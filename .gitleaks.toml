@@ -1,0 +1,15 @@
+title = "VoicX secret scanning"
+
+[extend]
+useDefault = true
+
+# This is the published Ed25519 verification key, never the private signing key.
+# Require both the exact public bytes and the single documentation path.
+[[rules]]
+id = "generic-api-key"
+
+[[rules.allowlists]]
+description = "Published update verification key in the validation report"
+condition = "AND"
+paths = ['''^docs/client-update-validation-2026-09-13\.md$''']
+regexes = ['''^V2gJha/\+dbSOAz0F8EBCX6358VJJD0JDtD\+wKZeemFg=$''']

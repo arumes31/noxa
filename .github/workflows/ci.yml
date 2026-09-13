@@ -56,7 +56,7 @@ jobs:
       - name: test generated protobuf contracts
         run: >-
           go test ./internal/grpcserver -run
-          '^(TestGeneratedServiceContracts|TestGeneratedAuthenticationReservationContracts|TestUserBannedEventChannelFieldContract|TestChannelDeletedEventIncludesDeleteReason)$'
+          '^(TestGeneratedServiceContracts|TestGeneratedAuthenticationCompatibilityContracts|TestUserBannedEventChannelFieldContract|TestChannelDeletedEventIncludesDeleteReason)$'
 
       - name: check protobuf breaking changes
         if: github.event_name == 'pull_request' && !contains(github.event.pull_request.labels.*.name, 'buf skip breaking')
@@ -120,7 +120,7 @@ jobs:
 
       - name: test client
         working-directory: client
-        run: go test -count=1 ./...
+        run: go test -tags=integration -count=1 ./...
 
   test:
     runs-on: ubuntu-latest

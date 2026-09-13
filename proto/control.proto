@@ -29,16 +29,21 @@ service Control {
 message AuthenticateRequest {
   string username = 1;
   string password = 2;
-  reserved 3;
-  reserved "token";
+  // Retained for source/wire compatibility. Authentication ignores this field.
+  string token = 3 [deprecated = true];
   string client_version = 4;
   map<string, string> metadata = 5;
 }
 
 message AuthenticateResponse {
-  reserved 1, 2, 4, 5, 6;
-  reserved "success", "session_token", "display_name", "expires_at", "error";
+  // Legacy clients may still inspect success; failures use gRPC status codes.
+  bool success = 1 [deprecated = true];
+  // Session tokens are not issued. Each RPC requires authorization metadata.
+  string session_token = 2 [deprecated = true];
   string user_id = 3;
+  string display_name = 4 [deprecated = true];
+  int64 expires_at = 5 [deprecated = true];
+  string error = 6 [deprecated = true];
 }
 
 // --- Channel management ---

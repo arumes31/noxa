@@ -48,7 +48,8 @@ func (c *controlService) Authenticate(ctx context.Context, req *voicxv1.Authenti
 	if !ok {
 		return nil, status.Error(codes.Unauthenticated, "invalid credentials")
 	}
-	return &voicxv1.AuthenticateResponse{UserId: req.GetUsername()}, nil
+	// Populate the deprecated success field for clients generated from the v1 API.
+	return &voicxv1.AuthenticateResponse{Success: true, UserId: req.GetUsername()}, nil
 }
 
 // ListChannels returns the channel tree, optionally rooted at one channel.

@@ -202,11 +202,15 @@ func (FileTransferStatus) EnumDescriptor() ([]byte, []int) {
 }
 
 type AuthenticateRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Username      string                 `protobuf:"bytes,1,opt,name=username,proto3" json:"username,omitempty"`
-	Password      string                 `protobuf:"bytes,2,opt,name=password,proto3" json:"password,omitempty"`
-	ClientVersion string                 `protobuf:"bytes,4,opt,name=client_version,json=clientVersion,proto3" json:"client_version,omitempty"`
-	Metadata      map[string]string      `protobuf:"bytes,5,rep,name=metadata,proto3" json:"metadata,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	state    protoimpl.MessageState `protogen:"open.v1"`
+	Username string                 `protobuf:"bytes,1,opt,name=username,proto3" json:"username,omitempty"`
+	Password string                 `protobuf:"bytes,2,opt,name=password,proto3" json:"password,omitempty"`
+	// Retained for source/wire compatibility. Authentication ignores this field.
+	//
+	// Deprecated: Marked as deprecated in control.proto.
+	Token         string            `protobuf:"bytes,3,opt,name=token,proto3" json:"token,omitempty"`
+	ClientVersion string            `protobuf:"bytes,4,opt,name=client_version,json=clientVersion,proto3" json:"client_version,omitempty"`
+	Metadata      map[string]string `protobuf:"bytes,5,rep,name=metadata,proto3" json:"metadata,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -255,6 +259,14 @@ func (x *AuthenticateRequest) GetPassword() string {
 	return ""
 }
 
+// Deprecated: Marked as deprecated in control.proto.
+func (x *AuthenticateRequest) GetToken() string {
+	if x != nil {
+		return x.Token
+	}
+	return ""
+}
+
 func (x *AuthenticateRequest) GetClientVersion() string {
 	if x != nil {
 		return x.ClientVersion
@@ -270,8 +282,22 @@ func (x *AuthenticateRequest) GetMetadata() map[string]string {
 }
 
 type AuthenticateResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	UserId        string                 `protobuf:"bytes,3,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Legacy clients may still inspect success; failures use gRPC status codes.
+	//
+	// Deprecated: Marked as deprecated in control.proto.
+	Success bool `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
+	// Session tokens are not issued. Each RPC requires authorization metadata.
+	//
+	// Deprecated: Marked as deprecated in control.proto.
+	SessionToken string `protobuf:"bytes,2,opt,name=session_token,json=sessionToken,proto3" json:"session_token,omitempty"`
+	UserId       string `protobuf:"bytes,3,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
+	// Deprecated: Marked as deprecated in control.proto.
+	DisplayName string `protobuf:"bytes,4,opt,name=display_name,json=displayName,proto3" json:"display_name,omitempty"`
+	// Deprecated: Marked as deprecated in control.proto.
+	ExpiresAt int64 `protobuf:"varint,5,opt,name=expires_at,json=expiresAt,proto3" json:"expires_at,omitempty"`
+	// Deprecated: Marked as deprecated in control.proto.
+	Error         string `protobuf:"bytes,6,opt,name=error,proto3" json:"error,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -306,9 +332,49 @@ func (*AuthenticateResponse) Descriptor() ([]byte, []int) {
 	return file_control_proto_rawDescGZIP(), []int{1}
 }
 
+// Deprecated: Marked as deprecated in control.proto.
+func (x *AuthenticateResponse) GetSuccess() bool {
+	if x != nil {
+		return x.Success
+	}
+	return false
+}
+
+// Deprecated: Marked as deprecated in control.proto.
+func (x *AuthenticateResponse) GetSessionToken() string {
+	if x != nil {
+		return x.SessionToken
+	}
+	return ""
+}
+
 func (x *AuthenticateResponse) GetUserId() string {
 	if x != nil {
 		return x.UserId
+	}
+	return ""
+}
+
+// Deprecated: Marked as deprecated in control.proto.
+func (x *AuthenticateResponse) GetDisplayName() string {
+	if x != nil {
+		return x.DisplayName
+	}
+	return ""
+}
+
+// Deprecated: Marked as deprecated in control.proto.
+func (x *AuthenticateResponse) GetExpiresAt() int64 {
+	if x != nil {
+		return x.ExpiresAt
+	}
+	return 0
+}
+
+// Deprecated: Marked as deprecated in control.proto.
+func (x *AuthenticateResponse) GetError() string {
+	if x != nil {
+		return x.Error
 	}
 	return ""
 }
@@ -1219,18 +1285,24 @@ var File_control_proto protoreflect.FileDescriptor
 
 const file_control_proto_rawDesc = "" +
 	"\n" +
-	"\rcontrol.proto\x12\bvoicx.v1\"\x87\x02\n" +
+	"\rcontrol.proto\x12\bvoicx.v1\"\x94\x02\n" +
 	"\x13AuthenticateRequest\x12\x1a\n" +
 	"\busername\x18\x01 \x01(\tR\busername\x12\x1a\n" +
-	"\bpassword\x18\x02 \x01(\tR\bpassword\x12%\n" +
+	"\bpassword\x18\x02 \x01(\tR\bpassword\x12\x18\n" +
+	"\x05token\x18\x03 \x01(\tB\x02\x18\x01R\x05token\x12%\n" +
 	"\x0eclient_version\x18\x04 \x01(\tR\rclientVersion\x12G\n" +
 	"\bmetadata\x18\x05 \x03(\v2+.voicx.v1.AuthenticateRequest.MetadataEntryR\bmetadata\x1a;\n" +
 	"\rMetadataEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01J\x04\b\x03\x10\x04R\x05token\"\x86\x01\n" +
-	"\x14AuthenticateResponse\x12\x17\n" +
-	"\auser_id\x18\x03 \x01(\tR\x06userIdJ\x04\b\x01\x10\x02J\x04\b\x02\x10\x03J\x04\b\x04\x10\x05J\x04\b\x05\x10\x06J\x04\b\x06\x10\aR\asuccessR\rsession_tokenR\fdisplay_nameR\n" +
-	"expires_atR\x05error\"\xac\x02\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xda\x01\n" +
+	"\x14AuthenticateResponse\x12\x1c\n" +
+	"\asuccess\x18\x01 \x01(\bB\x02\x18\x01R\asuccess\x12'\n" +
+	"\rsession_token\x18\x02 \x01(\tB\x02\x18\x01R\fsessionToken\x12\x17\n" +
+	"\auser_id\x18\x03 \x01(\tR\x06userId\x12%\n" +
+	"\fdisplay_name\x18\x04 \x01(\tB\x02\x18\x01R\vdisplayName\x12!\n" +
+	"\n" +
+	"expires_at\x18\x05 \x01(\x03B\x02\x18\x01R\texpiresAt\x12\x18\n" +
+	"\x05error\x18\x06 \x01(\tB\x02\x18\x01R\x05error\"\xac\x02\n" +
 	"\aChannel\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x1b\n" +

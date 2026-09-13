@@ -56,23 +56,29 @@ func TestGeneratedServiceContracts(t *testing.T) {
 	}
 }
 
-func TestGeneratedAuthenticationReservationContracts(t *testing.T) {
+func TestGeneratedAuthenticationCompatibilityContracts(t *testing.T) {
 	request := (&voicxv1.AuthenticateRequest{}).ProtoReflect().Descriptor()
 	response := (&voicxv1.AuthenticateResponse{}).ProtoReflect().Descriptor()
-	if request.Fields().ByName("token") != nil {
-		t.Fatal("AuthenticateRequest still exposes dead token field")
-	}
-	if !request.ReservedRanges().Has(3) || !hasReservedName(request, "token") {
-		t.Fatal("AuthenticateRequest does not reserve token field number and name")
-	}
-	for _, name := range []protoreflect.Name{"success", "session_token", "display_name", "expires_at", "error"} {
-		if response.Fields().ByName(name) != nil || !hasReservedName(response, name) {
-			t.Fatalf("AuthenticateResponse reservation for %q is missing", name)
+	for _, field := range []struct {
+		message protoreflect.MessageDescriptor
+		name    protoreflect.Name
+		number  protoreflect.FieldNumber
+		kind    protoreflect.Kind
+	}{
+		{request, "token", 3, protoreflect.StringKind},
+		{response, "success", 1, protoreflect.BoolKind},
+		{response, "session_token", 2, protoreflect.StringKind},
+		{response, "display_name", 4, protoreflect.StringKind},
+		{response, "expires_at", 5, protoreflect.Int64Kind},
+		{response, "error", 6, protoreflect.StringKind},
+	} {
+		descriptor := field.message.Fields().ByName(field.name)
+		if descriptor == nil || descriptor.Number() != field.number || descriptor.Kind() != field.kind {
+			t.Fatalf("legacy field %s.%s lost its name, number or type", field.message.Name(), field.name)
 		}
-	}
-	for _, number := range []protoreflect.FieldNumber{1, 2, 4, 5, 6} {
-		if !response.ReservedRanges().Has(number) {
-			t.Fatalf("AuthenticateResponse does not reserve field number %d", number)
+		options, ok := descriptor.Options().(*descriptorpb.FieldOptions)
+		if !ok || !options.GetDeprecated() {
+			t.Fatalf("legacy field %s.%s must remain deprecated", field.message.Name(), field.name)
 		}
 	}
 	userID := response.Fields().ByName("user_id")
@@ -89,13 +95,38 @@ func TestUserBannedEventChannelFieldContract(t *testing.T) {
 	}
 }
 
-func hasReservedName(descriptor protoreflect.MessageDescriptor, want protoreflect.Name) bool {
-	for i := 0; i < descriptor.ReservedNames().Len(); i++ {
-		if descriptor.ReservedNames().Get(i) == want {
-			return true
+func TestAuthenticateLegacyCompatibility(t *testing.T) {
+	service := &controlService{
+		logger: zap.NewNop(),
+		authenticate: func(_ context.Context, _, username, password string) (bool, error) {
+			return username == "admin" && password == "valid-password", nil
+		},
+	}
+	for _, credentials := range []bool{false, true} {
+		request := &voicxv1.AuthenticateRequest{}
+		if credentials {
+			request.Username, request.Password = "admin", "valid-password"
+		}
+		message := request.ProtoReflect()
+		message.Set(message.Descriptor().Fields().ByName("token"), protoreflect.ValueOfString("legacy-token"))
+		response, err := service.Authenticate(context.Background(), request)
+		if !credentials {
+			if status.Code(err) != codes.Unauthenticated {
+				t.Fatalf("token-only request = %v, want Unauthenticated", err)
+			}
+			continue
+		}
+		if err != nil || response.GetUserId() != "admin" {
+			t.Fatalf("password authentication = %v, %v", response, err)
+		}
+		result := response.ProtoReflect()
+		if !result.Get(result.Descriptor().Fields().ByName("success")).Bool() {
+			t.Fatal("successful authentication must set the legacy success field")
+		}
+		if result.Get(result.Descriptor().Fields().ByName("session_token")).String() != "" {
+			t.Fatal("compatibility must not mint session tokens")
 		}
 	}
-	return false
 }
 
 type permissionBackend struct {
