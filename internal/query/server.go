@@ -256,8 +256,14 @@ func (s *Server) runSession(ctx context.Context, sess *session) {
 	for {
 		sess.armIdleTimeout(s.IdleTimeout)
 
-		line, err := sess.r.ReadString('\n')
+		line, err := readQueryLine(sess.r, s.MaxLineLength)
 		if err != nil {
+			if errors.Is(err, errQueryLineTooLong) {
+				// Close immediately: draining to a newline would let a peer
+				// hold the session indefinitely by continuing the same line.
+				s.write(sess, errorLine(errInvalidParameter, "line too long"))
+				return
+			}
 			if !errors.Is(err, io.EOF) && !errors.Is(err, net.ErrClosed) {
 				s.logger.Debug("query read error", zap.Error(err))
 			}
@@ -265,12 +271,6 @@ func (s *Server) runSession(ctx context.Context, sess *session) {
 		}
 		line = strings.TrimRight(line, "\r\n")
 		if line == "" {
-			continue
-		}
-		if len(line) > s.MaxLineLength {
-			if !s.write(sess, errorLine(errInvalidParameter, "line too long")) {
-				return
-			}
 			continue
 		}
 
@@ -285,6 +285,30 @@ func (s *Server) runSession(ctx context.Context, sess *session) {
 		if !s.execute(ctx, sess, line) {
 			return
 		}
+	}
+}
+
+var errQueryLineTooLong = errors.New("query command line too long")
+
+// readQueryLine bounds accumulation even when the peer never sends a newline.
+// One optional CR before LF does not count toward the command length.
+func readQueryLine(r *bufio.Reader, limit int) (string, error) {
+	if limit <= 0 {
+		limit = 4096
+	}
+	var line []byte
+	for {
+		b, err := r.ReadByte()
+		if err != nil {
+			return "", err
+		}
+		if b == '\n' {
+			return strings.TrimSuffix(string(line), "\r"), nil
+		}
+		if len(line) > limit || len(line) == limit && b != '\r' {
+			return "", errQueryLineTooLong
+		}
+		line = append(line, b)
 	}
 }
 

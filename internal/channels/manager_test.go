@@ -38,12 +38,15 @@ func testEnv(t *testing.T) (*ChannelManager, *store.Store, *state.Manager) {
 
 	s, err := store.New(dbURL, logger, 5, 1, time.Minute)
 	if err != nil {
+		if os.Getenv("VOICX_TEST_DATABASE_URL") != "" {
+			t.Fatalf("configured database unavailable: %v", err)
+		}
 		t.Skipf("database unavailable, skipping: %v", err)
 	}
 	t.Cleanup(func() { _ = s.Close() })
 
 	if err := s.Migrate(); err != nil {
-		t.Skipf("migrate failed, skipping: %v", err)
+		t.Fatalf("database migration failed: %v", err)
 	}
 
 	sm := state.New(logger)

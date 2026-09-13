@@ -1635,10 +1635,16 @@ func dialGuest(addr, nickname, serverPassword string) (*client, error) {
 	if err != nil {
 		return nil, err
 	}
+	g := &client{conn: conn}
+	if err := initClientKeys(g); err != nil {
+		_ = conn.Close()
+		return nil, err
+	}
 	if err := writeMsg(conn, netproto.MsgAuthenticate, netproto.Authenticate{
-		Anonymous:      true,
-		Nickname:       nickname,
-		ServerPassword: serverPassword,
+		Anonymous:       true,
+		Nickname:        nickname,
+		ServerPassword:  serverPassword,
+		X25519PublicKey: base64.StdEncoding.EncodeToString(g.e2ePub[:]),
 	}); err != nil {
 		_ = conn.Close()
 		return nil, err
@@ -1657,11 +1663,12 @@ func dialGuest(addr, nickname, serverPassword string) (*client, error) {
 		_ = conn.Close()
 		return nil, errors.New("guest auth rejected: " + resp.Reason)
 	}
+	installScopeKeys(g, 0, resp.ChatKeys, true)
 	if _, err := readOfType(conn, netproto.MsgSnapshot, readTimeout); err != nil {
 		_ = conn.Close()
 		return nil, fmt.Errorf("reading snapshot: %w", err)
 	}
-	g := &client{conn: conn, uid: resp.UniqueID, clientID: resp.ClientID, nickname: resp.Nickname}
+	g.uid, g.clientID, g.nickname = resp.UniqueID, resp.ClientID, resp.Nickname
 	if err := registerClient(g); err != nil {
 		_ = conn.Close()
 		return nil, fmt.Errorf("e2e key publish: %w", err)

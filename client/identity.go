@@ -49,10 +49,13 @@ type identity struct {
 	// nonce, SecurityLevel the leading zero bits it reaches.
 	Counter       uint64 `json:"security_counter,omitempty"`
 	SecurityLevel int    `json:"security_level,omitempty"`
-	// (354) how PrivateKey is stored on disk: "" = plaintext, "dpapi" = the
-	// file's private_key carries a dpapiPrefix blob. In memory PrivateKey is
-	// always plaintext.
+	// (354) how private keys are stored on disk: "" = plaintext, "dpapi" =
+	// both private-key fields carry dpapiPrefix blobs. In memory both fields
+	// are always plaintext; older files protected only the signing key.
 	Protection string `json:"protection,omitempty"`
+	// Older DPAPI files protected only the signing key. Rewrite those on load
+	// so the encryption key gains the same protection without changing it.
+	needsEncryptionProtection bool
 }
 
 const (
@@ -384,8 +387,8 @@ func loadOrCreateIdentity() (*identity, error) {
 	return loadOrCreateIdentityAt(path)
 }
 
-// decodeIdentity parses an identity file, unwrapping a DPAPI-protected
-// private key (354) so the in-memory key is always plaintext.
+// decodeIdentity parses an identity file, unwrapping DPAPI-protected
+// private keys (354) so the in-memory keys are always plaintext.
 func decodeIdentity(raw []byte) (*identity, error) {
 	var id identity
 	if err := json.Unmarshal(raw, &id); err != nil {
@@ -394,8 +397,13 @@ func decodeIdentity(raw []byte) (*identity, error) {
 	if id.PublicKey == "" || id.PrivateKey == "" {
 		return nil, errors.New("not a valid identity file: missing key material")
 	}
-	if strings.HasPrefix(id.PrivateKey, dpapiPrefix) {
-		blob, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(id.PrivateKey, dpapiPrefix))
+	id.Protection = ""
+	encryptionProtected := strings.HasPrefix(id.X25519Private, dpapiPrefix)
+	for _, field := range []*string{&id.PrivateKey, &id.X25519Private} {
+		if !strings.HasPrefix(*field, dpapiPrefix) {
+			continue
+		}
+		blob, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(*field, dpapiPrefix))
 		if err != nil {
 			return nil, fmt.Errorf("%w (%v)", errProtectedUnreadable, err)
 		}
@@ -403,11 +411,15 @@ func decodeIdentity(raw []byte) (*identity, error) {
 		if err != nil {
 			return nil, fmt.Errorf("%w (%v)", errProtectedUnreadable, err)
 		}
-		id.PrivateKey = string(plain)
+		*field = string(plain)
 		id.Protection = protectionDPAPI
-	} else {
-		id.Protection = ""
 	}
+	// A legacy file has neither encryption field. A partially missing pair
+	// is corruption: upgrading it would destroy the remaining original key.
+	if (id.X25519Public == "") != (id.X25519Private == "") {
+		return nil, errors.New("not a valid identity file: incomplete encryption key pair")
+	}
+	id.needsEncryptionProtection = id.Protection == protectionDPAPI && !encryptionProtected && id.X25519Private != ""
 	return &id, nil
 }
 
@@ -431,12 +443,13 @@ func loadIdentityAtStrict(path string) (*identity, error) {
 // is the user's account everywhere and overwriting it is unrecoverable.
 func loadOrCreateIdentityAt(path string) (*identity, error) {
 	data, err := readIdentityAt(path)
-	if err == nil && len(data) > 0 {
+	if err == nil {
 		id, derr := decodeIdentity(data)
 		if derr != nil {
 			return nil, derr
 		}
-		if id.upgrade(strings.TrimSuffix(filepath.Base(path), ".json")) {
+		upgraded := id.upgrade(strings.TrimSuffix(filepath.Base(path), ".json"))
+		if upgraded || id.needsEncryptionProtection && keyProtectionWanted() && keyProtectionAvailable() {
 			if err := saveIdentityAt(path, id); err != nil {
 				return nil, err
 			}
@@ -519,18 +532,26 @@ var keyProtectionSetting = func() string { return loadSettings().IdentityKeyProt
 func keyProtectionWanted() bool { return keyProtectionSetting() != "off" }
 
 // saveIdentityAt persists the identity with owner-only permissions, protecting
-// the private key when DPAPI is available and wanted (354). A protection
+// both private keys when DPAPI is available and wanted (354). A protection
 // failure falls back to the plaintext file — refusing to write would cost the
 // user a key they can never recover.
 func saveIdentityAt(path string, id *identity) error {
 	out := *id
 	out.Protection = ""
 	if keyProtectionWanted() && keyProtectionAvailable() {
-		if blob, err := protectBytes([]byte(id.PrivateKey)); err == nil {
-			out.PrivateKey = dpapiPrefix + base64.StdEncoding.EncodeToString(blob)
+		for _, field := range []*string{&out.PrivateKey, &out.X25519Private} {
+			if *field == "" {
+				continue // legacy identities may not have an encryption key yet
+			}
+			blob, err := protectBytes([]byte(*field))
+			if err != nil {
+				out = *id
+				out.Protection = ""
+				log.Printf("key protection unavailable, storing identity in plaintext: %v", err)
+				break
+			}
+			*field = dpapiPrefix + base64.StdEncoding.EncodeToString(blob)
 			out.Protection = protectionDPAPI
-		} else {
-			log.Printf("key protection unavailable, storing identity in plaintext: %v", err)
 		}
 	}
 	// #nosec G117 -- an identity file is intentionally a serialized keypair;
@@ -543,6 +564,7 @@ func saveIdentityAt(path string, id *identity) error {
 		return err
 	}
 	id.Protection = out.Protection
+	id.needsEncryptionProtection = false
 	return nil
 }
 

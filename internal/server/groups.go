@@ -1266,13 +1266,13 @@ func (s *TCPServer) ClientIsBot(ctx context.Context, client *Client) bool {
 
 // guestGroupSet returns the Guest default group's permission set for
 // guests (virtual membership — guests have no users row).
-func (s *TCPServer) guestGroupSet(ctx context.Context) (permissions.PermissionSet, bool) {
+func (s *TCPServer) guestGroupSet(ctx context.Context) (permissions.PermissionSet, error) {
 	if s.deps == nil || s.deps.Perms == nil || s.deps.DefaultGuestGroupID == 0 {
-		return nil, false
+		return nil, nil
 	}
 	set, err := s.deps.Perms.LoadGroupPermissions(ctx, s.deps.DefaultGuestGroupID)
 	if err != nil {
-		return nil, false
+		return nil, fmt.Errorf("loading guest permissions: %w", err)
 	}
-	return set, true
+	return set, nil
 }

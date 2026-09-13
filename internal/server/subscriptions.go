@@ -171,7 +171,11 @@ func (s *TCPServer) subscribeAllowed(ctx context.Context, client *Client, channe
 	}
 	tp := permissions.NewTieredPermissions()
 	if client.UserID == 0 {
-		if set, ok := s.guestGroupSet(ctx); ok {
+		set, err := s.guestGroupSet(ctx)
+		if err != nil {
+			return false
+		}
+		if set != nil {
 			tp.Set(permissions.TierServerGroup, set)
 		}
 	} else {

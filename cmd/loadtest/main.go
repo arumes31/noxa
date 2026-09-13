@@ -64,19 +64,53 @@ type options struct {
 
 // stats accumulates load-test results.
 type stats struct {
-	connectsOK   atomic.Int64
-	connectsFail atomic.Int64
-	authOK       atomic.Int64
-	authFail     atomic.Int64
-	chatSent     atomic.Int64
-	chatRecv     atomic.Int64
-	pongs        atomic.Int64
-	webrtcOK     atomic.Int64
-	webrtcFail   atomic.Int64
-	rtpSent      atomic.Int64
+	connectsOK      atomic.Int64
+	connectsFail    atomic.Int64
+	authOK          atomic.Int64
+	authFail        atomic.Int64
+	sessionFail     atomic.Int64
+	chatSent        atomic.Int64
+	chatRecv        atomic.Int64
+	pongs           atomic.Int64
+	webrtcOK        atomic.Int64
+	webrtcFail      atomic.Int64
+	rtpSent         atomic.Int64
+	rtpRecv         atomic.Int64
+	rtpReceivers    atomic.Int64
+	receiverPackets sync.Map // client index -> *atomic.Int64
 
 	// authLatencyBuckets: <10ms, <50ms, <100ms, <500ms, <1s, >=1s.
 	authLatency [6]atomic.Int64
+}
+
+func (s *stats) recordReceivedRTP(index int) {
+	v, loaded := s.receiverPackets.LoadOrStore(index, &atomic.Int64{})
+	if !loaded {
+		s.rtpReceivers.Add(1)
+	}
+	v.(*atomic.Int64).Add(1)
+	s.rtpRecv.Add(1)
+}
+
+// result fails closed on missing clients as well as explicitly counted errors.
+// Successful local RTP writes do not establish delivery through the SFU.
+func (s *stats) result(opts options) error {
+	want := int64(opts.clients)
+	if s.connectsOK.Load() != want || s.connectsFail.Load() != 0 || s.authOK.Load() != want || s.authFail.Load() != 0 {
+		return errors.New("not all requested clients connected and authenticated successfully")
+	}
+	if s.sessionFail.Load() != 0 {
+		return errors.New("one or more control sessions failed before the requested duration")
+	}
+	if opts.webrtc {
+		if s.webrtcOK.Load() != want || s.webrtcFail.Load() != 0 || s.rtpSent.Load() == 0 {
+			return errors.New("not all requested clients established WebRTC and published RTP successfully")
+		}
+		if opts.channel != 0 && opts.clients > 1 && s.rtpReceivers.Load() != want {
+			return errors.New("RTP reception was not observed on every requested client")
+		}
+	}
+	return nil
 }
 
 // bucketLatency records an auth round-trip latency.
@@ -105,10 +139,18 @@ func (s *stats) print(opts options) {
 	fmt.Printf("clients=%d duration=%s ramp=%s\n", opts.clients, opts.duration, opts.ramp)
 	fmt.Printf("connects: ok=%d fail=%d\n", s.connectsOK.Load(), s.connectsFail.Load())
 	fmt.Printf("auth:     ok=%d fail=%d\n", s.authOK.Load(), s.authFail.Load())
+	fmt.Printf("sessions: fail=%d\n", s.sessionFail.Load())
 	fmt.Printf("chat:     sent=%d received=%d\n", s.chatSent.Load(), s.chatRecv.Load())
 	fmt.Printf("pongs:    %d\n", s.pongs.Load())
 	if opts.webrtc {
-		fmt.Printf("webrtc:  ok=%d fail=%d opus_rtp_sent=%d\n", s.webrtcOK.Load(), s.webrtcFail.Load(), s.rtpSent.Load())
+		fmt.Printf("webrtc:  ok=%d fail=%d opus_rtp_sent=%d opus_rtp_received=%d receivers=%d\n", s.webrtcOK.Load(), s.webrtcFail.Load(), s.rtpSent.Load(), s.rtpRecv.Load(), s.rtpReceivers.Load())
+		for i := 0; i < opts.clients; i++ {
+			var packets int64
+			if v, ok := s.receiverPackets.Load(i); ok {
+				packets = v.(*atomic.Int64).Load()
+			}
+			fmt.Printf("receiver client=%d opus_rtp_received=%d\n", i, packets)
+		}
 	}
 	fmt.Printf("auth latency (ms): <10=%d <50=%d <100=%d <500=%d <1000=%d >=1000=%d\n",
 		s.authLatency[0].Load(), s.authLatency[1].Load(), s.authLatency[2].Load(),
@@ -151,11 +193,12 @@ func main() {
 	}
 
 	var st stats
-	if err := run(context.Background(), opts, &st); err != nil {
+	err := run(context.Background(), opts, &st)
+	st.print(opts)
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "loadtest: %v\n", err)
 		os.Exit(1)
 	}
-	st.print(opts)
 }
 
 // run executes the load test: it starts opts.clients simulated clients,
@@ -168,11 +211,11 @@ func run(ctx context.Context, opts options, st *stats) error {
 	for i := 0; i < opts.clients; i++ {
 		// Stagger starts over the ramp period.
 		if opts.ramp > 0 && i > 0 {
-			delay := time.Duration(i) * opts.ramp / time.Duration(opts.clients)
+			delay := opts.ramp / time.Duration(opts.clients)
 			select {
 			case <-ctx.Done():
 				wg.Wait()
-				return nil
+				return st.result(opts)
 			case <-time.After(delay):
 			}
 		}
@@ -183,7 +226,7 @@ func run(ctx context.Context, opts options, st *stats) error {
 		}(i)
 	}
 	wg.Wait()
-	return nil
+	return st.result(opts)
 }
 
 // loggedFP prints the server fingerprint only on the first TLS dial.
@@ -314,6 +357,7 @@ func simulateClient(ctx context.Context, opts options, st *stats, index int) {
 		return
 	}
 	defer func() { _ = conn.Close() }()
+	conn = &controlConn{Conn: conn}
 	st.connectsOK.Add(1)
 
 	// Authenticate: anonymous guest (loadtest-N) or the shared account.
@@ -341,22 +385,25 @@ func simulateClient(ctx context.Context, opts options, st *stats, index int) {
 
 	// Consume the snapshot.
 	if _, err := readOfType(conn, netproto.MsgSnapshot, 5*time.Second); err != nil {
+		st.sessionFail.Add(1)
 		return
 	}
 
-	// Join the channel (best effort).
+	// Request channel membership; receiver evidence verifies media delivery.
 	if opts.channel != 0 {
-		_ = writeMsg(conn, netproto.MsgJoinChannel, netproto.JoinChannel{ChannelID: opts.channel})
+		if err := writeMsg(conn, netproto.MsgJoinChannel, netproto.JoinChannel{ChannelID: opts.channel}); err != nil {
+			st.sessionFail.Add(1)
+			return
+		}
 	}
 
 	var pc *webrtc.PeerConnection
 	if opts.webrtc {
-		pc, err = startOpusPublisher(conn, resp.ICEServers, opts.relayOnly, ctx, st)
+		pc, err = startOpusPublisher(conn, resp.ICEServers, opts.relayOnly, ctx, st, index)
 		if err != nil {
 			st.webrtcFail.Add(1)
 			return
 		}
-		st.webrtcOK.Add(1)
 		defer func() { _ = pc.Close() }()
 	}
 
@@ -394,6 +441,16 @@ func simulateClient(ctx context.Context, opts options, st *stats, index int) {
 						_ = pc.AddICECandidate(webrtc.ICECandidateInit{Candidate: candidate.Candidate, SDPMid: &mid, SDPMLineIndex: &line})
 					}
 				}
+			case netproto.MsgWebRTCOffer:
+				if pc != nil {
+					if err := answerRenegotiation(conn, pc, f); err != nil {
+						if ctx.Err() == nil {
+							st.webrtcFail.Add(1)
+						}
+						readErr <- err
+						return
+					}
+				}
 			}
 		}
 	}()
@@ -408,14 +465,23 @@ func simulateClient(ctx context.Context, opts options, st *stats, index int) {
 		case <-ctx.Done():
 			return
 		case <-readErr:
+			if ctx.Err() == nil {
+				st.sessionFail.Add(1)
+			}
 			return
 		case <-chatTicker.C:
 			if err := writeMsg(conn, netproto.MsgChatSend, netproto.ChatSend{Text: "loadtest ping"}); err != nil {
+				if ctx.Err() == nil {
+					st.sessionFail.Add(1)
+				}
 				return
 			}
 			st.chatSent.Add(1)
 		case <-pingTicker.C:
 			if err := writeMsg(conn, netproto.MsgPing, netproto.Ping{}); err != nil {
+				if ctx.Err() == nil {
+					st.sessionFail.Add(1)
+				}
 				return
 			}
 		}
@@ -425,7 +491,7 @@ func simulateClient(ctx context.Context, opts options, st *stats, index int) {
 // startOpusPublisher creates a real Pion peer and writes a valid Opus silence
 // packet every 20ms. Waiting for local ICE gathering avoids a separate client
 // trickle writer and makes the 100-client runner deterministic on localhost.
-func startOpusPublisher(conn net.Conn, supplied []netproto.ICEServer, relayOnly bool, ctx context.Context, st *stats) (*webrtc.PeerConnection, error) {
+func startOpusPublisher(conn net.Conn, supplied []netproto.ICEServer, relayOnly bool, ctx context.Context, st *stats, index int) (*webrtc.PeerConnection, error) {
 	configuration := webrtc.Configuration{}
 	if relayOnly {
 		configuration.ICETransportPolicy = webrtc.ICETransportPolicyRelay
@@ -439,6 +505,26 @@ func startOpusPublisher(conn net.Conn, supplied []netproto.ICEServer, relayOnly 
 	if err != nil {
 		return nil, err
 	}
+	pc.OnTrack(func(remote *webrtc.TrackRemote, _ *webrtc.RTPReceiver) {
+		if remote.Kind() != webrtc.RTPCodecTypeAudio {
+			return
+		}
+		for {
+			if _, _, err := remote.ReadRTP(); err != nil {
+				return
+			}
+			st.recordReceivedRTP(index)
+		}
+	})
+	var connected atomic.Bool
+	pc.OnConnectionStateChange(func(state webrtc.PeerConnectionState) {
+		if state == webrtc.PeerConnectionStateConnected && connected.CompareAndSwap(false, true) {
+			st.webrtcOK.Add(1)
+		}
+		if state == webrtc.PeerConnectionStateFailed && ctx.Err() == nil {
+			st.webrtcFail.Add(1)
+		}
+	})
 	track, err := webrtc.NewTrackLocalStaticRTP(webrtc.RTPCodecCapability{
 		MimeType: webrtc.MimeTypeOpus, ClockRate: 48000, Channels: 2,
 	}, "load-opus", "voicx-load")
@@ -512,6 +598,9 @@ func startOpusPublisher(conn net.Conn, supplied []netproto.ICEServer, relayOnly 
 			case <-ticker.C:
 				packet := &rtp.Packet{Header: rtp.Header{Version: 2, SequenceNumber: sequence, Timestamp: timestamp, SSRC: ssrc}, Payload: []byte{0xF8, 0xFF, 0xFE}}
 				if err := track.WriteRTP(packet); err != nil {
+					if ctx.Err() == nil {
+						st.webrtcFail.Add(1)
+					}
 					return
 				}
 				st.rtpSent.Add(1)
@@ -521,6 +610,31 @@ func startOpusPublisher(conn net.Conn, supplied []netproto.ICEServer, relayOnly 
 		}
 	}()
 	return pc, nil
+}
+
+func answerRenegotiation(conn net.Conn, pc *webrtc.PeerConnection, f *netproto.Frame) error {
+	var offer netproto.WebRTCOffer
+	if err := netproto.Decode(f, &offer); err != nil {
+		return err
+	}
+	if err := pc.SetRemoteDescription(webrtc.SessionDescription{Type: webrtc.SDPTypeOffer, SDP: offer.SDP}); err != nil {
+		return err
+	}
+	answer, err := pc.CreateAnswer(nil)
+	if err != nil {
+		return err
+	}
+	if err := pc.SetLocalDescription(answer); err != nil {
+		return err
+	}
+	return writeMsg(conn, netproto.MsgWebRTCAnswer, netproto.WebRTCAnswer{SDP: pc.LocalDescription().SDP})
+}
+
+// Control frames contain separate header and payload writes; serialize the
+// complete frame across the signaling reader and periodic traffic writer.
+type controlConn struct {
+	net.Conn
+	writeMu sync.Mutex
 }
 
 func readRTPIdentifiers(source io.Reader) (uint16, uint32, uint32, error) {
@@ -585,6 +699,10 @@ func udpPinger(addr string, done chan struct{}) {
 
 // writeMsg encodes and writes one control message.
 func writeMsg(conn net.Conn, mt netproto.MessageType, msg any) error {
+	if c, ok := conn.(*controlConn); ok {
+		c.writeMu.Lock()
+		defer c.writeMu.Unlock()
+	}
 	f, err := netproto.Encode(mt, msg)
 	if err != nil {
 		return err

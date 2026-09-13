@@ -71,7 +71,10 @@ FROM alpine:3.24@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec4
 # ca-certificates: required for outbound TLS (e.g. HTTPS clients, webhooks).
 # tzdata:         required for proper timezone handling in logs/scheduling.
 # wget:           used by the HEALTHCHECK below.
-RUN apk add --no-cache ca-certificates tzdata wget
+# Require the patched OpenSSL libraries even when the pinned base contains older
+# packages. Keep upgrades scoped to these libraries and their package dependencies.
+RUN apk add --no-cache --upgrade ca-certificates tzdata wget \
+    'libcrypto3>=3.5.8-r0' 'libssl3>=3.5.8-r0'
 
 # Create a non-root user/group with a fixed UID for predictable permissions.
 # uid 10001 avoids clashes with common alpine system users.

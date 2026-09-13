@@ -87,6 +87,7 @@ jobs:
           cache: npm
           cache-dependency-path: client/frontend/package-lock.json
       - run: npm ci
+      - run: npm run lint
       - run: npx playwright install --with-deps chromium
       - run: npm run build
       - run: npm run test:unit
@@ -172,6 +173,15 @@ jobs:
       - name: verify version metadata
         run: go run ./cmd/version -check
 
+      - name: verify module checksums
+        run: |
+          go mod verify
+          # Treat the locally replaced voicx module as workspace source.
+          # Otherwise Go tries to verify a nonexistent voicx@v0.4.0 zip.
+          export GOWORK="$RUNNER_TEMP/verify.work"
+          go work init "$GITHUB_WORKSPACE" "$GITHUB_WORKSPACE/client"
+          (cd client && go mod verify)
+
       - name: gofmt check
         run: |
           fmt=$(gofmt -l .)
@@ -252,6 +262,34 @@ jobs:
           createdb "$source_db"
           VOICX_DATABASE_URL="postgres://voicx:voicx@localhost:5432/$source_db?sslmode=disable" \
             go run ./cmd/migrate -timeout 2m
+          # Exercise relational user/channel/permission data, not only an
+          # empty migration ledger. These identities are disposable fixtures.
+          psql --dbname="$source_db" --set=ON_ERROR_STOP=1 <<'SQL'
+          BEGIN;
+          INSERT INTO users (unique_id, nickname) VALUES ('backup-fixture', 'Restore fixture');
+          INSERT INTO channels (name, channel_type, created_by)
+            SELECT 'Backup channel', 2, id FROM users WHERE unique_id = 'backup-fixture';
+          INSERT INTO server_groups (name) VALUES ('Backup group');
+          INSERT INTO permissions (permission_key, value, grant_value, skip_flag, negate_flag)
+            VALUES ('i_client_talk_power', 25, 10, false, false);
+          INSERT INTO server_group_members (user_id, server_group_id)
+            SELECT u.id, g.id FROM users u CROSS JOIN server_groups g
+            WHERE u.unique_id = 'backup-fixture' AND g.name = 'Backup group';
+          INSERT INTO server_group_permissions (server_group_id, permission_id)
+            SELECT g.id, p.id FROM server_groups g CROSS JOIN permissions p
+            WHERE g.name = 'Backup group' AND p.permission_key = 'i_client_talk_power';
+          COMMIT;
+          SQL
+          fixture_query="SELECT u.unique_id, u.nickname, c.name, g.name,
+            p.permission_key, p.value, p.grant_value, p.skip_flag, p.negate_flag
+            FROM users u JOIN channels c ON c.created_by = u.id
+            JOIN server_group_members m ON m.user_id = u.id
+            JOIN server_groups g ON g.id = m.server_group_id
+            JOIN server_group_permissions gp ON gp.server_group_id = g.id
+            JOIN permissions p ON p.id = gp.permission_id
+            WHERE u.unique_id = 'backup-fixture' ORDER BY c.id, g.id, p.id"
+          source_fixture="$(psql --dbname="$source_db" --tuples-only --no-align --command="$fixture_query")"
+          test -n "$source_fixture"
           pg_dump --format=custom --no-owner --file="$backup" "$source_db"
           test -s "$backup"
           createdb "$restore_db"
@@ -264,6 +302,8 @@ jobs:
             --command="SELECT filename || ':' || checksum FROM public.schema_migrations ORDER BY filename")"
           test -n "$source_ledger"
           test "$source_ledger" = "$restore_ledger"
+          restore_fixture="$(psql --dbname="$restore_db" --tuples-only --no-align --command="$fixture_query")"
+          test "$source_fixture" = "$restore_fixture"
 
   security-gate:
     name: Security analysis

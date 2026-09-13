@@ -76,16 +76,19 @@ import (
 //
 // A small in-memory cache (sync.Map keyed by cacheKey{userID,channelID})
 // avoids re-querying the database on every permission check. Entries
-// expire after cacheTTL (5s). The cache is best-effort: a miss or an
-// expired entry simply triggers a fresh query. There is no explicit
-// invalidation here; invalidation hooks are added when the loader is
-// wired into the mutation paths in later steps.
+// expire after cacheTTL (5s). Group reads use the same TTL to keep guest media
+// checks off the database. Mutations invalidate cached grants explicitly.
+// A generation check prevents a query crossing invalidation from publishing
+// stale permissions. Database work never holds the cache mutex.
 
 type Loader struct {
 	store  StoreBackend
 	logger *zap.Logger
 
-	cache sync.Map // map[cacheKey]cacheEntry
+	cache           sync.Map // map[cacheKey]cacheEntry
+	cacheMu         sync.RWMutex
+	cacheGeneration uint64
+	groupCache      map[int64]groupCacheEntry
 }
 
 // StoreBackend is the minimal subset of *store.Store that the loader
@@ -111,6 +114,13 @@ type cacheEntry struct {
 	expires time.Time
 }
 
+type groupCacheEntry struct {
+	set     PermissionSet
+	expires time.Time
+}
+
+const maxCachedGroups = 1024
+
 // cacheTTL is how long a cached TieredPermissions is considered fresh.
 const cacheTTL = 5 * time.Second
 
@@ -128,21 +138,35 @@ func NewLoader(store StoreBackend, logger *zap.Logger) *Loader {
 // permissions; never returns ErrPermissionNotSet.
 func (l *Loader) LoadForClient(ctx context.Context, userID int64, channelID int64) (TieredPermissions, error) {
 	key := cacheKey{userID: userID, channelID: channelID}
-	if v, ok := l.cache.Load(key); ok {
-		ce := v.(cacheEntry)
-		if time.Now().Before(ce.expires) {
-			return ce.tp, nil
+	for {
+		if err := ctx.Err(); err != nil {
+			return TieredPermissions{}, err
 		}
-		l.cache.Delete(key)
-	}
+		l.cacheMu.RLock()
+		generation := l.cacheGeneration
+		if v, ok := l.cache.Load(key); ok {
+			ce := v.(cacheEntry)
+			if time.Now().Before(ce.expires) {
+				l.cacheMu.RUnlock()
+				return ce.tp, nil
+			}
+		}
+		l.cacheMu.RUnlock()
 
-	tp, err := l.loadFromDB(ctx, userID, channelID)
-	if err != nil {
-		return TieredPermissions{}, err
-	}
+		tp, err := l.loadFromDB(ctx, userID, channelID)
+		if err != nil {
+			return TieredPermissions{}, err
+		}
 
-	l.cache.Store(key, cacheEntry{tp: tp, expires: time.Now().Add(cacheTTL)})
-	return tp, nil
+		l.cacheMu.Lock()
+		if generation != l.cacheGeneration {
+			l.cacheMu.Unlock()
+			continue // a mutation crossed the query; reload before granting
+		}
+		l.cache.Store(key, cacheEntry{tp: tp, expires: time.Now().Add(cacheTTL)})
+		l.cacheMu.Unlock()
+		return tp, nil
+	}
 }
 
 // Invalidate removes any cached TieredPermissions for the given
@@ -150,16 +174,23 @@ func (l *Loader) LoadForClient(ctx context.Context, userID int64, channelID int6
 // user's permissions or group memberships so subsequent reads observe
 // fresh data.
 func (l *Loader) Invalidate(userID int64, channelID int64) {
+	l.cacheMu.Lock()
+	defer l.cacheMu.Unlock()
+	l.cacheGeneration++
 	l.cache.Delete(cacheKey{userID: userID, channelID: channelID})
 }
 
 // InvalidateAll clears the whole cache. It is used after permission writes
 // that may affect many users (group permission changes, template applies).
 func (l *Loader) InvalidateAll() {
+	l.cacheMu.Lock()
+	defer l.cacheMu.Unlock()
+	l.cacheGeneration++
 	l.cache.Range(func(k, _ any) bool {
 		l.cache.Delete(k)
 		return true
 	})
+	clear(l.groupCache)
 }
 
 // loadFromDB performs the actual queries and assembles the
@@ -295,7 +326,37 @@ func (l *Loader) LoadChannelGroupsForUser(ctx context.Context, userID int64, cha
 // LoadGroupPermissions returns the permission set of one server group
 // (used for the guest default group and group inspection).
 func (l *Loader) LoadGroupPermissions(ctx context.Context, groupID int64) (PermissionSet, error) {
-	return l.loadServerGroupPermissions(ctx, groupID)
+	for {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		l.cacheMu.RLock()
+		generation := l.cacheGeneration
+		entry, ok := l.groupCache[groupID]
+		if ok && time.Now().Before(entry.expires) {
+			l.cacheMu.RUnlock()
+			return entry.set, nil
+		}
+		l.cacheMu.RUnlock()
+		set, err := l.loadServerGroupPermissions(ctx, groupID)
+		if err != nil {
+			return nil, err
+		}
+		l.cacheMu.Lock()
+		if generation != l.cacheGeneration {
+			l.cacheMu.Unlock()
+			continue
+		}
+		if l.groupCache == nil {
+			l.groupCache = make(map[int64]groupCacheEntry)
+		}
+		if len(l.groupCache) >= maxCachedGroups {
+			clear(l.groupCache)
+		}
+		l.groupCache[groupID] = groupCacheEntry{set: set, expires: time.Now().Add(cacheTTL)}
+		l.cacheMu.Unlock()
+		return set, nil
+	}
 }
 
 // loadServerGroupPermissions loads all permissions attached to a

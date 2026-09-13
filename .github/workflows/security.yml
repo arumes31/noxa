@@ -122,6 +122,12 @@ jobs:
           mkdir -p client/frontend/dist
           touch client/frontend/dist/.security-placeholder
 
+      - name: install Linux client analysis dependencies
+        if: matrix.module == 'client'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libx11-dev libxtst-dev libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev
+
       - name: Install gosec v2.28.0
         run: go install github.com/securego/gosec/v2/cmd/gosec@v2.28.0
 

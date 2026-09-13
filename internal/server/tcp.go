@@ -725,9 +725,25 @@ func (s *TCPServer) handleConn(ctx context.Context, conn net.Conn) {
 		}
 	}()
 
+	// Bound the entire unauthenticated exchange, including TLS and blocked
+	// replies. Incoming pings or partial frames must not renew this deadline.
+	authTimeout := 10 * time.Second
+	s.configMu.RLock()
+	if timeout := s.cfg.ClientTimeoutSeconds; timeout > 0 && timeout < 10 {
+		authTimeout = time.Duration(timeout) * time.Second
+	}
+	s.configMu.RUnlock()
+	authDeadline := time.Now().Add(authTimeout)
+	if err := conn.SetDeadline(authDeadline); err != nil {
+		return
+	}
+	authCtx, cancelAuth := context.WithDeadline(ctx, authDeadline)
+	defer cancelAuth()
+
 	client := &Client{
-		ID:   newClientID(),
-		Conn: conn,
+		ID:         newClientID(),
+		Conn:       conn,
+		lastActive: time.Now(),
 	}
 	s.register(client)
 	defer func() {
@@ -737,7 +753,7 @@ func (s *TCPServer) handleConn(ctx context.Context, conn net.Conn) {
 
 	// (217) max-clients enforcement: config max_clients, tightened by the
 	// serveredit override. 0 = unlimited.
-	if max := s.EffectiveMaxClients(ctx); max > 0 && s.clientCount() > max {
+	if max := s.EffectiveMaxClients(authCtx); max > 0 && s.clientCount() > max {
 		_ = s.sendGlobalError(client, errCodeUnavailable, "server is full")
 		return
 	}
@@ -789,14 +805,31 @@ func (s *TCPServer) handleConn(ctx context.Context, conn net.Conn) {
 		}
 
 		client.noteReceived(len(frame.Payload))
+		if !authDeadline.IsZero() && !time.Now().Before(authDeadline) {
+			return
+		}
 
-		if err := s.dispatch(ctx, client, frame); err != nil {
+		requestCtx := ctx
+		if !authDeadline.IsZero() {
+			requestCtx = authCtx
+		}
+		if err := s.dispatch(requestCtx, client, frame); err != nil {
 			s.logger.Warn("dispatch error",
 				zap.String("client_id", client.ID),
 				zap.String("msg_type", netproto.MessageType(frame.Type).String()),
 				zap.Error(err),
 			)
 			return
+		}
+		if !authDeadline.IsZero() && client.isAuthed() {
+			if authCtx.Err() != nil {
+				return
+			}
+			if err := conn.SetDeadline(time.Time{}); err != nil {
+				return
+			}
+			cancelAuth()
+			authDeadline = time.Time{}
 		}
 	}
 }
