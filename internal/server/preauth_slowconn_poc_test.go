@@ -38,7 +38,7 @@ func TestPreAuthIdleConnectionsReleaseCapacity(t *testing.T) {
 	}
 
 	extra := dialPreauthProbe(t, addr)
-	defer extra.Close()
+	defer func() { _ = extra.Close() }()
 	if err := extra.SetReadDeadline(time.Now().Add(3 * time.Second)); err != nil {
 		t.Fatal(err)
 	}
@@ -68,7 +68,7 @@ func TestPreAuthIdleConnectionsReleaseCapacity(t *testing.T) {
 	waitForTCPConnectionCleanup(t, s)
 
 	fresh := dialPreauthProbe(t, addr)
-	defer fresh.Close()
+	defer func() { _ = fresh.Close() }()
 	if err := fresh.SetDeadline(time.Now().Add(3 * time.Second)); err != nil {
 		t.Fatal(err)
 	}

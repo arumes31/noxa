@@ -22,7 +22,7 @@ func TestPreAuthIdleConnectionExpiresWithoutSendingFrame(t *testing.T) {
 		ClientTimeoutSeconds: 1,
 	})
 	conn := dialPreauthProbe(t, addr)
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	select {
 	case <-admitted:
 	case <-time.After(3 * time.Second):
