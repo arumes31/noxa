@@ -2,6 +2,8 @@ package server
 
 import (
 	"context"
+	"errors"
+	"io"
 	"net"
 	"testing"
 	"time"
@@ -11,43 +13,80 @@ import (
 	"voicx/internal/config"
 )
 
-// TestPreAuthIdleNeverTimesOut shows that a pre-auth connection that never
-// sends a frame has a zero lastActive timestamp, so the ClientTimeoutSeconds
-// check in pingLoop (`!last.IsZero()`) never fires: the connection, its
-// goroutine, and its max_clients slot are held forever (bounded only by
-// OS-level TCP timeout, typically hours).
-func TestPreAuthIdleNeverTimesOut(t *testing.T) {
-	addr := freePort(t)
-	cfg := &config.Config{
-		TCPAddr:              addr,
+// A peer that sends no frame must still expire and release its admission slot.
+// This is the regression for the old zero-lastActive timeout bypass.
+func TestPreAuthIdleConnectionExpiresWithoutSendingFrame(t *testing.T) {
+	s, addr, admitted := startPreauthProbeServer(t, &config.Config{
+		TCPAddr:              "127.0.0.1:0",
 		MaxClients:           16,
-		ClientTimeoutSeconds: 1, // very aggressive: 1s inactivity timeout
-	}
-	s := New(cfg, zap.NewNop(), nil)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go func() { _ = s.Start(ctx) }()
-
-	var conn net.Conn
-	deadline := time.Now().Add(3 * time.Second)
-	for time.Now().Before(deadline) {
-		c, err := (&net.Dialer{}).DialContext(ctx, "tcp", addr)
-		if err == nil {
-			conn = c
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	if conn == nil {
-		t.Fatal("dial failed")
-	}
+		ClientTimeoutSeconds: 1,
+	})
+	conn := dialPreauthProbe(t, addr)
 	defer conn.Close()
-
-	// Wait well beyond ClientTimeoutSeconds (1s) and several 15s ping ticks
-	// would be ideal; 18s covers one full ping tick with the 1s timeout.
-	time.Sleep(18 * time.Second)
-	if n := s.clientCount(); n != 1 {
-		t.Fatalf("expected idle pre-auth connection to never time out, count=%d", n)
+	select {
+	case <-admitted:
+	case <-time.After(3 * time.Second):
+		t.Fatal("idle connection was not admitted")
 	}
-	t.Log("confirmed: idle pre-auth connection with zero lastActive never hits ClientTimeoutSeconds")
+	if s.clientCount() != 1 {
+		t.Fatal("idle connection did not hold an admission slot")
+	}
+	assertPreauthProbeClosed(t, conn, time.Now().Add(3*time.Second))
+	waitForTCPConnectionCleanup(t, s)
+}
+
+func startPreauthProbeServer(t *testing.T, cfg *config.Config) (*TCPServer, string, <-chan struct{}) {
+	t.Helper()
+	s := New(cfg, zap.NewNop(), nil)
+	admitted := make(chan struct{}, cfg.MaxClients+1)
+	s.beforeHandle = func() { admitted <- struct{}{} }
+	ctx, cancel := context.WithCancel(context.Background())
+	startErr := make(chan error, 1)
+	go func() { startErr <- s.Start(ctx) }()
+	t.Cleanup(func() {
+		cancel()
+		shutdownCtx, stop := context.WithTimeout(context.Background(), 5*time.Second)
+		defer stop()
+		if err := s.Shutdown(shutdownCtx); err != nil {
+			t.Errorf("shutdown: %v", err)
+		}
+		select {
+		case err := <-startErr:
+			if err != nil {
+				t.Errorf("Start: %v", err)
+			}
+		case <-shutdownCtx.Done():
+			t.Error("server did not stop")
+		}
+	})
+	select {
+	case <-s.started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("listener did not start")
+	}
+	s.lifecycleMu.Lock()
+	addr := s.listener.Addr().String()
+	s.lifecycleMu.Unlock()
+	return s, addr, admitted
+}
+
+func dialPreauthProbe(t *testing.T, addr string) net.Conn {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
+	defer cancel()
+	conn, err := (&net.Dialer{}).DialContext(ctx, "tcp", addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return conn
+}
+
+func assertPreauthProbeClosed(t *testing.T, conn net.Conn, deadline time.Time) {
+	t.Helper()
+	if err := conn.SetReadDeadline(deadline); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := conn.Read(make([]byte, 1)); n != 0 || !errors.Is(err, io.EOF) {
+		t.Fatalf("server did not close idle pre-auth connection: bytes=%d, error=%v", n, err)
+	}
 }
