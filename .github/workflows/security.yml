@@ -42,6 +42,9 @@ jobs:
 
       - name: Perform CodeQL analysis
         uses: github/codeql-action/analyze@5595ccaf912efad79be6eef63a5619ff05969be3 # v4.37.6
+        with:
+          # Preserve the baseline identity when invoked through the reusable CI workflow.
+          category: .github/workflows/security.yml:codeql/language:${{ matrix.language }}
 
   govulncheck:
     name: Govulncheck (${{ matrix.module }})
