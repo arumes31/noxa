@@ -157,6 +157,7 @@ export namespace main {
 	    self?: boolean;
 	    client_msg_id?: string;
 	    offline?: boolean;
+	    enc_verified?: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new DMEntry(source);
@@ -172,6 +173,7 @@ export namespace main {
 	        this.self = source["self"];
 	        this.client_msg_id = source["client_msg_id"];
 	        this.offline = source["offline"];
+	        this.enc_verified = source["enc_verified"];
 	    }
 	}
 	export class DMPeer {
@@ -1583,4 +1585,3 @@ export namespace netproto {
 	}
 
 }
-

@@ -46,7 +46,10 @@ export function canFocusTarget(target) {
 
 function focusTarget(target) {
     if (!canFocusTarget(target)) return false;
-    target.focus({ preventScroll: true });
+    // Reveal keyboard targets in scrolling dialogs; restoring the background
+    // launcher must still preserve the user's workspace scroll position.
+    const inActiveDialog = topRecord()?.overlay.contains(target) || false;
+    target.focus({ preventScroll: !inActiveDialog });
     return document.activeElement === target;
 }
 

@@ -420,6 +420,7 @@ type DMEntry struct {
 	Self         bool   `json:"self,omitempty"`
 	ClientMsgID  string `json:"client_msg_id,omitempty"`
 	Offline      bool   `json:"offline,omitempty"`
+	EncVerified  bool   `json:"enc_verified,omitempty"` // body was opened locally; absent on legacy records
 }
 
 // DMPeer summarises one stored conversation, so PM tabs can be restored on

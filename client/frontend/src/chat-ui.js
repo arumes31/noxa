@@ -258,10 +258,12 @@ function normalize(d, chID) {
         reactions: d.reactions || null,
         mentions: d.mentions || [],
         e2e: !!d.e2e,
+        direct: !!d.direct || !!d.e2e,
         // enc_verified is set by the Go layer after it opened the body itself:
         // without it a history message would draw no badge at all and look
         // exactly like one the server handed over in the clear (91-135).
         enc: !!d.enc || !!d.enc_verified,
+        encVerified: !!d.enc_verified,
         offline: !!d.offline,
         clientMsgID: d.client_msg_id || "",
         replyToID: Number(d.reply_to_id) || 0,
@@ -489,7 +491,7 @@ function renderMsg(m) {
 
     const tag = document.createElement("span");
     tag.className = "msg-tag";
-    tag.textContent = m.e2e ? (m.offline ? "dm · offline" : "dm") : (m.channelID ? "channel" : "global");
+    tag.textContent = m.direct ? (m.offline ? "dm · offline" : "dm") : (m.channelID ? "channel" : "global");
     el.appendChild(tag);
 
     // (4b/91-135) lock semantics. A placeholder body means the message stayed
@@ -502,7 +504,7 @@ function renderMsg(m) {
         if (unopened) {
             lock.textContent = "⚠";
             lock.title = "this message is still encrypted — its key is not available to this client";
-        } else if (m.e2e) {
+        } else if (m.e2e || (m.direct && m.enc)) {
             lock.textContent = "🔒";
             lock.title = "end-to-end encrypted — only you and the other user can read this";
         } else {
@@ -531,7 +533,7 @@ function renderMsg(m) {
     }
 
     // (124) delivery/read receipt tick on my outgoing DMs.
-    if (m.self && m.e2e && m.clientMsgID) {
+    if (m.self && m.direct && m.clientMsgID) {
         const tick = document.createElement("span");
         tick.className = "msg-receipt";
         tick.dataset.cmid = m.clientMsgID;
@@ -832,9 +834,9 @@ function renderActions(m) {
     const th = threadIndex(activeKey());
     const root = th.rootOf.get(m.id) || m.id;
     if (th.replies.get(root)) mk("🧵", "open thread", () => openThread(root));
-    if (m.self && !m.e2e) mk("✎", "edit", () => startEdit(m));
+    if (m.self && !m.direct) mk("✎", "edit", () => startEdit(m));
     if (m.self) mk("🗑", "delete", () => deleteMsg(m));
-    if (!m.e2e) {
+    if (!m.direct) {
         const pinned = isPinned(m);
         mk(pinned ? "📍" : "📌", pinned ? "unpin" : "pin", () => pinMsg(m));
     }
@@ -1385,8 +1387,10 @@ function dmMsg(e, peerNick) {
         deleted: false,
         reactions: null,
         mentions: [],
-        e2e: true,
-        enc: false,
+        e2e: false,
+        direct: true,
+        enc: !!e.enc_verified,
+        encVerified: !!e.enc_verified,
         offline: !!e.offline,
         clientMsgID: e.client_msg_id || "",
         channelID: null,
@@ -1432,6 +1436,7 @@ function dmRecord(peer, nick, m) {
         self: m.self,
         client_msg_id: m.clientMsgID,
         offline: m.offline,
+        enc_verified: m.encVerified,
     }).then((err) => {
         if (!err || dmPersistWarned) return;
         dmPersistWarned = true;
@@ -1670,7 +1675,7 @@ export function addChat(d) {
     m.self = m.fromUID ? m.fromUID === st.myUniqueID : m.from === st.myNickname;
     clearTyping(m.fromUID); // (120) their message landed; they are done typing
 
-    if (m.e2e) {
+    if (m.direct) {
         return routeDM(d, m);
     }
 
@@ -1786,9 +1791,9 @@ function appendLive(m) {
 
 function routeDM(d, m) {
     const st = V().state;
-    // Peer: incoming → sender; own echo → the user we last DMed (the
-    // broadcast carries no to_unique_id client-side).
-    const peer = m.self ? (lastDMTarget || (view.kind === "dm" ? view.uid : "")) : (m.fromUID || "");
+    // New servers identify the echo's recipient; the legacy fallback cannot
+    // distinguish concurrent outgoing peers and is only used if it is absent.
+    const peer = m.self ? (d.to_unique_id || lastDMTarget || (view.kind === "dm" ? view.uid : "")) : (m.fromUID || "");
     if (!peer) return false;
     const tab = pmTabs.get(peer) || { uid: peer, nick: m.self ? peer : m.from, unread: 0, offline: false, pendingRead: "" };
     if (!pmTabs.has(peer)) pmTabs.set(peer, tab);

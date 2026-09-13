@@ -912,11 +912,25 @@ func presentChat(chat *netproto.ChatBroadcast) {
 // decryptChatEvent unseals a live chat broadcast.
 func (m *connManager) decryptChatEvent(data json.RawMessage, payload string) string {
 	var chat netproto.ChatBroadcast
-	if err := json.Unmarshal(data, &chat); err != nil || !chat.Enc {
+	if err := json.Unmarshal(data, &chat); err != nil {
+		return payload
+	}
+	// Verification is local evidence, never a claim accepted from the wire.
+	claimedVerified := chat.EncVerified
+	chat.EncVerified = false
+	if !chat.Enc {
+		if claimedVerified || chat.E2E {
+			chat.Direct = chat.Direct || chat.E2E
+			presentChat(&chat)
+			return rewrapChat("chat", chat, payload)
+		}
 		return payload
 	}
 
-	if chat.E2E || chat.KeyID == 0 {
+	if chat.Direct || chat.E2E || chat.KeyID == 0 {
+		// Legacy servers only supplied e2e. Keep scope after presentChat strips
+		// encryption metadata, even for a missing-key placeholder.
+		chat.Direct = true
 		// True E2EE DM: needs the sender's public key — resolved
 		// asynchronously so the read loop never blocks on a directory
 		// request (the response arrives on this same loop).
@@ -1091,13 +1105,27 @@ func (m *connManager) decryptDMAsync(chat netproto.ChatBroadcast, payload string
 	if err != nil {
 		return
 	}
-	peer, ok := m.peerPubKey(chat.FromUniqueID)
+	m.mu.Lock()
+	ownUID := m.uniqueID
+	m.mu.Unlock()
+	peerUID := chat.FromUniqueID
+	if peerUID == ownUID {
+		// The same box opens with recipient public key + sender private key.
+		// A legacy echo without its recipient cannot safely guess that key.
+		peerUID = chat.ToUniqueID
+	}
+	var peer [32]byte
+	ok := false
+	if peerUID != "" {
+		peer, ok = m.peerPubKey(peerUID)
+	}
 	if !ok {
 		chat.Text = missingKeyText
 	} else if plain, err := openDM(chat.Text, peer, priv); err != nil {
 		chat.Text = missingKeyText
 	} else {
 		chat.Text = plain
+		chat.EncVerified = true
 	}
 	presentChat(&chat)
 	m.emit("event", rewrapChat("chat", chat, payload))

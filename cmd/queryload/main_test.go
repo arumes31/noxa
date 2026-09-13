@@ -124,8 +124,8 @@ func TestRunWithDepsUsesManualTicksAndReports(t *testing.T) {
 	ticker.ch <- time.Unix(0, 0)
 	<-responseWritten
 	cancel()
-	if err := <-done; err != nil {
-		t.Fatalf("runWithDeps: %v", err)
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Fatalf("runWithDeps: %v, want caller cancellation", err)
 	}
 	if !ticker.stopped.Load() {
 		t.Fatal("ticker was not stopped")
@@ -167,8 +167,8 @@ func TestRunWithDepsCancellationClosesBlockedConnections(t *testing.T) {
 	cancel()
 	select {
 	case err := <-done:
-		if err != nil {
-			t.Fatalf("runWithDeps: %v", err)
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("runWithDeps: %v, want caller cancellation", err)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("runWithDeps did not return after cancellation while a response was blocked")

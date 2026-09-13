@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 
 	"voicx/internal/state"
 	"voicx/internal/store"
@@ -146,10 +147,34 @@ func hasCleanupTimer(mgr *ChannelManager, channelID int64) bool {
 	return ok
 }
 
+// useManualCleanupTimers keeps lifecycle assertions independent of database
+// latency. Scheduling logs run before the operation releases its tree lock,
+// so cleanup callbacks cannot claim their tokens while this hook replaces them.
+// The replacement timer has no callback; tests may deliver its token explicitly.
+func useManualCleanupTimers(mgr *ChannelManager) {
+	mgr.logger = mgr.logger.WithOptions(zap.Hooks(func(entry zapcore.Entry) error {
+		if entry.Message != "cleanup watcher scheduled" {
+			return nil
+		}
+		mgr.mu.Lock()
+		defer mgr.mu.Unlock()
+		for id, token := range mgr.timers {
+			token.timer.Stop()
+			inert := time.NewTimer(0)
+			inert.Stop()
+			// Replace the token too: an expired callback may already be waiting
+			// for the tree lock and must not claim this manually scheduled work.
+			mgr.timers[id] = &cleanupTimer{timer: inert, generation: token.generation}
+		}
+		return nil
+	}))
+}
+
 // TestCreateChannel_AllTypes verifies that CreateChannel inserts each channel
 // type into the DB and registers it in the state manager.
 func TestCreateChannel_AllTypes(t *testing.T) {
 	mgr, s, sm := testEnv(t)
+	useManualCleanupTimers(mgr)
 	userID := createTestUser(t, s)
 	parentID := createParentChannel(t, mgr, sm, userID)
 
@@ -164,8 +189,6 @@ func TestCreateChannel_AllTypes(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			// Cancel any cleanup timer the parent or prior iterations may have
-			// left running for this channel by using a unique name.
 			id, err := mgr.CreateChannel(context.Background(), ChannelSpec{
 				Name:       tc.name + "-" + fmt.Sprintf("%d", time.Now().UnixNano()),
 				Topic:      "test topic",
@@ -429,6 +452,7 @@ func TestDeleteChannelSubtree_ReconcilesAppliedExecError(t *testing.T) {
 // timer appropriately.
 func TestSetChannelType_Transitions(t *testing.T) {
 	mgr, s, sm := testEnv(t)
+	useManualCleanupTimers(mgr)
 	userID := createTestUser(t, s)
 
 	// temporary -> permanent cancels the timer.

@@ -46,10 +46,13 @@ type ChannelNode struct {
 // TreeSnapshot is the full nested view of the server's channel tree and the
 // users currently connected.
 type TreeSnapshot struct {
-	RootChannels  []*ChannelNode `json:"root_channels"`
-	TotalClients  int            `json:"total_clients"`
-	TotalChannels int            `json:"total_channels"`
-	GeneratedAt   time.Time      `json:"generated_at"`
+	RootChannels []*ChannelNode `json:"root_channels"`
+	// UnassignedClients includes authenticated users who have not joined a
+	// channel yet, so later move events can resolve their existing identities.
+	UnassignedClients []*ClientInfo `json:"unassigned_clients,omitempty"`
+	TotalClients      int           `json:"total_clients"`
+	TotalChannels     int           `json:"total_channels"`
+	GeneratedAt       time.Time     `json:"generated_at"`
 }
 
 // clientToInfo converts a state.Client into a serializable ClientInfo, stripping
@@ -75,7 +78,8 @@ func clientToInfo(c *state.Client) ClientInfo {
 // BuildSnapshot walks the state.Manager's channel tree and channel membership
 // to construct a full nested TreeSnapshot. Each ChannelNode is populated with
 // its child channels (recursively) and the ClientInfo of clients currently in
-// that channel. Totals are computed across the whole tree.
+// that channel. Users in channel zero are kept in UnassignedClients. Totals
+// include all visible clients, whether or not they have joined a channel.
 //
 // BuildSnapshot never returns nil; an empty state yields a non-nil snapshot with
 // zero totals.
@@ -126,7 +130,9 @@ func BuildSnapshot(sm *state.Manager, forAdmin bool, viewerUniqueID string) *Tre
 		}
 		total++
 		info := clientToInfo(c)
-		if c.ChannelID != 0 {
+		if c.ChannelID == 0 {
+			snap.UnassignedClients = append(snap.UnassignedClients, &info)
+		} else {
 			if node, ok := nodeByID[c.ChannelID]; ok {
 				node.Clients = append(node.Clients, &info)
 			}

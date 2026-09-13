@@ -68,6 +68,7 @@ type stats struct {
 	connectsFail    atomic.Int64
 	authOK          atomic.Int64
 	authFail        atomic.Int64
+	authFailures    sync.Map // client index -> authFailure; at most one per client
 	sessionFail     atomic.Int64
 	chatSent        atomic.Int64
 	chatRecv        atomic.Int64
@@ -81,6 +82,42 @@ type stats struct {
 
 	// authLatencyBuckets: <10ms, <50ms, <100ms, <500ms, <1s, >=1s.
 	authLatency [6]atomic.Int64
+}
+
+type authFailure struct {
+	stage      string
+	category   string
+	serverCode uint16
+	hasCode    bool
+}
+
+func (f authFailure) String() string {
+	line := fmt.Sprintf("stage=%s category=%s", f.stage, f.category)
+	if f.hasCode {
+		line += fmt.Sprintf(" server_code=%d", f.serverCode)
+	}
+	return line
+}
+
+// recordAuthFailure retains fixed classifications, never credentials, peer
+// messages, decoded payloads, or arbitrary transport error text.
+func (s *stats) recordAuthFailure(index int, stage string, err error) {
+	failure := authFailure{stage: stage, category: "transport"}
+	var serverErr *serverReplyError
+	var transportErr net.Error
+	switch {
+	case errors.As(err, &serverErr):
+		failure.category, failure.serverCode, failure.hasCode = "server_error", serverErr.code, true
+	case stage == "decode" || errors.Is(err, errMalformedServerReply):
+		failure.category = "malformed_response"
+	case stage == "rejected":
+		failure.category = "rejected"
+	case errors.As(err, &transportErr) && transportErr.Timeout():
+		failure.category = "timeout"
+	}
+	if _, loaded := s.authFailures.LoadOrStore(index, failure); !loaded {
+		s.authFail.Add(1)
+	}
 }
 
 func (s *stats) recordReceivedRTP(index int) {
@@ -139,6 +176,11 @@ func (s *stats) print(opts options) {
 	fmt.Printf("clients=%d duration=%s ramp=%s\n", opts.clients, opts.duration, opts.ramp)
 	fmt.Printf("connects: ok=%d fail=%d\n", s.connectsOK.Load(), s.connectsFail.Load())
 	fmt.Printf("auth:     ok=%d fail=%d\n", s.authOK.Load(), s.authFail.Load())
+	for i := 0; i < opts.clients; i++ {
+		if failure, ok := s.authFailures.Load(i); ok {
+			fmt.Printf("auth_failure client=%d %s\n", i, failure.(authFailure))
+		}
+	}
 	fmt.Printf("sessions: fail=%d\n", s.sessionFail.Load())
 	fmt.Printf("chat:     sent=%d received=%d\n", s.chatSent.Load(), s.chatRecv.Load())
 	fmt.Printf("pongs:    %d\n", s.pongs.Load())
@@ -367,18 +409,22 @@ func simulateClient(ctx context.Context, opts options, st *stats, index int) {
 	}
 	start := time.Now()
 	if err := writeMsg(conn, netproto.MsgAuthenticate, authMsg); err != nil {
-		st.authFail.Add(1)
+		st.recordAuthFailure(index, "write", err)
 		return
 	}
 	f, err := readOfType(conn, netproto.MsgAuthResponse, 5*time.Second)
 	if err != nil {
-		st.authFail.Add(1)
+		st.recordAuthFailure(index, "read", err)
 		return
 	}
 	st.bucketLatency(time.Since(start))
 	var resp netproto.AuthResponse
-	if err := netproto.Decode(f, &resp); err != nil || !resp.OK {
-		st.authFail.Add(1)
+	if err := netproto.Decode(f, &resp); err != nil {
+		st.recordAuthFailure(index, "decode", err)
+		return
+	}
+	if !resp.OK {
+		st.recordAuthFailure(index, "rejected", nil)
 		return
 	}
 	st.authOK.Add(1)
@@ -566,7 +612,7 @@ func startOpusPublisher(conn net.Conn, supplied []netproto.ICEServer, relayOnly 
 		_ = pc.Close()
 		return nil, err
 	}
-	answer, earlyCandidates, err := readWebRTCAnswer(conn, 10*time.Second)
+	answer, earlyCandidates, earlyOffer, err := readWebRTCAnswer(conn, 10*time.Second)
 	if err != nil {
 		_ = pc.Close()
 		return nil, err
@@ -579,6 +625,14 @@ func startOpusPublisher(conn net.Conn, supplied []netproto.ICEServer, relayOnly 
 		mid := candidate.SDPMid
 		line := candidate.SDPMLineIndex
 		if err := pc.AddICECandidate(webrtc.ICECandidateInit{Candidate: candidate.Candidate, SDPMid: &mid, SDPMLineIndex: &line}); err != nil {
+			_ = pc.Close()
+			return nil, err
+		}
+	}
+	// The server can publish a renegotiation offer before the initial answer
+	// reaches this reader. Apply it only after the first exchange is stable.
+	if earlyOffer != nil {
+		if err := answerRenegotiation(conn, pc, earlyOffer); err != nil {
 			_ = pc.Close()
 			return nil, err
 		}
@@ -647,16 +701,24 @@ func readRTPIdentifiers(source io.Reader) (uint16, uint32, uint32, error) {
 		binary.BigEndian.Uint32(seed[6:10]), nil
 }
 
-func readWebRTCAnswer(conn net.Conn, timeout time.Duration) (netproto.WebRTCAnswer, []netproto.ICECandidate, error) {
+func readWebRTCAnswer(conn net.Conn, timeout time.Duration) (netproto.WebRTCAnswer, []netproto.ICECandidate, *netproto.Frame, error) {
 	_ = conn.SetReadDeadline(time.Now().Add(timeout))
 	defer func() { _ = conn.SetReadDeadline(time.Time{}) }()
 	var candidates []netproto.ICECandidate
+	var earlyOffer *netproto.Frame
 	for {
 		f, err := netproto.ReadFrame(conn)
 		if err != nil {
-			return netproto.WebRTCAnswer{}, nil, err
+			return netproto.WebRTCAnswer{}, nil, nil, err
 		}
 		switch netproto.MessageType(f.Type) {
+		case netproto.MsgWebRTCOffer:
+			// A peer can have only one unanswered local offer. Bound buffering
+			// even if a broken server sends repeated offers without an answer.
+			if earlyOffer != nil {
+				return netproto.WebRTCAnswer{}, nil, nil, errors.New("multiple WebRTC offers before the initial answer")
+			}
+			earlyOffer = f
 		case netproto.MsgICECandidate:
 			var candidate netproto.ICECandidate
 			if err := netproto.Decode(f, &candidate); err == nil {
@@ -665,9 +727,9 @@ func readWebRTCAnswer(conn net.Conn, timeout time.Duration) (netproto.WebRTCAnsw
 		case netproto.MsgWebRTCAnswer:
 			var answer netproto.WebRTCAnswer
 			if err := netproto.Decode(f, &answer); err != nil {
-				return netproto.WebRTCAnswer{}, nil, err
+				return netproto.WebRTCAnswer{}, nil, nil, err
 			}
-			return answer, candidates, nil
+			return answer, candidates, earlyOffer, nil
 		case netproto.MsgPing:
 			_ = writeMsg(conn, netproto.MsgPong, netproto.Pong{})
 		}
@@ -710,8 +772,18 @@ func writeMsg(conn net.Conn, mt netproto.MessageType, msg any) error {
 	return netproto.WriteFrame(conn, f)
 }
 
-// readOfType reads frames until one of the wanted type arrives or the
-// deadline passes.
+type serverReplyError struct {
+	code uint16
+}
+
+func (e *serverReplyError) Error() string {
+	return fmt.Sprintf("server rejected request (code=%d)", e.code)
+}
+
+var errMalformedServerReply = errors.New("malformed server error frame")
+
+// readOfType reads frames until the requested type, a server rejection, or
+// the deadline. Requesting MsgError explicitly still returns its raw frame.
 func readOfType(conn net.Conn, mt netproto.MessageType, timeout time.Duration) (*netproto.Frame, error) {
 	_ = conn.SetReadDeadline(time.Now().Add(timeout))
 	defer func() { _ = conn.SetReadDeadline(time.Time{}) }()
@@ -722,6 +794,13 @@ func readOfType(conn net.Conn, mt netproto.MessageType, timeout time.Duration) (
 		}
 		if netproto.MessageType(f.Type) == mt {
 			return f, nil
+		}
+		if netproto.MessageType(f.Type) == netproto.MsgError {
+			var reply netproto.Error
+			if err := netproto.Decode(f, &reply); err != nil {
+				return nil, errMalformedServerReply
+			}
+			return nil, &serverReplyError{code: reply.Code}
 		}
 	}
 }

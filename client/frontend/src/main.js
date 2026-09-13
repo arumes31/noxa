@@ -204,6 +204,8 @@ function applyAppearance() {
         state.settings = null;
     }
     applyAppearance();
+    // initTabs renders before the asynchronous native settings load completes.
+    window.__voicxTabs.renderRecents();
     try {
         const uid = await window.go.main.App.IdentityUID();
         if (uid) $("login-identity").textContent = uid.slice(0, 12) + "…";
@@ -214,6 +216,7 @@ function applyAppearance() {
         state.clientVersion = v;
     } catch { /* version display is best-effort */ }
     document.querySelector(".login-card").classList.add("in");
+    startupAutoCheck();
 })();
 
 function showLogin() {
@@ -342,7 +345,6 @@ async function connectFromLogin() {
         showWorkspace();
         refreshPermissions();
         applyWhisperSettings();
-        startupAutoCheck();
         chatUI.onConnect(); // (133) MOTD + myUniqueID for mentions/own-msgs
         // (6b) group memberships drive tree colors/hoisted sections.
         P().refreshGroups().then(() => renderTree());
@@ -561,7 +563,23 @@ async function completeReconnect(c, generation, tabID) {
     return generation === reconnectGeneration;
 }
 
-async function attemptReconnect(c = state.lastConnect, { announceFailure = true } = {}) {
+async function retireReplacedTab(sourceTabID, replacementTabID, c, generation) {
+    if (!sourceTabID || !replacementTabID || sourceTabID === replacementTabID) return;
+    try {
+        const tabs = await window.go.main.App.ListTabs();
+        if (generation !== reconnectGeneration) return;
+        const source = tabs?.find((tab) => tab.id === sourceTabID);
+        // Explicit connections may intentionally open the same server twice.
+        // Only the disconnected tab that initiated this retry is replaced.
+        if (!source || source.connected || source.addr !== c.addr || source.nickname !== c.nick) return;
+        await window.go.main.App.CloseTab(sourceTabID);
+        state.tabConnects.delete(sourceTabID);
+    } catch (error) {
+        sysMsg("reconnected, but could not close the previous server tab: " + String(error));
+    }
+}
+
+async function attemptReconnect(c = state.lastConnect, { announceFailure = true, sourceTabID = state.activeTabID } = {}) {
     if (!c || state.reconnectInFlight) return false;
     const generation = reconnectGeneration;
     state.reconnectInFlight = true;
@@ -595,6 +613,7 @@ async function attemptReconnect(c = state.lastConnect, { announceFailure = true 
     if (!completed && generation !== reconnectGeneration && tabID) {
         try { await window.go.main.App.CloseTab(tabID); } catch { /* best-effort stale-tab cleanup */ }
     }
+    if (completed) await retireReplacedTab(sourceTabID, tabID, c, generation);
     return completed;
 }
 
@@ -647,7 +666,7 @@ function scheduleReconnect(
     state.reconnectTimer = setTimeout(async () => {
         clearReconnectTimer();
         if (generation !== reconnectGeneration) return;
-        const connected = await attemptReconnect(reconnectTarget, { announceFailure: false });
+        const connected = await attemptReconnect(reconnectTarget, { announceFailure: false, sourceTabID });
         if (connected) return;
         if (generation !== reconnectGeneration) return;
         chatUI.cancelReconnectAnnouncementBatch();
@@ -923,6 +942,7 @@ window.runtime.EventsOn("snapshot", (json) => {
     state.clients = [];
     lastKnownChannel.clear(); // the snapshot is authoritative
     for (const root of snap.root_channels || []) flattenChannel(root);
+    for (const client of snap.unassigned_clients || []) state.clients.push(client);
     for (const c of state.clients) {
         if (prioByID.has(c.client_id)) c.priority_speaker = true;
         if (shareByID.has(c.client_id)) c.sharing = true;
@@ -1069,9 +1089,18 @@ window.runtime.EventsOn("event", (json) => {
             // invisible→visible return is announced as leave+join: restore the
             // channel remembered from the leave so the user is not stranded in
             // channel 0 ("no channel") until the next user_moved.
-            const joinedChannel = d.channel_id ?? lastKnownChannel.get(d.client_id) ?? 0;
+            const existing = state.clients.find((client) => client.client_id === d.client_id);
+            const joinedChannel = d.channel_id ?? lastKnownChannel.get(d.client_id) ?? existing?.channel_id ?? 0;
             lastKnownChannel.delete(d.client_id);
-            state.clients.push({ client_id: d.client_id, unique_id: d.unique_id, nickname: d.nickname, channel_id: joinedChannel, is_speaking: false });
+            if (existing) {
+                // Auth's join can follow a snapshot already containing self.
+                // Keep presence, bot and media metadata from that snapshot.
+                existing.unique_id = d.unique_id ?? existing.unique_id;
+                existing.nickname = d.nickname ?? existing.nickname;
+                existing.channel_id = joinedChannel;
+            } else {
+                state.clients.push({ client_id: d.client_id, unique_id: d.unique_id, nickname: d.nickname, channel_id: joinedChannel, is_speaking: false });
+            }
             if (d.client_id !== state.myClientID) {
                 chatUI.sysJoinLeave(d.nickname || d.unique_id || "someone", "joined"); // (130/131)
                 if (joinedChannel === state.myChannelID && state.myChannelID !== 0) {
@@ -1940,7 +1969,7 @@ function addChat(d) {
         return;
     }
     // File logging per scope (Chat setting) — kept from the pre-5b renderer.
-    const scope = d.channel_id ? "channel" : (d.offline ? "dm · offline" : d.e2e ? "dm" : "chat");
+    const scope = d.direct || d.e2e ? (d.offline ? "dm · offline" : "dm") : (d.channel_id ? "channel" : "chat");
     const s = state.settings;
     if (s) {
         const line = `[${scope}] ${d.from}: ${d.text}`;

@@ -149,8 +149,18 @@ func (v *Voice) channelAudioFor(clientID string) ChannelAudio {
 // scheduleRenegotiate debounces track-set changes for a peer into a single
 // renegotiation offer, capped at one offer per renegRateLimit.
 func (v *Voice) scheduleRenegotiate(clientID string) {
+	v.scheduleRenegotiateForState(clientID, nil)
+}
+
+// expected prevents a late answer from recreating scheduling state after the
+// peer was closed or replaced.
+func (v *Voice) scheduleRenegotiateForState(clientID string, expected *renegState) {
 	v.renegMu.Lock()
 	st, ok := v.reneg[clientID]
+	if expected != nil && st != expected {
+		v.renegMu.Unlock()
+		return
+	}
 	if !ok {
 		st = &renegState{}
 		v.reneg[clientID] = st
@@ -171,7 +181,7 @@ func (v *Voice) scheduleRenegotiate(clientID string) {
 
 	// Schedule outside the renegotiation mutex: production timers run
 	// asynchronously, but test schedulers may invoke callbacks immediately.
-	timer := clock.AfterFunc(delay, func() { v.sendRenegotiation(clientID, generation) })
+	timer := clock.AfterFunc(delay, func() { v.sendRenegotiation(clientID, st, generation) })
 	v.renegMu.Lock()
 	if active, ok := v.reneg[clientID]; ok && active == st &&
 		active.generation == generation && active.pending {
@@ -200,42 +210,50 @@ func (v *Voice) renegScheduleConfigLocked() (renegClock, time.Duration, time.Dur
 }
 
 // sendRenegotiation creates and delivers a renegotiation offer for a peer.
-// It tolerates unanswered previous offers: the skip is logged and the server
-// keeps running. Pion v3.3 cannot roll back a local offer, so a fresh offer
-// can only be created once the client answers (HandleAnswer) or re-offers
-// (HandleOffer recreates the connection) — until then renegotiation offers
-// for that peer are refused by CreateOffer and skipped.
-func (v *Voice) sendRenegotiation(clientID string, generation uint64) {
+// An unanswered offer suspends delivery while retaining pending track changes.
+// HandleAnswer resumes those changes once signaling is stable again.
+func (v *Voice) sendRenegotiation(clientID string, expected *renegState, generation uint64) {
 	v.renegMu.Lock()
 	st, ok := v.reneg[clientID]
-	if !ok || st.generation != generation || !st.pending {
+	if !ok || st != expected || st.generation != generation || !st.pending {
 		v.renegMu.Unlock()
 		return
 	}
 	st.timer = nil
-	st.pending = false
-	sender := v.offerSender
-	unanswered := st.unanswered
-	clock, _, _ := v.renegScheduleConfigLocked()
-	v.renegMu.Unlock()
-
-	if v.engine == nil {
+	if st.unanswered > 0 {
+		unanswered := st.unanswered
+		v.renegMu.Unlock()
+		v.logger.Warn("client did not answer previous renegotiation offer; pending changes will resume after its answer",
+			zap.String("client_id", clientID),
+			zap.Int("unanswered", unanswered),
+		)
 		return
 	}
-	wrapper := v.engine.PeerConnection(clientID)
+	st.pending = false
+	sender := v.offerSender
+	clock, _, _ := v.renegScheduleConfigLocked()
+	var wrapper *PeerConnectionWrapper
+	if v.engine != nil {
+		wrapper = v.engine.PeerConnection(clientID)
+	}
+	if wrapper != nil {
+		// Reserve the offer before CreateOffer changes Pion's signaling state.
+		// A concurrent track change must remain pending even before delivery.
+		st.unanswered = 1
+	}
+	v.renegMu.Unlock()
+
 	if wrapper == nil {
 		return
 	}
 
-	if unanswered > 0 {
-		v.logger.Warn("client did not answer previous renegotiation offer; skipping until it answers or re-offers (old clients get no audio until updated)",
-			zap.String("client_id", clientID),
-			zap.Int("unanswered", unanswered),
-		)
-	}
-
 	offer, err := wrapper.CreateOffer()
 	if err != nil {
+		v.renegMu.Lock()
+		if v.reneg[clientID] == st {
+			st.unanswered = 0
+		}
+		v.renegMu.Unlock()
 		v.logger.Debug("renegotiation offer skipped",
 			zap.String("client_id", clientID),
 			zap.Error(err),
@@ -250,10 +268,11 @@ func (v *Voice) sendRenegotiation(clientID string, generation uint64) {
 	}
 
 	v.renegMu.Lock()
-	if current, ok := v.reneg[clientID]; ok {
-		current.lastSent = clock.Now()
-		current.unanswered++
+	if v.reneg[clientID] != st {
+		v.renegMu.Unlock()
+		return
 	}
+	st.lastSent = clock.Now()
 	v.renegMu.Unlock()
 
 	if sender != nil {
@@ -357,6 +376,9 @@ func (v *Voice) HandleOffer(clientID, offerSDP string, onLocalCandidate func(can
 // HandleAnswer applies an SDP answer from the client (used when the server
 // initiated renegotiation).
 func (v *Voice) HandleAnswer(clientID, answerSDP string) error {
+	v.renegMu.Lock()
+	st := v.reneg[clientID]
+	v.renegMu.Unlock()
 	wrapper := v.engine.PeerConnection(clientID)
 	if wrapper == nil {
 		return ErrNoPeer
@@ -365,10 +387,15 @@ func (v *Voice) HandleAnswer(clientID, answerSDP string) error {
 		return err
 	}
 	v.renegMu.Lock()
-	if st, ok := v.reneg[clientID]; ok {
+	pending := false
+	if current := v.reneg[clientID]; st != nil && current == st {
 		st.unanswered = 0
+		pending = st.pending
 	}
 	v.renegMu.Unlock()
+	if pending {
+		v.scheduleRenegotiateForState(clientID, st)
+	}
 	return nil
 }
 

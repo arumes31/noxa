@@ -154,7 +154,7 @@ flowchart TD
 ### Option 2: Building from Source
 
 #### Prerequisites
-* **Go**: `>= 1.26.6` (both Go modules declare this minimum)
+* **Go**: `>= 1.27.1` (both Go modules declare this minimum)
 * **Node.js**: `>= 24`
 * **Wails CLI**: `go install github.com/wailsapp/wails/v2/cmd/wails@v2.13.0`
 * **PostgreSQL**: `>= 16`

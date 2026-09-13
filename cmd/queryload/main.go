@@ -6,6 +6,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -48,6 +49,7 @@ func main() {
 
 type result struct {
 	ok, failed atomic.Int64
+	canceled   atomic.Int64
 	mu         sync.Mutex
 	latency    []time.Duration
 }
@@ -95,9 +97,16 @@ func runWithDeps(parent context.Context, o options, deps queryloadDeps) error {
 		}
 	}
 	for i := 0; i < o.connections; i++ {
+		if err := ctx.Err(); err != nil {
+			closeWorkers()
+			return err
+		}
 		conn, reader, err := deps.dialAndLogin(o)
 		if err != nil {
 			closeWorkers()
+			if err := ctx.Err(); err != nil {
+				return err
+			}
 			return fmt.Errorf("connection %d: %w", i, err)
 		}
 		workers = append(workers, workerConn{conn: conn, reader: reader})
@@ -109,9 +118,21 @@ func runWithDeps(parent context.Context, o options, deps queryloadDeps) error {
 			defer wg.Done()
 			defer func() { _ = conn.Close() }()
 			for range jobs {
+				if ctx.Err() != nil {
+					res.canceled.Add(1)
+					continue
+				}
 				start := deps.now()
-				if _, err := fmt.Fprintln(conn, o.command); err != nil || readResponse(reader) != nil {
-					res.failed.Add(1)
+				_, err := fmt.Fprintln(conn, o.command)
+				if err == nil {
+					err = readResponse(reader)
+				}
+				if err != nil {
+					if ctx.Err() != nil && (errors.Is(err, net.ErrClosed) || errors.Is(err, io.ErrClosedPipe)) {
+						res.canceled.Add(1)
+					} else {
+						res.failed.Add(1)
+					}
 					continue
 				}
 				res.ok.Add(1)
@@ -136,6 +157,12 @@ func runWithDeps(parent context.Context, o options, deps queryloadDeps) error {
 			closeWorkers()
 			wg.Wait()
 			deps.report(o, res)
+			if err := parent.Err(); err != nil {
+				return err
+			}
+			if res.failed.Load() != 0 || res.ok.Load() == 0 {
+				return fmt.Errorf("query workload failed: completed=%d failed=%d", res.ok.Load(), res.failed.Load())
+			}
 			return nil
 		case <-ticker.Chan():
 			select {
@@ -215,8 +242,8 @@ func printReportTo(out io.Writer, o options, r *result) {
 		return latency[idx]
 	}
 	ok := r.ok.Load()
-	if _, err := fmt.Fprintf(out, "queryload target=%d/s achieved=%.0f/s ok=%d failed=%d p50=%s p95=%s p99=%s\n",
-		o.rate, float64(ok)/o.duration.Seconds(), ok, r.failed.Load(), percentile(.50), percentile(.95), percentile(.99)); err != nil {
+	if _, err := fmt.Fprintf(out, "queryload target=%d/s achieved=%.0f/s ok=%d failed=%d canceled=%d p50=%s p95=%s p99=%s\n",
+		o.rate, float64(ok)/o.duration.Seconds(), ok, r.failed.Load(), r.canceled.Load(), percentile(.50), percentile(.95), percentile(.99)); err != nil {
 		return
 	}
 }

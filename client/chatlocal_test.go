@@ -47,7 +47,7 @@ func TestDMHistoryIsCiphertextAtRest(t *testing.T) {
 	a := newLocalApp(t, cm)
 
 	if err := a.DMHistoryAppend("peer-1", "bob", DMEntry{
-		FromUniqueID: "peer-1", FromNickname: "bob", Body: canary, SentAt: 1000,
+		FromUniqueID: "peer-1", FromNickname: "bob", Body: canary, SentAt: 1000, EncVerified: true,
 	}); err != "" {
 		t.Fatalf("DMHistoryAppend: %s", err)
 	}
@@ -88,6 +88,9 @@ func TestDMHistoryIsCiphertextAtRest(t *testing.T) {
 	}
 	if msgs[0].Seq != 1 || msgs[1].Seq != 2 {
 		t.Fatalf("seq = %d,%d, want 1,2", msgs[0].Seq, msgs[1].Seq)
+	}
+	if !msgs[0].EncVerified || msgs[1].EncVerified {
+		t.Fatalf("local verification provenance did not survive restart: %+v", msgs)
 	}
 
 	peers := restarted.DMHistoryPeers()

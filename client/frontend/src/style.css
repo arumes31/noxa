@@ -464,6 +464,7 @@ body:not(.details-collapsed) #details-toggle { display: none; }
 }
 .dlg {
     width: 340px; padding: 20px;
+    max-width: calc(100vw - 32px); max-height: calc(100dvh - 32px); overflow: auto;
     background: var(--bg-raised); border: 1px solid var(--border); border-radius: 10px;
     box-shadow: var(--shadow);
     display: flex; flex-direction: column; gap: 12px;

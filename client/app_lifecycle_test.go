@@ -14,6 +14,56 @@ func TestApplyAndRestartRequiresWindowContext(t *testing.T) {
 	}
 }
 
+func TestApplyAndRestartExitsWithCloseToTrayEnabled(t *testing.T) {
+	originalLaunch, originalQuit := restartLaunch, wailsQuit
+	originalHide, originalMarkHidden := windowHide, windowMarkHidden
+	t.Cleanup(func() {
+		restartLaunch, wailsQuit = originalLaunch, originalQuit
+		windowHide, windowMarkHidden = originalHide, originalMarkHidden
+	})
+	app := &App{ctx: context.Background(), settings: DefaultSettings()}
+	app.settings.CloseToTray = true
+	hides := 0
+	windowHide = func(context.Context) { hides++ }
+	windowMarkHidden = func() {}
+	if !app.beforeClose(app.ctx) || hides != 1 {
+		t.Fatal("ordinary window close did not hide to tray")
+	}
+	restartLaunch = func(string) error { return nil }
+	quitPrevented := true
+	wailsQuit = func(ctx context.Context) { quitPrevented = app.beforeClose(ctx) }
+	if got := app.ApplyAndRestart(); got != "" {
+		t.Fatalf("restart: %s", got)
+	}
+	if quitPrevented || hides != 1 {
+		t.Fatal("close-to-tray intercepted update restart and kept the old process running")
+	}
+	if !app.settings.CloseToTray {
+		t.Fatal("restart changed the user's close-to-tray preference")
+	}
+}
+
+func TestFailedRestartPreservesCloseToTrayBehavior(t *testing.T) {
+	originalLaunch, originalQuit := restartLaunch, wailsQuit
+	originalHide, originalMarkHidden := windowHide, windowMarkHidden
+	t.Cleanup(func() {
+		restartLaunch, wailsQuit = originalLaunch, originalQuit
+		windowHide, windowMarkHidden = originalHide, originalMarkHidden
+	})
+	app := &App{ctx: context.Background(), settings: DefaultSettings()}
+	app.settings.CloseToTray = true
+	windowHide = func(context.Context) {}
+	windowMarkHidden = func() {}
+	restartLaunch = func(string) error { return errors.New("launch failed") }
+	wailsQuit = func(context.Context) { t.Error("failed launch quit the running application") }
+	if got := app.ApplyAndRestart(); got == "" {
+		t.Fatal("failed launch reported success")
+	}
+	if !app.beforeClose(app.ctx) {
+		t.Fatal("failed restart disabled close-to-tray")
+	}
+}
+
 func TestApplyAndRestartLaunchesBeforeQuitAndStopsOnLaunchError(t *testing.T) {
 	originalLaunch, originalQuit := restartLaunch, wailsQuit
 	t.Cleanup(func() {

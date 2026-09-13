@@ -48,10 +48,20 @@ test.beforeEach(async ({ page }) => {
                 return async (...args) => {
                     window.__calls[method] = (window.__calls[method] || 0) + 1;
                     (window.__callArgs[method] ||= []).push(structuredClone(args));
-                    if (method === "GetSettings") return structuredClone(initialSettings);
+                    if (method === "GetSettings") {
+                        const persisted = sessionStorage.getItem("startup-settings");
+                        if (persisted) {
+                            await new Promise((resolve) => { window.__resolveStartupSettings = resolve; });
+                            return JSON.parse(persisted);
+                        }
+                        return structuredClone(initialSettings);
+                    }
                     if (method === "SaveSettings") { window.__savedSettings = structuredClone(args[0]); return ""; }
                     if (method === "CertificateClockWarning") return window.__certificateClockWarning || "";
                     if (method === "ConnectBookmarkTabWithID") {
+                        if (typeof window.__connectBookmarkHandler === "function") {
+                            return await window.__connectBookmarkHandler(...args);
+                        }
                         if (window.__connectBookmarkGate) await window.__connectBookmarkGate;
                         return {
                             tab_id: window.__connectTabID || "",
@@ -65,6 +75,7 @@ test.beforeEach(async ({ page }) => {
                         return { tab_id: window.__guestConnectTabID || "", error: "" };
                     }
                     if (method === "ListTabs") return structuredClone(window.__tabs);
+                    if (method === "DMHistoryLoad") return structuredClone(window.__dmHistory?.[args[0]] || []);
                     if (method === "Connected") {
                         if (window.__connectedGate) await window.__connectedGate;
                         return !!window.__connected;
@@ -441,6 +452,115 @@ test("ignores a delayed microphone failure after the voice session changes", asy
     expect(await page.evaluate(() => window.__voicx.state.micState)).toBe("unknown");
 });
 
+test("routes decrypted direct messages and echoes without mixing global chat or peers", async ({ page }) => {
+    await page.evaluate(() => {
+        const { state } = window.__voicx;
+        state.myUniqueID = "alpha";
+        state.myNickname = "ALPHA";
+        window.__voicx.showWorkspace();
+        for (const callback of window.__events.event || []) callback(JSON.stringify({
+            type: "chat", data: { direct: true, to_unique_id: "alpha", from_unique_id: "bravo", from: "BRAVO",
+                text: "private Grüße 🌿", enc_verified: true, client_msg_id: "received-dm" },
+        }));
+    });
+    await expect(page.locator("#chat-log")).not.toContainText("private Grüße");
+    const bravoTab = page.locator("#pm-tabs .pm-tab").filter({ hasText: "BRAVO" });
+    await expect(bravoTab).toBeVisible();
+    await bravoTab.click();
+    await expect(page.locator("#chat-log")).toContainText("private Grüße 🌿");
+    await expect(page.locator("#chat-log .msg-tag")).toHaveText("dm");
+    await expect(page.locator("#chat-log .msg-lock")).toHaveAttribute("title", /end-to-end encrypted/);
+
+    await page.evaluate(() => {
+        window.__voicxChat.openPM("charlie", "CHARLIE");
+        for (const callback of window.__events.event || []) callback(JSON.stringify({
+            type: "chat", data: { direct: true, to_unique_id: "bravo", from_unique_id: "alpha", from: "ALPHA",
+                text: "echo for Bravo", enc_verified: true, client_msg_id: "sent-dm" },
+        }));
+    });
+    await expect(page.locator("#chat-log")).not.toContainText("echo for Bravo");
+    await bravoTab.click();
+    await expect(page.locator("#chat-log")).toContainText("echo for Bravo");
+    await page.evaluate(() => {
+        for (const callback of window.__events.event || []) callback(JSON.stringify({
+            type: "chat", data: { direct: true, from_unique_id: "bravo", from: "BRAVO",
+                text: "[encrypted message — key unavailable]", client_msg_id: "unopened-dm" },
+        }));
+    });
+    await expect(page.locator("#chat-log .missing-key .msg-lock")).toHaveText("⚠");
+    const records = await page.evaluate(() => window.__callArgs.DMHistoryAppend.map((args) => args[2]));
+    expect(records.find((record) => record.client_msg_id === "received-dm").enc_verified).toBe(true);
+    expect(records.find((record) => record.client_msg_id === "unopened-dm").enc_verified).toBe(false);
+});
+
+test("restores DM history without claiming legacy or plaintext records were verified", async ({ page }) => {
+    await page.evaluate(() => {
+        window.__voicx.showWorkspace();
+        window.__dmHistory = { bravo: [
+            { body: "legacy record", from_nickname: "BRAVO", sent_at: 10 },
+            { body: "plaintext record", from_nickname: "BRAVO", sent_at: 11, enc_verified: false },
+            { body: "verified record", from_nickname: "BRAVO", sent_at: 12, enc_verified: true },
+        ] };
+        window.__voicxChat.openPM("bravo", "BRAVO");
+    });
+    await expect(page.locator("#chat-log")).toContainText("verified record");
+    await expect(page.locator("#chat-log .msg-tag")).toHaveText(["dm", "dm", "dm"]);
+    await expect(page.locator("#chat-log .msg-lock")).toHaveCount(1);
+    await expect(page.locator("#chat-log .msg-lock")).toHaveAttribute("title", /end-to-end encrypted/);
+});
+
+test("tracks existing unassigned clients when they later join a channel", async ({ page }) => {
+    await page.evaluate(() => {
+        const { state } = window.__voicx;
+        state.myClientID = "alpha";
+        window.__voicx.showWorkspace();
+        for (const callback of window.__events.snapshot || []) callback(JSON.stringify({
+            root_channels: [{ ChannelID: 1, ParentID: 0, Name: "Echo Test", clients: [] }],
+            unassigned_clients: [
+                { client_id: "alpha", unique_id: "uid-alpha", nickname: "ALPHA", channel_id: 0, is_bot: true, status: "away" },
+                { client_id: "bravo", unique_id: "uid-bravo", nickname: "BRAVO", channel_id: 0 },
+            ],
+        }));
+        // Auth's join follows its snapshot; it must not duplicate self or
+        // overwrite the richer snapshot metadata with partial event fields.
+        for (const callback of window.__events.event || []) callback(JSON.stringify({
+            type: "user_joined", data: { client_id: "alpha", unique_id: "uid-alpha", nickname: "ALPHA" },
+        }));
+        for (const clientID of ["alpha", "bravo"]) {
+            for (const callback of window.__events.event || []) callback(JSON.stringify({
+                type: "user_moved", data: { client_id: clientID, channel_id: 1 },
+            }));
+        }
+    });
+    await expect(page.locator('.channel[data-chid="1"] .ch-count')).toHaveText("[2]");
+    await expect(page.locator('.client[data-clid="bravo"]')).toContainText("BRAVO");
+    expect(await page.evaluate(() => window.__voicx.state.clients.map((client) => ({
+        id: client.client_id, channel: client.channel_id, bot: !!client.is_bot, status: client.status || "",
+    })))).toEqual([
+        { id: "alpha", channel: 1, bot: true, status: "away" },
+        { id: "bravo", channel: 1, bot: false, status: "" },
+    ]);
+});
+
+test("restores recent servers when persisted startup settings resolve", async ({ page }) => {
+    await page.evaluate((initialSettings) => {
+        sessionStorage.setItem("startup-settings", JSON.stringify({
+            ...initialSettings,
+            recents: [{ addr: "127.0.0.1:12583", nickname: "ALPHA", last_used: 1789289089 }],
+        }));
+    }, settings);
+    await page.reload();
+    await page.waitForFunction(() => window.__voicxTabs && window.__resolveStartupSettings);
+    await expect(page.locator("#login-recents .recent-row")).toHaveCount(0);
+    await page.evaluate(() => window.__resolveStartupSettings());
+
+    const recent = page.getByRole("button", { name: "ALPHA @ 127.0.0.1:12583", exact: true });
+    await expect(recent).toBeVisible();
+    await recent.click();
+    await expect(page.locator("#login-addr")).toHaveValue("127.0.0.1:12583");
+    await expect(page.locator("#login-nick")).toHaveValue("ALPHA");
+});
+
 test("edits a recent server in the login form and focuses its address", async ({ page }) => {
     await page.evaluate(() => {
         window.__voicx.state.settings.recents = [{
@@ -671,6 +791,86 @@ test("keeps an automatic reconnect pinned to the server that dropped", async ({ 
     expect(await page.evaluate(() => window.__callArgs.ConnectBookmarkTabWithID[0])).toEqual([
         "Dropped", "dropped.example:12333", "Alice", "secret", "",
     ]);
+});
+
+test("successful automatic reconnect replaces only the exact dropped server tab", async ({ page }) => {
+    await page.clock.install();
+    await page.evaluate(async () => {
+        const state = window.__voicx.state;
+        state.activeTabID = "dropped-tab";
+        state.settings.reconnect_on_loss = true;
+        state.lastConnect = { addr: "voice.example:12333", nick: "Alice", pw: "secret", spw: "", bookmark: "" };
+        window.__tabs = [
+            { id: "dropped-tab", addr: state.lastConnect.addr, nickname: "Alice", connected: false, active: true },
+            { id: "other-tab", addr: state.lastConnect.addr, nickname: "Alice", connected: false, active: false },
+        ];
+        window.__connectBookmarkHandler = async (_bookmark, addr, nickname) => {
+            const tabID = `replacement-${window.__calls.ConnectBookmarkTabWithID}`;
+            window.__tabs.forEach((tab) => { tab.active = false; });
+            window.__tabs.push({ id: tabID, addr, nickname, connected: true, active: true });
+            for (const callback of window.__events.tab_reset || []) callback(tabID);
+            return { tab_id: tabID, error: "" };
+        };
+        window.__closeTabHandler = async (tabID) => {
+            window.__tabs = window.__tabs.filter((tab) => tab.id !== tabID);
+            for (const callback of window.__events.tab_update || []) callback(structuredClone(window.__tabs));
+        };
+        for (const callback of window.__events.disconnected || []) callback();
+        // A user changes tabs during the retry countdown. Cleanup must still
+        // target the tab that dropped, including when both addresses match.
+        await window.go.main.App.SetActiveTab("other-tab");
+    });
+    await page.clock.runFor(5000);
+    await expect.poll(() => page.evaluate(() => window.__tabs.map((tab) => tab.id))).toEqual(["other-tab", "replacement-1"]);
+    expect(await page.evaluate(() => window.__callArgs.CloseTab)).toEqual([["dropped-tab"]]);
+
+    await page.evaluate(() => {
+        window.__tabs.find((tab) => tab.active).connected = false;
+        for (const callback of window.__events.disconnected || []) callback();
+    });
+    await page.clock.runFor(5000);
+    await expect.poll(() => page.evaluate(() => window.__tabs.map((tab) => tab.id))).toEqual(["other-tab", "replacement-2"]);
+    expect(await page.evaluate(() => window.__callArgs.CloseTab)).toEqual([["dropped-tab"], ["replacement-1"]]);
+});
+
+test("failed automatic reconnect preserves the dropped server tab", async ({ page }) => {
+    await page.clock.install();
+    await page.evaluate(() => {
+        const state = window.__voicx.state;
+        state.activeTabID = "dropped-tab";
+        state.settings.reconnect_on_loss = true;
+        state.lastConnect = { addr: "voice.example:12333", nick: "Alice", pw: "secret", spw: "", bookmark: "" };
+        window.__tabs = [{ id: "dropped-tab", addr: state.lastConnect.addr, nickname: "Alice", connected: false, active: true }];
+        window.__connectBookmarkResult = "connection refused";
+        for (const callback of window.__events.disconnected || []) callback();
+    });
+    await page.clock.runFor(5000);
+    await expect.poll(() => page.evaluate(() => window.__calls.ConnectBookmarkTabWithID || 0)).toBe(1);
+    expect(await page.evaluate(() => window.__calls.CloseTab || 0)).toBe(0);
+    expect(await page.evaluate(() => window.__tabs.map((tab) => tab.id))).toEqual(["dropped-tab"]);
+});
+
+test("automatic reconnect does not retire a source tab that is connected again", async ({ page }) => {
+    await page.clock.install();
+    await page.evaluate(() => {
+        const state = window.__voicx.state;
+        state.activeTabID = "dropped-tab";
+        state.settings.reconnect_on_loss = true;
+        state.lastConnect = { addr: "voice.example:12333", nick: "Alice", pw: "secret", spw: "", bookmark: "" };
+        window.__tabs = [{ id: "dropped-tab", addr: state.lastConnect.addr, nickname: "Alice", connected: false, active: true }];
+        window.__connectBookmarkHandler = async (_bookmark, addr, nickname) => {
+            window.__tabs[0].connected = true;
+            window.__tabs[0].active = false;
+            window.__tabs.push({ id: "replacement", addr, nickname, connected: true, active: true });
+            for (const callback of window.__events.tab_reset || []) callback("replacement");
+            return { tab_id: "replacement", error: "" };
+        };
+        for (const callback of window.__events.disconnected || []) callback();
+    });
+    await page.clock.runFor(5000);
+    await expect(page.locator("#conn-pill")).toHaveClass(/\bup\b/);
+    expect(await page.evaluate(() => window.__calls.CloseTab || 0)).toBe(0);
+    expect(await page.evaluate(() => window.__tabs.map((tab) => tab.id))).toEqual(["dropped-tab", "replacement"]);
 });
 
 test("does not finish an in-flight reconnect after an intentional disconnect", async ({ page }) => {
@@ -2589,6 +2789,43 @@ test("computes names for settings and generated dialog controls", async ({ page 
     await expect(create.locator(".cc-type")).toHaveAccessibleName("Type");
     await expect(create.locator(".cc-maxclients")).toHaveAccessibleName("Max clients (0 = unlimited)");
     await page.keyboard.press("Escape");
+});
+
+test("keeps long channel dialogs within a small window and scrolls to their actions", async ({ page }) => {
+    // Layout regression from the native 1024x768 window. Bindings are mocked;
+    // this checks the shared dialog layout, not real channel creation.
+    await page.setViewportSize({ width: 1024, height: 730 });
+    await page.evaluate(() => window.__voicx.showWorkspace());
+    await page.getByRole("button", { name: "Create channel", exact: true }).click();
+    const dialog = page.getByRole("dialog", { name: "Create channel" });
+    const panel = dialog.locator(".dlg");
+    await panel.evaluate(async (element) => {
+        await document.fonts.ready;
+        await Promise.all(element.getAnimations().map((animation) => animation.finished));
+    });
+    const bounds = await panel.boundingBox();
+    expect(bounds.y).toBeGreaterThanOrEqual(0);
+    expect(bounds.y + bounds.height).toBeLessThanOrEqual(730);
+    await expect(dialog.getByRole("heading", { name: "Create channel" })).toBeInViewport({ ratio: 1 });
+    const name = dialog.getByRole("textbox", { name: "Name", exact: true });
+    await name.fill("Small window room");
+    const create = dialog.getByRole("button", { name: "Create", exact: true });
+    const cancel = dialog.getByRole("button", { name: "Cancel", exact: true });
+    await page.keyboard.press("Shift+Tab");
+    await expect(cancel).toBeFocused();
+    await expect(cancel).toBeInViewport({ ratio: 1 });
+    await page.keyboard.press("Tab");
+    await expect(name).toBeFocused();
+    await expect(name).toBeInViewport({ ratio: 1 });
+    await page.keyboard.press("Shift+Tab");
+    await page.keyboard.press("Shift+Tab");
+    await expect(create).toBeFocused();
+    await expect(create).toBeInViewport({ ratio: 1 });
+    await expect(cancel).toBeInViewport({ ratio: 1 });
+    await expect.poll(() => panel.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
+    await page.keyboard.press("Enter");
+    await expect(dialog).toHaveCount(0);
+    await expect.poll(() => page.evaluate(() => window.__callArgs.CreateChannel?.[0]?.[0])).toBe("Small window room");
 });
 
 test("closes menus when keyboard focus exits and keeps expansion state in sync", async ({ page }) => {

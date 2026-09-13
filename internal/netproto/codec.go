@@ -619,7 +619,13 @@ type ChatSend struct {
 // fetches the sender's public key from the directory). Enc/KeyID mirror
 // ChatSend; E2E marks true end-to-end (box) messages for UI display.
 type ChatBroadcast struct {
-	ChannelID    string `json:"channel_id,omitempty"`
+	ChannelID string `json:"channel_id,omitempty"`
+	// Direct and ToUniqueID preserve routing independently of crypto flags,
+	// including the recipient needed to decrypt and place the sender's echo.
+	Direct     bool   `json:"direct,omitempty"`
+	ToUniqueID string `json:"to_unique_id,omitempty"`
+	// EncVerified is set only by the receiving native client after opening.
+	EncVerified  bool   `json:"enc_verified,omitempty"`
 	FromClientID string `json:"from_client_id,omitempty"`
 	FromUniqueID string `json:"from_unique_id,omitempty"`
 	From         string `json:"from"`

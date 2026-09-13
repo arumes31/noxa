@@ -734,6 +734,7 @@ func readOfType(conn net.Conn, mt netproto.MessageType, timeout time.Duration) (
 // server error frame aborts the wait immediately (surfaces the real cause
 // instead of a bare timeout).
 func readEvent(conn net.Conn, want string, timeout time.Duration) (*eventEnvelope, error) {
+	defer clearE2EReadDeadline(conn)
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
 		_ = conn.SetReadDeadline(deadline)
@@ -2421,6 +2422,23 @@ func chaosHistoryHas(cl *client, channelID int64, text string) (bool, error) {
 	return false, nil
 }
 
+func checkChaosOutageReply(f *netproto.Frame) error {
+	if netproto.MessageType(f.Type) != netproto.MsgError {
+		return errors.New("DB-backed request succeeded while the database was confirmed down")
+	}
+	var e netproto.Error
+	if err := netproto.Decode(f, &e); err != nil {
+		return fmt.Errorf("undecodable error frame: %w", err)
+	}
+	// Code 5 is the protocol's backend-unavailable result. Permission or
+	// malformed-request errors do not establish database outage handling.
+	if e.Code != 5 {
+		return fmt.Errorf("DB-backed request returned error %d (%s), want backend unavailable (5)", e.Code, e.Message)
+	}
+	fmt.Printf("e2e: chaos: DB-backed request answered with error frame %d (%s)\n", e.Code, e.Message)
+	return nil
+}
+
 // checkChaosPostgres is the database chaos drill (467): with two authenticated
 // sessions and continuous traffic in flight, the database is stopped and
 // restarted. It asserts that liveness and readiness diverge, that live TCP
@@ -2529,16 +2547,8 @@ func checkChaosPostgres(c *checkCtx) error {
 	if err != nil {
 		return fmt.Errorf("no answer to a DB-backed request during the outage (connection dropped or handler hung): %w", err)
 	}
-	if netproto.MessageType(f.Type) == netproto.MsgError {
-		var e netproto.Error
-		if err := netproto.Decode(f, &e); err != nil {
-			return fmt.Errorf("undecodable error frame: %w", err)
-		}
-		fmt.Printf("e2e: chaos: DB-backed request answered with error frame %d (%s)\n", e.Code, e.Message)
-	} else {
-		// Tolerated: a pooled connection can still serve a read. The session
-		// survived either way, which is what this step is about.
-		fmt.Printf("e2e: chaos: DB-backed request still succeeded (served from the pool)\n")
+	if err := checkChaosOutageReply(f); err != nil {
+		return err
 	}
 
 	// --- bring the database back -------------------------------------------
@@ -2558,17 +2568,7 @@ func checkChaosPostgres(c *checkCtx) error {
 
 	fresh, err := dialAuth(c.opts.addr, c.opts.aliceUID, c.opts.alicePass, c.opts.serverPass)
 	if err != nil {
-		// /readyz retries once on "bad connection", so it can report ready
-		// while other pooled connections are still stale. Report the gap
-		// instead of failing on it.
-		fmt.Printf("e2e: chaos: first authentication after recovery failed (%v), retrying\n", err)
-		for i := 0; i < 3 && err != nil; i++ {
-			time.Sleep(2 * time.Second)
-			fresh, err = dialAuth(c.opts.addr, c.opts.aliceUID, c.opts.alicePass, c.opts.serverPass)
-		}
-		if err != nil {
-			return fmt.Errorf("authentication never recovered: %w", err)
-		}
+		return fmt.Errorf("authentication failed after readiness recovered: %w", err)
 	}
 	defer closeE2EResource(fresh.conn)
 	if err := chaosJoin(fresh, c.channelID); err != nil {

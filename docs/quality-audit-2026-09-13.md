@@ -1,9 +1,13 @@
 # Quality and security audit — 2026-09-13
 
-Status: local audit and repairs complete, with validation limits recorded below.
+Status: local audit, follow-up repairs and Go 1.27 upgrade; measured results and
+validation limits are recorded below, including the follow-up section.
 This records measured results, not a production-readiness certification.
 
 ## Scope and starting state
+
+This section records the initial pass. The follow-up below starts from the user's
+subsequent commit of that work and supersedes the old toolchain and probe status.
 
 - Start: `codex/dev5`, `5c3486a7a878a843f71bedc7ab7027ef96576ac7`.
 - Work branch: `codex/quality-audit-20260913`.
@@ -391,3 +395,177 @@ client 50%; frontend core 90% lines/functions and 80% branches, selected UI scop
 Do not run the repository's Compose chaos targets against an existing deployment:
 the Compose file has fixed container, network and volume names. Inspect scripts
 and use independently named disposable infrastructure.
+
+## Follow-up: Go 1.27 and remaining live-test findings
+
+The follow-up started with a clean tree on `codex/quality-audit-20260913` at
+`38e119de87195059afc80d06a39555549bfeafd1`, which includes the earlier audit and
+the three formerly untracked probes. Delivery is the uncommitted diff against
+that revision. No push, release, image publication or production operation was
+performed. Raw follow-up evidence is in `temp/audit-20260913/followup/`.
+
+### Toolchain and dependency compatibility
+
+Both real Go modules now require **Go 1.27.1**. The Docker builder uses the same
+version with a verified manifest digest, and README prerequisites match. Existing
+CI jobs read the appropriate `go.mod`, so they inherit the upgrade. Nested
+`cmd/fuzzdiscover/testdata` manifests remain discovery fixtures, not application
+toolchains. The installed default was 1.27.0; verification explicitly selected
+`GOTOOLCHAIN=go1.27.1`.
+
+The version was checked against the [official Go downloads](https://go.dev/dl/)
+and [Go 1.27 release notes](https://go.dev/doc/go1.27). Explicit compatible module
+pins were updated and both modules tidied: 22 existing required pins in the root
+module and nine in the client module, with resulting transitive graph changes.
+Major import paths and local replacements are preserved. Notable versions are
+Pion WebRTC 4.2.20, Redis 9.22.0, Wails 2.15.0, hotkey 0.6.1, x/crypto 0.57.0,
+x/net 0.59.0 and protobuf 1.36.12. Frontend package versions were not changed.
+
+### Additional findings and regressions
+
+| ID / severity | Reproduction, cause and repair | Verification |
+| --- | --- | --- |
+| Q15 / Medium: obsolete probes prevented a truthful full root run | The now-tracked preauth probes expected vulnerable connections to survive, and the query cap probe expected a greeting after admission was rejected. Baseline failures are retained. Replaced those expectations with deadline, bounded admission and recovery assertions; query probes now assert authentication, escaping, lockout, parsing and privilege behavior. All socket lifetimes are bounded. | `internal/server/preauth_*_poc_test.go`, `internal/query/pentest_probe_test.go`: race tests and 20 lifecycle repetitions pass. No probe is deleted or excluded from the full suite. |
+| Q16 / Medium: query load returned success on rejection or no completed work | The real unknown-command workload recorded zero successes and nine failures but exited 0. Results now fail on any rejected request, no completed work, or parent cancellation. Normal duration shutdown separately counts canceled queued/active requests. Setup cancellation closes already-open workers. | `cmd/queryload/outcome_test.go`, `adversarial_outcome_test.go` and updated cancellation tests pass under race detection. The identical real rejection workload exits 1. |
+| Q17 / Medium: load authentication discarded server rejections | `readOfType` ignored `MsgError`, obscuring the stage and reason for rejected authentication. It now returns a typed numeric server error and records bounded stage/category/code diagnostics. Peer error text, credentials and raw transport errors are not logged. | `cmd/loadtest/main_auth_test.go`: deterministic protocol RED/green tests and full package race checks. The earlier intermittent authentication anomaly remains unclassified. |
+| Q18 / Medium: PostgreSQL chaos inherited an expired read deadline and accepted invalid outage results | The first real drill failed 24/25 after recovery. A channel key arriving before the move acknowledgment left a deadline on the connection. `readEvent` now clears deadlines on every exit. During a fully stopped database, the harness requires backend-unavailable code 5; successful history or permission denial cannot count as passing. Removed the existing post-readiness authentication retries. | `cmd/e2e/read_deadline_test.go` and `chaos_gate_test.go` fail before correction and pass afterward; the actual Go 1.27 drill passes 25/25 with first-attempt authentication after recovery. |
+| Q19 / Medium: load publisher dropped an early renegotiation offer | A ten-client run had one receiver at 951 packets while peers received about 7,970. Server timestamps showed a renegotiation offer preceding the initial answer. The publisher now buffers at most one offer, applies the initial answer and queued ICE, then answers the offer. Duplicate early offers fail promptly. | `cmd/loadtest/early_offer_test.go` uses real Pion negotiation and reproduces the dropped offer; `early_offer_limits_test.go` checks the bound. Both pass under race detection. |
+| Q20 / Medium: voice renegotiation lost changes while an offer was outstanding | A late publisher scheduled another offer while signaling was unstable; failed offer creation consumed the pending change. The service retains pending work until a valid answer, reserves in-flight offer state, and guards callbacks against replaced/closed peer state. | `internal/webrtc/reneg_pending_test.go` covers late publishers, invalid answers, timer bounds, stale callbacks and overlapping offer creation. Deterministic RED evidence is retained. Final verification is recorded below. |
+| Q21 / Low: channel lifecycle assertions raced automatic cleanup | The final root run failed when the valid 50ms temporary-channel cleanup completed before `TestCreateChannel_AllTypes` performed explicit deletion. The equivalent transition test had the same timing assumption. Those two tests now control cleanup timer delivery through a test-only fixture; production cleanup behavior, lifecycle assertions and actual cleanup tests remain intact. | The complete failing run is retained as `final-root-channel-timer-red.jsonl`. Final corrected results are recorded below. |
+| Q22 / Low, unresolved upstream: pacer drains queued writes after close | The live run logged 3,357 pacing write failures over eight seconds after synchronized disconnect. A deterministic standalone probe blocks the first write, queues three packets, closes the pacer, then releases the writer with a closed-pipe error: all three writes are attempted instead of only the already-active one. Pion's inner drain loop does not check its close channel, and failed zero-byte writes do not consume the pacing budget. | `followup/pacer_close_probe_test.go` and its RED log preserve the reproduction. The affected implementation is identical in interceptor 0.1.47 and 0.1.48; this is not attributed to the upgrade. No locally forked dependency, custom congestion-control replacement or error suppression was introduced. Next action: carry this minimized case into an upstream fix, then verify shutdown and active media using the fixed compatible release. |
+
+### Measured Go 1.27 validation
+
+Both modules passed `go mod verify`, `go mod tidy -diff`, `go vet ./...`, and
+`go build ./...`. Checksum verification used an ignored temporary workspace with
+both local modules; no dependency verification bypass or checked-in workspace was
+introduced. Frontend assets were built before compiling the client.
+
+The client full race/coverage run passed 349 test events with nine environment-gated
+live tests skipped. All nine live scenarios plus the certificate-pin regression
+were then run against the real TLS-pinned disposable server: ten passed, zero
+skipped, in 20.499 seconds. Client statement coverage was 65.5% (3,468/5,295).
+The final root and artifact results follow.
+
+The corrected complete root run passed **1,772 test events across 37 packages**,
+with zero failures and 15 skips. Internal statement coverage was **80.9%**
+(13,818/17,089), above the unchanged 70% gate. Skips cover Windows symlink/Unix
+permission and Linux-specific behavior, plus two tests that explicitly
+demonstrate missing-database skips; real PostgreSQL tests executed with the
+configured disposable DSN. Counts include named subtests and fuzz seeds and are
+not counts of distinct end-user workflows.
+
+The exact full-suite commands, each with `GOTOOLCHAIN=go1.27.1`, were:
+
+```powershell
+# Repository root; VOICX_TEST_DATABASE_URL and VOICX_REDIS_ADDR point to audit services.
+go test -race -count=1 -json -covermode=atomic '-coverprofile=temp/audit-20260913/followup/final-root-coverage.out' ./...
+# From client/ after building frontend assets:
+go test -race -count=1 -json -covermode=atomic '-coverprofile=../temp/audit-20260913/followup/go127-client-coverage.out' ./...
+go test -race -run '^TestLive' -count=1 -timeout=3m -v .
+```
+
+The first final root run failed on Q21 (1,770 pass events, two failing events
+including the parent test, 15 skips). The corrected run follows the deterministic
+test fix, not a blanket retry. Both affected lifecycle tests also passed ten
+race-enabled repetitions and the complete channels package. The final WebRTC
+race suite and ten repetitions of its new concurrency regressions passed, and
+independent review covered both timing fixes. Final root vet, build, lint and
+gosec passed; gosec scanned 107 native source files with zero issues and no new
+suppressions. The later channel change is test-only and its package lint passed.
+
+Fresh `npm ci` reported zero vulnerabilities. Frontend lint, unit tests and build
+passed; Playwright passed 69 tests with `--retries=0`, and accessibility passed
+one test. Core coverage was 98.10% lines, 91.55% branches and 95.16% functions;
+the selected UI scope was 25% lines, 76.92% branches and 25.43% functions. All
+existing coverage thresholds and measured scopes remain unchanged.
+
+Both modules passed golangci-lint 2.12.2 and gosec 2.28.0 with zero issues, and
+govulncheck 1.6.0 found zero reachable or imported-package vulnerabilities. The
+tools were rebuilt with Go 1.27.1 after older Go 1.26-built analyzers failed to
+analyze the new standard library. One module-only advisory remains:
+[GO-2026-5932](https://pkg.go.dev/vuln/GO-2026-5932), concerning unmaintained
+`x/crypto/openpgp`; the scans show that package is neither imported nor called,
+and the advisory has no fixed version. No suppression was added. Protocol lint,
+the generated protocol contract, actionlint and version-contract checks passed.
+
+The benchmark smoke command was `go test -run '^$' -bench=. -benchtime=1x`
+for `internal/netproto`, `internal/chatcrypto`, `internal/permissions` and
+`internal/filetransfer`. It passed; one iteration is execution evidence, not a
+latency distribution or a measured performance improvement.
+
+The final Linux amd64 image built successfully with the pinned Go 1.27.1 builder.
+It reached readiness 200 against a newly created disposable database as user
+`10001:10001`, then stopped with exit 0. Trivy 0.74.0 scanned that image's saved
+archive with HIGH/CRITICAL severity and returned exit 0. Evidence is
+`final-docker-build.log`, `final-trivy.json`, `final-container-smoke.json` and
+`final-container-stop.log`.
+
+### Real local load and dependency interruption
+
+Three repetitions of the original three-client, 15-second, one-second-ramp
+workload all authenticated three clients, activated all three receivers and had
+zero session failures. Received RTP counts were 4,168, 4,025 and 4,197. This does
+not establish the cause of the earlier one-off authentication rejection; the
+new diagnostics make any recurrence actionable.
+
+The identical ten-client comparison used anonymous identities, 20 seconds,
+a two-second ramp, UDP and synthetic Opus. Before the signaling fixes: 9,223
+RTP packets sent, 71,541 received, all ten receivers active, but one received
+only 951. After the fixes: 9,366 sent, 76,988 received, ten authenticated/active
+receivers and zero session failures. Receiver counts were 8,003 / 8,089 / 4,720 /
+8,064 / 8,054 / 8,043 / 8,002 / 8,025 / 8,015 / 7,973. The earlier starvation did
+not recur in the same receiver; the remaining imbalance is not treated as proof
+of uniform or complete media delivery.
+
+The final workload's 39 samples measured 14.234375 CPU seconds, peak working set
+94,445,568 bytes, private memory 123,539,456 bytes, Go heap 27,866,680 bytes and
+683 goroutines. UDP queue depth and database pool wait count stayed zero. After
+cleanup, goroutines returned to the baseline 33, with zero clients and peers.
+These separate process runs are local workload measurements; they do not isolate
+a dependency-performance effect. Source logs retain closed-pipe pacing errors
+after the synchronized client disconnects.
+
+The lower-count receiver completed its renegotiation answer at 10:19:31.598,
+alongside peers, and stayed connected until the common shutdown. Its roughly
+3,310-packet shortfall is close to the 3,357 queued-write errors, suggesting
+queued egress, but those errors have no peer IDs. Per-peer bandwidth estimates,
+queue age and loss measurements were not captured, so this does not establish
+the cause of throttling or prove complete all-publisher delivery. Q22 separately
+records the confirmed shutdown defect; pacing policy during the session remains
+an unclassified performance question.
+
+The successful query measurement used four connections, target rate 40/s and five
+seconds: 183 completed, zero failed/canceled, achieved 37/s, p95 664.4 microseconds
+and p99 1.0605 milliseconds. Reported p50 was zero at the local timer resolution.
+These are local measurements, not a production capacity claim.
+
+The real PostgreSQL stop/start drill passed 25/25 on Go 1.27.1: liveness remained
+200, readiness returned 503 during the outage, five operations returned the
+required backend-unavailable code, and 40/40 pings succeeded. After readiness
+returned, the first authentication succeeded and a new persisted chat message
+was readable from history. The Redis interruption run kept three authenticated
+clients with zero session failures; liveness and readiness both remained 200,
+consistent with Redis being optional. Redis restarted successfully. The scripts
+check audit container labels and address only named disposable services.
+
+### Compatibility and remaining limits
+
+There are no protocol, persisted-data or migration changes in this follow-up.
+Build hosts need Go 1.27.1 or automatic toolchain download access. Windows client
+compilation, unit tests and real backend integration passed with Wails 2.15.0;
+native GUI, tray/hotkeys, physical devices, Linux/macOS desktop runtime and actual
+TURN/WAN behavior remain unverified. Ten local synthetic peers do not establish
+production capacity. Earlier populated backup/restore evidence remains valid as
+an earlier-pass result; no claim is made of repeating off-site or point-in-time
+recovery. The original authentication anomaly remains unclassified, with no
+confirmed severity. Q22 remains a low-severity upstream lifecycle finding; the
+ten-peer pacing imbalance needs per-peer queue/bandwidth evidence before a
+congestion-control change. No production-readiness certification is implied.
+
+The native server stopped gracefully and its audit listeners were confirmed
+closed; the final image stopped with exit 0. Labeled PostgreSQL and Redis containers
+were then stopped; their data, extra fixture databases and raw evidence remain
+local for review. A PowerShell status check initially tried to read a file that
+an empty pipeline had not created; explicit Docker inspection subsequently
+verified all three audit containers stopped. No unrelated process was stopped.

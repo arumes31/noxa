@@ -1313,6 +1313,8 @@ func (s *TCPServer) handleChatSend(ctx context.Context, client *Client, f *netpr
 
 	// Direct messages are true E2EE: relay/spool only, no moderation.
 	chat := netproto.ChatBroadcast{
+		Direct:       true,
+		ToUniqueID:   msg.ToUniqueID,
 		ChannelID:    msg.ChannelID,
 		FromClientID: client.ID,
 		FromUniqueID: client.UniqueID,
@@ -1322,6 +1324,11 @@ func (s *TCPServer) handleChatSend(ctx context.Context, client *Client, f *netpr
 		KeyID:        msg.KeyID,
 		E2E:          msg.Enc,
 		ClientMsgID:  msg.ClientMsgID,
+	}
+	if chat.ToUniqueID == "" {
+		if target, ok := s.clientByID(msg.ToClientID); ok {
+			chat.ToUniqueID = target.uniqueID()
+		}
 	}
 	payload, err := eventEnvelope(eventChat, chat)
 	if err != nil {
@@ -1347,6 +1354,17 @@ func (s *TCPServer) handleChatSend(ctx context.Context, client *Client, f *netpr
 // echoed to the sender); otherwise it is spooled into offline_messages for
 // delivery at their next login.
 func (s *TCPServer) sendDirectByUniqueID(ctx context.Context, client *Client, toUniqueID string, payload []byte, text string, enc bool) error {
+	// Guests have authenticated live identities but no account row. Resolve
+	// the online session before consulting account storage for offline spooling.
+	if tc, ok := s.clientByUniqueID(toUniqueID); ok {
+		if err := s.deps.Broadcast.BroadcastToClient(tc.ID, payload); err != nil {
+			return s.sendErrorFor(client, requestOrigin(ctx), errCodeNotFound, "target client not reachable")
+		}
+		_ = s.deps.Broadcast.BroadcastToClient(client.ID, payload)
+		s.metricsSink().IncChatMessage("direct")
+		return nil
+	}
+
 	if s.deps.Auth == nil {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "authentication backend unavailable")
 	}
@@ -1360,15 +1378,6 @@ func (s *TCPServer) sendDirectByUniqueID(ctx context.Context, client *Client, to
 			zap.Error(err),
 		)
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "user lookup failed")
-	}
-
-	if tc, ok := s.clientByUniqueID(toUniqueID); ok {
-		if err := s.deps.Broadcast.BroadcastToClient(tc.ID, payload); err != nil {
-			return s.sendErrorFor(client, requestOrigin(ctx), errCodeNotFound, "target client not reachable")
-		}
-		_ = s.deps.Broadcast.BroadcastToClient(client.ID, payload)
-		s.metricsSink().IncChatMessage("direct")
-		return nil
 	}
 
 	if s.deps.Spool == nil {

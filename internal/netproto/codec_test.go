@@ -254,7 +254,7 @@ func TestCodecRoundTrip(t *testing.T) {
 	})
 
 	t.Run("ChatBroadcast", func(t *testing.T) {
-		in := ChatBroadcast{ChannelID: "7", FromClientID: "c-1", FromUniqueID: "uid-1", From: "dan", Text: "hello", Offline: true, ID: 42, Mentions: []string{"uid-2"}, ClientMsgID: "ref-1"}
+		in := ChatBroadcast{ChannelID: "7", Direct: true, ToUniqueID: "uid-2", EncVerified: true, FromClientID: "c-1", FromUniqueID: "uid-1", From: "dan", Text: "hello", Offline: true, ID: 42, Mentions: []string{"uid-2"}, ClientMsgID: "ref-1"}
 		var out ChatBroadcast
 		roundTrip(t, MsgChatBroadcast, in, &out)
 		if out.ChannelID != in.ChannelID || out.FromClientID != in.FromClientID || out.FromUniqueID != in.FromUniqueID ||
