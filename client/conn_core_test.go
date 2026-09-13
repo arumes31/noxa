@@ -367,7 +367,11 @@ func TestLegacyErrorIsGlobalAndTimeoutClosesExactConnection(t *testing.T) {
 	cm.mu.Lock()
 	cm.conn = client
 	cm.mu.Unlock()
-	go cm.readLoop(client)
+	readerDone := make(chan struct{})
+	go func() {
+		defer close(readerDone)
+		cm.readLoop(client)
+	}()
 	done := make(chan error, 2)
 	go func() {
 		_, err := cm.request(netproto.MsgAvatarGet, netproto.MsgAvatarData, netproto.AvatarGet{}, time.Second)
@@ -391,6 +395,12 @@ func TestLegacyErrorIsGlobalAndTimeoutClosesExactConnection(t *testing.T) {
 		case <-time.After(200 * time.Millisecond):
 			t.Fatal("legacy error waited for request timeout")
 		}
+	}
+	// Waiters wake before the reader finishes emitting termination events.
+	select {
+	case <-readerDone:
+	case <-time.After(time.Second):
+		t.Fatal("legacy error did not stop the reader")
 	}
 	if sink.count("servererror") != 1 || sink.count("disconnected") != 1 {
 		t.Fatalf("legacy error events servererror/disconnected = %d/%d", sink.count("servererror"), sink.count("disconnected"))
