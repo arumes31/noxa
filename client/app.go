@@ -47,6 +47,9 @@ type App struct {
 	chatAttachmentWrite      func(string, []byte) error
 	lifecycleMu              sync.Mutex
 	lifecycleCancel          context.CancelFunc
+	// Wails invokes beforeClose for programmatic Quit as well as window close.
+	// A successful update restart must exit even when close-to-tray is enabled.
+	restarting atomic.Bool
 	// cm is the ACTIVE tab's connManager (281 multi-server tabs): all
 	// bindings keep operating on it. Background tabs live in tabs and their
 	// events are journaled/replayed by tabs.go. Access via cmLoad/cmStore
@@ -118,6 +121,21 @@ func NewApp() *App {
 		hotkeys:  make(map[string]*hotkeyReg),
 		tabs:     make(map[string]*tabState),
 	}
+}
+
+func (a *App) beforeClose(ctx context.Context) bool {
+	if a.restarting.Load() {
+		return false
+	}
+	a.settingsMu.Lock()
+	closeToTray := a.settings.CloseToTray
+	a.settingsMu.Unlock()
+	if closeToTray {
+		windowHide(ctx)
+		windowMarkHidden()
+		return true
+	}
+	return false
 }
 
 // cmLoad returns the active tab's connManager (may be nil).

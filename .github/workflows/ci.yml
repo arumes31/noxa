@@ -120,7 +120,7 @@ jobs:
 
       - name: test client
         working-directory: client
-        run: go test -count=1 ./...
+        run: go test -tags=integration -count=1 ./...
 
   test:
     runs-on: ubuntu-latest

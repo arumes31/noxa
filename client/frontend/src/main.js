@@ -214,6 +214,7 @@ function applyAppearance() {
         state.clientVersion = v;
     } catch { /* version display is best-effort */ }
     document.querySelector(".login-card").classList.add("in");
+    startupAutoCheck();
 })();
 
 function showLogin() {
@@ -342,7 +343,6 @@ async function connectFromLogin() {
         showWorkspace();
         refreshPermissions();
         applyWhisperSettings();
-        startupAutoCheck();
         chatUI.onConnect(); // (133) MOTD + myUniqueID for mentions/own-msgs
         // (6b) group memberships drive tree colors/hoisted sections.
         P().refreshGroups().then(() => renderTree());

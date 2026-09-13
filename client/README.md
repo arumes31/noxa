@@ -577,9 +577,13 @@ handles the running-exe rename dance on Windows). Nothing applies without
 explicit confirmation — a final "Restart now" button relaunches the new
 binary.
 
-At startup (after login) it auto-checks quietly and shows a toast when an
-update exists; disable it in Settings → Application → "Check for updates at
-startup".
+At application startup, before connecting to a server, it checks once and
+opens an update dialog with an **Update now** button when a newer release
+exists. Download progress is shown, followed by **Restart now**. Failed
+downloads and restarts display an error and can be retried. Disable the
+automatic check in Settings → Application → "Check for updates at startup".
+Offline and up-to-date clients remain quiet; manual checks remain available
+in Help → **Check for updates…**.
 
 The update source is the `UpdateRepo` ldflags variable
 (`-X voicx/internal/version.UpdateRepo=<owner/repo>` — CI sets it to the
