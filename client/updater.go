@@ -386,6 +386,10 @@ func (a *App) DownloadAndApply(info UpdateInfo) string {
 	if err != nil {
 		return err.Error()
 	}
+	if err := validateClientExecutable(f); err != nil {
+		_ = f.Close()
+		return "update rejected: invalid Windows AMD64 executable: " + err.Error()
+	}
 	if err := selfupdate.Apply(f, selfupdate.Options{}); err != nil {
 		_ = f.Close()
 		return fmt.Sprintf("self-update failed (old version still running): %v", err)

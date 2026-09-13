@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -30,6 +31,9 @@ const updateIntegrationVersion = "v99.0.0"
 // Every call to the real self-updater runs in a disposable executable copy,
 // including rejection tests, so a regression can never replace the test runner.
 func TestDownloadAndApplyIntegration(t *testing.T) {
+	if runtime.GOOS != "windows" || runtime.GOARCH != "amd64" {
+		t.Skip("real replacement/relaunch exercises the Windows AMD64 client asset")
+	}
 	original, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
@@ -48,6 +52,7 @@ func TestDownloadAndApplyIntegration(t *testing.T) {
 		name       string
 		wantError  string
 		wantBinary bool
+		payload    []byte
 	}{
 		{name: "signed update replaces executable", wantBinary: true},
 		{name: "caller asset URLs are revalidated", wantBinary: true},
@@ -61,8 +66,20 @@ func TestDownloadAndApplyIntegration(t *testing.T) {
 		{name: "update withdrawn", wantError: "update is no longer available"},
 		{name: "metadata revalidation fails", wantError: "metadata could not be revalidated"},
 	}
+	for name, invalid := range invalidUpdatePlatforms(t, payload) {
+		tests = append(tests, struct {
+			name       string
+			wantError  string
+			wantBinary bool
+			payload    []byte
+		}{name: name, wantError: "update rejected: invalid Windows AMD64 executable", wantBinary: true, payload: invalid})
+	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			payload := payload
+			if tt.payload != nil {
+				payload = tt.payload
+			}
 			dir := t.TempDir()
 			executable := filepath.Join(dir, "updater-copy.exe")
 			if err := os.WriteFile(executable, originalBytes, 0o700); err != nil {
@@ -244,6 +261,10 @@ func TestDownloadAndApplyHelperProcess(t *testing.T) {
 }
 
 func buildUpdateProbe(t *testing.T) []byte {
+	return buildUpdateProbeFor(t, "windows", "amd64")
+}
+
+func buildUpdateProbeFor(t *testing.T, goos, goarch string) []byte {
 	t.Helper()
 	dir := t.TempDir()
 	source := filepath.Join(dir, "main.go")
@@ -255,6 +276,7 @@ func buildUpdateProbe(t *testing.T) []byte {
 	ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "go", "build", "-o", executable, source)
+	cmd.Env = append(os.Environ(), "GOOS="+goos, "GOARCH="+goarch, "CGO_ENABLED=0")
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("build replacement version probe: %v\n%s", err, out)
 	}
