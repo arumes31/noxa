@@ -213,6 +213,10 @@ type TURNConfig struct {
 
 // WebRTCConfig holds configuration for the Pion WebRTC engine.
 type WebRTCConfig struct {
+	// UDPAddr shares one IPv4 UDP port across peers; empty uses dynamic ports.
+	UDPAddr string `mapstructure:"udp_addr"`
+	// ExternalIPs are IPv4 addresses forwarding UDPAddr to this server.
+	ExternalIPs []string `mapstructure:"external_ips"`
 	// ICEServers is the list of STUN/TURN server URLs used when creating peer
 	// connections. If empty, the engine falls back to
 	// "stun:stun.l.google.com:19302".
@@ -309,6 +313,8 @@ func newConfigViper() *viper.Viper {
 	// WebRTC defaults ---------------------------------------------------------
 	v.SetDefault("webrtc.ice_servers", []string{"stun:stun.l.google.com:19302"})
 	v.SetDefault("webrtc.enable_av1", false)
+	v.SetDefault("webrtc.udp_addr", "")
+	v.SetDefault("webrtc.external_ips", []string{})
 
 	// UDP rate limiting defaults ----------------------------------------------
 	v.SetDefault("udp_rate_limit_pps", 200)
@@ -575,6 +581,19 @@ func (c *Config) Validate() error {
 	for i, rawURL := range c.TURN.URIs {
 		if err := validateICEURL(fmt.Sprintf("turn.uris[%d]", i), rawURL, true); err != nil {
 			errs = append(errs, err)
+		}
+	}
+	if c.WebRTC.UDPAddr != "" {
+		if err := validateAddress("webrtc.udp_addr", c.WebRTC.UDPAddr); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	if len(c.WebRTC.ExternalIPs) > 0 && c.WebRTC.UDPAddr == "" {
+		errs = append(errs, errors.New("webrtc.external_ips requires webrtc.udp_addr"))
+	}
+	for _, address := range c.WebRTC.ExternalIPs {
+		if ip := net.ParseIP(address); ip == nil || ip.To4() == nil {
+			errs = append(errs, fmt.Errorf("webrtc.external_ips contains invalid IPv4 address %q", address))
 		}
 	}
 	for i, rawURL := range c.WebRTC.ICEServers {

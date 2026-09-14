@@ -60,6 +60,7 @@ export function activateWorkspaceTab(name, { focus = false } = {}) {
     tabFiles.tabIndex = files ? 0 : -1;
     chatPane.hidden = files;
     filesPane.hidden = !files;
+    window.__voicxChat?.refreshHeader?.();
     if (files) {
         fb.channelID = V().state.myChannelID;
         refreshFiles();

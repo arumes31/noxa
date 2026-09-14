@@ -18,6 +18,7 @@ import { imageDataURL } from "./safe-media.js";
 import { parseRuntimeObject } from "./runtime-json.js";
 import { parseFileRef, transformCustomEmoji } from "./chat-parsers.js";
 import { captureScope, scopeIsCurrent } from "./scoped-actions.js";
+import { avatarColor } from "./workspace-ui.js";
 
 const V = () => window.__voicx;
 const $ = (id) => document.getElementById(id);
@@ -477,6 +478,12 @@ function renderMsg(m) {
     if (m.self) el.classList.add("own");
     if (m.id) el.dataset.msgId = m.id;
     el.dataset.ts = m.ts;
+    const avatar = document.createElement("span");
+    avatar.className = "msg-avatar";
+    avatar.setAttribute("aria-hidden", "true");
+    avatar.textContent = (m.from || "?").slice(0, 1).toUpperCase();
+    avatar.style.setProperty("--avatar-color", avatarColor(m.fromUID || m.from || ""));
+    el.appendChild(avatar);
 
     const time = document.createElement("span");
     time.className = "msg-time mono";
@@ -2742,23 +2749,31 @@ function fmtSlowMode(sec) {
 
 function updateHeader() {
     const st = V().state;
+    const filesOpen = $("files-pane")?.hidden === false;
     let title = "Chat", topic = "";
     let showChanBtns = false;
     let slow = 0;
-    if (view.kind === "global") {
+    if (filesOpen) {
+        const channel = st.channels.find((c) => c.ChannelID === st.myChannelID);
+        title = channel?.Name || "Files";
+        topic = channel?.Topic || "";
+    } else if (view.kind === "global") {
         title = "Global chat";
     } else if (view.kind === "dm") {
         title = "DM — " + (pmTabs.get(view.uid)?.nick || view.uid);
     } else {
         const ch = st.channels.find((c) => c.ChannelID === activeChannelID());
         if (ch) {
-            title = "# " + ch.Name;
+            title = ch.Name;
             topic = ch.Topic || "";
             slow = ch.SlowModeSeconds || 0;
             showChanBtns = true;
         }
     }
     $("chat-head-title").textContent = title;
+    $("chat-search-btn").classList.toggle("hidden", filesOpen);
+    $("chat-head-actions").querySelector(".channel-actions").hidden = filesOpen;
+    $("chat-text").placeholder = view.kind === "channel" || view.kind === "chan" ? "Message " + title + "…" : view.kind === "dm" ? "Message " + (pmTabs.get(view.uid)?.nick || view.uid) + "…" : "Message everyone…";
     const topicEl = $("chat-topic");
     topicEl.textContent = topic;
     topicEl.title = topic; // (111) tooltip carries the full topic

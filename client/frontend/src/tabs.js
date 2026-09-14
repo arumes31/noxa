@@ -81,20 +81,20 @@ function renderTabs(tabs) {
         // (284) bookmark colour: the dot identifies the server at a glance and
         // the underline of the active tab picks the same colour up.
         const bm = bookmarkFor(t);
-        if (bm && bm.color) {
-            el.style.setProperty("--tab-color", bm.color);
+        {
+            if (bm?.color) el.style.setProperty("--tab-color", bm.color);
             const dot = document.createElement("span");
             dot.className = "srv-tab-dot";
-            dot.style.background = bm.color;
-            dot.title = "bookmark: " + bm.name;
+            if (bm?.color) dot.style.background = bm.color;
+            dot.title = t.connected ? "Connected" : "Offline";
             select.appendChild(dot);
         }
         const label = document.createElement("span");
         label.className = "srv-tab-label";
-        label.textContent = (t.nickname || "?") + " @ " + (t.addr || "?");
-        label.title = t.id + (t.connected ? "" : " (offline)");
+        label.textContent = bm?.name || t.addr || "Server";
+        label.title = (t.nickname || "?") + " @ " + (t.addr || "?") + (t.connected ? "" : " (offline)");
         select.appendChild(label);
-        select.setAttribute("aria-label", label.textContent + (t.connected ? "" : ", offline"));
+        select.setAttribute("aria-label", (t.nickname || "?") + " @ " + (t.addr || "?") + (t.connected ? "" : ", offline"));
         if (t.mentions > 0) {
             const b = document.createElement("span");
             b.className = "srv-badge mention";

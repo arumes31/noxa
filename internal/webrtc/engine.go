@@ -8,10 +8,12 @@ import (
 	"crypto/x509/pkix"
 	"fmt"
 	"math/big"
+	"net"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/pion/ice/v4"
 	"github.com/pion/interceptor"
 	"github.com/pion/interceptor/pkg/cc"
 	"github.com/pion/interceptor/pkg/gcc"
@@ -27,6 +29,7 @@ import (
 type Engine struct {
 	logger *zap.Logger
 	api    *webrtc.API
+	udpMux ice.UDPMux
 
 	// iceServers are the configured ICE servers used when creating new peer
 	// connections.
@@ -47,8 +50,29 @@ type Engine struct {
 // RTCP feedback). The returned Engine is ready to create peer connections via
 // NewPeerConnection.
 func New(logger *zap.Logger, iceServers []string, enableAV1 bool) (*Engine, error) {
+	return NewWithNetwork(logger, iceServers, enableAV1, NetworkConfig{})
+}
+
+// NetworkConfig enables a shared IPv4 UDP listener and advertised NAT addresses.
+// Empty values preserve automatic ICE candidate gathering.
+type NetworkConfig struct {
+	UDPAddr     string
+	ExternalIPs []string
+}
+
+// NewWithNetwork constructs an engine with explicit container port forwarding.
+// The engine owns the shared UDP socket and releases it on Close.
+func NewWithNetwork(logger *zap.Logger, iceServers []string, enableAV1 bool, network NetworkConfig) (*Engine, error) {
 	if logger == nil {
 		return nil, fmt.Errorf("webrtc: logger must not be nil")
+	}
+	for _, address := range network.ExternalIPs {
+		if ip := net.ParseIP(address); ip == nil || ip.To4() == nil {
+			return nil, fmt.Errorf("webrtc: invalid external IPv4 address %q", address)
+		}
+	}
+	if len(network.ExternalIPs) > 0 && network.UDPAddr == "" {
+		return nil, fmt.Errorf("webrtc: external IPs require a shared UDP address")
 	}
 
 	mediaEngine := &webrtc.MediaEngine{}
@@ -77,12 +101,6 @@ func New(logger *zap.Logger, iceServers []string, enableAV1 bool) (*Engine, erro
 		return nil, fmt.Errorf("webrtc: registering default interceptors: %w", err)
 	}
 
-	api := webrtc.NewAPI(
-		webrtc.WithMediaEngine(mediaEngine),
-		webrtc.WithSettingEngine(settingEngine),
-		webrtc.WithInterceptorRegistry(interceptorRegistry),
-	)
-
 	parsedICE := make([]webrtc.ICEServer, 0, len(iceServers))
 	for _, raw := range iceServers {
 		if raw == "" {
@@ -105,7 +123,28 @@ func New(logger *zap.Logger, iceServers []string, enableAV1 bool) (*Engine, erro
 		return nil, fmt.Errorf("webrtc: DTLS certificate has no fingerprint")
 	}
 
+	var udpMux ice.UDPMux
+	if network.UDPAddr != "" {
+		conn, err := net.ListenPacket("udp4", network.UDPAddr)
+		if err != nil {
+			return nil, fmt.Errorf("webrtc: listening on shared UDP address: %w", err)
+		}
+		udpMux = webrtc.NewICEUDPMux(nil, conn)
+		settingEngine.SetICEUDPMux(udpMux)
+		settingEngine.SetNetworkTypes([]webrtc.NetworkType{webrtc.NetworkTypeUDP4})
+	}
+	if len(network.ExternalIPs) > 0 {
+		settingEngine.SetNAT1To1IPs(network.ExternalIPs, webrtc.ICECandidateTypeHost)
+		// Static host mappings replace STUN discovery for this server.
+		parsedICE = nil
+	}
+	api := webrtc.NewAPI(
+		webrtc.WithMediaEngine(mediaEngine),
+		webrtc.WithSettingEngine(settingEngine),
+		webrtc.WithInterceptorRegistry(interceptorRegistry),
+	)
 	e := &Engine{
+		udpMux:      udpMux,
 		logger:      logger,
 		api:         api,
 		iceServers:  parsedICE,
@@ -244,6 +283,11 @@ func (e *Engine) Close() error {
 		}
 		e.logger.Info("webrtc peer connection closed on engine shutdown",
 			zap.String("client_id", id), zap.Error(firstErr))
+	}
+	if e.udpMux != nil {
+		if err := e.udpMux.Close(); err != nil && firstErr == nil {
+			firstErr = fmt.Errorf("closing shared UDP socket: %w", err)
+		}
 	}
 	e.logger.Info("webrtc engine closed", zap.Int("peers_closed", len(peers)))
 	return firstErr

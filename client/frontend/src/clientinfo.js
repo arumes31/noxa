@@ -770,6 +770,36 @@ function subtreeOf(channelID) {
 // dialog paths above; exporting them permits focused behavior coverage.
 export { countSubtree, humanDuration, inboundAudioByPublisher, matchPreset, subtreeOf };
 
+// Avoid sending unchanged placement: re-parenting also invalidates server permissions.
+export function channelTreeChanges(channel, next) {
+    const fields = [];
+    if (next.joinPower !== (channel.NeededJoinPower || 0)) {
+        fields.push("join_power");
+    }
+    if (next.orderIndex !== (channel.OrderIndex || 0)) {
+        fields.push("order");
+    }
+    if (next.parentID !== (channel.ParentID || 0)) {
+        fields.push("parent");
+    }
+    if (next.inherit !== !!channel.InheritPermissions) {
+        fields.push("inherit");
+    }
+    return fields;
+}
+
+// Connect the helper text after the shared modal has assigned control IDs.
+export function describeChannelFields(form) {
+    for (const field of form.querySelectorAll(".channel-field")) {
+        const control = field.querySelector("input, select, textarea");
+        const hint = field.querySelector(".channel-field-hint");
+        if (control?.id && hint) {
+            hint.id = control.id + "-hint";
+            control.setAttribute("aria-describedby", hint.id);
+        }
+    }
+}
+
 function openChannelEdit(channel) {
     const overlay = document.createElement("div");
     overlay.className = "dlg-overlay";
@@ -780,54 +810,106 @@ function openChannelEdit(channel) {
         ? `<span class="group-chip ce-admin-chip" title="you hold b_channel_modify here">channel admin</span>`
         : "";
     overlay.innerHTML = `
-        <div class="dlg channel-edit">
-            <h3>Edit channel</h3>
-            <div class="ce-name"></div>
-            ${adminChip}
-            <label class="dlg-label">Topic</label>
-            <input type="text" class="dlg-input ce-topic" />
-            <label class="dlg-label">Description</label>
-            <textarea class="dlg-input ce-desc" rows="2"></textarea>
-            <label class="dlg-label">Max clients (0 = unlimited)</label>
-            <input type="number" class="dlg-input ce-maxclients" min="0" />
-            <label class="dlg-label">Slow mode seconds (0 = off)</label>
-            <input type="number" class="dlg-input ce-slowmode" min="0" title="minimum seconds between messages; holders of b_chat_slowmode_bypass are exempt" />
-            <label class="dlg-label">Quality preset</label>
-            <select class="dlg-input ce-preset">
-                <option value="voice">${QUALITY_PRESETS.voice.label}</option>
-                <option value="hq">${QUALITY_PRESETS.hq.label}</option>
-                <option value="music">${QUALITY_PRESETS.music.label}</option>
-                <option value="custom">Custom</option>
-            </select>
-            <label class="dlg-label">Opus bitrate (bits/s, 0 = default 32000)</label>
-            <input type="number" class="dlg-input ce-bitrate" min="0" step="1000" />
-            <div class="ce-flags">
-                <label><input type="checkbox" class="ce-fec" /> FEC</label>
-                <label><input type="checkbox" class="ce-dtx" /> DTX</label>
-                <label><input type="checkbox" class="ce-stereo" /> Stereo</label>
+        <form class="dlg channel-edit channel-editor" novalidate>
+            <header class="channel-dialog-header">
+                <div><h3>Edit channel</h3><div class="ce-name"></div></div>
+                <button type="button" class="channel-dialog-close" aria-label="Close channel editor" title="Close (Esc)">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="m6 6 12 12M6 18 18 6" /></svg>
+                </button>
+            </header>
+            <div class="channel-dialog-body">
+                ${adminChip}
+                <section class="channel-settings-section" aria-label="Channel details">
+                    <div class="channel-field">
+                        <label class="dlg-label">Topic</label>
+                        <input type="text" class="dlg-input ce-topic" placeholder="A short introduction to this channel" />
+                    </div>
+                    <div class="channel-field">
+                        <label class="dlg-label">Description</label>
+                        <textarea class="dlg-input ce-desc" rows="2" placeholder="Add details for people joining"></textarea>
+                    </div>
+                    <div class="channel-field-grid">
+                        <div class="channel-field">
+                            <label class="dlg-label">Participant limit</label>
+                            <input type="number" class="dlg-input ce-maxclients" min="0" />
+                            <span class="channel-field-hint">0 allows unlimited participants.</span>
+                        </div>
+                        <div class="channel-field">
+                            <label class="dlg-label">Message delay (seconds)</label>
+                            <input type="number" class="dlg-input ce-slowmode" min="0" />
+                            <span class="channel-field-hint">0 turns off slow mode.</span>
+                        </div>
+                    </div>
+                </section>
+                <section class="channel-settings-section" aria-label="Audio quality">
+                    <div class="channel-field">
+                        <label class="dlg-label">Audio quality</label>
+                        <select class="dlg-input ce-preset">
+                            <option value="voice">${QUALITY_PRESETS.voice.label}</option>
+                            <option value="hq">${QUALITY_PRESETS.hq.label}</option>
+                            <option value="music">${QUALITY_PRESETS.music.label}</option>
+                            <option value="custom">Custom settings</option>
+                        </select>
+                    </div>
+                    <details class="channel-disclosure">
+                        <summary>Fine-tune audio</summary>
+                        <div class="channel-disclosure-body">
+                            <div class="channel-field">
+                                <label class="dlg-label">Bitrate (bits per second)</label>
+                                <input type="number" class="dlg-input ce-bitrate" min="0" max="512000" step="1000" />
+                                <span class="channel-field-hint">0 uses the server default of 32,000.</span>
+                            </div>
+                            <div class="ce-flags">
+                                <label><input type="checkbox" class="ce-fec" /> Recover lost packets (FEC)</label>
+                                <label><input type="checkbox" class="ce-dtx" /> Reduce traffic during silence (DTX)</label>
+                                <label><input type="checkbox" class="ce-stereo" /> Stereo audio</label>
+                            </div>
+                        </div>
+                    </details>
+                </section>
+                <details class="channel-disclosure channel-section-disclosure">
+                    <summary>Access &amp; placement</summary>
+                    <div class="channel-disclosure-body">
+                        <div class="channel-field-grid">
+                            <div class="channel-field">
+                                <label class="dlg-label">Required join power</label>
+                                <input type="number" class="dlg-input ce-joinpower" min="0" />
+                                <span class="channel-field-hint">0 is open to everyone. Higher values restrict access.</span>
+                            </div>
+                            <div class="channel-field">
+                                <label class="dlg-label">Sort order</label>
+                                <input type="number" class="dlg-input ce-order" />
+                                <span class="channel-field-hint">Lower numbers appear first under the same parent.</span>
+                            </div>
+                        </div>
+                        <div class="channel-field">
+                            <label class="dlg-label">Parent channel</label>
+                            <select class="dlg-input ce-parent"><option value="0">Top level</option></select>
+                        </div>
+                        <label class="channel-checkbox"><input type="checkbox" class="ce-inherit" /> Use the parent’s permissions and join power</label>
+                    </div>
+                </details>
+                <details class="channel-disclosure channel-section-disclosure">
+                    <summary>Channel icon</summary>
+                    <div class="channel-disclosure-body">
+                        <span class="channel-field-hint">Icon changes apply immediately.</span>
+                        <div class="ce-icon-row">
+                            <button type="button" class="ce-icon-upload">Upload icon…</button>
+                            <select class="dlg-input ce-icon-copy" aria-label="Reuse a channel icon">
+                                <option value="0">Reuse an existing icon…</option>
+                            </select>
+                        </div>
+                    </div>
+                </details>
             </div>
-            <label class="dlg-label">Needed join power (0 = open to everyone)</label>
-            <input type="number" class="dlg-input ce-joinpower" min="0" title="a client needs i_channel_join_power at or above this to join; you cannot raise it above your own join power" />
-            <label class="dlg-label">Parent channel</label>
-            <select class="dlg-input ce-parent">
-                <option value="0">— top level —</option>
-            </select>
-            <label class="dlg-label">Sort index (163; lower sorts first among siblings)</label>
-            <input type="number" class="dlg-input ce-order" />
-            <label class="dlg-label"><input type="checkbox" class="ce-inherit" /> inherit the parent's channel permissions and join power</label>
-            <label class="dlg-label">Channel icon</label>
-            <div class="ce-icon-row">
-                <button class="icon-btn ce-icon-upload" title="Upload icon (compressed, max 1024px)">⬆ Upload…</button>
-                <select class="dlg-input ce-icon-copy">
-                    <option value="0">or reuse an existing channel icon…</option>
-                </select>
-            </div>
-            <div class="dlg-buttons">
-                <button class="dlg-ok">Save</button>
-                <button class="dlg-cancel">Cancel</button>
-            </div>
-        </div>`;
-
+            <footer class="channel-dialog-footer">
+                <div class="channel-save-error" role="alert" hidden></div>
+                <div class="dlg-buttons">
+                    <button type="button" class="dlg-cancel">Cancel</button>
+                    <button type="submit" class="dlg-ok">Save changes</button>
+                </div>
+            </footer>
+        </form>`;
     const q = (sel) => overlay.querySelector(sel);
     q(".ce-name").textContent = channel.Name;
     q(".ce-topic").value = channel.Topic || "";
@@ -900,47 +982,64 @@ function openChannelEdit(channel) {
         else V().toast("channel icon reused");
     };
 
-    q(".dlg-ok").onclick = async () => {
-        const err = await window.go.main.App.ChannelEdit(
-            channel.ChannelID,
-            q(".ce-topic").value,
-            parseInt(q(".ce-maxclients").value, 10) || 0,
-            parseInt(q(".ce-bitrate").value, 10) || 0,
-            q(".ce-fec").checked,
-            q(".ce-dtx").checked,
-            q(".ce-stereo").checked,
-            q(".ce-desc").value,
-            parseInt(q(".ce-slowmode").value, 10) || 0);
-        if (!isCurrentServerDialog(overlay)) return;
-
-        // Only the tree fields the user actually moved are sent: a parent_id
-        // on the wire drops the server's whole permission cache, so an
-        // untouched re-parent must not ride along with a topic edit.
+    const form = q("form");
+    const saveButton = q(".dlg-ok");
+    const saveError = q(".channel-save-error");
+    form.onsubmit = async (event) => {
+        event.preventDefault();
+        if (saveButton.disabled) return;
+        const invalid = [...form.querySelectorAll("input, select, textarea")].find((input) => !input.validity.valid);
+        if (invalid) {
+            const section = invalid.closest("details");
+            if (section) section.open = true;
+            invalid.reportValidity();
+            return;
+        }
+        // Capture placement before awaiting the first request, and send only changes.
         const joinPower = parseInt(q(".ce-joinpower").value, 10) || 0;
         const orderIndex = parseInt(q(".ce-order").value, 10) || 0;
         const parentID = parseInt(parentSel.value, 10) || 0;
         const inherit = q(".ce-inherit").checked;
-        const fields = [];
-        if (joinPower !== (channel.NeededJoinPower || 0)) fields.push("join_power");
-        if (orderIndex !== (channel.OrderIndex || 0)) fields.push("order");
-        if (parentID !== (channel.ParentID || 0)) fields.push("parent");
-        if (inherit !== !!channel.InheritPermissions) fields.push("inherit");
-        let treeErr = "";
-        if (fields.length) {
-            treeErr = await window.go.main.App.ChannelEditTree(
-                channel.ChannelID, fields.join(","), joinPower, orderIndex, parentID, inherit);
+        const fields = channelTreeChanges(channel, { joinPower, orderIndex, parentID, inherit });
+        saveButton.disabled = true;
+        saveButton.textContent = "Saving…";
+        saveError.hidden = true;
+        try {
+            const err = await window.go.main.App.ChannelEdit(
+                channel.ChannelID,
+                q(".ce-topic").value,
+                parseInt(q(".ce-maxclients").value, 10) || 0,
+                parseInt(q(".ce-bitrate").value, 10) || 0,
+                q(".ce-fec").checked,
+                q(".ce-dtx").checked,
+                q(".ce-stereo").checked,
+                q(".ce-desc").value,
+                parseInt(q(".ce-slowmode").value, 10) || 0);
             if (!isCurrentServerDialog(overlay)) return;
+            if (err) throw new Error(err);
+            if (fields.length) {
+                const treeErr = await window.go.main.App.ChannelEditTree(
+                    channel.ChannelID, fields.join(","), joinPower, orderIndex, parentID, inherit);
+                if (!isCurrentServerDialog(overlay)) return;
+                if (treeErr) throw new Error("Channel details saved, but access or placement could not be updated: " + treeErr);
+            }
+            overlay.remove();
+        } catch (error) {
+            if (!isCurrentServerDialog(overlay)) return;
+            saveError.textContent = error instanceof Error ? error.message : "Could not save changes. Please try again.";
+            saveError.hidden = false;
+        } finally {
+            if (overlay.isConnected) {
+                saveButton.disabled = false;
+                saveButton.textContent = "Save changes";
+            }
         }
-        overlay.remove();
-        if (err) V().sysMsg("channel edit failed: " + err);
-        if (treeErr) V().sysMsg("channel edit failed: " + treeErr);
-        // On success the server broadcasts channel_updated, which refreshes
-        // the tree (main.js).
     };
+    q(".channel-dialog-close").onclick = () => overlay.remove();
     q(".dlg-cancel").onclick = () => overlay.remove();
     overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
-    mountServerDialog(overlay);
-    q(".ce-topic").focus();
+    mountServerDialog(overlay, { initialFocus: q(".ce-topic") });
+    describeChannelFields(form);
 }
 
 // --- wiring -------------------------------------------------------------------

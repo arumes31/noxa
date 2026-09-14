@@ -293,6 +293,11 @@ async function refreshNews() {
         const [info, motd] = await Promise.all([App().ServerInfo(), App().MOTD()]);
         if (generation !== V().state.serverGeneration) return;
         const up = Math.floor(info.uptime_seconds / 60);
+        const serverName = document.getElementById("server-name");
+        if (serverName && info.name) {
+            serverName.textContent = info.name;
+            serverName.title = info.name;
+        }
         area.innerHTML = `
             <div class="news-line"><b>${esc(info.name)}</b></div>
             <div class="news-line mono">${esc(info.version)} · ${info.clients_online}/${info.max_clients} clients · ${info.channels_online} channels · up ${up}m</div>
@@ -319,6 +324,8 @@ function avatarLightbox(dataUrl) {
 
 function resetServerView() {
     hideHoverCard();
+    const serverName = document.getElementById("server-name");
+    if (serverName) serverName.textContent = "Server";
     const area = document.getElementById("news-area");
     if (area) area.innerHTML = `<div class="empty-state">loading server…</div>`;
 }

@@ -38,6 +38,8 @@ import { isActivationKey } from "./a11y.js";
 import { createLiveAnnouncementQueue } from "./live-announcer.js";
 import { dialogFocusableSelector, initModalSystem, mountServerDialog } from "./modal.js";
 import { parseRuntimeObject } from "./runtime-json.js";
+import { icon } from "./icons.js";
+import { initWorkspace, renderWorkspace, renderMember } from "./workspace-ui.js";
 
 const P = () => window.__voicxPerms;
 window.__voicxChat = chatUI;
@@ -1490,6 +1492,7 @@ function renderTree() {
     renderDirectTargets();
     renderClientCard();
     chatUI.refreshHeader(); // (111) topic/title follows tree + channel updates
+    renderWorkspace();
     restoreTreeFocus(root, focusState);
 }
 
@@ -1534,7 +1537,7 @@ function renderChannel(parentEl, ch, byParent, depth) {
     el.tabIndex = 0; // (298) keyboard navigation
     el.setAttribute("role", "treeitem"); // (343)
     el.setAttribute("aria-label", "channel " + ch.Name + (ch.HasPassword ? ", password protected" : ""));
-    el.innerHTML = `<span class="ch-icon">${ch.HasIcon ? "◈" : "#"}</span><span class="ch-name"></span>`;
+    el.innerHTML = `<span class="ch-disclosure" aria-hidden="true">${icon("chevron")}</span><span class="ch-icon">${icon("speaker")}</span><span class="ch-name"></span>`;
     el.querySelector(".ch-name").textContent = ch.Name;
     // (387) muted channel icon.
     if (window.__voicxNotify?.channelOverride?.(ch.ChannelID)?.muted) {
@@ -1555,7 +1558,7 @@ function renderChannel(parentEl, ch, byParent, depth) {
     if (ch.ClientCount > 0 || ch.MaxClients > 0) {
         const count = document.createElement("span");
         count.className = "ch-count mono";
-        count.textContent = `[${ch.ClientCount}${ch.MaxClients > 0 ? "/" + ch.MaxClients : ""}]`;
+        count.textContent = `${ch.ClientCount}${ch.MaxClients > 0 ? "/" + ch.MaxClients : ""}`;
         el.appendChild(count);
     }
     // (104) unread badge; accent variant when it includes a mention of me.
@@ -1620,6 +1623,10 @@ function renderChannel(parentEl, ch, byParent, depth) {
     const expandable = state.clients.some((c) => c.channel_id === ch.ChannelID) ||
         (byParent.get(ch.ChannelID) || []).length > 0;
     if (expandable) el.setAttribute("aria-expanded", String(!collapsed));
+    el.querySelector(".ch-disclosure").onclick = (event) => {
+        event.stopPropagation();
+        if (expandable) setChannelExpanded(ch.ChannelID, collapsed);
+    };
     if (!collapsed) {
         const members = state.clients.filter((c) => c.channel_id === ch.ChannelID);
         if (members.length > 0) {
@@ -1751,11 +1758,8 @@ function clientRow(c) {
     if (c.client_id === state.myClientID) {
         const icons = document.createElement("span");
         icons.className = "status-icons";
-        let txt = "";
-        if (state.muted) txt += " 🔇";
-        if (state.deafened) txt += " 🙉";
-        if (state.screenSharing) txt += " 🖥";
-        icons.textContent = txt;
+        icons.innerHTML = icon(state.muted ? "micOff" : "mic") +
+            (state.deafened ? icon("headphones") : "") + (state.screenSharing ? icon("screen") : "");
         row.appendChild(icons);
         // (347) DND shows on own status icons.
         if (window.__voicxPolish?.dndActive?.()) {
@@ -1902,41 +1906,7 @@ async function fetchAvatar(uniqueID) {
 // ---------------------------------------------------------------------------
 
 function renderClientCard() {
-    const el = $("client-card");
-    const c = state.clients.find((c) => c.client_id === state.selectedClientID);
-    if (!c) {
-        el.innerHTML = `<div class="empty-state">Select a user</div>`;
-        return;
-    }
-    const ch = state.channels.find((x) => x.ChannelID === c.channel_id);
-    const dataUrl = state.avatars.get(c.unique_id);
-    el.innerHTML = `
-        <div class="card-avatar ${c.is_speaking ? "speaking" : ""}"></div>
-        <div class="card-nick"></div>
-        <div class="card-uid mono"></div>
-        <div class="card-channel"></div>
-        <div class="card-groups"></div>`;
-    const cardAvatar = el.querySelector(".card-avatar");
-    if (!setSafeImage(cardAvatar, dataUrl)) {
-        const fallback = document.createElement("span");
-        fallback.textContent = initials(c.nickname || c.unique_id || "?");
-        cardAvatar.appendChild(fallback);
-    }
-    el.querySelector(".card-nick").textContent = c.nickname || c.unique_id;
-    el.querySelector(".card-uid").textContent = (c.unique_id || "").slice(0, 16) + "…";
-    el.querySelector(".card-channel").textContent = ch ? "in " + ch.Name : "no channel";
-    // (143-145) the user's server groups (from wave-6b membership data).
-    const chips = el.querySelector(".card-groups");
-    for (const g of state.groupByUID?.get(c.unique_id) || []) {
-        const chip = document.createElement("span");
-        chip.className = "group-chip";
-        chip.textContent = g.name;
-        if (g.color) {
-            chip.style.borderColor = g.color;
-            chip.style.color = g.color;
-        }
-        chips.appendChild(chip);
-    }
+    renderMember();
 }
 
 // The inspector is contextual: keep the workspace wide until the user selects
@@ -1945,9 +1915,11 @@ function renderClientCard() {
 function setDetailsOpen(open) {
     const details = $("details");
     const toggle = $("details-toggle");
+    const restoreFocus = !open && details.contains(document.activeElement);
     document.body.classList.toggle("details-collapsed", !open);
     details.setAttribute("aria-hidden", String(!open));
     toggle.setAttribute("aria-expanded", String(open));
+    if (restoreFocus) toggle.focus();
 }
 
 $("details-close").onclick = () => setDetailsOpen(false);
@@ -3171,12 +3143,13 @@ document.addEventListener("keydown", (e) => {
 
 window.runtime.EventsOn("hotkey_status", (st) => {
     const el = $("hotkey-status");
+    const action = { mute_toggle: "Mute", deafen_toggle: "Deafen", ptt: "Push to talk" }[st.action] || String(st.action || "Voice").replaceAll("_", " ");
     if (st.registered) {
-        el.textContent = "⌨ " + st.action;
+        el.textContent = action + " shortcut active";
         el.classList.remove("err");
         el.title = st.action + " hotkey active";
     } else {
-        el.textContent = "⌨ off";
+        el.textContent = action + " shortcut unavailable";
         el.classList.add("err");
         el.title = st.action + " hotkey failed: " + (st.error || "");
         toast("hotkey failed: " + st.action + " — " + (st.error || "registration failed"), "warn", "conn");
@@ -3303,3 +3276,4 @@ initMetaUI();   // wave-8b debug/stats/onboarding (registers window.__voicxMeta)
 initPolishUI(); // wave-8c polish/a11y (registers window.__voicxPolish)
 initNotifications(); // wave-9 notification matrix (registers window.__voicxNotify)
 chatUI.initChat(); // wave-5b chat UI (must run after __voicx exists)
+initWorkspace();

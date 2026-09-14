@@ -6,6 +6,7 @@ import { GridCompositor } from "./grid-compositor.js";
 
 import { isCurrentServerDialog, mountServerDialog } from "./modal.js";
 import { setSafeImage } from "./safe-media.js";
+import { labelButton } from "./icons.js";
 
 const V = () => window.__voicx;
 
@@ -648,6 +649,7 @@ function syncShareButton() {
     btn.setAttribute("aria-pressed", String(sharing));
     btn.setAttribute("aria-label", label);
     btn.title = label;
+    labelButton(btn, "screen", sharing ? "Stop sharing" : "Share screen");
 }
 
 // shareToggle is the voice-screen button handler: stop when sharing
@@ -1146,6 +1148,9 @@ function syncCameraButton() {
     btn.setAttribute("aria-pressed", String(!!cam && !cameraOff));
     btn.title = !cam ? "No camera in this session"
         : cameraOff ? "Camera off — click to turn on" : "Camera on — click to turn off";
+    const enabled = !!cam && !cameraOff;
+    labelButton(btn, enabled ? "camera" : "cameraOff", !cam ? "No camera" : enabled ? "Camera on" : "Camera off");
+    btn.setAttribute("aria-label", btn.title);
     $("local-video").classList.toggle("hidden", !cam || cameraOff);
 }
 

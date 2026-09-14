@@ -672,6 +672,52 @@ body:not(.details-collapsed) #details-toggle { display: none; }
 .ce-flags label { display: flex; align-items: center; gap: 6px; cursor: pointer; }
 .ce-flags input[type="checkbox"] { accent-color: var(--accent); }
 
+/* Keep the editor's context and actions visible while settings scroll. */
+.dlg.channel-editor {
+    width: 600px; padding: 0; gap: 0; overflow: hidden;
+    max-height: calc(100dvh - 32px);
+}
+.channel-dialog-header {
+    display: flex; align-items: flex-start; justify-content: space-between; gap: 16px;
+    padding: 20px 24px 16px; flex: 0 0 auto; border-bottom: 1px solid var(--border);
+}
+.channel-dialog-header > div { min-width: 0; }
+.channel-dialog-header .ce-name { margin-top: 6px; color: var(--text-dim); overflow-wrap: anywhere; }
+.channel-editor button.channel-dialog-close {
+    display: grid; place-items: center; flex: 0 0 auto; width: 36px; height: 36px;
+    padding: 0; border-color: transparent; background: transparent; color: var(--text-dim);
+}
+.channel-dialog-body { min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 20px 24px; }
+.channel-editor .ce-admin-chip { display: inline-block; margin-bottom: 16px; }
+.channel-settings-section { display: grid; gap: 16px; }
+.channel-settings-section + .channel-settings-section { margin-top: 20px; padding-top: 20px; border-top: 1px solid var(--border); }
+.channel-field { display: grid; gap: 6px; min-width: 0; }
+.channel-editor .dlg-label { margin: 0; font-size: .9286rem; letter-spacing: 0; color: var(--text-dim); }
+.channel-editor .dlg-input { min-width: 0; min-height: 38px; }
+.channel-editor textarea { resize: vertical; min-height: 64px; max-height: 160px; }
+.channel-field-hint { color: var(--text-dim); font-size: .8571rem; line-height: 1.45; }
+.channel-field-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.channel-disclosure summary { padding: 10px 0; cursor: pointer; color: var(--text-dim); font-weight: 500; }
+.channel-disclosure summary:hover { color: var(--text); }
+.channel-disclosure summary::marker { color: var(--text-dim); }
+.channel-disclosure-body { display: grid; gap: 16px; padding: 8px 0 10px; }
+.channel-section-disclosure { border-top: 1px solid var(--border); margin-top: 8px; padding-top: 4px; }
+.channel-editor .ce-flags { flex-direction: column; gap: 10px; }
+.channel-editor .ce-flags label, .channel-checkbox { display: flex; align-items: center; gap: 8px; font-size: .9286rem; color: var(--text-dim); }
+.channel-editor input[type="checkbox"] { accent-color: var(--accent); width: 16px; height: 16px; flex: 0 0 auto; }
+.channel-editor .ce-icon-row { display: flex; flex-wrap: wrap; gap: 10px; }
+.channel-editor .ce-icon-copy { flex: 1 1 200px; }
+.channel-dialog-footer { flex: 0 0 auto; padding: 14px 24px; border-top: 1px solid var(--border); background: var(--bg-raised); }
+.channel-editor .dlg-buttons button { min-height: 38px; }
+.channel-save-error { color: var(--danger); font-size: .9286rem; line-height: 1.45; margin-bottom: 12px; overflow-wrap: anywhere; }
+.channel-editor :is(button, input, select, textarea, summary):focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.channel-editor button:disabled { cursor: wait; opacity: .6; }
+@media (max-width: 520px) {
+    .channel-field-grid { grid-template-columns: minmax(0, 1fr); }
+    .channel-dialog-header, .channel-dialog-body { padding: 16px; }
+    .channel-dialog-footer { padding: 12px 16px; }
+}
+
 .ci-voice-head {
     margin-top: 6px; padding-top: 10px; border-top: 1px solid var(--border);
     font-size: 0.7857rem; font-weight: 700; letter-spacing: .08em; color: var(--text-faint);

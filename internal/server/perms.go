@@ -46,8 +46,25 @@ func (s *TCPServer) permCheckerFor(ctx context.Context, client *Client) (*permCh
 	if s.deps == nil || s.deps.Perms == nil || s.deps.Resolver == nil {
 		return nil, errPermsUnavailable
 	}
+	var channelID int64
+	if s.deps.State != nil {
+		if sc, ok := s.deps.State.GetClient(client.ID); ok {
+			channelID = sc.ChannelID
+		}
+	}
 	if client.UserID == 0 {
 		tp := permissions.NewTieredPermissions()
+		if channelID != 0 {
+			loaded, err := s.deps.Perms.LoadForClient(ctx, 0, channelID)
+			if err != nil {
+				return nil, fmt.Errorf("loading guest channel permissions: %w", err)
+			}
+			// Only channel rules apply to the virtual guest identity. Keep the
+			// loader's cached tiers immutable when adding the Guest group below.
+			if channel, ok := loaded.Get(permissions.TierChannel); ok {
+				tp.Set(permissions.TierChannel, channel)
+			}
+		}
 		set, err := s.guestGroupSet(ctx)
 		if err != nil {
 			return nil, err
@@ -61,12 +78,6 @@ func (s *TCPServer) permCheckerFor(ctx context.Context, client *Client) (*permCh
 			admin:    false,
 			guest:    true,
 		}, nil
-	}
-	var channelID int64
-	if s.deps.State != nil {
-		if sc, ok := s.deps.State.GetClient(client.ID); ok {
-			channelID = sc.ChannelID
-		}
 	}
 	tp, err := s.deps.Perms.LoadForClient(ctx, client.UserID, channelID)
 	if err != nil {
@@ -137,10 +148,14 @@ func (p *permChecker) joinAllowed(needed int) bool {
 }
 
 // talkAllowed reports whether the client may transmit audio. An unset
-// i_client_talk_power means allowed (the TS3 default talk power 0 meets the
-// default needed talk power 0); an explicitly negated entry denies.
+// i_client_talk_power defaults to 0 and must meet i_client_needed_talk_power
+// (also 0 by default); an explicitly negated talk-power entry denies.
 func (p *permChecker) talkAllowed() bool {
-	return p.notNegated(permissions.PermissionKeyClientTalkPower)
+	if p.admin {
+		return true
+	}
+	return p.notNegated(permissions.PermissionKeyClientTalkPower) &&
+		p.power(permissions.PermissionKeyClientTalkPower) >= p.neededPower(permissions.PermissionKeyClientNeededTalkPower)
 }
 
 // whisperAllowed reports whether the client may configure a whisper list.

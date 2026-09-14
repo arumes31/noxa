@@ -1,6 +1,7 @@
 // audio.js — voice UX helpers: mic level meter, loopback mic test, VAD
 // calibration, PTT release delay, the channel capture profile, remote-chain
 // limiter/per-user normalizer, and the per-user volume/mute registry.
+import { labelButton } from "./icons.js";
 const V = () => window.__voicx;
 
 // Keep the voice-bar action aligned with what the next activation will do.
@@ -10,7 +11,7 @@ export function syncMuteButton(button, muted) {
     if (!button) return;
     button.classList.toggle("active", !!muted);
     button.setAttribute("aria-pressed", String(!!muted));
-    button.textContent = muted ? "🔊" : "🔇";
+    labelButton(button, muted ? "micOff" : "mic", muted ? "Mic muted" : "Mic on");
     button.title = muted ? "Unmute" : "Mute";
     button.setAttribute("aria-label", muted ? "Unmute microphone" : "Mute microphone");
 }
@@ -325,7 +326,8 @@ export function isUserMuted(uid) {
 export async function setUserVolume(uid, pct) {
     const s = Object.assign({}, V().state.settings);
     s.user_volumes = Object.assign({}, s.user_volumes, { [uid]: pct });
-    await saveAll(s);
+    const error = await saveAll(s);
+    if (error) throw new Error(error);
     applyUserAudio(uid);
 }
 
@@ -344,6 +346,7 @@ async function saveAll(s) {
     // (282) re-read rather than caching the copy we sent: the Go side owns
     // fields the frontend never has (recents, what's-new marker).
     if (!err) V().state.settings = await window.go.main.App.GetSettings();
+    return err;
 }
 
 // userNodes maps uniqueID -> {gain: GainNode, mute: GainNode}.

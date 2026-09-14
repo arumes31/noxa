@@ -512,7 +512,9 @@ func run() (retErr error) {
 
 	// Initialize the Pion WebRTC engine and the voice facade (engine + SFU
 	// router) that the TCP control server drives via signaling messages.
-	engine, err := webrtc.New(logger, cfg.WebRTC.ICEServers, cfg.WebRTC.EnableAV1)
+	engine, err := webrtc.NewWithNetwork(logger, cfg.WebRTC.ICEServers, cfg.WebRTC.EnableAV1, webrtc.NetworkConfig{
+		UDPAddr: cfg.WebRTC.UDPAddr, ExternalIPs: cfg.WebRTC.ExternalIPs,
+	})
 	if err != nil {
 		return fmt.Errorf("initializing webrtc engine: %w", err)
 	}
