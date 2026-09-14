@@ -104,17 +104,19 @@ test("frontend UI module behaviors", { concurrency: false }, async (t) => {
         });
         const audio = await import("../src/audio.js");
         const button = element();
+        replaceGlobal(t, "document", { createElement: () => ({ textContent: "" }) });
+        button.appendChild = (child) => { button.label = child.textContent; };
 
         audio.syncMuteButton(button, true);
         assert.equal(button.classList.contains("active"), true);
         assert.equal(button.getAttribute("aria-pressed"), "true");
-        assert.equal(button.textContent, "🔊");
+        assert.equal(button.label, "Mic muted");
         assert.equal(button.getAttribute("aria-label"), "Unmute microphone");
 
         audio.syncMuteButton(button, false);
         assert.equal(button.classList.contains("active"), false);
         assert.equal(button.getAttribute("aria-pressed"), "false");
-        assert.equal(button.textContent, "🔇");
+        assert.equal(button.label, "Mic on");
         assert.equal(button.title, "Mute");
         assert.equal(audio.isMusicChannel({ AudioProfile: "broadcast" }), true);
         assert.equal(audio.isMusicChannel({ IsMusic: false }), false);
@@ -212,6 +214,24 @@ test("frontend UI module behaviors", { concurrency: false }, async (t) => {
         );
         normalized.tick();
         assert.ok(normalized.gain.gain.value > 1);
+    });
+
+    await t.test("member volume retains the saved value when persistence fails", async (t) => {
+        let persisted = { user_volumes: { mia: 100 } };
+        let failure = "";
+        replaceGlobal(t, "window", {
+            __voicx: { state: { settings: persisted } },
+            go: { main: { App: {
+                SaveSettings: async (value) => { if (!failure) persisted = value; return failure; },
+                GetSettings: async () => persisted,
+            } } },
+        });
+        const audio = await import("../src/audio.js");
+        await audio.setUserVolume("mia", 75);
+        assert.equal(audio.getUserVolume("mia"), .75);
+        failure = "disk unavailable";
+        await assert.rejects(audio.setUserVolume("mia", 90), /disk unavailable/);
+        assert.equal(audio.getUserVolume("mia"), .75);
     });
 
     await t.test("chat parses messages, subscriptions, mentions, replies, and switcher scores", async (t) => {
@@ -456,5 +476,30 @@ test("frontend UI module behaviors", { concurrency: false }, async (t) => {
         assert.equal(clientInfo.matchPreset(1, false, false, false), "custom");
         assert.equal(clientInfo.countSubtree(1), 2);
         assert.deepEqual(clientInfo.subtreeOf(1), new Set([1, 2, 3]));
+    });
+
+    await t.test("channel field hints are associated with labelled controls", async () => {
+        const { describeChannelFields } = await import("../src/clientinfo.js");
+        const attributes = {};
+        const control = { id: "participants", setAttribute(name, value) { attributes[name] = value; } };
+        const hint = {};
+        const field = (input, description) => ({ querySelector(selector) {
+            return selector === ".channel-field-hint" ? description : input;
+        }});
+        describeChannelFields({ querySelectorAll() { return [field(control, hint), field(null, {}), field(control, null)]; } });
+        assert.equal(hint.id, "participants-hint");
+        assert.equal(attributes["aria-describedby"], hint.id);
+    });
+
+    await t.test("channel edits send only changed placement fields", async () => {
+        const { channelTreeChanges } = await import("../src/clientinfo.js");
+        const open = { joinPower: 0, orderIndex: 0, parentID: 0, inherit: false };
+        assert.deepEqual(channelTreeChanges({}, open), []);
+        assert.deepEqual(channelTreeChanges({ Topic: "old" }, open), []);
+        const current = { NeededJoinPower: 20, OrderIndex: 4, ParentID: 9, InheritPermissions: true };
+        assert.deepEqual(channelTreeChanges(current, { joinPower: 20, orderIndex: 4, parentID: 9, inherit: true }), []);
+        assert.deepEqual(channelTreeChanges(current, { joinPower: 20, orderIndex: 1, parentID: 9, inherit: true }), ["order"]);
+        assert.deepEqual(channelTreeChanges(current, open), ["join_power", "order", "parent", "inherit"]);
+        assert.deepEqual(current, { NeededJoinPower: 20, OrderIndex: 4, ParentID: 9, InheritPermissions: true });
     });
 });

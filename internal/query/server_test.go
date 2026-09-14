@@ -487,23 +487,35 @@ func startQueryServerWith(t *testing.T, backend Backend, configure func(*Server)
 	ctx, cancel := context.WithCancel(context.Background())
 	errCh := make(chan error, 1)
 	go func() { errCh <- srv.Start(ctx) }()
-
-	// Wait until the server accepts.
-	deadline := time.Now().Add(3 * time.Second)
-	for time.Now().Before(deadline) {
-		conn, err := (&net.Dialer{}).DialContext(t.Context(), "tcp", addr)
-		if err == nil {
-			_ = conn.Close()
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
 	t.Cleanup(func() {
 		cancel()
 		_ = srv.Close()
 		<-errCh
 	})
-	return addr, srv
+
+	// Wait until the server accepts and releases the readiness connection.
+	// Closing the client alone can leave it counted against MaxConns briefly.
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		conn, err := (&net.Dialer{}).DialContext(t.Context(), "tcp", addr)
+		if err == nil {
+			defer closeServerQueryTestResource(t, conn)
+			if err := conn.SetDeadline(deadline); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := io.WriteString(conn, "quit\n"); err != nil {
+				t.Fatalf("readiness quit: %v", err)
+			}
+			// Server-side EOF follows unregisterConn, so no probe occupies a slot.
+			if _, err := io.Copy(io.Discard, conn); err != nil {
+				t.Fatalf("readiness cleanup: %v", err)
+			}
+			return addr, srv
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("query server did not become ready")
+	return "", nil
 }
 
 // dialQuery connects and consumes the two banner lines.

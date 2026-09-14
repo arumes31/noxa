@@ -1,0 +1,47 @@
+# Linux deployment: bridge networking with one forwarded WebRTC UDP port.
+# Apply after docker-compose.yml, using /opt/voicx/shared/deployment.env.
+services:
+  voicx:
+    ports: !override
+      - "12333:12333"
+      - "12334:12334/udp"
+      - "12336:12336"
+      - "100.103.150.8:12337:12337"
+      - "100.103.150.8:12339:12339"
+      - "12341:12341/udp"
+    environment:
+      VOICX_QUERY_SSH_ENABLED: "true"
+      VOICX_WEBRTC_UDP_ADDR: ":12341"
+      VOICX_WEBRTC_EXTERNAL_IPS: "129.121.110.249,100.103.150.8"
+      VOICX_SERVER_NAME: "VoicX orderotto-dev"
+      VOICX_SERVER_PASSWORD: ${VOICX_SERVER_PASSWORD:-}
+      VOICX_METRICS_ALLOW_REMOTE: "true"
+      VOICX_CHAT_MASTER_KEY_FILE: "/data/keys/chat_master.key"
+      GOMEMLIMIT: "768MiB"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:12337/readyz"]
+    mem_limit: 1g
+    stop_grace_period: 40s
+    logging: &bounded-logs
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+  postgres:
+    command:
+      - postgres
+      - -c
+      - ssl=on
+      - -c
+      - ssl_cert_file=/run/voicx-tls/server.crt
+      - -c
+      - ssl_key_file=/run/voicx-tls/server.key
+    volumes:
+      - /opt/voicx/shared/postgres-tls:/run/voicx-tls:ro
+    mem_limit: 512m
+    logging: *bounded-logs
+  redis:
+    mem_limit: 256m
+    logging: *bounded-logs
+  postgres-backup:
+    logging: *bounded-logs

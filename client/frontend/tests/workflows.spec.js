@@ -1,5 +1,142 @@
 import { expect, test } from "@playwright/test";
 
+async function showB3Workspace(page) {
+    await page.evaluate(() => {
+        const v = window.__voicx;
+        Object.assign(v.state, {
+            myClientID: "daniel", myUniqueID: "uid-daniel", myChannelID: 2,
+            channels: [
+                { ChannelID: 1, Name: "Echo Test", ParentID: 0 },
+                { ChannelID: 2, Name: "Public", ParentID: 0, Topic: "Open voice chat for everyone, including guests." },
+                { ChannelID: 3, Name: "Gaming", ParentID: 0 },
+            ],
+            clients: ["Daniel", "Alex", "Mia", "Jonas"].map((nickname) => ({
+                client_id: nickname.toLowerCase(), unique_id: "uid-" + nickname.toLowerCase(),
+                nickname, channel_id: 2, is_speaking: nickname === "Mia",
+            })),
+        });
+        v.showWorkspace(false);
+        v.renderTree();
+    });
+}
+
+test("B3 participant strip follows live channel membership and opens member controls", async ({ page }) => {
+    await showB3Workspace(page);
+    const strip = page.getByRole("region", { name: "Voice participants" });
+    await expect(strip.getByRole("button")).toHaveCount(4);
+    await strip.getByRole("button", { name: /Mia.*speaking/ }).click();
+    await expect(page.locator("#client-card .card-nick")).toHaveText("Mia");
+    await page.getByRole("slider", { name: "User volume" }).fill("75");
+    await page.getByRole("slider", { name: "User volume" }).press("Tab");
+    await expect.poll(() => page.evaluate(() => window.__savedSettings?.user_volumes?.["uid-mia"])).toBe(75);
+    await page.getByRole("button", { name: "Message Mia", exact: true }).click();
+    await expect(page.locator("#chat-head-title")).toContainText("Mia");
+    await page.evaluate(() => {
+        window.__voicx.state.myChannelID = 3;
+        window.__voicx.renderTree();
+    });
+    await expect(strip.getByRole("button")).toHaveCount(0);
+    await expect(strip).toContainText("No one else is here yet");
+});
+
+test("B3 keeps voice controls outside the Chat and Files panels @a11y", async ({ page }) => {
+    await showB3Workspace(page);
+    await page.evaluate(() => window.__voicx.openPM("uid-mia", "Mia"));
+    await expect(page.locator("#chat-head-title")).toContainText("Mia");
+    await page.getByRole("tab", { name: "Files", exact: true }).click();
+    await expect(page.locator("#chat-head-title")).toHaveText("Public");
+    await expect(page.locator("#files-pane")).toBeVisible();
+    await expect(page.locator("#chat-pane")).toBeHidden();
+    await expect(page.locator("#chat-input-row")).toBeHidden();
+    await expect(page.getByRole("button", { name: "Mute microphone", exact: true })).toBeVisible();
+    await page.getByRole("button", { name: "Mute microphone", exact: true }).click();
+    await expect(page.getByRole("button", { name: "Unmute microphone", exact: true })).toHaveAttribute("aria-pressed", "true");
+    await page.getByRole("button", { name: "Deafen", exact: true }).click();
+    await expect(page.getByRole("button", { name: "Undeafen", exact: true })).toHaveAttribute("aria-pressed", "true");
+    await auditAccessibility(page, "B3 files and voice toolbar");
+    await page.getByRole("tab", { name: "Chat", exact: true }).click();
+    await expect(page.locator("#chat-head-title")).toContainText("Mia");
+});
+
+test("B3 restores the persisted member volume after a failed save", async ({ page }) => {
+    await showB3Workspace(page);
+    await page.evaluate(() => {
+        const app = window.go.main.App;
+        window.go.main.App = new Proxy(app, {
+            get(target, method) {
+                if (method === "SaveSettings") return async (value) => {
+                    if (window.__failVolumeSave) return "disk full";
+                    window.__savedSettings = structuredClone(value);
+                    return "";
+                };
+                if (method === "GetSettings") return async () => structuredClone(window.__savedSettings);
+                return target[method];
+            },
+        });
+    });
+    await page.locator('#voice-participants [data-client-id="mia"]').click();
+    const slider = page.getByRole("slider", { name: "User volume" });
+    await slider.fill("75");
+    await expect.poll(() => page.evaluate(() => window.__voicx.state.settings.user_volumes?.["uid-mia"])).toBe(75);
+    await page.evaluate(() => { window.__failVolumeSave = true; });
+    await slider.fill("150");
+    await expect(page.locator("#member-action-error")).toHaveText("Could not save volume. Try again.");
+    await expect(slider).toHaveValue("75");
+    await expect(page.locator("#member-volume-value")).toHaveText("75%");
+    await expect.poll(() => page.evaluate(() => window.__savedSettings.user_volumes["uid-mia"])).toBe(75);
+});
+
+test("B3 ignores a volume save failure after selecting another member", async ({ page }) => {
+    await showB3Workspace(page);
+    await page.evaluate(() => {
+        const app = window.go.main.App;
+        window.go.main.App = new Proxy(app, {
+            get(target, method) {
+                if (method === "SaveSettings") return () => new Promise((resolve) => { window.__finishVolumeSave = resolve; });
+                return target[method];
+            },
+        });
+    });
+    await page.locator('#voice-participants [data-client-id="mia"]').click();
+    await page.getByRole("slider", { name: "User volume" }).fill("150");
+    await expect.poll(() => page.evaluate(() => typeof window.__finishVolumeSave)).toBe("function");
+    await page.locator('#voice-participants [data-client-id="alex"]').click();
+    await page.evaluate(() => window.__finishVolumeSave("disk full"));
+    await expect(page.locator("#client-card .card-nick")).toHaveText("Alex");
+    await expect(page.getByRole("slider", { name: "User volume" })).toHaveValue("100");
+    await expect(page.locator("#member-volume-value")).toHaveText("100%");
+    await expect(page.locator("#member-action-error")).toBeHidden();
+});
+
+test("B3 shows the details opener only while the pane is closed", async ({ page }) => {
+    await showB3Workspace(page);
+    const opener = page.locator("#details-toggle");
+    await expect(opener).toBeVisible();
+    await opener.click();
+    await expect(opener).toBeHidden();
+    await page.locator("#details-close").click();
+    await expect(opener).toBeVisible();
+    await expect(opener).toBeFocused();
+});
+
+test("B3 fits desktop and small windows without losing the composer or toolbar", async ({ page }) => {
+    await showB3Workspace(page);
+    for (const viewport of [{ width: 1440, height: 900 }, { width: 1000, height: 730 }, { width: 640, height: 480 }]) {
+        await page.setViewportSize(viewport);
+        await expect(page.locator("#chat-text")).toBeVisible();
+        await expect(page.locator("#voice-mute")).toBeVisible();
+        await expect(page.locator("#voice-disconnect")).toBeVisible();
+        const bounds = await page.evaluate(() => ({
+            overflow: document.documentElement.scrollWidth > innerWidth,
+            composer: document.getElementById("chat-input-row").getBoundingClientRect().bottom,
+            toolbar: document.getElementById("voice-bar").getBoundingClientRect().bottom,
+        }));
+        expect(bounds.overflow).toBe(false);
+        expect(bounds.composer).toBeLessThanOrEqual(viewport.height);
+        expect(bounds.toolbar).toBeLessThanOrEqual(viewport.height);
+    }
+});
+
 const settings = {
     settings_version: 4,
     capture_device_id: "",
@@ -85,6 +222,12 @@ test.beforeEach(async ({ page }) => {
                         return window.__activeClient || "client-a";
                     }
                     if (method === "IsAdmin") return true;
+                    if (method === "ChannelEdit") {
+                        if (window.__channelEditReject) throw new Error("Connection lost");
+                        if (window.__channelEditGate) await window.__channelEditGate;
+                        return window.__channelEditError || "";
+                    }
+                    if (method === "ChannelEditTree") return window.__channelTreeError || "";
                     if (method === "IsGuest") return false;
                     if (method === "IdentityUID") return "playwright-identity";
                     if (method === "ClientVersionShort") return "test";
@@ -305,24 +448,25 @@ test("refreshes capture and playback device lists on demand", async ({ page }) =
 test("mute control switches to an unmute affordance and back", async ({ page }) => {
     await page.evaluate(() => window.__voicx.showWorkspace(false));
     const mute = page.getByRole("button", { name: "Mute microphone" });
-    await expect(mute).toHaveText("🔇");
+    await expect(mute).toHaveText("Mic on");
     await expect(mute).toHaveAttribute("title", "Mute");
     await expect(mute).toHaveAttribute("aria-pressed", "false");
 
     await mute.click();
     const unmute = page.getByRole("button", { name: "Unmute microphone" });
-    await expect(unmute).toHaveText("🔊");
+    await expect(unmute).toHaveText("Mic muted");
     await expect(unmute).toHaveAttribute("title", "Unmute");
     await expect(unmute).toHaveAttribute("aria-pressed", "true");
 
     await unmute.click();
-    await expect(page.getByRole("button", { name: "Mute microphone" })).toHaveText("🔇");
+    await expect(page.getByRole("button", { name: "Mute microphone" })).toHaveText("Mic on");
 });
 
 test("retries a missing microphone without interrupting video or screen sharing", async ({ page }) => {
     await page.evaluate(() => {
         window.__voicx.showWorkspace(false);
         window.__getUserMediaCalls = 0;
+        window.__cameraRequests = 0;
         window.__allowMicrophone = false;
         window.__shareTracksStopped = 0;
 
@@ -334,6 +478,7 @@ test("retries a missing microphone without interrupting video or screen sharing"
         const audioStream = audioContext.createMediaStreamDestination().stream;
         navigator.mediaDevices.getUserMedia = async (constraints) => {
             window.__getUserMediaCalls++;
+            if (constraints.video) window.__cameraRequests++;
             if (constraints.audio && !window.__allowMicrophone) {
                 throw new DOMException("test permission denial", "NotAllowedError");
             }
@@ -350,14 +495,14 @@ test("retries a missing microphone without interrupting video or screen sharing"
             }
             addTransceiver(track, options = {}) {
                 const sender = {
-                    track,
+                    track: typeof track === "string" ? null : track,
                     getParameters: () => ({ encodings: [{}] }),
                     setParameters: async () => {},
                     replaceTrack: async (nextTrack) => { sender.track = nextTrack; },
                 };
                 const transceiver = {
                     sender,
-                    receiver: { track: null },
+                    receiver: { track: { kind: typeof track === "string" ? track : track.kind } },
                     direction: options.direction || "sendrecv",
                     currentDirection: options.direction || "sendrecv",
                 };
@@ -386,6 +531,11 @@ test("retries a missing microphone without interrupting video or screen sharing"
     });
 
     await expect(page.locator("#voice-status")).toHaveText("voice on");
+    expect(await page.evaluate(() => window.__cameraRequests)).toBe(0);
+    await expect(page.locator("#local-video")).toBeHidden();
+    await page.getByRole("button", { name: "Camera off — click to turn on", exact: true }).click();
+    await expect.poll(() => page.evaluate(() => window.__cameraRequests)).toBe(1);
+    await expect(page.locator("#local-video")).toBeVisible();
     await expect(page.locator("#mic-status > span")).toHaveText("Microphone access denied — video only");
     const retry = page.getByRole("button", { name: "Retry microphone access" });
     await expect(retry).toBeVisible();
@@ -422,6 +572,128 @@ test("retries a missing microphone without interrupting video or screen sharing"
         unpublishedShare: 0,
         slots: ["cam", "mic"],
     });
+
+    await page.evaluate(() => { window.__voicx.state.screenSharing = false; });
+    await page.getByRole("button", { name: "Camera on — click to turn off", exact: true }).click();
+    const stop = page.getByRole("button", { name: "Turn off", exact: true });
+    if (await stop.isVisible()) await stop.click();
+    await expect.poll(() => page.evaluate(() => window.__cameraTrack.readyState)).toBe("ended");
+    await expect(page.locator("#local-video")).toBeHidden();
+    expect(await page.evaluate(() => window.__voicx.state.localStream.getVideoTracks().length)).toBe(0);
+});
+
+test("camera stays off on joins and reconnects, and discards a late enable request", async ({ page }) => {
+    await page.evaluate(async () => {
+        const v = window.__voicx;
+        v.showWorkspace(false);
+        window.__cameraRequests = 0;
+        window.__denyCamera = true;
+        window.__cameraAudio = new AudioContext();
+        navigator.mediaDevices.getUserMedia = async (constraints) => {
+            if (constraints.video) {
+                window.__cameraRequests++;
+                if (window.__denyCamera) throw new DOMException("test denial", "NotAllowedError");
+                const stream = document.createElement("canvas").captureStream(1);
+                window.__enabledCameraTrack = stream.getVideoTracks()[0];
+                if (window.__delayCamera) await new Promise((resolve) => { window.__resolveCameraEnable = resolve; });
+                return stream;
+            }
+            return window.__cameraAudio.createMediaStreamDestination().stream;
+        };
+        // Negotiate with a real in-page peer; no camera or remote server is used.
+        const app = window.go.main.App;
+        window.__cameraRemote = new RTCPeerConnection();
+        window.go.main.App = new Proxy(app, {
+            get(target, key) {
+                if (key !== "WebRTCOffer") return target[key];
+                return async (sdp) => {
+                    await window.__cameraRemote.setRemoteDescription({ type: "offer", sdp });
+                    const answer = await window.__cameraRemote.createAnswer();
+                    await window.__cameraRemote.setLocalDescription(answer);
+                    return answer.sdp;
+                };
+            },
+        });
+        v.state.myChannelID = 42;
+        v.state.channels = [{ ChannelID: 42, Name: "Lobby" }];
+        await v.ensureVoiceForChannel();
+    });
+    await expect(page.locator("#voice-status")).toHaveText("voice on");
+    expect(await page.evaluate(() => window.__cameraRequests)).toBe(0);
+    const enable = page.getByRole("button", { name: "Camera off — click to turn on", exact: true });
+    await enable.click();
+    await expect(enable).toBeEnabled();
+    await expect(page.locator("#local-video")).toBeHidden();
+    expect(await page.evaluate(() => window.__cameraRequests)).toBe(1);
+
+    await page.evaluate(() => { window.__denyCamera = false; });
+    await enable.click();
+    await expect(page.locator("#local-video")).toBeVisible();
+    await page.evaluate(async () => {
+        const v = window.__voicx;
+        v.resetVoiceSession();
+        window.__cameraRemote.close();
+        window.__cameraRemote = new RTCPeerConnection();
+        await v.ensureVoiceForChannel();
+    });
+    await expect(page.locator("#voice-status")).toHaveText("voice on");
+    await expect(page.locator("#local-video")).toBeHidden();
+    expect(await page.evaluate(() => window.__enabledCameraTrack.readyState)).toBe("ended");
+    expect(await page.evaluate(() => window.__cameraRequests)).toBe(2);
+
+    await page.evaluate(() => { window.__delayCamera = true; });
+    await enable.click();
+    await expect.poll(() => page.evaluate(() => typeof window.__resolveCameraEnable)).toBe("function");
+    await page.evaluate(() => {
+        window.__voicx.resetVoiceSession();
+        window.__resolveCameraEnable();
+    });
+    await expect.poll(() => page.evaluate(() => window.__enabledCameraTrack.readyState)).toBe("ended");
+    await expect(page.locator("#local-video")).toBeHidden();
+    expect(await page.evaluate(() => window.__voicx.state.localStream)).toBeNull();
+});
+
+test("camera settings preview requires an explicit test and releases capture on exit", async ({ page }) => {
+    await page.evaluate(() => {
+        window.__cameraRequests = 0;
+        navigator.mediaDevices.getUserMedia = async (constraints) => {
+            if (!constraints.video || constraints.audio) throw new Error("expected camera-only test");
+            window.__cameraRequests++;
+            const stream = document.createElement("canvas").captureStream(1);
+            window.__previewTrack = stream.getVideoTracks()[0];
+            return stream;
+        };
+        window.__voicx.openSettings("capture");
+    });
+    expect(await page.evaluate(() => window.__cameraRequests)).toBe(0);
+    const start = page.getByRole("button", { name: "Test camera", exact: true });
+    await start.click();
+    await expect(page.getByLabel("Camera test preview")).toBeVisible();
+    await page.getByRole("button", { name: "Stop camera test", exact: true }).click();
+    expect(await page.evaluate(() => window.__previewTrack.readyState)).toBe("ended");
+    await start.click();
+    await page.locator('[data-page="playback"]').click();
+    expect(await page.evaluate(() => window.__previewTrack.readyState)).toBe("ended");
+    await page.locator('[data-page="capture"]').click();
+    await start.click();
+    await page.getByRole("button", { name: "Cancel", exact: true }).click();
+    expect(await page.evaluate(() => window.__previewTrack.readyState)).toBe("ended");
+    expect(await page.evaluate(() => window.__voicx.state.localStream)).toBeNull();
+});
+
+test("a camera test resolved after settings closes is immediately stopped", async ({ page }) => {
+    await page.evaluate(() => {
+        navigator.mediaDevices.getUserMedia = () => new Promise((resolve) => { window.__resolveCamera = resolve; });
+        window.__voicx.openSettings("capture");
+    });
+    await page.getByRole("button", { name: "Test camera", exact: true }).click();
+    await page.getByRole("button", { name: "Cancel", exact: true }).click();
+    await page.evaluate(() => {
+        const stream = document.createElement("canvas").captureStream(1);
+        window.__previewTrack = stream.getVideoTracks()[0];
+        window.__resolveCamera(stream);
+    });
+    await expect.poll(() => page.evaluate(() => window.__previewTrack.readyState)).toBe("ended");
 });
 
 test("ignores a delayed microphone failure after the voice session changes", async ({ page }) => {
@@ -532,7 +804,7 @@ test("tracks existing unassigned clients when they later join a channel", async 
             }));
         }
     });
-    await expect(page.locator('.channel[data-chid="1"] .ch-count')).toHaveText("[2]");
+    await expect(page.locator('.channel[data-chid="1"] .ch-count')).toHaveText("2");
     await expect(page.locator('.client[data-clid="bravo"]')).toContainText("BRAVO");
     expect(await page.evaluate(() => window.__voicx.state.clients.map((client) => ({
         id: client.client_id, channel: client.channel_id, bot: !!client.is_bot, status: client.status || "",
@@ -902,6 +1174,7 @@ test("does not finish an in-flight reconnect after an intentional disconnect", a
 
 test("labels screen-share controls and explains low-bandwidth data use", async ({ page }) => {
     await page.evaluate(() => window.__voicx.showWorkspace(false));
+    await page.getByLabel("Voice options", { exact: true }).click();
     const shareButton = page.locator("#voice-screen");
     const lowBandwidthButton = page.locator("#voice-lowbw");
 
@@ -1725,7 +1998,7 @@ test("nests connected members below channels and offers them as direct-message t
     await expect(page.locator("#chat-target")).toHaveValue("user-c");
 });
 
-test("uses the reference control-room composition without losing responsive navigation", async ({ page }) => {
+test("uses the B3 console composition without losing responsive navigation", async ({ page }) => {
     await page.setViewportSize({ width: 1280, height: 800 });
     await page.evaluate(() => {
         window.__voicx.showWorkspace(false);
@@ -1754,10 +2027,10 @@ test("uses the reference control-room composition without losing responsive navi
         railDirection: getComputedStyle(document.getElementById("server-tabs")).flexDirection,
         texture: getComputedStyle(document.getElementById("center"), "::before").backgroundImage,
     }));
-    expect(desktop.accent).toBe("#00f2ff");
-    expect(desktop.appColumns).toMatch(/^72px /);
-    expect(desktop.railDirection).toBe("column");
-    expect(desktop.texture).toContain("radial-gradient");
+    expect(desktop.accent).toBe("#4ad8ed");
+    expect(desktop.appColumns).toBe("1280px");
+    expect(desktop.railDirection).toBe("row");
+    expect(desktop.texture).toBe("none");
     const mainLounge = page.locator('.channel-node:has(> .channel[data-chid="1"])');
     await expect(mainLounge.locator(":scope > .channel-children")).toHaveAttribute("role", "group");
     await expect(mainLounge.locator(":scope > .channel-children")).toHaveAttribute("aria-label", "Main Lounge subchannels");
@@ -1769,6 +2042,9 @@ test("uses the reference control-room composition without losing responsive navi
         () => getComputedStyle(document.getElementById("server-tabs")).flexDirection,
     )).toBe("row");
     await expect(page.locator("#center")).toBeVisible();
+    await page.getByRole("button", { name: "Close details", exact: true }).click();
+    await page.getByRole("button", { name: "Show channels", exact: true }).click();
+    await expect(page.locator('.channel[data-chid="1"]')).toBeVisible();
 });
 
 test("exposes named landmarks, controls, live regions, and a visible focus ring", async ({ page }) => {
@@ -1873,6 +2149,7 @@ test("does not export a different channel after its passphrase dialog is left op
         ];
         state.clients = [{ client_id: "client-a", unique_id: "user-a", nickname: "Alice", channel_id: 1 }];
     });
+    await page.getByLabel("More channel actions", { exact: true }).click();
     await page.getByRole("button", { name: "Export chat history" }).click();
     await expect(page.getByRole("dialog", { name: "Export chat" })).toBeVisible();
     await page.locator('input[placeholder^="passphrase"]').fill("encrypted-export");
@@ -2828,6 +3105,70 @@ test("keeps long channel dialogs within a small window and scrolls to their acti
     await expect.poll(() => page.evaluate(() => window.__callArgs.CreateChannel?.[0]?.[0])).toBe("Small window room");
 });
 
+async function openChannelEditor(page) {
+    await page.evaluate(() => {
+        window.__voicx.showWorkspace(false);
+        for (const cb of window.__events.snapshot || []) cb(JSON.stringify({
+            root_channels: [{ ChannelID: 2, Name: "Public", Topic: "Everyone welcome", ParentID: 0,
+                OpusBitrate: 32000, OpusFEC: true, OpusDTX: true, OrderIndex: 1, clients: [], children: [] }],
+        }));
+    });
+    if (!(await page.locator("#sidebar").isVisible())) await page.getByRole("button", { name: "Show channels", exact: true }).click();
+    await page.locator('.channel[data-chid="2"]').click({ button: "right" });
+    await page.getByText("Edit channel", { exact: true }).click();
+    return page.getByRole("dialog", { name: "Edit channel", exact: true });
+}
+
+test("channel editor keeps its title and actions visible at small window sizes @a11y", async ({ page }) => {
+    for (const viewport of [{ width: 1000, height: 730 }, { width: 640, height: 480 }]) {
+        await page.setViewportSize(viewport);
+        const dialog = await openChannelEditor(page);
+        await expect(dialog.getByRole("heading", { name: "Edit channel" })).toBeInViewport({ ratio: 1 });
+        await expect(dialog.getByRole("button", { name: "Save changes" })).toBeInViewport({ ratio: 1 });
+        await expect(dialog.getByRole("button", { name: "Cancel", exact: true })).toBeInViewport({ ratio: 1 });
+        for (const summary of await dialog.locator("summary").all()) await summary.click();
+        await dialog.locator(".ce-order").fill("3");
+        await expect(dialog.getByRole("heading", { name: "Edit channel" })).toBeInViewport({ ratio: 1 });
+        await expect(dialog.getByRole("button", { name: "Save changes" })).toBeInViewport({ ratio: 1 });
+        const dimensions = await dialog.locator(".channel-edit").evaluate((el) => ({ width: el.clientWidth, scrollWidth: el.scrollWidth }));
+        expect(dimensions.scrollWidth).toBeLessThanOrEqual(dimensions.width);
+        await auditAccessibility(page, "channel editor");
+        await page.keyboard.press("Escape");
+        await expect(dialog).toHaveCount(0);
+    }
+});
+
+test("channel editor preserves input on failure and prevents duplicate saves", async ({ page }) => {
+    const dialog = await openChannelEditor(page);
+    await dialog.locator(".ce-topic").fill("New topic");
+    await dialog.getByText("Access & placement", { exact: true }).click();
+    await dialog.locator(".ce-order").fill("4");
+    await page.evaluate(() => { window.__channelEditError = "Permission denied"; });
+    await dialog.getByRole("button", { name: "Save changes" }).click();
+    await expect(dialog.getByRole("alert")).toContainText("Permission denied");
+    await expect(dialog.locator(".ce-topic")).toHaveValue("New topic");
+    expect(await page.evaluate(() => window.__calls.ChannelEditTree || 0)).toBe(0);
+    await page.evaluate(() => {
+        window.__channelEditError = "";
+        window.__channelEditGate = new Promise((resolve) => { window.__releaseChannelEdit = resolve; });
+    });
+    await dialog.getByRole("button", { name: "Save changes" }).click();
+    await expect(dialog.getByRole("button", { name: "Saving…" })).toBeDisabled();
+    await page.evaluate(() => { window.__releaseChannelEdit(); });
+    await expect(dialog).toHaveCount(0);
+    expect(await page.evaluate(() => window.__calls.ChannelEdit)).toBe(2);
+    expect(await page.evaluate(() => window.__callArgs.ChannelEditTree[0])).toEqual([2, "order", 0, 4, 0, false]);
+});
+
+test("channel editor saves presets without rewriting unchanged placement", async ({ page }) => {
+    const dialog = await openChannelEditor(page);
+    await dialog.locator(".ce-preset").selectOption("music");
+    await dialog.getByRole("button", { name: "Save changes" }).click();
+    await expect(dialog).toHaveCount(0);
+    expect(await page.evaluate(() => window.__callArgs.ChannelEdit[0])).toEqual([2, "Everyone welcome", 0, 128000, true, false, true, "", 0]);
+    expect(await page.evaluate(() => window.__calls.ChannelEditTree || 0)).toBe(0);
+});
+
 test("closes menus when keyboard focus exits and keeps expansion state in sync", async ({ page }) => {
     await page.evaluate(() => window.__voicx.showWorkspace(false));
     const tools = page.locator("#menubar > .menu-item").filter({ hasText: /^Tools/ });
@@ -2879,6 +3220,7 @@ test("maintains a nested dialog stack across media, rerenders, and zero-control 
         window.__voicx.showWorkspace(false);
         const { mountDialog } = await import("/src/modal.js");
         const launcher = document.getElementById("chat-info-btn");
+        launcher.closest("details").open = true;
         launcher.classList.remove("hidden");
         launcher.focus();
 
@@ -2934,6 +3276,7 @@ test("falls back from invalid modal focus and restores login after a workspace t
         window.__voicx.showWorkspace(false);
         const { mountDialog } = await import("/src/modal.js");
         const launcher = document.getElementById("chat-info-btn");
+        launcher.closest("details").open = true;
         launcher.classList.remove("hidden");
         launcher.focus();
         const overlay = document.createElement("div");

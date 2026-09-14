@@ -38,6 +38,8 @@ import { isActivationKey } from "./a11y.js";
 import { createLiveAnnouncementQueue } from "./live-announcer.js";
 import { dialogFocusableSelector, initModalSystem, mountServerDialog } from "./modal.js";
 import { parseRuntimeObject } from "./runtime-json.js";
+import { icon } from "./icons.js";
+import { initWorkspace, renderWorkspace, renderMember } from "./workspace-ui.js";
 
 const P = () => window.__voicxPerms;
 window.__voicxChat = chatUI;
@@ -1490,6 +1492,7 @@ function renderTree() {
     renderDirectTargets();
     renderClientCard();
     chatUI.refreshHeader(); // (111) topic/title follows tree + channel updates
+    renderWorkspace();
     restoreTreeFocus(root, focusState);
 }
 
@@ -1534,7 +1537,7 @@ function renderChannel(parentEl, ch, byParent, depth) {
     el.tabIndex = 0; // (298) keyboard navigation
     el.setAttribute("role", "treeitem"); // (343)
     el.setAttribute("aria-label", "channel " + ch.Name + (ch.HasPassword ? ", password protected" : ""));
-    el.innerHTML = `<span class="ch-icon">${ch.HasIcon ? "◈" : "#"}</span><span class="ch-name"></span>`;
+    el.innerHTML = `<span class="ch-disclosure" aria-hidden="true">${icon("chevron")}</span><span class="ch-icon">${icon("speaker")}</span><span class="ch-name"></span>`;
     el.querySelector(".ch-name").textContent = ch.Name;
     // (387) muted channel icon.
     if (window.__voicxNotify?.channelOverride?.(ch.ChannelID)?.muted) {
@@ -1555,7 +1558,7 @@ function renderChannel(parentEl, ch, byParent, depth) {
     if (ch.ClientCount > 0 || ch.MaxClients > 0) {
         const count = document.createElement("span");
         count.className = "ch-count mono";
-        count.textContent = `[${ch.ClientCount}${ch.MaxClients > 0 ? "/" + ch.MaxClients : ""}]`;
+        count.textContent = `${ch.ClientCount}${ch.MaxClients > 0 ? "/" + ch.MaxClients : ""}`;
         el.appendChild(count);
     }
     // (104) unread badge; accent variant when it includes a mention of me.
@@ -1620,6 +1623,10 @@ function renderChannel(parentEl, ch, byParent, depth) {
     const expandable = state.clients.some((c) => c.channel_id === ch.ChannelID) ||
         (byParent.get(ch.ChannelID) || []).length > 0;
     if (expandable) el.setAttribute("aria-expanded", String(!collapsed));
+    el.querySelector(".ch-disclosure").onclick = (event) => {
+        event.stopPropagation();
+        if (expandable) setChannelExpanded(ch.ChannelID, collapsed);
+    };
     if (!collapsed) {
         const members = state.clients.filter((c) => c.channel_id === ch.ChannelID);
         if (members.length > 0) {
@@ -1751,11 +1758,8 @@ function clientRow(c) {
     if (c.client_id === state.myClientID) {
         const icons = document.createElement("span");
         icons.className = "status-icons";
-        let txt = "";
-        if (state.muted) txt += " 🔇";
-        if (state.deafened) txt += " 🙉";
-        if (state.screenSharing) txt += " 🖥";
-        icons.textContent = txt;
+        icons.innerHTML = icon(state.muted ? "micOff" : "mic") +
+            (state.deafened ? icon("headphones") : "") + (state.screenSharing ? icon("screen") : "");
         row.appendChild(icons);
         // (347) DND shows on own status icons.
         if (window.__voicxPolish?.dndActive?.()) {
@@ -1902,41 +1906,7 @@ async function fetchAvatar(uniqueID) {
 // ---------------------------------------------------------------------------
 
 function renderClientCard() {
-    const el = $("client-card");
-    const c = state.clients.find((c) => c.client_id === state.selectedClientID);
-    if (!c) {
-        el.innerHTML = `<div class="empty-state">Select a user</div>`;
-        return;
-    }
-    const ch = state.channels.find((x) => x.ChannelID === c.channel_id);
-    const dataUrl = state.avatars.get(c.unique_id);
-    el.innerHTML = `
-        <div class="card-avatar ${c.is_speaking ? "speaking" : ""}"></div>
-        <div class="card-nick"></div>
-        <div class="card-uid mono"></div>
-        <div class="card-channel"></div>
-        <div class="card-groups"></div>`;
-    const cardAvatar = el.querySelector(".card-avatar");
-    if (!setSafeImage(cardAvatar, dataUrl)) {
-        const fallback = document.createElement("span");
-        fallback.textContent = initials(c.nickname || c.unique_id || "?");
-        cardAvatar.appendChild(fallback);
-    }
-    el.querySelector(".card-nick").textContent = c.nickname || c.unique_id;
-    el.querySelector(".card-uid").textContent = (c.unique_id || "").slice(0, 16) + "…";
-    el.querySelector(".card-channel").textContent = ch ? "in " + ch.Name : "no channel";
-    // (143-145) the user's server groups (from wave-6b membership data).
-    const chips = el.querySelector(".card-groups");
-    for (const g of state.groupByUID?.get(c.unique_id) || []) {
-        const chip = document.createElement("span");
-        chip.className = "group-chip";
-        chip.textContent = g.name;
-        if (g.color) {
-            chip.style.borderColor = g.color;
-            chip.style.color = g.color;
-        }
-        chips.appendChild(chip);
-    }
+    renderMember();
 }
 
 // The inspector is contextual: keep the workspace wide until the user selects
@@ -1945,9 +1915,11 @@ function renderClientCard() {
 function setDetailsOpen(open) {
     const details = $("details");
     const toggle = $("details-toggle");
+    const restoreFocus = !open && details.contains(document.activeElement);
     document.body.classList.toggle("details-collapsed", !open);
     details.setAttribute("aria-hidden", String(!open));
     toggle.setAttribute("aria-expanded", String(open));
+    if (restoreFocus) toggle.focus();
 }
 
 $("details-close").onclick = () => setDetailsOpen(false);
@@ -2147,67 +2119,36 @@ function audioConstraints() {
     return captureConstraints(state.channels.find((c) => c.ChannelID === state.myChannelID));
 }
 
-// (78) Camera frame rate from settings (15/30/60, default 30).
-function videoConstraints() {
-    const fps = state.settings?.camera_fps || 30;
-    return { width: 640, height: 360, frameRate: { ideal: fps } };
-}
-
 function microphoneFailureState(error) {
     return error?.name === "NotAllowedError" || error?.name === "SecurityError" ? "denied" : "none";
 }
 
 async function startVoice(expectedEpoch = voiceSessionEpoch) {
-    // Capture degrades in steps — mic+camera, then mic only, then camera only.
-    // Either device may be absent, and a machine without a webcam must still
-    // get a full audio session; micErr stays null while the mic works.
+    // Joining never requests a camera. A missing/denied microphone still
+    // permits receiving media, sharing a screen, and explicitly enabling video.
     let micErr = null;
+    let capturedStream;
     try {
-        state.localStream = await navigator.mediaDevices.getUserMedia({
+        capturedStream = await navigator.mediaDevices.getUserMedia({
             audio: audioConstraints(),
-            video: videoConstraints(),
+            video: false,
         });
-    } catch {
-        try {
-            state.localStream = await navigator.mediaDevices.getUserMedia({
-                audio: audioConstraints(),
-            });
-        } catch (e) {
-            micErr = e;
-            try {
-                state.localStream = await navigator.mediaDevices.getUserMedia({
-                    video: videoConstraints(),
-                });
-            } catch (ve) {
-                if (expectedEpoch === voiceSessionEpoch && state.myChannelID > 0) {
-                    setMicState(microphoneFailureState(micErr));
-                }
-                throw new Error("no microphone or camera available (mic: " +
-                    (micErr.name || micErr) + ", camera: " + (ve.name || ve) + ")");
-            }
-        }
+    } catch (e) {
+        micErr = e;
+        capturedStream = new MediaStream();
     }
     if (expectedEpoch !== voiceSessionEpoch || state.myChannelID <= 0) {
-        state.localStream?.getTracks().forEach((track) => track.stop());
-        state.localStream = null;
+        capturedStream.getTracks().forEach((track) => track.stop());
         return false;
     }
+    state.localStream = capturedStream;
     setMicState(micErr === null ? "ok" : microphoneFailureState(micErr));
     // (25) record which profile this capture was taken with, so a later move
     // only re-captures when the profile actually changes.
     markCaptureProfile(state.localStream.getAudioTracks()[0],
         state.channels.find((c) => c.ChannelID === state.myChannelID));
-    if (state.localStream.getVideoTracks().length === 0) {
-        sysMsg("no camera found; joined voice audio-only");
-    }
-    // (78) contentHint tracks the configured frame rate.
-    const camTrack = state.localStream.getVideoTracks()[0];
-    if (camTrack) camTrack.contentHint = (state.settings?.camera_fps || 30) >= 60 ? "motion" : "detail";
-    // the self-view is a fixed floating panel with a border: without a camera
-    // track it would just be an empty box over the UI (audio-only fallback).
-    $("local-video").srcObject = camTrack ? state.localStream : null;
-    $("local-video").classList.toggle("hidden", !camTrack);
-    resetCameraState(); // (85) a fresh session starts with the camera live
+    $("local-video").srcObject = null;
+    $("local-video").classList.add("hidden");
 
     // ICE servers delivered by the server at connect (STUN/TURN); an empty
     // list means "client defaults" (plain RTCPeerConnection).
@@ -2232,23 +2173,8 @@ async function startVoice(expectedEpoch = voiceSessionEpoch) {
     const audioTrack = state.localStream.getAudioTracks()[0];
     if (audioTrack) {
         pc.addTransceiver(audioTrack, { direction: "sendrecv", streams: [state.localStream] });
-    }
-
-    const videoTrack = state.localStream.getVideoTracks()[0];
-    if (videoTrack) {
-        try {
-            pc.addTransceiver(videoTrack, {
-                direction: "sendrecv",
-                streams: [state.localStream],
-                sendEncodings: [
-                    { rid: "f" },
-                    { rid: "h", scaleResolutionDownBy: 2 },
-                    { rid: "q", scaleResolutionDownBy: 4 },
-                ],
-            });
-        } catch {
-            pc.addTransceiver(videoTrack, { direction: "sendrecv", streams: [state.localStream] });
-        }
+    } else {
+        pc.addTransceiver("audio", { direction: "recvonly" });
     }
 
     pc.onicecandidate = (e) => {
@@ -2301,6 +2227,7 @@ async function startVoice(expectedEpoch = voiceSessionEpoch) {
     }
 
     applyChannelAudio();
+    resetCameraState();
     // (88) re-apply the persisted low-bandwidth mode to the fresh session.
     if (state.settings?.low_bandwidth) setLowBandwidth(true, false);
     startVoiceMonitor();
@@ -2560,7 +2487,7 @@ function retryMicrophoneAccess() {
 async function retryMicrophoneCapture() {
     if (state.myChannelID <= 0) return false;
     // A session where every capture device failed has no peer connection to
-    // extend. In that case retry the normal staged capture flow.
+    // extend. In that case retry the normal audio-only capture flow.
     if (!state.pc || !state.localStream) {
         return ensureVoiceForChannel();
     }
@@ -3171,12 +3098,13 @@ document.addEventListener("keydown", (e) => {
 
 window.runtime.EventsOn("hotkey_status", (st) => {
     const el = $("hotkey-status");
+    const action = { mute_toggle: "Mute", deafen_toggle: "Deafen", ptt: "Push to talk" }[st.action] || String(st.action || "Voice").replaceAll("_", " ");
     if (st.registered) {
-        el.textContent = "⌨ " + st.action;
+        el.textContent = action + " shortcut active";
         el.classList.remove("err");
         el.title = st.action + " hotkey active";
     } else {
-        el.textContent = "⌨ off";
+        el.textContent = action + " shortcut unavailable";
         el.classList.add("err");
         el.title = st.action + " hotkey failed: " + (st.error || "");
         toast("hotkey failed: " + st.action + " — " + (st.error || "registration failed"), "warn", "conn");
@@ -3303,3 +3231,4 @@ initMetaUI();   // wave-8b debug/stats/onboarding (registers window.__voicxMeta)
 initPolishUI(); // wave-8c polish/a11y (registers window.__voicxPolish)
 initNotifications(); // wave-9 notification matrix (registers window.__voicxNotify)
 chatUI.initChat(); // wave-5b chat UI (must run after __voicx exists)
+initWorkspace();
