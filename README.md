@@ -156,7 +156,7 @@ flowchart TD
 #### Prerequisites
 * **Go**: `>= 1.27.1` (both Go modules declare this minimum)
 * **Node.js**: `>= 24`
-* **Wails CLI**: `go install github.com/wailsapp/wails/v2/cmd/wails@v2.13.0`
+* **Wails CLI**: `go install github.com/wailsapp/wails/v2/cmd/wails@v2.16.0` (match `client/go.mod`)
 * **PostgreSQL**: `>= 16`
 
 #### Build Backend Server
