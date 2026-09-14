@@ -1,4 +1,4 @@
-# voicx-client
+# voicx
 
 Wails v2 desktop client for the voicx voice/chat server (see the repository
 root README for the server). **Status: scaffold** — the core flows work end
@@ -512,7 +512,7 @@ github.com/wailsapp/wails/v2/cmd/wails@v2.16.0`, matching `go.mod`).
 wails dev
 
 # Production build with the canonical commit/source version (repo root)
-make client-build  # output: client/build/bin/voicx-client.exe
+make client-build  # output: client/build/bin/voicx.exe
 
 # Windows PowerShell equivalent (repo root)
 ./scripts/build.ps1 client

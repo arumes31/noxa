@@ -67,6 +67,37 @@ test("B3 shows your detected speech even when your own playback is muted or deaf
     await expect(self).toContainText("Microphone muted");
 });
 
+test("tray follows detected self speech, input/output mute, and voice teardown without polling", async ({ page }) => {
+    await showB3Workspace(page);
+    await page.evaluate(() => {
+        window.__voicx.state.pc = { close() {} };
+        window.__voicx.renderTree();
+        for (const cb of window.__events.event) cb(JSON.stringify({
+            type: "speaking_changed", data: { client_id: "daniel", speaking: true },
+        }));
+    });
+    const flags = () => page.evaluate(() => window.__callArgs.SetTrayVoiceState?.at(-1));
+    await expect.poll(flags).toEqual([true, false, false]);
+    const count = await page.evaluate(() => window.__calls.SetTrayVoiceState);
+    await page.evaluate(() => {
+        for (let i = 0; i < 20; i++) window.__voicx.renderTree();
+        for (const cb of window.__events.event) cb(JSON.stringify({
+            type: "speaking_changed", data: { client_id: "mia", speaking: false },
+        }));
+    });
+    expect(await page.evaluate(() => window.__calls.SetTrayVoiceState)).toBe(count);
+    await page.locator("#voice-deafen").click();
+    await expect.poll(flags).toEqual([true, false, true]);
+    await page.locator("#voice-mute").click();
+    await expect.poll(flags).toEqual([false, true, true]);
+    await page.locator("#voice-deafen").click();
+    await expect.poll(flags).toEqual([false, true, false]);
+    await page.locator("#voice-mute").click();
+    await expect.poll(flags).toEqual([true, false, false]);
+    await page.evaluate(() => window.__voicx.resetVoiceSession());
+    await expect.poll(flags).toEqual([false, false, false]);
+});
+
 test("B3 keeps voice controls outside the Chat and Files panels @a11y", async ({ page }) => {
     await showB3Workspace(page);
     await page.evaluate(() => window.__voicx.openPM("uid-mia", "Mia"));

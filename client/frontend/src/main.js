@@ -40,11 +40,20 @@ import { dialogFocusableSelector, initModalSystem, mountServerDialog } from "./m
 import { parseRuntimeObject } from "./runtime-json.js";
 import { icon } from "./icons.js";
 import { initWorkspace, renderWorkspace, renderMember } from "./workspace-ui.js";
+import { createTrayVoiceSync } from "./tray-state.js";
 
 const P = () => window.__voicxPerms;
 window.__voicxChat = chatUI;
 
 const $ = (id) => document.getElementById(id);
+const publishTrayVoice = createTrayVoiceSync((...flags) => window.go.main.App.SetTrayVoiceState(...flags));
+
+function syncTrayVoice() {
+    const me = state.clients.find((client) => client.client_id === state.myClientID);
+    const speaking = !!(state.pc && !state.replayingTabID && state.myChannelID &&
+        me?.channel_id === state.myChannelID && me.is_speaking && !state.muted);
+    publishTrayVoice(speaking, state.muted, state.deafened);
+}
 
 const liveAnnouncements = createLiveAnnouncementQueue({
     resolveRegion: (priority) => $(priority === "assertive" ? "alert-announcer" : "chat-announcer"),
@@ -1523,6 +1532,7 @@ function renderTree() {
     renderClientCard();
     chatUI.refreshHeader(); // (111) topic/title follows tree + channel updates
     renderWorkspace();
+    syncTrayVoice();
     restoreTreeFocus(root, focusState);
 }
 
@@ -2449,6 +2459,7 @@ function teardownVoice() {
     clearRegionBox(); // (71)
     detachRemoteAudio();
     if (state.pc) { state.pc.close(); state.pc = null; }
+    syncTrayVoice();
     if (state.localStream) {
         for (const t of state.localStream.getTracks()) t.stop();
         state.localStream = null;

@@ -295,6 +295,8 @@ export function SetServerConfig(arg1:netproto.ServerConfig):Promise<netproto.Ser
 
 export function SetStatus(arg1:string,arg2:string):Promise<string>;
 
+export function SetTrayVoiceState(arg1:boolean,arg2:boolean,arg3:boolean):Promise<void>;
+
 export function SetVideoQuality(arg1:string):Promise<string>;
 
 export function SetWindowOpacity(arg1:number):Promise<string>;

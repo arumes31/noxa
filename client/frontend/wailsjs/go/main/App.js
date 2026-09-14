@@ -586,6 +586,10 @@ export function SetStatus(arg1, arg2) {
   return window['go']['main']['App']['SetStatus'](arg1, arg2);
 }
 
+export function SetTrayVoiceState(arg1, arg2, arg3) {
+  return window['go']['main']['App']['SetTrayVoiceState'](arg1, arg2, arg3);
+}
+
 export function SetVideoQuality(arg1) {
   return window['go']['main']['App']['SetVideoQuality'](arg1);
 }

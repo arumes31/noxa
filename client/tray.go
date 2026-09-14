@@ -11,6 +11,7 @@ import (
 	_ "embed"
 	"log"
 	"runtime"
+	"strconv"
 	"sync"
 
 	"github.com/getlantern/systray"
@@ -30,10 +31,14 @@ type tray struct {
 
 	mu          sync.Mutex
 	mentions    int
-	ptt         bool
+	speaking    bool
 	muted       bool
+	deafened    bool
 	visible     bool
 	isConnected bool
+	publish     func(trayPresentation, bool)
+	last        trayPresentation
+	presented   bool
 
 	miShowHide   *systray.MenuItem
 	miMute       *systray.MenuItem
@@ -56,8 +61,6 @@ func initTray(a *App, ready chan<- struct{}) {
 
 // onReady builds the tray menu (called on the systray thread).
 func (t *tray) onReady() {
-	systray.SetIcon(trayIcon())
-	t.updateTitle()
 	t.miShowHide = systray.AddMenuItem("Hide voicx", "show/hide the window")
 	systray.AddSeparator()
 	t.miMute = systray.AddMenuItem("Mute", "toggle microphone mute")
@@ -65,6 +68,25 @@ func (t *tray) onReady() {
 	systray.AddSeparator()
 	t.miReconnect = systray.AddMenuItem("Reconnect last server", "reconnect the last server")
 	t.miDisconnect = systray.AddMenuItem("Disconnect", "disconnect the active server tab")
+	t.mu.Lock()
+	t.publish = func(p trayPresentation, iconChanged bool) {
+		if iconChanged {
+			systray.SetIcon(trayIcons()[p.icon])
+		}
+		systray.SetTitle(p.title)
+		systray.SetTooltip(p.tooltip)
+		if t.muted {
+			t.miMute.SetTitle("Unmute microphone")
+		} else {
+			t.miMute.SetTitle("Mute microphone")
+		}
+		if t.deafened {
+			t.miDeafen.SetTitle("Unmute audio")
+		} else {
+			t.miDeafen.SetTitle("Mute audio")
+		}
+	}
+	t.mu.Unlock()
 	t.setConnected(t.app.Connected())
 	miQuit := systray.AddMenuItem("Quit", "quit voicx")
 
@@ -97,6 +119,9 @@ func (t *tray) onReady() {
 func (t *tray) setConnected(isConnected bool) {
 	t.mu.Lock()
 	t.isConnected = isConnected
+	if !isConnected {
+		t.speaking = false
+	}
 	if t.miReconnect != nil {
 		if isConnected {
 			t.miReconnect.Disable()
@@ -111,6 +136,7 @@ func (t *tray) setConnected(isConnected bool) {
 			t.miDisconnect.Disable()
 		}
 	}
+	t.updateTitleLocked()
 	t.mu.Unlock()
 }
 
@@ -180,60 +206,68 @@ func trayMarkHidden() {
 	}
 }
 
-// updateTitle refreshes the tray title/tooltip (289 PTT state, 290 badge).
+// updateTitle serializes native updates so an older state cannot overwrite a
+// newer transition. Identical presentations never touch the operating system.
 func (t *tray) updateTitle() {
 	t.mu.Lock()
-	mentions, ptt, muted := t.mentions, t.ptt, t.muted
-	t.mu.Unlock()
-	title := "voicx"
-	if ptt {
-		title += " ● TALKING"
-	} else if muted {
-		title += " (muted)"
-	}
-	tooltip := "voicx voice client"
-	if mentions > 0 {
-		tooltip += " — " + itoa(mentions) + " unread mention(s)"
-	}
-	systray.SetTitle(title)
-	systray.SetTooltip(tooltip)
+	defer t.mu.Unlock()
+	t.updateTitleLocked()
 }
 
-// itoa is a tiny int->string helper (avoids strconv for one call site).
-func itoa(n int) string {
-	if n == 0 {
-		return "0"
-	}
-	var buf [8]byte
-	i := len(buf)
-	for n > 0 {
-		i--
-		buf[i] = byte('0' + n%10)
-		n /= 10
-	}
-	return string(buf[i:])
+type trayPresentation struct {
+	icon           trayIconState
+	title, tooltip string
 }
 
-// traySetPTT reflects the PTT state in the tray title (289).
-func traySetPTT(active bool) {
-	if trayCtl == nil {
+func (t *tray) updateTitleLocked() {
+	if t.publish == nil {
 		return
 	}
-	trayCtl.mu.Lock()
-	trayCtl.ptt = active
-	trayCtl.mu.Unlock()
-	trayCtl.updateTitle()
-}
-
-// traySetMuted reflects the mute state in the tray title.
-func traySetMuted(muted bool) {
-	if trayCtl == nil {
+	mode, label := trayIdle, "Microphone on"
+	speaking := t.isConnected && t.speaking && !t.muted
+	switch {
+	case t.muted && t.deafened:
+		mode, label = trayBothMuted, "Microphone and audio muted"
+	case t.muted:
+		mode, label = trayMicMuted, "Microphone muted"
+	case speaking && t.deafened:
+		mode, label = trayTalkingDeafened, "Talking · Audio muted"
+	case t.deafened:
+		mode, label = trayDeafened, "Audio muted"
+	case speaking:
+		mode, label = trayTalking, "Talking"
+	}
+	p := trayPresentation{icon: mode, title: "voicx · " + label, tooltip: "voicx — " + label}
+	if !t.isConnected {
+		p.tooltip += " · Disconnected"
+	}
+	if t.mentions > 0 {
+		p.tooltip += " — " + strconv.Itoa(t.mentions) + " unread mention(s)"
+	}
+	if t.presented && p == t.last {
 		return
 	}
-	trayCtl.mu.Lock()
-	trayCtl.muted = muted
-	trayCtl.mu.Unlock()
-	trayCtl.updateTitle()
+	t.publish(p, !t.presented || p.icon != t.last.icon)
+	t.last, t.presented = p, true
+}
+
+func (t *tray) setVoiceState(speaking, muted, deafened bool) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	speaking = speaking && t.isConnected
+	if t.presented && t.speaking == speaking && t.muted == muted && t.deafened == deafened {
+		return
+	}
+	t.speaking, t.muted, t.deafened = speaking, muted, deafened
+	t.updateTitleLocked()
+}
+
+// SetTrayVoiceState receives the active voice session's detected speech and
+// independent input/output mute flags, including while the window is hidden.
+func (a *App) SetTrayVoiceState(speaking, muted, deafened bool) {
+	if trayCtl != nil {
+		trayCtl.setVoiceState(speaking, muted, deafened)
+	}
 }
 
 // trayAddMention bumps the mention badge (290) and refreshes the tooltip.

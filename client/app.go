@@ -698,7 +698,6 @@ func (a *App) SetVideoQuality(quality string) string {
 // SetMuted records the mute state (drives the status display; the actual
 // track toggling happens in the frontend).
 func (a *App) SetMuted(muted bool) {
-	traySetMuted(muted)
 	if cm := a.cmLoad(); cm != nil {
 		cm.emit("muted", muted)
 	}
@@ -706,7 +705,6 @@ func (a *App) SetMuted(muted bool) {
 
 // SetPTT records the push-to-talk state.
 func (a *App) SetPTT(active bool) {
-	traySetPTT(active)
 	if cm := a.cmLoad(); cm != nil {
 		cm.emit("ptt", active)
 	}

@@ -46,7 +46,7 @@ func runApp() {
 // runWails owns the native application loop on the calling OS thread.
 func runWails(app *App) {
 	err := wails.Run(&options.App{
-		Title:  "voicx-client",
+		Title:  "voicx",
 		Width:  1024,
 		Height: 768,
 		AssetServer: &assetserver.Options{

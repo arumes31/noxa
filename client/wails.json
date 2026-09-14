@@ -1,10 +1,10 @@
 {
   "$schema": "https://wails.io/schemas/config.v2.json",
-  "name": "voicx-client",
-  "outputfilename": "voicx-client",
+  "name": "voicx",
+  "outputfilename": "voicx",
   "info": {
     "companyName": "VoicX",
-    "productName": "VoicX",
+    "productName": "voicx",
     "productVersion": "0.4.3",
     "copyright": "Copyright 2026 VoicX",
     "comments": "VoicX desktop voice and collaboration client"
