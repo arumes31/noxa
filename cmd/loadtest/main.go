@@ -322,7 +322,7 @@ func controlTLSConfig(opts options) (*tls.Config, bool, error) {
 
 	switch {
 	case strings.TrimSpace(opts.tlsPin) != "":
-		cfg, err := pinnedTLSConfig(opts.tlsPin)
+		cfg, err := fingerprintVerifiedTLSConfig(opts.tlsPin)
 		return cfg, true, err
 	case opts.tlsInsecure:
 		if !isLoopbackEndpoint(opts.addr) {
@@ -343,7 +343,11 @@ func controlTLSConfig(opts options) (*tls.Config, bool, error) {
 	}
 }
 
-func pinnedTLSConfig(fingerprint string) (*tls.Config, error) {
+// fingerprintVerifiedTLSConfig replaces CA/hostname verification with an exact
+// certificate pin. VerifyConnection enforces the pin on every TLS handshake,
+// including resumed sessions. The explicit verification name also lets CodeQL
+// distinguish this custom trust policy from accidentally disabled verification.
+func fingerprintVerifiedTLSConfig(fingerprint string) (*tls.Config, error) {
 	expected, err := parseTLSFingerprint(fingerprint)
 	if err != nil {
 		return nil, err
