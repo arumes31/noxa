@@ -2119,67 +2119,36 @@ function audioConstraints() {
     return captureConstraints(state.channels.find((c) => c.ChannelID === state.myChannelID));
 }
 
-// (78) Camera frame rate from settings (15/30/60, default 30).
-function videoConstraints() {
-    const fps = state.settings?.camera_fps || 30;
-    return { width: 640, height: 360, frameRate: { ideal: fps } };
-}
-
 function microphoneFailureState(error) {
     return error?.name === "NotAllowedError" || error?.name === "SecurityError" ? "denied" : "none";
 }
 
 async function startVoice(expectedEpoch = voiceSessionEpoch) {
-    // Capture degrades in steps — mic+camera, then mic only, then camera only.
-    // Either device may be absent, and a machine without a webcam must still
-    // get a full audio session; micErr stays null while the mic works.
+    // Joining never requests a camera. A missing/denied microphone still
+    // permits receiving media, sharing a screen, and explicitly enabling video.
     let micErr = null;
+    let capturedStream;
     try {
-        state.localStream = await navigator.mediaDevices.getUserMedia({
+        capturedStream = await navigator.mediaDevices.getUserMedia({
             audio: audioConstraints(),
-            video: videoConstraints(),
+            video: false,
         });
-    } catch {
-        try {
-            state.localStream = await navigator.mediaDevices.getUserMedia({
-                audio: audioConstraints(),
-            });
-        } catch (e) {
-            micErr = e;
-            try {
-                state.localStream = await navigator.mediaDevices.getUserMedia({
-                    video: videoConstraints(),
-                });
-            } catch (ve) {
-                if (expectedEpoch === voiceSessionEpoch && state.myChannelID > 0) {
-                    setMicState(microphoneFailureState(micErr));
-                }
-                throw new Error("no microphone or camera available (mic: " +
-                    (micErr.name || micErr) + ", camera: " + (ve.name || ve) + ")");
-            }
-        }
+    } catch (e) {
+        micErr = e;
+        capturedStream = new MediaStream();
     }
     if (expectedEpoch !== voiceSessionEpoch || state.myChannelID <= 0) {
-        state.localStream?.getTracks().forEach((track) => track.stop());
-        state.localStream = null;
+        capturedStream.getTracks().forEach((track) => track.stop());
         return false;
     }
+    state.localStream = capturedStream;
     setMicState(micErr === null ? "ok" : microphoneFailureState(micErr));
     // (25) record which profile this capture was taken with, so a later move
     // only re-captures when the profile actually changes.
     markCaptureProfile(state.localStream.getAudioTracks()[0],
         state.channels.find((c) => c.ChannelID === state.myChannelID));
-    if (state.localStream.getVideoTracks().length === 0) {
-        sysMsg("no camera found; joined voice audio-only");
-    }
-    // (78) contentHint tracks the configured frame rate.
-    const camTrack = state.localStream.getVideoTracks()[0];
-    if (camTrack) camTrack.contentHint = (state.settings?.camera_fps || 30) >= 60 ? "motion" : "detail";
-    // the self-view is a fixed floating panel with a border: without a camera
-    // track it would just be an empty box over the UI (audio-only fallback).
-    $("local-video").srcObject = camTrack ? state.localStream : null;
-    $("local-video").classList.toggle("hidden", !camTrack);
-    resetCameraState(); // (85) a fresh session starts with the camera live
+    $("local-video").srcObject = null;
+    $("local-video").classList.add("hidden");
 
     // ICE servers delivered by the server at connect (STUN/TURN); an empty
     // list means "client defaults" (plain RTCPeerConnection).
@@ -2204,23 +2173,8 @@ async function startVoice(expectedEpoch = voiceSessionEpoch) {
     const audioTrack = state.localStream.getAudioTracks()[0];
     if (audioTrack) {
         pc.addTransceiver(audioTrack, { direction: "sendrecv", streams: [state.localStream] });
-    }
-
-    const videoTrack = state.localStream.getVideoTracks()[0];
-    if (videoTrack) {
-        try {
-            pc.addTransceiver(videoTrack, {
-                direction: "sendrecv",
-                streams: [state.localStream],
-                sendEncodings: [
-                    { rid: "f" },
-                    { rid: "h", scaleResolutionDownBy: 2 },
-                    { rid: "q", scaleResolutionDownBy: 4 },
-                ],
-            });
-        } catch {
-            pc.addTransceiver(videoTrack, { direction: "sendrecv", streams: [state.localStream] });
-        }
+    } else {
+        pc.addTransceiver("audio", { direction: "recvonly" });
     }
 
     pc.onicecandidate = (e) => {
@@ -2273,6 +2227,7 @@ async function startVoice(expectedEpoch = voiceSessionEpoch) {
     }
 
     applyChannelAudio();
+    resetCameraState();
     // (88) re-apply the persisted low-bandwidth mode to the fresh session.
     if (state.settings?.low_bandwidth) setLowBandwidth(true, false);
     startVoiceMonitor();
@@ -2532,7 +2487,7 @@ function retryMicrophoneAccess() {
 async function retryMicrophoneCapture() {
     if (state.myChannelID <= 0) return false;
     // A session where every capture device failed has no peer connection to
-    // extend. In that case retry the normal staged capture flow.
+    // extend. In that case retry the normal audio-only capture flow.
     if (!state.pc || !state.localStream) {
         return ensureVoiceForChannel();
     }

@@ -47,9 +47,14 @@ fontsource — fully offline in WebView2):
 Settings persist to `<UserConfigDir>/voicx/settings.json` (identity to
 `identity.json`, logs to `client.log` / `chat.log` in the same folder).
 
-**No-mic machines**: `getUserMedia` failures degrade to a video-only voice
-join with an inline "No microphone found" / "Mic access denied" state (PTT
-disabled), one system chat line — screen sharing still works.
+**Camera privacy**: Voice sessions start with the camera off. Camera access
+requires turning it on in the voice controls or selecting **Test camera** in
+Settings → Capture. Turning the camera off releases its capture track. The
+settings preview stays local and stops on Stop, page changes, or dialog close.
+
+**No-mic machines**: `getUserMedia` failures permit a receive-only voice join
+with an inline "No microphone found" / "Mic access denied" state (PTT disabled).
+Screen sharing and explicitly enabling the camera still work.
 
 Toasts (top-right) fire for channel join/leave, kicks, hotkey registration
 failures, and connection loss.

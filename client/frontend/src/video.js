@@ -7,6 +7,7 @@ import { GridCompositor } from "./grid-compositor.js";
 import { isCurrentServerDialog, mountServerDialog } from "./modal.js";
 import { setSafeImage } from "./safe-media.js";
 import { labelButton } from "./icons.js";
+import { renderMicStatus } from "./audio.js";
 
 const V = () => window.__voicx;
 
@@ -265,7 +266,7 @@ function toggleFocus(clid) {
 }
 
 export function initVideo() {
-    syncCameraButton(); // (85) disabled until a voice session captures a camera
+    syncCameraButton();
     syncShareButton();
     syncLowBandwidthButton();
     document.addEventListener("keydown", (e) => {
@@ -1129,13 +1130,15 @@ async function doStopShare() {
 }
 
 // ---------------------------------------------------------------------------
-// Camera on/off (85): the video half of the voice-bar quick button. It only
-// gates a camera captured at join — a session that started without one has no
-// send transceiver, and adding one would need a renegotiation with nothing to
-// send on it.
+// Camera capture is session-local and starts only from an explicit action.
 // ---------------------------------------------------------------------------
 
-let cameraOff = false;
+let cameraOff = true;
+let cameraRequest = null;
+
+export function cameraConstraints(settings) {
+    return { width: 640, height: 360, frameRate: { ideal: settings?.camera_fps || 30 } };
+}
 
 // syncCameraButton reflects camera availability and state in the voice bar.
 function syncCameraButton() {
@@ -1143,20 +1146,26 @@ function syncCameraButton() {
     const cam = state.localStream?.getVideoTracks()[0] || null;
     const btn = $("voice-video");
     if (!btn) return;
-    btn.disabled = !cam;
+    btn.disabled = !state.pc || !!cameraRequest;
     btn.classList.toggle("active", !!cam && !cameraOff);
     btn.setAttribute("aria-pressed", String(!!cam && !cameraOff));
-    btn.title = !cam ? "No camera in this session"
-        : cameraOff ? "Camera off — click to turn on" : "Camera on — click to turn off";
+    btn.title = !cam || cameraOff ? "Camera off — click to turn on" : "Camera on — click to turn off";
     const enabled = !!cam && !cameraOff;
-    labelButton(btn, enabled ? "camera" : "cameraOff", !cam ? "No camera" : enabled ? "Camera on" : "Camera off");
+    labelButton(btn, enabled ? "camera" : "cameraOff", enabled ? "Camera on" : "Camera off");
     btn.setAttribute("aria-label", btn.title);
     $("local-video").classList.toggle("hidden", !cam || cameraOff);
+    const preview = $("local-video");
+    const stream = enabled ? state.localStream : null;
+    if (preview.srcObject !== stream) {
+        preview.srcObject = stream;
+        renderMicStatus($("mic-status"), state.micState, V().retryMicrophoneAccess, enabled, $("ptt-btn"));
+    }
 }
 
 // resetCameraState clears the toggle for a fresh (or ended) voice session.
 export function resetCameraState() {
-    cameraOff = false;
+    cameraOff = true;
+    cameraRequest = null;
     sharePresetBitrate = 0;
     syncCameraButton();
     syncShareButton();
@@ -1165,19 +1174,16 @@ export function resetCameraState() {
 // cameraToggle is the voice-video button handler.
 export async function cameraToggle() {
     const { state } = V();
+    if (!state.pc || !state.localStream || cameraRequest) return;
     const cam = state.localStream?.getVideoTracks()[0] || null;
-    if (!cam) {
-        V().sysMsg("no camera in this voice session");
-        return;
-    }
-    if (cameraOff) {
-        await setCameraOff(false);
+    if (!cam || cameraOff) {
+        await startCamera();
         return;
     }
     // While sharing, the camera is not on the wire at all — the share owns the
     // send slot — so there is nothing for anyone to be watching yet.
     if (state.screenSharing) {
-        await setCameraOff(true);
+        await stopCamera();
         return;
     }
     await confirmStopPublish({
@@ -1185,24 +1191,79 @@ export async function cameraToggle() {
         what: "camera",
         stopLabel: "Turn off",
         keepLabel: "Keep on",
-        onStop: () => setCameraOff(true),
+        onStop: stopCamera,
     });
 }
 
-async function setCameraOff(off) {
+async function stopCamera() {
     const { state } = V();
     const cam = state.localStream?.getVideoTracks()[0] || null;
-    cameraOff = off;
-    if (cam) cam.enabled = !off;
-    // (85) replaceTrack(null) as well: a disabled track still occupies the
-    // encoder and keeps sending black frames to every subscriber. While a
-    // share owns the sender the toggle only parks the capture.
+    cameraOff = true;
+    if (cam) {
+        cam.stop();
+        state.localStream.removeTrack(cam);
+    }
     if (!state.screenSharing) {
         const vs = videoSender();
-        if (vs) await vs.replaceTrack(off ? null : cam).catch(() => {});
-        if (!off) applySendCaps();
+        if (vs) await vs.replaceTrack(null).catch(() => {});
     }
     syncCameraButton();
+}
+
+async function startCamera() {
+    const { state } = V();
+    const pc = state.pc;
+    const localStream = state.localStream;
+    const generation = state.serverGeneration;
+    const request = {};
+    cameraRequest = request;
+    const current = () => cameraRequest === request && state.pc === pc &&
+        state.localStream === localStream && state.serverGeneration === generation;
+    syncCameraButton();
+    let stream, sender, transceiver;
+    try {
+        stream = await navigator.mediaDevices.getUserMedia({ audio: false, video: cameraConstraints(state.settings) });
+        if (!current()) return;
+        const cam = stream.getVideoTracks()[0];
+        if (!cam) throw new Error("no camera track available");
+        cam.contentHint = (state.settings?.camera_fps || 30) >= 60 ? "motion" : "detail";
+        localStream.addTrack(cam);
+        if (!state.screenSharing) {
+            sender = videoSenderFor(pc);
+            if (sender) await sender.replaceTrack(cam);
+            else {
+                try {
+                    transceiver = pc.addTransceiver(cam, {
+                        direction: "sendrecv", streams: [localStream],
+                        sendEncodings: [{ rid: "f" }, { rid: "h", scaleResolutionDownBy: 2 }, { rid: "q", scaleResolutionDownBy: 4 }],
+                    });
+                } catch {
+                    transceiver = pc.addTransceiver(cam, { direction: "sendrecv", streams: [localStream] });
+                }
+                sender = transceiver.sender;
+            }
+            await renegotiate(pc, generation);
+        }
+        if (!current()) return;
+        cameraOff = false;
+        cam.onended = () => { if (state.localStream === localStream) void stopCamera(); };
+        applySendCaps();
+    } catch (error) {
+        if (current()) V().sysMsg("camera unavailable: " + (error.message || error.name));
+    } finally {
+        if (!current() || cameraOff) {
+            for (const track of stream?.getTracks() || []) {
+                track.stop();
+                localStream.removeTrack(track);
+            }
+            if (sender && stream?.getTracks().includes(sender.track)) await sender.replaceTrack(null).catch(() => {});
+            transceiver?.stop?.();
+        }
+        if (cameraRequest === request) {
+            cameraRequest = null;
+            syncCameraButton();
+        }
+    }
 }
 
 // trackSlots declares which slot each outbound track occupies (70). The router

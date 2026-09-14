@@ -466,6 +466,7 @@ test("retries a missing microphone without interrupting video or screen sharing"
     await page.evaluate(() => {
         window.__voicx.showWorkspace(false);
         window.__getUserMediaCalls = 0;
+        window.__cameraRequests = 0;
         window.__allowMicrophone = false;
         window.__shareTracksStopped = 0;
 
@@ -477,6 +478,7 @@ test("retries a missing microphone without interrupting video or screen sharing"
         const audioStream = audioContext.createMediaStreamDestination().stream;
         navigator.mediaDevices.getUserMedia = async (constraints) => {
             window.__getUserMediaCalls++;
+            if (constraints.video) window.__cameraRequests++;
             if (constraints.audio && !window.__allowMicrophone) {
                 throw new DOMException("test permission denial", "NotAllowedError");
             }
@@ -493,14 +495,14 @@ test("retries a missing microphone without interrupting video or screen sharing"
             }
             addTransceiver(track, options = {}) {
                 const sender = {
-                    track,
+                    track: typeof track === "string" ? null : track,
                     getParameters: () => ({ encodings: [{}] }),
                     setParameters: async () => {},
                     replaceTrack: async (nextTrack) => { sender.track = nextTrack; },
                 };
                 const transceiver = {
                     sender,
-                    receiver: { track: null },
+                    receiver: { track: { kind: typeof track === "string" ? track : track.kind } },
                     direction: options.direction || "sendrecv",
                     currentDirection: options.direction || "sendrecv",
                 };
@@ -529,6 +531,11 @@ test("retries a missing microphone without interrupting video or screen sharing"
     });
 
     await expect(page.locator("#voice-status")).toHaveText("voice on");
+    expect(await page.evaluate(() => window.__cameraRequests)).toBe(0);
+    await expect(page.locator("#local-video")).toBeHidden();
+    await page.getByRole("button", { name: "Camera off — click to turn on", exact: true }).click();
+    await expect.poll(() => page.evaluate(() => window.__cameraRequests)).toBe(1);
+    await expect(page.locator("#local-video")).toBeVisible();
     await expect(page.locator("#mic-status > span")).toHaveText("Microphone access denied — video only");
     const retry = page.getByRole("button", { name: "Retry microphone access" });
     await expect(retry).toBeVisible();
@@ -565,6 +572,128 @@ test("retries a missing microphone without interrupting video or screen sharing"
         unpublishedShare: 0,
         slots: ["cam", "mic"],
     });
+
+    await page.evaluate(() => { window.__voicx.state.screenSharing = false; });
+    await page.getByRole("button", { name: "Camera on — click to turn off", exact: true }).click();
+    const stop = page.getByRole("button", { name: "Turn off", exact: true });
+    if (await stop.isVisible()) await stop.click();
+    await expect.poll(() => page.evaluate(() => window.__cameraTrack.readyState)).toBe("ended");
+    await expect(page.locator("#local-video")).toBeHidden();
+    expect(await page.evaluate(() => window.__voicx.state.localStream.getVideoTracks().length)).toBe(0);
+});
+
+test("camera stays off on joins and reconnects, and discards a late enable request", async ({ page }) => {
+    await page.evaluate(async () => {
+        const v = window.__voicx;
+        v.showWorkspace(false);
+        window.__cameraRequests = 0;
+        window.__denyCamera = true;
+        window.__cameraAudio = new AudioContext();
+        navigator.mediaDevices.getUserMedia = async (constraints) => {
+            if (constraints.video) {
+                window.__cameraRequests++;
+                if (window.__denyCamera) throw new DOMException("test denial", "NotAllowedError");
+                const stream = document.createElement("canvas").captureStream(1);
+                window.__enabledCameraTrack = stream.getVideoTracks()[0];
+                if (window.__delayCamera) await new Promise((resolve) => { window.__resolveCameraEnable = resolve; });
+                return stream;
+            }
+            return window.__cameraAudio.createMediaStreamDestination().stream;
+        };
+        // Negotiate with a real in-page peer; no camera or remote server is used.
+        const app = window.go.main.App;
+        window.__cameraRemote = new RTCPeerConnection();
+        window.go.main.App = new Proxy(app, {
+            get(target, key) {
+                if (key !== "WebRTCOffer") return target[key];
+                return async (sdp) => {
+                    await window.__cameraRemote.setRemoteDescription({ type: "offer", sdp });
+                    const answer = await window.__cameraRemote.createAnswer();
+                    await window.__cameraRemote.setLocalDescription(answer);
+                    return answer.sdp;
+                };
+            },
+        });
+        v.state.myChannelID = 42;
+        v.state.channels = [{ ChannelID: 42, Name: "Lobby" }];
+        await v.ensureVoiceForChannel();
+    });
+    await expect(page.locator("#voice-status")).toHaveText("voice on");
+    expect(await page.evaluate(() => window.__cameraRequests)).toBe(0);
+    const enable = page.getByRole("button", { name: "Camera off — click to turn on", exact: true });
+    await enable.click();
+    await expect(enable).toBeEnabled();
+    await expect(page.locator("#local-video")).toBeHidden();
+    expect(await page.evaluate(() => window.__cameraRequests)).toBe(1);
+
+    await page.evaluate(() => { window.__denyCamera = false; });
+    await enable.click();
+    await expect(page.locator("#local-video")).toBeVisible();
+    await page.evaluate(async () => {
+        const v = window.__voicx;
+        v.resetVoiceSession();
+        window.__cameraRemote.close();
+        window.__cameraRemote = new RTCPeerConnection();
+        await v.ensureVoiceForChannel();
+    });
+    await expect(page.locator("#voice-status")).toHaveText("voice on");
+    await expect(page.locator("#local-video")).toBeHidden();
+    expect(await page.evaluate(() => window.__enabledCameraTrack.readyState)).toBe("ended");
+    expect(await page.evaluate(() => window.__cameraRequests)).toBe(2);
+
+    await page.evaluate(() => { window.__delayCamera = true; });
+    await enable.click();
+    await expect.poll(() => page.evaluate(() => typeof window.__resolveCameraEnable)).toBe("function");
+    await page.evaluate(() => {
+        window.__voicx.resetVoiceSession();
+        window.__resolveCameraEnable();
+    });
+    await expect.poll(() => page.evaluate(() => window.__enabledCameraTrack.readyState)).toBe("ended");
+    await expect(page.locator("#local-video")).toBeHidden();
+    expect(await page.evaluate(() => window.__voicx.state.localStream)).toBeNull();
+});
+
+test("camera settings preview requires an explicit test and releases capture on exit", async ({ page }) => {
+    await page.evaluate(() => {
+        window.__cameraRequests = 0;
+        navigator.mediaDevices.getUserMedia = async (constraints) => {
+            if (!constraints.video || constraints.audio) throw new Error("expected camera-only test");
+            window.__cameraRequests++;
+            const stream = document.createElement("canvas").captureStream(1);
+            window.__previewTrack = stream.getVideoTracks()[0];
+            return stream;
+        };
+        window.__voicx.openSettings("capture");
+    });
+    expect(await page.evaluate(() => window.__cameraRequests)).toBe(0);
+    const start = page.getByRole("button", { name: "Test camera", exact: true });
+    await start.click();
+    await expect(page.getByLabel("Camera test preview")).toBeVisible();
+    await page.getByRole("button", { name: "Stop camera test", exact: true }).click();
+    expect(await page.evaluate(() => window.__previewTrack.readyState)).toBe("ended");
+    await start.click();
+    await page.locator('[data-page="playback"]').click();
+    expect(await page.evaluate(() => window.__previewTrack.readyState)).toBe("ended");
+    await page.locator('[data-page="capture"]').click();
+    await start.click();
+    await page.getByRole("button", { name: "Cancel", exact: true }).click();
+    expect(await page.evaluate(() => window.__previewTrack.readyState)).toBe("ended");
+    expect(await page.evaluate(() => window.__voicx.state.localStream)).toBeNull();
+});
+
+test("a camera test resolved after settings closes is immediately stopped", async ({ page }) => {
+    await page.evaluate(() => {
+        navigator.mediaDevices.getUserMedia = () => new Promise((resolve) => { window.__resolveCamera = resolve; });
+        window.__voicx.openSettings("capture");
+    });
+    await page.getByRole("button", { name: "Test camera", exact: true }).click();
+    await page.getByRole("button", { name: "Cancel", exact: true }).click();
+    await page.evaluate(() => {
+        const stream = document.createElement("canvas").captureStream(1);
+        window.__previewTrack = stream.getVideoTracks()[0];
+        window.__resolveCamera(stream);
+    });
+    await expect.poll(() => page.evaluate(() => window.__previewTrack.readyState)).toBe("ended");
 });
 
 test("ignores a delayed microphone failure after the voice session changes", async ({ page }) => {

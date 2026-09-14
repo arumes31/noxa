@@ -61,6 +61,18 @@ deterministic `src.h<content-hash>` archive identity instead.
 
 ## Release rules
 
+Successful pushes to `main` automatically publish signed Windows client and
+Linux server prereleases named `v0.4.0-main.<CI run number>` (using the current
+`VERSION` base). Publication waits for lint, protocol, frontend, Windows client,
+server, and security checks. The build creates a local tag for consistent binary
+metadata; GitHub creates the remote tag at the exact tested commit only when the
+verified assets are published. Rerunning a CI run reuses its release identity.
+
+Main prereleases are available on the GitHub Releases page. They do not become
+the latest stable release, and the client's stable updater does not offer them.
+The existing signing secret and public-key variable are required for both main
+prereleases and tagged releases; see [update signing](update-signing.md).
+
 Create a clean `vMAJOR.MINOR.PATCH` tag whose numeric base matches `VERSION`.
 Prerelease tags such as `v0.4.0-rc.1` are accepted when their numeric base still
 matches. CI fetches complete tag history, validates the tag, and sends the same

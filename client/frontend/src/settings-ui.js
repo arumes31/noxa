@@ -6,6 +6,7 @@ import { MATRIX_EVENTS, defaultMatrixRow } from "./notifications.js";
 import { associateControlLabel, wrappedIndex } from "./a11y.js";
 import { createMediaDeviceInventory } from "./media-devices.js";
 import { closeDialog, mountDialog } from "./modal.js";
+import { cameraConstraints } from "./video.js";
 
 const V = () => window.__voicx;
 
@@ -23,6 +24,7 @@ const PAGES = [
 ];
 
 let draft = null; // working copy of settings while the dialog is open
+let stopCameraTest = () => {};
 
 function settings() { return draft; }
 
@@ -529,7 +531,7 @@ function pageCapture() {
     el.appendChild(row("Echo cancellation", checkbox(s.echo_cancellation !== false, (v) => { s.echo_cancellation = v; })));
     el.appendChild(row("Noise suppression", checkbox(s.noise_suppression !== false, (v) => { s.noise_suppression = v; })));
 
-    // (78) Camera frame rate applies when the automatic voice session next starts.
+    // Camera capture starts only when enabled or explicitly tested.
     const fpsSelect = document.createElement("select");
     for (const fps of [15, 30, 60]) {
         const o = document.createElement("option");
@@ -540,6 +542,59 @@ function pageCapture() {
     fpsSelect.value = String(s.camera_fps || 30);
     fpsSelect.onchange = () => { s.camera_fps = parseInt(fpsSelect.value, 10); };
     el.appendChild(row("Camera frame rate", fpsSelect));
+    el.appendChild(hint("Camera is off when joining. Turn it on in the voice controls, or test it here."));
+    const cameraTest = document.createElement("div");
+    const cameraBtn = document.createElement("button");
+    cameraBtn.type = "button";
+    cameraBtn.textContent = "Test camera";
+    const preview = document.createElement("video");
+    preview.autoplay = true;
+    preview.playsInline = true;
+    preview.muted = true;
+    preview.hidden = true;
+    preview.style.maxWidth = "100%";
+    preview.setAttribute("aria-label", "Camera test preview");
+    const cameraStatus = hint("");
+    cameraStatus.setAttribute("role", "status");
+    let testing = false;
+    let testStream = null;
+    const stop = () => {
+        testing = false;
+        testStream?.getTracks().forEach((track) => track.stop());
+        testStream = null;
+        preview.srcObject = null;
+        preview.hidden = true;
+        cameraBtn.disabled = false;
+        cameraBtn.textContent = "Test camera";
+    };
+    cameraBtn.onclick = async () => {
+        if (testing) { stop(); return; }
+        stopCameraTest();
+        stopCameraTest = stop;
+        testing = true;
+        cameraBtn.disabled = true;
+        cameraStatus.textContent = "";
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: false, video: cameraConstraints(s) });
+            if (!testing || !cameraTest.isConnected) {
+                stream.getTracks().forEach((track) => track.stop());
+                return;
+            }
+            testStream = stream;
+            preview.srcObject = stream;
+            preview.hidden = false;
+            cameraBtn.textContent = "Stop camera test";
+        } catch (error) {
+            if (testing) {
+                stop();
+                cameraStatus.textContent = "Camera test failed: " + (error.message || error.name);
+            }
+        } finally {
+            cameraBtn.disabled = false;
+        }
+    };
+    cameraTest.append(cameraBtn, preview, cameraStatus);
+    el.appendChild(cameraTest);
 
     el.appendChild(row("PTT release delay (ms)", slider(s.ptt_release_delay_ms || 0, 0, 2000, (v) => { s.ptt_release_delay_ms = v; })));
     el.appendChild(hint("Capture changes apply when voice next reconnects."));
@@ -1276,6 +1331,7 @@ const PAGE_BUILDERS = {
 };
 
 function renderPage(id) {
+    stopCameraTest();
     cancelHotkeyCapture();
     document.querySelectorAll(".settings-nav-item").forEach((n) => {
         const active = n.dataset.page === id;
@@ -1321,6 +1377,7 @@ function openSettings(pageId = "application") {
     search.placeholder = t("settings.searchPlaceholder");
     const content = overlay.querySelector("#settings-content");
     search.oninput = () => {
+        stopCameraTest();
         const q = search.value.trim().toLowerCase();
         if (!q) {
             renderPage(document.querySelector(".settings-nav-item.active")?.dataset.page || "application");
@@ -1405,6 +1462,7 @@ function openSettings(pageId = "application") {
 
     mountDialog(overlay, {
         onClose: () => {
+            stopCameraTest();
             cancelHotkeyCapture();
             revertLivePreview();
         },
