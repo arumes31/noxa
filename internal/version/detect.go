@@ -154,19 +154,21 @@ func exactVersionTag(runner gitRunner, base string) (string, error) {
 	}
 	tags := []string{}
 	mainTag := ""
+	baseline, _ := parseSemver(base)
 	for _, tag := range strings.Fields(output) {
 		normalized := normalizeVersion(tag)
 		if !strings.HasPrefix(tag, "v") {
 			continue
 		}
-		if _, valid := parseSemver(normalized); !valid {
+		candidate, valid := parseSemver(normalized)
+		if !valid {
 			return "", fmt.Errorf("release tag %q is not valid semantic versioning", tag)
 		}
 		tagBase, _ := parse(normalized)
-		if tagBase != base {
-			return "", fmt.Errorf("release tag %q does not match VERSION %q", tag, base)
+		if candidate.numbers[0] != baseline.numbers[0] || candidate.numbers[1] != baseline.numbers[1] || candidate.numbers[2] < baseline.numbers[2] {
+			return "", fmt.Errorf("release tag %q is outside the patch release line starting at VERSION %q", tag, base)
 		}
-		if run, automatic := strings.CutPrefix(normalized, base+"-main."); automatic && run != "" && strings.Trim(run, "0123456789") == "" {
+		if run, automatic := strings.CutPrefix(normalized, tagBase+"-main."); automatic && run != "" && strings.Trim(run, "0123456789") == "" {
 			if mainTag == "" || Compare(tag, mainTag) {
 				mainTag = tag
 			}

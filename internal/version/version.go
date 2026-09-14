@@ -8,7 +8,7 @@ package version
 
 // DeclaredRelease is the compile-time release line used by unstamped builds.
 // The repository check keeps it synchronized with VERSION.
-const DeclaredRelease = "0.4.0"
+const DeclaredRelease = "0.4.3"
 
 const defaultVersion = DeclaredRelease + "-dev"
 

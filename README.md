@@ -1,6 +1,8 @@
 <div align="center">
 
-# 🎙️ VoicX
+<img src="client/frontend/public/branding/logo.png" alt="VoicX logo" width="160" height="160" />
+
+# VoicX
 
 **Next-Generation High-Performance Real-Time Communication Platform**
 
@@ -152,6 +154,14 @@ flowchart TD
    ```
 
 ### Option 2: Building from Source
+
+Successful `main` builds publish signed stable releases, starting with `v0.4.3`,
+and mark them **Latest** for the client updater. Each new commit advances the
+highest stable patch tag; rerunning a published commit reuses its tag.
+`VERSION` and the package declarations set the minimum version on that major/minor
+release line. CI stamps the actual release patch into the binaries, Windows
+package resources, and signed manifest. Prerelease tags do not advance the stable
+sequence. Change the synchronized baseline declarations to start a new release line.
 
 #### Prerequisites
 * **Go**: `>= 1.27.1` (both Go modules declare this minimum)
@@ -337,6 +347,48 @@ voicx/
 ├── docker-compose.yml          # Production Docker stack
 └── README.md                   # System documentation
 ```
+
+---
+
+## Branding assets
+
+The transparent VoicX logo is used on the login screen, in the application menu,
+and at the top of this README. The original turquoise artwork is preserved;
+the checkerboard background has been removed from the source JPEG.
+
+| Asset | Location |
+| :--- | :--- |
+| Transparent logo (732 × 732) | [`client/frontend/public/branding/logo.png`](client/frontend/public/branding/logo.png) |
+| Browser favicon (16–256 px) | [`client/frontend/public/favicon.ico`](client/frontend/public/favicon.ico) |
+| PNG icons (32, 180, 192, 512 px) | [`client/frontend/public/branding/`](client/frontend/public/branding/) |
+| Desktop app icon (1024 × 1024) | [`client/build/appicon.png`](client/build/appicon.png) |
+| Windows app and installer icon | [`client/build/windows/icon.ico`](client/build/windows/icon.ico) |
+
+The frontend includes the favicon and Apple touch icon links. Vite copies the
+public assets into the frontend build; Wails uses the desktop assets when the
+application is rebuilt. Keep the transparent PNG as the branding source and
+resize it when replacing icons, rather than converting it back to JPEG.
+
+---
+
+## Branding assets
+
+The transparent VoicX logo is used on the login screen, in the application menu,
+and at the top of this README. The original turquoise artwork is preserved;
+the checkerboard background has been removed from the source JPEG.
+
+| Asset | Location |
+| :--- | :--- |
+| Transparent logo (732 × 732) | [`client/frontend/public/branding/logo.png`](client/frontend/public/branding/logo.png) |
+| Browser favicon (16–256 px) | [`client/frontend/public/favicon.ico`](client/frontend/public/favicon.ico) |
+| PNG icons (32, 180, 192, 512 px) | [`client/frontend/public/branding/`](client/frontend/public/branding/) |
+| Desktop app icon (1024 × 1024) | [`client/build/appicon.png`](client/build/appicon.png) |
+| Windows app and installer icon | [`client/build/windows/icon.ico`](client/build/windows/icon.ico) |
+
+The frontend includes the favicon and Apple touch icon links. Vite copies the
+public assets into the frontend build; Wails uses the desktop assets when the
+application is rebuilt. Keep the transparent PNG as the branding source and
+resize it when replacing icons, rather than converting it back to JPEG.
 
 ---
 
