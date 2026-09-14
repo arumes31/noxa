@@ -985,6 +985,7 @@ function syncOwnChannel({ audible = true } = {}) {
     }
     const previousChannelID = state.myChannelID;
     state.myChannelID = channelID;
+    if (channelID > 0) setDeafened(false);
     const initialCuePending = state.pendingInitialChannelCueTabID === state.activeTabID;
     let playedCue = false;
     if ((audible || initialCuePending) && !actionSoundsSuppressed()) {
@@ -1145,6 +1146,7 @@ window.runtime.EventsOn("event", (json) => {
             if (d.client_id === state.myClientID) {
                 const previousChannelID = state.myChannelID;
                 state.myChannelID = nextChannelID;
+                if (nextChannelID > 0 && nextChannelID !== previousChannelID) setDeafened(false);
                 let playedOwnCue = false;
                 if (!actionSoundsSuppressed()) {
                     if (nextChannelID > 0 && nextChannelID !== previousChannelID) {
