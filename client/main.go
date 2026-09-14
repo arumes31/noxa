@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"embed"
 	"log"
 	"os"
@@ -10,16 +9,21 @@ import (
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
-	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
 //go:embed all:frontend/dist
 var assets embed.FS
 
 func main() {
+	configureStandardLogger()
 	// (331) crash handler: a panic anywhere in main writes a timestamped
 	// crash log that is offered at the next start.
 	guardCrash("main", runApp)
+}
+
+func configureStandardLogger() {
+	log.SetFlags(log.Ldate | log.Ltime | log.Lmicroseconds | log.LUTC)
+	log.SetPrefix("")
 }
 
 // runApp is main's body under the crash guard.
@@ -53,19 +57,7 @@ func runWails(app *App) {
 		OnShutdown:       app.shutdown,
 		// (287) close-to-tray: the close button hides the window instead
 		// of quitting when the setting is on.
-		OnBeforeClose: func(ctx context.Context) bool {
-			if app.settings.CloseToTray {
-				wailsRuntime.WindowHide(ctx)
-				if trayCtl != nil {
-					trayCtl.mu.Lock()
-					trayCtl.visible = false
-					trayCtl.mu.Unlock()
-					trayCtl.miShowHide.SetTitle("Show voicx")
-				}
-				return true
-			}
-			return false
-		},
+		OnBeforeClose: app.beforeClose,
 		Bind: []interface{}{
 			app,
 		},

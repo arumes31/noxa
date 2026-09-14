@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 
 	"voicx/internal/state"
 	"voicx/internal/store"
@@ -38,12 +39,15 @@ func testEnv(t *testing.T) (*ChannelManager, *store.Store, *state.Manager) {
 
 	s, err := store.New(dbURL, logger, 5, 1, time.Minute)
 	if err != nil {
+		if os.Getenv("VOICX_TEST_DATABASE_URL") != "" {
+			t.Fatalf("configured database unavailable: %v", err)
+		}
 		t.Skipf("database unavailable, skipping: %v", err)
 	}
 	t.Cleanup(func() { _ = s.Close() })
 
 	if err := s.Migrate(); err != nil {
-		t.Skipf("migrate failed, skipping: %v", err)
+		t.Fatalf("database migration failed: %v", err)
 	}
 
 	sm := state.New(logger)
@@ -143,10 +147,34 @@ func hasCleanupTimer(mgr *ChannelManager, channelID int64) bool {
 	return ok
 }
 
+// useManualCleanupTimers keeps lifecycle assertions independent of database
+// latency. Scheduling logs run before the operation releases its tree lock,
+// so cleanup callbacks cannot claim their tokens while this hook replaces them.
+// The replacement timer has no callback; tests may deliver its token explicitly.
+func useManualCleanupTimers(mgr *ChannelManager) {
+	mgr.logger = mgr.logger.WithOptions(zap.Hooks(func(entry zapcore.Entry) error {
+		if entry.Message != "cleanup watcher scheduled" {
+			return nil
+		}
+		mgr.mu.Lock()
+		defer mgr.mu.Unlock()
+		for id, token := range mgr.timers {
+			token.timer.Stop()
+			inert := time.NewTimer(0)
+			inert.Stop()
+			// Replace the token too: an expired callback may already be waiting
+			// for the tree lock and must not claim this manually scheduled work.
+			mgr.timers[id] = &cleanupTimer{timer: inert, generation: token.generation}
+		}
+		return nil
+	}))
+}
+
 // TestCreateChannel_AllTypes verifies that CreateChannel inserts each channel
 // type into the DB and registers it in the state manager.
 func TestCreateChannel_AllTypes(t *testing.T) {
 	mgr, s, sm := testEnv(t)
+	useManualCleanupTimers(mgr)
 	userID := createTestUser(t, s)
 	parentID := createParentChannel(t, mgr, sm, userID)
 
@@ -161,8 +189,6 @@ func TestCreateChannel_AllTypes(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			// Cancel any cleanup timer the parent or prior iterations may have
-			// left running for this channel by using a unique name.
 			id, err := mgr.CreateChannel(context.Background(), ChannelSpec{
 				Name:       tc.name + "-" + fmt.Sprintf("%d", time.Now().UnixNano()),
 				Topic:      "test topic",
@@ -426,6 +452,7 @@ func TestDeleteChannelSubtree_ReconcilesAppliedExecError(t *testing.T) {
 // timer appropriately.
 func TestSetChannelType_Transitions(t *testing.T) {
 	mgr, s, sm := testEnv(t)
+	useManualCleanupTimers(mgr)
 	userID := createTestUser(t, s)
 
 	// temporary -> permanent cancels the timer.
@@ -604,6 +631,20 @@ func TestCleanupCallback_ClaimsExactTimerToken(t *testing.T) {
 	}
 	if _, ok := sm.GetChannel(channelID); !ok {
 		t.Fatal("stale callback removed the state channel")
+	}
+
+	// The active callback still owns the replacement token and performs the
+	// deletion. Calling it directly keeps this ownership test independent of
+	// wall-clock timer scheduling.
+	mgr.cleanupCallback(channelID, replacement)
+	if channelExistsInDB(t, s, channelID) {
+		t.Fatal("active callback did not delete the channel")
+	}
+	if _, ok := sm.GetChannel(channelID); ok {
+		t.Fatal("active callback did not remove the state channel")
+	}
+	if got := mgr.CleanupTimersCount(); got != 0 {
+		t.Fatalf("cleanup timers after active callback = %d, want 0", got)
 	}
 }
 
@@ -891,7 +932,6 @@ func TestTemporaryParentSurvivesUntilItsLastChildIsDeleted(t *testing.T) {
 	if got := mgr.CleanupTimersCount(); got != 0 {
 		t.Fatalf("cleanup timers with child present = %d, want 0", got)
 	}
-	time.Sleep(120 * time.Millisecond)
 	if !channelExistsInDB(t, s, parentID) || !channelExistsInDB(t, s, childID) {
 		t.Fatal("temporary parent cleanup cascaded through an existing child")
 	}
@@ -902,9 +942,10 @@ func TestTemporaryParentSurvivesUntilItsLastChildIsDeleted(t *testing.T) {
 	if got := mgr.CleanupTimersCount(); got != 1 {
 		t.Fatalf("cleanup timers after last child deletion = %d, want 1", got)
 	}
-	pollCondition(t, time.Second, func() bool {
-		return !channelExistsInDB(t, s, parentID)
-	}, "temporary parent was not cleaned after becoming an empty leaf")
+	mgr.cleanupCallback(parentID, activeCleanupToken(t, mgr, parentID))
+	if channelExistsInDB(t, s, parentID) {
+		t.Fatal("temporary parent was not cleaned after becoming an empty leaf")
+	}
 }
 
 // TestMoveClient_CancelsCleanup verifies that joining through the lifecycle
@@ -1093,7 +1134,7 @@ func insertChannelRow(t *testing.T, s *store.Store, name string, parentID int64,
 func TestLoadIntoState(t *testing.T) {
 	mgr, s, sm := testEnv(t)
 
-	if _, err := s.DB().Exec("DELETE FROM channels"); err != nil {
+	if _, err := s.DB().ExecContext(t.Context(), "DELETE FROM channels"); err != nil {
 		t.Fatalf("failed to clean channels table: %v", err)
 	}
 

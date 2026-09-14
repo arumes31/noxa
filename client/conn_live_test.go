@@ -3,22 +3,27 @@
 //
 //	VOICX_LIVE_ADDR=127.0.0.1:12333 go test -run Live -v ./... -count=1
 //
-// Optional: VOICX_LIVE_QUERY_ADDR (default: same host, port 12335) and
-// VOICX_LIVE_ADMIN_UID / VOICX_LIVE_ADMIN_PASS for channel creation.
+// Required when enabled: VOICX_LIVE_{ALICE,BOB,ADMIN}_{UID,PASS} and
+// VOICX_LIVE_TLS_FINGERPRINT from the disposable server's local certificate.
+// Optional: VOICX_LIVE_QUERY_ADDR (default: same host, port 12335).
 package main
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"image"
+	"image/png"
 	"io"
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -28,13 +33,13 @@ import (
 	"voicx/internal/netproto"
 )
 
-const (
-	liveAliceUID  = "cHZVQTN4VW91dG9KekhjTFViWGttTGpyaFUxVlBDcVloN3EzWVk5T1VsST0="
-	liveAlicePass = "alicepw"
-	liveBobUID    = "T2EybDNONG9pYXFhMk5aa3gyL3YveVNONXFheHNwdC9FQzFNQXQ0U0gvdz0="
-	liveBobPass   = "bobpw"
-	liveAdminUID  = "Q2ZCSGZWMDJnQUl3K0hIWkowUzUydUhUa0RoMlpGYkFtTWpxQnhZZ2VzUT0="
-	liveAdminPass = "adminpw"
+var (
+	liveAliceUID  = os.Getenv("VOICX_LIVE_ALICE_UID")
+	liveAlicePass = os.Getenv("VOICX_LIVE_ALICE_PASS")
+	liveBobUID    = os.Getenv("VOICX_LIVE_BOB_UID")
+	liveBobPass   = os.Getenv("VOICX_LIVE_BOB_PASS")
+	liveAdminUID  = os.Getenv("VOICX_LIVE_ADMIN_UID")
+	liveAdminPass = os.Getenv("VOICX_LIVE_ADMIN_PASS")
 )
 
 // liveAddr returns the control address or skips the test.
@@ -43,6 +48,11 @@ func liveAddr(t *testing.T) string {
 	addr := os.Getenv("VOICX_LIVE_ADDR")
 	if addr == "" {
 		t.Skip("VOICX_LIVE_ADDR not set; skipping live integration test")
+	}
+	for _, name := range []string{"ALICE_UID", "ALICE_PASS", "BOB_UID", "BOB_PASS", "ADMIN_UID", "ADMIN_PASS", "TLS_FINGERPRINT"} {
+		if os.Getenv("VOICX_LIVE_"+name) == "" {
+			t.Fatalf("VOICX_LIVE_%s is required for the configured live server", name)
+		}
 	}
 	return addr
 }
@@ -109,6 +119,40 @@ func newTestBackend(t *testing.T) (*connManager, *eventRecorder) {
 	return cm, rec
 }
 
+// newLiveTestBackend adds the externally configured live server pin without
+// coupling local fake-server unit tests to live-server environment variables.
+func newLiveTestBackend(t *testing.T) (*connManager, *eventRecorder) {
+	t.Helper()
+	cm, rec := newTestBackend(t)
+	cm.knownServers = loadKnownServersAt(filepath.Join(t.TempDir(), "known_servers.json"))
+	addr, err := normalizeServerAddr(os.Getenv("VOICX_LIVE_ADDR"))
+	if err != nil {
+		t.Fatalf("live server address: %v", err)
+	}
+	if err := cm.knownServers.trust(addr, os.Getenv("VOICX_LIVE_TLS_FINGERPRINT")); err != nil {
+		t.Fatalf("pinning live server certificate: %v", err)
+	}
+	return cm, rec
+}
+
+func TestLiveBackendTrustIsIsolatedAndPinned(t *testing.T) {
+	t.Setenv("VOICX_LIVE_ADDR", "127.0.0.1:12483")
+	const fingerprint = "fa:17:3d:a2:81:17:6a:2d:4e:d6:5b:c6:78:e0:b2:df:9b:aa:b4:d8:ca:43:ad:a5:f9:9b:21:6e:5d:8c:a7:66"
+	t.Setenv("VOICX_LIVE_TLS_FINGERPRINT", fingerprint)
+	cm, _ := newLiveTestBackend(t)
+	status, err := cm.knownServers.verify("127.0.0.1:12483", fingerprint)
+	if err != nil || status != trustOK {
+		t.Fatalf("preconfigured certificate pin: status %v, error %v", status, err)
+	}
+	status, err = cm.knownServers.verify("127.0.0.1:12483", strings.Repeat("00:", 31)+"00")
+	if err != nil || status != trustMismatch {
+		t.Fatalf("changed certificate pin: status %v, error %v", status, err)
+	}
+	if cm.allowPlaintext {
+		t.Fatal("live helper enables plaintext fallback")
+	}
+}
+
 // --- ServerQuery helper (channel creation) -----------------------------------
 
 // queryCmd runs one ServerQuery command and returns the response lines.
@@ -135,7 +179,7 @@ func queryCmd(t *testing.T, conn net.Conn, r *bufio.Reader, cmd string) []string
 // its ID.
 func ensureLiveChannel(t *testing.T) int64 {
 	t.Helper()
-	conn, err := net.DialTimeout("tcp", liveQueryAddr(t), 5*time.Second)
+	conn, err := (&net.Dialer{Timeout: 5 * time.Second}).DialContext(t.Context(), "tcp", liveQueryAddr(t))
 	if err != nil {
 		t.Fatalf("dial query: %v", err)
 	}
@@ -177,7 +221,7 @@ func TestLiveAuth(t *testing.T) {
 	addr := liveAddr(t)
 
 	// Alice.
-	alice, _ := newTestBackend(t)
+	alice, _ := newLiveTestBackend(t)
 	if err := alice.connect(addr, liveAliceUID, liveAlicePass, ""); err != "" {
 		t.Fatalf("alice connect: %s", err)
 	}
@@ -190,7 +234,7 @@ func TestLiveAuth(t *testing.T) {
 	}
 
 	// Bob.
-	bob, _ := newTestBackend(t)
+	bob, _ := newLiveTestBackend(t)
 	if err := bob.connect(addr, liveBobUID, liveBobPass, ""); err != "" {
 		t.Fatalf("bob connect: %s", err)
 	}
@@ -200,14 +244,14 @@ func TestLiveAuth(t *testing.T) {
 	}
 
 	// Wrong password must be rejected.
-	bad, _ := newTestBackend(t)
+	bad, _ := newLiveTestBackend(t)
 	if err := bad.connect(addr, liveAliceUID, "definitely-wrong", ""); err == "" {
 		bad.disconnect()
 		t.Fatal("wrong password accepted")
 	}
 
 	// Anonymous guest with the client's own identity (key-derived UID).
-	guest, _ := newTestBackend(t)
+	guest, _ := newLiveTestBackend(t)
 	wantUID, err := guest.id.uniqueID()
 	if err != nil {
 		t.Fatalf("uniqueID: %v", err)
@@ -241,13 +285,13 @@ func TestLiveChannelFlow(t *testing.T) {
 	addr := liveAddr(t)
 	channelID := ensureLiveChannel(t)
 
-	alice, aliceEvents := newTestBackend(t)
+	alice, aliceEvents := newLiveTestBackend(t)
 	if err := alice.connect(addr, liveAliceUID, liveAlicePass, ""); err != "" {
 		t.Fatalf("alice connect: %s", err)
 	}
 	defer alice.disconnect()
 
-	bob, bobEvents := newTestBackend(t)
+	bob, bobEvents := newLiveTestBackend(t)
 	if err := bob.connect(addr, liveBobUID, liveBobPass, ""); err != "" {
 		t.Fatalf("bob connect: %s", err)
 	}
@@ -312,7 +356,7 @@ func TestLiveChannelFlow(t *testing.T) {
 func TestLivePermissions(t *testing.T) {
 	addr := liveAddr(t)
 
-	cm, _ := newTestBackend(t)
+	cm, _ := newLiveTestBackend(t)
 	if err := cm.connect(addr, liveAliceUID, liveAlicePass, ""); err != "" {
 		t.Fatalf("alice connect: %s", err)
 	}
@@ -338,13 +382,13 @@ func TestLivePermissions(t *testing.T) {
 func TestLiveClientInfo(t *testing.T) {
 	addr := liveAddr(t)
 
-	alice, _ := newTestBackend(t)
+	alice, _ := newLiveTestBackend(t)
 	if err := alice.connect(addr, liveAliceUID, liveAlicePass, ""); err != "" {
 		t.Fatalf("alice connect: %s", err)
 	}
 	defer alice.disconnect()
 
-	bob, _ := newTestBackend(t)
+	bob, _ := newLiveTestBackend(t)
 	if err := bob.connect(addr, liveBobUID, liveBobPass, ""); err != "" {
 		t.Fatalf("bob connect: %s", err)
 	}
@@ -389,7 +433,7 @@ func TestLiveClientInfo(t *testing.T) {
 func TestLiveGroupManagement(t *testing.T) {
 	addr := liveAddr(t)
 
-	admin, _ := newTestBackend(t)
+	admin, _ := newLiveTestBackend(t)
 	if err := admin.connect(addr, liveAdminUID, liveAdminPass, ""); err != "" {
 		t.Fatalf("admin connect: %s", err)
 	}
@@ -490,7 +534,7 @@ func TestLiveGroupManagement(t *testing.T) {
 // (deny-on-unset) and surface as servererror events.
 func TestLiveGroupGateDenied(t *testing.T) {
 	addr := liveAddr(t)
-	bob, events := newTestBackend(t)
+	bob, events := newLiveTestBackend(t)
 	if err := bob.connect(addr, liveBobUID, liveBobPass, ""); err != "" {
 		t.Fatalf("bob connect: %s", err)
 	}
@@ -512,9 +556,15 @@ func TestLiveGroupGateDenied(t *testing.T) {
 
 // --- wave-7: file management bindings -------------------------------------------
 
-// tinyPNG is a minimal PNG header blob for icon uploads.
-var tinyPNG = []byte{0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,
-	0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52}
+// livePNG supplies a complete image, including its pixels and checksums.
+func livePNG(t *testing.T) []byte {
+	t.Helper()
+	var encoded bytes.Buffer
+	if err := png.Encode(&encoded, image.NewRGBA(image.Rect(0, 0, 1, 1))); err != nil {
+		t.Fatalf("encode icon fixture: %v", err)
+	}
+	return encoded.Bytes()
+}
 
 // sha256Hex returns the hex SHA-256 of b.
 func sha256Hex(b []byte) string {
@@ -529,7 +579,7 @@ func TestLiveFileManagement(t *testing.T) {
 	addr := liveAddr(t)
 	channelID := ensureLiveChannel(t)
 
-	admin, _ := newTestBackend(t)
+	admin, _ := newLiveTestBackend(t)
 	if err := admin.connect(addr, liveAdminUID, liveAdminPass, ""); err != "" {
 		t.Fatalf("admin connect: %s", err)
 	}
@@ -642,7 +692,11 @@ func TestLiveFileManagement(t *testing.T) {
 		t.Fatalf("split addr: %v", err)
 	}
 	linkURL := fmt.Sprintf("http://%s:%d%s", host, link.HealthPort, link.Path)
-	resp, err := http.Get(linkURL)
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, linkURL, nil)
+	if err != nil {
+		t.Fatalf("build GET link request: %v", err)
+	}
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatalf("GET link: %v", err)
 	}
@@ -676,15 +730,17 @@ func TestLiveFileManagement(t *testing.T) {
 	}
 
 	// Server icon round trip (270).
-	if err := app.ServerIconSet(base64.StdEncoding.EncodeToString(tinyPNG)); err != "" {
+	iconBytes := livePNG(t)
+	if err := app.ServerIconSet(base64.StdEncoding.EncodeToString(iconBytes)); err != "" {
 		t.Fatalf("ServerIconSet: %s", err)
 	}
 	icon, err := app.ServerIconGet()
 	if err != nil {
 		t.Fatalf("ServerIconGet: %v", err)
 	}
-	if icon.DataBase64 == "" {
-		t.Fatal("server icon empty after set")
+	gotIcon, err := base64.StdEncoding.DecodeString(icon.DataBase64)
+	if err != nil || !bytes.Equal(gotIcon, iconBytes) {
+		t.Fatalf("server icon round trip mismatch: bytes=%d, decode error=%v", len(gotIcon), err)
 	}
 }
 
@@ -695,12 +751,12 @@ func TestLiveFileManagement(t *testing.T) {
 func TestLivePresence(t *testing.T) {
 	addr := liveAddr(t)
 
-	alice, aliceEvents := newTestBackend(t)
+	alice, aliceEvents := newLiveTestBackend(t)
 	if err := alice.connect(addr, liveAliceUID, liveAlicePass, ""); err != "" {
 		t.Fatalf("alice connect: %s", err)
 	}
 	defer alice.disconnect()
-	bob, bobEvents := newTestBackend(t)
+	bob, bobEvents := newLiveTestBackend(t)
 	if err := bob.connect(addr, liveBobUID, liveBobPass, ""); err != "" {
 		t.Fatalf("bob connect: %s", err)
 	}

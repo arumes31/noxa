@@ -15,7 +15,7 @@ func TestLiveUploadDownload(t *testing.T) {
 	addr := liveAddr(t)
 	channelID := ensureLiveChannel(t)
 
-	alice, _ := newTestBackend(t)
+	alice, _ := newLiveTestBackend(t)
 	if err := alice.connect(addr, liveAliceUID, liveAlicePass, ""); err != "" {
 		t.Fatalf("alice connect: %s", err)
 	}

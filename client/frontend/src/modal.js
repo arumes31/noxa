@@ -46,7 +46,10 @@ export function canFocusTarget(target) {
 
 function focusTarget(target) {
     if (!canFocusTarget(target)) return false;
-    target.focus({ preventScroll: true });
+    // Reveal keyboard targets in scrolling dialogs; restoring the background
+    // launcher must still preserve the user's workspace scroll position.
+    const inActiveDialog = topRecord()?.overlay.contains(target) || false;
+    target.focus({ preventScroll: !inActiveDialog });
     return document.activeElement === target;
 }
 
@@ -324,6 +327,100 @@ export function closeDialog(overlay, reason = "close") {
 
 export function topDialog() {
     return topRecord()?.overlay || null;
+}
+
+function appendDialogText(parent, className, text) {
+    if (!text) return null;
+    const element = document.createElement("div");
+    element.className = className;
+    element.textContent = text;
+    parent.appendChild(element);
+    return element;
+}
+
+function promiseDialog(options, { prompt = false } = {}) {
+    const cancelValue = prompt ? null : false;
+    return new Promise((resolve) => {
+        let result = cancelValue;
+        let settled = false;
+        const overlay = document.createElement("div");
+        overlay.className = "dlg-overlay";
+        const dialog = document.createElement("div");
+        dialog.className = "dlg";
+        const title = document.createElement("h3");
+        title.textContent = options.title || (prompt ? "Enter a value" : "Confirm action");
+        dialog.appendChild(title);
+        appendDialogText(dialog, options.danger ? "set-hint warn" : "dlg-text", options.message);
+
+        let input = null;
+        if (prompt) {
+            const label = document.createElement("label");
+            label.className = "dlg-label";
+            label.textContent = options.label || "Value";
+            dialog.appendChild(label);
+            input = document.createElement("input");
+            input.className = "dlg-input";
+            input.type = options.inputType || "text";
+            input.value = options.value ?? "";
+            input.placeholder = options.placeholder || "";
+            dialog.appendChild(input);
+        }
+
+        const buttons = document.createElement("div");
+        buttons.className = "dlg-buttons";
+        const cancel = document.createElement("button");
+        cancel.type = "button";
+        cancel.className = "dlg-cancel";
+        cancel.textContent = options.cancelLabel || "Cancel";
+        const accept = document.createElement("button");
+        accept.type = "button";
+        accept.className = options.danger ? "dlg-ok danger-btn" : "dlg-ok";
+        accept.textContent = options.confirmLabel || (prompt ? "OK" : "Confirm");
+        const finish = (value, reason) => {
+            if (settled) return;
+            result = value;
+            closeDialog(overlay, reason);
+        };
+        cancel.onclick = () => finish(cancelValue, "cancel");
+        accept.onclick = () => finish(prompt ? input.value : true, "close");
+        if (input) {
+            input.addEventListener("keydown", (event) => {
+                if (event.key !== "Enter") return;
+                event.preventDefault();
+                finish(input.value, "close");
+            });
+        }
+        buttons.appendChild(cancel);
+        buttons.appendChild(accept);
+        dialog.appendChild(buttons);
+        overlay.appendChild(dialog);
+        overlay.onclick = (event) => {
+            if (event.target === overlay) finish(cancelValue, "cancel");
+        };
+
+        const mount = options.serverScoped ? mountServerDialog : mountDialog;
+        mount(overlay, {
+            launcher: options.launcher,
+            initialFocus: input || accept,
+            onCancel: () => { result = cancelValue; },
+            onClose: () => {
+                if (settled) return;
+                settled = true;
+                resolve(result);
+            },
+        });
+    });
+}
+
+// Small promise wrappers for simple text entry and dangerous confirmations.
+// They share the modal stack, focus trap, Escape/backdrop handling, and server
+// generation lifecycle instead of relying on native browser dialogs.
+export function promptDialog(options = {}) {
+    return promiseDialog(options, { prompt: true });
+}
+
+export function confirmDialog(options = {}) {
+    return promiseDialog(options);
 }
 
 function trapTab(event, record) {

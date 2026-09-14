@@ -16,6 +16,8 @@ import (
 
 	"go.uber.org/zap"
 
+	"voicx/internal/auth"
+	"voicx/internal/metrics"
 	"voicx/internal/version"
 )
 
@@ -43,12 +45,21 @@ type Server struct {
 	IdleTimeout time.Duration
 	// MaxLineLength is the longest accepted command line. Defaults to 4096.
 	MaxLineLength int
-	// MaxLoginFailures is the number of failed logins from one IP before it
-	// is locked out. Defaults to 5.
+	// MaxLoginFailures is the number of failed logins from one scoped
+	// principal before it is locked out. Defaults to 5.
 	MaxLoginFailures int
-	// LockoutDuration is how long an IP stays locked out. Defaults to 5
+	// LockoutDuration is how long a scoped principal stays locked out. Defaults to 5
 	// minutes.
 	LockoutDuration time.Duration
+	// LoginFailureTTL is how long an incomplete failure streak is retained.
+	// Defaults to 5 minutes.
+	LoginFailureTTL time.Duration
+	// MaxLoginFailureEntries caps retained unauthenticated login state.
+	// Defaults to 4096.
+	MaxLoginFailureEntries int
+	// MaxConcurrentLoginKDF caps concurrent password verifications across all
+	// ServerQuery, SSH, and gRPC admin login attempts. Defaults to 8.
+	MaxConcurrentLoginKDF int
 
 	listener net.Listener
 
@@ -56,10 +67,11 @@ type Server struct {
 	stopCh   chan struct{}
 	wg       sync.WaitGroup
 
-	mu         sync.Mutex
-	conns      map[net.Conn]struct{}
-	loginFails map[string]int
-	lockouts   map[string]time.Time
+	mu           sync.Mutex
+	conns        map[net.Conn]struct{}
+	loginLimiter *auth.LoginFailureLimiter
+	loginNow     func() time.Time
+	metrics      metrics.Sink
 }
 
 // New constructs a Server listening on addr. limits left at zero get
@@ -69,25 +81,74 @@ func New(addr string, logger *zap.Logger, backend Backend) *Server {
 		logger = zap.NewNop()
 	}
 	return &Server{
-		Addr:             addr,
-		MaxConns:         10,
-		IdleTimeout:      5 * time.Minute,
-		MaxLineLength:    4096,
-		MaxLoginFailures: 5,
-		LockoutDuration:  5 * time.Minute,
-		backend:          backend,
-		logger:           logger,
-		stopCh:           make(chan struct{}),
-		conns:            make(map[net.Conn]struct{}),
-		loginFails:       make(map[string]int),
-		lockouts:         make(map[string]time.Time),
+		Addr:                   addr,
+		MaxConns:               10,
+		IdleTimeout:            5 * time.Minute,
+		MaxLineLength:          4096,
+		MaxLoginFailures:       auth.DefaultLoginFailureMaxFailures,
+		LockoutDuration:        auth.DefaultLoginFailureLockout,
+		LoginFailureTTL:        auth.DefaultLoginFailureTTL,
+		MaxLoginFailureEntries: auth.DefaultLoginFailureMaxEntries,
+		MaxConcurrentLoginKDF:  auth.DefaultLoginFailureMaxConcurrentKDF,
+		backend:                backend,
+		logger:                 logger,
+		stopCh:                 make(chan struct{}),
+		conns:                  make(map[net.Conn]struct{}),
+		metrics:                metrics.Noop{},
 	}
+}
+
+// SetMetrics wires an optional metrics sink. It must be called before Start.
+func (s *Server) SetMetrics(sink metrics.Sink) {
+	if sink == nil {
+		sink = metrics.Noop{}
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.metrics = sink
+}
+
+// SetLoginLimiter injects the process-wide expensive-login limiter. It must be
+// called before the server starts; SSH and gRPC users of this server then share
+// the same KDF gate automatically.
+func (s *Server) SetLoginLimiter(limiter *auth.LoginFailureLimiter) {
+	if limiter == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.loginLimiter = limiter
+}
+
+func (s *Server) metricsSink() metrics.Sink {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.metrics == nil {
+		return metrics.Noop{}
+	}
+	return s.metrics
+}
+
+func (s *Server) loginFailureLimiter() *auth.LoginFailureLimiter {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.loginLimiter == nil {
+		s.loginLimiter = auth.NewLoginFailureLimiter(auth.LoginFailureLimiterConfig{
+			MaxFailures:      s.MaxLoginFailures,
+			LockoutDuration:  s.LockoutDuration,
+			FailureTTL:       s.LoginFailureTTL,
+			MaxEntries:       s.MaxLoginFailureEntries,
+			MaxConcurrentKDF: s.MaxConcurrentLoginKDF,
+			Now:              s.loginNow,
+		})
+	}
+	return s.loginLimiter
 }
 
 // Start binds the listener and serves connections until ctx is cancelled or
 // Close is called. It returns when the accept loop exits.
 func (s *Server) Start(ctx context.Context) error {
-	ln, err := net.Listen("tcp", s.Addr)
+	ln, err := (&net.ListenConfig{}).Listen(ctx, "tcp", s.Addr)
 	if err != nil {
 		return fmt.Errorf("query listen on %s: %w", s.Addr, err)
 	}
@@ -195,8 +256,14 @@ func (s *Server) runSession(ctx context.Context, sess *session) {
 	for {
 		sess.armIdleTimeout(s.IdleTimeout)
 
-		line, err := sess.r.ReadString('\n')
+		line, err := readQueryLine(sess.r, s.MaxLineLength)
 		if err != nil {
+			if errors.Is(err, errQueryLineTooLong) {
+				// Close immediately: draining to a newline would let a peer
+				// hold the session indefinitely by continuing the same line.
+				s.write(sess, errorLine(errInvalidParameter, "line too long"))
+				return
+			}
 			if !errors.Is(err, io.EOF) && !errors.Is(err, net.ErrClosed) {
 				s.logger.Debug("query read error", zap.Error(err))
 			}
@@ -204,12 +271,6 @@ func (s *Server) runSession(ctx context.Context, sess *session) {
 		}
 		line = strings.TrimRight(line, "\r\n")
 		if line == "" {
-			continue
-		}
-		if len(line) > s.MaxLineLength {
-			if !s.write(sess, errorLine(errInvalidParameter, "line too long")) {
-				return
-			}
 			continue
 		}
 
@@ -224,6 +285,30 @@ func (s *Server) runSession(ctx context.Context, sess *session) {
 		if !s.execute(ctx, sess, line) {
 			return
 		}
+	}
+}
+
+var errQueryLineTooLong = errors.New("query command line too long")
+
+// readQueryLine bounds accumulation even when the peer never sends a newline.
+// One optional CR before LF does not count toward the command length.
+func readQueryLine(r *bufio.Reader, limit int) (string, error) {
+	if limit <= 0 {
+		limit = 4096
+	}
+	var line []byte
+	for {
+		b, err := r.ReadByte()
+		if err != nil {
+			return "", err
+		}
+		if b == '\n' {
+			return strings.TrimSuffix(string(line), "\r"), nil
+		}
+		if len(line) > limit || len(line) == limit && b != '\r' {
+			return "", errQueryLineTooLong
+		}
+		line = append(line, b)
 	}
 }
 

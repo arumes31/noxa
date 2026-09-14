@@ -96,18 +96,27 @@ func dialTCP(addr string) (net.Conn, error) {
 		return nil, err
 	}
 	if !useTLS {
-		return net.DialTimeout("tcp", addr, readTimeout)
+		return (&net.Dialer{Timeout: readTimeout}).DialContext(context.Background(), "tcp", addr)
 	}
-	conn, err := tls.DialWithDialer(&net.Dialer{Timeout: readTimeout}, "tcp", addr, tlsConfig)
+	dialer := &tls.Dialer{
+		NetDialer: &net.Dialer{Timeout: readTimeout},
+		Config:    tlsConfig,
+	}
+	conn, err := dialer.DialContext(context.Background(), "tcp", addr)
 	if err != nil {
 		return nil, err
 	}
+	tlsConn, ok := conn.(*tls.Conn)
+	if !ok {
+		_ = conn.Close()
+		return nil, errors.New("TLS dial returned a non-TLS connection")
+	}
 	loggedFP.Do(func() {
-		if pc := conn.ConnectionState().PeerCertificates; len(pc) > 0 {
+		if pc := tlsConn.ConnectionState().PeerCertificates; len(pc) > 0 {
 			fmt.Printf("e2e: server TLS fingerprint: %s\n", tlscert.FingerprintDER(pc[0].Raw))
 		}
 	})
-	return conn, nil
+	return tlsConn, nil
 }
 
 func controlTLSConfig(addr string, mode controlTLSMode) (*tls.Config, bool, error) {
@@ -127,7 +136,7 @@ func controlTLSConfig(addr string, mode controlTLSMode) (*tls.Config, bool, erro
 
 	switch {
 	case strings.TrimSpace(mode.pin) != "":
-		cfg, err := pinnedTLSConfig(mode.pin)
+		cfg, err := fingerprintVerifiedTLSConfig(mode.pin)
 		return cfg, true, err
 	case mode.insecure:
 		if !isLoopbackEndpoint(addr) {
@@ -148,7 +157,11 @@ func controlTLSConfig(addr string, mode controlTLSMode) (*tls.Config, bool, erro
 	}
 }
 
-func pinnedTLSConfig(fingerprint string) (*tls.Config, error) {
+// fingerprintVerifiedTLSConfig replaces CA/hostname verification with an exact
+// certificate pin. VerifyConnection enforces the pin on every TLS handshake,
+// including resumed sessions. The explicit verification name also lets CodeQL
+// distinguish this custom trust policy from accidentally disabled verification.
+func fingerprintVerifiedTLSConfig(fingerprint string) (*tls.Config, error) {
 	expected, err := parseTLSFingerprint(fingerprint)
 	if err != nil {
 		return nil, err
@@ -542,7 +555,11 @@ type check struct {
 
 func httpGet(url string) (int, string, error) {
 	client := &http.Client{Timeout: readTimeout}
-	resp, err := client.Get(url)
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, url, nil)
+	if err != nil {
+		return 0, "", err
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		return 0, "", err
 	}
@@ -721,6 +738,7 @@ func readOfType(conn net.Conn, mt netproto.MessageType, timeout time.Duration) (
 // server error frame aborts the wait immediately (surfaces the real cause
 // instead of a bare timeout).
 func readEvent(conn net.Conn, want string, timeout time.Duration) (*eventEnvelope, error) {
+	defer clearE2EReadDeadline(conn)
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
 		_ = conn.SetReadDeadline(deadline)
@@ -892,7 +910,7 @@ func (l *lineReader) readLine(timeout time.Duration) (string, error) {
 }
 
 func dialQuery(addr, uid, password string) (*querySession, error) {
-	conn, err := net.DialTimeout("tcp", addr, readTimeout)
+	conn, err := (&net.Dialer{Timeout: readTimeout}).DialContext(context.Background(), "tcp", addr)
 	if err != nil {
 		return nil, err
 	}
@@ -1476,16 +1494,20 @@ func dialFileTransfer(addr string, init netproto.FileTransferInitResponse) (net.
 		if strings.TrimSpace(init.TLSFingerprint) != "" {
 			return nil, errors.New("file transfer response supplied a TLS fingerprint for a plaintext port")
 		}
-		return net.DialTimeout("tcp", addr, readTimeout)
+		return (&net.Dialer{Timeout: readTimeout}).DialContext(context.Background(), "tcp", addr)
 	}
 	if strings.TrimSpace(init.TLSFingerprint) == "" {
 		return nil, errors.New("file transfer TLS response omitted its certificate fingerprint")
 	}
-	tlsConfig, err := pinnedTLSConfig(init.TLSFingerprint)
+	tlsConfig, err := fingerprintVerifiedTLSConfig(init.TLSFingerprint)
 	if err != nil {
 		return nil, fmt.Errorf("file transfer TLS fingerprint: %w", err)
 	}
-	conn, err := tls.DialWithDialer(&net.Dialer{Timeout: readTimeout}, "tcp", addr, tlsConfig)
+	dialer := &tls.Dialer{
+		NetDialer: &net.Dialer{Timeout: readTimeout},
+		Config:    tlsConfig,
+	}
+	conn, err := dialer.DialContext(context.Background(), "tcp", addr)
 	if err != nil {
 		return nil, fmt.Errorf("file transfer TLS: %w", err)
 	}
@@ -1618,10 +1640,16 @@ func dialGuest(addr, nickname, serverPassword string) (*client, error) {
 	if err != nil {
 		return nil, err
 	}
+	g := &client{conn: conn}
+	if err := initClientKeys(g); err != nil {
+		_ = conn.Close()
+		return nil, err
+	}
 	if err := writeMsg(conn, netproto.MsgAuthenticate, netproto.Authenticate{
-		Anonymous:      true,
-		Nickname:       nickname,
-		ServerPassword: serverPassword,
+		Anonymous:       true,
+		Nickname:        nickname,
+		ServerPassword:  serverPassword,
+		X25519PublicKey: base64.StdEncoding.EncodeToString(g.e2ePub[:]),
 	}); err != nil {
 		_ = conn.Close()
 		return nil, err
@@ -1640,11 +1668,12 @@ func dialGuest(addr, nickname, serverPassword string) (*client, error) {
 		_ = conn.Close()
 		return nil, errors.New("guest auth rejected: " + resp.Reason)
 	}
+	installScopeKeys(g, 0, resp.ChatKeys, true)
 	if _, err := readOfType(conn, netproto.MsgSnapshot, readTimeout); err != nil {
 		_ = conn.Close()
 		return nil, fmt.Errorf("reading snapshot: %w", err)
 	}
-	g := &client{conn: conn, uid: resp.UniqueID, clientID: resp.ClientID, nickname: resp.Nickname}
+	g.uid, g.clientID, g.nickname = resp.UniqueID, resp.ClientID, resp.Nickname
 	if err := registerClient(g); err != nil {
 		_ = conn.Close()
 		return nil, fmt.Errorf("e2e key publish: %w", err)
@@ -2397,6 +2426,23 @@ func chaosHistoryHas(cl *client, channelID int64, text string) (bool, error) {
 	return false, nil
 }
 
+func checkChaosOutageReply(f *netproto.Frame) error {
+	if netproto.MessageType(f.Type) != netproto.MsgError {
+		return errors.New("DB-backed request succeeded while the database was confirmed down")
+	}
+	var e netproto.Error
+	if err := netproto.Decode(f, &e); err != nil {
+		return fmt.Errorf("undecodable error frame: %w", err)
+	}
+	// Code 5 is the protocol's backend-unavailable result. Permission or
+	// malformed-request errors do not establish database outage handling.
+	if e.Code != 5 {
+		return fmt.Errorf("DB-backed request returned error %d (%s), want backend unavailable (5)", e.Code, e.Message)
+	}
+	fmt.Printf("e2e: chaos: DB-backed request answered with error frame %d (%s)\n", e.Code, e.Message)
+	return nil
+}
+
 // checkChaosPostgres is the database chaos drill (467): with two authenticated
 // sessions and continuous traffic in flight, the database is stopped and
 // restarted. It asserts that liveness and readiness diverge, that live TCP
@@ -2505,16 +2551,8 @@ func checkChaosPostgres(c *checkCtx) error {
 	if err != nil {
 		return fmt.Errorf("no answer to a DB-backed request during the outage (connection dropped or handler hung): %w", err)
 	}
-	if netproto.MessageType(f.Type) == netproto.MsgError {
-		var e netproto.Error
-		if err := netproto.Decode(f, &e); err != nil {
-			return fmt.Errorf("undecodable error frame: %w", err)
-		}
-		fmt.Printf("e2e: chaos: DB-backed request answered with error frame %d (%s)\n", e.Code, e.Message)
-	} else {
-		// Tolerated: a pooled connection can still serve a read. The session
-		// survived either way, which is what this step is about.
-		fmt.Printf("e2e: chaos: DB-backed request still succeeded (served from the pool)\n")
+	if err := checkChaosOutageReply(f); err != nil {
+		return err
 	}
 
 	// --- bring the database back -------------------------------------------
@@ -2534,17 +2572,7 @@ func checkChaosPostgres(c *checkCtx) error {
 
 	fresh, err := dialAuth(c.opts.addr, c.opts.aliceUID, c.opts.alicePass, c.opts.serverPass)
 	if err != nil {
-		// /readyz retries once on "bad connection", so it can report ready
-		// while other pooled connections are still stale. Report the gap
-		// instead of failing on it.
-		fmt.Printf("e2e: chaos: first authentication after recovery failed (%v), retrying\n", err)
-		for i := 0; i < 3 && err != nil; i++ {
-			time.Sleep(2 * time.Second)
-			fresh, err = dialAuth(c.opts.addr, c.opts.aliceUID, c.opts.alicePass, c.opts.serverPass)
-		}
-		if err != nil {
-			return fmt.Errorf("authentication never recovered: %w", err)
-		}
+		return fmt.Errorf("authentication failed after readiness recovered: %w", err)
 	}
 	defer closeE2EResource(fresh.conn)
 	if err := chaosJoin(fresh, c.channelID); err != nil {

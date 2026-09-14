@@ -619,7 +619,13 @@ type ChatSend struct {
 // fetches the sender's public key from the directory). Enc/KeyID mirror
 // ChatSend; E2E marks true end-to-end (box) messages for UI display.
 type ChatBroadcast struct {
-	ChannelID    string `json:"channel_id,omitempty"`
+	ChannelID string `json:"channel_id,omitempty"`
+	// Direct and ToUniqueID preserve routing independently of crypto flags,
+	// including the recipient needed to decrypt and place the sender's echo.
+	Direct     bool   `json:"direct,omitempty"`
+	ToUniqueID string `json:"to_unique_id,omitempty"`
+	// EncVerified is set only by the receiving native client after opening.
+	EncVerified  bool   `json:"enc_verified,omitempty"`
 	FromClientID string `json:"from_client_id,omitempty"`
 	FromUniqueID string `json:"from_unique_id,omitempty"`
 	From         string `json:"from"`
@@ -642,6 +648,11 @@ type ChatBroadcast struct {
 type Error struct {
 	Code    uint16 `json:"code"`
 	Message string `json:"message"`
+	// OriginType optionally identifies the client request frame that caused
+	// this error. It is additive: older peers omit it and still decode, while
+	// newer clients can distinguish a command failure from an unrelated
+	// fire-and-forget server error.
+	OriginType uint16 `json:"origin_type,omitempty"`
 }
 
 // Ping is a liveness probe. Payload is ignored.
@@ -923,11 +934,14 @@ type FileLink struct {
 	Name      string `json:"name"`
 }
 
-// FileLinkResponse carries the link path and expiry. The client builds the
-// full URL from its own control host plus HealthPort (the server cannot
-// know its published address behind Docker/NAT).
+// FileLinkResponse carries the link path, scheme, and expiry. The client
+// builds the full URL from its own control host plus HealthPort (the server
+// cannot know its published address behind Docker/NAT). Scheme is optional
+// for compatibility with old servers and must never be inferred from the
+// TLS control connection.
 type FileLinkResponse struct {
 	Path       string `json:"path"`
+	Scheme     string `json:"scheme,omitempty"`
 	HealthPort int    `json:"health_port"`
 	ExpiresAt  int64  `json:"expires_at"`
 }

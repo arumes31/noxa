@@ -1181,85 +1181,51 @@ func (r *Router) ReadLoop(clientID, slot string, track TrackReader, extID uint8)
 	defer r.releaseSlot(clientID, slot, token)
 
 	if slot != SlotMic {
-		// Screen audio must not drive the speaking indicator, so it runs
-		// without VAD — which is also the only thing that re-evaluates the
-		// talk gate, hence the one-shot check here (70).
-		if !r.allowTalk(clientID) {
-			r.mu.RLock()
-			music := r.isMusicChannelLocked(clientID)
-			r.mu.RUnlock()
-			if !music {
-				r.logger.Info("router: audio publish denied",
-					zap.String("client_id", clientID),
-					zap.String("slot", slot),
-				)
-				return
-			}
-		}
+		// Screen audio must not drive the microphone speaking indicator.
 		extID = 0
 	}
 
 	v := &vad{}
-	muted := false
+	announcedSpeaking := false
 
-	var nonMicPkts uint64
 	for {
 		pkt, _, err := track.ReadRTP()
 		if err != nil {
 			break
 		}
 
-		if slot != SlotMic {
-			nonMicPkts++
-			if nonMicPkts%50 == 0 {
-				if !r.allowTalk(clientID) {
-					r.mu.RLock()
-					music := r.isMusicChannelLocked(clientID)
-					r.mu.RUnlock()
-					if !music {
-						r.logger.Info("router: audio publish revoked",
-							zap.String("client_id", clientID),
-							zap.String("slot", slot),
-						)
-						break
-					}
-				}
+		// RTP level metadata is optional and supplied by the publisher. It
+		// must never decide whether authorization is checked. Recheck each
+		// packet so live tracks observe permission changes as well.
+		allowed := r.allowTalk(clientID)
+		if !allowed {
+			r.mu.RLock()
+			allowed = r.isMusicChannelLocked(clientID)
+			r.mu.RUnlock()
+		}
+		if !allowed {
+			if announcedSpeaking {
+				r.speak(clientID, false)
+				announcedSpeaking = false
 			}
+			continue
 		}
 
 		if extID != 0 {
 			if level, ok := audioLevel(pkt, extID); ok {
-				speaking, changed := v.Update(level, time.Now())
-				if changed {
-					if speaking {
-						// Re-evaluate the talk gate on every speech start.
-						// Music channels (25) bypass the gate: high-quality
-						// publishing is never dropped, regardless of talk power.
-						muted = !r.allowTalk(clientID)
-						if muted {
-							r.mu.RLock()
-							music := r.isMusicChannelLocked(clientID)
-							r.mu.RUnlock()
-							if music {
-								muted = false
-							}
-						}
-					}
-					if !muted {
-						r.speak(clientID, speaking)
-					}
+				speaking, _ := v.Update(level, time.Now())
+				if speaking != announcedSpeaking {
+					r.speak(clientID, speaking)
+					announcedSpeaking = speaking
 				}
 			}
 		}
 
-		if muted {
-			continue
-		}
 		r.ForwardRTP(clientID, slot, pkt)
 	}
 
 	// Track ended: make sure the client does not stay marked as speaking.
-	if v.speaking && !muted {
+	if announcedSpeaking {
 		r.speak(clientID, false)
 	}
 }
@@ -1414,8 +1380,8 @@ func (r *Router) senderVideoTapID(senderID string) string {
 
 // ReadVideoLoop reads RTP packets from an incoming video track until the
 // track ends or errors and forwards each packet on the given slot. Video from
-// clients without publish permission is dropped (the gate is evaluated once
-// at track start). The track's RID (empty for non-simulcast) is registered
+// clients without publish permission is dropped; the gate is rechecked for
+// every packet to enforce revocation on live tracks. The track's RID is registered
 // under the slot so subscribers can select layers and PLIs can be routed back
 // to this publisher.
 func (r *Router) ReadVideoLoop(clientID, slot string, track VideoTrackReader) {
@@ -1478,6 +1444,9 @@ func (r *Router) ReadVideoLoop(clientID, slot string, track VideoTrackReader) {
 		pkt, _, err := track.ReadRTP()
 		if err != nil {
 			return
+		}
+		if !r.allowVideo(clientID) {
+			continue
 		}
 		r.ForwardVideo(clientID, slot, rid, pkt)
 	}

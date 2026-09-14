@@ -28,6 +28,16 @@ func (fakeAuth) AuthenticatePassword(_ context.Context, uniqueID, password strin
 	return uniqueID == "lt-uid" && password == "pw", nil
 }
 
+func (fakeAuth) AuthenticateIdentifier(_ context.Context, identifier, password string) (*auth.User, error) {
+	if identifier != "lt-uid" {
+		return nil, auth.ErrUserNotFound
+	}
+	if password != "pw" {
+		return nil, nil
+	}
+	return &auth.User{ID: 1, UniqueID: identifier, Nickname: "loadtest"}, nil
+}
+
 func (fakeAuth) AuthenticateChallenge(context.Context, string, []byte, []byte) (bool, error) {
 	return false, nil
 }
@@ -78,7 +88,7 @@ func (fakePerms) LoadGroupPermissions(context.Context, int64) (permissions.Permi
 // TestLoadtestSmoke runs the simulator against a real in-process server and
 // verifies clients connect, authenticate, and send chat.
 func TestLoadtestSmoke(t *testing.T) {
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	ln, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}
@@ -105,7 +115,7 @@ func TestLoadtestSmoke(t *testing.T) {
 	// Wait for the listener.
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
-		conn, err := net.Dial("tcp", addr)
+		conn, err := (&net.Dialer{}).DialContext(t.Context(), "tcp", addr)
 		if err == nil {
 			_ = conn.Close()
 			break
@@ -144,7 +154,7 @@ func TestLoadtestSmoke(t *testing.T) {
 	if err := <-errCh; err != nil {
 		t.Fatalf("server start error: %v", err)
 	}
-	_ = srv.Shutdown()
+	_ = srv.Shutdown(t.Context())
 }
 
 func TestReadRTPIdentifiers(t *testing.T) {
@@ -175,6 +185,66 @@ func TestControlTLSConfigRestrictsInsecureMode(t *testing.T) {
 	}
 }
 
+func TestPinnedTLSHandshake(t *testing.T) {
+	cert, fingerprint, err := tlscert.Ensure(t.TempDir(), "", "", []string{"localhost"})
+	if err != nil {
+		t.Fatalf("generate certificate: %v", err)
+	}
+
+	for _, tc := range []struct {
+		name      string
+		pin       string
+		wantError bool
+	}{
+		{name: "matching pin", pin: fingerprint},
+		{name: "wrong pin", pin: strings.Repeat("00", 32), wantError: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg, err := fingerprintVerifiedTLSConfig(tc.pin)
+			if err != nil {
+				t.Fatalf("TLS config: %v", err)
+			}
+			listener, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
+			if err != nil {
+				t.Fatalf("listen: %v", err)
+			}
+			t.Cleanup(func() { _ = listener.Close() })
+			clientConn, err := (&net.Dialer{Timeout: 5 * time.Second}).DialContext(t.Context(), "tcp", listener.Addr().String())
+			if err != nil {
+				t.Fatalf("dial: %v", err)
+			}
+			t.Cleanup(func() { _ = clientConn.Close() })
+			serverConn, err := listener.Accept()
+			if err != nil {
+				t.Fatalf("accept: %v", err)
+			}
+			t.Cleanup(func() {
+				_ = serverConn.Close()
+			})
+			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+			defer cancel()
+			serverTLS := tls.Server(serverConn, &tls.Config{
+				Certificates: []tls.Certificate{cert},
+				MinVersion:   tls.VersionTLS13,
+			})
+			serverResult := make(chan error, 1)
+			go func() { serverResult <- serverTLS.HandshakeContext(ctx) }()
+			clientTLS := tls.Client(clientConn, cfg)
+			err = clientTLS.HandshakeContext(ctx)
+			if tc.wantError {
+				if err == nil || !strings.Contains(err.Error(), "TLS fingerprint =") {
+					t.Fatalf("mismatched pin handshake error = %v", err)
+				}
+			} else if err != nil {
+				t.Fatalf("matching pin handshake: %v", err)
+			}
+			if serverErr := <-serverResult; !tc.wantError && serverErr != nil {
+				t.Fatalf("server handshake: %v", serverErr)
+			}
+		})
+	}
+}
+
 func TestPinnedTLSConfigVerifiesExactCertificate(t *testing.T) {
 	cert, fingerprint, err := tlscert.Ensure(t.TempDir(), "", "", []string{"localhost"})
 	if err != nil {
@@ -185,9 +255,9 @@ func TestPinnedTLSConfigVerifiesExactCertificate(t *testing.T) {
 		t.Fatalf("parse certificate: %v", err)
 	}
 
-	cfg, err := pinnedTLSConfig(fingerprint)
+	cfg, err := fingerprintVerifiedTLSConfig(fingerprint)
 	if err != nil {
-		t.Fatalf("pinnedTLSConfig: %v", err)
+		t.Fatalf("fingerprintVerifiedTLSConfig: %v", err)
 	}
 	state := tls.ConnectionState{PeerCertificates: []*x509.Certificate{leaf}}
 	if err := cfg.VerifyConnection(state); err != nil {
@@ -195,7 +265,7 @@ func TestPinnedTLSConfigVerifiesExactCertificate(t *testing.T) {
 	}
 
 	wrong := strings.Repeat("00:", 31) + "00"
-	cfg, err = pinnedTLSConfig(wrong)
+	cfg, err = fingerprintVerifiedTLSConfig(wrong)
 	if err != nil {
 		t.Fatalf("wrong pin syntax: %v", err)
 	}

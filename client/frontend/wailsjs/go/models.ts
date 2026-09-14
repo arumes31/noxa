@@ -116,6 +116,20 @@ export namespace main {
 		    return a;
 		}
 	}
+	export class ConnectTabResult {
+	    tab_id: string;
+	    error: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ConnectTabResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.tab_id = source["tab_id"];
+	        this.error = source["error"];
+	    }
+	}
 	export class Contact {
 	    unique_id: string;
 	    label?: string;
@@ -143,6 +157,7 @@ export namespace main {
 	    self?: boolean;
 	    client_msg_id?: string;
 	    offline?: boolean;
+	    enc_verified?: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new DMEntry(source);
@@ -158,6 +173,7 @@ export namespace main {
 	        this.self = source["self"];
 	        this.client_msg_id = source["client_msg_id"];
 	        this.offline = source["offline"];
+	        this.enc_verified = source["enc_verified"];
 	    }
 	}
 	export class DMPeer {
@@ -541,6 +557,7 @@ export namespace main {
 	    version: string;
 	    url: string;
 	    sha256url: string;
+	    signatureUrl: string;
 	    size: number;
 	
 	    static createFrom(source: any = {}) {
@@ -553,6 +570,7 @@ export namespace main {
 	        this.version = source["version"];
 	        this.url = source["url"];
 	        this.sha256url = source["sha256url"];
+	        this.signatureUrl = source["signatureUrl"];
 	        this.size = source["size"];
 	    }
 	}
@@ -1086,6 +1104,7 @@ export namespace netproto {
 	}
 	export class FileLinkResponse {
 	    path: string;
+	    scheme?: string;
 	    health_port: number;
 	    expires_at: number;
 	
@@ -1096,6 +1115,7 @@ export namespace netproto {
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.path = source["path"];
+	        this.scheme = source["scheme"];
 	        this.health_port = source["health_port"];
 	        this.expires_at = source["expires_at"];
 	    }
@@ -1565,4 +1585,3 @@ export namespace netproto {
 	}
 
 }
-

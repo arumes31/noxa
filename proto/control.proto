@@ -7,7 +7,7 @@ option go_package = "voicx/v1;voicxv1";
 // Control service handles authentication, channel management, permission
 // queries, and file transfer control.
 service Control {
-  // Authenticate validates credentials and returns a session token.
+  // Authenticate validates credentials and returns the authenticated user ID.
   rpc Authenticate(AuthenticateRequest) returns (AuthenticateResponse);
   // CreateChannel creates a new channel under an optional parent.
   rpc CreateChannel(CreateChannelRequest) returns (CreateChannelResponse);
@@ -17,7 +17,8 @@ service Control {
   rpc ListChannels(ListChannelsRequest) returns (ListChannelsResponse);
   // QueryPermissions returns the effective permissions for a user in a channel.
   rpc QueryPermissions(QueryPermissionsRequest) returns (QueryPermissionsResponse);
-  // File transfer control RPCs.
+  // File transfer RPCs intentionally return UNIMPLEMENTED. Transfer tokens are
+  // minted only by the control channel after a per-client permission check.
   rpc StartFileTransfer(StartFileTransferRequest) returns (StartFileTransferResponse);
   rpc GetFileTransferStatus(GetFileTransferStatusRequest) returns (GetFileTransferStatusResponse);
   rpc CancelFileTransfer(CancelFileTransferRequest) returns (CancelFileTransferResponse);
@@ -28,19 +29,21 @@ service Control {
 message AuthenticateRequest {
   string username = 1;
   string password = 2;
-  // Optional pre-issued token (e.g. for reconnect).
-  string token = 3;
+  // Retained for source/wire compatibility. Authentication ignores this field.
+  string token = 3 [deprecated = true];
   string client_version = 4;
   map<string, string> metadata = 5;
 }
 
 message AuthenticateResponse {
-  bool success = 1;
-  string session_token = 2;
+  // Legacy clients may still inspect success; failures use gRPC status codes.
+  bool success = 1 [deprecated = true];
+  // Session tokens are not issued. Each RPC requires authorization metadata.
+  string session_token = 2 [deprecated = true];
   string user_id = 3;
-  string display_name = 4;
-  int64 expires_at = 5; // unix millis
-  string error = 6;
+  string display_name = 4 [deprecated = true];
+  int64 expires_at = 5 [deprecated = true];
+  string error = 6 [deprecated = true];
 }
 
 // --- Channel management ---
