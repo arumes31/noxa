@@ -6,6 +6,7 @@ import { pickIcon } from "./image-tools.js";
 import { closeDialog, isCurrentServerDialog, mountServerDialog, registerDialogLifecycle } from "./modal.js";
 import { imageDataURL } from "./safe-media.js";
 import { parseRuntimeObject } from "./runtime-json.js";
+import { openChannelEdit } from "./clientinfo.js";
 
 const V = () => window.__voicx;
 const App = () => window.go.main.App;
@@ -235,6 +236,7 @@ function openPermissionManager() {
         </div>
         <div class="pm-tabs">
             <button data-tab="server" class="active">Server Groups</button>
+            ${V().state.isAdmin ? '<button data-tab="admins">Server Admins</button>' : ''}
             <button data-tab="clients">Clients</button>
             <button data-tab="channel">Channel</button>
             <button data-tab="channelGroups">Channel Groups</button>
@@ -249,8 +251,8 @@ function openPermissionManager() {
                 <div class="pm-right-head">
                     <input class="pm-filter dlg-input" placeholder="filter permissions…" />
                     <button class="pm-matrix icon-btn" title="Compare this client's effective permissions across sub-channels">▦</button>
-                    <button class="pm-export icon-btn" title="Export this target's permissions as JSON">⬇</button>
-                    <button class="pm-export-csv icon-btn" title="Export this target's permissions as CSV">CSV</button>
+                    <button class="pm-export icon-btn" title="Export this target's permission overrides as JSON">⬇</button>
+                    <button class="pm-export-csv icon-btn" title="Export this target's permission overrides as CSV">CSV</button>
                 </div>
                 <div class="pm-grid"></div>
                 <div class="pm-trace"></div>
@@ -380,6 +382,15 @@ function tabTier(tab) {
 async function renderTargets() {
     const manager = pm;
     if (!currentManager(manager)) return;
+    manager.adminRequest = (manager.adminRequest || 0) + 1;
+    const showingAdmins = manager.tab === "admins";
+    manager.q(".pm-left").classList.toggle("hidden", showingAdmins);
+    manager.q(".pm-right-head").classList.toggle("hidden", showingAdmins);
+    manager.q(".pm-trace").replaceChildren();
+    if (showingAdmins) {
+        await renderServerAdmins(manager);
+        return;
+    }
     const list = manager.q(".pm-targets");
     const actions = manager.q(".pm-actions");
     const members = manager.q(".pm-members");
@@ -477,7 +488,52 @@ async function loadEntries() {
     renderGrid();
 }
 
+async function renderServerAdmins(manager) {
+    const request = manager.adminRequest;
+    const current = () => currentManager(manager) && manager.tab === "admins" && manager.adminRequest === request;
+    const grid = manager.q(".pm-grid");
+    if (!V().state.isAdmin) {
+        grid.textContent = "Only server admins can view this roster.";
+        return;
+    }
+    grid.innerHTML = `<section class="pm-admins">
+        <h4>Server Admins</h4>
+        <p>Server admins have full access, independent of Member and other group permissions.</p>
+        <div class="dlg-buttons"><button class="pm-admin-refresh">Refresh admins</button><button class="pm-admin-key">Create admin key…</button></div>
+        <div class="pm-admin-list" aria-live="polite">Loading server admins…</div>
+    </section>`;
+    grid.querySelector(".pm-admin-refresh").onclick = () => { if (current()) void renderTargets(); };
+    grid.querySelector(".pm-admin-key").onclick = () => { if (current()) void openTokenManager({ adminOnly: true }); };
+    try {
+        const response = await App().ServerAdminList();
+        if (!current()) return;
+        const list = grid.querySelector(".pm-admin-list");
+        if (!Array.isArray(response?.entries)) throw new Error("Unsupported roster response");
+        if (!response.entries.length) {
+            list.textContent = "No server admins found.";
+            return;
+        }
+        const table = document.createElement("table");
+        table.className = "perm-grid pm-admin-table";
+        table.innerHTML = "<thead><tr><th>Name</th><th>Identity</th><th>Status</th></tr></thead><tbody></tbody>";
+        for (const admin of response.entries) {
+            const row = document.createElement("tr");
+            const online = V().state.clients.some(client => client.unique_id === admin.unique_id);
+            for (const value of [admin.nickname || admin.unique_id, admin.unique_id, online ? "Online" : "Offline"]) {
+                const cell = document.createElement("td");
+                cell.textContent = value;
+                row.appendChild(cell);
+            }
+            table.tBodies[0].appendChild(row);
+        }
+        list.replaceChildren(table);
+    } catch {
+        if (current()) grid.querySelector(".pm-admin-list").textContent = "Could not load server admins. Retry with Refresh admins; older servers need updating to support this list.";
+    }
+}
+
 function renderGrid() {
+    if (pm.tab === "admins") return;
     const grid = pm.q(".pm-grid");
     if (!pm.target) {
         grid.innerHTML = `<div class="empty-state">Select a target on the left</div>`;
@@ -496,7 +552,10 @@ function renderGrid() {
     table.innerHTML = `<thead><tr><th>key</th><th>value</th><th>grant</th><th>flags</th></tr></thead><tbody></tbody>`;
     const tbody = table.querySelector("tbody");
     for (const key of rows) {
-        const e = pm.entries.get(key);
+        // Join admission reads the channel property, not a permission override.
+        const channelSetting = pm.tab === "channel" && key === "i_channel_needed_join_power";
+        const channel = channelSetting && V().state.channels.find((ch) => ch.ChannelID === pm.target.channelID);
+        const e = channelSetting ? (channel ? { value: channel.NeededJoinPower || 0 } : null) : pm.entries.get(key);
         const tr = document.createElement("tr");
         tr.className = (e ? "set" : "unset") + (pm.editKey === key ? " editing" : "");
         const keyCell = document.createElement("td");
@@ -515,16 +574,48 @@ function renderGrid() {
             : e?.skip
                 ? "skip locks this value against lower-tier overrides"
                 : "";
-        flagsCell.textContent = e
+        flagsCell.textContent = channelSetting ? "channel setting" : e
             ? [e.skip ? "skip" : "", e.negate ? "negate" : ""].filter(Boolean).join(",")
             : "";
 
         tr.append(keyCell, valueCell, grantCell, flagsCell);
         tr.onclick = () => { pm.editKey = pm.editKey === key ? "" : key; renderGrid(); };
         tbody.appendChild(tr);
-        if (pm.editKey === key) tbody.appendChild(editorRow(key, e));
+        if (pm.editKey === key) tbody.appendChild(channelSetting ? channelJoinPowerRow(channel) : editorRow(key, e));
     }
     grid.appendChild(table);
+}
+
+function refreshChannelPermissions() {
+    if (currentManager(pm) && pm.tab === "channel") renderGrid();
+}
+
+function channelJoinPowerRow(channel) {
+    const tr = document.createElement("tr");
+    tr.className = "pm-editor-row";
+    const td = document.createElement("td");
+    td.colSpan = 4;
+    const note = document.createElement("p");
+    note.textContent = channel
+        ? "Required join power is configured in Edit channel. 0 adds no restriction on this channel."
+        : "This channel is no longer available.";
+    if (channel?.InheritPermissions) note.textContent += " Parent join-power requirements also apply.";
+    td.appendChild(note);
+    if (channel) {
+        const edit = editorButton("dlg-ok", "Edit channel…");
+        edit.disabled = !hasPerm("b_channel_modify");
+        if (edit.disabled) edit.title = "Requires b_channel_modify";
+        const manager = pm;
+        const target = pm.target;
+        edit.onclick = () => {
+            if (!currentManager(manager) || manager.target !== target) return;
+            const current = V().state.channels.find((ch) => ch.ChannelID === target.channelID);
+            if (current) openChannelEdit(current, { focusJoinPower: true });
+        };
+        td.appendChild(edit);
+    }
+    tr.appendChild(td);
+    return tr;
 }
 
 function permissionValue(value, present, extraClass = "") {
@@ -1770,10 +1861,11 @@ function openTokenShare(token) {
 
 // openTokenManager lists, mints and revokes privilege keys. All three
 // messages answer with the full list, so the view cannot drift.
-async function openTokenManager() {
+async function openTokenManager({ adminOnly = false } = {}) {
+    if (adminOnly && !V().state.isAdmin) return;
     const { overlay, q } = modal("audit", `
         <div class="pm-head">
-            <h3>Privilege Keys</h3>
+            <h3>${adminOnly ? "Admin Keys" : "Privilege Keys"}</h3>
             <button class="icon-btn tk-close" title="Close">✕</button>
         </div>
         <div class="tk-add"></div>
@@ -1789,6 +1881,7 @@ async function openTokenManager() {
     const channelName = (id) => V().state.channels.find((c) => c.ChannelID === id)?.Name || String(id);
 
     const render = (entries) => {
+        if (adminOnly) entries = entries.filter(entry => !entry.group_id);
         const list = q(".tk-list");
         list.innerHTML = entries.length ? "" : `<div class="empty-state">no privilege keys</div>`;
         if (!entries.length) return;
@@ -1832,12 +1925,12 @@ async function openTokenManager() {
 
     if (canTokenAdd()) {
         q(".tk-add").innerHTML = `
-            <select class="dlg-input tk-new-group" aria-label="Group granted by key"><option value="0">server admin (admin only)</option></select>
-            <select class="dlg-input tk-new-chan" aria-label="Channel restriction"><option value="0">— no channel —</option></select>
+            <select class="dlg-input tk-new-group" aria-label="Group granted by key" ${adminOnly ? "disabled" : ""}>${V().state.isAdmin ? '<option value="0">Server admin</option>' : ''}</select>
+            ${adminOnly ? '' : '<select class="dlg-input tk-new-chan" aria-label="Channel restriction"><option value="0">— no channel —</option></select>'}
             <input class="dlg-input tk-new-desc" placeholder="note (optional)" />
-            <button class="tk-new">+ Create key</button>`;
+            <button class="tk-new" disabled>+ Create key</button>`;
         try {
-            const response = await App().GroupList("server");
+            const response = adminOnly ? { groups: [] } : await App().GroupList("server");
             if (!isCurrentServerDialog(overlay)) return;
             for (const g of response.groups || []) {
                 const opt = document.createElement("option");
@@ -1846,21 +1939,26 @@ async function openTokenManager() {
                 q(".tk-new-group").appendChild(opt);
             }
         } catch { /* the admin option alone still works */ }
-        for (const c of V().state.channels) {
+        for (const c of adminOnly ? [] : V().state.channels) {
             const opt = document.createElement("option");
             opt.value = c.ChannelID;
             opt.textContent = "# " + c.Name;
             q(".tk-new-chan").appendChild(opt);
         }
         q(".tk-new").onclick = async () => {
-            const groupID = parseInt(q(".tk-new-group").value, 10) || 0;
-            const chanID = parseInt(q(".tk-new-chan").value, 10) || 0;
+            if (!isCurrentServerDialog(overlay) || q(".tk-new").disabled) return;
+            const groupID = Number(q(".tk-new-group").value);
+            if (!V().state.isAdmin && (!groupID || !Number.isSafeInteger(groupID))) return;
+            const chanID = groupID ? (parseInt(q(".tk-new-chan")?.value, 10) || 0) : 0;
+            q(".tk-new").disabled = true;
             let resp;
             try {
                 resp = await App().TokenAdd(groupID, chanID, q(".tk-new-desc").value.trim());
             } catch (err) {
                 if (isCurrentServerDialog(overlay)) V().toast("key creation failed: " + err, "warn");
                 return;
+            } finally {
+                if (isCurrentServerDialog(overlay)) q(".tk-new").disabled = false;
             }
             if (!isCurrentServerDialog(overlay)) return;
             const entries = resp.entries || [];
@@ -1880,6 +1978,7 @@ async function openTokenManager() {
         if (!isCurrentServerDialog(overlay)) return;
         known = new Set((resp.entries || []).map((e) => e.token));
         render(resp.entries || []);
+        if (q(".tk-new")) q(".tk-new").disabled = !q(".tk-new-group").options.length;
     } catch (err) {
         if (!isCurrentServerDialog(overlay)) return;
         q(".tk-list").innerHTML = `<div class="empty-state">key list failed: ${esc(err)}</div>`;
@@ -1989,6 +2088,7 @@ export function initPermsUI() {
 
     window.__voicxPerms = {
         openPermissionManager, openAuditViewer, openBanList, openChatFilters,
+        refreshChannelPermissions,
         openComplaints, openTokenManager, openTokenRedeem,
         refreshGroups, groupColorFor, primaryGroup, hoistedGroups, groupIconURL,
         canPermManage, canAuditView, canGroupManage, canBan, canKickChannel, canKickServer,

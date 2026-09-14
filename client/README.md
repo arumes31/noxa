@@ -15,6 +15,12 @@ fontsource — fully offline in WebView2):
   shows connection/idle time (ticking), ping (or `unknown`), client address
   (IP only for self or with `b_client_remoteaddress_view`), and transfer
   stats — live-refreshing every 2s.
+- **Server information** — click the server name, the latency readout, or
+  Connections → Server information. Shows server details and your connection's
+  latency, incoming audio loss/jitter, and In/Out control and media traffic.
+  Refreshes every 2s while visible (server metadata every 10s); closing or hiding
+  it stops polling. Missing metrics show `—`; platform requires an updated server.
+  Tools → Connection stats opens the same dialog, including optional history charts.
 - **Channel edit** — right-click a channel → Edit channel: topic, max
   clients, and a quality preset select (Voice 32 kbps / HQ Voice 64 kbps
   +FEC / Music 128 kbps stereo / Custom) pre-filling bitrate and the
@@ -71,6 +77,10 @@ failures, and connection loss.
   red gradient); **mic test with loopback playback** (Capture settings);
   **VAD auto-calibrate** (5 s ambient → noise floor → suggested threshold).
 - **PTT release delay** slider (0–2000 ms) so sentence ends aren't clipped.
+- **Voice detection** uses a local microphone track independent of the
+  transmitted track, so silence, mute, and PTT release cannot disable the
+  detector. This local track is released when voice disconnects and replaced
+  when the channel's capture profile changes.
 - **Own status icons** in the tree (muted / deafened / screen sharing) and a
   local-mute icon on users you muted.
 - **Talking-while-muted warning** (amber banner "You're muted!",
@@ -252,8 +262,21 @@ write and denials arrive as toasts (grant-cap errors included).
   Channel / Channel Groups. The right side is the editable permission grid
   (136) — click a row for the inline editor (value + grant inputs, skip/negate
   checkboxes with tooltips, Set/Unset). A filter box searches
-  keys (154); ⬇ exports the target's grid as JSON (148). Current values are
+  keys (154); ⬇ exports the target's permission overrides as JSON (148). Override values are
   read via the `PermList` request; after each write the grid re-queries.
+  On the Channel tab, `i_channel_needed_join_power` shows the channel's
+  **Required join power** setting. Click its row, then **Edit channel…** to
+  change it. This channel setting has no grant/skip/negate flags and is not
+  part of the permission-override export. Parent join requirements still
+  apply when permission inheritance is enabled.
+- **Server Admins** (Permission Manager, admins only): lists every admin
+  identity, including offline accounts, separately from ordinary groups.
+  **Create admin key…** opens the admin-key manager to create a single-use,
+  server-wide key or review and revoke existing admin keys. The server
+  independently checks admin status for both roster access and admin-key
+  creation. The roster requires an updated server (protocol messages 131/132);
+  older servers show an unavailable notice while existing key management
+  remains usable. Member permissions do not change the admin flag.
 - **Trace** (137/155): on the Clients tab, each row's editor has a Trace
   button — a panel showing the effective value, the winning tier highlighted,
   and every tier's contribution in resolver order.
@@ -524,7 +547,7 @@ release-equivalent path and uses the shared `cmd/version` calculator also used
 by CI and Docker.
 
 Connect from the login dialog: server address (`127.0.0.1:12333`), your
-unique ID, account password, and the server password if the server has one
+nickname, and the server password if the server has one
 set.
 
 ## Test account
@@ -549,12 +572,8 @@ ID is derived from the public key — you never type one.
 The login dialog asks for:
 
 - **Server** — host:port of the control channel.
-- **Nickname** — your account nickname (or unique ID). With a **password**
-  this is an account login: the server resolves the nickname, returns the
-  account's canonical unique ID, and binds your identity key to the account
-  so future logins work passwordless (challenge auth with the same key).
-- **Password** — optional. Empty = guest login with your own identity
-  (key-derived unique ID, guest semantics).
+- **Nickname** — your display name. The client uses its locally stored
+  cryptographic identity to connect; no account password is needed.
 - **Server password** — only if the server has a global password set.
 
 ## Hotkeys & troubleshooting

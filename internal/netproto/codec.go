@@ -165,11 +165,17 @@ const (
 	MsgPreKeyPublish        MessageType = 128 // client -> server: publish X3DH bundle and one-time keys
 	MsgPreKeyQuery          MessageType = 129 // client -> server: consume target's X3DH bundle
 	MsgPreKeyBundle         MessageType = 130 // server -> client: signed bundle plus optional one-time key
+	MsgServerAdminList      MessageType = 131 // admin -> server: list all server-admin identities
+	MsgServerAdmins         MessageType = 132 // server -> admin: persistent admin roster
 )
 
 // String returns a human-readable name for the message type.
 func (m MessageType) String() string {
 	switch m {
+	case MsgServerAdminList:
+		return "ServerAdminList"
+	case MsgServerAdmins:
+		return "ServerAdmins"
 	case MsgAuthenticate:
 		return "Authenticate"
 	case MsgAuthResponse:
@@ -983,6 +989,7 @@ type ServerInfoQuery struct{}
 type ServerInfoResponse struct {
 	Name           string `json:"name"`
 	Version        string `json:"version"`
+	Platform       string `json:"platform,omitempty"` // Optional for compatibility with older servers.
 	UptimeSeconds  int64  `json:"uptime_seconds"`
 	ClientsOnline  int    `json:"clients_online"`
 	ChannelsOnline int    `json:"channels_online"`

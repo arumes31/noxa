@@ -800,7 +800,7 @@ export function describeChannelFields(form) {
     }
 }
 
-function openChannelEdit(channel) {
+export function openChannelEdit(channel, { focusJoinPower = false } = {}) {
     const overlay = document.createElement("div");
     overlay.className = "dlg-overlay";
     // (156 honest UI): the server does not auto-assign a channel-creator
@@ -1038,7 +1038,8 @@ function openChannelEdit(channel) {
     q(".channel-dialog-close").onclick = () => overlay.remove();
     q(".dlg-cancel").onclick = () => overlay.remove();
     overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
-    mountServerDialog(overlay, { initialFocus: q(".ce-topic") });
+    if (focusJoinPower) q(".ce-joinpower").closest("details").open = true;
+    mountServerDialog(overlay, { initialFocus: q(focusJoinPower ? ".ce-joinpower" : ".ce-topic") });
     describeChannelFields(form);
 }
 

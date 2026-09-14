@@ -85,7 +85,7 @@ export function renderWorkspace() {
     $("voice-deafen").classList.toggle("active", state.deafened);
     $("voice-deafen").setAttribute("aria-pressed", String(state.deafened));
     $("voice-deafen").setAttribute("aria-label", state.deafened ? "Undeafen" : "Deafen");
-    labelButton($("voice-deafen"), "headphones", state.deafened ? "Undeafen" : "Deafen");
+    labelButton($("voice-deafen"), state.deafened ? "headphonesOff" : "headphones", state.deafened ? "Undeafen" : "Deafen");
     $("ptt-btn").classList.toggle("hidden", (state.settings?.activation_mode || "ptt") !== "ptt");
     for (const element of document.querySelectorAll("#channel-tree .avatar[data-uid]")) {
         element.style.setProperty("--avatar-color", avatarColor(element.dataset.uid));

@@ -49,7 +49,6 @@ const en = {
     "common.apply": "Apply",
     "login.server": "SERVER",
     "login.nickname": "NICKNAME",
-    "login.password": "PASSWORD",
     "login.serverPassword": "SERVER PASSWORD",
     "login.connect": "CONNECT",
     "login.recentServers": "RECENT SERVERS",
@@ -109,7 +108,6 @@ const de = {
     "common.apply": "Anwenden",
     "login.server": "SERVER",
     "login.nickname": "SPITZNAME",
-    "login.password": "PASSWORT",
     "login.serverPassword": "SERVER-PASSWORT",
     "login.connect": "VERBINDEN",
     "login.recentServers": "LETZTE SERVER",
@@ -207,7 +205,7 @@ export function applyStaticLabels() {
         }
     };
     const loginLabels = document.querySelectorAll(".login-card label");
-    const keys = ["login.server", "login.nickname", "login.password", "login.serverPassword"];
+    const keys = ["login.server", "login.nickname", "login.serverPassword"];
     loginLabels.forEach((l, i) => {
         if (keys[i] && l.firstChild) l.firstChild.textContent = t(keys[i]) + " ";
     });

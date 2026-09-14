@@ -296,7 +296,7 @@ async function refreshNews() {
         const serverName = document.getElementById("server-name");
         if (serverName && info.name) {
             serverName.textContent = info.name;
-            serverName.title = info.name;
+            serverName.title = `${info.name} — Server information`;
         }
         area.innerHTML = `
             <div class="news-line"><b>${esc(info.name)}</b></div>

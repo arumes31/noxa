@@ -510,6 +510,10 @@ export function SendTyping(arg1, arg2) {
   return window['go']['main']['App']['SendTyping'](arg1, arg2);
 }
 
+export function ServerAdminList() {
+  return window['go']['main']['App']['ServerAdminList']();
+}
+
 export function ServerBannerGet() {
   return window['go']['main']['App']['ServerBannerGet']();
 }

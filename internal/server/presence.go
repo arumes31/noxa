@@ -5,6 +5,7 @@ package server
 import (
 	"container/heap"
 	"context"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -235,6 +236,7 @@ func (s *TCPServer) handleServerInfoQuery(ctx context.Context, client *Client, f
 	resp := netproto.ServerInfoResponse{
 		Name:       s.cfg.ServerName,
 		Version:    version.String(),
+		Platform:   runtime.GOOS + "/" + runtime.GOARCH,
 		MaxClients: s.cfg.MaxClients,
 	}
 	// Off by default (91): this reply is authenticated-only and every caller

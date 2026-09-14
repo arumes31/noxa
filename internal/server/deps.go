@@ -161,6 +161,11 @@ type TokenBackend interface {
 	DeleteToken(ctx context.Context, key string) error
 }
 
+// ServerAdminStore reads the independent administrator flag, not group membership.
+type ServerAdminStore interface {
+	ListServerAdmins(ctx context.Context) ([]store.AdminIdentity, error)
+}
+
 // GroupStore is the subset of the store needed for wave-6a group and
 // permission management. It is satisfied by *store.Store.
 type GroupStore interface {
@@ -283,6 +288,7 @@ type Deps struct {
 	Complaints   ComplaintBackend
 	Chat         ChatStore
 	Groups       GroupStore
+	ServerAdmins ServerAdminStore
 	BanAdmin     BanAdminStore
 	Metrics      metrics.Sink
 	// LoginLimiter limits failed TCP control-channel passwords. Nil installs

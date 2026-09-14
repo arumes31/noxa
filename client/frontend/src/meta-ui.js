@@ -1,7 +1,8 @@
 // meta-ui.js — wave-8b meta features: debug console (327), connection stats
 // page (328), onboarding wizard (329), what's-new dialog (330), crash report
 // toast (331).
-import { closeDialog, isCurrentServerDialog, mountDialog, mountServerDialog } from "./modal.js";
+import { closeDialog, mountDialog, mountServerDialog } from "./modal.js";
+import { openServerInfo } from "./server-info.js";
 
 const V = () => window.__voicx;
 const App = () => window.go.main.App;
@@ -75,102 +76,7 @@ function escapeHtml(s) {
 // Connection stats page (328)
 // ---------------------------------------------------------------------------
 
-let statsTimer = null;
-let statsOverlay = null;
-
-function openStatsPage() {
-    if (statsOverlay?.isConnected) {
-        statsOverlay.focus();
-        return;
-    }
-    const overlay = document.createElement("div");
-    overlay.className = "dlg-overlay";
-    overlay.innerHTML = `
-        <div class="dlg stats-page">
-            <div class="pm-head">
-                <h3>Connection stats</h3>
-                <button class="icon-btn stats-close" title="Close">✕</button>
-            </div>
-            <div class="stats-server mono"></div>
-            <div class="stats-label">RTT (ms, 60s)</div>
-            <canvas class="stats-rtt" width="560" height="80"></canvas>
-            <div class="stats-label">Loss % (audio, 60s)</div>
-            <canvas class="stats-loss" width="560" height="60"></canvas>
-            <div class="stats-jitter mono"></div>
-            <div class="dlg-buttons"><button class="dlg-ok">Close</button></div>
-        </div>`;
-    statsOverlay = overlay;
-    const cleanup = () => {
-        if (statsTimer) {
-            clearInterval(statsTimer);
-            statsTimer = null;
-        }
-        if (statsOverlay === overlay) statsOverlay = null;
-    };
-    const close = () => closeDialog(overlay);
-    overlay.querySelector(".stats-close").onclick = close;
-    overlay.querySelector(".dlg-ok").onclick = close;
-    overlay.onclick = (e) => { if (e.target === overlay) close(); };
-    mountServerDialog(overlay, { onClose: cleanup });
-
-    const rttHist = [];
-    const lossHist = [];
-    const sample = async () => {
-        const { state } = V();
-        if (!state.myClientID) return;
-        try {
-            const info = await App().GetClientInfo(state.myClientID);
-            if (!isCurrentServerDialog(overlay)) return;
-            overlay.querySelector(".stats-server").textContent =
-                `${info.unique_id?.slice(0, 12) || ""}… · ping ${info.ping_ms} ms · connected ${Math.floor((Date.now() / 1000 - info.connected_at) / 60)} min`;
-            rttHist.push(info.ping_ms >= 0 ? info.ping_ms : 0);
-            if (rttHist.length > 60) rttHist.shift();
-        } catch { /* transient */ }
-        if (state.pc) {
-            try {
-                const stats = await state.pc.getStats();
-                let inbound = null, jitter = null;
-                stats.forEach((r) => {
-                    if (r.type === "inbound-rtp" && (r.kind === "audio" || r.mediaType === "audio") && !inbound) inbound = r;
-                    if (r.type === "remote-inbound-rtp" && jitter === null) jitter = r.jitter;
-                });
-                if (inbound) {
-                    const total = (inbound.packetsLost || 0) + (inbound.packetsReceived || 0);
-                    lossHist.push(total ? (inbound.packetsLost / total) * 100 : 0);
-                    if (lossHist.length > 60) lossHist.shift();
-                    overlay.querySelector(".stats-jitter").textContent =
-                        `jitter ${((inbound.jitter || 0) * 1000).toFixed(1)} ms · ${inbound.packetsReceived} recv / ${inbound.packetsLost} lost`;
-                }
-            } catch { /* no stats yet */ }
-        }
-        drawChart(overlay.querySelector(".stats-rtt"), rttHist, "#2ee6a8");
-        drawChart(overlay.querySelector(".stats-loss"), lossHist, "#f0b35a");
-    };
-    sample();
-    statsTimer = setInterval(sample, 1000);
-}
-
-// drawChart renders a tiny line chart onto a canvas.
-function drawChart(canvas, data, color) {
-    const ctx = canvas.getContext("2d");
-    ctx.fillStyle = "#0b0f14";
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-    if (data.length < 2) return;
-    const max = Math.max(1, ...data);
-    ctx.strokeStyle = color;
-    ctx.lineWidth = 1.5;
-    ctx.beginPath();
-    data.forEach((v, i) => {
-        const x = (i / 59) * canvas.width;
-        const y = canvas.height - (v / max) * (canvas.height - 6) - 3;
-        if (i === 0) ctx.moveTo(x, y);
-        else ctx.lineTo(x, y);
-    });
-    ctx.stroke();
-    ctx.fillStyle = "#8494a6";
-    ctx.font = "10px 'JetBrains Mono Variable', monospace";
-    ctx.fillText(String(Math.round(data[data.length - 1] * 10) / 10), 4, 11);
-}
+const openStatsPage = openServerInfo;
 
 // ---------------------------------------------------------------------------
 // Onboarding (329) + what's new (330) + crash toast (331)
@@ -272,7 +178,10 @@ export function initMetaUI() {
         if (dbg.rows.length > 500) dbg.rows.shift();
         renderDbg();
     });
-    window.__voicxMeta = { openDebugConsole, openStatsPage, maybeOnboard };
+    window.__voicxMeta = { openDebugConsole, openStatsPage, openServerInfo, maybeOnboard };
+    for (const id of ["server-name", "voice-latency"]) {
+        document.getElementById(id)?.addEventListener("click", openServerInfo);
+    }
     // Startup flows: crash report, what's new, onboarding (in that order).
     setTimeout(() => {
         maybeCrashToast();

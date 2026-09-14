@@ -257,6 +257,8 @@ export function SendICECandidate(arg1:string,arg2:string,arg3:number):Promise<vo
 
 export function SendTyping(arg1:number,arg2:string):Promise<string>;
 
+export function ServerAdminList():Promise<netproto.ServerAdmins>;
+
 export function ServerBannerGet():Promise<netproto.ServerBannerData>;
 
 export function ServerBannerSet(arg1:string):Promise<string>;
