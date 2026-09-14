@@ -1,5 +1,11 @@
 # Build Directory
 
+VoicX branding uses `appicon.png` (1024 × 1024 transparent PNG) and
+`windows/icon.ico` (16, 24, 32, 48, 64, 128, and 256 px). Both are derived
+from `../frontend/public/branding/logo.png`. The same ICO is also served as
+the frontend favicon. Replace these together when changing the logo, then
+rebuild the application to include the updated desktop and installer icons.
+
 The build directory is used to house all the build files and assets for your application. 
 
 The structure is:

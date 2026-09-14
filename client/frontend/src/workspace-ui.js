@@ -23,7 +23,10 @@ function avatar(element, client) {
 
 function voiceDescription(client) {
     const state = V().state;
-    if (client.client_id === state.myClientID && state.muted) return "Microphone muted";
+    if (client.client_id === state.myClientID) {
+        if (state.muted) return "Microphone muted";
+        return client.is_speaking && client.channel_id === state.myChannelID ? "Talking" : "In voice";
+    }
     if (isUserMuted(client.unique_id)) return "Muted for you";
     if (client.is_speaking && client.channel_id === state.myChannelID) return "Speaking";
     return "In voice";
@@ -56,10 +59,11 @@ export function renderWorkspace() {
         const description = voiceDescription(client);
         button.querySelector(".participant-name").textContent = name;
         const status = button.querySelector(".participant-state");
-        const statusIcon = description === "Speaking" ? "signal" : description.includes("muted") || description.includes("Muted") ? "micOff" : "mic";
+        const speaking = description === "Speaking" || description === "Talking";
+        const statusIcon = speaking ? "signal" : description.includes("muted") || description.includes("Muted") ? "micOff" : "mic";
         labelButton(status, statusIcon, description);
         button.setAttribute("aria-label", `${name}, ${description.toLowerCase()}. Member details`);
-        button.classList.toggle("speaking", description === "Speaking");
+        button.classList.toggle("speaking", speaking);
         button.classList.toggle("selected", state.selectedClientID === client.client_id);
         avatar(button.querySelector(".avatar"), client);
     }
@@ -137,7 +141,7 @@ export function renderMember() {
     const groups = state.groupByUID?.get(client.unique_id) || [];
     card.querySelector(".card-groups").textContent = groups.map((group) => group.name).join(" · ");
     avatar(card.querySelector(".card-avatar"), client);
-    card.querySelector(".card-avatar").classList.toggle("speaking", voiceDescription(client) === "Speaking");
+    card.querySelector(".card-avatar").classList.toggle("speaking", ["Speaking", "Talking"].includes(voiceDescription(client)));
     $("member-volume-value").textContent = $("member-volume").value + "%";
     const isSelf = client.client_id === state.myClientID;
     card.querySelector(".member-audio").hidden = isSelf || !client.unique_id;

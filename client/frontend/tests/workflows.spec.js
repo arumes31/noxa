@@ -39,6 +39,34 @@ test("B3 participant strip follows live channel membership and opens member cont
     await expect(strip).toContainText("No one else is here yet");
 });
 
+test("B3 shows your detected speech even when your own playback is muted or deafened", async ({ page }) => {
+    await showB3Workspace(page);
+    await page.evaluate(() => {
+        const v = window.__voicx;
+        v.state.settings.muted_users = ["uid-daniel"];
+        v.setDeafened(true);
+        for (const cb of window.__events.event) cb(JSON.stringify({
+            type: "speaking_changed", data: { client_id: "daniel", speaking: true },
+        }));
+    });
+    const self = page.locator('#voice-participants [data-client-id="daniel"]');
+    await expect(self).toContainText("Talking");
+    await expect(self).toHaveClass(/speaking/);
+    await expect(page.locator('#channel-tree .client[data-clid="daniel"]')).toHaveClass(/speaking/);
+    await page.getByRole("tab", { name: "Files", exact: true }).click();
+    await expect(self).toBeVisible();
+    await expect(self).toContainText("Talking");
+    await page.evaluate(() => {
+        for (const cb of window.__events.event) cb(JSON.stringify({
+            type: "speaking_changed", data: { client_id: "daniel", speaking: false },
+        }));
+    });
+    await expect(self).toContainText("In voice");
+    await expect(self).not.toHaveClass(/speaking/);
+    await page.locator("#voice-mute").click();
+    await expect(self).toContainText("Microphone muted");
+});
+
 test("B3 keeps voice controls outside the Chat and Files panels @a11y", async ({ page }) => {
     await showB3Workspace(page);
     await page.evaluate(() => window.__voicx.openPM("uid-mia", "Mia"));
@@ -56,6 +84,33 @@ test("B3 keeps voice controls outside the Chat and Files panels @a11y", async ({
     await auditAccessibility(page, "B3 files and voice toolbar");
     await page.getByRole("tab", { name: "Chat", exact: true }).click();
     await expect(page.locator("#chat-head-title")).toContainText("Mia");
+});
+
+test("B3 alpha details work with the keyboard and notifications stay readable @a11y", async ({ page }, testInfo) => {
+    await showB3Workspace(page);
+    await page.locator("#alpha-badge").focus();
+    await page.keyboard.press("Enter");
+    await expect(page.locator(".alpha-notice")).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(page.locator("#alpha-badge")).toBeFocused();
+    await page.evaluate(() => {
+        const self = window.__voicx.state.clients.find((c) => c.client_id === "daniel");
+        self.is_speaking = true;
+        window.__voicx.renderTree();
+        window.__voicxPolish.recordNotification("warn", "insufficient permission: b_channel_modify");
+    });
+    for (const width of [1000, 640]) {
+        await page.setViewportSize({ width, height: width === 1000 ? 730 : 480 });
+        await page.screenshot({ path: testInfo.outputPath(`workspace-${width}.png`) });
+        if (width === 640) await page.locator("#workspace-sidebar-toggle").click();
+        await page.locator("#notif-bell").click();
+        const message = page.locator(".nc-text");
+        await expect(message).toHaveText("insufficient permission: b_channel_modify");
+        expect(await message.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
+        await auditAccessibility(page, `notifications ${width}`);
+        await page.screenshot({ path: testInfo.outputPath(`notifications-${width}.png`) });
+        await page.getByRole("button", { name: "Close notifications", exact: true }).click();
+    }
 });
 
 test("B3 restores the persisted member volume after a failed save", async ({ page }) => {
@@ -880,6 +935,9 @@ test("shows connection-quality sample age and clears stale RTT on disconnect", a
 
     const pill = page.locator("#conn-pill");
     await expect(pill).toHaveAttribute("data-quality", "good");
+    await expect(page.locator("#voice-latency")).toBeVisible();
+    await expect(page.locator("#voice-latency")).toHaveText("12 ms");
+    await expect(page.locator("#voice-latency")).toHaveAttribute("aria-label", "Server latency: 12 milliseconds, good");
     await expect(pill).toHaveAttribute(
         "title",
         /connection quality: good \(RTT 12 ms, sampled (?:just now|\d+ seconds? ago)\)/,
@@ -891,6 +949,56 @@ test("shows connection-quality sample age and clears stale RTT on disconnect", a
     });
     await expect(pill).not.toHaveAttribute("data-quality", /.+/);
     await expect(pill).toHaveAttribute("title", "Offline — no current RTT sample");
+    await expect(page.locator("#voice-latency")).toBeHidden();
+});
+
+test("latency reuses the five-second sampler, marks stale samples, and prevents overlapping requests", async ({ page }, testInfo) => {
+    await page.clock.install();
+    await page.evaluate(() => {
+        const v = window.__voicx;
+        v.state.myClientID = "client-a";
+        v.showWorkspace(false);
+        const app = window.go.main.App;
+        window.__latencyCalls = 0;
+        window.__latencyPending = false;
+        window.go.main.App = new Proxy(app, {
+            get(target, method) {
+                if (method === "GetClientInfo") return async () => {
+                    window.__latencyCalls++;
+                    if (window.__latencyPending) return await new Promise((resolve) => { window.__finishLatency = resolve; });
+                    return { ping_ms: 12 };
+                };
+                return target[method];
+            },
+        });
+        v.startQualitySampler();
+    });
+    const latency = page.locator("#voice-latency");
+    await expect(latency).toHaveText("12 ms");
+    await page.evaluate(() => {
+        window.__latencyMutations = 0;
+        new MutationObserver((records) => { window.__latencyMutations += records.length; })
+            .observe(document.getElementById("voice-latency"), { childList: true, attributes: true, subtree: true });
+    });
+    await page.clock.fastForward(4000);
+    expect(await page.evaluate(() => window.__latencyCalls)).toBe(1);
+    expect(await page.evaluate(() => window.__latencyMutations)).toBe(0);
+    await page.evaluate(() => { window.__latencyPending = true; });
+    await page.clock.fastForward(1000);
+    expect(await page.evaluate(() => window.__latencyCalls)).toBe(2);
+    await page.clock.fastForward(20000);
+    expect(await page.evaluate(() => window.__latencyCalls)).toBe(2);
+    await expect(latency).toHaveText("12 ms · stale");
+    await page.evaluate(() => window.__finishLatency({ ping_ms: 275 }));
+    await expect(latency).toHaveText("275 ms");
+    await expect(latency).toHaveAttribute("data-quality", "poor");
+    await page.setViewportSize({ width: 1000, height: 730 });
+    await page.locator("#voice-bar").screenshot({ path: testInfo.outputPath("latency-desktop.png") });
+    await page.setViewportSize({ width: 640, height: 480 });
+    await expect(latency).toBeVisible();
+    await page.locator("#voice-bar").screenshot({ path: testInfo.outputPath("latency-small.png") });
+    await page.evaluate(() => window.__voicx.stopQualitySampler());
+    await expect(latency).toBeHidden();
 });
 
 test("clears RTT while switching tabs and only samples a connected active tab", async ({ page }) => {

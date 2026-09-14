@@ -8,9 +8,9 @@
 package main
 
 import (
-	"bytes"
-	"encoding/binary"
+	_ "embed"
 	"log"
+	"runtime"
 	"sync"
 
 	"github.com/getlantern/systray"
@@ -271,50 +271,16 @@ func (a *App) TrayClearMentions() {
 	trayClearMentions()
 }
 
-// trayIcon builds a minimal 16x16 32bpp ICO at runtime (signal-green square
-// with a transparent border) so no asset file is needed.
+//go:embed build/windows/icon.ico
+var trayIconWindows []byte
+
+//go:embed frontend/public/branding/favicon-32.png
+var trayIconPNG []byte
+
+// trayIcon returns the embedded brand mark in the platform's native format.
 func trayIcon() []byte {
-	const size = 16
-	// BITMAPINFOHEADER with biHeight = 2*size (XOR + AND masks).
-	var buf bytes.Buffer
-	// ICONDIR.
-	_ = binary.Write(&buf, binary.LittleEndian, uint16(0)) // reserved
-	_ = binary.Write(&buf, binary.LittleEndian, uint16(1)) // type: icon
-	_ = binary.Write(&buf, binary.LittleEndian, uint16(1)) // count
-	// ICONDIRENTRY.
-	buf.WriteByte(size)                                     // width
-	buf.WriteByte(size)                                     // height
-	buf.WriteByte(0)                                        // colors (0 = >8bpp)
-	buf.WriteByte(0)                                        // reserved
-	_ = binary.Write(&buf, binary.LittleEndian, uint16(1))  // planes
-	_ = binary.Write(&buf, binary.LittleEndian, uint16(32)) // bpp
-	imageSize := uint32(40 + size*size*4 + size*size/8)
-	_ = binary.Write(&buf, binary.LittleEndian, imageSize)
-	_ = binary.Write(&buf, binary.LittleEndian, uint32(6+16)) // data offset
-	// BITMAPINFOHEADER.
-	_ = binary.Write(&buf, binary.LittleEndian, uint32(40))    // header size
-	_ = binary.Write(&buf, binary.LittleEndian, int32(size))   // width
-	_ = binary.Write(&buf, binary.LittleEndian, int32(size*2)) // height (x2)
-	_ = binary.Write(&buf, binary.LittleEndian, uint16(1))     // planes
-	_ = binary.Write(&buf, binary.LittleEndian, uint16(32))    // bpp
-	_ = binary.Write(&buf, binary.LittleEndian, uint32(0))     // BI_RGB
-	_ = binary.Write(&buf, binary.LittleEndian, uint32(size*size*4))
-	_ = binary.Write(&buf, binary.LittleEndian, int32(0))
-	_ = binary.Write(&buf, binary.LittleEndian, int32(0))
-	_ = binary.Write(&buf, binary.LittleEndian, uint32(0))
-	_ = binary.Write(&buf, binary.LittleEndian, uint32(0))
-	// Pixels, bottom-up BGRA: 2px transparent border, green core.
-	for y := size - 1; y >= 0; y-- {
-		for x := 0; x < size; x++ {
-			edge := x < 2 || y < 2 || x >= size-2 || y >= size-2
-			if edge {
-				buf.Write([]byte{0, 0, 0, 0})
-			} else {
-				buf.Write([]byte{0xa8, 0xe6, 0x2e, 0xff}) // #2ee6a8 as BGRA
-			}
-		}
+	if runtime.GOOS == "windows" {
+		return trayIconWindows
 	}
-	// AND mask (1bpp, rows padded to 32 bits): all zero (opaque where alpha=ff).
-	buf.Write(make([]byte, size*4))
-	return buf.Bytes()
+	return trayIconPNG
 }

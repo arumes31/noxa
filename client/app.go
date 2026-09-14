@@ -442,7 +442,11 @@ func (a *App) TrustServerFingerprint(addr, fp string) string {
 	if err != nil {
 		return "invalid fingerprint: " + err.Error()
 	}
-	if err := ks.trust(addr, normalized); err != nil {
+	trustAddr, _, err := serverAddress(addr)
+	if err != nil {
+		return err.Error()
+	}
+	if err := ks.trust(trustAddr, normalized); err != nil {
 		return err.Error()
 	}
 	return ""

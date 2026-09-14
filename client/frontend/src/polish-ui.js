@@ -6,6 +6,7 @@
 import { setIdleQualityOverride } from "./video.js";
 import { isActivationKey } from "./a11y.js";
 import { mountDialog } from "./modal.js";
+import { icon } from "./icons.js";
 
 const V = () => window.__voicx;
 const App = () => window.go.main.App;
@@ -290,6 +291,7 @@ function openNotifCenter() {
         for (const n of notifHistory) {
             const row = document.createElement("div");
             row.className = "nc-row";
+            row.classList.toggle("nc-warning", n.kind === "warn");
             row.innerHTML = `<span class="nc-kind mono"></span><span class="nc-text"></span><span class="nc-time mono"></span>`;
             row.querySelector(".nc-kind").textContent = n.kind;
             row.querySelector(".nc-text").textContent = n.text;
@@ -326,8 +328,8 @@ function openNotifCenter() {
         <div class="dlg notif-center">
             <div class="pm-head">
                 <h3>${"Notifications"}</h3>
-                <button class="icon-btn nc-clear" title="Clear all" aria-label="Clear all notifications">🗑</button>
-                <button class="icon-btn nc-close" title="Close" aria-label="Close notifications">✕</button>
+                <button class="icon-btn nc-clear" title="Clear all" aria-label="Clear all notifications">${icon("trash")}</button>
+                <button class="icon-btn nc-close" title="Close" aria-label="Close notifications">${icon("close")}</button>
             </div>
             <div class="nc-list"></div>
         </div>`;

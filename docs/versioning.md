@@ -1,16 +1,18 @@
 # Automatic versioning
 
-`VERSION` is the single release-line declaration. It contains exactly three
-numeric components, currently `0.4.0`. Builds never rewrite it.
+`VERSION` is the minimum version on the current major/minor release line. It
+contains exactly three numeric components, currently `0.4.3`. Builds never
+rewrite it; synchronized package declarations use this baseline.
 
 `go run ./cmd/version` projects that release line onto the current source:
 
 | Source state | Canonical version |
 | --- | --- |
-| Exact clean tag `v0.4.0` | `0.4.0` |
-| Clean untagged commit | `0.4.0-dev+g996a4344dcd6` |
-| Dirty tracked/untracked source | `0.4.0-dev+g996a4344dcd6.dirty.hb99ce64cf0ba` |
-| Source archive without Git | `0.4.0-dev+src.h<content-hash>` |
+| Exact clean tag `v0.4.3` | `0.4.3` |
+| Later stable patch tag `v0.4.4` | `0.4.4` |
+| Clean untagged commit | `0.4.3-dev+g996a4344dcd6` |
+| Dirty tracked/untracked source | `0.4.3-dev+g996a4344dcd6.dirty.hb99ce64cf0ba` |
+| Source archive without Git | `0.4.3-dev+src.h<content-hash>` |
 
 The commit and content fragments are deterministic 12-character hashes. A
 different commit or effective dirty tree produces a different identity;
@@ -61,30 +63,26 @@ deterministic `src.h<content-hash>` archive identity instead.
 
 ## Release rules
 
-Successful pushes to `main` automatically publish signed Windows client and
-Linux server prereleases named `v0.4.0-main.<CI run number>` (using the current
-`VERSION` base). Publication waits for lint, protocol, frontend, Windows client,
-server, and security checks. The build creates a local tag for consistent binary
-metadata; GitHub creates the remote tag at the exact tested commit only when the
-verified assets are published. Rerunning a CI run reuses its release identity.
+Successful pushes to `main` publish signed stable Windows client and Linux server
+releases marked **Latest**, starting with `v0.4.3`. Publication waits for lint,
+protocol, frontend, Windows client, server, and security checks. The next patch is
+one greater than the highest stable tag on the current release line, or `VERSION`
+if that baseline has not been released yet. Prerelease tags do not affect this
+sequence. A rerun of an already tagged commit reuses its stable release identity.
 
-Main prereleases are available on the GitHub Releases page. They do not become
-the latest stable release, and the client's stable updater does not offer them.
-The existing signing secret and public-key variable are required for both main
-prereleases and tagged releases; see [update signing](update-signing.md).
+The build creates a local tag for consistent binary metadata; GitHub creates the
+remote tag at the tested commit when verified assets are published. The existing
+signing secret and public-key variable remain required; see
+[update signing](update-signing.md). The stable client updater offers these releases.
 
-Create a clean `vMAJOR.MINOR.PATCH` tag whose numeric base matches `VERSION`.
-Prerelease tags such as `v0.4.0-rc.1` are accepted when their numeric base still
-matches. CI fetches complete tag history, validates the tag, and sends the same
-canonical version to the server, desktop client, and container image. Invalid,
-ambiguous, dirty, or mismatched release states fail before artifact publication.
+Manual tags must stay on the same major/minor line as `VERSION` and may not precede
+its patch. Multiple intentional tags at one commit, dirty checkouts, malformed
+versions, and a newer stable release line fail validation. Historical automatic
+`-main.N` tags yield to intentional stable tags at the same commit.
 
-After a stable release, change `VERSION` to the next intended release line and
-update the synchronized package declarations. `go run ./cmd/version -check`
-enforces the root version, Go fallback, npm/lock metadata, local Go-module
-placeholder, and Wails product version as one set.
-
-Wails desktop package metadata intentionally uses the stable three-part release
-line. Windows and macOS both impose numeric bundle-version constraints that
-cannot carry SemVer commit metadata. The in-app version, logs, health endpoint,
-metrics, updater, and server-info response use the full canonical identity.
+To start a new major/minor line, change `VERSION` and the synchronized package
+declarations. `go run ./cmd/version -check` verifies that the root version, Go
+fallback, npm/lock metadata, local Go-module placeholder, and source Wails product
+version agree on the baseline. CI stamps the selected release patch into Windows
+package resources before building; binary runtime versions and the signed manifest
+use the same release tag. Direct source builds retain their development identity.
