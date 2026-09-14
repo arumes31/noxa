@@ -586,6 +586,10 @@ func (c *Config) Validate() error {
 	if c.WebRTC.UDPAddr != "" {
 		if err := validateAddress("webrtc.udp_addr", c.WebRTC.UDPAddr); err != nil {
 			errs = append(errs, err)
+		} else if host, _, _ := net.SplitHostPort(c.WebRTC.UDPAddr); host != "" {
+			if ip := net.ParseIP(host); ip == nil || ip.To4() == nil || strings.Contains(host, ":") {
+				errs = append(errs, fmt.Errorf("webrtc.udp_addr must bind an IPv4 address, got %q", host))
+			}
 		}
 	}
 	if len(c.WebRTC.ExternalIPs) > 0 && c.WebRTC.UDPAddr == "" {

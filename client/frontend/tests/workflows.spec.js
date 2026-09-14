@@ -58,6 +58,67 @@ test("B3 keeps voice controls outside the Chat and Files panels @a11y", async ({
     await expect(page.locator("#chat-head-title")).toContainText("Mia");
 });
 
+test("B3 restores the persisted member volume after a failed save", async ({ page }) => {
+    await showB3Workspace(page);
+    await page.evaluate(() => {
+        const app = window.go.main.App;
+        window.go.main.App = new Proxy(app, {
+            get(target, method) {
+                if (method === "SaveSettings") return async (value) => {
+                    if (window.__failVolumeSave) return "disk full";
+                    window.__savedSettings = structuredClone(value);
+                    return "";
+                };
+                if (method === "GetSettings") return async () => structuredClone(window.__savedSettings);
+                return target[method];
+            },
+        });
+    });
+    await page.locator('#voice-participants [data-client-id="mia"]').click();
+    const slider = page.getByRole("slider", { name: "User volume" });
+    await slider.fill("75");
+    await expect.poll(() => page.evaluate(() => window.__voicx.state.settings.user_volumes?.["uid-mia"])).toBe(75);
+    await page.evaluate(() => { window.__failVolumeSave = true; });
+    await slider.fill("150");
+    await expect(page.locator("#member-action-error")).toHaveText("Could not save volume. Try again.");
+    await expect(slider).toHaveValue("75");
+    await expect(page.locator("#member-volume-value")).toHaveText("75%");
+    await expect.poll(() => page.evaluate(() => window.__savedSettings.user_volumes["uid-mia"])).toBe(75);
+});
+
+test("B3 ignores a volume save failure after selecting another member", async ({ page }) => {
+    await showB3Workspace(page);
+    await page.evaluate(() => {
+        const app = window.go.main.App;
+        window.go.main.App = new Proxy(app, {
+            get(target, method) {
+                if (method === "SaveSettings") return () => new Promise((resolve) => { window.__finishVolumeSave = resolve; });
+                return target[method];
+            },
+        });
+    });
+    await page.locator('#voice-participants [data-client-id="mia"]').click();
+    await page.getByRole("slider", { name: "User volume" }).fill("150");
+    await expect.poll(() => page.evaluate(() => typeof window.__finishVolumeSave)).toBe("function");
+    await page.locator('#voice-participants [data-client-id="alex"]').click();
+    await page.evaluate(() => window.__finishVolumeSave("disk full"));
+    await expect(page.locator("#client-card .card-nick")).toHaveText("Alex");
+    await expect(page.getByRole("slider", { name: "User volume" })).toHaveValue("100");
+    await expect(page.locator("#member-volume-value")).toHaveText("100%");
+    await expect(page.locator("#member-action-error")).toBeHidden();
+});
+
+test("B3 shows the details opener only while the pane is closed", async ({ page }) => {
+    await showB3Workspace(page);
+    const opener = page.locator("#details-toggle");
+    await expect(opener).toBeVisible();
+    await opener.click();
+    await expect(opener).toBeHidden();
+    await page.locator("#details-close").click();
+    await expect(opener).toBeVisible();
+    await expect(opener).toBeFocused();
+});
+
 test("B3 fits desktop and small windows without losing the composer or toolbar", async ({ page }) => {
     await showB3Workspace(page);
     for (const viewport of [{ width: 1440, height: 900 }, { width: 1000, height: 730 }, { width: 640, height: 480 }]) {

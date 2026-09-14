@@ -110,10 +110,13 @@ export function renderMember() {
         slider.oninput = () => { $("member-volume-value").textContent = slider.value + "%"; };
         slider.onchange = async () => {
             const error = $("member-action-error");
+            const priorVolume = Math.round(getUserVolume(client.unique_id) * 100);
             error.hidden = true;
             try { await setUserVolume(client.unique_id, Number(slider.value)); }
             catch {
                 if (memberKey !== key || !error.isConnected) return;
+                slider.value = priorVolume;
+                $("member-volume-value").textContent = priorVolume + "%";
                 error.textContent = "Could not save volume. Try again.";
                 error.hidden = false;
             }

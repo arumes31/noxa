@@ -87,7 +87,7 @@ body.details-collapsed #app-body { grid-template-columns: minmax(210px, var(--si
 #chat-topic { font-size: .93rem; color: var(--text-dim); margin: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #chat-head-actions { display: flex; align-items: center; gap: 3px; flex: none; }
 #chat-head-actions .icon-btn { background: transparent; border-color: transparent; width: 30px; height: 32px; }
-#details-toggle, body:not(.details-collapsed) #details-toggle { display: inline-flex; position: static; transform: none; writing-mode: horizontal-tb; padding: 0; box-shadow: none; }
+body.details-collapsed #details-toggle { display: inline-flex; position: static; transform: none; writing-mode: horizontal-tb; padding: 0; box-shadow: none; }
 #workspace-sidebar-toggle { display: none; }
 #channel-member-count { color: var(--text-dim); font-size: .85rem; }
 .channel-actions { position: relative; }

@@ -28,6 +28,9 @@ func TestWebRTCNetworkValidation(t *testing.T) {
 		ips        []string
 	}{
 		{"bad port", ":65536", nil},
+		{"IPv6 bind", "[::1]:12341", nil},
+		{"mapped IPv6 bind", "[::ffff:127.0.0.1]:12341", nil},
+		{"hostname bind", "localhost:12341", nil},
 		{"missing bind", "", []string{"203.0.113.10"}},
 		{"hostname", ":12341", []string{"example.com"}},
 		{"IPv6 unsupported", ":12341", []string{"::1"}},

@@ -1,6 +1,7 @@
 package webrtc
 
 import (
+	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -66,6 +67,17 @@ func NewWithNetwork(logger *zap.Logger, iceServers []string, enableAV1 bool, net
 	if logger == nil {
 		return nil, fmt.Errorf("webrtc: logger must not be nil")
 	}
+	if network.UDPAddr != "" {
+		host, _, err := net.SplitHostPort(network.UDPAddr)
+		if err != nil {
+			return nil, fmt.Errorf("webrtc: invalid shared UDP address: %w", err)
+		}
+		if host != "" {
+			if ip := net.ParseIP(host); ip == nil || ip.To4() == nil || strings.Contains(host, ":") {
+				return nil, fmt.Errorf("webrtc: shared UDP address must bind IPv4, got %q", host)
+			}
+		}
+	}
 	for _, address := range network.ExternalIPs {
 		if ip := net.ParseIP(address); ip == nil || ip.To4() == nil {
 			return nil, fmt.Errorf("webrtc: invalid external IPv4 address %q", address)
@@ -123,20 +135,28 @@ func NewWithNetwork(logger *zap.Logger, iceServers []string, enableAV1 bool, net
 		return nil, fmt.Errorf("webrtc: DTLS certificate has no fingerprint")
 	}
 
+	if len(network.ExternalIPs) > 0 {
+		if err := settingEngine.SetICEAddressRewriteRules(webrtc.ICEAddressRewriteRule{
+			External:        network.ExternalIPs,
+			AsCandidateType: webrtc.ICECandidateTypeHost,
+			Mode:            webrtc.ICEAddressRewriteReplace,
+		}); err != nil {
+			return nil, fmt.Errorf("webrtc: configuring ICE address rewriting: %w", err)
+		}
+		// Static host mappings replace STUN discovery for this server.
+		parsedICE = nil
+	}
 	var udpMux ice.UDPMux
 	if network.UDPAddr != "" {
-		conn, err := net.ListenPacket("udp4", network.UDPAddr)
+		var listenConfig net.ListenConfig
+		// Construction has no caller context; Close owns the socket lifetime.
+		conn, err := listenConfig.ListenPacket(context.Background(), "udp4", network.UDPAddr)
 		if err != nil {
 			return nil, fmt.Errorf("webrtc: listening on shared UDP address: %w", err)
 		}
 		udpMux = webrtc.NewICEUDPMux(nil, conn)
 		settingEngine.SetICEUDPMux(udpMux)
 		settingEngine.SetNetworkTypes([]webrtc.NetworkType{webrtc.NetworkTypeUDP4})
-	}
-	if len(network.ExternalIPs) > 0 {
-		settingEngine.SetNAT1To1IPs(network.ExternalIPs, webrtc.ICECandidateTypeHost)
-		// Static host mappings replace STUN discovery for this server.
-		parsedICE = nil
 	}
 	api := webrtc.NewAPI(
 		webrtc.WithMediaEngine(mediaEngine),

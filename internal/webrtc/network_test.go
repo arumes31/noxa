@@ -1,6 +1,7 @@
 package webrtc
 
 import (
+	"context"
 	"net"
 	"strings"
 	"testing"
@@ -57,7 +58,8 @@ func TestSharedUDPPortCandidatesAndCleanup(t *testing.T) {
 	if err := e.Close(); err != nil {
 		t.Fatal(err)
 	}
-	conn, err := net.ListenPacket("udp4", addr)
+	var listenConfig net.ListenConfig
+	conn, err := listenConfig.ListenPacket(context.Background(), "udp4", addr)
 	if err != nil {
 		t.Fatalf("shared UDP socket was not released: %v", err)
 	}
@@ -67,12 +69,31 @@ func TestSharedUDPPortCandidatesAndCleanup(t *testing.T) {
 }
 
 func TestSharedUDPPortBindFailure(t *testing.T) {
-	conn, err := net.ListenPacket("udp4", "127.0.0.1:0")
+	var listenConfig net.ListenConfig
+	conn, err := listenConfig.ListenPacket(context.Background(), "udp4", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer conn.Close()
+	defer func() {
+		if err := conn.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	if _, err := NewWithNetwork(testLogger(), nil, false, NetworkConfig{UDPAddr: conn.LocalAddr().String()}); err == nil {
 		t.Fatal("expected occupied UDP port to fail startup")
+	}
+}
+
+func TestSharedUDPAddressValidation(t *testing.T) {
+	for _, addr := range []string{"[::1]:12341", "[::ffff:127.0.0.1]:12341", "localhost:12341", "invalid"} {
+		t.Run(addr, func(t *testing.T) {
+			e, err := NewWithNetwork(testLogger(), nil, false, NetworkConfig{UDPAddr: addr})
+			if err == nil {
+				if closeErr := e.Close(); closeErr != nil {
+					t.Error(closeErr)
+				}
+				t.Fatal("expected invalid shared UDP address to fail startup")
+			}
+		})
 	}
 }
