@@ -1,8 +1,6 @@
 <div align="center">
 
-<img src="client/frontend/public/branding/logo.png" alt="VoicX logo" width="160" height="160" />
-
-# VoicX
+# 🎙️ VoicX
 
 **Next-Generation High-Performance Real-Time Communication Platform**
 
