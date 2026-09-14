@@ -153,6 +153,7 @@ func exactVersionTag(runner gitRunner, base string) (string, error) {
 		return "", fmt.Errorf("reading git tags: %w", err)
 	}
 	tags := []string{}
+	mainTag := ""
 	for _, tag := range strings.Fields(output) {
 		normalized := normalizeVersion(tag)
 		if !strings.HasPrefix(tag, "v") {
@@ -165,6 +166,12 @@ func exactVersionTag(runner gitRunner, base string) (string, error) {
 		if tagBase != base {
 			return "", fmt.Errorf("release tag %q does not match VERSION %q", tag, base)
 		}
+		if run, automatic := strings.CutPrefix(normalized, base+"-main."); automatic && run != "" && strings.Trim(run, "0123456789") == "" {
+			if mainTag == "" || Compare(tag, mainTag) {
+				mainTag = tag
+			}
+			continue
+		}
 		tags = append(tags, tag)
 	}
 	if len(tags) > 1 {
@@ -173,7 +180,8 @@ func exactVersionTag(runner gitRunner, base string) (string, error) {
 	if len(tags) == 1 {
 		return tags[0], nil
 	}
-	return "", nil
+	// An intentional release tag takes precedence over automatic main snapshots.
+	return mainTag, nil
 }
 
 func dirtyFingerprint(root string, runner gitRunner) (string, error) {
