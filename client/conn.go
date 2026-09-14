@@ -42,7 +42,8 @@ func (s wailsSink) Emit(name string, payload any) {
 
 // connManager owns the control-channel connection and its read loop.
 type connManager struct {
-	sink eventSink
+	sink      eventSink
+	lookupSRV srvLookup // nil uses the system resolver; injectable for DNS tests
 
 	// tabID identifies the owning server tab (281). Empty means the legacy
 	// single-connection manager (tests, headless tools): events go out under
@@ -178,12 +179,12 @@ func (m *connManager) identity() (*identity, error) {
 	return id, nil
 }
 
-// dialTransport dials the control channel with TLS and verifies the
+// dialEndpoint dials the control channel with TLS and verifies the
 // certificate fingerprint against the TOFU store: first-seen servers are
 // accepted and pinned; a changed fingerprint fails hard
 // (errFingerprintMismatch). When the server does not speak TLS, it falls
 // back to plaintext only if allowPlaintext is set.
-func (m *connManager) dialTransport(addr string) (net.Conn, error) {
+func (m *connManager) dialEndpoint(ctx context.Context, addr, trustAddr string) (net.Conn, error) {
 	m.mu.Lock()
 	ks := m.knownServers
 	// A failed redial must not leave certificate metadata from an earlier
@@ -199,7 +200,7 @@ func (m *connManager) dialTransport(addr string) (net.Conn, error) {
 	canonicalAddr := ""
 	if ks != nil {
 		var err error
-		canonicalAddr, err = normalizeServerAddr(addr)
+		canonicalAddr, err = normalizeServerAddr(trustAddr)
 		if err != nil {
 			return nil, trustStoreUnavailable("normalize server address %q: %v", addr, err)
 		}
@@ -244,7 +245,7 @@ func (m *connManager) dialTransport(addr string) (net.Conn, error) {
 		NetDialer: &net.Dialer{Timeout: 5 * time.Second},
 		Config:    tlsConf,
 	}
-	conn, err := dialer.DialContext(context.Background(), "tcp", addr)
+	conn, err := dialer.DialContext(ctx, "tcp", addr)
 	if err == nil {
 		if ks != nil && firstSeen {
 			if err := ks.trust(canonicalAddr, fingerprint); err != nil {
@@ -298,7 +299,7 @@ func (m *connManager) dialTransport(addr string) (net.Conn, error) {
 	m.certNotAfter = time.Time{}
 	m.certValidityTrusted = false
 	m.mu.Unlock()
-	return (&net.Dialer{Timeout: 5 * time.Second}).DialContext(context.Background(), "tcp", addr)
+	return (&net.Dialer{Timeout: 5 * time.Second}).DialContext(ctx, "tcp", addr)
 }
 
 // securitySnapshot reports how the current connection is secured, for

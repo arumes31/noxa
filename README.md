@@ -1,6 +1,8 @@
 <div align="center">
 
-# 🎙️ VoicX
+<img src="client/frontend/public/branding/logo.png" alt="VoicX logo" width="160" height="160" />
+
+# VoicX
 
 **Next-Generation High-Performance Real-Time Communication Platform**
 
@@ -247,6 +249,34 @@ VoicX can be configured via environment variables or a YAML configuration file (
 Use secret injection for the override; it accepts either a single base64 32-byte
 key or a newline-separated `id:base64` key ring for key rotation.
 
+### Join by hostname with DNS SRV
+
+The desktop client accepts a hostname without a port in joins and bookmarks.
+Publish an SRV record for service `voicx`, protocol `tcp`, pointing to the
+server's **control TCP port** (including any externally mapped port):
+
+```dns
+_voicx._tcp.voice.example.com. 3600 IN SRV 0 5 23456 node.example.com.
+node.example.com.             3600 IN A   203.0.113.10
+```
+
+Users enter `voice.example.com` to connect to `node.example.com:23456`.
+The target must have an A and/or AAAA record. Lower priorities are tried first;
+weights distribute the initial choice among targets with equal priority.
+Unreachable targets are retried in resolver order within a 15-second connection
+budget. Authentication and certificate trust failures stop the connection.
+
+An explicit port, such as `voice.example.com:23456`, bypasses SRV. With no SRV
+record, the client uses the entered hostname on port `12333`. IP literals also
+use `12333` when their port is omitted. DNS failures are reported; an SRV target
+of `.` declares the service unavailable. SRV lookups time out after 5 seconds.
+Bookmarks retain the entered hostname and resolve it again on reconnect.
+Certificate pins stay tied to that hostname (with default port `12333`), so
+changing the SRV target does not bypass an existing pin.
+
+This uses standard [DNS SRV records (RFC 2782)](https://www.rfc-editor.org/rfc/rfc2782)
+and Go's [priority/weight-ordered SRV resolver](https://pkg.go.dev/net#Resolver.LookupSRV).
+
 ### Logging
 
 Production logging uses Zap sampling: for each repeated message in a sampling
@@ -345,6 +375,49 @@ voicx/
 ├── docker-compose.yml          # Production Docker stack
 └── README.md                   # System documentation
 ```
+
+---
+
+## Branding assets
+
+The transparent VoicX logo is used on the login screen, in the application menu,
+and at the top of this README. The original turquoise artwork is preserved;
+the checkerboard background has been removed from the source JPEG.
+
+| Asset | Location |
+| :--- | :--- |
+| Transparent logo (732 × 732) | [`client/frontend/public/branding/logo.png`](client/frontend/public/branding/logo.png) |
+| Browser favicon (16–256 px) | [`client/frontend/public/favicon.ico`](client/frontend/public/favicon.ico) |
+| PNG icons (32, 180, 192, 512 px) | [`client/frontend/public/branding/`](client/frontend/public/branding/) |
+| Desktop app icon (1024 × 1024) | [`client/build/appicon.png`](client/build/appicon.png) |
+| Windows app and installer icon | [`client/build/windows/icon.ico`](client/build/windows/icon.ico) |
+
+The system tray embeds the same mark (ICO on Windows, PNG on macOS/Linux).
+The frontend includes the favicon and Apple touch icon links. Vite copies the
+public assets into the frontend build; Wails uses the desktop assets when the
+application is rebuilt. Keep the transparent PNG as the branding source and
+resize it when replacing icons, rather than converting it back to JPEG.
+
+---
+
+## Branding assets
+
+The transparent VoicX logo is used on the login screen, in the application menu,
+and at the top of this README. The original turquoise artwork is preserved;
+the checkerboard background has been removed from the source JPEG.
+
+| Asset | Location |
+| :--- | :--- |
+| Transparent logo (732 × 732) | [`client/frontend/public/branding/logo.png`](client/frontend/public/branding/logo.png) |
+| Browser favicon (16–256 px) | [`client/frontend/public/favicon.ico`](client/frontend/public/favicon.ico) |
+| PNG icons (32, 180, 192, 512 px) | [`client/frontend/public/branding/`](client/frontend/public/branding/) |
+| Desktop app icon (1024 × 1024) | [`client/build/appicon.png`](client/build/appicon.png) |
+| Windows app and installer icon | [`client/build/windows/icon.ico`](client/build/windows/icon.ico) |
+
+The frontend includes the favicon and Apple touch icon links. Vite copies the
+public assets into the frontend build; Wails uses the desktop assets when the
+application is rebuilt. Keep the transparent PNG as the branding source and
+resize it when replacing icons, rather than converting it back to JPEG.
 
 ---
 
