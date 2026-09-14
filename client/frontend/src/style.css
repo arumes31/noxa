@@ -80,7 +80,6 @@ body {
 }
 .login-card.in { opacity: 1; transform: translateY(0); }
 .login-card .wordmark { margin: 0; font-size: 2.4286rem; }
-.tagline { margin: -8px 0 6px; color: var(--text-dim); font-size: 0.9286rem; }
 .login-card label {
     display: flex; flex-direction: column; gap: 5px;
     font-size: 0.7857rem; font-weight: 600; letter-spacing: .08em; color: var(--text-dim);
@@ -1263,7 +1262,7 @@ mark { background: var(--warn); color: #3a2a05; border-radius: 2px; padding: 0 1
 .pm-head h3 { margin: 0; }
 .pm-close { flex: none; }
 
-.pm-tabs { display: flex; gap: 4px; margin: 10px 0; border-bottom: 1px solid var(--border); }
+.pm-tabs { display: flex; flex-wrap: wrap; gap: 4px; margin: 10px 0; border-bottom: 1px solid var(--border); }
 .pm-tabs button {
     background: none; border: none; color: var(--text-dim); cursor: pointer;
     font: 600 0.8571rem var(--font-body); letter-spacing: 0.04em; text-transform: uppercase;
@@ -1277,6 +1276,14 @@ mark { background: var(--warn); color: #3a2a05; border-radius: 2px; padding: 0 1
 .pm-right { flex: 1; display: flex; flex-direction: column; gap: 8px; min-height: 0; }
 .pm-right-head { display: flex; gap: 6px; }
 .pm-right-head .pm-filter { flex: 1; }
+.pm-admins { display: grid; gap: 14px; padding: 14px; }
+.pm-admins h4, .pm-admins p { margin: 0; }
+.pm-admins p { color: var(--text-dim); line-height: 1.5; }
+.pm-admins .dlg-buttons { margin: 0; justify-content: flex-start; flex-wrap: wrap; }
+.pm-admin-list { min-width: 0; overflow-x: auto; }
+.pm-admin-table { width: 100%; table-layout: fixed; }
+.pm-admin-table td { overflow-wrap: anywhere; }
+.pm-admin-table th:last-child { width: 80px; }
 
 .pm-actions { display: flex; flex-wrap: wrap; gap: 4px; }
 .pm-actions button {

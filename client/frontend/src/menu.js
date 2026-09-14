@@ -230,7 +230,6 @@ async function connectBookmark(b) {
     $("login-addr").value = b.addr;
     // (334) per-server nickname override applies at connect.
     $("login-nick").value = b.nickname_override || b.nickname;
-    $("login-password").value = "";
     $("login-serverpw").value = "";
     state.lastConnect = null;
     V().showLogin();
@@ -238,7 +237,7 @@ async function connectBookmark(b) {
     // connect must carry the bookmark name to stay identifiable. Stashed
     // after showLogin, which drops the previous login's stash.
     state.pendingBookmark = { name: b.name, addr: b.addr };
-    toast("bookmark loaded — enter password to connect");
+    toast("bookmark loaded — enter the server password if required, then connect");
 }
 
 // sortedBookmarks returns bookmarks grouped by folder, ordered within (284).
@@ -432,6 +431,7 @@ export function initMenu() {
     const connections = buildMenu(t("menu.connections"), [
         menuAction(t("menu.connect"), () => V().showLogin()),
         menuAction(t("menu.disconnect"), () => V().disconnect()),
+        menuAction("Server information", () => window.__voicxMeta.openServerInfo()),
         divider(),
         menuAction(t("menu.quit"), () => window.runtime.Quit()),
     ]);

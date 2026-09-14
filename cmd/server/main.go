@@ -759,6 +759,7 @@ func run() (retErr error) {
 		Complaints:         dbStore,
 		Chat:               dbStore,
 		Groups:             dbStore,
+		ServerAdmins:       dbStore,
 		BanAdmin:           dbStore,
 		Metrics:            m,
 		LoginLimiter:       loginLimiter,

@@ -36,6 +36,60 @@ func TestReactionCacheExpiresAndIsBounded(t *testing.T) {
 	}
 }
 
+func TestToggleReaction(t *testing.T) {
+	s := testScratchStore(t)
+	if err := s.Migrate(); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	ctx := t.Context()
+	for _, tc := range []struct {
+		name     string
+		existing bool
+	}{
+		{name: "add"},
+		{name: "remove existing", existing: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			id, _, err := s.StoreChatMessage(ctx, 0, "author", "author", sealTest(t, testScopeKey(11), "react to me"), 1, 0, "")
+			if err != nil {
+				t.Fatalf("StoreChatMessage: %v", err)
+			}
+			const emoji = "👍"
+			if tc.existing {
+				if _, err := s.DB().ExecContext(ctx, `INSERT INTO chat_reactions (message_id, unique_id, emoji) VALUES ($1, $2, $3)`, id, "reader", emoji); err != nil {
+					t.Fatalf("seeding existing reaction: %v", err)
+				}
+			}
+			// Prime the cache so both operations must replace stale counts.
+			if _, err := s.Reactions(ctx, id); err != nil {
+				t.Fatalf("Reactions before toggle: %v", err)
+			}
+			counts, added, err := s.ToggleReaction(ctx, id, "reader", emoji)
+			if err != nil {
+				t.Fatalf("ToggleReaction: %v", err)
+			}
+			wantCount := 1
+			if tc.existing {
+				wantCount = 0
+			}
+			if added == tc.existing || counts[emoji] != wantCount {
+				t.Fatalf("toggle = %v, added %v; want count %d, added %v", counts, added, wantCount, !tc.existing)
+			}
+			var storedCount int
+			if err := s.DB().QueryRowContext(ctx, `SELECT COUNT(*) FROM chat_reactions WHERE message_id = $1 AND unique_id = $2 AND emoji = $3`, id, "reader", emoji).Scan(&storedCount); err != nil {
+				t.Fatalf("reading stored reaction: %v", err)
+			}
+			if storedCount != wantCount {
+				t.Fatalf("stored count = %d, want %d", storedCount, wantCount)
+			}
+			cached, err := s.Reactions(ctx, id)
+			if err != nil || cached[emoji] != wantCount {
+				t.Fatalf("Reactions after toggle = %v, %v; want count %d", cached, err, wantCount)
+			}
+		})
+	}
+}
+
 // testScopeKey is deterministic per fill byte so a test can seal and open
 // without a key manager.
 func testScopeKey(fill byte) [32]byte {

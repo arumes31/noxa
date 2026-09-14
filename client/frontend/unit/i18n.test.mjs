@@ -79,7 +79,7 @@ describe("language selection and translation", () => {
 describe("applyStaticLabels", () => {
     it("updates the login labels, button, and recent-servers heading", () => {
         setLanguage("de");
-        const labels = Array.from({ length: 4 }, () => ({ firstChild: { textContent: "old" } }));
+        const labels = Array.from({ length: 3 }, () => ({ firstChild: { textContent: "old" } }));
         const connect = { textContent: "old" };
         const paneHeads = [{ textContent: "other" }, { textContent: "old" }];
         globalThis.document = {
@@ -97,7 +97,7 @@ describe("applyStaticLabels", () => {
 
         assert.deepEqual(
             labels.map((label) => label.firstChild.textContent),
-            ["SERVER ", "SPITZNAME ", "PASSWORT ", "SERVER-PASSWORT "],
+            ["SERVER ", "SPITZNAME ", "SERVER-PASSWORT "],
         );
         assert.equal(connect.textContent, "VERBINDEN");
         assert.equal(paneHeads[1].textContent, "LETZTE SERVER");

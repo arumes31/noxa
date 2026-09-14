@@ -162,6 +162,8 @@ func TestMessageTypeString(t *testing.T) {
 		"PreKeyPublish",
 		"PreKeyQuery",
 		"PreKeyBundle",
+		"ServerAdminList",
+		"ServerAdmins",
 	}
 
 	for i, want := range names {

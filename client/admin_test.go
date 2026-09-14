@@ -11,6 +11,10 @@ func TestAdministrativeBindings(t *testing.T) {
 	app, _ := newPipedApp(t, func(frame *netproto.Frame) (netproto.MessageType, any, bool) {
 		frames <- frame
 		switch netproto.MessageType(frame.Type) {
+		case netproto.MsgServerAdminList:
+			return netproto.MsgServerAdmins, netproto.ServerAdmins{
+				Entries: []netproto.ServerAdminEntry{{UniqueID: "offline-admin", Nickname: "Offline Admin"}},
+			}, true
 		case netproto.MsgComplaintList, netproto.MsgComplaintClear:
 			return netproto.MsgComplaints, netproto.Complaints{
 				Entries: []netproto.ComplaintEntry{{TargetUniqueID: "target", FromUniqueID: "sender", Reason: "spam"}},
@@ -23,6 +27,12 @@ func TestAdministrativeBindings(t *testing.T) {
 			return 0, nil, false
 		}
 	})
+
+	admins, err := app.ServerAdminList()
+	if err != nil || len(admins.Entries) != 1 || admins.Entries[0].UniqueID != "offline-admin" {
+		t.Fatalf("ServerAdminList = %+v, %v", admins, err)
+	}
+	nextFrame(t, frames, netproto.MsgServerAdminList)
 
 	complaints, err := app.ComplaintList()
 	if err != nil || len(complaints.Entries) != 1 || complaints.Entries[0].Reason != "spam" {
@@ -74,6 +84,9 @@ func TestAdministrativeBindings(t *testing.T) {
 	}
 
 	app.cmLoad().disconnect()
+	if _, err := app.ServerAdminList(); err == nil {
+		t.Fatal("ServerAdminList succeeded after disconnect")
+	}
 	if _, err := app.ComplaintList(); err == nil {
 		t.Fatal("ComplaintList succeeded after disconnect")
 	}

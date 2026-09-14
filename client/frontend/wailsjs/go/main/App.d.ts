@@ -257,6 +257,8 @@ export function SendICECandidate(arg1:string,arg2:string,arg3:number):Promise<vo
 
 export function SendTyping(arg1:number,arg2:string):Promise<string>;
 
+export function ServerAdminList():Promise<netproto.ServerAdmins>;
+
 export function ServerBannerGet():Promise<netproto.ServerBannerData>;
 
 export function ServerBannerSet(arg1:string):Promise<string>;
@@ -294,6 +296,8 @@ export function SetScreenShareQuality(arg1:boolean,arg2:number):Promise<string>;
 export function SetServerConfig(arg1:netproto.ServerConfig):Promise<netproto.ServerConfig>;
 
 export function SetStatus(arg1:string,arg2:string):Promise<string>;
+
+export function SetTrayVoiceState(arg1:boolean,arg2:boolean,arg3:boolean):Promise<void>;
 
 export function SetVideoQuality(arg1:string):Promise<string>;
 

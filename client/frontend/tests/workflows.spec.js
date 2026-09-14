@@ -1,5 +1,195 @@
 import { expect, test } from "@playwright/test";
 
+test("Permission Manager lists offline admins and creates an admin key", async ({ page }, testInfo) => {
+    await showB3Workspace(page);
+    await page.evaluate(() => {
+        window.__voicx.state.isAdmin = true;
+        const app = window.go.main.App;
+        window.go.main.App = new Proxy(app, { get(target, method) {
+            if (method === "ServerAdminList") return async () => ({ entries: [
+                { unique_id: "uid-daniel", nickname: "Daniel" },
+                { unique_id: "uid-offline", nickname: "Offline Admin <img>" },
+            ] });
+            if (method === "TokenList") return async () => ({ entries: [] });
+            if (method === "TokenAdd") return async (...args) => {
+                (window.__adminKeyCalls ||= []).push(args);
+                await new Promise(resolve => { window.__finishAdminKey = resolve; });
+                return { entries: [{ token: "new-admin-key", group_id: 0, description: args[2] }] };
+            };
+            return target[method];
+        } });
+        window.__voicxPerms.openPermissionManager();
+    });
+    const manager = page.getByRole("dialog", { name: "Permission Manager", exact: true });
+    await manager.getByRole("button", { name: "Server Admins", exact: true }).click();
+    await expect(manager.getByText("Offline Admin <img>", { exact: true })).toBeVisible();
+    await expect(manager.getByText("uid-offline", { exact: true })).toBeVisible();
+    await expect(manager.getByText("Offline", { exact: true })).toBeVisible();
+    await expect(manager.locator(".pm-admin-list img")).toHaveCount(0);
+    for (const viewport of [{ width: 1004, height: 768 }, { width: 640, height: 480 }]) {
+        await page.setViewportSize(viewport);
+        await expect(manager.getByRole("button", { name: "Create admin key…", exact: true })).toBeInViewport();
+        await manager.screenshot({ path: testInfo.outputPath(`admins-${viewport.width}.png`) });
+    }
+    await manager.getByRole("button", { name: "Create admin key…", exact: true }).click();
+    const keys = page.getByRole("dialog", { name: "Admin Keys", exact: true });
+    await expect(keys.getByRole("combobox", { name: "Channel restriction" })).toHaveCount(0);
+    await keys.getByPlaceholder("note (optional)").fill("Second administrator");
+    await keys.getByRole("button", { name: "+ Create key", exact: true }).click();
+    await expect(keys.getByRole("button", { name: "+ Create key", exact: true })).toBeDisabled();
+    expect(await page.evaluate(() => window.__adminKeyCalls)).toEqual([[0, 0, "Second administrator"]]);
+    await page.evaluate(() => window.__finishAdminKey());
+    await expect(page.getByText("new-admin-key", { exact: true }).first()).toBeVisible();
+});
+
+test("Permission Manager hides the admin roster from non-admins", async ({ page }) => {
+    await page.evaluate(() => window.__voicxPerms.openPermissionManager());
+    await expect(page.getByRole("button", { name: "Server Admins", exact: true })).toHaveCount(0);
+});
+
+test("Permission Manager shows a retryable error when the server lacks the admin roster", async ({ page }) => {
+    await page.evaluate(() => {
+        window.__voicx.state.isAdmin = true;
+        const app = window.go.main.App;
+        window.go.main.App = new Proxy(app, { get(target, method) {
+            if (method === "ServerAdminList") return async () => { throw new Error("unsupported message"); };
+            return target[method];
+        } });
+        window.__voicxPerms.openPermissionManager();
+    });
+    await page.getByRole("button", { name: "Server Admins", exact: true }).click();
+    await expect(page.getByText(/Could not load server admins/)).toBeVisible();
+    await expect(page.getByRole("button", { name: "Refresh admins", exact: true })).toBeEnabled();
+    await expect(page.getByRole("button", { name: "Create admin key…", exact: true })).toBeEnabled();
+});
+
+test("Permission Manager discards a late admin roster after switching tabs", async ({ page }) => {
+    await page.evaluate(() => {
+        window.__voicx.state.isAdmin = true;
+        const app = window.go.main.App;
+        window.go.main.App = new Proxy(app, { get(target, method) {
+            if (method === "ServerAdminList") return () => new Promise(resolve => { window.__finishAdmins = resolve; });
+            return target[method];
+        } });
+        window.__voicxPerms.openPermissionManager();
+    });
+    await page.getByRole("button", { name: "Server Admins", exact: true }).click();
+    await page.getByRole("button", { name: "Server Groups", exact: true }).click();
+    await page.evaluate(() => window.__finishAdmins({ entries: [{ unique_id: "old", nickname: "Stale Admin" }] }));
+    await expect(page.getByText("Stale Admin", { exact: true })).toHaveCount(0);
+});
+
+async function prepareServerInformation(page) {
+    await showB3Workspace(page);
+    await page.evaluate(() => {
+        window.__serverInfo = { name: "VoiCX community", version: "0.4.3", platform: "linux/amd64", uptime_seconds: 90061, clients_online: 4, max_clients: 64, channels_online: 3 };
+        const app = window.go.main.App;
+        window.go.main.App = new Proxy(app, { get(target, method) {
+            if (method === "ServerInfo") return async () => {
+                window.__calls.ServerInfo = (window.__calls.ServerInfo || 0) + 1;
+                return structuredClone(window.__serverInfo);
+            };
+            return target[method];
+        } });
+        window.runtime.ClipboardSetText = async (value) => { window.__copiedAddress = value; return true; };
+        window.__voicx.state.lastConnect = { addr: "voice.example:12333" };
+    });
+}
+
+test("server information opens from the name, Connections menu and latency with accessible traffic details @a11y", async ({ page }, testInfo) => {
+    await prepareServerInformation(page);
+    await page.setViewportSize({ width: 1004, height: 768 });
+    await page.evaluate(() => {
+        window.__voicx.state.pc = { getStats: async () => new Map([
+            ["in", { id: "in", type: "inbound-rtp", kind: "audio", packetsReceived: 990, packetsLost: 10, jitter: .004, bytesReceived: 2097152, timestamp: 1000 }],
+            ["out", { id: "out", type: "outbound-rtp", kind: "audio", packetsSent: 2000, bytesSent: 4194304, timestamp: 1000 }],
+        ]) };
+    });
+    await page.locator("#server-name").click();
+    const dialog = page.getByRole("dialog", { name: "Server information" });
+    await expect(dialog.locator('[data-stat="name"]')).toHaveText("VoiCX community");
+    await expect(dialog.locator('[data-stat="address"]')).toHaveText("voice.example:12333");
+    await expect(dialog.locator('[data-stat="platform"]')).toHaveText("linux/amd64");
+    await expect(dialog.locator('[data-stat="control-in"]')).toHaveText("2.00 KiB");
+    await expect(dialog.locator('[data-stat="control-out"]')).toHaveText("1.00 KiB");
+    await expect(dialog.locator('[data-stat="loss"]')).toHaveText("1.00 %");
+    await expect(dialog.locator('[data-stat="jitter"]')).toHaveText("4.0 ms");
+    await expect(dialog.locator('[data-stat="media-in"]')).toHaveText("2.00 MiB");
+    await expect(dialog.locator('[data-stat="rate-in"]')).toHaveText("—");
+    await dialog.getByRole("button", { name: "Copy server address" }).click();
+    expect(await page.evaluate(() => window.__copiedAddress)).toBe("voice.example:12333");
+    await auditAccessibility(page, "server information");
+    await dialog.locator(".server-info").screenshot({ path: testInfo.outputPath("server-information.png") });
+    await page.keyboard.press("Escape");
+    await expect(page.locator("#server-name")).toBeFocused();
+    await page.getByRole("menuitem", { name: "Connections", exact: true }).click();
+    await page.getByRole("menuitem", { name: "Server information", exact: true }).click();
+    await expect(dialog).toBeVisible();
+    await page.keyboard.press("Escape");
+    await page.evaluate(() => {
+        const button = document.getElementById("voice-latency");
+        button.hidden = false;
+        button.textContent = "12 ms";
+    });
+    await page.locator("#voice-latency").click();
+    await expect(dialog).toBeVisible();
+    await page.setViewportSize({ width: 420, height: 600 });
+    await expect(dialog.getByRole("button", { name: "Close", exact: true })).toBeInViewport();
+    expect(await dialog.locator(".server-info").evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
+    await dialog.locator(".server-info").screenshot({ path: testInfo.outputPath("server-information-small.png") });
+});
+
+test("server information suspends hidden polling, avoids overlapping calls and stops on close", async ({ page }) => {
+    await prepareServerInformation(page);
+    await page.clock.install();
+    await page.locator("#server-name").click();
+    const dialog = page.getByRole("dialog", { name: "Server information" });
+    await expect(dialog.locator('[data-stat="ping"]')).toHaveText("12 ms");
+    const calls = () => page.evaluate(() => window.__calls.GetClientInfo || 0);
+    const initial = await calls();
+    await page.clock.runFor(1000);
+    expect(await calls()).toBe(initial);
+    await page.evaluate(() => { window.__clientInfoGate = new Promise((resolve) => { window.__finishInfo = resolve; }); });
+    await page.clock.runFor(1000);
+    await expect.poll(calls).toBe(initial + 1);
+    await page.clock.runFor(10000);
+    expect(await calls()).toBe(initial + 1);
+    await page.evaluate(() => window.__finishInfo());
+    await page.evaluate(() => {
+        window.__testHidden = true;
+        Object.defineProperty(document, "hidden", { configurable: true, get: () => window.__testHidden });
+        document.dispatchEvent(new Event("visibilitychange"));
+    });
+    await page.clock.runFor(10000);
+    expect(await calls()).toBe(initial + 1);
+    await page.evaluate(() => { window.__testHidden = false; document.dispatchEvent(new Event("visibilitychange")); });
+    await expect.poll(calls).toBe(initial + 2);
+    await page.keyboard.press("Escape");
+    await page.clock.runFor(10000);
+    expect(await calls()).toBe(initial + 2);
+});
+
+test("server information handles older servers and discards late results after a tab reset", async ({ page }) => {
+    await prepareServerInformation(page);
+    await page.evaluate(() => {
+        delete window.__serverInfo.platform;
+        window.__clientInfoResponse = { ping_ms: -1 };
+    });
+    await page.locator("#server-name").click();
+    const dialog = page.getByRole("dialog", { name: "Server information" });
+    await expect(dialog.locator('[data-stat="platform"]')).toHaveText("Unavailable on this server");
+    for (const key of ["ping", "loss", "media-in", "control-in"]) await expect(dialog.locator(`[data-stat="${key}"]`)).toHaveText("—");
+    await page.keyboard.press("Escape");
+    await page.evaluate(() => { window.__clientInfoGate = new Promise((resolve) => { window.__finishInfo = resolve; }); });
+    await page.locator("#server-name").click();
+    await page.evaluate(() => { for (const cb of window.__events.tab_reset) cb("another-tab"); });
+    await expect(dialog).toHaveCount(0);
+    await page.evaluate(() => window.__finishInfo());
+    await expect(dialog).toHaveCount(0);
+    await page.evaluate(() => { window.__voicx.state.myClientID = "other-client"; window.__serverInfo.name = "Other server"; window.__voicxMeta.openServerInfo(); });
+    await expect(dialog.locator('[data-stat="name"]')).toHaveText("Other server");
+});
+
 async function showB3Workspace(page) {
     await page.evaluate(() => {
         const v = window.__voicx;
@@ -65,6 +255,37 @@ test("B3 shows your detected speech even when your own playback is muted or deaf
     await expect(self).not.toHaveClass(/speaking/);
     await page.locator("#voice-mute").click();
     await expect(self).toContainText("Microphone muted");
+});
+
+test("tray follows detected self speech, input/output mute, and voice teardown without polling", async ({ page }) => {
+    await showB3Workspace(page);
+    await page.evaluate(() => {
+        window.__voicx.state.pc = { close() {} };
+        window.__voicx.renderTree();
+        for (const cb of window.__events.event) cb(JSON.stringify({
+            type: "speaking_changed", data: { client_id: "daniel", speaking: true },
+        }));
+    });
+    const flags = () => page.evaluate(() => window.__callArgs.SetTrayVoiceState?.at(-1));
+    await expect.poll(flags).toEqual([true, false, false]);
+    const count = await page.evaluate(() => window.__calls.SetTrayVoiceState);
+    await page.evaluate(() => {
+        for (let i = 0; i < 20; i++) window.__voicx.renderTree();
+        for (const cb of window.__events.event) cb(JSON.stringify({
+            type: "speaking_changed", data: { client_id: "mia", speaking: false },
+        }));
+    });
+    expect(await page.evaluate(() => window.__calls.SetTrayVoiceState)).toBe(count);
+    await page.locator("#voice-deafen").click();
+    await expect.poll(flags).toEqual([true, false, true]);
+    await page.locator("#voice-mute").click();
+    await expect.poll(flags).toEqual([false, true, true]);
+    await page.locator("#voice-deafen").click();
+    await expect.poll(flags).toEqual([false, true, false]);
+    await page.locator("#voice-mute").click();
+    await expect.poll(flags).toEqual([true, false, false]);
+    await page.evaluate(() => window.__voicx.resetVoiceSession());
+    await expect.poll(flags).toEqual([false, false, false]);
 });
 
 test("B3 keeps voice controls outside the Chat and Files panels @a11y", async ({ page }) => {
@@ -515,6 +736,96 @@ test("mute control switches to an unmute affordance and back", async ({ page }) 
 
     await unmute.click();
     await expect(page.getByRole("button", { name: "Mute microphone" })).toHaveText("Mic on");
+});
+
+test("voice activation reopens after silence and keeps mute and PTT private", async ({ page }) => {
+    // Use real browser tracks: disabling a track must silence its consumers.
+    await page.locator("body").click({ position: { x: 1, y: 1 } });
+    await page.evaluate(async () => {
+        const v = window.__voicx;
+        const ctx = new AudioContext();
+        const oscillator = ctx.createOscillator();
+        const gain = ctx.createGain();
+        const output = ctx.createMediaStreamDestination();
+        oscillator.connect(gain).connect(output);
+        gain.gain.value = 0;
+        oscillator.start();
+        await ctx.resume();
+        window.__voiceSignal = { ctx, gain };
+        v.state.settings.activation_mode = "vad";
+        v.state.settings.ptt_release_delay_ms = 0;
+        v.state.settings.warn_muted_talking = false;
+        v.state.localStream = output.stream;
+        v.state.pttActive = false;
+        v.state.muted = false;
+        v.applyVoiceState();
+        v.startVADMonitor();
+        await v.state.voiceMonitorCtx.resume();
+    });
+    const transmitting = () => page.evaluate(() => window.__voicx.state.localStream.getAudioTracks()[0].enabled);
+    expect(await transmitting()).toBe(false);
+    for (let cycle = 0; cycle < 2; cycle++) {
+        await page.evaluate(() => { window.__voiceSignal.gain.gain.value = 0.5; });
+        await expect.poll(transmitting).toBe(true);
+        await page.evaluate(() => { window.__voiceSignal.gain.gain.value = 0; });
+        await expect.poll(transmitting).toBe(false);
+    }
+    await page.evaluate(() => {
+        window.__voicx.state.muted = true;
+        window.__voiceSignal.gain.gain.value = 0.5;
+        window.__voicx.applyVoiceState();
+    });
+    await expect.poll(() => page.evaluate(() => window.__voicx.state.pttActive)).toBe(true);
+    expect(await transmitting()).toBe(false);
+    await page.evaluate(() => {
+        const v = window.__voicx;
+        v.state.settings.activation_mode = "ptt";
+        v.state.muted = false;
+        v.setPTT(false);
+    });
+    expect(await transmitting()).toBe(false);
+    await page.evaluate(() => window.__voicx.setPTT(true));
+    expect(await transmitting()).toBe(true);
+    await page.evaluate(() => {
+        window.__voicx.resetVoiceSession();
+        return window.__voiceSignal.ctx.close();
+    });
+});
+
+test("voice monitor releases its local capture on restart and disconnect", async ({ page }) => {
+    const result = await page.evaluate(async () => {
+        const v = window.__voicx;
+        const inputCtx = new AudioContext();
+        const track = inputCtx.createMediaStreamDestination().stream.getAudioTracks()[0];
+        const clones = [];
+        const clone = track.clone.bind(track);
+        track.clone = () => {
+            const copy = clone();
+            clones.push(copy);
+            return copy;
+        };
+        v.state.localStream = new MediaStream([track]);
+        v.startVADMonitor();
+        const firstCtx = v.state.voiceMonitorCtx;
+        v.startVADMonitor();
+        const afterRestart = clones.map((copy) => copy.readyState);
+        const senderAfterRestart = track.readyState;
+        v.resetVoiceSession();
+        await inputCtx.close();
+        return {
+            afterRestart, senderAfterRestart,
+            afterDisconnect: clones.map((copy) => copy.readyState),
+            senderAfterDisconnect: track.readyState,
+            firstContext: firstCtx.state,
+            monitorContext: v.state.voiceMonitorCtx,
+            timer: v.state.vadMonitor,
+        };
+    });
+    expect(result).toEqual({
+        afterRestart: ["ended", "live"], senderAfterRestart: "live",
+        afterDisconnect: ["ended", "ended"], senderAfterDisconnect: "ended",
+        firstContext: "closed", monitorContext: null, timer: null,
+    });
 });
 
 test("retries a missing microphone without interrupting video or screen sharing", async ({ page }) => {
@@ -1057,7 +1368,7 @@ test("does not paint a completed login over a tab selected during finalization",
     });
     await page.locator("#login-addr").fill("new.example:12333");
     await page.locator("#login-nick").fill("Alice");
-    await page.locator("#login-password").fill("secret");
+    await page.locator("#login-serverpw").fill("secret");
     await page.getByRole("button", { name: "Connect" }).click();
     await expect.poll(() => page.evaluate(() => window.__calls.ClientID || 0)).toBeGreaterThan(0);
 
@@ -1074,7 +1385,7 @@ test("does not paint a completed login over a tab selected during finalization",
     await expect.poll(() => page.evaluate(() => window.__voicx.state.lastConnect?.addr))
         .toBe("other.example:12333");
     await expect(page.locator("#conn-pill")).not.toHaveText("new.example:12333");
-    expect(await page.evaluate(() => window.__voicx.state.tabConnects.get("new-tab")?.pw)).toBe("secret");
+    expect(await page.evaluate(() => window.__voicx.state.tabConnects.get("new-tab")?.spw)).toBe("secret");
 });
 
 test("rejects A-to-B-to-A identity results during login finalization", async ({ page }) => {
@@ -2739,6 +3050,60 @@ test("renders hostile update, permission, and image metadata as inert data", asy
     await expect(page.locator(".valid-avatar img")).toHaveAttribute("src", "data:image/png;base64,AAAA");
 });
 
+test("channel permissions show the channel join requirement and edit its real setting", async ({ page }, testInfo) => {
+    await page.evaluate(() => {
+        window.__voicx.showWorkspace(false);
+        window.__voicx.state.isAdmin = true;
+        for (const cb of window.__events.snapshot || []) cb(JSON.stringify({
+            root_channels: [
+                { ChannelID: 2, Name: "Member1", NeededJoinPower: 30, clients: [], children: [] },
+                { ChannelID: 3, Name: "Public", NeededJoinPower: 0, clients: [], children: [] },
+            ],
+        }));
+        // An old permission override must not mask the enforced channel setting.
+        window.__permEntries = { entries: [{ key: "i_channel_needed_join_power", value: 99, grant: 99 }] };
+        window.__voicxPerms.openPermissionManager();
+    });
+    const manager = page.getByRole("dialog", { name: "Permission Manager", exact: true });
+    await manager.getByRole("button", { name: "Channel", exact: true }).click();
+    await manager.locator(".pm-target", { hasText: "Member1" }).click();
+    await manager.getByPlaceholder("filter permissions…").fill("i_channel_needed_join_power");
+    const row = manager.locator(".pm-edit-grid tbody tr").filter({ has: page.locator("td.mono", { hasText: "i_channel_needed_join_power" }) });
+    await expect(row.locator("td").nth(1)).toHaveText("30");
+    await expect(row.locator("td").nth(2)).toHaveText("—");
+    await expect(row).toContainText("channel setting");
+    await manager.locator(".pm-target", { hasText: "Public" }).click();
+    await expect(row.locator("td").nth(1)).toHaveText("0");
+    await manager.locator(".pm-target", { hasText: "Member1" }).click();
+    await row.click();
+    await expect(manager.locator(".pe-set, .pe-unset, .pe-grant")).toHaveCount(0);
+    await manager.screenshot({ path: testInfo.outputPath("channel-join-permission.png") });
+    await manager.getByRole("button", { name: "Edit channel…", exact: true }).click();
+    const editor = page.getByRole("dialog", { name: "Edit channel", exact: true });
+    await expect(editor.getByLabel("Required join power", { exact: true })).toHaveValue("30");
+    await expect(editor.getByLabel("Required join power", { exact: true })).toBeFocused();
+    await editor.getByLabel("Required join power", { exact: true }).fill("40");
+    await editor.getByRole("button", { name: "Save changes" }).click();
+    await expect(editor).toHaveCount(0);
+    expect(await page.evaluate(() => window.__callArgs.ChannelEditTree[0])).toEqual([2, "join_power", 40, 0, 0, false]);
+    expect(await page.evaluate(() => window.__calls.PermSet || 0)).toBe(0);
+    await page.evaluate(() => {
+        for (const cb of window.__events.event || []) cb(JSON.stringify({
+            type: "channel_updated", data: { channel_id: 2, needed_join_power: 40 },
+        }));
+    });
+    await expect(row.locator("td").nth(1)).toHaveText("40");
+    await page.evaluate(() => {
+        window.__voicx.state.isAdmin = false;
+        window.__voicx.state.myPerms = new Map([["b_permission_manage", { value: 1 }]]);
+        for (const cb of window.__events.event || []) cb(JSON.stringify({
+            type: "channel_updated", data: { channel_id: 2, needed_join_power: 40, inherit_permissions: true },
+        }));
+    });
+    await expect(manager.getByText(/Parent join-power requirements also apply/)).toBeVisible();
+    await expect(manager.getByRole("button", { name: "Edit channel…", exact: true })).toBeDisabled();
+});
+
 test("renders editable permission keys as inert text", async ({ page }) => {
     const key = '<span data-permission-key-injection="true">unexpected node</span>';
     await page.evaluate(({ permissionKey }) => {
@@ -3168,15 +3533,21 @@ test("keeps global announcements available in Files and restores chat for compac
     await expectRecoveredFocus();
 });
 
-test("moves focus explicitly between login and the connected workspace", async ({ page }) => {
+test("moves focus explicitly between login and the connected workspace", async ({ page }, testInfo) => {
     await expect(page.locator("#login-addr")).toBeFocused();
     await expect(page.locator(".skip-link")).toBeHidden();
     await expect(page.locator("#login-serverpw")).toHaveAttribute("autocomplete", "off");
-    await expect(page.locator("#login-password")).toHaveAttribute("autocomplete", "current-password");
+    await expect(page.locator(".login-card input[type=password]")).toHaveCount(1);
+    await expect(page.locator("#login-serverpw")).toHaveAccessibleName("SERVER PASSWORD");
+    await page.locator(".login-card").screenshot({ path: testInfo.outputPath("login.png") });
 
     await page.locator("#login-nick").fill("Alice");
+    await page.locator("#login-serverpw").fill("server-secret");
     await page.getByRole("button", { name: "Connect" }).click();
     await expect(page.locator("#center")).toBeFocused();
+    expect(await page.evaluate(() => window.__callArgs.ConnectBookmarkTabWithID[0])).toEqual([
+        "", "127.0.0.1:12333", "Alice", "", "server-secret",
+    ]);
     await expect(page.locator("#app")).toHaveAttribute("aria-hidden", "false");
     await expect(page.locator(".skip-link")).toBeAttached();
 
@@ -3520,13 +3891,13 @@ test("Escape runs polling-dialog cleanup and allows stateful dialogs to reopen",
     await page.keyboard.press("Escape");
 
     await page.evaluate(() => window.__voicxMeta.openStatsPage());
-    await expect(page.getByRole("dialog", { name: "Connection stats" })).toBeVisible();
+    await expect(page.getByRole("dialog", { name: "Server information" })).toBeVisible();
     await page.keyboard.press("Escape");
     const statsCalls = await page.evaluate(() => window.__calls.GetClientInfo || 0);
     await page.waitForTimeout(1200);
     expect(await page.evaluate(() => window.__calls.GetClientInfo || 0)).toBe(statsCalls);
     await page.evaluate(() => window.__voicxMeta.openStatsPage());
-    await expect(page.getByRole("dialog", { name: "Connection stats" })).toBeVisible();
+    await expect(page.getByRole("dialog", { name: "Server information" })).toBeVisible();
 });
 
 test("keeps onboarding semantics and focus when each step rerenders", async ({ page }) => {

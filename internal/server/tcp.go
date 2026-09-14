@@ -1003,6 +1003,8 @@ func (s *TCPServer) dispatch(ctx context.Context, client *Client, f *netproto.Fr
 		return s.handleGroupIconGet(ctx, client, f)
 	case netproto.MsgGroupMembers:
 		return s.handleGroupMembers(ctx, client, f)
+	case netproto.MsgServerAdminList:
+		return s.handleServerAdminList(ctx, client, f)
 	case netproto.MsgBanList:
 		return s.handleBanList(ctx, client, f)
 	case netproto.MsgBanRemove:

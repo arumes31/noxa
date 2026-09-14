@@ -11,6 +11,22 @@ import (
 	"voicx/internal/netproto"
 )
 
+// --- server administrators ---------------------------------------------------
+
+// ServerAdminList returns all server-admin identities, including offline users.
+func (a *App) ServerAdminList() (netproto.ServerAdmins, error) {
+	f, err := a.request(netproto.MsgServerAdminList, netproto.MsgServerAdmins,
+		netproto.ServerAdminList{}, 5*time.Second)
+	if err != nil {
+		return netproto.ServerAdmins{}, err
+	}
+	var resp netproto.ServerAdmins
+	if err := decodeJSON(f, &resp); err != nil {
+		return netproto.ServerAdmins{}, err
+	}
+	return resp, nil
+}
+
 // --- complaints (173) ---------------------------------------------------------
 
 // ComplaintList returns every filed complaint. Gated server-side by the same

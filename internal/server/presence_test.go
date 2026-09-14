@@ -204,7 +204,7 @@ func TestServerInfoQuery(t *testing.T) {
 	if err := netproto.Decode(f, &resp); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if resp.Version == "" || resp.ClientsOnline < 1 {
+	if resp.Version == "" || resp.Platform == "" || resp.ClientsOnline < 1 {
 		t.Fatalf("server info = %+v", resp)
 	}
 }

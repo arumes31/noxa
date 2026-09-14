@@ -40,11 +40,20 @@ import { dialogFocusableSelector, initModalSystem, mountServerDialog } from "./m
 import { parseRuntimeObject } from "./runtime-json.js";
 import { icon } from "./icons.js";
 import { initWorkspace, renderWorkspace, renderMember } from "./workspace-ui.js";
+import { createTrayVoiceSync } from "./tray-state.js";
 
 const P = () => window.__voicxPerms;
 window.__voicxChat = chatUI;
 
 const $ = (id) => document.getElementById(id);
+const publishTrayVoice = createTrayVoiceSync((...flags) => window.go.main.App.SetTrayVoiceState(...flags));
+
+function syncTrayVoice() {
+    const me = state.clients.find((client) => client.client_id === state.myClientID);
+    const speaking = !!(state.pc && !state.replayingTabID && state.myChannelID &&
+        me?.channel_id === state.myChannelID && me.is_speaking && !state.muted);
+    publishTrayVoice(speaking, state.muted, state.deafened);
+}
 
 const liveAnnouncements = createLiveAnnouncementQueue({
     resolveRegion: (priority) => $(priority === "assertive" ? "alert-announcer" : "chat-announcer"),
@@ -96,6 +105,7 @@ const state = {
     reconnectInFlight: false,
     vadMonitor: null,
     audioCtx: null,
+    voiceMonitorCtx: null,
     trackUsers: new Map(), // media track ID -> {client_id, unique_id, nickname} (per-publisher tracks; wave-3 video tiles)
     shareStream: null,     // getDisplayMedia result while screen sharing
     shareAudioSender: null, // RTCRtpSender of the optional share system-audio track
@@ -274,7 +284,6 @@ async function connectFromLogin() {
     document.querySelector(".login-card").setAttribute("aria-busy", "true");
     const addr = $("login-addr").value.trim();
     const nick = $("login-nick").value.trim();
-    const pw = $("login-password").value;
     const spw = $("login-serverpw").value;
     // A bridge call can outlive a tab switch. Only the tab/generation that
     // initiated this login may announce its eventual failure.
@@ -292,7 +301,7 @@ async function connectFromLogin() {
     const bookmark = state.pendingBookmark?.addr === addr ? state.pendingBookmark.name : "";
     try {
         const { error: err, tabID } = await connectBookmarkTabWithID(
-            bookmark, addr, nick, pw, spw);
+            bookmark, addr, nick, "", spw);
         if (err) {
             // (4a) TOFU fingerprint mismatch: prominent warning + explicit
             // trust action — never silently accepted.
@@ -309,7 +318,7 @@ async function connectFromLogin() {
         // here on. Clearing only on success keeps the retry after a rejected
         // password identifiable.
         state.pendingBookmark = null;
-        const connection = { addr, nick, pw, spw, bookmark };
+        const connection = { addr, nick, pw: "", spw, bookmark };
         const ownsActiveTab = await rememberTabConnect(connection, null, tabID);
         if (!ownsActiveTab) return;
         const finalizationGeneration = state.serverGeneration;
@@ -319,7 +328,7 @@ async function connectFromLogin() {
         state.reconnectAttempts = 0;
         let myClientID = "";
         let isAdmin = false;
-        let isGuest = !pw;
+        let isGuest = true;
         let security = "";
         try {
             myClientID = await window.go.main.App.ClientID();
@@ -869,7 +878,7 @@ function renderQualitySample() {
     if (pill.dataset.quality !== quality) pill.dataset.quality = quality;
     pill.title = `connection quality: ${lastQualitySample.quality} ` +
         `(RTT ${lastQualitySample.pingMs} ms, sampled ${qualitySampleAge(lastQualitySample.at)})`;
-    const title = `Server round-trip latency, ${quality}. Sampled ${qualitySampleAge(lastQualitySample.at)}.`;
+    const title = `Server round-trip latency, ${quality}. Sampled ${qualitySampleAge(lastQualitySample.at)}. Open server information.`;
     if (latency.title !== title) latency.title = title;
 }
 
@@ -981,6 +990,7 @@ window.runtime.EventsOn("snapshot", (json) => {
     // or reconnect. Reconcile here when the identity is already known; the
     // identity completion path calls the same helper for the opposite order.
     syncOwnChannel();
+    P()?.refreshChannelPermissions();
     // (317) blocked users are locally muted on sight; (318) contact nickname
     // history updates from presence; (383) buddy alerts; (389) channel watch.
     applyBlockAndContacts();
@@ -1287,6 +1297,7 @@ window.runtime.EventsOn("event", (json) => {
                 // a re-parent moves the row, so the cached ancestry has to
                 // follow it or the next edit dialog offers a stale parent.
                 ch.ParentID = d.parent_id || 0;
+                P()?.refreshChannelPermissions();
                 if (d.channel_id === state.myChannelID) applyChannelAudio();
                 chatUI.refreshHeader();
             }
@@ -1523,6 +1534,7 @@ function renderTree() {
     renderClientCard();
     chatUI.refreshHeader(); // (111) topic/title follows tree + channel updates
     renderWorkspace();
+    syncTrayVoice();
     restoreTreeFocus(root, focusState);
 }
 
@@ -1789,7 +1801,7 @@ function clientRow(c) {
         const icons = document.createElement("span");
         icons.className = "status-icons";
         icons.innerHTML = icon(state.muted ? "micOff" : "mic") +
-            (state.deafened ? icon("headphones") : "") + (state.screenSharing ? icon("screen") : "");
+            (state.deafened ? icon("headphonesOff") : "") + (state.screenSharing ? icon("screen") : "");
         row.appendChild(icons);
         // (347) DND shows on own status icons.
         if (window.__voicxPolish?.dndActive?.()) {
@@ -2287,7 +2299,11 @@ async function applyChannelAudio() {
     // (25) A move into or out of a music channel needs a fresh capture: the
     // stereo/DSP constraints cannot be changed on a live track.
     const { track, changed } = await applyCaptureProfile(state.pc, state.localStream, ch);
-    if (changed) startMicMeter(state.localStream);
+    if (changed) {
+        startVoiceMonitor();
+        startMicMeter(state.localStream);
+        applyVoiceState();
+    }
     if (track && !changed) track.contentHint = ch.OpusStereo ? "music" : "speech";
 }
 
@@ -2449,6 +2465,7 @@ function teardownVoice() {
     clearRegionBox(); // (71)
     detachRemoteAudio();
     if (state.pc) { state.pc.close(); state.pc = null; }
+    syncTrayVoice();
     if (state.localStream) {
         for (const t of state.localStream.getTracks()) t.stop();
         state.localStream = null;
@@ -2637,18 +2654,28 @@ function applyVoiceState() {
 // sibling level feed, the talking-while-muted warning (26), and the
 // talking-to-empty-channel hint (27).
 let mutedTalkStreak = 0, emptyStreak = 0, lastMutedWarn = 0, lastEmptyWarn = 0;
+let voiceMonitorTrack = null;
+let voiceMonitorSource = null;
 
 function startVoiceMonitor() {
     stopVoiceMonitor();
     const audioTrack = state.localStream?.getAudioTracks()[0];
     if (!audioTrack) return;
     try {
-        if (!state.audioCtx) state.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-        const ctx = state.audioCtx;
-        const src = ctx.createMediaStreamSource(state.localStream);
+        // The sender track is disabled by mute/PTT/VAD. Monitoring that same
+        // track hears silence after VAD closes and can never reopen the gate.
+        // Keep a local-only clone enabled so capture also stays available
+        // while the window is hidden. This track is never sent to a peer.
+        voiceMonitorTrack = audioTrack.clone();
+        voiceMonitorTrack.enabled = true;
+        state.voiceMonitorCtx = new (window.AudioContext || window.webkitAudioContext)();
+        const ctx = state.voiceMonitorCtx;
+        const src = ctx.createMediaStreamSource(new MediaStream([voiceMonitorTrack]));
+        voiceMonitorSource = src;
         const analyser = ctx.createAnalyser();
         analyser.fftSize = 512;
         src.connect(analyser);
+        void ctx.resume().catch(() => {});
         const buf = new Uint8Array(analyser.frequencyBinCount);
         let lastVoice = 0;
         state.vadMonitor = setInterval(() => {
@@ -2691,13 +2718,27 @@ function startVoiceMonitor() {
                 warnEmptyChannel();
             }
         }, 100);
-    } catch { /* monitor unavailable */ }
+    } catch {
+        stopVoiceMonitor();
+    }
 }
 
 function stopVoiceMonitor() {
     if (state.vadMonitor) {
         clearInterval(state.vadMonitor);
         state.vadMonitor = null;
+    }
+    if (voiceMonitorSource) {
+        voiceMonitorSource.disconnect();
+        voiceMonitorSource = null;
+    }
+    if (voiceMonitorTrack) {
+        voiceMonitorTrack.stop();
+        voiceMonitorTrack = null;
+    }
+    if (state.voiceMonitorCtx) {
+        void state.voiceMonitorCtx.close().catch(() => {});
+        state.voiceMonitorCtx = null;
     }
     mutedTalkStreak = 0;
     emptyStreak = 0;

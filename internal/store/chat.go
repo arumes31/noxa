@@ -337,8 +337,10 @@ func (s *Store) ToggleReaction(ctx context.Context, messageID int64, uniqueID, e
 	}
 	defer func() { _ = tx.Rollback() }()
 	// Serialize toggles for this exact tuple across goroutines and replicas.
+	// Quote the text fields to keep the tuple unambiguous without NUL bytes,
+	// which PostgreSQL rejects in text parameters.
 	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`,
-		fmt.Sprintf("%d\x00%s\x00%s", messageID, uniqueID, emoji)); err != nil {
+		fmt.Sprintf("%d:%q:%q", messageID, uniqueID, emoji)); err != nil {
 		return nil, false, fmt.Errorf("locking reaction: %w", err)
 	}
 	const del = `DELETE FROM chat_reactions WHERE message_id = $1 AND unique_id = $2 AND emoji = $3`
