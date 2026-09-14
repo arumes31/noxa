@@ -34,12 +34,19 @@ go.work.sum
 /.cache/
 /.lintcache*/
 
+# Local deployment overrides
+/docker-compose.orderotto-dev.yml
+
 # Docs
 BACKLOG.md
 GOAL.md
 /DESIGN.md
+/docs/plans/
+
+# Generated frontend metadata
+/client/frontend/package.json.md5
 
 # Graphify
 graphify-out/
 
-temp
+/temp/
