@@ -31,7 +31,7 @@ func TestMetadataVersions(t *testing.T) {
 		{
 			name:     "obsolete zero fallback",
 			metadata: Metadata{Version: "0.0.0-dev"},
-			expected: "0.4.0-dev+unknown",
+			expected: DeclaredRelease + "-dev+unknown",
 		},
 	}
 	for _, test := range tests {
@@ -54,8 +54,8 @@ func TestCurrentNeverReportsZeroVersion(t *testing.T) {
 	})
 	Version, Build, Commit, BuildDate, Dirty = "0.0.0", "", "", "", ""
 
-	if got := String(); !strings.HasPrefix(got, "0.4.0-dev+") {
-		t.Fatalf("String() = %q, want automatic 0.4.0 development version", got)
+	if got := String(); !strings.HasPrefix(got, DeclaredRelease+"-dev+") {
+		t.Fatalf("String() = %q, want automatic development version for %s", got, DeclaredRelease)
 	}
 }
 
@@ -145,7 +145,7 @@ func TestDevelopmentVersionUsesBinaryWhenVCSIsUnavailable(t *testing.T) {
 	t.Parallel()
 
 	got := developmentVersion("", false, "abc123456789ffff")
-	if got != "0.4.0-dev+bin.habc123456789" {
+	if got != DeclaredRelease+"-dev+bin.habc123456789" {
 		t.Errorf("developmentVersion() = %q", got)
 	}
 }

@@ -1464,6 +1464,41 @@ test("starts voice, plays the MP3 join cue, and switches channels", async ({ pag
     await expect(page.locator("#mic-status")).toBeEmpty();
 });
 
+test("undeafens after a confirmed channel join but preserves deafen on duplicate and remote events", async ({ page }) => {
+    await showB3Workspace(page);
+    const emitMove = (clientID, channelID) => page.evaluate(({ clientID, channelID }) => {
+        for (const callback of window.__events.event || []) callback(JSON.stringify({
+            type: "user_moved", data: { client_id: clientID, channel_id: channelID },
+        }));
+    }, { clientID, channelID });
+    await page.evaluate(() => window.__voicx.setDeafened(true));
+    await emitMove("mia", 3);
+    await emitMove("daniel", 2);
+    await expect(page.getByRole("button", { name: "Undeafen", exact: true })).toHaveAttribute("aria-pressed", "true");
+    await emitMove("daniel", 3);
+    await expect(page.getByRole("button", { name: "Deafen", exact: true })).toHaveAttribute("aria-pressed", "false");
+    expect(await page.locator("#remote-video").evaluate((element) => element.muted)).toBe(false);
+    await page.evaluate(() => window.__voicx.setDeafened(true));
+    await emitMove("daniel", 0);
+    expect(await page.evaluate(() => window.__voicx.state.deafened)).toBe(true);
+    await emitMove("daniel", 2);
+    expect(await page.evaluate(() => window.__voicx.state.deafened)).toBe(false);
+});
+
+test("undeafens when a snapshot confirms joining a channel", async ({ page }) => {
+    await showB3Workspace(page);
+    await page.evaluate(() => {
+        window.__voicx.setDeafened(true);
+        for (const callback of window.__events.snapshot || []) callback(JSON.stringify({
+            root_channels: [{ ChannelID: 3, Name: "Gaming", clients: [{
+                client_id: "daniel", unique_id: "uid-daniel", nickname: "Daniel", channel_id: 3,
+            }], children: [] }],
+        }));
+    });
+    await expect(page.getByRole("button", { name: "Deafen", exact: true })).toHaveAttribute("aria-pressed", "false");
+    expect(await page.locator("#remote-video").evaluate((element) => element.muted)).toBe(false);
+});
+
 test("shows the files toolbar and opens the upload picker", async ({ page }) => {
     await page.evaluate(() => {
         window.__voicx.showWorkspace(false);

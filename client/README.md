@@ -502,7 +502,7 @@ is disabled; the app keeps working. Change the bindings in `hotkeys.go`.
 ## Run
 
 Prereqs: Go 1.25+, Node 24+, Wails CLI v2 (`go install
-github.com/wailsapp/wails/v2/cmd/wails@v2.13.0`).
+github.com/wailsapp/wails/v2/cmd/wails@v2.16.0`, matching `go.mod`).
 
 ```bash
 # Start a local server first (repo root): postgres required

@@ -29,7 +29,7 @@ func main() {
 func run(args []string, stdout, stderr io.Writer) error {
 	flags := flag.NewFlagSet("version", flag.ContinueOnError)
 	flags.SetOutput(stderr)
-	format := flags.String("format", "version", "output: version, runtime, json, ldflags, github, docker, or base")
+	format := flags.String("format", "version", "output: version, runtime, json, ldflags, github, docker, base, or next-release")
 	root := flags.String("root", "", "repository root (auto-detected by default)")
 	check := flags.Bool("check", false, "verify all tracked version declarations")
 	if err := flags.Parse(args); err != nil {
@@ -52,7 +52,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return err
 	}
 	if *check {
-		if err := checkDeclarations(projectRoot, metadata); err != nil {
+		if err := checkDeclarations(projectRoot); err != nil {
 			return err
 		}
 	}
@@ -63,6 +63,12 @@ func run(args []string, stdout, stderr io.Writer) error {
 	case "base":
 		base, _ := appversion.Parse(metadata.Version)
 		_, err = fmt.Fprintln(stdout, base)
+	case "next-release":
+		var next string
+		next, err = appversion.NextRelease(projectRoot)
+		if err == nil {
+			_, err = fmt.Fprintln(stdout, next)
+		}
 	case "json":
 		encoder := json.NewEncoder(stdout)
 		encoder.SetIndent("", "  ")
@@ -172,8 +178,13 @@ func dockerArguments(metadata appversion.Metadata) []string {
 	return parts
 }
 
-func checkDeclarations(root string, metadata appversion.Metadata) error {
-	base, _ := appversion.Parse(metadata.Version)
+func checkDeclarations(root string) error {
+	// #nosec G304 -- root is the explicit local project root; the filename is fixed.
+	declared, err := os.ReadFile(filepath.Join(root, "VERSION"))
+	if err != nil {
+		return fmt.Errorf("reading version declaration: %w", err)
+	}
+	base := strings.TrimSpace(string(declared))
 	expected := map[string]string{
 		"client/frontend/package.json":          base,
 		"client/frontend/package-lock.json":     base,

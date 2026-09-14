@@ -153,10 +153,18 @@ flowchart TD
 
 ### Option 2: Building from Source
 
+Successful `main` builds publish signed stable releases, starting with `v0.4.3`,
+and mark them **Latest** for the client updater. Each new commit advances the
+highest stable patch tag; rerunning a published commit reuses its tag.
+`VERSION` and the package declarations set the minimum version on that major/minor
+release line. CI stamps the actual release patch into the binaries, Windows
+package resources, and signed manifest. Prerelease tags do not advance the stable
+sequence. Change the synchronized baseline declarations to start a new release line.
+
 #### Prerequisites
 * **Go**: `>= 1.27.1` (both Go modules declare this minimum)
 * **Node.js**: `>= 24`
-* **Wails CLI**: `go install github.com/wailsapp/wails/v2/cmd/wails@v2.13.0`
+* **Wails CLI**: `go install github.com/wailsapp/wails/v2/cmd/wails@v2.16.0` (match `client/go.mod`)
 * **PostgreSQL**: `>= 16`
 
 #### Build Backend Server

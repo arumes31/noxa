@@ -23,7 +23,7 @@ try {
         exit 0
     }
     if ($Target -eq "client" -and -not (Get-Command wails -ErrorAction SilentlyContinue)) {
-        throw "Wails CLI is required for a client build. Install it with: go install github.com/wailsapp/wails/v2/cmd/wails@v2.13.0"
+        throw "Wails CLI is required for a client build. Install it with: go install github.com/wailsapp/wails/v2/cmd/wails@v2.16.0"
     }
 
     $versionFlags = (& go run ./cmd/version -format ldflags)

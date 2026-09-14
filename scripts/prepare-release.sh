@@ -7,15 +7,18 @@ if [[ "${GITHUB_EVENT_NAME:-}" != push ]]; then
   exit 1
 fi
 
+if [[ -n "$(git status --porcelain=v1 --untracked-files=all)" ]]; then
+  echo "Releases require a clean checkout" >&2
+  exit 1
+fi
+
 if [[ "$GITHUB_REF" == refs/heads/main ]]; then
-  [[ "$GITHUB_RUN_NUMBER" =~ ^[1-9][0-9]*$ ]]
-  base="$(go run ./cmd/version -check -format base)"
   current="$(go run ./cmd/version -check)"
-  if [[ "$current" != "$base-dev"* && "$current" != "$base-main."* ]]; then
-    # A commit intentionally tagged for release already has its identity.
+  if [[ "$current" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    # A rerun of a published commit keeps the same stable release identity.
     tag="v$current"
   else
-    tag="v${base}-main.${GITHUB_RUN_NUMBER}"
+    tag="v$(go run ./cmd/version -check -format next-release)"
     if git show-ref --verify --quiet "refs/tags/$tag"; then
       test "$(git rev-parse "$tag^{commit}")" = "$(git rev-parse HEAD)"
     else
@@ -33,6 +36,9 @@ fi
 metadata="$(go run ./cmd/version -check -format github)"
 grep -Fxq "VOICX_VERSION=${tag#v}" <<< "$metadata"
 grep -Fxq "VOICX_DIRTY=false" <<< "$metadata"
+if [[ "$GITHUB_REF" == refs/heads/main ]]; then
+  grep -Fxq "VOICX_PRERELEASE=false" <<< "$metadata"
+fi
 printf '%s\n' "$metadata" >> "$GITHUB_ENV"
 printf 'tag=%s\n' "$tag" >> "$GITHUB_OUTPUT"
 grep '^VOICX_PRERELEASE=' <<< "$metadata" | sed 's/VOICX_PRERELEASE=/prerelease=/' >> "$GITHUB_OUTPUT"

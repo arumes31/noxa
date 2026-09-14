@@ -177,7 +177,7 @@ jobs:
         run: |
           go mod verify
           # Treat the locally replaced voicx module as workspace source.
-          # Otherwise Go tries to verify a nonexistent voicx@v0.4.0 zip.
+          # Otherwise Go tries to verify a nonexistent published voicx module zip.
           export GOWORK="$RUNNER_TEMP/verify.work"
           go work init "$GITHUB_WORKSPACE" "$GITHUB_WORKSPACE/client"
           (cd client && go mod verify)
@@ -430,12 +430,18 @@ jobs:
           }
 
       - name: install wails CLI
-        run: go install github.com/wailsapp/wails/v2/cmd/wails@v2.13.0
+        shell: bash
+        working-directory: client
+        run: |
+          wails_version="$(go list -m -f '{{.Version}}' github.com/wailsapp/wails/v2)"
+          go install "github.com/wailsapp/wails/v2/cmd/wails@$wails_version"
 
       - name: build client (windows/amd64)
         shell: bash
         working-directory: client
         run: |
+          # Package resources use the same numeric patch as the signed release.
+          node --input-type=module -e 'import fs from "node:fs"; const path = "wails.json"; const config = JSON.parse(fs.readFileSync(path, "utf8")); config.info.productVersion = process.env.VOICX_VERSION.split(/[+-]/)[0]; fs.writeFileSync(path, JSON.stringify(config, null, 2) + "\n");'
           wails build -trimpath -ldflags "-s -w $VOICX_LDFLAGS \
             -X=voicx/internal/version.UpdateRepo=$VOICX_UPDATE_REPO \
             -X=voicx/internal/version.UpdatePublicKeys=$VOICX_UPDATE_PUBLIC_KEYS"
