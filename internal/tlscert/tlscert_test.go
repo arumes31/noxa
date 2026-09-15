@@ -18,7 +18,7 @@ import (
 func TestEnsureGeneratesAndReloads(t *testing.T) {
 	dir := t.TempDir()
 
-	cert1, fp1, err := Ensure(dir, "", "", []string{"voicx"})
+	cert1, fp1, err := Ensure(dir, "", "", []string{"noxa"})
 	if err != nil {
 		t.Fatalf("Ensure (generate): %v", err)
 	}
@@ -35,7 +35,7 @@ func TestEnsureGeneratesAndReloads(t *testing.T) {
 		t.Fatalf("key.pem mode = %o, want 600", fi.Mode().Perm())
 	}
 
-	cert2, fp2, err := Ensure(dir, "", "", []string{"voicx"})
+	cert2, fp2, err := Ensure(dir, "", "", []string{"noxa"})
 	if err != nil {
 		t.Fatalf("Ensure (reload): %v", err)
 	}

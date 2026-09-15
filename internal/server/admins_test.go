@@ -6,9 +6,9 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"voicx/internal/netproto"
-	"voicx/internal/permissions"
-	"voicx/internal/store"
+	"noxa/internal/netproto"
+	"noxa/internal/permissions"
+	"noxa/internal/store"
 )
 
 type adminListFunc func(context.Context) ([]store.AdminIdentity, error)

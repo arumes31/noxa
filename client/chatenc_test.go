@@ -21,8 +21,8 @@ import (
 
 	"golang.org/x/crypto/nacl/box"
 
-	"voicx/internal/netproto"
-	"voicx/internal/tlscert"
+	"noxa/internal/netproto"
+	"noxa/internal/tlscert"
 )
 
 // --- in-process control channel ---------------------------------------------
@@ -537,7 +537,7 @@ func TestExportChatEncryptedRoundTrip(t *testing.T) {
 	if _, err := openExport(blob, "wrong"); err == nil {
 		t.Fatal("openExport with the wrong passphrase succeeded")
 	}
-	if _, err := openExport([]byte("NOTVOICX................................"), "x"); err == nil {
+	if _, err := openExport([]byte("NOTNOXA................................"), "x"); err == nil {
 		t.Fatal("openExport accepted a foreign file")
 	}
 	if _, err := sealExport(contents, ""); err == nil {

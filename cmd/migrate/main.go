@@ -12,9 +12,9 @@ import (
 
 	"go.uber.org/zap"
 
-	"voicx/internal/config"
-	"voicx/internal/logging"
-	"voicx/internal/store"
+	"noxa/internal/config"
+	"noxa/internal/logging"
+	"noxa/internal/store"
 )
 
 func main() {
@@ -28,7 +28,7 @@ func runMain() int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	if err := run(ctx, *timeout); err != nil {
-		fmt.Fprintf(os.Stderr, "voicx-migrate: %v\n", err)
+		fmt.Fprintf(os.Stderr, "noxa-migrate: %v\n", err)
 		return 1
 	}
 	return 0
@@ -55,7 +55,7 @@ func run(ctx context.Context, timeout time.Duration) (runErr error) {
 			// Sync commonly returns EINVAL for console streams even though all
 			// bytes were written. Surface it without turning a successful schema
 			// migration into a failed command.
-			fmt.Fprintf(os.Stderr, "voicx-migrate: syncing logger: %v\n", err)
+			fmt.Fprintf(os.Stderr, "noxa-migrate: syncing logger: %v\n", err)
 		}
 	}()
 

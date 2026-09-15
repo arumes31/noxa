@@ -1,4 +1,4 @@
-# VOICX original sound set
+# NOXA original sound set
 
 32 original dry contact sounds: fixed-filter noise impulses, muted taps and console clicks.
 No oscillators, pitch sweeps, melodies, reverb or external samples. Mono PCM, 48 kHz/16 bit.

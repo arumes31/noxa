@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"voicx/internal/store"
+	"noxa/internal/store"
 )
 
 // fakeFileStore implements FileStore in memory.

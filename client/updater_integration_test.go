@@ -21,8 +21,8 @@ import (
 	"testing"
 	"time"
 
-	"voicx/internal/updatemanifest"
-	"voicx/internal/version"
+	"noxa/internal/updatemanifest"
+	"noxa/internal/version"
 )
 
 const updateIntegrationVersion = "v99.0.0"
@@ -167,12 +167,12 @@ func TestDownloadAndApplyIntegration(t *testing.T) {
 			cmd := exec.CommandContext(ctx, executable, "-test.run=^TestDownloadAndApplyHelperProcess$", "-test.v")
 			cmd.Dir = dir
 			cmd.Env = append(os.Environ(),
-				"VOICX_UPDATER_TEST_CHILD="+executable,
-				"VOICX_UPDATER_TEST_ORIGINAL="+original,
-				"VOICX_UPDATER_TEST_API="+srv.URL,
-				"VOICX_UPDATER_TEST_KEY="+key,
-				"VOICX_UPDATER_TEST_ERROR="+tt.wantError,
-				"VOICX_UPDATER_TEST_CASE="+tt.name,
+				"NOXA_UPDATER_TEST_CHILD="+executable,
+				"NOXA_UPDATER_TEST_ORIGINAL="+original,
+				"NOXA_UPDATER_TEST_API="+srv.URL,
+				"NOXA_UPDATER_TEST_KEY="+key,
+				"NOXA_UPDATER_TEST_ERROR="+tt.wantError,
+				"NOXA_UPDATER_TEST_CASE="+tt.name,
 				"TMP="+tempDir, "TEMP="+tempDir, "TMPDIR="+tempDir)
 			if out, err := cmd.CombinedOutput(); err != nil {
 				t.Fatalf("isolated update: %v\n%s", err, out)
@@ -208,7 +208,7 @@ func TestDownloadAndApplyIntegration(t *testing.T) {
 }
 
 func TestDownloadAndApplyHelperProcess(t *testing.T) {
-	expected := os.Getenv("VOICX_UPDATER_TEST_CHILD")
+	expected := os.Getenv("NOXA_UPDATER_TEST_CHILD")
 	if expected == "" {
 		return
 	}
@@ -220,7 +220,7 @@ func TestDownloadAndApplyHelperProcess(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	originalInfo, err := os.Stat(os.Getenv("VOICX_UPDATER_TEST_ORIGINAL"))
+	originalInfo, err := os.Stat(os.Getenv("NOXA_UPDATER_TEST_ORIGINAL"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -229,21 +229,21 @@ func TestDownloadAndApplyHelperProcess(t *testing.T) {
 	}
 	version.Version = "0.1.0"
 	version.UpdateRepo = "o/r"
-	version.UpdatePublicKeys = os.Getenv("VOICX_UPDATER_TEST_KEY")
-	updateAPIBase = os.Getenv("VOICX_UPDATER_TEST_API")
+	version.UpdatePublicKeys = os.Getenv("NOXA_UPDATER_TEST_KEY")
+	updateAPIBase = os.Getenv("NOXA_UPDATER_TEST_API")
 	app := &App{}
 	info, err := app.CheckForUpdate()
 	if err != nil || !info.Available {
 		t.Fatalf("initial update check = %+v, %v", info, err)
 	}
-	if os.Getenv("VOICX_UPDATER_TEST_CASE") == "caller asset URLs are revalidated" {
+	if os.Getenv("NOXA_UPDATER_TEST_CASE") == "caller asset URLs are revalidated" {
 		info.URL = updateAPIBase + "/untrusted"
 		info.SHA256URL = info.URL
 		info.SignatureURL = info.URL
 		info.Size = 1
 	}
 	got := app.DownloadAndApply(info)
-	wantError := os.Getenv("VOICX_UPDATER_TEST_ERROR")
+	wantError := os.Getenv("NOXA_UPDATER_TEST_ERROR")
 	if wantError == "" && got != "" || wantError != "" && !strings.Contains(got, wantError) {
 		t.Fatalf("DownloadAndApply = %q, want error containing %q", got, wantError)
 	}

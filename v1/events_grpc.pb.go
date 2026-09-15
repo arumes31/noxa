@@ -4,7 +4,7 @@
 // - protoc             (unknown)
 // source: events.proto
 
-package voicxv1
+package noxav1
 
 import (
 	context "context"
@@ -19,7 +19,7 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	Events_Subscribe_FullMethodName = "/voicx.v1.Events/Subscribe"
+	Events_Subscribe_FullMethodName = "/noxa.v1.Events/Subscribe"
 )
 
 // EventsClient is the client API for Events service.
@@ -120,7 +120,7 @@ type Events_SubscribeServer = grpc.ServerStreamingServer[Event]
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
 var Events_ServiceDesc = grpc.ServiceDesc{
-	ServiceName: "voicx.v1.Events",
+	ServiceName: "noxa.v1.Events",
 	HandlerType: (*EventsServer)(nil),
 	Methods:     []grpc.MethodDesc{},
 	Streams: []grpc.StreamDesc{

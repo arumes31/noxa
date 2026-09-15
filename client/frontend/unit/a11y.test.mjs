@@ -30,7 +30,7 @@ test("visual sibling labels receive a stable native control association", () => 
     const label = { htmlFor: "", contains: () => false };
     const generatedControl = { id: "" };
     assert.equal(associateControlLabel(label, generatedControl), true);
-    assert.match(generatedControl.id, /^voicx-control-\d+$/);
+    assert.match(generatedControl.id, /^noxa-control-\d+$/);
     assert.equal(label.htmlFor, generatedControl.id);
 
     const existingLabel = { htmlFor: "", contains: () => false };

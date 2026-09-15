@@ -18,9 +18,9 @@ import (
 // isolated even when the supplied database has existing data.
 func testDedicatedDBStore(t *testing.T) *Store {
 	t.Helper()
-	base := os.Getenv("VOICX_TEST_DATABASE_URL")
+	base := os.Getenv("NOXA_TEST_DATABASE_URL")
 	if base == "" {
-		t.Skip("VOICX_TEST_DATABASE_URL is required for dedicated DB tests")
+		t.Skip("NOXA_TEST_DATABASE_URL is required for dedicated DB tests")
 	}
 	admin, err := sql.Open("postgres", base)
 	if err != nil {
@@ -32,7 +32,7 @@ func testDedicatedDBStore(t *testing.T) *Store {
 		_ = admin.Close()
 		t.Fatalf("pinging dedicated DB: %v", err)
 	}
-	name := fmt.Sprintf("voicx_9a_%d", time.Now().UnixNano())
+	name := fmt.Sprintf("noxa_9a_%d", time.Now().UnixNano())
 	if _, err := admin.ExecContext(ctx, "CREATE DATABASE "+name); err != nil {
 		_ = admin.Close()
 		t.Fatalf("creating dedicated scratch database: %v", err)

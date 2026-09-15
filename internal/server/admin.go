@@ -12,8 +12,8 @@ import (
 	"strconv"
 	"time"
 
-	"voicx/internal/netproto"
-	"voicx/internal/permissions"
+	"noxa/internal/netproto"
+	"noxa/internal/permissions"
 )
 
 // MoveClient moves a client into a channel without a permission check. It

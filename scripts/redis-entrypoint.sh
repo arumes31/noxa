@@ -2,11 +2,11 @@
 set -eu
 umask 077
 
-. "${VOICX_SECRET_ENV_LIB:-/usr/local/lib/voicx/secret-env.sh}"
+. "${NOXA_SECRET_ENV_LIB:-/usr/local/lib/noxa/secret-env.sh}"
 
 secret_env_load REDIS_PASSWORD optional
 
-runtime_dir=${REDIS_RUNTIME_DIR:-/tmp/voicx-redis}
+runtime_dir=${REDIS_RUNTIME_DIR:-/tmp/noxa-redis}
 config_file=${REDIS_CONFIG_FILE:-$runtime_dir/redis.conf}
 mkdir -p "$runtime_dir"
 chmod 700 "$runtime_dir"

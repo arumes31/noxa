@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"strconv"
 
-	"voicx/internal/config"
-	"voicx/internal/netproto"
+	"noxa/internal/config"
+	"noxa/internal/netproto"
 )
 
 // LoadPersistedServerConfig applies administrator-managed runtime settings to

@@ -64,12 +64,12 @@
     "sha256": "a1d99a91caa1dc5eef5aefa633df3470e452b2102da6e218a26a38a5fb005341"
   },
   "en/test": {
-    "text": "VOICX spoken notifications are enabled.",
-    "duration": 2.716734693877551,
+    "text": "noXa spoken notifications are enabled.",
+    "duration": 2.5309750566893423,
     "sampleRate": 22050,
     "peak": 0.114990234375,
-    "rmsDB": -36.894352652233835,
-    "sha256": "49e7846bb13d50030e3fde3d311272a6efecf8c6247548ff1db698dacf125562"
+    "rmsDB": -36.20978719918192,
+    "sha256": "1d5f1d6ba2eef7b01a03479072506456379b735628f3af756e9165f46025c875"
   },
   "de/banned": {
     "text": "Du wurdest vom Server gebannt.",
@@ -136,11 +136,11 @@
     "sha256": "b435ad6a6732605ab1c4b04e75d511160d7431cbb2cde2dac46b024d8518cdab"
   },
   "de/test": {
-    "text": "Die gesprochenen VOICX-Benachrichtigungen sind aktiviert.",
-    "duration": 2.612426303854875,
+    "text": "Die gesprochenen noXa-Benachrichtigungen sind aktiviert.",
+    "duration": 2.7812244897959184,
     "sampleRate": 22050,
     "peak": 0.114990234375,
-    "rmsDB": -33.19755151650534,
-    "sha256": "14a5dd3516c4fb66cd7f468ffcda10b76d06dabab09b2f270ec8d87d23a2f649"
+    "rmsDB": -33.45708051789484,
+    "sha256": "0947b3c8ddafd50ce375506640a293ce55c3ee215838822a8868149fbdc76905"
   }
 }

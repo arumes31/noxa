@@ -1,21 +1,21 @@
 # Asset storage security
 
-VoicX treats `FileRoot` as a security boundary. Run exactly one writer process
-per `FileRoot`, and grant write access only to the VoicX service identity and
+noXa treats `FileRoot` as a security boundary. Run exactly one writer process
+per `FileRoot`, and grant write access only to the noXa service identity and
 trusted administrators. Asset file names are confined with `os.Root`, but no
 cross-process lock coordinates extension replacement or group-icon metadata.
 
 ## Windows ACL requirement
 
 On Windows, Go's `os.Chmod(0700/0600)` calls do not rewrite NTFS DACLs. Before
-starting VoicX, provision `FileRoot` with a restricted **inheritable** DACL so
+starting noXa, provision `FileRoot` with a restricted **inheritable** DACL so
 new directories and files inherit the same protection. Verify the effective
-permissions as the service identity. VoicX emits `ASSET STORAGE SECURITY
+permissions as the service identity. noXa emits `ASSET STORAGE SECURITY
 LIMITATION` error-level log entries on Windows because the portable runtime
 cannot prove that the DACL is restricted; those warnings must be treated as a
 deployment gate.
 
-On POSIX systems, VoicX normalizes the root and asset directories to `0700` and
+On POSIX systems, noXa normalizes the root and asset directories to `0700` and
 regular asset files to `0600`. Parent-directory permissions and host/container
 mount policy remain the operator's responsibility.
 
@@ -41,7 +41,7 @@ Uploaded PNG, GIF, and WebP containers must be static. APNG animation chunks,
 multi-frame GIFs, and animated WebP feature flags are rejected before a full
 decode.
 
-There is no configured operator secret from which VoicX could derive a sound
+There is no configured operator secret from which noXa could derive a sound
 MAC, so an attacker who can rewrite both `FileRoot` and the database is already
 inside this trust boundary and can recompute the checksum.
 

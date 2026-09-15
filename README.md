@@ -1,19 +1,21 @@
 <div align="center">
 
-<img src="client/frontend/public/branding/logo.png" alt="VoicX logo" width="160" height="160" />
+<img src="client/frontend/public/branding/logo.png" alt="noXa logo" width="160" height="160" />
 
-# VoicX
+# noXa
+
+Previously VoicX. See the [rename and upgrade notes](docs/RENAME.md) for existing installations.
 
 **Next-Generation High-Performance Real-Time Communication Platform**
 
 *Ultra-low latency SFU voice & video engine, zero-trust E2EE chat messaging, PostgreSQL multi-tenant state persistence, and a 5-tier role-based permission system.*
 
-[![CI](https://github.com/arumes31/voicx/actions/workflows/ci.yml/badge.svg)](https://github.com/arumes31/voicx/actions/workflows/ci.yml)
-[![golangci-lint](https://github.com/arumes31/voicx/actions/workflows/golangci-lint.yml/badge.svg)](https://github.com/arumes31/voicx/actions/workflows/golangci-lint.yml)
-[![Security Analysis](https://github.com/arumes31/voicx/actions/workflows/security.yml/badge.svg)](https://github.com/arumes31/voicx/actions/workflows/security.yml)
-[![Go Version](https://img.shields.io/github/go-mod/go-version/arumes31/voicx)](https://go.dev/)
-[![Docker Image](https://img.shields.io/docker/v/arumes31/voicx?label=ghcr.io&logo=docker)](https://github.com/arumes31/voicx/pkgs/container/voicx)
-[![License](https://img.shields.io/github/license/arumes31/voicx)](LICENSE)
+[![CI](https://github.com/arumes31/noxa/actions/workflows/ci.yml/badge.svg)](https://github.com/arumes31/noxa/actions/workflows/ci.yml)
+[![golangci-lint](https://github.com/arumes31/noxa/actions/workflows/golangci-lint.yml/badge.svg)](https://github.com/arumes31/noxa/actions/workflows/golangci-lint.yml)
+[![Security Analysis](https://github.com/arumes31/noxa/actions/workflows/security.yml/badge.svg)](https://github.com/arumes31/noxa/actions/workflows/security.yml)
+[![Go Version](https://img.shields.io/github/go-mod/go-version/arumes31/noxa)](https://go.dev/)
+[![Docker Image](https://img.shields.io/docker/v/arumes31/noxa?label=ghcr.io&logo=docker)](https://github.com/arumes31/noxa/pkgs/container/noxa)
+[![License](https://img.shields.io/github/license/arumes31/noxa)](LICENSE)
 
 [Architecture](#-system-architecture) • [Features](#-key-features) • [Quick Start](#-quick-start) • [Permissions](#-5-tier-permission-engine) • [ServerQuery API](#-serverquery-admin-protocol) • [Configuration](#-configuration-reference)
 
@@ -23,7 +25,7 @@
 
 ## 🌟 Overview
 
-**VoicX** is an enterprise-grade, self-hosted real-time communication platform written in Go. Designed for high concurrency and operational clarity, VoicX couples a lightweight binary control protocol with a **Pion WebRTC SFU engine** for sub-100ms multi-party audio/video fan-out, end-to-end encrypted messaging, and granular administrative control.
+**noXa** is an enterprise-grade, self-hosted real-time communication platform written in Go. Designed for high concurrency and operational clarity, noXa couples a lightweight binary control protocol with a **Pion WebRTC SFU engine** for sub-100ms multi-party audio/video fan-out, end-to-end encrypted messaging, and granular administrative control.
 
 > [!NOTE]
 > **Zero-Trust Security**: Direct messages are fully E2EE using X25519 Double-Ratchet key agreements. The server stores only channel history under persisted scope keys; direct message bodies never hit the server database in plaintext or unwrapped ciphertext.
@@ -40,7 +42,7 @@ graph TD
         Bot["ServerQuery Bot / CLI\n(TCP Telnet / SSH)"]
     end
 
-    subgraph CoreServer["VoicX Server Core"]
+    subgraph CoreServer["noXa Server Core"]
         Control["TCP Control Listener\n:12333 (TLS / TOFU)"]
         Keepalive["UDP Keepalive Worker Pool\n:12334"]
         WebRTC["Pion WebRTC SFU Engine\n(DTLS-SRTP / ICE / Opus)"]
@@ -117,14 +119,14 @@ flowchart TD
 ## ⚡ Quick Start
 
 > [!TIP]
-> The fastest way to run VoicX is using **Docker Compose**.
+> The fastest way to run noXa is using **Docker Compose**.
 
 ### Option 1: Docker Compose (Recommended)
 
 1. Clone the repository:
    ```bash
-   git clone https://github.com/arumes31/voicx.git
-   cd voicx
+   git clone https://github.com/arumes31/noxa.git
+   cd noxa
    ```
 
 2. Create an explicit local-development environment, then launch PostgreSQL,
@@ -135,9 +137,9 @@ flowchart TD
    ```
 
    The sample environment is for host-local development. Before exposing a
-   deployment, set `VOICX_DEV_MODE=false`, replace the sample PostgreSQL
+   deployment, set `NOXA_DEV_MODE=false`, replace the sample PostgreSQL
    credential, and set `POSTGRES_SSLMODE` to `require`, `verify-ca`, or
-   `verify-full` (or supply `VOICX_COMPOSE_DATABASE_URL` with that sslmode).
+   `verify-full` (or supply `NOXA_COMPOSE_DATABASE_URL` with that sslmode).
    Each Compose secret also supports an `_FILE` counterpart; configure exactly
    one non-empty source. Set an `_FILE` value to a readable host path; Compose
    mounts it read-only at `/run/secrets/...`. Prefer a path outside the
@@ -150,7 +152,7 @@ flowchart TD
 
 3. View initial startup log (includes the generated **Admin Privilege Token**):
    ```bash
-   docker compose logs -f voicx
+   docker compose logs -f noxa
    ```
 
 ### Option 2: Building from Source
@@ -178,7 +180,7 @@ make build
 make version
 
 # Run migrations and start server
-VOICX_DATABASE_URL="postgres://voicx:voicx@localhost:5432/voicx?sslmode=disable" ./bin/voicx-server
+NOXA_DATABASE_URL="postgres://noxa:noxa@localhost:5432/noxa?sslmode=disable" ./bin/noxa-server
 ```
 
 On Windows PowerShell, use the equivalent native wrapper:
@@ -208,55 +210,55 @@ stamp the exact dirty-tree fingerprint into the binary.
 
 ## ⚙️ Configuration Reference
 
-VoicX can be configured via environment variables or a YAML configuration file (`config.yaml`).
+noXa can be configured via environment variables or a YAML configuration file (`config.yaml`).
 
 | Environment Variable | Default Value | Description |
 | :--- | :--- | :--- |
-| `VOICX_TCP_ADDR` | `:12333` | Primary control TCP listener address |
-| `VOICX_UDP_ADDR` | `:12334` | UDP keepalive ping/pong listener address |
-| `VOICX_GRPC_ADDR` | `127.0.0.1:12338` | Plaintext gRPC administration listener; loopback is mandatory |
-| `VOICX_QUERY_ADDR` | `127.0.0.1:12335` | ServerQuery admin protocol binding address |
-| `VOICX_QUERY_ALLOW_REMOTE` | `false` | Explicitly permit a non-loopback raw ServerQuery bind; prefer SSH instead |
-| `VOICX_QUERY_SSH_ENABLED` | `false` | Enable the SSH-wrapped ServerQuery listener |
-| `VOICX_QUERY_SSH_ADDR` | `:12339` | SSH ServerQuery listener address |
-| `VOICX_FILE_ADDR` | `:12336` | File transfer upload/download listener address |
-| `VOICX_HEALTH_ADDR` | `:12337` | Health/readiness HTTP listener; `/dl` bearer links on this listener are plaintext HTTP, so bind loopback or proxy it behind HTTPS |
-| `VOICX_METRICS_ALLOW_REMOTE` | `false` | Permit remote `/metrics` requests; without this opt-in, only IPv4/IPv6 loopback is accepted |
-| `VOICX_PPROF_ENABLED` | `false` | Enable runtime `/debug/pprof/` diagnostics; every pprof endpoint remains GET-only and direct-loopback-only |
-| `VOICX_SHUTDOWN_TIMEOUT` | `30s` | Positive total grace period shared by all services during orderly shutdown |
-| `VOICX_DATABASE_URL` | `postgres://...` | PostgreSQL connection URL |
-| `VOICX_REDIS_ADDR` | `localhost:6379` | Optional Redis address for pub/sub fanout |
-| `VOICX_TLS_ENABLED` | `true` | Enable TLS 1.3 encryption on control port |
-| `VOICX_TLS_DIR` | `./data/tls` | Directory storing the generated TLS certificate and key |
-| `VOICX_TLS_CERT_FILE` / `VOICX_TLS_KEY_FILE` | empty | Custom certificate and key; both must be configured together |
-| `VOICX_FILE_TLS_ENABLED` | `true` | Enable TLS 1.3 on file transfers; disabling is development-only |
-| `VOICX_FILE_ROOT` | `./data/files` | Root storage path for uploaded channel files & avatars |
-| `VOICX_FILE_MAX_CONNECTIONS` | `128` | Concurrent accepted file-transfer connections (1–10000) |
-| `VOICX_PII_KEY_FILE` | `./data/keys/pii.key` | AES-256-GCM master key file path for PII encryption |
-| `VOICX_CHANNEL_TEMP_LIFETIME_SECONDS` | `60` | Grace period before an empty temporary channel is removed |
-| `VOICX_CHAT_MASTER_KEY_FILE` | `./data/keys/chat_master.key` | KEK file used to wrap persisted chat scope keys; back it up with PostgreSQL |
-| `VOICX_CHAT_MASTER_KEY` | empty | Secret-injection override for the key file: one base64 32-byte key or a newline-separated `id:base64` key ring; never commit it |
-| `VOICX_CHAT_LEGACY_HISTORY` | `encrypt` | One-time handling for legacy plaintext rows: `encrypt` or `purge` |
-| `VOICX_CHAT_KEY_ROTATE_MIN_SECONDS` | `60` | Minimum interval used to coalesce scope-key rotations |
-| `VOICX_CHAT_SEARCH_MAX_MESSAGES` | `2000` | Maximum history messages scanned by client-side search |
-| `VOICX_CHAT_MAX_LENGTH` | `4096` | Maximum decrypted chat payload size in UTF-8 bytes |
-| `VOICX_DEFAULT_GROUPS_ENABLED` | `true` | Auto-create and assign the built-in Guest and Member groups |
-| `VOICX_TURN_CREDENTIALS_TTL` | `24h` | TURN credential lifetime; must be positive and at most 30 days |
-| `VOICX_REDIS_DIAL_TIMEOUT` / `READ_TIMEOUT` / `WRITE_TIMEOUT` | `5s` / `3s` / `3s` | Redis client timeouts when Redis is enabled |
-| `VOICX_REDIS_TLS_ENABLED` | `false` | Enable verified Redis TLS (TLS 1.2+); optional server name and CA file use `VOICX_REDIS_TLS_SERVER_NAME` / `VOICX_REDIS_TLS_CA_FILE` |
+| `NOXA_TCP_ADDR` | `:12333` | Primary control TCP listener address |
+| `NOXA_UDP_ADDR` | `:12334` | UDP keepalive ping/pong listener address |
+| `NOXA_GRPC_ADDR` | `127.0.0.1:12338` | Plaintext gRPC administration listener; loopback is mandatory |
+| `NOXA_QUERY_ADDR` | `127.0.0.1:12335` | ServerQuery admin protocol binding address |
+| `NOXA_QUERY_ALLOW_REMOTE` | `false` | Explicitly permit a non-loopback raw ServerQuery bind; prefer SSH instead |
+| `NOXA_QUERY_SSH_ENABLED` | `false` | Enable the SSH-wrapped ServerQuery listener |
+| `NOXA_QUERY_SSH_ADDR` | `:12339` | SSH ServerQuery listener address |
+| `NOXA_FILE_ADDR` | `:12336` | File transfer upload/download listener address |
+| `NOXA_HEALTH_ADDR` | `:12337` | Health/readiness HTTP listener; `/dl` bearer links on this listener are plaintext HTTP, so bind loopback or proxy it behind HTTPS |
+| `NOXA_METRICS_ALLOW_REMOTE` | `false` | Permit remote `/metrics` requests; without this opt-in, only IPv4/IPv6 loopback is accepted |
+| `NOXA_PPROF_ENABLED` | `false` | Enable runtime `/debug/pprof/` diagnostics; every pprof endpoint remains GET-only and direct-loopback-only |
+| `NOXA_SHUTDOWN_TIMEOUT` | `30s` | Positive total grace period shared by all services during orderly shutdown |
+| `NOXA_DATABASE_URL` | `postgres://...` | PostgreSQL connection URL |
+| `NOXA_REDIS_ADDR` | `localhost:6379` | Optional Redis address for pub/sub fanout |
+| `NOXA_TLS_ENABLED` | `true` | Enable TLS 1.3 encryption on control port |
+| `NOXA_TLS_DIR` | `./data/tls` | Directory storing the generated TLS certificate and key |
+| `NOXA_TLS_CERT_FILE` / `NOXA_TLS_KEY_FILE` | empty | Custom certificate and key; both must be configured together |
+| `NOXA_FILE_TLS_ENABLED` | `true` | Enable TLS 1.3 on file transfers; disabling is development-only |
+| `NOXA_FILE_ROOT` | `./data/files` | Root storage path for uploaded channel files & avatars |
+| `NOXA_FILE_MAX_CONNECTIONS` | `128` | Concurrent accepted file-transfer connections (1–10000) |
+| `NOXA_PII_KEY_FILE` | `./data/keys/pii.key` | AES-256-GCM master key file path for PII encryption |
+| `NOXA_CHANNEL_TEMP_LIFETIME_SECONDS` | `60` | Grace period before an empty temporary channel is removed |
+| `NOXA_CHAT_MASTER_KEY_FILE` | `./data/keys/chat_master.key` | KEK file used to wrap persisted chat scope keys; back it up with PostgreSQL |
+| `NOXA_CHAT_MASTER_KEY` | empty | Secret-injection override for the key file: one base64 32-byte key or a newline-separated `id:base64` key ring; never commit it |
+| `NOXA_CHAT_LEGACY_HISTORY` | `encrypt` | One-time handling for legacy plaintext rows: `encrypt` or `purge` |
+| `NOXA_CHAT_KEY_ROTATE_MIN_SECONDS` | `60` | Minimum interval used to coalesce scope-key rotations |
+| `NOXA_CHAT_SEARCH_MAX_MESSAGES` | `2000` | Maximum history messages scanned by client-side search |
+| `NOXA_CHAT_MAX_LENGTH` | `4096` | Maximum decrypted chat payload size in UTF-8 bytes |
+| `NOXA_DEFAULT_GROUPS_ENABLED` | `true` | Auto-create and assign the built-in Guest and Member groups |
+| `NOXA_TURN_CREDENTIALS_TTL` | `24h` | TURN credential lifetime; must be positive and at most 30 days |
+| `NOXA_REDIS_DIAL_TIMEOUT` / `READ_TIMEOUT` / `WRITE_TIMEOUT` | `5s` / `3s` / `3s` | Redis client timeouts when Redis is enabled |
+| `NOXA_REDIS_TLS_ENABLED` | `false` | Enable verified Redis TLS (TLS 1.2+); optional server name and CA file use `NOXA_REDIS_TLS_SERVER_NAME` / `NOXA_REDIS_TLS_CA_FILE` |
 
-`VOICX_CHAT_MASTER_KEY` takes precedence over `VOICX_CHAT_MASTER_KEY_FILE`.
+`NOXA_CHAT_MASTER_KEY` takes precedence over `NOXA_CHAT_MASTER_KEY_FILE`.
 Use secret injection for the override; it accepts either a single base64 32-byte
 key or a newline-separated `id:base64` key ring for key rotation.
 
 ### Join by hostname with DNS SRV
 
 The desktop client accepts a hostname without a port in joins and bookmarks.
-Publish an SRV record for service `voicx`, protocol `tcp`, pointing to the
+Publish an SRV record for service `noxa`, protocol `tcp`, pointing to the
 server's **control TCP port** (including any externally mapped port):
 
 ```dns
-_voicx._tcp.voice.example.com. 3600 IN SRV 0 5 23456 node.example.com.
+_noxa._tcp.voice.example.com. 3600 IN SRV 0 5 23456 node.example.com.
 node.example.com.             3600 IN A   203.0.113.10
 ```
 
@@ -285,7 +287,7 @@ Development logging keeps Zap's unsampled development configuration.
 
 ### Certificate trust and rotation
 
-The generated certificate under `VOICX_TLS_DIR` is the server's persistent
+The generated certificate under `NOXA_TLS_DIR` is the server's persistent
 identity. Back up that directory with the server data volume; replacing or
 losing it changes the fingerprint seen by every client.
 
@@ -306,9 +308,9 @@ fingerprint. Later changes fail closed. For a planned rotation:
 
 ## 💻 ServerQuery Admin Protocol
 
-VoicX exposes a line-based administrative text interface on `127.0.0.1:12335`
+noXa exposes a line-based administrative text interface on `127.0.0.1:12335`
 for host-local automation. The raw protocol is plaintext: a non-loopback bind is
-rejected unless `VOICX_QUERY_ALLOW_REMOTE=true` is set explicitly. For remote
+rejected unless `NOXA_QUERY_ALLOW_REMOTE=true` is set explicitly. For remote
 administration, enable the SSH transport on port `12339` instead. Docker Compose
 does not publish either administration port by default; publish `12339` when
 enabling Query SSH.
@@ -331,8 +333,8 @@ enabling Query SSH.
 
 ```bash
 $ telnet 127.0.0.1 12335
-VoicX ServerQuery
-welcome to VoicX ServerQuery
+noXa ServerQuery
+welcome to noXa ServerQuery
 login admin secretpass
 error id=0 msg=ok
 channellist
@@ -349,14 +351,14 @@ error id=0 msg=ok
 ## 📂 Project Structure
 
 ```
-voicx/
+noxa/
 ├── client/                     # Desktop Client (Wails v2 / Go + ES6 UI)
 │   ├── desktop_windows.go      # Windows COM thread affinity & tray setup
 │   ├── frontend/               # Single-page UI (Vite / ES6 / Modular CSS)
 │   ├── hotkeys.go              # Global hotkey registration engine
 │   └── ptt_windows.go          # Win32 Virtual Key low-level PTT observer
 ├── cmd/
-│   ├── server/                 # Standalone VoicX Server entrypoint
+│   ├── server/                 # Standalone noXa Server entrypoint
 │   └── migrate/                # Standalone DB migration utility
 ├── internal/
 │   ├── auth/                   # Ed25519 challenge & Argon2id authentication
@@ -380,7 +382,7 @@ voicx/
 
 ## Branding assets
 
-The transparent VoicX logo is used on the login screen, in the application menu,
+The transparent noXa logo is used on the login screen, in the application menu,
 and at the top of this README. The original turquoise artwork is preserved;
 the checkerboard background has been removed from the source JPEG.
 
@@ -402,7 +404,7 @@ resize it when replacing icons, rather than converting it back to JPEG.
 
 ## Branding assets
 
-The transparent VoicX logo is used on the login screen, in the application menu,
+The transparent noXa logo is used on the login screen, in the application menu,
 and at the top of this README. The original turquoise artwork is preserved;
 the checkerboard background has been removed from the source JPEG.
 
@@ -434,7 +436,7 @@ or recovery procedures change.
 
 ## 🔒 Security & Vulnerability Reporting
 
-VoicX is engineered around a strict security posture:
+noXa is engineered around a strict security posture:
 - **Challenge Authentication**: Public key cryptography prevents password sniffing over untrusted networks.
 - **Strict TOFU Certificate Pinning**: Clients pin self-signed TLS certificates on first connect.
 - **PII Storage Protection**: Sensitive user metadata columns are encrypted at rest with AES-256-GCM authenticated data.

@@ -1,34 +1,34 @@
-# docker-compose.yml — voicx full stack (Go server + PostgreSQL + Redis)
+# docker-compose.yml — noxa full stack (Go server + PostgreSQL + Redis)
 #
 # Usage:
 #   make compose-up   # build & start the whole stack detached
 #   make compose-down # stop & remove containers/networks
 #
-# Services resolve each other by service name on the `voicx-net` bridge network
+# Services resolve each other by service name on the `noxa-net` bridge network
 # (e.g. the Go server connects to `postgres:5432` and `redis:6379`).
 #
-# The voicx service is configured purely through VOICX_* environment variables
+# The noxa service is configured purely through NOXA_* environment variables
 # below (no config file is mounted). Credentials/defaults can be overridden via
 # a .env file (see .env.example).
 
 services:
   # ---------------------------------------------------------------------------
-  # voicx — the Go voice/video server
+  # noxa — the Go voice/video server
   # ---------------------------------------------------------------------------
-  voicx:
+  noxa:
     build:
       context: .
       dockerfile: Dockerfile
       args:
         # Make/CI inject Git metadata. Empty values make a direct Compose build
         # derive a deterministic version from the copied source tree.
-        VOICX_VERSION: ${VOICX_VERSION:-}
-        VOICX_COMMIT: ${VOICX_COMMIT:-}
-        VOICX_DIRTY: ${VOICX_DIRTY:-false}
-        VOICX_BUILD_DATE: ${VOICX_BUILD_DATE:-}
-        VOICX_UPDATE_REPO: ${VOICX_UPDATE_REPO:-voicx/voicx}
-    image: ${VOICX_IMAGE:-voicx:dev}
-    container_name: voicx
+        NOXA_VERSION: ${NOXA_VERSION:-}
+        NOXA_COMMIT: ${NOXA_COMMIT:-}
+        NOXA_DIRTY: ${NOXA_DIRTY:-false}
+        NOXA_BUILD_DATE: ${NOXA_BUILD_DATE:-}
+        NOXA_UPDATE_REPO: ${NOXA_UPDATE_REPO:-arumes31/noxa}
+    image: ${NOXA_IMAGE:-noxa:dev}
+    container_name: noxa
     # --- GPU access for server-side hardware transcoding (optional) --------
     # Only needed when recording.video_args uses a hardware encoder. Uncomment
     # ONE of the variants below.
@@ -60,7 +60,7 @@ services:
     tmpfs:
       - /tmp
     networks:
-      - voicx-net
+      - noxa-net
     ports:
       # TeamSpeak-style voice transport (UDP)
       - "12334:12334/udp"
@@ -68,8 +68,8 @@ services:
       - "12333:12333"
       # Raw ServerQuery is loopback-only inside the container by default.
       # Prefer SSH for remote administration. If raw remote access is
-      # intentional, publish 12335 and set both VOICX_QUERY_ADDR=:12335 and
-      # VOICX_QUERY_ALLOW_REMOTE=true.
+      # intentional, publish 12335 and set both NOXA_QUERY_ADDR=:12335 and
+      # NOXA_QUERY_ALLOW_REMOTE=true.
       # - "12335:12335"
       # Preferred remote administration: enable Query SSH and publish 12339.
       # - "12339:12339"
@@ -80,10 +80,10 @@ services:
     volumes:
       # Writable data (uploaded files, avatars, icons, recordings) so the
       # root filesystem can stay read-only.
-      - voicxdata:/data
+      - noxadata:/data
       - type: bind
-        source: ${VOICX_COMPOSE_DATABASE_URL_FILE:-./docker/secrets/.empty}
-        target: /run/secrets/voicx_database_url
+        source: ${NOXA_COMPOSE_DATABASE_URL_FILE:-./docker/secrets/.empty}
+        target: /run/secrets/noxa_database_url
         read_only: true
         bind: { create_host_path: false }
       - type: bind
@@ -103,75 +103,75 @@ services:
         bind: { create_host_path: false }
     environment:
       # --- Logging ---
-      VOICX_LOG_LEVEL: ${VOICX_LOG_LEVEL:-info}
+      NOXA_LOG_LEVEL: ${NOXA_LOG_LEVEL:-info}
       # Required explicit choice: the sample .env selects local development.
       # Production validation adds database credential and TLS requirements.
-      VOICX_DEV_MODE: ${VOICX_DEV_MODE:?set VOICX_DEV_MODE to true or false}
+      NOXA_DEV_MODE: ${NOXA_DEV_MODE:?set NOXA_DEV_MODE to true or false}
 
       # --- Database (points at the postgres service) ---
       # The entrypoint builds a percent-encoded URL from these discrete values
       # unless a complete URL or URL_FILE is supplied for an external database.
-      VOICX_DATABASE_URL: ${VOICX_COMPOSE_DATABASE_URL:-}
-      VOICX_DATABASE_URL_FILE: ${VOICX_COMPOSE_DATABASE_URL_FILE:+/run/secrets/voicx_database_url}
+      NOXA_DATABASE_URL: ${NOXA_COMPOSE_DATABASE_URL:-}
+      NOXA_DATABASE_URL_FILE: ${NOXA_COMPOSE_DATABASE_URL_FILE:+/run/secrets/noxa_database_url}
       POSTGRES_HOST: postgres
       POSTGRES_PORT: "5432"
-      POSTGRES_USER: ${POSTGRES_USER:-voicx}
-      POSTGRES_DB: ${POSTGRES_DB:-voicx}
+      POSTGRES_USER: ${POSTGRES_USER:-noxa}
+      POSTGRES_DB: ${POSTGRES_DB:-noxa}
       POSTGRES_SSLMODE: ${POSTGRES_SSLMODE:-disable}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-}
       POSTGRES_PASSWORD_FILE: ${POSTGRES_PASSWORD_FILE:+/run/secrets/postgres_password}
-      VOICX_PII_KEY_FILE: "/data/keys/pii.key"
+      NOXA_PII_KEY_FILE: "/data/keys/pii.key"
 
       # --- Redis (points at the redis service) ---
-      VOICX_REDIS_ADDR: "redis:6379"
-      VOICX_REDIS_PASSWORD: ${REDIS_PASSWORD:-}
-      VOICX_REDIS_PASSWORD_FILE: ${REDIS_PASSWORD_FILE:+/run/secrets/redis_password}
+      NOXA_REDIS_ADDR: "redis:6379"
+      NOXA_REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+      NOXA_REDIS_PASSWORD_FILE: ${REDIS_PASSWORD_FILE:+/run/secrets/redis_password}
 
       # --- Listen addresses (kept in sync with the published ports) ---
-      VOICX_TCP_ADDR: ":12333"
-      VOICX_UDP_ADDR: ":12334"
+      NOXA_TCP_ADDR: ":12333"
+      NOXA_UDP_ADDR: ":12334"
       # gRPC carries Basic credentials over plaintext and is loopback-only.
-      VOICX_GRPC_ADDR: "127.0.0.1:12338"
-      VOICX_HEALTH_ADDR: ":12337"
-      VOICX_METRICS_ALLOW_REMOTE: ${VOICX_METRICS_ALLOW_REMOTE:-false}
-      VOICX_PPROF_ENABLED: ${VOICX_PPROF_ENABLED:-false}
-      VOICX_SHUTDOWN_TIMEOUT: ${VOICX_SHUTDOWN_TIMEOUT:-30s}
-      VOICX_QUERY_ADDR: ${VOICX_QUERY_ADDR:-127.0.0.1:12335}
-      VOICX_QUERY_ALLOW_REMOTE: ${VOICX_QUERY_ALLOW_REMOTE:-false}
-      VOICX_QUERY_SSH_ENABLED: ${VOICX_QUERY_SSH_ENABLED:-false}
-      VOICX_QUERY_SSH_ADDR: ":12339"
-      VOICX_QUERY_SSH_HOST_KEY: "/data/keys/query_ssh_host.key"
-      VOICX_FILE_ADDR: ":12336"
+      NOXA_GRPC_ADDR: "127.0.0.1:12338"
+      NOXA_HEALTH_ADDR: ":12337"
+      NOXA_METRICS_ALLOW_REMOTE: ${NOXA_METRICS_ALLOW_REMOTE:-false}
+      NOXA_PPROF_ENABLED: ${NOXA_PPROF_ENABLED:-false}
+      NOXA_SHUTDOWN_TIMEOUT: ${NOXA_SHUTDOWN_TIMEOUT:-30s}
+      NOXA_QUERY_ADDR: ${NOXA_QUERY_ADDR:-127.0.0.1:12335}
+      NOXA_QUERY_ALLOW_REMOTE: ${NOXA_QUERY_ALLOW_REMOTE:-false}
+      NOXA_QUERY_SSH_ENABLED: ${NOXA_QUERY_SSH_ENABLED:-false}
+      NOXA_QUERY_SSH_ADDR: ":12339"
+      NOXA_QUERY_SSH_HOST_KEY: "/data/keys/query_ssh_host.key"
+      NOXA_FILE_ADDR: ":12336"
 
       # --- Writable data on the named volume (read_only root fs) ---
-      VOICX_FILE_ROOT: "/data/files"
-      VOICX_RECORDING_DIR: "/data/recordings"
+      NOXA_FILE_ROOT: "/data/files"
+      NOXA_RECORDING_DIR: "/data/recordings"
       # TLS cert persists on the volume (stable TOFU fingerprint across restarts)
-      VOICX_TLS_DIR: "/data/tls"
+      NOXA_TLS_DIR: "/data/tls"
 
       # --- TURN (optional; must match the coturn service, profile "turn") ---
-      VOICX_TURN_SECRET: ${TURN_SECRET:-}
-      VOICX_TURN_SECRET_FILE: ${TURN_SECRET_FILE:+/run/secrets/turn_secret}
-      VOICX_TURN_REALM: ${TURN_REALM:-voicx}
+      NOXA_TURN_SECRET: ${TURN_SECRET:-}
+      NOXA_TURN_SECRET_FILE: ${TURN_SECRET_FILE:+/run/secrets/turn_secret}
+      NOXA_TURN_REALM: ${TURN_REALM:-noxa}
       # Comma-separated client URIs, e.g. turn:localhost:12340?transport=udp
-      VOICX_TURN_URIS: ${VOICX_TURN_URIS:-}
+      NOXA_TURN_URIS: ${NOXA_TURN_URIS:-}
   # ---------------------------------------------------------------------------
   # postgres — primary relational database
   # ---------------------------------------------------------------------------
   postgres:
     image: postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777 # 16.14-alpine3.24
-    container_name: voicx-postgres
+    container_name: noxa-postgres
     restart: unless-stopped
     networks:
-      - voicx-net
-    # Exposed only internally; the voicx service connects via `postgres:5432`.
+      - noxa-net
+    # Exposed only internally; the noxa service connects via `postgres:5432`.
     expose:
       - "5432"
     environment:
-      POSTGRES_USER: ${POSTGRES_USER:-voicx}
+      POSTGRES_USER: ${POSTGRES_USER:-noxa}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-}
       POSTGRES_PASSWORD_FILE: ${POSTGRES_PASSWORD_FILE:+/run/secrets/postgres_password}
-      POSTGRES_DB: ${POSTGRES_DB:-voicx}
+      POSTGRES_DB: ${POSTGRES_DB:-noxa}
     volumes:
       - pgdata:/var/lib/postgresql/data
       - type: bind
@@ -192,25 +192,25 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.backup
-    image: ${VOICX_BACKUP_IMAGE:-voicx-backup:dev}
+    image: ${NOXA_BACKUP_IMAGE:-noxa-backup:dev}
     profiles: ["backup"]
     restart: ${BACKUP_RESTART_POLICY:-unless-stopped}
     depends_on:
       postgres:
         condition: service_healthy
     networks:
-      - voicx-net
+      - noxa-net
     environment:
       PGHOST: postgres
       PGPORT: "5432"
-      PGUSER: ${POSTGRES_USER:-voicx}
-      PGDATABASE: ${POSTGRES_DB:-voicx}
+      PGUSER: ${POSTGRES_USER:-noxa}
+      PGDATABASE: ${POSTGRES_DB:-noxa}
       PGSSLMODE: ${POSTGRES_SSLMODE:-disable}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-}
       POSTGRES_PASSWORD_FILE: ${POSTGRES_PASSWORD_FILE:+/run/secrets/postgres_password}
       # A complete external application URL selects this fail-closed path:
       # every BACKUP_PG* setting and backup password source becomes required.
-      BACKUP_EXTERNAL_DATABASE: "${VOICX_COMPOSE_DATABASE_URL:+1}${VOICX_COMPOSE_DATABASE_URL_FILE:+1}"
+      BACKUP_EXTERNAL_DATABASE: "${NOXA_COMPOSE_DATABASE_URL:+1}${NOXA_COMPOSE_DATABASE_URL_FILE:+1}"
       BACKUP_PGHOST: ${BACKUP_PGHOST:-}
       BACKUP_PGPORT: ${BACKUP_PGPORT:-}
       BACKUP_PGUSER: ${BACKUP_PGUSER:-}
@@ -263,17 +263,17 @@ services:
   # ---------------------------------------------------------------------------
   redis:
     image: redis:7-alpine@sha256:e7723ff73d963f5cc6d9c4643ea3d989527a402a319239054e9472a7fb9219a2 # 7.4.10-alpine
-    container_name: voicx-redis
+    container_name: noxa-redis
     restart: unless-stopped
     networks:
-      - voicx-net
-    # Exposed only internally; the voicx service connects via `redis:6379`.
+      - noxa-net
+    # Exposed only internally; the noxa service connects via `redis:6379`.
     expose:
       - "6379"
     volumes:
       - redisdata:/data
-      - ./scripts/secret-env.sh:/usr/local/lib/voicx/secret-env.sh:ro
-      - ./scripts/redis-entrypoint.sh:/usr/local/bin/voicx-redis-entrypoint.sh:ro
+      - ./scripts/secret-env.sh:/usr/local/lib/noxa/secret-env.sh:ro
+      - ./scripts/redis-entrypoint.sh:/usr/local/bin/noxa-redis-entrypoint.sh:ro
       - type: bind
         source: ${REDIS_PASSWORD_FILE:-./docker/secrets/.empty}
         target: /run/secrets/redis_password
@@ -282,9 +282,9 @@ services:
     environment:
       REDIS_PASSWORD: ${REDIS_PASSWORD:-}
       REDIS_PASSWORD_FILE: ${REDIS_PASSWORD_FILE:+/run/secrets/redis_password}
-    entrypoint: ["/bin/sh", "/usr/local/bin/voicx-redis-entrypoint.sh"]
+    entrypoint: ["/bin/sh", "/usr/local/bin/noxa-redis-entrypoint.sh"]
     healthcheck:
-      test: [ "CMD-SHELL", ". /usr/local/lib/voicx/secret-env.sh && secret_env_load REDIS_PASSWORD optional && REDISCLI_AUTH=\"$$REDIS_PASSWORD\" redis-cli ping" ]
+      test: [ "CMD-SHELL", ". /usr/local/lib/noxa/secret-env.sh && secret_env_load REDIS_PASSWORD optional && REDISCLI_AUTH=\"$$REDIS_PASSWORD\" redis-cli ping" ]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -299,12 +299,12 @@ services:
   # Start with:  TURN_SECRET=<random> TURN_EXTERNAL_IP=<public ip> \
   #                docker compose --profile turn up -d
   #
-  # Uses coturn's REST API auth: voicx mints time-limited credentials from the
+  # Uses coturn's REST API auth: noxa mints time-limited credentials from the
   # shared static auth secret (internal/turn) and delivers them to clients in
-  # the auth response. TURN_SECRET must match VOICX_TURN_SECRET on the voicx
-  # service; set BOTH in .env or neither side works (445). Also set on voicx
+  # the auth response. TURN_SECRET must match NOXA_TURN_SECRET on the noxa
+  # service; set BOTH in .env or neither side works (445). Also set on noxa
   # (comma-separated):
-  #   VOICX_TURN_URIS=turn:<host>:12340?transport=udp,turn:<host>:12340?transport=tcp
+  #   NOXA_TURN_URIS=turn:<host>:12340?transport=udp,turn:<host>:12340?transport=tcp
   #
   # TURN_EXTERNAL_IP is REQUIRED for any client outside this host (445): on the
   # bridge network coturn discovers only its 172.x container address and would
@@ -313,27 +313,27 @@ services:
   # on 172.x but rewrites the ADVERTISED address to the public one. Leaving it
   # unset drops the flag, which is only correct for host-local testing.
   # (Alternative to --external-ip: network_mode: host, which also drops the
-  # 101-port relay publish — but it cannot coexist with the voicx-net bridge.)
+  # 101-port relay publish — but it cannot coexist with the noxa-net bridge.)
   # ---------------------------------------------------------------------------
   coturn:
     image: coturn/coturn:4.17.0-r0@sha256:7df59bcd84800c3978da2dd0d7fb17a8179e77a8bf667f678813120a9f18b094
-    container_name: voicx-coturn
+    container_name: noxa-coturn
     profiles: [ "turn" ]
     restart: unless-stopped
     networks:
-      - voicx-net
+      - noxa-net
     environment:
       TURN_SECRET: ${TURN_SECRET:-}
       TURN_SECRET_FILE: ${TURN_SECRET_FILE:+/run/secrets/turn_secret}
     volumes:
-      - ./scripts/coturn-entrypoint.sh:/usr/local/bin/voicx-coturn-entrypoint.sh:ro
-      - ./scripts/secret-env.sh:/usr/local/lib/voicx/secret-env.sh:ro
+      - ./scripts/coturn-entrypoint.sh:/usr/local/bin/noxa-coturn-entrypoint.sh:ro
+      - ./scripts/secret-env.sh:/usr/local/lib/noxa/secret-env.sh:ro
       - type: bind
         source: ${TURN_SECRET_FILE:-./docker/secrets/.empty}
         target: /run/secrets/turn_secret
         read_only: true
         bind: { create_host_path: false }
-    entrypoint: [ "/bin/sh", "/usr/local/bin/voicx-coturn-entrypoint.sh" ]
+    entrypoint: [ "/bin/sh", "/usr/local/bin/noxa-coturn-entrypoint.sh" ]
     ports:
       - "12340:12340"
       - "12340:12340/udp"
@@ -355,10 +355,10 @@ services:
       #   --tls-listening-port=12341
       #   --cert=/etc/coturn/certs/fullchain.pem
       #   --pkey=/etc/coturn/certs/privkey.pem
-      # then append turns:<host>:12341?transport=tcp to VOICX_TURN_URIS.
+      # then append turns:<host>:12341?transport=tcp to NOXA_TURN_URIS.
       - "--no-tls"
       - "--no-dtls"
-      - "--realm=${TURN_REALM:-voicx}"
+      - "--realm=${TURN_REALM:-noxa}"
       - "--use-auth-secret"
       # Empty when TURN_EXTERNAL_IP is unset; coturn ignores the empty argument.
       - "${TURN_EXTERNAL_IP:+--external-ip=$TURN_EXTERNAL_IP}"
@@ -376,11 +376,11 @@ services:
   # periodic transport outages rather than merely perturbing signaling.
   toxiproxy:
     image: ghcr.io/shopify/toxiproxy:2.12.0@sha256:9378ed52a28bc50edc1350f936f518f31fa95f0d15917d6eb40b8e376d1a214e
-    container_name: voicx-toxiproxy
+    container_name: noxa-toxiproxy
     profiles: [ "chaos-network" ]
     restart: "no"
     networks:
-      - voicx-net
+      - noxa-net
     ports:
       - "12365:8474"
       - "12366:12366"
@@ -389,19 +389,19 @@ services:
 # Networks
 # ---------------------------------------------------------------------------
 networks:
-  voicx-net:
+  noxa-net:
     driver: bridge
-    name: voicx-net
+    name: noxa-net
 
 # ---------------------------------------------------------------------------
 # Volumes
 # ---------------------------------------------------------------------------
 volumes:
   pgdata:
-    name: voicx-pgdata
+    name: ${NOXA_PGDATA_VOLUME:-noxa-pgdata}
   pgbackups:
-    name: voicx-pgbackups
+    name: ${NOXA_PGBACKUPS_VOLUME:-noxa-pgbackups}
   redisdata:
-    name: voicx-redisdata
-  voicxdata:
-    name: voicx-data
+    name: ${NOXA_REDISDATA_VOLUME:-noxa-redisdata}
+  noxadata:
+    name: ${NOXA_DATA_VOLUME:-noxa-data}

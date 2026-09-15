@@ -21,7 +21,7 @@ import (
 	"go.uber.org/zap"
 	"golang.org/x/net/websocket"
 
-	"voicx/internal/auth"
+	"noxa/internal/auth"
 )
 
 // Authenticator verifies bot credentials. It has the same shape as the
@@ -267,7 +267,7 @@ func parseTypes(raw string) ([]string, error) {
 func setWSHeaders(header http.Header) {
 	header.Set("Cache-Control", "no-store")
 	header.Set("Referrer-Policy", "no-referrer")
-	header.Set("WWW-Authenticate", `Basic realm="voicx events"`)
+	header.Set("WWW-Authenticate", `Basic realm="noxa events"`)
 	header.Set("X-Content-Type-Options", "nosniff")
 }
 

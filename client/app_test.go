@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"voicx/internal/netproto"
-	"voicx/internal/tlscert"
+	"noxa/internal/netproto"
+	"noxa/internal/tlscert"
 )
 
 func nextFrame(t *testing.T, frames <-chan *netproto.Frame, want netproto.MessageType) *netproto.Frame {
@@ -83,7 +83,7 @@ func TestAppOfflineContracts(t *testing.T) {
 	if got := a.SendChat("global", "", ""); got != "empty message" {
 		t.Fatalf("SendChat empty = %q", got)
 	}
-	if got := a.Greet("Ada"); got != "Hello Ada, welcome to voicx!" {
+	if got := a.Greet("Ada"); got != "Hello Ada, welcome to noXa!" {
 		t.Fatalf("Greet = %q", got)
 	}
 	for name, value := range map[string]string{

@@ -60,7 +60,7 @@ func TestTrayIconAssets(t *testing.T) {
 			}
 		})
 	}
-	if dir := os.Getenv("VOICX_TRAY_PREVIEW_DIR"); dir != "" {
+	if dir := os.Getenv("NOXA_TRAY_PREVIEW_DIR"); dir != "" {
 		if err := os.MkdirAll(dir, 0755); err != nil {
 			t.Fatal(err)
 		}

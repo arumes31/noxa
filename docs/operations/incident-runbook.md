@@ -1,4 +1,4 @@
-# VoicX incident runbook
+# noXa incident runbook
 
 Use this runbook for production availability, integrity, or confidentiality
 incidents. Preserve evidence before changing state, and record every command and
@@ -15,7 +15,7 @@ timestamp in UTC.
    curl --fail --silent --show-error http://127.0.0.1:12337/healthz
    curl --fail --silent --show-error http://127.0.0.1:12337/readyz
    curl --fail --silent --show-error http://127.0.0.1:12337/api/v1/schema/version
-   curl --fail --silent --show-error http://127.0.0.1:12337/metrics > voicx-metrics.txt
+   curl --fail --silent --show-error http://127.0.0.1:12337/metrics > noxa-metrics.txt
    ```
 
    `/metrics` and schema diagnostics are loopback-only by default. Keep them
@@ -33,7 +33,7 @@ timestamp in UTC.
 | --- | --- | --- |
 | `/healthz` fails | process/listener/runtime | inspect the service exit and resource limits; roll back the last release if correlated |
 | `/healthz` succeeds, `/readyz` fails | PostgreSQL or migration | inspect DB reachability, TLS, pool saturation, locks, and schema version |
-| rising `voicx_db_pool_wait_*` | pool exhaustion/slow query | identify blocked and long-running queries; scale only after ruling out a lock storm |
+| rising `noxa_db_pool_wait_*` | pool exhaustion/slow query | identify blocked and long-running queries; scale only after ruling out a lock storm |
 | rising UDP drops with healthy control | media admission/network | reduce load, inspect CPU/socket pressure and TURN health, preserve control traffic |
 | event-bus drops only | diagnostic consumers | disconnect slow consumers; this stream must not impair the product path |
 | file errors only | file root, permissions, disk, TLS | stop new uploads if integrity is uncertain; verify free space and root confinement |

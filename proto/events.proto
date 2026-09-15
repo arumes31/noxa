@@ -1,8 +1,8 @@
 syntax = "proto3";
 
-package voicx.v1;
+package noxa.v1;
 
-option go_package = "voicx/v1;voicxv1";
+option go_package = "noxa/v1;noxav1";
 
 // Events service streams server-side events to clients. Clients open a stream
 // and receive events scoped to their session (channels they are in, the

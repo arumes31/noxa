@@ -13,7 +13,7 @@ import (
 	"go.uber.org/zap/zapcore"
 	"go.uber.org/zap/zaptest/observer"
 
-	"voicx/internal/state"
+	"noxa/internal/state"
 )
 
 func newTestBroadcaster(t *testing.T) (*Broadcaster, *state.Manager) {

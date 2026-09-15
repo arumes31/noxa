@@ -8,7 +8,7 @@
 // lives here because the permissions package exposes no lookup of its own.
 package query
 
-import "voicx/internal/permissions"
+import "noxa/internal/permissions"
 
 // knownPermKeys is the set of permission identifiers the resolver understands.
 var knownPermKeys = func() map[string]bool {

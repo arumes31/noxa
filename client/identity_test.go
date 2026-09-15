@@ -13,7 +13,7 @@ import (
 
 // identityTestApp builds an App whose identity store and settings file both
 // live under t.TempDir(). Nothing here may reach the developer's own
-// <UserConfigDir>/voicx — an overwritten identity file is unrecoverable.
+// <UserConfigDir>/noxa — an overwritten identity file is unrecoverable.
 func identityTestApp(t *testing.T, protection string) *App {
 	t.Helper()
 	root := t.TempDir()
@@ -35,7 +35,7 @@ func identityTestApp(t *testing.T, protection string) *App {
 // reload, and a stable derived unique ID.
 func TestIdentityRoundTrip(t *testing.T) {
 	identityTestApp(t, "off")
-	path := filepath.Join(t.TempDir(), "voicx", "identity.json")
+	path := filepath.Join(t.TempDir(), "noxa", "identity.json")
 
 	id1, err := loadOrCreateIdentityAt(path)
 	if err != nil {

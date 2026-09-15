@@ -5,9 +5,9 @@ package server
 import (
 	"testing"
 
-	"voicx/internal/netproto"
-	"voicx/internal/permissions"
-	"voicx/internal/state"
+	"noxa/internal/netproto"
+	"noxa/internal/permissions"
+	"noxa/internal/state"
 )
 
 // invalidatedAll reports whether a full cache drop was recorded.

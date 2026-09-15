@@ -1,4 +1,4 @@
-module voicx/client
+module noxa/client
 
 go 1.27.1
 
@@ -9,7 +9,7 @@ require (
 	golang.design/x/hotkey v0.6.1
 	golang.org/x/crypto v0.57.0
 	golang.org/x/sys v0.48.0
-	voicx v0.4.3
+	noxa v0.4.3
 )
 
 require (
@@ -60,4 +60,4 @@ require (
 	golang.org/x/text v0.42.0 // indirect
 )
 
-replace voicx => ../
+replace noxa => ../

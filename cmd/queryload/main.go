@@ -18,7 +18,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"voicx/internal/config"
+	"noxa/internal/config"
 )
 
 type options struct {
@@ -30,8 +30,8 @@ type options struct {
 func main() {
 	var o options
 	flag.StringVar(&o.addr, "addr", config.DefaultQueryAddr, "ServerQuery address")
-	flag.StringVar(&o.user, "user", os.Getenv("VOICX_QUERY_USER"), "admin unique ID (or VOICX_QUERY_USER)")
-	flag.StringVar(&o.password, "password", os.Getenv("VOICX_QUERY_PASSWORD"), "admin password (or VOICX_QUERY_PASSWORD)")
+	flag.StringVar(&o.user, "user", os.Getenv("NOXA_QUERY_USER"), "admin unique ID (or NOXA_QUERY_USER)")
+	flag.StringVar(&o.password, "password", os.Getenv("NOXA_QUERY_PASSWORD"), "admin password (or NOXA_QUERY_PASSWORD)")
 	flag.StringVar(&o.command, "command", "clientlist", "query command to execute")
 	flag.IntVar(&o.rate, "rate", 5000, "target aggregate requests per second")
 	flag.IntVar(&o.connections, "connections", 64, "persistent query connections")

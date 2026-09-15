@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"voicx/internal/metrics"
+	"noxa/internal/metrics"
 )
 
 type rotateFailureStore struct {
@@ -56,7 +56,7 @@ func TestChatKeyFailuresAreCountedOnceAtPublicBoundaries(t *testing.T) {
 	var familyFound bool
 	values := map[string]float64{}
 	for _, family := range families {
-		if family.GetName() != "voicx_chat_crypto_failures_total" {
+		if family.GetName() != "noxa_chat_crypto_failures_total" {
 			continue
 		}
 		familyFound = true

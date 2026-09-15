@@ -1,8 +1,8 @@
 // identity.go implements the client's Ed25519 identity (TS3 model: the
 // identity IS the key pair) and the multiple-identities manager (351).
-// Identities live one file per identity in <UserConfigDir>/voicx/identities/
+// Identities live one file per identity in <UserConfigDir>/noxa/identities/
 // with 0600 permissions; settings.ActiveIdentity records which one is
-// current. The legacy single <UserConfigDir>/voicx/identity.json is migrated
+// current. The legacy single <UserConfigDir>/noxa/identity.json is migrated
 // in on first use.
 package main
 
@@ -23,7 +23,7 @@ import (
 
 	"golang.org/x/crypto/nacl/box"
 
-	"voicx/internal/auth"
+	"noxa/internal/auth"
 )
 
 // identity is the client's key material, PEM/base64-encoded: the Ed25519
@@ -101,7 +101,7 @@ func (id *identity) uniqueID() (string, error) {
 // --- storage layout (351) ------------------------------------------------------
 
 // identityRootOverride redirects the identity store away from the real
-// <UserConfigDir>/voicx. Tests set it so no test can create, switch or delete
+// <UserConfigDir>/noxa. Tests set it so no test can create, switch or delete
 // an identity in the developer's own config directory.
 var identityRootOverride string
 
@@ -114,7 +114,7 @@ func identityRoot() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(dir, "voicx"), nil
+	return filepath.Join(dir, "noxa"), nil
 }
 
 // identitiesDir returns <root>/identities.

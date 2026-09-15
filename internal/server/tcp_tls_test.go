@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"voicx/internal/config"
-	"voicx/internal/netproto"
+	"noxa/internal/config"
+	"noxa/internal/netproto"
 )
 
 // startTLSTestServer starts a bare TCPServer and returns its address plus a

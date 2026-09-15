@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"voicx/internal/tlscert"
+	"noxa/internal/tlscert"
 )
 
 func mustVerifyTOFU(t *testing.T, ks *knownServers, addr, fp string) trustStatus {

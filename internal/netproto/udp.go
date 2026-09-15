@@ -1,4 +1,4 @@
-// Package netproto defines the wire formats used by the voicx server.
+// Package netproto defines the wire formats used by the noxa server.
 // This file declares the UDP message types and a small header parser used by
 // the UDP listener (internal/server/udp.go).
 //

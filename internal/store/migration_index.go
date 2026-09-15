@@ -14,8 +14,8 @@ import (
 )
 
 const (
-	indexProbeTable = "voicx_migration_index_probe"
-	indexProbeName  = "voicx_migration_index_probe_idx"
+	indexProbeTable = "noxa_migration_index_probe"
+	indexProbeName  = "noxa_migration_index_probe_idx"
 )
 
 type resolvedTable struct {

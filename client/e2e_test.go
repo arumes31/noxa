@@ -16,7 +16,7 @@ import (
 	"golang.org/x/crypto/nacl/box"
 	"golang.org/x/crypto/nacl/secretbox"
 
-	"voicx/internal/netproto"
+	"noxa/internal/netproto"
 )
 
 func genPair(t *testing.T) (pub, priv [32]byte) {

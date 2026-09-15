@@ -10,7 +10,7 @@ import (
 	"net"
 	"testing"
 
-	"voicx/internal/netproto"
+	"noxa/internal/netproto"
 )
 
 type transferRecordingWriter struct {

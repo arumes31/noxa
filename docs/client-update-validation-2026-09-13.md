@@ -51,14 +51,14 @@ Isolated checkout: `temp/updater-release`, branch
   hard-coded old-release expectations from fallback-version tests.
 
 Branch pushed to GitHub. CI run:
-https://github.com/arumes31/voicx/actions/runs/34748687080
+https://github.com/arumes31/noxa/actions/runs/34748687080
 Status at handoff: queued; no GitHub test result claimed.
 
 ## Deployment completed after explicit user approval
 
 The user approved creation and storage of the initial release-signing key.
 The private key was generated in a temporary file outside the repository,
-uploaded directly into the repository's VOICX_UPDATE_SIGNING_KEY Actions
+uploaded directly into the repository's NOXA_UPDATE_SIGNING_KEY Actions
 secret, and the temporary private-key file was removed. Public key:
 `V2gJha/+dbSOAz0F8EBCX6358VJJD0JDtD+wKZeemFg=`.
 
@@ -71,10 +71,10 @@ push until the container build passed; the full branch CI then succeeded.
 
 Release `v0.4.1` was published at 2026-09-13 13:08:46 UTC from commit
 `47257f3afed3310084ea3b0d20a67351e95055a1`:
-https://github.com/arumes31/voicx/releases/tag/v0.4.1
+https://github.com/arumes31/noxa/releases/tag/v0.4.1
 
 Tagged CI (including build, signing, publication, and container image) succeeded:
-https://github.com/arumes31/voicx/actions/runs/34758605091
+https://github.com/arumes31/noxa/actions/runs/34758605091
 Tagged lint run `34758604979` also succeeded.
 
 Published Windows client: 15,374,336 bytes, SHA-256
@@ -105,7 +105,7 @@ The startup button, progress, retry and restart states passed browser tests;
 real Windows self-replacement and launching a replacement while the old
 process runs passed integration tests. A complete native GUI click-through
 from startup through Update now and Restart now is still unverified.
-Computer Use state capture for the disposable VoicX-Update-E2E.exe instance
+Computer Use state capture for the disposable noXa-Update-E2E.exe instance
 returned `Computer Use app approval timed out`. The user was asked to approve
 that app access; no reply had arrived at this verification point. The separate
 ALPHA/BRAVO/CHARLIE native audit instances were not touched. Our disposable
@@ -135,7 +135,7 @@ Local pinned Go 1.26.6 validation:
 - Version metadata, manifest, and signer tests passed.
 - Each rejection preserves the disposable installed executable and user-data fixture; valid replacements launch the version probe while the old process remains alive.
 
-Patch branch CI: https://github.com/arumes31/voicx/actions/runs/34762743551.
+Patch branch CI: https://github.com/arumes31/noxa/actions/runs/34762743551.
 Publication and post-release live verification are pending at this point.
 
 ## Native update flow verified by the coordinated audit
@@ -149,15 +149,15 @@ The ALPHA/BRAVO/CHARLIE native audit (same workspace, task 01a09973-446f-7641-98
 
 Evidence under temp/ui-20260913-01/evidence: update-unwritable-green.json, update-native-relaunch.json, pre-update-profile.json, post-update-profile.json; broader native report: docs/native-ui-integration-2026-09-13.md. These are native fixture-server tests, distinct from the real GitHub artifact verification below.
 
-The full patch branch CI and lint passed. Tag v0.4.2 points to 79a6032f50d920813d969d474b475a40d7761866. Tagged build/sign/publish run: https://github.com/arumes31/voicx/actions/runs/34763143636.
+The full patch branch CI and lint passed. Tag v0.4.2 points to 79a6032f50d920813d969d474b475a40d7761866. Tagged build/sign/publish run: https://github.com/arumes31/noxa/actions/runs/34763143636.
 
 ## Final published result: v0.4.2
 
 Published stable/latest at 2026-09-13 14:44:43 UTC:
-https://github.com/arumes31/voicx/releases/tag/v0.4.2.
+https://github.com/arumes31/noxa/releases/tag/v0.4.2.
 All tagged CI jobs passed, including build, signing, publication and container image. Tagged lint run 34763143512 also passed.
 
-Independently downloaded assets passed manifest signature, SHA-256, and GitHub provenance verification restricted to arumes31/voicx/.github/workflows/ci.yml:
+Independently downloaded assets passed manifest signature, SHA-256, and GitHub provenance verification restricted to arumes31/noxa/.github/workflows/ci.yml:
 - Windows client: 15,423,488 bytes, SHA-256 c54585c7126821626ca5857148d0e03f6895120b066f465d26189bfd68cf9684.
 - Linux server: 28,074,146 bytes, SHA-256 d42eb1642f2f497c1cc0c9185676dc8ac46559e7a5c6e7c6918804847bcb8ae1.
 Evidence: temp/release-0.4.2-verification/, including both provenance JSON results.

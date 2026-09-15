@@ -15,8 +15,8 @@ import (
 	"testing"
 	"time"
 
-	"voicx/internal/netproto"
-	"voicx/internal/store"
+	"noxa/internal/netproto"
+	"noxa/internal/store"
 )
 
 // startServer starts a file-transfer server on an ephemeral port and returns

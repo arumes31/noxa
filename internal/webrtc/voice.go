@@ -50,7 +50,7 @@ const (
 	defaultRenegRateLimit = 2 * time.Second
 )
 
-// Voice is the signaling and routing facade for the voicx voice pipeline.
+// Voice is the signaling and routing facade for the noxa voice pipeline.
 type Voice struct {
 	engine *Engine
 	router *Router

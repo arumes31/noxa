@@ -5,7 +5,7 @@ import { copyToClipboard } from "./clipboard.js";
 import { pickIcon } from "./image-tools.js";
 import { closeDialog, isCurrentServerDialog, mountServerDialog } from "./modal.js";
 
-const V = () => window.__voicx;
+const V = () => window.__noxa;
 
 let menuEl = null;
 
@@ -19,7 +19,7 @@ function closeMenu() {
 function openContextMenu(x, y, client) {
     closeMenu();
     const { $ } = V();
-    const P = window.__voicxPerms;
+    const P = window.__noxaPerms;
     // (306) multi-select: with several users selected, batch actions apply
     // to all of them.
     const sel = V().state.multiSelect;
@@ -87,7 +87,7 @@ function openContextMenu(x, y, client) {
     const pokeAct = menuEl.querySelector('[data-act="poke"]');
     if (pokeAct) pokeAct.onclick = () => {
         closeMenu();
-        window.__voicxSocial.openPoke(client);
+        window.__noxaSocial.openPoke(client);
     };
     const contactAct = menuEl.querySelector('[data-act="contact"]');
     if (contactAct) contactAct.onclick = async () => {
@@ -143,7 +143,7 @@ function openContextMenu(x, y, client) {
 // every selected user.
 function openBatchMenu(x, y, clientIDs) {
     closeMenu();
-    const P = window.__voicxPerms;
+    const P = window.__noxaPerms;
     const myID = V().state.myClientID;
     const others = clientIDs.filter((id) => id !== myID);
     menuEl = document.createElement("div");
@@ -361,7 +361,7 @@ function openClientInfo(client) {
     const card = document.querySelector(`#client-card .card-avatar img`);
     if (card) {
         card.style.cursor = "zoom-in";
-        card.onclick = () => window.__voicxSocial.avatarLightbox(card.src);
+        card.onclick = () => window.__noxaSocial.avatarLightbox(card.src);
     }
     // (315) local per-user note editor.
     const noteRow = document.createElement("div");
@@ -370,9 +370,9 @@ function openClientInfo(client) {
         <div class="ci-label">Local note</div>
         <div class="ci-val"><input class="dlg-input ci-note-input" placeholder="only you see this…" /></div>`;
     const noteInput = noteRow.querySelector(".ci-note-input");
-    noteInput.value = window.__voicxSocial.userNote(client.unique_id);
+    noteInput.value = window.__noxaSocial.userNote(client.unique_id);
     noteInput.onchange = () => {
-        window.__voicxSocial.saveUserNote(client.unique_id, noteInput.value.trim())
+        window.__noxaSocial.saveUserNote(client.unique_id, noteInput.value.trim())
             .then(() => V().toast("note saved"));
     };
     overlay.querySelector(".ci-grid").appendChild(noteRow);
@@ -381,7 +381,7 @@ function openClientInfo(client) {
     if (groups) {
         const gRow = document.createElement("div");
         gRow.className = "ci-note";
-        gRow.innerHTML = `<div class="ci-label">Groups</div><div class="ci-val">${window.__voicxSocial.esc(groups)}</div>`;
+        gRow.innerHTML = `<div class="ci-label">Groups</div><div class="ci-val">${window.__noxaSocial.esc(groups)}</div>`;
         overlay.querySelector(".ci-grid").appendChild(gRow);
     }
 
@@ -515,7 +515,7 @@ const QUALITY_PRESETS = {
 function openChannelMenu(x, y, channel) {
     closeMenu();
     const isCurrent = channel.ChannelID === V().state.myChannelID;
-    const isSubscribed = !!window.__voicxChat?.isSubscribed?.(channel.ChannelID);
+    const isSubscribed = !!window.__noxaChat?.isSubscribed?.(channel.ChannelID);
     // (320) recent channels for quick rejoin.
     const recent = (V().recentChannels ? V().recentChannels() : [])
         .map((id) => V().state.channels.find((c) => c.ChannelID === id))
@@ -541,11 +541,11 @@ function openChannelMenu(x, y, channel) {
     menuEl.onclick = (e) => e.stopPropagation();
     menuEl.querySelector('[data-act="open-chat"]').onclick = () => {
         closeMenu();
-        window.__voicxChat?.openChannelTab?.(channel.ChannelID);
+        window.__noxaChat?.openChannelTab?.(channel.ChannelID);
     };
     menuEl.querySelector('[data-act="subscription"]').onclick = () => {
         closeMenu();
-        if (!isCurrent) window.__voicxChat?.setChannelSubscription?.(channel.ChannelID, !isSubscribed);
+        if (!isCurrent) window.__noxaChat?.setChannelSubscription?.(channel.ChannelID, !isSubscribed);
     };
     menuEl.querySelector('[data-act="edit"]').onclick = () => {
         closeMenu();
@@ -589,7 +589,7 @@ function recentChannels() {
 // openChannelNotify edits the per-channel notification overrides
 // (386/387/389): inherit/on/off per event class, mute, and watch threshold.
 function openChannelNotify(channel) {
-    const N = window.__voicxNotify;
+    const N = window.__noxaNotify;
     const ov = N.channelOverride(channel.ChannelID) || {};
     const overlay = document.createElement("div");
     overlay.className = "dlg-overlay";
@@ -599,7 +599,7 @@ function openChannelNotify(channel) {
         </select>`;
     overlay.innerHTML = `
         <div class="dlg">
-            <h3>Notifications: #${window.__voicxSocial.esc(channel.Name)}</h3>
+            <h3>Notifications: #${window.__noxaSocial.esc(channel.Name)}</h3>
             <label class="dlg-label">Messages</label>${sel("cn-messages", ov.messages)}
             <label class="dlg-label">Mentions & keywords</label>${sel("cn-mentions", ov.mentions)}
             <label class="dlg-label">Joins & leaves</label>${sel("cn-joins", ov.joins)}
@@ -804,7 +804,7 @@ export function openChannelEdit(channel, { focusJoinPower = false } = {}) {
     overlay.className = "dlg-overlay";
     // (156 honest UI): the server does not auto-assign a channel-creator
     // group; show the chip when the caller holds channel-modify rights.
-    const adminChip = window.__voicxPerms.canPermManage() || V().state.isAdmin ||
+    const adminChip = window.__noxaPerms.canPermManage() || V().state.isAdmin ||
         (V().state.myPerms?.get("b_channel_modify")?.value > 0)
         ? `<span class="group-chip ce-admin-chip" title="you hold b_channel_modify here">channel admin</span>`
         : "";
@@ -1045,7 +1045,7 @@ export function openChannelEdit(channel, { focusJoinPower = false } = {}) {
 // --- wiring -------------------------------------------------------------------
 
 export function initClientInfo() {
-    window.__voicx.openClientInfo = openClientInfo;
+    window.__noxa.openClientInfo = openClientInfo;
     const tree = document.getElementById("channel-tree");
     // (164) root channel creation via the sidebar + button.
     document.getElementById("channel-create-btn").onclick = (e) => {

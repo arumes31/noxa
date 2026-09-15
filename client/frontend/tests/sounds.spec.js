@@ -32,12 +32,12 @@ test("static speech decodes and frequent contact cues survive mandatory repetiti
 test("original sound set decodes, completes Test All, and releases all source nodes", async ({ page }) => {
     await page.goto("/");
     const result = await page.evaluate(async () => {
-        window.__voicx = { state: { settings: { play_sounds: false, sound_volume: 100 } } };
-        window.__voicxPolish = { dndActive: () => false };
+        window.__noxa = { state: { settings: { play_sounds: false, sound_volume: 100 } } };
+        window.__noxaPolish = { dndActive: () => false };
         const { SoundEngine } = await import("/src/sound-engine.js");
         const { SOUND_EVENTS } = await import("/src/sound-catalog.js");
         const engine = new SoundEngine({
-            getState: () => window.__voicx.state, isDND: () => false,
+            getState: () => window.__noxa.state, isDND: () => false,
             createContext: () => new AudioContext({ latencyHint: "interactive" }),
             load: async url => (await fetch(url)).arrayBuffer(),
         });

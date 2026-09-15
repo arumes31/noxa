@@ -5,7 +5,7 @@ package main
 import (
 	"time"
 
-	"voicx/internal/netproto"
+	"noxa/internal/netproto"
 )
 
 // SetStatus sets the caller's presence status ("online"|"away"|"busy") and

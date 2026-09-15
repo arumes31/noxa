@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/pion/webrtc/v4"
-	"voicx/internal/netproto"
+	"noxa/internal/netproto"
 )
 
 func TestAnswerRenegotiationAcceptsAdditionalPublisher(t *testing.T) {

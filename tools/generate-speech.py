@@ -1,4 +1,4 @@
-"""Development-only static speech rendering. Never imported or run by VOICX.
+"""Development-only static speech rendering. Never imported or run by NOXA.
 
 Usage: python tools/generate-speech.py --models temp/sound-runtime/speech-models
 Requires piper-tts==1.4.2 and numpy in an isolated environment.

@@ -7,9 +7,9 @@ import (
 	"strings"
 	"testing"
 
-	"voicx/internal/netproto"
-	"voicx/internal/permissions"
-	"voicx/internal/state"
+	"noxa/internal/netproto"
+	"noxa/internal/permissions"
+	"noxa/internal/state"
 )
 
 func TestSubscriptionSetIsAuthoritativeDeduplicatedAndSorted(t *testing.T) {

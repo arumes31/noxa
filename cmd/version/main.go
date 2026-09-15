@@ -1,4 +1,4 @@
-// Command version calculates voicx build metadata without modifying source
+// Command version calculates noxa build metadata without modifying source
 // files. It is shared by local builds, release CI, and container publishing.
 package main
 
@@ -16,7 +16,7 @@ import (
 
 	"golang.org/x/mod/modfile"
 
-	appversion "voicx/internal/version"
+	appversion "noxa/internal/version"
 )
 
 func main() {
@@ -133,7 +133,7 @@ func linkerFlags(metadata appversion.Metadata) string {
 	}
 	parts := make([]string, 0, len(values))
 	for _, value := range values {
-		parts = append(parts, "-X=voicx/internal/version."+value.name+"="+value.value)
+		parts = append(parts, "-X=noxa/internal/version."+value.name+"="+value.value)
 	}
 	return strings.Join(parts, " ")
 }
@@ -143,12 +143,12 @@ func writeGitHubEnvironment(writer io.Writer, metadata appversion.Metadata) erro
 		name  string
 		value string
 	}{
-		{name: "VOICX_VERSION", value: metadata.Version},
-		{name: "VOICX_COMMIT", value: metadata.Commit},
-		{name: "VOICX_BUILD_DATE", value: metadata.BuildDate},
-		{name: "VOICX_DIRTY", value: strconv.FormatBool(metadata.Dirty)},
-		{name: "VOICX_PRERELEASE", value: strconv.FormatBool(appversion.IsPrerelease(metadata.Version))},
-		{name: "VOICX_LDFLAGS", value: linkerFlags(metadata)},
+		{name: "NOXA_VERSION", value: metadata.Version},
+		{name: "NOXA_COMMIT", value: metadata.Commit},
+		{name: "NOXA_BUILD_DATE", value: metadata.BuildDate},
+		{name: "NOXA_DIRTY", value: strconv.FormatBool(metadata.Dirty)},
+		{name: "NOXA_PRERELEASE", value: strconv.FormatBool(appversion.IsPrerelease(metadata.Version))},
+		{name: "NOXA_LDFLAGS", value: linkerFlags(metadata)},
 	}
 	for _, value := range values {
 		if strings.ContainsAny(value.value, "\r\n") {
@@ -166,10 +166,10 @@ func dockerArguments(metadata appversion.Metadata) []string {
 		name  string
 		value string
 	}{
-		{name: "VOICX_VERSION", value: metadata.Version},
-		{name: "VOICX_COMMIT", value: metadata.Commit},
-		{name: "VOICX_DIRTY", value: strconv.FormatBool(metadata.Dirty)},
-		{name: "VOICX_BUILD_DATE", value: metadata.BuildDate},
+		{name: "NOXA_VERSION", value: metadata.Version},
+		{name: "NOXA_COMMIT", value: metadata.Commit},
+		{name: "NOXA_DIRTY", value: strconv.FormatBool(metadata.Dirty)},
+		{name: "NOXA_BUILD_DATE", value: metadata.BuildDate},
 	}
 	parts := make([]string, 0, len(values)*2)
 	for _, value := range values {
@@ -189,7 +189,7 @@ func checkDeclarations(root string) error {
 		"client/frontend/package.json":          base,
 		"client/frontend/package-lock.json":     base,
 		"client/wails.json":                     base,
-		"client/go.mod local voicx requirement": "v" + base,
+		"client/go.mod local noxa requirement": "v" + base,
 		"internal/version default":              base,
 	}
 
@@ -213,7 +213,7 @@ func checkDeclarations(root string) error {
 		"client/frontend/package.json":          packageVersion,
 		"client/frontend/package-lock.json":     lockVersion,
 		"client/wails.json":                     wailsVersion,
-		"client/go.mod local voicx requirement": moduleVersion,
+		"client/go.mod local noxa requirement": moduleVersion,
 		"internal/version default":              appversion.DeclaredRelease,
 	}
 	problems := []string{}
@@ -300,12 +300,12 @@ func readLocalModuleVersion(path string) (string, error) {
 	}
 	versions := []string{}
 	for _, requirement := range parsed.Require {
-		if requirement.Mod.Path == "voicx" {
+		if requirement.Mod.Path == "noxa" {
 			versions = append(versions, requirement.Mod.Version)
 		}
 	}
 	if len(versions) != 1 {
-		return "", fmt.Errorf("%s must have exactly one voicx requirement, found %d", path, len(versions))
+		return "", fmt.Errorf("%s must have exactly one noxa requirement, found %d", path, len(versions))
 	}
 	return versions[0], nil
 }

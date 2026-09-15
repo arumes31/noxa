@@ -2,7 +2,7 @@
 # Exercises the pinned backup image's root entrypoint and real gosu drop.
 set -eu
 
-image=${BACKUP_IMAGE:-voicx-backup:dev}
+image=${BACKUP_IMAGE:-noxa-backup:dev}
 
 stop_signal=$(docker image inspect --format '{{.Config.StopSignal}}' "$image")
 [ "$stop_signal" = SIGTERM ] || {

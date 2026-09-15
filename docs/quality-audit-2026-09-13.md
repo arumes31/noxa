@@ -23,7 +23,7 @@ subsequent commit of that work and supersedes the old toolchain and probe status
   Node 24.19.0, npm 11.17.0, Docker Desktop 4.90.0 / Engine 29.7.2.
 - Raw command evidence is kept in ignored `temp/audit-20260913/`.
 - Disposable PostgreSQL 16 and Redis 7 containers are named
-  `voicx-audit-20260913-postgres` and `voicx-audit-20260913-redis`, using
+  `noxa-audit-20260913-postgres` and `noxa-audit-20260913-redis`, using
   loopback ports 55483 and 56383. Existing deployment configuration and data
   are not inputs to the audit.
 - Disposable server, PostgreSQL and Redis processes were stopped at completion;
@@ -158,7 +158,7 @@ user/channel/group/permission relationships in addition to the migration ledger.
 README prerequisites now match the Go 1.26.6 module manifests.
 
 Direct client `go mod verify` fails even with a fresh cache because Go tries to
-verify the nonexistent archive for local replacement `voicx v0.4.0`. A temporary
+verify the nonexistent archive for local replacement `noxa v0.4.0`. A temporary
 workspace marking both modules as local source verifies every downloaded dependency
 successfully. CI uses that workspace only for checksum verification; normal builds
 retain the module layout. The direct-command failure remains explicitly recorded.
@@ -176,15 +176,15 @@ advisory in `libcrypto3` and `libssl3`. The
 [gRPC receive-buffer exhaustion advisory](https://github.com/grpc/grpc-go/security/advisories/GHSA-vp52-pcj8-j9qc)
 affects the ordinary server transport used here. The separate
 [xDS crash advisory](https://github.com/grpc/grpc-go/security/advisories/GHSA-2v4p-qf9q-27wj)
-requires an xDS server, which VoicX does not instantiate. Root now pins gRPC 1.83.2
+requires an xDS server, which noXa does not instantiate. Root now pins gRPC 1.83.2
 (Go minimum 1.25), including its required x/net 0.58.0 in both module graphs.
 No other unrelated dependency upgrades were made.
 
 The runtime now requires OpenSSL libraries at least 3.5.8-r0 while retaining the
 pinned Alpine base. This fixes the packaged
 [OpenSSL QUIC memory-growth advisory](https://github.com/openssl/openssl/releases/tag/openssl-3.5.8);
-VoicX's static Go server does not use OpenSSL QUIC, so this package finding is not
-claimed as an exploitable VoicX listener. The rebuilt image's HIGH/CRITICAL scan
+noXa's static Go server does not use OpenSSL QUIC, so this package finding is not
+claimed as an exploitable noXa listener. The rebuilt image's HIGH/CRITICAL scan
 passes with zero findings, without exclusions. Govulncheck separately reports zero
 reachable vulnerabilities; scanner databases and reachability models differ.
 
@@ -234,7 +234,7 @@ those probes; the original files remain unchanged.
 | root snapshot | `go run ./cmd/version -check` | pass |
 | root | `go mod verify` | pass |
 | temporary workspace, root/client | `go work init <root> <root>/client`; `go mod verify` | pass, including fresh module cache |
-| snapshot | `docker build -t voicx-audit:20260913 --build-arg VOICX_UPDATE_REPO=arumes31/voicx .` | Linux amd64 image built locally; user 10001; disposable startup ready; shutdown exit 0 |
+| snapshot | `docker build -t noxa-audit:20260913 --build-arg NOXA_UPDATE_REPO=arumes31/noxa .` | Linux amd64 image built locally; user 10001; disposable startup ready; shutdown exit 0 |
 | disposable Linux container | `sh scripts/test-container-entrypoints.sh` | pass; root-only gosu cases explicitly outside this harness |
 | rebuilt image | `trivy image --input audit-image-fixed.tar --scanners vuln --severity HIGH,CRITICAL --exit-code 1` | exit 0; zero HIGH/CRITICAL findings; no exclusions |
 | root history and source-only copy | Gitleaks 8.30.1 `git --redact` and `dir --redact` | both exit 1: two reviewed false positives each; no suppression added |
@@ -249,7 +249,7 @@ split; no newer coverage figure is inferred. Post-update vet/build, lint, both
 reachable-vulnerability scans, checksum verification and tidy-diff checks also passed.
 Exact counts are in `post-dependency-test-summary.json`.
 
-The final image `voicx-audit:20260913-fixed` has ID
+The final image `noxa-audit:20260913-fixed` has ID
 `sha256:fccfa9f51375842a43d523be9655f1a22142682310eae329cadfed48fa42d7fd`.
 It contains OpenSSL 3.5.8-r0 and gRPC 1.83.2, reached `/readyz` as UID/GID 10001,
 and stopped with exit 0. Build/scan/runtime evidence is in `docker-build-fixed.log`,
@@ -362,8 +362,8 @@ infrastructure. Existing scoped coverage thresholds remain unchanged.
 ## Reproducing disposable tests
 
 Use the PostgreSQL/Redis image digests from `.github/workflows/ci.yml`, distinct
-container names and loopback host ports. Set `VOICX_TEST_DATABASE_URL` to an audit-only
-database and `VOICX_REDIS_ADDR` to the audit Redis instance. Never use `.env` or
+container names and loopback host ports. Set `NOXA_TEST_DATABASE_URL` to an audit-only
+database and `NOXA_REDIS_ADDR` to the audit Redis instance. Never use `.env` or
 default local endpoints as implicit authorization to mutate an existing deployment.
 Windows Go race tests require the compatible MinGW gcc toolchain; Linux desktop
 tests additionally need the native packages and virtual display listed in CI.
@@ -373,7 +373,7 @@ Playwright installation is `npx playwright install chromium` on Windows and
 For checksum verification of the locally replaced modules in PowerShell:
 
 ```powershell
-$env:GOWORK = Join-Path $env:TEMP 'voicx-verify.work' # choose a new path
+$env:GOWORK = Join-Path $env:TEMP 'noxa-verify.work' # choose a new path
 go work init (Get-Location).Path (Join-Path (Get-Location).Path 'client')
 go mod verify
 Push-Location client
@@ -458,7 +458,7 @@ not counts of distinct end-user workflows.
 The exact full-suite commands, each with `GOTOOLCHAIN=go1.27.1`, were:
 
 ```powershell
-# Repository root; VOICX_TEST_DATABASE_URL and VOICX_REDIS_ADDR point to audit services.
+# Repository root; NOXA_TEST_DATABASE_URL and NOXA_REDIS_ADDR point to audit services.
 go test -race -count=1 -json -covermode=atomic '-coverprofile=temp/audit-20260913/followup/final-root-coverage.out' ./...
 # From client/ after building frontend assets:
 go test -race -count=1 -json -covermode=atomic '-coverprofile=../temp/audit-20260913/followup/go127-client-coverage.out' ./...

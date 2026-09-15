@@ -7,7 +7,7 @@ import (
 
 	"go.uber.org/zap"
 
-	"voicx/internal/state"
+	"noxa/internal/state"
 )
 
 // TestSetEventTapObservesEvents verifies the tap sees every server-wide event

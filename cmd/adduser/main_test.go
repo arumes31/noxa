@@ -14,7 +14,7 @@ func TestRunRejectsInvalidMigrationBounds(t *testing.T) {
 }
 
 func TestDatabaseDSNPrecedence(t *testing.T) {
-	t.Setenv("VOICX_DATABASE_URL", "postgres://environment")
+	t.Setenv("NOXA_DATABASE_URL", "postgres://environment")
 
 	got, err := databaseDSN("postgres://explicit")
 	if err != nil {
@@ -34,10 +34,10 @@ func TestDatabaseDSNPrecedence(t *testing.T) {
 }
 
 func TestDatabaseDSNRequired(t *testing.T) {
-	t.Setenv("VOICX_DATABASE_URL", "")
+	t.Setenv("NOXA_DATABASE_URL", "")
 
 	_, err := databaseDSN("")
-	if err == nil || !strings.Contains(err.Error(), "VOICX_DATABASE_URL") {
+	if err == nil || !strings.Contains(err.Error(), "NOXA_DATABASE_URL") {
 		t.Fatalf("databaseDSN error = %v, want configuration error", err)
 	}
 }

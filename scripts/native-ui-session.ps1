@@ -1,7 +1,7 @@
 #requires -Version 7.4
 <#
 .SYNOPSIS
-Starts, inspects, or stops a disposable native VoicX test environment.
+Starts, inspects, or stops a disposable native noXa test environment.
 .DESCRIPTION
 Run in PowerShell 7.4+ on Windows with Docker Desktop, Go, and Node/npm.
 Starts actual Wails clients; it does not automate UI or assert remote delivery.
@@ -34,7 +34,7 @@ if (-not $IsWindows) { throw 'This runner requires Windows for the native Wails 
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $runRoot = [IO.Path]::GetFullPath((Join-Path $repoRoot "temp/native-ui-$RunId"))
 $manifestPath = Join-Path $runRoot 'session.json'
-$labelKey = 'voicx.native-ui.run'
+$labelKey = 'noxa.native-ui.run'
 $session = $null
 
 function Invoke-Checked([string]$Program, [string[]]$Arguments) {
@@ -103,7 +103,7 @@ function Stop-Session {
 function Get-CleanEnvironment {
     $overrides = @{}
     foreach ($entry in Get-ChildItem Env:) {
-        if ($entry.Name -like 'VOICX_*' -or $entry.Name -like 'WEBVIEW2_*') { $overrides[$entry.Name] = $null }
+        if ($entry.Name -like 'NOXA_*' -or $entry.Name -like 'WEBVIEW2_*') { $overrides[$entry.Name] = $null }
     }
     return $overrides
 }
@@ -202,13 +202,13 @@ try {
     Copy-Item -LiteralPath $ClientBinary -Destination (Join-Path $runRoot 'bin/client.exe')
     $password = [Convert]::ToHexString([Security.Cryptography.RandomNumberGenerator]::GetBytes(32)).ToLowerInvariant()
     $envFile = Join-Path $runRoot 'secrets/postgres.env'
-    @('POSTGRES_USER=voicx_ui', 'POSTGRES_DB=voicx_ui', "POSTGRES_PASSWORD=$password") | Set-Content -LiteralPath $envFile -Encoding ascii
+    @('POSTGRES_USER=noxa_ui', 'POSTGRES_DB=noxa_ui', "POSTGRES_PASSWORD=$password") | Set-Content -LiteralPath $envFile -Encoding ascii
     $images = @{
         postgres = 'postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777'
         redis = 'redis:7-alpine@sha256:e7723ff73d963f5cc6d9c4643ea3d989527a402a319239054e9472a7fb9219a2'
     }
     foreach ($kind in @('postgres', 'redis')) {
-        $containerName = "voicx-native-$RunId-$kind"
+        $containerName = "noxa-native-$RunId-$kind"
         $hostPort = $BasePort + $(if ($kind -eq 'postgres') { 7 } else { 8 })
         $internalPort = if ($kind -eq 'postgres') { 5432 } else { 6379 }
         $dockerArgs = @('run', '-d', '--name', $containerName, '--label', "$labelKey=$RunId", '-p', "127.0.0.1:${hostPort}:$internalPort")
@@ -218,33 +218,33 @@ try {
         $session.containers += [pscustomobject]@{ name = $containerName; id = $containerId; kind = $kind; image = $images[$kind] }
         Save-Session
         Wait-Ready {
-            if ($kind -eq 'postgres') { & docker exec $containerId pg_isready -U voicx_ui -d voicx_ui *> $null }
+            if ($kind -eq 'postgres') { & docker exec $containerId pg_isready -U noxa_ui -d noxa_ui *> $null }
             else { & docker exec $containerId redis-cli ping *> $null }
             return $LASTEXITCODE -eq 0
         } "$kind readiness"
     }
     $serverEnv = Get-CleanEnvironment
-    $serverEnv.VOICX_DATABASE_URL = "postgres://voicx_ui:$password@127.0.0.1:$($BasePort + 7)/voicx_ui?sslmode=disable"
-    $serverEnv.VOICX_REDIS_ADDR = "127.0.0.1:$($BasePort + 8)"
-    $serverEnv.VOICX_SERVER_NAME = "NATIVE-UI-$RunId"
-    $serverEnv.VOICX_DEV_MODE = 'true'
-    $serverEnv.VOICX_TLS_ENABLED = 'true'
-    $serverEnv.VOICX_FILE_TLS_ENABLED = 'true'
+    $serverEnv.NOXA_DATABASE_URL = "postgres://noxa_ui:$password@127.0.0.1:$($BasePort + 7)/noxa_ui?sslmode=disable"
+    $serverEnv.NOXA_REDIS_ADDR = "127.0.0.1:$($BasePort + 8)"
+    $serverEnv.NOXA_SERVER_NAME = "NATIVE-UI-$RunId"
+    $serverEnv.NOXA_DEV_MODE = 'true'
+    $serverEnv.NOXA_TLS_ENABLED = 'true'
+    $serverEnv.NOXA_FILE_TLS_ENABLED = 'true'
     $portNames = @('TCP_ADDR', 'UDP_ADDR', 'GRPC_ADDR', 'HEALTH_ADDR', 'QUERY_ADDR', 'FILE_ADDR', 'QUERY_SSH_ADDR')
-    for ($offset = 0; $offset -lt $portNames.Count; $offset++) { $serverEnv['VOICX_' + $portNames[$offset]] = "127.0.0.1:$($BasePort + $offset)" }
+    for ($offset = 0; $offset -lt $portNames.Count; $offset++) { $serverEnv['NOXA_' + $portNames[$offset]] = "127.0.0.1:$($BasePort + $offset)" }
     $serverRecord = Start-RecordedProcess 'server' (Join-Path $runRoot 'bin/server.exe') (Join-Path $runRoot 'server') $serverEnv
     Wait-Ready {
         if ($null -eq (Get-RecordedProcess $serverRecord)) { throw 'Server exited before readiness.' }
         try { return (Invoke-WebRequest "http://127.0.0.1:$($BasePort + 3)/readyz" -TimeoutSec 2).StatusCode -eq 200 }
         catch { return $false }
-    } 'VoicX server readiness'
+    } 'noXa server readiness'
     if (-not $NoClients) {
         foreach ($role in @('ALPHA', 'BRAVO', 'CHARLIE')) {
             $profile = Join-Path $runRoot "profiles/$role"
             foreach ($directory in @('appdata', 'localappdata', 'temp', 'webview', 'install', 'fixtures')) {
                 New-Item -ItemType Directory -Path (Join-Path $profile $directory) -Force | Out-Null
             }
-            $executable = Join-Path $profile "install/VoicX-$role.exe"
+            $executable = Join-Path $profile "install/noXa-$role.exe"
             Copy-Item -LiteralPath (Join-Path $runRoot 'bin/client.exe') -Destination $executable
             $clientEnv = Get-CleanEnvironment
             $clientEnv.APPDATA = Join-Path $profile 'appdata'

@@ -12,7 +12,7 @@ import (
 
 	"golang.org/x/sys/windows"
 
-	"voicx/internal/safecast"
+	"noxa/internal/safecast"
 )
 
 var (

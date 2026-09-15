@@ -1,4 +1,4 @@
-// Package version owns the version displayed by voicx binaries.
+// Package version owns the version displayed by noxa binaries.
 //
 // Release tags provide stable semantic versions. Development builds add the
 // Git revision and (when needed) a source fingerprint. Linker
@@ -26,7 +26,7 @@ var (
 	// UpdateRepo is the GitHub "owner/repo" slug used for client
 	// auto-updates. Operators set it at build time; it defaults to a
 	// placeholder that yields "no update source".
-	UpdateRepo = "voicx/voicx"
+	UpdateRepo = "arumes31/noxa"
 	// UpdatePublicKeys contains one or more comma-separated, base64-encoded
 	// Ed25519 public keys trusted to authenticate client update manifests.
 	// It deliberately defaults to empty so non-release builds fail closed.

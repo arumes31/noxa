@@ -1,5 +1,5 @@
 // settings.go implements the client settings model and JSON persistence at
-// <UserConfigDir>/voicx/settings.json. Settings are loaded at startup and
+// <UserConfigDir>/noxa/settings.json. Settings are loaded at startup and
 // saved on every change (OK/Apply in the settings dialog).
 package main
 
@@ -14,7 +14,7 @@ import (
 )
 
 // allowDefaultSettingsPath gates the fallback to the real
-// <UserConfigDir>/voicx/settings.json when an App carries no settingsPath.
+// <UserConfigDir>/noxa/settings.json when an App carries no settingsPath.
 // Tests clear it (see main_test.go) so no App built without one can write
 // over the developer's real bookmarks.
 var allowDefaultSettingsPath = true
@@ -183,7 +183,7 @@ type Settings struct {
 	PTTReleaseDelayMs  int             `json:"ptt_release_delay_ms"` // 0..2000
 	WarnMutedTalking   bool            `json:"warn_muted_talking"`   // default on
 	WarnEmptyChannel   bool            `json:"warn_empty_channel"`   // default on
-	SoundPack          string          `json:"sound_pack"`           // "voicx"; legacy pack IDs migrate
+	SoundPack          string          `json:"sound_pack"`           // "noxa"; legacy pack IDs migrate
 	SoundVolume        int             `json:"sound_volume"`         // 0..200
 	SpokenMessages     bool            `json:"spoken_messages"`
 	SpeechVolume       int             `json:"speech_volume"` // 0..200
@@ -267,7 +267,7 @@ func DefaultSettings() Settings {
 		PTTReleaseDelayMs: 0,
 		WarnMutedTalking:  true,
 		WarnEmptyChannel:  true,
-		SoundPack:         "voicx",
+		SoundPack:         "noxa",
 		SoundVolume:       100,
 		SpokenMessages:    true,
 		SpeechVolume:      100,
@@ -335,7 +335,7 @@ func settingsPath() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(dir, "voicx", "settings.json"), nil
+	return filepath.Join(dir, "noxa", "settings.json"), nil
 }
 
 // loadSettingsAt loads settings from path, falling back to defaults for a
@@ -384,7 +384,7 @@ func migrateSettings(s Settings) Settings {
 	if s.SettingsVersion < 5 && strings.EqualFold(strings.TrimSpace(s.HotkeyPTT), "Space") {
 		// Space used to be the implicit PTT default. RegisterHotKey consumes a
 		// registered key system-wide on Windows, so old untouched defaults made
-		// spaces unavailable in every application while voicx was running.
+		// spaces unavailable in every application while noxa was running.
 		s.HotkeyPTT = ""
 	}
 	if s.SettingsVersion < 6 {
@@ -399,7 +399,7 @@ func migrateSettings(s Settings) Settings {
 	if s.SettingsVersion < 8 {
 		// One original complete set replaces the oscillator packs. Removed
 		// custom_sounds JSON is ignored; event/matrix choices remain intact.
-		s.SoundPack = "voicx"
+		s.SoundPack = "noxa"
 		if s.EventSounds != nil {
 			if kick, exists := s.EventSounds["kick"]; exists {
 				s.EventSounds["ban"] = kick
@@ -439,7 +439,7 @@ func migrateEventSoundSplits(s *Settings) {
 // (modes, enums, hotkey syntax) are validated by SaveSettings and are never
 // silently rewritten.
 func normalizeSettings(s Settings) Settings {
-	s.SoundPack = "voicx"
+	s.SoundPack = "noxa"
 	s.SoundVolume = clampSetting(s.SoundVolume, 0, 200)
 	s.SpeechVolume = clampSetting(s.SpeechVolume, 0, 200)
 	s.WindowOpacity = clampSetting(s.WindowOpacity, 20, 100)

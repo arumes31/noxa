@@ -8,7 +8,7 @@ package main
 import (
 	"time"
 
-	"voicx/internal/netproto"
+	"noxa/internal/netproto"
 )
 
 // --- server administrators ---------------------------------------------------

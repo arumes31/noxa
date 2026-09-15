@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"voicx/internal/netproto"
+	"noxa/internal/netproto"
 )
 
 func TestDispatchRulesAndAuthoritativeSubscriptions(t *testing.T) {

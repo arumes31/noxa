@@ -13,10 +13,10 @@ import (
 	"testing"
 	"time"
 
-	"voicx/internal/config"
-	"voicx/internal/netproto"
-	"voicx/internal/permissions"
-	"voicx/internal/state"
+	"noxa/internal/config"
+	"noxa/internal/netproto"
+	"noxa/internal/permissions"
+	"noxa/internal/state"
 )
 
 func TestTypingTrackerCleanupIsRateLimited(t *testing.T) {

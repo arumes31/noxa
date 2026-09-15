@@ -8,7 +8,7 @@ umask 077
 backup_dir="${BACKUP_DIR:-/backups/postgres}"
 retention_days="${BACKUP_RETENTION_DAYS:-7}"
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
-database="${PGDATABASE:-voicx}"
+database="${PGDATABASE:-noxa}"
 database_id=$(printf '%s' "$database" | sha256sum | awk '{print substr($1, 1, 16)}')
 archive_prefix="postgres-${database_id}"
 mkdir -p "$backup_dir"
@@ -65,7 +65,7 @@ rm -f "$dump_tmp"
 find "$backup_dir" -type f -name "${archive_prefix}-*.dump.gz" -mtime "+$retention_days" -delete
 
 # Optional object-storage upload. Configure rclone and set BACKUP_REMOTE to a
-# destination such as s3:voicx-backups/production.
+# destination such as s3:noxa-backups/production.
 if [ -n "${BACKUP_REMOTE:-}" ]; then
 	run_child rclone copyto "$target" "${BACKUP_REMOTE%/}/$(basename "$target")"
 fi

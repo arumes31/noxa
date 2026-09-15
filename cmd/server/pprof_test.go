@@ -5,7 +5,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"voicx/internal/health"
+	"noxa/internal/health"
 )
 
 func TestPprofEndpointsAreOptInAndLoopbackOnly(t *testing.T) {

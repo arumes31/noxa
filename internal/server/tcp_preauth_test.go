@@ -10,9 +10,9 @@ import (
 
 	"go.uber.org/zap"
 
-	"voicx/internal/auth"
-	"voicx/internal/config"
-	"voicx/internal/netproto"
+	"noxa/internal/auth"
+	"noxa/internal/config"
+	"noxa/internal/netproto"
 )
 
 // Virtual time and net.Pipe exercise connection deadlines without wall-clock

@@ -30,10 +30,10 @@ func TestMigrationHardensAndDiscardsSession(t *testing.T) {
 	if _, err := conn.ExecContext(ctx, `CREATE FUNCTION public.now()
 		RETURNS TIMESTAMPTZ LANGUAGE SQL IMMUTABLE
 		AS $$SELECT '2000-01-01 00:00:00+00'::TIMESTAMPTZ$$;
-		CREATE FUNCTION public.voicx_shadow_regex(TEXT, TEXT)
+		CREATE FUNCTION public.noxa_shadow_regex(TEXT, TEXT)
 		RETURNS BOOLEAN LANGUAGE SQL IMMUTABLE AS $$SELECT TRUE$$;
 		CREATE OPERATOR public.~ (
-			LEFTARG = TEXT, RIGHTARG = TEXT, FUNCTION = public.voicx_shadow_regex
+			LEFTARG = TEXT, RIGHTARG = TEXT, FUNCTION = public.noxa_shadow_regex
 		);
 		CREATE TEMP TABLE schema_migrations (shadow_marker TEXT);
 		CREATE TEMP TABLE chat_messages (shadow_marker TEXT);
@@ -99,14 +99,14 @@ func TestMigrationHardensAndDiscardsSession(t *testing.T) {
 	}
 
 	const ambiguousBackslashMigration = `-- voicx:no-transaction
-CREATE INDEX CONCURRENTLY voicx_standard_string_probe
+CREATE INDEX CONCURRENTLY noxa_standard_string_probe
     ON public.chat_messages (client_msg_id)
     WHERE client_msg_id = 'ends\';`
 	if err := applyNonTransactionalMigration(ctx, conn, ambiguousBackslashMigration); err != nil {
 		t.Fatalf("applying standard-conforming ambiguous-backslash migration: %v", err)
 	}
 	if _, err := conn.ExecContext(ctx,
-		`DROP INDEX CONCURRENTLY public.voicx_standard_string_probe`); err != nil {
+		`DROP INDEX CONCURRENTLY public.noxa_standard_string_probe`); err != nil {
 		t.Fatalf("dropping ambiguous-backslash probe index: %v", err)
 	}
 

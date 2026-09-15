@@ -5,8 +5,8 @@ package server
 import (
 	"testing"
 
-	"voicx/internal/permissions"
-	"voicx/internal/state"
+	"noxa/internal/permissions"
+	"noxa/internal/state"
 )
 
 // stateClientFor returns the in-memory state client of a connected user.

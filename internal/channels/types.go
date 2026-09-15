@@ -1,4 +1,4 @@
-// Package channels implements voicx channel lifecycle management: creation,
+// Package channels implements noxa channel lifecycle management: creation,
 // deletion, type transitions, and automatic cleanup of temporary channels when
 // they become empty.
 //
@@ -10,7 +10,7 @@ package channels
 import (
 	"fmt"
 
-	"voicx/internal/safecast"
+	"noxa/internal/safecast"
 )
 
 // ChannelType distinguishes temporary, semi-permanent, and permanent channels.

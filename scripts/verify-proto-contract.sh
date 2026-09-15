@@ -6,7 +6,7 @@ root="$(git rev-parse --show-toplevel)"
 cd "$root"
 
 if [[ "${1:-}" == "--self-test" ]]; then
-  if VOICX_VERIFY_PROTO_CONTRACT_NEGATIVE_UNTRACKED=1 bash "$0"; then
+  if NOXA_VERIFY_PROTO_CONTRACT_NEGATIVE_UNTRACKED=1 bash "$0"; then
     echo "proto-contract verifier accepted a missing untracked-stub guard" >&2
     exit 1
   fi
@@ -61,10 +61,10 @@ for plugin in ("buf.build/protocolbuffers/go:v1.36.11", "buf.build/grpc/go:v1.5.
 if "local: protoc-gen-" in generated:
     raise SystemExit("buf.gen.yaml must not fall back to local protoc-gen plugins")
 
-ci = os.environ.get("VOICX_VERIFY_PROTO_CONTRACT_CI")
+ci = os.environ.get("NOXA_VERIFY_PROTO_CONTRACT_CI")
 if ci is None:
     ci = Path(".github/workflows/ci.yml").read_text(encoding="utf-8")
-if os.getenv("VOICX_VERIFY_PROTO_CONTRACT_NEGATIVE_UNTRACKED"):
+if os.getenv("NOXA_VERIFY_PROTO_CONTRACT_NEGATIVE_UNTRACKED"):
     ci = ci.replace("git status --porcelain --untracked-files=all -- v1", "")
 
 if "types: [opened, synchronize, reopened, labeled, unlabeled]" not in ci:

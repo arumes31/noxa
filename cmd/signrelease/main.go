@@ -1,5 +1,5 @@
 // Command signrelease creates the detached Ed25519 signature consumed by the
-// VoicX client updater. The private key is read only from the environment so it
+// noXa client updater. The private key is read only from the environment so it
 // does not appear in process arguments or repository files.
 package main
 
@@ -13,12 +13,12 @@ import (
 	"os"
 	"strings"
 
-	"voicx/internal/updatemanifest"
+	"noxa/internal/updatemanifest"
 )
 
 const (
-	signingKeyEnv = "VOICX_UPDATE_SIGNING_KEY"
-	publicKeysEnv = "VOICX_UPDATE_PUBLIC_KEYS"
+	signingKeyEnv = "NOXA_UPDATE_SIGNING_KEY"
+	publicKeysEnv = "NOXA_UPDATE_PUBLIC_KEYS"
 )
 
 type signatureFile interface {
@@ -57,7 +57,7 @@ func run(args []string, stdout io.Writer) error {
 		if err != nil {
 			return fmt.Errorf("generate update key: %w", err)
 		}
-		_, err = fmt.Fprintf(stdout, "VOICX_UPDATE_PUBLIC_KEYS=%s\n", publicKey)
+		_, err = fmt.Fprintf(stdout, "NOXA_UPDATE_PUBLIC_KEYS=%s\n", publicKey)
 		return err
 	}
 	if *verify {

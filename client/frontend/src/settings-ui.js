@@ -9,7 +9,7 @@ import { createMediaDeviceInventory } from "./media-devices.js";
 import { closeDialog, mountDialog } from "./modal.js";
 import { cameraConstraints } from "./video.js";
 
-const V = () => window.__voicx;
+const V = () => window.__noxa;
 
 const PAGES = [
     { id: "application", icon: "⚙", label: "settings.application" },
@@ -392,8 +392,8 @@ const THEME_VARS = [
 
 // The editor owns the block between these markers inside user_css; anything
 // the user typed by hand around it survives an edit.
-const THEME_START = "/* voicx-theme-start */";
-const THEME_END = "/* voicx-theme-end */";
+const THEME_START = "/* noxa-theme-start */";
+const THEME_END = "/* noxa-theme-end */";
 
 // themeBlockBody returns the CSS between the markers ("" when absent).
 function themeBlockBody(css) {
@@ -979,7 +979,7 @@ function pageChat() {
     };
     el.appendChild(row(t("settings.keywords"), kw));
 
-    el.appendChild(hint(t("settings.chat.log.config.voicx.chat.log.help.open.log.folder")));
+    el.appendChild(hint(t("settings.chat.log.config.noxa.chat.log.help.open.log.folder")));
     // (4b) encryption note.
     const enc = document.createElement("div");
     enc.className = "set-hint";
@@ -1263,9 +1263,9 @@ function pageNotifications() {
     el.appendChild(row(t("settings.play.sounds.master"), checkbox(s.play_sounds !== false, (v) => { s.play_sounds = v; })));
 
     const pack = document.createElement("span");
-    pack.textContent = "VOICX";
+    pack.textContent = "noXa";
     el.appendChild(row(t("settings.sound.set"), pack));
-    el.appendChild(hint(t("settings.original.voicx.sounds.replace.soft.bright.retro.and.custom.beeps.your.event")));
+    el.appendChild(hint(t("settings.original.noxa.sounds.replace.soft.bright.retro.and.custom.beeps.your.event")));
     el.appendChild(row(t("settings.sound.volume"), slider(s.sound_volume ?? 100, 0, 200, (v) => { s.sound_volume = v; })));
     el.appendChild(row(t("settings.spoken.system.messages"), checkbox(s.spoken_messages !== false, v => { s.spoken_messages = v; })));
     el.appendChild(row(t("settings.speech.volume"), slider(s.speech_volume ?? 100, 0, 200, v => { s.speech_volume = v; })));
@@ -1566,7 +1566,7 @@ function openSettings(pageId = "application") {
 }
 
 export function initSettingsUI() {
-    window.__voicx.openSettings = openSettings;
+    window.__noxa.openSettings = openSettings;
     // (301) track registration errors for the hotkey map rows.
     window.runtime.EventsOn("hotkey_status", (st) => {
         if (st.error) hkErrors.set(st.action, st.error);

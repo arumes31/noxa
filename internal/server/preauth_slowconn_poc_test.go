@@ -8,8 +8,8 @@ import (
 	"time"
 
 	"go.uber.org/zap"
-	"voicx/internal/config"
-	"voicx/internal/netproto"
+	"noxa/internal/config"
+	"noxa/internal/netproto"
 )
 
 // Regression for filling admission slots with idle or partial-frame peers.

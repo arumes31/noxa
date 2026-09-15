@@ -3,7 +3,7 @@ package main
 import (
 	"testing"
 
-	"voicx/internal/netproto"
+	"noxa/internal/netproto"
 )
 
 func TestAdministrativeBindings(t *testing.T) {

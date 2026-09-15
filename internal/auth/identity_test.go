@@ -69,7 +69,7 @@ func TestSignVerifyChallengeRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GenerateIdentityKeyPair: %v", err)
 	}
-	challenge := []byte("voicx-challenge-12345")
+	challenge := []byte("noxa-challenge-12345")
 
 	sig, err := SignChallenge(priv, challenge)
 	if err != nil {

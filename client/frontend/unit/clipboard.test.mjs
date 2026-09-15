@@ -14,7 +14,7 @@ function setup(native, browser) {
     const messages = [];
     Object.defineProperty(globalThis, "window", { configurable: true, value: {
         runtime: native ? { ClipboardSetText: native } : {},
-        __voicx: { toast: (...args) => messages.push(args) },
+        __noxa: { toast: (...args) => messages.push(args) },
     } });
     Object.defineProperty(globalThis, "navigator", { configurable: true, value: {
         clipboard: browser ? { writeText: browser } : undefined,

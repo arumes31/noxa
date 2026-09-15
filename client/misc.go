@@ -21,13 +21,13 @@ var (
 	chatLogNow        = time.Now
 )
 
-// configDir returns the voicx config directory, creating it if needed.
+// configDir returns the noxa config directory, creating it if needed.
 func configDir() (string, error) {
 	dir, err := miscUserConfigDir()
 	if err != nil {
 		return "", err
 	}
-	dir = filepath.Join(dir, "voicx")
+	dir = filepath.Join(dir, "noxa")
 	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return "", err
 	}
@@ -149,7 +149,7 @@ func (a *App) ExportIdentity(id string) string {
 	a.identityMu.Unlock()
 	dest, err := wailsRuntime.SaveFileDialog(a.ctx, wailsRuntime.SaveDialogOptions{
 		Title:           "Export identity",
-		DefaultFilename: "voicx-identity-" + id + ".json",
+		DefaultFilename: "noxa-identity-" + id + ".json",
 	})
 	if err != nil || dest == "" {
 		return "" // cancelled

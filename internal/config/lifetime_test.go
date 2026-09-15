@@ -50,7 +50,7 @@ func TestChannelTempLifetimeFromEnv(t *testing.T) {
 	} {
 		t.Run(tc.env, func(t *testing.T) {
 			cleanConfigDir(t)
-			t.Setenv("VOICX_CHANNEL_TEMP_LIFETIME_SECONDS", tc.env)
+			t.Setenv("NOXA_CHANNEL_TEMP_LIFETIME_SECONDS", tc.env)
 			cfg, err := Load()
 			if err != nil {
 				t.Fatalf("Load: %v", err)

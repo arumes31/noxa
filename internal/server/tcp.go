@@ -1,4 +1,4 @@
-// Package server hosts the long-running voicx server components. This file
+// Package server hosts the long-running noxa server components. This file
 // implements the TCP control listener: it accepts connections, frames messages
 // using the netproto wire format, dispatches them to per-message-type
 // handlers, and tracks connected clients in a thread-safe registry.
@@ -23,13 +23,13 @@ import (
 
 	"go.uber.org/zap"
 
-	"voicx/internal/auth"
-	"voicx/internal/chatcrypto"
-	"voicx/internal/config"
-	"voicx/internal/metrics"
-	"voicx/internal/netproto"
-	"voicx/internal/state"
-	"voicx/internal/tlscert"
+	"noxa/internal/auth"
+	"noxa/internal/chatcrypto"
+	"noxa/internal/config"
+	"noxa/internal/metrics"
+	"noxa/internal/netproto"
+	"noxa/internal/state"
+	"noxa/internal/tlscert"
 )
 
 // Error codes sent in MsgError frames.

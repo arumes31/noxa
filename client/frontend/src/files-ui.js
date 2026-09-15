@@ -15,7 +15,7 @@ import { captureScope, runScopedDialogAction, scopeIsCurrent } from "./scoped-ac
 import { buildFileLink } from "./file-links.js";
 import { t } from "./i18n.js";
 
-const V = () => window.__voicx;
+const V = () => window.__noxa;
 const App = () => window.go.main.App;
 
 const fb = {
@@ -66,7 +66,7 @@ export function activateWorkspaceTab(name, { focus = false } = {}) {
     tabFiles.tabIndex = files ? 0 : -1;
     chatPane.hidden = files;
     filesPane.hidden = !files;
-    window.__voicxChat?.refreshHeader?.();
+    window.__noxaChat?.refreshHeader?.();
     if (files) {
         fb.channelID = V().state.myChannelID;
         refreshFiles();
@@ -1235,7 +1235,7 @@ export function initFilesUI() {
     });
     watchChannelIcons();
 
-    window.__voicxFiles = {
+    window.__noxaFiles = {
         activateWorkspaceTab, restoreVisibleWorkspaceFocus, refreshFiles, openTransfers, loadServerIcon, resetServerView,
         // Follows channel changes (256): browsing follows the channel I'm in.
         onChannelChanged() {

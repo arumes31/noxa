@@ -2,7 +2,7 @@
 import { isActivationKey, wrappedIndex } from "./a11y.js";
 import { closeDialog, mountDialog } from "./modal.js";
 
-const V = () => window.__voicx;
+const V = () => window.__noxa;
 
 let openMenu = null;
 let documentClickBound = false;
@@ -158,12 +158,12 @@ function dlgAbout() {
         <div class="dlg">
             <h3>${t("menu.about")}</h3>
             <div class="about-body">
-                <div class="wordmark" style="font-size:26px">voicx</div>
+                <div class="wordmark" style="font-size:26px">noXa</div>
                 <div class="mono about-version"></div>
                 <div class="mono about-uid"></div>
                 <div class="about-links">
-                    <a href="https://github.com/arumes31/voicx" target="_blank" rel="noopener noreferrer">${t("menu.project")}</a> ·
-                    <a href="https://github.com/arumes31/voicx/issues" target="_blank" rel="noopener noreferrer">${t("menu.issues")}</a>
+                    <a href="https://github.com/arumes31/noxa" target="_blank" rel="noopener noreferrer">${t("menu.project")}</a> ·
+                    <a href="https://github.com/arumes31/noxa/issues" target="_blank" rel="noopener noreferrer">${t("menu.issues")}</a>
                 </div>
             </div>
             <div class="dlg-buttons"><button class="dlg-ok">${t("common.close")}</button></div>
@@ -462,7 +462,7 @@ async function setServerIcon() {
         return;
     }
     V().toast(t("menu.serverIconUpdated"));
-    window.__voicxFiles.loadServerIcon();
+    window.__noxaFiles.loadServerIcon();
 }
 
 // --- menu bar -------------------------------------------------------------------
@@ -474,7 +474,7 @@ export function initMenu() {
     const connections = buildMenu(t("menu.connections"), [
         menuAction(t("menu.connect"), () => V().showLogin()),
         menuAction(t("menu.disconnect"), () => V().disconnect()),
-        menuAction(t("menu.serverInfo"), () => window.__voicxMeta.openServerInfo()),
+        menuAction(t("menu.serverInfo"), () => window.__noxaMeta.openServerInfo()),
         divider(),
         menuAction(t("menu.quit"), () => window.runtime.Quit()),
     ]);
@@ -527,9 +527,9 @@ export function initMenu() {
         }),
         menuAction(t("menu.setStatus"), () => {
             if (!V().state.myClientID) return V().toast(t("menu.notConnected"), "warn");
-            window.__voicxSocial.openStatusPicker();
+            window.__noxaSocial.openStatusPicker();
         }),
-        menuAction(t("menu.contacts"), () => window.__voicxSocial.openContacts()),
+        menuAction(t("menu.contacts"), () => window.__noxaSocial.openContacts()),
         menuAction(t("menu.setAvatar"), setAvatarFile),
         menuAction(t("menu.setServerIcon"), () => {
             if (!V().state.myClientID) return V().toast(t("menu.notConnected"), "warn");
@@ -552,45 +552,45 @@ export function initMenu() {
         }),
         menuAction(t("menu.permManager"), () => {
             if (!V().state.myClientID) return V().toast(t("menu.notConnected"), "warn");
-            window.__voicxPerms.openPermissionManager();
+            window.__noxaPerms.openPermissionManager();
         }),
     ]);
 
     const tools = buildMenu(t("menu.tools"), [
-        menuAction(t("menu.settings"), () => window.__voicx.openSettings("application")),
-        menuAction(t("menu.whisperLists"), () => window.__voicx.openSettings("whisper")),
+        menuAction(t("menu.settings"), () => window.__noxa.openSettings("application")),
+        menuAction(t("menu.whisperLists"), () => window.__noxa.openSettings("whisper")),
         divider(),
         menuAction(t("menu.auditLog"), () => {
             if (!V().state.myClientID) return V().toast(t("menu.notConnected"), "warn");
-            window.__voicxPerms.openAuditViewer();
+            window.__noxaPerms.openAuditViewer();
         }),
         menuAction(t("menu.bans"), () => {
             if (!V().state.myClientID) return V().toast(t("menu.notConnected"), "warn");
-            window.__voicxPerms.openBanList();
+            window.__noxaPerms.openBanList();
         }),
         menuAction(t("menu.chatFilters"), () => {
             if (!V().state.myClientID) return V().toast(t("menu.notConnected"), "warn");
-            window.__voicxPerms.openChatFilters();
+            window.__noxaPerms.openChatFilters();
         }),
         // (173) complaint review, gated the same way as the audit viewer.
         menuAction(t("menu.complaints"), () => {
             if (!V().state.myClientID) return V().toast(t("menu.notConnected"), "warn");
-            window.__voicxPerms.openComplaints();
+            window.__noxaPerms.openComplaints();
         }),
         // (174/175/176) privilege key management and handoff.
         menuAction(t("menu.privilegeKeys"), () => {
             if (!V().state.myClientID) return V().toast(t("menu.notConnected"), "warn");
-            window.__voicxPerms.openTokenManager();
+            window.__noxaPerms.openTokenManager();
         }),
-        menuAction(t("menu.usePrivilegeKey"), () => window.__voicxPerms.openTokenRedeem()),
+        menuAction(t("menu.usePrivilegeKey"), () => window.__noxaPerms.openTokenRedeem()),
         divider(),
         menuAction(t("menu.debugConsole"), () => {
             if (!V().state.myClientID) return V().toast(t("menu.notConnected"), "warn");
-            window.__voicxMeta.openDebugConsole();
+            window.__noxaMeta.openDebugConsole();
         }),
         menuAction(t("menu.connStats"), () => {
             if (!V().state.myClientID) return V().toast(t("menu.notConnected"), "warn");
-            window.__voicxMeta.openStatsPage();
+            window.__noxaMeta.openStatsPage();
         }),
     ]);
 
@@ -601,8 +601,8 @@ export function initMenu() {
         }),
         divider(),
         menuAction(t("menu.compact"), () => V().toggleCompact()),
-        menuAction(t("menu.zen"), () => window.__voicxPolish.toggleZen()),
-        menuAction(t("menu.popOutChat"), () => window.__voicxPolish.toggleChatPopout()),
+        menuAction(t("menu.zen"), () => window.__noxaPolish.toggleZen()),
+        menuAction(t("menu.popOutChat"), () => window.__noxaPolish.toggleChatPopout()),
         menuAction(t("menu.dnd"), async () => {
             if (dndSaving) return;
             dndSaving = true;
@@ -635,7 +635,7 @@ export function initMenu() {
     ]);
 
     const help = buildMenu(t("menu.help"), [
-        menuAction(t("menu.checkUpdates"), () => window.__voicx.checkForUpdatesInteractive()),
+        menuAction(t("menu.checkUpdates"), () => window.__noxa.checkForUpdatesInteractive()),
         menuAction(t("menu.exportLogs"), async () => {
             const err = await window.go.main.App.ExportLogs();
             if (err) V().toast(t("menu.exportFailed", { error: err }), "warn");

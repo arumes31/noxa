@@ -2,7 +2,7 @@
 import { closeDialog, mountDialog } from "./modal.js";
 import { t } from "./i18n.js";
 
-const V = () => window.__voicx;
+const V = () => window.__noxa;
 
 let modal = null;
 let startupChecked = false;
@@ -193,6 +193,6 @@ export function startupAutoCheck() {
 }
 
 export function initUpdater() {
-    window.__voicx.checkForUpdatesInteractive = checkForUpdatesInteractive;
-    window.__voicx.startupAutoCheck = startupAutoCheck;
+    window.__noxa.checkForUpdatesInteractive = checkForUpdatesInteractive;
+    window.__noxa.startupAutoCheck = startupAutoCheck;
 }

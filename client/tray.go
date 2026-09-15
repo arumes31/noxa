@@ -61,7 +61,7 @@ func initTray(a *App, ready chan<- struct{}) {
 
 // onReady builds the tray menu (called on the systray thread).
 func (t *tray) onReady() {
-	t.miShowHide = systray.AddMenuItem("Hide voicx", "show/hide the window")
+	t.miShowHide = systray.AddMenuItem("Hide noXa", "show/hide the window")
 	systray.AddSeparator()
 	t.miMute = systray.AddMenuItem("Mute", "toggle microphone mute")
 	t.miDeafen = systray.AddMenuItem("Deafen", "toggle deafen")
@@ -88,7 +88,7 @@ func (t *tray) onReady() {
 	}
 	t.mu.Unlock()
 	t.setConnected(t.app.Connected())
-	miQuit := systray.AddMenuItem("Quit", "quit voicx")
+	miQuit := systray.AddMenuItem("Quit", "quit noXa")
 
 	// recover is per-goroutine: the menu event loop needs its own guard (331).
 	go guardCrash("tray", func() {
@@ -184,10 +184,10 @@ func (t *tray) toggleWindow() {
 	}
 	if visible {
 		wailsRuntime.WindowShow(t.app.ctx)
-		t.miShowHide.SetTitle("Hide voicx")
+		t.miShowHide.SetTitle("Hide noXa")
 	} else {
 		wailsRuntime.WindowHide(t.app.ctx)
-		t.miShowHide.SetTitle("Show voicx")
+		t.miShowHide.SetTitle("Show noXa")
 	}
 }
 
@@ -202,7 +202,7 @@ func trayMarkHidden() {
 	trayCtl.visible = false
 	trayCtl.mu.Unlock()
 	if trayCtl.miShowHide != nil {
-		trayCtl.miShowHide.SetTitle("Show voicx")
+		trayCtl.miShowHide.SetTitle("Show noXa")
 	}
 }
 
@@ -237,7 +237,7 @@ func (t *tray) updateTitleLocked() {
 	case speaking:
 		mode, label = trayTalking, "Talking"
 	}
-	p := trayPresentation{icon: mode, title: "voicx · " + label, tooltip: "voicx — " + label}
+	p := trayPresentation{icon: mode, title: "noXa · " + label, tooltip: "noXa — " + label}
 	if !t.isConnected {
 		p.tooltip += " · Disconnected"
 	}

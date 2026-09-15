@@ -1,4 +1,4 @@
-// loadtest is a headless voicx client simulator for load testing. Each
+// loadtest is a headless noxa client simulator for load testing. Each
 // simulated client connects over the TCP control channel, authenticates
 // (password path with a shared test account), joins a channel, sends global
 // chat and pings, and optionally sends UDP pings to exercise the UDP path
@@ -11,7 +11,7 @@
 //	    [-tls | -tls-fingerprint <sha256> | -tls-insecure]
 //
 // Authentication uses a single shared account for all simulated clients
-// (voicx allows multiple connections per unique ID). Create a test user
+// (noxa allows multiple connections per unique ID). Create a test user
 // first (there is no protocol-level registration; use psql or an admin
 // token flow), e.g. via a one-off Go snippet calling auth.RegisterUser.
 package main
@@ -38,9 +38,9 @@ import (
 	"github.com/pion/rtp"
 	"github.com/pion/webrtc/v4"
 
-	"voicx/internal/config"
-	"voicx/internal/netproto"
-	"voicx/internal/tlscert"
+	"noxa/internal/config"
+	"noxa/internal/netproto"
+	"noxa/internal/tlscert"
 )
 
 // options holds the load-test parameters.
@@ -577,7 +577,7 @@ func startOpusPublisher(conn net.Conn, supplied []netproto.ICEServer, relayOnly 
 	})
 	track, err := webrtc.NewTrackLocalStaticRTP(webrtc.RTPCodecCapability{
 		MimeType: webrtc.MimeTypeOpus, ClockRate: 48000, Channels: 2,
-	}, "load-opus", "voicx-load")
+	}, "load-opus", "noxa-load")
 	if err != nil {
 		_ = pc.Close()
 		return nil, err

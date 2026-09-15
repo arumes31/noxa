@@ -9,7 +9,7 @@ export const SPEECH_ASSETS = {
         permission_denied: { url: new URL("./assets/speech/en/permission_denied.wav", import.meta.url).href, duration: 2.4729251700680273 },
         moved_by_admin: { url: new URL("./assets/speech/en/moved_by_admin.wav", import.meta.url).href, duration: 1.811156462585034 },
         server_shutdown: { url: new URL("./assets/speech/en/server_shutdown.wav", import.meta.url).href, duration: 1.8575963718820863 },
-        test: { url: new URL("./assets/speech/en/test.wav", import.meta.url).href, duration: 2.716734693877551 },
+        test: { url: new URL("./assets/speech/en/test.wav", import.meta.url).href, duration: 2.5309750566893423 },
     },
     de: {
         banned: { url: new URL("./assets/speech/de/banned.wav", import.meta.url).href, duration: 1.3216326530612246 },
@@ -20,6 +20,6 @@ export const SPEECH_ASSETS = {
         permission_denied: { url: new URL("./assets/speech/de/permission_denied.wav", import.meta.url).href, duration: 2.046031746031746 },
         moved_by_admin: { url: new URL("./assets/speech/de/moved_by_admin.wav", import.meta.url).href, duration: 1.987845804988662 },
         server_shutdown: { url: new URL("./assets/speech/de/server_shutdown.wav", import.meta.url).href, duration: 1.4982312925170067 },
-        test: { url: new URL("./assets/speech/de/test.wav", import.meta.url).href, duration: 2.612426303854875 },
+        test: { url: new URL("./assets/speech/de/test.wav", import.meta.url).href, duration: 2.7812244897959184 },
     },
 };

@@ -50,13 +50,13 @@ func resolveServerAddresses(ctx context.Context, addr string, lookup srvLookup) 
 	}
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	_, records, err := lookup(ctx, "voicx", "tcp", host)
+	_, records, err := lookup(ctx, "noxa", "tcp", host)
 	if err != nil {
 		var dnsErr *net.DNSError
 		if errors.As(err, &dnsErr) && dnsErr.IsNotFound {
 			return fallback, trustAddr, nil
 		}
-		return nil, "", fmt.Errorf("resolve _voicx._tcp.%s: %w", host, err)
+		return nil, "", fmt.Errorf("resolve _noxa._tcp.%s: %w", host, err)
 	}
 	if len(records) == 0 {
 		return fallback, trustAddr, nil
@@ -64,10 +64,10 @@ func resolveServerAddresses(ctx context.Context, addr string, lookup srvLookup) 
 	addresses := make([]string, 0, len(records))
 	for _, record := range records {
 		if record != nil && record.Target == "." {
-			return nil, "", fmt.Errorf("voicx service is unavailable for %s", host)
+			return nil, "", fmt.Errorf("noxa service is unavailable for %s", host)
 		}
 		if record == nil || record.Port == 0 || record.Target == "" {
-			return nil, "", fmt.Errorf("invalid voicx SRV record for %s", host)
+			return nil, "", fmt.Errorf("invalid noxa SRV record for %s", host)
 		}
 		target := strings.TrimSuffix(record.Target, ".")
 		addresses = append(addresses, net.JoinHostPort(target, strconv.Itoa(int(record.Port))))

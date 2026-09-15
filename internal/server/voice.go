@@ -12,11 +12,11 @@ import (
 
 	"go.uber.org/zap"
 
-	"voicx/internal/channels"
-	"voicx/internal/netproto"
-	"voicx/internal/permissions"
-	"voicx/internal/recorder"
-	"voicx/internal/webrtc"
+	"noxa/internal/channels"
+	"noxa/internal/netproto"
+	"noxa/internal/permissions"
+	"noxa/internal/recorder"
+	"noxa/internal/webrtc"
 )
 
 // Broadcast event types for the voice pipeline.

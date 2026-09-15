@@ -25,9 +25,9 @@ import (
 
 	"go.uber.org/zap"
 
-	"voicx/internal/netproto"
-	"voicx/internal/permissions"
-	"voicx/internal/store"
+	"noxa/internal/netproto"
+	"noxa/internal/permissions"
+	"noxa/internal/store"
 )
 
 // Broadcast event types for the wave-5a chat features.

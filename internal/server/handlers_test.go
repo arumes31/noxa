@@ -20,17 +20,17 @@ import (
 
 	"go.uber.org/zap"
 
-	"voicx/internal/auth"
-	"voicx/internal/broadcast"
-	"voicx/internal/channels"
-	"voicx/internal/chatcrypto"
-	"voicx/internal/config"
-	"voicx/internal/eventbus"
-	"voicx/internal/metrics"
-	"voicx/internal/netproto"
-	"voicx/internal/permissions"
-	"voicx/internal/state"
-	"voicx/internal/store"
+	"noxa/internal/auth"
+	"noxa/internal/broadcast"
+	"noxa/internal/channels"
+	"noxa/internal/chatcrypto"
+	"noxa/internal/config"
+	"noxa/internal/eventbus"
+	"noxa/internal/metrics"
+	"noxa/internal/netproto"
+	"noxa/internal/permissions"
+	"noxa/internal/state"
+	"noxa/internal/store"
 )
 
 // --- fakes -----------------------------------------------------------------
@@ -1684,7 +1684,7 @@ func TestTCPAuthenticationFailureMetric(t *testing.T) {
 		t.Fatalf("gather metrics: %v", err)
 	}
 	for _, family := range families {
-		if family.GetName() != "voicx_auth_failures_total" {
+		if family.GetName() != "noxa_auth_failures_total" {
 			continue
 		}
 		if len(family.GetMetric()) != 1 {
@@ -1697,7 +1697,7 @@ func TestTCPAuthenticationFailureMetric(t *testing.T) {
 		}
 		return
 	}
-	t.Fatal("voicx_auth_failures_total not gathered")
+	t.Fatal("noxa_auth_failures_total not gathered")
 }
 
 // TestAuthenticateBannedUniqueID verifies that a client whose unique ID has an

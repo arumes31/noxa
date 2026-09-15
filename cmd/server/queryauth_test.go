@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"voicx/internal/auth"
+	"noxa/internal/auth"
 )
 
 func TestQueryBackendHidesUnknownAccount(t *testing.T) {

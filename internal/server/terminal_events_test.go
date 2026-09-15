@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"voicx/internal/netproto"
+	"noxa/internal/netproto"
 )
 
 func TestTerminalEventDeliveredBeforeClose(t *testing.T) {

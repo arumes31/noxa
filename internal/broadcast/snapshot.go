@@ -11,7 +11,7 @@ package broadcast
 import (
 	"time"
 
-	"voicx/internal/state"
+	"noxa/internal/state"
 )
 
 // ClientInfo is a JSON-serializable subset of state.Client. It deliberately

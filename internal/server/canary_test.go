@@ -20,8 +20,8 @@ import (
 	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest/observer"
 
-	"voicx/internal/netproto"
-	"voicx/internal/permissions"
+	"noxa/internal/netproto"
+	"noxa/internal/permissions"
 )
 
 // permsWithPin grants b_channel_modify, the pin-curation gate.

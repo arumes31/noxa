@@ -53,10 +53,10 @@ type KEKRing struct {
 // stored message, so a missing ring is otherwise a fatal startup error.
 func LoadKEKRing(path, envB64 string, allowCreate bool) (*KEKRing, error) {
 	if strings.TrimSpace(envB64) != "" {
-		return parseRing(strings.NewReader(envB64), "VOICX_CHAT_MASTER_KEY")
+		return parseRing(strings.NewReader(envB64), "NOXA_CHAT_MASTER_KEY")
 	}
 	if path == "" {
-		return nil, errors.New("chat master key: chat_master_key_file is empty and VOICX_CHAT_MASTER_KEY is unset")
+		return nil, errors.New("chat master key: chat_master_key_file is empty and NOXA_CHAT_MASTER_KEY is unset")
 	}
 	// #nosec G304 -- path is an administrator-selected master-key location,
 	// intentionally outside a fixed application data root.
@@ -68,7 +68,7 @@ func LoadKEKRing(path, envB64 string, allowCreate bool) (*KEKRing, error) {
 		return nil, fmt.Errorf("reading chat master key %s: %w", path, err)
 	case !allowCreate:
 		return nil, fmt.Errorf("chat master key missing: stored scope key generations cannot be unwrapped; "+
-			"restore %s (or set VOICX_CHAT_MASTER_KEY) — it is backed up with the database; "+
+			"restore %s (or set NOXA_CHAT_MASTER_KEY) — it is backed up with the database; "+
 			"to abandon all chat history instead, run with --reset-chat-keys", path)
 	}
 	return createRing(path)

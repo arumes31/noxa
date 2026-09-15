@@ -14,11 +14,11 @@ import (
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/types/descriptorpb"
 
-	"voicx/internal/auth"
-	"voicx/internal/channels"
-	"voicx/internal/eventbus"
-	"voicx/internal/query"
-	voicxv1 "voicx/v1"
+	"noxa/internal/auth"
+	"noxa/internal/channels"
+	"noxa/internal/eventbus"
+	"noxa/internal/query"
+	noxav1 "noxa/v1"
 )
 
 func TestGeneratedServiceContracts(t *testing.T) {
@@ -26,8 +26,8 @@ func TestGeneratedServiceContracts(t *testing.T) {
 		name string
 		file protoreflect.FileDescriptor
 	}{
-		{name: "Chat", file: voicxv1.File_chat_proto},
-		{name: "Signaling", file: voicxv1.File_signaling_proto},
+		{name: "Chat", file: noxav1.File_chat_proto},
+		{name: "Signaling", file: noxav1.File_signaling_proto},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			service := test.file.Services().ByName(protoreflect.Name(test.name))
@@ -50,15 +50,15 @@ func TestGeneratedServiceContracts(t *testing.T) {
 		got = append(got, name)
 	}
 	sort.Strings(got)
-	want := []string{"voicx.v1.Control", "voicx.v1.Events"}
+	want := []string{"noxa.v1.Control", "noxa.v1.Events"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("registered gRPC services = %v, want %v", got, want)
 	}
 }
 
 func TestGeneratedAuthenticationCompatibilityContracts(t *testing.T) {
-	request := (&voicxv1.AuthenticateRequest{}).ProtoReflect().Descriptor()
-	response := (&voicxv1.AuthenticateResponse{}).ProtoReflect().Descriptor()
+	request := (&noxav1.AuthenticateRequest{}).ProtoReflect().Descriptor()
+	response := (&noxav1.AuthenticateResponse{}).ProtoReflect().Descriptor()
 	for _, field := range []struct {
 		message protoreflect.MessageDescriptor
 		name    protoreflect.Name
@@ -88,7 +88,7 @@ func TestGeneratedAuthenticationCompatibilityContracts(t *testing.T) {
 }
 
 func TestUserBannedEventChannelFieldContract(t *testing.T) {
-	descriptor := (&voicxv1.UserBannedEvent{}).ProtoReflect().Descriptor()
+	descriptor := (&noxav1.UserBannedEvent{}).ProtoReflect().Descriptor()
 	field := descriptor.Fields().ByName("channel_id")
 	if field == nil || field.Number() != 5 || field.Kind() != protoreflect.StringKind {
 		t.Fatalf("UserBannedEvent channel_id descriptor = %v, want string field 5", field)
@@ -103,7 +103,7 @@ func TestAuthenticateLegacyCompatibility(t *testing.T) {
 		},
 	}
 	for _, credentials := range []bool{false, true} {
-		request := &voicxv1.AuthenticateRequest{}
+		request := &noxav1.AuthenticateRequest{}
 		if credentials {
 			request.Username, request.Password = "admin", "valid-password"
 		}
@@ -154,21 +154,21 @@ func TestQueryPermissionsUsesAuthenticatedCallerAndAdminFlag(t *testing.T) {
 	backend := &permissionBackend{}
 	bus := eventbus.New(zap.NewNop())
 	defer bus.Close()
-	client := voicxv1.NewControlClient(dialGRPC(t, startGRPC(t, backend, bus)))
+	client := noxav1.NewControlClient(dialGRPC(t, startGRPC(t, backend, bus)))
 	ctx := authCtx(t, "caller", "pw")
 
-	caller, err := client.QueryPermissions(ctx, &voicxv1.QueryPermissionsRequest{ChannelId: "7"})
+	caller, err := client.QueryPermissions(ctx, &noxav1.QueryPermissionsRequest{ChannelId: "7"})
 	if err != nil {
 		t.Fatalf("QueryPermissions for caller: %v", err)
 	}
-	if !caller.GetIsAdmin() || !reflect.DeepEqual(caller.GetGranted(), []voicxv1.Permission{voicxv1.Permission_PERMISSION_SPEAK}) {
+	if !caller.GetIsAdmin() || !reflect.DeepEqual(caller.GetGranted(), []noxav1.Permission{noxav1.Permission_PERMISSION_SPEAK}) {
 		t.Fatalf("caller permissions = %+v, want administrator speaking permission", caller)
 	}
-	target, err := client.QueryPermissions(ctx, &voicxv1.QueryPermissionsRequest{ChannelId: "7", UserId: "target"})
+	target, err := client.QueryPermissions(ctx, &noxav1.QueryPermissionsRequest{ChannelId: "7", UserId: "target"})
 	if err != nil {
 		t.Fatalf("QueryPermissions for explicit target: %v", err)
 	}
-	if target.GetIsAdmin() || !reflect.DeepEqual(target.GetDenied(), []voicxv1.Permission{voicxv1.Permission_PERMISSION_BAN}) {
+	if target.GetIsAdmin() || !reflect.DeepEqual(target.GetDenied(), []noxav1.Permission{noxav1.Permission_PERMISSION_BAN}) {
 		t.Fatalf("target permissions = %+v, want non-admin denied ban", target)
 	}
 	if !reflect.DeepEqual(backend.lookups, []string{"caller", "target"}) {
@@ -176,14 +176,14 @@ func TestQueryPermissionsUsesAuthenticatedCallerAndAdminFlag(t *testing.T) {
 	}
 
 	service := &controlService{backend: backend, logger: zap.NewNop()}
-	if _, err := service.QueryPermissions(context.Background(), &voicxv1.QueryPermissionsRequest{}); status.Code(err) != codes.Unauthenticated {
+	if _, err := service.QueryPermissions(context.Background(), &noxav1.QueryPermissionsRequest{}); status.Code(err) != codes.Unauthenticated {
 		t.Fatalf("QueryPermissions without injected caller = %v, want Unauthenticated", err)
 	}
 }
 
 func TestControlChannelValidationAndBackendStatus(t *testing.T) {
 	service := &controlService{backend: &stubBackend{}, logger: zap.NewNop()}
-	for _, request := range []*voicxv1.CreateChannelRequest{
+	for _, request := range []*noxav1.CreateChannelRequest{
 		{Name: "channel", ParentId: "0"},
 		{Name: "channel", ParentId: "-1"},
 		{Name: "channel", ParentId: "not-a-number"},
@@ -193,7 +193,7 @@ func TestControlChannelValidationAndBackendStatus(t *testing.T) {
 			t.Fatalf("CreateChannel(%+v) = %v, want InvalidArgument", request, err)
 		}
 	}
-	if _, err := service.DeleteChannel(context.Background(), &voicxv1.DeleteChannelRequest{
+	if _, err := service.DeleteChannel(context.Background(), &noxav1.DeleteChannelRequest{
 		ChannelId: "1", Reason: strings.Repeat("x", maxDeleteReasonBytes+1),
 	}); status.Code(err) != codes.InvalidArgument {
 		t.Fatalf("DeleteChannel oversized reason = %v, want InvalidArgument", err)
@@ -231,7 +231,7 @@ func TestListChannelsSkipsOnlyMalformedRows(t *testing.T) {
 		{ChannelID: 2, Name: "bad max", MaxClients: -1},
 		{ChannelID: 3, Name: "bad count", ClientCount: -1},
 	}}, logger: zap.NewNop()}
-	response, err := service.ListChannels(context.Background(), &voicxv1.ListChannelsRequest{})
+	response, err := service.ListChannels(context.Background(), &noxav1.ListChannelsRequest{})
 	if err != nil {
 		t.Fatalf("ListChannels: %v", err)
 	}
@@ -243,22 +243,22 @@ func TestListChannelsSkipsOnlyMalformedRows(t *testing.T) {
 func TestAllFileTransferRPCsAreUnimplemented(t *testing.T) {
 	bus := eventbus.New(zap.NewNop())
 	defer bus.Close()
-	client := voicxv1.NewControlClient(dialGRPC(t, startGRPC(t, &stubBackend{}, bus)))
+	client := noxav1.NewControlClient(dialGRPC(t, startGRPC(t, &stubBackend{}, bus)))
 	ctx := authCtx(t, "admin-uid", "pw")
 	for _, test := range []struct {
 		name string
 		call func() error
 	}{
 		{name: "start", call: func() error {
-			_, err := client.StartFileTransfer(ctx, &voicxv1.StartFileTransferRequest{})
+			_, err := client.StartFileTransfer(ctx, &noxav1.StartFileTransferRequest{})
 			return err
 		}},
 		{name: "status", call: func() error {
-			_, err := client.GetFileTransferStatus(ctx, &voicxv1.GetFileTransferStatusRequest{})
+			_, err := client.GetFileTransferStatus(ctx, &noxav1.GetFileTransferStatusRequest{})
 			return err
 		}},
 		{name: "cancel", call: func() error {
-			_, err := client.CancelFileTransfer(ctx, &voicxv1.CancelFileTransferRequest{})
+			_, err := client.CancelFileTransfer(ctx, &noxav1.CancelFileTransferRequest{})
 			return err
 		}},
 	} {

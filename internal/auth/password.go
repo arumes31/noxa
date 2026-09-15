@@ -1,4 +1,4 @@
-// Package auth implements voicx authentication primitives: password hashing
+// Package auth implements noxa authentication primitives: password hashing
 // with Argon2id and identity generation using Ed25519 keys similar to
 // TeamSpeak's Unique IDs.
 package auth
@@ -14,7 +14,7 @@ import (
 
 	"golang.org/x/crypto/argon2"
 
-	"voicx/internal/safecast"
+	"noxa/internal/safecast"
 )
 
 // Argon2id parameters. These are package-level so tests can override them with
@@ -130,8 +130,8 @@ func VerifyPassword(password, encodedHash string) error {
 func makeDummyPasswordHash() string {
 	// #nosec G101 -- this public fixed input is deliberately not a credential;
 	// it equalizes the missing-user password-verification path.
-	const dummyInput = "voicx-dummy-password"
-	salt := []byte("voicx-dummy-salt")
+	const dummyInput = "noxa-dummy-password"
+	salt := []byte("noxa-dummy-salt")
 	hash := argon2.IDKey([]byte(dummyInput), salt, argonTime, argonMemory, argonThreads, argonKeyLen)
 	return encodeHash(salt, hash)
 }

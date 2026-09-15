@@ -4,7 +4,7 @@
 // 	protoc        (unknown)
 // source: control.proto
 
-package voicxv1
+package noxav1
 
 import (
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
@@ -854,8 +854,8 @@ func (x *QueryPermissionsRequest) GetUserId() string {
 
 type QueryPermissionsResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Granted       []Permission           `protobuf:"varint,1,rep,packed,name=granted,proto3,enum=voicx.v1.Permission" json:"granted,omitempty"`
-	Denied        []Permission           `protobuf:"varint,2,rep,packed,name=denied,proto3,enum=voicx.v1.Permission" json:"denied,omitempty"`
+	Granted       []Permission           `protobuf:"varint,1,rep,packed,name=granted,proto3,enum=noxa.v1.Permission" json:"granted,omitempty"`
+	Denied        []Permission           `protobuf:"varint,2,rep,packed,name=denied,proto3,enum=noxa.v1.Permission" json:"denied,omitempty"`
 	IsAdmin       bool                   `protobuf:"varint,3,opt,name=is_admin,json=isAdmin,proto3" json:"is_admin,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -917,7 +917,7 @@ type StartFileTransferRequest struct {
 	ChannelId     string                 `protobuf:"bytes,1,opt,name=channel_id,json=channelId,proto3" json:"channel_id,omitempty"`
 	Filename      string                 `protobuf:"bytes,2,opt,name=filename,proto3" json:"filename,omitempty"`
 	SizeBytes     int64                  `protobuf:"varint,3,opt,name=size_bytes,json=sizeBytes,proto3" json:"size_bytes,omitempty"`
-	Direction     FileTransferDirection  `protobuf:"varint,4,opt,name=direction,proto3,enum=voicx.v1.FileTransferDirection" json:"direction,omitempty"`
+	Direction     FileTransferDirection  `protobuf:"varint,4,opt,name=direction,proto3,enum=noxa.v1.FileTransferDirection" json:"direction,omitempty"`
 	ContentType   string                 `protobuf:"bytes,5,opt,name=content_type,json=contentType,proto3" json:"content_type,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -1104,7 +1104,7 @@ func (x *GetFileTransferStatusRequest) GetTransferId() string {
 type GetFileTransferStatusResponse struct {
 	state            protoimpl.MessageState `protogen:"open.v1"`
 	TransferId       string                 `protobuf:"bytes,1,opt,name=transfer_id,json=transferId,proto3" json:"transfer_id,omitempty"`
-	Status           FileTransferStatus     `protobuf:"varint,2,opt,name=status,proto3,enum=voicx.v1.FileTransferStatus" json:"status,omitempty"`
+	Status           FileTransferStatus     `protobuf:"varint,2,opt,name=status,proto3,enum=noxa.v1.FileTransferStatus" json:"status,omitempty"`
 	BytesTransferred int64                  `protobuf:"varint,3,opt,name=bytes_transferred,json=bytesTransferred,proto3" json:"bytes_transferred,omitempty"`
 	TotalBytes       int64                  `protobuf:"varint,4,opt,name=total_bytes,json=totalBytes,proto3" json:"total_bytes,omitempty"`
 	Error            string                 `protobuf:"bytes,5,opt,name=error,proto3" json:"error,omitempty"`
@@ -1285,13 +1285,13 @@ var File_control_proto protoreflect.FileDescriptor
 
 const file_control_proto_rawDesc = "" +
 	"\n" +
-	"\rcontrol.proto\x12\bvoicx.v1\"\x94\x02\n" +
+	"\rcontrol.proto\x12\anoxa.v1\"\x93\x02\n" +
 	"\x13AuthenticateRequest\x12\x1a\n" +
 	"\busername\x18\x01 \x01(\tR\busername\x12\x1a\n" +
 	"\bpassword\x18\x02 \x01(\tR\bpassword\x12\x18\n" +
 	"\x05token\x18\x03 \x01(\tB\x02\x18\x01R\x05token\x12%\n" +
-	"\x0eclient_version\x18\x04 \x01(\tR\rclientVersion\x12G\n" +
-	"\bmetadata\x18\x05 \x03(\v2+.voicx.v1.AuthenticateRequest.MetadataEntryR\bmetadata\x1a;\n" +
+	"\x0eclient_version\x18\x04 \x01(\tR\rclientVersion\x12F\n" +
+	"\bmetadata\x18\x05 \x03(\v2*.noxa.v1.AuthenticateRequest.MetadataEntryR\bmetadata\x1a;\n" +
 	"\rMetadataEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xda\x01\n" +
@@ -1302,7 +1302,7 @@ const file_control_proto_rawDesc = "" +
 	"\fdisplay_name\x18\x04 \x01(\tB\x02\x18\x01R\vdisplayName\x12!\n" +
 	"\n" +
 	"expires_at\x18\x05 \x01(\x03B\x02\x18\x01R\texpiresAt\x12\x18\n" +
-	"\x05error\x18\x06 \x01(\tB\x02\x18\x01R\x05error\"\xac\x02\n" +
+	"\x05error\x18\x06 \x01(\tB\x02\x18\x01R\x05error\"\xab\x02\n" +
 	"\aChannel\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x1b\n" +
@@ -1310,18 +1310,18 @@ const file_control_proto_rawDesc = "" +
 	"\vmax_clients\x18\x04 \x01(\x05R\n" +
 	"maxClients\x12\x1c\n" +
 	"\tpermanent\x18\x05 \x01(\bR\tpermanent\x12'\n" +
-	"\x0fcurrent_clients\x18\x06 \x01(\x05R\x0ecurrentClients\x12;\n" +
-	"\bmetadata\x18\a \x03(\v2\x1f.voicx.v1.Channel.MetadataEntryR\bmetadata\x1a;\n" +
+	"\x0fcurrent_clients\x18\x06 \x01(\x05R\x0ecurrentClients\x12:\n" +
+	"\bmetadata\x18\a \x03(\v2\x1e.noxa.v1.Channel.MetadataEntryR\bmetadata\x1a;\n" +
 	"\rMetadataEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\x8d\x02\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\x8c\x02\n" +
 	"\x14CreateChannelRequest\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x1b\n" +
 	"\tparent_id\x18\x02 \x01(\tR\bparentId\x12\x1f\n" +
 	"\vmax_clients\x18\x03 \x01(\x05R\n" +
 	"maxClients\x12\x1c\n" +
-	"\tpermanent\x18\x04 \x01(\bR\tpermanent\x12H\n" +
-	"\bmetadata\x18\x05 \x03(\v2,.voicx.v1.CreateChannelRequest.MetadataEntryR\bmetadata\x1a;\n" +
+	"\tpermanent\x18\x04 \x01(\bR\tpermanent\x12G\n" +
+	"\bmetadata\x18\x05 \x03(\v2+.noxa.v1.CreateChannelRequest.MetadataEntryR\bmetadata\x1a;\n" +
 	"\rMetadataEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"f\n" +
@@ -1338,24 +1338,24 @@ const file_control_proto_rawDesc = "" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x14\n" +
 	"\x05error\x18\x02 \x01(\tR\x05error\"=\n" +
 	"\x13ListChannelsRequest\x12&\n" +
-	"\x0froot_channel_id\x18\x01 \x01(\tR\rrootChannelId\"E\n" +
-	"\x14ListChannelsResponse\x12-\n" +
-	"\bchannels\x18\x01 \x03(\v2\x11.voicx.v1.ChannelR\bchannels\"Q\n" +
+	"\x0froot_channel_id\x18\x01 \x01(\tR\rrootChannelId\"D\n" +
+	"\x14ListChannelsResponse\x12,\n" +
+	"\bchannels\x18\x01 \x03(\v2\x10.noxa.v1.ChannelR\bchannels\"Q\n" +
 	"\x17QueryPermissionsRequest\x12\x1d\n" +
 	"\n" +
 	"channel_id\x18\x01 \x01(\tR\tchannelId\x12\x17\n" +
-	"\auser_id\x18\x02 \x01(\tR\x06userId\"\x93\x01\n" +
-	"\x18QueryPermissionsResponse\x12.\n" +
-	"\agranted\x18\x01 \x03(\x0e2\x14.voicx.v1.PermissionR\agranted\x12,\n" +
-	"\x06denied\x18\x02 \x03(\x0e2\x14.voicx.v1.PermissionR\x06denied\x12\x19\n" +
-	"\bis_admin\x18\x03 \x01(\bR\aisAdmin\"\xd6\x01\n" +
+	"\auser_id\x18\x02 \x01(\tR\x06userId\"\x91\x01\n" +
+	"\x18QueryPermissionsResponse\x12-\n" +
+	"\agranted\x18\x01 \x03(\x0e2\x13.noxa.v1.PermissionR\agranted\x12+\n" +
+	"\x06denied\x18\x02 \x03(\x0e2\x13.noxa.v1.PermissionR\x06denied\x12\x19\n" +
+	"\bis_admin\x18\x03 \x01(\bR\aisAdmin\"\xd5\x01\n" +
 	"\x18StartFileTransferRequest\x12\x1d\n" +
 	"\n" +
 	"channel_id\x18\x01 \x01(\tR\tchannelId\x12\x1a\n" +
 	"\bfilename\x18\x02 \x01(\tR\bfilename\x12\x1d\n" +
 	"\n" +
-	"size_bytes\x18\x03 \x01(\x03R\tsizeBytes\x12=\n" +
-	"\tdirection\x18\x04 \x01(\x0e2\x1f.voicx.v1.FileTransferDirectionR\tdirection\x12!\n" +
+	"size_bytes\x18\x03 \x01(\x03R\tsizeBytes\x12<\n" +
+	"\tdirection\x18\x04 \x01(\x0e2\x1e.noxa.v1.FileTransferDirectionR\tdirection\x12!\n" +
 	"\fcontent_type\x18\x05 \x01(\tR\vcontentType\"\x88\x01\n" +
 	"\x19StartFileTransferResponse\x12\x18\n" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x1f\n" +
@@ -1365,11 +1365,11 @@ const file_control_proto_rawDesc = "" +
 	"\x05error\x18\x04 \x01(\tR\x05error\"?\n" +
 	"\x1cGetFileTransferStatusRequest\x12\x1f\n" +
 	"\vtransfer_id\x18\x01 \x01(\tR\n" +
-	"transferId\"\xda\x01\n" +
+	"transferId\"\xd9\x01\n" +
 	"\x1dGetFileTransferStatusResponse\x12\x1f\n" +
 	"\vtransfer_id\x18\x01 \x01(\tR\n" +
-	"transferId\x124\n" +
-	"\x06status\x18\x02 \x01(\x0e2\x1c.voicx.v1.FileTransferStatusR\x06status\x12+\n" +
+	"transferId\x123\n" +
+	"\x06status\x18\x02 \x01(\x0e2\x1b.noxa.v1.FileTransferStatusR\x06status\x12+\n" +
 	"\x11bytes_transferred\x18\x03 \x01(\x03R\x10bytesTransferred\x12\x1f\n" +
 	"\vtotal_bytes\x18\x04 \x01(\x03R\n" +
 	"totalBytes\x12\x14\n" +
@@ -1405,16 +1405,16 @@ const file_control_proto_rawDesc = "" +
 	" FILE_TRANSFER_STATUS_IN_PROGRESS\x10\x02\x12\"\n" +
 	"\x1eFILE_TRANSFER_STATUS_COMPLETED\x10\x03\x12\x1f\n" +
 	"\x1bFILE_TRANSFER_STATUS_FAILED\x10\x04\x12!\n" +
-	"\x1dFILE_TRANSFER_STATUS_CANCELED\x10\x052\xcf\x05\n" +
-	"\aControl\x12M\n" +
-	"\fAuthenticate\x12\x1d.voicx.v1.AuthenticateRequest\x1a\x1e.voicx.v1.AuthenticateResponse\x12P\n" +
-	"\rCreateChannel\x12\x1e.voicx.v1.CreateChannelRequest\x1a\x1f.voicx.v1.CreateChannelResponse\x12P\n" +
-	"\rDeleteChannel\x12\x1e.voicx.v1.DeleteChannelRequest\x1a\x1f.voicx.v1.DeleteChannelResponse\x12M\n" +
-	"\fListChannels\x12\x1d.voicx.v1.ListChannelsRequest\x1a\x1e.voicx.v1.ListChannelsResponse\x12Y\n" +
-	"\x10QueryPermissions\x12!.voicx.v1.QueryPermissionsRequest\x1a\".voicx.v1.QueryPermissionsResponse\x12\\\n" +
-	"\x11StartFileTransfer\x12\".voicx.v1.StartFileTransferRequest\x1a#.voicx.v1.StartFileTransferResponse\x12h\n" +
-	"\x15GetFileTransferStatus\x12&.voicx.v1.GetFileTransferStatusRequest\x1a'.voicx.v1.GetFileTransferStatusResponse\x12_\n" +
-	"\x12CancelFileTransfer\x12#.voicx.v1.CancelFileTransferRequest\x1a$.voicx.v1.CancelFileTransferResponseB\x12Z\x10voicx/v1;voicxv1b\x06proto3"
+	"\x1dFILE_TRANSFER_STATUS_CANCELED\x10\x052\xbf\x05\n" +
+	"\aControl\x12K\n" +
+	"\fAuthenticate\x12\x1c.noxa.v1.AuthenticateRequest\x1a\x1d.noxa.v1.AuthenticateResponse\x12N\n" +
+	"\rCreateChannel\x12\x1d.noxa.v1.CreateChannelRequest\x1a\x1e.noxa.v1.CreateChannelResponse\x12N\n" +
+	"\rDeleteChannel\x12\x1d.noxa.v1.DeleteChannelRequest\x1a\x1e.noxa.v1.DeleteChannelResponse\x12K\n" +
+	"\fListChannels\x12\x1c.noxa.v1.ListChannelsRequest\x1a\x1d.noxa.v1.ListChannelsResponse\x12W\n" +
+	"\x10QueryPermissions\x12 .noxa.v1.QueryPermissionsRequest\x1a!.noxa.v1.QueryPermissionsResponse\x12Z\n" +
+	"\x11StartFileTransfer\x12!.noxa.v1.StartFileTransferRequest\x1a\".noxa.v1.StartFileTransferResponse\x12f\n" +
+	"\x15GetFileTransferStatus\x12%.noxa.v1.GetFileTransferStatusRequest\x1a&.noxa.v1.GetFileTransferStatusResponse\x12]\n" +
+	"\x12CancelFileTransfer\x12\".noxa.v1.CancelFileTransferRequest\x1a#.noxa.v1.CancelFileTransferResponseB\x10Z\x0enoxa/v1;noxav1b\x06proto3"
 
 var (
 	file_control_proto_rawDescOnce sync.Once
@@ -1431,55 +1431,55 @@ func file_control_proto_rawDescGZIP() []byte {
 var file_control_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
 var file_control_proto_msgTypes = make([]protoimpl.MessageInfo, 20)
 var file_control_proto_goTypes = []any{
-	(Permission)(0),                       // 0: voicx.v1.Permission
-	(FileTransferDirection)(0),            // 1: voicx.v1.FileTransferDirection
-	(FileTransferStatus)(0),               // 2: voicx.v1.FileTransferStatus
-	(*AuthenticateRequest)(nil),           // 3: voicx.v1.AuthenticateRequest
-	(*AuthenticateResponse)(nil),          // 4: voicx.v1.AuthenticateResponse
-	(*Channel)(nil),                       // 5: voicx.v1.Channel
-	(*CreateChannelRequest)(nil),          // 6: voicx.v1.CreateChannelRequest
-	(*CreateChannelResponse)(nil),         // 7: voicx.v1.CreateChannelResponse
-	(*DeleteChannelRequest)(nil),          // 8: voicx.v1.DeleteChannelRequest
-	(*DeleteChannelResponse)(nil),         // 9: voicx.v1.DeleteChannelResponse
-	(*ListChannelsRequest)(nil),           // 10: voicx.v1.ListChannelsRequest
-	(*ListChannelsResponse)(nil),          // 11: voicx.v1.ListChannelsResponse
-	(*QueryPermissionsRequest)(nil),       // 12: voicx.v1.QueryPermissionsRequest
-	(*QueryPermissionsResponse)(nil),      // 13: voicx.v1.QueryPermissionsResponse
-	(*StartFileTransferRequest)(nil),      // 14: voicx.v1.StartFileTransferRequest
-	(*StartFileTransferResponse)(nil),     // 15: voicx.v1.StartFileTransferResponse
-	(*GetFileTransferStatusRequest)(nil),  // 16: voicx.v1.GetFileTransferStatusRequest
-	(*GetFileTransferStatusResponse)(nil), // 17: voicx.v1.GetFileTransferStatusResponse
-	(*CancelFileTransferRequest)(nil),     // 18: voicx.v1.CancelFileTransferRequest
-	(*CancelFileTransferResponse)(nil),    // 19: voicx.v1.CancelFileTransferResponse
-	nil,                                   // 20: voicx.v1.AuthenticateRequest.MetadataEntry
-	nil,                                   // 21: voicx.v1.Channel.MetadataEntry
-	nil,                                   // 22: voicx.v1.CreateChannelRequest.MetadataEntry
+	(Permission)(0),                       // 0: noxa.v1.Permission
+	(FileTransferDirection)(0),            // 1: noxa.v1.FileTransferDirection
+	(FileTransferStatus)(0),               // 2: noxa.v1.FileTransferStatus
+	(*AuthenticateRequest)(nil),           // 3: noxa.v1.AuthenticateRequest
+	(*AuthenticateResponse)(nil),          // 4: noxa.v1.AuthenticateResponse
+	(*Channel)(nil),                       // 5: noxa.v1.Channel
+	(*CreateChannelRequest)(nil),          // 6: noxa.v1.CreateChannelRequest
+	(*CreateChannelResponse)(nil),         // 7: noxa.v1.CreateChannelResponse
+	(*DeleteChannelRequest)(nil),          // 8: noxa.v1.DeleteChannelRequest
+	(*DeleteChannelResponse)(nil),         // 9: noxa.v1.DeleteChannelResponse
+	(*ListChannelsRequest)(nil),           // 10: noxa.v1.ListChannelsRequest
+	(*ListChannelsResponse)(nil),          // 11: noxa.v1.ListChannelsResponse
+	(*QueryPermissionsRequest)(nil),       // 12: noxa.v1.QueryPermissionsRequest
+	(*QueryPermissionsResponse)(nil),      // 13: noxa.v1.QueryPermissionsResponse
+	(*StartFileTransferRequest)(nil),      // 14: noxa.v1.StartFileTransferRequest
+	(*StartFileTransferResponse)(nil),     // 15: noxa.v1.StartFileTransferResponse
+	(*GetFileTransferStatusRequest)(nil),  // 16: noxa.v1.GetFileTransferStatusRequest
+	(*GetFileTransferStatusResponse)(nil), // 17: noxa.v1.GetFileTransferStatusResponse
+	(*CancelFileTransferRequest)(nil),     // 18: noxa.v1.CancelFileTransferRequest
+	(*CancelFileTransferResponse)(nil),    // 19: noxa.v1.CancelFileTransferResponse
+	nil,                                   // 20: noxa.v1.AuthenticateRequest.MetadataEntry
+	nil,                                   // 21: noxa.v1.Channel.MetadataEntry
+	nil,                                   // 22: noxa.v1.CreateChannelRequest.MetadataEntry
 }
 var file_control_proto_depIdxs = []int32{
-	20, // 0: voicx.v1.AuthenticateRequest.metadata:type_name -> voicx.v1.AuthenticateRequest.MetadataEntry
-	21, // 1: voicx.v1.Channel.metadata:type_name -> voicx.v1.Channel.MetadataEntry
-	22, // 2: voicx.v1.CreateChannelRequest.metadata:type_name -> voicx.v1.CreateChannelRequest.MetadataEntry
-	5,  // 3: voicx.v1.ListChannelsResponse.channels:type_name -> voicx.v1.Channel
-	0,  // 4: voicx.v1.QueryPermissionsResponse.granted:type_name -> voicx.v1.Permission
-	0,  // 5: voicx.v1.QueryPermissionsResponse.denied:type_name -> voicx.v1.Permission
-	1,  // 6: voicx.v1.StartFileTransferRequest.direction:type_name -> voicx.v1.FileTransferDirection
-	2,  // 7: voicx.v1.GetFileTransferStatusResponse.status:type_name -> voicx.v1.FileTransferStatus
-	3,  // 8: voicx.v1.Control.Authenticate:input_type -> voicx.v1.AuthenticateRequest
-	6,  // 9: voicx.v1.Control.CreateChannel:input_type -> voicx.v1.CreateChannelRequest
-	8,  // 10: voicx.v1.Control.DeleteChannel:input_type -> voicx.v1.DeleteChannelRequest
-	10, // 11: voicx.v1.Control.ListChannels:input_type -> voicx.v1.ListChannelsRequest
-	12, // 12: voicx.v1.Control.QueryPermissions:input_type -> voicx.v1.QueryPermissionsRequest
-	14, // 13: voicx.v1.Control.StartFileTransfer:input_type -> voicx.v1.StartFileTransferRequest
-	16, // 14: voicx.v1.Control.GetFileTransferStatus:input_type -> voicx.v1.GetFileTransferStatusRequest
-	18, // 15: voicx.v1.Control.CancelFileTransfer:input_type -> voicx.v1.CancelFileTransferRequest
-	4,  // 16: voicx.v1.Control.Authenticate:output_type -> voicx.v1.AuthenticateResponse
-	7,  // 17: voicx.v1.Control.CreateChannel:output_type -> voicx.v1.CreateChannelResponse
-	9,  // 18: voicx.v1.Control.DeleteChannel:output_type -> voicx.v1.DeleteChannelResponse
-	11, // 19: voicx.v1.Control.ListChannels:output_type -> voicx.v1.ListChannelsResponse
-	13, // 20: voicx.v1.Control.QueryPermissions:output_type -> voicx.v1.QueryPermissionsResponse
-	15, // 21: voicx.v1.Control.StartFileTransfer:output_type -> voicx.v1.StartFileTransferResponse
-	17, // 22: voicx.v1.Control.GetFileTransferStatus:output_type -> voicx.v1.GetFileTransferStatusResponse
-	19, // 23: voicx.v1.Control.CancelFileTransfer:output_type -> voicx.v1.CancelFileTransferResponse
+	20, // 0: noxa.v1.AuthenticateRequest.metadata:type_name -> noxa.v1.AuthenticateRequest.MetadataEntry
+	21, // 1: noxa.v1.Channel.metadata:type_name -> noxa.v1.Channel.MetadataEntry
+	22, // 2: noxa.v1.CreateChannelRequest.metadata:type_name -> noxa.v1.CreateChannelRequest.MetadataEntry
+	5,  // 3: noxa.v1.ListChannelsResponse.channels:type_name -> noxa.v1.Channel
+	0,  // 4: noxa.v1.QueryPermissionsResponse.granted:type_name -> noxa.v1.Permission
+	0,  // 5: noxa.v1.QueryPermissionsResponse.denied:type_name -> noxa.v1.Permission
+	1,  // 6: noxa.v1.StartFileTransferRequest.direction:type_name -> noxa.v1.FileTransferDirection
+	2,  // 7: noxa.v1.GetFileTransferStatusResponse.status:type_name -> noxa.v1.FileTransferStatus
+	3,  // 8: noxa.v1.Control.Authenticate:input_type -> noxa.v1.AuthenticateRequest
+	6,  // 9: noxa.v1.Control.CreateChannel:input_type -> noxa.v1.CreateChannelRequest
+	8,  // 10: noxa.v1.Control.DeleteChannel:input_type -> noxa.v1.DeleteChannelRequest
+	10, // 11: noxa.v1.Control.ListChannels:input_type -> noxa.v1.ListChannelsRequest
+	12, // 12: noxa.v1.Control.QueryPermissions:input_type -> noxa.v1.QueryPermissionsRequest
+	14, // 13: noxa.v1.Control.StartFileTransfer:input_type -> noxa.v1.StartFileTransferRequest
+	16, // 14: noxa.v1.Control.GetFileTransferStatus:input_type -> noxa.v1.GetFileTransferStatusRequest
+	18, // 15: noxa.v1.Control.CancelFileTransfer:input_type -> noxa.v1.CancelFileTransferRequest
+	4,  // 16: noxa.v1.Control.Authenticate:output_type -> noxa.v1.AuthenticateResponse
+	7,  // 17: noxa.v1.Control.CreateChannel:output_type -> noxa.v1.CreateChannelResponse
+	9,  // 18: noxa.v1.Control.DeleteChannel:output_type -> noxa.v1.DeleteChannelResponse
+	11, // 19: noxa.v1.Control.ListChannels:output_type -> noxa.v1.ListChannelsResponse
+	13, // 20: noxa.v1.Control.QueryPermissions:output_type -> noxa.v1.QueryPermissionsResponse
+	15, // 21: noxa.v1.Control.StartFileTransfer:output_type -> noxa.v1.StartFileTransferResponse
+	17, // 22: noxa.v1.Control.GetFileTransferStatus:output_type -> noxa.v1.GetFileTransferStatusResponse
+	19, // 23: noxa.v1.Control.CancelFileTransfer:output_type -> noxa.v1.CancelFileTransferResponse
 	16, // [16:24] is the sub-list for method output_type
 	8,  // [8:16] is the sub-list for method input_type
 	8,  // [8:8] is the sub-list for extension type_name

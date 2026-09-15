@@ -353,7 +353,7 @@ func BenchmarkForwardRTP(b *testing.B) {
 				sub := fmt.Sprintf("sub%d", i)
 				track, err := webrtc.NewTrackLocalStaticRTP(
 					webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeOpus, ClockRate: 48000, Channels: 2},
-					"pub", "voicx",
+					"pub", "noxa",
 				)
 				if err != nil {
 					b.Fatalf("NewTrackLocalStaticRTP: %v", err)

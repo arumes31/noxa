@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"voicx/internal/safecast"
+	"noxa/internal/safecast"
 )
 
 // testScope returns a scope id no channel uses, so tests never collide with

@@ -1,4 +1,4 @@
-// Package redisx wraps a go-redis client for voicx. Redis backs later-phase
+// Package redisx wraps a go-redis client for noxa. Redis backs later-phase
 // features (pub/sub fan-out, rate limiting) and is treated as optional: a
 // startup Ping failure leaves the client retained in degraded mode so later
 // readiness probes can observe recovery without restarting the server.
@@ -19,7 +19,7 @@ import (
 	"go.uber.org/zap"
 )
 
-// Client wraps a *redis.Client with the voicx logger.
+// Client wraps a *redis.Client with the noxa logger.
 type Client struct {
 	rdb    *redis.Client
 	logger *zap.Logger

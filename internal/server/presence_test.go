@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"voicx/internal/netproto"
-	"voicx/internal/permissions"
+	"noxa/internal/netproto"
+	"noxa/internal/permissions"
 )
 
 func TestPokeTrackerZeroValueIsolationCapacityAndExpiry(t *testing.T) {

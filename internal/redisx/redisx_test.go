@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"voicx/internal/tlscert"
+	"noxa/internal/tlscert"
 )
 
 // TestNew verifies the constructor wires the address and password into the

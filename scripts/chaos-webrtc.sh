@@ -16,8 +16,8 @@ if [ -z "${LOADTEST_ARGS:-}" ]; then
 fi
 
 export TURN_SECRET
-export VOICX_TURN_URIS="turn:127.0.0.1:12366?transport=tcp"
-docker compose --profile turn --profile chaos-network up -d --build voicx coturn toxiproxy
+export NOXA_TURN_URIS="turn:127.0.0.1:12366?transport=tcp"
+docker compose --profile turn --profile chaos-network up -d --build noxa coturn toxiproxy
 
 api=http://127.0.0.1:12365
 for _ in $(seq 1 60); do

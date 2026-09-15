@@ -5,9 +5,9 @@ import (
 	"errors"
 	"testing"
 
-	"voicx/internal/config"
-	"voicx/internal/permissions"
-	"voicx/internal/state"
+	"noxa/internal/config"
+	"noxa/internal/permissions"
+	"noxa/internal/state"
 )
 
 func TestGuestTalkRespectsChannelRestrictions(t *testing.T) {

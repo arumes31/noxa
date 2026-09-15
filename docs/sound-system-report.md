@@ -1,4 +1,4 @@
-# VOICX static sound and speech redesign
+# NOXA static sound and speech redesign
 
 Implemented on codex/audio-update. Runtime audio is a player: 32 finished sound-effect WAVs and 18 finished speech WAVs. All creative synthesis and TTS happens in development tools. There is no runtime oscillator, noise generator, pitch transformation, speech synthesis, TTS service, model download or generated fallback.
 
@@ -7,7 +7,7 @@ Implemented on codex/audio-update. Runtime audio is a player: 32 finished sound-
 ## Architecture and event routing
 
 - tools/generate-sounds.mjs deterministically renders dry, fixed-filter noise contacts, taps and short console feedback into mono 48 kHz/16-bit PCM files. No pitched oscillators, sweeps, melodies or reverb remain in the recipes. Each event has its own finished file; channel join is 185 ms and PTT is 28/34 ms.
-- tools/generate-speech.py uses a development-only Piper environment to render the fixed text in tools/speech-lines.json. The shipped files are mono 22.05 kHz/16-bit PCM. No engine or model weights ship with VOICX.
+- tools/generate-speech.py uses a development-only Piper environment to render the fixed text in tools/speech-lines.json. The shipped files are mono 22.05 kHz/16-bit PCM. No engine or model weights ship with NOXA.
 - sound-catalog.js and speech-catalog.js centralize static URLs and metadata. sounds.js assembles one catalog for one SoundEngine/AudioContext. All 50 assets are eagerly decoded and cached. Runtime work is selecting a buffer, applying gain, routing and playing at its original rate.
 - SpeechQueue accepts only fixed event IDs, selects English/German, serializes speech and rechecks policy before playback. Reasons, names and message content cannot be passed as spoken text.
 - Main event handlers preserve channel, control, connection and notification routing. PTT applies voice state before scheduling feedback. The voice processing/capture pipeline remains separate from system audio.
@@ -72,13 +72,13 @@ Each filename exists in assets/speech/en/ and assets/speech/de/. The queue ranks
 | permission_denied | permission_denied.wav | 2.47 s | 2.05 s | You do not have permission to perform this action. | Du hast keine Berechtigung für diese Aktion. |
 | moved_by_admin | moved_by_admin.wav | 1.81 s | 1.99 s | You were moved to another channel. | Du wurdest in einen anderen Channel verschoben. |
 | server_shutdown | server_shutdown.wav | 1.86 s | 1.50 s | The server is shutting down. | Der Server wird heruntergefahren. |
-| test | test.wav | 2.72 s | 2.61 s | VOICX spoken notifications are enabled. | Die gesprochenen VOICX-Benachrichtigungen sind aktiviert. |
+| test | test.wav | 2.72 s | 2.61 s | NOXA spoken notifications are enabled. | Die gesprochenen NOXA-Benachrichtigungen sind aktiviert. |
 
 Speech data sources and exact model revision are documented in assets/speech/README.md, model cards and provenance.json. English uses the public-domain [LJ Speech dataset](https://keithito.com/LJ-Speech-Dataset/); German uses [Thorsten Voice](https://github.com/thorstenMueller/Thorsten-Voice), whose model card identifies CC0. [Piper](https://github.com/OHF-Voice/piper1-gpl) is a development-only tool. Effects are original and MIT licensed under the repository license.
 
 ## Settings and previews
 
-Settings version 8 replaces legacy pack IDs with voicx. Master sound enablement, volume, per-event choices, notification matrix, DND and replay suppression remain. The new ban effect inherits the old kick preference during migration. Old custom_sounds JSON is ignored and omitted on subsequent save.
+Settings version 8 replaces legacy pack IDs with noxa. Master sound enablement, volume, per-event choices, notification matrix, DND and replay suppression remain. The new ban effect inherits the old kick preference during migration. Old custom_sounds JSON is ignored and omitted on subsequent save.
 
 Spoken messages have an enable switch, independent 0–200% volume, connection-problem and administrative-action switches, plus speech_events support for individual persisted choices. New defaults enable speech; explicit false/zero values survive load/save. UI language selects German or English; unsupported languages deliberately use English. A missing selected-language recording is omitted, never synthesized or replaced with another language.
 
@@ -134,8 +134,8 @@ Repeated invocations of an identical command are grouped; transient failures and
 | gofmt -w changed Go files; go test ./... (client) | Passed; final client run 14.711 s. Log: sound-go-speech.log. Earlier sandbox file/cache failure rerun with authorized access. |
 | go test ./internal/server ./internal/broadcast | Final PASS, server 25.544 s. First run exposed an existing asynchronous permission-test race; test now waits for cache invalidation explicitly. |
 | go build -o temp/sound-runtime/server.exe ./cmd/server | Passed for isolated runtime testing. |
-| wails build -m -nosyncgomod -debug -o voicx-sound-review.exe | Earlier debug desktop build passed and used for native two-client checks. |
-| wails build -m -nosyncgomod -o voicx-sound-production.exe | Final production Windows desktop build passed in 45.082 s. Log: sound-wails-production.log. |
+| wails build -m -nosyncgomod -debug -o noxa-sound-review.exe | Earlier debug desktop build passed and used for native two-client checks. |
+| wails build -m -nosyncgomod -o noxa-sound-production.exe | Final production Windows desktop build passed in 45.082 s. Log: sound-wails-production.log. |
 | python temp/sound-runtime/analyze.py | Passed; measured final effect spectrum/DC/peaks and wrote audition-alphabetical.wav. |
 | node temp/sound-runtime/benchmark.mjs | Passed; completed-fade cleanup confirmed under 1,000 real WebAudio PTT submissions. |
 | powershell -NoProfile -File temp/sound-runtime/start-final.ps1 | Legacy PowerShell rejected AsHashtable; rerun in the current PowerShell runtime succeeded. |
@@ -161,4 +161,4 @@ Native physical output switching, headphones/laptop speakers, long-session subje
 - Removed: frontend/src/assets/channel_join.mp3.
 - Local review artifacts: docs/plans/2026-09-14-sound-redesign.md, this report, temp/sound-*.log, temp/sound-runtime/audition-alphabetical.wav and benchmark/signal-analysis JSON. The temporary TTS environment/model weights are not packaged or staged.
 
-The Windows binary is client/build/bin/voicx-sound-production.exe. No deployment or publication was performed.
+The Windows binary is client/build/bin/noxa-sound-production.exe. No deployment or publication was performed.

@@ -4,7 +4,7 @@
 // - protoc             (unknown)
 // source: control.proto
 
-package voicxv1
+package noxav1
 
 import (
 	context "context"
@@ -19,14 +19,14 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	Control_Authenticate_FullMethodName          = "/voicx.v1.Control/Authenticate"
-	Control_CreateChannel_FullMethodName         = "/voicx.v1.Control/CreateChannel"
-	Control_DeleteChannel_FullMethodName         = "/voicx.v1.Control/DeleteChannel"
-	Control_ListChannels_FullMethodName          = "/voicx.v1.Control/ListChannels"
-	Control_QueryPermissions_FullMethodName      = "/voicx.v1.Control/QueryPermissions"
-	Control_StartFileTransfer_FullMethodName     = "/voicx.v1.Control/StartFileTransfer"
-	Control_GetFileTransferStatus_FullMethodName = "/voicx.v1.Control/GetFileTransferStatus"
-	Control_CancelFileTransfer_FullMethodName    = "/voicx.v1.Control/CancelFileTransfer"
+	Control_Authenticate_FullMethodName          = "/noxa.v1.Control/Authenticate"
+	Control_CreateChannel_FullMethodName         = "/noxa.v1.Control/CreateChannel"
+	Control_DeleteChannel_FullMethodName         = "/noxa.v1.Control/DeleteChannel"
+	Control_ListChannels_FullMethodName          = "/noxa.v1.Control/ListChannels"
+	Control_QueryPermissions_FullMethodName      = "/noxa.v1.Control/QueryPermissions"
+	Control_StartFileTransfer_FullMethodName     = "/noxa.v1.Control/StartFileTransfer"
+	Control_GetFileTransferStatus_FullMethodName = "/noxa.v1.Control/GetFileTransferStatus"
+	Control_CancelFileTransfer_FullMethodName    = "/noxa.v1.Control/CancelFileTransfer"
 )
 
 // ControlClient is the client API for Control service.
@@ -366,7 +366,7 @@ func _Control_CancelFileTransfer_Handler(srv interface{}, ctx context.Context, d
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
 var Control_ServiceDesc = grpc.ServiceDesc{
-	ServiceName: "voicx.v1.Control",
+	ServiceName: "noxa.v1.Control",
 	HandlerType: (*ControlServer)(nil),
 	Methods: []grpc.MethodDesc{
 		{

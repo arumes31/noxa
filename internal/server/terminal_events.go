@@ -3,7 +3,7 @@ package server
 import (
 	"time"
 
-	"voicx/internal/netproto"
+	"noxa/internal/netproto"
 )
 
 // sendTerminalEvent writes directly before closing a connection. A broadcast

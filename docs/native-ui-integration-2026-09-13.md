@@ -33,7 +33,7 @@ tests and protocol load tests are not substitutes for these acceptance scenarios
 - Initial client executable SHA-256:
   `DE5ED31EEBD9604442C607764C3EA269C78C96C9206A6AF35F931206E89F1055`.
 - Server binds loopback TCP/UDP/control/admin/file/health ports 12583–12589.
-  TLS remains enabled. PostgreSQL database `voicx_ui_20260913_01` is newly created
+  TLS remains enabled. PostgreSQL database `noxa_ui_20260913_01` is newly created
   in the labeled disposable audit PostgreSQL container; Redis is the separately
   labeled audit instance. No production/default deployment data is used.
 - Three executable copies and profiles: ALPHA, BRAVO, CHARLIE. Each process has
@@ -468,7 +468,7 @@ The retained session can resume with its explicitly trusted rotated certificate.
 This example launches the final candidate into all three retained profiles:
 
 ```powershell
-docker start voicx-audit-20260913-postgres voicx-audit-20260913-redis
+docker start noxa-audit-20260913-postgres noxa-audit-20260913-redis
 pwsh -File ./temp/ui-20260913-01/start-server-rotated-cert.ps1
 foreach ($role in 'ALPHA','BRAVO','CHARLIE') {
     pwsh -File ./temp/ui-20260913-01/start-client.ps1 -Role $role

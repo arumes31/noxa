@@ -28,8 +28,8 @@ import (
 
 	"go.uber.org/zap"
 
-	"voicx/internal/netproto"
-	"voicx/internal/permissions"
+	"noxa/internal/netproto"
+	"noxa/internal/permissions"
 )
 
 // maxSubscribeTargets caps one ChannelSubscribe request and maxSubscriptions

@@ -521,7 +521,7 @@ func TestTrackSlotMSID(t *testing.T) {
 	if got, want := share.track.ID(), "a|screenaudio"; got != want {
 		t.Fatalf("screen audio track ID = %q, want %q", got, want)
 	}
-	if got, want := share.track.StreamID(), "voicx-a|screenaudio"; got != want {
+	if got, want := share.track.StreamID(), "noxa-a|screenaudio"; got != want {
 		t.Fatalf("screen audio stream ID = %q, want %q", got, want)
 	}
 	if share.track.StreamID() == fromA.audio[SlotMic].track.StreamID() {

@@ -20,10 +20,10 @@ import (
 	"golang.org/x/crypto/nacl/box"
 	"golang.org/x/crypto/nacl/secretbox"
 
-	"voicx/internal/chatcrypto"
-	"voicx/internal/config"
-	"voicx/internal/netproto"
-	"voicx/internal/state"
+	"noxa/internal/chatcrypto"
+	"noxa/internal/config"
+	"noxa/internal/netproto"
+	"noxa/internal/state"
 )
 
 func TestMoveCommitsWhenChannelKeyDeliveryIsCancelled(t *testing.T) {

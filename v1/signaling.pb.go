@@ -4,7 +4,7 @@
 // 	protoc        (unknown)
 // source: signaling.proto
 
-package voicxv1
+package noxav1
 
 import (
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
@@ -738,21 +738,21 @@ var File_signaling_proto protoreflect.FileDescriptor
 
 const file_signaling_proto_rawDesc = "" +
 	"\n" +
-	"\x0fsignaling.proto\x12\bvoicx.v1\"\x8c\x04\n" +
+	"\x0fsignaling.proto\x12\anoxa.v1\"\x84\x04\n" +
 	"\rSignalMessage\x12\x1b\n" +
 	"\tclient_id\x18\x01 \x01(\tR\bclientId\x12\x1d\n" +
 	"\n" +
-	"channel_id\x18\x02 \x01(\tR\tchannelId\x12:\n" +
+	"channel_id\x18\x02 \x01(\tR\tchannelId\x129\n" +
 	"\fjoin_channel\x18\n" +
-	" \x01(\v2\x15.voicx.v1.JoinChannelH\x00R\vjoinChannel\x12=\n" +
-	"\rleave_channel\x18\v \x01(\v2\x16.voicx.v1.LeaveChannelH\x00R\fleaveChannel\x123\n" +
-	"\tsubscribe\x18\f \x01(\v2\x13.voicx.v1.SubscribeH\x00R\tsubscribe\x129\n" +
-	"\vunsubscribe\x18\r \x01(\v2\x15.voicx.v1.UnsubscribeH\x00R\vunsubscribe\x121\n" +
-	"\tsdp_offer\x18\x0e \x01(\v2\x12.voicx.v1.SdpOfferH\x00R\bsdpOffer\x124\n" +
+	" \x01(\v2\x14.noxa.v1.JoinChannelH\x00R\vjoinChannel\x12<\n" +
+	"\rleave_channel\x18\v \x01(\v2\x15.noxa.v1.LeaveChannelH\x00R\fleaveChannel\x122\n" +
+	"\tsubscribe\x18\f \x01(\v2\x12.noxa.v1.SubscribeH\x00R\tsubscribe\x128\n" +
+	"\vunsubscribe\x18\r \x01(\v2\x14.noxa.v1.UnsubscribeH\x00R\vunsubscribe\x120\n" +
+	"\tsdp_offer\x18\x0e \x01(\v2\x11.noxa.v1.SdpOfferH\x00R\bsdpOffer\x123\n" +
 	"\n" +
-	"sdp_answer\x18\x0f \x01(\v2\x13.voicx.v1.SdpAnswerH\x00R\tsdpAnswer\x12=\n" +
-	"\rice_candidate\x18\x10 \x01(\v2\x16.voicx.v1.IceCandidateH\x00R\ficeCandidate\x12!\n" +
-	"\x03bye\x18\x11 \x01(\v2\r.voicx.v1.ByeH\x00R\x03byeB\t\n" +
+	"sdp_answer\x18\x0f \x01(\v2\x12.noxa.v1.SdpAnswerH\x00R\tsdpAnswer\x12<\n" +
+	"\rice_candidate\x18\x10 \x01(\v2\x15.noxa.v1.IceCandidateH\x00R\ficeCandidate\x12 \n" +
+	"\x03bye\x18\x11 \x01(\v2\f.noxa.v1.ByeH\x00R\x03byeB\t\n" +
 	"\apayload\"j\n" +
 	"\vJoinChannel\x12\x1d\n" +
 	"\n" +
@@ -796,9 +796,9 @@ const file_signaling_proto_rawDesc = "" +
 	"\x0fsdp_mline_index\x18\x06 \x01(\x05R\rsdpMlineIndex\x12\x1c\n" +
 	"\tdirection\x18\a \x01(\tR\tdirection\"\x1d\n" +
 	"\x03Bye\x12\x16\n" +
-	"\x06reason\x18\x01 \x01(\tR\x06reason2P\n" +
-	"\tSignaling\x12>\n" +
-	"\x06Signal\x12\x17.voicx.v1.SignalMessage\x1a\x17.voicx.v1.SignalMessage(\x010\x01\x1a\x03\x88\x02\x01B\x12Z\x10voicx/v1;voicxv1b\x06proto3"
+	"\x06reason\x18\x01 \x01(\tR\x06reason2N\n" +
+	"\tSignaling\x12<\n" +
+	"\x06Signal\x12\x16.noxa.v1.SignalMessage\x1a\x16.noxa.v1.SignalMessage(\x010\x01\x1a\x03\x88\x02\x01B\x10Z\x0enoxa/v1;noxav1b\x06proto3"
 
 var (
 	file_signaling_proto_rawDescOnce sync.Once
@@ -814,27 +814,27 @@ func file_signaling_proto_rawDescGZIP() []byte {
 
 var file_signaling_proto_msgTypes = make([]protoimpl.MessageInfo, 9)
 var file_signaling_proto_goTypes = []any{
-	(*SignalMessage)(nil), // 0: voicx.v1.SignalMessage
-	(*JoinChannel)(nil),   // 1: voicx.v1.JoinChannel
-	(*LeaveChannel)(nil),  // 2: voicx.v1.LeaveChannel
-	(*Subscribe)(nil),     // 3: voicx.v1.Subscribe
-	(*Unsubscribe)(nil),   // 4: voicx.v1.Unsubscribe
-	(*SdpOffer)(nil),      // 5: voicx.v1.SdpOffer
-	(*SdpAnswer)(nil),     // 6: voicx.v1.SdpAnswer
-	(*IceCandidate)(nil),  // 7: voicx.v1.IceCandidate
-	(*Bye)(nil),           // 8: voicx.v1.Bye
+	(*SignalMessage)(nil), // 0: noxa.v1.SignalMessage
+	(*JoinChannel)(nil),   // 1: noxa.v1.JoinChannel
+	(*LeaveChannel)(nil),  // 2: noxa.v1.LeaveChannel
+	(*Subscribe)(nil),     // 3: noxa.v1.Subscribe
+	(*Unsubscribe)(nil),   // 4: noxa.v1.Unsubscribe
+	(*SdpOffer)(nil),      // 5: noxa.v1.SdpOffer
+	(*SdpAnswer)(nil),     // 6: noxa.v1.SdpAnswer
+	(*IceCandidate)(nil),  // 7: noxa.v1.IceCandidate
+	(*Bye)(nil),           // 8: noxa.v1.Bye
 }
 var file_signaling_proto_depIdxs = []int32{
-	1, // 0: voicx.v1.SignalMessage.join_channel:type_name -> voicx.v1.JoinChannel
-	2, // 1: voicx.v1.SignalMessage.leave_channel:type_name -> voicx.v1.LeaveChannel
-	3, // 2: voicx.v1.SignalMessage.subscribe:type_name -> voicx.v1.Subscribe
-	4, // 3: voicx.v1.SignalMessage.unsubscribe:type_name -> voicx.v1.Unsubscribe
-	5, // 4: voicx.v1.SignalMessage.sdp_offer:type_name -> voicx.v1.SdpOffer
-	6, // 5: voicx.v1.SignalMessage.sdp_answer:type_name -> voicx.v1.SdpAnswer
-	7, // 6: voicx.v1.SignalMessage.ice_candidate:type_name -> voicx.v1.IceCandidate
-	8, // 7: voicx.v1.SignalMessage.bye:type_name -> voicx.v1.Bye
-	0, // 8: voicx.v1.Signaling.Signal:input_type -> voicx.v1.SignalMessage
-	0, // 9: voicx.v1.Signaling.Signal:output_type -> voicx.v1.SignalMessage
+	1, // 0: noxa.v1.SignalMessage.join_channel:type_name -> noxa.v1.JoinChannel
+	2, // 1: noxa.v1.SignalMessage.leave_channel:type_name -> noxa.v1.LeaveChannel
+	3, // 2: noxa.v1.SignalMessage.subscribe:type_name -> noxa.v1.Subscribe
+	4, // 3: noxa.v1.SignalMessage.unsubscribe:type_name -> noxa.v1.Unsubscribe
+	5, // 4: noxa.v1.SignalMessage.sdp_offer:type_name -> noxa.v1.SdpOffer
+	6, // 5: noxa.v1.SignalMessage.sdp_answer:type_name -> noxa.v1.SdpAnswer
+	7, // 6: noxa.v1.SignalMessage.ice_candidate:type_name -> noxa.v1.IceCandidate
+	8, // 7: noxa.v1.SignalMessage.bye:type_name -> noxa.v1.Bye
+	0, // 8: noxa.v1.Signaling.Signal:input_type -> noxa.v1.SignalMessage
+	0, // 9: noxa.v1.Signaling.Signal:output_type -> noxa.v1.SignalMessage
 	9, // [9:10] is the sub-list for method output_type
 	8, // [8:9] is the sub-list for method input_type
 	8, // [8:8] is the sub-list for extension type_name

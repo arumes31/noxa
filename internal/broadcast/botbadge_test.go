@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"voicx/internal/state"
+	"noxa/internal/state"
 )
 
 // TestSnapshotCarriesBotFlag verifies the bot flag survives the state ->

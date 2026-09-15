@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"voicx/internal/netproto"
+	"noxa/internal/netproto"
 )
 
 // IsAdmin reports whether the authenticated user is a server admin (used to

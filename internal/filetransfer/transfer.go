@@ -17,8 +17,8 @@ import (
 
 	"go.uber.org/zap"
 
-	"voicx/internal/netproto"
-	"voicx/internal/store"
+	"noxa/internal/netproto"
+	"noxa/internal/store"
 )
 
 // connTimeout bounds a single transfer connection.

@@ -20,11 +20,11 @@ import (
 	"testing"
 	"time"
 
-	"voicx/internal/config"
-	"voicx/internal/netproto"
-	"voicx/internal/permissions"
-	"voicx/internal/state"
-	"voicx/internal/store"
+	"noxa/internal/config"
+	"noxa/internal/netproto"
+	"noxa/internal/permissions"
+	"noxa/internal/state"
+	"noxa/internal/store"
 )
 
 // --- fake group store --------------------------------------------------------

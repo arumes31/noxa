@@ -5,7 +5,7 @@ import { SPEECH_ASSETS } from "./speech-catalog.js";
 import { SpeechQueue, SPEECH_EVENTS } from "./speech-queue.js";
 export { SOUND_EVENTS, SOUND_EVENT_GROUPS } from "./sound-catalog.js";
 
-const V = () => window.__voicx;
+const V = () => window.__noxa;
 const definitions = { ...SOUND_DEFINITIONS }, urls = { ...SOUND_URLS };
 for (const [language, clips] of Object.entries(SPEECH_ASSETS)) {
     for (const [event, clip] of Object.entries(clips)) {
@@ -17,7 +17,7 @@ for (const [language, clips] of Object.entries(SPEECH_ASSETS)) {
 export const soundEngine = new SoundEngine({
     definitions, urls,
     getState: () => V()?.state,
-    isDND: () => !!window.__voicxPolish?.dndActive?.(),
+    isDND: () => !!window.__noxaPolish?.dndActive?.(),
     createContext: () => new (window.AudioContext || window.webkitAudioContext)({ latencyHint: "interactive" }),
     load: async (url) => {
         const response = await fetch(url);
@@ -26,7 +26,7 @@ export const soundEngine = new SoundEngine({
     },
 });
 export const speechQueue = new SpeechQueue({ engine: soundEngine, assets: SPEECH_ASSETS,
-    getState: () => V()?.state, isDND: () => !!window.__voicxPolish?.dndActive?.(),
+    getState: () => V()?.state, isDND: () => !!window.__noxaPolish?.dndActive?.(),
     systemLanguage: () => navigator.language || "en" });
 export function playSpeech(event, options) { return speechQueue.enqueue(event, options); }
 export function clearSpeech(category) { speechQueue.clear(category); }

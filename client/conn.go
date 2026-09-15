@@ -1,4 +1,4 @@
-// conn.go implements the voicx control-protocol connection manager for the
+// conn.go implements the noxa control-protocol connection manager for the
 // client: dial, authenticate (password path), frame read loop, and event
 // fan-out to the Wails frontend. All server state lives here; the frontend
 // is a dumb UI fed by Wails runtime events.
@@ -17,9 +17,9 @@ import (
 
 	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
 
-	"voicx/internal/auth"
-	"voicx/internal/netproto"
-	"voicx/internal/tlscert"
+	"noxa/internal/auth"
+	"noxa/internal/netproto"
+	"noxa/internal/tlscert"
 )
 
 // eventSink receives backend events: the Wails runtime in production, a

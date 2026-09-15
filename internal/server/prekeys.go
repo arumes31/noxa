@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"time"
 
-	"voicx/internal/e2ee"
-	"voicx/internal/netproto"
-	"voicx/internal/store"
+	"noxa/internal/e2ee"
+	"noxa/internal/netproto"
+	"noxa/internal/store"
 )
 
 const maxPublishedOneTimePreKeys = 100

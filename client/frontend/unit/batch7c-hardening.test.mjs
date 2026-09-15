@@ -9,8 +9,8 @@ async function source(path) {
 describe("Batch 7C frontend hardening contracts", () => {
     it("opens About links externally and makes late version updates harmless", async () => {
         const menu = await source("../src/menu.js");
-        assert.match(menu, /https:\/\/github\.com\/arumes31\/voicx/);
-        assert.match(menu, /https:\/\/github\.com\/arumes31\/voicx\/issues/);
+        assert.match(menu, /https:\/\/github\.com\/arumes31\/noxa/);
+        assert.match(menu, /https:\/\/github\.com\/arumes31\/noxa\/issues/);
         assert.match(menu, /rel="noopener noreferrer"/);
         assert.match(menu, /overlay\.isConnected\s*&&\s*versionEl\.isConnected/);
         assert.match(menu, /BrowserOpenURL\(link\.href\)/);

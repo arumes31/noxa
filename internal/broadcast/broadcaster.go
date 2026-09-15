@@ -11,7 +11,7 @@ import (
 
 	"go.uber.org/zap"
 
-	"voicx/internal/state"
+	"noxa/internal/state"
 )
 
 // ErrNotRegistered is returned when a broadcast targets a client that has no

@@ -17,7 +17,7 @@ import (
 	"go.uber.org/zap"
 	"golang.org/x/net/websocket"
 
-	"voicx/internal/auth"
+	"noxa/internal/auth"
 )
 
 func testWSHandlerConfig(now func() time.Time) wsHandlerConfig {

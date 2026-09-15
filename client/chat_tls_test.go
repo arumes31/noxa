@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"voicx/internal/tlscert"
+	"noxa/internal/tlscert"
 )
 
 func TestPinFingerprint(t *testing.T) {

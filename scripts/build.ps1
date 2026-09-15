@@ -3,7 +3,7 @@ param(
     [ValidateSet("server", "client", "version", "check")]
     [string]$Target = "server",
 
-    [string]$UpdateRepo = "voicx/voicx",
+    [string]$UpdateRepo = "arumes31/noxa",
     [string]$UpdatePublicKeys = ""
 )
 
@@ -28,14 +28,14 @@ try {
 
     $versionFlags = (& go run ./cmd/version -format ldflags)
     if ($LASTEXITCODE -ne 0) { throw "version calculation failed" }
-    $linkerFlags = "-s -w $versionFlags -X=voicx/internal/version.UpdateRepo=$UpdateRepo"
+    $linkerFlags = "-s -w $versionFlags -X=noxa/internal/version.UpdateRepo=$UpdateRepo"
     if ($UpdatePublicKeys) {
-        $linkerFlags += " -X=voicx/internal/version.UpdatePublicKeys=$UpdatePublicKeys"
+        $linkerFlags += " -X=noxa/internal/version.UpdatePublicKeys=$UpdatePublicKeys"
     }
 
     if ($Target -eq "server") {
         New-Item -ItemType Directory -Force -Path "bin" | Out-Null
-        & go build -trimpath -ldflags $linkerFlags -o bin/voicx-server.exe ./cmd/server
+        & go build -trimpath -ldflags $linkerFlags -o bin/noxa-server.exe ./cmd/server
         if ($LASTEXITCODE -ne 0) { throw "server build failed" }
         exit 0
     }

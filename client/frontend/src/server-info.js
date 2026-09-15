@@ -3,7 +3,7 @@ import { icon } from "./icons.js";
 import { copyToClipboard } from "./clipboard.js";
 import { formatBytes, formatDuration, measured, summarizeMedia } from "./connection-stats.js";
 
-const V = () => window.__voicx;
+const V = () => window.__noxa;
 let currentOverlay = null;
 
 export function openServerInfo() {

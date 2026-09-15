@@ -3,7 +3,7 @@ package main
 import (
 	"testing"
 
-	"voicx/internal/netproto"
+	"noxa/internal/netproto"
 )
 
 func TestSocialBindings(t *testing.T) {
@@ -12,7 +12,7 @@ func TestSocialBindings(t *testing.T) {
 		frames <- frame
 		if netproto.MessageType(frame.Type) == netproto.MsgServerInfoQuery {
 			return netproto.MsgServerInfoResponse, netproto.ServerInfoResponse{
-				Name: "voicx", Version: "1.0", UptimeSeconds: 60, ClientsOnline: 2, ChannelsOnline: 3, MaxClients: 100,
+				Name: "noxa", Version: "1.0", UptimeSeconds: 60, ClientsOnline: 2, ChannelsOnline: 3, MaxClients: 100,
 			}, true
 		}
 		return 0, nil, false
@@ -38,7 +38,7 @@ func TestSocialBindings(t *testing.T) {
 	}
 
 	info, err := app.ServerInfo()
-	if err != nil || info.Name != "voicx" || info.ClientsOnline != 2 || info.ChannelsOnline != 3 || info.MaxClients != 100 {
+	if err != nil || info.Name != "noxa" || info.ClientsOnline != 2 || info.ChannelsOnline != 3 || info.MaxClients != 100 {
 		t.Fatalf("ServerInfo = %+v, %v", info, err)
 	}
 	nextFrame(t, frames, netproto.MsgServerInfoQuery)

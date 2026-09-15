@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"voicx/internal/netproto"
+	"noxa/internal/netproto"
 )
 
 // timeoutC bounds every "did this frame arrive" wait in this file. It is short
@@ -341,7 +341,7 @@ func TestChatExportHistoryPagesWholeChannel(t *testing.T) {
 		t.Fatal("the tombstoned message is missing from the transcript")
 	}
 	lines := strings.Split(strings.TrimSuffix(res.Text, "\n"), "\n")
-	if !strings.HasPrefix(lines[0], "# voicx export") {
+	if !strings.HasPrefix(lines[0], "# noXa export") {
 		t.Fatalf("first line = %q, want the partial-export notice", lines[0])
 	}
 	// Page two holds the oldest ids (999 tombstoned, then 1000), so a

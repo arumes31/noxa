@@ -21,8 +21,8 @@ import (
 	"github.com/minio/selfupdate"
 	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
 
-	"voicx/internal/updatemanifest"
-	"voicx/internal/version"
+	"noxa/internal/updatemanifest"
+	"noxa/internal/version"
 )
 
 // updateAPIBase is the GitHub API base URL (overridable in tests).
@@ -49,7 +49,7 @@ type githubRelease struct {
 }
 
 const (
-	clientAssetName        = "voicx-client-windows-amd64.exe"
+	clientAssetName        = "noxa-client-windows-amd64.exe"
 	checksumsName          = "checksums.txt"
 	checksumsSignatureName = "checksums.txt.sig"
 	metadataTimeout        = 10 * time.Second
@@ -111,7 +111,7 @@ func readLimited(r io.Reader, limit int64) ([]byte, error) {
 
 // fetchLatestRelease queries the latest release from the configured repo.
 func fetchLatestRelease(apiBase string) (*githubRelease, error) {
-	if version.UpdateRepo == "" || version.UpdateRepo == "voicx/voicx" {
+	if version.UpdateRepo == "" || version.UpdateRepo == "noxa/noxa" {
 		return nil, fmt.Errorf("no update source configured (UpdateRepo placeholder)")
 	}
 	owner, repo, ok := strings.Cut(version.UpdateRepo, "/")
@@ -134,7 +134,7 @@ func fetchLatestRelease(apiBase string) (*githubRelease, error) {
 		return nil, fmt.Errorf("create update request: %w", err)
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
-	req.Header.Set("User-Agent", "voicx-client/"+version.Short())
+	req.Header.Set("User-Agent", "noxa-client/"+version.Short())
 
 	resp, err := updateHTTPClient.Do(req)
 	if err != nil {
@@ -346,7 +346,7 @@ func (a *App) DownloadAndApply(info UpdateInfo) string {
 	ctx, cancel := context.WithTimeout(context.Background(), updateTimeout)
 	defer cancel()
 
-	tmpDir, err := os.MkdirTemp("", "voicx-update-*")
+	tmpDir, err := os.MkdirTemp("", "noxa-update-*")
 	if err != nil {
 		return err.Error()
 	}

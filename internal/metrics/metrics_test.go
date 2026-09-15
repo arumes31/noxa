@@ -15,7 +15,7 @@ import (
 	dto "github.com/prometheus/client_model/go"
 )
 
-// TestRegistryGather verifies the registry collects the voicx metrics and
+// TestRegistryGather verifies the registry collects the noxa metrics and
 // the Go collector.
 func TestRegistryGather(t *testing.T) {
 	m := New()
@@ -33,8 +33,8 @@ func TestRegistryGather(t *testing.T) {
 		names[f.GetName()] = true
 	}
 	for _, want := range []string{
-		"voicx_clients_connected", "voicx_chat_messages_total",
-		"voicx_rtp_packets_forwarded_total", "voicx_auth_failures_total", "go_goroutines",
+		"noxa_clients_connected", "noxa_chat_messages_total",
+		"noxa_rtp_packets_forwarded_total", "noxa_auth_failures_total", "go_goroutines",
 	} {
 		if !names[want] {
 			t.Errorf("metric family %q not gathered", want)
@@ -62,10 +62,10 @@ func TestCounterValues(t *testing.T) {
 		}
 		return -1
 	}
-	if got := value("voicx_tcp_connections_total"); got != 2 {
+	if got := value("noxa_tcp_connections_total"); got != 2 {
 		t.Errorf("tcp_connections = %v, want 2", got)
 	}
-	if got := value("voicx_udp_packets_dropped_total"); got != 1 {
+	if got := value("noxa_udp_packets_dropped_total"); got != 1 {
 		t.Errorf("udp_dropped = %v, want 1", got)
 	}
 }
@@ -82,11 +82,11 @@ func TestGaugeValuesCannotBecomeNegative(t *testing.T) {
 		t.Fatalf("Gather: %v", err)
 	}
 	for _, name := range []string{
-		"voicx_clients_connected",
-		"voicx_channels_active",
-		"voicx_webrtc_peers",
-		"voicx_udp_inbound_queue_depth",
-		"voicx_recordings_active",
+		"noxa_clients_connected",
+		"noxa_channels_active",
+		"noxa_webrtc_peers",
+		"noxa_udp_inbound_queue_depth",
+		"noxa_recordings_active",
 	} {
 		family := metricFamily(t, families, name)
 		if got := family.GetMetric()[0].GetGauge().GetValue(); got != 0 {
@@ -106,8 +106,8 @@ func TestMetricsHandler(t *testing.T) {
 		t.Fatalf("status = %d, want 200", rec.Code)
 	}
 	body, _ := io.ReadAll(rec.Result().Body)
-	if !strings.Contains(string(body), "voicx_webrtc_peers 2") {
-		t.Fatalf("body missing voicx_webrtc_peers 2:\n%s", body)
+	if !strings.Contains(string(body), "noxa_webrtc_peers 2") {
+		t.Fatalf("body missing noxa_webrtc_peers 2:\n%s", body)
 	}
 }
 
@@ -131,13 +131,13 @@ func TestGaugeFuncsSampleCallbacksAndKeepFirstRegistration(t *testing.T) {
 			t.Fatalf("%s = %v, want %v", name, got, want)
 		}
 	}
-	assertGauge("voicx_clients_connected", 3)
-	assertGauge("voicx_channels_active", 2)
-	assertGauge("voicx_webrtc_peers", 4)
-	assertGauge("voicx_udp_inbound_queue_depth", 5)
-	assertGauge("voicx_recordings_active", 6)
+	assertGauge("noxa_clients_connected", 3)
+	assertGauge("noxa_channels_active", 2)
+	assertGauge("noxa_webrtc_peers", 4)
+	assertGauge("noxa_udp_inbound_queue_depth", 5)
+	assertGauge("noxa_recordings_active", 6)
 	clients.Store(7)
-	assertGauge("voicx_clients_connected", 7)
+	assertGauge("noxa_clients_connected", 7)
 }
 
 func TestBoundedCollectorsUseFixedLabelsAndBuckets(t *testing.T) {
@@ -162,12 +162,12 @@ func TestBoundedCollectorsUseFixedLabelsAndBuckets(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Gather: %v", err)
 	}
-	if got := metricFamily(t, families, "voicx_udp_packets_rate_limited_total").GetMetric()[0].GetCounter().GetValue(); got != 1 {
+	if got := metricFamily(t, families, "noxa_udp_packets_rate_limited_total").GetMetric()[0].GetCounter().GetValue(); got != 1 {
 		t.Fatalf("rate-limited UDP packets = %v, want 1", got)
 	}
 	for _, name := range []string{
-		"voicx_recording_errors_total",
-		"voicx_chat_crypto_failures_total",
+		"noxa_recording_errors_total",
+		"noxa_chat_crypto_failures_total",
 	} {
 		for _, metric := range metricFamily(t, families, name).GetMetric() {
 			for _, label := range metric.GetLabel() {
@@ -178,9 +178,9 @@ func TestBoundedCollectorsUseFixedLabelsAndBuckets(t *testing.T) {
 		}
 	}
 	for _, name := range []string{
-		"voicx_broadcast_snapshot_duration_seconds",
-		"voicx_broadcast_client_backlog_depth",
-		"voicx_readiness_probe_duration_seconds",
+		"noxa_broadcast_snapshot_duration_seconds",
+		"noxa_broadcast_client_backlog_depth",
+		"noxa_readiness_probe_duration_seconds",
 	} {
 		family := metricFamily(t, families, name)
 		if family.GetType() != dto.MetricType_HISTOGRAM {
@@ -209,49 +209,49 @@ func TestBoundedCollectorsUseFixedLabelsAndBuckets(t *testing.T) {
 		t.Fatalf("%s missing labels %v", name, labels)
 		return nil
 	}
-	if got := histogramFor("voicx_broadcast_snapshot_duration_seconds", nil).GetSampleSum(); got != 0 {
+	if got := histogramFor("noxa_broadcast_snapshot_duration_seconds", nil).GetSampleSum(); got != 0 {
 		t.Fatalf("negative snapshot duration sum = %v, want 0", got)
 	}
-	if got := histogramFor("voicx_broadcast_client_backlog_depth", nil).GetSampleSum(); got != 0 {
+	if got := histogramFor("noxa_broadcast_client_backlog_depth", nil).GetSampleSum(); got != 0 {
 		t.Fatalf("negative broadcast backlog sum = %v, want 0", got)
 	}
-	postgresOK := histogramFor("voicx_readiness_probe_duration_seconds", map[string]string{
+	postgresOK := histogramFor("noxa_readiness_probe_duration_seconds", map[string]string{
 		"component": "postgres",
 		"result":    "ok",
 	})
 	if postgresOK.GetSampleCount() != 1 || postgresOK.GetSampleSum() != .01 {
 		t.Fatalf("postgres readiness count/sum = %d/%v, want 1/0.01", postgresOK.GetSampleCount(), postgresOK.GetSampleSum())
 	}
-	storageOK := histogramFor("voicx_readiness_probe_duration_seconds", map[string]string{
+	storageOK := histogramFor("noxa_readiness_probe_duration_seconds", map[string]string{
 		"component": "storage",
 		"result":    "ok",
 	})
 	if storageOK.GetSampleCount() != 1 || storageOK.GetSampleSum() != .005 {
 		t.Fatalf("storage readiness count/sum = %d/%v, want 1/0.005", storageOK.GetSampleCount(), storageOK.GetSampleSum())
 	}
-	redisError := histogramFor("voicx_readiness_probe_duration_seconds", map[string]string{
+	redisError := histogramFor("noxa_readiness_probe_duration_seconds", map[string]string{
 		"component": "redis",
 		"result":    "error",
 	})
 	if redisError.GetSampleCount() != 1 || redisError.GetSampleSum() != .025 {
 		t.Fatalf("Redis readiness count/sum = %d/%v, want 1/0.025", redisError.GetSampleCount(), redisError.GetSampleSum())
 	}
-	unknownReadiness := histogramFor("voicx_readiness_probe_duration_seconds", map[string]string{
+	unknownReadiness := histogramFor("noxa_readiness_probe_duration_seconds", map[string]string{
 		"component": "unknown",
 		"result":    "unknown",
 	})
 	if unknownReadiness.GetSampleCount() != 1 || unknownReadiness.GetSampleSum() != 0 {
 		t.Fatalf("unknown readiness count/sum = %d/%v, want 1/0", unknownReadiness.GetSampleCount(), unknownReadiness.GetSampleSum())
 	}
-	if got := len(metricFamily(t, families, "voicx_readiness_probe_duration_seconds").GetMetric()); got != 4 {
+	if got := len(metricFamily(t, families, "noxa_readiness_probe_duration_seconds").GetMetric()); got != 4 {
 		t.Fatalf("readiness metric series = %d, want bounded 4", got)
 	}
 
-	durationBuckets := metricFamily(t, families, "voicx_broadcast_snapshot_duration_seconds").GetMetric()[0].GetHistogram().GetBucket()
+	durationBuckets := metricFamily(t, families, "noxa_broadcast_snapshot_duration_seconds").GetMetric()[0].GetHistogram().GetBucket()
 	if len(durationBuckets) != 11 || durationBuckets[0].GetUpperBound() != .001 || durationBuckets[10].GetUpperBound() != 5 {
 		t.Fatalf("duration buckets = %+v, want fixed .001..5 buckets", durationBuckets)
 	}
-	backlogBuckets := metricFamily(t, families, "voicx_broadcast_client_backlog_depth").GetMetric()[0].GetHistogram().GetBucket()
+	backlogBuckets := metricFamily(t, families, "noxa_broadcast_client_backlog_depth").GetMetric()[0].GetHistogram().GetBucket()
 	if len(backlogBuckets) != 7 || backlogBuckets[0].GetUpperBound() != 0 || backlogBuckets[6].GetUpperBound() != 16 {
 		t.Fatalf("backlog buckets = %+v, want fixed 0..16 buckets", backlogBuckets)
 	}
@@ -289,11 +289,11 @@ func TestLabelsHaveBoundedCardinality(t *testing.T) {
 		t.Fatalf("Gather: %v", err)
 	}
 	for _, familyName := range []string{
-		"voicx_udp_packets_total",
-		"voicx_chat_messages_total",
-		"voicx_rtp_packets_forwarded_total",
-		"voicx_file_transfers_total",
-		"voicx_auth_failures_total",
+		"noxa_udp_packets_total",
+		"noxa_chat_messages_total",
+		"noxa_rtp_packets_forwarded_total",
+		"noxa_file_transfers_total",
+		"noxa_auth_failures_total",
 	} {
 		family := metricFamily(t, families, familyName)
 		if len(family.GetMetric()) != 1 {
@@ -305,7 +305,7 @@ func TestLabelsHaveBoundedCardinality(t *testing.T) {
 			}
 		}
 	}
-	if got := metricFamily(t, families, "voicx_rtp_packets_forwarded_total").GetMetric()[0].GetCounter().GetValue(); got != 2 {
+	if got := metricFamily(t, families, "noxa_rtp_packets_forwarded_total").GetMetric()[0].GetCounter().GetValue(); got != 2 {
 		t.Fatalf("RTP forwarded count = %v, want 2", got)
 	}
 }
@@ -321,7 +321,7 @@ func TestAuthFailureMetricsUseOnlyStableLabels(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Gather: %v", err)
 	}
-	family := metricFamily(t, families, "voicx_auth_failures_total")
+	family := metricFamily(t, families, "noxa_auth_failures_total")
 	if len(family.GetMetric()) != 4 {
 		t.Fatalf("auth failure metric count = %d, want 4", len(family.GetMetric()))
 	}
@@ -349,16 +349,16 @@ func TestRegisterDBPoolExportsLimitsAndCounters(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Gather: %v", err)
 	}
-	maxOpen := metricFamily(t, families, "voicx_db_pool_max_open_connections")
+	maxOpen := metricFamily(t, families, "noxa_db_pool_max_open_connections")
 	if got := maxOpen.GetMetric()[0].GetGauge().GetValue(); got != 17 {
 		t.Fatalf("max open connections = %v, want 17", got)
 	}
 	for _, name := range []string{
-		"voicx_db_pool_wait_count_total",
-		"voicx_db_pool_wait_duration_seconds_total",
-		"voicx_db_pool_closed_max_idle_total",
-		"voicx_db_pool_closed_max_idle_time_total",
-		"voicx_db_pool_closed_max_lifetime_total",
+		"noxa_db_pool_wait_count_total",
+		"noxa_db_pool_wait_duration_seconds_total",
+		"noxa_db_pool_closed_max_idle_total",
+		"noxa_db_pool_closed_max_idle_time_total",
+		"noxa_db_pool_closed_max_lifetime_total",
 	} {
 		family := metricFamily(t, families, name)
 		if family.GetType().String() != "COUNTER" {

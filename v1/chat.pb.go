@@ -4,7 +4,7 @@
 // 	protoc        (unknown)
 // source: chat.proto
 
-package voicxv1
+package noxav1
 
 import (
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
@@ -82,7 +82,7 @@ type ChatMessage struct {
 	RecipientId   string                 `protobuf:"bytes,4,opt,name=recipient_id,json=recipientId,proto3" json:"recipient_id,omitempty"` // empty for channel/global messages
 	Content       string                 `protobuf:"bytes,5,opt,name=content,proto3" json:"content,omitempty"`
 	Timestamp     int64                  `protobuf:"varint,6,opt,name=timestamp,proto3" json:"timestamp,omitempty"` // unix millis
-	Scope         ChatScope              `protobuf:"varint,7,opt,name=scope,proto3,enum=voicx.v1.ChatScope" json:"scope,omitempty"`
+	Scope         ChatScope              `protobuf:"varint,7,opt,name=scope,proto3,enum=noxa.v1.ChatScope" json:"scope,omitempty"`
 	Metadata      map[string]string      `protobuf:"bytes,8,rep,name=metadata,proto3" json:"metadata,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -613,7 +613,7 @@ var File_chat_proto protoreflect.FileDescriptor
 const file_chat_proto_rawDesc = "" +
 	"\n" +
 	"\n" +
-	"chat.proto\x12\bvoicx.v1\"\xdd\x02\n" +
+	"chat.proto\x12\anoxa.v1\"\xdb\x02\n" +
 	"\vChatMessage\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1d\n" +
 	"\n" +
@@ -621,30 +621,30 @@ const file_chat_proto_rawDesc = "" +
 	"\tsender_id\x18\x03 \x01(\tR\bsenderId\x12!\n" +
 	"\frecipient_id\x18\x04 \x01(\tR\vrecipientId\x12\x18\n" +
 	"\acontent\x18\x05 \x01(\tR\acontent\x12\x1c\n" +
-	"\ttimestamp\x18\x06 \x01(\x03R\ttimestamp\x12)\n" +
-	"\x05scope\x18\a \x01(\x0e2\x13.voicx.v1.ChatScopeR\x05scope\x12?\n" +
-	"\bmetadata\x18\b \x03(\v2#.voicx.v1.ChatMessage.MetadataEntryR\bmetadata\x1a;\n" +
+	"\ttimestamp\x18\x06 \x01(\x03R\ttimestamp\x12(\n" +
+	"\x05scope\x18\a \x01(\x0e2\x12.noxa.v1.ChatScopeR\x05scope\x12>\n" +
+	"\bmetadata\x18\b \x03(\v2\".noxa.v1.ChatMessage.MetadataEntryR\bmetadata\x1a;\n" +
 	"\rMetadataEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xda\x01\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xd9\x01\n" +
 	"\x16SendChannelChatRequest\x12\x1d\n" +
 	"\n" +
 	"channel_id\x18\x01 \x01(\tR\tchannelId\x12\x18\n" +
-	"\acontent\x18\x02 \x01(\tR\acontent\x12J\n" +
-	"\bmetadata\x18\x03 \x03(\v2..voicx.v1.SendChannelChatRequest.MetadataEntryR\bmetadata\x1a;\n" +
+	"\acontent\x18\x02 \x01(\tR\acontent\x12I\n" +
+	"\bmetadata\x18\x03 \x03(\v2-.noxa.v1.SendChannelChatRequest.MetadataEntryR\bmetadata\x1a;\n" +
 	"\rMetadataEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xb9\x01\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xb8\x01\n" +
 	"\x15SendGlobalChatRequest\x12\x18\n" +
-	"\acontent\x18\x01 \x01(\tR\acontent\x12I\n" +
-	"\bmetadata\x18\x02 \x03(\v2-.voicx.v1.SendGlobalChatRequest.MetadataEntryR\bmetadata\x1a;\n" +
+	"\acontent\x18\x01 \x01(\tR\acontent\x12H\n" +
+	"\bmetadata\x18\x02 \x03(\v2,.noxa.v1.SendGlobalChatRequest.MetadataEntryR\bmetadata\x1a;\n" +
 	"\rMetadataEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xe2\x01\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xe1\x01\n" +
 	"\x18SendDirectMessageRequest\x12!\n" +
 	"\frecipient_id\x18\x01 \x01(\tR\vrecipientId\x12\x18\n" +
-	"\acontent\x18\x02 \x01(\tR\acontent\x12L\n" +
-	"\bmetadata\x18\x03 \x03(\v20.voicx.v1.SendDirectMessageRequest.MetadataEntryR\bmetadata\x1a;\n" +
+	"\acontent\x18\x02 \x01(\tR\acontent\x12K\n" +
+	"\bmetadata\x18\x03 \x03(\v2/.noxa.v1.SendDirectMessageRequest.MetadataEntryR\bmetadata\x1a;\n" +
 	"\rMetadataEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"c\n" +
@@ -655,9 +655,9 @@ const file_chat_proto_rawDesc = "" +
 	"\x05error\x18\x03 \x01(\tR\x05error\"I\n" +
 	"\x1bFetchOfflineMessagesRequest\x12\x14\n" +
 	"\x05limit\x18\x01 \x01(\x05R\x05limit\x12\x14\n" +
-	"\x05since\x18\x02 \x01(\x03R\x05since\"l\n" +
-	"\x1cFetchOfflineMessagesResponse\x121\n" +
-	"\bmessages\x18\x01 \x03(\v2\x15.voicx.v1.ChatMessageR\bmessages\x12\x19\n" +
+	"\x05since\x18\x02 \x01(\x03R\x05since\"k\n" +
+	"\x1cFetchOfflineMessagesResponse\x120\n" +
+	"\bmessages\x18\x01 \x03(\v2\x14.noxa.v1.ChatMessageR\bmessages\x12\x19\n" +
 	"\bhas_more\x18\x02 \x01(\bR\ahasMore\"<\n" +
 	"\x19AckOfflineMessagesRequest\x12\x1f\n" +
 	"\vmessage_ids\x18\x01 \x03(\tR\n" +
@@ -670,13 +670,13 @@ const file_chat_proto_rawDesc = "" +
 	"\x16CHAT_SCOPE_UNSPECIFIED\x10\x00\x12\x16\n" +
 	"\x12CHAT_SCOPE_CHANNEL\x10\x01\x12\x15\n" +
 	"\x11CHAT_SCOPE_GLOBAL\x10\x02\x12\x15\n" +
-	"\x11CHAT_SCOPE_DIRECT\x10\x032\xc8\x03\n" +
-	"\x04Chat\x12O\n" +
-	"\x0fSendChannelChat\x12 .voicx.v1.SendChannelChatRequest\x1a\x1a.voicx.v1.SendChatResponse\x12M\n" +
-	"\x0eSendGlobalChat\x12\x1f.voicx.v1.SendGlobalChatRequest\x1a\x1a.voicx.v1.SendChatResponse\x12S\n" +
-	"\x11SendDirectMessage\x12\".voicx.v1.SendDirectMessageRequest\x1a\x1a.voicx.v1.SendChatResponse\x12e\n" +
-	"\x14FetchOfflineMessages\x12%.voicx.v1.FetchOfflineMessagesRequest\x1a&.voicx.v1.FetchOfflineMessagesResponse\x12_\n" +
-	"\x12AckOfflineMessages\x12#.voicx.v1.AckOfflineMessagesRequest\x1a$.voicx.v1.AckOfflineMessagesResponse\x1a\x03\x88\x02\x01B\x12Z\x10voicx/v1;voicxv1b\x06proto3"
+	"\x11CHAT_SCOPE_DIRECT\x10\x032\xbe\x03\n" +
+	"\x04Chat\x12M\n" +
+	"\x0fSendChannelChat\x12\x1f.noxa.v1.SendChannelChatRequest\x1a\x19.noxa.v1.SendChatResponse\x12K\n" +
+	"\x0eSendGlobalChat\x12\x1e.noxa.v1.SendGlobalChatRequest\x1a\x19.noxa.v1.SendChatResponse\x12Q\n" +
+	"\x11SendDirectMessage\x12!.noxa.v1.SendDirectMessageRequest\x1a\x19.noxa.v1.SendChatResponse\x12c\n" +
+	"\x14FetchOfflineMessages\x12$.noxa.v1.FetchOfflineMessagesRequest\x1a%.noxa.v1.FetchOfflineMessagesResponse\x12]\n" +
+	"\x12AckOfflineMessages\x12\".noxa.v1.AckOfflineMessagesRequest\x1a#.noxa.v1.AckOfflineMessagesResponse\x1a\x03\x88\x02\x01B\x10Z\x0enoxa/v1;noxav1b\x06proto3"
 
 var (
 	file_chat_proto_rawDescOnce sync.Once
@@ -693,38 +693,38 @@ func file_chat_proto_rawDescGZIP() []byte {
 var file_chat_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
 var file_chat_proto_msgTypes = make([]protoimpl.MessageInfo, 13)
 var file_chat_proto_goTypes = []any{
-	(ChatScope)(0),                       // 0: voicx.v1.ChatScope
-	(*ChatMessage)(nil),                  // 1: voicx.v1.ChatMessage
-	(*SendChannelChatRequest)(nil),       // 2: voicx.v1.SendChannelChatRequest
-	(*SendGlobalChatRequest)(nil),        // 3: voicx.v1.SendGlobalChatRequest
-	(*SendDirectMessageRequest)(nil),     // 4: voicx.v1.SendDirectMessageRequest
-	(*SendChatResponse)(nil),             // 5: voicx.v1.SendChatResponse
-	(*FetchOfflineMessagesRequest)(nil),  // 6: voicx.v1.FetchOfflineMessagesRequest
-	(*FetchOfflineMessagesResponse)(nil), // 7: voicx.v1.FetchOfflineMessagesResponse
-	(*AckOfflineMessagesRequest)(nil),    // 8: voicx.v1.AckOfflineMessagesRequest
-	(*AckOfflineMessagesResponse)(nil),   // 9: voicx.v1.AckOfflineMessagesResponse
-	nil,                                  // 10: voicx.v1.ChatMessage.MetadataEntry
-	nil,                                  // 11: voicx.v1.SendChannelChatRequest.MetadataEntry
-	nil,                                  // 12: voicx.v1.SendGlobalChatRequest.MetadataEntry
-	nil,                                  // 13: voicx.v1.SendDirectMessageRequest.MetadataEntry
+	(ChatScope)(0),                       // 0: noxa.v1.ChatScope
+	(*ChatMessage)(nil),                  // 1: noxa.v1.ChatMessage
+	(*SendChannelChatRequest)(nil),       // 2: noxa.v1.SendChannelChatRequest
+	(*SendGlobalChatRequest)(nil),        // 3: noxa.v1.SendGlobalChatRequest
+	(*SendDirectMessageRequest)(nil),     // 4: noxa.v1.SendDirectMessageRequest
+	(*SendChatResponse)(nil),             // 5: noxa.v1.SendChatResponse
+	(*FetchOfflineMessagesRequest)(nil),  // 6: noxa.v1.FetchOfflineMessagesRequest
+	(*FetchOfflineMessagesResponse)(nil), // 7: noxa.v1.FetchOfflineMessagesResponse
+	(*AckOfflineMessagesRequest)(nil),    // 8: noxa.v1.AckOfflineMessagesRequest
+	(*AckOfflineMessagesResponse)(nil),   // 9: noxa.v1.AckOfflineMessagesResponse
+	nil,                                  // 10: noxa.v1.ChatMessage.MetadataEntry
+	nil,                                  // 11: noxa.v1.SendChannelChatRequest.MetadataEntry
+	nil,                                  // 12: noxa.v1.SendGlobalChatRequest.MetadataEntry
+	nil,                                  // 13: noxa.v1.SendDirectMessageRequest.MetadataEntry
 }
 var file_chat_proto_depIdxs = []int32{
-	0,  // 0: voicx.v1.ChatMessage.scope:type_name -> voicx.v1.ChatScope
-	10, // 1: voicx.v1.ChatMessage.metadata:type_name -> voicx.v1.ChatMessage.MetadataEntry
-	11, // 2: voicx.v1.SendChannelChatRequest.metadata:type_name -> voicx.v1.SendChannelChatRequest.MetadataEntry
-	12, // 3: voicx.v1.SendGlobalChatRequest.metadata:type_name -> voicx.v1.SendGlobalChatRequest.MetadataEntry
-	13, // 4: voicx.v1.SendDirectMessageRequest.metadata:type_name -> voicx.v1.SendDirectMessageRequest.MetadataEntry
-	1,  // 5: voicx.v1.FetchOfflineMessagesResponse.messages:type_name -> voicx.v1.ChatMessage
-	2,  // 6: voicx.v1.Chat.SendChannelChat:input_type -> voicx.v1.SendChannelChatRequest
-	3,  // 7: voicx.v1.Chat.SendGlobalChat:input_type -> voicx.v1.SendGlobalChatRequest
-	4,  // 8: voicx.v1.Chat.SendDirectMessage:input_type -> voicx.v1.SendDirectMessageRequest
-	6,  // 9: voicx.v1.Chat.FetchOfflineMessages:input_type -> voicx.v1.FetchOfflineMessagesRequest
-	8,  // 10: voicx.v1.Chat.AckOfflineMessages:input_type -> voicx.v1.AckOfflineMessagesRequest
-	5,  // 11: voicx.v1.Chat.SendChannelChat:output_type -> voicx.v1.SendChatResponse
-	5,  // 12: voicx.v1.Chat.SendGlobalChat:output_type -> voicx.v1.SendChatResponse
-	5,  // 13: voicx.v1.Chat.SendDirectMessage:output_type -> voicx.v1.SendChatResponse
-	7,  // 14: voicx.v1.Chat.FetchOfflineMessages:output_type -> voicx.v1.FetchOfflineMessagesResponse
-	9,  // 15: voicx.v1.Chat.AckOfflineMessages:output_type -> voicx.v1.AckOfflineMessagesResponse
+	0,  // 0: noxa.v1.ChatMessage.scope:type_name -> noxa.v1.ChatScope
+	10, // 1: noxa.v1.ChatMessage.metadata:type_name -> noxa.v1.ChatMessage.MetadataEntry
+	11, // 2: noxa.v1.SendChannelChatRequest.metadata:type_name -> noxa.v1.SendChannelChatRequest.MetadataEntry
+	12, // 3: noxa.v1.SendGlobalChatRequest.metadata:type_name -> noxa.v1.SendGlobalChatRequest.MetadataEntry
+	13, // 4: noxa.v1.SendDirectMessageRequest.metadata:type_name -> noxa.v1.SendDirectMessageRequest.MetadataEntry
+	1,  // 5: noxa.v1.FetchOfflineMessagesResponse.messages:type_name -> noxa.v1.ChatMessage
+	2,  // 6: noxa.v1.Chat.SendChannelChat:input_type -> noxa.v1.SendChannelChatRequest
+	3,  // 7: noxa.v1.Chat.SendGlobalChat:input_type -> noxa.v1.SendGlobalChatRequest
+	4,  // 8: noxa.v1.Chat.SendDirectMessage:input_type -> noxa.v1.SendDirectMessageRequest
+	6,  // 9: noxa.v1.Chat.FetchOfflineMessages:input_type -> noxa.v1.FetchOfflineMessagesRequest
+	8,  // 10: noxa.v1.Chat.AckOfflineMessages:input_type -> noxa.v1.AckOfflineMessagesRequest
+	5,  // 11: noxa.v1.Chat.SendChannelChat:output_type -> noxa.v1.SendChatResponse
+	5,  // 12: noxa.v1.Chat.SendGlobalChat:output_type -> noxa.v1.SendChatResponse
+	5,  // 13: noxa.v1.Chat.SendDirectMessage:output_type -> noxa.v1.SendChatResponse
+	7,  // 14: noxa.v1.Chat.FetchOfflineMessages:output_type -> noxa.v1.FetchOfflineMessagesResponse
+	9,  // 15: noxa.v1.Chat.AckOfflineMessages:output_type -> noxa.v1.AckOfflineMessagesResponse
 	11, // [11:16] is the sub-list for method output_type
 	6,  // [6:11] is the sub-list for method input_type
 	6,  // [6:6] is the sub-list for extension type_name

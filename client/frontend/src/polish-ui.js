@@ -8,7 +8,7 @@ import { isActivationKey } from "./a11y.js";
 import { mountDialog } from "./modal.js";
 import { icon } from "./icons.js";
 
-const V = () => window.__voicx;
+const V = () => window.__noxa;
 const App = () => window.go.main.App;
 
 // ---------------------------------------------------------------------------
@@ -170,7 +170,7 @@ function toggleChatPopout() {
 
 function toggleZen() {
     const on = !document.body.classList.contains("zen");
-    if (on) window.__voicxFiles?.activateWorkspaceTab?.("chat", { focus: false });
+    if (on) window.__noxaFiles?.activateWorkspaceTab?.("chat", { focus: false });
     document.body.classList.toggle("zen", on);
     let ind = document.getElementById("zen-indicator");
     if (on && !ind) {
@@ -182,7 +182,7 @@ function toggleZen() {
     } else if (!on && ind) {
         ind.remove();
     }
-    window.__voicxFiles?.restoreVisibleWorkspaceFocus?.();
+    window.__noxaFiles?.restoreVisibleWorkspaceFocus?.();
 }
 
 // ---------------------------------------------------------------------------
@@ -319,13 +319,13 @@ function openNotifCenter() {
             row.querySelector(".nc-text").textContent = n.text;
             row.querySelector(".nc-time").textContent = new Date(n.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
             // Click-through: jump to the channel or PM tab (346).
-            if (n.uid && window.__voicx.openPM) {
+            if (n.uid && window.__noxa.openPM) {
                 row.classList.add("clickable");
                 row.tabIndex = 0;
                 row.setAttribute("role", "button");
                 row.onclick = () => {
                     overlay.remove();
-                    window.__voicx.openPM(n.uid, "");
+                    window.__noxa.openPM(n.uid, "");
                 };
             } else if (n.channelID) {
                 row.classList.add("clickable");
@@ -379,7 +379,7 @@ function openNotifCenter() {
 // explicitly expanded via double-click) render their member rows; every
 // other channel renders as a collapsed header with its [n] count, so DOM
 // size stays O(channels) instead of O(channels + users). Verified with
-// window.__voicxFakeTree(n), which injects n synthetic channels of 3 users.
+// window.__noxaFakeTree(n), which injects n synthetic channels of 3 users.
 const VIRTUAL_THRESHOLD = 500;
 
 // virtualizeEnabled reports whether the tree is in windowed mode.
@@ -436,6 +436,6 @@ export function initPolishUI() {
     initIdleVideoPause();
     initA11y();
     document.getElementById("notif-bell").onclick = openNotifCenter;
-    window.__voicxPolish = { toggleChatPopout, toggleZen, openNotifCenter, announce, recordNotification, dndActive, virtualizeEnabled, myBranchIDs };
-    window.__voicxFakeTree = injectFakeTree;
+    window.__noxaPolish = { toggleChatPopout, toggleZen, openNotifCenter, announce, recordNotification, dndActive, virtualizeEnabled, myBranchIDs };
+    window.__noxaFakeTree = injectFakeTree;
 }

@@ -77,7 +77,7 @@ func TestRegistrationPasswordPolicyAndExistingShortHashCompatibility(t *testing.
 }
 
 func TestDummyPasswordHashIsValid(t *testing.T) {
-	if err := VerifyPassword("voicx-dummy-password", dummyPasswordHash); err != nil {
+	if err := VerifyPassword("noxa-dummy-password", dummyPasswordHash); err != nil {
 		t.Fatalf("VerifyPassword(dummyPasswordHash): %v", err)
 	}
 }

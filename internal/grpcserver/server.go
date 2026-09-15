@@ -1,5 +1,5 @@
 // Package grpcserver implements the gRPC API declared in proto/ (232). The
-// generated stubs live in voicx/v1 (regenerate with `buf generate`).
+// generated stubs live in noxa/v1 (regenerate with `buf generate`).
 //
 // The API is a bot/administration surface, not a second client protocol: it
 // talks to the ServerQuery backend, so anything it can do the query port can
@@ -27,10 +27,10 @@ import (
 	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
 
-	"voicx/internal/auth"
-	"voicx/internal/eventbus"
-	"voicx/internal/query"
-	voicxv1 "voicx/v1"
+	"noxa/internal/auth"
+	"noxa/internal/eventbus"
+	"noxa/internal/query"
+	noxav1 "noxa/v1"
 )
 
 // Server owns the gRPC listener and the service implementations.
@@ -116,8 +116,8 @@ func New(addr string, backend query.Backend, bus *eventbus.Bus, logger *zap.Logg
 		grpc.ChainUnaryInterceptor(s.unaryRecovery, s.unaryAuth),
 		grpc.ChainStreamInterceptor(s.streamRecovery, s.streamAuth),
 	)
-	voicxv1.RegisterEventsServer(s.grpc, &eventsService{bus: bus, logger: logger})
-	voicxv1.RegisterControlServer(s.grpc, &controlService{backend: backend, logger: logger, authenticate: s.authenticateAdmin})
+	noxav1.RegisterEventsServer(s.grpc, &eventsService{bus: bus, logger: logger})
+	noxav1.RegisterControlServer(s.grpc, &controlService{backend: backend, logger: logger, authenticate: s.authenticateAdmin})
 	return s
 }
 
@@ -244,7 +244,7 @@ func (s *Server) shutdownTimeout() time.Duration {
 
 // authExempt lists the RPCs that carry their own credentials.
 var authExempt = map[string]bool{
-	"/voicx.v1.Control/Authenticate": true,
+	"/noxa.v1.Control/Authenticate": true,
 }
 
 // authenticate validates the "authorization: Basic <base64>" metadata header

@@ -22,7 +22,7 @@ import (
 
 	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
 
-	"voicx/internal/netproto"
+	"noxa/internal/netproto"
 )
 
 // --- file browser -------------------------------------------------------------

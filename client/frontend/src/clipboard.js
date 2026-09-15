@@ -9,9 +9,9 @@ export async function copyToClipboard(value, { success = t("clipboard.copied"), 
             await navigator.clipboard.writeText(value);
         }
     } catch {
-        if (isCurrent()) window.__voicx.toast(failure, "warn");
+        if (isCurrent()) window.__noxa.toast(failure, "warn");
         return false;
     }
-    if (isCurrent()) window.__voicx.toast(success);
+    if (isCurrent()) window.__noxa.toast(success);
     return true;
 }

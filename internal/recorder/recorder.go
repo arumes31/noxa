@@ -38,7 +38,7 @@ import (
 	"github.com/pion/rtp"
 	"go.uber.org/zap"
 
-	"voicx/internal/webrtc"
+	"noxa/internal/webrtc"
 )
 
 // ErrDisabled is returned by Start when recording is not enabled in the
@@ -1710,7 +1710,7 @@ func (r *Recorder) buildArgs(sdpPath, outPath string) []string {
 func buildSDP(audioPort, videoPort int) string {
 	return fmt.Sprintf(`v=0
 o=- 0 0 IN IP4 127.0.0.1
-s=voicx recording
+s=noxa recording
 c=IN IP4 127.0.0.1
 t=0 0
 m=audio %d RTP/AVP 111

@@ -10,17 +10,17 @@ import (
 	"database/sql"
 	"time"
 
-	"voicx/internal/auth"
-	"voicx/internal/broadcast"
-	"voicx/internal/channels"
-	"voicx/internal/chatcrypto"
-	"voicx/internal/metrics"
-	"voicx/internal/netproto"
-	"voicx/internal/permissions"
-	"voicx/internal/recorder"
-	"voicx/internal/state"
-	"voicx/internal/store"
-	"voicx/internal/webrtc"
+	"noxa/internal/auth"
+	"noxa/internal/broadcast"
+	"noxa/internal/channels"
+	"noxa/internal/chatcrypto"
+	"noxa/internal/metrics"
+	"noxa/internal/netproto"
+	"noxa/internal/permissions"
+	"noxa/internal/recorder"
+	"noxa/internal/state"
+	"noxa/internal/store"
+	"noxa/internal/webrtc"
 )
 
 // AuthBackend is the subset of auth.AuthService the TCP server needs.

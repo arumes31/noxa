@@ -4,7 +4,7 @@
 // 	protoc        (unknown)
 // source: events.proto
 
-package voicxv1
+package noxav1
 
 import (
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
@@ -91,7 +91,7 @@ func (EventType) EnumDescriptor() ([]byte, []int) {
 type SubscribeEventsRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Optional filter of event types to receive; empty means all.
-	EventTypes    []EventType `protobuf:"varint,1,rep,packed,name=event_types,json=eventTypes,proto3,enum=voicx.v1.EventType" json:"event_types,omitempty"`
+	EventTypes    []EventType `protobuf:"varint,1,rep,packed,name=event_types,json=eventTypes,proto3,enum=noxa.v1.EventType" json:"event_types,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -137,7 +137,7 @@ func (x *SubscribeEventsRequest) GetEventTypes() []EventType {
 type Event struct {
 	state     protoimpl.MessageState `protogen:"open.v1"`
 	Id        string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
-	Type      EventType              `protobuf:"varint,2,opt,name=type,proto3,enum=voicx.v1.EventType" json:"type,omitempty"`
+	Type      EventType              `protobuf:"varint,2,opt,name=type,proto3,enum=noxa.v1.EventType" json:"type,omitempty"`
 	Timestamp int64                  `protobuf:"varint,3,opt,name=timestamp,proto3" json:"timestamp,omitempty"` // unix millis
 	// Types that are valid to be assigned to Payload:
 	//
@@ -852,26 +852,26 @@ var File_events_proto protoreflect.FileDescriptor
 
 const file_events_proto_rawDesc = "" +
 	"\n" +
-	"\fevents.proto\x12\bvoicx.v1\"N\n" +
-	"\x16SubscribeEventsRequest\x124\n" +
-	"\vevent_types\x18\x01 \x03(\x0e2\x13.voicx.v1.EventTypeR\n" +
-	"eventTypes\"\xee\x04\n" +
+	"\fevents.proto\x12\anoxa.v1\"M\n" +
+	"\x16SubscribeEventsRequest\x123\n" +
+	"\vevent_types\x18\x01 \x03(\x0e2\x12.noxa.v1.EventTypeR\n" +
+	"eventTypes\"\xe5\x04\n" +
 	"\x05Event\x12\x0e\n" +
-	"\x02id\x18\x01 \x01(\tR\x02id\x12'\n" +
-	"\x04type\x18\x02 \x01(\x0e2\x13.voicx.v1.EventTypeR\x04type\x12\x1c\n" +
-	"\ttimestamp\x18\x03 \x01(\x03R\ttimestamp\x12<\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\x12&\n" +
+	"\x04type\x18\x02 \x01(\x0e2\x12.noxa.v1.EventTypeR\x04type\x12\x1c\n" +
+	"\ttimestamp\x18\x03 \x01(\x03R\ttimestamp\x12;\n" +
 	"\vuser_joined\x18\n" +
-	" \x01(\v2\x19.voicx.v1.UserJoinedEventH\x00R\n" +
-	"userJoined\x126\n" +
-	"\tuser_left\x18\v \x01(\v2\x17.voicx.v1.UserLeftEventH\x00R\buserLeft\x12B\n" +
-	"\ruser_speaking\x18\f \x01(\v2\x1b.voicx.v1.UserSpeakingEventH\x00R\fuserSpeaking\x12H\n" +
-	"\x0fchannel_created\x18\r \x01(\v2\x1d.voicx.v1.ChannelCreatedEventH\x00R\x0echannelCreated\x12H\n" +
-	"\x0fchannel_deleted\x18\x0e \x01(\v2\x1d.voicx.v1.ChannelDeletedEventH\x00R\x0echannelDeleted\x129\n" +
+	" \x01(\v2\x18.noxa.v1.UserJoinedEventH\x00R\n" +
+	"userJoined\x125\n" +
+	"\tuser_left\x18\v \x01(\v2\x16.noxa.v1.UserLeftEventH\x00R\buserLeft\x12A\n" +
+	"\ruser_speaking\x18\f \x01(\v2\x1a.noxa.v1.UserSpeakingEventH\x00R\fuserSpeaking\x12G\n" +
+	"\x0fchannel_created\x18\r \x01(\v2\x1c.noxa.v1.ChannelCreatedEventH\x00R\x0echannelCreated\x12G\n" +
+	"\x0fchannel_deleted\x18\x0e \x01(\v2\x1c.noxa.v1.ChannelDeletedEventH\x00R\x0echannelDeleted\x128\n" +
 	"\n" +
-	"user_moved\x18\x0f \x01(\v2\x18.voicx.v1.UserMovedEventH\x00R\tuserMoved\x12<\n" +
-	"\vuser_kicked\x18\x10 \x01(\v2\x19.voicx.v1.UserKickedEventH\x00R\n" +
-	"userKicked\x12<\n" +
-	"\vuser_banned\x18\x11 \x01(\v2\x19.voicx.v1.UserBannedEventH\x00R\n" +
+	"user_moved\x18\x0f \x01(\v2\x17.noxa.v1.UserMovedEventH\x00R\tuserMoved\x12;\n" +
+	"\vuser_kicked\x18\x10 \x01(\v2\x18.noxa.v1.UserKickedEventH\x00R\n" +
+	"userKicked\x12;\n" +
+	"\vuser_banned\x18\x11 \x01(\v2\x18.noxa.v1.UserBannedEventH\x00R\n" +
 	"userBannedB\t\n" +
 	"\apayload\"l\n" +
 	"\x0fUserJoinedEvent\x12\x1d\n" +
@@ -928,9 +928,9 @@ const file_events_proto_rawDesc = "" +
 	"\x1aEVENT_TYPE_CHANNEL_DELETED\x10\x05\x12\x19\n" +
 	"\x15EVENT_TYPE_USER_MOVED\x10\x06\x12\x1a\n" +
 	"\x16EVENT_TYPE_USER_KICKED\x10\a\x12\x1a\n" +
-	"\x16EVENT_TYPE_USER_BANNED\x10\b2J\n" +
-	"\x06Events\x12@\n" +
-	"\tSubscribe\x12 .voicx.v1.SubscribeEventsRequest\x1a\x0f.voicx.v1.Event0\x01B\x12Z\x10voicx/v1;voicxv1b\x06proto3"
+	"\x16EVENT_TYPE_USER_BANNED\x10\b2H\n" +
+	"\x06Events\x12>\n" +
+	"\tSubscribe\x12\x1f.noxa.v1.SubscribeEventsRequest\x1a\x0e.noxa.v1.Event0\x01B\x10Z\x0enoxa/v1;noxav1b\x06proto3"
 
 var (
 	file_events_proto_rawDescOnce sync.Once
@@ -947,31 +947,31 @@ func file_events_proto_rawDescGZIP() []byte {
 var file_events_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
 var file_events_proto_msgTypes = make([]protoimpl.MessageInfo, 10)
 var file_events_proto_goTypes = []any{
-	(EventType)(0),                 // 0: voicx.v1.EventType
-	(*SubscribeEventsRequest)(nil), // 1: voicx.v1.SubscribeEventsRequest
-	(*Event)(nil),                  // 2: voicx.v1.Event
-	(*UserJoinedEvent)(nil),        // 3: voicx.v1.UserJoinedEvent
-	(*UserLeftEvent)(nil),          // 4: voicx.v1.UserLeftEvent
-	(*UserSpeakingEvent)(nil),      // 5: voicx.v1.UserSpeakingEvent
-	(*ChannelCreatedEvent)(nil),    // 6: voicx.v1.ChannelCreatedEvent
-	(*ChannelDeletedEvent)(nil),    // 7: voicx.v1.ChannelDeletedEvent
-	(*UserMovedEvent)(nil),         // 8: voicx.v1.UserMovedEvent
-	(*UserKickedEvent)(nil),        // 9: voicx.v1.UserKickedEvent
-	(*UserBannedEvent)(nil),        // 10: voicx.v1.UserBannedEvent
+	(EventType)(0),                 // 0: noxa.v1.EventType
+	(*SubscribeEventsRequest)(nil), // 1: noxa.v1.SubscribeEventsRequest
+	(*Event)(nil),                  // 2: noxa.v1.Event
+	(*UserJoinedEvent)(nil),        // 3: noxa.v1.UserJoinedEvent
+	(*UserLeftEvent)(nil),          // 4: noxa.v1.UserLeftEvent
+	(*UserSpeakingEvent)(nil),      // 5: noxa.v1.UserSpeakingEvent
+	(*ChannelCreatedEvent)(nil),    // 6: noxa.v1.ChannelCreatedEvent
+	(*ChannelDeletedEvent)(nil),    // 7: noxa.v1.ChannelDeletedEvent
+	(*UserMovedEvent)(nil),         // 8: noxa.v1.UserMovedEvent
+	(*UserKickedEvent)(nil),        // 9: noxa.v1.UserKickedEvent
+	(*UserBannedEvent)(nil),        // 10: noxa.v1.UserBannedEvent
 }
 var file_events_proto_depIdxs = []int32{
-	0,  // 0: voicx.v1.SubscribeEventsRequest.event_types:type_name -> voicx.v1.EventType
-	0,  // 1: voicx.v1.Event.type:type_name -> voicx.v1.EventType
-	3,  // 2: voicx.v1.Event.user_joined:type_name -> voicx.v1.UserJoinedEvent
-	4,  // 3: voicx.v1.Event.user_left:type_name -> voicx.v1.UserLeftEvent
-	5,  // 4: voicx.v1.Event.user_speaking:type_name -> voicx.v1.UserSpeakingEvent
-	6,  // 5: voicx.v1.Event.channel_created:type_name -> voicx.v1.ChannelCreatedEvent
-	7,  // 6: voicx.v1.Event.channel_deleted:type_name -> voicx.v1.ChannelDeletedEvent
-	8,  // 7: voicx.v1.Event.user_moved:type_name -> voicx.v1.UserMovedEvent
-	9,  // 8: voicx.v1.Event.user_kicked:type_name -> voicx.v1.UserKickedEvent
-	10, // 9: voicx.v1.Event.user_banned:type_name -> voicx.v1.UserBannedEvent
-	1,  // 10: voicx.v1.Events.Subscribe:input_type -> voicx.v1.SubscribeEventsRequest
-	2,  // 11: voicx.v1.Events.Subscribe:output_type -> voicx.v1.Event
+	0,  // 0: noxa.v1.SubscribeEventsRequest.event_types:type_name -> noxa.v1.EventType
+	0,  // 1: noxa.v1.Event.type:type_name -> noxa.v1.EventType
+	3,  // 2: noxa.v1.Event.user_joined:type_name -> noxa.v1.UserJoinedEvent
+	4,  // 3: noxa.v1.Event.user_left:type_name -> noxa.v1.UserLeftEvent
+	5,  // 4: noxa.v1.Event.user_speaking:type_name -> noxa.v1.UserSpeakingEvent
+	6,  // 5: noxa.v1.Event.channel_created:type_name -> noxa.v1.ChannelCreatedEvent
+	7,  // 6: noxa.v1.Event.channel_deleted:type_name -> noxa.v1.ChannelDeletedEvent
+	8,  // 7: noxa.v1.Event.user_moved:type_name -> noxa.v1.UserMovedEvent
+	9,  // 8: noxa.v1.Event.user_kicked:type_name -> noxa.v1.UserKickedEvent
+	10, // 9: noxa.v1.Event.user_banned:type_name -> noxa.v1.UserBannedEvent
+	1,  // 10: noxa.v1.Events.Subscribe:input_type -> noxa.v1.SubscribeEventsRequest
+	2,  // 11: noxa.v1.Events.Subscribe:output_type -> noxa.v1.Event
 	11, // [11:12] is the sub-list for method output_type
 	10, // [10:11] is the sub-list for method input_type
 	10, // [10:10] is the sub-list for extension type_name

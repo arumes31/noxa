@@ -6,7 +6,7 @@
 import { playEvent } from "./sounds.js";
 import { closeDialog, isCurrentServerDialog, mountDialog, mountServerDialog } from "./modal.js";
 
-const V = () => window.__voicx;
+const V = () => window.__noxa;
 const App = () => window.go.main.App;
 
 // MATRIX_EVENTS are the rows of the notification matrix (385).
@@ -81,7 +81,7 @@ function overrideAllows(channelID, className, defaultOn) {
 // Read-only policy check used by live chat announcements so assistive output
 // follows the same DND, channel override and matrix preferences as toasts.
 export function notificationOutputAllowed(event, ctx = {}, output = "toast") {
-    if (window.__voicxPolish?.dndActive?.()) return false;
+    if (window.__noxaPolish?.dndActive?.()) return false;
     if (!overrideAllows(ctx.channelID, ctx.className || "messages", true)) return false;
     return !!matrixRow(event)[output];
 }
@@ -93,8 +93,8 @@ export function notificationOutputAllowed(event, ctx = {}, output = "toast") {
 // never bypasses this event's matrix row or channel override.
 export function notify(event, text, ctx = {}) {
     // (346) always record in the notification center (even under DND).
-    window.__voicxPolish?.recordNotification(event, text, ctx);
-    if (window.__voicxPolish?.dndActive?.()) return;
+    window.__noxaPolish?.recordNotification(event, text, ctx);
+    if (window.__noxaPolish?.dndActive?.()) return;
     if (!overrideAllows(ctx.channelID, ctx.className || "messages", true)) return;
     const row = matrixRow(event);
     if (row.toast) {
@@ -104,12 +104,12 @@ export function notify(event, text, ctx = {}) {
     }
     if (row.sound && !ctx.noSound) playEventSound(event, ctx.soundEvent);
     if (row.flash) App().FlashWindow();
-    if (row.native && !document.hasFocus()) App().Notify("voicx " + event, text.slice(0, 200));
+    if (row.native && !document.hasFocus()) App().Notify("noXa " + event, text.slice(0, 200));
 }
 
 // Precise action cues share the notification matrix's policy.
 function playEventSound(event, soundEvent = event) {
-    if (window.__voicxPolish?.dndActive?.()) return;
+    if (window.__noxaPolish?.dndActive?.()) return;
     const settings = V().state.settings;
     // Matrix sound permission is checked by notify() before this point. These
     // two checks additionally make a replay silent and let a precise action
@@ -321,9 +321,9 @@ export function maybeAlphaNotice(force = false) {
     overlay.className = "dlg-overlay alpha-notice";
     overlay.innerHTML = `
         <div class="dlg">
-            <h3>voicx is alpha software</h3>
+            <h3>noXa is alpha software</h3>
             <div class="dlg-text">
-                <p>voicx ${ver} is under construction — expect bugs and rough edges.
+                <p>noXa ${ver} is under construction — expect bugs and rough edges.
                 Please report issues on the project tracker (Help → About has the link).</p>
                 <label class="dlg-label"><input type="checkbox" class="alpha-skip" /> don't show again for this version</label>
             </div>
@@ -395,7 +395,7 @@ export async function maybeIdentityBackupNag(force = false) {
 }
 
 export function initNotifications() {
-    window.__voicxNotify = {
+    window.__noxaNotify = {
         notify, checkBuddyOnline, resetBuddyWatch, matchKeyword,
         checkChannelWatch, channelOverride, saveChannelOverride, maybeAlphaNotice,
         maybeIdentityBackupNag, resetServerRules, notificationOutputAllowed,

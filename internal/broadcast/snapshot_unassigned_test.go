@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"voicx/internal/state"
+	"noxa/internal/state"
 )
 
 func TestSnapshotIncludesVisibleClientsBeforeTheyJoinAChannel(t *testing.T) {

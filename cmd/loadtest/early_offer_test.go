@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/pion/webrtc/v4"
-	"voicx/internal/netproto"
+	"noxa/internal/netproto"
 )
 
 // The server may already be stable and create its next offer before its

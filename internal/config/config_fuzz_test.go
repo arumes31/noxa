@@ -13,7 +13,7 @@ func FuzzDecodeConfig(f *testing.F) {
 	for _, seed := range [][]byte{
 		{},
 		[]byte("log_level: INFO\nchat_legacy_history: PURGE\nrecording:\n  format: WEBM\n"),
-		[]byte("turn:\n  secret: example\n  realm: voicx\n  uris: [turn:turn.example:3478?transport=udp]\nwebrtc:\n  ice_servers: [stun:stun.example:3478]\n"),
+		[]byte("turn:\n  secret: example\n  realm: noxa\n  uris: [turn:turn.example:3478?transport=udp]\nwebrtc:\n  ice_servers: [stun:stun.example:3478]\n"),
 		[]byte("recording:\n  enabled: true\n  format: MP4\n  video_args: [-c:v, copy]\n  audio_args: [-c:a, copy]\n"),
 		[]byte("log_level: [not, a, scalar]\nturn: [not, a, mapping]\n"),
 		[]byte("shared: &shared\n  format: webm\nrecording: *shared\n"),

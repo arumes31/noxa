@@ -7,9 +7,9 @@ managed:
 plugins:
   - remote: buf.build/protocolbuffers/go:v1.36.11
     out: .
-    opt: module=voicx
+    opt: module=noxa
   - remote: buf.build/grpc/go:v1.5.1
     out: .
-    opt: module=voicx
+    opt: module=noxa
 inputs:
   - directory: proto

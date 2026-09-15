@@ -11,7 +11,7 @@ import (
 )
 
 // PeerConnectionWrapper wraps a Pion webrtc.PeerConnection with the metadata
-// and signaling plumbing required by the voicx server. It tracks the owning
+// and signaling plumbing required by the noxa server. It tracks the owning
 // clientID, exposes offer/answer/ICE/track helpers, and surfaces local ICE
 // candidates and the local/remote SDP through buffered channels for the
 // signaling layer to consume.

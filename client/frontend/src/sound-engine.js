@@ -30,7 +30,7 @@ export class SoundEngine {
     report(kind) {
         if (this.warnings.has(kind)) return;
         this.warnings.add(kind);
-        this.warn(`VOICX sound: ${kind}`);
+        this.warn(`NOXA sound: ${kind}`);
     }
 
     context() {

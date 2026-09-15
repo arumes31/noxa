@@ -13,7 +13,7 @@ import (
 
 // TestSettingsRoundTrip verifies defaults, save, and reload.
 func TestSettingsRoundTrip(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "voicx", "settings.json")
+	path := filepath.Join(t.TempDir(), "noxa", "settings.json")
 
 	// Missing file: defaults.
 	s := loadSettingsAt(path)
@@ -320,7 +320,7 @@ func TestSpeechSettingsPreserveExplicitPreferences(t *testing.T) {
 }
 
 func TestOriginalSoundSettingsMigration(t *testing.T) {
-	for _, pack := range []string{"soft", "bright", "retro", "", "voicx"} {
+	for _, pack := range []string{"soft", "bright", "retro", "", "noxa"} {
 		t.Run(pack, func(t *testing.T) {
 			s := DefaultSettings()
 			s.SettingsVersion = 7
@@ -330,7 +330,7 @@ func TestOriginalSoundSettingsMigration(t *testing.T) {
 			s.EventSounds["own_channel_join"] = false
 			s.EventSounds["user_move_out"] = false
 			got := normalizeSettings(migrateSettings(s))
-			if got.SoundPack != "voicx" || got.SoundVolume != 165 || got.PlaySounds ||
+			if got.SoundPack != "noxa" || got.SoundVolume != 165 || got.PlaySounds ||
 				got.EventSounds["own_channel_join"] || got.EventSounds["user_move_out"] {
 				t.Fatalf("migration changed preferences: %+v", got)
 			}
@@ -349,7 +349,7 @@ func TestOriginalSoundSettingsMigration(t *testing.T) {
 		t.Fatal(err)
 	}
 	loaded := loadSettingsAt(path)
-	if loaded.SoundPack != "voicx" || loaded.PlaySounds || loaded.SoundVolume != 0 || loaded.EventSounds["mention"] {
+	if loaded.SoundPack != "noxa" || loaded.PlaySounds || loaded.SoundVolume != 0 || loaded.EventSounds["mention"] {
 		t.Fatal("old JSON migration did not preserve opt-outs")
 	}
 	if err := saveSettingsAt(path, loaded); err != nil {
@@ -375,7 +375,7 @@ func TestSettingsWave1Fields(t *testing.T) {
 	if !s.WarnMutedTalking || !s.WarnEmptyChannel || !s.VoiceLimiter {
 		t.Fatal("wave-1 defaults wrong (toggles should be on)")
 	}
-	if s.SoundPack != "voicx" || s.SoundVolume != 100 || s.WhisperReplyHotkey != "Ctrl+R" {
+	if s.SoundPack != "noxa" || s.SoundVolume != 100 || s.WhisperReplyHotkey != "Ctrl+R" {
 		t.Fatalf("wave-1 defaults: %+v", s)
 	}
 	if !s.EventSounds["join"] || !s.EventSounds["whisper"] {
@@ -403,7 +403,7 @@ func TestSettingsWave1Fields(t *testing.T) {
 	if loaded.PTTReleaseDelayMs != 300 || loaded.WarnMutedTalking {
 		t.Fatalf("ptt delay / warn: %+v", loaded)
 	}
-	if loaded.SoundPack != "voicx" || loaded.EventSounds["join"] {
+	if loaded.SoundPack != "noxa" || loaded.EventSounds["join"] {
 		t.Fatalf("sound fields: %+v", loaded)
 	}
 	if loaded.VoiceLimiter {
@@ -416,7 +416,7 @@ func TestSettingsWave1Fields(t *testing.T) {
 		t.Fatalf("write: %v", err)
 	}
 	merged := loadSettingsAt(old)
-	if merged.Volume != 120 || !merged.WarnMutedTalking || merged.SoundPack != "voicx" {
+	if merged.Volume != 120 || !merged.WarnMutedTalking || merged.SoundPack != "noxa" {
 		t.Fatalf("merge with defaults broken: %+v", merged)
 	}
 }

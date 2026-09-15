@@ -1,7 +1,7 @@
-# voicx Protocol Buffers
+# noxa Protocol Buffers
 
-This directory defines the gRPC/Protobuf schema for the voicx voice/video
-server. All files use `syntax = "proto3";` and the package `voicx.v1`.
+This directory defines the gRPC/Protobuf schema for the noxa voice/video
+server. All files use `syntax = "proto3";` and the package `noxa.v1`.
 
 ## Files
 
@@ -24,7 +24,7 @@ buf lint
 ## Generating Go code
 
 The Go stubs are generated and committed under [`v1/`](../v1) (package
-`voicxv1`), matching the `go_package` option (`voicx/v1;voicxv1`) declared in
+`noxav1`), matching the `go_package` option (`noxa/v1;noxav1`) declared in
 each `.proto` file. Regenerate them after every schema change and commit the
 result — the server (232) compiles against them.
 

@@ -20,31 +20,31 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"go.uber.org/zap"
 
-	"voicx/internal/auth"
-	"voicx/internal/broadcast"
-	"voicx/internal/channels"
-	"voicx/internal/chatcrypto"
-	"voicx/internal/config"
-	"voicx/internal/eventbus"
-	"voicx/internal/filetransfer"
-	"voicx/internal/grpcserver"
-	"voicx/internal/health"
-	"voicx/internal/logging"
-	"voicx/internal/metrics"
-	"voicx/internal/netproto"
-	"voicx/internal/permissions"
-	"voicx/internal/query"
-	"voicx/internal/recorder"
-	"voicx/internal/redisx"
-	"voicx/internal/rules"
-	"voicx/internal/safecast"
-	"voicx/internal/server"
-	"voicx/internal/state"
-	"voicx/internal/store"
-	"voicx/internal/tlscert"
-	"voicx/internal/turn"
-	"voicx/internal/version"
-	"voicx/internal/webrtc"
+	"noxa/internal/auth"
+	"noxa/internal/broadcast"
+	"noxa/internal/channels"
+	"noxa/internal/chatcrypto"
+	"noxa/internal/config"
+	"noxa/internal/eventbus"
+	"noxa/internal/filetransfer"
+	"noxa/internal/grpcserver"
+	"noxa/internal/health"
+	"noxa/internal/logging"
+	"noxa/internal/metrics"
+	"noxa/internal/netproto"
+	"noxa/internal/permissions"
+	"noxa/internal/query"
+	"noxa/internal/recorder"
+	"noxa/internal/redisx"
+	"noxa/internal/rules"
+	"noxa/internal/safecast"
+	"noxa/internal/server"
+	"noxa/internal/state"
+	"noxa/internal/store"
+	"noxa/internal/tlscert"
+	"noxa/internal/turn"
+	"noxa/internal/version"
+	"noxa/internal/webrtc"
 )
 
 func main() {
@@ -55,7 +55,7 @@ func main() {
 		err = run()
 	}
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "voicx: %v\n", err)
+		fmt.Fprintf(os.Stderr, "noxa: %v\n", err)
 		os.Exit(1)
 	}
 }
@@ -74,7 +74,7 @@ func hasFlag(name string) bool {
 // syncing a console stream, which is not a durability failure.
 func syncLogger(logger *zap.Logger) {
 	if err := logger.Sync(); err != nil && !errors.Is(err, syscall.EINVAL) {
-		fmt.Fprintf(os.Stderr, "voicx: syncing logger: %v\n", err)
+		fmt.Fprintf(os.Stderr, "noxa: syncing logger: %v\n", err)
 	}
 }
 
@@ -172,7 +172,7 @@ func rewrapChatKeys() (retErr error) {
 		}
 	}()
 
-	ring, err := chatcrypto.LoadKEKRing(cfg.ChatMasterKeyFile, os.Getenv("VOICX_CHAT_MASTER_KEY"), false)
+	ring, err := chatcrypto.LoadKEKRing(cfg.ChatMasterKeyFile, os.Getenv("NOXA_CHAT_MASTER_KEY"), false)
 	if err != nil {
 		return fmt.Errorf("loading chat master key: %w", err)
 	}
@@ -302,7 +302,7 @@ func run() (retErr error) {
 	// (223) tee log lines into the in-memory ring buffer for `logview`.
 	logger = logger.WithOptions(logging.Tee())
 
-	logger.Info("voicx server starting",
+	logger.Info("noxa server starting",
 		zap.String("version", version.String()),
 		zap.String("server_name", cfg.ServerName),
 		zap.Bool("dev_mode", cfg.DevMode),
@@ -358,7 +358,7 @@ func run() (retErr error) {
 		return fmt.Errorf("counting chat scope keys: %w", err)
 	}
 	chatKEK, err := chatcrypto.LoadKEKRing(cfg.ChatMasterKeyFile,
-		os.Getenv("VOICX_CHAT_MASTER_KEY"), scopeKeyCount == 0)
+		os.Getenv("NOXA_CHAT_MASTER_KEY"), scopeKeyCount == 0)
 	if err != nil {
 		return fmt.Errorf("loading chat master key: %w", err)
 	}
@@ -890,13 +890,13 @@ func run() (retErr error) {
 	startService(serviceExits, "file-transfer server", func() error { return ftServer.Start(ctx) })
 	startService(serviceExits, "UDP media server", func() error { return udpServer.Start(ctx) })
 	servingReady.Store(true)
-	logger.Info("voicx server running, waiting for shutdown signal")
+	logger.Info("noxa server running, waiting for shutdown signal")
 	var runErr error
 	select {
 	case <-ctx.Done():
-		logger.Info("voicx server shutting down")
+		logger.Info("noxa server shutting down")
 	case restart := <-shutdownReq:
-		logger.Info("voicx server shutting down via ServerQuery", zap.Bool("restart", restart))
+		logger.Info("noxa server shutting down via ServerQuery", zap.Bool("restart", restart))
 	case exit := <-serviceExits:
 		runErr = unexpectedServiceExit(exit)
 	}
@@ -1023,19 +1023,19 @@ func iceServersProvider(cfg *config.Config, logger *zap.Logger) func(string) []n
 func registerEventBusMetrics(reg *prometheus.Registry, bus *eventbus.Bus, logger *zap.Logger) {
 	collectors := []prometheus.Collector{
 		prometheus.NewGaugeFunc(prometheus.GaugeOpts{
-			Name: "voicx_eventbus_subscribers",
+			Name: "noxa_eventbus_subscribers",
 			Help: "Current number of event-bus subscribers (bots).",
 		}, func() float64 { return float64(bus.Stats().Subscribers) }),
 		prometheus.NewCounterFunc(prometheus.CounterOpts{
-			Name: "voicx_eventbus_published_total",
+			Name: "noxa_eventbus_published_total",
 			Help: "Events published to the event bus.",
 		}, func() float64 { return float64(bus.Stats().Published) }),
 		prometheus.NewCounterFunc(prometheus.CounterOpts{
-			Name: "voicx_eventbus_dropped_total",
+			Name: "noxa_eventbus_dropped_total",
 			Help: "Events dropped because a subscriber was not draining its buffer.",
 		}, func() float64 { return float64(bus.Stats().Dropped) }),
 		prometheus.NewCounterFunc(prometheus.CounterOpts{
-			Name: "voicx_eventbus_evicted_total",
+			Name: "noxa_eventbus_evicted_total",
 			Help: "Subscribers evicted for persistently failing to drain.",
 		}, func() float64 { return float64(bus.Stats().Evicted) }),
 	}

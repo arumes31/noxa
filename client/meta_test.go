@@ -22,7 +22,7 @@ func TestGuardCrashWritesLogAndRepans(t *testing.T) {
 	if recovered != "crash canary" {
 		t.Fatalf("recovered panic = %#v, want crash canary", recovered)
 	}
-	raw, err := os.ReadFile(filepath.Join(base, "voicx", crashLogName))
+	raw, err := os.ReadFile(filepath.Join(base, "noxa", crashLogName))
 	if err != nil {
 		t.Fatalf("read crash log: %v", err)
 	}
@@ -36,7 +36,7 @@ func TestLastCrashReturnsTailAndConsumesIt(t *testing.T) {
 	base := t.TempDir()
 	metaUserConfigDir = func() (string, error) { return base, nil }
 	t.Cleanup(func() { metaUserConfigDir = original })
-	dir := filepath.Join(base, "voicx")
+	dir := filepath.Join(base, "noxa")
 	if err := os.MkdirAll(dir, 0o750); err != nil {
 		t.Fatalf("make log directory: %v", err)
 	}

@@ -14,9 +14,9 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	"voicx/internal/eventbus"
-	"voicx/internal/query"
-	voicxv1 "voicx/v1"
+	"noxa/internal/eventbus"
+	"noxa/internal/query"
+	noxav1 "noxa/v1"
 )
 
 func TestServerExternalShutdownRetiresCancellationWatcher(t *testing.T) {
@@ -95,10 +95,10 @@ func TestServerShutdownGracefullyDrainsUnaryAndRefusesNewRPCs(t *testing.T) {
 	srv, addr, cancel, errCh := startGRPCServer(t, backend, bus, nil)
 	defer cancel()
 
-	client := voicxv1.NewControlClient(dialGRPC(t, addr))
+	client := noxav1.NewControlClient(dialGRPC(t, addr))
 	firstDone := make(chan error, 1)
 	go func() {
-		_, err := client.ListChannels(authCtx(t, "admin-uid", "pw"), &voicxv1.ListChannelsRequest{})
+		_, err := client.ListChannels(authCtx(t, "admin-uid", "pw"), &noxav1.ListChannelsRequest{})
 		firstDone <- err
 	}()
 	<-entered
@@ -111,7 +111,7 @@ func TestServerShutdownGracefullyDrainsUnaryAndRefusesNewRPCs(t *testing.T) {
 	}()
 	waitForGRPCListenerClosed(t, addr)
 
-	_, err := client.ListChannels(authCtx(t, "admin-uid", "pw"), &voicxv1.ListChannelsRequest{})
+	_, err := client.ListChannels(authCtx(t, "admin-uid", "pw"), &noxav1.ListChannelsRequest{})
 	if status.Code(err) != codes.Unavailable {
 		t.Fatalf("new RPC during graceful shutdown = %v, want Unavailable", err)
 	}
@@ -137,8 +137,8 @@ func TestServerShutdownForcesOpenEventStreamAtDeadline(t *testing.T) {
 	srv, addr, cancel, errCh := startGRPCServer(t, &stubBackend{}, bus, nil)
 	defer cancel()
 
-	stream, err := voicxv1.NewEventsClient(dialGRPC(t, addr)).Subscribe(
-		authCtx(t, "admin-uid", "pw"), &voicxv1.SubscribeEventsRequest{})
+	stream, err := noxav1.NewEventsClient(dialGRPC(t, addr)).Subscribe(
+		authCtx(t, "admin-uid", "pw"), &noxav1.SubscribeEventsRequest{})
 	if err != nil {
 		t.Fatalf("Subscribe: %v", err)
 	}
@@ -274,11 +274,11 @@ func TestServerFatalServeErrorShutsDownExistingTransport(t *testing.T) {
 	errCh := make(chan error, 1)
 	go func() { errCh <- srv.Start(startCtx) }()
 
-	client := voicxv1.NewControlClient(dialGRPC(t, listener.Addr().String()))
+	client := noxav1.NewControlClient(dialGRPC(t, listener.Addr().String()))
 	firstDone := make(chan error, 1)
 	firstCtx := authCtx(t, "admin-uid", "pw")
 	go func() {
-		_, err := client.ListChannels(firstCtx, &voicxv1.ListChannelsRequest{})
+		_, err := client.ListChannels(firstCtx, &noxav1.ListChannelsRequest{})
 		firstDone <- err
 	}()
 	select {
@@ -295,7 +295,7 @@ func TestServerFatalServeErrorShutsDownExistingTransport(t *testing.T) {
 	if !srv.draining.Load() {
 		t.Fatal("fatal Serve error did not initiate shutdown")
 	}
-	_, newErr := client.ListChannels(authCtx(t, "admin-uid", "pw"), &voicxv1.ListChannelsRequest{})
+	_, newErr := client.ListChannels(authCtx(t, "admin-uid", "pw"), &noxav1.ListChannelsRequest{})
 	if status.Code(newErr) != codes.Unavailable {
 		t.Fatalf("new RPC after fatal Serve error = %v, want Unavailable", newErr)
 	}

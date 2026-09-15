@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"voicx/internal/netproto"
+	"noxa/internal/netproto"
 )
 
 func TestExplicitErrorOriginsDoNotLeakAcrossConcurrentWrites(t *testing.T) {

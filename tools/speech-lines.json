@@ -8,7 +8,7 @@
     "permission_denied": "You do not have permission to perform this action.",
     "moved_by_admin": "You were moved to another channel.",
     "server_shutdown": "The server is shutting down.",
-    "test": "VOICX spoken notifications are enabled."
+    "test": "noXa spoken notifications are enabled."
   },
   "de": {
     "banned": "Du wurdest vom Server gebannt.",
@@ -19,6 +19,6 @@
     "permission_denied": "Du hast keine Berechtigung für diese Aktion.",
     "moved_by_admin": "Du wurdest in einen anderen Channel verschoben.",
     "server_shutdown": "Der Server wird heruntergefahren.",
-    "test": "Die gesprochenen VOICX-Benachrichtigungen sind aktiviert."
+    "test": "Die gesprochenen noXa-Benachrichtigungen sind aktiviert."
   }
 }

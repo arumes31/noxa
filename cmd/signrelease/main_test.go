@@ -49,7 +49,7 @@ func TestSignFile(t *testing.T) {
 	dir := t.TempDir()
 	manifestPath := filepath.Join(dir, "checksums.txt")
 	signaturePath := filepath.Join(dir, "checksums.txt.sig")
-	manifest := []byte("# voicx-version: v1.2.3\nabc  client.exe\n")
+	manifest := []byte("# noxa-version: v1.2.3\nabc  client.exe\n")
 	if err := os.WriteFile(manifestPath, manifest, 0o600); err != nil {
 		t.Fatalf("write manifest: %v", err)
 	}
@@ -85,7 +85,7 @@ func TestSignFileRejectsInvalidVersionHeaderWithoutCreatingOutput(t *testing.T) 
 		t.Fatalf("generate key: %v", err)
 	}
 	encodedKey := base64.StdEncoding.EncodeToString(privateKey)
-	validManifest := []byte("# voicx-version: v1.2.3\nabc  client.exe\n")
+	validManifest := []byte("# noxa-version: v1.2.3\nabc  client.exe\n")
 
 	for _, test := range []struct {
 		name      string
@@ -94,10 +94,10 @@ func TestSignFileRejectsInvalidVersionHeaderWithoutCreatingOutput(t *testing.T) 
 		wantError string
 	}{
 		{name: "missing header", manifest: []byte("abc  client.exe\n"), version: "v1.2.3", wantError: "no release version"},
-		{name: "header is not first", manifest: []byte("abc  client.exe\n# voicx-version: v1.2.3\n"), version: "v1.2.3", wantError: "must be the first line"},
-		{name: "empty header", manifest: []byte("# voicx-version: \nabc  client.exe\n"), version: "v1.2.3", wantError: "release version is empty"},
-		{name: "duplicate header", manifest: []byte("# voicx-version: v1.2.3\n# voicx-version: v1.2.3\n"), version: "v1.2.3", wantError: "multiple release versions"},
-		{name: "mismatched header", manifest: []byte("# voicx-version: v1.2.4\nabc  client.exe\n"), version: "v1.2.3", wantError: "does not match release"},
+		{name: "header is not first", manifest: []byte("abc  client.exe\n# noxa-version: v1.2.3\n"), version: "v1.2.3", wantError: "must be the first line"},
+		{name: "empty header", manifest: []byte("# noxa-version: \nabc  client.exe\n"), version: "v1.2.3", wantError: "release version is empty"},
+		{name: "duplicate header", manifest: []byte("# noxa-version: v1.2.3\n# noxa-version: v1.2.3\n"), version: "v1.2.3", wantError: "multiple release versions"},
+		{name: "mismatched header", manifest: []byte("# noxa-version: v1.2.4\nabc  client.exe\n"), version: "v1.2.3", wantError: "does not match release"},
 		{name: "empty expected version", manifest: validManifest, wantError: "expected release version"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -126,7 +126,7 @@ func TestSignFileDoesNotOverwriteExistingSignature(t *testing.T) {
 	dir := t.TempDir()
 	manifestPath := filepath.Join(dir, "checksums.txt")
 	signaturePath := filepath.Join(dir, "checksums.txt.sig")
-	if err := os.WriteFile(manifestPath, []byte("# voicx-version: v1.2.3\nabc  client.exe\n"), 0o600); err != nil {
+	if err := os.WriteFile(manifestPath, []byte("# noxa-version: v1.2.3\nabc  client.exe\n"), 0o600); err != nil {
 		t.Fatalf("write manifest: %v", err)
 	}
 	sentinel := []byte("do-not-overwrite")
@@ -158,7 +158,7 @@ func TestSignFileDoesNotFollowExistingSignatureSymlink(t *testing.T) {
 	manifestPath := filepath.Join(dir, "checksums.txt")
 	signaturePath := filepath.Join(dir, "checksums.txt.sig")
 	targetPath := filepath.Join(dir, "signature-target.txt")
-	if err := os.WriteFile(manifestPath, []byte("# voicx-version: v1.2.3\nabc  client.exe\n"), 0o600); err != nil {
+	if err := os.WriteFile(manifestPath, []byte("# noxa-version: v1.2.3\nabc  client.exe\n"), 0o600); err != nil {
 		t.Fatalf("write manifest: %v", err)
 	}
 	sentinel := []byte("do-not-overwrite-symlink-target")
@@ -234,7 +234,7 @@ func TestVerifyFile(t *testing.T) {
 	dir := t.TempDir()
 	manifestPath := filepath.Join(dir, "checksums.txt")
 	signaturePath := filepath.Join(dir, "checksums.txt.sig")
-	manifest := []byte("# voicx-version: v1.2.3\nabc  client.exe\n")
+	manifest := []byte("# noxa-version: v1.2.3\nabc  client.exe\n")
 	if err := os.WriteFile(manifestPath, manifest, 0o600); err != nil {
 		t.Fatalf("write manifest: %v", err)
 	}
@@ -258,7 +258,7 @@ func TestRunVerifyRequiresVersion(t *testing.T) {
 	dir := t.TempDir()
 	manifestPath := filepath.Join(dir, "checksums.txt")
 	signaturePath := filepath.Join(dir, "checksums.txt.sig")
-	manifest := []byte("# voicx-version: v1.2.3\nabc  client.exe\n")
+	manifest := []byte("# noxa-version: v1.2.3\nabc  client.exe\n")
 	if err := os.WriteFile(manifestPath, manifest, 0o600); err != nil {
 		t.Fatalf("write manifest: %v", err)
 	}
@@ -284,7 +284,7 @@ func TestRunSignRequiresVersion(t *testing.T) {
 	dir := t.TempDir()
 	manifestPath := filepath.Join(dir, "checksums.txt")
 	signaturePath := filepath.Join(dir, "checksums.txt.sig")
-	if err := os.WriteFile(manifestPath, []byte("# voicx-version: v1.2.3\nabc  client.exe\n"), 0o600); err != nil {
+	if err := os.WriteFile(manifestPath, []byte("# noxa-version: v1.2.3\nabc  client.exe\n"), 0o600); err != nil {
 		t.Fatalf("write manifest: %v", err)
 	}
 	t.Setenv(signingKeyEnv, base64.StdEncoding.EncodeToString(privateKey))
