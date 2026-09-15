@@ -8,9 +8,12 @@ import (
 )
 
 func TestGroupAssignReturnsServerRejection(t *testing.T) {
-	app, _ := newPipedApp(t, func(frame *netproto.Frame) (netproto.MessageType, any, bool) {
+	app, cm := newPipedApp(t, func(frame *netproto.Frame) (netproto.MessageType, any, bool) {
 		return netproto.MsgError, netproto.Error{Code: 6, Message: "target user not found", OriginType: uint16(netproto.MsgGroupAssign)}, true
 	})
+	cm.mu.Lock()
+	cm.groupAssignAck = true
+	cm.mu.Unlock()
 	if got := app.GroupAssign("server", 2, "missing", 0, 0); !strings.Contains(got, "target user not found") {
 		t.Fatalf("assignment result = %q, want server rejection", got)
 	}
@@ -56,6 +59,7 @@ func TestGroupAndPermissionBindings(t *testing.T) {
 
 	cm.mu.Lock()
 	cm.isAdmin = true
+	cm.groupAssignAck = true
 	cm.isGuest = true
 	cm.mu.Unlock()
 	if !app.IsAdmin() || !app.IsGuest() {

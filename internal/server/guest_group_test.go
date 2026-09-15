@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"slices"
 	"testing"
 	"time"
 
@@ -34,6 +35,9 @@ func TestGroupAssignOnlineGuest(t *testing.T) {
 	defer func() { _ = admin.Close() }()
 	guest, identity := dialGuest(t, env.addr, "new-member", "")
 	defer func() { _ = guest.Close() }()
+	if !slices.Contains(identity.Capabilities, netproto.CapabilityGroupAssignAck) {
+		t.Fatal("server did not advertise group assignment acknowledgements")
+	}
 	groupID, err := env.groups.CreateGroup(context.Background(), "server", "Member", 0)
 	if err != nil {
 		t.Fatal(err)

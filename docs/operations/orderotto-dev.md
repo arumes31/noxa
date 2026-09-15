@@ -140,11 +140,11 @@ using this procedure after any future update.
 - Chromium negotiates distinct microphone/camera identities without duplicate
   MSID errors. Subscriber RTP headers omit publisher-specific extensions;
   egress interceptors supply extensions negotiated for each subscriber.
-- Two external Chromium peers using the updated client audio-source helper
-  decoded 360,960 and 372,480 samples through the deployed server. Both
-  measured a nonzero received waveform (RMS about 0.035) from the synthetic
-  test tone, with no negotiation errors. The test used a silent output sink;
-  it does not verify either user's physical speakers.
+- The [remote-audio regression](../../client/frontend/tests/remote-audio.spec.js)
+  connects two RTCPeerConnection instances directly within one browser page.
+  It verifies that the client audio-source helper produces a nonzero decoded
+  waveform using a silent output sink. It does not exercise deployed-server
+  routing or either user's physical speakers.
 - Existing channel permissions and the public/Tailscale port bindings were
   preserved. The Public channel remains available without a channel password
   or elevated talk-power requirement.
@@ -165,5 +165,7 @@ update without leaving the channel. Inactive reserved camera tracks stay
 hidden, including when a participant has never enabled their camera.
 
 Group assignment can now persist an online guest and membership atomically.
-The updated client waits for server acknowledgement before showing success.
-Deploy the server first: older servers do not implement that acknowledgement.
+The updated client waits for server acknowledgement when the authentication
+response advertises `group_assign_ack`. With older servers it sends the
+assignment without waiting; failures arrive through the existing asynchronous
+error event, so a successful legacy assignment does not close the connection.

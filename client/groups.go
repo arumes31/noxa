@@ -98,11 +98,25 @@ func (a *App) GroupDelete(groupType string, groupID int64, force bool) string {
 // GroupAssign assigns a user to a group. expiresInSeconds > 0 makes the
 // membership timed (145); channelID is required for channel groups.
 func (a *App) GroupAssign(groupType string, groupID int64, uniqueID string, channelID int64, expiresInSeconds int64) string {
-	if _, err := a.request(netproto.MsgGroupAssign, netproto.MsgGroupAssign, netproto.GroupAssign{
-		AckRequested: true,
+	cm, err := a.requireCM()
+	if err != nil {
+		return err.Error()
+	}
+	cm.mu.Lock()
+	acknowledged := cm.groupAssignAck
+	cm.mu.Unlock()
+	msg := netproto.GroupAssign{
+		AckRequested: acknowledged,
 		Type:         groupType, GroupID: groupID, UniqueID: uniqueID,
 		ChannelID: channelID, ExpiresInSeconds: expiresInSeconds,
-	}, 5*time.Second); err != nil {
+	}
+	if acknowledged {
+		_, err = cm.request(netproto.MsgGroupAssign, netproto.MsgGroupAssign, msg, 5*time.Second)
+	} else {
+		// Legacy servers only report failures through asynchronous MsgError.
+		err = cm.write(netproto.MsgGroupAssign, msg)
+	}
+	if err != nil {
 		return err.Error()
 	}
 	return ""

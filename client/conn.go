@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -63,6 +64,8 @@ type connManager struct {
 	isAdmin   bool
 	isGuest   bool
 	closed    bool
+	// groupAssignAck is advertised by the authenticated server.
+	groupAssignAck bool
 	// lastSnapshot/lastChannelList cache the latest state frames so a tab
 	// switch can replay them (281).
 	lastSnapshot    string
@@ -454,6 +457,7 @@ func (m *connManager) connectWith(addr string, authMsg netproto.Authenticate, si
 	m.uniqueID = resp.UniqueID
 	m.nickname = resp.Nickname
 	m.isAdmin = resp.IsAdmin
+	m.groupAssignAck = slices.Contains(resp.Capabilities, netproto.CapabilityGroupAssignAck)
 	m.isGuest = authMsg.Anonymous
 	m.iceServers = resp.ICEServers
 	m.motd = motd
@@ -509,6 +513,7 @@ func (m *connManager) detachLocked() (net.Conn, []chan requestResult, []net.Conn
 	}
 	clear(m.pending)
 	m.iceServers = nil
+	m.groupAssignAck = false
 	m.motd = ""
 	m.tlsUsed = false
 	m.fingerprint = ""

@@ -474,8 +474,14 @@ type Authenticate struct {
 	X25519PublicKey string `json:"x25519_public_key,omitempty"`
 }
 
+// CapabilityGroupAssignAck advertises support for GroupAssign.AckRequested.
+const CapabilityGroupAssignAck = "group_assign_ack"
+
 // AuthResponse is the server's reply to an Authenticate message.
 type AuthResponse struct {
+	// Capabilities advertises optional protocol features. Missing means legacy.
+	Capabilities []string `json:"capabilities,omitempty"`
+
 	OK       bool   `json:"ok"`
 	ClientID string `json:"client_id,omitempty"`
 	UniqueID string `json:"unique_id,omitempty"`

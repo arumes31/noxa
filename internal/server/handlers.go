@@ -522,6 +522,7 @@ func (s *TCPServer) finishAuth(ctx context.Context, client *Client, id authIdent
 
 	// Reply first, then send the snapshot, then announce the join.
 	resp := netproto.AuthResponse{
+		Capabilities:   []string{netproto.CapabilityGroupAssignAck},
 		OK:             true,
 		ClientID:       client.ID,
 		UniqueID:       id.uniqueID,
