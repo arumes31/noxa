@@ -11,6 +11,20 @@ export async function resumeAudioPlayback(context) {
     await context.resume();
 }
 
+// Chromium needs a playing media element to pull remote WebRTC audio into
+// WebAudio (crbug.com/933677). Keep it muted: the processing graph owns all
+// audible output, including per-user volume, deafen and device selection.
+export function createRemoteAudioSource(context, track) {
+    const stream = new MediaStream([track]);
+    const src = context.createMediaStreamSource(stream);
+    const playback = new Audio();
+    playback.muted = true;
+    playback.autoplay = true;
+    playback.srcObject = stream;
+    void playback.play().catch(() => {});
+    return { src, playback };
+}
+
 // Keep the voice-bar action aligned with what the next activation will do.
 // A pressed mute button offers "Unmute" to both pointer and screen-reader
 // users instead of continuing to announce the state-changing action as Mute.

@@ -1,17 +1,18 @@
 # noXa on orderotto-dev
 
 Updated on 2026-09-15 to commit
-`f06b0bb1e4f9df142e4b5b6f9bf7139a1dbeaa58` from PR #13. The server reports
-`0.4.3-dev+gf06b0bb1e4f9` and displays **noXa wowcraft.pw**.
-The image is pinned to the successful CI build:
+`f57945e02114ddb07f9cbe5759d41ff3860b7336` from PR #14. The server reports
+`0.4.3-dev+gf57945e02114` and displays **noXa wowcraft.pw**.
+The image was built on the host from an archive of that exact commit:
 
 ```text
-ghcr.io/arumes31/noxa@sha256:25c8e70ddc2ba4a3fb562f175606eda30f6bc57276e776b0373bbc997c56b888
+noxa:f57945e
+sha256:99db4c17778311756c8589111bc88ca796e106b0c91ef40a8a63831d7878e47c
 ```
 
 ## Operating the stack
 
-The release lives at `/opt/noxa/releases/f06b0bb`; `/opt/noxa/current` points
+The release lives at `/opt/noxa/releases/f57945e`; `/opt/noxa/current` points
 there. The wrapper uses `docker-compose.yml`, the host-specific
 `docker-compose.orderotto-dev.yml`, the `backup` profile, and the root-only
 `/opt/noxa/deployment.env`:
@@ -77,7 +78,24 @@ before and after the update. The control/file TLS SHA-256 fingerprint remains:
 
 ## Backups and rollback
 
-Before switching, the application was stopped and a fresh PostgreSQL dump and
+The voice/member updates took fresh one-shot PostgreSQL backups and saved
+the previous release link and protected deployment environment under:
+
+```text
+/opt/noxa/shared/backups/pre-fixes-3a8466e
+/opt/noxa/shared/backups/pre-fixes-f57945e
+```
+
+Only the application container was replaced. To undo the latest forwarding
+change while retaining the guest-membership fix:
+
+```sh
+cp /opt/noxa/shared/backups/pre-fixes-f57945e/deployment.env /opt/noxa/deployment.env
+ln -sfn releases/3a8466e /opt/noxa/current
+/opt/noxa/compose up -d --no-build --no-deps --pull never --wait noxa
+```
+
+Before the original rename, the application was stopped and a PostgreSQL dump and
 application-data archive were saved under:
 
 ```text
@@ -111,15 +129,41 @@ using this procedure after any future update.
 
 ## Deployment verification
 
-- All CI checks passed for the deployed commit, including tests, security,
-  protobuf compatibility, and both Docker architectures.
+- Root/client Go tests and lint, guest assignment race tests and isolated
+  PostgreSQL transaction tests passed. Browser tests cover playback, live
+  device settings and inactive video tracks.
 - Health/readiness passed; schema remains `024_chat_kek_id_range.sql`.
 - All expected services are running; the server has zero restarts and no error,
   fatal or panic log entries during deployment verification.
 - Two external clients authenticated as guests in the existing Public channel
   (ID 2), using the unchanged pinned TLS certificate.
-- Both WebRTC peers connected and received voice: 1,820 RTP packets sent and
-  1,651 received across the test, with no authentication or session failures.
+- Chromium negotiates distinct microphone/camera identities without duplicate
+  MSID errors. Subscriber RTP headers omit publisher-specific extensions;
+  egress interceptors supply extensions negotiated for each subscriber.
+- Two external Chromium peers using the updated client audio-source helper
+  decoded 360,960 and 372,480 samples through the deployed server. Both
+  measured a nonzero received waveform (RMS about 0.035) from the synthetic
+  test tone, with no negotiation errors. The test used a silent output sink;
+  it does not verify either user's physical speakers.
 - Existing channel permissions and the public/Tailscale port bindings were
   preserved. The Public channel remains available without a channel password
   or elevated talk-power requirement.
+
+## Desktop playback and settings
+
+Install the updated Windows client on each participant's machine. A server
+update cannot replace the WebAudio code embedded in an existing executable.
+Chromium requires a muted playing media element to start pulling a remote
+WebRTC audio track into WebAudio; the client retains and tears down that
+element alongside each voice/shared-audio source. The WebAudio graph remains
+responsible for volume, deafen and the chosen output device.
+
+Audio device settings are local preferences. Saving them no longer sends an
+unchanged whisper configuration, which previously caused permission failures
+for Public users. Active microphone constraints and the output device now
+update without leaving the channel. Inactive reserved camera tracks stay
+hidden, including when a participant has never enabled their camera.
+
+Group assignment can now persist an online guest and membership atomically.
+The updated client waits for server acknowledgement before showing success.
+Deploy the server first: older servers do not implement that acknowledgement.

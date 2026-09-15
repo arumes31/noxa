@@ -14,7 +14,7 @@ import {
     startMicMeter, stopMicMeter, pttRelease, makeLimiter,
     getUserVolume, isUserMuted, setUserMuted, registerUserChain, unregisterUserChain,
     setDucking, attachUserNormalizer, detachUserNormalizer, detachAllUserNormalizers,
-    captureConstraints, markCaptureProfile, applyCaptureProfile, resumeAudioPlayback,
+    captureConstraints, markCaptureProfile, applyCaptureProfile, resumeAudioPlayback, createRemoteAudioSource,
     syncMuteButton, renderMicStatus,
 } from "./audio.js";
 import {
@@ -2862,6 +2862,9 @@ function applyOutputSettings(el) {
 const remoteChain = { ctx: null, master: null };
 
 function resumeRemoteAudio() {
+    for (const { playback } of [...remoteTracks.values(), ...shareAudio.values()]) {
+        if (playback.paused) void playback.play().catch(() => {});
+    }
     void resumeAudioPlayback(remoteChain.ctx).catch(() => {
         toast("Voice playback could not start. Check your output device and try again.", "warn");
     });
@@ -2918,7 +2921,7 @@ function attachRemoteAudio(track, publisher) {
         // stream it is built from, so the per-user volume (1) and local mute
         // (2) chains would all follow one publisher if several tracks share a
         // stream: wrap this track alone.
-        const src = ctx.createMediaStreamSource(new MediaStream([track]));
+        const { src, playback } = createRemoteAudioSource(ctx, track);
         const gain = ctx.createGain();
         const mute = ctx.createGain();
         // (53) auto-level per publisher: keyed by track ID, inserted behind
@@ -2931,7 +2934,7 @@ function attachRemoteAudio(track, publisher) {
         mute.connect(remoteChain.master);
 
         const uid = publisher?.unique_id || "";
-        remoteTracks.set(track.id, { src, gain, mute, uid });
+        remoteTracks.set(track.id, { src, playback, gain, mute, uid });
         if (uid) registerUserChain(uid, gain, mute);
 
         track.addEventListener("ended", () => detachRemoteTrack(track.id));
@@ -3012,14 +3015,14 @@ function attachShareAudio(track, clientID, publisher) {
     if (!ensureRemoteChain()) return;
     try {
         const ctx = remoteChain.ctx;
-        const src = ctx.createMediaStreamSource(new MediaStream([track]));
+        const { src, playback } = createRemoteAudioSource(ctx, track);
         const gain = ctx.createGain();
         src.connect(gain);
         // no auto-level (53) on program audio: it would pump on music and
         // game sound, which is not a quiet speaker that needs lifting.
         gain.connect(remoteChain.master);
         shareAudio.set(clid, {
-            trackID: track.id, src, gain, uid: publisher?.unique_id || "",
+            trackID: track.id, src, playback, gain, uid: publisher?.unique_id || "",
             volume: 100, muted: false,
         });
         applyShareAudio(clid);
@@ -3033,6 +3036,8 @@ function detachShareAudio(clientID) {
     const n = shareAudio.get(String(clientID));
     if (!n) return;
     shareAudio.delete(String(clientID));
+    n.playback.pause();
+    n.playback.srcObject = null;
     try {
         n.gain.disconnect();
         n.src.disconnect();
@@ -3044,6 +3049,8 @@ function detachRemoteTrack(trackID) {
     const t = remoteTracks.get(trackID);
     if (!t) return;
     remoteTracks.delete(trackID);
+    t.playback.pause();
+    t.playback.srcObject = null;
     if (t.uid) unregisterUserChain(t.uid);
     detachUserNormalizer(trackID); // (53) no-op when normalization is off
     try {
