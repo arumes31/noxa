@@ -50,7 +50,7 @@ func TestGeneratedServiceContracts(t *testing.T) {
 		got = append(got, name)
 	}
 	sort.Strings(got)
-	want := []string{"noxa.v1.Control", "noxa.v1.Events"}
+	want := []string{"voicx.v1.Control", "voicx.v1.Events"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("registered gRPC services = %v, want %v", got, want)
 	}

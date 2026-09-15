@@ -1,8 +1,8 @@
 syntax = "proto3";
 
-package noxa.v1;
+package voicx.v1;
 
-option go_package = "noxa/v1;noxav1";
+option go_package = "voicx/v1;voicxv1";
 
 // Control service handles authentication, channel management, permission
 // queries, and file transfer control.

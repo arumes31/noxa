@@ -19,7 +19,7 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	Signaling_Signal_FullMethodName = "/noxa.v1.Signaling/Signal"
+	Signaling_Signal_FullMethodName = "/voicx.v1.Signaling/Signal"
 )
 
 // SignalingClient is the client API for Signaling service.
@@ -118,7 +118,7 @@ type Signaling_SignalServer = grpc.BidiStreamingServer[SignalMessage, SignalMess
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
 var Signaling_ServiceDesc = grpc.ServiceDesc{
-	ServiceName: "noxa.v1.Signaling",
+	ServiceName: "voicx.v1.Signaling",
 	HandlerType: (*SignalingServer)(nil),
 	Methods:     []grpc.MethodDesc{},
 	Streams: []grpc.StreamDesc{

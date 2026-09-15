@@ -21,8 +21,10 @@ data or migration checksums. New encrypted exports use `.noxachat`.
 Rename configuration variables from `VOICX_*` to `NOXA_*`. Keep existing database
 credentials, database names, encryption keys and data paths as their values.
 The local `.env` keys are updated by this rename; deployed environments must be
-updated separately. Upgrade gRPC consumers together with the server: generated
-services now use the `noxa.v1` namespace. New invite links use `noxa://`.
+updated separately. Published protobuf descriptors and gRPC method names retain
+the `voicx.v1` namespace for compatibility with existing consumers. Go generator
+mappings produce the renamed `noxa/v1` package without changing the protocol.
+New invite links use `noxa://`.
 
 Fresh Docker deployments use `noxa-*` volume names. To reuse the previous
 deployment's volumes, put these overrides in its `.env` before starting Compose:

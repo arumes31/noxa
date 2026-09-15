@@ -244,7 +244,7 @@ func (s *Server) shutdownTimeout() time.Duration {
 
 // authExempt lists the RPCs that carry their own credentials.
 var authExempt = map[string]bool{
-	"/noxa.v1.Control/Authenticate": true,
+	noxav1.Control_Authenticate_FullMethodName: true,
 }
 
 // authenticate validates the "authorization: Basic <base64>" metadata header

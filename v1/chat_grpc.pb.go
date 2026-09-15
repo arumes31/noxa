@@ -19,11 +19,11 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	Chat_SendChannelChat_FullMethodName      = "/noxa.v1.Chat/SendChannelChat"
-	Chat_SendGlobalChat_FullMethodName       = "/noxa.v1.Chat/SendGlobalChat"
-	Chat_SendDirectMessage_FullMethodName    = "/noxa.v1.Chat/SendDirectMessage"
-	Chat_FetchOfflineMessages_FullMethodName = "/noxa.v1.Chat/FetchOfflineMessages"
-	Chat_AckOfflineMessages_FullMethodName   = "/noxa.v1.Chat/AckOfflineMessages"
+	Chat_SendChannelChat_FullMethodName      = "/voicx.v1.Chat/SendChannelChat"
+	Chat_SendGlobalChat_FullMethodName       = "/voicx.v1.Chat/SendGlobalChat"
+	Chat_SendDirectMessage_FullMethodName    = "/voicx.v1.Chat/SendDirectMessage"
+	Chat_FetchOfflineMessages_FullMethodName = "/voicx.v1.Chat/FetchOfflineMessages"
+	Chat_AckOfflineMessages_FullMethodName   = "/voicx.v1.Chat/AckOfflineMessages"
 )
 
 // ChatClient is the client API for Chat service.
@@ -270,7 +270,7 @@ func _Chat_AckOfflineMessages_Handler(srv interface{}, ctx context.Context, dec 
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
 var Chat_ServiceDesc = grpc.ServiceDesc{
-	ServiceName: "noxa.v1.Chat",
+	ServiceName: "voicx.v1.Chat",
 	HandlerType: (*ChatServer)(nil),
 	Methods: []grpc.MethodDesc{
 		{

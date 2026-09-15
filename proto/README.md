@@ -1,7 +1,8 @@
 # noxa Protocol Buffers
 
 This directory defines the gRPC/Protobuf schema for the noxa voice/video
-server. All files use `syntax = "proto3";` and the package `noxa.v1`.
+server. All files use `syntax = "proto3";` and retain the published package
+`voicx.v1` so existing clients can continue calling the same RPC names.
 
 ## Files
 
@@ -23,10 +24,13 @@ buf lint
 
 ## Generating Go code
 
-The Go stubs are generated and committed under [`v1/`](../v1) (package
-`noxav1`), matching the `go_package` option (`noxa/v1;noxav1`) declared in
-each `.proto` file. Regenerate them after every schema change and commit the
-result — the server (232) compiles against them.
+The Go stubs are generated and committed under [`v1/`](../v1) as package
+`noxav1`, imported from `noxa/v1`. The published `go_package` descriptor remains
+`voicx/v1;voicxv1` for compatibility. The pinned generators use explicit
+[`M` import mappings](https://protobuf.dev/reference/go/go-generated/#packages)
+in `buf.gen.yaml` to place the generated code in the renamed Go module without
+changing those descriptors. Include a mapping for both plugins when adding a
+new schema file. Regenerate after every schema change and commit the result.
 
 Prerequisite (install once):
 
