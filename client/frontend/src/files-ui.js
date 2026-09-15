@@ -5,6 +5,7 @@
 // transfers window with a throughput sparkline (277/278). Folders are
 // virtual (derived from file rows — empty folders do not persist).
 import { humanBytes } from "./clientinfo.js";
+import { copyToClipboard } from "./clipboard.js";
 import { pickIcon } from "./image-tools.js";
 import { closeDialog, confirmDialog, isCurrentServerDialog, mountServerDialog, promptDialog } from "./modal.js";
 import { wrappedIndex } from "./a11y.js";
@@ -300,7 +301,7 @@ function fileRow(e) {
     const sha = tr.querySelector(".fb-sha");
     sha.textContent = (e.sha256 || "").slice(0, 8);
     sha.title = e.sha256 || "";
-    sha.onclick = () => navigator.clipboard.writeText(e.sha256).then(() => V().toast("SHA-256 copied"));
+    sha.onclick = () => copyToClipboard(e.sha256, { success: "SHA-256 copied", isCurrent: () => sha.isConnected });
 
     const act = tr.querySelector(".fb-actions");
     const btn = (label, title, fn) => {
@@ -376,9 +377,10 @@ async function linkFile(e) {
             V().toast("link failed: server returned an invalid download address", "warn");
             return;
         }
-        await navigator.clipboard.writeText(url);
-        if (!fileViewIsCurrent(scope)) return;
-        V().toast("download link copied (valid until " + fmtDate(resp.expires_at * 1000) + ")");
+        await copyToClipboard(url, {
+            success: "download link copied (valid until " + fmtDate(resp.expires_at * 1000) + ")",
+            isCurrent: () => fileViewIsCurrent(scope),
+        });
     } catch (err) {
         if (fileViewIsCurrent(scope)) V().toast("link failed: " + err, "warn");
     }

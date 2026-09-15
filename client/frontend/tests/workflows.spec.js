@@ -1,5 +1,287 @@
 import { expect, test } from "@playwright/test";
 
+async function installSaveScenario(page, settings = {}) {
+    await page.evaluate((settings) => {
+        const app = window.go.main.App;
+        window.__voicx.state.settings = { ...window.__voicx.state.settings, ...settings };
+        window.__persistedSettings = structuredClone(window.__voicx.state.settings);
+        window.__saveAttempts = 0;
+        window.__saveMode = "pending";
+        window.go.main.App = new Proxy(app, { get(target, method) {
+            if (method === "GetSettings") return async () => {
+                if (window.__refreshError) throw new Error("refresh unavailable");
+                return structuredClone(window.__persistedSettings);
+            };
+            if (method === "SaveSettings") return async (value) => {
+                window.__saveAttempts++;
+                const snapshot = structuredClone(value);
+                if (window.__saveMode === "pending") await new Promise(resolve => { window.__finishSave = resolve; });
+                if (window.__saveMode === "reject") throw new Error("disk unavailable");
+                if (window.__saveMode === "error") return "disk full";
+                window.__persistedSettings = snapshot;
+                return "";
+            };
+            return target[method];
+        } });
+    }, settings);
+}
+
+test("offline settings save does not require a live whisper connection", async ({ page }) => {
+    await installSaveScenario(page);
+    await page.evaluate(() => {
+        window.__saveMode = "success";
+        window.__voicx.state.myClientID = "";
+        const app = window.go.main.App;
+        window.go.main.App = new Proxy(app, { get(target, method) {
+            if (method === "WhisperSet") return async () => "not connected";
+            return target[method];
+        } });
+        window.__voicx.openSettings();
+    });
+    await page.locator("#set-ok").click();
+    await expect(page.locator("#settings-overlay")).toHaveCount(0);
+    expect(await page.evaluate(() => window.__saveAttempts)).toBe(1);
+});
+
+test("bookmark retries after persistence succeeds but refreshing settings fails", async ({ page }) => {
+    await installSaveScenario(page, { bookmarks: [{ name: "Original", addr: "example.test:12333", nickname: "Alice" }] });
+    await page.evaluate(() => {
+        window.__saveMode = "success";
+        let failOnce = true;
+        const app = window.go.main.App;
+        window.go.main.App = new Proxy(app, { get(target, method) {
+            if (method === "SaveSettings") return async value => {
+                const error = await target.SaveSettings(value);
+                // The real backend emits settings_update before resolving SaveSettings.
+                for (const cb of window.__events.settings_update || []) cb(structuredClone(window.__persistedSettings));
+                if (failOnce) { window.__refreshError = true; failOnce = false; }
+                return error;
+            };
+            return target[method];
+        } });
+        window.__voicx.showWorkspace(false);
+    });
+    await page.locator("#menubar > .menu-item").filter({ hasText: /^Bookmarks/ }).click();
+    await page.getByRole("menuitem", { name: "Manage bookmarks…", exact: true }).click();
+    await page.locator(".bm-edit").click();
+    const dialog = page.getByRole("dialog", { name: "Edit bookmark", exact: true });
+    await dialog.locator(".bm-f-name").fill("Renamed");
+    await dialog.getByRole("button", { name: "Save", exact: true }).click();
+    await expect(dialog.locator(".bookmark-save-status")).toContainText("refresh unavailable");
+    await page.evaluate(() => { window.__refreshError = false; });
+    await dialog.getByRole("button", { name: "Save", exact: true }).click();
+    await expect(dialog).toHaveCount(0);
+    await expect(page.locator(".bm-name")).toHaveText("Renamed");
+});
+
+test("settings save blocks duplicates, retains draft after failure and retries", async ({ page }) => {
+    const errors = [];
+    page.on("pageerror", error => errors.push(error.message));
+    await installSaveScenario(page);
+    await page.evaluate(() => window.__voicx.openSettings());
+    const dialog = page.locator("#settings-overlay");
+    await page.getByRole("spinbutton", { name: "Chat max lines", exact: true }).fill("777");
+    await page.locator("#set-apply").click();
+    await expect(page.locator("#set-apply")).toBeDisabled();
+    await expect(page.locator("#set-ok")).toBeDisabled();
+    await page.keyboard.press("Escape");
+    await expect(dialog).toBeVisible();
+    await page.evaluate(() => {
+        document.querySelector("#set-ok").click();
+        window.__voicx.openSettings("playback");
+    });
+    expect(await page.evaluate(() => window.__saveAttempts)).toBe(1);
+    await page.evaluate(() => { window.__saveMode = "reject"; window.__finishSave(); });
+    await expect(dialog.locator(".settings-save-status")).toContainText("disk unavailable");
+    await expect(page.locator("#set-apply")).toBeEnabled();
+    await expect(page.getByRole("spinbutton", { name: "Chat max lines", exact: true })).toHaveValue("777");
+    await page.evaluate(() => { window.__saveMode = "error"; });
+    await page.locator("#set-ok").click();
+    await expect(dialog.locator(".settings-save-status")).toContainText("disk full");
+    await expect(dialog).toBeVisible();
+    await page.evaluate(() => { window.__saveMode = "success"; });
+    await page.locator("#set-ok").click();
+    await expect(dialog).toHaveCount(0);
+    expect(await page.evaluate(() => window.__voicx.state.settings.chat_max_lines)).toBe(777);
+    expect(errors).toEqual([]);
+});
+
+test("bookmark save keeps edits on failure and commits only on success", async ({ page }) => {
+    await installSaveScenario(page, { bookmarks: [{ name: "Original", addr: "example.test:12333", nickname: "Alice" }] });
+    await page.evaluate(() => window.__voicx.showWorkspace(false));
+    await page.locator("#menubar > .menu-item").filter({ hasText: /^Bookmarks/ }).click();
+    await page.getByRole("menuitem", { name: "Manage bookmarks…", exact: true }).click();
+    await page.locator(".bm-edit").click();
+    const dialog = page.getByRole("dialog", { name: "Edit bookmark", exact: true });
+    await dialog.locator(".bm-f-name").fill("Renamed");
+    await dialog.getByRole("button", { name: "Save", exact: true }).click();
+    await expect(dialog).toBeVisible();
+    await expect(dialog.getByRole("button", { name: "Saving…", exact: true })).toBeDisabled();
+    expect(await page.evaluate(() => window.__voicx.state.settings.bookmarks[0].name)).toBe("Original");
+    await page.keyboard.press("Escape");
+    await expect(dialog).toBeVisible();
+    await page.evaluate(() => { window.__saveMode = "error"; window.__finishSave(); });
+    await expect(dialog.locator(".bookmark-save-status")).toContainText("disk full");
+    await expect(dialog.locator(".bm-f-name")).toHaveValue("Renamed");
+    await page.evaluate(() => { window.__saveMode = "reject"; });
+    await dialog.getByRole("button", { name: "Save", exact: true }).click();
+    await expect(dialog.locator(".bookmark-save-status")).toContainText("disk unavailable");
+    await page.evaluate(() => { window.__saveMode = "success"; });
+    await dialog.getByRole("button", { name: "Save", exact: true }).click();
+    await expect(dialog).toHaveCount(0);
+    await expect(page.locator(".bm-name")).toHaveText("Renamed");
+    expect(await page.evaluate(() => window.__voicx.state.settings.bookmarks[0].name)).toBe("Renamed");
+});
+
+test("DND save reports errors and changes state only after success", async ({ page }) => {
+    await installSaveScenario(page, { dnd_enabled: false });
+    await page.evaluate(() => {
+        window.__voicx.showWorkspace(false);
+        window.__dndFeedback = [];
+        window.__voicx.toast = (...args) => window.__dndFeedback.push(args);
+    });
+    const toggle = async () => {
+        await page.locator("#menubar > .menu-item").filter({ hasText: /^View/ }).click();
+        await page.getByRole("menuitem", { name: "Do not disturb", exact: true }).click();
+    };
+    await toggle();
+    expect(await page.evaluate(() => window.__voicx.state.settings.dnd_enabled)).toBe(false);
+    await toggle();
+    expect(await page.evaluate(() => window.__saveAttempts)).toBe(1);
+    await page.evaluate(() => { window.__saveMode = "error"; window.__finishSave(); });
+    await expect.poll(() => page.evaluate(() => window.__dndFeedback)).toEqual([["save failed: disk full", "warn", "alert", { bypassDND: true }]]);
+    expect(await page.evaluate(() => window.__voicx.state.settings.dnd_enabled)).toBe(false);
+    await page.evaluate(() => { window.__saveMode = "reject"; });
+    await toggle();
+    await expect.poll(() => page.evaluate(() => window.__dndFeedback.at(-1))).toEqual(["save failed: disk unavailable", "warn", "alert", { bypassDND: true }]);
+    await page.evaluate(() => { window.__saveMode = "success"; });
+    await toggle();
+    await expect.poll(() => page.evaluate(() => window.__voicx.state.settings.dnd_enabled)).toBe(true);
+    expect(await page.evaluate(() => window.__dndFeedback.at(-1))).toEqual(["do not disturb on", "info", "alert", { bypassDND: true }]);
+});
+
+test("DND disable failures remain visible while ordinary notifications stay muted", async ({ page }) => {
+    await installSaveScenario(page, { dnd_enabled: true });
+    await page.evaluate(() => {
+        window.__voicx.showWorkspace(false);
+        window.__saveMode = "error";
+        window.__voicx.toast("ordinary notification");
+    });
+    await expect(page.locator("#toasts .toast").filter({ hasText: "ordinary notification" })).toHaveCount(0);
+    await page.locator("#menubar > .menu-item").filter({ hasText: /^View/ }).click();
+    await page.getByRole("menuitem", { name: "Do not disturb", exact: true }).click();
+    await expect(page.locator("#toasts .toast").filter({ hasText: "save failed: disk full" })).toBeVisible();
+    expect(await page.evaluate(() => window.__voicx.state.settings.dnd_enabled)).toBe(true);
+});
+
+test("audio output failures warn once and ignore obsolete selections", async ({ page }) => {
+    await page.evaluate(() => {
+        window.__voicx.state.settings.playback_device_id = "missing-speaker";
+        const element = { setSinkId: async () => { throw new Error("device missing"); } };
+        for (let n = 0; n < 5; n++) window.__voicx.applyOutputSettings(element);
+    });
+    await expect(page.locator("#toasts .toast").filter({ hasText: "Could not switch audio output" })).toHaveCount(1);
+    await page.evaluate(async () => {
+        window.__voicx.state.settings.playback_device_id = "old-speaker";
+        window.__voicx.applyOutputSettings({ setSinkId: () => new Promise((_, reject) => { window.__failOldOutput = reject; }) });
+        await Promise.resolve();
+        window.__voicx.state.settings.playback_device_id = "working-speaker";
+        window.__failOldOutput(new Error("obsolete error"));
+    });
+    await expect(page.locator("#toasts .toast").filter({ hasText: "Could not switch audio output" })).toHaveCount(1);
+});
+
+test("settings search announces counts and explains the result cap", async ({ page }, testInfo) => {
+    await page.evaluate(() => window.__voicx.openSettings());
+    const search = page.locator("#settings-search");
+    await search.fill("a");
+    await expect(page.locator(".set-search-hit")).toHaveCount(40);
+    await expect(page.locator(".settings-search-summary")).toContainText(/Showing 40 of \d+ results\. Narrow your search/);
+    await page.screenshot({ path: testInfo.outputPath("settings-search-count.png") });
+    await search.fill("voice volume");
+    await expect(page.locator(".settings-search-summary")).toHaveText("1 result");
+    await search.fill("nothing-matches-this-value");
+    await expect(page.locator(".settings-search-summary")).toHaveText("0 results");
+    await search.fill("");
+    await expect(page.locator(".settings-search-summary")).toBeHidden();
+    await page.evaluate(async () => (await import("/src/i18n.js")).setLanguage("de"));
+    await search.fill("sprachlautstärke");
+    await expect(page.locator(".settings-search-summary")).toHaveText("1 Ergebnis");
+    await search.fill("a");
+    await expect(page.locator(".settings-search-summary")).toContainText(/40 von \d+ Ergebnissen angezeigt/);
+});
+
+test("settings search reuses labels and invalidates after edits, language changes and reopen", async ({ page }) => {
+    const errors = [];
+    page.on("pageerror", error => errors.push(error.message));
+    await page.evaluate(() => {
+        window.__voicx.openSettings();
+        window.__searchControls = 0;
+        const createElement = document.createElement.bind(document);
+        document.createElement = (name, options) => {
+            if (name === "select") window.__searchControls++;
+            return createElement(name, options);
+        };
+    });
+    const search = page.locator("#settings-search");
+    await search.fill("volume");
+    await expect(page.locator(".set-search-hit").first()).toBeVisible();
+    const firstBuild = await page.evaluate(() => window.__searchControls);
+    expect(firstBuild).toBeGreaterThan(0);
+    await search.fill("volum");
+    await search.fill("volume");
+    expect(await page.evaluate(() => window.__searchControls)).toBe(firstBuild);
+    expect(await page.evaluate(() => window.__calls.ListIdentities || 0)).toBe(0);
+    await search.fill("voice volume");
+    await page.locator(".set-search-hit").first().click();
+    await expect(page.getByRole("slider", { name: "Voice volume", exact: true })).toBeVisible();
+    await page.getByRole("slider", { name: "Voice volume", exact: true }).fill("65");
+    const beforeEditedSearch = await page.evaluate(() => window.__searchControls);
+    await search.fill("volume");
+    expect(await page.evaluate(() => window.__searchControls)).toBeGreaterThan(beforeEditedSearch);
+    await page.evaluate(async () => (await import("/src/i18n.js")).setLanguage("de"));
+    const beforeGermanSearch = await page.evaluate(() => window.__searchControls);
+    await search.fill("lautstärke");
+    await expect(page.locator(".set-search-hit").first()).toContainText("Wiedergabe");
+    const germanBuild = await page.evaluate(() => window.__searchControls);
+    expect(germanBuild).toBeGreaterThan(beforeGermanSearch);
+    await search.fill("lautstärk");
+    expect(await page.evaluate(() => window.__searchControls)).toBe(germanBuild);
+    await page.keyboard.press("Escape");
+    await page.evaluate(async () => {
+        (await import("/src/i18n.js")).setLanguage("en");
+        window.__voicx.openSettings();
+    });
+    const beforeReopenedSearch = await page.evaluate(() => window.__searchControls);
+    await search.fill("volume");
+    expect(await page.evaluate(() => window.__searchControls)).toBeGreaterThan(beforeReopenedSearch);
+    expect(errors).toEqual([]);
+});
+
+test("German menus translate remaining actions and bookmark dialogs", async ({ page }, testInfo) => {
+    await page.evaluate(async () => {
+        window.__voicx.showWorkspace(false);
+        (await import("/src/i18n.js")).setLanguage("de");
+        (await import("/src/menu.js")).initMenu();
+    });
+    await page.getByRole("menuitem", { name: "Ansicht", exact: true }).click();
+    for (const name of ["Details ein-/ausblenden", "Chat in eigenem Fenster", "Nicht stören", "Immer im Vordergrund", "Design: dunkel", "Design: hell", "Design: hoher Kontrast"]) {
+        await expect(page.getByRole("menuitem", { name, exact: true })).toBeVisible();
+    }
+    await page.screenshot({ path: testInfo.outputPath("german-view-menu.png") });
+    await page.keyboard.press("Escape");
+    await page.getByRole("menuitem", { name: "Lesezeichen", exact: true }).click();
+    await expect(page.getByRole("menuitem", { name: "Aktuellen Server als Lesezeichen speichern", exact: true })).toBeVisible();
+    await page.getByRole("menuitem", { name: "Lesezeichen verwalten…", exact: true }).click();
+    const dialog = page.getByRole("dialog", { name: "Lesezeichen verwalten", exact: true });
+    await expect(dialog).toContainText("Noch keine Lesezeichen");
+    await dialog.getByRole("button", { name: "Schließen", exact: true }).click();
+    await page.getByRole("menuitem", { name: "Selbst", exact: true }).click();
+    await page.getByRole("menuitem", { name: "Spitznamen ändern…", exact: true }).click();
+    await expect(page.getByRole("dialog", { name: "Spitznamen ändern", exact: true })).toContainText("Spitzname für die nächste Verbindung:");
+    await page.getByRole("button", { name: "Abbrechen", exact: true }).click();
+});
+
 test("client language translates every settings page and persists on Apply @a11y", async ({ page }, testInfo) => {
     const errors = [];
     page.on("pageerror", error => errors.push(error.message));
@@ -3568,6 +3850,54 @@ test("activates tree rows and workspace views from the keyboard with loading fee
     await expect(page.locator("#tab-files")).toHaveAttribute("aria-selected", "true");
     await page.keyboard.press("Home");
     await expect(page.locator("#tab-chat")).toHaveAttribute("aria-selected", "true");
+});
+
+test("notification center updates live and resumes unread counting after every close path", async ({ page }) => {
+    await page.evaluate(() => window.__voicx.showWorkspace(false));
+    const bell = page.locator("#notif-bell");
+    const rows = page.locator(".nc-row");
+    for (const close of ["button", "escape", "backdrop", "remove"]) {
+        await bell.click();
+        await page.getByRole("button", { name: "Clear all notifications" }).click();
+        await expect(page.locator(".nc-list")).toHaveText("no notifications");
+        await page.evaluate(() => window.__voicxPolish.recordNotification("message", "new arrival"));
+        await expect(rows).toHaveCount(1);
+        await expect(rows.first()).toContainText("new arrival");
+        await expect(bell).toHaveAttribute("aria-label", "Notifications, 0 unread");
+        await expect(page.locator("#notif-badge")).toHaveClass(/hidden/);
+        if (close === "button") await page.getByRole("button", { name: "Close notifications" }).click();
+        if (close === "escape") await page.keyboard.press("Escape");
+        if (close === "backdrop") await page.locator(".dlg-overlay").click({ position: { x: 2, y: 2 } });
+        await page.evaluate((close) => {
+            if (close === "remove") document.querySelector(".notif-center").closest(".dlg-overlay").remove();
+            // Direct removal and arrival can happen before lifecycle observers run.
+            window.__voicxPolish.recordNotification("message", "after closing");
+        }, close);
+        await expect(page.locator(".notif-center")).toHaveCount(0);
+        await expect(bell).toHaveAttribute("aria-label", "Notifications, 1 unread");
+    }
+});
+
+test("live notifications preserve focused rows and scrolling while limiting history to 50", async ({ page }, testInfo) => {
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    await page.evaluate(() => {
+        window.__voicx.showWorkspace(false);
+        for (let i = 0; i < 50; i++) window.__voicxPolish.recordNotification("message", `arrival ${i}`, { uid: `user-${i}` });
+    });
+    await page.locator("#notif-bell").click();
+    const focused = page.locator(".nc-row").filter({ hasText: /^messagearrival 30/ });
+    await focused.focus();
+    const before = await focused.evaluate(row => row.getBoundingClientRect().top);
+    await page.evaluate(() => window.__voicxPolish.recordNotification("message", "latest arrival", { uid: "latest" }));
+    await expect(page.locator(".nc-row")).toHaveCount(50);
+    await expect(page.locator(".nc-row").first()).toContainText("latest arrival");
+    await expect(focused).toBeFocused();
+    expect(Math.abs(await focused.evaluate(row => row.getBoundingClientRect().top) - before)).toBeLessThan(2);
+    await expect(page.locator(".nc-text").filter({ hasText: /^arrival 0$/ })).toHaveCount(0);
+    await page.screenshot({ path: testInfo.outputPath("notifications-live.png") });
+    await page.locator(".nc-row").last().focus();
+    await page.evaluate(() => window.__voicxPolish.recordNotification("message", "one more arrival"));
+    await expect(page.getByRole("button", { name: "Close notifications" })).toBeFocused();
 });
 
 test("keeps unread notification labels exact while the visual badge is capped", async ({ page }) => {

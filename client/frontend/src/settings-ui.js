@@ -1,5 +1,6 @@
 // settings-ui.js — TS3-style settings dialog with left icon nav.
 import { currentLanguage, t } from "./i18n.js";
+import { copyToClipboard } from "./clipboard.js";
 import { calibrateMic, startLoopback } from "./audio.js";
 import { previewSounds, previewSpeech, stopPreviews, updateSoundOutput, SOUND_EVENT_GROUPS, testAll } from "./sounds.js";
 import { MATRIX_EVENTS, defaultMatrixRow } from "./notifications.js";
@@ -28,12 +29,9 @@ let stopCameraTest = () => {};
 
 function settings() { return draft; }
 
-async function commit() {
-    const err = await window.go.main.App.SaveSettings(draft);
-    if (err) {
-        V().toast(t("settings.settings.not.saved") + err, "warn");
-        return false;
-    }
+async function commit(snapshot) {
+    const err = await window.go.main.App.SaveSettings(snapshot);
+    if (err) throw new Error(err);
     // (282) the draft was cloned when the dialog opened: re-read the merged
     // truth so Go-owned fields (recents) written meanwhile survive.
     V().state.settings = await window.go.main.App.GetSettings();
@@ -43,8 +41,8 @@ async function commit() {
     // (294-297) appearance applies live (theme/accent/user CSS/font/compact).
     if (V().applyAppearance) V().applyAppearance();
     // (291) always-on-top and (292) opacity apply immediately.
-    window.go.main.App.SetAlwaysOnTop(!!draft.always_on_top);
-    window.go.main.App.SetWindowOpacity(draft.window_opacity || 100);
+    await window.go.main.App.SetAlwaysOnTop(!!snapshot.always_on_top);
+    await window.go.main.App.SetWindowOpacity(snapshot.window_opacity || 100);
     return true;
 }
 
@@ -1024,7 +1022,7 @@ async function refreshIdentities(tbody) {
         uid.title = e.unique_id || "";
         uid.onclick = () => {
             if (!e.unique_id) return;
-            navigator.clipboard.writeText(e.unique_id).then(() => V().toast(t("settings.unique.id.copied")));
+            void copyToClipboard(e.unique_id, { success: t("settings.unique.id.copied"), isCurrent: () => uid.isConnected });
         };
         tr.appendChild(uid);
 
@@ -1122,7 +1120,7 @@ function pageSecurity() {
     tableScroll.setAttribute("aria-label", t("settings.identities"));
     tableScroll.appendChild(table);
     el.appendChild(tableScroll);
-    // (350) the settings search rebuilds every page on each keystroke; only
+    // Search builds detached pages to index their labels; only
     // the page that is really on screen may hit the identity store, which
     // unseals a protected key per row.
     setTimeout(() => { if (tbody.isConnected) refreshIdentities(tbody); }, 0);
@@ -1349,6 +1347,8 @@ function renderPage(id) {
         n.tabIndex = active ? 0 : -1;
     });
     const container = document.getElementById("settings-content");
+    const summary = document.querySelector(".settings-search-summary");
+    if (summary) { summary.textContent = ""; summary.hidden = true; }
     container.setAttribute("aria-labelledby", `settings-page-${id}`);
     container.innerHTML = "";
     container.appendChild(PAGE_BUILDERS[id]());
@@ -1368,6 +1368,7 @@ function translateDialog(overlay) {
 }
 
 function openSettings(pageId = "application") {
+    if (document.getElementById("settings-overlay")?.getAttribute("aria-busy") === "true") return;
     draft = JSON.parse(JSON.stringify(V().state.settings || {}));
     deviceInventory.invalidate();
 
@@ -1384,7 +1385,9 @@ function openSettings(pageId = "application") {
             <div class="settings-main">
                 <label class="sr-only" for="settings-search"></label>
                 <input id="settings-search" class="dlg-input" placeholder="" autocomplete="off" />
+                <div class="settings-search-summary set-hint" role="status" hidden></div>
                 <div id="settings-content" role="tabpanel"></div>
+                <div class="settings-save-status set-hint" role="status" hidden></div>
                 <div class="settings-footer">
                     <button id="set-ok"></button>
                     <button id="set-cancel"></button>
@@ -1398,23 +1401,42 @@ function openSettings(pageId = "application") {
     const search = overlay.querySelector("#settings-search");
     search.placeholder = t("settings.searchPlaceholder");
     const content = overlay.querySelector("#settings-content");
+    const summary = overlay.querySelector(".settings-search-summary");
+    // Keep only text, not detached controls or their callbacks. Draft edits
+    // invalidate dynamic labels; the cache is discarded with this dialog.
+    let searchIndex = null;
+    let searchLanguage = "";
+    const invalidateSearch = () => { searchIndex = null; };
+    content.addEventListener("input", invalidateSearch);
+    content.addEventListener("change", invalidateSearch);
+    content.addEventListener("click", (event) => {
+        if (!event.target.closest(".set-search-hit")) invalidateSearch();
+    });
     search.oninput = () => {
         stopPreviews();
         stopCameraTest();
+        cancelHotkeyCapture();
         const q = search.value.trim().toLowerCase();
         if (!q) {
             renderPage(document.querySelector(".settings-nav-item.active")?.dataset.page || "application");
             return;
         }
-        // Search all pages; collect matches as (page, label).
-        const hits = [];
-        for (const p of PAGES) {
-            const pageEl = PAGE_BUILDERS[p.id]();
-            pageEl.querySelectorAll(".set-row, .set-subhead, .set-hint, button").forEach((r) => {
-                const label = (r.querySelector(".set-label")?.textContent || r.textContent || "").toLowerCase();
-                if (label.includes(q)) hits.push({ page: p.id, label: label.trim() });
-            });
+        if (!searchIndex || searchLanguage !== currentLanguage()) {
+            searchIndex = [];
+            searchLanguage = currentLanguage();
+            for (const p of PAGES) {
+                const pageEl = PAGE_BUILDERS[p.id]();
+                pageEl.querySelectorAll(".set-row, .set-subhead, .set-hint, button").forEach((r) => {
+                    const label = (r.querySelector(".set-label")?.textContent || r.textContent || "").toLowerCase().trim();
+                    searchIndex.push({ page: p.id, label });
+                });
+            }
         }
+        const hits = searchIndex.filter(hit => hit.label.includes(q));
+        summary.hidden = false;
+        summary.textContent = hits.length > 40
+            ? t("settings.searchLimited", { shown: 40, total: hits.length })
+            : t(hits.length === 1 ? "settings.searchOne" : "settings.searchCount", { count: hits.length });
         content.innerHTML = "";
         if (hits.length === 0) {
             const empty = document.createElement("div");
@@ -1468,20 +1490,58 @@ function openSettings(pageId = "application") {
         nav.appendChild(item);
     }
 
+    let saving = false;
+    const saveStatus = overlay.querySelector(".settings-save-status");
     const applyAll = async () => {
+        if (saving) return false;
+        saving = true;
+        const snapshot = structuredClone(draft);
         const previousLanguage = currentLanguage();
-        if (!(await commit())) return false;
-        if (previousLanguage !== currentLanguage()) {
-            translateDialog(overlay);
-            if (search.value) search.oninput();
-            else renderPage(overlay.querySelector(".settings-nav-item.active")?.dataset.page || "application");
+        const serverGeneration = V().state.serverGeneration;
+        const focused = document.activeElement;
+        overlay.setAttribute("aria-busy", "true");
+        for (const button of overlay.querySelectorAll(".settings-footer button")) button.disabled = true;
+        search.disabled = true;
+        nav.inert = true;
+        content.inert = true;
+        saveStatus.hidden = false;
+        saveStatus.classList.remove("warn");
+        saveStatus.textContent = t("common.saving");
+        try {
+            await commit(snapshot);
+            if (!overlay.isConnected) return false;
+            if (previousLanguage !== currentLanguage()) {
+                translateDialog(overlay);
+                if (search.value) search.oninput();
+                else renderPage(overlay.querySelector(".settings-nav-item.active")?.dataset.page || "application");
+            }
+            // Local preferences also save while disconnected. A live whisper
+            // update belongs only to the server where this save began.
+            if (V().state.myClientID && serverGeneration === V().state.serverGeneration) {
+                const error = await window.go.main.App.WhisperSet(
+                    snapshot.whisper_active ? snapshot.whisper_clients || [] : [],
+                    snapshot.whisper_active ? snapshot.whisper_channels || [] : [],
+                    !!snapshot.whisper_active,
+                );
+                if (error) throw new Error(error);
+            }
+            saveStatus.textContent = t("settings.saved");
+            return true;
+        } catch (error) {
+            if (overlay.isConnected) {
+                saveStatus.textContent = t("menu.saveFailed", { error: error.message || String(error) });
+                saveStatus.classList.add("warn");
+            }
+            return false;
+        } finally {
+            saving = false;
+            overlay.removeAttribute("aria-busy");
+            for (const button of overlay.querySelectorAll(".settings-footer button")) button.disabled = false;
+            search.disabled = false;
+            nav.inert = false;
+            content.inert = false;
+            if (overlay.isConnected && focused?.isConnected) focused.focus();
         }
-        if (draft.whisper_active) {
-            window.go.main.App.WhisperSet(draft.whisper_clients || [], draft.whisper_channels || [], true);
-        } else {
-            window.go.main.App.WhisperSet([], [], false);
-        }
-        return true;
     };
 
     overlay.querySelector("#set-ok").onclick = async () => {
@@ -1494,6 +1554,7 @@ function openSettings(pageId = "application") {
 
     translateDialog(overlay);
     mountDialog(overlay, {
+        onCancel: () => !saving,
         onClose: () => {
             stopPreviews();
             stopCameraTest();

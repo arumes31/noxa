@@ -1,6 +1,7 @@
 // clientinfo.js — right-click context menu on channel-tree users and the
 // TS3-style Client Info dialog (live-refreshing).
 import { getUserVolume, isUserMuted, setUserMuted, setUserVolume } from "./audio.js";
+import { copyToClipboard } from "./clipboard.js";
 import { pickIcon } from "./image-tools.js";
 import { closeDialog, isCurrentServerDialog, mountServerDialog } from "./modal.js";
 
@@ -75,9 +76,7 @@ function openContextMenu(x, y, client) {
     };
     menuEl.querySelector('[data-act="copy"]').onclick = () => {
         closeMenu();
-        navigator.clipboard.writeText(client.unique_id).then(() => {
-            V().toast("unique ID copied");
-        });
+        void copyToClipboard(client.unique_id, { success: "unique ID copied" });
     };
     menuEl.querySelector('[data-act="mute"]').onclick = async () => {
         closeMenu();
@@ -356,7 +355,7 @@ function openClientInfo(client) {
 
     overlay.querySelector(".ci-nick").textContent = client.nickname || client.unique_id;
     overlay.querySelector(".ci-copy").onclick = () => {
-        navigator.clipboard.writeText(client.unique_id).then(() => V().toast("unique ID copied"));
+        void copyToClipboard(client.unique_id, { success: "unique ID copied", isCurrent: () => overlay.isConnected });
     };
     // (314) avatar full view on click; (325) click-to-copy chips.
     const card = document.querySelector(`#client-card .card-avatar img`);
@@ -562,11 +561,11 @@ function openChannelMenu(x, y, channel) {
     };
     menuEl.querySelector('[data-act="copy-id"]').onclick = () => {
         closeMenu();
-        navigator.clipboard.writeText(String(channel.ChannelID)).then(() => V().toast("channel ID copied"));
+        void copyToClipboard(String(channel.ChannelID), { success: "channel ID copied" });
     };
     menuEl.querySelector('[data-act="copy-addr"]').onclick = () => {
         closeMenu();
-        navigator.clipboard.writeText(V().state.lastConnect?.addr || "").then(() => V().toast("server address copied"));
+        void copyToClipboard(V().state.lastConnect?.addr || "", { success: "server address copied" });
     };
     for (const a of menuEl.querySelectorAll('[data-act^="recent-"]')) {
         a.onclick = () => {

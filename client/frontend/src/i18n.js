@@ -12,9 +12,11 @@
 //      startup). Every settings page uses the same catalogs.
 
 import { settingsEnglish, settingsGerman } from "./settings-messages.js";
+import { interfaceEnglish, interfaceGerman } from "./interface-messages.js";
 
 const en = {
     ...settingsEnglish,
+    ...interfaceEnglish,
     "menu.connections": "Connections",
     "menu.bookmarks": "Bookmarks",
     "menu.self": "Self",
@@ -75,6 +77,7 @@ const en = {
 
 const de = {
     ...settingsGerman,
+    ...interfaceGerman,
     "menu.connections": "Verbindungen",
     "menu.bookmarks": "Lesezeichen",
     "menu.self": "Selbst",

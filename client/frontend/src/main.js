@@ -32,7 +32,7 @@ import { initMetaUI } from "./meta-ui.js";
 import { initPolishUI } from "./polish-ui.js";
 import { imageDataURL, setSafeImage } from "./safe-media.js";
 import { initNotifications } from "./notifications.js";
-import { setLanguage, currentLanguage, applyStaticLabels } from "./i18n.js";
+import { setLanguage, currentLanguage, applyStaticLabels, t } from "./i18n.js";
 import { extractPresentedFingerprint } from "./security.js";
 import { isActivationKey } from "./a11y.js";
 import { createLiveAnnouncementQueue } from "./live-announcer.js";
@@ -136,7 +136,7 @@ function toast(text, kind = "info", category = "alert", options = {}) {
     // (346) record into the notification center; (347/348) DND suppresses
     // visible toasts but still records them silently.
     if (options.record !== false) window.__voicxPolish?.recordNotification(kind, text, {});
-    if (window.__voicxPolish?.dndActive?.()) return;
+    if (!options.bypassDND && window.__voicxPolish?.dndActive?.()) return;
     if (options.announce !== false) announceLive(text, kind === "warn" ? "assertive" : "polite");
     const el = document.createElement("div");
     el.className = "toast " + kind;
@@ -2798,12 +2798,32 @@ function warnEmptyChannel() {
 }
 
 // Output settings: volume + sink for remote media elements.
+let lastOutputDevice = "";
+let outputWarningShown = false;
+let outputSelection = 0;
+
+async function selectAudioOutput(target) {
+    const deviceID = state.settings?.playback_device_id || "";
+    if (deviceID !== lastOutputDevice) {
+        lastOutputDevice = deviceID;
+        outputWarningShown = false;
+        outputSelection++;
+    }
+    if (typeof target.setSinkId !== "function") return;
+    const selection = outputSelection;
+    try {
+        await target.setSinkId(deviceID);
+    } catch {
+        if (selection !== outputSelection || deviceID !== (state.settings?.playback_device_id || "") || target.state === "closed" || outputWarningShown) return;
+        outputWarningShown = true;
+        toast(t("audio.outputSwitchFailed"), "warn");
+    }
+}
+
 function applyOutputSettings(el) {
     const s = state.settings || {};
     el.volume = Math.min(1, (s.volume ?? 100) / 100);
-    if (s.playback_device_id && el.setSinkId) {
-        el.setSinkId(s.playback_device_id).catch(() => {});
-    }
+    void selectAudioOutput(el);
     el.muted = state.deafened;
     if (remoteChain.master) {
         remoteChain.master.gain.value = Math.min(2, (s.volume ?? 100) / 100);
@@ -2841,10 +2861,7 @@ function ensureRemoteChain() {
         out.connect(ctx.destination);
 
         // Output device selection where supported (Chrome 110+).
-        const s = state.settings || {};
-        if (s.playback_device_id && typeof ctx.setSinkId === "function") {
-            ctx.setSinkId(s.playback_device_id).catch(() => {});
-        }
+        void selectAudioOutput(ctx);
         return true;
     } catch (e) {
         sysMsg("remote audio chain failed: " + e);

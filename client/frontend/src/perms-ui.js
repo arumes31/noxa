@@ -3,6 +3,7 @@
 // icons), the audit log viewer, and the ban list dialog. All views degrade
 // gracefully for non-privileged users (read-only notice instead of controls).
 import { pickIcon } from "./image-tools.js";
+import { copyToClipboard } from "./clipboard.js";
 import { closeDialog, isCurrentServerDialog, mountServerDialog, registerDialogLifecycle } from "./modal.js";
 import { imageDataURL } from "./safe-media.js";
 import { parseRuntimeObject } from "./runtime-json.js";
@@ -1811,17 +1812,6 @@ const canTokenList = () => hasPerm("b_virtualserver_token_list");
 const canTokenAdd = () => hasPerm("b_virtualserver_token_add");
 const canTokenDelete = () => hasPerm("b_virtualserver_token_delete");
 
-// copyText copies to the clipboard and reports without echoing the value —
-// a privilege key must never reach a toast or a log line.
-async function copyText(value, what) {
-    try {
-        await navigator.clipboard.writeText(value);
-        V().toast(what + " copied to the clipboard");
-    } catch {
-        V().toast("clipboard unavailable", "warn");
-    }
-}
-
 // openTokenShare shows the handoff surface for one key: the raw key, the
 // invite link, and a QR of the link.
 function openTokenShare(token) {
@@ -1854,8 +1844,8 @@ function openTokenShare(token) {
     } else {
         q(".tk-qr-note").textContent = "link too long for a QR code — copy it instead";
     }
-    q(".tk-copy-key").onclick = () => copyText(token, "key");
-    q(".tk-copy-link").onclick = () => copyText(link, "invite link");
+    q(".tk-copy-key").onclick = () => copyToClipboard(token, { success: "key copied to the clipboard", isCurrent: () => overlay.isConnected });
+    q(".tk-copy-link").onclick = () => copyToClipboard(link, { success: "invite link copied to the clipboard", isCurrent: () => overlay.isConnected });
     q(".dlg-ok").onclick = () => overlay.remove();
 }
 

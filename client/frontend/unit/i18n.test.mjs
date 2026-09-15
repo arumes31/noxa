@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { afterEach, describe, it, mock } from "node:test";
 import { readFileSync } from "node:fs";
 import { settingsEnglish, settingsGerman } from "../src/settings-messages.js";
+import { interfaceEnglish, interfaceGerman } from "../src/interface-messages.js";
 import { SOUND_DEFINITIONS, SOUND_EVENT_GROUPS } from "../src/sound-catalog.js";
 
 import { applyStaticLabels, catalogParity, currentLanguage, interpolate, setLanguage, t } from "../src/i18n.js";
@@ -21,6 +22,23 @@ afterEach(() => {
 });
 
 describe("language selection and translation", () => {
+    it("covers menu and updater text in both languages with matching placeholders", () => {
+        assert.deepEqual(Object.keys(interfaceEnglish).sort(), Object.keys(interfaceGerman).sort());
+        for (const [key, english] of Object.entries(interfaceEnglish)) {
+            const placeholders = text => [...text.matchAll(/\{([^}]+)\}/g)].map(match => match[1]).sort();
+            assert.ok(interfaceGerman[key].trim(), key);
+            assert.deepEqual(placeholders(english), placeholders(interfaceGerman[key]), key);
+        }
+        for (const name of ["menu", "updater", "clipboard"]) {
+            const source = readFileSync(new URL(`../src/${name}.js`, import.meta.url), "utf8");
+            for (const language of ["en", "de"]) {
+                setLanguage(language);
+                for (const [, key] of source.matchAll(/\bt\("([^"]+)"/g)) {
+                    assert.notEqual(t(key), key, `${name}: missing ${language} ${key}`);
+                }
+            }
+        }
+    });
     it("covers settings keys, sound events and matching placeholders in both languages", () => {
         assert.deepEqual(Object.keys(settingsEnglish).sort(), Object.keys(settingsGerman).sort());
         const source = readFileSync(new URL("../src/settings-ui.js", import.meta.url), "utf8");

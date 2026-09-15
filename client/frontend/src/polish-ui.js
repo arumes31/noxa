@@ -245,11 +245,13 @@ function announce(text) {
 // ---------------------------------------------------------------------------
 
 const notifHistory = []; // {kind, text, at, channelID, uid}
+const notifViews = new Set();
 
 // recordNotification appends to the bell history (session-persisted, 50).
 export function recordNotification(kind, text, ctx = {}) {
     notifHistory.unshift({ kind, text, at: Date.now(), ...ctx });
     if (notifHistory.length > 50) notifHistory.pop();
+    for (const render of notifViews) render();
     updateBellBadge();
 }
 
@@ -285,10 +287,30 @@ function openNotifCenter() {
     updateBellBadge();
     const overlay = document.createElement("div");
     overlay.className = "dlg-overlay";
+    const rows = new Map();
     const render = () => {
+        // Removal can precede the shared modal lifecycle's cleanup observer.
+        if (!overlay.isConnected) {
+            notifViews.delete(render);
+            return;
+        }
         const list = overlay.querySelector(".nc-list");
-        list.innerHTML = notifHistory.length ? "" : `<div class="empty-state">no notifications</div>`;
+        const focused = document.activeElement;
+        const hadFocus = list.contains(focused);
+        const anchor = list.scrollTop > 0
+            ? [...list.children].find(row => row.getBoundingClientRect().bottom > list.getBoundingClientRect().top)
+            : null;
+        const anchorTop = anchor?.getBoundingClientRect().top;
+        for (const [n, row] of rows) {
+            if (notifHistory.includes(n)) continue;
+            row.remove();
+            rows.delete(n);
+        }
+        list.querySelector(".empty-state")?.remove();
+        if (!notifHistory.length) list.innerHTML = `<div class="empty-state">no notifications</div>`;
         for (const n of notifHistory) {
+            n.read = true;
+            if (rows.has(n)) continue;
             const row = document.createElement("div");
             row.className = "nc-row";
             row.classList.toggle("nc-warning", n.kind === "warn");
@@ -321,8 +343,11 @@ function openNotifCenter() {
                     row.click();
                 });
             }
-            list.appendChild(row);
+            rows.set(n, row);
+            list.insertBefore(row, list.children[notifHistory.indexOf(n)] || null);
         }
+        if (anchor?.isConnected) list.scrollTop += anchor.getBoundingClientRect().top - anchorTop;
+        if (hadFocus && !focused.isConnected) overlay.querySelector(".nc-close").focus({ preventScroll: true });
     };
     overlay.innerHTML = `
         <div class="dlg notif-center">
@@ -340,7 +365,8 @@ function openNotifCenter() {
         render();
     };
     overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
-    mountDialog(overlay);
+    mountDialog(overlay, { onClose: () => notifViews.delete(render) });
+    notifViews.add(render);
     render();
 }
 
