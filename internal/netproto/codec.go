@@ -475,6 +475,7 @@ type Authenticate struct {
 }
 
 // CapabilityGroupAssignAck advertises support for GroupAssign.AckRequested.
+// #nosec G101 -- this is a protocol capability identifier, not a credential.
 const CapabilityGroupAssignAck = "group_assign_ack"
 
 // AuthResponse is the server's reply to an Authenticate message.
