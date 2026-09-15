@@ -9,8 +9,46 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"testing"
 )
+
+func TestTrayPNGToICODimensions(t *testing.T) {
+	data := []byte("payload")
+	for _, size := range []int{-1, 0, 1, 32, 255, 256, 257} {
+		t.Run(strconv.Itoa(size), func(t *testing.T) {
+			ico := trayPNGToICO(data, size)
+			if size < 1 || size > 256 {
+				if ico != nil {
+					t.Fatal("invalid icon dimension was accepted")
+				}
+				return
+			}
+			if len(ico) != 22+len(data) || !bytes.Equal(ico[22:], data) {
+				t.Fatal("ICO did not preserve its payload")
+			}
+			if int(ico[6]) != size%256 || ico[6] != ico[7] {
+				t.Fatal("incorrect ICO dimensions (256 must be encoded as zero)")
+			}
+			if int(binary.LittleEndian.Uint32(ico[14:])) != len(data) {
+				t.Fatal("incorrect ICO payload length")
+			}
+		})
+	}
+}
+
+func TestTrayStateImagePreservesAlpha(t *testing.T) {
+	source := image.NewAlpha16(image.Rect(0, 0, 4, 1))
+	for x, alpha := range []uint16{0, 0x0080, 0x8000, 0xffff} {
+		source.SetAlpha16(x, 0, color.Alpha16{A: alpha})
+	}
+	result := trayStateImage(source, trayTalking)
+	for x, want := range []uint8{0, 0, 128, 255} {
+		if got := result.NRGBAAt(x, 0).A; got != want {
+			t.Fatalf("pixel %d alpha = %d, want %d", x, got, want)
+		}
+	}
+}
 
 func TestTrayIconAssets(t *testing.T) {
 	icons := trayIcons()

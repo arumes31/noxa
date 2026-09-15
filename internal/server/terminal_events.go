@@ -21,6 +21,9 @@ func (s *TCPServer) sendTerminalEvent(client *Client, event string, data any) {
 	if err := client.Conn.SetWriteDeadline(time.Now().Add(150 * time.Millisecond)); err != nil {
 		return
 	}
-	defer client.Conn.SetWriteDeadline(time.Time{})
+	defer func() {
+		// The connection is about to close; resetting its deadline is best effort.
+		_ = client.Conn.SetWriteDeadline(time.Time{})
+	}()
 	_ = netproto.WriteFrame(client.Conn, &netproto.Frame{Type: uint16(netproto.MsgEvent), Payload: payload})
 }

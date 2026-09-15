@@ -30,7 +30,9 @@ func TestTrayIconsLoadAtWindowsTraySize(t *testing.T) {
 			if handle == 0 {
 				t.Fatalf("load tray state %d at %dpx: %v", mode, size, err)
 			}
-			destroyIcon.Call(handle)
+			if ok, _, err := destroyIcon.Call(handle); ok == 0 {
+				t.Fatalf("destroy tray state %d at %dpx: %v", mode, size, err)
+			}
 		}
 	}
 }

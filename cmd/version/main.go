@@ -186,11 +186,11 @@ func checkDeclarations(root string) error {
 	}
 	base := strings.TrimSpace(string(declared))
 	expected := map[string]string{
-		"client/frontend/package.json":          base,
-		"client/frontend/package-lock.json":     base,
-		"client/wails.json":                     base,
+		"client/frontend/package.json":         base,
+		"client/frontend/package-lock.json":    base,
+		"client/wails.json":                    base,
 		"client/go.mod local noxa requirement": "v" + base,
-		"internal/version default":              base,
+		"internal/version default":             base,
 	}
 
 	packageVersion, err := readJSONVersion(filepath.Join(root, "client", "frontend", "package.json"))
@@ -210,11 +210,11 @@ func checkDeclarations(root string) error {
 		return err
 	}
 	actual := map[string]string{
-		"client/frontend/package.json":          packageVersion,
-		"client/frontend/package-lock.json":     lockVersion,
-		"client/wails.json":                     wailsVersion,
+		"client/frontend/package.json":         packageVersion,
+		"client/frontend/package-lock.json":    lockVersion,
+		"client/wails.json":                    wailsVersion,
 		"client/go.mod local noxa requirement": moduleVersion,
-		"internal/version default":              appversion.DeclaredRelease,
+		"internal/version default":             appversion.DeclaredRelease,
 	}
 	problems := []string{}
 	for name, wanted := range expected {
