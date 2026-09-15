@@ -14,7 +14,7 @@ import (
 
 	"go.uber.org/zap"
 
-	"voicx/internal/auth"
+	"noxa/internal/auth"
 )
 
 // session holds per-connection query state. It is transport-agnostic (224):

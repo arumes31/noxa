@@ -6,10 +6,10 @@ package server
 import (
 	"testing"
 
-	"voicx/internal/auth"
-	"voicx/internal/netproto"
-	"voicx/internal/permissions"
-	"voicx/internal/state"
+	"noxa/internal/auth"
+	"noxa/internal/netproto"
+	"noxa/internal/permissions"
+	"noxa/internal/state"
 )
 
 // startMoveEnv starts a server with a second non-admin user, so a move can be

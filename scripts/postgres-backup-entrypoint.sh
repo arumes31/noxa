@@ -2,7 +2,7 @@
 set -eu
 umask 077
 
-. "${VOICX_SECRET_ENV_LIB:-/usr/local/lib/voicx/secret-env.sh}"
+. "${NOXA_SECRET_ENV_LIB:-/usr/local/lib/noxa/secret-env.sh}"
 
 require_backup_value() {
 	backup_value_name=$1
@@ -46,8 +46,8 @@ else
 	secret_env_load POSTGRES_PASSWORD required
 	: "${PGHOST:=postgres}"
 	: "${PGPORT:=5432}"
-	: "${PGUSER:=voicx}"
-	: "${PGDATABASE:=voicx}"
+	: "${PGUSER:=noxa}"
+	: "${PGDATABASE:=noxa}"
 	: "${PGSSLMODE:=disable}"
 fi
 export PGHOST PGPORT PGUSER PGDATABASE PGSSLMODE
@@ -60,7 +60,7 @@ pgpass_escape() {
 	printf '%s' "$1" | sed 's/\\/\\\\/g; s/:/\\:/g'
 }
 
-pgpass_dir=${PGPASS_RUNTIME_DIR:-/tmp/voicx-pgpass}
+pgpass_dir=${PGPASS_RUNTIME_DIR:-/tmp/noxa-pgpass}
 pgpass_file=${PGPASSFILE_PATH:-$pgpass_dir/.pgpass}
 backup_dir=${BACKUP_DIR:-/backups/postgres}
 case "$backup_dir" in /*) ;; *)
@@ -99,8 +99,8 @@ if [ "$(id -u)" -eq 0 ]; then
 		echo 'postgres-backup: root requires BACKUP_DIR=/backups/postgres' >&2
 		exit 1
 	;; esac
-	case "$pgpass_dir" in /tmp/voicx-pgpass) ;; *)
-		echo 'postgres-backup: root requires PGPASS_RUNTIME_DIR=/tmp/voicx-pgpass' >&2
+	case "$pgpass_dir" in /tmp/noxa-pgpass) ;; *)
+		echo 'postgres-backup: root requires PGPASS_RUNTIME_DIR=/tmp/noxa-pgpass' >&2
 		exit 1
 	;; esac
 	for protected_path in /backups /tmp "$backup_dir" "$pgpass_dir" "$pgpass_file"; do

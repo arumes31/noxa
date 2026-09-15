@@ -20,13 +20,13 @@ import (
 //go:embed migrations/*.sql
 var migrationsFS embed.FS
 
-// migrationAdvisoryLockID is stable across binaries so every voicx process
+// migrationAdvisoryLockID is stable across binaries so every noxa process
 // serializes migrations for the same PostgreSQL database.
-const migrationAdvisoryLockID int64 = 0x766f6963786d6967 // "voicxmig"
+const migrationAdvisoryLockID int64 = 0x766f6963786d6967 // legacy "voicxmig" lock ID; stable across the rename
 
 const migrationChecksumConstraint = "schema_migrations_checksum_sha256"
 
-const checksumConstraintProbe = "voicx_migration_checksum_probe_check"
+const checksumConstraintProbe = "noxa_migration_checksum_probe_check"
 
 type embeddedMigration struct {
 	filename         string
@@ -41,7 +41,7 @@ type appliedMigration struct {
 }
 
 // Store wraps a *sql.DB connection pool and a logger, providing access to the
-// voicx PostgreSQL database.
+// noxa PostgreSQL database.
 type Store struct {
 	db                *sql.DB
 	logger            *zap.Logger
@@ -492,12 +492,12 @@ func finalizeMigrationLedger(
 
 func expectedChecksumConstraintDefinition(ctx context.Context, tx *sql.Tx) (string, error) {
 	if _, err := tx.ExecContext(ctx,
-		`DROP TABLE IF EXISTS pg_temp.voicx_migration_checksum_probe`); err != nil {
+		`DROP TABLE IF EXISTS pg_temp.noxa_migration_checksum_probe`); err != nil {
 		return "", fmt.Errorf("dropping migration checksum constraint probe: %w", err)
 	}
-	if _, err := tx.ExecContext(ctx, `CREATE TEMP TABLE pg_temp.voicx_migration_checksum_probe (
+	if _, err := tx.ExecContext(ctx, `CREATE TEMP TABLE pg_temp.noxa_migration_checksum_probe (
 		checksum TEXT,
-		CONSTRAINT voicx_migration_checksum_probe_check
+		CONSTRAINT noxa_migration_checksum_probe_check
 			CHECK (checksum OPERATOR(pg_catalog.~) '^[0-9a-f]{64}$')
 	) ON COMMIT DROP`); err != nil {
 		return "", fmt.Errorf("creating migration checksum constraint probe: %w", err)
@@ -507,7 +507,7 @@ func expectedChecksumConstraintDefinition(ctx context.Context, tx *sql.Tx) (stri
 		FROM pg_catalog.pg_constraint AS c
 		JOIN pg_catalog.pg_class AS r ON r.oid = c.conrelid
 		WHERE r.relnamespace = pg_catalog.pg_my_temp_schema()
-		  AND r.relname = 'voicx_migration_checksum_probe'
+		  AND r.relname = 'noxa_migration_checksum_probe'
 		  AND c.conname = $1`, checksumConstraintProbe).Scan(&definition); err != nil {
 		return "", fmt.Errorf("reading migration checksum constraint probe: %w", err)
 	}

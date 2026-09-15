@@ -17,8 +17,8 @@ import (
 	"go.uber.org/zap/zapcore"
 	"go.uber.org/zap/zaptest/observer"
 
-	"voicx/internal/config"
-	"voicx/internal/netproto"
+	"noxa/internal/config"
+	"noxa/internal/netproto"
 )
 
 // testLogger returns a discard logger suitable for tests.

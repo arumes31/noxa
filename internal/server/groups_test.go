@@ -20,11 +20,11 @@ import (
 	"testing"
 	"time"
 
-	"voicx/internal/config"
-	"voicx/internal/netproto"
-	"voicx/internal/permissions"
-	"voicx/internal/state"
-	"voicx/internal/store"
+	"noxa/internal/config"
+	"noxa/internal/netproto"
+	"noxa/internal/permissions"
+	"noxa/internal/state"
+	"noxa/internal/store"
 )
 
 // --- fake group store --------------------------------------------------------
@@ -700,9 +700,7 @@ func TestPermSetUnset(t *testing.T) {
 		p, ok := env.groups.perms[key]
 		return ok && p.value == 10 && p.grant == 50
 	})
-	if !env.perms.invalidateAllRecorded() {
-		t.Fatal("no cache invalidation after perm set")
-	}
+	waitFor(t, "cache invalidation after perm set", env.perms.invalidateAllRecorded)
 
 	// Client tier addressing resolves the unique ID to a user ID.
 	send(t, conn, netproto.MsgPermSet, netproto.PermSet{

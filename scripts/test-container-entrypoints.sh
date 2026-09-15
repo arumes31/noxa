@@ -3,7 +3,7 @@
 set -eu
 
 repo_root=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)
-tmpdir=$(mktemp -d "${TMPDIR:-/tmp}/voicx-entrypoints.XXXXXX")
+tmpdir=$(mktemp -d "${TMPDIR:-/tmp}/noxa-entrypoints.XXXXXX")
 scheduler_pid=
 cleanup() {
 	if [ -n "$scheduler_pid" ]; then
@@ -69,25 +69,25 @@ break' sh -c '. "$1"; secret_env_require_single_line SECRET' sh "$repo_root/scri
 	fail 'accepted a multiline line-oriented secret'
 fi
 
-argv_file="$tmpdir/voicx.argv"
+argv_file="$tmpdir/noxa.argv"
 cat > "$tmpdir/capture-argv" <<'EOF'
 #!/bin/sh
 printf '%s\n' "$0" "$@" > "$ARGV_FILE"
 EOF
 chmod +x "$tmpdir/capture-argv"
 ARGV_FILE="$argv_file" POSTGRES_PASSWORD='not-in-argv' POSTGRES_HOST=db \
-	VOICX_SECRET_ENV_LIB="$repo_root/scripts/secret-env.sh" \
-	"$repo_root/scripts/voicx-entrypoint.sh" "$tmpdir/capture-argv" serve
-! grep -q 'not-in-argv' "$argv_file" || fail 'voicx secret appeared in argv'
-if POSTGRES_HOST=db VOICX_SECRET_ENV_LIB="$repo_root/scripts/secret-env.sh" \
-	"$repo_root/scripts/voicx-entrypoint.sh" /bin/true; then
+	NOXA_SECRET_ENV_LIB="$repo_root/scripts/secret-env.sh" \
+	"$repo_root/scripts/noxa-entrypoint.sh" "$tmpdir/capture-argv" serve
+! grep -q 'not-in-argv' "$argv_file" || fail 'noxa secret appeared in argv'
+if POSTGRES_HOST=db NOXA_SECRET_ENV_LIB="$repo_root/scripts/secret-env.sh" \
+	"$repo_root/scripts/noxa-entrypoint.sh" /bin/true; then
 	fail 'accepted missing PostgreSQL password while generating a URL'
 fi
-VOICX_SECRET_ENV_LIB="$repo_root/scripts/secret-env.sh" "$repo_root/scripts/voicx-entrypoint.sh" /bin/true
-ARGV_FILE="$argv_file" VOICX_SERVER_BIN="$tmpdir/capture-argv" VOICX_SECRET_ENV_LIB="$repo_root/scripts/secret-env.sh" \
-	"$repo_root/scripts/voicx-entrypoint.sh" --version
-head -n 1 "$argv_file" | grep -qx "$tmpdir/capture-argv" || fail 'voicx binary flags were not prefixed with the server binary'
-sed -n '2p' "$argv_file" | grep -qx -- '--version' || fail 'voicx binary flag was not preserved'
+NOXA_SECRET_ENV_LIB="$repo_root/scripts/secret-env.sh" "$repo_root/scripts/noxa-entrypoint.sh" /bin/true
+ARGV_FILE="$argv_file" NOXA_SERVER_BIN="$tmpdir/capture-argv" NOXA_SECRET_ENV_LIB="$repo_root/scripts/secret-env.sh" \
+	"$repo_root/scripts/noxa-entrypoint.sh" --version
+head -n 1 "$argv_file" | grep -qx "$tmpdir/capture-argv" || fail 'noxa binary flags were not prefixed with the server binary'
+sed -n '2p' "$argv_file" | grep -qx -- '--version' || fail 'noxa binary flag was not preserved'
 
 if [ "$(id -u)" -ne 0 ]; then
 pgpass_file="$tmpdir/pgpass-dir/.pgpass"
@@ -99,35 +99,35 @@ EOF
 chmod +x "$tmpdir/check-pgpass"
 POSTGRES_PASSWORD='pa:ss\word' PGPASSFILE_PATH="$pgpass_file" \
 	PGPASS_RUNTIME_DIR="$tmpdir/pgpass-dir" BACKUP_DIR="$tmpdir/backups" \
-	VOICX_SECRET_ENV_LIB="$repo_root/scripts/secret-env.sh" \
+	NOXA_SECRET_ENV_LIB="$repo_root/scripts/secret-env.sh" \
 	"$repo_root/scripts/postgres-backup-entrypoint.sh" "$tmpdir/check-pgpass"
 assert_mode "$pgpass_file" 600
-expected_pgpass='postgres:5432:voicx:voicx:pa\:ss\\word'
+expected_pgpass='postgres:5432:noxa:noxa:pa\:ss\\word'
 [ "$(cat "$pgpass_file")" = "$expected_pgpass" ] || fail '.pgpass escaping mismatch'
 if POSTGRES_PASSWORD='bad
 password' PGPASS_RUNTIME_DIR="$tmpdir/pgpass-invalid" BACKUP_DIR="$tmpdir/backups-invalid" \
-	VOICX_SECRET_ENV_LIB="$repo_root/scripts/secret-env.sh" \
+	NOXA_SECRET_ENV_LIB="$repo_root/scripts/secret-env.sh" \
 	"$repo_root/scripts/postgres-backup-entrypoint.sh" /bin/true; then
 	fail 'accepted a multiline .pgpass password'
 fi
 if POSTGRES_PASSWORD=good PGHOST='bad
 host' PGPASS_RUNTIME_DIR="$tmpdir/pgpass-invalid-host" BACKUP_DIR="$tmpdir/backups-invalid-host" \
-	VOICX_SECRET_ENV_LIB="$repo_root/scripts/secret-env.sh" "$repo_root/scripts/postgres-backup-entrypoint.sh" /bin/true; then
+	NOXA_SECRET_ENV_LIB="$repo_root/scripts/secret-env.sh" "$repo_root/scripts/postgres-backup-entrypoint.sh" /bin/true; then
 	fail 'accepted a multiline .pgpass host'
 fi
-if POSTGRES_PASSWORD=good PGPASS_RUNTIME_DIR='/tmp/voicx-pgpass/../../etc' BACKUP_DIR="$tmpdir/backups-invalid-path" \
-	VOICX_SECRET_ENV_LIB="$repo_root/scripts/secret-env.sh" "$repo_root/scripts/postgres-backup-entrypoint.sh" /bin/true; then
+if POSTGRES_PASSWORD=good PGPASS_RUNTIME_DIR='/tmp/noxa-pgpass/../../etc' BACKUP_DIR="$tmpdir/backups-invalid-path" \
+	NOXA_SECRET_ENV_LIB="$repo_root/scripts/secret-env.sh" "$repo_root/scripts/postgres-backup-entrypoint.sh" /bin/true; then
 	fail 'accepted a dot-component escape from the .pgpass runtime directory'
 fi
 if BACKUP_EXTERNAL_DATABASE=1 POSTGRES_PASSWORD=ignored \
-	VOICX_SECRET_ENV_LIB="$repo_root/scripts/secret-env.sh" "$repo_root/scripts/postgres-backup-entrypoint.sh" /bin/true; then
+	NOXA_SECRET_ENV_LIB="$repo_root/scripts/secret-env.sh" "$repo_root/scripts/postgres-backup-entrypoint.sh" /bin/true; then
 	fail 'accepted an external database without dedicated backup settings'
 fi
 external_pgpass_dir="$tmpdir/external-pgpass"
 BACKUP_EXTERNAL_DATABASE=1 BACKUP_PGHOST=external-db BACKUP_PGPORT=6543 BACKUP_PGUSER=backup \
 	BACKUP_PGDATABASE=archive BACKUP_PGSSLMODE=verify-full BACKUP_POSTGRES_PASSWORD=backup-secret \
 	PGPASS_RUNTIME_DIR="$external_pgpass_dir" PGPASSFILE_PATH="$external_pgpass_dir/.pgpass" BACKUP_DIR="$tmpdir/external-backups" \
-	VOICX_SECRET_ENV_LIB="$repo_root/scripts/secret-env.sh" "$repo_root/scripts/postgres-backup-entrypoint.sh" "$tmpdir/check-pgpass"
+	NOXA_SECRET_ENV_LIB="$repo_root/scripts/secret-env.sh" "$repo_root/scripts/postgres-backup-entrypoint.sh" "$tmpdir/check-pgpass"
 grep -q '^external-db:6543:archive:backup:' "$external_pgpass_dir/.pgpass" || fail 'external backup did not use dedicated libpq settings'
 else
 	echo 'test-container-entrypoints: root skips generic backup entrypoint cases; run scripts/test-backup-image.sh for gosu coverage' >&2
@@ -141,7 +141,7 @@ EOF
 chmod +x "$tmpdir/capture-redis"
 REDIS_PASSWORD='redis-secret' REDIS_RUNTIME_DIR="$tmpdir/redis-runtime" REDIS_CONFIG_FILE="$redis_config" \
 	REDIS_ENTRYPOINT="$tmpdir/capture-redis" REDIS_ARGV_FILE="$tmpdir/redis.argv" \
-	VOICX_SECRET_ENV_LIB="$repo_root/scripts/secret-env.sh" "$repo_root/scripts/redis-entrypoint.sh" redis-server --save ''
+	NOXA_SECRET_ENV_LIB="$repo_root/scripts/secret-env.sh" "$repo_root/scripts/redis-entrypoint.sh" redis-server --save ''
 assert_mode "$redis_config" 600
 ! grep -q 'redis-secret' "$redis_config" || fail 'Redis config retained plaintext password'
 grep -q '^user default on #[0-9a-f][0-9a-f]* ~\* &\* +@all$' "$redis_config" || fail 'Redis config lacks ACL hash'
@@ -155,14 +155,14 @@ printf '%s\n' "$@" > "$TURN_ARGV_FILE"
 EOF
 chmod +x "$tmpdir/capture-turn"
 TURN_SECRET='turn-secret' TURN_CONFIG_DIR="$turn_config_dir" TURN_SERVER_BIN="$tmpdir/capture-turn" \
-	TURN_ARGV_FILE="$tmpdir/turn.argv" VOICX_SECRET_ENV_LIB="$repo_root/scripts/secret-env.sh" \
+	TURN_ARGV_FILE="$tmpdir/turn.argv" NOXA_SECRET_ENV_LIB="$repo_root/scripts/secret-env.sh" \
 	"$repo_root/scripts/coturn-entrypoint.sh" --listening-port=12340
 assert_mode "$turn_config_dir/turnserver.conf" 600
 grep -q '^static-auth-secret=turn-secret$' "$turn_config_dir/turnserver.conf" || fail 'TURN config missing secret'
 ! grep -q 'turn-secret' "$tmpdir/turn.argv" || fail 'TURN secret appeared in argv'
 if TURN_SECRET='bad
 secret' TURN_CONFIG_DIR="$tmpdir/turn-invalid" TURN_SERVER_BIN="$tmpdir/capture-turn" \
-	VOICX_SECRET_ENV_LIB="$repo_root/scripts/secret-env.sh" "$repo_root/scripts/coturn-entrypoint.sh"; then
+	NOXA_SECRET_ENV_LIB="$repo_root/scripts/secret-env.sh" "$repo_root/scripts/coturn-entrypoint.sh"; then
 	fail 'accepted a multiline TURN secret'
 fi
 
@@ -187,7 +187,7 @@ done
 EOF
 chmod +x "$tmpdir/fakebin/pg_dump"
 BACKUP_DELAY_SECONDS=0 BACKUP_COMMAND="$repo_root/scripts/postgres-backup.sh" \
-	BACKUP_DIR="$tmpdir/active-backup" PGHOST=postgres PGPORT=5432 PGUSER=voicx PGDATABASE=voicx \
+	BACKUP_DIR="$tmpdir/active-backup" PGHOST=postgres PGPORT=5432 PGUSER=noxa PGDATABASE=noxa \
 	BACKUP_WORK_READY_MARKER="$tmpdir/backup-ready" BACKUP_WORK_TERM_MARKER="$tmpdir/backup-term" \
 	PATH="$tmpdir/fakebin:$PATH" \
 	"$repo_root/scripts/postgres-backup-scheduler.sh" &

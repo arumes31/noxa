@@ -15,7 +15,7 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/emptypb"
 
-	"voicx/internal/eventbus"
+	"noxa/internal/eventbus"
 )
 
 const (

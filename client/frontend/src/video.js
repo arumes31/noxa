@@ -1,7 +1,7 @@
 // video.js — video grid (61), focus mode with filmstrip (73), per-subscriber
 // quality selector (63), share dialog (69-72), camera on/off + stop-share
 // confirm (85), and the low-bandwidth mode (88). Everything here works against
-// the shared namespace (window.__voicx) populated by main.js.
+// the shared namespace (window.__noxa) populated by main.js.
 import { GridCompositor } from "./grid-compositor.js";
 
 import { isCurrentServerDialog, mountServerDialog } from "./modal.js";
@@ -9,16 +9,16 @@ import { setSafeImage } from "./safe-media.js";
 import { labelButton } from "./icons.js";
 import { renderMicStatus } from "./audio.js";
 
-const V = () => window.__voicx;
+const V = () => window.__noxa;
 
 // (70/73) Track-identity contract with the router: a publisher's media arrives
 // as one track per SLOT, so camera and screen share are separate tiles and
 // shared system audio is a separate source from the microphone.
 //   default slots ("mic", "cam")   track id "<clientID>"
-//                                  msid stream "voicx-<clientID>"
+//                                  msid stream "noxa-<clientID>"
 //   extra slots ("screenaudio", "screen")
 //                                  track id "<clientID>|<slot>"
-//                                  msid stream "voicx-<clientID>|<slot>"
+//                                  msid stream "noxa-<clientID>|<slot>"
 // The separator is "|" because an msid id is an RFC 4566 token and "/" is not
 // a token character. Default slots keep the bare publisher ID, so parsing
 // yields slot "" for them and a router that labels nothing still resolves.

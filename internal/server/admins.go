@@ -4,7 +4,7 @@ import (
 	"context"
 
 	"go.uber.org/zap"
-	"voicx/internal/netproto"
+	"noxa/internal/netproto"
 )
 
 func (s *TCPServer) handleServerAdminList(ctx context.Context, client *Client, f *netproto.Frame) error {

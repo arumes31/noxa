@@ -12,8 +12,8 @@ import (
 
 	"go.uber.org/zap"
 
-	"voicx/internal/auth"
-	"voicx/internal/netproto"
+	"noxa/internal/auth"
+	"noxa/internal/netproto"
 )
 
 // handleKeyPublish records the client's X25519 public key: in the state

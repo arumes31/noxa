@@ -11,8 +11,8 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	"voicx/internal/eventbus"
-	voicxv1 "voicx/v1"
+	"noxa/internal/eventbus"
+	noxav1 "noxa/v1"
 )
 
 // formatInt renders a channel id as the string the proto schema uses.
@@ -28,7 +28,7 @@ func formatUint(v uint64) string { return strconv.FormatUint(v, 10) }
 
 // eventsService streams bus events to gRPC subscribers.
 type eventsService struct {
-	voicxv1.UnimplementedEventsServer
+	noxav1.UnimplementedEventsServer
 	bus    *eventbus.Bus
 	logger *zap.Logger
 }
@@ -55,17 +55,17 @@ type busEvent struct {
 // Types the control server does not broadcast under any of these names (chat,
 // typing, presence, ...) have no proto representation and are not streamed
 // here; the WebSocket stream (231) carries the full set.
-var busTypeFor = map[voicxv1.EventType]string{
-	voicxv1.EventType_EVENT_TYPE_USER_JOINED:     "user_joined",
-	voicxv1.EventType_EVENT_TYPE_USER_LEFT:       "user_left",
-	voicxv1.EventType_EVENT_TYPE_USER_SPEAKING:   "speaking_changed",
-	voicxv1.EventType_EVENT_TYPE_CHANNEL_CREATED: "channel_created",
-	voicxv1.EventType_EVENT_TYPE_CHANNEL_DELETED: "channel_deleted",
-	voicxv1.EventType_EVENT_TYPE_USER_MOVED:      "user_moved",
+var busTypeFor = map[noxav1.EventType]string{
+	noxav1.EventType_EVENT_TYPE_USER_JOINED:     "user_joined",
+	noxav1.EventType_EVENT_TYPE_USER_LEFT:       "user_left",
+	noxav1.EventType_EVENT_TYPE_USER_SPEAKING:   "speaking_changed",
+	noxav1.EventType_EVENT_TYPE_CHANNEL_CREATED: "channel_created",
+	noxav1.EventType_EVENT_TYPE_CHANNEL_DELETED: "channel_deleted",
+	noxav1.EventType_EVENT_TYPE_USER_MOVED:      "user_moved",
 	// Kicks and bans share one broadcast; the payload decides which of the
 	// two proto types an event becomes.
-	voicxv1.EventType_EVENT_TYPE_USER_KICKED: "kicked",
-	voicxv1.EventType_EVENT_TYPE_USER_BANNED: "kicked",
+	noxav1.EventType_EVENT_TYPE_USER_KICKED: "kicked",
+	noxav1.EventType_EVENT_TYPE_USER_BANNED: "kicked",
 }
 
 // allBusTypes is the unfiltered subscription, in a fixed order.
@@ -76,12 +76,12 @@ var allBusTypes = []string{
 
 // subscribedTypes turns the request filter into a bus type filter plus the
 // proto types the caller actually asked for. A nil proto filter means "all".
-func subscribedTypes(req *voicxv1.SubscribeEventsRequest) ([]string, map[voicxv1.EventType]bool, error) {
+func subscribedTypes(req *noxav1.SubscribeEventsRequest) ([]string, map[noxav1.EventType]bool, error) {
 	requested := req.GetEventTypes()
 	if len(requested) == 0 {
 		return allBusTypes, nil, nil
 	}
-	wanted := make(map[voicxv1.EventType]bool, len(requested))
+	wanted := make(map[noxav1.EventType]bool, len(requested))
 	seen := make(map[string]bool, len(requested))
 	busTypes := make([]string, 0, len(requested))
 	for _, t := range requested {
@@ -101,7 +101,7 @@ func subscribedTypes(req *voicxv1.SubscribeEventsRequest) ([]string, map[voicxv1
 
 // Subscribe streams server events until the client goes away or the bus drops
 // the subscriber for not keeping up.
-func (e *eventsService) Subscribe(req *voicxv1.SubscribeEventsRequest, stream grpc.ServerStreamingServer[voicxv1.Event]) error {
+func (e *eventsService) Subscribe(req *noxav1.SubscribeEventsRequest, stream grpc.ServerStreamingServer[noxav1.Event]) error {
 	caller := callerOf(stream)
 	busTypes, wanted, err := subscribedTypes(req)
 	if err != nil {
@@ -168,14 +168,14 @@ func boundedEventType(eventType string) string {
 // toProto converts a bus event into the proto envelope. It returns nil, nil
 // when the event has no representation in the schema, and returns an error
 // only when the payload could not be decoded.
-func toProto(evt eventbus.Event) (*voicxv1.Event, error) {
+func toProto(evt eventbus.Event) (*noxav1.Event, error) {
 	var payload busEvent
 	if len(evt.Data) > 0 {
 		if err := json.Unmarshal(evt.Data, &payload); err != nil {
 			return nil, fmt.Errorf("decode event payload: %w", err)
 		}
 	}
-	out := &voicxv1.Event{
+	out := &noxav1.Event{
 		Id:        formatUint(evt.Seq),
 		Timestamp: evt.Time.UnixMilli(),
 	}
@@ -184,52 +184,52 @@ func toProto(evt eventbus.Event) (*voicxv1.Event, error) {
 	// available on every event, so bots can correlate across event types.
 	switch evt.Type {
 	case "user_joined":
-		out.Type = voicxv1.EventType_EVENT_TYPE_USER_JOINED
-		out.Payload = &voicxv1.Event_UserJoined{UserJoined: &voicxv1.UserJoinedEvent{
+		out.Type = noxav1.EventType_EVENT_TYPE_USER_JOINED
+		out.Payload = &noxav1.Event_UserJoined{UserJoined: &noxav1.UserJoinedEvent{
 			ChannelId:   formatInt(payload.ChannelID),
 			UserId:      payload.ClientID,
 			DisplayName: payload.Nickname,
 		}}
 	case "user_left":
-		out.Type = voicxv1.EventType_EVENT_TYPE_USER_LEFT
-		out.Payload = &voicxv1.Event_UserLeft{UserLeft: &voicxv1.UserLeftEvent{
+		out.Type = noxav1.EventType_EVENT_TYPE_USER_LEFT
+		out.Payload = &noxav1.Event_UserLeft{UserLeft: &noxav1.UserLeftEvent{
 			ChannelId: formatInt(payload.ChannelID),
 			UserId:    payload.ClientID,
 			Reason:    payload.Reason,
 		}}
 	case "user_moved":
-		out.Type = voicxv1.EventType_EVENT_TYPE_USER_MOVED
-		out.Payload = &voicxv1.Event_UserMoved{UserMoved: &voicxv1.UserMovedEvent{
+		out.Type = noxav1.EventType_EVENT_TYPE_USER_MOVED
+		out.Payload = &noxav1.Event_UserMoved{UserMoved: &noxav1.UserMovedEvent{
 			UserId:        payload.ClientID,
 			FromChannelId: formatInt(payload.FromChannelID),
 			ToChannelId:   formatInt(payload.ChannelID),
 			MovedBy:       payload.ByClientID,
 		}}
 	case "speaking_changed":
-		out.Type = voicxv1.EventType_EVENT_TYPE_USER_SPEAKING
-		out.Payload = &voicxv1.Event_UserSpeaking{UserSpeaking: &voicxv1.UserSpeakingEvent{
+		out.Type = noxav1.EventType_EVENT_TYPE_USER_SPEAKING
+		out.Payload = &noxav1.Event_UserSpeaking{UserSpeaking: &noxav1.UserSpeakingEvent{
 			ChannelId: formatInt(payload.ChannelID),
 			UserId:    payload.ClientID,
 			Speaking:  payload.Speaking,
 		}}
 	case "channel_created":
-		out.Type = voicxv1.EventType_EVENT_TYPE_CHANNEL_CREATED
-		out.Payload = &voicxv1.Event_ChannelCreated{ChannelCreated: &voicxv1.ChannelCreatedEvent{
+		out.Type = noxav1.EventType_EVENT_TYPE_CHANNEL_CREATED
+		out.Payload = &noxav1.Event_ChannelCreated{ChannelCreated: &noxav1.ChannelCreatedEvent{
 			ChannelId: formatInt(payload.ChannelID),
 			Name:      payload.Name,
 			ParentId:  formatInt(payload.ParentID),
 		}}
 	case "channel_deleted":
-		out.Type = voicxv1.EventType_EVENT_TYPE_CHANNEL_DELETED
-		out.Payload = &voicxv1.Event_ChannelDeleted{ChannelDeleted: &voicxv1.ChannelDeletedEvent{
+		out.Type = noxav1.EventType_EVENT_TYPE_CHANNEL_DELETED
+		out.Payload = &noxav1.Event_ChannelDeleted{ChannelDeleted: &noxav1.ChannelDeletedEvent{
 			ChannelId: formatInt(payload.ChannelID),
 			Reason:    payload.Reason,
 		}}
 	case "kicked":
 		// One broadcast covers both: a kick that also bans is reported as a ban.
 		if payload.Ban {
-			out.Type = voicxv1.EventType_EVENT_TYPE_USER_BANNED
-			out.Payload = &voicxv1.Event_UserBanned{UserBanned: &voicxv1.UserBannedEvent{
+			out.Type = noxav1.EventType_EVENT_TYPE_USER_BANNED
+			out.Payload = &noxav1.Event_UserBanned{UserBanned: &noxav1.UserBannedEvent{
 				UserId:    payload.ClientID,
 				BannedBy:  payload.ByClientID,
 				Reason:    payload.Reason,
@@ -238,8 +238,8 @@ func toProto(evt eventbus.Event) (*voicxv1.Event, error) {
 			}}
 			return out, nil
 		}
-		out.Type = voicxv1.EventType_EVENT_TYPE_USER_KICKED
-		out.Payload = &voicxv1.Event_UserKicked{UserKicked: &voicxv1.UserKickedEvent{
+		out.Type = noxav1.EventType_EVENT_TYPE_USER_KICKED
+		out.Payload = &noxav1.Event_UserKicked{UserKicked: &noxav1.UserKickedEvent{
 			ChannelId: formatInt(payload.ChannelID),
 			UserId:    payload.ClientID,
 			KickedBy:  payload.ByClientID,

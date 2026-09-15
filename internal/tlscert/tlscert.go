@@ -1,4 +1,4 @@
-// Package tlscert manages the self-signed TLS certificate of the voicx
+// Package tlscert manages the self-signed TLS certificate of the noxa
 // control channel. On first start a certificate is generated (ECDSA P-256,
 // valid 10 years, SANs for localhost and the server name) and persisted; on
 // later starts it is loaded back, so the SHA-256 fingerprint clients pin via
@@ -194,7 +194,7 @@ func generate(hosts []string) (tls.Certificate, error) {
 
 	tmpl := &x509.Certificate{
 		SerialNumber: serial,
-		Subject:      pkix.Name{CommonName: "voicx", Organization: []string{"voicx (self-signed)"}},
+		Subject:      pkix.Name{CommonName: "noxa", Organization: []string{"noxa (self-signed)"}},
 		NotBefore:    time.Now().Add(-time.Hour),
 		NotAfter:     time.Now().Add(certLifetime),
 		KeyUsage:     x509.KeyUsageDigitalSignature,

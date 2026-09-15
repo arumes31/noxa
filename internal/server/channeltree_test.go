@@ -11,10 +11,10 @@ import (
 	"sync"
 	"testing"
 
-	"voicx/internal/channels"
-	"voicx/internal/netproto"
-	"voicx/internal/permissions"
-	"voicx/internal/state"
+	"noxa/internal/channels"
+	"noxa/internal/netproto"
+	"noxa/internal/permissions"
+	"noxa/internal/state"
 )
 
 // treeChannels is a ChannelBackend that mirrors every ChannelUpdate field into

@@ -1,5 +1,5 @@
 // tofu.go implements the client's trust-on-first-use store for control
-// channel TLS fingerprints: <UserConfigDir>/voicx/known_servers.json maps
+// channel TLS fingerprints: <UserConfigDir>/noxa/known_servers.json maps
 // server address -> SHA-256 certificate fingerprint. The first connection to
 // a server is accepted and pinned; a later fingerprint mismatch is a hard
 // error (possible MITM) until the user explicitly trusts the new one.
@@ -57,7 +57,7 @@ func knownServersPath() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(dir, "voicx", "known_servers.json"), nil
+	return filepath.Join(dir, "noxa", "known_servers.json"), nil
 }
 
 // loadKnownServersAt loads the store from path; a missing file yields an

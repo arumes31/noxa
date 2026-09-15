@@ -14,8 +14,8 @@ import (
 	"os"
 	"testing"
 
-	"voicx/internal/updatemanifest"
-	"voicx/internal/version"
+	"noxa/internal/updatemanifest"
+	"noxa/internal/version"
 )
 
 // fakeGitHub serves a canned latest-release response and asset downloads.
@@ -50,7 +50,7 @@ func TestCheckForUpdateAvailable(t *testing.T) {
 	srv := fakeGitHub(t, `{
 		"tag_name": "v99.0.0+999",
 		"assets": [
-			{"name": "voicx-client-windows-amd64.exe", "browser_download_url": "https://x/exe", "size": 12345},
+			{"name": "noxa-client-windows-amd64.exe", "browser_download_url": "https://x/exe", "size": 12345},
 			{"name": "checksums.txt", "browser_download_url": "https://x/sums"},
 			{"name": "checksums.txt.sig", "browser_download_url": "https://x/signature"}
 		]}`)
@@ -80,7 +80,7 @@ func TestCheckForUpdateRequiresSignature(t *testing.T) {
 	srv := fakeGitHub(t, `{
 		"tag_name": "v99.0.0+999",
 		"assets": [
-			{"name": "voicx-client-windows-amd64.exe", "browser_download_url": "https://x/exe", "size": 12345},
+			{"name": "noxa-client-windows-amd64.exe", "browser_download_url": "https://x/exe", "size": 12345},
 			{"name": "checksums.txt", "browser_download_url": "https://x/sums"}
 		]}`)
 	defer srv.Close()
@@ -148,7 +148,7 @@ func TestCheckForUpdateBadJSON(t *testing.T) {
 }
 
 func TestCheckForUpdateNoSource(t *testing.T) {
-	withUpdateRepo(t, "voicx/voicx") // placeholder slug
+	withUpdateRepo(t, "noxa/noxa") // placeholder slug
 	a := &App{}
 	if _, err := a.CheckForUpdate(); err == nil {
 		t.Fatal("expected error for placeholder update repo")

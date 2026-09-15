@@ -1,6 +1,6 @@
-# voicx
+# noxa
 
-Wails v2 desktop client for the voicx voice/chat server (see the repository
+Wails v2 desktop client for the noxa voice/chat server (see the repository
 root README for the server). **Status: scaffold** — the core flows work end
 to end (connect/auth, channel tree, chat, voice over WebRTC, permissions
 grid); polish (recording UI, complaint UI) comes later.
@@ -50,7 +50,7 @@ fontsource — fully offline in WebView2):
 - Signal green (`#2ee6a8`) is used *only* for voice activity so talk state
   is scannable at a glance; warnings are amber.
 
-Settings persist to `<UserConfigDir>/voicx/settings.json` (identity to
+Settings persist to `<UserConfigDir>/noxa/settings.json` (identity to
 `identity.json`, logs to `client.log` / `chat.log` in the same folder).
 
 **Camera privacy**: Voice sessions start with the camera off. Camera access
@@ -159,7 +159,7 @@ failures, and connection loss.
   a clear hint, and an active plaintext session is reported as "PLAINTEXT —
   traffic is NOT encrypted" in the connect info line.
 - **TOFU fingerprint pinning** — the server's self-signed certificate is
-  pinned in `<UserConfigDir>/voicx/known_servers.json` (addr → SHA-256
+  pinned in `<UserConfigDir>/noxa/known_servers.json` (addr → SHA-256
   fingerprint). First connect: accepted, pinned, and reported as "new server
   fingerprint pinned". Later **mismatch: the connect hard-fails** with a
   prominent warning dialog (possible MITM) and only proceeds after an
@@ -428,7 +428,7 @@ The files UI (`frontend/src/files-ui.js`, bindings in `files.go`) adds a
   DND with a quiet-hours schedule suppressing toasts/sounds/flashes while
   badges keep counting.
 - **Performance (349)**: windowed tree above 500 rows — DOM stays
-  O(channels); branches expand on double-click; `window.__voicxFakeTree(n)`
+  O(channels); branches expand on double-click; `window.__noxaFakeTree(n)`
   in the console measures render time.
 - **Settings search (350)**: cross-page search with jump + highlight.
 
@@ -462,8 +462,8 @@ The files UI (`frontend/src/files-ui.js`, bindings in `files.go`) adds a
 ## Architecture
 
 - **Go backend** (`app.go`, `conn.go`, `hotkeys.go`) owns all protocol
-  state. It speaks the voicx control protocol (`voicx/internal/netproto` —
-  this module imports it via `require voicx v0.4.0` + `replace voicx => ../`)
+  state. It speaks the noxa control protocol (`noxa/internal/netproto` —
+  this module imports it via `require noxa v0.4.0` + `replace noxa => ../`)
   and exposes a bound API to the frontend. Server traffic (snapshot, events,
   chat, ICE) is pushed to the UI as Wails runtime events.
 - **Frontend** (`frontend/`) is deliberately vanilla JS + CSS (no React —
@@ -535,7 +535,7 @@ github.com/wailsapp/wails/v2/cmd/wails@v2.16.0`, matching `go.mod`).
 wails dev
 
 # Production build with the canonical commit/source version (repo root)
-make client-build  # output: client/build/bin/voicx.exe
+make client-build  # output: client/build/bin/noxa.exe
 
 # Windows PowerShell equivalent (repo root)
 ./scripts/build.ps1 client
@@ -566,7 +566,7 @@ first-run admin token the server logs at WARN on an empty database.
 ## Identity & login
 
 Cryptographic identity: on first run the client generates an Ed25519 key pair
-and persists it to `<UserConfigDir>/voicx/identity.json` (0600). The unique
+and persists it to `<UserConfigDir>/noxa/identity.json` (0600). The unique
 ID is derived from the public key — you never type one.
 
 The login dialog asks for:
@@ -587,7 +587,7 @@ The login dialog asks for:
 The big mic button glows and the **● TALKING** banner appears while
 push-to-talk is active. The keyboard icon in the voice bar shows hotkey
 status (`⌨ ptt` = active, `⌨ off` = failed). If a hotkey shows off, check
-`<UserConfigDir>/voicx/client.log`. Debug lines like `hotkey ptt_down fired`
+`<UserConfigDir>/noxa/client.log`. Debug lines like `hotkey ptt_down fired`
 are logged there for every observed event.
 
 ## Auto-update
@@ -610,7 +610,7 @@ Offline and up-to-date clients remain quiet; manual checks remain available
 in Help → **Check for updates…**.
 
 The update source is the `UpdateRepo` ldflags variable
-(`-X voicx/internal/version.UpdateRepo=<owner/repo>` — CI sets it to the
+(`-X noxa/internal/version.UpdateRepo=<owner/repo>` — CI sets it to the
 repo automatically). With the placeholder default the check reports "no
 update source" and stays silent.
 
@@ -625,7 +625,7 @@ the client. Key setup and rotation are documented in
 join + `user_moved`, channel chat, `GetPermissions`) against a **live**
 server — no Wails runtime needed (the backend's events go through an
 `eventSink` seam; tests install a recorder). It skips unless
-`VOICX_LIVE_ADDR` is set:
+`NOXA_LIVE_ADDR` is set:
 
 This live-server test is manual-only: CI intentionally does not run it because
 it requires an explicitly selected live server.
@@ -633,11 +633,11 @@ it requires an explicitly selected live server.
 ```bash
 # server must be running (e.g. docker compose up)
 cd client
-VOICX_LIVE_ADDR=127.0.0.1:12333 go test -run Live -v ./... -count=1
-VOICX_LIVE_ADDR=127.0.0.1:12333 go test -race -run Live ./... -count=1
+NOXA_LIVE_ADDR=127.0.0.1:12333 go test -run Live -v ./... -count=1
+NOXA_LIVE_ADDR=127.0.0.1:12333 go test -race -run Live ./... -count=1
 ```
 
-Optional env: `VOICX_LIVE_QUERY_ADDR` (ServerQuery port, default
+Optional env: `NOXA_LIVE_QUERY_ADDR` (ServerQuery port, default
 `<host>:12335`). The test creates a throwaway permanent channel via
 ServerQuery (admin account) so channel-dependent assertions are real. Note
 `GetPermissions` returns an empty set on a fresh server — registered users

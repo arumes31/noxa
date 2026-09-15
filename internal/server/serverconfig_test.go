@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"voicx/internal/config"
+	"noxa/internal/config"
 )
 
 type memorySettings map[string]string

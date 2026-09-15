@@ -1,10 +1,10 @@
-// adduser registers a voicx user in the database and prints its unique ID.
+// adduser registers a noxa user in the database and prints its unique ID.
 //
 // Usage:
 //
 //	adduser -nickname <name> -password <pw> [-admin] [-db <dsn>] [-migration-timeout 5m]
 //
-// The database DSN comes from -db, then VOICX_DATABASE_URL. Migrations are
+// The database DSN comes from -db, then NOXA_DATABASE_URL. Migrations are
 // applied (idempotent). With -admin the user gets the is_admin flag
 // (RegisterUser creates non-admin users, so it is set with a follow-up
 // UPDATE).
@@ -25,8 +25,8 @@ import (
 
 	"go.uber.org/zap"
 
-	"voicx/internal/auth"
-	"voicx/internal/store"
+	"noxa/internal/auth"
+	"noxa/internal/store"
 )
 
 func main() {
@@ -37,7 +37,7 @@ func runMain() int {
 	nickname := flag.String("nickname", "", "user nickname (required)")
 	password := flag.String("password", "", "user password (required)")
 	admin := flag.Bool("admin", false, "grant server admin (users.is_admin)")
-	dsn := flag.String("db", "", "database DSN (default: VOICX_DATABASE_URL; required when unset)")
+	dsn := flag.String("db", "", "database DSN (default: NOXA_DATABASE_URL; required when unset)")
 	migrationTimeout := flag.Duration("migration-timeout", 5*time.Minute,
 		"maximum time to wait for the migration lock and apply migrations")
 	flag.Parse()
@@ -125,8 +125,8 @@ func databaseDSN(explicit string) (string, error) {
 	if explicit != "" {
 		return explicit, nil
 	}
-	if fromEnv := os.Getenv("VOICX_DATABASE_URL"); fromEnv != "" {
+	if fromEnv := os.Getenv("NOXA_DATABASE_URL"); fromEnv != "" {
 		return fromEnv, nil
 	}
-	return "", errors.New("database DSN is required: set -db or VOICX_DATABASE_URL")
+	return "", errors.New("database DSN is required: set -db or NOXA_DATABASE_URL")
 }

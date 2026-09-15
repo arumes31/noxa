@@ -7,8 +7,8 @@ import (
 
 	"go.uber.org/zap"
 
-	"voicx/internal/query"
-	"voicx/internal/state"
+	"noxa/internal/query"
+	"noxa/internal/state"
 )
 
 // TestListChannelsTotalOrder verifies channellist uses the total

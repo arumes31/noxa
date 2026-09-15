@@ -1,6 +1,6 @@
 // groups_test.go DB-backed tests for the wave-6a group/permission store.
 // They follow the repository's skip pattern: without a reachable Postgres the
-// tests skip. Set VOICX_TEST_DATABASE_URL to override the default dev URL.
+// tests skip. Set NOXA_TEST_DATABASE_URL to override the default dev URL.
 package store
 
 import (
@@ -17,7 +17,7 @@ import (
 // wave-6a tables/columns exist.
 func testDBStore(t *testing.T) *Store {
 	t.Helper()
-	configured := os.Getenv("VOICX_TEST_DATABASE_URL") != ""
+	configured := os.Getenv("NOXA_TEST_DATABASE_URL") != ""
 	s, err := New(testDBURL(), testLogger(), 2, 1, time.Minute)
 	if err != nil {
 		if configured {

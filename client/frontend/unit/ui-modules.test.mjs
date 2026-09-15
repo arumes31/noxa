@@ -75,6 +75,7 @@ function fileBrowserPane() {
         ".fb-crumb": crumb,
         ".fb-list": list,
         ".fb-quota": quota,
+        ".fb-filter": element(),
     }[selector] || null);
     return { list, pane };
 }
@@ -92,7 +93,7 @@ test("frontend UI module behaviors", { concurrency: false }, async (t) => {
         };
         const saved = [];
         replaceGlobal(t, "window", {
-            __voicx: { state },
+            __noxa: { state },
             go: {
                 main: {
                     App: {
@@ -220,7 +221,7 @@ test("frontend UI module behaviors", { concurrency: false }, async (t) => {
         let persisted = { user_volumes: { mia: 100 } };
         let failure = "";
         replaceGlobal(t, "window", {
-            __voicx: { state: { settings: persisted } },
+            __noxa: { state: { settings: persisted } },
             go: { main: { App: {
                 SaveSettings: async (value) => { if (!failure) persisted = value; return failure; },
                 GetSettings: async () => persisted,
@@ -235,7 +236,7 @@ test("frontend UI module behaviors", { concurrency: false }, async (t) => {
     });
 
     await t.test("chat parses messages, subscriptions, mentions, replies, and switcher scores", async (t) => {
-        replaceGlobal(t, "window", { __voicx: { state: { myNickname: "Dan" } } });
+        replaceGlobal(t, "window", { __noxa: { state: { myNickname: "Dan" } } });
         t.mock.module(new URL("../src/sounds.js", import.meta.url), {
             exports: { playEvent() {} },
         });
@@ -288,7 +289,7 @@ test("frontend UI module behaviors", { concurrency: false }, async (t) => {
             ["voice-mute", voiceMute],
         ]);
         replaceGlobal(t, "window", {
-            __voicx: { state: { channels: [], myChannelID: 0 } },
+            __noxa: { state: { channels: [], myChannelID: 0 } },
             getComputedStyle: () => ({ display: "block", visibility: "visible" }),
         });
         replaceGlobal(t, "document", {
@@ -413,7 +414,7 @@ test("frontend UI module behaviors", { concurrency: false }, async (t) => {
             },
         });
         replaceGlobal(t, "window", {
-            __voicx: { state: { serverGeneration: 7 }, toast: (...args) => toasts.push(args) },
+            __noxa: { state: { serverGeneration: 7 }, toast: (...args) => toasts.push(args) },
         });
         const imageTools = await import("../src/image-tools.js");
 
@@ -450,7 +451,7 @@ test("frontend UI module behaviors", { concurrency: false }, async (t) => {
 
     await t.test("client info derives audio stats, durations, channel trees, and presets", async (t) => {
         replaceGlobal(t, "window", {
-            __voicx: {
+            __noxa: {
                 state: {
                     channels: [
                         { ChannelID: 1 }, { ChannelID: 2, ParentID: 1 }, { ChannelID: 3, ParentID: 2 }, { ChannelID: 4 },

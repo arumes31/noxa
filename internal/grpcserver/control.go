@@ -12,11 +12,11 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	"voicx/internal/auth"
-	"voicx/internal/channels"
-	"voicx/internal/query"
-	"voicx/internal/safecast"
-	voicxv1 "voicx/v1"
+	"noxa/internal/auth"
+	"noxa/internal/channels"
+	"noxa/internal/query"
+	"noxa/internal/safecast"
+	noxav1 "noxa/v1"
 )
 
 const (
@@ -30,7 +30,7 @@ const (
 // per-client permission check, and a bot API that hands out its own tokens
 // would be a second, unchecked path to the file port.
 type controlService struct {
-	voicxv1.UnimplementedControlServer
+	noxav1.UnimplementedControlServer
 	backend      query.Backend
 	logger       *zap.Logger
 	authenticate func(context.Context, string, string, string) (bool, error)
@@ -39,7 +39,7 @@ type controlService struct {
 // Authenticate validates credentials. It is the one RPC that carries its own
 // credentials; every other RPC repeats them in the authorization metadata, so
 // no session token is minted.
-func (c *controlService) Authenticate(ctx context.Context, req *voicxv1.AuthenticateRequest) (*voicxv1.AuthenticateResponse, error) {
+func (c *controlService) Authenticate(ctx context.Context, req *noxav1.AuthenticateRequest) (*noxav1.AuthenticateResponse, error) {
 	ok, err := c.authenticate(ctx, remoteIPFromContext(ctx), req.GetUsername(), req.GetPassword())
 	if err != nil {
 		c.logger.Warn("grpc authenticate error", zap.Error(err))
@@ -49,11 +49,11 @@ func (c *controlService) Authenticate(ctx context.Context, req *voicxv1.Authenti
 		return nil, status.Error(codes.Unauthenticated, "invalid credentials")
 	}
 	// Populate the deprecated success field for clients generated from the v1 API.
-	return &voicxv1.AuthenticateResponse{Success: true, UserId: req.GetUsername()}, nil
+	return &noxav1.AuthenticateResponse{Success: true, UserId: req.GetUsername()}, nil
 }
 
 // ListChannels returns the channel tree, optionally rooted at one channel.
-func (c *controlService) ListChannels(ctx context.Context, req *voicxv1.ListChannelsRequest) (*voicxv1.ListChannelsResponse, error) {
+func (c *controlService) ListChannels(ctx context.Context, req *noxav1.ListChannelsRequest) (*noxav1.ListChannelsResponse, error) {
 	var root int64
 	if v := req.GetRootChannelId(); v != "" {
 		parsed, err := strconv.ParseInt(v, 10, 64)
@@ -64,7 +64,7 @@ func (c *controlService) ListChannels(ctx context.Context, req *voicxv1.ListChan
 	}
 	all := uniqueChannels(c.backend.ListChannels(ctx))
 	keep := subtreeCanonical(all, root)
-	resp := &voicxv1.ListChannelsResponse{}
+	resp := &noxav1.ListChannelsResponse{}
 	warnings := 0
 	for _, ch := range all {
 		if !keep[ch.ChannelID] {
@@ -80,7 +80,7 @@ func (c *controlService) ListChannels(ctx context.Context, req *voicxv1.ListChan
 			c.warnInvalidChannelRow(ch.ChannelID, "current_clients", &warnings)
 			continue
 		}
-		resp.Channels = append(resp.Channels, &voicxv1.Channel{
+		resp.Channels = append(resp.Channels, &noxav1.Channel{
 			Id:             strconv.FormatInt(ch.ChannelID, 10),
 			Name:           ch.Name,
 			ParentId:       formatInt(ch.ParentID),
@@ -161,7 +161,7 @@ func subtreeCanonical(all []query.ChannelInfo, root int64) map[int64]bool {
 }
 
 // CreateChannel creates a channel.
-func (c *controlService) CreateChannel(ctx context.Context, req *voicxv1.CreateChannelRequest) (*voicxv1.CreateChannelResponse, error) {
+func (c *controlService) CreateChannel(ctx context.Context, req *noxav1.CreateChannelRequest) (*noxav1.CreateChannelResponse, error) {
 	name := strings.TrimSpace(req.GetName())
 	if name == "" {
 		return nil, status.Error(codes.InvalidArgument, "name is required")
@@ -191,11 +191,11 @@ func (c *controlService) CreateChannel(ctx context.Context, req *voicxv1.CreateC
 	if err != nil {
 		return nil, grpcBackendStatus(c.logger, "create channel", err)
 	}
-	return &voicxv1.CreateChannelResponse{Success: true, ChannelId: strconv.FormatInt(id, 10)}, nil
+	return &noxav1.CreateChannelResponse{Success: true, ChannelId: strconv.FormatInt(id, 10)}, nil
 }
 
 // DeleteChannel removes a channel.
-func (c *controlService) DeleteChannel(ctx context.Context, req *voicxv1.DeleteChannelRequest) (*voicxv1.DeleteChannelResponse, error) {
+func (c *controlService) DeleteChannel(ctx context.Context, req *noxav1.DeleteChannelRequest) (*noxav1.DeleteChannelResponse, error) {
 	id, err := strconv.ParseInt(req.GetChannelId(), 10, 64)
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, "channel_id must be numeric")
@@ -207,7 +207,7 @@ func (c *controlService) DeleteChannel(ctx context.Context, req *voicxv1.DeleteC
 	if err := c.backend.DeleteChannel(ctx, id, reason); err != nil {
 		return nil, grpcBackendStatus(c.logger, "delete channel", err)
 	}
-	return &voicxv1.DeleteChannelResponse{Success: true}, nil
+	return &noxav1.DeleteChannelResponse{Success: true}, nil
 }
 
 // grpcBackendStatus exposes only stable transport semantics. Backend details
@@ -234,21 +234,21 @@ func grpcBackendStatus(logger *zap.Logger, operation string, err error) error {
 // protoPermFor maps the coarse proto permission enum onto the permission keys
 // the resolver evaluates. The enum is a summary: only permissions it can name
 // are reported.
-var protoPermFor = map[string]voicxv1.Permission{
-	"i_channel_join_power":             voicxv1.Permission_PERMISSION_JOIN,
-	"i_client_talk_power":              voicxv1.Permission_PERMISSION_SPEAK,
-	"b_client_video_publish":           voicxv1.Permission_PERMISSION_VIDEO,
-	"b_client_use_channel_command":     voicxv1.Permission_PERMISSION_CHAT,
-	"i_client_kick_from_channel_power": voicxv1.Permission_PERMISSION_KICK,
-	"b_client_ban":                     voicxv1.Permission_PERMISSION_BAN,
-	"i_client_move_power":              voicxv1.Permission_PERMISSION_MOVE,
-	"b_channel_create_child":           voicxv1.Permission_PERMISSION_CREATE_CHANNEL,
-	"b_channel_delete":                 voicxv1.Permission_PERMISSION_DELETE_CHANNEL,
-	"i_ft_file_upload_power":           voicxv1.Permission_PERMISSION_TRANSFER_FILE,
+var protoPermFor = map[string]noxav1.Permission{
+	"i_channel_join_power":             noxav1.Permission_PERMISSION_JOIN,
+	"i_client_talk_power":              noxav1.Permission_PERMISSION_SPEAK,
+	"b_client_video_publish":           noxav1.Permission_PERMISSION_VIDEO,
+	"b_client_use_channel_command":     noxav1.Permission_PERMISSION_CHAT,
+	"i_client_kick_from_channel_power": noxav1.Permission_PERMISSION_KICK,
+	"b_client_ban":                     noxav1.Permission_PERMISSION_BAN,
+	"i_client_move_power":              noxav1.Permission_PERMISSION_MOVE,
+	"b_channel_create_child":           noxav1.Permission_PERMISSION_CREATE_CHANNEL,
+	"b_channel_delete":                 noxav1.Permission_PERMISSION_DELETE_CHANNEL,
+	"i_ft_file_upload_power":           noxav1.Permission_PERMISSION_TRANSFER_FILE,
 }
 
 // QueryPermissions summarises a user's resolved permissions in a channel.
-func (c *controlService) QueryPermissions(ctx context.Context, req *voicxv1.QueryPermissionsRequest) (*voicxv1.QueryPermissionsResponse, error) {
+func (c *controlService) QueryPermissions(ctx context.Context, req *noxav1.QueryPermissionsRequest) (*noxav1.QueryPermissionsResponse, error) {
 	uniqueID := req.GetUserId()
 	if uniqueID == "" {
 		var ok bool
@@ -273,10 +273,10 @@ func (c *controlService) QueryPermissions(ctx context.Context, req *voicxv1.Quer
 		c.logger.Warn("grpc permission overview error", zap.Error(err))
 		return nil, status.Error(codes.Internal, "internal error")
 	}
-	resp := &voicxv1.QueryPermissionsResponse{IsAdmin: isAdmin}
+	resp := &noxav1.QueryPermissionsResponse{IsAdmin: isAdmin}
 	for _, line := range lines {
 		perm, ok := protoPermFor[line.Key]
-		if !ok || perm == voicxv1.Permission_PERMISSION_UNSPECIFIED {
+		if !ok || perm == noxav1.Permission_PERMISSION_UNSPECIFIED {
 			continue
 		}
 		if line.Value > 0 {

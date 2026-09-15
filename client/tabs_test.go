@@ -10,8 +10,8 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"voicx/internal/netproto"
-	"voicx/internal/tlscert"
+	"noxa/internal/netproto"
+	"noxa/internal/tlscert"
 )
 
 // newTabApp returns an App with a fresh tab registry (no Wails context).

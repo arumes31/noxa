@@ -10,10 +10,10 @@ import (
 	"testing"
 	"time"
 
-	"voicx/internal/netproto"
-	"voicx/internal/permissions"
-	"voicx/internal/recorder"
-	"voicx/internal/webrtc"
+	"noxa/internal/netproto"
+	"noxa/internal/permissions"
+	"noxa/internal/recorder"
+	"noxa/internal/webrtc"
 )
 
 func TestVoicePermissionCallbacksHaveBoundedContext(t *testing.T) {

@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"voicx/internal/state"
+	"noxa/internal/state"
 )
 
 // TestBuildSnapshotOrderIsStable verifies siblings sharing an order index keep

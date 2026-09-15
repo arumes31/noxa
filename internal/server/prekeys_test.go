@@ -10,9 +10,9 @@ import (
 	"testing"
 	"time"
 
-	"voicx/internal/e2ee"
-	"voicx/internal/netproto"
-	"voicx/internal/store"
+	"noxa/internal/e2ee"
+	"noxa/internal/netproto"
+	"noxa/internal/store"
 )
 
 func TestPreKeyPublishAndOneTimeQuery(t *testing.T) {

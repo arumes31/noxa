@@ -16,7 +16,7 @@ import (
 	"fmt"
 	"time"
 
-	"voicx/internal/safecast"
+	"noxa/internal/safecast"
 )
 
 // ScopeKey is one persisted generation of a scope's chat key. Wrapped is

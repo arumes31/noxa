@@ -35,9 +35,9 @@ import (
 	"golang.org/x/crypto/nacl/box"
 	"golang.org/x/crypto/nacl/secretbox"
 
-	securee2ee "voicx/internal/e2ee"
-	"voicx/internal/netproto"
-	"voicx/internal/safecast"
+	securee2ee "noxa/internal/e2ee"
+	"noxa/internal/netproto"
+	"noxa/internal/safecast"
 )
 
 type E2EEDiagnostics struct {
@@ -579,6 +579,7 @@ func sealFile(data []byte, key [32]byte) ([]byte, error) {
 // dmHistoryKeyLabel domain-separates the local DM log key from every other use
 // of the identity's X25519 secret, so no future reuse of that secret can ever
 // produce the same key by accident.
+// Persisted history keys must use the same derivation label across product renames.
 const dmHistoryKeyLabel = "voicx/dm-history/v1"
 
 // dmHistoryKey derives the at-rest key for the local DM log (122) from the

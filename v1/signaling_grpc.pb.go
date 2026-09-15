@@ -4,7 +4,7 @@
 // - protoc             (unknown)
 // source: signaling.proto
 
-package voicxv1
+package noxav1
 
 import (
 	context "context"

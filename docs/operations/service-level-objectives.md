@@ -1,6 +1,6 @@
-# VoicX service-level objectives
+# noXa service-level objectives
 
-This document defines the production objectives for one VoicX deployment. It
+This document defines the production objectives for one noXa deployment. It
 does not turn process uptime into user availability: control, chat, media, and
 file transfer are measured independently with authenticated synthetic clients.
 
@@ -36,16 +36,16 @@ good probe attempts / all valid probe attempts
 ```
 
 Timeouts, protocol errors, digest mismatches, and missing observations are bad
-events. Probe-runner or network failures outside the VoicX deployment are
+events. Probe-runner or network failures outside the noXa deployment are
 labelled `invalid` and audited; they are not silently counted as good.
 
 Prometheus process metrics supplement, but do not replace, the synthetic SLIs:
 
 - `up` and `/readyz` distinguish process and dependency health;
-- `voicx_udp_packets_dropped_total` detects media admission pressure;
-- `voicx_db_pool_*` exposes connection-pool saturation;
-- `voicx_eventbus_*` exposes diagnostic-stream drops;
-- `voicx_file_transfers_total{result="error"}` corroborates file-probe failures.
+- `noxa_udp_packets_dropped_total` detects media admission pressure;
+- `noxa_db_pool_*` exposes connection-pool saturation;
+- `noxa_eventbus_*` exposes diagnostic-stream drops;
+- `noxa_file_transfers_total{result="error"}` corroborates file-probe failures.
 
 Labels must stay bounded. Never add user, channel, filename, IP address, or
 request identifiers to a Prometheus label.

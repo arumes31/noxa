@@ -8,7 +8,7 @@ import (
 
 	"go.uber.org/zap"
 
-	"voicx/internal/state"
+	"noxa/internal/state"
 )
 
 func TestMarkChannelIconsUsesConfinedValidatedDiscovery(t *testing.T) {

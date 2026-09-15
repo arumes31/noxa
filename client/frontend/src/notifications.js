@@ -3,10 +3,10 @@
 // muted channels (387), and DND (347/348, still badging silently). Also the
 // buddy-online watcher (383), keyword highlights (388), channel watch
 // (389), and the alpha notice (215).
-import { playEvent, play } from "./sounds.js";
+import { playEvent } from "./sounds.js";
 import { closeDialog, isCurrentServerDialog, mountDialog, mountServerDialog } from "./modal.js";
 
-const V = () => window.__voicx;
+const V = () => window.__noxa;
 const App = () => window.go.main.App;
 
 // MATRIX_EVENTS are the rows of the notification matrix (385).
@@ -81,7 +81,7 @@ function overrideAllows(channelID, className, defaultOn) {
 // Read-only policy check used by live chat announcements so assistive output
 // follows the same DND, channel override and matrix preferences as toasts.
 export function notificationOutputAllowed(event, ctx = {}, output = "toast") {
-    if (window.__voicxPolish?.dndActive?.()) return false;
+    if (window.__noxaPolish?.dndActive?.()) return false;
     if (!overrideAllows(ctx.channelID, ctx.className || "messages", true)) return false;
     return !!matrixRow(event)[output];
 }
@@ -90,11 +90,11 @@ export function notificationOutputAllowed(event, ctx = {}, output = "toast") {
 // DND → record-only; muted/overridden channels → filtered; matrix → which
 // outputs fire. ctx: {channelID, uid, className ("messages"|"mentions"|"joins"),
 // noSound, soundEvent, announce}. soundEvent chooses a more specific cue but
-// never bypasses this event's matrix row, channel override, or custom beep.
+// never bypasses this event's matrix row or channel override.
 export function notify(event, text, ctx = {}) {
     // (346) always record in the notification center (even under DND).
-    window.__voicxPolish?.recordNotification(event, text, ctx);
-    if (window.__voicxPolish?.dndActive?.()) return;
+    window.__noxaPolish?.recordNotification(event, text, ctx);
+    if (window.__noxaPolish?.dndActive?.()) return;
     if (!overrideAllows(ctx.channelID, ctx.className || "messages", true)) return;
     const row = matrixRow(event);
     if (row.toast) {
@@ -104,27 +104,19 @@ export function notify(event, text, ctx = {}) {
     }
     if (row.sound && !ctx.noSound) playEventSound(event, ctx.soundEvent);
     if (row.flash) App().FlashWindow();
-    if (row.native && !document.hasFocus()) App().Notify("voicx " + event, text.slice(0, 200));
+    if (row.native && !document.hasFocus()) App().Notify("noXa " + event, text.slice(0, 200));
 }
 
-// playEventSound plays an event's sound: custom beep (384) for the matrix
-// event when configured, else its specific sound-pack cue. This lets all
-// remote join/leave/move sounds share the join_leave policy without making a
-// user's existing join/leave custom beep silently stop working.
+// Precise action cues share the notification matrix's policy.
 function playEventSound(event, soundEvent = event) {
-    if (window.__voicxPolish?.dndActive?.()) return;
+    if (window.__noxaPolish?.dndActive?.()) return;
     const settings = V().state.settings;
     // Matrix sound permission is checked by notify() before this point. These
     // two checks additionally make a replay silent and let a precise action
-    // toggle (for example user_move_out) suppress its legacy join_leave beep.
+    // toggle (for example user_move_out) suppress the specific cue.
     if (V().state.replayingTabID
         || settings?.event_sounds?.[event] === false
         || settings?.event_sounds?.[soundEvent] === false) return;
-    const spec = settings?.custom_sounds?.[event];
-    if (spec && spec.freq > 0) {
-        play("sine", spec.freq, (spec.duration_ms || 200) / 1000, (V().state.settings?.sound_volume ?? 100) / 100);
-        return;
-    }
     playEvent(soundEvent);
 }
 
@@ -329,9 +321,9 @@ export function maybeAlphaNotice(force = false) {
     overlay.className = "dlg-overlay alpha-notice";
     overlay.innerHTML = `
         <div class="dlg">
-            <h3>voicx is alpha software</h3>
+            <h3>noXa is alpha software</h3>
             <div class="dlg-text">
-                <p>voicx ${ver} is under construction — expect bugs and rough edges.
+                <p>noXa ${ver} is under construction — expect bugs and rough edges.
                 Please report issues on the project tracker (Help → About has the link).</p>
                 <label class="dlg-label"><input type="checkbox" class="alpha-skip" /> don't show again for this version</label>
             </div>
@@ -403,7 +395,7 @@ export async function maybeIdentityBackupNag(force = false) {
 }
 
 export function initNotifications() {
-    window.__voicxNotify = {
+    window.__noxaNotify = {
         notify, checkBuddyOnline, resetBuddyWatch, matchKeyword,
         checkChannelWatch, channelOverride, saveChannelOverride, maybeAlphaNotice,
         maybeIdentityBackupNag, resetServerRules, notificationOutputAllowed,

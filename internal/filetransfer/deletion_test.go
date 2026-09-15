@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"voicx/internal/store"
+	"noxa/internal/store"
 )
 
 func TestDeleteChannelDataRevokesCapabilitiesAndRemovesDirectory(t *testing.T) {

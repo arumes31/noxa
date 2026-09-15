@@ -4,12 +4,23 @@
 version: v2
 managed:
   enabled: false
+# Keep published descriptors stable; map generated Go code into the renamed module.
 plugins:
   - remote: buf.build/protocolbuffers/go:v1.36.11
     out: .
-    opt: module=voicx
+    opt:
+      - module=noxa
+      - Mchat.proto=noxa/v1;noxav1
+      - Mcontrol.proto=noxa/v1;noxav1
+      - Mevents.proto=noxa/v1;noxav1
+      - Msignaling.proto=noxa/v1;noxav1
   - remote: buf.build/grpc/go:v1.5.1
     out: .
-    opt: module=voicx
+    opt:
+      - module=noxa
+      - Mchat.proto=noxa/v1;noxav1
+      - Mcontrol.proto=noxa/v1;noxav1
+      - Mevents.proto=noxa/v1;noxav1
+      - Msignaling.proto=noxa/v1;noxav1
 inputs:
   - directory: proto

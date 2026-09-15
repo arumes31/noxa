@@ -29,7 +29,7 @@ export function dialogLabelFromID(id) {
 // already labelled by native HTML, and an explicit existing `for` always wins.
 export function associateControlLabel(label, control) {
     if (!label || !control || label.contains(control) || label.htmlFor) return false;
-    if (!control.id) control.id = `voicx-control-${++controlLabelSerial}`;
+    if (!control.id) control.id = `noxa-control-${++controlLabelSerial}`;
     label.htmlFor = control.id;
     return true;
 }

@@ -20,7 +20,7 @@ import (
 	"errors"
 	"fmt"
 
-	"voicx/internal/permissions"
+	"noxa/internal/permissions"
 )
 
 // errPermsUnavailable is returned by permCheckerFor when the permission

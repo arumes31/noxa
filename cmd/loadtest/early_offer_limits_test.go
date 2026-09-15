@@ -7,7 +7,7 @@ import (
 	"testing/synctest"
 	"time"
 
-	"voicx/internal/netproto"
+	"noxa/internal/netproto"
 )
 
 func TestInitialAnswerRejectsMultiplePendingOffers(t *testing.T) {

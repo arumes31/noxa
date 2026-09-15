@@ -12,8 +12,8 @@ import (
 
 	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
 
-	"voicx/internal/netproto"
-	"voicx/internal/version"
+	"noxa/internal/netproto"
+	"noxa/internal/version"
 )
 
 // windowOpacityApply is replaceable in ordering tests. Production uses the
@@ -396,7 +396,7 @@ func (a *App) CertificateClockWarning() string {
 }
 
 func certificateClockWarning(now, notBefore, notAfter time.Time) string {
-	const trustContext = "VoicX connected using fingerprint pinning; certificate dates did not decide trust. "
+	const trustContext = "noXa connected using fingerprint pinning; certificate dates did not decide trust. "
 	if now.IsZero() || notBefore.IsZero() || notAfter.IsZero() {
 		return ""
 	}
@@ -739,7 +739,7 @@ func (a *App) SetAlwaysOnTop(on bool) {
 
 // Greet is kept from the scaffold as a binding smoke test.
 func (a *App) Greet(name string) string {
-	return fmt.Sprintf("Hello %s, welcome to voicx!", name)
+	return fmt.Sprintf("Hello %s, welcome to noXa!", name)
 }
 
 // ClientVersion returns the full embedded version string.

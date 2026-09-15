@@ -218,7 +218,7 @@ test("shared modal lifecycle handles focus, cancellation, removal, and restorati
     globalThis.HTMLElement = FakeElement;
     globalThis.MutationObserver = FakeMutationObserver;
     globalThis.document = document;
-    globalThis.window = { __voicx: { state: { serverGeneration: 1 } } };
+    globalThis.window = { __noxa: { state: { serverGeneration: 1 } } };
     globalThis.requestAnimationFrame = (callback) => {
         frames.push(callback);
         return frames.length;
@@ -317,11 +317,11 @@ test("shared modal lifecycle handles focus, cancellation, removal, and restorati
 
         const legacy = dialog(document, "Legacy veto", [element(document, "button")]);
         const prevent = (event) => event.preventDefault();
-        legacy.overlay.addEventListener("voicx-dialog-cancel", prevent);
+        legacy.overlay.addEventListener("noxa-dialog-cancel", prevent);
         mountDialog(legacy.overlay);
         flushFrames();
         assert.equal(closeDialog(legacy.overlay, "cancel"), false);
-        legacy.overlay.removeEventListener("voicx-dialog-cancel", prevent);
+        legacy.overlay.removeEventListener("noxa-dialog-cancel", prevent);
         assert.equal(closeDialog(legacy.overlay), true);
         flushFrames();
 
@@ -345,7 +345,7 @@ test("shared modal lifecycle handles focus, cancellation, removal, and restorati
 
         assert.equal(isCurrentServerDialog(serverDialog.overlay), true);
         assert.equal(isCurrentServerDialog(nested.overlay), true);
-        globalThis.window.__voicx.state.serverGeneration++;
+        globalThis.window.__noxa.state.serverGeneration++;
         assert.equal(isCurrentServerDialog(serverDialog.overlay), false);
         assert.equal(closeServerDialogs(), 2);
         flushFrames();
@@ -551,7 +551,7 @@ test("shared modal lifecycle handles focus, cancellation, removal, and restorati
 
         const reset = promptDialog({ title: "Server-owned prompt", serverScoped: true });
         flushFrames();
-        globalThis.window.__voicx.state.serverGeneration++;
+        globalThis.window.__noxa.state.serverGeneration++;
         assert.equal(closeServerDialogs(), 1);
         assert.equal(await reset, null);
         flushFrames();

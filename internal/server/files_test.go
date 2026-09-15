@@ -9,12 +9,12 @@ import (
 	"testing"
 	"time"
 
-	"voicx/internal/auth"
-	"voicx/internal/config"
-	"voicx/internal/netproto"
-	"voicx/internal/permissions"
-	"voicx/internal/state"
-	"voicx/internal/store"
+	"noxa/internal/auth"
+	"noxa/internal/config"
+	"noxa/internal/netproto"
+	"noxa/internal/permissions"
+	"noxa/internal/state"
+	"noxa/internal/store"
 )
 
 func closeFileTestResource(t *testing.T, closer io.Closer) {

@@ -1,4 +1,4 @@
-# .dockerignore for voicx
+# .dockerignore for noxa
 # Keep the Docker build context small and reproducible by excluding files
 # that are not needed to compile or run the binary.
 

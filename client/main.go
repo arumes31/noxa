@@ -28,10 +28,13 @@ func configureStandardLogger() {
 
 // runApp is main's body under the crash guard.
 func runApp() {
-	// Log to <UserConfigDir>/voicx/client.log — a GUI app has no console, so
+	// Log to <UserConfigDir>/noxa/client.log — a GUI app has no console, so
 	// hotkey/connection failures must be diagnosable from a file.
 	if dir, err := os.UserConfigDir(); err == nil {
-		logDir := filepath.Join(dir, "voicx")
+		if err := migrateLegacyConfig(dir); err != nil {
+			log.Fatalf("cannot migrate noXa profile: %v", err)
+		}
+		logDir := filepath.Join(dir, "noxa")
 		if writer, err := newDailyLogWriter(logDir, "client.log"); err == nil {
 			log.SetOutput(writer)
 			defer func() { _ = writer.Close() }()
@@ -46,7 +49,7 @@ func runApp() {
 // runWails owns the native application loop on the calling OS thread.
 func runWails(app *App) {
 	err := wails.Run(&options.App{
-		Title:  "voicx",
+		Title:  "noXa",
 		Width:  1024,
 		Height: 768,
 		AssetServer: &assetserver.Options{

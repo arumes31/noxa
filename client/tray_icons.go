@@ -7,8 +7,11 @@ import (
 	"image/color"
 	"image/png"
 	"log"
+	"math"
 	"runtime"
 	"sync"
+
+	"noxa/internal/safecast"
 )
 
 type trayIconState uint8
@@ -44,6 +47,9 @@ var trayIcons = sync.OnceValue(func() map[trayIconState][]byte {
 		icons[mode] = out.Bytes()
 		if runtime.GOOS == "windows" {
 			icons[mode] = trayPNGToICO(out.Bytes(), img.Bounds().Dx())
+			if icons[mode] == nil {
+				icons[mode] = trayIcon()
+			}
 		}
 	}
 	return icons
@@ -64,9 +70,8 @@ func trayStateImage(source image.Image, mode trayIconState) *image.NRGBA {
 	}
 	for y := img.Bounds().Min.Y; y < img.Bounds().Max.Y; y++ {
 		for x := img.Bounds().Min.X; x < img.Bounds().Max.X; x++ {
-			_, _, _, alpha := source.At(x, y).RGBA()
 			pixel := tint
-			pixel.A = uint8(alpha >> 8)
+			pixel.A = color.AlphaModel.Convert(source.At(x, y)).(color.Alpha).A
 			img.SetNRGBA(x, y, pixel)
 		}
 	}
@@ -115,13 +120,25 @@ func absTray(value int) int {
 // ICO supports PNG payloads. A single 32px RGBA entry preserves transparency
 // and lets Windows scale the logo for the user's tray DPI.
 func trayPNGToICO(data []byte, size int) []byte {
+	if size < 1 || size > 256 || len(data) > math.MaxInt-22 {
+		return nil
+	}
+	// ICO stores a 256px dimension as zero in its one-byte directory field.
+	dimension, err := safecast.IntToUint8(size % 256)
+	if err != nil {
+		return nil
+	}
+	payloadSize, err := safecast.IntToUint32(len(data))
+	if err != nil {
+		return nil
+	}
 	ico := make([]byte, 22+len(data))
 	binary.LittleEndian.PutUint16(ico[2:], 1)
 	binary.LittleEndian.PutUint16(ico[4:], 1)
-	ico[6], ico[7] = byte(size), byte(size)
+	ico[6], ico[7] = dimension, dimension
 	binary.LittleEndian.PutUint16(ico[10:], 1)
 	binary.LittleEndian.PutUint16(ico[12:], 32)
-	binary.LittleEndian.PutUint32(ico[14:], uint32(len(data)))
+	binary.LittleEndian.PutUint32(ico[14:], payloadSize)
 	binary.LittleEndian.PutUint32(ico[18:], 22)
 	copy(ico[22:], data)
 	return ico

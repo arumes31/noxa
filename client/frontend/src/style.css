@@ -1,4 +1,4 @@
-/* voicx — voice ops console design system
+/* noxa — voice ops console design system
    Base: deep-space ink. Accent (signal green) is reserved EXCLUSIVELY for
    voice activity. Warnings: muted amber. */
 
@@ -517,6 +517,7 @@ body:not(.details-collapsed) #details-toggle { display: none; }
 .settings-nav-item.active { background: var(--bg-hover); color: var(--text); font-weight: 600; }
 .nav-icon { width: 18px; text-align: center; }
 .settings-main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+.settings-search-summary, .settings-save-status { margin: 0; padding: 8px 16px; overflow-wrap: anywhere; }
 #settings-content { flex: 1; overflow-y: auto; padding: 16px; }
 .settings-footer {
     display: flex; gap: 8px; justify-content: flex-end;
@@ -1416,6 +1417,8 @@ mark { background: var(--warn); color: #3a2a05; border-radius: 2px; padding: 0 1
 .fb-crumb a { color: var(--accent); cursor: pointer; }
 .fb-crumb a:hover { text-decoration: underline; }
 .fb-spacer { flex: 1; }
+.fb-filter { width: 100%; min-width: 0; box-sizing: border-box; }
+.fb-sort { background: transparent; border: 0; color: inherit; font: inherit; padding: 4px 0; cursor: pointer; }
 .fb-upload {
     width: auto;
     padding: 0 10px;
@@ -1656,6 +1659,7 @@ body.compact #voice-bar { justify-content: center; padding: 12px; }
 /* (327) debug console */
 .dlg.debug-console { width: 780px; max-width: 94vw; max-height: 80vh; display: flex; flex-direction: column; }
 .dbg-toolbar { display: flex; gap: 6px; margin: 8px 0; }
+.dbg-follow { min-height: 32px; display: flex; justify-content: flex-end; margin-top: 6px; }
 .dbg-toolbar button { background: var(--bg-hover); border: 1px solid var(--border); color: var(--text); border-radius: 6px; cursor: pointer; padding: 4px 10px; font-size: 0.7857rem; }
 .dbg-list { flex: 1; overflow-y: auto; border: 1px solid var(--border); border-radius: 8px; padding: 6px; font-size: 0.7857rem; }
 .dbg-row { padding: 1px 0; }
@@ -1815,7 +1819,7 @@ input::placeholder, textarea::placeholder { color: var(--text-faint); opacity: 1
 }
 
 /* ------------------------------------------------------------- wave 9 */
-/* Alpha badge, notification matrix, custom beep, buddy watch. */
+/* Alpha badge, notification matrix, buddy watch. */
 
 #alpha-badge {
     color: var(--warn); font: 700 0.9286rem var(--font-display); cursor: pointer;
@@ -1823,15 +1827,23 @@ input::placeholder, textarea::placeholder { color: var(--text-faint); opacity: 1
 }
 #alpha-badge:hover { color: var(--accent); }
 
-.notify-matrix td, .notify-matrix th { text-align: center; }
+.perm-grid.notify-matrix { table-layout: auto; }
+.notify-matrix td, .notify-matrix th { text-align: center; padding: 4px 5px; }
+.perm-grid.notify-matrix th:first-child { width: auto; }
+.identity-table-scroll { overflow-x: auto; }
+.perm-grid.identity-grid { table-layout: auto; min-width: 640px; }
+.perm-grid.identity-grid th:first-child { width: auto; }
+.identity-grid th { white-space: nowrap; }
+.identity-grid .id-actions { min-width: 180px; }
+.identity-grid .id-actions button { white-space: nowrap; margin: 2px; }
+.notify-matrix th, .notify-matrix button { white-space: nowrap; }
 .notify-matrix td:first-child, .notify-matrix th:first-child { text-align: left; }
-.beep-cell { white-space: nowrap; }
-.beep-cell input {
-    width: 64px; background: var(--bg-raised); border: 1px solid var(--border);
-    border-radius: 6px; color: var(--text); font-size: 0.7857rem; padding: 2px 4px;
-    margin-right: 4px;
+.sound-controls { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.sound-controls button, .notify-matrix button {
+    min-height: 32px; padding: 4px 10px; background: var(--bg-hover);
+    border: 1px solid var(--border); border-radius: 6px; color: var(--text); cursor: pointer;
 }
-.beep-cell button { background: var(--bg-hover); border: 1px solid var(--border); color: var(--text); border-radius: 6px; cursor: pointer; padding: 2px 7px; }
+.set-subhead.sound-controls { justify-content: space-between; }
 
 /* 👻 invisible users (admin view) */
 .client.invisible .client-name { opacity: 0.45; font-style: italic; }

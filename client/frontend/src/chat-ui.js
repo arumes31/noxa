@@ -11,7 +11,6 @@
 // Threads prefer the protocol reply_to_id field. The legacy quote-prefix
 // resolver remains for history written by older clients.
 import { renderMarkdown, escapeHTML, EMOJI } from "./markdown.js";
-import { playEvent } from "./sounds.js";
 import { pickIcon } from "./image-tools.js";
 import { closeDialog, confirmDialog, isCurrentServerDialog, mountServerDialog, promptDialog } from "./modal.js";
 import { imageDataURL } from "./safe-media.js";
@@ -20,7 +19,7 @@ import { parseFileRef, transformCustomEmoji } from "./chat-parsers.js";
 import { captureScope, scopeIsCurrent } from "./scoped-actions.js";
 import { avatarColor } from "./workspace-ui.js";
 
-const V = () => window.__voicx;
+const V = () => window.__noxa;
 const $ = (id) => document.getElementById(id);
 const app = () => window.go.main.App;
 
@@ -184,7 +183,7 @@ function chatSurfaceVisible(key) {
 
 function chatAnnouncementAllowed(event, ctx, key) {
     if (!chatSurfaceVisible(key)) return false;
-    return window.__voicxNotify?.notificationOutputAllowed?.(event, ctx, "toast") ?? true;
+    return window.__noxaNotify?.notificationOutputAllowed?.(event, ctx, "toast") ?? true;
 }
 
 function chatAnnouncementText(message) {
@@ -1701,7 +1700,7 @@ export function addChat(d) {
         m.mentioned = true; // (106) accent highlight
     } else if (!m.self) {
         // (388) keyword highlights: whole-word match gets mention treatment.
-        const kw = window.__voicxNotify?.matchKeyword(m.text || "");
+        const kw = window.__noxaNotify?.matchKeyword(m.text || "");
         const keywordLevelAllowed = level === "all" || level === "channel_mentions";
         if (kw) {
             m.mentioned = true;
@@ -1743,12 +1742,12 @@ export function addChat(d) {
             announcementEvent = event;
             announcementContext = context;
         }
-        window.__voicxNotify?.notify(event, text, { ...context, announce: false });
+        window.__noxaNotify?.notify(event, text, { ...context, announce: false });
     }
     if (key === activeKey()) {
         if (position === "append") appendLive(m);
         else renderView();
-    } else if (!m.self && !window.__voicxNotify?.channelOverride?.(chID)?.muted) {
+    } else if (!m.self && !window.__noxaNotify?.channelOverride?.(chID)?.muted) {
         // (104) unread badge for a non-selected channel. A muted channel (387)
         // suppresses the badge too — silencing only the sound would still nag
         // through the tree.
@@ -1809,7 +1808,7 @@ function routeDM(d, m) {
     const key = "dm:" + peer;
     if (pushMsg(key, m) === "duplicate") return false;
     if (!m.self && !m.offline) {
-        window.__voicxNotify?.notify("dm", (m.from || "someone") + ": " + (m.text || "").slice(0, 80),
+        window.__noxaNotify?.notify("dm", (m.from || "someone") + ": " + (m.text || "").slice(0, 80),
             { uid: peer, className: "messages", kind: "info", announce: false });
     }
     dmRecord(peer, tab.nick, m); // (122) both directions, so a restart replays the thread
@@ -1823,7 +1822,7 @@ function routeDM(d, m) {
         b.timer = setTimeout(() => {
             offlineBatch.delete(peer);
             const summary = `${b.n} offline message${b.n === 1 ? "" : "s"} from ${b.nick}`;
-            window.__voicxNotify?.notify("dm", summary,
+            window.__noxaNotify?.notify("dm", summary,
                 { uid: peer, className: "messages", kind: "info", announce: false });
             if (chatAnnouncementAllowed("dm", { uid: peer, className: "messages" }, key)) {
                 V().announceLive(summary);
@@ -2902,7 +2901,7 @@ async function exportChat() {
     const contents = res.text || "";
     if (pass !== "") {
         try {
-            await app().ExportChatEncrypted(`voicx-${name}.voicxchat`, contents, pass);
+            await app().ExportChatEncrypted(`noxa-${name}.noxachat`, contents, pass);
             if (!exportScopeIsCurrent(exportScope)) return;
         } catch (e) {
             if (!exportScopeIsCurrent(exportScope)) return;
@@ -2910,7 +2909,7 @@ async function exportChat() {
             return;
         }
     } else {
-        const err = await app().ExportChat(`voicx-${name}.txt`, contents);
+        const err = await app().ExportChat(`noxa-${name}.txt`, contents);
         if (!exportScopeIsCurrent(exportScope)) return;
         if (err) {
             V().toast("export failed: " + err, "warn");
@@ -2943,7 +2942,7 @@ function askExportPassphrase() {
         const warn = document.createElement("div");
         warn.className = "set-hint warn";
         warn.textContent = "A plain export writes DECRYPTED messages to a file on your disk. " +
-            "Enter a passphrase to write an encrypted .voicxchat instead.";
+            "Enter a passphrase to write an encrypted .noxachat instead.";
         dlg.appendChild(warn);
         const inp = document.createElement("input");
         inp.type = "password";
@@ -3005,7 +3004,7 @@ export function onAnnouncement(d) {
     const text = d.text || "";
     if (!text) return;
     // (385) announcements go through the notification matrix.
-    window.__voicxNotify?.notify("announcement", "announcement: " + text.slice(0, 100), { className: "messages", kind: "warn" });
+    window.__noxaNotify?.notify("announcement", "announcement: " + text.slice(0, 100), { className: "messages", kind: "warn" });
     const h = hashStr(text);
     const s = V().state.settings;
     if (s?.dismissed_announcement === h) return; // already dismissed
@@ -3502,7 +3501,7 @@ export function initChat() {
     });
 
     // Share helpers through the module namespace (clientinfo.js pattern).
-    Object.assign(window.__voicx, {
+    Object.assign(window.__noxa, {
         openPM,
         applyChatPrefs,
         chatUnread: (chID) => unread.get(chID) || null,

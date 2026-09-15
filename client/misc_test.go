@@ -17,7 +17,7 @@ func TestConfigDirCreatesAppDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("configDir: %v", err)
 	}
-	if want := filepath.Join(filepath.Dir(dir), "voicx"); dir != want {
+	if want := filepath.Join(filepath.Dir(dir), "noxa"); dir != want {
 		t.Fatalf("configDir = %q, want %q", dir, want)
 	}
 	info, err := os.Stat(dir)
@@ -53,7 +53,7 @@ func TestLogChatWritesTimestampedDailyLog(t *testing.T) {
 
 	(&App{}).LogChat("hello from test")
 	closeDailyLogs()
-	raw, err := os.ReadFile(filepath.Join(base, "voicx", "chat.log"))
+	raw, err := os.ReadFile(filepath.Join(base, "noxa", "chat.log"))
 	if err != nil {
 		t.Fatalf("read chat log: %v", err)
 	}

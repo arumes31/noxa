@@ -17,7 +17,7 @@ import (
 
 	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
 
-	"voicx/internal/version"
+	"noxa/internal/version"
 )
 
 type logArchiveWriter interface {
@@ -33,13 +33,13 @@ var (
 	shortVersion        = version.Short
 )
 
-// logDir returns the client log directory (<UserConfigDir>/voicx).
+// logDir returns the client log directory (<UserConfigDir>/noxa).
 func logDir() (string, error) {
 	dir, err := metaUserConfigDir()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(dir, "voicx"), nil
+	return filepath.Join(dir, "noxa"), nil
 }
 
 func openLogRoot() (*os.Root, error) {
@@ -58,7 +58,7 @@ func openLogRoot() (*os.Root, error) {
 func (a *App) ExportLogs() string {
 	dest, err := wailsRuntime.SaveFileDialog(a.ctx, wailsRuntime.SaveDialogOptions{
 		Title:           "Export logs",
-		DefaultFilename: fmt.Sprintf("voicx-logs-%s.zip", time.Now().Format("20060102-150405")),
+		DefaultFilename: fmt.Sprintf("noxa-logs-%s.zip", time.Now().Format("20060102-150405")),
 		Filters:         []wailsRuntime.FileFilter{{DisplayName: "Zip archives", Pattern: "*.zip"}},
 	})
 	if err != nil || dest == "" {

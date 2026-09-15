@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"voicx/internal/netproto"
+	"noxa/internal/netproto"
 )
 
 type fragmentingConn struct{ net.Conn }

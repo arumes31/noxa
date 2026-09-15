@@ -4,7 +4,7 @@
 // - protoc             (unknown)
 // source: control.proto
 
-package voicxv1
+package noxav1
 
 import (
 	context "context"

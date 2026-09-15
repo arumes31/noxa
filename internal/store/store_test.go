@@ -63,21 +63,21 @@ func TestPingSkipsWhenNoDB(t *testing.T) {
 
 // testDBURL is the dev database URL every DB-backed test connects to.
 func testDBURL() string {
-	if url := os.Getenv("VOICX_TEST_DATABASE_URL"); url != "" {
+	if url := os.Getenv("NOXA_TEST_DATABASE_URL"); url != "" {
 		return url
 	}
-	return "postgres://voicx:voicx@127.0.0.1:55432/voicx?sslmode=disable"
+	return "postgres://noxa:noxa@127.0.0.1:55432/noxa?sslmode=disable"
 }
 
 // testScratchStore creates an EMPTY throwaway database and returns a Store
 // bound to it. The shared dev database is already migrated, so it cannot
 // answer the only question these tests ask — did this file run exactly once,
-// starting from nothing. Without VOICX_TEST_DATABASE_URL it skips when the
+// starting from nothing. Without NOXA_TEST_DATABASE_URL it skips when the
 // local database is unavailable; an explicitly configured CI database must
 // instead surface connection, setup, and permission failures.
 func testScratchStore(t *testing.T) *Store {
 	t.Helper()
-	configured := os.Getenv("VOICX_TEST_DATABASE_URL") != ""
+	configured := os.Getenv("NOXA_TEST_DATABASE_URL") != ""
 	base := testDBURL()
 	admin, err := sql.Open("postgres", base)
 	if err != nil {
@@ -95,7 +95,7 @@ func testScratchStore(t *testing.T) *Store {
 		}
 		t.Skipf("no database available (%v); skipping migration test", err)
 	}
-	name := fmt.Sprintf("voicx_scratch_%d", time.Now().UnixNano())
+	name := fmt.Sprintf("noxa_scratch_%d", time.Now().UnixNano())
 	if _, err := admin.ExecContext(t.Context(), "CREATE DATABASE "+name); err != nil {
 		_ = admin.Close()
 		if configured {
@@ -140,7 +140,7 @@ func testScratchStore(t *testing.T) *Store {
 }
 
 // testAdditionalStore opens a distinct pool to the same scratch database,
-// modeling a second voicx process for advisory-lock tests.
+// modeling a second noxa process for advisory-lock tests.
 func testAdditionalStore(t *testing.T, existing *Store) *Store {
 	t.Helper()
 	var databaseName string

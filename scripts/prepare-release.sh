@@ -34,11 +34,11 @@ else
 fi
 
 metadata="$(go run ./cmd/version -check -format github)"
-grep -Fxq "VOICX_VERSION=${tag#v}" <<< "$metadata"
-grep -Fxq "VOICX_DIRTY=false" <<< "$metadata"
+grep -Fxq "NOXA_VERSION=${tag#v}" <<< "$metadata"
+grep -Fxq "NOXA_DIRTY=false" <<< "$metadata"
 if [[ "$GITHUB_REF" == refs/heads/main ]]; then
-  grep -Fxq "VOICX_PRERELEASE=false" <<< "$metadata"
+  grep -Fxq "NOXA_PRERELEASE=false" <<< "$metadata"
 fi
 printf '%s\n' "$metadata" >> "$GITHUB_ENV"
 printf 'tag=%s\n' "$tag" >> "$GITHUB_OUTPUT"
-grep '^VOICX_PRERELEASE=' <<< "$metadata" | sed 's/VOICX_PRERELEASE=/prerelease=/' >> "$GITHUB_OUTPUT"
+grep '^NOXA_PRERELEASE=' <<< "$metadata" | sed 's/NOXA_PRERELEASE=/prerelease=/' >> "$GITHUB_OUTPUT"

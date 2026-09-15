@@ -23,7 +23,7 @@ import (
 	"go.uber.org/zap"
 )
 
-// Engine is the core WebRTC engine for the voicx server. It owns a reusable
+// Engine is the core WebRTC engine for the noxa server. It owns a reusable
 // Pion webrtc.API (built once from a configured MediaEngine, SettingEngine and
 // InterceptorRegistry) and a registry of active peer connections keyed by
 // clientID. The Engine is safe for concurrent use.
@@ -196,8 +196,8 @@ func generateDTLSCertificate(now time.Time) (*webrtc.Certificate, error) {
 		return nil, fmt.Errorf("generating serial: %w", err)
 	}
 	return webrtc.NewCertificate(privateKey, x509.Certificate{
-		Issuer:                pkix.Name{CommonName: "voicx ephemeral DTLS"},
-		Subject:               pkix.Name{CommonName: "voicx ephemeral DTLS"},
+		Issuer:                pkix.Name{CommonName: "noxa ephemeral DTLS"},
+		Subject:               pkix.Name{CommonName: "noxa ephemeral DTLS"},
 		SerialNumber:          serial,
 		Version:               2,
 		NotBefore:             now.Add(-24 * time.Hour),
@@ -320,7 +320,7 @@ func (e *Engine) PeerCount() int {
 	return len(e.peers)
 }
 
-// registerCodecs registers the audio and video codecs supported by the voicx
+// registerCodecs registers the audio and video codecs supported by the noxa
 // SFU on the given MediaEngine. AV1 is only registered when enableAV1 is true.
 func registerCodecs(m *webrtc.MediaEngine, enableAV1 bool) error {
 	// Audio: Opus (preferred) and G.722 as a fallback.

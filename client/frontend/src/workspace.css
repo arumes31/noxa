@@ -30,7 +30,7 @@ input, textarea { caret-color: var(--accent); }
 
 #app { height: 100dvh; display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: 40px 40px minmax(0, 1fr) auto; }
 #menubar { grid-column: 1; grid-row: 1; padding: 3px 12px; min-height: 0; background: var(--bg-raised); }
-#menubar::before { content: "voicx"; color: var(--text); font: 600 1.3rem var(--font-display); margin-right: 24px; padding-left: 32px; background: url("/branding/favicon-32.png") no-repeat left center / 26px 26px; }
+#menubar::before { content: "noXa"; color: var(--text); font: 600 1.3rem var(--font-display); margin-right: 24px; padding-left: 32px; background: url("/branding/favicon-32.png") no-repeat left center / 26px 26px; }
 .login-card .wordmark { display: flex; align-items: center; gap: 12px; }
 .login-logo { display: block; flex: none; object-fit: contain; }
 .menu-item { font-size: .95rem; border-radius: 4px; }

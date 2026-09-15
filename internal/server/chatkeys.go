@@ -38,8 +38,8 @@ import (
 	"golang.org/x/crypto/nacl/box"
 	"golang.org/x/crypto/nacl/secretbox"
 
-	"voicx/internal/chatcrypto"
-	"voicx/internal/netproto"
+	"noxa/internal/chatcrypto"
+	"noxa/internal/netproto"
 )
 
 // globalChatScope is the scope ID of the server-wide (global chat) key.

@@ -1,14 +1,15 @@
 // settings-ui.js — TS3-style settings dialog with left icon nav.
-import { t } from "./i18n.js";
+import { currentLanguage, t } from "./i18n.js";
+import { copyToClipboard } from "./clipboard.js";
 import { calibrateMic, startLoopback } from "./audio.js";
-import { play, SOUND_EVENT_GROUPS, testAll } from "./sounds.js";
+import { previewSounds, previewSpeech, stopPreviews, updateSoundOutput, SOUND_EVENT_GROUPS, testAll } from "./sounds.js";
 import { MATRIX_EVENTS, defaultMatrixRow } from "./notifications.js";
 import { associateControlLabel, wrappedIndex } from "./a11y.js";
 import { createMediaDeviceInventory } from "./media-devices.js";
 import { closeDialog, mountDialog } from "./modal.js";
 import { cameraConstraints } from "./video.js";
 
-const V = () => window.__voicx;
+const V = () => window.__noxa;
 
 const PAGES = [
     { id: "application", icon: "⚙", label: "settings.application" },
@@ -28,22 +29,20 @@ let stopCameraTest = () => {};
 
 function settings() { return draft; }
 
-async function commit() {
-    const err = await window.go.main.App.SaveSettings(draft);
-    if (err) {
-        V().toast("settings not saved: " + err, "warn");
-        return false;
-    }
+async function commit(snapshot) {
+    const err = await window.go.main.App.SaveSettings(snapshot);
+    if (err) throw new Error(err);
     // (282) the draft was cloned when the dialog opened: re-read the merged
     // truth so Go-owned fields (recents) written meanwhile survive.
     V().state.settings = await window.go.main.App.GetSettings();
+    void updateSoundOutput();
     // (126-129) chat display prefs apply live (CSS classes on #chat-log).
     if (V().applyChatPrefs) V().applyChatPrefs();
     // (294-297) appearance applies live (theme/accent/user CSS/font/compact).
     if (V().applyAppearance) V().applyAppearance();
     // (291) always-on-top and (292) opacity apply immediately.
-    window.go.main.App.SetAlwaysOnTop(!!draft.always_on_top);
-    window.go.main.App.SetWindowOpacity(draft.window_opacity || 100);
+    await window.go.main.App.SetAlwaysOnTop(!!snapshot.always_on_top);
+    await window.go.main.App.SetWindowOpacity(snapshot.window_opacity || 100);
     return true;
 }
 
@@ -124,12 +123,12 @@ function deviceSelect(devices, selectedId, onchange) {
     const sel = document.createElement("select");
     const def = document.createElement("option");
     def.value = "";
-    def.textContent = "Default device";
+    def.textContent = t("settings.default.device");
     sel.appendChild(def);
     for (const d of devices) {
         const o = document.createElement("option");
         o.value = d.deviceId;
-        o.textContent = d.label || `Device ${d.deviceId.slice(0, 8)}`;
+        o.textContent = d.label || t("settings.device", { id: d.deviceId.slice(0, 8) });
         sel.appendChild(o);
     }
     sel.value = selectedId || "";
@@ -151,8 +150,8 @@ function devicePicker(kind, selectedId, onchange, label) {
     const refreshBtn = document.createElement("button");
     refreshBtn.type = "button";
     refreshBtn.className = "device-refresh";
-    refreshBtn.textContent = "Refresh devices";
-    refreshBtn.setAttribute("aria-label", `Refresh ${label.toLowerCase()}`);
+    refreshBtn.textContent = t("settings.refresh.devices");
+    refreshBtn.setAttribute("aria-label", t("settings.refresh", { label: currentLanguage() === "en" ? label.toLowerCase() : label }));
 
     const status = document.createElement("span");
     status.className = "set-hint device-status";
@@ -160,15 +159,15 @@ function devicePicker(kind, selectedId, onchange, label) {
     status.setAttribute("aria-live", "polite");
 
     let loaded = false;
-    const deviceType = kind === "audioinput" ? "capture" : "playback";
+    const deviceType = t(kind === "audioinput" ? "settings.devices.capture" : "settings.devices.playback");
     const refresh = async (force = false) => {
         currentId = select.value || currentId;
         if (!loaded) select.disabled = true;
         refreshBtn.disabled = true;
-        refreshBtn.textContent = "Refreshing…";
+        refreshBtn.textContent = t("settings.refreshing");
         wrap.setAttribute("aria-busy", "true");
         status.classList.remove("warn");
-        status.textContent = force ? "Refreshing audio devices…" : "Loading audio devices…";
+        status.textContent = force ? t("settings.refreshing.audio.devices") : t("settings.loading.audio.devices");
 
         try {
             const inventory = await deviceInventory.load(force);
@@ -180,7 +179,7 @@ function devicePicker(kind, selectedId, onchange, label) {
             if (currentId && !devices.some((device) => device.deviceId === currentId)) {
                 const unavailable = document.createElement("option");
                 unavailable.value = currentId;
-                unavailable.textContent = "Saved device (currently unavailable)";
+                unavailable.textContent = t("settings.saved.device.currently.unavailable");
                 next.appendChild(unavailable);
                 next.value = currentId;
             }
@@ -191,22 +190,22 @@ function devicePicker(kind, selectedId, onchange, label) {
             select = next;
             loaded = true;
             status.textContent = force
-                ? `Devices refreshed — ${devices.length} ${deviceType} device${devices.length === 1 ? "" : "s"} found.`
+                ? t("settings.devices.refreshed", { count: devices.length, type: deviceType })
                 : "";
             if (devices.length === 0) {
-                status.textContent = `No ${deviceType} devices found. Check the connection and media permissions, then refresh.`;
+                status.textContent = t("settings.devices.empty", { type: deviceType });
             }
         } catch (error) {
             if (!loaded) {
-                select.options[0].textContent = "Devices unavailable";
+                select.options[0].textContent = t("settings.devices.unavailable");
                 select.disabled = true;
             }
             status.classList.add("warn");
-            const detail = error?.message || error?.name || "unknown error";
-            status.textContent = `Could not list audio devices: ${detail}. Check media permissions, then retry.`;
+            const detail = error?.message || error?.name || t("settings.unknown.error");
+            status.textContent = t("settings.devices.failed", { detail });
         } finally {
             refreshBtn.disabled = false;
-            refreshBtn.textContent = "Refresh devices";
+            refreshBtn.textContent = t("settings.refresh.devices");
             wrap.removeAttribute("aria-busy");
         }
     };
@@ -222,34 +221,45 @@ function devicePicker(kind, selectedId, onchange, label) {
 function pageApplication() {
     const s = settings();
     const el = document.createElement("div");
-    el.appendChild(row("Chat max lines", numberInput(s.chat_max_lines, 10, 5000, (v) => { s.chat_max_lines = v; })));
-    el.appendChild(row("Toasts for join/leave", checkbox(s.notify_join_leave, (v) => { s.notify_join_leave = v; })));
-    el.appendChild(row("Toasts for connection events", checkbox(s.notify_connection, (v) => { s.notify_connection = v; })));
-    el.appendChild(row("Reconnect on connection loss (5 tries)", checkbox(s.reconnect_on_loss, (v) => { s.reconnect_on_loss = v; })));
-    el.appendChild(row("Check for updates at startup", checkbox(s.updates_auto_check !== false, (v) => { s.updates_auto_check = v; })));
+    const langSel = document.createElement("select");
+    for (const [value, label] of [["system", t("settings.system.default")], ["en", "English"], ["de", "Deutsch"]]) {
+        const option = document.createElement("option");
+        option.value = value;
+        option.textContent = label;
+        langSel.appendChild(option);
+    }
+    langSel.value = s.language || "system";
+    langSel.onchange = () => { s.language = langSel.value; };
+    el.appendChild(row(t("settings.language"), langSel));
+    el.appendChild(hint(t("settings.language.help")));
+    el.appendChild(row(t("settings.chat.max.lines"), numberInput(s.chat_max_lines, 10, 5000, (v) => { s.chat_max_lines = v; })));
+    el.appendChild(row(t("settings.toasts.for.join.leave"), checkbox(s.notify_join_leave, (v) => { s.notify_join_leave = v; })));
+    el.appendChild(row(t("settings.toasts.for.connection.events"), checkbox(s.notify_connection, (v) => { s.notify_connection = v; })));
+    el.appendChild(row(t("settings.reconnect.on.connection.loss.5.tries"), checkbox(s.reconnect_on_loss, (v) => { s.reconnect_on_loss = v; })));
+    el.appendChild(row(t("settings.check.for.updates.at.startup"), checkbox(s.updates_auto_check !== false, (v) => { s.updates_auto_check = v; })));
 
     // Presence (308/390): the idle timer and the status line it publishes.
     const psep = document.createElement("div");
     psep.className = "set-subhead";
-    psep.textContent = "Presence";
+    psep.textContent = t("settings.presence");
     el.appendChild(psep);
-    el.appendChild(row("Auto-away after (minutes, 0 = off)", numberInput(s.auto_away_minutes ?? 15, 0, 240, (v) => { s.auto_away_minutes = v; })));
+    el.appendChild(row(t("settings.auto.away.after.minutes.0.off"), numberInput(s.auto_away_minutes ?? 15, 0, 240, (v) => { s.auto_away_minutes = v; })));
     const awayMsg = document.createElement("input");
     awayMsg.className = "dlg-input";
     awayMsg.maxLength = 200;
-    awayMsg.placeholder = "auto-away";
+    awayMsg.placeholder = t("settings.auto.away");
     awayMsg.value = s.auto_away_message ?? "";
     awayMsg.onchange = () => { s.auto_away_message = awayMsg.value; };
-    el.appendChild(row("Auto-away status message", awayMsg));
-    el.appendChild(hint("Other clients see this text next to your 🕐 away icon while you are idle."));
+    el.appendChild(row(t("settings.auto.away.status.message"), awayMsg));
+    el.appendChild(hint(t("settings.other.clients.see.this.text.next.to.your.away.icon.while.you.are.idle")));
 
     // Window / system integration (wave 8a).
     const sep = document.createElement("div");
     sep.className = "set-subhead";
-    sep.textContent = "Window & appearance";
+    sep.textContent = t("settings.window.appearance");
     el.appendChild(sep);
     const themeSel = document.createElement("select");
-    for (const [v, label] of [["dark", "Dark (default)"], ["light", "Light"], ["hc", "High contrast"]]) {
+    for (const [v, label] of [["dark", t("settings.dark.default")], ["light", t("settings.light")], ["hc", t("settings.high.contrast")]]) {
         const o = document.createElement("option");
         o.value = v;
         o.textContent = label;
@@ -257,23 +267,12 @@ function pageApplication() {
     }
     themeSel.value = s.theme || "dark";
     themeSel.onchange = () => { s.theme = themeSel.value; };
-    el.appendChild(row("Theme", themeSel));
-    // (336) language selector: system default, English, Deutsch.
-    const langSel = document.createElement("select");
-    for (const [v, label] of [["system", "System default"], ["en", "English"], ["de", "Deutsch"]]) {
-        const o = document.createElement("option");
-        o.value = v;
-        o.textContent = label;
-        langSel.appendChild(o);
-    }
-    langSel.value = s.language || "system";
-    langSel.onchange = () => { s.language = langSel.value; };
-    el.appendChild(row(t("settings.language"), langSel));
+    el.appendChild(row(t("settings.theme"), themeSel));
     const accent = document.createElement("input");
     accent.type = "color";
     accent.value = s.accent_color || "#2ee6a8";
     accent.onchange = () => { s.accent_color = accent.value; };
-    el.appendChild(row("Accent color", accent));
+    el.appendChild(row(t("settings.accent.color"), accent));
     const fontSel = document.createElement("select");
     for (const [v, label] of [["outfit", "Outfit"], ["sora", "Sora"], ["jetbrains", "JetBrains Mono"]]) {
         const o = document.createElement("option");
@@ -283,37 +282,37 @@ function pageApplication() {
     }
     fontSel.value = s.ui_font || "outfit";
     fontSel.onchange = () => { s.ui_font = fontSel.value; };
-    el.appendChild(row("UI font", fontSel));
-    el.appendChild(row("UI font size", slider(s.ui_font_size || 14, 10, 20, (v) => { s.ui_font_size = v; })));
-    el.appendChild(row("Always on top", checkbox(s.always_on_top, (v) => { s.always_on_top = v; })));
-    el.appendChild(row("Compact mode", checkbox(s.compact_mode, (v) => { s.compact_mode = v; })));
-    el.appendChild(row("Reduce motion", checkbox(s.reduce_motion, (v) => { s.reduce_motion = v; })));
-    el.appendChild(row("Pause video when unfocused", checkbox(s.idle_video_pause !== false, (v) => { s.idle_video_pause = v; })));
-    el.appendChild(row("Close to tray", checkbox(s.close_to_tray, (v) => { s.close_to_tray = v; })));
-    el.appendChild(row("Minimize to tray", checkbox(s.minimize_to_tray, (v) => { s.minimize_to_tray = v; })));
+    el.appendChild(row(t("settings.ui.font"), fontSel));
+    el.appendChild(row(t("settings.ui.font.size"), slider(s.ui_font_size || 14, 10, 20, (v) => { s.ui_font_size = v; })));
+    el.appendChild(row(t("settings.always.on.top"), checkbox(s.always_on_top, (v) => { s.always_on_top = v; })));
+    el.appendChild(row(t("settings.compact.mode"), checkbox(s.compact_mode, (v) => { s.compact_mode = v; })));
+    el.appendChild(row(t("settings.reduce.motion"), checkbox(s.reduce_motion, (v) => { s.reduce_motion = v; })));
+    el.appendChild(row(t("settings.pause.video.when.unfocused"), checkbox(s.idle_video_pause !== false, (v) => { s.idle_video_pause = v; })));
+    el.appendChild(row(t("settings.close.to.tray"), checkbox(s.close_to_tray, (v) => { s.close_to_tray = v; })));
+    el.appendChild(row(t("settings.minimize.to.tray"), checkbox(s.minimize_to_tray, (v) => { s.minimize_to_tray = v; })));
     // (292) the floor keeps the window clickable. Applied on release, not per
     // drag frame: the binding persists the settings file on every call.
     const opacity = slider(s.window_opacity || 100, 20, 100, (v) => { s.window_opacity = v; });
     opacity.querySelector("input").addEventListener("change",
         () => window.go.main.App.SetWindowOpacity(s.window_opacity || 100));
-    el.appendChild(row("Window opacity", opacity));
+    el.appendChild(row(t("settings.window.opacity"), opacity));
     el.appendChild(themeEditor(s)); // (295)
     const css = document.createElement("textarea");
     css.className = "dlg-input user-css";
     css.rows = 4;
-    css.placeholder = "custom CSS overrides, e.g. .channel { letter-spacing: 0.5px }";
+    css.placeholder = t("settings.custom.css.overrides.e.g.channel.letter.spacing.0.5px");
     css.value = s.user_css || "";
     css.onchange = () => { s.user_css = css.value; };
-    el.appendChild(row("User CSS", css));
+    el.appendChild(row(t("settings.user.css"), css));
     return el;
 }
 
 function pageServer() {
     const el = document.createElement("div");
-    const status = hint("Loading effective server configuration…");
+    const status = hint(t("settings.loading.effective.server.configuration"));
     el.appendChild(status);
     if (!V().state.isAdmin) {
-        status.textContent = "Server configuration is available to administrators only.";
+        status.textContent = t("settings.server.configuration.is.available.to.administrators.only");
         return el;
     }
 
@@ -327,16 +326,16 @@ function pageServer() {
         values[key] = 0;
         return input;
     };
-    const maxClients = addNumber("Maximum clients (0 = unlimited)", "max_clients", 0, 100000);
-    const timeout = addNumber("Connection timeout (seconds)", "client_timeout_seconds", 30, 86400);
-    const bitrate = addNumber("Default Opus bitrate (bit/s)", "opus_bitrate", 6000, 510000);
+    const maxClients = addNumber(t("settings.maximum.clients.0.unlimited"), "max_clients", 0, 100000);
+    const timeout = addNumber(t("settings.connection.timeout.seconds"), "client_timeout_seconds", 30, 86400);
+    const bitrate = addNumber(t("settings.default.opus.bitrate.bit.s"), "opus_bitrate", 6000, 510000);
     const fec = checkbox(false, (v) => { values.opus_fec = v; });
     const dtx = checkbox(false, (v) => { values.opus_dtx = v; });
     const stereo = checkbox(false, (v) => { values.opus_stereo = v; });
-    form.appendChild(row("Default Opus in-band FEC", fec));
-    form.appendChild(row("Default Opus DTX", dtx));
-    form.appendChild(row("Default Opus stereo", stereo));
-    form.appendChild(hint("Codec defaults apply to newly created channels. Existing channels keep their explicit settings."));
+    form.appendChild(row(t("settings.default.opus.in.band.fec"), fec));
+    form.appendChild(row(t("settings.default.opus.dtx"), dtx));
+    form.appendChild(row(t("settings.default.opus.stereo"), stereo));
+    form.appendChild(hint(t("settings.codec.defaults.apply.to.newly.created.channels.existing.channels.keep.their")));
     const applyToForm = (cfg) => {
         Object.assign(values, cfg);
         maxClients.value = cfg.max_clients;
@@ -347,29 +346,29 @@ function pageServer() {
         stereo.checked = !!cfg.opus_stereo;
     };
     const apply = document.createElement("button");
-    apply.textContent = "Apply server configuration";
+    apply.textContent = t("settings.apply.server.configuration");
     apply.onclick = async () => {
         apply.disabled = true;
         try {
             const result = await window.go.main.App.SetServerConfig(values);
             applyToForm(result);
-            status.textContent = "Server configuration saved and active.";
-            V().toast("server configuration updated");
+            status.textContent = t("settings.server.configuration.saved.and.active");
+            V().toast(t("settings.server.configuration.updated"));
         } catch (err) {
-            status.textContent = "Could not save server configuration: " + err;
+            status.textContent = t("settings.could.not.save.server.configuration") + err;
             V().toast(status.textContent, "warn");
         } finally {
             apply.disabled = false;
         }
     };
-    form.appendChild(row("Runtime settings", apply));
+    form.appendChild(row(t("settings.runtime.settings"), apply));
 
     window.go.main.App.GetServerConfig().then((cfg) => {
         applyToForm(cfg);
-        status.textContent = "Changes take effect immediately and are restored after restart.";
+        status.textContent = t("settings.changes.take.effect.immediately.and.are.restored.after.restart");
         form.hidden = false;
     }).catch((err) => {
-        status.textContent = "Could not load server configuration: " + err;
+        status.textContent = t("settings.could.not.load.server.configuration") + err;
     });
     return el;
 }
@@ -380,21 +379,21 @@ function pageServer() {
 // ones: a color input cannot express the rgba() borders and shadows, and
 // --accent already has its own control (296) whose inline style would win.
 const THEME_VARS = [
-    ["--bg", "Background"],
-    ["--bg-raised", "Raised surface"],
-    ["--bg-panel", "Panel"],
-    ["--bg-hover", "Hover"],
-    ["--text", "Text"],
-    ["--text-dim", "Text (dim)"],
-    ["--text-faint", "Text (faint)"],
-    ["--warn", "Warning"],
-    ["--danger", "Danger"],
+    ["--bg", "settings.background"],
+    ["--bg-raised", "settings.raised.surface"],
+    ["--bg-panel", "settings.panel"],
+    ["--bg-hover", "settings.hover"],
+    ["--text", "settings.text"],
+    ["--text-dim", "settings.text.dim"],
+    ["--text-faint", "settings.text.faint"],
+    ["--warn", "settings.warning"],
+    ["--danger", "settings.danger"],
 ];
 
 // The editor owns the block between these markers inside user_css; anything
 // the user typed by hand around it survives an edit.
-const THEME_START = "/* voicx-theme-start */";
-const THEME_END = "/* voicx-theme-end */";
+const THEME_START = "/* noxa-theme-start */";
+const THEME_END = "/* noxa-theme-end */";
 
 // themeBlockBody returns the CSS between the markers ("" when absent).
 function themeBlockBody(css) {
@@ -445,7 +444,7 @@ function themeEditor(s) {
     const wrap = document.createElement("div");
     const head = document.createElement("div");
     head.className = "set-subhead";
-    head.textContent = "Theme colors";
+    head.textContent = t("settings.theme.colors");
     wrap.appendChild(head);
     const grid = document.createElement("div");
     grid.className = "theme-grid";
@@ -475,7 +474,7 @@ function themeEditor(s) {
             apply();
         };
         const txt = document.createElement("span");
-        txt.textContent = label;
+        txt.textContent = t(label);
         txt.title = name;
         cell.appendChild(inp);
         cell.appendChild(txt);
@@ -483,7 +482,7 @@ function themeEditor(s) {
     }
     wrap.appendChild(grid);
     const reset = document.createElement("button");
-    reset.textContent = "Reset theme colors";
+    reset.textContent = t("settings.reset.theme.colors");
     reset.onclick = () => {
         for (const k of Object.keys(overrides)) delete overrides[k];
         apply();
@@ -498,17 +497,17 @@ function themeEditor(s) {
 function pageCapture() {
     const s = settings();
     const el = document.createElement("div");
-    el.appendChild(row("Capture device", devicePicker(
+    el.appendChild(row(t("settings.capture.device"), devicePicker(
         "audioinput",
         s.capture_device_id,
         (v) => { s.capture_device_id = v; },
-        "Capture devices",
+        t("settings.capture.devices"),
     )));
 
     // Activation mode.
     const modeWrap = document.createElement("div");
     modeWrap.className = "set-modes";
-    for (const [id, label] of [["ptt", "Push-to-Talk"], ["vad", "Voice Activity Detection"], ["continuous", "Continuous Transmission"]]) {
+    for (const [id, label] of [["ptt", t("settings.push.to.talk")], ["vad", t("settings.voice.activity.detection")], ["continuous", t("settings.continuous.transmission")]]) {
         const l = document.createElement("label");
         const r = document.createElement("input");
         r.type = "radio";
@@ -524,12 +523,12 @@ function pageCapture() {
     }
     el.appendChild(modeWrap);
 
-    const vadRow = row("VAD threshold", slider(s.vad_threshold, 1, 100, (v) => { s.vad_threshold = v; }));
+    const vadRow = row(t("settings.vad.threshold"), slider(s.vad_threshold, 1, 100, (v) => { s.vad_threshold = v; }));
     vadRow.style.display = (s.activation_mode || "ptt") === "vad" ? "" : "none";
     el.appendChild(vadRow);
 
-    el.appendChild(row("Echo cancellation", checkbox(s.echo_cancellation !== false, (v) => { s.echo_cancellation = v; })));
-    el.appendChild(row("Noise suppression", checkbox(s.noise_suppression !== false, (v) => { s.noise_suppression = v; })));
+    el.appendChild(row(t("settings.echo.cancellation"), checkbox(s.echo_cancellation !== false, (v) => { s.echo_cancellation = v; })));
+    el.appendChild(row(t("settings.noise.suppression"), checkbox(s.noise_suppression !== false, (v) => { s.noise_suppression = v; })));
 
     // Camera capture starts only when enabled or explicitly tested.
     const fpsSelect = document.createElement("select");
@@ -541,19 +540,19 @@ function pageCapture() {
     }
     fpsSelect.value = String(s.camera_fps || 30);
     fpsSelect.onchange = () => { s.camera_fps = parseInt(fpsSelect.value, 10); };
-    el.appendChild(row("Camera frame rate", fpsSelect));
-    el.appendChild(hint("Camera is off when joining. Turn it on in the voice controls, or test it here."));
+    el.appendChild(row(t("settings.camera.frame.rate"), fpsSelect));
+    el.appendChild(hint(t("settings.camera.is.off.when.joining.turn.it.on.in.the.voice.controls.or.test.it.here")));
     const cameraTest = document.createElement("div");
     const cameraBtn = document.createElement("button");
     cameraBtn.type = "button";
-    cameraBtn.textContent = "Test camera";
+    cameraBtn.textContent = t("settings.test.camera");
     const preview = document.createElement("video");
     preview.autoplay = true;
     preview.playsInline = true;
     preview.muted = true;
     preview.hidden = true;
     preview.style.maxWidth = "100%";
-    preview.setAttribute("aria-label", "Camera test preview");
+    preview.setAttribute("aria-label", t("settings.camera.test.preview"));
     const cameraStatus = hint("");
     cameraStatus.setAttribute("role", "status");
     let testing = false;
@@ -565,7 +564,7 @@ function pageCapture() {
         preview.srcObject = null;
         preview.hidden = true;
         cameraBtn.disabled = false;
-        cameraBtn.textContent = "Test camera";
+        cameraBtn.textContent = t("settings.test.camera");
     };
     cameraBtn.onclick = async () => {
         if (testing) { stop(); return; }
@@ -583,11 +582,11 @@ function pageCapture() {
             testStream = stream;
             preview.srcObject = stream;
             preview.hidden = false;
-            cameraBtn.textContent = "Stop camera test";
+            cameraBtn.textContent = t("settings.stop.camera.test");
         } catch (error) {
             if (testing) {
                 stop();
-                cameraStatus.textContent = "Camera test failed: " + (error.message || error.name);
+                cameraStatus.textContent = t("settings.camera.test.failed") + (error.message || error.name);
             }
         } finally {
             cameraBtn.disabled = false;
@@ -596,17 +595,16 @@ function pageCapture() {
     cameraTest.append(cameraBtn, preview, cameraStatus);
     el.appendChild(cameraTest);
 
-    el.appendChild(row("PTT release delay (ms)", slider(s.ptt_release_delay_ms || 0, 0, 2000, (v) => { s.ptt_release_delay_ms = v; })));
-    el.appendChild(hint("Capture changes apply when voice next reconnects."));
+    el.appendChild(row(t("settings.ptt.delay"), slider(s.ptt_release_delay_ms || 0, 0, 2000, (v) => { s.ptt_release_delay_ms = v; })));
+    el.appendChild(hint(t("settings.capture.reconnect")));
     // (25) the music profile overrides these two, so say so where they live.
-    el.appendChild(hint("Music channels (stereo, 96 kbit/s or more) capture in stereo with echo cancellation, "
-        + "noise suppression and auto gain off; your settings above apply everywhere else."));
+    el.appendChild(hint(t("settings.music.channels.stereo.96.kbit.s.or.more.capture.in.stereo.with.echo.cancell")));
 
     // Mic test meter (3) + loopback playback (4).
     const testWrap = document.createElement("div");
     testWrap.className = "mic-test";
     const startBtn = document.createElement("button");
-    startBtn.textContent = "Begin Test";
+    startBtn.textContent = t("settings.begin.test");
     let loopbackCtx = null;
     const loopChk = checkbox(false, async (v) => {
         if (loopbackCtx) {
@@ -620,7 +618,7 @@ function pageCapture() {
     startBtn.onclick = async () => {
         startBtn.disabled = true;
         const stopBtn = document.createElement("button");
-        stopBtn.textContent = "Stop";
+        stopBtn.textContent = t("settings.stop");
         const bar = document.createElement("div");
         bar.className = "mic-bar";
         bar.innerHTML = `<div class="mic-fill"></div>`;
@@ -651,7 +649,7 @@ function pageCapture() {
             };
             tick();
         } catch (e) {
-            err.textContent = "mic test failed: " + (e.message || e.name);
+            err.textContent = t("settings.mic.test.failed") + (e.message || e.name);
         }
         stopBtn.onclick = () => {
             if (raf) cancelAnimationFrame(raf);
@@ -669,23 +667,23 @@ function pageCapture() {
     };
     testWrap.appendChild(startBtn);
     el.appendChild(testWrap);
-    el.appendChild(row("Loopback test (hear yourself — use headphones!)", loopChk));
+    el.appendChild(row(t("settings.loopback.test.hear.yourself.use.headphones"), loopChk));
 
     // (5) VAD auto-calibrate.
     const calBtn = document.createElement("button");
-    calBtn.textContent = "Auto-calibrate (5s ambient)";
+    calBtn.textContent = t("settings.auto.calibrate.5s.ambient");
     const calOut = document.createElement("span");
     calOut.className = "set-hint";
     calBtn.onclick = async () => {
         calBtn.disabled = true;
-        calOut.textContent = " recording ambient…";
+        calOut.textContent = t("settings.recording.ambient");
         try {
             const r = await calibrateMic(s.capture_device_id || undefined, 5000);
             s.vad_threshold = r.suggested;
-            calOut.textContent = ` noise floor ${(r.floor * 100).toFixed(1)}% → threshold set to ${r.suggested}`;
+            calOut.textContent = t("settings.calibration.result", { floor: (r.floor * 100).toFixed(1), threshold: r.suggested });
             if ((s.activation_mode || "ptt") === "vad") renderPage("capture");
         } catch (e) {
-            calOut.textContent = " calibration failed: " + (e.message || e.name);
+            calOut.textContent = t("settings.calibration.failed") + (e.message || e.name);
         }
         calBtn.disabled = false;
     };
@@ -700,26 +698,26 @@ function pageCapture() {
 function pagePlayback() {
     const s = settings();
     const el = document.createElement("div");
-    el.appendChild(row("Output device", devicePicker(
+    el.appendChild(row(t("settings.output.device"), devicePicker(
         "audiooutput",
         s.playback_device_id,
         (v) => { s.playback_device_id = v; },
-        "Playback devices",
+        t("settings.playback.devices"),
     )));
-    el.appendChild(row("Voice volume", slider(s.volume, 0, 200, (v) => {
+    el.appendChild(row(t("settings.voice.volume"), slider(s.volume, 0, 200, (v) => {
         s.volume = v;
         const rv = document.getElementById("remote-video");
         if (rv) V().applyOutputSettings(rv);
     })));
-    el.appendChild(row("Voice limiter (compressor)", checkbox(s.voice_limiter !== false, (v) => { s.voice_limiter = v; })));
-    el.appendChild(row("Per-user gain normalization (cap 4x)", checkbox(s.gain_normalize, (v) => { s.gain_normalize = v; })));
+    el.appendChild(row(t("settings.voice.limiter.compressor"), checkbox(s.voice_limiter !== false, (v) => { s.voice_limiter = v; })));
+    el.appendChild(row(t("settings.per.user.gain.normalization.cap.4x"), checkbox(s.gain_normalize, (v) => { s.gain_normalize = v; })));
     // (53) each publisher is levelled on its own chain, so a loud speaker no
     // longer sets the gain for a quiet one.
-    el.appendChild(hint("Normalization levels every speaker separately. Limiter and normalizer apply when voice next reconnects."));
+    el.appendChild(hint(t("settings.normalization.levels.every.speaker.separately.limiter.and.normalizer.apply")));
     const testBtn = document.createElement("button");
-    testBtn.textContent = "Play Test Sound";
-    testBtn.onclick = () => V().beep(660, 0.25);
-    el.appendChild(row("Test", testBtn));
+    testBtn.textContent = t("settings.play.test.sound");
+    testBtn.onclick = () => previewSounds(["own_channel_join"], s);
+    el.appendChild(row(t("settings.test"), testBtn));
     return el;
 }
 
@@ -737,10 +735,10 @@ function cancelHotkeyCapture() {
 function hotkeyCapture(initial, oncapture) {
     const b = document.createElement("button");
     b.className = "hotkey-capture";
-    b.textContent = initial || "Click and press a key";
+    b.textContent = initial || t("settings.click.and.press.a.key");
     b.onclick = () => {
         cancelHotkeyCapture();
-        b.textContent = "press keys…";
+        b.textContent = t("settings.press.keys");
         b.classList.add("capturing");
         const onKey = (e) => {
             e.preventDefault();
@@ -778,13 +776,13 @@ function pageHotkeys() {
     // action with rebind/unbind. Overrides land in the selected profile;
     // "default" edits the base bindings.
     const ACTIONS = [
-        ["ptt", "Push-to-talk", "hotkey_ptt", "ptt"],
-        ["mute_toggle", "Mute toggle", "hotkey_mute", "mute"],
-        ["deafen_toggle", "Deafen toggle", "hotkey_deafen", "deafen"],
-        ["whisper_reply", "Whisper reply", "whisper_reply_hotkey", "whisper_reply"],
-        ["quick_connect", "Quick connect (new tab)", "hotkey_quick_connect", "quick_connect"],
-        ["compact_toggle", "Compact mode toggle", "hotkey_compact", "compact"],
-        ["zen_toggle", "Zen mode toggle", "hotkey_zen", "zen"],
+        ["ptt", t("settings.push.to.talk.alternate"), "hotkey_ptt", "ptt"],
+        ["mute_toggle", t("settings.mute.toggle"), "hotkey_mute", "mute"],
+        ["deafen_toggle", t("settings.deafen.toggle"), "hotkey_deafen", "deafen"],
+        ["whisper_reply", t("settings.whisper.reply"), "whisper_reply_hotkey", "whisper_reply"],
+        ["quick_connect", t("settings.quick.connect.new.tab"), "hotkey_quick_connect", "quick_connect"],
+        ["compact_toggle", t("settings.compact.mode.toggle"), "hotkey_compact", "compact"],
+        ["zen_toggle", t("settings.zen.mode.toggle"), "hotkey_zen", "zen"],
     ];
     const profiles = Object.keys(s.hotkey_profiles || {}).sort();
     let curProfile = "default";
@@ -795,14 +793,14 @@ function pageHotkeys() {
     for (const p of ["default", ...profiles]) {
         const o = document.createElement("option");
         o.value = p;
-        o.textContent = p === "default" ? "default profile" : "profile: " + p;
+        o.textContent = p === "default" ? t("settings.default.profile") : t("settings.profile") + p;
         sel.appendChild(o);
     }
     sel.onchange = () => { curProfile = sel.value; renderRows(); };
     const saveAs = document.createElement("button");
-    saveAs.textContent = "Save as new profile…";
+    saveAs.textContent = t("settings.save.as.new.profile");
     saveAs.onclick = () => {
-        const name = prompt("Profile name (assign it to a bookmark in the bookmark manager):");
+        const name = prompt(t("settings.profile.name.assign.it.to.a.bookmark.in.the.bookmark.manager"));
         if (!name) return;
         s.hotkey_profiles = s.hotkey_profiles || {};
         s.hotkey_profiles[name] = {
@@ -824,7 +822,7 @@ function pageHotkeys() {
         const prof = (s.hotkey_profiles || {})[curProfile];
         for (const [action, label, field, profField] of ACTIONS) {
             const override = curProfile !== "default" && prof && prof[profField];
-            const spec = curProfile === "default" ? (s[field] || "") : (override || "(default: " + (s[field] || "unbound") + ")");
+            const spec = curProfile === "default" ? (s[field] || "") : (override || t("settings.default") + (s[field] || t("settings.unbound")) + ")");
             const wrap = document.createElement("div");
             wrap.className = "hk-map-row";
             const cap = hotkeyCapture(override || s[field] || "", (v) => {
@@ -835,11 +833,11 @@ function pageHotkeys() {
                     s.hotkey_profiles[curProfile] = s.hotkey_profiles[curProfile] || {};
                     s.hotkey_profiles[curProfile][profField] = v;
                 }
-                if (/^[A-Z]$/.test(v)) V().toast("warning: bare letter hotkeys fire while typing", "warn");
+                if (/^[A-Z]$/.test(v)) V().toast(t("settings.warning.bare.letter.hotkeys.fire.while.typing"), "warn");
             });
             const unbind = document.createElement("button");
             unbind.textContent = "✕";
-            unbind.title = curProfile === "default" ? "unbind" : "clear override (fall back to default)";
+            unbind.title = curProfile === "default" ? t("settings.unbind") : t("settings.clear.override.fall.back.to.default");
             unbind.onclick = () => {
                 if (curProfile === "default") s[field] = "";
                 else if (prof) prof[profField] = "";
@@ -858,13 +856,13 @@ function pageHotkeys() {
     renderRows();
 
     const reset = document.createElement("button");
-    reset.textContent = "Reset to defaults (PTT unbound / Ctrl+M)";
+    reset.textContent = t("settings.reset.to.defaults.ptt.unbound.ctrl.m");
     reset.onclick = () => {
         s.hotkey_ptt = ""; s.hotkey_mute = "Ctrl+M";
         renderPage("hotkeys");
     };
     el.appendChild(reset);
-    el.appendChild(hint("Hotkeys are applied when you Apply or OK. On Windows they do not reserve or consume the configured keys. Profiles apply on connect via the bookmark's profile field."));
+    el.appendChild(hint(t("settings.hotkeys.are.applied.when.you.apply.or.ok.on.windows.they.do.not.reserve.or")));
     return el;
 }
 
@@ -872,15 +870,15 @@ function pageWhisper() {
     const s = settings();
     const st = V().state;
     const el = document.createElement("div");
-    el.appendChild(row("Activate whisper", checkbox(s.whisper_active, (v) => { s.whisper_active = v; })));
-    el.appendChild(hint("While active, your voice goes to the checked targets instead of your channel."));
+    el.appendChild(row(t("settings.activate.whisper"), checkbox(s.whisper_active, (v) => { s.whisper_active = v; })));
+    el.appendChild(hint(t("settings.while.active.your.voice.goes.to.the.checked.targets.instead.of.your.channel")));
 
     const clientsWrap = document.createElement("div");
     clientsWrap.className = "set-subhead";
-    clientsWrap.textContent = "Clients (online now)";
+    clientsWrap.textContent = t("settings.clients.online.now");
     el.appendChild(clientsWrap);
     const clients = st.clients.filter((c) => c.client_id !== st.myClientID);
-    if (clients.length === 0) el.appendChild(hint("No other clients online."));
+    if (clients.length === 0) el.appendChild(hint(t("settings.no.other.clients.online")));
     for (const c of clients) {
         el.appendChild(row(c.nickname || c.unique_id, checkbox(
             (s.whisper_clients || []).includes(c.unique_id),
@@ -893,7 +891,7 @@ function pageWhisper() {
 
     const chWrap = document.createElement("div");
     chWrap.className = "set-subhead";
-    chWrap.textContent = "Channels";
+    chWrap.textContent = t("settings.channels");
     el.appendChild(chWrap);
     for (const ch of st.channels) {
         el.appendChild(row(ch.Name, checkbox(
@@ -905,7 +903,7 @@ function pageWhisper() {
             })));
     }
 
-    el.appendChild(hint("Applying also sends the whisper list to the server now."));
+    el.appendChild(hint(t("settings.applying.also.sends.the.whisper.list.to.the.server.now")));
     return el;
 }
 
@@ -914,9 +912,9 @@ function pageDownloads() {
     const el = document.createElement("div");
     const folder = document.createElement("span");
     folder.className = "mono";
-    folder.textContent = s.download_folder || "(not set)";
+    folder.textContent = s.download_folder || t("settings.not.set");
     const change = document.createElement("button");
-    change.textContent = "Change…";
+    change.textContent = t("settings.change");
     change.onclick = async () => {
         const dir = await window.go.main.App.PickDownloadFolder();
         if (dir) {
@@ -927,8 +925,8 @@ function pageDownloads() {
     const wrap = document.createElement("div");
     wrap.className = "set-folder";
     wrap.appendChild(folder); wrap.appendChild(change);
-    el.appendChild(row("Download folder", wrap));
-    el.appendChild(hint("Downloads from the file browser land here without asking. Leave it unset to be prompted for a location each time."));
+    el.appendChild(row(t("settings.download.folder"), wrap));
+    el.appendChild(hint(t("settings.downloads.from.the.file.browser.land.here.without.asking.leave.it.unset.to")));
     return el;
 }
 
@@ -949,43 +947,43 @@ function pageChat() {
         i.onchange = () => onchange(i.value);
         return i;
     };
-    el.appendChild(row("Timestamps", sel(
-        [["absolute", "Absolute"], ["relative", "Relative"], ["off", "Off"]],
+    el.appendChild(row(t("settings.timestamps"), sel(
+        [["absolute", t("settings.absolute")], ["relative", t("settings.relative")], ["off", t("settings.off")]],
         s.chat_timestamps || "absolute", (v) => { s.chat_timestamps = v; })));
-    el.appendChild(row("Density", sel(
-        [["comfortable", "Comfortable"], ["compact", "Compact"]],
+    el.appendChild(row(t("settings.density"), sel(
+        [["comfortable", t("settings.comfortable")], ["compact", t("settings.compact")]],
         s.chat_density || "comfortable", (v) => { s.chat_density = v; })));
-    el.appendChild(row("Layout", sel(
-        [["irc", "IRC lines"], ["bubbles", "Bubbles"]],
+    el.appendChild(row(t("settings.layout"), sel(
+        [["irc", t("settings.irc.lines")], ["bubbles", t("settings.bubbles")]],
         s.chat_layout || "irc", (v) => { s.chat_layout = v; })));
-    el.appendChild(row("Font size", slider(s.chat_font_size || 14, 12, 18, (v) => { s.chat_font_size = v; })));
+    el.appendChild(row(t("settings.font.size"), slider(s.chat_font_size || 14, 12, 18, (v) => { s.chat_font_size = v; })));
     // (130) system-message category filters.
-    el.appendChild(row("Show join/leave system lines", checkbox(s.sys_join_leave !== false, (v) => { s.sys_join_leave = v; })));
-    el.appendChild(row("Show kick system lines", checkbox(s.sys_kick !== false, (v) => { s.sys_kick = v; })));
+    el.appendChild(row(t("settings.show.join.leave.system.lines"), checkbox(s.sys_join_leave !== false, (v) => { s.sys_join_leave = v; })));
+    el.appendChild(row(t("settings.show.kick.system.lines"), checkbox(s.sys_kick !== false, (v) => { s.sys_kick = v; })));
 
-    el.appendChild(row("Chat max lines", numberInput(s.chat_max_lines, 10, 5000, (v) => { s.chat_max_lines = v; })));
-    el.appendChild(row("Log channel chats to file", checkbox(s.log_channel_chat, (v) => { s.log_channel_chat = v; })));
-    el.appendChild(row("Log private chats to file", checkbox(s.log_private_chat, (v) => { s.log_private_chat = v; })));
-    el.appendChild(row("Log server/global chats to file", checkbox(s.log_server_chat, (v) => { s.log_server_chat = v; })));
+    el.appendChild(row(t("settings.chat.max.lines"), numberInput(s.chat_max_lines, 10, 5000, (v) => { s.chat_max_lines = v; })));
+    el.appendChild(row(t("settings.log.channel.chats.to.file"), checkbox(s.log_channel_chat, (v) => { s.log_channel_chat = v; })));
+    el.appendChild(row(t("settings.log.private.chats.to.file"), checkbox(s.log_private_chat, (v) => { s.log_private_chat = v; })));
+    el.appendChild(row(t("settings.log.server.global.chats.to.file"), checkbox(s.log_server_chat, (v) => { s.log_server_chat = v; })));
 
     // (388) keyword highlights for the current server (one per line).
     const kwAddr = V().state.lastConnect?.addr || "";
     const kw = document.createElement("textarea");
     kw.className = "dlg-input user-css";
     kw.rows = 3;
-    kw.placeholder = "keyword highlights, one per line (current server)";
+    kw.placeholder = t("settings.keyword.highlights.one.per.line.current.server");
     kw.value = ((s.keywords || {})[kwAddr] || []).join("\n");
     kw.onchange = () => {
         s.keywords = s.keywords || {};
         s.keywords[kwAddr] = kw.value.split("\n").map((x) => x.trim()).filter(Boolean);
     };
-    el.appendChild(row("Keywords", kw));
+    el.appendChild(row(t("settings.keywords"), kw));
 
-    el.appendChild(hint("Chat log: <config>/voicx/chat.log (Help → Open log folder)."));
+    el.appendChild(hint(t("settings.chat.log.config.noxa.chat.log.help.open.log.folder")));
     // (4b) encryption note.
     const enc = document.createElement("div");
     enc.className = "set-hint";
-    enc.textContent = "Encryption: direct messages are end-to-end encrypted (🔒 — the server cannot read them). Channel and global chat are encrypted with server-held keys (🛡) so history and moderation keep working. Key rotation happens when a member leaves; they can still read history from their membership period.";
+    enc.textContent = t("settings.encryption.direct.messages.are.end.to.end.encrypted.the.server.cannot.read");
     el.appendChild(enc);
     return el;
 }
@@ -1000,7 +998,7 @@ async function refreshIdentities(tbody) {
         tbody.innerHTML = "";
         const tr = document.createElement("tr");
         tr.innerHTML = `<td colspan="6" class="warn"></td>`;
-        tr.querySelector("td").textContent = "identities unavailable: " + e;
+        tr.querySelector("td").textContent = t("settings.identities.unavailable") + e;
         tbody.appendChild(tr);
         return;
     }
@@ -1020,11 +1018,11 @@ async function refreshIdentities(tbody) {
 
         const uid = document.createElement("td");
         uid.className = "mono id-uid";
-        uid.textContent = e.unique_id ? e.unique_id.slice(0, 16) + "…" : "(unreadable)";
+        uid.textContent = e.unique_id ? e.unique_id.slice(0, 16) + "…" : t("settings.unreadable");
         uid.title = e.unique_id || "";
         uid.onclick = () => {
             if (!e.unique_id) return;
-            navigator.clipboard.writeText(e.unique_id).then(() => V().toast("unique ID copied"));
+            void copyToClipboard(e.unique_id, { success: t("settings.unique.id.copied"), isCurrent: () => uid.isConnected });
         };
         tr.appendChild(uid);
 
@@ -1036,15 +1034,15 @@ async function refreshIdentities(tbody) {
 
         // (354) which storage mode the key is actually in.
         const prot = document.createElement("td");
-        prot.textContent = e.protection === "dpapi" ? "🔒 DPAPI" : "📄 plaintext";
+        prot.textContent = e.protection === "dpapi" ? "🔒 DPAPI" : t("settings.plaintext");
         prot.title = e.protection === "dpapi"
-            ? "private key sealed to this Windows account — a copy of this file will not open elsewhere"
-            : "private key stored in the clear (no OS key store in use)";
+            ? t("settings.private.key.sealed.to.this.windows.account.a.copy.of.this.file.will.not.ope")
+            : t("settings.private.key.stored.in.the.clear.no.os.key.store.in.use");
         tr.appendChild(prot);
 
         // (353) backup state.
         const backup = document.createElement("td");
-        backup.textContent = e.exported_at ? "✓ " + e.exported_at : "⚠ never";
+        backup.textContent = e.exported_at ? "✓ " + e.exported_at : t("settings.never");
         if (!e.exported_at) backup.className = "warn";
         tr.appendChild(backup);
 
@@ -1058,41 +1056,41 @@ async function refreshIdentities(tbody) {
             actions.appendChild(b);
             return b;
         };
-        mk("Use", "make this the identity used on the next connect", async () => {
+        mk(t("settings.use"), t("settings.make.this.the.identity.used.on.the.next.connect"), async () => {
             const err = await window.go.main.App.SwitchIdentity(e.id);
-            if (err) V().toast("switch failed: " + err, "warn");
-            else V().toast("active identity: " + e.name + " — reconnect to use it", "warn");
+            if (err) V().toast(t("settings.switch.failed") + err, "warn");
+            else V().toast(t("settings.active.identity") + e.name + t("settings.reconnect.to.use.it"), "warn");
             refreshIdentities(tbody);
         }).disabled = e.active;
-        mk("Rename", "change the display label", async () => {
-            const name = prompt("Identity name:", e.name);
+        mk(t("settings.rename"), t("settings.change.the.display.label"), async () => {
+            const name = prompt(t("settings.identity.name"), e.name);
             if (!name) return;
             const err = await window.go.main.App.RenameIdentity(e.id, name);
-            if (err) V().toast("rename failed: " + err, "warn");
+            if (err) V().toast(t("settings.rename.failed") + err, "warn");
             refreshIdentities(tbody);
         });
-        mk("Export", "save a portable backup of this identity", async () => {
+        mk(t("settings.export"), t("settings.save.a.portable.backup.of.this.identity"), async () => {
             const err = await window.go.main.App.ExportIdentity(e.id);
-            if (err) V().toast("export failed: " + err, "warn");
-            else V().toast("identity exported — keep the file safe");
+            if (err) V().toast(t("settings.export.failed") + err, "warn");
+            else V().toast(t("settings.identity.exported.keep.the.file.safe"));
             refreshIdentities(tbody);
         });
-        mk("Level…", "raise the proof-of-work security level", async () => {
-            const target = parseInt(prompt("Target security level (leading zero bits, 1-40):", String((e.security_level || 0) + 4)), 10);
+        mk(t("settings.level"), t("settings.raise.the.proof.of.work.security.level"), async () => {
+            const target = parseInt(prompt(t("settings.target.security.level.leading.zero.bits.1.40"), String((e.security_level || 0) + 4)), 10);
             if (!target) return;
-            V().toast("computing security level (up to 30s)…");
+            V().toast(t("settings.computing.security.level.up.to.30s"));
             const res = await window.go.main.App.ImproveIdentityLevel(e.id, target, 30);
-            if (res.error) V().toast("level failed: " + res.error, "warn");
-            else V().toast(`security level ${res.level} (counter ${res.counter})`);
+            if (res.error) V().toast(t("settings.level.failed") + res.error, "warn");
+            else V().toast(t("settings.identity.level", { level: res.level, counter: res.counter }));
             refreshIdentities(tbody);
         });
-        mk("Delete", "remove this identity from this machine", async () => {
+        mk(t("settings.delete"), t("settings.remove.this.identity.from.this.machine"), async () => {
             const warn = e.exported_at
-                ? `Delete identity "${e.name}"?`
-                : `"${e.name}" has NEVER been exported. Deleting it loses that account on every server forever. Delete anyway?`;
+                ? t("settings.identity.delete", { name: e.name })
+                : t("settings.identity.delete.unbacked", { name: e.name });
             if (!confirm(warn)) return;
             const err = await window.go.main.App.DeleteIdentity(e.id, true);
-            if (err) V().toast("delete failed: " + err, "warn");
+            if (err) V().toast(t("settings.delete.failed") + err, "warn");
             refreshIdentities(tbody);
         }).classList.add("danger-btn");
         tr.appendChild(actions);
@@ -1108,15 +1106,21 @@ function pageSecurity() {
     // is the primary control here.
     const sub = document.createElement("div");
     sub.className = "set-subhead";
-    sub.textContent = "Identities";
+    sub.textContent = t("settings.identities");
     el.appendChild(sub);
 
     const table = document.createElement("table");
     table.className = "perm-grid identity-grid";
-    table.innerHTML = `<thead><tr><th>name</th><th>unique ID</th><th>level</th><th>key storage</th><th>backup</th><th></th></tr></thead><tbody></tbody>`;
+    table.innerHTML = `<thead><tr>${["name", "uid", "level.heading", "storage", "backup"].map(key => `<th>${t("settings.identity." + key)}</th>`).join("")}<th></th></tr></thead><tbody></tbody>`;
     const tbody = table.querySelector("tbody");
-    el.appendChild(table);
-    // (350) the settings search rebuilds every page on each keystroke; only
+    const tableScroll = document.createElement("div");
+    tableScroll.className = "identity-table-scroll";
+    tableScroll.tabIndex = 0;
+    tableScroll.setAttribute("role", "region");
+    tableScroll.setAttribute("aria-label", t("settings.identities"));
+    tableScroll.appendChild(table);
+    el.appendChild(tableScroll);
+    // Search builds detached pages to index their labels; only
     // the page that is really on screen may hit the identity store, which
     // unseals a protected key per row.
     setTimeout(() => { if (tbody.isConnected) refreshIdentities(tbody); }, 0);
@@ -1124,39 +1128,38 @@ function pageSecurity() {
     const bar = document.createElement("div");
     bar.className = "set-folder";
     const newBtn = document.createElement("button");
-    newBtn.textContent = "New identity…";
+    newBtn.textContent = t("settings.new.identity");
     newBtn.onclick = async () => {
-        const name = prompt("Name for the new identity (e.g. \"gaming\"):");
+        const name = prompt(t("settings.name.for.the.new.identity.e.g.gaming"));
         if (!name) return;
         const err = await window.go.main.App.CreateIdentity(name);
-        if (err) V().toast("create failed: " + err, "warn");
+        if (err) V().toast(t("settings.create.failed") + err, "warn");
         refreshIdentities(tbody);
     };
     const importBtn = document.createElement("button");
-    importBtn.textContent = "Import…";
+    importBtn.textContent = t("settings.import");
     importBtn.onclick = async () => {
         const err = await window.go.main.App.ImportIdentity();
-        if (err) V().toast("import failed: " + err, "warn");
-        else V().toast("identity imported and selected — reconnect to use it", "warn");
+        if (err) V().toast(t("settings.import.failed") + err, "warn");
+        else V().toast(t("settings.identity.imported.and.selected.reconnect.to.use.it"), "warn");
         refreshIdentities(tbody);
     };
     const regen = document.createElement("button");
     regen.className = "danger-btn";
-    regen.textContent = "Regenerate active";
+    regen.textContent = t("settings.regenerate.active");
     regen.onclick = async () => {
-        if (!confirm("Regenerating replaces the ACTIVE identity's key. Servers will see you as a NEW user (registered accounts keep working via password). Continue?")) return;
+        if (!confirm(t("settings.regenerating.replaces.the.active.identity.s.key.servers.will.see.you.as.a.n"))) return;
         const uid = await window.go.main.App.RegenerateIdentity();
-        V().toast("identity regenerated (" + uid.slice(0, 16) + "…) — reconnect to use it", "warn");
+        V().toast(t("settings.identity.regenerated") + uid.slice(0, 16) + t("settings.reconnect.to.use.it.alternate"), "warn");
         refreshIdentities(tbody);
     };
     bar.append(newBtn, importBtn, regen);
     el.appendChild(bar);
-    el.appendChild(hint("The active identity (●) is used on the next connect. Click a unique ID to copy it. "
-        + "An export is a portable plaintext copy — it is the only way to recover an identity if this machine dies."));
+    el.appendChild(hint(t("settings.the.active.identity.is.used.on.the.next.connect.click.a.unique.id.to.copy.i")));
 
     // (354) key storage at rest, with its fallback stated plainly.
     const protSel = document.createElement("select");
-    for (const [v, label] of [["auto", "Use the OS key store when available (default)"], ["off", "Always store in plaintext"]]) {
+    for (const [v, label] of [["auto", t("settings.use.the.os.key.store.when.available.default")], ["off", t("settings.always.store.in.plaintext")]]) {
         const o = document.createElement("option");
         o.value = v;
         o.textContent = label;
@@ -1164,19 +1167,17 @@ function pageSecurity() {
     }
     protSel.value = s.identity_key_protection === "off" ? "off" : "auto";
     protSel.onchange = () => { s.identity_key_protection = protSel.value; };
-    el.appendChild(row("Private key storage", protSel));
-    el.appendChild(hint("On Windows the private key is sealed with DPAPI to your user account, so a stolen copy of the file "
-        + "is useless elsewhere. Where DPAPI is unavailable the client falls back to the plaintext file instead of refusing to "
-        + "start. Applies the next time an identity file is written (switch, rename, level, regenerate)."));
+    el.appendChild(row(t("settings.private.key.storage"), protSel));
+    el.appendChild(hint(t("settings.on.windows.the.private.key.is.sealed.with.dpapi.to.your.user.account.so.a.s")));
 
     // (4a) Transport security: TLS is the default; plaintext is an explicit
     // dev opt-in.
     const tsub = document.createElement("div");
     tsub.className = "set-subhead";
-    tsub.textContent = "Transport";
+    tsub.textContent = t("settings.transport");
     el.appendChild(tsub);
-    el.appendChild(row("Allow plaintext connections (dev servers)", checkbox(!!s.allow_plaintext, (v) => { s.allow_plaintext = v; })));
-    el.appendChild(hint("Server connections use TLS with trust-on-first-use fingerprint pinning (known_servers.json). Enable plaintext only for local dev servers."));
+    el.appendChild(row(t("settings.allow.plaintext.connections.dev.servers"), checkbox(!!s.allow_plaintext, (v) => { s.allow_plaintext = v; })));
+    el.appendChild(hint(t("settings.server.connections.use.tls.with.trust.on.first.use.fingerprint.pinning.know")));
     return el;
 }
 
@@ -1186,10 +1187,10 @@ function pageNotifications() {
     const chatLevel = document.createElement("select");
     chatLevel.className = "dlg-input";
     for (const [value, label] of [
-        ["direct", "Direct messages only"],
-        ["channel_mentions", "DMs + channel mentions"],
-        ["role_mentions", "DMs + role mentions"],
-        ["all", "All messages"],
+        ["direct", t("settings.direct.messages.only")],
+        ["channel_mentions", t("settings.dms.channel.mentions")],
+        ["role_mentions", t("settings.dms.role.mentions")],
+        ["all", t("settings.all.messages")],
     ]) {
         const option = document.createElement("option");
         option.value = value;
@@ -1198,19 +1199,19 @@ function pageNotifications() {
     }
     chatLevel.value = s.chat_notification_level || "all";
     chatLevel.onchange = () => { s.chat_notification_level = chatLevel.value; };
-    el.appendChild(row("Chat notification category", chatLevel));
-    el.appendChild(hint("Per-channel mute and notification matrix outputs still apply after this category filter."));
+    el.appendChild(row(t("settings.chat.notification.category"), chatLevel));
+    el.appendChild(hint(t("settings.per.channel.mute.and.notification.matrix.outputs.still.apply.after.this.cat")));
     // (385) notification matrix: rows = events, columns = outputs. The rows
     // are the dispatcher's own event list, so every event it can fire has
     // reachable toggles here and the two cannot drift apart.
     const EVENTS = MATRIX_EVENTS;
     const matrix = document.createElement("table");
     matrix.className = "perm-grid notify-matrix";
-    matrix.innerHTML = `<thead><tr><th>event</th><th>toast</th><th>sound</th><th>flash</th><th>native</th><th>custom beep</th></tr></thead><tbody></tbody>`;
+    matrix.innerHTML = `<thead><tr>${["event", "toast", "sound", "flash", "native", "preview"].map(key => `<th>${t("settings.matrix." + key)}</th>`).join("")}</tr></thead><tbody></tbody>`;
     const tbody = matrix.querySelector("tbody");
     s.notify_matrix = s.notify_matrix || {};
-    s.custom_sounds = s.custom_sounds || {};
-    for (const [event, label] of EVENTS) {
+    for (const [event, englishLabel] of EVENTS) {
+        const label = currentLanguage() === "en" ? englishLabel : t("settings.sound." + event);
         // Unset rows seed from the dispatcher's default: this grid writes what
         // it shows, so a local guess would change behaviour on first visit.
         const rowData = s.notify_matrix[event] || defaultMatrixRow(event);
@@ -1220,100 +1221,105 @@ function pageNotifications() {
         for (const col of ["toast", "sound", "flash", "native"]) {
             const td = document.createElement("td");
             td.appendChild(checkbox(rowData[col], (v) => { rowData[col] = v; }));
+            td.firstChild.setAttribute("aria-label", label + ": " + t("settings.matrix." + col));
             tr.appendChild(td);
         }
-        // (384) custom beep: freq + duration + preview.
         const td = document.createElement("td");
-        td.className = "beep-cell";
-        const spec = s.custom_sounds[event] || { freq: 0, duration_ms: 200 };
-        s.custom_sounds[event] = spec;
-        const freq = document.createElement("input");
-        freq.type = "number";
-        freq.min = 100; freq.max = 2000; freq.value = spec.freq || "";
-        freq.placeholder = "Hz";
-        freq.className = "beep-freq";
-        freq.onchange = () => { spec.freq = parseInt(freq.value, 10) || 0; };
-        const dur = document.createElement("input");
-        dur.type = "number";
-        dur.min = 30; dur.max = 2000; dur.value = spec.duration_ms || 200;
-        dur.className = "beep-dur";
-        dur.onchange = () => { spec.duration_ms = parseInt(dur.value, 10) || 200; };
-        const prev = document.createElement("button");
-        prev.textContent = "▶";
-        prev.title = "preview";
-        prev.onclick = async () => {
-            // force: a preview must be audible even with the master toggle off.
-            if (spec.freq > 0) play("sine", spec.freq, (spec.duration_ms || 200) / 1000, 1, true);
-        };
-        td.append(freq, dur, prev);
+        const preview = document.createElement("button");
+        preview.type = "button";
+        preview.textContent = t("settings.play");
+        preview.setAttribute("aria-label", t("settings.preview", { label }));
+        preview.onclick = () => previewSounds([event], s);
+        td.appendChild(preview);
         tr.appendChild(td);
         tbody.appendChild(tr);
     }
     el.appendChild(matrix);
-    el.appendChild(hint("Empty freq = sound-pack default. DND overrides everything (mentions still badge)."));
+    el.appendChild(hint(t("settings.previews.use.your.sound.volume.and.event.choices.dnd.silences.all.previews")));
     // (347/348) do-not-disturb: toggle + quiet hours schedule.
-    el.appendChild(row("Do not disturb", checkbox(s.dnd_enabled, (v) => { s.dnd_enabled = v; })));
+    el.appendChild(row(t("settings.do.not.disturb"), checkbox(s.dnd_enabled, (v) => { s.dnd_enabled = v; })));
     const from = document.createElement("input");
     from.type = "time";
+    from.setAttribute("aria-label", t("settings.quiet.from"));
     from.value = s.dnd_from || "";
     from.onchange = () => { s.dnd_from = from.value; };
     const to = document.createElement("input");
     to.type = "time";
+    to.setAttribute("aria-label", t("settings.quiet.to"));
     to.value = s.dnd_to || "";
     to.onchange = () => { s.dnd_to = to.value; };
     const hours = document.createElement("div");
     hours.className = "dnd-hours";
     hours.append(from, document.createTextNode(" – "), to);
-    el.appendChild(row("Quiet hours (empty = off)", hours));
-    el.appendChild(hint("DND suppresses toasts, sounds, and taskbar flashes; mentions still badge silently."));
-    el.appendChild(row("Toasts for join/leave", checkbox(s.notify_join_leave, (v) => { s.notify_join_leave = v; })));
-    el.appendChild(row("Toasts for connection events", checkbox(s.notify_connection, (v) => { s.notify_connection = v; })));
-    el.appendChild(row("Warn when talking while muted", checkbox(s.warn_muted_talking !== false, (v) => { s.warn_muted_talking = v; })));
-    el.appendChild(row("Hint when talking to an empty channel", checkbox(s.warn_empty_channel !== false, (v) => { s.warn_empty_channel = v; })));
+    el.appendChild(row(t("settings.quiet.hours.empty.off"), hours));
+    el.appendChild(hint(t("settings.dnd.suppresses.toasts.sounds.and.taskbar.flashes.mentions.still.badge.silen")));
+    el.appendChild(row(t("settings.toasts.for.join.leave"), checkbox(s.notify_join_leave, (v) => { s.notify_join_leave = v; })));
+    el.appendChild(row(t("settings.toasts.for.connection.events"), checkbox(s.notify_connection, (v) => { s.notify_connection = v; })));
+    el.appendChild(row(t("settings.warn.when.talking.while.muted"), checkbox(s.warn_muted_talking !== false, (v) => { s.warn_muted_talking = v; })));
+    el.appendChild(row(t("settings.hint.when.talking.to.an.empty.channel"), checkbox(s.warn_empty_channel !== false, (v) => { s.warn_empty_channel = v; })));
 
     // (28) master gate, now actually read by sounds.js: only an explicit
     // false silences playback, so a settings blob without the field is on.
-    el.appendChild(row("Play sounds (master)", checkbox(s.play_sounds !== false, (v) => { s.play_sounds = v; })));
+    el.appendChild(row(t("settings.play.sounds.master"), checkbox(s.play_sounds !== false, (v) => { s.play_sounds = v; })));
 
-    // (28) Sound pack system.
-    const packSel = document.createElement("select");
-    for (const p of ["soft", "bright", "retro"]) {
-        const o = document.createElement("option");
-        o.value = p;
-        o.textContent = p[0].toUpperCase() + p.slice(1);
-        packSel.appendChild(o);
-    }
-    packSel.value = s.sound_pack || "soft";
-    packSel.onchange = () => { s.sound_pack = packSel.value; };
-    el.appendChild(row("Sound pack", packSel));
-    el.appendChild(row("Sound volume", slider(s.sound_volume ?? 100, 0, 200, (v) => { s.sound_volume = v; })));
-
-    const sub = document.createElement("div");
-    sub.className = "set-subhead";
-    sub.textContent = "Event sounds";
-    el.appendChild(sub);
-    // The player owns this grouped metadata. The settings dialog therefore
-    // stays legible as cues grow without ever drifting from playable events.
+    const pack = document.createElement("span");
+    pack.textContent = "noXa";
+    el.appendChild(row(t("settings.sound.set"), pack));
+    el.appendChild(hint(t("settings.original.noxa.sounds.replace.soft.bright.retro.and.custom.beeps.your.event")));
+    el.appendChild(row(t("settings.sound.volume"), slider(s.sound_volume ?? 100, 0, 200, (v) => { s.sound_volume = v; })));
+    el.appendChild(row(t("settings.spoken.system.messages"), checkbox(s.spoken_messages !== false, v => { s.spoken_messages = v; })));
+    el.appendChild(row(t("settings.speech.volume"), slider(s.speech_volume ?? 100, 0, 200, v => { s.speech_volume = v; })));
+    el.appendChild(row(t("settings.speak.connection.problems"), checkbox(s.speech_connection !== false, v => { s.speech_connection = v; })));
+    el.appendChild(row(t("settings.speak.administrative.actions"), checkbox(s.speech_admin !== false, v => { s.speech_admin = v; })));
+    const speechTest = document.createElement("button");
+    speechTest.type = "button";
+    speechTest.textContent = t("settings.test.spoken.message");
+    speechTest.onclick = () => previewSpeech(s);
+    el.appendChild(speechTest);
+    el.appendChild(hint(t("settings.fixed.english.or.german.recordings.follow.your.interface.language.other.lan")));
+    el.appendChild(hint(t("settings.previews.use.unsaved.settings.master.mute.can.be.bypassed.for.previews.dnd")));
+    const status = document.createElement("div");
+    status.className = "set-hint";
+    status.setAttribute("role", "status");
+    const onLabel = (label, event) => {
+        status.textContent = label ? t("settings.playing", { label: t("settings.sound." + event) }) : t("settings.preview.finished");
+    };
+    const button = (label, events) => {
+        const b = document.createElement("button");
+        b.type = "button";
+        b.textContent = label;
+        b.onclick = () => previewSounds(events, s, onLabel);
+        return b;
+    };
+    const controls = document.createElement("div");
+    controls.className = "sound-controls";
+    const all = button(t("settings.test.all.sounds"));
+    all.onclick = () => testAll(s, onLabel);
+    const stop = document.createElement("button");
+    stop.type = "button";
+    stop.textContent = t("settings.stop.preview");
+    stop.onclick = () => { stopPreviews(); status.textContent = t("settings.preview.stopped"); };
+    controls.append(all, stop);
+    el.append(controls, status);
     for (const group of SOUND_EVENT_GROUPS) {
         const heading = document.createElement("div");
-        heading.className = "set-subhead";
-        heading.textContent = group.label;
+        heading.className = "set-subhead sound-controls";
+        const label = document.createElement("span");
+        label.textContent = t("settings.soundgroup." + group.events[0][0]);
+        heading.append(label, button(t("settings.preview", { label: currentLanguage() === "en" ? label.textContent.toLowerCase() : label.textContent }), group.events.map(([event]) => event)));
         el.appendChild(heading);
-        for (const [event, label] of group.events) {
-            const enabled = !s.event_sounds || s.event_sounds[event] !== false;
-            el.appendChild(row(label, checkbox(enabled, (v) => {
+        for (const [event] of group.events) {
+            const label = t("settings.sound." + event);
+            const controls = document.createElement("div");
+            controls.className = "sound-controls";
+            controls.append(checkbox(s.event_sounds?.[event] !== false, (enabled) => {
                 s.event_sounds = s.event_sounds || {};
-                s.event_sounds[event] = v;
-            })));
+                s.event_sounds[event] = enabled;
+            }), button(t("settings.play"), [event]));
+            controls.querySelector("button").setAttribute("aria-label", t("settings.preview", { label }));
+            el.appendChild(row(label, controls));
         }
     }
-
-    const testBtn = document.createElement("button");
-    testBtn.textContent = "Test all sounds";
-    testBtn.onclick = async () => {
-        testAll();
-    };
-    el.appendChild(row("Test", testBtn));
     return el;
 }
 
@@ -1331,6 +1337,7 @@ const PAGE_BUILDERS = {
 };
 
 function renderPage(id) {
+    stopPreviews();
     stopCameraTest();
     cancelHotkeyCapture();
     document.querySelectorAll(".settings-nav-item").forEach((n) => {
@@ -1340,12 +1347,28 @@ function renderPage(id) {
         n.tabIndex = active ? 0 : -1;
     });
     const container = document.getElementById("settings-content");
+    const summary = document.querySelector(".settings-search-summary");
+    if (summary) { summary.textContent = ""; summary.hidden = true; }
     container.setAttribute("aria-labelledby", `settings-page-${id}`);
     container.innerHTML = "";
     container.appendChild(PAGE_BUILDERS[id]());
 }
 
+function translateDialog(overlay) {
+    overlay.querySelector("#settings-title").textContent = t("settings.settings");
+    overlay.querySelector(".settings-nav").setAttribute("aria-label", t("settings.settings.sections"));
+    overlay.querySelector('label[for="settings-search"]').textContent = t("settings.search.settings");
+    overlay.querySelector("#settings-search").placeholder = t("settings.searchPlaceholder");
+    for (const [id, key] of [["set-ok", "ok"], ["set-cancel", "cancel"], ["set-apply", "apply"]]) {
+        overlay.querySelector("#" + id).textContent = t("common." + key);
+    }
+    for (const page of PAGES) {
+        overlay.querySelector(`#settings-page-${page.id} span:last-child`).textContent = t(page.label);
+    }
+}
+
 function openSettings(pageId = "application") {
+    if (document.getElementById("settings-overlay")?.getAttribute("aria-busy") === "true") return;
     draft = JSON.parse(JSON.stringify(V().state.settings || {}));
     deviceInventory.invalidate();
 
@@ -1357,16 +1380,18 @@ function openSettings(pageId = "application") {
     overlay.className = "dlg-overlay";
     overlay.innerHTML = `
         <div class="settings-dialog">
-            <h2 id="settings-title" class="sr-only">Settings</h2>
-            <div class="settings-nav" role="tablist" aria-label="Settings sections" aria-orientation="vertical"></div>
+            <h2 id="settings-title" class="sr-only"></h2>
+            <div class="settings-nav" role="tablist" aria-orientation="vertical"></div>
             <div class="settings-main">
-                <label class="sr-only" for="settings-search">Search settings</label>
+                <label class="sr-only" for="settings-search"></label>
                 <input id="settings-search" class="dlg-input" placeholder="" autocomplete="off" />
+                <div class="settings-search-summary set-hint" role="status" hidden></div>
                 <div id="settings-content" role="tabpanel"></div>
+                <div class="settings-save-status set-hint" role="status" hidden></div>
                 <div class="settings-footer">
-                    <button id="set-ok">OK</button>
-                    <button id="set-cancel">Cancel</button>
-                    <button id="set-apply">Apply</button>
+                    <button id="set-ok"></button>
+                    <button id="set-cancel"></button>
+                    <button id="set-apply"></button>
                 </div>
             </div>
         </div>`;
@@ -1376,25 +1401,48 @@ function openSettings(pageId = "application") {
     const search = overlay.querySelector("#settings-search");
     search.placeholder = t("settings.searchPlaceholder");
     const content = overlay.querySelector("#settings-content");
+    const summary = overlay.querySelector(".settings-search-summary");
+    // Keep only text, not detached controls or their callbacks. Draft edits
+    // invalidate dynamic labels; the cache is discarded with this dialog.
+    let searchIndex = null;
+    let searchLanguage = "";
+    const invalidateSearch = () => { searchIndex = null; };
+    content.addEventListener("input", invalidateSearch);
+    content.addEventListener("change", invalidateSearch);
+    content.addEventListener("click", (event) => {
+        if (!event.target.closest(".set-search-hit")) invalidateSearch();
+    });
     search.oninput = () => {
+        stopPreviews();
         stopCameraTest();
+        cancelHotkeyCapture();
         const q = search.value.trim().toLowerCase();
         if (!q) {
             renderPage(document.querySelector(".settings-nav-item.active")?.dataset.page || "application");
             return;
         }
-        // Search all pages; collect matches as (page, label).
-        const hits = [];
-        for (const p of PAGES) {
-            const pageEl = PAGE_BUILDERS[p.id]();
-            pageEl.querySelectorAll(".set-row, .set-subhead, .set-hint, button").forEach((r) => {
-                const label = (r.querySelector(".set-label")?.textContent || r.textContent || "").toLowerCase();
-                if (label.includes(q)) hits.push({ page: p.id, label: label.trim() });
-            });
+        if (!searchIndex || searchLanguage !== currentLanguage()) {
+            searchIndex = [];
+            searchLanguage = currentLanguage();
+            for (const p of PAGES) {
+                const pageEl = PAGE_BUILDERS[p.id]();
+                pageEl.querySelectorAll(".set-row, .set-subhead, .set-hint, button").forEach((r) => {
+                    const label = (r.querySelector(".set-label")?.textContent || r.textContent || "").toLowerCase().trim();
+                    searchIndex.push({ page: p.id, label });
+                });
+            }
         }
+        const hits = searchIndex.filter(hit => hit.label.includes(q));
+        summary.hidden = false;
+        summary.textContent = hits.length > 40
+            ? t("settings.searchLimited", { shown: 40, total: hits.length })
+            : t(hits.length === 1 ? "settings.searchOne" : "settings.searchCount", { count: hits.length });
         content.innerHTML = "";
         if (hits.length === 0) {
-            content.innerHTML = `<div class="empty-state">no matching settings</div>`;
+            const empty = document.createElement("div");
+            empty.className = "empty-state";
+            empty.textContent = t("settings.no.matching.settings");
+            content.appendChild(empty);
             return;
         }
         for (const h of hits.slice(0, 40)) {
@@ -1402,7 +1450,7 @@ function openSettings(pageId = "application") {
             row.type = "button";
             row.className = "set-search-hit";
             row.innerHTML = `<span class="mono set-search-page"></span><span class="set-search-label"></span>`;
-            row.querySelector(".set-search-page").textContent = h.page;
+            row.querySelector(".set-search-page").textContent = t(PAGES.find(p => p.id === h.page).label);
             row.querySelector(".set-search-label").textContent = h.label;
             row.onclick = () => {
                 search.value = "";
@@ -1429,7 +1477,7 @@ function openSettings(pageId = "application") {
         item.setAttribute("aria-controls", "settings-content");
         item.setAttribute("aria-selected", "false");
         item.tabIndex = -1;
-        item.innerHTML = `<span class="nav-icon">${p.icon}</span><span>${t(p.label)}</span>`;
+        item.innerHTML = `<span class="nav-icon" aria-hidden="true">${p.icon}</span><span>${t(p.label)}</span>`;
         item.onclick = () => renderPage(p.id);
         item.addEventListener("keydown", (event) => {
             if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
@@ -1442,14 +1490,58 @@ function openSettings(pageId = "application") {
         nav.appendChild(item);
     }
 
+    let saving = false;
+    const saveStatus = overlay.querySelector(".settings-save-status");
     const applyAll = async () => {
-        if (!(await commit())) return false;
-        if (draft.whisper_active) {
-            window.go.main.App.WhisperSet(draft.whisper_clients || [], draft.whisper_channels || [], true);
-        } else {
-            window.go.main.App.WhisperSet([], [], false);
+        if (saving) return false;
+        saving = true;
+        const snapshot = structuredClone(draft);
+        const previousLanguage = currentLanguage();
+        const serverGeneration = V().state.serverGeneration;
+        const focused = document.activeElement;
+        overlay.setAttribute("aria-busy", "true");
+        for (const button of overlay.querySelectorAll(".settings-footer button")) button.disabled = true;
+        search.disabled = true;
+        nav.inert = true;
+        content.inert = true;
+        saveStatus.hidden = false;
+        saveStatus.classList.remove("warn");
+        saveStatus.textContent = t("common.saving");
+        try {
+            await commit(snapshot);
+            if (!overlay.isConnected) return false;
+            if (previousLanguage !== currentLanguage()) {
+                translateDialog(overlay);
+                if (search.value) search.oninput();
+                else renderPage(overlay.querySelector(".settings-nav-item.active")?.dataset.page || "application");
+            }
+            // Local preferences also save while disconnected. A live whisper
+            // update belongs only to the server where this save began.
+            if (V().state.myClientID && serverGeneration === V().state.serverGeneration) {
+                const error = await window.go.main.App.WhisperSet(
+                    snapshot.whisper_active ? snapshot.whisper_clients || [] : [],
+                    snapshot.whisper_active ? snapshot.whisper_channels || [] : [],
+                    !!snapshot.whisper_active,
+                );
+                if (error) throw new Error(error);
+            }
+            saveStatus.textContent = t("settings.saved");
+            return true;
+        } catch (error) {
+            if (overlay.isConnected) {
+                saveStatus.textContent = t("menu.saveFailed", { error: error.message || String(error) });
+                saveStatus.classList.add("warn");
+            }
+            return false;
+        } finally {
+            saving = false;
+            overlay.removeAttribute("aria-busy");
+            for (const button of overlay.querySelectorAll(".settings-footer button")) button.disabled = false;
+            search.disabled = false;
+            nav.inert = false;
+            content.inert = false;
+            if (overlay.isConnected && focused?.isConnected) focused.focus();
         }
-        return true;
     };
 
     overlay.querySelector("#set-ok").onclick = async () => {
@@ -1460,8 +1552,11 @@ function openSettings(pageId = "application") {
     overlay.querySelector("#set-apply").onclick = applyAll;
     overlay.onclick = (e) => { if (e.target === overlay) cancel(); };
 
+    translateDialog(overlay);
     mountDialog(overlay, {
+        onCancel: () => !saving,
         onClose: () => {
+            stopPreviews();
             stopCameraTest();
             cancelHotkeyCapture();
             revertLivePreview();
@@ -1471,7 +1566,7 @@ function openSettings(pageId = "application") {
 }
 
 export function initSettingsUI() {
-    window.__voicx.openSettings = openSettings;
+    window.__noxa.openSettings = openSettings;
     // (301) track registration errors for the hotkey map rows.
     window.runtime.EventsOn("hotkey_status", (st) => {
         if (st.error) hkErrors.set(st.action, st.error);

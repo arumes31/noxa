@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"golang.org/x/crypto/nacl/box"
-	"voicx/internal/netproto"
+	"noxa/internal/netproto"
 )
 
 // deadlineRecordingConn makes deadline ownership observable without sleeps

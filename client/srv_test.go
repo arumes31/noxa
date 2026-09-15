@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"voicx/internal/tlscert"
+	"noxa/internal/tlscert"
 )
 
 func TestResolveServerAddresses(t *testing.T) {
@@ -48,7 +48,7 @@ func TestResolveServerAddresses(t *testing.T) {
 			called := false
 			lookup := func(ctx context.Context, service, proto, host string) (string, []*net.SRV, error) {
 				called = true
-				if service != "voicx" || proto != "tcp" || host != test.wantHost {
+				if service != "noxa" || proto != "tcp" || host != test.wantHost {
 					t.Fatalf("lookup(%q, %q, %q)", service, proto, host)
 				}
 				if _, ok := ctx.Deadline(); !ok {

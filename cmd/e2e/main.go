@@ -1,4 +1,4 @@
-// e2e is a live-server end-to-end checklist runner for voicx. It connects to
+// e2e is a live-server end-to-end checklist runner for noxa. It connects to
 // a running server and exercises the health, UDP, auth, channel, chat,
 // permission, file-transfer, and ServerQuery paths, printing PASS/FAIL per
 // check and exiting non-zero unless everything passes.
@@ -38,9 +38,9 @@ import (
 	"golang.org/x/crypto/nacl/box"
 	"golang.org/x/crypto/nacl/secretbox"
 
-	"voicx/internal/config"
-	"voicx/internal/netproto"
-	"voicx/internal/tlscert"
+	"noxa/internal/config"
+	"noxa/internal/netproto"
+	"noxa/internal/tlscert"
 )
 
 // options holds the e2e parameters.
@@ -598,8 +598,8 @@ func checkMetrics(c *checkCtx) error {
 	if code != 200 {
 		return fmt.Errorf("metrics status = %d, want 200", code)
 	}
-	if !strings.Contains(body, "voicx_clients_connected") {
-		return errors.New("metrics body missing voicx_clients_connected")
+	if !strings.Contains(body, "noxa_clients_connected") {
+		return errors.New("metrics body missing noxa_clients_connected")
 	}
 	return nil
 }

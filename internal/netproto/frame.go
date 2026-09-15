@@ -1,4 +1,4 @@
-// Package netproto implements the wire protocol framing used by the voicx
+// Package netproto implements the wire protocol framing used by the noxa
 // control channel. It provides a length-prefixed binary framing layer and a
 // minimal message type registry / dispatch helper.
 //
@@ -19,7 +19,7 @@ import (
 	"fmt"
 	"io"
 
-	"voicx/internal/safecast"
+	"noxa/internal/safecast"
 )
 
 // MaxFrameSize is the largest frame (type + payload) the server will accept.

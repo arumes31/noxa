@@ -8,7 +8,7 @@ secret backup system, never in the archive described here.
 
 ## Create a recovery point
 
-1. Record the deployed image digest, VoicX version, UTC timestamp, database
+1. Record the deployed image digest, noXa version, UTC timestamp, database
    server version, and redacted configuration.
 2. Quiesce writes or use a storage/database snapshot mechanism that provides a
    documented common point in time. Do not copy a live mutable directory with a
@@ -32,11 +32,11 @@ Use an isolated network and new database, file roots, credentials, and ports.
 2. Restore the PostgreSQL dump into an empty database owned by a non-superuser.
 3. Restore file and asset roots to new empty directories with restrictive
    ownership. Do not overlay the production directories.
-   VoicX treats the restored channel table as authoritative and removes
+   noXa treats the restored channel table as authoritative and removes
    canonical numeric file directories for channels absent from it at startup.
    Never start against a filesystem snapshot paired with an older or incomplete
    database restore.
-4. Start the exact backed-up VoicX image against the isolated restore. Confirm
+4. Start the exact backed-up noXa image against the isolated restore. Confirm
    `/readyz` and `/api/v1/schema/version`, then stop it cleanly.
 5. Start the candidate image. Its migration runner must accept every ledger
    checksum and required index before readiness succeeds.
@@ -53,7 +53,7 @@ Use an isolated network and new database, file roots, credentials, and ports.
 
 ## Compose backup container
 
-The optional `backup` Compose profile runs the dedicated `voicx-backup` image.
+The optional `backup` Compose profile runs the dedicated `noxa-backup` image.
 It connects with `PGHOST`, `PGPORT`, `PGUSER`, `PGDATABASE`, and `PGSSLMODE`;
 the password is supplied through `POSTGRES_PASSWORD` or
 `POSTGRES_PASSWORD_FILE`, never a connection URL or `pg_dump` argument. The
@@ -81,7 +81,7 @@ For a rootless Docker daemon, make the `0700` source directory owned by the
 daemon/operator account instead of root; retain the same direct-file mounts and
 keep the directory inaccessible to unrelated host users.
 
-If VoicX uses `VOICX_COMPOSE_DATABASE_URL` or its `_FILE` form for an external
+If noXa uses `NOXA_COMPOSE_DATABASE_URL` or its `_FILE` form for an external
 database, the profile fails closed until `BACKUP_PGHOST`, `BACKUP_PGPORT`,
 `BACKUP_PGUSER`, `BACKUP_PGDATABASE`, `BACKUP_PGSSLMODE`, and exactly one of
 `BACKUP_POSTGRES_PASSWORD` / `BACKUP_POSTGRES_PASSWORD_FILE` are provided.
@@ -99,7 +99,7 @@ Use the separate external topology whenever the application URL is external:
 docker compose -f docker-compose.yml -f docker-compose.external-db.yml --profile backup up -d
 ```
 
-It removes VoicX's internal PostgreSQL health dependency and leaves the bundled
+It removes noXa's internal PostgreSQL health dependency and leaves the bundled
 database inactive, while retaining Redis and the optional backup profile.
 
 ## Recovery objectives

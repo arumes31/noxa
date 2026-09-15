@@ -4,7 +4,7 @@
 // 	protoc        (unknown)
 // source: events.proto
 
-package voicxv1
+package noxav1
 
 import (
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"

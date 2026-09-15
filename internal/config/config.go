@@ -13,9 +13,9 @@ import (
 	"github.com/spf13/viper"
 )
 
-// Config holds all runtime configuration for the voicx server.
+// Config holds all runtime configuration for the noxa server.
 // Values are populated from (in order of precedence):
-//  1. environment variables prefixed with VOICX_ (e.g. VOICX_TCP_ADDR)
+//  1. environment variables prefixed with NOXA_ (e.g. NOXA_TCP_ADDR)
 //  2. config.yaml at the project root (if present)
 //  3. the defaults defined in Load().
 type Config struct {
@@ -105,7 +105,7 @@ type Config struct {
 	// Chat encryption at rest (91). ChatMasterKeyFile holds the key-encryption
 	// key that wraps every stored scope generation; it lives OUTSIDE the
 	// database and must be backed up with it — losing it destroys all channel
-	// and global history irreversibly. VOICX_CHAT_MASTER_KEY overrides it.
+	// and global history irreversibly. NOXA_CHAT_MASTER_KEY overrides it.
 	// ChatLegacyHistory selects what the one-time backfill does with pre-012
 	// plaintext rows: "encrypt" (default, sealed in place) or "purge".
 	// ChatKeyRotateMinSecs coalesces channel key rotations so a flapping
@@ -233,7 +233,7 @@ func newConfigViper() *viper.Viper {
 	v := viper.New()
 
 	// Defaults -----------------------------------------------------------------
-	v.SetDefault("server_name", "voicx")
+	v.SetDefault("server_name", "noXa")
 	v.SetDefault("server_password", "")
 	v.SetDefault("log_level", "info")
 	v.SetDefault("dev_mode", true)
@@ -254,7 +254,7 @@ func newConfigViper() *viper.Viper {
 	v.SetDefault("file_max_size_mb", 100)
 	v.SetDefault("file_quiet_hours_start", 0)
 	v.SetDefault("file_quiet_hours_end", 0)
-	v.SetDefault("database_url", "postgres://voicx:voicx@localhost:5432/voicx?sslmode=disable")
+	v.SetDefault("database_url", "postgres://noxa:noxa@localhost:5432/noxa?sslmode=disable")
 	v.SetDefault("redis_addr", "localhost:6379")
 	v.SetDefault("redis_password", "")
 	v.SetDefault("redis_enabled", true)
@@ -301,7 +301,7 @@ func newConfigViper() *viper.Viper {
 
 	// TURN defaults: disabled (no secret) until coturn is deployed.
 	v.SetDefault("turn.secret", "")
-	v.SetDefault("turn.realm", "voicx")
+	v.SetDefault("turn.realm", "noxa")
 	v.SetDefault("turn.uris", []string{})
 	v.SetDefault("turn.credentials_ttl", 24*time.Hour)
 
@@ -333,19 +333,19 @@ func newConfigViper() *viper.Viper {
 	return v
 }
 
-// Load reads configuration from environment variables (VOICX_ prefix),
+// Load reads configuration from environment variables (NOXA_ prefix),
 // an optional config.yaml (searched in the working directory first, then
-// /etc/voicx), and built-in defaults. It returns a typed *Config or an error
+// /etc/noxa), and built-in defaults. It returns a typed *Config or an error
 // if configuration could not be unmarshalled.
 func Load() (*Config, error) {
 	v := newConfigViper()
 
-	// config.yaml: the working directory wins; /etc/voicx is the system
+	// config.yaml: the working directory wins; /etc/noxa is the system
 	// location used by the Docker image. The first file found is used.
 	v.SetConfigName("config")
 	v.SetConfigType("yaml")
 	v.AddConfigPath(".")
-	v.AddConfigPath("/etc/voicx")
+	v.AddConfigPath("/etc/noxa")
 	if err := v.ReadInConfig(); err != nil {
 		// Missing config file is fine; we fall back to env + defaults.
 		if _, ok := err.(viper.ConfigFileNotFoundError); !ok {
@@ -353,8 +353,8 @@ func Load() (*Config, error) {
 		}
 	}
 
-	// Environment variables: VOICX_<UPPER_SNAKE_FIELD> ------------------------
-	v.SetEnvPrefix("VOICX")
+	// Environment variables: NOXA_<UPPER_SNAKE_FIELD> ------------------------
+	v.SetEnvPrefix("NOXA")
 	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
 	v.AutomaticEnv()
 
@@ -739,8 +739,8 @@ func validateProductionDatabaseURL(raw string) error {
 	}
 	if parsed.User != nil {
 		password, hasPassword := parsed.User.Password()
-		if hasPassword && strings.EqualFold(parsed.User.Username(), "voicx") && password == "voicx" {
-			return errors.New("database_url must not use the default voicx:voicx credentials when dev_mode=false")
+		if hasPassword && strings.EqualFold(parsed.User.Username(), "noxa") && password == "noxa" {
+			return errors.New("database_url must not use the default noxa:noxa credentials when dev_mode=false")
 		}
 	}
 

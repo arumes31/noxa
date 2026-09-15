@@ -2,7 +2,7 @@
 // calibration, PTT release delay, the channel capture profile, remote-chain
 // limiter/per-user normalizer, and the per-user volume/mute registry.
 import { labelButton } from "./icons.js";
-const V = () => window.__voicx;
+const V = () => window.__noxa;
 
 // Keep the voice-bar action aligned with what the next activation will do.
 // A pressed mute button offers "Unmute" to both pointer and screen-reader

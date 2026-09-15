@@ -8,7 +8,7 @@ import { humanBytes } from "./clientinfo.js";
 import { isCurrentServerDialog, mountServerDialog } from "./modal.js";
 import { setSafeImage } from "./safe-media.js";
 
-const V = () => window.__voicx;
+const V = () => window.__noxa;
 const App = () => window.go.main.App;
 
 const STATUS_LABELS = { "": "online", away: "away", busy: "busy" };
@@ -219,7 +219,7 @@ function initHoverCards() {
             const c = V().state.clients.find((x) => x.client_id === clientRow.dataset.clid);
             if (!c) return;
             hoverTimer = setTimeout(() => {
-                const g = window.__voicxPerms.primaryGroup(c.unique_id);
+                const g = window.__noxaPerms.primaryGroup(c.unique_id);
                 const av = V().state.avatars.get(c.unique_id);
                 showHoverCard(e.clientX + 12, e.clientY + 12, `
                     <div class="hc-head">
@@ -350,7 +350,7 @@ async function saveUserNote(uid, note) {
 export function initSocialUI() {
     initTreeTools();
     initHoverCards();
-    window.__voicxSocial = {
+    window.__noxaSocial = {
         openStatusPicker, openContacts, openPoke, refreshNews, resetServerView,
         avatarLightbox, userNote, saveUserNote, esc,
     };

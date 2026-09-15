@@ -3,7 +3,7 @@
 // The health listener is deliberately separate from the TLS control socket;
 // never derive its scheme from the control connection.
 
-const CONTROL_SCHEMES = new Set(["http:", "https:", "tcp:", "tls:", "voicx:"]);
+const CONTROL_SCHEMES = new Set(["http:", "https:", "tcp:", "tls:", "noxa:"]);
 const LINK_SCHEMES = new Set(["http", "https"]);
 const LINK_PATH = /^\/dl\/([0-9a-f]{32})$/;
 
@@ -12,7 +12,7 @@ function controlAddressURL(address) {
     const value = address.trim();
     const hasScheme = /^[a-z][a-z0-9+.-]*:\/\//i.test(value);
     try {
-        const parsed = new URL(hasScheme ? value : `voicx://${value}`);
+        const parsed = new URL(hasScheme ? value : `noxa://${value}`);
         if (!CONTROL_SCHEMES.has(parsed.protocol) || !parsed.hostname ||
             parsed.username || parsed.password || parsed.search || parsed.hash ||
             (parsed.pathname !== "/" && parsed.pathname !== "")) return null;

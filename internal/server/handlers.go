@@ -20,13 +20,13 @@ import (
 
 	"go.uber.org/zap"
 
-	"voicx/internal/auth"
-	"voicx/internal/broadcast"
-	"voicx/internal/channels"
-	"voicx/internal/netproto"
-	"voicx/internal/permissions"
-	"voicx/internal/recorder"
-	"voicx/internal/state"
+	"noxa/internal/auth"
+	"noxa/internal/broadcast"
+	"noxa/internal/channels"
+	"noxa/internal/netproto"
+	"noxa/internal/permissions"
+	"noxa/internal/recorder"
+	"noxa/internal/state"
 )
 
 // Broadcast event types sent in MsgEvent envelopes.

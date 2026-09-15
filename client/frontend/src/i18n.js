@@ -9,10 +9,14 @@
 //      t("chat.connectedAs", { nick }) → "Connected as {nick}".
 //   3. Settings → Application → Language applies it live (menus and the
 //      settings dialog rebuild; static index.html labels are set once at
-//      startup — full coverage of every string is intentionally out of
-//      scope this wave).
+//      startup). Every settings page uses the same catalogs.
+
+import { settingsEnglish, settingsGerman } from "./settings-messages.js";
+import { interfaceEnglish, interfaceGerman } from "./interface-messages.js";
 
 const en = {
+    ...settingsEnglish,
+    ...interfaceEnglish,
     "menu.connections": "Connections",
     "menu.bookmarks": "Bookmarks",
     "menu.self": "Self",
@@ -35,7 +39,7 @@ const en = {
     "menu.debugConsole": "Debug console…",
     "menu.connStats": "Connection stats…",
     "menu.exportLogs": "Export logs…",
-    "menu.about": "About voicx",
+    "menu.about": "About noXa",
     "menu.checkUpdates": "Check for updates…",
     "menu.permManager": "Permission Manager…",
     "menu.viewMyPerms": "View my permissions",
@@ -72,6 +76,8 @@ const en = {
 };
 
 const de = {
+    ...settingsGerman,
+    ...interfaceGerman,
     "menu.connections": "Verbindungen",
     "menu.bookmarks": "Lesezeichen",
     "menu.self": "Selbst",
@@ -94,7 +100,7 @@ const de = {
     "menu.debugConsole": "Debug-Konsole…",
     "menu.connStats": "Verbindungsstatistik…",
     "menu.exportLogs": "Logs exportieren…",
-    "menu.about": "Über voicx",
+    "menu.about": "Über noXa",
     "menu.checkUpdates": "Nach Updates suchen…",
     "menu.permManager": "Rechte-Manager…",
     "menu.viewMyPerms": "Meine Rechte anzeigen",

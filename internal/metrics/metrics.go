@@ -1,4 +1,4 @@
-// Package metrics wraps the Prometheus client library with a voicx-specific
+// Package metrics wraps the Prometheus client library with a noxa-specific
 // registry and a narrow Sink interface. Server components consume Sink (or
 // the Noop implementation in tests) so no Prometheus calls are sprinkled
 // through handlers.
@@ -14,7 +14,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/collectors"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
-	"voicx/internal/version"
+	"noxa/internal/version"
 )
 
 const (
@@ -22,7 +22,7 @@ const (
 	metricsHandlerTimeout      = 10 * time.Second
 )
 
-// Sink is the narrow metrics interface used across voicx. *Metrics and Noop
+// Sink is the narrow metrics interface used across noxa. *Metrics and Noop
 // implement it.
 type Sink interface {
 	IncUDPPackets(kind string)
@@ -46,15 +46,15 @@ func (m *Metrics) RegisterDBPool(db *sql.DB) {
 	}
 	m.dbPoolOnce.Do(func() {
 		poolCollectors := []prometheus.Collector{
-			prometheus.NewGaugeFunc(prometheus.GaugeOpts{Namespace: "voicx", Subsystem: "db_pool", Name: "max_open_connections", Help: "Configured maximum PostgreSQL pool connections."}, func() float64 { return float64(db.Stats().MaxOpenConnections) }),
-			prometheus.NewGaugeFunc(prometheus.GaugeOpts{Namespace: "voicx", Subsystem: "db_pool", Name: "open_connections", Help: "Open PostgreSQL pool connections."}, func() float64 { return float64(db.Stats().OpenConnections) }),
-			prometheus.NewGaugeFunc(prometheus.GaugeOpts{Namespace: "voicx", Subsystem: "db_pool", Name: "in_use_connections", Help: "PostgreSQL pool connections currently in use."}, func() float64 { return float64(db.Stats().InUse) }),
-			prometheus.NewGaugeFunc(prometheus.GaugeOpts{Namespace: "voicx", Subsystem: "db_pool", Name: "idle_connections", Help: "Idle PostgreSQL pool connections."}, func() float64 { return float64(db.Stats().Idle) }),
-			prometheus.NewCounterFunc(prometheus.CounterOpts{Namespace: "voicx", Subsystem: "db_pool", Name: "wait_count_total", Help: "Requests that waited for a PostgreSQL pool connection."}, func() float64 { return float64(db.Stats().WaitCount) }),
-			prometheus.NewCounterFunc(prometheus.CounterOpts{Namespace: "voicx", Subsystem: "db_pool", Name: "wait_duration_seconds_total", Help: "Total time spent waiting for PostgreSQL pool connections."}, func() float64 { return db.Stats().WaitDuration.Seconds() }),
-			prometheus.NewCounterFunc(prometheus.CounterOpts{Namespace: "voicx", Subsystem: "db_pool", Name: "closed_max_idle_total", Help: "PostgreSQL connections closed after exceeding the idle pool limit."}, func() float64 { return float64(db.Stats().MaxIdleClosed) }),
-			prometheus.NewCounterFunc(prometheus.CounterOpts{Namespace: "voicx", Subsystem: "db_pool", Name: "closed_max_idle_time_total", Help: "PostgreSQL connections closed after exceeding the idle time limit."}, func() float64 { return float64(db.Stats().MaxIdleTimeClosed) }),
-			prometheus.NewCounterFunc(prometheus.CounterOpts{Namespace: "voicx", Subsystem: "db_pool", Name: "closed_max_lifetime_total", Help: "PostgreSQL connections closed after exceeding the lifetime limit."}, func() float64 { return float64(db.Stats().MaxLifetimeClosed) }),
+			prometheus.NewGaugeFunc(prometheus.GaugeOpts{Namespace: "noxa", Subsystem: "db_pool", Name: "max_open_connections", Help: "Configured maximum PostgreSQL pool connections."}, func() float64 { return float64(db.Stats().MaxOpenConnections) }),
+			prometheus.NewGaugeFunc(prometheus.GaugeOpts{Namespace: "noxa", Subsystem: "db_pool", Name: "open_connections", Help: "Open PostgreSQL pool connections."}, func() float64 { return float64(db.Stats().OpenConnections) }),
+			prometheus.NewGaugeFunc(prometheus.GaugeOpts{Namespace: "noxa", Subsystem: "db_pool", Name: "in_use_connections", Help: "PostgreSQL pool connections currently in use."}, func() float64 { return float64(db.Stats().InUse) }),
+			prometheus.NewGaugeFunc(prometheus.GaugeOpts{Namespace: "noxa", Subsystem: "db_pool", Name: "idle_connections", Help: "Idle PostgreSQL pool connections."}, func() float64 { return float64(db.Stats().Idle) }),
+			prometheus.NewCounterFunc(prometheus.CounterOpts{Namespace: "noxa", Subsystem: "db_pool", Name: "wait_count_total", Help: "Requests that waited for a PostgreSQL pool connection."}, func() float64 { return float64(db.Stats().WaitCount) }),
+			prometheus.NewCounterFunc(prometheus.CounterOpts{Namespace: "noxa", Subsystem: "db_pool", Name: "wait_duration_seconds_total", Help: "Total time spent waiting for PostgreSQL pool connections."}, func() float64 { return db.Stats().WaitDuration.Seconds() }),
+			prometheus.NewCounterFunc(prometheus.CounterOpts{Namespace: "noxa", Subsystem: "db_pool", Name: "closed_max_idle_total", Help: "PostgreSQL connections closed after exceeding the idle pool limit."}, func() float64 { return float64(db.Stats().MaxIdleClosed) }),
+			prometheus.NewCounterFunc(prometheus.CounterOpts{Namespace: "noxa", Subsystem: "db_pool", Name: "closed_max_idle_time_total", Help: "PostgreSQL connections closed after exceeding the idle time limit."}, func() float64 { return float64(db.Stats().MaxIdleTimeClosed) }),
+			prometheus.NewCounterFunc(prometheus.CounterOpts{Namespace: "noxa", Subsystem: "db_pool", Name: "closed_max_lifetime_total", Help: "PostgreSQL connections closed after exceeding the lifetime limit."}, func() float64 { return float64(db.Stats().MaxLifetimeClosed) }),
 		}
 		m.registry.MustRegister(poolCollectors...)
 	})
@@ -91,7 +91,7 @@ type Metrics struct {
 	buildInfo         *prometheus.GaugeVec
 }
 
-// New constructs a Metrics with its own registry (voicx_* metrics plus the
+// New constructs a Metrics with its own registry (noxa_* metrics plus the
 // default Go collectors).
 func New() *Metrics {
 	reg := prometheus.NewRegistry()
@@ -100,90 +100,90 @@ func New() *Metrics {
 	m := &Metrics{
 		registry: reg,
 		udpPackets: prometheus.NewCounterVec(prometheus.CounterOpts{
-			Namespace: "voicx", Name: "udp_packets_total",
+			Namespace: "noxa", Name: "udp_packets_total",
 			Help: "UDP packets processed by message kind.",
 		}, []string{"kind"}),
 		udpDropped: prometheus.NewCounter(prometheus.CounterOpts{
-			Namespace: "voicx", Name: "udp_packets_dropped_total",
+			Namespace: "noxa", Name: "udp_packets_dropped_total",
 			Help: "UDP packets rejected or dropped by rate limiting, queue pressure, or protocol validation.",
 		}),
 		udpRateLimited: prometheus.NewCounter(prometheus.CounterOpts{
-			Namespace: "voicx", Name: "udp_packets_rate_limited_total",
+			Namespace: "noxa", Name: "udp_packets_rate_limited_total",
 			Help: "UDP packets dropped by the per-source rate limiter.",
 		}),
 		tcpConnections: prometheus.NewCounter(prometheus.CounterOpts{
-			Namespace: "voicx", Name: "tcp_connections_total",
+			Namespace: "noxa", Name: "tcp_connections_total",
 			Help: "TCP control connections accepted.",
 		}),
 		chatMessages: prometheus.NewCounterVec(prometheus.CounterOpts{
-			Namespace: "voicx", Name: "chat_messages_total",
+			Namespace: "noxa", Name: "chat_messages_total",
 			Help: "Chat messages routed by scope (channel/direct/global).",
 		}, []string{"scope"}),
 		rtpForwarded: prometheus.NewCounterVec(prometheus.CounterOpts{
-			Namespace: "voicx", Name: "rtp_packets_forwarded_total",
+			Namespace: "noxa", Name: "rtp_packets_forwarded_total",
 			Help: "RTP packets forwarded by the SFU by media type.",
 		}, []string{"media"}),
 		fileTransfers: prometheus.NewCounterVec(prometheus.CounterOpts{
-			Namespace: "voicx", Name: "file_transfers_total",
+			Namespace: "noxa", Name: "file_transfers_total",
 			Help: "File transfers by direction and result.",
 		}, []string{"direction", "result"}),
 		authFailures: prometheus.NewCounterVec(prometheus.CounterOpts{
-			Namespace: "voicx", Name: "auth_failures_total",
+			Namespace: "noxa", Name: "auth_failures_total",
 			Help: "Rejected authentication attempts by transport and stable reason.",
 		}, []string{"transport", "reason"}),
 		recordingErrors: prometheus.NewCounterVec(prometheus.CounterOpts{
-			Namespace: "voicx", Name: "recording_errors_total",
+			Namespace: "noxa", Name: "recording_errors_total",
 			Help: "Recording lifecycle failures by stable operation.",
 		}, []string{"operation"}),
 		chatCryptoFailure: prometheus.NewCounterVec(prometheus.CounterOpts{
-			Namespace: "voicx", Name: "chat_crypto_failures_total",
+			Namespace: "noxa", Name: "chat_crypto_failures_total",
 			Help: "Chat cryptography failures by stable public operation.",
 		}, []string{"operation"}),
 		readinessDuration: prometheus.NewHistogramVec(prometheus.HistogramOpts{
-			Namespace: "voicx", Name: "readiness_probe_duration_seconds",
+			Namespace: "noxa", Name: "readiness_probe_duration_seconds",
 			Help:    "Duration of dependency readiness probes.",
 			Buckets: []float64{.001, .005, .01, .025, .05, .1, .25, .5, 1, 2.5, 5},
 		}, []string{"component", "result"}),
 		broadcastDuration: prometheus.NewHistogram(prometheus.HistogramOpts{
-			Namespace: "voicx", Name: "broadcast_snapshot_duration_seconds",
+			Namespace: "noxa", Name: "broadcast_snapshot_duration_seconds",
 			Help:    "Time to build and marshal a broadcast snapshot.",
 			Buckets: []float64{.001, .005, .01, .025, .05, .1, .25, .5, 1, 2.5, 5},
 		}),
 		broadcastBacklog: prometheus.NewHistogram(prometheus.HistogramOpts{
-			Namespace: "voicx", Name: "broadcast_client_backlog_depth",
+			Namespace: "noxa", Name: "broadcast_client_backlog_depth",
 			Help:    "Client outbound queue depth after a broadcast send attempt.",
 			Buckets: []float64{0, 1, 2, 4, 8, 12, 16},
 		}),
 		buildInfo: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Namespace: "voicx", Name: "build_info",
+			Namespace: "noxa", Name: "build_info",
 			Help: "Embedded build metadata (always 1).",
 		}, []string{"version", "commit"}),
 	}
 	reg.MustRegister(
 		prometheus.NewGaugeFunc(prometheus.GaugeOpts{
-			Namespace: "voicx", Name: "clients_connected",
+			Namespace: "noxa", Name: "clients_connected",
 			Help: "Currently connected control-channel clients.",
 		}, func() float64 {
 			clients, _ := m.currentStateStats()
 			return nonNegative(clients)
 		}),
 		prometheus.NewGaugeFunc(prometheus.GaugeOpts{
-			Namespace: "voicx", Name: "channels_active",
+			Namespace: "noxa", Name: "channels_active",
 			Help: "Currently active channels.",
 		}, func() float64 {
 			_, channels := m.currentStateStats()
 			return nonNegative(channels)
 		}),
 		prometheus.NewGaugeFunc(prometheus.GaugeOpts{
-			Namespace: "voicx", Name: "webrtc_peers",
+			Namespace: "noxa", Name: "webrtc_peers",
 			Help: "Active WebRTC peer connections.",
 		}, func() float64 { return nonNegative(m.currentWebRTCPeerCount()) }),
 		prometheus.NewGaugeFunc(prometheus.GaugeOpts{
-			Namespace: "voicx", Name: "udp_inbound_queue_depth",
+			Namespace: "noxa", Name: "udp_inbound_queue_depth",
 			Help: "UDP packets waiting for worker processing.",
 		}, func() float64 { return nonNegative(m.currentUDPInboundQueueDepth()) }),
 		prometheus.NewGaugeFunc(prometheus.GaugeOpts{
-			Namespace: "voicx", Name: "recordings_active",
+			Namespace: "noxa", Name: "recordings_active",
 			Help: "Currently active recording sessions.",
 		}, func() float64 { return nonNegative(m.currentRecorderSessionCount()) }),
 		m.udpPackets, m.udpDropped, m.udpRateLimited, m.tcpConnections,

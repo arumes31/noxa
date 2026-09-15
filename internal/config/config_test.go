@@ -9,26 +9,26 @@ import (
 	"time"
 )
 
-// TestLoadFromEnv verifies that VOICX_* environment variables override the
+// TestLoadFromEnv verifies that NOXA_* environment variables override the
 // built-in defaults and are reflected in the returned Config.
 func TestLoadFromEnv(t *testing.T) {
-	t.Setenv("VOICX_SERVER_NAME", "env-server")
-	t.Setenv("VOICX_LOG_LEVEL", "warn")
-	t.Setenv("VOICX_DEV_MODE", "false")
-	t.Setenv("VOICX_TCP_ADDR", ":11111")
-	t.Setenv("VOICX_UDP_ADDR", ":22222")
-	t.Setenv("VOICX_GRPC_ADDR", "127.0.0.1:33333")
-	t.Setenv("VOICX_QUERY_ADDR", ":44444")
-	t.Setenv("VOICX_QUERY_ALLOW_REMOTE", "true")
-	t.Setenv("VOICX_METRICS_ALLOW_REMOTE", "true")
-	t.Setenv("VOICX_PPROF_ENABLED", "true")
-	t.Setenv("VOICX_SHUTDOWN_TIMEOUT", "45s")
-	t.Setenv("VOICX_DATABASE_URL", "postgres://user:pass@db:5432/x?sslmode=require")
-	t.Setenv("VOICX_REDIS_ADDR", "redis:6379")
-	t.Setenv("VOICX_REDIS_PASSWORD", "secret")
-	t.Setenv("VOICX_MAX_CLIENTS", "512")
-	t.Setenv("VOICX_RECORDING_MAX_CONCURRENT", "7")
-	t.Setenv("VOICX_RECORDING_WINDOWS_ACL_READY", "true")
+	t.Setenv("NOXA_SERVER_NAME", "env-server")
+	t.Setenv("NOXA_LOG_LEVEL", "warn")
+	t.Setenv("NOXA_DEV_MODE", "false")
+	t.Setenv("NOXA_TCP_ADDR", ":11111")
+	t.Setenv("NOXA_UDP_ADDR", ":22222")
+	t.Setenv("NOXA_GRPC_ADDR", "127.0.0.1:33333")
+	t.Setenv("NOXA_QUERY_ADDR", ":44444")
+	t.Setenv("NOXA_QUERY_ALLOW_REMOTE", "true")
+	t.Setenv("NOXA_METRICS_ALLOW_REMOTE", "true")
+	t.Setenv("NOXA_PPROF_ENABLED", "true")
+	t.Setenv("NOXA_SHUTDOWN_TIMEOUT", "45s")
+	t.Setenv("NOXA_DATABASE_URL", "postgres://user:pass@db:5432/x?sslmode=require")
+	t.Setenv("NOXA_REDIS_ADDR", "redis:6379")
+	t.Setenv("NOXA_REDIS_PASSWORD", "secret")
+	t.Setenv("NOXA_MAX_CLIENTS", "512")
+	t.Setenv("NOXA_RECORDING_MAX_CONCURRENT", "7")
+	t.Setenv("NOXA_RECORDING_WINDOWS_ACL_READY", "true")
 
 	// Ensure no config.yaml is picked up from the working directory by
 	// running from a clean temp dir.
@@ -91,9 +91,9 @@ func TestLoadDefaults(t *testing.T) {
 		t.Fatalf("chdir: %v", err)
 	}
 
-	// Clear any VOICX_* env vars that might leak from the test environment.
+	// Clear any NOXA_* env vars that might leak from the test environment.
 	for _, kv := range os.Environ() {
-		if len(kv) >= 6 && kv[:6] == "VOICX_" {
+		if len(kv) >= 6 && kv[:6] == "NOXA_" {
 			if eq := indexOf(kv, '='); eq >= 0 {
 				t.Setenv(kv[:eq], "")
 			}
@@ -105,8 +105,8 @@ func TestLoadDefaults(t *testing.T) {
 		t.Fatalf("Load: %v", err)
 	}
 
-	if cfg.ServerName != "voicx" {
-		t.Errorf("ServerName = %q, want %q", cfg.ServerName, "voicx")
+	if cfg.ServerName != "noXa" {
+		t.Errorf("ServerName = %q, want %q", cfg.ServerName, "noXa")
 	}
 	if cfg.TCPAddr != DefaultTCPAddr {
 		t.Errorf("TCPAddr = %q, want %q", cfg.TCPAddr, DefaultTCPAddr)
@@ -164,10 +164,10 @@ func TestLoadRejectsInvalidFileQuietHours(t *testing.T) {
 	for _, tc := range []struct {
 		name, env, value string
 	}{
-		{"start below range", "VOICX_FILE_QUIET_HOURS_START", "-1"},
-		{"start above range", "VOICX_FILE_QUIET_HOURS_START", "24"},
-		{"end below range", "VOICX_FILE_QUIET_HOURS_END", "-1"},
-		{"end above range", "VOICX_FILE_QUIET_HOURS_END", "24"},
+		{"start below range", "NOXA_FILE_QUIET_HOURS_START", "-1"},
+		{"start above range", "NOXA_FILE_QUIET_HOURS_START", "24"},
+		{"end below range", "NOXA_FILE_QUIET_HOURS_END", "-1"},
+		{"end above range", "NOXA_FILE_QUIET_HOURS_END", "24"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
@@ -206,7 +206,7 @@ udp_addr: ":19987"
 max_clients: 256
 dev_mode: false
 log_level: "error"
-database_url: "postgres://app:secret@db:5432/voicx?sslmode=require"
+database_url: "postgres://app:secret@db:5432/noxa?sslmode=require"
 webrtc:
   enable_av1: true
   ice_servers:
@@ -271,7 +271,7 @@ func TestRepositorySampleConfigLoads(t *testing.T) {
 		t.Fatalf("chdir: %v", err)
 	}
 	for _, kv := range os.Environ() {
-		if strings.HasPrefix(kv, "VOICX_") {
+		if strings.HasPrefix(kv, "NOXA_") {
 			if eq := strings.IndexByte(kv, '='); eq >= 0 {
 				t.Setenv(kv[:eq], "")
 			}
@@ -426,15 +426,15 @@ func TestValidateRejectsUnsafeValues(t *testing.T) {
 			name: "production default database credentials",
 			mutate: func(c *Config) {
 				c.DevMode = false
-				c.DatabaseURL = "postgres://voicx:voicx@db:5432/voicx?sslmode=require"
+				c.DatabaseURL = "postgres://noxa:noxa@db:5432/noxa?sslmode=require"
 			},
-			wantErr: "default voicx:voicx credentials",
+			wantErr: "default noxa:noxa credentials",
 		},
 		{
 			name: "production database TLS disabled",
 			mutate: func(c *Config) {
 				c.DevMode = false
-				c.DatabaseURL = "postgres://app:secret@db:5432/voicx?sslmode=disable"
+				c.DatabaseURL = "postgres://app:secret@db:5432/noxa?sslmode=disable"
 			},
 			wantErr: "database_url sslmode",
 		},
@@ -442,7 +442,7 @@ func TestValidateRejectsUnsafeValues(t *testing.T) {
 			name: "production database TLS implicit",
 			mutate: func(c *Config) {
 				c.DevMode = false
-				c.DatabaseURL = "postgres://app:secret@db:5432/voicx"
+				c.DatabaseURL = "postgres://app:secret@db:5432/noxa"
 			},
 			wantErr: "database_url sslmode",
 		},
@@ -479,7 +479,7 @@ func TestValidateProductionDatabaseTLSModes(t *testing.T) {
 	for _, mode := range []string{"require", "verify-ca", "verify-full"} {
 		t.Run(mode, func(t *testing.T) {
 			cfg := cloneConfig(base)
-			cfg.DatabaseURL = "postgres://app:secret@db:5432/voicx?sslmode=" + mode
+			cfg.DatabaseURL = "postgres://app:secret@db:5432/noxa?sslmode=" + mode
 			if err := cfg.Validate(); err != nil {
 				t.Fatalf("Validate() error = %v", err)
 			}
@@ -567,13 +567,13 @@ func TestWarningsCoverProductionCredentialsAndRemoteExposure(t *testing.T) {
 // credentials or ICE URLs.
 func TestSummary(t *testing.T) {
 	cfg := &Config{
-		ServerName:      "voicx",
+		ServerName:      "noxa",
 		LogLevel:        "info",
 		DevMode:         true,
 		TCPAddr:         DefaultTCPAddr,
 		UDPAddr:         DefaultUDPAddr,
 		GRPCAddr:        DefaultGRPCAddr,
-		DatabaseURL:     "postgres://db-user:db-password@db:5432/voicx?sslmode=require&token=db-token",
+		DatabaseURL:     "postgres://db-user:db-password@db:5432/noxa?sslmode=require&token=db-token",
 		RedisAddr:       "redis://redis-user:redis-password@redis:6379/0?secret=redis-token",
 		RedisPassword:   "separate-redis-password",
 		MaxClients:      1024,
@@ -587,7 +587,7 @@ func TestSummary(t *testing.T) {
 	if s == "" {
 		t.Error("Summary() returned empty string")
 	}
-	if !strings.Contains(s, `name="voicx"`) || !strings.Contains(s, "db=\"postgres://db:5432/voicx?sslmode=require\"") {
+	if !strings.Contains(s, `name="noxa"`) || !strings.Contains(s, "db=\"postgres://db:5432/noxa?sslmode=require\"") {
 		t.Errorf("Summary() = %q, want safe identifying fields", s)
 	}
 	if !strings.Contains(s, "shutdown_timeout=30s") {
@@ -622,7 +622,7 @@ func loadDefaultConfig(t *testing.T) *Config {
 		t.Fatalf("chdir: %v", err)
 	}
 	for _, kv := range os.Environ() {
-		if strings.HasPrefix(kv, "VOICX_") {
+		if strings.HasPrefix(kv, "NOXA_") {
 			if eq := strings.IndexByte(kv, '='); eq >= 0 {
 				t.Setenv(kv[:eq], "")
 			}

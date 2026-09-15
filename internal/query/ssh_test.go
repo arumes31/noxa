@@ -173,7 +173,7 @@ func TestSSHShell(t *testing.T) {
 		t.Fatalf("shell: %v", err)
 	}
 	r := bufio.NewReader(stdout)
-	if line := readLine(t, r); !strings.HasPrefix(line, "VOICX ServerQuery") {
+	if line := readLine(t, r); !strings.HasPrefix(line, "NOXA ServerQuery") {
 		t.Fatalf("banner = %q", line)
 	}
 	_ = readLine(t, r) // hint
@@ -181,7 +181,7 @@ func TestSSHShell(t *testing.T) {
 	if _, err := stdin.Write([]byte("serverinfo\n")); err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	if line := readLine(t, r); !strings.Contains(line, "virtualserver_name=voicx\\stest") {
+	if line := readLine(t, r); !strings.Contains(line, "virtualserver_name=noxa\\stest") {
 		t.Fatalf("serverinfo = %q", line)
 	}
 	if line := readLine(t, r); line != "error id=0 msg=ok" {

@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"golang.org/x/crypto/nacl/box"
-	"voicx/internal/netproto"
+	"noxa/internal/netproto"
 )
 
 func TestDialGuestPublishesUsableEncryptionKey(t *testing.T) {

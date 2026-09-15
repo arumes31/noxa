@@ -13,10 +13,10 @@ import (
 	"testing"
 	"time"
 
-	"voicx/internal/auth"
-	"voicx/internal/netproto"
-	"voicx/internal/permissions"
-	"voicx/internal/store"
+	"noxa/internal/auth"
+	"noxa/internal/netproto"
+	"noxa/internal/permissions"
+	"noxa/internal/store"
 )
 
 // --- fakes ------------------------------------------------------------------

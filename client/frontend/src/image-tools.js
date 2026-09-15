@@ -5,7 +5,7 @@
 // would flatten the animation (269).
 import { closeDialog, mountDialog } from "./modal.js";
 
-const V = () => window.__voicx;
+const V = () => window.__noxa;
 
 const MAX_UPLOAD = 256 * 1024; // server-side image cap (same as avatars)
 

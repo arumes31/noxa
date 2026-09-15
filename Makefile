@@ -1,23 +1,23 @@
-# Makefile for voicx
+# Makefile for noxa
 # Common developer tasks. Targets are phony unless they produce a file.
 
 GO          ?= go
 DOCKER      ?= docker
-VOICX_IMAGE ?= voicx:dev
-VOICX_BACKUP_IMAGE ?= voicx-backup:dev
-export VOICX_IMAGE VOICX_BACKUP_IMAGE
-BINARY       = bin/voicx
+NOXA_IMAGE ?= noxa:dev
+NOXA_BACKUP_IMAGE ?= noxa-backup:dev
+export NOXA_IMAGE NOXA_BACKUP_IMAGE
+BINARY       = bin/noxa
 PKG          = ./cmd/server
 
 # One cross-platform calculator supplies an exact tag version or a deterministic
 # commit/dirty-tree development version without rewriting tracked files.
 VERSION_TOOL = $(GO) run ./cmd/version
-VOICX_UPDATE_REPO ?= voicx/voicx
-VOICX_UPDATE_PUBLIC_KEYS ?=
+NOXA_UPDATE_REPO ?= arumes31/noxa
+NOXA_UPDATE_PUBLIC_KEYS ?=
 
 UPDATE_LDFLAGS = \
-	-X voicx/internal/version.UpdateRepo=$(VOICX_UPDATE_REPO) \
-	-X voicx/internal/version.UpdatePublicKeys=$(VOICX_UPDATE_PUBLIC_KEYS)
+	-X noxa/internal/version.UpdateRepo=$(NOXA_UPDATE_REPO) \
+	-X noxa/internal/version.UpdatePublicKeys=$(NOXA_UPDATE_PUBLIC_KEYS)
 
 .PHONY: all build client-build run version version-check migrate proto tidy test cover fmt vet docker-build docker-run docker-stop compose-up compose-down compose-logs chaos chaos-webrtc profile-db query-load webrtc-load canary clean help
 
@@ -87,27 +87,27 @@ fmt:
 vet:
 	$(GO) vet ./...
 
-## docker-build: build the $(VOICX_IMAGE) image from the Dockerfile
+## docker-build: build the $(NOXA_IMAGE) image from the Dockerfile
 docker-build:
 	@set -e; \
 	version_args="$$($(VERSION_TOOL) -format docker)"; \
 	$(DOCKER) build $$version_args \
-		--build-arg VOICX_UPDATE_REPO=$(VOICX_UPDATE_REPO) \
-		-t $(VOICX_IMAGE) .
+		--build-arg NOXA_UPDATE_REPO=$(NOXA_UPDATE_REPO) \
+		-t $(NOXA_IMAGE) .
 
-## docker-run: run the $(VOICX_IMAGE) image with default ports published
+## docker-run: run the $(NOXA_IMAGE) image with default ports published
 docker-run:
-	$(DOCKER) run --rm -p 12333:12333 -p 12334:12334/udp -p 12335:12335 -p 12336:12336 -p 12337:12337 $(VOICX_IMAGE)
+	$(DOCKER) run --rm -p 12333:12333 -p 12334:12334/udp -p 12335:12335 -p 12336:12336 -p 12337:12337 $(NOXA_IMAGE)
 
-## docker-stop: stop and remove any running voicx containers
+## docker-stop: stop and remove any running noxa containers
 docker-stop:
-	-$(DOCKER) rm -f voicx 2>/dev/null || true
+	-$(DOCKER) rm -f noxa 2>/dev/null || true
 
-## compose-up: build and start the full stack (voicx + postgres + redis) detached
+## compose-up: build and start the full stack (noxa + postgres + redis) detached
 compose-up:
 	@set -e; \
 	version_args="$$($(VERSION_TOOL) -format docker)"; \
-	$(DOCKER) compose build $$version_args --build-arg VOICX_UPDATE_REPO=$(VOICX_UPDATE_REPO)
+	$(DOCKER) compose build $$version_args --build-arg NOXA_UPDATE_REPO=$(NOXA_UPDATE_REPO)
 	$(DOCKER) compose up -d --no-build
 
 ## compose-down: stop and remove the compose stack (containers, networks)

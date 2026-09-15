@@ -1,11 +1,11 @@
 // conn_live_test.go is a headless integration test for the client backend
-// against a LIVE voicx server. It is skipped unless VOICX_LIVE_ADDR is set:
+// against a LIVE noxa server. It is skipped unless NOXA_LIVE_ADDR is set:
 //
-//	VOICX_LIVE_ADDR=127.0.0.1:12333 go test -run Live -v ./... -count=1
+//	NOXA_LIVE_ADDR=127.0.0.1:12333 go test -run Live -v ./... -count=1
 //
-// Required when enabled: VOICX_LIVE_{ALICE,BOB,ADMIN}_{UID,PASS} and
-// VOICX_LIVE_TLS_FINGERPRINT from the disposable server's local certificate.
-// Optional: VOICX_LIVE_QUERY_ADDR (default: same host, port 12335).
+// Required when enabled: NOXA_LIVE_{ALICE,BOB,ADMIN}_{UID,PASS} and
+// NOXA_LIVE_TLS_FINGERPRINT from the disposable server's local certificate.
+// Optional: NOXA_LIVE_QUERY_ADDR (default: same host, port 12335).
 package main
 
 import (
@@ -30,28 +30,28 @@ import (
 	"testing"
 	"time"
 
-	"voicx/internal/netproto"
+	"noxa/internal/netproto"
 )
 
 var (
-	liveAliceUID  = os.Getenv("VOICX_LIVE_ALICE_UID")
-	liveAlicePass = os.Getenv("VOICX_LIVE_ALICE_PASS")
-	liveBobUID    = os.Getenv("VOICX_LIVE_BOB_UID")
-	liveBobPass   = os.Getenv("VOICX_LIVE_BOB_PASS")
-	liveAdminUID  = os.Getenv("VOICX_LIVE_ADMIN_UID")
-	liveAdminPass = os.Getenv("VOICX_LIVE_ADMIN_PASS")
+	liveAliceUID  = os.Getenv("NOXA_LIVE_ALICE_UID")
+	liveAlicePass = os.Getenv("NOXA_LIVE_ALICE_PASS")
+	liveBobUID    = os.Getenv("NOXA_LIVE_BOB_UID")
+	liveBobPass   = os.Getenv("NOXA_LIVE_BOB_PASS")
+	liveAdminUID  = os.Getenv("NOXA_LIVE_ADMIN_UID")
+	liveAdminPass = os.Getenv("NOXA_LIVE_ADMIN_PASS")
 )
 
 // liveAddr returns the control address or skips the test.
 func liveAddr(t *testing.T) string {
 	t.Helper()
-	addr := os.Getenv("VOICX_LIVE_ADDR")
+	addr := os.Getenv("NOXA_LIVE_ADDR")
 	if addr == "" {
-		t.Skip("VOICX_LIVE_ADDR not set; skipping live integration test")
+		t.Skip("NOXA_LIVE_ADDR not set; skipping live integration test")
 	}
 	for _, name := range []string{"ALICE_UID", "ALICE_PASS", "BOB_UID", "BOB_PASS", "ADMIN_UID", "ADMIN_PASS", "TLS_FINGERPRINT"} {
-		if os.Getenv("VOICX_LIVE_"+name) == "" {
-			t.Fatalf("VOICX_LIVE_%s is required for the configured live server", name)
+		if os.Getenv("NOXA_LIVE_"+name) == "" {
+			t.Fatalf("NOXA_LIVE_%s is required for the configured live server", name)
 		}
 	}
 	return addr
@@ -60,7 +60,7 @@ func liveAddr(t *testing.T) string {
 // liveQueryAddr returns the ServerQuery address for the live server.
 func liveQueryAddr(t *testing.T) string {
 	t.Helper()
-	if addr := os.Getenv("VOICX_LIVE_QUERY_ADDR"); addr != "" {
+	if addr := os.Getenv("NOXA_LIVE_QUERY_ADDR"); addr != "" {
 		return addr
 	}
 	host, _, err := net.SplitHostPort(liveAddr(t))
@@ -125,20 +125,20 @@ func newLiveTestBackend(t *testing.T) (*connManager, *eventRecorder) {
 	t.Helper()
 	cm, rec := newTestBackend(t)
 	cm.knownServers = loadKnownServersAt(filepath.Join(t.TempDir(), "known_servers.json"))
-	addr, err := normalizeServerAddr(os.Getenv("VOICX_LIVE_ADDR"))
+	addr, err := normalizeServerAddr(os.Getenv("NOXA_LIVE_ADDR"))
 	if err != nil {
 		t.Fatalf("live server address: %v", err)
 	}
-	if err := cm.knownServers.trust(addr, os.Getenv("VOICX_LIVE_TLS_FINGERPRINT")); err != nil {
+	if err := cm.knownServers.trust(addr, os.Getenv("NOXA_LIVE_TLS_FINGERPRINT")); err != nil {
 		t.Fatalf("pinning live server certificate: %v", err)
 	}
 	return cm, rec
 }
 
 func TestLiveBackendTrustIsIsolatedAndPinned(t *testing.T) {
-	t.Setenv("VOICX_LIVE_ADDR", "127.0.0.1:12483")
+	t.Setenv("NOXA_LIVE_ADDR", "127.0.0.1:12483")
 	const fingerprint = "fa:17:3d:a2:81:17:6a:2d:4e:d6:5b:c6:78:e0:b2:df:9b:aa:b4:d8:ca:43:ad:a5:f9:9b:21:6e:5d:8c:a7:66"
-	t.Setenv("VOICX_LIVE_TLS_FINGERPRINT", fingerprint)
+	t.Setenv("NOXA_LIVE_TLS_FINGERPRINT", fingerprint)
 	cm, _ := newLiveTestBackend(t)
 	status, err := cm.knownServers.verify("127.0.0.1:12483", fingerprint)
 	if err != nil || status != trustOK {

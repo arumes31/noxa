@@ -129,13 +129,13 @@ jobs:
       postgres:
         image: postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777 # 16.14-alpine3.24
         env:
-          POSTGRES_USER: voicx
-          POSTGRES_PASSWORD: voicx
-          POSTGRES_DB: voicx
+          POSTGRES_USER: noxa
+          POSTGRES_PASSWORD: noxa
+          POSTGRES_DB: noxa
         ports:
           - 5432:5432
         options: >-
-          --health-cmd "pg_isready -U voicx -d voicx"
+          --health-cmd "pg_isready -U noxa -d noxa"
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
@@ -176,8 +176,8 @@ jobs:
       - name: verify module checksums
         run: |
           go mod verify
-          # Treat the locally replaced voicx module as workspace source.
-          # Otherwise Go tries to verify a nonexistent published voicx module zip.
+          # Treat the locally replaced noxa module as workspace source.
+          # Otherwise Go tries to verify a nonexistent published noxa module zip.
           export GOWORK="$RUNNER_TEMP/verify.work"
           go work init "$GITHUB_WORKSPACE" "$GITHUB_WORKSPACE/client"
           (cd client && go mod verify)
@@ -229,8 +229,8 @@ jobs:
 
           printf "root internal coverage: %s%%\nclient coverage: %s%%\n" "$root_pct" "$client_pct"
         env:
-          VOICX_TEST_DATABASE_URL: postgres://voicx:voicx@localhost:5432/voicx?sslmode=disable
-          VOICX_REDIS_ADDR: localhost:6379
+          NOXA_TEST_DATABASE_URL: postgres://noxa:noxa@localhost:5432/noxa?sslmode=disable
+          NOXA_REDIS_ADDR: localhost:6379
 
       - name: upload coverage profiles
         if: always()
@@ -245,14 +245,14 @@ jobs:
         shell: bash
         env:
           PGHOST: localhost
-          PGUSER: voicx
-          PGPASSWORD: voicx
-          VOICX_DEV_MODE: "true"
+          PGUSER: noxa
+          PGPASSWORD: noxa
+          NOXA_DEV_MODE: "true"
         run: |
           set -euo pipefail
-          source_db="voicx_backup_source"
-          restore_db="voicx_backup_restore"
-          backup="$RUNNER_TEMP/voicx-backup.pgdump"
+          source_db="noxa_backup_source"
+          restore_db="noxa_backup_restore"
+          backup="$RUNNER_TEMP/noxa-backup.pgdump"
           cleanup() {
             dropdb --if-exists --force "$source_db"
             dropdb --if-exists --force "$restore_db"
@@ -260,7 +260,7 @@ jobs:
           trap cleanup EXIT
           cleanup
           createdb "$source_db"
-          VOICX_DATABASE_URL="postgres://voicx:voicx@localhost:5432/$source_db?sslmode=disable" \
+          NOXA_DATABASE_URL="postgres://noxa:noxa@localhost:5432/$source_db?sslmode=disable" \
             go run ./cmd/migrate -timeout 2m
           # Exercise relational user/channel/permission data, not only an
           # empty migration ledger. These identities are disposable fixtures.
@@ -294,7 +294,7 @@ jobs:
           test -s "$backup"
           createdb "$restore_db"
           pg_restore --exit-on-error --no-owner --dbname="$restore_db" "$backup"
-          VOICX_DATABASE_URL="postgres://voicx:voicx@localhost:5432/$restore_db?sslmode=disable" \
+          NOXA_DATABASE_URL="postgres://noxa:noxa@localhost:5432/$restore_db?sslmode=disable" \
             go run ./cmd/migrate -timeout 2m
           source_ledger="$(psql --dbname="$source_db" --tuples-only --no-align \
             --command="SELECT filename || ':' || checksum FROM public.schema_migrations ORDER BY filename")"
@@ -362,7 +362,7 @@ jobs:
             type=semver,pattern={{major}}.{{minor}}
             type=semver,pattern={{major}}
             type=sha,format=short
-            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' || (startsWith(github.ref, 'refs/tags/') && env.VOICX_PRERELEASE == 'false') }}
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' || (startsWith(github.ref, 'refs/tags/') && env.NOXA_PRERELEASE == 'false') }}
 
       - name: Build and push Docker image
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
@@ -373,11 +373,11 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
-            VOICX_VERSION=${{ env.VOICX_VERSION }}
-            VOICX_COMMIT=${{ env.VOICX_COMMIT }}
-            VOICX_DIRTY=${{ env.VOICX_DIRTY }}
-            VOICX_BUILD_DATE=${{ env.VOICX_BUILD_DATE }}
-            VOICX_UPDATE_REPO=${{ github.repository }}
+            NOXA_VERSION=${{ env.NOXA_VERSION }}
+            NOXA_COMMIT=${{ env.NOXA_COMMIT }}
+            NOXA_DIRTY=${{ env.NOXA_DIRTY }}
+            NOXA_BUILD_DATE=${{ env.NOXA_BUILD_DATE }}
+            NOXA_UPDATE_REPO=${{ github.repository }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
           provenance: mode=max
@@ -396,8 +396,8 @@ jobs:
       tag: ${{ steps.release-metadata.outputs.tag }}
       prerelease: ${{ steps.release-metadata.outputs.prerelease }}
     env:
-      VOICX_UPDATE_PUBLIC_KEYS: ${{ vars.VOICX_UPDATE_PUBLIC_KEYS }}
-      VOICX_UPDATE_REPO: ${{ github.repository }}
+      NOXA_UPDATE_PUBLIC_KEYS: ${{ vars.NOXA_UPDATE_PUBLIC_KEYS || vars.VOICX_UPDATE_PUBLIC_KEYS }}
+      NOXA_UPDATE_REPO: ${{ github.repository }}
     permissions:
       attestations: write
       contents: read
@@ -424,8 +424,8 @@ jobs:
       - name: validate update public-key configuration
         shell: bash
         run: |
-          test -n "$VOICX_UPDATE_PUBLIC_KEYS" || {
-            echo "repository variable VOICX_UPDATE_PUBLIC_KEYS is required" >&2
+          test -n "$NOXA_UPDATE_PUBLIC_KEYS" || {
+            echo "repository variable NOXA_UPDATE_PUBLIC_KEYS is required" >&2
             exit 1
           }
 
@@ -441,38 +441,38 @@ jobs:
         working-directory: client
         run: |
           # Package resources use the same numeric patch as the signed release.
-          node --input-type=module -e 'import fs from "node:fs"; const path = "wails.json"; const config = JSON.parse(fs.readFileSync(path, "utf8")); config.info.productVersion = process.env.VOICX_VERSION.split(/[+-]/)[0]; fs.writeFileSync(path, JSON.stringify(config, null, 2) + "\n");'
-          wails build -trimpath -ldflags "-s -w $VOICX_LDFLAGS \
-            -X=voicx/internal/version.UpdateRepo=$VOICX_UPDATE_REPO \
-            -X=voicx/internal/version.UpdatePublicKeys=$VOICX_UPDATE_PUBLIC_KEYS"
+          node --input-type=module -e 'import fs from "node:fs"; const path = "wails.json"; const config = JSON.parse(fs.readFileSync(path, "utf8")); config.info.productVersion = process.env.NOXA_VERSION.split(/[+-]/)[0]; fs.writeFileSync(path, JSON.stringify(config, null, 2) + "\n");'
+          wails build -trimpath -ldflags "-s -w $NOXA_LDFLAGS \
+            -X=noxa/internal/version.UpdateRepo=$NOXA_UPDATE_REPO \
+            -X=noxa/internal/version.UpdatePublicKeys=$NOXA_UPDATE_PUBLIC_KEYS"
 
       - name: build server (linux/amd64)
         shell: bash
         run: |
           GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build \
-            -trimpath -ldflags "-s -w $VOICX_LDFLAGS \
-              -X=voicx/internal/version.UpdateRepo=$VOICX_UPDATE_REPO" \
-            -o voicx-server-linux-amd64 ./cmd/server
+            -trimpath -ldflags "-s -w $NOXA_LDFLAGS \
+              -X=noxa/internal/version.UpdateRepo=$NOXA_UPDATE_REPO" \
+            -o noxa-server-linux-amd64 ./cmd/server
 
       - name: stage release binaries
         shell: bash
         run: |
-          cp client/build/bin/voicx.exe voicx-client-windows-amd64.exe
+          cp client/build/bin/noxa.exe noxa-client-windows-amd64.exe
 
       - name: attest release binary build provenance
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
           subject-path: |
-            voicx-client-windows-amd64.exe
-            voicx-server-linux-amd64
+            noxa-client-windows-amd64.exe
+            noxa-server-linux-amd64
 
       - name: upload release binaries for signing
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: release-binaries
           path: |
-            voicx-client-windows-amd64.exe
-            voicx-server-linux-amd64
+            noxa-client-windows-amd64.exe
+            noxa-server-linux-amd64
           if-no-files-found: error
           retention-days: 1
 
@@ -481,8 +481,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
-      VOICX_RELEASE_TAG: ${{ needs.release-build.outputs.tag }}
-      VOICX_UPDATE_PUBLIC_KEYS: ${{ vars.VOICX_UPDATE_PUBLIC_KEYS }}
+      NOXA_RELEASE_TAG: ${{ needs.release-build.outputs.tag }}
+      NOXA_UPDATE_PUBLIC_KEYS: ${{ vars.NOXA_UPDATE_PUBLIC_KEYS || vars.VOICX_UPDATE_PUBLIC_KEYS }}
     permissions:
       contents: read
     steps:
@@ -503,12 +503,12 @@ jobs:
       - name: create release manifest
         shell: bash
         run: |
-          test -n "$VOICX_UPDATE_PUBLIC_KEYS" || {
-            echo "repository variable VOICX_UPDATE_PUBLIC_KEYS is required" >&2
+          test -n "$NOXA_UPDATE_PUBLIC_KEYS" || {
+            echo "repository variable NOXA_UPDATE_PUBLIC_KEYS is required" >&2
             exit 1
           }
-          printf '# voicx-version: %s\n' "$VOICX_RELEASE_TAG" > release/checksums.txt
-          sha256sum release/voicx-client-windows-amd64.exe release/voicx-server-linux-amd64 \
+          printf '# noxa-version: %s\n' "$NOXA_RELEASE_TAG" > release/checksums.txt
+          sha256sum release/noxa-client-windows-amd64.exe release/noxa-server-linux-amd64 \
             | sed 's#  release/#  #' >> release/checksums.txt
 
       - name: build release signer
@@ -518,19 +518,19 @@ jobs:
       - name: sign release manifest
         shell: bash
         env:
-          VOICX_UPDATE_SIGNING_KEY: ${{ secrets.VOICX_UPDATE_SIGNING_KEY }}
-        run: '"$RUNNER_TEMP/signrelease" -in release/checksums.txt -out release/checksums.txt.sig -version "$VOICX_RELEASE_TAG"'
+          NOXA_UPDATE_SIGNING_KEY: ${{ secrets.NOXA_UPDATE_SIGNING_KEY || secrets.VOICX_UPDATE_SIGNING_KEY }}
+        run: '"$RUNNER_TEMP/signrelease" -in release/checksums.txt -out release/checksums.txt.sig -version "$NOXA_RELEASE_TAG"'
 
       - name: verify signed release assets
         shell: bash
         run: |
           go run ./cmd/signrelease -verify -in release/checksums.txt \
-            -out release/checksums.txt.sig -version "$VOICX_RELEASE_TAG"
+            -out release/checksums.txt.sig -version "$NOXA_RELEASE_TAG"
           (
             cd release
-            test "$(head -n 1 checksums.txt)" = "# voicx-version: $VOICX_RELEASE_TAG"
+            test "$(head -n 1 checksums.txt)" = "# noxa-version: $NOXA_RELEASE_TAG"
             test "$(tail -n +2 checksums.txt | wc -l)" -eq 2
-            test "$(tail -n +2 checksums.txt | awk '{print $2}')" = "$(printf '%s\n%s' voicx-client-windows-amd64.exe voicx-server-linux-amd64)"
+            test "$(tail -n +2 checksums.txt | awk '{print $2}')" = "$(printf '%s\n%s' noxa-client-windows-amd64.exe noxa-server-linux-amd64)"
             tail -n +2 checksums.txt | sha256sum --check --strict
           )
 
@@ -547,8 +547,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
-      VOICX_RELEASE_TAG: ${{ needs.release-build.outputs.tag }}
-      VOICX_UPDATE_PUBLIC_KEYS: ${{ vars.VOICX_UPDATE_PUBLIC_KEYS }}
+      NOXA_RELEASE_TAG: ${{ needs.release-build.outputs.tag }}
+      NOXA_UPDATE_PUBLIC_KEYS: ${{ vars.NOXA_UPDATE_PUBLIC_KEYS || vars.VOICX_UPDATE_PUBLIC_KEYS }}
     permissions:
       contents: write
     steps:
@@ -571,12 +571,12 @@ jobs:
         shell: bash
         run: |
           go run ./cmd/signrelease -verify -in release/checksums.txt \
-            -out release/checksums.txt.sig -version "$VOICX_RELEASE_TAG"
+            -out release/checksums.txt.sig -version "$NOXA_RELEASE_TAG"
           (
             cd release
-            test "$(head -n 1 checksums.txt)" = "# voicx-version: $VOICX_RELEASE_TAG"
+            test "$(head -n 1 checksums.txt)" = "# noxa-version: $NOXA_RELEASE_TAG"
             test "$(tail -n +2 checksums.txt | wc -l)" -eq 2
-            test "$(tail -n +2 checksums.txt | awk '{print $2}')" = "$(printf '%s\n%s' voicx-client-windows-amd64.exe voicx-server-linux-amd64)"
+            test "$(tail -n +2 checksums.txt | awk '{print $2}')" = "$(printf '%s\n%s' noxa-client-windows-amd64.exe noxa-server-linux-amd64)"
             tail -n +2 checksums.txt | sha256sum --check --strict
           )
 
@@ -589,7 +589,7 @@ jobs:
           make_latest: ${{ needs.release-build.outputs.prerelease == 'false' }}
           fail_on_unmatched_files: true
           files: |
-            release/voicx-client-windows-amd64.exe
-            release/voicx-server-linux-amd64
+            release/noxa-client-windows-amd64.exe
+            release/noxa-server-linux-amd64
             release/checksums.txt
             release/checksums.txt.sig

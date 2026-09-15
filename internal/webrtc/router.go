@@ -1,4 +1,4 @@
-// router.go implements the voicx SFU audio router. It tracks channel
+// router.go implements the noxa SFU audio router. It tracks channel
 // membership, per-peer audio output tracks, and whisper configurations, and
 // fans incoming RTP packets out to the appropriate subscribers.
 //
@@ -36,7 +36,7 @@ import (
 	"github.com/pion/webrtc/v4"
 	"go.uber.org/zap"
 
-	"voicx/internal/safecast"
+	"noxa/internal/safecast"
 )
 
 // TrackReader is the subset of *webrtc.TrackRemote the router reads from.
@@ -334,7 +334,7 @@ func (r *Router) SetVideoHandlers(canVideo func(clientID string) bool) {
 
 // JoinChannel records that clientID has joined channelID. It is idempotent
 // and moves the client out of any previous channel (a client occupies exactly
-// one channel at a time in voicx). It also creates publisher tracks between
+// one channel at a time in noxa). It also creates publisher tracks between
 // the client and every other channel member (per-publisher model) and
 // schedules renegotiation for peers that have a connection.
 func (r *Router) JoinChannel(channelID int64, clientID string) {
@@ -465,7 +465,7 @@ func (r *Router) removePairsLocked(channelID int64, clientID string) map[string]
 // only that stream's first audio track, so every per-user gain/mute chain ends
 // up fed by the same speaker (1, 2, 61).
 func publisherStreamID(publisherID string) string {
-	return "voicx-" + publisherID
+	return "noxa-" + publisherID
 }
 
 // slotTrackID returns the MSID track ID a subscriber sees for one of a

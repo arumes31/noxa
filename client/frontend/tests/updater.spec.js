@@ -15,9 +15,10 @@ async function boot(page, scenario = {}) {
         window.go = { main: { App: new Proxy({}, { get: (_, method) => async () => {
             window.__calls[method] = (window.__calls[method] || 0) + 1;
             const s = window.__scenario;
-            if (method === "GetSettings") return { onboarding_done: true, alpha_dismissed: "test", updates_auto_check: s.enabled !== false, notification_matrix: {} };
+            if (method === "GetSettings") return { onboarding_done: true, alpha_dismissed: "0.4.0", updates_auto_check: s.enabled !== false, notification_matrix: {} };
             if (method === "ClientVersionShort") return "0.4.0";
             if (method === "CheckForUpdate") {
+                if (s.checkPending) await new Promise((resolve) => { window.__finishCheck = resolve; });
                 if (s.offline) throw new Error("offline");
                 return { available: s.available !== false, version: "v0.4.1", size: 1048576 };
             }
@@ -46,7 +47,7 @@ test("startup offers update before connecting and checks once", async ({ page })
     await expect(dialog).toContainText("v0.4.1");
     await expect(dialog.getByRole("button", { name: "Update now" })).toBeVisible();
     await expect(dialog).toContainText("current build: 0.4.0");
-    await page.evaluate(() => window.__voicx.startupAutoCheck());
+    await page.evaluate(() => window.__noxa.startupAutoCheck());
     expect(await page.evaluate(() => window.__calls.CheckForUpdate)).toBe(1);
     expect(await page.evaluate(() => window.__calls.Connect)).toBeUndefined();
     await dialog.getByRole("button", { name: "Close", exact: true }).click();
@@ -104,7 +105,7 @@ test("applied update retains restart action after closing and reopening", async 
     await page.getByRole("button", { name: "Update now" }).click();
     await expect(page.getByRole("button", { name: "Restart now" })).toBeVisible();
     await page.getByRole("button", { name: "Close", exact: true }).click();
-    await page.evaluate(() => window.__voicx.checkForUpdatesInteractive());
+    await page.evaluate(() => window.__noxa.checkForUpdatesInteractive());
     await expect(page.getByRole("button", { name: "Restart now" })).toBeVisible();
     expect(await page.evaluate(() => window.__calls.DownloadAndApply)).toBe(1);
     expect(await page.evaluate(() => window.__calls.CheckForUpdate)).toBe(1);
@@ -112,13 +113,52 @@ test("applied update retains restart action after closing and reopening", async 
 
 test("manual update check works when automatic checks are disabled", async ({ page }) => {
     await boot(page, { enabled: false });
-    await page.evaluate(() => window.__voicx.checkForUpdatesInteractive());
+    await page.evaluate(() => window.__noxa.checkForUpdatesInteractive());
     await expect(page.getByRole("button", { name: "Update now" })).toBeVisible();
 });
 
 test("manual check displays network errors", async ({ page }) => {
     await boot(page, { offline: true });
-    await page.evaluate(() => window.__voicx.checkForUpdatesInteractive());
+    await page.evaluate(() => window.__noxa.checkForUpdatesInteractive());
     await expect(page.locator(".upd-status")).toContainText("check failed: Error: offline");
     await expect(page.getByRole("button", { name: "Update now" })).toBeHidden();
+});
+
+test("failed update checks retry in place and prevent duplicate requests", async ({ page }) => {
+    await boot(page, { enabled: false, offline: true });
+    await page.evaluate(() => window.__noxa.checkForUpdatesInteractive());
+    const dialog = page.getByRole("dialog", { name: "Check for updates", exact: true });
+    const retry = dialog.getByRole("button", { name: "Retry", exact: true });
+    await expect(retry).toBeVisible();
+    await page.evaluate(() => { window.__scenario = { checkPending: true, available: false }; });
+    await retry.click();
+    await expect(retry).toBeDisabled();
+    await expect(dialog.locator(".upd-status")).toHaveText("checking for updates…");
+    await page.evaluate(() => document.querySelector(".upd-retry").click());
+    expect(await page.evaluate(() => window.__calls.CheckForUpdate)).toBe(2);
+    await page.evaluate(() => window.__finishCheck());
+    await expect(dialog.locator(".upd-status")).toContainText("up to date");
+    await expect(dialog.locator(".upd-status")).not.toHaveClass(/warn/);
+    await expect(retry).toBeHidden();
+});
+
+test("German updater translates failure, retry, progress and restart", async ({ page }) => {
+    await boot(page, { enabled: false, offline: true });
+    await page.evaluate(async () => {
+        const { setLanguage } = await import("/src/i18n.js");
+        setLanguage("de");
+        await window.__noxa.checkForUpdatesInteractive();
+    });
+    const dialog = page.getByRole("dialog", { name: "Nach Updates suchen", exact: true });
+    await expect(dialog).toBeVisible();
+    await expect(dialog.locator(".upd-status")).toContainText("Suche fehlgeschlagen:");
+    await page.evaluate(() => { window.__scenario = { downloadPending: true }; });
+    await dialog.getByRole("button", { name: "Erneut versuchen", exact: true }).click();
+    await expect(dialog.locator(".upd-status")).toHaveText("Update verfügbar: v0.4.1 (1.0 MiB)");
+    await dialog.getByRole("button", { name: "Jetzt aktualisieren", exact: true }).click();
+    await expect(dialog.locator(".upd-status")).toHaveText("Wird heruntergeladen…");
+    await page.evaluate(() => window.__finishDownload());
+    await expect(dialog.getByRole("button", { name: "Jetzt neu starten", exact: true })).toBeVisible();
+    await expect(dialog.locator(".upd-status")).toHaveText("Update angewendet — Neustart erforderlich");
+    await dialog.getByRole("button", { name: "Schließen", exact: true }).click();
 });

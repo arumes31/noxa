@@ -27,8 +27,8 @@ import (
 
 	_ "golang.org/x/image/webp"
 
-	"voicx/internal/safecast"
-	"voicx/internal/store"
+	"noxa/internal/safecast"
+	"noxa/internal/store"
 )
 
 const (
@@ -57,7 +57,7 @@ var (
 // assetStorageLocks owns a lock set per configured FileRoot. Operations first
 // take a shared namespace lock, then sorted logical-base locks. That lets
 // unrelated assets proceed independently while directory scans can take the
-// namespace exclusively for a coherent snapshot. VoicX requires one writer
+// namespace exclusively for a coherent snapshot. noXa requires one writer
 // process per FileRoot: no cross-process lock coordinates extension collapse
 // or the group-icon journal with database metadata.
 var assetStorageLocks sync.Map // map[string]*assetLockSet

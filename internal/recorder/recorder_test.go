@@ -14,7 +14,7 @@ import (
 	"github.com/pion/rtp"
 	"go.uber.org/zap"
 
-	"voicx/internal/webrtc"
+	"noxa/internal/webrtc"
 )
 
 // fakeCommand is a fake OS process for lifecycle tests.

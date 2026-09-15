@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"voicx/internal/netproto"
-	"voicx/internal/tlscert"
+	"noxa/internal/netproto"
+	"noxa/internal/tlscert"
 )
 
 func TestControlTLSConfigRestrictsInsecureMode(t *testing.T) {

@@ -12,10 +12,10 @@ import (
 
 	"go.uber.org/zap"
 
-	"voicx/internal/auth"
-	"voicx/internal/safecast"
-	"voicx/internal/state"
-	"voicx/internal/store"
+	"noxa/internal/auth"
+	"noxa/internal/safecast"
+	"noxa/internal/state"
+	"noxa/internal/store"
 )
 
 // DefaultCleanupDelay is the grace period after a temporary channel becomes

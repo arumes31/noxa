@@ -1,4 +1,4 @@
-// Package filetransfer implements the voicx file-transfer system: a
+// Package filetransfer implements the noxa file-transfer system: a
 // token-authorized TCP server for uploading and downloading channel files.
 //
 // Model (TS3-inspired): the control channel issues short-lived, single-use
@@ -50,7 +50,7 @@ import (
 
 	"go.uber.org/zap"
 
-	"voicx/internal/store"
+	"noxa/internal/store"
 )
 
 // tokenTTL is how long an issued transfer token stays valid. It is a var so

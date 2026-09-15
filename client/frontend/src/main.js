@@ -1,4 +1,4 @@
-// voicx client frontend — voice ops console (vanilla JS).
+// noxa client frontend — voice ops console (vanilla JS).
 // Wails bridge: window.go.main.App.<Method>(...) calls the Go backend;
 // window.runtime.EventsOn(name, cb) receives backend events.
 
@@ -9,7 +9,7 @@ import { initMenu } from "./menu.js";
 import { initSettingsUI } from "./settings-ui.js";
 import { initClientInfo } from "./clientinfo.js";
 import { initUpdater, startupAutoCheck } from "./updater.js";
-import { playEvent, playChannelJoin, beep, testAll } from "./sounds.js";
+import { playEvent, playSpeech, clearSpeech, initSounds, updateSoundOutput, soundEngine, speechQueue } from "./sounds.js";
 import {
     startMicMeter, stopMicMeter, pttRelease, makeLimiter,
     getUserVolume, isUserMuted, setUserMuted, registerUserChain, unregisterUserChain,
@@ -32,7 +32,7 @@ import { initMetaUI } from "./meta-ui.js";
 import { initPolishUI } from "./polish-ui.js";
 import { imageDataURL, setSafeImage } from "./safe-media.js";
 import { initNotifications } from "./notifications.js";
-import { setLanguage, applyStaticLabels } from "./i18n.js";
+import { setLanguage, currentLanguage, applyStaticLabels, t } from "./i18n.js";
 import { extractPresentedFingerprint } from "./security.js";
 import { isActivationKey } from "./a11y.js";
 import { createLiveAnnouncementQueue } from "./live-announcer.js";
@@ -42,8 +42,8 @@ import { icon } from "./icons.js";
 import { initWorkspace, renderWorkspace, renderMember } from "./workspace-ui.js";
 import { createTrayVoiceSync } from "./tray-state.js";
 
-const P = () => window.__voicxPerms;
-window.__voicxChat = chatUI;
+const P = () => window.__noxaPerms;
+window.__noxaChat = chatUI;
 
 const $ = (id) => document.getElementById(id);
 const publishTrayVoice = createTrayVoiceSync((...flags) => window.go.main.App.SetTrayVoiceState(...flags));
@@ -104,7 +104,6 @@ const state = {
     reconnectTimer: null,
     reconnectInFlight: false,
     vadMonitor: null,
-    audioCtx: null,
     voiceMonitorCtx: null,
     trackUsers: new Map(), // media track ID -> {client_id, unique_id, nickname} (per-publisher tracks; wave-3 video tiles)
     shareStream: null,     // getDisplayMedia result while screen sharing
@@ -112,11 +111,6 @@ const state = {
     shareAudioTransceiver: null, // its transceiver, reused by the next share in this session
     regionBox: null,       // (71) crop target element, alive for the whole cropped share
 };
-
-// ---------------------------------------------------------------------------
-// Sounds are synthesized in sounds.js (sound packs); `beep` is the legacy
-// helper kept for simple cues.
-// ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
 // Toasts
@@ -141,8 +135,8 @@ function toast(text, kind = "info", category = "alert", options = {}) {
     }
     // (346) record into the notification center; (347/348) DND suppresses
     // visible toasts but still records them silently.
-    if (options.record !== false) window.__voicxPolish?.recordNotification(kind, text, {});
-    if (window.__voicxPolish?.dndActive?.()) return;
+    if (options.record !== false) window.__noxaPolish?.recordNotification(kind, text, {});
+    if (!options.bypassDND && window.__noxaPolish?.dndActive?.()) return;
     if (options.announce !== false) announceLive(text, kind === "warn" ? "assertive" : "polite");
     const el = document.createElement("div");
     el.className = "toast " + kind;
@@ -167,6 +161,7 @@ function applyAppearance() {
     const root = document.documentElement;
     // (336) language applies live (menus + static labels rebuild).
     setLanguage(s.language || "system");
+    root.lang = currentLanguage();
     applyStaticLabels();
     initMenu();
     // (294/295) theme sets the full variable palette via [data-theme].
@@ -198,9 +193,9 @@ function applyAppearance() {
     root.style.fontSize = (s.ui_font_size || 14) + "px";
     // (293) restore compact mode.
     const compact = !!s.compact_mode;
-    if (compact) window.__voicxFiles?.activateWorkspaceTab?.("chat", { focus: false });
+    if (compact) window.__noxaFiles?.activateWorkspaceTab?.("chat", { focus: false });
     document.body.classList.toggle("compact", compact);
-    if (compact) window.__voicxFiles?.restoreVisibleWorkspaceFocus?.();
+    if (compact) window.__noxaFiles?.restoreVisibleWorkspaceFocus?.();
 }
 
 // ---------------------------------------------------------------------------
@@ -210,6 +205,7 @@ function applyAppearance() {
 (async () => {
     try {
         state.settings = await window.go.main.App.GetSettings();
+        void updateSoundOutput();
         // (88) reflect the persisted low-bandwidth mode in the voice bar.
         if (state.settings?.low_bandwidth) setLowBandwidth(true, false);
     } catch {
@@ -217,14 +213,14 @@ function applyAppearance() {
     }
     applyAppearance();
     // initTabs renders before the asynchronous native settings load completes.
-    window.__voicxTabs.renderRecents();
+    window.__noxaTabs.renderRecents();
     try {
         const uid = await window.go.main.App.IdentityUID();
         if (uid) $("login-identity").textContent = uid.slice(0, 12) + "…";
     } catch { /* identity display is best-effort */ }
     try {
         const v = await window.go.main.App.ClientVersionShort();
-        $("login-version").textContent = "voicx " + v;
+        $("login-version").textContent = "noXa " + v;
         state.clientVersion = v;
     } catch { /* version display is best-effort */ }
     document.querySelector(".login-card").classList.add("in");
@@ -359,8 +355,8 @@ async function connectFromLogin() {
         chatUI.onConnect(); // (133) MOTD + myUniqueID for mentions/own-msgs
         // (6b) group memberships drive tree colors/hoisted sections.
         P().refreshGroups().then(() => renderTree());
-        window.__voicxFiles.loadServerIcon(); // (270) server icon in the sidebar
-        window.__voicxSocial.refreshNews(); // (313) server news pane
+        window.__noxaFiles.loadServerIcon(); // (270) server icon in the sidebar
+        window.__noxaSocial.refreshNews(); // (313) server news pane
         startQualitySampler(); // (333) connection quality pill
         noteActivity(); // (308) auto-away timer starts at connect
         playEvent("connection_connected");
@@ -565,11 +561,12 @@ async function completeReconnect(c, generation, tabID) {
     applyWhisperSettings();
     chatUI.onConnect();
     P()?.refreshGroups?.().then(() => renderTree());
-    window.__voicxFiles?.loadServerIcon?.();
-    window.__voicxSocial?.refreshNews?.();
+    window.__noxaFiles?.loadServerIcon?.();
+    window.__noxaSocial?.refreshNews?.();
     startQualitySampler();
     noteActivity();
     playEvent("connection_reconnected");
+    clearSpeech("connection");
     warnCertificateClock(clockWarning, c.addr);
     return generation === reconnectGeneration;
 }
@@ -641,6 +638,7 @@ function scheduleReconnect(
         if (target && state.reconnectAttempts >= 5 && !reconnectFailureSounded && ownsSource()) {
             reconnectFailureSounded = true;
             playEvent("connection_failed");
+            playSpeech("reconnect_failed");
         }
         chatUI.cancelReconnectAnnouncementBatch();
         showLogin();
@@ -698,7 +696,7 @@ async function reconnectLastServerNow() {
         clearReconnectTimer();
         const c = state.lastSuccessfulConnect;
         if (!c) {
-            await window.__voicxTabs?.quickConnectLast?.();
+            await window.__noxaTabs?.quickConnectLast?.();
             return;
         }
         // Intentional Disconnect clears lastConnect to suppress automatic
@@ -750,6 +748,7 @@ async function disconnect() {
 // teardown into one exactly-once user-facing connection edge.
 window.runtime.EventsOn("intentional_disconnect", (tabID) => {
     if (String(tabID || "") !== state.activeTabID) return;
+    clearSpeech();
     if (state.settings?.notify_connection !== false) toast("Disconnected", "info", "conn");
     playEvent("connection_disconnected");
 });
@@ -758,6 +757,7 @@ window.runtime.EventsOn("disconnected", () => {
     const unexpected = !!state.lastConnect;
     if (unexpected && state.settings?.notify_connection !== false) toast("Connection lost", "warn", "conn");
     if (unexpected) playEvent("connection_lost");
+    if (unexpected) playSpeech("connection_lost", { delay: 1200 });
     sysMsg("disconnected from server");
     // (32/33) whisper state is per-connection: client IDs and the server-side
     // whisper list do not survive a reconnect.
@@ -783,12 +783,13 @@ window.runtime.EventsOn("servererror", (msg) => {
     const text = String(msg).replace(/^\d+:\s*/, "");
     toast(text || "The server rejected that action", "warn");
     playEvent("server_error");
+    if (/^insufficient permission[: ]|^permission denied\b/i.test(text)) playSpeech("permission_denied");
 });
 
 // (282) the Go side maintains settings of its own (recents on every connect),
 // so the merged blob it pushes is the authoritative cache — without this the
 // recents list stays frozen at the value read once at startup.
-window.runtime.EventsOn("settings_update", (s) => { state.settings = s; });
+window.runtime.EventsOn("settings_update", (s) => { state.settings = s; void updateSoundOutput(); });
 
 // (320) recordRecentChannel tracks the last 5 joined channels per server
 // address in settings (debounced persist).
@@ -997,8 +998,8 @@ window.runtime.EventsOn("snapshot", (json) => {
     expandMyBranch(); // (302)
     resolveTrackUsers();
     videoRefreshNames(); // (61/73) tile labels follow the refreshed client list
-    window.__voicxNotify?.checkBuddyOnline();
-    window.__voicxNotify?.checkChannelWatch();
+    window.__noxaNotify?.checkBuddyOnline();
+    window.__noxaNotify?.checkChannelWatch();
     renderTree();
 });
 
@@ -1015,7 +1016,7 @@ function syncOwnChannel({ audible = true } = {}) {
         // must flush the pending new-tab join from this equality branch.
         const initialCuePending = state.pendingInitialChannelCueTabID === state.activeTabID;
         if (initialCuePending && channelID > 0 && !actionSoundsSuppressed()) {
-            playChannelJoin();
+            playEvent("own_channel_join");
             state.pendingInitialChannelCueTabID = "";
         }
         ensureVoiceForChannel();
@@ -1029,7 +1030,7 @@ function syncOwnChannel({ audible = true } = {}) {
     if ((audible || initialCuePending) && !actionSoundsSuppressed()) {
         if (channelID > 0) {
             if (previousChannelID > 0) playEvent("own_channel_switch");
-            else playChannelJoin();
+            else playEvent("own_channel_join");
             playedCue = true;
         } else if (previousChannelID > 0) {
             playEvent("own_channel_leave");
@@ -1040,7 +1041,7 @@ function syncOwnChannel({ audible = true } = {}) {
     expandMyBranch();
     applyChannelAudio();
     chatUI.onMyChannelChanged();
-    window.__voicxFiles?.onChannelChanged?.();
+    window.__noxaFiles?.onChannelChanged?.();
     renderTree();
     ensureVoiceForChannel();
 }
@@ -1146,7 +1147,7 @@ window.runtime.EventsOn("event", (json) => {
                 chatUI.sysJoinLeave(d.nickname || d.unique_id || "someone", "joined"); // (130/131)
                 if (joinedChannel === state.myChannelID && state.myChannelID !== 0) {
                     // (385) joins in my channel dispatch through the matrix.
-                    window.__voicxNotify?.notify("join_leave", (d.nickname || "someone") + " joined your channel",
+                    window.__noxaNotify?.notify("join_leave", (d.nickname || "someone") + " joined your channel",
                         { channelID: state.myChannelID, className: "joins", kind: "info",
                             soundEvent: "user_join", noSound: actionSoundsSuppressed() });
                 }
@@ -1167,7 +1168,7 @@ window.runtime.EventsOn("event", (json) => {
                 }
                 chatUI.sysJoinLeave(was.nickname || was.unique_id || "someone", "left"); // (130/131)
                 if (was.client_id !== state.myClientID && was.channel_id === state.myChannelID && state.myChannelID !== 0) {
-                    window.__voicxNotify?.notify("join_leave", (was.nickname || "someone") + " left your channel",
+                    window.__noxaNotify?.notify("join_leave", (was.nickname || "someone") + " left your channel",
                         { channelID: state.myChannelID, className: "joins", kind: "info",
                             soundEvent: "user_leave", noSound: actionSoundsSuppressed() });
                 }
@@ -1183,13 +1184,16 @@ window.runtime.EventsOn("event", (json) => {
             if (c) c.channel_id = nextChannelID;
             if (d.client_id === state.myClientID) {
                 const previousChannelID = state.myChannelID;
+                if (nextChannelID > 0 && nextChannelID !== previousChannelID && d.by_client_id && d.by_client_id !== state.myClientID) {
+                    playSpeech("moved_by_admin");
+                }
                 state.myChannelID = nextChannelID;
                 if (nextChannelID > 0 && nextChannelID !== previousChannelID) setDeafened(false);
                 let playedOwnCue = false;
                 if (!actionSoundsSuppressed()) {
                     if (nextChannelID > 0 && nextChannelID !== previousChannelID) {
                         if (previousChannelID > 0) playEvent("own_channel_switch");
-                        else playChannelJoin();
+                        else playEvent("own_channel_join");
                         playedOwnCue = true;
                     } else if (nextChannelID === 0 && previousChannelID > 0) {
                         playEvent("own_channel_leave");
@@ -1206,17 +1210,17 @@ window.runtime.EventsOn("event", (json) => {
                 expandMyBranch(); // (302)
                 applyChannelAudio();
                 chatUI.onMyChannelChanged(); // (103/111) load history + header for the new channel
-                window.__voicxFiles?.onChannelChanged?.(); // (256) file browser follows the channel
+                window.__noxaFiles?.onChannelChanged?.(); // (256) file browser follows the channel
                 recordRecentChannel(nextChannelID); // (320) recent channels
                 ensureVoiceForChannel();
             } else if (c && nextChannelID === state.myChannelID && state.myChannelID !== 0
                 && previousRemoteChannelID !== nextChannelID) {
-                window.__voicxNotify?.notify("join_leave", (c.nickname || "someone") + " moved into your channel",
+                window.__noxaNotify?.notify("join_leave", (c.nickname || "someone") + " moved into your channel",
                     { channelID: state.myChannelID, className: "joins", kind: "info",
                         soundEvent: "user_move_in", noSound: actionSoundsSuppressed() });
             } else if (c && previousRemoteChannelID === state.myChannelID && state.myChannelID !== 0
                 && previousRemoteChannelID !== nextChannelID) {
-                window.__voicxNotify?.notify("join_leave", (c.nickname || "someone") + " moved out of your channel",
+                window.__noxaNotify?.notify("join_leave", (c.nickname || "someone") + " moved out of your channel",
                     { channelID: previousRemoteChannelID, className: "joins", kind: "info",
                         soundEvent: "user_move_out", noSound: actionSoundsSuppressed() });
             }
@@ -1274,7 +1278,7 @@ window.runtime.EventsOn("event", (json) => {
             chatUI.onChannelsDeleted([...deleted]);
             if (selfDisplaced) {
                 chatUI.onMyChannelChanged();
-                window.__voicxFiles?.onChannelChanged?.();
+                window.__noxaFiles?.onChannelChanged?.();
                 ensureVoiceForChannel();
             }
             recomputeDucking();
@@ -1327,7 +1331,7 @@ window.runtime.EventsOn("event", (json) => {
         // (321/322) poke: toast + sound + taskbar flash.
         case "poke":
             // (385) pokes dispatch through the notification matrix.
-            window.__voicxNotify?.notify("poke",
+            window.__noxaNotify?.notify("poke",
                 `poke from ${d.from_nickname || "someone"}${d.message ? ": " + d.message : ""}`,
                 { className: "messages", kind: "warn" });
             break;
@@ -1342,7 +1346,7 @@ window.runtime.EventsOn("event", (json) => {
             const c = state.clients.find((c) => c.client_id === d.client_id);
             if (c) c.is_speaking = d.speaking;
             // (343) announce speaking events to the screen-reader region.
-            if (d.speaking) window.__voicxPolish?.announce((c ? c.nickname || c.unique_id : "someone") + " started speaking");
+            if (d.speaking) window.__noxaPolish?.announce((c ? c.nickname || c.unique_id : "someone") + " started speaking");
             updateTalkBanner();
             videoSpeaking(d.client_id, d.speaking);
             recomputeDucking();
@@ -1386,14 +1390,35 @@ window.runtime.EventsOn("event", (json) => {
         case "announcement":
             chatUI.onAnnouncement(d);
             return;
-        case "kicked":
+        case "server_shutdown":
+            if (!actionSoundsSuppressed()) {
+                state.lastConnect = null;
+                clearReconnectTimer();
+                playEvent("connection_disconnected");
+                playSpeech("server_shutdown");
+                toast("The server is shutting down.", "warn", "conn");
+            }
+            break;
+        case "kicked": {
+            const self = d.client_id === state.myClientID;
+            const removal = d.ban ? "banned" : d.from_server ? "kicked" : "kicked_channel";
+            const description = self ? (d.ban ? "You were banned from the server." : d.from_server ? "You were kicked from the server." : "You were removed from the channel.") : "Client " + (d.ban ? "banned" : "kicked");
             // (385) kicks dispatch through the notification matrix.
-            window.__voicxNotify?.notify("kick", "client kicked" + (d.reason ? ": " + d.reason : ""),
-                { className: "messages", kind: "warn" });
+            window.__noxaNotify?.notify("kick", description + (d.reason ? " Reason: " + d.reason : ""),
+                { className: "messages", kind: "warn", soundEvent: d.ban ? "ban" : "kick" });
+            if (self && !actionSoundsSuppressed()) {
+                if (d.from_server || d.ban) {
+                    state.lastConnect = null;
+                    reconnectGeneration++;
+                    clearReconnectTimer();
+                }
+                playSpeech(removal, { delay: 350 });
+            }
             if (state.settings?.sys_kick !== false) { // (130) category filter
                 sysMsg("client " + d.client_id + " was kicked" + (d.reason ? " (" + d.reason + ")" : ""));
             }
             break;
+        }
         case "screenshare_changed": {
             // (73) remember who is sharing: the grid labels those tiles, and
             // the camera-off detector (61) must not mistake a still desktop
@@ -1431,7 +1456,7 @@ window.runtime.EventsOn("event", (json) => {
     resolveTrackUsers();
     // (389) the snapshot arrives once at login, so only the live join/leave/
     // move events can ever show a channel crossing its watch threshold.
-    window.__voicxNotify?.checkChannelWatch();
+    window.__noxaNotify?.checkChannelWatch();
     renderTree();
     videoRefreshNames();
 });
@@ -1582,7 +1607,7 @@ function renderChannel(parentEl, ch, byParent, depth) {
     el.innerHTML = `<span class="ch-disclosure" aria-hidden="true">${icon("chevron")}</span><span class="ch-icon">${icon("speaker")}</span><span class="ch-name"></span>`;
     el.querySelector(".ch-name").textContent = ch.Name;
     // (387) muted channel icon.
-    if (window.__voicxNotify?.channelOverride?.(ch.ChannelID)?.muted) {
+    if (window.__noxaNotify?.channelOverride?.(ch.ChannelID)?.muted) {
         const mute = document.createElement("span");
         mute.className = "ch-lock";
         mute.textContent = " 🔕";
@@ -1618,13 +1643,13 @@ function renderChannel(parentEl, ch, byParent, depth) {
     el.draggable = true;
     el.addEventListener("dragstart", (e) => {
         if (e.target !== el) return;
-        e.dataTransfer.setData("text/voicx-chid", String(ch.ChannelID));
+        e.dataTransfer.setData("text/noxa-chid", String(ch.ChannelID));
         e.dataTransfer.effectAllowed = "move";
     });
     // (305) drag users onto a channel to move them there.
     el.addEventListener("dragover", (e) => {
-        if (e.dataTransfer.types.includes("text/voicx-uid") ||
-            e.dataTransfer.types.includes("text/voicx-chid")) {
+        if (e.dataTransfer.types.includes("text/noxa-uid") ||
+            e.dataTransfer.types.includes("text/noxa-chid")) {
             e.preventDefault();
             el.classList.add("drop-active");
         }
@@ -1636,12 +1661,12 @@ function renderChannel(parentEl, ch, byParent, depth) {
         // this a drop on a child also fires every ancestor's handler.
         e.stopPropagation();
         el.classList.remove("drop-active");
-        const chid = Number(e.dataTransfer.getData("text/voicx-chid"));
+        const chid = Number(e.dataTransfer.getData("text/noxa-chid"));
         if (chid) {
             reorderChannel(chid, ch);
             return;
         }
-        const uid = e.dataTransfer.getData("text/voicx-uid");
+        const uid = e.dataTransfer.getData("text/noxa-uid");
         const target = state.clients.find((c) => c.unique_id === uid);
         if (!target) return;
         if (target.client_id === state.myClientID) {
@@ -1657,9 +1682,9 @@ function renderChannel(parentEl, ch, byParent, depth) {
     // windowed mode every channel off my branch counts as collapsed unless
     // the user explicitly expanded it (double-click).
     let collapsed = state.collapsedChannels.has(ch.ChannelID);
-    if (window.__voicxPolish?.virtualizeEnabled?.()) {
+    if (window.__noxaPolish?.virtualizeEnabled?.()) {
         collapsed = state.collapsedChannels.has(ch.ChannelID) ||
-            (!window.__voicxPolish.myBranchIDs().has(ch.ChannelID) &&
+            (!window.__noxaPolish.myBranchIDs().has(ch.ChannelID) &&
                 !state.expandedVirtual.has(ch.ChannelID));
     }
     const expandable = state.clients.some((c) => c.channel_id === ch.ChannelID) ||
@@ -1733,7 +1758,7 @@ function clientRow(c) {
     if (c.unique_id) {
         row.draggable = true;
         row.addEventListener("dragstart", (e) => {
-            e.dataTransfer.setData("text/voicx-uid", c.unique_id);
+            e.dataTransfer.setData("text/noxa-uid", c.unique_id);
             e.dataTransfer.effectAllowed = "copy";
         });
     }
@@ -1804,7 +1829,7 @@ function clientRow(c) {
             (state.deafened ? icon("headphonesOff") : "") + (state.screenSharing ? icon("screen") : "");
         row.appendChild(icons);
         // (347) DND shows on own status icons.
-        if (window.__voicxPolish?.dndActive?.()) {
+        if (window.__noxaPolish?.dndActive?.()) {
             const dnd = document.createElement("span");
             dnd.className = "status-icons";
             dnd.textContent = " 🌙";
@@ -1904,7 +1929,7 @@ function onWhisperReceived(clientID, uniqueID, nickname) {
     if (uid) state.lastWhispererUID = uid;
     const who = nickname || c?.nickname || uid || clientID || "someone";
     trayMention();
-    window.__voicxNotify?.notify("whisper", who + " is whispering to you",
+    window.__noxaNotify?.notify("whisper", who + " is whispering to you",
         { uid, className: "messages", kind: "warn", noSound: !state.settings?.whisper_sound });
 }
 
@@ -2090,7 +2115,7 @@ $("chat-scope").onchange = () => setDirectTargetVisible($("chat-scope").value ==
 
 async function sendChat() {
     // Rich send flow (reply prefix, staged file uploads, DM tabs) is in
-    // chat-ui.js (wave 5b); this wrapper keeps the __voicx export stable.
+    // chat-ui.js (wave 5b); this wrapper keeps the __noxa export stable.
     await chatUI.sendMessage();
 }
 
@@ -2773,12 +2798,32 @@ function warnEmptyChannel() {
 }
 
 // Output settings: volume + sink for remote media elements.
+let lastOutputDevice = "";
+let outputWarningShown = false;
+let outputSelection = 0;
+
+async function selectAudioOutput(target) {
+    const deviceID = state.settings?.playback_device_id || "";
+    if (deviceID !== lastOutputDevice) {
+        lastOutputDevice = deviceID;
+        outputWarningShown = false;
+        outputSelection++;
+    }
+    if (typeof target.setSinkId !== "function") return;
+    const selection = outputSelection;
+    try {
+        await target.setSinkId(deviceID);
+    } catch {
+        if (selection !== outputSelection || deviceID !== (state.settings?.playback_device_id || "") || target.state === "closed" || outputWarningShown) return;
+        outputWarningShown = true;
+        toast(t("audio.outputSwitchFailed"), "warn");
+    }
+}
+
 function applyOutputSettings(el) {
     const s = state.settings || {};
     el.volume = Math.min(1, (s.volume ?? 100) / 100);
-    if (s.playback_device_id && el.setSinkId) {
-        el.setSinkId(s.playback_device_id).catch(() => {});
-    }
+    void selectAudioOutput(el);
     el.muted = state.deafened;
     if (remoteChain.master) {
         remoteChain.master.gain.value = Math.min(2, (s.volume ?? 100) / 100);
@@ -2816,10 +2861,7 @@ function ensureRemoteChain() {
         out.connect(ctx.destination);
 
         // Output device selection where supported (Chrome 110+).
-        const s = state.settings || {};
-        if (s.playback_device_id && typeof ctx.setSinkId === "function") {
-            ctx.setSinkId(s.playback_device_id).catch(() => {});
-        }
+        void selectAudioOutput(ctx);
         return true;
     } catch (e) {
         sysMsg("remote audio chain failed: " + e);
@@ -2995,12 +3037,12 @@ function setPTT(active) {
         $("ptt-btn").classList.toggle("live", effective);
         $("ptt-btn").setAttribute("aria-pressed", String(effective));
         window.go.main.App.SetPTT(effective);
+        applyVoiceState();
         // VAD continuously changes pttActive as speech starts and stops; only
         // physical push-to-talk actions earn an audible confirmation.
         if ((state.settings?.activation_mode || "ptt") === "ptt") {
             playEvent(effective ? "ptt_on" : "ptt_off");
         }
-        applyVoiceState();
         updateTalkBanner();
     });
 }
@@ -3045,14 +3087,14 @@ window.runtime.EventsOn("hotkey", (action) => {
         return;
     }
     if (action === "deafen_toggle") {
-        const { state, setDeafened, sysMsg } = window.__voicx;
+        const { state, setDeafened, sysMsg } = window.__noxa;
         setDeafened(!state.deafened);
         sysMsg(state.deafened ? "deafened (incoming audio off)" : "undeafened");
         return;
     }
     // (285) quick connect: last-used bookmark/recent in a new tab.
     if (action === "quick_connect") {
-        window.__voicxTabs?.quickConnectLast();
+        window.__noxaTabs?.quickConnectLast();
         return;
     }
     // (293) compact mode toggle.
@@ -3062,7 +3104,7 @@ window.runtime.EventsOn("hotkey", (action) => {
     }
     // (341) zen mode toggle.
     if (action === "zen_toggle") {
-        window.__voicxPolish?.toggleZen();
+        window.__noxaPolish?.toggleZen();
         return;
     }
     // (33) Whisper reply: arm whisper at the last whisperer, re-press restores
@@ -3102,9 +3144,9 @@ window.runtime.EventsOn("hotkey", (action) => {
 // only. Toggled from the View menu or the compact hotkey.
 function toggleCompact() {
     const on = !document.body.classList.contains("compact");
-    if (on) window.__voicxFiles?.activateWorkspaceTab?.("chat", { focus: false });
+    if (on) window.__noxaFiles?.activateWorkspaceTab?.("chat", { focus: false });
     document.body.classList.toggle("compact", on);
-    window.__voicxFiles?.restoreVisibleWorkspaceFocus?.();
+    window.__noxaFiles?.restoreVisibleWorkspaceFocus?.();
     if (state.settings) {
         state.settings.compact_mode = on;
         window.go.main.App.SaveSettings(state.settings);
@@ -3256,8 +3298,10 @@ async function refreshPermissions() {
 // Shared namespace for menu.js and settings-ui.js
 // ---------------------------------------------------------------------------
 
-window.__voicx = {
-    state, $, toast, announceLive, sysMsg, beep, showLogin, showWorkspace, disconnect, sendChat, setPTT,
+window.__noxa = {
+    soundEngine,
+    speechQueue,
+    state, $, toast, announceLive, sysMsg, showLogin, showWorkspace, disconnect, sendChat, setPTT,
     setDeafened, refreshPermissions, applyVoiceState, applyOutputSettings,
     startVADMonitor: startVoiceMonitor, stopVADMonitor: stopVoiceMonitor,
     connectFromLogin, renderTree, setChannelExpanded, setDetailsOpen, setDirectTargetVisible,
@@ -3289,17 +3333,18 @@ window.__voicx = {
 };
 
 initModalSystem();
+initSounds();
 initMenu();
 initSettingsUI();
 initClientInfo();
 initVideo();
 initUpdater();
-initPermsUI(); // wave-6b permission/group UI (registers window.__voicxPerms)
-initFilesUI(); // wave-7 file browser/transfers (registers window.__voicxFiles)
-initTabs();    // wave-8a server tabs (registers window.__voicxTabs)
-initSocialUI(); // wave-8b presence/contacts/hover (registers window.__voicxSocial)
-initMetaUI();   // wave-8b debug/stats/onboarding (registers window.__voicxMeta)
-initPolishUI(); // wave-8c polish/a11y (registers window.__voicxPolish)
-initNotifications(); // wave-9 notification matrix (registers window.__voicxNotify)
-chatUI.initChat(); // wave-5b chat UI (must run after __voicx exists)
+initPermsUI(); // wave-6b permission/group UI (registers window.__noxaPerms)
+initFilesUI(); // wave-7 file browser/transfers (registers window.__noxaFiles)
+initTabs();    // wave-8a server tabs (registers window.__noxaTabs)
+initSocialUI(); // wave-8b presence/contacts/hover (registers window.__noxaSocial)
+initMetaUI();   // wave-8b debug/stats/onboarding (registers window.__noxaMeta)
+initPolishUI(); // wave-8c polish/a11y (registers window.__noxaPolish)
+initNotifications(); // wave-9 notification matrix (registers window.__noxaNotify)
+chatUI.initChat(); // wave-5b chat UI (must run after __noxa exists)
 initWorkspace();

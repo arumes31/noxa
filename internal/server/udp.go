@@ -1,4 +1,4 @@
-// Package server hosts the long-running voicx server components. This file
+// Package server hosts the long-running noxa server components. This file
 // implements the UDP keepalive listener: it reads datagrams into pooled
 // buffers, dispatches them by a 1-byte message-type header to a bounded worker
 // pool, and exposes basic atomic counters via Stats(). The UDP surface is a
@@ -18,9 +18,9 @@ import (
 
 	"go.uber.org/zap"
 
-	"voicx/internal/config"
-	"voicx/internal/metrics"
-	"voicx/internal/netproto"
+	"noxa/internal/config"
+	"noxa/internal/metrics"
+	"noxa/internal/netproto"
 )
 
 // udpMTU is the typical maximum transmission unit we size receive buffers

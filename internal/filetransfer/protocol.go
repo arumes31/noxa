@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"net"
 
-	"voicx/internal/netproto"
+	"noxa/internal/netproto"
 )
 
 // File-transfer frame types (distinct namespace from the control protocol).

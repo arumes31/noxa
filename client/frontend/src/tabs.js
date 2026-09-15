@@ -5,8 +5,9 @@
 // state frames on activation, so the frontend keeps its single-state model:
 // on "tab_reset" we clear chat/tree and the replay rebuilds them.
 import { closeServerDialogs } from "./modal.js";
+import { clearSpeech } from "./sounds.js";
 
-const V = () => window.__voicx;
+const V = () => window.__noxa;
 const App = () => window.go.main.App;
 let activeTabID = "";
 
@@ -173,7 +174,7 @@ async function refreshTabIdentity(tabID) {
     try { isGuest = await App().IsGuest(); } catch { /* disconnected */ }
     if (activeTabID !== activatedTabID) return;
     state.isGuest = isGuest;
-    window.__voicxPerms?.redeemPendingToken?.();
+    window.__noxaPerms?.redeemPendingToken?.();
     const saved = state.tabConnects.get(tabID);
     if (saved) {
         state.lastConnect = saved;
@@ -199,6 +200,7 @@ async function refreshTabIdentity(tabID) {
 // onTabReset clears all per-server view state before the backend replays
 // the newly activated tab's journaled frames.
 function onTabReset(tabID) {
+    clearSpeech();
     const { state, $ } = V();
     activeTabID = tabID || "";
     state.activeTabID = activeTabID;
@@ -236,8 +238,8 @@ function onTabReset(tabID) {
     state.isGuest = true;
     state.myPriority = false;
     state.myStatus = "";
-    window.__voicxNotify?.resetBuddyWatch(); // (383) buddy alerts re-arm per connect
-    window.__voicxNotify?.resetServerRules?.(); // (216) gate belongs to one server tab
+    window.__noxaNotify?.resetBuddyWatch(); // (383) buddy alerts re-arm per connect
+    window.__noxaNotify?.resetServerRules?.(); // (216) gate belongs to one server tab
     state.myChannelID = 0;
     state.selectedClientID = "";
     V().setDetailsOpen(false);
@@ -246,12 +248,12 @@ function onTabReset(tabID) {
     state.collapsedChannels.clear();
     state.expandedVirtual.clear();
     state.lastConnect = state.tabConnects.get(tabID) || null;
-    window.__voicxChat?.resetView?.({ preserveReconnectAnnouncements });
-    window.__voicxFiles?.resetServerView?.();
-    window.__voicxSocial?.resetServerView?.();
+    window.__noxaChat?.resetView?.({ preserveReconnectAnnouncements });
+    window.__noxaFiles?.resetServerView?.();
+    window.__noxaSocial?.resetServerView?.();
     V().renderTree();
     V().refreshPermissions();
-    window.__voicxPerms?.refreshGroups?.().then(() => {
+    window.__noxaPerms?.refreshGroups?.().then(() => {
         if (activeTabID === tabID) V().renderTree();
     });
     refreshTabIdentity(tabID).then(async () => {
@@ -273,8 +275,8 @@ function onTabReset(tabID) {
             connectionPill.classList.remove("up");
             V().stopQualitySampler?.();
         }
-        window.__voicxFiles?.loadServerIcon?.();
-        window.__voicxSocial?.refreshNews?.();
+        window.__noxaFiles?.loadServerIcon?.();
+        window.__noxaSocial?.refreshNews?.();
     });
 }
 
@@ -415,5 +417,5 @@ export function initTabs() {
     // (286) auto-connect flagged bookmarks once settings are loaded.
     setTimeout(autoConnectBookmarks, 300);
 
-    window.__voicxTabs = { renderTabs, quickConnectLast, renderRecents };
+    window.__noxaTabs = { renderTabs, quickConnectLast, renderRecents };
 }

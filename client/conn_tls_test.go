@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"voicx/internal/tlscert"
+	"noxa/internal/tlscert"
 )
 
 func TestDialTransportTrustStoreFailureNeverFallsBackToPlaintext(t *testing.T) {

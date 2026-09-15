@@ -34,8 +34,8 @@ import (
 	"golang.org/x/crypto/argon2"
 	"golang.org/x/crypto/nacl/secretbox"
 
-	"voicx/internal/netproto"
-	"voicx/internal/tlscert"
+	"noxa/internal/netproto"
+	"noxa/internal/tlscert"
 )
 
 // ---------------------------------------------------------------------------
@@ -1673,7 +1673,7 @@ func (a *App) ChatExportHistory(channelID int64, maxMessages int) (ChatExportRes
 			reach = "TRUNCATED at the export limit"
 		}
 		lines = append([]string{fmt.Sprintf(
-			"# voicx export — %d messages, %d unreadable (no key), %s",
+			"# noXa export — %d messages, %d unreadable (no key), %s",
 			scanned, undecryptable, reach)}, lines...)
 	}
 	text := ""
@@ -1749,6 +1749,7 @@ func (a *App) ExportChat(defaultName, contents string) string {
 // derived from the passphrase with argon2id, so the file is worth no more than
 // the passphrase — but a plaintext export of an encrypted chat is worth far
 // less than that (125).
+// Keep the format identifier stable so existing encrypted exports remain readable.
 var exportMagic = []byte("VOICXCHAT1")
 
 const (
@@ -1787,7 +1788,7 @@ func sealExport(contents, passphrase string) ([]byte, error) {
 func openExport(blob []byte, passphrase string) (string, error) {
 	head := len(exportMagic) + exportSaltLen + 24
 	if len(blob) < head || !bytes.Equal(blob[:len(exportMagic)], exportMagic) {
-		return "", errors.New("not a voicx encrypted chat export")
+		return "", errors.New("not a noxa encrypted chat export")
 	}
 	salt := blob[len(exportMagic) : len(exportMagic)+exportSaltLen]
 	var nonce [24]byte
@@ -1803,7 +1804,7 @@ func openExport(blob []byte, passphrase string) (string, error) {
 }
 
 // ExportChatEncrypted saves the transcript passphrase-encrypted as
-// .voicxchat, so an export of an encrypted chat does not become the plaintext
+// .noxachat, so an export of an encrypted chat does not become the plaintext
 // copy the whole design exists to prevent. Returns "" on success or cancel.
 func (a *App) ExportChatEncrypted(defaultName, contents, passphrase string) (string, error) {
 	blob, err := sealExport(contents, passphrase)
@@ -1813,7 +1814,7 @@ func (a *App) ExportChatEncrypted(defaultName, contents, passphrase string) (str
 	path, err := wailsRuntime.SaveFileDialog(a.ctx, wailsRuntime.SaveDialogOptions{
 		DefaultFilename: defaultName,
 		Filters: []wailsRuntime.FileFilter{
-			{DisplayName: "Encrypted chat export", Pattern: "*.voicxchat"},
+			{DisplayName: "Encrypted chat export", Pattern: "*.noxachat"},
 		},
 	})
 	if err != nil || path == "" {

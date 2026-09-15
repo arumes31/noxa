@@ -14,7 +14,7 @@ import (
 	"strings"
 	"testing"
 
-	"voicx/internal/netproto"
+	"noxa/internal/netproto"
 )
 
 // uploadOne performs a complete upload of content under folder/name.

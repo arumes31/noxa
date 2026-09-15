@@ -1,19 +1,5 @@
 export namespace main {
 	
-	export class BeepSpec {
-	    freq: number;
-	    duration_ms: number;
-	
-	    static createFrom(source: any = {}) {
-	        return new BeepSpec(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.freq = source["freq"];
-	        this.duration_ms = source["duration_ms"];
-	    }
-	}
 	export class Bookmark {
 	    name: string;
 	    addr: string;
@@ -382,6 +368,11 @@ export namespace main {
 	    warn_empty_channel: boolean;
 	    sound_pack: string;
 	    sound_volume: number;
+	    spoken_messages: boolean;
+	    speech_volume: number;
+	    speech_connection: boolean;
+	    speech_admin: boolean;
+	    speech_events?: Record<string, boolean>;
 	    event_sounds: Record<string, boolean>;
 	    whisper_reply_hotkey: string;
 	    voice_limiter: boolean;
@@ -409,7 +400,6 @@ export namespace main {
 	    active_identity?: string;
 	    identity_key_protection?: string;
 	    notify_matrix?: Record<string, NotifyChannels>;
-	    custom_sounds?: Record<string, BeepSpec>;
 	    channel_notify?: Record<string, ChannelOverride>;
 	    keywords?: Record<string, Array<string>>;
 	    alpha_dismissed: string;
@@ -477,6 +467,11 @@ export namespace main {
 	        this.warn_empty_channel = source["warn_empty_channel"];
 	        this.sound_pack = source["sound_pack"];
 	        this.sound_volume = source["sound_volume"];
+	        this.spoken_messages = source["spoken_messages"];
+	        this.speech_volume = source["speech_volume"];
+	        this.speech_connection = source["speech_connection"];
+	        this.speech_admin = source["speech_admin"];
+	        this.speech_events = source["speech_events"];
 	        this.event_sounds = source["event_sounds"];
 	        this.whisper_reply_hotkey = source["whisper_reply_hotkey"];
 	        this.voice_limiter = source["voice_limiter"];
@@ -504,7 +499,6 @@ export namespace main {
 	        this.active_identity = source["active_identity"];
 	        this.identity_key_protection = source["identity_key_protection"];
 	        this.notify_matrix = this.convertValues(source["notify_matrix"], NotifyChannels, true);
-	        this.custom_sounds = this.convertValues(source["custom_sounds"], BeepSpec, true);
 	        this.channel_notify = this.convertValues(source["channel_notify"], ChannelOverride, true);
 	        this.keywords = source["keywords"];
 	        this.alpha_dismissed = source["alpha_dismissed"];

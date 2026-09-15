@@ -7,8 +7,8 @@ import (
 	"fmt"
 	"strings"
 
-	"voicx/internal/e2ee"
-	"voicx/internal/safecast"
+	"noxa/internal/e2ee"
+	"noxa/internal/safecast"
 )
 
 const maxPreKeysPerPublish = 200

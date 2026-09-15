@@ -6,9 +6,9 @@ import (
 	"encoding/json"
 	"testing"
 
-	"voicx/internal/netproto"
-	"voicx/internal/permissions"
-	"voicx/internal/state"
+	"noxa/internal/netproto"
+	"noxa/internal/permissions"
+	"noxa/internal/state"
 )
 
 // TestChannelEditDenied verifies b_channel_modify is enforced (deny on

@@ -12,12 +12,12 @@ import (
 // Exercise the actual helper in a subprocess: Fatal must fail the process,
 // whereas a misleading Skip would leave the configured integration gate green.
 func TestConfiguredDatabaseFailureIsFatal(t *testing.T) {
-	if os.Getenv("VOICX_DB_CONTRACT_CHILD") == "1" {
+	if os.Getenv("NOXA_DB_CONTRACT_CHILD") == "1" {
 		testAuthService(t)
 		return
 	}
-	t.Setenv("VOICX_DB_CONTRACT_CHILD", "1")
-	t.Setenv("VOICX_TEST_DATABASE_URL", "postgres://audit:audit@127.0.0.1:1/audit?sslmode=disable")
+	t.Setenv("NOXA_DB_CONTRACT_CHILD", "1")
+	t.Setenv("NOXA_TEST_DATABASE_URL", "postgres://audit:audit@127.0.0.1:1/audit?sslmode=disable")
 	executable, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)

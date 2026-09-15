@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	appversion "voicx/internal/version"
+	appversion "noxa/internal/version"
 )
 
 func TestLinkerFlags(t *testing.T) {
@@ -21,10 +21,10 @@ func TestLinkerFlags(t *testing.T) {
 	}
 	got := linkerFlags(metadata)
 	for _, expected := range []string{
-		"-X=voicx/internal/version.Version=0.4.0-dev+gabc1234.dirty.hdef5678",
-		"-X=voicx/internal/version.Commit=abc1234",
-		"-X=voicx/internal/version.BuildDate=2026-08-08T10:00:00Z",
-		"-X=voicx/internal/version.Dirty=true",
+		"-X=noxa/internal/version.Version=0.4.0-dev+gabc1234.dirty.hdef5678",
+		"-X=noxa/internal/version.Commit=abc1234",
+		"-X=noxa/internal/version.BuildDate=2026-08-08T10:00:00Z",
+		"-X=noxa/internal/version.Dirty=true",
 	} {
 		if !strings.Contains(got, expected) {
 			t.Errorf("linkerFlags() = %q, missing %q", got, expected)
@@ -41,11 +41,11 @@ func TestWriteGitHubEnvironment(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, expected := range []string{
-		"VOICX_VERSION=0.4.0-dev+gabc\n",
-		"VOICX_COMMIT=abc\n",
-		"VOICX_DIRTY=false\n",
-		"VOICX_PRERELEASE=true\n",
-		"VOICX_LDFLAGS=",
+		"NOXA_VERSION=0.4.0-dev+gabc\n",
+		"NOXA_COMMIT=abc\n",
+		"NOXA_DIRTY=false\n",
+		"NOXA_PRERELEASE=true\n",
+		"NOXA_LDFLAGS=",
 	} {
 		if !strings.Contains(output.String(), expected) {
 			t.Errorf("environment = %q, missing %q", output.String(), expected)

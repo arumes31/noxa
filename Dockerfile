@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.24.0@sha256:87999aa3d42bdc6bea60565083ee17e86d1f3339802f543c0d03998580f9cb89
 # =============================================================================
-# voicx - voice/video server (Phase 1 base image)
+# noxa - voice/video server (Phase 1 base image)
 # =============================================================================
 # Multi-stage build:
 #   1. builder  - cross-compiles a static Go binary from Go 1.27.1/Alpine 3.24
@@ -23,11 +23,11 @@ ARG TARGETARCH
 # Version metadata is normally injected via --build-arg by Make/CI. A direct
 # Docker build has no .git directory, so the build falls back to a deterministic
 # hash of the copied source tree.
-ARG VOICX_VERSION
-ARG VOICX_COMMIT
-ARG VOICX_DIRTY=false
-ARG VOICX_BUILD_DATE
-ARG VOICX_UPDATE_REPO=voicx/voicx
+ARG NOXA_VERSION
+ARG NOXA_COMMIT
+ARG NOXA_DIRTY=false
+ARG NOXA_BUILD_DATE
+ARG NOXA_UPDATE_REPO=arumes31/noxa
 
 # git is required by `go mod download` for modules that reference VCS sources.
 RUN apk add --no-cache git
@@ -49,19 +49,19 @@ COPY . .
 # CGO_ENABLED=0 ensures a static binary with no libc dependency.
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
-    if [ -n "${VOICX_VERSION}" ]; then \
-      VOICX_LDFLAGS="-X=voicx/internal/version.Version=${VOICX_VERSION} \
-        -X=voicx/internal/version.Commit=${VOICX_COMMIT} \
-        -X=voicx/internal/version.BuildDate=${VOICX_BUILD_DATE} \
-        -X=voicx/internal/version.Dirty=${VOICX_DIRTY}"; \
+    if [ -n "${NOXA_VERSION}" ]; then \
+      NOXA_LDFLAGS="-X=noxa/internal/version.Version=${NOXA_VERSION} \
+        -X=noxa/internal/version.Commit=${NOXA_COMMIT} \
+        -X=noxa/internal/version.BuildDate=${NOXA_BUILD_DATE} \
+        -X=noxa/internal/version.Dirty=${NOXA_DIRTY}"; \
     else \
-      VOICX_LDFLAGS="$(go run ./cmd/version -format ldflags)"; \
+      NOXA_LDFLAGS="$(go run ./cmd/version -format ldflags)"; \
     fi; \
     CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build \
     -mod=readonly -trimpath \
-    -ldflags="-s -w -buildid= ${VOICX_LDFLAGS} \
-      -X=voicx/internal/version.UpdateRepo=${VOICX_UPDATE_REPO}" \
-    -o /out/voicx ./cmd/server
+    -ldflags="-s -w -buildid= ${NOXA_LDFLAGS} \
+      -X=noxa/internal/version.UpdateRepo=${NOXA_UPDATE_REPO}" \
+    -o /out/noxa ./cmd/server
 
 # -----------------------------------------------------------------------------
 # Runtime stage
@@ -78,8 +78,8 @@ RUN apk add --no-cache --upgrade ca-certificates tzdata wget \
 
 # Create a non-root user/group with a fixed UID for predictable permissions.
 # uid 10001 avoids clashes with common alpine system users.
-RUN addgroup -S -g 10001 voicx \
-    && adduser  -S -G voicx -u 10001 -h /home/voicx voicx
+RUN addgroup -S -g 10001 noxa \
+    && adduser  -S -G noxa -u 10001 -h /home/noxa noxa
 
 # Data directories for uploaded files, avatars/icons, and recordings. The
 # compose stack mounts a named volume at /data; creating it here (owned by
@@ -89,12 +89,12 @@ RUN mkdir -p /data/files /data/recordings \
     && chown -R 10001:10001 /data
 
 # Copy the compiled binary from the builder stage.
-COPY --from=builder --chown=10001:10001 /out/voicx /out/voicx
-COPY --chown=10001:10001 scripts/secret-env.sh /usr/local/lib/voicx/secret-env.sh
-COPY --chown=10001:10001 scripts/voicx-entrypoint.sh /usr/local/bin/voicx-entrypoint.sh
-RUN chmod 0555 /usr/local/lib/voicx/secret-env.sh /usr/local/bin/voicx-entrypoint.sh
+COPY --from=builder --chown=10001:10001 /out/noxa /out/noxa
+COPY --chown=10001:10001 scripts/secret-env.sh /usr/local/lib/noxa/secret-env.sh
+COPY --chown=10001:10001 scripts/noxa-entrypoint.sh /usr/local/bin/noxa-entrypoint.sh
+RUN chmod 0555 /usr/local/lib/noxa/secret-env.sh /usr/local/bin/noxa-entrypoint.sh
 
-# Drop privileges: run as the non-root voicx user.
+# Drop privileges: run as the non-root noxa user.
 USER 10001:10001
 
 # Expose the service ports:
@@ -113,5 +113,5 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
 
 STOPSIGNAL SIGTERM
 
-ENTRYPOINT ["/usr/local/bin/voicx-entrypoint.sh"]
-CMD ["/out/voicx"]
+ENTRYPOINT ["/usr/local/bin/noxa-entrypoint.sh"]
+CMD ["/out/noxa"]

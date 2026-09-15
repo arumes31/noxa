@@ -25,8 +25,8 @@ import (
 	"go.uber.org/zap"
 	"golang.org/x/crypto/ssh"
 
-	"voicx/internal/auth"
-	"voicx/internal/safecast"
+	"noxa/internal/auth"
+	"noxa/internal/safecast"
 )
 
 const handshakeTimeout = 30 * time.Second
@@ -73,7 +73,7 @@ func (s *SSHServer) Start(ctx context.Context) error {
 		return fmt.Errorf("query ssh host key: %w", err)
 	}
 	cfg := &ssh.ServerConfig{
-		ServerVersion:    "SSH-2.0-voicx_" + Version,
+		ServerVersion:    "SSH-2.0-noxa_" + Version,
 		MaxAuthTries:     s.base.MaxLoginFailures,
 		PasswordCallback: s.passwordCallback(ctx),
 	}

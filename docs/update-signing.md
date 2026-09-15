@@ -1,6 +1,6 @@
 # Client update signing
 
-VoicX release clients accept an update only when `checksums.txt` has a valid
+noXa release clients accept an update only when `checksums.txt` has a valid
 Ed25519 signature from an embedded trusted key and its signed version matches
 the GitHub release tag. Update metadata, manifests, signatures, and binaries
 also have explicit download limits. Non-loopback update URLs must use HTTPS.
@@ -10,7 +10,7 @@ also have explicit download limits. Non-loopback update URLs must use HTTPS.
 Generate the key on a secured operator workstation, outside the repository:
 
 ```powershell
-go run ./cmd/signrelease -generate-key C:\secure\voicx-update-signing-key.txt
+go run ./cmd/signrelease -generate-key C:\secure\noxa-update-signing-key.txt
 ```
 
 The command creates the private-key file exclusively with restrictive process
@@ -20,9 +20,9 @@ Never commit it, attach it to a release, or paste it into logs or tickets.
 
 Configure the repository with:
 
-- Actions secret `VOICX_UPDATE_SIGNING_KEY`: the single base64 line stored in
+- Actions secret `NOXA_UPDATE_SIGNING_KEY`: the single base64 line stored in
   the generated private-key file;
-- Actions variable `VOICX_UPDATE_PUBLIC_KEYS`: the printed base64 public key.
+- Actions variable `NOXA_UPDATE_PUBLIC_KEYS`: the printed base64 public key.
 
 Tagged release builds validate the public-key configuration before building so
 the client never embeds an empty trust root. The private key is first consumed
@@ -32,12 +32,12 @@ through `internal/version.UpdatePublicKeys`.
 
 ## Rotation
 
-`VOICX_UPDATE_PUBLIC_KEYS` accepts comma-separated public keys. Rotate without
+`NOXA_UPDATE_PUBLIC_KEYS` accepts comma-separated public keys. Rotate without
 stranding installed clients in three releases:
 
 1. Generate a new key and publish a release embedding `old,new`, signed by the
    old private key.
-2. After that client is deployed, change `VOICX_UPDATE_SIGNING_KEY` to the new
+2. After that client is deployed, change `NOXA_UPDATE_SIGNING_KEY` to the new
    private key and keep publishing clients that trust `old,new`.
 3. After the supported upgrade window, publish a client that embeds only `new`.
 
@@ -50,9 +50,9 @@ key cannot safely bootstrap a replacement key through the compromised channel.
 
 The release workflow publishes:
 
-- `voicx-client-windows-amd64.exe`;
-- `voicx-server-linux-amd64`;
-- `checksums.txt`, beginning with `# voicx-version: <tag>`;
+- `noxa-client-windows-amd64.exe`;
+- `noxa-server-linux-amd64`;
+- `checksums.txt`, beginning with `# noxa-version: <tag>`;
 - `checksums.txt.sig`, a base64 detached Ed25519 signature over the exact bytes
   of `checksums.txt`.
 
@@ -65,7 +65,7 @@ verification is repeated immediately before the release upload.
 
 Both signing and verification require an explicit `-version <tag>`. Before
 creating a signature, the signer uses the shared manifest validator to require
-exactly one non-empty `# voicx-version: <tag>` header matching that value. It
+exactly one non-empty `# noxa-version: <tag>` header matching that value. It
 creates `checksums.txt.sig` exclusively with mode `0600`: an existing file or
 symlink is refused rather than overwritten, and a newly created partial output
 is removed if writing, syncing, or closing fails.

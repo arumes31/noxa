@@ -14,8 +14,8 @@ import (
 	"testing"
 	"time"
 
-	"voicx/internal/auth"
-	"voicx/internal/metrics"
+	"noxa/internal/auth"
+	"noxa/internal/metrics"
 )
 
 func closeServerQueryTestResource(t *testing.T, closer io.Closer) {
@@ -456,7 +456,7 @@ func newFakeBackend() *fakeBackend {
 		channels: []ChannelInfo{
 			{ChannelID: 1, ParentID: 0, Name: "Lobby", Type: 2, ClientCount: 1},
 		},
-		info:      Info{Name: "voicx test", Uptime: 90 * time.Second, ClientsOnline: 1, MaxClients: 1024, ChannelsOnline: 1},
+		info:      Info{Name: "noxa test", Uptime: 90 * time.Second, ClientsOnline: 1, MaxClients: 1024, ChannelsOnline: 1},
 		custom:    map[string]string{},
 		logStream: make(chan string, 8),
 	}
@@ -527,7 +527,7 @@ func dialQuery(t *testing.T, addr string) (net.Conn, *bufio.Reader) {
 	}
 	r := bufio.NewReader(conn)
 	b1 := readLine(t, r)
-	if !strings.HasPrefix(b1, "VOICX ServerQuery") {
+	if !strings.HasPrefix(b1, "NOXA ServerQuery") {
 		t.Fatalf("banner line 1 = %q", b1)
 	}
 	_ = readLine(t, r) // hint line
@@ -585,7 +585,7 @@ func TestGreeting(t *testing.T) {
 	defer closeServerQueryTestResource(t, conn)
 
 	r := bufio.NewReader(conn)
-	if line := readLine(t, r); !strings.Contains(line, "VOICX ServerQuery "+Version) {
+	if line := readLine(t, r); !strings.Contains(line, "NOXA ServerQuery "+Version) {
 		t.Fatalf("banner = %q", line)
 	}
 	if line := readLine(t, r); !strings.Contains(line, "help") {
@@ -668,7 +668,7 @@ func TestServerinfo(t *testing.T) {
 
 	lines := sendCmd(t, conn, r, "serverinfo")
 	row := lines[0]
-	for _, want := range []string{`virtualserver_name=voicx\stest`, "virtualserver_uptime=90", "virtualserver_clientsonline=1", "virtualserver_maxclients=1024", "virtualserver_channels_online=1"} {
+	for _, want := range []string{`virtualserver_name=noxa\stest`, "virtualserver_uptime=90", "virtualserver_clientsonline=1", "virtualserver_maxclients=1024", "virtualserver_channels_online=1"} {
 		if !strings.Contains(row, want) {
 			t.Errorf("serverinfo row %q missing %q", row, want)
 		}
@@ -870,7 +870,7 @@ func TestUnknownLoginMatchesWrongPasswordAndIsLimited(t *testing.T) {
 		t.Fatalf("gather metrics: %v", err)
 	}
 	for _, family := range families {
-		if family.GetName() != "voicx_auth_failures_total" {
+		if family.GetName() != "noxa_auth_failures_total" {
 			continue
 		}
 		if len(family.GetMetric()) != 1 || family.GetMetric()[0].GetCounter().GetValue() != 2 {

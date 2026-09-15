@@ -17,8 +17,8 @@ import (
 	"testing"
 	"time"
 
-	"voicx/internal/netproto"
-	"voicx/internal/tlscert"
+	"noxa/internal/netproto"
+	"noxa/internal/tlscert"
 )
 
 // startTLSServer starts a TLS file-transfer server on an ephemeral port and

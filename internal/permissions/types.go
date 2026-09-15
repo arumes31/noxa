@@ -1,5 +1,5 @@
 // Package permissions implements the TeamSpeak 3-style permission model
-// for voicx. It defines the permission keys, the five-tier evaluation
+// for noxa. It defines the permission keys, the five-tier evaluation
 // hierarchy, and the resolver that determines the effective value of a
 // permission for a client in a given channel context.
 //

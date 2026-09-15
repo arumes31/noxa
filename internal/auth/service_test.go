@@ -11,7 +11,7 @@ import (
 
 	"go.uber.org/zap"
 
-	"voicx/internal/store"
+	"noxa/internal/store"
 )
 
 func TestAuthenticateIdentifierVerifiesExactlyOnce(t *testing.T) {
@@ -130,9 +130,9 @@ func testAuthService(t *testing.T) *AuthService {
 func testAuthServiceWithStore(t *testing.T) (*AuthService, *store.Store) {
 	t.Helper()
 
-	dbURL := os.Getenv("VOICX_TEST_DATABASE_URL")
+	dbURL := os.Getenv("NOXA_TEST_DATABASE_URL")
 	if dbURL == "" {
-		dbURL = "postgres://voicx:voicx@localhost:5432/voicx?sslmode=disable"
+		dbURL = "postgres://noxa:noxa@localhost:5432/noxa?sslmode=disable"
 	}
 
 	logger, err := zap.NewDevelopment()
@@ -142,7 +142,7 @@ func testAuthServiceWithStore(t *testing.T) (*AuthService, *store.Store) {
 
 	s, err := store.New(dbURL, logger, 5, 1, time.Minute)
 	if err != nil {
-		if os.Getenv("VOICX_TEST_DATABASE_URL") != "" {
+		if os.Getenv("NOXA_TEST_DATABASE_URL") != "" {
 			t.Fatalf("configured database unavailable: %v", err)
 		}
 		t.Skipf("database unavailable, skipping: %v", err)

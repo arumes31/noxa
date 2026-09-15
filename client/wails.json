@@ -1,20 +1,20 @@
 {
   "$schema": "https://wails.io/schemas/config.v2.json",
-  "name": "voicx",
-  "outputfilename": "voicx",
+  "name": "noxa",
+  "outputfilename": "noxa",
   "info": {
-    "companyName": "VoicX",
-    "productName": "voicx",
+    "companyName": "noXa",
+    "productName": "noXa",
     "productVersion": "0.4.3",
-    "copyright": "Copyright 2026 VoicX",
-    "comments": "VoicX desktop voice and collaboration client"
+    "copyright": "Copyright 2026 noXa",
+    "comments": "noXa desktop voice and collaboration client"
   },
   "frontend:install": "npm install",
   "frontend:build": "npm run build",
   "frontend:dev:watcher": "npm run dev",
   "frontend:dev:serverUrl": "auto",
   "author": {
-    "name": "voicx",
-    "email": "noreply@voicx.local"
+    "name": "noxa",
+    "email": "noreply@noxa.local"
   }
 }

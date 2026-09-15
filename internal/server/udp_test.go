@@ -13,9 +13,9 @@ import (
 	"go.uber.org/zap/zapcore"
 	"go.uber.org/zap/zaptest/observer"
 
-	"voicx/internal/config"
-	"voicx/internal/metrics"
-	"voicx/internal/netproto"
+	"noxa/internal/config"
+	"noxa/internal/metrics"
+	"noxa/internal/netproto"
 )
 
 // freeUDPPort returns a UDP address string bound to an ephemeral free port
@@ -204,7 +204,7 @@ func TestUDPServerRateLimitReportsStatsAndMetrics(t *testing.T) {
 	}
 	values := map[string]float64{}
 	for _, family := range families {
-		if family.GetName() == "voicx_udp_packets_rate_limited_total" || family.GetName() == "voicx_udp_packets_dropped_total" {
+		if family.GetName() == "noxa_udp_packets_rate_limited_total" || family.GetName() == "noxa_udp_packets_dropped_total" {
 			values[family.GetName()] = family.GetMetric()[0].GetCounter().GetValue()
 		}
 	}
@@ -274,7 +274,7 @@ func TestUDPWorkerRecoversOnePacketPanicAndContinues(t *testing.T) {
 		t.Fatalf("Gather: %v", err)
 	}
 	for _, family := range families {
-		if family.GetName() == "voicx_udp_packets_dropped_total" {
+		if family.GetName() == "noxa_udp_packets_dropped_total" {
 			if got := family.GetMetric()[0].GetCounter().GetValue(); got != 2 {
 				t.Fatalf("Prometheus dropped packets = %v, want 2", got)
 			}

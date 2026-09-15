@@ -11,7 +11,7 @@ import (
 	"github.com/lib/pq"
 	"go.uber.org/zap"
 
-	"voicx/internal/store"
+	"noxa/internal/store"
 )
 
 // ErrUserExists is returned by RegisterUser when a user with the same unique ID

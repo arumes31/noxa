@@ -1,6 +1,6 @@
 # Build Directory
 
-VoicX branding uses `appicon.png` (1024 × 1024 transparent PNG) and
+noXa branding uses `appicon.png` (1024 × 1024 transparent PNG) and
 `windows/icon.ico` (16, 24, 32, 48, 64, 128, and 256 px). Both are derived
 from `../frontend/public/branding/logo.png`. The same ICO is also served as
 the frontend favicon. Replace these together when changing the logo, then
@@ -12,7 +12,7 @@ minus), both muted (red cross), and talking with audio muted. Native icons and
 tooltips update only on state changes. Speech comes from the active session's
 detected speaking state, not simply from holding the push-to-talk key.
 
-The Windows application is named `voicx` and builds to `bin/voicx.exe`. Release
+The Windows application is named `noxa` and builds to `bin/noxa.exe`. Release
 assets retain their client/platform suffix so existing automatic updates work.
 
 The build directory is used to house all the build files and assets for your application. 

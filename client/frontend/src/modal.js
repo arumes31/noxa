@@ -77,7 +77,7 @@ function syncDialogSemantics(overlay) {
     if (overlay.hasAttribute("aria-label")) return;
     const title = titleElement(overlay);
     if (title) {
-        if (!title.id) title.id = `voicx-dialog-title-${++titleSerial}`;
+        if (!title.id) title.id = `noxa-dialog-title-${++titleSerial}`;
         overlay.setAttribute("aria-labelledby", title.id);
     } else {
         overlay.removeAttribute("aria-labelledby");
@@ -91,7 +91,7 @@ function topRecord() {
 }
 
 function activeServerGeneration() {
-    return Number(globalThis.window?.__voicx?.state?.serverGeneration || 0);
+    return Number(globalThis.window?.__noxa?.state?.serverGeneration || 0);
 }
 
 function serverGenerationFor(options) {
@@ -308,7 +308,7 @@ export function closeDialog(overlay, reason = "close") {
     if (reason === "cancel" && overlay.dataset.blocking === "true") return false;
     record.closing = true;
     if (reason === "cancel") {
-        const legacy = new Event("voicx-dialog-cancel", { cancelable: true });
+        const legacy = new Event("noxa-dialog-cancel", { cancelable: true });
         const legacyAllowed = overlay.dispatchEvent(legacy);
         if (!record.active) return true;
         if (!legacyAllowed && !record.onCancel) {

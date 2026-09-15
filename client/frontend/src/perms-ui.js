@@ -3,12 +3,13 @@
 // icons), the audit log viewer, and the ban list dialog. All views degrade
 // gracefully for non-privileged users (read-only notice instead of controls).
 import { pickIcon } from "./image-tools.js";
+import { copyToClipboard } from "./clipboard.js";
 import { closeDialog, isCurrentServerDialog, mountServerDialog, registerDialogLifecycle } from "./modal.js";
 import { imageDataURL } from "./safe-media.js";
 import { parseRuntimeObject } from "./runtime-json.js";
 import { openChannelEdit } from "./clientinfo.js";
 
-const V = () => window.__voicx;
+const V = () => window.__noxa;
 const App = () => window.go.main.App;
 
 // Permission key catalog (internal/permissions/types.go). The grid shows
@@ -1204,9 +1205,9 @@ async function renderMembers() {
         doAssign(uid);
     };
 
-    // Drag & drop from the channel tree (140): rows carry text/voicx-uid.
+    // Drag & drop from the channel tree (140): rows carry text/noxa-uid.
     area.ondragover = (e) => {
-        if (e.dataTransfer.types.includes("text/voicx-uid")) {
+        if (e.dataTransfer.types.includes("text/noxa-uid")) {
             e.preventDefault();
             area.classList.add("drop-active");
         }
@@ -1215,7 +1216,7 @@ async function renderMembers() {
     area.ondrop = (e) => {
         e.preventDefault();
         area.classList.remove("drop-active");
-        const uid = e.dataTransfer.getData("text/voicx-uid");
+        const uid = e.dataTransfer.getData("text/noxa-uid");
         doAssign(uid);
     };
 }
@@ -1495,16 +1496,16 @@ async function openComplaints() {
 // --- invite links (176) -----------------------------------------------------------
 
 // inviteLink builds the handoff URL for a privilege key. Registering the
-// voicx:// scheme with the OS is an installer concern; generation and parsing
+// noxa:// scheme with the OS is an installer concern; generation and parsing
 // live here so a pasted link works even without the protocol handler.
 function inviteLink(addr, token) {
-    return "voicx://" + addr + "?token=" + encodeURIComponent(token);
+    return "noxa://" + addr + "?token=" + encodeURIComponent(token);
 }
 
-// parseInviteLink reads voicx://host:port?token=… back into its parts
+// parseInviteLink reads noxa://host:port?token=… back into its parts
 // (null when the string is not an invite link).
 function parseInviteLink(url) {
-    const m = /^voicx:\/\/([^/?#]+)\/?(?:\?(.*))?$/i.exec(String(url || "").trim());
+    const m = /^noxa:\/\/([^/?#]+)\/?(?:\?(.*))?$/i.exec(String(url || "").trim());
     if (!m) return null;
     const token = new URLSearchParams(m[2] || "").get("token") || "";
     return { addr: m[1], token };
@@ -1811,17 +1812,6 @@ const canTokenList = () => hasPerm("b_virtualserver_token_list");
 const canTokenAdd = () => hasPerm("b_virtualserver_token_add");
 const canTokenDelete = () => hasPerm("b_virtualserver_token_delete");
 
-// copyText copies to the clipboard and reports without echoing the value —
-// a privilege key must never reach a toast or a log line.
-async function copyText(value, what) {
-    try {
-        await navigator.clipboard.writeText(value);
-        V().toast(what + " copied to the clipboard");
-    } catch {
-        V().toast("clipboard unavailable", "warn");
-    }
-}
-
 // openTokenShare shows the handoff surface for one key: the raw key, the
 // invite link, and a QR of the link.
 function openTokenShare(token) {
@@ -1849,13 +1839,13 @@ function openTokenShare(token) {
     if (svg) {
         q(".tk-qr").innerHTML = svg;
         q(".tk-qr-note").textContent = addr
-            ? "Scan or paste the link into voicx to redeem."
+            ? "Scan or paste the link into noXa to redeem."
             : "Not connected — the link has no server address; copy the key instead.";
     } else {
         q(".tk-qr-note").textContent = "link too long for a QR code — copy it instead";
     }
-    q(".tk-copy-key").onclick = () => copyText(token, "key");
-    q(".tk-copy-link").onclick = () => copyText(link, "invite link");
+    q(".tk-copy-key").onclick = () => copyToClipboard(token, { success: "key copied to the clipboard", isCurrent: () => overlay.isConnected });
+    q(".tk-copy-link").onclick = () => copyToClipboard(link, { success: "invite link copied to the clipboard", isCurrent: () => overlay.isConnected });
     q(".dlg-ok").onclick = () => overlay.remove();
 }
 
@@ -2011,14 +2001,14 @@ function redeemPendingToken() {
     redeemToken(token);
 }
 
-// openTokenRedeem takes a raw key or a voicx:// invite link. This is the only
+// openTokenRedeem takes a raw key or a noxa:// invite link. This is the only
 // path that can redeem the bootstrap admin key printed at first server start.
 function openTokenRedeem() {
     const { overlay, q } = modal("confirm-dlg", `
         <h3>Use a privilege key</h3>
         <div class="dlg-text">
-            <p class="pm-dim">Paste a privilege key or a <span class="mono">voicx://</span> invite link. Any connected user can redeem a valid key.</p>
-            <input class="dlg-input mono tk-use-input" placeholder="key or voicx://host:port?token=…" />
+            <p class="pm-dim">Paste a privilege key or a <span class="mono">noxa://</span> invite link. Any connected user can redeem a valid key.</p>
+            <input class="dlg-input mono tk-use-input" placeholder="key or noxa://host:port?token=…" />
             <div class="pm-dim tk-use-hint"></div>
         </div>
         <div class="dlg-buttons">
@@ -2086,7 +2076,7 @@ export function initPermsUI() {
         redeemPendingToken();
     });
 
-    window.__voicxPerms = {
+    window.__noxaPerms = {
         openPermissionManager, openAuditViewer, openBanList, openChatFilters,
         refreshChannelPermissions,
         openComplaints, openTokenManager, openTokenRedeem,

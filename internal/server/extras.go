@@ -13,10 +13,10 @@ import (
 
 	"go.uber.org/zap"
 
-	"voicx/internal/channels"
-	"voicx/internal/netproto"
-	"voicx/internal/permissions"
-	"voicx/internal/store"
+	"noxa/internal/channels"
+	"noxa/internal/netproto"
+	"noxa/internal/permissions"
+	"noxa/internal/store"
 )
 
 // maxImageBytes is the maximum decoded size of an avatar or channel icon.

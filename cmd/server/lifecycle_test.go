@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"voicx/internal/config"
+	"noxa/internal/config"
 )
 
 func TestStartServiceReportsEveryExit(t *testing.T) {

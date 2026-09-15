@@ -14,7 +14,7 @@ const (
 	MaxSize = 1 << 20
 
 	// VersionPrefix identifies the signed release version in a manifest.
-	VersionPrefix = "# voicx-version: "
+	VersionPrefix = "# noxa-version: "
 )
 
 // Verify authenticates a detached, base64-encoded Ed25519 signature with one

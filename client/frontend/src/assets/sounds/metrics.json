@@ -1,0 +1,194 @@
+{
+  "connection_connected": {
+    "duration": 0.21,
+    "peak": 0.06866455078125,
+    "rmsDB": -36.00027957463898,
+    "targetRmsDB": -36
+  },
+  "connection_reconnected": {
+    "duration": 0.135,
+    "peak": 0.056915283203125,
+    "rmsDB": -38.00031840614033,
+    "targetRmsDB": -38
+  },
+  "connection_disconnected": {
+    "duration": 0.16,
+    "peak": 0.06610107421875,
+    "rmsDB": -37.00027011422871,
+    "targetRmsDB": -37
+  },
+  "connection_lost": {
+    "duration": 0.225,
+    "peak": 0.110260009765625,
+    "rmsDB": -33.00024681288407,
+    "targetRmsDB": -33
+  },
+  "connection_reconnecting": {
+    "duration": 0.11,
+    "peak": 0.02862548828125,
+    "rmsDB": -44.00022293741189,
+    "targetRmsDB": -44
+  },
+  "connection_failed": {
+    "duration": 0.18,
+    "peak": 0.103179931640625,
+    "rmsDB": -33.000238104238235,
+    "targetRmsDB": -33
+  },
+  "server_error": {
+    "duration": 0.145,
+    "peak": 0.080169677734375,
+    "rmsDB": -35.000301248191896,
+    "targetRmsDB": -35
+  },
+  "own_channel_join": {
+    "duration": 0.185,
+    "peak": 0.056610107421875,
+    "rmsDB": -38.0002351352565,
+    "targetRmsDB": -38
+  },
+  "own_channel_switch": {
+    "duration": 0.15,
+    "peak": 0.0531005859375,
+    "rmsDB": -39.000192223360834,
+    "targetRmsDB": -39
+  },
+  "own_channel_leave": {
+    "duration": 0.12,
+    "peak": 0.051025390625,
+    "rmsDB": -39.00011915953539,
+    "targetRmsDB": -39
+  },
+  "user_join": {
+    "duration": 0.09,
+    "peak": 0.03009033203125,
+    "rmsDB": -43.000286557336494,
+    "targetRmsDB": -43
+  },
+  "user_leave": {
+    "duration": 0.095,
+    "peak": 0.032623291015625,
+    "rmsDB": -43.000468320821874,
+    "targetRmsDB": -43
+  },
+  "user_move_in": {
+    "duration": 0.13,
+    "peak": 0.03509521484375,
+    "rmsDB": -43.000260042982966,
+    "targetRmsDB": -43
+  },
+  "user_move_out": {
+    "duration": 0.135,
+    "peak": 0.03515625,
+    "rmsDB": -43.00054407497911,
+    "targetRmsDB": -43
+  },
+  "mic_on": {
+    "duration": 0.07,
+    "peak": 0.030242919921875,
+    "rmsDB": -44.00020702072987,
+    "targetRmsDB": -44
+  },
+  "mic_off": {
+    "duration": 0.075,
+    "peak": 0.027496337890625,
+    "rmsDB": -44.000053536876784,
+    "targetRmsDB": -44
+  },
+  "deafen_on": {
+    "duration": 0.12,
+    "peak": 0.04095458984375,
+    "rmsDB": -42.000170346081674,
+    "targetRmsDB": -42
+  },
+  "deafen_off": {
+    "duration": 0.125,
+    "peak": 0.03570556640625,
+    "rmsDB": -42.00034877080405,
+    "targetRmsDB": -42
+  },
+  "ptt_on": {
+    "duration": 0.028,
+    "peak": 0.01202392578125,
+    "rmsDB": -49.00025939042556,
+    "targetRmsDB": -49
+  },
+  "ptt_off": {
+    "duration": 0.034,
+    "peak": 0.014495849609375,
+    "rmsDB": -49.00091636928073,
+    "targetRmsDB": -49
+  },
+  "mention": {
+    "duration": 0.165,
+    "peak": 0.072845458984375,
+    "rmsDB": -36.00016887637146,
+    "targetRmsDB": -36
+  },
+  "keyword": {
+    "duration": 0.12,
+    "peak": 0.050445556640625,
+    "rmsDB": -40.00018126050109,
+    "targetRmsDB": -40
+  },
+  "dm": {
+    "duration": 0.185,
+    "peak": 0.048583984375,
+    "rmsDB": -40.000300563618715,
+    "targetRmsDB": -40
+  },
+  "channel_message": {
+    "duration": 0.085,
+    "peak": 0.025146484375,
+    "rmsDB": -45.000175907402905,
+    "targetRmsDB": -45
+  },
+  "whisper": {
+    "duration": 0.14,
+    "peak": 0.053863525390625,
+    "rmsDB": -39.00031665578885,
+    "targetRmsDB": -39
+  },
+  "poke": {
+    "duration": 0.115,
+    "peak": 0.0760498046875,
+    "rmsDB": -36.00026721469439,
+    "targetRmsDB": -36
+  },
+  "join_leave": {
+    "duration": 0.1,
+    "peak": 0.0264892578125,
+    "rmsDB": -43.99994635116522,
+    "targetRmsDB": -44
+  },
+  "buddy_online": {
+    "duration": 0.15,
+    "peak": 0.043670654296875,
+    "rmsDB": -41.000239160636625,
+    "targetRmsDB": -41
+  },
+  "kick": {
+    "duration": 0.155,
+    "peak": 0.1119384765625,
+    "rmsDB": -33.00023532148767,
+    "targetRmsDB": -33
+  },
+  "ban": {
+    "duration": 0.22,
+    "peak": 0.10809326171875,
+    "rmsDB": -33.00029743755714,
+    "targetRmsDB": -33
+  },
+  "announcement": {
+    "duration": 0.24,
+    "peak": 0.084503173828125,
+    "rmsDB": -34.0002737337806,
+    "targetRmsDB": -34
+  },
+  "channel_watch": {
+    "duration": 0.15,
+    "peak": 0.031707763671875,
+    "rmsDB": -44.00005744562111,
+    "targetRmsDB": -44
+  }
+}

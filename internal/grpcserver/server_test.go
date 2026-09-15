@@ -18,11 +18,11 @@ import (
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 
-	"voicx/internal/auth"
-	"voicx/internal/eventbus"
-	"voicx/internal/metrics"
-	"voicx/internal/query"
-	voicxv1 "voicx/v1"
+	"noxa/internal/auth"
+	"noxa/internal/eventbus"
+	"noxa/internal/metrics"
+	"noxa/internal/query"
+	noxav1 "noxa/v1"
 )
 
 // stubBackend implements query.Backend far enough for the RPCs served here.
@@ -191,16 +191,16 @@ func TestControlRPCs(t *testing.T) {
 	}}
 	bus := eventbus.New(zap.NewNop())
 	defer bus.Close()
-	client := voicxv1.NewControlClient(dialGRPC(t, startGRPC(t, backend, bus)))
+	client := noxav1.NewControlClient(dialGRPC(t, startGRPC(t, backend, bus)))
 
-	auth, err := client.Authenticate(context.Background(), &voicxv1.AuthenticateRequest{
+	auth, err := client.Authenticate(context.Background(), &noxav1.AuthenticateRequest{
 		Username: "admin-uid", Password: "pw",
 	})
 	if err != nil || auth.GetUserId() != "admin-uid" {
 		t.Fatalf("Authenticate = %+v (err %v)", auth, err)
 	}
 	// A non-admin login is indistinguishable from invalid credentials.
-	_, err = client.Authenticate(context.Background(), &voicxv1.AuthenticateRequest{
+	_, err = client.Authenticate(context.Background(), &noxav1.AuthenticateRequest{
 		Username: "user-uid", Password: "pw",
 	})
 	if status.Code(err) != codes.Unauthenticated {
@@ -208,7 +208,7 @@ func TestControlRPCs(t *testing.T) {
 	}
 
 	ctx := authCtx(t, "admin-uid", "pw")
-	list, err := client.ListChannels(ctx, &voicxv1.ListChannelsRequest{})
+	list, err := client.ListChannels(ctx, &noxav1.ListChannelsRequest{})
 	if err != nil || len(list.GetChannels()) != 3 {
 		t.Fatalf("ListChannels = %+v (err %v)", list, err)
 	}
@@ -217,12 +217,12 @@ func TestControlRPCs(t *testing.T) {
 	}
 
 	// root_channel_id narrows the tree to that subtree.
-	sub, err := client.ListChannels(ctx, &voicxv1.ListChannelsRequest{RootChannelId: "1"})
+	sub, err := client.ListChannels(ctx, &noxav1.ListChannelsRequest{RootChannelId: "1"})
 	if err != nil || len(sub.GetChannels()) != 2 {
 		t.Fatalf("subtree = %+v (err %v)", sub, err)
 	}
 
-	created, err := client.CreateChannel(ctx, &voicxv1.CreateChannelRequest{
+	created, err := client.CreateChannel(ctx, &noxav1.CreateChannelRequest{
 		Name: "New", ParentId: "7", MaxClients: 11, Permanent: true,
 	})
 	if err != nil || created.GetChannelId() != "42" || backend.created != (query.ChannelCreateParams{
@@ -230,31 +230,31 @@ func TestControlRPCs(t *testing.T) {
 	}) {
 		t.Fatalf("CreateChannel = %+v (err %v)", created, err)
 	}
-	if _, err := client.CreateChannel(ctx, &voicxv1.CreateChannelRequest{}); status.Code(err) != codes.InvalidArgument {
+	if _, err := client.CreateChannel(ctx, &noxav1.CreateChannelRequest{}); status.Code(err) != codes.InvalidArgument {
 		t.Fatalf("CreateChannel without a name = %v", err)
 	}
 
-	if _, err := client.DeleteChannel(ctx, &voicxv1.DeleteChannelRequest{ChannelId: "2", Reason: "removed"}); err != nil {
+	if _, err := client.DeleteChannel(ctx, &noxav1.DeleteChannelRequest{ChannelId: "2", Reason: "removed"}); err != nil {
 		t.Fatalf("DeleteChannel: %v", err)
 	}
 	if backend.deleted != 2 || backend.deleteReason != "removed" {
 		t.Fatalf("deleted channel = %d reason %q", backend.deleted, backend.deleteReason)
 	}
 
-	perms, err := client.QueryPermissions(ctx, &voicxv1.QueryPermissionsRequest{UserId: "user-uid"})
+	perms, err := client.QueryPermissions(ctx, &noxav1.QueryPermissionsRequest{UserId: "user-uid"})
 	if err != nil {
 		t.Fatalf("QueryPermissions: %v", err)
 	}
-	if len(perms.GetGranted()) != 1 || perms.GetGranted()[0] != voicxv1.Permission_PERMISSION_SPEAK {
+	if len(perms.GetGranted()) != 1 || perms.GetGranted()[0] != noxav1.Permission_PERMISSION_SPEAK {
 		t.Fatalf("granted = %v", perms.GetGranted())
 	}
-	if len(perms.GetDenied()) != 1 || perms.GetDenied()[0] != voicxv1.Permission_PERMISSION_BAN {
+	if len(perms.GetDenied()) != 1 || perms.GetDenied()[0] != noxav1.Permission_PERMISSION_BAN {
 		t.Fatalf("denied = %v", perms.GetDenied())
 	}
-	if _, err := client.QueryPermissions(ctx, &voicxv1.QueryPermissionsRequest{UserId: "missing"}); status.Code(err) != codes.NotFound || status.Convert(err).Message() != "user not found" {
+	if _, err := client.QueryPermissions(ctx, &noxav1.QueryPermissionsRequest{UserId: "missing"}); status.Code(err) != codes.NotFound || status.Convert(err).Message() != "user not found" {
 		t.Fatalf("missing-user QueryPermissions = %v", err)
 	}
-	if _, err := client.QueryPermissions(ctx, &voicxv1.QueryPermissionsRequest{UserId: "perm-boom"}); status.Code(err) != codes.Internal || status.Convert(err).Message() != "internal error" {
+	if _, err := client.QueryPermissions(ctx, &noxav1.QueryPermissionsRequest{UserId: "perm-boom"}); status.Code(err) != codes.Internal || status.Convert(err).Message() != "internal error" {
 		t.Fatalf("backend-error QueryPermissions = %v", err)
 	}
 }
@@ -320,7 +320,7 @@ func TestListChannelsPreservesCanonicalInputOrder(t *testing.T) {
 	}}
 	bus := eventbus.New(zap.NewNop())
 	defer bus.Close()
-	client := voicxv1.NewControlClient(dialGRPC(t, startGRPC(t, backend, bus)))
+	client := noxav1.NewControlClient(dialGRPC(t, startGRPC(t, backend, bus)))
 	ctx := authCtx(t, "admin-uid", "pw")
 	for _, test := range []struct {
 		root string
@@ -330,7 +330,7 @@ func TestListChannelsPreservesCanonicalInputOrder(t *testing.T) {
 		{root: "1", want: []string{"4", "2", "1", "3"}},
 		{root: "99", want: nil},
 	} {
-		response, err := client.ListChannels(ctx, &voicxv1.ListChannelsRequest{RootChannelId: test.root})
+		response, err := client.ListChannels(ctx, &noxav1.ListChannelsRequest{RootChannelId: test.root})
 		if err != nil {
 			t.Fatalf("ListChannels(root=%q): %v", test.root, err)
 		}
@@ -347,7 +347,7 @@ func TestListChannelsPreservesCanonicalInputOrder(t *testing.T) {
 func TestCreateChannelTrimsNameBeforeBackend(t *testing.T) {
 	backend := &stubBackend{}
 	service := &controlService{backend: backend, logger: zap.NewNop()}
-	response, err := service.CreateChannel(context.Background(), &voicxv1.CreateChannelRequest{Name: "  Lobby  "})
+	response, err := service.CreateChannel(context.Background(), &noxav1.CreateChannelRequest{Name: "  Lobby  "})
 	if err != nil || !response.GetSuccess() || backend.created.Name != "Lobby" {
 		t.Fatalf("CreateChannel = %+v, backend name = %q, err = %v", response, backend.created.Name, err)
 	}
@@ -380,7 +380,7 @@ func TestListChannelsSkipsInvalidCounts(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			service := &controlService{backend: &stubBackend{channels: []query.ChannelInfo{test.channel}}, logger: zap.NewNop()}
-			response, err := service.ListChannels(context.Background(), &voicxv1.ListChannelsRequest{})
+			response, err := service.ListChannels(context.Background(), &noxav1.ListChannelsRequest{})
 			if err != nil || len(response.GetChannels()) != 0 {
 				t.Fatalf("ListChannels() = %+v, %v; want an empty successful response", response, err)
 			}
@@ -389,11 +389,11 @@ func TestListChannelsSkipsInvalidCounts(t *testing.T) {
 }
 
 func TestSubscribedTypesRejectsAllUnknownFilter(t *testing.T) {
-	all, wanted, err := subscribedTypes(&voicxv1.SubscribeEventsRequest{})
+	all, wanted, err := subscribedTypes(&noxav1.SubscribeEventsRequest{})
 	if err != nil || len(all) != len(allBusTypes) || wanted != nil {
 		t.Fatalf("empty filter = %v, %v, %v", all, wanted, err)
 	}
-	_, _, err = subscribedTypes(&voicxv1.SubscribeEventsRequest{EventTypes: []voicxv1.EventType{voicxv1.EventType(999)}})
+	_, _, err = subscribedTypes(&noxav1.SubscribeEventsRequest{EventTypes: []noxav1.EventType{noxav1.EventType(999)}})
 	if status.Code(err) != codes.InvalidArgument {
 		t.Fatalf("unknown-only filter error = %v", err)
 	}
@@ -473,11 +473,11 @@ func TestGRPCUnknownCredentialsMatchWrongPasswordAndAreMetered(t *testing.T) {
 	backend := &stubBackend{}
 	bus := eventbus.New(zap.NewNop())
 	defer bus.Close()
-	control := voicxv1.NewControlClient(dialGRPC(t, startGRPC(t, backend, bus)))
+	control := noxav1.NewControlClient(dialGRPC(t, startGRPC(t, backend, bus)))
 
 	var firstMessage string
 	for _, credentials := range [][2]string{{"admin-uid", "wrong"}, {"unknown-principal", "wrong"}} {
-		_, err := control.ListChannels(authCtx(t, credentials[0], credentials[1]), &voicxv1.ListChannelsRequest{})
+		_, err := control.ListChannels(authCtx(t, credentials[0], credentials[1]), &noxav1.ListChannelsRequest{})
 		if status.Code(err) != codes.Unauthenticated {
 			t.Fatalf("credentials %q: %v, want Unauthenticated", credentials[0], err)
 		}
@@ -503,7 +503,7 @@ func TestGRPCUnknownCredentialsMatchWrongPasswordAndAreMetered(t *testing.T) {
 		t.Fatalf("gather metrics: %v", err)
 	}
 	for _, family := range families {
-		if family.GetName() == "voicx_auth_failures_total" && len(family.GetMetric()) == 1 &&
+		if family.GetName() == "noxa_auth_failures_total" && len(family.GetMetric()) == 1 &&
 			family.GetMetric()[0].GetCounter().GetValue() == 2 {
 			return
 		}
@@ -521,21 +521,21 @@ func TestParseBasicRejectsOversizedMetadataBeforeDecoding(t *testing.T) {
 func TestGRPCRejectsOversizedAndMultipleAuthorizationMetadata(t *testing.T) {
 	bus := eventbus.New(zap.NewNop())
 	defer bus.Close()
-	control := voicxv1.NewControlClient(dialGRPC(t, startGRPC(t, &stubBackend{}, bus)))
+	control := noxav1.NewControlClient(dialGRPC(t, startGRPC(t, &stubBackend{}, bus)))
 
 	valid := "Basic " + base64.StdEncoding.EncodeToString([]byte("admin-uid:pw"))
 	multiple := metadata.AppendToOutgoingContext(context.Background(),
 		"authorization", valid,
 		"authorization", valid,
 	)
-	if _, err := control.ListChannels(multiple, &voicxv1.ListChannelsRequest{}); status.Code(err) != codes.Unauthenticated {
+	if _, err := control.ListChannels(multiple, &noxav1.ListChannelsRequest{}); status.Code(err) != codes.Unauthenticated {
 		t.Fatalf("multiple authorization values = %v, want Unauthenticated", err)
 	}
 
 	overlong := metadata.AppendToOutgoingContext(context.Background(),
 		"authorization", "Basic "+strings.Repeat("A", maxHeaderListBytes*2),
 	)
-	if _, err := control.ListChannels(overlong, &voicxv1.ListChannelsRequest{}); err == nil {
+	if _, err := control.ListChannels(overlong, &noxav1.ListChannelsRequest{}); err == nil {
 		t.Fatal("oversized authorization metadata was accepted")
 	}
 }
@@ -544,9 +544,9 @@ func TestGRPCTransportLimitsRejectOversizedRequestsAndMetadataBeforeBackend(t *t
 	backend := &stubBackend{}
 	bus := eventbus.New(zap.NewNop())
 	defer bus.Close()
-	control := voicxv1.NewControlClient(dialGRPC(t, startGRPC(t, backend, bus)))
+	control := noxav1.NewControlClient(dialGRPC(t, startGRPC(t, backend, bus)))
 
-	_, err := control.CreateChannel(authCtx(t, "admin-uid", "pw"), &voicxv1.CreateChannelRequest{
+	_, err := control.CreateChannel(authCtx(t, "admin-uid", "pw"), &noxav1.CreateChannelRequest{
 		Name: strings.Repeat("x", maxReceiveMessageBytes),
 	})
 	if status.Code(err) != codes.ResourceExhausted {
@@ -556,7 +556,7 @@ func TestGRPCTransportLimitsRejectOversizedRequestsAndMetadataBeforeBackend(t *t
 		t.Fatalf("backend created %q for an oversized request", backend.created.Name)
 	}
 
-	_, err = control.CreateChannel(authCtx(t, "admin-uid", "pw"), &voicxv1.CreateChannelRequest{
+	_, err = control.CreateChannel(authCtx(t, "admin-uid", "pw"), &noxav1.CreateChannelRequest{
 		Name:     "small",
 		Metadata: map[string]string{"x-test-oversized": strings.Repeat("x", maxReceiveMessageBytes)},
 	})
@@ -615,7 +615,7 @@ func TestGRPCListChannelsCancellationPropagatesToBackend(t *testing.T) {
 			}}
 			bus := eventbus.New(zap.NewNop())
 			defer bus.Close()
-			control := voicxv1.NewControlClient(dialGRPC(t, startGRPC(t, backend, bus)))
+			control := noxav1.NewControlClient(dialGRPC(t, startGRPC(t, backend, bus)))
 
 			ctx, cancel := tc.newCtx()
 			defer cancel()
@@ -623,7 +623,7 @@ func TestGRPCListChannelsCancellationPropagatesToBackend(t *testing.T) {
 			ctx = withAuth(ctx)
 			done := make(chan error, 1)
 			go func() {
-				_, err := control.ListChannels(ctx, &voicxv1.ListChannelsRequest{})
+				_, err := control.ListChannels(ctx, &noxav1.ListChannelsRequest{})
 				done <- err
 			}()
 			select {
@@ -674,7 +674,7 @@ func TestUnauthenticatedRPCsAreRefused(t *testing.T) {
 	bus := eventbus.New(zap.NewNop())
 	defer bus.Close()
 	conn := dialGRPC(t, startGRPC(t, &stubBackend{}, bus))
-	control := voicxv1.NewControlClient(conn)
+	control := noxav1.NewControlClient(conn)
 
 	for _, tc := range []struct {
 		name string
@@ -686,14 +686,14 @@ func TestUnauthenticatedRPCsAreRefused(t *testing.T) {
 		{"not an admin", authCtx(t, "user-uid", "pw"), codes.Unauthenticated},
 		{"backend error", authCtx(t, "boom", "pw"), codes.Internal},
 	} {
-		_, err := control.ListChannels(tc.ctx, &voicxv1.ListChannelsRequest{})
+		_, err := control.ListChannels(tc.ctx, &noxav1.ListChannelsRequest{})
 		if status.Code(err) != tc.want {
 			t.Fatalf("%s: code = %v, want %v", tc.name, status.Code(err), tc.want)
 		}
 	}
 
 	// Streams are gated by the same rule.
-	stream, err := voicxv1.NewEventsClient(conn).Subscribe(context.Background(), &voicxv1.SubscribeEventsRequest{})
+	stream, err := noxav1.NewEventsClient(conn).Subscribe(context.Background(), &noxav1.SubscribeEventsRequest{})
 	if err == nil {
 		_, err = stream.Recv()
 	}
@@ -707,8 +707,8 @@ func TestUnauthenticatedRPCsAreRefused(t *testing.T) {
 func TestFileTransferRPCsAreUnimplemented(t *testing.T) {
 	bus := eventbus.New(zap.NewNop())
 	defer bus.Close()
-	client := voicxv1.NewControlClient(dialGRPC(t, startGRPC(t, &stubBackend{}, bus)))
-	_, err := client.StartFileTransfer(authCtx(t, "admin-uid", "pw"), &voicxv1.StartFileTransferRequest{})
+	client := noxav1.NewControlClient(dialGRPC(t, startGRPC(t, &stubBackend{}, bus)))
+	_, err := client.StartFileTransfer(authCtx(t, "admin-uid", "pw"), &noxav1.StartFileTransferRequest{})
 	if status.Code(err) != codes.Unimplemented {
 		t.Fatalf("StartFileTransfer = %v", status.Code(err))
 	}

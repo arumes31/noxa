@@ -12,9 +12,9 @@ import (
 
 	"go.uber.org/zap"
 
-	"voicx/internal/netproto"
-	"voicx/internal/permissions"
-	"voicx/internal/version"
+	"noxa/internal/netproto"
+	"noxa/internal/permissions"
+	"noxa/internal/version"
 )
 
 // Broadcast event types for presence.

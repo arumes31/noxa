@@ -16,9 +16,9 @@ import (
 
 	"go.uber.org/zap"
 
-	"voicx/internal/auth"
-	"voicx/internal/metrics"
-	"voicx/internal/version"
+	"noxa/internal/auth"
+	"noxa/internal/metrics"
+	"noxa/internal/version"
 )
 
 // Version reported by the version command and the greeting banner.
@@ -26,7 +26,7 @@ var Version = version.String()
 
 var (
 	// banner is sent on connect, one line.
-	banner = "VOICX ServerQuery " + Version
+	banner = "NOXA ServerQuery " + Version
 	// bannerHint is the second greeting line.
 	bannerHint = "type 'help' for a list of commands"
 )

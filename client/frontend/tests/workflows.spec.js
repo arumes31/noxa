@@ -1,9 +1,419 @@
 import { expect, test } from "@playwright/test";
 
+async function installSaveScenario(page, settings = {}) {
+    await page.evaluate((settings) => {
+        const app = window.go.main.App;
+        window.__noxa.state.settings = { ...window.__noxa.state.settings, ...settings };
+        window.__persistedSettings = structuredClone(window.__noxa.state.settings);
+        window.__saveAttempts = 0;
+        window.__saveMode = "pending";
+        window.go.main.App = new Proxy(app, { get(target, method) {
+            if (method === "GetSettings") return async () => {
+                if (window.__refreshError) throw new Error("refresh unavailable");
+                return structuredClone(window.__persistedSettings);
+            };
+            if (method === "SaveSettings") return async (value) => {
+                window.__saveAttempts++;
+                const snapshot = structuredClone(value);
+                if (window.__saveMode === "pending") await new Promise(resolve => { window.__finishSave = resolve; });
+                if (window.__saveMode === "reject") throw new Error("disk unavailable");
+                if (window.__saveMode === "error") return "disk full";
+                window.__persistedSettings = snapshot;
+                return "";
+            };
+            return target[method];
+        } });
+    }, settings);
+}
+
+test("offline settings save does not require a live whisper connection", async ({ page }) => {
+    await installSaveScenario(page);
+    await page.evaluate(() => {
+        window.__saveMode = "success";
+        window.__noxa.state.myClientID = "";
+        const app = window.go.main.App;
+        window.go.main.App = new Proxy(app, { get(target, method) {
+            if (method === "WhisperSet") return async () => "not connected";
+            return target[method];
+        } });
+        window.__noxa.openSettings();
+    });
+    await page.locator("#set-ok").click();
+    await expect(page.locator("#settings-overlay")).toHaveCount(0);
+    expect(await page.evaluate(() => window.__saveAttempts)).toBe(1);
+});
+
+test("bookmark retries after persistence succeeds but refreshing settings fails", async ({ page }) => {
+    await installSaveScenario(page, { bookmarks: [{ name: "Original", addr: "example.test:12333", nickname: "Alice" }] });
+    await page.evaluate(() => {
+        window.__saveMode = "success";
+        let failOnce = true;
+        const app = window.go.main.App;
+        window.go.main.App = new Proxy(app, { get(target, method) {
+            if (method === "SaveSettings") return async value => {
+                const error = await target.SaveSettings(value);
+                // The real backend emits settings_update before resolving SaveSettings.
+                for (const cb of window.__events.settings_update || []) cb(structuredClone(window.__persistedSettings));
+                if (failOnce) { window.__refreshError = true; failOnce = false; }
+                return error;
+            };
+            return target[method];
+        } });
+        window.__noxa.showWorkspace(false);
+    });
+    await page.locator("#menubar > .menu-item").filter({ hasText: /^Bookmarks/ }).click();
+    await page.getByRole("menuitem", { name: "Manage bookmarks…", exact: true }).click();
+    await page.locator(".bm-edit").click();
+    const dialog = page.getByRole("dialog", { name: "Edit bookmark", exact: true });
+    await dialog.locator(".bm-f-name").fill("Renamed");
+    await dialog.getByRole("button", { name: "Save", exact: true }).click();
+    await expect(dialog.locator(".bookmark-save-status")).toContainText("refresh unavailable");
+    await page.evaluate(() => { window.__refreshError = false; });
+    await dialog.getByRole("button", { name: "Save", exact: true }).click();
+    await expect(dialog).toHaveCount(0);
+    await expect(page.locator(".bm-name")).toHaveText("Renamed");
+});
+
+test("settings save blocks duplicates, retains draft after failure and retries", async ({ page }) => {
+    const errors = [];
+    page.on("pageerror", error => errors.push(error.message));
+    await installSaveScenario(page);
+    await page.evaluate(() => window.__noxa.openSettings());
+    const dialog = page.locator("#settings-overlay");
+    await page.getByRole("spinbutton", { name: "Chat max lines", exact: true }).fill("777");
+    await page.locator("#set-apply").click();
+    await expect(page.locator("#set-apply")).toBeDisabled();
+    await expect(page.locator("#set-ok")).toBeDisabled();
+    await page.keyboard.press("Escape");
+    await expect(dialog).toBeVisible();
+    await page.evaluate(() => {
+        document.querySelector("#set-ok").click();
+        window.__noxa.openSettings("playback");
+    });
+    expect(await page.evaluate(() => window.__saveAttempts)).toBe(1);
+    await page.evaluate(() => { window.__saveMode = "reject"; window.__finishSave(); });
+    await expect(dialog.locator(".settings-save-status")).toContainText("disk unavailable");
+    await expect(page.locator("#set-apply")).toBeEnabled();
+    await expect(page.getByRole("spinbutton", { name: "Chat max lines", exact: true })).toHaveValue("777");
+    await page.evaluate(() => { window.__saveMode = "error"; });
+    await page.locator("#set-ok").click();
+    await expect(dialog.locator(".settings-save-status")).toContainText("disk full");
+    await expect(dialog).toBeVisible();
+    await page.evaluate(() => { window.__saveMode = "success"; });
+    await page.locator("#set-ok").click();
+    await expect(dialog).toHaveCount(0);
+    expect(await page.evaluate(() => window.__noxa.state.settings.chat_max_lines)).toBe(777);
+    expect(errors).toEqual([]);
+});
+
+test("bookmark save keeps edits on failure and commits only on success", async ({ page }) => {
+    await installSaveScenario(page, { bookmarks: [{ name: "Original", addr: "example.test:12333", nickname: "Alice" }] });
+    await page.evaluate(() => window.__noxa.showWorkspace(false));
+    await page.locator("#menubar > .menu-item").filter({ hasText: /^Bookmarks/ }).click();
+    await page.getByRole("menuitem", { name: "Manage bookmarks…", exact: true }).click();
+    await page.locator(".bm-edit").click();
+    const dialog = page.getByRole("dialog", { name: "Edit bookmark", exact: true });
+    await dialog.locator(".bm-f-name").fill("Renamed");
+    await dialog.getByRole("button", { name: "Save", exact: true }).click();
+    await expect(dialog).toBeVisible();
+    await expect(dialog.getByRole("button", { name: "Saving…", exact: true })).toBeDisabled();
+    expect(await page.evaluate(() => window.__noxa.state.settings.bookmarks[0].name)).toBe("Original");
+    await page.keyboard.press("Escape");
+    await expect(dialog).toBeVisible();
+    await page.evaluate(() => { window.__saveMode = "error"; window.__finishSave(); });
+    await expect(dialog.locator(".bookmark-save-status")).toContainText("disk full");
+    await expect(dialog.locator(".bm-f-name")).toHaveValue("Renamed");
+    await page.evaluate(() => { window.__saveMode = "reject"; });
+    await dialog.getByRole("button", { name: "Save", exact: true }).click();
+    await expect(dialog.locator(".bookmark-save-status")).toContainText("disk unavailable");
+    await page.evaluate(() => { window.__saveMode = "success"; });
+    await dialog.getByRole("button", { name: "Save", exact: true }).click();
+    await expect(dialog).toHaveCount(0);
+    await expect(page.locator(".bm-name")).toHaveText("Renamed");
+    expect(await page.evaluate(() => window.__noxa.state.settings.bookmarks[0].name)).toBe("Renamed");
+});
+
+test("DND save reports errors and changes state only after success", async ({ page }) => {
+    await installSaveScenario(page, { dnd_enabled: false });
+    await page.evaluate(() => {
+        window.__noxa.showWorkspace(false);
+        window.__dndFeedback = [];
+        window.__noxa.toast = (...args) => window.__dndFeedback.push(args);
+    });
+    const toggle = async () => {
+        await page.locator("#menubar > .menu-item").filter({ hasText: /^View/ }).click();
+        await page.getByRole("menuitem", { name: "Do not disturb", exact: true }).click();
+    };
+    await toggle();
+    expect(await page.evaluate(() => window.__noxa.state.settings.dnd_enabled)).toBe(false);
+    await toggle();
+    expect(await page.evaluate(() => window.__saveAttempts)).toBe(1);
+    await page.evaluate(() => { window.__saveMode = "error"; window.__finishSave(); });
+    await expect.poll(() => page.evaluate(() => window.__dndFeedback)).toEqual([["save failed: disk full", "warn", "alert", { bypassDND: true }]]);
+    expect(await page.evaluate(() => window.__noxa.state.settings.dnd_enabled)).toBe(false);
+    await page.evaluate(() => { window.__saveMode = "reject"; });
+    await toggle();
+    await expect.poll(() => page.evaluate(() => window.__dndFeedback.at(-1))).toEqual(["save failed: disk unavailable", "warn", "alert", { bypassDND: true }]);
+    await page.evaluate(() => { window.__saveMode = "success"; });
+    await toggle();
+    await expect.poll(() => page.evaluate(() => window.__noxa.state.settings.dnd_enabled)).toBe(true);
+    expect(await page.evaluate(() => window.__dndFeedback.at(-1))).toEqual(["do not disturb on", "info", "alert", { bypassDND: true }]);
+});
+
+test("DND disable failures remain visible while ordinary notifications stay muted", async ({ page }) => {
+    await installSaveScenario(page, { dnd_enabled: true });
+    await page.evaluate(() => {
+        window.__noxa.showWorkspace(false);
+        window.__saveMode = "error";
+        window.__noxa.toast("ordinary notification");
+    });
+    await expect(page.locator("#toasts .toast").filter({ hasText: "ordinary notification" })).toHaveCount(0);
+    await page.locator("#menubar > .menu-item").filter({ hasText: /^View/ }).click();
+    await page.getByRole("menuitem", { name: "Do not disturb", exact: true }).click();
+    await expect(page.locator("#toasts .toast").filter({ hasText: "save failed: disk full" })).toBeVisible();
+    expect(await page.evaluate(() => window.__noxa.state.settings.dnd_enabled)).toBe(true);
+});
+
+test("audio output failures warn once and ignore obsolete selections", async ({ page }) => {
+    await page.evaluate(() => {
+        window.__noxa.state.settings.playback_device_id = "missing-speaker";
+        const element = { setSinkId: async () => { throw new Error("device missing"); } };
+        for (let n = 0; n < 5; n++) window.__noxa.applyOutputSettings(element);
+    });
+    await expect(page.locator("#toasts .toast").filter({ hasText: "Could not switch audio output" })).toHaveCount(1);
+    await page.evaluate(async () => {
+        window.__noxa.state.settings.playback_device_id = "old-speaker";
+        window.__noxa.applyOutputSettings({ setSinkId: () => new Promise((_, reject) => { window.__failOldOutput = reject; }) });
+        await Promise.resolve();
+        window.__noxa.state.settings.playback_device_id = "working-speaker";
+        window.__failOldOutput(new Error("obsolete error"));
+    });
+    await expect(page.locator("#toasts .toast").filter({ hasText: "Could not switch audio output" })).toHaveCount(1);
+});
+
+test("settings search announces counts and explains the result cap", async ({ page }, testInfo) => {
+    await page.evaluate(() => window.__noxa.openSettings());
+    const search = page.locator("#settings-search");
+    await search.fill("a");
+    await expect(page.locator(".set-search-hit")).toHaveCount(40);
+    await expect(page.locator(".settings-search-summary")).toContainText(/Showing 40 of \d+ results\. Narrow your search/);
+    await page.screenshot({ path: testInfo.outputPath("settings-search-count.png") });
+    await search.fill("voice volume");
+    await expect(page.locator(".settings-search-summary")).toHaveText("1 result");
+    await search.fill("nothing-matches-this-value");
+    await expect(page.locator(".settings-search-summary")).toHaveText("0 results");
+    await search.fill("");
+    await expect(page.locator(".settings-search-summary")).toBeHidden();
+    await page.evaluate(async () => (await import("/src/i18n.js")).setLanguage("de"));
+    await search.fill("sprachlautstärke");
+    await expect(page.locator(".settings-search-summary")).toHaveText("1 Ergebnis");
+    await search.fill("a");
+    await expect(page.locator(".settings-search-summary")).toContainText(/40 von \d+ Ergebnissen angezeigt/);
+});
+
+test("settings search reuses labels and invalidates after edits, language changes and reopen", async ({ page }) => {
+    const errors = [];
+    page.on("pageerror", error => errors.push(error.message));
+    await page.evaluate(() => {
+        window.__noxa.openSettings();
+        window.__searchControls = 0;
+        const createElement = document.createElement.bind(document);
+        document.createElement = (name, options) => {
+            if (name === "select") window.__searchControls++;
+            return createElement(name, options);
+        };
+    });
+    const search = page.locator("#settings-search");
+    await search.fill("volume");
+    await expect(page.locator(".set-search-hit").first()).toBeVisible();
+    const firstBuild = await page.evaluate(() => window.__searchControls);
+    expect(firstBuild).toBeGreaterThan(0);
+    await search.fill("volum");
+    await search.fill("volume");
+    expect(await page.evaluate(() => window.__searchControls)).toBe(firstBuild);
+    expect(await page.evaluate(() => window.__calls.ListIdentities || 0)).toBe(0);
+    await search.fill("voice volume");
+    await page.locator(".set-search-hit").first().click();
+    await expect(page.getByRole("slider", { name: "Voice volume", exact: true })).toBeVisible();
+    await page.getByRole("slider", { name: "Voice volume", exact: true }).fill("65");
+    const beforeEditedSearch = await page.evaluate(() => window.__searchControls);
+    await search.fill("volume");
+    expect(await page.evaluate(() => window.__searchControls)).toBeGreaterThan(beforeEditedSearch);
+    await page.evaluate(async () => (await import("/src/i18n.js")).setLanguage("de"));
+    const beforeGermanSearch = await page.evaluate(() => window.__searchControls);
+    await search.fill("lautstärke");
+    await expect(page.locator(".set-search-hit").first()).toContainText("Wiedergabe");
+    const germanBuild = await page.evaluate(() => window.__searchControls);
+    expect(germanBuild).toBeGreaterThan(beforeGermanSearch);
+    await search.fill("lautstärk");
+    expect(await page.evaluate(() => window.__searchControls)).toBe(germanBuild);
+    await page.keyboard.press("Escape");
+    await page.evaluate(async () => {
+        (await import("/src/i18n.js")).setLanguage("en");
+        window.__noxa.openSettings();
+    });
+    const beforeReopenedSearch = await page.evaluate(() => window.__searchControls);
+    await search.fill("volume");
+    expect(await page.evaluate(() => window.__searchControls)).toBeGreaterThan(beforeReopenedSearch);
+    expect(errors).toEqual([]);
+});
+
+test("German menus translate remaining actions and bookmark dialogs", async ({ page }, testInfo) => {
+    await page.evaluate(async () => {
+        window.__noxa.showWorkspace(false);
+        (await import("/src/i18n.js")).setLanguage("de");
+        (await import("/src/menu.js")).initMenu();
+    });
+    await page.getByRole("menuitem", { name: "Ansicht", exact: true }).click();
+    for (const name of ["Details ein-/ausblenden", "Chat in eigenem Fenster", "Nicht stören", "Immer im Vordergrund", "Design: dunkel", "Design: hell", "Design: hoher Kontrast"]) {
+        await expect(page.getByRole("menuitem", { name, exact: true })).toBeVisible();
+    }
+    await page.screenshot({ path: testInfo.outputPath("german-view-menu.png") });
+    await page.keyboard.press("Escape");
+    await page.getByRole("menuitem", { name: "Lesezeichen", exact: true }).click();
+    await expect(page.getByRole("menuitem", { name: "Aktuellen Server als Lesezeichen speichern", exact: true })).toBeVisible();
+    await page.getByRole("menuitem", { name: "Lesezeichen verwalten…", exact: true }).click();
+    const dialog = page.getByRole("dialog", { name: "Lesezeichen verwalten", exact: true });
+    await expect(dialog).toContainText("Noch keine Lesezeichen");
+    await dialog.getByRole("button", { name: "Schließen", exact: true }).click();
+    await page.getByRole("menuitem", { name: "Selbst", exact: true }).click();
+    await page.getByRole("menuitem", { name: "Spitznamen ändern…", exact: true }).click();
+    await expect(page.getByRole("dialog", { name: "Spitznamen ändern", exact: true })).toContainText("Spitzname für die nächste Verbindung:");
+    await page.getByRole("button", { name: "Abbrechen", exact: true }).click();
+});
+
+test("client language translates every settings page and persists on Apply @a11y", async ({ page }, testInfo) => {
+    const errors = [];
+    page.on("pageerror", error => errors.push(error.message));
+    await page.evaluate(() => {
+        const app = window.go.main.App;
+        window.go.main.App = new Proxy(app, { get(target, method) {
+            if (method === "GetSettings") return async () => structuredClone(window.__savedSettings || window.__noxa.state.settings);
+            if (method === "ListIdentities") return async () => [{ id: "test", name: "My identity", unique_id: "identity-123456789", active: true, protection: "dpapi", security_level: 4 }];
+            return target[method];
+        } });
+        window.__noxa.openSettings();
+    });
+    await page.getByRole("combobox", { name: "Language", exact: true }).selectOption("de");
+    await page.getByRole("spinbutton", { name: "Chat max lines", exact: true }).fill("500");
+    await page.getByRole("button", { name: "Apply", exact: true }).click();
+    await expect(page.getByRole("dialog", { name: "Einstellungen", exact: true })).toBeVisible();
+    await expect(page.getByRole("combobox", { name: "Sprache", exact: true })).toHaveValue("de");
+    await expect(page.locator("html")).toHaveAttribute("lang", "de");
+    await expect(page.getByRole("spinbutton", { name: "Chat max. Zeilen", exact: true })).toHaveValue("500");
+    await page.screenshot({ path: testInfo.outputPath("settings-german-application.png") });
+    const pages = [
+        ["Anwendung", "Chat max. Zeilen"], ["Aufnahme", "Aufnahmegerät"],
+        ["Wiedergabe", "Ausgabegerät"], ["Tastenkürzel", "Als neues Profil speichern…"],
+        ["Flüstern", "Flüstern aktivieren"], ["Downloads", "Downloadordner"],
+        ["Chat", "Zeitstempel"], ["Sicherheit", "Identitäten"],
+        ["Server", "Die Serverkonfiguration ist nur für Administratoren verfügbar."],
+        ["Benachrichtigungen", "Gesprochene Systemmeldungen"],
+    ];
+    for (const [tab, label] of pages) {
+        await page.getByRole("tab", { name: tab, exact: true }).click();
+        await expect(page.locator("#settings-content").getByText(label, { exact: true })).toBeVisible();
+        if (tab === "Sicherheit") {
+            await expect(page.getByText("My identity", { exact: false })).toBeVisible();
+            await page.screenshot({ path: testInfo.outputPath("settings-german-security.png") });
+        }
+    }
+    await expect(page.getByRole("button", { name: "Sprachmeldung testen", exact: true })).toBeVisible();
+    await page.screenshot({ path: testInfo.outputPath("settings-german-notifications.png") });
+    expect(await page.locator(".notify-matrix").evaluate(table => {
+        const content = document.getElementById("settings-content");
+        return table.getBoundingClientRect().right <= content.getBoundingClientRect().right;
+    })).toBe(true);
+    await page.getByRole("textbox", { name: "Einstellungen suchen", exact: true }).fill("Lautstärke");
+    await expect(page.locator(".set-search-hit").first()).toContainText("Wiedergabe");
+    await page.getByRole("button", { name: "Abbrechen", exact: true }).click();
+    await page.evaluate(() => window.__noxa.openSettings());
+    await expect(page.getByRole("combobox", { name: "Sprache", exact: true })).toHaveValue("de");
+    await page.getByRole("combobox", { name: "Sprache", exact: true }).selectOption("en");
+    await page.getByRole("button", { name: "Abbrechen", exact: true }).click();
+    expect(await page.evaluate(() => window.__noxa.state.settings.language)).toBe("de");
+    await page.evaluate(() => window.__noxa.openSettings());
+    await page.getByRole("combobox", { name: "Sprache", exact: true }).selectOption("en");
+    await page.getByRole("button", { name: "OK", exact: true }).click();
+    await page.evaluate(() => window.__noxa.openSettings());
+    await expect(page.getByRole("dialog", { name: "Settings", exact: true })).toBeVisible();
+    await expect(page.getByRole("combobox", { name: "Language", exact: true })).toHaveValue("en");
+    expect(errors).toEqual([]);
+});
+
+test("static speech follows language, rare events, draft volume and mute settings", async ({ page }) => {
+    await page.evaluate(async () => {
+        const { state, soundEngine, speechQueue } = window.__noxa;
+        state.settings = { ...state.settings, language:"de", play_sounds:true, sound_volume:100, speech_volume:75,
+            spoken_messages:true, speech_admin:true, speech_connection:true, speech_events:{}, event_sounds:{}, notify_matrix:{}, dnd_enabled:false };
+        state.myClientID="speech-self";state.replayingTabID="";
+        await soundEngine.preload();await soundEngine.resume();
+        window.__speechPlayed=[];
+        const play=soundEngine.play.bind(soundEngine);
+        soundEngine.play=(id, options)=>{const ok=play(id,options);if(ok)window.__speechPlayed.push({id,volume:options?.volume});return ok;};
+        speechQueue.clear();
+        for(const cb of window.__events.event)cb(JSON.stringify({type:"kicked",data:{client_id:"speech-self",ban:true,from_server:true,reason:"a dynamic reason must remain visual"}}));
+    });
+    await expect.poll(()=>page.evaluate(()=>window.__speechPlayed.map(x=>x.id))).toContain("speech_de_banned");
+    expect(await page.evaluate(()=>window.__speechPlayed.filter(x=>x.id.startsWith("speech_")).map(x=>x.id))).toEqual(["speech_de_banned"]);
+    await page.evaluate(()=>{
+        const {state,speechQueue}=window.__noxa;speechQueue.clear();
+        state.settings.language="en";state.settings.play_sounds=false;
+        window.__noxa.openSettings("notifications");
+    });
+    await page.getByRole("slider",{name:"Speech volume",exact:true}).fill("200");
+    await page.getByRole("button",{name:"Test spoken message",exact:true}).click();
+    await expect.poll(()=>page.evaluate(()=>window.__speechPlayed.at(-1))).toEqual({id:"speech_en_test",volume:200});
+    expect(await page.evaluate(()=>window.__noxa.state.settings.speech_volume)).toBe(75);
+    await page.getByRole("button",{name:"Stop preview",exact:true}).click();
+    await page.getByRole("checkbox",{name:"Spoken system messages",exact:true}).uncheck();
+    const count=await page.evaluate(()=>window.__speechPlayed.length);
+    await page.getByRole("button",{name:"Test spoken message",exact:true}).click();
+    await page.waitForTimeout(250);
+    expect(await page.evaluate(()=>window.__speechPlayed.length)).toBe(count);
+    await page.getByRole("button",{name:"Cancel",exact:true}).click();
+    expect(await page.evaluate(()=>window.__noxa.speechQueue.current)).toBeNull();
+});
+
+test("sound previews use draft volume, finish Test All, and cancel on close @a11y", async ({ page }) => {
+    await page.evaluate(async () => {
+        const { state, soundEngine } = window.__noxa;
+        state.settings = { ...state.settings, play_sounds: false, sound_volume: 100, event_sounds: {}, dnd_enabled: false };
+        await soundEngine.preload();
+        window.__previewedSounds = [];
+        const original = soundEngine.play.bind(soundEngine);
+        soundEngine.play = (name, options) => {
+            const result = original(name, options);
+            if (result) window.__previewedSounds.push({ name, volume: options?.settings?.sound_volume });
+            return result;
+        };
+        window.__noxa.openSettings("notifications");
+    });
+    const volume = page.getByRole("slider", { name: "Sound volume", exact: true });
+    await volume.fill("0");
+    await page.getByRole("button", { name: "Preview Joined channel", exact: true }).click();
+    expect(await page.evaluate(() => window.__previewedSounds.length)).toBe(0);
+    await volume.fill("200");
+    await page.getByRole("button", { name: "Preview Joined channel", exact: true }).click();
+    await expect.poll(() => page.evaluate(() => window.__previewedSounds.at(-1))).toEqual({ name: "own_channel_join", volume: 200 });
+    expect(await page.evaluate(() => window.__noxa.state.settings.sound_volume)).toBe(100);
+    await page.getByRole("button", { name: "Stop preview", exact: true }).click();
+    await page.evaluate(() => { window.__previewedSounds = []; });
+    await page.getByRole("button", { name: "Test all sounds", exact: true }).click();
+    await expect(page.getByRole("status").filter({ hasText: "Preview finished" })).toBeVisible({ timeout: 20000 });
+    expect(await page.evaluate(() => new Set(window.__previewedSounds.map(x => x.name)).size)).toBe(32);
+    await page.getByRole("button", { name: "Preview connection", exact: true }).click();
+    await page.getByRole("button", { name: "Cancel", exact: true }).click();
+    await expect.poll(() => page.evaluate(() => window.__noxa.soundEngine.active.size)).toBe(0);
+    const count = await page.evaluate(() => window.__previewedSounds.length);
+    await page.waitForTimeout(650);
+    expect(await page.evaluate(() => window.__previewedSounds.length)).toBe(count);
+});
+
 test("Permission Manager lists offline admins and creates an admin key", async ({ page }, testInfo) => {
     await showB3Workspace(page);
     await page.evaluate(() => {
-        window.__voicx.state.isAdmin = true;
+        window.__noxa.state.isAdmin = true;
         const app = window.go.main.App;
         window.go.main.App = new Proxy(app, { get(target, method) {
             if (method === "ServerAdminList") return async () => ({ entries: [
@@ -18,7 +428,7 @@ test("Permission Manager lists offline admins and creates an admin key", async (
             };
             return target[method];
         } });
-        window.__voicxPerms.openPermissionManager();
+        window.__noxaPerms.openPermissionManager();
     });
     const manager = page.getByRole("dialog", { name: "Permission Manager", exact: true });
     await manager.getByRole("button", { name: "Server Admins", exact: true }).click();
@@ -43,19 +453,19 @@ test("Permission Manager lists offline admins and creates an admin key", async (
 });
 
 test("Permission Manager hides the admin roster from non-admins", async ({ page }) => {
-    await page.evaluate(() => window.__voicxPerms.openPermissionManager());
+    await page.evaluate(() => window.__noxaPerms.openPermissionManager());
     await expect(page.getByRole("button", { name: "Server Admins", exact: true })).toHaveCount(0);
 });
 
 test("Permission Manager shows a retryable error when the server lacks the admin roster", async ({ page }) => {
     await page.evaluate(() => {
-        window.__voicx.state.isAdmin = true;
+        window.__noxa.state.isAdmin = true;
         const app = window.go.main.App;
         window.go.main.App = new Proxy(app, { get(target, method) {
             if (method === "ServerAdminList") return async () => { throw new Error("unsupported message"); };
             return target[method];
         } });
-        window.__voicxPerms.openPermissionManager();
+        window.__noxaPerms.openPermissionManager();
     });
     await page.getByRole("button", { name: "Server Admins", exact: true }).click();
     await expect(page.getByText(/Could not load server admins/)).toBeVisible();
@@ -65,13 +475,13 @@ test("Permission Manager shows a retryable error when the server lacks the admin
 
 test("Permission Manager discards a late admin roster after switching tabs", async ({ page }) => {
     await page.evaluate(() => {
-        window.__voicx.state.isAdmin = true;
+        window.__noxa.state.isAdmin = true;
         const app = window.go.main.App;
         window.go.main.App = new Proxy(app, { get(target, method) {
             if (method === "ServerAdminList") return () => new Promise(resolve => { window.__finishAdmins = resolve; });
             return target[method];
         } });
-        window.__voicxPerms.openPermissionManager();
+        window.__noxaPerms.openPermissionManager();
     });
     await page.getByRole("button", { name: "Server Admins", exact: true }).click();
     await page.getByRole("button", { name: "Server Groups", exact: true }).click();
@@ -82,7 +492,7 @@ test("Permission Manager discards a late admin roster after switching tabs", asy
 async function prepareServerInformation(page) {
     await showB3Workspace(page);
     await page.evaluate(() => {
-        window.__serverInfo = { name: "VoiCX community", version: "0.4.3", platform: "linux/amd64", uptime_seconds: 90061, clients_online: 4, max_clients: 64, channels_online: 3 };
+        window.__serverInfo = { name: "noXa community", version: "0.4.3", platform: "linux/amd64", uptime_seconds: 90061, clients_online: 4, max_clients: 64, channels_online: 3 };
         const app = window.go.main.App;
         window.go.main.App = new Proxy(app, { get(target, method) {
             if (method === "ServerInfo") return async () => {
@@ -92,7 +502,7 @@ async function prepareServerInformation(page) {
             return target[method];
         } });
         window.runtime.ClipboardSetText = async (value) => { window.__copiedAddress = value; return true; };
-        window.__voicx.state.lastConnect = { addr: "voice.example:12333" };
+        window.__noxa.state.lastConnect = { addr: "voice.example:12333" };
     });
 }
 
@@ -100,14 +510,14 @@ test("server information opens from the name, Connections menu and latency with 
     await prepareServerInformation(page);
     await page.setViewportSize({ width: 1004, height: 768 });
     await page.evaluate(() => {
-        window.__voicx.state.pc = { getStats: async () => new Map([
+        window.__noxa.state.pc = { getStats: async () => new Map([
             ["in", { id: "in", type: "inbound-rtp", kind: "audio", packetsReceived: 990, packetsLost: 10, jitter: .004, bytesReceived: 2097152, timestamp: 1000 }],
             ["out", { id: "out", type: "outbound-rtp", kind: "audio", packetsSent: 2000, bytesSent: 4194304, timestamp: 1000 }],
         ]) };
     });
     await page.locator("#server-name").click();
     const dialog = page.getByRole("dialog", { name: "Server information" });
-    await expect(dialog.locator('[data-stat="name"]')).toHaveText("VoiCX community");
+    await expect(dialog.locator('[data-stat="name"]')).toHaveText("noXa community");
     await expect(dialog.locator('[data-stat="address"]')).toHaveText("voice.example:12333");
     await expect(dialog.locator('[data-stat="platform"]')).toHaveText("linux/amd64");
     await expect(dialog.locator('[data-stat="control-in"]')).toHaveText("2.00 KiB");
@@ -186,13 +596,13 @@ test("server information handles older servers and discards late results after a
     await expect(dialog).toHaveCount(0);
     await page.evaluate(() => window.__finishInfo());
     await expect(dialog).toHaveCount(0);
-    await page.evaluate(() => { window.__voicx.state.myClientID = "other-client"; window.__serverInfo.name = "Other server"; window.__voicxMeta.openServerInfo(); });
+    await page.evaluate(() => { window.__noxa.state.myClientID = "other-client"; window.__serverInfo.name = "Other server"; window.__noxaMeta.openServerInfo(); });
     await expect(dialog.locator('[data-stat="name"]')).toHaveText("Other server");
 });
 
 async function showB3Workspace(page) {
     await page.evaluate(() => {
-        const v = window.__voicx;
+        const v = window.__noxa;
         Object.assign(v.state, {
             myClientID: "daniel", myUniqueID: "uid-daniel", myChannelID: 2,
             channels: [
@@ -222,8 +632,8 @@ test("B3 participant strip follows live channel membership and opens member cont
     await page.getByRole("button", { name: "Message Mia", exact: true }).click();
     await expect(page.locator("#chat-head-title")).toContainText("Mia");
     await page.evaluate(() => {
-        window.__voicx.state.myChannelID = 3;
-        window.__voicx.renderTree();
+        window.__noxa.state.myChannelID = 3;
+        window.__noxa.renderTree();
     });
     await expect(strip.getByRole("button")).toHaveCount(0);
     await expect(strip).toContainText("No one else is here yet");
@@ -232,7 +642,7 @@ test("B3 participant strip follows live channel membership and opens member cont
 test("B3 shows your detected speech even when your own playback is muted or deafened", async ({ page }) => {
     await showB3Workspace(page);
     await page.evaluate(() => {
-        const v = window.__voicx;
+        const v = window.__noxa;
         v.state.settings.muted_users = ["uid-daniel"];
         v.setDeafened(true);
         for (const cb of window.__events.event) cb(JSON.stringify({
@@ -260,8 +670,8 @@ test("B3 shows your detected speech even when your own playback is muted or deaf
 test("tray follows detected self speech, input/output mute, and voice teardown without polling", async ({ page }) => {
     await showB3Workspace(page);
     await page.evaluate(() => {
-        window.__voicx.state.pc = { close() {} };
-        window.__voicx.renderTree();
+        window.__noxa.state.pc = { close() {} };
+        window.__noxa.renderTree();
         for (const cb of window.__events.event) cb(JSON.stringify({
             type: "speaking_changed", data: { client_id: "daniel", speaking: true },
         }));
@@ -270,7 +680,7 @@ test("tray follows detected self speech, input/output mute, and voice teardown w
     await expect.poll(flags).toEqual([true, false, false]);
     const count = await page.evaluate(() => window.__calls.SetTrayVoiceState);
     await page.evaluate(() => {
-        for (let i = 0; i < 20; i++) window.__voicx.renderTree();
+        for (let i = 0; i < 20; i++) window.__noxa.renderTree();
         for (const cb of window.__events.event) cb(JSON.stringify({
             type: "speaking_changed", data: { client_id: "mia", speaking: false },
         }));
@@ -284,13 +694,13 @@ test("tray follows detected self speech, input/output mute, and voice teardown w
     await expect.poll(flags).toEqual([false, true, false]);
     await page.locator("#voice-mute").click();
     await expect.poll(flags).toEqual([true, false, false]);
-    await page.evaluate(() => window.__voicx.resetVoiceSession());
+    await page.evaluate(() => window.__noxa.resetVoiceSession());
     await expect.poll(flags).toEqual([false, false, false]);
 });
 
 test("B3 keeps voice controls outside the Chat and Files panels @a11y", async ({ page }) => {
     await showB3Workspace(page);
-    await page.evaluate(() => window.__voicx.openPM("uid-mia", "Mia"));
+    await page.evaluate(() => window.__noxa.openPM("uid-mia", "Mia"));
     await expect(page.locator("#chat-head-title")).toContainText("Mia");
     await page.getByRole("tab", { name: "Files", exact: true }).click();
     await expect(page.locator("#chat-head-title")).toHaveText("Public");
@@ -315,10 +725,10 @@ test("B3 alpha details work with the keyboard and notifications stay readable @a
     await page.keyboard.press("Escape");
     await expect(page.locator("#alpha-badge")).toBeFocused();
     await page.evaluate(() => {
-        const self = window.__voicx.state.clients.find((c) => c.client_id === "daniel");
+        const self = window.__noxa.state.clients.find((c) => c.client_id === "daniel");
         self.is_speaking = true;
-        window.__voicx.renderTree();
-        window.__voicxPolish.recordNotification("warn", "insufficient permission: b_channel_modify");
+        window.__noxa.renderTree();
+        window.__noxaPolish.recordNotification("warn", "insufficient permission: b_channel_modify");
     });
     for (const width of [1000, 640]) {
         await page.setViewportSize({ width, height: width === 1000 ? 730 : 480 });
@@ -353,7 +763,7 @@ test("B3 restores the persisted member volume after a failed save", async ({ pag
     await page.locator('#voice-participants [data-client-id="mia"]').click();
     const slider = page.getByRole("slider", { name: "User volume" });
     await slider.fill("75");
-    await expect.poll(() => page.evaluate(() => window.__voicx.state.settings.user_volumes?.["uid-mia"])).toBe(75);
+    await expect.poll(() => page.evaluate(() => window.__noxa.state.settings.user_volumes?.["uid-mia"])).toBe(75);
     await page.evaluate(() => { window.__failVolumeSave = true; });
     await slider.fill("150");
     await expect(page.locator("#member-action-error")).toHaveText("Could not save volume. Try again.");
@@ -630,7 +1040,7 @@ test.beforeEach(async ({ page }) => {
         }});
     }, { initialSettings: settings });
     await page.goto("/");
-    await page.waitForFunction(() => !!window.__voicx?.openSettings);
+    await page.waitForFunction(() => !!window.__noxa?.openSettings);
 });
 
 async function auditAccessibility(page, context) {
@@ -681,7 +1091,7 @@ async function auditAccessibility(page, context) {
 }
 
 test("switches the capture device and persists it", async ({ page }) => {
-    await page.evaluate(() => window.__voicx.openSettings("capture"));
+    await page.evaluate(() => window.__noxa.openSettings("capture"));
     const select = page.locator("#settings-content .set-row").filter({ hasText: "Capture device" }).locator("select");
     await expect(select).toHaveValue("");
     await select.selectOption("mic-usb");
@@ -690,7 +1100,7 @@ test("switches the capture device and persists it", async ({ page }) => {
 });
 
 test("refreshes capture and playback device lists on demand", async ({ page }) => {
-    await page.evaluate(() => window.__voicx.openSettings("capture"));
+    await page.evaluate(() => window.__noxa.openSettings("capture"));
     const captureRow = page.locator("#settings-content .set-row").filter({ hasText: "Capture device" });
     const captureSelect = captureRow.locator("select");
     await expect(captureSelect).toHaveAccessibleName("Capture device");
@@ -722,7 +1132,7 @@ test("refreshes capture and playback device lists on demand", async ({ page }) =
 });
 
 test("mute control switches to an unmute affordance and back", async ({ page }) => {
-    await page.evaluate(() => window.__voicx.showWorkspace(false));
+    await page.evaluate(() => window.__noxa.showWorkspace(false));
     const mute = page.getByRole("button", { name: "Mute microphone" });
     await expect(mute).toHaveText("Mic on");
     await expect(mute).toHaveAttribute("title", "Mute");
@@ -742,7 +1152,7 @@ test("voice activation reopens after silence and keeps mute and PTT private", as
     // Use real browser tracks: disabling a track must silence its consumers.
     await page.locator("body").click({ position: { x: 1, y: 1 } });
     await page.evaluate(async () => {
-        const v = window.__voicx;
+        const v = window.__noxa;
         const ctx = new AudioContext();
         const oscillator = ctx.createOscillator();
         const gain = ctx.createGain();
@@ -762,7 +1172,7 @@ test("voice activation reopens after silence and keeps mute and PTT private", as
         v.startVADMonitor();
         await v.state.voiceMonitorCtx.resume();
     });
-    const transmitting = () => page.evaluate(() => window.__voicx.state.localStream.getAudioTracks()[0].enabled);
+    const transmitting = () => page.evaluate(() => window.__noxa.state.localStream.getAudioTracks()[0].enabled);
     expect(await transmitting()).toBe(false);
     for (let cycle = 0; cycle < 2; cycle++) {
         await page.evaluate(() => { window.__voiceSignal.gain.gain.value = 0.5; });
@@ -771,30 +1181,30 @@ test("voice activation reopens after silence and keeps mute and PTT private", as
         await expect.poll(transmitting).toBe(false);
     }
     await page.evaluate(() => {
-        window.__voicx.state.muted = true;
+        window.__noxa.state.muted = true;
         window.__voiceSignal.gain.gain.value = 0.5;
-        window.__voicx.applyVoiceState();
+        window.__noxa.applyVoiceState();
     });
-    await expect.poll(() => page.evaluate(() => window.__voicx.state.pttActive)).toBe(true);
+    await expect.poll(() => page.evaluate(() => window.__noxa.state.pttActive)).toBe(true);
     expect(await transmitting()).toBe(false);
     await page.evaluate(() => {
-        const v = window.__voicx;
+        const v = window.__noxa;
         v.state.settings.activation_mode = "ptt";
         v.state.muted = false;
         v.setPTT(false);
     });
     expect(await transmitting()).toBe(false);
-    await page.evaluate(() => window.__voicx.setPTT(true));
+    await page.evaluate(() => window.__noxa.setPTT(true));
     expect(await transmitting()).toBe(true);
     await page.evaluate(() => {
-        window.__voicx.resetVoiceSession();
+        window.__noxa.resetVoiceSession();
         return window.__voiceSignal.ctx.close();
     });
 });
 
 test("voice monitor releases its local capture on restart and disconnect", async ({ page }) => {
     const result = await page.evaluate(async () => {
-        const v = window.__voicx;
+        const v = window.__noxa;
         const inputCtx = new AudioContext();
         const track = inputCtx.createMediaStreamDestination().stream.getAudioTracks()[0];
         const clones = [];
@@ -830,7 +1240,7 @@ test("voice monitor releases its local capture on restart and disconnect", async
 
 test("retries a missing microphone without interrupting video or screen sharing", async ({ page }) => {
     await page.evaluate(() => {
-        window.__voicx.showWorkspace(false);
+        window.__noxa.showWorkspace(false);
         window.__getUserMediaCalls = 0;
         window.__cameraRequests = 0;
         window.__allowMicrophone = false;
@@ -885,10 +1295,10 @@ test("retries a missing microphone without interrupting video or screen sharing"
             close() { this.iceConnectionState = "closed"; }
         }
         window.RTCPeerConnection = FakePeerConnection;
-        window.__voicx.state.myClientID = "client-a";
-        window.__voicx.state.myChannelID = 0;
-        window.__voicx.state.channels = [{ ChannelID: 42, Name: "Lobby" }];
-        window.__voicx.state.clients = [{
+        window.__noxa.state.myClientID = "client-a";
+        window.__noxa.state.myChannelID = 0;
+        window.__noxa.state.channels = [{ ChannelID: 42, Name: "Lobby" }];
+        window.__noxa.state.clients = [{
             client_id: "client-a", unique_id: "user-a", nickname: "Alice",
             channel_id: 0, is_speaking: false,
         }];
@@ -907,7 +1317,7 @@ test("retries a missing microphone without interrupting video or screen sharing"
     await expect(retry).toBeVisible();
 
     await page.evaluate(() => {
-        const state = window.__voicx.state;
+        const state = window.__noxa.state;
         window.__pcBeforeMicRetry = state.pc;
         state.screenSharing = true;
         state.shareStream = {
@@ -922,10 +1332,10 @@ test("retries a missing microphone without interrupting video or screen sharing"
     await expect(page.locator("#ptt-btn")).toBeEnabled();
     await expect(page.locator("#ptt-btn")).toBeFocused();
     await expect.poll(() => page.evaluate(() => ({
-        samePeerConnection: window.__voicx.state.pc === window.__pcBeforeMicRetry,
-        audioTracks: window.__voicx.state.localStream.getAudioTracks().length,
+        samePeerConnection: window.__noxa.state.pc === window.__pcBeforeMicRetry,
+        audioTracks: window.__noxa.state.localStream.getAudioTracks().length,
         cameraLive: window.__cameraTrack.readyState === "live",
-        sharing: window.__voicx.state.screenSharing,
+        sharing: window.__noxa.state.screenSharing,
         shareTracksStopped: window.__shareTracksStopped,
         unpublishedShare: window.__calls.SetScreenShare || 0,
         slots: window.__callArgs.WebRTCOffer.at(-1)[1].map(({ slot }) => slot),
@@ -939,18 +1349,18 @@ test("retries a missing microphone without interrupting video or screen sharing"
         slots: ["cam", "mic"],
     });
 
-    await page.evaluate(() => { window.__voicx.state.screenSharing = false; });
+    await page.evaluate(() => { window.__noxa.state.screenSharing = false; });
     await page.getByRole("button", { name: "Camera on — click to turn off", exact: true }).click();
     const stop = page.getByRole("button", { name: "Turn off", exact: true });
     if (await stop.isVisible()) await stop.click();
     await expect.poll(() => page.evaluate(() => window.__cameraTrack.readyState)).toBe("ended");
     await expect(page.locator("#local-video")).toBeHidden();
-    expect(await page.evaluate(() => window.__voicx.state.localStream.getVideoTracks().length)).toBe(0);
+    expect(await page.evaluate(() => window.__noxa.state.localStream.getVideoTracks().length)).toBe(0);
 });
 
 test("camera stays off on joins and reconnects, and discards a late enable request", async ({ page }) => {
     await page.evaluate(async () => {
-        const v = window.__voicx;
+        const v = window.__noxa;
         v.showWorkspace(false);
         window.__cameraRequests = 0;
         window.__denyCamera = true;
@@ -996,7 +1406,7 @@ test("camera stays off on joins and reconnects, and discards a late enable reque
     await enable.click();
     await expect(page.locator("#local-video")).toBeVisible();
     await page.evaluate(async () => {
-        const v = window.__voicx;
+        const v = window.__noxa;
         v.resetVoiceSession();
         window.__cameraRemote.close();
         window.__cameraRemote = new RTCPeerConnection();
@@ -1011,12 +1421,12 @@ test("camera stays off on joins and reconnects, and discards a late enable reque
     await enable.click();
     await expect.poll(() => page.evaluate(() => typeof window.__resolveCameraEnable)).toBe("function");
     await page.evaluate(() => {
-        window.__voicx.resetVoiceSession();
+        window.__noxa.resetVoiceSession();
         window.__resolveCameraEnable();
     });
     await expect.poll(() => page.evaluate(() => window.__enabledCameraTrack.readyState)).toBe("ended");
     await expect(page.locator("#local-video")).toBeHidden();
-    expect(await page.evaluate(() => window.__voicx.state.localStream)).toBeNull();
+    expect(await page.evaluate(() => window.__noxa.state.localStream)).toBeNull();
 });
 
 test("camera settings preview requires an explicit test and releases capture on exit", async ({ page }) => {
@@ -1029,7 +1439,7 @@ test("camera settings preview requires an explicit test and releases capture on 
             window.__previewTrack = stream.getVideoTracks()[0];
             return stream;
         };
-        window.__voicx.openSettings("capture");
+        window.__noxa.openSettings("capture");
     });
     expect(await page.evaluate(() => window.__cameraRequests)).toBe(0);
     const start = page.getByRole("button", { name: "Test camera", exact: true });
@@ -1044,13 +1454,13 @@ test("camera settings preview requires an explicit test and releases capture on 
     await start.click();
     await page.getByRole("button", { name: "Cancel", exact: true }).click();
     expect(await page.evaluate(() => window.__previewTrack.readyState)).toBe("ended");
-    expect(await page.evaluate(() => window.__voicx.state.localStream)).toBeNull();
+    expect(await page.evaluate(() => window.__noxa.state.localStream)).toBeNull();
 });
 
 test("a camera test resolved after settings closes is immediately stopped", async ({ page }) => {
     await page.evaluate(() => {
         navigator.mediaDevices.getUserMedia = () => new Promise((resolve) => { window.__resolveCamera = resolve; });
-        window.__voicx.openSettings("capture");
+        window.__noxa.openSettings("capture");
     });
     await page.getByRole("button", { name: "Test camera", exact: true }).click();
     await page.getByRole("button", { name: "Cancel", exact: true }).click();
@@ -1064,11 +1474,11 @@ test("a camera test resolved after settings closes is immediately stopped", asyn
 
 test("ignores a delayed microphone failure after the voice session changes", async ({ page }) => {
     await page.evaluate(() => {
-        window.__voicx.showWorkspace(false);
+        window.__noxa.showWorkspace(false);
         const stream = document.createElement("canvas").captureStream(1);
-        window.__voicx.state.myChannelID = 42;
-        window.__voicx.state.localStream = stream;
-        window.__voicx.state.pc = {
+        window.__noxa.state.myChannelID = 42;
+        window.__noxa.state.localStream = stream;
+        window.__noxa.state.pc = {
             close() {},
             getSenders: () => [],
             getTransceivers: () => [],
@@ -1076,26 +1486,26 @@ test("ignores a delayed microphone failure after the voice session changes", asy
         navigator.mediaDevices.getUserMedia = () => new Promise((_resolve, reject) => {
             window.__rejectStaleMicRetry = reject;
         });
-        window.__staleMicRetry = window.__voicx.retryMicrophoneAccess();
+        window.__staleMicRetry = window.__noxa.retryMicrophoneAccess();
     });
     await expect.poll(() => page.evaluate(() => typeof window.__rejectStaleMicRetry)).toBe("function");
 
     await page.evaluate(async () => {
-        window.__voicx.resetVoiceSession();
+        window.__noxa.resetVoiceSession();
         window.__rejectStaleMicRetry(new DOMException("late denial", "NotAllowedError"));
         await window.__staleMicRetry;
     });
 
     await expect(page.locator("#mic-status")).toBeEmpty();
-    expect(await page.evaluate(() => window.__voicx.state.micState)).toBe("unknown");
+    expect(await page.evaluate(() => window.__noxa.state.micState)).toBe("unknown");
 });
 
 test("routes decrypted direct messages and echoes without mixing global chat or peers", async ({ page }) => {
     await page.evaluate(() => {
-        const { state } = window.__voicx;
+        const { state } = window.__noxa;
         state.myUniqueID = "alpha";
         state.myNickname = "ALPHA";
-        window.__voicx.showWorkspace();
+        window.__noxa.showWorkspace();
         for (const callback of window.__events.event || []) callback(JSON.stringify({
             type: "chat", data: { direct: true, to_unique_id: "alpha", from_unique_id: "bravo", from: "BRAVO",
                 text: "private Grüße 🌿", enc_verified: true, client_msg_id: "received-dm" },
@@ -1110,7 +1520,7 @@ test("routes decrypted direct messages and echoes without mixing global chat or 
     await expect(page.locator("#chat-log .msg-lock")).toHaveAttribute("title", /end-to-end encrypted/);
 
     await page.evaluate(() => {
-        window.__voicxChat.openPM("charlie", "CHARLIE");
+        window.__noxaChat.openPM("charlie", "CHARLIE");
         for (const callback of window.__events.event || []) callback(JSON.stringify({
             type: "chat", data: { direct: true, to_unique_id: "bravo", from_unique_id: "alpha", from: "ALPHA",
                 text: "echo for Bravo", enc_verified: true, client_msg_id: "sent-dm" },
@@ -1133,13 +1543,13 @@ test("routes decrypted direct messages and echoes without mixing global chat or 
 
 test("restores DM history without claiming legacy or plaintext records were verified", async ({ page }) => {
     await page.evaluate(() => {
-        window.__voicx.showWorkspace();
+        window.__noxa.showWorkspace();
         window.__dmHistory = { bravo: [
             { body: "legacy record", from_nickname: "BRAVO", sent_at: 10 },
             { body: "plaintext record", from_nickname: "BRAVO", sent_at: 11, enc_verified: false },
             { body: "verified record", from_nickname: "BRAVO", sent_at: 12, enc_verified: true },
         ] };
-        window.__voicxChat.openPM("bravo", "BRAVO");
+        window.__noxaChat.openPM("bravo", "BRAVO");
     });
     await expect(page.locator("#chat-log")).toContainText("verified record");
     await expect(page.locator("#chat-log .msg-tag")).toHaveText(["dm", "dm", "dm"]);
@@ -1149,9 +1559,9 @@ test("restores DM history without claiming legacy or plaintext records were veri
 
 test("tracks existing unassigned clients when they later join a channel", async ({ page }) => {
     await page.evaluate(() => {
-        const { state } = window.__voicx;
+        const { state } = window.__noxa;
         state.myClientID = "alpha";
-        window.__voicx.showWorkspace();
+        window.__noxa.showWorkspace();
         for (const callback of window.__events.snapshot || []) callback(JSON.stringify({
             root_channels: [{ ChannelID: 1, ParentID: 0, Name: "Echo Test", clients: [] }],
             unassigned_clients: [
@@ -1172,7 +1582,7 @@ test("tracks existing unassigned clients when they later join a channel", async 
     });
     await expect(page.locator('.channel[data-chid="1"] .ch-count')).toHaveText("2");
     await expect(page.locator('.client[data-clid="bravo"]')).toContainText("BRAVO");
-    expect(await page.evaluate(() => window.__voicx.state.clients.map((client) => ({
+    expect(await page.evaluate(() => window.__noxa.state.clients.map((client) => ({
         id: client.client_id, channel: client.channel_id, bot: !!client.is_bot, status: client.status || "",
     })))).toEqual([
         { id: "alpha", channel: 1, bot: true, status: "away" },
@@ -1188,7 +1598,7 @@ test("restores recent servers when persisted startup settings resolve", async ({
         }));
     }, settings);
     await page.reload();
-    await page.waitForFunction(() => window.__voicxTabs && window.__resolveStartupSettings);
+    await page.waitForFunction(() => window.__noxaTabs && window.__resolveStartupSettings);
     await expect(page.locator("#login-recents .recent-row")).toHaveCount(0);
     await page.evaluate(() => window.__resolveStartupSettings());
 
@@ -1201,12 +1611,12 @@ test("restores recent servers when persisted startup settings resolve", async ({
 
 test("edits a recent server in the login form and focuses its address", async ({ page }) => {
     await page.evaluate(() => {
-        window.__voicx.state.settings.recents = [{
+        window.__noxa.state.settings.recents = [{
             addr: "voice.example:12333",
             nickname: "Alice",
             last_used: 123,
         }];
-        window.__voicxTabs.renderRecents();
+        window.__noxaTabs.renderRecents();
     });
 
     const row = page.locator("#login-recents .recent-row");
@@ -1235,13 +1645,13 @@ test("edits a recent server in the login form and focuses its address", async ({
 
 test("shows connection-quality sample age and clears stale RTT on disconnect", async ({ page }) => {
     await page.evaluate(() => {
-        const { state } = window.__voicx;
+        const { state } = window.__noxa;
         state.myClientID = "client-a";
         const pill = document.getElementById("conn-pill");
         pill.textContent = "voice.example:12333";
         pill.classList.add("up");
-        window.__voicx.showWorkspace(false);
-        window.__voicx.startQualitySampler();
+        window.__noxa.showWorkspace(false);
+        window.__noxa.startQualitySampler();
     });
 
     const pill = page.locator("#conn-pill");
@@ -1255,7 +1665,7 @@ test("shows connection-quality sample age and clears stale RTT on disconnect", a
     );
 
     await page.evaluate(() => {
-        window.__voicx.state.settings.reconnect_on_loss = false;
+        window.__noxa.state.settings.reconnect_on_loss = false;
         for (const callback of window.__events.disconnected || []) callback();
     });
     await expect(pill).not.toHaveAttribute("data-quality", /.+/);
@@ -1266,7 +1676,7 @@ test("shows connection-quality sample age and clears stale RTT on disconnect", a
 test("latency reuses the five-second sampler, marks stale samples, and prevents overlapping requests", async ({ page }, testInfo) => {
     await page.clock.install();
     await page.evaluate(() => {
-        const v = window.__voicx;
+        const v = window.__noxa;
         v.state.myClientID = "client-a";
         v.showWorkspace(false);
         const app = window.go.main.App;
@@ -1308,19 +1718,19 @@ test("latency reuses the five-second sampler, marks stale samples, and prevents 
     await page.setViewportSize({ width: 640, height: 480 });
     await expect(latency).toBeVisible();
     await page.locator("#voice-bar").screenshot({ path: testInfo.outputPath("latency-small.png") });
-    await page.evaluate(() => window.__voicx.stopQualitySampler());
+    await page.evaluate(() => window.__noxa.stopQualitySampler());
     await expect(latency).toBeHidden();
 });
 
 test("clears RTT while switching tabs and only samples a connected active tab", async ({ page }) => {
     await page.evaluate(() => {
-        const { state } = window.__voicx;
+        const { state } = window.__noxa;
         state.myClientID = "client-a";
         const pill = document.getElementById("conn-pill");
         pill.textContent = "first.example:12333";
         pill.classList.add("up");
-        window.__voicx.showWorkspace(false);
-        window.__voicx.startQualitySampler();
+        window.__noxa.showWorkspace(false);
+        window.__noxa.startQualitySampler();
     });
     const pill = page.locator("#conn-pill");
     await expect(pill).toHaveAttribute("data-quality", "good");
@@ -1359,7 +1769,7 @@ test("does not paint a completed login over a tab selected during finalization",
             { id: "new-tab", addr: "new.example:12333", nickname: "Alice", active: true, connected: true },
             { id: "other-tab", addr: "other.example:12333", nickname: "Bob", active: false, connected: true },
         ];
-        window.__voicx.state.tabConnects.set("other-tab", {
+        window.__noxa.state.tabConnects.set("other-tab", {
             addr: "other.example:12333", nick: "Bob", pw: "", spw: "", bookmark: "",
         });
         window.__clientIDGate = new Promise((resolve) => {
@@ -1382,10 +1792,10 @@ test("does not paint a completed login over a tab selected during finalization",
         window.__releaseConnectIdentity();
     });
 
-    await expect.poll(() => page.evaluate(() => window.__voicx.state.lastConnect?.addr))
+    await expect.poll(() => page.evaluate(() => window.__noxa.state.lastConnect?.addr))
         .toBe("other.example:12333");
     await expect(page.locator("#conn-pill")).not.toHaveText("new.example:12333");
-    expect(await page.evaluate(() => window.__voicx.state.tabConnects.get("new-tab")?.spw)).toBe("secret");
+    expect(await page.evaluate(() => window.__noxa.state.tabConnects.get("new-tab")?.spw)).toBe("secret");
 });
 
 test("rejects A-to-B-to-A identity results during login finalization", async ({ page }) => {
@@ -1395,8 +1805,8 @@ test("rejects A-to-B-to-A identity results during login finalization", async ({ 
             id: "tab-a", addr: "a.example:12333", nickname: "Alice",
             active: true, connected: true,
         }];
-        window.__voicx.state.activeTabID = "tab-a";
-        window.__voicx.state.serverGeneration = 10;
+        window.__noxa.state.activeTabID = "tab-a";
+        window.__noxa.state.serverGeneration = 10;
         window.__clientIDGate = new Promise((resolve) => {
             window.__releaseABAIdentity = resolve;
         });
@@ -1410,22 +1820,22 @@ test("rejects A-to-B-to-A identity results during login finalization", async ({ 
         // Model A → B → A: the final active tab matches, but the identity
         // response came from the intervening tab and the generation changed.
         window.__activeClient = "client-from-tab-b";
-        window.__voicx.state.serverGeneration += 2;
+        window.__noxa.state.serverGeneration += 2;
         window.__releaseABAIdentity();
     });
 
     await expect(page.locator("#login-connect")).toBeEnabled();
-    expect(await page.evaluate(() => window.__voicx.state.myClientID)).not.toBe("client-from-tab-b");
+    expect(await page.evaluate(() => window.__noxa.state.myClientID)).not.toBe("client-from-tab-b");
     await expect(page.locator("#conn-pill")).not.toHaveClass(/\bup\b/);
 });
 
 test("warns about certificate timing after a guest quick-connect", async ({ page }) => {
     await page.evaluate(async () => {
         window.__certificateClockWarning = "Local clock may be inaccurate; check date, time, and time zone.";
-        window.__voicx.state.settings.recents = [{
+        window.__noxa.state.settings.recents = [{
             addr: "quick.example:12333", nickname: "Alice", last_used: 123,
         }];
-        await window.__voicxTabs.quickConnectLast();
+        await window.__noxaTabs.quickConnectLast();
     });
 
     await expect(page.locator("#alert-announcer")).toContainText(
@@ -1437,7 +1847,7 @@ test("warns about certificate timing after a guest quick-connect", async ({ page
 
 test("reconnects the last server from the tray only while disconnected", async ({ page }) => {
     await page.evaluate(() => {
-        const { state } = window.__voicx;
+        const { state } = window.__noxa;
         state.settings.reconnect_on_loss = false;
         state.lastConnect = null;
         state.lastSuccessfulConnect = {
@@ -1464,7 +1874,7 @@ test("reconnects the last server from the tray only while disconnected", async (
 
 test("keeps an automatic reconnect pinned to the server that dropped", async ({ page }) => {
     await page.evaluate(() => {
-        const state = window.__voicx.state;
+        const state = window.__noxa.state;
         state.settings.reconnect_on_loss = true;
         state.lastConnect = {
             addr: "dropped.example:12333", nick: "Alice", pw: "secret", spw: "", bookmark: "Dropped",
@@ -1487,7 +1897,7 @@ test("keeps an automatic reconnect pinned to the server that dropped", async ({ 
 test("successful automatic reconnect replaces only the exact dropped server tab", async ({ page }) => {
     await page.clock.install();
     await page.evaluate(async () => {
-        const state = window.__voicx.state;
+        const state = window.__noxa.state;
         state.activeTabID = "dropped-tab";
         state.settings.reconnect_on_loss = true;
         state.lastConnect = { addr: "voice.example:12333", nick: "Alice", pw: "secret", spw: "", bookmark: "" };
@@ -1527,7 +1937,7 @@ test("successful automatic reconnect replaces only the exact dropped server tab"
 test("failed automatic reconnect preserves the dropped server tab", async ({ page }) => {
     await page.clock.install();
     await page.evaluate(() => {
-        const state = window.__voicx.state;
+        const state = window.__noxa.state;
         state.activeTabID = "dropped-tab";
         state.settings.reconnect_on_loss = true;
         state.lastConnect = { addr: "voice.example:12333", nick: "Alice", pw: "secret", spw: "", bookmark: "" };
@@ -1544,7 +1954,7 @@ test("failed automatic reconnect preserves the dropped server tab", async ({ pag
 test("automatic reconnect does not retire a source tab that is connected again", async ({ page }) => {
     await page.clock.install();
     await page.evaluate(() => {
-        const state = window.__voicx.state;
+        const state = window.__noxa.state;
         state.activeTabID = "dropped-tab";
         state.settings.reconnect_on_loss = true;
         state.lastConnect = { addr: "voice.example:12333", nick: "Alice", pw: "secret", spw: "", bookmark: "" };
@@ -1566,7 +1976,7 @@ test("automatic reconnect does not retire a source tab that is connected again",
 
 test("does not finish an in-flight reconnect after an intentional disconnect", async ({ page }) => {
     await page.evaluate(() => {
-        const { state } = window.__voicx;
+        const { state } = window.__noxa;
         state.settings.reconnect_on_loss = true;
         state.lastSuccessfulConnect = {
             addr: "voice.example:12333", nick: "Alice", pw: "secret", spw: "", bookmark: "Work",
@@ -1588,11 +1998,11 @@ test("does not finish an in-flight reconnect after an intentional disconnect", a
     await expect.poll(() => page.evaluate(() => window.__calls.CloseTab || 0)).toBe(1);
     expect(await page.evaluate(() => window.__callArgs.CloseTab[0])).toEqual(["stale-reconnect-tab"]);
     await expect(page.locator("#conn-pill")).not.toHaveClass(/\bup\b/);
-    expect(await page.evaluate(() => window.__voicx.state.lastConnect)).toBeNull();
+    expect(await page.evaluate(() => window.__noxa.state.lastConnect)).toBeNull();
 });
 
 test("labels screen-share controls and explains low-bandwidth data use", async ({ page }) => {
-    await page.evaluate(() => window.__voicx.showWorkspace(false));
+    await page.evaluate(() => window.__noxa.showWorkspace(false));
     await page.getByLabel("Voice options", { exact: true }).click();
     const shareButton = page.locator("#voice-screen");
     const lowBandwidthButton = page.locator("#voice-lowbw");
@@ -1648,7 +2058,7 @@ test("switches active server tabs without retaining stale identity", async ({ pa
     });
     await expect(page.locator('.srv-tab[data-tab-id="tab-a"]')).toHaveClass(/active/);
     await page.evaluate(() => {
-        const state = window.__voicx.state;
+        const state = window.__noxa.state;
         state.serverGroups = [{ id: 7, name: "Old server admins" }];
         state.groupByUID = new Map([["old-user", [{ id: 7 }]]]);
         state.groupIcons = new Map([[7, "old-group-icon"]]);
@@ -1661,14 +2071,14 @@ test("switches active server tabs without retaining stale identity", async ({ pa
     });
     await page.locator('.srv-tab[data-tab-id="tab-b"]').click();
     await expect(page.locator('.srv-tab[data-tab-id="tab-b"]')).toHaveClass(/active/);
-    await expect.poll(() => page.evaluate(() => window.__voicx.state.myClientID)).toBe("client-b");
+    await expect.poll(() => page.evaluate(() => window.__noxa.state.myClientID)).toBe("client-b");
     await expect.poll(() => page.evaluate(() => ({
-        groups: window.__voicx.state.serverGroups.length,
-        memberships: window.__voicx.state.groupByUID.size,
-        groupIcons: window.__voicx.state.groupIcons.size,
-        avatars: window.__voicx.state.avatars.size,
-        avatarPending: window.__voicx.state.avatarPending.size,
-        permissions: window.__voicx.state.myPerms.size,
+        groups: window.__noxa.state.serverGroups.length,
+        memberships: window.__noxa.state.groupByUID.size,
+        groupIcons: window.__noxa.state.groupIcons.size,
+        avatars: window.__noxa.state.avatars.size,
+        avatarPending: window.__noxa.state.avatarPending.size,
+        permissions: window.__noxa.state.myPerms.size,
     }))).toEqual({ groups: 0, memberships: 0, groupIcons: 0, avatars: 0, avatarPending: 0, permissions: 0 });
     await expect(page.locator("#server-icon")).toHaveClass(/hidden/);
     await expect(page.locator("#server-icon")).not.toHaveAttribute("src", /.+/);
@@ -1681,7 +2091,7 @@ test("recognises an immediate channel join while switched-tab identity is loadin
             { id: "tab-b", addr: "b.example:12333", nickname: "bob", active: false, connected: true, unread: 0, mentions: 0 },
         ];
         window.__activeClient = "client-a";
-        window.__voicx.state.myClientID = "client-a";
+        window.__noxa.state.myClientID = "client-a";
         let release;
         window.__clientIDGate = new Promise((resolve) => { release = resolve; });
         window.__releaseClientID = release;
@@ -1704,14 +2114,14 @@ test("recognises an immediate channel join while switched-tab identity is loadin
         window.__clientIDGate = null;
     });
 
-    await expect.poll(() => page.evaluate(() => window.__voicx.state.myClientID)).toBe("client-b");
-    await expect.poll(() => page.evaluate(() => window.__voicx.state.myChannelID)).toBe(42);
+    await expect.poll(() => page.evaluate(() => window.__noxa.state.myClientID)).toBe("client-b");
+    await expect.poll(() => page.evaluate(() => window.__noxa.state.myChannelID)).toBe(42);
 });
 
 test("removes cascaded deleted channels and displaces every cached member safely", async ({ page }) => {
     await page.evaluate(() => {
-        window.__voicx.showWorkspace(false);
-        window.__voicx.state.myClientID = "";
+        window.__noxa.showWorkspace(false);
+        window.__noxa.state.myClientID = "";
         for (const callback of window.__events.snapshot || []) callback(JSON.stringify({
             root_channels: [
                 {
@@ -1742,20 +2152,20 @@ test("removes cascaded deleted channels and displaces every cached member safely
                 },
             ],
         }));
-        window.__voicx.state.myClientID = "client-a";
-        window.__voicx.state.myChannelID = 11;
+        window.__noxa.state.myClientID = "client-a";
+        window.__noxa.state.myChannelID = 11;
         window.__voiceTracksStopped = 0;
-        window.__voicx.state.localStream = {
+        window.__noxa.state.localStream = {
             getTracks: () => [{ stop: () => { window.__voiceTracksStopped++; } }],
             getAudioTracks: () => [],
             getVideoTracks: () => [],
         };
         document.getElementById("voice-status").textContent = "voice on";
-        window.__voicx.state.collapsedChannels.add(10);
-        window.__voicx.state.collapsedChannels.add(20);
-        window.__voicx.state.expandedVirtual.add(12);
-        window.__voicx.state.expandedVirtual.add(22);
-        window.__voicx.renderTree();
+        window.__noxa.state.collapsedChannels.add(10);
+        window.__noxa.state.collapsedChannels.add(20);
+        window.__noxa.state.expandedVirtual.add(12);
+        window.__noxa.state.expandedVirtual.add(22);
+        window.__noxa.renderTree();
     });
 
     await page.locator("#tab-files").click();
@@ -1769,13 +2179,13 @@ test("removes cascaded deleted channels and displaces every cached member safely
     });
 
     await expect.poll(() => page.evaluate(() => ({
-        channels: window.__voicx.state.channels.map((channel) => channel.ChannelID),
-        clients: Object.fromEntries(window.__voicx.state.clients.map((client) => [client.client_id, client.channel_id])),
-        myChannelID: window.__voicx.state.myChannelID,
-        localStreamCleared: window.__voicx.state.localStream === null,
+        channels: window.__noxa.state.channels.map((channel) => channel.ChannelID),
+        clients: Object.fromEntries(window.__noxa.state.clients.map((client) => [client.client_id, client.channel_id])),
+        myChannelID: window.__noxa.state.myChannelID,
+        localStreamCleared: window.__noxa.state.localStream === null,
         stopped: window.__voiceTracksStopped,
-        collapsedDeleted: !window.__voicx.state.collapsedChannels.has(10),
-        expandedDeleted: !window.__voicx.state.expandedVirtual.has(12),
+        collapsedDeleted: !window.__noxa.state.collapsedChannels.has(10),
+        expandedDeleted: !window.__noxa.state.expandedVirtual.has(12),
     }))).toEqual({
         channels: [20, 21, 22],
         clients: { "client-a": 0, "client-b": 0, "client-c": 22 },
@@ -1794,7 +2204,7 @@ test("removes cascaded deleted channels and displaces every cached member safely
     // subtree so this second deletion exercises descendant member and voice
     // cleanup rather than merely deleting a leaf.
     await page.evaluate(() => {
-        const state = window.__voicx.state;
+        const state = window.__noxa.state;
         state.myClientID = "client-c";
         state.myChannelID = 22;
         state.localStream = {
@@ -1807,13 +2217,13 @@ test("removes cascaded deleted channels and displaces every cached member safely
         for (const callback of window.__events.event || []) callback(event);
     });
     await expect.poll(() => page.evaluate(() => ({
-        channels: window.__voicx.state.channels.length,
-        carolChannel: window.__voicx.state.clients.find((client) => client.client_id === "client-c")?.channel_id,
-        myChannelID: window.__voicx.state.myChannelID,
-        localStreamCleared: window.__voicx.state.localStream === null,
+        channels: window.__noxa.state.channels.length,
+        carolChannel: window.__noxa.state.clients.find((client) => client.client_id === "client-c")?.channel_id,
+        myChannelID: window.__noxa.state.myChannelID,
+        localStreamCleared: window.__noxa.state.localStream === null,
         stopped: window.__voiceTracksStopped,
-        collapsedDeleted: !window.__voicx.state.collapsedChannels.has(20),
-        expandedDeleted: !window.__voicx.state.expandedVirtual.has(22),
+        collapsedDeleted: !window.__noxa.state.collapsedChannels.has(20),
+        expandedDeleted: !window.__noxa.state.expandedVirtual.has(22),
     }))).toEqual({
         channels: 0,
         carolChannel: 0,
@@ -1827,21 +2237,30 @@ test("removes cascaded deleted channels and displaces every cached member safely
     await expect(page.locator("#voice-status")).toHaveText("voice off");
 });
 
-test("starts voice, plays the MP3 join cue, and switches channels", async ({ page }) => {
-    await page.evaluate(() => {
+test("starts voice, plays the original channel join cue, and switches channels", async ({ page }) => {
+    await page.evaluate(async () => {
         window.__getUserMediaCalls = 0;
         window.__playedMedia = [];
-        HTMLMediaElement.prototype.play = function play() {
-            window.__playedMedia.push(this.currentSrc || this.src);
-            return Promise.resolve();
+        const engine = window.__noxa.soundEngine;
+        await engine.preload();
+        await engine.resume();
+        const source = engine.ctx.createBufferSource.bind(engine.ctx);
+        engine.ctx.createBufferSource = () => {
+            const node = source();
+            const start = node.start.bind(node);
+            node.start = (...args) => {
+                window.__playedMedia.push([...engine.buffers].find(([, buffer]) => node.buffer === buffer)?.[0]);
+                start(...args);
+            };
+            return node;
         };
         navigator.mediaDevices.getUserMedia = async () => {
             window.__getUserMediaCalls++;
             throw new DOMException("test permission denial", "NotAllowedError");
         };
-        window.__voicx.state.myClientID = "client-a";
-        window.__voicx.state.myChannelID = 0;
-        window.__voicx.state.clients = [{
+        window.__noxa.state.myClientID = "client-a";
+        window.__noxa.state.myChannelID = 0;
+        window.__noxa.state.clients = [{
             client_id: "client-a", unique_id: "user-a", nickname: "Alice",
             channel_id: 0, is_speaking: false,
         }];
@@ -1872,10 +2291,9 @@ test("starts voice, plays the MP3 join cue, and switches channels", async ({ pag
         const moved = JSON.stringify({ type: "user_moved", data: { client_id: "client-a", channel_id: 43 } });
         for (const cb of window.__events.event || []) cb(moved);
     });
-    // The bundled media cue belongs to the initial join; a channel switch has
-    // its own synthesized motif and must not replay the MP3.
-    await expect.poll(() => page.evaluate(() => window.__voicx.state.myChannelID)).toBe(43);
-    await expect.poll(() => page.evaluate(() => window.__playedMedia.length)).toBe(firstCueCount);
+    // A switch uses its own authored cue and does not replay channel join.
+    await expect.poll(() => page.evaluate(() => window.__noxa.state.myChannelID)).toBe(43);
+    await expect.poll(() => page.evaluate(() => window.__playedMedia.at(-1))).toBe("own_channel_switch");
     await page.evaluate(() => {
         const moved = JSON.stringify({ type: "user_moved", data: { client_id: "client-a", channel_id: 0 } });
         for (const cb of window.__events.event || []) cb(moved);
@@ -1890,24 +2308,24 @@ test("undeafens after a confirmed channel join but preserves deafen on duplicate
             type: "user_moved", data: { client_id: clientID, channel_id: channelID },
         }));
     }, { clientID, channelID });
-    await page.evaluate(() => window.__voicx.setDeafened(true));
+    await page.evaluate(() => window.__noxa.setDeafened(true));
     await emitMove("mia", 3);
     await emitMove("daniel", 2);
     await expect(page.getByRole("button", { name: "Undeafen", exact: true })).toHaveAttribute("aria-pressed", "true");
     await emitMove("daniel", 3);
     await expect(page.getByRole("button", { name: "Deafen", exact: true })).toHaveAttribute("aria-pressed", "false");
     expect(await page.locator("#remote-video").evaluate((element) => element.muted)).toBe(false);
-    await page.evaluate(() => window.__voicx.setDeafened(true));
+    await page.evaluate(() => window.__noxa.setDeafened(true));
     await emitMove("daniel", 0);
-    expect(await page.evaluate(() => window.__voicx.state.deafened)).toBe(true);
+    expect(await page.evaluate(() => window.__noxa.state.deafened)).toBe(true);
     await emitMove("daniel", 2);
-    expect(await page.evaluate(() => window.__voicx.state.deafened)).toBe(false);
+    expect(await page.evaluate(() => window.__noxa.state.deafened)).toBe(false);
 });
 
 test("undeafens when a snapshot confirms joining a channel", async ({ page }) => {
     await showB3Workspace(page);
     await page.evaluate(() => {
-        window.__voicx.setDeafened(true);
+        window.__noxa.setDeafened(true);
         for (const callback of window.__events.snapshot || []) callback(JSON.stringify({
             root_channels: [{ ChannelID: 3, Name: "Gaming", clients: [{
                 client_id: "daniel", unique_id: "uid-daniel", nickname: "Daniel", channel_id: 3,
@@ -1918,11 +2336,119 @@ test("undeafens when a snapshot confirms joining a channel", async ({ page }) =>
     expect(await page.locator("#remote-video").evaluate((element) => element.muted)).toBe(false);
 });
 
+test("file browser filters names and sorts columns without refetching @a11y", async ({ page }, testInfo) => {
+    await page.evaluate(() => {
+        window.__noxa.showWorkspace(false);
+        window.__noxa.state.myChannelID = 42;
+        window.__fileListResponse = {
+            folders: ["Reports", "Archive"],
+            entries: [
+                { name: "report10.txt", size: 2, uploaded_at: "2026-09-13T12:00:00Z" },
+                { name: "Alpha.txt", size: 100, uploaded_at: "2026-09-15T12:00:00Z" },
+                { name: "report2.txt", size: 30, uploaded_at: "2026-09-14T12:00:00Z" },
+            ],
+        };
+    });
+    await page.locator("#tab-files").click();
+    const names = page.locator(".fb-name");
+    await expect(names).toHaveText(["Alpha.txt", "report2.txt", "report10.txt"]);
+    const requests = await page.evaluate(() => window.__calls.FileList);
+    const filter = page.getByRole("searchbox", { name: "Filter files by name" });
+    await filter.fill(" REPORT ");
+    await expect(names).toHaveText(["report2.txt", "report10.txt"]);
+    await expect(page.locator(".fb-folder-link")).toHaveText(["Reports/"]);
+    await filter.fill("missing");
+    await expect(page.locator(".fb-list")).toContainText("No matching files or folders");
+    await filter.press("Escape");
+    await expect(names).toHaveCount(3);
+    const size = page.getByRole("button", { name: "Sort by size", exact: true });
+    await size.click();
+    await expect(names).toHaveText(["report10.txt", "report2.txt", "Alpha.txt"]);
+    await expect(size).toBeFocused();
+    await expect(size.locator("..")).toHaveAttribute("aria-sort", "ascending");
+    await size.press("Enter");
+    await expect(names).toHaveText(["Alpha.txt", "report2.txt", "report10.txt"]);
+    await expect(size.locator("..")).toHaveAttribute("aria-sort", "descending");
+    const date = page.getByRole("button", { name: "Sort by date", exact: true });
+    await date.click();
+    await expect(names).toHaveText(["report10.txt", "report2.txt", "Alpha.txt"]);
+    await date.click();
+    await expect(names).toHaveText(["Alpha.txt", "report2.txt", "report10.txt"]);
+    await page.getByRole("button", { name: "Sort by name", exact: true }).click();
+    await page.getByRole("button", { name: "Sort by name", exact: true }).click();
+    await expect(names).toHaveText(["report10.txt", "report2.txt", "Alpha.txt"]);
+    await expect(page.locator(".fb-folder-link")).toHaveText(["Reports/", "Archive/"]);
+    expect(await page.evaluate(() => window.__calls.FileList)).toBe(requests);
+    await auditAccessibility(page, "file filtering and sorting");
+    await page.screenshot({ path: testInfo.outputPath("file-controls.png") });
+    await page.evaluate(() => {
+        window.__fileListGate = new Promise(resolve => { window.__finishFileList = resolve; });
+    });
+    await page.getByRole("button", { name: "Refresh files", exact: true }).click();
+    await filter.fill("report");
+    await expect(names).toHaveCount(0);
+    await expect(page.locator(".fb-list")).toContainText("Loading channel files");
+    await page.evaluate(() => window.__finishFileList());
+    await expect(names).toHaveText(["report10.txt", "report2.txt"]);
+    await filter.fill("missing");
+    await page.evaluate(() => {
+        window.__fileListResponse = { entries: [], folders: [] };
+    });
+    await page.getByRole("button", { name: "Refresh files", exact: true }).click();
+    await expect(page.locator(".fb-list")).toContainText("No matching files or folders");
+    await filter.press("Escape");
+    await expect(page.locator(".fb-list")).toContainText("Empty folder");
+});
+
+test("debug console preserves older entries while new frames arrive and jumps to latest", async ({ page }, testInfo) => {
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    await page.evaluate(() => {
+        window.__noxa.showWorkspace(false);
+        window.__noxaMeta.openDebugConsole();
+        for (let i = 0; i < 200; i++) {
+            for (const cb of window.__events.debug_frame) cb({ dir: "in", type: i % 2 ? "odd" : "even", payload: `frame ${i}` });
+        }
+    });
+    const list = page.locator(".dbg-list");
+    await expect(page.locator(".dbg-row").last()).toContainText("frame 199");
+    await list.evaluate(el => { el.scrollTop = 500; });
+    const anchor = await list.evaluate(el => {
+        const row = [...el.children].find(row => row.getBoundingClientRect().bottom > el.getBoundingClientRect().top);
+        return { text: row.querySelector(".dbg-payload").textContent, top: row.getBoundingClientRect().top };
+    });
+    await page.evaluate(() => {
+        for (let i = 200; i < 210; i++) {
+            for (const cb of window.__events.debug_frame) cb({ dir: "in", type: "sample", payload: `frame ${i}` });
+        }
+    });
+    const row = page.locator(".dbg-row").filter({ has: page.locator(".dbg-payload", { hasText: new RegExp(`^${anchor.text}$`) }) });
+    expect(Math.abs(await row.evaluate(el => el.getBoundingClientRect().top) - anchor.top)).toBeLessThan(2);
+    await expect(page.locator(".dbg-row")).toHaveCount(200);
+    const jump = page.getByRole("button", { name: "Jump to latest" });
+    await expect(jump).toBeVisible();
+    await page.screenshot({ path: testInfo.outputPath("debug-reading.png") });
+    await jump.click();
+    await expect(jump).toBeHidden();
+    await page.evaluate(() => {
+        for (const cb of window.__events.debug_frame) cb({ dir: "out", type: "sample", payload: "newest frame" });
+    });
+    await expect(page.locator(".dbg-row").last()).toContainText("newest frame");
+    expect(await list.evaluate(el => el.scrollHeight - el.clientHeight - el.scrollTop)).toBeLessThan(3);
+    await page.locator(".dbg-filter").fill("even");
+    await expect(page.locator(".dbg-row b").first()).toHaveText("even");
+    await page.locator(".dbg-filter").fill("");
+    await expect(page.locator(".dbg-payload").first()).toHaveText("frame 11");
+    await expect(page.locator(".dbg-payload").nth(1)).toHaveText("frame 12");
+    await expect(page.locator(".dbg-payload").last()).toHaveText("newest frame");
+    await page.keyboard.press("Escape");
+    await expect(page.locator(".debug-console")).toHaveCount(0);
+});
+
 test("shows the files toolbar and opens the upload picker", async ({ page }) => {
     await page.evaluate(() => {
-        window.__voicx.showWorkspace(false);
-        window.__voicx.state.myChannelID = 42;
-        window.__voicx.state.channels = [{ ChannelID: 42, Name: "Uploads" }];
+        window.__noxa.showWorkspace(false);
+        window.__noxa.state.myChannelID = 42;
+        window.__noxa.state.channels = [{ ChannelID: 42, Name: "Uploads" }];
     });
 
     await page.locator("#tab-files").click();
@@ -1934,8 +2460,8 @@ test("shows the files toolbar and opens the upload picker", async ({ page }) => 
 
 test("saves chat attachments through the native bridge without a DOM data URL", async ({ page }) => {
     await page.evaluate(() => {
-        window.__voicx.showWorkspace(false);
-        const state = window.__voicx.state;
+        window.__noxa.showWorkspace(false);
+        const state = window.__noxa.state;
         state.myChannelID = 42;
         state.channels = [{ ChannelID: 42, Name: "Uploads" }];
         window.__saveAttachmentResult = "C:\\Downloads\\report.txt";
@@ -1969,7 +2495,7 @@ test("saves chat attachments through the native bridge without a DOM data URL", 
 
 test("opens About links externally once and ignores a late rejected version lookup", async ({ page }) => {
     await page.evaluate(() => {
-        window.__voicx.showWorkspace(false);
+        window.__noxa.showWorkspace(false);
         let release;
         window.__clientVersionGate = new Promise((resolve) => { release = resolve; });
         window.__releaseClientVersion = release;
@@ -1980,22 +2506,22 @@ test("opens About links externally once and ignores a late rejected version look
     });
     const help = page.locator("#menubar > .menu-item").filter({ hasText: /^Help/ });
     await help.click();
-    await page.getByRole("menuitem", { name: /About voicx/ }).click();
-    const about = page.locator(".dlg-overlay", { hasText: "About voicx" });
+    await page.getByRole("menuitem", { name: /About noXa/ }).click();
+    const about = page.locator(".dlg-overlay", { hasText: "About noXa" });
     const project = about.getByRole("link", { name: "project" });
-    await expect(project).toHaveAttribute("href", "https://github.com/arumes31/voicx");
+    await expect(project).toHaveAttribute("href", "https://github.com/arumes31/noxa");
     await expect(project).toHaveAttribute("rel", "noopener noreferrer");
-    await expect(about.getByRole("link", { name: "issues" })).toHaveAttribute("href", "https://github.com/arumes31/voicx/issues");
+    await expect(about.getByRole("link", { name: "issues" })).toHaveAttribute("href", "https://github.com/arumes31/noxa/issues");
 
     const before = page.url();
     await page.evaluate(() => {
         const overlay = [...document.querySelectorAll(".dlg-overlay")]
-            .find((el) => el.textContent.includes("About voicx"));
+            .find((el) => el.textContent.includes("About noXa"));
         overlay.querySelector(".about-links a").click();
         overlay.querySelector(".dlg-ok").click();
         window.__releaseClientVersion();
     });
-    await expect.poll(() => page.evaluate(() => window.__browserURLs)).toEqual(["https://github.com/arumes31/voicx"]);
+    await expect.poll(() => page.evaluate(() => window.__browserURLs)).toEqual(["https://github.com/arumes31/noxa"]);
     expect(page.url()).toBe(before);
     await expect(about).toHaveCount(0);
     await page.waitForTimeout(0);
@@ -2004,12 +2530,12 @@ test("opens About links externally once and ignores a late rejected version look
 
 test("retains failed chat drafts and only retries attachments that were not sent", async ({ page }) => {
     await page.evaluate(() => {
-        window.__voicx.showWorkspace(false);
-        window.__voicx.state.myChannelID = 42;
-        window.__voicx.state.channels = [{ ChannelID: 42, Name: "Uploads" }];
+        window.__noxa.showWorkspace(false);
+        window.__noxa.state.myChannelID = 42;
+        window.__noxa.state.channels = [{ ChannelID: 42, Name: "Uploads" }];
     });
     await page.evaluate(() => {
-        window.__voicxChat.addChat({
+        window.__noxaChat.addChat({
             id: 701, channel_id: 42, from: "Bob", from_unique_id: "user-b", text: "reply parent",
         });
     });
@@ -2048,11 +2574,11 @@ test("retains failed chat drafts and only retries attachments that were not sent
 
 test("requeues only upload and attachment-token failures without resending successful attachments", async ({ page }) => {
     await page.evaluate(() => {
-        window.__voicx.showWorkspace(false);
-        const state = window.__voicx.state;
+        window.__noxa.showWorkspace(false);
+        const state = window.__noxa.state;
         state.myChannelID = 42;
         state.channels = [{ ChannelID: 42, Name: "Uploads" }];
-        window.__voicxChat.addChat({ id: 704, channel_id: 42, from: "Bob", text: "reply parent" });
+        window.__noxaChat.addChat({ id: 704, channel_id: 42, from: "Bob", text: "reply parent" });
         window.__uploadAttempts = {};
         window.__attachmentSendAttempts = {};
         window.__uploadAttachmentHandler = (_channelID, name) => {
@@ -2111,19 +2637,19 @@ test("requeues only upload and attachment-token failures without resending succe
 
 test("discards stale inline attachment previews and configures lazy image and video media", async ({ page }) => {
     await page.evaluate(() => {
-        window.__voicx.showWorkspace(false);
-        const state = window.__voicx.state;
+        window.__noxa.showWorkspace(false);
+        const state = window.__noxa.state;
         state.myChannelID = 42;
         state.channels = [{ ChannelID: 42, Name: "Uploads" }];
-        window.__voicxChat.onMyChannelChanged();
+        window.__noxaChat.onMyChannelChanged();
         let release;
         window.__attachmentGate = new Promise((resolve) => { release = resolve; });
         window.__releaseAttachment = release;
         window.__attachmentData = "aGVsbG8=";
-        window.__voicxChat.addChat({ id: 702, channel_id: 42, from: "Bob", text: "[file:stale.vcx#dGVzdA==#stale.png]" });
+        window.__noxaChat.addChat({ id: 702, channel_id: 42, from: "Bob", text: "[file:stale.vcx#dGVzdA==#stale.png]" });
     });
     await page.evaluate(() => {
-        window.__voicx.state.serverGeneration++;
+        window.__noxa.state.serverGeneration++;
         window.__releaseAttachment();
     });
     await page.waitForTimeout(0);
@@ -2132,7 +2658,7 @@ test("discards stale inline attachment previews and configures lazy image and vi
 
     await page.evaluate(() => {
         window.__attachmentGate = null;
-        window.__voicxChat.addChat({ id: 703, channel_id: 42, from: "Bob", text: "[file:photo.vcx#dGVzdA==#photo.png] [file:clip.vcx#dGVzdA==#clip.webm]" });
+        window.__noxaChat.addChat({ id: 703, channel_id: 42, from: "Bob", text: "[file:photo.vcx#dGVzdA==#photo.png] [file:clip.vcx#dGVzdA==#clip.webm]" });
     });
     const image = page.locator(".msg-file img.msg-img");
     const video = page.locator(".msg-file video.msg-video");
@@ -2153,8 +2679,8 @@ test("discards stale inline attachment previews and configures lazy image and vi
 
 test("does not construct stale attachment data URLs after channel or view changes", async ({ page }) => {
     await page.evaluate(() => {
-        window.__voicx.showWorkspace(false);
-        const state = window.__voicx.state;
+        window.__noxa.showWorkspace(false);
+        const state = window.__noxa.state;
         state.myChannelID = 42;
         state.channels = [
             { ChannelID: 42, Name: "Original" },
@@ -2184,20 +2710,20 @@ test("does not construct stale attachment data URLs after channel or view change
         window.__downloadAttachmentHandler = (_channelID, storage) => new Promise((resolve, reject) => {
             window.__attachmentRequests[storage] = { resolve, reject };
         });
-        window.__voicxChat.addChat({
+        window.__noxaChat.addChat({
             id: 705, channel_id: 42, from: "Bob", text: "[file:stale-resolve.vcx#dGVzdA==#photo.png]",
         });
     });
     await expect.poll(() => page.evaluate(() => Object.keys(window.__attachmentRequests))).toEqual(["stale-resolve.vcx"]);
     await page.evaluate(() => {
-        window.__voicx.state.myChannelID = 43;
+        window.__noxa.state.myChannelID = 43;
         window.__attachmentRequests["stale-resolve.vcx"].resolve("aGVsbG8=");
     });
     await page.waitForTimeout(0);
     expect(await page.evaluate(() => window.__attachmentDataURLWrites)).toEqual([]);
 
     await page.evaluate(() => {
-        window.__voicxChat.addChat({
+        window.__noxaChat.addChat({
             id: 706, channel_id: 43, from: "Bob", text: "[file:stale-reject.vcx#dGVzdA==#photo.png]",
         });
     });
@@ -2205,7 +2731,7 @@ test("does not construct stale attachment data URLs after channel or view change
         "stale-reject.vcx", "stale-resolve.vcx",
     ]);
     await page.evaluate(() => {
-        window.__voicxChat.openPM("user-b", "Bob");
+        window.__noxaChat.openPM("user-b", "Bob");
         window.__attachmentRequests["stale-reject.vcx"].reject(new Error("download rejected"));
     });
     await page.waitForTimeout(0);
@@ -2221,10 +2747,10 @@ test("contains disconnect and ICE-candidate rejections and reports ICE exhaustio
     await page.evaluate(async () => {
         window.__unhandled = [];
         window.addEventListener("unhandledrejection", (event) => window.__unhandled.push(String(event.reason)));
-        window.__voicx.state.settings.notify_connection = true;
+        window.__noxa.state.settings.notify_connection = true;
         document.getElementById("conn-pill").classList.add("up");
         window.__disconnectReject = true;
-        await window.__voicx.disconnect();
+        await window.__noxa.disconnect();
 
         const originalSetTimeout = window.setTimeout;
         const originalClearTimeout = window.clearTimeout;
@@ -2286,14 +2812,14 @@ test("contains disconnect and ICE-candidate rejections and reports ICE exhaustio
             close() { this.iceConnectionState = "closed"; }
         }
         window.RTCPeerConnection = FakePeerConnection;
-        const state = window.__voicx.state;
+        const state = window.__noxa.state;
         state.myClientID = "client-a";
         state.myChannelID = 42;
         state.channels = [{ ChannelID: 42, Name: "Lobby" }];
-        await window.__voicx.ensureVoiceForChannel();
+        await window.__noxa.ensureVoiceForChannel();
         const oldPC = state.pc;
-        window.__voicx.resetVoiceSession();
-        await window.__voicx.ensureVoiceForChannel();
+        window.__noxa.resetVoiceSession();
+        await window.__noxa.ensureVoiceForChannel();
         const pc = state.pc;
         window.__iceSysMessagesBeforeRetries = document.querySelectorAll("#chat-log .msg.sys").length;
         window.__sendICECandidateReject = true;
@@ -2338,9 +2864,9 @@ test("contains disconnect and ICE-candidate rejections and reports ICE exhaustio
 
 test("does not let an old checksum restoration timer mutate a reset file view", async ({ page }) => {
     await page.evaluate(() => {
-        window.__voicx.showWorkspace(false);
-        window.__voicx.state.myChannelID = 42;
-        window.__voicx.state.channels = [{ ChannelID: 42, Name: "Uploads" }];
+        window.__noxa.showWorkspace(false);
+        window.__noxa.state.myChannelID = 42;
+        window.__noxa.state.channels = [{ ChannelID: 42, Name: "Uploads" }];
         window.__fileListResponse = {
             entries: [{ name: "report.txt", size: 4, uploader: "user-a", uploaded_at: 1, sha256: "0123456789abcdef" }],
             folders: [], used_bytes: 4, quota_bytes: 100,
@@ -2356,14 +2882,14 @@ test("does not let an old checksum restoration timer mutate a reset file view", 
         return sha.textContent;
     });
     expect(oldSHA).toBe("✓ ok");
-    await page.evaluate(() => window.__voicxFiles.resetServerView());
+    await page.evaluate(() => window.__noxaFiles.resetServerView());
     await page.waitForTimeout(4100);
     expect(await page.evaluate(() => window.__oldChecksumCell.textContent)).toBe("✓ ok");
 });
 
 test("keeps details contextual and opens it when a user is selected", async ({ page }) => {
     await page.evaluate(() => {
-        window.__voicx.showWorkspace(false);
+        window.__noxa.showWorkspace(false);
     });
     await expect(page.locator("body")).toHaveClass(/details-collapsed/);
     await page.evaluate(() => {
@@ -2393,9 +2919,9 @@ test("keeps details contextual and opens it when a user is selected", async ({ p
 
 test("lets a guest redeem a privilege key and promotes the live session", async ({ page }) => {
     await page.evaluate(() => {
-        window.__voicx.state.myClientID = "guest-client";
-        window.__voicx.state.isGuest = true;
-        window.__voicxPerms.openTokenRedeem();
+        window.__noxa.state.myClientID = "guest-client";
+        window.__noxa.state.isGuest = true;
+        window.__noxaPerms.openTokenRedeem();
     });
     await expect(page.locator(".tk-use-input")).toBeVisible();
     await page.locator(".tk-use-input").fill("bootstrap-key");
@@ -2409,15 +2935,15 @@ test("lets a guest redeem a privilege key and promotes the live session", async 
         });
         for (const cb of window.__events.event || []) cb(event);
     });
-    await expect.poll(() => page.evaluate(() => window.__voicx.state.isGuest)).toBe(false);
+    await expect.poll(() => page.evaluate(() => window.__noxa.state.isGuest)).toBe(false);
     await expect(page.locator(".toast")).toContainText("privilege key redeemed");
 });
 
 test("nests connected members below channels and offers them as direct-message targets", async ({ page }) => {
     await page.evaluate(() => {
-        window.__voicx.showWorkspace(false);
-        window.__voicx.state.myClientID = "client-a";
-        window.__voicx.state.myChannelID = 1;
+        window.__noxa.showWorkspace(false);
+        window.__noxa.state.myClientID = "client-a";
+        window.__noxa.state.myChannelID = 1;
         for (const cb of window.__events.snapshot || []) cb(JSON.stringify({
             root_channels: [
                 {
@@ -2455,14 +2981,14 @@ test("nests connected members below channels and offers them as direct-message t
 test("uses the B3 console composition without losing responsive navigation", async ({ page }) => {
     await page.setViewportSize({ width: 1280, height: 800 });
     await page.evaluate(() => {
-        window.__voicx.showWorkspace(false);
+        window.__noxa.showWorkspace(false);
         window.__tabs = [{
             id: "tab-a", addr: "127.0.0.1:12333", nickname: "Test",
             active: true, connected: true, unread: 0, mentions: 0,
         }];
         for (const cb of window.__events.tab_update || []) cb(structuredClone(window.__tabs));
-        window.__voicx.state.myClientID = "client-a";
-        window.__voicx.state.myChannelID = 1;
+        window.__noxa.state.myClientID = "client-a";
+        window.__noxa.state.myChannelID = 1;
         for (const cb of window.__events.snapshot || []) cb(JSON.stringify({
             root_channels: [{
                 ChannelID: 1, ParentID: 0, Name: "Main Lounge",
@@ -2502,7 +3028,7 @@ test("uses the B3 console composition without losing responsive navigation", asy
 });
 
 test("exposes named landmarks, controls, live regions, and a visible focus ring", async ({ page }) => {
-    await expect(page.getByRole("dialog", { name: "voicx" })).toBeVisible();
+    await expect(page.getByRole("dialog", { name: "noxa" })).toBeVisible();
     await expect(page.getByRole("textbox", { name: /^server$/i })).toBeVisible();
     await expect(page.getByRole("button", { name: "Connect" })).toBeVisible();
     await expect(page.locator("#login-error")).toHaveAttribute("role", "alert");
@@ -2520,7 +3046,7 @@ test("exposes named landmarks, controls, live regions, and a visible focus ring"
     })).toBe("solid 2px");
 
     await expect(page.locator(".skip-link")).toBeHidden();
-    await page.evaluate(() => window.__voicx.showWorkspace(false));
+    await page.evaluate(() => window.__noxa.showWorkspace(false));
     await page.locator(".skip-link").focus();
     await expect(page.locator(".skip-link")).toBeVisible();
     await page.evaluate(() => {
@@ -2541,19 +3067,19 @@ test("exposes named landmarks, controls, live regions, and a visible focus ring"
 test("@a11y audits primary login, workspace, settings, and permission-dialog states", async ({ page }) => {
     await auditAccessibility(page, "login");
 
-    await page.evaluate(() => window.__voicx.showWorkspace(false));
+    await page.evaluate(() => window.__noxa.showWorkspace(false));
     await auditAccessibility(page, "connected workspace");
 
-    await page.evaluate(() => window.__voicx.openSettings("application"));
+    await page.evaluate(() => window.__noxa.openSettings("application"));
     await expect(page.getByRole("dialog", { name: "Settings" })).toBeVisible();
     await auditAccessibility(page, "settings dialog");
     await page.keyboard.press("Escape");
 
     await page.evaluate(() => {
-        window.__voicx.state.isAdmin = true;
+        window.__noxa.state.isAdmin = true;
         window.__groups = { groups: [{ id: 7, name: "Operators", member_count: 0, color: "" }] };
         window.__permEntries = { entries: [{ key: "b_channel_join_permanent", value: 1, grant: 1, skip: false, negate: false }] };
-        window.__voicxPerms.openPermissionManager();
+        window.__noxaPerms.openPermissionManager();
     });
     await page.locator(".pm-target", { hasText: "Operators" }).click();
     await expect(page.locator(".pm-edit-grid")).toBeVisible();
@@ -2562,8 +3088,8 @@ test("@a11y audits primary login, workspace, settings, and permission-dialog sta
 
 test("does not delete a same-named file in a new channel after user_moved during confirmation", async ({ page }) => {
     await page.evaluate(() => {
-        const state = window.__voicx.state;
-        window.__voicx.showWorkspace(false);
+        const state = window.__noxa.state;
+        window.__noxa.showWorkspace(false);
         state.myClientID = "client-a";
         state.myChannelID = 1;
         state.channels = [
@@ -2593,8 +3119,8 @@ test("does not delete a same-named file in a new channel after user_moved during
 
 test("does not export a different channel after its passphrase dialog is left open", async ({ page }) => {
     await page.evaluate(() => {
-        const state = window.__voicx.state;
-        window.__voicx.showWorkspace(false);
+        const state = window.__noxa.state;
+        window.__noxa.showWorkspace(false);
         state.myClientID = "client-a";
         state.myChannelID = 1;
         state.channels = [
@@ -2623,7 +3149,7 @@ test("runtime boundaries ignore malformed payloads and never answer a stale offe
             event.preventDefault();
         };
         window.addEventListener("unhandledrejection", onUnhandled);
-        const state = window.__voicx.state;
+        const state = window.__noxa.state;
         state.myClientID = "client-a";
         state.clients = [];
         state.channels = [];
@@ -2707,7 +3233,7 @@ test("runtime boundaries ignore malformed payloads and never answer a stale offe
 
 test("serializes live-region bursts without coalescing identical messages", async ({ page }) => {
     await page.evaluate(() => {
-        window.__voicx.showWorkspace(false);
+        window.__noxa.showWorkspace(false);
         window.__spokenAnnouncements = [];
         for (const id of ["chat-announcer", "alert-announcer"]) {
             const region = document.getElementById(id);
@@ -2715,9 +3241,9 @@ test("serializes live-region bursts without coalescing identical messages", asyn
                 if (region.textContent) window.__spokenAnnouncements.push([id, region.textContent]);
             }).observe(region, { childList: true, characterData: true, subtree: true });
         }
-        window.__voicx.announceLive("repeated update");
-        window.__voicx.announceLive("repeated update");
-        window.__voicx.announceLive("urgent update", "assertive");
+        window.__noxa.announceLive("repeated update");
+        window.__noxa.announceLive("repeated update");
+        window.__noxa.announceLive("urgent update", "assertive");
     });
 
     await expect.poll(() => page.evaluate(() => window.__spokenAnnouncements)).toEqual([
@@ -2729,8 +3255,8 @@ test("serializes live-region bursts without coalescing identical messages", asyn
 
 test("announces only eligible chat in the visible scope", async ({ page }) => {
     await page.evaluate(() => {
-        window.__voicx.showWorkspace(false);
-        const state = window.__voicx.state;
+        window.__noxa.showWorkspace(false);
+        const state = window.__noxa.state;
         state.myClientID = "client-a";
         state.myUniqueID = "user-a";
         state.myNickname = "Alice";
@@ -2771,7 +3297,7 @@ test("announces only eligible chat in the visible scope", async ({ page }) => {
     expect(await page.evaluate(() => window.__spokenChat)).toEqual([]);
 
     await page.evaluate(() => {
-        window.__voicx.state.settings.notify_matrix = {};
+        window.__noxa.state.settings.notify_matrix = {};
         const message = JSON.stringify({
             type: "chat",
             data: { id: 206, from: "Bob", from_unique_id: "user-b", text: "visible message", channel_id: 1 },
@@ -2783,12 +3309,12 @@ test("announces only eligible chat in the visible scope", async ({ page }) => {
 
 test("summarizes visible offline replay instead of announcing every message", async ({ page }) => {
     await page.evaluate(() => {
-        window.__voicx.showWorkspace(false);
-        window.__voicx.state.myUniqueID = "user-a";
-        window.__voicx.state.myNickname = "Alice";
-        window.__voicx.state.settings.notify_matrix = {};
-        window.__voicx.state.settings.dnd_enabled = false;
-        window.__voicxChat.openPM("user-b", "Bob");
+        window.__noxa.showWorkspace(false);
+        window.__noxa.state.myUniqueID = "user-a";
+        window.__noxa.state.myNickname = "Alice";
+        window.__noxa.state.settings.notify_matrix = {};
+        window.__noxa.state.settings.dnd_enabled = false;
+        window.__noxaChat.openPM("user-b", "Bob");
         window.__offlineSpoken = [];
         const region = document.getElementById("chat-announcer");
         new MutationObserver(() => {
@@ -2814,8 +3340,8 @@ test("summarizes visible offline replay instead of announcing every message", as
 
 test("summarizes a visible reconnect burst instead of announcing every message", async ({ page }) => {
     await page.evaluate(() => {
-        window.__voicx.showWorkspace(false);
-        const state = window.__voicx.state;
+        window.__noxa.showWorkspace(false);
+        const state = window.__noxa.state;
         state.myClientID = "client-a";
         state.myUniqueID = "user-a";
         state.myNickname = "Alice";
@@ -2834,7 +3360,7 @@ test("summarizes a visible reconnect burst instead of announcing every message",
                 { ChannelID: 1, ParentID: 0, Name: "Lobby", clients: [], children: [] },
             ],
         }));
-        window.__voicxChat.beginReconnectAnnouncementBatch(2000);
+        window.__noxaChat.beginReconnectAnnouncementBatch(2000);
         for (let id = 401; id <= 403; id++) {
             const message = JSON.stringify({
                 type: "chat",
@@ -2857,8 +3383,8 @@ test("summarizes a visible reconnect burst instead of announcing every message",
 
 test("cancels stale reconnect batches when switching server tabs", async ({ page }) => {
     await page.evaluate(() => {
-        window.__voicx.showWorkspace(false);
-        const state = window.__voicx.state;
+        window.__noxa.showWorkspace(false);
+        const state = window.__noxa.state;
         state.myClientID = "client-a";
         state.myUniqueID = "user-a";
         state.myNickname = "Alice";
@@ -2887,7 +3413,7 @@ test("cancels stale reconnect batches when switching server tabs", async ({ page
             for (const callback of window.__events.event || []) callback(message);
         };
         snapshot();
-        window.__voicxChat.beginReconnectAnnouncementBatch(3000);
+        window.__noxaChat.beginReconnectAnnouncementBatch(3000);
         dispatch(451, "old server replay");
         for (const callback of window.__events.tab_reset || []) callback("manual-switch");
         state.myClientID = "client-a";
@@ -2905,8 +3431,8 @@ test("cancels stale reconnect batches when switching server tabs", async ({ page
 
 test("preserves reconnect batching across the tab created by a real reconnect", async ({ page }) => {
     await page.evaluate(() => {
-        window.__voicx.showWorkspace(false);
-        const state = window.__voicx.state;
+        window.__noxa.showWorkspace(false);
+        const state = window.__noxa.state;
         state.settings.chat_notification_level = "all";
         state.settings.notify_matrix = {};
         state.settings.channel_notify = {};
@@ -2916,7 +3442,7 @@ test("preserves reconnect batching across the tab created by a real reconnect", 
         new MutationObserver(() => {
             if (region.textContent) window.__preservedReconnectSpoken.push(region.textContent);
         }).observe(region, { childList: true, characterData: true, subtree: true });
-        window.__voicxChat.beginReconnectAnnouncementBatch(3000);
+        window.__noxaChat.beginReconnectAnnouncementBatch(3000);
         state.reconnectInFlight = true;
         for (const callback of window.__events.tab_reset || []) callback("reconnected-tab");
         state.reconnectInFlight = false;
@@ -2945,10 +3471,10 @@ test("preserves reconnect batching across the tab created by a real reconnect", 
 
 test("keeps reconnect countdown changes visual and announces the failure once", async ({ page }) => {
     await page.evaluate(() => {
-        window.__voicx.showWorkspace(false);
-        delete window.__voicx.state.settings.reconnect_on_loss;
-        window.__voicx.state.settings.notify_connection = true;
-        window.__voicx.state.lastConnect = { addr: "voice.example:12333", nick: "Alice", pw: "", spw: "" };
+        window.__noxa.showWorkspace(false);
+        delete window.__noxa.state.settings.reconnect_on_loss;
+        window.__noxa.state.settings.notify_connection = true;
+        window.__noxa.state.lastConnect = { addr: "voice.example:12333", nick: "Alice", pw: "", spw: "" };
         for (const callback of window.__events.disconnected || []) callback();
     });
     await expect(page.locator("#conn-pill")).toContainText("retry 1/5 in 5s");
@@ -2961,16 +3487,16 @@ test("keeps reconnect countdown changes visual and announces the failure once", 
 
 test("dispatches one DM notification only for actual E2EE direct messages", async ({ page }) => {
     await page.evaluate(() => {
-        const originalNotify = window.__voicxNotify.notify;
+        const originalNotify = window.__noxaNotify.notify;
         window.__notificationDispatches = [];
-        window.__voicxNotify.notify = (event, text, context) => {
+        window.__noxaNotify.notify = (event, text, context) => {
             window.__notificationDispatches.push(event);
             return originalNotify(event, text, context);
         };
         Object.defineProperty(document, "hasFocus", { configurable: true, value: () => false });
-        window.__voicx.state.myNickname = "Alice";
-        window.__voicx.state.myUniqueID = "user-a";
-        window.__voicx.state.clients = [
+        window.__noxa.state.myNickname = "Alice";
+        window.__noxa.state.myUniqueID = "user-a";
+        window.__noxa.state.clients = [
             { client_id: "client-b", unique_id: "user-b", nickname: "Bob", channel_id: 0 },
             { client_id: "client-c", unique_id: "user-c", nickname: "Carol", channel_id: 0 },
         ];
@@ -2999,7 +3525,7 @@ test("dispatches one DM notification only for actual E2EE direct messages", asyn
     ]);
     expect(await page.evaluate(() => window.__notificationDispatches.filter((event) => event === "dm").length)).toBe(1);
     expect(await page.evaluate(() => window.__calls.TrayMention || 0)).toBe(1);
-    expect(await page.evaluate(() => window.__voicx.state.lastWhispererUID)).toBe("user-b");
+    expect(await page.evaluate(() => window.__noxa.state.lastWhispererUID)).toBe("user-b");
 });
 
 test("renders hostile update, permission, and image metadata as inert data", async ({ page }) => {
@@ -3014,8 +3540,8 @@ test("renders hostile update, permission, and image metadata as inert data", asy
             source_tier: payload,
         }];
         window.__updateInfo = { available: true, version: payload, size: 1048576 };
-        await window.__voicx.refreshPermissions();
-        await window.__voicx.checkForUpdatesInteractive();
+        await window.__noxa.refreshPermissions();
+        await window.__noxa.checkForUpdatesInteractive();
     }, attack);
 
     expect(await page.evaluate(() => document.body.dataset.remoteXss || "")).toBe("");
@@ -3032,28 +3558,28 @@ test("renders hostile update, permission, and image metadata as inert data", asy
             content_type: `image/png\" onerror=\"document.body.dataset.remoteXss='image'`,
             data_base64: "AAAA",
         };
-        await window.__voicx.fetchAvatar("hostile-user");
-        window.__voicx.state.avatars.delete("valid-user");
-        window.__voicx.state.avatarPending.delete("valid-user");
+        await window.__noxa.fetchAvatar("hostile-user");
+        window.__noxa.state.avatars.delete("valid-user");
+        window.__noxa.state.avatarPending.delete("valid-user");
         const validHost = document.createElement("span");
         validHost.className = "avatar valid-avatar";
         validHost.dataset.uid = "valid-user";
         document.body.appendChild(validHost);
         window.__avatarResponse = { content_type: "image/png", data_base64: "AAAA" };
-        await window.__voicx.fetchAvatar("valid-user");
+        await window.__noxa.fetchAvatar("valid-user");
         void payload;
     }, attack);
 
     expect(await page.evaluate(() => document.body.dataset.remoteXss || "")).toBe("");
     await expect(page.locator(".hostile-avatar img")).toHaveCount(0);
-    expect(await page.evaluate(() => window.__voicx.state.avatars.get("hostile-user"))).toBe(null);
+    expect(await page.evaluate(() => window.__noxa.state.avatars.get("hostile-user"))).toBe(null);
     await expect(page.locator(".valid-avatar img")).toHaveAttribute("src", "data:image/png;base64,AAAA");
 });
 
 test("channel permissions show the channel join requirement and edit its real setting", async ({ page }, testInfo) => {
     await page.evaluate(() => {
-        window.__voicx.showWorkspace(false);
-        window.__voicx.state.isAdmin = true;
+        window.__noxa.showWorkspace(false);
+        window.__noxa.state.isAdmin = true;
         for (const cb of window.__events.snapshot || []) cb(JSON.stringify({
             root_channels: [
                 { ChannelID: 2, Name: "Member1", NeededJoinPower: 30, clients: [], children: [] },
@@ -3062,7 +3588,7 @@ test("channel permissions show the channel join requirement and edit its real se
         }));
         // An old permission override must not mask the enforced channel setting.
         window.__permEntries = { entries: [{ key: "i_channel_needed_join_power", value: 99, grant: 99 }] };
-        window.__voicxPerms.openPermissionManager();
+        window.__noxaPerms.openPermissionManager();
     });
     const manager = page.getByRole("dialog", { name: "Permission Manager", exact: true });
     await manager.getByRole("button", { name: "Channel", exact: true }).click();
@@ -3094,8 +3620,8 @@ test("channel permissions show the channel join requirement and edit its real se
     });
     await expect(row.locator("td").nth(1)).toHaveText("40");
     await page.evaluate(() => {
-        window.__voicx.state.isAdmin = false;
-        window.__voicx.state.myPerms = new Map([["b_permission_manage", { value: 1 }]]);
+        window.__noxa.state.isAdmin = false;
+        window.__noxa.state.myPerms = new Map([["b_permission_manage", { value: 1 }]]);
         for (const cb of window.__events.event || []) cb(JSON.stringify({
             type: "channel_updated", data: { channel_id: 2, needed_join_power: 40, inherit_permissions: true },
         }));
@@ -3107,12 +3633,12 @@ test("channel permissions show the channel join requirement and edit its real se
 test("renders editable permission keys as inert text", async ({ page }) => {
     const key = '<span data-permission-key-injection="true">unexpected node</span>';
     await page.evaluate(({ permissionKey }) => {
-        window.__voicx.state.isAdmin = true;
+        window.__noxa.state.isAdmin = true;
         window.__groups = { groups: [{ id: 7, name: "Operators", member_count: 0, color: "" }] };
         window.__permEntries = {
             entries: [{ key: permissionKey, value: 7, grant: 5, skip: true, negate: false }],
         };
-        window.__voicxPerms.openPermissionManager();
+        window.__noxaPerms.openPermissionManager();
     }, { permissionKey: key });
 
     await page.locator(".pm-target", { hasText: "Operators" }).click();
@@ -3131,7 +3657,7 @@ test("invalidates server dialogs and delayed responses when the active tab chang
     const oldKey = "old_server_permission";
     const newKey = "new_server_permission";
     await page.evaluate(({ staleKey }) => {
-        window.__voicx.state.isAdmin = true;
+        window.__noxa.state.isAdmin = true;
         window.__groups = { groups: [{ id: 7, name: "Old Operators", member_count: 0, color: "" }] };
         window.__permEntries = { entries: [{ key: staleKey, value: 7, grant: 7, skip: false, negate: false }] };
         let releasePermList;
@@ -3144,16 +3670,16 @@ test("invalidates server dialogs and delayed responses when the active tab chang
             nickname: "Old Alice", unique_id: "old-user", connected_at: Date.now() / 1000 - 60,
             idle_seconds: 1, ping_ms: 20, ip: "127.0.0.7", port: 12333, bytes_in: 7, bytes_out: 7,
         };
-        window.__voicxPerms.openPermissionManager();
+        window.__noxaPerms.openPermissionManager();
     }, { staleKey: oldKey });
 
     await page.locator(".pm-target", { hasText: "Old Operators" }).click();
     await expect.poll(() => page.evaluate(() => window.__calls.PermList || 0)).toBe(1);
     await page.evaluate(() => {
-        window.__voicx.openClientInfo({ client_id: "old-client", unique_id: "old-user", nickname: "Old Alice" });
-        window.__voicxPerms.openTokenManager();
-        window.__voicxPerms.openAuditViewer();
-        window.__voicxPerms.openBanList();
+        window.__noxa.openClientInfo({ client_id: "old-client", unique_id: "old-user", nickname: "Old Alice" });
+        window.__noxaPerms.openTokenManager();
+        window.__noxaPerms.openAuditViewer();
+        window.__noxaPerms.openBanList();
     });
     await expect.poll(() => page.evaluate(() => window.__calls.GetClientInfo || 0)).toBeGreaterThan(0);
     await expect(page.locator(".dlg-overlay").filter({ hasText: "Permission Manager" })).toHaveCount(1);
@@ -3170,15 +3696,15 @@ test("invalidates server dialogs and delayed responses when the active tab chang
             idle_seconds: 2, ping_ms: 9, ip: "127.0.0.9", port: 12333, bytes_in: 9, bytes_out: 9,
         };
         for (const callback of window.__events.tab_reset || []) callback("tab-b");
-        window.__voicx.state.isAdmin = true;
+        window.__noxa.state.isAdmin = true;
     }, { freshKey: newKey });
 
     await expect(page.locator(".dlg-overlay")).toHaveCount(0);
-    await page.evaluate(() => window.__voicxPerms.openPermissionManager());
+    await page.evaluate(() => window.__noxaPerms.openPermissionManager());
     await page.locator(".pm-target", { hasText: "New Operators" }).click();
     await expect(page.locator(".pm-edit-grid tbody tr.set td.mono")).toHaveText(newKey);
     await page.evaluate(() => {
-        window.__voicx.openClientInfo({ client_id: "new-client", unique_id: "new-user", nickname: "New Bob" });
+        window.__noxa.openClientInfo({ client_id: "new-client", unique_id: "new-user", nickname: "New Bob" });
     });
     await expect(page.getByRole("dialog", { name: "Connection Info" }).locator('[data-f="nick"]')).toHaveText("New Bob");
 
@@ -3210,9 +3736,9 @@ test("cancels server-bound image actions across active-tab resets", async ({ pag
         await dialog.accept("late-emoji");
     });
     const connect = () => page.evaluate(() => {
-        window.__voicx.showWorkspace(false);
-        window.__voicx.state.myClientID = "client-a";
-        window.__voicx.state.isAdmin = true;
+        window.__noxa.showWorkspace(false);
+        window.__noxa.state.myClientID = "client-a";
+        window.__noxa.state.isAdmin = true;
     });
     const reset = (tabID) => page.evaluate((id) => {
         for (const callback of window.__events.tab_reset || []) callback(id);
@@ -3268,8 +3794,8 @@ test("cancels server-bound image actions across active-tab resets", async ({ pag
 
 test("drops late ban-lift responses without refreshing the new server", async ({ page }) => {
     await page.evaluate(() => {
-        window.__voicx.showWorkspace(false);
-        window.__voicx.state.isAdmin = true;
+        window.__noxa.showWorkspace(false);
+        window.__noxa.state.isAdmin = true;
         window.__bans = { bans: [{
             id: 17,
             value: "old-user",
@@ -3281,7 +3807,7 @@ test("drops late ban-lift responses without refreshing the new server", async ({
         let release;
         window.__banRemoveGate = new Promise((resolve) => { release = resolve; });
         window.__releaseBanRemove = release;
-        window.__voicxPerms.openBanList();
+        window.__noxaPerms.openBanList();
     });
     await expect(page.locator(".ban-lift")).toHaveCount(1);
     await page.locator(".ban-lift").click();
@@ -3295,11 +3821,11 @@ test("drops late ban-lift responses without refreshing the new server", async ({
     // Once an old-server write is already in flight it cannot be cancelled,
     // but its response must not toast or schedule a list read on the new tab.
     await page.evaluate(() => {
-        window.__voicx.state.isAdmin = true;
+        window.__noxa.state.isAdmin = true;
         let release;
         window.__banRemoveGate = new Promise((resolve) => { release = resolve; });
         window.__releaseBanRemove = release;
-        window.__voicxPerms.openBanList();
+        window.__noxaPerms.openBanList();
     });
     await expect(page.locator(".ban-lift")).toHaveCount(1);
     await page.locator(".ban-lift").click();
@@ -3319,7 +3845,7 @@ test("drops late ban-lift responses without refreshing the new server", async ({
 
 test("supports keyboard menus and restores focus after a trapped modal", async ({ page }) => {
     await page.evaluate(() => {
-        window.__voicx.showWorkspace(false);
+        window.__noxa.showWorkspace(false);
     });
 
     const tools = page.locator("#menubar > .menu-item > span").filter({ hasText: /^Tools$/ }).locator("..");
@@ -3347,8 +3873,8 @@ test("supports keyboard menus and restores focus after a trapped modal", async (
 
 test("removes an unfinished hotkey capture when settings closes", async ({ page }) => {
     await page.evaluate(() => {
-        window.__voicx.showWorkspace(false);
-        window.__voicx.openSettings("hotkeys");
+        window.__noxa.showWorkspace(false);
+        window.__noxa.openSettings("hotkeys");
     });
     const capture = page.locator("#settings-content .hotkey-capture").first();
     await capture.click();
@@ -3365,9 +3891,9 @@ test("removes an unfinished hotkey capture when settings closes", async ({ page 
 
 test("activates tree rows and workspace views from the keyboard with loading feedback", async ({ page }) => {
     await page.evaluate(() => {
-        window.__voicx.showWorkspace(false);
-        window.__voicx.state.myClientID = "client-a";
-        window.__voicx.state.myChannelID = 1;
+        window.__noxa.showWorkspace(false);
+        window.__noxa.state.myClientID = "client-a";
+        window.__noxa.state.myChannelID = 1;
         for (const cb of window.__events.snapshot || []) cb(JSON.stringify({
             root_channels: [{
                 ChannelID: 1, ParentID: 0, Name: "Lobby",
@@ -3434,19 +3960,67 @@ test("activates tree rows and workspace views from the keyboard with loading fee
     await expect(page.locator("#tab-chat")).toHaveAttribute("aria-selected", "true");
 });
 
+test("notification center updates live and resumes unread counting after every close path", async ({ page }) => {
+    await page.evaluate(() => window.__noxa.showWorkspace(false));
+    const bell = page.locator("#notif-bell");
+    const rows = page.locator(".nc-row");
+    for (const close of ["button", "escape", "backdrop", "remove"]) {
+        await bell.click();
+        await page.getByRole("button", { name: "Clear all notifications" }).click();
+        await expect(page.locator(".nc-list")).toHaveText("no notifications");
+        await page.evaluate(() => window.__noxaPolish.recordNotification("message", "new arrival"));
+        await expect(rows).toHaveCount(1);
+        await expect(rows.first()).toContainText("new arrival");
+        await expect(bell).toHaveAttribute("aria-label", "Notifications, 0 unread");
+        await expect(page.locator("#notif-badge")).toHaveClass(/hidden/);
+        if (close === "button") await page.getByRole("button", { name: "Close notifications" }).click();
+        if (close === "escape") await page.keyboard.press("Escape");
+        if (close === "backdrop") await page.locator(".dlg-overlay").click({ position: { x: 2, y: 2 } });
+        await page.evaluate((close) => {
+            if (close === "remove") document.querySelector(".notif-center").closest(".dlg-overlay").remove();
+            // Direct removal and arrival can happen before lifecycle observers run.
+            window.__noxaPolish.recordNotification("message", "after closing");
+        }, close);
+        await expect(page.locator(".notif-center")).toHaveCount(0);
+        await expect(bell).toHaveAttribute("aria-label", "Notifications, 1 unread");
+    }
+});
+
+test("live notifications preserve focused rows and scrolling while limiting history to 50", async ({ page }, testInfo) => {
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    await page.evaluate(() => {
+        window.__noxa.showWorkspace(false);
+        for (let i = 0; i < 50; i++) window.__noxaPolish.recordNotification("message", `arrival ${i}`, { uid: `user-${i}` });
+    });
+    await page.locator("#notif-bell").click();
+    const focused = page.locator(".nc-row").filter({ has: page.locator(".nc-text", { hasText: /^arrival 30$/ }) });
+    await focused.focus();
+    const before = await focused.evaluate(row => row.getBoundingClientRect().top);
+    await page.evaluate(() => window.__noxaPolish.recordNotification("message", "latest arrival", { uid: "latest" }));
+    await expect(page.locator(".nc-row")).toHaveCount(50);
+    await expect(page.locator(".nc-row").first()).toContainText("latest arrival");
+    await expect(focused).toBeFocused();
+    expect(Math.abs(await focused.evaluate(row => row.getBoundingClientRect().top) - before)).toBeLessThan(2);
+    await expect(page.locator(".nc-text").filter({ hasText: /^arrival 0$/ })).toHaveCount(0);
+    await page.screenshot({ path: testInfo.outputPath("notifications-live.png") });
+    await page.locator(".nc-row").last().focus();
+    await page.evaluate(() => window.__noxaPolish.recordNotification("message", "one more arrival"));
+    await expect(page.getByRole("button", { name: "Close notifications" })).toBeFocused();
+});
+
 test("keeps unread notification labels exact while the visual badge is capped", async ({ page }) => {
-    await page.evaluate(() => window.__voicx.showWorkspace(false));
+    await page.evaluate(() => window.__noxa.showWorkspace(false));
     const bell = page.locator("#notif-bell");
     const badge = page.locator("#notif-badge");
     await expect(bell).toHaveAttribute("aria-label", "Notifications, 0 unread");
     await expect(badge).toHaveClass(/hidden/);
 
-    await page.evaluate(() => window.__voicxPolish.recordNotification("message", "one"));
+    await page.evaluate(() => window.__noxaPolish.recordNotification("message", "one"));
     await expect(bell).toHaveAttribute("aria-label", "Notifications, 1 unread");
     await expect(badge).toHaveText("1");
 
     await page.evaluate(() => {
-        for (let i = 2; i <= 12; i++) window.__voicxPolish.recordNotification("message", String(i));
+        for (let i = 2; i <= 12; i++) window.__noxaPolish.recordNotification("message", String(i));
     });
     await expect(bell).toHaveAttribute("aria-label", "Notifications, 12 unread");
     await expect(badge).toHaveText("9+");
@@ -3461,7 +4035,7 @@ test("keeps unread notification labels exact while the visual badge is capped", 
 });
 
 test("keeps global announcements available in Files and restores chat for compact and zen modes", async ({ page }) => {
-    await page.evaluate(() => window.__voicx.showWorkspace(false));
+    await page.evaluate(() => window.__noxa.showWorkspace(false));
     const workspaceState = () => page.evaluate(() => ({
         chatSelected: document.getElementById("tab-chat").getAttribute("aria-selected"),
         filesSelected: document.getElementById("tab-files").getAttribute("aria-selected"),
@@ -3493,8 +4067,8 @@ test("keeps global announcements available in Files and restores chat for compac
     await expect(page.locator("#files-pane")).toBeVisible();
     await expect(page.locator("#tab-files")).toBeFocused();
     await page.evaluate(() => {
-        window.__voicx.announceLive("Connection warning while browsing files", "assertive");
-        window.__voicx.announceLive("Status while browsing files", "polite");
+        window.__noxa.announceLive("Connection warning while browsing files", "assertive");
+        window.__noxa.announceLive("Status while browsing files", "polite");
     });
     await expect(page.locator("#alert-announcer")).toHaveText("Connection warning while browsing files");
     await expect(page.locator("#chat-announcer")).toHaveText("Status while browsing files");
@@ -3508,12 +4082,12 @@ test("keeps global announcements available in Files and restores chat for compac
         });
     })).toBe(true);
 
-    await page.evaluate(() => window.__voicx.toggleCompact());
+    await page.evaluate(() => window.__noxa.toggleCompact());
     await expect(page.locator("body")).toHaveClass(/compact/);
     await expect(page.locator("#voice-bar")).toBeVisible();
     expect(await workspaceState()).toEqual(chatActive);
     await expectRecoveredFocus();
-    await page.evaluate(() => window.__voicx.toggleCompact());
+    await page.evaluate(() => window.__noxa.toggleCompact());
     await expect(page.locator("body")).not.toHaveClass(/compact/);
     expect(await workspaceState()).toEqual(chatActive);
     await expectRecoveredFocus();
@@ -3522,12 +4096,12 @@ test("keeps global announcements available in Files and restores chat for compac
     await expect(page.locator("#files-pane .fb-upload")).toBeVisible();
     await page.locator("#files-pane .fb-upload").focus();
     await expect(page.locator("#files-pane .fb-upload")).toBeFocused();
-    await page.evaluate(() => window.__voicxPolish.toggleZen());
+    await page.evaluate(() => window.__noxaPolish.toggleZen());
     await expect(page.locator("body")).toHaveClass(/zen/);
     await expect(page.locator("#voice-bar")).toBeVisible();
     expect(await workspaceState()).toEqual(chatActive);
     await expectRecoveredFocus();
-    await page.evaluate(() => window.__voicxPolish.toggleZen());
+    await page.evaluate(() => window.__noxaPolish.toggleZen());
     await expect(page.locator("body")).not.toHaveClass(/zen/);
     expect(await workspaceState()).toEqual(chatActive);
     await expectRecoveredFocus();
@@ -3551,7 +4125,7 @@ test("moves focus explicitly between login and the connected workspace", async (
     await expect(page.locator("#app")).toHaveAttribute("aria-hidden", "false");
     await expect(page.locator(".skip-link")).toBeAttached();
 
-    await page.evaluate(() => window.__voicx.showLogin());
+    await page.evaluate(() => window.__noxa.showLogin());
     await expect(page.locator("#login-addr")).toBeFocused();
     await expect(page.locator("#app")).toHaveAttribute("aria-hidden", "true");
 
@@ -3567,13 +4141,14 @@ test("moves focus explicitly between login and the connected workspace", async (
 });
 
 test("computes names for settings and generated dialog controls", async ({ page }) => {
-    await page.evaluate(() => window.__voicx.openSettings("application"));
+    await page.evaluate(() => window.__noxa.openSettings("application"));
     await expect(page.locator('#settings-content input[type="number"]').first()).toHaveAccessibleName("Chat max lines");
-    await expect(page.locator("#settings-content select").first()).toHaveAccessibleName("Theme");
+    await expect(page.locator("#settings-content select").first()).toHaveAccessibleName("Language");
+    await expect(page.getByRole("combobox", { name: "Theme", exact: true })).toBeVisible();
     await expect(page.locator('#settings-content input[type="range"]').first()).toHaveAccessibleName("UI font size");
     await page.keyboard.press("Escape");
 
-    await page.evaluate(() => window.__voicx.showWorkspace());
+    await page.evaluate(() => window.__noxa.showWorkspace());
     await page.locator("#channel-create-btn").click();
     const create = page.getByRole("dialog", { name: "Create channel" });
     await expect(create.locator(".cc-name")).toHaveAccessibleName("Name");
@@ -3586,7 +4161,7 @@ test("keeps long channel dialogs within a small window and scrolls to their acti
     // Layout regression from the native 1024x768 window. Bindings are mocked;
     // this checks the shared dialog layout, not real channel creation.
     await page.setViewportSize({ width: 1024, height: 730 });
-    await page.evaluate(() => window.__voicx.showWorkspace());
+    await page.evaluate(() => window.__noxa.showWorkspace());
     await page.getByRole("button", { name: "Create channel", exact: true }).click();
     const dialog = page.getByRole("dialog", { name: "Create channel" });
     const panel = dialog.locator(".dlg");
@@ -3621,7 +4196,7 @@ test("keeps long channel dialogs within a small window and scrolls to their acti
 
 async function openChannelEditor(page) {
     await page.evaluate(() => {
-        window.__voicx.showWorkspace(false);
+        window.__noxa.showWorkspace(false);
         for (const cb of window.__events.snapshot || []) cb(JSON.stringify({
             root_channels: [{ ChannelID: 2, Name: "Public", Topic: "Everyone welcome", ParentID: 0,
                 OpusBitrate: 32000, OpusFEC: true, OpusDTX: true, OrderIndex: 1, clients: [], children: [] }],
@@ -3684,7 +4259,7 @@ test("channel editor saves presets without rewriting unchanged placement", async
 });
 
 test("closes menus when keyboard focus exits and keeps expansion state in sync", async ({ page }) => {
-    await page.evaluate(() => window.__voicx.showWorkspace(false));
+    await page.evaluate(() => window.__noxa.showWorkspace(false));
     const tools = page.locator("#menubar > .menu-item").filter({ hasText: /^Tools/ });
     await tools.focus();
     await page.keyboard.press("Enter");
@@ -3698,8 +4273,8 @@ test("closes menus when keyboard focus exits and keeps expansion state in sync",
 
 test("uses standard Left and Right behavior in the channel tree", async ({ page }) => {
     await page.evaluate(() => {
-        window.__voicx.showWorkspace(false);
-        window.__voicx.state.myClientID = "client-a";
+        window.__noxa.showWorkspace(false);
+        window.__noxa.state.myClientID = "client-a";
         for (const cb of window.__events.snapshot || []) cb(JSON.stringify({
             root_channels: [{
                 ChannelID: 1, ParentID: 0, Name: "Parent", clients: [],
@@ -3731,7 +4306,7 @@ test("uses standard Left and Right behavior in the channel tree", async ({ page 
 
 test("maintains a nested dialog stack across media, rerenders, and zero-control dialogs", async ({ page }) => {
     await page.evaluate(async () => {
-        window.__voicx.showWorkspace(false);
+        window.__noxa.showWorkspace(false);
         const { mountDialog } = await import("/src/modal.js");
         const launcher = document.getElementById("chat-info-btn");
         launcher.closest("details").open = true;
@@ -3787,7 +4362,7 @@ test("maintains a nested dialog stack across media, rerenders, and zero-control 
 
 test("falls back from invalid modal focus and restores login after a workspace transition", async ({ page }) => {
     await page.evaluate(async () => {
-        window.__voicx.showWorkspace(false);
+        window.__noxa.showWorkspace(false);
         const { mountDialog } = await import("/src/modal.js");
         const launcher = document.getElementById("chat-info-btn");
         launcher.closest("details").open = true;
@@ -3805,7 +4380,7 @@ test("falls back from invalid modal focus and restores login after a workspace t
     });
     await expect(page.locator(".visible-target")).toBeFocused();
 
-    await page.evaluate(() => window.__voicx.showLogin());
+    await page.evaluate(() => window.__noxa.showLogin());
     await page.keyboard.press("Escape");
     await expect(page.locator(".transition-dialog")).toHaveCount(0);
     await expect(page.locator("#login-addr")).toBeFocused();
@@ -3813,7 +4388,7 @@ test("falls back from invalid modal focus and restores login after a workspace t
 
 test("finalizes a dialog removed inside an ancestor subtree exactly once", async ({ page }) => {
     await page.evaluate(async () => {
-        window.__voicx.showWorkspace(false);
+        window.__noxa.showWorkspace(false);
         const { mountDialog } = await import("/src/modal.js");
         window.__subtreeDialogCloses = 0;
         const wrapper = document.createElement("section");
@@ -3835,7 +4410,7 @@ test("finalizes a dialog removed inside an ancestor subtree exactly once", async
 
 test("keeps a blocking gate visually and semantically above deferred dialogs", async ({ page }) => {
     await page.evaluate(async () => {
-        window.__voicx.showWorkspace(false);
+        window.__noxa.showWorkspace(false);
         for (const callback of window.__events.server_rules || []) {
             callback(JSON.stringify({ hash: "rules-v1", text: "Be excellent to each other." }));
         }
@@ -3862,7 +4437,7 @@ test("keeps a blocking gate visually and semantically above deferred dialogs", a
     expect(gateZ).toBeGreaterThan(skipLinkZ);
     await expect(page.getByRole("button", { name: "Decline and disconnect" })).toBeFocused();
 
-    await page.evaluate(() => window.__voicxNotify.resetServerRules());
+    await page.evaluate(() => window.__noxaNotify.resetServerRules());
     await expect(gate).toHaveCount(0);
     await expect(deferred).toHaveAttribute("aria-modal", "true");
     await expect(page.getByRole("button", { name: "Continue" })).toBeFocused();
@@ -3871,9 +4446,9 @@ test("keeps a blocking gate visually and semantically above deferred dialogs", a
 
 test("Escape runs polling-dialog cleanup and allows stateful dialogs to reopen", async ({ page }) => {
     await page.evaluate(() => {
-        window.__voicx.showWorkspace(false);
-        window.__voicx.state.myClientID = "client-a";
-        window.__voicx.openClientInfo({ client_id: "client-a", unique_id: "user-a", nickname: "Alice" });
+        window.__noxa.showWorkspace(false);
+        window.__noxa.state.myClientID = "client-a";
+        window.__noxa.openClientInfo({ client_id: "client-a", unique_id: "user-a", nickname: "Alice" });
     });
     await expect(page.getByRole("dialog", { name: "Connection Info" })).toBeVisible();
     await expect.poll(() => page.evaluate(() => window.__calls.GetClientInfo || 0)).toBeGreaterThan(0);
@@ -3882,43 +4457,43 @@ test("Escape runs polling-dialog cleanup and allows stateful dialogs to reopen",
     await page.waitForTimeout(2200);
     expect(await page.evaluate(() => window.__calls.GetClientInfo || 0)).toBe(clientInfoCalls);
 
-    await page.evaluate(() => window.__voicxFiles.openTransfers());
+    await page.evaluate(() => window.__noxaFiles.openTransfers());
     await expect(page.getByRole("dialog", { name: "Transfers" })).toBeVisible();
     await page.keyboard.press("Escape");
     await expect(page.getByRole("dialog", { name: "Transfers" })).toHaveCount(0);
-    await page.evaluate(() => window.__voicxFiles.openTransfers());
+    await page.evaluate(() => window.__noxaFiles.openTransfers());
     await expect(page.getByRole("dialog", { name: "Transfers" })).toBeVisible();
     await page.keyboard.press("Escape");
 
-    await page.evaluate(() => window.__voicxMeta.openStatsPage());
+    await page.evaluate(() => window.__noxaMeta.openStatsPage());
     await expect(page.getByRole("dialog", { name: "Server information" })).toBeVisible();
     await page.keyboard.press("Escape");
     const statsCalls = await page.evaluate(() => window.__calls.GetClientInfo || 0);
     await page.waitForTimeout(1200);
     expect(await page.evaluate(() => window.__calls.GetClientInfo || 0)).toBe(statsCalls);
-    await page.evaluate(() => window.__voicxMeta.openStatsPage());
+    await page.evaluate(() => window.__noxaMeta.openStatsPage());
     await expect(page.getByRole("dialog", { name: "Server information" })).toBeVisible();
 });
 
 test("keeps onboarding semantics and focus when each step rerenders", async ({ page }) => {
     await page.evaluate(() => {
-        window.__voicx.state.settings.onboarding_done = false;
-        window.__voicxMeta.maybeOnboard();
-        window.__voicxMeta.maybeOnboard();
+        window.__noxa.state.settings.onboarding_done = false;
+        window.__noxaMeta.maybeOnboard();
+        window.__noxaMeta.maybeOnboard();
     });
     await expect(page.locator(".onboarding")).toHaveCount(1);
-    await expect(page.getByRole("dialog", { name: "Welcome to voicx" })).toBeVisible();
+    await expect(page.getByRole("dialog", { name: "Welcome to noXa" })).toBeVisible();
     await expect(page.locator(".ob-nick")).toBeFocused();
     await page.getByRole("button", { name: "Next" }).click();
     await expect(page.getByRole("dialog", { name: "Microphone check" })).toBeVisible();
     await expect(page.getByRole("button", { name: "Open capture settings" })).toBeFocused();
     await page.keyboard.press("Escape");
     await expect(page.locator(".onboarding")).toHaveCount(0);
-    await expect.poll(() => page.evaluate(() => window.__voicx.state.settings.onboarding_done)).toBe(true);
+    await expect.poll(() => page.evaluate(() => window.__noxa.state.settings.onboarding_done)).toBe(true);
 });
 
 test("debounces keyboard pane persistence and refreshes separator values", async ({ page }) => {
-    await page.evaluate(() => window.__voicx.showWorkspace(false));
+    await page.evaluate(() => window.__noxa.showWorkspace(false));
     const handle = page.getByRole("separator", { name: "Resize channels pane" });
     await handle.focus();
     const before = await page.evaluate(() => window.__calls.SaveSettings || 0);
@@ -3935,32 +4510,25 @@ test("uses grouped, distinct action sounds without replaying historical tab acti
     const result = await page.evaluate(async () => {
         const tones = [];
         const media = [];
-        class FakeAudioContext {
-            get currentTime() { return 0; }
-            get destination() { return {}; }
-            createGain() {
-                return {
-                    gain: { setValueAtTime() {}, exponentialRampToValueAtTime() {} },
-                    connect(destination) { return destination; },
-                };
-            }
-            createOscillator() {
-                return {
-                    type: "sine",
-                    frequency: { value: 0 },
-                    connect(node) { return node; },
-                    start() { tones.push(this.frequency.value); },
-                    stop() {},
-                };
-            }
-        }
-        window.AudioContext = FakeAudioContext;
-        window.Audio = class {
-            addEventListener() {}
-            play() { media.push("channel_join"); return Promise.resolve(); }
+        const { soundEngine } = window.__noxa;
+        await soundEngine.preload();
+        await soundEngine.resume();
+        if (soundEngine.buffers.size !== 50 || soundEngine.ctx.state !== "running") throw new Error(JSON.stringify({ buffers: soundEngine.buffers.size, state: soundEngine.ctx.state, warnings: [...soundEngine.warnings] }));
+        let clock = 0;
+        soundEngine.now = () => clock += 1000;
+        const originalSource = soundEngine.ctx.createBufferSource.bind(soundEngine.ctx);
+        soundEngine.ctx.createBufferSource = () => {
+            const source = originalSource();
+            const start = source.start.bind(source);
+            source.start = (...args) => {
+                const name = [...soundEngine.buffers].find(([, buffer]) => buffer === source.buffer)?.[0];
+                if (name === "own_channel_join") media.push(name);
+                else tones.push(name);
+                start(...args);
+            };
+            return source;
         };
-        const state = window.__voicx.state;
-        state.audioCtx = null;
+        const state = window.__noxa.state;
         state.settings = {
             ...state.settings,
             activation_mode: "ptt",
@@ -3982,6 +4550,7 @@ test("uses grouped, distinct action sounds without replaying historical tab acti
             type: "user_moved", data: { client_id: "client-b", channel_id: channelID },
         }));
         const collect = (fn) => {
+            for (const entry of soundEngine.active) soundEngine.release(entry);
             tones.length = 0;
             fn();
             return [...tones];
@@ -3989,7 +4558,7 @@ test("uses grouped, distinct action sounds without replaying historical tab acti
 
         const moveIn = collect(() => move(1));
         const moveOut = collect(() => move(2));
-        state.settings.custom_sounds.join_leave = { freq: 432, duration_ms: 100 };
+        // Legacy custom beeps no longer override the authored action cue.
         state.settings.notify_matrix.join_leave = { toast: true, sound: false, flash: false, native: false };
         const matrixOff = collect(() => move(1));
         state.settings.notify_matrix.join_leave.sound = true;
@@ -4000,7 +4569,6 @@ test("uses grouped, distinct action sounds without replaying historical tab acti
         state.settings.event_sounds.user_move_out = false;
         const disabledSpecific = collect(() => move(2));
         state.settings.event_sounds.user_move_out = true;
-        delete state.settings.custom_sounds.join_leave;
         const afterReplay = collect(() => move(1));
         state.myUniqueID = "user-a";
         state.lastConnect = { addr: "sound.example:12333" };
@@ -4017,10 +4585,10 @@ test("uses grouped, distinct action sounds without replaying historical tab acti
         state.myChannelID = 0;
         state.clients = [{ client_id: "client-a", unique_id: "user-a", nickname: "Alice", channel_id: 7 }];
         const mediaBeforeOwnJoin = media.length;
-        const ownJoin = collect(() => window.__voicx.syncOwnChannel());
+        const ownJoin = collect(() => window.__noxa.syncOwnChannel());
         const ownJoinMedia = media.length - mediaBeforeOwnJoin;
         state.clients[0].channel_id = 8;
-        const ownSwitch = collect(() => window.__voicx.syncOwnChannel());
+        const ownSwitch = collect(() => window.__noxa.syncOwnChannel());
         state.myChannelID = 9;
         state.clients = [{ client_id: "client-a", unique_id: "user-a", nickname: "Alice", channel_id: 9 }];
         state.channels = [{ ChannelID: 9, ParentID: 0, Name: "Deleted" }];
@@ -4029,12 +4597,12 @@ test("uses grouped, distinct action sounds without replaying historical tab acti
             emit("event", JSON.stringify({ type: "user_moved", data: { client_id: "client-a", channel_id: 0 } }));
         });
         state.settings.activation_mode = "vad";
-        const vadPTT = collect(() => window.__voicx.setPTT(true));
-        window.__voicx.setPTT(false);
+        const vadPTT = collect(() => window.__noxa.setPTT(true));
+        window.__noxa.setPTT(false);
         state.settings.activation_mode = "ptt";
-        const ptt = collect(() => window.__voicx.setPTT(true));
-        window.__voicx.setPTT(false);
-        const deafen = collect(() => window.__voicx.setDeafened(true));
+        const ptt = collect(() => window.__noxa.setPTT(true));
+        window.__noxa.setPTT(false);
+        const deafen = collect(() => window.__noxa.setDeafened(true));
         state.settings.bookmarks = [{ name: "Guest", addr: "guest.example:12333", nickname: "Guest" }];
         window.__tabs = [{
             id: "guest-tab", addr: "guest.example:12333", nickname: "Guest",
@@ -4058,7 +4626,7 @@ test("uses grouped, distinct action sounds without replaying historical tab acti
         };
         const mediaBeforeGuest = media.length;
         tones.length = 0;
-        await window.__voicxTabs.quickConnectLast();
+        await window.__noxaTabs.quickConnectLast();
         const guestConnect = [...tones];
         const guestInitialJoinMedia = media.length - mediaBeforeGuest;
         const guestInitialCueCleared = state.pendingInitialChannelCueTabID === "";
@@ -4088,7 +4656,7 @@ test("uses grouped, distinct action sounds without replaying historical tab acti
 
         // A channel-0 replay leaves its initial marker armed. Its first live
         // self-move must consume that marker, so the following equality sync
-        // cannot duplicate the MP3 cue.
+        // cannot duplicate the channel cue.
         window.__tabs = [{
             id: "live-move-tab", addr: "live.example:12333", nickname: "Live",
             active: true, connected: true, unread: 0, mentions: 0,
@@ -4105,11 +4673,11 @@ test("uses grouped, distinct action sounds without replaying historical tab acti
         emit("event", JSON.stringify({
             type: "user_moved", data: { client_id: "client-a", channel_id: 17 },
         }));
-        window.__voicx.syncOwnChannel();
+        window.__noxa.syncOwnChannel();
         const liveMoveInitialMedia = media.length - mediaBeforeLiveMove;
         const liveMoveCueCleared = state.pendingInitialChannelCueTabID === "";
-        window.__voicx.openSettings("notifications");
-        const groups = [...document.querySelectorAll("#settings-content .set-subhead")].map((element) => element.textContent);
+        window.__noxa.openSettings("notifications");
+        const groups = [...document.querySelectorAll("#settings-content .set-subhead")].map((element) => element.querySelector("span")?.textContent || element.textContent);
         return { moveIn, moveOut, matrixOff, custom, replay, disabledSpecific, afterReplay,
             keywordChat, roleChat, ordinaryChat,
             ownJoin, ownJoinMedia, ownSwitch, channelDeletion, vadPTT, ptt, deafen, guestConnect,
@@ -4117,24 +4685,24 @@ test("uses grouped, distinct action sounds without replaying historical tab acti
             replayFirstCueCleared, liveMoveInitialMedia, liveMoveCueCleared, groups };
     });
 
-    expect(result.moveIn).toEqual([494, 659, 784]);
-    expect(result.moveOut).toEqual([784, 659, 494]);
+    expect(result.moveIn).toEqual(["user_move_in"]);
+    expect(result.moveOut).toEqual(["user_move_out"]);
     expect(result.matrixOff).toEqual([]);
-    expect(result.custom).toEqual([432]);
+    expect(result.custom).toEqual(["user_move_out"]);
     expect(result.replay).toEqual([]);
     expect(result.disabledSpecific).toEqual([]);
-    expect(result.afterReplay).toEqual([494, 659, 784]);
-    expect(result.keywordChat).toEqual([659, 784, 988]);
-    expect(result.roleChat).toEqual([784, 1047]);
-    expect(result.ordinaryChat).toEqual([587, 659]);
+    expect(result.afterReplay).toEqual(["user_move_in"]);
+    expect(result.keywordChat).toEqual(["keyword"]);
+    expect(result.roleChat).toEqual(["mention"]);
+    expect(result.ordinaryChat).toEqual(["channel_message"]);
     expect(result.ownJoin).toEqual([]);
     expect(result.ownJoinMedia).toBe(1);
-    expect(result.ownSwitch).toEqual([659, 784, 988]);
-    expect(result.channelDeletion).toEqual([587, 440, 349]);
+    expect(result.ownSwitch).toEqual(["own_channel_switch"]);
+    expect(result.channelDeletion).toEqual(["own_channel_leave"]);
     expect(result.vadPTT).toEqual([]);
-    expect(result.ptt).toEqual([740, 880]);
-    expect(result.deafen).toEqual([392, 294, 196]);
-    expect(result.guestConnect).toEqual([523, 659, 784]);
+    expect(result.ptt).toEqual(["ptt_on"]);
+    expect(result.deafen).toEqual(["deafen_on"]);
+    expect(result.guestConnect).toEqual(["connection_connected"]);
     expect(result.guestInitialJoinMedia).toBe(1);
     expect(result.guestInitialCueCleared).toBe(true);
     expect(result.replayFirstIdentityMedia).toBe(1);
@@ -4150,28 +4718,24 @@ test("uses grouped, distinct action sounds without replaying historical tab acti
 test("scopes connection failures and active-tab close sounds", async ({ page }) => {
     const result = await page.evaluate(async () => {
         const tones = [];
-        class FakeAudioContext {
-            get currentTime() { return 0; }
-            get destination() { return {}; }
-            createGain() {
-                return {
-                    gain: { setValueAtTime() {}, exponentialRampToValueAtTime() {} },
-                    connect(destination) { return destination; },
-                };
-            }
-            createOscillator() {
-                return {
-                    type: "sine",
-                    frequency: { value: 0 },
-                    connect(node) { return node; },
-                    start() { tones.push(this.frequency.value); },
-                    stop() {},
-                };
-            }
-        }
-        window.AudioContext = FakeAudioContext;
-        const state = window.__voicx.state;
-        state.audioCtx = null;
+        const { soundEngine } = window.__noxa;
+        await soundEngine.preload();
+        await soundEngine.resume();
+        if (soundEngine.buffers.size !== 50 || soundEngine.ctx.state !== "running") throw new Error(JSON.stringify({ buffers: soundEngine.buffers.size, state: soundEngine.ctx.state, warnings: [...soundEngine.warnings] }));
+        let clock = 0;
+        soundEngine.now = () => clock += 1000;
+        const originalSource = soundEngine.ctx.createBufferSource.bind(soundEngine.ctx);
+        soundEngine.ctx.createBufferSource = () => {
+            const source = originalSource();
+            const start = source.start.bind(source);
+            source.start = (...args) => {
+                const name = [...soundEngine.buffers].find(([, buffer]) => buffer === source.buffer)?.[0];
+                tones.push(name);
+                start(...args);
+            };
+            return source;
+        };
+        const state = window.__noxa.state;
         state.settings = { ...state.settings, event_sounds: {}, notify_matrix: {} };
         const emit = (name, payload) => {
             for (const callback of window.__events[name] || []) callback(payload);
@@ -4185,7 +4749,7 @@ test("scopes connection failures and active-tab close sounds", async ({ page }) 
         document.getElementById("login-addr").value = "slow.example:12333";
         document.getElementById("login-nick").value = "Alice";
         window.__connectBookmarkGate = new Promise((resolve) => { window.__releaseSlowConnect = resolve; });
-        const slowLogin = window.__voicx.connectFromLogin();
+        const slowLogin = window.__noxa.connectFromLogin();
         await Promise.resolve();
         emit("tab_reset", "tab-b");
         emit("tab_replay_done", "tab-b");
@@ -4197,7 +4761,7 @@ test("scopes connection failures and active-tab close sounds", async ({ page }) 
         tones.length = 0;
         window.__connectBookmarkGate = null;
         window.__connectBookmarkResult = "still unavailable";
-        await window.__voicx.connectFromLogin();
+        await window.__noxa.connectFromLogin();
         const currentFailure = [...tones];
         window.__connectBookmarkResult = "";
 
@@ -4263,10 +4827,10 @@ test("scopes connection failures and active-tab close sounds", async ({ page }) 
     });
 
     expect(result.staleFailure).toEqual([]);
-    expect(result.currentFailure).toEqual([247, 196, 165]);
-    expect(result.menuDisconnect).toEqual([659, 523, 392]);
+    expect(result.currentFailure).toEqual(["connection_failed"]);
+    expect(result.menuDisconnect).toEqual(["connection_disconnected"]);
     expect(result.backgroundClose).toEqual([]);
-    expect(result.activeClose).toEqual([659, 523, 392]);
+    expect(result.activeClose).toEqual(["connection_disconnected"]);
     expect(result.activeOfflineClose).toEqual([]);
     expect(result.offlineMenuDisconnect).toEqual([]);
 });

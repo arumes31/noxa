@@ -1,11 +1,12 @@
 // menu.js — TS3-style menu bar with dropdown menus.
 import { isActivationKey, wrappedIndex } from "./a11y.js";
-import { mountDialog } from "./modal.js";
+import { closeDialog, mountDialog } from "./modal.js";
 
-const V = () => window.__voicx;
+const V = () => window.__noxa;
 
 let openMenu = null;
 let documentClickBound = false;
+let dndSaving = false;
 const focusoutBoundBars = new WeakSet();
 
 function closeMenus(restoreFocus = false) {
@@ -26,7 +27,7 @@ function menuAction(label, fn, opts = {}) {
     a.tabIndex = -1;
     if (opts.disabled) {
         a.className = "disabled";
-        a.title = opts.tooltip || "coming soon";
+        a.title = opts.tooltip || t("menu.comingSoon");
         a.setAttribute("aria-disabled", "true");
         return a;
     }
@@ -134,8 +135,8 @@ function dlgPrompt(title, label, initial, cb) {
             <label class="dlg-label"></label>
             <input type="text" class="dlg-input" />
             <div class="dlg-buttons">
-                <button class="dlg-ok">OK</button>
-                <button class="dlg-cancel">Cancel</button>
+                <button class="dlg-ok">${t("common.ok")}</button>
+                <button class="dlg-cancel">${t("common.cancel")}</button>
             </div>
         </div>`;
     overlay.querySelector("h3").textContent = title;
@@ -155,27 +156,27 @@ function dlgAbout() {
     overlay.className = "dlg-overlay";
     overlay.innerHTML = `
         <div class="dlg">
-            <h3>About voicx</h3>
+            <h3>${t("menu.about")}</h3>
             <div class="about-body">
-                <div class="wordmark" style="font-size:26px">voicx</div>
+                <div class="wordmark" style="font-size:26px">noXa</div>
                 <div class="mono about-version"></div>
                 <div class="mono about-uid"></div>
                 <div class="about-links">
-                    <a href="https://github.com/arumes31/voicx" target="_blank" rel="noopener noreferrer">project</a> ·
-                    <a href="https://github.com/arumes31/voicx/issues" target="_blank" rel="noopener noreferrer">issues</a>
+                    <a href="https://github.com/arumes31/noxa" target="_blank" rel="noopener noreferrer">${t("menu.project")}</a> ·
+                    <a href="https://github.com/arumes31/noxa/issues" target="_blank" rel="noopener noreferrer">${t("menu.issues")}</a>
                 </div>
             </div>
-            <div class="dlg-buttons"><button class="dlg-ok">Close</button></div>
+            <div class="dlg-buttons"><button class="dlg-ok">${t("common.close")}</button></div>
         </div>`;
     const versionEl = overlay.querySelector(".about-version");
     const setVersion = (text) => {
         if (overlay.isConnected && versionEl.isConnected) versionEl.textContent = text;
     };
     window.go.main.App.ClientVersion()
-        .then((v) => setVersion("version " + v))
-        .catch(() => setVersion("version unavailable"));
+        .then((v) => setVersion(t("menu.version", { version: v })))
+        .catch(() => setVersion(t("menu.versionUnavailable")));
     const uidEl = overlay.querySelector(".about-uid");
-    uidEl.textContent = state.myUniqueID || "(not connected)";
+    uidEl.textContent = state.myUniqueID || t("menu.disconnected");
     for (const link of overlay.querySelectorAll(".about-links a")) {
         link.onclick = (event) => {
             event.preventDefault();
@@ -199,30 +200,31 @@ function currentSettings() {
     return V().state.settings || {};
 }
 
-async function saveSettings(patch) {
-    const s = Object.assign({}, currentSettings(), patch);
-    const err = await window.go.main.App.SaveSettings(s);
-    if (err) {
-        V().toast("save failed: " + err, "warn");
+async function saveSettings(patch, onError = error => V().toast(t("menu.saveFailed", { error }), "warn")) {
+    try {
+        const s = Object.assign({}, currentSettings(), patch);
+        const err = await window.go.main.App.SaveSettings(s);
+        if (err) throw new Error(err);
+        // Re-read merged settings so concurrent Go-owned updates survive.
+        V().state.settings = await window.go.main.App.GetSettings();
+        return true;
+    } catch (error) {
+        onError(error.message || String(error));
         return false;
     }
-    // (282) the blob we sent is a copy taken before the save: re-read the
-    // merged truth so Go-owned fields (recents) written meanwhile survive.
-    V().state.settings = await window.go.main.App.GetSettings();
-    return true;
 }
 
 async function bookmarkCurrent() {
     const { state, toast } = V();
     if (!state.lastConnect) {
-        toast("not connected", "warn");
+        toast(t("menu.notConnected"), "warn");
         return;
     }
     const c = state.lastConnect;
     const name = c.nick + " @ " + c.addr;
     const bookmarks = (currentSettings().bookmarks || []).filter((b) => !(b.addr === c.addr && b.nickname === c.nick));
     bookmarks.push({ name, addr: c.addr, nickname: c.nick });
-    if (await saveSettings({ bookmarks })) toast("bookmark saved: " + name);
+    if (await saveSettings({ bookmarks })) toast(t("menu.bookmarkSaved", { name }));
 }
 
 async function connectBookmark(b) {
@@ -237,7 +239,7 @@ async function connectBookmark(b) {
     // connect must carry the bookmark name to stay identifiable. Stashed
     // after showLogin, which drops the previous login's stash.
     state.pendingBookmark = { name: b.name, addr: b.addr };
-    toast("bookmark loaded — enter the server password if required, then connect");
+    toast(t("menu.bookmarkLoaded"));
 }
 
 // sortedBookmarks returns bookmarks grouped by folder, ordered within (284).
@@ -253,22 +255,22 @@ function sortedBookmarks() {
 function manageBookmarks() {
     const overlay = document.createElement("div");
     overlay.className = "dlg-overlay";
-    const persist = async () => {
-        const s = currentSettings();
+    const persist = async (bookmarks = currentSettings().bookmarks, onError) => {
+        const next = bookmarks.map(bookmark => ({ ...bookmark }));
         // Renumber the order within each folder (284).
         const groups = {};
-        for (const b of s.bookmarks) {
+        for (const b of next) {
             const f = b.folder || "";
             groups[f] = groups[f] || [];
             groups[f].push(b);
         }
         for (const f of Object.keys(groups)) groups[f].forEach((b, i) => { b.order = i; });
-        return saveSettings({ bookmarks: s.bookmarks });
+        return saveSettings({ bookmarks: next }, onError);
     };
     const render = () => {
         const bms = sortedBookmarks();
         const list = overlay.querySelector(".bm-list");
-        list.innerHTML = bms.length === 0 ? `<div class="empty-state">No bookmarks yet</div>` : "";
+        list.innerHTML = bms.length === 0 ? `<div class="empty-state">${t("menu.bookmarksEmpty")}</div>` : "";
         let lastFolder = null;
         bms.forEach((b) => {
             const folder = b.folder || "";
@@ -276,26 +278,26 @@ function manageBookmarks() {
                 lastFolder = folder;
                 const head = document.createElement("div");
                 head.className = "bm-folder";
-                head.textContent = folder || "(ungrouped)";
+                head.textContent = folder || t("menu.ungrouped");
                 list.appendChild(head);
             }
             const idx = currentSettings().bookmarks.indexOf(b);
             const row = document.createElement("div");
             row.className = "bm-row";
             row.innerHTML = `
-                <span class="bm-dot" title="color"></span>
+                <span class="bm-dot" title="${t("menu.bookmarkColor")}"></span>
                 <span class="bm-name"></span>
                 <span class="bm-addr mono"></span>
-                <button class="bm-up" title="move up">↑</button>
-                <button class="bm-down" title="move down">↓</button>
-                <button class="bm-edit">Edit</button>
-                <button class="bm-del">Delete</button>`;
+                <button class="bm-up" title="${t("menu.moveUp")}">↑</button>
+                <button class="bm-down" title="${t("menu.moveDown")}">↓</button>
+                <button class="bm-edit">${t("menu.edit")}</button>
+                <button class="bm-del">${t("common.delete")}</button>`;
             row.querySelector(".bm-name").textContent = b.name;
             row.querySelector(".bm-addr").textContent = b.addr + (b.auto_connect ? " ⚡" : "");
             const dot = row.querySelector(".bm-dot");
             dot.style.background = b.color || "var(--text-faint)";
             dot.onclick = () => {
-                const c = prompt("Bookmark color (hex, e.g. #2ee6a8; empty = none):", b.color || "");
+                const c = prompt(t("menu.colorPrompt"), b.color || "");
                 if (c === null) return;
                 b.color = c.trim();
                 persist().then(render);
@@ -323,9 +325,9 @@ function manageBookmarks() {
     };
     overlay.innerHTML = `
         <div class="dlg dlg-wide">
-            <h3>Manage bookmarks</h3>
+            <h3>${t("menu.bookmarksTitle")}</h3>
             <div class="bm-list"></div>
-            <div class="dlg-buttons"><button class="dlg-ok">Close</button></div>
+            <div class="dlg-buttons"><button class="dlg-ok">${t("common.close")}</button></div>
         </div>`;
     overlay.querySelector(".dlg-ok").onclick = () => overlay.remove();
     overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
@@ -334,29 +336,33 @@ function manageBookmarks() {
 }
 
 // editBookmark edits one bookmark's extended fields (283/284/286/300).
-function editBookmark(b, persist, render) {
+function editBookmark(bookmark, persist, render) {
+    const b = { ...bookmark };
+    let lastSubmittedName = bookmark.name;
+    let saving = false;
     const overlay = document.createElement("div");
     overlay.className = "dlg-overlay";
     overlay.innerHTML = `
         <div class="dlg">
-            <h3>Edit bookmark</h3>
-            <label class="dlg-label">Name</label>
+            <h3>${t("menu.editBookmark")}</h3>
+            <label class="dlg-label">${t("menu.bookmarkName")}</label>
             <input class="dlg-input bm-f-name" />
-            <label class="dlg-label">Folder</label>
-            <input class="dlg-input bm-f-folder" placeholder="e.g. work / friends" />
-            <label class="dlg-label">Hotkey profile</label>
-            <input class="dlg-input bm-f-profile" placeholder="default" />
-            <label class="dlg-label">Nickname override</label>
-            <input class="dlg-input bm-f-nick" placeholder="use bookmark nickname" />
-            <label class="dlg-label">Avatar override</label>
+            <label class="dlg-label">${t("menu.bookmarkFolder")}</label>
+            <input class="dlg-input bm-f-folder" placeholder="${t("menu.bookmarkFolderExample")}" />
+            <label class="dlg-label">${t("menu.hotkeyProfile")}</label>
+            <input class="dlg-input bm-f-profile" placeholder="${t("menu.defaultProfile")}" />
+            <label class="dlg-label">${t("menu.nicknameOverride")}</label>
+            <input class="dlg-input bm-f-nick" placeholder="${t("menu.useBookmarkNickname")}" />
+            <label class="dlg-label">${t("menu.avatarOverride")}</label>
             <div class="bm-f-avatar-row">
-                <button class="icon-btn bm-f-avatar-btn">choose image…</button>
+                <button class="icon-btn bm-f-avatar-btn">${t("menu.chooseImage")}</button>
                 <span class="bm-f-avatar-state mono"></span>
             </div>
-            <label class="dlg-label"><input type="checkbox" class="bm-f-auto" /> auto-connect on startup (guest/prefill only — passwords are never stored)</label>
+            <label class="dlg-label"><input type="checkbox" class="bm-f-auto" /> ${t("menu.autoConnect")}</label>
+            <div class="bookmark-save-status dlg-text" role="status" hidden></div>
             <div class="dlg-buttons">
-                <button class="dlg-ok">Save</button>
-                <button class="dlg-cancel">Cancel</button>
+                <button class="dlg-ok">${t("common.save")}</button>
+                <button class="dlg-cancel">${t("common.cancel")}</button>
             </div>
         </div>`;
     const q = (sel) => overlay.querySelector(sel);
@@ -365,26 +371,63 @@ function editBookmark(b, persist, render) {
     q(".bm-f-profile").value = b.profile || "";
     q(".bm-f-nick").value = b.nickname_override || "";
     q(".bm-f-auto").checked = !!b.auto_connect;
-    q(".bm-f-avatar-state").textContent = b.avatar_override_b64 ? "set (" + Math.round(b.avatar_override_b64.length / 1366) + " KB)" : "none";
+    q(".bm-f-avatar-state").textContent = b.avatar_override_b64 ? t("menu.avatarSize", { size: Math.round(b.avatar_override_b64.length / 1366) }) : t("menu.avatarNone");
     q(".bm-f-avatar-btn").onclick = async () => {
         const img = await pickIcon(256, 0.85);
         if (!img) return;
         b.avatar_override_b64 = img.dataBase64;
-        q(".bm-f-avatar-state").textContent = "set";
+        q(".bm-f-avatar-state").textContent = t("menu.avatarSet");
     };
     q(".dlg-ok").onclick = async () => {
+        if (saving) return;
         b.name = q(".bm-f-name").value.trim() || b.name;
         b.folder = q(".bm-f-folder").value.trim();
         b.profile = q(".bm-f-profile").value.trim();
         b.nickname_override = q(".bm-f-nick").value.trim();
         b.auto_connect = q(".bm-f-auto").checked;
-        overlay.remove();
-        await persist();
-        render();
+        const bookmarks = currentSettings().bookmarks || [];
+        const index = bookmarks.findIndex(entry => entry === bookmark || (
+            entry.addr === bookmark.addr && entry.nickname === bookmark.nickname &&
+            (entry.name === bookmark.name || entry.name === lastSubmittedName)
+        ));
+        const status = q(".bookmark-save-status");
+        status.hidden = false;
+        if (index < 0) {
+            status.textContent = t("menu.bookmarkChanged");
+            status.classList.add("warn");
+            return;
+        }
+        const next = bookmarks.map((entry, i) => i === index ? { ...b } : entry);
+        // A settings_update may already contain the rename even if the
+        // subsequent refresh fails. Keep that identity available for retry.
+        lastSubmittedName = b.name;
+        saving = true;
+        overlay.setAttribute("aria-busy", "true");
+        const controls = [...overlay.querySelectorAll("input, button")];
+        for (const control of controls) control.disabled = true;
+        q(".dlg-ok").textContent = t("common.saving");
+        status.textContent = t("common.saving");
+        status.classList.remove("warn");
+        try {
+            if (await persist(next, error => {
+                status.textContent = t("menu.saveFailed", { error });
+                status.classList.add("warn");
+            })) {
+                closeDialog(overlay);
+                render();
+            }
+        } finally {
+            saving = false;
+            overlay.removeAttribute("aria-busy");
+            for (const control of controls) control.disabled = false;
+            q(".dlg-ok").textContent = t("common.save");
+            if (overlay.isConnected) q(".dlg-ok").focus();
+        }
     };
-    q(".dlg-cancel").onclick = () => overlay.remove();
-    overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
-    mountDialog(overlay);
+    const cancel = () => { if (!saving) closeDialog(overlay, "cancel"); };
+    q(".dlg-cancel").onclick = cancel;
+    overlay.onclick = (e) => { if (e.target === overlay) cancel(); };
+    mountDialog(overlay, { onCancel: () => !saving });
 }
 
 // --- Self actions --------------------------------------------------------------
@@ -403,8 +446,8 @@ async function setAvatarFile() {
     if (!img || generation !== V().state.serverGeneration) return;
     const err = await window.go.main.App.SetAvatar(img.dataBase64);
     if (generation !== V().state.serverGeneration) return;
-    if (err) V().toast("avatar failed: " + err, "warn");
-    else V().toast("avatar updated");
+    if (err) V().toast(t("menu.avatarFailed", { error: err }), "warn");
+    else V().toast(t("menu.avatarUpdated"));
 }
 
 // setServerIcon uploads a compressed server icon (admin, 270/274).
@@ -415,11 +458,11 @@ async function setServerIcon() {
     const err = await window.go.main.App.ServerIconSet(img.dataBase64);
     if (generation !== V().state.serverGeneration) return;
     if (err) {
-        V().toast("server icon failed: " + err, "warn");
+        V().toast(t("menu.serverIconFailed", { error: err }), "warn");
         return;
     }
-    V().toast("server icon updated");
-    window.__voicxFiles.loadServerIcon();
+    V().toast(t("menu.serverIconUpdated"));
+    window.__noxaFiles.loadServerIcon();
 }
 
 // --- menu bar -------------------------------------------------------------------
@@ -431,12 +474,12 @@ export function initMenu() {
     const connections = buildMenu(t("menu.connections"), [
         menuAction(t("menu.connect"), () => V().showLogin()),
         menuAction(t("menu.disconnect"), () => V().disconnect()),
-        menuAction("Server information", () => window.__voicxMeta.openServerInfo()),
+        menuAction(t("menu.serverInfo"), () => window.__noxaMeta.openServerInfo()),
         divider(),
         menuAction(t("menu.quit"), () => window.runtime.Quit()),
     ]);
 
-    const bookmarkItems = [menuAction("Bookmark current server", bookmarkCurrent), divider()];
+    const bookmarkItems = [menuAction(t("menu.bookmarkCurrent"), bookmarkCurrent), divider()];
     const bookmarkList = document.createElement("div");
     bookmarkList.className = "bm-menu-list";
     const renderBookmarkMenu = () => {
@@ -466,39 +509,39 @@ export function initMenu() {
     const bookmarks = buildMenu(t("menu.bookmarks"), [
         ...bookmarkItems,
         bookmarkList,
-        menuAction("Manage bookmarks…", manageBookmarks),
+        menuAction(t("menu.manageBookmarks"), manageBookmarks),
     ]);
     const bmItem = bookmarks;
     const origClick = bmItem.onclick;
     bmItem.onclick = (e) => { renderBookmarkMenu(); origClick(e); };
 
     const self = buildMenu(t("menu.self"), [
-        menuAction("Change nickname…", () => {
-            dlgPrompt("Change nickname", "Nickname for your next connect:", V().state.myNickname, (v) => {
+        menuAction(t("menu.changeNickname"), () => {
+            dlgPrompt(t("menu.nicknameTitle"), t("menu.nicknamePrompt"), V().state.myNickname, (v) => {
                 if (v) {
                     $("login-nick").value = v;
                     V().state.myNickname = v;
-                    V().sysMsg("nickname set to " + v + " (applies on next connect)");
+                    V().sysMsg(t("menu.nicknameSet", { nickname: v }));
                 }
             });
         }),
         menuAction(t("menu.setStatus"), () => {
-            if (!V().state.myClientID) return V().toast("not connected", "warn");
-            window.__voicxSocial.openStatusPicker();
+            if (!V().state.myClientID) return V().toast(t("menu.notConnected"), "warn");
+            window.__noxaSocial.openStatusPicker();
         }),
-        menuAction(t("menu.contacts"), () => window.__voicxSocial.openContacts()),
+        menuAction(t("menu.contacts"), () => window.__noxaSocial.openContacts()),
         menuAction(t("menu.setAvatar"), setAvatarFile),
         menuAction(t("menu.setServerIcon"), () => {
-            if (!V().state.myClientID) return V().toast("not connected", "warn");
-            if (!V().state.isAdmin) return V().toast("server icon is admin-only", "warn");
+            if (!V().state.myClientID) return V().toast(t("menu.notConnected"), "warn");
+            if (!V().state.isAdmin) return V().toast(t("menu.serverIconAdminOnly"), "warn");
             setServerIcon();
         }),
         divider(),
-        menuAction("Toggle mute", () => $("voice-mute").click()),
-        menuAction("Toggle deafen", () => {
+        menuAction(t("menu.toggleMute"), () => $("voice-mute").click()),
+        menuAction(t("menu.toggleDeafen"), () => {
             const { state, setDeafened, sysMsg } = V();
             setDeafened(!state.deafened);
-            sysMsg(state.deafened ? "deafened (incoming audio off)" : "undeafened");
+            sysMsg(state.deafened ? t("menu.deafened") : t("menu.undeafened"));
         }),
     ]);
 
@@ -508,93 +551,101 @@ export function initMenu() {
             V().setDetailsOpen(true);
         }),
         menuAction(t("menu.permManager"), () => {
-            if (!V().state.myClientID) return V().toast("not connected", "warn");
-            window.__voicxPerms.openPermissionManager();
+            if (!V().state.myClientID) return V().toast(t("menu.notConnected"), "warn");
+            window.__noxaPerms.openPermissionManager();
         }),
     ]);
 
     const tools = buildMenu(t("menu.tools"), [
-        menuAction(t("menu.settings"), () => window.__voicx.openSettings("application")),
-        menuAction(t("menu.whisperLists"), () => window.__voicx.openSettings("whisper")),
+        menuAction(t("menu.settings"), () => window.__noxa.openSettings("application")),
+        menuAction(t("menu.whisperLists"), () => window.__noxa.openSettings("whisper")),
         divider(),
         menuAction(t("menu.auditLog"), () => {
-            if (!V().state.myClientID) return V().toast("not connected", "warn");
-            window.__voicxPerms.openAuditViewer();
+            if (!V().state.myClientID) return V().toast(t("menu.notConnected"), "warn");
+            window.__noxaPerms.openAuditViewer();
         }),
         menuAction(t("menu.bans"), () => {
-            if (!V().state.myClientID) return V().toast("not connected", "warn");
-            window.__voicxPerms.openBanList();
+            if (!V().state.myClientID) return V().toast(t("menu.notConnected"), "warn");
+            window.__noxaPerms.openBanList();
         }),
-        menuAction("Chat filters…", () => {
-            if (!V().state.myClientID) return V().toast("not connected", "warn");
-            window.__voicxPerms.openChatFilters();
+        menuAction(t("menu.chatFilters"), () => {
+            if (!V().state.myClientID) return V().toast(t("menu.notConnected"), "warn");
+            window.__noxaPerms.openChatFilters();
         }),
         // (173) complaint review, gated the same way as the audit viewer.
-        menuAction("Complaints…", () => {
-            if (!V().state.myClientID) return V().toast("not connected", "warn");
-            window.__voicxPerms.openComplaints();
+        menuAction(t("menu.complaints"), () => {
+            if (!V().state.myClientID) return V().toast(t("menu.notConnected"), "warn");
+            window.__noxaPerms.openComplaints();
         }),
         // (174/175/176) privilege key management and handoff.
-        menuAction("Privilege keys…", () => {
-            if (!V().state.myClientID) return V().toast("not connected", "warn");
-            window.__voicxPerms.openTokenManager();
+        menuAction(t("menu.privilegeKeys"), () => {
+            if (!V().state.myClientID) return V().toast(t("menu.notConnected"), "warn");
+            window.__noxaPerms.openTokenManager();
         }),
-        menuAction("Use a privilege key…", () => window.__voicxPerms.openTokenRedeem()),
+        menuAction(t("menu.usePrivilegeKey"), () => window.__noxaPerms.openTokenRedeem()),
         divider(),
         menuAction(t("menu.debugConsole"), () => {
-            if (!V().state.myClientID) return V().toast("not connected", "warn");
-            window.__voicxMeta.openDebugConsole();
+            if (!V().state.myClientID) return V().toast(t("menu.notConnected"), "warn");
+            window.__noxaMeta.openDebugConsole();
         }),
         menuAction(t("menu.connStats"), () => {
-            if (!V().state.myClientID) return V().toast("not connected", "warn");
-            window.__voicxMeta.openStatsPage();
+            if (!V().state.myClientID) return V().toast(t("menu.notConnected"), "warn");
+            window.__noxaMeta.openStatsPage();
         }),
     ]);
 
     // View menu: window/integration toggles (wave 8a/8c).
     const view = buildMenu(t("menu.view"), [
-        menuAction("Toggle details", () => {
+        menuAction(t("menu.toggleDetails"), () => {
             V().setDetailsOpen(document.body.classList.contains("details-collapsed"));
         }),
         divider(),
         menuAction(t("menu.compact"), () => V().toggleCompact()),
-        menuAction(t("menu.zen"), () => window.__voicxPolish.toggleZen()),
-        menuAction("Pop out chat", () => window.__voicxPolish.toggleChatPopout()),
-        menuAction("Do not disturb", async () => {
-            const s = V().state.settings;
-            s.dnd_enabled = !s.dnd_enabled;
-            await window.go.main.App.SaveSettings(s);
-            V().toast("do not disturb " + (s.dnd_enabled ? "on" : "off"));
-            V().renderTree();
+        menuAction(t("menu.zen"), () => window.__noxaPolish.toggleZen()),
+        menuAction(t("menu.popOutChat"), () => window.__noxaPolish.toggleChatPopout()),
+        menuAction(t("menu.dnd"), async () => {
+            if (dndSaving) return;
+            dndSaving = true;
+            const enabled = !V().state.settings?.dnd_enabled;
+            try {
+                if (await saveSettings({ dnd_enabled: enabled }, error => {
+                    V().toast(t("menu.saveFailed", { error }), "warn", "alert", { bypassDND: true });
+                })) {
+                    V().toast(t(V().state.settings.dnd_enabled ? "menu.dndOn" : "menu.dndOff"), "info", "alert", { bypassDND: true });
+                    V().renderTree();
+                }
+            } finally {
+                dndSaving = false;
+            }
         }),
-        menuAction("Always on top", async () => {
+        menuAction(t("menu.alwaysOnTop"), async () => {
             const on = !(V().state.settings?.always_on_top);
             await window.go.main.App.SetAlwaysOnTop(on);
             if (V().state.settings) V().state.settings.always_on_top = on;
-            V().toast("always on top " + (on ? "on" : "off"));
+            V().toast(t(on ? "menu.alwaysOnTopOn" : "menu.alwaysOnTopOff"));
         }),
-        menuAction("Window opacity…", () => {}, {
+        menuAction(t("menu.opacity"), () => {}, {
             disabled: true,
-            tooltip: "not supported by the Wails v2 WebView2 backend",
+            tooltip: t("menu.opacityUnsupported"),
         }),
         divider(),
-        menuAction("Theme: dark", () => setTheme("dark")),
-        menuAction("Theme: light", () => setTheme("light")),
-        menuAction("Theme: high contrast", () => setTheme("hc")),
+        menuAction(t("menu.themeDark"), () => setTheme("dark")),
+        menuAction(t("menu.themeLight"), () => setTheme("light")),
+        menuAction(t("menu.themeContrast"), () => setTheme("hc")),
     ]);
 
     const help = buildMenu(t("menu.help"), [
-        menuAction(t("menu.checkUpdates"), () => window.__voicx.checkForUpdatesInteractive()),
+        menuAction(t("menu.checkUpdates"), () => window.__noxa.checkForUpdatesInteractive()),
         menuAction(t("menu.exportLogs"), async () => {
             const err = await window.go.main.App.ExportLogs();
-            if (err) V().toast("export failed: " + err, "warn");
-            else V().toast("logs exported");
+            if (err) V().toast(t("menu.exportFailed", { error: err }), "warn");
+            else V().toast(t("menu.logsExported"));
         }),
         divider(),
         menuAction(t("menu.about"), dlgAbout),
-        menuAction("Open log folder", async () => {
+        menuAction(t("menu.openLogFolder"), async () => {
             const err = await window.go.main.App.OpenLogFolder();
-            if (err) V().toast("cannot open log folder: " + err, "warn");
+            if (err) V().toast(t("menu.openLogFolderFailed", { error: err }), "warn");
         }),
     ]);
 
@@ -623,7 +674,7 @@ async function setTheme(theme) {
     const s = Object.assign({}, V().state.settings || {}, { theme });
     const err = await window.go.main.App.SaveSettings(s);
     if (err) {
-        V().toast("save failed: " + err, "warn");
+        V().toast(t("menu.saveFailed", { error: err }), "warn");
         return;
     }
     // (282) same as saveSettings: the merged blob is the authoritative cache.

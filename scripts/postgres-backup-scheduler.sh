@@ -6,7 +6,7 @@ child_pid=
 
 cleanup_private_key() {
 	case "${PGSSLKEY:-}" in
-		/tmp/voicx-pgpass/client.key) rm -f "$PGSSLKEY" ;;
+		/tmp/noxa-pgpass/client.key) rm -f "$PGSSLKEY" ;;
 	esac
 }
 

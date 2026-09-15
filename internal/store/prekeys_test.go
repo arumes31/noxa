@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"voicx/internal/e2ee"
-	"voicx/internal/safecast"
+	"noxa/internal/e2ee"
+	"noxa/internal/safecast"
 )
 
 func TestPublishPreKeyBundleValidatesBeforeDatabaseAccess(t *testing.T) {

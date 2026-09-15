@@ -17,7 +17,7 @@ import (
 
 	"github.com/lib/pq"
 
-	"voicx/internal/safecast"
+	"noxa/internal/safecast"
 )
 
 // ErrChatEditConflict means the message changed after the caller rendered it.

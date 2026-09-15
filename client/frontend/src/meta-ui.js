@@ -3,8 +3,9 @@
 // toast (331).
 import { closeDialog, mountDialog, mountServerDialog } from "./modal.js";
 import { openServerInfo } from "./server-info.js";
+import { t } from "./i18n.js";
 
-const V = () => window.__voicx;
+const V = () => window.__noxa;
 const App = () => window.go.main.App;
 
 // ---------------------------------------------------------------------------
@@ -16,6 +17,7 @@ const dbg = { open: false, paused: false, filter: "", rows: [] };
 function openDebugConsole() {
     if (dbg.open) return;
     dbg.open = true;
+    dbg.rowElements = new Map();
     const overlay = document.createElement("div");
     overlay.className = "dlg-overlay";
     overlay.innerHTML = `
@@ -29,12 +31,14 @@ function openDebugConsole() {
                 <button class="dbg-pause">⏸ pause</button>
                 <button class="dbg-clear">clear</button>
             </div>
-            <div class="dbg-list mono"></div>
+            <div class="dbg-list mono" tabindex="0"></div>
+            <div class="dbg-follow"><button class="dbg-jump hidden" type="button"></button></div>
         </div>`;
     dbg.overlay = overlay;
     const close = () => closeDialog(overlay);
     const cleanup = (reason) => {
         dbg.open = false;
+        dbg.rowElements.clear();
         if (dbg.overlay === overlay) dbg.overlay = null;
         // A tab reset has already activated another backend; never send the
         // old dialog's teardown command to that newly active connection.
@@ -44,7 +48,7 @@ function openDebugConsole() {
     overlay.onclick = (e) => { if (e.target === overlay) close(); };
     overlay.querySelector(".dbg-filter").oninput = (e) => {
         dbg.filter = e.target.value.trim().toLowerCase();
-        renderDbg();
+        renderDbg(true);
     };
     overlay.querySelector(".dbg-pause").onclick = (e) => {
         dbg.paused = !dbg.paused;
@@ -52,20 +56,58 @@ function openDebugConsole() {
     };
     overlay.querySelector(".dbg-clear").onclick = () => {
         dbg.rows = [];
-        renderDbg();
+        renderDbg(true);
+    };
+    const list = overlay.querySelector(".dbg-list");
+    list.setAttribute("aria-label", t("debug.events"));
+    const jump = overlay.querySelector(".dbg-jump");
+    jump.textContent = t("debug.jumpLatest");
+    list.onscroll = updateDebugJump;
+    jump.onclick = () => {
+        list.scrollTop = list.scrollHeight;
+        list.focus({ preventScroll: true });
+        updateDebugJump();
     };
     mountServerDialog(overlay, { onClose: cleanup });
     App().SetDebugFrames(true);
-    renderDbg();
+    renderDbg(true);
 }
 
-function renderDbg() {
+function debugAtBottom(list) {
+    return list.scrollHeight - list.clientHeight - list.scrollTop <= 4;
+}
+
+function updateDebugJump() {
     if (!dbg.open) return;
     const list = dbg.overlay.querySelector(".dbg-list");
+    dbg.overlay.querySelector(".dbg-jump").classList.toggle("hidden", debugAtBottom(list));
+}
+
+function renderDbg(jumpToLatest = false) {
+    if (!dbg.open) return;
+    const list = dbg.overlay.querySelector(".dbg-list");
+    const followLatest = jumpToLatest || debugAtBottom(list);
+    const anchor = !followLatest
+        ? [...list.children].find(row => row.getBoundingClientRect().bottom > list.getBoundingClientRect().top)
+        : null;
+    const anchorTop = anchor?.getBoundingClientRect().top;
     const rows = dbg.rows.filter((r) => !dbg.filter || r.type.toLowerCase().includes(dbg.filter)).slice(-200);
-    list.innerHTML = rows.map((r) =>
-        `<div class="dbg-row ${r.dir}"><span class="dbg-dir">${r.dir === "in" ? "◀" : "▶"}</span> <b>${escapeHtml(r.type)}</b> <span class="dbg-payload">${escapeHtml(r.payload)}</span></div>`).join("");
-    list.scrollTop = list.scrollHeight;
+    for (const [frame, row] of dbg.rowElements) {
+        if (rows.includes(frame)) continue;
+        row.remove();
+        dbg.rowElements.delete(frame);
+    }
+    for (const frame of rows) {
+        if (dbg.rowElements.has(frame)) continue;
+        const row = document.createElement("div");
+        row.className = "dbg-row " + (frame.dir === "in" ? "in" : "out");
+        row.innerHTML = `<span class="dbg-dir">${frame.dir === "in" ? "◀" : "▶"}</span> <b>${escapeHtml(frame.type)}</b> <span class="dbg-payload">${escapeHtml(frame.payload)}</span>`;
+        dbg.rowElements.set(frame, row);
+        list.insertBefore(row, list.children[rows.indexOf(frame)] || null);
+    }
+    if (followLatest) list.scrollTop = list.scrollHeight;
+    else if (anchor?.isConnected) list.scrollTop += anchor.getBoundingClientRect().top - anchorTop;
+    updateDebugJump();
 }
 
 function escapeHtml(s) {
@@ -90,7 +132,7 @@ function maybeOnboard() {
     overlay.className = "dlg-overlay";
     let step = 0;
     const steps = [
-        { title: "Welcome to voicx", body: `<p>Your <b>identity</b> is an Ed25519 key pair generated locally — it is your account for guest logins and challenge auth. It never leaves this machine unless you export it.</p><p>Pick a nickname for your first connect:</p><input class="dlg-input ob-nick" placeholder="nickname" />` },
+        { title: "Welcome to noXa", body: `<p>Your <b>identity</b> is an Ed25519 key pair generated locally — it is your account for guest logins and challenge auth. It never leaves this machine unless you export it.</p><p>Pick a nickname for your first connect:</p><input class="dlg-input ob-nick" placeholder="nickname" />` },
         { title: "Microphone check", body: `<p>Open Settings → Capture and use the <b>mic test</b> to verify your input level.</p><button class="dlg-ok ob-mic">Open capture settings</button>` },
         { title: "Connect", body: `<p>Enter a server address and connect — bookmarks and recents make the next time one click.</p>` },
     ];
@@ -117,7 +159,7 @@ function maybeOnboard() {
         if (mic) mic.onclick = () => {
             closeDialog(overlay);
             void done();
-            window.__voicx.openSettings("capture");
+            window.__noxa.openSettings("capture");
         };
         overlay.querySelector(".ob-skip").onclick = () => {
             closeDialog(overlay);
@@ -164,7 +206,7 @@ async function maybeCrashToast() {
     try {
         const crash = await App().LastCrash();
         if (!crash) return;
-        V().toast("voicx crashed last time — a crash log was saved (Help → Export logs)", "warn", "conn");
+        V().toast("noXa crashed last time — a crash log was saved (Help → Export logs)", "warn", "conn");
         V().sysMsg("previous crash detected; export logs via Help → Export logs");
     } catch { /* best-effort */ }
 }
@@ -178,7 +220,7 @@ export function initMetaUI() {
         if (dbg.rows.length > 500) dbg.rows.shift();
         renderDbg();
     });
-    window.__voicxMeta = { openDebugConsole, openStatsPage, openServerInfo, maybeOnboard };
+    window.__noxaMeta = { openDebugConsole, openStatsPage, openServerInfo, maybeOnboard };
     for (const id of ["server-name", "voice-latency"]) {
         document.getElementById(id)?.addEventListener("click", openServerInfo);
     }

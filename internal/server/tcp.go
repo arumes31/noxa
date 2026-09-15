@@ -1,4 +1,4 @@
-// Package server hosts the long-running voicx server components. This file
+// Package server hosts the long-running noxa server components. This file
 // implements the TCP control listener: it accepts connections, frames messages
 // using the netproto wire format, dispatches them to per-message-type
 // handlers, and tracks connected clients in a thread-safe registry.
@@ -23,13 +23,13 @@ import (
 
 	"go.uber.org/zap"
 
-	"voicx/internal/auth"
-	"voicx/internal/chatcrypto"
-	"voicx/internal/config"
-	"voicx/internal/metrics"
-	"voicx/internal/netproto"
-	"voicx/internal/state"
-	"voicx/internal/tlscert"
+	"noxa/internal/auth"
+	"noxa/internal/chatcrypto"
+	"noxa/internal/config"
+	"noxa/internal/metrics"
+	"noxa/internal/netproto"
+	"noxa/internal/state"
+	"noxa/internal/tlscert"
 )
 
 // Error codes sent in MsgError frames.
@@ -612,6 +612,26 @@ func (s *TCPServer) beginShutdown() {
 	go func() {
 		var shutdownErr error
 		shutdownErr = joinTCPShutdownError(shutdownErr, closeTCPListener(listener))
+		// Give authenticated clients a fixed semantic reason before EOF. Raw
+		// unauthenticated sockets still close immediately. Writes run in parallel
+		// and each has a short deadline, independent of the number of clients.
+		s.mu.RLock()
+		clients := make([]*Client, 0, len(s.clients))
+		for _, client := range s.clients {
+			if client.isAuthed() {
+				clients = append(clients, client)
+			}
+		}
+		s.mu.RUnlock()
+		var notices sync.WaitGroup
+		for _, client := range clients {
+			notices.Add(1)
+			go func() {
+				defer notices.Done()
+				s.sendTerminalEvent(client, "server_shutdown", struct{}{})
+			}()
+		}
+		notices.Wait()
 		for _, conn := range connections {
 			shutdownErr = joinTCPShutdownError(shutdownErr, conn.Close())
 		}

@@ -1,8 +1,9 @@
 import { closeDialog, isCurrentServerDialog, mountServerDialog } from "./modal.js";
 import { icon } from "./icons.js";
+import { copyToClipboard } from "./clipboard.js";
 import { formatBytes, formatDuration, measured, summarizeMedia } from "./connection-stats.js";
 
-const V = () => window.__voicx;
+const V = () => window.__noxa;
 let currentOverlay = null;
 
 export function openServerInfo() {
@@ -67,14 +68,11 @@ export function openServerInfo() {
     set("address", address || "—");
     const copy = overlay.querySelector(".server-copy");
     copy.disabled = !address;
-    copy.onclick = async () => {
-        try {
-            if (await window.runtime.ClipboardSetText(address) === false) throw new Error("Clipboard unavailable");
-            if (isCurrentServerDialog(overlay)) V().toast("Server address copied.");
-        } catch {
-            if (isCurrentServerDialog(overlay)) V().toast("Could not copy the server address.", "warn");
-        }
-    };
+    copy.onclick = () => copyToClipboard(address, {
+        success: "Server address copied.",
+        failure: "Could not copy the server address.",
+        isCurrent: () => isCurrentServerDialog(overlay),
+    });
 
     let timer = null;
     let busy = false;

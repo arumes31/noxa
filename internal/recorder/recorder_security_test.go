@@ -19,7 +19,7 @@ import (
 	"github.com/pion/rtp"
 	"go.uber.org/zap"
 
-	"voicx/internal/webrtc"
+	"noxa/internal/webrtc"
 )
 
 func waitForSessionCount(t *testing.T, recorder *Recorder, want int) {
@@ -1408,7 +1408,7 @@ func TestDefaultCommandBindsPathsToRetainedRoot(t *testing.T) {
 }
 
 func TestRecordingRootFDHelper(t *testing.T) {
-	if os.Getenv("VOICX_RECORDER_ROOT_FD_HELPER") != "1" {
+	if os.Getenv("NOXA_RECORDER_ROOT_FD_HELPER") != "1" {
 		return
 	}
 	if len(os.Args) < 2 {
@@ -1469,7 +1469,7 @@ func TestLinuxChildTraversesInheritedRecordingRootAfterRename(t *testing.T) {
 		sdpPath,
 		outputPath,
 	)
-	child.Env = append(os.Environ(), "VOICX_RECORDER_ROOT_FD_HELPER=1")
+	child.Env = append(os.Environ(), "NOXA_RECORDER_ROOT_FD_HELPER=1")
 	stdout, err := child.StdoutPipe()
 	if err != nil {
 		t.Fatal(err)

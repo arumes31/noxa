@@ -5,6 +5,7 @@
 // transfers window with a throughput sparkline (277/278). Folders are
 // virtual (derived from file rows — empty folders do not persist).
 import { humanBytes } from "./clientinfo.js";
+import { copyToClipboard } from "./clipboard.js";
 import { pickIcon } from "./image-tools.js";
 import { closeDialog, confirmDialog, isCurrentServerDialog, mountServerDialog, promptDialog } from "./modal.js";
 import { wrappedIndex } from "./a11y.js";
@@ -12,8 +13,9 @@ import { imageDataURL } from "./safe-media.js";
 import { parseRuntimeObject } from "./runtime-json.js";
 import { captureScope, runScopedDialogAction, scopeIsCurrent } from "./scoped-actions.js";
 import { buildFileLink } from "./file-links.js";
+import { t } from "./i18n.js";
 
-const V = () => window.__voicx;
+const V = () => window.__noxa;
 const App = () => window.go.main.App;
 
 const fb = {
@@ -24,6 +26,10 @@ const fb = {
     used: 0,
     quota: 0,
     open: false,
+    filter: "",
+    sort: "name",
+    descending: false,
+    loaded: false,
 };
 let serverViewGeneration = 0;
 
@@ -60,7 +66,7 @@ export function activateWorkspaceTab(name, { focus = false } = {}) {
     tabFiles.tabIndex = files ? 0 : -1;
     chatPane.hidden = files;
     filesPane.hidden = !files;
-    window.__voicxChat?.refreshHeader?.();
+    window.__noxaChat?.refreshHeader?.();
     if (files) {
         fb.channelID = V().state.myChannelID;
         refreshFiles();
@@ -150,6 +156,7 @@ function fmtDate(ts) {
 
 // refreshFiles reloads the current folder listing.
 async function refreshFiles() {
+    fb.loaded = false;
     const pane = document.getElementById("files-pane");
     const list = pane.querySelector(".fb-list");
     if (!fb.channelID) {
@@ -180,6 +187,7 @@ async function refreshFiles() {
         }
     }
     renderFbChrome();
+    fb.loaded = true;
     renderFbList();
 }
 
@@ -198,6 +206,9 @@ function subfoldersOf() {
 
 function renderFbChrome() {
     const pane = document.getElementById("files-pane");
+    const filter = pane.querySelector(".fb-filter");
+    filter.placeholder = t("files.filter");
+    filter.setAttribute("aria-label", t("files.filter"));
     const ch = V().state.channels.find((c) => c.ChannelID === fb.channelID);
     // Breadcrumb.
     const crumb = pane.querySelector(".fb-crumb");
@@ -237,16 +248,43 @@ function renderFbChrome() {
 }
 
 function renderFbList() {
+    if (!fb.loaded) return;
     const list = document.getElementById("files-pane").querySelector(".fb-list");
     list.innerHTML = "";
-    const subs = subfoldersOf();
-    if (subs.length === 0 && fb.entries.length === 0) {
+    const query = fb.filter.trim().toLowerCase();
+    const byName = (a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" });
+    const subs = subfoldersOf().filter(name => name.toLowerCase().includes(query))
+        .sort((a, b) => byName(a, b) * (fb.sort === "name" && fb.descending ? -1 : 1));
+    const entries = fb.entries.filter(entry => (entry.name || "").toLowerCase().includes(query)).sort((a, b) => {
+        let order = 0;
+        if (fb.sort === "size") order = (Number(a.size) || 0) - (Number(b.size) || 0);
+        if (fb.sort === "date") order = (new Date(a.uploaded_at || 0).getTime() || 0) - (new Date(b.uploaded_at || 0).getTime() || 0);
+        return (order || byName(a.name || "", b.name || "")) * (fb.descending ? -1 : 1);
+    });
+    if (!query && subs.length === 0 && entries.length === 0) {
         list.innerHTML = `<div class="empty-state">Empty folder — drop files here to upload</div>`;
         return;
     }
     const table = document.createElement("table");
     table.className = "perm-grid fb-grid";
-    table.innerHTML = `<thead><tr><th>name</th><th>size</th><th>uploader</th><th>date</th><th>sha-256</th><th></th></tr></thead><tbody></tbody>`;
+    table.innerHTML = `<thead><tr><th data-sort="name"></th><th data-sort="size"></th><th>uploader</th><th data-sort="date"></th><th>sha-256</th><th></th></tr></thead><tbody></tbody>`;
+    for (const header of table.querySelectorAll("[data-sort]")) {
+        const key = header.dataset.sort;
+        const selected = key === fb.sort;
+        header.setAttribute("aria-sort", selected ? (fb.descending ? "descending" : "ascending") : "none");
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "fb-sort";
+        button.setAttribute("aria-label", t(`files.sort.${key}`));
+        button.textContent = t(`files.column.${key}`) + (selected ? (fb.descending ? " ↓" : " ↑") : "");
+        button.onclick = () => {
+            fb.descending = selected ? !fb.descending : false;
+            fb.sort = key;
+            renderFbList();
+            list.querySelector(`[data-sort="${key}"] button`).focus({ preventScroll: true });
+        };
+        header.appendChild(button);
+    }
     const tbody = table.querySelector("tbody");
 
     for (const sub of subs) {
@@ -264,10 +302,17 @@ function renderFbList() {
         tbody.appendChild(tr);
     }
 
-    for (const e of fb.entries) {
+    for (const e of entries) {
         tbody.appendChild(fileRow(e));
     }
     list.appendChild(table);
+    if (!subs.length && !entries.length) {
+        const empty = document.createElement("div");
+        empty.className = "empty-state";
+        empty.setAttribute("role", "status");
+        empty.textContent = t("files.noMatches");
+        list.appendChild(empty);
+    }
 }
 
 // isChatAttachment reports a row the browser cannot make sense of: a chat
@@ -300,7 +345,7 @@ function fileRow(e) {
     const sha = tr.querySelector(".fb-sha");
     sha.textContent = (e.sha256 || "").slice(0, 8);
     sha.title = e.sha256 || "";
-    sha.onclick = () => navigator.clipboard.writeText(e.sha256).then(() => V().toast("SHA-256 copied"));
+    sha.onclick = () => copyToClipboard(e.sha256, { success: "SHA-256 copied", isCurrent: () => sha.isConnected });
 
     const act = tr.querySelector(".fb-actions");
     const btn = (label, title, fn) => {
@@ -376,9 +421,10 @@ async function linkFile(e) {
             V().toast("link failed: server returned an invalid download address", "warn");
             return;
         }
-        await navigator.clipboard.writeText(url);
-        if (!fileViewIsCurrent(scope)) return;
-        V().toast("download link copied (valid until " + fmtDate(resp.expires_at * 1000) + ")");
+        await copyToClipboard(url, {
+            success: "download link copied (valid until " + fmtDate(resp.expires_at * 1000) + ")",
+            isCurrent: () => fileViewIsCurrent(scope),
+        });
     } catch (err) {
         if (fileViewIsCurrent(scope)) V().toast("link failed: " + err, "warn");
     }
@@ -930,6 +976,7 @@ function resetServerView() {
     fb.folder = "";
     fb.folders = [];
     fb.entries = [];
+    fb.loaded = false;
     fb.used = 0;
     fb.quota = 0;
     const icon = document.getElementById("server-icon");
@@ -1088,9 +1135,21 @@ export function initFilesUI() {
             <button class="icon-btn fb-banner" title="Set the server banner (admin, 270)" aria-label="Set server banner">🖼</button>
             <button class="icon-btn fb-transfers" title="Transfers" aria-label="Open transfers">⇅</button>
         </div>
+        <input class="fb-filter dlg-input" type="search" />
         <div class="fb-quota hidden"><div class="fb-quota-fill"></div></div>
         <div class="fb-list" aria-label="Channel files"></div>`;
 
+    const filter = pane.querySelector(".fb-filter");
+    filter.placeholder = t("files.filter");
+    filter.setAttribute("aria-label", t("files.filter"));
+    filter.oninput = () => { fb.filter = filter.value; renderFbList(); };
+    filter.onkeydown = (event) => {
+        if (event.key !== "Escape") return;
+        event.preventDefault();
+        filter.value = "";
+        fb.filter = "";
+        renderFbList();
+    };
     pane.querySelector(".fb-refresh").onclick = refreshFiles;
     pane.querySelector(".fb-transfers").onclick = openTransfers;
     pane.querySelector(".fb-emoji").onclick = openEmojiManager;
@@ -1176,7 +1235,7 @@ export function initFilesUI() {
     });
     watchChannelIcons();
 
-    window.__voicxFiles = {
+    window.__noxaFiles = {
         activateWorkspaceTab, restoreVisibleWorkspaceFocus, refreshFiles, openTransfers, loadServerIcon, resetServerView,
         // Follows channel changes (256): browsing follows the channel I'm in.
         onChannelChanged() {

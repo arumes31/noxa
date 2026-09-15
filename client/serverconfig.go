@@ -3,7 +3,7 @@ package main
 import (
 	"time"
 
-	"voicx/internal/netproto"
+	"noxa/internal/netproto"
 )
 
 // GetServerConfig returns the effective runtime settings exposed to server

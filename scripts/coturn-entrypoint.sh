@@ -2,11 +2,11 @@
 set -eu
 umask 077
 
-. "${VOICX_SECRET_ENV_LIB:-/usr/local/lib/voicx/secret-env.sh}"
+. "${NOXA_SECRET_ENV_LIB:-/usr/local/lib/noxa/secret-env.sh}"
 
 secret_env_load TURN_SECRET required
 secret_env_require_single_line TURN_SECRET
-config_dir=${TURN_CONFIG_DIR:-/tmp/voicx-coturn}
+config_dir=${TURN_CONFIG_DIR:-/tmp/noxa-coturn}
 config_file=${TURN_CONFIG_FILE:-$config_dir/turnserver.conf}
 mkdir -p "$config_dir"
 chmod 700 "$config_dir"

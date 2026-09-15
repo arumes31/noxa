@@ -12,13 +12,13 @@ import (
 
 	"go.uber.org/zap"
 
-	"voicx/internal/auth"
-	"voicx/internal/broadcast"
-	"voicx/internal/config"
-	"voicx/internal/permissions"
-	"voicx/internal/server"
-	"voicx/internal/state"
-	"voicx/internal/tlscert"
+	"noxa/internal/auth"
+	"noxa/internal/broadcast"
+	"noxa/internal/config"
+	"noxa/internal/permissions"
+	"noxa/internal/server"
+	"noxa/internal/state"
+	"noxa/internal/tlscert"
 )
 
 // fakeAuth implements server.AuthBackend for the smoke test.

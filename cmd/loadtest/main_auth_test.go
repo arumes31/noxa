@@ -10,7 +10,7 @@ import (
 	"testing/synctest"
 	"time"
 
-	"voicx/internal/netproto"
+	"noxa/internal/netproto"
 )
 
 func TestSimulateClientRecordsSafeAuthFailures(t *testing.T) {

@@ -2,7 +2,7 @@ import { icon, labelButton } from "./icons.js";
 import { getUserVolume, isUserMuted, setUserVolume } from "./audio.js";
 import { setSafeImage } from "./safe-media.js";
 
-const V = () => window.__voicx;
+const V = () => window.__noxa;
 const $ = (id) => document.getElementById(id);
 let memberKey = "";
 
@@ -126,7 +126,7 @@ export function renderMember() {
             }
         };
         $("member-message").onclick = () => {
-            window.__voicxFiles.activateWorkspaceTab("chat");
+            window.__noxaFiles.activateWorkspaceTab("chat");
             V().openPM(client.unique_id, client.nickname);
             if (innerWidth <= 1100) V().setDetailsOpen(false);
             $("chat-text").focus();

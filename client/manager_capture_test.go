@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"voicx/internal/netproto"
+	"noxa/internal/netproto"
 )
 
 func TestBindingsRequireManagerOffline(t *testing.T) {

@@ -5,8 +5,8 @@ import (
 	"errors"
 	"testing"
 
-	"voicx/internal/config"
-	"voicx/internal/permissions"
+	"noxa/internal/config"
+	"noxa/internal/permissions"
 )
 
 type unavailableGuestPermissions struct{ fakePerms }

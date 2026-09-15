@@ -1,5 +1,5 @@
 // Package health provides a minimal HTTP health/readiness endpoint for the
-// voicx server. It uses only the standard library: /healthz reports process
+// noxa server. It uses only the standard library: /healthz reports process
 // liveness (always 200 once serving) and /readyz reports readiness by
 // invoking a caller-supplied aggregate dependency check.
 package health
@@ -15,7 +15,7 @@ import (
 
 	"go.uber.org/zap"
 
-	"voicx/internal/version"
+	"noxa/internal/version"
 )
 
 const (

@@ -7,7 +7,7 @@ import (
 	"context"
 	"strconv"
 
-	"voicx/internal/permissions"
+	"noxa/internal/permissions"
 )
 
 // ResolvedPerm is one resolved permission of a user (219 permoverview).
