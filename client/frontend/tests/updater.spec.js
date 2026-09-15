@@ -15,7 +15,7 @@ async function boot(page, scenario = {}) {
         window.go = { main: { App: new Proxy({}, { get: (_, method) => async () => {
             window.__calls[method] = (window.__calls[method] || 0) + 1;
             const s = window.__scenario;
-            if (method === "GetSettings") return { onboarding_done: true, alpha_dismissed: "test", updates_auto_check: s.enabled !== false, notification_matrix: {} };
+            if (method === "GetSettings") return { onboarding_done: true, alpha_dismissed: "0.4.0", updates_auto_check: s.enabled !== false, notification_matrix: {} };
             if (method === "ClientVersionShort") return "0.4.0";
             if (method === "CheckForUpdate") {
                 if (s.checkPending) await new Promise((resolve) => { window.__finishCheck = resolve; });

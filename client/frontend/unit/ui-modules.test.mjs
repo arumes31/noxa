@@ -75,6 +75,7 @@ function fileBrowserPane() {
         ".fb-crumb": crumb,
         ".fb-list": list,
         ".fb-quota": quota,
+        ".fb-filter": element(),
     }[selector] || null);
     return { list, pane };
 }

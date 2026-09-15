@@ -1,4 +1,14 @@
 export const interfaceEnglish = {
+    "files.filter": "Filter files by name",
+    "files.noMatches": "No matching files or folders",
+    "files.column.name": "name",
+    "files.column.size": "size",
+    "files.column.date": "date",
+    "files.sort.name": "Sort by name",
+    "files.sort.size": "Sort by size",
+    "files.sort.date": "Sort by date",
+    "debug.jumpLatest": "Jump to latest",
+    "debug.events": "Debug events",
     "common.saving": "Saving…",
     "settings.saved": "Settings saved.",
     "settings.searchLimited": "Showing {shown} of {total} results. Narrow your search to see more specific matches.",
@@ -94,6 +104,16 @@ export const interfaceEnglish = {
 };
 
 export const interfaceGerman = {
+    "files.filter": "Dateien nach Namen filtern",
+    "files.noMatches": "Keine passenden Dateien oder Ordner",
+    "files.column.name": "Name",
+    "files.column.size": "Größe",
+    "files.column.date": "Datum",
+    "files.sort.name": "Nach Namen sortieren",
+    "files.sort.size": "Nach Größe sortieren",
+    "files.sort.date": "Nach Datum sortieren",
+    "debug.jumpLatest": "Zu den neuesten Einträgen",
+    "debug.events": "Debug-Ereignisse",
     "common.saving": "Wird gespeichert…",
     "settings.saved": "Einstellungen gespeichert.",
     "settings.searchLimited": "{shown} von {total} Ergebnissen angezeigt. Grenzen Sie die Suche ein, um genauere Treffer zu sehen.",

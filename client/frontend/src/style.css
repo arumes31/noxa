@@ -1417,6 +1417,8 @@ mark { background: var(--warn); color: #3a2a05; border-radius: 2px; padding: 0 1
 .fb-crumb a { color: var(--accent); cursor: pointer; }
 .fb-crumb a:hover { text-decoration: underline; }
 .fb-spacer { flex: 1; }
+.fb-filter { width: 100%; min-width: 0; box-sizing: border-box; }
+.fb-sort { background: transparent; border: 0; color: inherit; font: inherit; padding: 4px 0; cursor: pointer; }
 .fb-upload {
     width: auto;
     padding: 0 10px;
@@ -1657,6 +1659,7 @@ body.compact #voice-bar { justify-content: center; padding: 12px; }
 /* (327) debug console */
 .dlg.debug-console { width: 780px; max-width: 94vw; max-height: 80vh; display: flex; flex-direction: column; }
 .dbg-toolbar { display: flex; gap: 6px; margin: 8px 0; }
+.dbg-follow { min-height: 32px; display: flex; justify-content: flex-end; margin-top: 6px; }
 .dbg-toolbar button { background: var(--bg-hover); border: 1px solid var(--border); color: var(--text); border-radius: 6px; cursor: pointer; padding: 4px 10px; font-size: 0.7857rem; }
 .dbg-list { flex: 1; overflow-y: auto; border: 1px solid var(--border); border-radius: 8px; padding: 6px; font-size: 0.7857rem; }
 .dbg-row { padding: 1px 0; }

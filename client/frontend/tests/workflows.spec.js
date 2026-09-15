@@ -2336,6 +2336,114 @@ test("undeafens when a snapshot confirms joining a channel", async ({ page }) =>
     expect(await page.locator("#remote-video").evaluate((element) => element.muted)).toBe(false);
 });
 
+test("file browser filters names and sorts columns without refetching @a11y", async ({ page }, testInfo) => {
+    await page.evaluate(() => {
+        window.__voicx.showWorkspace(false);
+        window.__voicx.state.myChannelID = 42;
+        window.__fileListResponse = {
+            folders: ["Reports", "Archive"],
+            entries: [
+                { name: "report10.txt", size: 2, uploaded_at: "2026-09-13T12:00:00Z" },
+                { name: "Alpha.txt", size: 100, uploaded_at: "2026-09-15T12:00:00Z" },
+                { name: "report2.txt", size: 30, uploaded_at: "2026-09-14T12:00:00Z" },
+            ],
+        };
+    });
+    await page.locator("#tab-files").click();
+    const names = page.locator(".fb-name");
+    await expect(names).toHaveText(["Alpha.txt", "report2.txt", "report10.txt"]);
+    const requests = await page.evaluate(() => window.__calls.FileList);
+    const filter = page.getByRole("searchbox", { name: "Filter files by name" });
+    await filter.fill(" REPORT ");
+    await expect(names).toHaveText(["report2.txt", "report10.txt"]);
+    await expect(page.locator(".fb-folder-link")).toHaveText(["Reports/"]);
+    await filter.fill("missing");
+    await expect(page.locator(".fb-list")).toContainText("No matching files or folders");
+    await filter.press("Escape");
+    await expect(names).toHaveCount(3);
+    const size = page.getByRole("button", { name: "Sort by size", exact: true });
+    await size.click();
+    await expect(names).toHaveText(["report10.txt", "report2.txt", "Alpha.txt"]);
+    await expect(size).toBeFocused();
+    await expect(size.locator("..")).toHaveAttribute("aria-sort", "ascending");
+    await size.press("Enter");
+    await expect(names).toHaveText(["Alpha.txt", "report2.txt", "report10.txt"]);
+    await expect(size.locator("..")).toHaveAttribute("aria-sort", "descending");
+    const date = page.getByRole("button", { name: "Sort by date", exact: true });
+    await date.click();
+    await expect(names).toHaveText(["report10.txt", "report2.txt", "Alpha.txt"]);
+    await date.click();
+    await expect(names).toHaveText(["Alpha.txt", "report2.txt", "report10.txt"]);
+    await page.getByRole("button", { name: "Sort by name", exact: true }).click();
+    await page.getByRole("button", { name: "Sort by name", exact: true }).click();
+    await expect(names).toHaveText(["report10.txt", "report2.txt", "Alpha.txt"]);
+    await expect(page.locator(".fb-folder-link")).toHaveText(["Reports/", "Archive/"]);
+    expect(await page.evaluate(() => window.__calls.FileList)).toBe(requests);
+    await auditAccessibility(page, "file filtering and sorting");
+    await page.screenshot({ path: testInfo.outputPath("file-controls.png") });
+    await page.evaluate(() => {
+        window.__fileListGate = new Promise(resolve => { window.__finishFileList = resolve; });
+    });
+    await page.getByRole("button", { name: "Refresh files", exact: true }).click();
+    await filter.fill("report");
+    await expect(names).toHaveCount(0);
+    await expect(page.locator(".fb-list")).toContainText("Loading channel files");
+    await page.evaluate(() => window.__finishFileList());
+    await expect(names).toHaveText(["report10.txt", "report2.txt"]);
+    await filter.fill("missing");
+    await page.evaluate(() => {
+        window.__fileListResponse = { entries: [], folders: [] };
+    });
+    await page.getByRole("button", { name: "Refresh files", exact: true }).click();
+    await expect(page.locator(".fb-list")).toContainText("No matching files or folders");
+    await filter.press("Escape");
+    await expect(page.locator(".fb-list")).toContainText("Empty folder");
+});
+
+test("debug console preserves older entries while new frames arrive and jumps to latest", async ({ page }, testInfo) => {
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    await page.evaluate(() => {
+        window.__voicx.showWorkspace(false);
+        window.__voicxMeta.openDebugConsole();
+        for (let i = 0; i < 200; i++) {
+            for (const cb of window.__events.debug_frame) cb({ dir: "in", type: i % 2 ? "odd" : "even", payload: `frame ${i}` });
+        }
+    });
+    const list = page.locator(".dbg-list");
+    await expect(page.locator(".dbg-row").last()).toContainText("frame 199");
+    await list.evaluate(el => { el.scrollTop = 500; });
+    const anchor = await list.evaluate(el => {
+        const row = [...el.children].find(row => row.getBoundingClientRect().bottom > el.getBoundingClientRect().top);
+        return { text: row.querySelector(".dbg-payload").textContent, top: row.getBoundingClientRect().top };
+    });
+    await page.evaluate(() => {
+        for (let i = 200; i < 210; i++) {
+            for (const cb of window.__events.debug_frame) cb({ dir: "in", type: "sample", payload: `frame ${i}` });
+        }
+    });
+    const row = page.locator(".dbg-row").filter({ has: page.locator(".dbg-payload", { hasText: new RegExp(`^${anchor.text}$`) }) });
+    expect(Math.abs(await row.evaluate(el => el.getBoundingClientRect().top) - anchor.top)).toBeLessThan(2);
+    await expect(page.locator(".dbg-row")).toHaveCount(200);
+    const jump = page.getByRole("button", { name: "Jump to latest" });
+    await expect(jump).toBeVisible();
+    await page.screenshot({ path: testInfo.outputPath("debug-reading.png") });
+    await jump.click();
+    await expect(jump).toBeHidden();
+    await page.evaluate(() => {
+        for (const cb of window.__events.debug_frame) cb({ dir: "out", type: "sample", payload: "newest frame" });
+    });
+    await expect(page.locator(".dbg-row").last()).toContainText("newest frame");
+    expect(await list.evaluate(el => el.scrollHeight - el.clientHeight - el.scrollTop)).toBeLessThan(3);
+    await page.locator(".dbg-filter").fill("even");
+    await expect(page.locator(".dbg-row b").first()).toHaveText("even");
+    await page.locator(".dbg-filter").fill("");
+    await expect(page.locator(".dbg-payload").first()).toHaveText("frame 11");
+    await expect(page.locator(".dbg-payload").nth(1)).toHaveText("frame 12");
+    await expect(page.locator(".dbg-payload").last()).toHaveText("newest frame");
+    await page.keyboard.press("Escape");
+    await expect(page.locator(".debug-console")).toHaveCount(0);
+});
+
 test("shows the files toolbar and opens the upload picker", async ({ page }) => {
     await page.evaluate(() => {
         window.__voicx.showWorkspace(false);
@@ -3885,7 +3993,7 @@ test("live notifications preserve focused rows and scrolling while limiting hist
         for (let i = 0; i < 50; i++) window.__voicxPolish.recordNotification("message", `arrival ${i}`, { uid: `user-${i}` });
     });
     await page.locator("#notif-bell").click();
-    const focused = page.locator(".nc-row").filter({ hasText: /^messagearrival 30/ });
+    const focused = page.locator(".nc-row").filter({ has: page.locator(".nc-text", { hasText: /^arrival 30$/ }) });
     await focused.focus();
     const before = await focused.evaluate(row => row.getBoundingClientRect().top);
     await page.evaluate(() => window.__voicxPolish.recordNotification("message", "latest arrival", { uid: "latest" }));
