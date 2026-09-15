@@ -14,9 +14,9 @@ const V = () => window.__noxa;
 // (70/73) Track-identity contract with the router: a publisher's media arrives
 // as one track per SLOT, so camera and screen share are separate tiles and
 // shared system audio is a separate source from the microphone.
-//   default slots ("mic", "cam")   track id "<clientID>"
+//   microphone ("mic")            track id "<clientID>"
 //                                  msid stream "noxa-<clientID>"
-//   extra slots ("screenaudio", "screen")
+//   other slots ("cam", "screenaudio", "screen")
 //                                  track id "<clientID>|<slot>"
 //                                  msid stream "noxa-<clientID>|<slot>"
 // The separator is "|" because an msid id is an RFC 4566 token and "/" is not

@@ -471,7 +471,7 @@ func publisherStreamID(publisherID string) string {
 // slotTrackID returns the MSID track ID a subscriber sees for one of a
 // publisher's slots.
 func slotTrackID(publisherID, slot string) string {
-	if isDefaultSlot(slot) {
+	if slot == SlotMic {
 		return publisherID
 	}
 	return publisherID + slotSep + slot
@@ -482,7 +482,7 @@ func slotTrackID(publisherID, slot string) string {
 // stream's FIRST audio track only, so sharing a stream between the microphone
 // and screen audio would feed both through one gain chain (1, 2, 61, 70).
 func slotStreamID(publisherID, slot string) string {
-	if isDefaultSlot(slot) {
+	if slot == SlotMic {
 		return publisherStreamID(publisherID)
 	}
 	return publisherStreamID(publisherID) + slotSep + slot
