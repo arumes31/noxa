@@ -15,6 +15,7 @@ import (
 
 	"go.uber.org/zap"
 
+	"noxa/internal/auth"
 	"noxa/internal/netproto"
 	"noxa/internal/permissions"
 	"noxa/internal/store"
@@ -275,6 +276,10 @@ func (s *TCPServer) handleGroupEdit(ctx context.Context, client *Client, f *netp
 
 // --- membership --------------------------------------------------------------
 
+type guestGroupAssigner interface {
+	AssignGuestGroup(context.Context, string, int64, int64, string, string, time.Duration) (int64, error)
+}
+
 // handleGroupAssign assigns a user to a group (timed when
 // ExpiresInSeconds > 0) and invalidates the target's permission cache.
 func (s *TCPServer) handleGroupAssign(ctx context.Context, client *Client, f *netproto.Frame) error {
@@ -293,20 +298,42 @@ func (s *TCPServer) handleGroupAssign(ctx context.Context, client *Client, f *ne
 	if s.deps == nil || s.deps.Groups == nil || s.deps.Auth == nil {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "group store unavailable")
 	}
-	user, err := s.deps.Auth.LookupUser(ctx, msg.UniqueID)
-	if err != nil {
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodeNotFound, "target user not found")
-	}
-
 	expiresIn := time.Duration(msg.ExpiresInSeconds) * time.Second
-	if msg.Type == "channel" {
-		if msg.ChannelID == 0 {
-			return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "channel_id is required for channel groups")
+	if msg.Type != "server" && msg.Type != "channel" {
+		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "invalid group type")
+	}
+	if msg.Type == "channel" && msg.ChannelID == 0 {
+		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "channel_id is required for channel groups")
+	}
+	user, err := s.deps.Auth.LookupUser(ctx, msg.UniqueID)
+	promoted := false
+	if errors.Is(err, auth.ErrUserNotFound) {
+		target, online := s.clientByUniqueID(msg.UniqueID)
+		assigner, supported := s.deps.Groups.(guestGroupAssigner)
+		if !online || !supported || target.userID() != 0 {
+			return s.sendErrorFor(client, requestOrigin(ctx), errCodeNotFound, "target user not found")
 		}
+		id, assignErr := assigner.AssignGuestGroup(ctx, msg.Type, msg.GroupID, msg.ChannelID, target.uniqueID(), target.Username, expiresIn)
+		if assignErr != nil {
+			return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "assign failed: "+assignErr.Error())
+		}
+		user = &auth.User{ID: id, UniqueID: msg.UniqueID}
+		s.mu.RLock()
+		for _, connected := range s.clients {
+			if connected.uniqueID() == msg.UniqueID {
+				connected.promote(id, false)
+			}
+		}
+		s.mu.RUnlock()
+		promoted = true
+	} else if err != nil {
+		return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "user lookup unavailable")
+	}
+	if !promoted && msg.Type == "channel" {
 		if err := s.deps.Groups.AssignChannelGroup(ctx, msg.GroupID, user.ID, msg.ChannelID); err != nil {
 			return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "assign failed: "+err.Error())
 		}
-	} else {
+	} else if !promoted {
 		if err := s.deps.Groups.AssignServerGroup(ctx, msg.GroupID, user.ID, expiresIn); err != nil {
 			return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "assign failed: "+err.Error())
 		}
@@ -322,7 +349,11 @@ func (s *TCPServer) handleGroupAssign(ctx context.Context, client *Client, f *ne
 		s.notifyGroupEvent(user.UniqueID, eventGroupAssigned, map[string]any{
 			"group_id": msg.GroupID, "group_name": g.Name, "by": client.UniqueID,
 			"expires_in_seconds": msg.ExpiresInSeconds,
+			"unique_id":          user.UniqueID, "promoted": promoted,
 		})
+	}
+	if msg.AckRequested {
+		return s.writeMessage(client, netproto.MsgGroupAssign, msg)
 	}
 	return nil
 }
@@ -1218,14 +1249,14 @@ func (s *TCPServer) handleAuditLog(ctx context.Context, client *Client, f *netpr
 // assignDefaultGroup assigns the Member default group to a registered user
 // with no server-group memberships (first login).
 func (s *TCPServer) assignDefaultGroup(ctx context.Context, client *Client) {
-	if s.deps == nil || s.deps.Groups == nil || client.UserID == 0 || s.deps.DefaultMemberGroupID == 0 {
+	if s.deps == nil || s.deps.Groups == nil || client.userID() == 0 || s.deps.DefaultMemberGroupID == 0 {
 		return
 	}
-	ids, err := s.deps.Groups.UserGroupIDs(ctx, client.UserID)
+	ids, err := s.deps.Groups.UserGroupIDs(ctx, client.userID())
 	if err != nil || len(ids) > 0 {
 		return
 	}
-	if err := s.deps.Groups.AssignServerGroup(ctx, s.deps.DefaultMemberGroupID, client.UserID, 0); err != nil {
+	if err := s.deps.Groups.AssignServerGroup(ctx, s.deps.DefaultMemberGroupID, client.userID(), 0); err != nil {
 		s.logger.Warn("default group assignment failed",
 			zap.String("client_id", client.ID),
 			zap.Error(err),
@@ -1247,13 +1278,13 @@ func (s *TCPServer) assignDefaultGroup(ctx context.Context, client *Client) {
 // server admin would otherwise wear a bot badge. Guests can never be bots —
 // the flag is granted through a users row's groups.
 func (s *TCPServer) ClientIsBot(ctx context.Context, client *Client) bool {
-	if client == nil || client.UserID == 0 {
+	if client == nil || client.userID() == 0 {
 		return false
 	}
 	if s.deps == nil || s.deps.Perms == nil || s.deps.Resolver == nil {
 		return false
 	}
-	tp, err := s.deps.Perms.LoadForClient(ctx, client.UserID, 0)
+	tp, err := s.deps.Perms.LoadForClient(ctx, client.userID(), 0)
 	if err != nil {
 		return false
 	}

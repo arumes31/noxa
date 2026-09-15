@@ -5,8 +5,9 @@
 // Design notes:
 //   - The SFU never decodes or re-encodes media, and never copies a payload
 //     (436). One ReadRTP produces one *rtp.Packet, and that SAME packet is
-//     handed to every TrackWriter: pion's TrackLocalStaticRTP.WriteRTP
-//     value-copies the rtp.Header into a pooled packet and rewrites
+//     handed to every TrackWriter. Subscriber slots clear connection-specific
+//     header extensions on a shallow copy; pion's TrackLocalStaticRTP.WriteRTP
+//     then value-copies the rtp.Header into a pooled packet and rewrites
 //     Header.SSRC / Header.PayloadType per binding — each output track has its
 //     own SSRC and negotiated payload type — while the payload slice stays
 //     SHARED with the packet the read loop owns. So headers are rewritten, not
@@ -120,9 +121,7 @@ var slotKinds = map[string]webrtc.RTPCodecType{
 const slotSep = "|"
 
 // isDefaultSlot reports whether slot is the one an undeclared track of its
-// kind lands in. Default slots keep the bare publisher ID as their MSID track
-// ID, so the original contract (track ID == publisher client ID) still holds
-// for microphone audio and primary video.
+// kind lands in. Both default slots are reserved before media is published.
 func isDefaultSlot(slot string) bool {
 	return slot == SlotMic || slot == SlotCam
 }
@@ -141,6 +140,19 @@ func defaultSlot(kind webrtc.RTPCodecType) string {
 type pubSlot struct {
 	track  *webrtc.TrackLocalStaticRTP
 	sender *webrtc.RTPSender
+}
+
+// WriteRTP starts the subscriber's header-extension space afresh. Publisher
+// MID/RID and extension IDs belong to another SDP negotiation: forwarding
+// them can route packets to the wrong browser receiver despite a valid SSRC.
+// Egress interceptors add their own negotiated transport extensions. Keep
+// the payload shared and the source header intact for VAD, taps and fan-out.
+func (s *pubSlot) WriteRTP(pkt *rtp.Packet) error {
+	out := *pkt
+	out.Extension = false
+	out.ExtensionProfile = 0
+	out.Extensions = nil
+	return s.track.WriteRTP(&out)
 }
 
 // pubTrack is one publisher's media as seen by one subscriber: one output
@@ -471,7 +483,7 @@ func publisherStreamID(publisherID string) string {
 // slotTrackID returns the MSID track ID a subscriber sees for one of a
 // publisher's slots.
 func slotTrackID(publisherID, slot string) string {
-	if isDefaultSlot(slot) {
+	if slot == SlotMic {
 		return publisherID
 	}
 	return publisherID + slotSep + slot
@@ -482,7 +494,7 @@ func slotTrackID(publisherID, slot string) string {
 // stream's FIRST audio track only, so sharing a stream between the microphone
 // and screen audio would feed both through one gain chain (1, 2, 61, 70).
 func slotStreamID(publisherID, slot string) string {
-	if isDefaultSlot(slot) {
+	if slot == SlotMic {
 		return publisherStreamID(publisherID)
 	}
 	return publisherStreamID(publisherID) + slotSep + slot
@@ -1072,7 +1084,7 @@ func (r *Router) ForwardRTP(senderID, slot string, pkt *rtp.Packet) int {
 		if tracks, ok := r.pubTracks[sub]; ok {
 			if t, ok := tracks[senderID]; ok {
 				if s, ok := t.audio[slot]; ok {
-					writers = append(writers, s.track)
+					writers = append(writers, s)
 				}
 			}
 		}
@@ -1473,7 +1485,7 @@ func (r *Router) ForwardVideo(senderID, slot, rid string, pkt *rtp.Packet) int {
 		if tracks, ok := r.pubTracks[sub]; ok {
 			if t, ok := tracks[senderID]; ok {
 				if s, ok := t.video[slot]; ok {
-					accepted = append(accepted, s.track)
+					accepted = append(accepted, s)
 				}
 			}
 		}

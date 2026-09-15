@@ -1,16 +1,43 @@
 package main
 
 import (
+	"strings"
 	"testing"
 
 	"noxa/internal/netproto"
 )
+
+func TestGroupAssignReturnsServerRejection(t *testing.T) {
+	app, cm := newPipedApp(t, func(frame *netproto.Frame) (netproto.MessageType, any, bool) {
+		return netproto.MsgError, netproto.Error{Code: 6, Message: "target user not found", OriginType: uint16(netproto.MsgGroupAssign)}, true
+	})
+	cm.mu.Lock()
+	cm.groupAssignAck = true
+	cm.mu.Unlock()
+	if got := app.GroupAssign("server", 2, "missing", 0, 0); !strings.Contains(got, "target user not found") {
+		t.Fatalf("assignment result = %q, want server rejection", got)
+	}
+}
+
+func TestGroupPromotionUpdatesOnlyTargetSession(t *testing.T) {
+	cm := &connManager{uniqueID: "me", isGuest: true}
+	cm.applySessionEvent(`{"type":"group_assigned","data":{"unique_id":"other","promoted":true}}`)
+	if !cm.isGuest || cm.isAdmin {
+		t.Fatal("another user's grant changed the session")
+	}
+	cm.applySessionEvent(`{"type":"group_assigned","data":{"unique_id":"me","promoted":true}}`)
+	if cm.isGuest || cm.isAdmin {
+		t.Fatal("member grant did not preserve non-admin identity")
+	}
+}
 
 func TestGroupAndPermissionBindings(t *testing.T) {
 	frames := make(chan *netproto.Frame, 48)
 	app, cm := newPipedApp(t, func(frame *netproto.Frame) (netproto.MessageType, any, bool) {
 		frames <- frame
 		switch netproto.MessageType(frame.Type) {
+		case netproto.MsgGroupAssign:
+			return netproto.MsgGroupAssign, netproto.GroupAssign{}, true
 		case netproto.MsgGroupList, netproto.MsgGroupCreate, netproto.MsgGroupEdit:
 			return netproto.MsgGroupListResponse, netproto.GroupListResponse{}, true
 		case netproto.MsgGroupMembers:
@@ -32,6 +59,7 @@ func TestGroupAndPermissionBindings(t *testing.T) {
 
 	cm.mu.Lock()
 	cm.isAdmin = true
+	cm.groupAssignAck = true
 	cm.isGuest = true
 	cm.mu.Unlock()
 	if !app.IsAdmin() || !app.IsGuest() {

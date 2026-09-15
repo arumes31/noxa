@@ -29,12 +29,19 @@ let stopCameraTest = () => {};
 
 function settings() { return draft; }
 
+class SavedAudioSettingsError extends Error {}
+
 async function commit(snapshot) {
     const err = await window.go.main.App.SaveSettings(snapshot);
     if (err) throw new Error(err);
     // (282) the draft was cloned when the dialog opened: re-read the merged
     // truth so Go-owned fields (recents) written meanwhile survive.
     V().state.settings = await window.go.main.App.GetSettings();
+    try {
+        await V().applyLiveAudioSettings();
+    } catch (error) {
+        throw new SavedAudioSettingsError(t("settings.audioApplyFailed", { error: error.message || String(error) }), { cause: error });
+    }
     void updateSoundOutput();
     // (126-129) chat display prefs apply live (CSS classes on #chat-log).
     if (V().applyChatPrefs) V().applyChatPrefs();
@@ -1496,6 +1503,9 @@ function openSettings(pageId = "application") {
         if (saving) return false;
         saving = true;
         const snapshot = structuredClone(draft);
+        const previous = V().state.settings;
+        const whisperConfig = (s) => JSON.stringify([!!s?.whisper_active, s?.whisper_clients || [], s?.whisper_channels || []]);
+        const whisperChanged = whisperConfig(previous) !== whisperConfig(snapshot);
         const previousLanguage = currentLanguage();
         const serverGeneration = V().state.serverGeneration;
         const focused = document.activeElement;
@@ -1517,7 +1527,7 @@ function openSettings(pageId = "application") {
             }
             // Local preferences also save while disconnected. A live whisper
             // update belongs only to the server where this save began.
-            if (V().state.myClientID && serverGeneration === V().state.serverGeneration) {
+            if (whisperChanged && V().state.myClientID && serverGeneration === V().state.serverGeneration) {
                 const error = await window.go.main.App.WhisperSet(
                     snapshot.whisper_active ? snapshot.whisper_clients || [] : [],
                     snapshot.whisper_active ? snapshot.whisper_channels || [] : [],
@@ -1529,7 +1539,9 @@ function openSettings(pageId = "application") {
             return true;
         } catch (error) {
             if (overlay.isConnected) {
-                saveStatus.textContent = t("menu.saveFailed", { error: error.message || String(error) });
+                saveStatus.textContent = error instanceof SavedAudioSettingsError
+                    ? error.message
+                    : t("menu.saveFailed", { error: error.message || String(error) });
                 saveStatus.classList.add("warn");
             }
             return false;

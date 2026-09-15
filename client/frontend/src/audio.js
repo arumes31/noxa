@@ -4,6 +4,27 @@
 import { labelButton } from "./icons.js";
 const V = () => window.__noxa;
 
+// Incoming tracks arrive outside a user gesture. Resume their WebAudio context
+// explicitly and retry from user interaction if autoplay initially suspends it.
+export async function resumeAudioPlayback(context) {
+    if (!context || context.state === "closed" || context.state === "running") return;
+    await context.resume();
+}
+
+// Chromium needs a playing media element to pull remote WebRTC audio into
+// WebAudio (crbug.com/933677). Keep it muted: the processing graph owns all
+// audible output, including per-user volume, deafen and device selection.
+export function createRemoteAudioSource(context, track) {
+    const stream = new MediaStream([track]);
+    const src = context.createMediaStreamSource(stream);
+    const playback = new Audio();
+    playback.muted = true;
+    playback.autoplay = true;
+    playback.srcObject = stream;
+    void playback.play().catch(() => {});
+    return { src, playback };
+}
+
 // Keep the voice-bar action aligned with what the next activation will do.
 // A pressed mute button offers "Unmute" to both pointer and screen-reader
 // users instead of continuing to announce the state-changing action as Mute.
@@ -242,8 +263,8 @@ export function captureConstraints(ch) {
     };
 }
 
-// trackProfiles remembers which profile a live capture track was taken with;
-// a track we never saw captured counts as "voice" (the settings profile).
+// trackProfiles remembers the device and processing constraints used to capture
+// each track. A same-channel settings change can require a fresh microphone.
 const trackProfiles = new WeakMap();
 let recapturing = false; // one getUserMedia swap at a time
 
@@ -254,7 +275,7 @@ function profileOf(ch) {
 // markCaptureProfile records the profile a caller captured a track with, so
 // applyCaptureProfile does not re-capture a track that already matches.
 export function markCaptureProfile(track, ch) {
-    if (track) trackProfiles.set(track, profileOf(ch));
+    if (track) trackProfiles.set(track, JSON.stringify(captureConstraints(ch)));
 }
 
 // applyCaptureProfile re-captures the microphone and swaps the sender's track
@@ -266,8 +287,8 @@ export function markCaptureProfile(track, ch) {
 export async function applyCaptureProfile(pc, stream, ch) {
     const cur = stream?.getAudioTracks()[0] || null;
     if (!cur) return { track: null, changed: false };
-    const want = profileOf(ch);
-    if ((trackProfiles.get(cur) || "voice") === want) return { track: cur, changed: false };
+    const want = JSON.stringify(captureConstraints(ch));
+    if (trackProfiles.get(cur) === want) return { track: cur, changed: false };
     // a move and a channel_updated can land together: a second capture while
     // the first is still in flight would swap the sender's track twice.
     if (recapturing) return { track: cur, changed: false };
@@ -276,24 +297,28 @@ export async function applyCaptureProfile(pc, stream, ch) {
         let fresh = null;
         try {
             fresh = await navigator.mediaDevices.getUserMedia({ audio: captureConstraints(ch) });
-        } catch {
-            return { track: cur, changed: false };
+        } catch (error) {
+            return { track: cur, changed: false, error };
         }
         const next = fresh.getAudioTracks()[0];
         if (!next) {
             fresh.getTracks().forEach((t) => t.stop());
             return { track: cur, changed: false };
         }
+        if (pc?.connectionState === "closed") {
+            fresh.getTracks().forEach((track) => track.stop());
+            return { track: cur, changed: false };
+        }
         trackProfiles.set(next, want);
         next.enabled = cur.enabled;
-        next.contentHint = want === "music" ? "music" : "speech";
-        const sender = pc?.getSenders().find((s) => s.track && s.track.kind === "audio") || null;
+        next.contentHint = profileOf(ch) === "music" ? "music" : "speech";
+        const sender = pc?.getSenders().find((s) => s.track === cur) || null;
         if (sender) {
             try {
                 await sender.replaceTrack(next);
-            } catch {
+            } catch (error) {
                 next.stop();
-                return { track: cur, changed: false };
+                return { track: cur, changed: false, error };
             }
         }
         cur.stop();

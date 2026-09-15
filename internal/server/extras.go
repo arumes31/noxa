@@ -59,7 +59,7 @@ func (s *TCPServer) handleAvatarSet(ctx context.Context, client *Client, f *netp
 	if err := netproto.Decode(f, &msg); err != nil {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "malformed avatar_set: "+err.Error())
 	}
-	if client.UserID == 0 {
+	if client.userID() == 0 {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, "guests cannot upload avatars")
 	}
 	pc, err := s.permCheckerFor(ctx, client)
@@ -284,7 +284,7 @@ func (s *TCPServer) handleTokenUse(ctx context.Context, client *Client, f *netpr
 	if msg.Token == "" {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "empty token")
 	}
-	grant, err := s.deps.Tokens.UseTokenForIdentity(ctx, msg.Token, client.UserID, client.UniqueID, client.Username)
+	grant, err := s.deps.Tokens.UseTokenForIdentity(ctx, msg.Token, client.userID(), client.UniqueID, client.Username)
 	if err != nil {
 		if errors.Is(err, store.ErrTokenNotFound) {
 			return s.sendErrorFor(client, requestOrigin(ctx), errCodeNotFound, "unknown token")

@@ -116,6 +116,12 @@ func (c *Client) promote(userID int64, admin bool) {
 	c.admin = c.admin || admin
 }
 
+func (c *Client) userID() int64 {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.UserID
+}
+
 // uniqueID returns the client's authenticated unique ID ("" before auth).
 func (c *Client) uniqueID() string {
 	c.mu.RLock()

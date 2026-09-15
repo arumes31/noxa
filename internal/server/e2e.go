@@ -34,8 +34,8 @@ func (s *TCPServer) handleKeyPublish(ctx context.Context, client *Client, f *net
 	}
 
 	s.deps.State.SetE2EPublicKey(client.ID, msg.PublicKey)
-	if client.UserID != 0 && s.deps.Auth != nil {
-		if err := s.deps.Auth.SetE2EPublicKey(ctx, client.UserID, msg.PublicKey); err != nil {
+	if client.userID() != 0 && s.deps.Auth != nil {
+		if err := s.deps.Auth.SetE2EPublicKey(ctx, client.userID(), msg.PublicKey); err != nil {
 			s.logger.Warn("persisting e2e public key failed",
 				zap.String("client_id", client.ID),
 				zap.Error(err),

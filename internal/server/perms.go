@@ -52,7 +52,7 @@ func (s *TCPServer) permCheckerFor(ctx context.Context, client *Client) (*permCh
 			channelID = sc.ChannelID
 		}
 	}
-	if client.UserID == 0 {
+	if client.userID() == 0 {
 		tp := permissions.NewTieredPermissions()
 		if channelID != 0 {
 			loaded, err := s.deps.Perms.LoadForClient(ctx, 0, channelID)
@@ -79,7 +79,7 @@ func (s *TCPServer) permCheckerFor(ctx context.Context, client *Client) (*permCh
 			guest:    true,
 		}, nil
 	}
-	tp, err := s.deps.Perms.LoadForClient(ctx, client.UserID, channelID)
+	tp, err := s.deps.Perms.LoadForClient(ctx, client.userID(), channelID)
 	if err != nil {
 		return nil, fmt.Errorf("loading permissions: %w", err)
 	}

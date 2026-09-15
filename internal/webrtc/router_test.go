@@ -480,11 +480,11 @@ func TestPublisherTrackMSID(t *testing.T) {
 	if mic == nil || cam == nil {
 		t.Fatal("publisher a is missing a default slot on c")
 	}
-	if mic.track.ID() != "a" || cam.track.ID() != "a" {
-		t.Fatalf("track IDs = %q/%q, want both %q", mic.track.ID(), cam.track.ID(), "a")
+	if mic.track.ID() != "a" || cam.track.ID() != "a|cam" {
+		t.Fatalf("track IDs = %q/%q, want %q/%q", mic.track.ID(), cam.track.ID(), "a", "a|cam")
 	}
-	if mic.track.StreamID() != cam.track.StreamID() {
-		t.Fatalf("audio/video stream IDs = %q/%q, want one stream per publisher",
+	if mic.track.StreamID() == cam.track.StreamID() {
+		t.Fatalf("audio/video stream IDs = %q/%q, want distinct streams per slot",
 			mic.track.StreamID(), cam.track.StreamID())
 	}
 	if mic.track.StreamID() == fromB.audio[SlotMic].track.StreamID() {

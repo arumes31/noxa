@@ -474,8 +474,15 @@ type Authenticate struct {
 	X25519PublicKey string `json:"x25519_public_key,omitempty"`
 }
 
+// CapabilityGroupAssignAck advertises support for GroupAssign.AckRequested.
+// #nosec G101 -- this is a protocol capability identifier, not a credential.
+const CapabilityGroupAssignAck = "group_assign_ack"
+
 // AuthResponse is the server's reply to an Authenticate message.
 type AuthResponse struct {
+	// Capabilities advertises optional protocol features. Missing means legacy.
+	Capabilities []string `json:"capabilities,omitempty"`
+
 	OK       bool   `json:"ok"`
 	ClientID string `json:"client_id,omitempty"`
 	UniqueID string `json:"unique_id,omitempty"`
@@ -1480,6 +1487,9 @@ type GroupDelete struct {
 // GroupAssign assigns a user to a group. ChannelID is required for channel
 // groups. ExpiresInSeconds > 0 makes the membership expire (145).
 type GroupAssign struct {
+	// AckRequested asks the server to echo this message after a successful write.
+	// Older fire-and-forget clients omit it and receive no extra frame.
+	AckRequested     bool   `json:"ack_requested,omitempty"`
 	Type             string `json:"type"`
 	GroupID          int64  `json:"group_id"`
 	UniqueID         string `json:"unique_id"`

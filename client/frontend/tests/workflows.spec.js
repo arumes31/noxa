@@ -26,6 +26,104 @@ async function installSaveScenario(page, settings = {}) {
     }, settings);
 }
 
+test("saving guest audio settings does not require whisper permission", async ({ page }) => {
+    await installSaveScenario(page);
+    await page.evaluate(() => {
+        window.__saveMode = "success";
+        window.__noxa.state.myClientID = "guest";
+        const app = window.go.main.App;
+        window.go.main.App = new Proxy(app, { get(target, method) {
+            if (method === "WhisperSet") return async () => { throw new Error("whisper denied"); };
+            return target[method];
+        } });
+        window.__noxa.openSettings("capture");
+    });
+    await page.locator("#set-ok").click();
+    await expect(page.locator("#settings-overlay")).toHaveCount(0);
+});
+
+test("persisted audio settings report an apply warning and allow retry", async ({ page }) => {
+    await installSaveScenario(page);
+    await page.evaluate(() => {
+        window.__saveMode = "success";
+        window.__noxa.applyLiveAudioSettings = async () => { throw new Error("microphone unavailable"); };
+        window.__noxa.openSettings("capture");
+    });
+    await page.locator("#set-ok").click();
+    await expect(page.locator(".settings-save-status")).toHaveText("Settings saved, but audio changes could not be applied: microphone unavailable");
+    await expect(page.locator("#settings-overlay")).toBeVisible();
+    expect(await page.evaluate(() => window.__saveAttempts)).toBe(1);
+    await page.evaluate(() => { window.__noxa.applyLiveAudioSettings = async () => {}; });
+    await page.locator("#set-ok").click();
+    await expect(page.locator("#settings-overlay")).toHaveCount(0);
+});
+
+test("inactive camera tracks do not occupy the video grid", async ({ page }) => {
+    await page.evaluate(async () => {
+        window.__noxa.showWorkspace(false);
+        const video = await import("/src/video.js");
+        const canvas = document.createElement("canvas");
+        const stream = canvas.captureStream(1);
+        const track = stream.getVideoTracks()[0];
+        window.__cameraPlaceholder = track;
+        Object.defineProperty(track, "muted", { configurable: true, get: () => window.__cameraMuted });
+        window.__cameraMuted = true;
+        video.videoTrackAdded(track.id, stream, { client_id: "becksn", nickname: "becksn" });
+    });
+    await expect(page.locator("#video-grid")).toBeHidden();
+    await page.evaluate(() => { window.__cameraMuted = false; window.__cameraPlaceholder.dispatchEvent(new Event("unmute")); });
+    await expect(page.locator("#video-grid")).toBeVisible();
+    await page.evaluate(() => { window.__cameraMuted = true; window.__cameraPlaceholder.dispatchEvent(new Event("mute")); });
+    await expect(page.locator("#video-grid")).toBeHidden();
+    await page.evaluate(() => { window.__cameraMuted = false; window.__cameraPlaceholder.dispatchEvent(new Event("unmute")); });
+    await expect(page.locator("#video-grid")).toBeVisible();
+});
+
+test("incoming voice resumes suspended playback and applies the selected output", async ({ page }) => {
+    await page.evaluate(async () => {
+        const NativeContext = window.AudioContext;
+        const input = new NativeContext();
+        const stream = input.createMediaStreamDestination().stream;
+        navigator.mediaDevices.getUserMedia = async () => stream;
+        class FakePeerConnection {
+            constructor() { this.senders = []; this.iceConnectionState = "connected"; }
+            addTransceiver(track) {
+                const sender = { track, getParameters: () => ({}), setParameters: async () => {} };
+                this.senders.push(sender);
+                return { sender };
+            }
+            getSenders() { return this.senders; }
+            getTransceivers() { return []; }
+            async createOffer() { return { type: "offer", sdp: "test" }; }
+            async setLocalDescription() {}
+            async setRemoteDescription() {}
+            close() { this.connectionState = "closed"; }
+        }
+        window.RTCPeerConnection = FakePeerConnection;
+        const state = window.__noxa.state;
+        state.myClientID = "listener";
+        state.myChannelID = 42;
+        state.channels = [{ ChannelID: 42, Name: "Public" }];
+        await window.__noxa.ensureVoiceForChannel();
+        const playback = new NativeContext();
+        await playback.suspend();
+        window.__playback = playback;
+        window.__sinks = [];
+        playback.setSinkId = async (id) => { window.__sinks.push(id); };
+        window.AudioContext = function () { return playback; };
+        state.pc.ontrack({ track: stream.getAudioTracks()[0], streams: [stream] });
+    });
+    await expect.poll(() => page.evaluate(() => window.__playback.state)).toBe("running");
+    await page.evaluate(async () => {
+        window.__noxa.state.settings.playback_device_id = "speaker-2";
+        await window.__noxa.applyLiveAudioSettings();
+    });
+    expect(await page.evaluate(() => window.__sinks.at(-1))).toBe("speaker-2");
+    await page.evaluate(() => window.__playback.suspend());
+    await page.locator("body").click({ position: { x: 5, y: 5 } });
+    await expect.poll(() => page.evaluate(() => window.__playback.state)).toBe("running");
+});
+
 test("offline settings save does not require a live whisper connection", async ({ page }) => {
     await installSaveScenario(page);
     await page.evaluate(() => {
