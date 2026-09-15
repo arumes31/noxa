@@ -195,6 +195,21 @@ test("frontend UI module behaviors", { concurrency: false }, async (t) => {
         assert.equal(switched.changed, true);
         assert.deepEqual(captured.at(-1).audio.deviceId, { exact: "capture-2" });
 
+        oldTrack.readyState = "ended";
+        changes.length = 0;
+        freshTrack = { kind: "audio", stop() { this.stopped = true; } };
+        const recovered = await audio.applyCaptureProfile({ connectionState: "connected", getSenders: () => [sender] }, stream, null);
+        assert.equal(recovered.changed, true, "an ended microphone can be replaced on an open connection");
+        assert.deepEqual(changes.map(([kind]) => kind), ["replace", "remove", "add"]);
+
+        const replacementError = new Error("replacement rejected");
+        const failed = await audio.applyCaptureProfile({ getSenders: () => [{ track: oldTrack, replaceTrack: async () => { throw replacementError; } }] }, stream, null);
+        assert.equal(failed.error, replacementError);
+        assert.equal(freshTrack.stopped, true);
+        changes.length = 0;
+        assert.equal((await audio.applyCaptureProfile({ connectionState: "closed", getSenders: () => [sender] }, stream, null)).changed, false);
+        assert.deepEqual(changes, []);
+
         const gainNode = { gain: { value: 0 } };
         const muteNode = { gain: { value: 0 } };
         audio.registerUserChain("alice", gainNode, muteNode);

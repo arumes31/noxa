@@ -305,7 +305,7 @@ export async function applyCaptureProfile(pc, stream, ch) {
             fresh.getTracks().forEach((t) => t.stop());
             return { track: cur, changed: false };
         }
-        if (pc?.connectionState === "closed" || cur.readyState === "ended") {
+        if (pc?.connectionState === "closed") {
             fresh.getTracks().forEach((track) => track.stop());
             return { track: cur, changed: false };
         }

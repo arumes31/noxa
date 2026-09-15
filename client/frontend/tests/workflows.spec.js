@@ -42,6 +42,22 @@ test("saving guest audio settings does not require whisper permission", async ({
     await expect(page.locator("#settings-overlay")).toHaveCount(0);
 });
 
+test("persisted audio settings report an apply warning and allow retry", async ({ page }) => {
+    await installSaveScenario(page);
+    await page.evaluate(() => {
+        window.__saveMode = "success";
+        window.__noxa.applyLiveAudioSettings = async () => { throw new Error("microphone unavailable"); };
+        window.__noxa.openSettings("capture");
+    });
+    await page.locator("#set-ok").click();
+    await expect(page.locator(".settings-save-status")).toHaveText("Settings saved, but audio changes could not be applied: microphone unavailable");
+    await expect(page.locator("#settings-overlay")).toBeVisible();
+    expect(await page.evaluate(() => window.__saveAttempts)).toBe(1);
+    await page.evaluate(() => { window.__noxa.applyLiveAudioSettings = async () => {}; });
+    await page.locator("#set-ok").click();
+    await expect(page.locator("#settings-overlay")).toHaveCount(0);
+});
+
 test("inactive camera tracks do not occupy the video grid", async ({ page }) => {
     await page.evaluate(async () => {
         window.__noxa.showWorkspace(false);
