@@ -9,7 +9,7 @@ import { initMenu } from "./menu.js";
 import { initSettingsUI } from "./settings-ui.js";
 import { initClientInfo } from "./clientinfo.js";
 import { initUpdater, startupAutoCheck } from "./updater.js";
-import { playEvent, playChannelJoin, beep, testAll } from "./sounds.js";
+import { playEvent, playSpeech, clearSpeech, initSounds, updateSoundOutput, soundEngine, speechQueue } from "./sounds.js";
 import {
     startMicMeter, stopMicMeter, pttRelease, makeLimiter,
     getUserVolume, isUserMuted, setUserMuted, registerUserChain, unregisterUserChain,
@@ -104,7 +104,6 @@ const state = {
     reconnectTimer: null,
     reconnectInFlight: false,
     vadMonitor: null,
-    audioCtx: null,
     voiceMonitorCtx: null,
     trackUsers: new Map(), // media track ID -> {client_id, unique_id, nickname} (per-publisher tracks; wave-3 video tiles)
     shareStream: null,     // getDisplayMedia result while screen sharing
@@ -112,11 +111,6 @@ const state = {
     shareAudioTransceiver: null, // its transceiver, reused by the next share in this session
     regionBox: null,       // (71) crop target element, alive for the whole cropped share
 };
-
-// ---------------------------------------------------------------------------
-// Sounds are synthesized in sounds.js (sound packs); `beep` is the legacy
-// helper kept for simple cues.
-// ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
 // Toasts
@@ -210,6 +204,7 @@ function applyAppearance() {
 (async () => {
     try {
         state.settings = await window.go.main.App.GetSettings();
+        void updateSoundOutput();
         // (88) reflect the persisted low-bandwidth mode in the voice bar.
         if (state.settings?.low_bandwidth) setLowBandwidth(true, false);
     } catch {
@@ -570,6 +565,7 @@ async function completeReconnect(c, generation, tabID) {
     startQualitySampler();
     noteActivity();
     playEvent("connection_reconnected");
+    clearSpeech("connection");
     warnCertificateClock(clockWarning, c.addr);
     return generation === reconnectGeneration;
 }
@@ -641,6 +637,7 @@ function scheduleReconnect(
         if (target && state.reconnectAttempts >= 5 && !reconnectFailureSounded && ownsSource()) {
             reconnectFailureSounded = true;
             playEvent("connection_failed");
+            playSpeech("reconnect_failed");
         }
         chatUI.cancelReconnectAnnouncementBatch();
         showLogin();
@@ -750,6 +747,7 @@ async function disconnect() {
 // teardown into one exactly-once user-facing connection edge.
 window.runtime.EventsOn("intentional_disconnect", (tabID) => {
     if (String(tabID || "") !== state.activeTabID) return;
+    clearSpeech();
     if (state.settings?.notify_connection !== false) toast("Disconnected", "info", "conn");
     playEvent("connection_disconnected");
 });
@@ -758,6 +756,7 @@ window.runtime.EventsOn("disconnected", () => {
     const unexpected = !!state.lastConnect;
     if (unexpected && state.settings?.notify_connection !== false) toast("Connection lost", "warn", "conn");
     if (unexpected) playEvent("connection_lost");
+    if (unexpected) playSpeech("connection_lost", { delay: 1200 });
     sysMsg("disconnected from server");
     // (32/33) whisper state is per-connection: client IDs and the server-side
     // whisper list do not survive a reconnect.
@@ -783,12 +782,13 @@ window.runtime.EventsOn("servererror", (msg) => {
     const text = String(msg).replace(/^\d+:\s*/, "");
     toast(text || "The server rejected that action", "warn");
     playEvent("server_error");
+    if (/^insufficient permission[: ]|^permission denied\b/i.test(text)) playSpeech("permission_denied");
 });
 
 // (282) the Go side maintains settings of its own (recents on every connect),
 // so the merged blob it pushes is the authoritative cache — without this the
 // recents list stays frozen at the value read once at startup.
-window.runtime.EventsOn("settings_update", (s) => { state.settings = s; });
+window.runtime.EventsOn("settings_update", (s) => { state.settings = s; void updateSoundOutput(); });
 
 // (320) recordRecentChannel tracks the last 5 joined channels per server
 // address in settings (debounced persist).
@@ -1015,7 +1015,7 @@ function syncOwnChannel({ audible = true } = {}) {
         // must flush the pending new-tab join from this equality branch.
         const initialCuePending = state.pendingInitialChannelCueTabID === state.activeTabID;
         if (initialCuePending && channelID > 0 && !actionSoundsSuppressed()) {
-            playChannelJoin();
+            playEvent("own_channel_join");
             state.pendingInitialChannelCueTabID = "";
         }
         ensureVoiceForChannel();
@@ -1029,7 +1029,7 @@ function syncOwnChannel({ audible = true } = {}) {
     if ((audible || initialCuePending) && !actionSoundsSuppressed()) {
         if (channelID > 0) {
             if (previousChannelID > 0) playEvent("own_channel_switch");
-            else playChannelJoin();
+            else playEvent("own_channel_join");
             playedCue = true;
         } else if (previousChannelID > 0) {
             playEvent("own_channel_leave");
@@ -1183,13 +1183,16 @@ window.runtime.EventsOn("event", (json) => {
             if (c) c.channel_id = nextChannelID;
             if (d.client_id === state.myClientID) {
                 const previousChannelID = state.myChannelID;
+                if (nextChannelID > 0 && nextChannelID !== previousChannelID && d.by_client_id && d.by_client_id !== state.myClientID) {
+                    playSpeech("moved_by_admin");
+                }
                 state.myChannelID = nextChannelID;
                 if (nextChannelID > 0 && nextChannelID !== previousChannelID) setDeafened(false);
                 let playedOwnCue = false;
                 if (!actionSoundsSuppressed()) {
                     if (nextChannelID > 0 && nextChannelID !== previousChannelID) {
                         if (previousChannelID > 0) playEvent("own_channel_switch");
-                        else playChannelJoin();
+                        else playEvent("own_channel_join");
                         playedOwnCue = true;
                     } else if (nextChannelID === 0 && previousChannelID > 0) {
                         playEvent("own_channel_leave");
@@ -1386,14 +1389,35 @@ window.runtime.EventsOn("event", (json) => {
         case "announcement":
             chatUI.onAnnouncement(d);
             return;
-        case "kicked":
+        case "server_shutdown":
+            if (!actionSoundsSuppressed()) {
+                state.lastConnect = null;
+                clearReconnectTimer();
+                playEvent("connection_disconnected");
+                playSpeech("server_shutdown");
+                toast("The server is shutting down.", "warn", "conn");
+            }
+            break;
+        case "kicked": {
+            const self = d.client_id === state.myClientID;
+            const removal = d.ban ? "banned" : d.from_server ? "kicked" : "kicked_channel";
+            const description = self ? (d.ban ? "You were banned from the server." : d.from_server ? "You were kicked from the server." : "You were removed from the channel.") : "Client " + (d.ban ? "banned" : "kicked");
             // (385) kicks dispatch through the notification matrix.
-            window.__voicxNotify?.notify("kick", "client kicked" + (d.reason ? ": " + d.reason : ""),
-                { className: "messages", kind: "warn" });
+            window.__voicxNotify?.notify("kick", description + (d.reason ? " Reason: " + d.reason : ""),
+                { className: "messages", kind: "warn", soundEvent: d.ban ? "ban" : "kick" });
+            if (self && !actionSoundsSuppressed()) {
+                if (d.from_server || d.ban) {
+                    state.lastConnect = null;
+                    reconnectGeneration++;
+                    clearReconnectTimer();
+                }
+                playSpeech(removal, { delay: 350 });
+            }
             if (state.settings?.sys_kick !== false) { // (130) category filter
                 sysMsg("client " + d.client_id + " was kicked" + (d.reason ? " (" + d.reason + ")" : ""));
             }
             break;
+        }
         case "screenshare_changed": {
             // (73) remember who is sharing: the grid labels those tiles, and
             // the camera-off detector (61) must not mistake a still desktop
@@ -2995,12 +3019,12 @@ function setPTT(active) {
         $("ptt-btn").classList.toggle("live", effective);
         $("ptt-btn").setAttribute("aria-pressed", String(effective));
         window.go.main.App.SetPTT(effective);
+        applyVoiceState();
         // VAD continuously changes pttActive as speech starts and stops; only
         // physical push-to-talk actions earn an audible confirmation.
         if ((state.settings?.activation_mode || "ptt") === "ptt") {
             playEvent(effective ? "ptt_on" : "ptt_off");
         }
-        applyVoiceState();
         updateTalkBanner();
     });
 }
@@ -3257,7 +3281,9 @@ async function refreshPermissions() {
 // ---------------------------------------------------------------------------
 
 window.__voicx = {
-    state, $, toast, announceLive, sysMsg, beep, showLogin, showWorkspace, disconnect, sendChat, setPTT,
+    soundEngine,
+    speechQueue,
+    state, $, toast, announceLive, sysMsg, showLogin, showWorkspace, disconnect, sendChat, setPTT,
     setDeafened, refreshPermissions, applyVoiceState, applyOutputSettings,
     startVADMonitor: startVoiceMonitor, stopVADMonitor: stopVoiceMonitor,
     connectFromLogin, renderTree, setChannelExpanded, setDetailsOpen, setDirectTargetVisible,
@@ -3289,6 +3315,7 @@ window.__voicx = {
 };
 
 initModalSystem();
+initSounds();
 initMenu();
 initSettingsUI();
 initClientInfo();

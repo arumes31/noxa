@@ -1815,7 +1815,7 @@ input::placeholder, textarea::placeholder { color: var(--text-faint); opacity: 1
 }
 
 /* ------------------------------------------------------------- wave 9 */
-/* Alpha badge, notification matrix, custom beep, buddy watch. */
+/* Alpha badge, notification matrix, buddy watch. */
 
 #alpha-badge {
     color: var(--warn); font: 700 0.9286rem var(--font-display); cursor: pointer;
@@ -1825,13 +1825,12 @@ input::placeholder, textarea::placeholder { color: var(--text-faint); opacity: 1
 
 .notify-matrix td, .notify-matrix th { text-align: center; }
 .notify-matrix td:first-child, .notify-matrix th:first-child { text-align: left; }
-.beep-cell { white-space: nowrap; }
-.beep-cell input {
-    width: 64px; background: var(--bg-raised); border: 1px solid var(--border);
-    border-radius: 6px; color: var(--text); font-size: 0.7857rem; padding: 2px 4px;
-    margin-right: 4px;
+.sound-controls { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.sound-controls button, .notify-matrix button {
+    min-height: 32px; padding: 4px 10px; background: var(--bg-hover);
+    border: 1px solid var(--border); border-radius: 6px; color: var(--text); cursor: pointer;
 }
-.beep-cell button { background: var(--bg-hover); border: 1px solid var(--border); color: var(--text); border-radius: 6px; cursor: pointer; padding: 2px 7px; }
+.set-subhead.sound-controls { justify-content: space-between; }
 
 /* 👻 invisible users (admin view) */
 .client.invisible .client-name { opacity: 0.45; font-style: italic; }

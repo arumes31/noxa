@@ -1,7 +1,7 @@
 // settings-ui.js — TS3-style settings dialog with left icon nav.
 import { t } from "./i18n.js";
 import { calibrateMic, startLoopback } from "./audio.js";
-import { play, SOUND_EVENT_GROUPS, testAll } from "./sounds.js";
+import { previewSounds, previewSpeech, stopPreviews, updateSoundOutput, SOUND_EVENT_GROUPS, testAll } from "./sounds.js";
 import { MATRIX_EVENTS, defaultMatrixRow } from "./notifications.js";
 import { associateControlLabel, wrappedIndex } from "./a11y.js";
 import { createMediaDeviceInventory } from "./media-devices.js";
@@ -37,6 +37,7 @@ async function commit() {
     // (282) the draft was cloned when the dialog opened: re-read the merged
     // truth so Go-owned fields (recents) written meanwhile survive.
     V().state.settings = await window.go.main.App.GetSettings();
+    void updateSoundOutput();
     // (126-129) chat display prefs apply live (CSS classes on #chat-log).
     if (V().applyChatPrefs) V().applyChatPrefs();
     // (294-297) appearance applies live (theme/accent/user CSS/font/compact).
@@ -718,7 +719,7 @@ function pagePlayback() {
     el.appendChild(hint("Normalization levels every speaker separately. Limiter and normalizer apply when voice next reconnects."));
     const testBtn = document.createElement("button");
     testBtn.textContent = "Play Test Sound";
-    testBtn.onclick = () => V().beep(660, 0.25);
+    testBtn.onclick = () => previewSounds(["own_channel_join"], s);
     el.appendChild(row("Test", testBtn));
     return el;
 }
@@ -1206,10 +1207,9 @@ function pageNotifications() {
     const EVENTS = MATRIX_EVENTS;
     const matrix = document.createElement("table");
     matrix.className = "perm-grid notify-matrix";
-    matrix.innerHTML = `<thead><tr><th>event</th><th>toast</th><th>sound</th><th>flash</th><th>native</th><th>custom beep</th></tr></thead><tbody></tbody>`;
+    matrix.innerHTML = `<thead><tr><th>event</th><th>toast</th><th>sound</th><th>flash</th><th>native</th><th>preview</th></tr></thead><tbody></tbody>`;
     const tbody = matrix.querySelector("tbody");
     s.notify_matrix = s.notify_matrix || {};
-    s.custom_sounds = s.custom_sounds || {};
     for (const [event, label] of EVENTS) {
         // Unset rows seed from the dispatcher's default: this grid writes what
         // it shows, so a local guess would change behaviour on first visit.
@@ -1222,35 +1222,18 @@ function pageNotifications() {
             td.appendChild(checkbox(rowData[col], (v) => { rowData[col] = v; }));
             tr.appendChild(td);
         }
-        // (384) custom beep: freq + duration + preview.
         const td = document.createElement("td");
-        td.className = "beep-cell";
-        const spec = s.custom_sounds[event] || { freq: 0, duration_ms: 200 };
-        s.custom_sounds[event] = spec;
-        const freq = document.createElement("input");
-        freq.type = "number";
-        freq.min = 100; freq.max = 2000; freq.value = spec.freq || "";
-        freq.placeholder = "Hz";
-        freq.className = "beep-freq";
-        freq.onchange = () => { spec.freq = parseInt(freq.value, 10) || 0; };
-        const dur = document.createElement("input");
-        dur.type = "number";
-        dur.min = 30; dur.max = 2000; dur.value = spec.duration_ms || 200;
-        dur.className = "beep-dur";
-        dur.onchange = () => { spec.duration_ms = parseInt(dur.value, 10) || 200; };
-        const prev = document.createElement("button");
-        prev.textContent = "▶";
-        prev.title = "preview";
-        prev.onclick = async () => {
-            // force: a preview must be audible even with the master toggle off.
-            if (spec.freq > 0) play("sine", spec.freq, (spec.duration_ms || 200) / 1000, 1, true);
-        };
-        td.append(freq, dur, prev);
+        const preview = document.createElement("button");
+        preview.type = "button";
+        preview.textContent = "Play";
+        preview.setAttribute("aria-label", "Preview " + label);
+        preview.onclick = () => previewSounds([event], s);
+        td.appendChild(preview);
         tr.appendChild(td);
         tbody.appendChild(tr);
     }
     el.appendChild(matrix);
-    el.appendChild(hint("Empty freq = sound-pack default. DND overrides everything (mentions still badge)."));
+    el.appendChild(hint("Previews use your sound volume and event choices. DND silences all previews."));
     // (347/348) do-not-disturb: toggle + quiet hours schedule.
     el.appendChild(row("Do not disturb", checkbox(s.dnd_enabled, (v) => { s.dnd_enabled = v; })));
     const from = document.createElement("input");
@@ -1275,45 +1258,61 @@ function pageNotifications() {
     // false silences playback, so a settings blob without the field is on.
     el.appendChild(row("Play sounds (master)", checkbox(s.play_sounds !== false, (v) => { s.play_sounds = v; })));
 
-    // (28) Sound pack system.
-    const packSel = document.createElement("select");
-    for (const p of ["soft", "bright", "retro"]) {
-        const o = document.createElement("option");
-        o.value = p;
-        o.textContent = p[0].toUpperCase() + p.slice(1);
-        packSel.appendChild(o);
-    }
-    packSel.value = s.sound_pack || "soft";
-    packSel.onchange = () => { s.sound_pack = packSel.value; };
-    el.appendChild(row("Sound pack", packSel));
+    const pack = document.createElement("span");
+    pack.textContent = "VOICX";
+    el.appendChild(row("Sound set", pack));
+    el.appendChild(hint("Original VOICX sounds replace Soft, Bright, Retro and custom beeps. Your event choices are preserved."));
     el.appendChild(row("Sound volume", slider(s.sound_volume ?? 100, 0, 200, (v) => { s.sound_volume = v; })));
-
-    const sub = document.createElement("div");
-    sub.className = "set-subhead";
-    sub.textContent = "Event sounds";
-    el.appendChild(sub);
-    // The player owns this grouped metadata. The settings dialog therefore
-    // stays legible as cues grow without ever drifting from playable events.
+    el.appendChild(row("Spoken system messages", checkbox(s.spoken_messages !== false, v => { s.spoken_messages = v; })));
+    el.appendChild(row("Speech volume", slider(s.speech_volume ?? 100, 0, 200, v => { s.speech_volume = v; })));
+    el.appendChild(row("Speak connection problems", checkbox(s.speech_connection !== false, v => { s.speech_connection = v; })));
+    el.appendChild(row("Speak administrative actions", checkbox(s.speech_admin !== false, v => { s.speech_admin = v; })));
+    const speechTest = document.createElement("button");
+    speechTest.type = "button";
+    speechTest.textContent = "Test spoken message";
+    speechTest.onclick = () => previewSpeech(s);
+    el.appendChild(speechTest);
+    el.appendChild(hint("Fixed English or German recordings follow your interface language. Other languages use English. Reasons, names and messages are never spoken."));
+    el.appendChild(hint("Previews use unsaved settings. Master mute can be bypassed for previews; DND and disabled events stay silent."));
+    const status = document.createElement("div");
+    status.className = "set-hint";
+    status.setAttribute("role", "status");
+    const onLabel = (label) => { status.textContent = label ? "Playing: " + label : "Preview finished"; };
+    const button = (label, events) => {
+        const b = document.createElement("button");
+        b.type = "button";
+        b.textContent = label;
+        b.onclick = () => previewSounds(events, s, onLabel);
+        return b;
+    };
+    const controls = document.createElement("div");
+    controls.className = "sound-controls";
+    const all = button("Test all sounds");
+    all.onclick = () => testAll(s, onLabel);
+    const stop = document.createElement("button");
+    stop.type = "button";
+    stop.textContent = "Stop preview";
+    stop.onclick = () => { stopPreviews(); status.textContent = "Preview stopped"; };
+    controls.append(all, stop);
+    el.append(controls, status);
     for (const group of SOUND_EVENT_GROUPS) {
         const heading = document.createElement("div");
-        heading.className = "set-subhead";
-        heading.textContent = group.label;
+        heading.className = "set-subhead sound-controls";
+        const label = document.createElement("span");
+        label.textContent = group.label;
+        heading.append(label, button("Preview " + group.label.toLowerCase(), group.events.map(([event]) => event)));
         el.appendChild(heading);
         for (const [event, label] of group.events) {
-            const enabled = !s.event_sounds || s.event_sounds[event] !== false;
-            el.appendChild(row(label, checkbox(enabled, (v) => {
+            const controls = document.createElement("div");
+            controls.className = "sound-controls";
+            controls.append(checkbox(s.event_sounds?.[event] !== false, (enabled) => {
                 s.event_sounds = s.event_sounds || {};
-                s.event_sounds[event] = v;
-            })));
+                s.event_sounds[event] = enabled;
+            }), button("Play", [event]));
+            controls.querySelector("button").setAttribute("aria-label", "Preview " + label);
+            el.appendChild(row(label, controls));
         }
     }
-
-    const testBtn = document.createElement("button");
-    testBtn.textContent = "Test all sounds";
-    testBtn.onclick = async () => {
-        testAll();
-    };
-    el.appendChild(row("Test", testBtn));
     return el;
 }
 
@@ -1331,6 +1330,7 @@ const PAGE_BUILDERS = {
 };
 
 function renderPage(id) {
+    stopPreviews();
     stopCameraTest();
     cancelHotkeyCapture();
     document.querySelectorAll(".settings-nav-item").forEach((n) => {
@@ -1377,6 +1377,7 @@ function openSettings(pageId = "application") {
     search.placeholder = t("settings.searchPlaceholder");
     const content = overlay.querySelector("#settings-content");
     search.oninput = () => {
+        stopPreviews();
         stopCameraTest();
         const q = search.value.trim().toLowerCase();
         if (!q) {
@@ -1462,6 +1463,7 @@ function openSettings(pageId = "application") {
 
     mountDialog(overlay, {
         onClose: () => {
+            stopPreviews();
             stopCameraTest();
             cancelHotkeyCapture();
             revertLivePreview();

@@ -301,6 +301,73 @@ func TestSettingsMergeMissingFields(t *testing.T) {
 
 // TestSettingsWave1Fields verifies the wave-1 fields round-trip and merge
 // with defaults.
+func TestSpeechSettingsPreserveExplicitPreferences(t *testing.T) {
+	s := DefaultSettings()
+	if !s.SpokenMessages || !s.SpeechAdmin || !s.SpeechConnection || s.SpeechVolume != 100 {
+		t.Fatal("missing speech defaults")
+	}
+	if err := json.Unmarshal([]byte(`{"spoken_messages":false,"speech_volume":0,"speech_admin":false,"speech_events":{"banned":false}}`), &s); err != nil {
+		t.Fatal(err)
+	}
+	s = normalizeSettings(migrateSettings(s))
+	if s.SpokenMessages || s.SpeechAdmin || s.SpeechVolume != 0 || s.SpeechEvents["banned"] {
+		t.Fatal("speech preferences reset")
+	}
+	s.SpeechVolume = 900
+	if normalizeSettings(s).SpeechVolume != 200 {
+		t.Fatal("speech gain must be bounded")
+	}
+}
+
+func TestOriginalSoundSettingsMigration(t *testing.T) {
+	for _, pack := range []string{"soft", "bright", "retro", "", "voicx"} {
+		t.Run(pack, func(t *testing.T) {
+			s := DefaultSettings()
+			s.SettingsVersion = 7
+			s.SoundPack = pack
+			s.PlaySounds = false
+			s.SoundVolume = 165
+			s.EventSounds["own_channel_join"] = false
+			s.EventSounds["user_move_out"] = false
+			got := normalizeSettings(migrateSettings(s))
+			if got.SoundPack != "voicx" || got.SoundVolume != 165 || got.PlaySounds ||
+				got.EventSounds["own_channel_join"] || got.EventSounds["user_move_out"] {
+				t.Fatalf("migration changed preferences: %+v", got)
+			}
+		})
+	}
+	for _, volume := range []int{-1, 0, 100, 200, 999} {
+		s := DefaultSettings()
+		s.SoundVolume = volume
+		if got := normalizeSettings(s).SoundVolume; got != min(200, max(0, volume)) {
+			t.Errorf("volume %d became %d", volume, got)
+		}
+	}
+	path := filepath.Join(t.TempDir(), "settings.json")
+	legacy := []byte(`{"settings_version":7,"sound_pack":"retro","play_sounds":false,"sound_volume":0,"custom_sounds":{"mention":{"freq":880,"duration_ms":150}},"event_sounds":{"mention":false}}`)
+	if err := os.WriteFile(path, legacy, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	loaded := loadSettingsAt(path)
+	if loaded.SoundPack != "voicx" || loaded.PlaySounds || loaded.SoundVolume != 0 || loaded.EventSounds["mention"] {
+		t.Fatal("old JSON migration did not preserve opt-outs")
+	}
+	if err := saveSettingsAt(path, loaded); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		t.Fatal(err)
+	}
+	if _, exists := fields["custom_sounds"]; exists {
+		t.Fatal("obsolete custom sounds persisted")
+	}
+}
+
 func TestSettingsWave1Fields(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "settings.json")
 
@@ -308,7 +375,7 @@ func TestSettingsWave1Fields(t *testing.T) {
 	if !s.WarnMutedTalking || !s.WarnEmptyChannel || !s.VoiceLimiter {
 		t.Fatal("wave-1 defaults wrong (toggles should be on)")
 	}
-	if s.SoundPack != "soft" || s.SoundVolume != 100 || s.WhisperReplyHotkey != "Ctrl+R" {
+	if s.SoundPack != "voicx" || s.SoundVolume != 100 || s.WhisperReplyHotkey != "Ctrl+R" {
 		t.Fatalf("wave-1 defaults: %+v", s)
 	}
 	if !s.EventSounds["join"] || !s.EventSounds["whisper"] {
@@ -336,7 +403,7 @@ func TestSettingsWave1Fields(t *testing.T) {
 	if loaded.PTTReleaseDelayMs != 300 || loaded.WarnMutedTalking {
 		t.Fatalf("ptt delay / warn: %+v", loaded)
 	}
-	if loaded.SoundPack != "retro" || loaded.EventSounds["join"] {
+	if loaded.SoundPack != "voicx" || loaded.EventSounds["join"] {
 		t.Fatalf("sound fields: %+v", loaded)
 	}
 	if loaded.VoiceLimiter {
@@ -349,7 +416,7 @@ func TestSettingsWave1Fields(t *testing.T) {
 		t.Fatalf("write: %v", err)
 	}
 	merged := loadSettingsAt(old)
-	if merged.Volume != 120 || !merged.WarnMutedTalking || merged.SoundPack != "soft" {
+	if merged.Volume != 120 || !merged.WarnMutedTalking || merged.SoundPack != "voicx" {
 		t.Fatalf("merge with defaults broken: %+v", merged)
 	}
 }
@@ -407,7 +474,6 @@ func TestSettingsWave9(t *testing.T) {
 	s.NotifyMatrix = map[string]NotifyChannels{
 		"mention": {Toast: true, Sound: false, Flash: true, Native: true},
 	}
-	s.CustomSounds = map[string]BeepSpec{"mention": {Freq: 880, DurationMs: 150}}
 	s.ChannelNotify = map[string]ChannelOverride{
 		"srv#42": {Messages: "off", Muted: true, WatchThreshold: 3},
 	}
@@ -428,9 +494,6 @@ func TestSettingsWave9(t *testing.T) {
 	m := back.NotifyMatrix["mention"]
 	if !m.Toast || m.Sound || !m.Flash || !m.Native {
 		t.Fatalf("matrix row = %+v", m)
-	}
-	if back.CustomSounds["mention"].Freq != 880 {
-		t.Fatalf("beep = %+v", back.CustomSounds["mention"])
 	}
 	ov := back.ChannelNotify["srv#42"]
 	if ov.Messages != "off" || !ov.Muted || ov.WatchThreshold != 3 {

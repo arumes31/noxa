@@ -5,6 +5,7 @@
 // state frames on activation, so the frontend keeps its single-state model:
 // on "tab_reset" we clear chat/tree and the replay rebuilds them.
 import { closeServerDialogs } from "./modal.js";
+import { clearSpeech } from "./sounds.js";
 
 const V = () => window.__voicx;
 const App = () => window.go.main.App;
@@ -199,6 +200,7 @@ async function refreshTabIdentity(tabID) {
 // onTabReset clears all per-server view state before the backend replays
 // the newly activated tab's journaled frames.
 function onTabReset(tabID) {
+    clearSpeech();
     const { state, $ } = V();
     activeTabID = tabID || "";
     state.activeTabID = activeTabID;

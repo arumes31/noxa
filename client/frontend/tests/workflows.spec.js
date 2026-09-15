@@ -1,5 +1,74 @@
 import { expect, test } from "@playwright/test";
 
+test("static speech follows language, rare events, draft volume and mute settings", async ({ page }) => {
+    await page.evaluate(async () => {
+        const { state, soundEngine, speechQueue } = window.__voicx;
+        state.settings = { ...state.settings, language:"de", play_sounds:true, sound_volume:100, speech_volume:75,
+            spoken_messages:true, speech_admin:true, speech_connection:true, speech_events:{}, event_sounds:{}, notify_matrix:{}, dnd_enabled:false };
+        state.myClientID="speech-self";state.replayingTabID="";
+        await soundEngine.preload();await soundEngine.resume();
+        window.__speechPlayed=[];
+        const play=soundEngine.play.bind(soundEngine);
+        soundEngine.play=(id, options)=>{const ok=play(id,options);if(ok)window.__speechPlayed.push({id,volume:options?.volume});return ok;};
+        speechQueue.clear();
+        for(const cb of window.__events.event)cb(JSON.stringify({type:"kicked",data:{client_id:"speech-self",ban:true,from_server:true,reason:"a dynamic reason must remain visual"}}));
+    });
+    await expect.poll(()=>page.evaluate(()=>window.__speechPlayed.map(x=>x.id))).toContain("speech_de_banned");
+    expect(await page.evaluate(()=>window.__speechPlayed.filter(x=>x.id.startsWith("speech_")).map(x=>x.id))).toEqual(["speech_de_banned"]);
+    await page.evaluate(()=>{
+        const {state,speechQueue}=window.__voicx;speechQueue.clear();
+        state.settings.language="en";state.settings.play_sounds=false;
+        window.__voicx.openSettings("notifications");
+    });
+    await page.getByRole("slider",{name:"Speech volume",exact:true}).fill("200");
+    await page.getByRole("button",{name:"Test spoken message",exact:true}).click();
+    await expect.poll(()=>page.evaluate(()=>window.__speechPlayed.at(-1))).toEqual({id:"speech_en_test",volume:200});
+    expect(await page.evaluate(()=>window.__voicx.state.settings.speech_volume)).toBe(75);
+    await page.getByRole("button",{name:"Stop preview",exact:true}).click();
+    await page.getByRole("checkbox",{name:"Spoken system messages",exact:true}).uncheck();
+    const count=await page.evaluate(()=>window.__speechPlayed.length);
+    await page.getByRole("button",{name:"Test spoken message",exact:true}).click();
+    await page.waitForTimeout(250);
+    expect(await page.evaluate(()=>window.__speechPlayed.length)).toBe(count);
+    await page.getByRole("button",{name:"Cancel",exact:true}).click();
+    expect(await page.evaluate(()=>window.__voicx.speechQueue.current)).toBeNull();
+});
+
+test("sound previews use draft volume, finish Test All, and cancel on close @a11y", async ({ page }) => {
+    await page.evaluate(async () => {
+        const { state, soundEngine } = window.__voicx;
+        state.settings = { ...state.settings, play_sounds: false, sound_volume: 100, event_sounds: {}, dnd_enabled: false };
+        await soundEngine.preload();
+        window.__previewedSounds = [];
+        const original = soundEngine.play.bind(soundEngine);
+        soundEngine.play = (name, options) => {
+            const result = original(name, options);
+            if (result) window.__previewedSounds.push({ name, volume: options?.settings?.sound_volume });
+            return result;
+        };
+        window.__voicx.openSettings("notifications");
+    });
+    const volume = page.getByRole("slider", { name: "Sound volume", exact: true });
+    await volume.fill("0");
+    await page.getByRole("button", { name: "Preview Joined channel", exact: true }).click();
+    expect(await page.evaluate(() => window.__previewedSounds.length)).toBe(0);
+    await volume.fill("200");
+    await page.getByRole("button", { name: "Preview Joined channel", exact: true }).click();
+    await expect.poll(() => page.evaluate(() => window.__previewedSounds.at(-1))).toEqual({ name: "own_channel_join", volume: 200 });
+    expect(await page.evaluate(() => window.__voicx.state.settings.sound_volume)).toBe(100);
+    await page.getByRole("button", { name: "Stop preview", exact: true }).click();
+    await page.evaluate(() => { window.__previewedSounds = []; });
+    await page.getByRole("button", { name: "Test all sounds", exact: true }).click();
+    await expect(page.getByRole("status").filter({ hasText: "Preview finished" })).toBeVisible({ timeout: 20000 });
+    expect(await page.evaluate(() => new Set(window.__previewedSounds.map(x => x.name)).size)).toBe(32);
+    await page.getByRole("button", { name: "Preview connection", exact: true }).click();
+    await page.getByRole("button", { name: "Cancel", exact: true }).click();
+    await expect.poll(() => page.evaluate(() => window.__voicx.soundEngine.active.size)).toBe(0);
+    const count = await page.evaluate(() => window.__previewedSounds.length);
+    await page.waitForTimeout(650);
+    expect(await page.evaluate(() => window.__previewedSounds.length)).toBe(count);
+});
+
 test("Permission Manager lists offline admins and creates an admin key", async ({ page }, testInfo) => {
     await showB3Workspace(page);
     await page.evaluate(() => {
@@ -1827,13 +1896,22 @@ test("removes cascaded deleted channels and displaces every cached member safely
     await expect(page.locator("#voice-status")).toHaveText("voice off");
 });
 
-test("starts voice, plays the MP3 join cue, and switches channels", async ({ page }) => {
-    await page.evaluate(() => {
+test("starts voice, plays the original channel join cue, and switches channels", async ({ page }) => {
+    await page.evaluate(async () => {
         window.__getUserMediaCalls = 0;
         window.__playedMedia = [];
-        HTMLMediaElement.prototype.play = function play() {
-            window.__playedMedia.push(this.currentSrc || this.src);
-            return Promise.resolve();
+        const engine = window.__voicx.soundEngine;
+        await engine.preload();
+        await engine.resume();
+        const source = engine.ctx.createBufferSource.bind(engine.ctx);
+        engine.ctx.createBufferSource = () => {
+            const node = source();
+            const start = node.start.bind(node);
+            node.start = (...args) => {
+                window.__playedMedia.push([...engine.buffers].find(([, buffer]) => node.buffer === buffer)?.[0]);
+                start(...args);
+            };
+            return node;
         };
         navigator.mediaDevices.getUserMedia = async () => {
             window.__getUserMediaCalls++;
@@ -1872,10 +1950,9 @@ test("starts voice, plays the MP3 join cue, and switches channels", async ({ pag
         const moved = JSON.stringify({ type: "user_moved", data: { client_id: "client-a", channel_id: 43 } });
         for (const cb of window.__events.event || []) cb(moved);
     });
-    // The bundled media cue belongs to the initial join; a channel switch has
-    // its own synthesized motif and must not replay the MP3.
+    // A switch uses its own authored cue and does not replay channel join.
     await expect.poll(() => page.evaluate(() => window.__voicx.state.myChannelID)).toBe(43);
-    await expect.poll(() => page.evaluate(() => window.__playedMedia.length)).toBe(firstCueCount);
+    await expect.poll(() => page.evaluate(() => window.__playedMedia.at(-1))).toBe("own_channel_switch");
     await page.evaluate(() => {
         const moved = JSON.stringify({ type: "user_moved", data: { client_id: "client-a", channel_id: 0 } });
         for (const cb of window.__events.event || []) cb(moved);
@@ -3935,32 +4012,25 @@ test("uses grouped, distinct action sounds without replaying historical tab acti
     const result = await page.evaluate(async () => {
         const tones = [];
         const media = [];
-        class FakeAudioContext {
-            get currentTime() { return 0; }
-            get destination() { return {}; }
-            createGain() {
-                return {
-                    gain: { setValueAtTime() {}, exponentialRampToValueAtTime() {} },
-                    connect(destination) { return destination; },
-                };
-            }
-            createOscillator() {
-                return {
-                    type: "sine",
-                    frequency: { value: 0 },
-                    connect(node) { return node; },
-                    start() { tones.push(this.frequency.value); },
-                    stop() {},
-                };
-            }
-        }
-        window.AudioContext = FakeAudioContext;
-        window.Audio = class {
-            addEventListener() {}
-            play() { media.push("channel_join"); return Promise.resolve(); }
+        const { soundEngine } = window.__voicx;
+        await soundEngine.preload();
+        await soundEngine.resume();
+        if (soundEngine.buffers.size !== 50 || soundEngine.ctx.state !== "running") throw new Error(JSON.stringify({ buffers: soundEngine.buffers.size, state: soundEngine.ctx.state, warnings: [...soundEngine.warnings] }));
+        let clock = 0;
+        soundEngine.now = () => clock += 1000;
+        const originalSource = soundEngine.ctx.createBufferSource.bind(soundEngine.ctx);
+        soundEngine.ctx.createBufferSource = () => {
+            const source = originalSource();
+            const start = source.start.bind(source);
+            source.start = (...args) => {
+                const name = [...soundEngine.buffers].find(([, buffer]) => buffer === source.buffer)?.[0];
+                if (name === "own_channel_join") media.push(name);
+                else tones.push(name);
+                start(...args);
+            };
+            return source;
         };
         const state = window.__voicx.state;
-        state.audioCtx = null;
         state.settings = {
             ...state.settings,
             activation_mode: "ptt",
@@ -3982,6 +4052,7 @@ test("uses grouped, distinct action sounds without replaying historical tab acti
             type: "user_moved", data: { client_id: "client-b", channel_id: channelID },
         }));
         const collect = (fn) => {
+            for (const entry of soundEngine.active) soundEngine.release(entry);
             tones.length = 0;
             fn();
             return [...tones];
@@ -3989,7 +4060,7 @@ test("uses grouped, distinct action sounds without replaying historical tab acti
 
         const moveIn = collect(() => move(1));
         const moveOut = collect(() => move(2));
-        state.settings.custom_sounds.join_leave = { freq: 432, duration_ms: 100 };
+        // Legacy custom beeps no longer override the authored action cue.
         state.settings.notify_matrix.join_leave = { toast: true, sound: false, flash: false, native: false };
         const matrixOff = collect(() => move(1));
         state.settings.notify_matrix.join_leave.sound = true;
@@ -4000,7 +4071,6 @@ test("uses grouped, distinct action sounds without replaying historical tab acti
         state.settings.event_sounds.user_move_out = false;
         const disabledSpecific = collect(() => move(2));
         state.settings.event_sounds.user_move_out = true;
-        delete state.settings.custom_sounds.join_leave;
         const afterReplay = collect(() => move(1));
         state.myUniqueID = "user-a";
         state.lastConnect = { addr: "sound.example:12333" };
@@ -4088,7 +4158,7 @@ test("uses grouped, distinct action sounds without replaying historical tab acti
 
         // A channel-0 replay leaves its initial marker armed. Its first live
         // self-move must consume that marker, so the following equality sync
-        // cannot duplicate the MP3 cue.
+        // cannot duplicate the channel cue.
         window.__tabs = [{
             id: "live-move-tab", addr: "live.example:12333", nickname: "Live",
             active: true, connected: true, unread: 0, mentions: 0,
@@ -4109,7 +4179,7 @@ test("uses grouped, distinct action sounds without replaying historical tab acti
         const liveMoveInitialMedia = media.length - mediaBeforeLiveMove;
         const liveMoveCueCleared = state.pendingInitialChannelCueTabID === "";
         window.__voicx.openSettings("notifications");
-        const groups = [...document.querySelectorAll("#settings-content .set-subhead")].map((element) => element.textContent);
+        const groups = [...document.querySelectorAll("#settings-content .set-subhead")].map((element) => element.querySelector("span")?.textContent || element.textContent);
         return { moveIn, moveOut, matrixOff, custom, replay, disabledSpecific, afterReplay,
             keywordChat, roleChat, ordinaryChat,
             ownJoin, ownJoinMedia, ownSwitch, channelDeletion, vadPTT, ptt, deafen, guestConnect,
@@ -4117,24 +4187,24 @@ test("uses grouped, distinct action sounds without replaying historical tab acti
             replayFirstCueCleared, liveMoveInitialMedia, liveMoveCueCleared, groups };
     });
 
-    expect(result.moveIn).toEqual([494, 659, 784]);
-    expect(result.moveOut).toEqual([784, 659, 494]);
+    expect(result.moveIn).toEqual(["user_move_in"]);
+    expect(result.moveOut).toEqual(["user_move_out"]);
     expect(result.matrixOff).toEqual([]);
-    expect(result.custom).toEqual([432]);
+    expect(result.custom).toEqual(["user_move_out"]);
     expect(result.replay).toEqual([]);
     expect(result.disabledSpecific).toEqual([]);
-    expect(result.afterReplay).toEqual([494, 659, 784]);
-    expect(result.keywordChat).toEqual([659, 784, 988]);
-    expect(result.roleChat).toEqual([784, 1047]);
-    expect(result.ordinaryChat).toEqual([587, 659]);
+    expect(result.afterReplay).toEqual(["user_move_in"]);
+    expect(result.keywordChat).toEqual(["keyword"]);
+    expect(result.roleChat).toEqual(["mention"]);
+    expect(result.ordinaryChat).toEqual(["channel_message"]);
     expect(result.ownJoin).toEqual([]);
     expect(result.ownJoinMedia).toBe(1);
-    expect(result.ownSwitch).toEqual([659, 784, 988]);
-    expect(result.channelDeletion).toEqual([587, 440, 349]);
+    expect(result.ownSwitch).toEqual(["own_channel_switch"]);
+    expect(result.channelDeletion).toEqual(["own_channel_leave"]);
     expect(result.vadPTT).toEqual([]);
-    expect(result.ptt).toEqual([740, 880]);
-    expect(result.deafen).toEqual([392, 294, 196]);
-    expect(result.guestConnect).toEqual([523, 659, 784]);
+    expect(result.ptt).toEqual(["ptt_on"]);
+    expect(result.deafen).toEqual(["deafen_on"]);
+    expect(result.guestConnect).toEqual(["connection_connected"]);
     expect(result.guestInitialJoinMedia).toBe(1);
     expect(result.guestInitialCueCleared).toBe(true);
     expect(result.replayFirstIdentityMedia).toBe(1);
@@ -4150,28 +4220,24 @@ test("uses grouped, distinct action sounds without replaying historical tab acti
 test("scopes connection failures and active-tab close sounds", async ({ page }) => {
     const result = await page.evaluate(async () => {
         const tones = [];
-        class FakeAudioContext {
-            get currentTime() { return 0; }
-            get destination() { return {}; }
-            createGain() {
-                return {
-                    gain: { setValueAtTime() {}, exponentialRampToValueAtTime() {} },
-                    connect(destination) { return destination; },
-                };
-            }
-            createOscillator() {
-                return {
-                    type: "sine",
-                    frequency: { value: 0 },
-                    connect(node) { return node; },
-                    start() { tones.push(this.frequency.value); },
-                    stop() {},
-                };
-            }
-        }
-        window.AudioContext = FakeAudioContext;
+        const { soundEngine } = window.__voicx;
+        await soundEngine.preload();
+        await soundEngine.resume();
+        if (soundEngine.buffers.size !== 50 || soundEngine.ctx.state !== "running") throw new Error(JSON.stringify({ buffers: soundEngine.buffers.size, state: soundEngine.ctx.state, warnings: [...soundEngine.warnings] }));
+        let clock = 0;
+        soundEngine.now = () => clock += 1000;
+        const originalSource = soundEngine.ctx.createBufferSource.bind(soundEngine.ctx);
+        soundEngine.ctx.createBufferSource = () => {
+            const source = originalSource();
+            const start = source.start.bind(source);
+            source.start = (...args) => {
+                const name = [...soundEngine.buffers].find(([, buffer]) => buffer === source.buffer)?.[0];
+                tones.push(name);
+                start(...args);
+            };
+            return source;
+        };
         const state = window.__voicx.state;
-        state.audioCtx = null;
         state.settings = { ...state.settings, event_sounds: {}, notify_matrix: {} };
         const emit = (name, payload) => {
             for (const callback of window.__events[name] || []) callback(payload);
@@ -4263,10 +4329,10 @@ test("scopes connection failures and active-tab close sounds", async ({ page }) 
     });
 
     expect(result.staleFailure).toEqual([]);
-    expect(result.currentFailure).toEqual([247, 196, 165]);
-    expect(result.menuDisconnect).toEqual([659, 523, 392]);
+    expect(result.currentFailure).toEqual(["connection_failed"]);
+    expect(result.menuDisconnect).toEqual(["connection_disconnected"]);
     expect(result.backgroundClose).toEqual([]);
-    expect(result.activeClose).toEqual([659, 523, 392]);
+    expect(result.activeClose).toEqual(["connection_disconnected"]);
     expect(result.activeOfflineClose).toEqual([]);
     expect(result.offlineMenuDisconnect).toEqual([]);
 });

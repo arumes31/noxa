@@ -1,0 +1,8 @@
+{
+  "repository": "rhasspy/piper-voices",
+  "revision": "1162a9173d0ce503555aed757976b7a9912eae4c",
+  "models": {
+    "en": "en/en_US/ljspeech/high/en_US-ljspeech-high",
+    "de": "de/de_DE/thorsten/medium/de_DE-thorsten-medium"
+  }
+}

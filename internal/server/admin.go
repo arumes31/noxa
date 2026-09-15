@@ -78,6 +78,7 @@ func (s *TCPServer) performKick(byClientID, targetID string, fromServer, ban boo
 		// Announce the kick and close the connection; the target's own
 		// handleConn then performs the disconnect cleanup (state removal,
 		// unregister, user_left broadcast, temp-channel check).
+		s.sendTerminalEvent(target, eventKicked, evt)
 		s.broadcastEvent(eventKicked, evt)
 		_ = target.Conn.Close()
 		return nil

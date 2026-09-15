@@ -612,6 +612,26 @@ func (s *TCPServer) beginShutdown() {
 	go func() {
 		var shutdownErr error
 		shutdownErr = joinTCPShutdownError(shutdownErr, closeTCPListener(listener))
+		// Give authenticated clients a fixed semantic reason before EOF. Raw
+		// unauthenticated sockets still close immediately. Writes run in parallel
+		// and each has a short deadline, independent of the number of clients.
+		s.mu.RLock()
+		clients := make([]*Client, 0, len(s.clients))
+		for _, client := range s.clients {
+			if client.isAuthed() {
+				clients = append(clients, client)
+			}
+		}
+		s.mu.RUnlock()
+		var notices sync.WaitGroup
+		for _, client := range clients {
+			notices.Add(1)
+			go func() {
+				defer notices.Done()
+				s.sendTerminalEvent(client, "server_shutdown", struct{}{})
+			}()
+		}
+		notices.Wait()
 		for _, conn := range connections {
 			shutdownErr = joinTCPShutdownError(shutdownErr, conn.Close())
 		}

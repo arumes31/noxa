@@ -1,0 +1,24 @@
+{
+  "en": {
+    "banned": "You were banned from the server.",
+    "kicked": "You were kicked from the server.",
+    "kicked_channel": "You were removed from the channel.",
+    "connection_lost": "Connection to the server was lost.",
+    "reconnect_failed": "Unable to reconnect to the server.",
+    "permission_denied": "You do not have permission to perform this action.",
+    "moved_by_admin": "You were moved to another channel.",
+    "server_shutdown": "The server is shutting down.",
+    "test": "VOICX spoken notifications are enabled."
+  },
+  "de": {
+    "banned": "Du wurdest vom Server gebannt.",
+    "kicked": "Du wurdest vom Server entfernt.",
+    "kicked_channel": "Du wurdest aus dem Channel entfernt.",
+    "connection_lost": "Die Verbindung zum Server wurde unterbrochen.",
+    "reconnect_failed": "Die Verbindung zum Server konnte nicht wiederhergestellt werden.",
+    "permission_denied": "Du hast keine Berechtigung für diese Aktion.",
+    "moved_by_admin": "Du wurdest in einen anderen Channel verschoben.",
+    "server_shutdown": "Der Server wird heruntergefahren.",
+    "test": "Die gesprochenen VOICX-Benachrichtigungen sind aktiviert."
+  }
+}

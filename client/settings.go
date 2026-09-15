@@ -62,12 +62,6 @@ type NotifyChannels struct {
 	Native bool `json:"native"`
 }
 
-// BeepSpec is a custom synthesized notification sound (384).
-type BeepSpec struct {
-	Freq       int `json:"freq"`        // Hz
-	DurationMs int `json:"duration_ms"` // milliseconds
-}
-
 // ChannelOverride holds per-channel notification overrides (386/387/389):
 // Messages/Mentions/Joins are "inherit" | "on" | "off"; Muted silences the
 // channel entirely (messages still visible when selected); WatchThreshold >
@@ -105,7 +99,7 @@ type HotkeyProfile struct {
 // serialized default changes, and add the repair to migrateSettings:
 // loading merges the file ONTO the defaults, so a field an older client always
 // wrote wins over the new default unless it is explicitly repaired.
-const settingsVersion = 7
+const settingsVersion = 8
 
 // Settings holds all user preferences.
 type Settings struct {
@@ -189,8 +183,13 @@ type Settings struct {
 	PTTReleaseDelayMs  int             `json:"ptt_release_delay_ms"` // 0..2000
 	WarnMutedTalking   bool            `json:"warn_muted_talking"`   // default on
 	WarnEmptyChannel   bool            `json:"warn_empty_channel"`   // default on
-	SoundPack          string          `json:"sound_pack"`           // "soft" | "bright" | "retro"
+	SoundPack          string          `json:"sound_pack"`           // "voicx"; legacy pack IDs migrate
 	SoundVolume        int             `json:"sound_volume"`         // 0..200
+	SpokenMessages     bool            `json:"spoken_messages"`
+	SpeechVolume       int             `json:"speech_volume"` // 0..200
+	SpeechConnection   bool            `json:"speech_connection"`
+	SpeechAdmin        bool            `json:"speech_admin"`
+	SpeechEvents       map[string]bool `json:"speech_events,omitempty"`
 	EventSounds        map[string]bool `json:"event_sounds"`         // event name -> enabled
 	WhisperReplyHotkey string          `json:"whisper_reply_hotkey"` // default "Ctrl+R"
 	VoiceLimiter       bool            `json:"voice_limiter"`        // default on
@@ -233,7 +232,6 @@ type Settings struct {
 
 	// Notifications (wave 9).
 	NotifyMatrix   map[string]NotifyChannels  `json:"notify_matrix,omitempty"`  // (385) event -> outputs
-	CustomSounds   map[string]BeepSpec        `json:"custom_sounds,omitempty"`  // (384) event -> beep
 	ChannelNotify  map[string]ChannelOverride `json:"channel_notify,omitempty"` // (386-389) "addr#channelID" -> override
 	Keywords       map[string][]string        `json:"keywords,omitempty"`       // (388) server addr -> keywords
 	AlphaDismissed string                     `json:"alpha_dismissed"`          // (215) version whose notice was dismissed
@@ -269,8 +267,12 @@ func DefaultSettings() Settings {
 		PTTReleaseDelayMs: 0,
 		WarnMutedTalking:  true,
 		WarnEmptyChannel:  true,
-		SoundPack:         "soft",
+		SoundPack:         "voicx",
 		SoundVolume:       100,
+		SpokenMessages:    true,
+		SpeechVolume:      100,
+		SpeechConnection:  true,
+		SpeechAdmin:       true,
 		// (385) one entry per notification-matrix event plus the connection,
 		// channel, and voice-action cues. Legacy join/leave entries stay in the
 		// file so version-7 migration can preserve earlier choices.
@@ -286,7 +288,7 @@ func DefaultSettings() Settings {
 			"ptt_on": true, "ptt_off": true,
 			"mention": true, "keyword": true, "dm": true, "channel_message": true,
 			"whisper": true, "poke": true, "join_leave": true, "buddy_online": true,
-			"kick": true, "announcement": true, "channel_watch": true,
+			"kick": true, "ban": true, "announcement": true, "channel_watch": true,
 		},
 		WhisperReplyHotkey: "Ctrl+R",
 		VoiceLimiter:       true,
@@ -394,6 +396,16 @@ func migrateSettings(s Settings) Settings {
 	if s.SettingsVersion < 7 {
 		migrateEventSoundSplits(&s)
 	}
+	if s.SettingsVersion < 8 {
+		// One original complete set replaces the oscillator packs. Removed
+		// custom_sounds JSON is ignored; event/matrix choices remain intact.
+		s.SoundPack = "voicx"
+		if s.EventSounds != nil {
+			if kick, exists := s.EventSounds["kick"]; exists {
+				s.EventSounds["ban"] = kick
+			}
+		}
+	}
 	s.SettingsVersion = settingsVersion
 	return s
 }
@@ -427,6 +439,9 @@ func migrateEventSoundSplits(s *Settings) {
 // (modes, enums, hotkey syntax) are validated by SaveSettings and are never
 // silently rewritten.
 func normalizeSettings(s Settings) Settings {
+	s.SoundPack = "voicx"
+	s.SoundVolume = clampSetting(s.SoundVolume, 0, 200)
+	s.SpeechVolume = clampSetting(s.SpeechVolume, 0, 200)
 	s.WindowOpacity = clampSetting(s.WindowOpacity, 20, 100)
 	s.UIFontSize = clampSetting(s.UIFontSize, 10, 20)
 	s.ChatFontSize = clampSetting(s.ChatFontSize, 12, 18)

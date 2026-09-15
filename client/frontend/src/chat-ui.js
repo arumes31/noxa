@@ -11,7 +11,6 @@
 // Threads prefer the protocol reply_to_id field. The legacy quote-prefix
 // resolver remains for history written by older clients.
 import { renderMarkdown, escapeHTML, EMOJI } from "./markdown.js";
-import { playEvent } from "./sounds.js";
 import { pickIcon } from "./image-tools.js";
 import { closeDialog, confirmDialog, isCurrentServerDialog, mountServerDialog, promptDialog } from "./modal.js";
 import { imageDataURL } from "./safe-media.js";

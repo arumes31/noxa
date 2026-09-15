@@ -3,7 +3,7 @@
 // muted channels (387), and DND (347/348, still badging silently). Also the
 // buddy-online watcher (383), keyword highlights (388), channel watch
 // (389), and the alpha notice (215).
-import { playEvent, play } from "./sounds.js";
+import { playEvent } from "./sounds.js";
 import { closeDialog, isCurrentServerDialog, mountDialog, mountServerDialog } from "./modal.js";
 
 const V = () => window.__voicx;
@@ -90,7 +90,7 @@ export function notificationOutputAllowed(event, ctx = {}, output = "toast") {
 // DND → record-only; muted/overridden channels → filtered; matrix → which
 // outputs fire. ctx: {channelID, uid, className ("messages"|"mentions"|"joins"),
 // noSound, soundEvent, announce}. soundEvent chooses a more specific cue but
-// never bypasses this event's matrix row, channel override, or custom beep.
+// never bypasses this event's matrix row or channel override.
 export function notify(event, text, ctx = {}) {
     // (346) always record in the notification center (even under DND).
     window.__voicxPolish?.recordNotification(event, text, ctx);
@@ -107,24 +107,16 @@ export function notify(event, text, ctx = {}) {
     if (row.native && !document.hasFocus()) App().Notify("voicx " + event, text.slice(0, 200));
 }
 
-// playEventSound plays an event's sound: custom beep (384) for the matrix
-// event when configured, else its specific sound-pack cue. This lets all
-// remote join/leave/move sounds share the join_leave policy without making a
-// user's existing join/leave custom beep silently stop working.
+// Precise action cues share the notification matrix's policy.
 function playEventSound(event, soundEvent = event) {
     if (window.__voicxPolish?.dndActive?.()) return;
     const settings = V().state.settings;
     // Matrix sound permission is checked by notify() before this point. These
     // two checks additionally make a replay silent and let a precise action
-    // toggle (for example user_move_out) suppress its legacy join_leave beep.
+    // toggle (for example user_move_out) suppress the specific cue.
     if (V().state.replayingTabID
         || settings?.event_sounds?.[event] === false
         || settings?.event_sounds?.[soundEvent] === false) return;
-    const spec = settings?.custom_sounds?.[event];
-    if (spec && spec.freq > 0) {
-        play("sine", spec.freq, (spec.duration_ms || 200) / 1000, (V().state.settings?.sound_volume ?? 100) / 100);
-        return;
-    }
     playEvent(soundEvent);
 }
 

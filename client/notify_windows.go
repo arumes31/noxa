@@ -1,40 +1,72 @@
-// notify_windows.go implements native Windows notifications (345) via a
-// PowerShell NotifyIcon balloon. On this machine (Windows, no packaged
-// AppUserModelID) the WinRT toast API is unreliable for unpackaged apps,
-// while the WinForms balloon works — hence this approach. The process
-// overhead of a short PowerShell is accepted because notifications are
-// rate-limited by the callers (mentions/pokes only).
+// Native visual notifications are silent. All audio follows the frontend bus.
 package main
 
 import (
-	"context"
-	"encoding/base64"
-	"os"
-	"os/exec"
-	"syscall"
+	"sync"
+	"time"
+	"unicode/utf16"
+	"unsafe"
+
+	"golang.org/x/sys/windows"
 )
 
-const notifyPowerShell = `$title = [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($env:VOICX_NOTIFY_TITLE_B64)); ` +
-	`$text = [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($env:VOICX_NOTIFY_TEXT_B64)); ` +
-	`Add-Type -AssemblyName System.Windows.Forms; Add-Type -AssemblyName System.Drawing; ` +
-	`$n = New-Object System.Windows.Forms.NotifyIcon; $n.Icon = [System.Drawing.SystemIcons]::Information; ` +
-	`$n.Visible = $true; $n.ShowBalloonTip(3000, $title, $text, [System.Windows.Forms.ToolTipIcon]::Info); ` +
-	`Start-Sleep -Milliseconds 500; $n.Dispose()`
+var (
+	shellNotifyIcon = windows.NewLazySystemDLL("shell32.dll").NewProc("Shell_NotifyIconW")
+	notificationMu  sync.Mutex
+)
 
-// Notify posts a native balloon notification (345). Errors are reported to
-// the caller; the frontend falls back to its own toasts + FlashWindow.
+// notifyIconData matches NOTIFYICONDATAW including pointer-sized alignment.
+type notifyIconData struct {
+	Size                uint32
+	Window              uintptr
+	ID, Flags, Callback uint32
+	Icon                uintptr
+	Tip                 [128]uint16
+	State, StateMask    uint32
+	Info                [256]uint16
+	Timeout             uint32
+	Title               [64]uint16
+	InfoFlags           uint32
+	GUID                windows.GUID
+	BalloonIcon         uintptr
+}
+
+const notificationNoSound = 0x10
+
+func silentNotificationData(window uintptr, title, text string) notifyIconData {
+	data := notifyIconData{
+		Window: window, ID: 0x564f4943,
+		Flags:     0x10 | 0x40, // NIF_INFO | NIF_REALTIME: discard stale balloons
+		InfoFlags: 1 | notificationNoSound,
+	}
+	data.Size = uint32(unsafe.Sizeof(data))
+	copy(data.Title[:63], utf16.Encode([]rune(title)))
+	copy(data.Info[:255], utf16.Encode([]rune(text)))
+	return data
+}
+
+// Notify posts a silent Windows balloon. Native bursts are coalesced rather
+// than queued; the in-app notification center retains every notification.
 func (a *App) Notify(title, text string) string {
-	if len(text) > 240 {
-		text = text[:240]
+	if !notificationMu.TryLock() {
+		return ""
 	}
-	cmd := exec.CommandContext(context.Background(), "powershell.exe", "-NoProfile", "-NonInteractive", "-Command", notifyPowerShell)
-	cmd.Env = append(os.Environ(),
-		"VOICX_NOTIFY_TITLE_B64="+base64.StdEncoding.EncodeToString([]byte(title)),
-		"VOICX_NOTIFY_TEXT_B64="+base64.StdEncoding.EncodeToString([]byte(text)),
-	)
-	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
-	if err := cmd.Run(); err != nil {
-		return "native notification failed: " + err.Error()
+	defer notificationMu.Unlock()
+	guid, err := windows.GenerateGUID()
+	if err != nil {
+		return "native notification identifier unavailable"
 	}
+	// GUID identity also works while the Wails window is hidden in the tray.
+	data := silentNotificationData(findMainWindow(), title, text)
+	data.GUID = guid
+	data.Flags |= 0x20                                                  // NIF_GUID; use the same identity for add and delete
+	ok, _, _ := shellNotifyIcon.Call(0, uintptr(unsafe.Pointer(&data))) // NIM_ADD
+	if ok == 0 {
+		return "native notification failed"
+	}
+	defer func() {
+		_, _, _ = shellNotifyIcon.Call(2, uintptr(unsafe.Pointer(&data))) // NIM_DELETE
+	}()
+	time.Sleep(3 * time.Second)
 	return ""
 }
