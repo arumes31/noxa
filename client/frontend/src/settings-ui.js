@@ -35,6 +35,7 @@ async function commit(snapshot) {
     // (282) the draft was cloned when the dialog opened: re-read the merged
     // truth so Go-owned fields (recents) written meanwhile survive.
     V().state.settings = await window.go.main.App.GetSettings();
+    await V().applyLiveAudioSettings();
     void updateSoundOutput();
     // (126-129) chat display prefs apply live (CSS classes on #chat-log).
     if (V().applyChatPrefs) V().applyChatPrefs();
@@ -1496,6 +1497,9 @@ function openSettings(pageId = "application") {
         if (saving) return false;
         saving = true;
         const snapshot = structuredClone(draft);
+        const previous = V().state.settings;
+        const whisperConfig = (s) => JSON.stringify([!!s?.whisper_active, s?.whisper_clients || [], s?.whisper_channels || []]);
+        const whisperChanged = whisperConfig(previous) !== whisperConfig(snapshot);
         const previousLanguage = currentLanguage();
         const serverGeneration = V().state.serverGeneration;
         const focused = document.activeElement;
@@ -1517,7 +1521,7 @@ function openSettings(pageId = "application") {
             }
             // Local preferences also save while disconnected. A live whisper
             // update belongs only to the server where this save began.
-            if (V().state.myClientID && serverGeneration === V().state.serverGeneration) {
+            if (whisperChanged && V().state.myClientID && serverGeneration === V().state.serverGeneration) {
                 const error = await window.go.main.App.WhisperSet(
                     snapshot.whisper_active ? snapshot.whisper_clients || [] : [],
                     snapshot.whisper_active ? snapshot.whisper_channels || [] : [],

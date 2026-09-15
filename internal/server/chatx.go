@@ -809,7 +809,7 @@ func (s *TCPServer) handleChatHistory(ctx context.Context, client *Client, f *ne
 	}
 	// Anonymous users may still join and inspect public channel membership,
 	// but one request cannot bulk-export more than a normal page of history.
-	if client.UserID == 0 && (msg.Limit <= 0 || msg.Limit > 50) {
+	if client.userID() == 0 && (msg.Limit <= 0 || msg.Limit > 50) {
 		msg.Limit = 50
 	}
 	memberPub := s.publishedKey(client)

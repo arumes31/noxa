@@ -967,21 +967,31 @@ func (m *connManager) applySessionEvent(raw string) {
 	var env struct {
 		Type string `json:"type"`
 		Data struct {
-			GroupID  int64 `json:"group_id"`
-			Promoted bool  `json:"promoted"`
+			GroupID  int64  `json:"group_id"`
+			Promoted bool   `json:"promoted"`
+			UniqueID string `json:"unique_id"`
 		} `json:"data"`
 	}
-	if err := json.Unmarshal([]byte(raw), &env); err != nil || env.Type != "token_used" {
+	if err := json.Unmarshal([]byte(raw), &env); err != nil {
 		return
 	}
 	m.mu.Lock()
+	defer m.mu.Unlock()
+	if env.Type == "group_assigned" {
+		if env.Data.Promoted && env.Data.UniqueID == m.uniqueID {
+			m.isGuest = false
+		}
+		return
+	}
+	if env.Type != "token_used" {
+		return
+	}
 	if env.Data.Promoted {
 		m.isGuest = false
 	}
 	if env.Data.GroupID == 0 {
 		m.isAdmin = true
 	}
-	m.mu.Unlock()
 }
 
 // emit sends a backend event to the sink.

@@ -188,6 +188,13 @@ test("frontend UI module behaviors", { concurrency: false }, async (t) => {
             track: retained,
         });
 
+        // A device change inside the same channel must replace the live mic.
+        audio.markCaptureProfile(oldTrack, null);
+        state.settings.capture_device_id = "capture-2";
+        const switched = await audio.applyCaptureProfile({ getSenders: () => [sender] }, stream, null);
+        assert.equal(switched.changed, true);
+        assert.deepEqual(captured.at(-1).audio.deviceId, { exact: "capture-2" });
+
         const gainNode = { gain: { value: 0 } };
         const muteNode = { gain: { value: 0 } };
         audio.registerUserChain("alice", gainNode, muteNode);

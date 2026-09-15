@@ -18,7 +18,7 @@ func (s *TCPServer) handlePreKeyPublish(ctx context.Context, client *Client, f *
 	if err := netproto.Decode(f, &msg); err != nil {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "malformed prekey publish")
 	}
-	if client.UserID <= 0 {
+	if client.userID() <= 0 {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, "registered account required for asynchronous prekeys")
 	}
 	if s.deps == nil || s.deps.PreKeys == nil {
@@ -40,14 +40,14 @@ func (s *TCPServer) handlePreKeyPublish(ctx context.Context, client *Client, f *
 		seen[key.KeyID] = true
 		oneTime = append(oneTime, store.PreKey{KeyID: key.KeyID, PublicKey: key.PublicKey, OneTime: true})
 	}
-	previousIdentity, err := s.deps.PreKeys.PreKeyIdentity(ctx, client.UserID)
+	previousIdentity, err := s.deps.PreKeys.PreKeyIdentity(ctx, client.userID())
 	if err != nil && !errors.Is(err, store.ErrNoPreKeyBundle) {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "loading stored prekey identity failed")
 	}
 	if len(previousIdentity) > 0 && !e2ee.EqualFingerprint(previousIdentity, msg.IdentityDH) {
 		s.audit(ctx, client.UniqueID, "e2ee_identity_changed", client.UniqueID, "signed prekey identity changed")
 	}
-	if err := s.deps.PreKeys.PublishPreKeyBundle(ctx, client.UserID, store.PreKeyBundle{
+	if err := s.deps.PreKeys.PublishPreKeyBundle(ctx, client.userID(), store.PreKeyBundle{
 		IdentityDH: msg.IdentityDH, SigningPublic: msg.SigningPublic,
 		SignedPreKeyID: msg.SignedPreKeyID, SignedPreKey: msg.SignedPreKey, Signature: msg.Signature,
 	}, oneTime); err != nil {
@@ -62,7 +62,7 @@ func (s *TCPServer) handlePreKeyQuery(ctx context.Context, client *Client, f *ne
 	if err := netproto.Decode(f, &msg); err != nil || msg.UniqueID == "" {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "target unique ID is required")
 	}
-	if client.UserID <= 0 {
+	if client.userID() <= 0 {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, "registered account required for asynchronous prekeys")
 	}
 	if s.chatRate != nil && !s.chatRate.allow(client.UniqueID+":prekey", time.Now()) {

@@ -130,13 +130,13 @@ func (s *TCPServer) handleChannelSubscribe(ctx context.Context, client *Client, 
 			refused = append(refused, fmt.Sprintf("%d (key delivery failed)", id))
 			continue
 		}
-		if client.UserID != 0 && s.deps.Groups != nil {
-			groupID, applied, err := s.deps.Groups.ApplyChannelGroupAutoAssignment(ctx, client.UserID, id)
+		if client.userID() != 0 && s.deps.Groups != nil {
+			groupID, applied, err := s.deps.Groups.ApplyChannelGroupAutoAssignment(ctx, client.userID(), id)
 			if err != nil {
 				s.logger.Warn("channel-group auto assignment failed", zap.Int64("channel_id", id), zap.Error(err))
 			} else if applied {
 				if s.deps.Perms != nil {
-					s.deps.Perms.Invalidate(client.UserID, id)
+					s.deps.Perms.Invalidate(client.userID(), id)
 				}
 				s.audit(ctx, "system", "channel_group_auto_assign", client.UniqueID,
 					fmt.Sprintf("channel=%d group=%d", id, groupID))
@@ -170,7 +170,7 @@ func (s *TCPServer) subscribeAllowed(ctx context.Context, client *Client, channe
 		return false
 	}
 	tp := permissions.NewTieredPermissions()
-	if client.UserID == 0 {
+	if client.userID() == 0 {
 		set, err := s.guestGroupSet(ctx)
 		if err != nil {
 			return false
@@ -179,7 +179,7 @@ func (s *TCPServer) subscribeAllowed(ctx context.Context, client *Client, channe
 			tp.Set(permissions.TierServerGroup, set)
 		}
 	} else {
-		loaded, err := s.deps.Perms.LoadForClient(ctx, client.UserID, channelID)
+		loaded, err := s.deps.Perms.LoadForClient(ctx, client.userID(), channelID)
 		if err != nil {
 			return false
 		}

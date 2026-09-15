@@ -125,8 +125,8 @@ func (s *TCPServer) BanClient(ctx context.Context, byClientID, targetID string, 
 
 	expiresAt := banExpiration(seconds)
 	var bannedBy any
-	if caller, ok := s.clientByID(byClientID); ok && caller.UserID != 0 {
-		bannedBy = caller.UserID
+	if caller, ok := s.clientByID(byClientID); ok && caller.userID() != 0 {
+		bannedBy = caller.userID()
 	}
 	if err := s.insertBan(ctx, target.UniqueID, reason, bannedBy, persistentBanExpiration(expiresAt)); err != nil {
 		return fmt.Errorf("recording ban: %w", err)

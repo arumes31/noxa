@@ -39,13 +39,13 @@ func portFromAddress(address string) (int, error) {
 // channel. Guests hold the same virtual set everywhere, so they need no
 // second lookup.
 func (s *TCPServer) permCheckerInChannel(ctx context.Context, client *Client, channelID int64) (*permChecker, error) {
-	if client.UserID == 0 {
+	if client.userID() == 0 {
 		return s.permCheckerFor(ctx, client)
 	}
 	if s.deps == nil || s.deps.Perms == nil || s.deps.Resolver == nil {
 		return nil, errPermsUnavailable
 	}
-	tp, err := s.deps.Perms.LoadForClient(ctx, client.UserID, channelID)
+	tp, err := s.deps.Perms.LoadForClient(ctx, client.userID(), channelID)
 	if err != nil {
 		return nil, fmt.Errorf("loading permissions: %w", err)
 	}

@@ -20,7 +20,7 @@ const V = () => window.__noxa;
 //                                  track id "<clientID>|<slot>"
 //                                  msid stream "noxa-<clientID>|<slot>"
 // The separator is "|" because an msid id is an RFC 4566 token and "/" is not
-// a token character. Default slots keep the bare publisher ID, so parsing
+// a token character. Microphones keep the bare publisher ID, so parsing
 // yields slot "" for them and a router that labels nothing still resolves.
 const SLOT_SCREEN = "screen";
 export const SLOT_SCREEN_AUDIO = "screenaudio"; // main.js routes this slot's audio
@@ -143,9 +143,11 @@ export function videoTrackAdded(trackID, stream, publisher) {
     t.frames = 0;
     t.stalls = 0;
     t.flowing = true;
-    // A publisher turning the camera off arrives as a muted receiver track,
-    // not as a removed track — that flips the tile back to the avatar.
-    if (vt) vt.onmute = vt.onunmute = vt.onended = () => updateTileVideo(t);
+    // Reserved receiver tracks are not evidence that a camera is publishing.
+    if (vt) {
+        vt.onmute = vt.onended = () => updateTileVideo(t);
+        vt.onunmute = () => { t.flowing = true; updateTileVideo(t); };
+    }
     updateTileVideo(t);
     applyTileIdentity(t);
     layoutGrid();
@@ -178,7 +180,7 @@ export function videoSpeaking(clientID, speaking) {
 // videoRefreshNames re-resolves nickname/avatar on all tiles (user joined,
 // moved, avatar changed, started/stopped sharing).
 export function videoRefreshNames() {
-    for (const t of tiles.values()) applyTileIdentity(t);
+    for (const t of tiles.values()) { applyTileIdentity(t); updateTileVideo(t); }
 }
 
 // clearVideoGrid removes all tiles (voice teardown).
@@ -240,17 +242,21 @@ function tileIsScreen(t) {
 function updateTileVideo(t) {
     const track = t.track;
     const live = !!track && track.readyState === "live" && track.enabled && !track.muted;
+    const active = live && t.flowing && (t.slot !== SLOT_SCREEN || isSharing(t.clientID));
+    t.el.classList.toggle("hidden", !active);
     t.el.classList.toggle("has-video", live && t.flowing && t.video.readyState >= 2);
+    layoutGrid();
 }
 
 // layoutGrid recomputes the auto-layout class (1→full, 2→half, 3-4→2x2,
 // more→scrollable) and hides the grid when empty so chat keeps the space.
 function layoutGrid() {
     const grid = gridEl();
-    const n = tiles.size;
+    const visible = [...tiles.entries()].filter(([, tile]) => !tile.el.classList.contains("hidden"));
+    const n = visible.length;
     grid.classList.toggle("hidden", n === 0);
     grid.dataset.count = n <= 4 ? String(n) : "many";
-    grid.classList.toggle("has-focus", !!focusedID && tiles.has(focusedID));
+    grid.classList.toggle("has-focus", !!focusedID && visible.some(([key]) => key === focusedID));
     for (const [key, t] of tiles) t.el.classList.toggle("focused", key === focusedID);
 }
 

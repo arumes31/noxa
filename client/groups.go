@@ -1,7 +1,7 @@
 // groups.go defines the Wails-bound API for wave-6b permission/group
 // management: group CRUD and membership, the permission write path,
-// templates, traces, the audit log, and ban administration. Read operations
-// use the serialized request/response pattern (connManager.request); writes
+// templates, traces, the audit log, and ban administration. Reads and group
+// assignment use serialized request/response (connManager.request); other writes
 // are fire-and-forget — failures arrive as MsgError and surface via the
 // "servererror" event, matching the existing channel-edit UX.
 package main
@@ -98,10 +98,11 @@ func (a *App) GroupDelete(groupType string, groupID int64, force bool) string {
 // GroupAssign assigns a user to a group. expiresInSeconds > 0 makes the
 // membership timed (145); channelID is required for channel groups.
 func (a *App) GroupAssign(groupType string, groupID int64, uniqueID string, channelID int64, expiresInSeconds int64) string {
-	if err := a.write(netproto.MsgGroupAssign, netproto.GroupAssign{
-		Type: groupType, GroupID: groupID, UniqueID: uniqueID,
+	if _, err := a.request(netproto.MsgGroupAssign, netproto.MsgGroupAssign, netproto.GroupAssign{
+		AckRequested: true,
+		Type:         groupType, GroupID: groupID, UniqueID: uniqueID,
 		ChannelID: channelID, ExpiresInSeconds: expiresInSeconds,
-	}); err != nil {
+	}, 5*time.Second); err != nil {
 		return err.Error()
 	}
 	return ""

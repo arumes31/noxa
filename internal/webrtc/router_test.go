@@ -484,7 +484,7 @@ func TestPublisherTrackMSID(t *testing.T) {
 		t.Fatalf("track IDs = %q/%q, want %q/%q", mic.track.ID(), cam.track.ID(), "a", "a|cam")
 	}
 	if mic.track.StreamID() == cam.track.StreamID() {
-		t.Fatalf("audio/video stream IDs = %q/%q, want one stream per publisher",
+		t.Fatalf("audio/video stream IDs = %q/%q, want distinct streams per slot",
 			mic.track.StreamID(), cam.track.StreamID())
 	}
 	if mic.track.StreamID() == fromB.audio[SlotMic].track.StreamID() {

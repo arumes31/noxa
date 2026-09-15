@@ -14,7 +14,7 @@ import {
     startMicMeter, stopMicMeter, pttRelease, makeLimiter,
     getUserVolume, isUserMuted, setUserMuted, registerUserChain, unregisterUserChain,
     setDucking, attachUserNormalizer, detachUserNormalizer, detachAllUserNormalizers,
-    captureConstraints, markCaptureProfile, applyCaptureProfile,
+    captureConstraints, markCaptureProfile, applyCaptureProfile, resumeAudioPlayback,
     syncMuteButton, renderMicStatus,
 } from "./audio.js";
 import {
@@ -789,7 +789,11 @@ window.runtime.EventsOn("servererror", (msg) => {
 // (282) the Go side maintains settings of its own (recents on every connect),
 // so the merged blob it pushes is the authoritative cache — without this the
 // recents list stays frozen at the value read once at startup.
-window.runtime.EventsOn("settings_update", (s) => { state.settings = s; void updateSoundOutput(); });
+window.runtime.EventsOn("settings_update", (s) => {
+    state.settings = s;
+    void updateSoundOutput();
+    void applyLiveAudioSettings().catch((error) => toast("Audio settings: " + error.message, "warn"));
+});
 
 // (320) recordRecentChannel tracks the last 5 joined channels per server
 // address in settings (debounced persist).
@@ -1437,6 +1441,7 @@ window.runtime.EventsOn("event", (json) => {
         // wave 6b group events: memberships drive tree colors/hoisted
         // sections and the details-pane group chips.
         case "group_assigned":
+            if (d.promoted && d.unique_id === state.myUniqueID) state.isGuest = false;
             if (d.group_name) {
                 toast((d.by ? "you were " : "") + "added to group " + d.group_name, "info", "alert");
             }
@@ -2323,13 +2328,32 @@ async function applyChannelAudio() {
     }
     // (25) A move into or out of a music channel needs a fresh capture: the
     // stereo/DSP constraints cannot be changed on a live track.
-    const { track, changed } = await applyCaptureProfile(state.pc, state.localStream, ch);
+    const { track, changed, error } = await applyCaptureProfile(state.pc, state.localStream, ch);
     if (changed) {
         startVoiceMonitor();
         startMicMeter(state.localStream);
         applyVoiceState();
     }
     if (track && !changed) track.contentHint = ch.OpusStereo ? "music" : "speech";
+    return error;
+}
+
+// Serialize device swaps; settings_update and the Settings save can both ask
+// for the same change. The capture constraints prevent a redundant recapture.
+let liveAudioSettings = Promise.resolve();
+function applyLiveAudioSettings() {
+    liveAudioSettings = liveAudioSettings.catch(() => {}).then(async () => {
+        const error = await applyChannelAudio();
+        if (error) throw error;
+        applyVoiceState();
+        if (remoteChain.ctx) await selectAudioOutput(remoteChain.ctx);
+        if (remoteChain.master) {
+            remoteChain.master.gain.value = state.deafened ? 0 : Math.min(2, (state.settings?.volume ?? 100) / 100);
+        }
+        // Local preview elements must stay muted to avoid microphone feedback.
+        applyOutputSettings($("remote-video"));
+    });
+    return liveAudioSettings;
 }
 
 // (13/14) Priority-speaker ducking: while another priority speaker in my
@@ -2826,7 +2850,7 @@ function applyOutputSettings(el) {
     void selectAudioOutput(el);
     el.muted = state.deafened;
     if (remoteChain.master) {
-        remoteChain.master.gain.value = Math.min(2, (s.volume ?? 100) / 100);
+        remoteChain.master.gain.value = state.deafened ? 0 : Math.min(2, (s.volume ?? 100) / 100);
     }
 }
 
@@ -2836,19 +2860,31 @@ function applyOutputSettings(el) {
 // (track ID = publisher client ID) make per-user volume/mute/auto-level
 // audible; the registries themselves live in audio.js.
 const remoteChain = { ctx: null, master: null };
+
+function resumeRemoteAudio() {
+    void resumeAudioPlayback(remoteChain.ctx).catch(() => {
+        toast("Voice playback could not start. Check your output device and try again.", "warn");
+    });
+}
+window.addEventListener("pointerdown", resumeRemoteAudio, { passive: true });
+window.addEventListener("keydown", resumeRemoteAudio);
+window.addEventListener("focus", resumeRemoteAudio);
+document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") resumeRemoteAudio();
+});
 // remoteTracks maps media track ID -> {src, gain, mute, uid} for per-track
 // teardown when a publisher leaves or voice is stopped.
 const remoteTracks = new Map();
 
 // ensureRemoteChain builds the shared processing tail once per voice session.
 function ensureRemoteChain() {
-    if (remoteChain.ctx) return true;
+    if (remoteChain.ctx) { resumeRemoteAudio(); return true; }
     try {
         const ctx = new (window.AudioContext || window.webkitAudioContext)();
         remoteChain.ctx = ctx;
         const master = ctx.createGain();
         remoteChain.master = master;
-        master.gain.value = Math.min(2, (state.settings?.volume ?? 100) / 100);
+        master.gain.value = state.deafened ? 0 : Math.min(2, (state.settings?.volume ?? 100) / 100);
 
         // (52) voice limiter/compressor (default on). Gain normalization (53)
         // is per publisher and lives in attachRemoteAudio.
@@ -2862,6 +2898,7 @@ function ensureRemoteChain() {
 
         // Output device selection where supported (Chrome 110+).
         void selectAudioOutput(ctx);
+        resumeRemoteAudio();
         return true;
     } catch (e) {
         sysMsg("remote audio chain failed: " + e);
@@ -3302,7 +3339,7 @@ window.__noxa = {
     soundEngine,
     speechQueue,
     state, $, toast, announceLive, sysMsg, showLogin, showWorkspace, disconnect, sendChat, setPTT,
-    setDeafened, refreshPermissions, applyVoiceState, applyOutputSettings,
+    setDeafened, refreshPermissions, applyVoiceState, applyOutputSettings, applyLiveAudioSettings,
     startVADMonitor: startVoiceMonitor, stopVADMonitor: stopVoiceMonitor,
     connectFromLogin, renderTree, setChannelExpanded, setDetailsOpen, setDirectTargetVisible,
     clientName, initials, fetchAvatar,

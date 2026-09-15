@@ -1480,6 +1480,9 @@ type GroupDelete struct {
 // GroupAssign assigns a user to a group. ChannelID is required for channel
 // groups. ExpiresInSeconds > 0 makes the membership expire (145).
 type GroupAssign struct {
+	// AckRequested asks the server to echo this message after a successful write.
+	// Older fire-and-forget clients omit it and receive no extra frame.
+	AckRequested     bool   `json:"ack_requested,omitempty"`
 	Type             string `json:"type"`
 	GroupID          int64  `json:"group_id"`
 	UniqueID         string `json:"unique_id"`

@@ -660,7 +660,7 @@ func (s *TCPServer) sendPendingRules(ctx context.Context, client *Client, guest 
 		text, hash, err = s.deps.Rules.Text(ctx)
 		pending = hash != ""
 	} else {
-		text, hash, pending, err = s.deps.Rules.Pending(ctx, client.UserID)
+		text, hash, pending, err = s.deps.Rules.Pending(ctx, client.userID())
 	}
 	if err != nil {
 		s.logger.Warn("reading the server rules failed",
@@ -712,8 +712,8 @@ func (s *TCPServer) handleServerRulesAccept(ctx context.Context, client *Client,
 	}
 	// A guest has no users row to write the acceptance to, so it stays on the
 	// connection (see sendPendingRules).
-	if client.UserID != 0 {
-		if err := s.deps.Rules.Accept(ctx, client.UserID, msg.Hash); err != nil {
+	if client.userID() != 0 {
+		if err := s.deps.Rules.Accept(ctx, client.userID(), msg.Hash); err != nil {
 			s.logger.Warn("recording the rules acceptance failed",
 				zap.String("client_id", client.ID),
 				zap.Error(err),
@@ -827,7 +827,7 @@ func (s *TCPServer) handleCreateChannel(ctx context.Context, client *Client, f *
 		MaxClients:      msg.MaxClients,
 		Password:        msg.Password,
 		NeededJoinPower: msg.NeededJoinPower,
-		CreatedBy:       client.UserID,
+		CreatedBy:       client.userID(),
 		OpusBitrate:     msg.OpusBitrate,
 		OpusFEC:         opusFEC,
 		OpusDTX:         opusDTX,
@@ -1392,7 +1392,7 @@ func (s *TCPServer) sendDirectByUniqueID(ctx context.Context, client *Client, to
 	}
 	// E2EE DMs are spooled as ciphertext the server cannot read; the sender's
 	// unique ID travels along so the recipient can fetch the public key.
-	if err := s.deps.Spool.SpoolMessage(ctx, client.UserID, target.ID, client.UniqueID, text); err != nil {
+	if err := s.deps.Spool.SpoolMessage(ctx, client.userID(), target.ID, client.UniqueID, text); err != nil {
 		s.logger.Warn("spooling message failed",
 			zap.String("client_id", client.ID),
 			zap.Error(err),
@@ -1580,8 +1580,8 @@ func banExpirationMillis(expiresAt time.Time) int64 {
 // (171); zero or below is permanent.
 func (s *TCPServer) recordBan(ctx context.Context, caller, target *Client, reason string, durationSeconds int64) (time.Time, error) {
 	var bannedBy any
-	if caller.UserID != 0 {
-		bannedBy = caller.UserID
+	if caller.userID() != 0 {
+		bannedBy = caller.userID()
 	}
 	expiresAt := banExpiration(durationSeconds)
 	if err := s.insertBan(ctx, target.UniqueID, reason, bannedBy, persistentBanExpiration(expiresAt)); err != nil {
