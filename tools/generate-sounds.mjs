@@ -47,7 +47,6 @@ const groups = [
         ["buddy_online", "Watched contact online", "Warmer, slightly fuller presence contact", 150, 1, -41, [contact(0,145,1050,1,6,3), contact(0,100,430,.6,5,4)]],
         ["kick", "Kick/ban", "Firm low contact with a short abrupt cushioned stop", 155, 3, -33, [contact(0,150,1050,1,11,1.5), contact(0,85,430,.9,7,2)]],
         ["ban", "Banned", "Low dry stop followed by a subdued final contact", 220, 3, -33, [contact(0,105,800,1,9,2), contact(125,90,600,.7,10,2)]],
-        ["ban", "Banned", "Low dry stop followed by a subdued final contact", 220, 3, -33, [contact(0,105,800,1,9,2), contact(125,90,600,.7,10,2)]],
         ["announcement", "Announcement", "Broader clean contact with a brief dry body", 240, 3, -34, [contact(0,235,1400,1,5,3.5), contact(5,150,650,.65,4,4)]],
         ["channel_watch", "Channel watch", "Quiet separated pair of damped status ticks", 150, 0, -44, [contact(0,50,850,.7,8,2), contact(80,65,850,1,8,2)]],
     ]],

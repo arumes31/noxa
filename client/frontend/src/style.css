@@ -1823,7 +1823,16 @@ input::placeholder, textarea::placeholder { color: var(--text-faint); opacity: 1
 }
 #alpha-badge:hover { color: var(--accent); }
 
-.notify-matrix td, .notify-matrix th { text-align: center; }
+.perm-grid.notify-matrix { table-layout: auto; }
+.notify-matrix td, .notify-matrix th { text-align: center; padding: 4px 5px; }
+.perm-grid.notify-matrix th:first-child { width: auto; }
+.identity-table-scroll { overflow-x: auto; }
+.perm-grid.identity-grid { table-layout: auto; min-width: 640px; }
+.perm-grid.identity-grid th:first-child { width: auto; }
+.identity-grid th { white-space: nowrap; }
+.identity-grid .id-actions { min-width: 180px; }
+.identity-grid .id-actions button { white-space: nowrap; margin: 2px; }
+.notify-matrix th, .notify-matrix button { white-space: nowrap; }
 .notify-matrix td:first-child, .notify-matrix th:first-child { text-align: left; }
 .sound-controls { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .sound-controls button, .notify-matrix button {

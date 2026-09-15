@@ -1,5 +1,64 @@
 import { expect, test } from "@playwright/test";
 
+test("client language translates every settings page and persists on Apply @a11y", async ({ page }, testInfo) => {
+    const errors = [];
+    page.on("pageerror", error => errors.push(error.message));
+    await page.evaluate(() => {
+        const app = window.go.main.App;
+        window.go.main.App = new Proxy(app, { get(target, method) {
+            if (method === "GetSettings") return async () => structuredClone(window.__savedSettings || window.__voicx.state.settings);
+            if (method === "ListIdentities") return async () => [{ id: "test", name: "My identity", unique_id: "identity-123456789", active: true, protection: "dpapi", security_level: 4 }];
+            return target[method];
+        } });
+        window.__voicx.openSettings();
+    });
+    await page.getByRole("combobox", { name: "Language", exact: true }).selectOption("de");
+    await page.getByRole("spinbutton", { name: "Chat max lines", exact: true }).fill("500");
+    await page.getByRole("button", { name: "Apply", exact: true }).click();
+    await expect(page.getByRole("dialog", { name: "Einstellungen", exact: true })).toBeVisible();
+    await expect(page.getByRole("combobox", { name: "Sprache", exact: true })).toHaveValue("de");
+    await expect(page.locator("html")).toHaveAttribute("lang", "de");
+    await expect(page.getByRole("spinbutton", { name: "Chat max. Zeilen", exact: true })).toHaveValue("500");
+    await page.screenshot({ path: testInfo.outputPath("settings-german-application.png") });
+    const pages = [
+        ["Anwendung", "Chat max. Zeilen"], ["Aufnahme", "Aufnahmegerät"],
+        ["Wiedergabe", "Ausgabegerät"], ["Tastenkürzel", "Als neues Profil speichern…"],
+        ["Flüstern", "Flüstern aktivieren"], ["Downloads", "Downloadordner"],
+        ["Chat", "Zeitstempel"], ["Sicherheit", "Identitäten"],
+        ["Server", "Die Serverkonfiguration ist nur für Administratoren verfügbar."],
+        ["Benachrichtigungen", "Gesprochene Systemmeldungen"],
+    ];
+    for (const [tab, label] of pages) {
+        await page.getByRole("tab", { name: tab, exact: true }).click();
+        await expect(page.locator("#settings-content").getByText(label, { exact: true })).toBeVisible();
+        if (tab === "Sicherheit") {
+            await expect(page.getByText("My identity", { exact: false })).toBeVisible();
+            await page.screenshot({ path: testInfo.outputPath("settings-german-security.png") });
+        }
+    }
+    await expect(page.getByRole("button", { name: "Sprachmeldung testen", exact: true })).toBeVisible();
+    await page.screenshot({ path: testInfo.outputPath("settings-german-notifications.png") });
+    expect(await page.locator(".notify-matrix").evaluate(table => {
+        const content = document.getElementById("settings-content");
+        return table.getBoundingClientRect().right <= content.getBoundingClientRect().right;
+    })).toBe(true);
+    await page.getByRole("textbox", { name: "Einstellungen suchen", exact: true }).fill("Lautstärke");
+    await expect(page.locator(".set-search-hit").first()).toContainText("Wiedergabe");
+    await page.getByRole("button", { name: "Abbrechen", exact: true }).click();
+    await page.evaluate(() => window.__voicx.openSettings());
+    await expect(page.getByRole("combobox", { name: "Sprache", exact: true })).toHaveValue("de");
+    await page.getByRole("combobox", { name: "Sprache", exact: true }).selectOption("en");
+    await page.getByRole("button", { name: "Abbrechen", exact: true }).click();
+    expect(await page.evaluate(() => window.__voicx.state.settings.language)).toBe("de");
+    await page.evaluate(() => window.__voicx.openSettings());
+    await page.getByRole("combobox", { name: "Sprache", exact: true }).selectOption("en");
+    await page.getByRole("button", { name: "OK", exact: true }).click();
+    await page.evaluate(() => window.__voicx.openSettings());
+    await expect(page.getByRole("dialog", { name: "Settings", exact: true })).toBeVisible();
+    await expect(page.getByRole("combobox", { name: "Language", exact: true })).toHaveValue("en");
+    expect(errors).toEqual([]);
+});
+
 test("static speech follows language, rare events, draft volume and mute settings", async ({ page }) => {
     await page.evaluate(async () => {
         const { state, soundEngine, speechQueue } = window.__voicx;
@@ -3646,7 +3705,8 @@ test("moves focus explicitly between login and the connected workspace", async (
 test("computes names for settings and generated dialog controls", async ({ page }) => {
     await page.evaluate(() => window.__voicx.openSettings("application"));
     await expect(page.locator('#settings-content input[type="number"]').first()).toHaveAccessibleName("Chat max lines");
-    await expect(page.locator("#settings-content select").first()).toHaveAccessibleName("Theme");
+    await expect(page.locator("#settings-content select").first()).toHaveAccessibleName("Language");
+    await expect(page.getByRole("combobox", { name: "Theme", exact: true })).toBeVisible();
     await expect(page.locator('#settings-content input[type="range"]').first()).toHaveAccessibleName("UI font size");
     await page.keyboard.press("Escape");
 

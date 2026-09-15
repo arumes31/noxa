@@ -68,7 +68,7 @@ export async function previewSounds(events = SOUND_EVENTS, settings = V()?.state
         if (generation !== previewGeneration) return;
         if (!Object.hasOwn(SOUND_DEFINITIONS, name)) continue;
         if (!soundEngine.play(name, { force: true, settings })) continue;
-        onLabel(SOUND_DEFINITIONS[name].label);
+        onLabel(SOUND_DEFINITIONS[name].label, name);
         await new Promise(resolve => {
             finishDelay = resolve;
             previewTimer = setTimeout(resolve, (SOUND_DEFINITIONS[name].duration + .18) * 1000);

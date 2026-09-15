@@ -288,7 +288,6 @@ export const SOUND_URLS = {
     buddy_online: new URL("./assets/sounds/buddy_online.wav", import.meta.url).href,
     kick: new URL("./assets/sounds/kick.wav", import.meta.url).href,
     ban: new URL("./assets/sounds/ban.wav", import.meta.url).href,
-    ban: new URL("./assets/sounds/ban.wav", import.meta.url).href,
     announcement: new URL("./assets/sounds/announcement.wav", import.meta.url).href,
     channel_watch: new URL("./assets/sounds/channel_watch.wav", import.meta.url).href,
 };
@@ -432,10 +431,6 @@ export const SOUND_EVENT_GROUPS = [
             [
                 "kick",
                 "Kick/ban"
-            ],
-            [
-                "ban",
-                "Banned"
             ],
             [
                 "ban",

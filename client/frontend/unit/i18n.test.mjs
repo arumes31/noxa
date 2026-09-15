@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
 import { afterEach, describe, it, mock } from "node:test";
+import { readFileSync } from "node:fs";
+import { settingsEnglish, settingsGerman } from "../src/settings-messages.js";
+import { SOUND_DEFINITIONS, SOUND_EVENT_GROUPS } from "../src/sound-catalog.js";
 
 import { applyStaticLabels, catalogParity, currentLanguage, interpolate, setLanguage, t } from "../src/i18n.js";
 
@@ -18,6 +21,26 @@ afterEach(() => {
 });
 
 describe("language selection and translation", () => {
+    it("covers settings keys, sound events and matching placeholders in both languages", () => {
+        assert.deepEqual(Object.keys(settingsEnglish).sort(), Object.keys(settingsGerman).sort());
+        const source = readFileSync(new URL("../src/settings-ui.js", import.meta.url), "utf8");
+        for (const language of ["en", "de"]) {
+            setLanguage(language);
+            for (const [, key] of source.matchAll(/\bt\("([^"]+)"\)/g)) {
+                assert.notEqual(t(key), key, `missing ${language} ${key}`);
+            }
+            for (const event of Object.keys(SOUND_DEFINITIONS)) {
+                assert.notEqual(t("settings.sound." + event), "settings.sound." + event);
+            }
+        }
+        for (const [key, english] of Object.entries(settingsEnglish)) {
+            const placeholders = text => [...text.matchAll(/\{([a-z]+)\}/g)].map(m => m[1]).sort();
+            assert.ok(settingsGerman[key].trim(), key);
+            assert.deepEqual(placeholders(english), placeholders(settingsGerman[key]), key);
+        }
+        const events = SOUND_EVENT_GROUPS.flatMap(group => group.events.map(([event]) => event));
+        assert.equal(new Set(events).size, events.length, "sound settings must not repeat events");
+    });
     it("switches between English and German", () => {
         setLanguage("de");
         assert.equal(currentLanguage(), "de");

@@ -9,10 +9,12 @@
 //      t("chat.connectedAs", { nick }) → "Connected as {nick}".
 //   3. Settings → Application → Language applies it live (menus and the
 //      settings dialog rebuild; static index.html labels are set once at
-//      startup — full coverage of every string is intentionally out of
-//      scope this wave).
+//      startup). Every settings page uses the same catalogs.
+
+import { settingsEnglish, settingsGerman } from "./settings-messages.js";
 
 const en = {
+    ...settingsEnglish,
     "menu.connections": "Connections",
     "menu.bookmarks": "Bookmarks",
     "menu.self": "Self",
@@ -72,6 +74,7 @@ const en = {
 };
 
 const de = {
+    ...settingsGerman,
     "menu.connections": "Verbindungen",
     "menu.bookmarks": "Lesezeichen",
     "menu.self": "Selbst",

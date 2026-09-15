@@ -32,7 +32,7 @@ import { initMetaUI } from "./meta-ui.js";
 import { initPolishUI } from "./polish-ui.js";
 import { imageDataURL, setSafeImage } from "./safe-media.js";
 import { initNotifications } from "./notifications.js";
-import { setLanguage, applyStaticLabels } from "./i18n.js";
+import { setLanguage, currentLanguage, applyStaticLabels } from "./i18n.js";
 import { extractPresentedFingerprint } from "./security.js";
 import { isActivationKey } from "./a11y.js";
 import { createLiveAnnouncementQueue } from "./live-announcer.js";
@@ -161,6 +161,7 @@ function applyAppearance() {
     const root = document.documentElement;
     // (336) language applies live (menus + static labels rebuild).
     setLanguage(s.language || "system");
+    root.lang = currentLanguage();
     applyStaticLabels();
     initMenu();
     // (294/295) theme sets the full variable palette via [data-theme].
