@@ -178,7 +178,7 @@ type GroupStore interface {
 	UnassignServerGroup(ctx context.Context, groupID, userID int64) error
 	AssignChannelGroup(ctx context.Context, groupID, userID, channelID int64) error
 	ApplyChannelGroupAutoAssignment(ctx context.Context, userID, channelID int64) (groupID int64, applied bool, err error)
-	UnassignChannelGroup(ctx context.Context, userID, channelID int64) error
+	UnassignChannelGroup(ctx context.Context, groupID, userID, channelID int64) error
 	UserGroupIDs(ctx context.Context, userID int64) ([]int64, error)
 	FindGroupByName(ctx context.Context, groupType, name string) (*store.Group, error)
 	// ExpiredGroupMembers removes expired timed memberships (145) and

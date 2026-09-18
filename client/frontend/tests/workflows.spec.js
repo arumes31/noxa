@@ -112,10 +112,11 @@ test("@quickwins transfer estimates and new-message counts translate without cha
         v.state.channels = [{ ChannelID: 42, Name: "Lounge" }];
         v.refreshHeader();
         for (let id = 1; id <= 35; id++) {
-            for (const callback of window.__events.event || []) callback(JSON.stringify({ type: "chat", data: { id, channel_id: 42, from: "Bob", from_unique_id: "peer", text: "Message " + id } }));
+            for (const callback of window.__events.event || []) callback(JSON.stringify({ type: "chat", data: { id, channel_id: 42, from: "Bob", from_unique_id: "peer", text: "Message " + id, enc: id === 35 } }));
         }
     });
     await expect(page.locator("#chat-log .msg.rich")).toHaveCount(35);
+    await expect(page.locator("#chat-log .msg-lock")).toHaveAttribute("aria-label", /channel key/);
     await page.locator("#chat-log").evaluate(log => { log.scrollTop = 0; log.dispatchEvent(new Event("scroll")); });
     await page.evaluate(() => {
         for (const callback of window.__events.event || []) callback(JSON.stringify({ type: "chat", data: { id: 36, channel_id: 42, from: "Bob", from_unique_id: "peer", text: "New message" } }));
@@ -126,8 +127,10 @@ test("@quickwins transfer estimates and new-message counts translate without cha
         for (const callback of window.__events.ft_progress || []) callback({ id: "eta", name: "notes.zip", direction: "download", status: "active", total: 121000, transferred: 1000, bytes_per_sec: 1000 });
     });
     await expect(page.locator("#chat-newpill")).toHaveText("2 new messages ↓");
+    const readPointer = await page.evaluate(() => window.__noxa.state.settings.last_read_channels?.[42]);
     await page.evaluate(() => { window.__noxa.state.settings.language = "de"; window.__noxa.applyAppearance(); });
     await expect(page.locator("#chat-newpill")).toHaveText("2 neue Nachrichten ↓");
+    expect(await page.evaluate(() => window.__noxa.state.settings.last_read_channels?.[42])).toBe(readPointer);
     await page.locator("#chat-newpill").click();
     await expect(page.locator("#chat-newpill")).toBeHidden();
     await page.evaluate(() => { window.__noxa.state.settings.language = "en"; window.__noxa.applyAppearance(); });
@@ -1808,6 +1811,7 @@ test("routes decrypted direct messages and echoes without mixing global chat or 
     await expect(page.locator("#chat-log")).toContainText("private Grüße 🌿");
     await expect(page.locator("#chat-log .msg-tag")).toHaveText("dm");
     await expect(page.locator("#chat-log .msg-lock")).toHaveAttribute("title", /end-to-end encrypted/);
+    await expect(page.locator("#chat-log .msg-lock")).toHaveAttribute("aria-label", /end-to-end encrypted/);
 
     await page.evaluate(() => {
         window.__noxaChat.openPM("charlie", "CHARLIE");
@@ -1845,6 +1849,7 @@ test("restores DM history without claiming legacy or plaintext records were veri
     await expect(page.locator("#chat-log .msg-tag")).toHaveText(["dm", "dm", "dm"]);
     await expect(page.locator("#chat-log .msg-lock")).toHaveCount(1);
     await expect(page.locator("#chat-log .msg-lock")).toHaveAttribute("title", /end-to-end encrypted/);
+    await expect(page.locator("#chat-log .msg-lock")).toHaveAttribute("aria-label", /end-to-end encrypted/);
 });
 
 test("tracks existing unassigned clients when they later join a channel", async ({ page }) => {

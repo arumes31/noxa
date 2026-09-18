@@ -515,9 +515,11 @@ function renderMsg(m) {
             lock.title = t("chat.encryptedHelp");
         } else if (m.e2e || (m.direct && m.enc)) {
             lock.innerHTML = icon("lock");
+            lock.setAttribute("aria-label", t("chat.directHelp"));
             lock.title = t("chat.directHelp");
         } else {
             lock.innerHTML = icon("shield");
+            lock.setAttribute("aria-label", t("chat.channelHelp"));
             lock.title = t("chat.channelHelp");
         }
         el.appendChild(lock);
@@ -1521,7 +1523,7 @@ function showNewPill() {
     pill.classList.remove("hidden");
 }
 
-function renderView(keepScrollFrom) {
+function renderView(keepScrollFrom, { suppressMarkRead = false } = {}) {
     const log = $("chat-log");
     log.innerHTML = "";
     const key = activeKey();
@@ -1595,7 +1597,7 @@ function renderView(keepScrollFrom) {
         scrollToBottom();
         resetNewCount();
     }
-    markRead(key);
+    if (!suppressMarkRead) markRead(key);
 }
 
 function lastReadFor(key) {
@@ -3526,7 +3528,7 @@ export function initChat() {
         const pending = newCount;
         const pillWasVisible = !$("chat-newpill").classList.contains("hidden");
         renderTabs();
-        renderView(bottomOffset);
+        renderView(bottomOffset, { suppressMarkRead: pillWasVisible });
         requestAnimationFrame(() => {
             newCount = pending;
             if (pillWasVisible && newCount) showNewPill();

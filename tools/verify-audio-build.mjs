@@ -7,11 +7,12 @@ import { SPEECH_ASSETS } from "../client/frontend/src/speech-catalog.js";
 
 const directory = new URL("../client/frontend/dist/assets/", import.meta.url);
 const hash = bytes => createHash("sha256").update(bytes).digest("hex");
-const bundled = new Set(readdirSync(directory).filter(name => name.endsWith(".wav"))
-    .map(name => hash(readFileSync(new URL(name, directory)))));
+const bundledFiles = readdirSync(directory).filter(name => name.endsWith(".wav"));
+const bundled = new Set(bundledFiles.map(name => hash(readFileSync(new URL(name, directory)))));
 const sources = [...Object.values(SOUND_URLS), ...Object.values(SPEECH_ASSETS).flatMap(clips => Object.values(clips).map(clip => clip.url))];
 for (const url of sources) assert.ok(bundled.has(hash(readFileSync(new URL(url)))), `Missing bundled audio: ${url}`);
-assert.equal(bundled.size, sources.length, "Duplicate or obsolete WAVs in production bundle");
+assert.equal(bundledFiles.length, sources.length, "Duplicate or obsolete WAVs in production bundle");
+assert.equal(bundled.size, sources.length, "Production WAVs must have unique content");
 const notice = "noxa-audio-licenses.txt";
 assert.equal(hash(readFileSync(new URL(`../client/frontend/public/${notice}`, import.meta.url))),
     hash(readFileSync(new URL(`../client/frontend/dist/${notice}`, import.meta.url))), "Missing bundled audio licensing notice");

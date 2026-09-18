@@ -34,7 +34,7 @@ The existing native Windows notification implementation uses `NIIF_NOSOUND`; all
 - Existing `play_sounds` remains the total application-audio gate. The label now explicitly includes effects and speech. DND and replay suppression apply to both.
 - New `effects_enabled` defaults true. `sound_volume` remains the effects volume; `spoken_messages` and `speech_volume` control speech independently. Existing 0–200 values are preserved and safely bounded.
 - Existing `speech_connection` and `speech_admin` remain category gates. New `speech_removal` and `speech_permissions` add narrower controls. `speech_events` and `event_sounds` retain explicit per-event opt-outs; the kick notification-matrix row also gates self-removal speech.
-- Settings version 9 adds these fields without resetting unrelated settings. Legacy pack IDs (`soft`, `bright`, `retro`, empty and `noxa`) resolve to the single displayed **noXa** pack. Old custom-synthesis settings stay retired.
+- Settings version 10 adds these fields without resetting unrelated settings. Legacy pack IDs (`soft`, `bright`, `retro`, empty and `noxa`) resolve to the single displayed **noXa** pack. Old custom-synthesis settings stay retired.
 - Pre-speech profiles (before version 8) with master audio off or effects volume zero do not gain enabled speech. Existing explicit speech preferences survive load/save. The repository's earlier migration for pre-version-1 nonfunctional sound flags is unchanged.
 - Internal configuration keys, package identity, globals, paths and native IDs were retained. Existing `NOXA_*` environment keys and historical migration documentation are compatibility identifiers, not new display branding.
 

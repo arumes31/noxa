@@ -6,6 +6,7 @@ Model directory contains en.onnx, de.onnx, matching .json files and provenance.j
 """
 import argparse
 import hashlib
+import importlib.metadata
 import io
 import json
 import wave
@@ -70,7 +71,7 @@ catalog += '};\n'
 (root / 'client/frontend/src/speech-catalog.js').write_text(catalog, encoding='utf-8')
 (out / 'metrics.json').write_text(json.dumps(metrics, indent=2, ensure_ascii=False)+'\n', encoding='utf-8')
 provenance = json.loads((args.models/'provenance.json').read_text())
-provenance['authoring'] = {'tool': 'piper-tts 1.4.2', 'length_scale': 1.08,
+provenance['authoring'] = {'tool': f'piper-tts {importlib.metadata.version("piper-tts")}', 'length_scale': 1.08,
     'noise_scale': .55, 'noise_w_scale': .7, 'peak_ceiling': .115,
     'target_rms_dbfs': -31, 'silence_threshold': .002, 'edge_padding_ms': 25,
     'endpoint_fade_ms': 5, 'runtime_generation': False}

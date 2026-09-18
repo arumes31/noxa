@@ -1160,7 +1160,7 @@ func (s *TCPServer) leaveOwnChannel(client *Client) error {
 			return state.ErrClientNotFound
 		}
 		previousChannelID = snapshot.ChannelID
-		if err := s.deps.State.LeaveChannel(client.ID); err != nil {
+		if err := s.deps.State.LeaveChannel(client.ID); err != nil && !errors.Is(err, state.ErrNotInChannel) {
 			return err
 		}
 	}

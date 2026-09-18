@@ -423,7 +423,7 @@ func (s *TCPServer) handleGroupUnassign(ctx context.Context, client *Client, f *
 	}
 
 	if msg.Type == "channel" {
-		if err := s.deps.Groups.UnassignChannelGroup(ctx, user.ID, msg.ChannelID); err != nil {
+		if err := s.deps.Groups.UnassignChannelGroup(ctx, msg.GroupID, user.ID, msg.ChannelID); err != nil {
 			return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "unassign failed: "+err.Error())
 		}
 	} else {
