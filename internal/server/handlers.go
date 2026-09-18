@@ -1102,6 +1102,14 @@ func (s *TCPServer) handleJoinChannel(ctx context.Context, client *Client, f *ne
 	if s.deps == nil || s.deps.State == nil {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "state backend unavailable")
 	}
+	// Channel zero is the connected lobby. Leaving your own channel requires
+	// no moderation or join permission and never closes the server connection.
+	if msg.ChannelID == 0 {
+		if err := s.leaveOwnChannel(client); err != nil {
+			return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, err.Error())
+		}
+		return nil
+	}
 	// (215) acceptance is a condition of entry, not a notice: an unanswered
 	// rules prompt keeps the client in the lobby, where the only thing it can
 	// still do is answer.
@@ -1132,6 +1140,41 @@ func (s *TCPServer) handleJoinChannel(ctx context.Context, client *Client, f *ne
 	if err := s.moveClient(ctx, client.ID, msg.ChannelID, client.ID); err != nil {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeNotFound, err.Error())
 	}
+	return nil
+}
+
+func (s *TCPServer) leaveOwnChannel(client *Client) error {
+	var previousChannelID int64
+	if s.deps.Channels != nil {
+		var err error
+		previousChannelID, err = s.deps.Channels.LeaveClient(client.ID)
+		if errors.Is(err, state.ErrNotInChannel) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+	} else {
+		snapshot, ok := s.deps.State.GetClient(client.ID)
+		if !ok {
+			return state.ErrClientNotFound
+		}
+		previousChannelID = snapshot.ChannelID
+		if err := s.deps.State.LeaveChannel(client.ID); err != nil {
+			return err
+		}
+	}
+	if previousChannelID != 0 {
+		if s.deps.Voice != nil {
+			s.deps.Voice.LeaveChannel(client.ID, previousChannelID)
+		}
+		s.rotateScopeKey(context.Background(), previousChannelID)
+	}
+	_ = s.sendSubscriptionState(client)
+	s.broadcastEvent(eventUserMoved, userEvent{
+		ClientID: client.ID, FromChannelID: previousChannelID,
+		ChannelID: 0, ByClientID: client.ID,
+	})
 	return nil
 }
 

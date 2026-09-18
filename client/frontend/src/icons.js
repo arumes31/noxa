@@ -29,6 +29,21 @@ const paths = {
     download: '<path d="M12 2v14m-5-5 5 5 5-5M3 17v5h18v-5"/>',
     transfer: '<path d="M7 3v18m-4-4 4 4 4-4M17 21V3m-4 4 4-4 4 4"/>',
     signal: '<path d="M4 20v-4M9 20v-8M14 20V8M19 20V3"/>',
+    upload: '<path d="M12 16V2m-5 5 5-5 5 5M3 17v5h18v-5"/>',
+    folder: '<path d="M3 5h6l2 3h10v13H3z"/>',
+    folderPlus: '<path d="M3 5h6l2 3h10v13H3zM12 11v7M8.5 14.5h7"/>',
+    image: '<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8" cy="8" r="2"/><path d="m3 18 6-6 4 4 3-3 5 5"/>',
+    refresh: '<path d="M20 7a9 9 0 1 0 1 8M20 2v6h-6"/>',
+    link: '<path d="m10 14 4-4M8 16l-2 2a4 4 0 0 1-6-6l5-5a4 4 0 0 1 6 0M16 8l2-2a4 4 0 0 1 6 6l-5 5a4 4 0 0 1-6 0" transform="translate(2 0) scale(.85 1)"/>',
+    check: '<path d="m4 12 5 5L20 6"/>',
+    edit: '<path d="m15 3 6 6-12 12H3v-6zM12 6l6 6"/>',
+    reply: '<path d="m9 4-7 7 7 7M2 11h12a8 8 0 0 1 8 8"/>',
+    thread: '<path d="M5 3v12a5 5 0 0 0 5 5h9M10 6h11M10 11h8M16 16l4 4-4 4"/>',
+    keyboard: '<rect x="2" y="5" width="20" height="14" rx="2"/><path d="M6 9h.01M10 9h.01M14 9h.01M18 9h.01M6 12h.01M10 12h.01M14 12h.01M18 12h.01M7 16h10"/>',
+    whisper: '<path d="M9 17a4 4 0 0 0 8 0c0-3 4-4 4-9A7 7 0 0 0 7 8M12 8a2 2 0 0 1 4 0c0 3-3 3-3 6M2 9h2M2 14h3"/>',
+    shield: '<path d="m12 2 9 4v6c0 5-9 10-9 10S3 17 3 12V6zM8 12l3 3 5-6"/>',
+    leave: '<path d="M10 3H3v18h7M8 12h14m-5-5 5 5-5 5"/>',
+    warning: '<path d="M12 3 1 21h22zM12 9v5M12 18h.01"/>',
 };
 
 export function icon(name) {

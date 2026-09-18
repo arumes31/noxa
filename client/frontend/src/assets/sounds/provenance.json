@@ -1,0 +1,617 @@
+{
+  "title": "noXa",
+  "sources": {
+    "kenney": {
+      "title": "Interface Sounds 1.0",
+      "author": "Kenney",
+      "license": "CC0-1.0",
+      "page": "https://kenney.nl/assets/interface-sounds",
+      "download": "https://kenney.nl/media/pages/assets/interface-sounds/fa43c1dd4d-1677589452/kenney_interface-sounds.zip",
+      "archive": "kenney.zip",
+      "sha256": "f2193d072726d6758a5f7871b2dcc54dcce0d5c35c6f0a62f92549b327c81232"
+    },
+    "ui": {
+      "title": "UI Audio 1.0",
+      "author": "Kenney",
+      "page": "https://kenney.nl/assets/ui-audio",
+      "license": "CC0-1.0",
+      "download": "https://kenney.nl/media/pages/assets/ui-audio/490d233f68-1677590494/kenney_ui-audio.zip",
+      "archive": "ui.zip",
+      "sha256": "946fc23a63d535d693eb31b2eabb80c8c28d6351e2186b344ceb71b2cb1d5eb6"
+    },
+    "cards": {
+      "title": "Casino Audio 1.1 \u2014 card and packaging foley only",
+      "author": "Kenney",
+      "page": "https://kenney.nl/assets/casino-audio",
+      "license": "CC0-1.0",
+      "download": "https://kenney.nl/media/pages/assets/casino-audio/2472606a04-1721639069/kenney_casino-audio.zip",
+      "archive": "cards.zip",
+      "sha256": "f36250766ac5bc378c13708ddf12a23a8e54a3251f8d482c7536e51b5dbafa18"
+    },
+    "paper": {
+      "title": "Various Paper Sound Effects",
+      "author": "Luckius",
+      "page": "https://opengameart.org/content/various-paper-sound-effects",
+      "license": "CC0-1.0",
+      "download": "https://opengameart.org/sites/default/files/sounds_6.zip",
+      "archive": "paper.zip",
+      "sha256": "aa1889414310c7cfdd8dc291c19d4e4fc21ec987e9238b0d961fb72449c263a4"
+    }
+  },
+  "edits": {
+    "connection_connected": [
+      {
+        "source": "ui",
+        "file": "Audio/switch31.ogg",
+        "lengthMs": 180,
+        "weight": 1,
+        "atMs": 0,
+        "lowpassHz": 0,
+        "sourceFileSha256": "bca5f3047e73d28f6619d49a45dee1984340c165da5fa49b239068c2cb9b4be1",
+        "trimStartMs": 59.1609977324263
+      },
+      {
+        "source": "cards",
+        "file": "Audio/card-place-1.ogg",
+        "lengthMs": 165,
+        "weight": 0.38,
+        "atMs": 18,
+        "lowpassHz": 0,
+        "sourceFileSha256": "d8f26c33a665dcbdcc6f632f6050bc9dd548feb0d4942d4547615926d3926810",
+        "trimStartMs": 85.26077097505669
+      }
+    ],
+    "connection_reconnected": [
+      {
+        "source": "ui",
+        "file": "Audio/click2.ogg",
+        "lengthMs": 55,
+        "weight": 0.6,
+        "atMs": 0,
+        "lowpassHz": 0,
+        "sourceFileSha256": "c394b46bc6737f7f7edfbfa3031ce621b7a43d498d456d6198364eee9cd3e306",
+        "trimStartMs": 0.0
+      },
+      {
+        "source": "ui",
+        "file": "Audio/switch20.ogg",
+        "lengthMs": 130,
+        "weight": 1,
+        "atMs": 65,
+        "lowpassHz": 0,
+        "sourceFileSha256": "276b402ee4840f88a8df4eca6ece029b61c5840fa9149b0c5008fe4bda89cc21",
+        "trimStartMs": 122.78911564625851
+      }
+    ],
+    "connection_disconnected": [
+      {
+        "source": "ui",
+        "file": "Audio/switch11.ogg",
+        "lengthMs": 135,
+        "weight": 1,
+        "atMs": 0,
+        "lowpassHz": 4500,
+        "sourceFileSha256": "a8d445bd96fe3842ff2dcdd42ae728330baa8928032ca5f3d5cd4b926929550a",
+        "trimStartMs": 58.34467120181406
+      }
+    ],
+    "connection_lost": [
+      {
+        "source": "paper",
+        "file": "WAV/Paper Ripped - 1.wav",
+        "lengthMs": 95,
+        "weight": 0.55,
+        "atMs": 0,
+        "lowpassHz": 4200,
+        "sourceFileSha256": "79e862887ae205d2bfcf6ceea42faebae0115380c152b140b0427e36c845bc3e",
+        "trimStartMs": 0.0
+      },
+      {
+        "source": "ui",
+        "file": "Audio/switch24.ogg",
+        "lengthMs": 125,
+        "weight": 1,
+        "atMs": 98,
+        "lowpassHz": 0,
+        "sourceFileSha256": "aec5e91eef35c4a64d3bec7a25e54a68fa0448f4cf3179455e18c72c3dda60e9",
+        "trimStartMs": 82.24489795918367
+      }
+    ],
+    "connection_reconnecting": [
+      {
+        "source": "kenney",
+        "file": "Audio/switch_006.ogg",
+        "lengthMs": 100,
+        "weight": 1,
+        "atMs": 0,
+        "lowpassHz": 0,
+        "sourceFileSha256": "2676ddc4e341ee557b4d1dc8767ef8655540d66fb3ded6a1614080dbc4dc6f18",
+        "trimStartMs": 0.0
+      }
+    ],
+    "connection_failed": [
+      {
+        "source": "ui",
+        "file": "Audio/switch22.ogg",
+        "lengthMs": 95,
+        "weight": 0.8,
+        "atMs": 0,
+        "lowpassHz": 0,
+        "sourceFileSha256": "913261ad55fa0692902e4027a7a139844e7589d30c4286ab10e6d637f28b1d9f",
+        "trimStartMs": 71.49659863945578
+      },
+      {
+        "source": "ui",
+        "file": "Audio/switch11.ogg",
+        "lengthMs": 125,
+        "weight": 1,
+        "atMs": 137,
+        "lowpassHz": 0,
+        "sourceFileSha256": "a8d445bd96fe3842ff2dcdd42ae728330baa8928032ca5f3d5cd4b926929550a",
+        "trimStartMs": 58.34467120181406
+      },
+      {
+        "source": "cards",
+        "file": "Audio/card-place-4.ogg",
+        "lengthMs": 90,
+        "weight": 0.2,
+        "atMs": 145,
+        "lowpassHz": 0,
+        "sourceFileSha256": "18e3ba713b7259605fd27cdc048085ed56cf86b32403f070b6cb125019f77183",
+        "trimStartMs": 0.0
+      }
+    ],
+    "server_error": [
+      {
+        "source": "paper",
+        "file": "WAV/Paper Crushed - 2.wav",
+        "lengthMs": 135,
+        "weight": 0.65,
+        "atMs": 0,
+        "lowpassHz": 4200,
+        "sourceFileSha256": "2e9c9fd45abffbad091dca44ea5219a9d0dd9c55db5535ff1c65c0a1b03afb6e",
+        "trimStartMs": 0.0
+      },
+      {
+        "source": "ui",
+        "file": "Audio/click2.ogg",
+        "lengthMs": 55,
+        "weight": 1,
+        "atMs": 20,
+        "lowpassHz": 0,
+        "sourceFileSha256": "c394b46bc6737f7f7edfbfa3031ce621b7a43d498d456d6198364eee9cd3e306",
+        "trimStartMs": 0.0
+      }
+    ],
+    "own_channel_join": [
+      {
+        "source": "ui",
+        "file": "Audio/switch7.ogg",
+        "lengthMs": 145,
+        "weight": 1,
+        "atMs": 0,
+        "lowpassHz": 0,
+        "sourceFileSha256": "7a3032d1dae63d1096cf2f1e59cb43e598d5229dcb9617e9d3fb13e96c78d5f2",
+        "trimStartMs": 19.31972789115646
+      },
+      {
+        "source": "cards",
+        "file": "Audio/card-place-2.ogg",
+        "lengthMs": 220,
+        "weight": 0.45,
+        "atMs": 17,
+        "lowpassHz": 0,
+        "sourceFileSha256": "903d5050718595e87864dd755643b476ab1a5533080dcc2dddc72570d33ba9f8",
+        "trimStartMs": 41.60997732426304
+      }
+    ],
+    "own_channel_switch": [
+      {
+        "source": "kenney",
+        "file": "Audio/switch_001.ogg",
+        "lengthMs": 100,
+        "weight": 0.8,
+        "atMs": 0,
+        "lowpassHz": 0,
+        "sourceFileSha256": "3b74efad87f1e69dbd1d05c5ad952ab90859b5a3d11da6ec5bd79b4f03b42afa",
+        "trimStartMs": 0.0
+      },
+      {
+        "source": "cards",
+        "file": "Audio/card-slide-1.ogg",
+        "lengthMs": 115,
+        "weight": 1,
+        "atMs": 78,
+        "lowpassHz": 0,
+        "sourceFileSha256": "006cf9822d15d7063f8899e56041f41646df30adb6fbd8b974ee5d5420012690",
+        "trimStartMs": 107.3015873015873
+      }
+    ],
+    "own_channel_leave": [
+      {
+        "source": "ui",
+        "file": "Audio/switch11.ogg",
+        "lengthMs": 125,
+        "weight": 1,
+        "atMs": 0,
+        "lowpassHz": 0,
+        "sourceFileSha256": "a8d445bd96fe3842ff2dcdd42ae728330baa8928032ca5f3d5cd4b926929550a",
+        "trimStartMs": 58.34467120181406
+      },
+      {
+        "source": "cards",
+        "file": "Audio/card-place-1.ogg",
+        "lengthMs": 125,
+        "weight": 0.4,
+        "atMs": 20,
+        "lowpassHz": 0,
+        "sourceFileSha256": "d8f26c33a665dcbdcc6f632f6050bc9dd548feb0d4942d4547615926d3926810",
+        "trimStartMs": 85.26077097505669
+      }
+    ],
+    "user_join": [
+      {
+        "source": "kenney",
+        "file": "Audio/select_001.ogg",
+        "lengthMs": 50,
+        "weight": 1,
+        "atMs": 0,
+        "lowpassHz": 0,
+        "sourceFileSha256": "aec0c31ea934a35936ae0d2ab8fac8123c93aa5647f935853a58dbaf90278b7a",
+        "trimStartMs": 0.0
+      }
+    ],
+    "user_leave": [
+      {
+        "source": "cards",
+        "file": "Audio/card-place-1.ogg",
+        "lengthMs": 90,
+        "weight": 1,
+        "atMs": 0,
+        "lowpassHz": 0,
+        "sourceFileSha256": "d8f26c33a665dcbdcc6f632f6050bc9dd548feb0d4942d4547615926d3926810",
+        "trimStartMs": 85.26077097505669
+      }
+    ],
+    "user_move_in": [
+      {
+        "source": "kenney",
+        "file": "Audio/switch_004.ogg",
+        "lengthMs": 115,
+        "weight": 1,
+        "atMs": 0,
+        "lowpassHz": 7000,
+        "sourceFileSha256": "541c19cc1ab712a9efc5765df602e7d0da09d9cafdd297ce1e19b092289fd62f",
+        "trimStartMs": 0.0
+      }
+    ],
+    "user_move_out": [
+      {
+        "source": "ui",
+        "file": "Audio/rollover4.ogg",
+        "lengthMs": 80,
+        "weight": 1,
+        "atMs": 0,
+        "lowpassHz": 4500,
+        "sourceFileSha256": "8b70e47aa1d51d220a3609a02cc50ceed6e05a20f51c6f8daaf5fd83eae42cf3",
+        "trimStartMs": 40.9297052154195
+      }
+    ],
+    "mic_on": [
+      {
+        "source": "kenney",
+        "file": "Audio/switch_002.ogg",
+        "lengthMs": 125,
+        "weight": 1,
+        "atMs": 0,
+        "lowpassHz": 0,
+        "sourceFileSha256": "6fc395be2ad1f99ce318a5d28f98fb76dbeb676d83a0b28239d8c1fb90736180",
+        "trimStartMs": 0.0
+      }
+    ],
+    "mic_off": [
+      {
+        "source": "kenney",
+        "file": "Audio/switch_007.ogg",
+        "lengthMs": 135,
+        "weight": 1,
+        "atMs": 0,
+        "lowpassHz": 4800,
+        "sourceFileSha256": "eeaf60c2abc7e1b715e2b032401bcbf6b3753b77f96b238f861a034a75515967",
+        "trimStartMs": 0.0
+      }
+    ],
+    "deafen_on": [
+      {
+        "source": "kenney",
+        "file": "Audio/toggle_001.ogg",
+        "lengthMs": 135,
+        "weight": 1,
+        "atMs": 0,
+        "lowpassHz": 2800,
+        "sourceFileSha256": "ca1d2dde5f0b286abac4f070e23edab8f30927c8a533665cdf2ac6492a415e49",
+        "trimStartMs": 0.0
+      }
+    ],
+    "deafen_off": [
+      {
+        "source": "kenney",
+        "file": "Audio/toggle_004.ogg",
+        "lengthMs": 70,
+        "weight": 0.8,
+        "atMs": 0,
+        "lowpassHz": 0,
+        "sourceFileSha256": "d7bf2236fc95a0fe1e3b278259392bcb062644e2d4ec5f9c96f7c09a9928262f",
+        "trimStartMs": 0.0
+      },
+      {
+        "source": "kenney",
+        "file": "Audio/select_002.ogg",
+        "lengthMs": 45,
+        "weight": 0.55,
+        "atMs": 65,
+        "lowpassHz": 0,
+        "sourceFileSha256": "4cc6ac5341b9b2c86fef80c347de028e9ab9f2e037586ac7d9fa59a403a1c012",
+        "trimStartMs": 0.0
+      }
+    ],
+    "ptt_on": [
+      {
+        "source": "ui",
+        "file": "Audio/click4.ogg",
+        "lengthMs": 30,
+        "weight": 1,
+        "atMs": 0,
+        "lowpassHz": 5000,
+        "sourceFileSha256": "9c02bbfc872b50eb8750adf4b7c343120f19f5d2f04ab06a7a8948368a77b872",
+        "trimStartMs": 0.0
+      }
+    ],
+    "ptt_off": [
+      {
+        "source": "kenney",
+        "file": "Audio/click_003.ogg",
+        "lengthMs": 10,
+        "weight": 1,
+        "atMs": 0,
+        "lowpassHz": 4500,
+        "sourceFileSha256": "2fa929138bc3a0f432696588f66eac94b8f6d463905ec8808c6461ce4b054292",
+        "trimStartMs": 0.0
+      }
+    ],
+    "mention": [
+      {
+        "source": "paper",
+        "file": "WAV/Paper Sound - 2.wav",
+        "lengthMs": 130,
+        "weight": 0.55,
+        "atMs": 0,
+        "lowpassHz": 5500,
+        "sourceFileSha256": "7b670c269c463c308c8808a7d3bad5116fbd7a55c7e26d0b9064627f4c576b03",
+        "trimStartMs": 0.0
+      },
+      {
+        "source": "ui",
+        "file": "Audio/click2.ogg",
+        "lengthMs": 55,
+        "weight": 1,
+        "atMs": 145,
+        "lowpassHz": 0,
+        "sourceFileSha256": "c394b46bc6737f7f7edfbfa3031ce621b7a43d498d456d6198364eee9cd3e306",
+        "trimStartMs": 0.0
+      }
+    ],
+    "keyword": [
+      {
+        "source": "cards",
+        "file": "Audio/card-slide-5.ogg",
+        "lengthMs": 165,
+        "weight": 1,
+        "atMs": 0,
+        "lowpassHz": 6000,
+        "sourceFileSha256": "8638ab0c17f029aded0e27a4f9b9bb9f8c621b19a6e9975e855cb40ea63e2201",
+        "trimStartMs": 6.870748299319728
+      }
+    ],
+    "dm": [
+      {
+        "source": "cards",
+        "file": "Audio/card-place-3.ogg",
+        "lengthMs": 180,
+        "weight": 1,
+        "atMs": 0,
+        "lowpassHz": 0,
+        "sourceFileSha256": "1d988631a6e5201ed1bb0d728f2e43a3ec79401258426858793598044ac95841",
+        "trimStartMs": 295.51020408163265
+      },
+      {
+        "source": "ui",
+        "file": "Audio/click1.ogg",
+        "lengthMs": 50,
+        "weight": 0.3,
+        "atMs": 0,
+        "lowpassHz": 0,
+        "sourceFileSha256": "59175ac17cd49a68dd736285738441287636112a84a6f7ce0d89921bda5a5360",
+        "trimStartMs": 0.5668934240362812
+      }
+    ],
+    "channel_message": [
+      {
+        "source": "ui",
+        "file": "Audio/click1.ogg",
+        "lengthMs": 70,
+        "weight": 1,
+        "atMs": 0,
+        "lowpassHz": 0,
+        "sourceFileSha256": "59175ac17cd49a68dd736285738441287636112a84a6f7ce0d89921bda5a5360",
+        "trimStartMs": 0.5668934240362812
+      }
+    ],
+    "whisper": [
+      {
+        "source": "paper",
+        "file": "WAV/Paper Sound - 1.wav",
+        "lengthMs": 85,
+        "weight": 0.35,
+        "atMs": 0,
+        "lowpassHz": 3200,
+        "sourceFileSha256": "d04ac578637259182dc4c9e03664217d9c80c0da90d5784563dbe43bd6a264cc",
+        "trimStartMs": 0.0
+      },
+      {
+        "source": "kenney",
+        "file": "Audio/click_002.ogg",
+        "lengthMs": 10,
+        "weight": 1,
+        "atMs": 85,
+        "lowpassHz": 0,
+        "sourceFileSha256": "adcd1f4adc35f1b41bc1b5bbefeff7aa44f2f3f0d96d3199b544140c7c1e761c",
+        "trimStartMs": 0.0
+      }
+    ],
+    "poke": [
+      {
+        "source": "ui",
+        "file": "Audio/switch30.ogg",
+        "lengthMs": 150,
+        "weight": 1,
+        "atMs": 0,
+        "lowpassHz": 0,
+        "sourceFileSha256": "d220abb5218fccc6d37649e17e7cce2a4e253f474332d9ea2b0f0518264aff5a",
+        "trimStartMs": 118.73015873015873
+      }
+    ],
+    "join_leave": [
+      {
+        "source": "kenney",
+        "file": "Audio/select_002.ogg",
+        "lengthMs": 45,
+        "weight": 1,
+        "atMs": 0,
+        "lowpassHz": 0,
+        "sourceFileSha256": "4cc6ac5341b9b2c86fef80c347de028e9ab9f2e037586ac7d9fa59a403a1c012",
+        "trimStartMs": 0.0
+      },
+      {
+        "source": "cards",
+        "file": "Audio/card-place-1.ogg",
+        "lengthMs": 60,
+        "weight": 0.3,
+        "atMs": 17,
+        "lowpassHz": 0,
+        "sourceFileSha256": "d8f26c33a665dcbdcc6f632f6050bc9dd548feb0d4942d4547615926d3926810",
+        "trimStartMs": 85.26077097505669
+      }
+    ],
+    "buddy_online": [
+      {
+        "source": "ui",
+        "file": "Audio/switch17.ogg",
+        "lengthMs": 95,
+        "weight": 1,
+        "atMs": 0,
+        "lowpassHz": 0,
+        "sourceFileSha256": "d09974d4cf5ccb2d75647e2464cd424e7e3c7a0374e73e8a22577662031a3677",
+        "trimStartMs": 101.74603174603175
+      },
+      {
+        "source": "cards",
+        "file": "Audio/card-place-1.ogg",
+        "lengthMs": 140,
+        "weight": 0.3,
+        "atMs": 26,
+        "lowpassHz": 0,
+        "sourceFileSha256": "d8f26c33a665dcbdcc6f632f6050bc9dd548feb0d4942d4547615926d3926810",
+        "trimStartMs": 85.26077097505669
+      }
+    ],
+    "kick": [
+      {
+        "source": "ui",
+        "file": "Audio/switch32.ogg",
+        "lengthMs": 200,
+        "weight": 1,
+        "atMs": 0,
+        "lowpassHz": 5000,
+        "sourceFileSha256": "b740f507ad386a1d09bb5ca69a75231656a71375df11348fcd2d5e323b8d6727",
+        "trimStartMs": 111.11111111111111
+      }
+    ],
+    "ban": [
+      {
+        "source": "ui",
+        "file": "Audio/switch24.ogg",
+        "lengthMs": 100,
+        "weight": 0.8,
+        "atMs": 0,
+        "lowpassHz": 0,
+        "sourceFileSha256": "aec5e91eef35c4a64d3bec7a25e54a68fa0448f4cf3179455e18c72c3dda60e9",
+        "trimStartMs": 82.24489795918367
+      },
+      {
+        "source": "ui",
+        "file": "Audio/switch22.ogg",
+        "lengthMs": 120,
+        "weight": 1,
+        "atMs": 150,
+        "lowpassHz": 0,
+        "sourceFileSha256": "913261ad55fa0692902e4027a7a139844e7589d30c4286ab10e6d637f28b1d9f",
+        "trimStartMs": 71.49659863945578
+      },
+      {
+        "source": "paper",
+        "file": "WAV/Paper Crushed - 2.wav",
+        "lengthMs": 110,
+        "weight": 0.5,
+        "atMs": 150,
+        "lowpassHz": 4000,
+        "sourceFileSha256": "2e9c9fd45abffbad091dca44ea5219a9d0dd9c55db5535ff1c65c0a1b03afb6e",
+        "trimStartMs": 0.0
+      }
+    ],
+    "announcement": [
+      {
+        "source": "cards",
+        "file": "Audio/card-place-4.ogg",
+        "lengthMs": 200,
+        "weight": 0.65,
+        "atMs": 0,
+        "lowpassHz": 0,
+        "sourceFileSha256": "18e3ba713b7259605fd27cdc048085ed56cf86b32403f070b6cb125019f77183",
+        "trimStartMs": 0.0
+      },
+      {
+        "source": "ui",
+        "file": "Audio/click3.ogg",
+        "lengthMs": 60,
+        "weight": 1,
+        "atMs": 165,
+        "lowpassHz": 0,
+        "sourceFileSha256": "e3e7fc7ccd9c5cfdf77bffa05aee10d4973812076c76dc889ba2b16ea434127f",
+        "trimStartMs": 21.882086167800452
+      }
+    ],
+    "channel_watch": [
+      {
+        "source": "kenney",
+        "file": "Audio/select_007.ogg",
+        "lengthMs": 45,
+        "weight": 0.6,
+        "atMs": 0,
+        "lowpassHz": 4500,
+        "sourceFileSha256": "cd4390dd2b24f09016a5fa1be63334fa0f1859811f4cf29c02e8e2750f6a2cd0",
+        "trimStartMs": 0.0
+      },
+      {
+        "source": "ui",
+        "file": "Audio/rollover2.ogg",
+        "lengthMs": 60,
+        "weight": 0.7,
+        "atMs": 45,
+        "lowpassHz": 0,
+        "sourceFileSha256": "d0bc0fcba496d73df1da8c145e5330df75f87ab5a4f33a9b71461b006b5c338e",
+        "trimStartMs": 20.34013605442177
+      }
+    ]
+  }
+}

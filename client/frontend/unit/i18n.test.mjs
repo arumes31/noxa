@@ -138,7 +138,7 @@ describe("applyStaticLabels", () => {
 
         assert.deepEqual(
             labels.map((label) => label.firstChild.textContent),
-            ["SERVER ", "SPITZNAME ", "SERVER-PASSWORT "],
+            ["SERVER ", "SPITZNAME ", "Server-Passwort (optional) "],
         );
         assert.equal(connect.textContent, "VERBINDEN");
         assert.equal(paneHeads[1].textContent, "LETZTE SERVER");

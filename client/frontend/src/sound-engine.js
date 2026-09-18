@@ -10,8 +10,8 @@ export function soundVolume(value) {
 // This avoids compressor lookahead on the PTT path and gain-dependent distortion.
 export class SoundEngine {
     constructor({ getState, isDND, createContext, load, now = () => performance.now(), warn = console.warn,
-        definitions = SOUND_DEFINITIONS, urls = SOUND_URLS }) {
-        Object.assign(this, { getState, isDND, createContext, load, now, warn });
+        definitions = SOUND_DEFINITIONS, urls = SOUND_URLS, onStatusChange = () => {} }) {
+        Object.assign(this, { getState, isDND, createContext, load, now, warn, onStatusChange });
         this.definitions = definitions;
         this.urls = urls;
         this.buffers = new Map();
@@ -23,6 +23,8 @@ export class SoundEngine {
         this.ctx = null;
         this.output = Promise.resolve();
         this.requestedSink = undefined;
+        this.outputReady = false;
+        this.outputState = "uninitialized";
         this.generation = 0;
         this.disposed = false;
     }
@@ -30,7 +32,7 @@ export class SoundEngine {
     report(kind) {
         if (this.warnings.has(kind)) return;
         this.warnings.add(kind);
-        this.warn(`NOXA sound: ${kind}`);
+        this.warn(`noXa sound: ${kind}`);
     }
 
     context() {
@@ -38,24 +40,31 @@ export class SoundEngine {
         try {
             if (!this.ctx || this.ctx.state === "closed") {
                 this.ctx = this.createContext();
+                this.ctx.addEventListener?.("statechange", this.onStatusChange);
                 this.requestedSink = undefined;
             }
             return this.ctx;
-        } catch { this.report("audio context unavailable"); return null; }
+        } catch { this.setOutputState("unavailable"); this.report("audio context unavailable"); return null; }
     }
 
-    async preload() {
+    async preload(names = Object.keys(this.definitions)) {
         const ctx = this.context();
         if (!ctx) return;
         const generation = this.generation;
-        await Promise.all(Object.keys(this.definitions).map((name) => {
+        await this.setOutput(this.getState()?.settings?.playback_device_id);
+        await Promise.all(names.map((name) => {
+            if (!Object.hasOwn(this.definitions, name)) return undefined;
             if (this.buffers.has(name)) return undefined;
             if (!this.loading.has(name)) {
                 const task = Promise.resolve().then(() => this.load(this.urls[name]))
                     .then(data => ctx.decodeAudioData(data))
                     .then(buffer => {
                         if (!this.disposed && generation === this.generation) this.buffers.set(name, buffer);
-                    }).catch(() => this.report(`could not load ${name}`));
+                    }).catch(() => this.report(`could not load ${name}`))
+                    .finally(() => {
+                        if (this.loading.get(name) === task) this.loading.delete(name);
+                        this.onStatusChange();
+                    });
                 this.loading.set(name, task);
             }
             return this.loading.get(name);
@@ -81,48 +90,105 @@ export class SoundEngine {
         const sink = typeof id === "string" ? id : "";
         if (this.requestedSink === sink) return this.output;
         this.requestedSink = sink;
+        this.outputReady = false;
+        this.setOutputState("routing");
+        let routed = false;
+        let fallback = false;
         this.output = this.output.then(async () => {
-            if (this.disposed || ctx !== this.ctx) return;
+            if (this.disposed || ctx !== this.ctx || this.requestedSink !== sink) return;
             if (typeof ctx.setSinkId !== "function") {
+                fallback = !!sink;
                 if (sink) this.report("this WebView uses the default sound output");
+                routed = true;
                 return;
             }
-            try { await ctx.setSinkId(sink); }
+            try { await ctx.setSinkId(sink); routed = true; }
             catch {
+                fallback = true;
                 this.report("selected output unavailable; using system default");
-                try { await ctx.setSinkId(""); } catch { this.report("output routing unavailable"); }
+                try { await ctx.setSinkId(""); routed = true; } catch { this.report("output routing unavailable"); }
             }
-        }).catch(() => this.report("output routing unavailable"));
+        }).catch(() => this.report("output routing unavailable"))
+            .finally(() => {
+                if (!this.disposed && ctx === this.ctx && this.requestedSink === sink) {
+                    this.outputReady = routed;
+                    this.setOutputState(routed ? (fallback ? "fallback" : "ready") : "unavailable");
+                }
+            });
         return this.output;
     }
 
-    allowed(name, options) {
+    setOutputState(status) {
+        if (this.outputState === status) return;
+        this.outputState = status;
+        this.onStatusChange();
+    }
+
+    blockReason(name, options = {}, playback = true) {
         const state = this.getState();
         const settings = options.settings || state?.settings;
-        return !!settings && !this.isDND()
-            && settings.event_sounds?.[name] !== false
-            && (options.force || (settings.play_sounds !== false && !state?.replayingTabID));
+        const def = this.definitions[name];
+        if (!Object.hasOwn(this.definitions, name) || !settings) return "unavailable";
+        if (!options.preview && settings.play_sounds === false) return "master_muted";
+        if (!options.preview && state?.replayingTabID) return "history";
+        if (this.isDND(settings)) return "dnd";
+        if (def.category !== "Speech" && settings.effects_enabled === false) return "effects_disabled";
+        if (settings.event_sounds?.[name] === false) return "event_disabled";
+        if (!soundVolume(options.volume ?? settings.sound_volume)) return "volume_zero";
+        if (playback) {
+            if (this.outputState === "unavailable") return "output_unavailable";
+            if (this.outputState === "routing") return "routing";
+            if (this.ctx?.state !== "running") return "suspended";
+            if (!this.buffers.has(name)) return this.warnings.has(`could not load ${name}`) ? "load_failed" : "loading";
+        }
+        return "";
+    }
+
+    allowed(name, options) { return !this.blockReason(name, options, false); }
+
+    duckFactor(settings) {
+        const state = this.getState();
+        return settings?.duck_effects_while_speaking && state?.myChannelID > 0
+            && state.clients?.some(client => client.channel_id === state.myChannelID && client.is_speaking) ? .35 : 1;
+    }
+
+    updateDucking() {
+        for (const entry of this.active) {
+            if (!entry.duckEligible) continue;
+            const volume = entry.baseVolume * this.duckFactor(entry.settings || this.getState()?.settings);
+            if (entry.volume === volume) continue;
+            const now = this.ctx.currentTime, param = entry.gain.gain;
+            param.cancelScheduledValues?.(now);
+            param.setValueAtTime(param.value, now);
+            param.linearRampToValueAtTime(volume, now + .015);
+            entry.volume = volume;
+        }
     }
 
     play(name, options = {}) {
         if (!Object.hasOwn(this.definitions, name) || !this.allowed(name, options)) return false;
         const settings = options.settings || this.getState().settings;
-        const volume = soundVolume(options.volume ?? settings.sound_volume);
-        if (!volume) return false;
         const def = this.definitions[name];
+        const baseVolume = soundVolume(options.volume ?? settings.sound_volume) * (def.gain ?? 1);
+        if (!baseVolume) return false;
+        const duckEligible = def.category !== "Speech" && def.priority < 3;
+        const volume = baseVolume * (duckEligible ? this.duckFactor(settings) : 1);
         const time = this.now();
-        const key = def.category === "Other users" ? "movement" : name;
-        if (!options.force && time - (this.last.get(key) ?? -Infinity) < def.cooldown) return false;
+        const state = this.getState();
+        const scope = options.scope ?? `${state?.activeTabID || ""}:${state?.serverGeneration || 0}`;
+        const key = scope + ":" + (def.category === "Other users" ? "movement" : name);
+        if (!options.preview && time - (this.last.get(key) ?? -Infinity) < def.cooldown) return false;
         const ctx = this.context();
         if (!ctx) return false;
         // Never queue a stale PTT transition or replay an event after autoplay
         // unlock. Startup/gesture preloading prepares subsequent live actions.
         if (!this.buffers.has(name) || ctx.state !== "running") {
-            void this.preload();
+            void this.preload([name]);
             void this.resume();
             return false;
         }
         void this.setOutput(settings.playback_device_id);
+        if (!this.outputReady) return false;
         // Audio advances independently of the main thread. Reclaim completed
         // fades even when a burst delays delivery of their ended callbacks.
         for (const entry of this.retiring) {
@@ -130,11 +196,11 @@ export class SoundEngine {
         }
         const family = name.startsWith("ptt_") ? "ptt" : name;
         for (const entry of this.active) {
-            if (entry.family === family) this.retire(entry);
+            if (entry.family === family && entry.scope === scope) this.retire(entry);
         }
         if (this.active.size >= 4) {
             const victim = [...this.active].sort((a, b) => a.priority - b.priority)[0];
-            if (!options.force && victim.priority > def.priority) return false;
+            if (!options.preview && victim.priority > def.priority) return false;
             this.retire(victim);
         }
         let source, gain;
@@ -147,11 +213,13 @@ export class SoundEngine {
             // Reserve the slot while its previous cue fades. Rapid replacements
             // cancel unstarted sources, so no burst can accumulate audible tails.
             const startAt = Math.max(ctx.currentTime, ...[...this.retiring].map(e => e.stopAt));
-            const entry = { source, gain, family, startAt, volume, priority: def.priority, preview: !!options.force };
-            source.onended = () => { this.release(entry, false); options.onEnded?.(); };
+            const entry = { source, gain, family, scope, startAt, volume, baseVolume, duckEligible, settings: options.settings,
+                priority: def.priority, preview: !!options.preview, onEnded: options.onEnded };
+            source.onended = () => this.release(entry, false);
             this.active.add(entry);
             source.start(startAt);
             this.last.set(key, time);
+            if (this.last.size > 256) this.last.delete(this.last.keys().next().value);
             return true;
         } catch {
             for (const entry of this.active) if (entry.source === source) this.release(entry);
@@ -162,11 +230,14 @@ export class SoundEngine {
     }
 
     release(entry, stop = true) {
+        if (entry.released) return;
+        entry.released = true;
         this.active.delete(entry);
         this.retiring.delete(entry);
         entry.source.onended = null;
         try { if (stop) entry.source.stop(); } catch { /* already ended */ }
         try { entry.source.disconnect(); entry.gain.disconnect(); } catch { /* detached */ }
+        entry.onEnded?.();
     }
 
     retire(entry) {

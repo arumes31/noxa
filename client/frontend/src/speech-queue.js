@@ -12,6 +12,7 @@ export const SPEECH_EVENTS = {
 };
 
 export function speechLanguage(settings, systemLanguage = "en") {
+    if (["en", "de"].includes(settings?.speech_language)) return settings.speech_language;
     const language = settings?.language;
     const selected = language === "system" || !language ? systemLanguage : language;
     return typeof selected === "string" && selected.toLowerCase().startsWith("de") ? "de" : "en";
@@ -25,25 +26,55 @@ export class SpeechQueue {
 
     allowed(event, settings, preview) {
         const def = SPEECH_EVENTS[event];
-        if (!def || !settings || this.isDND() || settings.spoken_messages === false) return false;
+        if (!def || !settings || this.isDND(settings) || settings.spoken_messages === false) return false;
         if (!preview && (settings.play_sounds === false || this.getState()?.replayingTabID)) return false;
         if (settings.speech_events?.[event] === false || settings.event_sounds?.[def.effect] === false) return false;
         if (def.matrix && (settings.notify_matrix?.[def.matrix]?.sound === false || settings.event_sounds?.[def.matrix] === false)) return false;
+        if (event === "permission_denied" && settings.speech_permissions === false) return false;
+        if (["banned", "kicked", "kicked_channel"].includes(event) && settings.speech_removal === false) return false;
         return def.category === "test" || settings["speech_" + def.category] !== false;
     }
 
-    enqueue(event, { settings, preview = false, delay = 150 } = {}) {
+    scope() {
+        const state = this.getState();
+        return `${state?.activeTabID || ""}:${state?.serverGeneration || 0}`;
+    }
+
+    hasLiveSpeech() {
+        return (this.current && !this.current.preview) || this.pending.some(item => !item.preview);
+    }
+
+    enqueue(event, { settings, preview = false, delay = 150, withEffect = false, effect, onEnded } = {}) {
         if (!Object.hasOwn(SPEECH_EVENTS, event)) return false;
+        if (preview && this.hasLiveSpeech()) return false;
+        if (!preview) this.stopPreview();
         const selected = settings || this.getState()?.settings;
-        if (!this.allowed(event, selected, preview)) return false;
-        const now = this.now(), def = SPEECH_EVENTS[event];
-        if (!preview && this.current?.priority > def.priority) return false;
-        if (!preview && now - (this.last.get(event) ?? -Infinity) < 10000) return false;
-        this.last.set(event, now);
+        const now = this.now(), def = SPEECH_EVENTS[event], scope = this.scope();
+        const key = scope + ":" + event;
+        const coolingDown = !preview && now - (this.last.get(key) ?? -Infinity) < 10000;
+        const item = { event, scope, priority: def.priority, settings, preview, onEnded,
+            ready: now + delay, expires: now + 8000, waitingEffect: false };
+        let effectPlayed = false;
+        if (withEffect && (!def.matrix || (selected?.notify_matrix?.[def.matrix]?.sound !== false && selected?.event_sounds?.[def.matrix] !== false))) {
+            item.waitingEffect = true;
+            effectPlayed = this.engine.play(effect || def.effect, { settings: selected, scope,
+                onEnded: () => {
+                    item.waitingEffect = false;
+                    item.ready = Math.max(item.ready, this.now() + 150);
+                    this.pump();
+                } });
+            if (!effectPlayed) item.waitingEffect = false;
+        }
+        if (coolingDown || !this.allowed(event, selected, preview)) return effectPlayed;
+        if (!preview && this.current?.scope === scope && this.current?.priority > def.priority) return effectPlayed;
+        if (!preview) {
+            this.last.set(key, now);
+            while (this.last.size > 128) this.last.delete(this.last.keys().next().value);
+        }
         // Terminal/high-priority messages replace obsolete connection/admin speech.
-        this.pending = this.pending.filter(item => item.priority > def.priority);
-        if (this.current && (preview || def.priority > this.current.priority)) this.stopCurrent();
-        this.pending.push({ event, priority: def.priority, settings, preview, ready: now + delay, expires: now + 8000 });
+        this.pending = this.pending.filter(entry => entry.scope !== scope || entry.priority > def.priority);
+        if (this.current && (preview || (this.current.scope === scope && def.priority > this.current.priority))) this.stopCurrent();
+        this.pending.push(item);
         this.pending.sort((a, b) => b.priority - a.priority);
         this.pending = this.pending.slice(0, 3);
         this.pump();
@@ -56,26 +87,33 @@ export class SpeechQueue {
         while (this.pending.length) {
             const item = this.pending[0], now = this.now();
             const settings = item.settings || this.getState()?.settings;
-            if (item.expires < now || !this.allowed(item.event, settings, item.preview)) { this.pending.shift(); continue; }
+            if (item.expires < now || (!item.preview && item.scope !== this.scope()) || !this.allowed(item.event, settings, item.preview)) { this.pending.shift(); item.onEnded?.(); continue; }
+            if (item.waitingEffect) {
+                this.timer = this.schedule(() => this.pump(), Math.max(1, item.expires - now + 1));
+                return;
+            }
             if (item.ready > now) { this.timer = this.schedule(() => this.pump(), item.ready - now); return; }
             this.pending.shift();
             const language = speechLanguage(settings, this.systemLanguage());
             const clip = this.assets[language]?.[item.event];
-            if (!clip) continue; // No other-language or generated fallback.
+            if (!clip) { item.onEnded?.(); continue; } // No other-language or generated fallback.
             const id = "speech_" + language + "_" + item.event;
             this.current = { ...item, id };
             const playing = this.current;
-            const played = this.engine.play(id, { force: item.preview, settings, volume: settings.speech_volume ?? 100,
-                onEnded: () => { if (this.current === playing) { this.current = null; this.pump(); } } });
+            const played = this.engine.play(id, { preview: item.preview, settings, scope: item.scope, volume: settings.speech_volume ?? 100,
+                onEnded: () => { if (this.current === playing) { this.current = null; item.onEnded?.(); this.pump(); } } });
             if (played) return;
             this.current = null;
+            item.onEnded?.();
         }
     }
 
     stopCurrent() {
         if (this.current) {
-            for (const entry of this.engine.active) if (entry.family === this.current.id) this.engine.retire(entry);
+            const stopped = this.current;
             this.current = null;
+            for (const entry of this.engine.active) if (entry.family === stopped.id) this.engine.retire(entry);
+            stopped.onEnded?.();
         }
     }
 

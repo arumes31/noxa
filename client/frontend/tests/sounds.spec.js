@@ -1,5 +1,27 @@
 import { test, expect } from "@playwright/test";
 
+test("rejected previews cannot reroute a pending live announcement", async ({ page }) => {
+    await page.goto("/");
+    const result = await page.evaluate(async () => {
+        window.__noxa = { state: { settings: { play_sounds: true, spoken_messages: true, sound_volume: 100 }, activeTabID: "one" } };
+        window.__noxaPolish = { dndActive: () => false };
+        const { soundEngine, speechQueue, previewSpeech, previewSounds } = await import("/src/sounds.js");
+        await soundEngine.preload(); await soundEngine.resume();
+        speechQueue.enqueue("kicked", { delay: 2000 });
+        const routes = [];
+        const original = soundEngine.setOutput.bind(soundEngine);
+        soundEngine.setOutput = id => { routes.push(id); return original(id); };
+        const draft = { ...window.__noxa.state.settings, playback_device_id: "draft-speakers" };
+        await previewSpeech(draft, ["banned"]);
+        await previewSounds(["ban"], draft);
+        const pending = speechQueue.pending.map(item => item.event);
+        speechQueue.clear(); await soundEngine.dispose();
+        return { routes, pending };
+    });
+    expect(result.routes).toEqual([]);
+    expect(result.pending).toEqual(["kicked"]);
+});
+
 test("static speech decodes and frequent contact cues survive mandatory repetition", async ({ page }) => {
     test.setTimeout(120000);
     await page.goto("/");
@@ -17,7 +39,7 @@ test("static speech decodes and frequent contact cues survive mandatory repetiti
         const counts={};
         for(const [events,repetitions] of [[["ptt_on","ptt_off"],100],[["user_join"],50],[["user_leave"],50],[["channel_message"],50],[["mic_on","mic_off"],50],[["own_channel_switch"],30]]){
             for(let i=0;i<repetitions;i++)for(const event of events){
-                if(!engine.play(event,{force:true}))throw Error(event+" failed");
+                if(!engine.play(event,{preview:true}))throw Error(event+" failed");
                 counts[event]=(counts[event]||0)+1;
                 await new Promise(resolve=>setTimeout(resolve,SOUND_DEFINITIONS[event].duration*1000+30));
             }
@@ -29,7 +51,7 @@ test("static speech decodes and frequent contact cues survive mandatory repetiti
     expect(result.counts).toEqual({ptt_on:100,ptt_off:100,user_join:50,user_leave:50,channel_message:50,mic_on:50,mic_off:50,own_channel_switch:30});
 });
 
-test("original sound set decodes, completes Test All, and releases all source nodes", async ({ page }) => {
+test("replacement sound set decodes, completes Test All, and releases all source nodes", async ({ page }) => {
     await page.goto("/");
     const result = await page.evaluate(async () => {
         window.__noxa = { state: { settings: { play_sounds: false, sound_volume: 100 } } };
@@ -53,7 +75,7 @@ test("original sound set decodes, completes Test All, and releases all source no
             return node;
         };
         for (const name of SOUND_EVENTS) {
-            if (!engine.play(name, { force: true })) throw Error("Preview failed: " + name);
+            if (!engine.play(name, { preview: true })) throw Error("Preview failed: " + name);
             await new Promise(r => setTimeout(r, 500));
         }
         const active = engine.active.size;

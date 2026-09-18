@@ -17,7 +17,7 @@
             <h1 id="login-title" class="wordmark"><img class="login-logo" src="/branding/logo.png" width="56" height="56" alt="" />noXa</h1>
             <label for="login-addr">SERVER <input id="login-addr" value="127.0.0.1:12333" autocomplete="url" spellcheck="false" /></label>
             <label for="login-nick">NICKNAME <input id="login-nick" placeholder="nickname" autocomplete="nickname" /></label>
-            <label for="login-serverpw">SERVER PASSWORD <input id="login-serverpw" type="password" placeholder="if required" autocomplete="off" /></label>
+            <label for="login-serverpw">Server password (optional) <input id="login-serverpw" type="password" placeholder="if required" autocomplete="off" /></label>
             <button id="login-connect" type="submit">CONNECT</button>
             <div id="login-error" role="alert" aria-live="assertive"></div>
             <div class="pane-head">RECENT SERVERS</div>
@@ -107,9 +107,9 @@
             <div id="file-preview-row" class="hidden"></div>
             <div id="chat-input-row">
                 <select id="chat-scope" aria-label="Message scope">
-                    <option value="channel">channel</option>
-                    <option value="global">global</option>
-                    <option value="direct">direct</option>
+                    <option value="channel">This channel</option>
+                    <option value="global">Entire server</option>
+                    <option value="direct">Direct message</option>
                 </select>
                 <div id="chat-target-picker" class="hidden">
                     <input id="chat-target" placeholder="find connected member or enter UID" role="combobox" aria-label="Direct message recipient" aria-autocomplete="list" aria-expanded="false" aria-controls="chat-target-options" autocomplete="off" />
@@ -148,12 +148,13 @@
                 <button id="voice-video" class="voice-control" title="Camera" aria-label="Camera" aria-pressed="false"></button>
                 <button id="voice-screen" class="voice-control" title="Start sharing" aria-label="Start sharing" aria-pressed="false"></button>
                 <details id="voice-options"><summary class="voice-control" aria-label="Voice options">Voice options</summary><div class="voice-options-menu">
+                    <dl class="voice-devices"><dt id="voice-input-label">Microphone</dt><dd id="voice-input-device"></dd><dt id="voice-output-label">Audio output</dt><dd id="voice-output-device"></dd></dl>
                     <button id="voice-settings" class="voice-control" type="button"></button>
                     <button id="voice-prio" class="voice-control" title="Priority speaker" aria-label="Priority speaker" aria-pressed="false">Priority speaker</button>
                     <button id="voice-lowbw" class="voice-control" title="Low-bandwidth mode" aria-label="Low-bandwidth mode" aria-pressed="false">Low bandwidth</button>
                     <span id="hotkey-status" role="status" aria-live="polite"></span>
                 </div></details>
-                <button id="voice-disconnect" class="voice-control" type="button"></button>
+                <span class="voice-disconnect-group"><button id="voice-leave-channel" class="voice-control" type="button"></button><button id="voice-disconnect" class="voice-control" type="button"></button></span>
             </div>
             <div class="voice-info"><div class="voice-summary"><div id="voice-status" role="status" aria-live="polite">Voice disconnected</div><button id="voice-latency" type="button" aria-haspopup="dialog" hidden></button></div><span id="conn-pill" class="pill">offline</span><div id="mic-meter" class="hidden"><div class="mic-fill cool"></div></div></div>
             <div id="mic-status" class="warn" role="status" aria-live="polite"></div>

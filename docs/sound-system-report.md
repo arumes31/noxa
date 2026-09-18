@@ -1,164 +1,123 @@
-# NOXA static sound and speech redesign
+# noXa static sound and speech rework
 
-Implemented on codex/audio-update. Runtime audio is a player: 32 finished sound-effect WAVs and 18 finished speech WAVs. All creative synthesis and TTS happens in development tools. There is no runtime oscillator, noise generator, pitch transformation, speech synthesis, TTS service, model download or generated fallback.
+## Status
 
-**Verification status:** automated checks and the Windows production build passed. Final native multi-client UI testing was blocked by a Computer Use app-approval timeout. Subjective headphone/speaker listening and cross-platform native verification remain incomplete. Those acceptance criteria are not certified by this report.
+The implementation ships 32 replacement effects and 18 newly rendered English/German speech recordings. The production application only plays bundled files. All 50 recordings differ from the previous pack; none is retained as a fallback. The design target is Hybrid Professional Console + Modern Desktop.
 
-## Architecture and event routing
+**Approved for implementation after the metallic, drum-like and instrumental sources were removed.** The user's final instruction was “ok implement.” The corrected assets are integrated into production event playback, settings previews and the application build. The initial two noise-based auditions were rejected as too similar and are not shipped. Approval to implement does not constitute a complete fatigue or platform listening review. This report does not certify natural pronunciation, long-session comfort, physical headphone/speaker routing, or final native multi-client behavior. Audition files are in `.cache/noxa-audition/`.
 
-- tools/generate-sounds.mjs deterministically renders dry, fixed-filter noise contacts, taps and short console feedback into mono 48 kHz/16-bit PCM files. No pitched oscillators, sweeps, melodies or reverb remain in the recipes. Each event has its own finished file; channel join is 185 ms and PTT is 28/34 ms.
-- tools/generate-speech.py uses a development-only Piper environment to render the fixed text in tools/speech-lines.json. The shipped files are mono 22.05 kHz/16-bit PCM. No engine or model weights ship with NOXA.
-- sound-catalog.js and speech-catalog.js centralize static URLs and metadata. sounds.js assembles one catalog for one SoundEngine/AudioContext. All 50 assets are eagerly decoded and cached. Runtime work is selecting a buffer, applying gain, routing and playing at its original rate.
-- SpeechQueue accepts only fixed event IDs, selects English/German, serializes speech and rechecks policy before playback. Reasons, names and message content cannot be passed as spoken text.
-- Main event handlers preserve channel, control, connection and notification routing. PTT applies voice state before scheduling feedback. The voice processing/capture pipeline remains separate from system audio.
-- Kick/ban use distinct effects, then fixed speech after 350 ms from event dispatch (roughly 130–195 ms after the warning file ends). Only self-removal speaks; server and channel removal have different recordings. A forced move requires a different by_client_id. Connection loss waits 1.2 seconds and successful recovery cancels obsolete connection speech. Only final retry exhaustion speaks reconnect_failed.
-- Permission errors use an explicit permission-error prefix to choose a fixed clip; their detail remains visual. A semantic server_shutdown event selects its fixed clip. Servers without that new event produce ordinary connection-loss behavior.
-- The server attempts a direct terminal event before closing a kicked connection and announces graceful shutdown. Each write has a 150 ms deadline and skips an already-busy writer, so delivery is best effort and teardown stays bounded. Existing observer broadcasts remain. This adds a semantic event, not dynamic audio data.
+The checked-out repository is `https://github.com/arumes31/noxa.git`, on the existing `codex/fix-live-audio-and-members` branch. The remote was inspected, not renamed. No commit, push, release or deployment was performed by this task.
 
-## Removed implementation
+## Audio architecture
 
-Deleted channel_join.mp3, old CUES/PACKS and frequency-array synthesis, soft/bright/retro oscillator packs, beep/play/playChannelJoin helpers, custom-beep settings and BeepSpec bindings, obsolete imports and CSS. The earlier experimental generated resonant/sweeping recipes were also replaced in full. Windows visual notifications now use NIIF_NOSOUND rather than allowing an extra OS sound outside the selected volume/device.
+- `sound-catalog.js` defines every effect URL, category, duration, relative gain, priority and cooldown/concurrency policy. `speech-catalog.js` defines the localized full-sentence files and transcripts. Both are generated during authoring, not application startup or build.
+- `sounds.js` coordinates one dedicated system-audio context, cached PCM buffers, language selection and previews. It preloads all short effects and only the selected language's speech. Previously selected language buffers may remain cached; other languages are not decoded proactively.
+- `sound-engine.js` only decodes, schedules buffered playback, controls gain and routes output. No notification oscillators, frequency tables, TTS, pitch/rate changes, sound-design filters or generated fallbacks exist in the production frontend. Live microphone, codecs, voice processing, participant playback and screen-reader live regions remain separate.
+- The engine admits at most four audible system sources, including speech. Replacing a source reserves its slot through a 3 ms stop fade. Nodes are disconnected on completion/cancellation; ended callbacks are delivered once. PTT replaces the previous PTT transition without waiting in a notification queue. Main.js applies microphone/voice state before requesting feedback.
+- Effects are mono 48 kHz/16-bit PCM WAVs; speech is mono 22.05 kHz/16-bit PCM WAV. Every effect has its own finished file. Final effect ranges: PTT 25/35 ms; microphone/deafen 125–140 ms; own channel 165–275 ms; other-user movement 95–120 ms.
+- Relative gain is 1: intended level differences are mastered into the assets. The asset peak ceiling is 0.115. Four system sources at 200% are conservatively bounded by a summed sample peak of 0.92. This does not bound unrelated live voice or other applications in the operating-system mixer.
 
-## Effects inventory
+## Events and speech ordering
 
-Files are in client/frontend/src/assets/sounds/.
+The generated [complete inventory](audio-inventory.md) lists all effect and speech files, transcripts, measured durations, source call sites, categories, priorities and concurrency policies. It is generated with `node tools/audio-inventory.mjs`; source registries remain authoritative.
 
-| Event | Filename | Duration | Priority | Design description |
-| --- | --- | --- | --- | --- |
-| connection_connected | connection_connected.wav | 210 ms | Attention | Soft console contact with a short full confirmation body |
-| connection_reconnected | connection_reconnected.wav | 135 ms | Attention | Shorter light contact with a compact settled body |
-| connection_disconnected | connection_disconnected.wav | 160 ms | Attention | Single damped closure with a rounded soft attack |
-| connection_lost | connection_lost.wav | 225 ms | Warning | Interrupted coarse contact and a muted second stop |
-| connection_reconnecting | connection_reconnecting.wav | 110 ms | Control / medium | Quiet single neutral status contact |
-| connection_failed | connection_failed.wav | 180 ms | Warning | Dry rejected contact with a dense low body |
-| server_error | server_error.wav | 145 ms | Warning | Two compact dry refusal ticks |
-| own_channel_join | own_channel_join.wav | 185 ms | Attention | Soft voice-path contact with a short rounded confirmation tail |
-| own_channel_switch | own_channel_switch.wav | 150 ms | Attention | Muted transition contact followed by a small firmer contact |
-| own_channel_leave | own_channel_leave.wav | 120 ms | Attention | Single felt-damped closure with a short final decay |
-| user_join | user_join.wav | 90 ms | Low | Quiet clean presence tick |
-| user_leave | user_leave.wav | 95 ms | Low | Related presence tick with a softer damped edge |
-| user_move_in | user_move_in.wav | 130 ms | Low | Small paired contacts with a clean second edge |
-| user_move_out | user_move_out.wav | 135 ms | Low | Related paired contacts ending in a damped edge |
-| mic_on | mic_on.wav | 70 ms | Control / medium | Small clean control-surface contact |
-| mic_off | mic_off.wav | 75 ms | Control / medium | Muted control-surface release |
-| deafen_on | deafen_on.wav | 120 ms | Control / medium | Cushioned double contact with dark filtering |
-| deafen_off | deafen_off.wav | 125 ms | Control / medium | Matching double contact with a clearer open edge |
-| ptt_on | ptt_on.wav | 28 ms | Control / medium | Tiny dry talkback contact |
-| ptt_off | ptt_off.wav | 34 ms | Control / medium | Tiny damped talkback release |
-| mention | mention.wav | 165 ms | Attention | Defined single desktop tap with a brief supporting body |
-| keyword | keyword.wav | 120 ms | Control / medium | Compact textured tap with a softened attack |
-| dm | dm.wav | 185 ms | Control / medium | Two close dry desk contacts |
-| channel_message | channel_message.wav | 85 ms | Low | Very quiet single muted tick |
-| whisper | whisper.wav | 140 ms | Attention | Close dry soft contact and a tiny adjacent contact |
-| poke | poke.wav | 115 ms | Attention | One firm controlled physical tap |
-| join_leave | join_leave.wav | 100 ms | Low | Small neutral presence contact |
-| buddy_online | buddy_online.wav | 150 ms | Control / medium | Warmer, slightly fuller presence contact |
-| kick | kick.wav | 155 ms | Warning | Firm low contact with a short abrupt cushioned stop |
-| ban | ban.wav | 220 ms | Warning | Low dry stop followed by a subdued final contact |
-| announcement | announcement.wav | 240 ms | Warning | Broader clean contact with a brief dry body |
-| channel_watch | channel_watch.wav | 150 ms | Low | Quiet separated pair of damped status ticks |
+Important events use `playAlert`: the actual effect completion releases the speech sequence, followed by a 150 ms gap. If the effect is disabled or unavailable, eligible speech still plays. If speech is disabled, the effect still plays. Connection loss has an additional 1.2-second relevance delay; successful reconnect clears it. Reconnect failure speaks only on final exhaustion, never on each retry.
 
-## Fixed speech inventory
+`SpeechQueue` stores at most three waiting announcements, expires entries after eight seconds, and allows only one speech clip at a time. It scopes 10-second speech deduplication to event/tab/connection generation and bounds that map to 128 entries. Effects retain their separate short cooldowns, so repeated rejected actions can still have feedback while duplicate speech is suppressed. Recovery and tab changes cancel stale speech. Higher priority live speech can replace obsolete lower-priority speech. Previews cannot displace pending/live announcements, change their output, or suppress an incoming live sentence.
 
-Each filename exists in assets/speech/en/ and assets/speech/de/. The queue ranks ban highest, followed by kick/shutdown/final failure, connection loss, and administrative move/permission failure. All durations below are measured from the shipped files.
+Ban and kick use authoritative `ban` and `from_server` fields. Self-removal clears reconnect intent before teardown, preventing a generic disconnect/retry cascade. Channel removal has a distinct fixed sentence. Forced movement requires `by_client_id` different from the affected user and a changed positive destination. Voluntary channel actions do not speak. Permission speech requires a user-visible, explicit permission-rejection prefix. Explicit `server_shutdown` is supported by this repository; connection failure is never interpreted as shutdown. Reasons, user names, server names, destinations and message contents remain visual/accessibly announced interface text only.
 
-| Event | Filename per language | English | German | English text | German text |
-| --- | --- | --- | --- | --- | --- |
-| banned | banned.wav | 1.54 s | 1.32 s | You were banned from the server. | Du wurdest vom Server gebannt. |
-| kicked | kicked.wav | 1.38 s | 1.57 s | You were kicked from the server. | Du wurdest vom Server entfernt. |
-| kicked_channel | kicked_channel.wav | 1.56 s | 1.77 s | You were removed from the channel. | Du wurdest aus dem Channel entfernt. |
-| connection_lost | connection_lost.wav | 2.22 s | 2.09 s | Connection to the server was lost. | Die Verbindung zum Server wurde unterbrochen. |
-| reconnect_failed | reconnect_failed.wav | 2.08 s | 2.78 s | Unable to reconnect to the server. | Die Verbindung zum Server konnte nicht wiederhergestellt werden. |
-| permission_denied | permission_denied.wav | 2.47 s | 2.05 s | You do not have permission to perform this action. | Du hast keine Berechtigung für diese Aktion. |
-| moved_by_admin | moved_by_admin.wav | 1.81 s | 1.99 s | You were moved to another channel. | Du wurdest in einen anderen Channel verschoben. |
-| server_shutdown | server_shutdown.wav | 1.86 s | 1.50 s | The server is shutting down. | Der Server wird heruntergefahren. |
-| test | test.wav | 2.72 s | 2.61 s | NOXA spoken notifications are enabled. | Die gesprochenen NOXA-Benachrichtigungen sind aktiviert. |
+The existing native Windows notification implementation uses `NIIF_NOSOUND`; all audible app feedback goes through the system-audio policy. Existing server terminal-event delivery and live voice code were inspected and retained.
 
-Speech data sources and exact model revision are documented in assets/speech/README.md, model cards and provenance.json. English uses the public-domain [LJ Speech dataset](https://keithito.com/LJ-Speech-Dataset/); German uses [Thorsten Voice](https://github.com/thorstenMueller/Thorsten-Voice), whose model card identifies CC0. [Piper](https://github.com/OHF-Voice/piper1-gpl) is a development-only tool. Effects are original and MIT licensed under the repository license.
+## Settings and compatibility
 
-## Settings and previews
+- Existing `play_sounds` remains the total application-audio gate. The label now explicitly includes effects and speech. DND and replay suppression apply to both.
+- New `effects_enabled` defaults true. `sound_volume` remains the effects volume; `spoken_messages` and `speech_volume` control speech independently. Existing 0–200 values are preserved and safely bounded.
+- Existing `speech_connection` and `speech_admin` remain category gates. New `speech_removal` and `speech_permissions` add narrower controls. `speech_events` and `event_sounds` retain explicit per-event opt-outs; the kick notification-matrix row also gates self-removal speech.
+- Settings version 9 adds these fields without resetting unrelated settings. Legacy pack IDs (`soft`, `bright`, `retro`, empty and `noxa`) resolve to the single displayed **noXa** pack. Old custom-synthesis settings stay retired.
+- Pre-speech profiles (before version 8) with master audio off or effects volume zero do not gain enabled speech. Existing explicit speech preferences survive load/save. The repository's earlier migration for pre-version-1 nonfunctional sound flags is unchanged.
+- Internal configuration keys, package identity, globals, paths and native IDs were retained. Existing `NOXA_*` environment keys and historical migration documentation are compatibility identifiers, not new display branding.
 
-Settings version 8 replaces legacy pack IDs with noxa. Master sound enablement, volume, per-event choices, notification matrix, DND and replay suppression remain. The new ban effect inherits the old kick preference during migration. Old custom_sounds JSON is ignored and omitted on subsequent save.
+## Localization, previews and output
 
-Spoken messages have an enable switch, independent 0–200% volume, connection-problem and administrative-action switches, plus speech_events support for individual persisted choices. New defaults enable speech; explicit false/zero values survive load/save. UI language selects German or English; unsupported languages deliberately use English. A missing selected-language recording is omitted, never synthesized or replaced with another language.
+English and German recordings can be selected independently of the interface. The default follows the interface language, including system-language selection; unsupported interface languages deterministically select bundled English. A missing selected-language clip is omitted; there is no translation, TTS, fragment assembly or dynamic-text fallback. German uses the existing UI term “Channel.” The test clips use the exact noXa test sentences from the brief.
 
-Settings provide individual, category and complete-effect previews; a static spoken-message test; and Stop preview. Previews use draft volume/output settings without saving them. Explicit previews may bypass master mute/history, while DND, disabled events and the speech toggle remain authoritative. Closing or changing pages cancels previews; changing server tabs cancels stale speech. Saving settings reconciles pending speech with the new policy.
+Settings provide individual, category and all-effects previews; individual, category and all-speech previews; and Stop preview. All use production files/playback and the unsaved settings draft. Explicit previews may bypass only master mute and replay/history; DND, disabled effects/speech and per-event opt-outs remain authoritative. Sequences follow actual completion. Cancel, page changes and closing stop playback without saving the draft. New controls have accessible labels and status feedback.
 
-## Gain, burst protection and lifecycle
+The shared system context follows the selected playback output when `AudioContext.setSinkId` is supported. Playback is withheld during routing. If the selected device is unavailable or routing unsupported, the documented fallback is the system default, potentially speakers. The settings page explicitly explains that behavior. If both selected and fallback routing fail, playback stays silent. The live voice output path is unchanged. Physical device behavior still requires native validation.
 
-Each asset has a maximum sample peak of 0.115. A shared ceiling of four audible system sources at 200% gives a conservative summed sample peak of 0.92. Speech uses the same ceiling and bus. This bound concerns system audio; it is not a claim about arbitrary live voice/music mixed by the operating system. Runtime gain never manufactures variants.
+## Provenance and authoring
 
-Movement events share a 180 ms cooldown; low-priority repeats use 250 ms; reconnecting is limited to 5 seconds. Identical effects and opposite PTT transitions replace their previous instance. Replacement uses a 3 ms gain fade and reserves the next start until the retiring source stops, avoiding stacked tails. Higher-priority events can replace lower-priority effects. Completed fades are reclaimed even if main-thread activity delays ended callbacks.
+Effects are edited offline from pinned CC0 audio using `tools/master-sounds.py` and the single inventory `tools/effect-recipes.json`. The former procedural noise renderer is removed. Sources are Kenney Interface Sounds, Kenney UI Audio, paper/card placement and handling from Kenney Casino Audio, and Luckius Various Paper Sound Effects. The original library titles are provenance; no casino jingles, chips or dice are used. The source pages, archive hashes, source-file hashes, excerpts, weights and mastering choices are recorded in `assets/sounds/provenance.json`. Source licensing notices ship in `public/noxa-audio-licenses.txt`.
 
-Speech has one playing clip, at most three pending clips, 10-second per-event deduplication and an 8-second queue expiry. Higher-priority speech removes obsolete pending items and can interrupt a lower-priority clip; lower-priority speech is rejected during a higher-priority announcement.
+The final pack uses dry controls, paper contacts and short friction textures. All instrument-library samples, the lighter recording, glass and plucked elements used in the intermediate audition are removed. 24 affected cues were rebuilt after the user's correction; the remaining eight dry control cues are retained from the accepted replacement direction. No prior rejected generated-noise waveform remains. Source licenses permit modified redistribution under CC0; the noXa edits are dedicated under CC0 and authoring code remains MIT.
 
-One context handles startup, gestures/focus/visibility resume, selected output changes and device changes. Missing assets/context/decoder/output failures are logged once and cannot invoke fallback generation. A cold or suspended live event is skipped rather than replayed late. Explicit previews await preparation. setSinkId is capability checked and falls back to system default when unavailable. The [Web Audio specification](https://webaudio.github.io/web-audio-api/) governs that playback lifecycle. Native Windows notification flags follow [NOTIFYICONDATAW](https://learn.microsoft.com/en-us/windows/win32/api/shellapi/ns-shellapi-notifyicondataw).
+Offline work consists of onset trimming, downmixing, resampling, rumble/DC cleanup, optional high-frequency softening, contact editing, endpoint fades and level mastering. There is no oscillator, random-noise generator, pitch shift, reversal or melodic assembly. The ordinary build never downloads or authors audio.
 
-Sources disconnect on completion; pending preview timers, speech timers, listeners and buffers are released on cancellation/shutdown. A failed asset stays failed for the session; reloading retries it.
+Speech was rendered afresh from complete fixed sentences using development-only Piper 1.4.2, not converted from old speech files. The selected voices and licensing evidence are recorded in `assets/speech/README.md`, pinned model cards and `provenance.json`:
 
-## Audio and performance measurements
+- English: en_US-ljspeech-high. Its [model card](https://huggingface.co/rhasspy/piper-voices/blob/main/en/en_US/ljspeech/high/MODEL_CARD) identifies the public-domain [LJ Speech dataset](https://keithito.com/LJ-Speech-Dataset/).
+- German: de_DE-thorsten-medium. Its [model card](https://huggingface.co/rhasspy/piper-voices/blob/main/de/de_DE/thorsten/medium/MODEL_CARD) identifies Thorsten Voice under CC0.
+- Pinned voice repository revision: `1162a9173d0ce503555aed757976b7a9912eae4c`. The model weights and GPL-licensed Piper tool are development dependencies only and are not included in the application. These generated fixed sentences contain no copied application sound branding.
+- Authoring parameters: length scale 1.08; noise scale 0.55; noise width 0.7; 25 ms edge padding; 5 ms endpoint fades; target RMS -31 dBFS subject to 0.115 peak ceiling. These are applied only during authoring and are recorded in provenance.json.
+- Effects and speech `metrics.json` record file hashes, durations and measured levels. Speech catalogs include the exact rendered transcripts. Tests check hashes, valid PCM, non-silence, safe peaks and registry/transcript consistency.
 
-- Effects: 418,720 bytes; speech: 1,558,290 bytes.
-- Maximum effect sample peak: 0.11194; maximum absolute effect DC mean: 0.000000308.
-- Highest whole-cue energy above 2 kHz: 5.99% (poke). Mono files avoid interchannel phase/width problems. These measurements cannot prove perceptual comfort or recognizability.
-- Generator and tests validate finite samples, PCM headers, channel count/rate, duration, exact silent endpoints, peak/DC and effect RMS target tolerance. Speech generation trims excessive leading/trailing silence, validates duration/file size and records hashes.
-- 1,000 real Chromium PTT submissions: p95 0.20 ms, maximum 3.00 ms, total submission CPU/wall timing 90.6 ms. Reported context base latency 10 ms; preparation 437.5 ms. This is one local benchmark, not end-to-end microphone latency or an OS CPU profile. After settling: zero active/retiring sources.
-- Mandatory repetition browser test played PTT on/off 100 times each, user join/leave 50 each, message 50, mic on/off 50 each and channel switch 30: 480 completed submissions, with no leftover active/retiring nodes. It also decoded every spoken file.
+Authoring commands:
 
-## Commands and results
+```text
+uv --cache-dir .cache/uv venv .cache/noxa-audio-env --python 3.12
+uv --cache-dir .cache/uv pip install --python .cache/noxa-audio-env/Scripts/python.exe piper-tts==1.4.2 numpy==2.5.3 scipy==1.17.1 soundfile==0.13.1
+node tools/generate-sounds.mjs --download
+python tools/download-speech-models.py
+.cache/noxa-audio-env/Scripts/python.exe tools/generate-speech.py --models .cache/noxa-speech-models
+node tools/audio-inventory.mjs
+```
 
-Repeated invocations of an identical command are grouped; transient failures and their resolution are retained. Logs are in temp/sound-*.log.
+Installation, first run, ordinary builds and application startup do not run any generator or require models, services or keys. `npm run build` only bundles existing files and verifies them. Vite's [asset inlining setting](https://vite.dev/config/build-options.html#build-assetsinlinelimit) keeps all WAVs as discrete production assets. The [Web Audio specification](https://webaudio.github.io/web-audio-api/) defines the buffer lifecycle used for playback.
 
-| Command / scope | Result |
-| --- | --- |
-| node tools/generate-sounds.mjs | Final: 32 cues generated and validated. Earlier sandbox mkdir failure rerun with authorized access; first revised-contact pass failed RMS validation, fixed with offline peak shaping. |
-| uv venv temp/speech-env --python 3.12; uv pip install --python temp/speech-env/Scripts/python.exe piper-tts==1.4.2 numpy | Passed; isolated development environment. |
-| python temp/sound-runtime/download-models.py | Downloaded two build-only models/configurations/cards at a recorded revision. |
-| python tools/generate-speech.py --models temp/sound-runtime/speech-models | Passed, 18 measured static speech files. |
-| node --test unit/sounds.test.mjs | Initial expected missing-module failure before implementation; subsequent passes. |
-| npm run test:unit:sounds | 16 tests pass in final full suites. Initial new guard matched a generator comment; fixed to inspect prohibited runtime APIs/imports. |
-| npm run lint | Passed, including in final quality. |
-| npm run test:unit | Passed in final quality and npm test: core 70, UI 11, tray 2, stats 3, sound/speech 16. |
-| npm run test:a11y | 6 passed in final quality. Earlier failures exposed fixture media-device capability handling and speech timer binding; both fixed. |
-| npm run build | Final Vite production build passed. Initial sandbox dist-write failure rerun with authorized access. |
-| npm run quality | Final PASS: lint, all unit groups, six accessibility workflows and production frontend build. Log: sound-quality-static-final.log. |
-| npx playwright test tests/sounds.spec.js | Earlier decode/headroom tests passed; final expanded tests run through npm test. |
-| npx playwright test tests/workflows.spec.js --grep 'grouped, distinct action sounds&#124;scopes connection failures' | Passed after updating oscillator-based instrumentation to observe the actual buffer player. |
-| npx playwright test tests/workflows.spec.js --grep 'grouped, distinct action sounds&#124;scopes connection failures&#124;@a11y' | Earlier 7 passed. |
-| npx playwright test tests/workflows.spec.js --grep 'sound previews use draft' | Passed. |
-| npx playwright test tests/workflows.spec.js --grep 'starts voice, plays the original' | Passed after replacing the obsolete MP3 assertion. |
-| npx playwright test tests/workflows.spec.js --grep 'static speech&#124;sound previews use draft&#124;@a11y' | 7 passed, including real German ban speech and English draft-volume preview. |
-| npx playwright test tests/sounds.spec.js tests/workflows.spec.js --grep 'original sound set&#124;four simultaneous&#124;grouped, distinct action sounds&#124;scopes connection failures&#124;starts voice, plays the original&#124;sound previews use draft' | Earlier six focused checks passed. |
-| npm run test:e2e | Before speech: 119/120 first pass; old MP3 assertion fixed; 120/120 rerun. |
-| npm run test | Final PASS: unit groups plus 122/122 end-to-end tests, 3.8 minutes. Log: sound-test-static-full.log. |
-| gofmt -w changed Go files; go test ./... (client) | Passed; final client run 14.711 s. Log: sound-go-speech.log. Earlier sandbox file/cache failure rerun with authorized access. |
-| go test ./internal/server ./internal/broadcast | Final PASS, server 25.544 s. First run exposed an existing asynchronous permission-test race; test now waits for cache invalidation explicitly. |
-| go build -o temp/sound-runtime/server.exe ./cmd/server | Passed for isolated runtime testing. |
-| wails build -m -nosyncgomod -debug -o noxa-sound-review.exe | Earlier debug desktop build passed and used for native two-client checks. |
-| wails build -m -nosyncgomod -o noxa-sound-production.exe | Final production Windows desktop build passed in 45.082 s. Log: sound-wails-production.log. |
-| python temp/sound-runtime/analyze.py | Passed; measured final effect spectrum/DC/peaks and wrote audition-alphabetical.wav. |
-| node temp/sound-runtime/benchmark.mjs | Passed; completed-fade cleanup confirmed under 1,000 real WebAudio PTT submissions. |
-| powershell -NoProfile -File temp/sound-runtime/start-final.ps1 | Legacy PowerShell rejected AsHashtable; rerun in the current PowerShell runtime succeeded. |
-| git diff --check | Passed after removing unrelated Wails-generated formatting/reordering. |
+## Selected audio quick wins
 
-## Native and listening validation
+Implemented selections 2, 3, 31, 32, 33, 34, 39, 51, 61 and 81:
 
-Earlier native debug build: two isolated profiles connected to a local TLS server, joined Echo Test and appeared in voice together. Exercised PTT press/release, microphone on/off, deafen on/off, channel message/mention delivery, an actual permission denial, forced server loss, failed retries and successful automatic recovery after a brief outage. Server logs confirmed WebRTC sessions/audio tracks. There was a transient renegotiation warning, so this is not a claim of warning-free voice operation.
+- Playback and notification settings explain master mute, DND, disabled effects/announcements/events, zero volume, suspended playback and unavailable/fallback output. A rejected preview reports its cause.
+- Voice, effect, speech and VAD sliders have synchronized editable percentage fields. Values remain in the settings draft until saved.
+- Microphone testing and calibration use the current draft capture settings and the active channel's music profile. Only one check can run at a time; closing settings, changing pages or searching stops its tracks, loopback and audio context. A late permission response also releases its tracks.
+- Ambient calibration displays a five-second countdown. Silent capture is identified separately from denied permission, absent hardware and a busy input device.
+- Optional `duck_effects_while_speaking` reduces routine effects to 35% while a client in the active channel speaks. Priority 3+ alerts and prerecorded speech keep their configured volume. The option defaults off.
+- `speech_language` accepts `interface`, `en` or `de`. It defaults to following the interface, preserving existing profiles; unsupported interface languages still use the English recordings.
+- Failed asset loads leave the in-flight cache after completion so subsequent requests can retry. Concurrent requests still share one load; successful decoded assets stay cached.
 
-Those native checks preceded the final dry-contact assets and speech addition. The final production executable launched in English/German test profiles, but Computer Use approval timed out before UI validation. No claim is made that all final cues, administrative speech or final native multi-client workflows were manually heard. Build-time assets were decoded and played by Chromium tests; that is distinct from human listening.
+Settings generation 10 adds these choices without renaming legacy keys or storage locations. All effects and announcements remain bundled static audio. This follow-up changes playback gain and controls, not the approved recordings.
 
-Native physical output switching, headphones/laptop speakers, long-session subjective fatigue, speech pronunciation/neutrality, macOS and Linux WebViews remain unverified. WAV PCM was selected for conservative decoder compatibility; Windows Chromium/WebView2 builds were exercised, but cross-platform native support is not certified. setSinkId may be unavailable or permission-limited in some WebViews, in which case sound uses the default device and logs once. No TTS fallback exists.
+## Verification
 
-## Significant files
+Final corrected pack validation (2026-09-17):
 
-- Added: tools/generate-sounds.mjs, tools/generate-speech.py, tools/speech-lines.json.
-- Added: frontend sound-engine.js, sound-catalog.js, speech-queue.js, speech-catalog.js; 32 assets/sounds WAVs and metadata; 18 assets/speech WAVs, metrics, provenance, model cards and licensing/readme.
-- Reworked: frontend sounds.js, main.js, notifications.js, settings-ui.js, tabs.js, style.css; removed unused chat-ui.js import.
-- Settings/bindings: client/settings.go, settings_test.go, frontend/wailsjs/go/models.ts.
-- Native notifications: client/notify_windows.go, notify_windows_test.go.
-- Protocol delivery: internal/server/terminal_events.go, terminal_events_test.go, admin.go, tcp.go; groups_test.go timing fix.
-- Tests/tooling: frontend/package.json, unit/sounds.test.mjs, unit/speech.test.mjs, tests/sounds.spec.js, tests/workflows.spec.js.
-- Removed: frontend/src/assets/channel_join.mp3.
-- Local review artifacts: docs/plans/2026-09-14-sound-redesign.md, this report, temp/sound-*.log, temp/sound-runtime/audition-alphabetical.wav and benchmark/signal-analysis JSON. The temporary TTS environment/model weights are not packaged or staged.
+- `npm run lint`: passed, 72 frontend files checked.
+- `npm run test:unit`: 117 tests passed (76 core, 11 UI, 2 tray, 3 stats, 25 sound/speech). Audio checks include provenance, excluded source families, shipped hashes, PCM format, levels, endpoints, queue sequencing, draft previews, routing and failure handling. Log: `.cache/noxa-unit-corrected.log`.
+- `CI=1 npm run test:e2e -- --retries=0 --reporter=list`: all 147 Chromium browser tests passed in 3.1 minutes, including accessibility workflows. Log: `.cache/noxa-e2e-corrected.log`.
+- Browser audio stress: 100 PTT on/off cycles; 50 joins, leaves and channel messages each; 50 mic on/off cycles; 30 own-channel switches. All 480 cues completed and released their nodes; all 18 speech files decoded. This tests playback lifecycle, not perceived fatigue.
+- Browser workflows cover actual effect-end plus 150 ms sequencing, terminal ban without disconnect cascade, visual reasons, localized fixed speech, draft volume/DND, individual/all preview cancellation, output admission and safe maximum gain. The settings screenshot was visually inspected for clipping/readability.
+- Client `go test ./...`: passed (cached), including settings migration/round trips and native notification tests.
+- `wails build -o noxa-audio-review.exe`: Windows/amd64 production build passed in 20.769 seconds. Output: `client/build/bin/noxa-audio-review.exe` (19,061,760 bytes).
+- `node tools/verify-audio-build.mjs`: all 50 exact WAVs and the licensing notice found in the production bundle; no obsolete or duplicate WAVs.
+- Binary audit: all 50 complete source WAV byte sequences and the complete license notice were also found inside the built executable. Audio total: 2,129,020 bytes. Executable SHA-256: `0518952ca58456ea72dc9f4cf50b3f02f36b24a70a7f269c9b3b13d67497362b`. Record: `.cache/noxa-build-verification.json`.
+- All 50 recordings differ byte-for-byte from the pack at HEAD. Final effects use 37 distinct source files from the four documented CC0 packages. All instrument/glass/lighter sources from the intermediate audition are absent from final recipes/provenance.
+- Independent queue review identified four issues, all fixed with regressions: speech cooldown suppressing effects, previews displacing queued live speech, previews suppressing incoming speech, and rejected previews rerouting live speech.
+- Earlier browser localization failures came from a reused Vite server exposing two module identities. The complete final suite used a fresh server and passed without weakened assertions.
 
-The Windows binary is client/build/bin/noxa-sound-production.exe. No deployment or publication was performed.
+### Selected quick-win verification
+
+Follow-up validation (2026-09-17):
+
+- `npm run lint`: passed, 75 frontend files checked.
+- `npm run test:unit`: 121 tests passed (76 core, 11 UI, 2 tray, 3 stats, 29 sound/speech). New cases cover retry after failed asset loads, concurrent-load deduplication, optional effect ducking, blocking reasons and independent announcement language. Log: `.cache/noxa-quick-wins-unit.log`.
+- Client `go test ./...`: passed, including new language/ducking round trips, generation-9 profile compatibility and rejecting an invalid announcement language without mutating settings.
+- Fresh Chromium focused run: all 15 audio quick-win tests passed. Coverage includes live draft capture constraints, active music profiles, pending-permission cleanup, mutual exclusion, calibration countdown, silence versus denial, percentage synchronization/clamping/persistence, silent-output explanations, actual German asset playback with an English interface, and Cancel behavior. Log: `.cache/noxa-quick-wins-browser-final.log`.
+- Notification controls and calibration screenshots were visually inspected; percentage input, language selection and countdown were readable without overlapping controls.
+- Full fresh Chromium suite: all 162 tests passed without retries in 3.1 minutes. Log: `.cache/noxa-quick-wins-e2e.log`.
+- `wails build -o noxa-audio-review.exe`: Windows/amd64 build passed in 28.665 seconds. The updated executable is 19,072,512 bytes; SHA-256 `f692cb23d06c373238674af36b47a6154941032b53b5715ddf26c0b8f30a921e`. All 50 complete WAV payloads (2,129,020 bytes) and the complete audio license notice were verified inside the executable. Record: `.cache/noxa-quick-wins-build-verification.json`.
+
+### Still requiring human/platform review
+
+The user approved implementation of the corrected pack. A complete cue-by-cue and long-session listening review has not been recorded. The effects and every EN/DE phrase still need that review for comfort, naturalness, pronunciation and consistent noXa delivery. Automated repetition and decoding are not a substitute. Final native multi-client administrative workflows, physical output switching/loss, offline playback in the packaged WebView, macOS/Linux WebViews and long-session fatigue remain unverified unless later results below explicitly say otherwise.

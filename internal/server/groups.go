@@ -36,6 +36,36 @@ func groupManageKey(groupType string) permissions.PermissionKey {
 	return permissions.PermissionKeyServerGroupManage
 }
 
+// checkGroupAssignStepUp enforces the same grant-cap semantics on group
+// membership writes that handlePermSet enforces on permission writes: a
+// non-admin may only assign/unassign a group whose existing permission
+// entries they could write themselves. Otherwise any holder of
+// b_*_group_manage could step up into an admin-grade group.
+func (s *TCPServer) checkGroupAssignStepUp(ctx context.Context, pc *permChecker, groupType string, groupID int64) error {
+	if groupID == 0 {
+		return errors.New("group_id is required")
+	}
+	// Admins and b_permission_modify_power_ignore holders bypass, mirroring
+	// grantCapOk for direct permission writes.
+	if pc.admin || pc.granted(permissions.PermissionKeyPermissionModifyPowerIgnore) {
+		return nil
+	}
+	tier := store.PermTierServerGroup
+	if groupType == "channel" {
+		tier = store.PermTierChannelGroup
+	}
+	entries, err := s.deps.Groups.ListPermissions(ctx, tier, store.PermTarget{GroupID: groupID})
+	if err != nil {
+		return errors.New("permission lookup failed for group")
+	}
+	for _, e := range entries {
+		if !s.grantCapOk(pc, string(e.Key), e.Value, e.Grant) {
+			return fmt.Errorf("assigning group %d exceeds your own grant: %s is outside your grant for this key", groupID, e.Key)
+		}
+	}
+	return nil
+}
+
 // audit writes an audit entry (best-effort; nil store = no-op).
 func (s *TCPServer) audit(ctx context.Context, actor, action, target, detail string) {
 	if s.deps == nil || s.deps.Groups == nil {
@@ -298,6 +328,13 @@ func (s *TCPServer) handleGroupAssign(ctx context.Context, client *Client, f *ne
 	if s.deps == nil || s.deps.Groups == nil || s.deps.Auth == nil {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "group store unavailable")
 	}
+	// Step-up guard: a non-admin may only assign a group whose current
+	// permission entries they could have written themselves. Without this,
+	// any holder of b_*_group_manage could step up into an admin-grade group
+	// (e.g. one carrying b_permission_manage), escalating their privileges.
+	if escErr := s.checkGroupAssignStepUp(ctx, pc, msg.Type, msg.GroupID); escErr != nil {
+		return s.sendErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, escErr.Error())
+	}
 	expiresIn := time.Duration(msg.ExpiresInSeconds) * time.Second
 	if msg.Type != "server" && msg.Type != "channel" {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "invalid group type")
@@ -374,6 +411,11 @@ func (s *TCPServer) handleGroupUnassign(ctx context.Context, client *Client, f *
 	}
 	if s.deps == nil || s.deps.Groups == nil || s.deps.Auth == nil {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "group store unavailable")
+	}
+	// Same step-up guard as handleGroupAssign: removing a user from a group
+	// above the caller's own grant level is also a privileged write.
+	if escErr := s.checkGroupAssignStepUp(ctx, pc, msg.Type, msg.GroupID); escErr != nil {
+		return s.sendErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, escErr.Error())
 	}
 	user, err := s.deps.Auth.LookupUser(ctx, msg.UniqueID)
 	if err != nil {

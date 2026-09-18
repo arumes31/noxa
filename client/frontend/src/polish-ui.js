@@ -8,6 +8,8 @@ import { isActivationKey } from "./a11y.js";
 import { mountDialog } from "./modal.js";
 import { icon } from "./icons.js";
 
+import { t } from "./i18n.js";
+
 const V = () => window.__noxa;
 const App = () => window.go.main.App;
 
@@ -266,8 +268,8 @@ function updateBellBadge() {
 }
 
 // dndActive reports whether DND is on (toggle or quiet hours, 347/348).
-export function dndActive() {
-    const s = V().state.settings || {};
+export function dndActive(settings) {
+    const s = settings || V().state.settings || {};
     if (s.dnd_enabled) return true;
     if (!s.dnd_from || !s.dnd_to) return false;
     const now = new Date();
@@ -307,7 +309,7 @@ function openNotifCenter() {
             rows.delete(n);
         }
         list.querySelector(".empty-state")?.remove();
-        if (!notifHistory.length) list.innerHTML = `<div class="empty-state">no notifications</div>`;
+        if (!notifHistory.length) list.innerHTML = `<div class="empty-state">${t("workspace.noNotifications")}</div>`;
         for (const n of notifHistory) {
             n.read = true;
             if (rows.has(n)) continue;

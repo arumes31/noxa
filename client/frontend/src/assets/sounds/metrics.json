@@ -1,194 +1,290 @@
 {
   "connection_connected": {
-    "duration": 0.21,
-    "peak": 0.06866455078125,
-    "rmsDB": -36.00027957463898,
-    "targetRmsDB": -36
+    "title": "noXa \u2014 Connected",
+    "duration": 0.26,
+    "peak": 0.1099853515625,
+    "dc": -1.2226593800080127e-07,
+    "rmsDB": -45.14476647735228,
+    "targetRmsDB": -31,
+    "sha256": "e8d5a376df3379e76c75ee101b143804a12b1bbbcae357a96806919460c89cfb"
   },
   "connection_reconnected": {
-    "duration": 0.135,
-    "peak": 0.056915283203125,
-    "rmsDB": -38.00031840614033,
-    "targetRmsDB": -38
+    "title": "noXa \u2014 Reconnected",
+    "duration": 0.245,
+    "peak": 0.105010986328125,
+    "dc": -9.08261253720238e-08,
+    "rmsDB": -42.63341208257636,
+    "targetRmsDB": -32,
+    "sha256": "0cd512282a9a1789aacb96b8aeaf21cc54937d7bc2d2bcd79518771610b096fc"
   },
   "connection_disconnected": {
-    "duration": 0.16,
-    "peak": 0.06610107421875,
-    "rmsDB": -37.00027011422871,
-    "targetRmsDB": -37
+    "title": "noXa \u2014 Disconnected",
+    "duration": 0.175,
+    "peak": 0.100006103515625,
+    "dc": -1.1262439546130953e-07,
+    "rmsDB": -42.65181640892028,
+    "targetRmsDB": -34,
+    "sha256": "054b448d4eaaf03ace541a245222ea2f444e1a3510a50c8d58b40c6df5b53953"
   },
   "connection_lost": {
-    "duration": 0.225,
-    "peak": 0.110260009765625,
-    "rmsDB": -33.00024681288407,
-    "targetRmsDB": -33
+    "title": "noXa \u2014 Connection lost",
+    "duration": 0.255,
+    "peak": 0.11199951171875,
+    "dc": -1.0721044602736928e-07,
+    "rmsDB": -41.79931621978134,
+    "targetRmsDB": -30,
+    "sha256": "daf48035f7a41d81d4ffa2afff6f8bbf646620e2510c329b96bdc11688dff28c"
   },
   "connection_reconnecting": {
-    "duration": 0.11,
-    "peak": 0.02862548828125,
-    "rmsDB": -44.00022293741189,
-    "targetRmsDB": -44
+    "title": "noXa \u2014 Reconnecting",
+    "duration": 0.105,
+    "peak": 0.06500244140625,
+    "dc": -3.1486390128968253e-07,
+    "rmsDB": -41.54983605939664,
+    "targetRmsDB": -41,
+    "sha256": "fc36d39fdc7a8161e487b8b87736985ccccd9107c6c5267cf8f662e073d1231f"
   },
   "connection_failed": {
-    "duration": 0.18,
-    "peak": 0.103179931640625,
-    "rmsDB": -33.000238104238235,
-    "targetRmsDB": -33
+    "title": "noXa \u2014 Connection failed",
+    "duration": 0.28,
+    "peak": 0.11199951171875,
+    "dc": 2.7247837611607142e-08,
+    "rmsDB": -41.65842214169925,
+    "targetRmsDB": -30,
+    "sha256": "91d7efcfd8a9c1cb2e9f396c07b59125d99b289c325008b6d211e058d1d93944"
   },
   "server_error": {
-    "duration": 0.145,
-    "peak": 0.080169677734375,
-    "rmsDB": -35.000301248191896,
-    "targetRmsDB": -35
+    "title": "noXa \u2014 Server action error",
+    "duration": 0.19,
+    "peak": 0.108001708984375,
+    "dc": 1.037329958196272e-07,
+    "rmsDB": -39.040061907325246,
+    "targetRmsDB": -32,
+    "sha256": "35fabbe5d20ab75bee85f64e6081e718f1d2bf1023bf9f8d89b5d423ecf777a2"
   },
   "own_channel_join": {
-    "duration": 0.185,
-    "peak": 0.056610107421875,
-    "rmsDB": -38.0002351352565,
-    "targetRmsDB": -38
+    "title": "noXa \u2014 Joined channel",
+    "duration": 0.275,
+    "peak": 0.1099853515625,
+    "dc": 1.8495501893939394e-08,
+    "rmsDB": -45.35616652155343,
+    "targetRmsDB": -32,
+    "sha256": "c60bdd5ecef5dfa9a500fec0f4581c3ade221a6654c033d235028280232f414f"
   },
   "own_channel_switch": {
-    "duration": 0.15,
-    "peak": 0.0531005859375,
-    "rmsDB": -39.000192223360834,
-    "targetRmsDB": -39
+    "title": "noXa \u2014 Switched channel",
+    "duration": 0.205,
+    "peak": 0.100006103515625,
+    "dc": -4.341931847052846e-08,
+    "rmsDB": -41.32797969186748,
+    "targetRmsDB": -34,
+    "sha256": "21935201adedc604e902d7ffaff3ffd4d5fc72261238e11f44221f72de2d55f3"
   },
   "own_channel_leave": {
-    "duration": 0.12,
-    "peak": 0.051025390625,
-    "rmsDB": -39.00011915953539,
-    "targetRmsDB": -39
+    "title": "noXa \u2014 Left channel",
+    "duration": 0.165,
+    "peak": 0.095001220703125,
+    "dc": 5.009198429608586e-08,
+    "rmsDB": -43.13107583754061,
+    "targetRmsDB": -35,
+    "sha256": "d5d73821ec4e9f10e13e45c0c1b1cc0c609d3d0897ee5d7ed4cbf501dee8d4da"
   },
   "user_join": {
-    "duration": 0.09,
-    "peak": 0.03009033203125,
-    "rmsDB": -43.000286557336494,
-    "targetRmsDB": -43
+    "title": "noXa \u2014 User joined",
+    "duration": 0.1,
+    "peak": 0.05499267578125,
+    "dc": -1.2715657552083333e-07,
+    "rmsDB": -45.09864937953475,
+    "targetRmsDB": -42,
+    "sha256": "b50ca2b23f90e5c1169d531c86601ca4101b00e86f449c7aac12efc32cba2eae"
   },
   "user_leave": {
+    "title": "noXa \u2014 User left",
     "duration": 0.095,
-    "peak": 0.032623291015625,
-    "rmsDB": -43.000468320821874,
-    "targetRmsDB": -43
+    "peak": 0.04998779296875,
+    "dc": -8.030941611842105e-08,
+    "rmsDB": -50.29786228839302,
+    "targetRmsDB": -43,
+    "sha256": "afc9c3d91190722140540fac9118f6db24943361fc8a6a22e5fe02bf79fd2ba7"
   },
   "user_move_in": {
-    "duration": 0.13,
-    "peak": 0.03509521484375,
-    "rmsDB": -43.000260042982966,
-    "targetRmsDB": -43
+    "title": "noXa \u2014 User moved in",
+    "duration": 0.12,
+    "peak": 0.05499267578125,
+    "dc": -8.636050754123264e-07,
+    "rmsDB": -47.42117417868548,
+    "targetRmsDB": -42,
+    "sha256": "ac07f01a72e9a8f602efeb316de2b08f9d7009868b066b23767845437c20f68d"
   },
   "user_move_out": {
-    "duration": 0.135,
-    "peak": 0.03515625,
-    "rmsDB": -43.00054407497911,
-    "targetRmsDB": -43
+    "title": "noXa \u2014 User moved out",
+    "duration": 0.1,
+    "peak": 0.04998779296875,
+    "dc": -2.5431315104166668e-08,
+    "rmsDB": -45.17827541892405,
+    "targetRmsDB": -43,
+    "sha256": "e9dc3641606ceb83382ac6a4808edf8013a6697e8e3774e309241336d0f00e47"
   },
   "mic_on": {
-    "duration": 0.07,
-    "peak": 0.030242919921875,
-    "rmsDB": -44.00020702072987,
-    "targetRmsDB": -44
+    "title": "noXa \u2014 Microphone on",
+    "duration": 0.13,
+    "peak": 0.07501220703125,
+    "dc": -4.890637520032051e-08,
+    "rmsDB": -40.24003373931352,
+    "targetRmsDB": -39,
+    "sha256": "d95a222e8715a62a1ac21581ee008fe811b4955ac9c0a3a891deba32b0448f91"
   },
   "mic_off": {
-    "duration": 0.075,
-    "peak": 0.027496337890625,
-    "rmsDB": -44.000053536876784,
-    "targetRmsDB": -44
+    "title": "noXa \u2014 Microphone off",
+    "duration": 0.14,
+    "peak": 0.07000732421875,
+    "dc": 6.357828776041667e-08,
+    "rmsDB": -41.096814248527586,
+    "targetRmsDB": -40,
+    "sha256": "ad5d4d5a018a56de63d775bf2caf544dbe5f77d9d61f7bdcc1f676ca06a6d7fe"
   },
   "deafen_on": {
-    "duration": 0.12,
-    "peak": 0.04095458984375,
-    "rmsDB": -42.000170346081674,
-    "targetRmsDB": -42
+    "title": "noXa \u2014 Deafened",
+    "duration": 0.14,
+    "peak": 0.059326171875,
+    "dc": 8.628481910342262e-08,
+    "rmsDB": -38.00032564992508,
+    "targetRmsDB": -38,
+    "sha256": "4fb71a20b96f1da3a4c9f0f05f4d360c1001875e8c25236c6a3dc06928c68950"
   },
   "deafen_off": {
+    "title": "noXa \u2014 Undeafened",
     "duration": 0.125,
-    "peak": 0.03570556640625,
-    "rmsDB": -42.00034877080405,
-    "targetRmsDB": -42
+    "peak": 0.052581787109375,
+    "dc": 6.103515625e-08,
+    "rmsDB": -38.000405936772346,
+    "targetRmsDB": -38,
+    "sha256": "e894bcc0a3a34e3f5941dd8aa1d33c6cb01fab1aa379796b7985539d0cb46019"
   },
   "ptt_on": {
-    "duration": 0.028,
-    "peak": 0.01202392578125,
-    "rmsDB": -49.00025939042556,
-    "targetRmsDB": -49
+    "title": "noXa \u2014 Push-to-talk on",
+    "duration": 0.035,
+    "peak": 0.029998779296875,
+    "dc": 3.269740513392857e-07,
+    "rmsDB": -46.9340169739624,
+    "targetRmsDB": -46,
+    "sha256": "19025aa18422f19591a6abbe676c79e209e056acf6356f23cadf851a8ba552f7"
   },
   "ptt_off": {
-    "duration": 0.034,
-    "peak": 0.014495849609375,
-    "rmsDB": -49.00091636928073,
-    "targetRmsDB": -49
+    "title": "noXa \u2014 Push-to-talk off",
+    "duration": 0.025,
+    "peak": 0.0260009765625,
+    "dc": 2.288818359375e-07,
+    "rmsDB": -50.31103420769408,
+    "targetRmsDB": -47,
+    "sha256": "1b001243b9b80501f06836292fdd532b32d01dbf8eed8bbedbb66e716e460427"
   },
   "mention": {
-    "duration": 0.165,
-    "peak": 0.072845458984375,
-    "rmsDB": -36.00016887637146,
-    "targetRmsDB": -36
+    "title": "noXa \u2014 Mention",
+    "duration": 0.245,
+    "peak": 0.108001708984375,
+    "dc": -5.190064306972789e-08,
+    "rmsDB": -40.898073387042004,
+    "targetRmsDB": -32,
+    "sha256": "7a09b4365922926e6c0661ac54667aa4b6df01f4b625d93ff4bbf8770b9b1720"
   },
   "keyword": {
-    "duration": 0.12,
-    "peak": 0.050445556640625,
-    "rmsDB": -40.00018126050109,
-    "targetRmsDB": -40
+    "title": "noXa \u2014 Keyword highlight",
+    "duration": 0.18,
+    "peak": 0.084991455078125,
+    "dc": 8.477105034722223e-08,
+    "rmsDB": -44.39295184734562,
+    "targetRmsDB": -37,
+    "sha256": "8110ff157bde7c75c918781ebb846c346227fe2a2ec408c9b954a8fa83b7e01f"
   },
   "dm": {
-    "duration": 0.185,
-    "peak": 0.048583984375,
-    "rmsDB": -40.000300563618715,
-    "targetRmsDB": -40
+    "title": "noXa \u2014 Direct message",
+    "duration": 0.2,
+    "peak": 0.100006103515625,
+    "dc": -1.7801920572916667e-07,
+    "rmsDB": -44.52799122968072,
+    "targetRmsDB": -35,
+    "sha256": "51809976ebc0b9a87008e23d005a60973f5443f095b1ad0b6ca77b31b6863acc"
   },
   "channel_message": {
-    "duration": 0.085,
-    "peak": 0.025146484375,
-    "rmsDB": -45.000175907402905,
-    "targetRmsDB": -45
+    "title": "noXa \u2014 Channel message",
+    "duration": 0.08,
+    "peak": 0.04998779296875,
+    "dc": -1.2715657552083333e-07,
+    "rmsDB": -45.96577505286043,
+    "targetRmsDB": -43,
+    "sha256": "a4b99546770944d1be73068222cd524eaa656903d9399a80e1c278903de37969"
   },
   "whisper": {
-    "duration": 0.14,
-    "peak": 0.053863525390625,
-    "rmsDB": -39.00031665578885,
-    "targetRmsDB": -39
+    "title": "noXa \u2014 Voice whisper",
+    "duration": 0.155,
+    "peak": 0.079986572265625,
+    "dc": 4.5120075184811826e-08,
+    "rmsDB": -44.7568807511866,
+    "targetRmsDB": -38,
+    "sha256": "d27c15d5a5a8db307946dfa7317079a02f469317915fbb9f5f0cc42f50451571"
   },
   "poke": {
-    "duration": 0.115,
-    "peak": 0.0760498046875,
-    "rmsDB": -36.00026721469439,
-    "targetRmsDB": -36
+    "title": "noXa \u2014 Poke",
+    "duration": 0.165,
+    "peak": 0.1099853515625,
+    "dc": -1.6568887113320708e-07,
+    "rmsDB": -39.91160289576847,
+    "targetRmsDB": -32,
+    "sha256": "b18b998693ebdad636aca127bb1ab4ef79d729125f1c99c67f29b5a4d36741f7"
   },
   "join_leave": {
-    "duration": 0.1,
-    "peak": 0.0264892578125,
-    "rmsDB": -43.99994635116522,
-    "targetRmsDB": -44
+    "title": "noXa \u2014 Join/leave (your channel)",
+    "duration": 0.09,
+    "peak": 0.04998779296875,
+    "dc": 6.357828776041667e-08,
+    "rmsDB": -43.56490531666189,
+    "targetRmsDB": -43,
+    "sha256": "8b01e9567a3f4cb54996ac0e61821d959c87241d8c5995d2b0aa2f0a88e0ffef"
   },
   "buddy_online": {
-    "duration": 0.15,
-    "peak": 0.043670654296875,
-    "rmsDB": -41.000239160636625,
-    "targetRmsDB": -41
+    "title": "noXa \u2014 Watched contact online",
+    "duration": 0.2,
+    "peak": 0.084991455078125,
+    "dc": -2.2252400716145834e-08,
+    "rmsDB": -45.464873763217625,
+    "targetRmsDB": -37,
+    "sha256": "ab30e3c631151e1bc6752db119174d0c672b0b937293855b4af3abd6d01d165d"
   },
   "kick": {
-    "duration": 0.155,
-    "peak": 0.1119384765625,
-    "rmsDB": -33.00023532148767,
-    "targetRmsDB": -33
+    "title": "noXa \u2014 Kicked",
+    "duration": 0.21,
+    "peak": 0.11199951171875,
+    "dc": 4.54130626860119e-08,
+    "rmsDB": -40.514554580205335,
+    "targetRmsDB": -30,
+    "sha256": "1aa670ead6d98287bccdb003c584ba2d3500f33d747ab23d76377c0ff4a006c6"
   },
   "ban": {
-    "duration": 0.22,
-    "peak": 0.10809326171875,
-    "rmsDB": -33.00029743755714,
-    "targetRmsDB": -33
+    "title": "noXa \u2014 Banned",
+    "duration": 0.29,
+    "peak": 0.11199951171875,
+    "dc": 5.700122350933908e-08,
+    "rmsDB": -40.19254920118736,
+    "targetRmsDB": -29,
+    "sha256": "2e5304a32d73fc51183138d2de2835538b853ec2780a35eff9dda5121e809aab"
   },
   "announcement": {
-    "duration": 0.24,
-    "peak": 0.084503173828125,
-    "rmsDB": -34.0002737337806,
-    "targetRmsDB": -34
+    "title": "noXa \u2014 Announcement",
+    "duration": 0.25,
+    "peak": 0.105010986328125,
+    "dc": -5.0862630208333337e-08,
+    "rmsDB": -47.81111024891776,
+    "targetRmsDB": -33,
+    "sha256": "482711a3511fa25aa444e10474561666338e549dd0ffd3f7d7ce52bf865c4bc5"
   },
   "channel_watch": {
-    "duration": 0.15,
-    "peak": 0.031707763671875,
-    "rmsDB": -44.00005744562111,
-    "targetRmsDB": -44
+    "title": "noXa \u2014 Channel watch",
+    "duration": 0.13,
+    "peak": 0.05499267578125,
+    "dc": -5.868765024038462e-08,
+    "rmsDB": -44.77110811381544,
+    "targetRmsDB": -42,
+    "sha256": "dd33bae64830aff691a58f9a456a0714955c376d9e71409528f3b3c3f4cca37c"
   }
 }

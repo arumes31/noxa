@@ -1,5 +1,143 @@
 import { expect, test } from "@playwright/test";
 
+test("@quickwins workspace labels, devices and language switch", async ({ page }) => {
+    await page.evaluate(() => {
+        const v = window.__noxa;
+        v.state.settings.language = "en";
+        v.state.settings.capture_device_id = "mic-usb";
+        v.state.settings.playback_device_id = "speaker-usb";
+        v.state.channels = [{ ChannelID: 42, Name: "Lounge" }];
+        v.state.myChannelID = 42;
+        v.state.myClientID = "me";
+        v.state.clients = [{ client_id: "me", unique_id: "me", nickname: "Alice", channel_id: 42 }];
+        v.showWorkspace(false);
+        v.applyAppearance();
+        v.renderTree();
+    });
+    await expect(page.locator("#channel-member-count")).toHaveText("1 in voice");
+    await expect(page.locator('#chat-scope option[value="global"]')).toHaveText("Entire server");
+    await page.locator(".channel-actions > summary").click();
+    await expect(page.locator("#chat-pins-btn")).toHaveText("Pinned messages");
+    await expect(page.locator("#chat-pins-btn svg")).toHaveCount(1);
+    await page.locator("#voice-options > summary").click();
+    await expect(page.locator("#voice-input-device")).toContainText("USB Mic");
+    await expect(page.locator("#voice-output-device")).toContainText("USB Speakers");
+    await page.screenshot({ path: "../../.cache/ui-quickwins-workspace-en.png" });
+    await page.evaluate(() => { window.__noxa.state.settings.language = "de"; window.__noxa.applyAppearance(); });
+    await expect(page.locator("#channel-member-count")).toHaveText("1 im Sprachkanal");
+    await expect(page.locator("#chat-pins-btn")).toHaveText("Angeheftete Nachrichten");
+    await expect(page.locator("#voice-input-label")).toHaveText("Mikrofon");
+    await expect(page.locator('#chat-scope option[value="direct"]')).toHaveText("Direktnachricht");
+    await page.locator("#voice-options > summary").click();
+    await page.locator(".channel-actions > summary").click();
+    await page.setViewportSize({ width: 720, height: 800 });
+    await page.screenshot({ path: "../../.cache/ui-quickwins-workspace-de-small.png" });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+});
+
+test("@quickwins file actions and checksum stay accessible in both languages", async ({ page }) => {
+    await page.evaluate(() => {
+        const v = window.__noxa;
+        v.state.myChannelID = 42;
+        v.state.channels = [{ ChannelID: 42, Name: "Lounge" }];
+        window.__fileListResponse = { entries: [{ name: "notes.txt", size: 1200, sha256: "a".repeat(64), uploader: "alice", uploaded_at: 1234 }], folders: [] };
+        v.showWorkspace(false);
+    });
+    await page.locator("#tab-files").click();
+    await expect(page.locator(".fb-grid thead")).not.toContainText("sha-256");
+    await expect(page.locator(".fb-sha")).toBeHidden();
+    await expect(page.getByRole("button", { name: "Download", exact: true })).toBeVisible();
+    await page.locator(".fb-action-menu > summary").click();
+    await expect(page.getByRole("button", { name: "Verify checksum", exact: true })).toBeVisible();
+    await page.getByRole("button", { name: "Verify checksum", exact: true }).click();
+    await expect(page.locator(".fb-sha")).toHaveText("✓ ok");
+    expect(await page.evaluate(() => window.__callArgs.VerifyFile.at(-1))).toEqual([42, "", "notes.txt", "a".repeat(64)]);
+    await page.evaluate(() => { window.__noxa.state.settings.language = "de"; window.__noxa.applyAppearance(); });
+    await expect(page.locator(".fb-details summary")).toHaveText("Dateidetails");
+    await page.locator(".fb-details summary").click();
+    await expect(page.locator(".fb-sha")).toHaveText("a".repeat(64));
+    await page.locator(".fb-action-menu > summary").click();
+    await expect.poll(() => page.locator(".fb-action-list").evaluate(menu => {
+        const bounds = menu.getBoundingClientRect();
+        const list = menu.closest(".fb-list").getBoundingClientRect();
+        return bounds.top >= list.top && bounds.bottom <= list.bottom;
+    })).toBe(true);
+    await page.screenshot({ path: "../../.cache/ui-quickwins-files-de.png" });
+    await page.locator(".fb-action-menu > summary").press("Escape");
+    await expect(page.locator(".fb-action-menu")).not.toHaveAttribute("open");
+});
+
+test("@quickwins leaving a channel keeps the server session until its authoritative event", async ({ page }) => {
+    await page.evaluate(() => {
+        const v = window.__noxa;
+        v.state.myClientID = "me";
+        v.state.myChannelID = 42;
+        v.state.channels = [{ ChannelID: 42, Name: "Lounge" }];
+        v.state.clients = [{ client_id: "me", unique_id: "me", nickname: "Alice", channel_id: 42 }];
+        v.showWorkspace(false);
+        v.renderTree();
+    });
+    await page.locator("#voice-leave-channel").click();
+    expect(await page.evaluate(() => window.__callArgs.JoinChannel.at(-1))).toEqual([0]);
+    expect(await page.evaluate(() => window.__calls.Disconnect || 0)).toBe(0);
+    expect(await page.evaluate(() => window.__noxa.state.myChannelID)).toBe(42);
+    await page.evaluate(() => {
+        for (const callback of window.__events.event || []) callback(JSON.stringify({ type: "user_moved", data: { client_id: "me", from_channel_id: 42, channel_id: 0, by_client_id: "me" } }));
+    });
+    await expect(page.locator("#voice-leave-channel")).toBeDisabled();
+    await expect(page.locator("#app")).toBeVisible();
+    await expect(page.locator("#channel-member-count")).toHaveText("0 in voice");
+});
+
+test("@quickwins encrypted message recovery explains each failure and translates live", async ({ page }) => {
+    await page.evaluate(() => {
+        window.__noxa.showWorkspace(false);
+        window.__noxa.openPM("peer", "Bob");
+    });
+    await expect(page.locator("#chat-head-title")).toHaveText("DM — Bob");
+    await page.evaluate(() => {
+        for (const callback of window.__events.event || []) callback(JSON.stringify({ type: "chat", data: { direct: true, from_unique_id: "peer", from: "Bob", text: "[encrypted message — decryption failed]", client_msg_id: "failure" } }));
+    });
+    await expect(page.locator(".missing-key .msg-text")).toHaveText("This message could not be decrypted. Ask the sender to resend it.");
+    await expect(page.locator(".missing-key .msg-lock svg")).toHaveCount(1);
+    await page.evaluate(() => { window.__noxa.state.settings.language = "de"; window.__noxa.applyAppearance(); });
+    await expect(page.locator(".missing-key .msg-text")).toContainText("nicht entschlüsselt");
+});
+
+test("@quickwins transfer estimates and new-message counts translate without changing their meaning", async ({ page }) => {
+    await page.evaluate(() => {
+        const v = window.__noxa;
+        v.showWorkspace(false);
+        v.state.myChannelID = 42;
+        v.state.channels = [{ ChannelID: 42, Name: "Lounge" }];
+        v.refreshHeader();
+        for (let id = 1; id <= 35; id++) {
+            for (const callback of window.__events.event || []) callback(JSON.stringify({ type: "chat", data: { id, channel_id: 42, from: "Bob", from_unique_id: "peer", text: "Message " + id } }));
+        }
+    });
+    await expect(page.locator("#chat-log .msg.rich")).toHaveCount(35);
+    await page.locator("#chat-log").evaluate(log => { log.scrollTop = 0; log.dispatchEvent(new Event("scroll")); });
+    await page.evaluate(() => {
+        for (const callback of window.__events.event || []) callback(JSON.stringify({ type: "chat", data: { id: 36, channel_id: 42, from: "Bob", from_unique_id: "peer", text: "New message" } }));
+    });
+    await expect(page.locator("#chat-newpill")).toHaveText("1 new message ↓");
+    await page.evaluate(() => {
+        for (const callback of window.__events.event || []) callback(JSON.stringify({ type: "chat", data: { id: 37, channel_id: 42, from: "Bob", from_unique_id: "peer", text: "Another message" } }));
+        for (const callback of window.__events.ft_progress || []) callback({ id: "eta", name: "notes.zip", direction: "download", status: "active", total: 121000, transferred: 1000, bytes_per_sec: 1000 });
+    });
+    await expect(page.locator("#chat-newpill")).toHaveText("2 new messages ↓");
+    await page.evaluate(() => { window.__noxa.state.settings.language = "de"; window.__noxa.applyAppearance(); });
+    await expect(page.locator("#chat-newpill")).toHaveText("2 neue Nachrichten ↓");
+    await page.locator("#chat-newpill").click();
+    await expect(page.locator("#chat-newpill")).toBeHidden();
+    await page.evaluate(() => { window.__noxa.state.settings.language = "en"; window.__noxa.applyAppearance(); });
+    await page.locator("#tab-transfers").click();
+    await expect(page.locator(".tr-meta")).toContainText("About 2 min remaining");
+    await page.evaluate(() => { window.__noxa.state.settings.language = "de"; window.__noxa.applyAppearance(); });
+    await expect(page.locator(".tr-meta")).toContainText("Noch etwa 2 Min.");
+    await page.locator(".tr-close").click();
+});
+
 async function installSaveScenario(page, settings = {}) {
     await page.evaluate((settings) => {
         const app = window.go.main.App;
@@ -437,6 +575,60 @@ test("client language translates every settings page and persists on Apply @a11y
     await expect(page.getByRole("dialog", { name: "Settings", exact: true })).toBeVisible();
     await expect(page.getByRole("combobox", { name: "Language", exact: true })).toHaveValue("en");
     expect(errors).toEqual([]);
+});
+
+test("terminal audio finishes its cue before speech and suppresses disconnect cascades", async ({ page }) => {
+    await page.evaluate(async () => {
+        const { state, soundEngine, speechQueue } = window.__noxa;
+        Object.assign(state.settings, { play_sounds: true, effects_enabled: true, spoken_messages: true,
+            language: "en", speech_volume: 90, sound_volume: 100, event_sounds: {}, speech_events: {}, notify_matrix: {}, dnd_enabled: false });
+        state.myClientID = "audio-self"; state.replayingTabID = "";
+        state.lastConnect = { addr: "localhost" };
+        await soundEngine.preload(); await soundEngine.resume(); speechQueue.clear();
+        window.__audioTimeline = [];
+        const play = soundEngine.play.bind(soundEngine);
+        soundEngine.play = (id, options = {}) => {
+            const started = performance.now();
+            const ok = play(id, { ...options, onEnded: () => {
+                window.__audioTimeline.push({ id, end: performance.now() }); options.onEnded?.();
+            } });
+            if (ok) window.__audioTimeline.push({ id, start: started });
+            return ok;
+        };
+        for (const cb of window.__events.event) cb(JSON.stringify({ type: "kicked", data: {
+            client_id: "audio-self", ban: true, from_server: true, reason: "visual-only-reason" } }));
+        for (const cb of window.__events.disconnected) cb();
+    });
+    await expect.poll(() => page.evaluate(() => window.__audioTimeline.some(x => x.id === "speech_en_banned" && x.start))).toBeTruthy();
+    const timeline = await page.evaluate(() => window.__audioTimeline);
+    expect(timeline.filter(x => x.start).map(x => x.id)).toEqual(["ban", "speech_en_banned"]);
+    const gap = timeline.find(x => x.id === "speech_en_banned" && x.start).start - timeline.find(x => x.id === "ban" && x.end).end;
+    expect(gap).toBeGreaterThanOrEqual(140);
+    expect(gap).toBeLessThan(400);
+    await expect(page.getByText(/visual-only-reason/).first()).toBeVisible();
+});
+
+test("individual and all speech previews use draft settings and stop on close", async ({ page }, testInfo) => {
+    await page.evaluate(() => {
+        Object.assign(window.__noxa.state.settings, { language: "en", spoken_messages: true, effects_enabled: false,
+            speech_admin: true, speech_connection: true, speech_events: {}, event_sounds: {}, notify_matrix: {}, dnd_enabled: false });
+        window.__noxa.openSettings("notifications");
+    });
+    await expect(page.getByRole("button", { name: "Preview You were banned from the server.", exact: true })).toBeVisible();
+    await page.getByRole("button", { name: "Preview You were banned from the server.", exact: true }).click();
+    await expect.poll(() => page.evaluate(() => window.__noxa.speechQueue.current?.event)).toBe("banned");
+    await page.getByRole("button", { name: "Stop preview", exact: true }).click();
+    await page.getByRole("checkbox", { name: "Do not disturb", exact: true }).check();
+    await page.getByRole("button", { name: "Preview all spoken messages", exact: true }).click();
+    expect(await page.evaluate(() => window.__noxa.speechQueue.current)).toBeNull();
+    await page.getByRole("checkbox", { name: "Do not disturb", exact: true }).uncheck();
+    await page.getByRole("button", { name: "Preview all spoken messages", exact: true }).scrollIntoViewIfNeeded();
+    await page.screenshot({ path: testInfo.outputPath("noxa-audio-settings.png"), fullPage: true });
+    await page.getByRole("button", { name: "Preview all spoken messages", exact: true }).click();
+    await expect.poll(() => page.evaluate(() => window.__noxa.speechQueue.current?.preview)).toBe(true);
+    await page.getByRole("button", { name: "Cancel", exact: true }).click();
+    await expect.poll(() => page.evaluate(() => window.__noxa.speechQueue.current)).toBeNull();
+    expect(await page.evaluate(() => window.__noxa.state.settings.effects_enabled)).toBe(false);
 });
 
 test("static speech follows language, rare events, draft volume and mute settings", async ({ page }) => {
@@ -1633,7 +1825,7 @@ test("routes decrypted direct messages and echoes without mixing global chat or 
                 text: "[encrypted message — key unavailable]", client_msg_id: "unopened-dm" },
         }));
     });
-    await expect(page.locator("#chat-log .missing-key .msg-lock")).toHaveText("⚠");
+    await expect(page.locator("#chat-log .missing-key .msg-lock svg")).toHaveCount(1);
     const records = await page.evaluate(() => window.__callArgs.DMHistoryAppend.map((args) => args[2]));
     expect(records.find((record) => record.client_msg_id === "received-dm").enc_verified).toBe(true);
     expect(records.find((record) => record.client_msg_id === "unopened-dm").enc_verified).toBe(false);
@@ -2448,7 +2640,7 @@ test("file browser filters names and sorts columns without refetching @a11y", as
         };
     });
     await page.locator("#tab-files").click();
-    const names = page.locator(".fb-name");
+    const names = page.locator(".fb-filename");
     await expect(names).toHaveText(["Alpha.txt", "report2.txt", "report10.txt"]);
     const requests = await page.evaluate(() => window.__calls.FileList);
     const filter = page.getByRole("searchbox", { name: "Filter files by name" });
@@ -2971,7 +3163,8 @@ test("does not let an old checksum restoration timer mutate a reset file view", 
         };
     });
     await page.locator("#tab-files").click();
-    const verify = page.locator(".fb-actions button[title='verify checksum (re-downloads and compares)']");
+    await page.locator(".fb-action-menu > summary").click();
+    const verify = page.getByRole("button", { name: "Verify checksum", exact: true });
     await expect(verify).toBeVisible();
     await verify.click();
     const oldSHA = await page.evaluate(() => {
@@ -3203,7 +3396,8 @@ test("does not delete a same-named file in a new channel after user_moved during
         };
     });
     await page.locator("#tab-files").click();
-    await expect(page.locator("#files-pane .fb-name")).toHaveText("same-name.txt");
+    await expect(page.locator("#files-pane .fb-filename")).toHaveText("same-name.txt");
+    await page.locator(".fb-action-menu > summary").click();
     await page.locator('#files-pane .fb-actions button[title="delete"]').click();
     await expect(page.getByRole("dialog", { name: "Delete file?" })).toBeVisible();
 
@@ -3228,7 +3422,7 @@ test("does not export a different channel after its passphrase dialog is left op
         state.clients = [{ client_id: "client-a", unique_id: "user-a", nickname: "Alice", channel_id: 1 }];
     });
     await page.getByLabel("More channel actions", { exact: true }).click();
-    await page.getByRole("button", { name: "Export chat history" }).click();
+    await page.getByRole("button", { name: "Export history" }).click();
     await expect(page.getByRole("dialog", { name: "Export chat" })).toBeVisible();
     await page.locator('input[placeholder^="passphrase"]').fill("encrypted-export");
     await page.evaluate(() => {
@@ -4210,7 +4404,7 @@ test("moves focus explicitly between login and the connected workspace", async (
     await expect(page.locator(".skip-link")).toBeHidden();
     await expect(page.locator("#login-serverpw")).toHaveAttribute("autocomplete", "off");
     await expect(page.locator(".login-card input[type=password]")).toHaveCount(1);
-    await expect(page.locator("#login-serverpw")).toHaveAccessibleName("SERVER PASSWORD");
+    await expect(page.locator("#login-serverpw")).toHaveAccessibleName("Server password (optional)");
     await page.locator(".login-card").screenshot({ path: testInfo.outputPath("login.png") });
 
     await page.locator("#login-nick").fill("Alice");

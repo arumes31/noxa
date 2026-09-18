@@ -9,6 +9,8 @@ import { setSafeImage } from "./safe-media.js";
 import { labelButton } from "./icons.js";
 import { renderMicStatus } from "./audio.js";
 
+import { t } from "./i18n.js";
+
 const V = () => window.__noxa;
 
 // (70/73) Track-identity contract with the router: a publisher's media arrives
@@ -272,6 +274,7 @@ function toggleFocus(clid) {
 }
 
 export function initVideo() {
+    window.addEventListener("noxa-language-changed", () => { syncCameraButton(); syncShareButton(); syncLowBandwidthButton(); });
     syncCameraButton();
     syncShareButton();
     syncLowBandwidthButton();
@@ -535,8 +538,8 @@ const LOW_BW_ESTIMATE_ID = "voice-lowbw-estimate";
 function syncLowBandwidthButton() {
     const btn = V().$("voice-lowbw");
     if (!btn) return;
-    const description = `Estimated outgoing video: up to ${LOW_BW_HOURLY_MB} MB/hour at the 150 kbps camera or screen-share cap. Voice, protocol overhead, and incoming data are additional.`;
-    btn.title = `Low bandwidth — ${description}`;
+    const description = t("voice.lowBandwidthHelp", { count: LOW_BW_HOURLY_MB });
+    btn.title = t("voice.lowBandwidth") + " — " + description;
     btn.setAttribute("aria-description", description);
     btn.classList.toggle("active", lowBandwidth);
     btn.setAttribute("aria-pressed", String(lowBandwidth));
@@ -547,7 +550,7 @@ function syncLowBandwidthButton() {
         badge.className = "lowbw-estimate";
         btn.insertAdjacentElement("afterend", badge);
     }
-    badge.textContent = `≤${LOW_BW_HOURLY_MB} MB/h video send`;
+    badge.textContent = t("voice.lowBandwidthEstimate", { count: LOW_BW_HOURLY_MB });
     badge.title = description;
     badge.setAttribute("aria-label", description);
     badge.classList.toggle("active", lowBandwidth);
@@ -651,12 +654,12 @@ function syncShareButton() {
     const btn = V().$("voice-screen");
     if (!btn) return;
     const sharing = !!V().state.screenSharing;
-    const label = sharing ? "Stop sharing" : "Start sharing";
+    const label = sharing ? t("voice.stopShare") : t("voice.startShare");
     btn.classList.toggle("active", sharing);
     btn.setAttribute("aria-pressed", String(sharing));
     btn.setAttribute("aria-label", label);
     btn.title = label;
-    labelButton(btn, "screen", sharing ? "Stop sharing" : "Share screen");
+    labelButton(btn, "screen", sharing ? t("voice.stopShare") : t("voice.share"));
 }
 
 // shareToggle is the voice-screen button handler: stop when sharing
@@ -1097,7 +1100,7 @@ function confirmStopShare() {
     return confirmStopPublish({
         heading: "Stop sharing?",
         what: "screen",
-        stopLabel: "Stop sharing",
+        stopLabel: t("voice.stopShare"),
         keepLabel: "Keep sharing",
         onStop: () => doStopShare(),
     });
@@ -1155,9 +1158,9 @@ function syncCameraButton() {
     btn.disabled = !state.pc || !!cameraRequest;
     btn.classList.toggle("active", !!cam && !cameraOff);
     btn.setAttribute("aria-pressed", String(!!cam && !cameraOff));
-    btn.title = !cam || cameraOff ? "Camera off — click to turn on" : "Camera on — click to turn off";
+    btn.title = !cam || cameraOff ? t("voice.cameraEnable") : t("voice.cameraDisable");
     const enabled = !!cam && !cameraOff;
-    labelButton(btn, enabled ? "camera" : "cameraOff", enabled ? "Camera on" : "Camera off");
+    labelButton(btn, enabled ? "camera" : "cameraOff", enabled ? t("voice.cameraOn") : t("voice.cameraOff"));
     btn.setAttribute("aria-label", btn.title);
     $("local-video").classList.toggle("hidden", !cam || cameraOff);
     const preview = $("local-video");

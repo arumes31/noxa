@@ -9,7 +9,7 @@ import { initMenu } from "./menu.js";
 import { initSettingsUI } from "./settings-ui.js";
 import { initClientInfo } from "./clientinfo.js";
 import { initUpdater, startupAutoCheck } from "./updater.js";
-import { playEvent, playSpeech, clearSpeech, initSounds, updateSoundOutput, soundEngine, speechQueue } from "./sounds.js";
+import { playEvent, playAlert, clearSpeech, initSounds, updateSoundOutput, updateConversationDucking, soundEngine, speechQueue } from "./sounds.js";
 import {
     startMicMeter, stopMicMeter, pttRelease, makeLimiter,
     getUserVolume, isUserMuted, setUserMuted, registerUserChain, unregisterUserChain,
@@ -160,9 +160,13 @@ function applyAppearance() {
     const s = state.settings || {};
     const root = document.documentElement;
     // (336) language applies live (menus + static labels rebuild).
+    const previousLanguage = currentLanguage();
     setLanguage(s.language || "system");
     root.lang = currentLanguage();
     applyStaticLabels();
+    if (previousLanguage !== currentLanguage()) window.dispatchEvent(new Event("noxa-language-changed"));
+    syncMuteButton($("voice-mute"), state.muted);
+    renderVoiceStatus();
     initMenu();
     // (294/295) theme sets the full variable palette via [data-theme].
     root.dataset.theme = s.theme || "dark";
@@ -637,8 +641,7 @@ function scheduleReconnect(
     if (generation !== reconnectGeneration || !autoReconnectEnabled() || !target || state.reconnectAttempts >= 5) {
         if (target && state.reconnectAttempts >= 5 && !reconnectFailureSounded && ownsSource()) {
             reconnectFailureSounded = true;
-            playEvent("connection_failed");
-            playSpeech("reconnect_failed");
+            playAlert("reconnect_failed");
         }
         chatUI.cancelReconnectAnnouncementBatch();
         showLogin();
@@ -756,8 +759,7 @@ window.runtime.EventsOn("intentional_disconnect", (tabID) => {
 window.runtime.EventsOn("disconnected", () => {
     const unexpected = !!state.lastConnect;
     if (unexpected && state.settings?.notify_connection !== false) toast("Connection lost", "warn", "conn");
-    if (unexpected) playEvent("connection_lost");
-    if (unexpected) playSpeech("connection_lost", { delay: 1200 });
+    if (unexpected) playAlert("connection_lost", { delay: 1200 });
     sysMsg("disconnected from server");
     // (32/33) whisper state is per-connection: client IDs and the server-side
     // whisper list do not survive a reconnect.
@@ -782,8 +784,8 @@ window.runtime.EventsOn("disconnected", () => {
 window.runtime.EventsOn("servererror", (msg) => {
     const text = String(msg).replace(/^\d+:\s*/, "");
     toast(text || "The server rejected that action", "warn");
-    playEvent("server_error");
-    if (/^insufficient permission[: ]|^permission denied\b/i.test(text)) playSpeech("permission_denied");
+    if (/^insufficient permission[: ]|^permission denied\b/i.test(text)) playAlert("permission_denied");
+    else playEvent("server_error");
 });
 
 // (282) the Go side maintains settings of its own (recents on every connect),
@@ -1188,15 +1190,15 @@ window.runtime.EventsOn("event", (json) => {
             if (c) c.channel_id = nextChannelID;
             if (d.client_id === state.myClientID) {
                 const previousChannelID = state.myChannelID;
-                if (nextChannelID > 0 && nextChannelID !== previousChannelID && d.by_client_id && d.by_client_id !== state.myClientID) {
-                    playSpeech("moved_by_admin");
-                }
+                const forcedMove = nextChannelID > 0 && nextChannelID !== previousChannelID
+                    && d.by_client_id && d.by_client_id !== state.myClientID;
                 state.myChannelID = nextChannelID;
                 if (nextChannelID > 0 && nextChannelID !== previousChannelID) setDeafened(false);
                 let playedOwnCue = false;
                 if (!actionSoundsSuppressed()) {
                     if (nextChannelID > 0 && nextChannelID !== previousChannelID) {
-                        if (previousChannelID > 0) playEvent("own_channel_switch");
+                        if (forcedMove) playAlert("moved_by_admin", { effect: previousChannelID > 0 ? "own_channel_switch" : "own_channel_join" });
+                        else if (previousChannelID > 0) playEvent("own_channel_switch");
                         else playEvent("own_channel_join");
                         playedOwnCue = true;
                     } else if (nextChannelID === 0 && previousChannelID > 0) {
@@ -1398,8 +1400,7 @@ window.runtime.EventsOn("event", (json) => {
             if (!actionSoundsSuppressed()) {
                 state.lastConnect = null;
                 clearReconnectTimer();
-                playEvent("connection_disconnected");
-                playSpeech("server_shutdown");
+                playAlert("server_shutdown");
                 toast("The server is shutting down.", "warn", "conn");
             }
             break;
@@ -1409,14 +1410,14 @@ window.runtime.EventsOn("event", (json) => {
             const description = self ? (d.ban ? "You were banned from the server." : d.from_server ? "You were kicked from the server." : "You were removed from the channel.") : "Client " + (d.ban ? "banned" : "kicked");
             // (385) kicks dispatch through the notification matrix.
             window.__noxaNotify?.notify("kick", description + (d.reason ? " Reason: " + d.reason : ""),
-                { className: "messages", kind: "warn", soundEvent: d.ban ? "ban" : "kick" });
+                { className: "messages", kind: "warn", soundEvent: d.ban ? "ban" : "kick", noSound: self });
             if (self && !actionSoundsSuppressed()) {
                 if (d.from_server || d.ban) {
                     state.lastConnect = null;
                     reconnectGeneration++;
                     clearReconnectTimer();
                 }
-                playSpeech(removal, { delay: 350 });
+                playAlert(removal);
             }
             if (state.settings?.sys_kick !== false) { // (130) category filter
                 sysMsg("client " + d.client_id + " was kicked" + (d.reason ? " (" + d.reason + ")" : ""));
@@ -1779,7 +1780,7 @@ function clientRow(c) {
     }
     const name = document.createElement("span");
     name.className = "client-name";
-    name.textContent = (c.nickname || c.unique_id) + (c.client_id === state.myClientID ? " (you)" : "");
+    name.textContent = (c.nickname || c.unique_id) + (c.client_id === state.myClientID ? t("workspace.you") : "");
     // (178) nickname color from the first applicable server group.
     const gColor = P().groupColorFor(c.unique_id);
     if (gColor) name.style.color = gColor;
@@ -2364,6 +2365,7 @@ function applyLiveAudioSettings() {
 let unduckTimer = null;
 
 function recomputeDucking() {
+    updateConversationDucking();
     const inMyChannel = state.clients.filter((c) => c.channel_id === state.myChannelID && c.channel_id !== 0);
     const prioAll = inMyChannel.filter((c) => c.priority_speaker);
     const anyOtherTalking = prioAll.some((c) => c.client_id !== state.myClientID && c.is_speaking);
@@ -2535,7 +2537,8 @@ function setVoiceStatus(text) {
 }
 
 function renderVoiceStatus() {
-    $("voice-status").textContent = voiceStatusBase +
+    const key = { "voice on": "voice.on", "voice off": "voice.off", "voice connecting…": "voice.connecting", "voice unavailable": "voice.unavailable" }[voiceStatusBase];
+    $("voice-status").textContent = (key ? t(key) : voiceStatusBase) +
         (state.whisperArmed ? " · whisper → " + uidName(state.lastWhispererUID) : "");
 }
 
@@ -3353,6 +3356,7 @@ window.__noxa = {
     applyAppearance, toggleCompact, recentChannels, syncOwnChannel,
     playConnectionCue: (event = "connection_connected") => playEvent(event),
     startQualitySampler, stopQualitySampler,
+    voiceOutputDevice: () => ({ active: !!remoteChain.ctx && remoteChain.ctx.state !== "closed", id: typeof remoteChain.ctx?.sinkId === "string" ? remoteChain.ctx.sinkId : "" }),
     checkCertificateClock,
     ensureVoiceForChannel, resetVoiceSession, retryMicrophoneAccess,
     // (70) shared system audio controls for the screen tile's context menu.
