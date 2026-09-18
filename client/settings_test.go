@@ -119,6 +119,15 @@ func TestSaveSettingsInvalidInputLeavesCurrentSettingsUntouched(t *testing.T) {
 	if after.Volume != before.Volume || after.ChatMaxLines != before.ChatMaxLines || after.HotkeyPTT != before.HotkeyPTT {
 		t.Fatalf("invalid save changed settings: before=%+v after=%+v", before, after)
 	}
+	invalid = cloneSettings(before)
+	invalid.SpeechLanguage = "unsupported"
+	invalid.DuckEffectsWhileSpeaking = true
+	if got := a.SaveSettings(invalid); got != "invalid announcement language" {
+		t.Fatalf("unexpected announcement language validation: %q", got)
+	}
+	if got := a.GetSettings(); got.SpeechLanguage != before.SpeechLanguage || got.DuckEffectsWhileSpeaking != before.DuckEffectsWhileSpeaking {
+		t.Fatal("rejected announcement language changed audio settings")
+	}
 }
 
 func TestAtomicSettingsRenameFailurePreservesExistingFile(t *testing.T) {
@@ -316,6 +325,53 @@ func TestSpeechSettingsPreserveExplicitPreferences(t *testing.T) {
 	s.SpeechVolume = 900
 	if normalizeSettings(s).SpeechVolume != 200 {
 		t.Fatal("speech gain must be bounded")
+	}
+}
+
+func TestIndependentAudioSettingsRoundTrip(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	s := DefaultSettings()
+	s.EffectsEnabled = false
+	s.SpokenMessages = true
+	s.SpeechRemoval = false
+	s.SpeechPermissions = false
+	s.SpeechLanguage = "de"
+	s.DuckEffectsWhileSpeaking = true
+	if err := saveSettingsAt(path, s); err != nil {
+		t.Fatal(err)
+	}
+	got := loadSettingsAt(path)
+	if got.SpeechLanguage != "de" || !got.DuckEffectsWhileSpeaking {
+		t.Fatal("announcement language or conversation ducking did not survive save/load")
+	}
+	if got.EffectsEnabled || !got.SpokenMessages || got.SpeechRemoval || got.SpeechPermissions {
+		t.Fatal("independent audio choices changed on save/load")
+	}
+	for _, raw := range []string{
+		`{"settings_version":7,"play_sounds":false,"sound_volume":100}`,
+		`{"settings_version":7,"play_sounds":true,"sound_volume":0}`,
+	} {
+		if err := os.WriteFile(path, []byte(raw), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		got = loadSettingsAt(path)
+		if got.SpokenMessages {
+			t.Fatal("migration introduced speech for a silent profile")
+		}
+		if !got.EffectsEnabled {
+			t.Fatal("new effects switch must preserve legacy effect policy")
+		}
+	}
+}
+
+func TestLegacyAnnouncementLanguageAndDucking(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	if err := os.WriteFile(path, []byte(`{"settings_version":9,"language":"de","sound_volume":0,"play_sounds":false}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got := loadSettingsAt(path)
+	if got.SpeechLanguage != "interface" || got.DuckEffectsWhileSpeaking || got.Language != "de" || got.SoundVolume != 0 || got.PlaySounds {
+		t.Fatal("new audio settings changed the legacy profile")
 	}
 }
 

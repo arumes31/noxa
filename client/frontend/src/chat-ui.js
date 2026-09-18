@@ -17,6 +17,8 @@ import { imageDataURL } from "./safe-media.js";
 import { parseRuntimeObject } from "./runtime-json.js";
 import { parseFileRef, transformCustomEmoji } from "./chat-parsers.js";
 import { captureScope, scopeIsCurrent } from "./scoped-actions.js";
+import { t } from "./i18n.js";
+import { icon } from "./icons.js";
 import { avatarColor } from "./workspace-ui.js";
 
 const V = () => window.__noxa;
@@ -508,15 +510,17 @@ function renderMsg(m) {
         const lock = document.createElement("span");
         lock.className = "msg-lock";
         if (unopened) {
-            lock.textContent = "⚠";
-            lock.title = "this message is still encrypted — its key is not available to this client";
+            lock.innerHTML = icon("warning");
+            lock.setAttribute("aria-label", t("workspace.encryption"));
+            lock.title = t("chat.encryptedHelp");
         } else if (m.e2e || (m.direct && m.enc)) {
-            lock.textContent = "🔒";
-            lock.title = "end-to-end encrypted — only you and the other user can read this";
+            lock.innerHTML = icon("lock");
+            lock.setAttribute("aria-label", t("chat.directHelp"));
+            lock.title = t("chat.directHelp");
         } else {
-            lock.textContent = "🛡";
-            lock.title = "encrypted with this channel's key — stored encrypted. The server holds " +
-                "the channel key so it can moderate at send time; it does not keep the text.";
+            lock.innerHTML = icon("shield");
+            lock.setAttribute("aria-label", t("chat.channelHelp"));
+            lock.title = t("chat.channelHelp");
         }
         el.appendChild(lock);
     }
@@ -526,6 +530,11 @@ function renderMsg(m) {
     if (m.deleted) {
         body.classList.add("tombstone");
         body.textContent = "message deleted";
+    } else if (unopened) {
+        const key = m.text === "[encrypted message — you do not have access]" ? "chat.noAccess"
+            : m.text === "[refused: server sent plaintext history]" ? "chat.plaintextRefused"
+                : m.text === "[encrypted message — decryption failed]" ? "chat.decryptFailed" : "chat.keyUnavailable";
+        body.textContent = t(key);
     } else {
         renderBody(body, m);
     }
@@ -822,10 +831,11 @@ function openReactStrip(m, anchorEl) {
 function renderActions(m) {
     const acts = document.createElement("span");
     acts.className = "msg-actions";
-    const mk = (label, title, fn) => {
+    const mk = (glyph, title, fn) => {
         const b = document.createElement("button");
-        b.textContent = label;
+        b.innerHTML = icon(glyph);
         b.title = title;
+        b.setAttribute("aria-label", title);
         b.onclick = (e) => {
             e.stopPropagation();
             fn();
@@ -833,18 +843,18 @@ function renderActions(m) {
         acts.appendChild(b);
         return b;
     };
-    mk("😊", "react", () => openReactStrip(m, acts));
-    mk("↩", "reply", () => setReply(m));
+    mk("smile", t("chat.action.react"), () => openReactStrip(m, acts));
+    mk("reply", t("chat.action.reply"), () => setReply(m));
     // (108) only messages that are actually part of a chain get the affordance
     // — on everything else a thread button would open a panel of one.
     const th = threadIndex(activeKey());
     const root = th.rootOf.get(m.id) || m.id;
-    if (th.replies.get(root)) mk("🧵", "open thread", () => openThread(root));
-    if (m.self && !m.direct) mk("✎", "edit", () => startEdit(m));
-    if (m.self) mk("🗑", "delete", () => deleteMsg(m));
+    if (th.replies.get(root)) mk("thread", t("chat.action.thread"), () => openThread(root));
+    if (m.self && !m.direct) mk("edit", t("chat.action.edit"), () => startEdit(m));
+    if (m.self) mk("trash", t("chat.action.delete"), () => deleteMsg(m));
     if (!m.direct) {
         const pinned = isPinned(m);
-        mk(pinned ? "📍" : "📌", pinned ? "unpin" : "pin", () => pinMsg(m));
+        mk("pin", pinned ? t("chat.action.unpin") : t("chat.action.pin"), () => pinMsg(m));
     }
     return acts;
 }
@@ -1082,7 +1092,7 @@ function renderThreadPanel() {
     if (chain.length === 0) {
         const hint = document.createElement("div");
         hint.className = "set-hint";
-        hint.textContent = "the root of this thread is no longer loaded — scroll up to load older history";
+        hint.textContent = t("chat.missingRoot");
         threadPanel.appendChild(hint);
         return;
     }
@@ -1508,11 +1518,12 @@ function resetNewCount() {
 
 function showNewPill() {
     const pill = $("chat-newpill");
-    pill.textContent = `↓ ${newCount} new message${newCount === 1 ? "" : "s"}`;
+    pill.textContent = t(newCount === 1 ? "chat.newOne" : "chat.newMany", { count: newCount }) + " ↓";
+    pill.setAttribute("aria-label", t("chat.jumpNew", { count: newCount }));
     pill.classList.remove("hidden");
 }
 
-function renderView(keepScrollFrom) {
+function renderView(keepScrollFrom, { suppressMarkRead = false } = {}) {
     const log = $("chat-log");
     log.innerHTML = "";
     const key = activeKey();
@@ -1523,7 +1534,7 @@ function renderView(keepScrollFrom) {
     if (view.kind === "channel" && !V().state.myChannelID) {
         const hint = document.createElement("div");
         hint.className = "empty-state";
-        hint.textContent = "Join a channel to see its chat — or pick global/direct below.";
+        hint.textContent = t("chat.joinEmpty");
         log.appendChild(hint);
         updateHeader();
         return;
@@ -1545,7 +1556,7 @@ function renderView(keepScrollFrom) {
         if (st.end && st.loaded && st.msgs.length) {
             const end = document.createElement("div");
             end.className = "chat-history-end";
-            end.textContent = "— beginning of history —";
+            end.textContent = t("chat.historyStart");
             log.appendChild(end);
         }
         // (103) the server capped this page's key bundle, so rows in it stayed
@@ -1554,8 +1565,8 @@ function renderView(keepScrollFrom) {
         if (st.truncated) {
             const gap = document.createElement("div");
             gap.className = "chat-history-gap";
-            gap.textContent = "some older messages are unavailable — the server could not send every key for this page";
-            gap.title = "scroll up again to retry the missing keys";
+            gap.textContent = t("chat.historyGap");
+            gap.title = t("chat.historyRetry");
             log.appendChild(gap);
         }
     }
@@ -1586,7 +1597,7 @@ function renderView(keepScrollFrom) {
         scrollToBottom();
         resetNewCount();
     }
-    markRead(key);
+    if (!suppressMarkRead) markRead(key);
 }
 
 function lastReadFor(key) {
@@ -2692,7 +2703,7 @@ function showSearchResults(q, results, scanned, undecryptable) {
     if (results.length === 0) {
         const hint = document.createElement("div");
         hint.className = "set-hint";
-        hint.textContent = "no matches";
+        hint.textContent = t("chat.noMatches");
         list.appendChild(hint);
     }
     for (const r of results) {
@@ -2772,7 +2783,7 @@ function updateHeader() {
     $("chat-head-title").textContent = title;
     $("chat-search-btn").classList.toggle("hidden", filesOpen);
     $("chat-head-actions").querySelector(".channel-actions").hidden = filesOpen;
-    $("chat-text").placeholder = view.kind === "channel" || view.kind === "chan" ? "Message " + title + "…" : view.kind === "dm" ? "Message " + (pmTabs.get(view.uid)?.nick || view.uid) + "…" : "Message everyone…";
+    $("chat-text").placeholder = view.kind === "channel" || view.kind === "chan" ? t("workspace.compose", { name: title }) : view.kind === "dm" ? t("workspace.compose", { name: pmTabs.get(view.uid)?.nick || view.uid }) : t("workspace.composeAll");
     const topicEl = $("chat-topic");
     topicEl.textContent = topic;
     topicEl.title = topic; // (111) tooltip carries the full topic
@@ -2805,7 +2816,7 @@ function openDescription() {
         body.innerHTML = renderMarkdown(ch.Description); // escaped inside (112/113)
     } else {
         body.classList.add("set-hint");
-        body.textContent = "This channel has no description.";
+        body.textContent = t("chat.noDescription");
     }
     dlg.appendChild(body);
     // (91-135) one source for the encryption story, so the client and the
@@ -3511,6 +3522,18 @@ export function initChat() {
         isSubscribed,
     });
 
+    window.addEventListener("noxa-language-changed", () => {
+        const log = $("chat-log");
+        const bottomOffset = log.scrollHeight - log.scrollTop;
+        const pending = newCount;
+        const pillWasVisible = !$("chat-newpill").classList.contains("hidden");
+        renderTabs();
+        renderView(bottomOffset, { suppressMarkRead: pillWasVisible });
+        requestAnimationFrame(() => {
+            newCount = pending;
+            if (pillWasVisible && newCount) showNewPill();
+        });
+    });
     renderTabs();
     renderView();
 }

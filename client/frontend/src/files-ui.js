@@ -13,6 +13,8 @@ import { imageDataURL } from "./safe-media.js";
 import { parseRuntimeObject } from "./runtime-json.js";
 import { captureScope, runScopedDialogAction, scopeIsCurrent } from "./scoped-actions.js";
 import { buildFileLink } from "./file-links.js";
+import { icon, labelButton } from "./icons.js";
+import { formatTransferETA } from "./ui-format.js";
 import { t } from "./i18n.js";
 
 const V = () => window.__noxa;
@@ -161,7 +163,7 @@ async function refreshFiles() {
     const list = pane.querySelector(".fb-list");
     if (!fb.channelID) {
         list.removeAttribute("aria-busy");
-        list.innerHTML = `<div class="empty-state">Join a channel to browse its files</div>`;
+        list.innerHTML = `<div class="empty-state">${t("files.join")}</div>`;
         renderFbChrome();
         return;
     }
@@ -169,7 +171,7 @@ async function refreshFiles() {
     const channelID = fb.channelID;
     const folder = fb.folder;
     list.setAttribute("aria-busy", "true");
-    list.innerHTML = `<div class="empty-state" role="status">Loading channel files…</div>`;
+    list.innerHTML = `<div class="empty-state" role="status">${t("files.loading")}</div>`;
     try {
         const resp = await App().FileList(channelID, folder);
         if (generation !== serverViewGeneration || channelID !== fb.channelID || folder !== fb.folder) return;
@@ -179,7 +181,7 @@ async function refreshFiles() {
         fb.quota = resp.quota_bytes || 0;
     } catch (err) {
         if (generation !== serverViewGeneration || channelID !== fb.channelID || folder !== fb.folder) return;
-        list.innerHTML = `<div class="empty-state" role="alert">File list failed: ${esc(err)}</div>`;
+        list.innerHTML = `<div class="empty-state" role="alert">${esc(t("files.listFailed", { error: String(err) }))}</div>`;
         return;
     } finally {
         if (generation === serverViewGeneration && channelID === fb.channelID && folder === fb.folder) {
@@ -209,6 +211,13 @@ function renderFbChrome() {
     const filter = pane.querySelector(".fb-filter");
     filter.placeholder = t("files.filter");
     filter.setAttribute("aria-label", t("files.filter"));
+    for (const [selector, key] of [[".fb-refresh", "files.refreshLabel"], [".fb-upload", "files.uploadFiles"], [".fb-mkdir", "files.newFolderHelp"], [".fb-emoji", "files.manageEmoji"], [".fb-banner", "files.setBanner"], [".fb-transfers", "files.openTransfers"]]) {
+        const button = pane.querySelector(selector);
+        button.title = t(key);
+        button.setAttribute("aria-label", t(key));
+    }
+    pane.querySelector(".fb-upload span").textContent = t("files.upload");
+    pane.querySelector(".fb-list").setAttribute("aria-label", t("files.channelFiles"));
     const ch = V().state.channels.find((c) => c.ChannelID === fb.channelID);
     // Breadcrumb.
     const crumb = pane.querySelector(".fb-crumb");
@@ -231,16 +240,16 @@ function renderFbChrome() {
     if (fb.quota > 0) {
         const pct = Math.min(100, Math.round(fb.used / fb.quota * 100));
         q.innerHTML = `<div class="fb-quota-fill${pct > 90 ? " hot" : ""}" style="width:${pct}%"></div>`;
-        q.title = `${humanBytes(fb.used)} of ${humanBytes(fb.quota)} used (${pct}%)`;
+        q.title = t("files.quota", { used: humanBytes(fb.used), quota: humanBytes(fb.quota), percent: pct });
         q.setAttribute("role", "progressbar");
-        q.setAttribute("aria-label", "Channel file storage used");
+        q.setAttribute("aria-label", t("files.storage"));
         q.setAttribute("aria-valuemin", "0");
         q.setAttribute("aria-valuemax", "100");
         q.setAttribute("aria-valuenow", String(pct));
         q.classList.remove("hidden");
     } else {
         q.classList.add("hidden");
-        q.title = `${humanBytes(fb.used)} used (no quota)`;
+        q.title = t("files.noQuota", { used: humanBytes(fb.used) });
         for (const attr of ["role", "aria-label", "aria-valuemin", "aria-valuemax", "aria-valuenow"]) {
             q.removeAttribute(attr);
         }
@@ -262,12 +271,12 @@ function renderFbList() {
         return (order || byName(a.name || "", b.name || "")) * (fb.descending ? -1 : 1);
     });
     if (!query && subs.length === 0 && entries.length === 0) {
-        list.innerHTML = `<div class="empty-state">Empty folder — drop files here to upload</div>`;
+        list.innerHTML = `<div class="empty-state">${t("files.empty")}</div>`;
         return;
     }
     const table = document.createElement("table");
     table.className = "perm-grid fb-grid";
-    table.innerHTML = `<thead><tr><th data-sort="name"></th><th data-sort="size"></th><th>uploader</th><th data-sort="date"></th><th>sha-256</th><th></th></tr></thead><tbody></tbody>`;
+    table.innerHTML = `<thead><tr><th data-sort="name"></th><th data-sort="size"></th><th>${t("files.uploader")}</th><th data-sort="date"></th><th><span class="sr-only">${t("files.moreActions")}</span></th></tr></thead><tbody></tbody>`;
     for (const header of table.querySelectorAll("[data-sort]")) {
         const key = header.dataset.sort;
         const selected = key === fb.sort;
@@ -290,7 +299,7 @@ function renderFbList() {
     for (const sub of subs) {
         const tr = document.createElement("tr");
         tr.className = "fb-folder";
-        tr.innerHTML = `<td colspan="6">📁 <a class="fb-folder-link"></a></td>`;
+        tr.innerHTML = `<td colspan="5">${icon("folder")} <a class="fb-folder-link"></a></td>`;
         const link = tr.querySelector(".fb-folder-link");
         link.href = "#";
         link.textContent = sub + "/";
@@ -328,48 +337,80 @@ function isChatAttachment(e) {
 
 function fileRow(e) {
     const tr = document.createElement("tr");
-    tr.innerHTML = `
-        <td class="fb-name"></td>
-        <td class="mono">${humanBytes(e.size)}</td>
-        <td class="mono fb-up" title=""></td>
-        <td class="mono fb-date">${fmtDate(e.uploaded_at)}</td>
-        <td class="mono fb-sha" title="click to copy"></td>
-        <td class="fb-actions"></td>`;
+    tr.innerHTML = `<td class="fb-name"></td><td class="mono">${humanBytes(e.size)}</td>
+        <td class="mono fb-up"></td><td class="mono fb-date">${fmtDate(e.uploaded_at)}</td><td class="fb-actions"></td>`;
     const sealed = isChatAttachment(e);
     const nameCell = tr.querySelector(".fb-name");
-    nameCell.textContent = sealed ? "🔒 chat attachment" : e.name;
-    if (sealed) nameCell.title = e.name;
+    const name = document.createElement("span");
+    name.className = "fb-filename";
+    name.textContent = sealed ? t("files.sealedAttachment") : e.name;
+    name.title = e.name;
+    nameCell.appendChild(name);
+    const details = document.createElement("details");
+    details.className = "fb-details";
+    details.innerHTML = `<summary>${t("files.details")}</summary><div class="fb-checksum"><span>SHA-256</span><code class="fb-sha"></code><button type="button" class="fb-copy-sha file-action">${t("files.copyChecksum")}</button></div>`;
+    const sha = details.querySelector(".fb-sha");
+    sha.textContent = e.sha256 || t("files.noChecksum");
+    sha.setAttribute("role", "status");
+    const copy = details.querySelector(".fb-copy-sha");
+    copy.disabled = !e.sha256;
+    copy.onclick = () => copyToClipboard(e.sha256, { success: t("files.checksumCopied"), isCurrent: () => sha.isConnected });
+    nameCell.appendChild(details);
     const up = tr.querySelector(".fb-up");
     up.textContent = (e.uploader || "").slice(0, 8) + (e.uploader ? "…" : "");
     up.title = e.uploader || "";
-    const sha = tr.querySelector(".fb-sha");
-    sha.textContent = (e.sha256 || "").slice(0, 8);
-    sha.title = e.sha256 || "";
-    sha.onclick = () => copyToClipboard(e.sha256, { success: "SHA-256 copied", isCurrent: () => sha.isConnected });
-
     const act = tr.querySelector(".fb-actions");
-    const btn = (label, title, fn) => {
-        const b = document.createElement("button");
-        b.className = "icon-btn";
-        b.textContent = label;
-        b.title = title;
-        b.onclick = fn;
-        act.appendChild(b);
-        return b;
+    const btn = (parent, glyph, key, fn) => {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "file-action";
+        labelButton(button, glyph, t(key));
+        button.title = t(key);
+        button.setAttribute("aria-label", t(key));
+        button.onclick = fn;
+        parent.appendChild(button);
+        return button;
     };
-    const dl = btn("⬇", "download", () => downloadFile(e));
-    const link = btn("🔗", "copy download link (15 min)", () => linkFile(e));
+    const dl = btn(act, "download", "files.download", () => downloadFile(e));
+    const menu = document.createElement("details");
+    menu.className = "fb-action-menu";
+    menu.innerHTML = `<summary aria-label="${t("files.moreActions")}">${icon("more")}</summary><div class="fb-action-list"></div>`;
+    act.appendChild(menu);
+    const actions = menu.querySelector(".fb-action-list");
+    menu.addEventListener("toggle", () => {
+        if (!menu.open) return;
+        for (const other of document.querySelectorAll(".fb-action-menu[open]")) if (other !== menu) other.open = false;
+        const anchor = menu.querySelector("summary").getBoundingClientRect();
+        const container = menu.closest(".fb-list").getBoundingClientRect();
+        actions.style.maxHeight = Math.max(0, container.height - 16) + "px";
+        const bounds = actions.getBoundingClientRect();
+        actions.style.left = Math.max(8, Math.min(anchor.right - bounds.width, innerWidth - bounds.width - 8)) + "px";
+        actions.style.top = Math.max(container.top + 8, Math.min(anchor.bottom + 4, container.bottom - bounds.height - 8)) + "px";
+    });
+    menu.addEventListener("keydown", event => {
+        if (event.key === "Escape") { event.preventDefault(); menu.open = false; menu.querySelector("summary").focus(); }
+    });
+    const action = (glyph, key, fn) => btn(actions, glyph, key, () => {
+        menu.open = false;
+        menu.querySelector("summary").focus();
+        return fn();
+    });
+    const link = action("link", "files.copyLink", () => linkFile(e));
     if (sealed) {
         dl.disabled = true;
-        dl.title = "open it from the chat message that carries its key";
+        dl.title = t("files.openInChat");
         link.disabled = true;
-        link.title = "sealed files cannot be linked directly";
+        link.title = t("files.noSealedLink");
+        const hint = document.createElement("span");
+        hint.className = "fb-sealed-hint";
+        hint.textContent = t("files.openInChat");
+        nameCell.appendChild(hint);
     }
-    btn("✓", "verify checksum (re-downloads and compares)", () => verifyFile(e, tr));
-    btn("▾", "versions", () => toggleVersions(e, tr));
-    btn("✎", "rename / move within this channel", () => renameFile(e));
-    btn("⇄", "move to another channel", () => moveToChannel(e));
-    btn("🗑", "delete", () => deleteFile(e));
+    action("check", "files.verify", () => { details.open = true; return verifyFile(e, tr); }).disabled = !e.sha256;
+    action("file", "files.versions", () => toggleVersions(e, tr));
+    action("edit", "files.rename", () => renameFile(e));
+    action("transfer", "files.move", () => moveToChannel(e));
+    action("trash", "files.delete", () => deleteFile(e)).classList.add("danger-action");
     return tr;
 }
 
@@ -387,11 +428,11 @@ async function startDownload(args, id) {
     const err = await App().DownloadFileProgress(id, args.channelID, args.folder, args.name, args.path, args.size || 0);
     if (generation !== serverViewGeneration) return;
     if (err) {
-        V().toast("download failed: " + err, "warn");
+        V().toast(t("files.downloadFailed", { error: String(err) }), "warn");
         return;
     }
     downloadArgs.set(id, args);
-    V().toast("downloading " + args.name);
+    V().toast(t("files.downloading", { name: args.name }));
 }
 
 // downloadArgs keeps the retry payload per transfer id.
@@ -418,7 +459,7 @@ async function linkFile(e) {
         if (!fileViewIsCurrent(scope)) return;
         const url = buildFileLink(controlAddress, resp);
         if (!url) {
-            V().toast("link failed: server returned an invalid download address", "warn");
+            V().toast(t("files.badLink"), "warn");
             return;
         }
         await copyToClipboard(url, {
@@ -426,7 +467,7 @@ async function linkFile(e) {
             isCurrent: () => fileViewIsCurrent(scope),
         });
     } catch (err) {
-        if (fileViewIsCurrent(scope)) V().toast("link failed: " + err, "warn");
+        if (fileViewIsCurrent(scope)) V().toast(t("files.linkFailed", { error: String(err) }), "warn");
     }
 }
 
@@ -442,17 +483,17 @@ async function verifyFile(e, tr) {
     try {
         const ok = await App().VerifyFile(channelID, folder, e.name, e.sha256);
         if (!current()) return;
-        sha.textContent = ok ? "✓ ok" : "✗ BAD";
+        sha.textContent = ok ? t("files.verifyOK") : t("files.verifyBad");
         sha.className = "mono fb-sha " + (ok ? "verify-ok" : "verify-bad");
         setTimeout(() => {
             if (!current()) return;
-            sha.textContent = e.sha256.slice(0, 8);
+            sha.textContent = e.sha256;
             sha.className = "mono fb-sha";
         }, 4000);
     } catch (err) {
         if (!current()) return;
-        sha.textContent = "err";
-        V().toast("verify failed: " + err, "warn");
+        sha.textContent = t("files.verifyError");
+        V().toast(t("files.verifyFailed", { error: String(err) }), "warn");
     }
 }
 
@@ -464,7 +505,7 @@ async function toggleVersions(e, tr) {
     }
     const vr = document.createElement("tr");
     vr.className = "fb-versions";
-    vr.innerHTML = `<td colspan="6"><div class="fb-ver-list">loading…</div></td>`;
+    vr.innerHTML = `<td colspan="5"><div class="fb-ver-list">${t("files.loadingShort")}</div></td>`;
     tr.after(vr);
     const generation = serverViewGeneration;
     const channelID = fb.channelID;
@@ -474,7 +515,7 @@ async function toggleVersions(e, tr) {
         if (generation !== serverViewGeneration || !vr.isConnected) return;
         const list = vr.querySelector(".fb-ver-list");
         if (!resp.entries || resp.entries.length === 0) {
-            list.textContent = "no old versions";
+            list.textContent = t("files.noOldVersions");
             return;
         }
         list.innerHTML = "";
@@ -485,15 +526,16 @@ async function toggleVersions(e, tr) {
             row.querySelector(".fb-ver-name").textContent = v.name;
             const dl = document.createElement("button");
             dl.className = "icon-btn";
-            dl.textContent = "⬇";
-            dl.title = "download this version";
+            dl.innerHTML = icon("download");
+            dl.setAttribute("aria-label", t("files.downloadVersion"));
+            dl.title = t("files.downloadVersion");
             dl.onclick = () => downloadFile({ ...e, name: v.name, size: v.size });
             row.appendChild(dl);
             list.appendChild(row);
         }
     } catch (err) {
         if (generation !== serverViewGeneration || !vr.isConnected) return;
-        vr.querySelector(".fb-ver-list").textContent = "versions failed: " + err;
+        vr.querySelector(".fb-ver-list").textContent = t("files.versionsFailed", { error: String(err) });
     }
 }
 
@@ -501,10 +543,10 @@ async function renameFile(e) {
     await runScopedDialogAction({
         readScope: readFileView,
         openDialog: (scope) => promptDialog({
-            title: "Rename file",
-            label: "New name (or folder/name to move)",
+            title: t("files.renameTitle"),
+            label: t("files.renameLabel"),
             value: (scope.folder ? scope.folder + "/" : "") + e.name,
-            confirmLabel: "Rename",
+            confirmLabel: t("files.renameConfirm"),
             serverScoped: true,
         }),
         isAccepted: (name) => !!name && name !== e.name,
@@ -518,7 +560,7 @@ async function renameFile(e) {
             }
             const err = await App().FileRename(scope.channelID, scope.folder, e.name, newFolder, newName, 0);
             if (!fileViewIsCurrent(scope)) return;
-            if (err) V().toast("rename failed: " + err, "warn");
+            if (err) V().toast(t("files.renameFailed", { error: String(err) }), "warn");
             setTimeout(refreshFiles, 400);
         },
     });
@@ -530,22 +572,22 @@ async function moveToChannel(e) {
     const scope = captureScope(readFileView);
     const channels = (V().state.channels || []).filter((c) => c.ChannelID !== scope.channelID);
     if (channels.length === 0) {
-        V().toast("no other channel to move into", "warn");
+        V().toast(t("files.noOtherChannel"), "warn");
         return;
     }
     const overlay = document.createElement("div");
     overlay.className = "dlg-overlay";
     overlay.innerHTML = `
         <div class="dlg">
-            <h3>Move to channel</h3>
+            <h3>${t("files.moveTitle")}</h3>
             <div class="dlg-text fb-move-what"></div>
-            <label class="dlg-label">target channel</label>
+            <label class="dlg-label">${t("files.targetChannel")}</label>
             <select class="dlg-input fb-move-ch"></select>
-            <label class="dlg-label">folder in the target (blank = root)</label>
+            <label class="dlg-label">${t("files.targetFolder")}</label>
             <input class="dlg-input fb-move-folder" placeholder="docs/2024" />
             <div class="dlg-buttons">
-                <button class="dlg-ok">Move</button>
-                <button class="dlg-cancel">Cancel</button>
+                <button class="dlg-ok">${t("files.moveConfirm")}</button>
+                <button class="dlg-cancel">${t("common.cancel")}</button>
             </div>
         </div>`;
     overlay.querySelector(".fb-move-what").textContent = e.name;
@@ -567,8 +609,8 @@ async function moveToChannel(e) {
         close();
         const err = await App().FileRename(scope.channelID, scope.folder, e.name, folder, e.name, target);
         if (!fileViewIsCurrent(scope)) return;
-        if (err) V().toast("move failed: " + err, "warn");
-        else V().toast(`moved ${e.name} to ${targetName}`);
+        if (err) V().toast(t("files.moveFailed", { error: String(err) }), "warn");
+        else V().toast(t("files.moved", { name: e.name, channel: targetName }));
         setTimeout(refreshFiles, 400);
     };
     mountServerDialog(overlay);
@@ -578,9 +620,9 @@ async function deleteFile(e) {
     await runScopedDialogAction({
         readScope: readFileView,
         openDialog: () => confirmDialog({
-            title: "Delete file?",
-            message: `This permanently deletes “${e.name}” from this channel. This cannot be undone.`,
-            confirmLabel: "Delete file",
+            title: t("files.deleteTitle"),
+            message: t("files.deleteWarning", { name: e.name }),
+            confirmLabel: t("files.deleteConfirm"),
             danger: true,
             serverScoped: true,
         }),
@@ -588,7 +630,7 @@ async function deleteFile(e) {
         perform: async (scope) => {
             const err = await App().FileDelete(scope.channelID, scope.folder, e.name);
             if (!fileViewIsCurrent(scope)) return;
-            if (err) V().toast("delete failed: " + err, "warn");
+            if (err) V().toast(t("files.deleteFailed", { error: String(err) }), "warn");
             setTimeout(refreshFiles, 400);
         },
     });
@@ -609,30 +651,30 @@ const DROP_MAX = 4 * 1024 * 1024;
 // queueUploads takes browser File objects (drag & drop).
 function queueUploads(files) {
     if (!fb.channelID) {
-        V().toast("join a channel first", "warn");
+        V().toast(t("files.joinFirst"), "warn");
         return;
     }
     let queued = 0;
     for (const f of files) {
         if (f.size > DROP_MAX) {
-            V().toast(`${f.name} is too large to drop (${humanBytes(f.size)}) — use ⬆ to upload it`, "warn");
+            V().toast(t("files.tooLarge", { name: f.name, size: humanBytes(f.size) }), "warn");
             continue;
         }
         uploadQueue.push({ file: f, channelID: fb.channelID, folder: fb.folder, generation: serverViewGeneration });
         queued++;
     }
-    if (queued) V().toast(queued + " file(s) queued for upload");
+    if (queued) V().toast(t("files.queued", { count: queued }));
     pumpUploads();
 }
 
 // queueUploadPaths takes native paths from the picker: those stream off disk.
 function queueUploadPaths(paths) {
     if (!fb.channelID) {
-        V().toast("join a channel first", "warn");
+        V().toast(t("files.joinFirst"), "warn");
         return;
     }
     for (const p of paths) uploadQueue.push({ path: p, channelID: fb.channelID, folder: fb.folder, generation: serverViewGeneration });
-    V().toast(paths.length + " file(s) queued for upload");
+    V().toast(t("files.queued", { count: paths.length }));
     pumpUploads();
 }
 
@@ -656,7 +698,7 @@ function awaitUpload(id, generation) {
         } else if (Date.now() >= deadline) {
             clearInterval(check);
             uploadActive = false;
-            V().toast("upload status timed out; continuing the queue", "warn");
+            V().toast(t("files.uploadTimeout"), "warn");
             pumpUploads();
         }
     }, 300);
@@ -706,14 +748,14 @@ async function pumpUploads() {
             return;
         }
         if (err) {
-            V().toast("upload " + label + " failed: " + err, "warn");
+            V().toast(t("files.uploadNamedFailed", { name: label, error: String(err) }), "warn");
             uploadActive = false;
             pumpUploads();
             return;
         }
         awaitUpload(id, generation);
     } catch (err) {
-        V().toast("reading " + label + " failed: " + err, "warn");
+        V().toast(t("files.readFailed", { name: label, error: String(err) }), "warn");
         uploadActive = false;
         pumpUploads();
     }
@@ -731,8 +773,8 @@ function openTransfers() {
     overlay.innerHTML = `
         <div class="dlg transfers">
             <div class="pm-head">
-                <h3>Transfers</h3>
-                <button class="icon-btn tr-close" title="Close">✕</button>
+                <h3>${t("files.transfers")}</h3>
+                <button class="icon-btn tr-close" title="${t("common.close")}" aria-label="${t("common.close")}">${icon("close")}</button>
             </div>
             <canvas class="tr-spark" width="640" height="48"></canvas>
             <div class="tr-list"></div>
@@ -789,41 +831,42 @@ function renderTransfers() {
     list.innerHTML = "";
     const rows = [...transfers.values()].sort((a, b) => b.started - a.started);
     if (rows.length === 0) {
-        list.innerHTML = `<div class="empty-state">No transfers yet</div>`;
+        list.innerHTML = `<div class="empty-state">${t("files.noTransfers")}</div>`;
         return;
     }
-    for (const t of rows) {
+    for (const transfer of rows) {
         const row = document.createElement("div");
-        row.className = "tr-row " + t.status;
-        const pct = t.total > 0 ? Math.min(100, Math.round(t.transferred / t.total * 100)) : 0;
-        const eta = t.status === "active" && t.bps > 0 && t.total > 0
-            ? Math.max(0, Math.round((t.total - t.transferred) / t.bps)) + "s"
+        row.className = "tr-row " + transfer.status;
+        const pct = transfer.total > 0 ? Math.min(100, Math.round(transfer.transferred / transfer.total * 100)) : 0;
+        const eta = transfer.status === "active" && transfer.bps > 0 && transfer.total > 0
+            ? formatTransferETA((transfer.total - transfer.transferred) / transfer.bps)
             : "";
-        const resumed = t.resumed > 0 ? ` · resumed at ${humanBytes(t.resumed)}` : "";
+        const resumed = transfer.resumed > 0 ? t("files.resumed", { size: humanBytes(transfer.resumed) }) : "";
         row.innerHTML = `
-            <span class="tr-dir">${t.direction === "upload" ? "⬆" : "⬇"}</span>
-            <span class="tr-name" title="${esc(t.name)}">${esc(t.name)}</span>
+            <span class="tr-dir">${icon(transfer.direction === "upload" ? "upload" : "download")}</span>
+            <span class="tr-name" title="${esc(transfer.name)}">${esc(transfer.name)}</span>
             <span class="tr-bar"><span class="tr-fill" style="width:${pct}%"></span></span>
-            <span class="tr-meta mono">${pct}% · ${humanBytes(t.bps || 0)}/s ${eta ? "· " + eta : ""}${resumed}</span>
-            <span class="tr-status mono">${t.status}${t.error ? ": " + esc(t.error) : ""}</span>`;
-        if (t.status === "active") {
+            <span class="tr-meta mono">${pct}% · ${humanBytes(transfer.bps || 0)}/s ${eta ? "· " + eta : ""}${resumed}</span>
+            <span class="tr-status mono">${esc(t("files.transfer." + (["active", "done", "error", "failed", "cancelled", "canceled", "queued"].includes(transfer.status) ? transfer.status : "unknown")))}${transfer.error ? ": " + esc(transfer.error) : ""}</span>`;
+        if (transfer.status === "active") {
             const cancel = document.createElement("button");
             cancel.className = "icon-btn";
-            cancel.textContent = "✕";
-            cancel.title = "cancel transfer";
-            cancel.onclick = () => App().CancelTransfer(t.id);
+            cancel.innerHTML = icon("close");
+            cancel.setAttribute("aria-label", t("files.cancelTransfer"));
+            cancel.title = t("files.cancelTransfer");
+            cancel.onclick = () => App().CancelTransfer(transfer.id);
             row.appendChild(cancel);
-        } else if (t.status !== "done" && downloadArgs.has(t.id)) {
+        } else if (transfer.status !== "done" && downloadArgs.has(transfer.id)) {
             // (259) retrying into the same destination picks up where the
             // interrupted attempt stopped instead of re-fetching the whole file.
             const retry = document.createElement("button");
             retry.className = "icon-btn";
-            retry.textContent = "↻";
-            retry.title = "resume from where this stopped";
+            labelButton(retry, "refresh", t("files.resume"));
+            retry.title = t("files.resumeHelp");
             retry.onclick = () => {
-                const args = downloadArgs.get(t.id);
-                t.history = [];
-                startDownload(args, t.id);
+                const args = downloadArgs.get(transfer.id);
+                transfer.history = [];
+                startDownload(args, transfer.id);
             };
             row.appendChild(retry);
         }
@@ -870,7 +913,7 @@ function bannerEl() {
     el = document.createElement("img");
     el.id = "server-banner";
     el.alt = "";
-    el.title = "server banner";
+    el.title = t("files.banner");
     el.style.cssText = "display:none;width:100%;max-height:96px;object-fit:cover;border-radius:6px;margin:6px 0";
     brand.after(el);
     return el;
@@ -909,10 +952,10 @@ async function setServerBanner() {
     const err = await App().ServerBannerSet(img.dataBase64);
     if (generation !== serverViewGeneration) return;
     if (err) {
-        V().toast("banner failed: " + err, "warn");
+        V().toast(t("files.bannerFailed", { error: String(err) }), "warn");
         return;
     }
-    V().toast("server banner updated");
+    V().toast(t("files.bannerUpdated"));
     setTimeout(loadServerBanner, 400);
 }
 
@@ -1003,12 +1046,12 @@ async function openEmojiManager() {
     overlay.innerHTML = `
         <div class="dlg">
             <div class="pm-head">
-                <h3>Custom emoji</h3>
-                <button class="icon-btn em-close" title="Close">✕</button>
+                <h3>${t("files.customEmoji")}</h3>
+                <button class="icon-btn em-close" title="${t("common.close")}" aria-label="${t("common.close")}">${icon("close")}</button>
             </div>
-            <div class="em-list">loading…</div>
+            <div class="em-list">${t("files.loadingShort")}</div>
             <div class="dlg-buttons">
-                <button class="em-add">Upload emoji…</button>
+                <button class="em-add">${t("files.uploadEmoji")}</button>
             </div>
         </div>`;
     const close = () => overlay.remove();
@@ -1026,13 +1069,13 @@ async function renderEmojiList(overlay) {
         resp = await App().EmojiList();
     } catch (err) {
         if (!isCurrentServerDialog(overlay)) return;
-        list.textContent = "emoji list failed: " + err;
+        list.textContent = t("files.emojiListFailed", { error: String(err) });
         return;
     }
     if (!isCurrentServerDialog(overlay)) return;
     const emojis = resp.emojis || [];
     if (emojis.length === 0) {
-        list.innerHTML = `<div class="empty-state">No custom emoji yet</div>`;
+        list.innerHTML = `<div class="empty-state">${t("files.noEmoji")}</div>`;
         return;
     }
     list.innerHTML = "";
@@ -1057,42 +1100,44 @@ async function renderEmojiList(overlay) {
         name.textContent = ":" + e.name + ":";
         const ren = document.createElement("button");
         ren.className = "icon-btn";
-        ren.textContent = "✎";
-        ren.title = "rename (messages already sent keep the old name)";
+        ren.innerHTML = icon("edit");
+        ren.setAttribute("aria-label", t("files.emojiRename"));
+        ren.title = t("files.emojiRenameHelp");
         ren.onclick = async () => {
             if (!isCurrentServerDialog(overlay)) return;
             const generation = serverViewGeneration;
             const next = await promptDialog({
-                title: "Rename custom emoji",
-                label: "New emoji name (a-z, 0-9, _ or -)",
+                title: t("files.emojiRename"),
+                label: t("files.emojiNewName"),
                 value: e.name,
-                confirmLabel: "Rename",
+                confirmLabel: t("files.renameConfirm"),
                 serverScoped: true,
             });
             if (!next || next === e.name || generation !== serverViewGeneration || !isCurrentServerDialog(overlay)) return;
             const err = await App().EmojiRename(e.name, next);
             if (generation !== serverViewGeneration || !isCurrentServerDialog(overlay)) return;
-            if (err) V().toast("rename failed: " + err, "warn");
+            if (err) V().toast(t("files.renameFailed", { error: String(err) }), "warn");
             setTimeout(() => renderEmojiList(overlay), 400);
         };
         const del = document.createElement("button");
         del.className = "icon-btn";
-        del.textContent = "🗑";
-        del.title = "delete";
+        del.innerHTML = icon("trash");
+        del.setAttribute("aria-label", t("files.emojiDelete"));
+        del.title = t("files.delete");
         del.onclick = async () => {
             if (!isCurrentServerDialog(overlay)) return;
             const generation = serverViewGeneration;
             const confirmed = await confirmDialog({
-                title: "Delete custom emoji?",
-                message: `This permanently deletes :${e.name}: from this server. This cannot be undone.`,
-                confirmLabel: "Delete emoji",
+                title: t("files.emojiDeleteTitle"),
+                message: t("files.emojiDeleteWarning", { name: e.name }),
+                confirmLabel: t("files.emojiDelete"),
                 danger: true,
                 serverScoped: true,
             });
             if (!confirmed || generation !== serverViewGeneration || !isCurrentServerDialog(overlay)) return;
             const err = await App().EmojiDelete(e.name);
             if (generation !== serverViewGeneration || !isCurrentServerDialog(overlay)) return;
-            if (err) V().toast("delete failed: " + err, "warn");
+            if (err) V().toast(t("files.deleteFailed", { error: String(err) }), "warn");
             setTimeout(() => renderEmojiList(overlay), 400);
         };
         row.append(img, name, ren, del);
@@ -1103,9 +1148,9 @@ async function renderEmojiList(overlay) {
 async function addEmoji(overlay) {
     const generation = serverViewGeneration;
     const name = await promptDialog({
-        title: "Upload custom emoji",
-        label: "Emoji name (a-z, 0-9, _ or -)",
-        confirmLabel: "Continue",
+        title: t("files.emojiUpload"),
+        label: t("files.emojiName"),
+        confirmLabel: t("files.continue"),
         serverScoped: true,
     });
     if (!name || generation !== serverViewGeneration || !isCurrentServerDialog(overlay)) return;
@@ -1114,7 +1159,7 @@ async function addEmoji(overlay) {
     const err = await App().EmojiUpload(name, img.dataBase64);
     if (generation !== serverViewGeneration || !isCurrentServerDialog(overlay)) return;
     if (err) {
-        V().toast("upload failed: " + err, "warn");
+        V().toast(t("files.uploadFailed", { error: String(err) }), "warn");
         return;
     }
     setTimeout(() => renderEmojiList(overlay), 400);
@@ -1124,20 +1169,23 @@ async function addEmoji(overlay) {
 
 export function initFilesUI() {
     const pane = document.getElementById("files-pane");
+    document.addEventListener("pointerdown", event => {
+        for (const menu of pane.querySelectorAll(".fb-action-menu[open]")) if (!menu.contains(event.target)) menu.open = false;
+    });
     pane.innerHTML = `
         <div class="fb-toolbar">
             <span class="fb-crumb"></span>
             <span class="fb-spacer"></span>
-            <button class="icon-btn fb-refresh" title="Refresh" aria-label="Refresh files">⟳</button>
-            <button class="icon-btn fb-upload" title="Upload files"><span aria-hidden="true">⬆</span><span>Upload</span></button>
-            <button class="icon-btn fb-mkdir" title="New folder (virtual — persists only while it contains files)" aria-label="Create folder">📁+</button>
-            <button class="icon-btn fb-emoji" title="Custom emoji manager" aria-label="Manage custom emoji">😀</button>
-            <button class="icon-btn fb-banner" title="Set the server banner (admin, 270)" aria-label="Set server banner">🖼</button>
-            <button class="icon-btn fb-transfers" title="Transfers" aria-label="Open transfers">⇅</button>
+            <button class="icon-btn fb-refresh" title="${t("files.refresh")}" aria-label="${t("files.refreshLabel")}">${icon("refresh")}</button>
+            <button class="icon-btn fb-upload" title="${t("files.uploadFiles")}">${icon("upload")}<span>${t("files.upload")}</span></button>
+            <button class="icon-btn fb-mkdir" title="${t("files.newFolderHelp")}" aria-label="${t("files.createFolder")}">${icon("folderPlus")}</button>
+            <button class="icon-btn fb-emoji" title="${t("files.emojiManager")}" aria-label="${t("files.manageEmoji")}">${icon("smile")}</button>
+            <button class="icon-btn fb-banner" title="${t("files.setBannerHelp")}" aria-label="${t("files.setBanner")}">${icon("image")}</button>
+            <button class="icon-btn fb-transfers" title="Transfers" aria-label="${t("files.openTransfers")}">${icon("transfer")}</button>
         </div>
         <input class="fb-filter dlg-input" type="search" />
         <div class="fb-quota hidden"><div class="fb-quota-fill"></div></div>
-        <div class="fb-list" aria-label="Channel files"></div>`;
+        <div class="fb-list" aria-label="${t("files.channelFiles")}"></div>`;
 
     const filter = pane.querySelector(".fb-filter");
     filter.placeholder = t("files.filter");
@@ -1165,22 +1213,22 @@ export function initFilesUI() {
         await runScopedDialogAction({
             readScope: readFileView,
             openDialog: () => promptDialog({
-                title: "Create folder",
-                label: "New folder name",
-                message: "Folders are virtual and persist only while they contain files.",
-                confirmLabel: "Create folder",
+                title: t("files.createFolder"),
+                label: t("files.folderName"),
+                message: t("files.virtualFolder"),
+                confirmLabel: t("files.createFolder"),
                 serverScoped: true,
             }),
             isAccepted: Boolean,
             perform: async (scope, name) => {
                 const clean = name.replace(/^\/+|\/+$/g, "");
                 if (!clean || clean.includes("..") || clean.includes("\\")) {
-                    V().toast("invalid folder name", "warn");
+                    V().toast(t("files.invalidFolder"), "warn");
                     return;
                 }
                 fb.folder = scope.folder ? scope.folder + "/" + clean : clean;
                 refreshFiles();
-                V().toast("folder ready — upload or move files into it");
+                V().toast(t("files.folderReady"));
             },
         });
     };
@@ -1215,6 +1263,15 @@ export function initFilesUI() {
     });
     document.getElementById("tab-transfers").onclick = openTransfers;
 
+    window.addEventListener("noxa-language-changed", () => {
+        renderFbChrome();
+        if (fb.loaded) renderFbList();
+        else if (!fb.channelID) pane.querySelector(".fb-list").innerHTML = `<div class="empty-state">${t("files.join")}</div>`;
+        if (trWin.open) {
+            trWin.overlay.querySelector("h3").textContent = t("files.transfers");
+            renderTransfers();
+        }
+    });
     window.runtime.EventsOn("ft_progress", trackTransfer);
 
     // (270/271) branding changes announced by the server: drop the cached copy

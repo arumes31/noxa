@@ -2,6 +2,8 @@
 // calibration, PTT release delay, the channel capture profile, remote-chain
 // limiter/per-user normalizer, and the per-user volume/mute registry.
 import { labelButton } from "./icons.js";
+import { t } from "./i18n.js";
+
 const V = () => window.__noxa;
 
 // Incoming tracks arrive outside a user gesture. Resume their WebAudio context
@@ -26,15 +28,15 @@ export function createRemoteAudioSource(context, track) {
 }
 
 // Keep the voice-bar action aligned with what the next activation will do.
-// A pressed mute button offers "Unmute" to both pointer and screen-reader
+// A pressed mute button offers t("voice.unmute") to both pointer and screen-reader
 // users instead of continuing to announce the state-changing action as Mute.
 export function syncMuteButton(button, muted) {
     if (!button) return;
     button.classList.toggle("active", !!muted);
     button.setAttribute("aria-pressed", String(!!muted));
-    labelButton(button, muted ? "micOff" : "mic", muted ? "Mic muted" : "Mic on");
-    button.title = muted ? "Unmute" : "Mute";
-    button.setAttribute("aria-label", muted ? "Unmute microphone" : "Mute microphone");
+    labelButton(button, muted ? "micOff" : "mic", muted ? t("voice.micMuted") : t("voice.micOn"));
+    button.title = muted ? t("voice.unmute") : t("voice.mute");
+    button.setAttribute("aria-label", muted ? t("voice.unmuteMic") : t("voice.muteMic"));
 }
 
 // Render microphone capture failures with an in-context recovery action. The
@@ -244,8 +246,7 @@ export function isMusicChannel(ch) {
 // captureConstraints builds the getUserMedia audio constraints for the
 // channel: music channels force stereo with the browser's processing off,
 // every other channel uses the user's settings unchanged.
-export function captureConstraints(ch) {
-    const s = V().state.settings || {};
+export function captureConstraints(ch, s = V().state.settings || {}) {
     const device = s.capture_device_id ? { deviceId: { exact: s.capture_device_id } } : {};
     if (isMusicChannel(ch)) {
         return {

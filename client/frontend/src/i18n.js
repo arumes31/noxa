@@ -14,7 +14,10 @@
 import { settingsEnglish, settingsGerman } from "./settings-messages.js";
 import { interfaceEnglish, interfaceGerman } from "./interface-messages.js";
 
+import { quickWinEnglish, quickWinGerman } from "./quick-win-messages.js";
+
 const en = {
+    ...quickWinEnglish,
     ...settingsEnglish,
     ...interfaceEnglish,
     "menu.connections": "Connections",
@@ -53,7 +56,7 @@ const en = {
     "common.apply": "Apply",
     "login.server": "SERVER",
     "login.nickname": "NICKNAME",
-    "login.serverPassword": "SERVER PASSWORD",
+    "login.serverPassword": "Server password (optional)",
     "login.connect": "CONNECT",
     "login.recentServers": "RECENT SERVERS",
     "settings.application": "Application",
@@ -76,6 +79,7 @@ const en = {
 };
 
 const de = {
+    ...quickWinGerman,
     ...settingsGerman,
     ...interfaceGerman,
     "menu.connections": "Verbindungen",
@@ -114,7 +118,7 @@ const de = {
     "common.apply": "Anwenden",
     "login.server": "SERVER",
     "login.nickname": "SPITZNAME",
-    "login.serverPassword": "SERVER-PASSWORT",
+    "login.serverPassword": "Server-Passwort (optional)",
     "login.connect": "VERBINDEN",
     "login.recentServers": "LETZTE SERVER",
     "settings.application": "Anwendung",

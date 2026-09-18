@@ -1,146 +1,164 @@
 {
   "en/banned": {
+    "title": "noXa — banned",
     "text": "You were banned from the server.",
+    "duration": 1.6718367346938776,
+    "sampleRate": 22050,
+    "peak": 0.114990234375,
+    "rmsDB": -35.86806002882872,
+    "sha256": "cb5ed11e9d8007dc97078a9af0323e373a5056b9a8f556db309fb611dca51d13"
+  },
+  "en/kicked": {
+    "title": "noXa — kicked",
+    "text": "You were kicked from the server.",
     "duration": 1.5441269841269842,
     "sampleRate": 22050,
     "peak": 0.114990234375,
-    "rmsDB": -34.04271746521583,
-    "sha256": "d1bbff375f49fd625314f7a244a28888018b12e7ca85335a2c0dbbcd74b8b891"
-  },
-  "en/kicked": {
-    "text": "You were kicked from the server.",
-    "duration": 1.3815873015873017,
-    "sampleRate": 22050,
-    "peak": 0.114990234375,
-    "rmsDB": -35.6917793047883,
-    "sha256": "027b9b2bf129712e56249793c4b0054a33092f2b418631868def96dda21c78ab"
+    "rmsDB": -37.456618259219226,
+    "sha256": "e01e635b01e44e5c7d79f2e9f9c21cee6e26000aeedf29b71331860d37fe83cc"
   },
   "en/kicked_channel": {
+    "title": "noXa — kicked_channel",
     "text": "You were removed from the channel.",
     "duration": 1.555736961451247,
     "sampleRate": 22050,
     "peak": 0.114990234375,
-    "rmsDB": -34.70851053575413,
-    "sha256": "857456cf41e15fcbbad283d2d473633d1fbd14086f9b018b5ab5b4ae35d7efa9"
+    "rmsDB": -35.36414328026632,
+    "sha256": "9a3411e3591a6cd822c74358028cc17890fed4bb846ae2b12ac3cc533f92e940"
   },
   "en/connection_lost": {
+    "title": "noXa — connection_lost",
     "text": "Connection to the server was lost.",
     "duration": 2.2175056689342405,
     "sampleRate": 22050,
     "peak": 0.114990234375,
-    "rmsDB": -38.01273691135861,
-    "sha256": "49cbc4fc195e98247fe2deeb41fe0d10f1038422332c3e5eaecb669e19e6ed76"
+    "rmsDB": -38.289983913524416,
+    "sha256": "5454ed7696a97df9e668b53b60da702de9ccbbc42d5369ce61ff40603669cb6e"
   },
   "en/reconnect_failed": {
+    "title": "noXa — reconnect_failed",
     "text": "Unable to reconnect to the server.",
-    "duration": 2.078185941043084,
+    "duration": 2.414875283446712,
     "sampleRate": 22050,
     "peak": 0.114990234375,
-    "rmsDB": -39.6336263879377,
-    "sha256": "4862e440693b282d047234921c75370927245cc392cc45b05d1d25b5fd283d57"
+    "rmsDB": -37.913209683787095,
+    "sha256": "5bcb6ed56abb309f985d88e43eff81213eca840155119a6326f4a5ce82313b3c"
   },
   "en/permission_denied": {
+    "title": "noXa — permission_denied",
     "text": "You do not have permission to perform this action.",
-    "duration": 2.4729251700680273,
+    "duration": 2.8560544217687074,
     "sampleRate": 22050,
     "peak": 0.114990234375,
-    "rmsDB": -35.043820423684494,
-    "sha256": "9caf901b9fb5eae0ced28880d2b3f5916f2e58bcc5f6207d6db1a3ad647dbc2e"
+    "rmsDB": -35.349033185821284,
+    "sha256": "6e080c9ba97ef8df2d917a550cbfad5e75ac3d6f7ec939cc80c306abd256de52"
   },
   "en/moved_by_admin": {
+    "title": "noXa — moved_by_admin",
     "text": "You were moved to another channel.",
-    "duration": 1.811156462585034,
-    "sampleRate": 22050,
-    "peak": 0.114990234375,
-    "rmsDB": -34.618874825529666,
-    "sha256": "d1f0a72fe421232cb1030d0fb6bae1c3aea64d76edf1f68660c96c0ac21d4511"
-  },
-  "en/server_shutdown": {
-    "text": "The server is shutting down.",
     "duration": 1.8575963718820863,
     "sampleRate": 22050,
     "peak": 0.114990234375,
-    "rmsDB": -33.895496578469,
-    "sha256": "a1d99a91caa1dc5eef5aefa633df3470e452b2102da6e218a26a38a5fb005341"
+    "rmsDB": -34.837699251230646,
+    "sha256": "bc65610e7992ff4e57891fe7a244df4eec350136c068a07205056cc0b052a866"
+  },
+  "en/server_shutdown": {
+    "title": "noXa — server_shutdown",
+    "text": "The server is shutting down.",
+    "duration": 1.8924263038548752,
+    "sampleRate": 22050,
+    "peak": 0.114990234375,
+    "rmsDB": -36.475456608595664,
+    "sha256": "906862f2ff73dff0868b87e3db673b88f586c1262d90868143ac343d8bdf1221"
   },
   "en/test": {
-    "text": "noXa spoken notifications are enabled.",
-    "duration": 2.5309750566893423,
+    "title": "noXa — test",
+    "text": "This is a noXa spoken notification.",
+    "duration": 2.4961451247165534,
     "sampleRate": 22050,
     "peak": 0.114990234375,
-    "rmsDB": -36.20978719918192,
-    "sha256": "1d5f1d6ba2eef7b01a03479072506456379b735628f3af756e9165f46025c875"
+    "rmsDB": -35.649801227206794,
+    "sha256": "ed671f981690041fefc3d16c81c64c3de94a14ab14056652ce7f3cdbab45b784"
   },
   "de/banned": {
+    "title": "noXa — banned",
     "text": "Du wurdest vom Server gebannt.",
-    "duration": 1.3216326530612246,
+    "duration": 1.397687074829932,
     "sampleRate": 22050,
     "peak": 0.114990234375,
-    "rmsDB": -34.062490383983686,
-    "sha256": "ff93cd8d07a6468d46e8f23ff857a473cc63bb436d3760eeb45a42256d5904e3"
+    "rmsDB": -33.18600252862579,
+    "sha256": "24c44a9a33687a5992b9d04d91a12e885723ea7c4138474d9af0786853fd3794"
   },
   "de/kicked": {
+    "title": "noXa — kicked",
     "text": "Du wurdest vom Server entfernt.",
-    "duration": 1.566077097505669,
+    "duration": 1.6166893424036282,
     "sampleRate": 22050,
     "peak": 0.114990234375,
-    "rmsDB": -33.203196012142605,
-    "sha256": "e2d16f4a23c941be7f8ff453fd178b8d042998ec2141edf2a43952602861b7bc"
+    "rmsDB": -32.58267074797929,
+    "sha256": "24daf336665b747abd3a405747bd89919da511b3a9ef39673ad912b9d5058212"
   },
   "de/kicked_channel": {
+    "title": "noXa — kicked_channel",
     "text": "Du wurdest aus dem Channel entfernt.",
-    "duration": 1.7719727891156463,
+    "duration": 1.7229024943310658,
     "sampleRate": 22050,
     "peak": 0.114990234375,
-    "rmsDB": -33.286508675686306,
-    "sha256": "e68b22d090c055ccb09c6d85ba3b6ed8081af410467527171a1f7c7cedb60be2"
+    "rmsDB": -33.27137787011289,
+    "sha256": "df0bd0662903f079b6192b28b64854ccf2df9463be94f67f53e312ce5ca2b45a"
   },
   "de/connection_lost": {
+    "title": "noXa — connection_lost",
     "text": "Die Verbindung zum Server wurde unterbrochen.",
-    "duration": 2.0932879818594103,
+    "duration": 2.074784580498866,
     "sampleRate": 22050,
     "peak": 0.114990234375,
-    "rmsDB": -31.729053583910733,
-    "sha256": "84df6cddb6a05ff5ba84a6aebedbdb0995bff85aaf9eceff0a46d5bd765ed897"
+    "rmsDB": -32.59986206903034,
+    "sha256": "0561cc8a60488f0fa6af644a6395bb15c8d1af553ac0343f1400c33cfb974089"
   },
   "de/reconnect_failed": {
+    "title": "noXa — reconnect_failed",
     "text": "Die Verbindung zum Server konnte nicht wiederhergestellt werden.",
-    "duration": 2.7843537414965986,
+    "duration": 2.911201814058957,
     "sampleRate": 22050,
     "peak": 0.114990234375,
-    "rmsDB": -33.583733815430996,
-    "sha256": "e3b714bba1a651e53f54aadb3b6e25fa1db0e10f432229b54eff4eae40a5bf51"
+    "rmsDB": -33.391093997706996,
+    "sha256": "b3e96fa0ea9dcd40201b74aee7cc7761eaa7cec1b0be0563395f68c41e662cb5"
   },
   "de/permission_denied": {
+    "title": "noXa — permission_denied",
     "text": "Du hast keine Berechtigung für diese Aktion.",
-    "duration": 2.046031746031746,
+    "duration": 2.0742403628117914,
     "sampleRate": 22050,
     "peak": 0.114990234375,
-    "rmsDB": -34.34868161230681,
-    "sha256": "ee41df0d3adf65d2aa7a900eeef6f1a401079aafde6de99d1cbb5679b02aa7ff"
+    "rmsDB": -34.20394868637909,
+    "sha256": "53a8a89fefb4c36f28f70d0bdb9c5348e4e06c35c8d9e7010f9c61a7d4a211b8"
   },
   "de/moved_by_admin": {
+    "title": "noXa — moved_by_admin",
     "text": "Du wurdest in einen anderen Channel verschoben.",
-    "duration": 1.987845804988662,
+    "duration": 2.1452154195011337,
     "sampleRate": 22050,
     "peak": 0.114990234375,
-    "rmsDB": -33.0249026331813,
-    "sha256": "4f27c4fe32cc729def74f5f35c67bd2e91569b6d04fbbea6f8a59a4c75cc3096"
+    "rmsDB": -32.887362990337415,
+    "sha256": "bea3bca95a609f1aff168669e853ddacd35c87339f07abec50d22d20dcc2dc23"
   },
   "de/server_shutdown": {
+    "title": "noXa — server_shutdown",
     "text": "Der Server wird heruntergefahren.",
-    "duration": 1.4982312925170067,
+    "duration": 1.6096598639455781,
     "sampleRate": 22050,
     "peak": 0.114990234375,
-    "rmsDB": -33.595458843756916,
-    "sha256": "b435ad6a6732605ab1c4b04e75d511160d7431cbb2cde2dac46b024d8518cdab"
+    "rmsDB": -33.48562971642536,
+    "sha256": "689fda789ad25577f7e5b402fc875722a3941c3c84f9038578ef982973c0c6e7"
   },
   "de/test": {
-    "text": "Die gesprochenen noXa-Benachrichtigungen sind aktiviert.",
-    "duration": 2.7812244897959184,
+    "title": "noXa — test",
+    "text": "Dies ist eine gesprochene noXa-Benachrichtigung.",
+    "duration": 2.5004988662131518,
     "sampleRate": 22050,
     "peak": 0.114990234375,
-    "rmsDB": -33.45708051789484,
-    "sha256": "0947b3c8ddafd50ce375506640a293ce55c3ee215838822a8868149fbdc76905"
+    "rmsDB": -35.157858394249445,
+    "sha256": "2428e2251a08d020d64ad430134ccb48fb0b286f749e08365974a799061ea8b5"
   }
 }

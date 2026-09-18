@@ -1,8 +1,11 @@
 // settings-ui.js — TS3-style settings dialog with left icon nav.
+import { icon } from "./icons.js";
 import { currentLanguage, t } from "./i18n.js";
 import { copyToClipboard } from "./clipboard.js";
-import { calibrateMic, startLoopback } from "./audio.js";
-import { previewSounds, previewSpeech, stopPreviews, updateSoundOutput, SOUND_EVENT_GROUPS, testAll } from "./sounds.js";
+import { captureConstraints } from "./audio.js";
+import { MicCheck } from "./mic-check.js";
+import { percentageInput } from "./percentage-input.js";
+import { previewSounds, previewSpeech, speechPreviewLabel, audioStatus, SPEECH_EVENTS, stopPreviews, updateSoundOutput, SOUND_EVENT_GROUPS, testAll } from "./sounds.js";
 import { MATRIX_EVENTS, defaultMatrixRow } from "./notifications.js";
 import { associateControlLabel, wrappedIndex } from "./a11y.js";
 import { createMediaDeviceInventory } from "./media-devices.js";
@@ -12,20 +15,21 @@ import { cameraConstraints } from "./video.js";
 const V = () => window.__noxa;
 
 const PAGES = [
-    { id: "application", icon: "⚙", label: "settings.application" },
-    { id: "capture", icon: "🎙", label: "settings.capture" },
-    { id: "playback", icon: "🔊", label: "settings.playback" },
-    { id: "hotkeys", icon: "⌨", label: "settings.hotkeys" },
-    { id: "whisper", icon: "🤫", label: "settings.whisper" },
-    { id: "downloads", icon: "⬇", label: "settings.downloads" },
-    { id: "chat", icon: "💬", label: "settings.chat" },
-    { id: "security", icon: "🔑", label: "settings.security" },
-    { id: "server", icon: "🖥", label: "settings.server" },
-    { id: "notifications", icon: "🔔", label: "settings.notifications" },
+    { id: "application", icon: "settings", label: "settings.application" },
+    { id: "capture", icon: "mic", label: "settings.capture" },
+    { id: "playback", icon: "speaker", label: "settings.playback" },
+    { id: "hotkeys", icon: "keyboard", label: "settings.hotkeys" },
+    { id: "whisper", icon: "whisper", label: "settings.whisper" },
+    { id: "downloads", icon: "download", label: "settings.downloads" },
+    { id: "chat", icon: "chat", label: "settings.chat" },
+    { id: "security", icon: "lock", label: "settings.security" },
+    { id: "server", icon: "screen", label: "settings.server" },
+    { id: "notifications", icon: "bell", label: "settings.notifications" },
 ];
 
 let draft = null; // working copy of settings while the dialog is open
 let stopCameraTest = () => {};
+let stopMicCheck = () => {};
 
 function settings() { return draft; }
 
@@ -67,6 +71,10 @@ function row(label, control) {
         if (nested.length === 1) [target] = nested;
     }
     if (target) associateControlLabel(l, target);
+    if (control.querySelector?.(".audio-percent")) {
+        associateControlLabel(l, control.querySelector('input[type="range"]'));
+        control.querySelector(".audio-percent").setAttribute("aria-label", label + " (%)");
+    }
     return el;
 }
 
@@ -86,17 +94,18 @@ function numberInput(value, min, max, onchange) {
     return i;
 }
 
-function slider(value, min, max, oninput) {
+function slider(value, min, max, oninput, percent = false) {
     const wrap = document.createElement("div");
     wrap.className = "set-slider";
     const i = document.createElement("input");
     i.type = "range";
     i.min = min; i.max = max; i.value = value;
-    const out = document.createElement("span");
-    out.className = "mono";
-    out.textContent = value;
-    i.oninput = () => { out.textContent = i.value; oninput(parseInt(i.value, 10)); };
+    const out = percent ? percentageInput(i) : document.createElement("span");
+    out.classList.add("mono");
+    if (!percent) out.textContent = value;
+    i.oninput = () => { if (!percent) out.textContent = i.value; oninput(parseInt(i.value, 10)); };
     wrap.appendChild(i); wrap.appendChild(out);
+    if (percent) { const unit = document.createElement("span"); unit.textContent = "%"; unit.setAttribute("aria-hidden", "true"); wrap.appendChild(unit); }
     return wrap;
 }
 
@@ -530,7 +539,7 @@ function pageCapture() {
     }
     el.appendChild(modeWrap);
 
-    const vadRow = row(t("settings.vad.threshold"), slider(s.vad_threshold, 1, 100, (v) => { s.vad_threshold = v; }));
+    const vadRow = row(t("settings.vad.threshold"), slider(s.vad_threshold, 1, 100, (v) => { s.vad_threshold = v; }, true));
     vadRow.style.display = (s.activation_mode || "ptt") === "vad" ? "" : "none";
     el.appendChild(vadRow);
 
@@ -607,104 +616,103 @@ function pageCapture() {
     // (25) the music profile overrides these two, so say so where they live.
     el.appendChild(hint(t("settings.music.channels.stereo.96.kbit.s.or.more.capture.in.stereo.with.echo.cancell")));
 
-    // Mic test meter (3) + loopback playback (4).
     const testWrap = document.createElement("div");
     testWrap.className = "mic-test";
     const startBtn = document.createElement("button");
+    startBtn.type = "button";
     startBtn.textContent = t("settings.begin.test");
-    let loopbackCtx = null;
-    const loopChk = checkbox(false, async (v) => {
-        if (loopbackCtx) {
-            loopbackCtx.close().catch(() => {});
-            loopbackCtx = null;
-        }
-        if (v && testWrap._stream) {
-            loopbackCtx = await startLoopback(testWrap._stream);
-        }
-    });
-    startBtn.onclick = async () => {
-        startBtn.disabled = true;
-        const stopBtn = document.createElement("button");
-        stopBtn.textContent = t("settings.stop");
-        const bar = document.createElement("div");
-        bar.className = "mic-bar";
-        bar.innerHTML = `<div class="mic-fill"></div>`;
-        const fill = bar.querySelector(".mic-fill");
-        const err = document.createElement("div");
-        err.className = "set-hint warn";
-        testWrap.appendChild(stopBtn);
-        testWrap.appendChild(bar);
-        testWrap.appendChild(err);
-        let stream, raf, ctx;
-        try {
-            stream = await navigator.mediaDevices.getUserMedia({
-                audio: s.capture_device_id ? { deviceId: { exact: s.capture_device_id } } : true,
-            });
-            testWrap._stream = stream;
-            ctx = new (window.AudioContext || window.webkitAudioContext)();
-            const src = ctx.createMediaStreamSource(stream);
-            const an = ctx.createAnalyser();
-            an.fftSize = 512;
-            src.connect(an);
-            const buf = new Uint8Array(an.frequencyBinCount);
-            const tick = () => {
-                an.getByteTimeDomainData(buf);
-                let sum = 0;
-                for (const v of buf) sum += Math.abs(v - 128);
-                fill.style.width = Math.min(100, (sum / buf.length / 128) * 500) + "%";
-                raf = requestAnimationFrame(tick);
-            };
-            tick();
-        } catch (e) {
-            err.textContent = t("settings.mic.test.failed") + (e.message || e.name);
-        }
-        stopBtn.onclick = () => {
-            if (raf) cancelAnimationFrame(raf);
-            if (stream) stream.getTracks().forEach((t) => t.stop());
-            if (ctx) ctx.close();
-            testWrap._stream = null;
-            if (loopbackCtx) {
-                loopbackCtx.close().catch(() => {});
-                loopbackCtx = null;
-                loopChk.checked = false;
-            }
-            stopBtn.remove(); bar.remove();
-            startBtn.disabled = false;
-        };
-    };
-    testWrap.appendChild(startBtn);
-    el.appendChild(testWrap);
-    el.appendChild(row(t("settings.loopback.test.hear.yourself.use.headphones"), loopChk));
-
-    // (5) VAD auto-calibrate.
+    const stopBtn = document.createElement("button");
+    stopBtn.type = "button";
+    stopBtn.textContent = t("settings.stop");
+    stopBtn.hidden = true;
+    const bar = document.createElement("div");
+    bar.className = "mic-bar"; bar.hidden = true;
+    const fill = document.createElement("div");
+    fill.className = "mic-fill"; bar.appendChild(fill);
+    const testStatus = hint("");
+    testStatus.id = "mic-test-status"; testStatus.setAttribute("role", "status");
     const calBtn = document.createElement("button");
+    calBtn.type = "button";
     calBtn.textContent = t("settings.auto.calibrate.5s.ambient");
-    const calOut = document.createElement("span");
-    calOut.className = "set-hint";
-    calBtn.onclick = async () => {
-        calBtn.disabled = true;
-        calOut.textContent = t("settings.recording.ambient");
-        try {
-            const r = await calibrateMic(s.capture_device_id || undefined, 5000);
-            s.vad_threshold = r.suggested;
-            calOut.textContent = t("settings.calibration.result", { floor: (r.floor * 100).toFixed(1), threshold: r.suggested });
-            if ((s.activation_mode || "ptt") === "vad") renderPage("capture");
-        } catch (e) {
-            calOut.textContent = t("settings.calibration.failed") + (e.message || e.name);
-        }
-        calBtn.disabled = false;
+    const calStatus = hint("");
+    calStatus.id = "mic-calibration-status"; calStatus.setAttribute("role", "status");
+    const loopChk = checkbox(false, enabled => mic.setLoopback(enabled));
+    loopChk.disabled = true;
+    const mic = new MicCheck({
+        onState: (status, mode) => {
+            const busy = status !== "idle";
+            startBtn.disabled = busy; calBtn.disabled = busy;
+            stopBtn.hidden = !busy;
+            bar.hidden = !busy || mode !== "test";
+            loopChk.disabled = status !== "active" || mode !== "test";
+            if (!busy) loopChk.checked = false;
+            if (status === "requesting") {
+                testStatus.textContent = ""; calStatus.textContent = "";
+                (mode === "test" ? testStatus : calStatus).textContent = t("settings.mic.requesting");
+            } else if (status === "active" && mode === "test") {
+                testStatus.textContent = t("settings.mic.listening");
+            }
+        },
+        onLevel: level => { fill.style.width = level * 100 + "%"; },
+        onSilence: silent => { testStatus.textContent = t(silent ? "settings.mic.silent" : "settings.mic.detected"); },
+        onCountdown: seconds => { calStatus.textContent = t("settings.mic.countdown", { seconds }); },
+        onCalibrated: result => {
+            s.vad_threshold = result.suggested;
+            const controls = vadRow.querySelectorAll("input");
+            for (const control of controls) control.value = result.suggested;
+            calStatus.textContent = t("settings.calibration.result", { floor: (result.floor * 100).toFixed(1), threshold: result.suggested });
+        },
+        onError: (error, mode) => {
+            const status = mode === "test" ? testStatus : calStatus;
+            const key = { NotAllowedError: "settings.mic.denied", SecurityError: "settings.mic.denied",
+                NotFoundError: "settings.mic.missing", NotReadableError: "settings.mic.unavailable" }[error.name];
+            status.textContent = key ? t(key) : t("settings.mic.test.failed") + (error.message || error.name);
+        },
+    });
+    const begin = mode => {
+        if (mic.current) return;
+        stopMicCheck();
+        stopMicCheck = () => mic.stop();
+        const channel = V().state.channels?.find(channel => channel.ChannelID === V().state.myChannelID);
+        void mic.start(mode, captureConstraints(channel, s));
     };
+    startBtn.onclick = () => begin("test");
+    calBtn.onclick = () => begin("calibration");
+    stopBtn.onclick = () => {
+        const mode = mic.current?.mode;
+        mic.stop();
+        (mode === "calibration" ? calStatus : testStatus).textContent = t("settings.mic.stopped");
+    };
+    testWrap.append(startBtn, stopBtn, bar);
+    el.append(testWrap, testStatus, row(t("settings.loopback.test.hear.yourself.use.headphones"), loopChk));
     const calWrap = document.createElement("div");
     calWrap.className = "mic-test";
-    calWrap.appendChild(calBtn);
-    calWrap.appendChild(calOut);
+    calWrap.append(calBtn, calStatus);
     el.appendChild(calWrap);
     return el;
+}
+
+function renderAudioStatus(panel) {
+    const reasons = audioStatus(settings());
+    panel.textContent = reasons.length ? reasons.map(({ reason, count }) => t("settings.audio." + reason, { count })).join(" · ") : t("settings.audio.enabled");
+}
+
+function audioStatusPanel() {
+    const wrap = document.createElement("div");
+    wrap.className = "set-hint audio-status-panel";
+    const status = document.createElement("div");
+    status.className = "audio-status"; status.setAttribute("role", "status");
+    renderAudioStatus(status);
+    const preview = document.createElement("div");
+    preview.className = "audio-preview-status"; preview.setAttribute("role", "status");
+    wrap.append(status, preview);
+    return wrap;
 }
 
 function pagePlayback() {
     const s = settings();
     const el = document.createElement("div");
+    el.appendChild(audioStatusPanel());
     el.appendChild(row(t("settings.output.device"), devicePicker(
         "audiooutput",
         s.playback_device_id,
@@ -715,7 +723,7 @@ function pagePlayback() {
         s.volume = v;
         const rv = document.getElementById("remote-video");
         if (rv) V().applyOutputSettings(rv);
-    })));
+    }, true)));
     el.appendChild(row(t("settings.voice.limiter.compressor"), checkbox(s.voice_limiter !== false, (v) => { s.voice_limiter = v; })));
     el.appendChild(row(t("settings.per.user.gain.normalization.cap.4x"), checkbox(s.gain_normalize, (v) => { s.gain_normalize = v; })));
     // (53) each publisher is levelled on its own chain, so a loud speaker no
@@ -1191,6 +1199,7 @@ function pageSecurity() {
 function pageNotifications() {
     const s = settings();
     const el = document.createElement("div");
+    el.appendChild(audioStatusPanel());
     const chatLevel = document.createElement("select");
     chatLevel.className = "dlg-input";
     for (const [value, label] of [
@@ -1273,11 +1282,24 @@ function pageNotifications() {
     pack.textContent = "noXa";
     el.appendChild(row(t("settings.sound.set"), pack));
     el.appendChild(hint(t("settings.original.noxa.sounds.replace.soft.bright.retro.and.custom.beeps.your.event")));
-    el.appendChild(row(t("settings.sound.volume"), slider(s.sound_volume ?? 100, 0, 200, (v) => { s.sound_volume = v; })));
+    el.appendChild(hint(t("settings.audio.output.fallback")));
+    el.appendChild(row(t("settings.sound.volume"), slider(s.sound_volume ?? 100, 0, 200, (v) => { s.sound_volume = v; }, true)));
+    el.appendChild(row(t("settings.sound.effects"), checkbox(s.effects_enabled !== false, v => { s.effects_enabled = v; })));
+    el.appendChild(row(t("settings.audio.duck"), checkbox(s.duck_effects_while_speaking, v => { s.duck_effects_while_speaking = v; })));
+    el.appendChild(hint(t("settings.audio.duck.hint")));
     el.appendChild(row(t("settings.spoken.system.messages"), checkbox(s.spoken_messages !== false, v => { s.spoken_messages = v; })));
-    el.appendChild(row(t("settings.speech.volume"), slider(s.speech_volume ?? 100, 0, 200, v => { s.speech_volume = v; })));
+    el.appendChild(row(t("settings.speech.volume"), slider(s.speech_volume ?? 100, 0, 200, v => { s.speech_volume = v; }, true)));
+    const speechLocale = document.createElement("select");
+    for (const [value, label] of [["interface", t("settings.audio.follow.interface")], ["en", "English"], ["de", "Deutsch"]]) {
+        const option = document.createElement("option"); option.value = value; option.textContent = label; speechLocale.appendChild(option);
+    }
+    speechLocale.value = s.speech_language || "interface";
+    speechLocale.onchange = () => { s.speech_language = speechLocale.value; stopPreviews(); renderPage("notifications"); };
+    el.appendChild(row(t("settings.audio.speech.language"), speechLocale));
     el.appendChild(row(t("settings.speak.connection.problems"), checkbox(s.speech_connection !== false, v => { s.speech_connection = v; })));
     el.appendChild(row(t("settings.speak.administrative.actions"), checkbox(s.speech_admin !== false, v => { s.speech_admin = v; })));
+    el.appendChild(row(t("settings.speak.removal"), checkbox(s.speech_removal !== false, v => { s.speech_removal = v; })));
+    el.appendChild(row(t("settings.speak.permissions"), checkbox(s.speech_permissions !== false, v => { s.speech_permissions = v; })));
     const speechTest = document.createElement("button");
     speechTest.type = "button";
     speechTest.textContent = t("settings.test.spoken.message");
@@ -1308,6 +1330,35 @@ function pageNotifications() {
     stop.onclick = () => { stopPreviews(); status.textContent = t("settings.preview.stopped"); };
     controls.append(all, stop);
     el.append(controls, status);
+    const speechButton = (label, events) => {
+        const b = document.createElement("button");
+        b.type = "button";
+        b.textContent = label;
+        b.onclick = () => previewSpeech(s, events, event => {
+            status.textContent = event ? t("settings.playing", { label: speechPreviewLabel(event, s) }) : t("settings.preview.finished");
+        });
+        return b;
+    };
+    const speechControls = document.createElement("div");
+    speechControls.className = "sound-controls";
+    speechControls.appendChild(speechButton(t("settings.preview.all.speech"), Object.keys(SPEECH_EVENTS)));
+    for (const [category, label] of [["connection", "settings.speak.connection.problems"], ["admin", "settings.speak.administrative.actions"]]) {
+        speechControls.appendChild(speechButton(t("settings.preview", { label: t(label) }), Object.keys(SPEECH_EVENTS).filter(id => SPEECH_EVENTS[id].category === category)));
+    }
+    el.appendChild(speechControls);
+    for (const event of Object.keys(SPEECH_EVENTS)) {
+        const label = speechPreviewLabel(event, s);
+        const controls = document.createElement("div");
+        controls.className = "sound-controls";
+        if (event !== "test") controls.appendChild(checkbox(s.speech_events?.[event] !== false, enabled => {
+            s.speech_events ||= {};
+            s.speech_events[event] = enabled;
+        }));
+        const b = speechButton(t("settings.play"), [event]);
+        b.setAttribute("aria-label", t("settings.preview", { label }));
+        controls.appendChild(b);
+        el.appendChild(row(label, controls));
+    }
     for (const group of SOUND_EVENT_GROUPS) {
         const heading = document.createElement("div");
         heading.className = "set-subhead sound-controls";
@@ -1345,6 +1396,7 @@ const PAGE_BUILDERS = {
 
 function renderPage(id) {
     stopPreviews();
+    stopMicCheck();
     stopCameraTest();
     cancelHotkeyCapture();
     document.querySelectorAll(".settings-nav-item").forEach((n) => {
@@ -1408,6 +1460,16 @@ function openSettings(pageId = "application") {
     const search = overlay.querySelector("#settings-search");
     search.placeholder = t("settings.searchPlaceholder");
     const content = overlay.querySelector("#settings-content");
+    const refreshAudioStatus = () => {
+        for (const panel of content.querySelectorAll(".audio-status")) renderAudioStatus(panel);
+    };
+    content.addEventListener("input", refreshAudioStatus);
+    content.addEventListener("change", refreshAudioStatus);
+    window.addEventListener("noxa-audio-status", refreshAudioStatus);
+    const previewBlocked = event => {
+        for (const panel of content.querySelectorAll(".audio-preview-status")) panel.textContent = event.detail ? t("settings.audio." + event.detail) : "";
+    };
+    window.addEventListener("noxa-audio-preview-blocked", previewBlocked);
     const summary = overlay.querySelector(".settings-search-summary");
     // Keep only text, not detached controls or their callbacks. Draft edits
     // invalidate dynamic labels; the cache is discarded with this dialog.
@@ -1421,6 +1483,7 @@ function openSettings(pageId = "application") {
     });
     search.oninput = () => {
         stopPreviews();
+        stopMicCheck();
         stopCameraTest();
         cancelHotkeyCapture();
         const q = search.value.trim().toLowerCase();
@@ -1484,7 +1547,7 @@ function openSettings(pageId = "application") {
         item.setAttribute("aria-controls", "settings-content");
         item.setAttribute("aria-selected", "false");
         item.tabIndex = -1;
-        item.innerHTML = `<span class="nav-icon" aria-hidden="true">${p.icon}</span><span>${t(p.label)}</span>`;
+        item.innerHTML = `<span class="nav-icon" aria-hidden="true">${icon(p.icon)}</span><span>${t(p.label)}</span>`;
         item.onclick = () => renderPage(p.id);
         item.addEventListener("keydown", (event) => {
             if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
@@ -1568,7 +1631,10 @@ function openSettings(pageId = "application") {
     mountDialog(overlay, {
         onCancel: () => !saving,
         onClose: () => {
+            window.removeEventListener("noxa-audio-status", refreshAudioStatus);
+            window.removeEventListener("noxa-audio-preview-blocked", previewBlocked);
             stopPreviews();
+            stopMicCheck();
             stopCameraTest();
             cancelHotkeyCapture();
             revertLivePreview();

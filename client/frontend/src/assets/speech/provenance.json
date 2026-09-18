@@ -1,6 +1,18 @@
 {
   "repository": "rhasspy/piper-voices",
   "revision": "1162a9173d0ce503555aed757976b7a9912eae4c",
+  "authoring": {
+    "tool": "piper-tts 1.4.2",
+    "length_scale": 1.08,
+    "noise_scale": 0.55,
+    "noise_w_scale": 0.7,
+    "peak_ceiling": 0.115,
+    "target_rms_dbfs": -31,
+    "silence_threshold": 0.002,
+    "edge_padding_ms": 25,
+    "endpoint_fade_ms": 5,
+    "runtime_generation": false
+  },
   "models": {
     "en": "en/en_US/ljspeech/high/en_US-ljspeech-high",
     "de": "de/de_DE/thorsten/medium/de_DE-thorsten-medium"

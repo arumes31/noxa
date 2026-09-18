@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { readFileSync, readdirSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { SOUND_DEFINITIONS, SOUND_EVENTS } from "../src/sound-catalog.js";
 import { SoundEngine, soundVolume } from "../src/sound-engine.js";
 
@@ -30,15 +31,28 @@ function fixture(options = {}) {
     return { engine, state, ctx, sources, tick: (ms = 1000) => { now += ms; ctx.currentTime += ms / 1000; }, dnd: (v) => { dnd = v; } };
 }
 
-test("all 32 events have unique newly generated PCM assets with safe endpoints and levels", () => {
+test("all 32 events have unique replacement PCM assets with safe endpoints and levels", () => {
     assert.equal(SOUND_EVENTS.length, 32);
     const directory = new URL("../src/assets/sounds/", import.meta.url);
+    const metrics = JSON.parse(readFileSync(new URL("metrics.json", directory), "utf8"));
+    const provenance = JSON.parse(readFileSync(new URL("provenance.json", directory), "utf8"));
+    const recipes = JSON.parse(readFileSync(new URL("../../../tools/effect-recipes.json", import.meta.url), "utf8"));
+    assert.deepEqual(recipes.events.map(event => event.id), SOUND_EVENTS);
     assert.equal(readdirSync(directory).filter(x => x.endsWith(".wav")).length, 32);
     const hashes = new Set();
     for (const id of SOUND_EVENTS) {
         const def = SOUND_DEFINITIONS[id];
         assert.ok(def.duration >= .02 && def.duration <= .3);
         const wav = readFileSync(new URL(`${id}.wav`, directory));
+        assert.equal(createHash("sha256").update(wav).digest("hex"), metrics[id].sha256, `${id} shipped hash`);
+        assert.equal(metrics[id].duration, def.duration);
+        assert.ok(provenance.edits[id].length > 0, `${id} source provenance`);
+        for (const edit of provenance.edits[id]) {
+            assert.equal(provenance.sources[edit.source].license, "CC0-1.0");
+            assert.match(edit.sourceFileSha256, /^[a-f0-9]{64}$/);
+            assert.ok(!["robin", "dawith"].includes(edit.source), `${id} excluded source package`);
+            assert.doesNotMatch(edit.file, /glass|pluck|bong|ding|alarm|chip|dice|die-|negative/i);
+        }
         assert.equal(wav.toString("ascii", 0, 4), "RIFF");
         assert.equal(wav.readUInt16LE(22), 1);
         assert.equal(wav.readUInt32LE(24), 48000);
@@ -59,13 +73,13 @@ test("global, event, DND and replay gates survive forced previews", async () => 
     const f = fixture(); await f.engine.preload();
     f.state.settings.play_sounds = false;
     assert.equal(f.engine.play("mention"), false);
-    assert.equal(f.engine.play("mention", { force: true }), true);
+    assert.equal(f.engine.play("mention", { preview: true }), true);
     f.tick(); f.state.settings.event_sounds.dm = false;
-    assert.equal(f.engine.play("dm", { force: true }), false);
-    f.dnd(true); assert.equal(f.engine.play("poke", { force: true }), false);
+    assert.equal(f.engine.play("dm", { preview: true }), false);
+    f.dnd(true); assert.equal(f.engine.play("poke", { preview: true }), false);
     f.dnd(false); f.state.settings.play_sounds = true; f.state.replayingTabID = "old";
     assert.equal(f.engine.play("poke"), false);
-    assert.equal(f.engine.play("poke", { force: true }), true);
+    assert.equal(f.engine.play("poke", { preview: true }), true);
 });
 
 test("volume clamps malformed inputs and preserves zero and 200 percent", () => {
@@ -98,7 +112,7 @@ test("unknown events, failed context creation and failed loads never throw", asy
 
 test("preview uses draft volume, and output routing follows selection and falls back", async () => {
     const f = fixture(); await f.engine.preload();
-    assert.equal(f.engine.play("dm", { force: true, settings: { sound_volume: 0 } }), false);
+    assert.equal(f.engine.play("dm", { preview: true, settings: { sound_volume: 0 } }), false);
     await f.engine.setOutput("speaker"); assert.equal(f.ctx.sinkId, "speaker");
     f.ctx.setSinkId = async (id) => { if (id) throw new Error("removed"); f.ctx.sinkId = id; };
     await f.engine.setOutput("missing"); assert.equal(f.ctx.sinkId, "");
@@ -148,7 +162,7 @@ test("rapid replacement reserves fading slots without stacking live sources", as
         return source;
     };
     for (const name of ["mention", "dm", "poke", "announcement"]) f.engine.play(name);
-    for (let i = 0; i < 1000; i++) f.engine.play("connection_lost", { force: true });
+    for (let i = 0; i < 1000; i++) f.engine.play("connection_lost", { preview: true });
     assert.equal(f.engine.active.size, 4);
     assert.equal(f.engine.retiring.size, 1);
     const entry = [...f.engine.active].find(e => e.family === "connection_lost");
@@ -171,4 +185,96 @@ test("resume failures are deduplicated and malformed JSON volume is harmless", a
     assert.equal(f.engine.warnings.size, 1);
     for (const input of [false, [], {}, { valueOf: null }]) assert.equal(soundVolume(input), 1);
     await f.engine.dispose();
+});
+
+test("effects switch preserves master silence and does not silence speech", async () => {
+    const f = fixture({ definitions: { ...SOUND_DEFINITIONS, speech_en_banned: { category: "Speech", priority: 7, cooldown: 0 } } });
+    await f.engine.preload();
+    f.state.settings.effects_enabled = false;
+    assert.equal(f.engine.play("ban"), false);
+    assert.equal(f.engine.play("speech_en_banned", { volume: 80 }), true);
+    f.state.settings.play_sounds = false;
+    assert.equal(f.engine.play("speech_en_banned"), false);
+});
+
+test("preload accepts a subset, and retiring a source resolves completion exactly once", async () => {
+    const f = fixture(); await f.engine.preload(["ptt_on"]);
+    assert.deepEqual([...f.engine.buffers.keys()], ["ptt_on"]);
+    let ended = 0;
+    f.engine.play("ptt_on", { onEnded: () => ended++ });
+    const entry = [...f.engine.active][0];
+    f.engine.release(entry);
+    assert.equal(ended, 1);
+    f.engine.release(entry);
+    assert.equal(ended, 1);
+});
+
+test("failed asset loads can retry while concurrent attempts share one load", async () => {
+    let attempts = 0;
+    const f = fixture({ load: async () => { if (++attempts === 1) throw Error("temporary failure"); return new ArrayBuffer(8); } });
+    await f.engine.preload(["dm"]);
+    assert.equal(f.engine.play("dm"), false);
+    await Promise.all([f.engine.preload(["dm"]), f.engine.preload(["dm"])]);
+    assert.equal(attempts, 2);
+    assert.equal(f.engine.play("dm"), true);
+    await f.engine.preload(["dm"]);
+    assert.equal(attempts, 2);
+});
+
+test("optional conversation ducking lowers routine effects but preserves critical alerts", async () => {
+    const f = fixture(); await f.engine.preload();
+    Object.assign(f.state, { myChannelID: 7, clients: [{ channel_id: 7, is_speaking: true }] });
+    f.state.settings.duck_effects_while_speaking = true;
+    f.engine.play("dm");
+    assert.equal([...f.engine.active][0].volume, .35);
+    f.engine.play("ban");
+    assert.equal([...f.engine.active].find(e => e.family === "ban").volume, 1);
+    f.state.clients[0].is_speaking = false;
+    f.engine.updateDucking();
+    assert.equal([...f.engine.active].find(e => e.family === "dm").volume, 1);
+    f.tick(); f.state.clients[0] = { channel_id: 8, is_speaking: true };
+    f.engine.play("dm");
+    assert.equal([...f.engine.active].find(e => e.family === "dm").volume, 1);
+    f.state.clients[0].channel_id = 7;
+    f.state.settings.duck_effects_while_speaking = false;
+    f.engine.updateDucking();
+    assert.equal([...f.engine.active].find(e => e.family === "dm").volume, 1);
+});
+
+test("audio blocking reasons explain policy, volume and output failures", async () => {
+    const f = fixture(); await f.engine.preload();
+    assert.equal(f.engine.blockReason("dm"), "");
+    f.state.settings.play_sounds = false;
+    assert.equal(f.engine.blockReason("dm"), "master_muted");
+    assert.equal(f.engine.blockReason("dm", { preview: true }), "");
+    f.state.settings.play_sounds = true; f.dnd(true);
+    assert.equal(f.engine.blockReason("dm"), "dnd");
+    f.dnd(false); f.state.settings.event_sounds.dm = false;
+    assert.equal(f.engine.blockReason("dm"), "event_disabled");
+    delete f.state.settings.event_sounds.dm; f.state.settings.sound_volume = 0;
+    assert.equal(f.engine.blockReason("dm"), "volume_zero");
+    f.state.settings.sound_volume = 100;
+    f.ctx.setSinkId = async () => { throw Error("no output"); };
+    await f.engine.setOutput("missing");
+    assert.equal(f.engine.blockReason("dm"), "output_unavailable");
+});
+
+test("a device change cannot leak a cue to the previous output while routing is pending", async () => {
+    const f = fixture(); await f.engine.preload();
+    let routed;
+    f.ctx.setSinkId = () => new Promise(resolve => { routed = resolve; });
+    f.state.settings.playback_device_id = "headset";
+    assert.equal(f.engine.play("ban"), false);
+    await Promise.resolve();
+    routed(); await f.engine.output;
+    assert.equal(f.engine.play("ban"), true);
+});
+
+test("failure of both selected and fallback outputs remains silent", async () => {
+    const f = fixture(); await f.engine.preload();
+    f.ctx.setSinkId = async () => { throw Error("device lost"); };
+    f.state.settings.playback_device_id = "removed-headset";
+    await f.engine.setOutput("removed-headset");
+    assert.equal(f.engine.play("ban"), false);
+    assert.equal(f.sources.length, 0);
 });

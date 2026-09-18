@@ -215,10 +215,10 @@ func (s *Store) ApplyChannelGroupAutoAssignment(ctx context.Context, userID, cha
 	return groupID, true, nil
 }
 
-// UnassignChannelGroup removes a user from a channel group on a channel.
-func (s *Store) UnassignChannelGroup(ctx context.Context, userID, channelID int64) error {
-	const q = `DELETE FROM channel_group_members WHERE user_id = $1 AND channel_id = $2`
-	if _, err := s.db.ExecContext(ctx, q, userID, channelID); err != nil {
+// UnassignChannelGroup removes a user from the specified channel group on a channel.
+func (s *Store) UnassignChannelGroup(ctx context.Context, groupID, userID, channelID int64) error {
+	const q = `DELETE FROM channel_group_members WHERE channel_group_id = $1 AND user_id = $2 AND channel_id = $3`
+	if _, err := s.db.ExecContext(ctx, q, groupID, userID, channelID); err != nil {
 		return fmt.Errorf("unassigning channel group: %w", err)
 	}
 	return nil

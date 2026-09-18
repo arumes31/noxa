@@ -263,7 +263,27 @@ func TestChannelGroupsDB(t *testing.T) {
 	if g == nil || g.MemberCount != 1 {
 		t.Fatalf("channel group = %+v, want 1 member", g)
 	}
-	if err := s.UnassignChannelGroup(ctx, userID, channelID); err != nil {
+	replacementID, err := s.CreateGroup(ctx, "channel", "w6a_chan_replacement_"+suffix, 0)
+	if err != nil {
+		t.Fatalf("CreateGroup replacement: %v", err)
+	}
+	t.Cleanup(func() { _ = s.DeleteGroup(ctx, "channel", replacementID, true) })
+	if err := s.AssignChannelGroup(ctx, replacementID, userID, channelID); err != nil {
+		t.Fatalf("AssignChannelGroup replacement: %v", err)
+	}
+	if err := s.UnassignChannelGroup(ctx, gid, userID, channelID); err != nil {
+		t.Fatalf("UnassignChannelGroup stale group: %v", err)
+	}
+	var assignedGroupID int64
+	if err := s.DB().QueryRowContext(ctx,
+		`SELECT channel_group_id FROM channel_group_members WHERE user_id = $1 AND channel_id = $2`,
+		userID, channelID).Scan(&assignedGroupID); err != nil {
+		t.Fatalf("read replacement channel group: %v", err)
+	}
+	if assignedGroupID != replacementID {
+		t.Fatalf("channel group after stale unassign = %d, want %d", assignedGroupID, replacementID)
+	}
+	if err := s.UnassignChannelGroup(ctx, replacementID, userID, channelID); err != nil {
 		t.Fatalf("UnassignChannelGroup: %v", err)
 	}
 }

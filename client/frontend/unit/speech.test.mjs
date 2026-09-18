@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { readFileSync, readdirSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { SpeechQueue, SPEECH_EVENTS, speechLanguage } from "../src/speech-queue.js";
 import { SPEECH_ASSETS } from "../src/speech-catalog.js";
 
@@ -15,7 +16,20 @@ function fixture() {
     return { queue, engine, state, played, dnd:value=>{dnd=value;}, tick:ms=>{time+=ms;const cb=timer;timer=null;cb?.();} };
 }
 
+test("announcement language can override the interface without changing fallback behavior", () => {
+    assert.equal(speechLanguage({ language: "de", speech_language: "en" }), "en");
+    assert.equal(speechLanguage({ language: "en", speech_language: "de" }), "de");
+    assert.equal(speechLanguage({ language: "system", speech_language: "interface" }, "de-AT"), "de");
+    assert.equal(speechLanguage({ language: "de", speech_language: "invalid" }), "de");
+    const f = fixture();
+    f.state.settings.language = "de"; f.state.settings.speech_language = "en";
+    f.queue.enqueue("banned", { delay: 0 });
+    assert.equal(f.played[0].id, "speech_en_banned");
+});
+
 test("each fixed speech event has valid English/German PCM and no orphaned clips", () => {
+    const metrics = JSON.parse(readFileSync(new URL("../src/assets/speech/metrics.json", import.meta.url)));
+    const transcripts = JSON.parse(readFileSync(new URL("../../../tools/speech-lines.json", import.meta.url)));
     for (const language of ["en", "de"]) {
         assert.deepEqual(Object.keys(SPEECH_ASSETS[language]).sort(), Object.keys(SPEECH_EVENTS).sort());
         const directory = new URL("../src/assets/speech/"+language+"/",import.meta.url);
@@ -25,10 +39,42 @@ test("each fixed speech event has valid English/German PCM and no orphaned clips
             assert.equal(wav.toString("ascii",0,4),"RIFF"); assert.equal(wav.readUInt16LE(22),1);
             assert.ok([22050,24000,48000].includes(wav.readUInt32LE(24)));
             assert.equal(wav.readInt16LE(44),0); assert.equal(wav.readInt16LE(wav.length-2),0);
-            assert.ok(clip.duration >= 1 && clip.duration <= 3);
+            assert.ok(clip.duration >= .5 && clip.duration <= 6);
+            assert.equal(clip.duration, (wav.length - 44) / 2 / wav.readUInt32LE(24));
+            assert.equal(clip.transcript, transcripts[language][event]);
+            assert.equal(clip.transcript, metrics[language + "/" + event].text);
+            assert.equal(createHash("sha256").update(wav).digest("hex"), metrics[language + "/" + event].sha256);
+            assert.ok(wav.subarray(44).some(byte => byte !== 0), "speech cannot be a silent placeholder");
             for (let i=44;i<wav.length;i+=2) assert.ok(Math.abs(wav.readInt16LE(i)/32768)<=.1151);
         }
     }
+});
+
+test("preview never interrupts a live critical announcement", () => {
+    const f = fixture();
+    f.queue.enqueue("banned", { delay: 0 });
+    assert.equal(f.queue.enqueue("test", { preview: true, delay: 0 }), false);
+    assert.equal(f.queue.current.event, "banned");
+});
+
+test("live alerts take precedence over previews both during the effect gap and during speech", () => {
+    const f = fixture();
+    f.queue.enqueue("kicked");
+    assert.equal(f.queue.enqueue("banned", { preview: true, delay: 0 }), false);
+    f.queue.clear();
+    f.queue.enqueue("banned", { preview: true, delay: 0 });
+    f.queue.enqueue("connection_lost", { delay: 0 });
+    assert.equal(f.queue.current.event, "connection_lost");
+});
+
+test("speech cooldown does not hide subsequent rejected-action effects", () => {
+    const f = fixture();
+    f.queue.enqueue("permission_denied", { delay: 0 });
+    f.played[0].options.onEnded();
+    f.tick(1000);
+    assert.equal(f.queue.enqueue("permission_denied", { withEffect: true }), true);
+    assert.equal(f.played.at(-1).id, "server_error");
+    assert.equal(f.queue.pending.length, 0);
 });
 
 test("speech respects master, speech, event, matrix, DND and replay gates", () => {
@@ -68,4 +114,44 @@ test("production frontend cannot reintroduce oscillator or speech synthesis", ()
         const source=readFileSync(new URL(file,root),"utf8");
         assert.doesNotMatch(source,/createOscillator|speechSynthesis|SpeechSynthesisUtterance|from\s+["'][^"']*(?:piper|generate-speech)/,file);
     }
+});
+
+test("distinct sessions do not share critical cooldowns and stale generations are discarded", () => {
+    const f = fixture();
+    f.state.serverGeneration = 1;
+    assert.equal(f.queue.enqueue("banned"), true);
+    f.state.activeTabID = "two";
+    assert.equal(f.queue.enqueue("banned"), true);
+    f.tick(200);
+    assert.equal(f.played.length, 1);
+    f.played[0].options.onEnded();
+    f.state.serverGeneration++;
+    assert.equal(f.queue.enqueue("banned"), true);
+    f.queue.clear();
+    f.queue.enqueue("connection_lost");
+    f.state.serverGeneration++;
+    f.tick(200);
+    assert.equal(f.played.length, 1);
+});
+
+test("effect completion, then a 150ms gap, gates speech; speech-only remains available", () => {
+    const f = fixture();
+    f.engine.definitions = { ban: { duration: .22 } };
+    assert.equal(f.queue.enqueue("banned", { withEffect: true }), true);
+    assert.equal(f.played[0].id, "ban");
+    f.tick(1000);
+    assert.equal(f.played.length, 1);
+    f.played[0].options.onEnded();
+    f.tick(149); assert.equal(f.played.length, 1);
+    f.tick(1); assert.equal(f.played[1].id, "speech_en_banned");
+    f.queue.clear();
+    f.state.activeTabID = "two";
+    f.state.settings.effects_enabled = false;
+    f.engine.play = (id, options) => {
+        if (id === "ban") return false;
+        f.played.push({ id, options }); return true;
+    };
+    f.queue.enqueue("banned", { withEffect: true });
+    f.tick(150);
+    assert.equal(f.played.at(-1).id, "speech_en_banned");
 });

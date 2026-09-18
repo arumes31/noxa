@@ -239,10 +239,13 @@ func (f *fakeGroups) ApplyChannelGroupAutoAssignment(_ context.Context, _, _ int
 	return 0, false, nil
 }
 
-func (f *fakeGroups) UnassignChannelGroup(_ context.Context, userID, channelID int64) error {
+func (f *fakeGroups) UnassignChannelGroup(_ context.Context, groupID, userID, channelID int64) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	delete(f.channelMembers, [2]int64{userID, channelID})
+	key := [2]int64{userID, channelID}
+	if f.channelMembers[key] == groupID {
+		delete(f.channelMembers, key)
+	}
 	return nil
 }
 
@@ -676,6 +679,30 @@ func TestGroupAssignChannelRequiresChannelID(t *testing.T) {
 	env.groups.mu.Unlock()
 	if got != gid {
 		t.Fatalf("channel membership group = %d, want %d", got, gid)
+	}
+}
+
+func TestGroupUnassignChannelTargetsRequestedGroup(t *testing.T) {
+	env := startTestEnv(t, nil)
+	defer env.stop()
+	conn, _ := dialAuthed(t, env.addr, "admin-uid")
+	defer func() { _ = conn.Close() }()
+
+	oldGroupID, _ := env.groups.CreateGroup(context.Background(), "channel", "OldChanOps", 0)
+	newGroupID, _ := env.groups.CreateGroup(context.Background(), "channel", "NewChanOps", 0)
+	if err := env.groups.AssignChannelGroup(context.Background(), newGroupID, 2, 1); err != nil {
+		t.Fatalf("seed replacement channel group: %v", err)
+	}
+
+	send(t, conn, netproto.MsgGroupUnassign, netproto.GroupUnassign{
+		Type: "channel", GroupID: oldGroupID, UniqueID: "user-uid", ChannelID: 1,
+	})
+	readEventOfType(t, conn, eventGroupUnassigned)
+	env.groups.mu.Lock()
+	got := env.groups.channelMembers[[2]int64{2, 1}]
+	env.groups.mu.Unlock()
+	if got != newGroupID {
+		t.Fatalf("channel membership group = %d, want newer group %d", got, newGroupID)
 	}
 }
 

@@ -1,0 +1,931 @@
+{
+  "title": "noXa",
+  "sources": {
+    "kenney": {
+      "title": "Interface Sounds 1.0",
+      "author": "Kenney",
+      "license": "CC0-1.0",
+      "page": "https://kenney.nl/assets/interface-sounds",
+      "download": "https://kenney.nl/media/pages/assets/interface-sounds/fa43c1dd4d-1677589452/kenney_interface-sounds.zip",
+      "archive": "kenney.zip",
+      "sha256": "f2193d072726d6758a5f7871b2dcc54dcce0d5c35c6f0a62f92549b327c81232"
+    },
+    "ui": {
+      "title": "UI Audio 1.0",
+      "author": "Kenney",
+      "page": "https://kenney.nl/assets/ui-audio",
+      "license": "CC0-1.0",
+      "download": "https://kenney.nl/media/pages/assets/ui-audio/490d233f68-1677590494/kenney_ui-audio.zip",
+      "archive": "ui.zip",
+      "sha256": "946fc23a63d535d693eb31b2eabb80c8c28d6351e2186b344ceb71b2cb1d5eb6"
+    },
+    "cards": {
+      "title": "Casino Audio 1.1 \u2014 card and packaging foley only",
+      "author": "Kenney",
+      "page": "https://kenney.nl/assets/casino-audio",
+      "license": "CC0-1.0",
+      "download": "https://kenney.nl/media/pages/assets/casino-audio/2472606a04-1721639069/kenney_casino-audio.zip",
+      "archive": "cards.zip",
+      "sha256": "f36250766ac5bc378c13708ddf12a23a8e54a3251f8d482c7536e51b5dbafa18"
+    },
+    "paper": {
+      "title": "Various Paper Sound Effects",
+      "author": "Luckius",
+      "page": "https://opengameart.org/content/various-paper-sound-effects",
+      "license": "CC0-1.0",
+      "download": "https://opengameart.org/sites/default/files/sounds_6.zip",
+      "archive": "paper.zip",
+      "sha256": "aa1889414310c7cfdd8dc291c19d4e4fc21ec987e9238b0d961fb72449c263a4"
+    }
+  },
+  "events": [
+    {
+      "id": "connection_connected",
+      "label": "Connected",
+      "category": "Connection",
+      "character": "Firm control latch with a short paper settling texture",
+      "duration": 0.26,
+      "priority": 2,
+      "gain": 1,
+      "cooldown": 100,
+      "concurrency": "replace same event within session; priority admission",
+      "rmsDB": -31,
+      "peakCeiling": 0.11,
+      "parts": [
+        {
+          "source": "ui",
+          "file": "Audio/switch31.ogg",
+          "lengthMs": 180,
+          "weight": 1,
+          "atMs": 0,
+          "lowpassHz": 0
+        },
+        {
+          "source": "cards",
+          "file": "Audio/card-place-1.ogg",
+          "lengthMs": 165,
+          "weight": 0.38,
+          "atMs": 18,
+          "lowpassHz": 0
+        }
+      ]
+    },
+    {
+      "id": "connection_reconnected",
+      "label": "Reconnected",
+      "category": "Connection",
+      "character": "Two dry contacts ending in a clear latch",
+      "duration": 0.245,
+      "priority": 2,
+      "gain": 1,
+      "cooldown": 100,
+      "concurrency": "replace same event within session; priority admission",
+      "rmsDB": -32,
+      "peakCeiling": 0.105,
+      "parts": [
+        {
+          "source": "ui",
+          "file": "Audio/click2.ogg",
+          "lengthMs": 55,
+          "weight": 0.6,
+          "atMs": 0,
+          "lowpassHz": 0
+        },
+        {
+          "source": "ui",
+          "file": "Audio/switch20.ogg",
+          "lengthMs": 130,
+          "weight": 1,
+          "atMs": 65,
+          "lowpassHz": 0
+        }
+      ]
+    },
+    {
+      "id": "connection_disconnected",
+      "label": "Disconnected",
+      "category": "Connection",
+      "character": "Single calm dry control closure",
+      "duration": 0.175,
+      "priority": 2,
+      "gain": 1,
+      "cooldown": 100,
+      "concurrency": "replace same event within session; priority admission",
+      "rmsDB": -34,
+      "peakCeiling": 0.1,
+      "parts": [
+        {
+          "source": "ui",
+          "file": "Audio/switch11.ogg",
+          "lengthMs": 135,
+          "weight": 1,
+          "atMs": 0,
+          "lowpassHz": 4500
+        }
+      ]
+    },
+    {
+      "id": "connection_lost",
+      "label": "Connection lost",
+      "category": "Connection",
+      "character": "Brief paper interruption ending in a firm latch",
+      "duration": 0.255,
+      "priority": 3,
+      "gain": 1,
+      "cooldown": 100,
+      "concurrency": "replace same event within session; priority admission",
+      "rmsDB": -30,
+      "peakCeiling": 0.112,
+      "parts": [
+        {
+          "source": "paper",
+          "file": "WAV/Paper Ripped - 1.wav",
+          "lengthMs": 95,
+          "weight": 0.55,
+          "atMs": 0,
+          "lowpassHz": 4200
+        },
+        {
+          "source": "ui",
+          "file": "Audio/switch24.ogg",
+          "lengthMs": 125,
+          "weight": 1,
+          "atMs": 98,
+          "lowpassHz": 0
+        }
+      ]
+    },
+    {
+      "id": "connection_reconnecting",
+      "label": "Reconnecting",
+      "category": "Connection",
+      "character": "Small mechanical detent",
+      "duration": 0.105,
+      "priority": 1,
+      "gain": 1,
+      "cooldown": 5000,
+      "concurrency": "replace same event within session; priority admission",
+      "rmsDB": -41,
+      "peakCeiling": 0.065,
+      "parts": [
+        {
+          "source": "kenney",
+          "file": "Audio/switch_006.ogg",
+          "lengthMs": 100,
+          "weight": 1,
+          "atMs": 0,
+          "lowpassHz": 0
+        }
+      ]
+    },
+    {
+      "id": "connection_failed",
+      "label": "Connection failed",
+      "category": "Connection",
+      "character": "Two separated dry stops with a short paper edge",
+      "duration": 0.28,
+      "priority": 3,
+      "gain": 1,
+      "cooldown": 100,
+      "concurrency": "replace same event within session; priority admission",
+      "rmsDB": -30,
+      "peakCeiling": 0.112,
+      "parts": [
+        {
+          "source": "ui",
+          "file": "Audio/switch22.ogg",
+          "lengthMs": 95,
+          "weight": 0.8,
+          "atMs": 0,
+          "lowpassHz": 0
+        },
+        {
+          "source": "ui",
+          "file": "Audio/switch11.ogg",
+          "lengthMs": 125,
+          "weight": 1,
+          "atMs": 137,
+          "lowpassHz": 0
+        },
+        {
+          "source": "cards",
+          "file": "Audio/card-place-4.ogg",
+          "lengthMs": 90,
+          "weight": 0.2,
+          "atMs": 145,
+          "lowpassHz": 0
+        }
+      ]
+    },
+    {
+      "id": "server_error",
+      "label": "Server action error",
+      "category": "Connection",
+      "character": "Compact crumpled-paper stop and button contact",
+      "duration": 0.19,
+      "priority": 3,
+      "gain": 1,
+      "cooldown": 100,
+      "concurrency": "replace same event within session; priority admission",
+      "rmsDB": -32,
+      "peakCeiling": 0.108,
+      "parts": [
+        {
+          "source": "paper",
+          "file": "WAV/Paper Crushed - 2.wav",
+          "lengthMs": 135,
+          "weight": 0.65,
+          "atMs": 0,
+          "lowpassHz": 4200
+        },
+        {
+          "source": "ui",
+          "file": "Audio/click2.ogg",
+          "lengthMs": 55,
+          "weight": 1,
+          "atMs": 20,
+          "lowpassHz": 0
+        }
+      ]
+    },
+    {
+      "id": "own_channel_join",
+      "label": "Joined channel",
+      "category": "Your channel",
+      "character": "Signature control latch with a broad paper contact",
+      "duration": 0.275,
+      "priority": 2,
+      "gain": 1,
+      "cooldown": 100,
+      "concurrency": "replace same event within session; priority admission",
+      "rmsDB": -32,
+      "peakCeiling": 0.11,
+      "parts": [
+        {
+          "source": "ui",
+          "file": "Audio/switch7.ogg",
+          "lengthMs": 145,
+          "weight": 1,
+          "atMs": 0,
+          "lowpassHz": 0
+        },
+        {
+          "source": "cards",
+          "file": "Audio/card-place-2.ogg",
+          "lengthMs": 220,
+          "weight": 0.45,
+          "atMs": 17,
+          "lowpassHz": 0
+        }
+      ]
+    },
+    {
+      "id": "own_channel_switch",
+      "label": "Switched channel",
+      "category": "Your channel",
+      "character": "Crisp latch followed by a dry paper landing",
+      "duration": 0.205,
+      "priority": 2,
+      "gain": 1,
+      "cooldown": 100,
+      "concurrency": "replace same event within session; priority admission",
+      "rmsDB": -34,
+      "peakCeiling": 0.1,
+      "parts": [
+        {
+          "source": "kenney",
+          "file": "Audio/switch_001.ogg",
+          "lengthMs": 100,
+          "weight": 0.8,
+          "atMs": 0,
+          "lowpassHz": 0
+        },
+        {
+          "source": "cards",
+          "file": "Audio/card-slide-1.ogg",
+          "lengthMs": 115,
+          "weight": 1,
+          "atMs": 78,
+          "lowpassHz": 0
+        }
+      ]
+    },
+    {
+      "id": "own_channel_leave",
+      "label": "Left channel",
+      "category": "Your channel",
+      "character": "Calm control release with a brief paper closure",
+      "duration": 0.165,
+      "priority": 2,
+      "gain": 1,
+      "cooldown": 100,
+      "concurrency": "replace same event within session; priority admission",
+      "rmsDB": -35,
+      "peakCeiling": 0.095,
+      "parts": [
+        {
+          "source": "ui",
+          "file": "Audio/switch11.ogg",
+          "lengthMs": 125,
+          "weight": 1,
+          "atMs": 0,
+          "lowpassHz": 0
+        },
+        {
+          "source": "cards",
+          "file": "Audio/card-place-1.ogg",
+          "lengthMs": 125,
+          "weight": 0.4,
+          "atMs": 20,
+          "lowpassHz": 0
+        }
+      ]
+    },
+    {
+      "id": "user_join",
+      "label": "User joined",
+      "category": "Other users",
+      "character": "Small clear dry tap",
+      "duration": 0.1,
+      "priority": 0,
+      "gain": 1,
+      "cooldown": 180,
+      "concurrency": "coalesce movement",
+      "rmsDB": -42,
+      "peakCeiling": 0.055,
+      "parts": [
+        {
+          "source": "kenney",
+          "file": "Audio/select_001.ogg",
+          "lengthMs": 50,
+          "weight": 1,
+          "atMs": 0,
+          "lowpassHz": 0
+        }
+      ]
+    },
+    {
+      "id": "user_leave",
+      "label": "User left",
+      "category": "Other users",
+      "character": "Quiet paper contact with a short soft tail",
+      "duration": 0.095,
+      "priority": 0,
+      "gain": 1,
+      "cooldown": 180,
+      "concurrency": "coalesce movement",
+      "rmsDB": -43,
+      "peakCeiling": 0.05,
+      "parts": [
+        {
+          "source": "cards",
+          "file": "Audio/card-place-1.ogg",
+          "lengthMs": 90,
+          "weight": 1,
+          "atMs": 0,
+          "lowpassHz": 0
+        }
+      ]
+    },
+    {
+      "id": "user_move_in",
+      "label": "User moved in",
+      "category": "Other users",
+      "character": "Light grainy control contact",
+      "duration": 0.12,
+      "priority": 0,
+      "gain": 1,
+      "cooldown": 180,
+      "concurrency": "coalesce movement",
+      "rmsDB": -42,
+      "peakCeiling": 0.055,
+      "parts": [
+        {
+          "source": "kenney",
+          "file": "Audio/switch_004.ogg",
+          "lengthMs": 115,
+          "weight": 1,
+          "atMs": 0,
+          "lowpassHz": 7000
+        }
+      ]
+    },
+    {
+      "id": "user_move_out",
+      "label": "User moved out",
+      "category": "Other users",
+      "character": "Quiet compact button release",
+      "duration": 0.1,
+      "priority": 0,
+      "gain": 1,
+      "cooldown": 180,
+      "concurrency": "coalesce movement",
+      "rmsDB": -43,
+      "peakCeiling": 0.05,
+      "parts": [
+        {
+          "source": "ui",
+          "file": "Audio/rollover4.ogg",
+          "lengthMs": 80,
+          "weight": 1,
+          "atMs": 0,
+          "lowpassHz": 4500
+        }
+      ]
+    },
+    {
+      "id": "mic_on",
+      "label": "Microphone on",
+      "category": "Voice controls",
+      "character": "Mechanical switch engagement",
+      "duration": 0.13,
+      "priority": 1,
+      "gain": 1,
+      "cooldown": 100,
+      "concurrency": "replace same event within session; priority admission",
+      "rmsDB": -39,
+      "peakCeiling": 0.075,
+      "parts": [
+        {
+          "source": "kenney",
+          "file": "Audio/switch_002.ogg",
+          "lengthMs": 125,
+          "weight": 1,
+          "atMs": 0,
+          "lowpassHz": 0
+        }
+      ]
+    },
+    {
+      "id": "mic_off",
+      "label": "Microphone off",
+      "category": "Voice controls",
+      "character": "Darker mechanical release",
+      "duration": 0.14,
+      "priority": 1,
+      "gain": 1,
+      "cooldown": 100,
+      "concurrency": "replace same event within session; priority admission",
+      "rmsDB": -40,
+      "peakCeiling": 0.07,
+      "parts": [
+        {
+          "source": "kenney",
+          "file": "Audio/switch_007.ogg",
+          "lengthMs": 135,
+          "weight": 1,
+          "atMs": 0,
+          "lowpassHz": 4800
+        }
+      ]
+    },
+    {
+      "id": "deafen_on",
+      "label": "Deafened",
+      "category": "Voice controls",
+      "character": "Muted double-action control closure",
+      "duration": 0.14,
+      "priority": 1,
+      "gain": 1,
+      "cooldown": 100,
+      "concurrency": "replace same event within session; priority admission",
+      "rmsDB": -38,
+      "peakCeiling": 0.08,
+      "parts": [
+        {
+          "source": "kenney",
+          "file": "Audio/toggle_001.ogg",
+          "lengthMs": 135,
+          "weight": 1,
+          "atMs": 0,
+          "lowpassHz": 2800
+        }
+      ]
+    },
+    {
+      "id": "deafen_off",
+      "label": "Undeafened",
+      "category": "Voice controls",
+      "character": "Clearer control-surface release",
+      "duration": 0.125,
+      "priority": 1,
+      "gain": 1,
+      "cooldown": 100,
+      "concurrency": "replace same event within session; priority admission",
+      "rmsDB": -38,
+      "peakCeiling": 0.08,
+      "parts": [
+        {
+          "source": "kenney",
+          "file": "Audio/toggle_004.ogg",
+          "lengthMs": 70,
+          "weight": 0.8,
+          "atMs": 0,
+          "lowpassHz": 0
+        },
+        {
+          "source": "kenney",
+          "file": "Audio/select_002.ogg",
+          "lengthMs": 45,
+          "weight": 0.55,
+          "atMs": 65,
+          "lowpassHz": 0
+        }
+      ]
+    },
+    {
+      "id": "ptt_on",
+      "label": "Push-to-talk on",
+      "category": "Voice controls",
+      "character": "Tiny dry button engagement",
+      "duration": 0.035,
+      "priority": 1,
+      "gain": 1,
+      "cooldown": 0,
+      "concurrency": "replace PTT",
+      "rmsDB": -46,
+      "peakCeiling": 0.03,
+      "parts": [
+        {
+          "source": "ui",
+          "file": "Audio/click4.ogg",
+          "lengthMs": 30,
+          "weight": 1,
+          "atMs": 0,
+          "lowpassHz": 5000
+        }
+      ]
+    },
+    {
+      "id": "ptt_off",
+      "label": "Push-to-talk off",
+      "category": "Voice controls",
+      "character": "Tiny dry contact release",
+      "duration": 0.025,
+      "priority": 1,
+      "gain": 1,
+      "cooldown": 0,
+      "concurrency": "replace PTT",
+      "rmsDB": -47,
+      "peakCeiling": 0.026,
+      "parts": [
+        {
+          "source": "kenney",
+          "file": "Audio/click_003.ogg",
+          "lengthMs": 10,
+          "weight": 1,
+          "atMs": 0,
+          "lowpassHz": 4500
+        }
+      ]
+    },
+    {
+      "id": "mention",
+      "label": "Mention",
+      "category": "Notifications",
+      "character": "Distinct paper flick followed by a clear button contact",
+      "duration": 0.245,
+      "priority": 2,
+      "gain": 1,
+      "cooldown": 100,
+      "concurrency": "replace same event within session; priority admission",
+      "rmsDB": -32,
+      "peakCeiling": 0.108,
+      "parts": [
+        {
+          "source": "paper",
+          "file": "WAV/Paper Sound - 2.wav",
+          "lengthMs": 130,
+          "weight": 0.55,
+          "atMs": 0,
+          "lowpassHz": 5500
+        },
+        {
+          "source": "ui",
+          "file": "Audio/click2.ogg",
+          "lengthMs": 55,
+          "weight": 1,
+          "atMs": 145,
+          "lowpassHz": 0
+        }
+      ]
+    },
+    {
+      "id": "keyword",
+      "label": "Keyword highlight",
+      "category": "Notifications",
+      "character": "Short grainy paper contact",
+      "duration": 0.18,
+      "priority": 1,
+      "gain": 1,
+      "cooldown": 100,
+      "concurrency": "replace same event within session; priority admission",
+      "rmsDB": -37,
+      "peakCeiling": 0.085,
+      "parts": [
+        {
+          "source": "cards",
+          "file": "Audio/card-slide-5.ogg",
+          "lengthMs": 165,
+          "weight": 1,
+          "atMs": 0,
+          "lowpassHz": 6000
+        }
+      ]
+    },
+    {
+      "id": "dm",
+      "label": "Direct message",
+      "category": "Notifications",
+      "character": "Broad paper landing with a small dry leading click",
+      "duration": 0.2,
+      "priority": 1,
+      "gain": 1,
+      "cooldown": 100,
+      "concurrency": "replace same event within session; priority admission",
+      "rmsDB": -35,
+      "peakCeiling": 0.1,
+      "parts": [
+        {
+          "source": "cards",
+          "file": "Audio/card-place-3.ogg",
+          "lengthMs": 180,
+          "weight": 1,
+          "atMs": 0,
+          "lowpassHz": 0
+        },
+        {
+          "source": "ui",
+          "file": "Audio/click1.ogg",
+          "lengthMs": 50,
+          "weight": 0.3,
+          "atMs": 0,
+          "lowpassHz": 0
+        }
+      ]
+    },
+    {
+      "id": "channel_message",
+      "label": "Channel message",
+      "category": "Notifications",
+      "character": "Tiny clean dry button contact",
+      "duration": 0.08,
+      "priority": 0,
+      "gain": 1,
+      "cooldown": 250,
+      "concurrency": "replace same event within session; priority admission",
+      "rmsDB": -43,
+      "peakCeiling": 0.05,
+      "parts": [
+        {
+          "source": "ui",
+          "file": "Audio/click1.ogg",
+          "lengthMs": 70,
+          "weight": 1,
+          "atMs": 0,
+          "lowpassHz": 0
+        }
+      ]
+    },
+    {
+      "id": "whisper",
+      "label": "Voice whisper",
+      "category": "Notifications",
+      "character": "Soft paper texture ending in a light click",
+      "duration": 0.155,
+      "priority": 2,
+      "gain": 1,
+      "cooldown": 100,
+      "concurrency": "replace same event within session; priority admission",
+      "rmsDB": -38,
+      "peakCeiling": 0.08,
+      "parts": [
+        {
+          "source": "paper",
+          "file": "WAV/Paper Sound - 1.wav",
+          "lengthMs": 85,
+          "weight": 0.35,
+          "atMs": 0,
+          "lowpassHz": 3200
+        },
+        {
+          "source": "kenney",
+          "file": "Audio/click_002.ogg",
+          "lengthMs": 10,
+          "weight": 1,
+          "atMs": 85,
+          "lowpassHz": 0
+        }
+      ]
+    },
+    {
+      "id": "poke",
+      "label": "Poke",
+      "category": "Notifications",
+      "character": "Focused dry control snap",
+      "duration": 0.165,
+      "priority": 2,
+      "gain": 1,
+      "cooldown": 100,
+      "concurrency": "replace same event within session; priority admission",
+      "rmsDB": -32,
+      "peakCeiling": 0.11,
+      "parts": [
+        {
+          "source": "ui",
+          "file": "Audio/switch30.ogg",
+          "lengthMs": 150,
+          "weight": 1,
+          "atMs": 0,
+          "lowpassHz": 0
+        }
+      ]
+    },
+    {
+      "id": "join_leave",
+      "label": "Join/leave (your channel)",
+      "category": "Notifications",
+      "character": "Quiet short contact for the compatibility event",
+      "duration": 0.09,
+      "priority": 0,
+      "gain": 1,
+      "cooldown": 250,
+      "concurrency": "replace same event within session; priority admission",
+      "rmsDB": -43,
+      "peakCeiling": 0.05,
+      "parts": [
+        {
+          "source": "kenney",
+          "file": "Audio/select_002.ogg",
+          "lengthMs": 45,
+          "weight": 1,
+          "atMs": 0,
+          "lowpassHz": 0
+        },
+        {
+          "source": "cards",
+          "file": "Audio/card-place-1.ogg",
+          "lengthMs": 60,
+          "weight": 0.3,
+          "atMs": 17,
+          "lowpassHz": 0
+        }
+      ]
+    },
+    {
+      "id": "buddy_online",
+      "label": "Watched contact online",
+      "category": "Notifications",
+      "character": "Compact control contact with a soft paper edge",
+      "duration": 0.2,
+      "priority": 1,
+      "gain": 1,
+      "cooldown": 100,
+      "concurrency": "replace same event within session; priority admission",
+      "rmsDB": -37,
+      "peakCeiling": 0.085,
+      "parts": [
+        {
+          "source": "ui",
+          "file": "Audio/switch17.ogg",
+          "lengthMs": 95,
+          "weight": 1,
+          "atMs": 0,
+          "lowpassHz": 0
+        },
+        {
+          "source": "cards",
+          "file": "Audio/card-place-1.ogg",
+          "lengthMs": 140,
+          "weight": 0.3,
+          "atMs": 26,
+          "lowpassHz": 0
+        }
+      ]
+    },
+    {
+      "id": "kick",
+      "label": "Kicked",
+      "category": "Notifications",
+      "character": "Firm compact mechanical stop",
+      "duration": 0.21,
+      "priority": 3,
+      "gain": 1,
+      "cooldown": 100,
+      "concurrency": "replace same event within session; priority admission",
+      "rmsDB": -30,
+      "peakCeiling": 0.112,
+      "parts": [
+        {
+          "source": "ui",
+          "file": "Audio/switch32.ogg",
+          "lengthMs": 200,
+          "weight": 1,
+          "atMs": 0,
+          "lowpassHz": 5000
+        }
+      ]
+    },
+    {
+      "id": "ban",
+      "label": "Banned",
+      "category": "Notifications",
+      "character": "Two separated dry stops with a brief crumpled-paper finish",
+      "duration": 0.29,
+      "priority": 4,
+      "gain": 1,
+      "cooldown": 100,
+      "concurrency": "replace same event within session; priority admission",
+      "rmsDB": -29,
+      "peakCeiling": 0.112,
+      "parts": [
+        {
+          "source": "ui",
+          "file": "Audio/switch24.ogg",
+          "lengthMs": 100,
+          "weight": 0.8,
+          "atMs": 0,
+          "lowpassHz": 0
+        },
+        {
+          "source": "ui",
+          "file": "Audio/switch22.ogg",
+          "lengthMs": 120,
+          "weight": 1,
+          "atMs": 150,
+          "lowpassHz": 0
+        },
+        {
+          "source": "paper",
+          "file": "WAV/Paper Crushed - 2.wav",
+          "lengthMs": 110,
+          "weight": 0.5,
+          "atMs": 150,
+          "lowpassHz": 4000
+        }
+      ]
+    },
+    {
+      "id": "announcement",
+      "label": "Announcement",
+      "category": "Notifications",
+      "character": "Full paper contact ending in a crisp button closure",
+      "duration": 0.25,
+      "priority": 3,
+      "gain": 1,
+      "cooldown": 100,
+      "concurrency": "replace same event within session; priority admission",
+      "rmsDB": -33,
+      "peakCeiling": 0.105,
+      "parts": [
+        {
+          "source": "cards",
+          "file": "Audio/card-place-4.ogg",
+          "lengthMs": 200,
+          "weight": 0.65,
+          "atMs": 0,
+          "lowpassHz": 0
+        },
+        {
+          "source": "ui",
+          "file": "Audio/click3.ogg",
+          "lengthMs": 60,
+          "weight": 1,
+          "atMs": 165,
+          "lowpassHz": 0
+        }
+      ]
+    },
+    {
+      "id": "channel_watch",
+      "label": "Channel watch",
+      "category": "Notifications",
+      "character": "Quiet short textured button pair",
+      "duration": 0.13,
+      "priority": 0,
+      "gain": 1,
+      "cooldown": 250,
+      "concurrency": "replace same event within session; priority admission",
+      "rmsDB": -42,
+      "peakCeiling": 0.055,
+      "parts": [
+        {
+          "source": "kenney",
+          "file": "Audio/select_007.ogg",
+          "lengthMs": 45,
+          "weight": 0.6,
+          "atMs": 0,
+          "lowpassHz": 4500
+        },
+        {
+          "source": "ui",
+          "file": "Audio/rollover2.ogg",
+          "lengthMs": 60,
+          "weight": 0.7,
+          "atMs": 45,
+          "lowpassHz": 0
+        }
+      ]
+    }
+  ]
+}

@@ -76,6 +76,9 @@ function fileBrowserPane() {
         ".fb-list": list,
         ".fb-quota": quota,
         ".fb-filter": element(),
+        ".fb-refresh": element(), ".fb-upload": element(), ".fb-mkdir": element(),
+        ".fb-emoji": element(), ".fb-banner": element(), ".fb-transfers": element(),
+        ".fb-upload span": element(),
     }[selector] || null);
     return { list, pane };
 }

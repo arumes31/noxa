@@ -1,0 +1,110 @@
+noXa audio sources and redistribution
+
+Effects: CC0-1.0. noXa edits are also dedicated under CC0-1.0.
+https://creativecommons.org/publicdomain/zero/1.0/legalcode
+
+Source archives and each edit are identified in the repository at:
+client/frontend/src/assets/sounds/provenance.json
+
+Interface Sounds 1.0
+Author: Kenney
+License: CC0-1.0
+https://kenney.nl/assets/interface-sounds
+Archive SHA-256: f2193d072726d6758a5f7871b2dcc54dcce0d5c35c6f0a62f92549b327c81232
+
+Original source license:
+	
+
+	Interface Sounds (1.0)
+
+	Created/distributed by Kenney (www.kenney.nl)
+	Creation date: 11-02-2020
+
+			------------------------------
+
+	License: (Creative Commons Zero, CC0)
+	http://creativecommons.org/publicdomain/zero/1.0/
+
+	This content is free to use in personal, educational and commercial projects.
+	Support us by crediting Kenney or www.kenney.nl (this is not mandatory)
+
+			------------------------------
+
+	Donate:   http://support.kenney.nl
+	Patreon:  http://patreon.com/kenney/
+
+	Follow on Twitter for updates:
+	http://twitter.com/KenneyNL
+
+UI Audio 1.0
+Author: Kenney
+License: CC0-1.0
+https://kenney.nl/assets/ui-audio
+Archive SHA-256: 946fc23a63d535d693eb31b2eabb80c8c28d6351e2186b344ceb71b2cb1d5eb6
+
+Original source license:
+	
+
+	UI SFX Set
+
+	by  Kenney Vleugels (Kenney.nl)
+
+			------------------------------
+
+	License (Creative Commons Zero, CC0)
+	http://creativecommons.org/publicdomain/zero/1.0/
+
+	You may use these assets in personal and commercial projects.
+	Credit (Kenney or www.kenney.nl) would be nice but is not mandatory.
+
+			------------------------------
+
+	Donate:   http://support.kenney.nl
+	Request:  http://request.kenney.nl
+
+	Follow on Twitter for updates:
+	@KenneyNL
+
+Casino Audio 1.1 — card and packaging foley only
+Author: Kenney
+License: CC0-1.0
+https://kenney.nl/assets/casino-audio
+Archive SHA-256: f36250766ac5bc378c13708ddf12a23a8e54a3251f8d482c7536e51b5dbafa18
+
+Original source license:
+	
+
+	Casino Audio (1.1)
+
+	by  Kenney Vleugels (Kenney.nl)
+
+			------------------------------
+
+	License (Creative Commons Zero, CC0)
+	http://creativecommons.org/publicdomain/zero/1.0/
+
+	You may use these assets in personal and commercial projects.
+	Credit (Kenney or www.kenney.nl) would be nice but is not mandatory.
+
+			------------------------------
+
+	Donate:   http://support.kenney.nl
+	Request:  http://request.kenney.nl
+
+	Follow on Twitter for updates:
+	@KenneyNL
+
+Various Paper Sound Effects
+Author: Luckius
+License: CC0-1.0
+https://opengameart.org/content/various-paper-sound-effects
+Archive SHA-256: aa1889414310c7cfdd8dc291c19d4e4fc21ec987e9238b0d961fb72449c263a4
+
+Speech: complete fixed noXa English and German sentences rendered offline.
+English: Piper en_US-ljspeech-high, based on public-domain LJ Speech.
+https://keithito.com/LJ-Speech-Dataset/
+German: Piper de_DE-thorsten-medium, based on CC0 Thorsten Voice.
+https://github.com/thorstenMueller/Thorsten-Voice
+Voice source revision: 1162a9173d0ce503555aed757976b7a9912eae4c
+https://huggingface.co/rhasspy/piper-voices
+Piper tooling and model weights are not included in the application.

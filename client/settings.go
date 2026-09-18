@@ -99,7 +99,7 @@ type HotkeyProfile struct {
 // serialized default changes, and add the repair to migrateSettings:
 // loading merges the file ONTO the defaults, so a field an older client always
 // wrote wins over the new default unless it is explicitly repaired.
-const settingsVersion = 8
+const settingsVersion = 10
 
 // Settings holds all user preferences.
 type Settings struct {
@@ -178,22 +178,27 @@ type Settings struct {
 	UpdatesAutoCheck bool   `json:"updates_auto_check"`
 
 	// Voice UX (wave 1).
-	UserVolumes        map[string]int  `json:"user_volumes"`         // uniqueID -> volume 0..200
-	MutedUsers         []string        `json:"muted_users"`          // uniqueIDs muted locally
-	PTTReleaseDelayMs  int             `json:"ptt_release_delay_ms"` // 0..2000
-	WarnMutedTalking   bool            `json:"warn_muted_talking"`   // default on
-	WarnEmptyChannel   bool            `json:"warn_empty_channel"`   // default on
-	SoundPack          string          `json:"sound_pack"`           // "noxa"; legacy pack IDs migrate
-	SoundVolume        int             `json:"sound_volume"`         // 0..200
-	SpokenMessages     bool            `json:"spoken_messages"`
-	SpeechVolume       int             `json:"speech_volume"` // 0..200
-	SpeechConnection   bool            `json:"speech_connection"`
-	SpeechAdmin        bool            `json:"speech_admin"`
-	SpeechEvents       map[string]bool `json:"speech_events,omitempty"`
-	EventSounds        map[string]bool `json:"event_sounds"`         // event name -> enabled
-	WhisperReplyHotkey string          `json:"whisper_reply_hotkey"` // default "Ctrl+R"
-	VoiceLimiter       bool            `json:"voice_limiter"`        // default on
-	GainNormalize      bool            `json:"gain_normalize"`
+	UserVolumes              map[string]int  `json:"user_volumes"`         // uniqueID -> volume 0..200
+	MutedUsers               []string        `json:"muted_users"`          // uniqueIDs muted locally
+	PTTReleaseDelayMs        int             `json:"ptt_release_delay_ms"` // 0..2000
+	WarnMutedTalking         bool            `json:"warn_muted_talking"`   // default on
+	WarnEmptyChannel         bool            `json:"warn_empty_channel"`   // default on
+	SoundPack                string          `json:"sound_pack"`           // "noxa"; legacy pack IDs migrate
+	SoundVolume              int             `json:"sound_volume"`         // 0..200
+	EffectsEnabled           bool            `json:"effects_enabled"`
+	DuckEffectsWhileSpeaking bool            `json:"duck_effects_while_speaking"`
+	SpokenMessages           bool            `json:"spoken_messages"`
+	SpeechVolume             int             `json:"speech_volume"`   // 0..200
+	SpeechLanguage           string          `json:"speech_language"` // interface | en | de
+	SpeechConnection         bool            `json:"speech_connection"`
+	SpeechAdmin              bool            `json:"speech_admin"`
+	SpeechRemoval            bool            `json:"speech_removal"`
+	SpeechPermissions        bool            `json:"speech_permissions"`
+	SpeechEvents             map[string]bool `json:"speech_events,omitempty"`
+	EventSounds              map[string]bool `json:"event_sounds"`         // event name -> enabled
+	WhisperReplyHotkey       string          `json:"whisper_reply_hotkey"` // default "Ctrl+R"
+	VoiceLimiter             bool            `json:"voice_limiter"`        // default on
+	GainNormalize            bool            `json:"gain_normalize"`
 
 	// Video (wave 3).
 	CameraFPS    int  `json:"camera_fps"`    // 15 | 30 | 60 (default 30)
@@ -269,10 +274,14 @@ func DefaultSettings() Settings {
 		WarnEmptyChannel:  true,
 		SoundPack:         "noxa",
 		SoundVolume:       100,
+		EffectsEnabled:    true,
 		SpokenMessages:    true,
 		SpeechVolume:      100,
+		SpeechLanguage:    "interface",
 		SpeechConnection:  true,
 		SpeechAdmin:       true,
+		SpeechRemoval:     true,
+		SpeechPermissions: true,
 		// (385) one entry per notification-matrix event plus the connection,
 		// channel, and voice-action cues. Legacy join/leave entries stay in the
 		// file so version-7 migration can preserve earlier choices.
@@ -397,6 +406,10 @@ func migrateSettings(s Settings) Settings {
 		migrateEventSoundSplits(&s)
 	}
 	if s.SettingsVersion < 8 {
+		// Older silent profiles must not gain newly audible spoken messages.
+		if !s.PlaySounds || s.SoundVolume == 0 {
+			s.SpokenMessages = false
+		}
 		// One original complete set replaces the oscillator packs. Removed
 		// custom_sounds JSON is ignored; event/matrix choices remain intact.
 		s.SoundPack = "noxa"
@@ -442,6 +455,9 @@ func normalizeSettings(s Settings) Settings {
 	s.SoundPack = "noxa"
 	s.SoundVolume = clampSetting(s.SoundVolume, 0, 200)
 	s.SpeechVolume = clampSetting(s.SpeechVolume, 0, 200)
+	if s.SpeechLanguage == "" {
+		s.SpeechLanguage = "interface"
+	}
 	s.WindowOpacity = clampSetting(s.WindowOpacity, 20, 100)
 	s.UIFontSize = clampSetting(s.UIFontSize, 10, 20)
 	s.ChatFontSize = clampSetting(s.ChatFontSize, 12, 18)
@@ -741,6 +757,11 @@ func (a *App) SaveSettings(s Settings) string {
 	case "direct", "channel_mentions", "role_mentions", "all":
 	default:
 		return "invalid chat notification level"
+	}
+	switch s.SpeechLanguage {
+	case "", "interface", "en", "de":
+	default:
+		return "invalid announcement language"
 	}
 	generation, err := a.updateSettings(func(current Settings) Settings {
 		return mergeGoOwned(current, s)
