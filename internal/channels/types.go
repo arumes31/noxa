@@ -90,9 +90,6 @@ type ChannelSpec struct {
 	// Password is the plaintext channel password. If non-empty it is hashed
 	// with auth.HashPassword before being stored. If empty, no password is set.
 	Password string
-	// NeededJoinPower is the i_channel_join_power a client must meet or exceed
-	// to join the channel. 0 means no power requirement.
-	NeededJoinPower int
 	// CreatedBy is the user ID of the channel creator. 0 means unknown.
 	CreatedBy int64
 
@@ -116,14 +113,10 @@ type ChannelUpdate struct {
 	OpusStereo      *bool
 	SlowModeSeconds *int
 	Description     *string
-	// NeededJoinPower (160), OrderIndex (163) and ParentID (168) are editable
-	// after creation; ParentID 0 moves the channel to the root.
-	NeededJoinPower *int
-	OrderIndex      *int
-	ParentID        *int64
-	// InheritPermissions toggles resolving the parent's channel permissions
-	// before the channel's own (157).
-	InheritPermissions *bool
+	// OrderIndex and ParentID are editable after creation; ParentID 0 moves
+	// the channel to the root.
+	OrderIndex *int
+	ParentID   *int64
 }
 
 // Validate checks the spec for obvious errors and returns a descriptive error

@@ -1,7 +1,7 @@
 // ssh.go serves the same ServerQuery command loop over SSH (224). Only the
-// transport differs: authentication uses the SSH user name as the unique ID
-// and the SSH password as the query password, so the credentials and the
-// admin-only rule are identical to the raw TCP port.
+// transport differs: authentication uses the SSH user name as the account
+// identifier and the SSH password as the query password. The account must be
+// explicitly enabled for integrations.
 package query
 
 import (
@@ -26,6 +26,7 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"noxa/internal/auth"
+	"noxa/internal/netproto"
 	"noxa/internal/safecast"
 )
 
@@ -73,9 +74,8 @@ func (s *SSHServer) Start(ctx context.Context) error {
 		return fmt.Errorf("query ssh host key: %w", err)
 	}
 	cfg := &ssh.ServerConfig{
-		ServerVersion:    "SSH-2.0-noxa_" + Version,
-		MaxAuthTries:     s.base.MaxLoginFailures,
-		PasswordCallback: s.passwordCallback(ctx),
+		ServerVersion: "SSH-2.0-noxa_" + Version,
+		MaxAuthTries:  s.base.MaxLoginFailures,
 	}
 	cfg.AddHostKey(signer)
 
@@ -158,7 +158,7 @@ func (s *SSHServer) Close() error {
 
 // passwordCallback authenticates an SSH login with the query credentials and
 // feeds the same source-and-principal limiter as the TCP query port.
-func (s *SSHServer) passwordCallback(ctx context.Context) func(ssh.ConnMetadata, []byte) (*ssh.Permissions, error) {
+func (s *SSHServer) passwordCallback(ctx context.Context, principal *auth.IntegrationPrincipal) func(ssh.ConnMetadata, []byte) (*ssh.Permissions, error) {
 	authFailed := errors.New("invalid loginname or password")
 	return func(meta ssh.ConnMetadata, password []byte) (*ssh.Permissions, error) {
 		ip := hostOnly(meta.RemoteAddr().String())
@@ -170,18 +170,21 @@ func (s *SSHServer) passwordCallback(ctx context.Context) func(ssh.ConnMetadata,
 			return nil, errors.New("too many failed logins, try again later")
 		}
 		defer attempt.Cancel()
-		ok, admin, err := s.base.backend.Authenticate(ctx, meta.User(), string(password))
-		if err != nil {
-			s.logger.Warn("query ssh login error", zap.Error(err))
-			return nil, errors.New("internal error")
+		b := s.base.roleBackend()
+		if b == nil {
+			return nil, errors.New("integration authentication unavailable")
 		}
-		if !ok || !admin {
-			// Non-admins are refused like bad credentials: ServerQuery is
-			// admin-only and the distinction would confirm an account.
+		p, err := b.AuthenticateIntegration(ctx, meta.User(), string(password), ip)
+		if errors.Is(err, auth.ErrIntegrationDenied) {
 			attempt.Fail()
 			s.base.RecordAuthFailure("ssh", "invalid_credentials")
 			return nil, authFailed
 		}
+		if err != nil {
+			s.logger.Warn("query ssh integration login error", zap.Error(err))
+			return nil, errors.New("integration authentication unavailable")
+		}
+		*principal = p
 		attempt.Succeed(principalScope)
 		return nil, nil
 	}
@@ -200,7 +203,12 @@ func (s *SSHServer) serve(ctx context.Context, nConn net.Conn, cfg *ssh.ServerCo
 		s.logger.Debug("setting query ssh handshake deadline failed", zap.Error(err))
 		return
 	}
-	sshConn, chans, globalReqs, err := ssh.NewServerConn(nConn, cfg)
+	// Authentication proof belongs to this handshake only. Never reconstruct
+	// it from an SSH user name or client-supplied channel request.
+	var principal auth.IntegrationPrincipal
+	connectionConfig := *cfg
+	connectionConfig.PasswordCallback = s.passwordCallback(ctx, &principal)
+	sshConn, chans, globalReqs, err := ssh.NewServerConn(nConn, &connectionConfig)
 	if clearErr := nConn.SetDeadline(time.Time{}); clearErr != nil {
 		s.logger.Debug("clearing query ssh handshake deadline failed", zap.Error(clearErr))
 		if err == nil {
@@ -224,6 +232,7 @@ func (s *SSHServer) serve(ctx context.Context, nConn net.Conn, cfg *ssh.ServerCo
 		zap.String("unique_id", sshConn.User()),
 		zap.String("remote", hostOnly(nConn.RemoteAddr().String())))
 
+	var roleWrites sync.Mutex
 	for newChan := range chans {
 		if newChan.ChannelType() != "session" {
 			_ = newChan.Reject(ssh.UnknownChannelType, "only session channels are supported")
@@ -236,14 +245,14 @@ func (s *SSHServer) serve(ctx context.Context, nConn net.Conn, cfg *ssh.ServerCo
 		s.wg.Add(1)
 		go func() {
 			defer s.wg.Done()
-			s.serveChannel(ctx, sshConn, nConn, ch, reqs)
+			s.serveChannel(ctx, sshConn, nConn, ch, reqs, principal, &roleWrites)
 		}()
 	}
 }
 
 // serveChannel runs the command loop for one SSH session channel. It supports
 // an interactive shell and a one-shot exec ("ssh host clientlist").
-func (s *SSHServer) serveChannel(ctx context.Context, sshConn *ssh.ServerConn, nConn net.Conn, ch ssh.Channel, reqs <-chan *ssh.Request) {
+func (s *SSHServer) serveChannel(ctx context.Context, sshConn *ssh.ServerConn, nConn net.Conn, ch ssh.Channel, reqs <-chan *ssh.Request, principal auth.IntegrationPrincipal, roleWrites *sync.Mutex) {
 	defer func() {
 		if err := ch.Close(); err != nil {
 			s.logger.Debug("closing query ssh channel failed", zap.Error(err))
@@ -255,10 +264,15 @@ func (s *SSHServer) serveChannel(ctx context.Context, sshConn *ssh.ServerConn, n
 		w: ch,
 		// The idle timeout lives on the transport connection: an SSH channel
 		// has no deadline of its own.
-		setReadDeadline: nConn.SetReadDeadline,
-		remoteIP:        hostOnly(nConn.RemoteAddr().String()),
-		authed:          true,
-		username:        sshConn.User(),
+		setReadDeadline:  nConn.SetReadDeadline,
+		setWriteDeadline: nConn.SetWriteDeadline,
+		closeTransport:   nConn.Close,
+		remoteIP:         hostOnly(nConn.RemoteAddr().String()),
+		authed:           true,
+		username:         sshConn.User(),
+		principal:        principal,
+		roleWriteMu:      roleWrites,
+		sshModelRequired: true,
 	}
 
 	for req := range reqs {
@@ -274,7 +288,31 @@ func (s *SSHServer) serveChannel(ctx context.Context, sshConn *ssh.ServerConn, n
 			s.base.execute(ctx, sess, execCommand(req.Payload))
 			s.exit(ch)
 			return
-		case "pty-req", "env", "window-change":
+		case "env":
+			if s.base.roleBackend() == nil {
+				_ = req.Reply(true, nil)
+				continue
+			}
+			var env struct{ Name, Value string }
+			if err := ssh.Unmarshal(req.Payload, &env); err != nil {
+				// A malformed replacement must not preserve prior negotiation.
+				sess.authorizationModel = ""
+				sess.sshModelAccepted = false
+				_ = req.Reply(false, nil)
+				continue
+			}
+			if env.Name == "NOXA_AUTHORIZATION_MODEL" {
+				sess.authorizationModel = ""
+				sess.sshModelAccepted = false
+				if env.Value == netproto.AuthorizationModelRolesV1 {
+					sess.authorizationModel = env.Value
+					sess.sshModelAccepted = true
+				}
+				_ = req.Reply(sess.authorizationModel != "", nil)
+				continue
+			}
+			_ = req.Reply(true, nil)
+		case "pty-req", "window-change":
 			// Accepted and ignored: the protocol is line-based text.
 			_ = req.Reply(true, nil)
 		default:

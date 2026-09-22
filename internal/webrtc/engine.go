@@ -11,37 +11,39 @@ import (
 	"math/big"
 	"net"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/pion/ice/v4"
-	"github.com/pion/interceptor"
-	"github.com/pion/interceptor/pkg/cc"
-	"github.com/pion/interceptor/pkg/gcc"
 	"github.com/pion/sdp/v3"
+	"github.com/pion/transport/v4/stdnet"
 	"github.com/pion/webrtc/v4"
 	"go.uber.org/zap"
 )
 
 // Engine is the core WebRTC engine for the noxa server. It owns a reusable
-// Pion webrtc.API (built once from a configured MediaEngine, SettingEngine and
-// InterceptorRegistry) and a registry of active peer connections keyed by
+// Pion webrtc.API (replaced when the codec bounds for new peers change) and a
+// registry of active peer connections keyed by
 // clientID. The Engine is safe for concurrent use.
 type Engine struct {
 	logger *zap.Logger
 	api    *webrtc.API
 	udpMux ice.UDPMux
+	egress *mediaEgressRegistry
+	// Saved immutable network settings are reused when rebuilding the API.
+	settingEngine webrtc.SettingEngine
+	videoBounds   VideoBounds
 
 	// iceServers are the configured ICE servers used when creating new peer
 	// connections.
 	iceServers []webrtc.ICEServer
 
-	// enableAV1 controls whether the AV1 video codec is registered.
+	// enableAV1 retains the operator preference while bounds temporarily limit
+	// negotiation to VP8, so removing bounds can restore the configured codecs.
 	enableAV1   bool
 	certificate webrtc.Certificate
 	fingerprint string
 
-	mu     sync.RWMutex
+	mu     contextRWMutex
 	peers  map[string]*PeerConnectionWrapper
 	closed bool
 }
@@ -64,6 +66,15 @@ type NetworkConfig struct {
 // NewWithNetwork constructs an engine with explicit container port forwarding.
 // The engine owns the shared UDP socket and releases it on Close.
 func NewWithNetwork(logger *zap.Logger, iceServers []string, enableAV1 bool, network NetworkConfig) (*Engine, error) {
+	return NewWithVideoBounds(logger, iceServers, enableAV1, network, VideoBounds{})
+}
+
+// NewWithVideoBounds restricts negotiated video to VP8 when dimension limits
+// are enabled. The router must enforce the same bounds on encoded packets.
+func NewWithVideoBounds(logger *zap.Logger, iceServers []string, enableAV1 bool, network NetworkConfig, bounds VideoBounds) (*Engine, error) {
+	if err := bounds.validate(); err != nil {
+		return nil, err
+	}
 	if logger == nil {
 		return nil, fmt.Errorf("webrtc: logger must not be nil")
 	}
@@ -87,31 +98,22 @@ func NewWithNetwork(logger *zap.Logger, iceServers []string, enableAV1 bool, net
 		return nil, fmt.Errorf("webrtc: external IPs require a shared UDP address")
 	}
 
-	mediaEngine := &webrtc.MediaEngine{}
-	if err := registerCodecs(mediaEngine, enableAV1); err != nil {
-		return nil, fmt.Errorf("webrtc: registering codecs: %w", err)
+	egress := &mediaEgressRegistry{}
+	mediaEngine, interceptorRegistry, err := newEngineMedia(enableAV1, bounds, egress)
+	if err != nil {
+		return nil, err
 	}
 
 	settingEngine := webrtc.SettingEngine{}
+	networkStack, err := stdnet.NewNet()
+	if err != nil {
+		return nil, fmt.Errorf("webrtc: enumerating network interfaces: %w", err)
+	}
+	settingEngine.SetNet(boundedMediaNet{Net: networkStack})
 	// Use lite ICE candidate gathering by default; full ICE is configured via
 	// the ICE servers. Keep defaults conservative for a server-side SFU.
 	settingEngine.SetSCTPMaxReceiveBufferSize(16 * 1024 * 1024)
 	settingEngine.SetInterfaceFilter(usableICEInterface)
-
-	interceptorRegistry := &interceptor.Registry{}
-	congestionController, err := cc.NewInterceptor(func() (cc.BandwidthEstimator, error) {
-		return gcc.NewSendSideBWE(gcc.SendSideBWEInitialBitrate(1_500_000))
-	})
-	if err != nil {
-		return nil, fmt.Errorf("webrtc: creating GCC interceptor: %w", err)
-	}
-	interceptorRegistry.Add(congestionController)
-	if err := webrtc.ConfigureTWCCHeaderExtensionSender(mediaEngine, interceptorRegistry); err != nil {
-		return nil, fmt.Errorf("webrtc: configuring TWCC egress: %w", err)
-	}
-	if err := webrtc.RegisterDefaultInterceptors(mediaEngine, interceptorRegistry); err != nil {
-		return nil, fmt.Errorf("webrtc: registering default interceptors: %w", err)
-	}
 
 	parsedICE := make([]webrtc.ICEServer, 0, len(iceServers))
 	for _, raw := range iceServers {
@@ -154,7 +156,7 @@ func NewWithNetwork(logger *zap.Logger, iceServers []string, enableAV1 bool, net
 		if err != nil {
 			return nil, fmt.Errorf("webrtc: listening on shared UDP address: %w", err)
 		}
-		udpMux = webrtc.NewICEUDPMux(nil, conn)
+		udpMux = webrtc.NewICEUDPMux(nil, &boundedPacketConn{PacketConn: conn})
 		settingEngine.SetICEUDPMux(udpMux)
 		settingEngine.SetNetworkTypes([]webrtc.NetworkType{webrtc.NetworkTypeUDP4})
 	}
@@ -164,19 +166,22 @@ func NewWithNetwork(logger *zap.Logger, iceServers []string, enableAV1 bool, net
 		webrtc.WithInterceptorRegistry(interceptorRegistry),
 	)
 	e := &Engine{
-		udpMux:      udpMux,
-		logger:      logger,
-		api:         api,
-		iceServers:  parsedICE,
-		enableAV1:   enableAV1,
-		certificate: *certificate,
-		fingerprint: fingerprints[0].Value,
-		peers:       make(map[string]*PeerConnectionWrapper),
+		egress:        egress,
+		settingEngine: settingEngine,
+		videoBounds:   bounds,
+		udpMux:        udpMux,
+		logger:        logger,
+		api:           api,
+		iceServers:    parsedICE,
+		enableAV1:     enableAV1,
+		certificate:   *certificate,
+		fingerprint:   fingerprints[0].Value,
+		peers:         make(map[string]*PeerConnectionWrapper),
 	}
 
 	e.logger.Info("webrtc engine ready",
 		zap.Int("ice_servers", len(parsedICE)),
-		zap.Bool("av1_enabled", enableAV1),
+		zap.Bool("av1_enabled", enableAV1 && bounds == (VideoBounds{})),
 		zap.String("dtls_fingerprint", e.fingerprint),
 	)
 	return e, nil
@@ -234,6 +239,8 @@ func (e *Engine) NewPeerConnection(clientID string) (*PeerConnectionWrapper, err
 	}
 
 	wrapper := newPeerConnectionWrapper(pc, clientID, e.logger)
+	wrapper.egress = e.egress
+	wrapper.videoBounds = e.videoBounds
 	e.peers[clientID] = wrapper
 	e.logger.Info("webrtc peer connection created", zap.String("client_id", clientID))
 	return wrapper, nil
@@ -323,6 +330,10 @@ func (e *Engine) PeerCount() int {
 // registerCodecs registers the audio and video codecs supported by the noxa
 // SFU on the given MediaEngine. AV1 is only registered when enableAV1 is true.
 func registerCodecs(m *webrtc.MediaEngine, enableAV1 bool) error {
+	return registerCodecsWithVideoBounds(m, enableAV1, VideoBounds{})
+}
+
+func registerCodecsWithVideoBounds(m *webrtc.MediaEngine, enableAV1 bool, bounds VideoBounds) error {
 	// Audio: Opus (preferred) and G.722 as a fallback.
 	opus := webrtc.RTPCodecCapability{
 		MimeType:    webrtc.MimeTypeOpus,
@@ -353,8 +364,15 @@ func registerCodecs(m *webrtc.MediaEngine, enableAV1 bool) error {
 		},
 		PayloadType: 96,
 	}
+	if bounds != (VideoBounds{}) {
+		macroblocks := ((bounds.Width + 15) / 16) * ((bounds.Height + 15) / 16)
+		vp8.SDPFmtpLine = fmt.Sprintf("max-fs=%d", macroblocks)
+	}
 	if err := m.RegisterCodec(vp8, webrtc.RTPCodecTypeVideo); err != nil {
 		return fmt.Errorf("vp8: %w", err)
+	}
+	if bounds != (VideoBounds{}) {
+		return nil
 	}
 
 	vp9 := webrtc.RTPCodecParameters{

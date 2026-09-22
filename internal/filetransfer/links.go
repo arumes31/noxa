@@ -32,22 +32,29 @@ var ErrTooManyLinks = errors.New("too many active download links")
 
 // link is one issued download link.
 type link struct {
-	path    string // path relative to the registry's confined root
-	name    string // download file name (Content-Disposition)
-	expires time.Time
+	principal *Principal
+	scope     int64
+	path      string // path relative to the registry's confined root
+	name      string // download file name (Content-Disposition)
+	expires   time.Time
 }
 
 // LinkRegistry tracks issued download links and serves them over HTTP. It
 // implements http.Handler mounted at /dl/ on the health server.
 type LinkRegistry struct {
-	mu       sync.Mutex
-	rootDir  string
-	links    map[string]link
-	maxLinks int
-	now      func() time.Time
-	newToken func() (string, error)
-	revoked  map[string]struct{}
-	active   map[*os.File]string
+	// deliveryMu spans each guarded response write. Revocation drains writes
+	// even when initiated by a session disconnect outside the policy gate.
+	deliveryMu  sync.RWMutex
+	accessGuard AccessGuard
+	activeLinks map[*os.File]link
+	mu          sync.Mutex
+	rootDir     string
+	links       map[string]link
+	maxLinks    int
+	now         func() time.Time
+	newToken    func() (string, error)
+	revoked     map[string]struct{}
+	active      map[*os.File]string
 	// beforeServeOpen is a deterministic concurrency hook used by tests. It
 	// runs while mu is held immediately before a link file is opened.
 	beforeServeOpen func()
@@ -56,19 +63,24 @@ type LinkRegistry struct {
 // NewLinkRegistry returns an empty registry.
 func NewLinkRegistry(rootDir string) *LinkRegistry {
 	return &LinkRegistry{
-		rootDir:  rootDir,
-		links:    map[string]link{},
-		maxLinks: maxActiveLinks,
-		now:      time.Now,
-		newToken: func() (string, error) { return randomHex(linkTokenBytes) },
-		revoked:  map[string]struct{}{},
-		active:   map[*os.File]string{},
+		activeLinks: map[*os.File]link{},
+		rootDir:     rootDir,
+		links:       map[string]link{},
+		maxLinks:    maxActiveLinks,
+		now:         time.Now,
+		newToken:    func() (string, error) { return randomHex(linkTokenBytes) },
+		revoked:     map[string]struct{}{},
+		active:      map[*os.File]string{},
 	}
 }
 
 // Create issues a link for a regular file beneath the configured root and
 // returns its token. path must be relative to that root.
 func (r *LinkRegistry) Create(path, name string) (string, time.Time, error) {
+	return r.create(path, name, nil, 0)
+}
+
+func (r *LinkRegistry) create(path, name string, principal *Principal, scope int64) (string, time.Time, error) {
 	// /dl/<token> holds no key, so a chat attachment would be served as raw
 	// ciphertext that looks like a corrupt download (91-135).
 	if isEncryptedAttachment(name) {
@@ -109,7 +121,7 @@ func (r *LinkRegistry) Create(path, name string) (string, time.Time, error) {
 			continue
 		}
 		expires := now.Add(LinkTTL)
-		r.links[token] = link{path: path, name: name, expires: expires}
+		r.links[token] = link{path: path, name: name, expires: expires, principal: principal, scope: scope}
 		return token, expires, nil
 	}
 	return "", time.Time{}, errors.New("download link token collision limit exceeded")
@@ -119,6 +131,8 @@ func (r *LinkRegistry) Create(path, name string) (string, time.Time, error) {
 // already being served through those links. The channel remains tombstoned so
 // a racing Create cannot publish a capability after revocation.
 func (r *LinkRegistry) RevokeChannel(channelID int64) {
+	r.deliveryMu.Lock()
+	defer r.deliveryMu.Unlock()
 	channel := strconv.FormatInt(channelID, 10)
 	r.mu.Lock()
 	r.revoked[channel] = struct{}{}
@@ -131,6 +145,7 @@ func (r *LinkRegistry) RevokeChannel(channelID int64) {
 	for f, activeChannel := range r.active {
 		if activeChannel == channel {
 			delete(r.active, f)
+			delete(r.activeLinks, f)
 			active = append(active, f)
 		}
 	}
@@ -189,6 +204,7 @@ func (r *LinkRegistry) openActive(token string) (link, *os.File, bool) {
 		return link{}, nil, false
 	}
 	r.active[f] = channel
+	r.activeLinks[f] = l
 	return l, f, true
 }
 
@@ -224,6 +240,7 @@ func (r *LinkRegistry) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	defer func() {
 		r.mu.Lock()
 		delete(r.active, f)
+		delete(r.activeLinks, f)
 		r.mu.Unlock()
 		_ = f.Close()
 	}()
@@ -231,6 +248,12 @@ func (r *LinkRegistry) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	if err != nil {
 		http.Error(w, "file not found", http.StatusNotFound)
 		return
+	}
+	r.mu.Lock()
+	guarded := r.accessGuard != nil
+	r.mu.Unlock()
+	if guarded {
+		w = &linkResponseWriter{ResponseWriter: w, registry: r, token: token, link: l, ctx: req.Context()}
 	}
 	disposition := mime.FormatMediaType("attachment", map[string]string{"filename": l.name})
 	if disposition == "" {

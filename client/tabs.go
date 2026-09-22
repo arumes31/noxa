@@ -3,7 +3,7 @@
 // is what all existing bindings talk to (a.cm), so the bound API stays
 // unchanged. State-carrying events from every tab are journaled in Go, while
 // events from the ACTIVE tab also go to the frontend under their plain names
-// (snapshot/event/channellist/...), so the frontend keeps its single-state
+// (snapshot/event/...), so the frontend keeps its single-state
 // model. The bounded journal is replayed as plain events when a tab becomes
 // active — after a "tab_reset" marker that tells the frontend to clear its
 // chat/tree state first. Background chat events also bump the tab's
@@ -48,9 +48,10 @@ type journalEntry struct {
 
 // tabState bundles a tab's manager with its replay journal and badges.
 type tabState struct {
-	cm      *connManager
-	info    TabInfo
-	journal []journalEntry // events since the last snapshot
+	cm        *connManager
+	info      TabInfo
+	journal   []journalEntry // events since the last snapshot
+	transfers []ftProgress   // latest state per active transfer plus recent completions
 }
 
 // tabsMu guards tabs/activeID and every mutable tabState field.
@@ -107,10 +108,14 @@ func (a *App) relayTabEvent(tabID, name string, payload any) {
 	}
 	text, _ := payload.(string)
 	switch name {
+	case "ft_progress":
+		if progress, ok := payload.(ftProgress); ok {
+			ts.recordTransfer(progress)
+		}
 	case "snapshot":
 		ts.journal = ts.journal[:0]
 		ts.journal = append(ts.journal, journalEntry{name, text})
-	case "channellist", "subscriptions", "server_rules", "event":
+	case "subscriptions", "server_rules", "event":
 		ts.journal = append(ts.journal, journalEntry{name, text})
 		if len(ts.journal) > journalCap {
 			ts.journal = ts.journal[len(ts.journal)-journalCap:]
@@ -146,7 +151,7 @@ func (a *App) relayTabEvent(tabID, name string, payload any) {
 		a.activationPublishMu.Unlock()
 		return
 	}
-	if name != "snapshot" && name != "channellist" && name != "subscriptions" &&
+	if name != "snapshot" && name != "subscriptions" &&
 		name != "server_rules" && name != "event" && name != "disconnected" {
 		// ice/offer/avatar/servererror from background tabs: drop (voice is
 		// active-tab only this wave).
@@ -245,11 +250,16 @@ func (a *App) tabsRegistry() map[string]*tabState {
 
 // newTab creates a tab with a fresh connManager and registers it.
 func (a *App) newTab() (string, *tabState) {
+	return a.newTabWithIdentity(nil)
+}
+
+func (a *App) newTabWithIdentity(identity *identity) (string, *tabState) {
 	a.settingsMu.Lock()
 	allowPlaintext := a.settings.AllowPlaintext
 	a.settingsMu.Unlock()
 	id := fmt.Sprintf("tab-%d", a.tabSeq.Add(1))
 	cm := newConnManager(a.ctx)
+	cm.id = identity
 	cm.tabID = id
 	cm.sink = tabSink{app: a, tabID: id}
 	cm.allowPlaintext = allowPlaintext
@@ -265,6 +275,19 @@ func (a *App) newTab() (string, *tabState) {
 	a.tabOrder = append(a.tabOrder, id)
 	a.tabsMu.Unlock()
 	return id, ts
+}
+
+// newIdentityTab pins the selected key before dialing. Selecting or regenerating
+// an identity later cannot change this connection's encryption or journal owner.
+func (a *App) newIdentityTab() (string, *tabState, error) {
+	a.identityMu.Lock()
+	id, _, err := a.activeIdentityLocked()
+	a.identityMu.Unlock()
+	if err != nil {
+		return "", nil, err
+	}
+	tabID, tab := a.newTabWithIdentity(id)
+	return tabID, tab, nil
 }
 
 // activate switches the active tab. Its state commit is atomic under tabsMu;
@@ -300,6 +323,7 @@ func (a *App) activateLocked(tabID string) (*connManager, []journalEntry, uint64
 		ts.info.Unread = 0
 		ts.info.Mentions = 0
 		journal = append(journal, ts.journal...)
+		journal = append(journal, ts.transferSnapshot())
 	} else {
 		a.cmStore(nil)
 	}
@@ -318,6 +342,18 @@ func (a *App) finishActivateSerialized(tabID string, activeCM *connManager, jour
 	// state from the journaled frames in order.
 	trayClearMentions()
 	a.emitPlain("tab_reset", tabID)
+	// Publish the authenticated identity before replayed messages are routed.
+	// The selected identity may now belong to a different future connection.
+	if activeCM != nil {
+		activeCM.mu.Lock()
+		id := activeCM.id
+		activeCM.mu.Unlock()
+		if id != nil {
+			if uid, err := id.uniqueID(); err == nil {
+				a.emitPlain("tab_identity", map[string]string{"tab_id": tabID, "identity_uid": uid})
+			}
+		}
+	}
 	for _, e := range journal {
 		if !a.isCurrentActivation(generation) {
 			return
@@ -396,7 +432,10 @@ func (a *App) ConnectBookmarkTabWithID(bookmark, addr, nickname, password, serve
 	if addr == "" || nickname == "" {
 		return ConnectTabResult{Error: "server address and nickname are required"}
 	}
-	id, ts := a.newTab()
+	id, ts, identityErr := a.newIdentityTab()
+	if identityErr != nil {
+		return ConnectTabResult{Error: identityErr.Error()}
+	}
 	err := ts.cm.connect(addr, nickname, password, serverPassword)
 	if err != "" {
 		a.removeTab(id)
@@ -430,7 +469,10 @@ func (a *App) ConnectGuestBookmarkTabWithID(bookmark, addr, nickname string) Con
 	if addr == "" || nickname == "" {
 		return ConnectTabResult{Error: "server address and nickname are required"}
 	}
-	id, ts := a.newTab()
+	id, ts, identityErr := a.newIdentityTab()
+	if identityErr != nil {
+		return ConnectTabResult{Error: identityErr.Error()}
+	}
 	if err := ts.cm.connect(addr, nickname, "", ""); err != "" {
 		a.removeTab(id)
 		if err == errFingerprintMismatch.Error() {

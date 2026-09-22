@@ -21,76 +21,53 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
-type Permission int32
+type BanPersistence int32
 
 const (
-	Permission_PERMISSION_UNSPECIFIED    Permission = 0
-	Permission_PERMISSION_JOIN           Permission = 1
-	Permission_PERMISSION_SPEAK          Permission = 2
-	Permission_PERMISSION_VIDEO          Permission = 3
-	Permission_PERMISSION_CHAT           Permission = 4
-	Permission_PERMISSION_KICK           Permission = 5
-	Permission_PERMISSION_BAN            Permission = 6
-	Permission_PERMISSION_MOVE           Permission = 7
-	Permission_PERMISSION_CREATE_CHANNEL Permission = 8
-	Permission_PERMISSION_DELETE_CHANNEL Permission = 9
-	Permission_PERMISSION_TRANSFER_FILE  Permission = 10
+	BanPersistence_BAN_PERSISTENCE_UNSPECIFIED BanPersistence = 0
+	BanPersistence_BAN_PERSISTENCE_SAVED       BanPersistence = 1
+	// Sessions are revoked; inspect the ban list before retrying persistence.
+	BanPersistence_BAN_PERSISTENCE_UNCONFIRMED BanPersistence = 2
 )
 
-// Enum value maps for Permission.
+// Enum value maps for BanPersistence.
 var (
-	Permission_name = map[int32]string{
-		0:  "PERMISSION_UNSPECIFIED",
-		1:  "PERMISSION_JOIN",
-		2:  "PERMISSION_SPEAK",
-		3:  "PERMISSION_VIDEO",
-		4:  "PERMISSION_CHAT",
-		5:  "PERMISSION_KICK",
-		6:  "PERMISSION_BAN",
-		7:  "PERMISSION_MOVE",
-		8:  "PERMISSION_CREATE_CHANNEL",
-		9:  "PERMISSION_DELETE_CHANNEL",
-		10: "PERMISSION_TRANSFER_FILE",
+	BanPersistence_name = map[int32]string{
+		0: "BAN_PERSISTENCE_UNSPECIFIED",
+		1: "BAN_PERSISTENCE_SAVED",
+		2: "BAN_PERSISTENCE_UNCONFIRMED",
 	}
-	Permission_value = map[string]int32{
-		"PERMISSION_UNSPECIFIED":    0,
-		"PERMISSION_JOIN":           1,
-		"PERMISSION_SPEAK":          2,
-		"PERMISSION_VIDEO":          3,
-		"PERMISSION_CHAT":           4,
-		"PERMISSION_KICK":           5,
-		"PERMISSION_BAN":            6,
-		"PERMISSION_MOVE":           7,
-		"PERMISSION_CREATE_CHANNEL": 8,
-		"PERMISSION_DELETE_CHANNEL": 9,
-		"PERMISSION_TRANSFER_FILE":  10,
+	BanPersistence_value = map[string]int32{
+		"BAN_PERSISTENCE_UNSPECIFIED": 0,
+		"BAN_PERSISTENCE_SAVED":       1,
+		"BAN_PERSISTENCE_UNCONFIRMED": 2,
 	}
 )
 
-func (x Permission) Enum() *Permission {
-	p := new(Permission)
+func (x BanPersistence) Enum() *BanPersistence {
+	p := new(BanPersistence)
 	*p = x
 	return p
 }
 
-func (x Permission) String() string {
+func (x BanPersistence) String() string {
 	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
 }
 
-func (Permission) Descriptor() protoreflect.EnumDescriptor {
+func (BanPersistence) Descriptor() protoreflect.EnumDescriptor {
 	return file_control_proto_enumTypes[0].Descriptor()
 }
 
-func (Permission) Type() protoreflect.EnumType {
+func (BanPersistence) Type() protoreflect.EnumType {
 	return &file_control_proto_enumTypes[0]
 }
 
-func (x Permission) Number() protoreflect.EnumNumber {
+func (x BanPersistence) Number() protoreflect.EnumNumber {
 	return protoreflect.EnumNumber(x)
 }
 
-// Deprecated: Use Permission.Descriptor instead.
-func (Permission) EnumDescriptor() ([]byte, []int) {
+// Deprecated: Use BanPersistence.Descriptor instead.
+func (BanPersistence) EnumDescriptor() ([]byte, []int) {
 	return file_control_proto_rawDescGZIP(), []int{0}
 }
 
@@ -201,23 +178,414 @@ func (FileTransferStatus) EnumDescriptor() ([]byte, []int) {
 	return file_control_proto_rawDescGZIP(), []int{2}
 }
 
-type AuthenticateRequest struct {
+type GetServerRulesRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetServerRulesRequest) Reset() {
+	*x = GetServerRulesRequest{}
+	mi := &file_control_proto_msgTypes[0]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetServerRulesRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetServerRulesRequest) ProtoMessage() {}
+
+func (x *GetServerRulesRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_control_proto_msgTypes[0]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetServerRulesRequest.ProtoReflect.Descriptor instead.
+func (*GetServerRulesRequest) Descriptor() ([]byte, []int) {
+	return file_control_proto_rawDescGZIP(), []int{0}
+}
+
+type ListCustomMetadataRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	UniqueId      string                 `protobuf:"bytes,1,opt,name=unique_id,json=uniqueId,proto3" json:"unique_id,omitempty"`
+	AfterKey      string                 `protobuf:"bytes,2,opt,name=after_key,json=afterKey,proto3" json:"after_key,omitempty"`
+	Limit         int32                  `protobuf:"varint,3,opt,name=limit,proto3" json:"limit,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListCustomMetadataRequest) Reset() {
+	*x = ListCustomMetadataRequest{}
+	mi := &file_control_proto_msgTypes[1]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListCustomMetadataRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListCustomMetadataRequest) ProtoMessage() {}
+
+func (x *ListCustomMetadataRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_control_proto_msgTypes[1]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListCustomMetadataRequest.ProtoReflect.Descriptor instead.
+func (*ListCustomMetadataRequest) Descriptor() ([]byte, []int) {
+	return file_control_proto_rawDescGZIP(), []int{1}
+}
+
+func (x *ListCustomMetadataRequest) GetUniqueId() string {
+	if x != nil {
+		return x.UniqueId
+	}
+	return ""
+}
+
+func (x *ListCustomMetadataRequest) GetAfterKey() string {
+	if x != nil {
+		return x.AfterKey
+	}
+	return ""
+}
+
+func (x *ListCustomMetadataRequest) GetLimit() int32 {
+	if x != nil {
+		return x.Limit
+	}
+	return 0
+}
+
+type CustomMetadataEntry struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Key           string                 `protobuf:"bytes,1,opt,name=key,proto3" json:"key,omitempty"`
+	Value         string                 `protobuf:"bytes,2,opt,name=value,proto3" json:"value,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CustomMetadataEntry) Reset() {
+	*x = CustomMetadataEntry{}
+	mi := &file_control_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CustomMetadataEntry) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CustomMetadataEntry) ProtoMessage() {}
+
+func (x *CustomMetadataEntry) ProtoReflect() protoreflect.Message {
+	mi := &file_control_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CustomMetadataEntry.ProtoReflect.Descriptor instead.
+func (*CustomMetadataEntry) Descriptor() ([]byte, []int) {
+	return file_control_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *CustomMetadataEntry) GetKey() string {
+	if x != nil {
+		return x.Key
+	}
+	return ""
+}
+
+func (x *CustomMetadataEntry) GetValue() string {
+	if x != nil {
+		return x.Value
+	}
+	return ""
+}
+
+type ListCustomMetadataResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	UniqueId      string                 `protobuf:"bytes,1,opt,name=unique_id,json=uniqueId,proto3" json:"unique_id,omitempty"`
+	Entries       []*CustomMetadataEntry `protobuf:"bytes,2,rep,name=entries,proto3" json:"entries,omitempty"`
+	NextAfterKey  string                 `protobuf:"bytes,3,opt,name=next_after_key,json=nextAfterKey,proto3" json:"next_after_key,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListCustomMetadataResponse) Reset() {
+	*x = ListCustomMetadataResponse{}
+	mi := &file_control_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListCustomMetadataResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListCustomMetadataResponse) ProtoMessage() {}
+
+func (x *ListCustomMetadataResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_control_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListCustomMetadataResponse.ProtoReflect.Descriptor instead.
+func (*ListCustomMetadataResponse) Descriptor() ([]byte, []int) {
+	return file_control_proto_rawDescGZIP(), []int{3}
+}
+
+func (x *ListCustomMetadataResponse) GetUniqueId() string {
+	if x != nil {
+		return x.UniqueId
+	}
+	return ""
+}
+
+func (x *ListCustomMetadataResponse) GetEntries() []*CustomMetadataEntry {
+	if x != nil {
+		return x.Entries
+	}
+	return nil
+}
+
+func (x *ListCustomMetadataResponse) GetNextAfterKey() string {
+	if x != nil {
+		return x.NextAfterKey
+	}
+	return ""
+}
+
+type ChangeCustomMetadataRequest struct {
 	state    protoimpl.MessageState `protogen:"open.v1"`
-	Username string                 `protobuf:"bytes,1,opt,name=username,proto3" json:"username,omitempty"`
-	Password string                 `protobuf:"bytes,2,opt,name=password,proto3" json:"password,omitempty"`
-	// Retained for source/wire compatibility. Authentication ignores this field.
-	//
-	// Deprecated: Marked as deprecated in control.proto.
-	Token         string            `protobuf:"bytes,3,opt,name=token,proto3" json:"token,omitempty"`
-	ClientVersion string            `protobuf:"bytes,4,opt,name=client_version,json=clientVersion,proto3" json:"client_version,omitempty"`
-	Metadata      map[string]string `protobuf:"bytes,5,rep,name=metadata,proto3" json:"metadata,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	UniqueId string                 `protobuf:"bytes,1,opt,name=unique_id,json=uniqueId,proto3" json:"unique_id,omitempty"`
+	Key      string                 `protobuf:"bytes,2,opt,name=key,proto3" json:"key,omitempty"`
+	// Presence distinguishes an empty stored value from no requested action.
+	Value         *string `protobuf:"bytes,3,opt,name=value,proto3,oneof" json:"value,omitempty"`
+	Delete        bool    `protobuf:"varint,4,opt,name=delete,proto3" json:"delete,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ChangeCustomMetadataRequest) Reset() {
+	*x = ChangeCustomMetadataRequest{}
+	mi := &file_control_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ChangeCustomMetadataRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ChangeCustomMetadataRequest) ProtoMessage() {}
+
+func (x *ChangeCustomMetadataRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_control_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ChangeCustomMetadataRequest.ProtoReflect.Descriptor instead.
+func (*ChangeCustomMetadataRequest) Descriptor() ([]byte, []int) {
+	return file_control_proto_rawDescGZIP(), []int{4}
+}
+
+func (x *ChangeCustomMetadataRequest) GetUniqueId() string {
+	if x != nil {
+		return x.UniqueId
+	}
+	return ""
+}
+
+func (x *ChangeCustomMetadataRequest) GetKey() string {
+	if x != nil {
+		return x.Key
+	}
+	return ""
+}
+
+func (x *ChangeCustomMetadataRequest) GetValue() string {
+	if x != nil && x.Value != nil {
+		return *x.Value
+	}
+	return ""
+}
+
+func (x *ChangeCustomMetadataRequest) GetDelete() bool {
+	if x != nil {
+		return x.Delete
+	}
+	return false
+}
+
+type ChangeCustomMetadataResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	UniqueId      string                 `protobuf:"bytes,1,opt,name=unique_id,json=uniqueId,proto3" json:"unique_id,omitempty"`
+	Key           string                 `protobuf:"bytes,2,opt,name=key,proto3" json:"key,omitempty"`
+	Deleted       bool                   `protobuf:"varint,3,opt,name=deleted,proto3" json:"deleted,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ChangeCustomMetadataResponse) Reset() {
+	*x = ChangeCustomMetadataResponse{}
+	mi := &file_control_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ChangeCustomMetadataResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ChangeCustomMetadataResponse) ProtoMessage() {}
+
+func (x *ChangeCustomMetadataResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_control_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ChangeCustomMetadataResponse.ProtoReflect.Descriptor instead.
+func (*ChangeCustomMetadataResponse) Descriptor() ([]byte, []int) {
+	return file_control_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *ChangeCustomMetadataResponse) GetUniqueId() string {
+	if x != nil {
+		return x.UniqueId
+	}
+	return ""
+}
+
+func (x *ChangeCustomMetadataResponse) GetKey() string {
+	if x != nil {
+		return x.Key
+	}
+	return ""
+}
+
+func (x *ChangeCustomMetadataResponse) GetDeleted() bool {
+	if x != nil {
+		return x.Deleted
+	}
+	return false
+}
+
+type GetServerRulesResponse struct {
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	Text            string                 `protobuf:"bytes,1,opt,name=text,proto3" json:"text,omitempty"`
+	Hash            string                 `protobuf:"bytes,2,opt,name=hash,proto3" json:"hash,omitempty"`
+	AcceptedClients int64                  `protobuf:"varint,3,opt,name=accepted_clients,json=acceptedClients,proto3" json:"accepted_clients,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *GetServerRulesResponse) Reset() {
+	*x = GetServerRulesResponse{}
+	mi := &file_control_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetServerRulesResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetServerRulesResponse) ProtoMessage() {}
+
+func (x *GetServerRulesResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_control_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetServerRulesResponse.ProtoReflect.Descriptor instead.
+func (*GetServerRulesResponse) Descriptor() ([]byte, []int) {
+	return file_control_proto_rawDescGZIP(), []int{6}
+}
+
+func (x *GetServerRulesResponse) GetText() string {
+	if x != nil {
+		return x.Text
+	}
+	return ""
+}
+
+func (x *GetServerRulesResponse) GetHash() string {
+	if x != nil {
+		return x.Hash
+	}
+	return ""
+}
+
+func (x *GetServerRulesResponse) GetAcceptedClients() int64 {
+	if x != nil {
+		return x.AcceptedClients
+	}
+	return 0
+}
+
+type AuthenticateRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Username      string                 `protobuf:"bytes,1,opt,name=username,proto3" json:"username,omitempty"`
+	Password      string                 `protobuf:"bytes,2,opt,name=password,proto3" json:"password,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *AuthenticateRequest) Reset() {
 	*x = AuthenticateRequest{}
-	mi := &file_control_proto_msgTypes[0]
+	mi := &file_control_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -229,7 +597,7 @@ func (x *AuthenticateRequest) String() string {
 func (*AuthenticateRequest) ProtoMessage() {}
 
 func (x *AuthenticateRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[0]
+	mi := &file_control_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -242,7 +610,7 @@ func (x *AuthenticateRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AuthenticateRequest.ProtoReflect.Descriptor instead.
 func (*AuthenticateRequest) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{0}
+	return file_control_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *AuthenticateRequest) GetUsername() string {
@@ -259,52 +627,16 @@ func (x *AuthenticateRequest) GetPassword() string {
 	return ""
 }
 
-// Deprecated: Marked as deprecated in control.proto.
-func (x *AuthenticateRequest) GetToken() string {
-	if x != nil {
-		return x.Token
-	}
-	return ""
-}
-
-func (x *AuthenticateRequest) GetClientVersion() string {
-	if x != nil {
-		return x.ClientVersion
-	}
-	return ""
-}
-
-func (x *AuthenticateRequest) GetMetadata() map[string]string {
-	if x != nil {
-		return x.Metadata
-	}
-	return nil
-}
-
 type AuthenticateResponse struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	// Legacy clients may still inspect success; failures use gRPC status codes.
-	//
-	// Deprecated: Marked as deprecated in control.proto.
-	Success bool `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
-	// Session tokens are not issued. Each RPC requires authorization metadata.
-	//
-	// Deprecated: Marked as deprecated in control.proto.
-	SessionToken string `protobuf:"bytes,2,opt,name=session_token,json=sessionToken,proto3" json:"session_token,omitempty"`
-	UserId       string `protobuf:"bytes,3,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
-	// Deprecated: Marked as deprecated in control.proto.
-	DisplayName string `protobuf:"bytes,4,opt,name=display_name,json=displayName,proto3" json:"display_name,omitempty"`
-	// Deprecated: Marked as deprecated in control.proto.
-	ExpiresAt int64 `protobuf:"varint,5,opt,name=expires_at,json=expiresAt,proto3" json:"expires_at,omitempty"`
-	// Deprecated: Marked as deprecated in control.proto.
-	Error         string `protobuf:"bytes,6,opt,name=error,proto3" json:"error,omitempty"`
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	UserId        string                 `protobuf:"bytes,1,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *AuthenticateResponse) Reset() {
 	*x = AuthenticateResponse{}
-	mi := &file_control_proto_msgTypes[1]
+	mi := &file_control_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -316,7 +648,7 @@ func (x *AuthenticateResponse) String() string {
 func (*AuthenticateResponse) ProtoMessage() {}
 
 func (x *AuthenticateResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[1]
+	mi := &file_control_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -329,52 +661,12 @@ func (x *AuthenticateResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AuthenticateResponse.ProtoReflect.Descriptor instead.
 func (*AuthenticateResponse) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{1}
-}
-
-// Deprecated: Marked as deprecated in control.proto.
-func (x *AuthenticateResponse) GetSuccess() bool {
-	if x != nil {
-		return x.Success
-	}
-	return false
-}
-
-// Deprecated: Marked as deprecated in control.proto.
-func (x *AuthenticateResponse) GetSessionToken() string {
-	if x != nil {
-		return x.SessionToken
-	}
-	return ""
+	return file_control_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *AuthenticateResponse) GetUserId() string {
 	if x != nil {
 		return x.UserId
-	}
-	return ""
-}
-
-// Deprecated: Marked as deprecated in control.proto.
-func (x *AuthenticateResponse) GetDisplayName() string {
-	if x != nil {
-		return x.DisplayName
-	}
-	return ""
-}
-
-// Deprecated: Marked as deprecated in control.proto.
-func (x *AuthenticateResponse) GetExpiresAt() int64 {
-	if x != nil {
-		return x.ExpiresAt
-	}
-	return 0
-}
-
-// Deprecated: Marked as deprecated in control.proto.
-func (x *AuthenticateResponse) GetError() string {
-	if x != nil {
-		return x.Error
 	}
 	return ""
 }
@@ -394,7 +686,7 @@ type Channel struct {
 
 func (x *Channel) Reset() {
 	*x = Channel{}
-	mi := &file_control_proto_msgTypes[2]
+	mi := &file_control_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -406,7 +698,7 @@ func (x *Channel) String() string {
 func (*Channel) ProtoMessage() {}
 
 func (x *Channel) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[2]
+	mi := &file_control_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -419,7 +711,7 @@ func (x *Channel) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Channel.ProtoReflect.Descriptor instead.
 func (*Channel) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{2}
+	return file_control_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *Channel) GetId() string {
@@ -471,246 +763,6 @@ func (x *Channel) GetMetadata() map[string]string {
 	return nil
 }
 
-type CreateChannelRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
-	ParentId      string                 `protobuf:"bytes,2,opt,name=parent_id,json=parentId,proto3" json:"parent_id,omitempty"`
-	MaxClients    int32                  `protobuf:"varint,3,opt,name=max_clients,json=maxClients,proto3" json:"max_clients,omitempty"`
-	Permanent     bool                   `protobuf:"varint,4,opt,name=permanent,proto3" json:"permanent,omitempty"`
-	Metadata      map[string]string      `protobuf:"bytes,5,rep,name=metadata,proto3" json:"metadata,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *CreateChannelRequest) Reset() {
-	*x = CreateChannelRequest{}
-	mi := &file_control_proto_msgTypes[3]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *CreateChannelRequest) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*CreateChannelRequest) ProtoMessage() {}
-
-func (x *CreateChannelRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[3]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use CreateChannelRequest.ProtoReflect.Descriptor instead.
-func (*CreateChannelRequest) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{3}
-}
-
-func (x *CreateChannelRequest) GetName() string {
-	if x != nil {
-		return x.Name
-	}
-	return ""
-}
-
-func (x *CreateChannelRequest) GetParentId() string {
-	if x != nil {
-		return x.ParentId
-	}
-	return ""
-}
-
-func (x *CreateChannelRequest) GetMaxClients() int32 {
-	if x != nil {
-		return x.MaxClients
-	}
-	return 0
-}
-
-func (x *CreateChannelRequest) GetPermanent() bool {
-	if x != nil {
-		return x.Permanent
-	}
-	return false
-}
-
-func (x *CreateChannelRequest) GetMetadata() map[string]string {
-	if x != nil {
-		return x.Metadata
-	}
-	return nil
-}
-
-type CreateChannelResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Success       bool                   `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
-	ChannelId     string                 `protobuf:"bytes,2,opt,name=channel_id,json=channelId,proto3" json:"channel_id,omitempty"`
-	Error         string                 `protobuf:"bytes,3,opt,name=error,proto3" json:"error,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *CreateChannelResponse) Reset() {
-	*x = CreateChannelResponse{}
-	mi := &file_control_proto_msgTypes[4]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *CreateChannelResponse) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*CreateChannelResponse) ProtoMessage() {}
-
-func (x *CreateChannelResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[4]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use CreateChannelResponse.ProtoReflect.Descriptor instead.
-func (*CreateChannelResponse) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{4}
-}
-
-func (x *CreateChannelResponse) GetSuccess() bool {
-	if x != nil {
-		return x.Success
-	}
-	return false
-}
-
-func (x *CreateChannelResponse) GetChannelId() string {
-	if x != nil {
-		return x.ChannelId
-	}
-	return ""
-}
-
-func (x *CreateChannelResponse) GetError() string {
-	if x != nil {
-		return x.Error
-	}
-	return ""
-}
-
-type DeleteChannelRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	ChannelId     string                 `protobuf:"bytes,1,opt,name=channel_id,json=channelId,proto3" json:"channel_id,omitempty"`
-	Reason        string                 `protobuf:"bytes,2,opt,name=reason,proto3" json:"reason,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *DeleteChannelRequest) Reset() {
-	*x = DeleteChannelRequest{}
-	mi := &file_control_proto_msgTypes[5]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *DeleteChannelRequest) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*DeleteChannelRequest) ProtoMessage() {}
-
-func (x *DeleteChannelRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[5]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use DeleteChannelRequest.ProtoReflect.Descriptor instead.
-func (*DeleteChannelRequest) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{5}
-}
-
-func (x *DeleteChannelRequest) GetChannelId() string {
-	if x != nil {
-		return x.ChannelId
-	}
-	return ""
-}
-
-func (x *DeleteChannelRequest) GetReason() string {
-	if x != nil {
-		return x.Reason
-	}
-	return ""
-}
-
-type DeleteChannelResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Success       bool                   `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
-	Error         string                 `protobuf:"bytes,2,opt,name=error,proto3" json:"error,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *DeleteChannelResponse) Reset() {
-	*x = DeleteChannelResponse{}
-	mi := &file_control_proto_msgTypes[6]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *DeleteChannelResponse) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*DeleteChannelResponse) ProtoMessage() {}
-
-func (x *DeleteChannelResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[6]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use DeleteChannelResponse.ProtoReflect.Descriptor instead.
-func (*DeleteChannelResponse) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{6}
-}
-
-func (x *DeleteChannelResponse) GetSuccess() bool {
-	if x != nil {
-		return x.Success
-	}
-	return false
-}
-
-func (x *DeleteChannelResponse) GetError() string {
-	if x != nil {
-		return x.Error
-	}
-	return ""
-}
-
 type ListChannelsRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// If set, only the subtree rooted at this channel is returned.
@@ -721,7 +773,7 @@ type ListChannelsRequest struct {
 
 func (x *ListChannelsRequest) Reset() {
 	*x = ListChannelsRequest{}
-	mi := &file_control_proto_msgTypes[7]
+	mi := &file_control_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -733,7 +785,7 @@ func (x *ListChannelsRequest) String() string {
 func (*ListChannelsRequest) ProtoMessage() {}
 
 func (x *ListChannelsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[7]
+	mi := &file_control_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -746,7 +798,7 @@ func (x *ListChannelsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListChannelsRequest.ProtoReflect.Descriptor instead.
 func (*ListChannelsRequest) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{7}
+	return file_control_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *ListChannelsRequest) GetRootChannelId() string {
@@ -765,7 +817,7 @@ type ListChannelsResponse struct {
 
 func (x *ListChannelsResponse) Reset() {
 	*x = ListChannelsResponse{}
-	mi := &file_control_proto_msgTypes[8]
+	mi := &file_control_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -777,7 +829,7 @@ func (x *ListChannelsResponse) String() string {
 func (*ListChannelsResponse) ProtoMessage() {}
 
 func (x *ListChannelsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[8]
+	mi := &file_control_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -790,7 +842,7 @@ func (x *ListChannelsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListChannelsResponse.ProtoReflect.Descriptor instead.
 func (*ListChannelsResponse) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{8}
+	return file_control_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *ListChannelsResponse) GetChannels() []*Channel {
@@ -800,29 +852,27 @@ func (x *ListChannelsResponse) GetChannels() []*Channel {
 	return nil
 }
 
-type QueryPermissionsRequest struct {
+type GetServerInfoRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	ChannelId     string                 `protobuf:"bytes,1,opt,name=channel_id,json=channelId,proto3" json:"channel_id,omitempty"`
-	UserId        string                 `protobuf:"bytes,2,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"` // empty means the authenticated caller
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *QueryPermissionsRequest) Reset() {
-	*x = QueryPermissionsRequest{}
-	mi := &file_control_proto_msgTypes[9]
+func (x *GetServerInfoRequest) Reset() {
+	*x = GetServerInfoRequest{}
+	mi := &file_control_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *QueryPermissionsRequest) String() string {
+func (x *GetServerInfoRequest) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*QueryPermissionsRequest) ProtoMessage() {}
+func (*GetServerInfoRequest) ProtoMessage() {}
 
-func (x *QueryPermissionsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[9]
+func (x *GetServerInfoRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_control_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -833,49 +883,646 @@ func (x *QueryPermissionsRequest) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use QueryPermissionsRequest.ProtoReflect.Descriptor instead.
-func (*QueryPermissionsRequest) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{9}
+// Deprecated: Use GetServerInfoRequest.ProtoReflect.Descriptor instead.
+func (*GetServerInfoRequest) Descriptor() ([]byte, []int) {
+	return file_control_proto_rawDescGZIP(), []int{12}
 }
 
-func (x *QueryPermissionsRequest) GetChannelId() string {
+type ListComplaintsRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Exclusive ascending cursor; zero starts with the oldest complaint.
+	AfterId int64 `protobuf:"varint,1,opt,name=after_id,json=afterId,proto3" json:"after_id,omitempty"`
+	// Zero defaults to 50; maximum 100.
+	Limit         int32 `protobuf:"varint,2,opt,name=limit,proto3" json:"limit,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListComplaintsRequest) Reset() {
+	*x = ListComplaintsRequest{}
+	mi := &file_control_proto_msgTypes[13]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListComplaintsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListComplaintsRequest) ProtoMessage() {}
+
+func (x *ListComplaintsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_control_proto_msgTypes[13]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListComplaintsRequest.ProtoReflect.Descriptor instead.
+func (*ListComplaintsRequest) Descriptor() ([]byte, []int) {
+	return file_control_proto_rawDescGZIP(), []int{13}
+}
+
+func (x *ListComplaintsRequest) GetAfterId() int64 {
+	if x != nil {
+		return x.AfterId
+	}
+	return 0
+}
+
+func (x *ListComplaintsRequest) GetLimit() int32 {
+	if x != nil {
+		return x.Limit
+	}
+	return 0
+}
+
+type ComplaintRecord struct {
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	Id             int64                  `protobuf:"varint,1,opt,name=id,proto3" json:"id,omitempty"`
+	TargetUniqueId string                 `protobuf:"bytes,2,opt,name=target_unique_id,json=targetUniqueId,proto3" json:"target_unique_id,omitempty"`
+	TargetNickname string                 `protobuf:"bytes,3,opt,name=target_nickname,json=targetNickname,proto3" json:"target_nickname,omitempty"`
+	FromUniqueId   string                 `protobuf:"bytes,4,opt,name=from_unique_id,json=fromUniqueId,proto3" json:"from_unique_id,omitempty"`
+	FromNickname   string                 `protobuf:"bytes,5,opt,name=from_nickname,json=fromNickname,proto3" json:"from_nickname,omitempty"`
+	Reason         string                 `protobuf:"bytes,6,opt,name=reason,proto3" json:"reason,omitempty"`
+	// Unix seconds.
+	CreatedAt     int64 `protobuf:"varint,7,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ComplaintRecord) Reset() {
+	*x = ComplaintRecord{}
+	mi := &file_control_proto_msgTypes[14]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ComplaintRecord) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ComplaintRecord) ProtoMessage() {}
+
+func (x *ComplaintRecord) ProtoReflect() protoreflect.Message {
+	mi := &file_control_proto_msgTypes[14]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ComplaintRecord.ProtoReflect.Descriptor instead.
+func (*ComplaintRecord) Descriptor() ([]byte, []int) {
+	return file_control_proto_rawDescGZIP(), []int{14}
+}
+
+func (x *ComplaintRecord) GetId() int64 {
+	if x != nil {
+		return x.Id
+	}
+	return 0
+}
+
+func (x *ComplaintRecord) GetTargetUniqueId() string {
+	if x != nil {
+		return x.TargetUniqueId
+	}
+	return ""
+}
+
+func (x *ComplaintRecord) GetTargetNickname() string {
+	if x != nil {
+		return x.TargetNickname
+	}
+	return ""
+}
+
+func (x *ComplaintRecord) GetFromUniqueId() string {
+	if x != nil {
+		return x.FromUniqueId
+	}
+	return ""
+}
+
+func (x *ComplaintRecord) GetFromNickname() string {
+	if x != nil {
+		return x.FromNickname
+	}
+	return ""
+}
+
+func (x *ComplaintRecord) GetReason() string {
+	if x != nil {
+		return x.Reason
+	}
+	return ""
+}
+
+func (x *ComplaintRecord) GetCreatedAt() int64 {
+	if x != nil {
+		return x.CreatedAt
+	}
+	return 0
+}
+
+type ListComplaintsResponse struct {
+	state   protoimpl.MessageState `protogen:"open.v1"`
+	Entries []*ComplaintRecord     `protobuf:"bytes,1,rep,name=entries,proto3" json:"entries,omitempty"`
+	// Zero means the end of the current list.
+	NextAfterId   int64 `protobuf:"varint,2,opt,name=next_after_id,json=nextAfterId,proto3" json:"next_after_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListComplaintsResponse) Reset() {
+	*x = ListComplaintsResponse{}
+	mi := &file_control_proto_msgTypes[15]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListComplaintsResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListComplaintsResponse) ProtoMessage() {}
+
+func (x *ListComplaintsResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_control_proto_msgTypes[15]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListComplaintsResponse.ProtoReflect.Descriptor instead.
+func (*ListComplaintsResponse) Descriptor() ([]byte, []int) {
+	return file_control_proto_rawDescGZIP(), []int{15}
+}
+
+func (x *ListComplaintsResponse) GetEntries() []*ComplaintRecord {
+	if x != nil {
+		return x.Entries
+	}
+	return nil
+}
+
+func (x *ListComplaintsResponse) GetNextAfterId() int64 {
+	if x != nil {
+		return x.NextAfterId
+	}
+	return 0
+}
+
+type ClearComplaintsRequest struct {
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	TargetUniqueId string                 `protobuf:"bytes,1,opt,name=target_unique_id,json=targetUniqueId,proto3" json:"target_unique_id,omitempty"`
+	// Omitted clears all complaints against the target; otherwise just this reporter.
+	FromUniqueId  string `protobuf:"bytes,2,opt,name=from_unique_id,json=fromUniqueId,proto3" json:"from_unique_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ClearComplaintsRequest) Reset() {
+	*x = ClearComplaintsRequest{}
+	mi := &file_control_proto_msgTypes[16]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ClearComplaintsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ClearComplaintsRequest) ProtoMessage() {}
+
+func (x *ClearComplaintsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_control_proto_msgTypes[16]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ClearComplaintsRequest.ProtoReflect.Descriptor instead.
+func (*ClearComplaintsRequest) Descriptor() ([]byte, []int) {
+	return file_control_proto_rawDescGZIP(), []int{16}
+}
+
+func (x *ClearComplaintsRequest) GetTargetUniqueId() string {
+	if x != nil {
+		return x.TargetUniqueId
+	}
+	return ""
+}
+
+func (x *ClearComplaintsRequest) GetFromUniqueId() string {
+	if x != nil {
+		return x.FromUniqueId
+	}
+	return ""
+}
+
+type ClearComplaintsResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// A committed deletion acknowledgement, including zero for no matching rows.
+	Deleted       int64 `protobuf:"varint,1,opt,name=deleted,proto3" json:"deleted,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ClearComplaintsResponse) Reset() {
+	*x = ClearComplaintsResponse{}
+	mi := &file_control_proto_msgTypes[17]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ClearComplaintsResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ClearComplaintsResponse) ProtoMessage() {}
+
+func (x *ClearComplaintsResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_control_proto_msgTypes[17]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ClearComplaintsResponse.ProtoReflect.Descriptor instead.
+func (*ClearComplaintsResponse) Descriptor() ([]byte, []int) {
+	return file_control_proto_rawDescGZIP(), []int{17}
+}
+
+func (x *ClearComplaintsResponse) GetDeleted() int64 {
+	if x != nil {
+		return x.Deleted
+	}
+	return 0
+}
+
+type ListAuditLogRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Exclusive descending cursor; zero starts at the newest row.
+	BeforeId int64 `protobuf:"varint,1,opt,name=before_id,json=beforeId,proto3" json:"before_id,omitempty"`
+	// Zero defaults to 50; allowed range is 0..200.
+	Limit         int32 `protobuf:"varint,2,opt,name=limit,proto3" json:"limit,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListAuditLogRequest) Reset() {
+	*x = ListAuditLogRequest{}
+	mi := &file_control_proto_msgTypes[18]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListAuditLogRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListAuditLogRequest) ProtoMessage() {}
+
+func (x *ListAuditLogRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_control_proto_msgTypes[18]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListAuditLogRequest.ProtoReflect.Descriptor instead.
+func (*ListAuditLogRequest) Descriptor() ([]byte, []int) {
+	return file_control_proto_rawDescGZIP(), []int{18}
+}
+
+func (x *ListAuditLogRequest) GetBeforeId() int64 {
+	if x != nil {
+		return x.BeforeId
+	}
+	return 0
+}
+
+func (x *ListAuditLogRequest) GetLimit() int32 {
+	if x != nil {
+		return x.Limit
+	}
+	return 0
+}
+
+type AuditLogRecord struct {
+	state  protoimpl.MessageState `protogen:"open.v1"`
+	Id     int64                  `protobuf:"varint,1,opt,name=id,proto3" json:"id,omitempty"`
+	Actor  string                 `protobuf:"bytes,2,opt,name=actor,proto3" json:"actor,omitempty"`
+	Action string                 `protobuf:"bytes,3,opt,name=action,proto3" json:"action,omitempty"`
+	Target string                 `protobuf:"bytes,4,opt,name=target,proto3" json:"target,omitempty"`
+	// Native audit detail; interpret its structure only when structured is true.
+	Detail string `protobuf:"bytes,5,opt,name=detail,proto3" json:"detail,omitempty"`
+	// Unix seconds.
+	CreatedAt int64 `protobuf:"varint,6,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	// A protected row contains only id, created_at and restricted=true.
+	Restricted    bool `protobuf:"varint,7,opt,name=restricted,proto3" json:"restricted,omitempty"`
+	Structured    bool `protobuf:"varint,8,opt,name=structured,proto3" json:"structured,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AuditLogRecord) Reset() {
+	*x = AuditLogRecord{}
+	mi := &file_control_proto_msgTypes[19]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AuditLogRecord) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AuditLogRecord) ProtoMessage() {}
+
+func (x *AuditLogRecord) ProtoReflect() protoreflect.Message {
+	mi := &file_control_proto_msgTypes[19]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AuditLogRecord.ProtoReflect.Descriptor instead.
+func (*AuditLogRecord) Descriptor() ([]byte, []int) {
+	return file_control_proto_rawDescGZIP(), []int{19}
+}
+
+func (x *AuditLogRecord) GetId() int64 {
+	if x != nil {
+		return x.Id
+	}
+	return 0
+}
+
+func (x *AuditLogRecord) GetActor() string {
+	if x != nil {
+		return x.Actor
+	}
+	return ""
+}
+
+func (x *AuditLogRecord) GetAction() string {
+	if x != nil {
+		return x.Action
+	}
+	return ""
+}
+
+func (x *AuditLogRecord) GetTarget() string {
+	if x != nil {
+		return x.Target
+	}
+	return ""
+}
+
+func (x *AuditLogRecord) GetDetail() string {
+	if x != nil {
+		return x.Detail
+	}
+	return ""
+}
+
+func (x *AuditLogRecord) GetCreatedAt() int64 {
+	if x != nil {
+		return x.CreatedAt
+	}
+	return 0
+}
+
+func (x *AuditLogRecord) GetRestricted() bool {
+	if x != nil {
+		return x.Restricted
+	}
+	return false
+}
+
+func (x *AuditLogRecord) GetStructured() bool {
+	if x != nil {
+		return x.Structured
+	}
+	return false
+}
+
+type ListAuditLogResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Newest first. Continue with the last ID; a short/empty page ends traversal.
+	Entries       []*AuditLogRecord       `protobuf:"bytes,1,rep,name=entries,proto3" json:"entries,omitempty"`
+	Capabilities  []*CapabilityDescriptor `protobuf:"bytes,2,rep,name=capabilities,proto3" json:"capabilities,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListAuditLogResponse) Reset() {
+	*x = ListAuditLogResponse{}
+	mi := &file_control_proto_msgTypes[20]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListAuditLogResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListAuditLogResponse) ProtoMessage() {}
+
+func (x *ListAuditLogResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_control_proto_msgTypes[20]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListAuditLogResponse.ProtoReflect.Descriptor instead.
+func (*ListAuditLogResponse) Descriptor() ([]byte, []int) {
+	return file_control_proto_rawDescGZIP(), []int{20}
+}
+
+func (x *ListAuditLogResponse) GetEntries() []*AuditLogRecord {
+	if x != nil {
+		return x.Entries
+	}
+	return nil
+}
+
+func (x *ListAuditLogResponse) GetCapabilities() []*CapabilityDescriptor {
+	if x != nil {
+		return x.Capabilities
+	}
+	return nil
+}
+
+type ListClientsRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListClientsRequest) Reset() {
+	*x = ListClientsRequest{}
+	mi := &file_control_proto_msgTypes[21]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListClientsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListClientsRequest) ProtoMessage() {}
+
+func (x *ListClientsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_control_proto_msgTypes[21]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListClientsRequest.ProtoReflect.Descriptor instead.
+func (*ListClientsRequest) Descriptor() ([]byte, []int) {
+	return file_control_proto_rawDescGZIP(), []int{21}
+}
+
+type VisibleClient struct {
+	state    protoimpl.MessageState `protogen:"open.v1"`
+	ClientId string                 `protobuf:"bytes,1,opt,name=client_id,json=clientId,proto3" json:"client_id,omitempty"`
+	UniqueId string                 `protobuf:"bytes,2,opt,name=unique_id,json=uniqueId,proto3" json:"unique_id,omitempty"`
+	Nickname string                 `protobuf:"bytes,3,opt,name=nickname,proto3" json:"nickname,omitempty"`
+	// Zero denotes an unassigned visible session.
+	ChannelId     int64 `protobuf:"varint,4,opt,name=channel_id,json=channelId,proto3" json:"channel_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *VisibleClient) Reset() {
+	*x = VisibleClient{}
+	mi := &file_control_proto_msgTypes[22]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *VisibleClient) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*VisibleClient) ProtoMessage() {}
+
+func (x *VisibleClient) ProtoReflect() protoreflect.Message {
+	mi := &file_control_proto_msgTypes[22]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use VisibleClient.ProtoReflect.Descriptor instead.
+func (*VisibleClient) Descriptor() ([]byte, []int) {
+	return file_control_proto_rawDescGZIP(), []int{22}
+}
+
+func (x *VisibleClient) GetClientId() string {
+	if x != nil {
+		return x.ClientId
+	}
+	return ""
+}
+
+func (x *VisibleClient) GetUniqueId() string {
+	if x != nil {
+		return x.UniqueId
+	}
+	return ""
+}
+
+func (x *VisibleClient) GetNickname() string {
+	if x != nil {
+		return x.Nickname
+	}
+	return ""
+}
+
+func (x *VisibleClient) GetChannelId() int64 {
 	if x != nil {
 		return x.ChannelId
 	}
-	return ""
+	return 0
 }
 
-func (x *QueryPermissionsRequest) GetUserId() string {
-	if x != nil {
-		return x.UserId
-	}
-	return ""
-}
-
-type QueryPermissionsResponse struct {
+type ListClientsResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Granted       []Permission           `protobuf:"varint,1,rep,packed,name=granted,proto3,enum=voicx.v1.Permission" json:"granted,omitempty"`
-	Denied        []Permission           `protobuf:"varint,2,rep,packed,name=denied,proto3,enum=voicx.v1.Permission" json:"denied,omitempty"`
-	IsAdmin       bool                   `protobuf:"varint,3,opt,name=is_admin,json=isAdmin,proto3" json:"is_admin,omitempty"`
+	Clients       []*VisibleClient       `protobuf:"bytes,1,rep,name=clients,proto3" json:"clients,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *QueryPermissionsResponse) Reset() {
-	*x = QueryPermissionsResponse{}
-	mi := &file_control_proto_msgTypes[10]
+func (x *ListClientsResponse) Reset() {
+	*x = ListClientsResponse{}
+	mi := &file_control_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *QueryPermissionsResponse) String() string {
+func (x *ListClientsResponse) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*QueryPermissionsResponse) ProtoMessage() {}
+func (*ListClientsResponse) ProtoMessage() {}
 
-func (x *QueryPermissionsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[10]
+func (x *ListClientsResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_control_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -886,28 +1533,3907 @@ func (x *QueryPermissionsResponse) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use QueryPermissionsResponse.ProtoReflect.Descriptor instead.
-func (*QueryPermissionsResponse) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{10}
+// Deprecated: Use ListClientsResponse.ProtoReflect.Descriptor instead.
+func (*ListClientsResponse) Descriptor() ([]byte, []int) {
+	return file_control_proto_rawDescGZIP(), []int{23}
 }
 
-func (x *QueryPermissionsResponse) GetGranted() []Permission {
+func (x *ListClientsResponse) GetClients() []*VisibleClient {
 	if x != nil {
-		return x.Granted
+		return x.Clients
 	}
 	return nil
 }
 
-func (x *QueryPermissionsResponse) GetDenied() []Permission {
+type GetChannelInfoRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ChannelId     int64                  `protobuf:"varint,1,opt,name=channel_id,json=channelId,proto3" json:"channel_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetChannelInfoRequest) Reset() {
+	*x = GetChannelInfoRequest{}
+	mi := &file_control_proto_msgTypes[24]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetChannelInfoRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetChannelInfoRequest) ProtoMessage() {}
+
+func (x *GetChannelInfoRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_control_proto_msgTypes[24]
 	if x != nil {
-		return x.Denied
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetChannelInfoRequest.ProtoReflect.Descriptor instead.
+func (*GetChannelInfoRequest) Descriptor() ([]byte, []int) {
+	return file_control_proto_rawDescGZIP(), []int{24}
+}
+
+func (x *GetChannelInfoRequest) GetChannelId() int64 {
+	if x != nil {
+		return x.ChannelId
+	}
+	return 0
+}
+
+type GetChannelInfoResponse struct {
+	state     protoimpl.MessageState `protogen:"open.v1"`
+	ChannelId int64                  `protobuf:"varint,1,opt,name=channel_id,json=channelId,proto3" json:"channel_id,omitempty"`
+	// Hidden parents are represented as root, as in ListChannels.
+	ParentId int64  `protobuf:"varint,2,opt,name=parent_id,json=parentId,proto3" json:"parent_id,omitempty"`
+	Name     string `protobuf:"bytes,3,opt,name=name,proto3" json:"name,omitempty"`
+	Topic    string `protobuf:"bytes,4,opt,name=topic,proto3" json:"topic,omitempty"`
+	// 0 temporary, 1 semi-permanent, 2 permanent.
+	ChannelType int64 `protobuf:"varint,5,opt,name=channel_type,json=channelType,proto3" json:"channel_type,omitempty"`
+	MaxClients  int64 `protobuf:"varint,6,opt,name=max_clients,json=maxClients,proto3" json:"max_clients,omitempty"`
+	// Only sessions visible to the caller are counted.
+	CurrentClients  int64 `protobuf:"varint,7,opt,name=current_clients,json=currentClients,proto3" json:"current_clients,omitempty"`
+	OpusBitrate     int64 `protobuf:"varint,8,opt,name=opus_bitrate,json=opusBitrate,proto3" json:"opus_bitrate,omitempty"`
+	OpusFec         bool  `protobuf:"varint,9,opt,name=opus_fec,json=opusFec,proto3" json:"opus_fec,omitempty"`
+	OpusDtx         bool  `protobuf:"varint,10,opt,name=opus_dtx,json=opusDtx,proto3" json:"opus_dtx,omitempty"`
+	OpusStereo      bool  `protobuf:"varint,11,opt,name=opus_stereo,json=opusStereo,proto3" json:"opus_stereo,omitempty"`
+	SlowModeSeconds int64 `protobuf:"varint,12,opt,name=slow_mode_seconds,json=slowModeSeconds,proto3" json:"slow_mode_seconds,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *GetChannelInfoResponse) Reset() {
+	*x = GetChannelInfoResponse{}
+	mi := &file_control_proto_msgTypes[25]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetChannelInfoResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetChannelInfoResponse) ProtoMessage() {}
+
+func (x *GetChannelInfoResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_control_proto_msgTypes[25]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetChannelInfoResponse.ProtoReflect.Descriptor instead.
+func (*GetChannelInfoResponse) Descriptor() ([]byte, []int) {
+	return file_control_proto_rawDescGZIP(), []int{25}
+}
+
+func (x *GetChannelInfoResponse) GetChannelId() int64 {
+	if x != nil {
+		return x.ChannelId
+	}
+	return 0
+}
+
+func (x *GetChannelInfoResponse) GetParentId() int64 {
+	if x != nil {
+		return x.ParentId
+	}
+	return 0
+}
+
+func (x *GetChannelInfoResponse) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *GetChannelInfoResponse) GetTopic() string {
+	if x != nil {
+		return x.Topic
+	}
+	return ""
+}
+
+func (x *GetChannelInfoResponse) GetChannelType() int64 {
+	if x != nil {
+		return x.ChannelType
+	}
+	return 0
+}
+
+func (x *GetChannelInfoResponse) GetMaxClients() int64 {
+	if x != nil {
+		return x.MaxClients
+	}
+	return 0
+}
+
+func (x *GetChannelInfoResponse) GetCurrentClients() int64 {
+	if x != nil {
+		return x.CurrentClients
+	}
+	return 0
+}
+
+func (x *GetChannelInfoResponse) GetOpusBitrate() int64 {
+	if x != nil {
+		return x.OpusBitrate
+	}
+	return 0
+}
+
+func (x *GetChannelInfoResponse) GetOpusFec() bool {
+	if x != nil {
+		return x.OpusFec
+	}
+	return false
+}
+
+func (x *GetChannelInfoResponse) GetOpusDtx() bool {
+	if x != nil {
+		return x.OpusDtx
+	}
+	return false
+}
+
+func (x *GetChannelInfoResponse) GetOpusStereo() bool {
+	if x != nil {
+		return x.OpusStereo
+	}
+	return false
+}
+
+func (x *GetChannelInfoResponse) GetSlowModeSeconds() int64 {
+	if x != nil {
+		return x.SlowModeSeconds
+	}
+	return 0
+}
+
+type GetRoleStateRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Zero selects server roles; positive IDs select that channel's access editor.
+	ChannelId     int64 `protobuf:"varint,1,opt,name=channel_id,json=channelId,proto3" json:"channel_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetRoleStateRequest) Reset() {
+	*x = GetRoleStateRequest{}
+	mi := &file_control_proto_msgTypes[26]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetRoleStateRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetRoleStateRequest) ProtoMessage() {}
+
+func (x *GetRoleStateRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_control_proto_msgTypes[26]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetRoleStateRequest.ProtoReflect.Descriptor instead.
+func (*GetRoleStateRequest) Descriptor() ([]byte, []int) {
+	return file_control_proto_rawDescGZIP(), []int{26}
+}
+
+func (x *GetRoleStateRequest) GetChannelId() int64 {
+	if x != nil {
+		return x.ChannelId
+	}
+	return 0
+}
+
+type RoleAssignment struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	UserId        int64                  `protobuf:"varint,1,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
+	RoleIds       []int64                `protobuf:"varint,2,rep,packed,name=role_ids,json=roleIds,proto3" json:"role_ids,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RoleAssignment) Reset() {
+	*x = RoleAssignment{}
+	mi := &file_control_proto_msgTypes[27]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RoleAssignment) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RoleAssignment) ProtoMessage() {}
+
+func (x *RoleAssignment) ProtoReflect() protoreflect.Message {
+	mi := &file_control_proto_msgTypes[27]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RoleAssignment.ProtoReflect.Descriptor instead.
+func (*RoleAssignment) Descriptor() ([]byte, []int) {
+	return file_control_proto_rawDescGZIP(), []int{27}
+}
+
+func (x *RoleAssignment) GetUserId() int64 {
+	if x != nil {
+		return x.UserId
+	}
+	return 0
+}
+
+func (x *RoleAssignment) GetRoleIds() []int64 {
+	if x != nil {
+		return x.RoleIds
 	}
 	return nil
 }
 
-func (x *QueryPermissionsResponse) GetIsAdmin() bool {
+type RolePolicySnapshot struct {
+	state               protoimpl.MessageState `protogen:"open.v1"`
+	Revision            int64                  `protobuf:"varint,1,opt,name=revision,proto3" json:"revision,omitempty"`
+	OwnerId             int64                  `protobuf:"varint,2,opt,name=owner_id,json=ownerId,proto3" json:"owner_id,omitempty"`
+	EveryoneId          int64                  `protobuf:"varint,3,opt,name=everyone_id,json=everyoneId,proto3" json:"everyone_id,omitempty"`
+	DefaultMemberRoleId int64                  `protobuf:"varint,4,opt,name=default_member_role_id,json=defaultMemberRoleId,proto3" json:"default_member_role_id,omitempty"`
+	Roles               []*RoleDefinition      `protobuf:"bytes,5,rep,name=roles,proto3" json:"roles,omitempty"`
+	Members             []*RoleAssignment      `protobuf:"bytes,6,rep,name=members,proto3" json:"members,omitempty"`
+	// Only policies within the caller's management scope are included.
+	Channels      []*ChannelRoleAccess `protobuf:"bytes,7,rep,name=channels,proto3" json:"channels,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RolePolicySnapshot) Reset() {
+	*x = RolePolicySnapshot{}
+	mi := &file_control_proto_msgTypes[28]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RolePolicySnapshot) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RolePolicySnapshot) ProtoMessage() {}
+
+func (x *RolePolicySnapshot) ProtoReflect() protoreflect.Message {
+	mi := &file_control_proto_msgTypes[28]
 	if x != nil {
-		return x.IsAdmin
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RolePolicySnapshot.ProtoReflect.Descriptor instead.
+func (*RolePolicySnapshot) Descriptor() ([]byte, []int) {
+	return file_control_proto_rawDescGZIP(), []int{28}
+}
+
+func (x *RolePolicySnapshot) GetRevision() int64 {
+	if x != nil {
+		return x.Revision
+	}
+	return 0
+}
+
+func (x *RolePolicySnapshot) GetOwnerId() int64 {
+	if x != nil {
+		return x.OwnerId
+	}
+	return 0
+}
+
+func (x *RolePolicySnapshot) GetEveryoneId() int64 {
+	if x != nil {
+		return x.EveryoneId
+	}
+	return 0
+}
+
+func (x *RolePolicySnapshot) GetDefaultMemberRoleId() int64 {
+	if x != nil {
+		return x.DefaultMemberRoleId
+	}
+	return 0
+}
+
+func (x *RolePolicySnapshot) GetRoles() []*RoleDefinition {
+	if x != nil {
+		return x.Roles
+	}
+	return nil
+}
+
+func (x *RolePolicySnapshot) GetMembers() []*RoleAssignment {
+	if x != nil {
+		return x.Members
+	}
+	return nil
+}
+
+func (x *RolePolicySnapshot) GetChannels() []*ChannelRoleAccess {
+	if x != nil {
+		return x.Channels
+	}
+	return nil
+}
+
+type CapabilityDescriptor struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Key           string                 `protobuf:"bytes,1,opt,name=key,proto3" json:"key,omitempty"`
+	Group         string                 `protobuf:"bytes,2,opt,name=group,proto3" json:"group,omitempty"`
+	English       string                 `protobuf:"bytes,3,opt,name=english,proto3" json:"english,omitempty"`
+	German        string                 `protobuf:"bytes,4,opt,name=german,proto3" json:"german,omitempty"`
+	Channel       bool                   `protobuf:"varint,5,opt,name=channel,proto3" json:"channel,omitempty"`
+	Requires      []string               `protobuf:"bytes,6,rep,name=requires,proto3" json:"requires,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CapabilityDescriptor) Reset() {
+	*x = CapabilityDescriptor{}
+	mi := &file_control_proto_msgTypes[29]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CapabilityDescriptor) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CapabilityDescriptor) ProtoMessage() {}
+
+func (x *CapabilityDescriptor) ProtoReflect() protoreflect.Message {
+	mi := &file_control_proto_msgTypes[29]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CapabilityDescriptor.ProtoReflect.Descriptor instead.
+func (*CapabilityDescriptor) Descriptor() ([]byte, []int) {
+	return file_control_proto_rawDescGZIP(), []int{29}
+}
+
+func (x *CapabilityDescriptor) GetKey() string {
+	if x != nil {
+		return x.Key
+	}
+	return ""
+}
+
+func (x *CapabilityDescriptor) GetGroup() string {
+	if x != nil {
+		return x.Group
+	}
+	return ""
+}
+
+func (x *CapabilityDescriptor) GetEnglish() string {
+	if x != nil {
+		return x.English
+	}
+	return ""
+}
+
+func (x *CapabilityDescriptor) GetGerman() string {
+	if x != nil {
+		return x.German
+	}
+	return ""
+}
+
+func (x *CapabilityDescriptor) GetChannel() bool {
+	if x != nil {
+		return x.Channel
+	}
+	return false
+}
+
+func (x *CapabilityDescriptor) GetRequires() []string {
+	if x != nil {
+		return x.Requires
+	}
+	return nil
+}
+
+type GetRoleStateResponse struct {
+	state                 protoimpl.MessageState  `protogen:"open.v1"`
+	ParentAccessAvailable bool                    `protobuf:"varint,1,opt,name=parent_access_available,json=parentAccessAvailable,proto3" json:"parent_access_available,omitempty"`
+	EffectiveOverrides    []*ChannelRoleOverride  `protobuf:"bytes,2,rep,name=effective_overrides,json=effectiveOverrides,proto3" json:"effective_overrides,omitempty"`
+	ParentOverrides       []*ChannelRoleOverride  `protobuf:"bytes,3,rep,name=parent_overrides,json=parentOverrides,proto3" json:"parent_overrides,omitempty"`
+	ActorId               int64                   `protobuf:"varint,4,opt,name=actor_id,json=actorId,proto3" json:"actor_id,omitempty"`
+	Policy                *RolePolicySnapshot     `protobuf:"bytes,5,opt,name=policy,proto3" json:"policy,omitempty"`
+	Capabilities          []*CapabilityDescriptor `protobuf:"bytes,6,rep,name=capabilities,proto3" json:"capabilities,omitempty"`
+	ManageableRoleIds     []int64                 `protobuf:"varint,7,rep,packed,name=manageable_role_ids,json=manageableRoleIds,proto3" json:"manageable_role_ids,omitempty"`
+	GrantableCapabilities []string                `protobuf:"bytes,8,rep,name=grantable_capabilities,json=grantableCapabilities,proto3" json:"grantable_capabilities,omitempty"`
+	unknownFields         protoimpl.UnknownFields
+	sizeCache             protoimpl.SizeCache
+}
+
+func (x *GetRoleStateResponse) Reset() {
+	*x = GetRoleStateResponse{}
+	mi := &file_control_proto_msgTypes[30]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetRoleStateResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetRoleStateResponse) ProtoMessage() {}
+
+func (x *GetRoleStateResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_control_proto_msgTypes[30]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetRoleStateResponse.ProtoReflect.Descriptor instead.
+func (*GetRoleStateResponse) Descriptor() ([]byte, []int) {
+	return file_control_proto_rawDescGZIP(), []int{30}
+}
+
+func (x *GetRoleStateResponse) GetParentAccessAvailable() bool {
+	if x != nil {
+		return x.ParentAccessAvailable
+	}
+	return false
+}
+
+func (x *GetRoleStateResponse) GetEffectiveOverrides() []*ChannelRoleOverride {
+	if x != nil {
+		return x.EffectiveOverrides
+	}
+	return nil
+}
+
+func (x *GetRoleStateResponse) GetParentOverrides() []*ChannelRoleOverride {
+	if x != nil {
+		return x.ParentOverrides
+	}
+	return nil
+}
+
+func (x *GetRoleStateResponse) GetActorId() int64 {
+	if x != nil {
+		return x.ActorId
+	}
+	return 0
+}
+
+func (x *GetRoleStateResponse) GetPolicy() *RolePolicySnapshot {
+	if x != nil {
+		return x.Policy
+	}
+	return nil
+}
+
+func (x *GetRoleStateResponse) GetCapabilities() []*CapabilityDescriptor {
+	if x != nil {
+		return x.Capabilities
+	}
+	return nil
+}
+
+func (x *GetRoleStateResponse) GetManageableRoleIds() []int64 {
+	if x != nil {
+		return x.ManageableRoleIds
+	}
+	return nil
+}
+
+func (x *GetRoleStateResponse) GetGrantableCapabilities() []string {
+	if x != nil {
+		return x.GrantableCapabilities
+	}
+	return nil
+}
+
+type ListRoleMembersRequest struct {
+	state     protoimpl.MessageState `protogen:"open.v1"`
+	ChannelId int64                  `protobuf:"varint,1,opt,name=channel_id,json=channelId,proto3" json:"channel_id,omitempty"`
+	// Required positive revision from GetRoleState; stale reads return ABORTED.
+	ExpectedRevision int64 `protobuf:"varint,2,opt,name=expected_revision,json=expectedRevision,proto3" json:"expected_revision,omitempty"`
+	// At most 100 UTF-8 bytes, matching the native roster search.
+	Search string `protobuf:"bytes,3,opt,name=search,proto3" json:"search,omitempty"`
+	// Exclusive ascending user ID cursor; zero starts at the beginning.
+	AfterId       int64 `protobuf:"varint,4,opt,name=after_id,json=afterId,proto3" json:"after_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListRoleMembersRequest) Reset() {
+	*x = ListRoleMembersRequest{}
+	mi := &file_control_proto_msgTypes[31]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListRoleMembersRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListRoleMembersRequest) ProtoMessage() {}
+
+func (x *ListRoleMembersRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_control_proto_msgTypes[31]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListRoleMembersRequest.ProtoReflect.Descriptor instead.
+func (*ListRoleMembersRequest) Descriptor() ([]byte, []int) {
+	return file_control_proto_rawDescGZIP(), []int{31}
+}
+
+func (x *ListRoleMembersRequest) GetChannelId() int64 {
+	if x != nil {
+		return x.ChannelId
+	}
+	return 0
+}
+
+func (x *ListRoleMembersRequest) GetExpectedRevision() int64 {
+	if x != nil {
+		return x.ExpectedRevision
+	}
+	return 0
+}
+
+func (x *ListRoleMembersRequest) GetSearch() string {
+	if x != nil {
+		return x.Search
+	}
+	return ""
+}
+
+func (x *ListRoleMembersRequest) GetAfterId() int64 {
+	if x != nil {
+		return x.AfterId
+	}
+	return 0
+}
+
+type RoleMemberIdentity struct {
+	state    protoimpl.MessageState `protogen:"open.v1"`
+	UserId   int64                  `protobuf:"varint,1,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
+	UniqueId string                 `protobuf:"bytes,2,opt,name=unique_id,json=uniqueId,proto3" json:"unique_id,omitempty"`
+	Nickname string                 `protobuf:"bytes,3,opt,name=nickname,proto3" json:"nickname,omitempty"`
+	RoleIds  []int64                `protobuf:"varint,4,rep,packed,name=role_ids,json=roleIds,proto3" json:"role_ids,omitempty"`
+	// Protected members may be inspected even when they cannot be managed.
+	Manageable    bool `protobuf:"varint,5,opt,name=manageable,proto3" json:"manageable,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RoleMemberIdentity) Reset() {
+	*x = RoleMemberIdentity{}
+	mi := &file_control_proto_msgTypes[32]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RoleMemberIdentity) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RoleMemberIdentity) ProtoMessage() {}
+
+func (x *RoleMemberIdentity) ProtoReflect() protoreflect.Message {
+	mi := &file_control_proto_msgTypes[32]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RoleMemberIdentity.ProtoReflect.Descriptor instead.
+func (*RoleMemberIdentity) Descriptor() ([]byte, []int) {
+	return file_control_proto_rawDescGZIP(), []int{32}
+}
+
+func (x *RoleMemberIdentity) GetUserId() int64 {
+	if x != nil {
+		return x.UserId
+	}
+	return 0
+}
+
+func (x *RoleMemberIdentity) GetUniqueId() string {
+	if x != nil {
+		return x.UniqueId
+	}
+	return ""
+}
+
+func (x *RoleMemberIdentity) GetNickname() string {
+	if x != nil {
+		return x.Nickname
+	}
+	return ""
+}
+
+func (x *RoleMemberIdentity) GetRoleIds() []int64 {
+	if x != nil {
+		return x.RoleIds
+	}
+	return nil
+}
+
+func (x *RoleMemberIdentity) GetManageable() bool {
+	if x != nil {
+		return x.Manageable
+	}
+	return false
+}
+
+type ListRoleMembersResponse struct {
+	state    protoimpl.MessageState `protogen:"open.v1"`
+	Revision int64                  `protobuf:"varint,1,opt,name=revision,proto3" json:"revision,omitempty"`
+	// At most 100 registered identities, including offline members.
+	Entries []*RoleMemberIdentity `protobuf:"bytes,2,rep,name=entries,proto3" json:"entries,omitempty"`
+	// If true, pass the last entry's user_id as after_id for the next page.
+	More          bool `protobuf:"varint,3,opt,name=more,proto3" json:"more,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListRoleMembersResponse) Reset() {
+	*x = ListRoleMembersResponse{}
+	mi := &file_control_proto_msgTypes[33]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListRoleMembersResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListRoleMembersResponse) ProtoMessage() {}
+
+func (x *ListRoleMembersResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_control_proto_msgTypes[33]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListRoleMembersResponse.ProtoReflect.Descriptor instead.
+func (*ListRoleMembersResponse) Descriptor() ([]byte, []int) {
+	return file_control_proto_rawDescGZIP(), []int{33}
+}
+
+func (x *ListRoleMembersResponse) GetRevision() int64 {
+	if x != nil {
+		return x.Revision
+	}
+	return 0
+}
+
+func (x *ListRoleMembersResponse) GetEntries() []*RoleMemberIdentity {
+	if x != nil {
+		return x.Entries
+	}
+	return nil
+}
+
+func (x *ListRoleMembersResponse) GetMore() bool {
+	if x != nil {
+		return x.More
+	}
+	return false
+}
+
+type CheckAccessRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The subject only; never changes the authenticated actor. Zero means guest.
+	UserId           int64  `protobuf:"varint,1,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
+	ChannelId        int64  `protobuf:"varint,2,opt,name=channel_id,json=channelId,proto3" json:"channel_id,omitempty"`
+	Capability       string `protobuf:"bytes,3,opt,name=capability,proto3" json:"capability,omitempty"`
+	ExpectedRevision int64  `protobuf:"varint,4,opt,name=expected_revision,json=expectedRevision,proto3" json:"expected_revision,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
+}
+
+func (x *CheckAccessRequest) Reset() {
+	*x = CheckAccessRequest{}
+	mi := &file_control_proto_msgTypes[34]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CheckAccessRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CheckAccessRequest) ProtoMessage() {}
+
+func (x *CheckAccessRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_control_proto_msgTypes[34]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CheckAccessRequest.ProtoReflect.Descriptor instead.
+func (*CheckAccessRequest) Descriptor() ([]byte, []int) {
+	return file_control_proto_rawDescGZIP(), []int{34}
+}
+
+func (x *CheckAccessRequest) GetUserId() int64 {
+	if x != nil {
+		return x.UserId
+	}
+	return 0
+}
+
+func (x *CheckAccessRequest) GetChannelId() int64 {
+	if x != nil {
+		return x.ChannelId
+	}
+	return 0
+}
+
+func (x *CheckAccessRequest) GetCapability() string {
+	if x != nil {
+		return x.Capability
+	}
+	return ""
+}
+
+func (x *CheckAccessRequest) GetExpectedRevision() int64 {
+	if x != nil {
+		return x.ExpectedRevision
+	}
+	return 0
+}
+
+type RoleAccessDecision struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Allowed       bool                   `protobuf:"varint,1,opt,name=allowed,proto3" json:"allowed,omitempty"`
+	Reason        string                 `protobuf:"bytes,2,opt,name=reason,proto3" json:"reason,omitempty"`
+	RoleIds       []int64                `protobuf:"varint,3,rep,packed,name=role_ids,json=roleIds,proto3" json:"role_ids,omitempty"`
+	ChannelId     int64                  `protobuf:"varint,4,opt,name=channel_id,json=channelId,proto3" json:"channel_id,omitempty"`
+	Requirement   string                 `protobuf:"bytes,5,opt,name=requirement,proto3" json:"requirement,omitempty"`
+	Revision      int64                  `protobuf:"varint,6,opt,name=revision,proto3" json:"revision,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RoleAccessDecision) Reset() {
+	*x = RoleAccessDecision{}
+	mi := &file_control_proto_msgTypes[35]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RoleAccessDecision) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RoleAccessDecision) ProtoMessage() {}
+
+func (x *RoleAccessDecision) ProtoReflect() protoreflect.Message {
+	mi := &file_control_proto_msgTypes[35]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RoleAccessDecision.ProtoReflect.Descriptor instead.
+func (*RoleAccessDecision) Descriptor() ([]byte, []int) {
+	return file_control_proto_rawDescGZIP(), []int{35}
+}
+
+func (x *RoleAccessDecision) GetAllowed() bool {
+	if x != nil {
+		return x.Allowed
+	}
+	return false
+}
+
+func (x *RoleAccessDecision) GetReason() string {
+	if x != nil {
+		return x.Reason
+	}
+	return ""
+}
+
+func (x *RoleAccessDecision) GetRoleIds() []int64 {
+	if x != nil {
+		return x.RoleIds
+	}
+	return nil
+}
+
+func (x *RoleAccessDecision) GetChannelId() int64 {
+	if x != nil {
+		return x.ChannelId
+	}
+	return 0
+}
+
+func (x *RoleAccessDecision) GetRequirement() string {
+	if x != nil {
+		return x.Requirement
+	}
+	return ""
+}
+
+func (x *RoleAccessDecision) GetRevision() int64 {
+	if x != nil {
+		return x.Revision
+	}
+	return 0
+}
+
+type CheckAccessResponse struct {
+	state    protoimpl.MessageState `protogen:"open.v1"`
+	Decision *RoleAccessDecision    `protobuf:"bytes,1,opt,name=decision,proto3" json:"decision,omitempty"`
+	// Actor hierarchy is separate from the subject's permission decision.
+	CanManageMember bool `protobuf:"varint,2,opt,name=can_manage_member,json=canManageMember,proto3" json:"can_manage_member,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *CheckAccessResponse) Reset() {
+	*x = CheckAccessResponse{}
+	mi := &file_control_proto_msgTypes[36]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CheckAccessResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CheckAccessResponse) ProtoMessage() {}
+
+func (x *CheckAccessResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_control_proto_msgTypes[36]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CheckAccessResponse.ProtoReflect.Descriptor instead.
+func (*CheckAccessResponse) Descriptor() ([]byte, []int) {
+	return file_control_proto_rawDescGZIP(), []int{36}
+}
+
+func (x *CheckAccessResponse) GetDecision() *RoleAccessDecision {
+	if x != nil {
+		return x.Decision
+	}
+	return nil
+}
+
+func (x *CheckAccessResponse) GetCanManageMember() bool {
+	if x != nil {
+		return x.CanManageMember
+	}
+	return false
+}
+
+type GetChannelOptionsRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// channel_create, channel_edit, channel_move, or channel_delete.
+	Kind string `protobuf:"bytes,1,opt,name=kind,proto3" json:"kind,omitempty"`
+	// For creation, the parent (zero means root); otherwise the target channel.
+	ChannelId     int64 `protobuf:"varint,2,opt,name=channel_id,json=channelId,proto3" json:"channel_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetChannelOptionsRequest) Reset() {
+	*x = GetChannelOptionsRequest{}
+	mi := &file_control_proto_msgTypes[37]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetChannelOptionsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetChannelOptionsRequest) ProtoMessage() {}
+
+func (x *GetChannelOptionsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_control_proto_msgTypes[37]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetChannelOptionsRequest.ProtoReflect.Descriptor instead.
+func (*GetChannelOptionsRequest) Descriptor() ([]byte, []int) {
+	return file_control_proto_rawDescGZIP(), []int{37}
+}
+
+func (x *GetChannelOptionsRequest) GetKind() string {
+	if x != nil {
+		return x.Kind
+	}
+	return ""
+}
+
+func (x *GetChannelOptionsRequest) GetChannelId() int64 {
+	if x != nil {
+		return x.ChannelId
+	}
+	return 0
+}
+
+type ChannelManagementOption struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Id            int64                  `protobuf:"varint,1,opt,name=id,proto3" json:"id,omitempty"`
+	Name          string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
+	CanSync       bool                   `protobuf:"varint,3,opt,name=can_sync,json=canSync,proto3" json:"can_sync,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ChannelManagementOption) Reset() {
+	*x = ChannelManagementOption{}
+	mi := &file_control_proto_msgTypes[38]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ChannelManagementOption) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ChannelManagementOption) ProtoMessage() {}
+
+func (x *ChannelManagementOption) ProtoReflect() protoreflect.Message {
+	mi := &file_control_proto_msgTypes[38]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ChannelManagementOption.ProtoReflect.Descriptor instead.
+func (*ChannelManagementOption) Descriptor() ([]byte, []int) {
+	return file_control_proto_rawDescGZIP(), []int{38}
+}
+
+func (x *ChannelManagementOption) GetId() int64 {
+	if x != nil {
+		return x.Id
+	}
+	return 0
+}
+
+func (x *ChannelManagementOption) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *ChannelManagementOption) GetCanSync() bool {
+	if x != nil {
+		return x.CanSync
+	}
+	return false
+}
+
+type GetChannelOptionsResponse struct {
+	state                 protoimpl.MessageState     `protogen:"open.v1"`
+	Revision              int64                      `protobuf:"varint,1,opt,name=revision,proto3" json:"revision,omitempty"`
+	ChannelId             int64                      `protobuf:"varint,2,opt,name=channel_id,json=channelId,proto3" json:"channel_id,omitempty"`
+	Name                  string                     `protobuf:"bytes,3,opt,name=name,proto3" json:"name,omitempty"`
+	Settings              *RoleChannelSettings       `protobuf:"bytes,4,opt,name=settings,proto3" json:"settings,omitempty"`
+	AffectedChannels      int64                      `protobuf:"varint,5,opt,name=affected_channels,json=affectedChannels,proto3" json:"affected_channels,omitempty"`
+	CanCreatePermanent    bool                       `protobuf:"varint,6,opt,name=can_create_permanent,json=canCreatePermanent,proto3" json:"can_create_permanent,omitempty"`
+	CanCreateTemporary    bool                       `protobuf:"varint,7,opt,name=can_create_temporary,json=canCreateTemporary,proto3" json:"can_create_temporary,omitempty"`
+	CanManageAccess       bool                       `protobuf:"varint,8,opt,name=can_manage_access,json=canManageAccess,proto3" json:"can_manage_access,omitempty"`
+	EveryoneId            int64                      `protobuf:"varint,9,opt,name=everyone_id,json=everyoneId,proto3" json:"everyone_id,omitempty"`
+	Roles                 []*ChannelManagementOption `protobuf:"bytes,10,rep,name=roles,proto3" json:"roles,omitempty"`
+	GrantableCapabilities []string                   `protobuf:"bytes,11,rep,name=grantable_capabilities,json=grantableCapabilities,proto3" json:"grantable_capabilities,omitempty"`
+	Destinations          []*ChannelManagementOption `protobuf:"bytes,12,rep,name=destinations,proto3" json:"destinations,omitempty"`
+	unknownFields         protoimpl.UnknownFields
+	sizeCache             protoimpl.SizeCache
+}
+
+func (x *GetChannelOptionsResponse) Reset() {
+	*x = GetChannelOptionsResponse{}
+	mi := &file_control_proto_msgTypes[39]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetChannelOptionsResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetChannelOptionsResponse) ProtoMessage() {}
+
+func (x *GetChannelOptionsResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_control_proto_msgTypes[39]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetChannelOptionsResponse.ProtoReflect.Descriptor instead.
+func (*GetChannelOptionsResponse) Descriptor() ([]byte, []int) {
+	return file_control_proto_rawDescGZIP(), []int{39}
+}
+
+func (x *GetChannelOptionsResponse) GetRevision() int64 {
+	if x != nil {
+		return x.Revision
+	}
+	return 0
+}
+
+func (x *GetChannelOptionsResponse) GetChannelId() int64 {
+	if x != nil {
+		return x.ChannelId
+	}
+	return 0
+}
+
+func (x *GetChannelOptionsResponse) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *GetChannelOptionsResponse) GetSettings() *RoleChannelSettings {
+	if x != nil {
+		return x.Settings
+	}
+	return nil
+}
+
+func (x *GetChannelOptionsResponse) GetAffectedChannels() int64 {
+	if x != nil {
+		return x.AffectedChannels
+	}
+	return 0
+}
+
+func (x *GetChannelOptionsResponse) GetCanCreatePermanent() bool {
+	if x != nil {
+		return x.CanCreatePermanent
+	}
+	return false
+}
+
+func (x *GetChannelOptionsResponse) GetCanCreateTemporary() bool {
+	if x != nil {
+		return x.CanCreateTemporary
+	}
+	return false
+}
+
+func (x *GetChannelOptionsResponse) GetCanManageAccess() bool {
+	if x != nil {
+		return x.CanManageAccess
+	}
+	return false
+}
+
+func (x *GetChannelOptionsResponse) GetEveryoneId() int64 {
+	if x != nil {
+		return x.EveryoneId
+	}
+	return 0
+}
+
+func (x *GetChannelOptionsResponse) GetRoles() []*ChannelManagementOption {
+	if x != nil {
+		return x.Roles
+	}
+	return nil
+}
+
+func (x *GetChannelOptionsResponse) GetGrantableCapabilities() []string {
+	if x != nil {
+		return x.GrantableCapabilities
+	}
+	return nil
+}
+
+func (x *GetChannelOptionsResponse) GetDestinations() []*ChannelManagementOption {
+	if x != nil {
+		return x.Destinations
+	}
+	return nil
+}
+
+type GetServerInfoResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	Version       string                 `protobuf:"bytes,2,opt,name=version,proto3" json:"version,omitempty"`
+	Platform      string                 `protobuf:"bytes,3,opt,name=platform,proto3" json:"platform,omitempty"`
+	UptimeSeconds int64                  `protobuf:"varint,4,opt,name=uptime_seconds,json=uptimeSeconds,proto3" json:"uptime_seconds,omitempty"`
+	// Counts include only channels and sessions visible to the caller.
+	ClientsOnline  int64  `protobuf:"varint,5,opt,name=clients_online,json=clientsOnline,proto3" json:"clients_online,omitempty"`
+	ChannelsOnline int64  `protobuf:"varint,6,opt,name=channels_online,json=channelsOnline,proto3" json:"channels_online,omitempty"`
+	MaxClients     int64  `protobuf:"varint,7,opt,name=max_clients,json=maxClients,proto3" json:"max_clients,omitempty"`
+	Motd           string `protobuf:"bytes,8,opt,name=motd,proto3" json:"motd,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
+}
+
+func (x *GetServerInfoResponse) Reset() {
+	*x = GetServerInfoResponse{}
+	mi := &file_control_proto_msgTypes[40]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetServerInfoResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetServerInfoResponse) ProtoMessage() {}
+
+func (x *GetServerInfoResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_control_proto_msgTypes[40]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetServerInfoResponse.ProtoReflect.Descriptor instead.
+func (*GetServerInfoResponse) Descriptor() ([]byte, []int) {
+	return file_control_proto_rawDescGZIP(), []int{40}
+}
+
+func (x *GetServerInfoResponse) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *GetServerInfoResponse) GetVersion() string {
+	if x != nil {
+		return x.Version
+	}
+	return ""
+}
+
+func (x *GetServerInfoResponse) GetPlatform() string {
+	if x != nil {
+		return x.Platform
+	}
+	return ""
+}
+
+func (x *GetServerInfoResponse) GetUptimeSeconds() int64 {
+	if x != nil {
+		return x.UptimeSeconds
+	}
+	return 0
+}
+
+func (x *GetServerInfoResponse) GetClientsOnline() int64 {
+	if x != nil {
+		return x.ClientsOnline
+	}
+	return 0
+}
+
+func (x *GetServerInfoResponse) GetChannelsOnline() int64 {
+	if x != nil {
+		return x.ChannelsOnline
+	}
+	return 0
+}
+
+func (x *GetServerInfoResponse) GetMaxClients() int64 {
+	if x != nil {
+		return x.MaxClients
+	}
+	return 0
+}
+
+func (x *GetServerInfoResponse) GetMotd() string {
+	if x != nil {
+		return x.Motd
+	}
+	return ""
+}
+
+type GetClientInfoRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ClientId      string                 `protobuf:"bytes,1,opt,name=client_id,json=clientId,proto3" json:"client_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetClientInfoRequest) Reset() {
+	*x = GetClientInfoRequest{}
+	mi := &file_control_proto_msgTypes[41]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetClientInfoRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetClientInfoRequest) ProtoMessage() {}
+
+func (x *GetClientInfoRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_control_proto_msgTypes[41]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetClientInfoRequest.ProtoReflect.Descriptor instead.
+func (*GetClientInfoRequest) Descriptor() ([]byte, []int) {
+	return file_control_proto_rawDescGZIP(), []int{41}
+}
+
+func (x *GetClientInfoRequest) GetClientId() string {
+	if x != nil {
+		return x.ClientId
+	}
+	return ""
+}
+
+type GetClientInfoResponse struct {
+	state     protoimpl.MessageState `protogen:"open.v1"`
+	ClientId  string                 `protobuf:"bytes,1,opt,name=client_id,json=clientId,proto3" json:"client_id,omitempty"`
+	UniqueId  string                 `protobuf:"bytes,2,opt,name=unique_id,json=uniqueId,proto3" json:"unique_id,omitempty"`
+	Nickname  string                 `protobuf:"bytes,3,opt,name=nickname,proto3" json:"nickname,omitempty"`
+	ChannelId int64                  `protobuf:"varint,4,opt,name=channel_id,json=channelId,proto3" json:"channel_id,omitempty"`
+	// Unix seconds. Statistics are zero without ViewConnectionInfo;
+	// ping_ms is -1 when unavailable. Address fields have a separate gate.
+	ConnectedAt   int64  `protobuf:"varint,5,opt,name=connected_at,json=connectedAt,proto3" json:"connected_at,omitempty"`
+	IdleSeconds   int64  `protobuf:"varint,6,opt,name=idle_seconds,json=idleSeconds,proto3" json:"idle_seconds,omitempty"`
+	PingMs        int64  `protobuf:"varint,7,opt,name=ping_ms,json=pingMs,proto3" json:"ping_ms,omitempty"`
+	Ip            string `protobuf:"bytes,8,opt,name=ip,proto3" json:"ip,omitempty"`
+	Port          int64  `protobuf:"varint,9,opt,name=port,proto3" json:"port,omitempty"`
+	BytesIn       int64  `protobuf:"varint,10,opt,name=bytes_in,json=bytesIn,proto3" json:"bytes_in,omitempty"`
+	BytesOut      int64  `protobuf:"varint,11,opt,name=bytes_out,json=bytesOut,proto3" json:"bytes_out,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetClientInfoResponse) Reset() {
+	*x = GetClientInfoResponse{}
+	mi := &file_control_proto_msgTypes[42]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetClientInfoResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetClientInfoResponse) ProtoMessage() {}
+
+func (x *GetClientInfoResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_control_proto_msgTypes[42]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetClientInfoResponse.ProtoReflect.Descriptor instead.
+func (*GetClientInfoResponse) Descriptor() ([]byte, []int) {
+	return file_control_proto_rawDescGZIP(), []int{42}
+}
+
+func (x *GetClientInfoResponse) GetClientId() string {
+	if x != nil {
+		return x.ClientId
+	}
+	return ""
+}
+
+func (x *GetClientInfoResponse) GetUniqueId() string {
+	if x != nil {
+		return x.UniqueId
+	}
+	return ""
+}
+
+func (x *GetClientInfoResponse) GetNickname() string {
+	if x != nil {
+		return x.Nickname
+	}
+	return ""
+}
+
+func (x *GetClientInfoResponse) GetChannelId() int64 {
+	if x != nil {
+		return x.ChannelId
+	}
+	return 0
+}
+
+func (x *GetClientInfoResponse) GetConnectedAt() int64 {
+	if x != nil {
+		return x.ConnectedAt
+	}
+	return 0
+}
+
+func (x *GetClientInfoResponse) GetIdleSeconds() int64 {
+	if x != nil {
+		return x.IdleSeconds
+	}
+	return 0
+}
+
+func (x *GetClientInfoResponse) GetPingMs() int64 {
+	if x != nil {
+		return x.PingMs
+	}
+	return 0
+}
+
+func (x *GetClientInfoResponse) GetIp() string {
+	if x != nil {
+		return x.Ip
+	}
+	return ""
+}
+
+func (x *GetClientInfoResponse) GetPort() int64 {
+	if x != nil {
+		return x.Port
+	}
+	return 0
+}
+
+func (x *GetClientInfoResponse) GetBytesIn() int64 {
+	if x != nil {
+		return x.BytesIn
+	}
+	return 0
+}
+
+func (x *GetClientInfoResponse) GetBytesOut() int64 {
+	if x != nil {
+		return x.BytesOut
+	}
+	return 0
+}
+
+type GetServerConfigRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetServerConfigRequest) Reset() {
+	*x = GetServerConfigRequest{}
+	mi := &file_control_proto_msgTypes[43]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetServerConfigRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetServerConfigRequest) ProtoMessage() {}
+
+func (x *GetServerConfigRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_control_proto_msgTypes[43]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetServerConfigRequest.ProtoReflect.Descriptor instead.
+func (*GetServerConfigRequest) Descriptor() ([]byte, []int) {
+	return file_control_proto_rawDescGZIP(), []int{43}
+}
+
+type GetMediaLimitsRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetMediaLimitsRequest) Reset() {
+	*x = GetMediaLimitsRequest{}
+	mi := &file_control_proto_msgTypes[44]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetMediaLimitsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetMediaLimitsRequest) ProtoMessage() {}
+
+func (x *GetMediaLimitsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_control_proto_msgTypes[44]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetMediaLimitsRequest.ProtoReflect.Descriptor instead.
+func (*GetMediaLimitsRequest) Descriptor() ([]byte, []int) {
+	return file_control_proto_rawDescGZIP(), []int{44}
+}
+
+type SetMediaLimitsRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Zero means unlimited. Width and height must both be zero or both positive.
+	VideoMaxBitrate int64 `protobuf:"varint,1,opt,name=video_max_bitrate,json=videoMaxBitrate,proto3" json:"video_max_bitrate,omitempty"`
+	VideoMaxWidth   int64 `protobuf:"varint,2,opt,name=video_max_width,json=videoMaxWidth,proto3" json:"video_max_width,omitempty"`
+	VideoMaxHeight  int64 `protobuf:"varint,3,opt,name=video_max_height,json=videoMaxHeight,proto3" json:"video_max_height,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *SetMediaLimitsRequest) Reset() {
+	*x = SetMediaLimitsRequest{}
+	mi := &file_control_proto_msgTypes[45]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SetMediaLimitsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SetMediaLimitsRequest) ProtoMessage() {}
+
+func (x *SetMediaLimitsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_control_proto_msgTypes[45]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SetMediaLimitsRequest.ProtoReflect.Descriptor instead.
+func (*SetMediaLimitsRequest) Descriptor() ([]byte, []int) {
+	return file_control_proto_rawDescGZIP(), []int{45}
+}
+
+func (x *SetMediaLimitsRequest) GetVideoMaxBitrate() int64 {
+	if x != nil {
+		return x.VideoMaxBitrate
+	}
+	return 0
+}
+
+func (x *SetMediaLimitsRequest) GetVideoMaxWidth() int64 {
+	if x != nil {
+		return x.VideoMaxWidth
+	}
+	return 0
+}
+
+func (x *SetMediaLimitsRequest) GetVideoMaxHeight() int64 {
+	if x != nil {
+		return x.VideoMaxHeight
+	}
+	return 0
+}
+
+type GetMediaLimitsResponse struct {
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	VideoMaxBitrate int64                  `protobuf:"varint,1,opt,name=video_max_bitrate,json=videoMaxBitrate,proto3" json:"video_max_bitrate,omitempty"`
+	VideoMaxWidth   int64                  `protobuf:"varint,2,opt,name=video_max_width,json=videoMaxWidth,proto3" json:"video_max_width,omitempty"`
+	VideoMaxHeight  int64                  `protobuf:"varint,3,opt,name=video_max_height,json=videoMaxHeight,proto3" json:"video_max_height,omitempty"`
+	// Process-local revision, encoded as decimal text to preserve uint64 range.
+	Revision      string `protobuf:"bytes,4,opt,name=revision,proto3" json:"revision,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetMediaLimitsResponse) Reset() {
+	*x = GetMediaLimitsResponse{}
+	mi := &file_control_proto_msgTypes[46]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetMediaLimitsResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetMediaLimitsResponse) ProtoMessage() {}
+
+func (x *GetMediaLimitsResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_control_proto_msgTypes[46]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetMediaLimitsResponse.ProtoReflect.Descriptor instead.
+func (*GetMediaLimitsResponse) Descriptor() ([]byte, []int) {
+	return file_control_proto_rawDescGZIP(), []int{46}
+}
+
+func (x *GetMediaLimitsResponse) GetVideoMaxBitrate() int64 {
+	if x != nil {
+		return x.VideoMaxBitrate
+	}
+	return 0
+}
+
+func (x *GetMediaLimitsResponse) GetVideoMaxWidth() int64 {
+	if x != nil {
+		return x.VideoMaxWidth
+	}
+	return 0
+}
+
+func (x *GetMediaLimitsResponse) GetVideoMaxHeight() int64 {
+	if x != nil {
+		return x.VideoMaxHeight
+	}
+	return 0
+}
+
+func (x *GetMediaLimitsResponse) GetRevision() string {
+	if x != nil {
+		return x.Revision
+	}
+	return ""
+}
+
+type SetMediaLimitsResponse struct {
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	VideoMaxBitrate int64                  `protobuf:"varint,1,opt,name=video_max_bitrate,json=videoMaxBitrate,proto3" json:"video_max_bitrate,omitempty"`
+	VideoMaxWidth   int64                  `protobuf:"varint,2,opt,name=video_max_width,json=videoMaxWidth,proto3" json:"video_max_width,omitempty"`
+	VideoMaxHeight  int64                  `protobuf:"varint,3,opt,name=video_max_height,json=videoMaxHeight,proto3" json:"video_max_height,omitempty"`
+	// Exact revision committed by this request.
+	Revision      string `protobuf:"bytes,4,opt,name=revision,proto3" json:"revision,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SetMediaLimitsResponse) Reset() {
+	*x = SetMediaLimitsResponse{}
+	mi := &file_control_proto_msgTypes[47]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SetMediaLimitsResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SetMediaLimitsResponse) ProtoMessage() {}
+
+func (x *SetMediaLimitsResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_control_proto_msgTypes[47]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SetMediaLimitsResponse.ProtoReflect.Descriptor instead.
+func (*SetMediaLimitsResponse) Descriptor() ([]byte, []int) {
+	return file_control_proto_rawDescGZIP(), []int{47}
+}
+
+func (x *SetMediaLimitsResponse) GetVideoMaxBitrate() int64 {
+	if x != nil {
+		return x.VideoMaxBitrate
+	}
+	return 0
+}
+
+func (x *SetMediaLimitsResponse) GetVideoMaxWidth() int64 {
+	if x != nil {
+		return x.VideoMaxWidth
+	}
+	return 0
+}
+
+func (x *SetMediaLimitsResponse) GetVideoMaxHeight() int64 {
+	if x != nil {
+		return x.VideoMaxHeight
+	}
+	return 0
+}
+
+func (x *SetMediaLimitsResponse) GetRevision() string {
+	if x != nil {
+		return x.Revision
+	}
+	return ""
+}
+
+type GetChatFiltersRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetChatFiltersRequest) Reset() {
+	*x = GetChatFiltersRequest{}
+	mi := &file_control_proto_msgTypes[48]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetChatFiltersRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetChatFiltersRequest) ProtoMessage() {}
+
+func (x *GetChatFiltersRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_control_proto_msgTypes[48]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetChatFiltersRequest.ProtoReflect.Descriptor instead.
+func (*GetChatFiltersRequest) Descriptor() ([]byte, []int) {
+	return file_control_proto_rawDescGZIP(), []int{48}
+}
+
+type GetChatFiltersResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	WordFilter    string                 `protobuf:"bytes,1,opt,name=word_filter,json=wordFilter,proto3" json:"word_filter,omitempty"`
+	LinkBlacklist string                 `protobuf:"bytes,2,opt,name=link_blacklist,json=linkBlacklist,proto3" json:"link_blacklist,omitempty"`
+	LinkWhitelist string                 `protobuf:"bytes,3,opt,name=link_whitelist,json=linkWhitelist,proto3" json:"link_whitelist,omitempty"`
+	FromConfig    bool                   `protobuf:"varint,4,opt,name=from_config,json=fromConfig,proto3" json:"from_config,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetChatFiltersResponse) Reset() {
+	*x = GetChatFiltersResponse{}
+	mi := &file_control_proto_msgTypes[49]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetChatFiltersResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetChatFiltersResponse) ProtoMessage() {}
+
+func (x *GetChatFiltersResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_control_proto_msgTypes[49]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetChatFiltersResponse.ProtoReflect.Descriptor instead.
+func (*GetChatFiltersResponse) Descriptor() ([]byte, []int) {
+	return file_control_proto_rawDescGZIP(), []int{49}
+}
+
+func (x *GetChatFiltersResponse) GetWordFilter() string {
+	if x != nil {
+		return x.WordFilter
+	}
+	return ""
+}
+
+func (x *GetChatFiltersResponse) GetLinkBlacklist() string {
+	if x != nil {
+		return x.LinkBlacklist
+	}
+	return ""
+}
+
+func (x *GetChatFiltersResponse) GetLinkWhitelist() string {
+	if x != nil {
+		return x.LinkWhitelist
+	}
+	return ""
+}
+
+func (x *GetChatFiltersResponse) GetFromConfig() bool {
+	if x != nil {
+		return x.FromConfig
+	}
+	return false
+}
+
+// Omitted fields retain their values; present empty strings clear a list.
+// Only server_name, motd, announcement and server_rules are supported.
+// An absent value is invalid; a present empty value clears the setting.
+type SetServerTextRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Key           string                 `protobuf:"bytes,1,opt,name=key,proto3" json:"key,omitempty"`
+	Value         *string                `protobuf:"bytes,2,opt,name=value,proto3,oneof" json:"value,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SetServerTextRequest) Reset() {
+	*x = SetServerTextRequest{}
+	mi := &file_control_proto_msgTypes[50]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SetServerTextRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SetServerTextRequest) ProtoMessage() {}
+
+func (x *SetServerTextRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_control_proto_msgTypes[50]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SetServerTextRequest.ProtoReflect.Descriptor instead.
+func (*SetServerTextRequest) Descriptor() ([]byte, []int) {
+	return file_control_proto_rawDescGZIP(), []int{50}
+}
+
+func (x *SetServerTextRequest) GetKey() string {
+	if x != nil {
+		return x.Key
+	}
+	return ""
+}
+
+func (x *SetServerTextRequest) GetValue() string {
+	if x != nil && x.Value != nil {
+		return *x.Value
+	}
+	return ""
+}
+
+type SetServerTextResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Key   string                 `protobuf:"bytes,1,opt,name=key,proto3" json:"key,omitempty"`
+	// SHA-256 of the exact submitted UTF-8 bytes, including empty text.
+	ContentHash   string `protobuf:"bytes,2,opt,name=content_hash,json=contentHash,proto3" json:"content_hash,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SetServerTextResponse) Reset() {
+	*x = SetServerTextResponse{}
+	mi := &file_control_proto_msgTypes[51]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SetServerTextResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SetServerTextResponse) ProtoMessage() {}
+
+func (x *SetServerTextResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_control_proto_msgTypes[51]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SetServerTextResponse.ProtoReflect.Descriptor instead.
+func (*SetServerTextResponse) Descriptor() ([]byte, []int) {
+	return file_control_proto_rawDescGZIP(), []int{51}
+}
+
+func (x *SetServerTextResponse) GetKey() string {
+	if x != nil {
+		return x.Key
+	}
+	return ""
+}
+
+func (x *SetServerTextResponse) GetContentHash() string {
+	if x != nil {
+		return x.ContentHash
+	}
+	return ""
+}
+
+type SetChatFiltersRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	WordFilter    *string                `protobuf:"bytes,1,opt,name=word_filter,json=wordFilter,proto3,oneof" json:"word_filter,omitempty"`
+	LinkBlacklist *string                `protobuf:"bytes,2,opt,name=link_blacklist,json=linkBlacklist,proto3,oneof" json:"link_blacklist,omitempty"`
+	LinkWhitelist *string                `protobuf:"bytes,3,opt,name=link_whitelist,json=linkWhitelist,proto3,oneof" json:"link_whitelist,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SetChatFiltersRequest) Reset() {
+	*x = SetChatFiltersRequest{}
+	mi := &file_control_proto_msgTypes[52]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SetChatFiltersRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SetChatFiltersRequest) ProtoMessage() {}
+
+func (x *SetChatFiltersRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_control_proto_msgTypes[52]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SetChatFiltersRequest.ProtoReflect.Descriptor instead.
+func (*SetChatFiltersRequest) Descriptor() ([]byte, []int) {
+	return file_control_proto_rawDescGZIP(), []int{52}
+}
+
+func (x *SetChatFiltersRequest) GetWordFilter() string {
+	if x != nil && x.WordFilter != nil {
+		return *x.WordFilter
+	}
+	return ""
+}
+
+func (x *SetChatFiltersRequest) GetLinkBlacklist() string {
+	if x != nil && x.LinkBlacklist != nil {
+		return *x.LinkBlacklist
+	}
+	return ""
+}
+
+func (x *SetChatFiltersRequest) GetLinkWhitelist() string {
+	if x != nil && x.LinkWhitelist != nil {
+		return *x.LinkWhitelist
+	}
+	return ""
+}
+
+type SetChatFiltersResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	WordFilter    string                 `protobuf:"bytes,1,opt,name=word_filter,json=wordFilter,proto3" json:"word_filter,omitempty"`
+	LinkBlacklist string                 `protobuf:"bytes,2,opt,name=link_blacklist,json=linkBlacklist,proto3" json:"link_blacklist,omitempty"`
+	LinkWhitelist string                 `protobuf:"bytes,3,opt,name=link_whitelist,json=linkWhitelist,proto3" json:"link_whitelist,omitempty"`
+	FromConfig    bool                   `protobuf:"varint,4,opt,name=from_config,json=fromConfig,proto3" json:"from_config,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SetChatFiltersResponse) Reset() {
+	*x = SetChatFiltersResponse{}
+	mi := &file_control_proto_msgTypes[53]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SetChatFiltersResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SetChatFiltersResponse) ProtoMessage() {}
+
+func (x *SetChatFiltersResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_control_proto_msgTypes[53]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SetChatFiltersResponse.ProtoReflect.Descriptor instead.
+func (*SetChatFiltersResponse) Descriptor() ([]byte, []int) {
+	return file_control_proto_rawDescGZIP(), []int{53}
+}
+
+func (x *SetChatFiltersResponse) GetWordFilter() string {
+	if x != nil {
+		return x.WordFilter
+	}
+	return ""
+}
+
+func (x *SetChatFiltersResponse) GetLinkBlacklist() string {
+	if x != nil {
+		return x.LinkBlacklist
+	}
+	return ""
+}
+
+func (x *SetChatFiltersResponse) GetLinkWhitelist() string {
+	if x != nil {
+		return x.LinkWhitelist
+	}
+	return ""
+}
+
+func (x *SetChatFiltersResponse) GetFromConfig() bool {
+	if x != nil {
+		return x.FromConfig
+	}
+	return false
+}
+
+type SetServerConfigRequest struct {
+	state                protoimpl.MessageState `protogen:"open.v1"`
+	MaxClients           int32                  `protobuf:"varint,1,opt,name=max_clients,json=maxClients,proto3" json:"max_clients,omitempty"`
+	ClientTimeoutSeconds int32                  `protobuf:"varint,2,opt,name=client_timeout_seconds,json=clientTimeoutSeconds,proto3" json:"client_timeout_seconds,omitempty"`
+	OpusBitrate          int32                  `protobuf:"varint,3,opt,name=opus_bitrate,json=opusBitrate,proto3" json:"opus_bitrate,omitempty"`
+	OpusFec              bool                   `protobuf:"varint,4,opt,name=opus_fec,json=opusFec,proto3" json:"opus_fec,omitempty"`
+	OpusDtx              bool                   `protobuf:"varint,5,opt,name=opus_dtx,json=opusDtx,proto3" json:"opus_dtx,omitempty"`
+	OpusStereo           bool                   `protobuf:"varint,6,opt,name=opus_stereo,json=opusStereo,proto3" json:"opus_stereo,omitempty"`
+	unknownFields        protoimpl.UnknownFields
+	sizeCache            protoimpl.SizeCache
+}
+
+func (x *SetServerConfigRequest) Reset() {
+	*x = SetServerConfigRequest{}
+	mi := &file_control_proto_msgTypes[54]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SetServerConfigRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SetServerConfigRequest) ProtoMessage() {}
+
+func (x *SetServerConfigRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_control_proto_msgTypes[54]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SetServerConfigRequest.ProtoReflect.Descriptor instead.
+func (*SetServerConfigRequest) Descriptor() ([]byte, []int) {
+	return file_control_proto_rawDescGZIP(), []int{54}
+}
+
+func (x *SetServerConfigRequest) GetMaxClients() int32 {
+	if x != nil {
+		return x.MaxClients
+	}
+	return 0
+}
+
+func (x *SetServerConfigRequest) GetClientTimeoutSeconds() int32 {
+	if x != nil {
+		return x.ClientTimeoutSeconds
+	}
+	return 0
+}
+
+func (x *SetServerConfigRequest) GetOpusBitrate() int32 {
+	if x != nil {
+		return x.OpusBitrate
+	}
+	return 0
+}
+
+func (x *SetServerConfigRequest) GetOpusFec() bool {
+	if x != nil {
+		return x.OpusFec
+	}
+	return false
+}
+
+func (x *SetServerConfigRequest) GetOpusDtx() bool {
+	if x != nil {
+		return x.OpusDtx
+	}
+	return false
+}
+
+func (x *SetServerConfigRequest) GetOpusStereo() bool {
+	if x != nil {
+		return x.OpusStereo
+	}
+	return false
+}
+
+type SetServerConfigResponse struct {
+	state                protoimpl.MessageState `protogen:"open.v1"`
+	MaxClients           int64                  `protobuf:"varint,1,opt,name=max_clients,json=maxClients,proto3" json:"max_clients,omitempty"`
+	ClientTimeoutSeconds int64                  `protobuf:"varint,2,opt,name=client_timeout_seconds,json=clientTimeoutSeconds,proto3" json:"client_timeout_seconds,omitempty"`
+	OpusBitrate          int64                  `protobuf:"varint,3,opt,name=opus_bitrate,json=opusBitrate,proto3" json:"opus_bitrate,omitempty"`
+	OpusFec              bool                   `protobuf:"varint,4,opt,name=opus_fec,json=opusFec,proto3" json:"opus_fec,omitempty"`
+	OpusDtx              bool                   `protobuf:"varint,5,opt,name=opus_dtx,json=opusDtx,proto3" json:"opus_dtx,omitempty"`
+	OpusStereo           bool                   `protobuf:"varint,6,opt,name=opus_stereo,json=opusStereo,proto3" json:"opus_stereo,omitempty"`
+	unknownFields        protoimpl.UnknownFields
+	sizeCache            protoimpl.SizeCache
+}
+
+func (x *SetServerConfigResponse) Reset() {
+	*x = SetServerConfigResponse{}
+	mi := &file_control_proto_msgTypes[55]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SetServerConfigResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SetServerConfigResponse) ProtoMessage() {}
+
+func (x *SetServerConfigResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_control_proto_msgTypes[55]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SetServerConfigResponse.ProtoReflect.Descriptor instead.
+func (*SetServerConfigResponse) Descriptor() ([]byte, []int) {
+	return file_control_proto_rawDescGZIP(), []int{55}
+}
+
+func (x *SetServerConfigResponse) GetMaxClients() int64 {
+	if x != nil {
+		return x.MaxClients
+	}
+	return 0
+}
+
+func (x *SetServerConfigResponse) GetClientTimeoutSeconds() int64 {
+	if x != nil {
+		return x.ClientTimeoutSeconds
+	}
+	return 0
+}
+
+func (x *SetServerConfigResponse) GetOpusBitrate() int64 {
+	if x != nil {
+		return x.OpusBitrate
+	}
+	return 0
+}
+
+func (x *SetServerConfigResponse) GetOpusFec() bool {
+	if x != nil {
+		return x.OpusFec
+	}
+	return false
+}
+
+func (x *SetServerConfigResponse) GetOpusDtx() bool {
+	if x != nil {
+		return x.OpusDtx
+	}
+	return false
+}
+
+func (x *SetServerConfigResponse) GetOpusStereo() bool {
+	if x != nil {
+		return x.OpusStereo
+	}
+	return false
+}
+
+// Requires the global ManageServer capability.
+type GetServerConfigResponse struct {
+	state                protoimpl.MessageState `protogen:"open.v1"`
+	MaxClients           int64                  `protobuf:"varint,1,opt,name=max_clients,json=maxClients,proto3" json:"max_clients,omitempty"`
+	ClientTimeoutSeconds int64                  `protobuf:"varint,2,opt,name=client_timeout_seconds,json=clientTimeoutSeconds,proto3" json:"client_timeout_seconds,omitempty"`
+	OpusBitrate          int64                  `protobuf:"varint,3,opt,name=opus_bitrate,json=opusBitrate,proto3" json:"opus_bitrate,omitempty"`
+	OpusFec              bool                   `protobuf:"varint,4,opt,name=opus_fec,json=opusFec,proto3" json:"opus_fec,omitempty"`
+	OpusDtx              bool                   `protobuf:"varint,5,opt,name=opus_dtx,json=opusDtx,proto3" json:"opus_dtx,omitempty"`
+	OpusStereo           bool                   `protobuf:"varint,6,opt,name=opus_stereo,json=opusStereo,proto3" json:"opus_stereo,omitempty"`
+	unknownFields        protoimpl.UnknownFields
+	sizeCache            protoimpl.SizeCache
+}
+
+func (x *GetServerConfigResponse) Reset() {
+	*x = GetServerConfigResponse{}
+	mi := &file_control_proto_msgTypes[56]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetServerConfigResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetServerConfigResponse) ProtoMessage() {}
+
+func (x *GetServerConfigResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_control_proto_msgTypes[56]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetServerConfigResponse.ProtoReflect.Descriptor instead.
+func (*GetServerConfigResponse) Descriptor() ([]byte, []int) {
+	return file_control_proto_rawDescGZIP(), []int{56}
+}
+
+func (x *GetServerConfigResponse) GetMaxClients() int64 {
+	if x != nil {
+		return x.MaxClients
+	}
+	return 0
+}
+
+func (x *GetServerConfigResponse) GetClientTimeoutSeconds() int64 {
+	if x != nil {
+		return x.ClientTimeoutSeconds
+	}
+	return 0
+}
+
+func (x *GetServerConfigResponse) GetOpusBitrate() int64 {
+	if x != nil {
+		return x.OpusBitrate
+	}
+	return 0
+}
+
+func (x *GetServerConfigResponse) GetOpusFec() bool {
+	if x != nil {
+		return x.OpusFec
+	}
+	return false
+}
+
+func (x *GetServerConfigResponse) GetOpusDtx() bool {
+	if x != nil {
+		return x.OpusDtx
+	}
+	return false
+}
+
+func (x *GetServerConfigResponse) GetOpusStereo() bool {
+	if x != nil {
+		return x.OpusStereo
+	}
+	return false
+}
+
+type ListBansRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Exclusive descending cursor; zero starts at the newest record.
+	BeforeId int64 `protobuf:"varint,1,opt,name=before_id,json=beforeId,proto3" json:"before_id,omitempty"`
+	// Zero selects 50. The maximum is 100; negative values are invalid.
+	Limit         int32 `protobuf:"varint,2,opt,name=limit,proto3" json:"limit,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListBansRequest) Reset() {
+	*x = ListBansRequest{}
+	mi := &file_control_proto_msgTypes[57]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListBansRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListBansRequest) ProtoMessage() {}
+
+func (x *ListBansRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_control_proto_msgTypes[57]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListBansRequest.ProtoReflect.Descriptor instead.
+func (*ListBansRequest) Descriptor() ([]byte, []int) {
+	return file_control_proto_rawDescGZIP(), []int{57}
+}
+
+func (x *ListBansRequest) GetBeforeId() int64 {
+	if x != nil {
+		return x.BeforeId
+	}
+	return 0
+}
+
+func (x *ListBansRequest) GetLimit() int32 {
+	if x != nil {
+		return x.Limit
+	}
+	return 0
+}
+
+type BanRecord struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Id    int64                  `protobuf:"varint,1,opt,name=id,proto3" json:"id,omitempty"`
+	// Native ban types: 0 IP, 1 unique ID, 2 nickname.
+	Type     int64  `protobuf:"varint,2,opt,name=type,proto3" json:"type,omitempty"`
+	Value    string `protobuf:"bytes,3,opt,name=value,proto3" json:"value,omitempty"`
+	Reason   string `protobuf:"bytes,4,opt,name=reason,proto3" json:"reason,omitempty"`
+	BannedBy string `protobuf:"bytes,5,opt,name=banned_by,json=bannedBy,proto3" json:"banned_by,omitempty"`
+	// Unix seconds (unlike BanMemberResponse.expires_at, in milliseconds).
+	CreatedAt int64 `protobuf:"varint,6,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	// Zero means permanent.
+	ExpiresAt     int64 `protobuf:"varint,7,opt,name=expires_at,json=expiresAt,proto3" json:"expires_at,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *BanRecord) Reset() {
+	*x = BanRecord{}
+	mi := &file_control_proto_msgTypes[58]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *BanRecord) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*BanRecord) ProtoMessage() {}
+
+func (x *BanRecord) ProtoReflect() protoreflect.Message {
+	mi := &file_control_proto_msgTypes[58]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use BanRecord.ProtoReflect.Descriptor instead.
+func (*BanRecord) Descriptor() ([]byte, []int) {
+	return file_control_proto_rawDescGZIP(), []int{58}
+}
+
+func (x *BanRecord) GetId() int64 {
+	if x != nil {
+		return x.Id
+	}
+	return 0
+}
+
+func (x *BanRecord) GetType() int64 {
+	if x != nil {
+		return x.Type
+	}
+	return 0
+}
+
+func (x *BanRecord) GetValue() string {
+	if x != nil {
+		return x.Value
+	}
+	return ""
+}
+
+func (x *BanRecord) GetReason() string {
+	if x != nil {
+		return x.Reason
+	}
+	return ""
+}
+
+func (x *BanRecord) GetBannedBy() string {
+	if x != nil {
+		return x.BannedBy
+	}
+	return ""
+}
+
+func (x *BanRecord) GetCreatedAt() int64 {
+	if x != nil {
+		return x.CreatedAt
+	}
+	return 0
+}
+
+func (x *BanRecord) GetExpiresAt() int64 {
+	if x != nil {
+		return x.ExpiresAt
+	}
+	return 0
+}
+
+// Requires the global BanMembers capability on every page.
+type ListBansResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Bans  []*BanRecord           `protobuf:"bytes,1,rep,name=bans,proto3" json:"bans,omitempty"`
+	// Zero at the end; otherwise pass this value as the next before_id.
+	NextBeforeId  int64 `protobuf:"varint,2,opt,name=next_before_id,json=nextBeforeId,proto3" json:"next_before_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListBansResponse) Reset() {
+	*x = ListBansResponse{}
+	mi := &file_control_proto_msgTypes[59]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListBansResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListBansResponse) ProtoMessage() {}
+
+func (x *ListBansResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_control_proto_msgTypes[59]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListBansResponse.ProtoReflect.Descriptor instead.
+func (*ListBansResponse) Descriptor() ([]byte, []int) {
+	return file_control_proto_rawDescGZIP(), []int{59}
+}
+
+func (x *ListBansResponse) GetBans() []*BanRecord {
+	if x != nil {
+		return x.Bans
+	}
+	return nil
+}
+
+func (x *ListBansResponse) GetNextBeforeId() int64 {
+	if x != nil {
+		return x.NextBeforeId
+	}
+	return 0
+}
+
+type MoveMemberRequest struct {
+	state    protoimpl.MessageState `protogen:"open.v1"`
+	ClientId string                 `protobuf:"bytes,1,opt,name=client_id,json=clientId,proto3" json:"client_id,omitempty"`
+	// Destination channel; current source authority is also required.
+	ChannelId     int64 `protobuf:"varint,2,opt,name=channel_id,json=channelId,proto3" json:"channel_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *MoveMemberRequest) Reset() {
+	*x = MoveMemberRequest{}
+	mi := &file_control_proto_msgTypes[60]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *MoveMemberRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*MoveMemberRequest) ProtoMessage() {}
+
+func (x *MoveMemberRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_control_proto_msgTypes[60]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use MoveMemberRequest.ProtoReflect.Descriptor instead.
+func (*MoveMemberRequest) Descriptor() ([]byte, []int) {
+	return file_control_proto_rawDescGZIP(), []int{60}
+}
+
+func (x *MoveMemberRequest) GetClientId() string {
+	if x != nil {
+		return x.ClientId
+	}
+	return ""
+}
+
+func (x *MoveMemberRequest) GetChannelId() int64 {
+	if x != nil {
+		return x.ChannelId
+	}
+	return 0
+}
+
+type KickMemberRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ClientId      string                 `protobuf:"bytes,1,opt,name=client_id,json=clientId,proto3" json:"client_id,omitempty"`
+	Reason        string                 `protobuf:"bytes,2,opt,name=reason,proto3" json:"reason,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *KickMemberRequest) Reset() {
+	*x = KickMemberRequest{}
+	mi := &file_control_proto_msgTypes[61]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *KickMemberRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*KickMemberRequest) ProtoMessage() {}
+
+func (x *KickMemberRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_control_proto_msgTypes[61]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use KickMemberRequest.ProtoReflect.Descriptor instead.
+func (*KickMemberRequest) Descriptor() ([]byte, []int) {
+	return file_control_proto_rawDescGZIP(), []int{61}
+}
+
+func (x *KickMemberRequest) GetClientId() string {
+	if x != nil {
+		return x.ClientId
+	}
+	return ""
+}
+
+func (x *KickMemberRequest) GetReason() string {
+	if x != nil {
+		return x.Reason
+	}
+	return ""
+}
+
+type KickMemberResponse struct {
+	state    protoimpl.MessageState `protogen:"open.v1"`
+	ClientId string                 `protobuf:"bytes,1,opt,name=client_id,json=clientId,proto3" json:"client_id,omitempty"`
+	// The session is revoked even when resource cleanup remains pending.
+	CleanupPending bool `protobuf:"varint,2,opt,name=cleanup_pending,json=cleanupPending,proto3" json:"cleanup_pending,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
+}
+
+func (x *KickMemberResponse) Reset() {
+	*x = KickMemberResponse{}
+	mi := &file_control_proto_msgTypes[62]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *KickMemberResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*KickMemberResponse) ProtoMessage() {}
+
+func (x *KickMemberResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_control_proto_msgTypes[62]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use KickMemberResponse.ProtoReflect.Descriptor instead.
+func (*KickMemberResponse) Descriptor() ([]byte, []int) {
+	return file_control_proto_rawDescGZIP(), []int{62}
+}
+
+func (x *KickMemberResponse) GetClientId() string {
+	if x != nil {
+		return x.ClientId
+	}
+	return ""
+}
+
+func (x *KickMemberResponse) GetCleanupPending() bool {
+	if x != nil {
+		return x.CleanupPending
+	}
+	return false
+}
+
+type BanMemberRequest struct {
+	state    protoimpl.MessageState `protogen:"open.v1"`
+	ClientId string                 `protobuf:"bytes,1,opt,name=client_id,json=clientId,proto3" json:"client_id,omitempty"`
+	Reason   string                 `protobuf:"bytes,2,opt,name=reason,proto3" json:"reason,omitempty"`
+	// Zero means permanent. Negative or overflowing durations are rejected.
+	DurationSeconds int64 `protobuf:"varint,3,opt,name=duration_seconds,json=durationSeconds,proto3" json:"duration_seconds,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *BanMemberRequest) Reset() {
+	*x = BanMemberRequest{}
+	mi := &file_control_proto_msgTypes[63]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *BanMemberRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*BanMemberRequest) ProtoMessage() {}
+
+func (x *BanMemberRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_control_proto_msgTypes[63]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use BanMemberRequest.ProtoReflect.Descriptor instead.
+func (*BanMemberRequest) Descriptor() ([]byte, []int) {
+	return file_control_proto_rawDescGZIP(), []int{63}
+}
+
+func (x *BanMemberRequest) GetClientId() string {
+	if x != nil {
+		return x.ClientId
+	}
+	return ""
+}
+
+func (x *BanMemberRequest) GetReason() string {
+	if x != nil {
+		return x.Reason
+	}
+	return ""
+}
+
+func (x *BanMemberRequest) GetDurationSeconds() int64 {
+	if x != nil {
+		return x.DurationSeconds
+	}
+	return 0
+}
+
+type BanMemberResponse struct {
+	state       protoimpl.MessageState `protogen:"open.v1"`
+	UniqueId    string                 `protobuf:"bytes,1,opt,name=unique_id,json=uniqueId,proto3" json:"unique_id,omitempty"`
+	Persistence BanPersistence         `protobuf:"varint,2,opt,name=persistence,proto3,enum=voicx.v1.BanPersistence" json:"persistence,omitempty"`
+	// Unix milliseconds, meaningful only when saved; zero means permanent.
+	ExpiresAt      int64 `protobuf:"varint,3,opt,name=expires_at,json=expiresAt,proto3" json:"expires_at,omitempty"`
+	CleanupPending bool  `protobuf:"varint,4,opt,name=cleanup_pending,json=cleanupPending,proto3" json:"cleanup_pending,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
+}
+
+func (x *BanMemberResponse) Reset() {
+	*x = BanMemberResponse{}
+	mi := &file_control_proto_msgTypes[64]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *BanMemberResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*BanMemberResponse) ProtoMessage() {}
+
+func (x *BanMemberResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_control_proto_msgTypes[64]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use BanMemberResponse.ProtoReflect.Descriptor instead.
+func (*BanMemberResponse) Descriptor() ([]byte, []int) {
+	return file_control_proto_rawDescGZIP(), []int{64}
+}
+
+func (x *BanMemberResponse) GetUniqueId() string {
+	if x != nil {
+		return x.UniqueId
+	}
+	return ""
+}
+
+func (x *BanMemberResponse) GetPersistence() BanPersistence {
+	if x != nil {
+		return x.Persistence
+	}
+	return BanPersistence_BAN_PERSISTENCE_UNSPECIFIED
+}
+
+func (x *BanMemberResponse) GetExpiresAt() int64 {
+	if x != nil {
+		return x.ExpiresAt
+	}
+	return 0
+}
+
+func (x *BanMemberResponse) GetCleanupPending() bool {
+	if x != nil {
+		return x.CleanupPending
+	}
+	return false
+}
+
+type DisconnectMemberRequest struct {
+	state    protoimpl.MessageState `protogen:"open.v1"`
+	ClientId string                 `protobuf:"bytes,1,opt,name=client_id,json=clientId,proto3" json:"client_id,omitempty"`
+	// Must match the target's current channel.
+	ChannelId     int64  `protobuf:"varint,2,opt,name=channel_id,json=channelId,proto3" json:"channel_id,omitempty"`
+	Reason        string `protobuf:"bytes,3,opt,name=reason,proto3" json:"reason,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DisconnectMemberRequest) Reset() {
+	*x = DisconnectMemberRequest{}
+	mi := &file_control_proto_msgTypes[65]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DisconnectMemberRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DisconnectMemberRequest) ProtoMessage() {}
+
+func (x *DisconnectMemberRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_control_proto_msgTypes[65]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DisconnectMemberRequest.ProtoReflect.Descriptor instead.
+func (*DisconnectMemberRequest) Descriptor() ([]byte, []int) {
+	return file_control_proto_rawDescGZIP(), []int{65}
+}
+
+func (x *DisconnectMemberRequest) GetClientId() string {
+	if x != nil {
+		return x.ClientId
+	}
+	return ""
+}
+
+func (x *DisconnectMemberRequest) GetChannelId() int64 {
+	if x != nil {
+		return x.ChannelId
+	}
+	return 0
+}
+
+func (x *DisconnectMemberRequest) GetReason() string {
+	if x != nil {
+		return x.Reason
+	}
+	return ""
+}
+
+type DisconnectMemberResponse struct {
+	state    protoimpl.MessageState `protogen:"open.v1"`
+	ClientId string                 `protobuf:"bytes,1,opt,name=client_id,json=clientId,proto3" json:"client_id,omitempty"`
+	// The channel the member was removed from.
+	ChannelId     int64 `protobuf:"varint,2,opt,name=channel_id,json=channelId,proto3" json:"channel_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DisconnectMemberResponse) Reset() {
+	*x = DisconnectMemberResponse{}
+	mi := &file_control_proto_msgTypes[66]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DisconnectMemberResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DisconnectMemberResponse) ProtoMessage() {}
+
+func (x *DisconnectMemberResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_control_proto_msgTypes[66]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DisconnectMemberResponse.ProtoReflect.Descriptor instead.
+func (*DisconnectMemberResponse) Descriptor() ([]byte, []int) {
+	return file_control_proto_rawDescGZIP(), []int{66}
+}
+
+func (x *DisconnectMemberResponse) GetClientId() string {
+	if x != nil {
+		return x.ClientId
+	}
+	return ""
+}
+
+func (x *DisconnectMemberResponse) GetChannelId() int64 {
+	if x != nil {
+		return x.ChannelId
+	}
+	return 0
+}
+
+type MoveMemberResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ClientId      string                 `protobuf:"bytes,1,opt,name=client_id,json=clientId,proto3" json:"client_id,omitempty"`
+	ChannelId     int64                  `protobuf:"varint,2,opt,name=channel_id,json=channelId,proto3" json:"channel_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *MoveMemberResponse) Reset() {
+	*x = MoveMemberResponse{}
+	mi := &file_control_proto_msgTypes[67]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *MoveMemberResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*MoveMemberResponse) ProtoMessage() {}
+
+func (x *MoveMemberResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_control_proto_msgTypes[67]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use MoveMemberResponse.ProtoReflect.Descriptor instead.
+func (*MoveMemberResponse) Descriptor() ([]byte, []int) {
+	return file_control_proto_rawDescGZIP(), []int{67}
+}
+
+func (x *MoveMemberResponse) GetClientId() string {
+	if x != nil {
+		return x.ClientId
+	}
+	return ""
+}
+
+func (x *MoveMemberResponse) GetChannelId() int64 {
+	if x != nil {
+		return x.ChannelId
+	}
+	return 0
+}
+
+type RoleDefinition struct {
+	state    protoimpl.MessageState `protogen:"open.v1"`
+	Id       int64                  `protobuf:"varint,1,opt,name=id,proto3" json:"id,omitempty"`
+	Name     string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
+	Position int32                  `protobuf:"varint,3,opt,name=position,proto3" json:"position,omitempty"`
+	Color    string                 `protobuf:"bytes,4,opt,name=color,proto3" json:"color,omitempty"`
+	Icon     string                 `protobuf:"bytes,5,opt,name=icon,proto3" json:"icon,omitempty"`
+	Hoist    bool                   `protobuf:"varint,6,opt,name=hoist,proto3" json:"hoist,omitempty"`
+	// Stable roles-v1 capability names, checked by the shared authority.
+	Permissions   []string `protobuf:"bytes,7,rep,name=permissions,proto3" json:"permissions,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RoleDefinition) Reset() {
+	*x = RoleDefinition{}
+	mi := &file_control_proto_msgTypes[68]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RoleDefinition) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RoleDefinition) ProtoMessage() {}
+
+func (x *RoleDefinition) ProtoReflect() protoreflect.Message {
+	mi := &file_control_proto_msgTypes[68]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RoleDefinition.ProtoReflect.Descriptor instead.
+func (*RoleDefinition) Descriptor() ([]byte, []int) {
+	return file_control_proto_rawDescGZIP(), []int{68}
+}
+
+func (x *RoleDefinition) GetId() int64 {
+	if x != nil {
+		return x.Id
+	}
+	return 0
+}
+
+func (x *RoleDefinition) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *RoleDefinition) GetPosition() int32 {
+	if x != nil {
+		return x.Position
+	}
+	return 0
+}
+
+func (x *RoleDefinition) GetColor() string {
+	if x != nil {
+		return x.Color
+	}
+	return ""
+}
+
+func (x *RoleDefinition) GetIcon() string {
+	if x != nil {
+		return x.Icon
+	}
+	return ""
+}
+
+func (x *RoleDefinition) GetHoist() bool {
+	if x != nil {
+		return x.Hoist
+	}
+	return false
+}
+
+func (x *RoleDefinition) GetPermissions() []string {
+	if x != nil {
+		return x.Permissions
+	}
+	return nil
+}
+
+type ChannelRoleOverride struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Exactly one of role_id or user_id must be positive.
+	RoleId     int64  `protobuf:"varint,1,opt,name=role_id,json=roleId,proto3" json:"role_id,omitempty"`
+	UserId     int64  `protobuf:"varint,2,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
+	Capability string `protobuf:"bytes,3,opt,name=capability,proto3" json:"capability,omitempty"`
+	// "allow" or "deny"; an absent override means inherit.
+	Effect        string `protobuf:"bytes,4,opt,name=effect,proto3" json:"effect,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ChannelRoleOverride) Reset() {
+	*x = ChannelRoleOverride{}
+	mi := &file_control_proto_msgTypes[69]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ChannelRoleOverride) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ChannelRoleOverride) ProtoMessage() {}
+
+func (x *ChannelRoleOverride) ProtoReflect() protoreflect.Message {
+	mi := &file_control_proto_msgTypes[69]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ChannelRoleOverride.ProtoReflect.Descriptor instead.
+func (*ChannelRoleOverride) Descriptor() ([]byte, []int) {
+	return file_control_proto_rawDescGZIP(), []int{69}
+}
+
+func (x *ChannelRoleOverride) GetRoleId() int64 {
+	if x != nil {
+		return x.RoleId
+	}
+	return 0
+}
+
+func (x *ChannelRoleOverride) GetUserId() int64 {
+	if x != nil {
+		return x.UserId
+	}
+	return 0
+}
+
+func (x *ChannelRoleOverride) GetCapability() string {
+	if x != nil {
+		return x.Capability
+	}
+	return ""
+}
+
+func (x *ChannelRoleOverride) GetEffect() string {
+	if x != nil {
+		return x.Effect
+	}
+	return ""
+}
+
+type ChannelRoleAccess struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ChannelId     int64                  `protobuf:"varint,1,opt,name=channel_id,json=channelId,proto3" json:"channel_id,omitempty"`
+	ParentId      int64                  `protobuf:"varint,2,opt,name=parent_id,json=parentId,proto3" json:"parent_id,omitempty"`
+	Synced        bool                   `protobuf:"varint,3,opt,name=synced,proto3" json:"synced,omitempty"`
+	Overrides     []*ChannelRoleOverride `protobuf:"bytes,4,rep,name=overrides,proto3" json:"overrides,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ChannelRoleAccess) Reset() {
+	*x = ChannelRoleAccess{}
+	mi := &file_control_proto_msgTypes[70]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ChannelRoleAccess) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ChannelRoleAccess) ProtoMessage() {}
+
+func (x *ChannelRoleAccess) ProtoReflect() protoreflect.Message {
+	mi := &file_control_proto_msgTypes[70]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ChannelRoleAccess.ProtoReflect.Descriptor instead.
+func (*ChannelRoleAccess) Descriptor() ([]byte, []int) {
+	return file_control_proto_rawDescGZIP(), []int{70}
+}
+
+func (x *ChannelRoleAccess) GetChannelId() int64 {
+	if x != nil {
+		return x.ChannelId
+	}
+	return 0
+}
+
+func (x *ChannelRoleAccess) GetParentId() int64 {
+	if x != nil {
+		return x.ParentId
+	}
+	return 0
+}
+
+func (x *ChannelRoleAccess) GetSynced() bool {
+	if x != nil {
+		return x.Synced
+	}
+	return false
+}
+
+func (x *ChannelRoleAccess) GetOverrides() []*ChannelRoleOverride {
+	if x != nil {
+		return x.Overrides
+	}
+	return nil
+}
+
+type ChangeRolesRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// role_create, role_update, role_delete, roles_reorder, member_roles_set,
+	// channel_access_set, default_member_role_set, or owner_transfer.
+	Kind             string          `protobuf:"bytes,1,opt,name=kind,proto3" json:"kind,omitempty"`
+	ExpectedRevision int64           `protobuf:"varint,2,opt,name=expected_revision,json=expectedRevision,proto3" json:"expected_revision,omitempty"`
+	Role             *RoleDefinition `protobuf:"bytes,3,opt,name=role,proto3" json:"role,omitempty"`
+	RoleId           int64           `protobuf:"varint,4,opt,name=role_id,json=roleId,proto3" json:"role_id,omitempty"`
+	// Reordering is lowest first, including @everyone.
+	RoleIds       []int64            `protobuf:"varint,5,rep,packed,name=role_ids,json=roleIds,proto3" json:"role_ids,omitempty"`
+	UserId        int64              `protobuf:"varint,6,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
+	Channel       *ChannelRoleAccess `protobuf:"bytes,7,opt,name=channel,proto3" json:"channel,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ChangeRolesRequest) Reset() {
+	*x = ChangeRolesRequest{}
+	mi := &file_control_proto_msgTypes[71]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ChangeRolesRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ChangeRolesRequest) ProtoMessage() {}
+
+func (x *ChangeRolesRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_control_proto_msgTypes[71]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ChangeRolesRequest.ProtoReflect.Descriptor instead.
+func (*ChangeRolesRequest) Descriptor() ([]byte, []int) {
+	return file_control_proto_rawDescGZIP(), []int{71}
+}
+
+func (x *ChangeRolesRequest) GetKind() string {
+	if x != nil {
+		return x.Kind
+	}
+	return ""
+}
+
+func (x *ChangeRolesRequest) GetExpectedRevision() int64 {
+	if x != nil {
+		return x.ExpectedRevision
+	}
+	return 0
+}
+
+func (x *ChangeRolesRequest) GetRole() *RoleDefinition {
+	if x != nil {
+		return x.Role
+	}
+	return nil
+}
+
+func (x *ChangeRolesRequest) GetRoleId() int64 {
+	if x != nil {
+		return x.RoleId
+	}
+	return 0
+}
+
+func (x *ChangeRolesRequest) GetRoleIds() []int64 {
+	if x != nil {
+		return x.RoleIds
+	}
+	return nil
+}
+
+func (x *ChangeRolesRequest) GetUserId() int64 {
+	if x != nil {
+		return x.UserId
+	}
+	return 0
+}
+
+func (x *ChangeRolesRequest) GetChannel() *ChannelRoleAccess {
+	if x != nil {
+		return x.Channel
+	}
+	return nil
+}
+
+type ChangeRolesResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Revision      int64                  `protobuf:"varint,1,opt,name=revision,proto3" json:"revision,omitempty"`
+	CreatedRoleId int64                  `protobuf:"varint,2,opt,name=created_role_id,json=createdRoleId,proto3" json:"created_role_id,omitempty"`
+	// The change is saved even when enforcement is pending. Do not retry it.
+	EnforcementPending bool `protobuf:"varint,3,opt,name=enforcement_pending,json=enforcementPending,proto3" json:"enforcement_pending,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
+}
+
+func (x *ChangeRolesResponse) Reset() {
+	*x = ChangeRolesResponse{}
+	mi := &file_control_proto_msgTypes[72]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ChangeRolesResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ChangeRolesResponse) ProtoMessage() {}
+
+func (x *ChangeRolesResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_control_proto_msgTypes[72]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ChangeRolesResponse.ProtoReflect.Descriptor instead.
+func (*ChangeRolesResponse) Descriptor() ([]byte, []int) {
+	return file_control_proto_rawDescGZIP(), []int{72}
+}
+
+func (x *ChangeRolesResponse) GetRevision() int64 {
+	if x != nil {
+		return x.Revision
+	}
+	return 0
+}
+
+func (x *ChangeRolesResponse) GetCreatedRoleId() int64 {
+	if x != nil {
+		return x.CreatedRoleId
+	}
+	return 0
+}
+
+func (x *ChangeRolesResponse) GetEnforcementPending() bool {
+	if x != nil {
+		return x.EnforcementPending
+	}
+	return false
+}
+
+type RoleChannelSettings struct {
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	Name            string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	Topic           string                 `protobuf:"bytes,2,opt,name=topic,proto3" json:"topic,omitempty"`
+	Description     string                 `protobuf:"bytes,3,opt,name=description,proto3" json:"description,omitempty"`
+	OrderIndex      int32                  `protobuf:"varint,4,opt,name=order_index,json=orderIndex,proto3" json:"order_index,omitempty"`
+	MaxClients      int32                  `protobuf:"varint,5,opt,name=max_clients,json=maxClients,proto3" json:"max_clients,omitempty"`
+	SlowModeSeconds int32                  `protobuf:"varint,6,opt,name=slow_mode_seconds,json=slowModeSeconds,proto3" json:"slow_mode_seconds,omitempty"`
+	OpusBitrate     int32                  `protobuf:"varint,7,opt,name=opus_bitrate,json=opusBitrate,proto3" json:"opus_bitrate,omitempty"`
+	OpusFec         bool                   `protobuf:"varint,8,opt,name=opus_fec,json=opusFec,proto3" json:"opus_fec,omitempty"`
+	OpusDtx         bool                   `protobuf:"varint,9,opt,name=opus_dtx,json=opusDtx,proto3" json:"opus_dtx,omitempty"`
+	OpusStereo      bool                   `protobuf:"varint,10,opt,name=opus_stereo,json=opusStereo,proto3" json:"opus_stereo,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *RoleChannelSettings) Reset() {
+	*x = RoleChannelSettings{}
+	mi := &file_control_proto_msgTypes[73]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RoleChannelSettings) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RoleChannelSettings) ProtoMessage() {}
+
+func (x *RoleChannelSettings) ProtoReflect() protoreflect.Message {
+	mi := &file_control_proto_msgTypes[73]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RoleChannelSettings.ProtoReflect.Descriptor instead.
+func (*RoleChannelSettings) Descriptor() ([]byte, []int) {
+	return file_control_proto_rawDescGZIP(), []int{73}
+}
+
+func (x *RoleChannelSettings) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *RoleChannelSettings) GetTopic() string {
+	if x != nil {
+		return x.Topic
+	}
+	return ""
+}
+
+func (x *RoleChannelSettings) GetDescription() string {
+	if x != nil {
+		return x.Description
+	}
+	return ""
+}
+
+func (x *RoleChannelSettings) GetOrderIndex() int32 {
+	if x != nil {
+		return x.OrderIndex
+	}
+	return 0
+}
+
+func (x *RoleChannelSettings) GetMaxClients() int32 {
+	if x != nil {
+		return x.MaxClients
+	}
+	return 0
+}
+
+func (x *RoleChannelSettings) GetSlowModeSeconds() int32 {
+	if x != nil {
+		return x.SlowModeSeconds
+	}
+	return 0
+}
+
+func (x *RoleChannelSettings) GetOpusBitrate() int32 {
+	if x != nil {
+		return x.OpusBitrate
+	}
+	return 0
+}
+
+func (x *RoleChannelSettings) GetOpusFec() bool {
+	if x != nil {
+		return x.OpusFec
+	}
+	return false
+}
+
+func (x *RoleChannelSettings) GetOpusDtx() bool {
+	if x != nil {
+		return x.OpusDtx
+	}
+	return false
+}
+
+func (x *RoleChannelSettings) GetOpusStereo() bool {
+	if x != nil {
+		return x.OpusStereo
+	}
+	return false
+}
+
+type RoleChannelCreationAccess struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Synced        bool                   `protobuf:"varint,1,opt,name=synced,proto3" json:"synced,omitempty"`
+	Overrides     []*ChannelRoleOverride `protobuf:"bytes,2,rep,name=overrides,proto3" json:"overrides,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RoleChannelCreationAccess) Reset() {
+	*x = RoleChannelCreationAccess{}
+	mi := &file_control_proto_msgTypes[74]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RoleChannelCreationAccess) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RoleChannelCreationAccess) ProtoMessage() {}
+
+func (x *RoleChannelCreationAccess) ProtoReflect() protoreflect.Message {
+	mi := &file_control_proto_msgTypes[74]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RoleChannelCreationAccess.ProtoReflect.Descriptor instead.
+func (*RoleChannelCreationAccess) Descriptor() ([]byte, []int) {
+	return file_control_proto_rawDescGZIP(), []int{74}
+}
+
+func (x *RoleChannelCreationAccess) GetSynced() bool {
+	if x != nil {
+		return x.Synced
+	}
+	return false
+}
+
+func (x *RoleChannelCreationAccess) GetOverrides() []*ChannelRoleOverride {
+	if x != nil {
+		return x.Overrides
+	}
+	return nil
+}
+
+type ChangeChannelRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// channel_create, channel_edit, channel_move, or channel_delete.
+	Kind             string `protobuf:"bytes,1,opt,name=kind,proto3" json:"kind,omitempty"`
+	ExpectedRevision int64  `protobuf:"varint,2,opt,name=expected_revision,json=expectedRevision,proto3" json:"expected_revision,omitempty"`
+	ChannelId        int64  `protobuf:"varint,3,opt,name=channel_id,json=channelId,proto3" json:"channel_id,omitempty"`
+	ParentId         int64  `protobuf:"varint,4,opt,name=parent_id,json=parentId,proto3" json:"parent_id,omitempty"`
+	// Moves preserve effective access unless explicitly synchronized.
+	SyncToParent bool `protobuf:"varint,5,opt,name=sync_to_parent,json=syncToParent,proto3" json:"sync_to_parent,omitempty"`
+	// Creation only; omitted means inherit the parent.
+	Access *RoleChannelCreationAccess `protobuf:"bytes,6,opt,name=access,proto3" json:"access,omitempty"`
+	// Required for create/edit; absent for move/delete.
+	Settings *RoleChannelSettings `protobuf:"bytes,7,opt,name=settings,proto3" json:"settings,omitempty"`
+	// Creation only: 0 temporary, 1 semi-permanent, 2 permanent.
+	ChannelType int32 `protobuf:"varint,8,opt,name=channel_type,json=channelType,proto3" json:"channel_type,omitempty"`
+	// Creation only. The server hashes it after an authorization preflight.
+	Password string `protobuf:"bytes,9,opt,name=password,proto3" json:"password,omitempty"`
+	// Move only; omitted preserves order, while zero explicitly sets it.
+	OrderIndex    *int32 `protobuf:"varint,10,opt,name=order_index,json=orderIndex,proto3,oneof" json:"order_index,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ChangeChannelRequest) Reset() {
+	*x = ChangeChannelRequest{}
+	mi := &file_control_proto_msgTypes[75]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ChangeChannelRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ChangeChannelRequest) ProtoMessage() {}
+
+func (x *ChangeChannelRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_control_proto_msgTypes[75]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ChangeChannelRequest.ProtoReflect.Descriptor instead.
+func (*ChangeChannelRequest) Descriptor() ([]byte, []int) {
+	return file_control_proto_rawDescGZIP(), []int{75}
+}
+
+func (x *ChangeChannelRequest) GetKind() string {
+	if x != nil {
+		return x.Kind
+	}
+	return ""
+}
+
+func (x *ChangeChannelRequest) GetExpectedRevision() int64 {
+	if x != nil {
+		return x.ExpectedRevision
+	}
+	return 0
+}
+
+func (x *ChangeChannelRequest) GetChannelId() int64 {
+	if x != nil {
+		return x.ChannelId
+	}
+	return 0
+}
+
+func (x *ChangeChannelRequest) GetParentId() int64 {
+	if x != nil {
+		return x.ParentId
+	}
+	return 0
+}
+
+func (x *ChangeChannelRequest) GetSyncToParent() bool {
+	if x != nil {
+		return x.SyncToParent
+	}
+	return false
+}
+
+func (x *ChangeChannelRequest) GetAccess() *RoleChannelCreationAccess {
+	if x != nil {
+		return x.Access
+	}
+	return nil
+}
+
+func (x *ChangeChannelRequest) GetSettings() *RoleChannelSettings {
+	if x != nil {
+		return x.Settings
+	}
+	return nil
+}
+
+func (x *ChangeChannelRequest) GetChannelType() int32 {
+	if x != nil {
+		return x.ChannelType
+	}
+	return 0
+}
+
+func (x *ChangeChannelRequest) GetPassword() string {
+	if x != nil {
+		return x.Password
+	}
+	return ""
+}
+
+func (x *ChangeChannelRequest) GetOrderIndex() int32 {
+	if x != nil && x.OrderIndex != nil {
+		return *x.OrderIndex
+	}
+	return 0
+}
+
+type ChangeChannelResponse struct {
+	state     protoimpl.MessageState `protogen:"open.v1"`
+	Revision  int64                  `protobuf:"varint,1,opt,name=revision,proto3" json:"revision,omitempty"`
+	ChannelId int64                  `protobuf:"varint,2,opt,name=channel_id,json=channelId,proto3" json:"channel_id,omitempty"`
+	// The change is saved even when enforcement is pending. Do not retry it.
+	EnforcementPending bool `protobuf:"varint,3,opt,name=enforcement_pending,json=enforcementPending,proto3" json:"enforcement_pending,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
+}
+
+func (x *ChangeChannelResponse) Reset() {
+	*x = ChangeChannelResponse{}
+	mi := &file_control_proto_msgTypes[76]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ChangeChannelResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ChangeChannelResponse) ProtoMessage() {}
+
+func (x *ChangeChannelResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_control_proto_msgTypes[76]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ChangeChannelResponse.ProtoReflect.Descriptor instead.
+func (*ChangeChannelResponse) Descriptor() ([]byte, []int) {
+	return file_control_proto_rawDescGZIP(), []int{76}
+}
+
+func (x *ChangeChannelResponse) GetRevision() int64 {
+	if x != nil {
+		return x.Revision
+	}
+	return 0
+}
+
+func (x *ChangeChannelResponse) GetChannelId() int64 {
+	if x != nil {
+		return x.ChannelId
+	}
+	return 0
+}
+
+func (x *ChangeChannelResponse) GetEnforcementPending() bool {
+	if x != nil {
+		return x.EnforcementPending
+	}
+	return false
+}
+
+type SetMemberVoiceRequest struct {
+	state    protoimpl.MessageState `protogen:"open.v1"`
+	ClientId string                 `protobuf:"bytes,1,opt,name=client_id,json=clientId,proto3" json:"client_id,omitempty"`
+	// The displayed channel must still match when the change is applied.
+	ChannelId int64 `protobuf:"varint,2,opt,name=channel_id,json=channelId,proto3" json:"channel_id,omitempty"`
+	// At least one flag must be present. False explicitly clears that flag.
+	Muted         *bool `protobuf:"varint,3,opt,name=muted,proto3,oneof" json:"muted,omitempty"`
+	Deafened      *bool `protobuf:"varint,4,opt,name=deafened,proto3,oneof" json:"deafened,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SetMemberVoiceRequest) Reset() {
+	*x = SetMemberVoiceRequest{}
+	mi := &file_control_proto_msgTypes[77]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SetMemberVoiceRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SetMemberVoiceRequest) ProtoMessage() {}
+
+func (x *SetMemberVoiceRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_control_proto_msgTypes[77]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SetMemberVoiceRequest.ProtoReflect.Descriptor instead.
+func (*SetMemberVoiceRequest) Descriptor() ([]byte, []int) {
+	return file_control_proto_rawDescGZIP(), []int{77}
+}
+
+func (x *SetMemberVoiceRequest) GetClientId() string {
+	if x != nil {
+		return x.ClientId
+	}
+	return ""
+}
+
+func (x *SetMemberVoiceRequest) GetChannelId() int64 {
+	if x != nil {
+		return x.ChannelId
+	}
+	return 0
+}
+
+func (x *SetMemberVoiceRequest) GetMuted() bool {
+	if x != nil && x.Muted != nil {
+		return *x.Muted
+	}
+	return false
+}
+
+func (x *SetMemberVoiceRequest) GetDeafened() bool {
+	if x != nil && x.Deafened != nil {
+		return *x.Deafened
+	}
+	return false
+}
+
+type SetMemberVoiceResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Session voice-state revision, not an authorization-policy revision.
+	Revision      int64  `protobuf:"varint,1,opt,name=revision,proto3" json:"revision,omitempty"`
+	ClientId      string `protobuf:"bytes,2,opt,name=client_id,json=clientId,proto3" json:"client_id,omitempty"`
+	ChannelId     int64  `protobuf:"varint,3,opt,name=channel_id,json=channelId,proto3" json:"channel_id,omitempty"`
+	Muted         bool   `protobuf:"varint,4,opt,name=muted,proto3" json:"muted,omitempty"`
+	Deafened      bool   `protobuf:"varint,5,opt,name=deafened,proto3" json:"deafened,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SetMemberVoiceResponse) Reset() {
+	*x = SetMemberVoiceResponse{}
+	mi := &file_control_proto_msgTypes[78]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SetMemberVoiceResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SetMemberVoiceResponse) ProtoMessage() {}
+
+func (x *SetMemberVoiceResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_control_proto_msgTypes[78]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SetMemberVoiceResponse.ProtoReflect.Descriptor instead.
+func (*SetMemberVoiceResponse) Descriptor() ([]byte, []int) {
+	return file_control_proto_rawDescGZIP(), []int{78}
+}
+
+func (x *SetMemberVoiceResponse) GetRevision() int64 {
+	if x != nil {
+		return x.Revision
+	}
+	return 0
+}
+
+func (x *SetMemberVoiceResponse) GetClientId() string {
+	if x != nil {
+		return x.ClientId
+	}
+	return ""
+}
+
+func (x *SetMemberVoiceResponse) GetChannelId() int64 {
+	if x != nil {
+		return x.ChannelId
+	}
+	return 0
+}
+
+func (x *SetMemberVoiceResponse) GetMuted() bool {
+	if x != nil {
+		return x.Muted
+	}
+	return false
+}
+
+func (x *SetMemberVoiceResponse) GetDeafened() bool {
+	if x != nil {
+		return x.Deafened
 	}
 	return false
 }
@@ -925,7 +5451,7 @@ type StartFileTransferRequest struct {
 
 func (x *StartFileTransferRequest) Reset() {
 	*x = StartFileTransferRequest{}
-	mi := &file_control_proto_msgTypes[11]
+	mi := &file_control_proto_msgTypes[79]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -937,7 +5463,7 @@ func (x *StartFileTransferRequest) String() string {
 func (*StartFileTransferRequest) ProtoMessage() {}
 
 func (x *StartFileTransferRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[11]
+	mi := &file_control_proto_msgTypes[79]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -950,7 +5476,7 @@ func (x *StartFileTransferRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StartFileTransferRequest.ProtoReflect.Descriptor instead.
 func (*StartFileTransferRequest) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{11}
+	return file_control_proto_rawDescGZIP(), []int{79}
 }
 
 func (x *StartFileTransferRequest) GetChannelId() string {
@@ -1001,7 +5527,7 @@ type StartFileTransferResponse struct {
 
 func (x *StartFileTransferResponse) Reset() {
 	*x = StartFileTransferResponse{}
-	mi := &file_control_proto_msgTypes[12]
+	mi := &file_control_proto_msgTypes[80]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1013,7 +5539,7 @@ func (x *StartFileTransferResponse) String() string {
 func (*StartFileTransferResponse) ProtoMessage() {}
 
 func (x *StartFileTransferResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[12]
+	mi := &file_control_proto_msgTypes[80]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1026,7 +5552,7 @@ func (x *StartFileTransferResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StartFileTransferResponse.ProtoReflect.Descriptor instead.
 func (*StartFileTransferResponse) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{12}
+	return file_control_proto_rawDescGZIP(), []int{80}
 }
 
 func (x *StartFileTransferResponse) GetSuccess() bool {
@@ -1066,7 +5592,7 @@ type GetFileTransferStatusRequest struct {
 
 func (x *GetFileTransferStatusRequest) Reset() {
 	*x = GetFileTransferStatusRequest{}
-	mi := &file_control_proto_msgTypes[13]
+	mi := &file_control_proto_msgTypes[81]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1078,7 +5604,7 @@ func (x *GetFileTransferStatusRequest) String() string {
 func (*GetFileTransferStatusRequest) ProtoMessage() {}
 
 func (x *GetFileTransferStatusRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[13]
+	mi := &file_control_proto_msgTypes[81]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1091,7 +5617,7 @@ func (x *GetFileTransferStatusRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetFileTransferStatusRequest.ProtoReflect.Descriptor instead.
 func (*GetFileTransferStatusRequest) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{13}
+	return file_control_proto_rawDescGZIP(), []int{81}
 }
 
 func (x *GetFileTransferStatusRequest) GetTransferId() string {
@@ -1114,7 +5640,7 @@ type GetFileTransferStatusResponse struct {
 
 func (x *GetFileTransferStatusResponse) Reset() {
 	*x = GetFileTransferStatusResponse{}
-	mi := &file_control_proto_msgTypes[14]
+	mi := &file_control_proto_msgTypes[82]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1126,7 +5652,7 @@ func (x *GetFileTransferStatusResponse) String() string {
 func (*GetFileTransferStatusResponse) ProtoMessage() {}
 
 func (x *GetFileTransferStatusResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[14]
+	mi := &file_control_proto_msgTypes[82]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1139,7 +5665,7 @@ func (x *GetFileTransferStatusResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetFileTransferStatusResponse.ProtoReflect.Descriptor instead.
 func (*GetFileTransferStatusResponse) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{14}
+	return file_control_proto_rawDescGZIP(), []int{82}
 }
 
 func (x *GetFileTransferStatusResponse) GetTransferId() string {
@@ -1187,7 +5713,7 @@ type CancelFileTransferRequest struct {
 
 func (x *CancelFileTransferRequest) Reset() {
 	*x = CancelFileTransferRequest{}
-	mi := &file_control_proto_msgTypes[15]
+	mi := &file_control_proto_msgTypes[83]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1199,7 +5725,7 @@ func (x *CancelFileTransferRequest) String() string {
 func (*CancelFileTransferRequest) ProtoMessage() {}
 
 func (x *CancelFileTransferRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[15]
+	mi := &file_control_proto_msgTypes[83]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1212,7 +5738,7 @@ func (x *CancelFileTransferRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CancelFileTransferRequest.ProtoReflect.Descriptor instead.
 func (*CancelFileTransferRequest) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{15}
+	return file_control_proto_rawDescGZIP(), []int{83}
 }
 
 func (x *CancelFileTransferRequest) GetTransferId() string {
@@ -1239,7 +5765,7 @@ type CancelFileTransferResponse struct {
 
 func (x *CancelFileTransferResponse) Reset() {
 	*x = CancelFileTransferResponse{}
-	mi := &file_control_proto_msgTypes[16]
+	mi := &file_control_proto_msgTypes[84]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1251,7 +5777,7 @@ func (x *CancelFileTransferResponse) String() string {
 func (*CancelFileTransferResponse) ProtoMessage() {}
 
 func (x *CancelFileTransferResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[16]
+	mi := &file_control_proto_msgTypes[84]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1264,7 +5790,7 @@ func (x *CancelFileTransferResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CancelFileTransferResponse.ProtoReflect.Descriptor instead.
 func (*CancelFileTransferResponse) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{16}
+	return file_control_proto_rawDescGZIP(), []int{84}
 }
 
 func (x *CancelFileTransferResponse) GetSuccess() bool {
@@ -1285,24 +5811,38 @@ var File_control_proto protoreflect.FileDescriptor
 
 const file_control_proto_rawDesc = "" +
 	"\n" +
-	"\rcontrol.proto\x12\bvoicx.v1\"\x94\x02\n" +
+	"\rcontrol.proto\x12\bvoicx.v1\"\x17\n" +
+	"\x15GetServerRulesRequest\"k\n" +
+	"\x19ListCustomMetadataRequest\x12\x1b\n" +
+	"\tunique_id\x18\x01 \x01(\tR\buniqueId\x12\x1b\n" +
+	"\tafter_key\x18\x02 \x01(\tR\bafterKey\x12\x14\n" +
+	"\x05limit\x18\x03 \x01(\x05R\x05limit\"=\n" +
+	"\x13CustomMetadataEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value\"\x98\x01\n" +
+	"\x1aListCustomMetadataResponse\x12\x1b\n" +
+	"\tunique_id\x18\x01 \x01(\tR\buniqueId\x127\n" +
+	"\aentries\x18\x02 \x03(\v2\x1d.voicx.v1.CustomMetadataEntryR\aentries\x12$\n" +
+	"\x0enext_after_key\x18\x03 \x01(\tR\fnextAfterKey\"\x89\x01\n" +
+	"\x1bChangeCustomMetadataRequest\x12\x1b\n" +
+	"\tunique_id\x18\x01 \x01(\tR\buniqueId\x12\x10\n" +
+	"\x03key\x18\x02 \x01(\tR\x03key\x12\x19\n" +
+	"\x05value\x18\x03 \x01(\tH\x00R\x05value\x88\x01\x01\x12\x16\n" +
+	"\x06delete\x18\x04 \x01(\bR\x06deleteB\b\n" +
+	"\x06_value\"g\n" +
+	"\x1cChangeCustomMetadataResponse\x12\x1b\n" +
+	"\tunique_id\x18\x01 \x01(\tR\buniqueId\x12\x10\n" +
+	"\x03key\x18\x02 \x01(\tR\x03key\x12\x18\n" +
+	"\adeleted\x18\x03 \x01(\bR\adeleted\"k\n" +
+	"\x16GetServerRulesResponse\x12\x12\n" +
+	"\x04text\x18\x01 \x01(\tR\x04text\x12\x12\n" +
+	"\x04hash\x18\x02 \x01(\tR\x04hash\x12)\n" +
+	"\x10accepted_clients\x18\x03 \x01(\x03R\x0facceptedClients\"M\n" +
 	"\x13AuthenticateRequest\x12\x1a\n" +
 	"\busername\x18\x01 \x01(\tR\busername\x12\x1a\n" +
-	"\bpassword\x18\x02 \x01(\tR\bpassword\x12\x18\n" +
-	"\x05token\x18\x03 \x01(\tB\x02\x18\x01R\x05token\x12%\n" +
-	"\x0eclient_version\x18\x04 \x01(\tR\rclientVersion\x12G\n" +
-	"\bmetadata\x18\x05 \x03(\v2+.voicx.v1.AuthenticateRequest.MetadataEntryR\bmetadata\x1a;\n" +
-	"\rMetadataEntry\x12\x10\n" +
-	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xda\x01\n" +
-	"\x14AuthenticateResponse\x12\x1c\n" +
-	"\asuccess\x18\x01 \x01(\bB\x02\x18\x01R\asuccess\x12'\n" +
-	"\rsession_token\x18\x02 \x01(\tB\x02\x18\x01R\fsessionToken\x12\x17\n" +
-	"\auser_id\x18\x03 \x01(\tR\x06userId\x12%\n" +
-	"\fdisplay_name\x18\x04 \x01(\tB\x02\x18\x01R\vdisplayName\x12!\n" +
-	"\n" +
-	"expires_at\x18\x05 \x01(\x03B\x02\x18\x01R\texpiresAt\x12\x18\n" +
-	"\x05error\x18\x06 \x01(\tB\x02\x18\x01R\x05error\"\xac\x02\n" +
+	"\bpassword\x18\x02 \x01(\tR\bpassword\"/\n" +
+	"\x14AuthenticateResponse\x12\x17\n" +
+	"\auser_id\x18\x01 \x01(\tR\x06userId\"\xac\x02\n" +
 	"\aChannel\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x1b\n" +
@@ -1314,41 +5854,407 @@ const file_control_proto_rawDesc = "" +
 	"\bmetadata\x18\a \x03(\v2\x1f.voicx.v1.Channel.MetadataEntryR\bmetadata\x1a;\n" +
 	"\rMetadataEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\x8d\x02\n" +
-	"\x14CreateChannelRequest\x12\x12\n" +
-	"\x04name\x18\x01 \x01(\tR\x04name\x12\x1b\n" +
-	"\tparent_id\x18\x02 \x01(\tR\bparentId\x12\x1f\n" +
-	"\vmax_clients\x18\x03 \x01(\x05R\n" +
-	"maxClients\x12\x1c\n" +
-	"\tpermanent\x18\x04 \x01(\bR\tpermanent\x12H\n" +
-	"\bmetadata\x18\x05 \x03(\v2,.voicx.v1.CreateChannelRequest.MetadataEntryR\bmetadata\x1a;\n" +
-	"\rMetadataEntry\x12\x10\n" +
-	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"f\n" +
-	"\x15CreateChannelResponse\x12\x18\n" +
-	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x1d\n" +
-	"\n" +
-	"channel_id\x18\x02 \x01(\tR\tchannelId\x12\x14\n" +
-	"\x05error\x18\x03 \x01(\tR\x05error\"M\n" +
-	"\x14DeleteChannelRequest\x12\x1d\n" +
-	"\n" +
-	"channel_id\x18\x01 \x01(\tR\tchannelId\x12\x16\n" +
-	"\x06reason\x18\x02 \x01(\tR\x06reason\"G\n" +
-	"\x15DeleteChannelResponse\x12\x18\n" +
-	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x14\n" +
-	"\x05error\x18\x02 \x01(\tR\x05error\"=\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"=\n" +
 	"\x13ListChannelsRequest\x12&\n" +
 	"\x0froot_channel_id\x18\x01 \x01(\tR\rrootChannelId\"E\n" +
 	"\x14ListChannelsResponse\x12-\n" +
-	"\bchannels\x18\x01 \x03(\v2\x11.voicx.v1.ChannelR\bchannels\"Q\n" +
-	"\x17QueryPermissionsRequest\x12\x1d\n" +
+	"\bchannels\x18\x01 \x03(\v2\x11.voicx.v1.ChannelR\bchannels\"\x16\n" +
+	"\x14GetServerInfoRequest\"H\n" +
+	"\x15ListComplaintsRequest\x12\x19\n" +
+	"\bafter_id\x18\x01 \x01(\x03R\aafterId\x12\x14\n" +
+	"\x05limit\x18\x02 \x01(\x05R\x05limit\"\xf6\x01\n" +
+	"\x0fComplaintRecord\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\x03R\x02id\x12(\n" +
+	"\x10target_unique_id\x18\x02 \x01(\tR\x0etargetUniqueId\x12'\n" +
+	"\x0ftarget_nickname\x18\x03 \x01(\tR\x0etargetNickname\x12$\n" +
+	"\x0efrom_unique_id\x18\x04 \x01(\tR\ffromUniqueId\x12#\n" +
+	"\rfrom_nickname\x18\x05 \x01(\tR\ffromNickname\x12\x16\n" +
+	"\x06reason\x18\x06 \x01(\tR\x06reason\x12\x1d\n" +
 	"\n" +
-	"channel_id\x18\x01 \x01(\tR\tchannelId\x12\x17\n" +
-	"\auser_id\x18\x02 \x01(\tR\x06userId\"\x93\x01\n" +
-	"\x18QueryPermissionsResponse\x12.\n" +
-	"\agranted\x18\x01 \x03(\x0e2\x14.voicx.v1.PermissionR\agranted\x12,\n" +
-	"\x06denied\x18\x02 \x03(\x0e2\x14.voicx.v1.PermissionR\x06denied\x12\x19\n" +
-	"\bis_admin\x18\x03 \x01(\bR\aisAdmin\"\xd6\x01\n" +
+	"created_at\x18\a \x01(\x03R\tcreatedAt\"q\n" +
+	"\x16ListComplaintsResponse\x123\n" +
+	"\aentries\x18\x01 \x03(\v2\x19.voicx.v1.ComplaintRecordR\aentries\x12\"\n" +
+	"\rnext_after_id\x18\x02 \x01(\x03R\vnextAfterId\"h\n" +
+	"\x16ClearComplaintsRequest\x12(\n" +
+	"\x10target_unique_id\x18\x01 \x01(\tR\x0etargetUniqueId\x12$\n" +
+	"\x0efrom_unique_id\x18\x02 \x01(\tR\ffromUniqueId\"3\n" +
+	"\x17ClearComplaintsResponse\x12\x18\n" +
+	"\adeleted\x18\x01 \x01(\x03R\adeleted\"H\n" +
+	"\x13ListAuditLogRequest\x12\x1b\n" +
+	"\tbefore_id\x18\x01 \x01(\x03R\bbeforeId\x12\x14\n" +
+	"\x05limit\x18\x02 \x01(\x05R\x05limit\"\xdd\x01\n" +
+	"\x0eAuditLogRecord\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\x03R\x02id\x12\x14\n" +
+	"\x05actor\x18\x02 \x01(\tR\x05actor\x12\x16\n" +
+	"\x06action\x18\x03 \x01(\tR\x06action\x12\x16\n" +
+	"\x06target\x18\x04 \x01(\tR\x06target\x12\x16\n" +
+	"\x06detail\x18\x05 \x01(\tR\x06detail\x12\x1d\n" +
+	"\n" +
+	"created_at\x18\x06 \x01(\x03R\tcreatedAt\x12\x1e\n" +
+	"\n" +
+	"restricted\x18\a \x01(\bR\n" +
+	"restricted\x12\x1e\n" +
+	"\n" +
+	"structured\x18\b \x01(\bR\n" +
+	"structured\"\x8e\x01\n" +
+	"\x14ListAuditLogResponse\x122\n" +
+	"\aentries\x18\x01 \x03(\v2\x18.voicx.v1.AuditLogRecordR\aentries\x12B\n" +
+	"\fcapabilities\x18\x02 \x03(\v2\x1e.voicx.v1.CapabilityDescriptorR\fcapabilities\"\x14\n" +
+	"\x12ListClientsRequest\"\x84\x01\n" +
+	"\rVisibleClient\x12\x1b\n" +
+	"\tclient_id\x18\x01 \x01(\tR\bclientId\x12\x1b\n" +
+	"\tunique_id\x18\x02 \x01(\tR\buniqueId\x12\x1a\n" +
+	"\bnickname\x18\x03 \x01(\tR\bnickname\x12\x1d\n" +
+	"\n" +
+	"channel_id\x18\x04 \x01(\x03R\tchannelId\"H\n" +
+	"\x13ListClientsResponse\x121\n" +
+	"\aclients\x18\x01 \x03(\v2\x17.voicx.v1.VisibleClientR\aclients\"6\n" +
+	"\x15GetChannelInfoRequest\x12\x1d\n" +
+	"\n" +
+	"channel_id\x18\x01 \x01(\x03R\tchannelId\"\x91\x03\n" +
+	"\x16GetChannelInfoResponse\x12\x1d\n" +
+	"\n" +
+	"channel_id\x18\x01 \x01(\x03R\tchannelId\x12\x1b\n" +
+	"\tparent_id\x18\x02 \x01(\x03R\bparentId\x12\x12\n" +
+	"\x04name\x18\x03 \x01(\tR\x04name\x12\x14\n" +
+	"\x05topic\x18\x04 \x01(\tR\x05topic\x12!\n" +
+	"\fchannel_type\x18\x05 \x01(\x03R\vchannelType\x12\x1f\n" +
+	"\vmax_clients\x18\x06 \x01(\x03R\n" +
+	"maxClients\x12'\n" +
+	"\x0fcurrent_clients\x18\a \x01(\x03R\x0ecurrentClients\x12!\n" +
+	"\fopus_bitrate\x18\b \x01(\x03R\vopusBitrate\x12\x19\n" +
+	"\bopus_fec\x18\t \x01(\bR\aopusFec\x12\x19\n" +
+	"\bopus_dtx\x18\n" +
+	" \x01(\bR\aopusDtx\x12\x1f\n" +
+	"\vopus_stereo\x18\v \x01(\bR\n" +
+	"opusStereo\x12*\n" +
+	"\x11slow_mode_seconds\x18\f \x01(\x03R\x0fslowModeSeconds\"4\n" +
+	"\x13GetRoleStateRequest\x12\x1d\n" +
+	"\n" +
+	"channel_id\x18\x01 \x01(\x03R\tchannelId\"D\n" +
+	"\x0eRoleAssignment\x12\x17\n" +
+	"\auser_id\x18\x01 \x01(\x03R\x06userId\x12\x19\n" +
+	"\brole_ids\x18\x02 \x03(\x03R\aroleIds\"\xbe\x02\n" +
+	"\x12RolePolicySnapshot\x12\x1a\n" +
+	"\brevision\x18\x01 \x01(\x03R\brevision\x12\x19\n" +
+	"\bowner_id\x18\x02 \x01(\x03R\aownerId\x12\x1f\n" +
+	"\veveryone_id\x18\x03 \x01(\x03R\n" +
+	"everyoneId\x123\n" +
+	"\x16default_member_role_id\x18\x04 \x01(\x03R\x13defaultMemberRoleId\x12.\n" +
+	"\x05roles\x18\x05 \x03(\v2\x18.voicx.v1.RoleDefinitionR\x05roles\x122\n" +
+	"\amembers\x18\x06 \x03(\v2\x18.voicx.v1.RoleAssignmentR\amembers\x127\n" +
+	"\bchannels\x18\a \x03(\v2\x1b.voicx.v1.ChannelRoleAccessR\bchannels\"\xa6\x01\n" +
+	"\x14CapabilityDescriptor\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05group\x18\x02 \x01(\tR\x05group\x12\x18\n" +
+	"\aenglish\x18\x03 \x01(\tR\aenglish\x12\x16\n" +
+	"\x06german\x18\x04 \x01(\tR\x06german\x12\x18\n" +
+	"\achannel\x18\x05 \x01(\bR\achannel\x12\x1a\n" +
+	"\brequires\x18\x06 \x03(\tR\brequires\"\xe4\x03\n" +
+	"\x14GetRoleStateResponse\x126\n" +
+	"\x17parent_access_available\x18\x01 \x01(\bR\x15parentAccessAvailable\x12N\n" +
+	"\x13effective_overrides\x18\x02 \x03(\v2\x1d.voicx.v1.ChannelRoleOverrideR\x12effectiveOverrides\x12H\n" +
+	"\x10parent_overrides\x18\x03 \x03(\v2\x1d.voicx.v1.ChannelRoleOverrideR\x0fparentOverrides\x12\x19\n" +
+	"\bactor_id\x18\x04 \x01(\x03R\aactorId\x124\n" +
+	"\x06policy\x18\x05 \x01(\v2\x1c.voicx.v1.RolePolicySnapshotR\x06policy\x12B\n" +
+	"\fcapabilities\x18\x06 \x03(\v2\x1e.voicx.v1.CapabilityDescriptorR\fcapabilities\x12.\n" +
+	"\x13manageable_role_ids\x18\a \x03(\x03R\x11manageableRoleIds\x125\n" +
+	"\x16grantable_capabilities\x18\b \x03(\tR\x15grantableCapabilities\"\x97\x01\n" +
+	"\x16ListRoleMembersRequest\x12\x1d\n" +
+	"\n" +
+	"channel_id\x18\x01 \x01(\x03R\tchannelId\x12+\n" +
+	"\x11expected_revision\x18\x02 \x01(\x03R\x10expectedRevision\x12\x16\n" +
+	"\x06search\x18\x03 \x01(\tR\x06search\x12\x19\n" +
+	"\bafter_id\x18\x04 \x01(\x03R\aafterId\"\xa1\x01\n" +
+	"\x12RoleMemberIdentity\x12\x17\n" +
+	"\auser_id\x18\x01 \x01(\x03R\x06userId\x12\x1b\n" +
+	"\tunique_id\x18\x02 \x01(\tR\buniqueId\x12\x1a\n" +
+	"\bnickname\x18\x03 \x01(\tR\bnickname\x12\x19\n" +
+	"\brole_ids\x18\x04 \x03(\x03R\aroleIds\x12\x1e\n" +
+	"\n" +
+	"manageable\x18\x05 \x01(\bR\n" +
+	"manageable\"\x81\x01\n" +
+	"\x17ListRoleMembersResponse\x12\x1a\n" +
+	"\brevision\x18\x01 \x01(\x03R\brevision\x126\n" +
+	"\aentries\x18\x02 \x03(\v2\x1c.voicx.v1.RoleMemberIdentityR\aentries\x12\x12\n" +
+	"\x04more\x18\x03 \x01(\bR\x04more\"\x99\x01\n" +
+	"\x12CheckAccessRequest\x12\x17\n" +
+	"\auser_id\x18\x01 \x01(\x03R\x06userId\x12\x1d\n" +
+	"\n" +
+	"channel_id\x18\x02 \x01(\x03R\tchannelId\x12\x1e\n" +
+	"\n" +
+	"capability\x18\x03 \x01(\tR\n" +
+	"capability\x12+\n" +
+	"\x11expected_revision\x18\x04 \x01(\x03R\x10expectedRevision\"\xbe\x01\n" +
+	"\x12RoleAccessDecision\x12\x18\n" +
+	"\aallowed\x18\x01 \x01(\bR\aallowed\x12\x16\n" +
+	"\x06reason\x18\x02 \x01(\tR\x06reason\x12\x19\n" +
+	"\brole_ids\x18\x03 \x03(\x03R\aroleIds\x12\x1d\n" +
+	"\n" +
+	"channel_id\x18\x04 \x01(\x03R\tchannelId\x12 \n" +
+	"\vrequirement\x18\x05 \x01(\tR\vrequirement\x12\x1a\n" +
+	"\brevision\x18\x06 \x01(\x03R\brevision\"{\n" +
+	"\x13CheckAccessResponse\x128\n" +
+	"\bdecision\x18\x01 \x01(\v2\x1c.voicx.v1.RoleAccessDecisionR\bdecision\x12*\n" +
+	"\x11can_manage_member\x18\x02 \x01(\bR\x0fcanManageMember\"M\n" +
+	"\x18GetChannelOptionsRequest\x12\x12\n" +
+	"\x04kind\x18\x01 \x01(\tR\x04kind\x12\x1d\n" +
+	"\n" +
+	"channel_id\x18\x02 \x01(\x03R\tchannelId\"X\n" +
+	"\x17ChannelManagementOption\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\x03R\x02id\x12\x12\n" +
+	"\x04name\x18\x02 \x01(\tR\x04name\x12\x19\n" +
+	"\bcan_sync\x18\x03 \x01(\bR\acanSync\"\xba\x04\n" +
+	"\x19GetChannelOptionsResponse\x12\x1a\n" +
+	"\brevision\x18\x01 \x01(\x03R\brevision\x12\x1d\n" +
+	"\n" +
+	"channel_id\x18\x02 \x01(\x03R\tchannelId\x12\x12\n" +
+	"\x04name\x18\x03 \x01(\tR\x04name\x129\n" +
+	"\bsettings\x18\x04 \x01(\v2\x1d.voicx.v1.RoleChannelSettingsR\bsettings\x12+\n" +
+	"\x11affected_channels\x18\x05 \x01(\x03R\x10affectedChannels\x120\n" +
+	"\x14can_create_permanent\x18\x06 \x01(\bR\x12canCreatePermanent\x120\n" +
+	"\x14can_create_temporary\x18\a \x01(\bR\x12canCreateTemporary\x12*\n" +
+	"\x11can_manage_access\x18\b \x01(\bR\x0fcanManageAccess\x12\x1f\n" +
+	"\veveryone_id\x18\t \x01(\x03R\n" +
+	"everyoneId\x127\n" +
+	"\x05roles\x18\n" +
+	" \x03(\v2!.voicx.v1.ChannelManagementOptionR\x05roles\x125\n" +
+	"\x16grantable_capabilities\x18\v \x03(\tR\x15grantableCapabilities\x12E\n" +
+	"\fdestinations\x18\f \x03(\v2!.voicx.v1.ChannelManagementOptionR\fdestinations\"\x8d\x02\n" +
+	"\x15GetServerInfoResponse\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x12\x18\n" +
+	"\aversion\x18\x02 \x01(\tR\aversion\x12\x1a\n" +
+	"\bplatform\x18\x03 \x01(\tR\bplatform\x12%\n" +
+	"\x0euptime_seconds\x18\x04 \x01(\x03R\ruptimeSeconds\x12%\n" +
+	"\x0eclients_online\x18\x05 \x01(\x03R\rclientsOnline\x12'\n" +
+	"\x0fchannels_online\x18\x06 \x01(\x03R\x0echannelsOnline\x12\x1f\n" +
+	"\vmax_clients\x18\a \x01(\x03R\n" +
+	"maxClients\x12\x12\n" +
+	"\x04motd\x18\b \x01(\tR\x04motd\"3\n" +
+	"\x14GetClientInfoRequest\x12\x1b\n" +
+	"\tclient_id\x18\x01 \x01(\tR\bclientId\"\xc7\x02\n" +
+	"\x15GetClientInfoResponse\x12\x1b\n" +
+	"\tclient_id\x18\x01 \x01(\tR\bclientId\x12\x1b\n" +
+	"\tunique_id\x18\x02 \x01(\tR\buniqueId\x12\x1a\n" +
+	"\bnickname\x18\x03 \x01(\tR\bnickname\x12\x1d\n" +
+	"\n" +
+	"channel_id\x18\x04 \x01(\x03R\tchannelId\x12!\n" +
+	"\fconnected_at\x18\x05 \x01(\x03R\vconnectedAt\x12!\n" +
+	"\fidle_seconds\x18\x06 \x01(\x03R\vidleSeconds\x12\x17\n" +
+	"\aping_ms\x18\a \x01(\x03R\x06pingMs\x12\x0e\n" +
+	"\x02ip\x18\b \x01(\tR\x02ip\x12\x12\n" +
+	"\x04port\x18\t \x01(\x03R\x04port\x12\x19\n" +
+	"\bbytes_in\x18\n" +
+	" \x01(\x03R\abytesIn\x12\x1b\n" +
+	"\tbytes_out\x18\v \x01(\x03R\bbytesOut\"\x18\n" +
+	"\x16GetServerConfigRequest\"\x17\n" +
+	"\x15GetMediaLimitsRequest\"\x95\x01\n" +
+	"\x15SetMediaLimitsRequest\x12*\n" +
+	"\x11video_max_bitrate\x18\x01 \x01(\x03R\x0fvideoMaxBitrate\x12&\n" +
+	"\x0fvideo_max_width\x18\x02 \x01(\x03R\rvideoMaxWidth\x12(\n" +
+	"\x10video_max_height\x18\x03 \x01(\x03R\x0evideoMaxHeight\"\xb2\x01\n" +
+	"\x16GetMediaLimitsResponse\x12*\n" +
+	"\x11video_max_bitrate\x18\x01 \x01(\x03R\x0fvideoMaxBitrate\x12&\n" +
+	"\x0fvideo_max_width\x18\x02 \x01(\x03R\rvideoMaxWidth\x12(\n" +
+	"\x10video_max_height\x18\x03 \x01(\x03R\x0evideoMaxHeight\x12\x1a\n" +
+	"\brevision\x18\x04 \x01(\tR\brevision\"\xb2\x01\n" +
+	"\x16SetMediaLimitsResponse\x12*\n" +
+	"\x11video_max_bitrate\x18\x01 \x01(\x03R\x0fvideoMaxBitrate\x12&\n" +
+	"\x0fvideo_max_width\x18\x02 \x01(\x03R\rvideoMaxWidth\x12(\n" +
+	"\x10video_max_height\x18\x03 \x01(\x03R\x0evideoMaxHeight\x12\x1a\n" +
+	"\brevision\x18\x04 \x01(\tR\brevision\"\x17\n" +
+	"\x15GetChatFiltersRequest\"\xa8\x01\n" +
+	"\x16GetChatFiltersResponse\x12\x1f\n" +
+	"\vword_filter\x18\x01 \x01(\tR\n" +
+	"wordFilter\x12%\n" +
+	"\x0elink_blacklist\x18\x02 \x01(\tR\rlinkBlacklist\x12%\n" +
+	"\x0elink_whitelist\x18\x03 \x01(\tR\rlinkWhitelist\x12\x1f\n" +
+	"\vfrom_config\x18\x04 \x01(\bR\n" +
+	"fromConfig\"M\n" +
+	"\x14SetServerTextRequest\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x19\n" +
+	"\x05value\x18\x02 \x01(\tH\x00R\x05value\x88\x01\x01B\b\n" +
+	"\x06_value\"L\n" +
+	"\x15SetServerTextResponse\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12!\n" +
+	"\fcontent_hash\x18\x02 \x01(\tR\vcontentHash\"\xcb\x01\n" +
+	"\x15SetChatFiltersRequest\x12$\n" +
+	"\vword_filter\x18\x01 \x01(\tH\x00R\n" +
+	"wordFilter\x88\x01\x01\x12*\n" +
+	"\x0elink_blacklist\x18\x02 \x01(\tH\x01R\rlinkBlacklist\x88\x01\x01\x12*\n" +
+	"\x0elink_whitelist\x18\x03 \x01(\tH\x02R\rlinkWhitelist\x88\x01\x01B\x0e\n" +
+	"\f_word_filterB\x11\n" +
+	"\x0f_link_blacklistB\x11\n" +
+	"\x0f_link_whitelist\"\xa8\x01\n" +
+	"\x16SetChatFiltersResponse\x12\x1f\n" +
+	"\vword_filter\x18\x01 \x01(\tR\n" +
+	"wordFilter\x12%\n" +
+	"\x0elink_blacklist\x18\x02 \x01(\tR\rlinkBlacklist\x12%\n" +
+	"\x0elink_whitelist\x18\x03 \x01(\tR\rlinkWhitelist\x12\x1f\n" +
+	"\vfrom_config\x18\x04 \x01(\bR\n" +
+	"fromConfig\"\xe9\x01\n" +
+	"\x16SetServerConfigRequest\x12\x1f\n" +
+	"\vmax_clients\x18\x01 \x01(\x05R\n" +
+	"maxClients\x124\n" +
+	"\x16client_timeout_seconds\x18\x02 \x01(\x05R\x14clientTimeoutSeconds\x12!\n" +
+	"\fopus_bitrate\x18\x03 \x01(\x05R\vopusBitrate\x12\x19\n" +
+	"\bopus_fec\x18\x04 \x01(\bR\aopusFec\x12\x19\n" +
+	"\bopus_dtx\x18\x05 \x01(\bR\aopusDtx\x12\x1f\n" +
+	"\vopus_stereo\x18\x06 \x01(\bR\n" +
+	"opusStereo\"\xea\x01\n" +
+	"\x17SetServerConfigResponse\x12\x1f\n" +
+	"\vmax_clients\x18\x01 \x01(\x03R\n" +
+	"maxClients\x124\n" +
+	"\x16client_timeout_seconds\x18\x02 \x01(\x03R\x14clientTimeoutSeconds\x12!\n" +
+	"\fopus_bitrate\x18\x03 \x01(\x03R\vopusBitrate\x12\x19\n" +
+	"\bopus_fec\x18\x04 \x01(\bR\aopusFec\x12\x19\n" +
+	"\bopus_dtx\x18\x05 \x01(\bR\aopusDtx\x12\x1f\n" +
+	"\vopus_stereo\x18\x06 \x01(\bR\n" +
+	"opusStereo\"\xea\x01\n" +
+	"\x17GetServerConfigResponse\x12\x1f\n" +
+	"\vmax_clients\x18\x01 \x01(\x03R\n" +
+	"maxClients\x124\n" +
+	"\x16client_timeout_seconds\x18\x02 \x01(\x03R\x14clientTimeoutSeconds\x12!\n" +
+	"\fopus_bitrate\x18\x03 \x01(\x03R\vopusBitrate\x12\x19\n" +
+	"\bopus_fec\x18\x04 \x01(\bR\aopusFec\x12\x19\n" +
+	"\bopus_dtx\x18\x05 \x01(\bR\aopusDtx\x12\x1f\n" +
+	"\vopus_stereo\x18\x06 \x01(\bR\n" +
+	"opusStereo\"D\n" +
+	"\x0fListBansRequest\x12\x1b\n" +
+	"\tbefore_id\x18\x01 \x01(\x03R\bbeforeId\x12\x14\n" +
+	"\x05limit\x18\x02 \x01(\x05R\x05limit\"\xb8\x01\n" +
+	"\tBanRecord\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\x03R\x02id\x12\x12\n" +
+	"\x04type\x18\x02 \x01(\x03R\x04type\x12\x14\n" +
+	"\x05value\x18\x03 \x01(\tR\x05value\x12\x16\n" +
+	"\x06reason\x18\x04 \x01(\tR\x06reason\x12\x1b\n" +
+	"\tbanned_by\x18\x05 \x01(\tR\bbannedBy\x12\x1d\n" +
+	"\n" +
+	"created_at\x18\x06 \x01(\x03R\tcreatedAt\x12\x1d\n" +
+	"\n" +
+	"expires_at\x18\a \x01(\x03R\texpiresAt\"a\n" +
+	"\x10ListBansResponse\x12'\n" +
+	"\x04bans\x18\x01 \x03(\v2\x13.voicx.v1.BanRecordR\x04bans\x12$\n" +
+	"\x0enext_before_id\x18\x02 \x01(\x03R\fnextBeforeId\"O\n" +
+	"\x11MoveMemberRequest\x12\x1b\n" +
+	"\tclient_id\x18\x01 \x01(\tR\bclientId\x12\x1d\n" +
+	"\n" +
+	"channel_id\x18\x02 \x01(\x03R\tchannelId\"H\n" +
+	"\x11KickMemberRequest\x12\x1b\n" +
+	"\tclient_id\x18\x01 \x01(\tR\bclientId\x12\x16\n" +
+	"\x06reason\x18\x02 \x01(\tR\x06reason\"Z\n" +
+	"\x12KickMemberResponse\x12\x1b\n" +
+	"\tclient_id\x18\x01 \x01(\tR\bclientId\x12'\n" +
+	"\x0fcleanup_pending\x18\x02 \x01(\bR\x0ecleanupPending\"r\n" +
+	"\x10BanMemberRequest\x12\x1b\n" +
+	"\tclient_id\x18\x01 \x01(\tR\bclientId\x12\x16\n" +
+	"\x06reason\x18\x02 \x01(\tR\x06reason\x12)\n" +
+	"\x10duration_seconds\x18\x03 \x01(\x03R\x0fdurationSeconds\"\xb4\x01\n" +
+	"\x11BanMemberResponse\x12\x1b\n" +
+	"\tunique_id\x18\x01 \x01(\tR\buniqueId\x12:\n" +
+	"\vpersistence\x18\x02 \x01(\x0e2\x18.voicx.v1.BanPersistenceR\vpersistence\x12\x1d\n" +
+	"\n" +
+	"expires_at\x18\x03 \x01(\x03R\texpiresAt\x12'\n" +
+	"\x0fcleanup_pending\x18\x04 \x01(\bR\x0ecleanupPending\"m\n" +
+	"\x17DisconnectMemberRequest\x12\x1b\n" +
+	"\tclient_id\x18\x01 \x01(\tR\bclientId\x12\x1d\n" +
+	"\n" +
+	"channel_id\x18\x02 \x01(\x03R\tchannelId\x12\x16\n" +
+	"\x06reason\x18\x03 \x01(\tR\x06reason\"V\n" +
+	"\x18DisconnectMemberResponse\x12\x1b\n" +
+	"\tclient_id\x18\x01 \x01(\tR\bclientId\x12\x1d\n" +
+	"\n" +
+	"channel_id\x18\x02 \x01(\x03R\tchannelId\"P\n" +
+	"\x12MoveMemberResponse\x12\x1b\n" +
+	"\tclient_id\x18\x01 \x01(\tR\bclientId\x12\x1d\n" +
+	"\n" +
+	"channel_id\x18\x02 \x01(\x03R\tchannelId\"\xb2\x01\n" +
+	"\x0eRoleDefinition\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\x03R\x02id\x12\x12\n" +
+	"\x04name\x18\x02 \x01(\tR\x04name\x12\x1a\n" +
+	"\bposition\x18\x03 \x01(\x05R\bposition\x12\x14\n" +
+	"\x05color\x18\x04 \x01(\tR\x05color\x12\x12\n" +
+	"\x04icon\x18\x05 \x01(\tR\x04icon\x12\x14\n" +
+	"\x05hoist\x18\x06 \x01(\bR\x05hoist\x12 \n" +
+	"\vpermissions\x18\a \x03(\tR\vpermissions\"\x7f\n" +
+	"\x13ChannelRoleOverride\x12\x17\n" +
+	"\arole_id\x18\x01 \x01(\x03R\x06roleId\x12\x17\n" +
+	"\auser_id\x18\x02 \x01(\x03R\x06userId\x12\x1e\n" +
+	"\n" +
+	"capability\x18\x03 \x01(\tR\n" +
+	"capability\x12\x16\n" +
+	"\x06effect\x18\x04 \x01(\tR\x06effect\"\xa4\x01\n" +
+	"\x11ChannelRoleAccess\x12\x1d\n" +
+	"\n" +
+	"channel_id\x18\x01 \x01(\x03R\tchannelId\x12\x1b\n" +
+	"\tparent_id\x18\x02 \x01(\x03R\bparentId\x12\x16\n" +
+	"\x06synced\x18\x03 \x01(\bR\x06synced\x12;\n" +
+	"\toverrides\x18\x04 \x03(\v2\x1d.voicx.v1.ChannelRoleOverrideR\toverrides\"\x87\x02\n" +
+	"\x12ChangeRolesRequest\x12\x12\n" +
+	"\x04kind\x18\x01 \x01(\tR\x04kind\x12+\n" +
+	"\x11expected_revision\x18\x02 \x01(\x03R\x10expectedRevision\x12,\n" +
+	"\x04role\x18\x03 \x01(\v2\x18.voicx.v1.RoleDefinitionR\x04role\x12\x17\n" +
+	"\arole_id\x18\x04 \x01(\x03R\x06roleId\x12\x19\n" +
+	"\brole_ids\x18\x05 \x03(\x03R\aroleIds\x12\x17\n" +
+	"\auser_id\x18\x06 \x01(\x03R\x06userId\x125\n" +
+	"\achannel\x18\a \x01(\v2\x1b.voicx.v1.ChannelRoleAccessR\achannel\"\x8a\x01\n" +
+	"\x13ChangeRolesResponse\x12\x1a\n" +
+	"\brevision\x18\x01 \x01(\x03R\brevision\x12&\n" +
+	"\x0fcreated_role_id\x18\x02 \x01(\x03R\rcreatedRoleId\x12/\n" +
+	"\x13enforcement_pending\x18\x03 \x01(\bR\x12enforcementPending\"\xc9\x02\n" +
+	"\x13RoleChannelSettings\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x12\x14\n" +
+	"\x05topic\x18\x02 \x01(\tR\x05topic\x12 \n" +
+	"\vdescription\x18\x03 \x01(\tR\vdescription\x12\x1f\n" +
+	"\vorder_index\x18\x04 \x01(\x05R\n" +
+	"orderIndex\x12\x1f\n" +
+	"\vmax_clients\x18\x05 \x01(\x05R\n" +
+	"maxClients\x12*\n" +
+	"\x11slow_mode_seconds\x18\x06 \x01(\x05R\x0fslowModeSeconds\x12!\n" +
+	"\fopus_bitrate\x18\a \x01(\x05R\vopusBitrate\x12\x19\n" +
+	"\bopus_fec\x18\b \x01(\bR\aopusFec\x12\x19\n" +
+	"\bopus_dtx\x18\t \x01(\bR\aopusDtx\x12\x1f\n" +
+	"\vopus_stereo\x18\n" +
+	" \x01(\bR\n" +
+	"opusStereo\"p\n" +
+	"\x19RoleChannelCreationAccess\x12\x16\n" +
+	"\x06synced\x18\x01 \x01(\bR\x06synced\x12;\n" +
+	"\toverrides\x18\x02 \x03(\v2\x1d.voicx.v1.ChannelRoleOverrideR\toverrides\"\xa6\x03\n" +
+	"\x14ChangeChannelRequest\x12\x12\n" +
+	"\x04kind\x18\x01 \x01(\tR\x04kind\x12+\n" +
+	"\x11expected_revision\x18\x02 \x01(\x03R\x10expectedRevision\x12\x1d\n" +
+	"\n" +
+	"channel_id\x18\x03 \x01(\x03R\tchannelId\x12\x1b\n" +
+	"\tparent_id\x18\x04 \x01(\x03R\bparentId\x12$\n" +
+	"\x0esync_to_parent\x18\x05 \x01(\bR\fsyncToParent\x12;\n" +
+	"\x06access\x18\x06 \x01(\v2#.voicx.v1.RoleChannelCreationAccessR\x06access\x129\n" +
+	"\bsettings\x18\a \x01(\v2\x1d.voicx.v1.RoleChannelSettingsR\bsettings\x12!\n" +
+	"\fchannel_type\x18\b \x01(\x05R\vchannelType\x12\x1a\n" +
+	"\bpassword\x18\t \x01(\tR\bpassword\x12$\n" +
+	"\vorder_index\x18\n" +
+	" \x01(\x05H\x00R\n" +
+	"orderIndex\x88\x01\x01B\x0e\n" +
+	"\f_order_index\"\x83\x01\n" +
+	"\x15ChangeChannelResponse\x12\x1a\n" +
+	"\brevision\x18\x01 \x01(\x03R\brevision\x12\x1d\n" +
+	"\n" +
+	"channel_id\x18\x02 \x01(\x03R\tchannelId\x12/\n" +
+	"\x13enforcement_pending\x18\x03 \x01(\bR\x12enforcementPending\"\xa6\x01\n" +
+	"\x15SetMemberVoiceRequest\x12\x1b\n" +
+	"\tclient_id\x18\x01 \x01(\tR\bclientId\x12\x1d\n" +
+	"\n" +
+	"channel_id\x18\x02 \x01(\x03R\tchannelId\x12\x19\n" +
+	"\x05muted\x18\x03 \x01(\bH\x00R\x05muted\x88\x01\x01\x12\x1f\n" +
+	"\bdeafened\x18\x04 \x01(\bH\x01R\bdeafened\x88\x01\x01B\b\n" +
+	"\x06_mutedB\v\n" +
+	"\t_deafened\"\xa2\x01\n" +
+	"\x16SetMemberVoiceResponse\x12\x1a\n" +
+	"\brevision\x18\x01 \x01(\x03R\brevision\x12\x1b\n" +
+	"\tclient_id\x18\x02 \x01(\tR\bclientId\x12\x1d\n" +
+	"\n" +
+	"channel_id\x18\x03 \x01(\x03R\tchannelId\x12\x14\n" +
+	"\x05muted\x18\x04 \x01(\bR\x05muted\x12\x1a\n" +
+	"\bdeafened\x18\x05 \x01(\bR\bdeafened\"\xd6\x01\n" +
 	"\x18StartFileTransferRequest\x12\x1d\n" +
 	"\n" +
 	"channel_id\x18\x01 \x01(\tR\tchannelId\x12\x1a\n" +
@@ -1380,21 +6286,11 @@ const file_control_proto_rawDesc = "" +
 	"\x06reason\x18\x02 \x01(\tR\x06reason\"L\n" +
 	"\x1aCancelFileTransferResponse\x12\x18\n" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x14\n" +
-	"\x05error\x18\x02 \x01(\tR\x05error*\x98\x02\n" +
-	"\n" +
-	"Permission\x12\x1a\n" +
-	"\x16PERMISSION_UNSPECIFIED\x10\x00\x12\x13\n" +
-	"\x0fPERMISSION_JOIN\x10\x01\x12\x14\n" +
-	"\x10PERMISSION_SPEAK\x10\x02\x12\x14\n" +
-	"\x10PERMISSION_VIDEO\x10\x03\x12\x13\n" +
-	"\x0fPERMISSION_CHAT\x10\x04\x12\x13\n" +
-	"\x0fPERMISSION_KICK\x10\x05\x12\x12\n" +
-	"\x0ePERMISSION_BAN\x10\x06\x12\x13\n" +
-	"\x0fPERMISSION_MOVE\x10\a\x12\x1d\n" +
-	"\x19PERMISSION_CREATE_CHANNEL\x10\b\x12\x1d\n" +
-	"\x19PERMISSION_DELETE_CHANNEL\x10\t\x12\x1c\n" +
-	"\x18PERMISSION_TRANSFER_FILE\x10\n" +
-	"*\x8a\x01\n" +
+	"\x05error\x18\x02 \x01(\tR\x05error*m\n" +
+	"\x0eBanPersistence\x12\x1f\n" +
+	"\x1bBAN_PERSISTENCE_UNSPECIFIED\x10\x00\x12\x19\n" +
+	"\x15BAN_PERSISTENCE_SAVED\x10\x01\x12\x1f\n" +
+	"\x1bBAN_PERSISTENCE_UNCONFIRMED\x10\x02*\x8a\x01\n" +
 	"\x15FileTransferDirection\x12'\n" +
 	"#FILE_TRANSFER_DIRECTION_UNSPECIFIED\x10\x00\x12\"\n" +
 	"\x1eFILE_TRANSFER_DIRECTION_UPLOAD\x10\x01\x12$\n" +
@@ -1405,13 +6301,41 @@ const file_control_proto_rawDesc = "" +
 	" FILE_TRANSFER_STATUS_IN_PROGRESS\x10\x02\x12\"\n" +
 	"\x1eFILE_TRANSFER_STATUS_COMPLETED\x10\x03\x12\x1f\n" +
 	"\x1bFILE_TRANSFER_STATUS_FAILED\x10\x04\x12!\n" +
-	"\x1dFILE_TRANSFER_STATUS_CANCELED\x10\x052\xcf\x05\n" +
+	"\x1dFILE_TRANSFER_STATUS_CANCELED\x10\x052\xbe\x16\n" +
 	"\aControl\x12M\n" +
-	"\fAuthenticate\x12\x1d.voicx.v1.AuthenticateRequest\x1a\x1e.voicx.v1.AuthenticateResponse\x12P\n" +
-	"\rCreateChannel\x12\x1e.voicx.v1.CreateChannelRequest\x1a\x1f.voicx.v1.CreateChannelResponse\x12P\n" +
-	"\rDeleteChannel\x12\x1e.voicx.v1.DeleteChannelRequest\x1a\x1f.voicx.v1.DeleteChannelResponse\x12M\n" +
-	"\fListChannels\x12\x1d.voicx.v1.ListChannelsRequest\x1a\x1e.voicx.v1.ListChannelsResponse\x12Y\n" +
-	"\x10QueryPermissions\x12!.voicx.v1.QueryPermissionsRequest\x1a\".voicx.v1.QueryPermissionsResponse\x12\\\n" +
+	"\fAuthenticate\x12\x1d.voicx.v1.AuthenticateRequest\x1a\x1e.voicx.v1.AuthenticateResponse\x12M\n" +
+	"\fListChannels\x12\x1d.voicx.v1.ListChannelsRequest\x1a\x1e.voicx.v1.ListChannelsResponse\x12J\n" +
+	"\vChangeRoles\x12\x1c.voicx.v1.ChangeRolesRequest\x1a\x1d.voicx.v1.ChangeRolesResponse\x12P\n" +
+	"\rChangeChannel\x12\x1e.voicx.v1.ChangeChannelRequest\x1a\x1f.voicx.v1.ChangeChannelResponse\x12S\n" +
+	"\x0eSetMemberVoice\x12\x1f.voicx.v1.SetMemberVoiceRequest\x1a .voicx.v1.SetMemberVoiceResponse\x12G\n" +
+	"\n" +
+	"MoveMember\x12\x1b.voicx.v1.MoveMemberRequest\x1a\x1c.voicx.v1.MoveMemberResponse\x12Y\n" +
+	"\x10DisconnectMember\x12!.voicx.v1.DisconnectMemberRequest\x1a\".voicx.v1.DisconnectMemberResponse\x12G\n" +
+	"\n" +
+	"KickMember\x12\x1b.voicx.v1.KickMemberRequest\x1a\x1c.voicx.v1.KickMemberResponse\x12D\n" +
+	"\tBanMember\x12\x1a.voicx.v1.BanMemberRequest\x1a\x1b.voicx.v1.BanMemberResponse\x12P\n" +
+	"\rGetServerInfo\x12\x1e.voicx.v1.GetServerInfoRequest\x1a\x1f.voicx.v1.GetServerInfoResponse\x12P\n" +
+	"\rGetClientInfo\x12\x1e.voicx.v1.GetClientInfoRequest\x1a\x1f.voicx.v1.GetClientInfoResponse\x12V\n" +
+	"\x0fGetServerConfig\x12 .voicx.v1.GetServerConfigRequest\x1a!.voicx.v1.GetServerConfigResponse\x12S\n" +
+	"\x0eGetMediaLimits\x12\x1f.voicx.v1.GetMediaLimitsRequest\x1a .voicx.v1.GetMediaLimitsResponse\x12S\n" +
+	"\x0eSetMediaLimits\x12\x1f.voicx.v1.SetMediaLimitsRequest\x1a .voicx.v1.SetMediaLimitsResponse\x12V\n" +
+	"\x0fSetServerConfig\x12 .voicx.v1.SetServerConfigRequest\x1a!.voicx.v1.SetServerConfigResponse\x12S\n" +
+	"\x0eGetChatFilters\x12\x1f.voicx.v1.GetChatFiltersRequest\x1a .voicx.v1.GetChatFiltersResponse\x12S\n" +
+	"\x0eSetChatFilters\x12\x1f.voicx.v1.SetChatFiltersRequest\x1a .voicx.v1.SetChatFiltersResponse\x12P\n" +
+	"\rSetServerText\x12\x1e.voicx.v1.SetServerTextRequest\x1a\x1f.voicx.v1.SetServerTextResponse\x12_\n" +
+	"\x12ListCustomMetadata\x12#.voicx.v1.ListCustomMetadataRequest\x1a$.voicx.v1.ListCustomMetadataResponse\x12e\n" +
+	"\x14ChangeCustomMetadata\x12%.voicx.v1.ChangeCustomMetadataRequest\x1a&.voicx.v1.ChangeCustomMetadataResponse\x12A\n" +
+	"\bListBans\x12\x19.voicx.v1.ListBansRequest\x1a\x1a.voicx.v1.ListBansResponse\x12M\n" +
+	"\fGetRoleState\x12\x1d.voicx.v1.GetRoleStateRequest\x1a\x1e.voicx.v1.GetRoleStateResponse\x12V\n" +
+	"\x0fListRoleMembers\x12 .voicx.v1.ListRoleMembersRequest\x1a!.voicx.v1.ListRoleMembersResponse\x12J\n" +
+	"\vCheckAccess\x12\x1c.voicx.v1.CheckAccessRequest\x1a\x1d.voicx.v1.CheckAccessResponse\x12\\\n" +
+	"\x11GetChannelOptions\x12\".voicx.v1.GetChannelOptionsRequest\x1a#.voicx.v1.GetChannelOptionsResponse\x12J\n" +
+	"\vListClients\x12\x1c.voicx.v1.ListClientsRequest\x1a\x1d.voicx.v1.ListClientsResponse\x12S\n" +
+	"\x0eGetChannelInfo\x12\x1f.voicx.v1.GetChannelInfoRequest\x1a .voicx.v1.GetChannelInfoResponse\x12M\n" +
+	"\fListAuditLog\x12\x1d.voicx.v1.ListAuditLogRequest\x1a\x1e.voicx.v1.ListAuditLogResponse\x12S\n" +
+	"\x0eListComplaints\x12\x1f.voicx.v1.ListComplaintsRequest\x1a .voicx.v1.ListComplaintsResponse\x12V\n" +
+	"\x0fClearComplaints\x12 .voicx.v1.ClearComplaintsRequest\x1a!.voicx.v1.ClearComplaintsResponse\x12S\n" +
+	"\x0eGetServerRules\x12\x1f.voicx.v1.GetServerRulesRequest\x1a .voicx.v1.GetServerRulesResponse\x12\\\n" +
 	"\x11StartFileTransfer\x12\".voicx.v1.StartFileTransferRequest\x1a#.voicx.v1.StartFileTransferResponse\x12h\n" +
 	"\x15GetFileTransferStatus\x12&.voicx.v1.GetFileTransferStatusRequest\x1a'.voicx.v1.GetFileTransferStatusResponse\x12_\n" +
 	"\x12CancelFileTransfer\x12#.voicx.v1.CancelFileTransferRequest\x1a$.voicx.v1.CancelFileTransferResponseB\x12Z\x10voicx/v1;voicxv1b\x06proto3"
@@ -1429,62 +6353,201 @@ func file_control_proto_rawDescGZIP() []byte {
 }
 
 var file_control_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
-var file_control_proto_msgTypes = make([]protoimpl.MessageInfo, 20)
+var file_control_proto_msgTypes = make([]protoimpl.MessageInfo, 86)
 var file_control_proto_goTypes = []any{
-	(Permission)(0),                       // 0: voicx.v1.Permission
+	(BanPersistence)(0),                   // 0: voicx.v1.BanPersistence
 	(FileTransferDirection)(0),            // 1: voicx.v1.FileTransferDirection
 	(FileTransferStatus)(0),               // 2: voicx.v1.FileTransferStatus
-	(*AuthenticateRequest)(nil),           // 3: voicx.v1.AuthenticateRequest
-	(*AuthenticateResponse)(nil),          // 4: voicx.v1.AuthenticateResponse
-	(*Channel)(nil),                       // 5: voicx.v1.Channel
-	(*CreateChannelRequest)(nil),          // 6: voicx.v1.CreateChannelRequest
-	(*CreateChannelResponse)(nil),         // 7: voicx.v1.CreateChannelResponse
-	(*DeleteChannelRequest)(nil),          // 8: voicx.v1.DeleteChannelRequest
-	(*DeleteChannelResponse)(nil),         // 9: voicx.v1.DeleteChannelResponse
-	(*ListChannelsRequest)(nil),           // 10: voicx.v1.ListChannelsRequest
-	(*ListChannelsResponse)(nil),          // 11: voicx.v1.ListChannelsResponse
-	(*QueryPermissionsRequest)(nil),       // 12: voicx.v1.QueryPermissionsRequest
-	(*QueryPermissionsResponse)(nil),      // 13: voicx.v1.QueryPermissionsResponse
-	(*StartFileTransferRequest)(nil),      // 14: voicx.v1.StartFileTransferRequest
-	(*StartFileTransferResponse)(nil),     // 15: voicx.v1.StartFileTransferResponse
-	(*GetFileTransferStatusRequest)(nil),  // 16: voicx.v1.GetFileTransferStatusRequest
-	(*GetFileTransferStatusResponse)(nil), // 17: voicx.v1.GetFileTransferStatusResponse
-	(*CancelFileTransferRequest)(nil),     // 18: voicx.v1.CancelFileTransferRequest
-	(*CancelFileTransferResponse)(nil),    // 19: voicx.v1.CancelFileTransferResponse
-	nil,                                   // 20: voicx.v1.AuthenticateRequest.MetadataEntry
-	nil,                                   // 21: voicx.v1.Channel.MetadataEntry
-	nil,                                   // 22: voicx.v1.CreateChannelRequest.MetadataEntry
+	(*GetServerRulesRequest)(nil),         // 3: voicx.v1.GetServerRulesRequest
+	(*ListCustomMetadataRequest)(nil),     // 4: voicx.v1.ListCustomMetadataRequest
+	(*CustomMetadataEntry)(nil),           // 5: voicx.v1.CustomMetadataEntry
+	(*ListCustomMetadataResponse)(nil),    // 6: voicx.v1.ListCustomMetadataResponse
+	(*ChangeCustomMetadataRequest)(nil),   // 7: voicx.v1.ChangeCustomMetadataRequest
+	(*ChangeCustomMetadataResponse)(nil),  // 8: voicx.v1.ChangeCustomMetadataResponse
+	(*GetServerRulesResponse)(nil),        // 9: voicx.v1.GetServerRulesResponse
+	(*AuthenticateRequest)(nil),           // 10: voicx.v1.AuthenticateRequest
+	(*AuthenticateResponse)(nil),          // 11: voicx.v1.AuthenticateResponse
+	(*Channel)(nil),                       // 12: voicx.v1.Channel
+	(*ListChannelsRequest)(nil),           // 13: voicx.v1.ListChannelsRequest
+	(*ListChannelsResponse)(nil),          // 14: voicx.v1.ListChannelsResponse
+	(*GetServerInfoRequest)(nil),          // 15: voicx.v1.GetServerInfoRequest
+	(*ListComplaintsRequest)(nil),         // 16: voicx.v1.ListComplaintsRequest
+	(*ComplaintRecord)(nil),               // 17: voicx.v1.ComplaintRecord
+	(*ListComplaintsResponse)(nil),        // 18: voicx.v1.ListComplaintsResponse
+	(*ClearComplaintsRequest)(nil),        // 19: voicx.v1.ClearComplaintsRequest
+	(*ClearComplaintsResponse)(nil),       // 20: voicx.v1.ClearComplaintsResponse
+	(*ListAuditLogRequest)(nil),           // 21: voicx.v1.ListAuditLogRequest
+	(*AuditLogRecord)(nil),                // 22: voicx.v1.AuditLogRecord
+	(*ListAuditLogResponse)(nil),          // 23: voicx.v1.ListAuditLogResponse
+	(*ListClientsRequest)(nil),            // 24: voicx.v1.ListClientsRequest
+	(*VisibleClient)(nil),                 // 25: voicx.v1.VisibleClient
+	(*ListClientsResponse)(nil),           // 26: voicx.v1.ListClientsResponse
+	(*GetChannelInfoRequest)(nil),         // 27: voicx.v1.GetChannelInfoRequest
+	(*GetChannelInfoResponse)(nil),        // 28: voicx.v1.GetChannelInfoResponse
+	(*GetRoleStateRequest)(nil),           // 29: voicx.v1.GetRoleStateRequest
+	(*RoleAssignment)(nil),                // 30: voicx.v1.RoleAssignment
+	(*RolePolicySnapshot)(nil),            // 31: voicx.v1.RolePolicySnapshot
+	(*CapabilityDescriptor)(nil),          // 32: voicx.v1.CapabilityDescriptor
+	(*GetRoleStateResponse)(nil),          // 33: voicx.v1.GetRoleStateResponse
+	(*ListRoleMembersRequest)(nil),        // 34: voicx.v1.ListRoleMembersRequest
+	(*RoleMemberIdentity)(nil),            // 35: voicx.v1.RoleMemberIdentity
+	(*ListRoleMembersResponse)(nil),       // 36: voicx.v1.ListRoleMembersResponse
+	(*CheckAccessRequest)(nil),            // 37: voicx.v1.CheckAccessRequest
+	(*RoleAccessDecision)(nil),            // 38: voicx.v1.RoleAccessDecision
+	(*CheckAccessResponse)(nil),           // 39: voicx.v1.CheckAccessResponse
+	(*GetChannelOptionsRequest)(nil),      // 40: voicx.v1.GetChannelOptionsRequest
+	(*ChannelManagementOption)(nil),       // 41: voicx.v1.ChannelManagementOption
+	(*GetChannelOptionsResponse)(nil),     // 42: voicx.v1.GetChannelOptionsResponse
+	(*GetServerInfoResponse)(nil),         // 43: voicx.v1.GetServerInfoResponse
+	(*GetClientInfoRequest)(nil),          // 44: voicx.v1.GetClientInfoRequest
+	(*GetClientInfoResponse)(nil),         // 45: voicx.v1.GetClientInfoResponse
+	(*GetServerConfigRequest)(nil),        // 46: voicx.v1.GetServerConfigRequest
+	(*GetMediaLimitsRequest)(nil),         // 47: voicx.v1.GetMediaLimitsRequest
+	(*SetMediaLimitsRequest)(nil),         // 48: voicx.v1.SetMediaLimitsRequest
+	(*GetMediaLimitsResponse)(nil),        // 49: voicx.v1.GetMediaLimitsResponse
+	(*SetMediaLimitsResponse)(nil),        // 50: voicx.v1.SetMediaLimitsResponse
+	(*GetChatFiltersRequest)(nil),         // 51: voicx.v1.GetChatFiltersRequest
+	(*GetChatFiltersResponse)(nil),        // 52: voicx.v1.GetChatFiltersResponse
+	(*SetServerTextRequest)(nil),          // 53: voicx.v1.SetServerTextRequest
+	(*SetServerTextResponse)(nil),         // 54: voicx.v1.SetServerTextResponse
+	(*SetChatFiltersRequest)(nil),         // 55: voicx.v1.SetChatFiltersRequest
+	(*SetChatFiltersResponse)(nil),        // 56: voicx.v1.SetChatFiltersResponse
+	(*SetServerConfigRequest)(nil),        // 57: voicx.v1.SetServerConfigRequest
+	(*SetServerConfigResponse)(nil),       // 58: voicx.v1.SetServerConfigResponse
+	(*GetServerConfigResponse)(nil),       // 59: voicx.v1.GetServerConfigResponse
+	(*ListBansRequest)(nil),               // 60: voicx.v1.ListBansRequest
+	(*BanRecord)(nil),                     // 61: voicx.v1.BanRecord
+	(*ListBansResponse)(nil),              // 62: voicx.v1.ListBansResponse
+	(*MoveMemberRequest)(nil),             // 63: voicx.v1.MoveMemberRequest
+	(*KickMemberRequest)(nil),             // 64: voicx.v1.KickMemberRequest
+	(*KickMemberResponse)(nil),            // 65: voicx.v1.KickMemberResponse
+	(*BanMemberRequest)(nil),              // 66: voicx.v1.BanMemberRequest
+	(*BanMemberResponse)(nil),             // 67: voicx.v1.BanMemberResponse
+	(*DisconnectMemberRequest)(nil),       // 68: voicx.v1.DisconnectMemberRequest
+	(*DisconnectMemberResponse)(nil),      // 69: voicx.v1.DisconnectMemberResponse
+	(*MoveMemberResponse)(nil),            // 70: voicx.v1.MoveMemberResponse
+	(*RoleDefinition)(nil),                // 71: voicx.v1.RoleDefinition
+	(*ChannelRoleOverride)(nil),           // 72: voicx.v1.ChannelRoleOverride
+	(*ChannelRoleAccess)(nil),             // 73: voicx.v1.ChannelRoleAccess
+	(*ChangeRolesRequest)(nil),            // 74: voicx.v1.ChangeRolesRequest
+	(*ChangeRolesResponse)(nil),           // 75: voicx.v1.ChangeRolesResponse
+	(*RoleChannelSettings)(nil),           // 76: voicx.v1.RoleChannelSettings
+	(*RoleChannelCreationAccess)(nil),     // 77: voicx.v1.RoleChannelCreationAccess
+	(*ChangeChannelRequest)(nil),          // 78: voicx.v1.ChangeChannelRequest
+	(*ChangeChannelResponse)(nil),         // 79: voicx.v1.ChangeChannelResponse
+	(*SetMemberVoiceRequest)(nil),         // 80: voicx.v1.SetMemberVoiceRequest
+	(*SetMemberVoiceResponse)(nil),        // 81: voicx.v1.SetMemberVoiceResponse
+	(*StartFileTransferRequest)(nil),      // 82: voicx.v1.StartFileTransferRequest
+	(*StartFileTransferResponse)(nil),     // 83: voicx.v1.StartFileTransferResponse
+	(*GetFileTransferStatusRequest)(nil),  // 84: voicx.v1.GetFileTransferStatusRequest
+	(*GetFileTransferStatusResponse)(nil), // 85: voicx.v1.GetFileTransferStatusResponse
+	(*CancelFileTransferRequest)(nil),     // 86: voicx.v1.CancelFileTransferRequest
+	(*CancelFileTransferResponse)(nil),    // 87: voicx.v1.CancelFileTransferResponse
+	nil,                                   // 88: voicx.v1.Channel.MetadataEntry
 }
 var file_control_proto_depIdxs = []int32{
-	20, // 0: voicx.v1.AuthenticateRequest.metadata:type_name -> voicx.v1.AuthenticateRequest.MetadataEntry
-	21, // 1: voicx.v1.Channel.metadata:type_name -> voicx.v1.Channel.MetadataEntry
-	22, // 2: voicx.v1.CreateChannelRequest.metadata:type_name -> voicx.v1.CreateChannelRequest.MetadataEntry
-	5,  // 3: voicx.v1.ListChannelsResponse.channels:type_name -> voicx.v1.Channel
-	0,  // 4: voicx.v1.QueryPermissionsResponse.granted:type_name -> voicx.v1.Permission
-	0,  // 5: voicx.v1.QueryPermissionsResponse.denied:type_name -> voicx.v1.Permission
-	1,  // 6: voicx.v1.StartFileTransferRequest.direction:type_name -> voicx.v1.FileTransferDirection
-	2,  // 7: voicx.v1.GetFileTransferStatusResponse.status:type_name -> voicx.v1.FileTransferStatus
-	3,  // 8: voicx.v1.Control.Authenticate:input_type -> voicx.v1.AuthenticateRequest
-	6,  // 9: voicx.v1.Control.CreateChannel:input_type -> voicx.v1.CreateChannelRequest
-	8,  // 10: voicx.v1.Control.DeleteChannel:input_type -> voicx.v1.DeleteChannelRequest
-	10, // 11: voicx.v1.Control.ListChannels:input_type -> voicx.v1.ListChannelsRequest
-	12, // 12: voicx.v1.Control.QueryPermissions:input_type -> voicx.v1.QueryPermissionsRequest
-	14, // 13: voicx.v1.Control.StartFileTransfer:input_type -> voicx.v1.StartFileTransferRequest
-	16, // 14: voicx.v1.Control.GetFileTransferStatus:input_type -> voicx.v1.GetFileTransferStatusRequest
-	18, // 15: voicx.v1.Control.CancelFileTransfer:input_type -> voicx.v1.CancelFileTransferRequest
-	4,  // 16: voicx.v1.Control.Authenticate:output_type -> voicx.v1.AuthenticateResponse
-	7,  // 17: voicx.v1.Control.CreateChannel:output_type -> voicx.v1.CreateChannelResponse
-	9,  // 18: voicx.v1.Control.DeleteChannel:output_type -> voicx.v1.DeleteChannelResponse
-	11, // 19: voicx.v1.Control.ListChannels:output_type -> voicx.v1.ListChannelsResponse
-	13, // 20: voicx.v1.Control.QueryPermissions:output_type -> voicx.v1.QueryPermissionsResponse
-	15, // 21: voicx.v1.Control.StartFileTransfer:output_type -> voicx.v1.StartFileTransferResponse
-	17, // 22: voicx.v1.Control.GetFileTransferStatus:output_type -> voicx.v1.GetFileTransferStatusResponse
-	19, // 23: voicx.v1.Control.CancelFileTransfer:output_type -> voicx.v1.CancelFileTransferResponse
-	16, // [16:24] is the sub-list for method output_type
-	8,  // [8:16] is the sub-list for method input_type
-	8,  // [8:8] is the sub-list for extension type_name
-	8,  // [8:8] is the sub-list for extension extendee
-	0,  // [0:8] is the sub-list for field type_name
+	5,  // 0: voicx.v1.ListCustomMetadataResponse.entries:type_name -> voicx.v1.CustomMetadataEntry
+	88, // 1: voicx.v1.Channel.metadata:type_name -> voicx.v1.Channel.MetadataEntry
+	12, // 2: voicx.v1.ListChannelsResponse.channels:type_name -> voicx.v1.Channel
+	17, // 3: voicx.v1.ListComplaintsResponse.entries:type_name -> voicx.v1.ComplaintRecord
+	22, // 4: voicx.v1.ListAuditLogResponse.entries:type_name -> voicx.v1.AuditLogRecord
+	32, // 5: voicx.v1.ListAuditLogResponse.capabilities:type_name -> voicx.v1.CapabilityDescriptor
+	25, // 6: voicx.v1.ListClientsResponse.clients:type_name -> voicx.v1.VisibleClient
+	71, // 7: voicx.v1.RolePolicySnapshot.roles:type_name -> voicx.v1.RoleDefinition
+	30, // 8: voicx.v1.RolePolicySnapshot.members:type_name -> voicx.v1.RoleAssignment
+	73, // 9: voicx.v1.RolePolicySnapshot.channels:type_name -> voicx.v1.ChannelRoleAccess
+	72, // 10: voicx.v1.GetRoleStateResponse.effective_overrides:type_name -> voicx.v1.ChannelRoleOverride
+	72, // 11: voicx.v1.GetRoleStateResponse.parent_overrides:type_name -> voicx.v1.ChannelRoleOverride
+	31, // 12: voicx.v1.GetRoleStateResponse.policy:type_name -> voicx.v1.RolePolicySnapshot
+	32, // 13: voicx.v1.GetRoleStateResponse.capabilities:type_name -> voicx.v1.CapabilityDescriptor
+	35, // 14: voicx.v1.ListRoleMembersResponse.entries:type_name -> voicx.v1.RoleMemberIdentity
+	38, // 15: voicx.v1.CheckAccessResponse.decision:type_name -> voicx.v1.RoleAccessDecision
+	76, // 16: voicx.v1.GetChannelOptionsResponse.settings:type_name -> voicx.v1.RoleChannelSettings
+	41, // 17: voicx.v1.GetChannelOptionsResponse.roles:type_name -> voicx.v1.ChannelManagementOption
+	41, // 18: voicx.v1.GetChannelOptionsResponse.destinations:type_name -> voicx.v1.ChannelManagementOption
+	61, // 19: voicx.v1.ListBansResponse.bans:type_name -> voicx.v1.BanRecord
+	0,  // 20: voicx.v1.BanMemberResponse.persistence:type_name -> voicx.v1.BanPersistence
+	72, // 21: voicx.v1.ChannelRoleAccess.overrides:type_name -> voicx.v1.ChannelRoleOverride
+	71, // 22: voicx.v1.ChangeRolesRequest.role:type_name -> voicx.v1.RoleDefinition
+	73, // 23: voicx.v1.ChangeRolesRequest.channel:type_name -> voicx.v1.ChannelRoleAccess
+	72, // 24: voicx.v1.RoleChannelCreationAccess.overrides:type_name -> voicx.v1.ChannelRoleOverride
+	77, // 25: voicx.v1.ChangeChannelRequest.access:type_name -> voicx.v1.RoleChannelCreationAccess
+	76, // 26: voicx.v1.ChangeChannelRequest.settings:type_name -> voicx.v1.RoleChannelSettings
+	1,  // 27: voicx.v1.StartFileTransferRequest.direction:type_name -> voicx.v1.FileTransferDirection
+	2,  // 28: voicx.v1.GetFileTransferStatusResponse.status:type_name -> voicx.v1.FileTransferStatus
+	10, // 29: voicx.v1.Control.Authenticate:input_type -> voicx.v1.AuthenticateRequest
+	13, // 30: voicx.v1.Control.ListChannels:input_type -> voicx.v1.ListChannelsRequest
+	74, // 31: voicx.v1.Control.ChangeRoles:input_type -> voicx.v1.ChangeRolesRequest
+	78, // 32: voicx.v1.Control.ChangeChannel:input_type -> voicx.v1.ChangeChannelRequest
+	80, // 33: voicx.v1.Control.SetMemberVoice:input_type -> voicx.v1.SetMemberVoiceRequest
+	63, // 34: voicx.v1.Control.MoveMember:input_type -> voicx.v1.MoveMemberRequest
+	68, // 35: voicx.v1.Control.DisconnectMember:input_type -> voicx.v1.DisconnectMemberRequest
+	64, // 36: voicx.v1.Control.KickMember:input_type -> voicx.v1.KickMemberRequest
+	66, // 37: voicx.v1.Control.BanMember:input_type -> voicx.v1.BanMemberRequest
+	15, // 38: voicx.v1.Control.GetServerInfo:input_type -> voicx.v1.GetServerInfoRequest
+	44, // 39: voicx.v1.Control.GetClientInfo:input_type -> voicx.v1.GetClientInfoRequest
+	46, // 40: voicx.v1.Control.GetServerConfig:input_type -> voicx.v1.GetServerConfigRequest
+	47, // 41: voicx.v1.Control.GetMediaLimits:input_type -> voicx.v1.GetMediaLimitsRequest
+	48, // 42: voicx.v1.Control.SetMediaLimits:input_type -> voicx.v1.SetMediaLimitsRequest
+	57, // 43: voicx.v1.Control.SetServerConfig:input_type -> voicx.v1.SetServerConfigRequest
+	51, // 44: voicx.v1.Control.GetChatFilters:input_type -> voicx.v1.GetChatFiltersRequest
+	55, // 45: voicx.v1.Control.SetChatFilters:input_type -> voicx.v1.SetChatFiltersRequest
+	53, // 46: voicx.v1.Control.SetServerText:input_type -> voicx.v1.SetServerTextRequest
+	4,  // 47: voicx.v1.Control.ListCustomMetadata:input_type -> voicx.v1.ListCustomMetadataRequest
+	7,  // 48: voicx.v1.Control.ChangeCustomMetadata:input_type -> voicx.v1.ChangeCustomMetadataRequest
+	60, // 49: voicx.v1.Control.ListBans:input_type -> voicx.v1.ListBansRequest
+	29, // 50: voicx.v1.Control.GetRoleState:input_type -> voicx.v1.GetRoleStateRequest
+	34, // 51: voicx.v1.Control.ListRoleMembers:input_type -> voicx.v1.ListRoleMembersRequest
+	37, // 52: voicx.v1.Control.CheckAccess:input_type -> voicx.v1.CheckAccessRequest
+	40, // 53: voicx.v1.Control.GetChannelOptions:input_type -> voicx.v1.GetChannelOptionsRequest
+	24, // 54: voicx.v1.Control.ListClients:input_type -> voicx.v1.ListClientsRequest
+	27, // 55: voicx.v1.Control.GetChannelInfo:input_type -> voicx.v1.GetChannelInfoRequest
+	21, // 56: voicx.v1.Control.ListAuditLog:input_type -> voicx.v1.ListAuditLogRequest
+	16, // 57: voicx.v1.Control.ListComplaints:input_type -> voicx.v1.ListComplaintsRequest
+	19, // 58: voicx.v1.Control.ClearComplaints:input_type -> voicx.v1.ClearComplaintsRequest
+	3,  // 59: voicx.v1.Control.GetServerRules:input_type -> voicx.v1.GetServerRulesRequest
+	82, // 60: voicx.v1.Control.StartFileTransfer:input_type -> voicx.v1.StartFileTransferRequest
+	84, // 61: voicx.v1.Control.GetFileTransferStatus:input_type -> voicx.v1.GetFileTransferStatusRequest
+	86, // 62: voicx.v1.Control.CancelFileTransfer:input_type -> voicx.v1.CancelFileTransferRequest
+	11, // 63: voicx.v1.Control.Authenticate:output_type -> voicx.v1.AuthenticateResponse
+	14, // 64: voicx.v1.Control.ListChannels:output_type -> voicx.v1.ListChannelsResponse
+	75, // 65: voicx.v1.Control.ChangeRoles:output_type -> voicx.v1.ChangeRolesResponse
+	79, // 66: voicx.v1.Control.ChangeChannel:output_type -> voicx.v1.ChangeChannelResponse
+	81, // 67: voicx.v1.Control.SetMemberVoice:output_type -> voicx.v1.SetMemberVoiceResponse
+	70, // 68: voicx.v1.Control.MoveMember:output_type -> voicx.v1.MoveMemberResponse
+	69, // 69: voicx.v1.Control.DisconnectMember:output_type -> voicx.v1.DisconnectMemberResponse
+	65, // 70: voicx.v1.Control.KickMember:output_type -> voicx.v1.KickMemberResponse
+	67, // 71: voicx.v1.Control.BanMember:output_type -> voicx.v1.BanMemberResponse
+	43, // 72: voicx.v1.Control.GetServerInfo:output_type -> voicx.v1.GetServerInfoResponse
+	45, // 73: voicx.v1.Control.GetClientInfo:output_type -> voicx.v1.GetClientInfoResponse
+	59, // 74: voicx.v1.Control.GetServerConfig:output_type -> voicx.v1.GetServerConfigResponse
+	49, // 75: voicx.v1.Control.GetMediaLimits:output_type -> voicx.v1.GetMediaLimitsResponse
+	50, // 76: voicx.v1.Control.SetMediaLimits:output_type -> voicx.v1.SetMediaLimitsResponse
+	58, // 77: voicx.v1.Control.SetServerConfig:output_type -> voicx.v1.SetServerConfigResponse
+	52, // 78: voicx.v1.Control.GetChatFilters:output_type -> voicx.v1.GetChatFiltersResponse
+	56, // 79: voicx.v1.Control.SetChatFilters:output_type -> voicx.v1.SetChatFiltersResponse
+	54, // 80: voicx.v1.Control.SetServerText:output_type -> voicx.v1.SetServerTextResponse
+	6,  // 81: voicx.v1.Control.ListCustomMetadata:output_type -> voicx.v1.ListCustomMetadataResponse
+	8,  // 82: voicx.v1.Control.ChangeCustomMetadata:output_type -> voicx.v1.ChangeCustomMetadataResponse
+	62, // 83: voicx.v1.Control.ListBans:output_type -> voicx.v1.ListBansResponse
+	33, // 84: voicx.v1.Control.GetRoleState:output_type -> voicx.v1.GetRoleStateResponse
+	36, // 85: voicx.v1.Control.ListRoleMembers:output_type -> voicx.v1.ListRoleMembersResponse
+	39, // 86: voicx.v1.Control.CheckAccess:output_type -> voicx.v1.CheckAccessResponse
+	42, // 87: voicx.v1.Control.GetChannelOptions:output_type -> voicx.v1.GetChannelOptionsResponse
+	26, // 88: voicx.v1.Control.ListClients:output_type -> voicx.v1.ListClientsResponse
+	28, // 89: voicx.v1.Control.GetChannelInfo:output_type -> voicx.v1.GetChannelInfoResponse
+	23, // 90: voicx.v1.Control.ListAuditLog:output_type -> voicx.v1.ListAuditLogResponse
+	18, // 91: voicx.v1.Control.ListComplaints:output_type -> voicx.v1.ListComplaintsResponse
+	20, // 92: voicx.v1.Control.ClearComplaints:output_type -> voicx.v1.ClearComplaintsResponse
+	9,  // 93: voicx.v1.Control.GetServerRules:output_type -> voicx.v1.GetServerRulesResponse
+	83, // 94: voicx.v1.Control.StartFileTransfer:output_type -> voicx.v1.StartFileTransferResponse
+	85, // 95: voicx.v1.Control.GetFileTransferStatus:output_type -> voicx.v1.GetFileTransferStatusResponse
+	87, // 96: voicx.v1.Control.CancelFileTransfer:output_type -> voicx.v1.CancelFileTransferResponse
+	63, // [63:97] is the sub-list for method output_type
+	29, // [29:63] is the sub-list for method input_type
+	29, // [29:29] is the sub-list for extension type_name
+	29, // [29:29] is the sub-list for extension extendee
+	0,  // [0:29] is the sub-list for field type_name
 }
 
 func init() { file_control_proto_init() }
@@ -1492,13 +6555,18 @@ func file_control_proto_init() {
 	if File_control_proto != nil {
 		return
 	}
+	file_control_proto_msgTypes[4].OneofWrappers = []any{}
+	file_control_proto_msgTypes[50].OneofWrappers = []any{}
+	file_control_proto_msgTypes[52].OneofWrappers = []any{}
+	file_control_proto_msgTypes[75].OneofWrappers = []any{}
+	file_control_proto_msgTypes[77].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_control_proto_rawDesc), len(file_control_proto_rawDesc)),
 			NumEnums:      3,
-			NumMessages:   20,
+			NumMessages:   86,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

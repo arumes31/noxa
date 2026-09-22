@@ -41,7 +41,7 @@ func TestBuildSnapshotOrderIsStable(t *testing.T) {
 // field would silently rename it in every snapshot (304).
 func TestSnapshotChannelFieldNames(t *testing.T) {
 	sm := newTestManager()
-	sm.AddChannel(&state.Channel{ChannelID: 1, Name: "Root", OrderIndex: 3, NeededJoinPower: 50, InheritPermissions: true})
+	sm.AddChannel(&state.Channel{ChannelID: 1, Name: "Root", OrderIndex: 3})
 
 	raw, err := json.Marshal(BuildSnapshot(sm, true, ""))
 	if err != nil {
@@ -56,7 +56,7 @@ func TestSnapshotChannelFieldNames(t *testing.T) {
 	if len(snap.RootChannels) != 1 {
 		t.Fatalf("root channels = %d, want 1", len(snap.RootChannels))
 	}
-	for _, key := range []string{"OrderIndex", "ParentID", "NeededJoinPower", "InheritPermissions"} {
+	for _, key := range []string{"OrderIndex", "ParentID"} {
 		if _, ok := snap.RootChannels[0][key]; !ok {
 			t.Fatalf("snapshot channel has no %q field: %s", key, raw)
 		}

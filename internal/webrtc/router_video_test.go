@@ -260,8 +260,9 @@ func TestRelayKeyframeRequest(t *testing.T) {
 	r.rtcpWriters["pub"] = pub
 	r.mu.Unlock()
 	registerVideoSource(r, "pub", SlotCam, "f", 9001)
-
-	r.relayKeyframeRequest(9001)
+	sender := &webrtc.RTPSender{}
+	r.pubTracks["viewer"] = map[string]*pubTrack{"pub": {video: map[string]*pubSlot{SlotCam: {sender: sender}}}}
+	r.relayKeyframeRequest("viewer", sender)
 	if got := pub.pliCount(); got != 1 {
 		t.Fatalf("relayed PLIs = %d, want 1", got)
 	}
@@ -270,10 +271,49 @@ func TestRelayKeyframeRequest(t *testing.T) {
 		t.Fatalf("relayed PLI MediaSSRC = %d, want 9001", pli.MediaSSRC)
 	}
 
-	// Unknown SSRC: no relay.
-	r.relayKeyframeRequest(424242)
+	// An unknown or another subscriber's binding cannot request a frame.
+	r.relayKeyframeRequest("viewer", &webrtc.RTPSender{})
+	r.relayKeyframeRequest("other", sender)
 	if got := pub.pliCount(); got != 1 {
 		t.Fatalf("relayed PLIs after unknown SSRC = %d, want 1", got)
+	}
+}
+
+func TestRelayKeyframeRequestUsesSubscriberBinding(t *testing.T) {
+	pc, err := webrtc.NewPeerConnection(webrtc.Configuration{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = pc.Close() })
+	track, err := webrtc.NewTrackLocalStaticRTP(webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeVP8}, "cam", "publisher")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sender, err := pc.AddTrack(track)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := NewRouter(nil)
+	pub := &fakeRTCPWriter{}
+	r.rtcpWriters["pub"] = pub
+	r.pubTracks["viewer"] = map[string]*pubTrack{"pub": {video: map[string]*pubSlot{SlotCam: {sender: sender}}}}
+	registerVideoSource(r, "pub", SlotCam, "h", 9001)
+	ssrc := uint32(sender.GetParameters().Encodings[0].SSRC)
+	if ssrc == 9001 {
+		t.Fatal("test needs different publisher and subscriber SSRCs")
+	}
+	r.relayKeyframeRequest("viewer", sender)
+	if pub.pliCount() != 1 {
+		t.Fatal("subscriber's rewritten SSRC did not reach publisher")
+	}
+	if got := pub.pkts[0][0].(*rtcp.PictureLossIndication).MediaSSRC; got != 9001 {
+		t.Fatalf("keyframe requested wrong source: %d", got)
+	}
+	delete(r.pubTracks["viewer"], "pub")
+	clear(r.keyframeLast)
+	r.relayKeyframeRequest("viewer", sender)
+	if pub.pliCount() != 1 {
+		t.Fatal("removed binding requested a keyframe")
 	}
 }
 

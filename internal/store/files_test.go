@@ -165,4 +165,36 @@ func TestFileQuotaUsageDB(t *testing.T) {
 	if err != nil || none != 0 {
 		t.Errorf("empty uploader usage = %d, err=%v, want 0", none, err)
 	}
+	for _, tc := range []struct {
+		name, hash, who   string
+		channel, uploader int64
+	}{
+		{"deduplicated", "sha-dup-" + suffix, uploader, 1000, 1000},
+		{"another_uploader", "sha-other-" + suffix, uploader, 500, 0},
+		{"missing_hash", "absent", uploader, 0, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			channel, personal, err := s.FileContentUsage(ctx, chA, tc.hash, tc.who)
+			if err != nil || channel != tc.channel || personal != tc.uploader {
+				t.Fatalf("content usage = %d/%d, %v; want %d/%d", channel, personal, err, tc.channel, tc.uploader)
+			}
+		})
+	}
+	for _, tc := range []struct {
+		name               string
+		channel            int64
+		folder, file, hash string
+		want               int64
+	}{
+		{"source_copy_remains", chA, "", "one.bin", "sha-dup-" + suffix, 1000},
+		{"last_reference", chB, "", "three.bin", "sha-dup-" + suffix, 0},
+		{"other_uploader", chA, "", "missing", "sha-other-" + suffix, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := s.UploaderContentUsageExcept(ctx, tc.channel, tc.hash, uploader, tc.folder, tc.file)
+			if err != nil || got != tc.want {
+				t.Fatalf("remaining content = %d, %v; want %d", got, err, tc.want)
+			}
+		})
+	}
 }

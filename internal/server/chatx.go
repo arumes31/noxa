@@ -25,8 +25,9 @@ import (
 
 	"go.uber.org/zap"
 
+	"noxa/internal/authorization"
 	"noxa/internal/netproto"
-	"noxa/internal/permissions"
+	"noxa/internal/state"
 	"noxa/internal/store"
 )
 
@@ -96,22 +97,8 @@ func (l *chatRateLimiter) allowLimit(uid string, now time.Time, limit int) bool 
 	return true
 }
 
-func (s *TCPServer) chatActionLimit(ctx context.Context, client *Client) int {
-	limit := s.chatRate.max
-	pc, err := s.permCheckerFor(ctx, client)
-	if err != nil {
-		return limit
-	}
-	switch power := pc.power(permissions.PermissionKeyClientTalkPower); {
-	case power >= 75:
-		return limit * 8
-	case power >= 50:
-		return limit * 4
-	case power >= 25:
-		return limit * 2
-	default:
-		return limit
-	}
+func (s *TCPServer) chatActionLimit(context.Context, *Client) int {
+	return s.chatRate.max
 }
 
 // spamEntry is one recently seen message body for spam detection. Only the
@@ -250,14 +237,14 @@ func (t *slowTracker) check(uid string, channelID int64, seconds int, now time.T
 // shape-validated (enc, key id) by handleChatSend.
 func (s *TCPServer) routeScopedChat(ctx context.Context, client *Client, msg netproto.ChatSend, channelID int64) error {
 	uid := client.UniqueID
+	if msg.AckRequested && s.deps.Chat == nil {
+		return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "chat store unavailable")
+	}
 
 	// (114) slow mode (channel scope; b_chat_slowmode_bypass or admins skip).
 	if channelID != 0 && s.cfg != nil {
 		if ch, ok := s.deps.State.GetChannel(channelID); ok && ch.SlowModeSeconds > 0 {
-			privileged := false
-			if pc, err := s.permCheckerFor(ctx, client); err == nil {
-				privileged = pc.granted(permissions.PermissionKeyChatSlowmodeBypass)
-			}
+			privileged := s.roleAllowed(ctx, client, channelID, authorization.BypassSlowmode)
 			if !privileged {
 				if wait := s.chatSlow.check(uid, channelID, ch.SlowModeSeconds, time.Now()); wait > 0 {
 					s.metricsSink().IncChatMessage("rejected")
@@ -345,7 +332,7 @@ func (s *TCPServer) routeScopedChat(ctx context.Context, client *Client, msg net
 		}
 		messageID = id
 		if !inserted {
-			return nil
+			return s.acknowledgeChat(client, msg, netproto.ChatStored, messageID)
 		}
 	}
 
@@ -375,18 +362,13 @@ func (s *TCPServer) routeScopedChat(ctx context.Context, client *Client, msg net
 		return err
 	}
 	if channelID == 0 {
-		// BroadcastEvent wraps the data in the event envelope itself.
-		raw, err := json.Marshal(chat)
-		if err != nil {
-			return err
-		}
-		s.deps.Broadcast.BroadcastEvent(eventChat, raw)
+		s.broadcastChannelScoped(ctx, channelID, payload)
 		s.metricsSink().IncChatMessage("global")
 	} else {
 		s.broadcastChannelScoped(ctx, channelID, payload)
 		s.metricsSink().IncChatMessage("channel")
 	}
-	return nil
+	return s.acknowledgeChat(client, msg, netproto.ChatStored, messageID)
 }
 
 // ---------------------------------------------------------------------------
@@ -402,14 +384,9 @@ func (s *TCPServer) routeScopedChat(ctx context.Context, client *Client, msg net
 // content, so sealedSetting deliberately excludes it.
 const chatFiltersKey = "chat_filters"
 
-// permissionKeyChatFilterManage gates reading and writing the moderation
-// lists. Admins bypass every check, so the lists are manageable out of the box
-// and delegable once the key is granted (117/118).
-const permissionKeyChatFilterManage = permissions.PermissionKey("b_chat_filter_manage")
-
 // maxFilterListBytes caps one stored list. moderateBody re-scans every list on
 // every send and every edit, so an unbounded list is a self-inflicted DoS.
-const maxFilterListBytes = 4096
+const maxFilterListBytes = netproto.MaxChatFilterListBytes
 
 // chatFilters holds the three comma-separated moderation lists. The JSON tags
 // are both the stored document's shape and netproto.ChatFilterResponse's;
@@ -422,18 +399,19 @@ type chatFilters struct {
 
 // chatFilterCache memoises the lists: moderateBody runs on every moderated
 // message, and reloading the setting each time would put a database read on
-// the send path. Writers call invalidateFilters.
+// the send path. Managed saves publish their committed values; legacy raw
+// setting writes invalidate the cache under the same writer lock.
 type chatFilterCache struct {
 	mu         sync.Mutex
 	loaded     bool
 	fromConfig bool
 	filters    chatFilters
 
-	// writeMu serialises the read-modify-write in handleChatFilterSet. A set
+	// writeMu serialises managed read-modify-write and legacy raw writes. A set
 	// carries only the lists it changes, so two concurrent operators editing
 	// different lists would otherwise each store their own view and one edit
 	// would vanish.
-	writeMu sync.Mutex
+	writeMu contextMutex
 }
 
 // configFilters is the boot-time fallback, in force until an operator stores
@@ -605,20 +583,17 @@ func (s *TCPServer) moderateBody(ctx context.Context, body string) error {
 // handleChatFilterGet returns the moderation lists in force. Reads are gated
 // like writes: the word list tells an attacker exactly what to evade.
 func (s *TCPServer) handleChatFilterGet(ctx context.Context, client *Client, _ *netproto.Frame) error {
-	pc, err := s.permCheckerFor(ctx, client)
-	if err != nil {
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "permission backend unavailable")
-	}
-	if !pc.granted(permissionKeyChatFilterManage) {
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, "insufficient permission: "+string(permissionKeyChatFilterManage))
-	}
-	f, fromConfig := s.effectiveFilters(ctx)
-	return s.writeMessage(client, netproto.MsgChatFilterResponse, netproto.ChatFilterResponse{
-		WordFilter:    f.WordFilter,
-		LinkBlacklist: f.LinkBlacklist,
-		LinkWhitelist: f.LinkWhitelist,
-		FromConfig:    fromConfig,
+	return s.withChatFilterManagement(ctx, client, func(ctx context.Context) error {
+		result, err := s.readManagedChatFilters(ctx)
+		if err != nil {
+			return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "reading chat filters failed")
+		}
+		return s.writeMessageInContext(ctx, client, netproto.MsgChatFilterResponse, result)
 	})
+}
+
+func (s *TCPServer) withChatFilterManagement(ctx context.Context, client *Client, effect func(context.Context) error) error {
+	return s.roleAction(ctx, client, 0, authorization.ManageChatFilters, effect)
 }
 
 // handleChatFilterSet replaces the runtime moderation lists (117/118) and
@@ -628,60 +603,17 @@ func (s *TCPServer) handleChatFilterSet(ctx context.Context, client *Client, f *
 	if err := netproto.Decode(f, &msg); err != nil {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "malformed chat_filter_set: "+err.Error())
 	}
-	if s.deps == nil || s.deps.Chat == nil {
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "chat store unavailable")
-	}
-	pc, err := s.permCheckerFor(ctx, client)
-	if err != nil {
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "permission backend unavailable")
-	}
-	if !pc.granted(permissionKeyChatFilterManage) {
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, "insufficient permission: "+string(permissionKeyChatFilterManage))
-	}
-
-	if s.chatFilters != nil {
-		s.chatFilters.writeMu.Lock()
-		defer s.chatFilters.writeMu.Unlock()
-	}
-
-	// Every set writes the FULL triple, so the first one snapshots whatever
-	// config.yaml still supplied and the lists can never be half-stored.
-	next, _ := s.effectiveFilters(ctx)
-	for _, upd := range []struct {
-		in  *string
-		out *string
-	}{
-		{msg.WordFilter, &next.WordFilter},
-		{msg.LinkBlacklist, &next.LinkBlacklist},
-		{msg.LinkWhitelist, &next.LinkWhitelist},
-	} {
-		if upd.in == nil {
-			continue
+	return s.withChatFilterManagement(ctx, client, func(ctx context.Context) error {
+		result, err := s.saveChatFilters(ctx, client.uniqueID(), msg)
+		if errors.Is(err, authorization.ErrRoleInvalid) {
+			return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, fmt.Sprintf("filter list too long (max %d bytes)", maxFilterListBytes))
 		}
-		if len(*upd.in) > maxFilterListBytes {
-			return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed,
-				fmt.Sprintf("filter list too long (max %d bytes)", maxFilterListBytes))
+		if err != nil {
+			return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "saving chat filters failed")
 		}
-		*upd.out = normalizeList(*upd.in)
-	}
-
-	raw, err := json.Marshal(next)
-	if err != nil {
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "encoding chat filters failed")
-	}
-	if err := s.deps.Chat.SetServerSetting(ctx, chatFiltersKey, string(raw), 0); err != nil {
-		s.logger.Warn("storing chat filters failed", zap.Error(err))
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "storing chat filters failed")
-	}
-	s.invalidateFilters()
-	s.audit(ctx, client.UniqueID, "chat_filter_set", chatFiltersKey,
-		fmt.Sprintf("words=%d blacklist=%d whitelist=%d",
-			len(splitList(next.WordFilter)), len(splitList(next.LinkBlacklist)), len(splitList(next.LinkWhitelist))))
-
-	return s.writeMessage(client, netproto.MsgChatFilterResponse, netproto.ChatFilterResponse{
-		WordFilter:    next.WordFilter,
-		LinkBlacklist: next.LinkBlacklist,
-		LinkWhitelist: next.LinkWhitelist,
+		replyCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+		return s.writeMessageInContext(replyCtx, client, netproto.MsgChatFilterResponse, result)
 	})
 }
 
@@ -689,13 +621,19 @@ func (s *TCPServer) handleChatFilterSet(ctx context.Context, client *Client, f *
 var mentionRe = regexp.MustCompile(`@([A-Za-z0-9_\-]+)`)
 
 // parseMentions resolves @nickname mentions to unique IDs of online users
-// (105). @channel mentions all current channel members; @here/@everyone
-// require b_chat_mention_all (unset = denied).
+// (105). Mass mentions require MentionEveryone.
 func (s *TCPServer) parseMentions(ctx context.Context, client *Client, channelID int64, body string) []string {
 	if s.deps.State == nil {
 		return nil
 	}
 	out := map[string]bool{}
+	addMention := func(member *state.Client) {
+		if !s.roleAllowed(ctx, client, member.ChannelID, authorization.ViewChannel) ||
+			(member.Status == "invisible" && !s.roleAllowed(ctx, client, 0, authorization.ViewConnectionInfo)) {
+			return
+		}
+		out[member.UniqueID] = true
+	}
 
 	// (105) @channel, @here and @everyone all mass-notify, so all three sit
 	// behind the same permission — gating only two of them let any user reach
@@ -704,20 +642,18 @@ func (s *TCPServer) parseMentions(ctx context.Context, client *Client, channelID
 	if mentionRe.MatchString(body) {
 		lower := strings.ToLower(body)
 		if strings.Contains(lower, "@channel") || strings.Contains(lower, "@here") || strings.Contains(lower, "@everyone") {
-			if pc, err := s.permCheckerFor(ctx, client); err == nil && pc.granted(permissions.PermissionKeyChatMentionAll) {
-				mentionAll = true
-			}
+			mentionAll = s.roleAllowed(ctx, client, channelID, authorization.MentionEveryone)
 		}
 	}
 
 	if mentionAll {
 		if channelID != 0 {
 			for _, m := range s.deps.State.ChannelMembers(channelID) {
-				out[m.UniqueID] = true
+				addMention(m)
 			}
 		} else {
 			for _, c := range s.deps.State.ListClients() {
-				out[c.UniqueID] = true
+				addMention(c)
 			}
 		}
 	} else {
@@ -727,7 +663,7 @@ func (s *TCPServer) parseMentions(ctx context.Context, client *Client, channelID
 				continue
 			}
 			if strings.Contains(lower, "@"+strings.ToLower(c.Nickname)) {
-				out[c.UniqueID] = true
+				addMention(c)
 			}
 		}
 	}
@@ -801,6 +737,12 @@ func (s *TCPServer) handleChatHistory(ctx context.Context, client *Client, f *ne
 	if err := netproto.Decode(f, &msg); err != nil {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "malformed chat_history: "+err.Error())
 	}
+	return s.roleAction(ctx, client, msg.ChannelID, authorization.ReadHistory, func(ctx context.Context) error {
+		return s.chatHistoryAllowed(ctx, client, msg)
+	})
+}
+
+func (s *TCPServer) chatHistoryAllowed(ctx context.Context, client *Client, msg netproto.ChatHistory) error {
 	if s.deps == nil || s.deps.Chat == nil || s.deps.State == nil {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "chat store unavailable")
 	}
@@ -890,9 +832,12 @@ func (s *TCPServer) handleChatEdit(ctx context.Context, client *Client, f *netpr
 	if err != nil {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "message lookup failed")
 	}
-	if stored == nil || stored.DeletedAt != nil {
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodeNotFound, "message not found")
-	}
+	return s.messageRoleAction(ctx, client, stored, authorization.SendMessages, func(ctx context.Context) error {
+		return s.chatEditAllowed(ctx, client, msg, stored)
+	})
+}
+
+func (s *TCPServer) chatEditAllowed(ctx context.Context, client *Client, msg netproto.ChatEdit, stored *store.ChatMessage) error {
 	if stored.FromUniqueID != client.UniqueID {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, "you can only edit your own messages")
 	}
@@ -957,7 +902,7 @@ func (s *TCPServer) handleChatEdit(ctx context.Context, client *Client, f *netpr
 		"edited_by":  client.UniqueID,
 		"version":    version,
 	})
-	return nil
+	return s.ackChatMutation(client, msg.AckRequested, netproto.MsgChatEdit, msg.MessageID)
 }
 
 // handleChatDelete tombstones a message: own messages, or any with
@@ -974,18 +919,16 @@ func (s *TCPServer) handleChatDelete(ctx context.Context, client *Client, f *net
 	if err != nil {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "message lookup failed")
 	}
-	if stored == nil || stored.DeletedAt != nil {
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodeNotFound, "message not found")
+	capability := authorization.ManageMessages
+	if stored != nil && stored.FromUniqueID == client.UniqueID {
+		capability = authorization.ViewChannel
 	}
-	if stored.FromUniqueID != client.UniqueID {
-		pc, err := s.permCheckerFor(ctx, client)
-		if err != nil {
-			return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "permission backend unavailable")
-		}
-		if !pc.granted(permissions.PermissionKeyChatDeleteAny) {
-			return s.sendErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, "insufficient permission: "+string(permissions.PermissionKeyChatDeleteAny))
-		}
-	}
+	return s.messageRoleAction(ctx, client, stored, capability, func(ctx context.Context) error {
+		return s.chatDeleteAllowed(ctx, client, msg, stored)
+	})
+}
+
+func (s *TCPServer) chatDeleteAllowed(ctx context.Context, client *Client, msg netproto.ChatDelete, stored *store.ChatMessage) error {
 	if err := s.deps.Chat.DeleteChatMessage(ctx, msg.MessageID); err != nil {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeNotFound, "delete failed: "+err.Error())
 	}
@@ -994,7 +937,7 @@ func (s *TCPServer) handleChatDelete(ctx context.Context, client *Client, f *net
 		"channel_id": stored.ChannelID,
 		"deleted_by": client.UniqueID,
 	})
-	return nil
+	return s.ackChatMutation(client, msg.AckRequested, netproto.MsgChatDelete, msg.MessageID)
 }
 
 // broadcastScope broadcasts an event to a channel's members and subscribers
@@ -1002,14 +945,6 @@ func (s *TCPServer) handleChatDelete(ctx context.Context, client *Client, f *net
 // broadcastChannelScoped takes a pre-wrapped envelope, BroadcastEvent wraps
 // the data itself.
 func (s *TCPServer) broadcastScope(ctx context.Context, channelID int64, eventType string, data any) {
-	if channelID == 0 {
-		raw, err := json.Marshal(data)
-		if err != nil {
-			return
-		}
-		s.deps.Broadcast.BroadcastEvent(eventType, raw)
-		return
-	}
 	payload, err := eventEnvelope(eventType, data)
 	if err != nil {
 		return
@@ -1021,24 +956,21 @@ func (s *TCPServer) broadcastScope(ctx context.Context, channelID int64, eventTy
 // Pins (109)
 // ---------------------------------------------------------------------------
 
-// handleChatPin pins or unpins a message. Gated by b_channel_modify (the
-// channel-edit permission — pin curation is a channel-management action).
+// handleChatPin pins or unpins a message after ManageMessages authorization.
 func (s *TCPServer) handleChatPin(ctx context.Context, client *Client, f *netproto.Frame) error {
 	var msg netproto.ChatPin
 	if err := netproto.Decode(f, &msg); err != nil {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "malformed chat_pin: "+err.Error())
 	}
+	return s.roleAction(ctx, client, msg.ChannelID, authorization.ManageMessages, func(ctx context.Context) error {
+		return s.chatPinAllowed(ctx, client, msg)
+	})
+}
+
+func (s *TCPServer) chatPinAllowed(ctx context.Context, client *Client, msg netproto.ChatPin) error {
 	if s.deps == nil || s.deps.Chat == nil {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "chat store unavailable")
 	}
-	pc, err := s.permCheckerFor(ctx, client)
-	if err != nil {
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "permission backend unavailable")
-	}
-	if !pc.granted(permissions.PermissionKeyChannelModify) {
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, "insufficient permission: "+string(permissions.PermissionKeyChannelModify))
-	}
-
 	if msg.Pinned {
 		stored, err := s.deps.Chat.GetChatMessage(ctx, msg.MessageID)
 		if err != nil || stored == nil || stored.DeletedAt != nil {
@@ -1065,7 +997,7 @@ func (s *TCPServer) handleChatPin(ctx context.Context, client *Client, f *netpro
 		"channel_id": msg.ChannelID,
 		"by":         client.UniqueID,
 	})
-	return nil
+	return s.ackChatMutation(client, msg.AckRequested, netproto.MsgChatPin, msg.MessageID)
 }
 
 // handleChatPins lists a channel's pins. It is gated exactly like history:
@@ -1078,6 +1010,12 @@ func (s *TCPServer) handleChatPins(ctx context.Context, client *Client, f *netpr
 	if err := netproto.Decode(f, &msg); err != nil {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "malformed chat_pins: "+err.Error())
 	}
+	return s.roleAction(ctx, client, msg.ChannelID, authorization.ReadHistory, func(ctx context.Context) error {
+		return s.chatPinsAllowed(ctx, client, msg)
+	})
+}
+
+func (s *TCPServer) chatPinsAllowed(ctx context.Context, client *Client, msg netproto.ChatPins) error {
 	if s.deps == nil || s.deps.Chat == nil {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "chat store unavailable")
 	}
@@ -1127,9 +1065,15 @@ func (s *TCPServer) handleChatReact(ctx context.Context, client *Client, f *netp
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "invalid emoji")
 	}
 	stored, err := s.deps.Chat.GetChatMessage(ctx, msg.MessageID)
-	if err != nil || stored == nil || stored.DeletedAt != nil {
+	if err != nil {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeNotFound, "message not found")
 	}
+	return s.messageRoleAction(ctx, client, stored, authorization.SendMessages, func(ctx context.Context) error {
+		return s.chatReactAllowed(ctx, client, msg, stored)
+	})
+}
+
+func (s *TCPServer) chatReactAllowed(ctx context.Context, client *Client, msg netproto.ChatReact, stored *store.ChatMessage) error {
 	counts, added, err := s.deps.Chat.ToggleReaction(ctx, msg.MessageID, client.UniqueID, msg.Emoji)
 	if err != nil {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "reaction failed")
@@ -1140,8 +1084,18 @@ func (s *TCPServer) handleChatReact(ctx context.Context, client *Client, f *netp
 		"reactions":  counts,
 		"by":         client.UniqueID,
 		"added":      added,
+		"emoji":      msg.Emoji,
 	})
-	return nil
+	return s.ackChatMutation(client, msg.AckRequested, netproto.MsgChatReact, msg.MessageID)
+}
+
+func (s *TCPServer) ackChatMutation(client *Client, requested bool, operation netproto.MessageType, messageID int64) error {
+	if !requested {
+		return nil
+	}
+	return s.writeCommittedReply(client, netproto.MsgChatMutationSaved, netproto.ChatMutationSaved{
+		Operation: operation, MessageID: messageID,
+	})
 }
 
 // ---------------------------------------------------------------------------
@@ -1167,6 +1121,12 @@ type typingEvent struct {
 // an error: an indicator is fire-and-forget, and a client that left a channel
 // mid-keystroke should not get an error frame for it.
 func (s *TCPServer) handleTyping(ctx context.Context, client *Client, f *netproto.Frame) error {
+	return s.rolePolicyRead(ctx, client, func(ctx context.Context) error {
+		return s.relaySessionTyping(ctx, client, f)
+	})
+}
+
+func (s *TCPServer) relaySessionTyping(ctx context.Context, client *Client, f *netproto.Frame) error {
 	var msg netproto.Typing
 	if err := netproto.Decode(f, &msg); err != nil {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "malformed typing: "+err.Error())
@@ -1188,6 +1148,13 @@ func (s *TCPServer) handleTyping(ctx context.Context, client *Client, f *netprot
 		UniqueID:  client.UniqueID,
 		Nickname:  client.Username,
 		ChannelID: msg.ChannelID,
+	}
+	if msg.ToUniqueID == "" {
+		_ = s.withRoleAccess(ctx, client, msg.ChannelID, authorization.SendMessages, func(ctx context.Context) error {
+			s.broadcastScope(ctx, msg.ChannelID, eventTyping, data)
+			return nil
+		})
+		return nil
 	}
 	switch {
 	case msg.ToUniqueID != "":
@@ -1240,6 +1207,12 @@ func (s *TCPServer) handleChatRead(ctx context.Context, client *Client, f *netpr
 
 // relayReceipt forwards a receipt event to the (online) original DM sender.
 func (s *TCPServer) relayReceipt(ctx context.Context, client *Client, toUniqueID, eventType, clientMsgID string) error {
+	return s.rolePolicyRead(ctx, client, func(ctx context.Context) error {
+		return s.relaySessionReceipt(ctx, client, toUniqueID, eventType, clientMsgID)
+	})
+}
+
+func (s *TCPServer) relaySessionReceipt(ctx context.Context, client *Client, toUniqueID, eventType, clientMsgID string) error {
 	if s.deps == nil || s.deps.Broadcast == nil {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "broadcast backend unavailable")
 	}
@@ -1266,45 +1239,33 @@ func (s *TCPServer) relayReceipt(ctx context.Context, client *Client, toUniqueID
 // emojiNameRe validates emoji names.
 var emojiNameRe = regexp.MustCompile(`^[a-z0-9_\-]{1,32}$`)
 
-// handleEmojiUpload stores a custom emoji image and announces it. Gated by
-// b_emoji_manage.
+// handleEmojiUpload stores a custom emoji image and announces it.
 func (s *TCPServer) handleEmojiUpload(ctx context.Context, client *Client, f *netproto.Frame) error {
 	var msg netproto.EmojiUpload
 	if err := netproto.Decode(f, &msg); err != nil {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "malformed emoji_upload: "+err.Error())
 	}
-	pc, err := s.permCheckerFor(ctx, client)
-	if err != nil {
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "permission backend unavailable")
-	}
-	if !pc.granted(permissions.PermissionKeyEmojiManage) {
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, "insufficient permission: "+string(permissions.PermissionKeyEmojiManage))
-	}
-	if !emojiNameRe.MatchString(msg.Name) {
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "invalid emoji name (1-32 of a-z 0-9 _ -)")
-	}
-	raw, ext, err := decodeImage(msg.DataBase64)
-	if err != nil {
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, err.Error())
-	}
-	fileName, err := s.assets().writeImage("emojis", msg.Name, ext, raw)
-	if err != nil {
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "emoji write failed")
-	}
-	s.broadcastEvent(eventEmojiAdded, map[string]any{"name": msg.Name, "file_name": fileName, "by": client.UniqueID})
-	return nil
+	return s.withEmojiManagement(ctx, client, func(ctx context.Context) error {
+		if !emojiNameRe.MatchString(msg.Name) {
+			return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "invalid emoji name (1-32 of a-z 0-9 _ -)")
+		}
+		raw, ext, err := decodeImage(msg.DataBase64)
+		if err != nil {
+			return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, err.Error())
+		}
+		fileName, err := s.assets().writeImage("emojis", msg.Name, ext, raw)
+		if err != nil {
+			return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "emoji write failed")
+		}
+		s.broadcastEvent(eventEmojiAdded, map[string]any{"name": msg.Name, "file_name": fileName, "by": client.UniqueID})
+		return s.acknowledgeAsset(client, msg.AckRequested, netproto.MsgEmojiUpload, msg.Name, "")
+	})
 }
 
-// emojiManageAllowed applies the same gate as upload (272).
-func (s *TCPServer) emojiManageAllowed(ctx context.Context, client *Client) error {
-	pc, err := s.permCheckerFor(ctx, client)
-	if err != nil {
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "permission backend unavailable")
-	}
-	if !pc.granted(permissions.PermissionKeyEmojiManage) {
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, "insufficient permission: "+string(permissions.PermissionKeyEmojiManage))
-	}
-	return nil
+// A written denial can return nil; keep the effect inside the authorized branch
+// rather than treating the write result as a permission decision.
+func (s *TCPServer) withEmojiManagement(ctx context.Context, client *Client, effect func(context.Context) error) error {
+	return s.roleAction(ctx, client, 0, authorization.ManageEmoji, effect)
 }
 
 // handleEmojiDelete removes a custom emoji and announces it (272).
@@ -1313,22 +1274,21 @@ func (s *TCPServer) handleEmojiDelete(ctx context.Context, client *Client, f *ne
 	if err := netproto.Decode(f, &msg); err != nil {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "malformed emoji_delete: "+err.Error())
 	}
-	if err := s.emojiManageAllowed(ctx, client); err != nil {
-		return err
-	}
-	if !emojiNameRe.MatchString(msg.Name) {
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "invalid emoji name")
-	}
-	_, err := s.assets().removeImage("emojis", msg.Name)
-	if errors.Is(err, fs.ErrNotExist) {
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodeNotFound, "emoji not found")
-	}
-	if err != nil {
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "emoji delete failed")
-	}
-	s.audit(ctx, client.UniqueID, "emoji_delete", msg.Name, "")
-	s.broadcastEvent(eventEmojiRemoved, map[string]any{"name": msg.Name, "by": client.UniqueID})
-	return nil
+	return s.withEmojiManagement(ctx, client, func(ctx context.Context) error {
+		if !emojiNameRe.MatchString(msg.Name) {
+			return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "invalid emoji name")
+		}
+		_, err := s.assets().removeImage("emojis", msg.Name)
+		if errors.Is(err, fs.ErrNotExist) {
+			return s.sendErrorFor(client, requestOrigin(ctx), errCodeNotFound, "emoji not found")
+		}
+		if err != nil {
+			return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "emoji delete failed")
+		}
+		s.audit(ctx, client.UniqueID, "emoji_delete", msg.Name, "")
+		s.broadcastEvent(eventEmojiRemoved, map[string]any{"name": msg.Name, "by": client.UniqueID})
+		return s.acknowledgeAsset(client, msg.AckRequested, netproto.MsgEmojiDelete, msg.Name, "")
+	})
 }
 
 // handleEmojiRename renames a custom emoji (272). Messages already sent keep
@@ -1339,30 +1299,29 @@ func (s *TCPServer) handleEmojiRename(ctx context.Context, client *Client, f *ne
 	if err := netproto.Decode(f, &msg); err != nil {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "malformed emoji_rename: "+err.Error())
 	}
-	if err := s.emojiManageAllowed(ctx, client); err != nil {
-		return err
-	}
-	if !emojiNameRe.MatchString(msg.Name) || !emojiNameRe.MatchString(msg.NewName) {
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "invalid emoji name (1-32 of a-z 0-9 _ -)")
-	}
-	if msg.Name == msg.NewName {
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "new name is the same")
-	}
-	fileName, err := s.assets().renameImage("emojis", msg.Name, msg.NewName)
-	if errors.Is(err, fs.ErrNotExist) {
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodeNotFound, "emoji not found")
-	}
-	if errors.Is(err, fs.ErrExist) {
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "an emoji with that name already exists")
-	}
-	if err != nil {
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "emoji rename failed")
-	}
-	s.audit(ctx, client.UniqueID, "emoji_rename", msg.Name, "to "+msg.NewName)
-	s.broadcastEvent(eventEmojiRenamed, map[string]any{
-		"name": msg.Name, "new_name": msg.NewName, "file_name": fileName, "by": client.UniqueID,
+	return s.withEmojiManagement(ctx, client, func(ctx context.Context) error {
+		if !emojiNameRe.MatchString(msg.Name) || !emojiNameRe.MatchString(msg.NewName) {
+			return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "invalid emoji name (1-32 of a-z 0-9 _ -)")
+		}
+		if msg.Name == msg.NewName {
+			return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "new name is the same")
+		}
+		fileName, err := s.assets().renameImage("emojis", msg.Name, msg.NewName)
+		if errors.Is(err, fs.ErrNotExist) {
+			return s.sendErrorFor(client, requestOrigin(ctx), errCodeNotFound, "emoji not found")
+		}
+		if errors.Is(err, fs.ErrExist) {
+			return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "an emoji with that name already exists")
+		}
+		if err != nil {
+			return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "emoji rename failed")
+		}
+		s.audit(ctx, client.UniqueID, "emoji_rename", msg.Name, "to "+msg.NewName)
+		s.broadcastEvent(eventEmojiRenamed, map[string]any{
+			"name": msg.Name, "new_name": msg.NewName, "file_name": fileName, "by": client.UniqueID,
+		})
+		return s.acknowledgeAsset(client, msg.AckRequested, netproto.MsgEmojiRename, msg.Name, msg.NewName)
 	})
-	return nil
 }
 
 // handleEmojiList lists the uploaded custom emojis.
@@ -1437,6 +1396,10 @@ func (s *TCPServer) serverSettingSealed(ctx context.Context, key string) (string
 	if s.deps == nil || s.deps.Chat == nil {
 		return "", 0, nil
 	}
+	if err := s.serverTextMu.LockContext(ctx); err != nil {
+		return "", 0, err
+	}
+	defer s.serverTextMu.Unlock()
 	v, gen, err := s.deps.Chat.GetServerSetting(ctx, key)
 	if err != nil || v == "" {
 		return "", 0, err
@@ -1494,13 +1457,27 @@ func (s *TCPServer) serverSettingPlain(ctx context.Context, key string) string {
 	return plain
 }
 
-// SetServerSettingAndAnnounce stores a server setting. The operator-authored
-// broadcast texts (motd, announcement) are SEALED under the current global
-// generation before they touch the database, so a dump never yields them;
-// "announcement" is additionally broadcast to all online clients.
-func (s *TCPServer) SetServerSettingAndAnnounce(ctx context.Context, key, value string) error {
+// Authorization belongs to the native boundary or integration lease.
+// Keep edits ordered with re-seal write-back; a saved edit gets its own audit
+// attempt and never returns a later protected read as its acknowledgement.
+func (s *TCPServer) setServerSettingAndAnnounce(ctx context.Context, key, value, actor string) error {
 	if s.deps == nil || s.deps.Chat == nil {
 		return errors.New("chat store unavailable")
+	}
+	if sealedSetting(key) || key == "server_name" || key == "server_rules" {
+		if err := s.serverTextMu.LockContext(ctx); err != nil {
+			return err
+		}
+		defer s.serverTextMu.Unlock()
+	}
+	plainBytes := len(value)
+	// Legacy raw filter updates must share the native save order, including
+	// invalidation, so they cannot race publication of a committed cache value.
+	if key == chatFiltersKey && s.chatFilters != nil {
+		if err := s.chatFilters.writeMu.LockContext(ctx); err != nil {
+			return err
+		}
+		defer s.chatFilters.writeMu.Unlock()
 	}
 	keyID := uint32(0)
 	if sealedSetting(key) && value != "" {
@@ -1531,6 +1508,11 @@ func (s *TCPServer) SetServerSettingAndAnnounce(ctx context.Context, key, value 
 	}
 	if key == "announcement" && value != "" {
 		s.broadcastEvent(eventAnnouncement, map[string]any{"text": value, "enc": keyID > 0, "key_id": keyID})
+	}
+	if actor != "" {
+		auditCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+		s.audit(auditCtx, actor, "server_text_set", key, fmt.Sprintf("bytes=%d cleared=%t", plainBytes, plainBytes == 0))
 	}
 	return nil
 }

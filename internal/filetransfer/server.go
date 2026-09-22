@@ -46,6 +46,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"go.uber.org/zap"
@@ -57,11 +58,11 @@ import (
 // tests can shorten it (mirrors authCacheTTL in the auth package).
 var tokenTTL = 60 * time.Second
 
-// ErrQuotaExceeded is returned by InitUpload when the channel's file quota
+// ErrQuotaExceeded is returned at issuance or commit when the channel's file quota
 // would be exceeded.
 var ErrQuotaExceeded = errors.New("filetransfer: channel quota exceeded")
 
-// ErrUploaderQuotaExceeded is returned by InitUpload when the uploader's own
+// ErrUploaderQuotaExceeded is returned at issuance or commit when the uploader's own
 // quota would be exceeded (266).
 var ErrUploaderQuotaExceeded = errors.New("filetransfer: upload quota exceeded")
 
@@ -117,6 +118,10 @@ type FileStore interface {
 	// blobs, and a copy that costs no disk must not be charged for.
 	ChannelFileUsage(ctx context.Context, channelID int64) (int64, error)
 	UploaderFileUsage(ctx context.Context, uploader string) (int64, error)
+	// FileContentUsage returns the bytes of this hash already counted against
+	// the channel and this uploader in the channel, respectively.
+	FileContentUsage(ctx context.Context, channelID int64, sha256, uploader string) (int64, int64, error)
+	UploaderContentUsageExcept(ctx context.Context, channelID int64, sha256, uploader, folder, name string) (int64, error)
 }
 
 // Quota is one axis of the file quota model (265 per channel, 266 per
@@ -129,7 +134,7 @@ type Quota struct {
 
 // Exceeded reports whether storing size more bytes would cross the ceiling.
 func (q Quota) Exceeded(size int64) bool {
-	return q.Limit > 0 && q.Used+size > q.Limit
+	return q.Limit > 0 && (q.Used > q.Limit || size > q.Limit-q.Used)
 }
 
 // quotaFor pairs a usage lookup with a MiB ceiling.
@@ -162,6 +167,9 @@ type Config struct {
 	// ChannelQuotaMB is the per-channel total file size quota in MiB.
 	// 0 = unlimited.
 	ChannelQuotaMB int64
+	// UserQuotaMB caps each uploader across channels, including moves. Zero
+	// leaves the independent server-wide ceiling disabled.
+	UserQuotaMB int64
 	// MaxSizeMB is the per-transfer size cap in MiB. 0 = unlimited.
 	MaxSizeMB int64
 	// TLSEnabled wraps the listener in TLS (91-135). False is a dev-only
@@ -178,25 +186,29 @@ type Config struct {
 
 // transfer is a pending (token-issued, not yet consumed) file transfer.
 type transfer struct {
-	ID        string
-	Token     string
-	Direction string // "upload" | "download"
-	ChannelID int64
-	Folder    string
-	Name      string
-	Size      int64
-	Uploader  string
-	Expires   time.Time
+	revoked         atomic.Bool
+	Principal       *Principal
+	ID              string
+	Token           string
+	Direction       string // "upload" | "download"
+	ChannelID       int64
+	Folder          string
+	Name            string
+	Size            int64
+	Uploader        string
+	UploaderQuotaMB int64
+	Expires         time.Time
 }
 
 // activeTransfer lets channel deletion revoke transfers that already
 // consumed their single-use token. Closing conn interrupts both upload and
 // download I/O; done closes only after any partial upload has been removed.
 type activeTransfer struct {
-	transferID string
-	channelID  int64
-	conn       net.Conn
-	done       chan struct{}
+	authorization *transfer
+	transferID    string
+	channelID     int64
+	conn          net.Conn
+	done          chan struct{}
 }
 
 type channelCleanup struct {
@@ -237,12 +249,12 @@ type Server struct {
 	connSlots chan struct{}
 	accepted  map[net.Conn]struct{}
 
-	// fileOpsMu makes filesystem-producing mutations linearizable with a
-	// channel tombstone. Deletion takes the write side only long enough to
-	// drain prior mutations and publish the tombstone; later operations acquire
-	// the read side, observe it, and fail before touching disk or metadata.
+	// fileOpsMu serializes ownership checks with file mutations and drains
+	// them before physical channel cleanup. Tombstones are published separately
+	// under mu so revocation does not wait for filesystem work to drain.
 	fileOpsMu       sync.RWMutex
 	mu              sync.Mutex
+	accessGuard     AccessGuard
 	transfers       map[string]*transfer // keyed by token digest
 	activeTransfers map[string]*activeTransfer
 	deletedChannels map[int64]*channelCleanup
@@ -313,6 +325,12 @@ func (s *Server) Fingerprint() string {
 // uploaderQuotaMB is that user's personal ceiling (266), resolved by the
 // caller from the client's permissions (0 = unlimited).
 func (s *Server) InitUpload(ctx context.Context, channelID int64, folder, name string, size int64, uploader string, uploaderQuotaMB int64) (string, string, error) {
+	if s.cfg.UserQuotaMB > 0 && (uploaderQuotaMB <= 0 || s.cfg.UserQuotaMB < uploaderQuotaMB) {
+		uploaderQuotaMB = s.cfg.UserQuotaMB
+	}
+	if s.channelDeleted(channelID) {
+		return "", "", ErrChannelDeleted
+	}
 	name, err := sanitizeName(name)
 	if err != nil {
 		return "", "", err
@@ -326,6 +344,11 @@ func (s *Server) InitUpload(ctx context.Context, channelID int64, folder, name s
 	}
 	if s.cfg.MaxSizeMB > 0 && size > s.cfg.MaxSizeMB<<20 {
 		return "", "", fmt.Errorf("%w: %d bytes exceeds the %d MiB limit", ErrTooLarge, size, s.cfg.MaxSizeMB)
+	}
+	s.fileOpsMu.Lock()
+	defer s.fileOpsMu.Unlock()
+	if err := s.checkFileOwner(ctx, channelID, folder, name); err != nil {
+		return "", "", err
 	}
 
 	if s.cfg.ChannelQuotaMB > 0 {
@@ -348,12 +371,14 @@ func (s *Server) InitUpload(ctx context.Context, channelID int64, folder, name s
 	}
 
 	return s.register(&transfer{
-		Direction: "upload",
-		ChannelID: channelID,
-		Folder:    folder,
-		Name:      name,
-		Size:      size,
-		Uploader:  uploader,
+		Direction:       "upload",
+		Principal:       transferPrincipal(ctx),
+		ChannelID:       channelID,
+		Folder:          folder,
+		Name:            name,
+		Size:            size,
+		Uploader:        uploader,
+		UploaderQuotaMB: uploaderQuotaMB,
 	})
 }
 
@@ -373,6 +398,7 @@ func (s *Server) InitDownload(ctx context.Context, channelID int64, folder, name
 	}
 	return s.register(&transfer{
 		Direction: "download",
+		Principal: transferPrincipal(ctx),
 		ChannelID: channelID,
 		Folder:    folder,
 		Name:      rec.Name,
@@ -417,6 +443,11 @@ func (s *Server) DeleteFile(ctx context.Context, channelID int64, folder, name s
 	}
 	folder, err = sanitizeFolder(folder)
 	if err != nil {
+		return err
+	}
+	s.fileOpsMu.Lock()
+	defer s.fileOpsMu.Unlock()
+	if err := s.checkFileOwner(ctx, channelID, folder, name); err != nil {
 		return err
 	}
 	if err := s.store.DeleteFile(ctx, channelID, folder, name); err != nil {
@@ -470,13 +501,28 @@ func (s *Server) MoveFile(ctx context.Context, channelID int64, folder, name str
 	if newChannelID == 0 {
 		newChannelID = channelID
 	}
-	s.fileOpsMu.RLock()
-	defer s.fileOpsMu.RUnlock()
+	s.fileOpsMu.Lock()
+	defer s.fileOpsMu.Unlock()
+	if err := s.checkFileOwner(ctx, channelID, folder, name); err != nil {
+		return err
+	}
 	if s.channelDeleted(channelID) || s.channelDeleted(newChannelID) {
 		return ErrChannelDeleted
 	}
 	if channelID == newChannelID && folder == newFolder && name == newName {
 		return errors.New("nothing to rename")
+	}
+	if channelID != newChannelID {
+		if err := s.checkMoveQuota(ctx, channelID, folder, name, newChannelID); err != nil {
+			return err
+		}
+	}
+	// Only a confirmed missing target permits a move. A transient lookup
+	// failure must not be treated as absence or create target directories.
+	if _, err := s.store.GetFile(ctx, newChannelID, newFolder, newName); err == nil {
+		return fmt.Errorf("%s already exists in the target folder", newName)
+	} else if !errors.Is(err, store.ErrFileNotFound) {
+		return fmt.Errorf("checking move destination: %w", err)
 	}
 	root, err := s.openBlobRoot()
 	if err != nil {
@@ -487,13 +533,6 @@ func (s *Server) MoveFile(ctx context.Context, channelID int64, folder, name str
 	newPath := blobPath(newChannelID, newFolder, newName)
 	if err := root.MkdirAll(filepath.Dir(newPath), 0o700); err != nil {
 		return fmt.Errorf("creating target folder: %w", err)
-	}
-	// A move into an occupied name would silently orphan the blob already
-	// there, so refuse instead of overwriting.
-	if channelID != newChannelID || folder != newFolder || name != newName {
-		if _, err := s.store.GetFile(ctx, newChannelID, newFolder, newName); err == nil {
-			return fmt.Errorf("%s already exists in the target folder", newName)
-		}
 	}
 	if err := s.store.MoveFile(ctx, channelID, folder, name, newChannelID, newFolder, newName); err != nil {
 		if errors.Is(err, store.ErrFileExists) {
@@ -621,6 +660,9 @@ func (s *Server) Links() *LinkRegistry {
 
 // CreateLink issues an expiring download link for a channel file (267).
 func (s *Server) CreateLink(ctx context.Context, channelID int64, folder, name string) (string, time.Time, error) {
+	if s.channelDeleted(channelID) {
+		return "", time.Time{}, ErrChannelDeleted
+	}
 	name, err := sanitizeName(name)
 	if err != nil {
 		return "", time.Time{}, err
@@ -629,10 +671,18 @@ func (s *Server) CreateLink(ctx context.Context, channelID int64, folder, name s
 	if err != nil {
 		return "", time.Time{}, err
 	}
+	s.fileOpsMu.RLock()
+	defer s.fileOpsMu.RUnlock()
+	if s.channelDeleted(channelID) {
+		return "", time.Time{}, ErrChannelDeleted
+	}
+	if err := s.checkFileOwner(ctx, channelID, folder, name); err != nil {
+		return "", time.Time{}, err
+	}
 	if _, err := s.store.GetFile(ctx, channelID, folder, name); err != nil {
 		return "", time.Time{}, err
 	}
-	return s.links.Create(blobPath(channelID, folder, name), name)
+	return s.links.create(blobPath(channelID, folder, name), name, transferPrincipal(ctx), channelID)
 }
 
 // TombstoneChannelData permanently rejects new work for a deleted channel and
@@ -775,13 +825,17 @@ func (s *Server) register(tr *transfer) (string, string, error) {
 // transfer or an error when the token is unknown or expired.
 func (s *Server) consume(token, transferID string) (*transfer, error) {
 	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.consumeLocked(token, transferID)
+}
+
+func (s *Server) consumeLocked(token, transferID string) (*transfer, error) {
 	digest := tokenDigest(token)
 	tr, ok := s.transfers[digest]
 	if ok {
 		delete(s.transfers, digest)
 	}
 	deleted := ok && s.channelDeletedLocked(tr.ChannelID)
-	s.mu.Unlock()
 
 	if !ok || !constantTimeStringEqual(tr.ID, transferID) {
 		return nil, errors.New("invalid transfer token")
@@ -798,14 +852,19 @@ func (s *Server) consume(token, transferID string) (*transfer, error) {
 func (s *Server) activateTransfer(tr *transfer, conn net.Conn) (*activeTransfer, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.activateTransferLocked(tr, conn)
+}
+
+func (s *Server) activateTransferLocked(tr *transfer, conn net.Conn) (*activeTransfer, error) {
 	if s.channelDeletedLocked(tr.ChannelID) {
 		return nil, ErrChannelDeleted
 	}
 	active := &activeTransfer{
-		transferID: tr.ID,
-		channelID:  tr.ChannelID,
-		conn:       conn,
-		done:       make(chan struct{}),
+		authorization: tr,
+		transferID:    tr.ID,
+		channelID:     tr.ChannelID,
+		conn:          conn,
+		done:          make(chan struct{}),
 	}
 	s.activeTransfers[tr.ID] = active
 	return active, nil

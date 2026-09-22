@@ -12,6 +12,7 @@ export function openServerInfo() {
         currentOverlay.focus();
         return;
     }
+    const { activeTabID: tabID, myClientID: clientID } = V().state;
     const overlay = document.createElement("div");
     overlay.className = "dlg-overlay";
     const field = (key) => `<span data-stat="${key}">—</span>`;
@@ -100,8 +101,8 @@ export function openServerInfo() {
             const app = window.go.main.App;
             const refreshServer = !server || Date.now() - serverAt >= 10000;
             const [infoResult, serverResult, mediaResult] = await Promise.allSettled([
-                Promise.resolve().then(() => app.GetClientInfo(state.myClientID)),
-                Promise.resolve().then(() => refreshServer ? app.ServerInfo() : server),
+                Promise.resolve().then(() => app.GetClientInfoForTab(tabID, clientID)),
+                Promise.resolve().then(() => refreshServer ? app.ServerInfoForTab(tabID) : server),
                 Promise.resolve().then(() => pc?.getStats()),
             ]);
             busy = false;

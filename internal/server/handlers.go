@@ -21,10 +21,9 @@ import (
 	"go.uber.org/zap"
 
 	"noxa/internal/auth"
-	"noxa/internal/broadcast"
+	"noxa/internal/authorization"
 	"noxa/internal/channels"
 	"noxa/internal/netproto"
-	"noxa/internal/permissions"
 	"noxa/internal/recorder"
 	"noxa/internal/state"
 )
@@ -74,13 +73,8 @@ type channelUpdatedEvent struct {
 	OpusStereo      bool   `json:"opus_stereo"`
 	SlowModeSeconds int    `json:"slow_mode_seconds"`
 	Description     string `json:"description"`
-	// Join power (160), sort index (163), parent (168) and the inheritance
-	// toggle (157) ride the same event so a client that edited any of them
-	// sees the result without refetching the tree.
-	NeededJoinPower    int   `json:"needed_join_power"`
-	OrderIndex         int   `json:"order_index"`
-	ParentID           int64 `json:"parent_id"`
-	InheritPermissions bool  `json:"inherit_permissions"`
+	OrderIndex      int    `json:"order_index"`
+	ParentID        int64  `json:"parent_id"`
 }
 
 // kickEvent is the payload of kicked events.
@@ -114,6 +108,9 @@ func (s *TCPServer) handleAuthenticate(ctx context.Context, client *Client, f *n
 	}
 	if client.isAuthed() {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "already authenticated")
+	}
+	if !s.negotiateAuthorization(client, msg.AuthorizationModels) {
+		return s.rejectAuthorizationModel(client)
 	}
 	// (133) the encryption key is captured before any auth path branches, so
 	// finishAuth can seal the global generation and the MOTD into the reply
@@ -244,6 +241,9 @@ func (s *TCPServer) handleAuthSignature(ctx context.Context, client *Client, f *
 	}
 	if client.isAuthed() {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "already authenticated")
+	}
+	if client.negotiatedAuthorizationModel() != s.requiredAuthorizationModel() {
+		return s.rejectAuthorizationModel(client)
 	}
 	// The guest/challenge path leaves Authenticate.PublicKey empty and carries
 	// its keys here instead, so the encryption key is captured here too (133).
@@ -430,7 +430,7 @@ func (s *TCPServer) completeAuthForUser(ctx context.Context, client *Client, use
 		uniqueID: user.UniqueID,
 		nickname: nickname,
 		userID:   user.ID,
-		admin:    user.IsAdmin,
+		bot:      user.IsBot,
 	})
 }
 
@@ -454,7 +454,7 @@ type authIdentity struct {
 	uniqueID string
 	nickname string
 	userID   int64
-	admin    bool
+	bot      bool
 	guest    bool
 }
 
@@ -463,25 +463,60 @@ type authIdentity struct {
 // followed by a full tree snapshot, deliver any spooled offline messages
 // (registered users only), and announce the join.
 func (s *TCPServer) finishAuth(ctx context.Context, client *Client, id authIdentity) error {
-	client.setIdentity(id.uniqueID, id.nickname, id.userID, id.admin)
-	if !id.guest {
-		if recorder, ok := s.deps.Auth.(interface {
-			RecordLastIP(context.Context, int64, string) error
-		}); ok {
-			host, _, err := net.SplitHostPort(client.Conn.RemoteAddr().String())
-			if err == nil {
-				if err := recorder.RecordLastIP(ctx, id.userID, host); err != nil {
-					s.logger.Warn("recording encrypted login IP failed", zap.Error(err))
+	if client.negotiatedAuthorizationModel() != s.requiredAuthorizationModel() {
+		return s.rejectAuthorizationModel(client)
+	}
+	if id.userID > 0 && s.deps != nil && s.deps.Authority != nil {
+		if err := s.deps.Authority.RefreshIfChanged(ctx, id.userID, s.noLiveMemberSession); err != nil {
+			return s.writeMessage(client, netproto.MsgAuthResponse, netproto.AuthResponse{Reason: "internal error"})
+		}
+	}
+	var rejection string
+	err := s.withRolePolicy(ctx, func(ctx context.Context) error {
+		s.roleMetadataMu.Lock()
+		defer s.roleMetadataMu.Unlock()
+		if client.sessionRevoked() {
+			return authorization.ErrRoleForbidden
+		}
+		if s.deps.Auth == nil {
+			return authorization.ErrAuthorizationUnavailable
+		}
+		var err error
+		rejection, err = s.banRejectReason(ctx, client, id.uniqueID, remoteIP(client.Conn))
+		if err != nil {
+			return err
+		}
+		if rejection != "" {
+			return authorization.ErrRoleForbidden
+		}
+		client.setIdentity(id.uniqueID, id.nickname, id.userID, id.bot)
+		s.publishAuthenticatedSession(ctx, client, id)
+		return nil
+	})
+	if err != nil {
+		if rejection == "" {
+			rejection = "internal error"
+		} else {
+			s.metricsSink().IncAuthFailure("tcp", "banned")
+		}
+		return s.writeMessage(client, netproto.MsgAuthResponse, netproto.AuthResponse{Reason: rejection})
+	}
+	if err := s.withRoleSession(ctx, client, func(ctx context.Context) error {
+		if !id.guest {
+			if recorder, ok := s.deps.Auth.(interface {
+				RecordLastIP(context.Context, int64, string) error
+			}); ok {
+				host, _, err := net.SplitHostPort(client.Conn.RemoteAddr().String())
+				if err == nil {
+					if err := recorder.RecordLastIP(ctx, id.userID, host); err != nil {
+						s.logger.Warn("recording encrypted login IP failed", zap.Error(err))
+					}
 				}
 			}
 		}
-	}
-
-	// Default groups (143/144): a registered user with no server-group
-	// memberships joins the Member group on first login. Guests virtually
-	// hold the Guest group (see permCheckerFor).
-	if !id.guest {
-		s.assignDefaultGroup(ctx, client)
+		return nil
+	}); err != nil {
+		return err
 	}
 
 	s.logger.Info("client authenticated",
@@ -491,50 +526,25 @@ func (s *TCPServer) finishAuth(ctx context.Context, client *Client, id authIdent
 		zap.Bool("guest", id.guest),
 	)
 
-	if s.deps.State != nil {
-		s.deps.State.AddClient(&state.Client{
-			ClientID:    client.ID,
-			UniqueID:    id.uniqueID,
-			Nickname:    id.nickname,
-			ConnectedAt: time.Now(),
-			Conn:        client.Conn,
-			// (180) resolved once at auth so the badge rides every snapshot.
-			IsBot: s.ClientIsBot(ctx, client),
-		})
-		// (133) the key must be live before the snapshot, so anything that
-		// reads it during this handshake sees it.
-		if x := client.x25519(); x != "" {
-			s.deps.State.SetE2EPublicKey(client.ID, x)
-		}
-	}
-
-	if s.deps.Broadcast != nil {
-		out, err := s.deps.Broadcast.Register(client.ID)
-		if err != nil {
-			s.logger.Warn("broadcast register failed",
-				zap.String("client_id", client.ID),
-				zap.Error(err),
-			)
-		} else {
-			go s.broadcastWriter(client, out)
-		}
-	}
-
 	// Reply first, then send the snapshot, then announce the join.
 	resp := netproto.AuthResponse{
-		Capabilities:   []string{netproto.CapabilityGroupAssignAck},
-		OK:             true,
-		ClientID:       client.ID,
-		UniqueID:       id.uniqueID,
-		Nickname:       id.nickname,
-		TLSFingerprint: s.tlsFingerprint,
-		IsAdmin:        id.admin,
+		AuthorizationModel: s.requiredAuthorizationModel(),
+		OK:                 true,
+		ClientID:           client.ID,
+		UniqueID:           id.uniqueID,
+		Nickname:           id.nickname,
+		TLSFingerprint:     s.tlsFingerprint,
 	}
-	s.attachChatKeysAndMOTD(ctx, client, &resp)
 	if s.deps.ICEServers != nil {
 		resp.ICEServers = s.deps.ICEServers(id.uniqueID)
 	}
-	if err := s.writeMessage(client, netproto.MsgAuthResponse, resp); err != nil {
+	if err := s.withRoleSession(ctx, client, func(ctx context.Context) error {
+		e := ctx.Value(roleLeaseKey{}).(roleLease).evaluator
+		if e.Evaluate(client.userID(), 0, authorization.ViewChannel).Allowed {
+			s.attachChatKeysAndMOTD(ctx, client, &resp)
+		}
+		return s.writeAuthenticationResponse(ctx, client, resp)
+	}); err != nil {
 		return err
 	}
 
@@ -543,7 +553,7 @@ func (s *TCPServer) finishAuth(ctx context.Context, client *Client, id authIdent
 	}
 	// (312) Seed the client's channel-tab model with the authoritative set.
 	// The current channel is implicit and therefore cannot be unsubscribed.
-	if err := s.sendSubscriptionState(client); err != nil {
+	if err := s.sendSubscriptionState(ctx, client); err != nil {
 		return err
 	}
 
@@ -551,30 +561,56 @@ func (s *TCPServer) finishAuth(ctx context.Context, client *Client, id authIdent
 	// process it as the first live event. It stays here rather than moving
 	// behind key publish: deliverScopeKey skips clients that never published
 	// one, which would silently drop the announcement for all of them.
-	if ann, gen, err := s.serverSettingSealed(ctx, "announcement"); err == nil && ann != "" {
-		data := map[string]any{"text": ann, "enc": gen > 0, "key_id": gen}
-		if payload, err := eventEnvelope(eventAnnouncement, data); err == nil {
-			_ = s.writeFrame(client, &netproto.Frame{Type: uint16(netproto.MsgEvent), Payload: payload})
+	if err := s.withRoleSession(ctx, client, func(ctx context.Context) error {
+		if ann, gen, err := s.serverSettingSealed(ctx, "announcement"); err == nil && ann != "" {
+			data := map[string]any{"text": ann, "enc": gen > 0, "key_id": gen}
+			if payload, err := eventEnvelope(eventAnnouncement, data); err == nil {
+				if err := s.writeRoleBroadcastInContext(ctx, client, payload); err != nil {
+					return err
+				}
+			}
 		}
+		return nil
+	}); err != nil {
+		return err
 	}
 
 	// Guests have no users row, so no offline spool (spool inserts require a
 	// users.id).
-	if !id.guest {
-		s.deliverSpooled(ctx, client, id.userID)
-	}
+	return s.withRoleSession(ctx, client, func(ctx context.Context) error {
+		if !id.guest {
+			s.deliverSpooled(ctx, client, id.userID)
+		}
 
-	// (216) the rules gate arms last in the handshake: the client already has
-	// the tree and its own identity, so the modal goes up over a rendered UI
-	// and a failing rules read costs it none of that.
-	s.sendPendingRules(ctx, client, id.guest)
-
-	s.broadcastEvent(eventUserJoined, userEvent{
-		ClientID: client.ID,
-		UniqueID: id.uniqueID,
-		Nickname: id.nickname,
+		// Arm the rules gate after identity and the tree reach the client.
+		s.sendPendingRules(ctx, client, id.guest)
+		s.broadcastEvent(eventUserJoined, userEvent{
+			ClientID: client.ID,
+			UniqueID: id.uniqueID,
+			Nickname: id.nickname,
+		})
+		return nil
 	})
-	return nil
+}
+
+// publishAuthenticatedSession installs identity-dependent live state once. In
+// role mode final ban admission, identity and this publication share the policy
+// and metadata barriers; slow handshake delivery happens after releasing them.
+func (s *TCPServer) publishAuthenticatedSession(ctx context.Context, client *Client, id authIdentity) {
+	if s.deps.State != nil {
+		s.deps.State.AddClient(&state.Client{ClientID: client.ID, UserID: id.userID, UniqueID: id.uniqueID, Nickname: id.nickname, ConnectedAt: time.Now(), Conn: client.Conn, IsBot: s.ClientIsBot(ctx, client)})
+		if x := client.x25519(); x != "" {
+			s.deps.State.SetE2EPublicKey(client.ID, x)
+		}
+	}
+	if s.deps.Broadcast != nil {
+		out, err := s.deps.Broadcast.Register(client.ID)
+		if err != nil {
+			s.logger.Warn("broadcast register failed", zap.String("client_id", client.ID), zap.Error(err))
+		} else {
+			go s.broadcastWriter(client, out)
+		}
+	}
 }
 
 // attachChatKeysAndMOTD seals the global generation for the client's X25519
@@ -673,7 +709,10 @@ func (s *TCPServer) sendPendingRules(ctx context.Context, client *Client, guest 
 	if !pending {
 		return
 	}
-	client.setRulesPending(true)
+	if err := s.setSessionRulesPending(ctx, client, true); err != nil {
+		_ = client.Conn.Close()
+		return
+	}
 	if err := s.writeMessage(client, netproto.MsgServerRules, netproto.ServerRules{Text: text, Hash: hash}); err != nil {
 		s.logger.Warn("sending the server rules failed",
 			zap.String("client_id", client.ID),
@@ -689,6 +728,12 @@ func (s *TCPServer) sendPendingRules(ctx context.Context, client *Client, guest 
 // ServerRules frame is the acknowledgement of a successful accept: the gate
 // state stays server-authoritative, so the dialog never has to guess.
 func (s *TCPServer) handleServerRulesAccept(ctx context.Context, client *Client, f *netproto.Frame) error {
+	return s.rolePolicyRead(ctx, client, func(ctx context.Context) error {
+		return s.acceptSessionRules(ctx, client, f)
+	})
+}
+
+func (s *TCPServer) acceptSessionRules(ctx context.Context, client *Client, f *netproto.Frame) error {
 	var msg netproto.ServerRulesAccept
 	if err := netproto.Decode(f, &msg); err != nil {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "malformed server_rules_accept: "+err.Error())
@@ -708,7 +753,9 @@ func (s *TCPServer) handleServerRulesAccept(ctx context.Context, client *Client,
 		if err := s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "the server rules changed since they were shown"); err != nil {
 			return err
 		}
-		client.setRulesPending(hash != "")
+		if err := s.setSessionRulesPending(ctx, client, hash != ""); err != nil {
+			return s.roleError(ctx, client, err)
+		}
 		return s.writeMessage(client, netproto.MsgServerRules, netproto.ServerRules{Text: text, Hash: hash})
 	}
 	// A guest has no users row to write the acceptance to, so it stays on the
@@ -722,8 +769,24 @@ func (s *TCPServer) handleServerRulesAccept(ctx context.Context, client *Client,
 			return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "recording the acceptance failed")
 		}
 	}
-	client.setRulesPending(false)
+	if err := s.setSessionRulesPending(ctx, client, false); err != nil {
+		return s.roleError(ctx, client, err)
+	}
 	return s.writeMessage(client, netproto.MsgServerRules, netproto.ServerRules{})
+}
+
+// Rules eligibility also participates in media metadata. A stale acceptance
+// can re-block a connected session, so it uses the same barrier as movement.
+func (s *TCPServer) setSessionRulesPending(ctx context.Context, client *Client, pending bool) error {
+	return s.withRolePolicy(ctx, func(ctx context.Context) error {
+		s.roleMetadataMu.Lock()
+		defer s.roleMetadataMu.Unlock()
+		client.roleActionMu.Lock()
+		defer client.roleActionMu.Unlock()
+		client.setRulesPending(pending)
+		s.refreshRolePublishers(ctx.Value(roleLeaseKey{}).(roleLease).evaluator)
+		return nil
+	})
 }
 
 // dedupeNickname appends #2, #3, ... when the nickname is already taken by
@@ -761,136 +824,6 @@ func newGuestUniqueID() string {
 	return "guest:" + hex.EncodeToString(b)
 }
 
-// handleCreateChannel creates a channel via the channel manager after a
-// permission check keyed on the requested channel type, announces the new
-// channel to all clients, and replies with the current channel list.
-func (s *TCPServer) handleCreateChannel(ctx context.Context, client *Client, f *netproto.Frame) error {
-	var msg netproto.CreateChannel
-	if err := netproto.Decode(f, &msg); err != nil {
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "malformed create_channel: "+err.Error())
-	}
-	if s.deps == nil || s.deps.Channels == nil {
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "channel backend unavailable")
-	}
-
-	ct, err := channels.ParseChannelType(msg.Type)
-	if err != nil {
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "invalid channel type")
-	}
-
-	pc, err := s.permCheckerFor(ctx, client)
-	if err != nil {
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "permission backend unavailable")
-	}
-	var permKey permissions.PermissionKey
-	switch ct {
-	case channels.ChannelTypePermanent:
-		permKey = permissions.PermissionKeyChannelCreatePermanent
-	case channels.ChannelTypeSemiPermanent:
-		permKey = permissions.PermissionKeyChannelCreateSemiPermanent
-	default:
-		permKey = permissions.PermissionKeyChannelCreateTemporary
-	}
-	if !pc.granted(permKey) {
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, "insufficient permission: "+string(permKey))
-	}
-	// A caller may not set a needed join power above their own join power
-	// (admins bypass), mirroring the TS3 power-cap rule.
-	if msg.NeededJoinPower > 0 && !pc.admin &&
-		pc.power(permissions.PermissionKeyChannelJoinPower) < msg.NeededJoinPower {
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, "cannot set needed join power above your own join power")
-	}
-
-	s.configMu.RLock()
-	defaultBitrate := s.cfg.DefaultOpusBitrate
-	defaultFEC := s.cfg.DefaultOpusFEC
-	defaultDTX := s.cfg.DefaultOpusDTX
-	defaultStereo := s.cfg.DefaultOpusStereo
-	s.configMu.RUnlock()
-	if msg.OpusBitrate == 0 {
-		msg.OpusBitrate = defaultBitrate
-	}
-	opusFEC, opusDTX, opusStereo := defaultFEC, defaultDTX, defaultStereo
-	if msg.OpusFEC != nil {
-		opusFEC = *msg.OpusFEC
-	}
-	if msg.OpusDTX != nil {
-		opusDTX = *msg.OpusDTX
-	}
-	if msg.OpusStereo != nil {
-		opusStereo = *msg.OpusStereo
-	}
-	channelID, err := s.deps.Channels.CreateChannel(ctx, channels.ChannelSpec{
-		Name:            msg.Name,
-		Topic:           msg.Topic,
-		ParentID:        msg.ParentID,
-		Type:            ct,
-		MaxClients:      msg.MaxClients,
-		Password:        msg.Password,
-		NeededJoinPower: msg.NeededJoinPower,
-		CreatedBy:       client.userID(),
-		OpusBitrate:     msg.OpusBitrate,
-		OpusFEC:         opusFEC,
-		OpusDTX:         opusDTX,
-		OpusStereo:      opusStereo,
-	})
-	if err != nil {
-		s.logger.Warn("create channel failed",
-			zap.String("client_id", client.ID),
-			zap.Error(err),
-		)
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "create channel failed: "+err.Error())
-	}
-
-	s.broadcastEvent(eventChannelCreated, channelEvent{
-		ChannelID: channelID,
-		Name:      msg.Name,
-		ParentID:  msg.ParentID,
-	})
-	s.audit(ctx, client.UniqueID, "channel_create", fmt.Sprintf("%d", channelID), msg.Name)
-	return s.writeMessage(client, netproto.MsgChannelList, s.channelListResponse())
-}
-
-// handleDeleteChannel deletes a channel via the channel manager after a
-// b_channel_delete check and announces the deletion to all clients.
-func (s *TCPServer) handleDeleteChannel(ctx context.Context, client *Client, f *netproto.Frame) error {
-	var msg netproto.DeleteChannel
-	if err := netproto.Decode(f, &msg); err != nil {
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "malformed delete_channel: "+err.Error())
-	}
-	if s.deps == nil || s.deps.Channels == nil {
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "channel backend unavailable")
-	}
-
-	pc, err := s.permCheckerFor(ctx, client)
-	if err != nil {
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "permission backend unavailable")
-	}
-	if !pc.granted(permissions.PermissionKeyChannelDelete) {
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, "insufficient permission: "+string(permissions.PermissionKeyChannelDelete))
-	}
-
-	result, err := s.deps.Channels.DeleteChannelSubtree(ctx, msg.ChannelID)
-	if err != nil {
-		if errors.Is(err, channels.ErrChannelNotFound) {
-			return s.sendErrorFor(client, requestOrigin(ctx), errCodeNotFound, "channel not found")
-		}
-		s.logger.Warn("delete channel failed",
-			zap.String("client_id", client.ID),
-			zap.Int64("channel_id", msg.ChannelID),
-			zap.Error(err),
-		)
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "delete channel failed")
-	}
-
-	if result.RootID == 0 {
-		result.RootID = msg.ChannelID
-	}
-	s.ApplyChannelDeletion(result, "")
-	s.audit(ctx, client.UniqueID, "channel_delete", fmt.Sprintf("%d", msg.ChannelID), "")
-	return nil
-}
-
 // ApplyChannelDeletion publishes every side effect shared by explicit and
 // automatic channel-subtree deletion. ChannelManager releases its lifecycle
 // lock before invoking this method as the temporary-cleanup sink.
@@ -925,7 +858,7 @@ func (s *TCPServer) ApplyChannelDeletion(result channels.DeleteResult, reason st
 	// mutation can legitimately hold its lifecycle read lock while finishing a
 	// database/blob move; clients, metrics, and recorders still need to observe
 	// the committed deletion immediately.
-	s.pushSubscriptionStateTo(result.SubscriberIDs)
+	s.pushSubscriptionStateTo(context.Background(), result.SubscriberIDs)
 	s.stopDeletedChannelRecordings(result.ChannelIDs)
 	cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cleanupCancel()
@@ -975,87 +908,6 @@ func (s *TCPServer) stopDeletedChannelRecordings(channelIDs []int64) {
 	wg.Wait()
 }
 
-// handleChannelEdit edits a channel's settings (topic, max clients, Opus
-// audio quality) after a b_channel_modify check, persists them, and
-// announces the change to all clients.
-func (s *TCPServer) handleChannelEdit(ctx context.Context, client *Client, f *netproto.Frame) error {
-	var msg netproto.ChannelEdit
-	if err := netproto.Decode(f, &msg); err != nil {
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "malformed channel_edit: "+err.Error())
-	}
-	if s.deps == nil || s.deps.Channels == nil || s.deps.State == nil {
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "channel backend unavailable")
-	}
-	channel, ok := s.deps.State.GetChannel(msg.ChannelID)
-	if !ok {
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodeNotFound, "channel not found")
-	}
-
-	pc, err := s.permCheckerFor(ctx, client)
-	if err != nil {
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "permission backend unavailable")
-	}
-	if !pc.granted(permissions.PermissionKeyChannelModify) {
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, "insufficient permission: "+string(permissions.PermissionKeyChannelModify))
-	}
-	// Same power cap as channel creation (160): an editor may not raise the
-	// needed join power above their own join power, or they could lock
-	// themselves and their peers out of a channel they still administer.
-	if msg.NeededJoinPower != nil && !pc.admin {
-		if pc.power(permissions.PermissionKeyChannelJoinPower) < *msg.NeededJoinPower {
-			return s.sendErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, "cannot set needed join power above your own join power")
-		}
-		if *msg.NeededJoinPower < channel.NeededJoinPower {
-			return s.sendErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, "cannot reduce the channel's needed join power")
-		}
-	}
-
-	if err := s.deps.Channels.UpdateChannel(ctx, msg.ChannelID, channels.ChannelUpdate{
-		Topic:              msg.Topic,
-		MaxClients:         msg.MaxClients,
-		OpusBitrate:        msg.OpusBitrate,
-		OpusFEC:            msg.OpusFEC,
-		OpusDTX:            msg.OpusDTX,
-		OpusStereo:         msg.OpusStereo,
-		SlowModeSeconds:    msg.SlowModeSeconds,
-		Description:        msg.Description,
-		NeededJoinPower:    msg.NeededJoinPower,
-		OrderIndex:         msg.OrderIndex,
-		ParentID:           msg.ParentID,
-		InheritPermissions: msg.InheritPermissions,
-	}); err != nil {
-		if errors.Is(err, channels.ErrInvalidMove) {
-			return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, err.Error())
-		}
-		if errors.Is(err, channels.ErrChannelNotFound) {
-			return s.sendErrorFor(client, requestOrigin(ctx), errCodeNotFound, "channel not found")
-		}
-		s.logger.Warn("channel edit failed",
-			zap.String("client_id", client.ID),
-			zap.Int64("channel_id", msg.ChannelID),
-			zap.Error(err),
-		)
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "channel edit failed: "+err.Error())
-	}
-
-	// (157) re-parenting or flipping inheritance changes the resolved channel
-	// tier for every user in the affected subtree, and the loader caches per
-	// (user, channel) — nothing here can enumerate those pairs, so drop all.
-	if s.deps.Perms != nil && (msg.InheritPermissions != nil || msg.ParentID != nil) {
-		s.deps.Perms.InvalidateAll()
-	}
-
-	if ch, ok := s.deps.State.GetChannel(msg.ChannelID); ok {
-		s.broadcastEvent(eventChannelUpdated, channelUpdatedEventFor(ch))
-	}
-	topic := ""
-	if msg.Topic != nil {
-		topic = *msg.Topic
-	}
-	s.audit(ctx, client.UniqueID, "channel_edit", fmt.Sprintf("%d", msg.ChannelID), topic)
-	return nil
-}
-
 // BroadcastChannelUpdated announces a channel's current editable fields to
 // all clients (used by out-of-band edits, e.g. ServerQuery channeledit).
 func (s *TCPServer) BroadcastChannelUpdated(channelID int64) {
@@ -1073,31 +925,30 @@ func (s *TCPServer) BroadcastChannelUpdated(channelID int64) {
 // channel_updated event.
 func channelUpdatedEventFor(ch *state.Channel) channelUpdatedEvent {
 	return channelUpdatedEvent{
-		ChannelID:          ch.ChannelID,
-		Topic:              ch.Topic,
-		MaxClients:         ch.MaxClients,
-		OpusBitrate:        ch.OpusBitrate,
-		OpusFEC:            ch.OpusFEC,
-		OpusDTX:            ch.OpusDTX,
-		OpusStereo:         ch.OpusStereo,
-		SlowModeSeconds:    ch.SlowModeSeconds,
-		Description:        ch.Description,
-		NeededJoinPower:    ch.NeededJoinPower,
-		OrderIndex:         ch.OrderIndex,
-		ParentID:           ch.ParentID,
-		InheritPermissions: ch.InheritPermissions,
+		ChannelID:       ch.ChannelID,
+		Topic:           ch.Topic,
+		MaxClients:      ch.MaxClients,
+		OpusBitrate:     ch.OpusBitrate,
+		OpusFEC:         ch.OpusFEC,
+		OpusDTX:         ch.OpusDTX,
+		OpusStereo:      ch.OpusStereo,
+		SlowModeSeconds: ch.SlowModeSeconds,
+		Description:     ch.Description,
+		OrderIndex:      ch.OrderIndex,
+		ParentID:        ch.ParentID,
 	}
 }
 
-// handleJoinChannel moves the calling client into the target channel. Joining
-// requires the caller's i_channel_join_power to meet the channel's
-// needed_join_power; when the channel has a password, the caller must supply
-// it unless they hold b_channel_join_ignore_password (TS3 semantics: the
-// power check and the password check are independent).
+// handleJoinChannel moves the calling client into the target channel. The
+// role evaluator authorizes Connect, and any channel password is checked
+// independently.
 func (s *TCPServer) handleJoinChannel(ctx context.Context, client *Client, f *netproto.Frame) error {
 	var msg netproto.JoinChannel
 	if err := netproto.Decode(f, &msg); err != nil {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "malformed join_channel: "+err.Error())
+	}
+	if msg.AckRequested && msg.ChannelID < 0 {
+		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "invalid channel")
 	}
 	if s.deps == nil || s.deps.State == nil {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "state backend unavailable")
@@ -1105,11 +956,27 @@ func (s *TCPServer) handleJoinChannel(ctx context.Context, client *Client, f *ne
 	// Channel zero is the connected lobby. Leaving your own channel requires
 	// no moderation or join permission and never closes the server connection.
 	if msg.ChannelID == 0 {
-		if err := s.leaveOwnChannel(client); err != nil {
-			return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, err.Error())
-		}
-		return nil
+		return s.rolePolicyRead(ctx, client, func(ctx context.Context) error {
+			s.roleMetadataMu.Lock()
+			defer s.roleMetadataMu.Unlock()
+			client.roleActionMu.Lock()
+			defer client.roleActionMu.Unlock()
+			if err := s.leaveOwnChannelInContext(ctx, client); err != nil {
+				return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, err.Error())
+			}
+			return s.acknowledgeJoin(client, msg)
+		})
 	}
+	return s.roleAction(ctx, client, msg.ChannelID, authorization.Connect, func(ctx context.Context) error {
+		return s.joinChannelAllowed(ctx, client, msg)
+	})
+}
+
+func (s *TCPServer) joinChannelAllowed(ctx context.Context, client *Client, msg netproto.JoinChannel) error {
+	s.roleMetadataMu.Lock()
+	defer s.roleMetadataMu.Unlock()
+	client.roleActionMu.Lock()
+	defer client.roleActionMu.Unlock()
 	// (215) acceptance is a condition of entry, not a notice: an unanswered
 	// rules prompt keeps the client in the lobby, where the only thing it can
 	// still do is answer.
@@ -1121,17 +988,8 @@ func (s *TCPServer) handleJoinChannel(ctx context.Context, client *Client, f *ne
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeNotFound, "channel not found")
 	}
 
-	pc, err := s.permCheckerFor(ctx, client)
-	if err != nil {
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "permission backend unavailable")
-	}
-	// Inheriting sub-channels are gated by the strongest needed power on their
-	// chain (157/168), so a child cannot be used as a back door into a gated
-	// parent's subtree.
-	if !pc.joinAllowed(s.deps.State.EffectiveJoinPower(ch.ChannelID)) {
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, "insufficient permission: "+string(permissions.PermissionKeyChannelJoinPower))
-	}
-	if ch.PasswordHash != "" && !pc.granted(permissions.PermissionKeyChannelJoinIgnorePassword) {
+	bypassPassword := s.roleAllowed(ctx, client, msg.ChannelID, authorization.BypassChannelPassword)
+	if ch.PasswordHash != "" && !bypassPassword {
 		if err := auth.VerifyPassword(msg.Password, ch.PasswordHash); err != nil {
 			return s.sendErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, "invalid channel password")
 		}
@@ -1140,10 +998,10 @@ func (s *TCPServer) handleJoinChannel(ctx context.Context, client *Client, f *ne
 	if err := s.moveClient(ctx, client.ID, msg.ChannelID, client.ID); err != nil {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeNotFound, err.Error())
 	}
-	return nil
+	return s.acknowledgeJoin(client, msg)
 }
 
-func (s *TCPServer) leaveOwnChannel(client *Client) error {
+func (s *TCPServer) leaveOwnChannelInContext(ctx context.Context, client *Client) error {
 	var previousChannelID int64
 	if s.deps.Channels != nil {
 		var err error
@@ -1164,13 +1022,15 @@ func (s *TCPServer) leaveOwnChannel(client *Client) error {
 			return err
 		}
 	}
+	s.deps.State.SetPrioritySpeaker(client.ID, false)
+	s.deps.State.SetSharing(client.ID, false)
 	if previousChannelID != 0 {
 		if s.deps.Voice != nil {
 			s.deps.Voice.LeaveChannel(client.ID, previousChannelID)
 		}
-		s.rotateScopeKey(context.Background(), previousChannelID)
+		s.rotateScopeKey(ctx, previousChannelID)
 	}
-	_ = s.sendSubscriptionState(client)
+	_ = s.sendSubscriptionState(ctx, client)
 	s.broadcastEvent(eventUserMoved, userEvent{
 		ClientID: client.ID, FromChannelID: previousChannelID,
 		ChannelID: 0, ByClientID: client.ID,
@@ -1178,37 +1038,25 @@ func (s *TCPServer) leaveOwnChannel(client *Client) error {
 	return nil
 }
 
-// handleMoveClient moves another client into a channel after an
-// i_client_move_power vs i_client_needed_move_power check.
+// handleMoveClient uses current role authority and hierarchy.
 func (s *TCPServer) handleMoveClient(ctx context.Context, client *Client, f *netproto.Frame) error {
 	var msg netproto.MoveClient
 	if err := netproto.Decode(f, &msg); err != nil {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "malformed move_client: "+err.Error())
 	}
-	if s.deps == nil || s.deps.State == nil {
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "state backend unavailable")
+	err := s.withRolePolicy(ctx, func(ctx context.Context) error {
+		s.roleMetadataMu.Lock()
+		defer s.roleMetadataMu.Unlock()
+		if client.sessionRevoked() || client.rulesBlocked() {
+			return authorization.ErrRoleForbidden
+		}
+		e := ctx.Value(roleLeaseKey{}).(roleLease).evaluator
+		return s.moveRoleMember(ctx, e, client.userID(), client.uniqueID(), client.ID, msg)
+	})
+	if err != nil {
+		return s.roleError(ctx, client, err)
 	}
-	if _, ok := s.deps.State.GetChannel(msg.ChannelID); !ok {
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodeNotFound, "channel not found")
-	}
-	target, ok := s.clientByID(msg.ClientID)
-	if !ok || !target.isAuthed() {
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodeNotFound, "target client not found")
-	}
-	if target.rulesBlocked() {
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, "target must accept the server rules before joining a channel")
-	}
-
-	if err := s.checkPowerOver(ctx, client, target,
-		permissions.PermissionKeyClientMovePower,
-		permissions.PermissionKeyClientNeededMovePower); err != nil {
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, err.Error())
-	}
-
-	if err := s.moveClient(ctx, target.ID, msg.ChannelID, client.ID); err != nil {
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodeNotFound, err.Error())
-	}
-	return nil
+	return s.acknowledgeMove(client, msg)
 }
 
 // handleKickClient kicks a client from its channel or from the server (and
@@ -1218,52 +1066,72 @@ func (s *TCPServer) handleKickClient(ctx context.Context, client *Client, f *net
 	if err := netproto.Decode(f, &msg); err != nil {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "malformed kick_client: "+err.Error())
 	}
-	if s.deps == nil || s.deps.State == nil {
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "state backend unavailable")
-	}
-	target, ok := s.clientByID(msg.ClientID)
-	if !ok || !target.isAuthed() {
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodeNotFound, "target client not found")
-	}
-
-	powerKey := permissions.PermissionKeyClientKickFromChannelPower
-	neededKey := permissions.PermissionKeyClientNeededKickFromChannelPower
-	if msg.FromServer || msg.Ban {
-		powerKey = permissions.PermissionKeyClientKickFromServerPower
-		neededKey = permissions.PermissionKeyClientNeededKickFromServerPower
+	if msg.ExpectedChannelID < 0 || ((msg.FromServer || msg.Ban) && msg.ExpectedChannelID != 0) ||
+		(msg.AckRequested && !msg.FromServer && !msg.Ban && msg.ExpectedChannelID == 0) {
+		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "invalid channel-disconnect scope; refresh the member list")
 	}
 	if msg.Ban {
-		powerKey = permissions.PermissionKeyClientBanPower
-		neededKey = permissions.PermissionKeyClientNeededBanPower
-	}
-	if err := s.checkPowerOver(ctx, client, target, powerKey, neededKey); err != nil {
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, err.Error())
-	}
-
-	var expiresAt time.Time
-	if msg.Ban {
-		var err error
-		expiresAt, err = s.recordBan(ctx, client, target, msg.Reason, msg.DurationSeconds)
-		if err != nil {
-			s.logger.Warn("recording ban failed",
-				zap.String("client_id", client.ID),
-				zap.String("target_id", target.ID),
-				zap.Error(err),
-			)
-			return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "recording ban failed")
+		var result roleBanResult
+		err := s.withExclusiveRolePolicy(ctx, func(ctx context.Context) error {
+			s.roleMetadataMu.Lock()
+			defer s.roleMetadataMu.Unlock()
+			if client.sessionRevoked() || client.rulesBlocked() {
+				return authorization.ErrRoleForbidden
+			}
+			var err error
+			result, err = s.banRoleMember(ctx, ctx.Value(roleLeaseKey{}).(roleLease).evaluator, client.userID(), client.uniqueID(), client.ID, msg.ClientID, msg.Reason, msg.DurationSeconds)
+			return err
+		})
+		if result.UniqueID != "" && !result.Saved {
+			if msg.AckRequested {
+				return s.acknowledgeRemoval(client, msg, 0, netproto.BanUnconfirmed, result.Pending)
+			}
+			return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "ban persistence could not be confirmed; matching sessions were disconnected; refresh the ban list before retrying")
 		}
+		if err != nil {
+			return s.roleError(ctx, client, err)
+		}
+		if msg.AckRequested {
+			return s.acknowledgeRemoval(client, msg, 0, netproto.BanSaved, result.Pending)
+		}
+		if result.Pending {
+			return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "ban saved and sessions revoked; resource cleanup is pending")
+		}
+		return nil
 	}
-
-	if err := s.performKick(client.ID, target.ID, msg.FromServer || msg.Ban, msg.Ban, msg.Reason, expiresAt); err != nil {
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodeNotFound, err.Error())
+	if msg.FromServer {
+		var pending bool
+		err := s.withExclusiveRolePolicy(ctx, func(ctx context.Context) error {
+			s.roleMetadataMu.Lock()
+			defer s.roleMetadataMu.Unlock()
+			if client.sessionRevoked() || client.rulesBlocked() {
+				return authorization.ErrRoleForbidden
+			}
+			var err error
+			pending, err = s.kickRoleMember(ctx, ctx.Value(roleLeaseKey{}).(roleLease).evaluator, client.userID(), client.uniqueID(), client.ID, msg.ClientID, msg.Reason)
+			return err
+		})
+		if err != nil {
+			return s.roleError(ctx, client, err)
+		}
+		return s.acknowledgeRemoval(client, msg, 0, "", pending)
 	}
-	action := "kick"
-	if msg.Ban {
-		action = "ban"
+	var result netproto.MemberDisconnectResult
+	err := s.withRolePolicy(ctx, func(ctx context.Context) error {
+		s.roleMetadataMu.Lock()
+		defer s.roleMetadataMu.Unlock()
+		if client.sessionRevoked() || client.rulesBlocked() {
+			return authorization.ErrRoleForbidden
+		}
+		e := ctx.Value(roleLeaseKey{}).(roleLease).evaluator
+		var err error
+		result, err = s.disconnectRoleMember(ctx, e, client.userID(), client.uniqueID(), client.ID, msg.ClientID, msg.ExpectedChannelID, msg.Reason)
+		return err
+	})
+	if err != nil {
+		return s.roleError(ctx, client, err)
 	}
-	s.audit(ctx, client.UniqueID, action, target.UniqueID,
-		fmt.Sprintf("from_server=%t duration_seconds=%d reason=%s", msg.FromServer || msg.Ban, msg.DurationSeconds, msg.Reason))
-	return nil
+	return s.acknowledgeRemoval(client, msg, result.ChannelID, "", false)
 }
 
 // maxChatBytes caps the chat body size (for encrypted messages this is the
@@ -1280,9 +1148,18 @@ const maxChatBytes = 16 * 1024
 // global scopes only; direct messages are true E2EE and unverifiable by
 // design) and the ciphertext size — it cannot read the body.
 func (s *TCPServer) handleChatSend(ctx context.Context, client *Client, f *netproto.Frame) error {
+	return s.rolePolicyRead(ctx, client, func(ctx context.Context) error {
+		return s.sendSessionChat(ctx, client, f)
+	})
+}
+
+func (s *TCPServer) sendSessionChat(ctx context.Context, client *Client, f *netproto.Frame) error {
 	var msg netproto.ChatSend
 	if err := netproto.Decode(f, &msg); err != nil {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "malformed chat_send: "+err.Error())
+	}
+	if msg.AckRequested && !validAcknowledgedChat(msg) {
+		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "invalid acknowledged chat destination or reference")
 	}
 	if s.deps == nil || s.deps.Broadcast == nil {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "broadcast backend unavailable")
@@ -1320,39 +1197,41 @@ func (s *TCPServer) handleChatSend(ctx context.Context, client *Client, f *netpr
 			}
 			channelID = id
 		}
-		// Read entitlement FIRST, before anything touches chatKeys: members and
-		// entitled subscribers may write the channel tab they can read, while
-		// routeScopedChat may ensure a scope's first generation. Reaching it with an
-		// attacker-supplied channel id is a disk-exhaustion DoS (91).
-		if channelID != 0 {
-			if s.deps.State == nil {
-				return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "state backend unavailable")
-			}
-			if !s.scopeReadable(ctx, client, channelID) {
-				return s.sendErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, "not a member or subscriber of this channel")
-			}
-		}
-		if msg.Enc {
-			if s.chatKeys == nil {
-				return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "chat key manager unavailable")
-			}
-			// Non-minting lookup: an unknown scope is "rejoin", never a mint.
-			currentID, _, err := s.chatKeys.current(ctx, channelID)
-			if errors.Is(err, ErrNoScopeKey) {
-				return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "no chat key for this channel yet — rejoin the channel")
-			}
-			if err != nil {
-				return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "chat key unavailable")
-			}
-			if msg.KeyID != currentID {
-				scope := "channel"
-				if channelID == 0 {
-					scope = "global scope"
+		return s.roleAction(ctx, client, channelID, authorization.SendMessages, func(ctx context.Context) error {
+			// Read entitlement FIRST, before anything touches chatKeys: members and
+			// entitled subscribers may write the channel tab they can read, while
+			// routeScopedChat may ensure a scope's first generation. Reaching it with an
+			// attacker-supplied channel id is a disk-exhaustion DoS (91).
+			if channelID != 0 {
+				if s.deps.State == nil {
+					return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "state backend unavailable")
 				}
-				return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "stale chat key for "+scope+" (key rotated; wait for re-key)")
+				if !s.scopeReadable(ctx, client, channelID) {
+					return s.sendErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, "not a member or subscriber of this channel")
+				}
 			}
-		}
-		return s.routeScopedChat(ctx, client, msg, channelID)
+			if msg.Enc {
+				if s.chatKeys == nil {
+					return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "chat key manager unavailable")
+				}
+				// Non-minting lookup: an unknown scope is "rejoin", never a mint.
+				currentID, _, err := s.chatKeys.current(ctx, channelID)
+				if errors.Is(err, ErrNoScopeKey) {
+					return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "no chat key for this channel yet — rejoin the channel")
+				}
+				if err != nil {
+					return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "chat key unavailable")
+				}
+				if msg.KeyID != currentID {
+					scope := "channel"
+					if channelID == 0 {
+						scope = "global scope"
+					}
+					return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "stale chat key for "+scope+" (key rotated; wait for re-key)")
+				}
+			}
+			return s.routeScopedChat(ctx, client, msg, channelID)
+		})
 	}
 
 	// Direct messages are true E2EE: relay/spool only, no moderation.
@@ -1381,38 +1260,42 @@ func (s *TCPServer) handleChatSend(ctx context.Context, client *Client, f *netpr
 
 	switch {
 	case msg.ToUniqueID != "":
-		return s.sendDirectByUniqueID(ctx, client, msg.ToUniqueID, payload, msg.Text, msg.Enc)
+		return s.sendDirectByUniqueID(ctx, client, msg, payload)
 	default: // msg.ToClientID != ""
 		if err := s.deps.Broadcast.BroadcastToClient(msg.ToClientID, payload); err != nil {
 			return s.sendErrorFor(client, requestOrigin(ctx), errCodeNotFound, "target client not reachable")
 		}
 		// Echo the direct message back to the sender.
-		_ = s.deps.Broadcast.BroadcastToClient(client.ID, payload)
+		if err := s.echoAcceptedDirect(client, msg, payload); err != nil {
+			return err
+		}
 		s.metricsSink().IncChatMessage("direct")
 	}
-	return nil
+	return s.acknowledgeChat(client, msg, netproto.ChatRelayed, 0)
 }
 
 // sendDirectByUniqueID delivers a direct message to the user with the given
 // unique ID. If the user is online the message is delivered immediately (and
 // echoed to the sender); otherwise it is spooled into offline_messages for
 // delivery at their next login.
-func (s *TCPServer) sendDirectByUniqueID(ctx context.Context, client *Client, toUniqueID string, payload []byte, text string, enc bool) error {
+func (s *TCPServer) sendDirectByUniqueID(ctx context.Context, client *Client, msg netproto.ChatSend, payload []byte) error {
 	// Guests have authenticated live identities but no account row. Resolve
 	// the online session before consulting account storage for offline spooling.
-	if tc, ok := s.clientByUniqueID(toUniqueID); ok {
+	if tc, ok := s.clientByUniqueID(msg.ToUniqueID); ok {
 		if err := s.deps.Broadcast.BroadcastToClient(tc.ID, payload); err != nil {
 			return s.sendErrorFor(client, requestOrigin(ctx), errCodeNotFound, "target client not reachable")
 		}
-		_ = s.deps.Broadcast.BroadcastToClient(client.ID, payload)
+		if err := s.echoAcceptedDirect(client, msg, payload); err != nil {
+			return err
+		}
 		s.metricsSink().IncChatMessage("direct")
-		return nil
+		return s.acknowledgeChat(client, msg, netproto.ChatRelayed, 0)
 	}
 
 	if s.deps.Auth == nil {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "authentication backend unavailable")
 	}
-	target, err := s.deps.Auth.LookupUser(ctx, toUniqueID)
+	target, err := s.deps.Auth.LookupUser(ctx, msg.ToUniqueID)
 	if err != nil {
 		if errors.Is(err, auth.ErrUserNotFound) {
 			return s.sendErrorFor(client, requestOrigin(ctx), errCodeNotFound, "target user not found")
@@ -1431,12 +1314,12 @@ func (s *TCPServer) sendDirectByUniqueID(ctx context.Context, client *Client, to
 	// behalf: a plaintext DM to an offline user would land in the spool in
 	// the clear. Relaying it live is the sender's choice; persisting it is
 	// not, so the escape hatch stops at the spool (91).
-	if !enc {
+	if !msg.Enc {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, "target user is offline and plaintext direct messages are never spooled — encrypt the message")
 	}
 	// E2EE DMs are spooled as ciphertext the server cannot read; the sender's
 	// unique ID travels along so the recipient can fetch the public key.
-	if err := s.deps.Spool.SpoolMessage(ctx, client.userID(), target.ID, client.UniqueID, text); err != nil {
+	if err := s.deps.Spool.SpoolMessage(ctx, client.userID(), target.ID, client.UniqueID, msg.Text); err != nil {
 		s.logger.Warn("spooling message failed",
 			zap.String("client_id", client.ID),
 			zap.Error(err),
@@ -1445,9 +1328,16 @@ func (s *TCPServer) sendDirectByUniqueID(ctx context.Context, client *Client, to
 	}
 	s.logger.Info("message spooled for offline user",
 		zap.String("client_id", client.ID),
-		zap.String("to_unique_id", toUniqueID),
+		zap.String("to_unique_id", msg.ToUniqueID),
 	)
-	return nil
+	if msg.AckRequested {
+		// Give the sender the same own-message echo after durable offline
+		// acceptance as after live relay. This does not claim recipient delivery.
+		if err := s.echoAcceptedDirect(client, msg, payload); err != nil {
+			return err
+		}
+	}
+	return s.acknowledgeChat(client, msg, netproto.ChatQueued, 0)
 }
 
 // deliverSpooled sends any spooled offline messages for the user to the
@@ -1477,7 +1367,9 @@ func (s *TCPServer) deliverSpooled(ctx context.Context, client *Client, userID i
 			FromClientID: strconv.FormatInt(m.FromUserID, 10),
 			FromUniqueID: m.FromUniqueID,
 			From:         m.FromName,
+			ToUniqueID:   client.uniqueID(),
 			Text:         m.Message,
+			Direct:       true,
 			Offline:      true,
 			Enc:          true,
 			E2E:          true,
@@ -1527,7 +1419,22 @@ func remoteIP(conn net.Conn) string {
 // the voice router's membership in sync, and announces the move.
 func (s *TCPServer) moveClient(ctx context.Context, clientID string, channelID int64, movedBy string) error {
 	afterMove := func(previousChannelID int64) {
+		// The destination can revoke active controls even without a policy
+		// edit. The caller retains its policy and membership action locks.
+		if lease, ok := ctx.Value(roleLeaseKey{}).(roleLease); ok {
+			if member, present := s.deps.State.GetClient(clientID); present {
+				if !lease.evaluator.Evaluate(member.UserID, channelID, authorization.PrioritySpeaker).Allowed {
+					s.deps.State.SetPrioritySpeaker(clientID, false)
+				}
+				if !lease.evaluator.Evaluate(member.UserID, channelID, authorization.ShareScreen).Allowed {
+					s.deps.State.SetSharing(clientID, false)
+				}
+			}
+		}
 		if s.deps.Voice != nil {
+			if lease, ok := ctx.Value(roleLeaseKey{}).(roleLease); ok {
+				s.refreshRolePublishers(lease.evaluator)
+			}
 			if previousChannelID != 0 && previousChannelID != channelID {
 				s.deps.Voice.LeaveChannel(clientID, previousChannelID)
 			}
@@ -1536,7 +1443,7 @@ func (s *TCPServer) moveClient(ctx context.Context, clientID string, channelID i
 		// Chat keys (4b): the client gets the new channel's key; the channel it
 		// left rotates so ex-members cannot read new messages.
 		if previousChannelID != 0 && previousChannelID != channelID {
-			s.rotateScopeKey(context.Background(), previousChannelID)
+			s.rotateScopeKey(ctx, previousChannelID)
 		}
 		if client, ok := s.clientByID(clientID); ok {
 			// The move is already committed when this lifecycle callback runs.
@@ -1550,7 +1457,7 @@ func (s *TCPServer) moveClient(ctx context.Context, clientID string, channelID i
 			}
 			// (312) the channel a client stands in is implicitly subscribed, so a
 			// move changes the authoritative set even though nothing was asked.
-			_ = s.sendSubscriptionState(client)
+			_ = s.sendSubscriptionState(ctx, client)
 		}
 		s.broadcastEvent(eventUserMoved, userEvent{
 			ClientID:      clientID,
@@ -1560,38 +1467,23 @@ func (s *TCPServer) moveClient(ctx context.Context, clientID string, channelID i
 		})
 	}
 	if s.deps.Channels != nil {
-		_, err := s.deps.Channels.MoveClientWithLifecycle(clientID, channelID, afterMove)
+		backend, ok := s.deps.Channels.(interface {
+			MoveClientWithinCapacity(string, int64, func(int64)) (int64, error)
+		})
+		if !ok {
+			return authorization.ErrAuthorizationUnavailable
+		}
+		_, err := backend.MoveClientWithinCapacity(clientID, channelID, afterMove)
 		return err
 	}
 	var oldChannelID int64
 	if sc, ok := s.deps.State.GetClient(clientID); ok {
 		oldChannelID = sc.ChannelID
 	}
-	if err := s.deps.State.MoveClient(clientID, channelID); err != nil {
+	if err := s.deps.State.MoveClientWithinCapacity(clientID, channelID); err != nil {
 		return err
 	}
 	afterMove(oldChannelID)
-	return nil
-}
-
-// checkPowerOver resolves both the caller's power permission and the target's
-// needed power permission and reports whether the caller may act on the
-// target. Non-admin callers may not act on admin targets.
-func (s *TCPServer) checkPowerOver(ctx context.Context, caller, target *Client, powerKey, neededKey permissions.PermissionKey) error {
-	callerPC, err := s.permCheckerFor(ctx, caller)
-	if err != nil {
-		return err
-	}
-	targetPC, err := s.permCheckerFor(ctx, target)
-	if err != nil {
-		return err
-	}
-	if !callerPC.admin && targetPC.admin {
-		return errors.New("cannot act on a server admin")
-	}
-	if !callerPC.powerAtLeast(powerKey, targetPC.neededPower(neededKey)) {
-		return errors.New("insufficient permission: " + string(powerKey))
-	}
 	return nil
 }
 
@@ -1619,21 +1511,6 @@ func banExpirationMillis(expiresAt time.Time) int64 {
 	return expiresAt.UnixMilli()
 }
 
-// recordBan inserts a unique-ID ban for the target and returns the exact
-// expiry used for persistence. durationSeconds > 0 makes the ban temporary
-// (171); zero or below is permanent.
-func (s *TCPServer) recordBan(ctx context.Context, caller, target *Client, reason string, durationSeconds int64) (time.Time, error) {
-	var bannedBy any
-	if caller.userID() != 0 {
-		bannedBy = caller.userID()
-	}
-	expiresAt := banExpiration(durationSeconds)
-	if err := s.insertBan(ctx, target.UniqueID, reason, bannedBy, persistentBanExpiration(expiresAt)); err != nil {
-		return time.Time{}, err
-	}
-	return expiresAt, nil
-}
-
 // insertBan inserts a unique-ID ban into the bans table. expiresAt nil (or
 // the nil interface) means a permanent ban. It is a no-op when ban
 // persistence is not wired; kicks still proceed.
@@ -1654,12 +1531,15 @@ func (s *TCPServer) sendSnapshot(client *Client) error {
 	if s.deps == nil || s.deps.State == nil {
 		return nil
 	}
-	snap := broadcast.BuildSnapshot(s.deps.State, client.isAdmin(), client.UniqueID)
-	payload, err := json.Marshal(snap)
-	if err != nil {
-		return err
+	if s.deps.Authority == nil {
+		return authorization.ErrAuthorizationUnavailable
 	}
-	return s.writeFrame(client, &netproto.Frame{Type: uint16(netproto.MsgSnapshot), Payload: payload})
+	return s.deps.Authority.WithPolicy(context.Background(), func(e *authorization.RoleEvaluator) error {
+		if client.sessionRevoked() {
+			return authorization.ErrRoleForbidden
+		}
+		return s.writeMessage(client, netproto.MsgSnapshot, buildRoleSnapshot(s.deps.State, e, client.userID(), client.uniqueID()))
+	})
 }
 
 // broadcastEvent marshals payload and broadcasts it to all registered clients
@@ -1685,17 +1565,7 @@ func (s *TCPServer) broadcastToAdmins(eventType string, payload any) {
 	if s.deps == nil || s.deps.Broadcast == nil {
 		return
 	}
-	raw, err := eventEnvelope(eventType, payload)
-	if err != nil {
-		return
-	}
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	for _, c := range s.clients {
-		if c.isAdmin() {
-			_ = s.deps.Broadcast.BroadcastToClient(c.ID, raw)
-		}
-	}
+	s.broadcastEvent(eventType, payload)
 }
 
 // eventEnvelope wraps payload in the {"type": ..., "data": ...} envelope used
@@ -1713,31 +1583,20 @@ func eventEnvelope(eventType string, payload any) ([]byte, error) {
 	return json.Marshal(envelope)
 }
 
-// channelListResponse builds a ChannelList reply from the current state. The
-// list carries no order field, so the row order IS the order (163): it must be
-// the same total order the snapshot tree uses.
-func (s *TCPServer) channelListResponse() netproto.ChannelList {
-	var list netproto.ChannelList
-	if s.deps == nil || s.deps.State == nil {
-		return list
-	}
-	for _, ch := range s.deps.State.ChannelTreeOrdered() {
-		list.Channels = append(list.Channels, netproto.Channel{
-			ID:      strconv.FormatInt(ch.ChannelID, 10),
-			Name:    ch.Name,
-			Clients: ch.ClientCount,
-		})
-	}
-	return list
-}
-
 // broadcastWriter pumps outbound broadcast payloads to the client connection
 // as MsgEvent frames until the broadcaster closes the channel (on Unregister)
 // or a write fails.
 func (s *TCPServer) broadcastWriter(client *Client, out <-chan []byte) {
 	for payload := range out {
-		frame := &netproto.Frame{Type: uint16(netproto.MsgEvent), Payload: payload}
-		if err := s.writeFrame(client, frame); err != nil {
+		if string(payload) == mediaLimitsNotification {
+			if err := s.writeCurrentMediaLimits(context.Background(), client); err != nil {
+				_ = client.Conn.Close()
+				return
+			}
+			continue
+		}
+		if err := s.writeRoleBroadcast(client, payload); err != nil {
+			_ = client.Conn.Close()
 			return
 		}
 	}

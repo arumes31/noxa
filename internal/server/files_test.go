@@ -10,9 +10,10 @@ import (
 	"time"
 
 	"noxa/internal/auth"
+	"noxa/internal/authorization"
 	"noxa/internal/config"
+	"noxa/internal/filetransfer"
 	"noxa/internal/netproto"
-	"noxa/internal/permissions"
 	"noxa/internal/state"
 	"noxa/internal/store"
 )
@@ -38,6 +39,9 @@ type fakeFileTransfer struct {
 	fingerprint     string
 	tombstoneHook   func(int64)
 }
+
+func (f *fakeFileTransfer) SetAccessGuard(filetransfer.AccessGuard)                          {}
+func (f *fakeFileTransfer) RevokeTransfers(func(filetransfer.Principal, int64, string) bool) {}
 
 func (f *fakeFileTransfer) TombstoneChannelData(channelID int64) error {
 	f.mu.Lock()
@@ -192,8 +196,9 @@ func (f *fakeFileTransfer) uploadCount() int {
 // TestFileTransferInitUpload verifies an upload token is issued and the
 // response carries id/token/port.
 func TestFileTransferInitUpload(t *testing.T) {
-	env := startTestEnv(t, nil)
+	env := startTestEnvWithCapabilities(t, authorization.UploadFiles)
 	defer env.stop()
+	env.state.AddChannel(testChannel(1))
 
 	conn, _ := dialAuthed(t, env.addr, "user-uid")
 	defer closeFileTestResource(t, conn)
@@ -217,17 +222,11 @@ func TestFileTransferInitUpload(t *testing.T) {
 	}
 }
 
-// TestFileTransferInitDenied verifies a negated upload power denies token
-// issuance.
+// TestFileTransferInitDenied verifies UploadFiles is required for token issuance.
 func TestFileTransferInitDenied(t *testing.T) {
-	perms := tieredWith(&permissions.Permission{
-		Key:    permissions.PermissionKeyFTFileUploadPower,
-		Type:   permissions.PermissionTypeInteger,
-		Value:  0,
-		Negate: true,
-	})
-	env := startTestEnv(t, &perms)
+	env := startTestEnvWithCapabilities(t)
 	defer env.stop()
+	env.state.AddChannel(testChannel(1))
 
 	conn, _ := dialAuthed(t, env.addr, "user-uid")
 	defer closeFileTestResource(t, conn)
@@ -248,42 +247,16 @@ func TestFileTransferInitDenied(t *testing.T) {
 	}
 }
 
-// TestFileTransferUploadQuotaPermission verifies the caller's personal upload
-// ceiling (266) is resolved from permissions and handed to the backend, which
-// is the only thing that can enforce it.
-func TestFileTransferUploadQuotaPermission(t *testing.T) {
-	perms := tieredWith(&permissions.Permission{
-		Key:   permissions.PermissionKeyFTUploadQuotaMB,
-		Type:  permissions.PermissionTypeInteger,
-		Value: 25,
-	})
-	env := startTestEnv(t, &perms)
-	defer env.stop()
-
-	conn, _ := dialAuthed(t, env.addr, "user-uid")
-	defer closeFileTestResource(t, conn)
-
-	send(t, conn, netproto.MsgFileTransferInit, netproto.FileTransferInit{
-		ChannelID: 1, Direction: "upload", Name: "a.txt", Size: 42,
-	})
-	readOfType(t, conn, netproto.MsgFileTransferInitResponse)
-
-	env.ft.mu.Lock()
-	defer env.ft.mu.Unlock()
-	if len(env.ft.uploads) != 1 || env.ft.uploads[0].quotaMB != 25 {
-		t.Fatalf("uploads = %+v, want quotaMB 25", env.ft.uploads)
-	}
-}
-
 // TestFileRenameCrossChannel verifies a move carries the target channel
 // through to the backend (262).
 func TestFileRenameCrossChannel(t *testing.T) {
-	env := startTestEnv(t, nil)
+	env := startTestEnvWithCapabilities(t, authorization.UploadFiles)
 	defer env.stop()
 	env.ft.files = []store.FileRecord{{ChannelID: 1, Name: "a.txt", Uploader: "user-uid"}}
+	env.state.AddChannel(testChannel(1))
 	env.state.AddChannel(&state.Channel{ChannelID: 2, Name: "target"})
 
-	conn, _ := dialAuthed(t, env.addr, "user-uid")
+	conn, _ := dialAuthed(t, env.addr, "admin-uid")
 	defer closeFileTestResource(t, conn)
 
 	send(t, conn, netproto.MsgFileRename, netproto.FileRename{
@@ -307,19 +280,10 @@ func TestFileRenameCrossChannel(t *testing.T) {
 // may not upload into the destination (262): managing a file in one channel
 // must not be a way to push it into a channel they cannot write to.
 func TestFileRenameCrossChannelDenied(t *testing.T) {
-	perms := tieredWith(&permissions.Permission{
-		Key:    permissions.PermissionKeyFTFileUploadPower,
-		Type:   permissions.PermissionTypeInteger,
-		Value:  0,
-		Negate: true,
-	}, &permissions.Permission{
-		Key:   permissions.PermissionKeyFTFileDelete,
-		Type:  permissions.PermissionTypeBoolean,
-		Value: 1,
-	})
-	env := startTestEnv(t, &perms)
+	env := startTestEnvWithCapabilities(t)
 	defer env.stop()
 	env.ft.files = []store.FileRecord{{ChannelID: 1, Name: "a.txt", Uploader: "user-uid"}}
+	env.state.AddChannel(testChannel(1))
 	env.state.AddChannel(&state.Channel{ChannelID: 2, Name: "target"})
 
 	conn, _ := dialAuthed(t, env.addr, "user-uid")
@@ -347,6 +311,7 @@ func TestFileRenameCrossChannelDenied(t *testing.T) {
 func TestFileTransferInitDownload(t *testing.T) {
 	env := startTestEnv(t, nil)
 	defer env.stop()
+	env.state.AddChannel(testChannel(1))
 
 	conn, _ := dialAuthed(t, env.addr, "user-uid")
 	defer closeFileTestResource(t, conn)
@@ -368,6 +333,7 @@ func TestFileTransferInitDownload(t *testing.T) {
 func TestFileList(t *testing.T) {
 	env := startTestEnv(t, nil)
 	defer env.stop()
+	env.state.AddChannel(testChannel(1))
 
 	env.ft.files = []store.FileRecord{
 		{ChannelID: 1, Name: "a.txt", Size: 42, SHA256: "abc", Uploader: "user-uid"},
@@ -393,6 +359,7 @@ func TestFileList(t *testing.T) {
 func TestFileListQuota(t *testing.T) {
 	env := startTestEnv(t, nil)
 	defer env.stop()
+	env.state.AddChannel(testChannel(1))
 
 	env.ft.files = []store.FileRecord{
 		{ChannelID: 1, Name: "a.txt", Size: 42, SHA256: "abc", Uploader: "user-uid"},
@@ -418,6 +385,7 @@ func TestFileListQuota(t *testing.T) {
 func TestFileDeleteGates(t *testing.T) {
 	env := startTestEnv(t, nil)
 	defer env.stop()
+	env.state.AddChannel(testChannel(1))
 	env.ft.files = []store.FileRecord{
 		{ChannelID: 1, Name: "owned.txt", Size: 1, Uploader: "user-uid"},
 		{ChannelID: 1, Name: "foreign.txt", Size: 1, Uploader: "admin-uid"},
@@ -458,6 +426,7 @@ func TestFileDeleteGates(t *testing.T) {
 func TestFileRename(t *testing.T) {
 	env := startTestEnv(t, nil)
 	defer env.stop()
+	env.state.AddChannel(testChannel(1))
 	env.ft.files = []store.FileRecord{
 		{ChannelID: 1, Name: "old.txt", Size: 1, Uploader: "user-uid"},
 	}
@@ -485,6 +454,7 @@ func TestFileRename(t *testing.T) {
 func TestFileVersions(t *testing.T) {
 	env := startTestEnv(t, nil)
 	defer env.stop()
+	env.state.AddChannel(testChannel(1))
 	env.ft.files = []store.FileRecord{
 		{ChannelID: 1, Name: "a.txt", Size: 3},
 		{ChannelID: 1, Name: "a.txt.v1", Size: 2},
@@ -510,6 +480,7 @@ func TestFileVersions(t *testing.T) {
 func TestFileLink(t *testing.T) {
 	env := startTestEnv(t, nil)
 	defer env.stop()
+	env.state.AddChannel(testChannel(1))
 	env.ft.files = []store.FileRecord{
 		{ChannelID: 1, Name: "a.txt", Size: 1, Uploader: "user-uid"},
 	}
@@ -546,6 +517,7 @@ func TestFileLinkRejectsMalformedHealthAddress(t *testing.T) {
 		cfg.HealthAddr = "not-a-listen-address"
 	})
 	defer env.stop()
+	env.state.AddChannel(testChannel(1))
 	env.ft.files = []store.FileRecord{{ChannelID: 1, Name: "a.txt", Size: 1, Uploader: "user-uid"}}
 
 	conn, _ := dialAuthed(t, env.addr, "user-uid")
@@ -568,7 +540,7 @@ func TestPortFromAddressRejectsUnusableAddresses(t *testing.T) {
 }
 
 // authUser3 is a third fake user for gate tests.
-var authUser3 = auth.User{ID: 3, UniqueID: "other-uid", Nickname: "other", IsAdmin: false}
+var authUser3 = auth.User{ID: 3, UniqueID: "other-uid", Nickname: "other"}
 
 // TestServerIconSetGet verifies the server icon round trip (270).
 func TestServerIconSetGet(t *testing.T) {

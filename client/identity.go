@@ -750,16 +750,12 @@ func (a *App) ListIdentities() []IdentityEntry {
 	return out
 }
 
-// forgetCachedIdentity drops the connManager's cached key so the next connect
-// picks up the new active identity.
-func (a *App) forgetCachedIdentity(id *identity) {
-	cm := a.cmLoad()
-	if cm == nil {
-		return
-	}
-	cm.mu.Lock()
-	cm.id = id
-	cm.mu.Unlock()
+// invalidateIdentityContexts announces a selected-identity change while
+// identityMu is held. Existing tabs retain the key used to authenticate and
+// decrypt their journal; a new connection captures the selected key separately.
+func (a *App) invalidateIdentityContexts() {
+	a.identityGeneration++
+	a.emitPlain("dm_history_identity_changed", strconv.FormatUint(a.identityGeneration, 10))
 }
 
 // CreateIdentity generates a new identity labelled name WITHOUT switching to
@@ -856,7 +852,7 @@ func (a *App) switchIdentityLocked(id string) string {
 	if err != nil {
 		return err.Error()
 	}
-	loaded, err := loadIdentityAtStrict(path)
+	_, err = loadIdentityAtStrict(path)
 	if err != nil {
 		return err.Error()
 	}
@@ -866,7 +862,7 @@ func (a *App) switchIdentityLocked(id string) string {
 	}); err != nil {
 		return err.Error()
 	}
-	a.forgetCachedIdentity(loaded)
+	a.invalidateIdentityContexts()
 	a.emitSettingsUpdate()
 	return ""
 }
@@ -937,7 +933,7 @@ func (a *App) DeleteIdentity(id string, confirmUnexported bool) string {
 		}); err != nil {
 			return err.Error()
 		}
-		a.forgetCachedIdentity(nil)
+		a.invalidateIdentityContexts()
 	}
 	a.emitSettingsUpdate()
 	return ""
@@ -969,7 +965,7 @@ func (a *App) ImproveIdentityLevel(id string, target, maxSeconds int) IdentityLe
 		if err := saveIdentityAt(path, loaded); err != nil {
 			return IdentityLevelResult{Error: err.Error()}
 		}
-		a.forgetCachedIdentity(nil)
+		a.invalidateIdentityContexts()
 	}
 	return IdentityLevelResult{Level: loaded.SecurityLevel, Counter: loaded.Counter}
 }

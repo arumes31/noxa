@@ -246,12 +246,12 @@ function announce(text) {
 // Notification center (346) + DND (347/348)
 // ---------------------------------------------------------------------------
 
-const notifHistory = []; // {kind, text, at, channelID, uid}
+const notifHistory = []; // {kind, text, at, channelID, uid, tabID}
 const notifViews = new Set();
 
 // recordNotification appends to the bell history (session-persisted, 50).
 export function recordNotification(kind, text, ctx = {}) {
-    notifHistory.unshift({ kind, text, at: Date.now(), ...ctx });
+    notifHistory.unshift({ kind, text, at: Date.now(), ...ctx, tabID: V().state.activeTabID });
     if (notifHistory.length > 50) notifHistory.pop();
     for (const render of notifViews) render();
     updateBellBadge();
@@ -333,9 +333,15 @@ function openNotifCenter() {
                 row.classList.add("clickable");
                 row.tabIndex = 0;
                 row.setAttribute("role", "button");
-                row.onclick = () => {
+                row.onclick = async () => {
+                    const generation = V().state.serverGeneration;
                     overlay.remove();
-                    App().JoinChannel(n.channelID);
+                    try {
+                        const err = await App().JoinChannelForTab(n.tabID, n.channelID);
+                        if (err && generation === V().state.serverGeneration) V().toast(err, "warn");
+                    } catch (err) {
+                        if (generation === V().state.serverGeneration) V().toast(String(err), "warn");
+                    }
                 };
             }
             if (row.classList.contains("clickable")) {

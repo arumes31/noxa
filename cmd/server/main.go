@@ -11,7 +11,6 @@ import (
 	"net/http/pprof"
 	"os"
 	"os/signal"
-	"strconv"
 	"strings"
 	"sync/atomic"
 	"syscall"
@@ -21,6 +20,7 @@ import (
 	"go.uber.org/zap"
 
 	"noxa/internal/auth"
+	"noxa/internal/authorization"
 	"noxa/internal/broadcast"
 	"noxa/internal/channels"
 	"noxa/internal/chatcrypto"
@@ -32,7 +32,6 @@ import (
 	"noxa/internal/logging"
 	"noxa/internal/metrics"
 	"noxa/internal/netproto"
-	"noxa/internal/permissions"
 	"noxa/internal/query"
 	"noxa/internal/recorder"
 	"noxa/internal/redisx"
@@ -110,6 +109,14 @@ type serviceExit struct {
 	err  error
 }
 
+// activeRoleBackend prevents prepared or interrupted setup state from becoming
+// a serving authority. Mutations still use the store's transactional writer.
+type activeRoleBackend struct{ *store.Store }
+
+func (b activeRoleBackend) RolePolicy(ctx context.Context) (authorization.RolePolicy, error) {
+	return b.ActiveRolePolicy(ctx)
+}
+
 // startService reports every service exit, including an unexpected nil error.
 // The caller provides a channel large enough for every launched service so
 // shutdown cannot strand a reporter after the first exit wins the select.
@@ -160,6 +167,11 @@ func rewrapChatKeys() (retErr error) {
 		return fmt.Errorf("initializing logger: %w", err)
 	}
 	defer syncLogger(logger)
+	lease, err := store.AcquireRoleProcessLease(context.Background(), cfg.DatabaseURL)
+	if err != nil {
+		return fmt.Errorf("acquiring offline role process lease: %w", err)
+	}
+	defer func() { retErr = errors.Join(retErr, lease.Close()) }()
 
 	dbStore, err := store.New(cfg.DatabaseURL, logger,
 		cfg.DBMaxOpenConns, cfg.DBMaxIdleConns, cfg.DBConnMaxLifetime)
@@ -171,6 +183,9 @@ func rewrapChatKeys() (retErr error) {
 			retErr = errors.Join(retErr, fmt.Errorf("closing store: %w", err))
 		}
 	}()
+	if err := dbStore.CheckFreshInstall(context.Background()); err != nil {
+		return err
+	}
 
 	ring, err := chatcrypto.LoadKEKRing(cfg.ChatMasterKeyFile, os.Getenv("NOXA_CHAT_MASTER_KEY"), false)
 	if err != nil {
@@ -318,8 +333,13 @@ func run() (retErr error) {
 	for _, warning := range cfg.Warnings() {
 		logger.Warn("unsafe configuration", zap.String("warning", warning))
 	}
+	lease, err := store.AcquireRoleProcessLease(ctx, cfg.DatabaseURL)
+	if err != nil {
+		return fmt.Errorf("acquiring role process lease: %w", err)
+	}
+	defer func() { retErr = errors.Join(retErr, lease.Close()) }()
 
-	// Initialize the PostgreSQL store and run migrations on startup.
+	// Initialize this version's database before opening any listeners.
 	dbStore, err := store.New(cfg.DatabaseURL, logger,
 		cfg.DBMaxOpenConns, cfg.DBMaxIdleConns, cfg.DBConnMaxLifetime)
 	if err != nil {
@@ -332,7 +352,10 @@ func run() (retErr error) {
 	}()
 
 	migrationCtx, cancelMigration := context.WithTimeout(ctx, 5*time.Minute)
-	err = dbStore.MigrateContext(migrationCtx)
+	err = dbStore.EnsureFreshInstall(migrationCtx)
+	if err == nil {
+		err = dbStore.MigrateContext(migrationCtx)
+	}
 	cancelMigration()
 	if err != nil {
 		return fmt.Errorf("running migrations: %w", err)
@@ -342,7 +365,7 @@ func run() (retErr error) {
 		return fmt.Errorf("loading PII encryption key: %w", err)
 	}
 	dbStore.SetPIICipher(piiCipher)
-	logger.Info("database migrations applied")
+	logger.Info("fresh-version schema ready")
 
 	// (91) chat key material. --reset-chat-keys runs first so an operator who
 	// lost the master key can start over instead of being locked out forever;
@@ -368,42 +391,16 @@ func run() (retErr error) {
 		zap.Int64("scope_key_generations", scopeKeyCount),
 	)
 
-	// Default groups (138/143/144): ensure the Guest and Member server groups
-	// exist so the TCP server can assign them at login. Seeding is idempotent
-	// and disabled via default_groups_enabled=false.
-	var defaultGuestGroupID, defaultMemberGroupID int64
-	if cfg.DefaultGroupsEnabled {
-		if defaultGuestGroupID, err = ensureServerGroup(context.Background(), dbStore, "Guest", 0); err != nil {
-			return fmt.Errorf("ensuring default Guest group: %w", err)
-		}
-		for _, key := range []permissions.PermissionKey{
-			permissions.PermissionKeyFTFileUploadPower,
-			permissions.PermissionKeyClientAvatarUpload,
-		} {
-			if err := dbStore.SetPermission(context.Background(), store.PermTierServerGroup,
-				store.PermTarget{GroupID: defaultGuestGroupID}, string(key), 0, 0, false, true); err != nil {
-				return fmt.Errorf("hardening default Guest group %s: %w", key, err)
+	var tcpServer *server.TCPServer
+	roleAuthority, err := authorization.NewAuthority(ctx, activeRoleBackend{dbStore},
+		func(ctx context.Context, before, after *authorization.RoleEvaluator) error {
+			if tcpServer == nil {
+				return authorization.ErrAuthorizationUnavailable
 			}
-		}
-		if defaultMemberGroupID, err = ensureServerGroup(context.Background(), dbStore, "Member", 100); err != nil {
-			return fmt.Errorf("ensuring default Member group: %w", err)
-		}
-		logger.Info("default groups ready",
-			zap.Int64("guest_group_id", defaultGuestGroupID),
-			zap.Int64("member_group_id", defaultMemberGroupID),
-		)
-	}
-
-	// First-run bootstrap: with no admin user and no tokens, issue a one-time
-	// admin privilege token (TS3-style initial privilege key) and log it.
-	bootstrapToken, err := dbStore.BootstrapAdminToken(context.Background())
+			return tcpServer.ReconcileRolePolicy(ctx, before, after)
+		})
 	if err != nil {
-		return fmt.Errorf("bootstrap admin token: %w", err)
-	}
-	if bootstrapToken != "" {
-		logger.Warn("no admin user found: initial admin privilege token created (redeem once via TokenUse)",
-			zap.String("token", bootstrapToken),
-		)
+		return fmt.Errorf("loading active roles-v1 authorization (run role-setup activation first): %w", err)
 	}
 
 	// Initialize the authentication service. It wraps the store and provides
@@ -425,6 +422,9 @@ func run() (retErr error) {
 	// the database and the in-memory state manager, including automatic cleanup
 	// of empty temporary channels.
 	channelMgr := channels.New(dbStore, stateManager, logger)
+	// Enter role mode before loading persisted channels so legacy cleanup timers
+	// and resource writers can never run during startup.
+	channelMgr.EnableRoleMode(nil)
 	// (165) operator-configurable temporary channel lifetime; <= 0 keeps the default.
 	channelMgr.SetCleanupDelay(time.Duration(cfg.ChannelTempLifetimeSeconds) * time.Second)
 	defer channelMgr.Close()
@@ -455,18 +455,8 @@ func run() (retErr error) {
 			}
 		}
 		if echoChannelID == 0 {
-			id, err := channelMgr.CreateChannel(context.Background(), channels.ChannelSpec{
-				Name: cfg.EchoChannelName,
-				Type: channels.ChannelTypePermanent,
-			})
-			if err != nil {
-				return fmt.Errorf("creating echo test channel: %w", err)
-			}
-			echoChannelID = id
-			logger.Info("echo test channel created",
-				zap.String("name", cfg.EchoChannelName),
-				zap.Int64("channel_id", id),
-			)
+			logger.Warn("configured echo channel is missing; loopback stays disabled until the channel is created through roles-v1",
+				zap.String("name", cfg.EchoChannelName))
 		}
 	}
 
@@ -498,23 +488,18 @@ func run() (retErr error) {
 	defer events.Close()
 	broadcaster.SetEventTap(events.Publish)
 
-	// Initialize the permission loader (DB-backed, with a short-lived cache)
-	// and the stateless resolver used by the TCP permission middleware.
-	permLoader := permissions.NewLoader(dbStore, logger)
-	permResolver := permissions.NewResolver()
-	logger.Info("permissions ready")
-
-	go func() {
-		ticker := time.NewTicker(24 * time.Hour)
-		defer ticker.Stop()
-		runPermissionAuditLoop(ctx, logger, ticker.C, dbStore.CompressPermissionAudit)
-	}()
+	logger.Info("roles-v1 authorization ready")
 
 	// Initialize the Pion WebRTC engine and the voice facade (engine + SFU
 	// router) that the TCP control server drives via signaling messages.
-	engine, err := webrtc.NewWithNetwork(logger, cfg.WebRTC.ICEServers, cfg.WebRTC.EnableAV1, webrtc.NetworkConfig{
+	// Load saved defaults before constructing consumers of startup settings.
+	if err := server.LoadPersistedServerConfig(context.Background(), cfg, dbStore); err != nil {
+		return fmt.Errorf("loading persisted server configuration: %w", err)
+	}
+	videoBounds := webrtc.VideoBounds{Width: cfg.VideoMaxWidth, Height: cfg.VideoMaxHeight}
+	engine, err := webrtc.NewWithVideoBounds(logger, cfg.WebRTC.ICEServers, cfg.WebRTC.EnableAV1, webrtc.NetworkConfig{
 		UDPAddr: cfg.WebRTC.UDPAddr, ExternalIPs: cfg.WebRTC.ExternalIPs,
-	})
+	}, videoBounds)
 	if err != nil {
 		return fmt.Errorf("initializing webrtc engine: %w", err)
 	}
@@ -523,7 +508,13 @@ func run() (retErr error) {
 			logger.Warn("WebRTC engine shutdown error", zap.Error(err))
 		}
 	}()
-	voiceRouter := webrtc.NewRouter(logger)
+	voiceRouter, err := webrtc.NewRouterWithVideoBounds(logger, videoBounds)
+	if err != nil {
+		return fmt.Errorf("configuring video dimension ceiling: %w", err)
+	}
+	if err := voiceRouter.SetVideoBitrateLimit(cfg.VideoMaxBitrate); err != nil {
+		return fmt.Errorf("configuring video bitrate ceiling: %w", err)
+	}
 	voice := webrtc.NewVoice(engine, voiceRouter, logger)
 	m.RegisterWebRTCPeerCount(voice.PeerCount)
 	voice.SetEchoChannel(echoChannelID)
@@ -545,7 +536,7 @@ func run() (retErr error) {
 
 	// Initialize the recorder. It manages ffmpeg subprocesses that record
 	// channel streams; it is inert unless recording.enabled is set.
-	rec := recorder.New(recorderConfig(cfg.Recording), logger, recorder.Observers{
+	rec := recorder.NewChannelRecorder(recorderConfig(cfg.Recording), logger, recorder.Observers{
 		OnError: m.IncRecordingError,
 	})
 	m.RegisterRecorderSessionCount(rec.SessionCount)
@@ -644,6 +635,7 @@ func run() (retErr error) {
 		QuietHoursStart: cfg.FileQuietHoursStart,
 		QuietHoursEnd:   cfg.FileQuietHoursEnd,
 		ChannelQuotaMB:  cfg.FileChannelQuotaMB,
+		UserQuotaMB:     cfg.FileUserQuotaMB,
 		MaxSizeMB:       cfg.FileMaxSizeMB,
 		TLSEnabled:      fileTLS,
 		Cert:            tlsCert,
@@ -720,12 +712,6 @@ func run() (retErr error) {
 		logger.Error("ASSET STORAGE SECURITY LIMITATION", zap.String("warning", warning))
 	}
 
-	// Resolve any group-icon transaction left by a process crash before the
-	// control server can serve files or accept a competing update.
-	if err := server.RecoverGroupIconTransactions(context.Background(), cfg.FileRoot, dbStore); err != nil {
-		return fmt.Errorf("recovering group icon transactions: %w", err)
-	}
-
 	// Flag only confined, supported, regular channel icons so snapshots do not
 	// trust arbitrary directory entries at startup.
 	if _, err := markChannelIcons(cfg.FileRoot, stateManager); err != nil {
@@ -738,28 +724,24 @@ func run() (retErr error) {
 	rulesSvc := rules.New(dbStore, dbStore.DB())
 
 	// Start the TCP control listener, wired to the auth, state, channels,
-	// broadcast, permissions, and voice backends.
-	if err := server.LoadPersistedServerConfig(context.Background(), cfg, dbStore); err != nil {
-		return fmt.Errorf("loading persisted server configuration: %w", err)
-	}
-	tcpServer := server.New(cfg, logger, &server.Deps{
+	// broadcast, roles, and voice backends.
+	tcpServer = server.New(cfg, logger, &server.Deps{
 		Auth:               authSvc,
 		State:              stateManager,
 		Channels:           channelMgr,
 		Broadcast:          broadcaster,
-		Perms:              permLoader,
-		Resolver:           permResolver,
+		Authority:          roleAuthority,
 		Bans:               dbStore,
 		Spool:              dbStore,
 		PreKeys:            dbStore,
 		Voice:              voice,
 		Recorder:           rec,
 		FileTransfer:       ftServer,
-		Tokens:             dbStore,
 		Complaints:         dbStore,
+		CustomMetadata:     dbStore,
 		Chat:               dbStore,
 		Groups:             dbStore,
-		ServerAdmins:       dbStore,
+		Roles:              dbStore,
 		BanAdmin:           dbStore,
 		Metrics:            m,
 		LoginLimiter:       loginLimiter,
@@ -768,17 +750,11 @@ func run() (retErr error) {
 		ChatKEK:            chatKEK,
 		ServerPasswordHash: serverPasswordHash,
 		ICEServers:         iceServersProvider(cfg, logger),
-
-		DefaultGuestGroupID:  defaultGuestGroupID,
-		DefaultMemberGroupID: defaultMemberGroupID,
 	})
-	channelMgr.SetCleanupDeleteHandler(func(result channels.DeleteResult) {
-		tcpServer.ApplyChannelDeletion(result, "")
-	})
-	// Reconcile only after the cleanup callback is installed. LoadIntoState
-	// starts temporary-channel timers: deletions that commit before this point
-	// are now visible as orphans, while concurrent/later deletions invoke the
-	// callback. No listener is accepting file work yet.
+	channelMgr.EnableRoleMode(roleAuthority)
+	// Remove orphaned file data before serving. Role-mode channel timers remain
+	// disabled until the Authority is attached and its initial Reload completes.
+	// No listener is accepting file work yet.
 	liveChannels := stateManager.ListChannels()
 	liveChannelIDs := make([]int64, 0, len(liveChannels))
 	for _, channel := range liveChannels {
@@ -805,63 +781,21 @@ func run() (retErr error) {
 	if err := tcpServer.EncryptLegacyChatHistory(context.Background(), cfg.ChatLegacyHistory); err != nil {
 		return fmt.Errorf("encrypting legacy chat history: %w", err)
 	}
-
-	// Timed group memberships (145): reap expired rows every 60s, invalidate
-	// the permission cache, and notify affected online users.
-	go func() {
-		ticker := time.NewTicker(60 * time.Second)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				tcpServer.ReapExpiredGroups(ctx)
-			}
-		}
-	}()
-
-	// Start the ServerQuery listener (TS3-style admin/bot protocol). Only
-	// server admins may log in.
-	// (218) serverstop/serverrestart: a query-initiated graceful shutdown
-	// takes the same path as SIGTERM. restart only logs the supervisor
-	// dependency (docker restart=unless-stopped brings the server back).
-	shutdownReq := make(chan bool, 1)
-	qBackend := &queryBackend{
-		authSvc:    authSvc,
-		stateMgr:   stateManager,
-		channelMgr: channelMgr,
-		tcp:        tcpServer,
-		db:         dbStore,
-		permLoader: permLoader,
-		shutdown: func(restart bool) {
-			if restart {
-				logger.Warn("serverrestart via ServerQuery: stopping gracefully; a supervisor (docker restart policy) must restart the process")
-			} else {
-				logger.Warn("serverstop via ServerQuery: shutting down gracefully")
-			}
-			select {
-			case shutdownReq <- restart:
-			default:
-				logger.Debug("shutdown request already pending")
-			}
-		},
-		startedAt:  time.Now(),
-		serverName: cfg.ServerName,
-		maxClients: cfg.MaxClients,
-		rules:      rulesSvc,
+	if err := roleAuthority.Reload(ctx); err != nil {
+		return fmt.Errorf("reconciling roles-v1 authorization before serving: %w", err)
 	}
+
+	// ServerQuery accepts explicitly enabled roles-v1 integration accounts.
+	qBackend := &queryBackend{tcp: tcpServer}
 	queryServer := query.New(cfg.QueryAddr, logger, qBackend)
 	queryServer.SetLoginLimiter(loginLimiter)
 	queryServer.SetMetrics(m)
 	// (231) the event stream for bots, on the health listener next to
-	// /metrics. Same credentials as ServerQuery: the stream reveals who is
-	// where, so it is admin-only.
-	healthServer.Handle("/events", eventbus.HandlerWithLoginProtection(events, qBackend.Authenticate, logger, loginLimiter, m))
+	// /metrics. Integration roles govern the filtered stream.
+	healthServer.Handle("/events", eventbus.HandlerWithRoleBackend(events, qBackend, logger, loginLimiter, m))
 	registerEventBusMetrics(m.Registry(), events, logger)
 
-	// (232) the gRPC API on the reserved port: same backend, same
-	// admin-only credentials, plus Events.Subscribe on the event bus.
+	// (232) the gRPC API on the reserved port shares the roles-v1 backend.
 	grpcServer := grpcserver.New(cfg.GRPCAddr, qBackend, events, logger, queryServer)
 	grpcServer.ShutdownTimeout = cfg.ShutdownTimeout
 	// gRPC has a dedicated run context. The shared shutdown context below owns
@@ -878,8 +812,16 @@ func run() (retErr error) {
 
 	// Routes and listener objects are complete before any socket is opened.
 	// The spare slot ensures every reporter can finish after one exit triggers
-	// shutdown (seven services at most, including optional SSH).
-	serviceExits := make(chan serviceExit, 8)
+	// shutdown (eight services at most, including optional SSH and lease failure).
+	serviceExits := make(chan serviceExit, 9)
+	if err := lease.Check(ctx); err != nil {
+		return fmt.Errorf("checking role process lease before listening: %w", err)
+	}
+	go func() {
+		if err := monitorRoleProcessLease(ctx, lease); err != nil {
+			serviceExits <- serviceExit{name: "role process lease", err: err}
+		}
+	}()
 	startService(serviceExits, "health HTTP server", healthServer.Start)
 	startService(serviceExits, "TCP control server", func() error { return tcpServer.Start(ctx) })
 	startService(serviceExits, "ServerQuery server", func() error { return queryServer.Start(ctx) })
@@ -895,8 +837,6 @@ func run() (retErr error) {
 	select {
 	case <-ctx.Done():
 		logger.Info("noxa server shutting down")
-	case restart := <-shutdownReq:
-		logger.Info("noxa server shutting down via ServerQuery", zap.Bool("restart", restart))
 	case exit := <-serviceExits:
 		runErr = unexpectedServiceExit(exit)
 	}
@@ -931,55 +871,22 @@ func run() (retErr error) {
 	return runErr
 }
 
-type permissionAuditCompressor func(context.Context, time.Time) (int64, error)
-
-// runPermissionAuditCompression isolates one maintenance invocation. A bug in
-// compression must be visible to operators without killing the periodic loop.
-func runPermissionAuditCompression(ctx context.Context, logger *zap.Logger, compress permissionAuditCompressor) {
-	defer func() {
-		if recovered := recover(); recovered != nil {
-			logger.Error("permission audit compression panic",
-				zap.String("panic_type", fmt.Sprintf("%T", recovered)),
-				zap.Stack("stack"),
-			)
-		}
-	}()
-	count, err := compress(ctx, time.Now().AddDate(0, 0, -30))
-	if err != nil && ctx.Err() == nil {
-		logger.Warn("permission audit compression failed", zap.Error(err))
-	} else if count > 0 {
-		logger.Info("permission audit compressed", zap.Int64("rows", count))
-	}
-}
-
-func runPermissionAuditLoop(
-	ctx context.Context,
-	logger *zap.Logger,
-	ticks <-chan time.Time,
-	compress permissionAuditCompressor,
-) {
-	runPermissionAuditCompression(ctx, logger, compress)
+func monitorRoleProcessLease(ctx context.Context, lease *store.RoleProcessLease) error {
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
 	for {
 		select {
-		case <-ticks:
-			runPermissionAuditCompression(ctx, logger, compress)
 		case <-ctx.Done():
-			return
+			return nil
+		case <-ticker.C:
+			checkCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+			err := lease.Check(checkCtx)
+			cancel()
+			if err != nil && ctx.Err() == nil {
+				return err
+			}
 		}
 	}
-}
-
-// ensureServerGroup returns the ID of the named server group, creating it
-// when absent (idempotent default-group seeding).
-func ensureServerGroup(ctx context.Context, dbStore *store.Store, name string, sortID int) (int64, error) {
-	g, err := dbStore.FindGroupByName(ctx, "server", name)
-	if err != nil {
-		return 0, err
-	}
-	if g != nil {
-		return g.ID, nil
-	}
-	return dbStore.CreateGroup(ctx, "server", name, sortID)
 }
 
 // iceServersProvider builds the Deps.ICEServers callback: clients receive the
@@ -1046,482 +953,7 @@ func registerEventBusMetrics(reg *prometheus.Registry, bus *eventbus.Bus, logger
 	}
 }
 
-// queryBackend adapts the server's building blocks to the query.Backend
-// interface. Only admins may log in; every operation after that is trusted.
+// queryBackend exposes the server's role-scoped integration operations.
 type queryBackend struct {
-	authSvc               *auth.AuthService
-	passwordAuthenticator func(context.Context, string, string) (bool, error)
-	stateMgr              *state.Manager
-	channelMgr            *channels.ChannelManager
-	tcp                   *server.TCPServer
-	db                    *store.Store
-	permLoader            *permissions.Loader
-	shutdown              func(restart bool)
-	startedAt             time.Time
-	serverName            string
-	maxClients            int
-	// rules serves the server rules shown on first join (215).
-	rules *rules.Service
-}
-
-func (q *queryBackend) Authenticate(ctx context.Context, uniqueID, password string) (bool, bool, error) {
-	authenticate := q.passwordAuthenticator
-	if authenticate == nil {
-		authenticate = q.authSvc.AuthenticatePassword
-	}
-	ok, err := authenticate(ctx, uniqueID, password)
-	if errors.Is(err, auth.ErrUserNotFound) {
-		// The AuthService has already performed dummy Argon2 work. ServerQuery
-		// must present an unknown account exactly like a wrong password.
-		return false, false, nil
-	}
-	if err != nil || !ok {
-		return false, false, err
-	}
-	user, err := q.authSvc.LookupUser(ctx, uniqueID)
-	if err != nil {
-		return false, false, err
-	}
-	return true, user.IsAdmin, nil
-}
-
-func (q *queryBackend) ListClients(context.Context) []query.ClientInfo {
-	clients := q.stateMgr.ListClients()
-	out := make([]query.ClientInfo, 0, len(clients))
-	for _, c := range clients {
-		out = append(out, query.ClientInfo{
-			ClientID:  c.ClientID,
-			UniqueID:  c.UniqueID,
-			Nickname:  c.Nickname,
-			ChannelID: c.ChannelID,
-		})
-	}
-	return out
-}
-
-func (q *queryBackend) ListChannels(context.Context) []query.ChannelInfo {
-	// Totally ordered so channellist agrees with the tree clients see (163).
-	channels := q.stateMgr.ChannelTreeOrdered()
-	out := make([]query.ChannelInfo, 0, len(channels))
-	for _, ch := range channels {
-		out = append(out, query.ChannelInfo{
-			ChannelID:       ch.ChannelID,
-			ParentID:        ch.ParentID,
-			Name:            ch.Name,
-			Topic:           ch.Topic,
-			Type:            ch.ChannelType,
-			MaxClients:      ch.MaxClients,
-			ClientCount:     ch.ClientCount,
-			OpusBitrate:     ch.OpusBitrate,
-			OpusFEC:         ch.OpusFEC,
-			OpusDTX:         ch.OpusDTX,
-			OpusStereo:      ch.OpusStereo,
-			SlowModeSeconds: ch.SlowModeSeconds,
-		})
-	}
-	return out
-}
-
-func (q *queryBackend) ChannelInfo(_ context.Context, channelID int64) (query.ChannelInfo, bool) {
-	ch, ok := q.stateMgr.GetChannel(channelID)
-	if !ok {
-		return query.ChannelInfo{}, false
-	}
-	return query.ChannelInfo{
-		ChannelID:       ch.ChannelID,
-		ParentID:        ch.ParentID,
-		Name:            ch.Name,
-		Topic:           ch.Topic,
-		Type:            ch.ChannelType,
-		MaxClients:      ch.MaxClients,
-		ClientCount:     ch.ClientCount,
-		OpusBitrate:     ch.OpusBitrate,
-		OpusFEC:         ch.OpusFEC,
-		OpusDTX:         ch.OpusDTX,
-		OpusStereo:      ch.OpusStereo,
-		SlowModeSeconds: ch.SlowModeSeconds,
-	}, true
-}
-
-func (q *queryBackend) EditChannel(ctx context.Context, channelID int64, params query.ChannelEditParams) error {
-	if err := q.channelMgr.UpdateChannel(ctx, channelID, channels.ChannelUpdate{
-		Topic:              params.Topic,
-		MaxClients:         params.MaxClients,
-		OpusBitrate:        params.OpusBitrate,
-		OpusFEC:            params.OpusFEC,
-		OpusDTX:            params.OpusDTX,
-		OpusStereo:         params.OpusStereo,
-		SlowModeSeconds:    params.SlowModeSeconds,
-		NeededJoinPower:    params.NeededJoinPower,
-		OrderIndex:         params.OrderIndex,
-		ParentID:           params.ParentID,
-		InheritPermissions: params.InheritPermissions,
-	}); err != nil {
-		return err
-	}
-	// (157) same reason as the control-channel edit: re-parenting or flipping
-	// inheritance changes the resolved channel tier for a whole subtree.
-	if q.permLoader != nil && (params.InheritPermissions != nil || params.ParentID != nil) {
-		q.permLoader.InvalidateAll()
-	}
-	q.db.Audit(ctx, "serverquery", "channel_edit", strconv.FormatInt(channelID, 10), "")
-	// Keep connected clients in sync (the control-channel edit path does the
-	// same after MsgChannelEdit).
-	q.tcp.BroadcastChannelUpdated(channelID)
-	return nil
-}
-
-func (q *queryBackend) ServerInfo(ctx context.Context) query.Info {
-	stats := q.stateMgr.Stats()
-	return query.Info{
-		Name:           q.effectiveName(ctx),
-		Uptime:         time.Since(q.startedAt),
-		ClientsOnline:  stats.ClientCount,
-		MaxClients:     q.tcp.EffectiveMaxClients(ctx),
-		ChannelsOnline: stats.ChannelCount,
-		TLSFingerprint: q.tcp.TLSFingerprint(),
-	}
-}
-
-func (q *queryBackend) MoveClient(ctx context.Context, clientID string, channelID int64) error {
-	return q.tcp.MoveClient(ctx, clientID, channelID)
-}
-
-func (q *queryBackend) KickClient(ctx context.Context, clientID string, fromServer bool, reason string) error {
-	return q.tcp.KickClient(ctx, "serverquery", clientID, fromServer, reason)
-}
-
-func (q *queryBackend) SendText(_ context.Context, targetMode int, target, msg string) error {
-	return q.tcp.SendServerText(targetMode, target, msg)
-}
-
-func (q *queryBackend) CreateChannel(ctx context.Context, params query.ChannelCreateParams) (int64, error) {
-	parsedType, err := channels.ParseChannelType(params.Type)
-	if err != nil {
-		return 0, err
-	}
-	id, err := q.channelMgr.CreateChannel(ctx, channels.ChannelSpec{
-		Name:       params.Name,
-		Topic:      params.Topic,
-		ParentID:   params.ParentID,
-		MaxClients: params.MaxClients,
-		Type:       parsedType,
-	})
-	if err != nil {
-		return 0, err
-	}
-	q.db.Audit(ctx, "serverquery", "channel_create", strconv.FormatInt(id, 10), params.Name)
-	return id, nil
-}
-
-func (q *queryBackend) DeleteChannel(ctx context.Context, channelID int64, reason string) error {
-	result, err := q.channelMgr.DeleteChannelSubtree(ctx, channelID)
-	if err != nil {
-		return err
-	}
-	if q.tcp != nil {
-		q.tcp.ApplyChannelDeletion(result, reason)
-	}
-	q.db.Audit(ctx, "serverquery", "channel_delete", strconv.FormatInt(channelID, 10), reason)
-	return nil
-}
-
-func (q *queryBackend) ServerSet(ctx context.Context, key, value string) error {
-	return q.tcp.SetServerSettingAndAnnounce(ctx, key, value)
-}
-
-func (q *queryBackend) BanClient(ctx context.Context, clientID string, seconds int64, reason string) error {
-	return q.tcp.BanClient(ctx, "serverquery", clientID, seconds, reason)
-}
-
-func (q *queryBackend) ListComplaints(ctx context.Context) ([]query.Complaint, error) {
-	rows, err := q.db.ListComplaints(ctx)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]query.Complaint, 0, len(rows))
-	for _, c := range rows {
-		out = append(out, query.Complaint{
-			ID:        c.ID,
-			Reporter:  c.Reporter,
-			Target:    c.Target,
-			Reason:    c.Reason,
-			CreatedAt: c.CreatedAt,
-		})
-	}
-	return out, nil
-}
-
-func (q *queryBackend) DeleteComplaint(ctx context.Context, id int64) error {
-	return q.db.DeleteComplaint(ctx, id)
-}
-
-func (q *queryBackend) DeleteAllComplaints(ctx context.Context) error {
-	return q.db.DeleteAllComplaints(ctx)
-}
-
-func (q *queryBackend) TokenAdd(ctx context.Context, tokenType int, groupID int64) (string, error) {
-	key, err := q.db.CreateToken(ctx, tokenType, groupID, 1)
-	if err != nil {
-		return "", err
-	}
-	q.db.Audit(ctx, "serverquery", "token_create", strconv.FormatInt(groupID, 10), fmt.Sprintf("type=%d", tokenType))
-	return key, nil
-}
-
-func (q *queryBackend) TokenList(ctx context.Context) ([]query.Token, error) {
-	rows, err := q.db.ListTokens(ctx)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]query.Token, 0, len(rows))
-	for _, t := range rows {
-		out = append(out, query.Token{
-			Key:     t.Key,
-			Type:    t.Type,
-			GroupID: t.GroupID,
-			Uses:    t.Uses,
-			MaxUses: t.MaxUses,
-		})
-	}
-	return out, nil
-}
-
-func (q *queryBackend) TokenDelete(ctx context.Context, key string) error {
-	return q.db.DeleteToken(ctx, key)
-}
-
-// AuditLog returns the newest audit entries (149), newest first.
-func (q *queryBackend) AuditLog(ctx context.Context, limit int) ([]query.AuditEntry, error) {
-	rows, err := q.db.AuditList(ctx, 0, limit)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]query.AuditEntry, 0, len(rows))
-	for _, e := range rows {
-		out = append(out, query.AuditEntry{
-			ID:        e.ID,
-			Actor:     e.Actor,
-			Action:    e.Action,
-			Target:    e.Target,
-			Detail:    e.Detail,
-			CreatedAt: e.CreatedAt,
-		})
-	}
-	return out, nil
-}
-
-// --- wave 10a (217-223) -------------------------------------------------------
-
-// effectiveName returns the effective server name (217 serveredit override).
-func (q *queryBackend) effectiveName(ctx context.Context) string {
-	if name, _, err := q.db.GetServerSetting(ctx, "server_name"); err == nil && name != "" {
-		return name
-	}
-	return q.serverName
-}
-
-// ServerEdit applies the fields serveredit passed (217). An empty stored value
-// is how both readers spell "unset", so writing one is the clear path.
-func (q *queryBackend) ServerEdit(ctx context.Context, params query.ServerEditParams) error {
-	if params.Name != nil {
-		if err := q.db.SetServerSetting(ctx, "server_name", *params.Name, 0); err != nil {
-			return err
-		}
-	}
-	if params.Welcome != nil {
-		// Through the server so the MOTD is sealed under the global
-		// generation; a raw store write would put operator text in the dump.
-		if err := q.tcp.SetServerSettingAndAnnounce(ctx, "motd", *params.Welcome); err != nil {
-			return err
-		}
-	}
-	if params.MaxClients != nil {
-		value := ""
-		if *params.MaxClients > 0 {
-			value = fmt.Sprint(*params.MaxClients)
-		}
-		if err := q.db.SetServerSetting(ctx, "max_clients_override", value, 0); err != nil {
-			return err
-		}
-	}
-	q.db.Audit(ctx, "serverquery", "serveredit", derefOr(params.Name, ""),
-		fmt.Sprintf("welcome=%t maxclients=%d", params.Welcome != nil, derefOr(params.MaxClients, 0)))
-	return nil
-}
-
-// derefOr reads an optional serveredit field.
-func derefOr[T any](p *T, fallback T) T {
-	if p == nil {
-		return fallback
-	}
-	return *p
-}
-
-func (q *queryBackend) Shutdown(_ context.Context, restart bool) error {
-	q.shutdown(restart)
-	return nil
-}
-
-func (q *queryBackend) PermOverview(ctx context.Context, uniqueID string, channelID int64) ([]query.PermLine, bool, error) {
-	lines, isAdmin, err := q.tcp.PermOverview(ctx, uniqueID, channelID)
-	if err != nil {
-		return nil, false, err
-	}
-	out := make([]query.PermLine, 0, len(lines))
-	for _, l := range lines {
-		out = append(out, query.PermLine{Key: l.Key, Value: l.Value, Grant: l.Grant, Tier: l.Tier})
-	}
-	return out, isAdmin, nil
-}
-
-func (q *queryBackend) ChannelPermList(ctx context.Context, channelID int64) ([]query.ChannelPerm, error) {
-	entries, err := q.db.ListPermissions(ctx, store.PermTierChannel, store.PermTarget{ChannelID: channelID})
-	if err != nil {
-		return nil, err
-	}
-	out := make([]query.ChannelPerm, 0, len(entries))
-	for _, e := range entries {
-		out = append(out, query.ChannelPerm{Key: e.Key, Value: e.Value, Grant: e.Grant, Skip: e.Skip, Negate: e.Negate})
-	}
-	return out, nil
-}
-
-func (q *queryBackend) ChannelAddPerm(ctx context.Context, actor string, channelID int64, key string, value, grant int, skip, negate bool) error {
-	if err := q.db.SetPermission(ctx, store.PermTierChannel, store.PermTarget{ChannelID: channelID}, key, value, grant, skip, negate); err != nil {
-		return err
-	}
-	q.db.Audit(ctx, actor, "perm_set", fmt.Sprintf("channel/%s", key),
-		fmt.Sprintf("cid=%d value=%d grant=%d skip=%t negate=%t", channelID, value, grant, skip, negate))
-	q.permInvalidate()
-	return nil
-}
-
-func (q *queryBackend) ChannelDelPerm(ctx context.Context, actor string, channelID int64, key string) error {
-	if err := q.db.UnsetPermission(ctx, store.PermTierChannel, store.PermTarget{ChannelID: channelID}, key); err != nil {
-		return err
-	}
-	q.db.Audit(ctx, actor, "perm_unset", fmt.Sprintf("channel/%s", key), fmt.Sprintf("cid=%d", channelID))
-	q.permInvalidate()
-	return nil
-}
-
-// permInvalidate clears the permission cache after query-side writes.
-func (q *queryBackend) permInvalidate() {
-	if q.permLoader != nil {
-		q.permLoader.InvalidateAll()
-	}
-}
-
-func (q *queryBackend) ServerGroupAdd(ctx context.Context, actor, name string, sortID int) (int64, error) {
-	id, err := q.db.CreateGroup(ctx, "server", name, sortID)
-	if err != nil {
-		return 0, err
-	}
-	q.db.Audit(ctx, actor, "group_create", "server:"+name, fmt.Sprintf("id=%d", id))
-	return id, nil
-}
-
-func (q *queryBackend) ServerGroupDel(ctx context.Context, actor string, groupID int64, force bool) error {
-	if err := q.db.DeleteGroup(ctx, "server", groupID, force); err != nil {
-		return err
-	}
-	q.db.Audit(ctx, actor, "group_delete", fmt.Sprintf("server:%d", groupID), fmt.Sprintf("force=%t", force))
-	q.permInvalidate()
-	return nil
-}
-
-func (q *queryBackend) ServerGroupAddClient(ctx context.Context, actor string, groupID int64, uniqueID string, durationSeconds int64) error {
-	user, err := q.authSvc.LookupUser(ctx, uniqueID)
-	if err != nil {
-		return err
-	}
-	if err := q.db.AssignServerGroup(ctx, groupID, user.ID, time.Duration(durationSeconds)*time.Second); err != nil {
-		return err
-	}
-	q.db.Audit(ctx, actor, "group_assign", fmt.Sprintf("server:%d", groupID),
-		fmt.Sprintf("user=%s expires_in=%ds", uniqueID, durationSeconds))
-	q.permInvalidate()
-	return nil
-}
-
-func (q *queryBackend) ServerGroupDelClient(ctx context.Context, actor string, groupID int64, uniqueID string) error {
-	user, err := q.authSvc.LookupUser(ctx, uniqueID)
-	if err != nil {
-		return err
-	}
-	if err := q.db.UnassignServerGroup(ctx, groupID, user.ID); err != nil {
-		return err
-	}
-	q.db.Audit(ctx, actor, "group_unassign", fmt.Sprintf("server:%d", groupID), "user="+uniqueID)
-	q.permInvalidate()
-	return nil
-}
-
-func (q *queryBackend) ServerGroupList(ctx context.Context) ([]query.GroupInfo, error) {
-	groups, err := q.db.ListGroups(ctx, "server")
-	if err != nil {
-		return nil, err
-	}
-	out := make([]query.GroupInfo, 0, len(groups))
-	for _, g := range groups {
-		out = append(out, query.GroupInfo{ID: g.ID, Name: g.Name, SortID: g.SortID, MemberCount: g.MemberCount})
-	}
-	return out, nil
-}
-
-func (q *queryBackend) ServerGroupClientList(ctx context.Context, groupID int64) ([]query.GroupMemberInfo, error) {
-	members, err := q.db.ListServerGroupMembers(ctx, groupID)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]query.GroupMemberInfo, 0, len(members))
-	for _, m := range members {
-		var expires int64
-		if m.ExpiresAt != nil {
-			expires = m.ExpiresAt.Unix()
-		}
-		out = append(out, query.GroupMemberInfo{UniqueID: m.UniqueID, Nickname: m.Nickname, ExpiresAt: expires})
-	}
-	return out, nil
-}
-
-func (q *queryBackend) CustomSet(ctx context.Context, uniqueID, key, value string) error {
-	return q.db.CustomSet(ctx, uniqueID, key, value)
-}
-
-func (q *queryBackend) CustomDel(ctx context.Context, uniqueID, key string) error {
-	return q.db.CustomDel(ctx, uniqueID, key)
-}
-
-func (q *queryBackend) CustomInfo(ctx context.Context, uniqueID string) ([]query.CustomProp, error) {
-	entries, err := q.db.CustomInfo(ctx, uniqueID)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]query.CustomProp, 0, len(entries))
-	for _, e := range entries {
-		out = append(out, query.CustomProp{Key: e.Key, Value: e.Value})
-	}
-	return out, nil
-}
-
-func (q *queryBackend) LogView(_ context.Context, lines int, filter string) ([]string, error) {
-	return logging.Recent(lines, filter), nil
-}
-
-func (q *queryBackend) LogFollow() (<-chan string, func()) {
-	return logging.Follow()
-}
-
-func (q *queryBackend) ServerRules(ctx context.Context) (string, string, int, error) {
-	text, hash, err := q.rules.Text(ctx)
-	if err != nil {
-		return "", "", 0, err
-	}
-	accepted, err := q.rules.AcceptedCount(ctx)
-	if err != nil {
-		return "", "", 0, err
-	}
-	return text, hash, accepted, nil
+	tcp *server.TCPServer
 }

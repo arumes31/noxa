@@ -7,11 +7,12 @@
 import { humanBytes } from "./clientinfo.js";
 import { isCurrentServerDialog, mountServerDialog } from "./modal.js";
 import { setSafeImage } from "./safe-media.js";
+import { capturePresenceScope, setPresence } from "./presence.js";
 
 const V = () => window.__noxa;
 const App = () => window.go.main.App;
 
-const STATUS_LABELS = { "": "online", away: "away", busy: "busy" };
+const STATUS_LABELS = { "": "online", away: "away", busy: "busy", invisible: "invisible" };
 
 // ---------------------------------------------------------------------------
 // Tree tools (302/319)
@@ -48,6 +49,8 @@ function initTreeTools() {
 // openStatusPicker shows the status dialog (Self menu).
 function openStatusPicker() {
     const { state } = V();
+    const scope = capturePresenceScope();
+    const canSetInvisible = state.canSetInvisible;
     const overlay = document.createElement("div");
     overlay.className = "dlg-overlay";
     overlay.innerHTML = `
@@ -57,7 +60,7 @@ function openStatusPicker() {
                 <option value="online">🟢 online</option>
                 <option value="away">🕐 away</option>
                 <option value="busy">⛔ busy</option>
-                ${V().state.isAdmin ? '<option value="invisible">👻 invisible (admin only)</option>' : ""}
+                ${canSetInvisible ? '<option value="invisible">👻 invisible (admin only)</option>' : ""}
             </select>
             <label class="dlg-label">Status message (optional)</label>
             <input class="dlg-input st-msg" maxlength="200" placeholder="e.g. in a meeting" />
@@ -69,15 +72,11 @@ function openStatusPicker() {
     const sel = overlay.querySelector(".st-sel");
     sel.value = state.myStatus || "online";
     overlay.querySelector(".dlg-ok").onclick = async () => {
-        const generation = state.serverGeneration;
+        if (!isCurrentServerDialog(overlay)) return;
         const status = sel.value;
         const msg = overlay.querySelector(".st-msg").value.trim();
         overlay.remove();
-        const err = await App().SetStatus(status, msg);
-        if (generation !== state.serverGeneration) return;
-        if (err) V().toast("status failed: " + err, "warn");
-        else {
-            state.myStatus = status === "online" ? "" : status;
+        if (await setPresence(status, msg, scope)) {
             V().sysMsg("status: " + STATUS_LABELS[state.myStatus] + (msg ? " — " + msg : ""));
         }
     };
@@ -253,6 +252,7 @@ function initHoverCards() {
 // ---------------------------------------------------------------------------
 
 function openPoke(client) {
+    const tabID = V().state.activeTabID, generation = V().state.serverGeneration;
     const overlay = document.createElement("div");
     overlay.className = "dlg-overlay";
     overlay.innerHTML = `
@@ -267,10 +267,15 @@ function openPoke(client) {
         </div>`;
     overlay.querySelector(".poke-target").textContent = client.nickname || client.unique_id;
     overlay.querySelector(".dlg-ok").onclick = async () => {
+        if (!isCurrentServerDialog(overlay)) return;
         const msg = overlay.querySelector(".poke-msg").value.trim();
         overlay.remove();
-        const err = await App().Poke(client.client_id, msg);
-        if (err) V().toast("poke failed: " + err, "warn");
+        try {
+            const err = await App().PokeForTab(tabID, client.client_id, msg);
+            if (err && generation === V().state.serverGeneration) V().toast("poke failed: " + err, "warn");
+        } catch (err) {
+            if (generation === V().state.serverGeneration) V().toast("poke failed: " + err, "warn");
+        }
     };
     overlay.querySelector(".dlg-cancel").onclick = () => overlay.remove();
     overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
@@ -285,12 +290,13 @@ function openPoke(client) {
 async function refreshNews() {
     const area = document.getElementById("news-area");
     const generation = V().state.serverGeneration;
+    const tabID = V().state.activeTabID;
     if (!V().state.myClientID) {
         area.innerHTML = `<div class="empty-state">offline</div>`;
         return;
     }
     try {
-        const [info, motd] = await Promise.all([App().ServerInfo(), App().MOTD()]);
+        const [info, motd] = await Promise.all([App().ServerInfoForTab(tabID), App().MOTDForTab(tabID)]);
         if (generation !== V().state.serverGeneration) return;
         const up = Math.floor(info.uptime_seconds / 60);
         const serverName = document.getElementById("server-name");

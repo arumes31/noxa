@@ -1,12 +1,8 @@
-// ws.go exposes the event bus over WebSocket so bots can subscribe (231).
-// The stream is a firehose of who-is-where, so it is authenticated with the
-// same admin credentials as ServerQuery; an anonymous subscriber would be a
-// presence-tracking leak.
+// ws.go provides the request guardrails for the roles-v1 event stream.
 package eventbus
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"net/http"
 	"net/netip"
@@ -23,11 +19,6 @@ import (
 
 	"noxa/internal/auth"
 )
-
-// Authenticator verifies bot credentials. It has the same shape as the
-// ServerQuery login check: ok reports valid credentials, admin reports whether
-// the account may administer the server.
-type Authenticator func(ctx context.Context, uniqueID, password string) (ok, admin bool, err error)
 
 type authFailureRecorder interface {
 	IncAuthFailure(transport, reason string)
@@ -58,44 +49,6 @@ const (
 
 var errInvalidEventFilter = errors.New("invalid event type filter")
 
-// wsEvent is the wire form of an event. Data is passed through verbatim, so a
-// bot sees exactly the payload connected clients see.
-type wsEvent struct {
-	Seq  uint64          `json:"seq"`
-	Type string          `json:"type"`
-	Time string          `json:"time"`
-	Data json.RawMessage `json:"data"`
-}
-
-// Handler serves the WebSocket event stream at whatever path it is mounted on.
-// Subscribers authenticate with HTTP Basic auth and may narrow the stream with
-// a comma-separated ?types= query parameter.
-func Handler(bus *Bus, auth Authenticator, logger *zap.Logger) http.Handler {
-	return HandlerWithLoginProtection(bus, auth, logger, nil, nil)
-}
-
-// HandlerWithLoginProtection serves the WebSocket event stream with the
-// process-wide password-verification limiter. The cheap per-IP limiter remains
-// in place as an earlier rejection layer; this limiter protects the expensive
-// credential verification itself.
-func HandlerWithLoginProtection(
-	bus *Bus,
-	authenticate Authenticator,
-	logger *zap.Logger,
-	loginLimiter *auth.LoginFailureLimiter,
-	failures authFailureRecorder,
-) http.Handler {
-	return newWSHandler(bus, authenticate, logger, wsHandlerConfig{
-		maxConnections:  maxWSConnections,
-		maxAuthAttempts: maxWSAuthAttempts,
-		authWindow:      wsAuthWindow,
-		maxAuthBuckets:  maxWSAuthBuckets,
-		now:             time.Now,
-		loginLimiter:    loginLimiter,
-		failures:        failures,
-	})
-}
-
 type wsHandlerConfig struct {
 	maxConnections  int
 	maxAuthAttempts int
@@ -104,9 +57,11 @@ type wsHandlerConfig struct {
 	now             func() time.Time
 	loginLimiter    *auth.LoginFailureLimiter
 	failures        authFailureRecorder
+	roleBackend     RoleBackend
+	streamLifetime  time.Duration
 }
 
-func newWSHandler(bus *Bus, authenticate Authenticator, logger *zap.Logger, cfg wsHandlerConfig) http.Handler {
+func newWSHandler(bus *Bus, logger *zap.Logger, cfg wsHandlerConfig) http.Handler {
 	if logger == nil {
 		logger = zap.NewNop()
 	}
@@ -118,12 +73,13 @@ func newWSHandler(bus *Bus, authenticate Authenticator, logger *zap.Logger, cfg 
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		setWSHeaders(w.Header())
+		w.Header().Set("Noxa-Authorization-Model", "roles-v1")
 		if r.Method != http.MethodGet {
 			w.Header().Set("Allow", http.MethodGet)
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		if bus == nil || authenticate == nil {
+		if bus == nil || cfg.roleBackend == nil {
 			http.Error(w, "event stream unavailable", http.StatusServiceUnavailable)
 			return
 		}
@@ -134,6 +90,21 @@ func newWSHandler(bus *Bus, authenticate Authenticator, logger *zap.Logger, cfg 
 		}
 		if len(r.URL.RawQuery) > maxRawQuerySize {
 			http.Error(w, "request URI too long", http.StatusRequestURITooLong)
+			return
+		}
+		models := r.Header.Values("Noxa-Authorization-Model")
+		if len(models) != 1 || models[0] != "roles-v1" {
+			http.Error(w, "roles-v1 authorization required", http.StatusPreconditionFailed)
+			return
+		}
+		types, err := requestTypes(r.URL.RawQuery)
+		if err != nil {
+			http.Error(w, "roles-v1 requires role_snapshot, optionally speaking_changed", http.StatusBadRequest)
+			return
+		}
+		wantSpeaking, err := roleWSTypes(types)
+		if err != nil {
+			http.Error(w, "roles-v1 requires role_snapshot, optionally speaking_changed", http.StatusBadRequest)
 			return
 		}
 		allowed, retryAfter := limiter.allow(r.RemoteAddr)
@@ -165,13 +136,10 @@ func newWSHandler(bus *Bus, authenticate Authenticator, logger *zap.Logger, cfg 
 			defer attempt.Cancel()
 		}
 
-		valid, admin, err := authenticate(r.Context(), user, password)
-		if err != nil {
-			logger.Warn("event stream auth error", zap.Error(err))
-			http.Error(w, "internal error", http.StatusInternalServerError)
-			return
-		}
-		if !valid || !admin {
+		ctx, cancel := context.WithTimeout(r.Context(), wsWriteTimeout)
+		principal, err := cfg.roleBackend.AuthenticateIntegration(ctx, user, password, remoteIPKey(r.RemoteAddr))
+		cancel()
+		if errors.Is(err, auth.ErrIntegrationDenied) {
 			if attempt != nil {
 				attempt.Fail()
 			}
@@ -181,14 +149,13 @@ func newWSHandler(bus *Bus, authenticate Authenticator, logger *zap.Logger, cfg 
 			http.Error(w, "invalid credentials", http.StatusUnauthorized)
 			return
 		}
+		if err != nil {
+			logger.Warn("event stream auth error", zap.Error(err))
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
 		if attempt != nil {
 			attempt.Succeed(principalScope)
-		}
-
-		types, err := requestTypes(r.URL.RawQuery)
-		if err != nil {
-			http.Error(w, errInvalidEventFilter.Error(), http.StatusBadRequest)
-			return
 		}
 		if !isWebSocketUpgrade(r.Header) {
 			http.Error(w, "websocket upgrade required", http.StatusBadRequest)
@@ -207,6 +174,7 @@ func newWSHandler(bus *Bus, authenticate Authenticator, logger *zap.Logger, cfg 
 			return
 		}
 
+		transport := &roleWSResponseWriter{ResponseWriter: w}
 		wsServer := websocket.Server{
 			Handshake: sameOriginOrAbsent,
 			Handler: func(conn *websocket.Conn) {
@@ -216,10 +184,11 @@ func newWSHandler(bus *Bus, authenticate Authenticator, logger *zap.Logger, cfg 
 						logger.Debug("closing event stream websocket failed", zap.Error(err))
 					}
 				}()
-				serveStream(bus, conn, user, types, logger)
+				serveRoleStream(r.Context(), bus, conn, transport.conn, cfg.roleBackend, principal, wantSpeaking, cfg.streamLifetime)
 			},
 		}
-		wsServer.ServeHTTP(w, r)
+		wsServer.Header = w.Header().Clone()
+		wsServer.ServeHTTP(transport, r)
 	})
 }
 
@@ -425,60 +394,4 @@ func positiveDuration(duration time.Duration) time.Duration {
 func retryAfterSeconds(duration time.Duration) string {
 	seconds := (positiveDuration(duration) + time.Second - 1) / time.Second
 	return strconv.FormatInt(int64(seconds), 10)
-}
-
-// serveStream pumps bus events into one WebSocket connection until either side
-// goes away.
-func serveStream(bus *Bus, conn *websocket.Conn, name string, types []string, logger *zap.Logger) {
-	sub := bus.Subscribe("ws:"+name, types, 0)
-	if sub == nil {
-		return
-	}
-	defer sub.Unsubscribe()
-
-	// A subscriber that never reads still has to be noticed when it hangs up,
-	// so drain (and discard) its side of the socket.
-	peerGone := make(chan struct{})
-	go func() {
-		defer close(peerGone)
-		var discard []byte
-		for {
-			if err := websocket.Message.Receive(conn, &discard); err != nil {
-				return
-			}
-		}
-	}()
-
-	logger.Info("event stream subscriber connected",
-		zap.String("unique_id", name), zap.Strings("types", types))
-	defer func() {
-		logger.Info("event stream subscriber disconnected",
-			zap.String("unique_id", name), zap.Uint64("dropped", sub.Dropped()))
-	}()
-
-	for {
-		select {
-		case <-peerGone:
-			return
-		case evt, ok := <-sub.C:
-			if !ok {
-				// Evicted by the drop policy: closing the socket tells the bot
-				// its stream is no longer complete.
-				return
-			}
-			payload, err := json.Marshal(wsEvent{
-				Seq:  evt.Seq,
-				Type: evt.Type,
-				Time: evt.Time.Format(time.RFC3339Nano),
-				Data: evt.Data,
-			})
-			if err != nil {
-				continue
-			}
-			_ = conn.SetWriteDeadline(time.Now().Add(wsWriteTimeout))
-			if err := websocket.Message.Send(conn, string(payload)); err != nil {
-				return
-			}
-		}
-	}
 }

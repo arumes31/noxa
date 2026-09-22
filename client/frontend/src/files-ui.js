@@ -38,6 +38,7 @@ let serverViewGeneration = 0;
 function readFileView() {
     return {
         generation: serverViewGeneration,
+        tabID: V().state.activeTabID,
         channelID: fb.channelID,
         folder: fb.folder,
     };
@@ -45,6 +46,14 @@ function readFileView() {
 
 function fileViewIsCurrent(scope) {
     return scopeIsCurrent(scope, readFileView);
+}
+
+function transferScopeIsCurrent(scope) {
+    return scope.generation === serverViewGeneration && scope.tabID === V().state.activeTabID;
+}
+
+function transferKey(tabID, id) {
+    return `${tabID}\0${id}`;
 }
 
 // activateWorkspaceTab owns the accessible selection and panel visibility for
@@ -105,41 +114,63 @@ export function restoreVisibleWorkspaceFocus() {
 // Transfers registry (278) + sparkline data (277)
 // ---------------------------------------------------------------------------
 
-const transfers = new Map(); // id -> record
+const transfers = new Map(); // tab + transfer ID -> record
 const RECENT_KEEP = 20;
+let transferSequence = 0;
 let sparkSamples = []; // aggregate bytes/sec samples (~1 per progress event burst)
 let sparkTimer = null;
 
-function trackTransfer(p) {
-    let t = transfers.get(p.id);
+function trackTransfer(payload, render = true) {
+    const p = parseRuntimeObject(payload);
+    if (!p || typeof p.id !== "string" || !p.id || !["upload", "download"].includes(p.direction)) return;
+    const tabID = V().state.activeTabID;
+    const key = transferKey(tabID, p.id);
+    let t = transfers.get(key);
     if (!t) {
-        t = { id: p.id, direction: p.direction, name: p.name, history: [], started: Date.now() };
-        transfers.set(p.id, t);
+        t = { id: p.id, tabID, direction: p.direction, name: p.name, history: [], started: Date.now() };
+        transfers.set(key, t);
     }
     Object.assign(t, {
         transferred: p.transferred, total: p.total, bps: p.bytes_per_sec,
         status: p.status, error: p.error || "", resumed: p.resumed || 0,
+        updated: ++transferSequence,
     });
     if (p.status === "active") {
         t.history.push(p.bytes_per_sec || 0);
         if (t.history.length > 60) t.history.shift();
     }
-    trimTransfers();
+    trimTransfers(tabID);
+    if (render && trWin.open) renderTransfers();
+}
+
+function restoreTransfers(payload) {
+    const snapshot = parseRuntimeObject(payload);
+    if (!Array.isArray(snapshot?.transfers)) return;
+    const tabID = V().state.activeTabID;
+    for (const [key, transfer] of transfers) if (transfer.tabID === tabID) transfers.delete(key);
+    for (const progress of snapshot.transfers) trackTransfer(progress, false);
+    for (const [key, args] of downloadArgs) {
+        if (args.scope.tabID === tabID && !transfers.has(key)) downloadArgs.delete(key);
+    }
     if (trWin.open) renderTransfers();
 }
 
-function trimTransfers() {
-    const done = [...transfers.values()].filter((t) => t.status !== "active");
+function trimTransfers(tabID) {
+    const done = [...transfers.values()].filter((t) => t.tabID === tabID && t.status !== "active");
     if (done.length > RECENT_KEEP) {
-        done.sort((a, b) => b.started - a.started);
-        for (const t of done.slice(RECENT_KEEP)) transfers.delete(t.id);
+        done.sort((a, b) => b.updated - a.updated);
+        for (const t of done.slice(RECENT_KEEP)) {
+            const key = transferKey(t.tabID, t.id);
+            transfers.delete(key);
+            downloadArgs.delete(key);
+        }
     }
 }
 
 // activeBps aggregates the throughput of active transfers (sparkline).
 function activeBps() {
     let sum = 0;
-    for (const t of transfers.values()) if (t.status === "active") sum += t.bps || 0;
+    for (const t of transfers.values()) if (t.tabID === V().state.activeTabID && t.status === "active") sum += t.bps || 0;
     return sum;
 }
 
@@ -167,24 +198,22 @@ async function refreshFiles() {
         renderFbChrome();
         return;
     }
-    const generation = serverViewGeneration;
-    const channelID = fb.channelID;
-    const folder = fb.folder;
+    const scope = captureScope(readFileView);
     list.setAttribute("aria-busy", "true");
     list.innerHTML = `<div class="empty-state" role="status">${t("files.loading")}</div>`;
     try {
-        const resp = await App().FileList(channelID, folder);
-        if (generation !== serverViewGeneration || channelID !== fb.channelID || folder !== fb.folder) return;
+        const resp = await App().FileListForTab(scope.tabID, scope.channelID, scope.folder);
+        if (!fileViewIsCurrent(scope)) return;
         fb.entries = resp.entries || [];
         fb.folders = resp.folders || [];
         fb.used = resp.used_bytes || 0;
         fb.quota = resp.quota_bytes || 0;
     } catch (err) {
-        if (generation !== serverViewGeneration || channelID !== fb.channelID || folder !== fb.folder) return;
+        if (!fileViewIsCurrent(scope)) return;
         list.innerHTML = `<div class="empty-state" role="alert">${esc(t("files.listFailed", { error: String(err) }))}</div>`;
         return;
     } finally {
-        if (generation === serverViewGeneration && channelID === fb.channelID && folder === fb.folder) {
+        if (fileViewIsCurrent(scope)) {
             list.removeAttribute("aria-busy");
         }
     }
@@ -422,40 +451,47 @@ let xferSeq = 0;
 // transfer list can retry it — a retry into the same destination resumes from
 // the partial file rather than starting over (259).
 async function startDownload(args, id) {
-    if (args.generation !== undefined && args.generation !== serverViewGeneration) return;
-    const generation = serverViewGeneration;
+    if (!args || !transferScopeIsCurrent(args.scope)) return;
     id = id || `dl-${++xferSeq}`;
-    const err = await App().DownloadFileProgress(id, args.channelID, args.folder, args.name, args.path, args.size || 0);
-    if (generation !== serverViewGeneration) return;
-    if (err) {
-        V().toast(t("files.downloadFailed", { error: String(err) }), "warn");
-        return;
+    try {
+        const err = await App().DownloadFileProgressForTab(args.scope.tabID, id, args.scope.channelID, args.scope.folder, args.name, args.path, args.size || 0);
+        if (!transferScopeIsCurrent(args.scope)) return;
+        if (err) throw new Error(err);
+        downloadArgs.set(transferKey(args.scope.tabID, id), args);
+        V().toast(t("files.downloading", { name: args.name }));
+    } catch (err) {
+        if (transferScopeIsCurrent(args.scope)) V().toast(t("files.downloadFailed", { error: String(err) }), "warn");
     }
-    downloadArgs.set(id, args);
-    V().toast(t("files.downloading", { name: args.name }));
 }
 
 // downloadArgs keeps the retry payload per transfer id.
 const downloadArgs = new Map();
 
+function canRetryDownload(args) {
+    return !!args && args.scope.tabID === V().state.activeTabID && args.serverAddress === V().state.lastConnect?.addr;
+}
+
 async function downloadFile(e) {
-    const generation = serverViewGeneration;
-    const channelID = fb.channelID;
-    const folder = fb.folder;
+    const scope = captureScope(readFileView);
+    const serverAddress = V().state.lastConnect?.addr;
     // The configured download folder (Downloads settings) wins; only fall back
     // to the save dialog when the user has not set one.
-    let path = await App().DownloadPath(e.name);
-    if (generation !== serverViewGeneration) return;
-    if (!path) path = await App().PickSavePath(e.name);
-    if (!path || generation !== serverViewGeneration) return;
-    startDownload({ channelID, folder, name: e.name, path, size: e.size || 0, generation });
+    try {
+        let path = await App().DownloadPath(e.name);
+        if (!fileViewIsCurrent(scope)) return;
+        if (!path) path = await App().PickSavePath(e.name);
+        if (!path || !fileViewIsCurrent(scope)) return;
+        await startDownload({ scope, serverAddress, name: e.name, path, size: e.size || 0 });
+    } catch (err) {
+        if (fileViewIsCurrent(scope)) V().toast(t("files.downloadFailed", { error: String(err) }), "warn");
+    }
 }
 
 async function linkFile(e) {
     const scope = captureScope(readFileView);
     const controlAddress = V().state.lastConnect?.addr;
     try {
-        const resp = await App().FileLink(scope.channelID, scope.folder, e.name);
+        const resp = await App().FileLinkForTab(scope.tabID, scope.channelID, scope.folder, e.name);
         if (!fileViewIsCurrent(scope)) return;
         const url = buildFileLink(controlAddress, resp);
         if (!url) {
@@ -463,7 +499,7 @@ async function linkFile(e) {
             return;
         }
         await copyToClipboard(url, {
-            success: "download link copied (valid until " + fmtDate(resp.expires_at * 1000) + ")",
+            success: t(resp.session_bound ? "files.linkCopiedSession" : "files.linkCopied", { time: fmtDate(resp.expires_at * 1000) }),
             isCurrent: () => fileViewIsCurrent(scope),
         });
     } catch (err) {
@@ -472,16 +508,13 @@ async function linkFile(e) {
 }
 
 async function verifyFile(e, tr) {
-    const generation = serverViewGeneration;
-    const channelID = fb.channelID;
-    const folder = fb.folder;
+    const scope = captureScope(readFileView);
     const sha = tr.querySelector(".fb-sha");
-    const current = () => generation === serverViewGeneration && channelID === fb.channelID &&
-        folder === fb.folder && tr.isConnected && sha?.isConnected && tr.querySelector(".fb-sha") === sha;
+    const current = () => fileViewIsCurrent(scope) && tr.isConnected && sha?.isConnected && tr.querySelector(".fb-sha") === sha;
     if (!current()) return;
     sha.textContent = "…";
     try {
-        const ok = await App().VerifyFile(channelID, folder, e.name, e.sha256);
+        const ok = await App().VerifyFileForTab(scope.tabID, scope.channelID, scope.folder, e.name, e.sha256);
         if (!current()) return;
         sha.textContent = ok ? t("files.verifyOK") : t("files.verifyBad");
         sha.className = "mono fb-sha " + (ok ? "verify-ok" : "verify-bad");
@@ -507,12 +540,10 @@ async function toggleVersions(e, tr) {
     vr.className = "fb-versions";
     vr.innerHTML = `<td colspan="5"><div class="fb-ver-list">${t("files.loadingShort")}</div></td>`;
     tr.after(vr);
-    const generation = serverViewGeneration;
-    const channelID = fb.channelID;
-    const folder = fb.folder;
+    const scope = captureScope(readFileView);
     try {
-        const resp = await App().FileVersions(channelID, folder, e.name);
-        if (generation !== serverViewGeneration || !vr.isConnected) return;
+        const resp = await App().FileVersionsForTab(scope.tabID, scope.channelID, scope.folder, e.name);
+        if (!fileViewIsCurrent(scope) || !vr.isConnected) return;
         const list = vr.querySelector(".fb-ver-list");
         if (!resp.entries || resp.entries.length === 0) {
             list.textContent = t("files.noOldVersions");
@@ -534,7 +565,7 @@ async function toggleVersions(e, tr) {
             list.appendChild(row);
         }
     } catch (err) {
-        if (generation !== serverViewGeneration || !vr.isConnected) return;
+        if (!fileViewIsCurrent(scope) || !vr.isConnected) return;
         vr.querySelector(".fb-ver-list").textContent = t("files.versionsFailed", { error: String(err) });
     }
 }
@@ -558,10 +589,10 @@ async function renameFile(e) {
                 newFolder = name.slice(0, index);
                 newName = name.slice(index + 1);
             }
-            const err = await App().FileRename(scope.channelID, scope.folder, e.name, newFolder, newName, 0);
+            const err = await App().FileRenameForTab(scope.tabID, scope.channelID, scope.folder, e.name, newFolder, newName, 0);
             if (!fileViewIsCurrent(scope)) return;
             if (err) V().toast(t("files.renameFailed", { error: String(err) }), "warn");
-            setTimeout(refreshFiles, 400);
+            setTimeout(() => { if (fileViewIsCurrent(scope)) refreshFiles(); }, 400);
         },
     });
 }
@@ -607,11 +638,11 @@ async function moveToChannel(e) {
         const folder = overlay.querySelector(".fb-move-folder").value.replace(/^\/+|\/+$/g, "");
         const targetName = sel.options[sel.selectedIndex].textContent;
         close();
-        const err = await App().FileRename(scope.channelID, scope.folder, e.name, folder, e.name, target);
+        const err = await App().FileRenameForTab(scope.tabID, scope.channelID, scope.folder, e.name, folder, e.name, target);
         if (!fileViewIsCurrent(scope)) return;
         if (err) V().toast(t("files.moveFailed", { error: String(err) }), "warn");
         else V().toast(t("files.moved", { name: e.name, channel: targetName }));
-        setTimeout(refreshFiles, 400);
+        setTimeout(() => { if (fileViewIsCurrent(scope)) refreshFiles(); }, 400);
     };
     mountServerDialog(overlay);
 }
@@ -628,10 +659,10 @@ async function deleteFile(e) {
         }),
         isAccepted: Boolean,
         perform: async (scope) => {
-            const err = await App().FileDelete(scope.channelID, scope.folder, e.name);
+            const err = await App().FileDeleteForTab(scope.tabID, scope.channelID, scope.folder, e.name);
             if (!fileViewIsCurrent(scope)) return;
             if (err) V().toast(t("files.deleteFailed", { error: String(err) }), "warn");
-            setTimeout(refreshFiles, 400);
+            setTimeout(() => { if (fileViewIsCurrent(scope)) refreshFiles(); }, 400);
         },
     });
 }
@@ -639,7 +670,8 @@ async function deleteFile(e) {
 // --- upload queue (257/260) -----------------------------------------------------
 
 const uploadQueue = [];
-let uploadActive = false;
+let uploadActive = null;
+let uploadPoll = null;
 const UPLOAD_WAIT_TIMEOUT_MS = 10 * 60 * 1000;
 
 // DROP_MAX caps the browser-File route: a dropped File has no path on disk we
@@ -660,7 +692,7 @@ function queueUploads(files) {
             V().toast(t("files.tooLarge", { name: f.name, size: humanBytes(f.size) }), "warn");
             continue;
         }
-        uploadQueue.push({ file: f, channelID: fb.channelID, folder: fb.folder, generation: serverViewGeneration });
+        uploadQueue.push({ file: f, scope: captureScope(readFileView) });
         queued++;
     }
     if (queued) V().toast(t("files.queued", { count: queued }));
@@ -668,38 +700,42 @@ function queueUploads(files) {
 }
 
 // queueUploadPaths takes native paths from the picker: those stream off disk.
-function queueUploadPaths(paths) {
-    if (!fb.channelID) {
+function queueUploadPaths(paths, scope) {
+    if (!fileViewIsCurrent(scope)) return;
+    if (!scope.channelID) {
         V().toast(t("files.joinFirst"), "warn");
         return;
     }
-    for (const p of paths) uploadQueue.push({ path: p, channelID: fb.channelID, folder: fb.folder, generation: serverViewGeneration });
+    for (const p of paths) uploadQueue.push({ path: p, scope });
     V().toast(t("files.queued", { count: paths.length }));
     pumpUploads();
 }
 
 // awaitUpload keeps the queue sequential (260): the next file starts only once
 // this one has left the active state.
-function awaitUpload(id, generation) {
+function finishUpload(task) {
+    if (uploadActive !== task) return;
+    if (uploadPoll !== null) clearInterval(uploadPoll);
+    uploadPoll = null;
+    uploadActive = null;
+    pumpUploads();
+}
+
+function awaitUpload(id, task) {
     const deadline = Date.now() + UPLOAD_WAIT_TIMEOUT_MS;
-    const check = setInterval(() => {
-        if (generation !== serverViewGeneration) {
-            clearInterval(check);
-            uploadActive = false;
-            pumpUploads();
+    uploadPoll = setInterval(() => {
+        if (uploadActive !== task) return;
+        if (!transferScopeIsCurrent(task.scope)) {
+            finishUpload(task);
             return;
         }
-        const t = transfers.get(id);
-        if (t && t.status !== "active") {
-            clearInterval(check);
-            uploadActive = false;
-            if (t.status === "done") refreshFiles();
-            pumpUploads();
+        const transfer = transfers.get(transferKey(task.scope.tabID, id));
+        if (transfer && transfer.status !== "active") {
+            if (transfer.status === "done" && fileViewIsCurrent(task.scope)) refreshFiles();
+            finishUpload(task);
         } else if (Date.now() >= deadline) {
-            clearInterval(check);
-            uploadActive = false;
             V().toast(t("files.uploadTimeout"), "warn");
-            pumpUploads();
+            finishUpload(task);
         }
     }, 300);
 }
@@ -719,11 +755,11 @@ export { bytesToBase64, isChatAttachment };
 
 async function pumpUploads() {
     if (uploadActive || uploadQueue.length === 0) return;
-    uploadActive = true;
-    const { file, path, channelID, folder, generation } = uploadQueue.shift();
-    if (generation !== serverViewGeneration) {
-        uploadActive = false;
-        pumpUploads();
+    const task = uploadQueue.shift();
+    uploadActive = task;
+    const { file, path, scope } = task;
+    if (!transferScopeIsCurrent(scope)) {
+        finishUpload(task);
         return;
     }
     const id = `up-${++xferSeq}`;
@@ -731,33 +767,29 @@ async function pumpUploads() {
     try {
         let err;
         if (path) {
-            err = await App().UploadPathProgress(id, channelID, folder, path);
+            err = await App().UploadPathProgressForTab(scope.tabID, id, scope.channelID, scope.folder, path);
         } else {
             const buf = await file.arrayBuffer();
-            if (generation !== serverViewGeneration) {
-                uploadActive = false;
-                pumpUploads();
+            if (!transferScopeIsCurrent(scope) || uploadActive !== task) {
+                finishUpload(task);
                 return;
             }
             const b64 = bytesToBase64(new Uint8Array(buf));
-            err = await App().UploadFileProgress(id, channelID, folder, file.name, b64);
+            err = await App().UploadFileProgressForTab(scope.tabID, id, scope.channelID, scope.folder, file.name, b64);
         }
-        if (generation !== serverViewGeneration) {
-            uploadActive = false;
-            pumpUploads();
+        if (!transferScopeIsCurrent(scope) || uploadActive !== task) {
+            finishUpload(task);
             return;
         }
         if (err) {
             V().toast(t("files.uploadNamedFailed", { name: label, error: String(err) }), "warn");
-            uploadActive = false;
-            pumpUploads();
+            finishUpload(task);
             return;
         }
-        awaitUpload(id, generation);
+        awaitUpload(id, task);
     } catch (err) {
-        V().toast(t("files.readFailed", { name: label, error: String(err) }), "warn");
-        uploadActive = false;
-        pumpUploads();
+        if (transferScopeIsCurrent(scope) && uploadActive === task) V().toast(t("files.readFailed", { name: label, error: String(err) }), "warn");
+        finishUpload(task);
     }
 }
 
@@ -829,7 +861,7 @@ function renderTransfers() {
     if (!trWin.open) return;
     const list = trWin.overlay.querySelector(".tr-list");
     list.innerHTML = "";
-    const rows = [...transfers.values()].sort((a, b) => b.started - a.started);
+    const rows = [...transfers.values()].filter(transfer => transfer.tabID === V().state.activeTabID).sort((a, b) => b.started - a.started);
     if (rows.length === 0) {
         list.innerHTML = `<div class="empty-state">${t("files.noTransfers")}</div>`;
         return;
@@ -848,15 +880,38 @@ function renderTransfers() {
             <span class="tr-bar"><span class="tr-fill" style="width:${pct}%"></span></span>
             <span class="tr-meta mono">${pct}% · ${humanBytes(transfer.bps || 0)}/s ${eta ? "· " + eta : ""}${resumed}</span>
             <span class="tr-status mono">${esc(t("files.transfer." + (["active", "done", "error", "failed", "cancelled", "canceled", "queued"].includes(transfer.status) ? transfer.status : "unknown")))}${transfer.error ? ": " + esc(transfer.error) : ""}</span>`;
-        if (transfer.status === "active") {
+        if (transfer.status === "done" && transfer.direction === "download") {
+            const open = document.createElement("button");
+            open.type = "button";
+            labelButton(open, "folder", t("polish.openFolder"));
+            open.onclick = async () => {
+                if (V().state.activeTabID !== transfer.tabID) return;
+                try {
+                    const error = await App().OpenDownloadFolderForTab(transfer.tabID, transfer.id);
+                    if (error) throw new Error(error);
+                } catch (error) {
+                    if (V().state.activeTabID === transfer.tabID) V().toast(t("polish.openFolderFailed", { error: String(error) }), "warn");
+                }
+            };
+            row.appendChild(open);
+        } else if (transfer.status === "active") {
             const cancel = document.createElement("button");
             cancel.className = "icon-btn";
             cancel.innerHTML = icon("close");
             cancel.setAttribute("aria-label", t("files.cancelTransfer"));
             cancel.title = t("files.cancelTransfer");
-            cancel.onclick = () => App().CancelTransfer(transfer.id);
+            cancel.onclick = async () => {
+                const scope = captureScope(readFileView);
+                if (scope.tabID !== transfer.tabID) return;
+                try {
+                    const err = await App().CancelTransferForTab(transfer.tabID, transfer.id);
+                    if (err) throw new Error(err);
+                } catch (err) {
+                    if (transferScopeIsCurrent(scope)) V().toast(String(err), "warn");
+                }
+            };
             row.appendChild(cancel);
-        } else if (transfer.status !== "done" && downloadArgs.has(transfer.id)) {
+        } else if (transfer.status !== "done" && canRetryDownload(downloadArgs.get(transferKey(transfer.tabID, transfer.id)))) {
             // (259) retrying into the same destination picks up where the
             // interrupted attempt stopped instead of re-fetching the whole file.
             const retry = document.createElement("button");
@@ -864,9 +919,10 @@ function renderTransfers() {
             labelButton(retry, "refresh", t("files.resume"));
             retry.title = t("files.resumeHelp");
             retry.onclick = () => {
-                const args = downloadArgs.get(transfer.id);
+                const args = downloadArgs.get(transferKey(transfer.tabID, transfer.id));
+                if (!canRetryDownload(args)) return;
                 transfer.history = [];
-                startDownload(args, transfer.id);
+                startDownload({ ...args, scope: { ...args.scope, generation: serverViewGeneration } }, transfer.id);
             };
             row.appendChild(retry);
         }
@@ -876,10 +932,10 @@ function renderTransfers() {
 
 // --- server icon + banner (270) ------------------------------------------------
 
-async function loadServerIcon() {
+async function loadServerIcon(tabID = V().state.activeTabID) {
     const generation = serverViewGeneration;
     try {
-        const data = await App().ServerIconGet();
+        const data = await App().ServerIconGetForTab(tabID);
         if (generation !== serverViewGeneration) return;
         const el = document.getElementById("server-icon");
         const url = imageDataURL(data);
@@ -898,7 +954,7 @@ async function loadServerIcon() {
     }
     // Both halves of the server's branding load on the same trigger (connect
     // and menu refresh), so the banner rides along here.
-    if (generation === serverViewGeneration) loadServerBanner();
+    if (generation === serverViewGeneration) loadServerBanner(tabID);
 }
 
 // bannerEl returns the banner image, creating it under the sidebar brand on
@@ -919,12 +975,12 @@ function bannerEl() {
     return el;
 }
 
-async function loadServerBanner() {
+async function loadServerBanner(tabID = V().state.activeTabID) {
     const generation = serverViewGeneration;
     const el = bannerEl();
     if (!el) return;
     try {
-        const data = await App().ServerBannerGet();
+        const data = await App().ServerBannerGetForTab(tabID);
         if (generation !== serverViewGeneration) return;
         const url = imageDataURL(data);
         if (url) {
@@ -944,19 +1000,22 @@ async function loadServerBanner() {
 // setServerBanner uploads a new banner (admin only). Reachable from the files
 // toolbar; the server refuses non-admins.
 async function setServerBanner() {
+    const tabID = V().state.activeTabID;
     // Banners are wide, so allow more pixels than a 256px icon; the quality
     // loop still keeps it under the server's 256 KiB cap (274).
     const generation = serverViewGeneration;
     const img = await pickIcon(1600, 0.85);
     if (!img || generation !== serverViewGeneration) return;
-    const err = await App().ServerBannerSet(img.dataBase64);
+    const err = await App().ServerBannerSetForTab(tabID, img.dataBase64);
     if (generation !== serverViewGeneration) return;
     if (err) {
         V().toast(t("files.bannerFailed", { error: String(err) }), "warn");
         return;
     }
     V().toast(t("files.bannerUpdated"));
-    setTimeout(loadServerBanner, 400);
+    setTimeout(() => {
+        if (generation === serverViewGeneration) loadServerBanner(tabID);
+    }, 400);
 }
 
 // --- channel icons (271) --------------------------------------------------------
@@ -976,8 +1035,9 @@ function decorateChannelIcons() {
         if (!slot || slot.dataset.iconFor === String(id)) continue;
         if (!channelIcons.has(id)) {
             const generation = serverViewGeneration;
+            const tabID = V().state.activeTabID;
             channelIcons.set(id, null); // claim it so concurrent passes do not refetch
-            App().ChannelIconGet(id).then((d) => {
+            App().ChannelIconGetForTab(tabID, id).then((d) => {
                 if (generation !== serverViewGeneration) return;
                 const url = imageDataURL(d);
                 if (url) {
@@ -1014,6 +1074,12 @@ function watchChannelIcons() {
 
 function resetServerView() {
     serverViewGeneration++;
+    uploadQueue.length = 0;
+    uploadActive = null;
+    if (uploadPoll !== null) clearInterval(uploadPoll);
+    uploadPoll = null;
+    sparkSamples = [];
+    if (trWin.open) renderTransfers();
     channelIcons.clear();
     fb.channelID = 0;
     fb.folder = "";
@@ -1041,6 +1107,7 @@ function resetServerView() {
 // asset manager for the same files — previews, rename, delete and upload in
 // one place, reached from the media (files) pane.
 async function openEmojiManager() {
+    const tabID = V().state.activeTabID;
     const overlay = document.createElement("div");
     overlay.className = "dlg-overlay";
     overlay.innerHTML = `
@@ -1057,16 +1124,17 @@ async function openEmojiManager() {
     const close = () => overlay.remove();
     overlay.querySelector(".em-close").onclick = close;
     overlay.onclick = (e) => { if (e.target === overlay) close(); };
-    overlay.querySelector(".em-add").onclick = () => addEmoji(overlay);
+    overlay.querySelector(".em-add").onclick = () => addEmoji(overlay, tabID);
     mountServerDialog(overlay);
-    renderEmojiList(overlay);
+    renderEmojiList(overlay, tabID);
 }
 
-async function renderEmojiList(overlay) {
+async function renderEmojiList(overlay, tabID) {
+    if (!isCurrentServerDialog(overlay)) return;
     const list = overlay.querySelector(".em-list");
     let resp;
     try {
-        resp = await App().EmojiList();
+        resp = await App().EmojiListForTab(tabID);
     } catch (err) {
         if (!isCurrentServerDialog(overlay)) return;
         list.textContent = t("files.emojiListFailed", { error: String(err) });
@@ -1087,9 +1155,9 @@ async function renderEmojiList(overlay) {
         img.style.cssText = "width:24px;height:24px;object-fit:contain";
         img.alt = e.name;
         const generation = serverViewGeneration;
-        App().EmojiGet(e.name)
+        App().EmojiGetForTab(tabID, e.name)
             .then((d) => {
-                if (generation !== serverViewGeneration) return;
+                if (generation !== serverViewGeneration || !isCurrentServerDialog(overlay) || !row.isConnected) return;
                 const url = imageDataURL(d);
                 if (url) img.src = url;
             })
@@ -1114,10 +1182,14 @@ async function renderEmojiList(overlay) {
                 serverScoped: true,
             });
             if (!next || next === e.name || generation !== serverViewGeneration || !isCurrentServerDialog(overlay)) return;
-            const err = await App().EmojiRename(e.name, next);
-            if (generation !== serverViewGeneration || !isCurrentServerDialog(overlay)) return;
-            if (err) V().toast(t("files.renameFailed", { error: String(err) }), "warn");
-            setTimeout(() => renderEmojiList(overlay), 400);
+            try {
+                const err = await App().EmojiRenameForTab(tabID, e.name, next);
+                if (generation !== serverViewGeneration || !isCurrentServerDialog(overlay)) return;
+                if (err) V().toast(t("files.renameFailed", { error: String(err) }), "warn");
+                else setTimeout(() => renderEmojiList(overlay, tabID), 400);
+            } catch (err) {
+                if (isCurrentServerDialog(overlay)) V().toast(t("files.renameFailed", { error: String(err) }), "warn");
+            }
         };
         const del = document.createElement("button");
         del.className = "icon-btn";
@@ -1135,17 +1207,22 @@ async function renderEmojiList(overlay) {
                 serverScoped: true,
             });
             if (!confirmed || generation !== serverViewGeneration || !isCurrentServerDialog(overlay)) return;
-            const err = await App().EmojiDelete(e.name);
-            if (generation !== serverViewGeneration || !isCurrentServerDialog(overlay)) return;
-            if (err) V().toast(t("files.deleteFailed", { error: String(err) }), "warn");
-            setTimeout(() => renderEmojiList(overlay), 400);
+            try {
+                const err = await App().EmojiDeleteForTab(tabID, e.name);
+                if (generation !== serverViewGeneration || !isCurrentServerDialog(overlay)) return;
+                if (err) V().toast(t("files.deleteFailed", { error: String(err) }), "warn");
+                else setTimeout(() => renderEmojiList(overlay, tabID), 400);
+            } catch (err) {
+                if (isCurrentServerDialog(overlay)) V().toast(t("files.deleteFailed", { error: String(err) }), "warn");
+            }
         };
         row.append(img, name, ren, del);
         list.appendChild(row);
     }
 }
 
-async function addEmoji(overlay) {
+async function addEmoji(overlay, tabID) {
+    if (!isCurrentServerDialog(overlay)) return;
     const generation = serverViewGeneration;
     const name = await promptDialog({
         title: t("files.emojiUpload"),
@@ -1156,13 +1233,14 @@ async function addEmoji(overlay) {
     if (!name || generation !== serverViewGeneration || !isCurrentServerDialog(overlay)) return;
     const img = await pickIcon(128, 0.9);
     if (!img || generation !== serverViewGeneration || !isCurrentServerDialog(overlay)) return;
-    const err = await App().EmojiUpload(name, img.dataBase64);
-    if (generation !== serverViewGeneration || !isCurrentServerDialog(overlay)) return;
-    if (err) {
-        V().toast(t("files.uploadFailed", { error: String(err) }), "warn");
-        return;
+    try {
+        const err = await App().EmojiUploadForTab(tabID, name, img.dataBase64);
+        if (generation !== serverViewGeneration || !isCurrentServerDialog(overlay)) return;
+        if (err) V().toast(t("files.uploadFailed", { error: String(err) }), "warn");
+        else setTimeout(() => renderEmojiList(overlay, tabID), 400);
+    } catch (err) {
+        if (isCurrentServerDialog(overlay)) V().toast(t("files.uploadFailed", { error: String(err) }), "warn");
     }
-    setTimeout(() => renderEmojiList(overlay), 400);
 }
 
 // --- wiring ---------------------------------------------------------------------
@@ -1205,9 +1283,13 @@ export function initFilesUI() {
     pane.querySelector(".fb-upload").onclick = async () => {
         // Native picker, not <input type=file>: it yields paths, which upload
         // by streaming instead of by base64 blob (259).
-        const generation = serverViewGeneration;
-        const paths = await App().PickUploadPaths();
-        if (generation === serverViewGeneration && paths && paths.length) queueUploadPaths(paths);
+        const scope = captureScope(readFileView);
+        try {
+            const paths = await App().PickUploadPaths();
+            if (paths?.length) queueUploadPaths(paths, scope);
+        } catch (err) {
+            if (fileViewIsCurrent(scope)) V().toast(String(err), "warn");
+        }
     };
     pane.querySelector(".fb-mkdir").onclick = async () => {
         await runScopedDialogAction({
@@ -1273,6 +1355,7 @@ export function initFilesUI() {
         }
     });
     window.runtime.EventsOn("ft_progress", trackTransfer);
+    window.runtime.EventsOn("ft_snapshot", restoreTransfers);
 
     // (270/271) branding changes announced by the server: drop the cached copy
     // so the next paint shows the new image instead of waiting for a reconnect.

@@ -10,43 +10,11 @@ import (
 	"testing"
 	"time"
 
+	"noxa/internal/authorization"
 	"noxa/internal/netproto"
-	"noxa/internal/permissions"
 	"noxa/internal/recorder"
 	"noxa/internal/webrtc"
 )
-
-func TestVoicePermissionCallbacksHaveBoundedContext(t *testing.T) {
-	env := startTestEnv(t, nil)
-	defer env.stop()
-	conn, clientID := dialAuthed(t, env.addr, "user-uid")
-	defer closeVoiceTestResource(t, conn)
-
-	env.perms.loadForClientFn = func(ctx context.Context, _, _ int64) (permissions.TieredPermissions, error) {
-		<-ctx.Done()
-		return permissions.TieredPermissions{}, ctx.Err()
-	}
-	for _, callback := range []struct {
-		name string
-		fn   func(string) bool
-	}{
-		{name: "talk", fn: env.srv.canTalk},
-		{name: "video", fn: env.srv.canPublishVideo},
-	} {
-		t.Run(callback.name, func(t *testing.T) {
-			result := make(chan bool, 1)
-			go func() { result <- callback.fn(clientID) }()
-			select {
-			case allowed := <-result:
-				if allowed {
-					t.Fatal("permission callback failed open after loader timeout")
-				}
-			case <-time.After(mediaPermissionTimeout + 500*time.Millisecond):
-				t.Fatal("permission callback did not cancel its loader")
-			}
-		})
-	}
-}
 
 func closeVoiceTestResource(t *testing.T, closer io.Closer) {
 	t.Helper()
@@ -62,11 +30,14 @@ type fakeVoice struct {
 	answerSDP string
 	offerErr  error
 
-	canTalkFn    func(string) bool
-	onSpeakingFn func(string, bool)
-	canVideoFn   func(string) bool
-	qualityErr   error
-	offerSender  func(clientID, offerSDP string) error
+	canTalkFn      func(string) bool
+	onSpeakingFn   func(string, bool)
+	canVideoFn     func(string) bool
+	qualityErr     error
+	offerSender    func(clientID, offerSDP string) error
+	offerGuard     webrtc.OfferGuard
+	publisherGuard webrtc.PublisherGuard
+	refreshed      []string
 
 	onCandidate func(candidate, sdpMid string, mlineIndex uint16)
 	offers      []string // offer SDPs by client
@@ -95,6 +66,26 @@ func (f *fakeVoice) SetHandlers(canTalk func(string) bool, onSpeaking func(strin
 	defer f.mu.Unlock()
 	f.canTalkFn = canTalk
 	f.onSpeakingFn = onSpeaking
+}
+
+func (f *fakeVoice) SetMediaGuard(webrtc.MediaGuard) {}
+
+func (f *fakeVoice) SetPublisherGuard(guard webrtc.PublisherGuard) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.publisherGuard = guard
+}
+
+func (f *fakeVoice) SetOfferGuard(guard webrtc.OfferGuard) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.offerGuard = guard
+}
+
+func (f *fakeVoice) RefreshSubscriber(clientID string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.refreshed = append(f.refreshed, clientID)
 }
 
 func (f *fakeVoice) HandleOffer(_, offerSDP string, onCandidate func(candidate, sdpMid string, mlineIndex uint16)) (string, error) {
@@ -210,6 +201,16 @@ func (f *fakeVoice) lastWhisper() (whisperCall, bool) {
 	return f.whispers[len(f.whispers)-1], true
 }
 
+func placeVoiceTestClients(t *testing.T, env *testEnv, channelID int64, clientIDs ...string) {
+	t.Helper()
+	env.state.AddChannel(testChannel(channelID))
+	for _, clientID := range clientIDs {
+		if err := env.state.MoveClient(clientID, channelID); err != nil {
+			t.Fatalf("move voice test client %s to channel %d: %v", clientID, channelID, err)
+		}
+	}
+}
+
 // --- tests ------------------------------------------------------------------
 
 // TestWebRTCOfferAnswer verifies the signaling round-trip: the client's SDP
@@ -220,8 +221,9 @@ func TestWebRTCOfferAnswer(t *testing.T) {
 	defer env.stop()
 	env.voice.answerSDP = "server-answer-sdp"
 
-	conn, _ := dialAuthed(t, env.addr, "user-uid")
+	conn, userID := dialAuthed(t, env.addr, "user-uid")
 	defer closeVoiceTestResource(t, conn)
+	placeVoiceTestClients(t, env, 1, userID)
 
 	// The server must have installed its voice callbacks at construction.
 	env.voice.mu.Lock()
@@ -266,8 +268,9 @@ func TestICECandidateFromClient(t *testing.T) {
 	env := startTestEnv(t, nil)
 	defer env.stop()
 
-	conn, _ := dialAuthed(t, env.addr, "user-uid")
+	conn, userID := dialAuthed(t, env.addr, "user-uid")
 	defer closeVoiceTestResource(t, conn)
+	placeVoiceTestClients(t, env, 1, userID)
 
 	send(t, conn, netproto.MsgICECandidate, netproto.ICECandidate{Candidate: "cand-xyz", SDPMid: "0"})
 	waitFor(t, "candidate forwarded", func() bool {
@@ -280,16 +283,18 @@ func TestICECandidateFromClient(t *testing.T) {
 // TestWhisperSet verifies whisper configuration reaches the voice backend
 // with unique IDs resolved to online client IDs.
 func TestWhisperSet(t *testing.T) {
-	env := startTestEnv(t, nil)
+	env := startTestEnvWithCapabilities(t, authorization.Whisper)
 	defer env.stop()
 
 	adminConn, adminID := dialAuthed(t, env.addr, "admin-uid")
 	defer closeVoiceTestResource(t, adminConn)
-	userConn, _ := dialAuthed(t, env.addr, "user-uid")
+	userConn, userID := dialAuthed(t, env.addr, "user-uid")
 	defer closeVoiceTestResource(t, userConn)
+	placeVoiceTestClients(t, env, 1, adminID, userID)
+	env.state.AddChannel(testChannel(7))
 
 	send(t, userConn, netproto.MsgWhisperSet, netproto.WhisperSet{
-		UniqueIDs:  []string{"admin-uid", "offline-uid"},
+		UniqueIDs:  []string{"admin-uid"},
 		ChannelIDs: []int64{7},
 		Active:     true,
 	})
@@ -302,22 +307,14 @@ func TestWhisperSet(t *testing.T) {
 	if !call.active || len(call.channels) != 1 || call.channels[0] != 7 {
 		t.Fatalf("whisper call = %+v", call)
 	}
-	// Only the online target (admin) is resolved; the offline one is dropped.
 	if len(call.clients) != 1 || call.clients[0] != adminID {
 		t.Fatalf("whisper clients = %v, want [%s]", call.clients, adminID)
 	}
 }
 
-// TestWhisperSetDenied verifies a negated i_client_whisper_power denies
-// whisper configuration.
+// TestWhisperSetDenied verifies Whisper is required for configuration.
 func TestWhisperSetDenied(t *testing.T) {
-	perms := tieredWith(&permissions.Permission{
-		Key:    permissions.PermissionKeyClientWhisperPower,
-		Type:   permissions.PermissionTypeInteger,
-		Value:  0,
-		Negate: true,
-	})
-	env := startTestEnv(t, &perms)
+	env := startTestEnvWithCapabilities(t)
 	defer env.stop()
 
 	conn, _ := dialAuthed(t, env.addr, "user-uid")
@@ -343,13 +340,14 @@ func TestWhisperSetDenied(t *testing.T) {
 // whisper event naming the whisperer's unique ID (what the reply hotkey
 // whispers back to).
 func TestWhisperSpeakingSignalsTarget(t *testing.T) {
-	env := startTestEnv(t, nil)
+	env := startTestEnvWithCapabilities(t, authorization.Whisper)
 	defer env.stop()
 
 	adminConn, adminID := dialAuthed(t, env.addr, "admin-uid")
 	defer closeVoiceTestResource(t, adminConn)
 	userConn, userID := dialAuthed(t, env.addr, "user-uid")
 	defer closeVoiceTestResource(t, userConn)
+	placeVoiceTestClients(t, env, 1, adminID, userID)
 
 	send(t, userConn, netproto.MsgWhisperSet, netproto.WhisperSet{
 		UniqueIDs: []string{"admin-uid"},
@@ -416,8 +414,7 @@ func TestPositionUpdate(t *testing.T) {
 	userConn, userID := dialAuthed(t, env.addr, "user-uid")
 	defer closeVoiceTestResource(t, userConn)
 
-	send(t, adminConn, netproto.MsgCreateChannel, netproto.CreateChannel{Name: "Arena", Type: 2})
-	readOfType(t, adminConn, netproto.MsgChannelList)
+	env.state.AddChannel(testChannel(1))
 
 	send(t, adminConn, netproto.MsgJoinChannel, netproto.JoinChannel{ChannelID: 1})
 	send(t, userConn, netproto.MsgJoinChannel, netproto.JoinChannel{ChannelID: 1})
@@ -447,8 +444,7 @@ func TestVoiceMembershipSync(t *testing.T) {
 	defer closeVoiceTestResource(t, adminConn)
 	userConn, userID := dialAuthed(t, env.addr, "user-uid")
 
-	send(t, adminConn, netproto.MsgCreateChannel, netproto.CreateChannel{Name: "Lobby", Type: 2})
-	readOfType(t, adminConn, netproto.MsgChannelList)
+	env.state.AddChannel(testChannel(1))
 
 	send(t, userConn, netproto.MsgJoinChannel, netproto.JoinChannel{ChannelID: 1})
 	waitFor(t, "voice join recorded", func() bool {
@@ -551,6 +547,7 @@ func TestVideoQuality(t *testing.T) {
 
 	conn, userID := dialAuthed(t, env.addr, "user-uid")
 	defer closeVoiceTestResource(t, conn)
+	placeVoiceTestClients(t, env, 1, userID)
 
 	send(t, conn, netproto.MsgVideoQuality, netproto.VideoQuality{Quality: "high"})
 	waitFor(t, "quality recorded", func() bool {
@@ -573,8 +570,7 @@ func TestRecordingControl(t *testing.T) {
 
 	adminConn, _ := dialAuthed(t, env.addr, "admin-uid")
 	defer closeVoiceTestResource(t, adminConn)
-	send(t, adminConn, netproto.MsgCreateChannel, netproto.CreateChannel{Name: "Recorded", Type: 2})
-	readOfType(t, adminConn, netproto.MsgChannelList)
+	env.state.AddChannel(testChannel(1))
 
 	send(t, adminConn, netproto.MsgRecordingControl, netproto.RecordingControl{ChannelID: 1, Action: "start"})
 	waitFor(t, "recording started", func() bool {
@@ -607,50 +603,13 @@ func TestRecordingStartRejectsUnknownChannel(t *testing.T) {
 	if err := netproto.Decode(f, &protocolErr); err != nil {
 		t.Fatal(err)
 	}
-	if protocolErr.Code != errCodeNotFound {
-		t.Fatalf("error code = %d, want %d", protocolErr.Code, errCodeNotFound)
+	if protocolErr.Code != errCodePermissionDenied {
+		t.Fatalf("error code = %d, want %d", protocolErr.Code, errCodePermissionDenied)
 	}
 	if got := env.recorder.startedCount(); got != 0 {
 		t.Fatalf("recordings started = %d, want 0", got)
 	}
 }
-
-func TestRecordingStartSerializesWithChannelDeletion(t *testing.T) {
-	env := startTestEnv(t, nil)
-	defer env.stop()
-	starter, _ := dialAuthed(t, env.addr, "admin-uid")
-	defer closeVoiceTestResource(t, starter)
-	send(t, starter, netproto.MsgCreateChannel, netproto.CreateChannel{Name: "Recorded", Type: 2})
-	readOfType(t, starter, netproto.MsgChannelList)
-	deleter, _ := dialAuthed(t, env.addr, "admin-uid")
-	defer closeVoiceTestResource(t, deleter)
-
-	startEntered := make(chan struct{}, 1)
-	allowStart := make(chan struct{})
-	env.recorder.mu.Lock()
-	env.recorder.startEntered = startEntered
-	env.recorder.startRelease = allowStart
-	env.recorder.mu.Unlock()
-	env.channels.deleteAttempt = make(chan struct{}, 1)
-
-	send(t, starter, netproto.MsgRecordingControl, netproto.RecordingControl{ChannelID: 1, Action: "start"})
-	<-startEntered
-	send(t, deleter, netproto.MsgDeleteChannel, netproto.DeleteChannel{ChannelID: 1})
-	<-env.channels.deleteAttempt
-	if _, ok := env.state.GetChannel(1); !ok {
-		t.Fatal("deletion crossed an in-flight recording start")
-	}
-	close(allowStart)
-	readEventOfType(t, deleter, eventChannelDeleted)
-	waitFor(t, "recording stopped after serialized deletion", func() bool {
-		env.recorder.mu.Lock()
-		defer env.recorder.mu.Unlock()
-		return len(env.recorder.started) == 1 && len(env.recorder.stopped) == 1 && env.recorder.stopped[0] == 1
-	})
-}
-
-// TestRecordingControlDenied verifies a non-admin without the recording
-// permission cannot start a recording.
 func TestRecordingControlDenied(t *testing.T) {
 	env := startTestEnv(t, nil) // no permissions granted
 	defer env.stop()

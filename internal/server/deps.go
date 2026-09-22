@@ -1,7 +1,7 @@
 // deps.go defines the backend services the TCP control server depends on and
 // the small interfaces used to consume them. The interfaces are satisfied by
 // the concrete production types (auth.AuthService, channels.ChannelManager,
-// permissions.Loader, store.Store) and make the handlers testable with fakes
+// store.Store) and make the handlers testable with fakes
 // that need no database.
 package server
 
@@ -11,12 +11,13 @@ import (
 	"time"
 
 	"noxa/internal/auth"
+	"noxa/internal/authorization"
 	"noxa/internal/broadcast"
 	"noxa/internal/channels"
 	"noxa/internal/chatcrypto"
+	"noxa/internal/filetransfer"
 	"noxa/internal/metrics"
 	"noxa/internal/netproto"
-	"noxa/internal/permissions"
 	"noxa/internal/recorder"
 	"noxa/internal/state"
 	"noxa/internal/store"
@@ -48,16 +49,6 @@ type ChannelBackend interface {
 	RemoveClient(clientID string) (*state.Client, error)
 	WithChannelLifecycle(channelID int64, operation func() error) error
 	OnClientLeftChannel(channelID int64)
-}
-
-// PermLoader is the subset of permissions.Loader the TCP server needs.
-type PermLoader interface {
-	LoadForClient(ctx context.Context, userID, channelID int64) (permissions.TieredPermissions, error)
-	Invalidate(userID, channelID int64)
-	// InvalidateAll clears the whole cache (after group/template writes).
-	InvalidateAll()
-	// LoadGroupPermissions returns one server group's permission set.
-	LoadGroupPermissions(ctx context.Context, groupID int64) (permissions.PermissionSet, error)
 }
 
 // BanStore is the minimal store surface needed to record bans. It is
@@ -92,6 +83,11 @@ type VoiceBackend interface {
 	SetHandlers(canTalk func(clientID string) bool, onSpeaking func(clientID string, speaking bool))
 	// SetVideoHandlers installs the video-publish permission gate.
 	SetVideoHandlers(canVideo func(clientID string) bool)
+	// SetMediaGuard protects each packet through its recipient write.
+	SetMediaGuard(webrtc.MediaGuard)
+	SetPublisherGuard(webrtc.PublisherGuard)
+	SetOfferGuard(webrtc.OfferGuard)
+	RefreshSubscriber(clientID string)
 	// HandleOffer applies an SDP offer and returns the SDP answer.
 	// onLocalCandidate is invoked asynchronously for each local ICE candidate.
 	HandleOffer(clientID, offerSDP string, onLocalCandidate func(candidate, sdpMid string, mlineIndex uint16)) (string, error)
@@ -121,9 +117,11 @@ type RecordingBackend interface {
 
 // FileTransferBackend is the subset of filetransfer.Server the TCP server
 // needs: issuing single-use transfer tokens, listing/managing channel files,
-// and minting download links. The file-transfer port itself trusts only the
-// token; permission checks happen here, at issue time.
+// and minting download links. In role mode, principal-bound tokens and links
+// recheck current access through the installed guard at delivery and commit.
 type FileTransferBackend interface {
+	SetAccessGuard(filetransfer.AccessGuard)
+	RevokeTransfers(func(filetransfer.Principal, int64, string) bool)
 	// InitUpload takes the caller's personal upload ceiling in MiB (266,
 	// 0 = unlimited); the channel ceiling (265) is server configuration and
 	// the backend already knows it.
@@ -152,57 +150,11 @@ type FileTransferBackend interface {
 	Fingerprint() string
 }
 
-// TokenBackend is the subset of the store needed to redeem and administer
-// privilege tokens (174).
-type TokenBackend interface {
-	UseTokenForIdentity(ctx context.Context, key string, userID int64, uniqueID, nickname string) (store.TokenGrant, error)
-	ListTokens(ctx context.Context) ([]store.Token, error)
-	CreateTokenWithMeta(ctx context.Context, tokenType int, groupID, channelID int64, description string, maxUses int) (string, error)
-	DeleteToken(ctx context.Context, key string) error
-}
-
-// ServerAdminStore reads the independent administrator flag, not group membership.
-type ServerAdminStore interface {
-	ListServerAdmins(ctx context.Context) ([]store.AdminIdentity, error)
-}
-
-// GroupStore is the subset of the store needed for wave-6a group and
-// permission management. It is satisfied by *store.Store.
-type GroupStore interface {
-	ListGroups(ctx context.Context, groupType string) ([]store.Group, error)
-	GetGroup(ctx context.Context, groupType string, id int64) (*store.Group, error)
-	CreateGroup(ctx context.Context, groupType, name string, sortID int) (int64, error)
-	RenameGroup(ctx context.Context, groupType string, id int64, name string) error
-	DeleteGroup(ctx context.Context, groupType string, id int64, force bool) error
-	AssignServerGroup(ctx context.Context, groupID, userID int64, expiresIn time.Duration) error
-	UnassignServerGroup(ctx context.Context, groupID, userID int64) error
-	AssignChannelGroup(ctx context.Context, groupID, userID, channelID int64) error
-	ApplyChannelGroupAutoAssignment(ctx context.Context, userID, channelID int64) (groupID int64, applied bool, err error)
-	UnassignChannelGroup(ctx context.Context, groupID, userID, channelID int64) error
-	UserGroupIDs(ctx context.Context, userID int64) ([]int64, error)
-	FindGroupByName(ctx context.Context, groupType, name string) (*store.Group, error)
-	// ExpiredGroupMembers removes expired timed memberships (145) and
-	// returns the affected (userID, groupID) pairs.
-	ExpiredGroupMembers(ctx context.Context, now time.Time) ([][2]int64, error)
-	// UserUniqueID maps a users.id back to its unique ID (reaper notify).
-	UserUniqueID(ctx context.Context, userID int64) (string, error)
-	// SetGroupIcon marks a server group's icon file name.
-	SetGroupIcon(ctx context.Context, groupID int64, icon string) error
-	// SetGroupCosmetics writes a server group's colour/hoist/sort (178/179);
-	// a nil field is left unchanged.
-	SetGroupCosmetics(ctx context.Context, groupID int64, color *string, hoist *bool, sortID *int) error
-	SetPermission(ctx context.Context, tier store.PermTier, target store.PermTarget, key string, value, grant int, skip, negate bool) error
-	UnsetPermission(ctx context.Context, tier store.PermTier, target store.PermTarget, key string) error
-	CopyPermissions(ctx context.Context, tier store.PermTier, target store.PermTarget, remove []string, entries []store.PermEntry) error
-	// ListPermissions is the editor read path (wave 6b).
-	ListPermissions(ctx context.Context, tier store.PermTier, target store.PermTarget) ([]store.PermEntry, error)
-	Audit(ctx context.Context, actor, action, target, detail string)
+// AuditStore is the role-aware audit sink and scoped read source.
+type AuditStore interface {
+	AuditScoped(ctx context.Context, actor, action, target, detail string, channelIDs []int64)
 	AuditList(ctx context.Context, beforeID int64, limit int) ([]store.AuditEntry, error)
-	// Member listings (wave 6b group management UI).
-	ListServerGroupMembers(ctx context.Context, groupID int64) ([]store.GroupMember, error)
-	ListChannelGroupMembers(ctx context.Context, groupID, channelID int64) ([]store.GroupMember, error)
 }
-
 // BanAdminStore is the subset of the store needed for ban administration
 // (wave 6b ban list dialog). It is satisfied by *store.Store.
 type BanAdminStore interface {
@@ -272,25 +224,26 @@ type ScopeKeyStore interface {
 // "unavailable" error instead of panicking, which keeps the server usable in
 // tests and during partial startups.
 type Deps struct {
-	Auth         AuthBackend
-	State        *state.Manager
-	Channels     ChannelBackend
-	Broadcast    *broadcast.Broadcaster
-	Perms        PermLoader
-	Resolver     *permissions.Resolver
-	Bans         BanStore
-	Spool        SpoolStore
-	PreKeys      PreKeyStore
-	Voice        VoiceBackend
-	Recorder     RecordingBackend
-	FileTransfer FileTransferBackend
-	Tokens       TokenBackend
-	Complaints   ComplaintBackend
-	Chat         ChatStore
-	Groups       GroupStore
-	ServerAdmins ServerAdminStore
-	BanAdmin     BanAdminStore
-	Metrics      metrics.Sink
+	Auth           AuthBackend
+	State          *state.Manager
+	Channels       ChannelBackend
+	Broadcast      *broadcast.Broadcaster
+	Bans           BanStore
+	Spool          SpoolStore
+	PreKeys        PreKeyStore
+	Voice          VoiceBackend
+	Recorder       RecordingBackend
+	FileTransfer   FileTransferBackend
+	Complaints     ComplaintBackend
+	CustomMetadata CustomMetadataStore
+	Chat           ChatStore
+	Groups         AuditStore
+	Roles          RoleStore
+	// Authority is installed only for the roles-v1 runtime after cutover. It
+	// serializes live policy changes with protected effects and revocation.
+	Authority *authorization.Authority
+	BanAdmin  BanAdminStore
+	Metrics   metrics.Sink
 	// LoginLimiter limits failed TCP control-channel passwords. Nil installs
 	// the production default; tests can inject a clock-controlled limiter.
 	LoginLimiter *auth.LoginFailureLimiter
@@ -312,12 +265,6 @@ type Deps struct {
 	// ServerPasswordHash, when non-empty, requires clients to supply the
 	// global server password at authenticate time (verified with Argon2id).
 	ServerPasswordHash string
-
-	// Default groups (6a): registered users with no memberships are assigned
-	// DefaultMemberGroupID at login; guests virtually hold
-	// DefaultGuestGroupID's permissions. 0 disables the behavior.
-	DefaultGuestGroupID  int64
-	DefaultMemberGroupID int64
 
 	// ICEServers, when non-nil, returns the ICE servers a client should use
 	// for WebRTC: the STUN defaults plus, when TURN is configured, a TURN

@@ -24,6 +24,8 @@ function avatar(element, client) {
 
 function voiceState(client) {
     const state = V().state;
+    if (client.server_deafened) return "serverDeafened";
+    if (client.server_muted) return "serverMuted";
     if (client.client_id === state.myClientID) {
         if (state.muted) return "muted";
         return client.is_speaking && client.channel_id === state.myChannelID ? "talking" : "idle";
@@ -62,7 +64,7 @@ export function renderWorkspace() {
         button.querySelector(".participant-name").textContent = name;
         const status = button.querySelector(".participant-state");
         const speaking = statusKey === "speaking" || statusKey === "talking";
-        const statusIcon = speaking ? "signal" : ["muted", "localMuted"].includes(statusKey) ? "micOff" : "mic";
+        const statusIcon = speaking ? "signal" : ["muted", "localMuted", "serverMuted", "serverDeafened"].includes(statusKey) ? "micOff" : "mic";
         labelButton(status, statusIcon, description);
         button.setAttribute("aria-label", t("workspace.memberLabel", { name, state: description.toLowerCase() }));
         button.classList.toggle("speaking", speaking);
@@ -80,6 +82,13 @@ export function renderWorkspace() {
         strip.appendChild(empty);
     }
     const ownChannel = state.channels.find((c) => c.ChannelID === state.myChannelID);
+    const context = $("voice-context");
+    context.textContent = t("polish.connection", {
+        server: state.lastConnect?.addr || t("status.offline"),
+        channel: ownChannel?.Name || t("workspace.noVoice"),
+    });
+    context.title = context.textContent;
+    $("mic-meter").setAttribute("aria-label", t("polish.meter"));
     strip.title = ownChannel ? t("workspace.participantsIn", { channel: ownChannel.Name }) : t("workspace.participants");
     $("server-summary").textContent = t("workspace.online", { count: state.clients.length });
     $("channel-member-count").textContent = t("workspace.inVoice", { count: members.length });
@@ -142,8 +151,7 @@ export function renderMember() {
     const channel = state.channels.find((c) => c.ChannelID === client.channel_id);
     card.querySelector(".card-channel").textContent = channel ? t("workspace.inChannel", { channel: channel.Name }) : t("workspace.noChannel");
     card.querySelector(".card-uid").textContent = client.unique_id || t("workspace.noIdentity");
-    const groups = state.groupByUID?.get(client.unique_id) || [];
-    card.querySelector(".card-groups").textContent = groups.map((group) => group.name).join(" · ");
+    card.querySelector(".card-groups").textContent = (client.roles || []).map((role) => role.name).join(" · ");
     avatar(card.querySelector(".card-avatar"), client);
     card.querySelector(".card-avatar").classList.toggle("speaking", ["speaking", "talking"].includes(voiceState(client)));
     $("member-volume-value").textContent = $("member-volume").value + "%";
@@ -174,11 +182,12 @@ export function initWorkspace() {
     $("voice-disconnect").onclick = () => V().disconnect();
     $("voice-leave-channel").onclick = async () => {
         const generation = V().state.serverGeneration;
+        const tabID = V().state.activeTabID;
         const channel = V().state.myChannelID;
         if (!channel) return;
         $("voice-leave-channel").disabled = true;
         try {
-            const error = await window.go.main.App.JoinChannel(0);
+            const error = await window.go.main.App.JoinChannelForTab(tabID, 0);
             if (error) throw new Error(error);
         } catch (error) {
             if (generation === V().state.serverGeneration) V().toast(t("workspace.leaveFailed", { error: String(error.message || error) }), "warn");
@@ -268,6 +277,9 @@ function translateWorkspace() {
     labelButton($("tab-chat"), "chat", t("workspace.chat"));
     labelButton($("tab-files"), "file", t("workspace.files"));
     labelButton($("ptt-btn"), "mic", t("workspace.ptt"));
+    $("ptt-btn").setAttribute("aria-label", t("workspace.ptt"));
+    $("ptt-btn").title = t("workspace.ptt");
+    $("chat-text").setAttribute("aria-label", t("workspace.message"));
     labelButton($("voice-settings"), "settings", t("workspace.audioPreferences"));
     labelButton($("voice-options").querySelector("summary"), "settings", t("workspace.voiceSettings"));
     labelButton($("voice-disconnect"), "disconnect", t("workspace.disconnect"));

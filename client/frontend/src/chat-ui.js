@@ -44,6 +44,7 @@ const unread = new Map(); // channelID -> {n, mention}
 const pmTabs = new Map(); // uid -> {uid, nick, unread, offline, pendingRead}
 const chanTabs = new Map(); // channelID -> {id}; derived from SubscriptionState
 let pendingChannelTab = 0; // activate only after the server confirms subscription
+let channelTabRequest = 0;
 const receipts = new Map(); // clientMsgID -> "delivered" | "read"
 const myReactions = new Map(); // messageID -> Set(emoji) I toggled this session.
 // NOTE (97): history only carries reaction COUNTS, not who reacted, so the
@@ -52,17 +53,27 @@ const myReactions = new Map(); // messageID -> Set(emoji) I toggled this session
 let atBottom = true;
 let newCount = 0;
 let replyTo = null; // message object being replied to (107)
+let replyRevision = 0;
+let draftRevision = 0;
+let activeSend = null;
 let pendingFiles = []; // {name, dataBase64, isImage, dataURL} staged for send (98/100)
 let lastDMTarget = ""; // last unique ID we sent a DM to (echo routing)
 let emojiPanel = null; // open emoji panel element (95)
 let pinsPanel = null; // open pins panel element (109)
+let pinsRequest = 0;
 let searchQ = ""; // live search filter (110)
+let chatViewGeneration = 0;
+let activeSearch = null;
+let searchResultsPanel = null;
+let activeExport = null;
+let exportAttempt = 0;
 let threadPanel = null; // open thread panel element (108)
 let threadRootID = 0; // root message id the thread panel is showing (108)
 
 // Pinned message ids per store key (109). Loaded once per scope alongside
 // history so the 📌 hover button can actually toggle instead of only pinning.
 const pinnedIDs = new Map(); // store key -> Set(messageID)
+const pendingPinChanges = new Map(); // per-ID events received during an initial pin read
 
 // Typing indicators (120): store key -> Map(uniqueID -> {nick, expires}).
 const typers = new Map();
@@ -96,6 +107,11 @@ let reconnectAnnouncementUntil = 0;
 // its store once per session, and a write failure is reported once rather than
 // per message.
 let dmPersistWarned = false;
+let dmGeneration = 0;
+let dmRestoreAttempt = null;
+let dmOwner = null;
+let dmIdentityRevision = 0n;
+const closedDMPeers = new Set();
 
 // DM_RESTORE_TABS caps how many stored conversations get a tab back on
 // connect. The bar is a single wrapped row, so restoring 200 peers would bury
@@ -141,6 +157,8 @@ function readExportScope() {
     const exportView = view;
     return {
         generation: V().state.serverGeneration,
+        tabID: V().state.activeTabID,
+        viewGeneration: chatViewGeneration,
         kind: exportView.kind,
         channelID: exportView.kind === "global" ? 0 : (activeChannelID() || 0),
         uid: exportView.kind === "dm" ? exportView.uid : "",
@@ -151,9 +169,144 @@ function exportScopeIsCurrent(scope) {
     return scopeIsCurrent(scope, readExportScope);
 }
 
+function readChatServerScope() {
+    return { generation: V().state.serverGeneration, tabID: V().state.activeTabID };
+}
+
+function chatServerIsCurrent(scope) {
+    return scopeIsCurrent(scope, readChatServerScope);
+}
+
+function readDMHistoryScope() {
+    return { ...readChatServerScope(), dmGeneration };
+}
+
+function dmHistoryScopeIsCurrent(scope) {
+    return scopeIsCurrent(scope, readDMHistoryScope);
+}
+
+function dmRevision(value) {
+    if (typeof value !== "string" || !/^(0|[1-9]\d{0,19})$/.test(value)) return null;
+    const revision = BigInt(value);
+    return revision <= 18446744073709551615n ? revision : null;
+}
+
+function dmOwnerIsCurrent(owner) {
+    return owner === dmOwner && dmHistoryScopeIsCurrent(owner.scope);
+}
+
+function getDMOwner() {
+    if (dmOwner && dmOwnerIsCurrent(dmOwner)) return dmOwner;
+    const owner = { scope: captureScope(readDMHistoryScope), revision: dmIdentityRevision, context: null };
+    dmOwner = owner;
+    // Handle acquisition failure immediately, even if no conversation is open.
+    owner.ready = (async () => {
+        try {
+            const context = await app().DMHistoryContextForTab(owner.scope.tabID || "");
+            if (!dmOwnerIsCurrent(owner)) throw new Error("DM history owner changed");
+            const revision = dmRevision(context?.identity_revision);
+            if (!context || context.tab_id !== (owner.scope.tabID || "") || typeof context.identity_uid !== "string" || !context.identity_uid ||
+                dmRevision(context.activation) === null || revision === null) throw new Error("DM history context unavailable");
+            if (revision !== owner.revision) {
+                // A getter can enter native code after a switch but before its
+                // notification. Start a new owner; never bless its old actions.
+                if (revision > dmIdentityRevision) onDMIdentityChanged(context.identity_revision);
+                throw new Error("DM history owner changed");
+            }
+            owner.context = Object.freeze({ ...context });
+            V().state.myUniqueID = context.identity_uid;
+            return { context: owner.context };
+        } catch (error) {
+            owner.failed = true;
+            return { error };
+        }
+    })();
+    return owner;
+}
+
+function callDMHistory(owner, method, ...args) {
+    const invoke = context => {
+        if (!dmOwnerIsCurrent(owner)) throw new Error("DM history owner changed");
+        return app()[method](context, ...args);
+    };
+    if (owner.context) {
+        try { return Promise.resolve(invoke(owner.context)); } catch (error) { return Promise.reject(error); }
+    }
+    return owner.ready.then(result => {
+        if (result.error) throw result.error;
+        return invoke(result.context);
+    });
+}
+
+function resetDMOwner() {
+    dmGeneration++;
+    dmOwner = null;
+    dmRestoreAttempt = null;
+    dmPersistWarned = false;
+    closedDMPeers.clear();
+}
+
+function onDMIdentityChanged(value) {
+    const revision = dmRevision(value);
+    if (revision === null || revision <= dmIdentityRevision) return;
+    dmIdentityRevision = revision;
+    resetDMHistoryView();
+}
+
+function resetDMHistoryView() {
+    resetDMOwner();
+    pmTabs.clear();
+    for (const key of store.keys()) if (key.startsWith("dm:")) store.delete(key);
+    for (const key of typers.keys()) if (key.startsWith("dm:")) typers.delete(key);
+    for (const batch of offlineBatch.values()) if (batch.timer) clearTimeout(batch.timer);
+    offlineBatch.clear();
+    receipts.clear();
+    lastDMTarget = "";
+    closeQS();
+    if (view.kind === "dm") {
+        $("chat-scope").value = "channel";
+        V().setDirectTargetVisible(false);
+        resetNewCount();
+        setView({ kind: "channel" });
+    } else renderTabs();
+    void restorePMTabs();
+}
+
+function cancelChatSearch() {
+    activeSearch?.unsubscribe?.();
+    activeSearch = null;
+    const button = $("chat-search-server");
+    if (button) { button.disabled = false; button.textContent = t("polish.searchAll"); }
+    if (searchResultsPanel) closeDialog(searchResultsPanel);
+}
+
+function invalidateChatViewWork() {
+    $("chat-send-error").classList.add("hidden");
+    chatViewGeneration++;
+    exportAttempt++;
+    cancelChatSearch();
+    activeExport?.progress.close();
+    closePinsPanel();
+    closeReactStrip();
+    activeSend = null;
+    $("chat-send").disabled = false;
+    pendingFiles = [];
+    renderFilePreview();
+    clearReply();
+    resetTypingOut();
+}
+
+function scanProgressCount(data, requestID) {
+    const progress = parseRuntimeObject(data);
+    return progress?.request_id === requestID && Number.isSafeInteger(progress.scanned) && progress.scanned >= 0
+        ? progress.scanned : null;
+}
+
 function readAttachmentSaveScope(channelID) {
     return {
         generation: V().state.serverGeneration,
+        tabID: V().state.activeTabID,
+        viewGeneration: chatViewGeneration,
         channelID,
         viewKey: activeKey(),
     };
@@ -343,14 +496,11 @@ function hashStr(s) {
 // they do, so the same gate applies to all three.
 const MENTION_ALL_FORMS = ["channel", "here", "everyone"];
 
-// canMentionAll resolves b_chat_mention_all locally so the completer only
-// OFFERS the mass-mention forms to a user who may use them (105). The server
-// enforces the same key independently — this is UI, not security.
+// The server evaluates the role capability when the message is sent. The
+// completer stays discoverable because snapshots intentionally do not expose
+// the caller's full effective capability set.
 function canMentionAll() {
-    const st = V().state;
-    if (st.isAdmin) return true;
-    const e = st.myPerms?.get("b_chat_mention_all");
-    return !!e && e.value !== 0 && !e.negate;
+    return true;
 }
 
 function reEscape(s) {
@@ -408,9 +558,10 @@ function markMentions(container) {
 async function ensureCustomEmoji() {
     if (!customDirty) return;
     const generation = V().state.serverGeneration;
+    const tabID = V().state.activeTabID;
     customDirty = false;
     try {
-        const r = await app().EmojiList();
+        const r = await app().EmojiListForTab(tabID);
         if (generation !== V().state.serverGeneration) return;
         customEmoji = r.emojis || [];
     } catch {
@@ -422,9 +573,10 @@ async function ensureCustomEmoji() {
 async function emojiURL(name) {
     if (emojiURLs.has(name)) return emojiURLs.get(name);
     const generation = V().state.serverGeneration;
+    const tabID = V().state.activeTabID;
     emojiURLs.set(name, ""); // marks "loading/failed until proven otherwise"
     try {
-        const d = await app().EmojiGet(name);
+        const d = await app().EmojiGetForTab(tabID, name);
         if (generation !== V().state.serverGeneration) return "";
         const u = imageDataURL(d);
         if (!u) return "";
@@ -478,7 +630,10 @@ function renderMsg(m) {
     if (m.mentioned) el.classList.add("mentioned");
     if (m.self) el.classList.add("own");
     if (m.id) el.dataset.msgId = m.id;
+    m.renderKey ||= m.id ? "message-" + m.id : m.clientMsgID ? "client-" + m.clientMsgID : crypto.randomUUID();
+    el.dataset.scrollKey = m.renderKey;
     el.dataset.ts = m.ts;
+    el.dataset.authorGroup = m.deleted || !m.fromUID ? "" : JSON.stringify([m.fromUID, m.from, m.self, m.direct, m.channelID, m.enc, m.e2e]);
     const avatar = document.createElement("span");
     avatar.className = "msg-avatar";
     avatar.setAttribute("aria-hidden", "true");
@@ -499,7 +654,7 @@ function renderMsg(m) {
 
     const tag = document.createElement("span");
     tag.className = "msg-tag";
-    tag.textContent = m.direct ? (m.offline ? "dm · offline" : "dm") : (m.channelID ? "channel" : "global");
+    tag.textContent = t(m.direct ? (m.offline ? "polish.offlineDirect" : "polish.direct") : (m.channelID ? "polish.channel" : "polish.global"));
     el.appendChild(tag);
 
     // (4b/91-135) lock semantics. A placeholder body means the message stayed
@@ -529,7 +684,7 @@ function renderMsg(m) {
     body.className = "msg-text";
     if (m.deleted) {
         body.classList.add("tombstone");
-        body.textContent = "message deleted";
+        body.textContent = t("polish.deleted");
     } else if (unopened) {
         const key = m.text === "[encrypted message — you do not have access]" ? "chat.noAccess"
             : m.text === "[refused: server sent plaintext history]" ? "chat.plaintextRefused"
@@ -543,7 +698,7 @@ function renderMsg(m) {
     if (m.edited && !m.deleted) {
         const em = document.createElement("span");
         em.className = "msg-edited";
-        em.textContent = "(edited)";
+        em.textContent = t("polish.edited");
         el.appendChild(em);
     }
 
@@ -626,7 +781,7 @@ function attachFileRef(container, m, cap) {
     const inlineVideo = VIDEO_EXTS.includes(ext);
     if (inlineImage || inlineVideo) {
         wrap.textContent = `loading ${inlineVideo ? "video" : "image"} ${name} …`;
-        app().DownloadChatAttachment(chID, ref.storage, ref.key).then((b64) => {
+        app().DownloadChatAttachmentForTab(previewScope.tabID, chID, ref.storage, ref.key).then((b64) => {
             // Check before touching the wrapper or constructing a renderer data
             // URL: a completed request belongs to the scope that launched it.
             if (!previewIsCurrent()) return;
@@ -664,9 +819,9 @@ function attachFileRef(container, m, cap) {
             zoom.className = "media-zoom";
             zoom.textContent = "⤢";
             zoom.title = "open " + name + " full size";
-            zoom.onclick = () => openLightbox(el);
+            zoom.onclick = () => { if (previewIsCurrent()) openLightbox(el); };
             wrap.appendChild(zoom);
-            if (!inlineVideo) el.onclick = () => openLightbox(el); // controls own the click on a video
+            if (!inlineVideo) el.onclick = () => { if (previewIsCurrent()) openLightbox(el); }; // controls own the click on a video
         }).catch((err) => {
             if (!previewIsCurrent()) return;
             wrap.textContent = "";
@@ -687,15 +842,16 @@ function attachFileRef(container, m, cap) {
 // Go saves the decrypted bytes, so an attachment never becomes a base64 data
 // URL or plaintext buffer in the JavaScript download path.
 function downloadChip(chID, ref, name, suffix) {
+    const scope = captureScope(() => readAttachmentSaveScope(chID));
     const b = document.createElement("button");
     b.className = "file-chip";
     b.textContent = "📎 " + name + suffix;
     b.title = "download " + name;
     b.onclick = async () => {
-        const scope = captureScope(() => readAttachmentSaveScope(chID));
+        if (!b.isConnected || b.disabled || !attachmentSaveScopeIsCurrent(scope)) return;
         b.disabled = true;
         try {
-            const path = await app().SaveChatAttachment(chID, ref.storage, ref.key, name);
+            const path = await app().SaveChatAttachmentForTab(scope.tabID, chID, ref.storage, ref.key, name);
             if (!attachmentSaveScopeIsCurrent(scope)) return;
             if (path) V().toast("saved " + name);
         } catch (e) {
@@ -732,6 +888,7 @@ function openLightbox(node) {
 const QUICK_REACTS = ["👍", "❤️", "😂", "😮", "😢", "🎉", "🔥", "👀"];
 
 function renderReacts(m) {
+    const scope = captureScope(readExportScope);
     const row = document.createElement("span");
     row.className = "msg-reacts";
     const rx = m.reactions || {};
@@ -744,6 +901,7 @@ function renderReacts(m) {
         chip.title = "toggle your reaction";
         chip.onclick = (e) => {
             e.stopPropagation();
+            if (!exportScopeIsCurrent(scope)) return;
             toggleReaction(m, emoji);
         };
         row.appendChild(chip);
@@ -752,24 +910,11 @@ function renderReacts(m) {
 }
 
 async function toggleReaction(m, emoji) {
-    const err = await app().ChatReact(m.id, emoji);
-    if (err) {
-        V().toast("reaction failed: " + err, "warn");
-        return;
-    }
-    // Optimistic local toggle; the chat_reaction broadcast carries the new
-    // counts and re-syncs (including the own-highlight via `by`).
-    let set = myReactions.get(m.id);
-    if (!set) {
-        set = new Set();
-        myReactions.set(m.id, set);
-    }
-    if (set.has(emoji)) set.delete(emoji);
-    else set.add(emoji);
-    const rx = { ...(m.reactions || {}) };
-    rx[emoji] = Math.max(0, (rx[emoji] || 0) + (set.has(emoji) ? 1 : -1));
-    m.reactions = rx;
-    refreshReacts(m);
+    const scope = captureScope(readExportScope);
+    if (!await runChatMutation(scope, () => app().ChatReactForTab(scope.tabID, m.id, emoji), "reaction")) return;
+    if (!exportScopeIsCurrent(scope)) return;
+    // The authoritative event supplies counts and ownership, before or after
+    // the acknowledgement.
 }
 
 function refreshReacts(m) {
@@ -791,11 +936,15 @@ function closeReactStrip() {
 function openReactStrip(m, anchorEl) {
     closeReactStrip();
     reactStrip = document.createElement("div");
+    const strip = reactStrip;
+    const scope = captureScope(readExportScope);
+    const currentStrip = () => reactStrip === strip && exportScopeIsCurrent(scope);
     reactStrip.className = "react-strip";
     for (const emoji of QUICK_REACTS) {
         const b = document.createElement("button");
         b.textContent = emoji;
         b.onclick = () => {
+            if (!currentStrip()) return;
             closeReactStrip();
             toggleReaction(m, emoji);
         };
@@ -803,20 +952,23 @@ function openReactStrip(m, anchorEl) {
     }
     // Custom server emoji join the strip once loaded.
     ensureCustomEmoji().then(async () => {
-        if (!reactStrip) return;
+        if (!currentStrip()) return;
         for (const e of customEmoji.slice(0, 8)) {
+            if (!currentStrip()) return;
             const url = await emojiURL(e.name);
-            if (!url || !reactStrip) continue;
+            if (!currentStrip()) return;
+            if (!url) continue;
             const b = document.createElement("button");
             const img = document.createElement("img");
             img.src = url;
             img.alt = ":" + e.name + ":";
             b.appendChild(img);
             b.onclick = () => {
+                if (!currentStrip()) return;
                 closeReactStrip();
                 toggleReaction(m, ":" + e.name + ":");
             };
-            reactStrip.appendChild(b);
+            strip.appendChild(b);
         }
     });
     const r = anchorEl.getBoundingClientRect();
@@ -829,6 +981,7 @@ function openReactStrip(m, anchorEl) {
 // --- hover actions (97/101/102/107/109) --------------------------------------
 
 function renderActions(m) {
+    const scope = captureScope(readExportScope);
     const acts = document.createElement("span");
     acts.className = "msg-actions";
     const mk = (glyph, title, fn) => {
@@ -838,6 +991,7 @@ function renderActions(m) {
         b.setAttribute("aria-label", title);
         b.onclick = (e) => {
             e.stopPropagation();
+            if (!exportScopeIsCurrent(scope)) return;
             fn();
         };
         acts.appendChild(b);
@@ -860,13 +1014,29 @@ function renderActions(m) {
 }
 
 function refreshMsgEl(m) {
+    const log = $("chat-log");
+    const anchor = captureScrollAnchor(log);
     const el = document.querySelector(`#chat-log .msg[data-msg-id="${m.id}"]`);
     if (el) el.replaceWith(renderMsg(m));
+    applySearchFilter();
+    restoreScrollAnchor(log, anchor);
 }
 
 // --- edit / delete (101/102) ---------------------------------------------------
 
+async function runChatMutation(scope, action, label, stillCurrent = () => true) {
+    const current = () => exportScopeIsCurrent(scope) && stillCurrent();
+    if (!current()) return false;
+    let error;
+    try { error = await action(); }
+    catch (e) { error = String(e); }
+    if (!current()) return false;
+    if (error) V().toast(label + " failed: " + error, "warn");
+    return !error;
+}
+
 function startEdit(m) {
+    const scope = captureScope(readExportScope);
     const el = document.querySelector(`#chat-log .msg[data-msg-id="${m.id}"]`);
     if (!el) return;
     const body = el.querySelector(".msg-text");
@@ -876,22 +1046,26 @@ function startEdit(m) {
     body.replaceWith(input);
     input.focus();
     input.setSelectionRange(input.value.length, input.value.length);
+    const finish = () => {
+        input.onblur = null;
+        if (exportScopeIsCurrent(scope) && input.isConnected) refreshMsgEl(m);
+    };
     input.onkeydown = async (e) => {
         e.stopPropagation();
-        if (e.key === "Escape") refreshMsgEl(m);
+        if (!exportScopeIsCurrent(scope) || !input.isConnected) return;
+        if (e.key === "Escape") finish();
         if (e.key !== "Enter") return;
         const t = input.value.trim();
-        refreshMsgEl(m); // the chat_edited broadcast refreshes the text
+        finish(); // the chat_edited broadcast refreshes the text
         if (t && t !== m.text) {
-            const err = await app().ChatEditMessage(m.channelID ?? 0, m.id, t, m.version || 1);
-            if (err) V().toast("edit failed: " + err, "warn");
+            await runChatMutation(scope, () => app().ChatEditMessageForTab(scope.tabID, m.channelID ?? 0, m.id, t, m.version || 1), "edit");
         }
     };
-    input.onblur = () => refreshMsgEl(m);
+    input.onblur = finish;
 }
 
 async function deleteMsg(m) {
-    const generation = V().state.serverGeneration;
+    const scope = captureScope(readExportScope);
     const confirmed = await confirmDialog({
         title: "Delete message?",
         message: "This removes the message for everyone. This cannot be undone.",
@@ -899,10 +1073,8 @@ async function deleteMsg(m) {
         danger: true,
         serverScoped: true,
     });
-    if (!confirmed || generation !== V().state.serverGeneration) return;
-    const err = await app().ChatDeleteMessage(m.id);
-    if (generation !== V().state.serverGeneration) return;
-    if (err) V().toast("delete failed: " + err, "warn");
+    if (!confirmed) return;
+    await runChatMutation(scope, () => app().ChatDeleteMessageForTab(scope.tabID, m.id), "delete");
     // The chat_deleted broadcast renders the tombstone.
 }
 
@@ -920,9 +1092,9 @@ function isPinned(m) {
 // pinMsg toggles. The hover button used to always send pinned=true, so it
 // could pin but never unpin despite saying so (109).
 async function pinMsg(m) {
+    const scope = captureScope(readExportScope);
     const chID = m.channelID ?? 0;
-    const err = await app().ChatPinMessage(chID, m.id, !isPinned(m));
-    if (err) V().toast("pin failed: " + err, "warn"); // permission errors land here (109)
+    await runChatMutation(scope, () => app().ChatPinMessageForTab(scope.tabID, chID, m.id, !isPinned(m)), "pin");
     // The chat_pinned/chat_unpinned broadcast updates the set and the button.
 }
 
@@ -930,11 +1102,23 @@ async function pinMsg(m) {
 // is pinned without the panel being open.
 async function ensurePins(key) {
     if (pinnedIDs.has(key) || !key.startsWith("ch:")) return;
+    const scope = captureScope(readChatServerScope);
     const set = pinSet(key);
+    const changes = new Map();
+    pendingPinChanges.set(key, changes);
     try {
-        const resp = await app().ChatPins(Number(key.slice(3)));
+        const resp = await app().ChatPinsForTab(scope.tabID, Number(key.slice(3)));
+        if (!chatServerIsCurrent(scope) || pinnedIDs.get(key) !== set) return;
+        set.clear();
         for (const p of resp.pins || []) set.add(Number(p.message_id));
+        for (const [id, pinned] of changes) {
+            if (pinned) set.add(id);
+            else set.delete(id);
+        }
     } catch { /* no membership / old server: pins stay unknown, button pins */ }
+    finally {
+        if (pendingPinChanges.get(key) === changes) pendingPinChanges.delete(key);
+    }
 }
 
 // --- reply-to (107) ------------------------------------------------------------
@@ -942,6 +1126,7 @@ async function ensurePins(key) {
 // stored messages and mixed-version servers readable.
 
 function setReply(m) {
+    replyRevision++;
     replyTo = m;
     const bar = $("reply-bar");
     bar.innerHTML = "";
@@ -959,6 +1144,7 @@ function setReply(m) {
 }
 
 function clearReply() {
+    replyRevision++;
     replyTo = null;
     $("reply-bar").classList.add("hidden");
 }
@@ -1125,6 +1311,7 @@ function refreshThreadFor(id) {
 // ---------------------------------------------------------------------------
 
 function setView(v) {
+    invalidateChatViewWork();
     view = v;
     closeThreadPanel(); // a chain belongs to one scope (108)
     resetTypingOut(); // (120) the next keystroke pings the new scope at once
@@ -1147,6 +1334,10 @@ function setView(v) {
 
 export function openPM(uid, nick) {
     if (!uid) return;
+    // A new user action can recover failed acquisition. Pending descendants
+    // retain their old owner and are never transparently retried.
+    if (dmOwner?.failed && dmOwnerIsCurrent(dmOwner)) resetDMHistoryView();
+    closedDMPeers.delete(uid);
     if (!pmTabs.has(uid)) pmTabs.set(uid, { uid, nick: nick || uid, unread: 0, offline: false, pendingRead: "" });
     if (nick) pmTabs.get(uid).nick = nick;
     activatePM(uid);
@@ -1228,7 +1419,14 @@ export async function setChannelSubscription(channelID, subscribe) {
         V().toast("your joined channel is always subscribed", "info", "alert");
         return false;
     }
-    const err = await app().SubscribeChannels([id], !!subscribe);
+    const scope = captureScope(readChatServerScope);
+    let err;
+    try {
+        err = await app().SubscribeChannelsForTab(scope.tabID, [id], !!subscribe);
+    } catch (error) {
+        err = String(error);
+    }
+    if (!chatServerIsCurrent(scope)) return false;
     if (err) {
         V().toast((subscribe ? "subscribe" : "unsubscribe") + " failed: " + err, "warn");
         return false;
@@ -1244,7 +1442,9 @@ export async function openChannelTab(channelID) {
         return;
     }
     pendingChannelTab = id;
-    if (!await setChannelSubscription(id, true)) pendingChannelTab = 0;
+    const request = ++channelTabRequest;
+    const scope = captureScope(readChatServerScope);
+    if (!await setChannelSubscription(id, true) && chatServerIsCurrent(scope) && request === channelTabRequest && pendingChannelTab === id) pendingChannelTab = 0;
 }
 
 function closeChannelTab(channelID) {
@@ -1295,6 +1495,7 @@ export function onSubscriptions(json) {
 // instead of starting empty. Destroying that log is a separate, explicit act
 // (clearPMHistory) — closing a tab must never delete a conversation (122).
 function closePM(uid) {
+    closedDMPeers.add(uid);
     pmTabs.delete(uid);
     store.delete("dm:" + uid);
     if (view.kind === "dm" && view.uid === uid) {
@@ -1344,10 +1545,13 @@ function renderTabs() {
     }
     for (const tab of pmTabs.values()) {
         const el = document.createElement("div");
+        const scope = captureScope(readDMHistoryScope);
+        const current = () => el.isConnected && dmHistoryScopeIsCurrent(scope) && pmTabs.get(tab.uid) === tab;
         el.className = "pm-tab" + (view.kind === "dm" && view.uid === tab.uid ? " active" : "");
         el.title = "right-click to delete the stored history of this conversation";
         el.oncontextmenu = (e) => {
             e.preventDefault();
+            if (!current()) return;
             clearPMHistory(tab.uid, tab.nick);
         };
         const name = document.createElement("span");
@@ -1373,10 +1577,11 @@ function renderTabs() {
         x.title = "close tab";
         x.onclick = (e) => {
             e.stopPropagation();
+            if (!current()) return;
             closePM(tab.uid);
         };
         el.appendChild(x);
-        el.onclick = () => activatePM(tab.uid);
+        el.onclick = () => { if (current()) activatePM(tab.uid); };
         bar.appendChild(el);
     }
 }
@@ -1419,11 +1624,21 @@ function dmMsg(e, peerNick) {
 // runs in FRONT of whatever already arrived live, so a message that landed
 // before the tab was opened stays newest instead of being replayed twice.
 async function ensureDMHistory(uid) {
-    const st = getStore("dm:" + uid);
-    if (st.loaded || st.loading || !uid) return;
+    const key = "dm:" + uid;
+    const st = getStore(key);
+    if (st.loaded || st.loading || !uid) return false;
+    const scope = captureScope(readDMHistoryScope);
+    const owner = getDMOwner();
+    const attempt = Symbol();
+    st.dmLoadAttempt = attempt;
+    const current = () => dmHistoryScopeIsCurrent(scope) && store.get(key) === st && st.dmLoadAttempt === attempt;
     st.loading = true;
     try {
-        const rows = await app().DMHistoryLoad(uid);
+        const rows = await callDMHistory(owner, "DMHistoryLoadForContext", uid);
+        // A read may already hold the deleted file's contents. Wait for an
+        // overlapping clear: success invalidates this load, failure keeps it.
+        if (st.dmClearPending) await st.dmClearPending;
+        if (!current()) return false;
         const nick = pmTabs.get(uid)?.nick || uid;
         const live = new Set(st.msgs.map((m) => m.clientMsgID).filter(Boolean));
         const older = (rows || []).map((e) => dmMsg(e, nick))
@@ -1432,11 +1647,15 @@ async function ensureDMHistory(uid) {
         const max = V().state.settings?.chat_max_lines || 200;
         while (st.msgs.length > Math.max(max, PAGE)) st.msgs.shift();
     } catch (e) {
+        if (!current()) return false;
         V().toast("DM history unavailable: " + e, "warn");
     } finally {
-        st.loading = false;
-        st.loaded = true;
+        if (current()) {
+            st.loading = false;
+            st.loaded = true;
+        }
     }
+    return true;
 }
 
 // dmRecord writes one DM — sent or received — to the peer's sealed log. The
@@ -1444,7 +1663,16 @@ async function ensureDMHistory(uid) {
 // a reconnect does not double the conversation.
 function dmRecord(peer, nick, m) {
     if (!peer) return;
-    app().DMHistoryAppend(peer, nick || "", {
+    const scope = captureScope(readDMHistoryScope);
+    const st = store.get("dm:" + peer);
+    const tab = pmTabs.get(peer);
+    const owner = getDMOwner();
+    const reportFailure = err => {
+        if (!dmHistoryScopeIsCurrent(scope) || store.get("dm:" + peer) !== st || pmTabs.get(peer) !== tab || !err || dmPersistWarned) return;
+        dmPersistWarned = true;
+        V().toast("DM history is not being saved: " + err, "warn");
+    };
+    callDMHistory(owner, "DMHistoryAppendForContext", peer, nick || "", {
         from_unique_id: m.fromUID,
         from_nickname: m.from,
         body: m.text,
@@ -1453,50 +1681,70 @@ function dmRecord(peer, nick, m) {
         client_msg_id: m.clientMsgID,
         offline: m.offline,
         enc_verified: m.encVerified,
-    }).then((err) => {
-        if (!err || dmPersistWarned) return;
-        dmPersistWarned = true;
-        V().toast("DM history is not being saved: " + err, "warn");
-    }).catch(() => { /* the tab still works without a log */ });
+    }).then(reportFailure).catch(reportFailure);
 }
 
 // clearPMHistory is the ONLY path that destroys a conversation, and it says so
 // before it does: the server never had a copy to fall back on (122).
 async function clearPMHistory(uid, nick) {
-    const generation = V().state.serverGeneration;
-    const confirmed = await confirmDialog({
-        title: "Delete stored conversation?",
-        message: `This permanently deletes the stored history with ${nick}. This cannot be undone: these messages are end-to-end encrypted and the server has no copy.`,
-        confirmLabel: "Delete history",
-        danger: true,
-        serverScoped: true,
-    });
-    if (!confirmed || generation !== V().state.serverGeneration) return;
-    const err = await app().DMHistoryClear(uid);
-    if (generation !== V().state.serverGeneration) return;
-    if (err) {
-        V().toast("could not clear DM history: " + err, "warn");
-        return;
+    const key = "dm:" + uid;
+    const st = getStore(key);
+    if (st.dmClearAttempt) return;
+    const scope = captureScope(readDMHistoryScope);
+    const owner = getDMOwner();
+    const tab = pmTabs.get(uid);
+    const attempt = Symbol();
+    st.dmClearAttempt = attempt;
+    let finishClear;
+    const current = () => dmHistoryScopeIsCurrent(scope) && store.get(key) === st && pmTabs.get(uid) === tab && st.dmClearAttempt === attempt;
+    try {
+        const confirmed = await confirmDialog({
+            title: "Delete stored conversation?",
+            message: `This permanently deletes the stored history with ${nick}. This cannot be undone: these messages are end-to-end encrypted and the server has no copy.`,
+            confirmLabel: "Delete history",
+            danger: true,
+            serverScoped: true,
+        });
+        if (!confirmed || !current()) return;
+        const cleared = new Set(st.msgs);
+        st.dmClearPending = new Promise(resolve => { finishClear = resolve; });
+        const err = await callDMHistory(owner, "DMHistoryClearForContext", uid);
+        if (!current()) return;
+        if (err) throw new Error(err);
+        st.msgs = st.msgs.filter(message => !cleared.has(message));
+        st.dmLoadAttempt = null;
+        st.loading = false;
+        st.loaded = true;
+        if (view.kind === "dm" && view.uid === uid) renderView();
+        V().toast("stored history with " + nick + " deleted", "info");
+    } catch (err) {
+        if (current()) V().toast("could not clear DM history: " + err, "warn");
+    } finally {
+        if (st.dmClearAttempt === attempt) {
+            st.dmClearAttempt = null;
+            st.dmClearPending = null;
+        }
+        finishClear?.();
     }
-    const st = getStore("dm:" + uid);
-    st.msgs = [];
-    st.loaded = true;
-    if (view.kind === "dm" && view.uid === uid) renderView();
-    V().toast("stored history with " + nick + " deleted", "info");
 }
 
 // restorePMTabs gives conversations with a stored log their tab back, so a
 // restart shows them without waiting for the peer to speak first.
 async function restorePMTabs() {
+    const scope = captureScope(readDMHistoryScope);
+    const owner = getDMOwner();
+    const attempt = Symbol();
+    dmRestoreAttempt = attempt;
     let peers = [];
     try {
-        peers = await app().DMHistoryPeers();
+        peers = await callDMHistory(owner, "DMHistoryPeersForContext");
     } catch {
         return; // no local storage path yet
     }
+    if (!dmHistoryScopeIsCurrent(scope) || dmRestoreAttempt !== attempt) return;
     let added = false;
     for (const p of (peers || []).slice(0, DM_RESTORE_TABS)) {
-        if (!p.unique_id || pmTabs.has(p.unique_id)) continue;
+        if (!p.unique_id || pmTabs.has(p.unique_id) || closedDMPeers.has(p.unique_id)) continue;
         pmTabs.set(p.unique_id, {
             uid: p.unique_id, nick: p.nickname || p.unique_id,
             unread: 0, offline: false, pendingRead: "",
@@ -1523,10 +1771,26 @@ function showNewPill() {
     pill.classList.remove("hidden");
 }
 
+function captureScrollAnchor(log) {
+    if (atBottom) return null;
+    const top = log.getBoundingClientRect().top;
+    const row = [...log.querySelectorAll(".msg[data-scroll-key]:not(.hidden)")].find(el => el.getBoundingClientRect().bottom > top);
+    return row ? { id: row.dataset.scrollKey, offset: row.getBoundingClientRect().top - top, scrollTop: log.scrollTop } : null;
+}
+
+function restoreScrollAnchor(log, anchor) {
+    if (!anchor) return;
+    const row = [...log.querySelectorAll(".msg[data-scroll-key]")].find(el => el.dataset.scrollKey === anchor.id);
+    if (row) log.scrollTop += row.getBoundingClientRect().top - log.getBoundingClientRect().top - anchor.offset;
+    else log.scrollTop = anchor.scrollTop;
+}
+
 function renderView(keepScrollFrom, { suppressMarkRead = false } = {}) {
     const log = $("chat-log");
+    const anchor = log.dataset.viewKey === activeKey() ? captureScrollAnchor(log) : null;
     log.innerHTML = "";
     const key = activeKey();
+    log.dataset.viewKey = key;
     const st = getStore(key);
 
     renderTyping(); // (120) drop the previous scope's indicator before anything else
@@ -1543,14 +1807,16 @@ function renderView(keepScrollFrom, { suppressMarkRead = false } = {}) {
     if (view.kind === "dm") {
         // (122) the local sealed log is this conversation's whole history.
         if (!st.loaded && !st.loading) {
-            ensureDMHistory(view.uid).then(() => {
-                if (activeKey() === key) renderView();
+            const scope = captureScope(readDMHistoryScope);
+            ensureDMHistory(view.uid).then((applied) => {
+                if (applied && dmHistoryScopeIsCurrent(scope) && activeKey() === key && store.get(key) === st) renderView();
             });
         }
     } else {
         if (!st.loaded && !st.loading) {
+            const scope = captureScope(readChatServerScope);
             ensureHistory(key).then(() => {
-                if (activeKey() === key) renderView();
+                if (chatServerIsCurrent(scope) && activeKey() === key && store.get(key) === st) renderView();
             });
         }
         if (st.end && st.loaded && st.msgs.length) {
@@ -1580,7 +1846,7 @@ function renderView(keepScrollFrom, { suppressMarkRead = false } = {}) {
         if (!dividerPlaced && lastRead !== null && m.id > lastRead && !m.self) {
             const div = document.createElement("div");
             div.className = "chat-new-divider";
-            div.textContent = "— new messages —";
+            div.textContent = t("polish.newMessages");
             log.appendChild(div);
             dividerPlaced = true;
         }
@@ -1591,13 +1857,15 @@ function renderView(keepScrollFrom, { suppressMarkRead = false } = {}) {
     updateHeader();
     renderThreadPanel(); // (108) the open chain follows the loaded window
 
-    if (keepScrollFrom !== undefined) {
+    if (anchor) {
+        restoreScrollAnchor(log, anchor);
+    } else if (keepScrollFrom !== undefined) {
         log.scrollTop = log.scrollHeight - keepScrollFrom;
     } else {
         scrollToBottom();
         resetNewCount();
     }
-    if (!suppressMarkRead) markRead(key);
+    if (!suppressMarkRead && !anchor) markRead(key);
 }
 
 function lastReadFor(key) {
@@ -1643,12 +1911,34 @@ async function ensureHistory(key) {
 }
 
 async function loadPage(key, beforeID) {
+    const scope = captureScope(readChatServerScope);
     const st = getStore(key);
+    const before = new Map(st.msgs.map(message => [message, {
+        version: message.version, deleted: message.deleted, reactionRevision: message.reactionRevision,
+    }]));
     const chID = Number(key.slice(3));
-    const resp = await app().ChatHistory(chID, beforeID, PAGE);
+    const resp = await app().ChatHistoryForTab(scope.tabID, chID, beforeID, PAGE);
+    if (!chatServerIsCurrent(scope) || store.get(key) !== st) return 0;
     const page = (resp.messages || []).map((x) => attribute(normalize(x, chID))).reverse(); // newest-first → oldest-first
     if (beforeID === 0) {
-        st.msgs = page;
+        // Only changes received during this request outrank its snapshot.
+        // Keep the loaded range contiguous so older-page cursors cannot skip
+        // a gap left by an old cached message from an unsubscribed channel.
+        const firstID = page[0]?.id || 0;
+        const contentChanged = m => !before.has(m) || before.get(m).version !== m.version || before.get(m).deleted !== m.deleted;
+        const reactionsChanged = m => !before.has(m) || before.get(m).reactionRevision !== m.reactionRevision;
+        const currentByID = new Map(st.msgs.map(m => [m.id, m]));
+        const historyIDs = new Set(page.map(m => m.id));
+        const concurrent = st.msgs.filter(m => !historyIDs.has(m.id) && (!firstID || m.id >= firstID) && (contentChanged(m) || reactionsChanged(m)));
+        const merged = page.map(history => {
+            const live = currentByID.get(history.id);
+            if (!live) return history;
+            const body = contentChanged(live) && !history.deleted && (live.deleted || live.version >= history.version) ? live : history;
+            const reactions = reactionsChanged(live) ? live : history;
+            return { ...body, reactions: reactions.reactions, reactionRevision: reactions.reactionRevision, renderKey: live.renderKey };
+        });
+        st.msgs = merged.concat(concurrent)
+            .sort((a, b) => a.id && b.id ? a.id - b.id : a.ts - b.ts);
         st.truncated = !!resp.truncated;
     } else {
         st.msgs = page.concat(st.msgs);
@@ -1662,6 +1952,7 @@ async function loadPage(key, beforeID) {
 
 async function maybeLoadOlder() {
     if (view.kind === "dm") return;
+    const scope = captureScope(readChatServerScope);
     const key = activeKey();
     const st = getStore(key);
     if (st.loading || st.end || !st.loaded || !st.msgs.length) return;
@@ -1676,7 +1967,7 @@ async function maybeLoadOlder() {
         await loadPage(key, st.msgs[0].id);
     } catch { /* keep what we have */ }
     st.loading = false;
-    if (activeKey() !== key) return;
+    if (!chatServerIsCurrent(scope) || activeKey() !== key || store.get(key) !== st) return;
     // Anchor the viewport: content was prepended, so the old scrollHeight
     // as "distance from the new bottom" lands back on the same message.
     renderView(prevH);
@@ -1790,10 +2081,12 @@ function pushMsg(key, m) {
 
 function appendLive(m) {
     const log = $("chat-log");
+    const anchor = captureScrollAnchor(log);
     log.appendChild(renderMsg(m));
     const max = V().state.settings?.chat_max_lines || 200;
     while (log.children.length > max) log.firstChild.remove();
-    if (searchQ) applySearchFilter();
+    applySearchFilter();
+    restoreScrollAnchor(log, anchor);
     refreshThreadFor(m.id); // (108) a reply joins the open chain immediately
     if (atBottom) {
         scrollToBottom();
@@ -1845,12 +2138,10 @@ function routeDM(d, m) {
     if (!m.self && m.clientMsgID) {
         // (124) delivery receipt immediately; read receipt when the tab is
         // visible and focused (otherwise queued for activation/focus).
-        app().SendChatDelivered(m.fromUID, m.clientMsgID);
-        if (view.kind === "dm" && view.uid === peer && document.hasFocus()) {
-            app().SendChatRead(m.fromUID, m.clientMsgID);
-        } else {
-            tab.pendingRead = m.clientMsgID;
-        }
+        const scope = captureScope(readChatServerScope);
+        void sendChatSignal(() => app().SendChatDeliveredForTab(scope.tabID, m.fromUID, m.clientMsgID));
+        tab.pendingRead = { id: m.clientMsgID, scope };
+        void sendPendingReads();
     }
 
     if (key === activeKey()) {
@@ -1872,12 +2163,40 @@ function routeDM(d, m) {
     };
 }
 
-function sendPendingReads() {
-    if (view.kind !== "dm" || !document.hasFocus()) return;
+async function sendChatSignal(action) {
+    try { await action(); }
+    catch { /* Typing and delivery are best-effort signals. */ }
+}
+
+async function sendPendingReads() {
+    if (view.kind !== "dm" || !chatSurfaceVisible("dm:" + view.uid)) return;
     const tab = pmTabs.get(view.uid);
-    if (tab?.pendingRead) {
-        app().SendChatRead(tab.uid, tab.pendingRead);
+    if (!tab) return;
+    const queue = tab.readQueue ||= [];
+    if (tab.pendingRead) {
+        const pending = tab.pendingRead;
+        if (chatServerIsCurrent(pending.scope) && !queue.some(entry => entry.id === pending.id)) queue.push(pending);
         tab.pendingRead = "";
+    }
+    if (tab.readAttempt) return;
+    while (queue.length && !chatServerIsCurrent(queue[0].scope)) queue.shift();
+    const entry = queue[0];
+    if (!entry) return;
+    const attempt = { entry };
+    tab.readAttempt = attempt;
+    const current = () => pmTabs.get(tab.uid) === tab && tab.readAttempt === attempt && chatServerIsCurrent(entry.scope);
+    let sent = false;
+    try {
+        const error = await app().SendChatReadForTab(entry.scope.tabID, tab.uid, entry.id);
+        if (!current() || error) return;
+        sent = true;
+        if (queue[0] === entry) queue.shift();
+    } catch { /* Retain this receipt for a later focus/message trigger. */ }
+    finally {
+        if (tab.readAttempt === attempt) tab.readAttempt = null;
+        if (sent && pmTabs.get(tab.uid) === tab && chatServerIsCurrent(entry.scope) && view.kind === "dm" && view.uid === tab.uid && (queue.length || tab.pendingRead)) {
+            void sendPendingReads();
+        }
     }
 }
 
@@ -1937,6 +2256,8 @@ export function onChatPinned(d, pinned) {
     // (109) keep the per-scope pin set current so the 📌 hover button toggles.
     const key = "ch:" + (Number(d.channel_id) || 0);
     const id = Number(d.message_id);
+    // Replay deltas over the initial snapshot without dropping unrelated pins.
+    pendingPinChanges.get(key)?.set(id, pinned);
     if (pinned) pinSet(key).add(id);
     else pinSet(key).delete(id);
     const m = findMsg(id);
@@ -1950,6 +2271,15 @@ export function onChatReaction(d) {
     // The event carries the authoritative counts; the own-highlight only
     // tracks toggles made in this session (history has counts only, 97).
     m.reactions = d.reactions || {};
+    m.reactionRevision = (m.reactionRevision || 0) + 1;
+    if (d.by && d.by === V().state.myUniqueID && typeof d.added === "boolean" && typeof d.emoji === "string" && d.emoji) {
+        let own = myReactions.get(m.id);
+        if (!own) { own = new Set(); myReactions.set(m.id, own); }
+        if (d.added) own.add(d.emoji);
+        else own.delete(d.emoji);
+        m.reactionOwnRevision ??= new Map();
+        m.reactionOwnRevision.set(d.emoji, (m.reactionOwnRevision.get(d.emoji) || 0) + 1);
+    }
     refreshReacts(m);
 }
 
@@ -2010,15 +2340,17 @@ function noteTyping() {
         resetTypingOut();
         return;
     }
+    const captured = captureScope(readSendScope);
+    const [chID, uid] = typingScopeOf();
     const send = () => {
+        if (!scopeIsCurrent(captured, readSendScope)) return;
         typingDebounce = null;
-        const [chID, uid] = typingScopeOf();
         const scope = chID + "|" + uid;
         const now = Date.now();
         if (scope !== typingScope || now - typingSentAt >= TYPING_PING_MS) {
             typingScope = scope;
             typingSentAt = now;
-            app().SendTyping(chID, uid);
+            void sendChatSignal(() => app().SendTypingForTab(captured.tabID, chID, uid));
         }
     };
     if (!typingDebounce) typingDebounce = setTimeout(send, TYPING_DEBOUNCE_MS);
@@ -2092,72 +2424,120 @@ function renderTyping() {
 // Sending (reply ids 601, file uploads 98/100)
 // ---------------------------------------------------------------------------
 
+function readSendScope() {
+    const scope = $("chat-scope").value;
+    const target = scope === "channel" ? String(activeChannelID() || "")
+        : scope === "direct" ? $("chat-target").value.trim() : "";
+    return { ...readExportScope(), sendScope: scope, target };
+}
+
+function showSendFailure(error, scope, canRetry) {
+    const panel = $("chat-send-error");
+    panel.querySelector("span").textContent = t("polish.sendFailed", { error: String(error) });
+    panel.classList.remove("hidden");
+    const retry = $("chat-retry");
+    retry.textContent = t("polish.retry");
+    retry.hidden = !canRetry();
+    retry.onclick = () => {
+        if (!scopeIsCurrent(scope, readSendScope) || !canRetry()) {
+            panel.classList.add("hidden");
+            return;
+        }
+        void sendMessage();
+    };
+}
+
 export async function sendMessage() {
-    const st = V().state;
+    if (activeSend) return;
     const input = $("chat-text");
-    let text = input.value.trim();
+    const draft = input.value;
+    const text = draft.trim();
+    if (!text && pendingFiles.length === 0) return;
+    $("chat-send-error").classList.add("hidden");
+    const captured = captureScope(readSendScope);
+    const operation = { scope: captured };
+    activeSend = operation;
+    $("chat-send").disabled = true;
+    const current = () => activeSend === operation && scopeIsCurrent(captured, readSendScope);
+    const inputRevision = draftRevision;
+    const parentRevision = replyRevision;
+    let expectedDraft = draft, expectedParent = parentRevision, failure = null;
+    const retryFiles = [];
+    const canRetry = () => draftRevision === inputRevision && replyRevision === expectedParent &&
+        input.value === expectedDraft && pendingFiles.length === retryFiles.length &&
+        pendingFiles.every((file, index) => file === retryFiles[index]);
+    const { sendScope: scope, target } = captured;
+    const parentID = scope === "direct" ? 0 : (replyTo?.id || 0);
     const files = pendingFiles.splice(0);
     renderFilePreview();
-    if (!text && files.length === 0) return;
-
-    const scope = $("chat-scope").value;
-    let target = "";
-    if (scope === "channel") target = String(activeChannelID() || "");
     if (scope === "direct") {
-        target = $("chat-target").value.trim();
         lastDMTarget = target;
         if (target && !pmTabs.has(target)) openPMKeepView(target);
     }
-
-    // Files are sealed with their own key and uploaded under a content-derived
-    // name; the returned token carries that key inside the encrypted message
-    // body, so the attachment is as private as the message (91-135).
-    const chID = scope === "channel" ? (activeChannelID() || 0) : 0;
-    const retryFiles = [];
-    for (const f of files) {
-        let token;
-        try {
-            token = await app().UploadChatAttachment(chID, f.name, f.dataBase64);
-        } catch (e) {
-            V().sysMsg("upload failed: " + e);
-            retryFiles.push(f);
-            continue;
-        }
-        try {
-            const err = await app().SendChat(scope, target, token);
-            if (err) {
-                V().sysMsg("chat failed: " + err);
+    try {
+        const chID = scope === "channel" ? captured.channelID : 0;
+        for (const f of files) {
+            if (!current()) return;
+            let token;
+            try {
+                token = await app().UploadChatAttachmentForTab(captured.tabID, chID, f.name, f.dataBase64);
+            } catch (e) {
+                if (!current()) return;
+                failure = e;
+                retryFiles.push(f);
+                continue;
+            }
+            if (!current()) return;
+            try {
+                const err = await app().SendChatForTab(captured.tabID, scope, target, token);
+                if (!current()) return;
+                if (err) {
+                    failure = err;
+                    retryFiles.push(f);
+                }
+            } catch (e) {
+                if (!current()) return;
+                failure = e;
                 retryFiles.push(f);
             }
-        } catch (e) {
-            V().sysMsg("chat failed: " + e);
-            retryFiles.push(f);
         }
-    }
-    if (retryFiles.length) {
-        pendingFiles = [...retryFiles, ...pendingFiles];
-        renderFilePreview();
-    }
-
-    if (text) {
-        const parentID = scope === "direct" ? 0 : (replyTo?.id || 0);
-        let err = "";
-        try {
-            err = parentID
-                ? await app().SendChatReply(scope, target, text, parentID)
-                : await app().SendChat(scope, target, text);
-        } catch (e) {
-            V().sysMsg("chat failed: " + e);
-            return;
+        if (!current()) return;
+        if (retryFiles.length) {
+            pendingFiles = [...retryFiles, ...pendingFiles];
+            renderFilePreview();
         }
-        if (err) {
-            V().sysMsg("chat failed: " + err);
-            return;
+        if (text) {
+            let err = "";
+            try {
+                err = parentID
+                    ? await app().SendChatReplyForTab(captured.tabID, scope, target, text, parentID)
+                    : await app().SendChatForTab(captured.tabID, scope, target, text);
+            } catch (e) {
+                failure = e;
+                return;
+            }
+            if (!current()) return;
+            if (err) {
+                failure = err;
+                return;
+            }
+            rememberSent(text);
+            if (replyRevision === parentRevision) {
+                clearReply();
+                expectedParent = replyRevision;
+            }
+            if (draftRevision === inputRevision && input.value === draft) {
+                input.value = "";
+                expectedDraft = "";
+                resetTypingOut();
+            }
         }
-        rememberSent(text);
-        if (replyTo) clearReply();
-        input.value = "";
-        resetTypingOut(); // (120) the message landed; stop claiming to be composing
+    } finally {
+        if (failure !== null && current()) showSendFailure(failure, captured, canRetry);
+        if (activeSend === operation) {
+            activeSend = null;
+            $("chat-send").disabled = false;
+        }
     }
 }
 
@@ -2174,11 +2554,13 @@ function recallSent(e) {
     if (e.key === "ArrowUp" && (input.selectionStart === 0 || sentHistoryPos < sentHistory.length) && sentHistoryPos > 0) {
         e.preventDefault();
         if (sentHistoryPos === sentHistory.length) sentHistoryDraft = input.value;
+        draftRevision++;
         input.value = sentHistory[--sentHistoryPos];
         input.selectionStart = input.selectionEnd = input.value.length;
     } else if (e.key === "ArrowDown" && input.selectionEnd === input.value.length && sentHistoryPos < sentHistory.length) {
         e.preventDefault();
         sentHistoryPos++;
+        draftRevision++;
         input.value = sentHistoryPos === sentHistory.length ? sentHistoryDraft : sentHistory[sentHistoryPos];
         input.selectionStart = input.selectionEnd = input.value.length;
     }
@@ -2199,6 +2581,7 @@ function openPMKeepView(uid) {
 // --- file staging: paste / drop (98/100) ---------------------------------------
 
 function stageFiles(fileList) {
+    const scope = captureScope(readSendScope);
     for (const f of fileList) {
         if (f.size > ATTACH_MAX_BYTES) {
             V().toast(`${f.name || "file"} is larger than ${Math.round(ATTACH_MAX_BYTES / 1048576)} MB — use the file browser`, "warn");
@@ -2206,6 +2589,7 @@ function stageFiles(fileList) {
         }
         const reader = new FileReader();
         reader.onload = () => {
+            if (!scopeIsCurrent(scope, readSendScope)) return;
             const dataURL = reader.result;
             const rawName = (f.name || "image.png").replace(/[\[\]#]/g, "_");
             const extIdx = rawName.lastIndexOf(".");
@@ -2224,7 +2608,7 @@ function stageFiles(fileList) {
             });
             renderFilePreview();
         };
-        reader.onerror = () => V().toast("could not read " + (f.name || "file"), "warn");
+        reader.onerror = () => { if (scopeIsCurrent(scope, readSendScope)) V().toast("could not read " + (f.name || "file"), "warn"); };
         reader.readAsDataURL(f);
     }
 }
@@ -2260,6 +2644,7 @@ function renderFilePreview() {
 }
 
 function insertAtCursor(text) {
+    draftRevision++;
     const input = $("chat-text");
     const pos = input.selectionStart ?? input.value.length;
     input.value = input.value.slice(0, pos) + text + input.value.slice(input.selectionEnd ?? pos);
@@ -2273,6 +2658,9 @@ function toggleEmojiPanel() {
         return;
     }
     emojiPanel = document.createElement("div");
+    const panel = emojiPanel;
+    const panelGeneration = V().state.serverGeneration;
+    const currentPanel = () => emojiPanel === panel && panelGeneration === V().state.serverGeneration;
     emojiPanel.className = "emoji-panel";
     emojiPanel.onclick = (e) => e.stopPropagation();
 
@@ -2308,6 +2696,7 @@ function toggleEmojiPanel() {
     up.onclick = async (ev) => {
         ev.stopPropagation();
         const generation = V().state.serverGeneration;
+        const tabID = V().state.activeTabID;
         const img = await pickIcon(128, 0.9);
         if (!img?.dataBase64 || generation !== V().state.serverGeneration) return;
         const name = (await promptDialog({
@@ -2317,21 +2706,25 @@ function toggleEmojiPanel() {
             serverScoped: true,
         }) || "").trim();
         if (!name || generation !== V().state.serverGeneration) return;
-        const err = await app().EmojiUpload(name, img.dataBase64);
-        if (generation !== V().state.serverGeneration) return;
-        if (err) {
-            V().toast("emoji upload failed: " + err, "warn");
-            return;
+        try {
+            const err = await app().EmojiUploadForTab(tabID, name, img.dataBase64);
+            if (generation !== V().state.serverGeneration) return;
+            if (err) {
+                V().toast("emoji upload failed: " + err, "warn");
+                return;
+            }
+            customDirty = true; // refetch so the new one appears in the picker
+            V().toast("emoji :" + name + ": upload requested");
+        } catch (err) {
+            if (generation === V().state.serverGeneration) V().toast("emoji upload failed: " + String(err), "warn");
         }
-        customDirty = true; // refetch so the new one appears in the picker
-        V().toast("emoji :" + name + ": uploaded");
     };
     head.appendChild(up);
     const grid = document.createElement("div");
     grid.className = "emoji-grid";
     emojiPanel.appendChild(grid);
     ensureCustomEmoji().then(async () => {
-        if (!emojiPanel) return;
+        if (!currentPanel()) return;
         if (customEmoji.length === 0) {
             const hint = document.createElement("div");
             hint.className = "set-hint";
@@ -2340,8 +2733,10 @@ function toggleEmojiPanel() {
             return;
         }
         for (const e of customEmoji) {
+            if (!currentPanel()) return;
             const url = await emojiURL(e.name);
-            if (!url || !emojiPanel) continue;
+            if (!currentPanel()) return;
+            if (!url) continue;
             const b = document.createElement("button");
             b.title = ":" + e.name + ":";
             const img = document.createElement("img");
@@ -2501,6 +2896,10 @@ async function togglePinsPanel() {
 
 async function loadPinsPanel() {
     if (!pinsPanel) return;
+    const panel = pinsPanel;
+    const request = ++pinsRequest;
+    const scope = captureScope(readExportScope);
+    const current = () => pinsPanel === panel && pinsRequest === request && exportScopeIsCurrent(scope);
     if (view.kind === "channel" && !V().state.myChannelID) {
         V().toast("join a channel to view its pinned messages — or switch to global", "info", "alert");
         closePinsPanel();
@@ -2513,7 +2912,7 @@ async function loadPinsPanel() {
     head.textContent = "Pinned messages";
     const x = document.createElement("button");
     x.textContent = "✕";
-    x.onclick = closePinsPanel;
+    x.onclick = () => { if (current()) closePinsPanel(); };
     head.appendChild(x);
     pinsPanel.appendChild(head);
     let pins = [];
@@ -2521,12 +2920,13 @@ async function loadPinsPanel() {
         // Pins decrypt through the same Go path as history, and the response
         // carries the generations it references, so bodies arrive plaintext
         // and the panel needs no extra round trip (109).
-        const resp = await app().ChatPins(chID);
+        const resp = await app().ChatPinsForTab(scope.tabID, chID);
+        if (!current()) return;
         pins = resp.pins || [];
-        const set = pinSet("ch:" + chID);
-        set.clear();
-        for (const p of pins) set.add(Number(p.message_id));
+        // An authoritative refresh supersedes any still-pending preload.
+        pinnedIDs.set("ch:" + chID, new Set(pins.map(p => Number(p.message_id))));
     } catch (e) {
+        if (!current()) return;
         const err = document.createElement("div");
         err.className = "set-hint warn";
         err.textContent = "pins unavailable: " + e;
@@ -2552,6 +2952,7 @@ async function loadPinsPanel() {
         jump.textContent = "↩";
         jump.title = "jump to message";
         jump.onclick = () => {
+            if (!current()) return;
             if (!flashMsg(p.message_id)) {
                 V().toast("message not loaded — scroll up to load older history", "info", "alert");
             }
@@ -2561,9 +2962,10 @@ async function loadPinsPanel() {
         unpin.textContent = "✕";
         unpin.title = "unpin";
         unpin.onclick = async () => {
-            const err = await app().ChatPinMessage(chID, p.message_id, false);
-            if (err) V().toast("unpin failed: " + err, "warn");
-            loadPinsPanel();
+            if (!current() || unpin.disabled) return;
+            unpin.disabled = true;
+            await runChatMutation(scope, () => app().ChatPinMessageForTab(scope.tabID, chID, p.message_id, false), "unpin", current);
+            if (current()) await loadPinsPanel();
         };
         row.appendChild(unpin);
         pinsPanel.appendChild(row);
@@ -2580,6 +2982,7 @@ function openSearch() {
 }
 
 function closeSearch() {
+    cancelChatSearch();
     $("chat-search-row").classList.add("hidden");
     $("chat-search").value = "";
     searchQ = "";
@@ -2590,14 +2993,35 @@ function applySearchFilter() {
     const log = $("chat-log");
     const q = searchQ.toLowerCase();
     clearMarks(log);
-    log.querySelectorAll(".msg").forEach((el) => {
+    let matches = 0;
+    const messages = log.querySelectorAll(".msg.rich");
+    messages.forEach((el) => {
         const show = !q || el.textContent.toLowerCase().includes(q);
         el.classList.toggle("hidden", !show);
+        if (show) matches++;
         if (show && q) {
             const body = el.querySelector(".msg-text");
             if (body) markIn(body, q);
         }
     });
+    const count = $("chat-search-count");
+    count.textContent = t("polish.matches", { count: matches, total: messages.length });
+    count.classList.toggle("hidden", !q);
+    groupMessages(log);
+}
+
+function groupMessages(log) {
+    let previous = null;
+    for (const row of log.children) {
+        const stamp = Number(row.dataset.ts);
+        const priorStamp = Number(previous?.dataset.ts);
+        const eligible = row.matches(".msg.rich:not(.hidden):not(.deleted)");
+        const sameAuthor = eligible && previous && row.dataset.authorGroup && row.dataset.authorGroup === previous.dataset.authorGroup;
+        const together = sameAuthor && stamp >= priorStamp && stamp - priorStamp < 5 * 60 * 1000 &&
+            new Date(stamp).toDateString() === new Date(priorStamp).toDateString();
+        row.classList.toggle("grouped", !!together);
+        previous = eligible ? row : null;
+    }
 }
 
 function clearMarks(root) {
@@ -2613,13 +3037,22 @@ function markIn(el, q) {
     const nodes = [];
     while (walker.nextNode()) nodes.push(walker.currentNode);
     for (const node of nodes) {
-        const idx = node.nodeValue.toLowerCase().indexOf(q);
+        const text = node.nodeValue;
+        const folded = text.toLowerCase();
+        let start = 0;
+        let idx = folded.indexOf(q);
         if (idx < 0) continue;
-        const after = node.splitText(idx);
-        after.splitText(q.length);
-        const mark = document.createElement("mark");
-        mark.textContent = after.nodeValue;
-        after.parentNode.replaceChild(mark, after);
+        const fragment = document.createDocumentFragment();
+        while (idx >= 0) {
+            fragment.append(document.createTextNode(text.slice(start, idx)));
+            const mark = document.createElement("mark");
+            mark.textContent = text.slice(idx, idx + q.length);
+            fragment.append(mark);
+            start = idx + q.length;
+            idx = folded.indexOf(q, start);
+        }
+        fragment.append(document.createTextNode(text.slice(start)));
+        node.replaceWith(fragment);
     }
 }
 
@@ -2627,59 +3060,48 @@ function markIn(el, q) {
 // layer applies its own cap, this is only what we ask for.
 const SEARCH_MAX = 2000;
 
-const SEARCH_LABEL = "search all history";
 
 // searchAll runs the full-history search. It is CLIENT-side: App.ChatSearch
 // pages the scope in Go and matches over bodies it decrypted itself, because
 // the server stores only ciphertext and cannot match on content (110).
 async function searchAll() {
-    const generation = V().state.serverGeneration;
+    const scope = captureScope(readExportScope);
+    const dm = scope.kind === "dm" ? getDMOwner() : null;
     const q = $("chat-search").value.trim();
     if (!q) return;
     const btn = $("chat-search-server");
     if (btn && btn.disabled) return;
     if (view.kind === "channel" && !V().state.myChannelID) {
-        V().toast("join a channel to search its history — or switch to global", "info", "alert");
+        V().toast(t("polish.joinSearch"), "info", "alert");
         return;
     }
-    if (view.kind === "dm") {
-        // (122/110) the server is E2EE-blind for DMs, so the only searchable
-        // history is this device's own sealed log.
-        btn.disabled = true;
-        btn.textContent = "searching…";
-        let dm = { messages: [], scanned: 0, undecryptable: 0 };
-        try {
-            dm = await app().DMSearch(view.uid, q, SEARCH_MAX);
-        } catch (e) {
-            if (generation === V().state.serverGeneration) V().toast("search failed: " + e, "warn");
-        }
-        if (generation !== V().state.serverGeneration) return;
-        btn.disabled = false;
-        btn.textContent = SEARCH_LABEL;
-        showSearchResults(q.toLowerCase(), dm.messages || [], dm.scanned || 0, dm.undecryptable || 0);
-        return;
-    }
-    const chID = view.kind === "global" ? 0 : (activeChannelID() || 0);
+    cancelChatSearch();
+    const operation = { id: crypto.randomUUID(), scope, unsubscribe: null };
+    activeSearch = operation;
+    const current = () => activeSearch === operation && exportScopeIsCurrent(scope);
     btn.disabled = true;
-    btn.textContent = "searching…";
+    btn.textContent = t("polish.searching", { count: "" });
     // The paging loop lives in Go now: the keys never cross into the webview
     // and a page can use the store's cap of 200 instead of the UI's 50 (110).
-    const unsub = window.runtime.EventsOn("chatsearch:progress",
-        (n) => { btn.textContent = `searching… ${n}`; });
-    let res = { messages: [], scanned: 0, undecryptable: 0 };
+    operation.unsubscribe = window.runtime.EventsOn("chatsearch:progress", data => {
+        const count = scanProgressCount(data, operation.id);
+        if (current() && count !== null) btn.textContent = t("polish.searching", { count });
+    });
+    let res = null;
     try {
-        res = await app().ChatSearch(chID, q, SEARCH_MAX);
+        res = scope.kind === "dm"
+            ? await callDMHistory(dm, "DMSearchForContext", scope.uid, q, SEARCH_MAX)
+            : await app().ChatSearchForTab(scope.tabID, operation.id, scope.channelID, q, SEARCH_MAX);
     } catch (e) {
-        if (generation === V().state.serverGeneration) V().toast("search failed: " + e, "warn");
+        if (current()) V().toast(t("polish.searchFailed", { error: String(e) }), "warn");
     }
-    if (unsub) unsub();
-    if (generation !== V().state.serverGeneration) return;
-    btn.disabled = false;
-    btn.textContent = SEARCH_LABEL;
-    showSearchResults(q.toLowerCase(), res.messages || [], res.scanned || 0, res.undecryptable || 0);
+    operation.unsubscribe?.();
+    if (!current()) return;
+    cancelChatSearch();
+    if (res) showSearchResults(q.toLowerCase(), res.messages || [], res.scanned || 0, res.undecryptable || 0, scope);
 }
 
-function showSearchResults(q, results, scanned, undecryptable) {
+function showSearchResults(q, results, scanned, undecryptable, scope) {
     const overlay = document.createElement("div");
     overlay.className = "dlg-overlay";
     const dlg = document.createElement("div");
@@ -2688,15 +3110,15 @@ function showSearchResults(q, results, scanned, undecryptable) {
     // A partial search must never look complete: messages under a generation
     // this client cannot obtain are counted, not silently dropped.
     h.textContent = undecryptable > 0
-        ? `${results.length} matches (${undecryptable} messages could not be decrypted)`
-        : `${results.length} matches`;
+        ? t("polish.searchPartial", { count: results.length, missing: undecryptable })
+        : t("polish.searchMatches", { count: results.length });
     dlg.appendChild(h);
     const sub = document.createElement("div");
     sub.className = "set-hint";
     // Scanned is the honest denominator: the search stops at the Go layer's
     // cap, so "0 matches" over a truncated scan is not "not in the history".
-    sub.textContent = `searched ${scanned} message${scanned === 1 ? "" : "s"} of this scope` +
-        (scanned >= SEARCH_MAX ? ` (stopped at the ${SEARCH_MAX}-message cap — narrow the query to reach further back)` : "");
+    sub.textContent = t("polish.searched", { count: scanned }) +
+        (scanned >= SEARCH_MAX ? " · " + t("polish.searchCap", { count: SEARCH_MAX }) : "");
     dlg.appendChild(sub);
     const list = document.createElement("div");
     list.className = "search-list";
@@ -2709,20 +3131,16 @@ function showSearchResults(q, results, scanned, undecryptable) {
     for (const r of results) {
         const row = document.createElement("div");
         row.className = "search-hit";
-        // Escape first, then wrap the match in <mark> (XSS discipline).
-        const esc = escapeHTML((r.body || "").slice(0, 200));
-        const eq = escapeHTML(q).toLowerCase();
-        const idx = esc.toLowerCase().indexOf(eq);
-        row.innerHTML = idx >= 0
-            ? esc.slice(0, idx) + "<mark>" + esc.slice(idx, idx + eq.length) + "</mark>" + esc.slice(idx + eq.length)
-            : esc;
+        row.textContent = (r.body || "").slice(0, 200);
+        markIn(row, q);
         const meta = document.createElement("span");
         meta.className = "search-meta";
         meta.textContent = `${r.from_nickname || "?"} · ${fmtFull((typeof r.sent_at === "number" ? r.sent_at * 1000 : Date.parse(r.sent_at)) || 0)}`;
         row.insertBefore(meta, row.firstChild);
         row.onclick = () => {
-            overlay.remove();
-            if (!flashMsg(r.id)) V().toast("message not in the loaded view — scroll up to load it", "info", "alert");
+            closeDialog(overlay);
+            if (!exportScopeIsCurrent(scope)) return;
+            if (!flashMsg(r.id)) V().toast(t("polish.notLoaded"), "info", "alert");
         };
         list.appendChild(row);
     }
@@ -2731,15 +3149,16 @@ function showSearchResults(q, results, scanned, undecryptable) {
     btns.className = "dlg-buttons";
     const ok = document.createElement("button");
     ok.className = "dlg-ok";
-    ok.textContent = "Close";
-    ok.onclick = () => overlay.remove();
+    ok.textContent = t("polish.close");
+    ok.onclick = () => closeDialog(overlay);
     btns.appendChild(ok);
     dlg.appendChild(btns);
     overlay.appendChild(dlg);
     overlay.onclick = (e) => {
-        if (e.target === overlay) overlay.remove();
+        if (e.target === overlay) closeDialog(overlay);
     };
-    mountServerDialog(overlay);
+    searchResultsPanel = overlay;
+    mountServerDialog(overlay, { onClose: () => { if (searchResultsPanel === overlay) searchResultsPanel = null; } });
 }
 
 // ---------------------------------------------------------------------------
@@ -2748,6 +3167,7 @@ function showSearchResults(q, results, scanned, undecryptable) {
 
 export function refreshHeader() {
     updateHeader();
+    void sendPendingReads();
 }
 
 // fmtSlowMode renders a slow-mode interval the way a person reads it.
@@ -2876,7 +3296,11 @@ function exportProgressDialog() {
 // export is the one place this client can undo the storage guarantee: it takes
 // an explicit confirm, and the encrypted container is offered first.
 async function exportChat() {
+    const attempt = ++exportAttempt;
+    activeExport?.progress.close();
     const exportScope = captureScope(readExportScope);
+    const dm = exportScope.kind === "dm" ? getDMOwner() : null;
+    const attemptIsCurrent = () => attempt === exportAttempt && exportScopeIsCurrent(exportScope);
     // Without a joined channel the channel view has no scope of its own, and
     // channel id 0 is GLOBAL: exporting it here would hand over a different
     // conversation than the one on screen.
@@ -2889,11 +3313,18 @@ async function exportChat() {
         : (V().state.channels.find((c) => c.ChannelID === exportScope.channelID)?.Name || "channel");
 
     const pass = await askExportPassphrase();
-    if (pass === null || !exportScopeIsCurrent(exportScope)) return; // cancelled or switched
+    if (pass === null || !attemptIsCurrent()) return;
 
     const prog = exportProgressDialog();
-    let unsub = window.runtime.EventsOn("chatexport:progress", (n) => prog.update(n));
+    const operation = { id: crypto.randomUUID(), progress: prog };
+    activeExport = operation;
+    const current = () => activeExport === operation && attemptIsCurrent();
+    let unsub = window.runtime.EventsOn("chatexport:progress", data => {
+        const count = scanProgressCount(data, operation.id);
+        if (current() && count !== null) prog.update(count);
+    });
     prog.setCleanup(() => {
+        if (activeExport === operation) activeExport = null;
         if (!unsub) return;
         unsub();
         unsub = null;
@@ -2901,27 +3332,28 @@ async function exportChat() {
     let res = null;
     try {
         res = exportScope.kind === "dm"
-            ? await app().DMExportHistory(exportScope.uid)
-            : await app().ChatExportHistory(exportScope.channelID, 0);
+            ? await callDMHistory(dm, "DMExportHistoryForContext", exportScope.uid)
+            : await app().ChatExportHistoryForTab(exportScope.tabID, operation.id, exportScope.channelID, 0);
     } catch (e) {
-        if (exportScopeIsCurrent(exportScope)) V().toast("export failed: " + e, "warn");
+        if (current()) V().toast("export failed: " + e, "warn");
     }
+    const ready = current();
     prog.close();
-    if (!res || !exportScopeIsCurrent(exportScope)) return;
+    if (!ready || !res || !attemptIsCurrent()) return;
 
     const contents = res.text || "";
     if (pass !== "") {
         try {
             await app().ExportChatEncrypted(`noxa-${name}.noxachat`, contents, pass);
-            if (!exportScopeIsCurrent(exportScope)) return;
+            if (!attemptIsCurrent()) return;
         } catch (e) {
-            if (!exportScopeIsCurrent(exportScope)) return;
+            if (!attemptIsCurrent()) return;
             V().toast("export failed: " + e, "warn");
             return;
         }
     } else {
         const err = await app().ExportChat(`noxa-${name}.txt`, contents);
-        if (!exportScopeIsCurrent(exportScope)) return;
+        if (!attemptIsCurrent()) return;
         if (err) {
             V().toast("export failed: " + err, "warn");
             return;
@@ -3040,25 +3472,32 @@ export function onAnnouncement(d) {
 
 export async function onConnect() {
     const st = V().state;
-    // myUniqueID drives mention matching and own-message detection.
-    try {
-        st.myUniqueID = await app().IdentityUID();
-    } catch { /* best-effort */ }
+    const { activeTabID: tabID, serverGeneration: generation } = st;
+    const current = () => tabID === st.activeTabID && generation === st.serverGeneration;
+    // The context resolves the connection's key, which may differ from the
+    // identity selected for the next connection. Acquisition sets myUniqueID.
+    await getDMOwner().ready;
+    if (!current()) return;
     restorePMTabs(); // (122) conversations that survived the last restart
     try {
-        onSubscriptions({ channel_ids: await app().Subscriptions() });
+        const channelIDs = await app().SubscriptionsForTab(tabID);
+        if (!current()) return;
+        onSubscriptions({ channel_ids: channelIDs });
     } catch { /* the live authoritative event is still the primary path */ }
+    if (!current()) return;
     // (133) surface the server MOTD once per connect. It is a server notice,
     // not a message: styling it as one would put it next to a shield or a lock
     // it has not earned.
     try {
-        const motd = await app().MOTD();
+        const motd = await app().MOTDForTab(tabID);
+        if (!current()) return;
         if (motd) V().sysMsg("server notice — " + motd);
     } catch { /* MOTD is best-effort */ }
 }
 
 export function onMyChannelChanged() {
     const st = V().state;
+    if (view.kind === "channel") invalidateChatViewWork();
     if (unread.delete(st.myChannelID)) V().renderTree();
     if (view.kind === "chan" && view.id === st.myChannelID) {
         setView({ kind: "channel" });
@@ -3078,6 +3517,8 @@ export function onChannelsDeleted(channelIDs) {
         chanTabs.delete(id);
         unread.delete(id);
         store.delete("ch:" + id);
+        pinnedIDs.delete("ch:" + id);
+        pendingPinChanges.delete("ch:" + id);
     }
     if (removed.has(pendingChannelTab)) pendingChannelTab = 0;
     if (view.kind === "chan" && removed.has(view.id)) {
@@ -3094,6 +3535,11 @@ export function onChannelsDeleted(channelIDs) {
 // stores, unread badges, PM tabs, and the rendered panes. The tab journal
 // replay rebuilds the view from server frames afterwards.
 export function resetView(options = {}) {
+    resetDMOwner();
+    V().state.myUniqueID = "";
+    invalidateChatViewWork();
+    closeEmojiPanel();
+    closeReactStrip();
     view = { kind: "channel" };
     store.clear();
     unread.clear();
@@ -3120,6 +3566,7 @@ export function resetView(options = {}) {
     receipts.clear();
     myReactions.clear();
     pinnedIDs.clear();
+    pendingPinChanges.clear();
     threadCache.clear();
     closeThreadPanel();
     closePinsPanel();
@@ -3218,9 +3665,18 @@ function closeQS() {
 function openQS() {
     closeQS();
     const st = V().state;
+    const { activeTabID: tabID, serverGeneration: generation } = st;
     const items = [];
     for (const ch of st.channels) {
-        items.push({ label: "# " + ch.Name, hint: "channel", action: () => app().JoinChannel(ch.ChannelID) });
+        items.push({ label: "# " + ch.Name, hint: "channel", action: async () => {
+            if (generation !== st.serverGeneration) return;
+            try {
+                const err = await app().JoinChannelForTab(tabID, ch.ChannelID);
+                if (err && generation === st.serverGeneration) V().toast(err, "warn");
+            } catch (err) {
+                if (generation === st.serverGeneration) V().toast(String(err), "warn");
+            }
+        } });
     }
     for (const c of st.clients) {
         if (c.unique_id && c.unique_id !== st.myUniqueID) {
@@ -3249,6 +3705,8 @@ function openQS() {
         if (e.target === qsOverlay) closeQS();
     };
     const mountedOverlay = qsOverlay;
+    const dmScope = captureScope(readDMHistoryScope);
+    const currentQuickSwitcher = () => qsOverlay === mountedOverlay && mountedOverlay.isConnected && dmHistoryScopeIsCurrent(dmScope);
     mountServerDialog(qsOverlay, {
         initialFocus: input,
         onClose: () => {
@@ -3279,6 +3737,7 @@ function openQS() {
             row.appendChild(l);
             row.appendChild(h);
             row.onclick = () => {
+                if (!currentQuickSwitcher()) return;
                 closeQS();
                 it.action();
             };
@@ -3291,6 +3750,7 @@ function openQS() {
     };
     input.onkeydown = (e) => {
         e.stopPropagation();
+        if (!currentQuickSwitcher()) return;
         if (e.key === "Escape") closeQS();
         if (e.key === "ArrowDown") {
             e.preventDefault();
@@ -3324,6 +3784,7 @@ function handleTabComplete(e) {
         e.preventDefault();
         tabCycle.idx = (tabCycle.idx + 1) % tabCycle.matches.length;
         const pick = tabCycle.matches[tabCycle.idx];
+        draftRevision++;
         input.value = input.value.slice(0, tabCycle.start) + "@" + pick + " " + input.value.slice(tabCycle.end);
         tabCycle.end = tabCycle.start + pick.length + 2;
         input.selectionStart = input.selectionEnd = tabCycle.end;
@@ -3352,6 +3813,7 @@ function handleTabComplete(e) {
     const pick = names[0];
     const end = start + pick.length + 2;
     tabCycle = { start, end, base, matches: names, idx: 0 };
+    draftRevision++;
     input.value = input.value.slice(0, start) + "@" + pick + " " + input.value.slice(pos);
     input.selectionStart = input.selectionEnd = end;
 }
@@ -3362,6 +3824,13 @@ function handleTabComplete(e) {
 
 export function initChat() {
     window.runtime.EventsOn("subscriptions", onSubscriptions);
+    window.runtime.EventsOn("dm_history_identity_changed", onDMIdentityChanged);
+    window.runtime.EventsOn("tab_identity", data => {
+        const identity = parseRuntimeObject(data);
+        if (identity?.tab_id === V().state.activeTabID && typeof identity.identity_uid === "string") {
+            V().state.myUniqueID = identity.identity_uid;
+        }
+    });
     const log = $("chat-log");
 
     applyChatPrefs();
@@ -3374,11 +3843,13 @@ export function initChat() {
         else {
             const uid = $("chat-target").value.trim();
             if (uid) openPM(uid);
+            else invalidateChatViewWork();
         }
     });
     $("chat-target").addEventListener("change", () => {
         const uid = $("chat-target").value.trim();
         if ($("chat-scope").value === "direct" && uid) openPM(uid);
+        else invalidateChatViewWork();
     });
 
     // (134) scroll lock + (103) scroll-up history paging.
@@ -3425,6 +3896,7 @@ export function initChat() {
     $("chat-search-btn").onclick = openSearch;
     $("chat-search-close").onclick = closeSearch;
     $("chat-search").addEventListener("input", () => {
+        cancelChatSearch();
         searchQ = $("chat-search").value.trim();
         applySearchFilter();
     });
@@ -3493,11 +3965,16 @@ export function initChat() {
         if (e.key === "Tab") handleTabComplete(e);
         else tabCycle = null;
     });
-    $("chat-text").addEventListener("input", noteTyping);
+    $("chat-text").addEventListener("input", () => {
+        draftRevision++;
+        $("chat-send-error").classList.add("hidden");
+        noteTyping();
+    });
     $("chat-text").addEventListener("blur", resetTypingOut);
 
     // Read receipts need a focused window (124).
     window.addEventListener("focus", sendPendingReads);
+    document.addEventListener("visibilitychange", sendPendingReads);
 
     // Ctrl+F search (110), Ctrl+K quick switcher (135).
     document.addEventListener("keydown", (e) => {

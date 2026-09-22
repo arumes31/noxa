@@ -45,10 +45,10 @@ export function syncMuteButton(button, muted) {
 export function renderMicStatus(container, micState, onRetry, videoOnly = true, successFocus = null) {
     if (!container) return null;
     container.replaceChildren();
-    const suffix = videoOnly ? " — video only" : "";
+    const suffix = videoOnly ? t("polish.videoOnly") : "";
     const message = micState === "denied"
-        ? `Microphone access denied${suffix}`
-        : micState === "none" ? `No microphone found${suffix}` : "";
+        ? t("polish.micDenied") + suffix
+        : micState === "none" ? t("polish.micMissing") + suffix : "";
     if (!message) return null;
 
     const text = document.createElement("span");
@@ -58,12 +58,12 @@ export function renderMicStatus(container, micState, onRetry, videoOnly = true, 
     const retry = document.createElement("button");
     retry.type = "button";
     retry.className = "mic-retry";
-    retry.textContent = "Retry microphone access";
+    retry.textContent = t("polish.micRetry");
     retry.onclick = async () => {
         const retryHadFocus = document.activeElement === retry;
         let recovered = false;
         retry.disabled = true;
-        retry.textContent = "Retrying…";
+        retry.textContent = t("polish.retrying");
         try {
             recovered = !!(await onRetry?.());
         } finally {
@@ -74,7 +74,7 @@ export function renderMicStatus(container, micState, onRetry, videoOnly = true, 
             // mounted failure case so the user can make another attempt.
             if (retry.isConnected) {
                 retry.disabled = false;
-                retry.textContent = "Retry microphone access";
+                retry.textContent = t("polish.micRetry");
             }
         }
     };
@@ -99,13 +99,20 @@ export function startMicMeter(stream) {
     }
     el.classList.remove("hidden");
     const fill = el.querySelector(".mic-fill");
+    meterAnalyser = {};
     try {
         const ctx = new (window.AudioContext || window.webkitAudioContext)();
-        const src = ctx.createMediaStreamSource(stream);
+        meterAnalyser.ctx = ctx;
+        const track = stream.getAudioTracks()[0].clone();
+        meterAnalyser.track = track;
+        track.enabled = true;
+        const src = ctx.createMediaStreamSource(new MediaStream([track]));
+        meterAnalyser.src = src;
         const an = ctx.createAnalyser();
         an.fftSize = 512;
         src.connect(an);
-        meterAnalyser = { ctx, an };
+        meterAnalyser = { ctx, an, src, track };
+        void ctx.resume().catch(() => {});
         const buf = new Uint8Array(an.frequencyBinCount);
         const tick = () => {
             an.getByteTimeDomainData(buf);
@@ -113,12 +120,13 @@ export function startMicMeter(stream) {
             for (const v of buf) sum += Math.abs(v - 128);
             const level = Math.min(1, (sum / buf.length / 128) * 5);
             fill.style.width = level * 100 + "%";
+            el.setAttribute("aria-valuenow", String(Math.round(level * 100)));
             fill.className = "mic-fill " + (level > 0.7 ? "hot" : level > 0.35 ? "warm" : "cool");
             meterRaf = requestAnimationFrame(tick);
         };
         tick();
     } catch {
-        el.classList.add("hidden");
+        stopMicMeter();
     }
 }
 
@@ -128,7 +136,9 @@ export function stopMicMeter() {
         meterRaf = null;
     }
     if (meterAnalyser) {
-        meterAnalyser.ctx.close().catch(() => {});
+        meterAnalyser.src?.disconnect();
+        meterAnalyser.track?.stop();
+        void meterAnalyser.ctx?.close().catch(() => {});
         meterAnalyser = null;
     }
     const el = document.getElementById("mic-meter");

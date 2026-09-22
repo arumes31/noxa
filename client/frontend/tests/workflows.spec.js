@@ -1,5 +1,3222 @@
 import { expect, test } from "@playwright/test";
 
+test.describe("own role overview", () => {
+    test("role overview uses visible own roles without retired queries", async ({ page }) => {
+        await page.evaluate(async () => {
+            const v = window.__noxa;
+            Object.assign(v.state, { authorizationModel: "roles-v1", myClientID: "self", clients: [{ client_id: "self", roles: [{ id: 1, name: "Member", position: 1 }] }] });
+            await v.refreshPermissions();
+        });
+        expect(await page.evaluate(() => window.__calls.GetPermissions || 0)).toBe(0);
+        await expect(page.locator("#perm-area")).toContainText("Member");
+        await expect(page.locator("#perm-area .perm-grid")).toHaveCount(0);
+    });
+    test("own role overview follows current self snapshots", async ({ page }) => {
+        await page.evaluate(async () => {
+            const v = window.__noxa;
+            Object.assign(v.state, { authorizationModel: "roles-v1", myClientID: "self", myChannelID: 0,
+                clients: [{ client_id: "self", channel_id: 0, roles: [{ id: 1, name: "Member", position: 1 }] }] });
+            await v.refreshPermissions();
+            v.state.clients[0].roles = [{ id: 2, name: "Moderator", position: 2 }];
+            v.syncOwnChannel({ audible: false });
+        });
+        await expect(page.locator("#perm-area")).toContainText("Moderator");
+        await expect(page.locator("#perm-area")).not.toContainText("Member");
+        expect(await page.evaluate(() => window.__calls.GetPermissions || 0)).toBe(0);
+    });
+});
+
+test.describe("tray reconnect source ownership", () => {
+    test("disconnect retires a late fallback guest connection", async ({ page }) => {
+        await page.evaluate(() => {
+            window.__noxa.state.lastSuccessfulConnect = null;
+            window.__noxa.state.settings.bookmarks = [{ name: "Original", addr: "original.example:12333", nickname: "Alice" }];
+            window.__guestConnectHandler = () => new Promise(resolve => { window.__finishGuestTray = resolve; });
+            for (const cb of window.__events.tray_reconnect || []) cb();
+        });
+        await expect.poll(() => page.evaluate(() => typeof window.__finishGuestTray)).toBe("function");
+        await page.evaluate(async () => {
+            await window.__noxa.disconnect();
+            window.__finishGuestTray({ tab_id: "obsolete-guest", error: "" });
+        });
+        await expect.poll(() => page.evaluate(() => window.__callArgs.CloseTab || [])).toEqual([["obsolete-guest"]]);
+    });
+    for (const automatic of [false, true]) test(`obsolete connection failure cannot disturb replacement with auto retry ${automatic}`, async ({ page }) => {
+        await page.evaluate(automatic => {
+            const v = window.__noxa;
+            v.state.settings.reconnect_on_loss = automatic;
+            v.state.lastSuccessfulConnect = { addr: "source.example:12333", nick: "Alice" };
+            window.__connectBookmarkGate = new Promise(resolve => { window.__releaseTrayConnect = resolve; });
+            window.__connectBookmarkResult = "connection failed";
+            for (const cb of window.__events.tray_reconnect || []) cb();
+        }, automatic);
+        await expect.poll(() => page.evaluate(() => window.__calls.ConnectBookmarkTabWithID || 0)).toBe(1);
+        await page.evaluate(() => {
+            const v = window.__noxa;
+            v.state.activeTabID = "replacement"; v.state.serverGeneration++;
+            v.state.lastConnect = { addr: "replacement.example:12333", nick: "Bob" };
+            v.showWorkspace(false);
+            window.__releaseTrayConnect();
+        });
+        await expect.poll(() => page.evaluate(() => window.__noxa.state.reconnectInFlight)).toBe(false);
+        expect(await page.evaluate(() => window.__noxa.state.reconnectAttempts)).toBe(0);
+        await expect(page.locator("#login-overlay")).toBeHidden();
+    });
+    test("fallback bookmark is frozen before the status read", async ({ page }) => {
+        await page.evaluate(() => {
+            const v = window.__noxa;
+            v.state.lastSuccessfulConnect = null;
+            v.state.settings.bookmarks = [{ name: "Original", addr: "original.example:12333", nickname: "Alice" }];
+            const app = window.go.main.App;
+            window.go.main.App = new Proxy(app, { get(target, key) {
+                if (key === "ListTabs") return async () => await new Promise(resolve => { window.__finishTrayLookup = resolve; });
+                return target[key];
+            } });
+            for (const cb of window.__events.tray_reconnect || []) cb();
+        });
+        await expect.poll(() => page.evaluate(() => typeof window.__finishTrayLookup)).toBe("function");
+        await page.evaluate(() => {
+            window.__noxa.state.settings.bookmarks[0].addr = "changed.example:12333";
+            window.__finishTrayLookup([]);
+        });
+        await expect.poll(() => page.evaluate(() => window.__calls.ConnectGuestBookmarkTabWithID || 0)).toBe(1);
+        expect(await page.evaluate(() => window.__callArgs.ConnectGuestBookmarkTabWithID[0][1])).toBe("original.example:12333");
+    });
+    for (const scenario of ["native switch", "frontend switch", "disconnect", "read failure", "still offline"]) test(scenario, async ({ page }) => {
+        await page.evaluate(scenario => {
+            const v = window.__noxa;
+            v.state.activeTabID = "source";
+            v.state.settings.reconnect_on_loss = false;
+            v.state.lastSuccessfulConnect = { addr: "source.example:12333", nick: "Alice", pw: "", spw: "", bookmark: "" };
+            document.getElementById("conn-pill").classList.remove("up");
+            const app = window.go.main.App;
+            window.__trayCheck = { scenario, lookups: [] };
+            window.go.main.App = new Proxy(app, { get(target, key) {
+                if (!["Connected", "ListTabs"].includes(key)) return target[key];
+                return async () => {
+                    const f = window.__trayCheck;
+                    f.lookups.push(key);
+                    if (f.finished) return key === "Connected" ? false : [{ id: "source", active: true, connected: false }];
+                    await new Promise(resolve => { f.release = resolve; });
+                    f.finished = true;
+                    if (scenario === "read failure") throw new Error("status unavailable");
+                    return key === "Connected" ? false : [{ id: scenario === "native switch" ? "other" : "source", active: true, connected: false }];
+                };
+            } });
+            for (const cb of window.__events.tray_reconnect || []) cb();
+        }, scenario);
+        await expect.poll(() => page.evaluate(() => typeof window.__trayCheck.release)).toBe("function");
+        await page.evaluate(scenario => {
+            const v = window.__noxa;
+            if (scenario === "frontend switch") {
+                v.state.activeTabID = "other";
+                v.state.serverGeneration++;
+                v.state.lastSuccessfulConnect = { addr: "other.example:12333", nick: "Bob", pw: "", spw: "", bookmark: "" };
+            }
+            if (scenario === "disconnect") void v.disconnect();
+            window.__trayCheck.release();
+        }, scenario);
+        await expect.poll(() => page.evaluate(() => window.__trayCheck.finished)).toBe(true);
+        if (scenario === "still offline") {
+            await expect.poll(() => page.evaluate(() => window.__calls.ConnectBookmarkTabWithID || 0)).toBe(1);
+            expect(await page.evaluate(() => window.__callArgs.ConnectBookmarkTabWithID[0][1])).toBe("source.example:12333");
+        } else {
+            expect(await page.evaluate(() => window.__calls.ConnectBookmarkTabWithID || 0)).toBe(0);
+        }
+        expect(await page.evaluate(() => window.__trayCheck.lookups[0])).toBe("ListTabs");
+    });
+});
+
+test.describe("confirmed tab-bound media controls", () => {
+    test.beforeEach(async ({ page }) => {
+        await page.evaluate(() => {
+            const v = window.__noxa;
+            v.showWorkspace(false);
+            Object.assign(v.state, { activeTabID: "server-a", myClientID: "self", myChannelID: 42, lastWhispererUID: "peer", myPriority: false, whisperArmed: false });
+            const f = window.__controls = { nativeTab: "server-a", effects: [], errors: [], pending: [] };
+            v.sysMsg = message => f.errors.push(message);
+            const app = window.go.main.App;
+            window.go.main.App = new Proxy(app, { get(target, key) {
+                if (!["SetPrioritySpeaker", "WhisperSet", "SetVideoQuality"].includes(key.replace(/ForTab$/, ""))) return target[key];
+                return async (...args) => {
+                    const tab = key.endsWith("ForTab") ? args.shift() : f.nativeTab;
+                    if (tab !== f.nativeTab) return "server changed";
+                    f.effects.push([key.replace(/ForTab$/, ""), tab, ...args]);
+                    return await new Promise(resolve => f.pending.push(resolve));
+                };
+            } });
+            window.__runControl = action => {
+                if (action === "priority") return document.getElementById("voice-prio").onclick();
+                return Promise.all((window.__events.hotkey || []).map(cb => cb("whisper_reply")));
+            };
+        });
+    });
+    for (const action of ["priority", "whisper"]) {
+        test(`${action} rejects native activation before frontend reset`, async ({ page }) => {
+            await page.evaluate(action => { window.__controls.nativeTab = "server-b"; window.__controlAction = window.__runControl(action); }, action);
+            await expect.poll(() => page.evaluate(() => window.__controls.effects.length)).toBe(0);
+            expect(await page.evaluate(() => window.__noxa.state.myPriority || window.__noxa.state.whisperArmed)).toBe(false);
+        });
+        test(`${action} waits for confirmation and contains denial`, async ({ page }) => {
+            await page.evaluate(action => { window.__controlAction = window.__runControl(action); }, action);
+            await expect.poll(() => page.evaluate(() => window.__controls.pending.length)).toBe(1);
+            expect(await page.evaluate(() => window.__noxa.state.myPriority || window.__noxa.state.whisperArmed)).toBe(false);
+            await page.evaluate(async () => { window.__controls.pending.shift()("denied"); await window.__controlAction; });
+            expect(await page.evaluate(() => window.__noxa.state.myPriority || window.__noxa.state.whisperArmed)).toBe(false);
+        });
+        test(`${action} ignores an old successful completion`, async ({ page }) => {
+            await page.evaluate(action => { window.__controlAction = window.__runControl(action); }, action);
+            await expect.poll(() => page.evaluate(() => window.__controls.pending.length)).toBe(1);
+            await page.evaluate(async () => {
+                const s = window.__noxa.state;
+                s.activeTabID = "server-b"; s.serverGeneration++; s.myPriority = false; s.whisperArmed = false;
+                window.__controls.pending.shift()(""); await window.__controlAction;
+            });
+            expect(await page.evaluate(() => window.__noxa.state.myPriority || window.__noxa.state.whisperArmed)).toBe(false);
+        });
+    }
+    test("priority confirmation does not invert an earlier authoritative event", async ({ page }) => {
+        await page.evaluate(() => { window.__controlAction = window.__runControl("priority"); });
+        await expect.poll(() => page.evaluate(() => window.__controls.pending.length)).toBe(1);
+        await page.evaluate(async () => {
+            for (const cb of window.__events.event || []) cb(JSON.stringify({ type: "priority_speaker_changed", data: { client_id: "self", active: true } }));
+            window.__controls.pending.shift()(""); await window.__controlAction;
+        });
+        expect(await page.evaluate(() => window.__noxa.state.myPriority)).toBe(true);
+    });
+    test("whisper reply preserves its confirmed target and failed restore remains armed", async ({ page }) => {
+        await page.evaluate(() => { window.__controlAction = window.__runControl("whisper"); });
+        await expect.poll(() => page.evaluate(() => window.__controls.pending.length)).toBe(1);
+        await page.evaluate(async () => {
+            window.__noxa.state.lastWhispererUID = "new-incoming-peer";
+            window.__controls.pending.shift()(""); await window.__controlAction;
+        });
+        expect(await page.evaluate(() => window.__noxa.state.whisperTargetUID)).toBe("peer");
+        await expect(page.locator("#voice-status")).toContainText("whisper → peer");
+        await page.evaluate(() => { window.__controlAction = window.__runControl("whisper"); });
+        await expect.poll(() => page.evaluate(() => window.__controls.pending.length)).toBe(1);
+        await page.evaluate(async () => { window.__controls.pending.shift()("restore denied"); await window.__controlAction; });
+        expect(await page.evaluate(() => window.__noxa.state.whisperArmed)).toBe(true);
+        expect(await page.evaluate(() => window.__noxa.state.whisperTargetUID)).toBe("peer");
+    });
+    test("voice teardown declares stop sharing only for the original tab", async ({ page }) => {
+        await page.evaluate(() => {
+            const s = window.__noxa.state;
+            s.voiceTabID = "server-a";
+            s.activeTabID = "server-b";
+            s.shareStream = document.createElement("canvas").captureStream(1);
+            s.screenSharing = true;
+            window.__noxa.resetVoiceSession();
+        });
+        expect(await page.evaluate(() => window.__callArgs.SetScreenShareForTab.at(-1))).toEqual(["server-a", false]);
+    });
+    for (const scenario of ["retry", "reopen retry", "server switch"]) test(`whisper settings preserve ${scenario} ownership`, async ({ page }) => {
+        await installSaveScenario(page, { whisper_active: false, whisper_clients: [], whisper_channels: [] });
+        await page.evaluate(() => {
+            window.__saveMode = "success";
+            window.__noxa.state.channels = [{ ChannelID: 42, Name: "Original room" }];
+            window.__noxa.openSettings("whisper");
+        });
+        await page.getByRole("checkbox", { name: "Activate whisper", exact: true }).check();
+        await page.getByRole("checkbox", { name: "Original room", exact: true }).check();
+        if (scenario === "server switch") {
+            await page.evaluate(() => {
+                window.__noxa.state.activeTabID = "server-b";
+                window.__noxa.state.serverGeneration++;
+                window.__controls.nativeTab = "server-b";
+            });
+            await page.locator("#set-apply").click();
+            await expect(page.locator("#settings-overlay")).not.toHaveAttribute("aria-busy", "true");
+            expect(await page.evaluate(() => window.__controls.effects)).toEqual([]);
+            return;
+        }
+        await page.locator("#set-apply").click();
+        await expect.poll(() => page.evaluate(() => window.__controls.pending.length)).toBe(1);
+        await page.evaluate(() => window.__controls.pending.shift()("whisper denied"));
+        await expect(page.locator(".settings-save-status")).toContainText("whisper denied");
+        if (scenario === "reopen retry") {
+            await page.locator("#set-cancel").click();
+            await page.evaluate(() => window.__noxa.openSettings("whisper"));
+        }
+        await page.locator("#set-apply").click();
+        await expect.poll(() => page.evaluate(() => window.__controls.effects.length)).toBe(2);
+        await page.evaluate(() => window.__controls.pending.shift()(""));
+        await expect(page.locator("#settings-overlay")).not.toHaveAttribute("aria-busy", "true");
+    });
+});
+
+test.describe("tab-bound voice signaling", () => {
+    test.beforeEach(async ({ page }) => {
+        await page.evaluate(() => {
+            const v = window.__noxa;
+            v.showWorkspace(false);
+            Object.assign(v.state, { activeTabID: "server-a", myChannelID: 42, channels: [{ ChannelID: 42, Name: "Voice" }] });
+            const f = window.__voiceScope = { nativeTab: "server-b", calls: [], effects: [] };
+            const app = window.go.main.App;
+            window.go.main.App = new Proxy(app, { get(target, key) {
+                const method = key.replace(/ForTab$/, "");
+                if (!["GetICEServers", "GetMediaLimits", "WebRTCOffer", "WebRTCAnswer", "SendICECandidate"].includes(method)) return target[key];
+                return async (...args) => {
+                    const tab = key.endsWith("ForTab") ? args.shift() : f.nativeTab;
+                    f.calls.push([method, tab, ...args]);
+                    if (tab !== f.nativeTab) throw new Error("server changed");
+                    f.effects.push([method, tab, ...args]);
+                    if (method === "GetICEServers") return [];
+                    if (method === "GetMediaLimits") return {};
+                    if (method === "WebRTCOffer") {
+                        if (f.holdOffer) return await new Promise(resolve => { f.resolveOffer = resolve; });
+                        return "answer";
+                    }
+                };
+            } });
+        });
+    });
+    test("voice metadata cannot come from the newly active native tab", async ({ page }) => {
+        await page.evaluate(async () => {
+            window.__voiceScope.capture = document.createElement("canvas").captureStream(1);
+            navigator.mediaDevices.getUserMedia = async () => window.__voiceScope.capture;
+            await window.__noxa.ensureVoiceForChannel();
+        });
+        expect(await page.evaluate(() => window.__voiceScope.effects)).toEqual([]);
+        expect(await page.evaluate(() => window.__voiceScope.calls.map(call => call.slice(0, 2)))).toEqual([["GetICEServers", "server-a"], ["GetMediaLimits", "server-a"]]);
+        expect(await page.evaluate(() => window.__voiceScope.capture.getTracks()[0].readyState)).toBe("ended");
+    });
+    for (const action of ["offer", "answer"]) test(`${action} remains bound across native activation`, async ({ page }) => {
+        await page.evaluate(async action => {
+            const video = await import("/src/video.js");
+            const identity = "a=ice-ufrag:original\r\na=ice-pwd:original-secret";
+            const pc = window.__noxa.state.pc = {
+                remoteDescription: { sdp: identity },
+                createOffer: async () => ({ type: "offer", sdp: "offer" }),
+                createAnswer: async () => ({ type: "answer", sdp: "answer" }),
+                setLocalDescription: async () => {},
+                setRemoteDescription: async () => {},
+                getSenders: () => [],
+            };
+            try {
+                if (action === "offer") await video.renegotiate(pc);
+                else await video.answerRemoteOffer(pc, window.__noxa.state.serverGeneration, identity);
+            } catch { /* stale native tab is expected */ }
+        }, action);
+        expect(await page.evaluate(() => window.__voiceScope.effects)).toEqual([]);
+        expect(await page.evaluate(() => window.__voiceScope.calls.map(call => call.slice(0, 2)))).toEqual([[action === "offer" ? "WebRTCOffer" : "WebRTCAnswer", "server-a"]]);
+    });
+    for (const slot of ["mic", "cam", "screenaudio"]) test(`ending a replaced ${slot} track preserves its successor`, async ({ page }) => {
+        await page.evaluate(() => {
+            window.__voiceScope.nativeTab = "server-a";
+            window.__voiceScope.holdOffer = true;
+            navigator.mediaDevices.getUserMedia = async () => new MediaStream();
+            window.__voiceStart = window.__noxa.ensureVoiceForChannel();
+        });
+        await expect.poll(() => page.evaluate(() => typeof window.__voiceScope.resolveOffer)).toBe("function");
+        const result = await page.evaluate(async slot => {
+            const v = window.__noxa;
+            const pc = v.state.pc;
+            const context = new AudioContext();
+            const capture = () => slot === "cam" ? document.createElement("canvas").captureStream(1) : context.createMediaStreamDestination().stream;
+            const first = capture();
+            const second = capture();
+            const id = slot === "mic" ? "publisher" : `publisher|${slot}`;
+            const playbacks = [];
+            const NativeAudio = window.Audio;
+            window.Audio = function (...args) {
+                const playback = new NativeAudio(...args);
+                playbacks.push(playback);
+                return playback;
+            };
+            for (const stream of [first, second]) {
+                Object.defineProperty(stream.getTracks()[0], "id", { value: id });
+                pc.ontrack({ track: stream.getTracks()[0], streams: [stream] });
+            }
+            first.getTracks()[0].dispatchEvent(new Event("ended"));
+            const result = { registered: v.state.trackUsers.has(id) };
+            window.Audio = NativeAudio;
+            if (slot !== "cam") result.playback = playbacks.at(-1)?.srcObject?.getTracks()[0] === second.getTracks()[0];
+            if (slot === "cam") result.tile = !!document.querySelector('.vtile[data-clid="publisher"]');
+            if (slot === "screenaudio") result.audio = v.shareAudioCtl.get("publisher");
+            v.state.myChannelID = 0;
+            v.resetVoiceSession();
+            for (const stream of [first, second]) stream.getTracks().forEach(track => track.stop());
+            await context.close();
+            window.__voiceScope.resolveOffer("obsolete answer");
+            await window.__voiceStart;
+            return result;
+        }, slot);
+        expect(result.registered).toBe(true);
+        if (slot !== "cam") expect(result.playback).toBe(true);
+        if (slot === "cam") expect(result.tile).toBe(true);
+        if (slot === "screenaudio") expect(result.audio).toEqual({ muted: false, volume: 100 });
+    });
+    for (const callback of ["ICE", "track"]) test(`replaced peers cannot deliver late ${callback} callbacks`, async ({ page }) => {
+        await page.evaluate(() => {
+            window.__voiceScope.nativeTab = "server-a";
+            window.__voiceScope.holdOffer = true;
+            navigator.mediaDevices.getUserMedia = async () => new MediaStream();
+            window.__voiceStart = window.__noxa.ensureVoiceForChannel();
+        });
+        await expect.poll(() => page.evaluate(() => typeof window.__voiceScope.resolveOffer)).toBe("function");
+        await page.evaluate(async callback => {
+            const v = window.__noxa;
+            const pc = v.state.pc;
+            if (!pc) throw new Error("voice fixture did not create a peer");
+            window.__voiceScope.calls = [];
+            v.state.pc = {};
+            pc.onicecandidate({ candidate: { candidate: "old-candidate", sdpMid: "0", sdpMLineIndex: 0 } });
+            if (callback === "track") {
+                const stream = document.createElement("canvas").captureStream(1);
+                const track = stream.getVideoTracks()[0];
+                pc.ontrack({ track, streams: [stream] });
+                window.__voiceScope.lateTrack = { readyState: track.readyState, registered: v.state.trackUsers.has(track.id) };
+            }
+            v.state.pc = pc;
+            v.state.myChannelID = 0;
+            v.resetVoiceSession();
+            window.__voiceScope.resolveOffer("obsolete answer");
+            await window.__voiceStart;
+        }, callback);
+        expect(await page.evaluate(() => window.__voiceScope.calls.filter(call => call[0] === "SendICECandidate"))).toEqual([]);
+        if (callback === "track") expect(await page.evaluate(() => window.__voiceScope.lateTrack)).toEqual({ readyState: "ended", registered: false });
+    });
+});
+
+test.describe("confirmed tab-bound presence", () => {
+    test.beforeEach(async ({ page }) => {
+        await page.evaluate(() => {
+            const v = window.__noxa;
+            v.showWorkspace(false);
+            Object.assign(v.state, { activeTabID: "server-a", myClientID: "self", authorizationModel: "roles-v1", myStatus: "", canSetInvisible: true, isAdmin: false });
+            const f = window.__presence = { nativeTab: "server-a", calls: [], pending: [], messages: [], errors: [], timers: [] };
+            v.sysMsg = msg => f.messages.push(msg);
+            v.toast = (...args) => f.errors.push(args);
+            const app = window.go.main.App;
+            window.go.main.App = new Proxy(app, { get(target, key) {
+                if (key !== "SetStatus" && key !== "SetStatusForTab") return target[key];
+                return async (...args) => {
+                    const tab = key === "SetStatusForTab" ? args.shift() : f.nativeTab;
+                    f.calls.push([tab, ...args]);
+                    if (tab !== f.nativeTab) return "server changed";
+                    return await new Promise((resolve, reject) => f.pending.push({ resolve, reject }));
+                };
+            } });
+            const timer = window.setTimeout;
+            window.setTimeout = (callback, ms, ...args) => {
+                if (ms === 60000) { const id = timer(() => {}, 3600000); f.timers.push({ id, callback }); return id; }
+                return timer(callback, ms, ...args);
+            };
+        });
+    });
+    test("status picker uses displayed tab during native activation", async ({ page }) => {
+        await page.evaluate(() => { window.__noxaSocial.openStatusPicker(); window.__presence.nativeTab = "server-b"; });
+        await page.locator('.st-sel').selectOption("busy");
+        await page.getByRole("button", { name: "Set", exact: true }).click();
+        await expect.poll(() => page.evaluate(() => window.__presence.calls)).toEqual([["server-a", "busy", ""]]);
+        expect(await page.evaluate(() => window.__noxa.state.myStatus)).toBe("");
+    });
+    test("role authority supplies invisible option and confirmed feedback", async ({ page }) => {
+        await page.evaluate(() => window.__noxaSocial.openStatusPicker());
+        await expect(page.locator('.st-sel option[value="invisible"]')).toHaveCount(1);
+        await page.locator('.st-sel').selectOption("invisible");
+        await page.getByRole("button", { name: "Set", exact: true }).click();
+        await expect.poll(() => page.evaluate(() => window.__presence.pending.length)).toBe(1);
+        expect(await page.evaluate(() => window.__noxa.state.myStatus)).toBe("");
+        await page.evaluate(() => window.__presence.pending[0].resolve(""));
+        await expect.poll(() => page.evaluate(() => window.__noxa.state.myStatus)).toBe("invisible");
+        expect(await page.evaluate(() => window.__presence.messages)).toEqual(["status: invisible"]);
+    });
+    test("legacy admin flag cannot enable invisible in role mode", async ({ page }) => {
+        await page.evaluate(() => { window.__noxa.state.canSetInvisible = false; window.__noxa.state.isAdmin = true; window.__noxaSocial.openStatusPicker(); });
+        await expect(page.locator('.st-sel option[value="invisible"]')).toHaveCount(0);
+    });
+    test("auto-away does not report success before confirmation", async ({ page }) => {
+        await page.evaluate(() => {
+            window.__noxa.state.settings.auto_away_minutes = 1;
+            document.dispatchEvent(new MouseEvent("mousemove"));
+            window.__presence.timers.at(-1).callback();
+        });
+        await expect.poll(() => page.evaluate(() => window.__presence.pending.length)).toBe(1);
+        expect(await page.evaluate(() => window.__noxa.state.myStatus)).toBe("");
+        await page.evaluate(() => window.__presence.pending[0].resolve("status denied"));
+        await expect.poll(() => page.evaluate(() => window.__presence.errors.length)).toBe(1);
+        expect(await page.evaluate(() => window.__noxa.state.myStatus)).toBe("");
+    });
+    test("old idle timer cannot set the replacement server away", async ({ page }) => {
+        await page.evaluate(() => {
+            window.__noxa.state.settings.auto_away_minutes = 1;
+            document.dispatchEvent(new MouseEvent("mousemove"));
+            const state = window.__noxa.state;
+            state.activeTabID = "server-b";
+            state.serverGeneration++;
+            window.__presence.nativeTab = "server-b";
+            window.__presence.timers.at(-1).callback();
+        });
+        expect(await page.evaluate(() => window.__presence.calls)).toEqual([]);
+    });
+    test("tab activation starts its own idle timer after session restoration", async ({ page }) => {
+        await page.evaluate(() => {
+            window.__noxa.state.settings.auto_away_minutes = 1;
+            const app = window.go.main.App;
+            window.go.main.App = new Proxy(app, { get(target, key) {
+                if (key === "SessionInfoForTab") return async () => ({ client_id: "self-b", connected: true, is_admin: false, is_guest: false });
+                return target[key];
+            } });
+            window.__presence.nativeTab = "server-b";
+            for (const callback of window.__events.tab_reset || []) callback("server-b");
+        });
+        await expect.poll(() => page.evaluate(() => window.__noxa.state.myClientID)).toBe("self-b");
+        await expect.poll(() => page.evaluate(() => window.__presence.timers.length)).toBe(1);
+        await page.evaluate(() => { void window.__presence.timers[0].callback(); });
+        await expect.poll(() => page.evaluate(() => window.__presence.calls)).toEqual([["server-b", "away", "auto-away"]]);
+    });
+    test("activity during pending auto-away restores online once", async ({ page }) => {
+        await page.evaluate(() => {
+            window.__noxa.state.settings.auto_away_minutes = 1;
+            document.dispatchEvent(new MouseEvent("mousemove"));
+            window.__presence.timers.at(-1).callback();
+        });
+        await expect.poll(() => page.evaluate(() => window.__presence.pending.length)).toBe(1);
+        await page.evaluate(() => {
+            for (let i = 0; i < 5; i++) document.dispatchEvent(new MouseEvent("mousemove"));
+        });
+        await expect.poll(() => page.evaluate(() => window.__presence.calls)).toEqual([["server-a", "away", "auto-away"], ["server-a", "online", ""]]);
+        await page.evaluate(() => window.__presence.pending[0].resolve(""));
+        expect(await page.evaluate(() => window.__noxa.state.myStatus)).toBe("");
+        await page.evaluate(() => window.__presence.pending[1].resolve(""));
+        expect(await page.evaluate(() => window.__noxa.state.myStatus)).toBe("");
+        await expect(page.locator('#chat-log')).not.toContainText("auto-away after");
+    });
+    test("a newer manual status owns completion and feedback", async ({ page }) => {
+        for (const status of ["busy", "invisible"]) {
+            await page.evaluate(() => window.__noxaSocial.openStatusPicker());
+            await page.locator('.st-sel').selectOption(status);
+            await page.getByRole("button", { name: "Set", exact: true }).click();
+        }
+        await expect.poll(() => page.evaluate(() => window.__presence.pending.length)).toBe(2);
+        await page.evaluate(() => window.__presence.pending[1].resolve(""));
+        await expect.poll(() => page.evaluate(() => window.__noxa.state.myStatus)).toBe("invisible");
+        await page.evaluate(() => window.__presence.pending[0].resolve(""));
+        expect(await page.evaluate(() => window.__noxa.state.myStatus)).toBe("invisible");
+        expect(await page.evaluate(() => window.__presence.messages)).toEqual(["status: invisible"]);
+    });
+    test("failed automatic restoration does not retry on every activity", async ({ page }) => {
+        await page.evaluate(() => {
+            window.__noxa.state.myStatus = "away";
+            document.dispatchEvent(new MouseEvent("mousemove"));
+        });
+        await expect.poll(() => page.evaluate(() => window.__presence.pending.length)).toBe(1);
+        await page.evaluate(() => window.__presence.pending[0].resolve("bridge unavailable"));
+        await expect.poll(() => page.evaluate(() => window.__presence.errors.length)).toBe(1);
+        await page.evaluate(() => {
+            for (let i = 0; i < 10; i++) document.dispatchEvent(new MouseEvent("mousemove"));
+        });
+        expect(await page.evaluate(() => window.__presence.calls)).toEqual([["server-a", "online", ""]]);
+        // A deliberate manual change can still recover immediately.
+        await page.evaluate(() => window.__noxaSocial.openStatusPicker());
+        await page.locator('.st-sel').selectOption("online");
+        await page.getByRole("button", { name: "Set", exact: true }).click();
+        await expect.poll(() => page.evaluate(() => window.__presence.pending.length)).toBe(2);
+        await page.evaluate(() => window.__presence.pending[1].resolve(""));
+        await expect.poll(() => page.evaluate(() => window.__noxa.state.myStatus)).toBe("");
+    });
+    for (const replaced of [true, false]) test(`bridge failure ${replaced ? "after replacement stays silent" : "is reported without changing status"}`, async ({ page }) => {
+        await page.evaluate(() => window.__noxaSocial.openStatusPicker());
+        await page.locator('.st-sel').selectOption("busy");
+        await page.getByRole("button", { name: "Set", exact: true }).click();
+        await expect.poll(() => page.evaluate(() => window.__presence.pending.length)).toBe(1);
+        await page.evaluate(replaced => {
+            if (replaced) { window.__noxa.state.serverGeneration++; window.__noxa.state.activeTabID = "server-b"; }
+            window.__presence.pending[0].reject(new Error("bridge unavailable"));
+        }, replaced);
+        expect(await page.evaluate(() => window.__noxa.state.myStatus)).toBe("");
+        expect(await page.evaluate(() => window.__presence.messages)).toEqual([]);
+        await expect.poll(() => page.evaluate(() => window.__presence.errors.length)).toBe(replaced ? 0 : 1);
+    });
+    test("snapshot and event restore authoritative self presence and eligibility", async ({ page }) => {
+        await page.evaluate(() => {
+            for (const callback of window.__events.snapshot || []) callback(JSON.stringify({ can_set_invisible: true, root_channels: [], unassigned_clients: [{ client_id: "self", unique_id: "me", status: "busy", channel_id: 0 }] }));
+        });
+        expect(await page.evaluate(() => [window.__noxa.state.myStatus, window.__noxa.state.canSetInvisible])).toEqual(["busy", true]);
+        await page.evaluate(() => {
+            for (const callback of window.__events.snapshot || []) callback(JSON.stringify({ root_channels: [], unassigned_clients: [{ client_id: "self", unique_id: "me", status: "", channel_id: 0 }] }));
+        });
+        expect(await page.evaluate(() => [window.__noxa.state.myStatus, window.__noxa.state.canSetInvisible])).toEqual(["", false]);
+        await page.evaluate(() => {
+            for (const callback of window.__events.event || []) callback(JSON.stringify({ type: "status_changed", data: { client_id: "self", status: "away", message: "back soon" } }));
+        });
+        expect(await page.evaluate(() => window.__noxa.state.myStatus)).toBe("away");
+    });
+});
+
+test.describe("tab-bound rules subscriptions and avatars", () => {
+    test.beforeEach(async ({ page }) => {
+        await page.evaluate(() => {
+            const v = window.__noxa;
+            v.showWorkspace(false);
+            Object.assign(v.state, { activeTabID: "server-a", myChannelID: 1 });
+            const f = window.__sessionActions = { nativeTab: "server-b", calls: [], effects: [], toasts: [] };
+            v.toast = (...args) => f.toasts.push(args);
+            const app = window.go.main.App;
+            window.go.main.App = new Proxy(app, { get(target, key) {
+                const method = key.replace(/ForTab$/, "");
+                if (!["AcceptServerRules", "SubscribeChannels", "GetAvatar", "Disconnect", "DisconnectTab"].includes(method)) return target[key];
+                return async (...args) => {
+                    const tab = key.endsWith("ForTab") || key === "DisconnectTab" ? args.shift() : f.nativeTab;
+                    f.calls.push([method, tab, ...args]);
+                    if (key !== "DisconnectTab" && tab !== f.nativeTab) {
+                        if (method === "GetAvatar") throw new Error("server changed");
+                        return "server changed";
+                    }
+                    f.effects.push([method, tab, ...args]);
+                    if (f.hold && method === "SubscribeChannels") return await new Promise(resolve => { f.resolve = resolve; });
+                    if (method === "GetAvatar") return {};
+                    return "";
+                };
+            } });
+        });
+    });
+    for (const action of ["accept", "decline", "subscribe", "avatar", "disconnect"]) {
+        test(`${action} stays on the displayed server before tab reset`, async ({ page }) => {
+            if (action === "accept" || action === "decline") {
+                await page.evaluate(async () => (await import("/src/notifications.js")).showServerRules({ text: "Be kind", hash: "revision-a" }));
+                await page.getByRole("button", { name: action === "accept" ? "Accept" : "Decline and disconnect", exact: true }).click();
+            } else if (action === "subscribe") {
+                await page.evaluate(async () => (await import("/src/chat-ui.js")).setChannelSubscription(3, true));
+            } else if (action === "disconnect") {
+                await page.evaluate(() => window.__noxa.disconnect());
+            } else {
+                await page.evaluate(() => window.__noxa.fetchAvatar("peer"));
+            }
+            const calls = await page.evaluate(() => window.__sessionActions.calls);
+            expect(calls).toHaveLength(1);
+            expect(calls[0][1]).toBe("server-a");
+            expect(await page.evaluate(() => window.__sessionActions.effects)).toEqual(["decline", "disconnect"].includes(action) ? [["DisconnectTab", "server-a"]] : []);
+        });
+    }
+    for (const replacement of [true, false]) test(`late subscription rejection preserves the ${replacement ? "replacement server" : "newer request"} pending tab`, async ({ page }) => {
+        await page.evaluate(async () => {
+            const chat = await import("/src/chat-ui.js");
+            const f = window.__sessionActions;
+            f.nativeTab = "server-a";
+            f.hold = true;
+            window.__oldSubscription = chat.openChannelTab(3);
+        });
+        await expect.poll(() => page.evaluate(() => typeof window.__sessionActions.resolve)).toBe("function");
+        await page.evaluate(async replacement => {
+            const chat = await import("/src/chat-ui.js");
+            const f = window.__sessionActions;
+            if (replacement) {
+                Object.assign(window.__noxa.state, { activeTabID: "server-b", serverGeneration: window.__noxa.state.serverGeneration + 1 });
+                chat.resetView();
+                f.nativeTab = "server-b";
+            }
+            f.hold = false;
+            await chat.openChannelTab(3);
+            f.resolve("old server denied");
+            await window.__oldSubscription;
+            chat.onSubscriptions({ channel_ids: [1, 3] });
+        }, replacement);
+        expect(await page.evaluate(() => window.__sessionActions.toasts)).toEqual(replacement ? [] : [["subscribe failed: old server denied", "warn"]]);
+        await expect(page.locator('.channel-tab.active')).toContainText("3");
+    });
+    test("rules success waits for the server event and preserves the displayed hash", async ({ page }) => {
+        await page.evaluate(async () => {
+            window.__sessionActions.nativeTab = "server-a";
+            (await import("/src/notifications.js")).showServerRules({ text: "Be kind", hash: "revision-a" });
+        });
+        await page.getByRole("button", { name: "Accept", exact: true }).click();
+        expect(await page.evaluate(() => window.__sessionActions.calls)).toEqual([["AcceptServerRules", "server-a", "revision-a"]]);
+        await expect(page.locator('.server-rules-gate')).toContainText("recording acceptance");
+        await page.evaluate(() => {
+            for (const callback of window.__events.server_rules || []) callback(JSON.stringify({ text: "", hash: "" }));
+        });
+        await expect(page.locator('.server-rules-gate')).toHaveCount(0);
+    });
+    for (const action of ["accept", "decline"]) test(`rules ${action} bridge rejection restores controls`, async ({ page }) => {
+        await page.evaluate(async action => {
+            const app = window.go.main.App;
+            window.go.main.App = new Proxy(app, { get(target, key) {
+                if (key === (action === "accept" ? "AcceptServerRulesForTab" : "DisconnectTab")) return async () => { throw new Error("bridge unavailable"); };
+                return target[key];
+            } });
+            (await import("/src/notifications.js")).showServerRules({ text: "Be kind", hash: "revision-a" });
+        }, action);
+        await page.getByRole("button", { name: action === "accept" ? "Accept" : "Decline and disconnect", exact: true }).click();
+        await expect(page.locator('.server-rules-gate')).toContainText("bridge unavailable");
+        await expect(page.getByRole("button", { name: "Accept", exact: true })).toBeEnabled();
+        await expect(page.getByRole("button", { name: "Decline and disconnect" })).toBeEnabled();
+    });
+});
+
+test.describe("DM identity context lifecycle", () => {
+    test.beforeEach(async ({ page }) => {
+        await page.evaluate(() => {
+            const v = window.__noxa;
+            v.showWorkspace(false);
+            Object.assign(v.state, { activeTabID: "server-a", myUniqueID: "display-identity", myChannelID: 1 });
+            const f = window.__dmIdentity = {
+                native: { tab_id: "server-a", identity_uid: "storage-identity", activation: "4", identity_revision: "0" },
+                calls: [], effects: [], acquisitions: [], pending: [], toasts: [], unhandled: [], hold: false,
+            };
+            v.toast = (...args) => f.toasts.push(args);
+            window.addEventListener("unhandledrejection", event => f.unhandled.push(String(event.reason)));
+            const app = window.go.main.App;
+            window.go.main.App = new Proxy(app, { get(target, key) {
+                if (key === "DMHistoryContextForTab") return async tab => {
+                    f.acquisitions.push(tab);
+                    if (tab !== f.native.tab_id) throw new Error("server changed");
+                    const value = structuredClone(f.native);
+                    if (f.hold) return await new Promise((resolve, reject) => f.pending.push({ value, resolve, reject }));
+                    return value;
+                };
+                const method = key.replace(/ForContext$/, "");
+                if (!["DMHistoryLoad", "DMHistoryAppend", "DMHistoryClear", "DMHistoryPeers", "DMSearch", "DMExportHistory"].includes(method)) return target[key];
+                return async (...args) => {
+                    const context = key.endsWith("ForContext") ? args.shift() : structuredClone(f.native);
+                    f.calls.push([method, context, ...args]);
+                    if (JSON.stringify(context) !== JSON.stringify(f.native)) {
+                        if (["DMHistoryAppend", "DMHistoryClear"].includes(method)) return "DM history owner changed";
+                        throw new Error("DM history owner changed");
+                    }
+                    f.effects.push([method, context, ...args]);
+                    if (method === "DMHistoryLoad") return [{ body: "stored for " + context.identity_uid, sent_at: 1 }];
+                    if (method === "DMHistoryPeers") return [];
+                    if (method === "DMSearch") return { messages: [], scanned: 0 };
+                    if (method === "DMExportHistory") return { text: "private transcript", messages: 1, complete: true };
+                    return "";
+                };
+            } });
+            window.__dmIdentityChanged = revision => {
+                f.native = { ...f.native, identity_uid: "replacement-identity", identity_revision: revision };
+                for (const callback of window.__events.dm_history_identity_changed || []) callback(revision);
+            };
+            window.__noxaChat.resetView();
+        });
+        await page.evaluate(() => new Promise(resolve => setTimeout(resolve, 0)));
+        await page.evaluate(() => { window.__dmIdentity.calls.length = 0; window.__dmIdentity.effects.length = 0; });
+    });
+    test("native activation before reset cannot redirect a DM history load", async ({ page }) => {
+        await page.evaluate(() => {
+            window.__dmIdentity.native.tab_id = "server-b";
+            window.__noxaChat.openPM("peer", "Peer");
+        });
+        await expect.poll(() => page.evaluate(() => window.__dmIdentity.calls.length)).toBe(1);
+        expect(await page.evaluate(() => window.__dmIdentity.effects)).toEqual([]);
+        expect(await page.evaluate(() => window.__dmIdentity.calls[0][1].identity_uid)).toBe("storage-identity");
+    });
+    test("identity change before notification cannot redirect a pending clear", async ({ page }) => {
+        await page.evaluate(() => window.__noxaChat.openPM("peer", "Peer"));
+        await expect(page.locator("#chat-log")).toContainText("stored for storage-identity");
+        await page.locator(".pm-tab").click({ button: "right" });
+        await page.evaluate(() => { window.__dmIdentity.native.identity_uid = "replacement-identity"; window.__dmIdentity.native.identity_revision = "2"; });
+        await page.getByRole("button", { name: "Delete history", exact: true }).click();
+        await expect.poll(() => page.evaluate(() => window.__dmIdentity.calls.filter(call => call[0] === "DMHistoryClear").length)).toBe(1);
+        expect(await page.evaluate(() => window.__dmIdentity.effects.filter(call => call[0] === "DMHistoryClear"))).toEqual([]);
+        await expect(page.locator("#chat-log")).toContainText("stored for storage-identity");
+        expect(await page.evaluate(() => window.__dmIdentity.acquisitions.length)).toBe(1);
+    });
+    test("same-tab identity event replaces DM state and ignores duplicate or older revisions", async ({ page }) => {
+        await page.evaluate(() => window.__noxaChat.openPM("peer", "Peer"));
+        await expect(page.locator("#chat-log")).toContainText("stored for storage-identity");
+        await page.evaluate(() => window.__dmIdentityChanged("2"));
+        await expect(page.locator("#chat-log")).not.toContainText("stored for storage-identity");
+        await page.evaluate(() => window.__noxaChat.openPM("peer", "Peer"));
+        await expect(page.locator("#chat-log")).toContainText("stored for replacement-identity");
+        await page.evaluate(() => {
+            for (const revision of ["1", "2"]) for (const callback of window.__events.dm_history_identity_changed || []) callback(revision);
+        });
+        await expect(page.locator("#chat-log")).toContainText("stored for replacement-identity");
+        expect(await page.evaluate(() => window.__dmIdentity.acquisitions.length)).toBe(2);
+    });
+    test("late context acquisition cannot authorize actions from an obsolete owner", async ({ page }) => {
+        await page.evaluate(() => {
+            window.__dmIdentity.hold = true;
+            window.__noxaChat.resetView();
+            window.__noxaChat.openPM("peer", "Peer");
+        });
+        await expect.poll(() => page.evaluate(() => window.__dmIdentity.pending.length)).toBe(1);
+        await page.evaluate(() => window.__dmIdentityChanged("2"));
+        await expect.poll(() => page.evaluate(() => window.__dmIdentity.pending.length)).toBe(2);
+        await page.evaluate(() => { const p = window.__dmIdentity.pending[0]; p.resolve(p.value); });
+        await page.evaluate(() => new Promise(resolve => requestAnimationFrame(resolve)));
+        expect(await page.evaluate(() => window.__dmIdentity.effects)).toEqual([]);
+        expect(await page.evaluate(() => window.__dmIdentity.toasts)).toEqual([]);
+        await page.evaluate(() => { const p = window.__dmIdentity.pending[1]; p.resolve(p.value); });
+        await page.evaluate(() => window.__noxaChat.openPM("peer", "Peer"));
+        await expect(page.locator("#chat-log")).toContainText("stored for replacement-identity");
+    });
+    test("offline history uses a frozen offline context", async ({ page }) => {
+        await page.evaluate(() => {
+            window.__dmIdentity.native = { ...window.__dmIdentity.native, tab_id: "", activation: "5" };
+            window.__noxa.state.activeTabID = "";
+            window.__noxa.state.serverGeneration++;
+            window.__noxaChat.resetView();
+            window.__noxaChat.openPM("peer", "Peer");
+        });
+        await expect(page.locator("#chat-log")).toContainText("stored for storage-identity");
+        expect(await page.evaluate(() => window.__dmIdentity.acquisitions.at(-1))).toBe("");
+        expect(await page.evaluate(() => window.__dmIdentity.calls.at(-1)[1].tab_id)).toBe("");
+    });
+    test("newer getter response before notification invalidates its waiting actions", async ({ page }) => {
+        await page.evaluate(() => {
+            window.__dmIdentity.hold = true;
+            window.__noxaChat.resetView();
+            window.__noxaChat.openPM("peer", "Peer");
+        });
+        await expect.poll(() => page.evaluate(() => window.__dmIdentity.pending.length)).toBe(1);
+        await page.evaluate(() => {
+            const f = window.__dmIdentity;
+            f.native = { ...f.native, identity_uid: "replacement-identity", identity_revision: "2" };
+            f.pending[0].resolve(structuredClone(f.native));
+        });
+        await expect.poll(() => page.evaluate(() => window.__dmIdentity.pending.length)).toBe(2);
+        expect(await page.evaluate(() => window.__dmIdentity.effects)).toEqual([]);
+        await page.evaluate(() => { const p = window.__dmIdentity.pending[1]; p.resolve(p.value); });
+        await page.evaluate(() => window.__noxaChat.openPM("peer", "Peer"));
+        await expect(page.locator("#chat-log")).toContainText("stored for replacement-identity");
+        await page.evaluate(() => window.__dmIdentityChanged("2"));
+        await expect(page.locator("#chat-log")).toContainText("stored for replacement-identity");
+        expect(await page.evaluate(() => window.__dmIdentity.pending.length)).toBe(2);
+    });
+    test("reopening recovers failed acquisition without replaying old descendants", async ({ page }) => {
+        await page.evaluate(() => { window.__dmIdentity.hold = true; window.__noxaChat.resetView(); window.__noxaChat.openPM("peer", "Peer"); });
+        await expect.poll(() => page.evaluate(() => window.__dmIdentity.pending.length)).toBe(1);
+        await page.evaluate(() => window.__dmIdentity.pending[0].reject(new Error("temporary context failure")));
+        await expect.poll(() => page.evaluate(() => window.__dmIdentity.toasts.length)).toBe(1);
+        await page.locator(".pm-tab .pm-close").click();
+        await page.evaluate(() => { window.__dmIdentity.hold = false; window.__noxaChat.openPM("peer", "Peer"); });
+        await expect(page.locator("#chat-log")).toContainText("stored for storage-identity");
+        expect(await page.evaluate(() => window.__dmIdentity.effects.filter(call => call[0] === "DMHistoryLoad").length)).toBe(1);
+        expect(await page.evaluate(() => window.__dmIdentity.unhandled)).toEqual([]);
+    });
+    test("replayed outgoing DM uses the connection identity before context acquisition finishes", async ({ page }) => {
+        await page.evaluate(() => {
+            const f = window.__dmIdentity;
+            f.hold = true;
+            window.__noxaChat.resetView();
+            window.__noxa.state.myUniqueID = "other-tab-identity";
+            for (const callback of window.__events.tab_identity || []) callback({ tab_id: "server-a", identity_uid: "storage-identity" });
+            window.__noxaChat.addChat({ direct: true, enc_verified: true, from_unique_id: "storage-identity", to_unique_id: "recipient", from: "Self", client_msg_id: "replayed", text: "outgoing replay" });
+        });
+        await expect.poll(() => page.evaluate(() => window.__dmIdentity.pending.length)).toBe(1);
+        await page.evaluate(() => { const p = window.__dmIdentity.pending[0]; p.resolve(p.value); });
+        await expect.poll(() => page.evaluate(() => window.__dmIdentity.effects.filter(call => call[0] === "DMHistoryAppend").length)).toBe(1);
+        const append = await page.evaluate(() => window.__dmIdentity.effects.find(call => call[0] === "DMHistoryAppend"));
+        expect(append[2]).toBe("recipient");
+        expect(append[4].self).toBe(true);
+    });
+    for (const operation of ["append", "search", "export"]) {
+        test(`native identity change cannot redirect DM ${operation}`, async ({ page }) => {
+            await page.evaluate(() => window.__noxaChat.openPM("peer", "Peer"));
+            await expect(page.locator("#chat-log")).toContainText("stored for storage-identity");
+            await page.evaluate(() => { window.__dmIdentity.native.identity_uid = "replacement-identity"; window.__dmIdentity.native.identity_revision = "2"; });
+            if (operation === "append") {
+                await page.evaluate(() => window.__noxaChat.addChat({ direct: true, enc_verified: true, from_unique_id: "peer", from: "Peer", client_msg_id: "incoming", text: "incoming" }));
+            } else if (operation === "search") {
+                await page.evaluate(() => {
+                    document.getElementById("chat-search-btn").click();
+                    document.getElementById("chat-search").value = "needle";
+                    document.getElementById("chat-search-server").click();
+                });
+            } else {
+                await page.evaluate(() => document.getElementById("chat-export-btn").click());
+                await page.locator('input[placeholder^="passphrase"]').fill("export-password");
+                await page.getByRole("button", { name: "Export", exact: true }).click();
+            }
+            const method = { append: "DMHistoryAppend", search: "DMSearch", export: "DMExportHistory" }[operation];
+            await expect.poll(() => page.evaluate(method => window.__dmIdentity.calls.filter(call => call[0] === method).length, method)).toBe(1);
+            expect(await page.evaluate(method => window.__dmIdentity.effects.filter(call => call[0] === method), method)).toEqual([]);
+            expect(await page.evaluate(() => window.__dmIdentity.acquisitions.length)).toBe(1);
+            expect(await page.evaluate(() => window.__calls.ExportChatEncrypted || 0)).toBe(0);
+        });
+    }
+    test("identity reset closes old quick-switcher actions and cancels offline summaries", async ({ page }) => {
+        await page.evaluate(() => {
+            window.__noxaChat.openPM("peer", "Peer");
+            window.__noxaChat.addChat({ direct: true, offline: true, from_unique_id: "peer", from: "Peer", client_msg_id: "offline", text: "offline batch" });
+        });
+        await page.keyboard.press("Control+k");
+        await expect(page.locator(".qs-overlay")).toBeVisible();
+        await page.evaluate(() => {
+            window.__oldDMQuickRow = [...document.querySelectorAll(".qs-row")].find(row => row.textContent.includes("Peer"));
+            window.__dmIdentityChanged("2");
+        });
+        await expect(page.locator(".qs-overlay")).toHaveCount(0);
+        await page.evaluate(() => window.__oldDMQuickRow.click());
+        await page.waitForTimeout(800);
+        expect(await page.evaluate(() => window.__dmIdentity.effects.filter(call => call[0] === "DMHistoryLoad" && call[1].identity_revision === "2"))).toEqual([]);
+        expect(await page.evaluate(() => window.__dmIdentity.toasts)).toEqual([]);
+    });
+    test("malformed identity notifications cannot invalidate a valid owner", async ({ page }) => {
+        await page.evaluate(() => window.__noxaChat.openPM("peer", "Peer"));
+        await expect(page.locator("#chat-log")).toContainText("stored for storage-identity");
+        await page.evaluate(() => {
+            for (const revision of [null, {}, "-1", "NaN", "18446744073709551616"]) {
+                for (const callback of window.__events.dm_history_identity_changed || []) callback(revision);
+            }
+        });
+        await expect(page.locator("#chat-log")).toContainText("stored for storage-identity");
+        expect(await page.evaluate(() => window.__dmIdentity.acquisitions.length)).toBe(1);
+    });
+});
+
+test.describe("DM history callback ownership", () => {
+    test.beforeEach(async ({ page }) => {
+        await page.evaluate(() => {
+            const v = window.__noxa;
+            v.showWorkspace(false);
+            Object.assign(v.state, { activeTabID: "server-a", myUniqueID: "self", myChannelID: 1 });
+            const f = window.__dmScope = { loads: [], peers: [], clears: [], appends: [], toasts: [], unhandled: [] };
+            v.toast = (...args) => f.toasts.push(args);
+            window.addEventListener("unhandledrejection", event => f.unhandled.push(String(event.reason)));
+            const app = window.go.main.App;
+            window.go.main.App = new Proxy(app, { get(target, key) {
+                const list = { DMHistoryLoad: "loads", DMHistoryPeers: "peers", DMHistoryClear: "clears", DMHistoryAppend: "appends" }[key.replace(/ForContext$/, "")];
+                if (!list) return target[key];
+                return (...args) => new Promise((resolve, reject) => f[list].push({ args: key.endsWith("ForContext") ? args.slice(1) : args, resolve, reject }));
+            } });
+            window.__dmIncoming = body => window.__noxaChat.addChat({ direct: true, enc_verified: true, from_unique_id: "peer", from: "Peer", client_msg_id: body, text: body });
+        });
+        await page.evaluate(() => window.__noxaChat.openPM("bootstrap", "Bootstrap"));
+        await expect.poll(() => page.evaluate(() => window.__dmScope.loads.length)).toBe(1);
+        await page.evaluate(() => window.__dmScope.loads[0].resolve([]));
+        await page.locator(".pm-tab .pm-close").click();
+        await page.evaluate(() => { window.__dmScope.loads.length = 0; });
+    });
+    for (const reject of [false, true]) {
+        test(`obsolete history ${reject ? "failure" : "completion"} cannot repaint a reopened peer`, async ({ page }) => {
+            await page.evaluate(() => window.__noxaChat.openPM("peer", "Peer"));
+            await expect.poll(() => page.evaluate(() => window.__dmScope.loads.length)).toBe(1);
+            await page.locator(".pm-tab .pm-close").click();
+            await page.evaluate(() => window.__noxaChat.openPM("peer", "Peer"));
+            await expect.poll(() => page.evaluate(() => window.__dmScope.loads.length)).toBe(2);
+            await page.evaluate(() => window.__dmScope.loads[1].resolve([{ body: "current history", sent_at: 1 }]));
+            await expect(page.locator("#chat-log")).toContainText("current history");
+            await page.evaluate(reject => {
+                window.__currentDMRow = document.querySelector("#chat-log .msg");
+                const pending = window.__dmScope.loads[0];
+                if (reject) pending.reject(new Error("old history failed"));
+                else pending.resolve([{ body: "obsolete history", sent_at: 1 }]);
+            }, reject);
+            await page.evaluate(() => new Promise(resolve => requestAnimationFrame(resolve)));
+            expect(await page.evaluate(() => window.__currentDMRow.isConnected)).toBe(true);
+            expect(await page.evaluate(() => window.__dmScope.toasts)).toEqual([]);
+            await expect(page.locator("#chat-log")).not.toContainText("obsolete history");
+        });
+    }
+    test("old peer enumeration cannot restore tabs after a server reset", async ({ page }) => {
+        await page.evaluate(() => window.__noxaChat.resetView());
+        await expect.poll(() => page.evaluate(() => window.__dmScope.peers.length)).toBe(1);
+        await page.evaluate(() => { window.__noxa.state.serverGeneration++; window.__noxaChat.resetView(); });
+        await expect.poll(() => page.evaluate(() => window.__dmScope.peers.length)).toBe(2);
+        await page.evaluate(() => {
+            window.__dmScope.peers[1].resolve([]);
+            window.__dmScope.peers[0].resolve([{ unique_id: "old-peer", nickname: "Obsolete peer" }]);
+        });
+        await page.evaluate(() => new Promise(resolve => requestAnimationFrame(resolve)));
+        await expect(page.locator("#pm-tabs")).not.toContainText("Obsolete peer");
+    });
+    test("old persistence failure cannot consume the new session warning", async ({ page }) => {
+        await page.evaluate(() => {
+            window.__dmIncoming("first");
+            window.__noxa.state.serverGeneration++;
+            window.__noxaChat.resetView();
+            window.__dmIncoming("second");
+            window.__dmScope.toasts.length = 0;
+            window.__dmScope.appends[0].resolve("old storage failure");
+        });
+        await page.evaluate(() => new Promise(resolve => requestAnimationFrame(resolve)));
+        expect(await page.evaluate(() => window.__dmScope.toasts)).toEqual([]);
+        await page.evaluate(() => window.__dmScope.appends[1].resolve("current storage failure"));
+        await expect.poll(() => page.evaluate(() => window.__dmScope.toasts.length)).toBe(1);
+        expect(await page.evaluate(() => window.__dmScope.toasts[0][0])).toContain("current storage failure");
+    });
+    test("old persistence failure cannot warn in a reopened peer", async ({ page }) => {
+        await page.evaluate(() => { window.__noxaChat.openPM("peer", "Peer"); window.__dmIncoming("first"); });
+        await page.locator(".pm-tab .pm-close").click();
+        await page.evaluate(() => {
+            window.__noxaChat.openPM("peer", "Peer");
+            window.__dmIncoming("second");
+            window.__dmScope.toasts.length = 0;
+            window.__dmScope.appends[0].resolve("obsolete failure");
+        });
+        await page.evaluate(() => new Promise(resolve => requestAnimationFrame(resolve)));
+        expect(await page.evaluate(() => window.__dmScope.toasts)).toEqual([]);
+        await page.evaluate(() => window.__dmScope.appends[1].resolve("current failure"));
+        await expect.poll(() => page.evaluate(() => window.__dmScope.toasts.length)).toBe(1);
+        expect(await page.evaluate(() => window.__dmScope.toasts[0][0])).toContain("current failure");
+    });
+    async function requestClear(page) {
+        await page.locator(".pm-tab").first().click({ button: "right" });
+        await page.getByRole("button", { name: "Delete history", exact: true }).click();
+        await expect.poll(() => page.evaluate(() => window.__dmScope.clears.length)).toBe(1);
+    }
+    test("clear completion preserves messages that arrived after deletion was requested", async ({ page }) => {
+        await page.evaluate(() => window.__noxaChat.openPM("peer", "Peer"));
+        await page.evaluate(() => window.__dmScope.loads[0].resolve([{ body: "old history", sent_at: 1 }]));
+        await expect(page.locator("#chat-log")).toContainText("old history");
+        await requestClear(page);
+        await page.evaluate(() => { window.__dmIncoming("new arrival"); window.__dmScope.clears[0].resolve(""); });
+        await expect(page.locator("#chat-log")).toContainText("new arrival");
+        await expect(page.locator("#chat-log")).not.toContainText("old history");
+    });
+    test("late history cannot undo a successful clear", async ({ page }) => {
+        await page.evaluate(() => window.__noxaChat.openPM("peer", "Peer"));
+        await requestClear(page);
+        await page.evaluate(() => window.__dmScope.clears[0].resolve(""));
+        await expect.poll(() => page.evaluate(() => window.__dmScope.toasts.length)).toBe(1);
+        await page.evaluate(() => window.__dmScope.loads[0].resolve([{ body: "deleted history", sent_at: 1 }]));
+        await page.evaluate(() => new Promise(resolve => requestAnimationFrame(resolve)));
+        await expect(page.locator("#chat-log")).not.toContainText("deleted history");
+    });
+    for (const fail of [false, true]) {
+        test(`history finishing during clear is ${fail ? "retained on failure" : "discarded on success"}`, async ({ page }) => {
+            await page.evaluate(() => window.__noxaChat.openPM("peer", "Peer"));
+            await requestClear(page);
+            await page.evaluate(() => window.__dmScope.loads[0].resolve([{ body: "loaded during clear", sent_at: 1 }]));
+            await page.evaluate(() => new Promise(resolve => requestAnimationFrame(resolve)));
+            await page.evaluate(fail => window.__dmScope.clears[0].resolve(fail ? "storage unavailable" : ""), fail);
+            await expect.poll(() => page.evaluate(() => window.__dmScope.toasts.length)).toBe(1);
+            if (fail) await expect(page.locator("#chat-log")).toContainText("loaded during clear");
+            else await expect(page.locator("#chat-log")).not.toContainText("loaded during clear");
+        });
+    }
+    test("closing a peer while enumeration is pending keeps it closed", async ({ page }) => {
+        await page.evaluate(() => { window.__noxaChat.resetView(); window.__noxaChat.openPM("peer", "Peer"); });
+        await page.locator(".pm-tab .pm-close").click();
+        await page.evaluate(() => window.__dmScope.peers[0].resolve([{ unique_id: "peer", nickname: "Peer" }]));
+        await page.evaluate(() => new Promise(resolve => requestAnimationFrame(resolve)));
+        await expect(page.locator(".pm-tab")).toHaveCount(0);
+        expect(await page.evaluate(() => window.__dmScope.clears.length)).toBe(0);
+    });
+    test("detached peer controls cannot act on a replacement peer", async ({ page }) => {
+        await page.evaluate(() => {
+            window.__noxaChat.openPM("peer", "Peer");
+            window.__oldDMTab = document.querySelector(".pm-tab");
+            window.__noxaChat.resetView();
+            window.__noxaChat.openPM("peer", "Replacement peer");
+            window.__oldDMTab.querySelector(".pm-close").click();
+            window.__oldDMTab.click();
+            window.__oldDMTab.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true }));
+        });
+        await expect(page.locator(".pm-tab")).toContainText("Replacement peer");
+        await expect(page.getByRole("button", { name: "Delete history", exact: true })).toHaveCount(0);
+        expect(await page.evaluate(() => window.__dmScope.clears.length)).toBe(0);
+    });
+    test("clear bridge failure is contained and leaves history available", async ({ page }) => {
+        await page.evaluate(() => window.__noxaChat.openPM("peer", "Peer"));
+        await page.evaluate(() => window.__dmScope.loads[0].resolve([{ body: "retained history", sent_at: 1 }]));
+        await expect(page.locator("#chat-log")).toContainText("retained history");
+        await requestClear(page);
+        await page.evaluate(() => window.__dmScope.clears[0].reject(new Error("storage unavailable")));
+        await page.evaluate(() => new Promise(resolve => requestAnimationFrame(resolve)));
+        expect(await page.evaluate(() => window.__dmScope.unhandled)).toEqual([]);
+        await expect(page.locator("#chat-log")).toContainText("retained history");
+        await expect.poll(() => page.evaluate(() => window.__dmScope.toasts.length)).toBe(1);
+    });
+    test("clear confirmation cannot delete a reopened peer", async ({ page }) => {
+        await page.evaluate(() => window.__noxaChat.openPM("peer", "Peer"));
+        await page.locator(".pm-tab").click({ button: "right" });
+        await page.evaluate(() => {
+            document.querySelector(".pm-tab .pm-close").click();
+            window.__noxaChat.openPM("peer", "Peer");
+        });
+        await page.getByRole("button", { name: "Delete history", exact: true }).click();
+        await page.evaluate(() => new Promise(resolve => requestAnimationFrame(resolve)));
+        expect(await page.evaluate(() => window.__dmScope.clears.length)).toBe(0);
+    });
+    for (const reject of [false, true]) {
+        test(`old clear ${reject ? "failure" : "completion"} cannot change a reopened peer`, async ({ page }) => {
+            await page.evaluate(() => window.__noxaChat.openPM("peer", "Peer"));
+            await requestClear(page);
+            await page.locator(".pm-tab .pm-close").click();
+            await page.evaluate(() => window.__noxaChat.openPM("peer", "Peer"));
+            await page.evaluate(() => window.__dmScope.loads[1].resolve([{ body: "replacement history", sent_at: 1 }]));
+            await expect(page.locator("#chat-log")).toContainText("replacement history");
+            await page.evaluate(reject => {
+                const pending = window.__dmScope.clears[0];
+                if (reject) pending.reject(new Error("obsolete clear failure"));
+                else pending.resolve("");
+            }, reject);
+            await page.evaluate(() => new Promise(resolve => requestAnimationFrame(resolve)));
+            await expect(page.locator("#chat-log")).toContainText("replacement history");
+            expect(await page.evaluate(() => window.__dmScope.toasts)).toEqual([]);
+            expect(await page.evaluate(() => window.__dmScope.unhandled)).toEqual([]);
+        });
+    }
+});
+
+test.describe("tab-bound chat signals", () => {
+    test.beforeEach(async ({ page }) => {
+        await page.evaluate(() => {
+            const v = window.__noxa;
+            v.showWorkspace(false);
+            Object.assign(v.state, { activeTabID: "server-a", myUniqueID: "self", myChannelID: 1, channels: [{ ChannelID: 1, Name: "Original" }, { ChannelID: 2, Name: "Other" }] });
+            const f = window.__signalScope = { nativeTab: "server-a", calls: [], effects: [], pending: [], focused: true, visible: true, hold: false, reject: false, unhandled: [] };
+            document.hasFocus = () => f.focused;
+            Object.defineProperty(document, "visibilityState", { configurable: true, get: () => f.visible ? "visible" : "hidden" });
+            window.addEventListener("unhandledrejection", event => f.unhandled.push(String(event.reason)));
+            const app = window.go.main.App;
+            window.go.main.App = new Proxy(app, { get(target, key) {
+                const method = key.replace(/ForTab$/, "");
+                if (!["SendTyping", "SendChatRead", "SendChatDelivered"].includes(method)) return target[key];
+                return async (...args) => {
+                    const tab = key.endsWith("ForTab") ? args.shift() : f.nativeTab;
+                    f.calls.push([method, tab, ...args]);
+                    if (tab !== f.nativeTab) return "server changed";
+                    f.effects.push([method, tab, ...args]);
+                    if (f.reject) throw new Error("signal unavailable");
+                    if (method === "SendChatRead" && f.hold) return await new Promise(resolve => f.pending.push(resolve));
+                    return "";
+                };
+            } });
+            window.__incomingDM = id => window.__noxaChat.addChat({ direct: true, enc_verified: true, from_unique_id: "peer", from: "Peer", client_msg_id: id, text: "hello " + id });
+        });
+    });
+    test("native activation cannot redirect typing", async ({ page }) => {
+        await page.evaluate(() => { window.__signalScope.nativeTab = "server-b"; });
+        await page.locator("#chat-text").fill("typing on original");
+        await expect.poll(() => page.evaluate(() => window.__signalScope.calls)).toEqual([["SendTyping", "server-a", 1, ""]]);
+        expect(await page.evaluate(() => window.__signalScope.effects)).toEqual([]);
+    });
+    test("native activation cannot redirect delivery or read receipts", async ({ page }) => {
+        await page.evaluate(() => {
+            window.__noxaChat.openPM("peer", "Peer");
+            window.__signalScope.nativeTab = "server-b";
+            window.__incomingDM("message-1");
+        });
+        await expect.poll(() => page.evaluate(() => window.__signalScope.calls)).toEqual([
+            ["SendChatDelivered", "server-a", "peer", "message-1"], ["SendChatRead", "server-a", "peer", "message-1"],
+        ]);
+        expect(await page.evaluate(() => window.__signalScope.effects)).toEqual([]);
+    });
+    test("typing scheduled in the previous channel cannot announce typing in the new one", async ({ page }) => {
+        await page.locator("#chat-text").fill("original draft");
+        await page.evaluate(() => { window.__noxa.state.myChannelID = 2; window.__noxaChat.onMyChannelChanged(); });
+        await page.waitForTimeout(400);
+        expect(await page.evaluate(() => window.__signalScope.effects)).toEqual([]);
+        await page.locator("#chat-text").fill("new draft");
+        await expect.poll(() => page.evaluate(() => window.__signalScope.effects)).toEqual([["SendTyping", "server-a", 2, ""]]);
+    });
+    test("failed queued read is retained for a later focus retry", async ({ page }) => {
+        await page.evaluate(() => {
+            window.__signalScope.focused = false;
+            window.__incomingDM("message-1");
+            window.__noxaChat.openPM("peer", "Peer");
+            window.__signalScope.hold = true;
+            window.__signalScope.focused = true;
+            window.dispatchEvent(new Event("focus"));
+        });
+        await expect.poll(() => page.evaluate(() => window.__signalScope.pending.length)).toBe(1);
+        await page.evaluate(() => window.__signalScope.pending[0]("write failed"));
+        await page.evaluate(() => new Promise(resolve => requestAnimationFrame(resolve)));
+        await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+        await expect.poll(() => page.evaluate(() => window.__signalScope.pending.length)).toBe(2);
+        await page.evaluate(() => window.__signalScope.pending[1](""));
+    });
+    test("new pending read survives an older read completion without duplicate sends", async ({ page }) => {
+        await page.evaluate(() => {
+            window.__noxaChat.openPM("peer", "Peer");
+            window.__signalScope.hold = true;
+            window.__incomingDM("message-1");
+        });
+        await expect.poll(() => page.evaluate(() => window.__signalScope.pending.length)).toBe(1);
+        await page.evaluate(() => {
+            window.__incomingDM("message-2");
+            window.dispatchEvent(new Event("focus"));
+            window.dispatchEvent(new Event("focus"));
+        });
+        expect(await page.evaluate(() => window.__signalScope.pending.length)).toBe(1);
+        await page.evaluate(() => window.__signalScope.pending[0](""));
+        await expect.poll(() => page.evaluate(() => window.__signalScope.pending.length)).toBe(2);
+        expect(await page.evaluate(() => window.__signalScope.calls.filter(call => call[0] === "SendChatRead"))).toEqual([
+            ["SendChatRead", "server-a", "peer", "message-1"], ["SendChatRead", "server-a", "peer", "message-2"],
+        ]);
+        await page.evaluate(() => window.__signalScope.pending[1](""));
+    });
+    test("signal bridge failures never become unhandled rejections", async ({ page }) => {
+        await page.evaluate(() => {
+            window.__signalScope.reject = true;
+            window.__noxaChat.openPM("peer", "Peer");
+            window.__incomingDM("message-1");
+        });
+        await page.locator("#chat-text").fill("typing");
+        await expect.poll(() => page.evaluate(() => window.__signalScope.calls.length)).toBe(3);
+        await page.evaluate(() => new Promise(resolve => requestAnimationFrame(resolve)));
+        expect(await page.evaluate(() => window.__signalScope.unhandled)).toEqual([]);
+    });
+    test("visible bursts retain every read ID while one write is pending", async ({ page }) => {
+        await page.evaluate(() => {
+            window.__noxaChat.openPM("peer", "Peer");
+            window.__signalScope.hold = true;
+            for (const id of ["one", "two", "three"]) window.__incomingDM(id);
+        });
+        for (let i = 0; i < 3; i++) {
+            await expect.poll(() => page.evaluate(() => window.__signalScope.pending.length)).toBe(i + 1);
+            await page.evaluate(i => window.__signalScope.pending[i](""), i);
+        }
+        expect(await page.evaluate(() => window.__signalScope.calls.filter(call => call[0] === "SendChatRead").map(call => call[3]))).toEqual(["one", "two", "three"]);
+    });
+    for (const hidden of ["files", "document"]) {
+        test(`${hidden} visibility delays receipts until chat becomes visible`, async ({ page }) => {
+            await page.evaluate(() => window.__noxaChat.openPM("peer", "Peer"));
+            if (hidden === "files") await page.locator("#tab-files").click();
+            else await page.evaluate(() => { window.__signalScope.visible = false; document.dispatchEvent(new Event("visibilitychange")); });
+            await page.evaluate(() => window.__incomingDM("hidden-message"));
+            expect(await page.evaluate(() => window.__signalScope.calls.filter(call => call[0] === "SendChatRead"))).toEqual([]);
+            if (hidden === "files") await page.locator("#tab-chat").click();
+            else await page.evaluate(() => { window.__signalScope.visible = true; document.dispatchEvent(new Event("visibilitychange")); });
+            await expect.poll(() => page.evaluate(() => window.__signalScope.calls.filter(call => call[0] === "SendChatRead"))).toEqual([["SendChatRead", "server-a", "peer", "hidden-message"]]);
+        });
+    }
+    test("a rejected read retries only on a later trigger", async ({ page }) => {
+        await page.evaluate(() => {
+            window.__noxaChat.openPM("peer", "Peer");
+            window.__signalScope.reject = true;
+            window.__incomingDM("message-1");
+        });
+        await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+        expect(await page.evaluate(() => window.__signalScope.calls.filter(call => call[0] === "SendChatRead").length)).toBe(1);
+        await page.evaluate(() => { window.__signalScope.reject = false; window.dispatchEvent(new Event("focus")); });
+        await expect.poll(() => page.evaluate(() => window.__signalScope.calls.filter(call => call[0] === "SendChatRead").length)).toBe(2);
+        expect(await page.evaluate(() => window.__signalScope.unhandled)).toEqual([]);
+    });
+    test("old read completion cannot release a recreated peer's pending write", async ({ page }) => {
+        await page.evaluate(() => {
+            window.__noxaChat.openPM("peer", "Peer");
+            window.__signalScope.hold = true;
+            window.__incomingDM("old");
+        });
+        await expect.poll(() => page.evaluate(() => window.__signalScope.pending.length)).toBe(1);
+        await page.evaluate(() => {
+            window.__noxaChat.resetView();
+            window.__noxa.state.activeTabID = "server-b";
+            window.__noxa.state.serverGeneration++;
+            window.__signalScope.nativeTab = "server-b";
+            window.__noxaChat.openPM("peer", "Peer");
+            window.__incomingDM("new");
+        });
+        await expect.poll(() => page.evaluate(() => window.__signalScope.pending.length)).toBe(2);
+        await page.evaluate(() => window.__signalScope.pending[0](""));
+        await page.evaluate(() => new Promise(resolve => requestAnimationFrame(resolve)));
+        await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+        expect(await page.evaluate(() => window.__signalScope.pending.length)).toBe(2);
+        await page.evaluate(() => window.__signalScope.pending[1](""));
+    });
+});
+
+test.describe("tab-bound chat sending and attachments", () => {
+    test.beforeEach(async ({ page }) => {
+        await page.evaluate(() => {
+            const v = window.__noxa;
+            v.showWorkspace(false);
+            Object.assign(v.state, { activeTabID: "server-a", myChannelID: 1, channels: [{ ChannelID: 1, Name: "Original" }, { ChannelID: 2, Name: "Other" }] });
+            const f = window.__sendScope = { nativeTab: "server-a", calls: [], effects: [], pending: [], messages: [], hold: "" };
+            v.sysMsg = (...args) => f.messages.push(args);
+            v.toast = (...args) => f.messages.push(args);
+            const app = window.go.main.App;
+            window.go.main.App = new Proxy(app, { get(target, key) {
+                const method = key.replace(/ForTab$/, "");
+                if (!["SendChat", "SendChatReply", "UploadChatAttachment", "DownloadChatAttachment", "SaveChatAttachment"].includes(method)) return target[key];
+                return async (...args) => {
+                    const tab = key.endsWith("ForTab") ? args.shift() : f.nativeTab;
+                    f.calls.push([method, tab, ...args]);
+                    if (tab !== f.nativeTab) throw new Error("server changed");
+                    f.effects.push([method, tab, ...args]);
+                    if (f.hold === method) return await new Promise((resolve, reject) => f.pending.push({ resolve, reject }));
+                    if (method === "UploadChatAttachment") return "[file:original.vcx#dGVzdA==#original.txt]";
+                    if (method === "DownloadChatAttachment") return "aGVsbG8=";
+                    return "";
+                };
+            } });
+        });
+    });
+    async function attach(page) {
+        await page.locator("#chat-file").setInputFiles({ name: "original.txt", mimeType: "text/plain", buffer: Buffer.from("original") });
+        await expect(page.locator(".file-preview")).toHaveCount(1);
+    }
+    for (const kind of ["text", "reply", "upload", "preview", "save"]) {
+        test(`native activation cannot redirect ${kind}`, async ({ page }) => {
+            if (kind === "upload") await attach(page);
+            if (["reply", "save"].includes(kind)) {
+                await page.evaluate(kind => window.__noxaChat.addChat({ id: 71, channel_id: 1, from: "Me", text: kind === "save" ? "[file:original.vcx#dGVzdA==#original.txt]" : "parent" }), kind);
+                if (kind === "reply") await page.locator('#chat-log button[title="reply"]').evaluate(button => button.click());
+            }
+            await page.evaluate(() => { window.__sendScope.nativeTab = "server-b"; });
+            if (kind === "preview") {
+                await page.evaluate(() => window.__noxaChat.addChat({ id: 72, channel_id: 1, from: "Me", text: "[file:photo.vcx#dGVzdA==#photo.png]" }));
+            } else if (kind === "save") {
+                await page.locator(".msg-file .file-chip").click();
+            } else {
+                if (kind !== "upload") await page.locator("#chat-text").fill("captured text");
+                await page.locator("#chat-send").click();
+            }
+            await expect.poll(() => page.evaluate(() => window.__sendScope.calls.length)).toBe(1);
+            expect(await page.evaluate(() => window.__sendScope.calls[0][1])).toBe("server-a");
+            expect(await page.evaluate(() => window.__sendScope.effects)).toEqual([]);
+        });
+    }
+    for (const result of ["success", "error"]) {
+        test(`late send ${result} cannot clear or report into another conversation`, async ({ page }) => {
+            await page.evaluate(() => { window.__sendScope.hold = "SendChat"; });
+            await page.locator("#chat-text").fill("original draft");
+            await page.locator("#chat-send").click();
+            await expect.poll(() => page.evaluate(() => window.__sendScope.pending.length)).toBe(1);
+            await page.evaluate(() => { window.__noxa.state.myChannelID = 2; window.__noxaChat.onMyChannelChanged(); });
+            await page.locator("#chat-text").fill("new draft");
+            await page.evaluate(result => window.__sendScope.pending[0].resolve(result === "error" ? "old private error" : ""), result);
+            await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+            await expect(page.locator("#chat-text")).toHaveValue("new draft");
+            expect(await page.evaluate(() => window.__sendScope.messages)).toEqual([]);
+        });
+    }
+    test("upload completion after a channel round trip cannot send its token or stale text", async ({ page }) => {
+        await attach(page);
+        await page.evaluate(() => { window.__sendScope.hold = "UploadChatAttachment"; });
+        await page.locator("#chat-text").fill("original draft");
+        await page.locator("#chat-send").click();
+        await expect.poll(() => page.evaluate(() => window.__sendScope.pending.length)).toBe(1);
+        await page.evaluate(() => {
+            for (const id of [2, 1]) { window.__noxa.state.myChannelID = id; window.__noxaChat.onMyChannelChanged(); }
+            window.__sendScope.pending[0].resolve("[file:stale.vcx#dGVzdA==#stale.txt]");
+        });
+        await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+        expect(await page.evaluate(() => window.__sendScope.calls.map(call => call[0]))).toEqual(["UploadChatAttachment"]);
+    });
+    test("send success preserves a newer draft in the same conversation", async ({ page }) => {
+        await page.evaluate(() => { window.__sendScope.hold = "SendChat"; });
+        await page.locator("#chat-text").fill("first draft");
+        await page.locator("#chat-send").click();
+        await expect.poll(() => page.evaluate(() => window.__sendScope.pending.length)).toBe(1);
+        await page.locator("#chat-text").fill("second draft");
+        await page.evaluate(() => window.__sendScope.pending[0].resolve(""));
+        await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+        await expect(page.locator("#chat-text")).toHaveValue("second draft");
+    });
+    test("editing away and back to the same draft still preserves it", async ({ page }) => {
+        await page.evaluate(() => { window.__sendScope.hold = "SendChat"; });
+        await page.locator("#chat-text").fill("same text");
+        await page.locator("#chat-send").click();
+        await expect.poll(() => page.evaluate(() => window.__sendScope.pending.length)).toBe(1);
+        await page.locator("#chat-text").fill("different text");
+        await page.locator("#chat-text").fill("same text");
+        await page.evaluate(() => window.__sendScope.pending[0].resolve(""));
+        await expect(page.locator("#chat-send")).toBeEnabled();
+        await expect(page.locator("#chat-text")).toHaveValue("same text");
+    });
+    test("replacing a selected emoji with itself preserves the newer draft", async ({ page }) => {
+        await page.locator("#chat-emoji").click();
+        const emoji = await page.locator(".emoji-panel button").first().textContent();
+        await page.locator("#chat-emoji").click();
+        await page.evaluate(() => { window.__sendScope.hold = "SendChat"; });
+        await page.locator("#chat-text").fill(emoji);
+        await page.locator("#chat-send").click();
+        await expect.poll(() => page.evaluate(() => window.__sendScope.pending.length)).toBe(1);
+        await page.locator("#chat-emoji").click();
+        await page.evaluate(() => {
+            const input = document.getElementById("chat-text");
+            input.setSelectionRange(0, input.value.length);
+            document.querySelector(".emoji-panel button").click();
+        });
+        await page.evaluate(() => window.__sendScope.pending[0].resolve(""));
+        await expect(page.locator("#chat-send")).toBeEnabled();
+        await expect(page.locator("#chat-text")).toHaveValue(emoji);
+    });
+    test("old send completion cannot unlock a newer pending send", async ({ page }) => {
+        await page.evaluate(() => { window.__sendScope.hold = "SendChat"; });
+        await page.locator("#chat-text").fill("original");
+        await page.locator("#chat-send").click();
+        await expect.poll(() => page.evaluate(() => window.__sendScope.pending.length)).toBe(1);
+        await page.evaluate(() => { window.__noxa.state.myChannelID = 2; window.__noxaChat.onMyChannelChanged(); });
+        await page.locator("#chat-text").fill("replacement");
+        await page.locator("#chat-send").click();
+        await expect.poll(() => page.evaluate(() => window.__sendScope.pending.length)).toBe(2);
+        await page.evaluate(async () => {
+            window.__sendScope.pending[0].resolve("");
+            await new Promise(resolve => requestAnimationFrame(resolve));
+            void window.__noxaChat.sendMessage();
+        });
+        expect(await page.evaluate(() => window.__sendScope.pending.length)).toBe(2);
+        await expect(page.locator("#chat-send")).toBeDisabled();
+        await page.evaluate(() => window.__sendScope.pending[1].resolve(""));
+        await expect(page.locator("#chat-send")).toBeEnabled();
+        await expect(page.locator("#chat-text")).toHaveValue("");
+    });
+    for (const reject of [false, true]) {
+        test(`stale attachment-token ${reject ? "rejection" : "error"} stops the remaining send batch`, async ({ page }) => {
+            await attach(page);
+            await page.locator("#chat-file").setInputFiles({ name: "second.txt", mimeType: "text/plain", buffer: Buffer.from("second") });
+            await expect(page.locator(".file-preview")).toHaveCount(2);
+            await page.evaluate(() => { window.__sendScope.hold = "SendChat"; });
+            await page.locator("#chat-text").fill("text after files");
+            await page.locator("#chat-send").click();
+            await expect.poll(() => page.evaluate(() => window.__sendScope.pending.length)).toBe(1);
+            await page.evaluate(reject => {
+                window.__noxa.state.myChannelID = 2;
+                window.__noxaChat.onMyChannelChanged();
+                if (reject) window.__sendScope.pending[0].reject(new Error("old failure"));
+                else window.__sendScope.pending[0].resolve("old failure");
+            }, reject);
+            await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+            expect(await page.evaluate(() => window.__sendScope.calls.map(call => call[0]))).toEqual(["UploadChatAttachment", "SendChat"]);
+            expect(await page.evaluate(() => window.__sendScope.messages)).toEqual([]);
+            await expect(page.locator(".file-preview")).toHaveCount(0);
+        });
+    }
+    test("a reply chosen during upload does not replace the captured parent or get cleared", async ({ page }) => {
+        await page.evaluate(() => {
+            for (const id of [71, 72]) window.__noxaChat.addChat({ id, channel_id: 1, from: "Me", text: "parent " + id });
+        });
+        await page.locator('.msg[data-msg-id="71"] button[title="reply"]').evaluate(button => button.click());
+        await attach(page);
+        await page.locator("#chat-text").fill("original reply");
+        await page.evaluate(() => { window.__sendScope.hold = "UploadChatAttachment"; });
+        await page.locator("#chat-send").click();
+        await expect.poll(() => page.evaluate(() => window.__sendScope.pending.length)).toBe(1);
+        await page.locator('.msg[data-msg-id="72"] button[title="reply"]').evaluate(button => button.click());
+        await page.evaluate(() => window.__sendScope.pending[0].resolve("[file:original.vcx#dGVzdA==#original.txt]"));
+        await expect(page.locator("#chat-send")).toBeEnabled();
+        expect(await page.evaluate(() => window.__sendScope.calls.filter(call => call[0] === "SendChatReply"))).toEqual([["SendChatReply", "server-a", "channel", "1", "original reply", 71]]);
+        await expect(page.locator("#reply-bar")).toContainText("parent 72");
+        await expect(page.locator("#reply-bar")).not.toHaveClass(/hidden/);
+    });
+    for (const error of [false, true]) {
+        test(`late FileReader ${error ? "error" : "success"} cannot revive after a channel round trip`, async ({ page }) => {
+            await page.evaluate(() => {
+                window.FileReader = class { readAsDataURL() { window.__pendingReader = this; } };
+            });
+            await page.locator("#chat-file").setInputFiles({ name: "late.txt", mimeType: "text/plain", buffer: Buffer.from("late") });
+            await expect.poll(() => page.evaluate(() => !!window.__pendingReader)).toBe(true);
+            await page.evaluate(error => {
+                for (const id of [2, 1]) { window.__noxa.state.myChannelID = id; window.__noxaChat.onMyChannelChanged(); }
+                const reader = window.__pendingReader;
+                reader.result = "data:text/plain;base64,bGF0ZQ==";
+                if (error) reader.onerror();
+                else reader.onload();
+            }, error);
+            await expect(page.locator(".file-preview")).toHaveCount(0);
+            expect(await page.evaluate(() => window.__sendScope.messages)).toEqual([]);
+        });
+    }
+    test("detached attachment save controls cannot invoke the native dialog", async ({ page }) => {
+        await page.evaluate(() => {
+            window.__noxaChat.addChat({ id: 71, channel_id: 1, from: "Me", text: "[file:original.vcx#dGVzdA==#original.txt]" });
+            const button = document.querySelector(".msg-file .file-chip");
+            button.remove();
+            button.click();
+        });
+        expect(await page.evaluate(() => window.__sendScope.calls)).toEqual([]);
+    });
+    test("current attachment previews and save controls retain their exact source", async ({ page }) => {
+        await page.evaluate(() => window.__noxaChat.addChat({ id: 71, channel_id: 1, from: "Me", text: "[file:photo.vcx#dGVzdA==#photo.png] [file:doc.vcx#dGVzdA==#doc.txt]" }));
+        await expect(page.locator(".msg-img")).toHaveAttribute("src", "data:image/png;base64,aGVsbG8=");
+        await page.locator(".msg-file .file-chip").click();
+        expect(await page.evaluate(() => window.__sendScope.effects)).toEqual([
+            ["DownloadChatAttachment", "server-a", 1, "photo.vcx", "dGVzdA=="],
+            ["SaveChatAttachment", "server-a", 1, "doc.vcx", "dGVzdA==", "doc.txt"],
+        ]);
+    });
+    test("clearing a direct target during upload stops follow-up delivery", async ({ page }) => {
+        await page.evaluate(() => window.__noxaChat.openPM("peer", "Peer"));
+        await attach(page);
+        await page.evaluate(() => { window.__sendScope.hold = "UploadChatAttachment"; });
+        await page.locator("#chat-send").click();
+        await expect.poll(() => page.evaluate(() => window.__sendScope.pending.length)).toBe(1);
+        await page.evaluate(() => {
+            const target = document.getElementById("chat-target");
+            target.value = "";
+            target.dispatchEvent(new Event("change", { bubbles: true }));
+            window.__sendScope.pending[0].resolve("[file:original.vcx#dGVzdA==#original.txt]");
+        });
+        await expect(page.locator("#chat-send")).toBeEnabled();
+        await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+        expect(await page.evaluate(() => window.__sendScope.calls.map(call => call[0]))).toEqual(["UploadChatAttachment"]);
+    });
+});
+
+test.describe("tab-bound chat mutations", () => {
+    test.beforeEach(async ({ page }) => {
+        await page.evaluate(() => {
+            const v = window.__noxa;
+            v.showWorkspace(false);
+            Object.assign(v.state, { activeTabID: "server-a", myUniqueID: "self", myChannelID: 1, channels: [{ ChannelID: 1, Name: "Original" }, { ChannelID: 2, Name: "Other" }] });
+            const f = window.__mutationScope = { nativeTab: "server-a", calls: [], effects: [], pending: [], toasts: [], hold: false };
+            v.toast = (...args) => f.toasts.push(args);
+            window.__unhandled = [];
+            window.addEventListener("unhandledrejection", event => window.__unhandled.push(String(event.reason)));
+            const app = window.go.main.App;
+            window.go.main.App = new Proxy(app, { get(target, key) {
+                const method = key.replace(/ForTab$/, "");
+                if (method === "ChatPins") return async () => ({ pins: [{ message_id: 71, message: { body: "original message", from_nickname: "Me" } }] });
+                if (!["ChatEditMessage", "ChatDeleteMessage", "ChatPinMessage", "ChatReact"].includes(method)) return target[key];
+                return async (...args) => {
+                    const tab = key.endsWith("ForTab") ? args.shift() : f.nativeTab;
+                    f.calls.push([method, tab, ...args]);
+                    if (tab !== f.nativeTab) return "server changed";
+                    f.effects.push([method, tab, ...args]);
+                    if (f.hold) return await new Promise((resolve, reject) => f.pending.push({ resolve, reject }));
+                    return "";
+                };
+            } });
+            window.__noxaChat.addChat({ id: 71, channel_id: 1, from_unique_id: "self", from: "Me", text: "original message" });
+        });
+    });
+    async function mutate(page, action) {
+        await page.locator("#chat-log .msg").hover();
+        await page.locator(`#chat-log button[title="${action}"]`).click();
+        if (action === "edit") {
+            await page.locator(".msg-edit-input").fill("revised message");
+            await page.locator(".msg-edit-input").press("Enter");
+        } else if (action === "delete") {
+            await page.getByRole("button", { name: "Delete message", exact: true }).click();
+        } else if (action === "react") {
+            await page.locator(".react-strip button").first().click();
+        }
+    }
+    for (const action of ["edit", "delete", "pin", "react"]) {
+        test(`native activation cannot redirect ${action}`, async ({ page }) => {
+            await page.evaluate(() => { window.__mutationScope.nativeTab = "server-b"; });
+            await mutate(page, action);
+            await expect.poll(() => page.evaluate(() => window.__mutationScope.calls.length)).toBe(1);
+            expect(await page.evaluate(() => window.__mutationScope.calls[0][1])).toBe("server-a");
+            expect(await page.evaluate(() => window.__mutationScope.effects)).toEqual([]);
+        });
+        test(`obsolete ${action} failure cannot affect a channel round trip`, async ({ page }) => {
+            await page.evaluate(() => { window.__mutationScope.hold = true; });
+            await mutate(page, action);
+            await expect.poll(() => page.evaluate(() => window.__mutationScope.pending.length)).toBe(1);
+            await page.evaluate(() => {
+                for (const id of [2, 1]) { window.__noxa.state.myChannelID = id; window.__noxaChat.onMyChannelChanged(); }
+                window.__mutationScope.pending[0].resolve("old private failure");
+            });
+            await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+            expect(await page.evaluate(() => window.__mutationScope.toasts)).toEqual([]);
+        });
+    }
+    test("delete confirmation cannot survive a channel round trip", async ({ page }) => {
+        await page.locator("#chat-log .msg").hover();
+        await page.locator('#chat-log button[title="delete"]').click();
+        await page.evaluate(() => { for (const id of [2, 1]) { window.__noxa.state.myChannelID = id; window.__noxaChat.onMyChannelChanged(); } });
+        await page.getByRole("button", { name: "Delete message", exact: true }).click();
+        expect(await page.evaluate(() => window.__mutationScope.calls)).toEqual([]);
+    });
+    test("current mutations preserve exact payloads and edit submission has no blur error", async ({ page }) => {
+        for (const action of ["edit", "delete", "pin", "react"]) await mutate(page, action);
+        expect(await page.evaluate(() => window.__mutationScope.effects)).toEqual([
+            ["ChatEditMessage", "server-a", 1, 71, "revised message", 1],
+            ["ChatDeleteMessage", "server-a", 71],
+            ["ChatPinMessage", "server-a", 1, 71, true],
+            ["ChatReact", "server-a", 71, "👍"],
+        ]);
+        expect(await page.evaluate(() => window.__unhandled)).toEqual([]);
+        await page.evaluate(() => window.__noxaChat.onChatReaction({ message_id: 71, reactions: { "👍": 1 }, by: "self", added: true, emoji: "👍" }));
+        await expect(page.locator(".react-chip.own")).toContainText("👍 1");
+    });
+    test("rejected mutation promises produce current feedback without an unhandled rejection", async ({ page }) => {
+        await page.evaluate(() => { window.__mutationScope.hold = true; });
+        await mutate(page, "react");
+        await expect.poll(() => page.evaluate(() => window.__mutationScope.pending.length)).toBe(1);
+        await page.evaluate(() => window.__mutationScope.pending[0].reject(new Error("write failed")));
+        await expect.poll(() => page.evaluate(() => window.__mutationScope.toasts)).toEqual([["reaction failed: Error: write failed", "warn"]]);
+        expect(await page.evaluate(() => window.__unhandled)).toEqual([]);
+    });
+    for (const ordering of ["before", "after"]) test(`role reaction broadcast ${ordering} acknowledgement applies once`, async ({ page }) => {
+        await page.evaluate(() => {
+            window.__noxa.state.authorizationModel = "roles-v1";
+            window.__mutationScope.hold = true;
+        });
+        await mutate(page, "react");
+        await expect.poll(() => page.evaluate(() => window.__mutationScope.pending.length)).toBe(1);
+        await expect(page.locator(".react-chip.own")).toHaveCount(0);
+        if (ordering === "before") await page.evaluate(() => window.__noxaChat.onChatReaction({ message_id: 71, reactions: { "👍": 1 }, by: "self", added: true, emoji: "👍" }));
+        await page.evaluate(() => window.__mutationScope.pending[0].resolve(""));
+        await page.evaluate(() => new Promise(resolve => requestAnimationFrame(resolve)));
+        if (ordering === "after") {
+            await expect(page.locator(".react-chip.own")).toHaveCount(0);
+            await page.evaluate(() => window.__noxaChat.onChatReaction({ message_id: 71, reactions: { "👍": 1 }, by: "self", added: true, emoji: "👍" }));
+        }
+        await expect(page.locator(".react-chip.own")).toHaveText("👍 1");
+        await page.locator(".react-chip.own").click();
+        await expect.poll(() => page.evaluate(() => window.__mutationScope.pending.length)).toBe(2);
+        await page.evaluate(() => {
+            window.__noxaChat.onChatReaction({ message_id: 71, reactions: {}, by: "self", added: false, emoji: "👍" });
+            window.__mutationScope.pending[1].resolve("");
+        });
+        await expect(page.locator(".react-chip")).toHaveCount(0);
+    });
+    test("stale reaction success cannot apply an optimistic toggle after navigation", async ({ page }) => {
+        await page.evaluate(() => { window.__mutationScope.hold = true; });
+        await mutate(page, "react");
+        await expect.poll(() => page.evaluate(() => window.__mutationScope.pending.length)).toBe(1);
+        await page.evaluate(() => {
+            for (const id of [2, 1]) { window.__noxa.state.myChannelID = id; window.__noxaChat.onMyChannelChanged(); }
+            window.__mutationScope.pending[0].resolve("");
+        });
+        await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+        await expect(page.locator(".react-chip.own")).toHaveCount(0);
+    });
+    test("pin-panel unpin retains its server", async ({ page }) => {
+        await page.locator("#chat-pins-btn").evaluate(button => button.click());
+        await expect(page.locator(".pin-row")).toHaveCount(1);
+        await page.evaluate(() => { window.__mutationScope.nativeTab = "server-b"; });
+        await page.locator('.pin-row button[title="unpin"]').click();
+        await expect.poll(() => page.evaluate(() => window.__mutationScope.calls)).toEqual([["ChatPinMessage", "server-a", 1, 71, false]]);
+        expect(await page.evaluate(() => window.__mutationScope.effects)).toEqual([]);
+    });
+    test("reaction rechecks scope after the mutation helper resolves", async ({ page }) => {
+        await page.evaluate(() => {
+            const app = window.go.main.App;
+            window.go.main.App = new Proxy(app, { get(target, key) {
+                if (key !== "ChatReactForTab") return target[key];
+                return () => Promise.resolve("");
+            } });
+            document.querySelector('#chat-log button[title="react"]').click();
+            document.querySelector(".react-strip button").click();
+            queueMicrotask(() => {
+                window.__noxa.state.serverGeneration++;
+            });
+        });
+        await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+        await expect(page.locator(".react-chip.own")).toHaveCount(0);
+    });
+    test("an old pins close control cannot close a replacement panel", async ({ page }) => {
+        await page.locator("#chat-pins-btn").evaluate(button => button.click());
+        await expect(page.locator(".pin-row")).toHaveCount(1);
+        await page.evaluate(() => {
+            const oldClose = document.querySelector(".pins-panel .chat-pop-head button");
+            document.getElementById("chat-pins-btn").click();
+            document.getElementById("chat-pins-btn").click();
+            oldClose.click();
+        });
+        await expect(page.locator(".pins-panel")).toBeVisible();
+    });
+    test("closed pin-panel writes cannot show late errors", async ({ page }) => {
+        await page.locator("#chat-pins-btn").evaluate(button => button.click());
+        await expect(page.locator(".pin-row")).toHaveCount(1);
+        await page.evaluate(() => { window.__mutationScope.hold = true; });
+        await page.locator('.pin-row button[title="unpin"]').click();
+        await expect.poll(() => page.evaluate(() => window.__mutationScope.pending.length)).toBe(1);
+        await page.locator(".pins-panel .chat-pop-head button").click();
+        await page.evaluate(() => window.__mutationScope.pending[0].resolve("old panel failure"));
+        await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+        expect(await page.evaluate(() => window.__mutationScope.toasts)).toEqual([]);
+        await expect(page.locator(".pins-panel")).toHaveCount(0);
+    });
+    test("conversation changes dismiss old pins and reaction controls", async ({ page }) => {
+        await page.locator("#chat-pins-btn").evaluate(button => button.click());
+        await expect(page.locator(".pin-row")).toHaveCount(1);
+        await page.locator('#chat-log button[title="react"]').evaluate(button => button.click());
+        await expect(page.locator(".react-strip")).toBeVisible();
+        await page.evaluate(() => { window.__noxa.state.myChannelID = 2; window.__noxaChat.onMyChannelChanged(); });
+        await expect(page.locator(".pins-panel")).toHaveCount(0);
+        await expect(page.locator(".react-strip")).toHaveCount(0);
+    });
+});
+
+test.describe("tab-bound chat search and export", () => {
+    test.beforeEach(async ({ page }) => {
+        await page.evaluate(() => {
+            const v = window.__noxa;
+            v.showWorkspace(false);
+            Object.assign(v.state, { activeTabID: "server-a", myClientID: "member-a", myChannelID: 1, channels: [{ ChannelID: 1, Name: "Original" }, { ChannelID: 2, Name: "Other" }] });
+            const f = window.__scanScope = { nativeTab: "server-a", calls: [], effects: [], pending: [], toasts: [], hold: false };
+            v.toast = (...args) => f.toasts.push(args);
+            const app = window.go.main.App;
+            window.go.main.App = new Proxy(app, { get(target, key) {
+                const method = key.replace(/ForTab$|ForContext$/, "");
+                if (method === "ExportChatEncrypted" && f.holdSave) return async (...args) => {
+                    f.holdSave = false;
+                    f.saveArgs = args;
+                    return await new Promise((resolve, reject) => { f.resolveSave = resolve; f.rejectSave = reject; });
+                };
+                if (!["ChatSearch", "ChatExportHistory", "DMSearch"].includes(method)) return target[key];
+                return async (...args) => {
+                    if (key.endsWith("ForContext")) args.shift();
+                    const scoped = key.endsWith("ForTab");
+                    const tab = scoped ? args.shift() : f.nativeTab;
+                    const requestID = scoped ? args.shift() : "";
+                    f.calls.push([method, tab, requestID, ...args]);
+                    if (tab !== f.nativeTab) throw new Error("server changed");
+                    f.effects.push([method, tab, requestID, ...args]);
+                    if (f.hold) return await new Promise((resolve, reject) => f.pending.push({ resolve, reject, requestID }));
+                    return method === "ChatExportHistory" ? { text: "captured transcript", messages: 1, complete: true } : { messages: [], scanned: 0 };
+                };
+            } });
+        });
+    });
+    async function search(page, query = "needle") {
+        await page.evaluate(query => {
+            document.getElementById("chat-search-btn").click();
+            const input = document.getElementById("chat-search");
+            input.value = query;
+            input.dispatchEvent(new Event("input", { bubbles: true }));
+            document.getElementById("chat-search-server").click();
+        }, query);
+    }
+    async function exportHistory(page) {
+        await page.evaluate(() => document.getElementById("chat-export-btn").click());
+        await page.locator('input[placeholder^="passphrase"]').fill("export-password");
+        await page.getByRole("button", { name: "Export", exact: true }).click();
+    }
+    test("native activation cannot redirect search", async ({ page }) => {
+        await page.evaluate(() => { window.__scanScope.nativeTab = "server-b"; });
+        await search(page);
+        await expect.poll(() => page.evaluate(() => window.__scanScope.calls)).toEqual([["ChatSearch", "server-a", expect.any(String), 1, "needle", 2000]]);
+        expect(await page.evaluate(() => window.__scanScope.effects)).toEqual([]);
+    });
+    test("native activation cannot redirect export after confirmation", async ({ page }) => {
+        await page.evaluate(() => { window.__scanScope.nativeTab = "server-b"; });
+        await exportHistory(page);
+        await expect.poll(() => page.evaluate(() => window.__scanScope.calls)).toEqual([["ChatExportHistory", "server-a", expect.any(String), 1, 0]]);
+        expect(await page.evaluate(() => window.__scanScope.effects)).toEqual([]);
+        expect(await page.evaluate(() => window.__calls.ExportChatEncrypted || 0)).toBe(0);
+    });
+    for (const reject of [false, true]) {
+        test(`returning to a channel cannot revive a stale search ${reject ? "failure" : "result"}`, async ({ page }) => {
+            await page.evaluate(() => { window.__scanScope.hold = true; });
+            await search(page);
+            await expect.poll(() => page.evaluate(() => window.__scanScope.pending.length)).toBe(1);
+            await page.evaluate(() => {
+                for (const id of [2, 1]) { window.__noxa.state.myChannelID = id; window.__noxaChat.onMyChannelChanged(); }
+            });
+            await expect(page.locator("#chat-search-server")).toBeEnabled();
+            await page.evaluate(reject => {
+                const pending = window.__scanScope.pending[0];
+                if (reject) pending.reject(new Error("old private failure"));
+                else pending.resolve({ messages: [{ id: 77, body: "old private result", from_nickname: "member" }], scanned: 1 });
+            }, reject);
+            await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+            await expect(page.locator(".search-results")).toHaveCount(0);
+            expect(await page.evaluate(() => window.__scanScope.toasts)).toEqual([]);
+        });
+    }
+    test("superseded search progress and completion cannot disturb a newer request", async ({ page }) => {
+        await page.evaluate(() => { window.__scanScope.hold = true; });
+        await search(page, "old");
+        await expect.poll(() => page.evaluate(() => window.__scanScope.pending.length)).toBe(1);
+        await search(page, "new");
+        await expect.poll(() => page.evaluate(() => window.__scanScope.pending.length)).toBe(2);
+        await page.evaluate(() => {
+            const [old, current] = window.__scanScope.pending;
+            for (const cb of window.__events["chatsearch:progress"] || []) {
+                cb({ request_id: old.requestID, scanned: 999 });
+                cb({ request_id: current.requestID, scanned: 12 });
+            }
+            old.resolve({ messages: [], scanned: 999 });
+        });
+        await expect(page.locator("#chat-search-server")).toHaveText("searching… 12");
+        await expect(page.locator("#chat-search-server")).toBeDisabled();
+        await expect(page.locator(".search-results")).toHaveCount(0);
+        await page.evaluate(() => window.__scanScope.pending[1].resolve({ messages: [], scanned: 12 }));
+        await expect(page.locator("#chat-search-server")).toBeEnabled();
+        await expect(page.locator(".search-results")).toBeVisible();
+    });
+    test("rendered search results close when their conversation changes", async ({ page }) => {
+        await search(page);
+        await expect(page.locator(".search-results")).toBeVisible();
+        await page.evaluate(() => { window.__noxa.state.myChannelID = 2; window.__noxaChat.onMyChannelChanged(); });
+        await expect(page.locator(".search-results")).toHaveCount(0);
+    });
+    test("a local DM search cannot reopen after switching peers and returning", async ({ page }) => {
+        await page.evaluate(() => { window.__scanScope.hold = true; window.__noxa.openPM("peer-a", "Peer A"); });
+        await search(page);
+        await expect.poll(() => page.evaluate(() => window.__scanScope.pending.length)).toBe(1);
+        await page.evaluate(() => { window.__noxa.openPM("peer-b", "Peer B"); window.__noxa.openPM("peer-a", "Peer A"); });
+        await expect(page.locator("#chat-search-server")).toBeEnabled();
+        await page.evaluate(() => window.__scanScope.pending[0].resolve({ messages: [{ id: 5, body: "old private DM search" }], scanned: 1 }));
+        await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+        await expect(page.locator(".search-results")).toHaveCount(0);
+    });
+    test("export progress accepts only its request and saves the captured transcript", async ({ page }) => {
+        await page.evaluate(() => { window.__scanScope.hold = true; });
+        await exportHistory(page);
+        await expect.poll(() => page.evaluate(() => window.__scanScope.pending.length)).toBe(1);
+        await page.evaluate(() => {
+            const request = window.__scanScope.pending[0];
+            for (const cb of window.__events["chatexport:progress"]) {
+                cb({ request_id: request.requestID, scanned: 12 });
+                cb({ request_id: "other-request", scanned: 999 });
+                cb(999);
+                cb({ request_id: request.requestID, scanned: -1 });
+            }
+        });
+        await expect(page.getByRole("dialog", { name: "Exporting chat" })).toContainText("decrypted 12 messages…");
+        await page.evaluate(() => window.__scanScope.pending[0].resolve({ text: "confirmed original transcript", messages: 12, complete: true }));
+        await expect.poll(() => page.evaluate(() => window.__callArgs.ExportChatEncrypted)).toEqual([["noxa-Original.noxachat", "confirmed original transcript", "export-password"]]);
+        expect(await page.evaluate(() => (window.__events["chatexport:progress"] || []).length)).toBe(0);
+    });
+    test("plain export still requires its explicit confirmation", async ({ page }) => {
+        await page.evaluate(() => document.getElementById("chat-export-btn").click());
+        await page.getByRole("button", { name: "Export", exact: true }).click();
+        await expect(page.getByRole("dialog", { name: "Export unencrypted chat?" })).toBeVisible();
+        expect(await page.evaluate(() => window.__scanScope.calls)).toEqual([]);
+        await page.getByRole("button", { name: "Export unencrypted", exact: true }).click();
+        await expect.poll(() => page.evaluate(() => window.__callArgs.ExportChat)).toEqual([["noxa-Original.txt", "captured transcript"]]);
+    });
+    test("superseded native save errors cannot disturb a newer export", async ({ page }) => {
+        await page.evaluate(() => { window.__scanScope.holdSave = true; });
+        await exportHistory(page);
+        await expect.poll(() => page.evaluate(() => window.__scanScope.saveArgs)).toEqual(["noxa-Original.noxachat", "captured transcript", "export-password"]);
+        await page.evaluate(() => { window.__scanScope.hold = true; });
+        await exportHistory(page);
+        await expect.poll(() => page.evaluate(() => window.__scanScope.pending.length)).toBe(1);
+        await page.evaluate(() => window.__scanScope.rejectSave(new Error("old save failure")));
+        await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+        expect(await page.evaluate(() => window.__scanScope.toasts)).toEqual([]);
+        await expect(page.getByRole("dialog", { name: "Exporting chat" })).toBeVisible();
+    });
+    for (const reason of ["channel", "close"]) {
+        test(`${reason} invalidation prevents an export scan from opening a save dialog`, async ({ page }) => {
+            await page.evaluate(() => { window.__scanScope.hold = true; });
+            await exportHistory(page);
+            await expect.poll(() => page.evaluate(() => window.__scanScope.pending.length)).toBe(1);
+            if (reason === "channel") {
+                await page.evaluate(() => { for (const id of [2, 1]) { window.__noxa.state.myChannelID = id; window.__noxaChat.onMyChannelChanged(); } });
+            } else {
+                await page.keyboard.press("Escape");
+            }
+            await page.evaluate(() => window.__scanScope.pending[0].resolve({ text: "stale transcript", messages: 1, complete: true }));
+            await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+            expect(await page.evaluate(() => window.__calls.ExportChatEncrypted || 0)).toBe(0);
+            expect(await page.evaluate(() => (window.__events["chatexport:progress"] || []).length)).toBe(0);
+        });
+    }
+});
+
+test.describe("tab-bound chat history and pins", () => {
+    test.beforeEach(async ({ page }) => {
+        await page.evaluate(() => {
+            const v = window.__noxa;
+            v.showWorkspace(false);
+            Object.assign(v.state, { activeTabID: "server-a", myClientID: "member-a", myChannelID: 1, channels: [{ ChannelID: 1, Name: "Room" }] });
+            const f = window.__chatReadScope = { nativeTab: "server-a", calls: [], effects: [], pins: { pins: [] } };
+            const app = window.go.main.App;
+            window.go.main.App = new Proxy(app, { get(target, key) {
+                const method = key.replace(/ForTab$/, "");
+                if (!["ChatHistory", "ChatPins"].includes(method)) return target[key];
+                return async (...args) => {
+                    const tab = key.endsWith("ForTab") ? args.shift() : f.nativeTab;
+                    f.calls.push([method, tab, ...args]);
+                    if (tab !== f.nativeTab) throw new Error("server changed");
+                    f.effects.push([method, tab, ...args]);
+                    const result = structuredClone(method === "ChatPins" ? f.pins : (f.history || { messages: [] }));
+                    if (method === "ChatPins" && f.gate) { const gate = f.gate; f.gate = null; await gate; }
+                    if (method === "ChatHistory" && f.historyGate) { const gate = f.historyGate; f.historyGate = null; await gate; }
+                    if (f.reject) throw new Error("old private error");
+                    return result;
+                };
+            } });
+        });
+    });
+    test("native activation cannot redirect history or pin preload", async ({ page }) => {
+        await page.evaluate(() => {
+            window.__chatReadScope.nativeTab = "server-b";
+            window.__noxaChat.onMyChannelChanged();
+        });
+        await expect.poll(() => page.evaluate(() => window.__chatReadScope.calls)).toEqual([
+            ["ChatPins", "server-a", 1], ["ChatHistory", "server-a", 1, 0, 50],
+        ]);
+        expect(await page.evaluate(() => window.__chatReadScope.effects)).toEqual([]);
+    });
+    test("native activation cannot redirect the pins panel", async ({ page }) => {
+        await page.evaluate(() => { window.__chatReadScope.nativeTab = "server-b"; document.getElementById("chat-pins-btn").click(); });
+        await expect.poll(() => page.evaluate(() => window.__chatReadScope.calls)).toEqual([["ChatPins", "server-a", 1]]);
+        expect(await page.evaluate(() => window.__chatReadScope.effects)).toEqual([]);
+    });
+    test("late history cannot rerender the replacement server", async ({ page }) => {
+        await page.evaluate(() => {
+            const f = window.__chatReadScope;
+            f.history = { messages: [{ id: 77, body: "old private history", from_nickname: "old member" }] };
+            f.historyGate = new Promise(resolve => { f.releaseHistory = resolve; });
+            window.__noxaChat.onMyChannelChanged();
+        });
+        await expect.poll(() => page.evaluate(() => window.__chatReadScope.calls.length)).toBe(2);
+        await page.evaluate(() => {
+            window.__noxaChat.resetView();
+            window.__noxa.state.activeTabID = "server-b";
+            window.__noxa.state.serverGeneration++;
+            window.__chatReadScope.nativeTab = "server-b";
+            window.__chatReadScope.history = { messages: [{ id: 10, body: "replacement history", from_nickname: "new member" }] };
+            window.__noxaChat.onMyChannelChanged();
+        });
+        await expect(page.locator("#chat-log")).toContainText("replacement history");
+        await page.evaluate(() => {
+            const f = window.__chatReadScope;
+            f.mutations = 0;
+            f.observer = new MutationObserver(records => { f.mutations += records.length; });
+            f.observer.observe(document.getElementById("chat-log"), { childList: true, subtree: true });
+            f.releaseHistory();
+        });
+        await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+        expect(await page.evaluate(() => window.__chatReadScope.mutations)).toBe(0);
+        await expect(page.locator("#chat-log")).not.toContainText("old private");
+    });
+    for (const newer of ["panel", "event"]) {
+        test(`pin preload cannot undo a newer ${newer} result`, async ({ page }) => {
+            await page.evaluate(() => {
+                const f = window.__chatReadScope;
+                f.history = { messages: [{ id: 88, body: "unrelated pin", from_nickname: "member" }, { id: 77, body: "message to pin", from_nickname: "member" }] };
+                f.pins = { pins: [{ message_id: 77 }, { message_id: 88 }] };
+                f.gate = new Promise(resolve => { f.release = resolve; });
+                window.__noxaChat.onMyChannelChanged();
+            });
+            await expect(page.locator('#chat-log .msg[data-msg-id="77"]')).toBeVisible();
+            await page.evaluate(newer => {
+                window.__chatReadScope.pins = { pins: [] };
+                if (newer === "panel") document.getElementById("chat-pins-btn").click();
+                else window.__noxaChat.onChatPinned({ channel_id: 1, message_id: 77 }, false);
+            }, newer);
+            if (newer === "panel") await expect(page.locator(".pins-panel")).toContainText("Nothing pinned yet");
+            await page.evaluate(() => { window.__chatReadScope.release(); });
+            await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+            await page.locator('#chat-log .msg[data-msg-id="77"] button[title="pin"]').evaluate(button => button.click());
+            await expect.poll(() => page.evaluate(() => window.__callArgs.ChatPinMessageForTab)).toEqual([["server-a", 1, 77, true]]);
+            if (newer === "event") {
+                await page.locator('#chat-log .msg[data-msg-id="88"] button[title="pin"]').evaluate(button => button.click());
+                await expect.poll(() => page.evaluate(() => window.__callArgs.ChatPinMessageForTab)).toEqual([["server-a", 1, 77, true], ["server-a", 1, 88, false]]);
+            }
+        });
+    }
+    for (const reject of [false, true]) {
+        test(`late pin ${reject ? "failure" : "content"} cannot reach a replacement panel`, async ({ page }) => {
+            await page.evaluate(() => {
+                const f = window.__chatReadScope;
+                f.pins = { pins: [{ message_id: 77, message: { body: "old private pin", from_nickname: "old member" } }] };
+                f.gate = new Promise(resolve => { f.release = resolve; });
+                document.getElementById("chat-pins-btn").click();
+            });
+            await expect.poll(() => page.evaluate(() => window.__chatReadScope.calls.length)).toBe(1);
+            await page.evaluate(() => {
+                window.__noxaChat.resetView();
+                window.__noxa.state.activeTabID = "server-b";
+                window.__noxa.state.serverGeneration++;
+                window.__chatReadScope.nativeTab = "server-b";
+                window.__chatReadScope.pins = { pins: [] };
+                document.getElementById("chat-pins-btn").click();
+            });
+            await expect(page.locator(".pins-panel")).toContainText("Nothing pinned yet");
+            await page.evaluate(reject => { window.__chatReadScope.reject = reject; window.__chatReadScope.release(); }, reject);
+            // Drain the released async callback before inspecting the replacement.
+            await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+            await expect(page.locator(".pins-panel")).not.toContainText("old private");
+        });
+    }
+});
+
+test.describe("acknowledged role ban removal", () => {
+    test.beforeEach(async ({ page }) => {
+        await page.evaluate(() => {
+            const v = window.__noxa;
+            v.showWorkspace(false);
+            v.state.activeTabID = "server-a";
+            v.state.authorizationModel = "roles-v1";
+            const f = window.__roleBan = { nativeTab: "server-a", lists: 0, calls: [], effects: 0, completed: 0, rows: [{ id: 17, value: "banned-account", reason: "reason", banned_by: "moderator", expires_at: 0 }] };
+            const app = window.go.main.App;
+            window.go.main.App = new Proxy(app, { get(target, key) {
+                if (key === "BanRemoveForTab" || key === "BanRemove") return () => { throw new Error("unacknowledged role removal"); };
+                if (key === "BanListForTab") return async tab => {
+                    if (tab !== f.nativeTab) throw new Error("server changed");
+                    f.lists++;
+                    if (f.failReload) throw new Error("list unavailable");
+                    return { bans: structuredClone(f.rows) };
+                };
+                if (key === "RemoveRoleBanForTab") return async (tab, id) => {
+                    f.calls.push([tab, id]);
+                    if (tab !== f.nativeTab) throw new Error("server changed");
+                    if (f.gate) await f.gate;
+                    f.completed++;
+                    if (f.reject) throw new Error("private error");
+                    f.effects++; f.rows = []; return { ban_id: id };
+                };
+                return target[key];
+            } });
+            window.__noxaPerms.openBanList();
+        });
+        await expect(page.locator(".ban-lift")).toHaveCount(1);
+    });
+    async function lift(page) {
+        await page.locator(".ban-lift").click();
+        await page.getByRole("dialog", { name: "Lift ban", exact: true }).getByRole("button", { name: "Lift", exact: true }).click();
+    }
+    test("waits for committed deletion before refreshing the list", async ({ page }) => {
+        await page.evaluate(() => { const f = window.__roleBan; f.gate = new Promise(resolve => { f.release = resolve; }); });
+        await lift(page);
+        await expect.poll(() => page.evaluate(() => window.__roleBan.calls)).toEqual([["server-a", 17]]);
+        await expect(page.locator(".ban-lift")).toBeDisabled();
+        await expect(page.getByRole("button", { name: "Reload bans", exact: true })).toBeDisabled();
+        expect(await page.evaluate(() => window.__roleBan.lists)).toBe(1);
+        await page.evaluate(() => window.__roleBan.release());
+        await expect(page.locator(".ban-lift")).toHaveCount(0);
+        expect(await page.evaluate(() => window.__roleBan.lists)).toBe(2);
+    });
+    test("uncertain deletion requires an explicit reload", async ({ page }) => {
+        await page.evaluate(() => { window.__roleBan.reject = true; });
+        await lift(page);
+        await expect(page.getByRole("status").filter({ hasText: "Removal could not be confirmed" })).toBeVisible();
+        await expect(page.locator(".ban-lift")).toBeDisabled();
+        expect(await page.evaluate(() => window.__roleBan.lists)).toBe(1);
+        await page.getByRole("button", { name: "Reload bans", exact: true }).click();
+        await expect(page.locator(".ban-lift")).toBeEnabled();
+        expect(await page.evaluate(() => window.__roleBan.lists)).toBe(2);
+    });
+    test("failed refresh after removal clears pending feedback and permits reload", async ({ page }) => {
+        await page.evaluate(() => { window.__roleBan.failReload = true; });
+        await lift(page);
+        await expect(page.getByText("ban list failed: Error: list unavailable", { exact: true })).toBeVisible();
+        await expect(page.getByRole("status").filter({ hasText: "Updating bans" })).toHaveCount(0);
+        await expect(page.getByRole("button", { name: "Reload bans", exact: true })).toBeEnabled();
+        expect(await page.evaluate(() => window.__roleBan.effects)).toBe(1);
+        await page.evaluate(() => { window.__roleBan.failReload = false; });
+        await page.getByRole("button", { name: "Reload bans", exact: true }).click();
+        await expect(page.getByText("no bans", { exact: true })).toBeVisible();
+    });
+    test("native activation cannot redirect removal before frontend reset", async ({ page }) => {
+        await page.evaluate(() => { window.__roleBan.nativeTab = "server-b"; });
+        await lift(page);
+        await expect.poll(() => page.evaluate(() => window.__roleBan.calls)).toEqual([["server-a", 17]]);
+        expect(await page.evaluate(() => window.__roleBan.effects)).toBe(0);
+        await expect(page.locator(".ban-lift")).toBeDisabled();
+    });
+    test("late rejection cannot revive the previous server dialog or reload it", async ({ page }) => {
+        await page.evaluate(() => { const f = window.__roleBan; f.reject = true; f.gate = new Promise(resolve => { f.release = resolve; }); });
+        await lift(page);
+        await expect.poll(() => page.evaluate(() => window.__roleBan.calls.length)).toBe(1);
+        await page.evaluate(() => {
+            for (const callback of window.__events.tab_reset || []) callback("server-b");
+            window.__roleBan.release();
+        });
+        await expect.poll(() => page.evaluate(() => window.__roleBan.completed)).toBe(1);
+        await expect(page.getByRole("dialog")).toHaveCount(0);
+        expect(await page.evaluate(() => window.__roleBan.lists)).toBe(1);
+    });
+});
+
+test.describe("tab-bound channel placement", () => {
+    test.beforeEach(async ({ page }) => {
+        await page.evaluate(() => {
+            const v = window.__noxa;
+            v.showWorkspace(false);
+            v.state.activeTabID = "server-a";
+            v.state.myClientID = "self";
+            v.state.authorizationModel = "roles-v1";
+            v.state.channels = [{ ChannelID: 1, ParentID: 0, Name: "First", OrderIndex: 0 },
+                { ChannelID: 2, ParentID: 0, Name: "Second", OrderIndex: 10 },
+                { ChannelID: 4, ParentID: 0, Name: "Parent", OrderIndex: 20 },
+                { ChannelID: 3, ParentID: 4, Name: "Child", OrderIndex: 30 }];
+            const f = window.__placement = { nativeTab: "server-a", calls: [], changes: [], channels: structuredClone(v.state.channels) };
+            const app = window.go.main.App;
+            window.go.main.App = new Proxy(app, { get(target, key) {
+                if (["ChannelEditTree", "RoleChannelState", "ChangeRoleChannel"].includes(key)) return () => { throw new Error("unscoped placement"); };
+                if (!["ChannelEditTreeForTab", "RoleChannelStateForTab", "ChangeRoleChannelForTab"].includes(key)) return target[key];
+                return async (tabID, ...args) => {
+                    f.calls.push({ key, tabID, args });
+                    if (tabID !== f.nativeTab) throw new Error("server changed");
+                    if (key === "RoleChannelStateForTab") return {
+                        revision: 8, channel_id: 1, name: "Current name", can_create_permanent: true,
+                        destinations: f.destinations || [{ id: 0, name: "Root", can_sync: true }, { id: 4, name: "Parent", can_sync: true }],
+                        settings: { name: "Current name", topic: "Fresh topic", description: "", order_index: f.order ?? 0, max_clients: 0, slow_mode_seconds: 0, opus_bitrate: 0, opus_fec: false, opus_dtx: false, opus_stereo: false },
+                    };
+                    f.changes.push(args);
+                    if (f.gate) await f.gate;
+                    return key === "ChangeRoleChannelForTab" ? { revision: 9, channel_id: 1 } : "";
+                };
+            } });
+            v.renderTree();
+        });
+    });
+
+    const drag = (page, target) => page.locator('.channel[data-chid="1"]').dragTo(page.locator(`.channel[data-chid="${target}"]`));
+
+    test("same-parent role drag reviews a fresh settings edit and waits for acknowledgement", async ({ page }) => {
+        await drag(page, 2);
+        const dialog = page.locator(".channel-lifecycle-dialog");
+        await expect(dialog.getByLabel("Topic", { exact: true })).toHaveValue("Fresh topic");
+        await expect(dialog.getByLabel("Sort order", { exact: true })).toHaveValue("11");
+        await expect(dialog.getByLabel("Sort order", { exact: true })).toBeVisible();
+        expect(await page.evaluate(() => window.__placement.changes)).toEqual([]);
+        await page.evaluate(() => { window.__placement.gate = new Promise(resolve => { window.__placement.release = resolve; }); });
+        await dialog.getByRole("button", { name: "Save changes", exact: true }).click();
+        await expect.poll(() => page.evaluate(() => window.__placement.changes.length)).toBe(1);
+        await expect(dialog.getByRole("button", { name: "Save changes", exact: true })).toBeDisabled();
+        const request = await page.evaluate(() => window.__placement.changes[0][0]);
+        expect(request).toMatchObject({ kind: "channel_edit", channel_id: 1, expected_revision: 8, settings: { order_index: 11, topic: "Fresh topic" } });
+        expect(request).not.toHaveProperty("parent_id");
+        await page.evaluate(() => window.__placement.release());
+        await expect(dialog).toHaveCount(0);
+    });
+
+    test("cross-parent role drag sends order and destination together while keeping access", async ({ page }) => {
+        await drag(page, 3);
+        const dialog = page.locator(".channel-lifecycle-dialog");
+        await expect(dialog.getByRole("combobox", { name: "Destination", exact: true })).toHaveValue("4");
+        await expect(dialog.getByRole("combobox", { name: "Channel access", exact: true })).toHaveValue("keep");
+        await expect(dialog.getByLabel("Sort order", { exact: true })).toHaveValue("31");
+        await dialog.getByRole("button", { name: "Move", exact: true }).click();
+        await expect.poll(() => page.evaluate(() => window.__placement.changes.length)).toBe(1);
+        expect(await page.evaluate(() => window.__placement.changes[0][0])).toEqual({ kind: "channel_move", expected_revision: 8, channel_id: 1, parent_id: 4, sync_to_parent: false, order_index: 31 });
+    });
+
+    test("cross-parent move preserves an explicit zero order", async ({ page }) => {
+        await page.evaluate(() => { window.__placement.order = 9; });
+        await drag(page, 3);
+        const dialog = page.locator(".channel-lifecycle-dialog");
+        await dialog.getByLabel("Sort order", { exact: true }).fill("0");
+        await dialog.getByRole("button", { name: "Move", exact: true }).click();
+        await expect.poll(() => page.evaluate(() => window.__placement.changes.length)).toBe(1);
+        expect(await page.evaluate(() => window.__placement.changes[0][0])).toEqual({ kind: "channel_move", expected_revision: 8, channel_id: 1, parent_id: 4, sync_to_parent: false, order_index: 0 });
+    });
+
+    test("an unavailable drop destination is never replaced by the first allowed destination", async ({ page }) => {
+        await page.evaluate(() => { window.__placement.destinations = [{ id: 0, name: "Root" }]; });
+        await drag(page, 3);
+        const dialog = page.locator(".channel-lifecycle-dialog");
+        await expect(dialog.getByRole("combobox", { name: "Destination", exact: true })).toHaveValue("");
+        await expect(dialog).toContainText("That destination is no longer available. Choose another destination.");
+        await expect(dialog.getByRole("button", { name: "Move", exact: true })).toBeDisabled();
+        await dialog.getByRole("combobox", { name: "Destination", exact: true }).selectOption("0");
+        await expect(dialog.getByRole("button", { name: "Move", exact: true })).toBeEnabled();
+    });
+
+    test("overflowing drop order has no native effects", async ({ page }) => {
+        await page.evaluate(() => { window.__noxa.state.channels[1].OrderIndex = 2147483647; window.__noxa.renderTree(); });
+        await drag(page, 2);
+        expect(await page.evaluate(() => window.__placement.calls)).toEqual([]);
+        await expect(page.getByText("This channel is at the sort-order limit. Adjust its sort order in channel settings first.", { exact: true })).toBeVisible();
+    });
+
+    for (const mode of ["roles-v1"]) {
+        test(`${mode} channel drop rejects native activation before frontend reset`, async ({ page }) => {
+            await page.evaluate(model => { window.__noxa.state.authorizationModel = model; window.__placement.nativeTab = "server-b"; }, mode);
+            await drag(page, 2);
+            await expect.poll(() => page.evaluate(() => window.__placement.calls.length)).toBe(1);
+            expect(await page.evaluate(() => window.__placement.calls[0].tabID)).toBe("server-a");
+            expect(await page.evaluate(() => window.__placement.changes)).toEqual([]);
+        });
+    }
+
+    test("returning to the source tab cannot revive a channel drag", async ({ page }) => {
+        await page.evaluate(() => {
+            const transfer = new DataTransfer();
+            document.querySelector('.channel[data-chid="1"]').dispatchEvent(new DragEvent("dragstart", { dataTransfer: transfer, bubbles: true }));
+            for (const tab of ["server-b", "server-a"]) for (const callback of window.__events.tab_reset || []) callback(tab);
+            window.__noxa.state.channels = window.__placement.channels;
+            window.__noxa.renderTree();
+            document.querySelector('.channel[data-chid="2"]').dispatchEvent(new DragEvent("drop", { dataTransfer: transfer, bubbles: true }));
+        });
+        expect(await page.evaluate(() => window.__placement.calls)).toEqual([]);
+    });
+});
+
+test.describe("tab-bound custom emoji", () => {
+    test.beforeEach(async ({ page }) => {
+        await page.evaluate(async () => {
+            const v = window.__noxa;
+            v.showWorkspace(false);
+            v.state.activeTabID = "server-a";
+            v.state.myClientID = "self";
+            const f = window.__emoji = { nativeTab: "server-a", calls: [], effects: [], toasts: [], names: ["wave", "hello"], completed: [] };
+            v.toast = text => f.toasts.push(text);
+            const app = window.go.main.App;
+            const methods = ["EmojiList", "EmojiGet", "EmojiUpload", "EmojiRename", "EmojiDelete"];
+            window.go.main.App = new Proxy(app, { get(target, key) {
+                if (methods.includes(key)) return () => { throw new Error("unscoped emoji call"); };
+                if (!methods.some(name => key === name + "ForTab")) return target[key];
+                return async (tabID, ...args) => {
+                    const name = key.slice(0, -"ForTab".length);
+                    f.calls.push({ name, tabID, args });
+                    if (tabID !== f.nativeTab) throw new Error("server changed");
+                    const names = [...f.names];
+                    if (!["EmojiList", "EmojiGet"].includes(name)) f.effects.push({ name, args });
+                    if (f.gated === name && (!f.gatedArg || f.gatedArg === args[0])) await f.gate;
+                    f.completed.push(name);
+                    if (f.reject === name) throw new Error("old rejection");
+                    if (name === "EmojiList") return { emojis: names.map(name => ({ name })) };
+                    if (name === "EmojiGet") return { content_type: "image/png", data_base64: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=" };
+                    return f.error || "";
+                };
+            } });
+            const chat = await import("/src/chat-ui.js");
+            chat.onEmojiAdded();
+        });
+    });
+
+    const openManager = async page => {
+        await page.locator("#tab-files").click();
+        await page.locator(".fb-emoji").click();
+    };
+
+    test("manager lists and previews only its opening server", async ({ page }) => {
+        await openManager(page);
+        await expect(page.locator(".em-row img").first()).toHaveAttribute("src", /^data:image\/png;base64,/);
+        expect(await page.evaluate(() => window.__emoji.calls.every(c => c.tabID === "server-a"))).toBe(true);
+        await page.locator(".em-close").click();
+        await page.evaluate(() => { window.__emoji.nativeTab = "server-b"; });
+        await page.locator(".fb-emoji").click();
+        await expect(page.locator(".em-list")).toContainText("server changed");
+        expect(await page.evaluate(() => window.__emoji.calls.filter(c => c.name === "EmojiList").map(c => c.tabID))).toEqual(["server-a", "server-a"]);
+    });
+
+    for (const action of ["rename", "delete"]) {
+        test(`${action} waits for storage and does not refresh after rejection`, async ({ page }) => {
+            await openManager(page);
+            await page.evaluate(action => {
+                const f = window.__emoji;
+                f.gated = action === "rename" ? "EmojiRename" : "EmojiDelete";
+                f.error = "asset storage failed";
+                f.gate = new Promise(resolve => { f.release = resolve; });
+            }, action);
+            const name = action === "rename" ? "Rename custom emoji" : "Delete emoji";
+            await page.locator(".em-row").first().getByRole("button", { name, exact: true }).click();
+            if (action === "rename") await page.getByRole("dialog", { name }).getByRole("textbox").fill("renamed");
+            await page.getByRole("dialog").last().getByRole("button", { name: action === "rename" ? "Rename" : "Delete emoji", exact: true }).click();
+            await expect.poll(() => page.evaluate(() => window.__emoji.effects.length)).toBe(1);
+            expect(await page.evaluate(() => window.__emoji.completed.includes(window.__emoji.gated))).toBe(false);
+            expect(await page.evaluate(() => window.__emoji.calls.filter(c => c.name === "EmojiList").length)).toBe(1);
+            expect(await page.evaluate(() => window.__emoji.toasts)).toEqual([]);
+            await page.evaluate(() => window.__emoji.release());
+            await expect.poll(() => page.evaluate(() => window.__emoji.toasts.join(" "))).toContain("asset storage failed");
+            await expect(page.locator(".em-row")).toHaveCount(2);
+            expect(await page.evaluate(() => window.__emoji.calls.filter(c => c.name === "EmojiList").length)).toBe(1);
+        });
+
+        test(`${action} prompt cannot mutate another native tab`, async ({ page }) => {
+            await openManager(page);
+            const name = action === "rename" ? "Rename custom emoji" : "Delete emoji";
+            await page.locator(".em-row").first().getByRole("button", { name, exact: true }).click();
+            if (action === "rename") await page.getByRole("dialog", { name }).getByRole("textbox").fill("renamed");
+            await page.evaluate(() => { window.__emoji.nativeTab = "server-b"; });
+            await page.getByRole("dialog").last().getByRole("button", { name: action === "rename" ? "Rename" : "Delete emoji", exact: true }).click();
+            await expect.poll(() => page.evaluate(() => window.__emoji.toasts.length)).toBe(1);
+            expect(await page.evaluate(() => window.__emoji.effects)).toEqual([]);
+            expect(await page.evaluate(() => window.__emoji.calls.at(-1).tabID)).toBe("server-a");
+        });
+    }
+
+    for (const surface of ["manager", "picker"]) {
+        test(`${surface} upload retains its tab through the image and name prompts`, async ({ page }) => {
+            if (surface === "manager") {
+                await openManager(page);
+                await page.locator(".em-add").click();
+                await page.getByRole("dialog", { name: "Upload custom emoji", exact: true }).getByRole("textbox").fill("new_emoji");
+            } else await page.locator("#chat-emoji").click();
+            const chooserPromise = page.waitForEvent("filechooser");
+            if (surface === "manager") await page.getByRole("button", { name: "Continue", exact: true }).click();
+            else await page.locator(".emoji-upload").click();
+            const chooser = await chooserPromise;
+            await page.evaluate(() => { window.__emoji.nativeTab = "server-b"; });
+            await chooser.setFiles({ name: "pixel.png", mimeType: "image/png", buffer: Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=", "base64") });
+            if (surface === "picker") {
+                await page.getByRole("dialog", { name: "Upload custom emoji", exact: true }).getByRole("textbox").fill("new_emoji");
+                await page.getByRole("button", { name: "Upload", exact: true }).click();
+            }
+            await expect.poll(() => page.evaluate(() => window.__emoji.calls.filter(c => c.name === "EmojiUpload").length)).toBe(1);
+            expect(await page.evaluate(() => window.__emoji.effects)).toEqual([]);
+            expect(await page.evaluate(() => window.__emoji.calls.find(c => c.name === "EmojiUpload").tabID)).toBe("server-a");
+            await expect.poll(() => page.evaluate(() => window.__emoji.toasts.length)).toBe(1);
+        });
+    }
+
+    test("closing the manager cancels a scheduled mutation refresh", async ({ page }) => {
+        await page.clock.install();
+        await openManager(page);
+        await page.locator(".em-row").first().getByRole("button", { name: "Delete emoji", exact: true }).click();
+        await page.getByRole("dialog").last().getByRole("button", { name: "Delete emoji", exact: true }).click();
+        await expect.poll(() => page.evaluate(() => window.__emoji.effects.length)).toBe(1);
+        await page.locator(".em-close").click();
+        await page.evaluate(() => { window.__emoji.nativeTab = "server-b"; });
+        await page.clock.runFor(500);
+        expect(await page.evaluate(() => window.__emoji.calls.filter(c => c.name === "EmojiList").length)).toBe(1);
+    });
+
+    test("late mutation rejection cannot toast or refresh after reset", async ({ page }) => {
+        await openManager(page);
+        await page.evaluate(() => {
+            const f = window.__emoji;
+            f.gated = f.reject = "EmojiDelete";
+            f.gate = new Promise(resolve => { f.release = resolve; });
+        });
+        await page.locator(".em-row").first().getByRole("button", { name: "Delete emoji", exact: true }).click();
+        await page.getByRole("dialog").last().getByRole("button", { name: "Delete emoji", exact: true }).click();
+        await expect.poll(() => page.evaluate(() => window.__emoji.effects.length)).toBe(1);
+        await page.evaluate(() => {
+            for (const callback of window.__events.tab_reset || []) callback("server-b");
+            window.__emoji.release();
+        });
+        await expect.poll(() => page.evaluate(() => window.__emoji.completed.includes("EmojiDelete"))).toBe(true);
+        expect(await page.evaluate(() => window.__emoji.toasts)).toEqual([]);
+        expect(await page.evaluate(() => window.__emoji.calls.filter(c => c.name === "EmojiList").length)).toBe(1);
+    });
+
+    test("late emoji replies cannot attach the previous message to a replacement reaction strip", async ({ page }) => {
+        await page.evaluate(() => {
+            const f = window.__emoji;
+            f.gated = "EmojiGet";
+            f.gatedArg = "wave";
+            f.gate = new Promise(resolve => { f.release = resolve; });
+            window.__noxa.state.myChannelID = 42;
+            window.__noxa.state.channels = [{ ChannelID: 42, Name: "Chat" }];
+            for (const id of [1, 2]) {
+                for (const callback of window.__events.event || []) callback(JSON.stringify({ type: "chat", data: { id, channel_id: 42, from: "Bob", from_unique_id: "peer", text: "Message " + id } }));
+            }
+        });
+        await expect.poll(() => page.evaluate(() => window.__emoji.completed.includes("EmojiList"))).toBe(true);
+        await page.locator('.msg[data-msg-id="1"]').hover();
+        await page.locator('.msg[data-msg-id="1"]').getByRole("button", { name: "react", exact: true }).click();
+        await expect.poll(() => page.evaluate(() => window.__emoji.calls.some(c => c.name === "EmojiGet" && c.args[0] === "wave"))).toBe(true);
+        await page.locator('.msg[data-msg-id="2"]').hover();
+        await page.locator('.msg[data-msg-id="2"]').getByRole("button", { name: "react", exact: true }).click();
+        await expect(page.locator('.react-strip img[alt=":hello:"]')).toBeVisible();
+        await page.evaluate(() => window.__emoji.release());
+        await expect.poll(() => page.evaluate(() => window.__emoji.completed.filter(n => n === "EmojiGet").length)).toBe(2);
+        // If the late first image is present, its action must belong to the
+        // current message too; the previous loop used a mutable global strip.
+        const wave = page.locator('.react-strip img[alt=":wave:"]');
+        if (await wave.count()) await wave.click();
+        else await page.locator('.react-strip img[alt=":hello:"]').click();
+        await expect.poll(() => page.evaluate(() => window.__callArgs.ChatReactForTab?.at(-1)?.[1])).toBe(2);
+    });
+
+    test("a pending picker loop cannot fetch remaining old emoji on a new server", async ({ page }) => {
+        await page.evaluate(() => {
+            const f = window.__emoji;
+            f.gated = "EmojiGet";
+            f.gatedArg = "wave";
+            f.gate = new Promise(resolve => { f.release = resolve; });
+        });
+        await page.locator("#chat-emoji").click();
+        await expect.poll(() => page.evaluate(() => window.__emoji.calls.some(c => c.name === "EmojiGet" && c.args[0] === "wave"))).toBe(true);
+        await page.evaluate(() => {
+            for (const callback of window.__events.tab_reset || []) callback("server-b");
+            window.__emoji.nativeTab = "server-b";
+            window.__emoji.names = ["new"];
+            window.__noxa.showWorkspace(false);
+        });
+        await page.locator("#chat-emoji").click();
+        await expect(page.locator('.emoji-panel img[alt=":new:"]')).toBeVisible();
+        await page.evaluate(() => window.__emoji.release());
+        await expect.poll(() => page.evaluate(() => window.__emoji.completed.filter(n => n === "EmojiGet").length)).toBe(2);
+        expect(await page.evaluate(() => window.__emoji.calls.some(c => c.name === "EmojiGet" && c.tabID === "server-b" && c.args[0] === "hello"))).toBe(false);
+        await expect(page.locator('.emoji-panel img[alt=":wave:"]')).toHaveCount(0);
+    });
+});
+
+test.describe("tab-bound metadata and channel icons", () => {
+    test.beforeEach(async ({ page }) => {
+        await page.evaluate(() => {
+            const v = window.__noxa;
+            v.showWorkspace(false);
+            v.state.activeTabID = "server-a";
+            v.state.myClientID = "self";
+            v.state.myChannelID = 1;
+            v.state.channels = [{ ChannelID: 1, Name: "Lobby", ParentID: 0 }, { ChannelID: 2, Name: "Other", ParentID: 0, HasIcon: true }];
+            v.recentChannels = () => [2];
+            const f = window.__metadata = { nativeTab: "server-a", calls: [], effects: [], toasts: [], notices: [] };
+            v.toast = text => f.toasts.push(text);
+            v.sysMsg = text => f.notices.push(text);
+            const app = window.go.main.App;
+            const names = ["GetClientInfo", "ServerInfo", "MOTD", "Subscriptions", "ChannelIconGet", "ChannelIconSet", "JoinChannel"];
+            window.go.main.App = new Proxy(app, { get(target, key) {
+                if (names.includes(key)) return () => { throw new Error("unscoped metadata call"); };
+                if (key === "DMHistoryContextForTab") return async (tabID) => {
+                    if (tabID !== "server-a") return target[key](tabID);
+                    f.calls.push({ name: "DMHistoryContext", tabID, args: [] });
+                    if (f.gated === "DMHistoryContext") await f.gate;
+                    return { tab_id: tabID, identity_uid: "old-identity", activation: "0", identity_revision: "0" };
+                };
+                if (!names.some(name => key === name + "ForTab")) return target[key];
+                return async (tabID, ...args) => {
+                    const name = key.slice(0, -"ForTab".length);
+                    f.calls.push({ name, tabID, args });
+                    if (tabID !== f.nativeTab) throw new Error("server changed");
+                    if (["ChannelIconSet", "JoinChannel"].includes(name)) f.effects.push({ name, args });
+                    if (f.gated === name) await f.gate;
+                    if (f.reject === name) throw new Error("old rejection");
+                    if (name === "GetClientInfo") return { nickname: "Old Alice", unique_id: "old", ping_ms: 12 };
+                    if (name === "ServerInfo") return { name: "Old server", uptime_seconds: 60 };
+                    if (name === "MOTD") return "old notice";
+                    if (name === "Subscriptions") return [2];
+                    if (name === "ChannelIconGet") return f.icon || {};
+                    return "";
+                };
+            } });
+            v.renderTree();
+        });
+    });
+
+    test("metadata dialogs and news reject the native activation gap", async ({ page }) => {
+        await page.evaluate(() => {
+            window.__metadata.nativeTab = "server-b";
+            window.__noxa.openClientInfo({ client_id: "alice", nickname: "Alice" });
+            window.__noxaMeta.openServerInfo();
+            return window.__noxaSocial.refreshNews();
+        });
+        await expect(page.locator(".server-info-error")).toContainText("Server details unavailable");
+        await expect(page.locator("#news-area")).toHaveText("server info unavailable");
+        const calls = await page.evaluate(() => window.__metadata.calls.filter(c => ["GetClientInfo", "ServerInfo", "MOTD"].includes(c.name)));
+        expect(calls.map(c => c.name).sort()).toEqual(["GetClientInfo", "GetClientInfo", "MOTD", "ServerInfo", "ServerInfo"]);
+        expect(calls.every(c => c.tabID === "server-a")).toBe(true);
+        expect(calls.filter(c => c.name === "GetClientInfo").map(c => c.args)).toEqual([["alice"], ["self"]]);
+    });
+
+    test("late news and channel icons cannot populate a replacement server", async ({ page }) => {
+        await page.evaluate(() => {
+            const f = window.__metadata;
+            const pending = [];
+            const app = window.go.main.App;
+            window.go.main.App = new Proxy(app, { get(target, key) {
+                if (!["ServerInfoForTab", "ChannelIconGetForTab"].includes(key)) return target[key];
+                return async (...args) => {
+                    const response = key === "ServerInfoForTab" ? { name: "Stale server", uptime_seconds: 60 } :
+                        { data_base64: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=", content_type: "image/png" };
+                    if (args[0] !== "server-a") return {};
+                    f.calls.push({ name: key, tabID: args[0], args: args.slice(1) });
+                    await new Promise(resolve => pending.push(resolve));
+                    return response;
+                };
+            } });
+            f.release = () => pending.forEach(resolve => resolve());
+            window.__noxa.state.channels = [{ ChannelID: 33, Name: "Old channel", ParentID: 0, HasIcon: true }];
+            window.__noxa.renderTree();
+            f.news = window.__noxaSocial.refreshNews();
+        });
+        await expect.poll(() => page.evaluate(() => window.__metadata.calls.some(c => c.name === "ChannelIconGetForTab" && c.args[0] === 33))).toBe(true);
+        await page.evaluate(async () => {
+            for (const callback of window.__events.tab_reset || []) callback("server-b");
+            window.__noxa.state.channels = [{ ChannelID: 33, Name: "New channel", ParentID: 0, HasIcon: true }];
+            window.__noxa.renderTree();
+            document.getElementById("news-area").textContent = "New server news";
+            window.__metadata.release();
+            await window.__metadata.news;
+        });
+        await expect(page.locator("#news-area")).not.toContainText("Stale server");
+        await expect(page.locator('.channel[data-chid="33"] .ch-icon img')).toHaveCount(0);
+    });
+
+    test("server information captures the opening client before queued queries", async ({ page }) => {
+        await page.evaluate(() => {
+            window.__noxaMeta.openServerInfo();
+            window.__noxa.state.myClientID = "replacement";
+        });
+        await expect.poll(() => page.evaluate(() => window.__metadata.calls.filter(c => c.name === "GetClientInfo"))).toEqual([
+            { name: "GetClientInfo", tabID: "server-a", args: ["self"] },
+        ]);
+    });
+
+    test("recent channel navigation cannot join another native server", async ({ page }) => {
+        await page.locator('.channel[data-chid="1"]').click({ button: "right" });
+        await page.evaluate(() => { window.__metadata.nativeTab = "server-b"; });
+        await page.locator('[data-act="recent-2"]').click();
+        await expect.poll(() => page.evaluate(() => window.__metadata.calls.filter(c => c.name === "JoinChannel"))).toEqual([
+            { name: "JoinChannel", tabID: "server-a", args: [2] },
+        ]);
+        expect(await page.evaluate(() => window.__metadata.effects)).toEqual([]);
+    });
+
+    test("quick switch and leave channel reject the native activation gap", async ({ page }) => {
+        await page.keyboard.press("Control+k");
+        await page.evaluate(() => { window.__metadata.nativeTab = "server-b"; });
+        await page.locator(".qs-row").filter({ hasText: "# Other" }).click();
+        await page.locator("#voice-leave-channel").click();
+        await expect.poll(() => page.evaluate(() => window.__metadata.calls.filter(c => c.name === "JoinChannel"))).toEqual([
+            { name: "JoinChannel", tabID: "server-a", args: [2] },
+            { name: "JoinChannel", tabID: "server-a", args: [0] },
+        ]);
+        expect(await page.evaluate(() => window.__metadata.effects)).toEqual([]);
+        await expect(page.locator("#voice-leave-channel")).toBeEnabled();
+    });
+
+    test("channel notifications retain their originating server across tab changes", async ({ page }) => {
+        await page.evaluate(() => {
+            window.__noxaPolish.recordNotification("mention", "Old channel mention", { channelID: 2 });
+            for (const callback of window.__events.tab_reset || []) callback("server-b");
+            window.__metadata.nativeTab = "server-b";
+            window.__noxaPolish.openNotifCenter();
+        });
+        await page.locator(".nc-row").filter({ hasText: "Old channel mention" }).click();
+        await expect.poll(() => page.evaluate(() => window.__metadata.calls.filter(c => c.name === "JoinChannel"))).toEqual([
+            { name: "JoinChannel", tabID: "server-a", args: [2] },
+        ]);
+        expect(await page.evaluate(() => window.__metadata.effects)).toEqual([]);
+    });
+
+    for (const stage of ["DMHistoryContext", "Subscriptions", "MOTD"]) {
+        test(`connection setup discards late ${stage} after reset`, async ({ page }) => {
+            await page.evaluate(async gated => {
+                const f = window.__metadata;
+                f.gated = gated;
+                f.gate = new Promise(resolve => { f.release = resolve; });
+                const chat = await import("/src/chat-ui.js");
+                f.connect = chat.onConnect();
+            }, stage);
+            await expect.poll(() => page.evaluate(name => window.__metadata.calls.some(c => c.name === name), stage)).toBe(true);
+            await page.evaluate(async () => {
+                window.__dmStorageIdentity = "new-identity";
+                for (const callback of window.__events.tab_reset || []) callback("server-b");
+                window.__noxa.state.myUniqueID = "new-identity";
+                window.__metadata.release();
+                await window.__metadata.connect;
+            });
+            expect(await page.evaluate(() => window.__noxa.state.myUniqueID)).toBe("new-identity");
+            expect(await page.evaluate(() => window.__noxaChat.isSubscribed(2))).toBe(false);
+            expect(await page.evaluate(() => window.__metadata.notices)).toEqual([]);
+            if (stage !== "MOTD") expect(await page.evaluate(() => window.__metadata.calls.some(c => c.name === "MOTD" && c.tabID === "server-a"))).toBe(false);
+        });
+    }
+
+    test("connection setup restores the current tab subscriptions and notice", async ({ page }) => {
+        await page.evaluate(async () => { const chat = await import("/src/chat-ui.js"); await chat.onConnect(); });
+        expect(await page.evaluate(() => window.__noxaChat.isSubscribed(2))).toBe(true);
+        expect(await page.evaluate(() => window.__metadata.notices)).toEqual(["server notice — old notice"]);
+        expect(await page.evaluate(() => window.__metadata.calls.filter(c => ["MOTD", "Subscriptions"].includes(c.name)).map(c => c.tabID))).toEqual(["server-a", "server-a"]);
+    });
+
+});
+
+test.describe("tab-bound member actions and branding", () => {
+    test.beforeEach(async ({ page }) => {
+        await page.evaluate(() => {
+            const v = window.__noxa;
+            v.showWorkspace(false);
+            v.state.activeTabID = "server-a";
+            v.state.authorizationModel = "roles-v1";
+            v.state.isAdmin = false;
+            v.state.myPerms = new Map();
+            v.state.myClientID = "self";
+            v.state.clients = [
+                { client_id: "alice", unique_id: "alice", nickname: "Alice", channel_id: 1 },
+                { client_id: "bob", unique_id: "bob", nickname: "Bob", channel_id: 1 },
+            ];
+            v.state.channels = [{ ChannelID: 1, Name: "Lobby", ParentID: 0 }, { ChannelID: 2, Name: "Other", ParentID: 0 }];
+            v.renderTree();
+            const fixture = window.__actions = { nativeTab: "server-a", calls: [], effects: [], toasts: [] };
+            v.toast = text => fixture.toasts.push(text);
+            const app = window.go.main.App;
+            const names = ["JoinChannel", "KickClient", "DisconnectMember", "MoveClient", "Poke", "SetAvatar", "ServerIconSet", "ServerBannerSet", "ServerIconGet", "ServerBannerGet"];
+            window.go.main.App = new Proxy(app, { get(target, key) {
+                if (names.includes(key)) return () => { throw new Error("unscoped native call"); };
+                if (!names.some(name => key === name + "ForTab")) return target[key];
+                return async (tabID, ...args) => {
+                    const name = key.slice(0, -"ForTab".length);
+                    fixture.calls.push({ name, tabID, args });
+                    if (name.endsWith("Get")) {
+                        if (tabID !== fixture.nativeTab) throw new Error("server changed");
+                        return {};
+                    }
+                    if (tabID !== fixture.nativeTab) return "server changed";
+                    if (name === "DisconnectMember" && args[1] !== v.state.clients.find(c => c.client_id === args[0])?.channel_id) return "target channel changed";
+                    fixture.effects.push({ name, args });
+                    if (fixture.gate) await fixture.gate;
+                    return fixture.error || "";
+                };
+            } });
+        });
+    });
+
+    test("join rejection preserves membership until the result arrives", async ({ page }) => {
+        await page.evaluate(() => {
+            const f = window.__actions;
+            f.error = "channel access denied";
+            f.gate = new Promise(resolve => { f.release = resolve; });
+            window.__noxa.state.myChannelID = 1;
+            window.__noxa.renderTree();
+        });
+        await page.locator('.channel[data-chid="2"]').click();
+        await expect.poll(() => page.evaluate(() => window.__actions.calls.filter(c => c.name === "JoinChannel"))).toEqual([
+            { name: "JoinChannel", tabID: "server-a", args: [2] },
+        ]);
+        expect(await page.evaluate(() => window.__noxa.state.myChannelID)).toBe(1);
+        await expect(page.locator("#toasts .toast")).toHaveCount(0);
+        await page.evaluate(() => window.__actions.release());
+        await expect(page.locator("#toasts .toast")).toHaveText("join failed: channel access denied");
+        expect(await page.evaluate(() => window.__noxa.state.myChannelID)).toBe(1);
+    });
+
+    test("leave waits for confirmation and restores controls on rejection", async ({ page }) => {
+        await page.evaluate(() => {
+            const f = window.__actions;
+            f.error = "membership backend unavailable";
+            f.gate = new Promise(resolve => { f.release = resolve; });
+            window.__noxa.state.myChannelID = 1;
+            window.__noxa.renderTree();
+        });
+        await page.locator("#voice-leave-channel").click();
+        await expect.poll(() => page.evaluate(() => window.__actions.calls.filter(c => c.name === "JoinChannel"))).toEqual([
+            { name: "JoinChannel", tabID: "server-a", args: [0] },
+        ]);
+        await expect(page.locator("#voice-leave-channel")).toBeDisabled();
+        expect(await page.evaluate(() => window.__noxa.state.myChannelID)).toBe(1);
+        await page.evaluate(() => window.__actions.release());
+        await expect(page.locator("#voice-leave-channel")).toBeEnabled();
+        await expect.poll(() => page.evaluate(() => window.__actions.toasts.join(" "))).toContain("membership backend unavailable");
+        expect(await page.evaluate(() => window.__noxa.state.myChannelID)).toBe(1);
+    });
+
+    test("old leave result cannot change a replacement server's controls", async ({ page }) => {
+        await page.evaluate(() => {
+            const f = window.__actions;
+            f.error = "old leave denied";
+            f.gate = new Promise(resolve => { f.release = resolve; });
+            window.__noxa.state.myChannelID = 1;
+            window.__noxa.renderTree();
+        });
+        await page.locator("#voice-leave-channel").click();
+        await expect.poll(() => page.evaluate(() => window.__actions.calls.some(c => c.name === "JoinChannel"))).toBe(true);
+        await page.evaluate(() => {
+            for (const callback of window.__events.tab_reset || []) callback("server-b");
+            window.__noxa.state.myChannelID = 2;
+            window.__noxa.renderTree();
+            window.__actions.release();
+        });
+        await expect(page.locator("#voice-leave-channel")).toBeEnabled();
+        expect(await page.evaluate(() => window.__actions.toasts)).toEqual([]);
+        expect(await page.evaluate(() => window.__noxa.state.myChannelID)).toBe(2);
+    });
+
+    test("role moderators can request a kick without legacy powers", async ({ page }) => {
+        await page.locator('.client[data-clid="alice"]').click({ button: "right" });
+        await page.locator('[data-act="kick-ch"]').click();
+        await page.getByRole("dialog").locator(".reason").fill("Please rejoin");
+        await page.getByRole("button", { name: "Kick", exact: true }).click();
+        await expect.poll(() => page.evaluate(() => window.__actions.effects)).toEqual([
+            { name: "DisconnectMember", args: ["alice", 1, "Please rejoin"] },
+        ]);
+    });
+
+    test("kick and poke prompts cannot act on another native tab", async ({ page }) => {
+        await page.locator('.client[data-clid="alice"]').click({ button: "right" });
+        await page.locator('[data-act="kick-srv"]').click();
+        await page.evaluate(() => { window.__actions.nativeTab = "server-b"; });
+        await page.getByRole("button", { name: "Kick", exact: true }).click();
+        await expect.poll(() => page.evaluate(() => window.__actions.calls.length)).toBe(1);
+        await page.evaluate(() => window.__noxaSocial.openPoke(window.__noxa.state.clients[0]));
+        await page.getByRole("button", { name: "Poke", exact: true }).click();
+        await expect.poll(() => page.evaluate(() => window.__actions.calls.length)).toBe(2);
+        expect(await page.evaluate(() => window.__actions.effects)).toEqual([]);
+        expect(await page.evaluate(() => window.__actions.calls.every(c => c.tabID === "server-a"))).toBe(true);
+    });
+
+    test("channel disconnect retains the channel captured when the menu opened", async ({ page }) => {
+        await page.locator('.client[data-clid="alice"]').click({ button: "right" });
+        await page.evaluate(() => { window.__noxa.state.clients[0].channel_id = 2; });
+        await page.locator('[data-act="kick-ch"]').click();
+        await page.getByRole("button", { name: "Kick", exact: true }).click();
+        await expect.poll(() => page.evaluate(() => window.__actions.calls)).toEqual([
+            { name: "DisconnectMember", tabID: "server-a", args: ["alice", 1, ""] },
+        ]);
+        expect(await page.evaluate(() => window.__actions.effects)).toEqual([]);
+        await expect.poll(() => page.evaluate(() => window.__actions.toasts)).toEqual(["target channel changed"]);
+    });
+
+    test("batch channel disconnects retain every member's opening channel", async ({ page }) => {
+        await page.evaluate(() => {
+            window.__noxa.state.multiSelect = new Set(["alice", "bob"]);
+            const f = window.__actions;
+            f.gate = new Promise(resolve => { f.release = resolve; });
+        });
+        await page.locator('.client[data-clid="alice"]').click({ button: "right" });
+        await page.locator('[data-act="kick"]').click();
+        await expect.poll(() => page.evaluate(() => window.__actions.effects.length)).toBe(1);
+        await page.evaluate(() => { window.__noxa.state.clients[1].channel_id = 2; window.__actions.release(); });
+        await expect.poll(() => page.evaluate(() => window.__actions.calls)).toEqual([
+            { name: "DisconnectMember", tabID: "server-a", args: ["alice", 1, ""] },
+            { name: "DisconnectMember", tabID: "server-a", args: ["bob", 1, ""] },
+        ]);
+        expect(await page.evaluate(() => window.__actions.effects.length)).toBe(1);
+        await expect.poll(() => page.evaluate(() => window.__actions.toasts)).toEqual(["target channel changed"]);
+    });
+
+    test("a member who left before tree redraw does not offer a channel disconnect", async ({ page }) => {
+        await page.evaluate(() => { window.__noxa.state.clients[0].channel_id = 0; });
+        await page.locator('.client[data-clid="alice"]').click({ button: "right" });
+        await expect(page.locator('[data-act="kick-ch"]')).toHaveCount(0);
+        await expect(page.locator('[data-act="kick-srv"]')).toBeVisible();
+    });
+
+    test("batch kicks stop when native activation changes between requests", async ({ page }) => {
+        await page.evaluate(() => {
+            window.__noxa.state.multiSelect = new Set(["alice", "bob"]);
+            const f = window.__actions;
+            f.gate = new Promise(resolve => { f.release = resolve; });
+        });
+        await page.locator('.client[data-clid="alice"]').click({ button: "right" });
+        await page.locator('[data-act="kick"]').click();
+        await expect.poll(() => page.evaluate(() => window.__actions.effects.length)).toBe(1);
+        await page.evaluate(() => { window.__actions.nativeTab = "server-b"; window.__actions.release(); });
+        await expect.poll(() => page.evaluate(() => window.__actions.calls.length)).toBe(2);
+        expect(await page.evaluate(() => window.__actions.effects.length)).toBe(1);
+        expect(await page.evaluate(() => window.__actions.toasts.some(s => s.includes("kicked 2")))).toBe(false);
+    });
+
+    for (const switched of [false, true]) {
+        test(`poke rejection ${switched ? "stays out of a replacement session" : "is reported after native acceptance fails"}`, async ({ page }) => {
+            await page.evaluate(() => {
+                const f = window.__actions;
+                f.error = "poke permission denied";
+                f.gate = new Promise(resolve => { f.release = resolve; });
+                window.__noxaSocial.openPoke(window.__noxa.state.clients[0]);
+            });
+            await page.getByRole("button", { name: "Poke", exact: true }).click();
+            await expect.poll(() => page.evaluate(() => window.__actions.effects.length)).toBe(1);
+            expect(await page.evaluate(() => window.__actions.toasts)).toEqual([]);
+            await page.evaluate(async changed => {
+                if (changed) for (const callback of window.__events.tab_reset || []) callback("server-b");
+                window.__actions.release();
+                await window.__actions.gate;
+            }, switched);
+            if (switched) expect(await page.evaluate(() => window.__actions.toasts)).toEqual([]);
+            else await expect.poll(() => page.evaluate(() => window.__actions.toasts)).toEqual(["poke failed: poke permission denied"]);
+        });
+    }
+
+    test("batch channel disconnects wait for each result and stop on denial", async ({ page }) => {
+        await page.evaluate(() => {
+            window.__noxa.state.multiSelect = new Set(["alice", "bob"]);
+            const f = window.__actions;
+            f.error = "disconnect denied";
+            f.gate = new Promise(resolve => { f.release = resolve; });
+        });
+        await page.locator('.client[data-clid="alice"]').click({ button: "right" });
+        await page.locator('[data-act="kick"]').click();
+        await expect.poll(() => page.evaluate(() => window.__actions.effects.length)).toBe(1);
+        expect(await page.evaluate(() => window.__actions.toasts)).toEqual([]);
+        await page.evaluate(() => window.__actions.release());
+        await expect.poll(() => page.evaluate(() => window.__actions.toasts)).toEqual(["disconnect denied"]);
+        expect(await page.evaluate(() => window.__actions.effects.length)).toBe(1);
+    });
+
+    for (const outcome of ["ban saved and sessions revoked; resource cleanup is pending", "sessions revoked; ban persistence is unconfirmed; refresh the ban list before retrying"]) {
+        test(`ban reports ${outcome}`, async ({ page }) => {
+            await page.locator('.client[data-clid="alice"]').click({ button: "right" });
+            await page.locator('[data-act="ban"]').click();
+            await page.evaluate(result => {
+                const f = window.__actions;
+                f.error = result;
+                f.gate = new Promise(resolve => { f.release = resolve; });
+            }, outcome);
+            await page.getByRole("button", { name: "Ban", exact: true }).click();
+            await expect.poll(() => page.evaluate(() => window.__actions.effects.length)).toBe(1);
+            expect(await page.evaluate(() => window.__actions.toasts)).toEqual([]);
+            await page.evaluate(() => window.__actions.release());
+            await expect.poll(() => page.evaluate(() => window.__actions.toasts)).toEqual([outcome]);
+            expect(await page.evaluate(() => window.__actions.effects.length)).toBe(1);
+        });
+    }
+
+    test("late ban errors do not toast into a replacement session", async ({ page }) => {
+        await page.locator('.client[data-clid="alice"]').click({ button: "right" });
+        await page.locator('[data-act="ban"]').click();
+        await page.evaluate(() => {
+            const f = window.__actions;
+            f.error = "old rejection";
+            f.gate = new Promise(resolve => { f.release = resolve; });
+        });
+        await page.getByRole("button", { name: "Ban", exact: true }).click();
+        await expect.poll(() => page.evaluate(() => window.__actions.effects.length)).toBe(1);
+        await page.evaluate(() => {
+            for (const callback of window.__events.tab_reset || []) callback("new-session");
+            window.__actions.release();
+        });
+        expect(await page.evaluate(() => window.__actions.toasts)).toEqual([]);
+    });
+
+    test("member drag uses the opening native tab and rejects a switched server", async ({ page }) => {
+        const member = page.locator('.client[data-clid="alice"]');
+        const channel = page.locator('.channel[data-chid="2"]');
+        await member.dragTo(channel);
+        await expect.poll(() => page.evaluate(() => window.__actions.effects)).toEqual([
+            { name: "MoveClient", args: ["alice", 2] },
+        ]);
+        await page.evaluate(() => { window.__actions.nativeTab = "server-b"; });
+        await member.dragTo(channel);
+        await expect.poll(() => page.evaluate(() => window.__actions.calls.filter(c => c.name === "MoveClient").length)).toBe(2);
+        expect(await page.evaluate(() => window.__actions.effects.length)).toBe(1);
+        expect(await page.evaluate(() => window.__actions.calls.every(c => c.tabID === "server-a"))).toBe(true);
+    });
+
+    test("self drag is rejected during native activation before frontend reset", async ({ page }) => {
+        await page.evaluate(() => { window.__noxa.state.myClientID = "alice"; window.__actions.nativeTab = "server-b"; });
+        await page.locator('.client[data-clid="alice"]').dragTo(page.locator('.channel[data-chid="2"]'));
+        await expect.poll(() => page.evaluate(() => window.__actions.calls.filter(c => c.name === "JoinChannel"))).toEqual([
+            { name: "JoinChannel", tabID: "server-a", args: [2] },
+        ]);
+        expect(await page.evaluate(() => window.__actions.effects)).toEqual([]);
+    });
+
+    test("drag targets the exact session when two sessions share an identity", async ({ page }) => {
+        await page.evaluate(() => {
+            window.__noxa.state.clients[1].unique_id = "alice";
+            window.__noxa.renderTree();
+        });
+        await page.locator('.client[data-clid="bob"]').dragTo(page.locator('.channel[data-chid="2"]'));
+        await expect.poll(() => page.evaluate(() => window.__actions.effects)).toEqual([
+            { name: "MoveClient", args: ["bob", 2] },
+        ]);
+    });
+
+    test("returning to the same tab does not revive an old member drag", async ({ page }) => {
+        await page.evaluate(() => {
+            const transfer = new DataTransfer();
+            document.querySelector('.client[data-clid="alice"]').dispatchEvent(new DragEvent("dragstart", { dataTransfer: transfer, bubbles: true }));
+            for (const id of ["server-b", "server-a"]) {
+                for (const callback of window.__events.tab_reset || []) callback(id);
+            }
+            const v = window.__noxa;
+            v.state.clients = [{ client_id: "alice", unique_id: "alice", nickname: "Alice", channel_id: 1 }];
+            v.state.channels = [{ ChannelID: 1, Name: "Lobby", ParentID: 0 }, { ChannelID: 2, Name: "Other", ParentID: 0 }];
+            v.renderTree();
+            document.querySelector('.channel[data-chid="2"]').dispatchEvent(new DragEvent("drop", { dataTransfer: transfer, bubbles: true }));
+        });
+        expect(await page.evaluate(() => window.__actions.effects)).toEqual([]);
+    });
+
+    test("a drag started on another tab cannot target a matching user after reset", async ({ page }) => {
+        await page.evaluate(() => {
+            const transfer = new DataTransfer();
+            document.querySelector('.client[data-clid="alice"]').dispatchEvent(new DragEvent("dragstart", { dataTransfer: transfer, bubbles: true }));
+            window.__oldMemberDrag = transfer;
+            for (const callback of window.__events.tab_reset || []) callback("server-b");
+            const v = window.__noxa;
+            v.state.clients = [{ client_id: "new-alice", unique_id: "alice", nickname: "Alice", channel_id: 1 }];
+            v.state.channels = [{ ChannelID: 1, Name: "Lobby", ParentID: 0 }, { ChannelID: 2, Name: "Other", ParentID: 0 }];
+            v.renderTree();
+            document.querySelector('.channel[data-chid="2"]').dispatchEvent(new DragEvent("drop", { dataTransfer: transfer, bubbles: true }));
+        });
+        expect(await page.evaluate(() => window.__actions.effects)).toEqual([]);
+        expect(await page.evaluate(() => window.__actions.calls.filter(c => c.name === "MoveClient"))).toEqual([]);
+    });
+
+    for (const kind of ["icon", "banner"]) {
+        for (const rejected of [false, true]) {
+            test(`${kind} waits for storage before ${rejected ? "rejection" : "success"} feedback`, async ({ page }) => {
+                await page.evaluate(rejected => {
+                    const f = window.__actions;
+                    f.error = rejected ? "asset storage failed" : "";
+                    f.gate = new Promise(resolve => { f.release = resolve; });
+                }, rejected);
+                const chooserPromise = page.waitForEvent("filechooser");
+                if (kind === "icon") {
+                    await page.locator("#menubar > .menu-item > span").filter({ hasText: /^Self$/ }).click();
+                    await page.getByRole("menuitem", { name: /^Set server icon/ }).click();
+                } else {
+                    await page.locator("#tab-files").click();
+                    await page.locator(".fb-banner").click();
+                }
+                const chooser = await chooserPromise;
+                await chooser.setFiles({ name: "pixel.png", mimeType: "image/png",
+                    buffer: Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=", "base64") });
+                await expect.poll(() => page.evaluate(() => window.__actions.effects.length)).toBe(1);
+                expect(await page.evaluate(() => window.__actions.toasts)).toEqual([]);
+                const reads = await page.evaluate(() => window.__actions.calls.filter(c => c.name.endsWith("Get")).length);
+                await page.evaluate(() => window.__actions.release());
+                await expect.poll(() => page.evaluate(() => window.__actions.toasts.length)).toBe(1);
+                if (rejected) {
+                    expect(await page.evaluate(() => window.__actions.toasts[0])).toContain("asset storage failed");
+                    expect(await page.evaluate(() => window.__actions.calls.filter(c => c.name.endsWith("Get")).length)).toBe(reads);
+                } else {
+                    expect(await page.evaluate(() => window.__actions.toasts[0])).toMatch(/updated/i);
+                    // Icon refresh also loads the sidebar banner.
+                    await expect.poll(() => page.evaluate(() => window.__actions.calls.filter(c => c.name.endsWith("Get")).length)).toBe(reads + (kind === "icon" ? 2 : 1));
+                }
+            });
+        }
+
+        test(`${kind} picker stays on its original native tab`, async ({ page }) => {
+            const chooserPromise = page.waitForEvent("filechooser");
+            if (kind === "icon") {
+                await page.locator("#menubar > .menu-item > span").filter({ hasText: /^Self$/ }).click();
+                await page.getByRole("menuitem", { name: /^Set server icon/ }).click();
+            } else {
+                await page.locator("#tab-files").click();
+                await page.locator(".fb-banner").click();
+            }
+            const chooser = await chooserPromise;
+            await page.evaluate(() => { window.__actions.nativeTab = "server-b"; });
+            await chooser.setFiles({ name: "pixel.png", mimeType: "image/png",
+                buffer: Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=", "base64") });
+            await expect.poll(() => page.evaluate(() => window.__actions.calls.filter(c => c.name.endsWith("Set")).length)).toBe(1);
+            expect(await page.evaluate(() => window.__actions.effects)).toEqual([]);
+            expect(await page.evaluate(() => window.__actions.calls.filter(c => c.name.endsWith("Set"))[0].tabID)).toBe("server-a");
+        });
+    }
+});
+
+test.describe("tab-bound shared management", () => {
+    test.beforeEach(async ({ page }) => {
+        await page.evaluate(() => {
+            window.__noxa.showWorkspace(false);
+            window.__noxa.state.isAdmin = false;
+            window.__noxa.state.activeTabID = "server-a";
+            window.__noxa.state.myPerms = new Map();
+            const fixture = window.__management = { nativeTab: "server-a", calls: [], effects: [], toasts: [],
+                filters: { word_filter: "old", link_blacklist: "bad.test", link_whitelist: "", from_config: false },
+                bans: [{ id: 17, value: "member", reason: "spam", banned_by: "owner", expires_at: 0 }],
+                complaints: [{ target_unique_id: "member", from_unique_id: "reporter", reason: "spam", created_at: 1 }],
+            };
+            window.__noxa.toast = (text) => fixture.toasts.push(text);
+            const app = window.go.main.App;
+            const names = ["AuditLog", "ChatFilterGet", "ChatFilterSet", "BanList", "BanRemove", "ComplaintList", "ComplaintClear"];
+            window.go.main.App = new Proxy(app, { get(target, key) {
+                if (names.includes(key)) return () => { throw new Error("unscoped call"); };
+                if (!names.some((name) => key === name + "ForTab")) return target[key];
+                return async (tabID, ...args) => {
+                    const name = key.slice(0, -"ForTab".length);
+                    fixture.calls.push({ name, tabID, args });
+                    if (tabID !== fixture.nativeTab || fixture.denied) {
+                        if (name === "BanRemove") return "permission denied or server changed";
+                        throw new Error("permission denied or server changed");
+                    }
+                    if (name === "ChatFilterGet") {
+                        if (fixture.loadGate) await fixture.loadGate;
+                        return structuredClone(fixture.filters);
+                    }
+                    if (name === "ChatFilterSet") {
+                        fixture.effects.push({ name, args });
+                        if (fixture.saveGate) await fixture.saveGate;
+                        if (fixture.saveFailed) throw new Error("save outcome unknown");
+                        fixture.filters = { word_filter: args[0], link_blacklist: args[1], link_whitelist: args[2], from_config: false };
+                        return structuredClone(fixture.filters);
+                    }
+                    if (name === "BanList") return { bans: structuredClone(fixture.bans) };
+                    if (name === "BanRemove") { fixture.effects.push({ name, args }); fixture.bans = []; return ""; }
+                    if (name === "ComplaintList") return { entries: structuredClone(fixture.complaints) };
+                    if (name === "ComplaintClear") { fixture.effects.push({ name, args }); fixture.complaints = []; return { entries: [] }; }
+                    return { entries: args[0] ? [] : [{ id: 7, action: "ban_remove", actor: "owner", target: "17", detail: "", created_at: 1 }] };
+                };
+            } });
+        });
+    });
+
+    test("delegated filter manager loads and saves without legacy flags", async ({ page }) => {
+        await page.evaluate(() => window.__noxaPerms.openChatFilters());
+        await expect(page.locator(".cf-words")).toHaveValue("old");
+        await page.locator(".cf-words").fill("");
+        await page.locator(".cf-save").click();
+        await expect.poll(() => page.evaluate(() => window.__management.effects)).toEqual([
+            { name: "ChatFilterSet", args: ["", "bad.test", ""] },
+        ]);
+        await expect(page.locator(".cf-save")).toBeEnabled();
+    });
+
+    test("filter save requires a loaded form and freezes edits until acknowledgement", async ({ page }) => {
+        await page.evaluate(() => {
+            const f = window.__management;
+            f.loadGate = new Promise(resolve => { f.releaseLoad = resolve; });
+            window.__noxaPerms.openChatFilters();
+        });
+        await expect(page.locator(".cf-save")).toBeDisabled();
+        await expect(page.locator(".cf-words")).toBeDisabled();
+        await page.evaluate(() => window.__management.releaseLoad());
+        await expect(page.locator(".cf-words")).toHaveValue("old");
+        await page.locator(".cf-words").fill("draft");
+        await page.evaluate(() => {
+            const f = window.__management;
+            f.saveGate = new Promise(resolve => { f.releaseSave = resolve; });
+        });
+        await page.locator(".cf-save").click();
+        await expect(page.locator(".cf-reload")).toBeDisabled();
+        await expect(page.locator(".cf-words")).toBeDisabled();
+        await page.evaluate(() => window.__management.releaseSave());
+        await expect(page.locator(".cf-save")).toBeEnabled();
+        await expect(page.locator(".cf-words")).toHaveValue("draft");
+    });
+
+    test("uncertain filter save keeps draft and requires reload", async ({ page }) => {
+        await page.evaluate(() => window.__noxaPerms.openChatFilters());
+        await expect(page.locator(".cf-words")).toHaveValue("old");
+        await page.locator(".cf-words").fill("draft");
+        await page.evaluate(() => { window.__management.saveFailed = true; });
+        await page.locator(".cf-save").click();
+        await expect.poll(() => page.evaluate(() => window.__management.toasts.length)).toBe(1);
+        await expect(page.locator(".cf-save")).toBeDisabled();
+        await expect(page.locator(".cf-words")).toHaveValue("draft");
+        await page.locator(".cf-reload").click();
+        await expect(page.locator(".cf-words")).toHaveValue("old");
+        await expect(page.locator(".cf-save")).toBeEnabled();
+    });
+
+    test("old filter save is rejected before frontend reset", async ({ page }) => {
+        await page.evaluate(() => window.__noxaPerms.openChatFilters());
+        await expect(page.locator(".cf-words")).toHaveValue("old");
+        await page.locator(".cf-words").fill("draft");
+        await page.evaluate(() => { window.__management.nativeTab = "server-b"; });
+        await page.locator(".cf-save").click();
+        await expect.poll(() => page.evaluate(() => window.__management.toasts.length)).toBe(1);
+        expect(await page.evaluate(() => window.__management.effects)).toEqual([]);
+        expect(await page.evaluate(() => window.__management.calls.at(-1).tabID)).toBe("server-a");
+    });
+
+    test("late filter acknowledgement cannot restore a closed server dialog", async ({ page }) => {
+        await page.evaluate(() => window.__noxaPerms.openChatFilters());
+        await expect(page.locator(".cf-words")).toHaveValue("old");
+        await page.locator(".cf-words").fill("draft");
+        await page.evaluate(() => {
+            const f = window.__management;
+            f.saveGate = new Promise(resolve => { f.releaseSave = resolve; });
+        });
+        await page.locator(".cf-save").click();
+        await expect.poll(() => page.evaluate(() => window.__management.effects.length)).toBe(1);
+        await page.evaluate(() => {
+            for (const callback of window.__events.tab_reset || []) callback("replacement-session");
+            window.__management.releaseSave();
+        });
+        await expect(page.getByRole("dialog")).toHaveCount(0);
+        expect(await page.evaluate(() => window.__management.toasts)).toEqual([]);
+        expect(await page.evaluate(() => window.__management.calls.map(c => c.name))).toEqual(["ChatFilterGet", "ChatFilterSet"]);
+    });
+
+    for (const [open, control, effect] of [
+        ["openComplaints", ".cp-one", "ComplaintClear"],
+    ]) {
+        test(`${effect} uses current server grants without legacy flags`, async ({ page }) => {
+            await page.evaluate(name => window.__noxaPerms[name](), open);
+            await page.locator(control).click();
+            if (effect === "BanRemove") await page.getByRole("button", { name: "Lift", exact: true }).click();
+            await expect.poll(() => page.evaluate(() => window.__management.effects.length)).toBe(1);
+            expect(await page.evaluate(() => window.__management.effects[0].name)).toBe(effect);
+        });
+        test(`${effect} cannot reach a different native tab`, async ({ page }) => {
+            await page.evaluate(name => window.__noxaPerms[name](), open);
+            await expect(page.locator(control)).toBeVisible();
+            await page.evaluate(() => { window.__management.nativeTab = "server-b"; });
+            await page.locator(control).click();
+            if (effect === "BanRemove") {
+                await page.getByRole("button", { name: "Lift", exact: true }).click();
+                await expect(page.getByRole("dialog").getByRole("status")).toHaveText("Removal could not be confirmed. Reload bans before trying again.");
+                await expect(page.locator(control)).toBeDisabled();
+                await expect(page.getByRole("button", { name: "Reload bans", exact: true })).toBeEnabled();
+            } else await expect.poll(() => page.evaluate(() => window.__management.toasts.length)).toBe(1);
+            expect(await page.evaluate(() => window.__management.effects)).toEqual([]);
+            expect(await page.evaluate(() => window.__management.calls.every(c => c.tabID === "server-a"))).toBe(true);
+        });
+    }
+
+    for (const [open, error] of [["openBanList", "ban list failed"], ["openComplaints", "complaint list failed"], ["openChatFilters", "loading filters failed"]]) {
+        test(`${open} honors server denial despite stale administrator flag`, async ({ page }) => {
+            await page.evaluate(name => {
+                window.__noxa.state.isAdmin = true;
+                window.__management.denied = true;
+                window.__noxaPerms[name]();
+            }, open);
+            await expect(page.getByRole("dialog")).toContainText(error);
+            expect(await page.evaluate(() => window.__management.effects)).toEqual([]);
+            if (open === "openChatFilters") await expect(page.locator(".cf-save")).toBeDisabled();
+        });
+    }
+});
+
+test.describe("role-aware server configuration", () => {
+    test.beforeEach(async ({ page }) => {
+        await page.evaluate(() => {
+            const v = window.__noxa;
+            v.state.authorizationModel = "roles-v1";
+            v.state.isAdmin = false;
+            v.state.activeTabID = "server-a";
+            window.__serverSettings = { loads: 0, saves: [], mediaLoads: 0, mediaSaves: [], toasts: [], config: {
+                max_clients: 100, client_timeout_seconds: 90, opus_bitrate: 64000,
+                opus_fec: true, opus_dtx: false, opus_stereo: true, media_limits_management: true,
+            }, media: { video_max_bitrate: 800000, video_max_width: 1280, video_max_height: 720 } };
+            v.toast = message => window.__serverSettings.toasts.push(message);
+            const app = window.go.main.App;
+            window.go.main.App = new Proxy(app, { get(target, key) {
+                if (key === "GetServerConfigForTab") return async tabID => {
+                    if (tabID !== "server-a") throw new Error("wrong server tab");
+                    const fixture = window.__serverSettings;
+                    fixture.loads++;
+                    if (fixture.delayLoad) await new Promise(resolve => { fixture.finishLoad = resolve; });
+                    if (fixture.denied) throw new Error("permission denied");
+                    return structuredClone(fixture.config);
+                };
+                if (key === "SetServerConfigForTab") return async (tabID, config) => {
+                    if (tabID !== "server-a") throw new Error("wrong server tab");
+                    const fixture = window.__serverSettings;
+                    fixture.saves.push(structuredClone(config));
+                    if (fixture.delaySave) await new Promise(resolve => { fixture.finishSave = resolve; });
+                    if (fixture.denied) throw new Error("permission denied");
+                    fixture.config = structuredClone(config);
+                    return structuredClone(config);
+                };
+                if (key === "GetMediaLimitsForTab") return async tabID => {
+                    if (tabID !== "server-a") throw new Error("wrong server tab");
+                    const fixture = window.__serverSettings;
+                    fixture.mediaLoads++;
+                    if (fixture.denied) throw new Error("permission denied");
+                    return structuredClone(fixture.media);
+                };
+                if (key === "SetMediaLimitsForTab") return async (tabID, limits) => {
+                    if (tabID !== "server-a") throw new Error("wrong server tab");
+                    const fixture = window.__serverSettings;
+                    fixture.mediaSaves.push(structuredClone(limits));
+                    if (fixture.delaySave) await new Promise(resolve => { fixture.finishSave = resolve; });
+                    if (fixture.denied) throw new Error("permission denied");
+                    fixture.media = structuredClone(limits);
+                    return { revision: "2", ...structuredClone(limits) };
+                };
+                return target[key];
+            } });
+        });
+    });
+
+    test("delegated managers can save without the legacy administrator flag", async ({ page }) => {
+        await page.evaluate(() => window.__noxa.openSettings("server"));
+        await expect(page.getByLabel("Maximum clients (0 = unlimited)")).toHaveValue("100");
+        await page.getByLabel("Maximum clients (0 = unlimited)").fill("75");
+        await page.getByRole("button", { name: "Apply server configuration", exact: true }).click();
+        await expect.poll(() => page.evaluate(() => window.__serverSettings.saves)).toEqual([{
+            max_clients: 75, client_timeout_seconds: 90, opus_bitrate: 64000,
+            opus_fec: true, opus_dtx: false, opus_stereo: true,
+        }]);
+    });
+
+    test("delegated managers can edit live video publishing limits", async ({ page }) => {
+        await page.evaluate(() => window.__noxa.openSettings("server"));
+        const rate = page.getByLabel("Video bitrate ceiling (bit/s, 0 = unlimited)");
+        const width = page.getByLabel("Maximum encoded video width (0 = unlimited)");
+        const height = page.getByLabel("Maximum encoded video height (0 = unlimited)");
+        await expect(rate).toHaveValue("800000");
+        await expect(width).toHaveValue("1280");
+        await expect(height).toHaveValue("720");
+        await rate.fill("600000");
+        await width.fill("640");
+        await height.fill("360");
+        await page.getByRole("button", { name: "Apply video publishing limits", exact: true }).click();
+        await expect.poll(() => page.evaluate(() => window.__serverSettings.mediaSaves)).toEqual([{
+            video_max_bitrate: 600000, video_max_width: 640, video_max_height: 360,
+        }]);
+        await width.fill("640");
+        await height.fill("0");
+        await page.getByRole("button", { name: "Apply video publishing limits", exact: true }).click();
+        expect(await page.evaluate(() => window.__serverSettings.mediaSaves.length)).toBe(1);
+        await expect(height).toHaveJSProperty("validationMessage", "Set both dimensions to 0, or set both between 1 and 16383.");
+    });
+
+    test("older servers omit the unsupported media editor", async ({ page }) => {
+        await page.evaluate(() => {
+            delete window.__serverSettings.config.media_limits_management;
+            window.__noxa.openSettings("server");
+        });
+        await expect(page.getByLabel("Maximum clients (0 = unlimited)")).toHaveValue("100");
+        await expect(page.getByRole("button", { name: "Apply video publishing limits", exact: true })).toHaveCount(0);
+        expect(await page.evaluate(() => window.__serverSettings.mediaLoads)).toBe(0);
+    });
+
+    test("server authorization works before model discovery and denies legacy non-admins", async ({ page }) => {
+        await page.evaluate(() => { delete window.__noxa.state.authorizationModel; window.__noxa.openSettings("server"); });
+        await expect(page.getByLabel("Maximum clients (0 = unlimited)")).toHaveValue("100");
+        await page.evaluate(() => { window.__serverSettings.denied = true; window.__noxa.openSettings("server"); });
+        await expect(page.locator("#settings-content")).toContainText("permission denied");
+        await expect(page.getByRole("button", { name: "Apply server configuration", exact: true })).toBeHidden();
+    });
+
+    test("role-mode denials override a stale legacy administrator flag", async ({ page }) => {
+        await page.evaluate(() => {
+            window.__noxa.state.isAdmin = true;
+            window.__serverSettings.denied = true;
+            window.__noxa.openSettings("server");
+        });
+        await expect(page.locator("#settings-content")).toContainText("permission denied");
+        await expect(page.getByRole("button", { name: "Apply server configuration", exact: true })).toBeHidden();
+        expect(await page.evaluate(() => window.__serverSettings.loads)).toBe(1);
+    });
+
+    test("invalid numbers and duplicate submissions never reach the backend", async ({ page }) => {
+        await page.evaluate(() => { window.__serverSettings.delaySave = true; window.__noxa.openSettings("server"); });
+        const maximum = page.getByLabel("Maximum clients (0 = unlimited)");
+        await maximum.fill("-1");
+        const apply = page.getByRole("button", { name: "Apply server configuration", exact: true });
+        await apply.click();
+        expect(await page.evaluate(() => window.__serverSettings.saves)).toEqual([]);
+        await maximum.fill("50");
+        await apply.click();
+        await expect(apply).toBeDisabled();
+        await expect(maximum).toBeDisabled();
+        await page.evaluate(() => window.__serverSettings.finishSave());
+        await expect(apply).toBeEnabled();
+        expect(await page.evaluate(() => window.__serverSettings.saves.length)).toBe(1);
+    });
+
+    test("failed saves require an explicit reload before retry", async ({ page }) => {
+        await page.evaluate(() => window.__noxa.openSettings("server"));
+        const apply = page.getByRole("button", { name: "Apply server configuration", exact: true });
+        await expect(apply).toBeVisible();
+        await page.evaluate(() => { window.__serverSettings.denied = true; });
+        await apply.click();
+        await expect(apply).toBeDisabled();
+        await expect(page.locator("#settings-content")).toContainText("permission denied");
+        await page.evaluate(() => { window.__serverSettings.denied = false; window.__serverSettings.config.max_clients = 12; });
+        await page.getByRole("button", { name: "Reload server configuration", exact: true }).click();
+        await expect(page.getByLabel("Maximum clients (0 = unlimited)")).toHaveValue("12");
+        await expect(apply).toBeEnabled();
+        expect(await page.evaluate(() => window.__serverSettings.saves.length)).toBe(1);
+    });
+
+    test("a server switch prevents stale saves and ignores late replies", async ({ page }) => {
+        await page.evaluate(() => { window.__serverSettings.delayLoad = true; window.__noxa.openSettings("server"); });
+        await expect.poll(() => page.evaluate(() => typeof window.__serverSettings.finishLoad)).toBe("function");
+        await page.evaluate(() => { window.__noxa.state.serverGeneration++; window.__serverSettings.finishLoad(); });
+        await expect(page.locator("#settings-content")).toContainText("The server changed");
+        await expect(page.getByRole("button", { name: "Apply server configuration", exact: true })).toBeHidden();
+        await page.evaluate(() => { window.__serverSettings.delayLoad = false; });
+        await page.getByRole("button", { name: "Reload server configuration", exact: true }).click();
+        await expect(page.getByLabel("Maximum clients (0 = unlimited)")).toHaveValue("100");
+        await page.evaluate(() => { window.__noxa.state.serverGeneration++; });
+        await page.getByRole("button", { name: "Apply server configuration", exact: true }).click();
+        expect(await page.evaluate(() => window.__serverSettings.saves)).toEqual([]);
+    });
+
+    test("a save reply from the previous server cannot display success on the next", async ({ page }) => {
+        await page.evaluate(() => { window.__serverSettings.delaySave = true; window.__noxa.openSettings("server"); });
+        await page.getByRole("button", { name: "Apply server configuration", exact: true }).click();
+        await expect.poll(() => page.evaluate(() => typeof window.__serverSettings.finishSave)).toBe("function");
+        await page.evaluate(() => { window.__noxa.state.serverGeneration++; window.__serverSettings.finishSave(); });
+        await expect(page.locator("#settings-content")).toContainText("The server changed");
+        expect(await page.evaluate(() => window.__serverSettings.toasts)).toEqual([]);
+    });
+
+    test("settings search indexes server labels without requesting protected data", async ({ page }) => {
+        await page.evaluate(() => window.__noxa.openSettings("application"));
+        await page.locator("#settings-search").fill("Maximum clients");
+        await expect(page.locator(".set-search-hit")).toHaveCount(1);
+        expect(await page.evaluate(() => window.__serverSettings.loads)).toBe(0);
+        await page.locator(".set-search-hit").click();
+        await expect(page.getByLabel("Maximum clients (0 = unlimited)")).toHaveValue("100");
+    });
+});
+
+test("role cosmetics use visible snapshot members, highest hoist and safe inline icons", async ({ page }) => {
+    await page.evaluate(async () => {
+        const v = window.__noxa;
+        v.state.authorizationModel = "roles-v1";
+        v.state.channels = [{ ChannelID: 42, Name: "Lounge" }];
+        const low = { id: 20, name: "Member", position: 1, color: "#abcdef", hoist: true };
+        const high = { id: 30, name: "Helper <img src=x>", position: 2, icon: "★", hoist: true };
+        v.state.clients = [
+            { client_id: "alice", unique_id: "alice", nickname: "Alice", channel_id: 42, roles: [low, high] },
+            { client_id: "bob", unique_id: "bob", nickname: "Bob", channel_id: 42, roles: [low] },
+        ];
+        v.showWorkspace(false);
+        v.renderTree();
+    });
+    await expect(page.locator(".hoist-section")).toHaveCount(2);
+    await expect(page.locator(".hoist-section").first().locator(".client-name")).toHaveText("Alice");
+    await expect(page.locator(".hoist-section").last().locator(".client-name")).toHaveText("Bob");
+    await expect(page.locator('.client[data-clid="alice"]').last().locator(".client-name")).toHaveCSS("color", "rgb(171, 205, 239)");
+    await expect(page.locator('.client[data-clid="alice"]').last().locator(".group-badge")).toHaveText("★ Helper <img src=x>");
+    await expect(page.locator(".hoist-icon img, .group-badge img")).toHaveCount(0);
+    await page.setViewportSize({ width: 720, height: 800 });
+    await page.locator("#workspace-sidebar-toggle").click();
+    await expect(page.locator(".hoist-section").first()).toBeVisible();
+    await page.screenshot({ path: "../../.cache/role-cosmetics.png" });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await page.evaluate(() => window.__noxa.openClientInfo(window.__noxa.state.clients[0]));
+    await expect(page.locator(".ci-member-roles .group-badge")).toHaveCount(2);
+    await page.evaluate(() => {
+        for (const callback of window.__events.snapshot || []) callback(JSON.stringify({ root_channels: [{ ChannelID: 42, Name: "Lounge", clients: [
+            { client_id: "alice", unique_id: "alice", nickname: "Alice", channel_id: 42 },
+        ] }] }));
+    });
+    await expect(page.locator(".hoist-section, .client .group-badge")).toHaveCount(0);
+    await expect(page.locator(".ci-member-roles")).toBeHidden();
+    await expect(page.getByText("Bob", { exact: true })).toHaveCount(0);
+});
+
 test("@quickwins workspace labels, devices and language switch", async ({ page }) => {
     await page.evaluate(() => {
         const v = window.__noxa;
@@ -51,7 +3268,7 @@ test("@quickwins file actions and checksum stay accessible in both languages", a
     await expect(page.getByRole("button", { name: "Verify checksum", exact: true })).toBeVisible();
     await page.getByRole("button", { name: "Verify checksum", exact: true }).click();
     await expect(page.locator(".fb-sha")).toHaveText("✓ ok");
-    expect(await page.evaluate(() => window.__callArgs.VerifyFile.at(-1))).toEqual([42, "", "notes.txt", "a".repeat(64)]);
+    expect(await page.evaluate(() => window.__callArgs.VerifyFileForTab.at(-1))).toEqual([await page.evaluate(() => window.__noxa.state.activeTabID), 42, "", "notes.txt", "a".repeat(64)]);
     await page.evaluate(() => { window.__noxa.state.settings.language = "de"; window.__noxa.applyAppearance(); });
     await expect(page.locator(".fb-details summary")).toHaveText("Dateidetails");
     await page.locator(".fb-details summary").click();
@@ -70,6 +3287,7 @@ test("@quickwins file actions and checksum stay accessible in both languages", a
 test("@quickwins leaving a channel keeps the server session until its authoritative event", async ({ page }) => {
     await page.evaluate(() => {
         const v = window.__noxa;
+        v.state.activeTabID = "server-a";
         v.state.myClientID = "me";
         v.state.myChannelID = 42;
         v.state.channels = [{ ChannelID: 42, Name: "Lounge" }];
@@ -78,7 +3296,7 @@ test("@quickwins leaving a channel keeps the server session until its authoritat
         v.renderTree();
     });
     await page.locator("#voice-leave-channel").click();
-    expect(await page.evaluate(() => window.__callArgs.JoinChannel.at(-1))).toEqual([0]);
+    expect(await page.evaluate(() => window.__callArgs.JoinChannelForTab.at(-1))).toEqual(["server-a", 0]);
     expect(await page.evaluate(() => window.__calls.Disconnect || 0)).toBe(0);
     expect(await page.evaluate(() => window.__noxa.state.myChannelID)).toBe(42);
     await page.evaluate(() => {
@@ -174,7 +3392,7 @@ test("saving guest audio settings does not require whisper permission", async ({
         window.__noxa.state.myClientID = "guest";
         const app = window.go.main.App;
         window.go.main.App = new Proxy(app, { get(target, method) {
-            if (method === "WhisperSet") return async () => { throw new Error("whisper denied"); };
+            if (method === "WhisperSetForTab") return async () => { throw new Error("whisper denied"); };
             return target[method];
         } });
         window.__noxa.openSettings("capture");
@@ -272,7 +3490,7 @@ test("offline settings save does not require a live whisper connection", async (
         window.__noxa.state.myClientID = "";
         const app = window.go.main.App;
         window.go.main.App = new Proxy(app, { get(target, method) {
-            if (method === "WhisperSet") return async () => "not connected";
+            if (method === "WhisperSetForTab") return async () => "not connected";
             return target[method];
         } });
         window.__noxa.openSettings();
@@ -546,7 +3764,7 @@ test("client language translates every settings page and persists on Apply @a11y
         ["Wiedergabe", "Ausgabegerät"], ["Tastenkürzel", "Als neues Profil speichern…"],
         ["Flüstern", "Flüstern aktivieren"], ["Downloads", "Downloadordner"],
         ["Chat", "Zeitstempel"], ["Sicherheit", "Identitäten"],
-        ["Server", "Die Serverkonfiguration ist nur für Administratoren verfügbar."],
+        ["Server", "Maximale Clientanzahl (0 = unbegrenzt)"],
         ["Benachrichtigungen", "Gesprochene Systemmeldungen"],
     ];
     for (const [tab, label] of pages) {
@@ -703,99 +3921,21 @@ test("sound previews use draft volume, finish Test All, and cancel on close @a11
     expect(await page.evaluate(() => window.__previewedSounds.length)).toBe(count);
 });
 
-test("Permission Manager lists offline admins and creates an admin key", async ({ page }, testInfo) => {
-    await showB3Workspace(page);
-    await page.evaluate(() => {
-        window.__noxa.state.isAdmin = true;
-        const app = window.go.main.App;
-        window.go.main.App = new Proxy(app, { get(target, method) {
-            if (method === "ServerAdminList") return async () => ({ entries: [
-                { unique_id: "uid-daniel", nickname: "Daniel" },
-                { unique_id: "uid-offline", nickname: "Offline Admin <img>" },
-            ] });
-            if (method === "TokenList") return async () => ({ entries: [] });
-            if (method === "TokenAdd") return async (...args) => {
-                (window.__adminKeyCalls ||= []).push(args);
-                await new Promise(resolve => { window.__finishAdminKey = resolve; });
-                return { entries: [{ token: "new-admin-key", group_id: 0, description: args[2] }] };
-            };
-            return target[method];
-        } });
-        window.__noxaPerms.openPermissionManager();
-    });
-    const manager = page.getByRole("dialog", { name: "Permission Manager", exact: true });
-    await manager.getByRole("button", { name: "Server Admins", exact: true }).click();
-    await expect(manager.getByText("Offline Admin <img>", { exact: true })).toBeVisible();
-    await expect(manager.getByText("uid-offline", { exact: true })).toBeVisible();
-    await expect(manager.getByText("Offline", { exact: true })).toBeVisible();
-    await expect(manager.locator(".pm-admin-list img")).toHaveCount(0);
-    for (const viewport of [{ width: 1004, height: 768 }, { width: 640, height: 480 }]) {
-        await page.setViewportSize(viewport);
-        await expect(manager.getByRole("button", { name: "Create admin key…", exact: true })).toBeInViewport();
-        await manager.screenshot({ path: testInfo.outputPath(`admins-${viewport.width}.png`) });
-    }
-    await manager.getByRole("button", { name: "Create admin key…", exact: true }).click();
-    const keys = page.getByRole("dialog", { name: "Admin Keys", exact: true });
-    await expect(keys.getByRole("combobox", { name: "Channel restriction" })).toHaveCount(0);
-    await keys.getByPlaceholder("note (optional)").fill("Second administrator");
-    await keys.getByRole("button", { name: "+ Create key", exact: true }).click();
-    await expect(keys.getByRole("button", { name: "+ Create key", exact: true })).toBeDisabled();
-    expect(await page.evaluate(() => window.__adminKeyCalls)).toEqual([[0, 0, "Second administrator"]]);
-    await page.evaluate(() => window.__finishAdminKey());
-    await expect(page.getByText("new-admin-key", { exact: true }).first()).toBeVisible();
-});
-
-test("Permission Manager hides the admin roster from non-admins", async ({ page }) => {
-    await page.evaluate(() => window.__noxaPerms.openPermissionManager());
-    await expect(page.getByRole("button", { name: "Server Admins", exact: true })).toHaveCount(0);
-});
-
-test("Permission Manager shows a retryable error when the server lacks the admin roster", async ({ page }) => {
-    await page.evaluate(() => {
-        window.__noxa.state.isAdmin = true;
-        const app = window.go.main.App;
-        window.go.main.App = new Proxy(app, { get(target, method) {
-            if (method === "ServerAdminList") return async () => { throw new Error("unsupported message"); };
-            return target[method];
-        } });
-        window.__noxaPerms.openPermissionManager();
-    });
-    await page.getByRole("button", { name: "Server Admins", exact: true }).click();
-    await expect(page.getByText(/Could not load server admins/)).toBeVisible();
-    await expect(page.getByRole("button", { name: "Refresh admins", exact: true })).toBeEnabled();
-    await expect(page.getByRole("button", { name: "Create admin key…", exact: true })).toBeEnabled();
-});
-
-test("Permission Manager discards a late admin roster after switching tabs", async ({ page }) => {
-    await page.evaluate(() => {
-        window.__noxa.state.isAdmin = true;
-        const app = window.go.main.App;
-        window.go.main.App = new Proxy(app, { get(target, method) {
-            if (method === "ServerAdminList") return () => new Promise(resolve => { window.__finishAdmins = resolve; });
-            return target[method];
-        } });
-        window.__noxaPerms.openPermissionManager();
-    });
-    await page.getByRole("button", { name: "Server Admins", exact: true }).click();
-    await page.getByRole("button", { name: "Server Groups", exact: true }).click();
-    await page.evaluate(() => window.__finishAdmins({ entries: [{ unique_id: "old", nickname: "Stale Admin" }] }));
-    await expect(page.getByText("Stale Admin", { exact: true })).toHaveCount(0);
-});
-
 async function prepareServerInformation(page) {
-    await showB3Workspace(page);
     await page.evaluate(() => {
-        window.__serverInfo = { name: "noXa community", version: "0.4.3", platform: "linux/amd64", uptime_seconds: 90061, clients_online: 4, max_clients: 64, channels_online: 3 };
         const app = window.go.main.App;
-        window.go.main.App = new Proxy(app, { get(target, method) {
-            if (method === "ServerInfo") return async () => {
-                window.__calls.ServerInfo = (window.__calls.ServerInfo || 0) + 1;
-                return structuredClone(window.__serverInfo);
-            };
-            return target[method];
+        window.__serverInfo = {
+            name: "noXa community", version: "test", platform: "linux/amd64",
+            uptime_seconds: 60, clients_online: 2, max_clients: 100, channels_online: 1,
+        };
+        window.go.main.App = new Proxy(app, { get(target, key) {
+            if (key === "ServerInfoForTab") return async () => structuredClone(window.__serverInfo);
+            return target[key];
         } });
         window.runtime.ClipboardSetText = async (value) => { window.__copiedAddress = value; return true; };
+        window.__noxa.state.myClientID = "client-a";
         window.__noxa.state.lastConnect = { addr: "voice.example:12333" };
+        window.__noxa.showWorkspace(false);
     });
 }
 
@@ -848,7 +3988,7 @@ test("server information suspends hidden polling, avoids overlapping calls and s
     await page.locator("#server-name").click();
     const dialog = page.getByRole("dialog", { name: "Server information" });
     await expect(dialog.locator('[data-stat="ping"]')).toHaveText("12 ms");
-    const calls = () => page.evaluate(() => window.__calls.GetClientInfo || 0);
+    const calls = () => page.evaluate(() => window.__calls.GetClientInfoForTab || 0);
     const initial = await calls();
     await page.clock.runFor(1000);
     expect(await calls()).toBe(initial);
@@ -912,6 +4052,241 @@ async function showB3Workspace(page) {
         v.renderTree();
     });
 }
+
+test("selected quick wins group consecutive authors and count every search hit", async ({ page }) => {
+    await showB3Workspace(page);
+    await page.evaluate(() => {
+        const base = Date.now();
+        for (const [i, name, text] of [[1, "Alex", "needle needle <tag>"], [2, "Alex", "needle again"], [3, "Mia", "something else"]]) {
+            window.__noxaChat.addChat({ id: 9000 + i, channel_id: 2, from: name,
+                from_unique_id: "uid-" + name.toLowerCase(), text, sent_at: base + i, edited: i === 2 });
+        }
+    });
+    await expect(page.locator('[data-msg-id="9002"]')).toHaveClass(/grouped/);
+    const grouped = page.locator('[data-msg-id="9002"]');
+    const timestamp = await grouped.locator('.msg-time').boundingBox(), body = await grouped.locator('.msg-text').boundingBox();
+    expect(Math.abs(timestamp.y - body.y)).toBeLessThan(6);
+    await expect(page.locator('[data-msg-id="9003"]')).not.toHaveClass(/grouped/);
+    await page.locator("#chat-search-btn").click();
+    await page.locator("#chat-search").fill("needle");
+    await expect(page.locator("#chat-search-count")).toContainText("2 of");
+    await expect(page.locator('#chat-log mark')).toHaveCount(3);
+    await expect(page.locator('[data-msg-id="9001"] .msg-text')).toContainText("<tag>");
+    await expect(page.locator('[data-msg-id="9001"] tag')).toHaveCount(0);
+    await page.locator("#chat-search").fill("absent");
+    await expect(page.locator("#chat-search-count")).toContainText("0 of");
+});
+
+test("selected quick wins retain voice context and explicit mute semantics", async ({ page }) => {
+    await showB3Workspace(page);
+    await expect(page.locator("#voice-context")).toContainText("Public");
+    await page.getByRole("button", { name: "Mute microphone", exact: true }).click();
+    await expect(page.locator("#voice-mute")).toHaveText("Microphone muted");
+    await expect(page.locator("#voice-mute svg")).toHaveCount(1);
+    await expect(page.getByRole("button", { name: "Leave voice channel", exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Disconnect server", exact: true })).toBeVisible();
+    await page.getByRole("tab", { name: "Files", exact: true }).click();
+    await expect(page.locator("#voice-context")).toContainText("Public");
+});
+
+test("selected quick wins retry only the unchanged failed draft", async ({ page }) => {
+    await showB3Workspace(page);
+    await page.evaluate(() => {
+        window.__retryPayloads = [];
+        window.__sendChatHandler = (_scope, _target, text) => {
+            window.__retryPayloads.push(text);
+            return new Promise(resolve => { window.__resolveRetry = resolve; });
+        };
+    });
+    await page.locator("#chat-text").fill("first draft");
+    await page.locator("#chat-send").click();
+    await expect.poll(() => page.evaluate(() => window.__retryPayloads.length)).toBe(1);
+    await page.locator("#chat-text").fill("new draft");
+    await page.evaluate(() => window.__resolveRetry("offline"));
+    await expect(page.locator("#chat-send-error")).toContainText("offline");
+    await expect(page.locator("#chat-retry")).toBeHidden();
+    await page.locator("#chat-send").click();
+    await expect.poll(() => page.evaluate(() => window.__retryPayloads.length)).toBe(2);
+    await page.evaluate(() => window.__resolveRetry("offline again"));
+    await page.locator("#chat-retry").click();
+    await expect.poll(() => page.evaluate(() => window.__retryPayloads)).toEqual(["first draft", "new draft", "new draft"]);
+    await page.evaluate(() => window.__resolveRetry(""));
+    await expect(page.locator("#chat-text")).toHaveValue("");
+    await expect(page.locator("#chat-send-error")).toBeHidden();
+});
+
+test("selected quick wins retry failed attachments without repeating successful text", async ({ page }) => {
+    await showB3Workspace(page);
+    await page.evaluate(() => {
+        window.__uploadCount = 0;
+        window.__sentQuick = [];
+        window.__uploadAttachmentHandler = () => {
+            if (++window.__uploadCount === 1) throw new Error("upload offline");
+            return "[file:retry.vcx#dGVzdA==#retry.txt]";
+        };
+        window.__sendChatHandler = (_scope, _target, text) => { window.__sentQuick.push(text); return ""; };
+    });
+    await page.locator("#chat-file").setInputFiles({ name: "retry.txt", mimeType: "text/plain", buffer: Buffer.from("retry") });
+    await expect(page.locator(".file-preview")).toHaveCount(1);
+    await page.locator("#chat-text").fill("successful text");
+    await page.locator("#chat-send").click();
+    await expect(page.locator("#chat-text")).toHaveValue("");
+    await page.locator("#chat-retry").click();
+    await expect(page.locator(".file-preview")).toHaveCount(0);
+    expect(await page.evaluate(() => window.__sentQuick)).toEqual(["successful text", "[file:retry.vcx#dGVzdA==#retry.txt]"]);
+});
+
+test("selected quick wins microphone meter measures muted input and releases its clone", async ({ page }) => {
+    await showB3Workspace(page);
+    await page.evaluate(async () => {
+        const ctx = new AudioContext();
+        const osc = ctx.createOscillator(), dest = ctx.createMediaStreamDestination();
+        osc.connect(dest); osc.start(); await ctx.resume();
+        const source = dest.stream.getAudioTracks()[0];
+        const clone = source.clone.bind(source);
+        source.clone = () => { window.__meterClone = clone(); return window.__meterClone; };
+        source.enabled = false;
+        window.__meterSource = source;
+        window.__meterAudio = await import("/src/audio.js");
+        window.__meterAudio.startMicMeter(dest.stream);
+        window.__meterCleanup = () => { source.stop(); osc.stop(); return ctx.close(); };
+    });
+    await expect.poll(() => page.locator("#mic-meter").getAttribute("aria-valuenow").then(Number)).toBeGreaterThan(0);
+    expect(await page.evaluate(() => window.__meterSource.enabled)).toBe(false);
+    await page.evaluate(() => window.__meterAudio.stopMicMeter());
+    await expect(page.locator("#mic-meter")).toBeHidden();
+    expect(await page.evaluate(() => window.__meterClone.readyState)).toBe("ended");
+    expect(await page.evaluate(() => window.__meterSource.readyState)).toBe("live");
+    await page.evaluate(() => window.__meterCleanup());
+});
+
+test("selected quick wins completed downloads open their scoped folder", async ({ page }) => {
+    await showB3Workspace(page);
+    await page.evaluate(() => {
+        window.__noxa.state.activeTabID = "download-tab";
+        for (const callback of window.__events.ft_progress || []) {
+            callback({ id: "finished", name: "notes.zip", direction: "download", status: "done", total: 100, transferred: 100 });
+            callback({ id: "pending", name: "pending.zip", direction: "download", status: "active", total: 100, transferred: 1 });
+            callback({ id: "upload", name: "upload.zip", direction: "upload", status: "done", total: 100, transferred: 100 });
+        }
+    });
+    await page.locator("#tab-transfers").click();
+    await expect(page.getByRole("button", { name: "Open folder", exact: true })).toHaveCount(1);
+    await page.getByRole("button", { name: "Open folder", exact: true }).click();
+    expect(await page.evaluate(() => window.__callArgs.OpenDownloadFolderForTab)).toEqual([["download-tab", "finished"]]);
+    await page.evaluate(() => { window.__noxa.state.settings.language = "de"; window.__noxa.applyAppearance(); });
+    await expect(page.getByRole("button", { name: "Ordner öffnen", exact: true })).toHaveCount(1);
+});
+
+test("selected quick wins anchor scrollback across trimming and language changes", async ({ page }) => {
+    await showB3Workspace(page);
+    await page.evaluate(() => {
+        window.__noxa.state.settings.chat_max_lines = 80;
+        window.__noxaChat.onMyChannelChanged();
+        for (let id = 1; id <= 80; id++) window.__noxaChat.addChat({ id, channel_id: 2, from: "Alex", from_unique_id: "alex", text: "Message " + id });
+    });
+    await expect(page.locator("#chat-log .msg.rich")).toHaveCount(80);
+    const log = page.locator("#chat-log");
+    await log.evaluate(log => { log.scrollTop = log.scrollHeight / 2; log.dispatchEvent(new Event("scroll")); });
+    const anchor = await log.evaluate(log => {
+        const row = [...log.querySelectorAll(".msg.rich")].find(row => row.getBoundingClientRect().top >= log.getBoundingClientRect().top);
+        return { key: row.dataset.scrollKey, y: row.getBoundingClientRect().top - log.getBoundingClientRect().top };
+    });
+    const readPointer = await page.evaluate(() => window.__noxa.state.settings.last_read_channels?.[2]);
+    await page.evaluate(() => {
+        for (let id = 81; id <= 85; id++) window.__noxaChat.addChat({ id, channel_id: 2, from: "Alex", from_unique_id: "alex", text: "Message " + id });
+        window.__noxa.state.settings.language = "de";
+        window.__noxa.applyAppearance();
+    });
+    const after = await log.evaluate((log, key) => [...log.querySelectorAll(".msg.rich")].find(row => row.dataset.scrollKey === key).getBoundingClientRect().top - log.getBoundingClientRect().top, anchor.key);
+    expect(Math.abs(after - anchor.y)).toBeLessThan(2);
+    expect(await page.evaluate(() => window.__noxa.state.settings.last_read_channels?.[2])).toBe(readPointer);
+    await expect(page.locator("#chat-newpill")).toHaveText("5 neue Nachrichten ↓");
+});
+
+for (const change of ["history edit", "history deletion", "concurrent edit", "concurrent reaction"]) test(`selected quick wins reconcile cached history and preserve pagination: ${change}`, async ({ page }) => {
+    await showB3Workspace(page);
+    await page.evaluate(() => {
+        window.__historyCursors = [];
+        const app = window.go.main.App;
+        window.go.main.App = new Proxy(app, { get(target, key) {
+            if (key !== "ChatHistoryForTab") return target[key];
+            return async (_tab, _channel, before) => {
+                window.__historyCursors.push(before);
+                if (before) return { messages: [] };
+                return new Promise(resolve => { window.__resolveHistory = resolve; });
+            };
+        } });
+        for (const id of [100, 200]) window.__noxaChat.addChat({ id, channel_id: 2, from: "Alex", from_unique_id: "alex", text: "cached", version: 1 });
+        window.__noxaChat.onMyChannelChanged();
+    });
+    await expect.poll(() => page.evaluate(() => typeof window.__resolveHistory)).toBe("function");
+    await page.evaluate(change => {
+        if (change === "concurrent edit") window.__noxaChat.onChatEdited({ message_id: 200, body: "concurrent", version: 3 });
+        if (change === "concurrent reaction") window.__noxaChat.onChatReaction({ message_id: 200, reactions: { "👍": 3 } });
+        const messages = Array.from({ length: 50 }, (_, i) => ({
+            id: 249 - i, from_nickname: "Alex", from_unique_id: "alex", body: "authoritative", version: 2,
+            edited: true, deleted: change === "history deletion" && i === 49,
+        }));
+        window.__resolveHistory({ messages });
+    }, change);
+    await expect(page.locator("#chat-log .msg.rich")).toHaveCount(50);
+    await expect(page.locator('[data-msg-id="100"]')).toHaveCount(0);
+    await expect(page.locator('[data-msg-id="200"] .msg-text')).toHaveText(change === "concurrent edit" ? "concurrent" : change === "history deletion" ? "Message deleted" : "authoritative");
+    if (change === "concurrent reaction") await expect(page.locator('[data-msg-id="200"] .react-chip')).toHaveText("👍 3");
+    await page.locator("#chat-log").evaluate(log => { log.scrollTop = 0; log.dispatchEvent(new Event("scroll")); });
+    await expect.poll(() => page.evaluate(() => window.__historyCursors)).toEqual([0, 200]);
+});
+
+test("selected quick wins fullscreen keeps names and share audio has independent percentages", async ({ page }) => {
+    await showB3Workspace(page);
+    await page.evaluate(async () => {
+        const v = window.__noxa;
+        v.state.clients.push({ client_id: "screen-peer", nickname: "Screen Person", unique_id: "screen-uid", sharing: true });
+        window.__shareLevel = { volume: 75, muted: false };
+        v.shareAudioCtl = {
+            get: () => window.__shareLevel,
+            setVolume: (_id, volume) => { window.__shareLevel.volume = volume; },
+            setMuted: (_id, muted) => { window.__shareLevel.muted = muted; },
+        };
+        const canvas = document.createElement("canvas");
+        const context = canvas.getContext("2d");
+        window.__videoPaint = setInterval(() => { context.fillStyle = "#123456"; context.fillRect(0, 0, 300, 150); }, 50);
+        const stream = canvas.captureStream(20), track = stream.getVideoTracks()[0];
+        Object.defineProperty(track, "id", { value: "screen-peer|screen" });
+        window.__quickVideo = await import("/src/video.js");
+        window.__quickVideo.videoTrackAdded(track.id, stream, { client_id: "screen-peer" });
+    });
+    const tile = page.locator('.vtile[data-slot="screen"]');
+    await expect(tile).toBeVisible();
+    const gridBounds = await page.locator('#video-grid').boundingBox(), nameBounds = await tile.locator('.vtile-name').boundingBox();
+    expect(nameBounds.y).toBeGreaterThanOrEqual(gridBounds.y);
+    expect(nameBounds.y + nameBounds.height).toBeLessThanOrEqual(gridBounds.y + gridBounds.height);
+    await tile.hover();
+    await tile.locator(".vtile-fullscreen").click();
+    await expect.poll(() => page.evaluate(() => document.fullscreenElement?.className || "")).toContain("vtile");
+    await expect(tile.locator(".vtile-name")).toBeVisible();
+    await expect(tile.locator(".vtile-name")).toHaveText("Screen Person");
+    await page.keyboard.press("Escape");
+    await expect.poll(() => page.evaluate(() => !!document.fullscreenElement)).toBe(false);
+    await tile.click({ button: "right" });
+    await page.getByRole("slider", { name: "Shared audio", exact: true }).fill("45");
+    await expect(page.locator(".ctx-vol-pct")).toHaveText("45%");
+    expect(await page.evaluate(() => window.__shareLevel.volume)).toBe(45);
+    await page.getByText("Mute shared audio", { exact: true }).click();
+    expect(await page.evaluate(() => window.__shareLevel.muted)).toBe(true);
+    await expect(tile).toBeVisible();
+    await page.evaluate(async () => { await window.__quickVideo.setLowBandwidth(true, false); });
+    await expect(tile.locator(".vtile-preview-age")).toHaveText("Preview updated just now");
+    await page.clock.install();
+    await page.clock.fastForward(123000);
+    await expect(tile.locator(".vtile-preview-age")).toHaveText("Preview updated 2 minutes ago");
+    await page.evaluate(() => { window.__noxa.state.settings.language = "de"; window.__noxa.applyAppearance(); });
+    await expect(tile.locator(".vtile-preview-age")).toHaveText("Vorschau vor 2 Minuten aktualisiert");
+    await expect(tile.locator(".vtile-kind")).toHaveText("Bildschirmfreigabe");
+    await page.evaluate(() => { clearInterval(window.__videoPaint); window.__quickVideo.clearVideoGrid(); });
+    await expect(page.locator("#video-grid")).toBeHidden();
+});
 
 test("B3 participant strip follows live channel membership and opens member controls", async ({ page }) => {
     await showB3Workspace(page);
@@ -1160,10 +4535,17 @@ test.beforeEach(async ({ page }) => {
             },
         };
         const app = new Proxy({}, {
-            get(_target, method) {
+            get(_target, nativeMethod) {
                 return async (...args) => {
+                    let method = nativeMethod;
                     window.__calls[method] = (window.__calls[method] || 0) + 1;
                     (window.__callArgs[method] ||= []).push(structuredClone(args));
+                    if (method.endsWith("ForContext")) {
+                        method = method.replace(/ForContext$/, "");
+                        args = args.slice(1);
+                        (window.__callArgs[method] ||= []).push(structuredClone(args));
+                    }
+                    if (method === "DMHistoryContextForTab") return { tab_id: args[0], identity_uid: window.__dmStorageIdentity || "playwright-identity", activation: "0", identity_revision: "0" };
                     if (method === "GetSettings") {
                         const persisted = sessionStorage.getItem("startup-settings");
                         if (persisted) {
@@ -1173,6 +4555,11 @@ test.beforeEach(async ({ page }) => {
                         return structuredClone(initialSettings);
                     }
                     if (method === "SaveSettings") { window.__savedSettings = structuredClone(args[0]); return ""; }
+                    if (method === "GetServerConfigForTab") return {
+                        max_clients: 100, client_timeout_seconds: 90, opus_bitrate: 64000,
+                        opus_fec: true, opus_dtx: false, opus_stereo: false,
+                    };
+                    if (method === "SetServerConfigForTab") return structuredClone(args[1]);
                     if (method === "CertificateClockWarning") return window.__certificateClockWarning || "";
                     if (method === "ConnectBookmarkTabWithID") {
                         if (typeof window.__connectBookmarkHandler === "function") {
@@ -1200,13 +4587,22 @@ test.beforeEach(async ({ page }) => {
                         if (window.__clientIDGate) await window.__clientIDGate;
                         return window.__activeClient || "client-a";
                     }
+                    if (method === "SessionInfoForTab") {
+                        const session = {
+                            authorization_model: window.__authorizationModel || "",
+                            client_id: window.__activeClient || "client-a", is_admin: true, is_guest: false,
+                            connected: window.__tabs.find((tab) => tab.id === args[0])?.connected ?? true, security: "",
+                        };
+                        if (window.__clientIDGate) await window.__clientIDGate;
+                        return session;
+                    }
                     if (method === "IsAdmin") return true;
-                    if (method === "ChannelEdit") {
+                    if (method === "ChannelEditForTab") {
                         if (window.__channelEditReject) throw new Error("Connection lost");
                         if (window.__channelEditGate) await window.__channelEditGate;
                         return window.__channelEditError || "";
                     }
-                    if (method === "ChannelEditTree") return window.__channelTreeError || "";
+                    if (method === "ChannelEditTreeForTab") return window.__channelTreeError || "";
                     if (method === "IsGuest") return false;
                     if (method === "IdentityUID") return "playwright-identity";
                     if (method === "ClientVersionShort") return "test";
@@ -1215,7 +4611,10 @@ test.beforeEach(async ({ page }) => {
                         if (window.__clientVersionReject) throw new Error("version unavailable");
                         return window.__clientVersion || "test";
                     }
-                    if (method === "Disconnect") {
+                    if (method === "DisconnectTab" && typeof window.__disconnectTabHandler === "function") {
+                        return await window.__disconnectTabHandler(...args);
+                    }
+                    if (method === "Disconnect" || method === "DisconnectTab") {
                         if (typeof window.__disconnectHandler === "function") {
                             return await window.__disconnectHandler(...args);
                         }
@@ -1225,21 +4624,20 @@ test.beforeEach(async ({ page }) => {
                     if (method === "CloseTab" && typeof window.__closeTabHandler === "function") {
                         return await window.__closeTabHandler(...args);
                     }
-                    if (method === "DisconnectTab" && typeof window.__disconnectTabHandler === "function") {
-                        return await window.__disconnectTabHandler(...args);
-                    }
-                    if (method === "SendICECandidate") {
+                    if (method === "SendICECandidateForTab") {
                         if (window.__sendICECandidateReject) throw new Error("signal closed");
                         return "";
                     }
-                    if (method === "UploadChatAttachment") {
+                    if (method === "UploadChatAttachment" || method === "UploadChatAttachmentForTab") {
+                        if (method.endsWith("ForTab")) args = args.slice(1);
                         if (typeof window.__uploadAttachmentHandler === "function") {
                             return await window.__uploadAttachmentHandler(...args);
                         }
                         if (window.__uploadAttachmentReject) throw new Error("upload unavailable");
                         return window.__uploadAttachmentResult || "[file:blob.vcx#dGVzdA==#file.bin]";
                     }
-                    if (method === "DownloadChatAttachment") {
+                    if (method === "DownloadChatAttachment" || method === "DownloadChatAttachmentForTab") {
+                        if (method.endsWith("ForTab")) args = args.slice(1);
                         if (typeof window.__downloadAttachmentHandler === "function") {
                             return await window.__downloadAttachmentHandler(...args);
                         }
@@ -1247,59 +4645,44 @@ test.beforeEach(async ({ page }) => {
                         if (window.__attachmentReject) throw new Error(window.__attachmentReject);
                         return window.__attachmentData || "";
                     }
-                    if (method === "SendChat") {
+                    if (method === "SendChat" || method === "SendChatForTab") {
+                        if (method.endsWith("ForTab")) args = args.slice(1);
                         if (typeof window.__sendChatHandler === "function") {
                             return await window.__sendChatHandler(...args);
                         }
                         if (window.__sendChatReject) throw new Error("send unavailable");
                         return window.__sendChatResult || "";
                     }
-                    if (method === "SendChatReply") {
+                    if (method === "SendChatReply" || method === "SendChatReplyForTab") {
                         if (window.__sendChatReplyReject) throw new Error("reply unavailable");
                         return window.__sendChatReplyResult || "";
                     }
-                    if (method === "VerifyFile") {
+                    if (method === "VerifyFileForTab") {
                         if (window.__verifyFileGate) await window.__verifyFileGate;
                         if (window.__verifyFileReject) throw new Error("verify unavailable");
                         return window.__verifyFileResult ?? true;
                     }
-                    if (method === "FileList") {
+                    if (method === "FileListForTab") {
                         if (window.__fileListGate) await window.__fileListGate;
                         return structuredClone(window.__fileListResponse || {
                             entries: [], folders: [], used_bytes: 0, quota_bytes: 0,
                         });
                     }
-                    if (method === "SaveChatAttachment") {
+                    if (method === "SaveChatAttachment" || method === "SaveChatAttachmentForTab") {
                         if (window.__saveAttachmentGate) await window.__saveAttachmentGate;
                         return window.__saveAttachmentResult || "";
                     }
-                    if (method === "WebRTCAnswer" && window.__webRTCAnswerReject) {
+                    if (method === "WebRTCAnswerForTab" && window.__webRTCAnswerReject) {
                         throw new Error("answer rejected");
                     }
-                    if (method === "GetPermissions") return structuredClone(window.__permissions || []);
-                    if (method === "GroupList") return structuredClone(window.__groups || { groups: [] });
-                    if (method === "PermList") {
-                        const response = structuredClone(window.__permEntries || { entries: [] });
-                        const gate = window.__permListGate;
-                        window.__permListGate = null;
-                        if (gate) await gate;
-                        return response;
-                    }
-                    if (method === "PermSet") { window.__lastPermSet = structuredClone(args); return ""; }
-                    if (method === "BanList") return structuredClone(window.__bans || { bans: [] });
-                    if (method === "BanRemove") {
-                        const gate = window.__banRemoveGate;
-                        window.__banRemoveGate = null;
-                        if (gate) await gate;
-                        return window.__banRemoveResult || "";
-                    }
+                    if (method === "BanListForTab") return structuredClone(window.__bans || { bans: [] });
                     if (method === "CheckForUpdate") return structuredClone(window.__updateInfo || { available: false, version: "test", size: 0 });
                     if (method === "IdentityInfo") return {};
-                    if (method === "GetAvatar") return structuredClone(window.__avatarResponse || {});
-                    if (method === "ServerIconGet" || method === "ServerBannerGet" || method === "ChannelIconGet" || method === "GroupIconGet" || method === "EmojiGet") {
+                    if (method === "GetAvatarForTab") return structuredClone(window.__avatarResponse || {});
+                    if (method === "ServerIconGetForTab" || method === "ServerBannerGetForTab" || method === "ChannelIconGetForTab" || method === "EmojiGetForTab") {
                         return structuredClone(window.__assetResponse || {});
                     }
-                    if (method === "GetClientInfo") {
+                    if (method === "GetClientInfoForTab") {
                         const response = structuredClone(window.__clientInfoResponse || {
                             nickname: "Alice", unique_id: "user-a", connected_at: Date.now() / 1000 - 120,
                             idle_seconds: 5, ping_ms: 12, ip: "127.0.0.1", port: 12333,
@@ -1334,6 +4717,189 @@ test.beforeEach(async ({ page }) => {
     }, { initialSettings: settings });
     await page.goto("/");
     await page.waitForFunction(() => !!window.__noxa?.openSettings);
+});
+
+test("session snapshot rejects native activation before frontend reset", async ({ page }) => {
+    const result = await page.evaluate(async () => {
+        const original = window.go.main.App;
+        let nativeTab = "a";
+        let release;
+        const gate = new Promise((resolve) => { release = resolve; });
+        const calls = [];
+        window.go.main.App = new Proxy(original, { get(target, method) {
+            if (method === "SessionInfoForTab") return async (tabID) => {
+                calls.push([method, tabID]);
+                await gate;
+                if (tabID !== nativeTab) throw new Error("server tab changed");
+                return { client_id: "a-client", is_admin: false, is_guest: true, connected: true };
+            };
+            if (method === "ClientID") return async () => { await gate; return nativeTab + "-client"; };
+            if (method === "IsAdmin") return async () => nativeTab === "b";
+            if (method === "IsGuest") return async () => nativeTab !== "b";
+            return target[method];
+        } });
+        for (const cb of window.__events.tab_reset) cb("a");
+        nativeTab = "b";
+        release();
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        const { myClientID, isGuest } = window.__noxa.state;
+        return { myClientID, isGuest, calls };
+    });
+    expect(result).toEqual({ myClientID: "", isGuest: true, calls: [["SessionInfoForTab", "a"]] });
+});
+
+for (const flow of ["login", "reconnect"]) test(`session snapshot keeps an offline ${flow} offline`, async ({ page }) => {
+    await page.evaluate(async (flow) => {
+        const original = window.go.main.App;
+        window.__offlineSnapshotCalls = 0;
+        window.go.main.App = new Proxy(original, { get(target, method) {
+            if (method === "SessionInfoForTab") return async () => {
+                window.__offlineSnapshotCalls++;
+                return { client_id: "", is_admin: false, is_guest: true, connected: false, security: "offline" };
+            };
+            return target[method];
+        } });
+        if (flow === "login") {
+            document.getElementById("login-addr").value = "closed.example:12333";
+            document.getElementById("login-nick").value = "Alice";
+            await window.__noxa.connectFromLogin();
+        } else {
+            window.__noxa.state.settings.reconnect_on_loss = false;
+            window.__noxa.state.lastSuccessfulConnect = {
+                addr: "closed.example:12333", nick: "Alice", pw: "", spw: "", bookmark: "",
+            };
+            for (const callback of window.__events.tray_reconnect || []) callback();
+        }
+    }, flow);
+    await expect.poll(() => page.evaluate(() => window.__offlineSnapshotCalls)).toBe(1);
+    await expect(page.locator("#conn-pill")).not.toHaveClass(/\bup\b/);
+    expect(await page.evaluate(() => window.__calls.MOTDForTab || 0)).toBe(0);
+});
+
+test("session snapshot leaves one retry scheduled after a disconnect during recovery", async ({ page }) => {
+    await page.clock.install();
+    await page.evaluate(() => {
+        const original = window.go.main.App;
+        window.__sessionSnapshotPending = false;
+        const gate = new Promise((resolve) => { window.__releaseSessionSnapshot = resolve; });
+        window.go.main.App = new Proxy(original, { get(target, method) {
+            if (method === "SessionInfoForTab") return async () => {
+                window.__sessionSnapshotPending = true;
+                await gate;
+                return { client_id: "closed-client", is_admin: true, is_guest: false, connected: true, security: "TLS" };
+            };
+            return target[method];
+        } });
+        const state = window.__noxa.state;
+        state.settings.reconnect_on_loss = true;
+        state.lastConnect = { addr: "closed.example:12333", nick: "Alice", pw: "", spw: "", bookmark: "" };
+        for (const callback of window.__events.disconnected) callback();
+    });
+    await page.clock.runFor(5000);
+    await expect.poll(() => page.evaluate(() => window.__sessionSnapshotPending)).toBe(true);
+    await page.evaluate(() => {
+        for (const callback of window.__events.disconnected) callback();
+        window.__releaseSessionSnapshot();
+    });
+    await page.clock.runFor(100);
+    expect(await page.evaluate(() => window.__noxa.state.reconnectAttempts)).toBe(2);
+    await page.clock.runFor(4900);
+    expect(await page.evaluate(() => window.__calls.ConnectBookmarkTabWithID)).toBe(2);
+});
+
+test("session snapshot preserves the retry limit after repeated offline reconnects", async ({ page }) => {
+    await page.clock.install();
+    await page.evaluate(() => {
+        const original = window.go.main.App;
+        window.go.main.App = new Proxy(original, { get(target, method) {
+            if (method === "SessionInfoForTab") return async () => ({
+                client_id: "", is_admin: false, is_guest: true, connected: false, security: "offline",
+            });
+            return target[method];
+        } });
+        const state = window.__noxa.state;
+        state.settings.reconnect_on_loss = true;
+        state.lastConnect = { addr: "closed.example:12333", nick: "Alice", pw: "", spw: "", bookmark: "" };
+        for (const callback of window.__events.disconnected) callback();
+    });
+    for (let attempt = 1; attempt <= 5; attempt++) {
+        await page.clock.runFor(5000);
+        await expect.poll(() => page.evaluate(() => window.__calls.ConnectBookmarkTabWithID || 0)).toBe(attempt);
+    }
+    await page.clock.runFor(10000);
+    expect(await page.evaluate(() => window.__calls.ConnectBookmarkTabWithID)).toBe(5);
+    expect(await page.evaluate(() => window.__noxa.state.reconnectAttempts)).toBe(5);
+    await expect(page.locator("#conn-pill")).not.toHaveClass(/\bup\b/);
+});
+
+for (const flow of ["tab", "login", "reconnect"]) test(`session snapshot cannot revive a disconnected ${flow}`, async ({ page }) => {
+    await page.evaluate((flow) => {
+        const original = window.go.main.App;
+        window.__sessionSnapshotPending = false;
+        window.__noxa.state.settings.reconnect_on_loss = false;
+        const gate = new Promise((resolve) => { window.__releaseSessionSnapshot = resolve; });
+        window.go.main.App = new Proxy(original, { get(target, method) {
+            if (method === "SessionInfoForTab") return async () => {
+                window.__sessionSnapshotPending = true;
+                await gate;
+                return { client_id: "obsolete-client", is_admin: true, is_guest: false, connected: true, security: "TLS" };
+            };
+            return target[method];
+        } });
+        if (flow === "tab") {
+            for (const cb of window.__events.tab_reset) cb("a");
+        } else if (flow === "login") {
+            document.getElementById("login-addr").value = "closed.example:12333";
+            document.getElementById("login-nick").value = "Alice";
+            void window.__noxa.connectFromLogin();
+        } else {
+            window.__noxa.state.lastSuccessfulConnect = {
+                addr: "closed.example:12333", nick: "Alice", pw: "", spw: "", bookmark: "",
+            };
+            for (const callback of window.__events.tray_reconnect || []) callback();
+        }
+    }, flow);
+    await expect.poll(() => page.evaluate(() => window.__sessionSnapshotPending)).toBe(true);
+    const result = await page.evaluate(async () => {
+        for (const callback of window.__events.disconnected) callback();
+        window.__releaseSessionSnapshot();
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        const { myClientID, isGuest } = window.__noxa.state;
+        return { myClientID, isGuest };
+    });
+    expect(result).toEqual({ myClientID: "", isGuest: true });
+    await expect(page.locator("#conn-pill")).not.toHaveClass(/\bup\b/);
+});
+
+test("session snapshot ignores an earlier activation of the same tab", async ({ page }) => {
+    const result = await page.evaluate(async () => {
+        const original = window.go.main.App;
+        let release;
+        let first = true;
+        const gate = new Promise((resolve) => { release = resolve; });
+        window.go.main.App = new Proxy(original, { get(target, method) {
+            if (method === "SessionInfoForTab") return async () => {
+                if (first) {
+                    first = false;
+                    await gate;
+                    return { client_id: "obsolete-client", is_admin: true, is_guest: false, connected: true, authorization_model: "roles-v1" };
+                }
+                return { client_id: "current-client", is_admin: false, is_guest: true, connected: true };
+            };
+            if (method === "ClientID") return async () => {
+                if (first) { first = false; await gate; return "obsolete-client"; }
+                return "current-client";
+            };
+            return target[method];
+        } });
+        for (const tab of ["a", "b", "a"]) for (const cb of window.__events.tab_reset) cb(tab);
+        await new Promise((resolve) => setTimeout(resolve, 30));
+        release();
+        await new Promise((resolve) => setTimeout(resolve, 30));
+        const { myClientID, isGuest, authorizationModel } = window.__noxa.state;
+        return { myClientID, isGuest, authorizationModel };
+    });
+    expect(result).toEqual({ myClientID: "current-client", isGuest: true, authorizationModel: "" });
 });
 
 async function auditAccessibility(page, context) {
@@ -1630,8 +5196,8 @@ test("retries a missing microphone without interrupting video or screen sharing"
         cameraLive: window.__cameraTrack.readyState === "live",
         sharing: window.__noxa.state.screenSharing,
         shareTracksStopped: window.__shareTracksStopped,
-        unpublishedShare: window.__calls.SetScreenShare || 0,
-        slots: window.__callArgs.WebRTCOffer.at(-1)[1].map(({ slot }) => slot),
+        unpublishedShare: window.__calls.SetScreenShareForTab || 0,
+        slots: window.__callArgs.WebRTCOfferForTab.at(-1)[2].map(({ slot }) => slot),
     }))).toEqual({
         samePeerConnection: true,
         audioTracks: 1,
@@ -1674,8 +5240,8 @@ test("camera stays off on joins and reconnects, and discards a late enable reque
         window.__cameraRemote = new RTCPeerConnection();
         window.go.main.App = new Proxy(app, {
             get(target, key) {
-                if (key !== "WebRTCOffer") return target[key];
-                return async (sdp) => {
+                if (key !== "WebRTCOfferForTab") return target[key];
+                return async (_tab, sdp) => {
                     await window.__cameraRemote.setRemoteDescription({ type: "offer", sdp });
                     const answer = await window.__cameraRemote.createAnswer();
                     await window.__cameraRemote.setLocalDescription(answer);
@@ -1720,6 +5286,339 @@ test("camera stays off on joins and reconnects, and discards a late enable reque
     await expect.poll(() => page.evaluate(() => window.__enabledCameraTrack.readyState)).toBe("ended");
     await expect(page.locator("#local-video")).toBeHidden();
     expect(await page.evaluate(() => window.__noxa.state.localStream)).toBeNull();
+});
+
+test("disconnect immediately releases camera capture waiting for a negotiation", async ({ page }) => {
+    await page.evaluate(async () => {
+        const v = window.__noxa;
+        v.state.myChannelID = 42;
+        v.state.localStream = new MediaStream();
+        v.state.pc = new RTCPeerConnection();
+        const video = await import("/src/video.js");
+        video.resetCameraState();
+        navigator.mediaDevices.getUserMedia = async () => {
+            const stream = document.createElement("canvas").captureStream(1);
+            window.__queuedCamera = stream.getVideoTracks()[0];
+            return stream;
+        };
+        video.queuePeerNegotiation(v.state.pc, () => new Promise(resolve => { window.__finishQueuedOffer = resolve; }));
+        window.__queuedCameraStart = video.cameraToggle();
+    });
+    await expect.poll(() => page.evaluate(() => window.__queuedCamera?.readyState)).toBe("live");
+    await page.evaluate(() => window.__noxa.resetVoiceSession());
+    expect(await page.evaluate(() => window.__queuedCamera.readyState)).toBe("ended");
+    await page.evaluate(async () => { window.__finishQueuedOffer(); await window.__queuedCameraStart; });
+});
+
+async function installMediaUpdateFixture(page) {
+    await page.evaluate(() => {
+        const v = window.__noxa;
+        v.showWorkspace(false);
+        window.__mediaUpdate = { reads: 0, offers: [], limits: { video_max_width: 0, video_max_height: 0, video_max_bitrate: 1000000 } };
+        class LimitPeer {
+            constructor() { this.transceivers = []; this.signalingState = "stable"; }
+            getTransceivers() { return this.transceivers; }
+            getSenders() { return this.transceivers.map(tr => tr.sender); }
+            addTransceiver(track, options) {
+                let params = { encodings: [{}] };
+                const sender = { track: typeof track === "string" ? null : track, getParameters: () => structuredClone(params),
+                    setParameters: async value => {
+                        if (window.__mediaUpdate.failCaps) throw new Error("encoder failure");
+                        params = structuredClone(value);
+                    } };
+                const tr = { sender, receiver: { track: { kind: typeof track === "string" ? track : track.kind } }, direction: options.direction };
+                this.transceivers.push(tr);
+                return tr;
+            }
+            async createOffer(options) { window.__mediaUpdate.offers.push(options); return { type: "offer", sdp: "offer" }; }
+            async setLocalDescription() {}
+            async setRemoteDescription() {}
+            close() { this.closed = true; }
+        }
+        window.__limitPeer = LimitPeer;
+        Object.assign(v.state, { activeTabID: "limit-tab", myClientID: "limit-self", myChannelID: 42,
+            channels: [{ ChannelID: 42, Name: "Lobby" }], pc: new LimitPeer(), localStream: document.createElement("canvas").captureStream(1),
+            mediaLimits: { video_max_width: 0, video_max_height: 0, video_max_bitrate: 0 } });
+        window.__mediaUpdate.track = v.state.localStream.getVideoTracks()[0];
+        v.state.pc.addTransceiver(window.__mediaUpdate.track, { direction: "sendrecv" });
+        const app = window.go.main.App;
+        window.go.main.App = new Proxy(app, { get(target, key) {
+            if (key === "GetMediaLimitsForTab") return async tab => {
+                if (tab !== "limit-tab") throw new Error("wrong tab");
+                const fixture = window.__mediaUpdate;
+                fixture.reads++;
+                if (fixture.failRead) throw new Error("limits unavailable");
+                if (fixture.holdRead) return await new Promise(resolve => { fixture.finishRead = resolve; });
+                return { ...fixture.limits };
+            };
+            if (key === "WebRTCOfferForTab") return async tab => {
+                if (tab !== "limit-tab") throw new Error("wrong offer tab");
+                if (window.__mediaUpdate.failOffer) throw new Error("offer failure");
+                if (window.__mediaUpdate.holdOffer) await new Promise(resolve => { window.__mediaUpdate.finishOffer = resolve; });
+                return "answer";
+            };
+            return target[key];
+        } });
+        window.__emitLimits = () => { for (const cb of window.__events.media_limits_changed || []) cb(""); };
+    });
+}
+
+test("live media invalidation applies bitrate and rebuilds only for dimension changes", async ({ page }) => {
+    await installMediaUpdateFixture(page);
+    await page.evaluate(() => window.__emitLimits());
+    await expect.poll(() => page.evaluate(() => window.__noxa.state.pc.getSenders()[0].getParameters().encodings[0].maxBitrate)).toBe(850000);
+    expect(await page.evaluate(() => window.__mediaUpdate.offers)).toEqual([]);
+    await page.evaluate(() => { window.__mediaUpdate.limits.video_max_width = 320; window.__mediaUpdate.limits.video_max_height = 180; window.__emitLimits(); });
+    await expect.poll(() => page.evaluate(() => window.__mediaUpdate.offers.length)).toBe(1);
+    await page.evaluate(() => window.__emitLimits());
+    await expect.poll(() => page.evaluate(() => window.__mediaUpdate.reads)).toBe(3);
+    expect(await page.evaluate(() => ({ offers: window.__mediaUpdate.offers, capture: window.__mediaUpdate.track.readyState, enabled: window.__mediaUpdate.track.enabled })))
+        .toEqual({ offers: [{ iceRestart: true }], capture: "live", enabled: true });
+});
+
+for (const failure of ["failRead", "failCaps", "failOffer"]) {
+    test(`live media update releases its session after ${failure}`, async ({ page }) => {
+        await installMediaUpdateFixture(page);
+        const errors = [];
+        page.on("pageerror", error => errors.push(error.message));
+        await page.evaluate(failure => {
+            window.__mediaUpdate[failure] = true;
+            window.__mediaUpdate.limits = { video_max_width: 320, video_max_height: 180, video_max_bitrate: 1000000 };
+            window.__emitLimits();
+        }, failure);
+        await expect(page.locator("#voice-status")).toHaveText("voice unavailable");
+        expect(await page.evaluate(() => ({ state: window.__mediaUpdate.track.readyState, peer: window.__noxa.state.pc, limits: window.__noxa.state.mediaLimits })))
+            .toEqual({ state: "ended", peer: null, limits: null });
+        expect(errors).toEqual([]);
+    });
+}
+
+for (const turns of [1, 3, 5, 7, 9, 11, 13]) {
+    test(`live media invalidation arriving around completion is retained (${turns} microtasks)`, async ({ page }) => {
+        await installMediaUpdateFixture(page);
+        await page.evaluate(turns => {
+            const sender = window.__noxa.state.pc.getSenders()[0];
+            const apply = sender.setParameters;
+            sender.setParameters = async parameters => {
+                sender.setParameters = apply;
+                await apply(parameters);
+                const invalidate = remaining => queueMicrotask(() => {
+                    if (remaining > 0) invalidate(remaining - 1);
+                    else { window.__mediaUpdate.limits.video_max_bitrate = 500000; window.__emitLimits(); }
+                });
+                invalidate(turns);
+            };
+            window.__emitLimits();
+        }, turns);
+        await expect.poll(() => page.evaluate(() => window.__noxa.state.pc.getSenders()[0].getParameters().encodings[0].maxBitrate)).toBe(425000);
+        expect(await page.evaluate(() => window.__mediaUpdate.reads)).toBe(2);
+    });
+}
+
+test("live media invalidation discards an outdated bridge result before applying it", async ({ page }) => {
+    await installMediaUpdateFixture(page);
+    await page.evaluate(() => { window.__mediaUpdate.holdRead = true; window.__emitLimits(); });
+    await expect.poll(() => page.evaluate(() => typeof window.__mediaUpdate.finishRead)).toBe("function");
+    await page.evaluate(() => {
+        window.__emitLimits();
+        window.__mediaUpdate.holdRead = false;
+        window.__mediaUpdate.finishRead({ video_max_width: 100, video_max_height: 50, video_max_bitrate: 100 });
+    });
+    await expect.poll(() => page.evaluate(() => window.__noxa.state.pc.getSenders()[0].getParameters().encodings[0].maxBitrate)).toBe(850000);
+    expect(await page.evaluate(() => ({ reads: window.__mediaUpdate.reads, offers: window.__mediaUpdate.offers, state: window.__mediaUpdate.track.readyState })))
+        .toEqual({ reads: 2, offers: [], state: "live" });
+});
+
+test("live media update timeout tears down its peer and late completion leaves a replacement alone", async ({ page }) => {
+    await installMediaUpdateFixture(page);
+    await page.clock.install();
+    await page.evaluate(() => { window.__mediaUpdate.holdRead = true; window.__emitLimits(); });
+    await expect.poll(() => page.evaluate(() => typeof window.__mediaUpdate.finishRead)).toBe("function");
+    await page.clock.fastForward(10001);
+    await expect(page.locator("#voice-status")).toHaveText("voice unavailable");
+    expect(await page.evaluate(() => window.__mediaUpdate.track.readyState)).toBe("ended");
+    await page.evaluate(() => {
+        const state = window.__noxa.state;
+        state.pc = new window.__limitPeer();
+        state.localStream = document.createElement("canvas").captureStream(1);
+        state.mediaLimits = { video_max_bitrate: 2000000 };
+        window.__mediaUpdate.finishRead({ video_max_width: 100, video_max_height: 50 });
+    });
+    expect(await page.evaluate(() => ({ closed: !!window.__noxa.state.pc.closed, limits: window.__noxa.state.mediaLimits,
+        state: window.__noxa.state.localStream.getTracks()[0].readyState })))
+        .toEqual({ closed: false, limits: { video_max_bitrate: 2000000 }, state: "live" });
+});
+
+for (const stage of ["queue", "constraints", "offer"]) {
+    test(`live media deadline covers ${stage} and ignores late work`, async ({ page }) => {
+        await installMediaUpdateFixture(page);
+        await page.clock.install();
+        const errors = [];
+        page.on("pageerror", error => errors.push(error.message));
+        await page.evaluate(async stage => {
+            const fixture = window.__mediaUpdate;
+            fixture.limits = { video_max_width: 320, video_max_height: 180, video_max_bitrate: 1000000 };
+            if (stage === "queue") {
+                const video = await import("/src/video.js");
+                video.queuePeerNegotiation(window.__noxa.state.pc, () => new Promise(resolve => { fixture.finishWork = resolve; }));
+            } else if (stage === "constraints") {
+                fixture.track.applyConstraints = () => new Promise(resolve => { fixture.finishWork = resolve; });
+            } else fixture.holdOffer = true;
+            window.__emitLimits();
+        }, stage);
+        await expect.poll(() => page.evaluate(stage => typeof window.__mediaUpdate[stage === "offer" ? "finishOffer" : "finishWork"], stage)).toBe("function");
+        await page.clock.fastForward(10001);
+        await expect(page.locator("#voice-status")).toHaveText("voice unavailable");
+        expect(await page.evaluate(() => window.__mediaUpdate.track.readyState)).toBe("ended");
+        await page.evaluate(stage => window.__mediaUpdate[stage === "offer" ? "finishOffer" : "finishWork"](), stage);
+        await expect.poll(() => page.evaluate(() => window.__noxa.state.pc)).toBeNull();
+        expect(errors).toEqual([]);
+    });
+}
+
+test("live media update waits for startup's offer before rebuilding", async ({ page }) => {
+    await installMediaUpdateFixture(page);
+    await page.evaluate(() => {
+        window.__noxa.resetVoiceSession();
+        window.RTCPeerConnection = window.__limitPeer;
+        navigator.mediaDevices.getUserMedia = async () => new MediaStream();
+        window.__mediaUpdate.holdOffer = true;
+        window.__mediaUpdate.start = window.__noxa.ensureVoiceForChannel();
+    });
+    await expect.poll(() => page.evaluate(() => typeof window.__mediaUpdate.finishOffer)).toBe("function");
+    await page.evaluate(() => {
+        window.__mediaUpdate.limits = { video_max_width: 320, video_max_height: 180, video_max_bitrate: 1000000 };
+        window.__emitLimits();
+    });
+    expect(await page.evaluate(() => ({ reads: window.__mediaUpdate.reads, offers: window.__mediaUpdate.offers.length }))).toEqual({ reads: 1, offers: 1 });
+    await page.evaluate(async () => {
+        window.__mediaUpdate.holdOffer = false;
+        window.__mediaUpdate.finishOffer();
+        await window.__mediaUpdate.start;
+    });
+    await expect.poll(() => page.evaluate(() => window.__mediaUpdate.offers.length)).toBe(2);
+    await expect(page.locator("#voice-status")).toHaveText("voice on");
+});
+
+test("live media timeout releases startup ownership before an old offer finishes", async ({ page }) => {
+    await installMediaUpdateFixture(page);
+    await page.clock.install();
+    await page.evaluate(() => {
+        window.__noxa.resetVoiceSession();
+        window.RTCPeerConnection = window.__limitPeer;
+        navigator.mediaDevices.getUserMedia = async () => new MediaStream();
+        window.__mediaUpdate.holdOffer = true;
+        window.__mediaUpdate.firstStart = window.__noxa.ensureVoiceForChannel();
+    });
+    await expect.poll(() => page.evaluate(() => typeof window.__mediaUpdate.finishOffer)).toBe("function");
+    await page.evaluate(() => { window.__mediaUpdate.finishOldOffer = window.__mediaUpdate.finishOffer; window.__emitLimits(); });
+    await page.clock.fastForward(10001);
+    await expect(page.locator("#voice-status")).toHaveText("voice unavailable");
+    await page.evaluate(() => { window.__mediaUpdate.nextStart = window.__noxa.ensureVoiceForChannel(); });
+    await expect.poll(() => page.evaluate(() => window.__mediaUpdate.offers.length)).toBe(2);
+    await page.evaluate(async () => {
+        window.__mediaUpdate.finishOldOffer();
+        await window.__mediaUpdate.firstStart;
+    });
+    await expect(page.locator("#voice-status")).toHaveText("voice connecting…");
+    await page.evaluate(async () => { window.__mediaUpdate.finishOffer(); await window.__mediaUpdate.nextStart; });
+    await expect(page.locator("#voice-status")).toHaveText("voice on");
+    expect(await page.evaluate(() => window.__mediaUpdate.offers.length)).toBe(2);
+});
+
+test("voice startup limits deadline releases microphone capture before any peer exists", async ({ page }) => {
+    await installMediaUpdateFixture(page);
+    await page.clock.install();
+    await page.evaluate(() => {
+        window.__noxa.resetVoiceSession();
+        window.__mediaUpdate.track = document.createElement("canvas").captureStream(1).getVideoTracks()[0];
+        navigator.mediaDevices.getUserMedia = async () => new MediaStream([window.__mediaUpdate.track]);
+        window.__mediaUpdate.holdRead = true;
+        window.__mediaUpdate.start = window.__noxa.ensureVoiceForChannel();
+    });
+    await expect.poll(() => page.evaluate(() => typeof window.__mediaUpdate.finishRead)).toBe("function");
+    await page.evaluate(() => window.__emitLimits());
+    await page.clock.fastForward(10001);
+    await expect(page.locator("#voice-status")).toHaveText("voice unavailable");
+    expect(await page.evaluate(() => window.__mediaUpdate.track.readyState)).toBe("ended");
+    await page.evaluate(async () => { window.__mediaUpdate.finishRead({ video_max_bitrate: 100 }); await window.__mediaUpdate.start; });
+    expect(await page.evaluate(() => window.__noxa.state.pc)).toBeNull();
+});
+
+test("voice startup refetches limits invalidated while its initial snapshot is pending", async ({ page }) => {
+    await installMediaUpdateFixture(page);
+    await page.evaluate(() => {
+        window.__noxa.resetVoiceSession();
+        window.RTCPeerConnection = window.__limitPeer;
+        navigator.mediaDevices.getUserMedia = async () => new MediaStream();
+        window.__mediaUpdate.holdRead = true;
+        window.__mediaUpdate.start = window.__noxa.ensureVoiceForChannel();
+    });
+    await expect.poll(() => page.evaluate(() => typeof window.__mediaUpdate.finishRead)).toBe("function");
+    await page.evaluate(async () => {
+        window.__emitLimits();
+        window.__mediaUpdate.holdRead = false;
+        window.__mediaUpdate.finishRead({ video_max_bitrate: 100 });
+        await window.__mediaUpdate.start;
+    });
+    expect(await page.evaluate(() => ({ reads: window.__mediaUpdate.reads, limits: window.__noxa.state.mediaLimits })))
+        .toEqual({ reads: 2, limits: { video_max_width: 0, video_max_height: 0, video_max_bitrate: 1000000 } });
+});
+
+test("late media limits cannot replace the next server's voice session", async ({ page }) => {
+    await page.evaluate(() => {
+        const v = window.__noxa;
+        v.showWorkspace(false);
+        v.state.myChannelID = 42;
+        v.state.channels = [{ ChannelID: 42, Name: "Lobby" }];
+        window.__limitsCapture = document.createElement("canvas").captureStream(1);
+        navigator.mediaDevices.getUserMedia = async () => window.__limitsCapture;
+        const app = window.go.main.App;
+        window.go.main.App = new Proxy(app, { get(target, key) {
+            if (key === "GetMediaLimitsForTab") return () => new Promise(resolve => { window.__finishLimits = resolve; });
+            return target[key];
+        } });
+        window.__limitsStart = v.ensureVoiceForChannel();
+    });
+    await expect.poll(() => page.evaluate(() => typeof window.__finishLimits)).toBe("function");
+    const result = await page.evaluate(async () => {
+        const v = window.__noxa;
+        v.resetVoiceSession();
+        v.state.serverGeneration++;
+        const nextStream = document.createElement("canvas").captureStream(1);
+        const nextPeer = new RTCPeerConnection();
+        const nextLimits = { video_max_bitrate: 2000000 };
+        v.state.localStream = nextStream;
+        v.state.pc = nextPeer;
+        v.state.mediaLimits = nextLimits;
+        window.__finishLimits({ video_max_bitrate: 1000000, video_max_width: 320, video_max_height: 180 });
+        await window.__limitsStart;
+        const result = { sameStream: v.state.localStream === nextStream, live: nextStream.getTracks()[0].readyState,
+            samePeer: v.state.pc === nextPeer, limits: v.state.mediaLimits, oldCapture: window.__limitsCapture.getTracks()[0].readyState };
+        v.resetVoiceSession();
+        return result;
+    });
+    expect(result).toEqual({ sameStream: true, live: "live", samePeer: true, limits: { video_max_bitrate: 2000000 }, oldCapture: "ended" });
+});
+
+test("media-limit bridge failure releases capture and exits connecting state", async ({ page }) => {
+    await page.evaluate(async () => {
+        const v = window.__noxa;
+        v.showWorkspace(false);
+        v.state.myChannelID = 42;
+        v.state.channels = [{ ChannelID: 42, Name: "Lobby" }];
+        window.__limitsCapture = document.createElement("canvas").captureStream(1);
+        navigator.mediaDevices.getUserMedia = async () => window.__limitsCapture;
+        const app = window.go.main.App;
+        window.go.main.App = new Proxy(app, { get(target, key) {
+            if (key === "GetMediaLimitsForTab") return async () => { throw new Error("bridge unavailable"); };
+            return target[key];
+        } });
+        await v.ensureVoiceForChannel();
+    });
+    await expect(page.locator("#voice-status")).toHaveText("voice unavailable");
+    expect(await page.evaluate(() => window.__limitsCapture.getTracks()[0].readyState)).toBe("ended");
+    expect(await page.evaluate(() => window.__noxa.state.mediaLimits)).toBeNull();
 });
 
 test("camera settings preview requires an explicit test and releases capture on exit", async ({ page }) => {
@@ -1796,6 +5695,7 @@ test("ignores a delayed microphone failure after the voice session changes", asy
 test("routes decrypted direct messages and echoes without mixing global chat or peers", async ({ page }) => {
     await page.evaluate(() => {
         const { state } = window.__noxa;
+        window.__dmStorageIdentity = "alpha";
         state.myUniqueID = "alpha";
         state.myNickname = "ALPHA";
         window.__noxa.showWorkspace();
@@ -1979,7 +5879,7 @@ test("latency reuses the five-second sampler, marks stale samples, and prevents 
         window.__latencyPending = false;
         window.go.main.App = new Proxy(app, {
             get(target, method) {
-                if (method === "GetClientInfo") return async () => {
+                if (method === "GetClientInfoForTab") return async () => {
                     window.__latencyCalls++;
                     if (window.__latencyPending) return await new Promise((resolve) => { window.__finishLatency = resolve; });
                     return { ping_ms: 12 };
@@ -2057,6 +5957,18 @@ test("warns after connect when the local clock is outside certificate validity",
     await expect.poll(() => page.evaluate(() => window.__calls.CertificateClockWarning || 0)).toBe(1);
 });
 
+test("login submits an account password separately and clears the input after success", async ({ page }) => {
+    await page.locator("#login-nick").fill("registered-member");
+    await page.locator("#login-accountpw").fill("account-test-password");
+    await page.locator("#login-serverpw").fill("server-test-password");
+    await page.locator("#login-connect").click();
+    await expect(page.locator("#login-overlay")).toBeHidden();
+    expect(await page.evaluate(() => window.__callArgs.ConnectBookmarkTabWithID[0].slice(2)))
+        .toEqual(["registered-member", "account-test-password", "server-test-password"]);
+    await expect(page.locator("#login-accountpw")).toHaveValue("");
+    expect(await page.evaluate(() => JSON.stringify(localStorage))).not.toContain("account-test-password");
+});
+
 test("does not paint a completed login over a tab selected during finalization", async ({ page }) => {
     await page.evaluate(() => {
         window.__connectTabID = "new-tab";
@@ -2075,7 +5987,7 @@ test("does not paint a completed login over a tab selected during finalization",
     await page.locator("#login-nick").fill("Alice");
     await page.locator("#login-serverpw").fill("secret");
     await page.getByRole("button", { name: "Connect" }).click();
-    await expect.poll(() => page.evaluate(() => window.__calls.ClientID || 0)).toBeGreaterThan(0);
+    await expect.poll(() => page.evaluate(() => window.__calls.SessionInfoForTab || 0)).toBeGreaterThan(0);
 
     await page.evaluate(() => {
         window.__tabs = window.__tabs.map((tab) => ({
@@ -2109,7 +6021,7 @@ test("rejects A-to-B-to-A identity results during login finalization", async ({ 
     await page.locator("#login-addr").fill("a.example:12333");
     await page.locator("#login-nick").fill("Alice");
     await page.getByRole("button", { name: "Connect" }).click();
-    await expect.poll(() => page.evaluate(() => window.__calls.ClientID || 0)).toBeGreaterThan(0);
+    await expect.poll(() => page.evaluate(() => window.__calls.SessionInfoForTab || 0)).toBeGreaterThan(0);
 
     await page.evaluate(() => {
         // Model A → B → A: the final active tab matches, but the identity
@@ -2289,7 +6201,7 @@ test("does not finish an in-flight reconnect after an intentional disconnect", a
         window.__releaseConnectBookmark();
     });
 
-    await expect.poll(() => page.evaluate(() => window.__calls.Disconnect || 0)).toBe(1);
+    await expect.poll(() => page.evaluate(() => window.__calls.DisconnectTab || 0)).toBe(1);
     await expect.poll(() => page.evaluate(() => window.__calls.CloseTab || 0)).toBe(1);
     expect(await page.evaluate(() => window.__callArgs.CloseTab[0])).toEqual(["stale-reconnect-tab"]);
     await expect(page.locator("#conn-pill")).not.toHaveClass(/\bup\b/);
@@ -2297,7 +6209,22 @@ test("does not finish an in-flight reconnect after an intentional disconnect", a
 });
 
 test("labels screen-share controls and explains low-bandwidth data use", async ({ page }) => {
-    await page.evaluate(() => window.__noxa.showWorkspace(false));
+    await page.evaluate(() => {
+        const v = window.__noxa;
+        v.showWorkspace(false);
+        v.state.pc = new RTCPeerConnection();
+        window.__shareRemote = new RTCPeerConnection();
+        const app = window.go.main.App;
+        window.go.main.App = new Proxy(app, { get(target, key) {
+            if (key !== "WebRTCOfferForTab") return target[key];
+            return async (_tab, sdp) => {
+                await window.__shareRemote.setRemoteDescription({ type: "offer", sdp });
+                const answer = await window.__shareRemote.createAnswer();
+                await window.__shareRemote.setLocalDescription(answer);
+                return answer.sdp;
+            };
+        } });
+    });
     await page.getByLabel("Voice options", { exact: true }).click();
     const shareButton = page.locator("#voice-screen");
     const lowBandwidthButton = page.locator("#voice-lowbw");
@@ -2326,12 +6253,7 @@ test("labels screen-share controls and explains low-bandwidth data use", async (
     await auditAccessibility(page, "screen-share dialog");
 
     await page.evaluate(() => {
-        const videoTrack = { kind: "video", contentHint: "", stop() {}, onended: null };
-        navigator.mediaDevices.getDisplayMedia = async () => ({
-            getVideoTracks: () => [videoTrack],
-            getAudioTracks: () => [],
-            getTracks: () => [videoTrack],
-        });
+        navigator.mediaDevices.getDisplayMedia = async () => document.createElement("canvas").captureStream(1);
     });
     await shareDialog.getByRole("button", { name: "Start sharing" }).click();
     await expect(shareButton).toHaveAttribute("title", "Stop sharing");
@@ -2354,12 +6276,9 @@ test("switches active server tabs without retaining stale identity", async ({ pa
     await expect(page.locator('.srv-tab[data-tab-id="tab-a"]')).toHaveClass(/active/);
     await page.evaluate(() => {
         const state = window.__noxa.state;
-        state.serverGroups = [{ id: 7, name: "Old server admins" }];
-        state.groupByUID = new Map([["old-user", [{ id: 7 }]]]);
-        state.groupIcons = new Map([[7, "old-group-icon"]]);
+        state.clients = [{ client_id: "old-client", unique_id: "old-user", nickname: "Old", roles: [{ id: 7, name: "Old server admins" }] }];
         state.avatars = new Map([["old-user", "old-avatar"]]);
         state.avatarPending = new Set(["old-user"]);
-        state.myPerms = new Map([["b_server_admin", { value: 1 }]]);
         const serverIcon = document.getElementById("server-icon");
         serverIcon.src = "data:image/png;base64,AAAA";
         serverIcon.classList.remove("hidden");
@@ -2368,13 +6287,10 @@ test("switches active server tabs without retaining stale identity", async ({ pa
     await expect(page.locator('.srv-tab[data-tab-id="tab-b"]')).toHaveClass(/active/);
     await expect.poll(() => page.evaluate(() => window.__noxa.state.myClientID)).toBe("client-b");
     await expect.poll(() => page.evaluate(() => ({
-        groups: window.__noxa.state.serverGroups.length,
-        memberships: window.__noxa.state.groupByUID.size,
-        groupIcons: window.__noxa.state.groupIcons.size,
+        clients: window.__noxa.state.clients.length,
         avatars: window.__noxa.state.avatars.size,
         avatarPending: window.__noxa.state.avatarPending.size,
-        permissions: window.__noxa.state.myPerms.size,
-    }))).toEqual({ groups: 0, memberships: 0, groupIcons: 0, avatars: 0, avatarPending: 0, permissions: 0 });
+    }))).toEqual({ clients: 0, avatars: 0, avatarPending: 0 });
     await expect(page.locator("#server-icon")).toHaveClass(/hidden/);
     await expect(page.locator("#server-icon")).not.toHaveAttribute("src", /.+/);
 });
@@ -2631,6 +6547,406 @@ test("undeafens when a snapshot confirms joining a channel", async ({ page }) =>
     expect(await page.locator("#remote-video").evaluate((element) => element.muted)).toBe(false);
 });
 
+test.describe("tab-bound file inspection", () => {
+    test.beforeEach(async ({ page }) => {
+        await page.evaluate(() => {
+            const v = window.__noxa;
+            v.showWorkspace(false);
+            Object.assign(v.state, { activeTabID: "server-a", myChannelID: 42, lastConnect: { addr: "a.example:12333" } });
+            const f = window.__fileScope = { nativeTab: "server-a", calls: [], effects: [], copied: [], toasts: [], entries: [{ name: "report.txt", size: 5, sha256: "abc" }] };
+            v.toast = text => f.toasts.push(text);
+            window.runtime.ClipboardSetText = async value => { f.copied.push(value); return true; };
+            const app = window.go.main.App;
+            window.go.main.App = new Proxy(app, { get(target, key) {
+                const method = key.replace(/ForTab$/, "");
+                if (!["FileList", "FileVersions", "FileLink", "FileDelete", "FileRename", "VerifyFile"].includes(method)) return target[key];
+                return async (...args) => {
+                    const tab = key.endsWith("ForTab") ? args.shift() : f.nativeTab;
+                    f.calls.push([method, tab, ...args]);
+                    if (tab !== f.nativeTab) {
+                        if (method === "FileDelete" || method === "FileRename") return "server changed";
+                        throw new Error("server changed");
+                    }
+                    f.effects.push([method, tab]);
+                    if (method === "FileList") return { entries: [...f.entries], folders: [] };
+                    if (method === "FileDelete" || method === "FileRename") {
+                        if (f.gate) await f.gate;
+                        f.completed = true;
+                        if (!f.error) f.entries = method === "FileDelete" || args[5] ? [] : [{ ...f.entries[0], name: args[4] }];
+                        return f.error || "";
+                    }
+                    if (method === "VerifyFile") {
+                        if (f.gate) await f.gate;
+                        f.completed = true;
+                        return true;
+                    }
+                    if (method === "FileVersions") {
+                        if (f.gate) await f.gate;
+                        f.completed = true;
+                        return { entries: [{ name: "old-report.txt", size: 5 }] };
+                    }
+                    if (f.gate) await f.gate;
+                    f.completed = true;
+                    return { path: "/dl/00112233445566778899aabbccddeeff", health_port: 12334, scheme: "https", expires_at: 1000, session_bound: true };
+                };
+            } });
+        });
+        await page.locator("#tab-files").click();
+        await expect(page.locator(".fb-filename")).toHaveText(["report.txt"]);
+        await page.evaluate(() => { window.__fileScope.calls = []; window.__fileScope.effects = []; });
+    });
+    test("native activation cannot redirect a folder refresh", async ({ page }) => {
+        await page.evaluate(() => { window.__fileScope.nativeTab = "server-b"; });
+        await page.getByRole("button", { name: "Refresh files", exact: true }).click();
+        await expect.poll(() => page.evaluate(() => window.__fileScope.calls)).toEqual([["FileList", "server-a", 42, ""]]);
+        expect(await page.evaluate(() => window.__fileScope.effects)).toEqual([]);
+    });
+    for (const [label, method] of [["Versions", "FileVersions"], ["Copy download link (15 min)", "FileLink"]]) {
+        test(`native activation cannot redirect ${method}`, async ({ page }) => {
+            await page.locator(".fb-action-menu summary").click();
+            await page.evaluate(() => { window.__fileScope.nativeTab = "server-b"; });
+            await page.getByRole("button", { name: label, exact: true }).click();
+            await expect.poll(() => page.evaluate(() => window.__fileScope.calls)).toEqual([[method, "server-a", 42, "", "report.txt"]]);
+            expect(await page.evaluate(() => window.__fileScope.effects)).toEqual([]);
+        });
+    }
+    test("late versions cannot render after frontend tab identity changes", async ({ page }) => {
+        await page.evaluate(() => { window.__fileScope.gate = new Promise(resolve => { window.__fileScope.finish = resolve; }); });
+        await page.locator(".fb-action-menu summary").click();
+        await page.getByRole("button", { name: "Versions", exact: true }).click();
+        await expect.poll(() => page.evaluate(() => window.__fileScope.calls.length)).toBe(1);
+        await page.evaluate(() => { window.__noxa.state.activeTabID = "server-b"; window.__fileScope.finish(); });
+        await expect.poll(() => page.evaluate(() => window.__fileScope.completed)).toBe(true);
+        await expect(page.locator(".fb-ver-name")).toHaveCount(0);
+    });
+    test("current link copies the originating server URL", async ({ page }) => {
+        await page.locator(".fb-action-menu summary").click();
+        await page.getByRole("button", { name: "Copy download link (15 min)", exact: true }).click();
+        await expect.poll(() => page.evaluate(() => window.__fileScope.copied)).toEqual(["https://a.example:12334/dl/00112233445566778899aabbccddeeff"]);
+    });
+    test("late link cannot replace the clipboard after frontend tab identity changes", async ({ page }) => {
+        await page.evaluate(() => { window.__fileScope.gate = new Promise(resolve => { window.__fileScope.finish = resolve; }); });
+        await page.locator(".fb-action-menu summary").click();
+        await page.getByRole("button", { name: "Copy download link (15 min)", exact: true }).click();
+        await expect.poll(() => page.evaluate(() => window.__fileScope.calls.length)).toBe(1);
+        await page.evaluate(() => { window.__noxa.state.activeTabID = "server-b"; window.__fileScope.finish(); });
+        await expect.poll(() => page.evaluate(() => window.__fileScope.completed)).toBe(true);
+        expect(await page.evaluate(() => window.__fileScope.copied)).toEqual([]);
+    });
+    test("native activation cannot redirect checksum verification", async ({ page }) => {
+        await page.locator(".fb-action-menu summary").click();
+        await page.evaluate(() => { window.__fileScope.nativeTab = "server-b"; });
+        await page.getByRole("button", { name: "Verify checksum", exact: true }).click();
+        await expect.poll(() => page.evaluate(() => window.__fileScope.calls)).toEqual([["VerifyFile", "server-a", 42, "", "report.txt", "abc"]]);
+        expect(await page.evaluate(() => window.__fileScope.effects)).toEqual([]);
+    });
+    test("late checksum cannot render after frontend tab identity changes", async ({ page }) => {
+        await page.evaluate(() => { window.__fileScope.gate = new Promise(resolve => { window.__fileScope.finish = resolve; }); });
+        await page.locator(".fb-action-menu summary").click();
+        await page.getByRole("button", { name: "Verify checksum", exact: true }).click();
+        await expect.poll(() => page.evaluate(() => window.__fileScope.calls.length)).toBe(1);
+        await page.evaluate(() => { window.__noxa.state.activeTabID = "server-b"; window.__fileScope.finish(); });
+        await expect.poll(() => page.evaluate(() => window.__fileScope.completed)).toBe(true);
+        expect(await page.locator(".fb-sha").textContent()).toBe("…");
+    });
+    for (const action of ["delete", "rename", "move"]) {
+        for (const outcome of ["saved", "denied", "replaced"]) {
+            test(`file ${action} waits for ${outcome} result before feedback or refresh`, async ({ page }) => {
+                await page.evaluate(outcome => {
+                    window.__noxa.state.channels = [{ ChannelID: 42, Name: "Source" }, { ChannelID: 43, Name: "Target" }];
+                    const f = window.__fileScope;
+                    f.error = outcome === "saved" ? "" : "file operation denied";
+                    f.gate = new Promise(resolve => { f.finish = resolve; });
+                }, outcome);
+                await page.locator(".fb-action-menu summary").click();
+                const title = { move: "Move to another channel", rename: "Rename / move within channel", delete: "delete" }[action];
+                await page.locator(`.fb-action-list button[title="${title}"]`).click();
+                const dialog = page.getByRole("dialog");
+                if (action === "rename") await dialog.locator("input").fill("renamed.txt");
+                await dialog.locator(".dlg-ok").click();
+                await expect.poll(() => page.evaluate(() => window.__fileScope.calls.length)).toBe(1);
+                expect(await page.evaluate(() => window.__fileScope.completed)).not.toBe(true);
+                expect(await page.evaluate(() => window.__fileScope.toasts)).toEqual([]);
+                await expect(page.locator(".fb-filename")).toHaveText(["report.txt"]);
+                await page.evaluate(outcome => {
+                    if (outcome === "replaced") window.__noxa.state.activeTabID = "server-b";
+                    window.__fileScope.finish();
+                }, outcome);
+                await expect.poll(() => page.evaluate(() => window.__fileScope.completed)).toBe(true);
+                if (outcome === "replaced") {
+                    expect(await page.evaluate(() => window.__fileScope.calls.length)).toBe(1);
+                    expect(await page.evaluate(() => window.__fileScope.toasts)).toEqual([]);
+                    await expect(page.locator(".fb-filename")).toHaveText(["report.txt"]);
+                } else {
+                    await expect.poll(() => page.evaluate(() => window.__fileScope.calls.filter(c => c[0] === "FileList").length)).toBe(1);
+                    if (outcome === "denied") {
+                        expect(await page.evaluate(() => window.__fileScope.toasts.join(" "))).toContain("file operation denied");
+                        await expect(page.locator(".fb-filename")).toHaveText(["report.txt"]);
+                    } else {
+                        await expect(page.locator(".fb-filename")).toHaveText(action === "rename" ? ["renamed.txt"] : []);
+                        if (action === "move") expect(await page.evaluate(() => window.__fileScope.toasts.join(" "))).toContain("Target");
+                    }
+                }
+            });
+        }
+
+        test(`native activation cannot redirect confirmed file ${action}`, async ({ page }) => {
+            await page.evaluate(() => { window.__noxa.state.channels = [{ ChannelID: 42, Name: "Source" }, { ChannelID: 43, Name: "Target" }]; });
+            await page.locator(".fb-action-menu summary").click();
+            const title = { move: "Move to another channel", rename: "Rename / move within channel", delete: "delete" }[action];
+            await page.locator(`.fb-action-list button[title="${title}"]`).click();
+            const dialog = page.getByRole("dialog");
+            await expect(dialog).toBeVisible();
+            if (action === "rename") await dialog.locator("input").fill("renamed.txt");
+            await page.evaluate(() => { window.__fileScope.nativeTab = "server-b"; });
+            await dialog.locator(".dlg-ok").click();
+            await expect.poll(() => page.evaluate(() => window.__fileScope.calls.length)).toBeGreaterThan(0);
+            const call = await page.evaluate(() => window.__fileScope.calls[0]);
+            expect(call.slice(0, 5)).toEqual([action === "delete" ? "FileDelete" : "FileRename", "server-a", 42, "", "report.txt"]);
+            expect(await page.evaluate(() => window.__fileScope.effects)).toEqual([]);
+        });
+    }
+});
+
+test.describe("tab-bound file transfers", () => {
+    test.beforeEach(async ({ page }) => {
+        await page.evaluate(() => {
+            const v = window.__noxa;
+            v.showWorkspace(false);
+            Object.assign(v.state, { activeTabID: "server-a", myChannelID: 42, channels: [{ ChannelID: 42, Name: "Files" }] });
+            window.__fileListResponse = { entries: [{ name: "report.txt", size: 5 }], folders: [] };
+            const f = window.__transferScope = { nativeTab: "server-a", paths: ["C:\\fixture\\upload.txt"], calls: [], effects: [] };
+            const app = window.go.main.App;
+            window.go.main.App = new Proxy(app, { get(target, key) {
+                if (key === "PickUploadPaths") return async () => { if (f.pickerGate) await f.pickerGate; return f.paths; };
+                if (key === "DownloadPath") return async () => { if (f.pathGate) await f.pathGate; return "C:\\fixture\\report.txt"; };
+                const method = key.replace(/ForTab$/, "");
+                if (!["UploadPathProgress", "UploadFileProgress", "DownloadFileProgress", "CancelTransfer"].includes(method)) return target[key];
+                return async (...args) => {
+                    const tab = key.endsWith("ForTab") ? args.shift() : f.nativeTab;
+                    f.calls.push([method, tab, ...args]);
+                    if (tab !== f.nativeTab) return "server changed";
+                    f.effects.push([method, tab]);
+                    if (method === "UploadPathProgress" && f.uploadGates?.[tab]) await f.uploadGates[tab];
+                    return "";
+                };
+            } });
+        });
+        await page.locator("#tab-files").click();
+        await expect(page.locator(".fb-filename")).toHaveText("report.txt");
+    });
+    for (const kind of ["upload", "download", "cancel"]) {
+        test(`native activation cannot redirect ${kind}`, async ({ page }) => {
+            if (kind === "cancel") {
+                await page.evaluate(() => {
+                    for (const cb of window.__events.ft_progress || []) cb({ id: "old", direction: "download", name: "old.txt", status: "active" });
+                });
+                await page.locator("#tab-transfers").click();
+            }
+            await page.evaluate(() => { window.__transferScope.nativeTab = "server-b"; });
+            await page.locator(kind === "upload" ? ".fb-upload" : kind === "download" ? '.fb-actions button[title="Download"]' : '.tr-row button').click();
+            await expect.poll(() => page.evaluate(() => window.__transferScope.calls.length)).toBe(1);
+            expect(await page.evaluate(() => window.__transferScope.calls[0][1])).toBe("server-a");
+            expect(await page.evaluate(() => window.__transferScope.effects)).toEqual([]);
+        });
+    }
+    test("upload picker results cannot select a different channel", async ({ page }) => {
+        await page.evaluate(() => { window.__transferScope.pickerGate = new Promise(resolve => { window.__transferScope.finishPicker = resolve; }); });
+        await page.locator(".fb-upload").click();
+        await page.evaluate(() => {
+            window.__noxa.state.myChannelID = 43;
+            window.__noxaFiles.onChannelChanged();
+            window.__transferScope.finishPicker();
+        });
+        await expect(page.locator(".fb-filename")).toHaveText("report.txt");
+        expect(await page.evaluate(() => window.__transferScope.calls)).toEqual([]);
+    });
+    test("late download path cannot start on another frontend tab", async ({ page }) => {
+        await page.evaluate(() => { window.__transferScope.pathGate = new Promise(resolve => { window.__transferScope.finishPath = resolve; }); });
+        await page.getByRole("button", { name: "Download", exact: true }).click();
+        await page.evaluate(() => { window.__noxa.state.activeTabID = "server-b"; window.__transferScope.finishPath(); });
+        expect(await page.evaluate(() => window.__transferScope.calls)).toEqual([]);
+    });
+    test("late upload initialization cannot release a new server queue", async ({ page }) => {
+        await page.evaluate(() => {
+            const f = window.__transferScope;
+            f.uploadGates = { "server-a": new Promise(resolve => { f.finishOld = resolve; }), "server-b": new Promise(resolve => { f.finishNew = resolve; }) };
+        });
+        await page.locator(".fb-upload").click();
+        await expect.poll(() => page.evaluate(() => window.__transferScope.calls.length)).toBe(1);
+        await page.evaluate(() => {
+            const f = window.__transferScope;
+            f.nativeTab = "server-b";
+            window.__noxa.state.activeTabID = "server-b";
+            window.__noxaFiles.resetServerView();
+            window.__noxaFiles.onChannelChanged();
+            f.paths = ["C:\\fixture\\first.txt", "C:\\fixture\\second.txt"];
+        });
+        await page.locator(".fb-upload").click();
+        await expect.poll(() => page.evaluate(() => window.__transferScope.calls.filter(c => c[1] === "server-b").length)).toBe(1);
+        await page.evaluate(() => window.__transferScope.finishOld());
+        expect(await page.evaluate(() => window.__transferScope.calls.filter(c => c[1] === "server-b").length)).toBe(1);
+    });
+    test("dropped bytes cannot follow native activation", async ({ page }) => {
+        await page.evaluate(() => {
+            window.__transferScope.nativeTab = "server-b";
+            const data = new DataTransfer();
+            data.items.add(new File(["data"], "drop.txt"));
+            document.getElementById("files-pane").dispatchEvent(new DragEvent("drop", { dataTransfer: data, bubbles: true }));
+        });
+        await expect.poll(() => page.evaluate(() => window.__transferScope.calls.length)).toBe(1);
+        expect(await page.evaluate(() => window.__transferScope.calls[0])).toEqual(["UploadFileProgress", "server-a", "up-1", 42, "", "drop.txt", "ZGF0YQ=="]);
+        expect(await page.evaluate(() => window.__transferScope.effects)).toEqual([]);
+    });
+    test("late dropped-file reading cannot start on another frontend tab", async ({ page }) => {
+        await page.evaluate(() => {
+            const f = window.__transferScope;
+            File.prototype.arrayBuffer = async function () {
+                f.readStarted = true;
+                await new Promise(resolve => { f.finishRead = resolve; });
+                return new TextEncoder().encode("data").buffer;
+            };
+            const data = new DataTransfer();
+            data.items.add(new File(["data"], "drop.txt"));
+            document.getElementById("files-pane").dispatchEvent(new DragEvent("drop", { dataTransfer: data, bubbles: true }));
+        });
+        await expect.poll(() => page.evaluate(() => window.__transferScope.readStarted)).toBe(true);
+        await page.evaluate(() => { window.__noxa.state.activeTabID = "server-b"; window.__transferScope.finishRead(); });
+        expect(await page.evaluate(() => window.__transferScope.calls)).toEqual([]);
+    });
+    test("retry retains its original server and download target", async ({ page }) => {
+        await page.getByRole("button", { name: "Download", exact: true }).click();
+        await expect.poll(() => page.evaluate(() => window.__transferScope.calls.length)).toBe(1);
+        await page.evaluate(() => {
+            const id = window.__transferScope.calls[0][2];
+            for (const cb of window.__events.ft_progress || []) cb({ id, direction: "download", name: "report.txt", status: "error" });
+        });
+        await page.locator("#tab-transfers").click();
+        await page.evaluate(() => { window.__transferScope.nativeTab = "server-b"; });
+        await page.locator(".tr-row button").click();
+        await expect.poll(() => page.evaluate(() => window.__transferScope.calls.length)).toBe(2);
+        const calls = await page.evaluate(() => window.__transferScope.calls);
+        expect(calls[1]).toEqual(calls[0]);
+        expect(await page.evaluate(() => window.__transferScope.effects)).toEqual([["DownloadFileProgress", "server-a"]]);
+    });
+    test("failed downloads can resume after returning to the original tab", async ({ page }) => {
+        await page.getByRole("button", { name: "Download", exact: true }).click();
+        await expect.poll(() => page.evaluate(() => window.__transferScope.calls.length)).toBe(1);
+        await page.evaluate(() => {
+            const id = window.__transferScope.calls[0][2];
+            for (const cb of window.__events.ft_progress || []) cb({ id, direction: "download", name: "report.txt", status: "error" });
+            for (const tab of ["server-b", "server-a"]) {
+                window.__transferScope.nativeTab = tab;
+                window.__noxa.state.activeTabID = tab;
+                window.__noxaFiles.resetServerView();
+                window.__noxaFiles.onChannelChanged();
+            }
+        });
+        await page.locator("#tab-transfers").click();
+        await page.locator(".tr-row button").click({ timeout: 1500 });
+        await expect.poll(() => page.evaluate(() => window.__transferScope.calls.length)).toBe(2);
+        const calls = await page.evaluate(() => window.__transferScope.calls);
+        expect(calls[1]).toEqual(calls[0]);
+    });
+    test("background failure replay replaces stale active state and preserves Resume", async ({ page }) => {
+        await page.getByRole("button", { name: "Download", exact: true }).click();
+        await expect.poll(() => page.evaluate(() => window.__transferScope.calls.length)).toBe(1);
+        await page.evaluate(() => {
+            const f = window.__transferScope;
+            const id = f.calls[0][2];
+            for (const cb of window.__events.ft_progress || []) cb({ id, direction: "download", name: "report.txt", status: "active" });
+            window.__noxa.state.activeTabID = "server-b";
+            window.__noxaFiles.resetServerView();
+            for (const cb of window.__events.ft_progress || []) cb({ id, direction: "download", name: "other-server.txt", status: "active" });
+            window.__noxa.state.activeTabID = "server-a";
+            window.__noxaFiles.resetServerView();
+            for (const cb of window.__events.ft_snapshot || []) cb(JSON.stringify({ transfers: [{ id, direction: "download", name: "report.txt", status: "error", error: "connection closed" }] }));
+        });
+        await page.locator("#tab-transfers").click();
+        await expect(page.locator(".tr-row")).toHaveCount(1);
+        await expect(page.locator(".tr-row")).toHaveClass(/error/);
+        await expect(page.locator(".tr-list")).not.toContainText("other-server.txt");
+        await page.locator(".tr-row button").click();
+        await expect.poll(() => page.evaluate(() => window.__transferScope.calls.length)).toBe(2);
+        const calls = await page.evaluate(() => window.__transferScope.calls);
+        expect(calls[1]).toEqual(calls[0]);
+    });
+    test("authoritative transfer snapshots remove expired rows only from their own tab", async ({ page }) => {
+        await page.evaluate(() => {
+            for (const cb of window.__events.ft_progress || []) cb({ id: "old", direction: "download", name: "expired.txt", status: "active" });
+            window.__noxa.state.activeTabID = "server-b";
+            window.__noxaFiles.resetServerView();
+            for (const cb of window.__events.ft_progress || []) cb({ id: "old", direction: "download", name: "retained.txt", status: "active" });
+            window.__noxa.state.activeTabID = "server-a";
+            window.__noxaFiles.resetServerView();
+            for (const cb of window.__events.ft_snapshot || []) cb({ transfers: [] });
+        });
+        await page.locator("#tab-transfers").click();
+        await expect(page.locator(".tr-row")).toHaveCount(0);
+        await page.evaluate(() => { window.__noxa.state.activeTabID = "server-b"; window.__noxaFiles.resetServerView(); });
+        await expect(page.locator(".tr-name")).toHaveText("retained.txt");
+    });
+    test("transfer history keeps latest completions and all active rows", async ({ page }) => {
+        await page.evaluate(() => {
+            const send = value => { for (const cb of window.__events.ft_progress || []) cb(value); };
+            send({ id: "running", direction: "upload", name: "running.txt", status: "active" });
+            for (let i = 0; i < 40; i++) send({ id: `done-${i}`, direction: "download", name: `done-${i}.txt`, status: "done" });
+        });
+        await page.locator("#tab-transfers").click();
+        await expect(page.locator(".tr-row")).toHaveCount(21);
+        const names = await page.locator(".tr-name").allTextContents();
+        expect(names).toEqual(expect.arrayContaining(["running.txt", ...Array.from({ length: 20 }, (_, i) => `done-${i + 20}.txt`)]));
+    });
+    test("queued uploads stay sequential and retain the chosen channel", async ({ page }) => {
+        await page.evaluate(() => { window.__transferScope.paths = ["C:\\fixture\\first.txt", "C:\\fixture\\second.txt"]; });
+        await page.locator(".fb-upload").click();
+        await expect.poll(() => page.evaluate(() => window.__transferScope.calls.length)).toBe(1);
+        await page.evaluate(() => {
+            window.__noxa.state.myChannelID = 43;
+            window.__noxaFiles.onChannelChanged();
+            const id = window.__transferScope.calls[0][2];
+            for (const cb of window.__events.ft_progress || []) cb({ id, direction: "upload", name: "first.txt", status: "done" });
+        });
+        await expect.poll(() => page.evaluate(() => window.__transferScope.calls.length)).toBe(2);
+        expect(await page.evaluate(() => window.__transferScope.calls[1])).toEqual(["UploadPathProgress", "server-a", "up-2", 42, "", "C:\\fixture\\second.txt"]);
+    });
+    test("old upload polling cannot release the replacement queue or reveal its rows", async ({ page }) => {
+        await page.evaluate(() => {
+            const f = window.__transferScope;
+            f.polls = [];
+            const original = window.setInterval;
+            window.setInterval = (callback, delay, ...args) => {
+                if (delay === 300) { f.polls.push(callback); return 100000 + f.polls.length; }
+                return original(callback, delay, ...args);
+            };
+        });
+        await page.locator(".fb-upload").click();
+        await expect.poll(() => page.evaluate(() => window.__transferScope.polls.length)).toBe(1);
+        await page.evaluate(() => {
+            const f = window.__transferScope;
+            for (const cb of window.__events.ft_progress || []) cb({ id: f.calls[0][2], direction: "upload", name: "old-secret.txt", status: "active" });
+            f.nativeTab = "server-b";
+            window.__noxa.state.activeTabID = "server-b";
+            window.__noxaFiles.resetServerView();
+            window.__noxaFiles.onChannelChanged();
+            f.paths = ["C:\\fixture\\first.txt", "C:\\fixture\\second.txt"];
+        });
+        await page.locator(".fb-upload").click();
+        await expect.poll(() => page.evaluate(() => window.__transferScope.polls.length)).toBe(2);
+        await page.evaluate(() => window.__transferScope.polls[0]());
+        expect(await page.evaluate(() => window.__transferScope.calls.length)).toBe(2);
+        await page.locator("#tab-transfers").click();
+        await expect(page.locator(".tr-list")).not.toContainText("old-secret.txt");
+        await page.evaluate(() => {
+            const f = window.__transferScope;
+            for (const cb of window.__events.ft_progress || []) cb({ id: f.calls[1][2], direction: "upload", name: "first.txt", status: "done" });
+            f.polls[1]();
+        });
+        await expect.poll(() => page.evaluate(() => window.__transferScope.calls.length)).toBe(3);
+        expect(await page.evaluate(() => window.__transferScope.calls[2][5])).toBe("C:\\fixture\\second.txt");
+    });
+});
+
 test("file browser filters names and sorts columns without refetching @a11y", async ({ page }, testInfo) => {
     await page.evaluate(() => {
         window.__noxa.showWorkspace(false);
@@ -2647,7 +6963,7 @@ test("file browser filters names and sorts columns without refetching @a11y", as
     await page.locator("#tab-files").click();
     const names = page.locator(".fb-filename");
     await expect(names).toHaveText(["Alpha.txt", "report2.txt", "report10.txt"]);
-    const requests = await page.evaluate(() => window.__calls.FileList);
+    const requests = await page.evaluate(() => window.__calls.FileListForTab);
     const filter = page.getByRole("searchbox", { name: "Filter files by name" });
     await filter.fill(" REPORT ");
     await expect(names).toHaveText(["report2.txt", "report10.txt"]);
@@ -2673,7 +6989,7 @@ test("file browser filters names and sorts columns without refetching @a11y", as
     await page.getByRole("button", { name: "Sort by name", exact: true }).click();
     await expect(names).toHaveText(["report10.txt", "report2.txt", "Alpha.txt"]);
     await expect(page.locator(".fb-folder-link")).toHaveText(["Reports/", "Archive/"]);
-    expect(await page.evaluate(() => window.__calls.FileList)).toBe(requests);
+    expect(await page.evaluate(() => window.__calls.FileListForTab)).toBe(requests);
     await auditAccessibility(page, "file filtering and sorting");
     await page.screenshot({ path: testInfo.outputPath("file-controls.png") });
     await page.evaluate(() => {
@@ -2776,7 +7092,7 @@ test("saves chat attachments through the native bridge without a DOM data URL", 
     await expect(chip).toBeVisible();
     await chip.click();
     await expect(chip).toBeDisabled();
-    await expect.poll(() => page.evaluate(() => window.__callArgs.SaveChatAttachment)).toEqual([
+    await expect.poll(() => page.evaluate(() => window.__callArgs.SaveChatAttachmentForTab?.map(args => args.slice(1)))).toEqual([
         [42, "blob.vcx", "dGVzdC1rZXk=", "report.txt"],
     ]);
     await expect(page.locator('a[href^="data:application/octet-stream;base64,"]')).toHaveCount(0);
@@ -2846,7 +7162,7 @@ test("retains failed chat drafts and only retries attachments that were not sent
     await expect(page.locator("#chat-text")).toHaveValue("draft reply");
     await expect(page.locator("#reply-bar")).not.toHaveClass(/hidden/);
     await expect(page.locator("#file-preview-row")).toHaveClass(/hidden/);
-    expect(await page.evaluate(() => ({ upload: window.__calls.UploadChatAttachment, send: window.__calls.SendChat }))).toEqual({ upload: 1, send: 1 });
+    expect(await page.evaluate(() => ({ upload: window.__calls.UploadChatAttachmentForTab, send: window.__calls.SendChatForTab }))).toEqual({ upload: 1, send: 1 });
 
     await page.evaluate(() => {
         window.__sendChatReplyResult = "";
@@ -2861,9 +7177,9 @@ test("retains failed chat drafts and only retries attachments that were not sent
     await expect(page.locator("#chat-text")).toHaveValue("");
     await expect(page.locator("#reply-bar")).toHaveClass(/hidden/);
     expect(await page.evaluate(() => ({
-        upload: window.__calls.UploadChatAttachment,
-        send: window.__calls.SendChat,
-        reply: window.__calls.SendChatReply,
+        upload: window.__calls.UploadChatAttachmentForTab,
+        send: window.__calls.SendChatForTab,
+        reply: window.__calls.SendChatReplyForTab,
     }))).toEqual({ upload: 1, send: 1, reply: 3 });
 });
 
@@ -3140,8 +7456,8 @@ test("contains disconnect and ICE-candidate rejections and reports ICE exhaustio
         for (let i = 0; i < 4; i++) await runNextICETimer();
         window.__iceRetryDelays = delays;
     });
-    expect(await page.evaluate(() => window.__calls.Disconnect)).toBe(1);
-    expect(await page.evaluate(() => window.__calls.SendICECandidate)).toBe(1);
+    expect(await page.evaluate(() => window.__calls.DisconnectTab)).toBe(1);
+    expect(await page.evaluate(() => window.__calls.SendICECandidateForTab)).toBe(1);
     expect(await page.evaluate(() => window.__oldPeerIsolation)).toEqual({ pendingBeforeOldEvents: 1, pendingAfterOldEvents: 1 });
     expect(await page.evaluate(() => window.__iceRetryDelays)).toEqual([1000, 2000, 5000, 15000, 1000, 2000, 5000, 15000]);
     expect(await page.evaluate(() => window.__terminalToastsBeforeRecovery)).toBe(1);
@@ -3211,28 +7527,6 @@ test("keeps details contextual and opens it when a user is selected", async ({ p
     await page.getByRole("button", { name: "Close details" }).click();
     await expect(page.locator("body")).toHaveClass(/details-collapsed/);
     await expect(page.locator("#details-toggle")).toBeVisible();
-});
-
-test("lets a guest redeem a privilege key and promotes the live session", async ({ page }) => {
-    await page.evaluate(() => {
-        window.__noxa.state.myClientID = "guest-client";
-        window.__noxa.state.isGuest = true;
-        window.__noxaPerms.openTokenRedeem();
-    });
-    await expect(page.locator(".tk-use-input")).toBeVisible();
-    await page.locator(".tk-use-input").fill("bootstrap-key");
-    await page.getByRole("button", { name: "Redeem", exact: true }).click();
-    await expect.poll(() => page.evaluate(() => window.__calls.TokenUse || 0)).toBe(1);
-
-    await page.evaluate(() => {
-        const event = JSON.stringify({
-            type: "token_used",
-            data: { client_id: "guest-client", group_id: 5, promoted: true },
-        });
-        for (const cb of window.__events.event || []) cb(event);
-    });
-    await expect.poll(() => page.evaluate(() => window.__noxa.state.isGuest)).toBe(false);
-    await expect(page.locator(".toast")).toContainText("privilege key redeemed");
 });
 
 test("nests connected members below channels and offers them as direct-message targets", async ({ page }) => {
@@ -3360,7 +7654,7 @@ test("exposes named landmarks, controls, live regions, and a visible focus ring"
     await expect(page.locator("#chat-announcer")).toHaveText("Bob: hello from Bob");
 });
 
-test("@a11y audits primary login, workspace, settings, and permission-dialog states", async ({ page }) => {
+test("@a11y audits primary login, workspace, settings, and role-dialog states", async ({ page }) => {
     await auditAccessibility(page, "login");
 
     await page.evaluate(() => window.__noxa.showWorkspace(false));
@@ -3371,15 +7665,28 @@ test("@a11y audits primary login, workspace, settings, and permission-dialog sta
     await auditAccessibility(page, "settings dialog");
     await page.keyboard.press("Escape");
 
-    await page.evaluate(() => {
-        window.__noxa.state.isAdmin = true;
-        window.__groups = { groups: [{ id: 7, name: "Operators", member_count: 0, color: "" }] };
-        window.__permEntries = { entries: [{ key: "b_channel_join_permanent", value: 1, grant: 1, skip: false, negate: false }] };
-        window.__noxaPerms.openPermissionManager();
+    await page.evaluate(async () => {
+        const state = window.__noxa.state;
+        state.activeTabID = "server-a";
+        state.authorizationModel = "roles-v1";
+        const app = window.go.main.App;
+        window.go.main.App = new Proxy(app, { get(target, key) {
+            if (key === "RoleStateForTab") return async () => ({
+                actor_id: 1,
+                policy: { revision: 1, owner_id: 1, everyone_id: 10, roles: [
+                    { id: 10, name: "@everyone", position: 0, permissions: [] },
+                ], members: [], channels: [] },
+                capabilities: [{ key: "view_channel", group: "access", en: "View channels", de: "Kanäle anzeigen" }],
+                manageable_role_ids: [10], grantable_capabilities: ["view_channel"],
+            });
+            return target[key];
+        } });
+        const { openRolesManager } = await import("/src/roles-ui.js");
+        openRolesManager();
     });
-    await page.locator(".pm-target", { hasText: "Operators" }).click();
-    await expect(page.locator(".pm-edit-grid")).toBeVisible();
-    await auditAccessibility(page, "permission manager dialog");
+    await expect(page.getByRole("dialog", { name: "Roles", exact: true })).toBeVisible();
+    await expect(page.locator(".role-form")).toBeVisible();
+    await auditAccessibility(page, "roles dialog");
 });
 
 test("does not delete a same-named file in a new channel after user_moved during confirmation", async ({ page }) => {
@@ -3411,7 +7718,7 @@ test("does not delete a same-named file in a new channel after user_moved during
         for (const callback of window.__events.event || []) callback(moved);
     });
     await page.getByRole("button", { name: "Delete file" }).click();
-    await expect.poll(() => page.evaluate(() => window.__calls.FileDelete || 0)).toBe(0);
+    await expect.poll(() => page.evaluate(() => window.__calls.FileDeleteForTab || 0)).toBe(0);
 });
 
 test("does not export a different channel after its passphrase dialog is left open", async ({ page }) => {
@@ -3435,7 +7742,7 @@ test("does not export a different channel after its passphrase dialog is left op
         for (const callback of window.__events.event || []) callback(moved);
     });
     await page.getByRole("button", { name: "Export", exact: true }).click();
-    await expect.poll(() => page.evaluate(() => window.__calls.ChatExportHistory || 0)).toBe(0);
+    await expect.poll(() => page.evaluate(() => window.__calls.ChatExportHistoryForTab || 0)).toBe(0);
 });
 
 test("runtime boundaries ignore malformed payloads and never answer a stale offer", async ({ page }) => {
@@ -3451,8 +7758,10 @@ test("runtime boundaries ignore malformed payloads and never answer a stale offe
         state.clients = [];
         state.channels = [];
         state.serverGeneration = 40;
+        const offerSDP = "a=ice-ufrag:current\r\na=ice-pwd:current-secret";
         let releaseOffer;
         const oldPeer = {
+            remoteDescription: { sdp: offerSDP },
             ice: 0, remote: 0, answers: 0, local: 0,
             addIceCandidate: async () => { oldPeer.ice++; },
             setRemoteDescription: async () => {
@@ -3466,28 +7775,28 @@ test("runtime boundaries ignore malformed payloads and never answer a stale offe
         const emit = (name, payload) => {
             for (const callback of window.__events[name] || []) callback(payload);
         };
-        for (const name of ["snapshot", "channellist", "event", "ice", "offer"]) {
+        for (const name of ["snapshot", "event", "ice", "offer"]) {
             emit(name, "{");
             emit(name, "null");
             emit(name, "[]");
         }
-        emit("snapshot", JSON.stringify({ root_channels: [] }));
-        emit("channellist", JSON.stringify({ channels: [{ id: 7, name: "Valid channel" }] }));
+        emit("snapshot", JSON.stringify({ root_channels: [{ ChannelID: 7, ParentID: 0, Name: "Valid channel", clients: [], children: [] }] }));
         emit("event", JSON.stringify({ type: "user_joined", data: {
             client_id: "client-b", unique_id: "user-b", nickname: "Bob", channel_id: 7,
         } }));
         emit("ice", JSON.stringify({ candidate: "candidate", sdp_mid: "0", sdp_mline_index: 0 }));
-        emit("offer", JSON.stringify({ sdp: "old-offer" }));
+        emit("offer", JSON.stringify({ sdp: offerSDP }));
         await new Promise((resolve) => setTimeout(resolve, 0));
         state.serverGeneration++;
         state.pc = { replacement: true };
         releaseOffer();
         await new Promise((resolve) => setTimeout(resolve, 0));
-        const staleAnswers = window.__calls.WebRTCAnswer || 0;
+        const staleAnswers = window.__calls.WebRTCAnswerForTab || 0;
         for (const stage of ["remote", "answer", "local", "bridge"]) {
             state.serverGeneration++;
             window.__webRTCAnswerReject = stage === "bridge";
             state.pc = {
+                remoteDescription: { sdp: offerSDP },
                 addIceCandidate: async () => {},
                 setRemoteDescription: async () => {
                     if (stage === "remote") throw new Error("remote rejected");
@@ -3500,7 +7809,7 @@ test("runtime boundaries ignore malformed payloads and never answer a stale offe
                     if (stage === "local") throw new Error("local rejected");
                 },
             };
-            emit("offer", JSON.stringify({ sdp: `${stage}-offer` }));
+            emit("offer", JSON.stringify({ sdp: offerSDP }));
             await new Promise((resolve) => setTimeout(resolve, 0));
         }
         window.__webRTCAnswerReject = false;
@@ -3512,7 +7821,7 @@ test("runtime boundaries ignore malformed payloads and never answer a stale offe
             remote: oldPeer.remote,
             local: oldPeer.local,
             staleAnswers,
-            answers: window.__calls.WebRTCAnswer || 0,
+            answers: window.__calls.WebRTCAnswerForTab || 0,
             errors,
         };
     });
@@ -3521,7 +7830,7 @@ test("runtime boundaries ignore malformed payloads and never answer a stale offe
         hasValidEvent: true,
         ice: 1,
         remote: 1,
-        local: 1,
+        local: 0,
         staleAnswers: 0,
         answers: 1,
         errors: [],
@@ -3825,25 +8134,14 @@ test("dispatches one DM notification only for actual E2EE direct messages", asyn
     expect(await page.evaluate(() => window.__noxa.state.lastWhispererUID)).toBe("user-b");
 });
 
-test("renders hostile update, permission, and image metadata as inert data", async ({ page }) => {
+test("renders hostile update and image metadata as inert data", async ({ page }) => {
     const attack = `<img src=x onerror="document.body.dataset.remoteXss='yes'">`;
     await page.evaluate(async (payload) => {
-        window.__permissions = [{
-            key: payload,
-            value: 7,
-            skip: true,
-            negate: false,
-            inherited: true,
-            source_tier: payload,
-        }];
         window.__updateInfo = { available: true, version: payload, size: 1048576 };
-        await window.__noxa.refreshPermissions();
         await window.__noxa.checkForUpdatesInteractive();
     }, attack);
 
     expect(await page.evaluate(() => document.body.dataset.remoteXss || "")).toBe("");
-    await expect(page.locator("#perm-area tbody .mono")).toHaveText(attack);
-    await expect(page.locator("#perm-area tbody tr")).toHaveAttribute("title", `effective from ${attack} (inherited)`);
     await expect(page.locator(".upd-status")).toHaveText(`update available: ${attack} (1.0 MiB)`);
 
     await page.evaluate(async (payload) => {
@@ -3871,154 +8169,6 @@ test("renders hostile update, permission, and image metadata as inert data", asy
     await expect(page.locator(".hostile-avatar img")).toHaveCount(0);
     expect(await page.evaluate(() => window.__noxa.state.avatars.get("hostile-user"))).toBe(null);
     await expect(page.locator(".valid-avatar img")).toHaveAttribute("src", "data:image/png;base64,AAAA");
-});
-
-test("channel permissions show the channel join requirement and edit its real setting", async ({ page }, testInfo) => {
-    await page.evaluate(() => {
-        window.__noxa.showWorkspace(false);
-        window.__noxa.state.isAdmin = true;
-        for (const cb of window.__events.snapshot || []) cb(JSON.stringify({
-            root_channels: [
-                { ChannelID: 2, Name: "Member1", NeededJoinPower: 30, clients: [], children: [] },
-                { ChannelID: 3, Name: "Public", NeededJoinPower: 0, clients: [], children: [] },
-            ],
-        }));
-        // An old permission override must not mask the enforced channel setting.
-        window.__permEntries = { entries: [{ key: "i_channel_needed_join_power", value: 99, grant: 99 }] };
-        window.__noxaPerms.openPermissionManager();
-    });
-    const manager = page.getByRole("dialog", { name: "Permission Manager", exact: true });
-    await manager.getByRole("button", { name: "Channel", exact: true }).click();
-    await manager.locator(".pm-target", { hasText: "Member1" }).click();
-    await manager.getByPlaceholder("filter permissions…").fill("i_channel_needed_join_power");
-    const row = manager.locator(".pm-edit-grid tbody tr").filter({ has: page.locator("td.mono", { hasText: "i_channel_needed_join_power" }) });
-    await expect(row.locator("td").nth(1)).toHaveText("30");
-    await expect(row.locator("td").nth(2)).toHaveText("—");
-    await expect(row).toContainText("channel setting");
-    await manager.locator(".pm-target", { hasText: "Public" }).click();
-    await expect(row.locator("td").nth(1)).toHaveText("0");
-    await manager.locator(".pm-target", { hasText: "Member1" }).click();
-    await row.click();
-    await expect(manager.locator(".pe-set, .pe-unset, .pe-grant")).toHaveCount(0);
-    await manager.screenshot({ path: testInfo.outputPath("channel-join-permission.png") });
-    await manager.getByRole("button", { name: "Edit channel…", exact: true }).click();
-    const editor = page.getByRole("dialog", { name: "Edit channel", exact: true });
-    await expect(editor.getByLabel("Required join power", { exact: true })).toHaveValue("30");
-    await expect(editor.getByLabel("Required join power", { exact: true })).toBeFocused();
-    await editor.getByLabel("Required join power", { exact: true }).fill("40");
-    await editor.getByRole("button", { name: "Save changes" }).click();
-    await expect(editor).toHaveCount(0);
-    expect(await page.evaluate(() => window.__callArgs.ChannelEditTree[0])).toEqual([2, "join_power", 40, 0, 0, false]);
-    expect(await page.evaluate(() => window.__calls.PermSet || 0)).toBe(0);
-    await page.evaluate(() => {
-        for (const cb of window.__events.event || []) cb(JSON.stringify({
-            type: "channel_updated", data: { channel_id: 2, needed_join_power: 40 },
-        }));
-    });
-    await expect(row.locator("td").nth(1)).toHaveText("40");
-    await page.evaluate(() => {
-        window.__noxa.state.isAdmin = false;
-        window.__noxa.state.myPerms = new Map([["b_permission_manage", { value: 1 }]]);
-        for (const cb of window.__events.event || []) cb(JSON.stringify({
-            type: "channel_updated", data: { channel_id: 2, needed_join_power: 40, inherit_permissions: true },
-        }));
-    });
-    await expect(manager.getByText(/Parent join-power requirements also apply/)).toBeVisible();
-    await expect(manager.getByRole("button", { name: "Edit channel…", exact: true })).toBeDisabled();
-});
-
-test("renders editable permission keys as inert text", async ({ page }) => {
-    const key = '<span data-permission-key-injection="true">unexpected node</span>';
-    await page.evaluate(({ permissionKey }) => {
-        window.__noxa.state.isAdmin = true;
-        window.__groups = { groups: [{ id: 7, name: "Operators", member_count: 0, color: "" }] };
-        window.__permEntries = {
-            entries: [{ key: permissionKey, value: 7, grant: 5, skip: true, negate: false }],
-        };
-        window.__noxaPerms.openPermissionManager();
-    }, { permissionKey: key });
-
-    await page.locator(".pm-target", { hasText: "Operators" }).click();
-    const keyCell = page.locator(".pm-edit-grid tbody tr.set td.mono");
-    await expect(keyCell).toHaveText(key);
-    await expect(page.locator('[data-permission-key-injection="true"]')).toHaveCount(0);
-
-    await keyCell.click();
-    await expect(page.locator(".pm-editor-row .pe-value")).toHaveValue("7");
-    await expect(page.locator(".pm-editor-row .pe-grant")).toHaveValue("5");
-    await page.locator(".pm-editor-row .pe-set").click();
-    await expect.poll(() => page.evaluate(() => window.__lastPermSet?.[4])).toBe(key);
-});
-
-test("invalidates server dialogs and delayed responses when the active tab changes", async ({ page }) => {
-    const oldKey = "old_server_permission";
-    const newKey = "new_server_permission";
-    await page.evaluate(({ staleKey }) => {
-        window.__noxa.state.isAdmin = true;
-        window.__groups = { groups: [{ id: 7, name: "Old Operators", member_count: 0, color: "" }] };
-        window.__permEntries = { entries: [{ key: staleKey, value: 7, grant: 7, skip: false, negate: false }] };
-        let releasePermList;
-        window.__permListGate = new Promise((resolve) => { releasePermList = resolve; });
-        window.__releaseOldPermList = releasePermList;
-        let releaseClientInfo;
-        window.__clientInfoGate = new Promise((resolve) => { releaseClientInfo = resolve; });
-        window.__releaseOldClientInfo = releaseClientInfo;
-        window.__clientInfoResponse = {
-            nickname: "Old Alice", unique_id: "old-user", connected_at: Date.now() / 1000 - 60,
-            idle_seconds: 1, ping_ms: 20, ip: "127.0.0.7", port: 12333, bytes_in: 7, bytes_out: 7,
-        };
-        window.__noxaPerms.openPermissionManager();
-    }, { staleKey: oldKey });
-
-    await page.locator(".pm-target", { hasText: "Old Operators" }).click();
-    await expect.poll(() => page.evaluate(() => window.__calls.PermList || 0)).toBe(1);
-    await page.evaluate(() => {
-        window.__noxa.openClientInfo({ client_id: "old-client", unique_id: "old-user", nickname: "Old Alice" });
-        window.__noxaPerms.openTokenManager();
-        window.__noxaPerms.openAuditViewer();
-        window.__noxaPerms.openBanList();
-    });
-    await expect.poll(() => page.evaluate(() => window.__calls.GetClientInfo || 0)).toBeGreaterThan(0);
-    await expect(page.locator(".dlg-overlay").filter({ hasText: "Permission Manager" })).toHaveCount(1);
-    await expect(page.locator(".dlg-overlay").filter({ hasText: "Privilege Keys" })).toHaveCount(1);
-    await expect(page.locator(".dlg-overlay").filter({ hasText: "Audit Log" })).toHaveCount(1);
-    await expect(page.locator(".dlg-overlay").filter({ hasText: "Bans" })).toHaveCount(1);
-    await expect(page.locator(".dlg-overlay").filter({ hasText: "Connection Info" })).toHaveCount(1);
-
-    await page.evaluate(({ freshKey }) => {
-        window.__groups = { groups: [{ id: 9, name: "New Operators", member_count: 0, color: "" }] };
-        window.__permEntries = { entries: [{ key: freshKey, value: 9, grant: 9, skip: false, negate: false }] };
-        window.__clientInfoResponse = {
-            nickname: "New Bob", unique_id: "new-user", connected_at: Date.now() / 1000 - 30,
-            idle_seconds: 2, ping_ms: 9, ip: "127.0.0.9", port: 12333, bytes_in: 9, bytes_out: 9,
-        };
-        for (const callback of window.__events.tab_reset || []) callback("tab-b");
-        window.__noxa.state.isAdmin = true;
-    }, { freshKey: newKey });
-
-    await expect(page.locator(".dlg-overlay")).toHaveCount(0);
-    await page.evaluate(() => window.__noxaPerms.openPermissionManager());
-    await page.locator(".pm-target", { hasText: "New Operators" }).click();
-    await expect(page.locator(".pm-edit-grid tbody tr.set td.mono")).toHaveText(newKey);
-    await page.evaluate(() => {
-        window.__noxa.openClientInfo({ client_id: "new-client", unique_id: "new-user", nickname: "New Bob" });
-    });
-    await expect(page.getByRole("dialog", { name: "Connection Info" }).locator('[data-f="nick"]')).toHaveText("New Bob");
-
-    await page.evaluate(() => {
-        window.__releaseOldPermList();
-        window.__releaseOldClientInfo();
-    });
-    await page.waitForTimeout(100);
-    await expect(page.getByRole("dialog", { name: "Connection Info" }).locator('[data-f="nick"]')).toHaveText("New Bob");
-    await page.getByRole("dialog", { name: "Connection Info" }).getByRole("button", { name: "Close" }).click();
-    await expect(page.locator(".pm-edit-grid tbody tr.set td.mono")).toHaveText(newKey);
-    await expect(page.locator(".pm-edit-grid tbody tr.set td.mono")).not.toHaveText(oldKey);
-    await page.locator(".pm-edit-grid tbody tr.set td.mono").click();
-    await page.locator(".pm-editor-row .pe-set").click();
-    await expect.poll(() => page.evaluate(() => window.__lastPermSet)).toEqual([
-        "server_group", 9, "", 0, newKey, 9, 9, false, false,
-    ]);
 });
 
 test("cancels server-bound image actions across active-tab resets", async ({ page }) => {
@@ -4056,7 +8206,7 @@ test("cancels server-bound image actions across active-tab resets", async ({ pag
     await expect(page.getByRole("dialog", { name: "Set avatar" })).toBeVisible();
     await reset("avatar-dialog-reset");
     await expect(page.getByRole("dialog", { name: "Set avatar" })).toHaveCount(0);
-    await expect.poll(() => page.evaluate(() => window.__calls.SetAvatar || 0)).toBe(0);
+    await expect.poll(() => page.evaluate(() => window.__calls.SetAvatarForTab || 0)).toBe(0);
 
     // A reset while the native picker is open must not allow the crop dialog
     // to mount late under the new generation.
@@ -4066,7 +8216,7 @@ test("cancels server-bound image actions across active-tab resets", async ({ pag
     await lateCropChooser.setFiles(image);
     await page.waitForTimeout(300);
     await expect(page.getByRole("dialog", { name: "Set avatar" })).toHaveCount(0);
-    expect(await page.evaluate(() => window.__calls.SetAvatar || 0)).toBe(0);
+    expect(await page.evaluate(() => window.__calls.SetAvatarForTab || 0)).toBe(0);
 
     // Server icon compression and quick-emoji upload have no DOM dialog after
     // file selection, so their caller-owned generation tokens block the write.
@@ -4075,7 +8225,7 @@ test("cancels server-bound image actions across active-tab resets", async ({ pag
     await reset("server-icon-reset");
     await iconChooser.setFiles(image);
     await page.waitForTimeout(300);
-    expect(await page.evaluate(() => window.__calls.ServerIconSet || 0)).toBe(0);
+    expect(await page.evaluate(() => window.__calls.ServerIconSetForTab || 0)).toBe(0);
 
     await connect();
     await page.locator("#chat-emoji").click();
@@ -4086,329 +8236,15 @@ test("cancels server-bound image actions across active-tab resets", async ({ pag
     await emojiChooser.setFiles(image);
     await page.waitForTimeout(300);
     expect(prompts).toEqual([]);
-    expect(await page.evaluate(() => window.__calls.EmojiUpload || 0)).toBe(0);
-});
-
-test("drops late ban-lift responses without refreshing the new server", async ({ page }) => {
-    await page.evaluate(() => {
-        window.__noxa.showWorkspace(false);
-        window.__noxa.state.isAdmin = true;
-        window.__bans = { bans: [{
-            id: 17,
-            value: "old-user",
-            reason: "old server ban",
-            banned_by: "old-admin",
-            expires_at: 0,
-        }] };
-        window.__banRemoveResult = "old server rejected the lift";
-        let release;
-        window.__banRemoveGate = new Promise((resolve) => { release = resolve; });
-        window.__releaseBanRemove = release;
-        window.__noxaPerms.openBanList();
-    });
-    await expect(page.locator(".ban-lift")).toHaveCount(1);
-    await page.locator(".ban-lift").click();
-    await expect(page.getByRole("dialog", { name: "Lift ban" })).toBeVisible();
-    await page.evaluate(() => {
-        for (const callback of window.__events.tab_reset || []) callback("ban-confirm-reset");
-    });
-    await expect(page.locator(".dlg-overlay")).toHaveCount(0);
-    expect(await page.evaluate(() => window.__calls.BanRemove || 0)).toBe(0);
-
-    // Once an old-server write is already in flight it cannot be cancelled,
-    // but its response must not toast or schedule a list read on the new tab.
-    await page.evaluate(() => {
-        window.__noxa.state.isAdmin = true;
-        let release;
-        window.__banRemoveGate = new Promise((resolve) => { release = resolve; });
-        window.__releaseBanRemove = release;
-        window.__noxaPerms.openBanList();
-    });
-    await expect(page.locator(".ban-lift")).toHaveCount(1);
-    await page.locator(".ban-lift").click();
-    await page.getByRole("dialog", { name: "Lift ban" }).getByRole("button", { name: "Lift", exact: true }).click();
-    await expect.poll(() => page.evaluate(() => window.__calls.BanRemove || 0)).toBe(1);
-    await expect.poll(() => page.evaluate(() => window.__calls.BanList || 0)).toBe(2);
-
-    await page.evaluate(() => {
-        for (const callback of window.__events.tab_reset || []) callback("ban-reset");
-        window.__releaseBanRemove();
-    });
-    await expect(page.locator(".dlg-overlay")).toHaveCount(0);
-    await page.waitForTimeout(600);
-    expect(await page.evaluate(() => window.__calls.BanList || 0)).toBe(2);
-    await expect(page.locator("#toasts")).not.toContainText("old server rejected the lift");
-});
-
-test("supports keyboard menus and restores focus after a trapped modal", async ({ page }) => {
-    await page.evaluate(() => {
-        window.__noxa.showWorkspace(false);
-    });
-
-    const tools = page.locator("#menubar > .menu-item > span").filter({ hasText: /^Tools$/ }).locator("..");
-    await tools.focus();
-    await page.keyboard.press("Enter");
-    await expect(tools).toHaveAttribute("aria-expanded", "true");
-    await expect(page.getByRole("menuitem", { name: /^Settings/ })).toBeFocused();
-    await page.keyboard.press("Enter");
-
-    const dialog = page.getByRole("dialog", { name: "Settings" });
-    await expect(dialog).toBeVisible();
-    await expect.poll(() => page.locator("#app").evaluate((el) => el.inert)).toBe(true);
-    await expect(page.locator("#settings-page-application")).toBeFocused();
-
-    await page.keyboard.press("Shift+Tab");
-    await expect(page.locator("#set-apply")).toBeFocused();
-    await page.keyboard.press("Tab");
-    await expect(page.locator("#settings-page-application")).toBeFocused();
-
-    await page.keyboard.press("Escape");
-    await expect(dialog).toHaveCount(0);
-    await expect(tools).toBeFocused();
-    await expect.poll(() => page.locator("#app").evaluate((el) => el.inert)).toBe(false);
-});
-
-test("removes an unfinished hotkey capture when settings closes", async ({ page }) => {
-    await page.evaluate(() => {
-        window.__noxa.showWorkspace(false);
-        window.__noxa.openSettings("hotkeys");
-    });
-    const capture = page.locator("#settings-content .hotkey-capture").first();
-    await capture.click();
-    await expect(capture).toHaveClass(/capturing/);
-    await page.keyboard.press("Escape");
-    await expect(page.getByRole("dialog", { name: "Settings" })).toHaveCount(0);
-
-    const prevented = await page.evaluate(() => {
-        const event = new KeyboardEvent("keydown", { key: "K", bubbles: true, cancelable: true });
-        return !document.dispatchEvent(event);
-    });
-    expect(prevented).toBe(false);
-});
-
-test("activates tree rows and workspace views from the keyboard with loading feedback", async ({ page }) => {
-    await page.evaluate(() => {
-        window.__noxa.showWorkspace(false);
-        window.__noxa.state.myClientID = "client-a";
-        window.__noxa.state.myChannelID = 1;
-        for (const cb of window.__events.snapshot || []) cb(JSON.stringify({
-            root_channels: [{
-                ChannelID: 1, ParentID: 0, Name: "Lobby",
-                clients: [{ client_id: "client-a", unique_id: "user-a", nickname: "Alice", channel_id: 1 }],
-                children: [],
-            }],
-        }));
-    });
-
-    const client = page.locator('.client[data-clid="client-a"]');
-    await client.focus();
-    await page.keyboard.press("Space");
-    await expect(page.locator("body")).not.toHaveClass(/details-collapsed/);
-    await expect(client).toHaveAttribute("aria-selected", "true");
-    await expect(client).toBeFocused();
-
-    const tablist = page.getByRole("tablist", { name: "Workspace views" });
-    await expect(tablist).toBeVisible();
-    expect(await tablist.locator("#tab-transfers").count()).toBe(0);
-    await expect(page.locator("#tab-transfers")).toHaveAttribute("aria-haspopup", "dialog");
-    await expect(page.locator("#tab-chat")).toHaveAttribute("aria-controls", "chat-pane");
-    await expect(page.locator("#tab-chat")).toHaveAttribute("aria-selected", "true");
-    await expect(page.locator("#tab-chat")).toHaveAttribute("tabindex", "0");
-    await expect(page.locator("#tab-files")).toHaveAttribute("aria-controls", "files-pane");
-    await expect(page.locator("#tab-files")).toHaveAttribute("aria-selected", "false");
-    await expect(page.locator("#tab-files")).toHaveAttribute("tabindex", "-1");
-    await expect(page.locator("#chat-pane")).toHaveAttribute("role", "tabpanel");
-    await expect(page.locator("#chat-pane")).toHaveAttribute("aria-labelledby", "tab-chat");
-    await expect(page.locator("#files-pane")).toHaveAttribute("role", "tabpanel");
-    await expect(page.locator("#files-pane")).toHaveAttribute("aria-labelledby", "tab-files");
-
-    await page.evaluate(() => {
-        let release;
-        window.__fileListGate = new Promise((resolve) => { release = resolve; });
-        window.__releaseFileList = release;
-    });
-    await page.locator("#tab-chat").focus();
-    await page.keyboard.press("ArrowRight");
-    await expect(page.locator("#tab-files")).toHaveAttribute("aria-selected", "true");
-    await expect(page.locator("#tab-files")).toHaveAttribute("tabindex", "0");
-    await expect(page.locator("#tab-chat")).toHaveAttribute("tabindex", "-1");
-    expect(await page.evaluate(() => ({
-        chatSelected: document.getElementById("tab-chat").getAttribute("aria-selected"),
-        filesSelected: document.getElementById("tab-files").getAttribute("aria-selected"),
-        chatHidden: document.getElementById("chat-pane").hidden,
-        filesHidden: document.getElementById("files-pane").hidden,
-    }))).toEqual({ chatSelected: "false", filesSelected: "true", chatHidden: true, filesHidden: false });
-    await expect(page.locator("#files-pane .fb-list")).toHaveAttribute("aria-busy", "true");
-    await expect(page.locator('#files-pane .fb-list [role="status"]')).toContainText("Loading channel files");
-
-    await page.evaluate(() => {
-        window.__releaseFileList();
-        window.__fileListGate = null;
-    });
-    await expect(page.locator("#files-pane .fb-list")).not.toHaveAttribute("aria-busy", "true");
-    await expect(page.locator("#files-pane .empty-state")).toContainText("Empty folder");
-    await page.keyboard.press("ArrowLeft");
-    await expect(page.locator("#tab-chat")).toHaveAttribute("aria-selected", "true");
-    await expect(page.locator("#chat-pane")).toBeVisible();
-    await expect(page.locator("#files-pane")).toBeHidden();
-    await page.keyboard.press("End");
-    await expect(page.locator("#tab-files")).toHaveAttribute("aria-selected", "true");
-    await page.keyboard.press("Home");
-    await expect(page.locator("#tab-chat")).toHaveAttribute("aria-selected", "true");
-});
-
-test("notification center updates live and resumes unread counting after every close path", async ({ page }) => {
-    await page.evaluate(() => window.__noxa.showWorkspace(false));
-    const bell = page.locator("#notif-bell");
-    const rows = page.locator(".nc-row");
-    for (const close of ["button", "escape", "backdrop", "remove"]) {
-        await bell.click();
-        await page.getByRole("button", { name: "Clear all notifications" }).click();
-        await expect(page.locator(".nc-list")).toHaveText("no notifications");
-        await page.evaluate(() => window.__noxaPolish.recordNotification("message", "new arrival"));
-        await expect(rows).toHaveCount(1);
-        await expect(rows.first()).toContainText("new arrival");
-        await expect(bell).toHaveAttribute("aria-label", "Notifications, 0 unread");
-        await expect(page.locator("#notif-badge")).toHaveClass(/hidden/);
-        if (close === "button") await page.getByRole("button", { name: "Close notifications" }).click();
-        if (close === "escape") await page.keyboard.press("Escape");
-        if (close === "backdrop") await page.locator(".dlg-overlay").click({ position: { x: 2, y: 2 } });
-        await page.evaluate((close) => {
-            if (close === "remove") document.querySelector(".notif-center").closest(".dlg-overlay").remove();
-            // Direct removal and arrival can happen before lifecycle observers run.
-            window.__noxaPolish.recordNotification("message", "after closing");
-        }, close);
-        await expect(page.locator(".notif-center")).toHaveCount(0);
-        await expect(bell).toHaveAttribute("aria-label", "Notifications, 1 unread");
-    }
-});
-
-test("live notifications preserve focused rows and scrolling while limiting history to 50", async ({ page }, testInfo) => {
-    await page.emulateMedia({ reducedMotion: "reduce" });
-    await page.evaluate(() => {
-        window.__noxa.showWorkspace(false);
-        for (let i = 0; i < 50; i++) window.__noxaPolish.recordNotification("message", `arrival ${i}`, { uid: `user-${i}` });
-    });
-    await page.locator("#notif-bell").click();
-    const focused = page.locator(".nc-row").filter({ has: page.locator(".nc-text", { hasText: /^arrival 30$/ }) });
-    await focused.focus();
-    const before = await focused.evaluate(row => row.getBoundingClientRect().top);
-    await page.evaluate(() => window.__noxaPolish.recordNotification("message", "latest arrival", { uid: "latest" }));
-    await expect(page.locator(".nc-row")).toHaveCount(50);
-    await expect(page.locator(".nc-row").first()).toContainText("latest arrival");
-    await expect(focused).toBeFocused();
-    expect(Math.abs(await focused.evaluate(row => row.getBoundingClientRect().top) - before)).toBeLessThan(2);
-    await expect(page.locator(".nc-text").filter({ hasText: /^arrival 0$/ })).toHaveCount(0);
-    await page.screenshot({ path: testInfo.outputPath("notifications-live.png") });
-    await page.locator(".nc-row").last().focus();
-    await page.evaluate(() => window.__noxaPolish.recordNotification("message", "one more arrival"));
-    await expect(page.getByRole("button", { name: "Close notifications" })).toBeFocused();
-});
-
-test("keeps unread notification labels exact while the visual badge is capped", async ({ page }) => {
-    await page.evaluate(() => window.__noxa.showWorkspace(false));
-    const bell = page.locator("#notif-bell");
-    const badge = page.locator("#notif-badge");
-    await expect(bell).toHaveAttribute("aria-label", "Notifications, 0 unread");
-    await expect(badge).toHaveClass(/hidden/);
-
-    await page.evaluate(() => window.__noxaPolish.recordNotification("message", "one"));
-    await expect(bell).toHaveAttribute("aria-label", "Notifications, 1 unread");
-    await expect(badge).toHaveText("1");
-
-    await page.evaluate(() => {
-        for (let i = 2; i <= 12; i++) window.__noxaPolish.recordNotification("message", String(i));
-    });
-    await expect(bell).toHaveAttribute("aria-label", "Notifications, 12 unread");
-    await expect(badge).toHaveText("9+");
-
-    await bell.click();
-    await expect(page.locator(".notif-center")).toBeVisible();
-    await expect(bell).toHaveAttribute("aria-label", "Notifications, 0 unread");
-    await expect(badge).toHaveClass(/hidden/);
-    await page.getByRole("button", { name: "Clear all notifications" }).click();
-    await expect(bell).toHaveAttribute("aria-label", "Notifications, 0 unread");
-    await expect(badge).toHaveText("");
-});
-
-test("keeps global announcements available in Files and restores chat for compact and zen modes", async ({ page }) => {
-    await page.evaluate(() => window.__noxa.showWorkspace(false));
-    const workspaceState = () => page.evaluate(() => ({
-        chatSelected: document.getElementById("tab-chat").getAttribute("aria-selected"),
-        filesSelected: document.getElementById("tab-files").getAttribute("aria-selected"),
-        chatTabIndex: document.getElementById("tab-chat").tabIndex,
-        filesTabIndex: document.getElementById("tab-files").tabIndex,
-        chatHidden: document.getElementById("chat-pane").hidden,
-        filesHidden: document.getElementById("files-pane").hidden,
-    }));
-    const chatActive = {
-        chatSelected: "true", filesSelected: "false",
-        chatTabIndex: 0, filesTabIndex: -1,
-        chatHidden: false, filesHidden: true,
-    };
-    const activeElement = () => page.evaluate(() => {
-        const active = document.activeElement;
-        const style = active ? getComputedStyle(active) : null;
-        return {
-            id: active?.id || "",
-            visible: Boolean(active && active !== document.body && active.isConnected && !active.hidden && !active.closest("[hidden]") &&
-                style?.display !== "none" && style?.visibility !== "hidden" && active.getClientRects().length),
-            unselectedFilesTab: active?.id === "tab-files" && active.tabIndex === -1,
-        };
-    });
-    const expectRecoveredFocus = async () => {
-        expect(await activeElement()).toEqual({ id: "voice-mute", visible: true, unselectedFilesTab: false });
-    };
-
-    await page.locator("#tab-files").click();
-    await expect(page.locator("#files-pane")).toBeVisible();
-    await expect(page.locator("#tab-files")).toBeFocused();
-    await page.evaluate(() => {
-        window.__noxa.announceLive("Connection warning while browsing files", "assertive");
-        window.__noxa.announceLive("Status while browsing files", "polite");
-    });
-    await expect(page.locator("#alert-announcer")).toHaveText("Connection warning while browsing files");
-    await expect(page.locator("#chat-announcer")).toHaveText("Status while browsing files");
-    await expect(page.locator("#alert-announcer")).toBeVisible();
-    expect(await page.evaluate(() => {
-        const chatPane = document.getElementById("chat-pane");
-        const filesPane = document.getElementById("files-pane");
-        return ["chat-announcer", "alert-announcer"].every((id) => {
-            const region = document.getElementById(id);
-            return !chatPane.contains(region) && !filesPane.contains(region) && !region.hidden;
-        });
-    })).toBe(true);
-
-    await page.evaluate(() => window.__noxa.toggleCompact());
-    await expect(page.locator("body")).toHaveClass(/compact/);
-    await expect(page.locator("#voice-bar")).toBeVisible();
-    expect(await workspaceState()).toEqual(chatActive);
-    await expectRecoveredFocus();
-    await page.evaluate(() => window.__noxa.toggleCompact());
-    await expect(page.locator("body")).not.toHaveClass(/compact/);
-    expect(await workspaceState()).toEqual(chatActive);
-    await expectRecoveredFocus();
-
-    await page.locator("#tab-files").click();
-    await expect(page.locator("#files-pane .fb-upload")).toBeVisible();
-    await page.locator("#files-pane .fb-upload").focus();
-    await expect(page.locator("#files-pane .fb-upload")).toBeFocused();
-    await page.evaluate(() => window.__noxaPolish.toggleZen());
-    await expect(page.locator("body")).toHaveClass(/zen/);
-    await expect(page.locator("#voice-bar")).toBeVisible();
-    expect(await workspaceState()).toEqual(chatActive);
-    await expectRecoveredFocus();
-    await page.evaluate(() => window.__noxaPolish.toggleZen());
-    await expect(page.locator("body")).not.toHaveClass(/zen/);
-    expect(await workspaceState()).toEqual(chatActive);
-    await expectRecoveredFocus();
+    expect(await page.evaluate(() => window.__calls.EmojiUploadForTab || 0)).toBe(0);
 });
 
 test("moves focus explicitly between login and the connected workspace", async ({ page }, testInfo) => {
     await expect(page.locator("#login-addr")).toBeFocused();
     await expect(page.locator(".skip-link")).toBeHidden();
     await expect(page.locator("#login-serverpw")).toHaveAttribute("autocomplete", "off");
-    await expect(page.locator(".login-card input[type=password]")).toHaveCount(1);
+    await expect(page.locator(".login-card input[type=password]")).toHaveCount(2);
+    await expect(page.locator("#login-accountpw")).toHaveAccessibleName("Account password (optional)");
     await expect(page.locator("#login-serverpw")).toHaveAccessibleName("Server password (optional)");
     await page.locator(".login-card").screenshot({ path: testInfo.outputPath("login.png") });
 
@@ -4445,20 +8281,45 @@ test("computes names for settings and generated dialog controls", async ({ page 
     await expect(page.locator('#settings-content input[type="range"]').first()).toHaveAccessibleName("UI font size");
     await page.keyboard.press("Escape");
 
-    await page.evaluate(() => window.__noxa.showWorkspace());
+    await page.evaluate(() => {
+        const app = window.go.main.App;
+        window.go.main.App = new Proxy(app, { get(target, key) {
+            if (key === "RoleChannelStateForTab") return async () => ({
+                revision: 8, everyone_id: 1, name: "Top level", can_create_permanent: true,
+                can_create_temporary: true, can_manage_access: false, destinations: [],
+                settings: { name: "", topic: "", description: "", max_clients: 0,
+                    slow_mode_seconds: 0, order_index: 0, opus_bitrate: 32000,
+                    opus_fec: true, opus_dtx: true, opus_stereo: false },
+            });
+            return target[key];
+        } });
+        window.__noxa.showWorkspace();
+    });
     await page.locator("#channel-create-btn").click();
     const create = page.getByRole("dialog", { name: "Create channel" });
-    await expect(create.locator(".cc-name")).toHaveAccessibleName("Name");
-    await expect(create.locator(".cc-type")).toHaveAccessibleName("Type");
-    await expect(create.locator(".cc-maxclients")).toHaveAccessibleName("Max clients (0 = unlimited)");
+    await expect(create.getByRole("textbox", { name: "Channel name" })).toBeVisible();
+    await expect(create.getByRole("combobox", { name: "Channel lifetime" })).toBeVisible();
+    await create.getByText("Limits and audio").click();
+    await expect(create.getByRole("spinbutton", { name: "Participant limit (0 = unlimited)" })).toBeVisible();
     await page.keyboard.press("Escape");
 });
 
 test("keeps long channel dialogs within a small window and scrolls to their actions", async ({ page }) => {
-    // Layout regression from the native 1024x768 window. Bindings are mocked;
-    // this checks the shared dialog layout, not real channel creation.
     await page.setViewportSize({ width: 1024, height: 730 });
-    await page.evaluate(() => window.__noxa.showWorkspace());
+    await page.evaluate(() => {
+        const app = window.go.main.App;
+        window.go.main.App = new Proxy(app, { get(target, key) {
+            if (key === "RoleChannelStateForTab") return async () => ({
+                revision: 8, everyone_id: 1, name: "Top level", can_create_permanent: true,
+                can_create_temporary: true, can_manage_access: false, destinations: [],
+                settings: { name: "", topic: "", description: "", max_clients: 0,
+                    slow_mode_seconds: 0, order_index: 0, opus_bitrate: 32000,
+                    opus_fec: true, opus_dtx: true, opus_stereo: false },
+            });
+            return target[key];
+        } });
+        window.__noxa.showWorkspace();
+    });
     await page.getByRole("button", { name: "Create channel", exact: true }).click();
     const dialog = page.getByRole("dialog", { name: "Create channel" });
     const panel = dialog.locator(".dlg");
@@ -4470,29 +8331,46 @@ test("keeps long channel dialogs within a small window and scrolls to their acti
     expect(bounds.y).toBeGreaterThanOrEqual(0);
     expect(bounds.y + bounds.height).toBeLessThanOrEqual(730);
     await expect(dialog.getByRole("heading", { name: "Create channel" })).toBeInViewport({ ratio: 1 });
-    const name = dialog.getByRole("textbox", { name: "Name", exact: true });
+    const name = dialog.getByRole("textbox", { name: "Channel name", exact: true });
     await name.fill("Small window room");
     const create = dialog.getByRole("button", { name: "Create", exact: true });
-    const cancel = dialog.getByRole("button", { name: "Cancel", exact: true });
-    await page.keyboard.press("Shift+Tab");
-    await expect(cancel).toBeFocused();
-    await expect(cancel).toBeInViewport({ ratio: 1 });
-    await page.keyboard.press("Tab");
-    await expect(name).toBeFocused();
-    await expect(name).toBeInViewport({ ratio: 1 });
-    await page.keyboard.press("Shift+Tab");
-    await page.keyboard.press("Shift+Tab");
-    await expect(create).toBeFocused();
+    const close = dialog.getByRole("button", { name: "Close", exact: true });
     await expect(create).toBeInViewport({ ratio: 1 });
-    await expect(cancel).toBeInViewport({ ratio: 1 });
-    await expect.poll(() => panel.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
-    await page.keyboard.press("Enter");
+    await expect(close).toBeInViewport({ ratio: 1 });
+    await dialog.getByText("Limits and audio").click();
+    await expect(dialog.getByRole("spinbutton", { name: "Participant limit (0 = unlimited)" })).toBeVisible();
+    await expect(create).toBeInViewport({ ratio: 1 });
+    await close.click();
+    await page.getByRole("button", { name: "Apply", exact: true }).click();
     await expect(dialog).toHaveCount(0);
-    await expect.poll(() => page.evaluate(() => window.__callArgs.CreateChannel?.[0]?.[0])).toBe("Small window room");
 });
 
 async function openChannelEditor(page) {
     await page.evaluate(() => {
+        const app = window.go.main.App;
+        window.go.main.App = new Proxy(app, {
+            get(target, key) {
+                if (key === "RoleChannelStateForTab") return async () => ({
+                    revision: 8,
+                    channel_id: 2,
+                    name: "Public",
+                    destinations: [{ id: 0, name: "Root", can_sync: true }],
+                    settings: {
+                        name: "Public",
+                        topic: "Everyone welcome",
+                        description: "",
+                        order_index: 1,
+                        max_clients: 0,
+                        slow_mode_seconds: 0,
+                        opus_bitrate: 32000,
+                        opus_fec: true,
+                        opus_dtx: true,
+                        opus_stereo: false,
+                    },
+                });
+                return target[key];
+            },
+        });
         window.__noxa.showWorkspace(false);
         for (const cb of window.__events.snapshot || []) cb(JSON.stringify({
             root_channels: [{ ChannelID: 2, Name: "Public", Topic: "Everyone welcome", ParentID: 0,
@@ -4511,48 +8389,17 @@ test("channel editor keeps its title and actions visible at small window sizes @
         const dialog = await openChannelEditor(page);
         await expect(dialog.getByRole("heading", { name: "Edit channel" })).toBeInViewport({ ratio: 1 });
         await expect(dialog.getByRole("button", { name: "Save changes" })).toBeInViewport({ ratio: 1 });
-        await expect(dialog.getByRole("button", { name: "Cancel", exact: true })).toBeInViewport({ ratio: 1 });
+        await expect(dialog.getByRole("button", { name: "Close", exact: true })).toBeInViewport({ ratio: 1 });
         for (const summary of await dialog.locator("summary").all()) await summary.click();
-        await dialog.locator(".ce-order").fill("3");
+        await expect(dialog.getByLabel("Sort order", { exact: true })).toBeVisible();
         await expect(dialog.getByRole("heading", { name: "Edit channel" })).toBeInViewport({ ratio: 1 });
         await expect(dialog.getByRole("button", { name: "Save changes" })).toBeInViewport({ ratio: 1 });
-        const dimensions = await dialog.locator(".channel-edit").evaluate((el) => ({ width: el.clientWidth, scrollWidth: el.scrollWidth }));
+        const dimensions = await dialog.evaluate((el) => ({ width: el.clientWidth, scrollWidth: el.scrollWidth }));
         expect(dimensions.scrollWidth).toBeLessThanOrEqual(dimensions.width);
         await auditAccessibility(page, "channel editor");
         await page.keyboard.press("Escape");
         await expect(dialog).toHaveCount(0);
     }
-});
-
-test("channel editor preserves input on failure and prevents duplicate saves", async ({ page }) => {
-    const dialog = await openChannelEditor(page);
-    await dialog.locator(".ce-topic").fill("New topic");
-    await dialog.getByText("Access & placement", { exact: true }).click();
-    await dialog.locator(".ce-order").fill("4");
-    await page.evaluate(() => { window.__channelEditError = "Permission denied"; });
-    await dialog.getByRole("button", { name: "Save changes" }).click();
-    await expect(dialog.getByRole("alert")).toContainText("Permission denied");
-    await expect(dialog.locator(".ce-topic")).toHaveValue("New topic");
-    expect(await page.evaluate(() => window.__calls.ChannelEditTree || 0)).toBe(0);
-    await page.evaluate(() => {
-        window.__channelEditError = "";
-        window.__channelEditGate = new Promise((resolve) => { window.__releaseChannelEdit = resolve; });
-    });
-    await dialog.getByRole("button", { name: "Save changes" }).click();
-    await expect(dialog.getByRole("button", { name: "Saving…" })).toBeDisabled();
-    await page.evaluate(() => { window.__releaseChannelEdit(); });
-    await expect(dialog).toHaveCount(0);
-    expect(await page.evaluate(() => window.__calls.ChannelEdit)).toBe(2);
-    expect(await page.evaluate(() => window.__callArgs.ChannelEditTree[0])).toEqual([2, "order", 0, 4, 0, false]);
-});
-
-test("channel editor saves presets without rewriting unchanged placement", async ({ page }) => {
-    const dialog = await openChannelEditor(page);
-    await dialog.locator(".ce-preset").selectOption("music");
-    await dialog.getByRole("button", { name: "Save changes" }).click();
-    await expect(dialog).toHaveCount(0);
-    expect(await page.evaluate(() => window.__callArgs.ChannelEdit[0])).toEqual([2, "Everyone welcome", 0, 128000, true, false, true, "", 0]);
-    expect(await page.evaluate(() => window.__calls.ChannelEditTree || 0)).toBe(0);
 });
 
 test("closes menus when keyboard focus exits and keeps expansion state in sync", async ({ page }) => {
@@ -4748,11 +8595,11 @@ test("Escape runs polling-dialog cleanup and allows stateful dialogs to reopen",
         window.__noxa.openClientInfo({ client_id: "client-a", unique_id: "user-a", nickname: "Alice" });
     });
     await expect(page.getByRole("dialog", { name: "Connection Info" })).toBeVisible();
-    await expect.poll(() => page.evaluate(() => window.__calls.GetClientInfo || 0)).toBeGreaterThan(0);
+    await expect.poll(() => page.evaluate(() => window.__calls.GetClientInfoForTab || 0)).toBeGreaterThan(0);
     await page.keyboard.press("Escape");
-    const clientInfoCalls = await page.evaluate(() => window.__calls.GetClientInfo || 0);
+    const clientInfoCalls = await page.evaluate(() => window.__calls.GetClientInfoForTab || 0);
     await page.waitForTimeout(2200);
-    expect(await page.evaluate(() => window.__calls.GetClientInfo || 0)).toBe(clientInfoCalls);
+    expect(await page.evaluate(() => window.__calls.GetClientInfoForTab || 0)).toBe(clientInfoCalls);
 
     await page.evaluate(() => window.__noxaFiles.openTransfers());
     await expect(page.getByRole("dialog", { name: "Transfers" })).toBeVisible();
@@ -4765,9 +8612,9 @@ test("Escape runs polling-dialog cleanup and allows stateful dialogs to reopen",
     await page.evaluate(() => window.__noxaMeta.openStatsPage());
     await expect(page.getByRole("dialog", { name: "Server information" })).toBeVisible();
     await page.keyboard.press("Escape");
-    const statsCalls = await page.evaluate(() => window.__calls.GetClientInfo || 0);
+    const statsCalls = await page.evaluate(() => window.__calls.GetClientInfoForTab || 0);
     await page.waitForTimeout(1200);
-    expect(await page.evaluate(() => window.__calls.GetClientInfo || 0)).toBe(statsCalls);
+    expect(await page.evaluate(() => window.__calls.GetClientInfoForTab || 0)).toBe(statsCalls);
     await page.evaluate(() => window.__noxaMeta.openStatsPage());
     await expect(page.getByRole("dialog", { name: "Server information" })).toBeVisible();
 });
@@ -5064,7 +8911,7 @@ test("scopes connection failures and active-tab close sounds", async ({ page }) 
 
         tones.length = 0;
         window.__disconnectHandler = async () => {
-            // Match App.Disconnect -> closeTab(true): the Go-owned edge is
+            // Match App.DisconnectTab -> closeTab(true): the Go-owned edge is
             // emitted before replacement tab replay and bridge resolution.
             emit("intentional_disconnect", "tab-b");
             window.__tabs = [
@@ -5114,6 +8961,7 @@ test("scopes connection failures and active-tab close sounds", async ({ page }) 
 
         tones.length = 0;
         window.__disconnectHandler = null;
+        window.__disconnectTabHandler = null;
         emit("tray_disconnect");
         await new Promise((resolve) => setTimeout(resolve, 0));
         const offlineMenuDisconnect = [...tones];

@@ -349,36 +349,6 @@ func TestLiveChannelFlow(t *testing.T) {
 	}, 5*time.Second, "bob receiving alice's channel chat")
 }
 
-// TestLivePermissions exercises the GetPermissions request/response round
-// trip. A fresh server grants registered users nothing, so the resolved set
-// may be empty; the important part is that the query/response exchange works
-// (a non-empty set requires seeded permission rows).
-func TestLivePermissions(t *testing.T) {
-	addr := liveAddr(t)
-
-	cm, _ := newLiveTestBackend(t)
-	if err := cm.connect(addr, liveAliceUID, liveAlicePass, ""); err != "" {
-		t.Fatalf("alice connect: %s", err)
-	}
-	defer cm.disconnect()
-
-	app := appWithCM(cm)
-	entries, err := app.GetPermissions()
-	if err != nil {
-		t.Fatalf("GetPermissions: %v", err)
-	}
-	// Round-trip succeeded; entries may be empty on a fresh server.
-	for _, e := range entries {
-		if e.Key == "" {
-			t.Errorf("permission entry with empty key: %+v", e)
-		}
-	}
-	t.Logf("resolved %d permission entries for alice", len(entries))
-}
-
-// TestLiveClientInfo verifies the ClientInfo query/response flow against the
-// live server: bob's self query includes his IP; alice's query of bob hides
-// the IP (no b_client_remoteaddress_view grant by default).
 func TestLiveClientInfo(t *testing.T) {
 	addr := liveAddr(t)
 
@@ -428,135 +398,6 @@ func TestLiveClientInfo(t *testing.T) {
 // --- wave-6b: permission/group management bindings -----------------------------
 
 // TestLiveGroupManagement exercises the wave-6b bindings against the live
-// server: group list/create/members, perm set + trace, audit log, ban list,
-// and the admin flag.
-func TestLiveGroupManagement(t *testing.T) {
-	addr := liveAddr(t)
-
-	admin, _ := newLiveTestBackend(t)
-	if err := admin.connect(addr, liveAdminUID, liveAdminPass, ""); err != "" {
-		t.Fatalf("admin connect: %s", err)
-	}
-	defer admin.disconnect()
-	app := appWithCM(admin)
-
-	if !app.IsAdmin() {
-		t.Fatal("IsAdmin = false for the admin account")
-	}
-
-	// Default groups are seeded (143/144).
-	list, err := app.GroupList("server")
-	if err != nil {
-		t.Fatalf("GroupList: %v", err)
-	}
-	var guest *netproto.GroupEntry
-	for i := range list.Groups {
-		if list.Groups[i].Name == "Guest" {
-			guest = &list.Groups[i]
-		}
-	}
-	if guest == nil {
-		t.Fatalf("default Guest group missing: %+v", list.Groups)
-	}
-
-	// Create + assign alice + member listing.
-	name := "live-mods-" + strconv.FormatInt(time.Now().UnixNano(), 36)
-	created, err := app.GroupCreate("server", name, 10)
-	if err != nil {
-		t.Fatalf("GroupCreate: %v", err)
-	}
-	var gid int64
-	for _, g := range created.Groups {
-		if g.Name == name {
-			gid = g.ID
-		}
-	}
-	if gid == 0 {
-		t.Fatalf("created group %q not in list", name)
-	}
-	defer app.GroupDelete("server", gid, true)
-
-	if err := app.GroupAssign("server", gid, liveAliceUID, 0, 0); err != "" {
-		t.Fatalf("GroupAssign: %s", err)
-	}
-	members, err := app.GroupMembers("server", gid, 0)
-	if err != nil {
-		t.Fatalf("GroupMembers: %v", err)
-	}
-	if len(members.Members) != 1 || members.Members[0].UniqueID != liveAliceUID {
-		t.Fatalf("members = %+v", members.Members)
-	}
-	if err := app.GroupUnassign("server", gid, liveAliceUID, 0); err != "" {
-		t.Fatalf("GroupUnassign: %s", err)
-	}
-
-	// Perm set (client tier) -> trace reflects it -> unset.
-	if err := app.PermSet("client", 0, liveAliceUID, 0, "i_client_talk_power", 66, 0, false, false); err != "" {
-		t.Fatalf("PermSet: %s", err)
-	}
-	defer app.PermUnset("client", 0, liveAliceUID, 0, "i_client_talk_power")
-	trace, err := app.PermTrace(liveAliceUID, "i_client_talk_power", 0)
-	if err != nil {
-		t.Fatalf("PermTrace: %v", err)
-	}
-	if trace.Effective != 66 || trace.EffectiveTier != "client_specific" {
-		t.Fatalf("trace = %d/%q, want 66/client_specific", trace.Effective, trace.EffectiveTier)
-	}
-	if err := app.PermUnset("client", 0, liveAliceUID, 0, "i_client_talk_power"); err != "" {
-		t.Fatalf("PermUnset: %s", err)
-	}
-
-	// The writes above produced audit rows.
-	audit, err := app.AuditLog(0, 5)
-	if err != nil {
-		t.Fatalf("AuditLog: %v", err)
-	}
-	if len(audit.Entries) == 0 {
-		t.Fatal("audit log empty after admin writes")
-	}
-
-	// Ban list is admin-readable (may be empty).
-	if _, err := app.BanList(); err != nil {
-		t.Fatalf("BanList: %v", err)
-	}
-
-	// Group icon get on a group without an icon returns an empty payload.
-	icon, err := app.GroupIconGet(gid)
-	if err != nil {
-		t.Fatalf("GroupIconGet: %v", err)
-	}
-	if icon.DataBase64 != "" {
-		t.Fatalf("unexpected icon data (%d bytes)", len(icon.DataBase64))
-	}
-}
-
-// TestLiveGroupGateDenied verifies non-admin group writes are refused
-// (deny-on-unset) and surface as servererror events.
-func TestLiveGroupGateDenied(t *testing.T) {
-	addr := liveAddr(t)
-	bob, events := newLiveTestBackend(t)
-	if err := bob.connect(addr, liveBobUID, liveBobPass, ""); err != "" {
-		t.Fatalf("bob connect: %s", err)
-	}
-	defer bob.disconnect()
-	app := appWithCM(bob)
-
-	if app.IsAdmin() {
-		t.Fatal("IsAdmin = true for bob")
-	}
-	// Fire-and-forget: the denial arrives as a servererror event (the
-	// request/response path would only see a timeout).
-	if err := bob.write(netproto.MsgGroupCreate, netproto.GroupCreate{Type: "server", Name: "live-forbidden"}); err != nil {
-		t.Fatalf("GroupCreate write: %v", err)
-	}
-	events.waitFor(t, "servererror", func(p string) bool {
-		return strings.Contains(p, "insufficient permission")
-	}, 5*time.Second, "permission-denied error event")
-}
-
-// --- wave-7: file management bindings -------------------------------------------
-
-// livePNG supplies a complete image, including its pixels and checksums.
 func livePNG(t *testing.T) []byte {
 	t.Helper()
 	var encoded bytes.Buffer
@@ -566,15 +407,11 @@ func livePNG(t *testing.T) []byte {
 	return encoded.Bytes()
 }
 
-// sha256Hex returns the hex SHA-256 of b.
 func sha256Hex(b []byte) string {
 	sum := sha256.Sum256(b)
 	return hex.EncodeToString(sum[:])
 }
 
-// TestLiveFileManagement exercises the wave-7 file flow against the live
-// server: upload → overwrite (versions) → folder upload → rename/move →
-// download link → checksum verify → delete.
 func TestLiveFileManagement(t *testing.T) {
 	addr := liveAddr(t)
 	channelID := ensureLiveChannel(t)

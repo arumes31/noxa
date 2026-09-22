@@ -6,6 +6,10 @@ export function AcceptServerRules(arg1) {
   return window['go']['main']['App']['AcceptServerRules'](arg1);
 }
 
+export function AcceptServerRulesForTab(arg1, arg2) {
+  return window['go']['main']['App']['AcceptServerRulesForTab'](arg1, arg2);
+}
+
 export function ApplyAndRestart() {
   return window['go']['main']['App']['ApplyAndRestart']();
 }
@@ -18,76 +22,140 @@ export function AuditLog(arg1, arg2) {
   return window['go']['main']['App']['AuditLog'](arg1, arg2);
 }
 
+export function AuditLogForTab(arg1, arg2, arg3) {
+  return window['go']['main']['App']['AuditLogForTab'](arg1, arg2, arg3);
+}
+
 export function BanList() {
   return window['go']['main']['App']['BanList']();
 }
 
-export function BanRemove(arg1) {
-  return window['go']['main']['App']['BanRemove'](arg1);
+export function BanListForTab(arg1) {
+  return window['go']['main']['App']['BanListForTab'](arg1);
 }
 
 export function CancelTransfer(arg1) {
   return window['go']['main']['App']['CancelTransfer'](arg1);
 }
 
+export function CancelTransferForTab(arg1, arg2) {
+  return window['go']['main']['App']['CancelTransferForTab'](arg1, arg2);
+}
+
 export function CertificateClockWarning() {
   return window['go']['main']['App']['CertificateClockWarning']();
 }
 
-export function ChannelEdit(arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9) {
-  return window['go']['main']['App']['ChannelEdit'](arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9);
+export function ChangeRoleChannel(arg1) {
+  return window['go']['main']['App']['ChangeRoleChannel'](arg1);
 }
 
-export function ChannelEditTree(arg1, arg2, arg3, arg4, arg5, arg6) {
-  return window['go']['main']['App']['ChannelEditTree'](arg1, arg2, arg3, arg4, arg5, arg6);
+export function ChangeRoleChannelForTab(arg1, arg2) {
+  return window['go']['main']['App']['ChangeRoleChannelForTab'](arg1, arg2);
 }
 
 export function ChannelIconGet(arg1) {
   return window['go']['main']['App']['ChannelIconGet'](arg1);
 }
 
+export function ChannelIconGetForTab(arg1, arg2) {
+  return window['go']['main']['App']['ChannelIconGetForTab'](arg1, arg2);
+}
+
 export function ChannelIconSet(arg1, arg2, arg3) {
   return window['go']['main']['App']['ChannelIconSet'](arg1, arg2, arg3);
+}
+
+export function ChannelIconSetForTab(arg1, arg2, arg3, arg4) {
+  return window['go']['main']['App']['ChannelIconSetForTab'](arg1, arg2, arg3, arg4);
 }
 
 export function ChatDeleteMessage(arg1) {
   return window['go']['main']['App']['ChatDeleteMessage'](arg1);
 }
 
+export function ChatDeleteMessageForTab(arg1, arg2) {
+  return window['go']['main']['App']['ChatDeleteMessageForTab'](arg1, arg2);
+}
+
 export function ChatEditMessage(arg1, arg2, arg3, arg4) {
   return window['go']['main']['App']['ChatEditMessage'](arg1, arg2, arg3, arg4);
+}
+
+export function ChatEditMessageForTab(arg1, arg2, arg3, arg4, arg5) {
+  return window['go']['main']['App']['ChatEditMessageForTab'](arg1, arg2, arg3, arg4, arg5);
 }
 
 export function ChatExportHistory(arg1, arg2) {
   return window['go']['main']['App']['ChatExportHistory'](arg1, arg2);
 }
 
+export function ChatExportHistoryForTab(arg1, arg2, arg3, arg4) {
+  return window['go']['main']['App']['ChatExportHistoryForTab'](arg1, arg2, arg3, arg4);
+}
+
 export function ChatFilterGet() {
   return window['go']['main']['App']['ChatFilterGet']();
+}
+
+export function ChatFilterGetForTab(arg1) {
+  return window['go']['main']['App']['ChatFilterGetForTab'](arg1);
 }
 
 export function ChatFilterSet(arg1, arg2, arg3) {
   return window['go']['main']['App']['ChatFilterSet'](arg1, arg2, arg3);
 }
 
+export function ChatFilterSetForTab(arg1, arg2, arg3, arg4) {
+  return window['go']['main']['App']['ChatFilterSetForTab'](arg1, arg2, arg3, arg4);
+}
+
 export function ChatHistory(arg1, arg2, arg3) {
   return window['go']['main']['App']['ChatHistory'](arg1, arg2, arg3);
+}
+
+export function ChatHistoryForTab(arg1, arg2, arg3, arg4) {
+  return window['go']['main']['App']['ChatHistoryForTab'](arg1, arg2, arg3, arg4);
 }
 
 export function ChatPinMessage(arg1, arg2, arg3) {
   return window['go']['main']['App']['ChatPinMessage'](arg1, arg2, arg3);
 }
 
+export function ChatPinMessageForTab(arg1, arg2, arg3, arg4) {
+  return window['go']['main']['App']['ChatPinMessageForTab'](arg1, arg2, arg3, arg4);
+}
+
 export function ChatPins(arg1) {
   return window['go']['main']['App']['ChatPins'](arg1);
+}
+
+export function ChatPinsForTab(arg1, arg2) {
+  return window['go']['main']['App']['ChatPinsForTab'](arg1, arg2);
 }
 
 export function ChatReact(arg1, arg2) {
   return window['go']['main']['App']['ChatReact'](arg1, arg2);
 }
 
+export function ChatReactForTab(arg1, arg2, arg3) {
+  return window['go']['main']['App']['ChatReactForTab'](arg1, arg2, arg3);
+}
+
 export function ChatSearch(arg1, arg2, arg3) {
   return window['go']['main']['App']['ChatSearch'](arg1, arg2, arg3);
+}
+
+export function ChatSearchForTab(arg1, arg2, arg3, arg4, arg5) {
+  return window['go']['main']['App']['ChatSearchForTab'](arg1, arg2, arg3, arg4, arg5);
+}
+
+export function CheckAccess(arg1) {
+  return window['go']['main']['App']['CheckAccess'](arg1);
+}
+
+export function CheckAccessForTab(arg1, arg2) {
+  return window['go']['main']['App']['CheckAccessForTab'](arg1, arg2);
 }
 
 export function CheckForUpdate() {
@@ -110,16 +178,20 @@ export function CloseTab(arg1) {
   return window['go']['main']['App']['CloseTab'](arg1);
 }
 
-export function DisconnectTab(arg1) {
-  return window['go']['main']['App']['DisconnectTab'](arg1);
-}
-
 export function ComplaintClear(arg1, arg2) {
   return window['go']['main']['App']['ComplaintClear'](arg1, arg2);
 }
 
+export function ComplaintClearForTab(arg1, arg2, arg3) {
+  return window['go']['main']['App']['ComplaintClearForTab'](arg1, arg2, arg3);
+}
+
 export function ComplaintList() {
   return window['go']['main']['App']['ComplaintList']();
+}
+
+export function ComplaintListForTab(arg1) {
+  return window['go']['main']['App']['ComplaintListForTab'](arg1);
 }
 
 export function Connect(arg1, arg2, arg3, arg4) {
@@ -162,10 +234,6 @@ export function ConnectionSecurity() {
   return window['go']['main']['App']['ConnectionSecurity']();
 }
 
-export function CreateChannel(arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10, arg11) {
-  return window['go']['main']['App']['CreateChannel'](arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10, arg11);
-}
-
 export function CreateIdentity(arg1) {
   return window['go']['main']['App']['CreateIdentity'](arg1);
 }
@@ -174,28 +242,52 @@ export function DMExportHistory(arg1) {
   return window['go']['main']['App']['DMExportHistory'](arg1);
 }
 
+export function DMExportHistoryForContext(arg1, arg2) {
+  return window['go']['main']['App']['DMExportHistoryForContext'](arg1, arg2);
+}
+
 export function DMHistoryAppend(arg1, arg2, arg3) {
   return window['go']['main']['App']['DMHistoryAppend'](arg1, arg2, arg3);
+}
+
+export function DMHistoryAppendForContext(arg1, arg2, arg3, arg4) {
+  return window['go']['main']['App']['DMHistoryAppendForContext'](arg1, arg2, arg3, arg4);
 }
 
 export function DMHistoryClear(arg1) {
   return window['go']['main']['App']['DMHistoryClear'](arg1);
 }
 
+export function DMHistoryClearForContext(arg1, arg2) {
+  return window['go']['main']['App']['DMHistoryClearForContext'](arg1, arg2);
+}
+
+export function DMHistoryContextForTab(arg1) {
+  return window['go']['main']['App']['DMHistoryContextForTab'](arg1);
+}
+
 export function DMHistoryLoad(arg1) {
   return window['go']['main']['App']['DMHistoryLoad'](arg1);
+}
+
+export function DMHistoryLoadForContext(arg1, arg2) {
+  return window['go']['main']['App']['DMHistoryLoadForContext'](arg1, arg2);
 }
 
 export function DMHistoryPeers() {
   return window['go']['main']['App']['DMHistoryPeers']();
 }
 
+export function DMHistoryPeersForContext(arg1) {
+  return window['go']['main']['App']['DMHistoryPeersForContext'](arg1);
+}
+
 export function DMSearch(arg1, arg2, arg3) {
   return window['go']['main']['App']['DMSearch'](arg1, arg2, arg3);
 }
 
-export function DeleteChannel(arg1) {
-  return window['go']['main']['App']['DeleteChannel'](arg1);
+export function DMSearchForContext(arg1, arg2, arg3, arg4) {
+  return window['go']['main']['App']['DMSearchForContext'](arg1, arg2, arg3, arg4);
 }
 
 export function DeleteIdentity(arg1, arg2) {
@@ -206,6 +298,14 @@ export function Disconnect() {
   return window['go']['main']['App']['Disconnect']();
 }
 
+export function DisconnectMemberForTab(arg1, arg2, arg3, arg4) {
+  return window['go']['main']['App']['DisconnectMemberForTab'](arg1, arg2, arg3, arg4);
+}
+
+export function DisconnectTab(arg1) {
+  return window['go']['main']['App']['DisconnectTab'](arg1);
+}
+
 export function DownloadAndApply(arg1) {
   return window['go']['main']['App']['DownloadAndApply'](arg1);
 }
@@ -214,12 +314,20 @@ export function DownloadChatAttachment(arg1, arg2, arg3) {
   return window['go']['main']['App']['DownloadChatAttachment'](arg1, arg2, arg3);
 }
 
+export function DownloadChatAttachmentForTab(arg1, arg2, arg3, arg4) {
+  return window['go']['main']['App']['DownloadChatAttachmentForTab'](arg1, arg2, arg3, arg4);
+}
+
 export function DownloadFile(arg1, arg2) {
   return window['go']['main']['App']['DownloadFile'](arg1, arg2);
 }
 
 export function DownloadFileProgress(arg1, arg2, arg3, arg4, arg5, arg6) {
   return window['go']['main']['App']['DownloadFileProgress'](arg1, arg2, arg3, arg4, arg5, arg6);
+}
+
+export function DownloadFileProgressForTab(arg1, arg2, arg3, arg4, arg5, arg6, arg7) {
+  return window['go']['main']['App']['DownloadFileProgressForTab'](arg1, arg2, arg3, arg4, arg5, arg6, arg7);
 }
 
 export function DownloadPath(arg1) {
@@ -234,20 +342,40 @@ export function EmojiDelete(arg1) {
   return window['go']['main']['App']['EmojiDelete'](arg1);
 }
 
+export function EmojiDeleteForTab(arg1, arg2) {
+  return window['go']['main']['App']['EmojiDeleteForTab'](arg1, arg2);
+}
+
 export function EmojiGet(arg1) {
   return window['go']['main']['App']['EmojiGet'](arg1);
+}
+
+export function EmojiGetForTab(arg1, arg2) {
+  return window['go']['main']['App']['EmojiGetForTab'](arg1, arg2);
 }
 
 export function EmojiList() {
   return window['go']['main']['App']['EmojiList']();
 }
 
+export function EmojiListForTab(arg1) {
+  return window['go']['main']['App']['EmojiListForTab'](arg1);
+}
+
 export function EmojiRename(arg1, arg2) {
   return window['go']['main']['App']['EmojiRename'](arg1, arg2);
 }
 
+export function EmojiRenameForTab(arg1, arg2, arg3) {
+  return window['go']['main']['App']['EmojiRenameForTab'](arg1, arg2, arg3);
+}
+
 export function EmojiUpload(arg1, arg2) {
   return window['go']['main']['App']['EmojiUpload'](arg1, arg2);
+}
+
+export function EmojiUploadForTab(arg1, arg2, arg3) {
+  return window['go']['main']['App']['EmojiUploadForTab'](arg1, arg2, arg3);
 }
 
 export function ExportChat(arg1, arg2) {
@@ -270,20 +398,40 @@ export function FileDelete(arg1, arg2, arg3) {
   return window['go']['main']['App']['FileDelete'](arg1, arg2, arg3);
 }
 
+export function FileDeleteForTab(arg1, arg2, arg3, arg4) {
+  return window['go']['main']['App']['FileDeleteForTab'](arg1, arg2, arg3, arg4);
+}
+
 export function FileLink(arg1, arg2, arg3) {
   return window['go']['main']['App']['FileLink'](arg1, arg2, arg3);
+}
+
+export function FileLinkForTab(arg1, arg2, arg3, arg4) {
+  return window['go']['main']['App']['FileLinkForTab'](arg1, arg2, arg3, arg4);
 }
 
 export function FileList(arg1, arg2) {
   return window['go']['main']['App']['FileList'](arg1, arg2);
 }
 
+export function FileListForTab(arg1, arg2, arg3) {
+  return window['go']['main']['App']['FileListForTab'](arg1, arg2, arg3);
+}
+
 export function FileRename(arg1, arg2, arg3, arg4, arg5, arg6) {
   return window['go']['main']['App']['FileRename'](arg1, arg2, arg3, arg4, arg5, arg6);
 }
 
+export function FileRenameForTab(arg1, arg2, arg3, arg4, arg5, arg6, arg7) {
+  return window['go']['main']['App']['FileRenameForTab'](arg1, arg2, arg3, arg4, arg5, arg6, arg7);
+}
+
 export function FileVersions(arg1, arg2, arg3) {
   return window['go']['main']['App']['FileVersions'](arg1, arg2, arg3);
+}
+
+export function FileVersionsForTab(arg1, arg2, arg3, arg4) {
+  return window['go']['main']['App']['FileVersionsForTab'](arg1, arg2, arg3, arg4);
 }
 
 export function FlashWindow() {
@@ -294,20 +442,40 @@ export function GetAvatar(arg1) {
   return window['go']['main']['App']['GetAvatar'](arg1);
 }
 
+export function GetAvatarForTab(arg1, arg2) {
+  return window['go']['main']['App']['GetAvatarForTab'](arg1, arg2);
+}
+
 export function GetClientInfo(arg1) {
   return window['go']['main']['App']['GetClientInfo'](arg1);
+}
+
+export function GetClientInfoForTab(arg1, arg2) {
+  return window['go']['main']['App']['GetClientInfoForTab'](arg1, arg2);
 }
 
 export function GetICEServers() {
   return window['go']['main']['App']['GetICEServers']();
 }
 
-export function GetPermissions() {
-  return window['go']['main']['App']['GetPermissions']();
+export function GetICEServersForTab(arg1) {
+  return window['go']['main']['App']['GetICEServersForTab'](arg1);
+}
+
+export function GetMediaLimits() {
+  return window['go']['main']['App']['GetMediaLimits']();
+}
+
+export function GetMediaLimitsForTab(arg1) {
+  return window['go']['main']['App']['GetMediaLimitsForTab'](arg1);
 }
 
 export function GetServerConfig() {
   return window['go']['main']['App']['GetServerConfig']();
+}
+
+export function GetServerConfigForTab(arg1) {
+  return window['go']['main']['App']['GetServerConfigForTab'](arg1);
 }
 
 export function GetSettings() {
@@ -316,46 +484,6 @@ export function GetSettings() {
 
 export function Greet(arg1) {
   return window['go']['main']['App']['Greet'](arg1);
-}
-
-export function GroupAssign(arg1, arg2, arg3, arg4, arg5) {
-  return window['go']['main']['App']['GroupAssign'](arg1, arg2, arg3, arg4, arg5);
-}
-
-export function GroupCreate(arg1, arg2, arg3) {
-  return window['go']['main']['App']['GroupCreate'](arg1, arg2, arg3);
-}
-
-export function GroupDelete(arg1, arg2, arg3) {
-  return window['go']['main']['App']['GroupDelete'](arg1, arg2, arg3);
-}
-
-export function GroupEdit(arg1, arg2, arg3, arg4) {
-  return window['go']['main']['App']['GroupEdit'](arg1, arg2, arg3, arg4);
-}
-
-export function GroupIconGet(arg1) {
-  return window['go']['main']['App']['GroupIconGet'](arg1);
-}
-
-export function GroupIconSet(arg1, arg2) {
-  return window['go']['main']['App']['GroupIconSet'](arg1, arg2);
-}
-
-export function GroupList(arg1) {
-  return window['go']['main']['App']['GroupList'](arg1);
-}
-
-export function GroupMembers(arg1, arg2, arg3) {
-  return window['go']['main']['App']['GroupMembers'](arg1, arg2, arg3);
-}
-
-export function GroupRename(arg1, arg2, arg3) {
-  return window['go']['main']['App']['GroupRename'](arg1, arg2, arg3);
-}
-
-export function GroupUnassign(arg1, arg2, arg3, arg4) {
-  return window['go']['main']['App']['GroupUnassign'](arg1, arg2, arg3, arg4);
 }
 
 export function IdentityBackupPending() {
@@ -378,10 +506,6 @@ export function ImproveIdentityLevel(arg1, arg2, arg3) {
   return window['go']['main']['App']['ImproveIdentityLevel'](arg1, arg2, arg3);
 }
 
-export function IsAdmin() {
-  return window['go']['main']['App']['IsAdmin']();
-}
-
 export function IsGuest() {
   return window['go']['main']['App']['IsGuest']();
 }
@@ -390,8 +514,16 @@ export function JoinChannel(arg1) {
   return window['go']['main']['App']['JoinChannel'](arg1);
 }
 
+export function JoinChannelForTab(arg1, arg2) {
+  return window['go']['main']['App']['JoinChannelForTab'](arg1, arg2);
+}
+
 export function KickClient(arg1, arg2, arg3, arg4, arg5) {
   return window['go']['main']['App']['KickClient'](arg1, arg2, arg3, arg4, arg5);
+}
+
+export function KickClientForTab(arg1, arg2, arg3, arg4, arg5, arg6) {
+  return window['go']['main']['App']['KickClientForTab'](arg1, arg2, arg3, arg4, arg5, arg6);
 }
 
 export function LastCrash() {
@@ -414,8 +546,16 @@ export function MOTD() {
   return window['go']['main']['App']['MOTD']();
 }
 
+export function MOTDForTab(arg1) {
+  return window['go']['main']['App']['MOTDForTab'](arg1);
+}
+
 export function MoveClient(arg1, arg2) {
   return window['go']['main']['App']['MoveClient'](arg1, arg2);
+}
+
+export function MoveClientForTab(arg1, arg2, arg3) {
+  return window['go']['main']['App']['MoveClientForTab'](arg1, arg2, arg3);
 }
 
 export function Notify(arg1, arg2) {
@@ -424,30 +564,6 @@ export function Notify(arg1, arg2) {
 
 export function OpenLogFolder() {
   return window['go']['main']['App']['OpenLogFolder']();
-}
-
-export function PermCopy(arg1, arg2, arg3, arg4, arg5, arg6) {
-  return window['go']['main']['App']['PermCopy'](arg1, arg2, arg3, arg4, arg5, arg6);
-}
-
-export function PermList(arg1, arg2, arg3, arg4) {
-  return window['go']['main']['App']['PermList'](arg1, arg2, arg3, arg4);
-}
-
-export function PermSet(arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9) {
-  return window['go']['main']['App']['PermSet'](arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9);
-}
-
-export function PermTemplateApply(arg1, arg2, arg3, arg4) {
-  return window['go']['main']['App']['PermTemplateApply'](arg1, arg2, arg3, arg4);
-}
-
-export function PermTrace(arg1, arg2, arg3) {
-  return window['go']['main']['App']['PermTrace'](arg1, arg2, arg3);
-}
-
-export function PermUnset(arg1, arg2, arg3, arg4, arg5) {
-  return window['go']['main']['App']['PermUnset'](arg1, arg2, arg3, arg4, arg5);
 }
 
 export function PickDownloadFolder() {
@@ -466,6 +582,14 @@ export function Poke(arg1, arg2) {
   return window['go']['main']['App']['Poke'](arg1, arg2);
 }
 
+export function PokeForTab(arg1, arg2, arg3) {
+  return window['go']['main']['App']['PokeForTab'](arg1, arg2, arg3);
+}
+
+export function PreviewChannelAccessForTab(arg1, arg2) {
+  return window['go']['main']['App']['PreviewChannelAccessForTab'](arg1, arg2);
+}
+
 export function RecordRecent(arg1, arg2) {
   return window['go']['main']['App']['RecordRecent'](arg1, arg2);
 }
@@ -474,12 +598,52 @@ export function RegenerateIdentity() {
   return window['go']['main']['App']['RegenerateIdentity']();
 }
 
+export function RemoveRoleBanForTab(arg1, arg2) {
+  return window['go']['main']['App']['RemoveRoleBanForTab'](arg1, arg2);
+}
+
 export function RenameIdentity(arg1, arg2) {
   return window['go']['main']['App']['RenameIdentity'](arg1, arg2);
 }
 
+export function RoleChange(arg1) {
+  return window['go']['main']['App']['RoleChange'](arg1);
+}
+
+export function RoleChangeForTab(arg1, arg2) {
+  return window['go']['main']['App']['RoleChangeForTab'](arg1, arg2);
+}
+
+export function RoleChannelState(arg1) {
+  return window['go']['main']['App']['RoleChannelState'](arg1);
+}
+
+export function RoleChannelStateForTab(arg1, arg2) {
+  return window['go']['main']['App']['RoleChannelStateForTab'](arg1, arg2);
+}
+
+export function RoleMembers(arg1) {
+  return window['go']['main']['App']['RoleMembers'](arg1);
+}
+
+export function RoleMembersForTab(arg1, arg2) {
+  return window['go']['main']['App']['RoleMembersForTab'](arg1, arg2);
+}
+
+export function RoleState(arg1) {
+  return window['go']['main']['App']['RoleState'](arg1);
+}
+
+export function RoleStateForTab(arg1, arg2) {
+  return window['go']['main']['App']['RoleStateForTab'](arg1, arg2);
+}
+
 export function SaveChatAttachment(arg1, arg2, arg3, arg4) {
   return window['go']['main']['App']['SaveChatAttachment'](arg1, arg2, arg3, arg4);
+}
+
+export function SaveChatAttachmentForTab(arg1, arg2, arg3, arg4, arg5) {
+  return window['go']['main']['App']['SaveChatAttachmentForTab'](arg1, arg2, arg3, arg4, arg5);
 }
 
 export function SaveSettings(arg1) {
@@ -494,32 +658,60 @@ export function SendChatDelivered(arg1, arg2) {
   return window['go']['main']['App']['SendChatDelivered'](arg1, arg2);
 }
 
+export function SendChatDeliveredForTab(arg1, arg2, arg3) {
+  return window['go']['main']['App']['SendChatDeliveredForTab'](arg1, arg2, arg3);
+}
+
+export function SendChatForTab(arg1, arg2, arg3, arg4) {
+  return window['go']['main']['App']['SendChatForTab'](arg1, arg2, arg3, arg4);
+}
+
 export function SendChatRead(arg1, arg2) {
   return window['go']['main']['App']['SendChatRead'](arg1, arg2);
+}
+
+export function SendChatReadForTab(arg1, arg2, arg3) {
+  return window['go']['main']['App']['SendChatReadForTab'](arg1, arg2, arg3);
 }
 
 export function SendChatReply(arg1, arg2, arg3, arg4) {
   return window['go']['main']['App']['SendChatReply'](arg1, arg2, arg3, arg4);
 }
 
+export function SendChatReplyForTab(arg1, arg2, arg3, arg4, arg5) {
+  return window['go']['main']['App']['SendChatReplyForTab'](arg1, arg2, arg3, arg4, arg5);
+}
+
 export function SendICECandidate(arg1, arg2, arg3) {
   return window['go']['main']['App']['SendICECandidate'](arg1, arg2, arg3);
+}
+
+export function SendICECandidateForTab(arg1, arg2, arg3, arg4) {
+  return window['go']['main']['App']['SendICECandidateForTab'](arg1, arg2, arg3, arg4);
 }
 
 export function SendTyping(arg1, arg2) {
   return window['go']['main']['App']['SendTyping'](arg1, arg2);
 }
 
-export function ServerAdminList() {
-  return window['go']['main']['App']['ServerAdminList']();
+export function SendTypingForTab(arg1, arg2, arg3) {
+  return window['go']['main']['App']['SendTypingForTab'](arg1, arg2, arg3);
 }
 
 export function ServerBannerGet() {
   return window['go']['main']['App']['ServerBannerGet']();
 }
 
+export function ServerBannerGetForTab(arg1) {
+  return window['go']['main']['App']['ServerBannerGetForTab'](arg1);
+}
+
 export function ServerBannerSet(arg1) {
   return window['go']['main']['App']['ServerBannerSet'](arg1);
+}
+
+export function ServerBannerSetForTab(arg1, arg2) {
+  return window['go']['main']['App']['ServerBannerSetForTab'](arg1, arg2);
 }
 
 export function ServerFingerprint() {
@@ -530,12 +722,28 @@ export function ServerIconGet() {
   return window['go']['main']['App']['ServerIconGet']();
 }
 
+export function ServerIconGetForTab(arg1) {
+  return window['go']['main']['App']['ServerIconGetForTab'](arg1);
+}
+
 export function ServerIconSet(arg1) {
   return window['go']['main']['App']['ServerIconSet'](arg1);
 }
 
+export function ServerIconSetForTab(arg1, arg2) {
+  return window['go']['main']['App']['ServerIconSetForTab'](arg1, arg2);
+}
+
 export function ServerInfo() {
   return window['go']['main']['App']['ServerInfo']();
+}
+
+export function ServerInfoForTab(arg1) {
+  return window['go']['main']['App']['ServerInfoForTab'](arg1);
+}
+
+export function SessionInfoForTab(arg1) {
+  return window['go']['main']['App']['SessionInfoForTab'](arg1);
 }
 
 export function SetActiveTab(arg1) {
@@ -550,6 +758,10 @@ export function SetAvatar(arg1) {
   return window['go']['main']['App']['SetAvatar'](arg1);
 }
 
+export function SetAvatarForTab(arg1, arg2) {
+  return window['go']['main']['App']['SetAvatarForTab'](arg1, arg2);
+}
+
 export function SetDebugFrames(arg1) {
   return window['go']['main']['App']['SetDebugFrames'](arg1);
 }
@@ -560,6 +772,18 @@ export function SetHotkey(arg1, arg2) {
 
 export function SetHotkeys(arg1, arg2, arg3) {
   return window['go']['main']['App']['SetHotkeys'](arg1, arg2, arg3);
+}
+
+export function SetMediaLimitsForTab(arg1, arg2) {
+  return window['go']['main']['App']['SetMediaLimitsForTab'](arg1, arg2);
+}
+
+export function SetMemberVoice(arg1) {
+  return window['go']['main']['App']['SetMemberVoice'](arg1);
+}
+
+export function SetMemberVoiceForTab(arg1, arg2) {
+  return window['go']['main']['App']['SetMemberVoiceForTab'](arg1, arg2);
 }
 
 export function SetMuted(arg1) {
@@ -574,20 +798,44 @@ export function SetPrioritySpeaker(arg1) {
   return window['go']['main']['App']['SetPrioritySpeaker'](arg1);
 }
 
+export function SetPrioritySpeakerForTab(arg1, arg2) {
+  return window['go']['main']['App']['SetPrioritySpeakerForTab'](arg1, arg2);
+}
+
+export function SetRoleChannelIconForTab(arg1, arg2, arg3, arg4) {
+  return window['go']['main']['App']['SetRoleChannelIconForTab'](arg1, arg2, arg3, arg4);
+}
+
 export function SetScreenShare(arg1) {
   return window['go']['main']['App']['SetScreenShare'](arg1);
+}
+
+export function SetScreenShareForTab(arg1, arg2) {
+  return window['go']['main']['App']['SetScreenShareForTab'](arg1, arg2);
 }
 
 export function SetScreenShareQuality(arg1, arg2) {
   return window['go']['main']['App']['SetScreenShareQuality'](arg1, arg2);
 }
 
+export function SetScreenShareQualityForTab(arg1, arg2, arg3) {
+  return window['go']['main']['App']['SetScreenShareQualityForTab'](arg1, arg2, arg3);
+}
+
 export function SetServerConfig(arg1) {
   return window['go']['main']['App']['SetServerConfig'](arg1);
 }
 
+export function SetServerConfigForTab(arg1, arg2) {
+  return window['go']['main']['App']['SetServerConfigForTab'](arg1, arg2);
+}
+
 export function SetStatus(arg1, arg2) {
   return window['go']['main']['App']['SetStatus'](arg1, arg2);
+}
+
+export function SetStatusForTab(arg1, arg2, arg3) {
+  return window['go']['main']['App']['SetStatusForTab'](arg1, arg2, arg3);
 }
 
 export function SetTrayVoiceState(arg1, arg2, arg3) {
@@ -598,6 +846,10 @@ export function SetVideoQuality(arg1) {
   return window['go']['main']['App']['SetVideoQuality'](arg1);
 }
 
+export function SetVideoQualityForTab(arg1, arg2) {
+  return window['go']['main']['App']['SetVideoQualityForTab'](arg1, arg2);
+}
+
 export function SetWindowOpacity(arg1) {
   return window['go']['main']['App']['SetWindowOpacity'](arg1);
 }
@@ -606,8 +858,16 @@ export function SubscribeChannels(arg1, arg2) {
   return window['go']['main']['App']['SubscribeChannels'](arg1, arg2);
 }
 
+export function SubscribeChannelsForTab(arg1, arg2, arg3) {
+  return window['go']['main']['App']['SubscribeChannelsForTab'](arg1, arg2, arg3);
+}
+
 export function Subscriptions() {
   return window['go']['main']['App']['Subscriptions']();
+}
+
+export function SubscriptionsForTab(arg1) {
+  return window['go']['main']['App']['SubscriptionsForTab'](arg1);
 }
 
 export function SwitchIdentity(arg1) {
@@ -616,22 +876,6 @@ export function SwitchIdentity(arg1) {
 
 export function SystemCPUPercent() {
   return window['go']['main']['App']['SystemCPUPercent']();
-}
-
-export function TokenAdd(arg1, arg2, arg3) {
-  return window['go']['main']['App']['TokenAdd'](arg1, arg2, arg3);
-}
-
-export function TokenDelete(arg1) {
-  return window['go']['main']['App']['TokenDelete'](arg1);
-}
-
-export function TokenList() {
-  return window['go']['main']['App']['TokenList']();
-}
-
-export function TokenUse(arg1) {
-  return window['go']['main']['App']['TokenUse'](arg1);
 }
 
 export function TrayClearMentions() {
@@ -650,6 +894,10 @@ export function UploadChatAttachment(arg1, arg2, arg3) {
   return window['go']['main']['App']['UploadChatAttachment'](arg1, arg2, arg3);
 }
 
+export function UploadChatAttachmentForTab(arg1, arg2, arg3, arg4) {
+  return window['go']['main']['App']['UploadChatAttachmentForTab'](arg1, arg2, arg3, arg4);
+}
+
 export function UploadFile(arg1, arg2, arg3) {
   return window['go']['main']['App']['UploadFile'](arg1, arg2, arg3);
 }
@@ -658,20 +906,40 @@ export function UploadFileProgress(arg1, arg2, arg3, arg4, arg5) {
   return window['go']['main']['App']['UploadFileProgress'](arg1, arg2, arg3, arg4, arg5);
 }
 
+export function UploadFileProgressForTab(arg1, arg2, arg3, arg4, arg5, arg6) {
+  return window['go']['main']['App']['UploadFileProgressForTab'](arg1, arg2, arg3, arg4, arg5, arg6);
+}
+
 export function UploadPathProgress(arg1, arg2, arg3, arg4) {
   return window['go']['main']['App']['UploadPathProgress'](arg1, arg2, arg3, arg4);
+}
+
+export function UploadPathProgressForTab(arg1, arg2, arg3, arg4, arg5) {
+  return window['go']['main']['App']['UploadPathProgressForTab'](arg1, arg2, arg3, arg4, arg5);
 }
 
 export function VerifyFile(arg1, arg2, arg3, arg4) {
   return window['go']['main']['App']['VerifyFile'](arg1, arg2, arg3, arg4);
 }
 
+export function VerifyFileForTab(arg1, arg2, arg3, arg4, arg5) {
+  return window['go']['main']['App']['VerifyFileForTab'](arg1, arg2, arg3, arg4, arg5);
+}
+
 export function WebRTCAnswer(arg1) {
   return window['go']['main']['App']['WebRTCAnswer'](arg1);
 }
 
+export function WebRTCAnswerForTab(arg1, arg2) {
+  return window['go']['main']['App']['WebRTCAnswerForTab'](arg1, arg2);
+}
+
 export function WebRTCOffer(arg1, arg2) {
   return window['go']['main']['App']['WebRTCOffer'](arg1, arg2);
+}
+
+export function WebRTCOfferForTab(arg1, arg2, arg3) {
+  return window['go']['main']['App']['WebRTCOfferForTab'](arg1, arg2, arg3);
 }
 
 export function WhatsNew() {
@@ -680,4 +948,8 @@ export function WhatsNew() {
 
 export function WhisperSet(arg1, arg2, arg3) {
   return window['go']['main']['App']['WhisperSet'](arg1, arg2, arg3);
+}
+
+export function WhisperSetForTab(arg1, arg2, arg3, arg4) {
+  return window['go']['main']['App']['WhisperSetForTab'](arg1, arg2, arg3, arg4);
 }

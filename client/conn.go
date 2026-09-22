@@ -53,28 +53,26 @@ type connManager struct {
 	// plain names.
 	tabID string
 
-	mu        sync.Mutex
-	writeMu   sync.Mutex
-	conn      net.Conn
-	connEpoch uint64
-	addr      string // control address (tab info)
-	clientID  string
-	uniqueID  string
-	nickname  string
-	isAdmin   bool
-	isGuest   bool
-	closed    bool
-	// groupAssignAck is advertised by the authenticated server.
-	groupAssignAck bool
-	// lastSnapshot/lastChannelList cache the latest state frames so a tab
-	// switch can replay them (281).
-	lastSnapshot    string
-	lastChannelList string
+	mu                 sync.Mutex
+	writeMu            sync.Mutex
+	conn               net.Conn
+	connEpoch          uint64
+	addr               string // control address (tab info)
+	clientID           string
+	uniqueID           string
+	nickname           string
+	isGuest            bool
+	authorizationModel string
+	closed             bool
+	// The latest snapshot is replayed when a tab becomes active.
+	lastSnapshot string
 	// lastSubscriptions is the newest authoritative subscription set (312).
 	lastSubscriptions string
 	// iceServers are the ICE servers delivered by the server in the
 	// AuthResponse (nil = use client defaults).
-	iceServers []netproto.ICEServer
+	iceServers          []netproto.ICEServer
+	mediaLimits         netproto.MediaLimits
+	mediaLimitsRevision uint64
 	// motd is the server's message of the day from the AuthResponse
 	// ("" when unset); surfaced in chat once per connect (133).
 	motd string
@@ -121,6 +119,7 @@ type connManager struct {
 	// parsed frame cannot race a replacement connection's waiter.
 	beforeDispatchLock func()
 	transfers          transferRegistry
+	downloads          downloadHistory
 	progress           transferProgressReporter
 	// transferEpoch and acceptingTransfers bind data-port workers to one
 	// authenticated control connection. A disconnect flips the gate before
@@ -372,6 +371,7 @@ type challengeSigner func(challenge []byte) (signature []byte, publicKey string,
 // challenge handshake is completed. It returns "" on success or the failure
 // reason.
 func (m *connManager) connectWith(addr string, authMsg netproto.Authenticate, signer challengeSigner) string {
+	authMsg.AuthorizationModels = []string{netproto.AuthorizationModelRolesV1}
 	conn, err := m.dialTransport(addr)
 	if err != nil {
 		return err.Error()
@@ -421,6 +421,10 @@ func (m *connManager) connectWith(addr string, authMsg netproto.Authenticate, si
 			_ = conn.Close()
 			return err.Error()
 		}
+		if resp.OK && resp.MediaLimitsRevision != 0 && !hasCompleteAuthMediaLimits(f) {
+			_ = conn.Close()
+			return "invalid server media limits"
+		}
 		break
 	}
 
@@ -432,6 +436,14 @@ func (m *connManager) connectWith(addr string, authMsg netproto.Authenticate, si
 		return "authentication failed"
 	}
 
+	if resp.AuthorizationModel != netproto.AuthorizationModelRolesV1 {
+		_ = conn.Close()
+		return "unsupported server authorization model; upgrade noXa"
+	}
+	if (resp.MediaLimits != nil && !resp.MediaLimits.Valid()) || (resp.MediaLimitsRevision != 0 && resp.MediaLimits == nil) {
+		_ = conn.Close()
+		return "invalid server media limits"
+	}
 	// The global generation and the MOTD sealed under it are resolved BEFORE
 	// this returns, so App.MOTD() stays a correct one-shot read with no event
 	// and no re-render path (133). installCurrentKeys takes m.mu via
@@ -456,10 +468,14 @@ func (m *connManager) connectWith(addr string, authMsg netproto.Authenticate, si
 	m.clientID = resp.ClientID
 	m.uniqueID = resp.UniqueID
 	m.nickname = resp.Nickname
-	m.isAdmin = resp.IsAdmin
-	m.groupAssignAck = slices.Contains(resp.Capabilities, netproto.CapabilityGroupAssignAck)
+	m.authorizationModel = resp.AuthorizationModel
 	m.isGuest = authMsg.Anonymous
 	m.iceServers = resp.ICEServers
+	m.mediaLimits = netproto.MediaLimits{}
+	m.mediaLimitsRevision = resp.MediaLimitsRevision
+	if resp.MediaLimits != nil {
+		m.mediaLimits = *resp.MediaLimits
+	}
 	m.motd = motd
 	m.closed = false
 	m.transferEpoch++
@@ -513,7 +529,7 @@ func (m *connManager) detachLocked() (net.Conn, []chan requestResult, []net.Conn
 	}
 	clear(m.pending)
 	m.iceServers = nil
-	m.groupAssignAck = false
+	m.authorizationModel = ""
 	m.motd = ""
 	m.tlsUsed = false
 	m.fingerprint = ""
@@ -526,6 +542,8 @@ func (m *connManager) detachLocked() (net.Conn, []chan requestResult, []net.Conn
 	// disconnect, so keeping the cached set would show tabs that no longer
 	// receive anything.
 	m.lastSubscriptions = ""
+	m.mediaLimits = netproto.MediaLimits{}
+	m.mediaLimitsRevision = 0
 	m.closed = true
 	m.conn = nil
 	m.connEpoch++
@@ -589,7 +607,17 @@ func (m *connManager) notifyWaiters(waiters []chan requestResult, result request
 func (m *connManager) iceServersSnapshot() []netproto.ICEServer {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.iceServers
+	servers := slices.Clone(m.iceServers)
+	for i := range servers {
+		servers[i].URLs = slices.Clone(servers[i].URLs)
+	}
+	return servers
+}
+
+func (m *connManager) mediaLimitsSnapshot() netproto.MediaLimits {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.mediaLimits
 }
 
 // motdSnapshot returns the server's message of the day delivered in the
@@ -606,13 +634,6 @@ func (m *connManager) clientIDSnapshot() string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.clientID
-}
-
-// isAdminSnapshot reports whether the authenticated user is a server admin.
-func (m *connManager) isAdminSnapshot() bool {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.isAdmin
 }
 
 // isGuestSnapshot reports whether the current session authenticated through
@@ -773,7 +794,7 @@ func (m *connManager) request(send, reply netproto.MessageType, msg any, timeout
 		f := result.frame
 		if f.Type == uint16(netproto.MsgError) {
 			var e netproto.Error
-			if err := netproto.Decode(f, &e); err == nil {
+			if err := netproto.Decode(f, &e); err == nil && e.Message != "" {
 				return nil, fmt.Errorf("%s", e.Message)
 			}
 			return nil, fmt.Errorf("server error")
@@ -848,6 +869,11 @@ func (m *connManager) dispatchFrom(conn net.Conn, epoch uint64, f *netproto.Fram
 // replacement connection installed in the gap.
 func (m *connManager) dispatchAccepted(conn net.Conn, epoch uint64, checkSource bool, f *netproto.Frame) {
 	mt := netproto.MessageType(f.Type)
+	var mediaUpdate netproto.MediaLimitsChanged
+	var mediaUpdateErr error
+	if mt == netproto.MsgMediaLimitsChanged {
+		mediaUpdate, mediaUpdateErr = decodeMediaLimitsChanged(f)
+	}
 	var protocolErr netproto.Error
 	if mt == netproto.MsgError {
 		if err := netproto.Decode(f, &protocolErr); err != nil {
@@ -861,6 +887,30 @@ func (m *connManager) dispatchAccepted(conn net.Conn, epoch uint64, checkSource 
 	m.mu.Lock()
 	if checkSource && (conn == nil || m.conn != conn || m.connEpoch != epoch) {
 		m.mu.Unlock()
+		return
+	}
+	if mt == netproto.MsgMediaLimitsChanged {
+		if mediaUpdateErr != nil {
+			m.mu.Unlock()
+			if checkSource {
+				m.terminateConn(conn, true)
+			}
+			return
+		}
+		if mediaUpdate.Revision <= m.mediaLimitsRevision {
+			m.mu.Unlock()
+			return
+		}
+		changed := m.mediaLimits != mediaUpdate.MediaLimits
+		m.mediaLimits, m.mediaLimitsRevision = mediaUpdate.MediaLimits, mediaUpdate.Revision
+		m.mu.Unlock()
+		m.teeFrame("in", f)
+		if changed {
+			// An invalidation carries no snapshot that could become stale while
+			// a tab/reconnect event is queued. The UI must read the active tab's
+			// current limits and recheck its voice/session ownership afterward.
+			m.emit("media_limits_changed", "")
+		}
 		return
 	}
 	var waiter chan requestResult
@@ -900,7 +950,6 @@ func (m *connManager) dispatchAccepted(conn net.Conn, epoch uint64, checkSource 
 		// the backend; DMs decrypt asynchronously and re-emit, which is what
 		// the empty return means.
 		if out := m.maybeDecryptEvent(string(f.Payload)); out != "" {
-			m.applySessionEvent(out)
 			m.emit("event", out)
 		}
 	case netproto.MsgChannelKey:
@@ -921,24 +970,12 @@ func (m *connManager) dispatchAccepted(conn net.Conn, epoch uint64, checkSource 
 		// (216) The webview owns the blocking prompt, but the frame stays a
 		// typed backend event so operator text is never interpreted as markup.
 		m.emit("server_rules", string(f.Payload))
-	case netproto.MsgChannelList:
-		m.mu.Lock()
-		m.lastChannelList = string(f.Payload)
-		m.mu.Unlock()
-		m.emit("channellist", string(f.Payload))
 	case netproto.MsgICECandidate:
 		m.emit("ice", string(f.Payload))
 	case netproto.MsgWebRTCOffer:
 		m.emit("offer", string(f.Payload))
 	case netproto.MsgAvatarData:
 		m.emit("avatar", string(f.Payload))
-	case netproto.MsgPermsInvalid:
-		// (151) the server pushes this instead of the client re-resolving on a
-		// timer; the reason distinguishes a cosmetics change from a grant change.
-		var pi netproto.PermsInvalid
-		if err := netproto.Decode(f, &pi); err == nil {
-			m.emit("perms_invalid", pi.Reason)
-		}
 	case netproto.MsgError:
 		// OriginType was absent from legacy Error frames. It is unsafe to
 		// continue because an eventual uncorrelated reply could satisfy a
@@ -962,40 +999,6 @@ func (m *connManager) dispatchAccepted(conn net.Conn, epoch uint64, checkSource 
 		_ = m.write(netproto.MsgPong, netproto.Pong{})
 	default:
 		// Unknown frame: ignore.
-	}
-}
-
-// applySessionEvent keeps the bound session flags aligned with grants that
-// take effect after authentication. In particular, a guest token redemption
-// promotes the identity and an admin token changes IsAdmin immediately.
-func (m *connManager) applySessionEvent(raw string) {
-	var env struct {
-		Type string `json:"type"`
-		Data struct {
-			GroupID  int64  `json:"group_id"`
-			Promoted bool   `json:"promoted"`
-			UniqueID string `json:"unique_id"`
-		} `json:"data"`
-	}
-	if err := json.Unmarshal([]byte(raw), &env); err != nil {
-		return
-	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if env.Type == "group_assigned" {
-		if env.Data.Promoted && env.Data.UniqueID == m.uniqueID {
-			m.isGuest = false
-		}
-		return
-	}
-	if env.Type != "token_used" {
-		return
-	}
-	if env.Data.Promoted {
-		m.isGuest = false
-	}
-	if env.Data.GroupID == 0 {
-		m.isAdmin = true
 	}
 }
 

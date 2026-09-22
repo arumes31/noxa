@@ -215,7 +215,7 @@ func TestConnRequestsUseIndependentReplyGatesAndMatchErrors(t *testing.T) {
 
 	differentDone := make(chan error, 2)
 	go func() {
-		_, err := cm.request(netproto.MsgPermissionsQuery, netproto.MsgPermissionsResponse, netproto.PermissionsQuery{}, time.Second)
+		_, err := cm.request(netproto.MsgServerInfoQuery, netproto.MsgServerInfoResponse, netproto.ServerInfoQuery{}, time.Second)
 		differentDone <- err
 	}()
 	go func() {
@@ -237,9 +237,9 @@ func TestConnRequestsUseIndependentReplyGatesAndMatchErrors(t *testing.T) {
 	}
 	var response any
 	switch netproto.MessageType(first.Type) {
-	case netproto.MsgPermissionsQuery:
-		response = netproto.PermissionsResponse{}
-		if err := netproto.WriteFrame(server, mustEncode(netproto.MsgPermissionsResponse, response)); err != nil {
+	case netproto.MsgServerInfoQuery:
+		response = netproto.ServerInfoResponse{}
+		if err := netproto.WriteFrame(server, mustEncode(netproto.MsgServerInfoResponse, response)); err != nil {
 			t.Fatal(err)
 		}
 	case netproto.MsgClientInfoQuery:
@@ -344,12 +344,12 @@ func TestConnErrorOriginOnlyCompletesMatchingRequest(t *testing.T) {
 
 	matching := make(chan error, 1)
 	go func() {
-		_, err := cm.request(netproto.MsgPermissionsQuery, netproto.MsgPermissionsResponse, netproto.PermissionsQuery{}, time.Second)
+		_, err := cm.request(netproto.MsgServerInfoQuery, netproto.MsgServerInfoResponse, netproto.ServerInfoQuery{}, time.Second)
 		matching <- err
 	}()
 	_ = readFrame(t, server)
 	if err := netproto.WriteFrame(server, mustEncode(netproto.MsgError, netproto.Error{
-		Message: "denied", OriginType: uint16(netproto.MsgPermissionsQuery),
+		Message: "denied", OriginType: uint16(netproto.MsgServerInfoQuery),
 	})); err != nil {
 		t.Fatal(err)
 	}
@@ -378,7 +378,7 @@ func TestLegacyErrorIsGlobalAndTimeoutClosesExactConnection(t *testing.T) {
 		done <- err
 	}()
 	go func() {
-		_, err := cm.request(netproto.MsgPermissionsQuery, netproto.MsgPermissionsResponse, netproto.PermissionsQuery{}, time.Second)
+		_, err := cm.request(netproto.MsgServerInfoQuery, netproto.MsgServerInfoResponse, netproto.ServerInfoQuery{}, time.Second)
 		done <- err
 	}()
 	_ = readFrame(t, server)

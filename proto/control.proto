@@ -4,19 +4,62 @@ package voicx.v1;
 
 option go_package = "voicx/v1;voicxv1";
 
-// Control service handles authentication, channel management, permission
-// queries, and file transfer control.
+// Control service handles authentication, role-aware management, and file
+// transfer control.
 service Control {
   // Authenticate validates credentials and returns the authenticated user ID.
   rpc Authenticate(AuthenticateRequest) returns (AuthenticateResponse);
-  // CreateChannel creates a new channel under an optional parent.
-  rpc CreateChannel(CreateChannelRequest) returns (CreateChannelResponse);
-  // DeleteChannel removes a channel.
-  rpc DeleteChannel(DeleteChannelRequest) returns (DeleteChannelResponse);
   // ListChannels returns the channel tree.
   rpc ListChannels(ListChannelsRequest) returns (ListChannelsResponse);
-  // QueryPermissions returns the effective permissions for a user in a channel.
-  rpc QueryPermissions(QueryPermissionsRequest) returns (QueryPermissionsResponse);
+  // ChangeRoles applies one revision-checked roles-v1 mutation. The actor comes
+  // from integration credentials; user_id in the request is only the target.
+  rpc ChangeRoles(ChangeRolesRequest) returns (ChangeRolesResponse);
+  // ChangeChannel uses the roles-v1 lifecycle transaction for channel resources
+  // and access policy.
+  rpc ChangeChannel(ChangeChannelRequest) returns (ChangeChannelResponse);
+  // SetMemberVoice changes server mute/deafen flags for the current session.
+  rpc SetMemberVoice(SetMemberVoiceRequest) returns (SetMemberVoiceResponse);
+  // MoveMember shares the native roles-v1 member movement lifecycle.
+  rpc MoveMember(MoveMemberRequest) returns (MoveMemberResponse);
+  // DisconnectMember removes voice membership while preserving the session.
+  rpc DisconnectMember(DisconnectMemberRequest) returns (DisconnectMemberResponse);
+  // KickMember revokes one native session through the shared roles-v1 lifecycle.
+  rpc KickMember(KickMemberRequest) returns (KickMemberResponse);
+  // BanMember records a canonical account ban and revokes all matching sessions.
+  rpc BanMember(BanMemberRequest) returns (BanMemberResponse);
+  // These roles-v1 reads retain current authorization through bounded delivery.
+  rpc GetServerInfo(GetServerInfoRequest) returns (GetServerInfoResponse);
+  rpc GetClientInfo(GetClientInfoRequest) returns (GetClientInfoResponse);
+  rpc GetServerConfig(GetServerConfigRequest) returns (GetServerConfigResponse);
+  // Media limits are a separate complete replacement so older clients cannot
+  // clear them by omitting fields from SetServerConfig.
+  rpc GetMediaLimits(GetMediaLimitsRequest) returns (GetMediaLimitsResponse);
+  rpc SetMediaLimits(SetMediaLimitsRequest) returns (SetMediaLimitsResponse);
+  // SetServerConfig replaces all six runtime settings; acknowledgement contains
+  // the saved values rather than a subsequent current-state read.
+  rpc SetServerConfig(SetServerConfigRequest) returns (SetServerConfigResponse);
+  rpc GetChatFilters(GetChatFiltersRequest) returns (GetChatFiltersResponse);
+  rpc SetChatFilters(SetChatFiltersRequest) returns (SetChatFiltersResponse);
+  rpc SetServerText(SetServerTextRequest) returns (SetServerTextResponse);
+  // Custom metadata is management-only annotation data, never role authority.
+  rpc ListCustomMetadata(ListCustomMetadataRequest) returns (ListCustomMetadataResponse);
+  rpc ChangeCustomMetadata(ChangeCustomMetadataRequest) returns (ChangeCustomMetadataResponse);
+  // ListBans includes expired records for recovery after unconfirmed writes.
+  rpc ListBans(ListBansRequest) returns (ListBansResponse);
+  // Management reads share the native scoped projection and hierarchy rules.
+  rpc GetRoleState(GetRoleStateRequest) returns (GetRoleStateResponse);
+  rpc ListRoleMembers(ListRoleMembersRequest) returns (ListRoleMembersResponse);
+  rpc CheckAccess(CheckAccessRequest) returns (CheckAccessResponse);
+  rpc GetChannelOptions(GetChannelOptionsRequest) returns (GetChannelOptionsResponse);
+  // Discovery reads use the same filtered snapshot as native/Query clients.
+  rpc ListClients(ListClientsRequest) returns (ListClientsResponse);
+  rpc GetChannelInfo(GetChannelInfoRequest) returns (GetChannelInfoResponse);
+  // ListAuditLog preserves native per-record scope filtering and placeholders.
+  rpc ListAuditLog(ListAuditLogRequest) returns (ListAuditLogResponse);
+  rpc ListComplaints(ListComplaintsRequest) returns (ListComplaintsResponse);
+  rpc ClearComplaints(ClearComplaintsRequest) returns (ClearComplaintsResponse);
+  // GetServerRules includes acceptance counts for exactly the returned wording.
+  rpc GetServerRules(GetServerRulesRequest) returns (GetServerRulesResponse);
   // File transfer RPCs intentionally return UNIMPLEMENTED. Transfer tokens are
   // minted only by the control channel after a per-client permission check.
   rpc StartFileTransfer(StartFileTransferRequest) returns (StartFileTransferResponse);
@@ -26,24 +69,52 @@ service Control {
 
 // --- Authentication ---
 
+message GetServerRulesRequest {}
+
+message ListCustomMetadataRequest {
+  string unique_id = 1;
+  string after_key = 2;
+  int32 limit = 3;
+}
+
+message CustomMetadataEntry {
+  string key = 1;
+  string value = 2;
+}
+
+message ListCustomMetadataResponse {
+  string unique_id = 1;
+  repeated CustomMetadataEntry entries = 2;
+  string next_after_key = 3;
+}
+
+message ChangeCustomMetadataRequest {
+  string unique_id = 1;
+  string key = 2;
+  // Presence distinguishes an empty stored value from no requested action.
+  optional string value = 3;
+  bool delete = 4;
+}
+
+message ChangeCustomMetadataResponse {
+  string unique_id = 1;
+  string key = 2;
+  bool deleted = 3;
+}
+
+message GetServerRulesResponse {
+  string text = 1;
+  string hash = 2;
+  int64 accepted_clients = 3;
+}
+
 message AuthenticateRequest {
   string username = 1;
   string password = 2;
-  // Retained for source/wire compatibility. Authentication ignores this field.
-  string token = 3 [deprecated = true];
-  string client_version = 4;
-  map<string, string> metadata = 5;
 }
 
 message AuthenticateResponse {
-  // Legacy clients may still inspect success; failures use gRPC status codes.
-  bool success = 1 [deprecated = true];
-  // Session tokens are not issued. Each RPC requires authorization metadata.
-  string session_token = 2 [deprecated = true];
-  string user_id = 3;
-  string display_name = 4 [deprecated = true];
-  int64 expires_at = 5 [deprecated = true];
-  string error = 6 [deprecated = true];
+  string user_id = 1;
 }
 
 // --- Channel management ---
@@ -58,30 +129,6 @@ message Channel {
   map<string, string> metadata = 7;
 }
 
-message CreateChannelRequest {
-  string name = 1;
-  string parent_id = 2;
-  int32 max_clients = 3;
-  bool permanent = 4;
-  map<string, string> metadata = 5;
-}
-
-message CreateChannelResponse {
-  bool success = 1;
-  string channel_id = 2;
-  string error = 3;
-}
-
-message DeleteChannelRequest {
-  string channel_id = 1;
-  string reason = 2;
-}
-
-message DeleteChannelResponse {
-  bool success = 1;
-  string error = 2;
-}
-
 message ListChannelsRequest {
   // If set, only the subtree rooted at this channel is returned.
   string root_channel_id = 1;
@@ -91,31 +138,542 @@ message ListChannelsResponse {
   repeated Channel channels = 1;
 }
 
-// --- Permissions ---
+// --- Role authorization (roles-v1 only) ---
 
-enum Permission {
-  PERMISSION_UNSPECIFIED = 0;
-  PERMISSION_JOIN = 1;
-  PERMISSION_SPEAK = 2;
-  PERMISSION_VIDEO = 3;
-  PERMISSION_CHAT = 4;
-  PERMISSION_KICK = 5;
-  PERMISSION_BAN = 6;
-  PERMISSION_MOVE = 7;
-  PERMISSION_CREATE_CHANNEL = 8;
-  PERMISSION_DELETE_CHANNEL = 9;
-  PERMISSION_TRANSFER_FILE = 10;
+message GetServerInfoRequest {}
+
+message ListComplaintsRequest {
+  // Exclusive ascending cursor; zero starts with the oldest complaint.
+  int64 after_id = 1;
+  // Zero defaults to 50; maximum 100.
+  int32 limit = 2;
 }
 
-message QueryPermissionsRequest {
-  string channel_id = 1;
-  string user_id = 2; // empty means the authenticated caller
+message ComplaintRecord {
+  int64 id = 1;
+  string target_unique_id = 2;
+  string target_nickname = 3;
+  string from_unique_id = 4;
+  string from_nickname = 5;
+  string reason = 6;
+  // Unix seconds.
+  int64 created_at = 7;
 }
 
-message QueryPermissionsResponse {
-  repeated Permission granted = 1;
-  repeated Permission denied = 2;
-  bool is_admin = 3;
+message ListComplaintsResponse {
+  repeated ComplaintRecord entries = 1;
+  // Zero means the end of the current list.
+  int64 next_after_id = 2;
+}
+
+message ClearComplaintsRequest {
+  string target_unique_id = 1;
+  // Omitted clears all complaints against the target; otherwise just this reporter.
+  string from_unique_id = 2;
+}
+
+message ClearComplaintsResponse {
+  // A committed deletion acknowledgement, including zero for no matching rows.
+  int64 deleted = 1;
+}
+
+message ListAuditLogRequest {
+  // Exclusive descending cursor; zero starts at the newest row.
+  int64 before_id = 1;
+  // Zero defaults to 50; allowed range is 0..200.
+  int32 limit = 2;
+}
+
+message AuditLogRecord {
+  int64 id = 1;
+  string actor = 2;
+  string action = 3;
+  string target = 4;
+  // Native audit detail; interpret its structure only when structured is true.
+  string detail = 5;
+  // Unix seconds.
+  int64 created_at = 6;
+  // A protected row contains only id, created_at and restricted=true.
+  bool restricted = 7;
+  bool structured = 8;
+}
+
+message ListAuditLogResponse {
+  // Newest first. Continue with the last ID; a short/empty page ends traversal.
+  repeated AuditLogRecord entries = 1;
+  repeated CapabilityDescriptor capabilities = 2;
+}
+
+message ListClientsRequest {}
+
+message VisibleClient {
+  string client_id = 1;
+  string unique_id = 2;
+  string nickname = 3;
+  // Zero denotes an unassigned visible session.
+  int64 channel_id = 4;
+}
+
+message ListClientsResponse {
+  repeated VisibleClient clients = 1;
+}
+
+message GetChannelInfoRequest {
+  int64 channel_id = 1;
+}
+
+message GetChannelInfoResponse {
+  int64 channel_id = 1;
+  // Hidden parents are represented as root, as in ListChannels.
+  int64 parent_id = 2;
+  string name = 3;
+  string topic = 4;
+  // 0 temporary, 1 semi-permanent, 2 permanent.
+  int64 channel_type = 5;
+  int64 max_clients = 6;
+  // Only sessions visible to the caller are counted.
+  int64 current_clients = 7;
+  int64 opus_bitrate = 8;
+  bool opus_fec = 9;
+  bool opus_dtx = 10;
+  bool opus_stereo = 11;
+  int64 slow_mode_seconds = 12;
+}
+
+message GetRoleStateRequest {
+  // Zero selects server roles; positive IDs select that channel's access editor.
+  int64 channel_id = 1;
+}
+
+message RoleAssignment {
+  int64 user_id = 1;
+  repeated int64 role_ids = 2;
+}
+
+message RolePolicySnapshot {
+  int64 revision = 1;
+  int64 owner_id = 2;
+  int64 everyone_id = 3;
+  int64 default_member_role_id = 4;
+  repeated RoleDefinition roles = 5;
+  repeated RoleAssignment members = 6;
+  // Only policies within the caller's management scope are included.
+  repeated ChannelRoleAccess channels = 7;
+}
+
+message CapabilityDescriptor {
+  string key = 1;
+  string group = 2;
+  string english = 3;
+  string german = 4;
+  bool channel = 5;
+  repeated string requires = 6;
+}
+
+message GetRoleStateResponse {
+  bool parent_access_available = 1;
+  repeated ChannelRoleOverride effective_overrides = 2;
+  repeated ChannelRoleOverride parent_overrides = 3;
+  int64 actor_id = 4;
+  RolePolicySnapshot policy = 5;
+  repeated CapabilityDescriptor capabilities = 6;
+  repeated int64 manageable_role_ids = 7;
+  repeated string grantable_capabilities = 8;
+}
+
+message ListRoleMembersRequest {
+  int64 channel_id = 1;
+  // Required positive revision from GetRoleState; stale reads return ABORTED.
+  int64 expected_revision = 2;
+  // At most 100 UTF-8 bytes, matching the native roster search.
+  string search = 3;
+  // Exclusive ascending user ID cursor; zero starts at the beginning.
+  int64 after_id = 4;
+}
+
+message RoleMemberIdentity {
+  int64 user_id = 1;
+  string unique_id = 2;
+  string nickname = 3;
+  repeated int64 role_ids = 4;
+  // Protected members may be inspected even when they cannot be managed.
+  bool manageable = 5;
+}
+
+message ListRoleMembersResponse {
+  int64 revision = 1;
+  // At most 100 registered identities, including offline members.
+  repeated RoleMemberIdentity entries = 2;
+  // If true, pass the last entry's user_id as after_id for the next page.
+  bool more = 3;
+}
+
+message CheckAccessRequest {
+  // The subject only; never changes the authenticated actor. Zero means guest.
+  int64 user_id = 1;
+  int64 channel_id = 2;
+  string capability = 3;
+  int64 expected_revision = 4;
+}
+
+message RoleAccessDecision {
+  bool allowed = 1;
+  string reason = 2;
+  repeated int64 role_ids = 3;
+  int64 channel_id = 4;
+  string requirement = 5;
+  int64 revision = 6;
+}
+
+message CheckAccessResponse {
+  RoleAccessDecision decision = 1;
+  // Actor hierarchy is separate from the subject's permission decision.
+  bool can_manage_member = 2;
+}
+
+message GetChannelOptionsRequest {
+  // channel_create, channel_edit, channel_move, or channel_delete.
+  string kind = 1;
+  // For creation, the parent (zero means root); otherwise the target channel.
+  int64 channel_id = 2;
+}
+
+message ChannelManagementOption {
+  int64 id = 1;
+  string name = 2;
+  bool can_sync = 3;
+}
+
+message GetChannelOptionsResponse {
+  int64 revision = 1;
+  int64 channel_id = 2;
+  string name = 3;
+  RoleChannelSettings settings = 4;
+  int64 affected_channels = 5;
+  bool can_create_permanent = 6;
+  bool can_create_temporary = 7;
+  bool can_manage_access = 8;
+  int64 everyone_id = 9;
+  repeated ChannelManagementOption roles = 10;
+  repeated string grantable_capabilities = 11;
+  repeated ChannelManagementOption destinations = 12;
+}
+
+message GetServerInfoResponse {
+  string name = 1;
+  string version = 2;
+  string platform = 3;
+  int64 uptime_seconds = 4;
+  // Counts include only channels and sessions visible to the caller.
+  int64 clients_online = 5;
+  int64 channels_online = 6;
+  int64 max_clients = 7;
+  string motd = 8;
+}
+
+message GetClientInfoRequest {
+  string client_id = 1;
+}
+
+message GetClientInfoResponse {
+  string client_id = 1;
+  string unique_id = 2;
+  string nickname = 3;
+  int64 channel_id = 4;
+  // Unix seconds. Statistics are zero without ViewConnectionInfo;
+  // ping_ms is -1 when unavailable. Address fields have a separate gate.
+  int64 connected_at = 5;
+  int64 idle_seconds = 6;
+  int64 ping_ms = 7;
+  string ip = 8;
+  int64 port = 9;
+  int64 bytes_in = 10;
+  int64 bytes_out = 11;
+}
+
+message GetServerConfigRequest {}
+
+message GetMediaLimitsRequest {}
+
+message SetMediaLimitsRequest {
+  // Zero means unlimited. Width and height must both be zero or both positive.
+  int64 video_max_bitrate = 1;
+  int64 video_max_width = 2;
+  int64 video_max_height = 3;
+}
+
+message GetMediaLimitsResponse {
+  int64 video_max_bitrate = 1;
+  int64 video_max_width = 2;
+  int64 video_max_height = 3;
+  // Process-local revision, encoded as decimal text to preserve uint64 range.
+  string revision = 4;
+}
+
+message SetMediaLimitsResponse {
+  int64 video_max_bitrate = 1;
+  int64 video_max_width = 2;
+  int64 video_max_height = 3;
+  // Exact revision committed by this request.
+  string revision = 4;
+}
+
+message GetChatFiltersRequest {}
+
+message GetChatFiltersResponse {
+  string word_filter = 1;
+  string link_blacklist = 2;
+  string link_whitelist = 3;
+  bool from_config = 4;
+}
+
+// Omitted fields retain their values; present empty strings clear a list.
+// Only server_name, motd, announcement and server_rules are supported.
+// An absent value is invalid; a present empty value clears the setting.
+message SetServerTextRequest {
+  string key = 1;
+  optional string value = 2;
+}
+
+message SetServerTextResponse {
+  string key = 1;
+  // SHA-256 of the exact submitted UTF-8 bytes, including empty text.
+  string content_hash = 2;
+}
+
+message SetChatFiltersRequest {
+  optional string word_filter = 1;
+  optional string link_blacklist = 2;
+  optional string link_whitelist = 3;
+}
+
+message SetChatFiltersResponse {
+  string word_filter = 1;
+  string link_blacklist = 2;
+  string link_whitelist = 3;
+  bool from_config = 4;
+}
+
+message SetServerConfigRequest {
+  int32 max_clients = 1;
+  int32 client_timeout_seconds = 2;
+  int32 opus_bitrate = 3;
+  bool opus_fec = 4;
+  bool opus_dtx = 5;
+  bool opus_stereo = 6;
+}
+
+message SetServerConfigResponse {
+  int64 max_clients = 1;
+  int64 client_timeout_seconds = 2;
+  int64 opus_bitrate = 3;
+  bool opus_fec = 4;
+  bool opus_dtx = 5;
+  bool opus_stereo = 6;
+}
+
+// Requires the global ManageServer capability.
+message GetServerConfigResponse {
+  int64 max_clients = 1;
+  int64 client_timeout_seconds = 2;
+  int64 opus_bitrate = 3;
+  bool opus_fec = 4;
+  bool opus_dtx = 5;
+  bool opus_stereo = 6;
+}
+
+message ListBansRequest {
+  // Exclusive descending cursor; zero starts at the newest record.
+  int64 before_id = 1;
+  // Zero selects 50. The maximum is 100; negative values are invalid.
+  int32 limit = 2;
+}
+
+message BanRecord {
+  int64 id = 1;
+  // Native ban types: 0 IP, 1 unique ID, 2 nickname.
+  int64 type = 2;
+  string value = 3;
+  string reason = 4;
+  string banned_by = 5;
+  // Unix seconds (unlike BanMemberResponse.expires_at, in milliseconds).
+  int64 created_at = 6;
+  // Zero means permanent.
+  int64 expires_at = 7;
+}
+
+// Requires the global BanMembers capability on every page.
+message ListBansResponse {
+  repeated BanRecord bans = 1;
+  // Zero at the end; otherwise pass this value as the next before_id.
+  int64 next_before_id = 2;
+}
+
+message MoveMemberRequest {
+  string client_id = 1;
+  // Destination channel; current source authority is also required.
+  int64 channel_id = 2;
+}
+
+message KickMemberRequest {
+  string client_id = 1;
+  string reason = 2;
+}
+
+message KickMemberResponse {
+  string client_id = 1;
+  // The session is revoked even when resource cleanup remains pending.
+  bool cleanup_pending = 2;
+}
+
+message BanMemberRequest {
+  string client_id = 1;
+  string reason = 2;
+  // Zero means permanent. Negative or overflowing durations are rejected.
+  int64 duration_seconds = 3;
+}
+
+enum BanPersistence {
+  BAN_PERSISTENCE_UNSPECIFIED = 0;
+  BAN_PERSISTENCE_SAVED = 1;
+  // Sessions are revoked; inspect the ban list before retrying persistence.
+  BAN_PERSISTENCE_UNCONFIRMED = 2;
+}
+
+message BanMemberResponse {
+  string unique_id = 1;
+  BanPersistence persistence = 2;
+  // Unix milliseconds, meaningful only when saved; zero means permanent.
+  int64 expires_at = 3;
+  bool cleanup_pending = 4;
+}
+
+message DisconnectMemberRequest {
+  string client_id = 1;
+  // Must match the target's current channel.
+  int64 channel_id = 2;
+  string reason = 3;
+}
+
+message DisconnectMemberResponse {
+  string client_id = 1;
+  // The channel the member was removed from.
+  int64 channel_id = 2;
+}
+
+message MoveMemberResponse {
+  string client_id = 1;
+  int64 channel_id = 2;
+}
+
+message RoleDefinition {
+  int64 id = 1;
+  string name = 2;
+  int32 position = 3;
+  string color = 4;
+  string icon = 5;
+  bool hoist = 6;
+  // Stable roles-v1 capability names, checked by the shared authority.
+  repeated string permissions = 7;
+}
+
+message ChannelRoleOverride {
+  // Exactly one of role_id or user_id must be positive.
+  int64 role_id = 1;
+  int64 user_id = 2;
+  string capability = 3;
+  // "allow" or "deny"; an absent override means inherit.
+  string effect = 4;
+}
+
+message ChannelRoleAccess {
+  int64 channel_id = 1;
+  int64 parent_id = 2;
+  bool synced = 3;
+  repeated ChannelRoleOverride overrides = 4;
+}
+
+message ChangeRolesRequest {
+  // role_create, role_update, role_delete, roles_reorder, member_roles_set,
+  // channel_access_set, default_member_role_set, or owner_transfer.
+  string kind = 1;
+  int64 expected_revision = 2;
+  RoleDefinition role = 3;
+  int64 role_id = 4;
+  // Reordering is lowest first, including @everyone.
+  repeated int64 role_ids = 5;
+  int64 user_id = 6;
+  ChannelRoleAccess channel = 7;
+}
+
+message ChangeRolesResponse {
+  int64 revision = 1;
+  int64 created_role_id = 2;
+  // The change is saved even when enforcement is pending. Do not retry it.
+  bool enforcement_pending = 3;
+}
+
+message RoleChannelSettings {
+  string name = 1;
+  string topic = 2;
+  string description = 3;
+  int32 order_index = 4;
+  int32 max_clients = 5;
+  int32 slow_mode_seconds = 6;
+  int32 opus_bitrate = 7;
+  bool opus_fec = 8;
+  bool opus_dtx = 9;
+  bool opus_stereo = 10;
+}
+
+message RoleChannelCreationAccess {
+  bool synced = 1;
+  repeated ChannelRoleOverride overrides = 2;
+}
+
+message ChangeChannelRequest {
+  // channel_create, channel_edit, channel_move, or channel_delete.
+  string kind = 1;
+  int64 expected_revision = 2;
+  int64 channel_id = 3;
+  int64 parent_id = 4;
+  // Moves preserve effective access unless explicitly synchronized.
+  bool sync_to_parent = 5;
+  // Creation only; omitted means inherit the parent.
+  RoleChannelCreationAccess access = 6;
+  // Required for create/edit; absent for move/delete.
+  RoleChannelSettings settings = 7;
+  // Creation only: 0 temporary, 1 semi-permanent, 2 permanent.
+  int32 channel_type = 8;
+  // Creation only. The server hashes it after an authorization preflight.
+  string password = 9;
+  // Move only; omitted preserves order, while zero explicitly sets it.
+  optional int32 order_index = 10;
+}
+
+message ChangeChannelResponse {
+  int64 revision = 1;
+  int64 channel_id = 2;
+  // The change is saved even when enforcement is pending. Do not retry it.
+  bool enforcement_pending = 3;
+}
+
+message SetMemberVoiceRequest {
+  string client_id = 1;
+  // The displayed channel must still match when the change is applied.
+  int64 channel_id = 2;
+  // At least one flag must be present. False explicitly clears that flag.
+  optional bool muted = 3;
+  optional bool deafened = 4;
+}
+
+message SetMemberVoiceResponse {
+  // Session voice-state revision, not an authorization-policy revision.
+  int64 revision = 1;
+  string client_id = 2;
+  int64 channel_id = 3;
+  bool muted = 4;
+  bool deafened = 5;
 }
 
 // --- File transfer control ---

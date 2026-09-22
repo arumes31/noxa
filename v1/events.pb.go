@@ -33,6 +33,8 @@ const (
 	EventType_EVENT_TYPE_USER_MOVED      EventType = 6
 	EventType_EVENT_TYPE_USER_KICKED     EventType = 7
 	EventType_EVENT_TYPE_USER_BANNED     EventType = 8
+	// roles-v1 structural updates replace the entire filtered discovery state.
+	EventType_EVENT_TYPE_ROLE_SNAPSHOT EventType = 9
 )
 
 // Enum value maps for EventType.
@@ -47,6 +49,7 @@ var (
 		6: "EVENT_TYPE_USER_MOVED",
 		7: "EVENT_TYPE_USER_KICKED",
 		8: "EVENT_TYPE_USER_BANNED",
+		9: "EVENT_TYPE_ROLE_SNAPSHOT",
 	}
 	EventType_value = map[string]int32{
 		"EVENT_TYPE_UNSPECIFIED":     0,
@@ -58,6 +61,7 @@ var (
 		"EVENT_TYPE_USER_MOVED":      6,
 		"EVENT_TYPE_USER_KICKED":     7,
 		"EVENT_TYPE_USER_BANNED":     8,
+		"EVENT_TYPE_ROLE_SNAPSHOT":   9,
 	}
 )
 
@@ -91,6 +95,8 @@ func (EventType) EnumDescriptor() ([]byte, []int) {
 type SubscribeEventsRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Optional filter of event types to receive; empty means all.
+	// roles-v1 accepts ROLE_SNAPSHOT, optionally with USER_SPEAKING. Snapshots
+	// are required to reconcile membership, visibility and speaking revocation.
 	EventTypes    []EventType `protobuf:"varint,1,rep,packed,name=event_types,json=eventTypes,proto3,enum=voicx.v1.EventType" json:"event_types,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -149,6 +155,7 @@ type Event struct {
 	//	*Event_UserMoved
 	//	*Event_UserKicked
 	//	*Event_UserBanned
+	//	*Event_RoleSnapshot
 	Payload       isEvent_Payload `protobuf_oneof:"payload"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -284,6 +291,15 @@ func (x *Event) GetUserBanned() *UserBannedEvent {
 	return nil
 }
 
+func (x *Event) GetRoleSnapshot() *RoleSnapshotEvent {
+	if x != nil {
+		if x, ok := x.Payload.(*Event_RoleSnapshot); ok {
+			return x.RoleSnapshot
+		}
+	}
+	return nil
+}
+
 type isEvent_Payload interface {
 	isEvent_Payload()
 }
@@ -320,6 +336,10 @@ type Event_UserBanned struct {
 	UserBanned *UserBannedEvent `protobuf:"bytes,17,opt,name=user_banned,json=userBanned,proto3,oneof"`
 }
 
+type Event_RoleSnapshot struct {
+	RoleSnapshot *RoleSnapshotEvent `protobuf:"bytes,18,opt,name=role_snapshot,json=roleSnapshot,proto3,oneof"`
+}
+
 func (*Event_UserJoined) isEvent_Payload() {}
 
 func (*Event_UserLeft) isEvent_Payload() {}
@@ -335,6 +355,8 @@ func (*Event_UserMoved) isEvent_Payload() {}
 func (*Event_UserKicked) isEvent_Payload() {}
 
 func (*Event_UserBanned) isEvent_Payload() {}
+
+func (*Event_RoleSnapshot) isEvent_Payload() {}
 
 type UserJoinedEvent struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -704,6 +726,67 @@ func (x *UserMovedEvent) GetMovedBy() string {
 	return ""
 }
 
+type RoleSnapshotEvent struct {
+	state    protoimpl.MessageState    `protogen:"open.v1"`
+	Channels []*GetChannelInfoResponse `protobuf:"bytes,1,rep,name=channels,proto3" json:"channels,omitempty"`
+	Clients  []*VisibleClient          `protobuf:"bytes,2,rep,name=clients,proto3" json:"clients,omitempty"`
+	// Replaces the entire visible speaking set, including when empty.
+	SpeakingClientIds []string `protobuf:"bytes,3,rep,name=speaking_client_ids,json=speakingClientIds,proto3" json:"speaking_client_ids,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
+}
+
+func (x *RoleSnapshotEvent) Reset() {
+	*x = RoleSnapshotEvent{}
+	mi := &file_events_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RoleSnapshotEvent) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RoleSnapshotEvent) ProtoMessage() {}
+
+func (x *RoleSnapshotEvent) ProtoReflect() protoreflect.Message {
+	mi := &file_events_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RoleSnapshotEvent.ProtoReflect.Descriptor instead.
+func (*RoleSnapshotEvent) Descriptor() ([]byte, []int) {
+	return file_events_proto_rawDescGZIP(), []int{8}
+}
+
+func (x *RoleSnapshotEvent) GetChannels() []*GetChannelInfoResponse {
+	if x != nil {
+		return x.Channels
+	}
+	return nil
+}
+
+func (x *RoleSnapshotEvent) GetClients() []*VisibleClient {
+	if x != nil {
+		return x.Clients
+	}
+	return nil
+}
+
+func (x *RoleSnapshotEvent) GetSpeakingClientIds() []string {
+	if x != nil {
+		return x.SpeakingClientIds
+	}
+	return nil
+}
+
 type UserKickedEvent struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	ChannelId     string                 `protobuf:"bytes,1,opt,name=channel_id,json=channelId,proto3" json:"channel_id,omitempty"`
@@ -716,7 +799,7 @@ type UserKickedEvent struct {
 
 func (x *UserKickedEvent) Reset() {
 	*x = UserKickedEvent{}
-	mi := &file_events_proto_msgTypes[8]
+	mi := &file_events_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -728,7 +811,7 @@ func (x *UserKickedEvent) String() string {
 func (*UserKickedEvent) ProtoMessage() {}
 
 func (x *UserKickedEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_events_proto_msgTypes[8]
+	mi := &file_events_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -741,7 +824,7 @@ func (x *UserKickedEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UserKickedEvent.ProtoReflect.Descriptor instead.
 func (*UserKickedEvent) Descriptor() ([]byte, []int) {
-	return file_events_proto_rawDescGZIP(), []int{8}
+	return file_events_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *UserKickedEvent) GetChannelId() string {
@@ -785,7 +868,7 @@ type UserBannedEvent struct {
 
 func (x *UserBannedEvent) Reset() {
 	*x = UserBannedEvent{}
-	mi := &file_events_proto_msgTypes[9]
+	mi := &file_events_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -797,7 +880,7 @@ func (x *UserBannedEvent) String() string {
 func (*UserBannedEvent) ProtoMessage() {}
 
 func (x *UserBannedEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_events_proto_msgTypes[9]
+	mi := &file_events_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -810,7 +893,7 @@ func (x *UserBannedEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UserBannedEvent.ProtoReflect.Descriptor instead.
 func (*UserBannedEvent) Descriptor() ([]byte, []int) {
-	return file_events_proto_rawDescGZIP(), []int{9}
+	return file_events_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *UserBannedEvent) GetUserId() string {
@@ -852,10 +935,10 @@ var File_events_proto protoreflect.FileDescriptor
 
 const file_events_proto_rawDesc = "" +
 	"\n" +
-	"\fevents.proto\x12\bvoicx.v1\"N\n" +
+	"\fevents.proto\x12\bvoicx.v1\x1a\rcontrol.proto\"N\n" +
 	"\x16SubscribeEventsRequest\x124\n" +
 	"\vevent_types\x18\x01 \x03(\x0e2\x13.voicx.v1.EventTypeR\n" +
-	"eventTypes\"\xee\x04\n" +
+	"eventTypes\"\xb2\x05\n" +
 	"\x05Event\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12'\n" +
 	"\x04type\x18\x02 \x01(\x0e2\x13.voicx.v1.EventTypeR\x04type\x12\x1c\n" +
@@ -872,7 +955,8 @@ const file_events_proto_rawDesc = "" +
 	"\vuser_kicked\x18\x10 \x01(\v2\x19.voicx.v1.UserKickedEventH\x00R\n" +
 	"userKicked\x12<\n" +
 	"\vuser_banned\x18\x11 \x01(\v2\x19.voicx.v1.UserBannedEventH\x00R\n" +
-	"userBannedB\t\n" +
+	"userBanned\x12B\n" +
+	"\rrole_snapshot\x18\x12 \x01(\v2\x1b.voicx.v1.RoleSnapshotEventH\x00R\froleSnapshotB\t\n" +
 	"\apayload\"l\n" +
 	"\x0fUserJoinedEvent\x12\x1d\n" +
 	"\n" +
@@ -904,7 +988,11 @@ const file_events_proto_rawDesc = "" +
 	"\auser_id\x18\x01 \x01(\tR\x06userId\x12&\n" +
 	"\x0ffrom_channel_id\x18\x02 \x01(\tR\rfromChannelId\x12\"\n" +
 	"\rto_channel_id\x18\x03 \x01(\tR\vtoChannelId\x12\x19\n" +
-	"\bmoved_by\x18\x04 \x01(\tR\amovedBy\"~\n" +
+	"\bmoved_by\x18\x04 \x01(\tR\amovedBy\"\xb4\x01\n" +
+	"\x11RoleSnapshotEvent\x12<\n" +
+	"\bchannels\x18\x01 \x03(\v2 .voicx.v1.GetChannelInfoResponseR\bchannels\x121\n" +
+	"\aclients\x18\x02 \x03(\v2\x17.voicx.v1.VisibleClientR\aclients\x12.\n" +
+	"\x13speaking_client_ids\x18\x03 \x03(\tR\x11speakingClientIds\"~\n" +
 	"\x0fUserKickedEvent\x12\x1d\n" +
 	"\n" +
 	"channel_id\x18\x01 \x01(\tR\tchannelId\x12\x17\n" +
@@ -918,7 +1006,7 @@ const file_events_proto_rawDesc = "" +
 	"\n" +
 	"expires_at\x18\x04 \x01(\x03R\texpiresAt\x12\x1d\n" +
 	"\n" +
-	"channel_id\x18\x05 \x01(\tR\tchannelId*\x8e\x02\n" +
+	"channel_id\x18\x05 \x01(\tR\tchannelId*\xac\x02\n" +
 	"\tEventType\x12\x1a\n" +
 	"\x16EVENT_TYPE_UNSPECIFIED\x10\x00\x12\x1a\n" +
 	"\x16EVENT_TYPE_USER_JOINED\x10\x01\x12\x18\n" +
@@ -928,7 +1016,8 @@ const file_events_proto_rawDesc = "" +
 	"\x1aEVENT_TYPE_CHANNEL_DELETED\x10\x05\x12\x19\n" +
 	"\x15EVENT_TYPE_USER_MOVED\x10\x06\x12\x1a\n" +
 	"\x16EVENT_TYPE_USER_KICKED\x10\a\x12\x1a\n" +
-	"\x16EVENT_TYPE_USER_BANNED\x10\b2J\n" +
+	"\x16EVENT_TYPE_USER_BANNED\x10\b\x12\x1c\n" +
+	"\x18EVENT_TYPE_ROLE_SNAPSHOT\x10\t2J\n" +
 	"\x06Events\x12@\n" +
 	"\tSubscribe\x12 .voicx.v1.SubscribeEventsRequest\x1a\x0f.voicx.v1.Event0\x01B\x12Z\x10voicx/v1;voicxv1b\x06proto3"
 
@@ -945,7 +1034,7 @@ func file_events_proto_rawDescGZIP() []byte {
 }
 
 var file_events_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_events_proto_msgTypes = make([]protoimpl.MessageInfo, 10)
+var file_events_proto_msgTypes = make([]protoimpl.MessageInfo, 11)
 var file_events_proto_goTypes = []any{
 	(EventType)(0),                 // 0: voicx.v1.EventType
 	(*SubscribeEventsRequest)(nil), // 1: voicx.v1.SubscribeEventsRequest
@@ -956,8 +1045,11 @@ var file_events_proto_goTypes = []any{
 	(*ChannelCreatedEvent)(nil),    // 6: voicx.v1.ChannelCreatedEvent
 	(*ChannelDeletedEvent)(nil),    // 7: voicx.v1.ChannelDeletedEvent
 	(*UserMovedEvent)(nil),         // 8: voicx.v1.UserMovedEvent
-	(*UserKickedEvent)(nil),        // 9: voicx.v1.UserKickedEvent
-	(*UserBannedEvent)(nil),        // 10: voicx.v1.UserBannedEvent
+	(*RoleSnapshotEvent)(nil),      // 9: voicx.v1.RoleSnapshotEvent
+	(*UserKickedEvent)(nil),        // 10: voicx.v1.UserKickedEvent
+	(*UserBannedEvent)(nil),        // 11: voicx.v1.UserBannedEvent
+	(*GetChannelInfoResponse)(nil), // 12: voicx.v1.GetChannelInfoResponse
+	(*VisibleClient)(nil),          // 13: voicx.v1.VisibleClient
 }
 var file_events_proto_depIdxs = []int32{
 	0,  // 0: voicx.v1.SubscribeEventsRequest.event_types:type_name -> voicx.v1.EventType
@@ -968,15 +1060,18 @@ var file_events_proto_depIdxs = []int32{
 	6,  // 5: voicx.v1.Event.channel_created:type_name -> voicx.v1.ChannelCreatedEvent
 	7,  // 6: voicx.v1.Event.channel_deleted:type_name -> voicx.v1.ChannelDeletedEvent
 	8,  // 7: voicx.v1.Event.user_moved:type_name -> voicx.v1.UserMovedEvent
-	9,  // 8: voicx.v1.Event.user_kicked:type_name -> voicx.v1.UserKickedEvent
-	10, // 9: voicx.v1.Event.user_banned:type_name -> voicx.v1.UserBannedEvent
-	1,  // 10: voicx.v1.Events.Subscribe:input_type -> voicx.v1.SubscribeEventsRequest
-	2,  // 11: voicx.v1.Events.Subscribe:output_type -> voicx.v1.Event
-	11, // [11:12] is the sub-list for method output_type
-	10, // [10:11] is the sub-list for method input_type
-	10, // [10:10] is the sub-list for extension type_name
-	10, // [10:10] is the sub-list for extension extendee
-	0,  // [0:10] is the sub-list for field type_name
+	10, // 8: voicx.v1.Event.user_kicked:type_name -> voicx.v1.UserKickedEvent
+	11, // 9: voicx.v1.Event.user_banned:type_name -> voicx.v1.UserBannedEvent
+	9,  // 10: voicx.v1.Event.role_snapshot:type_name -> voicx.v1.RoleSnapshotEvent
+	12, // 11: voicx.v1.RoleSnapshotEvent.channels:type_name -> voicx.v1.GetChannelInfoResponse
+	13, // 12: voicx.v1.RoleSnapshotEvent.clients:type_name -> voicx.v1.VisibleClient
+	1,  // 13: voicx.v1.Events.Subscribe:input_type -> voicx.v1.SubscribeEventsRequest
+	2,  // 14: voicx.v1.Events.Subscribe:output_type -> voicx.v1.Event
+	14, // [14:15] is the sub-list for method output_type
+	13, // [13:14] is the sub-list for method input_type
+	13, // [13:13] is the sub-list for extension type_name
+	13, // [13:13] is the sub-list for extension extendee
+	0,  // [0:13] is the sub-list for field type_name
 }
 
 func init() { file_events_proto_init() }
@@ -984,6 +1079,7 @@ func file_events_proto_init() {
 	if File_events_proto != nil {
 		return
 	}
+	file_control_proto_init()
 	file_events_proto_msgTypes[1].OneofWrappers = []any{
 		(*Event_UserJoined)(nil),
 		(*Event_UserLeft)(nil),
@@ -993,6 +1089,7 @@ func file_events_proto_init() {
 		(*Event_UserMoved)(nil),
 		(*Event_UserKicked)(nil),
 		(*Event_UserBanned)(nil),
+		(*Event_RoleSnapshot)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
@@ -1000,7 +1097,7 @@ func file_events_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_events_proto_rawDesc), len(file_events_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   10,
+			NumMessages:   11,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

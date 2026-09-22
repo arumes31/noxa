@@ -14,7 +14,7 @@ secret backup system, never in the archive described here.
    documented common point in time. Do not copy a live mutable directory with a
    best-effort recursive file command.
 3. Create a PostgreSQL custom-format dump with `pg_dump --format=custom` and
-   capture the file root plus server/channel/group asset roots from the same
+   capture the file root plus server/channel asset roots from the same
    snapshot boundary.
 4. Hash every artifact with SHA-256, encrypt it with the operator-owned backup
    key, upload it to immutable storage, and verify the uploaded size and digest.
@@ -23,7 +23,7 @@ secret backup system, never in the archive described here.
 
 ## Restore drill
 
-Run this at least quarterly and before a migration or storage-layout release.
+Run this at least quarterly and before a storage-layout release.
 Use an isolated network and new database, file roots, credentials, and ports.
 
 1. Verify archive signatures/digests before decrypting or extracting. Reject
@@ -36,20 +36,41 @@ Use an isolated network and new database, file roots, credentials, and ports.
    canonical numeric file directories for channels absent from it at startup.
    Never start against a filesystem snapshot paired with an older or incomplete
    database restore.
-4. Start the exact backed-up noXa image against the isolated restore. Confirm
+4. Start the matching roles-v1 image against the isolated restore. Confirm
    `/readyz` and `/api/v1/schema/version`, then stop it cleanly.
-5. Start the candidate image. Its migration runner must accept every ledger
-   checksum and required index before readiness succeeds.
+5. Restart the same image and confirm it accepts the existing roles-v1 install
+   marker, schema and active policy. Older-version backups are not accepted by
+   this fresh-version release.
 6. With non-administrator synthetic accounts, verify authentication, channel
    membership, encrypted chat history, one upload/download digest, and every
-   server/channel/group asset class. Confirm a cross-channel file request and a
+   server/channel asset class. Confirm a cross-channel file request and a
    path traversal request are denied.
 7. Compare row counts and sampled content digests with the recovery-point
-   manifest. Scan logs for migration, journal-recovery, permission, and missing
+   manifest. Scan logs for schema, journal-recovery, permission, and missing
    file errors.
 8. Destroy the isolated credentials and restored plaintext after recording the
    drill result. Keep only the timestamp, recovery-point identifier, versions,
    duration, checks performed, and remediation owners.
+
+## Roles-v1 fresh-install rehearsal
+
+Start with an empty disposable PostgreSQL database. This version does not
+upgrade an older noXa database or import its accounts, channels or content.
+The server and offline operator commands mark a fresh database for roles-v1
+and reject an unmarked database that already contains public tables.
+
+1. Initialize the schema with the candidate server or `noxa-migrate` command.
+   The server must refuse to serve until a roles-v1 policy is active.
+2. Register the owner account with `adduser`, then inspect and activate it by
+   its exact unique ID with `role-setup`. Preserve the generated chat master
+   key with the database backup.
+3. Start the candidate server. Verify owner login, non-owner denial, role
+   assignment and revocation, channel visibility, chat/file reads,
+   Query/gRPC negotiation and a restart with the same policy.
+4. Restore a backup of this new-version database, key and assets into another
+   empty environment. Verify owner recovery and sampled content digests.
+
+Any failed credential, authorization, restore or digest check blocks launch.
 
 ## Compose backup container
 
@@ -111,8 +132,8 @@ is failed even when the process eventually starts.
 
 ## Fail-closed conditions
 
-Do not switch production traffic to a restore when a migration checksum differs,
+Do not switch production traffic to a restore when its schema version differs,
 a required index is missing or invalid, an asset recovery journal cannot be
 reconciled, startup orphan cleanup fails, content digests differ, key material is
-unavailable, or the restore requires hand-editing the migration ledger. Preserve
+unavailable, or the restore requires hand-editing schema metadata. Preserve
 the failed restore for forensics and escalate through the incident runbook.

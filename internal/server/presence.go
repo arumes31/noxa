@@ -5,16 +5,14 @@ package server
 import (
 	"container/heap"
 	"context"
-	"runtime"
 	"strings"
 	"sync"
 	"time"
 
 	"go.uber.org/zap"
 
+	"noxa/internal/authorization"
 	"noxa/internal/netproto"
-	"noxa/internal/permissions"
-	"noxa/internal/version"
 )
 
 // Broadcast event types for presence.
@@ -117,9 +115,6 @@ func (s *TCPServer) handleSetStatus(ctx context.Context, client *Client, f *netp
 	if !validStatuses[status] {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "invalid status (want online|away|busy|invisible)")
 	}
-	if status == "invisible" && !client.isAdmin() {
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, "invisible status is admin-only")
-	}
 	if status == "online" {
 		status = ""
 	}
@@ -129,38 +124,29 @@ func (s *TCPServer) handleSetStatus(ctx context.Context, client *Client, f *netp
 	if s.deps == nil || s.deps.State == nil {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "state backend unavailable")
 	}
-
-	var wasInvisible bool
-	if sc, ok := s.deps.State.GetClient(client.ID); ok {
-		wasInvisible = sc.Status == "invisible"
-	}
-	s.deps.State.SetStatus(client.ID, status, msg.Message)
-
-	evt := statusEvent{
-		ClientID: client.ID,
-		Status:   status,
-		Message:  msg.Message,
-	}
-	switch {
-	case status == "invisible" && !wasInvisible:
-		// Going invisible: non-admins see a leave; admins see the status.
-		s.broadcastEvent(eventUserLeft, userEvent{ClientID: client.ID})
-		s.broadcastToAdmins(eventStatusChanged, evt)
-	case wasInvisible && status != "invisible":
-		// Coming back: non-admins see a join; everyone sees the status.
-		s.broadcastEvent(eventUserJoined, userEvent{
-			ClientID: client.ID,
-			UniqueID: client.UniqueID,
-			Nickname: client.Username,
-		})
-		s.broadcastEvent(eventStatusChanged, evt)
-	case status == "invisible":
-		// Already invisible: status changes stay with the admins.
-		s.broadcastToAdmins(eventStatusChanged, evt)
-	default:
-		s.broadcastEvent(eventStatusChanged, evt)
-	}
-	return nil
+	return s.rolePolicyRead(ctx, client, func(ctx context.Context) error {
+		s.roleMetadataMu.Lock()
+		defer s.roleMetadataMu.Unlock()
+		client.roleActionMu.Lock()
+		defer client.roleActionMu.Unlock()
+		e := ctx.Value(roleLeaseKey{}).(roleLease).evaluator
+		if status == "invisible" && !e.Evaluate(client.userID(), 0, authorization.Administrator).Allowed {
+			return s.roleError(ctx, client, authorization.ErrRoleForbidden)
+		}
+		s.deps.State.SetStatus(client.ID, status, msg.Message)
+		current, ok := s.deps.State.GetClient(client.ID)
+		if !ok || current.Status != status || current.StatusMessage != msg.Message {
+			return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "session presence unavailable")
+		}
+		s.refreshRolePublishers(e)
+		s.broadcastEvent(eventStatusChanged, statusEvent{ClientID: client.ID, Status: status, Message: msg.Message})
+		if msg.AckRequested {
+			return s.writeCommittedReply(client, netproto.MsgStatusSaved, netproto.StatusSaved{
+				ClientID: client.ID, Status: status, Message: msg.Message,
+			})
+		}
+		return nil
+	})
 }
 
 // statusEvent is the status_changed broadcast payload.
@@ -190,20 +176,10 @@ func (s *TCPServer) handlePoke(ctx context.Context, client *Client, f *netproto.
 	if len(msg.Message) > maxStatusMessage {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "poke message too long")
 	}
-	target, ok := s.clientByID(msg.ClientID)
-	if !ok || !target.isAuthed() {
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodeNotFound, "target client not found")
-	}
+	return s.rolePoke(ctx, client, msg)
+}
 
-	pc, err := s.permCheckerFor(ctx, client)
-	if err != nil {
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "permission backend unavailable")
-	}
-	if !pc.granted(permissions.PermissionKeyClientPoke) &&
-		!pc.powerAtLeast(permissions.PermissionKeyClientPokePower, 1) {
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, "insufficient permission: "+string(permissions.PermissionKeyClientPoke))
-	}
-
+func (s *TCPServer) sendPoke(ctx context.Context, client, target *Client, msg netproto.Poke) error {
 	key := client.ID + "→" + target.ID
 	if !s.pokes.allow(key, time.Now()) {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "poke cooldown: wait before poking this client again")
@@ -224,6 +200,9 @@ func (s *TCPServer) handlePoke(ctx context.Context, client *Client, f *netproto.
 		zap.String("from", client.ID),
 		zap.String("to", target.ID),
 	)
+	if msg.AckRequested {
+		return s.writeCommittedReply(client, netproto.MsgPokeAccepted, netproto.PokeAccepted{ClientID: target.ID})
+	}
 	return nil
 }
 
@@ -233,26 +212,5 @@ func (s *TCPServer) handleServerInfoQuery(ctx context.Context, client *Client, f
 	if err := netproto.Decode(f, &netproto.ServerInfoQuery{}); err != nil {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "malformed server_info_query: "+err.Error())
 	}
-	resp := netproto.ServerInfoResponse{
-		Name:       s.cfg.ServerName,
-		Version:    version.String(),
-		Platform:   runtime.GOOS + "/" + runtime.GOARCH,
-		MaxClients: s.cfg.MaxClients,
-	}
-	// Off by default (91): this reply is authenticated-only and every caller
-	// that published an X25519 key already got the MOTD sealed in its
-	// AuthResponse, so repeating it here in the clear would be the sole
-	// plaintext body left on the wire. Operators opt in for a public MOTD.
-	if s.cfg.ServerInfoMOTD {
-		resp.MOTD = s.serverSettingPlain(ctx, "motd")
-	}
-	if s.deps != nil && s.deps.State != nil {
-		stats := s.deps.State.Stats()
-		resp.ClientsOnline = stats.ClientCount
-		resp.ChannelsOnline = stats.ChannelCount
-	}
-	if !s.startedAt.IsZero() {
-		resp.UptimeSeconds = int64(time.Since(s.startedAt).Seconds())
-	}
-	return s.writeMessage(client, netproto.MsgServerInfoResponse, resp)
+	return s.roleServerInfo(ctx, client)
 }

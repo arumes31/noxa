@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
+	"noxa/internal/authorization"
 	"noxa/internal/netproto"
-	"noxa/internal/permissions"
 	"noxa/internal/state"
 )
 
@@ -54,16 +54,18 @@ func TestChannelSubscribeRejectsMissingKeyAndOver64Targets(t *testing.T) {
 }
 
 func TestChannelSubscribeDeliversKeysHonorsCurrentChannelAndRevokes(t *testing.T) {
-	tp := subscriptionPermissions()
-	allowed := map[int64]bool{40: true}
-	env := startTestEnvDeps(t, &tp, nil, func(deps *Deps) {
-		deps.Perms.(*fakePerms).loadForClientFn = func(_ context.Context, _ int64, channelID int64) (permissions.TieredPermissions, error) {
-			if allowed[channelID] {
-				return tp, nil
-			}
-			return permissions.NewTieredPermissions(), nil
-		}
-	})
+	backend := serverRoleFixture()
+	backend.policy.OwnerID = 1
+	backend.policy.Roles[0].Permissions = []authorization.Capability{authorization.ViewChannel}
+	backend.policy.Channels = []authorization.ChannelPolicy{
+		{ChannelID: 40},
+		{ChannelID: 41, Overrides: []authorization.RoleOverride{{UserID: 2, Capability: authorization.ViewChannel, Effect: authorization.Deny}}},
+	}
+	authority, err := authorization.NewAuthority(t.Context(), backend, func(context.Context, *authorization.RoleEvaluator, *authorization.RoleEvaluator) error { return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	env := startTestEnvDeps(t, nil, nil, func(deps *Deps) { deps.Authority = authority })
 	defer env.stop()
 	env.state.AddChannel(&state.Channel{ChannelID: 40, Name: "forty"})
 	env.state.AddChannel(&state.Channel{ChannelID: 41, Name: "forty-one"})
@@ -81,8 +83,8 @@ func TestChannelSubscribeDeliversKeysHonorsCurrentChannelAndRevokes(t *testing.T
 	if len(keys) != 1 || keys[0].ChannelID != 40 {
 		t.Fatalf("delivered keys = %+v, want exactly channel 40", keys)
 	}
-	if len(errs) != 1 || errs[0].Code != errCodePermissionDenied || !strings.Contains(errs[0].Message, "41") || !strings.Contains(errs[0].Message, "404") {
-		t.Fatalf("mixed-target refusal = %+v, want permission-denied naming 41 and 404", errs)
+	if len(errs) != 1 || errs[0].Code != errCodePermissionDenied || !strings.Contains(errs[0].Message, "unavailable") {
+		t.Fatalf("mixed-target refusal = %+v, want generic permission denial", errs)
 	}
 	if got := env.deps.ScopeKeys.(*fakeScopeKeys).countFor(40); got != 1 {
 		t.Fatalf("scope keys for accepted target = %d, want 1", got)
@@ -109,7 +111,13 @@ func TestChannelSubscribeDeliversKeysHonorsCurrentChannelAndRevokes(t *testing.T
 		t.Fatal(err)
 	}
 	env.state.Subscribe(authResp.ClientID, []int64{40})
-	allowed[40] = false
+	backend.mu.Lock()
+	backend.policy.Revision++
+	backend.policy.Channels[0].Overrides = []authorization.RoleOverride{{UserID: 2, Capability: authorization.ViewChannel, Effect: authorization.Deny}}
+	backend.mu.Unlock()
+	if err := authority.Reload(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 	if got := env.srv.channelSubscribers(context.Background(), 40); len(got) != 0 {
 		t.Fatalf("revoked subscribers = %v, want none", got)
 	}
@@ -122,7 +130,19 @@ func TestChannelSubscribeDeliversKeysHonorsCurrentChannelAndRevokes(t *testing.T
 }
 
 func TestChannelSubscribeAllows64AndRejects65thStandingSubscription(t *testing.T) {
-	env := startTestEnv(t, nil)
+	backend := serverRoleFixture()
+	backend.policy.OwnerID = 1
+	backend.policy.Roles[0].Permissions = []authorization.Capability{authorization.ViewChannel}
+	backend.policy.Channels = nil
+	for channelID := int64(1000); channelID < 1000+maxSubscriptions; channelID++ {
+		backend.policy.Channels = append(backend.policy.Channels, authorization.ChannelPolicy{ChannelID: channelID})
+	}
+	backend.policy.Channels = append(backend.policy.Channels, authorization.ChannelPolicy{ChannelID: 2000})
+	authority, err := authorization.NewAuthority(t.Context(), backend, func(context.Context, *authorization.RoleEvaluator, *authorization.RoleEvaluator) error { return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	env := startTestEnvDeps(t, nil, nil, func(deps *Deps) { deps.Authority = authority })
 	defer env.stop()
 	pub, _ := testX25519(t)
 	conn, authResp := dialSubscriptionClient(t, env.addr, "admin-uid", pub)
@@ -141,8 +161,8 @@ func TestChannelSubscribeAllows64AndRejects65thStandingSubscription(t *testing.T
 	}
 	env.state.AddChannel(&state.Channel{ChannelID: 2000, Name: "overflow"})
 	send(t, conn, netproto.MsgChannelSubscribe, netproto.ChannelSubscribe{Subscribe: true, ChannelIDs: []int64{2000}})
-	if got := readError(t, conn); got.Code != errCodeMalformed {
-		t.Fatalf("65th standing subscription error = %+v, want malformed", got)
+	if got := readError(t, conn); got.Code != errCodePermissionDenied {
+		t.Fatalf("65th standing subscription error = %+v, want permission denied", got)
 	}
 	if got := env.state.Subscriptions(authResp.ClientID); len(got) != maxSubscriptions {
 		t.Fatalf("standing subscriptions = %d, want %d", len(got), maxSubscriptions)
@@ -193,13 +213,4 @@ func readSubscriptionReply(t *testing.T, conn net.Conn) (netproto.SubscriptionSt
 			return state, keys, errs
 		}
 	}
-}
-
-func subscriptionPermissions() permissions.TieredPermissions {
-	tp := permissions.NewTieredPermissions()
-	set := permissions.NewPermissionSet()
-	set.Set(&permissions.Permission{Key: permissions.PermissionKeyChannelSubscribePower, Type: permissions.PermissionTypeInteger, Value: 10, Grant: 10})
-	set.Set(&permissions.Permission{Key: permissions.PermissionKeyChannelNeededSubscribePower, Type: permissions.PermissionTypeInteger, Value: 5, Grant: 5})
-	tp.Set(permissions.TierServerGroup, set)
-	return tp
 }

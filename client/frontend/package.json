@@ -1,7 +1,7 @@
 {
   "name": "noxa",
   "private": true,
-  "version": "0.4.3",
+  "version": "0.5.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -11,7 +11,9 @@
     "quality": "npm run lint && npm run test:unit && npm run test:a11y && npm run build",
     "test": "npm run test:unit && npm run test:e2e",
     "test:a11y": "playwright test tests/workflows.spec.js --grep @a11y",
-    "test:unit": "npm run test:unit:core && npm run test:unit:ui && npm run test:unit:tray && npm run test:unit:stats && npm run test:unit:sounds",
+    "test:unit": "npm run test:unit:core && npm run test:unit:ui && npm run test:unit:tray && npm run test:unit:stats && npm run test:unit:sounds && npm run test:unit:roles && npm run test:unit:media",
+    "test:unit:media": "node --test --experimental-test-coverage --test-coverage-include=src/media-limits.js --test-coverage-lines=90 --test-coverage-functions=90 --test-coverage-branches=80 unit/media-limits.test.mjs",
+    "test:unit:roles": "node --test unit/role-editor-state.test.mjs unit/channel-access-state.test.mjs unit/audit-format.test.mjs unit/role-presentation.test.mjs",
     "test:unit:sounds": "node --test unit/sounds.test.mjs unit/speech.test.mjs",
     "sounds:generate": "node ../../tools/generate-sounds.mjs",
     "test:unit:stats": "node --test unit/connection-stats.test.mjs",

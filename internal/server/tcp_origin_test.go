@@ -21,7 +21,7 @@ func TestExplicitErrorOriginsDoNotLeakAcrossConcurrentWrites(t *testing.T) {
 	// The first net.Pipe write blocks before its peer starts reading. Queue two
 	// unrelated responses behind it; all three calls share one Client but their
 	// immutable arguments must survive the write serialization unchanged.
-	go func() { done <- s.sendErrorFor(client, netproto.MsgPermissionsQuery, errCodeMalformed, "permissions") }()
+	go func() { done <- s.sendErrorFor(client, netproto.MsgServerInfoQuery, errCodeMalformed, "server info") }()
 	time.Sleep(10 * time.Millisecond)
 	go func() { done <- s.sendErrorFor(client, netproto.MsgClientInfoQuery, errCodeNotFound, "client") }()
 	go func() { done <- s.sendGlobalError(client, errCodeUnavailable, "global") }()
@@ -44,7 +44,7 @@ func TestExplicitErrorOriginsDoNotLeakAcrossConcurrentWrites(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if origins[netproto.MsgPermissionsQuery] != 1 || origins[netproto.MsgClientInfoQuery] != 1 || origins[0] != 1 {
+	if origins[netproto.MsgServerInfoQuery] != 1 || origins[netproto.MsgClientInfoQuery] != 1 || origins[0] != 1 {
 		t.Fatalf("error origins = %#v", origins)
 	}
 }

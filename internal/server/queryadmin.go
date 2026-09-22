@@ -1,65 +1,11 @@
-// queryadmin.go implements the ServerQuery-facing additions of wave 10a:
-// the resolved-permission overview (219) and the max-clients override
-// enforcement (217).
+// queryadmin.go implements the runtime max-clients override.
 package server
 
 import (
 	"context"
 	"strconv"
 
-	"noxa/internal/permissions"
 )
-
-// ResolvedPerm is one resolved permission of a user (219 permoverview).
-type ResolvedPerm struct {
-	Key   string
-	Value int
-	Grant int
-	Tier  string
-}
-
-// PermOverview returns the resolved permission set and authoritative admin
-// flag of a user in an optional channel context: one entry per key present in
-// any tier, resolved through the tier hierarchy (same rules as the
-// client-facing permissions_query).
-func (s *TCPServer) PermOverview(ctx context.Context, uniqueID string, channelID int64) ([]ResolvedPerm, bool, error) {
-	if s.deps == nil || s.deps.Auth == nil || s.deps.Perms == nil || s.deps.Resolver == nil {
-		return nil, false, errPermsUnavailable
-	}
-	user, err := s.deps.Auth.LookupUser(ctx, uniqueID)
-	if err != nil {
-		return nil, false, err
-	}
-	tp, err := s.deps.Perms.LoadForClient(ctx, user.ID, channelID)
-	if err != nil {
-		return nil, false, err
-	}
-	var out []ResolvedPerm
-	seen := make(map[permissions.PermissionKey]bool)
-	for tier := permissions.Tier(0); tier <= permissions.TierChannel; tier++ {
-		set, ok := tp.Get(tier)
-		if !ok || set == nil {
-			continue
-		}
-		for _, key := range set.Keys() {
-			if seen[key] {
-				continue
-			}
-			seen[key] = true
-			p, winTier, err := s.deps.Resolver.Resolve(tp, key)
-			if err != nil {
-				continue
-			}
-			out = append(out, ResolvedPerm{
-				Key:   string(p.Key),
-				Value: p.Value,
-				Grant: p.Grant,
-				Tier:  winTier.String(),
-			})
-		}
-	}
-	return out, user.IsAdmin, nil
-}
 
 // EffectiveMaxClients returns the current connection cap. Runtime server UI
 // changes are folded into cfg under configMu and persisted for restart.

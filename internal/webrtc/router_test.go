@@ -74,7 +74,9 @@ func makeAudioPacket(t *testing.T, seq uint16, level int) *rtp.Packet {
 			Timestamp:      uint32(seq) * 960,
 			SSRC:           4242,
 		},
-		Payload: []byte{0xde, 0xad},
+		// Forwarding tests use this opaque fixture for audio and video. A
+		// minimal VP8 keyframe also exercises validated video continuity.
+		Payload: []byte{0x10, 0, 0, 0, 0x9d, 1, 0x2a, 0x80, 2, 0x68, 1},
 	}
 	if level >= 0 {
 		if err := pkt.SetExtension(1, []byte{byte(level)}); err != nil {
@@ -803,6 +805,12 @@ func TestVoiceHandleOfferConcurrentMove(t *testing.T) {
 		moved.Do(func() { r.JoinChannel(9, "c1") })
 	})
 
+	// A fresh browser transport still rebuilds; ordinary camera offers reuse it.
+	replacement := newClientPC(t)
+	offer, err = replacement.CreateOffer(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if _, err := v.HandleOffer("c1", offer.SDP, nil); err != nil {
 		t.Fatalf("re-offer HandleOffer: %v", err)
 	}

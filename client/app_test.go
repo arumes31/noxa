@@ -206,14 +206,18 @@ func TestCertificateClockWarningRequiresPinnedCertificate(t *testing.T) {
 }
 
 func TestAppConnectedBindings(t *testing.T) {
+	oldRoot, oldProtection := identityRootOverride, keyProtectionSetting
+	identityRootOverride = t.TempDir()
+	keyProtectionSetting = func() string { return "off" }
+	t.Cleanup(func() {
+		identityRootOverride = oldRoot
+		keyProtectionSetting = oldProtection
+	})
+
 	frames := make(chan *netproto.Frame, 32)
 	app, cm := newPipedApp(t, func(frame *netproto.Frame) (netproto.MessageType, any, bool) {
 		frames <- frame
 		switch netproto.MessageType(frame.Type) {
-		case netproto.MsgPermissionsQuery:
-			return netproto.MsgPermissionsResponse, netproto.PermissionsResponse{
-				Entries: []netproto.PermissionEntry{{Key: "i_client_talk_power", Value: 42}},
-			}, true
 		case netproto.MsgWebRTCOffer:
 			return netproto.MsgWebRTCAnswer, netproto.WebRTCAnswer{SDP: "answer-sdp"}, true
 		case netproto.MsgAvatarGet:
@@ -310,20 +314,6 @@ func TestAppConnectedBindings(t *testing.T) {
 		t.Fatalf("SetPrioritySpeaker payload = %+v, %v", priority, err)
 	}
 
-	if got := app.ChannelEdit(7, "topic", 25, 64_000, true, false, true, "description", 3); got != "" {
-		t.Fatalf("ChannelEdit = %q", got)
-	}
-	var edit netproto.ChannelEdit
-	if err := netproto.Decode(nextFrame(t, frames, netproto.MsgChannelEdit), &edit); err != nil {
-		t.Fatalf("decode ChannelEdit: %v", err)
-	}
-	if edit.ChannelID != 7 || edit.Topic == nil || *edit.Topic != "topic" || edit.MaxClients == nil || *edit.MaxClients != 25 ||
-		edit.OpusBitrate == nil || *edit.OpusBitrate != 64_000 || edit.OpusFEC == nil || !*edit.OpusFEC ||
-		edit.OpusDTX == nil || *edit.OpusDTX || edit.OpusStereo == nil || !*edit.OpusStereo ||
-		edit.Description == nil || *edit.Description != "description" || edit.SlowModeSeconds == nil || *edit.SlowModeSeconds != 3 {
-		t.Fatalf("ChannelEdit payload = %+v", edit)
-	}
-
 	if got := app.SendChatReply("channel", "7", "reply", 99); got != "" {
 		t.Fatalf("SendChatReply = %q", got)
 	}
@@ -340,12 +330,6 @@ func TestAppConnectedBindings(t *testing.T) {
 		!whisper.Active || len(whisper.UniqueIDs) != 1 || whisper.UniqueIDs[0] != "u1" || len(whisper.ChannelIDs) != 2 {
 		t.Fatalf("WhisperSet payload = %+v, %v", whisper, err)
 	}
-
-	permissions, err := app.GetPermissions()
-	if err != nil || len(permissions) != 1 || permissions[0].Key != "i_client_talk_power" || permissions[0].Value != 42 {
-		t.Fatalf("GetPermissions = %+v, %v", permissions, err)
-	}
-	nextFrame(t, frames, netproto.MsgPermissionsQuery)
 
 	tracks := []netproto.TrackSlot{{TrackID: "mic-track", Slot: "mic"}}
 	answer, err := app.WebRTCOffer("offer-sdp", tracks)

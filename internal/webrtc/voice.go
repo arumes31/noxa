@@ -5,9 +5,12 @@ package webrtc
 
 import (
 	"errors"
+	"fmt"
+	"strings"
 	"sync"
 	"time"
 
+	"github.com/pion/sdp/v3"
 	"github.com/pion/webrtc/v4"
 	"go.uber.org/zap"
 )
@@ -15,6 +18,9 @@ import (
 // ErrNoPeer is returned by Voice operations that reference a client with no
 // active peer connection.
 var ErrNoPeer = errors.New("webrtc: no peer connection for client")
+
+// ErrPeerReset requires a fresh signaling session after a partially applied SDP.
+var ErrPeerReset = errors.New("webrtc: media negotiation requires reconnect")
 
 // renegState tracks per-peer renegotiation scheduling (debounce + rate limit
 // + unanswered-offer tolerance).
@@ -29,6 +35,10 @@ type renegState struct {
 type renegTimer interface {
 	Stop() bool
 }
+
+// OfferGuard synchronously authorizes SDP construction and delivery together.
+// It runs outside all voice/router locks and must never retain send.
+type OfferGuard func(clientID string, send func() error) error
 
 type renegClock interface {
 	Now() time.Time
@@ -56,9 +66,12 @@ type Voice struct {
 	router *Router
 	logger *zap.Logger
 
+	videoLimitsMu contextRWMutex
+
 	renegMu        sync.Mutex
 	reneg          map[string]*renegState
 	offerSender    func(clientID, offerSDP string) error
+	offerGuard     OfferGuard
 	renegClock     renegClock
 	renegDebounce  time.Duration
 	renegRateLimit time.Duration
@@ -114,6 +127,20 @@ func (v *Voice) SetOfferSender(fn func(clientID, offerSDP string) error) {
 	v.renegMu.Lock()
 	defer v.renegMu.Unlock()
 	v.offerSender = fn
+}
+
+func (v *Voice) SetOfferGuard(guard OfferGuard) {
+	v.renegMu.Lock()
+	defer v.renegMu.Unlock()
+	v.offerGuard = guard
+}
+
+// RefreshSubscriber queues renegotiation on the voice scheduler. It does not
+// construct SDP here; OfferGuard rechecks access when the timer delivers it.
+func (v *Voice) RefreshSubscriber(clientID string) {
+	if v.engine.PeerConnection(clientID) != nil {
+		v.scheduleRenegotiate(clientID)
+	}
 }
 
 // SetEchoChannel sets the loopback test channel (15). See
@@ -231,6 +258,7 @@ func (v *Voice) sendRenegotiation(clientID string, expected *renegState, generat
 	}
 	st.pending = false
 	sender := v.offerSender
+	guard := v.offerGuard
 	clock, _, _ := v.renegScheduleConfigLocked()
 	var wrapper *PeerConnectionWrapper
 	if v.engine != nil {
@@ -247,41 +275,64 @@ func (v *Voice) sendRenegotiation(clientID string, expected *renegState, generat
 		return
 	}
 
-	offer, err := wrapper.CreateOffer()
+	send := func() error {
+		// Guard acquisition may have waited through a peer replacement.
+		v.renegMu.Lock()
+		// A newer track-change generation is retained in pending and will
+		// follow this reserved offer's answer; a replaced peer must be skipped.
+		current := v.reneg[clientID] == st
+		v.renegMu.Unlock()
+		if !current || v.engine.PeerConnection(clientID) != wrapper {
+			return ErrNoPeer
+		}
+		v.router.PrepareSubscriber(clientID)
+		offer, err := wrapper.CreateOffer()
+		if err != nil {
+			v.renegMu.Lock()
+			if v.reneg[clientID] == st {
+				st.unanswered = 0
+			}
+			v.renegMu.Unlock()
+			v.logger.Debug("renegotiation offer skipped",
+				zap.String("client_id", clientID),
+				zap.Error(err),
+			)
+			return err
+		}
+
+		// Per-channel Opus parameters (21-23): rewrite the offer's Opus fmtp for
+		// the subscriber's channel before delivery.
+		if cfg := v.channelAudioFor(clientID); !cfg.IsZero() {
+			offer = RewriteOpusFMTP(offer, cfg)
+		}
+
+		v.renegMu.Lock()
+		if v.reneg[clientID] != st {
+			v.renegMu.Unlock()
+			return ErrNoPeer
+		}
+		st.lastSent = clock.Now()
+		v.renegMu.Unlock()
+
+		if sender != nil {
+			return sender(clientID, offer)
+		}
+		return nil
+	}
+	var err error
+	if guard == nil {
+		err = send()
+	} else {
+		err = guard(clientID, send)
+	}
 	if err != nil {
 		v.renegMu.Lock()
 		if v.reneg[clientID] == st {
 			st.unanswered = 0
+			st.pending = true
 		}
 		v.renegMu.Unlock()
-		v.logger.Debug("renegotiation offer skipped",
-			zap.String("client_id", clientID),
-			zap.Error(err),
-		)
-		return
-	}
-
-	// Per-channel Opus parameters (21-23): rewrite the offer's Opus fmtp for
-	// the subscriber's channel before delivery.
-	if cfg := v.channelAudioFor(clientID); !cfg.IsZero() {
-		offer = RewriteOpusFMTP(offer, cfg)
-	}
-
-	v.renegMu.Lock()
-	if v.reneg[clientID] != st {
-		v.renegMu.Unlock()
-		return
-	}
-	st.lastSent = clock.Now()
-	v.renegMu.Unlock()
-
-	if sender != nil {
-		if err := sender(clientID, offer); err != nil {
-			v.logger.Warn("delivering renegotiation offer failed",
-				zap.String("client_id", clientID),
-				zap.Error(err),
-			)
-		}
+		v.logger.Debug("renegotiation not delivered", zap.String("client_id", clientID), zap.Error(err))
 	}
 }
 
@@ -302,14 +353,54 @@ func (v *Voice) RemoveTap(tapID string) {
 	v.router.DetachPeer(tapID)
 }
 
-// HandleOffer (re)creates the peer connection for clientID, attaches it to
-// the router, applies the SDP offer, and returns the SDP answer. An existing
-// session for the client is torn down first, making re-offers idempotent;
-// channel membership survives the rebuild.
+// RequestSourceKeyframe addresses the exact recording source, including its
+// simulcast layer, rather than an arbitrary SSRC sharing the publisher slot.
+func (v *Voice) RequestSourceKeyframe(publisher, slot string, ssrc uint32) {
+	v.router.mu.RLock()
+	var rid string
+	found := false
+	for candidate, source := range v.router.videoSources[publisher][slot] {
+		if source == ssrc {
+			rid, found = candidate, true
+			break
+		}
+	}
+	v.router.mu.RUnlock()
+	if found {
+		v.router.RequestKeyframe(publisher, slot, rid)
+	}
+}
+
+// HandleOffer preserves the transport for camera, screen and ICE renegotiation.
+// A new remote DTLS identity (for example after switching desktop tabs) replaces
+// the peer while retaining channel membership, whisper intent and quality.
 //
 // onLocalCandidate, if non-nil, is invoked asynchronously for every locally
 // gathered ICE candidate until the peer connection is closed.
 func (v *Voice) HandleOffer(clientID, offerSDP string, onLocalCandidate func(candidate, sdpMid string, mlineIndex uint16)) (string, error) {
+	fingerprint, err := remoteFingerprint(offerSDP)
+	if err != nil {
+		return "", err
+	}
+	if existing := v.engine.PeerConnection(clientID); existing != nil {
+		if remote := existing.pc.RemoteDescription(); remote != nil {
+			previous, parseErr := remoteFingerprint(remote.SDP)
+			if parseErr == nil && previous == fingerprint {
+				v.router.EnsurePublishers(clientID)
+				v.router.PrepareSubscriber(clientID)
+				v.engine.mu.RLock()
+				bounds := v.engine.videoBounds
+				v.engine.mu.RUnlock()
+				answer, err := existing.handleOffer(offerSDP, &bounds)
+				if err == nil {
+					if cfg := v.channelAudioFor(clientID); !cfg.IsZero() {
+						answer = RewriteOpusFMTP(answer, cfg)
+					}
+				}
+				return answer, err
+			}
+		}
+	}
 	// The rebuild replaces the peer connection only: dropping the client's
 	// channel would leave it routed to nobody after an ICE restart (59), and
 	// dropping plus restoring it would undo a move that lands mid-rebuild (the
@@ -330,6 +421,7 @@ func (v *Voice) HandleOffer(clientID, offerSDP string, onLocalCandidate func(can
 	// Per-publisher model: create tracks for every current channel member
 	// BEFORE the initial answer so they are negotiated right away.
 	v.router.EnsurePublishers(clientID)
+	v.router.PrepareSubscriber(clientID)
 
 	answer, err := wrapper.HandleOffer(offerSDP)
 	if err != nil {
@@ -371,6 +463,41 @@ func (v *Voice) HandleOffer(clientID, offerSDP string, onLocalCandidate func(can
 
 	v.logger.Info("voice session established", zap.String("client_id", clientID))
 	return answer, nil
+}
+
+// The bundled transport must have one unambiguous DTLS identity. Media-level
+// and session-level fingerprint placement are both used by real clients.
+func remoteFingerprint(raw string) (string, error) {
+	var description sdp.SessionDescription
+	if err := description.Unmarshal([]byte(raw)); err != nil {
+		return "", fmt.Errorf("parsing remote SDP: %w", err)
+	}
+	var fingerprint string
+	read := func(attributes []sdp.Attribute) error {
+		for _, attribute := range attributes {
+			if attribute.Key != "fingerprint" {
+				continue
+			}
+			value := strings.ToLower(strings.Join(strings.Fields(attribute.Value), " "))
+			if value == "" || (fingerprint != "" && fingerprint != value) {
+				return errors.New("inconsistent remote DTLS fingerprint")
+			}
+			fingerprint = value
+		}
+		return nil
+	}
+	if err := read(description.Attributes); err != nil {
+		return "", err
+	}
+	for _, media := range description.MediaDescriptions {
+		if err := read(media.Attributes); err != nil {
+			return "", err
+		}
+	}
+	if fingerprint == "" {
+		return "", errors.New("remote DTLS fingerprint missing")
+	}
+	return fingerprint, nil
 }
 
 // HandleAnswer applies an SDP answer from the client (used when the server
