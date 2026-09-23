@@ -27,6 +27,37 @@ func autoRecordingProcess(_ context.Context, _ string, args ...string) Command {
 	return cmd
 }
 
+func commitRecordingPacket(t *testing.T, capture *channelCapture, packet *rtp.Packet, delivery webrtc.MediaDelivery) {
+	t.Helper()
+	committed := make(chan struct{}, 1)
+	deadline := time.After(2 * time.Second)
+	ticker := time.NewTicker(20 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		checks := 0
+		if err := capture.WriteMedia(packet, delivery, func(write func() error) error {
+			checks++
+			err := write()
+			if checks == 2 && err == nil {
+				select {
+				case committed <- struct{}{}:
+				default:
+				}
+			}
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+		select {
+		case <-committed:
+			return
+		case <-deadline:
+			t.Fatal("packet never committed to recording input")
+		case <-ticker.C:
+		}
+	}
+}
+
 func TestChannelRecordingCapacityFailureIsExplicit(t *testing.T) {
 	cfg := testConfig(privateTempDir(t))
 	cfg.MaxConcurrent = 1
@@ -202,9 +233,9 @@ func TestChannelRecordingCapturesEveryMediaSlot(t *testing.T) {
 		if slot == webrtc.SlotCam || slot == webrtc.SlotScreen {
 			codec = "video/VP8"
 		}
-		if err := capture.WriteMedia(&rtp.Packet{Header: rtp.Header{SSRC: 42}, Payload: []byte{1}}, webrtc.MediaDelivery{SenderID: "alice", Slot: slot, Codec: codec}, func(write func() error) error { return write() }); err != nil {
-			t.Fatal(err)
-		}
+		commitRecordingPacket(t, capture, &rtp.Packet{Header: rtp.Header{Version: 2, SSRC: 42},
+			Payload: []byte{0x10, 0, 0, 0, 0x9d, 1, 0x2a, 0, 0, 0, 0}},
+			webrtc.MediaDelivery{SenderID: "alice", Slot: slot, Codec: codec})
 	}
 	deadline := time.Now().Add(time.Second)
 	for c.processes.SessionCount() != 4 && time.Now().Before(deadline) {
@@ -253,12 +284,9 @@ func TestChannelRecordingSeparatesParticipantsAndSourceEpochs(t *testing.T) {
 	c.mu.Lock()
 	capture := c.sessions[1]
 	c.mu.Unlock()
-	commit := func(write func() error) error { return write() }
 	for _, publisher := range []string{"alice", "bob"} {
 		packet := &rtp.Packet{Header: rtp.Header{Version: 2, SSRC: 42, SequenceNumber: 1}, Payload: []byte{1, 2, 3}}
-		if err := capture.WriteMedia(packet, webrtc.MediaDelivery{SenderID: publisher, Slot: webrtc.SlotMic, SourceEpoch: 1}, commit); err != nil {
-			t.Fatal(err)
-		}
+		commitRecordingPacket(t, capture, packet, webrtc.MediaDelivery{SenderID: publisher, Slot: webrtc.SlotMic, SourceEpoch: 1})
 	}
 	deadline := time.Now().Add(2 * time.Second)
 	for c.processes.SessionCount() != 2 && time.Now().Before(deadline) {
@@ -268,9 +296,7 @@ func TestChannelRecordingSeparatesParticipantsAndSourceEpochs(t *testing.T) {
 		t.Fatal("overlapping RTP SSRCs were collapsed across participants")
 	}
 	packet := &rtp.Packet{Header: rtp.Header{Version: 2, SSRC: 42, SequenceNumber: 1}, Payload: []byte{1, 2, 3}}
-	if err := capture.WriteMedia(packet, webrtc.MediaDelivery{SenderID: "alice", Slot: webrtc.SlotMic, SourceEpoch: 2}, commit); err != nil {
-		t.Fatal(err)
-	}
+	commitRecordingPacket(t, capture, packet, webrtc.MediaDelivery{SenderID: "alice", Slot: webrtc.SlotMic, SourceEpoch: 2})
 	barrier := make(chan struct{}, 1)
 	if err := capture.WriteMedia(packet, webrtc.MediaDelivery{SenderID: "bob", Slot: webrtc.SlotMic, SourceEpoch: 1}, func(write func() error) error {
 		select {

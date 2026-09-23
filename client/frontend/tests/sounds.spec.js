@@ -82,9 +82,9 @@ test("replacement sound set decodes, completes Test All, and releases all source
         await engine.dispose();
         return { count, durations, active, created, ended, closed: ctx.state };
     });
-    expect(result.count).toBe(32);
-    expect(result.created).toBe(32);
-    expect(result.ended).toBe(32);
+    expect(result.count).toBe(33);
+    expect(result.created).toBe(33);
+    expect(result.ended).toBe(33);
     expect(result.active).toBe(0);
     expect(result.closed).toBe("closed");
     expect(Math.max(...result.durations)).toBeLessThan(.501);

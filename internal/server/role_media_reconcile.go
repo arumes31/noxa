@@ -7,6 +7,7 @@ import (
 	"noxa/internal/authorization"
 	"noxa/internal/recorder"
 	"noxa/internal/state"
+	"noxa/internal/webrtc"
 )
 
 // reconcileRoleMedia runs under Authority's exclusive gate, before chat key
@@ -46,6 +47,12 @@ func (s *TCPServer) reconcileRoleMedia(ctx context.Context, _ *authorization.Rol
 		}
 		if !after.Evaluate(client.userID(), member.ChannelID, authorization.ShareScreen).Allowed {
 			s.deps.State.SetSharing(client.ID, false)
+			if s.deps.Voice != nil {
+				s.deps.Voice.RevokeVideo(client.ID, webrtc.SlotScreen)
+			}
+		}
+		if s.deps.Voice != nil && !after.Evaluate(client.userID(), member.ChannelID, authorization.ShareCamera).Allowed {
+			s.deps.Voice.RevokeVideo(client.ID, webrtc.SlotCam)
 		}
 		if s.deps.Voice != nil && !after.Evaluate(client.userID(), member.ChannelID, authorization.Whisper).Allowed {
 			s.deps.Voice.SetWhisper(client.ID, nil, nil, false)

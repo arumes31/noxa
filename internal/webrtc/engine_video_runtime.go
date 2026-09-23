@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/pion/interceptor"
+	"github.com/pion/interceptor/pkg/nack"
 	"github.com/pion/sdp/v3"
 	"github.com/pion/webrtc/v4"
 )
@@ -61,7 +62,12 @@ func newEngineMedia(enableAV1 bool, bounds VideoBounds, egress *mediaEgressRegis
 			return nil, nil, fmt.Errorf("webrtc: configuring TWCC egress: %w", err)
 		}
 	}
-	if err := webrtc.RegisterDefaultInterceptors(media, registry); err != nil {
+	// At the default 100 ms interval, ten attempts give normal RTTs several
+	// chances to repair loss. Unlimited retries keep obsolete packets alive
+	// for tens of seconds on sparse video and indefinitely on an idle layer.
+	if err := webrtc.RegisterDefaultInterceptorsWithOptions(media, registry,
+		webrtc.WithNackGeneratorOptions(nack.GeneratorMaxNacksPerPacket(10)),
+	); err != nil {
 		return nil, nil, fmt.Errorf("webrtc: registering default interceptors: %w", err)
 	}
 	return media, registry, nil

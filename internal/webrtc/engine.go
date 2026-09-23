@@ -78,15 +78,18 @@ func NewWithVideoBounds(logger *zap.Logger, iceServers []string, enableAV1 bool,
 	if logger == nil {
 		return nil, fmt.Errorf("webrtc: logger must not be nil")
 	}
+	includeLoopback := false
 	if network.UDPAddr != "" {
 		host, _, err := net.SplitHostPort(network.UDPAddr)
 		if err != nil {
 			return nil, fmt.Errorf("webrtc: invalid shared UDP address: %w", err)
 		}
 		if host != "" {
-			if ip := net.ParseIP(host); ip == nil || ip.To4() == nil || strings.Contains(host, ":") {
+			ip := net.ParseIP(host)
+			if ip == nil || ip.To4() == nil || strings.Contains(host, ":") {
 				return nil, fmt.Errorf("webrtc: shared UDP address must bind IPv4, got %q", host)
 			}
+			includeLoopback = ip.IsLoopback()
 		}
 	}
 	for _, address := range network.ExternalIPs {
@@ -105,6 +108,8 @@ func NewWithVideoBounds(logger *zap.Logger, iceServers []string, enableAV1 bool,
 	}
 
 	settingEngine := webrtc.SettingEngine{}
+	// An explicit loopback listener otherwise has no gatherable host address.
+	settingEngine.SetIncludeLoopbackCandidate(includeLoopback)
 	networkStack, err := stdnet.NewNet()
 	if err != nil {
 		return nil, fmt.Errorf("webrtc: enumerating network interfaces: %w", err)

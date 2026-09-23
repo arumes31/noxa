@@ -225,6 +225,15 @@ body.details-collapsed #details-toggle { display: inline-flex; position: static;
 .voice-options-menu .voice-control { justify-content: flex-start; }
 #hotkey-status { white-space: normal; margin: 0; font: .8rem var(--font-body); }
 .voice-info { margin-left: auto; gap: 4px; max-width: 220px; }
+
+/* Keep controls together; the connection summary has a predictable second row
+   instead of pushing German labels into an extra, partially filled row. */
+#voice-bar > .voice-buttons { flex: 1 1 100%; }
+#voice-bar > .voice-info { flex: 1 1 auto; flex-direction: row; flex-wrap: wrap; align-items: center; gap: 6px 12px; max-width: none; margin-left: 0; }
+#voice-bar > #mic-status:empty { display: none; }
+#voice-bar .voice-disconnect-group { gap: 4px; padding-left: 8px; margin-left: 2px; }
+#voice-bar .voice-control { padding: 7px 8px; gap: 5px; }
+#voice-bar #voice-context { max-width: min(36ch, 60vw); }
 .voice-summary { display: flex; align-items: center; gap: 10px; }
 #voice-latency { flex: none; padding: 2px 0 2px 10px; border: 0; border-left: 1px solid var(--border); border-radius: 0; background: transparent; color: var(--text-dim); font-size: .85rem; font-variant-numeric: tabular-nums; white-space: nowrap; }
 #voice-latency:hover { text-decoration: underline; text-underline-offset: 3px; }

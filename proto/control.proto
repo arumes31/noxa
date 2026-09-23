@@ -575,6 +575,7 @@ message RoleDefinition {
   bool hoist = 6;
   // Stable roles-v1 capability names, checked by the shared authority.
   repeated string permissions = 7;
+  bool mentionable = 8;
 }
 
 message ChannelRoleOverride {

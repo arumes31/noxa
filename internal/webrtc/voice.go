@@ -22,6 +22,10 @@ var ErrNoPeer = errors.New("webrtc: no peer connection for client")
 // ErrPeerReset requires a fresh signaling session after a partially applied SDP.
 var ErrPeerReset = errors.New("webrtc: media negotiation requires reconnect")
 
+// ErrOfferCollision asks the client to answer the outstanding server offer
+// before retrying its own offer on the same transport.
+var ErrOfferCollision = errors.New("webrtc negotiation collision")
+
 // renegState tracks per-peer renegotiation scheduling (debounce + rate limit
 // + unanswered-offer tolerance).
 type renegState struct {

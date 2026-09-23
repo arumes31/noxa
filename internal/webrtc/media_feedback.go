@@ -1,6 +1,8 @@
 package webrtc
 
 import (
+	"strings"
+
 	"github.com/pion/interceptor"
 	"github.com/pion/interceptor/pkg/cc"
 	"github.com/pion/rtcp"
@@ -15,6 +17,12 @@ type mediaBandwidthEstimator struct {
 }
 
 func (e *mediaBandwidthEstimator) AddStream(info *interceptor.StreamInfo, writer interceptor.RTPWriter) interceptor.RTPWriter {
+	// Voice has a separate, unpaced lane. Its sparse traffic cannot measure
+	// the capacity of the paced video lane, especially before viewing starts.
+	if strings.EqualFold(info.MimeType, "audio/opus") {
+		e.pacer.AddStream(info.SSRC, writer)
+		return e.pacer
+	}
 	for _, extension := range info.RTPHeaderExtensions {
 		if extension.URI == sdp.TransportCCURI && extension.ID > 0 && extension.ID < 256 {
 			return e.BandwidthEstimator.AddStream(info, writer)

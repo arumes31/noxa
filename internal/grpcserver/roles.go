@@ -133,7 +133,7 @@ func roleChangeFromProto(req *noxav1.ChangeRolesRequest) authorization.RoleChang
 		RoleID: req.GetRoleId(), RoleIDs: slices.Clone(req.GetRoleIds()), UserID: req.GetUserId(),
 		Role: authorization.Role{
 			ID: r.GetId(), Name: r.GetName(), Position: int(r.GetPosition()),
-			Color: r.GetColor(), Icon: r.GetIcon(), Hoist: r.GetHoist(),
+			Color: r.GetColor(), Icon: r.GetIcon(), Hoist: r.GetHoist(), Mentionable: r.GetMentionable(),
 		},
 		Channel: authorization.ChannelPolicy{
 			ChannelID: ch.GetChannelId(), ParentID: ch.GetParentId(), Synced: ch.GetSynced(),

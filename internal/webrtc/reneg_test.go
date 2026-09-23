@@ -81,6 +81,44 @@ func TestClientReofferPreservesMediaTransport(t *testing.T) {
 	}
 }
 
+func TestOfferCollisionPreservesOutstandingServerOffer(t *testing.T) {
+	v := runtimeVoice(t)
+	client := newClientPC(t)
+	establishVoiceSession(t, v, client, "collision")
+	peer := v.engine.PeerConnection("collision")
+	serverOffer, err := peer.CreateOffer()
+	if err != nil {
+		t.Fatal(err)
+	}
+	clientOffer, err := client.CreateOffer(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := v.HandleOffer("collision", clientOffer.SDP, nil); !errors.Is(err, ErrOfferCollision) {
+		t.Fatalf("collision = %v", err)
+	}
+	if peer.pc.SignalingState() != webrtc.SignalingStateHaveLocalOffer {
+		t.Fatal("collision discarded server offer")
+	}
+	if err := client.SetRemoteDescription(webrtc.SessionDescription{Type: webrtc.SDPTypeOffer, SDP: serverOffer}); err != nil {
+		t.Fatal(err)
+	}
+	answer, err := client.CreateAnswer(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := client.SetLocalDescription(answer); err != nil {
+		t.Fatal(err)
+	}
+	if err := peer.HandleAnswer(answer.SDP); err != nil {
+		t.Fatal(err)
+	}
+	establishVoiceSession(t, v, client, "collision")
+	if v.engine.PeerConnection("collision") != peer {
+		t.Fatal("collision replaced transport")
+	}
+}
+
 func TestPartiallyAppliedReofferRequiresReconnect(t *testing.T) {
 	v := runtimeVoice(t)
 	client := newClientPC(t)

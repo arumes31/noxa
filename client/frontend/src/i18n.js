@@ -18,8 +18,16 @@ import { auditEnglish, auditGerman } from "./audit-messages.js";
 
 import { quickWinEnglish, quickWinGerman } from "./quick-win-messages.js";
 import { uiPolishEnglish, uiPolishGerman } from "./ui-polish-messages.js";
+import { streamEnglish, streamGerman } from "./stream-messages.js";
+import { chatEnglish, chatGerman } from "./chat-messages.js";
+import { conversationEnglish, conversationGerman } from "./conversation-messages.js";
+import { callEnglish, callGerman } from "./call-messages.js";
 
 const en = {
+    ...callEnglish,
+    ...conversationEnglish,
+    ...chatEnglish,
+    ...streamEnglish,
     ...uiPolishEnglish,
     ...auditEnglish,
     ...roleEnglish,
@@ -86,6 +94,10 @@ const en = {
 };
 
 const de = {
+    ...callGerman,
+    ...conversationGerman,
+    ...chatGerman,
+    ...streamGerman,
     ...uiPolishGerman,
     ...auditGerman,
     ...roleGerman,

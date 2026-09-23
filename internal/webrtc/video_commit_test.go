@@ -186,9 +186,14 @@ func TestCommitVideoLimitsGatesPeersAndRejectsEarlierInspection(t *testing.T) {
 		peer <- p
 	}()
 	waitPendingVideoWriter(t, &v.engine.mu)
+	// Busy policy commits drop packets immediately; they must never reach
+	// the recording writer before or after the commit.
 	select {
-	case <-forwarded:
-		t.Fatal("old packet passed the persistence gate")
+	case sent := <-forwarded:
+		if sent != 0 || w.count() != 0 {
+			t.Fatal("old packet passed the persistence gate")
+		}
+		forwarded <- sent
 	case <-peer:
 		t.Fatal("peer created during persistence")
 	case <-time.After(10 * time.Millisecond):

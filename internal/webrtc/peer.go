@@ -107,6 +107,9 @@ func (w *PeerConnectionWrapper) HandleOffer(sdp string) (string, error) {
 func (w *PeerConnectionWrapper) handleOffer(sdp string, bounds *VideoBounds) (result string, resultErr error) {
 	w.signalMu.Lock()
 	defer w.signalMu.Unlock()
+	if w.pc.SignalingState() == webrtc.SignalingStateHaveLocalOffer {
+		return "", ErrOfferCollision
+	}
 	defer func() {
 		// Pion cannot roll back a partially applied remote offer. Glare leaves
 		// have-local-offer intact and can be retried after its answer instead.

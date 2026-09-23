@@ -189,6 +189,11 @@ func (s *channelCapture) stop() {
 			pending.cancel()
 		}
 		if active != nil {
+			// life.Lock above drained committed writes. Empty inputs have no
+			// output to finalize, even if their worker is still in startup.
+			if active.audioTap.lastSource.Load() == 0 && active.videoTap.tap.lastSource.Load() == 0 {
+				active.discardEmpty.Store(true)
+			}
 			active.requestStop()
 		}
 	}
@@ -389,7 +394,14 @@ func (s *channelCapture) run(stopStartupCancellation func() bool) {
 }
 
 func (s *channelCapture) writeManifest() (retErr error) {
-	raw, err := json.MarshalIndent(s.manifest, "", "  ")
+	manifest := s.manifest
+	manifest.Tracks = make([]*captureTrack, 0, len(s.manifest.Tracks))
+	for _, track := range s.manifest.Tracks {
+		if track.File != "" {
+			manifest.Tracks = append(manifest.Tracks, track)
+		}
+	}
+	raw, err := json.MarshalIndent(manifest, "", "  ")
 	if err != nil {
 		return err
 	}
@@ -531,6 +543,11 @@ func (s *channelCapture) requestKeyframe(child *captureChild) {
 	}
 }
 func (s *channelCapture) finishChild(child *captureChild) error {
+	// No media was committed before startup ended or a keyframe arrived.
+	// There is no container to finalize; reap the empty process and omit it.
+	if !child.started {
+		child.session.discardEmpty.Store(true)
+	}
 	err := s.owner.processes.stopSession(child.session)
 	if err != nil {
 		s.stop()
@@ -542,5 +559,8 @@ func (s *channelCapture) finishChild(child *captureChild) error {
 	delete(s.ownedIDs, child.id)
 	s.ownedMu.Unlock()
 	child.track.EndMS = child.lastSeen.Sub(s.started).Milliseconds()
+	if !child.started && err == nil {
+		child.track.File = ""
+	}
 	return err
 }

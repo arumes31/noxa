@@ -49,12 +49,16 @@ test.beforeEach(async ({ page }) => {
             if (window.__media.delayOffer) await new Promise(resolve => { window.__media.finishOffer = resolve; });
             return "answer";
         },
-            SetScreenShareForTab: async tab => tab === "media-tab" ? "" : "wrong tab",
-            SetScreenShareQualityForTab: async (tab, active, height) => {
+            VideoStreamControlForTab: async (tab, msg) => {
                 if (tab !== "media-tab") throw new Error("wrong tab");
-                window.__media.shareControl = [tab, active, height];
-                if (window.__media.delayShareControl) return await new Promise(resolve => { window.__media.finishShareControl = resolve; });
-                return "";
+                if (msg.action === "publish" && msg.active && msg.slot === "screen") {
+                    window.__media.shareControl = [tab, msg.active];
+                    if (window.__media.delayShareControl) {
+                        const error = await new Promise(resolve => { window.__media.finishShareControl = resolve; });
+                        if (error) throw new Error(error);
+                    }
+                }
+                return { ...msg, generation: msg.generation === "0" ? "1" : msg.generation, streams: [] };
             },
             SetVideoQualityForTab: async (tab, quality) => {
                 if (tab !== "media-tab") throw new Error("wrong tab");
@@ -75,6 +79,78 @@ test.beforeEach(async ({ page }) => {
         (await import("/src/modal.js")).initModalSystem();
         document.getElementById("voice-screen").onclick = () => window.__media.video.shareToggle();
     });
+});
+
+test("repeated screen shares reuse senders and declare shared audio after every restart", async ({ page }) => {
+    await page.evaluate(() => {
+        window.__media.audioContext = new AudioContext();
+        Object.defineProperty(navigator.mediaDevices, "getDisplayMedia", { configurable: true, value: async () => {
+            const video = document.createElement("canvas").captureStream(1).getVideoTracks()[0];
+            const audio = window.__media.audioContext.createMediaStreamDestination().stream.getAudioTracks()[0];
+            return new MediaStream([video, audio]);
+        } });
+    });
+    for (let i = 0; i < 3; i++) {
+        await page.locator("#voice-screen").click();
+        await page.locator(".sh-audio").check();
+        await page.getByRole("dialog").getByRole("button", { name: "Start sharing", exact: true }).click();
+        await expect.poll(() => page.evaluate(() => !!window.__noxa.state.screenSharing)).toBe(true);
+        expect(await page.evaluate(() => window.__media.offers.at(-1).map(t => t.slot).sort())).toEqual(["cam", "screen", "screenaudio"]);
+        expect(await page.evaluate(() => window.__noxa.state.pc.getTransceivers().length)).toBe(3);
+        await page.locator("#voice-screen").click();
+        await page.getByRole("dialog").getByRole("button", { name: "Stop sharing", exact: true }).click();
+        await expect.poll(() => page.evaluate(() => !!window.__noxa.state.shareStopping)).toBe(false);
+    }
+    await page.evaluate(() => window.__media.audioContext.close());
+});
+
+test("slot declarations preserve negotiated MSID after replacing a real browser sender", async ({ page }) => {
+    const result = await page.evaluate(async () => {
+        const pc = new RTCPeerConnection();
+        const capture = () => document.createElement("canvas").captureStream(1);
+        const first = capture(), next = capture();
+        const transceiver = pc.addTransceiver(first.getVideoTracks()[0], { direction: "sendonly", streams: [first] });
+        await pc.setLocalDescription(await pc.createOffer());
+        await transceiver.sender.replaceTrack(next.getVideoTracks()[0]);
+        window.__noxa.state.pc = pc;
+        window.__noxa.state.shareVideoTransceiver = transceiver;
+        const sdp = (await pc.createOffer()).sdp;
+        const slots = window.__media.video.trackSlots(sdp);
+        const original = first.getVideoTracks()[0].id;
+        const replacement = next.getVideoTracks()[0].id;
+        pc.close(); first.getTracks().forEach(t => t.stop()); next.getTracks().forEach(t => t.stop());
+        return { slots, original, replacement };
+    });
+    expect(result.slots).toContainEqual({ track_id: result.original, slot: "screen" });
+    expect(result.slots.some(s => s.track_id === result.replacement)).toBe(false);
+});
+
+test("offer collision answers the pending server offer before retrying the same capture", async ({ page }) => {
+    const result = await page.evaluate(async () => {
+        const video = window.__media.video, pc = window.__noxa.state.pc, calls = [];
+        const identity = "a=ice-ufrag:existing\r\na=ice-pwd:existing-password\r\n";
+        pc.remoteDescription = { sdp: identity };
+        pc.createAnswer = async () => ({ type: "answer", sdp: "local-answer" });
+        pc.setLocalDescription = async description => { calls.push(description.type === "offer" ? "local-offer" : description.type); };
+        pc.setRemoteDescription = async description => { calls.push(`remote-${description.type}`); };
+        let attempt = 0;
+        window.go.main.App.WebRTCOfferForTab = async () => {
+            calls.push("offer-write");
+            if (++attempt === 1) {
+                window.__media.pendingAnswer = video.answerRemoteOffer(pc, 1, identity);
+                throw new Error("webrtc negotiation collision");
+            }
+            return "remote-answer";
+        };
+        window.go.main.App.WebRTCAnswerForTab = async () => { calls.push("answer-write"); };
+        let error = null;
+        try { await video.renegotiate(pc); } catch (e) { error = String(e); }
+        await window.__media.pendingAnswer;
+        return { calls, error, capture: window.__media.camera.readyState };
+    });
+    expect(result.error).toBeNull();
+    expect(result.capture).toBe("live");
+    expect(result.calls).toEqual(["local-offer", "offer-write", "rollback", "remote-offer", "answer", "answer-write", "local-offer", "offer-write", "remote-answer"]);
 });
 
 test("server limits constrain screen capture and divide the budget with the camera", async ({ page }) => {

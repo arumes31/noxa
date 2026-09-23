@@ -6,6 +6,7 @@ import { pickIcon } from "./image-tools.js";
 import { closeDialog, isCurrentServerDialog, mountServerDialog } from "./modal.js";
 import { t } from "./i18n.js";
 import { roleChip } from "./role-presentation.js";
+import { startPrivateCall } from "./private-calls.js";
 
 const V = () => window.__noxa;
 
@@ -597,6 +598,12 @@ function openChannelMenu(x, y, channel) {
     menuEl.style.left = Math.min(x, window.innerWidth - 240) + "px";
     menuEl.style.top = Math.min(y, window.innerHeight - 260) + "px";
     menuEl.onclick = (e) => e.stopPropagation();
+    if (client.unique_id && client.client_id !== V().state.myClientID) {
+        const call = document.createElement("button");
+        call.type = "button"; call.className = "ctx-action"; call.textContent = t("call.start");
+        call.onclick = () => { closeMenu(); void startPrivateCall(client.unique_id); };
+        menuEl.append(call);
+    }
     menuEl.querySelector('[data-act="open-chat"]').onclick = () => {
         closeMenu();
         window.__noxaChat?.openChannelTab?.(channel.ChannelID);

@@ -27,6 +27,9 @@ func newArrivalGroup(a cc.Acknowledgment) arrivalGroup {
 func (g *arrivalGroup) add(a cc.Acknowledgment) {
 	g.packets = append(g.packets, a)
 	g.arrival = a.Arrival
+	if a.Departure.After(g.departure) {
+		g.departure = a.Departure
+	}
 }
 
 func (g arrivalGroup) String() string {

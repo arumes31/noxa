@@ -120,7 +120,7 @@ func roleStateToProto(state netproto.RoleState) *noxav1.GetRoleStateResponse {
 	p := state.Policy
 	policy := &noxav1.RolePolicySnapshot{Revision: p.Revision, OwnerId: p.OwnerID, EveryoneId: p.EveryoneID, DefaultMemberRoleId: p.DefaultMemberRoleID}
 	for _, r := range p.Roles {
-		policy.Roles = append(policy.Roles, &noxav1.RoleDefinition{Id: r.ID, Name: r.Name, Position: int32(r.Position), Color: r.Color, Icon: r.Icon, Hoist: r.Hoist, Permissions: capabilitiesToProto(r.Permissions)})
+		policy.Roles = append(policy.Roles, &noxav1.RoleDefinition{Id: r.ID, Name: r.Name, Position: int32(r.Position), Color: r.Color, Icon: r.Icon, Hoist: r.Hoist, Mentionable: r.Mentionable, Permissions: capabilitiesToProto(r.Permissions)})
 	}
 	for _, m := range p.Members {
 		policy.Members = append(policy.Members, &noxav1.RoleAssignment{UserId: m.UserID, RoleIds: slices.Clone(m.RoleIDs)})

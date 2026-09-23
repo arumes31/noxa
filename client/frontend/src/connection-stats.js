@@ -2,6 +2,26 @@
 // counted again. See https://www.w3.org/TR/webrtc-stats/#rtpstatshierarchy.
 export const measured = (value) => Number.isFinite(value) && value >= 0;
 
+// Report what this runtime actually used, independently for each direction.
+// Implementation names and the efficiency hint are not proof of GPU execution.
+export function summarizeVideoProcessing(report) {
+    const rows = report ? [...report.values()] : [];
+    const codecs = new Map(rows.filter((row) => row.type === "codec").map((row) => [row.id, row]));
+    const text = (value) => typeof value === "string" && value.trim() ? value.trim() : null;
+    const collect = (type, frames, implementation, efficiency) => rows
+        .filter((row) => row.type === type && (row.kind || row.mediaType) === "video" &&
+            row.active !== false && measured(row[frames]) && row[frames] > 0)
+        .map((row) => ({
+            codec: text(codecs.get(row.codecId)?.mimeType)?.replace(/^video\//i, "") || null,
+            implementation: text(row[implementation]),
+            powerEfficient: typeof row[efficiency] === "boolean" ? row[efficiency] : null,
+        }));
+    return {
+        encoders: collect("outbound-rtp", "framesEncoded", "encoderImplementation", "powerEfficientEncoder"),
+        decoders: collect("inbound-rtp", "framesDecoded", "decoderImplementation", "powerEfficientDecoder"),
+    };
+}
+
 export function formatBytes(value) {
     if (!measured(value)) return "—";
     const units = ["B", "KiB", "MiB", "GiB", "TiB"];

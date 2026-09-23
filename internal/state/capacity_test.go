@@ -23,7 +23,8 @@ func TestConcurrentCapacityReservationPreservesRejectedMembership(t *testing.T) 
 	}
 	workers.Wait()
 	first, second := <-results, <-results
-	if !((first == nil && errors.Is(second, ErrChannelFull)) || (second == nil && errors.Is(first, ErrChannelFull))) {
+	accepted := first == nil && errors.Is(second, ErrChannelFull) || second == nil && errors.Is(first, ErrChannelFull)
+	if !accepted {
 		t.Fatalf("capacity results: %v / %v", first, second)
 	}
 	if len(m.ChannelMembers(1)) != 1 || len(m.ChannelMembers(2)) != 1 {

@@ -4,6 +4,7 @@
 // the shared namespace (window.__noxa) populated by main.js.
 import { GridCompositor } from "./grid-compositor.js";
 import { captureMediaScope, mediaScopeIsCurrent } from "./media-controls.js";
+import { startPublication, stopPublication } from "./stream-publication.js";
 
 import { isCurrentServerDialog, mountServerDialog } from "./modal.js";
 import { setSafeImage } from "./safe-media.js";
@@ -68,6 +69,10 @@ let lastSentQuality = "";
 let qualityRequest = null;
 let idleOverride = false; // (342) window idle: force low without losing the pref
 let cpuPressure = false;
+let receiveCpuPressure = false;
+let sendCpuPressure = false;
+let cpuRecoverySince = null;
+let statsPollRequest = null;
 let autoNetworkQuality = "high";
 let statsTimer = null;
 let compositeTimer = null;
@@ -82,7 +87,7 @@ function gridEl() { return document.getElementById("video-grid"); }
 // videoTrackAdded registers (or re-registers) one publisher video slot as a
 // grid tile. trackID follows the slot contract above, so a publisher sending
 // camera and screen at once gets one tile per slot (73).
-export function videoTrackAdded(trackID, stream, publisher) {
+export function videoTrackAdded(trackID, stream, publisher, watchControls) {
     const key = String(trackID);
     const parsed = parseTrackID(key);
     const clid = String(publisher?.client_id || parsed.clientID);
@@ -156,6 +161,8 @@ export function videoTrackAdded(trackID, stream, publisher) {
         gridEl().appendChild(el);
     }
     t.clientID = clid;
+    t.watchControls = watchControls || null;
+    if (watchControls) t.el.append(watchControls);
     t.el.dataset.clid = clid;
     // (61) select by track id and render from a private stream, so a tile can
     // never follow another slot or publisher even if the ontrack stream ever
@@ -187,6 +194,7 @@ export function videoTrackAdded(trackID, stream, publisher) {
     applyTileIdentity(t);
     layoutGrid();
     startStatsPoll();
+    return t.el;
 }
 
 // videoTrackRemoved drops one slot's tile (track ended / publisher left).
@@ -222,6 +230,11 @@ export function videoRefreshNames() {
 // clearVideoGrid removes all tiles (voice teardown).
 export function clearVideoGrid() {
     qualityRequest = null;
+    statsPollRequest = null;
+    cpuPressure = false;
+    receiveCpuPressure = false;
+    sendCpuPressure = false;
+    cpuRecoverySince = null;
     for (const key of [...tiles.keys()]) videoTrackRemoved(key);
     focusedID = null;
     // the next session starts from the server's default layer, so a stale
@@ -265,17 +278,8 @@ function applyTileIdentity(t) {
     t.el.classList.toggle("speaking", !!(c && c.is_speaking));
 }
 
-// tileIsScreen reports whether a tile shows a shared surface. A publisher that
-// declares the "screen" slot has a dedicated tile for it, so its default tile
-// is the camera. One that does not publishes the share on the default slot
-// instead, where the screenshare_changed flag is the only marker (73).
 function tileIsScreen(t) {
-    if (t.slot === SLOT_SCREEN) return true;
-    if (t.slot !== "" || !isSharing(t.clientID)) return false;
-    for (const other of tiles.values()) {
-        if (other.clientID === t.clientID && other.slot === SLOT_SCREEN) return false;
-    }
-    return true;
+    return t.slot === SLOT_SCREEN;
 }
 
 // A paused preview describes the frame actually presented, not the latest
@@ -297,7 +301,7 @@ function updatePreviewAge(tile) {
 function updateTileVideo(t) {
     const track = t.track;
     const live = !!track && track.readyState === "live" && track.enabled && !track.muted;
-    const active = live && t.flowing && (t.slot !== SLOT_SCREEN || isSharing(t.clientID));
+    const active = !!t.watchControls || live && t.flowing;
     t.el.classList.toggle("hidden", !active);
     t.el.classList.toggle("has-video", live && t.flowing && t.video.readyState >= 2);
     layoutGrid();
@@ -347,7 +351,7 @@ export function initVideo() {
 // effectiveQuality maps the preference to a concrete layer. Auto heuristic:
 // focused view -> high, grid view -> mid, low-bandwidth mode -> low.
 function effectiveQuality() {
-    if (lowBandwidth || idleOverride || cpuPressure) return "low";
+    if (lowBandwidth || idleOverride || receiveCpuPressure) return "low";
     if (qualityPref !== "auto") return qualityPref;
     const viewQuality = focusedID ? "high" : "mid";
     const rank = { low: 0, mid: 1, high: 2 };
@@ -521,15 +525,24 @@ const STALL_POLLS = 2;
 async function refreshBadges() {
     for (const tile of tiles.values()) updatePreviewAge(tile);
     const { state } = V();
-    if (!state.pc || tiles.size === 0) return;
+    if (!state.pc || tiles.size === 0 || statsPollRequest) return;
+    const request = { pc: state.pc, scope: captureMediaScope() };
+    statsPollRequest = request;
+    const current = () => statsPollRequest === request && state.pc === request.pc && mediaScopeIsCurrent(request.scope);
     try {
-        const stats = await state.pc.getStats();
+        const stats = await request.pc.getStats();
+        if (!current()) return;
+        const cpu = await window.go.main.App.SystemCPUPercent();
+        if (!current()) return;
         const byTrack = new Map(); // trackIdentifier -> {w, frames}
+        const decoders = [], encoders = [];
         let availableIncomingBitrate = 0;
         stats.forEach((r) => {
             if (r.type === "inbound-rtp" && (r.kind === "video" || r.mediaType === "video")) {
                 byTrack.set(r.trackIdentifier, { w: r.frameWidth || 0, frames: r.framesDecoded || 0 });
+                if (r.framesDecoded > 0) decoders.push(r);
             }
+            if (r.type === "outbound-rtp" && r.kind === "video" && r.active !== false && r.framesEncoded > 0) encoders.push(r);
             if (r.type === "candidate-pair" && (r.nominated || r.selected) && r.state === "succeeded") {
                 availableIncomingBitrate = Math.max(availableIncomingBitrate, r.availableIncomingBitrate || 0);
             }
@@ -541,13 +554,43 @@ async function refreshBadges() {
                 pushQuality();
             }
         }
-        const cpu = await window.go.main.App.SystemCPUPercent();
-        const nextPressure = cpu >= 85;
-        if (nextPressure !== cpuPressure) {
-            cpuPressure = nextPressure;
-            V().sysMsg(nextPressure ? `CPU ${cpu.toFixed(0)}% — reducing video resolution` : "CPU recovered — restoring video resolution");
+        // Restore only after sustained headroom. A single below-threshold
+        // reading must not trigger another simulcast/keyframe switch.
+        let nextPressure = cpuPressure;
+        if (!Number.isFinite(cpu) || cpu < 0 || cpu > 100) {
+            cpuRecoverySince = null;
+        } else if (cpu >= 85) {
+            nextPressure = true;
+            cpuRecoverySince = null;
+        } else if (cpuPressure && cpu < 70) {
+            cpuRecoverySince ??= performance.now();
+            if (performance.now() - cpuRecoverySince >= 15000) {
+                nextPressure = false;
+                cpuRecoverySince = null;
+            }
+        } else {
+            cpuRecoverySince = null;
+        }
+        cpuPressure = nextPressure;
+        // Honor the runtime's power-efficient path (normally hardware-backed)
+        // instead of reacting to other applications' CPU use. Missing stats
+        // retain the software fallback; this flag is not proof of a GPU codec.
+        const nextReceive = cpuPressure && !(decoders.length && decoders.every(r => r.powerEfficientDecoder === true));
+        const publishingVideo = encoders.length > 0 || request.pc.getSenders().some(sender => sender.track?.kind === "video" && sender.track.readyState !== "ended");
+        const nextSend = cpuPressure && publishingVideo && !(encoders.length && encoders.every(r => r.powerEfficientEncoder === true));
+        if (nextReceive !== receiveCpuPressure || nextSend !== sendCpuPressure) {
+            const hadPressure = receiveCpuPressure || sendCpuPressure;
+            if ((nextReceive || nextSend) !== hadPressure) {
+                V().sysMsg(nextReceive || nextSend ? `CPU ${cpu.toFixed(0)}% — reducing software video resolution` : "Video processing recovered — restoring resolution");
+            }
+        }
+        if (nextReceive !== receiveCpuPressure) {
+            receiveCpuPressure = nextReceive;
             lastSentQuality = "";
             pushQuality();
+        }
+        if (nextSend !== sendCpuPressure) {
+            sendCpuPressure = nextSend;
             applySendCaps();
         }
         for (const t of tiles.values()) {
@@ -578,13 +621,8 @@ async function refreshBadges() {
             t.badgeEl.classList.remove("hidden");
             t.badgeEl.textContent = w >= 1280 ? "HD" : w >= 640 ? "MD" : "LD";
         }
-    } catch { /* stats unavailable */ }
-}
-
-// isSharing reports the publisher's screen-share flag from screenshare_changed.
-function isSharing(clientID) {
-    const c = V().state.clients.find((c) => String(c.client_id) === String(clientID));
-    return !!c?.sharing;
+    } catch { if (current()) cpuRecoverySince = null; }
+    finally { if (statsPollRequest === request) statsPollRequest = null; }
 }
 
 // ---------------------------------------------------------------------------
@@ -759,7 +797,7 @@ function applySendCaps(stillRelevant = () => true) {
             return { sender, parameters, encodings: parameters.encodings || [],
                 preset: sender === screenSender ? sharePresetBitrate || Infinity : Infinity };
         });
-        capVideoEncodings(sources, state.mediaLimits, lowBandwidth ? LOW_BW_BITRATE : cpuPressure ? 500000 : 0);
+        capVideoEncodings(sources, state.mediaLimits, lowBandwidth ? LOW_BW_BITRATE : sendCpuPressure ? 500000 : 0);
         for (const { sender, parameters, encodings } of sources) {
             if (!current()) return;
             if (encodings.length) await sender.setParameters(parameters);
@@ -907,7 +945,8 @@ async function startShare({ surface, preset, withAudio }) {
     const tabID = state.activeTabID;
     const peerConnection = state.pc;
     if (!peerConnection) return;
-    const current = () => state.serverGeneration === generation && state.activeTabID === tabID && state.pc === peerConnection;
+    const shareScope = captureMediaScope();
+    const current = () => mediaScopeIsCurrent(shareScope) && state.serverGeneration === generation && state.activeTabID === tabID && state.pc === peerConnection;
     let shareTransceiver = null;
     const discardDisplay = (stream) => {
         stream?.getTracks().forEach((track) => track.stop());
@@ -995,14 +1034,15 @@ async function startShare({ surface, preset, withAudio }) {
     state.shareStream = display;
     sharePresetBitrate = p.bitrate;
     if (peerConnection) {
-        // A fresh transceiver keeps the SDP track identity tied to this screen
-        // source. Replacing a camera track would retain its cached cam slot.
+        // The dedicated screen transceiver survives publication stops.
         try {
             await queuePeerNegotiation(peerConnection, async () => {
                 if (!current() || shareEnded) throw new DOMException("capture ended", "AbortError");
                 try {
                     if (!trackFitsVideoLimits(screenTrack, state.mediaLimits)) throw new Error(tLabel("voice.mediaDimensionsFailed"));
-                    shareTransceiver = peerConnection.addTransceiver(screenTrack, { direction: "sendonly", streams: [display] });
+                    shareTransceiver = state.shareVideoTransceiver;
+                    if (shareTransceiver) await shareTransceiver.sender.replaceTrack(screenTrack);
+                    else shareTransceiver = peerConnection.addTransceiver(screenTrack, { direction: "sendonly", streams: [display] });
                     state.shareVideoTransceiver = shareTransceiver;
                     await applySendCaps();
                     if (!current() || shareEnded) throw new DOMException("capture ended", "AbortError");
@@ -1071,6 +1111,7 @@ async function startShare({ surface, preset, withAudio }) {
             try {
                 state.shareAudioSender = state.shareAudioTransceiver.sender;
                 await state.shareAudioSender.replaceTrack(displayAudio);
+                await renegotiate(peerConnection, generation);
                 if (!current()) {
                     discardDisplay(display);
                     return;
@@ -1093,9 +1134,10 @@ async function startShare({ surface, preset, withAudio }) {
         return;
     }
     state.screenSharing = true;
-    const shareHeight = screenTrack.getSettings?.().height || video.height.ideal;
     let shareErr;
-    try { shareErr = await window.go.main.App.SetScreenShareQualityForTab(tabID, true, shareHeight); }
+    try { if (!await startPublication("screen", screenTrack, () => {
+        if (state.shareStream?.getVideoTracks()[0] === screenTrack) void doStopShare();
+    })) shareErr = "capture ended"; }
     catch (error) { shareErr = String(error); }
     if (!current()) {
         discardDisplay(display);
@@ -1292,10 +1334,8 @@ async function doStopShare() {
         state.shareAudioSender.replaceTrack(null).catch(() => {});
         state.shareAudioSender = null;
     }
-    state.shareAudioTransceiver?.stop();
-    state.shareAudioTransceiver = null;
-    state.shareVideoTransceiver?.stop();
-    state.shareVideoTransceiver = null;
+    const screenSender = state.shareVideoTransceiver?.sender;
+    if (screenSender) void screenSender.replaceTrack(null).catch(() => {});
     if (state.shareStream) {
         state.shareStream.getTracks().forEach((t) => t.stop());
         state.shareStream = null;
@@ -1305,8 +1345,7 @@ async function doStopShare() {
     applySendCaps();
     syncCameraButton();
     try {
-        const error = await window.go.main.App.SetScreenShareForTab(tabID, false);
-        if (error) throw new Error(error);
+        await stopPublication("screen");
         if (pc && current()) await renegotiate(pc, generation);
     } catch (error) {
         if (current()) V().sysMsg("stopping screen share failed: " + (error.message || error.name));
@@ -1380,6 +1419,7 @@ export async function cameraToggle() {
 
 async function stopCamera() {
     const { state } = V();
+    const scope = captureMediaScope();
     const cam = state.localStream?.getVideoTracks()[0] || null;
     cameraOff = true;
     if (cam) {
@@ -1387,9 +1427,11 @@ async function stopCamera() {
         state.localStream.removeTrack(cam);
     }
     const vs = videoSender();
-    if (vs) await vs.replaceTrack(null).catch(() => {});
+    if (vs) void vs.replaceTrack(null).catch(() => {});
     applySendCaps();
     syncCameraButton();
+    try { await stopPublication("cam", cam); }
+    catch (error) { if (mediaScopeIsCurrent(scope)) V().sysMsg(tLabel("streams.failed", { error: String(error) })); }
 }
 
 async function startCamera() {
@@ -1399,8 +1441,9 @@ async function startCamera() {
     const generation = state.serverGeneration;
     const tabID = state.activeTabID;
     const request = {};
+    const cameraScope = captureMediaScope();
     cameraRequest = request;
-    const current = () => cameraRequest === request && state.pc === pc &&
+    const current = () => mediaScopeIsCurrent(cameraScope) && cameraRequest === request && state.pc === pc &&
         state.localStream === localStream && state.serverGeneration === generation && state.activeTabID === tabID;
     syncCameraButton();
     let stream, sender, transceiver;
@@ -1448,6 +1491,9 @@ async function startCamera() {
             }
         });
         if (!current()) return;
+        if (!await startPublication("cam", cam, () => {
+            if (state.localStream?.getVideoTracks()[0] === cam) void stopCamera();
+        }) || !current()) return;
         cameraOff = false;
         cam.onended = () => { if (state.localStream === localStream) void stopCamera(); };
     } catch (error) {
@@ -1476,16 +1522,24 @@ async function startCamera() {
 // previous one, so it must be complete on EVERY offer — including the ICE
 // restart, which would otherwise tear the share's output track off every
 // subscriber exactly when the network is already unstable.
-export function trackSlots() {
+export function trackSlots(sdp) {
     const { state } = V();
     if (!state.pc) return [];
     const shareAudio = state.shareAudioSender?.track || null;
     const shareVideo = state.shareVideoTransceiver?.sender.track || null;
+    const negotiatedIDs = new Map();
+    for (const section of String(sdp || "").split(/(?=^m=)/m)) {
+        const mid = section.match(/^a=mid:([^\r\n]+)/m)?.[1];
+        const trackID = section.match(/^a=msid:[^\s]+ ([^\r\n\s]+)/m)?.[1];
+        if (mid && trackID) negotiatedIDs.set(mid, trackID);
+    }
     const out = [];
     for (const s of state.pc.getSenders()) {
         const t = s.track;
         if (!t) continue;
-        out.push({ track_id: t.id, slot: t === shareAudio ? SLOT_SCREEN_AUDIO : t === shareVideo ? SLOT_SCREEN : t.kind === "audio" ? "mic" : "cam" });
+        const transceiver = state.pc.getTransceivers().find(item => item.sender === s);
+        const trackID = negotiatedIDs.get(transceiver?.mid) || (negotiatedIDs.size === 0 ? t.id : "");
+        if (trackID) out.push({ track_id: trackID, slot: t === shareAudio ? SLOT_SCREEN_AUDIO : t === shareVideo ? SLOT_SCREEN : t.kind === "audio" ? "mic" : "cam" });
     }
     return out;
 }
@@ -1520,12 +1574,21 @@ function remoteICEIdentity(sdp) {
 
 // Ignore offers from a transport superseded by a reconnect or ICE restart.
 // Compare ICE credentials after any earlier local round finishes.
+const pendingRemoteOffers = new WeakMap();
 export function answerRemoteOffer(peerConnection, generation, offerSDP) {
     const tabID = V().state.activeTabID;
-    return queuePeerNegotiation(peerConnection, async () => {
+    const pending = { generation, tabID, offerSDP };
+    pendingRemoteOffers.set(peerConnection, pending);
+    return queuePeerNegotiation(peerConnection, () => applyPendingRemoteOffer(peerConnection, pending));
+}
+
+async function applyPendingRemoteOffer(peerConnection, pending) {
+        if (pendingRemoteOffers.get(peerConnection) !== pending) return false;
+        pendingRemoteOffers.delete(peerConnection);
+        const { generation, tabID, offerSDP } = pending;
         const current = () => V().state.pc === peerConnection && V().state.serverGeneration === generation && V().state.activeTabID === tabID;
         const identity = remoteICEIdentity(peerConnection.remoteDescription?.sdp);
-        if (!current() || !identity || identity !== remoteICEIdentity(offerSDP)) return;
+        if (!current() || !identity || identity !== remoteICEIdentity(offerSDP)) return false;
         await peerConnection.setRemoteDescription({ type: "offer", sdp: offerSDP });
         if (!current()) return;
         const answer = await peerConnection.createAnswer();
@@ -1533,7 +1596,7 @@ export function answerRemoteOffer(peerConnection, generation, offerSDP) {
         await peerConnection.setLocalDescription(answer);
         if (!current()) return;
         await window.go.main.App.WebRTCAnswerForTab(tabID, answer.sdp);
-    });
+        return current();
 }
 
 export function renegotiate(peerConnection = V().state.pc, generation = V().state.serverGeneration, offerOptions, stillRelevant = () => true) {
@@ -1547,18 +1610,30 @@ async function negotiateOffer(peerConnection, generation, offerOptions, stillRel
     const ensureCurrent = () => {
         if (!current()) throw new DOMException("server session changed", "AbortError");
     };
-    try {
+    for (let attempt = 0; ; attempt++) {
+      try {
         ensureCurrent();
         const offer = await peerConnection.createOffer(offerOptions);
         ensureCurrent();
         await peerConnection.setLocalDescription(offer);
         ensureCurrent();
-        const answerSDP = await window.go.main.App.WebRTCOfferForTab(tabID, offer.sdp, trackSlots());
+        const answerSDP = await window.go.main.App.WebRTCOfferForTab(tabID, offer.sdp, trackSlots(offer.sdp));
         ensureCurrent();
         await peerConnection.setRemoteDescription({ type: "answer", sdp: answerSDP });
         ensureCurrent();
-    } catch (e) {
+        return;
+      } catch (e) {
         await peerConnection?.setLocalDescription({ type: "rollback" }).catch(() => {});
-        throw e;
+        if (!current() || attempt >= 2 || !String(e).includes("webrtc negotiation collision")) throw e;
+        // The server's offer may still be crossing the native event bridge.
+        // Consume it under our queue ownership so its queued callback cannot
+        // deadlock this retry or apply the same offer twice.
+        for (let wait = 0; wait < 20 && current() && !pendingRemoteOffers.has(peerConnection); wait++) {
+            await new Promise(resolve => setTimeout(resolve, 25));
+        }
+        ensureCurrent();
+        const pending = pendingRemoteOffers.get(peerConnection);
+        if (!pending || !await applyPendingRemoteOffer(peerConnection, pending)) throw e;
+      }
     }
 }

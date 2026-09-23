@@ -197,6 +197,14 @@ func TestMessageTypeString(t *testing.T) {
 		"MediaLimitsChanged",
 		"MediaLimitsSet",
 		"MediaLimitsSaved",
+		"VideoStreamControl",
+		"VideoStreamResult",
+		"PollRequest",
+		"PollState",
+		"ConversationRequest",
+		"ConversationResult",
+		"CallRequest",
+		"CallResult",
 	}
 
 	for i, want := range names {

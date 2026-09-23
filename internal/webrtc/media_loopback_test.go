@@ -12,15 +12,14 @@ import (
 // Exercise the production Engine and Router over actual ICE/DTLS/SRTP.
 // Both automatic UDP sockets and the shared listener are covered.
 func TestMediaEgressLoopbackSockets(t *testing.T) {
-	for _, shared := range []bool{false, true} {
-		name := "automatic"
-		if shared {
-			name = "shared"
-		}
+	for _, name := range []string{"automatic", "shared", "loopback"} {
 		t.Run(name, func(t *testing.T) {
 			network := NetworkConfig{}
-			if shared {
+			if name == "shared" {
 				network.UDPAddr = "0.0.0.0:0"
+			} else if name == "loopback" {
+				network.UDPAddr = "127.0.0.1:0"
+				network.ExternalIPs = []string{"127.0.0.1"}
 			}
 			engine, err := NewWithNetwork(testLogger(), []string{"stun:127.0.0.1:9"}, false, network)
 			if err != nil {
@@ -51,6 +50,7 @@ func TestMediaEgressLoopbackSockets(t *testing.T) {
 				return write()
 			})
 			receiverSettings := pion.SettingEngine{}
+			receiverSettings.SetIncludeLoopbackCandidate(name == "loopback")
 			receiverSettings.SetInterfaceFilter(usableICEInterface)
 			receiverAPI := pion.NewAPI(pion.WithSettingEngine(receiverSettings))
 			receiver, err := receiverAPI.NewPeerConnection(pion.Configuration{})

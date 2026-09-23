@@ -92,6 +92,7 @@ export function renderRoleForm(host, model, changed) {
     icon.maxLength = 16;
     form.append(cosmetics);
     field(form, t("roles.hoist"), "checkbox", draft.hoist, (value) => { draft.hoist = value; changed(); });
+    if (!draft.id || draft.id !== snapshot.policy.everyone_id) field(form, t("roles.mentionable"), "checkbox", draft.mentionable, (value) => { draft.mentionable = value; changed(); });
     const search = field(form, t("roles.search"), "search", "", () => {});
     const list = roleElement("div", "role-capabilities");
     const capabilityName = (key) => snapshot.capabilities.find((c) => c.key === key)?.[currentLanguage()] || key;

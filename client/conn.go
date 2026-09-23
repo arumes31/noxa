@@ -108,10 +108,10 @@ type connManager struct {
 	certValidityTrusted bool
 
 	// The wire protocol has no request ID, so same-reply-type requests remain
-	// serialized. Newer servers attach Error.OriginType, letting an error for
+	// serialized. Servers attach Error.OriginType, letting an error for
 	// a fire-and-forget command stay global instead of failing this request.
-	// Typed replies are still protected by closing the exact transport on a
-	// timeout, so a late reply can never satisfy the next request.
+	// Timed-out background reads keep their reply slot until drained; other
+	// timeouts close the transport. Late replies cannot satisfy new requests.
 	requestGatesMu sync.Mutex
 	requestGates   map[netproto.MessageType]*sync.Mutex
 	pending        map[netproto.MessageType]pendingRequest
@@ -130,9 +130,10 @@ type connManager struct {
 
 	// The defaults keep an idle connected control channel alive while making a
 	// peer that stops responding fail in bounded time. Tests may shorten them.
-	heartbeatInterval time.Duration
-	readTimeout       time.Duration
-	writeTimeout      time.Duration
+	heartbeatInterval   time.Duration
+	readTimeout         time.Duration
+	writeTimeout        time.Duration
+	requestDrainTimeout time.Duration
 }
 
 type requestResult struct {
@@ -141,9 +142,11 @@ type requestResult struct {
 }
 
 type pendingRequest struct {
-	request netproto.MessageType
-	reply   netproto.MessageType
-	result  chan requestResult
+	request    netproto.MessageType
+	reply      netproto.MessageType
+	result     chan requestResult
+	abandoned  bool
+	drainTimer *time.Timer
 }
 
 const (
@@ -154,15 +157,16 @@ const (
 
 func newConnManager(wailsCtx context.Context) *connManager {
 	return &connManager{
-		sink:              wailsSink{ctx: wailsCtx},
-		pending:           make(map[netproto.MessageType]pendingRequest),
-		requestGates:      make(map[netproto.MessageType]*sync.Mutex),
-		heartbeatInterval: defaultHeartbeatInterval,
-		readTimeout:       defaultReadTimeout,
-		writeTimeout:      defaultWriteTimeout,
-		pubKeys:           newPubKeyCache(),
-		scopeKeys:         newScopeKeyStore(),
-		decryptSem:        make(chan struct{}, maxAsyncDecrypts),
+		sink:                wailsSink{ctx: wailsCtx},
+		pending:             make(map[netproto.MessageType]pendingRequest),
+		requestGates:        make(map[netproto.MessageType]*sync.Mutex),
+		heartbeatInterval:   defaultHeartbeatInterval,
+		readTimeout:         defaultReadTimeout,
+		writeTimeout:        defaultWriteTimeout,
+		requestDrainTimeout: 10 * time.Second,
+		pubKeys:             newPubKeyCache(),
+		scopeKeys:           newScopeKeyStore(),
+		decryptSem:          make(chan struct{}, maxAsyncDecrypts),
 	}
 }
 
@@ -525,6 +529,9 @@ func (m *connManager) detachLocked() (net.Conn, []chan requestResult, []net.Conn
 	conn := m.conn
 	waiters := make([]chan requestResult, 0, len(m.pending))
 	for _, pending := range m.pending {
+		if pending.drainTimer != nil {
+			pending.drainTimer.Stop()
+		}
 		waiters = append(waiters, pending.result)
 	}
 	clear(m.pending)
@@ -558,6 +565,10 @@ func (m *connManager) disconnect() {
 	m.mu.Lock()
 	conn, waiters, transferConns := m.detachLocked()
 	m.mu.Unlock()
+	m.finishDetach(conn, waiters, transferConns, false)
+}
+
+func (m *connManager) finishDetach(conn net.Conn, waiters []chan requestResult, transferConns []net.Conn, emitDisconnected bool) {
 	if m.pubKeys != nil {
 		m.pubKeys.clear()
 	}
@@ -566,6 +577,9 @@ func (m *connManager) disconnect() {
 	}
 	m.notifyWaiters(waiters, requestResult{err: net.ErrClosed})
 	closeTransfers(transferConns)
+	if emitDisconnected {
+		m.emit("disconnected", "")
+	}
 }
 
 // terminateConn is the single unexpected-termination owner. It detaches only
@@ -579,17 +593,7 @@ func (m *connManager) terminateConn(conn net.Conn, emitDisconnected bool) bool {
 	}
 	toClose, waiters, transferConns := m.detachLocked()
 	m.mu.Unlock()
-	if m.pubKeys != nil {
-		m.pubKeys.clear()
-	}
-	if toClose != nil {
-		_ = toClose.Close()
-	}
-	m.notifyWaiters(waiters, requestResult{err: net.ErrClosed})
-	closeTransfers(transferConns)
-	if emitDisconnected {
-		m.emit("disconnected", "")
-	}
+	m.finishDetach(toClose, waiters, transferConns, emitDisconnected)
 	return true
 }
 
@@ -773,11 +777,15 @@ func (m *connManager) request(send, reply netproto.MessageType, msg any, timeout
 	if m.pending == nil {
 		m.pending = make(map[netproto.MessageType]pendingRequest)
 	}
+	if _, exists := m.pending[reply]; exists {
+		m.mu.Unlock()
+		return nil, fmt.Errorf("previous request still pending for %s", reply)
+	}
 	m.pending[reply] = pendingRequest{request: send, reply: reply, result: ch}
 	m.mu.Unlock()
 	defer func() {
 		m.mu.Lock()
-		if pending, ok := m.pending[reply]; ok && pending.result == ch {
+		if pending, ok := m.pending[reply]; ok && pending.result == ch && !pending.abandoned {
 			delete(m.pending, reply)
 		}
 		m.mu.Unlock()
@@ -801,12 +809,55 @@ func (m *connManager) request(send, reply netproto.MessageType, msg any, timeout
 		}
 		return f, nil
 	case <-time.After(timeout):
-		// There is no typed response correlation on the legacy frame format.
-		// Closing this exact transport prevents its late response from being
-		// delivered to a later request that expects the same reply type.
-		m.terminateConn(conn, true)
+		if canDrainRequest(send) || isPollRead(send, msg) || isConversationRead(send, msg) || isPrivateCallRead(send, msg) {
+			m.abandonRequest(conn, reply, ch)
+		} else {
+			// Mutations may have succeeded without a reply. Disconnect until
+			// their state can be reconciled, instead of leaving unknown state.
+			m.terminateConn(conn, true)
+		}
 		return nil, fmt.Errorf("timeout waiting for %s", reply)
 	}
+}
+
+// Only background reads with no state to reconcile may outlive their caller.
+// Keep this explicit: queries such as pre-key retrieval can consume state.
+func canDrainRequest(send netproto.MessageType) bool {
+	switch send {
+	case netproto.MsgAvatarGet, netproto.MsgClientInfoQuery, netproto.MsgServerInfoQuery,
+		netproto.MsgServerIconGet, netproto.MsgServerBannerGet, netproto.MsgChannelIconGet,
+		netproto.MsgEmojiGet:
+		return true
+	default:
+		return false
+	}
+}
+
+func (m *connManager) abandonRequest(conn net.Conn, reply netproto.MessageType, result chan requestResult) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	pending, ok := m.pending[reply]
+	if m.conn != conn || !ok || pending.result != result {
+		return // A reply or disconnect already claimed this request.
+	}
+	pending.abandoned = true
+	delay := m.requestDrainTimeout
+	if delay <= 0 {
+		delay = 10 * time.Second
+	}
+	pending.drainTimer = time.AfterFunc(delay, func() {
+		m.mu.Lock()
+		current, exists := m.pending[reply]
+		if m.conn != conn || !exists || current.result != result || !current.abandoned {
+			m.mu.Unlock()
+			return
+		}
+		// Claim expiration and detach atomically with respect to reply delivery.
+		toClose, waiters, transfers := m.detachLocked()
+		m.mu.Unlock()
+		m.finishDetach(toClose, waiters, transfers, true)
+	})
+	m.pending[reply] = pending
 }
 
 // requestGate serializes only requests that expect the same reply type. The
@@ -914,8 +965,13 @@ func (m *connManager) dispatchAccepted(conn net.Conn, epoch uint64, checkSource 
 		return
 	}
 	var waiter chan requestResult
+	var abandoned bool
 	if mt != netproto.MsgError {
 		if pending, ok := m.pending[mt]; ok {
+			if pending.drainTimer != nil {
+				pending.drainTimer.Stop()
+			}
+			abandoned = pending.abandoned
 			delete(m.pending, mt)
 			waiter = pending.result
 		}
@@ -923,6 +979,10 @@ func (m *connManager) dispatchAccepted(conn net.Conn, epoch uint64, checkSource 
 		origin := netproto.MessageType(protocolErr.OriginType)
 		for reply, pending := range m.pending {
 			if pending.request == origin {
+				if pending.drainTimer != nil {
+					pending.drainTimer.Stop()
+				}
+				abandoned = pending.abandoned
 				delete(m.pending, reply)
 				waiter = pending.result
 				break
@@ -931,6 +991,9 @@ func (m *connManager) dispatchAccepted(conn net.Conn, epoch uint64, checkSource 
 	}
 	m.mu.Unlock()
 	m.teeFrame("in", f)
+	if abandoned {
+		return
+	}
 	if waiter != nil {
 		select {
 		case waiter <- requestResult{frame: f}:

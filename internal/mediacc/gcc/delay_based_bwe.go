@@ -7,8 +7,8 @@ import (
 	"sync"
 	"time"
 
-	"noxa/internal/mediacc/cc"
 	"github.com/pion/logging"
+	"noxa/internal/mediacc/cc"
 )
 
 // DelayStats contains some internal statistics of the delay based congestion
@@ -27,8 +27,7 @@ type DelayStats struct {
 type now func() time.Time
 
 type delayController struct {
-	ackPipe     chan<- []cc.Acknowledgment
-	ackRatePipe chan<- []cc.Acknowledgment
+	ackPipe chan<- []cc.Acknowledgment
 
 	*arrivalGroupAccumulator
 	*rateController
@@ -49,11 +48,9 @@ type delayControllerConfig struct {
 
 func newDelayController(delayConfig delayControllerConfig, loggerFactory logging.LoggerFactory) *delayController {
 	ackPipe := make(chan []cc.Acknowledgment)
-	ackRatePipe := make(chan []cc.Acknowledgment)
 
 	delayController := &delayController{
 		ackPipe:                 ackPipe,
-		ackRatePipe:             ackRatePipe,
 		arrivalGroupAccumulator: nil,
 		rateController:          nil,
 		onUpdateCallback:        nil,
@@ -71,20 +68,53 @@ func newDelayController(delayConfig delayControllerConfig, loggerFactory logging
 		},
 	)
 	delayController.rateController = rateController
-	overuseDetector := newOveruseDetector(newAdaptiveThreshold(), 10*time.Millisecond, rateController.onDelayStats)
-	slopeEstimator := newSlopeEstimator(newKalman(), overuseDetector.onDelayStats)
-	arrivalGroupAccumulator := newArrivalGroupAccumulator()
+	var latest DelayStats
+	var updated bool
+	var slopeEstimator *slopeEstimator
+	var arrivalGroupAccumulator *arrivalGroupAccumulator
+	resetTiming := func() {
+		detector := newOveruseDetector(newAdaptiveThreshold(), 10*time.Millisecond, func(ds DelayStats) {
+			latest, updated = ds, true
+		})
+		slopeEstimator = newSlopeEstimator(newTrendline(), detector.onDelayStats)
+		arrivalGroupAccumulator = newArrivalGroupAccumulator()
+	}
+	resetTiming()
 
 	rc := newRateCalculator(500 * time.Millisecond)
 
-	delayController.wg.Add(2)
+	delayController.wg.Add(1)
 	go func() {
 		defer delayController.wg.Done()
-		arrivalGroupAccumulator.run(ackPipe, slopeEstimator.onArrivalGroup)
-	}()
-	go func() {
-		defer delayController.wg.Done()
-		rc.run(ackRatePipe, rateController.onReceivedRate)
+		var lastFeedback time.Time
+		for acks := range ackPipe {
+			received := false
+			for _, ack := range acks {
+				if !ack.Arrival.IsZero() {
+					received = true
+					break
+				}
+			}
+			if !received {
+				continue
+			}
+			now := delayConfig.nowFn()
+			// Match WebRTC's two-second stream timeout: keep the current
+			// bitrate, but do not compare resumed packets with stale timing.
+			if !lastFeedback.IsZero() && now.Sub(lastFeedback) > 2*time.Second {
+				resetTiming()
+			}
+			lastFeedback = now
+			// Rate and delay must describe the same completed feedback report.
+			// A burst of acknowledgements supplies one rate-control decision,
+			// not repeated reductions against the previous report's throughput.
+			rc.add(acks, rateController.onReceivedRate)
+			updated = false
+			arrivalGroupAccumulator.add(acks, slopeEstimator.onArrivalGroup)
+			if updated {
+				rateController.onDelayStats(latest)
+			}
+		}
 	}()
 
 	return delayController
@@ -96,14 +126,12 @@ func (d *delayController) onUpdate(f func(DelayStats)) {
 
 func (d *delayController) updateDelayEstimate(acks []cc.Acknowledgment) {
 	d.ackPipe <- acks
-	d.ackRatePipe <- acks
 }
 
 func (d *delayController) Close() error {
 	defer d.wg.Wait()
 
 	close(d.ackPipe)
-	close(d.ackRatePipe)
 
 	return nil
 }

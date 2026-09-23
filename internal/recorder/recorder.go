@@ -35,6 +35,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/pion/rtcp"
 	"github.com/pion/rtp"
 	"go.uber.org/zap"
 
@@ -401,6 +402,7 @@ type Session struct {
 	processDone <-chan struct{}
 
 	stopping       atomic.Bool
+	discardEmpty   atomic.Bool
 	forcedStop     atomic.Bool
 	hardTimedOut   atomic.Bool
 	stopOnce       sync.Once
@@ -1528,7 +1530,11 @@ func (r *Recorder) finalize(s *Session) {
 			cleanupErrs = append(cleanupErrs, fmt.Errorf("removing sdp file: %w", err))
 		}
 		if s.root != nil {
-			if err := secureRecordingOutput(s.root, s.outputName); err != nil {
+			if s.discardEmpty.Load() {
+				if err := s.root.Remove(s.outputName); err != nil && !errors.Is(err, os.ErrNotExist) {
+					cleanupErrs = append(cleanupErrs, err)
+				}
+			} else if err := secureRecordingOutput(s.root, s.outputName); err != nil {
 				cleanupErrs = append(cleanupErrs, err)
 			}
 			if err := s.root.Close(); err != nil {
@@ -1595,6 +1601,12 @@ func (s *Session) requestStop() {
 	s.stopping.Store(true)
 	s.stopOnce.Do(func() {
 		s.unregister()
+		if s.discardEmpty.Load() {
+			s.abortTaps()
+			s.closeControl(false)
+			s.startKill()
+			return
+		}
 		s.closeTapsGracefully()
 		s.closeControl(true)
 	})
@@ -1644,6 +1656,14 @@ func (s *Session) closeControl(graceful bool) {
 				<-s.tapsDone
 				if _, err := io.WriteString(s.stdin, "q"); err != nil {
 					s.addCleanupError(fmt.Errorf("requesting ffmpeg quit: %w", err))
+				}
+				// The demux thread can still be waiting for UDP after stdin quit.
+				// End each drained RTP input so FFmpeg can join it and write trailers.
+				if s.audioTap != nil {
+					s.addCleanupError(s.audioTap.endInput())
+				}
+				if s.videoTap != nil {
+					s.addCleanupError(s.videoTap.tap.endInput())
 				}
 			}
 			if err := s.stdin.Close(); err != nil {
@@ -1744,7 +1764,12 @@ func (s *Session) result() error {
 	defer s.resultMu.RUnlock()
 	var waitErr error
 	if s.waitErr != nil {
-		waitErr = fmt.Errorf("ffmpeg exited: %w", s.waitErr)
+		var exitErr *exec.ExitError
+		killedEmpty := s.discardEmpty.Load() && errors.As(s.waitErr, &exitErr) &&
+			(exitErr.ExitCode() == -1 || runtime.GOOS == "windows" && exitErr.ExitCode() == 1)
+		if !killedEmpty {
+			waitErr = fmt.Errorf("ffmpeg exited: %w", s.waitErr)
+		}
 	}
 	return errors.Join(waitErr, s.killErr, s.tapCloseErr, s.cleanupErr)
 }
@@ -1820,8 +1845,9 @@ func freeUDPPort() (int, error) {
 // Tap implements webrtc.TrackWriter, forwarding RTP packets to the ffmpeg
 // process's UDP input.
 type Tap struct {
-	conn *net.UDPConn
-	addr *net.UDPAddr
+	conn       *net.UDPConn
+	addr       *net.UDPAddr
+	lastSource atomic.Uint64 // SSRC + 1; zero means no packet was sent.
 
 	closeOnce sync.Once
 	closeErr  error
@@ -1913,6 +1939,12 @@ func (b *BufferedTap) writeLoop() {
 				return
 			}
 			_, err := b.tap.conn.WriteToUDP(raw, b.tap.addr)
+			if err == nil {
+				var header rtp.Header
+				if _, parseErr := header.Unmarshal(raw); parseErr == nil {
+					b.tap.lastSource.Store(uint64(header.SSRC) + 1)
+				}
+			}
 			b.mu.Lock()
 			b.queued -= len(raw)
 			if err != nil {
@@ -2012,7 +2044,35 @@ func (t *Tap) WriteRTP(pkt *rtp.Packet) error {
 		return err
 	}
 	_, err = t.conn.WriteToUDP(raw, t.addr)
+	if err == nil {
+		t.lastSource.Store(uint64(pkt.SSRC) + 1)
+	}
 	return err
+}
+
+// endInput sends RTCP BYE after the RTP socket has closed and all writers have
+// drained. A separate bounded socket also works after an idle source stopped.
+func (t *Tap) endInput() error {
+	source := t.lastSource.Load()
+	if source == 0 {
+		return nil
+	}
+	// FFmpeg rejects packets shorter than an RTP header before checking RTCP.
+	// The reason pads this single-source BYE beyond that twelve-byte minimum.
+	packet, err := (&rtcp.Goodbye{Sources: []uint32{uint32(source - 1)}, Reason: "recording stopped"}).Marshal()
+	if err != nil {
+		return err
+	}
+	conn, err := net.DialUDP("udp", nil, &net.UDPAddr{IP: t.addr.IP, Port: t.addr.Port + 1})
+	if err != nil {
+		return fmt.Errorf("opening recorder RTCP input: %w", err)
+	}
+	deadlineErr := conn.SetWriteDeadline(time.Now().Add(25 * time.Millisecond))
+	if deadlineErr != nil {
+		return errors.Join(deadlineErr, conn.Close())
+	}
+	_, err = conn.Write(packet)
+	return errors.Join(err, conn.Close())
 }
 
 // Close releases the tap's socket.

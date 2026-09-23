@@ -53,7 +53,7 @@ func (b *roleWSBackend) WithIntegrationEvent(ctx context.Context, p auth.Integra
 func TestRoleWSUnavailableBackendDoesNotOpenLegacyStream(t *testing.T) {
 	bus := New(zap.NewNop())
 	t.Cleanup(bus.Close)
-	request := httptest.NewRequest(http.MethodGet, "http://localhost/events", nil)
+	request := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "http://localhost/events", nil)
 	request.SetBasicAuth("admin", "password")
 	recorder := httptest.NewRecorder()
 	HandlerWithRoleBackend(bus, nil, zap.NewNop(), nil, nil).ServeHTTP(recorder, request)

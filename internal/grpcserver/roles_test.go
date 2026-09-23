@@ -42,7 +42,7 @@ func TestRoleGRPCMutationAndClosedLegacySurfaces(t *testing.T) {
 	var denied atomic.Bool
 	want := authorization.RoleChange{
 		Kind: authorization.MemberRolesSet, ExpectedRevision: 7, RoleID: 42, RoleIDs: []int64{42, 43}, UserID: 99,
-		Role:    authorization.Role{ID: 42, Name: "Support", Position: 2, Color: "#123456", Icon: "S", Hoist: true, Permissions: []authorization.Capability{authorization.ViewChannel}},
+		Role:    authorization.Role{ID: 42, Name: "Support", Position: 2, Color: "#123456", Icon: "S", Hoist: true, Mentionable: true, Permissions: []authorization.Capability{authorization.ViewChannel}},
 		Channel: authorization.ChannelPolicy{ChannelID: 2, ParentID: 1, Synced: true, Overrides: []authorization.RoleOverride{{RoleID: 42, UserID: 99, Capability: authorization.ViewChannel, Effect: authorization.Deny}}},
 	}
 	b := &roleGRPCBackend{
@@ -73,7 +73,7 @@ func TestRoleGRPCMutationAndClosedLegacySurfaces(t *testing.T) {
 	c := noxav1.NewControlClient(conn)
 	req := &noxav1.ChangeRolesRequest{
 		Kind: string(want.Kind), ExpectedRevision: 7, RoleId: 42, RoleIds: []int64{42, 43}, UserId: 99,
-		Role:    &noxav1.RoleDefinition{Id: 42, Name: "Support", Position: 2, Color: "#123456", Icon: "S", Hoist: true, Permissions: []string{string(authorization.ViewChannel)}},
+		Role:    &noxav1.RoleDefinition{Id: 42, Name: "Support", Position: 2, Color: "#123456", Icon: "S", Hoist: true, Mentionable: true, Permissions: []string{string(authorization.ViewChannel)}},
 		Channel: &noxav1.ChannelRoleAccess{ChannelId: 2, ParentId: 1, Synced: true, Overrides: []*noxav1.ChannelRoleOverride{{RoleId: 42, UserId: 99, Capability: string(authorization.ViewChannel), Effect: "deny"}}},
 	}
 	ctx := roleAuthCtx(t, "integration", "pw")

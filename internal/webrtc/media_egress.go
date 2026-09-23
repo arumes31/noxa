@@ -17,11 +17,19 @@ const mediaTicketLifetime = time.Second
 // lease before entering Pion: the terminal interceptor checks again after all
 // buffering, without acquiring Authority recursively through a track lock.
 func (s *pubSlot) enqueueMedia(pkt *rtp.Packet, ticket mediaTicket) (bool, error) {
-	allowed := ticket.guard == nil
-	if ticket.guard != nil {
-		if err := ticket.guard(ticket.delivery, func() error { allowed = true; return nil }); err != nil {
+	allowed := false
+	admit := func() error { allowed = true; return nil }
+	switch {
+	case ticket.router != nil:
+		if err := ticket.router.mediaCommit(ticket.delivery, ticket.guard, ticket.videoRevision)(admit); err != nil {
 			return false, err
 		}
+	case ticket.guard != nil:
+		if err := ticket.guard(ticket.delivery, admit); err != nil {
+			return false, err
+		}
+	default:
+		allowed = true
 	}
 	if !allowed {
 		return false, nil
@@ -120,9 +128,9 @@ func (s *mediaEgressStream) write(header *rtp.Header, payload []byte, attrs inte
 	}
 	n := 0
 	write := func() error {
-		// Lock order: authority, member movement, video policy, stream, socket.
+		// Lock order: authority, member movement, video policy, watch, stream, socket.
 		// No router or track lock may be acquired while holding stream.mu.
-		if ticket.router != nil {
+		if ticket.router != nil && (ticket.delivery.Slot == SlotCam || ticket.delivery.Slot == SlotScreen) {
 			if !ticket.router.videoPolicyMu.TryRLock() {
 				return nil
 			}
@@ -131,16 +139,22 @@ func (s *mediaEgressStream) write(header *rtp.Header, payload []byte, attrs inte
 				return nil
 			}
 		}
-		s.mu.RLock()
-		defer s.mu.RUnlock()
-		if !s.active || s.tickets[id] != ticket || !time.Now().Before(ticket.expires) {
-			return nil
+		commit := func() error {
+			s.mu.RLock()
+			defer s.mu.RUnlock()
+			if !s.active || s.tickets[id] != ticket || !time.Now().Before(ticket.expires) {
+				return nil
+			}
+			out := *header
+			out.CSRC = ticket.csrc
+			var err error
+			n, err = writer.Write(&out, payload, attrs)
+			return err
 		}
-		out := *header
-		out.CSRC = ticket.csrc
-		var err error
-		n, err = writer.Write(&out, payload, attrs)
-		return err
+		if ticket.router != nil {
+			return ticket.router.withWhisperScope(ticket.delivery, func() error { return ticket.router.withWatch(ticket.delivery, commit) })
+		}
+		return commit()
 	}
 	if ticket.guard != nil {
 		err := ticket.guard(ticket.delivery, write)
@@ -185,28 +199,4 @@ func (t *guardedLocalTrack) Unbind(ctx webrtc.TrackLocalContext) error {
 	}
 	r.mu.Unlock()
 	return t.TrackLocalStaticRTP.Unbind(ctx)
-}
-
-type mediaEgressFactory struct{ registry *mediaEgressRegistry }
-
-func (f mediaEgressFactory) NewInterceptor(string) (interceptor.Interceptor, error) {
-	return &mediaEgressInterceptor{registry: f.registry}, nil
-}
-
-type mediaEgressInterceptor struct {
-	interceptor.NoOp
-	registry *mediaEgressRegistry
-}
-
-func (i *mediaEgressInterceptor) BindLocalStream(info *interceptor.StreamInfo, writer interceptor.RTPWriter) interceptor.RTPWriter {
-	id := info.ID
-	return interceptor.RTPWriterFunc(func(header *rtp.Header, payload []byte, attrs interceptor.Attributes) (int, error) {
-		i.registry.mu.Lock()
-		stream := i.registry.streams[id]
-		i.registry.mu.Unlock()
-		if stream == nil {
-			return 0, nil
-		}
-		return stream.write(header, payload, attrs, writer)
-	})
 }

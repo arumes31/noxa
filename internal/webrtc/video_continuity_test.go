@@ -80,6 +80,7 @@ func TestSubscriberSimulcastOutputContinuity(t *testing.T) {
 	attachFakePeer(t, e, r, "sub")
 	r.JoinChannel(1, "sub")
 	r.JoinChannel(1, "pub")
+	testVideoPublication(t, r, "pub", "sub", SlotCam)
 	registerVideoSource(r, "pub", SlotCam, "h", 10)
 	registerVideoSource(r, "pub", SlotCam, "f", 20)
 	output := pubTrackFor(r, "sub", "pub").video[SlotCam]
@@ -163,5 +164,28 @@ func TestVideoContinuitySwitch(t *testing.T) {
 	out, ok = stream.translate(continuityPacket(10, 2, 99000, 2, true), now.Add(time.Second/10))
 	if !ok || out.SequenceNumber != 3 || out.Payload[3] != 2 {
 		t.Fatalf("return switch: %+v", out)
+	}
+}
+
+func TestVideoContinuityWatchResume(t *testing.T) {
+	var stream videoContinuity
+	now := time.Now()
+	stream.beginEpoch()
+	if _, ok := stream.translate(continuityPacket(10, 99, 87000, 9, false), now); ok {
+		t.Fatal("first watch started without a keyframe")
+	}
+	if _, ok := stream.translate(continuityPacket(10, 100, 90000, 10, true), now); !ok {
+		t.Fatal("first watch rejected keyframe")
+	}
+	stream.beginEpoch()
+	if _, ok := stream.translate(continuityPacket(10, 999, 897000, 99, false), now.Add(time.Second)); ok {
+		t.Fatal("same-source resume accepted a delta frame")
+	}
+	out, ok := stream.translate(continuityPacket(10, 1000, 900000, 100, true), now.Add(time.Second))
+	if !ok || out.SequenceNumber != 101 || out.Timestamp != 180000 || out.Payload[3] != 11 {
+		t.Fatalf("resume lost output continuity: %+v", out)
+	}
+	if _, ok := stream.translate(continuityPacket(10, 998, 894000, 98, false), now); ok {
+		t.Fatal("old epoch packet accepted after resume")
 	}
 }

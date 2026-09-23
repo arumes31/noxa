@@ -26,7 +26,10 @@ type rateController struct {
 	init               bool
 	delayStats         DelayStats
 	target             int
+	pacedBitrate       int
 	lastUpdate         time.Time
+	lastDecrease       time.Time
+	lossLimitedOveruse time.Time
 	lastState          state
 	latestRTT          time.Duration
 	latestReceivedRate int
@@ -62,6 +65,7 @@ func newRateController(
 		init:                 false,
 		delayStats:           DelayStats{},
 		target:               initialTargetBitrate,
+		pacedBitrate:         initialTargetBitrate,
 		lastUpdate:           time.Time{},
 		lastState:            stateIncrease,
 		latestRTT:            0,
@@ -83,7 +87,10 @@ func (c *rateController) updateRTT(rtt time.Duration) {
 }
 
 func (c *rateController) onDelayStats(ds DelayStats) {
-	now := time.Now()
+	now := c.now()
+	if ds.Usage != usageOver {
+		c.lossLimitedOveruse = time.Time{}
+	}
 
 	if !c.init {
 		c.delayStats = ds
@@ -92,8 +99,9 @@ func (c *rateController) onDelayStats(ds DelayStats) {
 
 		return
 	}
+	nextState := c.delayStats.State.transition(ds.Usage)
 	c.delayStats = ds
-	c.delayStats.State = c.delayStats.State.transition(ds.Usage)
+	c.delayStats.State = nextState
 
 	if c.delayStats.State == stateHold {
 		return
@@ -161,21 +169,38 @@ func (c *rateController) increase(now time.Time) int {
 
 	// maximum increase to 1.5 * received rate
 	received := int(1.5 * float64(c.latestReceivedRate))
-	if rate > received && received > c.target {
-		return received
-	}
-
-	if rate < c.target {
-		return c.target
-	}
-
-	return rate
+	return max(c.target, min(rate, received))
 }
 
 func (c *rateController) decrease() int {
-	target := int(beta * float64(c.latestReceivedRate))
+	now := c.now()
+	// Loss control may already have reduced pacing below the throughput in
+	// this delayed report. Allow one feedback RTT for that reduction to
+	// arrive, but never let a held loss estimate mask continuing queue growth.
+	if c.pacedBitrate < c.target && float64(c.pacedBitrate) <= beta*float64(c.latestReceivedRate) {
+		if c.lossLimitedOveruse.IsZero() {
+			c.lossLimitedOveruse = now
+		}
+		if now.Sub(c.lossLimitedOveruse) < clampDuration(c.latestRTT, 200*time.Millisecond, time.Second) {
+			return c.target
+		}
+	}
+	// Let a changed pacing rate reach the receiver before responding again.
+	// A sparse report is not a measurement of the path's maximum capacity.
+	if !c.lastDecrease.IsZero() && now.Sub(c.lastDecrease) < clampDuration(c.latestRTT, 200*time.Millisecond, time.Second) {
+		return c.target
+	}
+	target := int(beta * float64(min(c.target, c.pacedBitrate)))
 	c.latestDecreaseRate.update(float64(c.latestReceivedRate))
-	c.lastUpdate = c.now()
+	c.lastUpdate, c.lastDecrease = now, now
 
-	return target
+	return min(c.target, target)
+}
+
+// Anchor a decrease to the effective rate without erasing accumulated AIMD
+// recovery while the loss controller holds its estimate between updates.
+func (c *rateController) setPacedBitrate(rate int) {
+	c.lock.Lock()
+	defer c.lock.Unlock()
+	c.pacedBitrate = rate
 }

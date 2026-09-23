@@ -134,6 +134,18 @@ const (
 // String returns a human-readable name for the message type.
 func (m MessageType) String() string {
 	switch m {
+	case MsgCallRequest:
+		return "CallRequest"
+	case MsgCallResult:
+		return "CallResult"
+	case MsgConversationRequest:
+		return "ConversationRequest"
+	case MsgConversationResult:
+		return "ConversationResult"
+	case MsgPollRequest:
+		return "PollRequest"
+	case MsgPollState:
+		return "PollState"
 	case MsgChatMutationSaved:
 		return "ChatMutationSaved"
 	case MsgChatAccepted:
@@ -154,6 +166,10 @@ func (m MessageType) String() string {
 		return "StatusSaved"
 	case MsgMediaControlSaved:
 		return "MediaControlSaved"
+	case MsgVideoStreamControl:
+		return "VideoStreamControl"
+	case MsgVideoStreamResult:
+		return "VideoStreamResult"
 	case MsgMediaLimitsChanged:
 		return "MediaLimitsChanged"
 	case MsgMediaLimitsSet:
@@ -562,11 +578,12 @@ type ChatBroadcast struct {
 	// ID is the server-side message id (channel/global history, wave 5a;
 	// 0 for DMs). Mentions lists mentioned users' unique IDs. ClientMsgID
 	// echoes the sender's reference for receipts.
-	ID          int64    `json:"id,omitempty"`
-	ReplyToID   int64    `json:"reply_to_id,omitempty"`
-	Version     uint64   `json:"version,omitempty"`
-	Mentions    []string `json:"mentions,omitempty"`
-	ClientMsgID string   `json:"client_msg_id,omitempty"`
+	ID           int64    `json:"id,omitempty"`
+	ReplyToID    int64    `json:"reply_to_id,omitempty"`
+	Version      uint64   `json:"version,omitempty"`
+	Mentions     []string `json:"mentions,omitempty"`
+	RoleMentions []string `json:"role_mentions,omitempty"`
+	ClientMsgID  string   `json:"client_msg_id,omitempty"`
 }
 
 // Error carries a server-side error to the client.
@@ -671,9 +688,11 @@ type WhisperSet struct {
 // PositionUpdate publishes the client's 3D position for positional audio. It
 // is relayed to the other members of the client's channel as a position event.
 type PositionUpdate struct {
-	X float64 `json:"x"`
-	Y float64 `json:"y"`
-	Z float64 `json:"z"`
+	ChannelID int64   `json:"channel_id"`
+	Context   string  `json:"context"`
+	X         float64 `json:"x"`
+	Y         float64 `json:"y"`
+	Z         float64 `json:"z"`
 }
 
 // VideoQuality requests a simulcast layer for the video the client receives.

@@ -9,6 +9,7 @@ package server
 import (
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -273,9 +274,24 @@ func (s *TCPServer) routeScopedChat(ctx context.Context, client *Client, msg net
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, fmt.Sprintf("message too long (max %d bytes)", s.cfg.ChatMaxLength))
 	}
 
+	poll, isPoll, pollErr := netproto.DecodePoll(plain)
+	if isPoll {
+		if pollErr != nil || poll.Validate(time.Now()) != nil || msg.ReplyToID != 0 || client.userID() <= 0 {
+			return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "invalid poll")
+		}
+		if _, ok := s.deps.Chat.(pollStore); !ok {
+			return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "poll storage unavailable")
+		}
+	}
+
 	// Attachment tokens carry a fresh random key per upload; the filters and
 	// the spam heuristic see the display name instead (12/116).
 	moderated := stripAttachmentRefs(plain)
+	if isPoll {
+		// Poll JSON escapes are syntax, not visible text. Moderate the exact
+		// decoded fields the UI displays, so Unicode escapes cannot hide words.
+		moderated = poll.Question + "\n" + strings.Join(poll.Options, "\n")
+	}
 
 	// (117/118) word + link filters.
 	if err := s.moderateBody(ctx, moderated); err != nil {
@@ -289,7 +305,12 @@ func (s *TCPServer) routeScopedChat(ctx context.Context, client *Client, msg net
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "possible spam detected — please vary your messages")
 	}
 	// (105) mention parsing.
-	mentions := s.parseMentions(ctx, client, channelID, plain)
+	mentionBody := plain
+	if isPoll {
+		mentionBody = moderated
+	}
+	mentions := s.parseMentions(ctx, client, channelID, mentionBody)
+	roleMentions := s.parseRoleMentions(ctx, client, channelID, mentionBody)
 
 	// (91) store the sender's ORIGINAL ciphertext verbatim: handleChatSend has
 	// already proved the key id is current, so the bytes that were moderated
@@ -322,7 +343,14 @@ func (s *TCPServer) routeScopedChat(ctx context.Context, client *Client, msg net
 				return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "reply target is not in this chat")
 			}
 		}
-		id, inserted, err := s.deps.Chat.StoreChatMessage(ctx, channelID, uid, client.Username, bodyEnc, keyID, msg.ReplyToID, msg.ClientMsgID)
+		var id int64
+		var inserted bool
+		var err error
+		if isPoll {
+			id, inserted, err = s.deps.Chat.(pollStore).StoreChatPoll(ctx, channelID, uid, client.Username, bodyEnc, keyID, msg.ClientMsgID, poll)
+		} else {
+			id, inserted, err = s.deps.Chat.StoreChatMessage(ctx, channelID, uid, client.Username, bodyEnc, keyID, msg.ReplyToID, msg.ClientMsgID)
+		}
 		if err != nil {
 			// Relaying anyway would turn a constraint violation into
 			// invisible, indefinite history loss; fail the send instead.
@@ -355,6 +383,7 @@ func (s *TCPServer) routeScopedChat(ctx context.Context, client *Client, msg net
 		ReplyToID:    msg.ReplyToID,
 		Version:      1,
 		Mentions:     mentions,
+		RoleMentions: roleMentions,
 		ClientMsgID:  msg.ClientMsgID,
 	}
 	payload, err := eventEnvelope(eventChat, chat)
@@ -861,6 +890,17 @@ func (s *TCPServer) chatEditAllowed(ctx context.Context, client *Client, msg net
 			return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "message decryption failed (stale key?)")
 		}
 		plain = p
+	}
+	isPoll := false
+	if backend, ok := s.deps.Chat.(pollStore); ok {
+		_, lookupErr := backend.ReadPoll(ctx, stored.ID, client.UniqueID)
+		isPoll = lookupErr == nil
+		if lookupErr != nil && !errors.Is(lookupErr, sql.ErrNoRows) {
+			return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "message type unavailable")
+		}
+	}
+	if isPoll || strings.HasPrefix(plain, netproto.PollPrefix) {
+		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "poll questions and options cannot be edited; close the poll and create a new one")
 	}
 	// (119) same cap as the send path. The nil guard leads: this function
 	// already treats s.cfg as possibly nil above, so testing ChatMaxLength

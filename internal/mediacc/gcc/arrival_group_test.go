@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"noxa/internal/mediacc/cc"
 	"github.com/stretchr/testify/assert"
+	"noxa/internal/mediacc/cc"
 )
 
 func TestArrivalGroup(t *testing.T) {
@@ -71,11 +71,11 @@ func TestArrivalGroup(t *testing.T) {
 					Arrival:        time.Time{}.Add(time.Second),
 				}},
 				arrival:   time.Time{}.Add(time.Second),
-				departure: time.Time{},
+				departure: time.Time{}.Add(time.Second),
 			},
 		},
 		{
-			name: "departure time of group is the departure time of the first packet in the group",
+			name: "departure time of group is the latest departure in the group",
 			acks: []cc.Acknowledgment{{
 				SequenceNumber: 0,
 				Size:           0,
@@ -110,7 +110,7 @@ func TestArrivalGroup(t *testing.T) {
 					Arrival:        time.Time{}.Add(56 * time.Millisecond),
 				}},
 				arrival:   time.Time{}.Add(56 * time.Millisecond),
-				departure: time.Time{}.Add(27 * time.Millisecond),
+				departure: time.Time{}.Add(50 * time.Millisecond),
 			},
 		},
 	}

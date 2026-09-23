@@ -1,5 +1,9 @@
 // Settings translations. Keep both catalogs and placeholder names in sync.
 export const settingsEnglish = {
+    "settings.positional.enabled": "Positional voice audio",
+    "settings.positional.hint": "Opt in to share game positions with your voice channel. A game adapter must update the local input file. Missing or stale data restores normal voice; screen-share audio stays unchanged.",
+    "settings.positional.copyPath": "Copy game input path",
+    "settings.positional.source": "Game adapter",
     "settings.mic.requesting": "Waiting for microphone permission…",
     "settings.mic.listening": "Listening… Speak to test your microphone.",
     "settings.mic.silent": "Microphone connected, but no audio signal detected. Check the input device and hardware mute.",
@@ -336,6 +340,7 @@ export const settingsEnglish = {
     "settings.sound.ban": "Banned",
     "settings.sound.announcement": "Announcement",
     "settings.sound.channel_watch": "Channel watch",
+    "settings.sound.stream_watch_started": "Someone started watching your stream",
     "settings.soundgroup.connection_connected": "Connection",
     "settings.soundgroup.own_channel_join": "Your channel",
     "settings.soundgroup.user_join": "Other users",
@@ -344,6 +349,10 @@ export const settingsEnglish = {
 };
 
 export const settingsGerman = {
+    "settings.positional.enabled": "Positionsabhängiger Sprachklang",
+    "settings.positional.hint": "Teilt bei Aktivierung Spielpositionen mit deinem Sprachkanal. Ein Spieladapter muss die lokale Eingabedatei aktualisieren. Ohne aktuelle Daten bleibt der Sprachklang normal; Bildschirmton bleibt unverändert.",
+    "settings.positional.copyPath": "Pfad für Spieldaten kopieren",
+    "settings.positional.source": "Spieladapter",
     "settings.mic.requesting": "Warte auf Mikrofonberechtigung…",
     "settings.mic.listening": "Bereit… Sprich, um dein Mikrofon zu testen.",
     "settings.mic.silent": "Mikrofon verbunden, aber kein Audiosignal erkannt. Prüfe Eingabegerät und Stummschaltung am Gerät.",
@@ -680,6 +689,7 @@ export const settingsGerman = {
     "settings.sound.ban": "Gesperrt",
     "settings.sound.announcement": "Ankündigung",
     "settings.sound.channel_watch": "Kanalbeobachtung",
+    "settings.sound.stream_watch_started": "Jemand sieht sich deinen Stream an",
     "settings.soundgroup.connection_connected": "Verbindung",
     "settings.soundgroup.own_channel_join": "Dein Kanal",
     "settings.soundgroup.user_join": "Andere Personen",

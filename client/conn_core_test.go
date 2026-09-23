@@ -493,6 +493,7 @@ func TestLateReplyAfterTimeoutCannotReachReplacementRequest(t *testing.T) {
 	if err := <-first; err == nil {
 		t.Fatal("first request did not time out")
 	}
+	cm.disconnect()
 
 	cm.mu.Lock()
 	oldEpoch := uint64(1)

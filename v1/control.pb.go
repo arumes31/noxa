@@ -4562,6 +4562,7 @@ type RoleDefinition struct {
 	Hoist    bool                   `protobuf:"varint,6,opt,name=hoist,proto3" json:"hoist,omitempty"`
 	// Stable roles-v1 capability names, checked by the shared authority.
 	Permissions   []string `protobuf:"bytes,7,rep,name=permissions,proto3" json:"permissions,omitempty"`
+	Mentionable   bool     `protobuf:"varint,8,opt,name=mentionable,proto3" json:"mentionable,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -4643,6 +4644,13 @@ func (x *RoleDefinition) GetPermissions() []string {
 		return x.Permissions
 	}
 	return nil
+}
+
+func (x *RoleDefinition) GetMentionable() bool {
+	if x != nil {
+		return x.Mentionable
+	}
+	return false
 }
 
 type ChannelRoleOverride struct {
@@ -6168,7 +6176,7 @@ const file_control_proto_rawDesc = "" +
 	"\x12MoveMemberResponse\x12\x1b\n" +
 	"\tclient_id\x18\x01 \x01(\tR\bclientId\x12\x1d\n" +
 	"\n" +
-	"channel_id\x18\x02 \x01(\x03R\tchannelId\"\xb2\x01\n" +
+	"channel_id\x18\x02 \x01(\x03R\tchannelId\"\xd4\x01\n" +
 	"\x0eRoleDefinition\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\x03R\x02id\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x1a\n" +
@@ -6176,7 +6184,8 @@ const file_control_proto_rawDesc = "" +
 	"\x05color\x18\x04 \x01(\tR\x05color\x12\x12\n" +
 	"\x04icon\x18\x05 \x01(\tR\x04icon\x12\x14\n" +
 	"\x05hoist\x18\x06 \x01(\bR\x05hoist\x12 \n" +
-	"\vpermissions\x18\a \x03(\tR\vpermissions\"\x7f\n" +
+	"\vpermissions\x18\a \x03(\tR\vpermissions\x12 \n" +
+	"\vmentionable\x18\b \x01(\bR\vmentionable\"\x7f\n" +
 	"\x13ChannelRoleOverride\x12\x17\n" +
 	"\arole_id\x18\x01 \x01(\x03R\x06roleId\x12\x17\n" +
 	"\auser_id\x18\x02 \x01(\x03R\x06userId\x12\x1e\n" +

@@ -7,6 +7,7 @@ import (
 	"noxa/internal/authorization"
 	"noxa/internal/netproto"
 	"noxa/internal/state"
+	"noxa/internal/webrtc"
 )
 
 func TestRoleMovementRechecksActiveMediaFlags(t *testing.T) {
@@ -40,6 +41,7 @@ func TestRoleMovementRechecksActiveMediaFlags(t *testing.T) {
 				}
 				env := startTestEnvDeps(t, nil, nil, func(d *Deps) {
 					d.Authority = authority
+					d.Voice = &fakeVoice{}
 					if !lifecycle {
 						d.Channels = nil
 					}
@@ -63,7 +65,9 @@ func TestRoleMovementRechecksActiveMediaFlags(t *testing.T) {
 					t.Fatal(err)
 				}
 				send(t, conn, netproto.MsgPrioritySpeaker, netproto.PrioritySpeaker{Active: true})
-				send(t, conn, netproto.MsgScreenShare, netproto.ScreenShare{Active: true})
+				env.deps.Voice.(*fakeVoice).videoRouter().JoinChannel(1, id)
+				send(t, conn, netproto.MsgVideoStreamControl, netproto.VideoStreamControl{Action: "publish", Slot: webrtc.SlotScreen, Active: true})
+				readOfType(t, conn, netproto.MsgVideoStreamResult)
 				send(t, conn, netproto.MsgPing, netproto.Ping{})
 				readOfType(t, conn, netproto.MsgPong)
 				before, _ := env.state.GetClient(id)
@@ -86,7 +90,8 @@ func TestRoleMovementRechecksActiveMediaFlags(t *testing.T) {
 				if scenario.full {
 					wantChannel = 1
 				}
-				if after.ChannelID != wantChannel || after.PrioritySpeaker != scenario.wantActive || after.Sharing != scenario.wantActive {
+				wantSharing := wantChannel == 1 && scenario.wantActive
+				if after.ChannelID != wantChannel || after.PrioritySpeaker != scenario.wantActive || after.Sharing != wantSharing {
 					t.Fatalf("destination media state: %+v; channel=%d active=%v", after, wantChannel, scenario.wantActive)
 				}
 			})

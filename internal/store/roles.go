@@ -165,9 +165,9 @@ func readRolePolicy(ctx context.Context, tx *sql.Tx, lock bool) (authorization.R
 		return p, err
 	}
 	roleIndex := map[int64]int{}
-	err = roleRows(ctx, tx, `SELECT id,name,position,color,icon,hoist FROM auth_roles ORDER BY position`, func(rows *sql.Rows) error {
+	err = roleRows(ctx, tx, `SELECT id,name,position,color,icon,hoist,mentionable FROM auth_roles ORDER BY position`, func(rows *sql.Rows) error {
 		var r authorization.Role
-		if err := rows.Scan(&r.ID, &r.Name, &r.Position, &r.Color, &r.Icon, &r.Hoist); err != nil {
+		if err := rows.Scan(&r.ID, &r.Name, &r.Position, &r.Color, &r.Icon, &r.Hoist, &r.Mentionable); err != nil {
 			return err
 		}
 		roleIndex[r.ID] = len(p.Roles)
@@ -268,7 +268,7 @@ func writeRolePolicy(ctx context.Context, tx *sql.Tx, before, after authorizatio
 		if exists && reflect.DeepEqual(old, r) {
 			continue
 		}
-		_, err := tx.ExecContext(ctx, `INSERT INTO auth_roles(id,name,position,color,icon,hoist) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(id) DO UPDATE SET name=EXCLUDED.name,position=EXCLUDED.position,color=EXCLUDED.color,icon=EXCLUDED.icon,hoist=EXCLUDED.hoist`, r.ID, r.Name, r.Position, r.Color, r.Icon, r.Hoist)
+		_, err := tx.ExecContext(ctx, `INSERT INTO auth_roles(id,name,position,color,icon,hoist,mentionable) VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT(id) DO UPDATE SET name=EXCLUDED.name,position=EXCLUDED.position,color=EXCLUDED.color,icon=EXCLUDED.icon,hoist=EXCLUDED.hoist,mentionable=EXCLUDED.mentionable`, r.ID, r.Name, r.Position, r.Color, r.Icon, r.Hoist, r.Mentionable)
 		if err != nil {
 			return err
 		}

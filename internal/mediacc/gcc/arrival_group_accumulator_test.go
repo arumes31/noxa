@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"noxa/internal/mediacc/cc"
 	"github.com/stretchr/testify/assert"
+	"noxa/internal/mediacc/cc"
 )
 
 func TestArrivalGroupAccumulator(t *testing.T) {
@@ -70,7 +70,7 @@ func TestArrivalGroupAccumulator(t *testing.T) {
 					},
 				},
 				arrival:   time.Time{}.Add(20 * time.Millisecond),
-				departure: time.Time{},
+				departure: time.Time{}.Add(3 * time.Millisecond),
 			}},
 		},
 		{
@@ -102,7 +102,7 @@ func TestArrivalGroupAccumulator(t *testing.T) {
 						},
 					},
 					arrival:   time.Time{}.Add(20 * time.Millisecond),
-					departure: time.Time{}.Add(0 * time.Millisecond),
+					departure: time.Time{}.Add(3 * time.Millisecond),
 				},
 				{
 					packets: []cc.Acknowledgment{
@@ -195,7 +195,7 @@ func TestArrivalGroupAccumulator(t *testing.T) {
 							Arrival:        time.Time{}.Add(4 * time.Millisecond),
 						},
 					},
-					departure: time.Time{},
+					departure: time.Time{}.Add(3 * time.Millisecond),
 					arrival:   time.Time{}.Add(4 * time.Millisecond),
 				},
 				{
@@ -211,7 +211,7 @@ func TestArrivalGroupAccumulator(t *testing.T) {
 							Arrival:        time.Time{}.Add(10 * time.Millisecond),
 						},
 					},
-					departure: time.Time{}.Add(6 * time.Millisecond),
+					departure: time.Time{}.Add(9 * time.Millisecond),
 					arrival:   time.Time{}.Add(10 * time.Millisecond),
 				},
 			},

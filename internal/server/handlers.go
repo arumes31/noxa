@@ -1419,6 +1419,10 @@ func remoteIP(conn net.Conn) string {
 // the voice router's membership in sync, and announces the move.
 func (s *TCPServer) moveClient(ctx context.Context, clientID string, channelID int64, movedBy string) error {
 	afterMove := func(previousChannelID int64) {
+		if previousChannelID != channelID {
+			// Moving invalidates publications even when the destination permits sharing.
+			s.deps.State.SetSharing(clientID, false)
+		}
 		// The destination can revoke active controls even without a policy
 		// edit. The caller retains its policy and membership action locks.
 		if lease, ok := ctx.Value(roleLeaseKey{}).(roleLease); ok {

@@ -10,9 +10,9 @@ import (
 	"time"
 
 	"github.com/pion/interceptor"
-	"noxa/internal/mediacc/ntp"
 	"github.com/pion/rtcp"
 	"github.com/pion/rtp"
+	"noxa/internal/mediacc/ntp"
 )
 
 // TwccExtensionAttributesKey identifies the TWCC value in the attribute collection
@@ -65,7 +65,7 @@ func (f *FeedbackAdapter) onSentTWCC(ts time.Time, extID uint8, header *rtp.Head
 	f.history.add(Acknowledgment{
 		SequenceNumber: tccExt.TransportSequence,
 		SSRC:           0,
-		Size:           header.MarshalSize() + size,
+		Size:           header.MarshalSize() + size + int(header.PaddingSize),
 		Departure:      ts,
 		Arrival:        time.Time{},
 		ECN:            0,
@@ -89,28 +89,28 @@ func (f *FeedbackAdapter) OnSent(ts time.Time, header *rtp.Header, size int, att
 func (f *FeedbackAdapter) unpackRunLengthChunk(
 	start uint16, refTime time.Time, chunk *rtcp.RunLengthChunk, deltas []*rtcp.RecvDelta,
 ) (consumedDeltas int, nextRef time.Time, acks []Acknowledgment, err error) {
-	result := make([]Acknowledgment, chunk.RunLength)
+	result := make([]Acknowledgment, 0, chunk.RunLength)
 	deltaIndex := 0
 
 	end := start + chunk.RunLength
-	resultIndex := 0
 	for i := start; i != end; i++ {
+		if chunk.PacketStatusSymbol != rtcp.TypeTCCPacketNotReceived {
+			if deltaIndex >= len(deltas) || deltas[deltaIndex] == nil {
+				return deltaIndex, refTime, result, errInvalidFeedback
+			}
+			refTime = refTime.Add(time.Duration(deltas[deltaIndex].Delta) * time.Microsecond)
+			deltaIndex++
+		}
 		key := feedbackHistoryKey{
 			ssrc:           0,
 			sequenceNumber: i,
 		}
 		if ack, ok := f.history.get(key); ok {
 			if chunk.PacketStatusSymbol != rtcp.TypeTCCPacketNotReceived {
-				if len(deltas)-1 < deltaIndex {
-					return deltaIndex, refTime, result, errInvalidFeedback
-				}
-				refTime = refTime.Add(time.Duration(deltas[deltaIndex].Delta) * time.Microsecond)
 				ack.Arrival = refTime
-				deltaIndex++
 			}
-			result[resultIndex] = ack
+			result = append(result, ack)
 		}
-		resultIndex++
 	}
 
 	return deltaIndex, refTime, result, nil
@@ -119,26 +119,28 @@ func (f *FeedbackAdapter) unpackRunLengthChunk(
 func (f *FeedbackAdapter) unpackStatusVectorChunk(
 	start uint16, refTime time.Time, chunk *rtcp.StatusVectorChunk, deltas []*rtcp.RecvDelta,
 ) (consumedDeltas int, nextRef time.Time, acks []Acknowledgment, err error) {
-	result := make([]Acknowledgment, len(chunk.SymbolList))
+	result := make([]Acknowledgment, 0, len(chunk.SymbolList))
 	deltaIndex := 0
-	resultIndex := 0
 	for i, symbol := range chunk.SymbolList {
+		// Delta encoding spans all received statuses, including packets whose
+		// send history has expired. Eviction is not a reported network loss.
+		if symbol != rtcp.TypeTCCPacketNotReceived {
+			if deltaIndex >= len(deltas) || deltas[deltaIndex] == nil {
+				return deltaIndex, refTime, result, errInvalidFeedback
+			}
+			refTime = refTime.Add(time.Duration(deltas[deltaIndex].Delta) * time.Microsecond)
+			deltaIndex++
+		}
 		key := feedbackHistoryKey{
 			ssrc:           0,
 			sequenceNumber: start + uint16(i), //nolint:gosec // G115
 		}
 		if ack, ok := f.history.get(key); ok {
 			if symbol != rtcp.TypeTCCPacketNotReceived {
-				if len(deltas)-1 < deltaIndex {
-					return deltaIndex, refTime, result, errInvalidFeedback
-				}
-				refTime = refTime.Add(time.Duration(deltas[deltaIndex].Delta) * time.Microsecond)
 				ack.Arrival = refTime
-				deltaIndex++
 			}
-			result[resultIndex] = ack
+			result = append(result, ack)
 		}
-		resultIndex++
 	}
 
 	return deltaIndex, refTime, result, nil
@@ -156,30 +158,43 @@ func (f *FeedbackAdapter) OnTransportCCFeedback(
 	index := feedback.BaseSequenceNumber
 	refTime := time.Time{}.Add(time.Duration(feedback.ReferenceTime) * 64 * time.Millisecond)
 	recvDeltas := feedback.RecvDeltas
+	remaining := int(feedback.PacketStatusCount)
 
 	for _, chunk := range feedback.PacketChunks {
+		if remaining == 0 {
+			break
+		}
 		switch chunk := chunk.(type) {
 		case *rtcp.RunLengthChunk:
-			n, nextRefTime, acks, err := f.unpackRunLengthChunk(index, refTime, chunk, recvDeltas)
+			limited := *chunk
+			limited.RunLength = min(chunk.RunLength, uint16(remaining)) //nolint:gosec // bounded by PacketStatusCount
+			n, nextRefTime, acks, err := f.unpackRunLengthChunk(index, refTime, &limited, recvDeltas)
 			if err != nil {
 				return nil, err
 			}
 			refTime = nextRefTime
 			result = append(result, acks...)
 			recvDeltas = recvDeltas[n:]
-			index = uint16(int(index) + len(acks)) //nolint:gosec // G115
+			index += limited.RunLength // Transport sequence numbers wrap at 16 bits.
+			remaining -= int(limited.RunLength)
 		case *rtcp.StatusVectorChunk:
-			n, nextRefTime, acks, err := f.unpackStatusVectorChunk(index, refTime, chunk, recvDeltas)
+			limited := *chunk
+			limited.SymbolList = chunk.SymbolList[:min(len(chunk.SymbolList), remaining)]
+			n, nextRefTime, acks, err := f.unpackStatusVectorChunk(index, refTime, &limited, recvDeltas)
 			if err != nil {
 				return nil, err
 			}
 			refTime = nextRefTime
 			result = append(result, acks...)
 			recvDeltas = recvDeltas[n:]
-			index = uint16(int(index) + len(acks)) //nolint:gosec // G115
+			index += uint16(len(limited.SymbolList)) //nolint:gosec // bounded by PacketStatusCount; sequence wraps
+			remaining -= len(limited.SymbolList)
 		default:
 			return nil, errInvalidFeedback
 		}
+	}
+	if remaining != 0 {
+		return nil, errInvalidFeedback
 	}
 
 	return result, nil

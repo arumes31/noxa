@@ -28,13 +28,22 @@ func TestRateCalculator(t *testing.T) {
 			expected: []int{1000, 30_000},
 		},
 		{
-			name: "idleWindowRetainsEstimateUntilTimeAdvances",
+			name: "idleWindowUsesTheMeasuredPacketGap",
 			acks: []cc.Acknowledgment{
 				{Size: 125, Arrival: t0},
 				{Size: 125, Arrival: t0.Add(time.Second)},
 				{Size: 125, Arrival: t0.Add(1100 * time.Millisecond)},
 			},
-			expected: []int{1000, 20_000},
+			expected: []int{1000, 1000, 20_000},
+		},
+		{
+			name: "reorderedArrivalCannotMoveIdleGapBackward",
+			acks: []cc.Acknowledgment{
+				{Size: 1200, Arrival: t0},
+				{Size: 1200, Arrival: t0.Add(-time.Second)},
+				{Size: 1200, Arrival: t0.Add(600 * time.Millisecond)},
+			},
+			expected: []int{9600, 16_000},
 		},
 		{
 			name:     "emptyCreatesNoRate",

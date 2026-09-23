@@ -72,12 +72,13 @@ type Client struct {
 	mediaLimitsTimerGeneration uint64
 
 	// Activity and connection stats (Client Info dialog).
-	lastActive time.Time // last received frame
-	bytesIn    int64     // payload bytes received
-	bytesOut   int64     // payload bytes sent
-	lastPingAt time.Time // last server-initiated Ping sent
-	rttNs      int64     // smoothed RTT in nanoseconds (EWMA)
-	rttKnown   bool      // whether any Pong was received
+	lastActive     time.Time // last received frame
+	lastPositionAt time.Time // last accepted positional metadata update
+	bytesIn        int64     // payload bytes received
+	bytesOut       int64     // payload bytes sent
+	lastPingAt     time.Time // last server-initiated Ping sent
+	rttNs          int64     // smoothed RTT in nanoseconds (EWMA)
+	rttKnown       bool      // whether any Pong was received
 
 	// Pending challenge-response handshake state (set on Authenticate without
 	// a password, consumed by AuthSignature).
@@ -275,6 +276,10 @@ func (c *Client) takeChallenge(uniqueID string) ([]byte, string, bool) {
 
 // TCPServer accepts and serves control-channel connections.
 type TCPServer struct {
+	privateCallsMu        sync.Mutex
+	privateCalls          map[string]netproto.CallSession
+	privateCallByClient   map[string]string
+	privateCallDirty      map[string]bool
 	roleRecordingOwners   sync.Map   // channel ID -> initiating registered user ID
 	roleRevokedRecordings sync.Map   // channel IDs awaiting cleanup; tap delivery is denied
 	roleRecordingMu       sync.Mutex // serialize recording start/stop and ownership publication
@@ -333,14 +338,16 @@ type TCPServer struct {
 
 	// Chat infrastructure (wave 5a): rate limiter, spam tracker, slow-mode
 	// tracker, and the memoised runtime moderation lists (117/118).
-	chatRate     *chatRateLimiter
-	chatSpam     *spamTracker
-	chatSlow     *slowTracker
-	typingRate   *typingTracker
-	chatFilters  *chatFilterCache
-	pokes        pokeTracker
-	beforeHandle func()
-	afterAccept  func()
+	chatRate             *chatRateLimiter
+	callSignalRate       *chatRateLimiter
+	conversationReadRate *chatRateLimiter
+	chatSpam             *spamTracker
+	chatSlow             *slowTracker
+	typingRate           *typingTracker
+	chatFilters          *chatFilterCache
+	pokes                pokeTracker
+	beforeHandle         func()
+	afterAccept          func()
 
 	loginLimiter *auth.LoginFailureLimiter
 
@@ -411,11 +418,13 @@ func New(cfg *config.Config, logger *zap.Logger, deps *Deps) *TCPServer {
 		rotationAfter: func(delay time.Duration, callback func()) {
 			time.AfterFunc(delay, callback)
 		},
-		chatRate:     newChatRateLimiter(cfg.ChatRateMsgs, time.Duration(cfg.ChatRateWindowSeconds)*time.Second),
-		chatSpam:     newSpamTracker(),
-		chatSlow:     newSlowTracker(),
-		typingRate:   newTypingTracker(),
-		loginLimiter: loginLimiter,
+		chatRate:             newChatRateLimiter(cfg.ChatRateMsgs, time.Duration(cfg.ChatRateWindowSeconds)*time.Second),
+		callSignalRate:       newChatRateLimiter(32, time.Second),
+		conversationReadRate: newChatRateLimiter(32, time.Second),
+		chatSpam:             newSpamTracker(),
+		chatSlow:             newSlowTracker(),
+		typingRate:           newTypingTracker(),
+		loginLimiter:         loginLimiter,
 
 		chatFilters: &chatFilterCache{},
 	}
@@ -970,6 +979,14 @@ func (s *TCPServer) dispatch(ctx context.Context, client *Client, f *netproto.Fr
 		return s.handlePositionUpdate(ctx, client, f)
 	case netproto.MsgVideoQuality:
 		return s.handleVideoQuality(ctx, client, f)
+	case netproto.MsgVideoStreamControl:
+		return s.handleVideoStreamControl(ctx, client, f)
+	case netproto.MsgPollRequest:
+		return s.handlePoll(ctx, client, f)
+	case netproto.MsgConversationRequest:
+		return s.handleConversation(ctx, client, f)
+	case netproto.MsgCallRequest:
+		return s.handlePrivateCall(ctx, client, f)
 	case netproto.MsgPrioritySpeaker:
 		return s.handlePrioritySpeaker(ctx, client, f)
 	case netproto.MsgRecordingControl:
@@ -1210,6 +1227,7 @@ func (s *TCPServer) onDisconnect(client *Client) {
 	if alreadyCleaned {
 		return
 	}
+	s.disconnectPrivateCall(client.ID)
 
 	if s.deps.Broadcast != nil {
 		s.deps.Broadcast.Unregister(client.ID)

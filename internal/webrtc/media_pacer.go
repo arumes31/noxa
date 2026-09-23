@@ -121,7 +121,7 @@ func (p *mediaPacer) SetTargetBitrate(rate int) {
 }
 
 func (p *mediaPacer) Write(header *rtp.Header, payload []byte, attrs interceptor.Attributes) (int, error) {
-	size := header.MarshalSize() + len(payload)
+	size := header.MarshalSize() + len(payload) + int(header.PaddingSize)
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.closed {
@@ -321,7 +321,7 @@ func (i *mediaCCInterceptor) BindLocalStream(info *interceptor.StreamInfo, write
 		stream.bindingID = info.ID
 		stream.audio = strings.EqualFold(info.MimeType, "audio/opus")
 		for _, extension := range info.RTPHeaderExtensions {
-			if extension.URI == sdp.TransportCCURI && extension.ID > 0 && extension.ID < 256 {
+			if !stream.audio && extension.URI == sdp.TransportCCURI && extension.ID > 0 && extension.ID < 256 {
 				stream.twccID = uint8(extension.ID)
 			}
 		}

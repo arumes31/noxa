@@ -29,6 +29,15 @@ func (r *Router) SetPublisherGuard(guard PublisherGuard) {
 }
 
 func (r *Router) prunePublishersLocked() {
+	r.watchMu.Lock()
+	for key := range r.watches {
+		if !r.publisherAllowedLocked(key.subscriber, key.publisher) {
+			watch := r.watches[key]
+			watch.active = false
+			r.watches[key] = watch
+		}
+	}
+	r.watchMu.Unlock()
 	for sub, publishers := range r.pubTracks {
 		for pub := range publishers {
 			if !r.publisherAllowedLocked(sub, pub) {

@@ -220,7 +220,9 @@ export function initWorkspace() {
         if (event.key === "Escape" && document.body.classList.contains("channels-open")) {
             document.body.classList.remove("channels-open");
             $("workspace-sidebar-toggle").setAttribute("aria-expanded", "false");
-            $("workspace-sidebar-toggle").focus();
+            const groupToggle = document.querySelector("#center.private-group-active .group-show-channels");
+            groupToggle?.setAttribute("aria-expanded", "false");
+            (groupToggle || $("workspace-sidebar-toggle")).focus();
         }
     });
     renderWorkspace();

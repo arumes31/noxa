@@ -4,7 +4,6 @@
 package gcc
 
 import (
-	"runtime"
 	"testing"
 	"time"
 
@@ -22,6 +21,69 @@ func (t staticThreshold) compare(estimate, _ time.Duration) (usage, time.Duratio
 	}
 
 	return usageNormal, estimate, time.Duration(t)
+}
+
+func TestOveruseDetectorUsesWireTimeForBatchedFeedback(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		measurement time.Duration
+		want        usage
+	}{
+		{"constant delay", 0, usageOver},
+		{"growing delay with short send interval", 18 * time.Millisecond, usageNormal},
+		{"shrinking delay with long send interval", -10 * time.Millisecond, usageOver},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var got []usage
+			detector := newOveruseDetector(staticThreshold(time.Millisecond), 10*time.Millisecond,
+				func(ds DelayStats) { got = append(got, ds.Usage) })
+			// A single feedback packet delivers both groups together; their
+			// departure spacing, not the callback spacing, determines persistence.
+			for _, estimate := range []time.Duration{2 * time.Millisecond, 3 * time.Millisecond} {
+				detector.onDelayStats(DelayStats{Estimate: estimate, LastReceiveDelta: 20 * time.Millisecond, Measurement: tc.measurement})
+			}
+			assert.Equal(t, []usage{usageNormal, tc.want}, got)
+		})
+	}
+}
+
+func TestOveruseDetectorComparesUnscaledDelayTrend(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		estimates []time.Duration
+		want      usage
+	}{
+		{"declining startup delay", []time.Duration{10 * time.Millisecond, 9 * time.Millisecond, 8 * time.Millisecond}, usageNormal},
+		{"persistent constant delay", []time.Duration{10 * time.Millisecond, 10 * time.Millisecond, 10 * time.Millisecond}, usageOver},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var got usage
+			detector := newOveruseDetector(newAdaptiveThreshold(), 10*time.Millisecond,
+				func(ds DelayStats) { got = ds.Usage })
+			for _, estimate := range tc.estimates {
+				detector.onDelayStats(DelayStats{Estimate: estimate, LastReceiveDelta: 20 * time.Millisecond})
+			}
+			assert.Equal(t, tc.want, got)
+		})
+	}
+}
+
+func TestOverusePersistsAcrossFeedbackBatchPhases(t *testing.T) {
+	for _, batchSize := range []int{7, 10, 13} {
+		for phase := range batchSize {
+			filter := newTrendline()
+			var got usage
+			detector := newOveruseDetector(newAdaptiveThreshold(), 10*time.Millisecond, func(ds DelayStats) { got = ds.Usage })
+			for i := range 200 {
+				filter.setPeriod(10 * time.Millisecond)
+				delta := time.Duration(4+i%2) * time.Millisecond
+				detector.onDelayStats(DelayStats{Measurement: delta, Estimate: filter.updateEstimate(delta), LastReceiveDelta: 10*time.Millisecond + delta})
+				if i > 100 && (i+phase)%batchSize == 0 && got != usageOver {
+					t.Fatalf("batch size %d phase %d hid continuously growing queue at sample %d", batchSize, phase, i)
+				}
+			}
+		}
+	}
 }
 
 func TestOveruseDetectorWithoutDelay(t *testing.T) {
@@ -76,14 +138,15 @@ func TestOveruseDetectorWithoutDelay(t *testing.T) {
 			delay:    10 * time.Millisecond,
 		},
 		{
-			name: "noOverUseIfEstimateDecreased",
+			name: "overusePersistsUntilEstimateReentersThreshold",
 			estimates: []DelayStats{
 				{},
 				{Estimate: 4 * time.Millisecond},
 				{Estimate: 5 * time.Millisecond},
 				{Estimate: 3 * time.Millisecond},
+				{Estimate: 0},
 			},
-			expected: []usage{usageNormal, usageNormal, usageOver, usageNormal},
+			expected: []usage{usageNormal, usageNormal, usageOver, usageOver, usageNormal},
 			thresh:   staticThreshold(1 * time.Millisecond),
 			delay:    0,
 		},
@@ -98,13 +161,8 @@ func TestOveruseDetectorWithoutDelay(t *testing.T) {
 			go func() {
 				defer close(out)
 				for _, e := range tc.estimates {
+					e.LastReceiveDelta = tc.delay
 					od.onDelayStats(e)
-					if tc.delay == 0 {
-						// avoid time.Sleep(0) since it's broken on windows.
-						runtime.Gosched()
-					} else {
-						time.Sleep(tc.delay)
-					}
 				}
 			}()
 			received := []usage{}

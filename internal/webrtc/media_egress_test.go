@@ -104,7 +104,7 @@ func TestMediaEgressDropsOldTicketsAcrossPolicyAndStreamChanges(t *testing.T) {
 			stream := &mediaEgressStream{active: true, registry: registry}
 			r := NewRouter(zap.NewNop())
 			policy := r.videoPolicySnapshot()
-			ticket := mediaTicket{router: r, videoRevision: policy.revision}
+			ticket := mediaTicket{router: r, videoRevision: policy.revision, delivery: MediaDelivery{Slot: SlotCam, Tap: true}}
 			source := &rtp.Packet{Header: rtp.Header{Version: 2, SequenceNumber: 1}, Payload: []byte{1}}
 			packet, _ := stream.prepare(source, ticket)
 			switch change {

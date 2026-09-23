@@ -90,6 +90,7 @@ type speakingEvent struct {
 // positionEvent is the payload of position events, relaying a client's 3D
 // position to the other members of its channel.
 type positionEvent struct {
+	Context   string  `json:"context"`
 	ChannelID int64   `json:"channel_id"`
 	ClientID  string  `json:"client_id"`
 	X         float64 `json:"x"`
@@ -139,7 +140,20 @@ func (s *TCPServer) applyWebRTCOffer(ctx context.Context, client *Client, msg ne
 				SDPMLineIndex: mlineIndex,
 			})
 		})
+	// A peer rebuild retires publications; ordinary renegotiation preserves them.
+	// Reconcile even after a failed rebuild, while channel-control locks are held.
+	sharing := false
+	for _, stream := range s.deps.Voice.VideoPublications(client.ID) {
+		if stream.PublisherID == client.ID && stream.Slot == webrtc.SlotScreen {
+			sharing = true
+			break
+		}
+	}
+	s.deps.State.SetSharing(client.ID, sharing)
 	if err != nil {
+		if errors.Is(err, webrtc.ErrOfferCollision) {
+			return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, webrtc.ErrOfferCollision.Error())
+		}
 		s.logger.Warn("webrtc offer failed",
 			zap.String("client_id", client.ID),
 			zap.Error(err),

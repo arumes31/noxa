@@ -25,7 +25,8 @@ func closeVoiceTestResource(t *testing.T, closer io.Closer) {
 
 // fakeVoice implements VoiceBackend, recording all calls.
 type fakeVoice struct {
-	mu sync.Mutex
+	mu           sync.Mutex
+	streamRouter *webrtc.Router
 
 	answerSDP string
 	offerErr  error
@@ -59,6 +60,34 @@ type whisperCall struct {
 	clients  []string
 	channels []int64
 	active   bool
+}
+
+func (f *fakeVoice) videoRouter() *webrtc.Router {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.streamRouter == nil {
+		f.streamRouter = webrtc.NewRouter(nil)
+	}
+	return f.streamRouter
+}
+func (f *fakeVoice) PublishVideo(publisher, slot string, generation uint64, active bool) (uint64, error) {
+	return f.videoRouter().PublishVideo(publisher, slot, generation, active)
+}
+func (f *fakeVoice) WatchVideo(subscriber, publisher, slot string, generation, revision, session uint64, active bool) (bool, error) {
+	return f.videoRouter().WatchVideo(subscriber, publisher, slot, generation, revision, session, active)
+}
+func (f *fakeVoice) VideoWatchSession(subscriber string) uint64 {
+	return f.videoRouter().VideoWatchSession(subscriber)
+}
+func (f *fakeVoice) VideoPublications(subscriber string) []webrtc.VideoPublication {
+	return f.videoRouter().VideoPublications(subscriber)
+}
+func (f *fakeVoice) RevokeVideo(publisher, slot string) { f.videoRouter().RevokeVideo(publisher, slot) }
+func (f *fakeVoice) SetVideoPreview(publisher, slot string, generation uint64, data []byte) error {
+	return f.videoRouter().SetVideoPreview(publisher, slot, generation, data)
+}
+func (f *fakeVoice) VideoPreview(subscriber, publisher, slot string, generation uint64) ([]byte, int64, error) {
+	return f.videoRouter().VideoPreview(subscriber, publisher, slot, generation)
 }
 
 func (f *fakeVoice) SetHandlers(canTalk func(string) bool, onSpeaking func(string, bool)) {
@@ -422,7 +451,7 @@ func TestPositionUpdate(t *testing.T) {
 		return len(env.state.ChannelMembers(1)) == 2
 	})
 
-	send(t, userConn, netproto.MsgPositionUpdate, netproto.PositionUpdate{X: 1.5, Y: -2, Z: 3.25})
+	send(t, userConn, netproto.MsgPositionUpdate, netproto.PositionUpdate{ChannelID: 1, Context: "test-map", X: 1.5, Y: -2, Z: 3.25})
 
 	data := readEventOfType(t, adminConn, eventPosition)
 	var pe positionEvent

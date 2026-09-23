@@ -273,7 +273,7 @@ test("frontend UI module behaviors", { concurrency: false }, async (t) => {
             body: "hello", enc_verified: true, from_nickname: "Ada", id: "8", reply_to_id: "3", sent_at: 7,
         }, 5), {
             channelID: 5, clientMsgID: "", deleted: false, edited: false, e2e: false, direct: false, enc: true, encVerified: true, from: "Ada", fromUID: "",
-            id: 8, mentioned: false, mentions: [], offline: false, reactions: null, replyToID: 3, self: false, text: "hello", ts: 7000, version: 1,
+            id: 8, mentioned: false, mentions: [], role_mentions: [], offline: false, reactions: null, replyToID: 3, self: false, text: "hello", ts: 7000, version: 1,
         });
         const plaintextDM = chat.normalize({ direct: true, text: "clear" });
         assert.equal(plaintextDM.direct, true);
@@ -287,7 +287,7 @@ test("frontend UI module behaviors", { concurrency: false }, async (t) => {
         const reply = { from: "Bob", id: 2, replyToID: 1, text: "plain", ts: 20 };
         const legacyReply = { from: "Bob", id: 3, replyToID: 0, text: "↪ Ada: earlier", ts: 30 };
         assert.equal(chat.resolveParent([first, reply, legacyReply], reply), first);
-        assert.equal(chat.resolveParent([first, reply, legacyReply], legacyReply), first);
+        assert.equal(chat.resolveParent([first, reply, legacyReply], legacyReply), null);
         assert.equal(chat.fmtSlowMode(3600), "1h");
         assert.equal(chat.fmtSlowMode(120), "2m");
         assert.equal(chat.fmtSlowMode(7), "7s");
@@ -297,6 +297,7 @@ test("frontend UI module behaviors", { concurrency: false }, async (t) => {
     });
 
     await t.test("chat connection setup keeps best-effort failures and late replies scoped", async (t) => {
+        replaceGlobal(t, "document", { getElementById: () => null });
         const state = { activeTabID: "a", serverGeneration: 1, myUniqueID: "initial" };
         const notices = [], reads = [];
         let delayed = "", release;

@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"errors"
+	"time"
 
 	"noxa/internal/authorization"
 	"noxa/internal/netproto"
@@ -109,8 +110,21 @@ func (s *TCPServer) roleScreenShare(ctx context.Context, client *Client, msg net
 }
 
 func (s *TCPServer) rolePositionUpdate(ctx context.Context, client *Client, msg netproto.PositionUpdate) error {
+	if msg.ChannelID <= 0 || !msg.ValidPosition() {
+		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "invalid position")
+	}
 	return s.roleChannelControl(ctx, client, authorization.Connect, true, func(_ context.Context, channelID int64) error {
-		payload, err := eventEnvelope(eventPosition, positionEvent{ChannelID: channelID, ClientID: client.ID, X: msg.X, Y: msg.Y, Z: msg.Z})
+		if msg.ChannelID != channelID {
+			return nil
+		}
+		client.mu.Lock()
+		if time.Since(client.lastPositionAt) < 150*time.Millisecond {
+			client.mu.Unlock()
+			return nil
+		}
+		client.lastPositionAt = time.Now()
+		client.mu.Unlock()
+		payload, err := eventEnvelope(eventPosition, positionEvent{ChannelID: channelID, ClientID: client.ID, Context: msg.Context, X: msg.X, Y: msg.Y, Z: msg.Z})
 		if err != nil {
 			return err
 		}

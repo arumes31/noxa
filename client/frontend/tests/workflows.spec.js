@@ -1,5 +1,104 @@
 import { expect, test } from "@playwright/test";
 
+test.describe("persistent polls", () => {
+    test.beforeEach(async ({ page }) => {
+        await page.evaluate(() => {
+            const v = window.__noxa;
+            v.showWorkspace(false);
+            Object.assign(v.state, { activeTabID: "server-a", myChannelID: 1, myUniqueID: "self", channels: [{ ChannelID: 1, Name: "Lobby" }] });
+            window.__pollCalls = [];
+            window.__pollState = { message_id: 9100, counts: [0, 0], choices: [], total_voters: 0, closed: false, version: 1, closes_at: Math.floor(Date.now() / 1000) + 3600 };
+            const app = window.go.main.App;
+            window.go.main.App = new Proxy(app, { get(target, key) {
+                if (key === "CreatePollForTab") return async (...args) => { window.__pollCalls.push(args); return ""; };
+                if (key !== "PollForTab") return target[key];
+                return async (tab, request) => {
+                    window.__pollCalls.push([tab, structuredClone(request)]);
+                    if (window.__pollGate) await window.__pollGate;
+                    const saved = window.__pollState;
+                    if (request.action === "vote") {
+                        saved.choices = request.choices;
+                        saved.counts = [0, 1].map(index => request.choices.includes(index) ? 1 : 0);
+                        saved.total_voters = request.choices.length ? 1 : 0;
+                        saved.version++;
+                    }
+                    if (request.action === "close") { saved.closed = true; saved.version++; }
+                    return { ...structuredClone(saved), action: request.action };
+                };
+            }});
+        });
+    });
+    async function postPoll(page) {
+        await page.evaluate(() => window.__noxaChat.addChat({ id: 9100, channel_id: 1, from_unique_id: "other", from: "Bob", text: '[noxa-poll:v1]' + JSON.stringify({ question: "Choose <script>", options: ["Forest", "Harbor"], multiple: false, closes_at: window.__pollState.closes_at }) }));
+        await expect(page.locator(".poll-status")).toContainText("0 voters");
+    }
+    test("single ballots replace, clear, persist after rerender and close", async ({ page }) => {
+        await postPoll(page);
+        const forest = page.locator(".poll-option").filter({ hasText: "Forest" });
+        const harbor = page.locator(".poll-option").filter({ hasText: "Harbor" });
+        await forest.click();
+        await expect(forest).toHaveAttribute("aria-pressed", "true");
+        await harbor.click();
+        await expect(forest).toHaveAttribute("aria-pressed", "false");
+        await expect(harbor).toHaveAttribute("aria-pressed", "true");
+        await harbor.click();
+        await expect(page.locator(".poll-status")).toContainText("0 voters");
+        await forest.click();
+        await page.getByRole("button", { name: "Refresh results", exact: true }).click();
+        await expect(forest).toHaveAttribute("aria-pressed", "true");
+        await page.getByRole("button", { name: "Close poll", exact: true }).click();
+        await expect(page.locator(".poll-status")).toContainText("Closed");
+        await expect(forest).toBeDisabled();
+        await expect(page.locator(".poll-question")).toHaveText("Choose <script>");
+        await expect(page.locator(".chat-poll script")).toHaveCount(0);
+    });
+    test("creation validates options and binds the saved poll to its original server", async ({ page }) => {
+        await page.getByRole("button", { name: "Create poll", exact: true }).click();
+        await page.getByLabel("Question", { exact: true }).fill("Next map?");
+        await page.getByLabel("Options — one per line (2–10)", { exact: true }).fill("Forest\nforest");
+        await page.locator(".poll-dialog").getByRole("button", { name: "Create poll", exact: true }).click();
+        await expect(page.locator(".poll-dialog [role=alert]")).toContainText("different");
+        expect(await page.evaluate(() => window.__pollCalls.length)).toBe(0);
+        await page.getByLabel("Options — one per line (2–10)", { exact: true }).fill("Forest\nHarbor");
+        await page.locator(".poll-dialog").getByRole("button", { name: "Create poll", exact: true }).click();
+        await expect(page.locator(".poll-dialog")).toHaveCount(0);
+        const call = await page.evaluate(() => window.__pollCalls[0]);
+        expect(call.slice(0, 3)).toEqual(["server-a", "channel", "1"]);
+        expect(call[3]).toMatchObject({ question: "Next map?", options: ["Forest", "Harbor"], multiple: false });
+    });
+    test("a late vote response cannot update another server", async ({ page }) => {
+        await postPoll(page);
+        await page.evaluate(() => { window.__pollGate = new Promise(resolve => { window.__finishPoll = resolve; }); });
+        await page.locator(".poll-option").first().click();
+        await page.evaluate(() => {
+            window.__noxa.state.activeTabID = "server-b";
+            window.__noxa.state.serverGeneration++;
+            window.__finishPoll();
+        });
+        await expect(page.locator(".poll-option").first()).toHaveAttribute("aria-pressed", "false");
+        expect(await page.evaluate(() => window.__pollCalls.every(call => call[0] === "server-a"))).toBe(true);
+    });
+});
+
+test("custom role mentions complete stable IDs and render safe role names", async ({ page }) => {
+    await page.evaluate(() => {
+        const v = window.__noxa;
+        v.showWorkspace(false);
+        Object.assign(v.state, { myChannelID: 1, myUniqueID: "self", channels: [{ ChannelID: 1, Name: "Lobby" }], clients: [{ client_id: "other", nickname: "Bob", roles: [{ id: 20, name: "Raid <team>" }] }] });
+    });
+    await page.locator("#chat-text").fill("@Raid");
+    await page.locator("#chat-text").press("Tab");
+    await expect(page.locator("#chat-text")).toHaveValue("<@&20> ");
+    await page.evaluate(() => {
+        window.__noxaChat.addChat({ id: 8001, channel_id: 1, from_unique_id: "other", from: "Bob", text: "Hello <@&20>", role_mentions: ["self"] });
+        window.__noxaChat.addChat({ id: 8002, channel_id: 1, from_unique_id: "other", from: "Bob", text: "Unresolved @admin <@&20>" });
+    });
+    await expect(page.locator('#chat-log [data-msg-id="8001"]')).toHaveClass(/mentioned/);
+    await expect(page.locator('#chat-log [data-msg-id="8002"]')).not.toHaveClass(/mentioned/);
+    await expect(page.locator('#chat-log [data-msg-id="8001"] .mention-tok')).toHaveText("@Raid <team>");
+    await expect(page.locator("#chat-log team")).toHaveCount(0);
+});
+
 test.describe("own role overview", () => {
     test("role overview uses visible own roles without retired queries", async ({ page }) => {
         await page.evaluate(async () => {
@@ -192,7 +291,7 @@ test.describe("confirmed tab-bound media controls", () => {
             window.__controls.pending.shift()(""); await window.__controlAction;
         });
         expect(await page.evaluate(() => window.__noxa.state.whisperTargetUID)).toBe("peer");
-        await expect(page.locator("#voice-status")).toContainText("whisper → peer");
+        await expect(page.locator("#voice-status")).toContainText("Whisper to peer");
         await page.evaluate(() => { window.__controlAction = window.__runControl("whisper"); });
         await expect.poll(() => page.evaluate(() => window.__controls.pending.length)).toBe(1);
         await page.evaluate(async () => { window.__controls.pending.shift()("restore denied"); await window.__controlAction; });
@@ -200,15 +299,26 @@ test.describe("confirmed tab-bound media controls", () => {
         expect(await page.evaluate(() => window.__noxa.state.whisperTargetUID)).toBe("peer");
     });
     test("voice teardown declares stop sharing only for the original tab", async ({ page }) => {
-        await page.evaluate(() => {
+        await page.evaluate(async () => {
             const s = window.__noxa.state;
             s.voiceTabID = "server-a";
-            s.activeTabID = "server-b";
+            s.pc = { close() {} };
             s.shareStream = document.createElement("canvas").captureStream(1);
             s.screenSharing = true;
+            const calls = window.__publicationCalls = [];
+            const app = window.go.main.App;
+            const control = async (tab, msg) => {
+                calls.push([tab, msg]);
+                return { ...msg, generation: "7", streams: [] };
+            };
+            window.go.main.App = new Proxy(app, { get: (target, key) => key === "VideoStreamControlForTab" ? control : target[key] });
+            await (await import("/src/stream-publication.js")).startPublication("screen", s.shareStream.getVideoTracks()[0]);
+            s.activeTabID = "server-b";
             window.__noxa.resetVoiceSession();
         });
-        expect(await page.evaluate(() => window.__callArgs.SetScreenShareForTab.at(-1))).toEqual(["server-a", false]);
+        expect(await page.evaluate(() => window.__publicationCalls.filter(([, msg]) => msg.action === "publish" && !msg.active))).toEqual([
+            ["server-a", expect.objectContaining({ slot: "screen", generation: "7", active: false })],
+        ]);
     });
     for (const scenario of ["retry", "reopen retry", "server switch"]) test(`whisper settings preserve ${scenario} ownership`, async ({ page }) => {
         await installSaveScenario(page, { whisper_active: false, whisper_clients: [], whisper_channels: [] });
@@ -344,7 +454,7 @@ test.describe("tab-bound voice signaling", () => {
         }, slot);
         expect(result.registered).toBe(true);
         if (slot !== "cam") expect(result.playback).toBe(true);
-        if (slot === "cam") expect(result.tile).toBe(true);
+        if (slot === "cam") expect(result.tile).toBe(false); // Viewing requires an explicit watch.
         if (slot === "screenaudio") expect(result.audio).toEqual({ muted: false, volume: 100 });
     });
     for (const callback of ["ICE", "track"]) test(`replaced peers cannot deliver late ${callback} callbacks`, async ({ page }) => {
@@ -614,7 +724,7 @@ test.describe("tab-bound rules subscriptions and avatars", () => {
             await window.__oldSubscription;
             chat.onSubscriptions({ channel_ids: [1, 3] });
         }, replacement);
-        expect(await page.evaluate(() => window.__sessionActions.toasts)).toEqual(replacement ? [] : [["subscribe failed: old server denied", "warn"]]);
+        expect(await page.evaluate(() => window.__sessionActions.toasts)).toEqual(replacement ? [] : [["subscription update failed: old server denied", "warn"]]);
         await expect(page.locator('.channel-tab.active')).toContainText("3");
     });
     test("rules success waits for the server event and preserves the displayed hash", async ({ page }) => {
@@ -1702,7 +1812,7 @@ test.describe("tab-bound chat search and export", () => {
             }
             old.resolve({ messages: [], scanned: 999 });
         });
-        await expect(page.locator("#chat-search-server")).toHaveText("searching… 12");
+        await expect(page.locator("#chat-search-server")).toHaveText("Searching… 12");
         await expect(page.locator("#chat-search-server")).toBeDisabled();
         await expect(page.locator(".search-results")).toHaveCount(0);
         await page.evaluate(() => window.__scanScope.pending[1].resolve({ messages: [], scanned: 12 }));
@@ -3912,7 +4022,7 @@ test("sound previews use draft volume, finish Test All, and cancel on close @a11
     await page.evaluate(() => { window.__previewedSounds = []; });
     await page.getByRole("button", { name: "Test all sounds", exact: true }).click();
     await expect(page.getByRole("status").filter({ hasText: "Preview finished" })).toBeVisible({ timeout: 20000 });
-    expect(await page.evaluate(() => new Set(window.__previewedSounds.map(x => x.name)).size)).toBe(32);
+    expect(await page.evaluate(() => new Set(window.__previewedSounds.map(x => x.name)).size)).toBe(33);
     await page.getByRole("button", { name: "Preview connection", exact: true }).click();
     await page.getByRole("button", { name: "Cancel", exact: true }).click();
     await expect.poll(() => page.evaluate(() => window.__noxa.soundEngine.active.size)).toBe(0);
@@ -3980,6 +4090,42 @@ test("server information opens from the name, Connections menu and latency with 
     await expect(dialog.getByRole("button", { name: "Close", exact: true })).toBeInViewport();
     expect(await dialog.locator(".server-info").evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
     await dialog.locator(".server-info").screenshot({ path: testInfo.outputPath("server-information-small.png") });
+});
+
+test("server information shows reported video processors without inventing GPU support or retaining a replaced peer", async ({ page }, testInfo) => {
+    await prepareServerInformation(page);
+    await page.clock.install();
+    await page.evaluate(() => {
+        window.__processorStats = () => new Map([
+            ["vp8", { id: "vp8", type: "codec", mimeType: "video/VP8" }],
+            ["send", { id: "send", type: "outbound-rtp", kind: "video", codecId: "vp8", framesEncoded: 10, encoderImplementation: "libvpx", powerEfficientEncoder: false }],
+            ["receive", { id: "receive", type: "inbound-rtp", kind: "video", codecId: "vp8", framesDecoded: 10, decoderImplementation: "<img src=x onerror=alert(1)>" }],
+        ]);
+        window.__noxa.state.pc = { getStats: async () => window.__processorStats() };
+    });
+    await page.locator("#server-name").click();
+    const dialog = page.getByRole("dialog", { name: "Server information" });
+    await dialog.getByText("Video processing diagnostics", { exact: true }).click();
+    const send = dialog.locator('[data-video-processors="encoders"]');
+    const receive = dialog.locator('[data-video-processors="decoders"]');
+    await expect(send).toHaveText("VP8 · libvpx · power efficient: no");
+    await expect(receive).toHaveText("VP8 · <img src=x onerror=alert(1)> · power efficient: not reported");
+    await expect(receive.locator("img")).toHaveCount(0);
+    await page.setViewportSize({ width: 420, height: 600 });
+    expect(await dialog.locator(".server-info-body").evaluate(el => el.scrollWidth <= el.clientWidth)).toBe(true);
+    await dialog.locator(".server-info-processing").scrollIntoViewIfNeeded();
+    await dialog.locator(".server-info").screenshot({ path: testInfo.outputPath("video-processing.png") });
+    await page.evaluate(() => {
+        window.__noxa.state.pc.getStats = () => new Promise(resolve => { window.__releaseProcessorStats = resolve; });
+    });
+    await page.clock.runFor(2000);
+    await expect.poll(() => page.evaluate(() => typeof window.__releaseProcessorStats)).toBe("function");
+    await page.evaluate(() => {
+        window.__noxa.state.pc = { getStats: async () => new Map() };
+        window.__releaseProcessorStats(window.__processorStats());
+    });
+    await expect(send).toHaveText("—");
+    await expect(receive).toHaveText("—");
 });
 
 test("server information suspends hidden polling, avoids overlapping calls and stops on close", async ({ page }) => {
@@ -4178,6 +4324,88 @@ test("selected quick wins completed downloads open their scoped folder", async (
     await expect(page.getByRole("button", { name: "Ordner öffnen", exact: true })).toHaveCount(1);
 });
 
+test("private groups restore persisted unread state after native tab activation", async ({ page }) => {
+    await showB3Workspace(page);
+    await page.evaluate(() => {
+        const app = window.go.main.App;
+        window.go.main.App = new Proxy(app, { get(target, key) {
+            if (key === "ConversationForTab") return async () => ({ conversations: [{ id: "restored", name: "Restored private group", owner: "uid-daniel", revision: 1, epoch: 1, unread_count: 3, read_message_id: 4, latest_message_id: 7, members: [{ unique_id: "uid-daniel", pending: false }] }], messages: [] });
+            if (key === "SessionInfoForTab") return async () => ({ connected: true, client_id: "client-daniel", unique_id: "uid-daniel", authorization_model: "roles-v1" });
+            return target[key];
+        } });
+        for (const callback of window.__events.tab_reset || []) callback("restored-server");
+    });
+    await expect(page.locator('.group-list-item[data-group-id="restored"] .group-unread')).toHaveText("3");
+});
+
+test("private group sidebar resizes and collapses within the full application layout", async ({ page }, testInfo) => {
+    await showB3Workspace(page);
+    await page.evaluate(async () => {
+        window.__noxa.state.activeTabID = "group-layout-server";
+        const app = window.go.main.App;
+        window.go.main.App = new Proxy(app, { get(target, key) {
+            if (key === "ConversationForTab") return async () => ({ conversations: [], messages: [] });
+            return target[key];
+        } });
+        const groups = await import("/src/conversations.js"); groups.initConversations();
+    });
+    const split = page.locator("#sidebar-scroll");
+    const divider = page.getByRole("separator", { name: "Resize channels and private groups" });
+    await expect(page.locator(".group-sidebar-status")).toHaveText("No private groups yet.");
+    const initial = await divider.boundingBox(), bounds = await split.boundingBox();
+    expect(initial.y).toBeGreaterThan(bounds.y + bounds.height * 0.7);
+    await page.screenshot({ path: testInfo.outputPath("group-sidebar-empty.png") });
+    await page.mouse.move(initial.x + initial.width / 2, initial.y + 4);
+    await page.mouse.down(); await page.mouse.move(initial.x + initial.width / 2, bounds.y + bounds.height / 2, { steps: 6 }); await page.mouse.up();
+    expect((await divider.boundingBox()).y).toBeLessThan(initial.y - 50);
+    await page.getByRole("button", { name: "Private groups", exact: true }).click();
+    await expect(page.locator(".group-sidebar-body")).toBeHidden();
+    await page.evaluate(() => { window.__noxa.state.settings.language = "de"; window.__noxa.applyAppearance(); });
+    await page.getByRole("button", { name: "Private Gruppen", exact: true }).click();
+    await expect(page.getByRole("separator", { name: "Größe von Kanälen und privaten Gruppen anpassen" })).toBeVisible();
+    await page.screenshot({ path: testInfo.outputPath("group-sidebar-resized.png") });
+});
+
+test("private group workspace keeps hidden channel messages unread until returning to channel", async ({ page }) => {
+    await showB3Workspace(page);
+    await page.evaluate(async () => {
+        window.__noxa.state.activeTabID = "group-read-server";
+        const app = window.go.main.App;
+        const group = { id: "read-group", name: "Private team", owner: "uid-daniel", revision: 1, epoch: 1,
+            members: [{ unique_id: "uid-daniel", pending: false, joined_epoch: 1 }] };
+        window.go.main.App = new Proxy(app, { get(target, key) {
+            if (key === "ConversationForTab") return async () => ({ conversations: [structuredClone(group)], messages: [] });
+            if (key === "ChatHistoryForTab") return async () => ({ messages: [] });
+            return target[key];
+        } });
+        window.__noxaChat.onMyChannelChanged();
+        window.__noxaChat.addChat({ id: 9201, channel_id: 2, from: "Alex", from_unique_id: "uid-alex", text: "Already read in channel" });
+        const groups = await import("/src/conversations.js");
+        groups.initConversations();
+    });
+    await expect(page.locator('#chat-log [data-msg-id="9201"]')).toBeVisible();
+    await expect.poll(() => page.evaluate(() => window.__savedSettings?.last_read_channels?.[2])).toBe(9201);
+    await page.locator("#private-groups-sidebar").getByRole("button", { name: "Private team", exact: true }).click();
+    await expect(page.locator("#private-groups .group-content h3")).toHaveText("Private team");
+    await expect(page.locator("#chat-pane")).toBeHidden();
+    await page.evaluate(() => {
+        for (const callback of window.__events.event || []) callback(JSON.stringify({ type: "chat", data: {
+            id: 9202, channel_id: 2, from: "Alex", from_unique_id: "uid-alex", text: "Unread while private team is open",
+        } }));
+    });
+    await expect.poll(() => page.evaluate(() => window.__noxa.chatUnread(2)?.n)).toBe(1);
+    await expect(page.locator('#chat-log [data-msg-id="9202"]')).toHaveCount(0);
+    // Exercise a real rerender while hidden as well as the incoming-message path.
+    await page.evaluate(() => window.dispatchEvent(new Event("noxa-language-changed")));
+    expect(await page.evaluate(() => window.__noxa.state.settings.last_read_channels[2])).toBe(9201);
+    expect(await page.evaluate(() => window.__savedSettings.last_read_channels[2])).toBe(9201);
+    await page.getByRole("button", { name: "Back to channel", exact: true }).click();
+    await expect(page.locator("#chat-pane")).toBeVisible();
+    await expect(page.locator('#chat-log [data-msg-id="9202"]')).toBeVisible();
+    expect(await page.evaluate(() => window.__noxa.chatUnread(2))).toBeNull();
+    await expect.poll(() => page.evaluate(() => window.__savedSettings?.last_read_channels?.[2])).toBe(9202);
+});
+
 test("selected quick wins anchor scrollback across trimming and language changes", async ({ page }) => {
     await showB3Workspace(page);
     await page.evaluate(() => {
@@ -4242,7 +4470,7 @@ test("selected quick wins fullscreen keeps names and share audio has independent
     await showB3Workspace(page);
     await page.evaluate(async () => {
         const v = window.__noxa;
-        v.state.clients.push({ client_id: "screen-peer", nickname: "Screen Person", unique_id: "screen-uid", sharing: true });
+        v.state.clients.push({ client_id: "screen-peer", nickname: "Screen Person", unique_id: "screen-uid" });
         window.__shareLevel = { volume: 75, muted: false };
         v.shareAudioCtl = {
             get: () => window.__shareLevel,
@@ -4993,18 +5221,18 @@ test("refreshes capture and playback device lists on demand", async ({ page }) =
 test("mute control switches to an unmute affordance and back", async ({ page }) => {
     await page.evaluate(() => window.__noxa.showWorkspace(false));
     const mute = page.getByRole("button", { name: "Mute microphone" });
-    await expect(mute).toHaveText("Mic on");
+    await expect(mute).toHaveText("Microphone on");
     await expect(mute).toHaveAttribute("title", "Mute");
     await expect(mute).toHaveAttribute("aria-pressed", "false");
 
     await mute.click();
     const unmute = page.getByRole("button", { name: "Unmute microphone" });
-    await expect(unmute).toHaveText("Mic muted");
+    await expect(unmute).toHaveText("Microphone muted");
     await expect(unmute).toHaveAttribute("title", "Unmute");
     await expect(unmute).toHaveAttribute("aria-pressed", "true");
 
     await unmute.click();
-    await expect(page.getByRole("button", { name: "Mute microphone" })).toHaveText("Mic on");
+    await expect(page.getByRole("button", { name: "Mute microphone" })).toHaveText("Microphone on");
 });
 
 test("voice activation reopens after silence and keeps mute and PTT private", async ({ page }) => {
@@ -5709,7 +5937,7 @@ test("routes decrypted direct messages and echoes without mixing global chat or 
     await expect(bravoTab).toBeVisible();
     await bravoTab.click();
     await expect(page.locator("#chat-log")).toContainText("private Grüße 🌿");
-    await expect(page.locator("#chat-log .msg-tag")).toHaveText("dm");
+    await expect(page.locator("#chat-log .msg-tag")).toHaveText("Direct message");
     await expect(page.locator("#chat-log .msg-lock")).toHaveAttribute("title", /end-to-end encrypted/);
     await expect(page.locator("#chat-log .msg-lock")).toHaveAttribute("aria-label", /end-to-end encrypted/);
 
@@ -5746,7 +5974,7 @@ test("restores DM history without claiming legacy or plaintext records were veri
         window.__noxaChat.openPM("bravo", "BRAVO");
     });
     await expect(page.locator("#chat-log")).toContainText("verified record");
-    await expect(page.locator("#chat-log .msg-tag")).toHaveText(["dm", "dm", "dm"]);
+    await expect(page.locator("#chat-log .msg-tag")).toHaveText(["Direct message", "Direct message", "Direct message"]);
     await expect(page.locator("#chat-log .msg-lock")).toHaveCount(1);
     await expect(page.locator("#chat-log .msg-lock")).toHaveAttribute("title", /end-to-end encrypted/);
     await expect(page.locator("#chat-log .msg-lock")).toHaveAttribute("aria-label", /end-to-end encrypted/);
@@ -6003,6 +6231,140 @@ test("does not paint a completed login over a tab selected during finalization",
         .toBe("other.example:12333");
     await expect(page.locator("#conn-pill")).not.toHaveText("new.example:12333");
     expect(await page.evaluate(() => window.__noxa.state.tabConnects.get("new-tab")?.spw)).toBe("secret");
+});
+
+test("video CPU pressure does not flap quality around its threshold", async ({ page }) => {
+    await page.clock.install();
+    await page.evaluate(async () => {
+        const state = window.__noxa.state;
+        Object.assign(state, { activeTabID: "video-tab", myClientID: "self", myChannelID: 1, pc: { getStats: async () => new Map(), getSenders: () => [] } });
+        window.__testCPU = 90;
+        const app = window.go.main.App;
+        window.go.main.App = new Proxy(app, { get(target, key) {
+            if (key === "SystemCPUPercent") return async () => {
+                if (window.__rejectCPU) throw new Error("CPU telemetry unavailable");
+                return window.__testCPU;
+            };
+            return target[key];
+        }});
+        const video = await import("/src/video.js");
+        const stream = document.createElement("canvas").captureStream(1);
+        video.videoTrackAdded(stream.getVideoTracks()[0].id, stream, { client_id: "peer", nickname: "Peer" });
+    });
+    const qualities = () => page.evaluate(() => (window.__callArgs.SetVideoQualityForTab || []).map(args => args[1]));
+    await page.clock.runFor(3000);
+    await expect.poll(qualities).toEqual(["low"]);
+    for (const cpu of [84, 86, 84, 75, 69, 80]) {
+        await page.evaluate(value => { window.__testCPU = value; }, cpu);
+        await page.clock.runFor(3000);
+    }
+    expect(await qualities()).toEqual(["low"]);
+    await page.evaluate(() => { window.__testCPU = 60; });
+    await page.clock.runFor(12000);
+    await page.evaluate(() => { window.__rejectCPU = true; });
+    await page.clock.runFor(6000);
+    await page.evaluate(() => { window.__rejectCPU = false; });
+    await page.clock.runFor(15000);
+    expect(await qualities()).toEqual(["low"]);
+    await page.clock.runFor(3000);
+    await expect.poll(qualities).toEqual(["low", "mid"]);
+});
+
+test("video CPU pressure respects efficient decoding and discards stale polls", async ({ page }) => {
+    await page.clock.install();
+    await page.evaluate(async () => {
+        const state = window.__noxa.state;
+        window.__efficientDecoder = true;
+        const pc = { getStats: async () => new Map([["video", { type: "inbound-rtp", kind: "video", framesDecoded: 20, powerEfficientDecoder: window.__efficientDecoder }]]), getSenders: () => [] };
+        Object.assign(state, { activeTabID: "video-tab", myClientID: "self", myChannelID: 1, pc });
+        const app = window.go.main.App;
+        window.go.main.App = new Proxy(app, { get(target, key) {
+            if (key === "SystemCPUPercent") return async () => {
+                if (window.__delayCPU) return await new Promise(resolve => { window.__finishCPU = resolve; });
+                return 95;
+            };
+            return target[key];
+        }});
+        window.__videoForCPU = await import("/src/video.js");
+        const stream = document.createElement("canvas").captureStream(1);
+        window.__videoForCPU.videoTrackAdded(stream.getVideoTracks()[0].id, stream, { client_id: "peer", nickname: "Peer" });
+    });
+    await page.clock.runFor(9000);
+    expect(await page.evaluate(() => window.__calls.SetVideoQualityForTab || 0)).toBe(0);
+    await page.evaluate(() => { window.__efficientDecoder = false; window.__delayCPU = true; });
+    await page.clock.runFor(3000);
+    await expect.poll(() => page.evaluate(() => typeof window.__finishCPU)).toBe("function");
+    await page.evaluate(() => {
+        window.__videoForCPU.clearVideoGrid();
+        window.__noxa.state.serverGeneration++;
+        window.__finishCPU(95);
+    });
+    await page.clock.runFor(3000);
+    expect(await page.evaluate(() => window.__calls.SetVideoQualityForTab || 0)).toBe(0);
+});
+
+test("video CPU pressure treats sender and receiver efficiency independently", async ({ page }) => {
+    await page.clock.install();
+    await page.evaluate(async () => {
+        window.__efficientSender = true;
+        window.__efficientReceiver = false;
+        window.__senderCaps = [];
+        const stream = document.createElement("canvas").captureStream(1);
+        const track = stream.getVideoTracks()[0];
+        const sender = { track, getParameters: () => ({ encodings: [{}] }), setParameters: async value => { window.__senderCaps.push(value); } };
+        const pc = {
+            getSenders: () => [sender],
+            getTransceivers: () => [{ sender, receiver: { track: { kind: "video" } }, direction: "sendonly" }],
+            getStats: async () => new Map([
+                ["receive", { type: "inbound-rtp", kind: "video", framesDecoded: 20, powerEfficientDecoder: window.__efficientReceiver }],
+                ["send", { type: "outbound-rtp", kind: "video", framesEncoded: 20, powerEfficientEncoder: window.__efficientSender }],
+            ]),
+        };
+        Object.assign(window.__noxa.state, { activeTabID: "video-tab", myClientID: "self", myChannelID: 1, pc });
+        const app = window.go.main.App;
+        window.go.main.App = new Proxy(app, { get(target, key) {
+            if (key === "SystemCPUPercent") return async () => 95;
+            return target[key];
+        }});
+        const video = await import("/src/video.js");
+        video.videoTrackAdded(track.id, stream, { client_id: "peer", nickname: "Peer" });
+    });
+    await page.clock.runFor(3000);
+    await expect.poll(() => page.evaluate(() => window.__callArgs.SetVideoQualityForTab?.at(-1)?.[1])).toBe("low");
+    expect(await page.evaluate(() => window.__senderCaps)).toEqual([]);
+    await page.evaluate(() => { window.__efficientSender = false; window.__efficientReceiver = true; });
+    await page.clock.runFor(3000);
+    await expect.poll(() => page.evaluate(() => window.__callArgs.SetVideoQualityForTab?.at(-1)?.[1])).toBe("mid");
+    await expect.poll(() => page.evaluate(() => window.__senderCaps.at(-1)?.encodings[0]?.maxBitrate)).toBe(500000);
+});
+
+test("late tab metadata cannot erase successful login credentials", async ({ page }) => {
+    await page.evaluate(() => {
+        const app = window.go.main.App;
+        window.__tabs = [{ id: "login-tab", addr: "voice.example:12333", nickname: "Alice", active: true, connected: true }];
+        window.go.main.App = new Proxy(app, { get(target, key) {
+            if (key === "ListTabs") return async () => {
+                if (!window.__releaseTabMetadata) {
+                    await new Promise(resolve => { window.__releaseTabMetadata = resolve; });
+                }
+                return structuredClone(window.__tabs);
+            };
+            return target[key];
+        }});
+        window.__connectBookmarkHandler = async () => ({ tab_id: "login-tab", error: "" });
+        for (const callback of window.__events.tab_reset || []) callback("login-tab");
+    });
+    await expect.poll(() => page.evaluate(() => typeof window.__releaseTabMetadata)).toBe("function");
+    await page.locator("#login-addr").fill("voice.example:12333");
+    await page.locator("#login-nick").fill("Alice");
+    await page.locator("#login-accountpw").fill("account-secret");
+    await page.locator("#login-serverpw").fill("server-secret");
+    await page.locator("#login-connect").click();
+    await expect.poll(() => page.evaluate(() => window.__noxa.state.tabConnects.get("login-tab")?.spw)).toBe("server-secret");
+    await page.evaluate(() => window.__releaseTabMetadata());
+    await expect.poll(() => page.evaluate(() => window.__noxa.state.lastConnect?.spw)).toBe("server-secret");
+    expect(await page.evaluate(() => window.__noxa.state.tabConnects.get("login-tab")?.pw)).toBe("account-secret");
+    expect(await page.evaluate(() => window.__noxa.state.lastSuccessfulConnect?.spw)).toBe("server-secret");
 });
 
 test("rejects A-to-B-to-A identity results during login finalization", async ({ page }) => {
@@ -8657,7 +9019,7 @@ test("uses grouped, distinct action sounds without replaying historical tab acti
         const { soundEngine } = window.__noxa;
         await soundEngine.preload();
         await soundEngine.resume();
-        if (soundEngine.buffers.size !== 50 || soundEngine.ctx.state !== "running") throw new Error(JSON.stringify({ buffers: soundEngine.buffers.size, state: soundEngine.ctx.state, warnings: [...soundEngine.warnings] }));
+        if (soundEngine.buffers.size !== 51 || soundEngine.ctx.state !== "running") throw new Error(JSON.stringify({ buffers: soundEngine.buffers.size, state: soundEngine.ctx.state, warnings: [...soundEngine.warnings] }));
         let clock = 0;
         soundEngine.now = () => clock += 1000;
         const originalSource = soundEngine.ctx.createBufferSource.bind(soundEngine.ctx);
@@ -8718,13 +9080,13 @@ test("uses grouped, distinct action sounds without replaying historical tab acti
         state.lastConnect = { addr: "sound.example:12333" };
         state.settings.chat_notification_level = "all";
         state.settings.keywords = { "sound.example:12333": ["urgent"] };
-        const chat = (id, text) => emit("event", JSON.stringify({
+        const chat = (id, text, role_mentions = []) => emit("event", JSON.stringify({
             type: "chat", data: {
-                id, from: "Bob", from_unique_id: "user-b", text, channel_id: 1,
+                id, from: "Bob", from_unique_id: "user-b", text, channel_id: 1, role_mentions,
             },
         }));
         const keywordChat = collect(() => chat(901, "urgent request"));
-        const roleChat = collect(() => chat(902, "@admin urgent request"));
+        const roleChat = collect(() => chat(902, "<@&1> urgent request", ["user-a"]));
         const ordinaryChat = collect(() => chat(903, "ordinary request"));
         state.myChannelID = 0;
         state.clients = [{ client_id: "client-a", unique_id: "user-a", nickname: "Alice", channel_id: 7 }];
@@ -8865,7 +9227,7 @@ test("scopes connection failures and active-tab close sounds", async ({ page }) 
         const { soundEngine } = window.__noxa;
         await soundEngine.preload();
         await soundEngine.resume();
-        if (soundEngine.buffers.size !== 50 || soundEngine.ctx.state !== "running") throw new Error(JSON.stringify({ buffers: soundEngine.buffers.size, state: soundEngine.ctx.state, warnings: [...soundEngine.warnings] }));
+        if (soundEngine.buffers.size !== 51 || soundEngine.ctx.state !== "running") throw new Error(JSON.stringify({ buffers: soundEngine.buffers.size, state: soundEngine.ctx.state, warnings: [...soundEngine.warnings] }));
         let clock = 0;
         soundEngine.now = () => clock += 1000;
         const originalSource = soundEngine.ctx.createBufferSource.bind(soundEngine.ctx);
@@ -8978,4 +9340,39 @@ test("scopes connection failures and active-tab close sounds", async ({ page }) 
     expect(result.activeClose).toEqual(["connection_disconnected"]);
     expect(result.activeOfflineClose).toEqual([]);
     expect(result.offlineMenuDisconnect).toEqual([]);
+});
+
+
+test("viewer-start sound belongs to the current publication and obeys sound settings", async ({ page }) => {
+    const result = await page.evaluate(async () => {
+        const { state, soundEngine } = window.__noxa;
+        state.pc = {}; state.myClientID = "publisher"; state.myChannelID = 1;
+        state.replayingTabID = "";
+        state.settings = { ...state.settings, play_sounds: true, effects_enabled: true, sound_volume: 100,
+            event_sounds: {}, notify_matrix: {}, dnd_enabled: false, dnd_from: "", dnd_to: "" };
+        window.go.main.App = new Proxy(window.go.main.App, { get: (target, key) => key === "VideoStreamControlForTab"
+            ? async (_tab, msg) => ({ ...msg, generation: "90" }) : target[key] });
+        const p = await import("/src/stream-publication.js");
+        const track = document.createElement("canvas").captureStream(1).getVideoTracks()[0];
+        if (!await p.startPublication("cam", track)) throw new Error("fixture publication rejected");
+        await soundEngine.preload(); await soundEngine.resume();
+        let clock = 0; soundEngine.now = () => clock += 1000;
+        const heard = []; const original = soundEngine.play.bind(soundEngine);
+        soundEngine.play = (name, options) => { const ok = original(name, options); if (ok) heard.push(name); return ok; };
+        const emit = (data = {}) => {
+            for (const entry of soundEngine.active) soundEngine.release(entry);
+            for (const cb of window.__events.event) cb(JSON.stringify({ type: "stream_watch_started", data: { publisher_id: "publisher", slot: "cam", generation: "90", ...data } }));
+            return heard.length;
+        };
+        const counts = [emit(), emit({ generation: "89" }), emit({ publisher_id: "someone-else" }), emit({ slot: "screen" })];
+        state.settings.play_sounds = false; counts.push(emit()); state.settings.play_sounds = true;
+        state.settings.event_sounds.stream_watch_started = false; counts.push(emit()); state.settings.event_sounds.stream_watch_started = true;
+        state.settings.effects_enabled = false; counts.push(emit()); state.settings.effects_enabled = true;
+        state.settings.dnd_enabled = true; counts.push(emit()); state.settings.dnd_enabled = false;
+        state.replayingTabID = "past"; counts.push(emit()); state.replayingTabID = "";
+        counts.push(emit());
+        await p.stopPublication("cam"); counts.push(emit()); track.stop();
+        return { counts, heard };
+    });
+    expect(result).toEqual({ counts: [1,1,1,1,1,1,1,1,1,2,2], heard: ["stream_watch_started", "stream_watch_started"] });
 });

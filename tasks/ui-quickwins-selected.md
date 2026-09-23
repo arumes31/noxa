@@ -7,7 +7,8 @@ than replaced. Preserve the ongoing deployment/media work.
 - [x] Voice: persistent server/channel context (1), explicit microphone state
   with icon/text (2/3), capture meter next to mute (6), local muted-speech warning
   (7), distinct camera/share controls (11), explicit leave/disconnect (64).
-- [x] Video: actual presented-frame age for paused screen previews (15),
+- [x] Video (15): periodic publisher previews and native opt-in viewing verified.
+  Actual presented-frame age for paused screen previews is complete;
   accessible share volume percent (22), reliable Escape/fullscreen
   controls and persistent participant name (27/28).
 - [x] Chat: localized unread separator/pill (31/32), stable scrollback (33),
@@ -15,9 +16,10 @@ than replaced. Preserve the ongoing deployment/media work.
   retry (37), result count and all occurrence highlighting (45/46).
 - [x] Files: open containing folder for completed downloads (93), using the
   native recorded transfer destination rather than a server-supplied path.
-- [x] Language consistency (99): audit affected voice/chat/video/file controls,
-  update both catalogs and verify live language switching.
-- [x] Regression tests, browser/native verification, final builds and review.
+- [x] Language consistency (99): affected controls and wider chat translation
+  pass verified by the full browser suite and frontend units.
+- [ ] Final regression tests, browser/native verification, builds and review for
+  the expanded stream and translation scope. Earlier selected-control checks passed.
 
 Implementation order: voice, chat, files, video/previews, integration.
 
@@ -39,12 +41,12 @@ Verification:
   reconcile separately, and older-page cursors retain a contiguous range.
 - Final packaged production executable: `client/build/bin/noxa.exe`.
 
-Scope boundary: item 15 currently reports the age of the actual paused video
-frame, not a continuously refreshed server preview. The separately approved
-opt-in stream catalog, periodic preview publication, and watch/stop protocol in
-`docs/plans/2026-09-22-opt-in-channel-video.md` remain unfinished. This checklist
-does not assert completion of that broader media/deployment task or a complete
-translation audit of every unrelated dialog in the application.
+The separately approved stream catalog now publishes a JPEG preview every two
+minutes, with explicit watch/stop controls and independent screen audio mute.
+Native checks prove default-off video, three selected streams, independent stop,
+preview refresh and permission revocation. Final deployment checks remain in
+`tasks/deployment-finish.md`; this does not claim a translation audit of every
+unrelated dialog in the application.
 
 Evidence logs: `.cache/ui-selected-quality.log`,
 `.cache/ui-selected-final-browser.log`, `.cache/ui-selected-visual-final.log`,

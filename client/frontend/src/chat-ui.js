@@ -8,8 +8,14 @@
 // join/leave collapsing (131), announcement banner (132), MOTD (133), scroll
 // lock (134) and the Ctrl+K quick switcher (135).
 //
-// Threads prefer the protocol reply_to_id field. The legacy quote-prefix
-// resolver remains for history written by older clients.
+// Replies and direct recipients use explicit protocol identities.
+import { resolveParent, directPeer } from "./chat-relations.js";
+import { roleMentionChoices, roleMentionLabel, mentionFlags } from "./role-mentions.js";
+import { createPoll, renderPoll } from "./polls.js";
+import { parsePoll } from "./poll-state.js";
+import { closeConversations, initConversations, isPrivateGroupActive, resetConversations } from "./conversations.js";
+import { sessionUserID } from "./session-identity.js";
+import { chatEnglish } from "./chat-messages.js";
 import { renderMarkdown, escapeHTML, EMOJI } from "./markdown.js";
 import { pickIcon } from "./image-tools.js";
 import { closeDialog, confirmDialog, isCurrentServerDialog, mountServerDialog, promptDialog } from "./modal.js";
@@ -57,7 +63,6 @@ let replyRevision = 0;
 let draftRevision = 0;
 let activeSend = null;
 let pendingFiles = []; // {name, dataBase64, isImage, dataURL} staged for send (98/100)
-let lastDMTarget = ""; // last unique ID we sent a DM to (echo routing)
 let emojiPanel = null; // open emoji panel element (95)
 let pinsPanel = null; // open pins panel element (109)
 let pinsRequest = 0;
@@ -92,9 +97,9 @@ let customDirty = true;
 const emojiURLs = new Map(); // name -> dataURL | "" (failed)
 const builtInEmoji = [...new Set(Object.values(EMOJI))];
 const EMOJI_CATS = [
-    ["Faces", builtInEmoji.slice(0, 30)],
-    ["Reactions", builtInEmoji.slice(30, 49)],
-    ["Objects & symbols", builtInEmoji.slice(49)],
+    ["chat.faces", builtInEmoji.slice(0, 30)],
+    ["chat.reactions", builtInEmoji.slice(30, 49)],
+    ["chat.objectsSymbols", builtInEmoji.slice(49)],
 ];
 
 // Offline-DM toast batching (123).
@@ -261,7 +266,6 @@ function resetDMHistoryView() {
     for (const batch of offlineBatch.values()) if (batch.timer) clearTimeout(batch.timer);
     offlineBatch.clear();
     receipts.clear();
-    lastDMTarget = "";
     closeQS();
     if (view.kind === "dm") {
         $("chat-scope").value = "channel";
@@ -331,7 +335,7 @@ function chatSurfaceVisible(key) {
     const workspace = document.getElementById("app");
     const chatTab = document.getElementById("tab-chat");
     const chatPane = document.getElementById("chat-pane");
-    return key === activeKey() && document.visibilityState === "visible" && document.hasFocus() &&
+    return !isPrivateGroupActive() && key === activeKey() && document.visibilityState === "visible" && document.hasFocus() &&
         workspace && !workspace.classList.contains("hidden") && workspace.getAttribute("aria-hidden") !== "true" &&
         chatTab?.getAttribute("aria-selected") === "true" && !chatPane?.hidden;
 }
@@ -412,6 +416,7 @@ function normalize(d, chID) {
         deleted: !!d.deleted,
         reactions: d.reactions || null,
         mentions: d.mentions || [],
+        role_mentions: d.role_mentions || [],
         e2e: !!d.e2e,
         direct: !!d.direct || !!d.e2e,
         // enc_verified is set by the Go layer after it opened the body itself:
@@ -531,7 +536,7 @@ function mentionsMe(text) {
 // markMentions wraps @tokens in the rendered body. It walks text nodes only,
 // so it can never introduce markup into user text.
 function markMentions(container) {
-    const re = mentionRe();
+    const re = new RegExp(mentionRe().source + "|<@&([1-9][0-9]{0,18})>", "gi");
     const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT);
     const nodes = [];
     while (walker.nextNode()) nodes.push(walker.currentNode);
@@ -545,7 +550,8 @@ function markMentions(container) {
         const tail = token.splitText(hit[0].length);
         const span = document.createElement("span");
         span.className = "mention-tok";
-        span.textContent = token.nodeValue;
+        span.textContent = hit[2] ? roleMentionLabel(V().state.clients, hit[2]) : token.nodeValue;
+        if (hit[2]) span.title = token.nodeValue;
         token.parentNode.replaceChild(span, token);
         nodes.unshift(tail); // a body can mention more than one name
     }
@@ -615,13 +621,7 @@ const UNOPENED_BODIES = new Set([
 
 // CHAT_ENCRYPTION_HELP is the single source for what the shield actually
 // promises, so the channel info panel and the README cannot drift apart.
-export const CHAT_ENCRYPTION_HELP =
-    "Channel and global messages are encrypted with a key the server holds, so it can " +
-    "apply moderation at send time but keeps no readable copy: history, pins and " +
-    "attachments are stored sealed. Direct messages are end-to-end encrypted and the " +
-    "server never holds their key. Search runs in this client over decrypted messages — " +
-    "the server cannot match on content. Attachments carry their own key inside the " +
-    "encrypted message body, so a file is exactly as private as the message that links it.";
+export const CHAT_ENCRYPTION_HELP = chatEnglish["chat.encryptionHelp"];
 
 function renderMsg(m) {
     const el = document.createElement("div");
@@ -725,14 +725,9 @@ function renderMsg(m) {
 // renderMarkdown (which escapes first); file names only ever go into
 // textContent or DOM properties, never raw HTML.
 function renderBody(container, m) {
-    let text = m.text;
-    let quoteNick = null;
-    const qm = text.match(/^↪ ([^\n:]{1,64}): /);
-    if (qm) {
-        quoteNick = qm[1];
-        text = text.slice(qm[0].length);
-    }
-    if (!quoteNick && m.replyToID) quoteNick = findMsg(m.replyToID)?.from || "message";
+    if (renderPoll(container, m)) return;
+    const text = m.text;
+    const quoteNick = m.replyToID ? (findMsg(m.replyToID)?.from || t("chat.replyMessage")) : null;
     const parts = text.split(/\[file:([^\]]+)\]/);
     let html = "";
     for (let i = 0; i < parts.length; i += 2) html += renderMarkdown(parts[i]);
@@ -742,7 +737,7 @@ function renderBody(container, m) {
         const q = document.createElement("span");
         q.className = "msg-quote";
         q.textContent = "↪ " + quoteNick + ":";
-        q.title = "jump to the quoted message";
+        q.title = t("chat.quoteJump");
         container.insertBefore(q, container.firstChild);
     }
     for (let i = 1; i < parts.length; i += 2) attachFileRef(container, m, parts[i]);
@@ -780,7 +775,7 @@ function attachFileRef(container, m, cap) {
     const inlineImage = IMAGE_EXTS.includes(ext);
     const inlineVideo = VIDEO_EXTS.includes(ext);
     if (inlineImage || inlineVideo) {
-        wrap.textContent = `loading ${inlineVideo ? "video" : "image"} ${name} …`;
+        wrap.textContent = t(inlineVideo ? "chat.loadingVideo" : "chat.loadingImage", { name });
         app().DownloadChatAttachmentForTab(previewScope.tabID, chID, ref.storage, ref.key).then((b64) => {
             // Check before touching the wrapper or constructing a renderer data
             // URL: a completed request belongs to the scope that launched it.
@@ -794,7 +789,7 @@ function attachFileRef(container, m, cap) {
             // oversized media stays a download chip rather than wedging the
             // webview (100).
             if (b64.length > INLINE_MAX_B64) {
-                wrap.appendChild(downloadChip(chID, ref, name, " (too large to preview)"));
+                wrap.appendChild(downloadChip(chID, ref, name, t("chat.tooLargePreview")));
                 return;
             }
             const el = inlineVideo
@@ -818,7 +813,7 @@ function attachFileRef(container, m, cap) {
             const zoom = document.createElement("button");
             zoom.className = "media-zoom";
             zoom.textContent = "⤢";
-            zoom.title = "open " + name + " full size";
+            zoom.title = t("chat.openFull", { name });
             zoom.onclick = () => { if (previewIsCurrent()) openLightbox(el); };
             wrap.appendChild(zoom);
             if (!inlineVideo) el.onclick = () => { if (previewIsCurrent()) openLightbox(el); }; // controls own the click on a video
@@ -826,9 +821,9 @@ function attachFileRef(container, m, cap) {
             if (!previewIsCurrent()) return;
             wrap.textContent = "";
             if (String(err).includes("too large to preview")) {
-                wrap.appendChild(downloadChip(chID, ref, name, " (too large to preview)"));
+                wrap.appendChild(downloadChip(chID, ref, name, t("chat.tooLargePreview")));
             } else {
-                wrap.textContent = "📎 " + name + " (download failed)";
+                wrap.textContent = "📎 " + name + t("chat.downloadFailed");
             }
         });
     } else {
@@ -846,16 +841,16 @@ function downloadChip(chID, ref, name, suffix) {
     const b = document.createElement("button");
     b.className = "file-chip";
     b.textContent = "📎 " + name + suffix;
-    b.title = "download " + name;
+    b.title = t("chat.downloadName", { name });
     b.onclick = async () => {
         if (!b.isConnected || b.disabled || !attachmentSaveScopeIsCurrent(scope)) return;
         b.disabled = true;
         try {
             const path = await app().SaveChatAttachmentForTab(scope.tabID, chID, ref.storage, ref.key, name);
             if (!attachmentSaveScopeIsCurrent(scope)) return;
-            if (path) V().toast("saved " + name);
+            if (path) V().toast(t("chat.saved", { name }));
         } catch (e) {
-            if (attachmentSaveScopeIsCurrent(scope)) V().toast("save failed: " + e, "warn");
+            if (attachmentSaveScopeIsCurrent(scope)) V().toast(t("chat.saveFailed", { error: String(e) }), "warn");
         } finally {
             if (attachmentSaveScopeIsCurrent(scope) && b.isConnected) b.disabled = false;
         }
@@ -898,7 +893,7 @@ function renderReacts(m) {
         chip.className = "react-chip";
         if (myReactions.get(m.id)?.has(emoji)) chip.classList.add("own");
         chip.textContent = `${emoji} ${count}`;
-        chip.title = "toggle your reaction";
+        chip.title = t("chat.reactionToggle");
         chip.onclick = (e) => {
             e.stopPropagation();
             if (!exportScopeIsCurrent(scope)) return;
@@ -1004,7 +999,7 @@ function renderActions(m) {
     const th = threadIndex(activeKey());
     const root = th.rootOf.get(m.id) || m.id;
     if (th.replies.get(root)) mk("thread", t("chat.action.thread"), () => openThread(root));
-    if (m.self && !m.direct) mk("edit", t("chat.action.edit"), () => startEdit(m));
+    if (m.self && !m.direct && !parsePoll(m.text)) mk("edit", t("chat.action.edit"), () => startEdit(m));
     if (m.self) mk("trash", t("chat.action.delete"), () => deleteMsg(m));
     if (!m.direct) {
         const pinned = isPinned(m);
@@ -1031,7 +1026,7 @@ async function runChatMutation(scope, action, label, stillCurrent = () => true) 
     try { error = await action(); }
     catch (e) { error = String(e); }
     if (!current()) return false;
-    if (error) V().toast(label + " failed: " + error, "warn");
+    if (error) V().toast(t("chat.mutationFailed", { action: label, error }), "warn");
     return !error;
 }
 
@@ -1055,10 +1050,10 @@ function startEdit(m) {
         if (!exportScopeIsCurrent(scope) || !input.isConnected) return;
         if (e.key === "Escape") finish();
         if (e.key !== "Enter") return;
-        const t = input.value.trim();
+        const text = input.value.trim();
         finish(); // the chat_edited broadcast refreshes the text
-        if (t && t !== m.text) {
-            await runChatMutation(scope, () => app().ChatEditMessageForTab(scope.tabID, m.channelID ?? 0, m.id, t, m.version || 1), "edit");
+        if (text && text !== m.text) {
+            await runChatMutation(scope, () => app().ChatEditMessageForTab(scope.tabID, m.channelID ?? 0, m.id, text, m.version || 1), t("chat.action.edit"));
         }
     };
     input.onblur = finish;
@@ -1067,14 +1062,14 @@ function startEdit(m) {
 async function deleteMsg(m) {
     const scope = captureScope(readExportScope);
     const confirmed = await confirmDialog({
-        title: "Delete message?",
-        message: "This removes the message for everyone. This cannot be undone.",
-        confirmLabel: "Delete message",
+        title: t("chat.deleteTitle"),
+        message: t("chat.deleteHelp"),
+        confirmLabel: t("chat.deleteConfirm"),
         danger: true,
         serverScoped: true,
     });
     if (!confirmed) return;
-    await runChatMutation(scope, () => app().ChatDeleteMessageForTab(scope.tabID, m.id), "delete");
+    await runChatMutation(scope, () => app().ChatDeleteMessageForTab(scope.tabID, m.id), t("chat.action.delete"));
     // The chat_deleted broadcast renders the tombstone.
 }
 
@@ -1135,7 +1130,7 @@ function setReply(m) {
     label.textContent = "↪ " + m.from + ": " + m.text.slice(0, 80);
     const x = document.createElement("button");
     x.textContent = "✕";
-    x.title = "cancel reply";
+    x.title = t("chat.replyCancel");
     x.onclick = clearReply;
     bar.appendChild(label);
     bar.appendChild(x);
@@ -1149,31 +1144,6 @@ function clearReply() {
     $("reply-bar").classList.add("hidden");
 }
 
-// QUOTE_RE matches the reply prefix. It is the ONLY link between a reply and
-// its parent — threads (108) resolve the chain from it rather than adding a
-// second mechanism to the wire.
-const QUOTE_RE = /^↪ ([^\n:]{1,64}): /;
-
-// quotedNick returns the nick a message replies to, or "".
-function quotedNick(m) {
-    return (!m.deleted && m.text.match(QUOTE_RE)?.[1]) || "";
-}
-
-// resolveParent finds the message a reply quotes: the newest loaded message
-// from that nick at or before the reply. The prefix carries no id, so this is
-// best-effort by construction — the same rule the quote jump has always used.
-function resolveParent(msgs, m) {
-    if (m.replyToID) return msgs.find((candidate) => candidate.id === m.replyToID) || null;
-    const nick = quotedNick(m);
-    if (!nick) return null;
-    let target = null;
-    for (const c of msgs) {
-        if (c === m) break;
-        if (c.from === nick && c.ts <= m.ts && c.id) target = c;
-    }
-    return target;
-}
-
 function scrollToQuote(quoteEl) {
     const msgEl = quoteEl.closest(".msg");
     const id = Number(msgEl?.dataset.msgId) || 0;
@@ -1181,7 +1151,7 @@ function scrollToQuote(quoteEl) {
     const self = st.msgs.find((x) => x.id === id);
     const target = self ? resolveParent(st.msgs, self) : null;
     if (!target) {
-        V().toast("quoted message not loaded", "info", "alert");
+        V().toast(t("chat.quoteUnavailable"), "info", "alert");
         return;
     }
     flashMsg(target.id);
@@ -1266,10 +1236,10 @@ function renderThreadPanel() {
 
     const head = document.createElement("div");
     head.className = "chat-pop-head";
-    head.textContent = `Thread · ${(th.replies.get(threadRootID) || 0) + 1} messages`;
+    head.textContent = t("chat.threadCount", { count: (th.replies.get(threadRootID) || 0) + 1 });
     const x = document.createElement("button");
     x.textContent = "✕";
-    x.title = "close thread";
+    x.title = t("chat.threadClose");
     x.onclick = closeThreadPanel;
     head.appendChild(x);
     threadPanel.appendChild(head);
@@ -1291,8 +1261,8 @@ function renderThreadPanel() {
     }
     const reply = document.createElement("button");
     reply.className = "thread-reply";
-    reply.textContent = "↩ reply in thread";
-    reply.title = "reply to the last message of this chain";
+    reply.textContent = t("chat.replyThread");
+    reply.title = t("chat.threadReply");
     reply.onclick = () => setReply(chain[chain.length - 1]);
     threadPanel.appendChild(reply);
 }
@@ -1311,6 +1281,7 @@ function refreshThreadFor(id) {
 // ---------------------------------------------------------------------------
 
 function setView(v) {
+    closeConversations();
     invalidateChatViewWork();
     view = v;
     closeThreadPanel(); // a chain belongs to one scope (108)
@@ -1331,6 +1302,8 @@ function setView(v) {
     renderView();
     sendPendingReads();
 }
+
+export function resumeChatView() { setView(view); }
 
 export function openPM(uid, nick) {
     if (!uid) return;
@@ -1357,7 +1330,7 @@ async function openE2EEDiagnostics() {
     let d;
     try { d = await app().E2EEDiagnostics(peer); }
     catch (err) {
-        if (generation === V().state.serverGeneration) V().toast("encryption diagnostics failed: " + err, "warn");
+        if (generation === V().state.serverGeneration) V().toast(t("chat.diagnosticsFailed", { error: String(err) }), "warn");
         return;
     }
     if (generation !== V().state.serverGeneration) return;
@@ -1366,17 +1339,17 @@ async function openE2EEDiagnostics() {
     const verified = peer && d.safety_number && V().state.settings?.e2ee_verified?.[peer] === d.safety_number;
     const changed = peer && V().state.settings?.e2ee_verified?.[peer] && !verified;
     overlay.innerHTML = `<div class="dlg e2ee-diagnostics">
-        <h3>End-to-end encryption</h3>
-        <div class="e2ee-status ${changed ? "warn" : verified ? "ok" : ""}">${changed ? "⚠ Safety number changed" : verified ? "✓ Safety number verified" : peer ? "Safety number not verified" : "Channel-key diagnostics"}</div>
+        <h3>${t("chat.e2ee")}</h3>
+        <div class="e2ee-status ${changed ? "warn" : verified ? "ok" : ""}">${changed ? t("chat.safetyChanged") : verified ? t("chat.safetyVerifiedStatus") : peer ? t("chat.safetyUnverified") : t("chat.channelDiagnostics")}</div>
         <dl>
-            <dt>Cipher</dt><dd>${escapeHTML(d.cipher || "unknown")}</dd>
-            <dt>Cached peer keys</dt><dd>${d.cached_peers || 0}</dd>
-            <dt>Channel generations</dt><dd>${d.scope_keys || 0}</dd>
-            <dt>Missing/refused keys</dt><dd>${d.refused_keys || 0}</dd>
-            <dt>Handshakes in flight</dt><dd>${d.pending_key_pulls || 0}</dd>
+            <dt>${t("chat.cipher")}</dt><dd>${escapeHTML(d.cipher || t("chat.unknown"))}</dd>
+            <dt>${t("chat.cachedKeys")}</dt><dd>${d.cached_peers || 0}</dd>
+            <dt>${t("chat.channelGenerations")}</dt><dd>${d.scope_keys || 0}</dd>
+            <dt>${t("chat.missingKeys")}</dt><dd>${d.refused_keys || 0}</dd>
+            <dt>${t("chat.pendingHandshakes")}</dt><dd>${d.pending_key_pulls || 0}</dd>
         </dl>
-        ${peer ? `<label>Safety number</label><pre class="safety-number">${escapeHTML(d.safety_number || "peer key unavailable")}</pre>` : ""}
-        <div class="dlg-buttons">${peer && d.safety_number ? '<button class="dlg-ok verify-safety">Mark verified</button>' : ""}<button class="dlg-cancel">Close</button></div>
+        ${peer ? `<label>${t("chat.safetyNumber")}</label><pre class="safety-number">${escapeHTML(d.safety_number || t("chat.keyUnavailable"))}</pre>` : ""}
+        <div class="dlg-buttons">${peer && d.safety_number ? `<button class="dlg-ok verify-safety">${t("chat.markVerified")}</button>` : ""}<button class="dlg-cancel">${t("chat.close")}</button></div>
     </div>`;
     overlay.querySelector(".dlg-cancel").onclick = () => overlay.remove();
     overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
@@ -1390,12 +1363,12 @@ async function openE2EEDiagnostics() {
         } catch (err) {
             settings.e2ee_verified = previous;
             if (!isCurrentServerDialog(overlay)) return;
-            V().toast("saving safety verification failed: " + err, "warn");
+            V().toast(t("chat.safetySaveFailed", { error: String(err) }), "warn");
             return;
         }
         if (!isCurrentServerDialog(overlay)) return;
         overlay.remove();
-        V().toast("safety number verified");
+        V().toast(t("chat.safetyVerified"));
     });
     mountServerDialog(overlay);
 }
@@ -1416,7 +1389,7 @@ export async function setChannelSubscription(channelID, subscribe) {
     const id = Number(channelID);
     if (!id) return false;
     if (!subscribe && id === V().state.myChannelID) {
-        V().toast("your joined channel is always subscribed", "info", "alert");
+        V().toast(t("chat.joinedSubscribed"), "info", "alert");
         return false;
     }
     const scope = captureScope(readChatServerScope);
@@ -1428,7 +1401,7 @@ export async function setChannelSubscription(channelID, subscribe) {
     }
     if (!chatServerIsCurrent(scope)) return false;
     if (err) {
-        V().toast((subscribe ? "subscribe" : "unsubscribe") + " failed: " + err, "warn");
+        V().toast(t("chat.subscriptionFailed", { error: String(err) }), "warn");
         return false;
     }
     return true;
@@ -1450,7 +1423,7 @@ export async function openChannelTab(channelID) {
 function closeChannelTab(channelID) {
     const id = Number(channelID);
     if (id === V().state.myChannelID) {
-        V().toast("move to another channel before unsubscribing", "info", "alert");
+        V().toast(t("chat.moveUnsubscribe"), "info", "alert");
         return;
     }
     setChannelSubscription(id, false);
@@ -1517,7 +1490,7 @@ function renderTabs() {
         const active = activeChannelID() === id && view.kind !== "global" && view.kind !== "dm";
         const el = document.createElement("div");
         el.className = "pm-tab channel-tab" + (active ? " active" : "");
-        el.title = current ? "joined channel" : "subscribed channel";
+        el.title = current ? t("chat.joinedChannel") : t("chat.subscribedChannel");
         const name = document.createElement("span");
         name.className = "pm-tab-name";
         name.textContent = "# " + channelName(id);
@@ -1533,7 +1506,7 @@ function renderTabs() {
             const x = document.createElement("button");
             x.className = "pm-close";
             x.textContent = "✕";
-            x.title = "unsubscribe and close tab";
+            x.title = t("chat.unsubscribeClose");
             x.onclick = (e) => {
                 e.stopPropagation();
                 closeChannelTab(id);
@@ -1548,7 +1521,7 @@ function renderTabs() {
         const scope = captureScope(readDMHistoryScope);
         const current = () => el.isConnected && dmHistoryScopeIsCurrent(scope) && pmTabs.get(tab.uid) === tab;
         el.className = "pm-tab" + (view.kind === "dm" && view.uid === tab.uid ? " active" : "");
-        el.title = "right-click to delete the stored history of this conversation";
+        el.title = t("chat.deleteHistoryHint");
         el.oncontextmenu = (e) => {
             e.preventDefault();
             if (!current()) return;
@@ -1561,8 +1534,8 @@ function renderTabs() {
         if (tab.offline) {
             const b = document.createElement("span");
             b.className = "pm-badge offline";
-            b.textContent = "offline";
-            b.title = "offline messages received";
+            b.textContent = t("chat.offline");
+            b.title = t("chat.offlineReceived");
             el.appendChild(b);
         }
         if (tab.unread > 0) {
@@ -1574,7 +1547,7 @@ function renderTabs() {
         const x = document.createElement("button");
         x.className = "pm-close";
         x.textContent = "✕";
-        x.title = "close tab";
+        x.title = t("chat.tabClose");
         x.onclick = (e) => {
             e.stopPropagation();
             if (!current()) return;
@@ -1648,7 +1621,7 @@ async function ensureDMHistory(uid) {
         while (st.msgs.length > Math.max(max, PAGE)) st.msgs.shift();
     } catch (e) {
         if (!current()) return false;
-        V().toast("DM history unavailable: " + e, "warn");
+        V().toast(t("chat.dmUnavailable", { error: String(e) }), "warn");
     } finally {
         if (current()) {
             st.loading = false;
@@ -1670,7 +1643,7 @@ function dmRecord(peer, nick, m) {
     const reportFailure = err => {
         if (!dmHistoryScopeIsCurrent(scope) || store.get("dm:" + peer) !== st || pmTabs.get(peer) !== tab || !err || dmPersistWarned) return;
         dmPersistWarned = true;
-        V().toast("DM history is not being saved: " + err, "warn");
+        V().toast(t("chat.dmNotSaved", { error: String(err) }), "warn");
     };
     callDMHistory(owner, "DMHistoryAppendForContext", peer, nick || "", {
         from_unique_id: m.fromUID,
@@ -1699,9 +1672,9 @@ async function clearPMHistory(uid, nick) {
     const current = () => dmHistoryScopeIsCurrent(scope) && store.get(key) === st && pmTabs.get(uid) === tab && st.dmClearAttempt === attempt;
     try {
         const confirmed = await confirmDialog({
-            title: "Delete stored conversation?",
-            message: `This permanently deletes the stored history with ${nick}. This cannot be undone: these messages are end-to-end encrypted and the server has no copy.`,
-            confirmLabel: "Delete history",
+            title: t("chat.deleteHistoryTitle"),
+            message: t("chat.dmDeleteHelp", { name: nick }),
+            confirmLabel: t("chat.deleteHistoryConfirm"),
             danger: true,
             serverScoped: true,
         });
@@ -1716,9 +1689,9 @@ async function clearPMHistory(uid, nick) {
         st.loading = false;
         st.loaded = true;
         if (view.kind === "dm" && view.uid === uid) renderView();
-        V().toast("stored history with " + nick + " deleted", "info");
+        V().toast(t("chat.dmDeleted", { name: nick }), "info");
     } catch (err) {
-        if (current()) V().toast("could not clear DM history: " + err, "warn");
+        if (current()) V().toast(t("chat.dmClearFailed", { error: String(err) }), "warn");
     } finally {
         if (st.dmClearAttempt === attempt) {
             st.dmClearAttempt = null;
@@ -1877,6 +1850,7 @@ function lastReadFor(key) {
 }
 
 function markRead(key) {
+    if (isPrivateGroupActive()) return;
     if (!key.startsWith("ch:")) return;
     const st = getStore(key);
     const newest = st.msgs.length ? st.msgs[st.msgs.length - 1].id : 0;
@@ -1960,7 +1934,7 @@ async function maybeLoadOlder() {
     const log = $("chat-log");
     const spinner = document.createElement("div");
     spinner.className = "chat-spinner";
-    spinner.textContent = "loading older messages…";
+    spinner.textContent = t("chat.loadingOlder");
     log.insertBefore(spinner, log.firstChild);
     const prevH = log.scrollHeight;
     try {
@@ -1991,14 +1965,15 @@ export function addChat(d) {
     const key = "ch:" + chID;
     const position = pushMsg(key, m);
     if (position === "duplicate") return false;
-    const directMention = m.mentions.includes(st.myUniqueID) && !m.self;
-    const roleMention = !m.self && /@(admin|moderator|member|guest)\b/i.test(m.text || "");
+    const flags = mentionFlags(m, sessionUserID(st));
+    const directMention = flags.direct && !m.self;
+    const roleMention = flags.role && !m.self;
     const level = st.settings?.chat_notification_level || "all";
     let announcementAllowed = false;
     let announcementEvent = "channel_message";
     let announcementContext = { channelID: m.channelID, className: "messages" };
     let notification = null;
-    if (directMention) {
+    if (directMention || roleMention) {
         m.mentioned = true; // (106) accent highlight
     } else if (!m.self) {
         // (388) keyword highlights: whole-word match gets mention treatment.
@@ -2016,7 +1991,7 @@ export function addChat(d) {
         }
     }
     if (!m.self) {
-        const allowed = level === "all" || (level === "channel_mentions" && directMention) || (level === "role_mentions" && roleMention);
+        const allowed = level === "all" || (level === "channel_mentions" && (directMention || roleMention)) || (level === "role_mentions" && roleMention);
         // A direct/role mention outranks a keyword; an otherwise ordinary
         // message is the fallback. Dispatch one notification per message so
         // the new per-event sound cues never overlap for the same chat line.
@@ -2046,7 +2021,7 @@ export function addChat(d) {
         }
         window.__noxaNotify?.notify(event, text, { ...context, announce: false });
     }
-    if (key === activeKey()) {
+    if (key === activeKey() && !isPrivateGroupActive()) {
         if (position === "append") appendLive(m);
         else renderView();
     } else if (!m.self && !window.__noxaNotify?.channelOverride?.(chID)?.muted) {
@@ -2101,9 +2076,7 @@ function appendLive(m) {
 
 function routeDM(d, m) {
     const st = V().state;
-    // New servers identify the echo's recipient; the legacy fallback cannot
-    // distinguish concurrent outgoing peers and is only used if it is absent.
-    const peer = m.self ? (d.to_unique_id || lastDMTarget || (view.kind === "dm" ? view.uid : "")) : (m.fromUID || "");
+    const peer = directPeer(d, m);
     if (!peer) return false;
     const tab = pmTabs.get(peer) || { uid: peer, nick: m.self ? peer : m.from, unread: 0, offline: false, pendingRead: "" };
     if (!pmTabs.has(peer)) pmTabs.set(peer, tab);
@@ -2125,7 +2098,7 @@ function routeDM(d, m) {
         if (b.timer) clearTimeout(b.timer);
         b.timer = setTimeout(() => {
             offlineBatch.delete(peer);
-            const summary = `${b.n} offline message${b.n === 1 ? "" : "s"} from ${b.nick}`;
+            const summary = t("chat.offlineBatch", { count: b.n, name: b.nick });
             window.__noxaNotify?.notify("dm", summary,
                 { uid: peer, className: "messages", kind: "info", announce: false });
             if (chatAnnouncementAllowed("dm", { uid: peer, className: "messages" }, key)) {
@@ -2144,7 +2117,7 @@ function routeDM(d, m) {
         void sendPendingReads();
     }
 
-    if (key === activeKey()) {
+    if (key === activeKey() && !isPrivateGroupActive()) {
         appendLive(m);
     } else if (!m.self) {
         tab.unread++;
@@ -2252,7 +2225,7 @@ export function onChatDeleted(d) {
 }
 
 export function onChatPinned(d, pinned) {
-    V().sysMsg(pinned ? "a message was pinned" : "a message was unpinned");
+    V().sysMsg(pinned ? t("chat.wasPinned") : t("chat.wasUnpinned"));
     // (109) keep the per-scope pin set current so the 📌 hover button toggles.
     const key = "ch:" + (Number(d.channel_id) || 0);
     const id = Number(d.message_id);
@@ -2415,9 +2388,9 @@ function renderTyping() {
         el.textContent = "";
         return;
     }
-    el.textContent = names.length === 1 ? `${names[0]} is typing…`
-        : names.length === 2 ? `${names[0]} and ${names[1]} are typing…`
-        : `${names.length} people are typing…`;
+    el.textContent = names.length === 1 ? t("chat.typingOne", { name: names[0] })
+        : names.length === 2 ? t("chat.typingTwo", { first: names[0], second: names[1] })
+        : t("chat.typingMany", { count: names.length });
 }
 
 // ---------------------------------------------------------------------------
@@ -2471,7 +2444,6 @@ export async function sendMessage() {
     const files = pendingFiles.splice(0);
     renderFilePreview();
     if (scope === "direct") {
-        lastDMTarget = target;
         if (target && !pmTabs.has(target)) openPMKeepView(target);
     }
     try {
@@ -2584,7 +2556,7 @@ function stageFiles(fileList) {
     const scope = captureScope(readSendScope);
     for (const f of fileList) {
         if (f.size > ATTACH_MAX_BYTES) {
-            V().toast(`${f.name || "file"} is larger than ${Math.round(ATTACH_MAX_BYTES / 1048576)} MB — use the file browser`, "warn");
+            V().toast(t("chat.attachmentTooLarge", { name: f.name || t("chat.file"), size: Math.round(ATTACH_MAX_BYTES / 1048576) }), "warn");
             continue;
         }
         const reader = new FileReader();
@@ -2608,7 +2580,7 @@ function stageFiles(fileList) {
             });
             renderFilePreview();
         };
-        reader.onerror = () => { if (scopeIsCurrent(scope, readSendScope)) V().toast("could not read " + (f.name || "file"), "warn"); };
+        reader.onerror = () => { if (scopeIsCurrent(scope, readSendScope)) V().toast(t("chat.readFileFailed", { name: f.name || t("chat.file") }), "warn"); };
         reader.readAsDataURL(f);
     }
 }
@@ -2633,7 +2605,7 @@ function renderFilePreview() {
         }
         const x = document.createElement("button");
         x.textContent = "✕";
-        x.title = "remove";
+        x.title = t("chat.remove");
         x.onclick = () => {
             pendingFiles.splice(i, 1);
             renderFilePreview();
@@ -2667,7 +2639,7 @@ function toggleEmojiPanel() {
     for (const [cat, list] of EMOJI_CATS) {
         const head = document.createElement("div");
         head.className = "emoji-cat";
-        head.textContent = cat;
+        head.textContent = t(cat);
         emojiPanel.appendChild(head);
         const grid = document.createElement("div");
         grid.className = "emoji-grid";
@@ -2685,14 +2657,14 @@ function toggleEmojiPanel() {
     // Custom server emoji, cached as data URLs.
     const head = document.createElement("div");
     head.className = "emoji-cat";
-    head.textContent = "Server emoji";
+    head.textContent = t("chat.serverEmoji");
     emojiPanel.appendChild(head);
     // (96) upload is permission-gated server-side, so the button is always
     // offered and a denial comes back as an error frame.
     const up = document.createElement("button");
     up.className = "emoji-upload";
     up.textContent = "+ upload";
-    up.title = "upload a custom server emoji (needs permission)";
+    up.title = t("chat.uploadEmojiHint");
     up.onclick = async (ev) => {
         ev.stopPropagation();
         const generation = V().state.serverGeneration;
@@ -2700,9 +2672,9 @@ function toggleEmojiPanel() {
         const img = await pickIcon(128, 0.9);
         if (!img?.dataBase64 || generation !== V().state.serverGeneration) return;
         const name = (await promptDialog({
-            title: "Upload custom emoji",
-            label: "Emoji shortcode (letters, digits, _ and -)",
-            confirmLabel: "Upload",
+            title: t("chat.uploadEmojiTitle"),
+            label: t("chat.emojiShortcode"),
+            confirmLabel: t("chat.upload"),
             serverScoped: true,
         }) || "").trim();
         if (!name || generation !== V().state.serverGeneration) return;
@@ -2710,13 +2682,13 @@ function toggleEmojiPanel() {
             const err = await app().EmojiUploadForTab(tabID, name, img.dataBase64);
             if (generation !== V().state.serverGeneration) return;
             if (err) {
-                V().toast("emoji upload failed: " + err, "warn");
+                V().toast(t("chat.emojiFailed", { error: String(err) }), "warn");
                 return;
             }
             customDirty = true; // refetch so the new one appears in the picker
-            V().toast("emoji :" + name + ": upload requested");
+            V().toast(t("chat.emojiRequested", { name }));
         } catch (err) {
-            if (generation === V().state.serverGeneration) V().toast("emoji upload failed: " + String(err), "warn");
+            if (generation === V().state.serverGeneration) V().toast(t("chat.emojiFailed", { error: String(err) }), "warn");
         }
     };
     head.appendChild(up);
@@ -2728,7 +2700,7 @@ function toggleEmojiPanel() {
         if (customEmoji.length === 0) {
             const hint = document.createElement("div");
             hint.className = "set-hint";
-            hint.textContent = "none on this server";
+            hint.textContent = t("chat.noEmoji");
             grid.appendChild(hint);
             return;
         }
@@ -2901,7 +2873,7 @@ async function loadPinsPanel() {
     const scope = captureScope(readExportScope);
     const current = () => pinsPanel === panel && pinsRequest === request && exportScopeIsCurrent(scope);
     if (view.kind === "channel" && !V().state.myChannelID) {
-        V().toast("join a channel to view its pinned messages — or switch to global", "info", "alert");
+        V().toast(t("chat.joinPins"), "info", "alert");
         closePinsPanel();
         return;
     }
@@ -2909,7 +2881,7 @@ async function loadPinsPanel() {
     pinsPanel.innerHTML = "";
     const head = document.createElement("div");
     head.className = "chat-pop-head";
-    head.textContent = "Pinned messages";
+    head.textContent = t("chat.pinnedTitle");
     const x = document.createElement("button");
     x.textContent = "✕";
     x.onclick = () => { if (current()) closePinsPanel(); };
@@ -2929,14 +2901,14 @@ async function loadPinsPanel() {
         if (!current()) return;
         const err = document.createElement("div");
         err.className = "set-hint warn";
-        err.textContent = "pins unavailable: " + e;
+        err.textContent = t("chat.pinsFailed", { error: String(e) });
         pinsPanel.appendChild(err);
         return;
     }
     if (pins.length === 0) {
         const hint = document.createElement("div");
         hint.className = "set-hint";
-        hint.textContent = "Nothing pinned yet — hover a message and hit 📌.";
+        hint.textContent = t("chat.noPins");
         pinsPanel.appendChild(hint);
         return;
     }
@@ -2950,21 +2922,21 @@ async function loadPinsPanel() {
         row.appendChild(body);
         const jump = document.createElement("button");
         jump.textContent = "↩";
-        jump.title = "jump to message";
+        jump.title = t("chat.messageJump");
         jump.onclick = () => {
             if (!current()) return;
             if (!flashMsg(p.message_id)) {
-                V().toast("message not loaded — scroll up to load older history", "info", "alert");
+                V().toast(t("chat.messageUnavailable"), "info", "alert");
             }
         };
         row.appendChild(jump);
         const unpin = document.createElement("button");
         unpin.textContent = "✕";
-        unpin.title = "unpin";
+        unpin.title = t("chat.unpin");
         unpin.onclick = async () => {
             if (!current() || unpin.disabled) return;
             unpin.disabled = true;
-            await runChatMutation(scope, () => app().ChatPinMessageForTab(scope.tabID, chID, p.message_id, false), "unpin", current);
+            await runChatMutation(scope, () => app().ChatPinMessageForTab(scope.tabID, chID, p.message_id, false), t("chat.unpin"), current);
             if (current()) await loadPinsPanel();
         };
         row.appendChild(unpin);
@@ -3188,7 +3160,7 @@ function updateHeader() {
         title = channel?.Name || "Files";
         topic = channel?.Topic || "";
     } else if (view.kind === "global") {
-        title = "Global chat";
+        title = t("chat.globalTitle");
     } else if (view.kind === "dm") {
         title = "DM — " + (pmTabs.get(view.uid)?.nick || view.uid);
     } else {
@@ -3213,7 +3185,7 @@ function updateHeader() {
     const slowEl = $("chat-slowmode");
     slowEl.textContent = slow > 0 ? "🐢 " + fmtSlowMode(slow) : "";
     slowEl.title = slow > 0
-        ? `slow mode: one message every ${fmtSlowMode(slow)} in this channel (moderators are exempt)`
+        ? t("chat.slowModeHelp", { interval: fmtSlowMode(slow) })
         : "";
     slowEl.classList.toggle("hidden", slow <= 0);
     $("chat-pins-btn").classList.toggle("hidden", view.kind === "dm");
@@ -3228,7 +3200,7 @@ function openDescription() {
     const dlg = document.createElement("div");
     dlg.className = "dlg dlg-wide chan-desc";
     const h = document.createElement("h3");
-    h.textContent = ch ? "# " + ch.Name : "Channel";
+    h.textContent = ch ? "# " + ch.Name : t("chat.channelLabel");
     dlg.appendChild(h);
     const body = document.createElement("div");
     body.className = "chan-desc-body";
@@ -3242,17 +3214,17 @@ function openDescription() {
     // (91-135) one source for the encryption story, so the client and the
     // README cannot drift apart on what the shield actually promises.
     const encH = document.createElement("h4");
-    encH.textContent = "How chat encryption works here";
+    encH.textContent = t("chat.encryptionTitle");
     dlg.appendChild(encH);
     const enc = document.createElement("div");
     enc.className = "set-hint";
-    enc.textContent = CHAT_ENCRYPTION_HELP;
+    enc.textContent = t("chat.encryptionHelp");
     dlg.appendChild(enc);
     const btns = document.createElement("div");
     btns.className = "dlg-buttons";
     const ok = document.createElement("button");
     ok.className = "dlg-ok";
-    ok.textContent = "Close";
+    ok.textContent = t("chat.close");
     ok.onclick = () => overlay.remove();
     btns.appendChild(ok);
     dlg.appendChild(btns);
@@ -3272,17 +3244,17 @@ function exportProgressDialog() {
     const dlg = document.createElement("div");
     dlg.className = "dlg";
     const h = document.createElement("h3");
-    h.textContent = "Exporting chat";
+    h.textContent = t("chat.exportProgressTitle");
     const p = document.createElement("div");
     p.className = "set-hint";
-    p.textContent = "decrypting history…";
+    p.textContent = t("chat.decrypting");
     dlg.appendChild(h);
     dlg.appendChild(p);
     overlay.appendChild(dlg);
     let cleanup = null;
     mountServerDialog(overlay, { onClose: () => cleanup?.() });
     return {
-        update: (n) => { p.textContent = `decrypted ${n} messages…`; },
+        update: (n) => { p.textContent = t("chat.decryptedCount", { count: n }); },
         close: () => closeDialog(overlay),
         setCleanup: (fn) => { cleanup = fn; },
     };
@@ -3305,7 +3277,7 @@ async function exportChat() {
     // channel id 0 is GLOBAL: exporting it here would hand over a different
     // conversation than the one on screen.
     if (exportScope.kind === "channel" && !exportScope.channelID) {
-        V().toast("join a channel to export its history — or switch to global", "info", "alert");
+        V().toast(t("chat.joinExport"), "info", "alert");
         return;
     }
     const name = exportScope.kind === "dm" ? "dm-" + exportScope.uid.slice(0, 8)
@@ -3335,7 +3307,7 @@ async function exportChat() {
             ? await callDMHistory(dm, "DMExportHistoryForContext", exportScope.uid)
             : await app().ChatExportHistoryForTab(exportScope.tabID, operation.id, exportScope.channelID, 0);
     } catch (e) {
-        if (current()) V().toast("export failed: " + e, "warn");
+        if (current()) V().toast(t("chat.exportFailed", { error: String(e) }), "warn");
     }
     const ready = current();
     prog.close();
@@ -3348,23 +3320,23 @@ async function exportChat() {
             if (!attemptIsCurrent()) return;
         } catch (e) {
             if (!attemptIsCurrent()) return;
-            V().toast("export failed: " + e, "warn");
+            V().toast(t("chat.exportFailed", { error: String(e) }), "warn");
             return;
         }
     } else {
         const err = await app().ExportChat(`noxa-${name}.txt`, contents);
         if (!attemptIsCurrent()) return;
         if (err) {
-            V().toast("export failed: " + err, "warn");
+            V().toast(t("chat.exportFailed", { error: String(err) }), "warn");
             return;
         }
     }
     // The same notice rides inside the file; repeating it here is what stops a
     // partial transcript from being taken for a whole one before it is opened.
     if (res.complete === false || res.undecryptable > 0) {
-        V().toast(`exported ${res.messages} messages` +
-            (res.undecryptable > 0 ? `, ${res.undecryptable} unreadable (no key)` : "") +
-            (res.complete === false ? " — stopped at the export limit" : ""), "warn");
+        V().toast(t("chat.exportCount", { count: res.messages }) +
+            (res.undecryptable > 0 ? t("chat.exportUnreadable", { count: res.undecryptable }) : "") +
+            (res.complete === false ? t("chat.exportLimit") : ""), "warn");
     }
 }
 
@@ -3380,16 +3352,16 @@ function askExportPassphrase() {
         const dlg = document.createElement("div");
         dlg.className = "dlg";
         const h = document.createElement("h3");
-        h.textContent = "Export chat";
+        h.textContent = t("chat.exportTitle");
         dlg.appendChild(h);
         const warn = document.createElement("div");
         warn.className = "set-hint warn";
-        warn.textContent = "A plain export writes DECRYPTED messages to a file on your disk. " +
-            "Enter a passphrase to write an encrypted .noxachat instead.";
+        warn.textContent = t("chat.exportWarning");
+
         dlg.appendChild(warn);
         const inp = document.createElement("input");
         inp.type = "password";
-        inp.placeholder = "passphrase (leave empty for a plain export)";
+        inp.placeholder = t("chat.passphraseHint");
         dlg.appendChild(inp);
         const btns = document.createElement("div");
         btns.className = "dlg-buttons";
@@ -3398,20 +3370,20 @@ function askExportPassphrase() {
             closeDialog(overlay, value === null ? "cancel" : "close");
         };
         const cancel = document.createElement("button");
-        cancel.textContent = "Cancel";
+        cancel.textContent = t("chat.cancel");
         cancel.onclick = () => done(null);
         const ok = document.createElement("button");
         ok.className = "dlg-ok";
-        ok.textContent = "Export";
+        ok.textContent = t("chat.export");
         ok.onclick = async () => {
             const p = inp.value;
             if (p === "") {
                 if (confirmingPlainExport) return;
                 confirmingPlainExport = true;
                 const confirmed = await confirmDialog({
-                    title: "Export unencrypted chat?",
-                    message: "This writes decrypted messages to a file on your disk. Anyone who can read that file can read this chat.",
-                    confirmLabel: "Export unencrypted",
+                    title: t("chat.exportPlainTitle"),
+                    message: t("chat.exportPlainHelp"),
+                    confirmLabel: t("chat.exportPlainConfirm"),
                     danger: true,
                     serverScoped: true,
                 });
@@ -3447,17 +3419,17 @@ export function onAnnouncement(d) {
     const text = d.text || "";
     if (!text) return;
     // (385) announcements go through the notification matrix.
-    window.__noxaNotify?.notify("announcement", "announcement: " + text.slice(0, 100), { className: "messages", kind: "warn" });
+    window.__noxaNotify?.notify("announcement", t("chat.announcement", { message: text.slice(0, 100) }), { className: "messages", kind: "warn" });
     const h = hashStr(text);
     const s = V().state.settings;
     if (s?.dismissed_announcement === h) return; // already dismissed
     const b = document.createElement("div");
     b.className = "announce-banner";
-    const t = document.createElement("span");
-    t.textContent = "📢 " + text;
+    const announcementText = document.createElement("span");
+    announcementText.textContent = "📢 " + text;
     const x = document.createElement("button");
     x.textContent = "✕";
-    x.title = "dismiss";
+    x.title = t("chat.dismiss");
     x.onclick = () => {
         b.remove();
         if (s) {
@@ -3465,12 +3437,13 @@ export function onAnnouncement(d) {
             persistSettings();
         }
     };
-    b.appendChild(t);
+    b.appendChild(announcementText);
     b.appendChild(x);
     box.appendChild(b);
 }
 
 export async function onConnect() {
+    initConversations();
     const st = V().state;
     const { activeTabID: tabID, serverGeneration: generation } = st;
     const current = () => tabID === st.activeTabID && generation === st.serverGeneration;
@@ -3491,7 +3464,7 @@ export async function onConnect() {
     try {
         const motd = await app().MOTDForTab(tabID);
         if (!current()) return;
-        if (motd) V().sysMsg("server notice — " + motd);
+        if (motd) V().sysMsg(t("chat.serverNotice", { message: motd }));
     } catch { /* MOTD is best-effort */ }
 }
 
@@ -3535,6 +3508,7 @@ export function onChannelsDeleted(channelIDs) {
 // stores, unread badges, PM tabs, and the rendered panes. The tab journal
 // replay rebuilds the view from server frames afterwards.
 export function resetView(options = {}) {
+    resetConversations();
     resetDMOwner();
     V().state.myUniqueID = "";
     invalidateChatViewWork();
@@ -3549,7 +3523,6 @@ export function resetView(options = {}) {
     pendingChannelTab = 0;
     replyTo = null;
     pendingFiles = [];
-    lastDMTarget = "";
     newCount = 0;
     jl.verb = null;
     jl.names = [];
@@ -3668,7 +3641,7 @@ function openQS() {
     const { activeTabID: tabID, serverGeneration: generation } = st;
     const items = [];
     for (const ch of st.channels) {
-        items.push({ label: "# " + ch.Name, hint: "channel", action: async () => {
+        items.push({ label: "# " + ch.Name, hint: t("chat.channelHint"), action: async () => {
             if (generation !== st.serverGeneration) return;
             try {
                 const err = await app().JoinChannelForTab(tabID, ch.ChannelID);
@@ -3680,14 +3653,14 @@ function openQS() {
     }
     for (const c of st.clients) {
         if (c.unique_id && c.unique_id !== st.myUniqueID) {
-            items.push({ label: "@ " + (c.nickname || c.unique_id), hint: "user → PM", action: () => openPM(c.unique_id, c.nickname) });
+            items.push({ label: "@ " + (c.nickname || c.unique_id), hint: t("chat.userHint"), action: () => openPM(c.unique_id, c.nickname) });
         }
     }
     for (const tab of pmTabs.values()) {
-        items.push({ label: "✉ " + tab.nick, hint: "PM tab", action: () => activatePM(tab.uid) });
+        items.push({ label: "✉ " + tab.nick, hint: t("chat.pmTabHint"), action: () => activatePM(tab.uid) });
     }
     for (const tab of chanTabs.values()) {
-        items.push({ label: "# " + channelName(tab.id), hint: "channel tab", action: () => activateChannel(tab.id) });
+        items.push({ label: "# " + channelName(tab.id), hint: t("chat.channelTabHint"), action: () => activateChannel(tab.id) });
     }
 
     qsOverlay = document.createElement("div");
@@ -3695,7 +3668,7 @@ function openQS() {
     const box = document.createElement("div");
     box.className = "qs-box";
     const input = document.createElement("input");
-    input.placeholder = "jump to channel, user or PM tab…";
+    input.placeholder = t("chat.switcherHint");
     const list = document.createElement("div");
     list.className = "qs-list";
     box.appendChild(input);
@@ -3785,8 +3758,8 @@ function handleTabComplete(e) {
         tabCycle.idx = (tabCycle.idx + 1) % tabCycle.matches.length;
         const pick = tabCycle.matches[tabCycle.idx];
         draftRevision++;
-        input.value = input.value.slice(0, tabCycle.start) + "@" + pick + " " + input.value.slice(tabCycle.end);
-        tabCycle.end = tabCycle.start + pick.length + 2;
+        input.value = input.value.slice(0, tabCycle.start) + pick + " " + input.value.slice(tabCycle.end);
+        tabCycle.end = tabCycle.start + pick.length + 1;
         input.selectionStart = input.selectionEnd = tabCycle.end;
         return;
     }
@@ -3800,9 +3773,10 @@ function handleTabComplete(e) {
     const names = V().state.clients
         .filter((c) => c.client_id !== V().state.myClientID)
         .map((c) => c.nickname || c.unique_id)
-        .filter((n) => n && n.toLowerCase().startsWith(base));
+        .filter((n) => n && n.toLowerCase().startsWith(base)).map(n => "@" + n);
+    if (view.kind !== "dm") names.push(...roleMentionChoices(V().state.clients, base).map(role => role.token));
     if (canMentionAll()) {
-        for (const f of MENTION_ALL_FORMS) if (f.startsWith(base)) names.push(f);
+        for (const f of MENTION_ALL_FORMS) if (f.startsWith(base)) names.push("@" + f);
     }
     if (names.length === 0) {
         tabCycle = null;
@@ -3811,10 +3785,10 @@ function handleTabComplete(e) {
     e.preventDefault();
     const start = pos - m[0].length;
     const pick = names[0];
-    const end = start + pick.length + 2;
+    const end = start + pick.length + 1;
     tabCycle = { start, end, base, matches: names, idx: 0 };
     draftRevision++;
-    input.value = input.value.slice(0, start) + "@" + pick + " " + input.value.slice(pos);
+    input.value = input.value.slice(0, start) + pick + " " + input.value.slice(pos);
     input.selectionStart = input.selectionEnd = end;
 }
 
@@ -3908,6 +3882,20 @@ export function initChat() {
     $("chat-search-server").onclick = searchAll;
 
     // Emoji picker (95).
+    const pollButton = document.createElement("button");
+    pollButton.id = "chat-poll";
+    pollButton.className = "icon-btn";
+    pollButton.textContent = "▥";
+    pollButton.title = t("poll.create");
+    pollButton.setAttribute("aria-label", t("poll.create"));
+    pollButton.onclick = () => {
+        if (view.kind === "dm" || (view.kind === "channel" && !V().state.myChannelID)) {
+            V().toast(t("poll.channelOnly"), "warn");
+            return;
+        }
+        createPoll(view.kind === "global" ? "global" : "channel", view.kind === "global" ? "" : String(activeChannelID()));
+    };
+    $("chat-emoji").before(pollButton);
     $("chat-emoji").onclick = (e) => {
         e.stopPropagation();
         toggleEmojiPanel();
@@ -4000,6 +3988,8 @@ export function initChat() {
     });
 
     window.addEventListener("noxa-language-changed", () => {
+        pollButton.title = t("poll.create");
+        pollButton.setAttribute("aria-label", t("poll.create"));
         const log = $("chat-log");
         const bottomOffset = log.scrollHeight - log.scrollTop;
         const pending = newCount;

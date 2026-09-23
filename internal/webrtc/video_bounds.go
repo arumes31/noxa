@@ -45,11 +45,23 @@ type vp8BoundsInspector struct {
 	sequence           uint16
 }
 
+func (v *vp8BoundsInspector) stale(pkt *rtp.Packet) bool {
+	return v.seen && int16(pkt.SequenceNumber-v.sequence) <= 0
+}
+
 func (v *vp8BoundsInspector) accept(pkt *rtp.Packet) bool {
+	if v.stale(pkt) {
+		return false
+	}
 	if v.seen && pkt.SequenceNumber != v.sequence+1 {
 		v.known, v.frame = false, false
 	}
 	v.sequence, v.seen = pkt.SequenceNumber, true
+	if isVideoPadding(pkt) {
+		// Padding consumes a sequence number, but carries no dimensions or
+		// frame boundary. A real sequence gap above still invalidates state.
+		return true
+	}
 	var descriptor codecs.VP8Packet
 	data, err := descriptor.Unmarshal(pkt.Payload)
 	if err != nil || len(data) == 0 {

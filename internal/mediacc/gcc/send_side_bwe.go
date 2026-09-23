@@ -10,11 +10,11 @@ import (
 	"time"
 
 	"github.com/pion/interceptor"
-	"noxa/internal/mediacc/cc"
-	"noxa/internal/mediacc/ntp"
 	"github.com/pion/logging"
 	"github.com/pion/rtcp"
 	"github.com/pion/rtp"
+	"noxa/internal/mediacc/cc"
+	"noxa/internal/mediacc/ntp"
 )
 
 const (
@@ -299,6 +299,7 @@ func (e *SendSideBWE) onDelayUpdate(delayStats DelayStats) {
 	lossStats := e.lossController.getEstimate(delayStats.TargetBitrate)
 	bitrateChanged := false
 	bitrate := min(delayStats.TargetBitrate, lossStats.TargetBitrate)
+	e.delayController.setPacedBitrate(bitrate)
 	if bitrate != e.latestBitrate {
 		bitrateChanged = true
 		e.latestBitrate = bitrate

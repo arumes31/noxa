@@ -66,6 +66,7 @@ func (s *TCPServer) kickRoleMember(ctx context.Context, e *authorization.RoleEva
 func (s *TCPServer) removeRoleSession(ctx context.Context, target *Client, event kickEvent) (pending bool) {
 	target.revokeSession()
 	s.unregister(target.ID)
+	s.disconnectPrivateCall(target.ID)
 	if s.deps.FileTransfer != nil {
 		s.deps.FileTransfer.RevokeTransfers(func(p filetransfer.Principal, _ int64, _ string) bool { return p.SessionID != target.ID })
 	}

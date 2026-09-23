@@ -6,6 +6,7 @@
 // on "tab_reset" we clear chat/tree and the replay rebuilds them.
 import { closeServerDialogs } from "./modal.js";
 import { clearSpeech } from "./sounds.js";
+import { initConversations } from "./conversations.js";
 
 const V = () => window.__noxa;
 const App = () => window.go.main.App;
@@ -182,9 +183,11 @@ async function refreshTabIdentity(tabID) {
             info = (await App().ListTabs()).find((x) => x.id === tabID) || null;
         } catch { /* keep the address unknown until the next refresh */ }
         if (!current()) return;
-        state.lastConnect = info
+        // The login can finish while ListTabs is pending. Its credential-bearing
+        // record takes precedence over this metadata-only fallback.
+        state.lastConnect = state.tabConnects.get(tabID) || (info
             ? { addr: info.addr, nick: info.nickname, pw: "", spw: "", bookmark: "" }
-            : null;
+            : null);
         if (info) state.tabConnects.set(tabID, state.lastConnect);
     }
     state.myNickname = state.lastConnect ? state.lastConnect.nick : "";
@@ -220,6 +223,7 @@ function onTabReset(tabID) {
         ? "Connection status is refreshing"
         : "Offline — no current RTT sample";
     closeServerDialogs();
+    V().stopPrivateCall?.();
     // Voice is active-tab only: fully tear down capture and WebRTC before the
     // replayed channel state automatically starts the new tab's session.
     V().resetVoiceSession();
@@ -257,6 +261,7 @@ function onTabReset(tabID) {
         if (!current() || !session) return;
         V().refreshPermissions();
         if (session.connected && state.myClientID) {
+            initConversations();
             connectionPill.textContent = state.lastConnect?.addr || "connected";
             connectionPill.classList.add("up");
             connectionPill.title = "";

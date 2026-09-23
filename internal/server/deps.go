@@ -99,6 +99,13 @@ type VoiceBackend interface {
 	SetWhisper(clientID string, clients []string, channels []int64, active bool)
 	// SetVideoQuality sets the client's preferred simulcast layer.
 	SetVideoQuality(clientID, quality string) error
+	PublishVideo(publisher, slot string, generation uint64, active bool) (uint64, error)
+	WatchVideo(subscriber, publisher, slot string, generation, revision, session uint64, active bool) (bool, error)
+	VideoWatchSession(subscriber string) uint64
+	VideoPublications(subscriber string) []webrtc.VideoPublication
+	RevokeVideo(publisher, slot string)
+	SetVideoPreview(publisher, slot string, generation uint64, jpeg []byte) error
+	VideoPreview(subscriber, publisher, slot string, generation uint64) ([]byte, int64, error)
 	// AddTap registers an extra subscriber (e.g. a recorder) in a channel.
 	AddTap(channelID int64, tapID string, audio, video webrtc.TrackWriter)
 	RemoveTap(tapID string)
@@ -155,6 +162,7 @@ type AuditStore interface {
 	AuditScoped(ctx context.Context, actor, action, target, detail string, channelIDs []int64)
 	AuditList(ctx context.Context, beforeID int64, limit int) ([]store.AuditEntry, error)
 }
+
 // BanAdminStore is the subset of the store needed for ban administration
 // (wave 6b ban list dialog). It is satisfied by *store.Store.
 type BanAdminStore interface {

@@ -3,6 +3,14 @@
 // window.runtime.EventsOn(name, cb) receives backend events.
 
 import "@fontsource-variable/sora";
+import "./streams.css";
+import "./polls.css";
+import "./conversations.css";
+import { conversationChanged, filterConversations, privateGroupViewToken } from "./conversations.js";
+import "./private-calls.css";
+import { privateCallChanged, privateCallSignal, stopPrivateCall } from "./private-calls.js";
+import { refreshPolls } from "./polls.js";
+import { SpatialVoice } from "./positional-audio.js";
 import "@fontsource-variable/outfit";
 import "@fontsource-variable/jetbrains-mono";
 import { initMenu } from "./menu.js";
@@ -24,6 +32,8 @@ import {
     renegotiate, answerRemoteOffer, applyVideoLimits,
 } from "./video.js";
 import * as chatUI from "./chat-ui.js";
+import { startStreamSession, stopStreamSession, streamSessionIsCurrent, receiveStreamTrack, receiveShareAudio } from "./stream-controls.js";
+import { isCurrentPublication } from "./stream-publication.js";
 import { initPermsUI } from "./roles-access-ui.js";
 import { roleChip } from "./role-presentation.js";
 import { initFilesUI } from "./files-ui.js";
@@ -1016,6 +1026,7 @@ window.runtime.EventsOn("snapshot", (json) => {
 // syncOwnChannel makes channel ownership independent of whether the snapshot
 // / user_moved event or the active-tab ClientID lookup finishes first.
 function syncOwnChannel({ audible = true } = {}) {
+    reconcileSpatialVoice();
     void refreshPermissions();
     if (!state.myClientID) return;
     const me = state.clients.find((c) => c.client_id === state.myClientID);
@@ -1370,6 +1381,28 @@ window.runtime.EventsOn("event", (json) => {
         case "chat_reaction":
             chatUI.onChatReaction(d);
             return;
+        case "poll_changed":
+            refreshPolls(d);
+            return;
+        case "conversation_changed":
+            void conversationChanged(d);
+            return;
+        case "private_call":
+            void privateCallChanged(d);
+            void conversationChanged();
+            return;
+        case "private_call_signal":
+            void privateCallSignal(d);
+            return;
+        case "position": {
+            reconcileSpatialVoice();
+            const member = state.clients.find(client => client.client_id === d.client_id);
+            if (state.settings?.positional_audio && d.channel_id === state.myChannelID && member?.channel_id === state.myChannelID && d.client_id !== state.myClientID) {
+                spatialVoice?.remote(d.client_id, d);
+                spatialVoice?.update(true);
+            }
+            return;
+        }
         // (120) typing relay. Returns early like the other chat events: an
         // indicator changes nothing in the tree and must not trigger a redraw
         // of it on every keystroke of every user.
@@ -1416,6 +1449,9 @@ window.runtime.EventsOn("event", (json) => {
             }
             break;
         }
+        case "stream_watch_started":
+            if (!actionSoundsSuppressed() && isCurrentPublication(d)) playEvent("stream_watch_started");
+            return;
         case "screenshare_changed": {
             // (73) remember who is sharing: the grid labels those tiles, and
             // the camera-off detector (61) must not mistake a still desktop
@@ -1433,6 +1469,7 @@ window.runtime.EventsOn("event", (json) => {
             break;
     }
     resolveTrackUsers();
+    reconcileSpatialVoice();
     // (389) the snapshot arrives once at login, so only the live join/leave/
     // move events can ever show a channel crossing its watch threshold.
     window.__noxaNotify?.checkChannelWatch();
@@ -1531,6 +1568,7 @@ function renderTree() {
         root.appendChild(empty);
     }
     renderDirectTargets();
+    filterConversations();
     renderClientCard();
     chatUI.refreshHeader(); // (111) topic/title follows tree + channel updates
     renderWorkspace();
@@ -1614,9 +1652,11 @@ function renderChannel(parentEl, ch, byParent, depth) {
     }
     el.onclick = async () => {
         if (generation !== state.serverGeneration) return;
+        const groupView = privateGroupViewToken();
         try {
             const err = await window.go.main.App.JoinChannelForTab(tabID, ch.ChannelID);
             if (err && generation === state.serverGeneration) toast("join failed: " + err, "warn");
+            if (!err && generation === state.serverGeneration && tabID === state.activeTabID && groupView && groupView === privateGroupViewToken()) await chatUI.openChannelTab(ch.ChannelID);
         } catch (err) {
             if (generation === state.serverGeneration) toast("join failed: " + err, "warn");
         }
@@ -2191,6 +2231,8 @@ function refreshLiveMediaLimits() {
 // join/leave voice control: a confirmed local channel move establishes the
 // session, while disconnecting or changing server tabs tears it down.
 function ensureVoiceForChannel() {
+    reconcileSpatialVoice();
+    if (state.myChannelID > 0) stopPrivateCall();
     if (state.myChannelID <= 0) {
         if (state.pc || state.localStream || voiceStartPromise ||
             state.micState === "none" || state.micState === "denied") {
@@ -2200,6 +2242,25 @@ function ensureVoiceForChannel() {
     }
     if (voiceStartPromise) return voiceStartPromise;
     if (state.pc) {
+        if (!streamSessionIsCurrent(state.pc)) {
+            // A channel move retains microphone voice, but publication and
+            // viewing consent belong to the channel that granted them.
+            for (const track of state.localStream?.getVideoTracks() || []) { track.stop(); state.localStream.removeTrack(track); }
+            state.shareStream?.getTracks().forEach(track => track.stop());
+            state.shareStream = null;
+            state.screenSharing = false;
+            state.shareStarting = null;
+            state.shareStopping = false;
+            resetCameraState();
+            startStreamSession(state.pc, videoTrackAdded, videoTrackRemoved);
+            for (const receiver of state.pc.getReceivers()) {
+                const track = receiver.track;
+                const parsed = parseTrackID(track.id);
+                const publisher = state.clients.find(c => String(c.client_id) === parsed.clientID);
+                if (track.kind === "video") receiveStreamTrack(track, publisher);
+                else if (parsed.slot === SLOT_SCREEN_AUDIO) receiveShareAudio(track, parsed.clientID);
+            }
+        }
         setVoiceStatus("voice on");
         return Promise.resolve(true);
     }
@@ -2366,6 +2427,7 @@ async function startVoice(expectedEpoch = voiceSessionEpoch) {
     // backing off 1s, 2s, 5s, 15s before giving up with a warning toast.
     pc.oniceconnectionstatechange = () => onICEStateChange(pc);
     const receivedTracks = new Map();
+    startStreamSession(pc, videoTrackAdded, videoTrackRemoved);
     pc.ontrack = (e) => {
         if (!current() || state.pc !== pc) {
             e.track.stop();
@@ -2388,10 +2450,11 @@ async function startVoice(expectedEpoch = voiceSessionEpoch) {
         });
         if (e.track.kind === "video") {
             // (61/73) one grid tile per publisher video slot; removed on ended.
-            videoTrackAdded(e.track.id, e.streams[0], publisher);
+            receiveStreamTrack(e.track, publisher);
             return;
         }
         if (slot === SLOT_SCREEN_AUDIO) {
+            receiveShareAudio(e.track, clientID);
             // (70) a sharer's system audio is not a second microphone.
             attachShareAudio(e.track, clientID, publisher);
             return;
@@ -2603,7 +2666,7 @@ function scheduleICERestart(pc) {
 }
 
 function teardownVoice() {
-    const voiceTabID = state.voiceTabID || state.activeTabID;
+    stopStreamSession();
     state.mediaLimits = null;
     stopVoiceMonitor();
     stopMicMeter();
@@ -2619,7 +2682,6 @@ function teardownVoice() {
         state.shareStream = null;
         state.shareAudioSender = null;
         state.screenSharing = false;
-        void window.go.main.App.SetScreenShareForTab(voiceTabID, false).catch(() => {});
         $("voice-screen").classList.remove("active");
         $("voice-screen").setAttribute("aria-pressed", "false");
     }
@@ -2982,6 +3044,40 @@ document.addEventListener("visibilitychange", () => {
 // remoteTracks maps media track ID -> {src, gain, mute, uid} for per-track
 // teardown when a publisher leaves or voice is stopped.
 const remoteTracks = new Map();
+let spatialVoice = null;
+let positionReadPending = false;
+let spatialScope = "";
+
+function reconcileSpatialVoice() {
+    const scope = JSON.stringify([state.activeTabID, state.serverGeneration, state.myChannelID, voiceSessionEpoch]);
+    if (scope !== spatialScope) {
+        spatialScope = scope;
+        spatialVoice?.reset();
+    }
+    spatialVoice?.retainPeers(state.clients.filter(client => client.channel_id === state.myChannelID && client.client_id !== state.myClientID).map(client => client.client_id));
+    spatialVoice?.update(!!state.settings?.positional_audio);
+}
+
+// The native file source is read only while the user has opted in and joined
+// voice. Capture both server and voice scope before any asynchronous work.
+setInterval(async () => {
+    const enabled = !!state.settings?.positional_audio;
+    reconcileSpatialVoice();
+    if (!enabled || positionReadPending || !state.myChannelID || !state.pc || state.pc.connectionState === "closed") return;
+    const { activeTabID: tabID, serverGeneration: generation, myChannelID: channelID } = state;
+    const epoch = voiceSessionEpoch;
+    const current = () => state.settings?.positional_audio && state.activeTabID === tabID && state.serverGeneration === generation && state.myChannelID === channelID && voiceSessionEpoch === epoch;
+    positionReadPending = true;
+    try {
+        const position = await window.go.main.App.ReadPositionalInput();
+        if (!current()) return;
+        spatialVoice?.local(position);
+        spatialVoice?.update(true);
+        await window.go.main.App.PublishPositionForTab(tabID, { channel_id: channelID, context: position.context, x: position.x, y: position.y, z: position.z });
+    } catch {
+        // A game may not be running. Expiry restores ordinary voice playback.
+    } finally { positionReadPending = false; }
+}, 250);
 
 // ensureRemoteChain builds the shared processing tail once per voice session.
 function ensureRemoteChain() {
@@ -2989,6 +3085,7 @@ function ensureRemoteChain() {
     try {
         const ctx = new (window.AudioContext || window.webkitAudioContext)();
         remoteChain.ctx = ctx;
+        spatialVoice = new SpatialVoice(ctx);
         const master = ctx.createGain();
         remoteChain.master = master;
         master.gain.value = state.deafened ? 0 : Math.min(2, (state.settings?.volume ?? 100) / 100);
@@ -3035,7 +3132,7 @@ function attachRemoteAudio(track, publisher) {
         const head = attachUserNormalizer(ctx, track.id, src);
         head.connect(gain);
         gain.connect(mute);
-        mute.connect(remoteChain.master);
+        spatialVoice.attach(track.id, mute, remoteChain.master, publisher?.client_id || "");
 
         const uid = publisher?.unique_id || "";
         const entry = { src, playback, gain, mute, uid };
@@ -3065,6 +3162,7 @@ function resolveTrackUsers() {
         });
         const t = remoteTracks.get(trackID);
         if (t && !t.uid && publisher.unique_id) {
+            spatialVoice?.peer(trackID, publisher.client_id);
             t.uid = publisher.unique_id;
             registerUserChain(publisher.unique_id, t.gain, t.mute);
         }
@@ -3159,6 +3257,7 @@ function detachRemoteTrack(trackID) {
     const t = remoteTracks.get(trackID);
     if (!t) return;
     remoteTracks.delete(trackID);
+    spatialVoice?.detach(trackID);
     t.playback.pause();
     t.playback.srcObject = null;
     if (t.uid) unregisterUserChain(t.uid);
@@ -3172,6 +3271,7 @@ function detachRemoteTrack(trackID) {
 
 function detachRemoteAudio() {
     for (const trackID of [...remoteTracks.keys()]) detachRemoteTrack(trackID);
+    spatialVoice = null;
     for (const clid of [...shareAudio.keys()]) detachShareAudio(clid); // (70)
     detachAllUserNormalizers(); // (53) stops the shared auto-level ticker
     if (remoteChain.ctx) {
@@ -3459,6 +3559,7 @@ window.__noxa = {
     voiceOutputDevice: () => ({ active: !!remoteChain.ctx && remoteChain.ctx.state !== "closed", id: typeof remoteChain.ctx?.sinkId === "string" ? remoteChain.ctx.sinkId : "" }),
     checkCertificateClock,
     ensureVoiceForChannel, resetVoiceSession, retryMicrophoneAccess, renderVoiceStatus,
+    stopPrivateCall,
     // (70) shared system audio controls for the screen tile's context menu.
     shareAudioCtl: {
         get: (clientID) => {

@@ -66,10 +66,13 @@ func TestVideoBitrateLimitBeforeFanoutAndRecording(t *testing.T) {
 	}
 	r.JoinChannel(1, "publisher")
 	r.JoinChannel(1, "recorder")
+	testVideoPublication(t, r, "publisher", "viewer-a", SlotCam)
+	testVideoPublication(t, r, "publisher", "viewer-b", SlotCam)
 	tap := &fakeTrackWriter{}
 	r.addVideoOutput("recorder", tap)
 	registerVideoSource(r, "publisher", SlotCam, "", 1)
 	packet := &rtp.Packet{Header: rtp.Header{Version: 2}, Payload: make([]byte, 988)}
+	copy(packet.Payload, boundsKeyPacket(1, 1, 640, 360).Payload)
 	if err := r.SetVideoBitrateLimit(8000); err != nil {
 		t.Fatal(err)
 	}
@@ -82,6 +85,8 @@ func TestVideoBitrateLimitBeforeFanoutAndRecording(t *testing.T) {
 	}
 	// Another source/layer of the same publisher must share the exhausted budget.
 	r.SetTrackSlots("publisher", map[string]string{"camera": SlotCam, "display": SlotScreen})
+	testVideoPublication(t, r, "publisher", "viewer-a", SlotScreen)
+	testVideoPublication(t, r, "publisher", "viewer-b", SlotScreen)
 	registerVideoSource(r, "publisher", SlotScreen, "f", 2)
 	if sent := r.forwardVideoAt("publisher", SlotScreen, "f", packet, at); sent != 0 || tap.count() != 1 {
 		t.Fatalf("slot/layer bypass: %d tap=%d", sent, tap.count())

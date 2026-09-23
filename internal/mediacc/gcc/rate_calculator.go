@@ -10,7 +10,10 @@ import (
 )
 
 type rateCalculator struct {
-	window time.Duration
+	window      time.Duration
+	history     []cc.Acknowledgment
+	initialized bool
+	sum         int
 }
 
 func newRateCalculator(window time.Duration) *rateCalculator {
@@ -20,52 +23,51 @@ func newRateCalculator(window time.Duration) *rateCalculator {
 }
 
 func (c *rateCalculator) run(in <-chan []cc.Acknowledgment, onRateUpdate func(int)) {
-	var history []cc.Acknowledgment
-	init := false
-	sum := 0
 	for acks := range in {
-		for _, next := range acks {
-			if next.Arrival.IsZero() {
-				// Ignore packet if it didn't arrive
-				continue
-			}
-			history = append(history, next)
-			sum += next.Size
+		c.add(acks, onRateUpdate)
+	}
+}
 
-			if !init {
-				init = true
-				// Don't know any timeframe here, only arrival of last packet,
-				// which is by definition in the window that ends with the last
-				// arrival time
-				onRateUpdate(next.Size * 8)
-
-				continue
-			}
-
-			del := 0
-			for _, ack := range history {
-				deadline := next.Arrival.Add(-c.window)
-				if !ack.Arrival.Before(deadline) {
-					break
-				}
-				del++
-				sum -= ack.Size
-			}
-			history = history[del:]
-			if len(history) == 0 {
-				onRateUpdate(0)
-
-				continue
-			}
-			dt := next.Arrival.Sub(history[0].Arrival)
-			// TWCC timestamps may be equal, and an idle interval can leave only
-			// this packet in the window. Neither supplies a measurable rate.
-			if dt <= 0 {
-				continue
-			}
-			bits := 8 * sum
-			rate := int(float64(bits) / dt.Seconds())
-			onRateUpdate(rate)
+func (c *rateCalculator) add(acks []cc.Acknowledgment, onRateUpdate func(int)) {
+	for _, next := range acks {
+		if next.Arrival.IsZero() {
+			continue
 		}
+		var previousArrival time.Time
+		if len(c.history) > 0 {
+			previousArrival = c.history[len(c.history)-1].Arrival
+			// Match delay grouping: old feedback must not move the measured
+			// window or its idle-gap anchor backwards.
+			if next.Arrival.Before(previousArrival) {
+				continue
+			}
+		}
+		c.history = append(c.history, next)
+		c.sum += next.Size
+		if !c.initialized {
+			c.initialized = true
+			onRateUpdate(next.Size * 8)
+			continue
+		}
+		del := 0
+		for _, ack := range c.history {
+			if !ack.Arrival.Before(next.Arrival.Add(-c.window)) {
+				break
+			}
+			del++
+			c.sum -= ack.Size
+		}
+		c.history = c.history[del:]
+		dt := next.Arrival.Sub(c.history[0].Arrival)
+		// If the entire window expired, the gap since its last packet is
+		// still a measurable interval. Sparse traffic must not retain an old
+		// high rate forever. Equal timestamps still provide no elapsed time.
+		if len(c.history) == 1 {
+			dt = next.Arrival.Sub(previousArrival)
+		}
+		if dt <= 0 {
+			continue
+		}
+		onRateUpdate(int(float64(8*c.sum) / dt.Seconds()))
 	}
 }

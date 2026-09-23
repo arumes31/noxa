@@ -17,6 +17,7 @@ type Role struct {
 	Color       string       `json:"color"`
 	Icon        string       `json:"icon"`
 	Hoist       bool         `json:"hoist"`
+	Mentionable bool         `json:"mentionable"`
 	Permissions []Capability `json:"permissions"`
 }
 

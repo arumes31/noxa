@@ -120,7 +120,11 @@ export function Connected():Promise<boolean>;
 
 export function ConnectionSecurity():Promise<string>;
 
+export function ConversationForTab(arg1:string,arg2:netproto.ConversationRequest):Promise<netproto.ConversationResult>;
+
 export function CreateIdentity(arg1:string):Promise<string>;
+
+export function CreatePollForTab(arg1:string,arg2:string,arg3:string,arg4:netproto.PollDefinition):Promise<string>;
 
 export function DMExportHistory(arg1:string):Promise<main.ChatExportResult>;
 
@@ -284,7 +288,11 @@ export function MoveClientForTab(arg1:string,arg2:string,arg3:number):Promise<st
 
 export function Notify(arg1:string,arg2:string):Promise<string>;
 
+export function OpenDownloadFolderForTab(arg1:string,arg2:string):Promise<string>;
+
 export function OpenLogFolder():Promise<string>;
+
+export function OpenPrivateCallDescriptionForTab(arg1:string,arg2:netproto.CallSignal):Promise<main.PrivateCallDescription>;
 
 export function PickDownloadFolder():Promise<string>;
 
@@ -296,7 +304,17 @@ export function Poke(arg1:string,arg2:string):Promise<string>;
 
 export function PokeForTab(arg1:string,arg2:string,arg3:string):Promise<string>;
 
+export function PollForTab(arg1:string,arg2:netproto.PollRequest):Promise<netproto.PollState>;
+
+export function PositionalInputPath():Promise<string>;
+
 export function PreviewChannelAccessForTab(arg1:string,arg2:netproto.ChannelAccessPreview):Promise<authorization.ChannelAccessImpact>;
+
+export function PrivateCallForTab(arg1:string,arg2:netproto.CallRequest):Promise<netproto.CallResult>;
+
+export function PublishPositionForTab(arg1:string,arg2:netproto.PositionUpdate):Promise<string>;
+
+export function ReadPositionalInput():Promise<main.PositionalInput>;
 
 export function RecordRecent(arg1:string,arg2:string):Promise<void>;
 
@@ -344,9 +362,13 @@ export function SendChatReply(arg1:string,arg2:string,arg3:string,arg4:number):P
 
 export function SendChatReplyForTab(arg1:string,arg2:string,arg3:string,arg4:string,arg5:number):Promise<string>;
 
+export function SendConversationForTab(arg1:string,arg2:string,arg3:string,arg4:string):Promise<number>;
+
 export function SendICECandidate(arg1:string,arg2:string,arg3:number):Promise<void>;
 
 export function SendICECandidateForTab(arg1:string,arg2:string,arg3:string,arg4:number):Promise<void>;
+
+export function SendPrivateCallDescriptionForTab(arg1:string,arg2:string,arg3:string,arg4:string,arg5:string):Promise<void>;
 
 export function SendTyping(arg1:number,arg2:string):Promise<string>;
 
@@ -430,6 +452,8 @@ export function SetVideoQualityForTab(arg1:string,arg2:string):Promise<string>;
 
 export function SetWindowOpacity(arg1:number):Promise<string>;
 
+export function StopPrivateCallForTab(arg1:string,arg2:string):Promise<void>;
+
 export function SubscribeChannels(arg1:Array<number>,arg2:boolean):Promise<string>;
 
 export function SubscribeChannelsForTab(arg1:string,arg2:Array<number>,arg3:boolean):Promise<string>;
@@ -465,6 +489,8 @@ export function UploadPathProgressForTab(arg1:string,arg2:string,arg3:number,arg
 export function VerifyFile(arg1:number,arg2:string,arg3:string,arg4:string):Promise<boolean>;
 
 export function VerifyFileForTab(arg1:string,arg2:number,arg3:string,arg4:string,arg5:string):Promise<boolean>;
+
+export function VideoStreamControlForTab(arg1:string,arg2:netproto.VideoStreamControl):Promise<netproto.VideoStreamResult>;
 
 export function WebRTCAnswer(arg1:string):Promise<void>;
 

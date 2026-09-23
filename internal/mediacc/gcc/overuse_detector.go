@@ -18,9 +18,9 @@ type overuseDetector struct {
 	dsWriter func(DelayStats)
 
 	lastEstimate       time.Duration
-	lastUpdate         time.Time
 	increasingDuration time.Duration
 	increasingCounter  int
+	hypothesis         usage
 }
 
 func newOveruseDetector(thresh threshold, overuseTime time.Duration, dsw func(DelayStats)) *overuseDetector {
@@ -29,22 +29,22 @@ func newOveruseDetector(thresh threshold, overuseTime time.Duration, dsw func(De
 		overuseTime:        overuseTime,
 		dsWriter:           dsw,
 		lastEstimate:       0,
-		lastUpdate:         time.Now(),
-		increasingDuration: 0,
+		increasingDuration: -1,
 		increasingCounter:  0,
+		hypothesis:         usageNormal,
 	}
 }
 
 func (d *overuseDetector) onDelayStats(ds DelayStats) {
-	now := time.Now()
-	delta := now.Sub(d.lastUpdate)
-	d.lastUpdate = now
+	// Measurement is arrival delta minus departure delta. Use the latter
+	// for persistence so batching or scheduling feedback cannot change it.
+	delta := max(ds.LastReceiveDelta-ds.Measurement, 0)
 
 	thresholdUse, estimate, currentThreshold := d.threshold.compare(ds.Estimate, ds.LastReceiveDelta)
 
-	use := usageNormal
+	use := d.hypothesis
 	if thresholdUse == usageOver { //nolint:nestif
-		if d.increasingDuration == 0 {
+		if d.increasingDuration < 0 {
 			d.increasingDuration = delta / 2
 		} else {
 			d.increasingDuration += delta
@@ -54,25 +54,30 @@ func (d *overuseDetector) onDelayStats(ds DelayStats) {
 
 		if (d.overuseTime == 0 && d.increasingCounter > 1) ||
 			(d.increasingDuration > d.overuseTime && d.increasingCounter > 1) {
-			if estimate > d.lastEstimate {
+			// Threshold scaling grows during startup even when the underlying
+			// delay is falling. Compare the raw offsets to detect its trend.
+			if ds.Estimate >= d.lastEstimate {
 				use = usageOver
+				d.increasingDuration = 0
+				d.increasingCounter = 0
 			}
 		}
 	}
 
 	if thresholdUse == usageUnder {
 		d.increasingCounter = 0
-		d.increasingDuration = 0
+		d.increasingDuration = -1
 		use = usageUnder
 	}
 
 	if thresholdUse == usageNormal {
-		d.increasingDuration = 0
+		d.increasingDuration = -1
 		d.increasingCounter = 0
 		use = usageNormal
 	}
 
-	d.lastEstimate = estimate
+	d.lastEstimate = ds.Estimate
+	d.hypothesis = use
 
 	d.dsWriter(DelayStats{
 		Measurement:      ds.Measurement,

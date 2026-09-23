@@ -31,7 +31,11 @@ func (s *TCPServer) writeRoleBroadcastInContext(ctx context.Context, client *Cli
 		if err := json.Unmarshal(payload, &event); err != nil {
 			return err
 		}
-		if event.Type == eventSpeakingChanged || event.Type == eventWhisper || event.Type == eventAvatarChanged || event.Type == eventPoke || event.Type == eventPrioritySpeakerChanged || event.Type == eventScreenshareChanged {
+		if event.Type == eventPrivateCallSignal {
+			s.privateCallsMu.Lock()
+			defer s.privateCallsMu.Unlock()
+		}
+		if event.Type == eventSpeakingChanged || event.Type == eventWhisper || event.Type == eventAvatarChanged || event.Type == eventPoke || event.Type == eventPrioritySpeakerChanged || event.Type == eventScreenshareChanged || event.Type == eventStreamWatchStarted || event.Type == eventPosition {
 			// A queued activity write must finish before moderation can
 			// acknowledge a mute/deafen, or recheck after that change. Avatar
 			// notifications likewise must not outlive the member's visibility.
@@ -64,6 +68,41 @@ func (s *TCPServer) roleBroadcastFrame(client *Client, payload []byte, e *author
 		return nil, err
 	}
 	switch envelope.Type {
+	case eventPrivateCall:
+		// Direct opaque invalidation; the state request checks participant/session.
+	case eventPrivateCallSignal:
+		var signal netproto.CallSignal
+		if err := json.Unmarshal(envelope.Data, &signal); err != nil {
+			return nil, err
+		}
+		call, found := s.privateCalls[signal.CallID]
+		sender, senderFound := call.Participant(signal.From)
+		recipient, recipientFound := call.Participant(client.UniqueID)
+		if !found || call.EndedAt != 0 || !senderFound || !recipientFound || sender.State != "accepted" || recipient.State != "accepted" || recipient.ClientID != client.ID || signal.To != client.UniqueID {
+			return nil, nil
+		}
+		liveSender, online := s.clientByID(sender.ClientID)
+		if !online || !liveSender.isAuthed() || liveSender.sessionRevoked() || liveSender.UniqueID != signal.From {
+			return nil, nil
+		}
+	case eventStreamWatchStarted:
+		var event streamWatchStartedEvent
+		if err := json.Unmarshal(envelope.Data, &event); err != nil {
+			return nil, err
+		}
+		if event.PublisherID != client.ID || s.deps.Voice == nil {
+			return nil, nil
+		}
+		current := false
+		for _, stream := range s.deps.Voice.VideoPublications(client.ID) {
+			if stream.PublisherID == client.ID && stream.Slot == event.Slot && stream.Generation == event.Generation {
+				current = true
+				break
+			}
+		}
+		if !current {
+			return nil, nil
+		}
 	case roleChannelDelivery:
 		var event roleChannelEvent
 		if err := json.Unmarshal(envelope.Data, &event); err != nil {
@@ -109,6 +148,13 @@ func (s *TCPServer) roleBroadcastFrame(client *Client, payload []byte, e *author
 		}
 		if envelope.Type == eventSpeakingChanged && event.Speaking && (member.ServerMuted || !member.IsSpeaking) {
 			return nil, nil
+		}
+		if envelope.Type == eventPosition {
+			recipient, present := s.deps.State.GetClient(client.ID)
+			if !present || recipient.ChannelID <= 0 || recipient.ChannelID != member.ChannelID ||
+				!e.Evaluate(recipient.UserID, recipient.ChannelID, authorization.Connect).Allowed {
+				return nil, nil
+			}
 		}
 		if (envelope.Type == eventPrioritySpeakerChanged && event.Active != member.PrioritySpeaker) ||
 			(envelope.Type == eventScreenshareChanged && event.Active != member.Sharing) {
@@ -196,6 +242,9 @@ func (s *TCPServer) roleBroadcastFrame(client *Client, payload []byte, e *author
 		if !ok || !sender.isAuthed() || !e.Evaluate(sender.userID(), 0, authorization.PokeMembers).Allowed || !s.rolePokeTargetVisible(e, sender, client.ID) {
 			return nil, nil
 		}
+	case eventConversationChanged:
+		// Addressed invalidation only. No content/membership crosses this queue;
+		// fetching either requires a current database membership lease.
 	case eventTyping, eventDMDelivered, eventDMRead,
 		eventEmojiAdded, eventEmojiRemoved, eventEmojiRenamed, eventServerBannerChanged:
 		// Direct or server-wide events. Channel typing uses the guarded envelope.
@@ -211,6 +260,14 @@ func (s *TCPServer) roleBroadcastFrame(client *Client, payload []byte, e *author
 // disclose hidden/invisible members even when the author can see them. The
 // desktop only needs to know whether this recipient was mentioned.
 func recipientChatPayload(chat netproto.ChatBroadcast, uniqueID string) ([]byte, error) {
+	roleMentions := chat.RoleMentions
+	chat.RoleMentions = nil
+	for _, mentioned := range roleMentions {
+		if uniqueID != "" && mentioned == uniqueID {
+			chat.RoleMentions = []string{uniqueID}
+			break
+		}
+	}
 	mentions := chat.Mentions
 	chat.Mentions = nil
 	for _, mentioned := range mentions {

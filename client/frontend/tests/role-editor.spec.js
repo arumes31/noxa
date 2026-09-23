@@ -1,5 +1,20 @@
 import { expect, test } from "@playwright/test";
 
+test("role mentionability saves and reloads independently of permissions", async ({ page }) => {
+    await page.getByRole("button", { name: "Roles", exact: true }).click();
+    await page.getByRole("button", { name: "Member", exact: true }).click();
+    await page.getByLabel("Allow everyone to mention this role", { exact: true }).check();
+    await page.getByRole("button", { name: "Save", exact: true }).click();
+    await expect(page.getByLabel("Allow everyone to mention this role", { exact: true })).toBeChecked();
+    expect(await page.evaluate(() => window.__roleCalls.at(-1).role)).toMatchObject({ id: 20, mentionable: true, permissions: ["speak"] });
+    await page.getByRole("button", { name: "Moderator", exact: true }).click();
+    await page.getByRole("button", { name: "Member", exact: true }).click();
+    await expect(page.getByLabel("Allow everyone to mention this role", { exact: true })).toBeChecked();
+    await page.getByLabel("Allow everyone to mention this role", { exact: true }).uncheck();
+    await page.getByRole("button", { name: "Save", exact: true }).click();
+    await expect.poll(() => page.evaluate(() => window.__roleState.policy.roles.find(role => role.id === 20).mentionable)).toBe(false);
+});
+
 test("child access remains editable without disclosing parent policy", async ({ page }) => {
     await page.evaluate(() => {
         const state = window.__roleState;

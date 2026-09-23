@@ -851,6 +851,17 @@ function pagePlayback() {
         if (rv) V().applyOutputSettings(rv);
     }, true)));
     el.appendChild(row(t("settings.voice.limiter.compressor"), checkbox(s.voice_limiter !== false, (v) => { s.voice_limiter = v; })));
+    el.appendChild(row(t("settings.positional.enabled"), checkbox(!!s.positional_audio, (v) => { s.positional_audio = v; })));
+    el.appendChild(hint(t("settings.positional.hint")));
+    const positionPath = document.createElement("button");
+    positionPath.textContent = t("settings.positional.copyPath");
+    positionPath.onclick = async () => {
+        try {
+            const path = await window.go.main.App.PositionalInputPath();
+            if (path) await copyToClipboard(path);
+        } catch (error) { V().toast(String(error), "warn"); }
+    };
+    el.appendChild(row(t("settings.positional.source"), positionPath));
     el.appendChild(row(t("settings.per.user.gain.normalization.cap.4x"), checkbox(s.gain_normalize, (v) => { s.gain_normalize = v; })));
     // (53) each publisher is levelled on its own chain, so a loud speaker no
     // longer sets the gain for a quiet one.

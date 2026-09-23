@@ -234,8 +234,16 @@ export function ConnectionSecurity() {
   return window['go']['main']['App']['ConnectionSecurity']();
 }
 
+export function ConversationForTab(arg1, arg2) {
+  return window['go']['main']['App']['ConversationForTab'](arg1, arg2);
+}
+
 export function CreateIdentity(arg1) {
   return window['go']['main']['App']['CreateIdentity'](arg1);
+}
+
+export function CreatePollForTab(arg1, arg2, arg3, arg4) {
+  return window['go']['main']['App']['CreatePollForTab'](arg1, arg2, arg3, arg4);
 }
 
 export function DMExportHistory(arg1) {
@@ -562,8 +570,16 @@ export function Notify(arg1, arg2) {
   return window['go']['main']['App']['Notify'](arg1, arg2);
 }
 
+export function OpenDownloadFolderForTab(arg1, arg2) {
+  return window['go']['main']['App']['OpenDownloadFolderForTab'](arg1, arg2);
+}
+
 export function OpenLogFolder() {
   return window['go']['main']['App']['OpenLogFolder']();
+}
+
+export function OpenPrivateCallDescriptionForTab(arg1, arg2) {
+  return window['go']['main']['App']['OpenPrivateCallDescriptionForTab'](arg1, arg2);
 }
 
 export function PickDownloadFolder() {
@@ -586,8 +602,28 @@ export function PokeForTab(arg1, arg2, arg3) {
   return window['go']['main']['App']['PokeForTab'](arg1, arg2, arg3);
 }
 
+export function PollForTab(arg1, arg2) {
+  return window['go']['main']['App']['PollForTab'](arg1, arg2);
+}
+
+export function PositionalInputPath() {
+  return window['go']['main']['App']['PositionalInputPath']();
+}
+
 export function PreviewChannelAccessForTab(arg1, arg2) {
   return window['go']['main']['App']['PreviewChannelAccessForTab'](arg1, arg2);
+}
+
+export function PrivateCallForTab(arg1, arg2) {
+  return window['go']['main']['App']['PrivateCallForTab'](arg1, arg2);
+}
+
+export function PublishPositionForTab(arg1, arg2) {
+  return window['go']['main']['App']['PublishPositionForTab'](arg1, arg2);
+}
+
+export function ReadPositionalInput() {
+  return window['go']['main']['App']['ReadPositionalInput']();
 }
 
 export function RecordRecent(arg1, arg2) {
@@ -682,12 +718,20 @@ export function SendChatReplyForTab(arg1, arg2, arg3, arg4, arg5) {
   return window['go']['main']['App']['SendChatReplyForTab'](arg1, arg2, arg3, arg4, arg5);
 }
 
+export function SendConversationForTab(arg1, arg2, arg3, arg4) {
+  return window['go']['main']['App']['SendConversationForTab'](arg1, arg2, arg3, arg4);
+}
+
 export function SendICECandidate(arg1, arg2, arg3) {
   return window['go']['main']['App']['SendICECandidate'](arg1, arg2, arg3);
 }
 
 export function SendICECandidateForTab(arg1, arg2, arg3, arg4) {
   return window['go']['main']['App']['SendICECandidateForTab'](arg1, arg2, arg3, arg4);
+}
+
+export function SendPrivateCallDescriptionForTab(arg1, arg2, arg3, arg4, arg5) {
+  return window['go']['main']['App']['SendPrivateCallDescriptionForTab'](arg1, arg2, arg3, arg4, arg5);
 }
 
 export function SendTyping(arg1, arg2) {
@@ -854,6 +898,10 @@ export function SetWindowOpacity(arg1) {
   return window['go']['main']['App']['SetWindowOpacity'](arg1);
 }
 
+export function StopPrivateCallForTab(arg1, arg2) {
+  return window['go']['main']['App']['StopPrivateCallForTab'](arg1, arg2);
+}
+
 export function SubscribeChannels(arg1, arg2) {
   return window['go']['main']['App']['SubscribeChannels'](arg1, arg2);
 }
@@ -924,6 +972,10 @@ export function VerifyFile(arg1, arg2, arg3, arg4) {
 
 export function VerifyFileForTab(arg1, arg2, arg3, arg4, arg5) {
   return window['go']['main']['App']['VerifyFileForTab'](arg1, arg2, arg3, arg4, arg5);
+}
+
+export function VideoStreamControlForTab(arg1, arg2) {
+  return window['go']['main']['App']['VideoStreamControlForTab'](arg1, arg2);
 }
 
 export function WebRTCAnswer(arg1) {

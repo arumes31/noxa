@@ -2,7 +2,7 @@
 
 ## Status
 
-The implementation ships 32 replacement effects and 18 newly rendered English/German speech recordings. The production application only plays bundled files. All 50 recordings differ from the previous pack; none is retained as a fallback. The design target is Hybrid Professional Console + Modern Desktop.
+The implementation ships 33 effects and 18 English/German speech recordings. The production application only plays bundled files. The original 50 recordings replace the previous pack; the additional viewer-start cue uses the same licensed source collection. The design target is Hybrid Professional Console + Modern Desktop.
 
 **Approved for implementation after the metallic, drum-like and instrumental sources were removed.** The user's final instruction was “ok implement.” The corrected assets are integrated into production event playback, settings previews and the application build. The initial two noise-based auditions were rejected as too similar and are not shipped. Approval to implement does not constitute a complete fatigue or platform listening review. This report does not certify natural pronunciation, long-session comfort, physical headphone/speaker routing, or final native multi-client behavior. Audition files are in `.cache/noxa-audition/`.
 
@@ -16,6 +16,10 @@ The checked-out repository is `https://github.com/arumes31/noxa.git`, on the exi
 - The engine admits at most four audible system sources, including speech. Replacing a source reserves its slot through a 3 ms stop fade. Nodes are disconnected on completion/cancellation; ended callbacks are delivered once. PTT replaces the previous PTT transition without waiting in a notification queue. Main.js applies microphone/voice state before requesting feedback.
 - Effects are mono 48 kHz/16-bit PCM WAVs; speech is mono 22.05 kHz/16-bit PCM WAV. Every effect has its own finished file. Final effect ranges: PTT 25/35 ms; microphone/deafen 125–140 ms; own channel 165–275 ms; other-user movement 95–120 ms.
 - Relative gain is 1: intended level differences are mastered into the assets. The asset peak ceiling is 0.115. Four system sources at 200% are conservatively bounded by a summed sample peak of 0.92. This does not bound unrelated live voice or other applications in the operating-system mixer.
+
+## Viewer-start cue
+
+A short, independently configurable sound plays for a publisher when another member starts watching the current camera or screen stream. The server detects the transition atomically: duplicate watches, catalog polling, failed requests and stopping stay silent. Resuming counts as a new start. Notifications contain no viewer identity and are discarded after the publication changes. Master mute, effects volume, per-event opt-out, DND and history suppression apply; a 250 ms cooldown bounds bursts.
 
 ## Events and speech ordering
 

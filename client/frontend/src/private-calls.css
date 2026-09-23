@@ -1,0 +1,5 @@
+.private-call-panel { position: fixed; right: 16px; bottom: 104px; z-index: 15000; width: min(360px, calc(100vw - 32px)); padding: 16px; color: var(--text); background: var(--panel, #14212a); border: 1px solid var(--accent, #22d3ee); border-radius: 8px; box-shadow: 0 4px 20px #0005; }
+.private-call-panel p { overflow-wrap: anywhere; margin: 8px 0 12px; }
+.private-call-controls { display: flex; flex-wrap: wrap; gap: 8px; }
+.call-history { width: min(640px, 94vw); max-height: 80vh; overflow: auto; }
+.call-history p { padding: 8px 0; border-bottom: 1px solid var(--border); overflow-wrap: anywhere; }

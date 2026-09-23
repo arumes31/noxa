@@ -11,21 +11,23 @@
     "quality": "npm run lint && npm run test:unit && npm run test:a11y && npm run build",
     "test": "npm run test:unit && npm run test:e2e",
     "test:a11y": "playwright test tests/workflows.spec.js --grep @a11y",
-    "test:unit": "npm run test:unit:core && npm run test:unit:ui && npm run test:unit:tray && npm run test:unit:stats && npm run test:unit:sounds && npm run test:unit:roles && npm run test:unit:media",
+    "test:unit": "npm run test:unit:core && npm run test:unit:ui && npm run test:unit:tray && npm run test:unit:stats && npm run test:unit:sounds && npm run test:unit:roles && npm run test:unit:media && npm run test:unit:communication",
+    "test:unit:communication": "node --test unit/polls.test.mjs unit/positional-audio.test.mjs unit/media-replay.test.mjs unit/media-cryptor.test.mjs",
     "test:unit:media": "node --test --experimental-test-coverage --test-coverage-include=src/media-limits.js --test-coverage-lines=90 --test-coverage-functions=90 --test-coverage-branches=80 unit/media-limits.test.mjs",
-    "test:unit:roles": "node --test unit/role-editor-state.test.mjs unit/channel-access-state.test.mjs unit/audit-format.test.mjs unit/role-presentation.test.mjs",
+    "test:unit:roles": "node --test unit/role-editor-state.test.mjs unit/channel-access-state.test.mjs unit/audit-format.test.mjs unit/role-presentation.test.mjs unit/role-mentions.test.mjs",
     "test:unit:sounds": "node --test unit/sounds.test.mjs unit/speech.test.mjs",
     "sounds:generate": "node ../../tools/generate-sounds.mjs",
     "test:unit:stats": "node --test unit/connection-stats.test.mjs",
     "test:unit:tray": "node --test unit/tray-state.test.mjs",
-    "test:unit:core": "node --test --experimental-test-coverage --test-coverage-include=src/markdown.js --test-coverage-include=src/i18n.js --test-coverage-include=src/security.js --test-coverage-include=src/a11y.js --test-coverage-include=src/live-announcer.js --test-coverage-include=src/modal.js --test-coverage-include=src/safe-media.js --test-coverage-include=src/media-devices.js --test-coverage-include=src/runtime-json.js --test-coverage-include=src/chat-parsers.js --test-coverage-include=src/scoped-actions.js --test-coverage-include=src/file-links.js --test-coverage-lines=90 --test-coverage-functions=90 --test-coverage-branches=80 unit/markdown.test.mjs unit/i18n.test.mjs unit/clipboard.test.mjs unit/security.test.mjs unit/a11y.test.mjs unit/live-announcer.test.mjs unit/modal.test.mjs unit/safe-media.test.mjs unit/media-devices.test.mjs unit/runtime-json.test.mjs unit/chat-parsers.test.mjs unit/file-links.test.mjs unit/lint.test.mjs unit/native-dialogs.test.mjs unit/scoped-actions.test.mjs unit/batch7c-hardening.test.mjs unit/playwright-config.test.mjs unit/ui-format.test.mjs",
+    "test:unit:core": "node --test --experimental-test-coverage --test-coverage-include=src/markdown.js --test-coverage-include=src/i18n.js --test-coverage-include=src/security.js --test-coverage-include=src/a11y.js --test-coverage-include=src/live-announcer.js --test-coverage-include=src/modal.js --test-coverage-include=src/safe-media.js --test-coverage-include=src/media-devices.js --test-coverage-include=src/runtime-json.js --test-coverage-include=src/chat-parsers.js --test-coverage-include=src/scoped-actions.js --test-coverage-include=src/file-links.js --test-coverage-lines=90 --test-coverage-functions=90 --test-coverage-branches=80 unit/markdown.test.mjs unit/i18n.test.mjs unit/clipboard.test.mjs unit/security.test.mjs unit/a11y.test.mjs unit/live-announcer.test.mjs unit/modal.test.mjs unit/safe-media.test.mjs unit/media-devices.test.mjs unit/runtime-json.test.mjs unit/chat-parsers.test.mjs unit/file-links.test.mjs unit/lint.test.mjs unit/native-dialogs.test.mjs unit/scoped-actions.test.mjs unit/batch7c-hardening.test.mjs unit/playwright-config.test.mjs unit/ui-format.test.mjs unit/chat-relations.test.mjs",
     "test:unit:ui": "node --test --experimental-test-module-mocks --experimental-test-coverage --test-coverage-include=src/audio.js --test-coverage-include=src/chat-ui.js --test-coverage-include=src/files-ui.js --test-coverage-include=src/grid-compositor.js --test-coverage-include=src/image-tools.js --test-coverage-include=src/clientinfo.js --test-coverage-lines=25 --test-coverage-functions=25 --test-coverage-branches=70 unit/ui-modules.test.mjs",
     "test:e2e": "playwright test"
   },
   "dependencies": {
     "@fontsource-variable/jetbrains-mono": "^5.3.0",
     "@fontsource-variable/outfit": "^5.3.0",
-    "@fontsource-variable/sora": "^5.3.0"
+    "@fontsource-variable/sora": "^5.3.0",
+    "livekit-client": "2.22.3"
   },
   "devDependencies": {
     "@playwright/test": "^1.62.1",
