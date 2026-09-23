@@ -3,6 +3,7 @@ module noxa
 go 1.27.1
 
 require (
+	github.com/bluenviron/mediacommon/v2 v2.9.5
 	github.com/lib/pq v1.12.3
 	github.com/pion/ice/v4 v4.4.2
 	github.com/pion/interceptor v0.1.48
