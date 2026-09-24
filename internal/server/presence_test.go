@@ -207,6 +207,9 @@ func TestServerInfoQuery(t *testing.T) {
 	if resp.Version == "" || resp.Platform == "" || resp.ClientsOnline < 1 {
 		t.Fatalf("server info = %+v", resp)
 	}
+	if resp.ChatMaxBytes != 2000 {
+		t.Fatalf("chat byte limit = %d, want 2000", resp.ChatMaxBytes)
+	}
 }
 
 // bobClientID returns the admin's client ID in the test env.

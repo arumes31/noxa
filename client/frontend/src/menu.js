@@ -1,6 +1,7 @@
 // menu.js — TS3-style menu bar with dropdown menus.
 import { isActivationKey, wrappedIndex } from "./a11y.js";
 import { closeDialog, mountDialog } from "./modal.js";
+import { copyToClipboard } from "./clipboard.js";
 
 const V = () => window.__noxa;
 
@@ -168,6 +169,8 @@ function dlgAbout() {
             <div class="about-body">
                 <div class="wordmark" style="font-size:26px">noXa</div>
                 <div class="mono about-version"></div>
+                <div class="mono about-server-version"></div>
+                <button class="about-copy-version" type="button" disabled>${t("wins.copyVersion")}</button>
                 <div class="mono about-uid"></div>
                 <div class="about-links">
                     <a href="https://github.com/arumes31/noxa" target="_blank" rel="noopener noreferrer">${t("menu.project")}</a> ·
@@ -180,9 +183,25 @@ function dlgAbout() {
     const setVersion = (text) => {
         if (overlay.isConnected && versionEl.isConnected) versionEl.textContent = text;
     };
-    window.go.main.App.ClientVersion()
-        .then((v) => setVersion(t("menu.version", { version: v })))
-        .catch(() => setVersion(t("menu.versionUnavailable")));
+    const versionScope = { tabID: state.activeTabID, generation: state.serverGeneration };
+    const sameServer = () => versionScope.tabID === state.activeTabID && versionScope.generation === state.serverGeneration;
+    const versionButton = overlay.querySelector(".about-copy-version");
+    let clientVersion = t("wins.unavailable"), serverVersion = t("wins.unavailable");
+    Promise.allSettled([
+        window.go.main.App.ClientVersion(),
+        state.myClientID ? window.go.main.App.ServerInfoForTab(versionScope.tabID) : Promise.resolve(null),
+    ]).then(([client, server]) => {
+        if (!overlay.isConnected) return;
+        if (client.status === "fulfilled" && client.value) clientVersion = client.value;
+        if (sameServer() && server.status === "fulfilled" && server.value?.version) serverVersion = server.value.version;
+        setVersion(t("wins.clientVersion", { version: clientVersion }));
+        overlay.querySelector(".about-server-version").textContent = t("wins.serverVersion", { version: serverVersion });
+        versionButton.disabled = false;
+    });
+    versionButton.onclick = () => copyToClipboard([
+        "noXa", t("wins.clientVersion", { version: clientVersion }),
+        t("wins.serverVersion", { version: sameServer() ? serverVersion : t("wins.unavailable") }),
+    ].join("\n"), { success: t("wins.versionCopied"), isCurrent: () => overlay.isConnected });
     const uidEl = overlay.querySelector(".about-uid");
     uidEl.textContent = state.myUniqueID || t("menu.disconnected");
     for (const link of overlay.querySelectorAll(".about-links a")) {
@@ -487,7 +506,7 @@ export function initMenu() {
         menuAction(t("menu.disconnect"), () => V().disconnect()),
         menuAction(t("menu.serverInfo"), () => window.__noxaMeta.openServerInfo()),
         divider(),
-        menuAction(t("menu.quit"), () => window.runtime.Quit()),
+        menuAction(t("menu.quit"), () => window.go.main.App.Quit()),
     ]);
 
     const bookmarkItems = [menuAction(t("menu.bookmarkCurrent"), bookmarkCurrent), divider()];

@@ -108,10 +108,8 @@ func (t *tray) onReady() {
 			case <-t.miDisconnect.ClickedCh:
 				t.disconnectActive()
 			case <-miQuit.ClickedCh:
-				systray.Quit()
-				if t.app.ctx != nil {
-					wailsRuntime.Quit(t.app.ctx)
-				}
+				t.app.Quit()
+				return
 			}
 		}
 	})

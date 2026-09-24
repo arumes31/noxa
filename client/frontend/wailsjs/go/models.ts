@@ -820,6 +820,7 @@ export namespace main {
 	    }
 	}
 	export class Settings {
+	    settings_base?: string;
 	    settings_version: number;
 	    bookmarks: Bookmark[];
 	    recents: RecentServer[];
@@ -839,6 +840,7 @@ export namespace main {
 	    details_width: number;
 	    idle_video_pause: boolean;
 	    dnd_enabled: boolean;
+	    notification_snooze_until: number;
 	    dnd_from: string;
 	    dnd_to: string;
 	    capture_device_id: string;
@@ -926,6 +928,7 @@ export namespace main {
 
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.settings_base = source["settings_base"];
 	        this.settings_version = source["settings_version"];
 	        this.bookmarks = this.convertValues(source["bookmarks"], Bookmark);
 	        this.recents = this.convertValues(source["recents"], RecentServer);
@@ -945,6 +948,7 @@ export namespace main {
 	        this.details_width = source["details_width"];
 	        this.idle_video_pause = source["idle_video_pause"];
 	        this.dnd_enabled = source["dnd_enabled"];
+	        this.notification_snooze_until = source["notification_snooze_until"];
 	        this.dnd_from = source["dnd_from"];
 	        this.dnd_to = source["dnd_to"];
 	        this.capture_device_id = source["capture_device_id"];
@@ -2638,6 +2642,7 @@ export namespace netproto {
 	    }
 	}
 	export class ServerInfoResponse {
+	    chat_max_bytes?: number;
 	    name: string;
 	    version: string;
 	    platform?: string;
@@ -2653,6 +2658,7 @@ export namespace netproto {
 
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.chat_max_bytes = source["chat_max_bytes"];
 	        this.name = source["name"];
 	        this.version = source["version"];
 	        this.platform = source["platform"];

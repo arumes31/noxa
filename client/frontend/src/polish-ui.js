@@ -9,6 +9,7 @@ import { mountDialog } from "./modal.js";
 import { icon } from "./icons.js";
 
 import { t } from "./i18n.js";
+import { mountSnoozeControls } from "./notification-snooze.js";
 
 const V = () => window.__noxa;
 const App = () => window.go.main.App;
@@ -50,11 +51,15 @@ function initResizablePanes() {
     const makeHandle = (el, field, invert) => {
         const h = document.createElement("div");
         h.className = "pane-handle" + (invert ? " right" : "");
-        h.title = "drag to resize · double-click to reset";
+        const translate = () => {
+            h.title = t("wins.resizeHelp");
+            h.setAttribute("aria-label", t(el.id === "sidebar" ? "wins.resizeChannels" : "wins.resizeDetails"));
+        };
+        translate();
+        window.addEventListener("noxa-language-changed", translate);
         h.tabIndex = 0;
         h.setAttribute("role", "separator");
         h.setAttribute("aria-orientation", "vertical");
-        h.setAttribute("aria-label", `Resize ${el.id === "sidebar" ? "channels" : "details"} pane`);
         h.setAttribute("aria-valuemin", "160");
         h.setAttribute("aria-valuemax", "560");
         const updateValue = (width) => h.setAttribute("aria-valuenow", String(Math.round(width)));
@@ -270,6 +275,7 @@ function updateBellBadge() {
 // dndActive reports whether DND is on (toggle or quiet hours, 347/348).
 export function dndActive(settings) {
     const s = settings || V().state.settings || {};
+    if (Number.isFinite(s.notification_snooze_until) && s.notification_snooze_until > Date.now()) return true;
     if (s.dnd_enabled) return true;
     if (!s.dnd_from || !s.dnd_to) return false;
     const now = new Date();
@@ -365,6 +371,7 @@ function openNotifCenter() {
                 <button class="icon-btn nc-close" title="Close" aria-label="Close notifications">${icon("close")}</button>
             </div>
             <div class="nc-list"></div>
+            <div class="nc-snooze"></div>
         </div>`;
     overlay.querySelector(".nc-close").onclick = () => overlay.remove();
     overlay.querySelector(".nc-clear").onclick = () => {
@@ -373,7 +380,8 @@ function openNotifCenter() {
         render();
     };
     overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
-    mountDialog(overlay, { onClose: () => notifViews.delete(render) });
+    const cleanupSnooze = mountSnoozeControls(overlay.querySelector(".nc-snooze"));
+    mountDialog(overlay, { onClose: () => { notifViews.delete(render); cleanupSnooze(); } });
     notifViews.add(render);
     render();
 }

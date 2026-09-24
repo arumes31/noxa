@@ -8,7 +8,7 @@ Previously VoicX. See the [rename and upgrade notes](docs/RENAME.md) for existin
 
 **Next-Generation High-Performance Real-Time Communication Platform**
 
-*Ultra-low latency SFU voice & video engine, zero-trust E2EE chat messaging, PostgreSQL multi-tenant state persistence, and a 5-tier role-based permission system.*
+*Ultra-low latency SFU voice & video engine, zero-trust E2EE chat messaging, PostgreSQL multi-tenant state persistence, and named roles, role hierarchy, and channel access overrides.*
 
 [![CI](https://github.com/arumes31/noxa/actions/workflows/ci.yml/badge.svg)](https://github.com/arumes31/noxa/actions/workflows/ci.yml)
 [![golangci-lint](https://github.com/arumes31/noxa/actions/workflows/golangci-lint.yml/badge.svg)](https://github.com/arumes31/noxa/actions/workflows/golangci-lint.yml)
@@ -17,7 +17,7 @@ Previously VoicX. See the [rename and upgrade notes](docs/RENAME.md) for existin
 [![Docker Image](https://img.shields.io/docker/v/arumes31/noxa?label=ghcr.io&logo=docker)](https://github.com/arumes31/noxa/pkgs/container/noxa)
 [![License](https://img.shields.io/github/license/arumes31/noxa)](LICENSE)
 
-[Architecture](#-system-architecture) • [Features](#-key-features) • [Quick Start](#-quick-start) • [Permissions](#-5-tier-permission-engine) • [ServerQuery API](#-serverquery-admin-protocol) • [Configuration](#-configuration-reference)
+[Architecture](#-system-architecture) • [Features](#-key-features) • [Quick Start](#-quick-start) • [Permissions](#-roles-and-channel-access) • [ServerQuery API](#-serverquery-admin-protocol) • [Configuration](#-configuration-reference)
 
 ---
 
@@ -96,23 +96,15 @@ graph TD
 * **Rich Messaging Controls**: Channel history search, pinned messages, emoji reactions, typing indicators, read receipts, and `@mention` notifications.
 * **Automated Moderation**: Regex link whitelisting/blacklisting, duplicate message suppression, rate limiting, and word filtering.
 
-### 🛡️ 5-Tier Hierarchical Permission Engine
+### 🛡️ Roles and Channel Access
 
-```mermaid
-flowchart TD
-    Tier1["Tier 1: Server Group (Lowest)"] --> Tier2["Tier 2: Client Permissions"]
-    Tier2 --> Tier3["Tier 3: Channel Client Overrides"]
-    Tier3 --> Tier4["Tier 4: Channel Permissions"]
-    Tier4 --> Tier5["Tier 5: Channel Group (Highest)"]
+* **Named roles**: `@everyone` supplies the baseline; a member's role grants combine. Role order controls delegated management, moderation targets, and appearance.
+* **Channel access**: Channels either sync with their parent or use custom overrides. Overrides use Inherit / Allow / Deny for roles and individual registered members.
+* **Predictable resolution**: Start with server role grants, apply the channel's `@everyone` overrides, combine role overrides (allow wins at this stage), then apply member-specific overrides. Capability prerequisites and moderation restrictions still apply.
+* **Protected ownership**: Owner and Administrator bypass configurable channel overrides, but not account bans, admission checks, ownership protection, hierarchy checks, or operational limits. Only the owner can grant Administrator or transfer ownership.
+* **Explainable changes**: Check access shows the effective decision and its source. Revision checks prevent stale saves; role/access mutations are audited.
 
-    Tier5 --> Eval{"Evaluate Skip & Negate Flags"}
-    Eval --> Result["Final Granted / Denied Power"]
-```
-
-* **5 Evaluation Tiers**: Server Group → Client → Channel Client → Channel → Channel Group.
-* **Skip & Negate Semantics**: Prevent lower-level channel groups from overriding critical server-wide bans or moderation flags.
-* **Non-Admin Grant Capping**: Delegated moderators can only assign permission values less than or equal to their own grant power.
-* **Detailed Audit Logging**: Every group creation, assignment, permission mutation, kick, ban, and token redemption is appended to an immutable database audit log.
+The current server and client require the coordinated `roles-v1` model and a fresh database. Existing legacy databases are not automatically migrated. See [fresh setup](docs/role-setup-preflight.md) and [the authorization contract](docs/capability-enforcement.md).
 
 ---
 
@@ -319,30 +311,42 @@ enabling Query SSH.
 
 | Command | Arguments | Description |
 | :--- | :--- | :--- |
-| `login` | `<username> <password>` | Authenticate as ServerQuery administrator |
-| `clientlist` | `[-uid] [-times] [-voice]` | List all connected clients with state metadata |
-| `channellist` | `[-topic] [-flags] [-limits]` | List all active channels and configuration |
-| `clientmove` | `clid=<id> cid=<target_cid>` | Move a connected client to another channel |
-| `clientkick` | `clid=<id> reason=<text>` | Kick client from current channel or server |
-| `banadd` | `[uid=<uid>] [ip=<ip>] time=<sec>` | Create an identity or IP address ban rule |
-| `permset` | `permid=<key> val=<value>` | Modify permission value for a group or client |
-| `tokenadd` | `tokentype=<0|1> id=<group_id>` | Generate a single-use privilege token |
+| `login` | `<unique_id_or_nickname> <password> authorization_model=roles-v1` | Authenticate an integration-enabled account; current roles determine access |
+| `clientlist` | none | List currently visible connected clients |
+| `channellist` | none | List currently visible channels |
+| `channelinfo` | `cid=<channel_id>` | Inspect a visible channel |
+| `rolelist` | `[cid=<channel_id>]` | Read the authorized role/access editor state and its revision |
+| `rolechange` | `data=<escaped_JSON_with_expected_revision>` | Change roles, assignments or access under hierarchy checks |
+| `membermove` | `data=<escaped_JSON_with_client_id_and_destination_channel_id>` | Move a member under current channel and hierarchy checks |
+| `memberkick` | `data=<escaped_JSON_with_client_id>` | Remove a member from the server |
+| `memberban` | `data=<escaped_JSON_with_client_id_and_duration_seconds>` | Ban a connected member |
+
+Provision integration accounts offline with `adduser -integration`; this enables
+login but grants no roles. Current capabilities and hierarchy apply to every
+operation, including existing sessions. Retired numeric permissions and privilege
+tokens have no compatibility fallback. Use `help` for the complete command list
+and [integration access](docs/integration-role-access.md) for JSON schemas,
+ServerQuery escaping and conflict handling. SSH sessions must separately negotiate
+`NOXA_AUTHORIZATION_MODEL=roles-v1`; see [model negotiation](docs/authorization-model-negotiation.md).
 
 <details>
 <summary><b>Click to expand ServerQuery session example</b></summary>
 
-```bash
+```text
 $ telnet 127.0.0.1 12335
-noXa ServerQuery
-welcome to noXa ServerQuery
-login admin secretpass
+NOXA ServerQuery <server_version>
+type 'help' for a list of commands
+login <integration_nickname> <account_password> authorization_model=roles-v1
+authorization_model=roles-v1
 error id=0 msg=ok
-channellist
-cid=1 channel_name=Default\sChannel total_clients=3|cid=2 channel_name=Lounge total_clients=0
-error id=0 msg=ok
-clientmove clid=4 cid=2
+quit
 error id=0 msg=ok
 ```
+
+Replace the angle-bracket placeholders with the provisioned account credentials
+(escape spaces as `\s`). After login, run `channellist` or `rolelist` to obtain
+current IDs and revisions before constructing a mutation; examples must not
+assume fixed IDs or a universal administrator account.
 
 </details>
 
@@ -367,7 +371,7 @@ noxa/
 │   ├── e2ee/                   # Signal-style X25519 Double-Ratchet crypto
 │   ├── filetransfer/           # Token-authenticated file pipeline
 │   ├── netproto/               # Binary frame codec & JSON message definitions
-│   ├── permissions/            # 5-tier permission evaluation engine
+│   ├── authorization/          # Named roles and channel access evaluation
 │   ├── query/                  # ServerQuery line-based admin protocol
 │   ├── store/                  # PostgreSQL data access layer & migrations
 │   └── webrtc/                 # Pion WebRTC SFU engine & Opus mixer
@@ -440,7 +444,7 @@ noXa is engineered around a strict security posture:
 - **Challenge Authentication**: Public key cryptography prevents password sniffing over untrusted networks.
 - **Strict TOFU Certificate Pinning**: Clients pin self-signed TLS certificates on first connect.
 - **PII Storage Protection**: Sensitive user metadata columns are encrypted at rest with AES-256-GCM authenticated data.
-- **Privilege Capping**: Non-administrators cannot grant permissions exceeding their own delegated grant tier.
+- **Delegated Role Management**: Managers can manage only lower roles and cannot grant capabilities they do not hold. Only the owner can grant Administrator.
 
 ---
 

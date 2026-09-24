@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./fixtures.js";
 
 test("role mentionability saves and reloads independently of permissions", async ({ page }) => {
     await page.getByRole("button", { name: "Roles", exact: true }).click();

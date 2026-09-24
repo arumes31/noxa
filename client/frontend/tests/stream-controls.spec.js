@@ -1,4 +1,4 @@
-import { test, expect } from "@playwright/test";
+import { test, expect } from "./fixtures.js";
 
 test.beforeEach(async ({ page }) => {
     await page.route("**/streams-fixture", route => route.fulfill({ contentType: "text/html", body: `<!doctype html><html lang="en"><head><link rel="stylesheet" href="/src/style.css"><link rel="stylesheet" href="/src/streams.css"></head><body><main><div id="video-grid"></div></main></body></html>` }));
@@ -9,6 +9,7 @@ test.beforeEach(async ({ page }) => {
         const calls = [], shown = new Set(), tracks = new Map();
         window.__streams = { streams, calls, shown, tracks, audio, session: "10" };
         window.__noxa = { state: { pc, activeTabID: "one", serverGeneration: 1, sessionGeneration: 1, myChannelID: 1, myClientID: "me", settings: {}, clients: [{ client_id: "alice", nickname: "Alice" }, { client_id: "bob", nickname: "Bob" }] },
+            $: id => document.getElementById(id),
             shareAudioCtl: { get: () => audio, setMuted: (_id, muted) => { audio.muted = muted; }, setVolume: (_id, volume) => { audio.volume = volume; } }, sysMsg: () => {}, initials: name => name.slice(0, 1) };
         window.go = { main: { App: { VideoStreamControlForTab: async (tab, msg) => {
             calls.push({ tab, ...msg });

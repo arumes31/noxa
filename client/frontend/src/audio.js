@@ -3,6 +3,7 @@
 // limiter/per-user normalizer, and the per-user volume/mute registry.
 import { labelButton } from "./icons.js";
 import { t } from "./i18n.js";
+import { updateLocalSettings } from "./settings-store.js";
 
 const V = () => window.__noxa;
 
@@ -356,33 +357,39 @@ export function getUserVolume(uid) {
 
 export function isUserMuted(uid) {
     const s = V().state.settings;
-    return (s?.muted_users || []).includes(uid);
+    return (s?.muted_users || []).includes(uid) || (s?.blocked_users || []).includes(uid);
 }
 
-export async function setUserVolume(uid, pct) {
-    const s = Object.assign({}, V().state.settings);
-    s.user_volumes = Object.assign({}, s.user_volumes, { [uid]: pct });
-    const error = await saveAll(s);
-    if (error) throw new Error(error);
-    applyUserAudio(uid);
+function mutateAudioPreference(uid, mutate) {
+    return updateLocalSettings(mutate).then(() => {
+        applyUserAudio(uid);
+    });
 }
 
-export async function setUserMuted(uid, muted) {
-    const s = Object.assign({}, V().state.settings);
-    const set = new Set(s.muted_users || []);
-    if (muted) set.add(uid);
-    else set.delete(uid);
-    s.muted_users = [...set];
-    await saveAll(s);
-    applyUserAudio(uid);
+export function setUserVolume(uid, pct) {
+    return mutateAudioPreference(uid, s => { s.user_volumes = { ...s.user_volumes, [uid]: pct }; });
 }
 
-async function saveAll(s) {
-    const err = await window.go.main.App.SaveSettings(s);
-    // (282) re-read rather than caching the copy we sent: the Go side owns
-    // fields the frontend never has (recents, what's-new marker).
-    if (!err) V().state.settings = await window.go.main.App.GetSettings();
-    return err;
+export function setUserMuted(uid, muted) {
+    return mutateAudioPreference(uid, s => {
+        const users = new Set(s.muted_users || []);
+        if (muted) users.add(uid);
+        else users.delete(uid);
+        s.muted_users = [...users];
+    });
+}
+
+export function setUserBlocked(uid, blocked) {
+    return mutateAudioPreference(uid, s => {
+        const users = new Set(s.blocked_users || []);
+        if (blocked) users.add(uid);
+        else users.delete(uid);
+        s.blocked_users = [...users];
+    });
+}
+
+export function refreshUserAudio() {
+    for (const uid of userNodes.keys()) applyUserAudio(uid);
 }
 
 // userNodes maps uniqueID -> {gain: GainNode, mute: GainNode}.

@@ -79,6 +79,7 @@ func (s *TCPServer) buildRoleServerInfo(ctx context.Context, e *authorization.Ro
 	s.configMu.RLock()
 	resp := netproto.ServerInfoResponse{Name: s.cfg.ServerName, Version: version.String(), Platform: runtime.GOOS + "/" + runtime.GOARCH, MaxClients: s.cfg.MaxClients}
 	publicMOTD := s.cfg.ServerInfoMOTD
+	resp.ChatMaxBytes = s.cfg.ChatMaxLength
 	s.configMu.RUnlock()
 	if name := s.serverSetting(ctx, "server_name"); name != "" {
 		resp.Name = name

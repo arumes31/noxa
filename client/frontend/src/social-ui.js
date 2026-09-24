@@ -5,9 +5,11 @@
 // channels (320), tree filter + collapse/expand wiring (302/319), and
 // multi-select batch actions (306).
 import { humanBytes } from "./clientinfo.js";
+import { setUserBlocked } from "./audio.js";
 import { isCurrentServerDialog, mountServerDialog } from "./modal.js";
 import { setSafeImage } from "./safe-media.js";
 import { capturePresenceScope, setPresence } from "./presence.js";
+import { updateLocalSettings } from "./settings-store.js";
 
 const V = () => window.__noxa;
 const App = () => window.go.main.App;
@@ -91,10 +93,10 @@ function openStatusPicker() {
 
 function openContacts() {
     const { state } = V();
-    const s = state.settings || {};
     const overlay = document.createElement("div");
     overlay.className = "dlg-overlay";
     const render = () => {
+        const s = state.settings || {};
         const contacts = s.contacts || [];
         const list = overlay.querySelector(".ct-list");
         list.innerHTML = contacts.length ? "" : `<div class="empty-state">No contacts yet</div>`;
@@ -116,8 +118,12 @@ function openContacts() {
             watch.textContent = c.notify_online ? "🔔" : "🔕";
             watch.title = c.notify_online ? "notify when online: on" : "notify when online: off";
             watch.onclick = async () => {
-                c.notify_online = !c.notify_online;
-                await App().SaveSettings(s);
+                try {
+                    await updateLocalSettings(current => {
+                        const contact = (current.contacts || []).find(x => x.unique_id === c.unique_id);
+                        if (contact) contact.notify_online = !contact.notify_online;
+                    });
+                } catch (error) { V().toast(String(error), "error"); return; }
                 if (!isCurrentServerDialog(overlay)) return;
                 render();
             };
@@ -126,15 +132,17 @@ function openContacts() {
             blockBtn.textContent = blocked ? "🚫" : "🔇";
             blockBtn.title = blocked ? "unblock" : "block (hide chat + mute voice)";
             blockBtn.onclick = async () => {
-                if (blocked) s.blocked_users = (s.blocked_users || []).filter((u) => u !== c.unique_id);
-                else s.blocked_users = [...(s.blocked_users || []), c.unique_id];
-                await App().SaveSettings(s);
+                try { await setUserBlocked(c.unique_id, !blocked); }
+                catch (error) { V().toast(String(error), "error"); return; }
                 if (!isCurrentServerDialog(overlay)) return;
                 render();
             };
             row.querySelector(".ct-del").onclick = async () => {
-                s.contacts = contacts.filter((x) => x !== c);
-                await App().SaveSettings(s);
+                try {
+                    await updateLocalSettings(current => {
+                        current.contacts = (current.contacts || []).filter(x => x.unique_id !== c.unique_id);
+                    });
+                } catch (error) { V().toast(String(error), "error"); return; }
                 if (!isCurrentServerDialog(overlay)) return;
                 render();
             };
@@ -153,14 +161,20 @@ function openContacts() {
             <div class="dlg-buttons"><button class="dlg-ok">Close</button></div>
         </div>`;
     overlay.querySelector(".ct-add-btn").onclick = async () => {
+        const s = state.settings || {};
         const uid = overlay.querySelector(".ct-uid").value.trim();
         if (!uid) return;
         if ((s.contacts || []).some((c) => c.unique_id === uid)) {
             V().toast("contact already exists", "warn");
             return;
         }
-        s.contacts = [...(s.contacts || []), { unique_id: uid, label: overlay.querySelector(".ct-label").value.trim() }];
-        await App().SaveSettings(s);
+        const label = overlay.querySelector(".ct-label").value.trim();
+        try {
+            await updateLocalSettings(current => {
+                if ((current.contacts || []).some(c => c.unique_id === uid)) return;
+                current.contacts = [...(current.contacts || []), { unique_id: uid, label }];
+            });
+        } catch (error) { V().toast(String(error), "error"); return; }
         if (!isCurrentServerDialog(overlay)) return;
         overlay.querySelector(".ct-uid").value = "";
         overlay.querySelector(".ct-label").value = "";
@@ -342,11 +356,11 @@ function userNote(uid) {
 }
 
 async function saveUserNote(uid, note) {
-    const s = V().state.settings;
-    s.user_notes = s.user_notes || {};
-    if (note) s.user_notes[uid] = note;
-    else delete s.user_notes[uid];
-    await App().SaveSettings(s);
+    await updateLocalSettings(s => {
+        s.user_notes = s.user_notes || {};
+        if (note) s.user_notes[uid] = note;
+        else delete s.user_notes[uid];
+    });
 }
 
 // ---------------------------------------------------------------------------

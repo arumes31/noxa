@@ -119,7 +119,8 @@
                     <button id="chat-target-toggle" type="button" aria-label="Show connected members" title="Show connected members">⌄</button>
                     <div id="chat-target-options" class="hidden" role="listbox"></div>
                 </div>
-                <input id="chat-text" placeholder="message…" aria-label="Message" autocomplete="off" />
+                <input id="chat-text" placeholder="message…" aria-label="Message" aria-describedby="chat-length" autocomplete="off" />
+                <span id="chat-length" class="composer-count" hidden></span>
                 <input id="chat-file" type="file" multiple class="hidden" aria-label="Choose attachments" />
                 <button id="chat-attach" class="icon-btn" title="Attach files (or paste / drop them here)" aria-label="Attach files">📎</button>
                 <button id="chat-emoji" class="icon-btn" title="Emoji picker" aria-label="Open emoji picker">😊</button>
@@ -144,6 +145,7 @@
         </aside>
         </div>
         <footer id="voice-bar" aria-label="Voice controls">
+            <div class="voice-hints"><span id="voice-shortcut-hint" hidden></span><span id="voice-whisper-preview" hidden></span></div>
             <div class="voice-buttons">
                 <div class="voice-microphone"><button id="voice-mute" class="voice-control" aria-label="Mute microphone" aria-pressed="false"></button><div id="mic-meter" class="hidden" role="meter" aria-label="Microphone input level" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div class="mic-fill cool"></div></div><span id="mic-warning" class="hidden" role="status" aria-live="polite"></span></div>
                 <button id="ptt-btn" class="voice-control" title="Hold to talk" aria-label="Push to talk" aria-pressed="false"></button>

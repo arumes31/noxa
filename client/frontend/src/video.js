@@ -2,6 +2,8 @@
 // quality selector (63), share dialog (69-72), camera on/off + stop-share
 // confirm (85), and the low-bandwidth mode (88). Everything here works against
 // the shared namespace (window.__noxa) populated by main.js.
+import { copyToClipboard } from "./clipboard.js";
+import { formatBitrate, summarizeStream } from "./connection-stats.js";
 import { GridCompositor } from "./grid-compositor.js";
 import { captureMediaScope, mediaScopeIsCurrent } from "./media-controls.js";
 import { startPublication, stopPublication } from "./stream-publication.js";
@@ -106,6 +108,7 @@ export function videoTrackAdded(trackID, stream, publisher, watchControls) {
                 <span class="vtile-badge hidden"></span>
                 <span class="vtile-preview-age hidden"></span>
             </div>
+            <details class="vtile-diagnostics"><summary></summary><div class="vtile-diagnostics-body"><p class="vtile-codec"></p><p class="vtile-rate"></p><p class="vtile-traffic-note"></p><button class="vtile-copy-diagnostics" type="button"></button></div></details>
             <button class="vtile-pip icon-btn" title="floating always-on-top video">▣</button>
             <button class="vtile-fullscreen icon-btn" title="fullscreen (Esc exits)">⛶</button>`;
         const video = el.querySelector("video");
@@ -157,6 +160,19 @@ export function videoTrackAdded(trackID, stream, publisher, watchControls) {
             el, video, nameEl, kindEl, badgeEl, track: null, stream: null,
             clientID: clid, slot: parsed.slot, frames: 0, stalls: 0, flowing: true,
         };
+        el.querySelector(".vtile-diagnostics").onclick = event => event.stopPropagation();
+        el.querySelector(".vtile-copy-diagnostics").onclick = () => {
+            const sample = t.diagnostics;
+            const payload = {
+                sampled_at: t.diagnosticsAt || null, direction: "received", slot: t.slot,
+                codec: sample?.codec ?? null, bitrate_bits_per_second: sample?.bitrate ?? null,
+                bandwidth: formatBitrate(sample?.bitrate), payload_bytes_received: sample?.bytes ?? null,
+                width: sample?.width ?? null, height: sample?.height ?? null,
+                frames_decoded: sample?.frames ?? null, packets_lost: sample?.packetsLost ?? null,
+                note: "RTP media payload only; excludes network headers. Null means unavailable.",
+            };
+            void copyToClipboard(JSON.stringify(payload, null, 2), { success: tLabel("wins.streamCopied"), isCurrent: () => el.isConnected });
+        };
         tiles.set(key, t);
         gridEl().appendChild(el);
     }
@@ -169,6 +185,9 @@ export function videoTrackAdded(trackID, stream, publisher, watchControls) {
     // carries more than one track.
     const vt = stream?.getVideoTracks().find((tr) => tr.id === key) || null;
     t.track = vt;
+    t.diagnostics = null;
+    t.diagnosticsPC = null;
+    t.diagnosticsAt = null;
     if (t.frameCallback != null) t.video.cancelVideoFrameCallback(t.frameCallback);
     t.frameCallback = null;
     t.lastFrameAt = null;
@@ -247,6 +266,7 @@ export function clearVideoGrid() {
 // avatar fallback (61: avatar-with-ring fallback behind the video; visible when
 // no frames flow, e.g. camera off or black screen share).
 function applyTileIdentity(t) {
+    renderStreamDiagnostics(t);
     const { state, initials, fetchAvatar } = V();
     const clid = t.clientID;
     const c = state.clients.find((c) => String(c.client_id) === clid);
@@ -276,6 +296,15 @@ function applyTileIdentity(t) {
         if (uid) fetchAvatar(uid);
     }
     t.el.classList.toggle("speaking", !!(c && c.is_speaking));
+}
+
+function renderStreamDiagnostics(tile) {
+    const panel = tile.el.querySelector(".vtile-diagnostics");
+    panel.querySelector("summary").textContent = tLabel("wins.streamDetails");
+    panel.querySelector(".vtile-codec").textContent = tLabel("wins.streamCodec", { codec: tile.diagnostics?.codec || "—" });
+    panel.querySelector(".vtile-rate").textContent = tLabel("wins.streamRate", { rate: formatBitrate(tile.diagnostics?.bitrate) });
+    panel.querySelector(".vtile-traffic-note").textContent = tLabel("wins.payloadNote");
+    panel.querySelector("button").textContent = tLabel("wins.copyStream");
 }
 
 function tileIsScreen(t) {
@@ -532,6 +561,12 @@ async function refreshBadges() {
     try {
         const stats = await request.pc.getStats();
         if (!current()) return;
+        for (const tile of tiles.values()) {
+            tile.diagnostics = summarizeStream(stats, tile.track?.id, tile.diagnosticsPC === request.pc ? tile.diagnostics : null);
+            tile.diagnosticsPC = request.pc;
+            tile.diagnosticsAt = new Date().toISOString();
+            renderStreamDiagnostics(tile);
+        }
         const cpu = await window.go.main.App.SystemCPUPercent();
         if (!current()) return;
         const byTrack = new Map(); // trackIdentifier -> {w, frames}

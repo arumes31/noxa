@@ -22,8 +22,10 @@ import { streamEnglish, streamGerman } from "./stream-messages.js";
 import { chatEnglish, chatGerman } from "./chat-messages.js";
 import { conversationEnglish, conversationGerman } from "./conversation-messages.js";
 import { callEnglish, callGerman } from "./call-messages.js";
+import { selectedWinEnglish, selectedWinGerman } from "./selected-win-messages.js";
 
 const en = {
+    ...selectedWinEnglish,
     ...callEnglish,
     ...conversationEnglish,
     ...chatEnglish,
@@ -94,6 +96,7 @@ const en = {
 };
 
 const de = {
+    ...selectedWinGerman,
     ...callGerman,
     ...conversationGerman,
     ...chatGerman,

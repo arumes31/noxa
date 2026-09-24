@@ -314,6 +314,8 @@ export function PrivateCallForTab(arg1:string,arg2:netproto.CallRequest):Promise
 
 export function PublishPositionForTab(arg1:string,arg2:netproto.PositionUpdate):Promise<string>;
 
+export function Quit():Promise<void>;
+
 export function ReadPositionalInput():Promise<main.PositionalInput>;
 
 export function RecordRecent(arg1:string,arg2:string):Promise<void>;
@@ -419,6 +421,8 @@ export function SetMemberVoice(arg1:netproto.MemberVoiceSet):Promise<netproto.Me
 export function SetMemberVoiceForTab(arg1:string,arg2:netproto.MemberVoiceSet):Promise<netproto.MemberVoiceState>;
 
 export function SetMuted(arg1:boolean):Promise<void>;
+
+export function SetNotificationSnooze(arg1:number):Promise<number>;
 
 export function SetPTT(arg1:boolean):Promise<void>;
 

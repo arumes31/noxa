@@ -1,12 +1,13 @@
 // clientinfo.js — right-click context menu on channel-tree users and the
 // TS3-style Client Info dialog (live-refreshing).
-import { getUserVolume, isUserMuted, setUserMuted, setUserVolume } from "./audio.js";
+import { getUserVolume, isUserMuted, setUserMuted, setUserVolume, setUserBlocked } from "./audio.js";
 import { copyToClipboard } from "./clipboard.js";
 import { pickIcon } from "./image-tools.js";
 import { closeDialog, isCurrentServerDialog, mountServerDialog } from "./modal.js";
 import { t } from "./i18n.js";
 import { roleChip } from "./role-presentation.js";
 import { startPrivateCall } from "./private-calls.js";
+import { updateLocalSettings } from "./settings-store.js";
 
 const V = () => window.__noxa;
 
@@ -71,6 +72,16 @@ function openContextMenu(x, y, client) {
     menuEl.style.top = Math.min(y, window.innerHeight - 260) + "px";
     menuEl.onclick = (e) => e.stopPropagation();
 
+    if (client.unique_id && client.client_id !== V().state.myClientID) {
+        const generation = V().state.serverGeneration;
+        const call = document.createElement("button");
+        call.type = "button"; call.className = "ctx-action"; call.textContent = t("call.start");
+        call.onclick = () => {
+            closeMenu();
+            if (tabID === V().state.activeTabID && generation === V().state.serverGeneration) void startPrivateCall(client.unique_id);
+        };
+        menuEl.append(call);
+    }
     if (client.channel_id > 0 && client.client_id !== V().state.myClientID) {
         const voice = document.createElement("button");
         voice.type = "button";
@@ -110,8 +121,10 @@ function openContextMenu(x, y, client) {
     };
     menuEl.querySelector('[data-act="mute"]').onclick = async () => {
         closeMenu();
-        await setUserMuted(client.unique_id, !muted);
-        V().toast((muted ? "unmuted " : "muted ") + (client.nickname || client.unique_id) + " locally");
+        try {
+            await setUserMuted(client.unique_id, !muted);
+            V().toast((isUserMuted(client.unique_id) ? "muted " : "unmuted ") + (client.nickname || client.unique_id) + " locally");
+        } catch (error) { V().toast(String(error), "error"); }
     };
     // (170) kick with reason dialog; (171) ban with duration presets.
     const pokeAct = menuEl.querySelector('[data-act="poke"]');
@@ -127,19 +140,23 @@ function openContextMenu(x, y, client) {
             V().toast("already a contact");
             return;
         }
-        s.contacts = [...(s.contacts || []), { unique_id: client.unique_id, label: "" }];
-        await window.go.main.App.SaveSettings(s);
-        V().toast("contact added");
+        try {
+            await updateLocalSettings(current => {
+                if ((current.contacts || []).some(c => c.unique_id === client.unique_id)) return;
+                current.contacts = [...(current.contacts || []), { unique_id: client.unique_id, label: "" }];
+            });
+            V().toast("contact added");
+        } catch (error) { V().toast(String(error), "error"); }
     };
     const blockAct = menuEl.querySelector('[data-act="block"]');
     if (blockAct) blockAct.onclick = async () => {
         closeMenu();
         const s = V().state.settings;
         const blocked = (s.blocked_users || []).includes(client.unique_id);
-        if (blocked) s.blocked_users = s.blocked_users.filter((u) => u !== client.unique_id);
-        else s.blocked_users = [...(s.blocked_users || []), client.unique_id];
-        await window.go.main.App.SaveSettings(s);
-        V().toast(blocked ? "unblocked" : "blocked — chat hidden, voice muted locally");
+        try {
+            await setUserBlocked(client.unique_id, !blocked);
+            V().toast(blocked ? "unblocked" : "blocked — chat hidden, voice muted locally");
+        } catch (error) { V().toast(String(error), "error"); }
     };
     const kickAct = menuEl.querySelector('[data-act="kick-ch"]');
     if (kickAct) kickAct.onclick = () => {
@@ -163,7 +180,8 @@ function openContextMenu(x, y, client) {
         menuEl.querySelector(".ctx-vol-pct").textContent = slider.value + "%";
     };
     slider.onchange = async () => {
-        await setUserVolume(client.unique_id, parseInt(slider.value, 10));
+        try { await setUserVolume(client.unique_id, parseInt(slider.value, 10)); }
+        catch (error) { V().toast(String(error), "error"); }
     };
 
     document.body.appendChild(menuEl);
@@ -189,11 +207,13 @@ function openBatchMenu(x, y, clientIDs) {
 
     menuEl.querySelector('[data-act="mute"]').onclick = async () => {
         closeMenu();
-        for (const id of clientIDs) {
-            const c = V().state.clients.find((x) => x.client_id === id);
-            if (c) await setUserMuted(c.unique_id, true);
-        }
-        V().toast("muted " + clientIDs.length + " users locally");
+        try {
+            for (const id of clientIDs) {
+                const c = V().state.clients.find((x) => x.client_id === id);
+                if (c) await setUserMuted(c.unique_id, true);
+            }
+            V().toast("muted " + clientIDs.length + " users locally");
+        } catch (error) { V().toast(String(error), "error"); }
     };
     const kick = menuEl.querySelector('[data-act="kick"]');
     if (kick) kick.onclick = async () => {
@@ -425,7 +445,8 @@ function openClientInfo(client) {
     noteInput.value = window.__noxaSocial.userNote(client.unique_id);
     noteInput.onchange = () => {
         window.__noxaSocial.saveUserNote(client.unique_id, noteInput.value.trim())
-            .then(() => V().toast("note saved"));
+            .then(() => V().toast("note saved"))
+            .catch(error => V().toast(String(error), "error"));
     };
     overlay.querySelector(".ci-grid").appendChild(noteRow);
     // Current roles from the recipient-filtered member snapshot.
@@ -598,12 +619,6 @@ function openChannelMenu(x, y, channel) {
     menuEl.style.left = Math.min(x, window.innerWidth - 240) + "px";
     menuEl.style.top = Math.min(y, window.innerHeight - 260) + "px";
     menuEl.onclick = (e) => e.stopPropagation();
-    if (client.unique_id && client.client_id !== V().state.myClientID) {
-        const call = document.createElement("button");
-        call.type = "button"; call.className = "ctx-action"; call.textContent = t("call.start");
-        call.onclick = () => { closeMenu(); void startPrivateCall(client.unique_id); };
-        menuEl.append(call);
-    }
     menuEl.querySelector('[data-act="open-chat"]').onclick = () => {
         closeMenu();
         window.__noxaChat?.openChannelTab?.(channel.ChannelID);

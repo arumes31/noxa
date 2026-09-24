@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./fixtures.js";
 import { readFileSync } from "node:fs";
 
 const presetContract = JSON.parse(readFileSync(new URL("../../../testdata/channel-access-presets.json", import.meta.url), "utf8"));

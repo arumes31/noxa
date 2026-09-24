@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./fixtures.js";
 
 test.beforeEach(async ({ page }) => {
     await page.route("**/__group_test__", route => route.fulfill({ contentType: "text/html", body: '<!doctype html><html><head><title>Private groups</title><link rel="stylesheet" href="/src/conversations.css"></head><body><aside id="sidebar"><div id="channel-tree"><button>Lobby</button></div></aside><main id="center"><section id="chat-pane"><p>Channel messages</p><textarea aria-label="Message Lobby">channel draft</textarea></section></main><button id="launch">Groups</button></body></html>' }));

@@ -622,6 +622,10 @@ export function PublishPositionForTab(arg1, arg2) {
   return window['go']['main']['App']['PublishPositionForTab'](arg1, arg2);
 }
 
+export function Quit() {
+  return window['go']['main']['App']['Quit']();
+}
+
 export function ReadPositionalInput() {
   return window['go']['main']['App']['ReadPositionalInput']();
 }
@@ -832,6 +836,10 @@ export function SetMemberVoiceForTab(arg1, arg2) {
 
 export function SetMuted(arg1) {
   return window['go']['main']['App']['SetMuted'](arg1);
+}
+
+export function SetNotificationSnooze(arg1) {
+  return window['go']['main']['App']['SetNotificationSnooze'](arg1);
 }
 
 export function SetPTT(arg1) {

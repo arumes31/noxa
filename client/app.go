@@ -48,8 +48,8 @@ type App struct {
 	lifecycleMu              sync.Mutex
 	lifecycleCancel          context.CancelFunc
 	// Wails invokes beforeClose for programmatic Quit as well as window close.
-	// A successful update restart must exit even when close-to-tray is enabled.
-	restarting atomic.Bool
+	// Explicit Quit and update restart bypass close-to-tray.
+	quitting atomic.Bool
 	// cm is the ACTIVE tab's connManager (281 multi-server tabs): all
 	// bindings keep operating on it. Background tabs live in tabs and their
 	// events are journaled/replayed by tabs.go. Access via cmLoad/cmStore
@@ -96,8 +96,10 @@ type App struct {
 	// before a caller queues for the durable-settings transaction.
 	beforeSettingsTransaction func()
 
-	hkMu    sync.Mutex
-	hotkeys map[string]*hotkeyReg
+	hkMu             sync.Mutex
+	hotkeys          map[string]*hotkeyReg
+	hotkeyGeneration map[string]uint64
+	hotkeysClosed    bool
 
 	// opacityMu serialises OS-level setWindowOpacity calls so the background
 	// watcher and SetWindowOpacity cannot interleave and leave persisted vs.
@@ -128,7 +130,7 @@ func NewApp() *App {
 }
 
 func (a *App) beforeClose(ctx context.Context) bool {
-	if a.restarting.Load() {
+	if a.quitting.Load() {
 		return false
 	}
 	a.settingsMu.Lock()
@@ -140,6 +142,15 @@ func (a *App) beforeClose(ctx context.Context) bool {
 		return true
 	}
 	return false
+}
+
+// Quit exits explicitly, even when closing the window normally hides it.
+func (a *App) Quit() {
+	if a.ctx == nil {
+		return
+	}
+	a.quitting.Store(true)
+	wailsQuit(a.ctx)
 }
 
 // cmLoad returns the active tab's connManager (may be nil).
@@ -276,6 +287,7 @@ func (a *App) shutdown(_ context.Context) {
 	}
 	a.lifecycleMu.Unlock()
 	a.hkMu.Lock()
+	a.hotkeysClosed = true
 	for action, reg := range a.hotkeys {
 		reg.stop()
 		delete(a.hotkeys, action)

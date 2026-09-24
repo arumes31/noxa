@@ -936,6 +936,7 @@ type ServerInfoQuery struct{}
 
 // ServerInfoResponse carries the server's public information.
 type ServerInfoResponse struct {
+	ChatMaxBytes   int    `json:"chat_max_bytes,omitempty"` // Channel/global plaintext UTF-8 limit; zero means unspecified.
 	Name           string `json:"name"`
 	Version        string `json:"version"`
 	Platform       string `json:"platform,omitempty"` // Optional for compatibility with older servers.

@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./fixtures.js";
 
 test("maintained media worker encrypts VP8 and fails closed for a recipient without the key", async ({ page }) => {
     await page.route("**/__encryption_test__", route => route.fulfill({ contentType: "text/html", body: '<!doctype html><title>Encrypted media test</title>' }));

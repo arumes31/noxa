@@ -5,11 +5,9 @@
 //
 // Required when enabled: NOXA_LIVE_{ALICE,BOB,ADMIN}_{UID,PASS} and
 // NOXA_LIVE_TLS_FINGERPRINT from the disposable server's local certificate.
-// Optional: NOXA_LIVE_QUERY_ADDR (default: same host, port 12335).
 package main
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"crypto/sha256"
@@ -30,6 +28,8 @@ import (
 	"testing"
 	"time"
 
+	"noxa/internal/authorization"
+	"noxa/internal/broadcast"
 	"noxa/internal/netproto"
 )
 
@@ -55,19 +55,6 @@ func liveAddr(t *testing.T) string {
 		}
 	}
 	return addr
-}
-
-// liveQueryAddr returns the ServerQuery address for the live server.
-func liveQueryAddr(t *testing.T) string {
-	t.Helper()
-	if addr := os.Getenv("NOXA_LIVE_QUERY_ADDR"); addr != "" {
-		return addr
-	}
-	host, _, err := net.SplitHostPort(liveAddr(t))
-	if err != nil {
-		t.Fatalf("splitting addr: %v", err)
-	}
-	return net.JoinHostPort(host, "12335")
 }
 
 // eventRecorder is an eventSink that records everything for assertions.
@@ -153,64 +140,32 @@ func TestLiveBackendTrustIsIsolatedAndPinned(t *testing.T) {
 	}
 }
 
-// --- ServerQuery helper (channel creation) -----------------------------------
-
-// queryCmd runs one ServerQuery command and returns the response lines.
-func queryCmd(t *testing.T, conn net.Conn, r *bufio.Reader, cmd string) []string {
-	t.Helper()
-	if _, err := conn.Write([]byte(cmd + "\n")); err != nil {
-		t.Fatalf("query write: %v", err)
-	}
-	var lines []string
-	for {
-		_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
-		line, err := r.ReadString('\n')
-		if err != nil {
-			t.Fatalf("query read: %v", err)
-		}
-		lines = append(lines, strings.TrimRight(line, "\r\n"))
-		if strings.HasPrefix(lines[len(lines)-1], "error id=") {
-			return lines
-		}
-	}
-}
-
-// ensureLiveChannel creates a permanent channel via ServerQuery and returns
-// its ID.
+// ensureLiveChannel creates a room through the current client role API.
 func ensureLiveChannel(t *testing.T) int64 {
 	t.Helper()
-	conn, err := (&net.Dialer{Timeout: 5 * time.Second}).DialContext(t.Context(), "tcp", liveQueryAddr(t))
+	admin, _ := newLiveTestBackend(t)
+	if err := admin.connect(liveAddr(t), liveAdminUID, liveAdminPass, ""); err != "" {
+		t.Fatalf("fixture admin connect: %s", err)
+	}
+	defer admin.disconnect()
+	app := appWithCM(admin)
+	state, err := app.RoleChannelState(netproto.RoleChannelQuery{Kind: authorization.ChannelCreate})
 	if err != nil {
-		t.Fatalf("dial query: %v", err)
+		t.Fatalf("fixture channel preflight: %v", err)
 	}
-	defer func() { _ = conn.Close() }()
-	r := bufio.NewReader(conn)
-	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
-	if _, err := r.ReadString('\n'); err != nil { // banner line 1
-		t.Fatalf("query banner: %v", err)
+	var overrides []authorization.RoleOverride
+	for _, capability := range []authorization.Capability{authorization.ViewChannel, authorization.ReadHistory, authorization.SendMessages, authorization.Connect, authorization.Speak, authorization.UploadFiles, authorization.DownloadFiles} {
+		overrides = append(overrides, authorization.RoleOverride{RoleID: state.EveryoneID, Capability: capability, Effect: authorization.Allow})
 	}
-	if _, err := r.ReadString('\n'); err != nil { // banner line 2
-		t.Fatalf("query banner: %v", err)
+	result, err := app.ChangeRoleChannel(netproto.RoleChannelChange{
+		Kind: authorization.ChannelCreate, ExpectedRevision: state.Revision, ChannelType: 2,
+		Settings: &netproto.RoleChannelSettings{Name: "live-e2e-" + strconv.FormatInt(time.Now().UnixNano(), 10), OpusBitrate: 64000, OpusFEC: true},
+		Access:   &netproto.RoleChannelAccess{Synced: false, Overrides: overrides},
+	})
+	if err != nil || result.ChannelID <= 0 {
+		t.Fatalf("fixture channel creation: %+v, %v", result, err)
 	}
-
-	lines := queryCmd(t, conn, r, "login "+liveAdminUID+" "+liveAdminPass)
-	if last := lines[len(lines)-1]; last != "error id=0 msg=ok" {
-		t.Fatalf("query login failed: %s", last)
-	}
-
-	name := "live-e2e-" + strconv.FormatInt(time.Now().Unix(), 10)
-	lines = queryCmd(t, conn, r, `channelcreate channel_name=`+name+` channel_flag_permanent=1`)
-	for _, l := range lines {
-		if strings.HasPrefix(l, "cid=") {
-			cid, err := strconv.ParseInt(strings.TrimPrefix(l, "cid="), 10, 64)
-			if err != nil {
-				t.Fatalf("parse cid: %v", err)
-			}
-			return cid
-		}
-	}
-	t.Fatalf("channelcreate failed: %v", lines)
-	return 0
+	return result.ChannelID
 }
 
 // --- tests -------------------------------------------------------------------
@@ -279,7 +234,7 @@ func mustTempIdentity(t *testing.T) *identity {
 	return id
 }
 
-// TestLiveChannelFlow exercises the snapshot, channel join (with user_moved
+// TestLiveChannelFlow exercises the snapshot, channel join (with membership snapshot
 // event), and channel chat between two backend instances.
 func TestLiveChannelFlow(t *testing.T) {
 	addr := liveAddr(t)
@@ -300,28 +255,28 @@ func TestLiveChannelFlow(t *testing.T) {
 	// Both backends must receive a snapshot containing the new channel.
 	cidStr := strconv.FormatInt(channelID, 10)
 	aliceEvents.waitFor(t, "snapshot", func(p string) bool {
-		return strings.Contains(p, `"ChannelID":`+cidStr) || strings.Contains(p, "live-e2e-")
+		return strings.Contains(p, `"ChannelID":`+cidStr)
 	}, 5*time.Second, "alice snapshot with channel")
 	bobEvents.waitFor(t, "snapshot", func(p string) bool {
-		return strings.Contains(p, "live-e2e-")
+		return strings.Contains(p, `"ChannelID":`+cidStr)
 	}, 5*time.Second, "bob snapshot with channel")
 
-	// Alice joins; then bob joins. Bob must observe a user_moved event for
+	// Alice joins; then bob joins. Bob must observe a membership snapshot event for
 	// alice's join.
-	if err := alice.write(netproto.MsgJoinChannel, netproto.JoinChannel{ChannelID: channelID}); err != nil {
+	if err := appWithCM(alice).JoinChannel(channelID); err != "" {
 		t.Fatalf("alice join: %v", err)
 	}
-	bobEvents.waitFor(t, "event", func(p string) bool {
-		return strings.Contains(p, `"user_moved"`) && strings.Contains(p, alice.clientID)
-	}, 5*time.Second, "bob observing alice user_moved")
+	bobEvents.waitFor(t, "snapshot", func(p string) bool {
+		return liveMemberSnapshot(p, alice.clientID, channelID, "")
+	}, 5*time.Second, "bob observing alice membership snapshot")
 
-	if err := bob.write(netproto.MsgJoinChannel, netproto.JoinChannel{ChannelID: channelID}); err != nil {
+	if err := appWithCM(bob).JoinChannel(channelID); err != "" {
 		t.Fatalf("bob join: %v", err)
 	}
 	// Alice should observe bob's move too.
-	aliceEvents.waitFor(t, "event", func(p string) bool {
-		return strings.Contains(p, `"user_moved"`) && strings.Contains(p, bob.clientID)
-	}, 5*time.Second, "alice observing bob user_moved")
+	aliceEvents.waitFor(t, "snapshot", func(p string) bool {
+		return liveMemberSnapshot(p, bob.clientID, channelID, "")
+	}, 5*time.Second, "alice observing bob membership snapshot")
 
 	// Alice sends channel chat; bob receives it. Chat is encrypted (4b): the
 	// backend seals with the channel key delivered after the join, and bob's
@@ -366,6 +321,13 @@ func TestLiveClientInfo(t *testing.T) {
 
 	aliceApp := appWithCM(alice)
 	bobApp := appWithCM(bob)
+	channelID := ensureLiveChannel(t)
+	if err := aliceApp.JoinChannel(channelID); err != "" {
+		t.Fatalf("alice join: %s", err)
+	}
+	if err := bobApp.JoinChannel(channelID); err != "" {
+		t.Fatalf("bob join: %s", err)
+	}
 
 	// Self query: full data incl. IP.
 	self, err := bobApp.GetClientInfo(bob.clientID)
@@ -588,7 +550,7 @@ func TestLiveFileManagement(t *testing.T) {
 func TestLivePresence(t *testing.T) {
 	addr := liveAddr(t)
 
-	alice, aliceEvents := newLiveTestBackend(t)
+	alice, _ := newLiveTestBackend(t)
 	if err := alice.connect(addr, liveAliceUID, liveAlicePass, ""); err != "" {
 		t.Fatalf("alice connect: %s", err)
 	}
@@ -601,6 +563,13 @@ func TestLivePresence(t *testing.T) {
 
 	aliceApp := appWithCM(alice)
 	bobApp := appWithCM(bob)
+	channelID := ensureLiveChannel(t)
+	if err := aliceApp.JoinChannel(channelID); err != "" {
+		t.Fatalf("alice join: %s", err)
+	}
+	if err := bobApp.JoinChannel(channelID); err != "" {
+		t.Fatalf("bob join: %s", err)
+	}
 
 	// Server info (313): version and counts present.
 	info, err := aliceApp.ServerInfo()
@@ -615,26 +584,48 @@ func TestLivePresence(t *testing.T) {
 	if err := aliceApp.SetStatus("away", "brb"); err != "" {
 		t.Fatalf("SetStatus: %s", err)
 	}
-	bobEvents.waitFor(t, "event", func(p string) bool {
-		return strings.Contains(p, "status_changed") && strings.Contains(p, "away")
-	}, 5*time.Second, "status_changed event")
+	bobEvents.waitFor(t, "snapshot", func(p string) bool {
+		return liveMemberSnapshot(p, alice.clientID, channelID, "away")
+	}, 5*time.Second, "status snapshot")
 	if err := aliceApp.SetStatus("online", ""); err != "" {
 		t.Fatalf("SetStatus online: %s", err)
 	}
 
-	// Poke without b_client_poke: bob gets a servererror (deny-on-unset).
-	if err := bobApp.Poke(alice.clientID, "hi"); err != "" {
-		t.Fatalf("Poke write: %s", err)
+	// Role-mode mutations return their acknowledged errors synchronously.
+	if err := bobApp.Poke(alice.clientID, "hi"); err == "" {
+		t.Fatal("unauthorized poke accepted")
 	}
-	bobEvents.waitFor(t, "servererror", func(p string) bool {
-		return strings.Contains(p, "insufficient permission")
-	}, 5*time.Second, "poke denial")
+	if err := aliceApp.SetStatus("sleeping", ""); !strings.Contains(err, "invalid status") {
+		t.Fatalf("invalid status result: %s", err)
+	}
+}
 
-	// Invalid status: servererror arrives.
-	if err := aliceApp.SetStatus("sleeping", ""); err != "" {
-		t.Fatalf("SetStatus invalid write: %s", err)
+func liveMemberSnapshot(payload, id string, channel int64, status string) bool {
+	var snapshot broadcast.TreeSnapshot
+	if json.Unmarshal([]byte(payload), &snapshot) != nil {
+		return false
 	}
-	aliceEvents.waitFor(t, "servererror", func(p string) bool {
-		return strings.Contains(p, "invalid status")
-	}, 5*time.Second, "invalid-status error event")
+	matches := func(client *broadcast.ClientInfo) bool {
+		return client.ClientID == id && client.ChannelID == channel && client.Status == status
+	}
+	for _, client := range snapshot.UnassignedClients {
+		if matches(client) {
+			return true
+		}
+	}
+	var visit func([]*broadcast.ChannelNode) bool
+	visit = func(channels []*broadcast.ChannelNode) bool {
+		for _, item := range channels {
+			for _, client := range item.Clients {
+				if matches(client) {
+					return true
+				}
+			}
+			if visit(item.Children) {
+				return true
+			}
+		}
+		return false
+	}
+	return visit(snapshot.RootChannels)
 }

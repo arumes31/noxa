@@ -25,10 +25,24 @@ import { parseFileRef, transformCustomEmoji } from "./chat-parsers.js";
 import { captureScope, scopeIsCurrent } from "./scoped-actions.js";
 import { t } from "./i18n.js";
 import { icon } from "./icons.js";
+import { copyToClipboard } from "./clipboard.js";
 import { avatarColor } from "./workspace-ui.js";
 
 const V = () => window.__noxa;
 const $ = (id) => document.getElementById(id);
+
+let composerLimit = null;
+function updateComposerCount() {
+    const input = $("chat-text"), counter = $("chat-length");
+    if (!input || !counter) return;
+    const text = input.value.trim();
+    const bytes = new TextEncoder().encode(text).length;
+    const limit = composerLimit && chatServerIsCurrent(composerLimit.scope) && $("chat-scope").value !== "direct" ? composerLimit.bytes : 0;
+    counter.hidden = text.length === 0;
+    counter.textContent = t(limit > 0 ? "wins.messageLimit" : "wins.characters", { count: [...text].length, bytes, limit });
+    counter.title = t("wins.limitNote");
+    counter.classList.toggle("warn", limit > 0 && bytes >= limit * 0.9);
+}
 const app = () => window.go.main.App;
 
 const PAGE = 50; // history page size (103)
@@ -992,6 +1006,19 @@ function renderActions(m) {
         acts.appendChild(b);
         return b;
     };
+    const copy = mk("copy", t("wins.copyMessage"), async () => {
+        const current = () => acts.isConnected && exportScopeIsCurrent(scope);
+        if (await copyToClipboard(m.text || "", { success: t("wins.messageCopied"), isCurrent: current }) && current()) {
+            copy.textContent = t("wins.messageCopied");
+            copy.setAttribute("aria-label", t("wins.messageCopied"));
+            const feedback = document.createElement("span");
+            feedback.className = "sr-only";
+            feedback.setAttribute("role", "status");
+            acts.append(feedback);
+            feedback.textContent = t("wins.messageCopied");
+            setTimeout(() => { feedback.remove(); if (copy.isConnected) { copy.innerHTML = icon("copy"); copy.setAttribute("aria-label", t("wins.copyMessage")); } }, 2500);
+        }
+    });
     mk("smile", t("chat.action.react"), () => openReactStrip(m, acts));
     mk("reply", t("chat.action.reply"), () => setReply(m));
     // (108) only messages that are actually part of a chain get the affordance
@@ -2505,6 +2532,7 @@ export async function sendMessage() {
             }
         }
     } finally {
+        updateComposerCount();
         if (failure !== null && current()) showSendFailure(failure, captured, canRetry);
         if (activeSend === operation) {
             activeSend = null;
@@ -2621,6 +2649,7 @@ function insertAtCursor(text) {
     const pos = input.selectionStart ?? input.value.length;
     input.value = input.value.slice(0, pos) + text + input.value.slice(input.selectionEnd ?? pos);
     input.selectionStart = input.selectionEnd = pos + text.length;
+    updateComposerCount();
     input.focus();
 }
 
@@ -3150,6 +3179,7 @@ function fmtSlowMode(sec) {
 }
 
 function updateHeader() {
+    updateComposerCount();
     const st = V().state;
     const filesOpen = $("files-pane")?.hidden === false;
     let title = "Chat", topic = "";
@@ -3447,6 +3477,14 @@ export async function onConnect() {
     const st = V().state;
     const { activeTabID: tabID, serverGeneration: generation } = st;
     const current = () => tabID === st.activeTabID && generation === st.serverGeneration;
+    composerLimit = null;
+    updateComposerCount();
+    const limitScope = readChatServerScope();
+    void Promise.resolve().then(() => app().ServerInfoForTab(tabID)).then(info => {
+        if (!current() || !chatServerIsCurrent(limitScope)) return;
+        composerLimit = { scope: limitScope, bytes: Number.isSafeInteger(info?.chat_max_bytes) ? info.chat_max_bytes : 0 };
+        updateComposerCount();
+    }).catch(() => {});
     // The context resolves the connection's key, which may differ from the
     // identity selected for the next connection. Acquisition sets myUniqueID.
     await getDMOwner().ready;
@@ -3508,6 +3546,8 @@ export function onChannelsDeleted(channelIDs) {
 // stores, unread badges, PM tabs, and the rendered panes. The tab journal
 // replay rebuilds the view from server frames afterwards.
 export function resetView(options = {}) {
+    composerLimit = null;
+    updateComposerCount();
     resetConversations();
     resetDMOwner();
     V().state.myUniqueID = "";
@@ -3797,6 +3837,9 @@ function handleTabComplete(e) {
 // ---------------------------------------------------------------------------
 
 export function initChat() {
+    $("chat-text").addEventListener("input", updateComposerCount);
+    $("chat-text").addEventListener("keyup", updateComposerCount);
+    window.addEventListener("noxa-language-changed", updateComposerCount);
     window.runtime.EventsOn("subscriptions", onSubscriptions);
     window.runtime.EventsOn("dm_history_identity_changed", onDMIdentityChanged);
     window.runtime.EventsOn("tab_identity", data => {

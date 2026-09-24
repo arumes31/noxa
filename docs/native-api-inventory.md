@@ -2,7 +2,9 @@
 
 This is a development checkpoint, not a declaration of complete native parity.
 The frontend call sites and corresponding native implementations were inspected
-on 2026-09-21. Production still uses the legacy authorization model.
+on 2026-09-21 and the retirement/settings entries updated on 2026-09-23.
+Current binaries require `roles-v1`; legacy authorization is unsupported. This
+inventory describes source contracts, not a deployment or physical-device test.
 
 | Surface | Current contract | Remaining work |
 | --- | --- | --- |
@@ -17,16 +19,15 @@ on 2026-09-21. Production still uses the legacy authorization model.
 | Main menu/tray disconnect | Uses `DisconnectTab` with captured source scope; native intentional-disconnect events remain responsible for notification and replacement replay | Complete; reconnect cancellation and failure feedback retain frontend source-generation guards. |
 | Voice metadata and signaling | Expected-tab ICE/limits reads and offers/answers/candidates; guarded capture, queued negotiation and received-track ownership; see `native-voice-session.md` | Physical capture, revocation and ICE recovery rehearsal. Answers/candidates confirm submission only. |
 | Priority, whisper, screen declarations and received-video quality | Expected-tab methods and role-mode confirmations; guarded hotkey/settings/capture/teardown/quality completion; see `native-media-controls.md` | Physical media and full cutover rehearsal. `SetPTT` and `SetMuted` emit local events only; delayed PTT release is guarded by session/channel scope and voice epoch. |
-| Legacy groups, tier permissions and privilege tokens | Role-mode TCP dispatch rejects the retired message family; frontend entry points, dialog continuations, cache reads and grant events reject role/pending mode. Token controls are disabled; own-role inspection uses snapshots | Legacy-to-legacy `Group*`, `Perm*` and `GetPermissions` calls still use the active manager (except existing `GroupListForTab` token flow). Complete their scope inventory or retire them after cutover parity/reset; no legacy storage/API removal is claimed. |
-| Local settings, window/tray controls, capture preferences and identity management | Deliberately local operations; many need no server tab | Distinguish local-only state from methods that also send protocol frames in the remaining inventory. |
+| Legacy groups, tier permissions and privilege tokens | Retired from current storage, APIs and desktop controls; own-role inspection uses snapshots | No compatibility fallback. Use named roles and channel access. |
+| Local settings, window/tray controls, capture preferences and identity management | Deliberately local operations; many need no server tab. `GetSettings` supplies an edit baseline; `SaveSettings` merges changed fields atomically and rejects same-field conflicts. Contacts, notes and audio preferences publish only persisted settings | A conflict retains the draft and requires reopening Settings against current values. Baselines are bridge metadata, never disk settings. |
 
 The call-site search is a locator, not proof of completeness: aliases, dynamic
 bridge access, native menu callbacks and server-originated events also need
-inspection. Legacy `Group*`, `Perm*` and token methods must not be mechanically
-rewritten into role APIs; their removal depends on parity and the approved reset
-procedure. Audit and ban operations are separate retained features.
+inspection. Retired group/permission/token methods must not be mechanically
+translated into role APIs. Audit and ban operations are separate retained features.
 
-The broader release gaps remain in `tasks/todo.md`: enforcement inventory,
-Query/event and chaos coverage, runtime media configuration, physical capture,
-startup authority/reconciliation, default-member registration, copied-database
-reset/recovery preservation, legacy retirement and explicit production activation.
+See the current checkpoint at the top of
+`tasks/permission-implementation-status.md` for release evidence and remaining
+live media/recording/device verification. Dated implementation sections describe
+historical gaps and must not be read as current deployment status.

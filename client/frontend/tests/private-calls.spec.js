@@ -1,9 +1,9 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./fixtures.js";
 
 test.use({ launchOptions: { args: ["--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream", "--autoplay-policy=no-user-gesture-required"] }, permissions: ["microphone"] });
 
 for (const signalingMode of ["normal", "gathering", "candidates-first"]) {
-test(`real peer call captures only after acceptance and tears down without joining a channel${signalingMode === "normal" ? "" : ` (${signalingMode})`}`, async ({ browser }) => {
+test(`real peer call captures only after acceptance and tears down without joining a channel${signalingMode === "normal" ? "" : ` (${signalingMode})`}`, async ({ newIsolatedPage }) => {
     const pages = new Map();
     const heldDescriptions = new Map();
     const candidateBatches = [];
@@ -11,7 +11,7 @@ test(`real peer call captures only after acceptance and tears down without joini
     let revision = 0;
     const notify = () => { for (const page of pages.values()) void page.evaluate(id => window.__callsModule.privateCallChanged({ id }), call.id).catch(() => {}); };
     for (const uid of ["alice", "bob"]) {
-        const page = await browser.newPage({ permissions: ["microphone"] }); pages.set(uid, page);
+        const page = await newIsolatedPage({ permissions: ["microphone"] }); pages.set(uid, page);
         await page.route("**/__call_test__", route => route.fulfill({ contentType: "text/html", body: '<!doctype html><title>Call test</title><link rel="stylesheet" href="/src/private-calls.css">' }));
         await page.exposeFunction("requestCall", async request => {
             if (request.action === "start") call = { id: "call-1", caller: uid, revision: ++revision, created_at: Math.floor(Date.now()/1000), ring_until: Math.floor(Date.now()/1000)+30, ended_at: 0, participants: [{ unique_id: "alice", client_id: "a", state: "accepted" }, { unique_id: "bob", client_id: "b", state: "ringing" }] };

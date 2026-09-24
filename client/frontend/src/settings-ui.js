@@ -8,6 +8,7 @@ import { MicCheck } from "./mic-check.js";
 import { percentageInput } from "./percentage-input.js";
 import { previewSounds, previewSpeech, speechPreviewLabel, audioStatus, SPEECH_EVENTS, stopPreviews, updateSoundOutput, SOUND_EVENT_GROUPS, testAll } from "./sounds.js";
 import { MATRIX_EVENTS, defaultMatrixRow } from "./notifications.js";
+import { renderVoiceHints } from "./workspace-ui.js";
 import { associateControlLabel, wrappedIndex } from "./a11y.js";
 import { createMediaDeviceInventory } from "./media-devices.js";
 import { closeDialog, mountDialog } from "./modal.js";
@@ -42,6 +43,11 @@ async function commit(snapshot) {
     // (282) the draft was cloned when the dialog opened: re-read the merged
     // truth so Go-owned fields (recents) written meanwhile survive.
     V().state.settings = await window.go.main.App.GetSettings();
+    // Keep existing control closures attached to the rebased draft, including
+    // when persistence succeeds but applying an audio device subsequently fails.
+    for (const key of Object.keys(draft)) delete draft[key];
+    Object.assign(draft, structuredClone(V().state.settings));
+    renderVoiceHints();
     try {
         await V().applyLiveAudioSettings();
     } catch (error) {
@@ -52,9 +58,7 @@ async function commit(snapshot) {
     if (V().applyChatPrefs) V().applyChatPrefs();
     // (294-297) appearance applies live (theme/accent/user CSS/font/compact).
     if (V().applyAppearance) V().applyAppearance();
-    // (291) always-on-top and (292) opacity apply immediately.
-    await window.go.main.App.SetAlwaysOnTop(!!snapshot.always_on_top);
-    await window.go.main.App.SetWindowOpacity(snapshot.window_opacity || 100);
+    // SaveSettings applies native effects from the merged, committed settings.
     return true;
 }
 
@@ -1714,6 +1718,13 @@ function openSettings(pageId = "application") {
         const whisperChanged = appliedWhisperConfig !== nextWhisperConfig ||
             overlay.querySelector(".settings-nav-item.active")?.dataset.page === "whisper";
         const previousLanguage = currentLanguage();
+        const refreshDraftControls = () => {
+            if (!overlay.isConnected) return;
+            if (previousLanguage !== currentLanguage()) translateDialog(overlay);
+            invalidateSearch();
+            if (search.value) search.oninput();
+            else renderPage(overlay.querySelector(".settings-nav-item.active")?.dataset.page || "application");
+        };
         const focused = document.activeElement;
         overlay.setAttribute("aria-busy", "true");
         for (const button of overlay.querySelectorAll(".settings-footer button")) button.disabled = true;
@@ -1726,22 +1737,18 @@ function openSettings(pageId = "application") {
         try {
             await commit(snapshot);
             if (!overlay.isConnected) return false;
-            if (previousLanguage !== currentLanguage()) {
-                translateDialog(overlay);
-                if (search.value) search.oninput();
-                else renderPage(overlay.querySelector(".settings-nav-item.active")?.dataset.page || "application");
-            }
+            refreshDraftControls();
             // Local preferences also save while disconnected. A live whisper
             // update belongs only to the server where this dialog opened.
             if (whisperChanged && V().state.myClientID && mediaScopeIsCurrent(whisperScope)) {
                 const error = await setWhisperRouting({
-                    clients: snapshot.whisper_active ? snapshot.whisper_clients || [] : [],
-                    channels: snapshot.whisper_active ? snapshot.whisper_channels || [] : [],
-                    active: !!snapshot.whisper_active,
+                    clients: draft.whisper_active ? draft.whisper_clients || [] : [],
+                    channels: draft.whisper_active ? draft.whisper_channels || [] : [],
+                    active: !!draft.whisper_active,
                 }, whisperScope);
                 if (error) throw new Error(error);
                 if (error === "") {
-                    appliedWhisperConfig = nextWhisperConfig;
+                    appliedWhisperConfig = whisperConfig(draft);
                     V().state.whisperArmed = false;
                     V().state.whisperTargetUID = "";
                     V().state.whisperPrev = null;
@@ -1751,6 +1758,9 @@ function openSettings(pageId = "application") {
             saveStatus.textContent = t("settings.saved");
             return true;
         } catch (error) {
+            // Persistence already rebased nested draft objects. Rebind controls
+            // even if audio application failed, so subsequent edits reach them.
+            if (error instanceof SavedAudioSettingsError) refreshDraftControls();
             if (overlay.isConnected) {
                 saveStatus.textContent = error instanceof SavedAudioSettingsError
                     ? error.message

@@ -1,7 +1,7 @@
 import { closeDialog, isCurrentServerDialog, mountServerDialog } from "./modal.js";
 import { icon } from "./icons.js";
 import { copyToClipboard } from "./clipboard.js";
-import { formatBytes, formatDuration, measured, summarizeMedia, summarizeVideoProcessing } from "./connection-stats.js";
+import { formatBytes, formatBitrate, formatDuration, measured, summarizeMedia, summarizeVideoProcessing } from "./connection-stats.js";
 import { t } from "./i18n.js";
 
 const V = () => window.__noxa;
@@ -161,7 +161,7 @@ export function openServerInfo() {
             set("jitter", measured(media.jitter) ? `${media.jitter.toFixed(1)} ms` : "—");
             for (const [key, value] of [["media-in", media.inBytes], ["media-out", media.outBytes]]) set(key, formatBytes(value));
             for (const [key, value] of [["packets-in", media.inPackets], ["packets-out", media.outPackets]]) set(key, measured(value) ? value.toLocaleString() : "—");
-            for (const [key, value] of [["rate-in", media.inRate], ["rate-out", media.outRate]]) set(key, measured(value) ? `${formatBytes(value)}/s` : "—");
+            for (const [key, value] of [["rate-in", media.inRate], ["rate-out", media.outRate]]) set(key, formatBitrate(measured(value) ? value * 8 : null));
             history.push({ at: Date.now(), ping, loss: media.loss });
             while (history.length && history[0].at < Date.now() - 60000) history.shift();
             drawHistory();

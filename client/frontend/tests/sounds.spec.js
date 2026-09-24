@@ -1,7 +1,16 @@
-import { test, expect } from "@playwright/test";
+import { test, expect } from "./fixtures.js";
+
+test.beforeEach(async ({ page }) => {
+    // These tests exercise real Web Audio modules, not the Wails application.
+    // Keep a same-origin document for asset imports without booting main.js.
+    await page.route("**/__sounds_test__", route => route.fulfill({
+        contentType: "text/html",
+        body: "<!doctype html><html lang=\"en\"><title>Sound module test</title><body></body></html>",
+    }));
+    await page.goto("/__sounds_test__");
+});
 
 test("rejected previews cannot reroute a pending live announcement", async ({ page }) => {
-    await page.goto("/");
     const result = await page.evaluate(async () => {
         window.__noxa = { state: { settings: { play_sounds: true, spoken_messages: true, sound_volume: 100 }, activeTabID: "one" } };
         window.__noxaPolish = { dndActive: () => false };
@@ -24,7 +33,6 @@ test("rejected previews cannot reroute a pending live announcement", async ({ pa
 
 test("static speech decodes and frequent contact cues survive mandatory repetition", async ({ page }) => {
     test.setTimeout(120000);
-    await page.goto("/");
     const result=await page.evaluate(async()=>{
         const {SoundEngine}=await import("/src/sound-engine.js");
         const {SOUND_DEFINITIONS}=await import("/src/sound-catalog.js");
@@ -52,7 +60,6 @@ test("static speech decodes and frequent contact cues survive mandatory repetiti
 });
 
 test("replacement sound set decodes, completes Test All, and releases all source nodes", async ({ page }) => {
-    await page.goto("/");
     const result = await page.evaluate(async () => {
         window.__noxa = { state: { settings: { play_sounds: false, sound_volume: 100 } } };
         window.__noxaPolish = { dndActive: () => false };
@@ -91,7 +98,6 @@ test("replacement sound set decodes, completes Test All, and releases all source
 });
 
 test("four simultaneous cues at maximum gain retain headroom in real WebAudio", async ({ page }) => {
-    await page.goto("/");
     const result = await page.evaluate(async () => {
         const { SOUND_URLS } = await import("/src/sound-catalog.js");
         const peaks = [];

@@ -2,6 +2,30 @@
 // counted again. See https://www.w3.org/TR/webrtc-stats/#rtpstatshierarchy.
 export const measured = (value) => Number.isFinite(value) && value >= 0;
 
+export function formatBitrate(bitsPerSecond) {
+    if (!measured(bitsPerSecond)) return "—";
+    return bitsPerSecond >= 1000000
+        ? `${(bitsPerSecond / 1000000).toFixed(2)} Mbit/s`
+        : `${Math.round(bitsPerSecond / 1000)} kbit/s`;
+}
+
+// Only the selected receiver's RTP payload is included, never other streams,
+// remote reports, candidate addresses or credentials.
+export function summarizeStream(report, trackID, previous) {
+    const rows = report && typeof trackID === "string" && trackID.length ? [...report.values()].filter(row => row.type === "inbound-rtp" &&
+        (row.kind || row.mediaType) === "video" && row.trackIdentifier === trackID) : [];
+    const codecs = [...new Set(rows.map(row => report.get(row.codecId)?.mimeType?.replace(/^video\//i, "")).filter(Boolean))];
+    const bytesPerSecond = rate(rows, previous?.rows, "bytesReceived");
+    return {
+        rows, codec: codecs.join(" / ") || null,
+        bitrate: measured(bytesPerSecond) ? bytesPerSecond * 8 : null,
+        bytes: sum(rows, "bytesReceived"), frames: sum(rows, "framesDecoded"),
+        width: rows.length === 1 && measured(rows[0].frameWidth) ? rows[0].frameWidth : null,
+        height: rows.length === 1 && measured(rows[0].frameHeight) ? rows[0].frameHeight : null,
+        packetsLost: sum(rows, "packetsLost"),
+    };
+}
+
 // Report what this runtime actually used, independently for each direction.
 // Implementation names and the efficiency hint are not proof of GPU execution.
 export function summarizeVideoProcessing(report) {

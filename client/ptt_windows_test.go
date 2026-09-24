@@ -81,7 +81,7 @@ func TestPassiveHotkeyLoopStopsWhenUnbound(t *testing.T) {
 	a := &App{hotkeys: map[string]*hotkeyReg{}}
 	done := make(chan struct{})
 	go func() {
-		a.passiveHotkeyLoop("ptt", nil, hotkey.KeyF20)
+		a.passiveHotkeyLoop("ptt", nil, hotkey.KeyF20, 0)
 		close(done)
 	}()
 

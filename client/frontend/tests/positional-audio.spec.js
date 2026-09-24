@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./fixtures.js";
 
 test("real Web Audio pans voice, preserves mute, and bypasses stale or disabled positions", async ({ page }) => {
     await page.route("**/__spatial_test__", route => route.fulfill({ contentType: "text/html", body: "<!doctype html><title>Spatial audio test</title>" }));

@@ -20,7 +20,7 @@ import { initUpdater, startupAutoCheck } from "./updater.js";
 import { playEvent, playAlert, clearSpeech, initSounds, updateSoundOutput, updateConversationDucking, soundEngine, speechQueue } from "./sounds.js";
 import {
     startMicMeter, stopMicMeter, pttRelease, makeLimiter,
-    getUserVolume, isUserMuted, setUserMuted, registerUserChain, unregisterUserChain,
+    getUserVolume, isUserMuted, refreshUserAudio, registerUserChain, unregisterUserChain,
     setDucking, attachUserNormalizer, detachUserNormalizer, detachAllUserNormalizers,
     captureConstraints, markCaptureProfile, applyCaptureProfile, resumeAudioPlayback, createRemoteAudioSource,
     syncMuteButton, renderMicStatus,
@@ -50,7 +50,7 @@ import { createLiveAnnouncementQueue } from "./live-announcer.js";
 import { dialogFocusableSelector, initModalSystem, mountServerDialog } from "./modal.js";
 import { parseRuntimeObject } from "./runtime-json.js";
 import { icon } from "./icons.js";
-import { initWorkspace, renderWorkspace, renderMember } from "./workspace-ui.js";
+import { initWorkspace, renderWorkspace, renderMember, renderVoiceHints } from "./workspace-ui.js";
 import { createTrayVoiceSync } from "./tray-state.js";
 import { capturePresenceScope, presenceIsCurrent, restorePresenceOnActivity, setPresence } from "./presence.js";
 import { captureMediaScope, mediaScopeIsCurrent, setWhisperRouting } from "./media-controls.js";
@@ -819,6 +819,8 @@ window.runtime.EventsOn("servererror", (msg) => {
 // recents list stays frozen at the value read once at startup.
 window.runtime.EventsOn("settings_update", (s) => {
     state.settings = s;
+    refreshUserAudio();
+    renderVoiceHints();
     void updateSoundOutput();
     void applyLiveAudioSettings().catch((error) => toast("Audio settings: " + error.message, "warn"));
 });
@@ -1078,9 +1080,7 @@ function syncOwnChannel({ audible = true } = {}) {
 function applyBlockAndContacts() {
     const s = state.settings;
     if (!s) return;
-    for (const uid of s.blocked_users || []) {
-        setUserMuted(uid, true);
-    }
+    refreshUserAudio();
     let dirty = false;
     for (const contact of s.contacts || []) {
         const online = state.clients.find((c) => c.unique_id === contact.unique_id);
@@ -2716,6 +2716,7 @@ function setVoiceStatus(text) {
 }
 
 function renderVoiceStatus() {
+    renderVoiceHints();
     const key = { "voice on": "voice.on", "voice off": "voice.off", "voice connecting…": "voice.connecting", "voice unavailable": "voice.unavailable" }[voiceStatusBase];
     $("voice-status").textContent = (key ? t(key) : voiceStatusBase) +
         (state.whisperArmed ? " · " + t("polish.whisper", { name: uidName(state.whisperTargetUID) }) : "");
@@ -3481,7 +3482,16 @@ document.addEventListener("keydown", (e) => {
     rows[next < 0 ? 0 : next].focus();
 });
 
+window.runtime.EventsOn("hotkey_binding", (binding) => {
+    if (binding.action !== "ptt") return;
+    state.pttShortcutStatus = { spec: binding.spec };
+    renderVoiceHints();
+});
 window.runtime.EventsOn("hotkey_status", (st) => {
+    if (st.action === "ptt") {
+        state.pttShortcutStatus = { ...state.pttShortcutStatus, ...st };
+        renderVoiceHints();
+    }
     const el = $("hotkey-status");
     const action = { mute_toggle: "Mute", deafen_toggle: "Deafen", ptt: "Push to talk" }[st.action] || String(st.action || "Voice").replaceAll("_", " ");
     if (st.registered) {
