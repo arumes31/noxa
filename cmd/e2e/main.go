@@ -14,6 +14,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -29,7 +30,6 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"os/exec"
 	"strconv"
 	"strings"
 	"sync"
@@ -45,26 +45,27 @@ import (
 
 // options holds the e2e parameters.
 type options struct {
-	addr          string
-	queryAddr     string
-	healthURL     string
-	udpAddr       string
-	fileAddr      string
-	aliceUID      string
-	alicePass     string
-	aliceNickname string
-	bobUID        string
-	bobPass       string
-	adminUID      string
-	adminPass     string
-	serverPass    string
-	filePayload   int64
-	tlsVerify     bool
-	tlsPin        string
-	tlsInsecure   bool
-	chaos         bool
-	chaosStopCmd  string
-	chaosStartCmd string
+	authorizationModel string
+	addr               string
+	queryAddr          string
+	healthURL          string
+	udpAddr            string
+	fileAddr           string
+	aliceUID           string
+	alicePass          string
+	aliceNickname      string
+	bobUID             string
+	bobPass            string
+	adminUID           string
+	adminPass          string
+	serverPass         string
+	filePayload        int64
+	tlsVerify          bool
+	tlsPin             string
+	tlsInsecure        bool
+	chaos              bool
+	chaosStopCmd       string
+	chaosStartCmd      string
 }
 
 // file-transfer frame types (mirror internal/filetransfer, unexported).
@@ -425,6 +426,7 @@ func e2eOpenDM(blobB64 string, senderPub, recipientPriv [32]byte) (string, error
 
 func main() {
 	var o options
+	flag.StringVar(&o.authorizationModel, "authorization-model", netproto.AuthorizationModelRolesV1, "required authorization model (roles-v1)")
 	flag.StringVar(&o.addr, "addr", "127.0.0.1"+config.DefaultTCPAddr, "control channel address")
 	flag.StringVar(&o.queryAddr, "query-addr", config.DefaultQueryAddr, "ServerQuery address")
 	flag.StringVar(&o.healthURL, "health-url", "http://127.0.0.1"+config.DefaultHealthAddr, "health endpoint base URL")
@@ -468,59 +470,11 @@ func main() {
 
 // runChecks executes the checklist and returns the process exit code.
 func runChecks(o options) int {
-	cx := &checkCtx{opts: o}
-	defer cx.close()
-
-	checks := []check{
-		{"healthz", checkHealthz},
-		{"readyz", checkReadyz},
-		{"metrics", checkMetrics},
-		{"udp-ping-pong", checkUDP},
-		{"auth", checkAuth},
-		{"auth-nickname", checkAuthNickname},
-		{"channel-create-denied-for-user", checkCreateDenied},
-		{"channel-create-via-query", checkCreateViaQuery},
-		{"channel-join", checkJoin},
-		{"auth-anonymous", checkAnonymousAuth},
-		{"anonymous-create-denied", checkAnonymousCreateDenied},
-		{"chat-channel", checkChatChannel},
-		{"chat-direct", checkChatDirect},
-		{"chat-global", checkChatGlobal},
-		{"chat-history", checkChatHistory},
-		{"chat-edit-delete", checkChatEditDelete},
-		{"chat-slowmode", checkChatSlowMode},
-		{"permission-delete-denied", checkDeleteDenied},
-		{"file-upload-download-list", checkFiles},
-		{"query", checkQuery},
-		{"query-wave10a", checkQueryWave10a},
-		{"group-management", checkGroupManagement},
-		{"guest-default-group", checkGuestDefaultGroup},
-		{"perm-set-trace", checkPermSetTrace},
+	if err := validateE2EProfile(o); err != nil {
+		fmt.Printf("FAIL options: %v\n", err)
+		return 2
 	}
-	if o.serverPass != "" {
-		checks = append(checks, check{"auth-anonymous-server-password", checkAnonymousServerPassword})
-	}
-	// Opt-in only, and last: the drill takes the database away from the whole
-	// server, so anything running after it would be testing a recovering
-	// backend rather than its own subject (467).
-	if o.chaos {
-		checks = append(checks, check{"chaos-postgres-restart", checkChaosPostgres})
-	}
-
-	passed := 0
-	for _, c := range checks {
-		if err := c.run(cx); err != nil {
-			fmt.Printf("FAIL %s: %v\n", c.name, err)
-		} else {
-			fmt.Printf("PASS %s\n", c.name)
-			passed++
-		}
-	}
-	fmt.Printf("%d/%d checks passed\n", passed, len(checks))
-	if passed != len(checks) {
-		return 1
-	}
-	return 0
+	return runRoleChecks(o)
 }
 
 // checkCtx carries shared state between checks.
@@ -534,12 +488,15 @@ type checkCtx struct {
 
 func (c *checkCtx) close() {
 	if c.alice != nil {
+		clientsByConn.Delete(c.alice.conn)
 		_ = c.alice.conn.Close()
 	}
 	if c.bob != nil {
+		clientsByConn.Delete(c.bob.conn)
 		_ = c.bob.conn.Close()
 	}
 	if c.guest != nil {
+		clientsByConn.Delete(c.guest.conn)
 		_ = c.guest.conn.Close()
 	}
 }
@@ -638,7 +595,11 @@ func checkUDP(c *checkCtx) error {
 // Auth & protocol helpers
 // ---------------------------------------------------------------------------
 
-func dialAuth(addr, uid, password, serverPassword string) (*client, error) {
+func dialAuth(addr, uid, password, serverPassword string, models ...string) (*client, error) {
+	model, err := e2eAuthorizationModel(models)
+	if err != nil {
+		return nil, err
+	}
 	conn, err := dialTCP(addr)
 	if err != nil {
 		return nil, err
@@ -649,10 +610,11 @@ func dialAuth(addr, uid, password, serverPassword string) (*client, error) {
 		return nil, err
 	}
 	if err := writeMsg(conn, netproto.MsgAuthenticate, netproto.Authenticate{
-		Username:        uid,
-		Password:        password,
-		ServerPassword:  serverPassword,
-		X25519PublicKey: base64.StdEncoding.EncodeToString(c.e2ePub[:]),
+		Username:            uid,
+		Password:            password,
+		ServerPassword:      serverPassword,
+		X25519PublicKey:     base64.StdEncoding.EncodeToString(c.e2ePub[:]),
+		AuthorizationModels: e2eAdvertisedModels(model),
 	}); err != nil {
 		_ = conn.Close()
 		return nil, err
@@ -671,15 +633,22 @@ func dialAuth(addr, uid, password, serverPassword string) (*client, error) {
 		_ = conn.Close()
 		return nil, errors.New("auth rejected: " + resp.Reason)
 	}
+	if err := e2eCheckAuthorizationModel(resp, model); err != nil {
+		_ = conn.Close()
+		return nil, err
+	}
 	// The global generation rides along with the response; it is the CURRENT
 	// one, so it may advance scopeLatest.
 	installScopeKeys(c, 0, resp.ChatKeys, true)
+	clientsByConn.Store(conn, c)
 	if _, err := readOfType(conn, netproto.MsgSnapshot, readTimeout); err != nil {
+		clientsByConn.Delete(conn)
 		_ = conn.Close()
 		return nil, fmt.Errorf("reading snapshot: %w", err)
 	}
-	c.clientID, c.nickname = resp.ClientID, resp.Nickname
+	c.clientID, c.nickname, c.uid = resp.ClientID, resp.Nickname, resp.UniqueID
 	if err := registerClient(c); err != nil {
+		clientsByConn.Delete(conn)
 		_ = conn.Close()
 		return nil, fmt.Errorf("e2e key publish: %w", err)
 	}
@@ -708,10 +677,6 @@ func clearE2EReadDeadline(conn net.Conn) {
 	reportE2ECleanupError("clear read deadline failed", conn.SetReadDeadline(time.Time{}))
 }
 
-func writeE2ECleanupMsg(conn net.Conn, mt netproto.MessageType, msg any) {
-	reportE2ECleanupError("restore message failed", writeMsg(conn, mt, msg))
-}
-
 func readOfType(conn net.Conn, mt netproto.MessageType, timeout time.Duration) (*netproto.Frame, error) {
 	_ = conn.SetReadDeadline(time.Now().Add(timeout))
 	defer clearE2EReadDeadline(conn)
@@ -730,6 +695,13 @@ func readOfType(conn net.Conn, mt netproto.MessageType, timeout time.Duration) (
 		}
 		if netproto.MessageType(f.Type) == mt {
 			return f, nil
+		}
+		if netproto.MessageType(f.Type) == netproto.MsgError {
+			var reply netproto.Error
+			if err := netproto.Decode(f, &reply); err != nil {
+				return nil, errors.New("malformed server error")
+			}
+			return nil, fmt.Errorf("server rejected E2E request (code=%d)", reply.Code)
 		}
 	}
 }
@@ -776,107 +748,6 @@ func readEvent(conn net.Conn, want string, timeout time.Duration) (*eventEnvelop
 	return nil, fmt.Errorf("no %q event within %s", want, timeout)
 }
 
-func checkAuth(c *checkCtx) error {
-	alice, err := dialAuth(c.opts.addr, c.opts.aliceUID, c.opts.alicePass, c.opts.serverPass)
-	if err != nil {
-		return fmt.Errorf("alice: %w", err)
-	}
-	c.alice = alice
-
-	bob, err := dialAuth(c.opts.addr, c.opts.bobUID, c.opts.bobPass, c.opts.serverPass)
-	if err != nil {
-		return fmt.Errorf("bob: %w", err)
-	}
-	c.bob = bob
-
-	// Wrong password must be rejected.
-	conn, err := dialTCP(c.opts.addr)
-	if err != nil {
-		return err
-	}
-	defer closeE2EResource(conn)
-	if err := writeMsg(conn, netproto.MsgAuthenticate, netproto.Authenticate{
-		Username: c.opts.aliceUID, Password: "definitely-wrong", ServerPassword: c.opts.serverPass,
-	}); err != nil {
-		return err
-	}
-	f, err := readOfType(conn, netproto.MsgAuthResponse, readTimeout)
-	if err != nil {
-		return err
-	}
-	var resp netproto.AuthResponse
-	if err := netproto.Decode(f, &resp); err != nil {
-		return err
-	}
-	if resp.OK {
-		return errors.New("wrong password accepted")
-	}
-	return nil
-}
-
-// checkAuthNickname verifies password auth by nickname: authenticating with
-// the account nickname instead of the unique ID succeeds and returns the
-// canonical unique ID.
-func checkAuthNickname(c *checkCtx) error {
-	nick := c.opts.aliceNickname
-	if nick == "" {
-		nick = "alice" // cmd/adduser default nickname in our docs
-	}
-	conn, err := dialTCP(c.opts.addr)
-	if err != nil {
-		return err
-	}
-	defer closeE2EResource(conn)
-	if err := writeMsg(conn, netproto.MsgAuthenticate, netproto.Authenticate{
-		Username:       nick,
-		Password:       c.opts.alicePass,
-		ServerPassword: c.opts.serverPass,
-	}); err != nil {
-		return err
-	}
-	f, err := readOfType(conn, netproto.MsgAuthResponse, readTimeout)
-	if err != nil {
-		return err
-	}
-	var resp netproto.AuthResponse
-	if err := netproto.Decode(f, &resp); err != nil {
-		return err
-	}
-	if !resp.OK {
-		return fmt.Errorf("nickname login rejected: %s", resp.Reason)
-	}
-	if resp.UniqueID != c.opts.aliceUID {
-		return fmt.Errorf("unique id = %q, want canonical %q", resp.UniqueID, c.opts.aliceUID)
-	}
-	return nil
-}
-
-// ---------------------------------------------------------------------------
-// Channels
-// ---------------------------------------------------------------------------
-
-// checkCreateDenied verifies a default (non-admin, unprivileged) user cannot
-// create a permanent channel — creation goes through ServerQuery instead.
-func checkCreateDenied(c *checkCtx) error {
-	if err := writeMsg(c.alice.conn, netproto.MsgCreateChannel,
-		netproto.CreateChannel{Name: "e2e-denied", Type: 2}); err != nil {
-		return err
-	}
-	f, err := readOfType(c.alice.conn, netproto.MsgError, readTimeout)
-	if err != nil {
-		return err
-	}
-	var e netproto.Error
-	if err := netproto.Decode(f, &e); err != nil {
-		return err
-	}
-	if e.Code != 4 {
-		return fmt.Errorf("error code = %d, want 4 (permission denied)", e.Code)
-	}
-	return nil
-}
-
-// querySession is a ServerQuery connection.
 type querySession struct {
 	conn net.Conn
 	r    *lineReader
@@ -884,8 +755,9 @@ type querySession struct {
 
 // lineReader wraps a conn for line-based reads with a deadline.
 type lineReader struct {
-	conn net.Conn
-	buf  []byte
+	conn      net.Conn
+	buf       []byte
+	readBytes uint64
 }
 
 func (l *lineReader) readLine(timeout time.Duration) (string, error) {
@@ -897,24 +769,38 @@ func (l *lineReader) readLine(timeout time.Duration) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		if n == 0 {
+		if n <= 0 {
 			continue
 		}
+		l.readBytes += uint64(n)
 		if one[0] == '\n' {
 			line := string(l.buf)
 			l.buf = l.buf[:0]
 			return strings.TrimRight(line, "\r"), nil
 		}
+		if len(l.buf) >= 8<<20 {
+			return "", errors.New("query line exceeds response limit")
+		}
 		l.buf = append(l.buf, one[0])
 	}
 }
 
-func dialQuery(addr, uid, password string) (*querySession, error) {
+func dialQuery(addr, uid, password string, models ...string) (*querySession, error) {
+	model, err := e2eAuthorizationModel(models)
+	if err != nil {
+		return nil, err
+	}
 	conn, err := (&net.Dialer{Timeout: readTimeout}).DialContext(context.Background(), "tcp", addr)
 	if err != nil {
 		return nil, err
 	}
 	q := &querySession{conn: conn, r: &lineReader{conn: conn}}
+	connected := false
+	defer func() {
+		if !connected {
+			_ = conn.Close()
+		}
+	}()
 	// Banner: two lines.
 	if _, err := q.r.readLine(readTimeout); err != nil {
 		return nil, err
@@ -922,13 +808,18 @@ func dialQuery(addr, uid, password string) (*querySession, error) {
 	if _, err := q.r.readLine(readTimeout); err != nil {
 		return nil, err
 	}
-	lines, err := q.cmd("login " + uid + " " + password)
+	command := "login " + escapeE2EQuery(uid) + " " + escapeE2EQuery(password) + " authorization_model=" + model
+	lines, err := q.cmd(command)
 	if err != nil {
 		return nil, err
 	}
 	if last := lines[len(lines)-1]; last != "error id=0 msg=ok" {
 		return nil, fmt.Errorf("query login failed: %s", last)
 	}
+	if len(lines) != 2 || lines[0] != "authorization_model="+model {
+		return nil, errors.New("query server did not confirm the selected authorization model")
+	}
+	connected = true
 	return q, nil
 }
 
@@ -938,10 +829,19 @@ func (q *querySession) cmd(command string) ([]string, error) {
 		return nil, err
 	}
 	var lines []string
+	startBytes := q.r.readBytes
+	deadline := time.Now().Add(queryResponseTimeout(command))
 	for {
-		line, err := q.r.readLine(readTimeout)
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return nil, errors.New("query response timed out")
+		}
+		line, err := q.r.readLine(remaining)
 		if err != nil {
 			return nil, err
+		}
+		if q.r.readBytes-startBytes > 8<<20 {
+			return nil, errors.New("query response exceeds limit")
 		}
 		lines = append(lines, line)
 		if strings.HasPrefix(line, "error id=") {
@@ -950,107 +850,21 @@ func (q *querySession) cmd(command string) ([]string, error) {
 	}
 }
 
-func runE2EQueryCleanup(q *querySession, action, command string) {
-	if _, err := q.cmd(command); err != nil {
-		reportE2ECleanupError(action, err)
+// Role mutations have a 30-second operation budget followed by a 10-second
+// commit acknowledgement window. Do not mistake a valid slow commit for a
+// failed write, especially when the test server uses a remote database.
+func queryResponseTimeout(command string) time.Duration {
+	name, _, _ := strings.Cut(command, " ")
+	switch name {
+	case "rolechange", "channelchange":
+		return 45 * time.Second
+	case "rolelist", "rolemembers", "accesscheck", "channelquery":
+		return 15 * time.Second
+	default:
+		return readTimeout
 	}
 }
 
-func checkCreateViaQuery(c *checkCtx) error {
-	q, err := dialQuery(c.opts.queryAddr, c.opts.adminUID, c.opts.adminPass)
-	if err != nil {
-		return err
-	}
-	defer closeE2EResource(q.conn)
-
-	lines, err := q.cmd(`channelcreate channel_name=e2e\schannel channel_flag_permanent=1`)
-	if err != nil {
-		return err
-	}
-	var cidLine string
-	for _, l := range lines {
-		if strings.HasPrefix(l, "cid=") {
-			cidLine = l
-		}
-	}
-	if cidLine == "" {
-		return fmt.Errorf("no cid in response: %v", lines)
-	}
-	cid, err := strconv.ParseInt(strings.TrimPrefix(cidLine, "cid="), 10, 64)
-	if err != nil {
-		return err
-	}
-	c.channelID = cid
-
-	// Bob reconnects to get a fresh snapshot containing the new channel.
-	_ = c.bob.conn.Close()
-	bob, err := dialAuth(c.opts.addr, c.opts.bobUID, c.opts.bobPass, c.opts.serverPass)
-	if err != nil {
-		return fmt.Errorf("bob reconnect: %w", err)
-	}
-	c.bob = bob
-	return nil
-}
-
-func checkJoin(c *checkCtx) error {
-	if err := writeMsg(c.alice.conn, netproto.MsgJoinChannel,
-		netproto.JoinChannel{ChannelID: c.channelID}); err != nil {
-		return fmt.Errorf("alice join: %w", err)
-	}
-	if err := writeMsg(c.bob.conn, netproto.MsgJoinChannel,
-		netproto.JoinChannel{ChannelID: c.channelID}); err != nil {
-		return fmt.Errorf("bob join: %w", err)
-	}
-	// user_moved events go to EVERYONE, so a type-only match can observe
-	// alice's move while bob's own join is still being processed. Wait for
-	// each client's OWN move to prove membership before continuing.
-	if err := waitForMove(c.alice.conn, c.alice.clientID); err != nil {
-		return fmt.Errorf("alice membership: %w", err)
-	}
-	if err := waitForMove(c.bob.conn, c.bob.clientID); err != nil {
-		return fmt.Errorf("bob membership: %w", err)
-	}
-	return nil
-}
-
-// waitForMove reads user_moved events until one names the given client ID.
-func waitForMove(conn net.Conn, clientID string) error {
-	deadline := time.Now().Add(readTimeout)
-	for time.Now().Before(deadline) {
-		env, err := readEvent(conn, "user_moved", time.Until(deadline))
-		if err != nil {
-			return err
-		}
-		var ue struct {
-			ClientID string `json:"client_id"`
-		}
-		if err := json.Unmarshal(env.Data, &ue); err != nil {
-			return err
-		}
-		if ue.ClientID == clientID {
-			return nil
-		}
-	}
-	return fmt.Errorf("no user_moved for %s", clientID)
-}
-
-// ---------------------------------------------------------------------------
-// Chat
-// ---------------------------------------------------------------------------
-
-func checkChatChannel(c *checkCtx) error {
-	text := "channel-" + randHex(4)
-	if err := writeEncChannelChat(c.alice, c.channelID, text); err != nil {
-		return fmt.Errorf("alice send: %w", err)
-	}
-	if err := readEncChannelChat(c.bob, c.channelID, text); err != nil {
-		return fmt.Errorf("bob: %w", err)
-	}
-	return nil
-}
-
-// writeEncChannelChat seals a channel message with the sender's scope key
-// and sends it (wave 4b: plaintext chat is rejected by the server).
 func writeEncChannelChat(cl *client, channelID int64, text string) error {
 	if err := awaitScopeKey(cl.conn, cl, channelID); err != nil {
 		return err
@@ -1098,79 +912,6 @@ func readEncChannelChat(cl *client, channelID int64, wantText string) error {
 	return fmt.Errorf("encrypted chat %q not received/decryptable", wantText)
 }
 
-func checkChatDirect(c *checkCtx) error {
-	text := "direct-" + randHex(4)
-	// Bob seals the DM for alice's published X25519 key (true E2EE).
-	alicePub, err := fetchPub(c.bob.conn, c.alice.uid)
-	if err != nil {
-		return fmt.Errorf("fetch alice pubkey: %w", err)
-	}
-	blob, err := e2eSealDM(text, alicePub, c.bob.e2ePriv)
-	if err != nil {
-		return err
-	}
-	if err := writeMsg(c.bob.conn, netproto.MsgChatSend, netproto.ChatSend{
-		ToUniqueID: c.alice.uid, Text: blob, Enc: true,
-	}); err != nil {
-		return err
-	}
-
-	// Alice opens it with bob's public key; the wire form must be ciphertext
-	// marked E2E.
-	bobPub, err := fetchPub(c.alice.conn, c.bob.uid)
-	if err != nil {
-		return fmt.Errorf("fetch bob pubkey: %w", err)
-	}
-	deadline := time.Now().Add(readTimeout)
-	for time.Now().Before(deadline) {
-		env, err := readEvent(c.alice.conn, "chat", time.Until(deadline))
-		if err != nil {
-			return err
-		}
-		var chat netproto.ChatBroadcast
-		if err := json.Unmarshal(env.Data, &chat); err != nil {
-			return err
-		}
-		if !chat.Enc || !chat.E2E {
-			return fmt.Errorf("DM not marked E2E (enc=%v e2e=%v)", chat.Enc, chat.E2E)
-		}
-		if chat.Text == text {
-			return fmt.Errorf("server relayed the DM in plaintext")
-		}
-		plain, err := e2eOpenDM(chat.Text, bobPub, c.alice.e2ePriv)
-		if err == nil && plain == text {
-			return nil
-		}
-	}
-	return fmt.Errorf("encrypted DM %q not received/decryptable", text)
-}
-
-func checkChatGlobal(c *checkCtx) error {
-	text := "global-" + randHex(4)
-	// Global scope is key scope 0.
-	if err := awaitScopeKey(c.alice.conn, c.alice, 0); err != nil {
-		return fmt.Errorf("alice global key: %w", err)
-	}
-	id := c.alice.scopeLatest[0]
-	key := c.alice.scopeKeys[0][id]
-	blob, err := e2eSealScope(text, key)
-	if err != nil {
-		return err
-	}
-	if err := writeMsg(c.alice.conn, netproto.MsgChatSend, netproto.ChatSend{
-		Text: blob, Enc: true, KeyID: id,
-	}); err != nil {
-		return err
-	}
-	if err := readEncChannelChat(c.bob, 0, text); err != nil {
-		return fmt.Errorf("bob: %w", err)
-	}
-	if err := readEncChannelChat(c.alice, 0, text); err != nil {
-		return fmt.Errorf("alice (echo): %w", err)
-	}
-	return nil
-}
-
 // checkChatHistory (5a/103): an encrypted channel message is retrievable as
 // decrypted history by a channel member.
 func checkChatHistory(c *checkCtx) error {
@@ -1212,167 +953,6 @@ func checkChatHistory(c *checkCtx) error {
 	}
 	return fmt.Errorf("message %q not found decrypted in history (%d entries)", text, len(resp.Messages))
 }
-
-// checkChatEditDelete (5a/101+102): own-message edit and delete with events
-// and a history tombstone.
-func checkChatEditDelete(c *checkCtx) error {
-	text := "editme-" + randHex(4)
-	if err := writeEncChannelChat(c.alice, c.channelID, text); err != nil {
-		return fmt.Errorf("alice send: %w", err)
-	}
-
-	// Bob receives it to learn the server-side id.
-	env, err := readEvent(c.bob.conn, "chat", readTimeout)
-	if err != nil {
-		return fmt.Errorf("bob receive: %w", err)
-	}
-	var chat netproto.ChatBroadcast
-	if err := json.Unmarshal(env.Data, &chat); err != nil {
-		return err
-	}
-	if chat.ID == 0 {
-		return fmt.Errorf("chat message has no server id")
-	}
-
-	// Alice edits (encrypted); bob must see chat_edited with the re-sealed
-	// body, decryptable to the new text.
-	newText := "edited-" + randHex(4)
-	keyID := c.alice.scopeLatest[c.channelID]
-	key := c.alice.scopeKeys[c.channelID][keyID]
-	blob, err := e2eSealScope(newText, key)
-	if err != nil {
-		return err
-	}
-	if err := writeMsg(c.alice.conn, netproto.MsgChatEdit, netproto.ChatEdit{
-		MessageID: chat.ID, NewText: blob, Enc: true, KeyID: keyID,
-	}); err != nil {
-		return err
-	}
-	editEnv, err := readEvent(c.bob.conn, "chat_edited", readTimeout)
-	if err != nil {
-		return fmt.Errorf("bob chat_edited: %w", err)
-	}
-	var edit struct {
-		MessageID int64  `json:"message_id"`
-		Body      string `json:"body"`
-		Enc       bool   `json:"enc"`
-		KeyID     uint32 `json:"key_id"`
-	}
-	if err := json.Unmarshal(editEnv.Data, &edit); err != nil {
-		return err
-	}
-	if edit.MessageID != chat.ID || !edit.Enc {
-		return fmt.Errorf("chat_edited = %+v", edit)
-	}
-	plain, err := e2eOpenScope(edit.Body, key)
-	if err != nil || plain != newText {
-		return fmt.Errorf("edited body decrypt = %q, %v; want %q", plain, err, newText)
-	}
-
-	// Alice deletes; bob must see chat_deleted and history must tombstone.
-	if err := writeMsg(c.alice.conn, netproto.MsgChatDelete, netproto.ChatDelete{MessageID: chat.ID}); err != nil {
-		return err
-	}
-	if _, err := readEvent(c.bob.conn, "chat_deleted", readTimeout); err != nil {
-		return fmt.Errorf("bob chat_deleted: %w", err)
-	}
-
-	if err := writeMsg(c.bob.conn, netproto.MsgChatHistory, netproto.ChatHistory{
-		ChannelID: c.channelID, Limit: 10,
-	}); err != nil {
-		return err
-	}
-	f, err := readOfType(c.bob.conn, netproto.MsgChatHistoryResponse, readTimeout)
-	if err != nil {
-		return err
-	}
-	var resp netproto.ChatHistoryResponse
-	if err := netproto.Decode(f, &resp); err != nil {
-		return err
-	}
-	for _, m := range resp.Messages {
-		if m.ID == chat.ID {
-			// A tombstone must carry neither plaintext nor ciphertext: with
-			// bodies always sealed, checking Body alone would pass vacuously.
-			if !m.Deleted || m.Body != "" || m.BodyEnc != "" || m.KeyID != 0 {
-				return fmt.Errorf("history entry after delete = %+v, want tombstone", m)
-			}
-			return nil
-		}
-	}
-	return fmt.Errorf("deleted message %d not in history", chat.ID)
-}
-
-// checkChatSlowMode (5a/114): a channel with slow mode rejects a quick
-// second message with a slow-mode error. Slow mode is set via ServerQuery
-// (channel edit requires b_channel_modify, which the e2e users don't hold).
-func checkChatSlowMode(c *checkCtx) error {
-	q, err := dialQuery(c.opts.queryAddr, c.opts.adminUID, c.opts.adminPass)
-	if err != nil {
-		return err
-	}
-	defer closeE2EResource(q.conn)
-
-	setSlow := func(seconds int) error {
-		if _, err := q.cmd(fmt.Sprintf("channeledit cid=%d slow_mode_seconds=%d", c.channelID, seconds)); err != nil {
-			return err
-		}
-		// Drain the channel_updated event on bob so it can't pollute reads.
-		if _, err := readEvent(c.bob.conn, "channel_updated", readTimeout); err != nil {
-			return fmt.Errorf("bob channel_updated: %w", err)
-		}
-		return nil
-	}
-
-	if err := setSlow(30); err != nil {
-		return fmt.Errorf("enable slow mode: %w", err)
-	}
-	if err := writeEncChannelChat(c.bob, c.channelID, "slow-first"); err != nil {
-		return fmt.Errorf("first send: %w", err)
-	}
-	if err := writeEncChannelChat(c.bob, c.channelID, "slow-second"); err != nil {
-		return fmt.Errorf("second send: %w", err)
-	}
-	f, err := readOfType(c.bob.conn, netproto.MsgError, readTimeout)
-	if err != nil {
-		return fmt.Errorf("waiting for slow mode error: %w", err)
-	}
-	var e netproto.Error
-	if err := netproto.Decode(f, &e); err != nil {
-		return err
-	}
-	if !strings.Contains(e.Message, "slow mode") {
-		return fmt.Errorf("error = %q, want slow mode rejection", e.Message)
-	}
-	return setSlow(0)
-}
-
-// ---------------------------------------------------------------------------
-// Permissions
-// ---------------------------------------------------------------------------
-
-func checkDeleteDenied(c *checkCtx) error {
-	if err := writeMsg(c.bob.conn, netproto.MsgDeleteChannel,
-		netproto.DeleteChannel{ChannelID: c.channelID}); err != nil {
-		return err
-	}
-	f, err := readOfType(c.bob.conn, netproto.MsgError, readTimeout)
-	if err != nil {
-		return err
-	}
-	var e netproto.Error
-	if err := netproto.Decode(f, &e); err != nil {
-		return err
-	}
-	if e.Code != 4 {
-		return fmt.Errorf("error code = %d, want 4 (permission denied)", e.Code)
-	}
-	return nil
-}
-
-// ---------------------------------------------------------------------------
-// Files
-// ---------------------------------------------------------------------------
 
 func (c *checkCtx) fileTransferAddr(port int) string {
 	if port != 0 {
@@ -1428,7 +1008,7 @@ func checkFiles(c *checkCtx) error {
 	if err != nil {
 		return fmt.Errorf("download: %w", err)
 	}
-	if !equalBytes(got, payload) {
+	if !bytes.Equal(got, payload) {
 		return fmt.Errorf("download content mismatch (%d vs %d bytes)", len(got), len(payload))
 	}
 
@@ -1601,41 +1181,12 @@ func downloadFile(addr string, init netproto.FileTransferInitResponse) ([]byte, 
 // ServerQuery
 // ---------------------------------------------------------------------------
 
-func checkQuery(c *checkCtx) error {
-	q, err := dialQuery(c.opts.queryAddr, c.opts.adminUID, c.opts.adminPass)
-	if err != nil {
-		return err
-	}
-	defer closeE2EResource(q.conn)
-
-	lines, err := q.cmd("clientlist")
-	if err != nil {
-		return err
-	}
-	joined := strings.Join(lines, "\n")
-	if !strings.Contains(joined, c.opts.aliceUID) {
-		return fmt.Errorf("clientlist missing alice (%s)", c.opts.aliceUID)
-	}
-	if !strings.Contains(joined, c.opts.bobUID) {
-		return fmt.Errorf("clientlist missing bob (%s)", c.opts.bobUID)
-	}
-
-	lines, err = q.cmd("serverinfo")
-	if err != nil {
-		return err
-	}
-	if last := lines[len(lines)-1]; last != "error id=0 msg=ok" {
-		return fmt.Errorf("serverinfo failed: %s", last)
-	}
-	return nil
-}
-
-// ---------------------------------------------------------------------------
-// Anonymous (guest) login
-// ---------------------------------------------------------------------------
-
 // dialGuest connects and authenticates as an anonymous guest.
-func dialGuest(addr, nickname, serverPassword string) (*client, error) {
+func dialGuest(addr, nickname, serverPassword string, models ...string) (*client, error) {
+	model, err := e2eAuthorizationModel(models)
+	if err != nil {
+		return nil, err
+	}
 	conn, err := dialTCP(addr)
 	if err != nil {
 		return nil, err
@@ -1646,10 +1197,11 @@ func dialGuest(addr, nickname, serverPassword string) (*client, error) {
 		return nil, err
 	}
 	if err := writeMsg(conn, netproto.MsgAuthenticate, netproto.Authenticate{
-		Anonymous:       true,
-		Nickname:        nickname,
-		ServerPassword:  serverPassword,
-		X25519PublicKey: base64.StdEncoding.EncodeToString(g.e2ePub[:]),
+		Anonymous:           true,
+		Nickname:            nickname,
+		ServerPassword:      serverPassword,
+		X25519PublicKey:     base64.StdEncoding.EncodeToString(g.e2ePub[:]),
+		AuthorizationModels: e2eAdvertisedModels(model),
 	}); err != nil {
 		_ = conn.Close()
 		return nil, err
@@ -1668,127 +1220,25 @@ func dialGuest(addr, nickname, serverPassword string) (*client, error) {
 		_ = conn.Close()
 		return nil, errors.New("guest auth rejected: " + resp.Reason)
 	}
+	if err := e2eCheckAuthorizationModel(resp, model); err != nil {
+		_ = conn.Close()
+		return nil, err
+	}
 	installScopeKeys(g, 0, resp.ChatKeys, true)
+	clientsByConn.Store(conn, g)
 	if _, err := readOfType(conn, netproto.MsgSnapshot, readTimeout); err != nil {
+		clientsByConn.Delete(conn)
 		_ = conn.Close()
 		return nil, fmt.Errorf("reading snapshot: %w", err)
 	}
 	g.uid, g.clientID, g.nickname = resp.UniqueID, resp.ClientID, resp.Nickname
 	if err := registerClient(g); err != nil {
+		clientsByConn.Delete(conn)
 		_ = conn.Close()
 		return nil, fmt.Errorf("e2e key publish: %w", err)
 	}
 	return g, nil
 }
-
-// checkAnonymousAuth verifies a guest can log in with just a nickname, is
-// visible to other clients, can join a channel, and can chat in it.
-func checkAnonymousAuth(c *checkCtx) error {
-	guest, err := dialGuest(c.opts.addr, "e2e-guest", c.opts.serverPass)
-	if err != nil {
-		return err
-	}
-	c.guest = guest
-	if !strings.HasPrefix(guest.uid, "guest:") {
-		return fmt.Errorf("guest unique id = %q, want guest: prefix", guest.uid)
-	}
-	if guest.nickname != "e2e-guest" {
-		return fmt.Errorf("guest nickname = %q, want e2e-guest", guest.nickname)
-	}
-
-	// Bob must see the guest's user_joined with the nickname.
-	deadline := time.Now().Add(readTimeout)
-	for time.Now().Before(deadline) {
-		env, err := readEvent(c.bob.conn, "user_joined", time.Until(deadline))
-		if err != nil {
-			return fmt.Errorf("bob user_joined: %w", err)
-		}
-		var ue struct {
-			ClientID string `json:"client_id"`
-			Nickname string `json:"nickname"`
-		}
-		if err := json.Unmarshal(env.Data, &ue); err != nil {
-			return err
-		}
-		if ue.Nickname == "e2e-guest" {
-			break
-		}
-	}
-
-	// Guest joins the channel and both directions of channel chat work.
-	if err := writeMsg(c.guest.conn, netproto.MsgJoinChannel,
-		netproto.JoinChannel{ChannelID: c.channelID}); err != nil {
-		return fmt.Errorf("guest join: %w", err)
-	}
-
-	text := "guest-chat-" + randHex(4)
-	if err := writeEncChannelChat(c.guest, c.channelID, text); err != nil {
-		return fmt.Errorf("guest send: %w", err)
-	}
-	if err := readEncChannelChat(c.bob, c.channelID, text); err != nil {
-		return fmt.Errorf("bob reading guest chat: %w", err)
-	}
-
-	text = "to-guest-" + randHex(4)
-	if err := writeEncChannelChat(c.bob, c.channelID, text); err != nil {
-		return fmt.Errorf("bob send: %w", err)
-	}
-	if err := readEncChannelChat(c.guest, c.channelID, text); err != nil {
-		return fmt.Errorf("guest reading bob chat: %w", err)
-	}
-	return nil
-}
-
-// checkAnonymousCreateDenied verifies guests cannot create channels.
-func checkAnonymousCreateDenied(c *checkCtx) error {
-	if err := writeMsg(c.guest.conn, netproto.MsgCreateChannel,
-		netproto.CreateChannel{Name: "guest-denied", Type: 0}); err != nil {
-		return err
-	}
-	f, err := readOfType(c.guest.conn, netproto.MsgError, readTimeout)
-	if err != nil {
-		return err
-	}
-	var e netproto.Error
-	if err := netproto.Decode(f, &e); err != nil {
-		return err
-	}
-	if e.Code != 4 {
-		return fmt.Errorf("error code = %d, want 4 (permission denied)", e.Code)
-	}
-	return nil
-}
-
-// checkAnonymousServerPassword verifies guests must supply the server
-// password on a protected server (only run when -server-password is set).
-func checkAnonymousServerPassword(c *checkCtx) error {
-	conn, err := dialTCP(c.opts.addr)
-	if err != nil {
-		return err
-	}
-	defer closeE2EResource(conn)
-	if err := writeMsg(conn, netproto.MsgAuthenticate, netproto.Authenticate{
-		Anonymous: true, Nickname: "e2e-guest-nopass",
-	}); err != nil {
-		return err
-	}
-	f, err := readOfType(conn, netproto.MsgAuthResponse, readTimeout)
-	if err != nil {
-		return err
-	}
-	var resp netproto.AuthResponse
-	if err := netproto.Decode(f, &resp); err != nil {
-		return err
-	}
-	if resp.OK {
-		return errors.New("guest auth without server password accepted on a protected server")
-	}
-	return nil
-}
-
-// ---------------------------------------------------------------------------
-// misc
-// ---------------------------------------------------------------------------
 
 func randHex(n int) string {
 	b := make([]byte, n)
@@ -1796,589 +1246,24 @@ func randHex(n int) string {
 	return hex.EncodeToString(b)
 }
 
-func equalBytes(a, b []byte) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
-}
-
-// ---------------------------------------------------------------------------
-// Permission/group management (wave 6a)
-// ---------------------------------------------------------------------------
-
-// groupList asks the server for the group list of a type.
-func groupList(conn net.Conn, groupType string) (*netproto.GroupListResponse, error) {
-	if err := writeMsg(conn, netproto.MsgGroupList, netproto.GroupList{Type: groupType}); err != nil {
-		return nil, err
-	}
-	f, err := readOfType(conn, netproto.MsgGroupListResponse, readTimeout)
-	if err != nil {
-		return nil, err
-	}
-	var resp netproto.GroupListResponse
-	if err := netproto.Decode(f, &resp); err != nil {
-		return nil, err
-	}
-	return &resp, nil
-}
-
-// findGroup returns the list entry with the given name, or nil.
-func findGroup(list *netproto.GroupListResponse, name string) *netproto.GroupEntry {
-	for i := range list.Groups {
-		if list.Groups[i].Name == name {
-			return &list.Groups[i]
-		}
-	}
-	return nil
-}
-
-// checkGroupManagement verifies the default groups are seeded and that an
-// admin can create a group, assign alice (she gets the event), unassign her,
-// and delete the group.
-func checkGroupManagement(c *checkCtx) error {
-	admin, err := dialAuth(c.opts.addr, c.opts.adminUID, c.opts.adminPass, c.opts.serverPass)
-	if err != nil {
-		return fmt.Errorf("admin: %w", err)
-	}
-	defer closeE2EResource(admin.conn)
-
-	// Default groups (143/144): Guest and Member are seeded at startup;
-	// alice auto-joined Member on her first login.
-	list, err := groupList(admin.conn, "server")
-	if err != nil {
-		return err
-	}
-	if findGroup(list, "Guest") == nil {
-		return errors.New("default Guest group missing")
-	}
-	member := findGroup(list, "Member")
-	if member == nil {
-		return errors.New("default Member group missing")
-	}
-	if member.MemberCount < 1 {
-		return fmt.Errorf("member group has %d members, want >= 1 (alice auto-join)", member.MemberCount)
-	}
-
-	// Create a group (the response is the refreshed list).
-	name := "e2e-mods-" + randHex(3)
-	if err := writeMsg(admin.conn, netproto.MsgGroupCreate,
-		netproto.GroupCreate{Type: "server", Name: name, SortID: 10}); err != nil {
-		return err
-	}
-	f, err := readOfType(admin.conn, netproto.MsgGroupListResponse, readTimeout)
-	if err != nil {
-		return err
-	}
-	var created netproto.GroupListResponse
-	if err := netproto.Decode(f, &created); err != nil {
-		return err
-	}
-	g := findGroup(&created, name)
-	if g == nil {
-		return fmt.Errorf("created group %q not in list", name)
-	}
-	groupID := g.ID
-
-	// Assign alice; she receives group_assigned and the member count rises.
-	if err := writeMsg(admin.conn, netproto.MsgGroupAssign,
-		netproto.GroupAssign{Type: "server", GroupID: groupID, UniqueID: c.opts.aliceUID}); err != nil {
-		return err
-	}
-	if _, err := readEvent(c.alice.conn, "group_assigned", readTimeout); err != nil {
-		return fmt.Errorf("alice group_assigned: %w", err)
-	}
-	list, err = groupList(admin.conn, "server")
-	if err != nil {
-		return err
-	}
-	if g := findGroup(list, name); g == nil || g.MemberCount != 1 {
-		return fmt.Errorf("group after assign = %+v, want 1 member", g)
-	}
-
-	// Unassign and delete again (cleanup, and covers both code paths).
-	if err := writeMsg(admin.conn, netproto.MsgGroupUnassign,
-		netproto.GroupUnassign{Type: "server", GroupID: groupID, UniqueID: c.opts.aliceUID}); err != nil {
-		return err
-	}
-	if _, err := readEvent(c.alice.conn, "group_unassigned", readTimeout); err != nil {
-		return fmt.Errorf("alice group_unassigned: %w", err)
-	}
-	if err := writeMsg(admin.conn, netproto.MsgGroupDelete,
-		netproto.GroupDelete{Type: "server", GroupID: groupID}); err != nil {
-		return err
-	}
-	list, err = groupList(admin.conn, "server")
-	if err != nil {
-		return err
-	}
-	if findGroup(list, name) != nil {
-		return fmt.Errorf("group %q still listed after delete", name)
-	}
-	return nil
-}
-
-// checkGuestDefaultGroup verifies guests virtually hold the Guest group's
-// permissions: a permission set on the Guest group shows up in an anonymous
-// client's own resolved permission set.
-func checkGuestDefaultGroup(c *checkCtx) error {
-	admin, err := dialAuth(c.opts.addr, c.opts.adminUID, c.opts.adminPass, c.opts.serverPass)
-	if err != nil {
-		return fmt.Errorf("admin: %w", err)
-	}
-	defer closeE2EResource(admin.conn)
-
-	list, err := groupList(admin.conn, "server")
-	if err != nil {
-		return err
-	}
-	guest := findGroup(list, "Guest")
-	if guest == nil {
-		return errors.New("default Guest group missing")
-	}
-
-	// Marker permission on the Guest group; removed again at the end.
-	if err := writeMsg(admin.conn, netproto.MsgPermSet, netproto.PermSet{
-		Tier: "server_group", GroupID: guest.ID, Key: "i_client_talk_power", Value: 42,
-	}); err != nil {
-		return err
-	}
-	defer writeE2ECleanupMsg(admin.conn, netproto.MsgPermUnset, netproto.PermUnset{
-		Tier: "server_group", GroupID: guest.ID, Key: "i_client_talk_power",
-	})
-
-	g, err := dialGuest(c.opts.addr, "e2e-guest-group", c.opts.serverPass)
-	if err != nil {
-		return err
-	}
-	defer closeE2EResource(g.conn)
-
-	// The PermSet travels on the admin connection and is processed
-	// asynchronously to the guest connection: poll the guest's resolved
-	// permissions until the marker appears.
+func waitForMove(conn net.Conn, clientID string) error {
 	deadline := time.Now().Add(readTimeout)
-	for {
-		if err := writeMsg(g.conn, netproto.MsgPermissionsQuery, netproto.PermissionsQuery{}); err != nil {
-			return err
-		}
-		f, err := readOfType(g.conn, netproto.MsgPermissionsResponse, readTimeout)
+	for time.Now().Before(deadline) {
+		env, err := readEvent(conn, "user_moved", time.Until(deadline))
 		if err != nil {
 			return err
 		}
-		var resp netproto.PermissionsResponse
-		if err := netproto.Decode(f, &resp); err != nil {
+		var moved struct {
+			ClientID string `json:"client_id"`
+		}
+		if err := json.Unmarshal(env.Data, &moved); err != nil {
 			return err
 		}
-		for _, e := range resp.Entries {
-			if e.Key == "i_client_talk_power" && e.Value == 42 {
-				return nil
-			}
-		}
-		if time.Now().After(deadline) {
-			return fmt.Errorf("guest permissions lack the Guest group's marker (entries=%+v)", resp.Entries)
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
-}
-
-// checkPermSetTrace verifies the permission write path and the trace: a
-// client-tier set shows up as the winning tier and disappears after unset.
-func checkPermSetTrace(c *checkCtx) error {
-	admin, err := dialAuth(c.opts.addr, c.opts.adminUID, c.opts.adminPass, c.opts.serverPass)
-	if err != nil {
-		return fmt.Errorf("admin: %w", err)
-	}
-	defer closeE2EResource(admin.conn)
-
-	trace := func() (*netproto.PermTraceResponse, error) {
-		if err := writeMsg(admin.conn, netproto.MsgPermTrace, netproto.PermTrace{
-			UniqueID: c.opts.aliceUID, Key: "i_client_talk_power",
-		}); err != nil {
-			return nil, err
-		}
-		f, err := readOfType(admin.conn, netproto.MsgPermTraceResponse, readTimeout)
-		if err != nil {
-			return nil, err
-		}
-		var resp netproto.PermTraceResponse
-		if err := netproto.Decode(f, &resp); err != nil {
-			return nil, err
-		}
-		return &resp, nil
-	}
-
-	if err := writeMsg(admin.conn, netproto.MsgPermSet, netproto.PermSet{
-		Tier: "client", UniqueID: c.opts.aliceUID, Key: "i_client_talk_power", Value: 77,
-	}); err != nil {
-		return err
-	}
-	defer writeE2ECleanupMsg(admin.conn, netproto.MsgPermUnset, netproto.PermUnset{
-		Tier: "client", UniqueID: c.opts.aliceUID, Key: "i_client_talk_power",
-	})
-
-	resp, err := trace()
-	if err != nil {
-		return err
-	}
-	if resp.Effective != 77 || resp.EffectiveTier != "client_specific" {
-		return fmt.Errorf("trace after set = %d/%q, want 77/client_specific", resp.Effective, resp.EffectiveTier)
-	}
-
-	if err := writeMsg(admin.conn, netproto.MsgPermUnset, netproto.PermUnset{
-		Tier: "client", UniqueID: c.opts.aliceUID, Key: "i_client_talk_power",
-	}); err != nil {
-		return err
-	}
-	resp, err = trace()
-	if err != nil {
-		return err
-	}
-	if resp.EffectiveTier != "" {
-		return fmt.Errorf("trace after unset = %d/%q, want unset", resp.Effective, resp.EffectiveTier)
-	}
-	return nil
-}
-
-// checkQueryWave10a exercises the wave-10a ServerQuery commands against the
-// live server: serveredit (name reflected in serverinfo), server groups,
-// channel permissions, and permoverview.
-func checkQueryWave10a(c *checkCtx) error {
-	q, err := dialQuery(c.opts.queryAddr, c.opts.adminUID, c.opts.adminPass)
-	if err != nil {
-		return err
-	}
-	defer closeE2EResource(q.conn)
-
-	// Read the current server name for later restore.
-	lines, err := q.cmd("serverinfo")
-	if err != nil {
-		return err
-	}
-	var origName string
-	for _, l := range lines {
-		if strings.HasPrefix(l, "virtualserver_name=") {
-			origName = strings.TrimPrefix(strings.Split(l, " ")[0], "virtualserver_name=")
+		if moved.ClientID == clientID {
+			return nil
 		}
 	}
-
-	// (217) serveredit changes the name; serverinfo reflects it.
-	if _, err := q.cmd(`serveredit virtualserver_name=WaveTen`); err != nil {
-		return fmt.Errorf("serveredit: %w", err)
-	}
-	lines, err = q.cmd("serverinfo")
-	if err != nil {
-		return err
-	}
-	if !strings.Contains(lines[0], "virtualserver_name=WaveTen") {
-		return fmt.Errorf("serverinfo after edit = %v", lines)
-	}
-	if origName != "" {
-		defer runE2EQueryCleanup(q, "restore server name failed", `serveredit virtualserver_name=`+origName)
-	}
-
-	// (221) server group cycle.
-	lines, err = q.cmd(`servergroupadd name=w10test`)
-	if err != nil || len(lines) == 0 || !strings.HasPrefix(lines[0], "sgid=") {
-		return fmt.Errorf("servergroupadd = %v, %v", lines, err)
-	}
-	sgid := strings.TrimPrefix(lines[0], "sgid=")
-	if _, err := q.cmd("servergroupaddclient sgid=" + sgid + " cldbid=" + c.opts.aliceUID); err != nil {
-		return fmt.Errorf("servergroupaddclient: %w", err)
-	}
-	lines, err = q.cmd("servergroupclientlist sgid=" + sgid)
-	if err != nil || len(lines) == 0 || !strings.Contains(lines[0], c.opts.aliceUID) {
-		return fmt.Errorf("servergroupclientlist = %v, %v", lines, err)
-	}
-	defer func() {
-		runE2EQueryCleanup(
-			q,
-			"remove server group member failed",
-			"servergroupdelclient sgid="+sgid+" cldbid="+c.opts.aliceUID,
-		)
-		runE2EQueryCleanup(q, "delete server group failed", "servergroupdel sgid="+sgid+" force=1")
-	}()
-
-	// (220) channel-tier permission, then (219) permoverview shows it.
-	if _, err := q.cmd("channeladdperm cid=1 permid=i_client_needed_talk_power permvalue=77"); err != nil {
-		return fmt.Errorf("channeladdperm: %w", err)
-	}
-	defer runE2EQueryCleanup(
-		q,
-		"remove channel permission failed",
-		"channeldelperm cid=1 permid=i_client_needed_talk_power",
-	)
-	lines, err = q.cmd("permoverview unique_id=" + c.opts.aliceUID + " cid=1")
-	if err != nil {
-		return fmt.Errorf("permoverview: %w", err)
-	}
-	found := false
-	for _, l := range lines {
-		if strings.Contains(l, "permid=i_client_needed_talk_power") && strings.Contains(l, "permvalue=77") {
-			found = true
-		}
-	}
-	if !found {
-		return fmt.Errorf("permoverview missing channel-tier entry: %v", lines)
-	}
-
-	// (222) custom property cycle.
-	if _, err := q.cmd("customset cldbid=" + c.opts.aliceUID + " ident=role value=tester"); err != nil {
-		return fmt.Errorf("customset: %w", err)
-	}
-	defer runE2EQueryCleanup(
-		q,
-		"delete custom property failed",
-		"customdel cldbid="+c.opts.aliceUID+" ident=role",
-	)
-	lines, err = q.cmd("custominfo cldbid=" + c.opts.aliceUID)
-	if err != nil || len(lines) == 0 || !strings.Contains(lines[0], "ident=role") {
-		return fmt.Errorf("custominfo = %v, %v", lines, err)
-	}
-
-	// (223) logview returns lines.
-	lines, err = q.cmd("logview lines=5")
-	if err != nil || len(lines) < 2 {
-		return fmt.Errorf("logview = %v, %v", lines, err)
-	}
-	if !strings.HasPrefix(lines[0], "line=") {
-		return fmt.Errorf("logview row = %q", lines[0])
-	}
-	return nil
-}
-
-// ---------------------------------------------------------------------------
-// Chaos: PostgreSQL restart under traffic (467)
-// ---------------------------------------------------------------------------
-
-const (
-	// chaosUnreadyWithin bounds how long /readyz may keep claiming readiness
-	// after the database is gone.
-	chaosUnreadyWithin = 10 * time.Second
-	// chaosReadyWithin bounds recovery: /readyz must serve 200 again this long
-	// after the database comes back.
-	chaosReadyWithin = 30 * time.Second
-	// chaosOutage is how long traffic runs against the dead database before
-	// the tallies are judged.
-	chaosOutage = 3 * time.Second
-	// chaosPingEvery paces the liveness traffic.
-	chaosPingEvery = 200 * time.Millisecond
-	// chaosChatEvery paces the DB-backed traffic. Chat is deliberately slower
-	// than the pings: the server's default limit is 5 messages per 3s, and a
-	// rate-limit rejection would be indistinguishable from a database failure.
-	chaosChatEvery = time.Second
-	// chaosPoll is the interval between health probes.
-	chaosPoll = 250 * time.Millisecond
-	// chaosCommandTimeout bounds each operator-supplied stop/start command.
-	chaosCommandTimeout = 30 * time.Second
-)
-
-// chaosSession drives one authenticated session from two goroutines: a reader
-// that never sets a deadline (a deadline firing mid-frame would desynchronize
-// the stream) and a writer that generates the traffic. WriteFrame emits the
-// header and the payload as separate writes, so every write goes through wmu
-// or the two goroutines would interleave a frame.
-type chaosSession struct {
-	cl  *client
-	wmu sync.Mutex
-
-	mu       sync.Mutex
-	pings    int
-	pongs    int
-	chats    int
-	errCodes map[uint16]int
-	readErr  error
-	stopped  bool
-}
-
-func newChaosSession(cl *client) *chaosSession {
-	return &chaosSession{cl: cl, errCodes: map[uint16]int{}}
-}
-
-// chaosTally is a snapshot of a session's counters.
-type chaosTally struct {
-	pings    int
-	pongs    int
-	chats    int
-	errCodes map[uint16]int
-	readErr  error
-}
-
-func (s *chaosSession) snapshot() chaosTally {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	codes := make(map[uint16]int, len(s.errCodes))
-	for k, v := range s.errCodes {
-		codes[k] = v
-	}
-	return chaosTally{pings: s.pings, pongs: s.pongs, chats: s.chats, errCodes: codes, readErr: s.readErr}
-}
-
-// send writes one frame under the write lock.
-func (s *chaosSession) send(mt netproto.MessageType, msg any) error {
-	s.wmu.Lock()
-	defer s.wmu.Unlock()
-	return writeMsg(s.cl.conn, mt, msg)
-}
-
-// stop closes the connection so the blocking reader returns, and marks the
-// session as shut down so that return is not reported as a dropped session.
-func (s *chaosSession) stop() {
-	s.mu.Lock()
-	s.stopped = true
-	s.mu.Unlock()
-	_ = s.cl.conn.Close()
-}
-
-// readLoop consumes frames until the connection ends, answering server
-// keepalives and tallying pongs and error frames.
-func (s *chaosSession) readLoop() {
-	for {
-		f, err := netproto.ReadFrame(s.cl.conn)
-		if err != nil {
-			s.mu.Lock()
-			if !s.stopped && s.readErr == nil {
-				s.readErr = err
-			}
-			s.mu.Unlock()
-			return
-		}
-		switch netproto.MessageType(f.Type) {
-		case netproto.MsgPong:
-			s.mu.Lock()
-			s.pongs++
-			s.mu.Unlock()
-		case netproto.MsgPing:
-			if err := s.send(netproto.MsgPong, netproto.Pong{}); err != nil {
-				return
-			}
-		case netproto.MsgChannelKey:
-			// The scope maps are also read by sendChat, so the capture takes
-			// the same lock.
-			s.mu.Lock()
-			captureChannelKey(s.cl.conn, f)
-			s.mu.Unlock()
-		case netproto.MsgError:
-			var e netproto.Error
-			if err := netproto.Decode(f, &e); err == nil {
-				s.mu.Lock()
-				s.errCodes[e.Code]++
-				s.mu.Unlock()
-			}
-		}
-	}
-}
-
-// sendChat seals text with the generation already captured for channelID and
-// sends it. It cannot reuse writeEncChannelChat: that helper READS from the
-// connection to await a key, and reads belong to readLoop here.
-func (s *chaosSession) sendChat(channelID int64, text string) error {
-	s.mu.Lock()
-	id := s.cl.scopeLatest[channelID]
-	key := s.cl.scopeKeys[channelID][id]
-	s.mu.Unlock()
-	blob, err := e2eSealScope(text, key)
-	if err != nil {
-		return err
-	}
-	return s.send(netproto.MsgChatSend, netproto.ChatSend{
-		ChannelID: strconv.FormatInt(channelID, 10), Text: blob, Enc: true, KeyID: id,
-	})
-}
-
-// writeLoop generates traffic until stop closes. Write failures end the loop;
-// the reader reports the session as dropped.
-func (s *chaosSession) writeLoop(channelID int64, stop <-chan struct{}) {
-	ping := time.NewTicker(chaosPingEvery)
-	defer ping.Stop()
-	chat := time.NewTicker(chaosChatEvery)
-	defer chat.Stop()
-
-	for {
-		select {
-		case <-stop:
-			return
-		case <-ping.C:
-			if err := s.send(netproto.MsgPing, netproto.Ping{}); err != nil {
-				return
-			}
-			s.mu.Lock()
-			s.pings++
-			s.mu.Unlock()
-		case <-chat.C:
-			// Unique text every time: three identical messages in 30s trip the
-			// anti-spam filter, which would look like a backend failure.
-			if err := s.sendChat(channelID, "chaos-"+randHex(4)); err != nil {
-				return
-			}
-			s.mu.Lock()
-			s.chats++
-			s.mu.Unlock()
-		}
-	}
-}
-
-// runChaosCmd runs one chaos command. The command line is split on whitespace
-// and executed WITHOUT a shell, so the drill behaves identically on Windows
-// and Linux; quoting and shell operators are therefore not supported.
-func runChaosCmd(cmdline string) (string, error) {
-	fields := strings.Fields(cmdline)
-	if len(fields) == 0 {
-		return "", errors.New("empty command")
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), chaosCommandTimeout)
-	defer cancel()
-	out, err := exec.CommandContext(ctx, fields[0], fields[1:]...).CombinedOutput() // #nosec G204 -- explicit operator-supplied drill command; no shell is used.
-	return strings.TrimSpace(string(out)), err
-}
-
-// awaitReadyz polls /readyz until want accepts the status, returning the last
-// status seen.
-func awaitReadyz(baseURL string, want func(int) bool, within time.Duration) (int, error) {
-	deadline := time.Now().Add(within)
-	last := 0
-	for {
-		code, _, err := httpGet(baseURL + "/readyz")
-		if err == nil {
-			last = code
-			if want(code) {
-				return code, nil
-			}
-		}
-		if time.Now().After(deadline) {
-			return last, fmt.Errorf("last status %d after %s", last, within)
-		}
-		time.Sleep(chaosPoll)
-	}
-}
-
-// readAnyOf reads frames until one of the wanted types arrives, answering
-// server keepalives while it waits.
-func readAnyOf(conn net.Conn, timeout time.Duration, want ...netproto.MessageType) (*netproto.Frame, error) {
-	_ = conn.SetReadDeadline(time.Now().Add(timeout))
-	defer clearE2EReadDeadline(conn)
-	for {
-		f, err := netproto.ReadFrame(conn)
-		if err != nil {
-			return nil, err
-		}
-		if netproto.MessageType(f.Type) == netproto.MsgPing {
-			_ = writeMsg(conn, netproto.MsgPong, netproto.Pong{})
-			continue
-		}
-		if netproto.MessageType(f.Type) == netproto.MsgChannelKey {
-			captureChannelKey(conn, f)
-		}
-		for _, w := range want {
-			if netproto.MessageType(f.Type) == w {
-				return f, nil
-			}
-		}
-	}
+	return fmt.Errorf("no user_moved for %s", clientID)
 }
 
 // chaosJoin puts a fresh session into the drill channel and waits for the
@@ -2391,39 +1276,6 @@ func chaosJoin(cl *client, channelID int64) error {
 		return fmt.Errorf("membership: %w", err)
 	}
 	return awaitScopeKey(cl.conn, cl, channelID)
-}
-
-// chaosHistoryHas asks for the channel's recent history and reports whether it
-// contains text.
-func chaosHistoryHas(cl *client, channelID int64, text string) (bool, error) {
-	if err := writeMsg(cl.conn, netproto.MsgChatHistory, netproto.ChatHistory{
-		ChannelID: channelID, Limit: 20,
-	}); err != nil {
-		return false, err
-	}
-	f, err := readOfType(cl.conn, netproto.MsgChatHistoryResponse, readTimeout)
-	if err != nil {
-		return false, err
-	}
-	var resp netproto.ChatHistoryResponse
-	if err := netproto.Decode(f, &resp); err != nil {
-		return false, err
-	}
-	// Archival generations: they must not move the send generation.
-	installScopeKeys(cl, channelID, resp.Keys, false)
-	for _, m := range resp.Messages {
-		if m.Deleted {
-			continue
-		}
-		body, err := historyBody(cl, channelID, m)
-		if err != nil {
-			continue
-		}
-		if body == text {
-			return true, nil
-		}
-	}
-	return false, nil
 }
 
 func checkChaosOutageReply(f *netproto.Frame) error {
@@ -2440,168 +1292,5 @@ func checkChaosOutageReply(f *netproto.Frame) error {
 		return fmt.Errorf("DB-backed request returned error %d (%s), want backend unavailable (5)", e.Code, e.Message)
 	}
 	fmt.Printf("e2e: chaos: DB-backed request answered with error frame %d (%s)\n", e.Code, e.Message)
-	return nil
-}
-
-// checkChaosPostgres is the database chaos drill (467): with two authenticated
-// sessions and continuous traffic in flight, the database is stopped and
-// restarted. It asserts that liveness and readiness diverge, that live TCP
-// sessions survive and keep being answered, that DB-backed requests fail as
-// error frames rather than by dropping the connection, and that the server
-// serves reads and writes again once the database returns.
-//
-// It is destructive and opt-in (-chaos), and always tries to restart the
-// database, including on failure.
-func checkChaosPostgres(c *checkCtx) error {
-	if c.channelID == 0 {
-		return errors.New("no channel id — channel-create-via-query must run first")
-	}
-
-	// Fresh sessions: the shared alice/bob connections are reused by other
-	// checks, and this one deliberately breaks their backend.
-	traffic, err := dialAuth(c.opts.addr, c.opts.bobUID, c.opts.bobPass, c.opts.serverPass)
-	if err != nil {
-		return fmt.Errorf("traffic session: %w", err)
-	}
-	defer closeE2EResource(traffic.conn)
-	probe, err := dialAuth(c.opts.addr, c.opts.aliceUID, c.opts.alicePass, c.opts.serverPass)
-	if err != nil {
-		return fmt.Errorf("probe session: %w", err)
-	}
-	defer closeE2EResource(probe.conn)
-	if err := chaosJoin(traffic, c.channelID); err != nil {
-		return fmt.Errorf("traffic session join: %w", err)
-	}
-	if err := chaosJoin(probe, c.channelID); err != nil {
-		return fmt.Errorf("probe session join: %w", err)
-	}
-
-	sess := newChaosSession(traffic)
-	stop := make(chan struct{})
-	var wg sync.WaitGroup
-	wg.Add(2)
-	go func() { defer wg.Done(); sess.readLoop() }()
-	go func() { defer wg.Done(); sess.writeLoop(c.channelID, stop) }()
-	defer func() {
-		close(stop)
-		sess.stop()
-		wg.Wait()
-	}()
-
-	// Let the traffic settle so a zero pong count later means something.
-	time.Sleep(time.Second)
-	if base := sess.snapshot(); base.pongs == 0 {
-		return fmt.Errorf("no pong before the outage (%d pings sent) — the drill cannot prove anything", base.pings)
-	}
-
-	// --- take the database down --------------------------------------------
-	fmt.Printf("e2e: chaos: stopping the database: %s\n", c.opts.chaosStopCmd)
-	if out, err := runChaosCmd(c.opts.chaosStopCmd); err != nil {
-		return fmt.Errorf("stop command %q failed: %w: %s", c.opts.chaosStopCmd, err, out)
-	}
-	restarted := false
-	defer func() {
-		if !restarted {
-			// Never leave the stack on a dead database, whatever went wrong.
-			if out, err := runChaosCmd(c.opts.chaosStartCmd); err != nil {
-				fmt.Printf("e2e: chaos: RESTART FAILED, the stack needs manual repair: %v: %s\n", err, out)
-			}
-		}
-	}()
-
-	// (i) readiness must drop while liveness holds.
-	code, err := awaitReadyz(c.opts.healthURL, func(code int) bool { return code != http.StatusOK }, chaosUnreadyWithin)
-	if err != nil {
-		return fmt.Errorf("readyz kept reporting ready with the database down: %w", err)
-	}
-	// The server answers 500 here; 503 is the more conventional code for the
-	// same condition, so both count as "not ready".
-	if code != http.StatusServiceUnavailable && code != http.StatusInternalServerError {
-		return fmt.Errorf("readyz status = %d with the database down, want 503 or 500", code)
-	}
-	hc, _, err := httpGet(c.opts.healthURL + "/healthz")
-	if err != nil {
-		return fmt.Errorf("healthz unreachable during the outage: %w", err)
-	}
-	if hc != http.StatusOK {
-		return fmt.Errorf("healthz status = %d during the outage, want 200 — liveness must not follow the database", hc)
-	}
-	fmt.Printf("e2e: chaos: readyz = %d, healthz = %d with the database down\n", code, hc)
-
-	// (ii) live sessions survive and keep being answered.
-	before := sess.snapshot()
-	time.Sleep(chaosOutage)
-	during := sess.snapshot()
-	if during.readErr != nil {
-		return fmt.Errorf("traffic session dropped during the outage: %w", during.readErr)
-	}
-	if during.pongs <= before.pongs {
-		return fmt.Errorf("no ping answered during the outage (%d pings, %d pongs) — the session is not being served",
-			during.pings, during.pongs)
-	}
-
-	// (iii) a DB-backed request must come back as an error frame on a live
-	// connection, not as a dropped connection, a panic, or a hang.
-	if err := writeMsg(probe.conn, netproto.MsgChatHistory, netproto.ChatHistory{
-		ChannelID: c.channelID, Limit: 10,
-	}); err != nil {
-		return fmt.Errorf("history request during the outage: %w", err)
-	}
-	f, err := readAnyOf(probe.conn, readTimeout, netproto.MsgError, netproto.MsgChatHistoryResponse)
-	if err != nil {
-		return fmt.Errorf("no answer to a DB-backed request during the outage (connection dropped or handler hung): %w", err)
-	}
-	if err := checkChaosOutageReply(f); err != nil {
-		return err
-	}
-
-	// --- bring the database back -------------------------------------------
-	fmt.Printf("e2e: chaos: starting the database: %s\n", c.opts.chaosStartCmd)
-	if out, err := runChaosCmd(c.opts.chaosStartCmd); err != nil {
-		return fmt.Errorf("start command %q failed: %w: %s", c.opts.chaosStartCmd, err, out)
-	}
-	restarted = true
-
-	// (iv) readiness, fresh authentication, and a persisted round trip.
-	if _, err := awaitReadyz(c.opts.healthURL, func(code int) bool { return code == http.StatusOK }, chaosReadyWithin); err != nil {
-		return fmt.Errorf("readyz did not recover: %w", err)
-	}
-	if tally := sess.snapshot(); tally.readErr != nil {
-		return fmt.Errorf("traffic session dropped during recovery: %w", tally.readErr)
-	}
-
-	fresh, err := dialAuth(c.opts.addr, c.opts.aliceUID, c.opts.alicePass, c.opts.serverPass)
-	if err != nil {
-		return fmt.Errorf("authentication failed after readiness recovered: %w", err)
-	}
-	defer closeE2EResource(fresh.conn)
-	if err := chaosJoin(fresh, c.channelID); err != nil {
-		return fmt.Errorf("post-recovery join: %w", err)
-	}
-
-	text := "chaos-recovered-" + randHex(4)
-	if err := writeEncChannelChat(fresh, c.channelID, text); err != nil {
-		return fmt.Errorf("post-recovery send: %w", err)
-	}
-	// The write only counts if it reached storage, so read it back out of the
-	// database rather than off the relay.
-	deadline := time.Now().Add(readTimeout)
-	for {
-		found, err := chaosHistoryHas(fresh, c.channelID, text)
-		if err != nil {
-			return fmt.Errorf("post-recovery history query: %w", err)
-		}
-		if found {
-			break
-		}
-		if time.Now().After(deadline) {
-			return fmt.Errorf("post-recovery message %q never appeared in history — the write did not reach storage", text)
-		}
-		time.Sleep(chaosPoll)
-	}
-
-	final := sess.snapshot()
-	fmt.Printf("e2e: chaos: %d pings / %d pongs / %d chats, error frames by code: %v\n",
-		final.pings, final.pongs, final.chats, final.errCodes)
 	return nil
 }

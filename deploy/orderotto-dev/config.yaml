@@ -1,0 +1,31 @@
+dev_mode: false
+log_level: info
+tcp_addr: ":12333"
+udp_addr: ":12334"
+file_addr: ":12336"
+health_addr: ":12337"
+grpc_addr: "127.0.0.1:12338"
+# The host publishes this only on loopback; use an SSH tunnel for operators.
+query_addr: ":12335"
+query_allow_remote: true
+metrics_allow_remote: false
+tls_enabled: true
+file_tls_enabled: true
+tls_dir: /data/tls
+file_root: /data/files
+recording:
+  enabled: true
+  dir: /data/recordings
+  # Actual FFmpeg processes: one per active participant/media slot.
+  max_concurrent: 16
+pii_key_file: /data/keys/pii.key
+chat_master_key_file: /data/keys/chat_master.key
+redis_enabled: false
+max_clients: 100
+db_max_open_conns: 15
+db_max_idle_conns: 3
+webrtc:
+  udp_addr: "0.0.0.0:12341"
+  external_ips: ["129.121.110.249", "100.103.150.8"]
+  ice_servers: []
+  enable_av1: false

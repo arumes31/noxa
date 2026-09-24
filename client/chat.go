@@ -53,6 +53,15 @@ func (a *App) ChatHistory(channelID, beforeID int64, limit int) (netproto.ChatHi
 	return chatHistoryWith(m, channelID, beforeID, limit)
 }
 
+// ChatHistoryForTab binds the request and decryption keys to the displayed server.
+func (a *App) ChatHistoryForTab(tabID string, channelID, beforeID int64, limit int) (netproto.ChatHistoryResponse, error) {
+	m, err := a.requireTabCM(tabID)
+	if err != nil {
+		return netproto.ChatHistoryResponse{}, err
+	}
+	return chatHistoryWith(m, channelID, beforeID, limit)
+}
+
 // chatHistoryWith performs one page through the manager selected at the
 // compound operation's start. Search/export must not re-resolve App.cm for
 // every page: an active-tab switch midway through a scan would otherwise mix
@@ -132,6 +141,19 @@ func (a *App) ChatEditMessage(channelID, messageID int64, newText string, expect
 	if err != nil {
 		return err.Error()
 	}
+	return chatEditMessageWith(m, channelID, messageID, newText, expectedVersion)
+}
+
+// ChatEditMessageForTab binds encryption and the write to the displayed server.
+func (a *App) ChatEditMessageForTab(tabID string, channelID, messageID int64, newText string, expectedVersion uint64) string {
+	m, err := a.requireTabCM(tabID)
+	if err != nil {
+		return err.Error()
+	}
+	return chatEditMessageWith(m, channelID, messageID, newText, expectedVersion)
+}
+
+func chatEditMessageWith(m *connManager, channelID, messageID int64, newText string, expectedVersion uint64) string {
 	keyID, key, ok := m.scopeKeys.current(channelID)
 	if !ok {
 		return "no chat key for this channel yet"
@@ -140,9 +162,11 @@ func (a *App) ChatEditMessage(channelID, messageID int64, newText string, expect
 	if err != nil {
 		return err.Error()
 	}
-	if err := m.write(netproto.MsgChatEdit, netproto.ChatEdit{
-		MessageID: messageID, NewText: blob, Enc: true, KeyID: keyID, ExpectedVersion: expectedVersion,
-	}); err != nil {
+	ack := m.usesRoleAuthorization()
+	if err := m.writeChatMutation(netproto.MsgChatEdit, messageID, netproto.ChatEdit{
+		AckRequested: ack,
+		MessageID:    messageID, NewText: blob, Enc: true, KeyID: keyID, ExpectedVersion: expectedVersion,
+	}, ack); err != nil {
 		return err.Error()
 	}
 	return ""
@@ -154,7 +178,21 @@ func (a *App) ChatDeleteMessage(messageID int64) string {
 	if err != nil {
 		return err.Error()
 	}
-	if err := m.write(netproto.MsgChatDelete, netproto.ChatDelete{MessageID: messageID}); err != nil {
+	return chatDeleteMessageWith(m, messageID)
+}
+
+// ChatDeleteMessageForTab binds the message ID to its original server.
+func (a *App) ChatDeleteMessageForTab(tabID string, messageID int64) string {
+	m, err := a.requireTabCM(tabID)
+	if err != nil {
+		return err.Error()
+	}
+	return chatDeleteMessageWith(m, messageID)
+}
+
+func chatDeleteMessageWith(m *connManager, messageID int64) string {
+	ack := m.usesRoleAuthorization()
+	if err := m.writeChatMutation(netproto.MsgChatDelete, messageID, netproto.ChatDelete{AckRequested: ack, MessageID: messageID}, ack); err != nil {
 		return err.Error()
 	}
 	return ""
@@ -166,9 +204,24 @@ func (a *App) ChatPinMessage(channelID, messageID int64, pinned bool) string {
 	if err != nil {
 		return err.Error()
 	}
-	if err := m.write(netproto.MsgChatPin, netproto.ChatPin{
-		ChannelID: channelID, MessageID: messageID, Pinned: pinned,
-	}); err != nil {
+	return chatPinMessageWith(m, channelID, messageID, pinned)
+}
+
+// ChatPinMessageForTab binds the pin change to its original server.
+func (a *App) ChatPinMessageForTab(tabID string, channelID, messageID int64, pinned bool) string {
+	m, err := a.requireTabCM(tabID)
+	if err != nil {
+		return err.Error()
+	}
+	return chatPinMessageWith(m, channelID, messageID, pinned)
+}
+
+func chatPinMessageWith(m *connManager, channelID, messageID int64, pinned bool) string {
+	ack := m.usesRoleAuthorization()
+	if err := m.writeChatMutation(netproto.MsgChatPin, messageID, netproto.ChatPin{
+		AckRequested: ack,
+		ChannelID:    channelID, MessageID: messageID, Pinned: pinned,
+	}, ack); err != nil {
 		return err.Error()
 	}
 	return ""
@@ -180,6 +233,19 @@ func (a *App) ChatPins(channelID int64) (netproto.ChatPinsResponse, error) {
 	if err != nil {
 		return netproto.ChatPinsResponse{}, err
 	}
+	return chatPinsWith(m, channelID)
+}
+
+// ChatPinsForTab captures the expected server before requesting encrypted pins.
+func (a *App) ChatPinsForTab(tabID string, channelID int64) (netproto.ChatPinsResponse, error) {
+	m, err := a.requireTabCM(tabID)
+	if err != nil {
+		return netproto.ChatPinsResponse{}, err
+	}
+	return chatPinsWith(m, channelID)
+}
+
+func chatPinsWith(m *connManager, channelID int64) (netproto.ChatPinsResponse, error) {
 	f, err := m.request(netproto.MsgChatPins, netproto.MsgChatPinsResponse,
 		netproto.ChatPins{ChannelID: channelID}, 10*time.Second)
 	if err != nil {
@@ -216,6 +282,23 @@ func (a *App) SubscribeChannels(channelIDs []int64, subscribe bool) string {
 	if m == nil {
 		return "not connected"
 	}
+	return m.subscribeChannels(channelIDs, subscribe)
+}
+
+// SubscribeChannelsForTab submits a change to the displayed server. The
+// subscriptions event remains the sole source of authoritative membership.
+func (a *App) SubscribeChannelsForTab(tabID string, channelIDs []int64, subscribe bool) string {
+	m, err := a.requireTabCM(tabID)
+	if err != nil {
+		return err.Error()
+	}
+	return m.subscribeChannels(channelIDs, subscribe)
+}
+
+func (m *connManager) subscribeChannels(channelIDs []int64, subscribe bool) string {
+	if len(channelIDs) == 0 {
+		return "no channels given"
+	}
 	if err := m.write(netproto.MsgChannelSubscribe, netproto.ChannelSubscribe{
 		ChannelIDs: channelIDs, Subscribe: subscribe,
 	}); err != nil {
@@ -232,6 +315,19 @@ func (a *App) Subscriptions() []int64 {
 	if m == nil {
 		return []int64{}
 	}
+	return m.subscriptions()
+}
+
+// SubscriptionsForTab reads the cached subscription set of the displayed server.
+func (a *App) SubscriptionsForTab(tabID string) ([]int64, error) {
+	m, err := a.requireTabCM(tabID)
+	if err != nil {
+		return nil, err
+	}
+	return m.subscriptions(), nil
+}
+
+func (m *connManager) subscriptions() []int64 {
 	m.mu.Lock()
 	raw := m.lastSubscriptions
 	m.mu.Unlock()
@@ -259,6 +355,19 @@ func (a *App) ChatFilterGet() (netproto.ChatFilterResponse, error) {
 	if err != nil {
 		return netproto.ChatFilterResponse{}, err
 	}
+	return m.chatFilterGet()
+}
+
+// ChatFilterGetForTab rejects operations from a different server's dialog.
+func (a *App) ChatFilterGetForTab(tabID string) (netproto.ChatFilterResponse, error) {
+	m, err := a.requireTabCM(tabID)
+	if err != nil {
+		return netproto.ChatFilterResponse{}, err
+	}
+	return m.chatFilterGet()
+}
+
+func (m *connManager) chatFilterGet() (netproto.ChatFilterResponse, error) {
 	f, err := m.request(netproto.MsgChatFilterGet, netproto.MsgChatFilterResponse,
 		netproto.ChatFilterGet{}, 5*time.Second)
 	if err != nil {
@@ -280,6 +389,19 @@ func (a *App) ChatFilterSet(wordFilter, linkBlacklist, linkWhitelist string) (ne
 	if err != nil {
 		return netproto.ChatFilterResponse{}, err
 	}
+	return m.chatFilterSet(wordFilter, linkBlacklist, linkWhitelist)
+}
+
+// ChatFilterSetForTab rejects operations from a different server's dialog.
+func (a *App) ChatFilterSetForTab(tabID string, wordFilter, linkBlacklist, linkWhitelist string) (netproto.ChatFilterResponse, error) {
+	m, err := a.requireTabCM(tabID)
+	if err != nil {
+		return netproto.ChatFilterResponse{}, err
+	}
+	return m.chatFilterSet(wordFilter, linkBlacklist, linkWhitelist)
+}
+
+func (m *connManager) chatFilterSet(wordFilter, linkBlacklist, linkWhitelist string) (netproto.ChatFilterResponse, error) {
 	f, err := m.request(netproto.MsgChatFilterSet, netproto.MsgChatFilterResponse,
 		netproto.ChatFilterSet{
 			WordFilter:    &wordFilter,
@@ -316,7 +438,7 @@ type ChatSearchResult struct {
 	Undecryptable int                         `json:"undecryptable"`
 }
 
-// chatScan pages a scope's history backwards from newest, decrypting each
+// chatScanWith pages a scope's history backwards from newest, decrypting each
 // page with the generations the server bundles alongside it, and hands every
 // entry to visit. Search (110) and export (125) both need the WHOLE scope
 // rather than the window the view happens to hold, so they share one pager —
@@ -326,11 +448,7 @@ type ChatSearchResult struct {
 // It reports how many entries were scanned and whether it reached the
 // beginning of history; complete=false means maxMessages or a mid-scan page
 // error stopped it, so the caller must present a partial result as partial.
-func (a *App) chatScan(channelID int64, maxMessages int, progress string, visit func(netproto.ChatHistoryEntry)) (int, bool, error) {
-	m, err := a.requireCM()
-	if err != nil {
-		return 0, false, err
-	}
+func chatScanWith(m *connManager, channelID int64, maxMessages int, progress, requestID string, visit func(netproto.ChatHistoryEntry)) (int, bool, error) {
 	scanned := 0
 	before := int64(0)
 	for scanned < maxMessages {
@@ -355,7 +473,11 @@ func (a *App) chatScan(channelID int64, maxMessages int, progress string, visit 
 		if progress != "" {
 			// Keep progress with the manager captured before paging. A tab switch
 			// must not send this scan's UI updates into another server tab.
-			m.emit(progress, scanned)
+			if requestID == "" {
+				m.emit(progress, scanned)
+			} else {
+				m.emit(progress, chatScanProgress{RequestID: requestID, Scanned: scanned})
+			}
 		}
 	}
 	return scanned, false, nil
@@ -366,13 +488,38 @@ func (a *App) chatScan(channelID int64, maxMessages int, progress string, visit 
 // newest-first. Search runs entirely client-side: the server stores only
 // ciphertext and cannot match on content (110).
 func (a *App) ChatSearch(channelID int64, query string, maxMessages int) (ChatSearchResult, error) {
+	m, err := a.requireCM()
+	if err != nil {
+		return ChatSearchResult{}, err
+	}
+	return chatSearchWith(m, "", channelID, query, maxMessages)
+}
+
+type chatScanProgress struct {
+	RequestID string `json:"request_id"`
+	Scanned   int    `json:"scanned"`
+}
+
+// ChatSearchForTab binds every page and progress event to the caller's tab and request.
+func (a *App) ChatSearchForTab(tabID, requestID string, channelID int64, query string, maxMessages int) (ChatSearchResult, error) {
+	if len(requestID) == 0 || len(requestID) > 128 {
+		return ChatSearchResult{}, fmt.Errorf("invalid chat scan request ID")
+	}
+	m, err := a.requireTabCM(tabID)
+	if err != nil {
+		return ChatSearchResult{}, err
+	}
+	return chatSearchWith(m, requestID, channelID, query, maxMessages)
+}
+
+func chatSearchWith(m *connManager, requestID string, channelID int64, query string, maxMessages int) (ChatSearchResult, error) {
 	q := strings.ToLower(strings.TrimSpace(query))
 	if maxMessages <= 0 {
 		maxMessages = chatSearchDefaultMax
 	}
 	var out []netproto.ChatHistoryEntry
 	undecryptable := 0
-	scanned, _, err := a.chatScan(channelID, maxMessages, "chatsearch:progress", func(m netproto.ChatHistoryEntry) {
+	scanned, _, err := chatScanWith(m, channelID, maxMessages, "chatsearch:progress", requestID, func(m netproto.ChatHistoryEntry) {
 		if m.Deleted {
 			return
 		}
@@ -446,6 +593,10 @@ type dmLog struct {
 // still retain dmMu for their read-modify-write transaction.
 var dmBeforeRead func()
 
+// dmBeforeWrite lets tests pause an accepted operation after owner capture,
+// before it waits for the disk transaction lock.
+var dmBeforeWrite func()
+
 // dmHistoryDir returns the per-device log directory. An App with no settings
 // path (tests, with the default-path fallback disarmed) gets an error rather
 // than a write into the developer's real config directory.
@@ -469,42 +620,57 @@ func (a *App) dmIdentity() (*identity, error) {
 	return loadOrCreateIdentity()
 }
 
+// dmHistoryStore retains one identity across an entire local operation,
+// including waits for another writer and scans of multiple conversations.
+type dmHistoryStore struct {
+	dir       string
+	publicKey [32]byte
+	key       [32]byte
+}
+
+func (a *App) captureDMHistory() (dmHistoryStore, error) {
+	dir, err := a.dmHistoryDir()
+	if err != nil {
+		return dmHistoryStore{}, err
+	}
+	id, err := a.dmIdentity()
+	if err != nil {
+		return dmHistoryStore{}, err
+	}
+	return dmHistoryStoreForIdentity(dir, id)
+}
+
+func dmHistoryStoreForIdentity(dir string, id *identity) (dmHistoryStore, error) {
+	pub, _, err := id.x25519()
+	if err != nil {
+		return dmHistoryStore{}, err
+	}
+	key, err := dmHistoryKey(id)
+	if err != nil {
+		return dmHistoryStore{}, err
+	}
+	return dmHistoryStore{dir: dir, publicKey: pub, key: key}, nil
+}
+
 // dmHistoryPath names a peer's log from a hash of (own public key, peer), so
 // the file name leaks neither the peer nor the owner.
 func (a *App) dmHistoryPath(peer string) (string, error) {
-	dir, err := a.dmHistoryDir()
+	store, err := a.captureDMHistory()
 	if err != nil {
 		return "", err
 	}
-	id, err := a.dmIdentity()
-	if err != nil {
-		return "", err
-	}
-	pub, _, err := id.x25519()
-	if err != nil {
-		return "", err
-	}
-	sum := sha256.Sum256(append(append([]byte(dmHistoryKeyLabel+"|name|"), pub[:]...), peer...))
-	return filepath.Join(dir, hex.EncodeToString(sum[:])[:32]+dmHistoryExt), nil
+	return store.path(peer), nil
 }
 
-// dmFileKey derives the at-rest key for the local DM logs.
-func (a *App) dmFileKey() ([32]byte, error) {
-	id, err := a.dmIdentity()
-	if err != nil {
-		return [32]byte{}, err
-	}
-	return dmHistoryKey(id)
+func (s dmHistoryStore) path(peer string) string {
+	sum := sha256.Sum256(append(append([]byte(dmHistoryKeyLabel+"|name|"), s.publicKey[:]...), peer...))
+	return filepath.Join(s.dir, hex.EncodeToString(sum[:])[:32]+dmHistoryExt)
 }
 
-// dmLoadLog opens a peer's log. A missing file is an empty log, not an error:
+// load opens a peer's log. A missing file is an empty log, not an error:
 // the first DM with someone is the normal case.
-func (a *App) dmLoadLog(peer string) (dmLog, error) {
-	path, err := a.dmHistoryPath(peer)
-	if err != nil {
-		return dmLog{}, err
-	}
-	root, name, err := openParentRoot(path)
+func (s dmHistoryStore) load(peer string) (dmLog, error) {
+	root, name, err := openParentRoot(s.path(peer))
 	if err != nil {
 		if os.IsNotExist(err) {
 			return dmLog{Peer: peer}, nil
@@ -519,16 +685,12 @@ func (a *App) dmLoadLog(peer string) (dmLog, error) {
 		}
 		return dmLog{}, err
 	}
-	return a.dmOpenBlob(blob)
+	return s.open(blob)
 }
 
-// dmOpenBlob unseals and decodes a log file's bytes.
-func (a *App) dmOpenBlob(blob []byte) (dmLog, error) {
-	key, err := a.dmFileKey()
-	if err != nil {
-		return dmLog{}, err
-	}
-	plain, err := openFile(blob, key)
+// open unseals and decodes a log file's bytes.
+func (s dmHistoryStore) open(blob []byte) (dmLog, error) {
+	plain, err := openFile(blob, s.key)
 	if err != nil {
 		// A log this identity cannot open is not this identity's log. Failing
 		// closed keeps a corrupt or foreign file from being silently replaced.
@@ -541,25 +703,18 @@ func (a *App) dmOpenBlob(blob []byte) (dmLog, error) {
 	return l, nil
 }
 
-// dmSaveLog seals and writes a peer's log, trimming it to the newest
+// save seals and writes a peer's log, trimming it to the newest
 // dmHistoryMax messages.
-func (a *App) dmSaveLog(l dmLog) error {
+func (s dmHistoryStore) save(l dmLog) error {
 	if n := len(l.Messages); n > dmHistoryMax {
 		l.Messages = append([]DMEntry(nil), l.Messages[n-dmHistoryMax:]...)
 	}
-	path, err := a.dmHistoryPath(l.Peer)
-	if err != nil {
-		return err
-	}
-	key, err := a.dmFileKey()
-	if err != nil {
-		return err
-	}
+	path := s.path(l.Peer)
 	raw, err := json.Marshal(l)
 	if err != nil {
 		return err
 	}
-	blob, err := sealFile(raw, key)
+	blob, err := sealFile(raw, s.key)
 	if err != nil {
 		return err
 	}
@@ -599,10 +754,21 @@ func (a *App) DMHistoryLoad(peer string) ([]DMEntry, error) {
 	if peer == "" {
 		return nil, errors.New("peer is required")
 	}
+	store, err := a.captureDMHistory()
+	if err != nil {
+		return nil, err
+	}
+	return store.messages(peer)
+}
+
+func (s dmHistoryStore) messages(peer string) ([]DMEntry, error) {
+	if peer == "" {
+		return nil, errors.New("peer is required")
+	}
 	if hook := dmBeforeRead; hook != nil {
 		hook()
 	}
-	l, err := a.dmLoadLog(peer)
+	l, err := s.load(peer)
 	if err != nil {
 		return nil, err
 	}
@@ -619,9 +785,23 @@ func (a *App) DMHistoryAppend(peer, nickname string, e DMEntry) string {
 	if peer == "" {
 		return "peer is required"
 	}
+	store, err := a.captureDMHistory()
+	if err != nil {
+		return err.Error()
+	}
+	return a.dmHistoryAppendWith(store, peer, nickname, e)
+}
+
+func (a *App) dmHistoryAppendWith(store dmHistoryStore, peer, nickname string, e DMEntry) string {
+	if peer == "" {
+		return "peer is required"
+	}
+	if hook := dmBeforeWrite; hook != nil {
+		hook()
+	}
 	a.dmMu.Lock()
 	defer a.dmMu.Unlock()
-	l, err := a.dmLoadLog(peer)
+	l, err := store.load(peer)
 	if err != nil {
 		return err.Error()
 	}
@@ -649,7 +829,7 @@ func (a *App) DMHistoryAppend(peer, nickname string, e DMEntry) string {
 		}
 	}
 	l.Messages = append(l.Messages, e)
-	if err := a.dmSaveLog(l); err != nil {
+	if err := store.save(l); err != nil {
 		return err.Error()
 	}
 	return ""
@@ -660,13 +840,23 @@ func (a *App) DMHistoryClear(peer string) string {
 	if peer == "" {
 		return "peer is required"
 	}
-	a.dmMu.Lock()
-	defer a.dmMu.Unlock()
-	path, err := a.dmHistoryPath(peer)
+	store, err := a.captureDMHistory()
 	if err != nil {
 		return err.Error()
 	}
-	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+	return a.dmHistoryClearWith(store, peer)
+}
+
+func (a *App) dmHistoryClearWith(store dmHistoryStore, peer string) string {
+	if peer == "" {
+		return "peer is required"
+	}
+	if hook := dmBeforeWrite; hook != nil {
+		hook()
+	}
+	a.dmMu.Lock()
+	defer a.dmMu.Unlock()
+	if err := os.Remove(store.path(peer)); err != nil && !os.IsNotExist(err) {
 		return err.Error()
 	}
 	return ""
@@ -676,12 +866,16 @@ func (a *App) DMHistoryClear(peer string) string {
 // survive a restart. Logs sealed to a different identity are skipped rather
 // than reported: they are not this user's conversations.
 func (a *App) DMHistoryPeers() []DMPeer {
-	out := []DMPeer{}
-	dir, err := a.dmHistoryDir()
+	store, err := a.captureDMHistory()
 	if err != nil {
-		return out
+		return []DMPeer{}
 	}
-	root, err := os.OpenRoot(dir)
+	return store.peers()
+}
+
+func (s dmHistoryStore) peers() []DMPeer {
+	out := []DMPeer{}
+	root, err := os.OpenRoot(s.dir)
 	if err != nil {
 		return out
 	}
@@ -698,7 +892,7 @@ func (a *App) DMHistoryPeers() []DMPeer {
 		if err != nil {
 			continue
 		}
-		l, err := a.dmOpenBlob(blob)
+		l, err := s.open(blob)
 		if err != nil || l.Peer == "" {
 			continue
 		}
@@ -718,6 +912,15 @@ func (a *App) DMHistoryPeers() []DMPeer {
 // conversation. EncVerified is true because these bodies were opened by this
 // client from true-E2EE ciphertext before they were ever written down.
 func (a *App) DMSearch(peer, query string, maxMessages int) (ChatSearchResult, error) {
+	store, err := a.captureDMHistory()
+	if err != nil {
+		return ChatSearchResult{Messages: []netproto.ChatHistoryEntry{}}, nil
+	}
+	return store.search(peer, query, maxMessages), nil
+}
+
+func (s dmHistoryStore) search(peer, query string, maxMessages int) ChatSearchResult {
+	res := ChatSearchResult{Messages: []netproto.ChatHistoryEntry{}}
 	q := strings.ToLower(strings.TrimSpace(query))
 	if maxMessages <= 0 {
 		maxMessages = chatSearchDefaultMax
@@ -725,23 +928,22 @@ func (a *App) DMSearch(peer, query string, maxMessages int) (ChatSearchResult, e
 	peers := []string{peer}
 	if peer == "" {
 		peers = nil
-		for _, p := range a.DMHistoryPeers() {
+		for _, p := range s.peers() {
 			peers = append(peers, p.UniqueID)
 		}
 	}
 
-	res := ChatSearchResult{Messages: []netproto.ChatHistoryEntry{}}
 	for _, uid := range peers {
 		if hook := dmBeforeRead; hook != nil {
 			hook()
 		}
-		l, err := a.dmLoadLog(uid)
+		l, err := s.load(uid)
 		if err != nil {
 			continue
 		}
 		for i := len(l.Messages) - 1; i >= 0; i-- { // newest first, like ChatSearch
 			if res.Scanned >= maxMessages {
-				return res, nil
+				return res
 			}
 			m := l.Messages[i]
 			res.Scanned++
@@ -758,7 +960,7 @@ func (a *App) DMSearch(peer, query string, maxMessages int) (ChatSearchResult, e
 			})
 		}
 	}
-	return res, nil
+	return res
 }
 
 // ChatReact toggles a reaction on a message.
@@ -767,9 +969,24 @@ func (a *App) ChatReact(messageID int64, emoji string) string {
 	if err != nil {
 		return err.Error()
 	}
-	if err := m.write(netproto.MsgChatReact, netproto.ChatReact{
-		MessageID: messageID, Emoji: emoji,
-	}); err != nil {
+	return chatReactWith(m, messageID, emoji)
+}
+
+// ChatReactForTab binds the reaction to its original server.
+func (a *App) ChatReactForTab(tabID string, messageID int64, emoji string) string {
+	m, err := a.requireTabCM(tabID)
+	if err != nil {
+		return err.Error()
+	}
+	return chatReactWith(m, messageID, emoji)
+}
+
+func chatReactWith(m *connManager, messageID int64, emoji string) string {
+	ack := m.usesRoleAuthorization()
+	if err := m.writeChatMutation(netproto.MsgChatReact, messageID, netproto.ChatReact{
+		AckRequested: ack,
+		MessageID:    messageID, Emoji: emoji,
+	}, ack); err != nil {
 		return err.Error()
 	}
 	return ""
@@ -781,6 +998,19 @@ func (a *App) SendTyping(channelID int64, toUniqueID string) string {
 	if err != nil {
 		return err.Error()
 	}
+	return sendTypingWith(m, channelID, toUniqueID)
+}
+
+// SendTypingForTab sends activity only through the displayed server.
+func (a *App) SendTypingForTab(tabID string, channelID int64, toUniqueID string) string {
+	m, err := a.requireTabCM(tabID)
+	if err != nil {
+		return err.Error()
+	}
+	return sendTypingWith(m, channelID, toUniqueID)
+}
+
+func sendTypingWith(m *connManager, channelID int64, toUniqueID string) string {
 	if err := m.write(netproto.MsgTyping, netproto.Typing{
 		ChannelID: channelID, ToUniqueID: toUniqueID,
 	}); err != nil {
@@ -795,6 +1025,19 @@ func (a *App) SendChatDelivered(toUniqueID, clientMsgID string) string {
 	if err != nil {
 		return err.Error()
 	}
+	return sendChatDeliveredWith(m, toUniqueID, clientMsgID)
+}
+
+// SendChatDeliveredForTab binds a delivery receipt to its source server.
+func (a *App) SendChatDeliveredForTab(tabID, toUniqueID, clientMsgID string) string {
+	m, err := a.requireTabCM(tabID)
+	if err != nil {
+		return err.Error()
+	}
+	return sendChatDeliveredWith(m, toUniqueID, clientMsgID)
+}
+
+func sendChatDeliveredWith(m *connManager, toUniqueID, clientMsgID string) string {
 	if err := m.write(netproto.MsgChatDelivered, netproto.ChatDelivered{
 		ToUniqueID: toUniqueID, ClientMsgID: clientMsgID,
 	}); err != nil {
@@ -809,6 +1052,19 @@ func (a *App) SendChatRead(toUniqueID, clientMsgID string) string {
 	if err != nil {
 		return err.Error()
 	}
+	return sendChatReadWith(m, toUniqueID, clientMsgID)
+}
+
+// SendChatReadForTab binds a read receipt to its source server.
+func (a *App) SendChatReadForTab(tabID, toUniqueID, clientMsgID string) string {
+	m, err := a.requireTabCM(tabID)
+	if err != nil {
+		return err.Error()
+	}
+	return sendChatReadWith(m, toUniqueID, clientMsgID)
+}
+
+func sendChatReadWith(m *connManager, toUniqueID, clientMsgID string) string {
 	if err := m.write(netproto.MsgChatRead, netproto.ChatRead{
 		ToUniqueID: toUniqueID, ClientMsgID: clientMsgID,
 	}); err != nil {
@@ -823,16 +1079,26 @@ func (a *App) SendChatRead(toUniqueID, clientMsgID string) string {
 
 // EmojiList lists the server's custom emojis.
 // EmojiUpload uploads a custom server emoji (96). The server gates it on
-// b_emoji_upload and rejects oversized images, so failures come back as an
-// error frame rather than a return value here.
+// ManageEmoji in role mode and waits for the storage result before succeeding.
 func (a *App) EmojiUpload(name, dataBase64 string) string {
 	m, err := a.requireCM()
 	if err != nil {
 		return err.Error()
 	}
-	if err := m.write(netproto.MsgEmojiUpload, netproto.EmojiUpload{
-		Name: name, DataBase64: dataBase64,
-	}); err != nil {
+	return m.emojiUpload(name, dataBase64)
+}
+
+// EmojiUploadForTab rejects uploads from another server's view.
+func (a *App) EmojiUploadForTab(tabID, name, dataBase64 string) string {
+	m, err := a.requireTabCM(tabID)
+	if err != nil {
+		return err.Error()
+	}
+	return m.emojiUpload(name, dataBase64)
+}
+
+func (m *connManager) emojiUpload(name, dataBase64 string) string {
+	if err := m.mutateAsset(netproto.MsgEmojiUpload, name, "", dataBase64); err != nil {
 		return err.Error()
 	}
 	return ""
@@ -843,6 +1109,19 @@ func (a *App) EmojiList() (netproto.EmojiListResponse, error) {
 	if err != nil {
 		return netproto.EmojiListResponse{}, err
 	}
+	return m.emojiList()
+}
+
+// EmojiListForTab keeps emoji discovery on the originating server.
+func (a *App) EmojiListForTab(tabID string) (netproto.EmojiListResponse, error) {
+	m, err := a.requireTabCM(tabID)
+	if err != nil {
+		return netproto.EmojiListResponse{}, err
+	}
+	return m.emojiList()
+}
+
+func (m *connManager) emojiList() (netproto.EmojiListResponse, error) {
 	f, err := m.request(netproto.MsgEmojiList, netproto.MsgEmojiListResponse,
 		netproto.EmojiList{}, 10*time.Second)
 	if err != nil {
@@ -861,6 +1140,19 @@ func (a *App) EmojiGet(name string) (netproto.EmojiData, error) {
 	if err != nil {
 		return netproto.EmojiData{}, err
 	}
+	return m.emojiGet(name)
+}
+
+// EmojiGetForTab keeps emoji images on the originating server.
+func (a *App) EmojiGetForTab(tabID, name string) (netproto.EmojiData, error) {
+	m, err := a.requireTabCM(tabID)
+	if err != nil {
+		return netproto.EmojiData{}, err
+	}
+	return m.emojiGet(name)
+}
+
+func (m *connManager) emojiGet(name string) (netproto.EmojiData, error) {
 	f, err := m.request(netproto.MsgEmojiGet, netproto.MsgEmojiData,
 		netproto.EmojiGet{Name: name}, 10*time.Second)
 	if err != nil {
@@ -969,6 +1261,10 @@ func (a *App) ftPutBytes(channelID int64, name string, data []byte) error {
 	if err != nil {
 		return err
 	}
+	return ftPutBytesWith(cm, channelID, name, data)
+}
+
+func ftPutBytesWith(cm *connManager, channelID int64, name string, data []byte) error {
 	f, err := cm.request(netproto.MsgFileTransferInit, netproto.MsgFileTransferInitResponse,
 		netproto.FileTransferInit{ChannelID: channelID, Direction: "upload", Name: name, Size: int64(len(data))},
 		10*time.Second)
@@ -1083,6 +1379,23 @@ func parseFileRef(capture string) (storage, keyB64, name string) {
 // The key only ever exists inside the (encrypted) message body, so the file
 // gets exactly the protection the message text gets.
 func (a *App) UploadChatAttachment(channelID int64, name, dataBase64 string) (string, error) {
+	cm, err := a.requireCM()
+	if err != nil {
+		return "", err
+	}
+	return uploadChatAttachmentWith(cm, channelID, name, dataBase64)
+}
+
+// UploadChatAttachmentForTab captures the server before preparing encrypted bytes.
+func (a *App) UploadChatAttachmentForTab(tabID string, channelID int64, name, dataBase64 string) (string, error) {
+	cm, err := a.requireTabCM(tabID)
+	if err != nil {
+		return "", err
+	}
+	return uploadChatAttachmentWith(cm, channelID, name, dataBase64)
+}
+
+func uploadChatAttachmentWith(cm *connManager, channelID int64, name, dataBase64 string) (string, error) {
 	data, err := io.ReadAll(io.LimitReader(
 		base64.NewDecoder(base64.StdEncoding, strings.NewReader(dataBase64)),
 		int64(maxChatAttachmentBytes)+1,
@@ -1102,7 +1415,7 @@ func (a *App) UploadChatAttachment(channelID int64, name, dataBase64 string) (st
 		return "", err
 	}
 	storage := attachmentStorageName(blob)
-	if err := a.ftPutBytes(channelID, storage, blob); err != nil {
+	if err := ftPutBytesWith(cm, channelID, storage, blob); err != nil {
 		return "", err
 	}
 	return "[file:" + storage + "#" + base64.StdEncoding.EncodeToString(key[:]) +
@@ -1192,6 +1505,20 @@ func (a *App) chatAttachmentBytes(channelID int64, storage, keyB64 string) ([]by
 // downloads a plain legacy [file:photo.png] reference.
 func (a *App) DownloadChatAttachment(channelID int64, storage, keyB64 string) (string, error) {
 	plain, err := a.chatAttachmentBytes(channelID, storage, keyB64)
+	return inlineChatAttachment(plain, err)
+}
+
+// DownloadChatAttachmentForTab binds an inline preview to its source server.
+func (a *App) DownloadChatAttachmentForTab(tabID string, channelID int64, storage, keyB64 string) (string, error) {
+	cm, err := a.requireTabCM(tabID)
+	if err != nil {
+		return "", err
+	}
+	plain, err := a.chatAttachmentBytesForCM(cm, channelID, storage, keyB64)
+	return inlineChatAttachment(plain, err)
+}
+
+func inlineChatAttachment(plain []byte, err error) (string, error) {
 	if err != nil {
 		return "", err
 	}
@@ -1314,6 +1641,19 @@ func (a *App) SaveChatAttachment(channelID int64, storage, keyB64, defaultName s
 	// the dialog is open must not redirect the selected attachment to another
 	// server; no network operation occurs until after the user chooses a path.
 	cm := a.cmLoad()
+	return a.saveChatAttachmentWith(cm, channelID, storage, keyB64, defaultName)
+}
+
+// SaveChatAttachmentForTab rejects stale tabs before opening the native dialog.
+func (a *App) SaveChatAttachmentForTab(tabID string, channelID int64, storage, keyB64, defaultName string) (string, error) {
+	cm, err := a.requireTabCM(tabID)
+	if err != nil {
+		return "", err
+	}
+	return a.saveChatAttachmentWith(cm, channelID, storage, keyB64, defaultName)
+}
+
+func (a *App) saveChatAttachmentWith(cm *connManager, channelID int64, storage, keyB64, defaultName string) (string, error) {
 	dest, err := a.chooseChatAttachmentPath(defaultName)
 	if err != nil || dest == "" {
 		return dest, err
@@ -1647,12 +1987,32 @@ type ChatExportResult struct {
 // never disagree about which generations they could open. Progress lands on
 // the "chatexport:progress" event as the running scanned count.
 func (a *App) ChatExportHistory(channelID int64, maxMessages int) (ChatExportResult, error) {
+	m, err := a.requireCM()
+	if err != nil {
+		return ChatExportResult{}, err
+	}
+	return chatExportHistoryWith(m, "", channelID, maxMessages)
+}
+
+// ChatExportHistoryForTab captures the confirmed source before the first page.
+func (a *App) ChatExportHistoryForTab(tabID, requestID string, channelID int64, maxMessages int) (ChatExportResult, error) {
+	if len(requestID) == 0 || len(requestID) > 128 {
+		return ChatExportResult{}, fmt.Errorf("invalid chat scan request ID")
+	}
+	m, err := a.requireTabCM(tabID)
+	if err != nil {
+		return ChatExportResult{}, err
+	}
+	return chatExportHistoryWith(m, requestID, channelID, maxMessages)
+}
+
+func chatExportHistoryWith(m *connManager, requestID string, channelID int64, maxMessages int) (ChatExportResult, error) {
 	if maxMessages <= 0 {
 		maxMessages = chatExportDefaultMax
 	}
 	var lines []string
 	undecryptable := 0
-	scanned, complete, err := a.chatScan(channelID, maxMessages, "chatexport:progress", func(m netproto.ChatHistoryEntry) {
+	scanned, complete, err := chatScanWith(m, channelID, maxMessages, "chatexport:progress", requestID, func(m netproto.ChatHistoryEntry) {
 		if !m.Deleted && !m.EncVerified {
 			undecryptable++
 		}
@@ -1661,7 +2021,7 @@ func (a *App) ChatExportHistory(channelID int64, maxMessages int) (ChatExportRes
 	if err != nil {
 		return ChatExportResult{}, err
 	}
-	// chatScan walks newest-first; a transcript reads oldest-first.
+	// chatScanWith walks newest-first; a transcript reads oldest-first.
 	for i, j := 0, len(lines)-1; i < j; i, j = i+1, j-1 {
 		lines[i], lines[j] = lines[j], lines[i]
 	}
@@ -1711,6 +2071,10 @@ func (a *App) DMExportHistory(peer string) (ChatExportResult, error) {
 	if err != nil {
 		return ChatExportResult{}, err
 	}
+	return dmExportMessages(msgs), nil
+}
+
+func dmExportMessages(msgs []DMEntry) ChatExportResult {
 	lines := make([]string, 0, len(msgs))
 	for _, m := range msgs {
 		lines = append(lines, chatExportLine(netproto.ChatHistoryEntry{
@@ -1724,7 +2088,7 @@ func (a *App) DMExportHistory(peer string) (ChatExportResult, error) {
 	if len(lines) > 0 {
 		text = strings.Join(lines, "\n") + "\n"
 	}
-	return ChatExportResult{Text: text, Messages: len(msgs), Complete: true}, nil
+	return ChatExportResult{Text: text, Messages: len(msgs), Complete: true}
 }
 
 // ExportChat saves text to a user-chosen file via the native save dialog.

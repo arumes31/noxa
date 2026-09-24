@@ -76,9 +76,12 @@ func TestForwardVideoFanout(t *testing.T) {
 	r.JoinChannel(1, "b")
 	r.JoinChannel(1, "c")
 	r.JoinChannel(1, "pub") // creates (b,pub) and (c,pub) video tracks
+	testVideoPublication(t, r, "pub", "b", SlotCam)
+	testVideoPublication(t, r, "pub", "c", SlotCam)
 	registerVideoSource(r, "pub", SlotCam, "", 9001)
 
 	pkt := makeAudioPacket(t, 1, -1) // packet contents don't matter here
+	pkt.Payload = boundsKeyPacket(1, 1, 640, 360).Payload
 	if sent := r.ForwardVideo("pub", SlotCam, "", pkt); sent != 2 {
 		t.Fatalf("ForwardVideo sent = %d, want 2", sent)
 	}
@@ -100,6 +103,9 @@ func TestSimulcastLayerSelection(t *testing.T) {
 		r.JoinChannel(1, id)
 	}
 	r.JoinChannel(1, "pub")
+	for _, id := range []string{"hi", "mid", "lo", "def"} {
+		testVideoPublication(t, r, "pub", id, SlotCam)
+	}
 
 	if err := r.SetVideoQuality("hi", "high"); err != nil {
 		t.Fatalf("SetVideoQuality: %v", err)
@@ -117,6 +123,7 @@ func TestSimulcastLayerSelection(t *testing.T) {
 	registerVideoSource(r, "pub", SlotCam, "q", 9003)
 
 	pkt := makeAudioPacket(t, 1, -1)
+	pkt.Payload = boundsKeyPacket(1, 1, 640, 360).Payload
 	if sent := r.ForwardVideo("pub", SlotCam, "f", pkt); sent != 1 {
 		t.Errorf("layer f sent = %d, want 1 (high subscriber only)", sent)
 	}
@@ -144,6 +151,8 @@ func TestSimulcastFallback(t *testing.T) {
 	r.JoinChannel(1, "mid")
 	r.JoinChannel(1, "lo")
 	r.JoinChannel(1, "pub")
+	testVideoPublication(t, r, "pub", "mid", SlotCam)
+	testVideoPublication(t, r, "pub", "lo", SlotCam)
 
 	if err := r.SetVideoQuality("mid", "mid"); err != nil {
 		t.Fatalf("SetVideoQuality: %v", err)
@@ -157,6 +166,7 @@ func TestSimulcastFallback(t *testing.T) {
 	registerVideoSource(r, "pub", SlotCam, "f", 9001)
 
 	pkt := makeAudioPacket(t, 1, -1)
+	pkt.Payload = boundsKeyPacket(1, 1, 640, 360).Payload
 	if sent := r.ForwardVideo("pub", SlotCam, "f", pkt); sent != 2 {
 		t.Errorf("layer f sent = %d, want 2 (both fall back to f)", sent)
 	}
@@ -179,12 +189,14 @@ func TestNonSimulcastAcceptsAll(t *testing.T) {
 	attachFakePeer(t, e, r, "lo")
 	r.JoinChannel(1, "lo")
 	r.JoinChannel(1, "pub")
+	testVideoPublication(t, r, "pub", "lo", SlotCam)
 	if err := r.SetVideoQuality("lo", "low"); err != nil {
 		t.Fatalf("SetVideoQuality: %v", err)
 	}
 
 	registerVideoSource(r, "pub", SlotCam, "", 9001) // no simulcast
 	pkt := makeAudioPacket(t, 1, -1)
+	pkt.Payload = boundsKeyPacket(1, 1, 640, 360).Payload
 	if sent := r.ForwardVideo("pub", SlotCam, "", pkt); sent != 1 {
 		t.Fatalf("ForwardVideo sent = %d, want 1", sent)
 	}
@@ -260,8 +272,9 @@ func TestRelayKeyframeRequest(t *testing.T) {
 	r.rtcpWriters["pub"] = pub
 	r.mu.Unlock()
 	registerVideoSource(r, "pub", SlotCam, "f", 9001)
-
-	r.relayKeyframeRequest(9001)
+	sender := &webrtc.RTPSender{}
+	r.pubTracks["viewer"] = map[string]*pubTrack{"pub": {video: map[string]*pubSlot{SlotCam: {sender: sender}}}}
+	r.relayKeyframeRequest("viewer", sender)
 	if got := pub.pliCount(); got != 1 {
 		t.Fatalf("relayed PLIs = %d, want 1", got)
 	}
@@ -270,10 +283,49 @@ func TestRelayKeyframeRequest(t *testing.T) {
 		t.Fatalf("relayed PLI MediaSSRC = %d, want 9001", pli.MediaSSRC)
 	}
 
-	// Unknown SSRC: no relay.
-	r.relayKeyframeRequest(424242)
+	// An unknown or another subscriber's binding cannot request a frame.
+	r.relayKeyframeRequest("viewer", &webrtc.RTPSender{})
+	r.relayKeyframeRequest("other", sender)
 	if got := pub.pliCount(); got != 1 {
 		t.Fatalf("relayed PLIs after unknown SSRC = %d, want 1", got)
+	}
+}
+
+func TestRelayKeyframeRequestUsesSubscriberBinding(t *testing.T) {
+	pc, err := webrtc.NewPeerConnection(webrtc.Configuration{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = pc.Close() })
+	track, err := webrtc.NewTrackLocalStaticRTP(webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeVP8}, "cam", "publisher")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sender, err := pc.AddTrack(track)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := NewRouter(nil)
+	pub := &fakeRTCPWriter{}
+	r.rtcpWriters["pub"] = pub
+	r.pubTracks["viewer"] = map[string]*pubTrack{"pub": {video: map[string]*pubSlot{SlotCam: {sender: sender}}}}
+	registerVideoSource(r, "pub", SlotCam, "h", 9001)
+	ssrc := uint32(sender.GetParameters().Encodings[0].SSRC)
+	if ssrc == 9001 {
+		t.Fatal("test needs different publisher and subscriber SSRCs")
+	}
+	r.relayKeyframeRequest("viewer", sender)
+	if pub.pliCount() != 1 {
+		t.Fatal("subscriber's rewritten SSRC did not reach publisher")
+	}
+	if got := pub.pkts[0][0].(*rtcp.PictureLossIndication).MediaSSRC; got != 9001 {
+		t.Fatalf("keyframe requested wrong source: %d", got)
+	}
+	delete(r.pubTracks["viewer"], "pub")
+	clear(r.keyframeLast)
+	r.relayKeyframeRequest("viewer", sender)
+	if pub.pliCount() != 1 {
+		t.Fatal("removed binding requested a keyframe")
 	}
 }
 

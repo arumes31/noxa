@@ -286,5 +286,14 @@
     "rmsDB": -44.77110811381544,
     "targetRmsDB": -42,
     "sha256": "dd33bae64830aff691a58f9a456a0714955c376d9e71409528f3b3c3f4cca37c"
+  },
+  "stream_watch_started": {
+    "title": "noXa \u2014 Someone started watching your stream",
+    "duration": 0.185,
+    "peak": 0.07501220703125,
+    "dc": 5.154996304898649e-08,
+    "rmsDB": -45.87141902911151,
+    "targetRmsDB": -37,
+    "sha256": "62e79a9cd59650f388e2a4b591034cc2c41f7f4889b63553fbb23420a9bb0ba1"
   }
 }

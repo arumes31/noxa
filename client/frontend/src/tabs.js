@@ -6,6 +6,7 @@
 // on "tab_reset" we clear chat/tree and the replay rebuilds them.
 import { closeServerDialogs } from "./modal.js";
 import { clearSpeech } from "./sounds.js";
+import { initConversations } from "./conversations.js";
 
 const V = () => window.__noxa;
 const App = () => window.go.main.App;
@@ -144,37 +145,32 @@ function renderTabs(tabs) {
 }
 
 // refreshTabIdentity re-reads the identity of the newly activated connection
-// (281). Client ID, admin flag and the connect record are per server: a stale
+// (281). Client ID and the connect record are per server: a stale
 // one mis-keys priority ducking, the quality sampler, recent channels (320)
 // and every action that reports "the current server address".
 async function refreshTabIdentity(tabID) {
     const { state } = V();
-    const activatedTabID = tabID;
+    const generation = state.serverGeneration;
+    const sessionGeneration = state.sessionGeneration;
+    const current = () => activeTabID === tabID && state.serverGeneration === generation && state.sessionGeneration === sessionGeneration;
     if (!tabID) {
         state.myClientID = "";
         state.myNickname = "";
-        state.isAdmin = false;
         state.isGuest = true;
+        state.authorizationModel = "";
         state.lastConnect = null;
         return;
     }
-    let myClientID = "";
-    try { myClientID = await App().ClientID(); } catch { /* disconnected */ }
-    if (activeTabID !== activatedTabID) return;
-    state.myClientID = myClientID;
+    let session;
+    try { session = await App().SessionInfoForTab(tabID); } catch { return; }
+    if (!current()) return;
+    state.myClientID = session.client_id;
+    state.isGuest = session.is_guest;
+    state.authorizationModel = session.authorization_model || "";
     // The tab's replayed snapshot (and even an immediate join event) may have
-    // arrived while ClientID was pending. Resolve our channel from that state
+    // arrived while the session snapshot was pending. Resolve our channel from that state
     // now so the move cannot be mistaken for another user's.
     V().syncOwnChannel({ audible: false });
-    let isAdmin = false;
-    try { isAdmin = await App().IsAdmin(); } catch { /* disconnected */ }
-    if (activeTabID !== activatedTabID) return;
-    state.isAdmin = isAdmin;
-    let isGuest = true;
-    try { isGuest = await App().IsGuest(); } catch { /* disconnected */ }
-    if (activeTabID !== activatedTabID) return;
-    state.isGuest = isGuest;
-    window.__noxaPerms?.redeemPendingToken?.();
     const saved = state.tabConnects.get(tabID);
     if (saved) {
         state.lastConnect = saved;
@@ -186,15 +182,18 @@ async function refreshTabIdentity(tabID) {
         try {
             info = (await App().ListTabs()).find((x) => x.id === tabID) || null;
         } catch { /* keep the address unknown until the next refresh */ }
-        if (activeTabID !== activatedTabID) return;
-        state.lastConnect = info
+        if (!current()) return;
+        // The login can finish while ListTabs is pending. Its credential-bearing
+        // record takes precedence over this metadata-only fallback.
+        state.lastConnect = state.tabConnects.get(tabID) || (info
             ? { addr: info.addr, nick: info.nickname, pw: "", spw: "", bookmark: "" }
-            : null;
+            : null);
         if (info) state.tabConnects.set(tabID, state.lastConnect);
     }
     state.myNickname = state.lastConnect ? state.lastConnect.nick : "";
     if (state.lastConnect) state.lastSuccessfulConnect = { ...state.lastConnect };
     V().renderTree();
+    return session;
 }
 
 // onTabReset clears all per-server view state before the backend replays
@@ -211,6 +210,9 @@ function onTabReset(tabID) {
     state.pendingInitialChannelCueTabID = !restoringKnownTab && activeTabID ? activeTabID : "";
     const preserveReconnectAnnouncements = !!state.reconnectInFlight;
     state.serverGeneration = (state.serverGeneration || 0) + 1;
+    const generation = state.serverGeneration;
+    const sessionGeneration = state.sessionGeneration;
+    const current = () => activeTabID === tabID && state.serverGeneration === generation && state.sessionGeneration === sessionGeneration;
     // RTT belongs to one server identity. Clear the old sample before replay
     // and restart only after the new tab's identity has been resolved.
     V().stopQualitySampler?.();
@@ -221,6 +223,7 @@ function onTabReset(tabID) {
         ? "Connection status is refreshing"
         : "Offline — no current RTT sample";
     closeServerDialogs();
+    V().stopPrivateCall?.();
     // Voice is active-tab only: fully tear down capture and WebRTC before the
     // replayed channel state automatically starts the new tab's session.
     V().resetVoiceSession();
@@ -228,16 +231,17 @@ function onTabReset(tabID) {
     state.clients = [];
     state.myClientID = "";
     state.myNickname = "";
-    state.myPerms = new Map();
-    state.serverGroups = [];
-    state.groupByUID = new Map();
-    state.groupIcons = new Map();
     state.avatars = new Map();
     state.avatarPending = new Set();
-    state.isAdmin = false;
     state.isGuest = true;
+    state.authorizationModel = tabID ? "pending" : "";
     state.myPriority = false;
+    state.whisperArmed = false;
+    state.whisperTargetUID = "";
+    state.whisperPrev = null;
+    state.lastWhispererUID = "";
     state.myStatus = "";
+    state.canSetInvisible = false;
     window.__noxaNotify?.resetBuddyWatch(); // (383) buddy alerts re-arm per connect
     window.__noxaNotify?.resetServerRules?.(); // (216) gate belongs to one server tab
     state.myChannelID = 0;
@@ -253,21 +257,18 @@ function onTabReset(tabID) {
     window.__noxaSocial?.resetServerView?.();
     V().renderTree();
     V().refreshPermissions();
-    window.__noxaPerms?.refreshGroups?.().then(() => {
-        if (activeTabID === tabID) V().renderTree();
-    });
-    refreshTabIdentity(tabID).then(async () => {
-        if (activeTabID !== tabID) return;
-        let connected = false;
-        try { connected = !!(await App().Connected()); } catch { /* disconnected */ }
-        if (activeTabID !== tabID) return;
-        if (connected && state.myClientID) {
+    refreshTabIdentity(tabID).then(async (session) => {
+        if (!current() || !session) return;
+        V().refreshPermissions();
+        if (session.connected && state.myClientID) {
+            initConversations();
             connectionPill.textContent = state.lastConnect?.addr || "connected";
             connectionPill.classList.add("up");
             connectionPill.title = "";
             V().startQualitySampler?.();
+            V().noteActivity?.();
             await V().checkCertificateClock?.(state.lastConnect?.addr || "", tabID);
-            if (activeTabID !== tabID) return;
+            if (!current()) return;
         } else {
             connectionPill.textContent = state.lastConnect?.addr
                 ? `${state.lastConnect.addr} (offline)`
@@ -297,6 +298,7 @@ async function autoConnectBookmarks() {
             // Account login needed: prefill for the user.
             const { $ } = V();
             $("login-addr").value = b.addr;
+            $("login-accountpw").value = "";
             $("login-nick").value = nick;
             V().state.pendingBookmark = { name: b.name, addr: b.addr };
             V().sysMsg?.("auto-connect needs your password for " + b.addr);
@@ -311,12 +313,16 @@ async function autoConnectBookmarks() {
     }
 }
 
-// quickConnectLast connects the most recently used bookmark in a new tab
-// (285, default Ctrl+Shift+C).
-async function quickConnectLast() {
+function quickConnectTarget() {
     const bms = V().state.settings?.bookmarks || [];
     const recents = V().state.settings?.recents || [];
     const target = bms[bms.length - 1] || recents[0];
+    return target ? { ...target } : null;
+}
+
+// quickConnectLast connects the most recently used bookmark in a new tab
+// (285, default Ctrl+Shift+C). Tray callers pass their captured target.
+async function quickConnectLast(target = quickConnectTarget(), isCancelled = () => false) {
     if (!target) {
         V().toast("no bookmark or recent server to quick-connect", "warn");
         return;
@@ -329,10 +335,18 @@ async function quickConnectLast() {
     const requestTabID = activeTabID;
     const { error: err, tabID } = await connectGuestBookmarkWithID(
         target.name || "", target.addr, nick);
+    if (isCancelled()) {
+        if (!err && tabID) {
+            try { await App().CloseTab(tabID); } catch { /* best-effort stale-tab cleanup */ }
+        }
+        return;
+    }
     if (err !== "") {
+        if (requestServerGeneration !== V().state.serverGeneration || requestTabID !== activeTabID) return;
         playSourceConnectionFailure(requestTabID, requestServerGeneration);
         const { $ } = V();
         $("login-addr").value = target.addr;
+        $("login-accountpw").value = "";
         $("login-nick").value = nick;
         V().showLogin();
         // stashed after showLogin, which drops the previous login's stash: a
@@ -368,6 +382,7 @@ function renderRecents() {
         label.textContent = serverLabel;
         label.onclick = () => {
             document.getElementById("login-addr").value = r.addr;
+            document.getElementById("login-accountpw").value = "";
             document.getElementById("login-nick").value = r.nickname || "";
         };
         const edit = row.querySelector(".recent-edit");
@@ -377,6 +392,7 @@ function renderRecents() {
             event.stopPropagation();
             const addr = document.getElementById("login-addr");
             addr.value = r.addr;
+            document.getElementById("login-accountpw").value = "";
             document.getElementById("login-nick").value = r.nickname || "";
             V().state.pendingBookmark = null;
             addr.focus();
@@ -417,5 +433,5 @@ export function initTabs() {
     // (286) auto-connect flagged bookmarks once settings are loaded.
     setTimeout(autoConnectBookmarks, 300);
 
-    window.__noxaTabs = { renderTabs, quickConnectLast, renderRecents };
+    window.__noxaTabs = { renderTabs, quickConnectLast, quickConnectTarget, renderRecents };
 }

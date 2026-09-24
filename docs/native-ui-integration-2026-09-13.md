@@ -437,11 +437,15 @@ PowerShell 7.4+, Docker, Go and Node/npm. A fresh run builds the actual server a
 Wails client, creates labeled loopback-only PostgreSQL/Redis containers, waits for
 readiness, and launches three independent profiles. It records exact process
 paths/start times, container IDs/labels and build hashes. It does not automate
-native interaction or preconfigure roles.
+native interaction. As of 23 September, it provisions disposable Alice/Bob/owner
+accounts and activates roles-v1 before starting the server. Credentials and the
+live-test environment are retained in the run's access-restricted `secrets`
+directory; the `test` action loads and restores that environment automatically.
 
 ```powershell
 pwsh -File ./scripts/native-ui-session.ps1 start -RunId ui-rerun-20260913-02 -BasePort 13583
 pwsh -File ./scripts/native-ui-session.ps1 status -RunId ui-rerun-20260913-02
+pwsh -File ./scripts/native-ui-session.ps1 test -RunId ui-rerun-20260913-02
 pwsh -File ./scripts/native-ui-session.ps1 stop -RunId ui-rerun-20260913-02
 ```
 

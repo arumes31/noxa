@@ -8,6 +8,24 @@ import (
 	"time"
 )
 
+func TestExplicitQuitBypassesCloseToTray(t *testing.T) {
+	originalQuit := wailsQuit
+	t.Cleanup(func() { wailsQuit = originalQuit })
+	app := &App{ctx: context.Background(), settings: DefaultSettings()}
+	app.settings.CloseToTray = true
+	called := false
+	wailsQuit = func(ctx context.Context) {
+		called = true
+		if app.beforeClose(ctx) {
+			t.Error("explicit quit was cancelled")
+		}
+	}
+	app.Quit()
+	if !called || !app.settings.CloseToTray {
+		t.Fatal("quit must run without changing close preference")
+	}
+}
+
 func TestApplyAndRestartRequiresWindowContext(t *testing.T) {
 	if got := (&App{}).ApplyAndRestart(); got == "" {
 		t.Fatal("restart without a live application context succeeded")

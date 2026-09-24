@@ -482,6 +482,32 @@ func (s *Store) SetServerSettings(ctx context.Context, values map[string]string,
 	return nil
 }
 
+// GetPlainServerSettings reads unsealed settings from one database snapshot.
+// Missing rows are absent from the map; stored empty strings remain present.
+func (s *Store) GetPlainServerSettings(ctx context.Context, keys []string) (map[string]string, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT key, value, key_id FROM server_settings WHERE key = ANY($1)`, pq.Array(keys))
+	if err != nil {
+		return nil, fmt.Errorf("loading plain server settings: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	values := make(map[string]string, len(keys))
+	for rows.Next() {
+		var key, value string
+		var keyID int64
+		if err := rows.Scan(&key, &value, &keyID); err != nil {
+			return nil, fmt.Errorf("reading plain server setting: %w", err)
+		}
+		if keyID != 0 {
+			return nil, fmt.Errorf("server setting %s is unexpectedly sealed", key)
+		}
+		values[key] = value
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("reading plain server settings: %w", err)
+	}
+	return values, nil
+}
+
 // GetServerSetting returns a server setting and the generation it is sealed
 // under ("" / 0 when unset or unsealed).
 func (s *Store) GetServerSetting(ctx context.Context, key string) (string, uint32, error) {

@@ -4,25 +4,18 @@ package grpcserver
 
 import (
 	"context"
-	"errors"
 	"strconv"
-	"strings"
 
 	"go.uber.org/zap"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	"noxa/internal/auth"
-	"noxa/internal/channels"
 	"noxa/internal/query"
 	"noxa/internal/safecast"
 	noxav1 "noxa/v1"
 )
 
-const (
-	maxDeleteReasonBytes      = 512
-	maxInvalidChannelWarnings = 8
-)
+const maxInvalidChannelWarnings = 8
 
 // controlService serves administration RPCs. The file-transfer RPCs are
 // deliberately left to UnimplementedControlServer (codes.Unimplemented): the
@@ -31,25 +24,8 @@ const (
 // would be a second, unchecked path to the file port.
 type controlService struct {
 	noxav1.UnimplementedControlServer
-	backend      query.Backend
-	logger       *zap.Logger
-	authenticate func(context.Context, string, string, string) (bool, error)
-}
-
-// Authenticate validates credentials. It is the one RPC that carries its own
-// credentials; every other RPC repeats them in the authorization metadata, so
-// no session token is minted.
-func (c *controlService) Authenticate(ctx context.Context, req *noxav1.AuthenticateRequest) (*noxav1.AuthenticateResponse, error) {
-	ok, err := c.authenticate(ctx, remoteIPFromContext(ctx), req.GetUsername(), req.GetPassword())
-	if err != nil {
-		c.logger.Warn("grpc authenticate error", zap.Error(err))
-		return nil, status.Error(codes.Internal, "internal error")
-	}
-	if !ok {
-		return nil, status.Error(codes.Unauthenticated, "invalid credentials")
-	}
-	// Populate the deprecated success field for clients generated from the v1 API.
-	return &noxav1.AuthenticateResponse{Success: true, UserId: req.GetUsername()}, nil
+	backend query.Backend
+	logger  *zap.Logger
 }
 
 // ListChannels returns the channel tree, optionally rooted at one channel.
@@ -62,7 +38,14 @@ func (c *controlService) ListChannels(ctx context.Context, req *noxav1.ListChann
 		}
 		root = parsed
 	}
-	all := uniqueChannels(c.backend.ListChannels(ctx))
+	if root < 0 {
+		return nil, status.Error(codes.InvalidArgument, "root_channel_id must be nonnegative")
+	}
+	return c.listRoleChannels(ctx, root)
+}
+
+func (c *controlService) channelListResponse(channels []query.ChannelInfo, root int64) *noxav1.ListChannelsResponse {
+	all := uniqueChannels(channels)
 	keep := subtreeCanonical(all, root)
 	resp := &noxav1.ListChannelsResponse{}
 	warnings := 0
@@ -89,7 +72,7 @@ func (c *controlService) ListChannels(ctx context.Context, req *noxav1.ListChann
 			CurrentClients: currentClients,
 		})
 	}
-	return resp, nil
+	return resp
 }
 
 // warnInvalidChannelRow emits bounded, non-sensitive diagnostics for malformed
@@ -158,132 +141,4 @@ func subtreeCanonical(all []query.ChannelInfo, root int64) map[int64]bool {
 		stack = append(stack, children[id]...)
 	}
 	return keep
-}
-
-// CreateChannel creates a channel.
-func (c *controlService) CreateChannel(ctx context.Context, req *noxav1.CreateChannelRequest) (*noxav1.CreateChannelResponse, error) {
-	name := strings.TrimSpace(req.GetName())
-	if name == "" {
-		return nil, status.Error(codes.InvalidArgument, "name is required")
-	}
-	var parentID int64
-	if value := req.GetParentId(); value != "" {
-		parsed, err := strconv.ParseInt(value, 10, 64)
-		if err != nil || parsed <= 0 {
-			return nil, status.Error(codes.InvalidArgument, "parent_id must be a positive integer")
-		}
-		parentID = parsed
-	}
-	maxClients, err := safecast.Int32ToInt(req.GetMaxClients())
-	if err != nil || maxClients < 0 {
-		return nil, status.Error(codes.InvalidArgument, "max_clients must not be negative")
-	}
-	channelType := 0
-	if req.GetPermanent() {
-		channelType = 2
-	}
-	id, err := c.backend.CreateChannel(ctx, query.ChannelCreateParams{
-		Name:       name,
-		ParentID:   parentID,
-		MaxClients: maxClients,
-		Type:       channelType,
-	})
-	if err != nil {
-		return nil, grpcBackendStatus(c.logger, "create channel", err)
-	}
-	return &noxav1.CreateChannelResponse{Success: true, ChannelId: strconv.FormatInt(id, 10)}, nil
-}
-
-// DeleteChannel removes a channel.
-func (c *controlService) DeleteChannel(ctx context.Context, req *noxav1.DeleteChannelRequest) (*noxav1.DeleteChannelResponse, error) {
-	id, err := strconv.ParseInt(req.GetChannelId(), 10, 64)
-	if err != nil {
-		return nil, status.Error(codes.InvalidArgument, "channel_id must be numeric")
-	}
-	reason := req.GetReason()
-	if len(reason) > maxDeleteReasonBytes {
-		return nil, status.Error(codes.InvalidArgument, "reason is too long")
-	}
-	if err := c.backend.DeleteChannel(ctx, id, reason); err != nil {
-		return nil, grpcBackendStatus(c.logger, "delete channel", err)
-	}
-	return &noxav1.DeleteChannelResponse{Success: true}, nil
-}
-
-// grpcBackendStatus exposes only stable transport semantics. Backend details
-// remain in structured server logs for unknown failures and never become a
-// bot-visible error string.
-func grpcBackendStatus(logger *zap.Logger, operation string, err error) error {
-	switch {
-	case errors.Is(err, context.Canceled):
-		return status.Error(codes.Canceled, "request canceled")
-	case errors.Is(err, context.DeadlineExceeded):
-		return status.Error(codes.DeadlineExceeded, "deadline exceeded")
-	case errors.Is(err, auth.ErrUserNotFound), errors.Is(err, channels.ErrChannelNotFound):
-		return status.Error(codes.NotFound, "not found")
-	case errors.Is(err, channels.ErrInvalidSpec), errors.Is(err, channels.ErrInvalidMove):
-		return status.Error(codes.FailedPrecondition, "request cannot be applied")
-	default:
-		if logger != nil {
-			logger.Warn("grpc backend operation failed", zap.String("operation", operation), zap.Error(err))
-		}
-		return status.Error(codes.Internal, "internal error")
-	}
-}
-
-// protoPermFor maps the coarse proto permission enum onto the permission keys
-// the resolver evaluates. The enum is a summary: only permissions it can name
-// are reported.
-var protoPermFor = map[string]noxav1.Permission{
-	"i_channel_join_power":             noxav1.Permission_PERMISSION_JOIN,
-	"i_client_talk_power":              noxav1.Permission_PERMISSION_SPEAK,
-	"b_client_video_publish":           noxav1.Permission_PERMISSION_VIDEO,
-	"b_client_use_channel_command":     noxav1.Permission_PERMISSION_CHAT,
-	"i_client_kick_from_channel_power": noxav1.Permission_PERMISSION_KICK,
-	"b_client_ban":                     noxav1.Permission_PERMISSION_BAN,
-	"i_client_move_power":              noxav1.Permission_PERMISSION_MOVE,
-	"b_channel_create_child":           noxav1.Permission_PERMISSION_CREATE_CHANNEL,
-	"b_channel_delete":                 noxav1.Permission_PERMISSION_DELETE_CHANNEL,
-	"i_ft_file_upload_power":           noxav1.Permission_PERMISSION_TRANSFER_FILE,
-}
-
-// QueryPermissions summarises a user's resolved permissions in a channel.
-func (c *controlService) QueryPermissions(ctx context.Context, req *noxav1.QueryPermissionsRequest) (*noxav1.QueryPermissionsResponse, error) {
-	uniqueID := req.GetUserId()
-	if uniqueID == "" {
-		var ok bool
-		uniqueID, ok = callerIdentity(ctx)
-		if !ok {
-			return nil, status.Error(codes.Unauthenticated, "missing authenticated caller")
-		}
-	}
-	var channelID int64
-	if v := req.GetChannelId(); v != "" {
-		parsed, err := strconv.ParseInt(v, 10, 64)
-		if err != nil {
-			return nil, status.Error(codes.InvalidArgument, "channel_id must be numeric")
-		}
-		channelID = parsed
-	}
-	lines, isAdmin, err := c.backend.PermOverview(ctx, uniqueID, channelID)
-	if err != nil {
-		if errors.Is(err, auth.ErrUserNotFound) {
-			return nil, status.Error(codes.NotFound, "user not found")
-		}
-		c.logger.Warn("grpc permission overview error", zap.Error(err))
-		return nil, status.Error(codes.Internal, "internal error")
-	}
-	resp := &noxav1.QueryPermissionsResponse{IsAdmin: isAdmin}
-	for _, line := range lines {
-		perm, ok := protoPermFor[line.Key]
-		if !ok || perm == noxav1.Permission_PERMISSION_UNSPECIFIED {
-			continue
-		}
-		if line.Value > 0 {
-			resp.Granted = append(resp.Granted, perm)
-		} else {
-			resp.Denied = append(resp.Denied, perm)
-		}
-	}
-	return resp, nil
 }

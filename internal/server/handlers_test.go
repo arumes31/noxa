@@ -21,6 +21,7 @@ import (
 	"go.uber.org/zap"
 
 	"noxa/internal/auth"
+	"noxa/internal/authorization"
 	"noxa/internal/broadcast"
 	"noxa/internal/channels"
 	"noxa/internal/chatcrypto"
@@ -28,12 +29,23 @@ import (
 	"noxa/internal/eventbus"
 	"noxa/internal/metrics"
 	"noxa/internal/netproto"
-	"noxa/internal/permissions"
 	"noxa/internal/state"
 	"noxa/internal/store"
 )
 
 // --- fakes -----------------------------------------------------------------
+
+type deniedWSRoleBackend struct {
+	eventbus.RoleBackend
+	calls *atomic.Int32
+}
+
+func (deniedWSRoleBackend) RoleIntegrationsEnabled() bool { return true }
+
+func (b deniedWSRoleBackend) AuthenticateIntegration(context.Context, string, string, string) (auth.IntegrationPrincipal, error) {
+	b.calls.Add(1)
+	return auth.IntegrationPrincipal{}, auth.ErrIntegrationDenied
+}
 
 // fakeAuth implements AuthBackend with in-memory credentials, public keys,
 // and bans.
@@ -207,15 +219,14 @@ func (f *fakeChannels) CreateChannel(_ context.Context, spec channels.ChannelSpe
 	f.nextID++
 	f.created = append(f.created, spec)
 	f.state.AddChannel(&state.Channel{
-		ChannelID:       f.nextID,
-		ParentID:        spec.ParentID,
-		Name:            spec.Name,
-		Topic:           spec.Topic,
-		ChannelType:     int(spec.Type),
-		MaxClients:      spec.MaxClients,
-		CreatedAt:       time.Now(),
-		PasswordHash:    passwordHash,
-		NeededJoinPower: spec.NeededJoinPower,
+		ChannelID:    f.nextID,
+		ParentID:     spec.ParentID,
+		Name:         spec.Name,
+		Topic:        spec.Topic,
+		ChannelType:  int(spec.Type),
+		MaxClients:   spec.MaxClients,
+		CreatedAt:    time.Now(),
+		PasswordHash: passwordHash,
 	})
 	return f.nextID, nil
 }
@@ -273,13 +284,25 @@ func (f *fakeChannels) DeleteChannelSubtree(_ context.Context, channelID int64) 
 }
 
 func (f *fakeChannels) MoveClientWithLifecycle(clientID string, channelID int64, afterMove func(int64)) (int64, error) {
+	return f.moveClientWithLifecycle(clientID, channelID, afterMove, false)
+}
+
+func (f *fakeChannels) MoveClientWithinCapacity(clientID string, channelID int64, afterMove func(int64)) (int64, error) {
+	return f.moveClientWithLifecycle(clientID, channelID, afterMove, true)
+}
+
+func (f *fakeChannels) moveClientWithLifecycle(clientID string, channelID int64, afterMove func(int64), enforceCapacity bool) (int64, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	oldChannelID, _, ok := f.state.ClientChannelState(clientID)
 	if !ok {
 		return 0, state.ErrClientNotFound
 	}
-	if err := f.state.MoveClient(clientID, channelID); err != nil {
+	move := f.state.MoveClient
+	if enforceCapacity {
+		move = f.state.MoveClientWithinCapacity
+	}
+	if err := move(clientID, channelID); err != nil {
 		return oldChannelID, err
 	}
 	if oldChannelID != 0 && oldChannelID != channelID {
@@ -351,12 +374,6 @@ func (f *fakeChannels) OnClientLeftChannel(channelID int64) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.leftLog = append(f.leftLog, channelID)
-}
-
-func (f *fakeChannels) createdCount() int {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return len(f.created)
 }
 
 // fakeChat implements ChatStore in memory.
@@ -581,6 +598,12 @@ func (f *fakeChat) GetServerSetting(_ context.Context, key string) (string, uint
 	return f.settings[key], f.settingID[key], nil
 }
 
+func (f *fakeChat) GetPlainServerSettings(ctx context.Context, keys []string) (map[string]string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return memorySettings(f.settings).GetPlainServerSettings(ctx, keys)
+}
+
 // seedLegacy adds a pre-012 plaintext row for the backfill tests.
 func (f *fakeChat) seedLegacy(id, channelID int64, body string) {
 	f.mu.Lock()
@@ -740,49 +763,6 @@ func (f *fakeScopeKeys) RotateScopeKey(ctx context.Context, scope int64, newKeyI
 	return f.InsertScopeKey(ctx, scope, newKeyID, wrapped, kekID)
 }
 
-// fakePerms implements PermLoader, returning the same tiered permissions for
-// every client.
-type fakePerms struct {
-	tp              permissions.TieredPermissions
-	loadForClientFn func(context.Context, int64, int64) (permissions.TieredPermissions, error)
-
-	// groupSet, when non-nil, is the canned set served by
-	// LoadGroupPermissions (guest-group tests).
-	groupSet permissions.PermissionSet
-
-	mu            sync.Mutex
-	invalidations [][2]int64
-}
-
-func (f *fakePerms) LoadForClient(ctx context.Context, userID, channelID int64) (permissions.TieredPermissions, error) {
-	if f.loadForClientFn != nil {
-		return f.loadForClientFn(ctx, userID, channelID)
-	}
-	return f.tp, nil
-}
-
-// Invalidate records a cache-invalidation call.
-func (f *fakePerms) Invalidate(userID, channelID int64) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.invalidations = append(f.invalidations, [2]int64{userID, channelID})
-}
-
-// InvalidateAll records a full invalidation.
-func (f *fakePerms) InvalidateAll() {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.invalidations = append(f.invalidations, [2]int64{-1, -1})
-}
-
-// LoadGroupPermissions returns the canned group set.
-func (f *fakePerms) LoadGroupPermissions(context.Context, int64) (permissions.PermissionSet, error) {
-	if f.groupSet != nil {
-		return f.groupSet, nil
-	}
-	return permissions.NewPermissionSet(), nil
-}
-
 // fakeSpool implements SpoolStore in memory.
 type fakeSpool struct {
 	mu        sync.Mutex
@@ -854,26 +834,6 @@ func (f *fakeSpool) pendingCount() int {
 	return len(f.pending)
 }
 
-// tieredWith builds TieredPermissions with the given entries in the server
-// group tier.
-func tieredWith(perms ...*permissions.Permission) permissions.TieredPermissions {
-	tp := permissions.NewTieredPermissions()
-	set := permissions.NewPermissionSet()
-	for _, p := range perms {
-		set.Set(p)
-	}
-	tp.Set(permissions.TierServerGroup, set)
-	return tp
-}
-
-func boolPerm(key permissions.PermissionKey, granted bool) *permissions.Permission {
-	v := 0
-	if granted {
-		v = 1
-	}
-	return &permissions.Permission{Key: key, Type: permissions.PermissionTypeBoolean, Value: v}
-}
-
 // --- test harness ----------------------------------------------------------
 
 // testEnv bundles a running server with its fake backends.
@@ -886,8 +846,6 @@ type testEnv struct {
 	voice      *fakeVoice
 	recorder   *fakeRecorder
 	ft         *fakeFileTransfer
-	perms      *fakePerms
-	tokens     *fakeTokens
 	complaints *fakeComplaints
 	chat       *fakeChat
 	groups     *fakeGroups
@@ -897,31 +855,29 @@ type testEnv struct {
 	stop       func()
 }
 
-// startTestEnv starts a TCP server with fake auth/channels/permissions
-// backends. perms may be nil, in which case an empty TieredPermissions is
-// served (nothing granted; admins still bypass).
-func startTestEnv(t *testing.T, perms *permissions.TieredPermissions) *testEnv {
+// startTestEnv starts a TCP server with fake backends and a roles-v1 authority.
+func startTestEnv(t *testing.T, _ any) *testEnv {
 	t.Helper()
-	return startTestEnvFull(t, perms, nil)
+	return startTestEnvFull(t, nil, nil)
 }
 
 // startTestEnvFull is startTestEnv with a hook to adjust the server config
 // (e.g. disable ChatAllowPlaintext for encryption tests).
-func startTestEnvFull(t *testing.T, perms *permissions.TieredPermissions, mutateCfg func(*config.Config)) *testEnv {
+func startTestEnvFull(t *testing.T, _ any, mutateCfg func(*config.Config)) *testEnv {
 	t.Helper()
-	return startTestEnvDeps(t, perms, mutateCfg, nil)
+	return startTestEnvDeps(t, nil, mutateCfg, nil)
 }
 
 // startTestEnvDeps is startTestEnvFull with an additional hook to adjust the
 // server deps (e.g. default group IDs for wave-6a tests).
-func startTestEnvDeps(t *testing.T, perms *permissions.TieredPermissions, mutateCfg func(*config.Config), mutateDeps func(*Deps)) *testEnv {
+func startTestEnvDeps(t *testing.T, _ any, mutateCfg func(*config.Config), mutateDeps func(*Deps)) *testEnv {
 	t.Helper()
-	return startTestEnvLogger(t, perms, mutateCfg, mutateDeps, nil)
+	return startTestEnvLogger(t, nil, mutateCfg, mutateDeps, nil)
 }
 
 // startTestEnvLogger is startTestEnvDeps with the server's logger supplied by
 // the caller, so a test can assert on what the pipeline logs (91).
-func startTestEnvLogger(t *testing.T, perms *permissions.TieredPermissions, mutateCfg func(*config.Config), mutateDeps func(*Deps), logger *zap.Logger) *testEnv {
+func startTestEnvLogger(t *testing.T, _ any, mutateCfg func(*config.Config), mutateDeps func(*Deps), logger *zap.Logger, beforeStart ...func(*TCPServer)) *testEnv {
 	t.Helper()
 	if logger == nil {
 		logger = testLogger()
@@ -931,17 +887,12 @@ func startTestEnvLogger(t *testing.T, perms *permissions.TieredPermissions, muta
 	bc := broadcast.New(testLogger(), sm)
 	fc := &fakeChannels{state: sm}
 
-	tp := permissions.NewTieredPermissions()
-	if perms != nil {
-		tp = *perms
-	}
-
 	fa := &fakeAuth{
 		passwords: map[string]string{"admin-uid": "pw", "user-uid": "pw"},
 		pubkeys:   map[string]string{},
 		users: map[string]*auth.User{
-			"admin-uid": {ID: 1, UniqueID: "admin-uid", Nickname: "admin", IsAdmin: true},
-			"user-uid":  {ID: 2, UniqueID: "user-uid", Nickname: "user", IsAdmin: false},
+			"admin-uid": {ID: 1, UniqueID: "admin-uid", Nickname: "admin"},
+			"user-uid":  {ID: 2, UniqueID: "user-uid", Nickname: "user"},
 		},
 		nicknames:   map[string]*auth.User{},
 		pubkeyIndex: map[string]*auth.User{},
@@ -951,13 +902,10 @@ func startTestEnvLogger(t *testing.T, perms *permissions.TieredPermissions, muta
 	fv := &fakeVoice{}
 	fr := &fakeRecorder{}
 	ft := &fakeFileTransfer{}
-	ftk := &fakeTokens{}
 	fcm := &fakeComplaints{}
 	fchat := newFakeChat()
 	fg := newFakeGroups()
 	fba := &fakeBanAdmin{}
-
-	fp := &fakePerms{tp: tp}
 
 	fsk := newFakeScopeKeys()
 	kek, err := chatcrypto.LoadKEKRing(filepath.Join(t.TempDir(), "kek.ring"), "", true)
@@ -970,13 +918,10 @@ func startTestEnvLogger(t *testing.T, perms *permissions.TieredPermissions, muta
 		State:        sm,
 		Channels:     fc,
 		Broadcast:    bc,
-		Perms:        fp,
-		Resolver:     permissions.NewResolver(),
 		Spool:        fs,
 		Voice:        fv,
 		Recorder:     fr,
 		FileTransfer: ft,
-		Tokens:       ftk,
 		Complaints:   fcm,
 		Chat:         fchat,
 		Groups:       fg,
@@ -984,6 +929,27 @@ func startTestEnvLogger(t *testing.T, perms *permissions.TieredPermissions, muta
 		ScopeKeys:    fsk,
 		ChatKEK:      kek,
 	}
+	roleStore := serverRoleFixture()
+	roleStore.policy.OwnerID = 1
+	roleStore.policy.Roles[0].Permissions = []authorization.Capability{
+		authorization.ViewChannel,
+		authorization.Connect,
+		authorization.SendMessages,
+		authorization.ReadHistory,
+		authorization.Speak,
+		authorization.ShareCamera,
+		authorization.ShareScreen,
+		authorization.DownloadFiles,
+	}
+	roleStore.policy.Channels = roleStore.policy.Channels[:0]
+	for channelID := int64(1); channelID <= 20; channelID++ {
+		roleStore.policy.Channels = append(roleStore.policy.Channels, authorization.ChannelPolicy{ChannelID: channelID})
+	}
+	authority, err := authorization.NewAuthority(t.Context(), roleStore, func(context.Context, *authorization.RoleEvaluator, *authorization.RoleEvaluator) error { return nil })
+	if err != nil {
+		t.Fatalf("create test role authority: %v", err)
+	}
+	deps.Authority = authority
 	if mutateDeps != nil {
 		mutateDeps(deps)
 	}
@@ -1002,6 +968,9 @@ func startTestEnvLogger(t *testing.T, perms *permissions.TieredPermissions, muta
 		mutateCfg(cfg)
 	}
 	srv := New(cfg, logger, deps)
+	for _, configure := range beforeStart {
+		configure(srv)
+	}
 	// Mirror the binary's boot order: the global generation is minted once,
 	// eagerly, so nothing on a hot path ever mints (91).
 	if err := srv.EnsureGlobalScopeKey(context.Background()); err != nil && deps.ScopeKeys != nil {
@@ -1015,7 +984,7 @@ func startTestEnvLogger(t *testing.T, perms *permissions.TieredPermissions, muta
 	conn := dialRetry(t, addr)
 	_ = conn.Close() // connectivity probe only
 
-	env := &testEnv{addr: addr, state: sm, channels: fc, auth: fa, spool: fs, voice: fv, recorder: fr, ft: ft, perms: fp, tokens: ftk, complaints: fcm, chat: fchat, groups: fg, banAdmin: fba, deps: deps, srv: srv}
+	env := &testEnv{addr: addr, state: sm, channels: fc, auth: fa, spool: fs, voice: fv, recorder: fr, ft: ft, complaints: fcm, chat: fchat, groups: fg, banAdmin: fba, deps: deps, srv: srv}
 	var stopOnce sync.Once
 	env.stop = func() {
 		stopOnce.Do(func() {
@@ -1052,6 +1021,12 @@ func dialRetry(t *testing.T, addr string) net.Conn {
 // send encodes and writes a message to the connection.
 func send(t *testing.T, conn net.Conn, mt netproto.MessageType, msg any) {
 	t.Helper()
+	if mt == netproto.MsgAuthenticate {
+		if request, ok := msg.(netproto.Authenticate); ok && len(request.AuthorizationModels) == 0 {
+			request.AuthorizationModels = []string{netproto.AuthorizationModelRolesV1}
+			msg = request
+		}
+	}
 	f, err := netproto.Encode(mt, msg)
 	if err != nil {
 		t.Fatalf("encode %s: %v", mt, err)
@@ -1092,7 +1067,7 @@ func readOfType(t *testing.T, conn net.Conn, mt netproto.MessageType) *netproto.
 func dialAuthed(t *testing.T, addr, uniqueID string) (net.Conn, string) {
 	t.Helper()
 	conn := dialRetry(t, addr)
-	send(t, conn, netproto.MsgAuthenticate, netproto.Authenticate{Username: uniqueID, Password: "pw"})
+	send(t, conn, netproto.MsgAuthenticate, netproto.Authenticate{Username: uniqueID, Password: "pw", AuthorizationModels: []string{netproto.AuthorizationModelRolesV1}})
 
 	f := readOfType(t, conn, netproto.MsgAuthResponse)
 	var resp netproto.AuthResponse
@@ -1114,7 +1089,8 @@ func dialAuthedX25519(t *testing.T, addr, uniqueID string, pub [32]byte) (net.Co
 	t.Helper()
 	conn := dialRetry(t, addr)
 	send(t, conn, netproto.MsgAuthenticate, netproto.Authenticate{
-		Username: uniqueID, Password: "pw", X25519PublicKey: b64e(pub[:]),
+		AuthorizationModels: []string{netproto.AuthorizationModelRolesV1},
+		Username:            uniqueID, Password: "pw", X25519PublicKey: b64e(pub[:]),
 	})
 	f := readOfType(t, conn, netproto.MsgAuthResponse)
 	var resp netproto.AuthResponse
@@ -1434,19 +1410,11 @@ func TestSharedLoginLimiterBoundsTCPAndWebSocketKDF(t *testing.T) {
 	bus := eventbus.New(zap.NewNop())
 	defer bus.Close()
 	var wsCalls atomic.Int32
-	wsHandler := eventbus.HandlerWithLoginProtection(
-		bus,
-		func(context.Context, string, string) (bool, bool, error) {
-			wsCalls.Add(1)
-			return false, false, nil
-		},
-		zap.NewNop(),
-		limiter,
-		nil,
-	)
+	wsHandler := eventbus.HandlerWithRoleBackend(bus, deniedWSRoleBackend{calls: &wsCalls}, zap.NewNop(), limiter, nil)
 	wsRequest := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "http://localhost/events", nil)
 	wsRequest.RemoteAddr = "192.0.2.10:1000"
 	wsRequest.SetBasicAuth("ws-user", "wrong")
+	wsRequest.Header.Set("Noxa-Authorization-Model", "roles-v1")
 	wsRecorder := httptest.NewRecorder()
 	wsHandler.ServeHTTP(wsRecorder, wsRequest)
 	if wsRecorder.Code != http.StatusTooManyRequests {
@@ -1774,77 +1742,6 @@ func TestAuthenticateLifecycle(t *testing.T) {
 	})
 }
 
-// TestCreateChannelPermissionDenied verifies that a non-admin without the
-// create permission gets a permission-denied error.
-func TestCreateChannelPermissionDenied(t *testing.T) {
-	env := startTestEnv(t, nil) // no permissions granted
-	defer env.stop()
-
-	conn, _ := dialAuthed(t, env.addr, "user-uid")
-	defer func() { _ = conn.Close() }()
-
-	send(t, conn, netproto.MsgCreateChannel, netproto.CreateChannel{Name: "nope", Type: 0})
-	f := readOfType(t, conn, netproto.MsgError)
-	var e netproto.Error
-	if err := netproto.Decode(f, &e); err != nil {
-		t.Fatalf("decode error: %v", err)
-	}
-	if e.Code != errCodePermissionDenied {
-		t.Fatalf("error code = %d, want %d (permission denied)", e.Code, errCodePermissionDenied)
-	}
-	if got := env.channels.createdCount(); got != 0 {
-		t.Fatalf("created channels = %d, want 0", got)
-	}
-}
-
-// TestCreateChannelGranted verifies the resolver path: a non-admin with an
-// explicit b_channel_create_temporary grant may create a temporary channel.
-func TestCreateChannelGranted(t *testing.T) {
-	perms := tieredWith(boolPerm(permissions.PermissionKeyChannelCreateTemporary, true))
-	env := startTestEnv(t, &perms)
-	defer env.stop()
-
-	conn, _ := dialAuthed(t, env.addr, "user-uid")
-	defer func() { _ = conn.Close() }()
-
-	send(t, conn, netproto.MsgCreateChannel, netproto.CreateChannel{Name: "Temp", Type: 0})
-	f := readOfType(t, conn, netproto.MsgChannelList)
-	var list netproto.ChannelList
-	if err := netproto.Decode(f, &list); err != nil {
-		t.Fatalf("decode channel list: %v", err)
-	}
-	if len(list.Channels) != 1 || list.Channels[0].Name != "Temp" {
-		t.Fatalf("channel list = %+v, want one channel named Temp", list.Channels)
-	}
-	if got := env.channels.createdCount(); got != 1 {
-		t.Fatalf("created channels = %d, want 1", got)
-	}
-}
-
-// TestCreateChannelAsAdminBroadcasts verifies that an admin can create any
-// channel type and that other clients receive a channel_created event.
-func TestCreateChannelAsAdminBroadcasts(t *testing.T) {
-	env := startTestEnv(t, nil)
-	defer env.stop()
-
-	adminConn, _ := dialAuthed(t, env.addr, "admin-uid")
-	defer func() { _ = adminConn.Close() }()
-	userConn, _ := dialAuthed(t, env.addr, "user-uid")
-	defer func() { _ = userConn.Close() }()
-
-	send(t, adminConn, netproto.MsgCreateChannel, netproto.CreateChannel{Name: "Lobby", Type: 2})
-	readOfType(t, adminConn, netproto.MsgChannelList)
-
-	data := readEventOfType(t, userConn, eventChannelCreated)
-	var ce channelEvent
-	if err := json.Unmarshal(data, &ce); err != nil {
-		t.Fatalf("unmarshal channel event: %v", err)
-	}
-	if ce.Name != "Lobby" || ce.ChannelID != 1 {
-		t.Fatalf("channel event = %+v, want id 1 name Lobby", ce)
-	}
-}
-
 // TestJoinChannelAndChat verifies joining a channel and channel-scoped chat
 // delivery to the channel's members.
 func TestJoinChannelAndChat(t *testing.T) {
@@ -1856,9 +1753,7 @@ func TestJoinChannelAndChat(t *testing.T) {
 	userConn, _ := dialAuthed(t, env.addr, "user-uid")
 	defer func() { _ = userConn.Close() }()
 
-	// Admin creates a permanent channel.
-	send(t, adminConn, netproto.MsgCreateChannel, netproto.CreateChannel{Name: "Lobby", Type: 2})
-	readOfType(t, adminConn, netproto.MsgChannelList)
+	env.state.AddChannel(testChannel(1))
 
 	// Both clients join it.
 	send(t, adminConn, netproto.MsgJoinChannel, netproto.JoinChannel{ChannelID: 1})
@@ -1867,9 +1762,6 @@ func TestJoinChannelAndChat(t *testing.T) {
 	waitFor(t, "both clients in channel", func() bool {
 		return len(env.state.ChannelMembers(1)) == 2
 	})
-
-	// The user must observe the admin's move via a user_moved event.
-	readEventOfType(t, userConn, eventUserMoved)
 
 	// Channel chat from the user reaches the admin (a channel member).
 	send(t, userConn, netproto.MsgChatSend, netproto.ChatSend{ChannelID: "1", Text: "hi admin"})
@@ -1917,8 +1809,7 @@ func TestMoveOtherClientDenied(t *testing.T) {
 	userConn, userID := dialAuthed(t, env.addr, "user-uid")
 	defer func() { _ = userConn.Close() }()
 
-	send(t, adminConn, netproto.MsgCreateChannel, netproto.CreateChannel{Name: "Lobby", Type: 2})
-	readOfType(t, adminConn, netproto.MsgChannelList)
+	env.state.AddChannel(testChannel(1))
 
 	send(t, userConn, netproto.MsgMoveClient, netproto.MoveClient{ClientID: userID, ChannelID: 1})
 	f := readOfType(t, userConn, netproto.MsgError)
@@ -1942,8 +1833,7 @@ func TestKickFromChannel(t *testing.T) {
 	userConn, userID := dialAuthed(t, env.addr, "user-uid")
 	defer func() { _ = userConn.Close() }()
 
-	send(t, adminConn, netproto.MsgCreateChannel, netproto.CreateChannel{Name: "Lobby", Type: 2})
-	readOfType(t, adminConn, netproto.MsgChannelList)
+	env.state.AddChannel(testChannel(1))
 
 	send(t, adminConn, netproto.MsgJoinChannel, netproto.JoinChannel{ChannelID: 1})
 	send(t, userConn, netproto.MsgJoinChannel, netproto.JoinChannel{ChannelID: 1})
@@ -1976,76 +1866,6 @@ func TestKickFromChannel(t *testing.T) {
 		return true
 	})
 }
-
-// TestDeleteChannel verifies the admin delete flow broadcasts and tears down
-// the complete cascaded subtree, including voice membership.
-func TestDeleteChannel(t *testing.T) {
-	env := startTestEnv(t, nil)
-	defer env.stop()
-
-	adminConn, _ := dialAuthed(t, env.addr, "admin-uid")
-	defer func() { _ = adminConn.Close() }()
-	userConn, userID := dialAuthed(t, env.addr, "user-uid")
-	defer func() { _ = userConn.Close() }()
-
-	send(t, adminConn, netproto.MsgCreateChannel, netproto.CreateChannel{Name: "Lobby", Type: 2})
-	readOfType(t, adminConn, netproto.MsgChannelList)
-	send(t, adminConn, netproto.MsgCreateChannel, netproto.CreateChannel{Name: "Child", ParentID: 1, Type: 2})
-	readOfType(t, adminConn, netproto.MsgChannelList)
-	send(t, userConn, netproto.MsgJoinChannel, netproto.JoinChannel{ChannelID: 2})
-	waitFor(t, "user in child channel", func() bool {
-		return len(env.state.ChannelMembers(2)) == 1
-	})
-
-	send(t, adminConn, netproto.MsgDeleteChannel, netproto.DeleteChannel{ChannelID: 1})
-	data := readEventOfType(t, userConn, eventChannelDeleted)
-	var ce channelEvent
-	if err := json.Unmarshal(data, &ce); err != nil {
-		t.Fatalf("unmarshal channel event: %v", err)
-	}
-	if ce.ChannelID != 1 || len(ce.ChannelIDs) != 2 || ce.ChannelIDs[0] != 1 || ce.ChannelIDs[1] != 2 {
-		t.Fatalf("deleted channel event = %+v, want root 1 and IDs [1 2]", ce)
-	}
-	if _, ok := env.state.GetChannel(1); ok {
-		t.Fatal("channel 1 still in state after delete")
-	}
-	if _, ok := env.state.GetChannel(2); ok {
-		t.Fatal("channel 2 still in state after cascaded delete")
-	}
-	channelID, _, ok := env.state.ClientChannelState(userID)
-	if !ok || channelID != 0 {
-		t.Fatalf("displaced user state = (%d, %v), want channel 0", channelID, ok)
-	}
-	env.voice.mu.Lock()
-	leaves := append([][2]any(nil), env.voice.leaves...)
-	env.voice.mu.Unlock()
-	if len(leaves) == 0 || leaves[len(leaves)-1] != [2]any{userID, int64(2)} {
-		t.Fatalf("voice leaves = %v, want displaced user from child 2", leaves)
-	}
-	var stopped []int64
-	var channelsMarked []int64
-	var channelsRemoved []int64
-	waitFor(t, "subtree resource cleanup", func() bool {
-		env.recorder.mu.Lock()
-		stopped = append([]int64(nil), env.recorder.stopped...)
-		env.recorder.mu.Unlock()
-		env.ft.mu.Lock()
-		channelsMarked = append([]int64(nil), env.ft.channelsMarked...)
-		channelsRemoved = append([]int64(nil), env.ft.channelsRemoved...)
-		env.ft.mu.Unlock()
-		return len(stopped) == 2 && len(channelsMarked) == 2 && len(channelsRemoved) == 2
-	})
-	if stopped[0] != 1 || stopped[1] != 2 {
-		t.Fatalf("stopped recordings = %v, want [1 2]", stopped)
-	}
-	if len(channelsMarked) != 2 || channelsMarked[0] != 1 || channelsMarked[1] != 2 {
-		t.Fatalf("tombstoned file channels = %v, want [1 2]", channelsMarked)
-	}
-	if len(channelsRemoved) != 2 || channelsRemoved[0] != 1 || channelsRemoved[1] != 2 {
-		t.Fatalf("removed file channels = %v, want [1 2]", channelsRemoved)
-	}
-}
-
 func TestApplyChannelDeletionTombstonesSubtreeBeforeRecorderDrain(t *testing.T) {
 	stopEntered := make(chan struct{}, 2)
 	stopRelease := make(chan struct{})
@@ -2155,12 +1975,12 @@ func TestApplyChannelDeletionTombstonesEntireSubtreeBeforeBroadcast(t *testing.T
 	}
 }
 
-// TestJoinUnknownChannel verifies joining a nonexistent channel fails.
+// TestJoinUnknownChannel verifies inaccessible channel IDs are not disclosed.
 func TestJoinUnknownChannel(t *testing.T) {
 	env := startTestEnv(t, nil)
 	defer env.stop()
 
-	conn, _ := dialAuthed(t, env.addr, "user-uid")
+	conn, _ := dialAuthed(t, env.addr, "admin-uid")
 	defer func() { _ = conn.Close() }()
 
 	send(t, conn, netproto.MsgJoinChannel, netproto.JoinChannel{ChannelID: 999})
@@ -2169,41 +1989,10 @@ func TestJoinUnknownChannel(t *testing.T) {
 	if err := netproto.Decode(f, &e); err != nil {
 		t.Fatalf("decode error: %v", err)
 	}
-	if e.Code != errCodeNotFound {
-		t.Fatalf("error code = %d, want %d (not found)", e.Code, errCodeNotFound)
+	if e.Code != errCodePermissionDenied {
+		t.Fatalf("error code = %d, want %d (permission denied)", e.Code, errCodePermissionDenied)
 	}
 }
-
-// TestSendErrorOnMalformed verifies malformed payloads are rejected.
-func TestSendErrorOnMalformed(t *testing.T) {
-	env := startTestEnv(t, nil)
-	defer env.stop()
-
-	conn, _ := dialAuthed(t, env.addr, "user-uid")
-	defer func() { _ = conn.Close() }()
-
-	if err := netproto.WriteFrame(conn, &netproto.Frame{
-		Type:    uint16(netproto.MsgCreateChannel),
-		Payload: []byte("{not json"),
-	}); err != nil {
-		t.Fatalf("write malformed frame: %v", err)
-	}
-	f := readOfType(t, conn, netproto.MsgError)
-	var e netproto.Error
-	if err := netproto.Decode(f, &e); err != nil {
-		t.Fatalf("decode error: %v", err)
-	}
-	if e.Code != errCodeMalformed {
-		t.Fatalf("error code = %d, want %d (malformed)", e.Code, errCodeMalformed)
-	}
-}
-
-// intPerm builds an integer (power) permission entry for the fake loader.
-func intPerm(key permissions.PermissionKey, v int) *permissions.Permission {
-	return &permissions.Permission{Key: key, Type: permissions.PermissionTypeInteger, Value: v}
-}
-
-// --- challenge-response auth ------------------------------------------------
 
 // TestChallengeAuthHandshake exercises the full Ed25519 challenge-response
 // handshake over TCP with a real key pair generated in-test.
@@ -2226,7 +2015,7 @@ func TestChallengeAuthHandshake(t *testing.T) {
 	defer func() { _ = conn.Close() }()
 
 	// Round 1: authenticate without a password -> challenge.
-	send(t, conn, netproto.MsgAuthenticate, netproto.Authenticate{Username: uid})
+	send(t, conn, netproto.MsgAuthenticate, netproto.Authenticate{Username: uid, AuthorizationModels: []string{netproto.AuthorizationModelRolesV1}})
 	f := readOfType(t, conn, netproto.MsgAuthChallenge)
 	var ch netproto.AuthChallenge
 	if err := netproto.Decode(f, &ch); err != nil {
@@ -2411,167 +2200,9 @@ func TestChallengeAuthenticationReservesSourceAndPrincipalBeforeVerification(t *
 	}
 }
 
-// --- channel password / needed join power -----------------------------------
-
-// TestJoinChannelPassword verifies the channel password gate: no password and
-// a wrong password are denied, the correct password joins.
-func TestJoinChannelPassword(t *testing.T) {
-	env := startTestEnv(t, nil)
-	defer env.stop()
-
-	adminConn, _ := dialAuthed(t, env.addr, "admin-uid")
-	defer func() { _ = adminConn.Close() }()
-	userConn, userID := dialAuthed(t, env.addr, "user-uid")
-	defer func() { _ = userConn.Close() }()
-
-	send(t, adminConn, netproto.MsgCreateChannel, netproto.CreateChannel{Name: "Vault", Type: 2, Password: "chanpw"})
-	readOfType(t, adminConn, netproto.MsgChannelList)
-
-	expectDenied := func(msg netproto.JoinChannel, why string) {
-		t.Helper()
-		send(t, userConn, netproto.MsgJoinChannel, msg)
-		f := readOfType(t, userConn, netproto.MsgError)
-		var e netproto.Error
-		if err := netproto.Decode(f, &e); err != nil {
-			t.Fatalf("decode error: %v", err)
-		}
-		if e.Code != errCodePermissionDenied {
-			t.Fatalf("%s: error code = %d, want %d", why, e.Code, errCodePermissionDenied)
-		}
-	}
-
-	expectDenied(netproto.JoinChannel{ChannelID: 1}, "join without password")
-	expectDenied(netproto.JoinChannel{ChannelID: 1, Password: "wrong"}, "join with wrong password")
-
-	send(t, userConn, netproto.MsgJoinChannel, netproto.JoinChannel{ChannelID: 1, Password: "chanpw"})
-	waitFor(t, "user in channel", func() bool {
-		for _, c := range env.state.ChannelMembers(1) {
-			if c.ClientID == userID {
-				return true
-			}
-		}
-		return false
-	})
-}
-
-// TestJoinChannelIgnorePassword verifies that b_channel_join_ignore_password
-// bypasses the channel password.
-func TestJoinChannelIgnorePassword(t *testing.T) {
-	perms := tieredWith(boolPerm(permissions.PermissionKeyChannelJoinIgnorePassword, true))
-	env := startTestEnv(t, &perms)
-	defer env.stop()
-
-	adminConn, _ := dialAuthed(t, env.addr, "admin-uid")
-	defer func() { _ = adminConn.Close() }()
-	userConn, userID := dialAuthed(t, env.addr, "user-uid")
-	defer func() { _ = userConn.Close() }()
-
-	send(t, adminConn, netproto.MsgCreateChannel, netproto.CreateChannel{Name: "Vault", Type: 2, Password: "chanpw"})
-	readOfType(t, adminConn, netproto.MsgChannelList)
-
-	send(t, userConn, netproto.MsgJoinChannel, netproto.JoinChannel{ChannelID: 1})
-	waitFor(t, "user in channel", func() bool {
-		for _, c := range env.state.ChannelMembers(1) {
-			if c.ClientID == userID {
-				return true
-			}
-		}
-		return false
-	})
-}
-
-// TestJoinChannelNeededPower verifies the i_channel_join_power vs
-// needed_join_power check: below the needed power is denied, sufficient power
-// joins.
-func TestJoinChannelNeededPower(t *testing.T) {
-	env := startTestEnv(t, nil) // no join power granted
-	defer env.stop()
-
-	adminConn, _ := dialAuthed(t, env.addr, "admin-uid")
-	defer func() { _ = adminConn.Close() }()
-	userConn, _ := dialAuthed(t, env.addr, "user-uid")
-	defer func() { _ = userConn.Close() }()
-
-	send(t, adminConn, netproto.MsgCreateChannel, netproto.CreateChannel{Name: "HQ", Type: 2, NeededJoinPower: 50})
-	readOfType(t, adminConn, netproto.MsgChannelList)
-
-	send(t, userConn, netproto.MsgJoinChannel, netproto.JoinChannel{ChannelID: 1})
-	f := readOfType(t, userConn, netproto.MsgError)
-	var e netproto.Error
-	if err := netproto.Decode(f, &e); err != nil {
-		t.Fatalf("decode error: %v", err)
-	}
-	if e.Code != errCodePermissionDenied {
-		t.Fatalf("error code = %d, want %d", e.Code, errCodePermissionDenied)
-	}
-}
-
-// TestJoinChannelNeededPowerGranted verifies a client with sufficient
-// i_channel_join_power joins a channel with a needed_join_power.
-func TestJoinChannelNeededPowerGranted(t *testing.T) {
-	perms := tieredWith(intPerm(permissions.PermissionKeyChannelJoinPower, 75))
-	env := startTestEnv(t, &perms)
-	defer env.stop()
-
-	adminConn, _ := dialAuthed(t, env.addr, "admin-uid")
-	defer func() { _ = adminConn.Close() }()
-	userConn, userID := dialAuthed(t, env.addr, "user-uid")
-	defer func() { _ = userConn.Close() }()
-
-	send(t, adminConn, netproto.MsgCreateChannel, netproto.CreateChannel{Name: "HQ", Type: 2, NeededJoinPower: 50})
-	readOfType(t, adminConn, netproto.MsgChannelList)
-
-	send(t, userConn, netproto.MsgJoinChannel, netproto.JoinChannel{ChannelID: 1})
-	waitFor(t, "user in channel", func() bool {
-		for _, c := range env.state.ChannelMembers(1) {
-			if c.ClientID == userID {
-				return true
-			}
-		}
-		return false
-	})
-}
-
-// TestCreateChannelNeededPowerCap verifies a non-admin may not set a needed
-// join power above their own join power.
-func TestCreateChannelNeededPowerCap(t *testing.T) {
-	perms := tieredWith(
-		boolPerm(permissions.PermissionKeyChannelCreateTemporary, true),
-		intPerm(permissions.PermissionKeyChannelJoinPower, 10),
-	)
-	env := startTestEnv(t, &perms)
-	defer env.stop()
-
-	conn, _ := dialAuthed(t, env.addr, "user-uid")
-	defer func() { _ = conn.Close() }()
-
-	send(t, conn, netproto.MsgCreateChannel, netproto.CreateChannel{Name: "TooHigh", Type: 0, NeededJoinPower: 50})
-	f := readOfType(t, conn, netproto.MsgError)
-	var e netproto.Error
-	if err := netproto.Decode(f, &e); err != nil {
-		t.Fatalf("decode error: %v", err)
-	}
-	if e.Code != errCodePermissionDenied {
-		t.Fatalf("error code = %d, want %d", e.Code, errCodePermissionDenied)
-	}
-	if got := env.channels.createdCount(); got != 0 {
-		t.Fatalf("created channels = %d, want 0", got)
-	}
-
-	// At or below the caller's own join power it succeeds.
-	send(t, conn, netproto.MsgCreateChannel, netproto.CreateChannel{Name: "Fine", Type: 0, NeededJoinPower: 10})
-	readOfType(t, conn, netproto.MsgChannelList)
-	if got := env.channels.createdCount(); got != 1 {
-		t.Fatalf("created channels = %d, want 1", got)
-	}
-}
-
-// --- offline message spool --------------------------------------------------
-
 // TestDirectMessageSpooledOffline verifies that an encrypted direct message
 // to an offline user is spooled instead of failing, and that a plaintext one
-// is refused: the server has no DM key, so it could not seal it, and an
-// unsealable body must never reach the spool (91).
+// is refused because the server has no DM key.
 func TestDirectMessageSpooledOffline(t *testing.T) {
 	env := startTestEnv(t, nil)
 	defer env.stop()
@@ -2673,15 +2304,6 @@ func TestMoveEventsCarryCommittedChannelAndActor(t *testing.T) {
 		t.Fatalf("admin move = %+v, want target %s from 1 to 2 by %s", adminMove, userID, adminID)
 	}
 
-	// ServerQuery has no connected actor, so its established synthetic actor is
-	// explicit rather than fabricating a user/session identity.
-	if err := env.srv.MoveClient(context.Background(), userID, 1); err != nil {
-		t.Fatalf("ServerQuery MoveClient: %v", err)
-	}
-	queryMove := nextMove()
-	if queryMove.ClientID != userID || queryMove.FromChannelID != 2 || queryMove.ChannelID != 1 || queryMove.ByClientID != "serverquery" {
-		t.Fatalf("ServerQuery move = %+v", queryMove)
-	}
 }
 
 func TestBanEventsCarryExpiryAndTargetChannel(t *testing.T) {
@@ -2721,36 +2343,4 @@ func TestBanEventsCarryExpiryAndTargetChannel(t *testing.T) {
 		}
 	})
 
-	t.Run("trusted permanent ban", func(t *testing.T) {
-		env := startTestEnv(t, nil)
-		defer env.stop()
-		userConn, userID := dialAuthed(t, env.addr, "user-uid")
-		defer func() { _ = userConn.Close() }()
-		env.state.AddChannel(testChannel(1))
-		if err := env.state.MoveClient(userID, 1); err != nil {
-			t.Fatalf("position ban target: %v", err)
-		}
-
-		events := make(chan kickEvent, 1)
-		env.deps.Broadcast.SetEventTap(func(eventType string, payload []byte) {
-			if eventType != eventKicked {
-				return
-			}
-			var event kickEvent
-			if err := json.Unmarshal(payload, &event); err == nil {
-				events <- event
-			}
-		})
-		if err := env.srv.BanClient(context.Background(), "serverquery", userID, 0, "permanent"); err != nil {
-			t.Fatalf("trusted BanClient: %v", err)
-		}
-		select {
-		case event := <-events:
-			if !event.Ban || event.ChannelID != 1 || event.ExpiresAt != 0 || event.ByClientID != "serverquery" {
-				t.Fatalf("permanent ban event = %+v, want serverquery permanent ban for channel 1", event)
-			}
-		case <-time.After(3 * time.Second):
-			t.Fatal("timed out waiting for permanent ban event")
-		}
-	})
 }

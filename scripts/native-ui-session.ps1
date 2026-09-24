@@ -4,7 +4,9 @@
 Starts, inspects, or stops a disposable native noXa test environment.
 .DESCRIPTION
 Run in PowerShell 7.4+ on Windows with Docker Desktop, Go, and Node/npm.
-Starts actual Wails clients; it does not automate UI or assert remote delivery.
+Starts actual Wails clients and provisions disposable roles-v1 accounts.
+The test action runs the client backend's live integration tests.
+SkipBuild skips server/client builds; provisioning tools are always built.
 All ports bind loopback. DEV_MODE permits locally generated TLS certificates.
 Run IDs are single-use. Stop terminates only recorded native processes and stops
 only recorded, correctly labeled containers. Evidence and data are retained.
@@ -19,7 +21,7 @@ only recorded, correctly labeled containers. Evidence and data are retained.
 #>
 [CmdletBinding()]
 param(
-    [Parameter(Mandatory, Position = 0)][ValidateSet('start', 'status', 'stop')][string]$Action,
+    [Parameter(Mandatory, Position = 0)][ValidateSet('start', 'status', 'stop', 'test')][string]$Action,
     [Parameter(Mandatory)][ValidatePattern('^[a-z0-9][a-z0-9-]{0,39}$')][string]$RunId,
     [ValidateRange(1024, 65526)][int]$BasePort = 13583,
     [switch]$SkipBuild,
@@ -137,6 +139,28 @@ if ($Action -ne 'start') {
     $session = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
     if ($session.runId -ne $RunId -or $session.root -ne $runRoot) { throw 'Session manifest does not match requested run.' }
     if ($Action -eq 'stop') { Stop-Session; Write-Output "Stopped $RunId; retained $runRoot"; return }
+    if ($Action -eq 'test') {
+        $server = @($session.processes | Where-Object name -eq 'server')
+        if ($server.Count -ne 1 -or $null -eq (Get-RecordedProcess $server[0])) { throw 'The disposable server is not running.' }
+        $testEnv = Get-Content -LiteralPath (Join-Path $runRoot 'secrets/live-environment.json') -Raw | ConvertFrom-Json -AsHashtable
+        $previous = @{}
+        Push-Location (Join-Path $repoRoot 'client')
+        try {
+            foreach ($key in $testEnv.Keys) {
+                if ($key -notlike 'NOXA_LIVE_*') { throw 'Unexpected live test environment key.' }
+                $previous[$key] = [Environment]::GetEnvironmentVariable($key, 'Process')
+                [Environment]::SetEnvironmentVariable($key, $testEnv[$key], 'Process')
+            }
+            & go test -run '^TestLive' -count=1 -v . *> (Join-Path $runRoot 'evidence/live-tests.log')
+            $testExit = $LASTEXITCODE
+            Get-Content -LiteralPath (Join-Path $runRoot 'evidence/live-tests.log')
+            if ($testExit -ne 0) { throw 'Live integration tests failed; inspect evidence/live-tests.log.' }
+        } finally {
+            foreach ($key in $previous.Keys) { [Environment]::SetEnvironmentVariable($key, $previous[$key], 'Process') }
+            Pop-Location
+        }
+        return
+    }
     $processStatus = foreach ($record in $session.processes) {
         [pscustomobject]@{ name = $record.name; pid = $record.pid; running = ($null -ne (Get-RecordedProcess $record)); executable = $record.executable }
     }
@@ -164,6 +188,13 @@ try { $udp.Client.Bind([Net.IPEndPoint]::new([Net.IPAddress]::Loopback, $BasePor
 foreach ($directory in @('bin', 'tools', 'server', 'profiles', 'evidence', 'secrets')) {
     New-Item -ItemType Directory -Path (Join-Path $runRoot $directory) -Force | Out-Null
 }
+# Keep disposable credentials readable only by this Windows account and SYSTEM.
+$secretAcl = [Security.AccessControl.DirectorySecurity]::new()
+$secretAcl.SetAccessRuleProtection($true, $false)
+foreach ($sid in @([Security.Principal.WindowsIdentity]::GetCurrent().User, [Security.Principal.SecurityIdentifier]::new('S-1-5-18'))) {
+    $secretAcl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new($sid, 'FullControl', 'ContainerInherit,ObjectInherit', 'None', 'Allow'))
+}
+Set-Acl -LiteralPath (Join-Path $runRoot 'secrets') -AclObject $secretAcl
 # Keep generated Go tooling outside root-module package discovery.
 Set-Content -LiteralPath (Join-Path $runRoot 'go.mod') -Value 'module native-ui-artifacts'
 $session = [pscustomobject]@{
@@ -232,12 +263,45 @@ try {
     $serverEnv.NOXA_FILE_TLS_ENABLED = 'true'
     $portNames = @('TCP_ADDR', 'UDP_ADDR', 'GRPC_ADDR', 'HEALTH_ADDR', 'QUERY_ADDR', 'FILE_ADDR', 'QUERY_SSH_ADDR')
     for ($offset = 0; $offset -lt $portNames.Count; $offset++) { $serverEnv['NOXA_' + $portNames[$offset]] = "127.0.0.1:$($BasePort + $offset)" }
+    # The database lease requires provisioning while the server is stopped.
+    Set-Location -LiteralPath $repoRoot
+    foreach ($tool in @('adduser', 'role-setup')) {
+        Invoke-Checked go @('build', '-o', (Join-Path $runRoot "tools/$tool.exe"), "./cmd/$tool") | Out-Null
+    }
+    $previousDatabase = $env:NOXA_DATABASE_URL
+    $previousChatKey = $env:NOXA_CHAT_MASTER_KEY
+    $credentials = @{}
+    try {
+        $env:NOXA_DATABASE_URL = $serverEnv.NOXA_DATABASE_URL
+        $env:NOXA_CHAT_MASTER_KEY = $null
+        foreach ($account in @('ALICE', 'BOB', 'ADMIN')) {
+            $accountPassword = [Convert]::ToHexString([Security.Cryptography.RandomNumberGenerator]::GetBytes(24)).ToLowerInvariant()
+            $provisionOutput = (& (Join-Path $runRoot 'tools/adduser.exe') -nickname "native-$($account.ToLowerInvariant())" -password $accountPassword 2>&1 | Out-String)
+            if ($LASTEXITCODE -ne 0 -or $provisionOutput -notmatch 'unique_id: (\S+)') { throw "Could not provision $account; credential-bearing output suppressed." }
+            $credentials[$account] = @{ uid = $Matches[1]; password = $accountPassword }
+        }
+        $credentials | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $runRoot 'secrets/live-credentials.json')
+        $roleOutput = (& (Join-Path $runRoot 'tools/role-setup.exe') -owner-uid $credentials.ADMIN.uid -activate -confirm ACTIVATE-ROLES-V1 -chat-master-key-file (Join-Path $runRoot 'server/data/keys/chat_master.key') 2>&1 | Out-String)
+        if ($LASTEXITCODE -ne 0) { throw 'Disposable roles-v1 activation failed; credential-bearing output suppressed.' }
+    } finally {
+        $env:NOXA_DATABASE_URL = $previousDatabase
+        $env:NOXA_CHAT_MASTER_KEY = $previousChatKey
+    }
     $serverRecord = Start-RecordedProcess 'server' (Join-Path $runRoot 'bin/server.exe') (Join-Path $runRoot 'server') $serverEnv
     Wait-Ready {
         if ($null -eq (Get-RecordedProcess $serverRecord)) { throw 'Server exited before readiness.' }
         try { return (Invoke-WebRequest "http://127.0.0.1:$($BasePort + 3)/readyz" -TimeoutSec 2).StatusCode -eq 200 }
         catch { return $false }
     } 'noXa server readiness'
+    $certificate = [Security.Cryptography.X509Certificates.X509Certificate2]::CreateFromPem((Get-Content -LiteralPath (Join-Path $runRoot 'server/data/tls/cert.pem') -Raw))
+    try { $fingerprint = ([Convert]::ToHexString($certificate.GetCertHash([Security.Cryptography.HashAlgorithmName]::SHA256)) -split '(..)' | Where-Object { $_ }) -join ':' }
+    finally { $certificate.Dispose() }
+    $testEnvironment = @{ NOXA_LIVE_ADDR = $session.address; NOXA_LIVE_TLS_FINGERPRINT = $fingerprint }
+    foreach ($account in $credentials.Keys) {
+        $testEnvironment["NOXA_LIVE_${account}_UID"] = $credentials[$account].uid
+        $testEnvironment["NOXA_LIVE_${account}_PASS"] = $credentials[$account].password
+    }
+    $testEnvironment | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $runRoot 'secrets/live-environment.json')
     if (-not $NoClients) {
         foreach ($role in @('ALPHA', 'BRAVO', 'CHARLIE')) {
             $profile = Join-Path $runRoot "profiles/$role"
@@ -258,7 +322,7 @@ try {
     }
     $session.state = 'ready'
     Save-Session
-    Write-Output "Ready at $($session.address). Evidence: $runRoot/evidence. Connect clients through their actual UI; roles and channels are not preconfigured."
+    Write-Output "Ready at $($session.address). Evidence: $runRoot/evidence. Roles-v1 is active; disposable credentials are in the protected secrets directory. Run the test action for live backend checks."
 } catch {
     $failure = $_
     try { Stop-Session } catch { Write-Warning "Cleanup incomplete: $($_.Exception.Message)" }

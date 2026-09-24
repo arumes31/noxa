@@ -11,6 +11,7 @@ import (
 	"go.uber.org/zap"
 
 	"noxa/internal/auth"
+	"noxa/internal/authorization"
 	"noxa/internal/config"
 	"noxa/internal/netproto"
 )
@@ -142,7 +143,7 @@ func TestTCPPreauthSuccessfulAuthenticationRestoresInactivityPolicy(t *testing.T
 				s, peer, done := startPreauthPipe(t, tc.inactivitySeconds, false)
 				defer finishPreauthPipe(peer, done)
 				time.Sleep(9 * time.Second)
-				frame, err := netproto.Encode(netproto.MsgAuthenticate, netproto.Authenticate{Anonymous: true, Nickname: "guest"})
+				frame, err := netproto.Encode(netproto.MsgAuthenticate, netproto.Authenticate{Anonymous: true, Nickname: "guest", AuthorizationModels: []string{netproto.AuthorizationModelRolesV1}})
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -269,7 +270,11 @@ func (s *preauthWaitingSettings) GetServerSetting(ctx context.Context, _ string)
 
 func startPreauthPipe(t *testing.T, inactivitySeconds int, useTLS bool) (*TCPServer, net.Conn, <-chan struct{}) {
 	t.Helper()
-	s := New(&config.Config{ClientTimeoutSeconds: inactivitySeconds}, zap.NewNop(), &Deps{Auth: &fakeAuth{}})
+	authority, err := authorization.NewAuthority(t.Context(), serverRoleFixture(), func(context.Context, *authorization.RoleEvaluator, *authorization.RoleEvaluator) error { return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := New(&config.Config{ClientTimeoutSeconds: inactivitySeconds}, zap.NewNop(), &Deps{Auth: &fakeAuth{}, Authority: authority})
 	server, peer := net.Pipe()
 	conn := server
 	if useTLS {

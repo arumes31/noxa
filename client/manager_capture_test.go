@@ -19,9 +19,6 @@ func TestBindingsRequireManagerOffline(t *testing.T) {
 	if got := a.ChatDeleteMessage(1); got != "not connected" {
 		t.Fatalf("ChatDeleteMessage offline = %q", got)
 	}
-	if _, err := a.GetPermissions(); err == nil || err.Error() != "not connected" {
-		t.Fatalf("GetPermissions offline error = %v", err)
-	}
 	if got := a.SetStatus("online", ""); got != "not connected" {
 		t.Fatalf("SetStatus offline = %q", got)
 	}

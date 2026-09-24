@@ -3,11 +3,40 @@
 package server
 
 import (
+	"context"
 	"testing"
 
-	"noxa/internal/permissions"
+	"noxa/internal/authorization"
+	"noxa/internal/netproto"
 	"noxa/internal/state"
 )
+
+func TestRoleBotIdentityGrantsNoAuthority(t *testing.T) {
+	for _, bot := range []bool{false, true} {
+		t.Run(map[bool]string{false: "account_member", true: "account_bot"}[bot], func(t *testing.T) {
+			backend := serverRoleFixture()
+			a, err := authorization.NewAuthority(t.Context(), backend, func(context.Context, *authorization.RoleEvaluator, *authorization.RoleEvaluator) error { return nil })
+			if err != nil {
+				t.Fatal(err)
+			}
+			env := startTestEnvDeps(t, nil, nil, func(d *Deps) {
+				d.Authority = a
+				d.Auth.(*fakeAuth).users["admin-uid"].IsBot = bot
+			})
+			defer env.stop()
+			conn, _ := dialAuthed(t, env.addr, "admin-uid")
+			defer func() { _ = conn.Close() }()
+			if got := stateClientFor(t, env, "admin-uid").IsBot; got != bot {
+				t.Fatalf("bot badge = %v, want %v", got, bot)
+			}
+			send(t, conn, netproto.MsgServerBannerSet, netproto.ServerBannerSet{DataBase64: b64(tinyPNG)})
+			var denied netproto.Error
+			if err := netproto.Decode(readOfType(t, conn, netproto.MsgError), &denied); err != nil || denied.Code != errCodePermissionDenied {
+				t.Fatalf("bot gained server authority: %+v, %v", denied, err)
+			}
+		})
+	}
+}
 
 // stateClientFor returns the in-memory state client of a connected user.
 func stateClientFor(t *testing.T, env *testEnv, uniqueID string) *state.Client {
@@ -20,23 +49,23 @@ func stateClientFor(t *testing.T, env *testEnv, uniqueID string) *state.Client {
 	return sc
 }
 
-// TestAuthSetsBotFlag verifies an account holding b_client_is_bot is marked at
-// authentication time, which is what puts the badge in every later snapshot.
+// TestAuthSetsBotFlag verifies account metadata reaches the authenticated
+// session and every later snapshot.
 func TestAuthSetsBotFlag(t *testing.T) {
-	tp := tieredWith(&permissions.Permission{Key: permissions.PermissionKeyClientIsBot, Value: 1})
-	env := startTestEnv(t, &tp)
+	env := startTestEnvDeps(t, nil, nil, func(d *Deps) {
+		d.Auth.(*fakeAuth).users["user-uid"].IsBot = true
+	})
 	defer env.stop()
 	conn, _ := dialAuthed(t, env.addr, "user-uid")
 	defer func() { _ = conn.Close() }()
 
 	if !stateClientFor(t, env, "user-uid").IsBot {
-		t.Fatalf("account holding b_client_is_bot is not flagged in state")
+		t.Fatalf("bot account is not flagged in state")
 	}
 }
 
-// TestAuthLeavesNonBotsUnflagged covers the two ways a client must NOT get a
-// badge: no permission at all, and an admin who would otherwise be swept up by
-// the admin bypass that ClientIsBot deliberately skips.
+// TestAuthLeavesNonBotsUnflagged verifies ordinary account metadata never
+// creates a bot badge.
 func TestAuthLeavesNonBotsUnflagged(t *testing.T) {
 	env := startTestEnv(t, nil)
 	defer env.stop()
@@ -57,8 +86,7 @@ func TestAuthLeavesNonBotsUnflagged(t *testing.T) {
 // TestGuestAuthLeavesBotUnflagged: guests have no users row, so the flag can
 // never be granted to them.
 func TestGuestAuthLeavesBotUnflagged(t *testing.T) {
-	tp := tieredWith(&permissions.Permission{Key: permissions.PermissionKeyClientIsBot, Value: 1})
-	env := startTestEnv(t, &tp)
+	env := startTestEnv(t, nil)
 	defer env.stop()
 	conn, _ := dialGuest(t, env.addr, "g", "")
 	defer func() { _ = conn.Close() }()

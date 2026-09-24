@@ -21,6 +21,7 @@ func TestSimulateClientRecordsSafeAuthFailures(t *testing.T) {
 	}{
 		{name: "server rejection", frame: &netproto.Frame{Type: uint16(netproto.MsgError), Payload: []byte(`{"code":5,"message":"peer-secret"}`)}, want: "stage=read category=server_error server_code=5"},
 		{name: "auth rejection", frame: &netproto.Frame{Type: uint16(netproto.MsgAuthResponse), Payload: []byte(`{"ok":false,"reason":"peer-secret"}`)}, want: "stage=rejected category=rejected"},
+		{name: "incompatible authorization model", frame: &netproto.Frame{Type: uint16(netproto.MsgAuthResponse), Payload: []byte(`{"ok":false,"authorization_model":"roles-v2","reason":"peer-secret"}`)}, want: "stage=model category=authorization_model_mismatch"},
 		{name: "malformed authentication", frame: &netproto.Frame{Type: uint16(netproto.MsgAuthResponse), Payload: []byte("peer-secret")}, want: "stage=decode category=malformed_response"},
 		{name: "malformed server error", frame: &netproto.Frame{Type: uint16(netproto.MsgError), Payload: []byte("peer-secret")}, want: "stage=read category=malformed_response"},
 		{name: "transport closed", want: "stage=read category=transport"},

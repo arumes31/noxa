@@ -1,8 +1,36 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { formatBytes, formatDuration, summarizeMedia } from "../src/connection-stats.js";
+import { formatBytes, formatDuration, summarizeMedia, summarizeVideoProcessing } from "../src/connection-stats.js";
 
 const report = (...rows) => new Map(rows.map((r) => [r.id, r]));
+test("video processing reports actual local codecs and independent encoder/decoder efficiency", () => {
+    const stats = summarizeVideoProcessing(report(
+        { id: "vp8", type: "codec", mimeType: "video/VP8" },
+        { id: "h264", type: "codec", mimeType: "video/H264" },
+        { id: "send", type: "outbound-rtp", kind: "video", framesEncoded: 10, codecId: "h264", encoderImplementation: "ExternalEncoder", powerEfficientEncoder: true },
+        { id: "receive", type: "inbound-rtp", kind: "video", framesDecoded: 20, codecId: "vp8", decoderImplementation: "libvpx", powerEfficientDecoder: false },
+        { id: "remote", type: "remote-inbound-rtp", kind: "video", framesDecoded: 20, decoderImplementation: "Ignore" },
+        { id: "audio", type: "inbound-rtp", kind: "audio", framesDecoded: 20 },
+        { id: "idle", type: "outbound-rtp", kind: "video", framesEncoded: 0 },
+        { id: "inactive", type: "outbound-rtp", kind: "video", active: false, framesEncoded: 50 },
+    ));
+    assert.deepEqual(stats, {
+        encoders: [{ codec: "H264", implementation: "ExternalEncoder", powerEfficient: true }],
+        decoders: [{ codec: "VP8", implementation: "libvpx", powerEfficient: false }],
+    });
+});
+test("missing processor information stays unknown and mixed implementations remain distinct", () => {
+    assert.deepEqual(summarizeVideoProcessing(null), { encoders: [], decoders: [] });
+    const row = { type: "inbound-rtp", mediaType: "video", framesDecoded: 1, codecId: "absent" };
+    const stats = summarizeVideoProcessing(report(
+        { ...row, id: "a" }, { ...row, id: "b", decoderImplementation: "D3D11VideoDecoder" },
+        { ...row, id: "c", powerEfficientDecoder: "true" },
+    ));
+    assert.equal(stats.decoders.length, 3);
+    assert.deepEqual(stats.decoders[0], { codec: null, implementation: null, powerEfficient: null });
+    assert.equal(stats.decoders[1].powerEfficient, null, "implementation name must not invent an efficiency flag");
+    assert.equal(stats.decoders[2].powerEfficient, null);
+});
 test("unavailable statistics stay distinct from measured zero", () => {
     for (const value of [undefined, null, -1, NaN, Infinity]) {
         assert.equal(formatBytes(value), "—");

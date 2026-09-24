@@ -72,53 +72,6 @@ func TestChannelTreeOrderedReturnsClones(t *testing.T) {
 	}
 }
 
-// TestChannelPermissionChain verifies the chain stops at the first channel
-// that does not inherit (157).
-func TestChannelPermissionChain(t *testing.T) {
-	m := treeManager(
-		&Channel{ChannelID: 1},
-		&Channel{ChannelID: 2, ParentID: 1, InheritPermissions: true},
-		&Channel{ChannelID: 3, ParentID: 2, InheritPermissions: true},
-		&Channel{ChannelID: 4, ParentID: 1},
-	)
-
-	chain := m.ChannelPermissionChain(3)
-	want := []int64{3, 2, 1}
-	if len(chain) != len(want) {
-		t.Fatalf("chain = %v, want %v", chain, want)
-	}
-	for i := range want {
-		if chain[i] != want[i] {
-			t.Fatalf("chain = %v, want %v", chain, want)
-		}
-	}
-
-	if chain := m.ChannelPermissionChain(4); len(chain) != 1 || chain[0] != 4 {
-		t.Fatalf("non-inheriting chain = %v, want [4]", chain)
-	}
-	if chain := m.ChannelPermissionChain(99); chain != nil {
-		t.Fatalf("unknown channel chain = %v, want nil", chain)
-	}
-}
-
-// TestEffectiveJoinPower verifies an inheriting sub-channel takes the highest
-// needed power on its chain, and a non-inheriting one only its own (157/168).
-func TestEffectiveJoinPower(t *testing.T) {
-	m := treeManager(
-		&Channel{ChannelID: 1, NeededJoinPower: 50},
-		&Channel{ChannelID: 2, ParentID: 1, InheritPermissions: true, NeededJoinPower: 10},
-		&Channel{ChannelID: 3, ParentID: 1, NeededJoinPower: 10},
-		&Channel{ChannelID: 4, ParentID: 2, InheritPermissions: true, NeededJoinPower: 75},
-	)
-
-	cases := map[int64]int{1: 50, 2: 50, 3: 10, 4: 75, 99: 0}
-	for id, want := range cases {
-		if got := m.EffectiveJoinPower(id); got != want {
-			t.Fatalf("EffectiveJoinPower(%d) = %d, want %d", id, got, want)
-		}
-	}
-}
-
 // TestChannelAncestors verifies the parent walk used as the move cycle guard
 // (168), including a hand-corrupted cycle that must terminate.
 func TestChannelAncestors(t *testing.T) {

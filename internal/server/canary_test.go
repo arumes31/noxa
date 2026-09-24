@@ -10,6 +10,7 @@ package server
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"reflect"
 	"strings"
@@ -20,14 +21,29 @@ import (
 	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest/observer"
 
+	"noxa/internal/authorization"
 	"noxa/internal/netproto"
-	"noxa/internal/permissions"
 )
 
-// permsWithPin grants b_channel_modify, the pin-curation gate.
-func permsWithPin() *permissions.TieredPermissions {
-	tp := tieredWith(boolPerm(permissions.PermissionKeyChannelModify, true))
-	return &tp
+func startTestEnvWithCapabilities(t *testing.T, extra ...authorization.Capability) *testEnv {
+	t.Helper()
+	backend := serverRoleFixture()
+	backend.policy.OwnerID = 1
+	backend.policy.Roles[0].Permissions = append([]authorization.Capability{
+		authorization.ViewChannel,
+		authorization.Connect,
+		authorization.SendMessages,
+		authorization.ReadHistory,
+		authorization.Speak,
+	}, extra...)
+	for channelID := int64(2); channelID <= 20; channelID++ {
+		backend.policy.Channels = append(backend.policy.Channels, authorization.ChannelPolicy{ChannelID: channelID})
+	}
+	authority, err := authorization.NewAuthority(t.Context(), backend, func(context.Context, *authorization.RoleEvaluator, *authorization.RoleEvaluator) error { return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	return startTestEnvDeps(t, nil, nil, func(d *Deps) { d.Authority = authority })
 }
 
 // containsCanary walks v via reflect — unexported fields included — and
@@ -130,7 +146,7 @@ func TestContainsCanaryReadsUnexportedFields(t *testing.T) {
 // tracker, and the broadcast payloads it produced.
 func TestNoPlaintextAnywhereInServerState(t *testing.T) {
 	const canary = "canary-7f3a"
-	env := startTestEnv(t, permsWithPin())
+	env := startTestEnvWithCapabilities(t, authorization.ManageMessages)
 	defer env.stop()
 	alice, bob, key, keyID, _ := chatPair(t, env)
 	defer func() { _ = alice.Close() }()
@@ -205,7 +221,7 @@ func TestNoPlaintextInHistoryResponse(t *testing.T) {
 // the entry shape from history.
 func TestNoPlaintextInPinsResponse(t *testing.T) {
 	const canary = "canary-7f3a"
-	env := startTestEnv(t, permsWithPin())
+	env := startTestEnvWithCapabilities(t, authorization.ManageMessages)
 	defer env.stop()
 	alice, bob, key, keyID, _ := chatPair(t, env)
 	defer func() { _ = alice.Close() }()

@@ -48,8 +48,8 @@ type App struct {
 	lifecycleMu              sync.Mutex
 	lifecycleCancel          context.CancelFunc
 	// Wails invokes beforeClose for programmatic Quit as well as window close.
-	// A successful update restart must exit even when close-to-tray is enabled.
-	restarting atomic.Bool
+	// Explicit Quit and update restart bypass close-to-tray.
+	quitting atomic.Bool
 	// cm is the ACTIVE tab's connManager (281 multi-server tabs): all
 	// bindings keep operating on it. Background tabs live in tabs and their
 	// events are journaled/replayed by tabs.go. Access via cmLoad/cmStore
@@ -96,8 +96,10 @@ type App struct {
 	// before a caller queues for the durable-settings transaction.
 	beforeSettingsTransaction func()
 
-	hkMu    sync.Mutex
-	hotkeys map[string]*hotkeyReg
+	hkMu             sync.Mutex
+	hotkeys          map[string]*hotkeyReg
+	hotkeyGeneration map[string]uint64
+	hotkeysClosed    bool
 
 	// opacityMu serialises OS-level setWindowOpacity calls so the background
 	// watcher and SetWindowOpacity cannot interleave and leave persisted vs.
@@ -112,6 +114,10 @@ type App struct {
 	// are account credentials, so interleaving a switch/regeneration/delete
 	// must never select one path and write another.
 	identityMu sync.Mutex
+	// identityGeneration invalidates local-history contexts even when the
+	// selected identity is changed away and back before the UI catches up.
+	// It is guarded by identityMu.
+	identityGeneration uint64
 }
 
 // NewApp creates a new App.
@@ -124,7 +130,7 @@ func NewApp() *App {
 }
 
 func (a *App) beforeClose(ctx context.Context) bool {
-	if a.restarting.Load() {
+	if a.quitting.Load() {
 		return false
 	}
 	a.settingsMu.Lock()
@@ -136,6 +142,15 @@ func (a *App) beforeClose(ctx context.Context) bool {
 		return true
 	}
 	return false
+}
+
+// Quit exits explicitly, even when closing the window normally hides it.
+func (a *App) Quit() {
+	if a.ctx == nil {
+		return
+	}
+	a.quitting.Store(true)
+	wailsQuit(a.ctx)
 }
 
 // cmLoad returns the active tab's connManager (may be nil).
@@ -151,28 +166,12 @@ func (a *App) requireCM() (*connManager, error) {
 	return cm, nil
 }
 
-// request and write are the one-frame operation boundaries used by bindings
-// that do not need to retain the manager for a later local step. They still
-// capture it once through requireCM, so an active-tab switch cannot split a
-// request between managers.
-func (a *App) request(send, reply netproto.MessageType, msg any, timeout time.Duration) (*netproto.Frame, error) {
-	cm, err := a.requireCM()
-	if err != nil {
-		return nil, err
-	}
-	return cm.request(send, reply, msg, timeout)
-}
-
-func (a *App) write(mt netproto.MessageType, msg any) error {
-	cm, err := a.requireCM()
-	if err != nil {
-		return err
-	}
-	return cm.write(mt, msg)
-}
-
 // cmStore sets the active tab's connManager.
 func (a *App) cmStore(cm *connManager) { a.cm.Store(cm) }
+
+func (a *App) domReady(context.Context) {
+	trayRefreshWindowIcon()
+}
 
 // startup is called when the app starts.
 func (a *App) startup(ctx context.Context) {
@@ -288,6 +287,7 @@ func (a *App) shutdown(_ context.Context) {
 	}
 	a.lifecycleMu.Unlock()
 	a.hkMu.Lock()
+	a.hotkeysClosed = true
 	for action, reg := range a.hotkeys {
 		reg.stop()
 		delete(a.hotkeys, action)
@@ -336,7 +336,20 @@ func (a *App) JoinChannel(channelID int64) string {
 	if err != nil {
 		return err.Error()
 	}
-	if err := cm.write(netproto.MsgJoinChannel, netproto.JoinChannel{ChannelID: channelID}); err != nil {
+	return cm.joinChannel(channelID)
+}
+
+// JoinChannelForTab keeps channel navigation on its initiating server.
+func (a *App) JoinChannelForTab(tabID string, channelID int64) string {
+	cm, err := a.requireTabCM(tabID)
+	if err != nil {
+		return err.Error()
+	}
+	return cm.joinChannel(channelID)
+}
+
+func (cm *connManager) joinChannel(channelID int64) string {
+	if err := cm.joinChannelAcknowledged(netproto.JoinChannel{ChannelID: channelID}); err != nil {
 		return err.Error()
 	}
 	return ""
@@ -349,7 +362,20 @@ func (a *App) MoveClient(clientID string, channelID int64) string {
 	if err != nil {
 		return err.Error()
 	}
-	if err := cm.write(netproto.MsgMoveClient, netproto.MoveClient{
+	return cm.moveClient(clientID, channelID)
+}
+
+// MoveClientForTab rejects actions from another server's view.
+func (a *App) MoveClientForTab(tabID string, clientID string, channelID int64) string {
+	cm, err := a.requireTabCM(tabID)
+	if err != nil {
+		return err.Error()
+	}
+	return cm.moveClient(clientID, channelID)
+}
+
+func (cm *connManager) moveClient(clientID string, channelID int64) string {
+	if err := cm.moveClientAcknowledged(netproto.MoveClient{
 		ClientID: clientID, ChannelID: channelID,
 	}); err != nil {
 		return err.Error()
@@ -365,6 +391,15 @@ func (a *App) GetICEServers() []netproto.ICEServer {
 		return nil
 	}
 	return cm.iceServersSnapshot()
+}
+
+// GetMediaLimits returns the current connection's advertised publishing limits.
+func (a *App) GetMediaLimits() netproto.MediaLimits {
+	cm, err := a.requireCM()
+	if err != nil {
+		return netproto.MediaLimits{}
+	}
+	return cm.mediaLimitsSnapshot()
 }
 
 // ServerFingerprint returns the SHA-256 fingerprint of the current (or last
@@ -461,6 +496,10 @@ func (a *App) ConnectionSecurity() string {
 		return "offline"
 	}
 	tlsUsed, fp, newServer := cm.securitySnapshot()
+	return connectionSecurity(tlsUsed, fp, newServer)
+}
+
+func connectionSecurity(tlsUsed bool, fp string, newServer bool) string {
 	if !tlsUsed {
 		return "PLAINTEXT — traffic is NOT encrypted"
 	}
@@ -480,6 +519,15 @@ func (a *App) MOTD() string {
 	return cm.motdSnapshot()
 }
 
+// MOTDForTab reads the notice only from the displayed server's connection.
+func (a *App) MOTDForTab(tabID string) (string, error) {
+	cm, err := a.requireTabCM(tabID)
+	if err != nil {
+		return "", err
+	}
+	return cm.motdSnapshot(), nil
+}
+
 // AcceptServerRules accepts exactly the rules revision displayed by the
 // blocking first-join prompt (216). The server answers with another
 // ServerRules frame: an empty payload closes the gate, while changed rules
@@ -491,6 +539,23 @@ func (a *App) AcceptServerRules(hash string) string {
 	m := a.cmLoad()
 	if m == nil {
 		return "not connected"
+	}
+	return m.acceptServerRules(hash)
+}
+
+// AcceptServerRulesForTab submits the displayed revision to its original server.
+// The server_rules event remains the authoritative acceptance response.
+func (a *App) AcceptServerRulesForTab(tabID, hash string) string {
+	m, err := a.requireTabCM(tabID)
+	if err != nil {
+		return err.Error()
+	}
+	return m.acceptServerRules(hash)
+}
+
+func (m *connManager) acceptServerRules(hash string) string {
+	if hash == "" {
+		return "rules hash is required"
 	}
 	if err := m.write(netproto.MsgServerRulesAccept, netproto.ServerRulesAccept{Hash: hash}); err != nil {
 		return err.Error()
@@ -518,36 +583,7 @@ func (a *App) SetPrioritySpeaker(active bool) string {
 	if err != nil {
 		return err.Error()
 	}
-	if err := cm.write(netproto.MsgPrioritySpeaker, netproto.PrioritySpeaker{Active: active}); err != nil {
-		return err.Error()
-	}
-	return ""
-}
-
-// ChannelEdit edits a channel's settings (gated server-side by
-// b_channel_modify). The dialog always sends the full form, so every field
-// is set explicitly. It returns "" on success or the failure reason.
-func (a *App) ChannelEdit(channelID int64, topic string, maxClients int, opusBitrate int, opusFEC bool, opusDTX bool, opusStereo bool, description string, slowModeSeconds int) string {
-	cm, err := a.requireCM()
-	if err != nil {
-		return err.Error()
-	}
-	if err := cm.write(netproto.MsgChannelEdit, netproto.ChannelEdit{
-		ChannelID:   channelID,
-		Topic:       &topic,
-		MaxClients:  &maxClients,
-		OpusBitrate: &opusBitrate,
-		OpusFEC:     &opusFEC,
-		OpusDTX:     &opusDTX,
-		OpusStereo:  &opusStereo,
-		Description: &description,
-		// (114) the dialog always sends the full form, so 0 means "off"
-		// rather than "unchanged".
-		SlowModeSeconds: &slowModeSeconds,
-	}); err != nil {
-		return err.Error()
-	}
-	return ""
+	return cm.mediaControl(netproto.MediaControlSaved{Operation: netproto.MsgPrioritySpeaker, Active: active})
 }
 
 // SendChat sends a chat message. scope is "global", "channel", or "direct"
@@ -563,6 +599,20 @@ func (a *App) SendChatReply(scope, target, text string, replyToID int64) string 
 	return a.sendChat(scope, target, text, replyToID)
 }
 
+// SendChatForTab captures the displayed server before encrypting a message.
+func (a *App) SendChatForTab(tabID, scope, target, text string) string {
+	return a.SendChatReplyForTab(tabID, scope, target, text, 0)
+}
+
+// SendChatReplyForTab binds encryption and delivery to the initiating tab.
+func (a *App) SendChatReplyForTab(tabID, scope, target, text string, replyToID int64) string {
+	cm, err := a.requireTabCM(tabID)
+	if err != nil {
+		return err.Error()
+	}
+	return sendChatWith(cm, scope, target, text, replyToID)
+}
+
 func (a *App) sendChat(scope, target, text string, replyToID int64) string {
 	if text == "" {
 		return "empty message"
@@ -571,6 +621,13 @@ func (a *App) sendChat(scope, target, text string, replyToID int64) string {
 	if err != nil {
 		return err.Error()
 	}
+	return sendChatWith(cm, scope, target, text, replyToID)
+}
+
+func sendChatWith(cm *connManager, scope, target, text string, replyToID int64) string {
+	if text == "" {
+		return "empty message"
+	}
 	msg, err := cm.encryptChat(scope, target, text)
 	if err != nil {
 		return "encryption failed: " + err.Error()
@@ -578,7 +635,7 @@ func (a *App) sendChat(scope, target, text string, replyToID int64) string {
 	if scope != "direct" {
 		msg.ReplyToID = replyToID
 	}
-	if err := cm.write(netproto.MsgChatSend, msg); err != nil {
+	if err := cm.sendChatAcknowledged(msg); err != nil {
 		return err.Error()
 	}
 	return ""
@@ -590,32 +647,7 @@ func (a *App) WhisperSet(uniqueIDs []string, channelIDs []int64, active bool) st
 	if err != nil {
 		return err.Error()
 	}
-	if err := cm.write(netproto.MsgWhisperSet, netproto.WhisperSet{
-		UniqueIDs:  uniqueIDs,
-		ChannelIDs: channelIDs,
-		Active:     active,
-	}); err != nil {
-		return err.Error()
-	}
-	return ""
-}
-
-// GetPermissions returns the caller's resolved permission set.
-func (a *App) GetPermissions() ([]netproto.PermissionEntry, error) {
-	cm, err := a.requireCM()
-	if err != nil {
-		return nil, err
-	}
-	f, err := cm.request(netproto.MsgPermissionsQuery, netproto.MsgPermissionsResponse,
-		netproto.PermissionsQuery{}, 5*time.Second)
-	if err != nil {
-		return nil, err
-	}
-	var resp netproto.PermissionsResponse
-	if err := decodeJSON(f, &resp); err != nil {
-		return nil, err
-	}
-	return resp.Entries, nil
+	return cm.mediaControl(netproto.MediaControlSaved{Operation: netproto.MsgWhisperSet, UniqueIDs: uniqueIDs, ChannelIDs: channelIDs, Active: active})
 }
 
 // WebRTCOffer sends the browser's SDP offer and returns the server's answer.
@@ -629,6 +661,10 @@ func (a *App) WebRTCOffer(sdp string, tracks []netproto.TrackSlot) (string, erro
 	if err != nil {
 		return "", err
 	}
+	return cm.webRTCOffer(sdp, tracks)
+}
+
+func (cm *connManager) webRTCOffer(sdp string, tracks []netproto.TrackSlot) (string, error) {
 	f, err := cm.request(netproto.MsgWebRTCOffer, netproto.MsgWebRTCAnswer,
 		netproto.WebRTCOffer{SDP: sdp, Tracks: tracks}, 10*time.Second)
 	if err != nil {
@@ -676,10 +712,7 @@ func (a *App) SetScreenShareQuality(active bool, maxHeight int) string {
 	if m == nil {
 		return "not connected"
 	}
-	if err := m.write(netproto.MsgScreenShare, netproto.ScreenShare{Active: active, MaxHeight: maxHeight}); err != nil {
-		return err.Error()
-	}
-	return ""
+	return m.mediaControl(netproto.MediaControlSaved{Operation: netproto.MsgScreenShare, Active: active, MaxHeight: maxHeight})
 }
 
 // SetVideoQuality requests a simulcast layer for the video this client
@@ -689,10 +722,7 @@ func (a *App) SetVideoQuality(quality string) string {
 	if m == nil {
 		return "not connected"
 	}
-	if err := m.write(netproto.MsgVideoQuality, netproto.VideoQuality{Quality: quality}); err != nil {
-		return err.Error()
-	}
-	return ""
+	return m.mediaControl(netproto.MediaControlSaved{Operation: netproto.MsgVideoQuality, Quality: quality})
 }
 
 // SetMuted records the mute state (drives the status display; the actual
@@ -716,7 +746,20 @@ func (a *App) SetAvatar(dataBase64 string) string {
 	if err != nil {
 		return err.Error()
 	}
-	if err := cm.write(netproto.MsgAvatarSet, netproto.AvatarSet{DataBase64: dataBase64}); err != nil {
+	return cm.setAvatar(dataBase64)
+}
+
+// SetAvatarForTab rejects actions from another server's view.
+func (a *App) SetAvatarForTab(tabID string, dataBase64 string) string {
+	cm, err := a.requireTabCM(tabID)
+	if err != nil {
+		return err.Error()
+	}
+	return cm.setAvatar(dataBase64)
+}
+
+func (cm *connManager) setAvatar(dataBase64 string) string {
+	if err := cm.mutateAsset(netproto.MsgAvatarSet, "", "", dataBase64); err != nil {
 		return err.Error()
 	}
 	return ""
@@ -774,6 +817,19 @@ func (a *App) GetAvatar(uniqueID string) (netproto.AvatarData, error) {
 	if err != nil {
 		return netproto.AvatarData{}, err
 	}
+	return cm.getAvatar(uniqueID)
+}
+
+// GetAvatarForTab fetches an avatar from the displayed server only.
+func (a *App) GetAvatarForTab(tabID, uniqueID string) (netproto.AvatarData, error) {
+	cm, err := a.requireTabCM(tabID)
+	if err != nil {
+		return netproto.AvatarData{}, err
+	}
+	return cm.getAvatar(uniqueID)
+}
+
+func (cm *connManager) getAvatar(uniqueID string) (netproto.AvatarData, error) {
 	f, err := cm.request(netproto.MsgAvatarGet, netproto.MsgAvatarData,
 		netproto.AvatarGet{UniqueID: uniqueID}, 5*time.Second)
 	if err != nil {
@@ -793,6 +849,19 @@ func (a *App) GetClientInfo(clientID string) (netproto.ClientInfoResponse, error
 	if err != nil {
 		return netproto.ClientInfoResponse{}, err
 	}
+	return cm.getClientInfo(clientID)
+}
+
+// GetClientInfoForTab keeps connection queries on their originating server.
+func (a *App) GetClientInfoForTab(tabID, clientID string) (netproto.ClientInfoResponse, error) {
+	cm, err := a.requireTabCM(tabID)
+	if err != nil {
+		return netproto.ClientInfoResponse{}, err
+	}
+	return cm.getClientInfo(clientID)
+}
+
+func (cm *connManager) getClientInfo(clientID string) (netproto.ClientInfoResponse, error) {
 	f, err := cm.request(netproto.MsgClientInfoQuery, netproto.MsgClientInfoResponse,
 		netproto.ClientInfoQuery{ClientID: clientID}, 5*time.Second)
 	if err != nil {

@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./fixtures.js";
 
 // Real WebAudio and silent MediaStream tracks, with only the native capture
 // boundary controlled so permission races do not depend on physical hardware.

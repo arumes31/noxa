@@ -35,6 +35,7 @@ file_root: "./data/files"     # on-disk layout: <channel_id>/<name>
 file_max_kbps: 0              # per-connection bandwidth cap in KiB/s; 0 = unlimited
 file_max_connections: 128     # concurrent accepted file-port connections; 1..10000
 file_channel_quota_mb: 0      # per-channel total file quota in MiB; 0 = unlimited
+file_user_quota_mb: 0         # per-uploader quota for uploads/moves, including owners/admins; 0 = unlimited
 file_max_size_mb: 100         # per-transfer size cap in MiB; 0 = unlimited
 file_quiet_hours_start: 0      # local hour 0..23; equal start/end disables
 file_quiet_hours_end: 0
@@ -56,6 +57,9 @@ redis_tls_ca_file: ""          # optional PEM CA bundle; uses system roots when 
 max_clients: 1024
 client_timeout_seconds: 90
 default_opus_bitrate: 32000
+video_max_bitrate: 0          # per-publisher relayed video RTP bits/s, all slots/layers; 1s burst; 0 = unlimited
+video_max_width: 0            # both dimensions 0 = unlimited; enabling requires VP8 video
+video_max_height: 0           # e.g. width 1920 and height 1080; encoded frame bounds
 default_opus_fec: true
 default_opus_dtx: false
 default_opus_stereo: false
@@ -90,7 +94,6 @@ chat_legacy_history: encrypt       # encrypt | purge
 chat_key_rotate_min_seconds: 60
 chat_search_max_messages: 2000
 server_info_motd: false            # true exposes MOTD plaintext after authentication
-default_groups_enabled: true
 
 # Chat moderation & limits (wave 5a). max_length is in UTF-8 plaintext bytes
 # post-decrypt. rate = per-user token bucket. word/link filters apply to

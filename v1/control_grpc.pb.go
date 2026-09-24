@@ -19,11 +19,40 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	Control_Authenticate_FullMethodName          = "/voicx.v1.Control/Authenticate"
-	Control_CreateChannel_FullMethodName         = "/voicx.v1.Control/CreateChannel"
-	Control_DeleteChannel_FullMethodName         = "/voicx.v1.Control/DeleteChannel"
-	Control_ListChannels_FullMethodName          = "/voicx.v1.Control/ListChannels"
 	Control_QueryPermissions_FullMethodName      = "/voicx.v1.Control/QueryPermissions"
+	Control_DeleteChannel_FullMethodName         = "/voicx.v1.Control/DeleteChannel"
+	Control_CreateChannel_FullMethodName         = "/voicx.v1.Control/CreateChannel"
+	Control_Authenticate_FullMethodName          = "/voicx.v1.Control/Authenticate"
+	Control_ListChannels_FullMethodName          = "/voicx.v1.Control/ListChannels"
+	Control_ChangeRoles_FullMethodName           = "/voicx.v1.Control/ChangeRoles"
+	Control_ChangeChannel_FullMethodName         = "/voicx.v1.Control/ChangeChannel"
+	Control_SetMemberVoice_FullMethodName        = "/voicx.v1.Control/SetMemberVoice"
+	Control_MoveMember_FullMethodName            = "/voicx.v1.Control/MoveMember"
+	Control_DisconnectMember_FullMethodName      = "/voicx.v1.Control/DisconnectMember"
+	Control_KickMember_FullMethodName            = "/voicx.v1.Control/KickMember"
+	Control_BanMember_FullMethodName             = "/voicx.v1.Control/BanMember"
+	Control_GetServerInfo_FullMethodName         = "/voicx.v1.Control/GetServerInfo"
+	Control_GetClientInfo_FullMethodName         = "/voicx.v1.Control/GetClientInfo"
+	Control_GetServerConfig_FullMethodName       = "/voicx.v1.Control/GetServerConfig"
+	Control_GetMediaLimits_FullMethodName        = "/voicx.v1.Control/GetMediaLimits"
+	Control_SetMediaLimits_FullMethodName        = "/voicx.v1.Control/SetMediaLimits"
+	Control_SetServerConfig_FullMethodName       = "/voicx.v1.Control/SetServerConfig"
+	Control_GetChatFilters_FullMethodName        = "/voicx.v1.Control/GetChatFilters"
+	Control_SetChatFilters_FullMethodName        = "/voicx.v1.Control/SetChatFilters"
+	Control_SetServerText_FullMethodName         = "/voicx.v1.Control/SetServerText"
+	Control_ListCustomMetadata_FullMethodName    = "/voicx.v1.Control/ListCustomMetadata"
+	Control_ChangeCustomMetadata_FullMethodName  = "/voicx.v1.Control/ChangeCustomMetadata"
+	Control_ListBans_FullMethodName              = "/voicx.v1.Control/ListBans"
+	Control_GetRoleState_FullMethodName          = "/voicx.v1.Control/GetRoleState"
+	Control_ListRoleMembers_FullMethodName       = "/voicx.v1.Control/ListRoleMembers"
+	Control_CheckAccess_FullMethodName           = "/voicx.v1.Control/CheckAccess"
+	Control_GetChannelOptions_FullMethodName     = "/voicx.v1.Control/GetChannelOptions"
+	Control_ListClients_FullMethodName           = "/voicx.v1.Control/ListClients"
+	Control_GetChannelInfo_FullMethodName        = "/voicx.v1.Control/GetChannelInfo"
+	Control_ListAuditLog_FullMethodName          = "/voicx.v1.Control/ListAuditLog"
+	Control_ListComplaints_FullMethodName        = "/voicx.v1.Control/ListComplaints"
+	Control_ClearComplaints_FullMethodName       = "/voicx.v1.Control/ClearComplaints"
+	Control_GetServerRules_FullMethodName        = "/voicx.v1.Control/GetServerRules"
 	Control_StartFileTransfer_FullMethodName     = "/voicx.v1.Control/StartFileTransfer"
 	Control_GetFileTransferStatus_FullMethodName = "/voicx.v1.Control/GetFileTransferStatus"
 	Control_CancelFileTransfer_FullMethodName    = "/voicx.v1.Control/CancelFileTransfer"
@@ -33,19 +62,71 @@ const (
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 //
-// Control service handles authentication, channel management, permission
-// queries, and file transfer control.
+// Control service handles authentication, role-aware management, and file
+// transfer control.
 type ControlClient interface {
+	// Deprecated: Do not use.
+	// Retained for descriptor compatibility; this legacy operation is unimplemented.
+	QueryPermissions(ctx context.Context, in *QueryPermissionsRequest, opts ...grpc.CallOption) (*QueryPermissionsResponse, error)
+	// Deprecated: Do not use.
+	// Retained for descriptor compatibility; this legacy operation is unimplemented.
+	DeleteChannel(ctx context.Context, in *DeleteChannelRequest, opts ...grpc.CallOption) (*DeleteChannelResponse, error)
+	// Deprecated: Do not use.
+	// Retained for descriptor compatibility; this legacy operation is unimplemented.
+	CreateChannel(ctx context.Context, in *CreateChannelRequest, opts ...grpc.CallOption) (*CreateChannelResponse, error)
 	// Authenticate validates credentials and returns the authenticated user ID.
 	Authenticate(ctx context.Context, in *AuthenticateRequest, opts ...grpc.CallOption) (*AuthenticateResponse, error)
-	// CreateChannel creates a new channel under an optional parent.
-	CreateChannel(ctx context.Context, in *CreateChannelRequest, opts ...grpc.CallOption) (*CreateChannelResponse, error)
-	// DeleteChannel removes a channel.
-	DeleteChannel(ctx context.Context, in *DeleteChannelRequest, opts ...grpc.CallOption) (*DeleteChannelResponse, error)
 	// ListChannels returns the channel tree.
 	ListChannels(ctx context.Context, in *ListChannelsRequest, opts ...grpc.CallOption) (*ListChannelsResponse, error)
-	// QueryPermissions returns the effective permissions for a user in a channel.
-	QueryPermissions(ctx context.Context, in *QueryPermissionsRequest, opts ...grpc.CallOption) (*QueryPermissionsResponse, error)
+	// ChangeRoles applies one revision-checked roles-v1 mutation. The actor comes
+	// from integration credentials; user_id in the request is only the target.
+	ChangeRoles(ctx context.Context, in *ChangeRolesRequest, opts ...grpc.CallOption) (*ChangeRolesResponse, error)
+	// ChangeChannel uses the roles-v1 lifecycle transaction for channel resources
+	// and access policy.
+	ChangeChannel(ctx context.Context, in *ChangeChannelRequest, opts ...grpc.CallOption) (*ChangeChannelResponse, error)
+	// SetMemberVoice changes server mute/deafen flags for the current session.
+	SetMemberVoice(ctx context.Context, in *SetMemberVoiceRequest, opts ...grpc.CallOption) (*SetMemberVoiceResponse, error)
+	// MoveMember shares the native roles-v1 member movement lifecycle.
+	MoveMember(ctx context.Context, in *MoveMemberRequest, opts ...grpc.CallOption) (*MoveMemberResponse, error)
+	// DisconnectMember removes voice membership while preserving the session.
+	DisconnectMember(ctx context.Context, in *DisconnectMemberRequest, opts ...grpc.CallOption) (*DisconnectMemberResponse, error)
+	// KickMember revokes one native session through the shared roles-v1 lifecycle.
+	KickMember(ctx context.Context, in *KickMemberRequest, opts ...grpc.CallOption) (*KickMemberResponse, error)
+	// BanMember records a canonical account ban and revokes all matching sessions.
+	BanMember(ctx context.Context, in *BanMemberRequest, opts ...grpc.CallOption) (*BanMemberResponse, error)
+	// These roles-v1 reads retain current authorization through bounded delivery.
+	GetServerInfo(ctx context.Context, in *GetServerInfoRequest, opts ...grpc.CallOption) (*GetServerInfoResponse, error)
+	GetClientInfo(ctx context.Context, in *GetClientInfoRequest, opts ...grpc.CallOption) (*GetClientInfoResponse, error)
+	GetServerConfig(ctx context.Context, in *GetServerConfigRequest, opts ...grpc.CallOption) (*GetServerConfigResponse, error)
+	// Media limits are a separate complete replacement so older clients cannot
+	// clear them by omitting fields from SetServerConfig.
+	GetMediaLimits(ctx context.Context, in *GetMediaLimitsRequest, opts ...grpc.CallOption) (*GetMediaLimitsResponse, error)
+	SetMediaLimits(ctx context.Context, in *SetMediaLimitsRequest, opts ...grpc.CallOption) (*SetMediaLimitsResponse, error)
+	// SetServerConfig replaces all six runtime settings; acknowledgement contains
+	// the saved values rather than a subsequent current-state read.
+	SetServerConfig(ctx context.Context, in *SetServerConfigRequest, opts ...grpc.CallOption) (*SetServerConfigResponse, error)
+	GetChatFilters(ctx context.Context, in *GetChatFiltersRequest, opts ...grpc.CallOption) (*GetChatFiltersResponse, error)
+	SetChatFilters(ctx context.Context, in *SetChatFiltersRequest, opts ...grpc.CallOption) (*SetChatFiltersResponse, error)
+	SetServerText(ctx context.Context, in *SetServerTextRequest, opts ...grpc.CallOption) (*SetServerTextResponse, error)
+	// Custom metadata is management-only annotation data, never role authority.
+	ListCustomMetadata(ctx context.Context, in *ListCustomMetadataRequest, opts ...grpc.CallOption) (*ListCustomMetadataResponse, error)
+	ChangeCustomMetadata(ctx context.Context, in *ChangeCustomMetadataRequest, opts ...grpc.CallOption) (*ChangeCustomMetadataResponse, error)
+	// ListBans includes expired records for recovery after unconfirmed writes.
+	ListBans(ctx context.Context, in *ListBansRequest, opts ...grpc.CallOption) (*ListBansResponse, error)
+	// Management reads share the native scoped projection and hierarchy rules.
+	GetRoleState(ctx context.Context, in *GetRoleStateRequest, opts ...grpc.CallOption) (*GetRoleStateResponse, error)
+	ListRoleMembers(ctx context.Context, in *ListRoleMembersRequest, opts ...grpc.CallOption) (*ListRoleMembersResponse, error)
+	CheckAccess(ctx context.Context, in *CheckAccessRequest, opts ...grpc.CallOption) (*CheckAccessResponse, error)
+	GetChannelOptions(ctx context.Context, in *GetChannelOptionsRequest, opts ...grpc.CallOption) (*GetChannelOptionsResponse, error)
+	// Discovery reads use the same filtered snapshot as native/Query clients.
+	ListClients(ctx context.Context, in *ListClientsRequest, opts ...grpc.CallOption) (*ListClientsResponse, error)
+	GetChannelInfo(ctx context.Context, in *GetChannelInfoRequest, opts ...grpc.CallOption) (*GetChannelInfoResponse, error)
+	// ListAuditLog preserves native per-record scope filtering and placeholders.
+	ListAuditLog(ctx context.Context, in *ListAuditLogRequest, opts ...grpc.CallOption) (*ListAuditLogResponse, error)
+	ListComplaints(ctx context.Context, in *ListComplaintsRequest, opts ...grpc.CallOption) (*ListComplaintsResponse, error)
+	ClearComplaints(ctx context.Context, in *ClearComplaintsRequest, opts ...grpc.CallOption) (*ClearComplaintsResponse, error)
+	// GetServerRules includes acceptance counts for exactly the returned wording.
+	GetServerRules(ctx context.Context, in *GetServerRulesRequest, opts ...grpc.CallOption) (*GetServerRulesResponse, error)
 	// File transfer RPCs intentionally return UNIMPLEMENTED. Transfer tokens are
 	// minted only by the control channel after a per-client permission check.
 	StartFileTransfer(ctx context.Context, in *StartFileTransferRequest, opts ...grpc.CallOption) (*StartFileTransferResponse, error)
@@ -61,16 +142,29 @@ func NewControlClient(cc grpc.ClientConnInterface) ControlClient {
 	return &controlClient{cc}
 }
 
-func (c *controlClient) Authenticate(ctx context.Context, in *AuthenticateRequest, opts ...grpc.CallOption) (*AuthenticateResponse, error) {
+// Deprecated: Do not use.
+func (c *controlClient) QueryPermissions(ctx context.Context, in *QueryPermissionsRequest, opts ...grpc.CallOption) (*QueryPermissionsResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(AuthenticateResponse)
-	err := c.cc.Invoke(ctx, Control_Authenticate_FullMethodName, in, out, cOpts...)
+	out := new(QueryPermissionsResponse)
+	err := c.cc.Invoke(ctx, Control_QueryPermissions_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
+// Deprecated: Do not use.
+func (c *controlClient) DeleteChannel(ctx context.Context, in *DeleteChannelRequest, opts ...grpc.CallOption) (*DeleteChannelResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DeleteChannelResponse)
+	err := c.cc.Invoke(ctx, Control_DeleteChannel_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// Deprecated: Do not use.
 func (c *controlClient) CreateChannel(ctx context.Context, in *CreateChannelRequest, opts ...grpc.CallOption) (*CreateChannelResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(CreateChannelResponse)
@@ -81,10 +175,10 @@ func (c *controlClient) CreateChannel(ctx context.Context, in *CreateChannelRequ
 	return out, nil
 }
 
-func (c *controlClient) DeleteChannel(ctx context.Context, in *DeleteChannelRequest, opts ...grpc.CallOption) (*DeleteChannelResponse, error) {
+func (c *controlClient) Authenticate(ctx context.Context, in *AuthenticateRequest, opts ...grpc.CallOption) (*AuthenticateResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(DeleteChannelResponse)
-	err := c.cc.Invoke(ctx, Control_DeleteChannel_FullMethodName, in, out, cOpts...)
+	out := new(AuthenticateResponse)
+	err := c.cc.Invoke(ctx, Control_Authenticate_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -101,10 +195,290 @@ func (c *controlClient) ListChannels(ctx context.Context, in *ListChannelsReques
 	return out, nil
 }
 
-func (c *controlClient) QueryPermissions(ctx context.Context, in *QueryPermissionsRequest, opts ...grpc.CallOption) (*QueryPermissionsResponse, error) {
+func (c *controlClient) ChangeRoles(ctx context.Context, in *ChangeRolesRequest, opts ...grpc.CallOption) (*ChangeRolesResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(QueryPermissionsResponse)
-	err := c.cc.Invoke(ctx, Control_QueryPermissions_FullMethodName, in, out, cOpts...)
+	out := new(ChangeRolesResponse)
+	err := c.cc.Invoke(ctx, Control_ChangeRoles_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *controlClient) ChangeChannel(ctx context.Context, in *ChangeChannelRequest, opts ...grpc.CallOption) (*ChangeChannelResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ChangeChannelResponse)
+	err := c.cc.Invoke(ctx, Control_ChangeChannel_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *controlClient) SetMemberVoice(ctx context.Context, in *SetMemberVoiceRequest, opts ...grpc.CallOption) (*SetMemberVoiceResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SetMemberVoiceResponse)
+	err := c.cc.Invoke(ctx, Control_SetMemberVoice_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *controlClient) MoveMember(ctx context.Context, in *MoveMemberRequest, opts ...grpc.CallOption) (*MoveMemberResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(MoveMemberResponse)
+	err := c.cc.Invoke(ctx, Control_MoveMember_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *controlClient) DisconnectMember(ctx context.Context, in *DisconnectMemberRequest, opts ...grpc.CallOption) (*DisconnectMemberResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DisconnectMemberResponse)
+	err := c.cc.Invoke(ctx, Control_DisconnectMember_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *controlClient) KickMember(ctx context.Context, in *KickMemberRequest, opts ...grpc.CallOption) (*KickMemberResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(KickMemberResponse)
+	err := c.cc.Invoke(ctx, Control_KickMember_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *controlClient) BanMember(ctx context.Context, in *BanMemberRequest, opts ...grpc.CallOption) (*BanMemberResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(BanMemberResponse)
+	err := c.cc.Invoke(ctx, Control_BanMember_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *controlClient) GetServerInfo(ctx context.Context, in *GetServerInfoRequest, opts ...grpc.CallOption) (*GetServerInfoResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetServerInfoResponse)
+	err := c.cc.Invoke(ctx, Control_GetServerInfo_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *controlClient) GetClientInfo(ctx context.Context, in *GetClientInfoRequest, opts ...grpc.CallOption) (*GetClientInfoResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetClientInfoResponse)
+	err := c.cc.Invoke(ctx, Control_GetClientInfo_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *controlClient) GetServerConfig(ctx context.Context, in *GetServerConfigRequest, opts ...grpc.CallOption) (*GetServerConfigResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetServerConfigResponse)
+	err := c.cc.Invoke(ctx, Control_GetServerConfig_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *controlClient) GetMediaLimits(ctx context.Context, in *GetMediaLimitsRequest, opts ...grpc.CallOption) (*GetMediaLimitsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetMediaLimitsResponse)
+	err := c.cc.Invoke(ctx, Control_GetMediaLimits_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *controlClient) SetMediaLimits(ctx context.Context, in *SetMediaLimitsRequest, opts ...grpc.CallOption) (*SetMediaLimitsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SetMediaLimitsResponse)
+	err := c.cc.Invoke(ctx, Control_SetMediaLimits_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *controlClient) SetServerConfig(ctx context.Context, in *SetServerConfigRequest, opts ...grpc.CallOption) (*SetServerConfigResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SetServerConfigResponse)
+	err := c.cc.Invoke(ctx, Control_SetServerConfig_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *controlClient) GetChatFilters(ctx context.Context, in *GetChatFiltersRequest, opts ...grpc.CallOption) (*GetChatFiltersResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetChatFiltersResponse)
+	err := c.cc.Invoke(ctx, Control_GetChatFilters_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *controlClient) SetChatFilters(ctx context.Context, in *SetChatFiltersRequest, opts ...grpc.CallOption) (*SetChatFiltersResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SetChatFiltersResponse)
+	err := c.cc.Invoke(ctx, Control_SetChatFilters_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *controlClient) SetServerText(ctx context.Context, in *SetServerTextRequest, opts ...grpc.CallOption) (*SetServerTextResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SetServerTextResponse)
+	err := c.cc.Invoke(ctx, Control_SetServerText_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *controlClient) ListCustomMetadata(ctx context.Context, in *ListCustomMetadataRequest, opts ...grpc.CallOption) (*ListCustomMetadataResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListCustomMetadataResponse)
+	err := c.cc.Invoke(ctx, Control_ListCustomMetadata_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *controlClient) ChangeCustomMetadata(ctx context.Context, in *ChangeCustomMetadataRequest, opts ...grpc.CallOption) (*ChangeCustomMetadataResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ChangeCustomMetadataResponse)
+	err := c.cc.Invoke(ctx, Control_ChangeCustomMetadata_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *controlClient) ListBans(ctx context.Context, in *ListBansRequest, opts ...grpc.CallOption) (*ListBansResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListBansResponse)
+	err := c.cc.Invoke(ctx, Control_ListBans_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *controlClient) GetRoleState(ctx context.Context, in *GetRoleStateRequest, opts ...grpc.CallOption) (*GetRoleStateResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetRoleStateResponse)
+	err := c.cc.Invoke(ctx, Control_GetRoleState_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *controlClient) ListRoleMembers(ctx context.Context, in *ListRoleMembersRequest, opts ...grpc.CallOption) (*ListRoleMembersResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListRoleMembersResponse)
+	err := c.cc.Invoke(ctx, Control_ListRoleMembers_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *controlClient) CheckAccess(ctx context.Context, in *CheckAccessRequest, opts ...grpc.CallOption) (*CheckAccessResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CheckAccessResponse)
+	err := c.cc.Invoke(ctx, Control_CheckAccess_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *controlClient) GetChannelOptions(ctx context.Context, in *GetChannelOptionsRequest, opts ...grpc.CallOption) (*GetChannelOptionsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetChannelOptionsResponse)
+	err := c.cc.Invoke(ctx, Control_GetChannelOptions_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *controlClient) ListClients(ctx context.Context, in *ListClientsRequest, opts ...grpc.CallOption) (*ListClientsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListClientsResponse)
+	err := c.cc.Invoke(ctx, Control_ListClients_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *controlClient) GetChannelInfo(ctx context.Context, in *GetChannelInfoRequest, opts ...grpc.CallOption) (*GetChannelInfoResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetChannelInfoResponse)
+	err := c.cc.Invoke(ctx, Control_GetChannelInfo_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *controlClient) ListAuditLog(ctx context.Context, in *ListAuditLogRequest, opts ...grpc.CallOption) (*ListAuditLogResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListAuditLogResponse)
+	err := c.cc.Invoke(ctx, Control_ListAuditLog_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *controlClient) ListComplaints(ctx context.Context, in *ListComplaintsRequest, opts ...grpc.CallOption) (*ListComplaintsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListComplaintsResponse)
+	err := c.cc.Invoke(ctx, Control_ListComplaints_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *controlClient) ClearComplaints(ctx context.Context, in *ClearComplaintsRequest, opts ...grpc.CallOption) (*ClearComplaintsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ClearComplaintsResponse)
+	err := c.cc.Invoke(ctx, Control_ClearComplaints_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *controlClient) GetServerRules(ctx context.Context, in *GetServerRulesRequest, opts ...grpc.CallOption) (*GetServerRulesResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetServerRulesResponse)
+	err := c.cc.Invoke(ctx, Control_GetServerRules_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -145,19 +519,71 @@ func (c *controlClient) CancelFileTransfer(ctx context.Context, in *CancelFileTr
 // All implementations must embed UnimplementedControlServer
 // for forward compatibility.
 //
-// Control service handles authentication, channel management, permission
-// queries, and file transfer control.
+// Control service handles authentication, role-aware management, and file
+// transfer control.
 type ControlServer interface {
+	// Deprecated: Do not use.
+	// Retained for descriptor compatibility; this legacy operation is unimplemented.
+	QueryPermissions(context.Context, *QueryPermissionsRequest) (*QueryPermissionsResponse, error)
+	// Deprecated: Do not use.
+	// Retained for descriptor compatibility; this legacy operation is unimplemented.
+	DeleteChannel(context.Context, *DeleteChannelRequest) (*DeleteChannelResponse, error)
+	// Deprecated: Do not use.
+	// Retained for descriptor compatibility; this legacy operation is unimplemented.
+	CreateChannel(context.Context, *CreateChannelRequest) (*CreateChannelResponse, error)
 	// Authenticate validates credentials and returns the authenticated user ID.
 	Authenticate(context.Context, *AuthenticateRequest) (*AuthenticateResponse, error)
-	// CreateChannel creates a new channel under an optional parent.
-	CreateChannel(context.Context, *CreateChannelRequest) (*CreateChannelResponse, error)
-	// DeleteChannel removes a channel.
-	DeleteChannel(context.Context, *DeleteChannelRequest) (*DeleteChannelResponse, error)
 	// ListChannels returns the channel tree.
 	ListChannels(context.Context, *ListChannelsRequest) (*ListChannelsResponse, error)
-	// QueryPermissions returns the effective permissions for a user in a channel.
-	QueryPermissions(context.Context, *QueryPermissionsRequest) (*QueryPermissionsResponse, error)
+	// ChangeRoles applies one revision-checked roles-v1 mutation. The actor comes
+	// from integration credentials; user_id in the request is only the target.
+	ChangeRoles(context.Context, *ChangeRolesRequest) (*ChangeRolesResponse, error)
+	// ChangeChannel uses the roles-v1 lifecycle transaction for channel resources
+	// and access policy.
+	ChangeChannel(context.Context, *ChangeChannelRequest) (*ChangeChannelResponse, error)
+	// SetMemberVoice changes server mute/deafen flags for the current session.
+	SetMemberVoice(context.Context, *SetMemberVoiceRequest) (*SetMemberVoiceResponse, error)
+	// MoveMember shares the native roles-v1 member movement lifecycle.
+	MoveMember(context.Context, *MoveMemberRequest) (*MoveMemberResponse, error)
+	// DisconnectMember removes voice membership while preserving the session.
+	DisconnectMember(context.Context, *DisconnectMemberRequest) (*DisconnectMemberResponse, error)
+	// KickMember revokes one native session through the shared roles-v1 lifecycle.
+	KickMember(context.Context, *KickMemberRequest) (*KickMemberResponse, error)
+	// BanMember records a canonical account ban and revokes all matching sessions.
+	BanMember(context.Context, *BanMemberRequest) (*BanMemberResponse, error)
+	// These roles-v1 reads retain current authorization through bounded delivery.
+	GetServerInfo(context.Context, *GetServerInfoRequest) (*GetServerInfoResponse, error)
+	GetClientInfo(context.Context, *GetClientInfoRequest) (*GetClientInfoResponse, error)
+	GetServerConfig(context.Context, *GetServerConfigRequest) (*GetServerConfigResponse, error)
+	// Media limits are a separate complete replacement so older clients cannot
+	// clear them by omitting fields from SetServerConfig.
+	GetMediaLimits(context.Context, *GetMediaLimitsRequest) (*GetMediaLimitsResponse, error)
+	SetMediaLimits(context.Context, *SetMediaLimitsRequest) (*SetMediaLimitsResponse, error)
+	// SetServerConfig replaces all six runtime settings; acknowledgement contains
+	// the saved values rather than a subsequent current-state read.
+	SetServerConfig(context.Context, *SetServerConfigRequest) (*SetServerConfigResponse, error)
+	GetChatFilters(context.Context, *GetChatFiltersRequest) (*GetChatFiltersResponse, error)
+	SetChatFilters(context.Context, *SetChatFiltersRequest) (*SetChatFiltersResponse, error)
+	SetServerText(context.Context, *SetServerTextRequest) (*SetServerTextResponse, error)
+	// Custom metadata is management-only annotation data, never role authority.
+	ListCustomMetadata(context.Context, *ListCustomMetadataRequest) (*ListCustomMetadataResponse, error)
+	ChangeCustomMetadata(context.Context, *ChangeCustomMetadataRequest) (*ChangeCustomMetadataResponse, error)
+	// ListBans includes expired records for recovery after unconfirmed writes.
+	ListBans(context.Context, *ListBansRequest) (*ListBansResponse, error)
+	// Management reads share the native scoped projection and hierarchy rules.
+	GetRoleState(context.Context, *GetRoleStateRequest) (*GetRoleStateResponse, error)
+	ListRoleMembers(context.Context, *ListRoleMembersRequest) (*ListRoleMembersResponse, error)
+	CheckAccess(context.Context, *CheckAccessRequest) (*CheckAccessResponse, error)
+	GetChannelOptions(context.Context, *GetChannelOptionsRequest) (*GetChannelOptionsResponse, error)
+	// Discovery reads use the same filtered snapshot as native/Query clients.
+	ListClients(context.Context, *ListClientsRequest) (*ListClientsResponse, error)
+	GetChannelInfo(context.Context, *GetChannelInfoRequest) (*GetChannelInfoResponse, error)
+	// ListAuditLog preserves native per-record scope filtering and placeholders.
+	ListAuditLog(context.Context, *ListAuditLogRequest) (*ListAuditLogResponse, error)
+	ListComplaints(context.Context, *ListComplaintsRequest) (*ListComplaintsResponse, error)
+	ClearComplaints(context.Context, *ClearComplaintsRequest) (*ClearComplaintsResponse, error)
+	// GetServerRules includes acceptance counts for exactly the returned wording.
+	GetServerRules(context.Context, *GetServerRulesRequest) (*GetServerRulesResponse, error)
 	// File transfer RPCs intentionally return UNIMPLEMENTED. Transfer tokens are
 	// minted only by the control channel after a per-client permission check.
 	StartFileTransfer(context.Context, *StartFileTransferRequest) (*StartFileTransferResponse, error)
@@ -173,20 +599,107 @@ type ControlServer interface {
 // pointer dereference when methods are called.
 type UnimplementedControlServer struct{}
 
-func (UnimplementedControlServer) Authenticate(context.Context, *AuthenticateRequest) (*AuthenticateResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method Authenticate not implemented")
-}
-func (UnimplementedControlServer) CreateChannel(context.Context, *CreateChannelRequest) (*CreateChannelResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method CreateChannel not implemented")
+func (UnimplementedControlServer) QueryPermissions(context.Context, *QueryPermissionsRequest) (*QueryPermissionsResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method QueryPermissions not implemented")
 }
 func (UnimplementedControlServer) DeleteChannel(context.Context, *DeleteChannelRequest) (*DeleteChannelResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method DeleteChannel not implemented")
 }
+func (UnimplementedControlServer) CreateChannel(context.Context, *CreateChannelRequest) (*CreateChannelResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method CreateChannel not implemented")
+}
+func (UnimplementedControlServer) Authenticate(context.Context, *AuthenticateRequest) (*AuthenticateResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method Authenticate not implemented")
+}
 func (UnimplementedControlServer) ListChannels(context.Context, *ListChannelsRequest) (*ListChannelsResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ListChannels not implemented")
 }
-func (UnimplementedControlServer) QueryPermissions(context.Context, *QueryPermissionsRequest) (*QueryPermissionsResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method QueryPermissions not implemented")
+func (UnimplementedControlServer) ChangeRoles(context.Context, *ChangeRolesRequest) (*ChangeRolesResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ChangeRoles not implemented")
+}
+func (UnimplementedControlServer) ChangeChannel(context.Context, *ChangeChannelRequest) (*ChangeChannelResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ChangeChannel not implemented")
+}
+func (UnimplementedControlServer) SetMemberVoice(context.Context, *SetMemberVoiceRequest) (*SetMemberVoiceResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method SetMemberVoice not implemented")
+}
+func (UnimplementedControlServer) MoveMember(context.Context, *MoveMemberRequest) (*MoveMemberResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method MoveMember not implemented")
+}
+func (UnimplementedControlServer) DisconnectMember(context.Context, *DisconnectMemberRequest) (*DisconnectMemberResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method DisconnectMember not implemented")
+}
+func (UnimplementedControlServer) KickMember(context.Context, *KickMemberRequest) (*KickMemberResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method KickMember not implemented")
+}
+func (UnimplementedControlServer) BanMember(context.Context, *BanMemberRequest) (*BanMemberResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method BanMember not implemented")
+}
+func (UnimplementedControlServer) GetServerInfo(context.Context, *GetServerInfoRequest) (*GetServerInfoResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetServerInfo not implemented")
+}
+func (UnimplementedControlServer) GetClientInfo(context.Context, *GetClientInfoRequest) (*GetClientInfoResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetClientInfo not implemented")
+}
+func (UnimplementedControlServer) GetServerConfig(context.Context, *GetServerConfigRequest) (*GetServerConfigResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetServerConfig not implemented")
+}
+func (UnimplementedControlServer) GetMediaLimits(context.Context, *GetMediaLimitsRequest) (*GetMediaLimitsResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetMediaLimits not implemented")
+}
+func (UnimplementedControlServer) SetMediaLimits(context.Context, *SetMediaLimitsRequest) (*SetMediaLimitsResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method SetMediaLimits not implemented")
+}
+func (UnimplementedControlServer) SetServerConfig(context.Context, *SetServerConfigRequest) (*SetServerConfigResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method SetServerConfig not implemented")
+}
+func (UnimplementedControlServer) GetChatFilters(context.Context, *GetChatFiltersRequest) (*GetChatFiltersResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetChatFilters not implemented")
+}
+func (UnimplementedControlServer) SetChatFilters(context.Context, *SetChatFiltersRequest) (*SetChatFiltersResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method SetChatFilters not implemented")
+}
+func (UnimplementedControlServer) SetServerText(context.Context, *SetServerTextRequest) (*SetServerTextResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method SetServerText not implemented")
+}
+func (UnimplementedControlServer) ListCustomMetadata(context.Context, *ListCustomMetadataRequest) (*ListCustomMetadataResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ListCustomMetadata not implemented")
+}
+func (UnimplementedControlServer) ChangeCustomMetadata(context.Context, *ChangeCustomMetadataRequest) (*ChangeCustomMetadataResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ChangeCustomMetadata not implemented")
+}
+func (UnimplementedControlServer) ListBans(context.Context, *ListBansRequest) (*ListBansResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ListBans not implemented")
+}
+func (UnimplementedControlServer) GetRoleState(context.Context, *GetRoleStateRequest) (*GetRoleStateResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetRoleState not implemented")
+}
+func (UnimplementedControlServer) ListRoleMembers(context.Context, *ListRoleMembersRequest) (*ListRoleMembersResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ListRoleMembers not implemented")
+}
+func (UnimplementedControlServer) CheckAccess(context.Context, *CheckAccessRequest) (*CheckAccessResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method CheckAccess not implemented")
+}
+func (UnimplementedControlServer) GetChannelOptions(context.Context, *GetChannelOptionsRequest) (*GetChannelOptionsResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetChannelOptions not implemented")
+}
+func (UnimplementedControlServer) ListClients(context.Context, *ListClientsRequest) (*ListClientsResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ListClients not implemented")
+}
+func (UnimplementedControlServer) GetChannelInfo(context.Context, *GetChannelInfoRequest) (*GetChannelInfoResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetChannelInfo not implemented")
+}
+func (UnimplementedControlServer) ListAuditLog(context.Context, *ListAuditLogRequest) (*ListAuditLogResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ListAuditLog not implemented")
+}
+func (UnimplementedControlServer) ListComplaints(context.Context, *ListComplaintsRequest) (*ListComplaintsResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ListComplaints not implemented")
+}
+func (UnimplementedControlServer) ClearComplaints(context.Context, *ClearComplaintsRequest) (*ClearComplaintsResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ClearComplaints not implemented")
+}
+func (UnimplementedControlServer) GetServerRules(context.Context, *GetServerRulesRequest) (*GetServerRulesResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetServerRules not implemented")
 }
 func (UnimplementedControlServer) StartFileTransfer(context.Context, *StartFileTransferRequest) (*StartFileTransferResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method StartFileTransfer not implemented")
@@ -218,38 +731,20 @@ func RegisterControlServer(s grpc.ServiceRegistrar, srv ControlServer) {
 	s.RegisterService(&Control_ServiceDesc, srv)
 }
 
-func _Control_Authenticate_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(AuthenticateRequest)
+func _Control_QueryPermissions_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(QueryPermissionsRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(ControlServer).Authenticate(ctx, in)
+		return srv.(ControlServer).QueryPermissions(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: Control_Authenticate_FullMethodName,
+		FullMethod: Control_QueryPermissions_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(ControlServer).Authenticate(ctx, req.(*AuthenticateRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _Control_CreateChannel_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(CreateChannelRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(ControlServer).CreateChannel(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: Control_CreateChannel_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(ControlServer).CreateChannel(ctx, req.(*CreateChannelRequest))
+		return srv.(ControlServer).QueryPermissions(ctx, req.(*QueryPermissionsRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -272,6 +767,42 @@ func _Control_DeleteChannel_Handler(srv interface{}, ctx context.Context, dec fu
 	return interceptor(ctx, in, info, handler)
 }
 
+func _Control_CreateChannel_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CreateChannelRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControlServer).CreateChannel(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Control_CreateChannel_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControlServer).CreateChannel(ctx, req.(*CreateChannelRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Control_Authenticate_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(AuthenticateRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControlServer).Authenticate(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Control_Authenticate_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControlServer).Authenticate(ctx, req.(*AuthenticateRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _Control_ListChannels_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(ListChannelsRequest)
 	if err := dec(in); err != nil {
@@ -290,20 +821,524 @@ func _Control_ListChannels_Handler(srv interface{}, ctx context.Context, dec fun
 	return interceptor(ctx, in, info, handler)
 }
 
-func _Control_QueryPermissions_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(QueryPermissionsRequest)
+func _Control_ChangeRoles_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ChangeRolesRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(ControlServer).QueryPermissions(ctx, in)
+		return srv.(ControlServer).ChangeRoles(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: Control_QueryPermissions_FullMethodName,
+		FullMethod: Control_ChangeRoles_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(ControlServer).QueryPermissions(ctx, req.(*QueryPermissionsRequest))
+		return srv.(ControlServer).ChangeRoles(ctx, req.(*ChangeRolesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Control_ChangeChannel_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ChangeChannelRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControlServer).ChangeChannel(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Control_ChangeChannel_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControlServer).ChangeChannel(ctx, req.(*ChangeChannelRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Control_SetMemberVoice_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SetMemberVoiceRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControlServer).SetMemberVoice(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Control_SetMemberVoice_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControlServer).SetMemberVoice(ctx, req.(*SetMemberVoiceRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Control_MoveMember_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(MoveMemberRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControlServer).MoveMember(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Control_MoveMember_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControlServer).MoveMember(ctx, req.(*MoveMemberRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Control_DisconnectMember_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DisconnectMemberRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControlServer).DisconnectMember(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Control_DisconnectMember_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControlServer).DisconnectMember(ctx, req.(*DisconnectMemberRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Control_KickMember_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(KickMemberRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControlServer).KickMember(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Control_KickMember_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControlServer).KickMember(ctx, req.(*KickMemberRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Control_BanMember_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(BanMemberRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControlServer).BanMember(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Control_BanMember_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControlServer).BanMember(ctx, req.(*BanMemberRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Control_GetServerInfo_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetServerInfoRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControlServer).GetServerInfo(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Control_GetServerInfo_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControlServer).GetServerInfo(ctx, req.(*GetServerInfoRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Control_GetClientInfo_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetClientInfoRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControlServer).GetClientInfo(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Control_GetClientInfo_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControlServer).GetClientInfo(ctx, req.(*GetClientInfoRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Control_GetServerConfig_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetServerConfigRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControlServer).GetServerConfig(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Control_GetServerConfig_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControlServer).GetServerConfig(ctx, req.(*GetServerConfigRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Control_GetMediaLimits_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetMediaLimitsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControlServer).GetMediaLimits(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Control_GetMediaLimits_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControlServer).GetMediaLimits(ctx, req.(*GetMediaLimitsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Control_SetMediaLimits_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SetMediaLimitsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControlServer).SetMediaLimits(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Control_SetMediaLimits_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControlServer).SetMediaLimits(ctx, req.(*SetMediaLimitsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Control_SetServerConfig_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SetServerConfigRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControlServer).SetServerConfig(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Control_SetServerConfig_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControlServer).SetServerConfig(ctx, req.(*SetServerConfigRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Control_GetChatFilters_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetChatFiltersRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControlServer).GetChatFilters(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Control_GetChatFilters_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControlServer).GetChatFilters(ctx, req.(*GetChatFiltersRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Control_SetChatFilters_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SetChatFiltersRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControlServer).SetChatFilters(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Control_SetChatFilters_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControlServer).SetChatFilters(ctx, req.(*SetChatFiltersRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Control_SetServerText_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SetServerTextRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControlServer).SetServerText(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Control_SetServerText_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControlServer).SetServerText(ctx, req.(*SetServerTextRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Control_ListCustomMetadata_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListCustomMetadataRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControlServer).ListCustomMetadata(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Control_ListCustomMetadata_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControlServer).ListCustomMetadata(ctx, req.(*ListCustomMetadataRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Control_ChangeCustomMetadata_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ChangeCustomMetadataRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControlServer).ChangeCustomMetadata(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Control_ChangeCustomMetadata_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControlServer).ChangeCustomMetadata(ctx, req.(*ChangeCustomMetadataRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Control_ListBans_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListBansRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControlServer).ListBans(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Control_ListBans_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControlServer).ListBans(ctx, req.(*ListBansRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Control_GetRoleState_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetRoleStateRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControlServer).GetRoleState(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Control_GetRoleState_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControlServer).GetRoleState(ctx, req.(*GetRoleStateRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Control_ListRoleMembers_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListRoleMembersRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControlServer).ListRoleMembers(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Control_ListRoleMembers_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControlServer).ListRoleMembers(ctx, req.(*ListRoleMembersRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Control_CheckAccess_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CheckAccessRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControlServer).CheckAccess(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Control_CheckAccess_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControlServer).CheckAccess(ctx, req.(*CheckAccessRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Control_GetChannelOptions_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetChannelOptionsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControlServer).GetChannelOptions(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Control_GetChannelOptions_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControlServer).GetChannelOptions(ctx, req.(*GetChannelOptionsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Control_ListClients_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListClientsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControlServer).ListClients(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Control_ListClients_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControlServer).ListClients(ctx, req.(*ListClientsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Control_GetChannelInfo_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetChannelInfoRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControlServer).GetChannelInfo(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Control_GetChannelInfo_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControlServer).GetChannelInfo(ctx, req.(*GetChannelInfoRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Control_ListAuditLog_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListAuditLogRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControlServer).ListAuditLog(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Control_ListAuditLog_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControlServer).ListAuditLog(ctx, req.(*ListAuditLogRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Control_ListComplaints_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListComplaintsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControlServer).ListComplaints(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Control_ListComplaints_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControlServer).ListComplaints(ctx, req.(*ListComplaintsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Control_ClearComplaints_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ClearComplaintsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControlServer).ClearComplaints(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Control_ClearComplaints_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControlServer).ClearComplaints(ctx, req.(*ClearComplaintsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Control_GetServerRules_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetServerRulesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControlServer).GetServerRules(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Control_GetServerRules_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControlServer).GetServerRules(ctx, req.(*GetServerRulesRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -370,24 +1405,140 @@ var Control_ServiceDesc = grpc.ServiceDesc{
 	HandlerType: (*ControlServer)(nil),
 	Methods: []grpc.MethodDesc{
 		{
-			MethodName: "Authenticate",
-			Handler:    _Control_Authenticate_Handler,
-		},
-		{
-			MethodName: "CreateChannel",
-			Handler:    _Control_CreateChannel_Handler,
+			MethodName: "QueryPermissions",
+			Handler:    _Control_QueryPermissions_Handler,
 		},
 		{
 			MethodName: "DeleteChannel",
 			Handler:    _Control_DeleteChannel_Handler,
 		},
 		{
+			MethodName: "CreateChannel",
+			Handler:    _Control_CreateChannel_Handler,
+		},
+		{
+			MethodName: "Authenticate",
+			Handler:    _Control_Authenticate_Handler,
+		},
+		{
 			MethodName: "ListChannels",
 			Handler:    _Control_ListChannels_Handler,
 		},
 		{
-			MethodName: "QueryPermissions",
-			Handler:    _Control_QueryPermissions_Handler,
+			MethodName: "ChangeRoles",
+			Handler:    _Control_ChangeRoles_Handler,
+		},
+		{
+			MethodName: "ChangeChannel",
+			Handler:    _Control_ChangeChannel_Handler,
+		},
+		{
+			MethodName: "SetMemberVoice",
+			Handler:    _Control_SetMemberVoice_Handler,
+		},
+		{
+			MethodName: "MoveMember",
+			Handler:    _Control_MoveMember_Handler,
+		},
+		{
+			MethodName: "DisconnectMember",
+			Handler:    _Control_DisconnectMember_Handler,
+		},
+		{
+			MethodName: "KickMember",
+			Handler:    _Control_KickMember_Handler,
+		},
+		{
+			MethodName: "BanMember",
+			Handler:    _Control_BanMember_Handler,
+		},
+		{
+			MethodName: "GetServerInfo",
+			Handler:    _Control_GetServerInfo_Handler,
+		},
+		{
+			MethodName: "GetClientInfo",
+			Handler:    _Control_GetClientInfo_Handler,
+		},
+		{
+			MethodName: "GetServerConfig",
+			Handler:    _Control_GetServerConfig_Handler,
+		},
+		{
+			MethodName: "GetMediaLimits",
+			Handler:    _Control_GetMediaLimits_Handler,
+		},
+		{
+			MethodName: "SetMediaLimits",
+			Handler:    _Control_SetMediaLimits_Handler,
+		},
+		{
+			MethodName: "SetServerConfig",
+			Handler:    _Control_SetServerConfig_Handler,
+		},
+		{
+			MethodName: "GetChatFilters",
+			Handler:    _Control_GetChatFilters_Handler,
+		},
+		{
+			MethodName: "SetChatFilters",
+			Handler:    _Control_SetChatFilters_Handler,
+		},
+		{
+			MethodName: "SetServerText",
+			Handler:    _Control_SetServerText_Handler,
+		},
+		{
+			MethodName: "ListCustomMetadata",
+			Handler:    _Control_ListCustomMetadata_Handler,
+		},
+		{
+			MethodName: "ChangeCustomMetadata",
+			Handler:    _Control_ChangeCustomMetadata_Handler,
+		},
+		{
+			MethodName: "ListBans",
+			Handler:    _Control_ListBans_Handler,
+		},
+		{
+			MethodName: "GetRoleState",
+			Handler:    _Control_GetRoleState_Handler,
+		},
+		{
+			MethodName: "ListRoleMembers",
+			Handler:    _Control_ListRoleMembers_Handler,
+		},
+		{
+			MethodName: "CheckAccess",
+			Handler:    _Control_CheckAccess_Handler,
+		},
+		{
+			MethodName: "GetChannelOptions",
+			Handler:    _Control_GetChannelOptions_Handler,
+		},
+		{
+			MethodName: "ListClients",
+			Handler:    _Control_ListClients_Handler,
+		},
+		{
+			MethodName: "GetChannelInfo",
+			Handler:    _Control_GetChannelInfo_Handler,
+		},
+		{
+			MethodName: "ListAuditLog",
+			Handler:    _Control_ListAuditLog_Handler,
+		},
+		{
+			MethodName: "ListComplaints",
+			Handler:    _Control_ListComplaints_Handler,
+		},
+		{
+			MethodName: "ClearComplaints",
+			Handler:    _Control_ClearComplaints_Handler,
+		},
+		{
+			MethodName: "GetServerRules",
+			Handler:    _Control_GetServerRules_Handler,
 		},
 		{
 			MethodName: "StartFileTransfer",

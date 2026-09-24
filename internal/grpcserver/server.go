@@ -3,8 +3,9 @@
 //
 // The API is a bot/administration surface, not a second client protocol: it
 // talks to the ServerQuery backend, so anything it can do the query port can
-// do, with the same admin-only credentials. Every RPC except Control's own
-// Authenticate requires HTTP Basic credentials in the "authorization"
+// do. Legacy mode uses admin-only credentials; roles-v1 uses explicitly enabled
+// integration accounts and a separate allowlist of role-aware RPCs. Every RPC
+// except Control's own Authenticate requires HTTP Basic credentials in the "authorization"
 // metadata header, checked by the interceptors below.
 package grpcserver
 
@@ -44,13 +45,15 @@ type Server struct {
 	// default.
 	ShutdownTimeout time.Duration
 
-	backend query.Backend
-	bus     *eventbus.Bus
-	logger  *zap.Logger
-	grpc    *grpc.Server
-	limiter LoginLimiter
-	addrErr error
-	listen  func(network, address string) (net.Listener, error)
+	backend         query.Backend
+	bus             *eventbus.Bus
+	logger          *zap.Logger
+	grpc            *grpc.Server
+	limiter         LoginLimiter
+	addrErr         error
+	listen          func(network, address string) (net.Listener, error)
+	delivery        roleDeliveryTracker
+	roleStreamSlots chan struct{}
 
 	shutdownOnce sync.Once
 	forceOnce    sync.Once
@@ -100,9 +103,11 @@ func New(addr string, backend query.Backend, bus *eventbus.Bus, logger *zap.Logg
 		limiter:         limiter,
 		shutdownDone:    make(chan struct{}),
 		listen:          net.Listen,
+		roleStreamSlots: make(chan struct{}, 64),
 	}
 	s.addrErr = validateLoopbackAddr(addr)
 	s.grpc = grpc.NewServer(
+		grpc.StatsHandler(&s.delivery),
 		grpc.MaxRecvMsgSize(maxReceiveMessageBytes),
 		grpc.MaxHeaderListSize(maxHeaderListBytes),
 		grpc.KeepaliveParams(keepalive.ServerParameters{
@@ -116,8 +121,8 @@ func New(addr string, backend query.Backend, bus *eventbus.Bus, logger *zap.Logg
 		grpc.ChainUnaryInterceptor(s.unaryRecovery, s.unaryAuth),
 		grpc.ChainStreamInterceptor(s.streamRecovery, s.streamAuth),
 	)
-	noxav1.RegisterEventsServer(s.grpc, &eventsService{bus: bus, logger: logger})
-	noxav1.RegisterControlServer(s.grpc, &controlService{backend: backend, logger: logger, authenticate: s.authenticateAdmin})
+	noxav1.RegisterEventsServer(s.grpc, &eventsService{bus: bus, logger: logger, backend: backend})
+	noxav1.RegisterControlServer(s.grpc, &controlService{backend: backend, logger: logger})
 	return s
 }
 
@@ -141,6 +146,9 @@ func (s *Server) Start(ctx context.Context) error {
 		return fmt.Errorf("grpc listen on %s: %w", s.Addr, err)
 	}
 	s.logger.Info("gRPC listener started", zap.String("addr", s.Addr))
+	if s.roleBackend() != nil {
+		ln = &roleDeliveryListener{Listener: ln, tracker: &s.delivery}
+	}
 
 	serveDone := make(chan struct{})
 	watchDone := make(chan struct{})
@@ -197,6 +205,9 @@ func (s *Server) Shutdown(ctx context.Context) error {
 		s.draining.Store(true)
 		go func() {
 			s.grpc.GracefulStop()
+			// Unary handlers can finish before their protected read callbacks.
+			// No new worker can start after gRPC has joined those handlers.
+			s.delivery.workers.Wait()
 			close(s.shutdownDone)
 		}()
 	})
@@ -242,71 +253,27 @@ func (s *Server) shutdownTimeout() time.Duration {
 	return s.ShutdownTimeout
 }
 
-// authExempt lists the RPCs that carry their own credentials.
-var authExempt = map[string]bool{
-	noxav1.Control_Authenticate_FullMethodName: true,
-}
-
-// authenticate validates the "authorization: Basic <base64>" metadata header
-// against the same admin-only credentials as ServerQuery.
-func (s *Server) authenticate(ctx context.Context) (string, error) {
+func (s *Server) basicCredentials(ctx context.Context) (string, string, error) {
 	md, ok := metadata.FromIncomingContext(ctx)
 	if !ok {
 		s.recordAuthFailure("malformed_metadata")
-		return "", status.Error(codes.Unauthenticated, "missing metadata")
+		return "", "", status.Error(codes.Unauthenticated, "missing metadata")
 	}
 	values := md.Get("authorization")
 	if len(values) == 0 {
 		s.recordAuthFailure("malformed_metadata")
-		return "", status.Error(codes.Unauthenticated, "missing authorization metadata")
+		return "", "", status.Error(codes.Unauthenticated, "missing authorization metadata")
 	}
 	if len(values) != 1 {
 		s.recordAuthFailure("malformed_metadata")
-		return "", status.Error(codes.Unauthenticated, "exactly one authorization value is required")
+		return "", "", status.Error(codes.Unauthenticated, "exactly one authorization value is required")
 	}
 	uniqueID, password, err := parseBasic(values[0])
 	if err != nil {
 		s.recordAuthFailure("malformed_metadata")
-		return "", status.Error(codes.Unauthenticated, err.Error())
+		return "", "", status.Error(codes.Unauthenticated, err.Error())
 	}
-	valid, err := s.authenticateAdmin(ctx, remoteIPFromContext(ctx), uniqueID, password)
-	if err != nil {
-		s.logger.Warn("grpc auth error", zap.Error(err))
-		return "", status.Error(codes.Internal, "internal error")
-	}
-	if !valid {
-		// Non-admins are refused like bad credentials: the API is admin-only
-		// and the distinction would confirm an account exists.
-		return "", status.Error(codes.Unauthenticated, "invalid credentials")
-	}
-	return uniqueID, nil
-}
-
-func (s *Server) authenticateAdmin(ctx context.Context, _ string, uniqueID, password string) (bool, error) {
-	if s.limiter == nil {
-		return false, fmt.Errorf("login limiter unavailable")
-	}
-	// The listener is loopback-only, so using its source IP would let one
-	// local process lock out all administrators. Loopback gRPC is therefore
-	// limited by the exact attempted principal, without a shared IP scope.
-	principalScope := auth.LoginFailureScope("", uniqueID)
-	attempt, allowed := s.limiter.ReserveLoginAttempt(principalScope)
-	if !allowed {
-		s.recordAuthFailure("locked_out")
-		return false, nil
-	}
-	defer attempt.Cancel()
-	valid, admin, err := s.backend.Authenticate(ctx, uniqueID, password)
-	if err != nil {
-		return false, err
-	}
-	if !valid || !admin {
-		attempt.Fail()
-		s.recordAuthFailure("invalid_credentials")
-		return false, nil
-	}
-	attempt.Succeed(principalScope)
-	return true, nil
+	return uniqueID, password, nil
 }
 
 func (s *Server) recordAuthFailure(reason string) {
@@ -352,31 +319,11 @@ func (s *Server) unaryAuth(ctx context.Context, req any, info *grpc.UnaryServerI
 	if s.draining.Load() {
 		return nil, status.Error(codes.Unavailable, "server shutting down")
 	}
-	if authExempt[info.FullMethod] {
-		return handler(ctx, req)
+	backend := s.roleBackend()
+	if backend == nil {
+		return nil, status.Error(codes.FailedPrecondition, "roles-v1 integration backend unavailable")
 	}
-	uniqueID, err := s.authenticate(ctx)
-	if err != nil {
-		return nil, err
-	}
-	return handler(withCallerIdentity(ctx, uniqueID), req)
-}
-
-// callerIdentityKey is private and typed so only this package's
-// authentication interceptor can establish an authenticated unary caller.
-type callerIdentityKey struct{}
-
-// withCallerIdentity records the authenticated principal for downstream unary
-// handlers without making transport metadata part of application logic.
-func withCallerIdentity(ctx context.Context, uniqueID string) context.Context {
-	return context.WithValue(ctx, callerIdentityKey{}, uniqueID)
-}
-
-// callerIdentity returns the authenticated unary caller, if the interceptor
-// established one. Empty values are deliberately rejected to fail closed.
-func callerIdentity(ctx context.Context) (string, bool) {
-	uniqueID, ok := ctx.Value(callerIdentityKey{}).(string)
-	return uniqueID, ok && uniqueID != ""
+	return s.roleUnaryAuth(ctx, req, info, handler, backend)
 }
 
 // unaryRecovery is outermost so a panic in authentication, a handler, or a
@@ -399,23 +346,11 @@ func (s *Server) streamAuth(srv any, ss grpc.ServerStream, info *grpc.StreamServ
 	if s.draining.Load() {
 		return status.Error(codes.Unavailable, "server shutting down")
 	}
-	if authExempt[info.FullMethod] {
-		return handler(srv, ss)
+	backend := s.roleBackend()
+	if backend == nil {
+		return status.Error(codes.FailedPrecondition, "roles-v1 integration backend unavailable")
 	}
-	uniqueID, err := s.authenticate(ss.Context())
-	if err != nil {
-		return err
-	}
-	ctx, cancel := context.WithTimeout(ss.Context(), s.streamLifetime())
-	defer cancel()
-	err = handler(srv, &identifiedStream{
-		ServerStream: &contextServerStream{ServerStream: ss, ctx: ctx},
-		uniqueID:     uniqueID,
-	})
-	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-		return status.Error(codes.DeadlineExceeded, "stream lifetime expired; reconnect")
-	}
-	return err
+	return s.roleStreamAuth(srv, ss, info, handler, backend)
 }
 
 // streamRecovery is outermost for the same reason as unaryRecovery.
@@ -451,18 +386,3 @@ type contextServerStream struct {
 }
 
 func (s *contextServerStream) Context() context.Context { return s.ctx }
-
-// identifiedStream carries the authenticated caller to the handler, which uses
-// it to name the subscriber in bus logs and metrics.
-type identifiedStream struct {
-	grpc.ServerStream
-	uniqueID string
-}
-
-// callerOf returns the authenticated caller of a stream, if any.
-func callerOf(ss grpc.ServerStream) string {
-	if is, ok := ss.(*identifiedStream); ok {
-		return is.uniqueID
-	}
-	return "unknown"
-}

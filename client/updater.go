@@ -421,7 +421,7 @@ func (a *App) ApplyAndRestart() string {
 	if err := restartLaunch(exe); err != nil {
 		return err.Error()
 	}
-	a.restarting.Store(true)
+	a.quitting.Store(true)
 	wailsQuit(a.ctx)
 	return ""
 }

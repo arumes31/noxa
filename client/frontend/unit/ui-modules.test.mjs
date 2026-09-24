@@ -114,13 +114,13 @@ test("frontend UI module behaviors", { concurrency: false }, async (t) => {
         audio.syncMuteButton(button, true);
         assert.equal(button.classList.contains("active"), true);
         assert.equal(button.getAttribute("aria-pressed"), "true");
-        assert.equal(button.label, "Mic muted");
+        assert.equal(button.label, "Microphone muted");
         assert.equal(button.getAttribute("aria-label"), "Unmute microphone");
 
         audio.syncMuteButton(button, false);
         assert.equal(button.classList.contains("active"), false);
         assert.equal(button.getAttribute("aria-pressed"), "false");
-        assert.equal(button.label, "Mic on");
+        assert.equal(button.label, "Microphone on");
         assert.equal(button.title, "Mute");
         assert.equal(audio.isMusicChannel({ AudioProfile: "broadcast" }), true);
         assert.equal(audio.isMusicChannel({ IsMusic: false }), false);
@@ -273,7 +273,7 @@ test("frontend UI module behaviors", { concurrency: false }, async (t) => {
             body: "hello", enc_verified: true, from_nickname: "Ada", id: "8", reply_to_id: "3", sent_at: 7,
         }, 5), {
             channelID: 5, clientMsgID: "", deleted: false, edited: false, e2e: false, direct: false, enc: true, encVerified: true, from: "Ada", fromUID: "",
-            id: 8, mentioned: false, mentions: [], offline: false, reactions: null, replyToID: 3, self: false, text: "hello", ts: 7000, version: 1,
+            id: 8, mentioned: false, mentions: [], role_mentions: [], offline: false, reactions: null, replyToID: 3, self: false, text: "hello", ts: 7000, version: 1,
         });
         const plaintextDM = chat.normalize({ direct: true, text: "clear" });
         assert.equal(plaintextDM.direct, true);
@@ -287,13 +287,103 @@ test("frontend UI module behaviors", { concurrency: false }, async (t) => {
         const reply = { from: "Bob", id: 2, replyToID: 1, text: "plain", ts: 20 };
         const legacyReply = { from: "Bob", id: 3, replyToID: 0, text: "↪ Ada: earlier", ts: 30 };
         assert.equal(chat.resolveParent([first, reply, legacyReply], reply), first);
-        assert.equal(chat.resolveParent([first, reply, legacyReply], legacyReply), first);
+        assert.equal(chat.resolveParent([first, reply, legacyReply], legacyReply), null);
         assert.equal(chat.fmtSlowMode(3600), "1h");
         assert.equal(chat.fmtSlowMode(120), "2m");
         assert.equal(chat.fmtSlowMode(7), "7s");
         assert.equal(chat.qsScore("alp", "Alpha"), 100);
         assert.ok(chat.qsScore("apa", "Alpha") > 0);
         assert.equal(chat.qsScore("zzz", "Alpha"), -1);
+    });
+
+    await t.test("chat connection setup keeps best-effort failures and late replies scoped", async (t) => {
+        replaceGlobal(t, "document", { getElementById: () => null });
+        const state = { activeTabID: "a", serverGeneration: 1, myUniqueID: "initial" };
+        const notices = [], reads = [];
+        let delayed = "", release;
+        const app = {
+            DMHistoryContextForTab: async tab => {
+                if (delayed === "identity") return new Promise(resolve => { release = () => resolve({ tab_id: tab, identity_uid: "old", activation: "0", identity_revision: "0" }); });
+                throw new Error("identity unavailable");
+            },
+            DMHistoryPeersForContext: async () => [],
+            SubscriptionsForTab: async tabID => {
+                reads.push(["subscriptions", tabID]);
+                if (delayed === "subscriptions") return new Promise(resolve => { release = () => resolve([2]); });
+                throw new Error("subscriptions unavailable");
+            },
+            MOTDForTab: async tabID => {
+                reads.push(["motd", tabID]);
+                if (delayed === "motd") return new Promise(resolve => { release = () => resolve("old notice"); });
+                return "current notice";
+            },
+        };
+        replaceGlobal(t, "window", { __noxa: { state, sysMsg: text => notices.push(text) }, go: { main: { App: app } } });
+        const chat = await import("../src/chat-ui.js");
+        await chat.onConnect();
+        assert.deepEqual(reads, [["subscriptions", "a"], ["motd", "a"]]);
+        assert.deepEqual(notices, ["server notice — current notice"]);
+        for (const stage of ["identity", "subscriptions", "motd"]) {
+            state.serverGeneration++;
+            delayed = stage;
+            release = null;
+            reads.length = 0;
+            notices.length = 0;
+            const connecting = chat.onConnect();
+            for (let i = 0; i < 10 && !release; i++) await Promise.resolve();
+            assert.equal(typeof release, "function", stage + " reached its delayed read");
+            state.serverGeneration++;
+            state.myUniqueID = "replacement";
+            release();
+            await connecting;
+            assert.equal(state.myUniqueID, "replacement");
+            assert.deepEqual(notices, []);
+            if (stage !== "motd") assert.equal(reads.some(([name]) => name === "motd"), false);
+        }
+    });
+
+    await t.test("chat send preserves failed and replacement drafts and serializes native writes", async (t) => {
+        const state = { activeTabID: "a", serverGeneration: 1, myChannelID: 7 };
+        const nodes = new Map(["chat-text", "chat-send", "chat-scope", "file-preview-row", "reply-bar", "chat-send-error", "chat-retry"].map(id => [id, { ...element(), value: "" }]));
+        const errorText = element();
+        nodes.get("chat-send-error").querySelector = () => errorText;
+        nodes.get("chat-scope").value = "channel";
+        const input = nodes.get("chat-text"), button = nodes.get("chat-send");
+        const notices = [], calls = [];
+        let resolve;
+        const app = { SendChatForTab: (...args) => {
+            calls.push(args);
+            return new Promise(done => { resolve = done; });
+        } };
+        replaceGlobal(t, "window", { __noxa: { state, sysMsg: message => notices.push(message) }, go: { main: { App: app } } });
+        replaceGlobal(t, "document", { getElementById: id => nodes.get(id) });
+        const chat = await import("../src/chat-ui.js");
+        input.value = "original";
+        const failed = chat.sendMessage();
+        assert.equal(button.disabled, true);
+        await chat.sendMessage();
+        assert.deepEqual(calls, [["a", "channel", "7", "original"]]);
+        resolve("write failed");
+        await failed;
+        assert.equal(input.value, "original");
+        assert.equal(button.disabled, false);
+        assert.deepEqual(notices, []);
+        assert.equal(errorText.textContent, "Message not sent: write failed");
+        assert.equal(nodes.get("chat-retry").hidden, false);
+        notices.length = 0;
+        const stale = chat.sendMessage();
+        state.serverGeneration++;
+        input.value = "replacement";
+        resolve("");
+        await stale;
+        assert.equal(input.value, "replacement");
+        assert.deepEqual(notices, []);
+        const current = chat.sendMessage();
+        resolve("");
+        await current;
+        assert.equal(input.value, "");
+        assert.equal(button.disabled, false);
+        assert.equal(calls.length, 3);
     });
 
     await t.test("files switches both workspace tabs, restores focus, and protects sealed data", async (t) => {
@@ -474,7 +564,7 @@ test("frontend UI module behaviors", { concurrency: false }, async (t) => {
         assert.equal(imageTools.base64Bytes("YWJj"), 3);
     });
 
-    await t.test("client info derives audio stats, durations, channel trees, and presets", async (t) => {
+    await t.test("client info derives audio stats and durations", async (t) => {
         replaceGlobal(t, "window", {
             __noxa: {
                 state: {
@@ -498,34 +588,33 @@ test("frontend UI module behaviors", { concurrency: false }, async (t) => {
         assert.equal(clientInfo.humanBytes(1024 * 1024), "1.0 MiB");
         assert.equal(clientInfo.humanDuration(65), "1m 5s");
         assert.equal(clientInfo.humanDuration(3661), "1h 1m 1s");
-        assert.equal(clientInfo.matchPreset(128000, true, false, true), "music");
-        assert.equal(clientInfo.matchPreset(1, false, false, false), "custom");
-        assert.equal(clientInfo.countSubtree(1), 2);
-        assert.deepEqual(clientInfo.subtreeOf(1), new Set([1, 2, 3]));
     });
 
-    await t.test("channel field hints are associated with labelled controls", async () => {
-        const { describeChannelFields } = await import("../src/clientinfo.js");
-        const attributes = {};
-        const control = { id: "participants", setAttribute(name, value) { attributes[name] = value; } };
-        const hint = {};
-        const field = (input, description) => ({ querySelector(selector) {
-            return selector === ".channel-field-hint" ? description : input;
-        }});
-        describeChannelFields({ querySelectorAll() { return [field(control, hint), field(null, {}), field(control, null)]; } });
-        assert.equal(hint.id, "participants-hint");
-        assert.equal(attributes["aria-describedby"], hint.id);
+    await t.test("open profile role chips follow the current session and clear after revocation", async (t) => {
+        const role = { id: 20, name: "Helper <img src=x>", icon: "★", position: 1, color: "#abcdef" };
+        const client = { client_id: "member", unique_id: "member", roles: [role] };
+        const state = { authorizationModel: "roles-v1", clients: [client] };
+        replaceGlobal(t, "window", { __noxa: { state } });
+        replaceGlobal(t, "document", { createElement: () => ({ style: {}, textContent: "" }) });
+        const label = {}, chips = { children: [], replaceChildren() { this.children = []; }, append(...items) { this.children.push(...items); } };
+        const row = { querySelector: (selector) => selector === ".ci-label" ? label : chips };
+        const { renderClientRoles } = await import("../src/clientinfo.js");
+        renderClientRoles(row, client);
+        assert.equal(label.textContent, "Roles");
+        assert.equal(row.hidden, false);
+        assert.equal(chips.children[0].textContent, "★ Helper <img src=x>");
+        assert.equal(chips.children[0].style.color, "#abcdef");
+        state.clients = [{ ...client, roles: [] }];
+        renderClientRoles(row, client);
+        assert.equal(row.hidden, true);
+        assert.equal(chips.children.length, 0);
+        state.clients = [{ ...client, client_id: "another-session" }];
+        renderClientRoles(row, client);
+        assert.equal(row.hidden, true);
+        state.clients = [{ ...client, roles: [{ ...role, name: "Member" }] }];
+        renderClientRoles(row, client);
+        assert.equal(label.textContent, "Roles");
+        assert.equal(chips.children[0].textContent, "★ Member");
     });
 
-    await t.test("channel edits send only changed placement fields", async () => {
-        const { channelTreeChanges } = await import("../src/clientinfo.js");
-        const open = { joinPower: 0, orderIndex: 0, parentID: 0, inherit: false };
-        assert.deepEqual(channelTreeChanges({}, open), []);
-        assert.deepEqual(channelTreeChanges({ Topic: "old" }, open), []);
-        const current = { NeededJoinPower: 20, OrderIndex: 4, ParentID: 9, InheritPermissions: true };
-        assert.deepEqual(channelTreeChanges(current, { joinPower: 20, orderIndex: 4, parentID: 9, inherit: true }), []);
-        assert.deepEqual(channelTreeChanges(current, { joinPower: 20, orderIndex: 1, parentID: 9, inherit: true }), ["order"]);
-        assert.deepEqual(channelTreeChanges(current, open), ["join_power", "order", "parent", "inherit"]);
-        assert.deepEqual(current, { NeededJoinPower: 20, OrderIndex: 4, ParentID: 9, InheritPermissions: true });
-    });
 });

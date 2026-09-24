@@ -1,5 +1,6 @@
 // settings-ui.js — TS3-style settings dialog with left icon nav.
 import { icon } from "./icons.js";
+import { captureMediaScope, mediaScopeIsCurrent, setWhisperRouting } from "./media-controls.js";
 import { currentLanguage, t } from "./i18n.js";
 import { copyToClipboard } from "./clipboard.js";
 import { captureConstraints } from "./audio.js";
@@ -7,6 +8,7 @@ import { MicCheck } from "./mic-check.js";
 import { percentageInput } from "./percentage-input.js";
 import { previewSounds, previewSpeech, speechPreviewLabel, audioStatus, SPEECH_EVENTS, stopPreviews, updateSoundOutput, SOUND_EVENT_GROUPS, testAll } from "./sounds.js";
 import { MATRIX_EVENTS, defaultMatrixRow } from "./notifications.js";
+import { renderVoiceHints } from "./workspace-ui.js";
 import { associateControlLabel, wrappedIndex } from "./a11y.js";
 import { createMediaDeviceInventory } from "./media-devices.js";
 import { closeDialog, mountDialog } from "./modal.js";
@@ -41,6 +43,11 @@ async function commit(snapshot) {
     // (282) the draft was cloned when the dialog opened: re-read the merged
     // truth so Go-owned fields (recents) written meanwhile survive.
     V().state.settings = await window.go.main.App.GetSettings();
+    // Keep existing control closures attached to the rebased draft, including
+    // when persistence succeeds but applying an audio device subsequently fails.
+    for (const key of Object.keys(draft)) delete draft[key];
+    Object.assign(draft, structuredClone(V().state.settings));
+    renderVoiceHints();
     try {
         await V().applyLiveAudioSettings();
     } catch (error) {
@@ -51,9 +58,7 @@ async function commit(snapshot) {
     if (V().applyChatPrefs) V().applyChatPrefs();
     // (294-297) appearance applies live (theme/accent/user CSS/font/compact).
     if (V().applyAppearance) V().applyAppearance();
-    // (291) always-on-top and (292) opacity apply immediately.
-    await window.go.main.App.SetAlwaysOnTop(!!snapshot.always_on_top);
-    await window.go.main.App.SetWindowOpacity(snapshot.window_opacity || 100);
+    // SaveSettings applies native effects from the merged, committed settings.
     return true;
 }
 
@@ -78,7 +83,7 @@ function row(label, control) {
     return el;
 }
 
-function checkbox(checked, onchange) {
+function checkbox(checked, onchange = () => {}) {
     const c = document.createElement("input");
     c.type = "checkbox";
     c.checked = !!checked;
@@ -86,7 +91,7 @@ function checkbox(checked, onchange) {
     return c;
 }
 
-function numberInput(value, min, max, onchange) {
+function numberInput(value, min, max, onchange = () => {}) {
     const i = document.createElement("input");
     i.type = "number";
     i.min = min; i.max = max; i.value = value;
@@ -323,37 +328,53 @@ function pageApplication() {
     return el;
 }
 
-function pageServer() {
+function pageServer({ load = true } = {}) {
     const el = document.createElement("div");
+    const generation = V().state.serverGeneration;
+    const tabID = V().state.activeTabID;
+    const model = V().state.authorizationModel;
+    const current = () => el.isConnected && generation === V().state.serverGeneration &&
+        tabID === V().state.activeTabID && model === V().state.authorizationModel;
     const status = hint(t("settings.loading.effective.server.configuration"));
+    status.setAttribute("role", "status");
     el.appendChild(status);
-    if (!V().state.isAdmin) {
-        status.textContent = t("settings.server.configuration.is.available.to.administrators.only");
-        return el;
-    }
-
-    const form = document.createElement("div");
+    // Access comes from the protected server query in both authorization models.
+    const form = document.createElement("form");
+    const mediaForm = document.createElement("form");
     form.hidden = true;
-    el.appendChild(form);
-    const values = {};
-    const addNumber = (label, key, min, max) => {
-        const input = numberInput(0, min, max, (v) => { values[key] = v; });
-        form.appendChild(row(label, input));
-        values[key] = 0;
+    mediaForm.hidden = true;
+    const runtimeHeading = document.createElement("h4");
+    runtimeHeading.className = "set-subhead";
+    runtimeHeading.textContent = t("settings.runtime.settings");
+    form.appendChild(runtimeHeading);
+    const mediaHeading = document.createElement("h4");
+    mediaHeading.className = "set-subhead";
+    mediaHeading.textContent = t("settings.video.publishing.limits");
+    mediaForm.appendChild(mediaHeading);
+    el.append(form, mediaForm);
+    let busy = false, needsReload = true;
+    const addNumber = (owner, label, min, max) => {
+        const input = numberInput(0, min, max);
+        input.required = true;
+        input.step = "1";
+        owner.appendChild(row(label, input));
         return input;
     };
-    const maxClients = addNumber(t("settings.maximum.clients.0.unlimited"), "max_clients", 0, 100000);
-    const timeout = addNumber(t("settings.connection.timeout.seconds"), "client_timeout_seconds", 30, 86400);
-    const bitrate = addNumber(t("settings.default.opus.bitrate.bit.s"), "opus_bitrate", 6000, 510000);
-    const fec = checkbox(false, (v) => { values.opus_fec = v; });
-    const dtx = checkbox(false, (v) => { values.opus_dtx = v; });
-    const stereo = checkbox(false, (v) => { values.opus_stereo = v; });
+    const maxClients = addNumber(form, t("settings.maximum.clients.0.unlimited"), 0, 100000);
+    const timeout = addNumber(form, t("settings.connection.timeout.seconds"), 30, 86400);
+    const bitrate = addNumber(form, t("settings.default.opus.bitrate.bit.s"), 6000, 510000);
+    const fec = checkbox(false);
+    const dtx = checkbox(false);
+    const stereo = checkbox(false);
     form.appendChild(row(t("settings.default.opus.in.band.fec"), fec));
     form.appendChild(row(t("settings.default.opus.dtx"), dtx));
     form.appendChild(row(t("settings.default.opus.stereo"), stereo));
     form.appendChild(hint(t("settings.codec.defaults.apply.to.newly.created.channels.existing.channels.keep.their")));
+    const videoBitrate = addNumber(mediaForm, t("settings.video.bitrate.ceiling"), 0, 100000000);
+    const videoWidth = addNumber(mediaForm, t("settings.video.maximum.encoded.width"), 0, 16383);
+    const videoHeight = addNumber(mediaForm, t("settings.video.maximum.encoded.height"), 0, 16383);
+    mediaForm.appendChild(hint(t("settings.video.limit.help")));
     const applyToForm = (cfg) => {
-        Object.assign(values, cfg);
         maxClients.value = cfg.max_clients;
         timeout.value = cfg.client_timeout_seconds;
         bitrate.value = cfg.opus_bitrate;
@@ -361,31 +382,140 @@ function pageServer() {
         dtx.checked = !!cfg.opus_dtx;
         stereo.checked = !!cfg.opus_stereo;
     };
+    const applyToMediaForm = (limits) => {
+        videoBitrate.value = limits.video_max_bitrate;
+        videoWidth.value = limits.video_max_width;
+        videoHeight.value = limits.video_max_height;
+    };
     const apply = document.createElement("button");
+    apply.type = "submit";
     apply.textContent = t("settings.apply.server.configuration");
-    apply.onclick = async () => {
-        apply.disabled = true;
+    const applyMedia = document.createElement("button");
+    applyMedia.type = "submit";
+    applyMedia.textContent = t("settings.apply.video.limits");
+    const reload = document.createElement("button");
+    reload.type = "button";
+    reload.textContent = t("settings.serverConfig.reload");
+    reload.hidden = true;
+    el.appendChild(reload);
+    const controls = () => {
+        for (const owner of [form, mediaForm]) owner.setAttribute("aria-busy", String(busy));
+        for (const input of el.querySelectorAll("form input")) input.disabled = busy || needsReload;
+        apply.disabled = busy || needsReload;
+        applyMedia.disabled = busy || needsReload;
+        reload.disabled = busy;
+    };
+    const stale = () => {
+        if (!el.isConnected) return;
+        form.hidden = true;
+        mediaForm.hidden = true;
+        status.textContent = t("settings.serverConfig.changed");
+        reload.hidden = false;
+        reload.disabled = false;
+    };
+    form.onsubmit = async event => {
+        event.preventDefault();
+        if (!current()) { stale(); return; }
+        if (busy || needsReload || !form.reportValidity()) return;
+        // Read the actual controls so Enter submits the current number even
+        // when the browser has not dispatched a change/blur event yet.
+        const request = { max_clients: Number(maxClients.value), client_timeout_seconds: Number(timeout.value),
+            opus_bitrate: Number(bitrate.value), opus_fec: fec.checked, opus_dtx: dtx.checked, opus_stereo: stereo.checked };
+        busy = true;
+        controls();
         try {
-            const result = await window.go.main.App.SetServerConfig(values);
+            const result = await window.go.main.App.SetServerConfigForTab(tabID, request);
+            if (!current()) { stale(); return; }
             applyToForm(result);
             status.textContent = t("settings.server.configuration.saved.and.active");
             V().toast(t("settings.server.configuration.updated"));
         } catch (err) {
-            status.textContent = t("settings.could.not.save.server.configuration") + err;
+            if (!current()) { stale(); return; }
+            needsReload = true;
+            reload.hidden = false;
+            status.textContent = t("settings.could.not.save.server.configuration") + err + " " + t("settings.serverConfig.reloadAfterFailure");
             V().toast(status.textContent, "warn");
         } finally {
-            apply.disabled = false;
+            busy = false;
+            if (current()) controls();
         }
     };
     form.appendChild(row(t("settings.runtime.settings"), apply));
+    for (const input of [videoWidth, videoHeight]) {
+        input.addEventListener("input", () => videoHeight.setCustomValidity(""));
+    }
+    mediaForm.onsubmit = async event => {
+        event.preventDefault();
+        if (!current()) { stale(); return; }
+        if (busy || needsReload) return;
+        videoHeight.setCustomValidity("");
+        const width = Number(videoWidth.value), height = Number(videoHeight.value);
+        if ((width === 0) !== (height === 0)) {
+            videoHeight.setCustomValidity(t("settings.video.dimensions.paired"));
+        }
+        if (!mediaForm.reportValidity()) return;
+        const request = { video_max_bitrate: Number(videoBitrate.value),
+            video_max_width: width, video_max_height: height };
+        busy = true;
+        controls();
+        try {
+            const result = await window.go.main.App.SetMediaLimitsForTab(tabID, request);
+            if (!current()) { stale(); return; }
+            applyToMediaForm(result);
+            status.textContent = t("settings.video.limits.saved.and.active");
+            V().toast(t("settings.video.limits.updated"));
+        } catch (err) {
+            if (!current()) { stale(); return; }
+            needsReload = true;
+            reload.hidden = false;
+            status.textContent = t("settings.could.not.save.video.limits") + err + " " + t("settings.serverConfig.reloadAfterFailure");
+            V().toast(status.textContent, "warn");
+        } finally {
+            busy = false;
+            if (current()) controls();
+        }
+    };
+    mediaForm.appendChild(row(t("settings.video.publishing.limits"), applyMedia));
 
-    window.go.main.App.GetServerConfig().then((cfg) => {
-        applyToForm(cfg);
-        status.textContent = t("settings.changes.take.effect.immediately.and.are.restored.after.restart");
-        form.hidden = false;
-    }).catch((err) => {
-        status.textContent = t("settings.could.not.load.server.configuration") + err;
-    });
+    const refresh = async () => {
+        if (!current()) { stale(); return; }
+        if (busy) return;
+        busy = true;
+        controls();
+        try {
+            const cfg = await window.go.main.App.GetServerConfigForTab(tabID);
+            const limits = cfg.media_limits_management
+                ? await window.go.main.App.GetMediaLimitsForTab(tabID)
+                : null;
+            if (!current()) { stale(); return; }
+            applyToForm(cfg);
+            if (limits) applyToMediaForm(limits);
+            needsReload = false;
+            status.textContent = t("settings.changes.take.effect.immediately.and.are.restored.after.restart");
+            form.hidden = false;
+            mediaForm.hidden = !limits;
+            reload.hidden = true;
+        } catch (err) {
+            if (!current()) { stale(); return; }
+            needsReload = true;
+            form.hidden = true;
+            mediaForm.hidden = true;
+            reload.hidden = false;
+            status.textContent = t("settings.could.not.load.server.configuration") + err;
+        } finally {
+            busy = false;
+            if (current()) controls();
+        }
+    };
+    reload.onclick = () => {
+        if (!el.isConnected || busy) return;
+        // An explicit reload creates a fresh scope on the newly selected server.
+        if (!current()) renderPage("server");
+        else void refresh();
+    };
+    controls();
+    // Search builds detached pages solely to index their static labels.
+    if (load) queueMicrotask(refresh);
     return el;
 }
 
@@ -725,6 +855,17 @@ function pagePlayback() {
         if (rv) V().applyOutputSettings(rv);
     }, true)));
     el.appendChild(row(t("settings.voice.limiter.compressor"), checkbox(s.voice_limiter !== false, (v) => { s.voice_limiter = v; })));
+    el.appendChild(row(t("settings.positional.enabled"), checkbox(!!s.positional_audio, (v) => { s.positional_audio = v; })));
+    el.appendChild(hint(t("settings.positional.hint")));
+    const positionPath = document.createElement("button");
+    positionPath.textContent = t("settings.positional.copyPath");
+    positionPath.onclick = async () => {
+        try {
+            const path = await window.go.main.App.PositionalInputPath();
+            if (path) await copyToClipboard(path);
+        } catch (error) { V().toast(String(error), "warn"); }
+    };
+    el.appendChild(row(t("settings.positional.source"), positionPath));
     el.appendChild(row(t("settings.per.user.gain.normalization.cap.4x"), checkbox(s.gain_normalize, (v) => { s.gain_normalize = v; })));
     // (53) each publisher is levelled on its own chain, so a loud speaker no
     // longer sets the gain for a quiet one.
@@ -1429,6 +1570,11 @@ function translateDialog(overlay) {
 function openSettings(pageId = "application") {
     if (document.getElementById("settings-overlay")?.getAttribute("aria-busy") === "true") return;
     draft = JSON.parse(JSON.stringify(V().state.settings || {}));
+    const whisperScope = captureMediaScope();
+    const whisperConfig = (s) => JSON.stringify([!!s?.whisper_active, s?.whisper_clients || [], s?.whisper_channels || []]);
+    // Local persistence is independent of live routing. Keep failed live changes
+    // pending so Apply can retry the same draft after a server rejection.
+    let appliedWhisperConfig = whisperConfig(draft);
     deviceInventory.invalidate();
 
     let overlay = document.getElementById("settings-overlay");
@@ -1495,7 +1641,7 @@ function openSettings(pageId = "application") {
             searchIndex = [];
             searchLanguage = currentLanguage();
             for (const p of PAGES) {
-                const pageEl = PAGE_BUILDERS[p.id]();
+                const pageEl = p.id === "server" ? pageServer({ load: false }) : PAGE_BUILDERS[p.id]();
                 pageEl.querySelectorAll(".set-row, .set-subhead, .set-hint, button").forEach((r) => {
                     const label = (r.querySelector(".set-label")?.textContent || r.textContent || "").toLowerCase().trim();
                     searchIndex.push({ page: p.id, label });
@@ -1566,11 +1712,19 @@ function openSettings(pageId = "application") {
         if (saving) return false;
         saving = true;
         const snapshot = structuredClone(draft);
-        const previous = V().state.settings;
-        const whisperConfig = (s) => JSON.stringify([!!s?.whisper_active, s?.whisper_clients || [], s?.whisper_channels || []]);
-        const whisperChanged = whisperConfig(previous) !== whisperConfig(snapshot);
+        const nextWhisperConfig = whisperConfig(snapshot);
+        // Applying the whisper editor explicitly reapplies routing, including
+        // a configuration saved locally but rejected before reopening it.
+        const whisperChanged = appliedWhisperConfig !== nextWhisperConfig ||
+            overlay.querySelector(".settings-nav-item.active")?.dataset.page === "whisper";
         const previousLanguage = currentLanguage();
-        const serverGeneration = V().state.serverGeneration;
+        const refreshDraftControls = () => {
+            if (!overlay.isConnected) return;
+            if (previousLanguage !== currentLanguage()) translateDialog(overlay);
+            invalidateSearch();
+            if (search.value) search.oninput();
+            else renderPage(overlay.querySelector(".settings-nav-item.active")?.dataset.page || "application");
+        };
         const focused = document.activeElement;
         overlay.setAttribute("aria-busy", "true");
         for (const button of overlay.querySelectorAll(".settings-footer button")) button.disabled = true;
@@ -1583,24 +1737,30 @@ function openSettings(pageId = "application") {
         try {
             await commit(snapshot);
             if (!overlay.isConnected) return false;
-            if (previousLanguage !== currentLanguage()) {
-                translateDialog(overlay);
-                if (search.value) search.oninput();
-                else renderPage(overlay.querySelector(".settings-nav-item.active")?.dataset.page || "application");
-            }
+            refreshDraftControls();
             // Local preferences also save while disconnected. A live whisper
-            // update belongs only to the server where this save began.
-            if (whisperChanged && V().state.myClientID && serverGeneration === V().state.serverGeneration) {
-                const error = await window.go.main.App.WhisperSet(
-                    snapshot.whisper_active ? snapshot.whisper_clients || [] : [],
-                    snapshot.whisper_active ? snapshot.whisper_channels || [] : [],
-                    !!snapshot.whisper_active,
-                );
+            // update belongs only to the server where this dialog opened.
+            if (whisperChanged && V().state.myClientID && mediaScopeIsCurrent(whisperScope)) {
+                const error = await setWhisperRouting({
+                    clients: draft.whisper_active ? draft.whisper_clients || [] : [],
+                    channels: draft.whisper_active ? draft.whisper_channels || [] : [],
+                    active: !!draft.whisper_active,
+                }, whisperScope);
                 if (error) throw new Error(error);
+                if (error === "") {
+                    appliedWhisperConfig = whisperConfig(draft);
+                    V().state.whisperArmed = false;
+                    V().state.whisperTargetUID = "";
+                    V().state.whisperPrev = null;
+                    V().renderVoiceStatus();
+                }
             }
             saveStatus.textContent = t("settings.saved");
             return true;
         } catch (error) {
+            // Persistence already rebased nested draft objects. Rebind controls
+            // even if audio application failed, so subsequent edits reach them.
+            if (error instanceof SavedAudioSettingsError) refreshDraftControls();
             if (overlay.isConnected) {
                 saveStatus.textContent = error instanceof SavedAudioSettingsError
                     ? error.message

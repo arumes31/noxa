@@ -11,7 +11,15 @@ server. All files use `syntax = "proto3";` and retain the published package
 | [`signaling.proto`](signaling.proto) | `Signaling` (deprecated) | Compatibility descriptors for the intentionally unserved WebRTC signaling RPCs. |
 | [`chat.proto`](chat.proto) | `Chat` (deprecated) | Compatibility descriptors for the intentionally unserved chat RPCs. |
 | [`events.proto`](events.proto) | `Events` | Server events broadcast to clients (user joined/left, speaking, channel created/deleted, user moved/kicked/banned). |
-| [`control.proto`](control.proto) | `Control` | Authentication, channel create/delete/list, permission queries, file transfer control. |
+| [`control.proto`](control.proto) | `Control` | Authentication, role-aware channel/member management and inspection; compatibility descriptors for retired operations. |
+
+Authentication retains the published field numbers, including `user_id = 3` in
+the response. Deprecated fields are never reused for new values; credentials
+and the `roles-v1` model header are still required on each RPC. The deprecated
+`CreateChannel`, `DeleteChannel`, and `QueryPermissions` declarations remain for
+source/wire compatibility and return `UNIMPLEMENTED`. Use `ChangeChannel` and
+the role inspection APIs instead; retaining descriptors does not restore the
+retired permission model.
 
 ## Linting
 

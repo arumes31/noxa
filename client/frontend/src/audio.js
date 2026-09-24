@@ -3,6 +3,7 @@
 // limiter/per-user normalizer, and the per-user volume/mute registry.
 import { labelButton } from "./icons.js";
 import { t } from "./i18n.js";
+import { updateLocalSettings } from "./settings-store.js";
 
 const V = () => window.__noxa;
 
@@ -45,10 +46,10 @@ export function syncMuteButton(button, muted) {
 export function renderMicStatus(container, micState, onRetry, videoOnly = true, successFocus = null) {
     if (!container) return null;
     container.replaceChildren();
-    const suffix = videoOnly ? " — video only" : "";
+    const suffix = videoOnly ? t("polish.videoOnly") : "";
     const message = micState === "denied"
-        ? `Microphone access denied${suffix}`
-        : micState === "none" ? `No microphone found${suffix}` : "";
+        ? t("polish.micDenied") + suffix
+        : micState === "none" ? t("polish.micMissing") + suffix : "";
     if (!message) return null;
 
     const text = document.createElement("span");
@@ -58,12 +59,12 @@ export function renderMicStatus(container, micState, onRetry, videoOnly = true, 
     const retry = document.createElement("button");
     retry.type = "button";
     retry.className = "mic-retry";
-    retry.textContent = "Retry microphone access";
+    retry.textContent = t("polish.micRetry");
     retry.onclick = async () => {
         const retryHadFocus = document.activeElement === retry;
         let recovered = false;
         retry.disabled = true;
-        retry.textContent = "Retrying…";
+        retry.textContent = t("polish.retrying");
         try {
             recovered = !!(await onRetry?.());
         } finally {
@@ -74,7 +75,7 @@ export function renderMicStatus(container, micState, onRetry, videoOnly = true, 
             // mounted failure case so the user can make another attempt.
             if (retry.isConnected) {
                 retry.disabled = false;
-                retry.textContent = "Retry microphone access";
+                retry.textContent = t("polish.micRetry");
             }
         }
     };
@@ -99,13 +100,20 @@ export function startMicMeter(stream) {
     }
     el.classList.remove("hidden");
     const fill = el.querySelector(".mic-fill");
+    meterAnalyser = {};
     try {
         const ctx = new (window.AudioContext || window.webkitAudioContext)();
-        const src = ctx.createMediaStreamSource(stream);
+        meterAnalyser.ctx = ctx;
+        const track = stream.getAudioTracks()[0].clone();
+        meterAnalyser.track = track;
+        track.enabled = true;
+        const src = ctx.createMediaStreamSource(new MediaStream([track]));
+        meterAnalyser.src = src;
         const an = ctx.createAnalyser();
         an.fftSize = 512;
         src.connect(an);
-        meterAnalyser = { ctx, an };
+        meterAnalyser = { ctx, an, src, track };
+        void ctx.resume().catch(() => {});
         const buf = new Uint8Array(an.frequencyBinCount);
         const tick = () => {
             an.getByteTimeDomainData(buf);
@@ -113,12 +121,13 @@ export function startMicMeter(stream) {
             for (const v of buf) sum += Math.abs(v - 128);
             const level = Math.min(1, (sum / buf.length / 128) * 5);
             fill.style.width = level * 100 + "%";
+            el.setAttribute("aria-valuenow", String(Math.round(level * 100)));
             fill.className = "mic-fill " + (level > 0.7 ? "hot" : level > 0.35 ? "warm" : "cool");
             meterRaf = requestAnimationFrame(tick);
         };
         tick();
     } catch {
-        el.classList.add("hidden");
+        stopMicMeter();
     }
 }
 
@@ -128,7 +137,9 @@ export function stopMicMeter() {
         meterRaf = null;
     }
     if (meterAnalyser) {
-        meterAnalyser.ctx.close().catch(() => {});
+        meterAnalyser.src?.disconnect();
+        meterAnalyser.track?.stop();
+        void meterAnalyser.ctx?.close().catch(() => {});
         meterAnalyser = null;
     }
     const el = document.getElementById("mic-meter");
@@ -346,33 +357,39 @@ export function getUserVolume(uid) {
 
 export function isUserMuted(uid) {
     const s = V().state.settings;
-    return (s?.muted_users || []).includes(uid);
+    return (s?.muted_users || []).includes(uid) || (s?.blocked_users || []).includes(uid);
 }
 
-export async function setUserVolume(uid, pct) {
-    const s = Object.assign({}, V().state.settings);
-    s.user_volumes = Object.assign({}, s.user_volumes, { [uid]: pct });
-    const error = await saveAll(s);
-    if (error) throw new Error(error);
-    applyUserAudio(uid);
+function mutateAudioPreference(uid, mutate) {
+    return updateLocalSettings(mutate).then(() => {
+        applyUserAudio(uid);
+    });
 }
 
-export async function setUserMuted(uid, muted) {
-    const s = Object.assign({}, V().state.settings);
-    const set = new Set(s.muted_users || []);
-    if (muted) set.add(uid);
-    else set.delete(uid);
-    s.muted_users = [...set];
-    await saveAll(s);
-    applyUserAudio(uid);
+export function setUserVolume(uid, pct) {
+    return mutateAudioPreference(uid, s => { s.user_volumes = { ...s.user_volumes, [uid]: pct }; });
 }
 
-async function saveAll(s) {
-    const err = await window.go.main.App.SaveSettings(s);
-    // (282) re-read rather than caching the copy we sent: the Go side owns
-    // fields the frontend never has (recents, what's-new marker).
-    if (!err) V().state.settings = await window.go.main.App.GetSettings();
-    return err;
+export function setUserMuted(uid, muted) {
+    return mutateAudioPreference(uid, s => {
+        const users = new Set(s.muted_users || []);
+        if (muted) users.add(uid);
+        else users.delete(uid);
+        s.muted_users = [...users];
+    });
+}
+
+export function setUserBlocked(uid, blocked) {
+    return mutateAudioPreference(uid, s => {
+        const users = new Set(s.blocked_users || []);
+        if (blocked) users.add(uid);
+        else users.delete(uid);
+        s.blocked_users = [...users];
+    });
+}
+
+export function refreshUserAudio() {
+    for (const uid of userNodes.keys()) applyUserAudio(uid);
 }
 
 // userNodes maps uniqueID -> {gain: GainNode, mute: GainNode}.

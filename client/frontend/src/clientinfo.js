@@ -1,11 +1,23 @@
 // clientinfo.js — right-click context menu on channel-tree users and the
 // TS3-style Client Info dialog (live-refreshing).
-import { getUserVolume, isUserMuted, setUserMuted, setUserVolume } from "./audio.js";
+import { getUserVolume, isUserMuted, setUserMuted, setUserVolume, setUserBlocked } from "./audio.js";
 import { copyToClipboard } from "./clipboard.js";
 import { pickIcon } from "./image-tools.js";
 import { closeDialog, isCurrentServerDialog, mountServerDialog } from "./modal.js";
+import { t } from "./i18n.js";
+import { roleChip } from "./role-presentation.js";
+import { startPrivateCall } from "./private-calls.js";
+import { updateLocalSettings } from "./settings-store.js";
 
 const V = () => window.__noxa;
+
+async function roleChannelDialog(kind, channelID) {
+    const generation = V().state.serverGeneration;
+    try {
+        const { openRoleChannel } = await import("./channel-lifecycle-ui.js");
+        if (generation === V().state.serverGeneration) openRoleChannel(kind, channelID);
+    } catch { if (generation === V().state.serverGeneration) V().toast(t("roles.unavailable"), "warn"); }
+}
 
 let menuEl = null;
 
@@ -18,6 +30,8 @@ function closeMenu() {
 
 function openContextMenu(x, y, client) {
     closeMenu();
+    const tabID = V().state.activeTabID;
+    const disconnectTarget = { clientID: client.client_id, channelID: client.channel_id };
     const { $ } = V();
     const P = window.__noxaPerms;
     // (306) multi-select: with several users selected, batch actions apply
@@ -37,9 +51,9 @@ function openContextMenu(x, y, client) {
         mod.push(`<a data-act="contact">${isContact ? "✓ " : ""}Add to contacts</a>`);
         const isBlocked = (V().state.settings?.blocked_users || []).includes(client.unique_id);
         mod.push(`<a data-act="block">${isBlocked ? "✓ " : ""}Block (hide chat + mute)</a>`);
-        if (P.canKickChannel()) mod.push(`<a data-act="kick-ch">Kick from channel…</a>`);
-        if (P.canKickServer()) mod.push(`<a data-act="kick-srv">Kick from server…</a>`);
-        if (P.canBan()) mod.push(`<a data-act="ban">Ban…</a>`);
+        if (disconnectTarget.channelID > 0) mod.push(`<a data-act="kick-ch">Kick from channel…</a>`);
+        mod.push(`<a data-act="kick-srv">Kick from server…</a>`);
+        mod.push(`<a data-act="ban">Ban…</a>`);
     }
     menuEl = document.createElement("div");
     menuEl.className = "ctx-menu";
@@ -58,6 +72,33 @@ function openContextMenu(x, y, client) {
     menuEl.style.top = Math.min(y, window.innerHeight - 260) + "px";
     menuEl.onclick = (e) => e.stopPropagation();
 
+    if (client.unique_id && client.client_id !== V().state.myClientID) {
+        const generation = V().state.serverGeneration;
+        const call = document.createElement("button");
+        call.type = "button"; call.className = "ctx-action"; call.textContent = t("call.start");
+        call.onclick = () => {
+            closeMenu();
+            if (tabID === V().state.activeTabID && generation === V().state.serverGeneration) void startPrivateCall(client.unique_id);
+        };
+        menuEl.append(call);
+    }
+    if (client.channel_id > 0 && client.client_id !== V().state.myClientID) {
+        const voice = document.createElement("button");
+        voice.type = "button";
+        voice.className = "ctx-action";
+        voice.textContent = t("roles.voice.title");
+        voice.onclick = async () => {
+            const generation = V().state.serverGeneration;
+            closeMenu();
+            try {
+                const { openVoiceModeration } = await import("./voice-moderation-ui.js");
+                if (generation === V().state.serverGeneration) openVoiceModeration(client);
+            } catch {
+                if (generation === V().state.serverGeneration) V().toast(t("roles.voice.failed"));
+            }
+        };
+        menuEl.append(voice);
+    }
     menuEl.querySelector('[data-act="info"]').onclick = () => {
         closeMenu();
         openClientInfo(client);
@@ -80,8 +121,10 @@ function openContextMenu(x, y, client) {
     };
     menuEl.querySelector('[data-act="mute"]').onclick = async () => {
         closeMenu();
-        await setUserMuted(client.unique_id, !muted);
-        V().toast((muted ? "unmuted " : "muted ") + (client.nickname || client.unique_id) + " locally");
+        try {
+            await setUserMuted(client.unique_id, !muted);
+            V().toast((isUserMuted(client.unique_id) ? "muted " : "unmuted ") + (client.nickname || client.unique_id) + " locally");
+        } catch (error) { V().toast(String(error), "error"); }
     };
     // (170) kick with reason dialog; (171) ban with duration presets.
     const pokeAct = menuEl.querySelector('[data-act="poke"]');
@@ -97,43 +140,48 @@ function openContextMenu(x, y, client) {
             V().toast("already a contact");
             return;
         }
-        s.contacts = [...(s.contacts || []), { unique_id: client.unique_id, label: "" }];
-        await window.go.main.App.SaveSettings(s);
-        V().toast("contact added");
+        try {
+            await updateLocalSettings(current => {
+                if ((current.contacts || []).some(c => c.unique_id === client.unique_id)) return;
+                current.contacts = [...(current.contacts || []), { unique_id: client.unique_id, label: "" }];
+            });
+            V().toast("contact added");
+        } catch (error) { V().toast(String(error), "error"); }
     };
     const blockAct = menuEl.querySelector('[data-act="block"]');
     if (blockAct) blockAct.onclick = async () => {
         closeMenu();
         const s = V().state.settings;
         const blocked = (s.blocked_users || []).includes(client.unique_id);
-        if (blocked) s.blocked_users = s.blocked_users.filter((u) => u !== client.unique_id);
-        else s.blocked_users = [...(s.blocked_users || []), client.unique_id];
-        await window.go.main.App.SaveSettings(s);
-        V().toast(blocked ? "unblocked" : "blocked — chat hidden, voice muted locally");
+        try {
+            await setUserBlocked(client.unique_id, !blocked);
+            V().toast(blocked ? "unblocked" : "blocked — chat hidden, voice muted locally");
+        } catch (error) { V().toast(String(error), "error"); }
     };
     const kickAct = menuEl.querySelector('[data-act="kick-ch"]');
     if (kickAct) kickAct.onclick = () => {
         closeMenu();
         reasonDialog("Kick from channel", client, (reason) =>
-            window.go.main.App.KickClient(client.client_id, false, false, reason, 0));
+            window.go.main.App.DisconnectMemberForTab(tabID, disconnectTarget.clientID, disconnectTarget.channelID, reason));
     };
     const kickSrvAct = menuEl.querySelector('[data-act="kick-srv"]');
     if (kickSrvAct) kickSrvAct.onclick = () => {
         closeMenu();
         reasonDialog("Kick from server", client, (reason) =>
-            window.go.main.App.KickClient(client.client_id, true, false, reason, 0));
+            window.go.main.App.KickClientForTab(tabID, client.client_id, true, false, reason, 0));
     };
     const banAct = menuEl.querySelector('[data-act="ban"]');
     if (banAct) banAct.onclick = () => {
         closeMenu();
-        banDialog(client);
+        banDialog(client, tabID);
     };
     const slider = menuEl.querySelector('.ctx-volume input');
     slider.oninput = () => {
         menuEl.querySelector(".ctx-vol-pct").textContent = slider.value + "%";
     };
     slider.onchange = async () => {
-        await setUserVolume(client.unique_id, parseInt(slider.value, 10));
+        try { await setUserVolume(client.unique_id, parseInt(slider.value, 10)); }
+        catch (error) { V().toast(String(error), "error"); }
     };
 
     document.body.appendChild(menuEl);
@@ -143,14 +191,15 @@ function openContextMenu(x, y, client) {
 // every selected user.
 function openBatchMenu(x, y, clientIDs) {
     closeMenu();
-    const P = window.__noxaPerms;
+    const tabID = V().state.activeTabID, generation = V().state.serverGeneration;
     const myID = V().state.myClientID;
     const others = clientIDs.filter((id) => id !== myID);
+    const disconnectTargets = others.map(clientID => ({ clientID, channelID: V().state.clients.find(c => c.client_id === clientID)?.channel_id }));
     menuEl = document.createElement("div");
     menuEl.className = "ctx-menu";
     const entries = [`<a data-act="count" class="ctx-head">${clientIDs.length} selected</a>`];
     entries.push(`<a data-act="mute">Mute all locally</a>`);
-    if (P.canKickChannel() && others.length) entries.push(`<a data-act="kick">Kick all from channel</a>`);
+    if (others.length) entries.push(`<a data-act="kick">Kick all from channel</a>`);
     menuEl.innerHTML = entries.join("");
     menuEl.style.left = Math.min(x, window.innerWidth - 240) + "px";
     menuEl.style.top = Math.min(y, window.innerHeight - 200) + "px";
@@ -158,19 +207,29 @@ function openBatchMenu(x, y, clientIDs) {
 
     menuEl.querySelector('[data-act="mute"]').onclick = async () => {
         closeMenu();
-        for (const id of clientIDs) {
-            const c = V().state.clients.find((x) => x.client_id === id);
-            if (c) await setUserMuted(c.unique_id, true);
-        }
-        V().toast("muted " + clientIDs.length + " users locally");
+        try {
+            for (const id of clientIDs) {
+                const c = V().state.clients.find((x) => x.client_id === id);
+                if (c) await setUserMuted(c.unique_id, true);
+            }
+            V().toast("muted " + clientIDs.length + " users locally");
+        } catch (error) { V().toast(String(error), "error"); }
     };
     const kick = menuEl.querySelector('[data-act="kick"]');
     if (kick) kick.onclick = async () => {
         closeMenu();
-        for (const id of others) {
-            await window.go.main.App.KickClient(id, false, false, "", 0);
+        for (const target of disconnectTargets) {
+            if (generation !== V().state.serverGeneration) return;
+            try {
+                const err = await window.go.main.App.DisconnectMemberForTab(tabID, target.clientID, target.channelID || 0, "");
+                if (generation !== V().state.serverGeneration) return;
+                if (err) { V().toast(err, "warn"); return; }
+            } catch (err) {
+                if (generation === V().state.serverGeneration) V().toast("kick failed: " + err, "warn");
+                return;
+            }
         }
-        V().toast("kicked " + others.length + " users");
+        V().toast("kick requests sent for " + others.length + " users");
     };
     document.body.appendChild(menuEl);
 }
@@ -318,7 +377,20 @@ function humanDuration(sec) {
     return `${s}s`;
 }
 
+// Re-resolve the displayed session on every snapshot so an open profile cannot
+// retain revoked cosmetics or use another session of a newly hidden member.
+export function renderClientRoles(row, client) {
+    const { state } = V();
+    const roles = [...(state.clients.find((c) => c.client_id === client.client_id)?.roles || [])].sort((a, b) => b.position - a.position);
+    row.hidden = !roles.length;
+    row.querySelector(".ci-label").textContent = t("roles.title");
+    const chips = row.querySelector(".ci-val");
+    chips.replaceChildren();
+    chips.append(...roles.map(roleChip));
+}
+
 function openClientInfo(client) {
+    const tabID = V().state.activeTabID;
     const overlay = document.createElement("div");
     overlay.className = "dlg-overlay";
     overlay.innerHTML = `
@@ -373,17 +445,17 @@ function openClientInfo(client) {
     noteInput.value = window.__noxaSocial.userNote(client.unique_id);
     noteInput.onchange = () => {
         window.__noxaSocial.saveUserNote(client.unique_id, noteInput.value.trim())
-            .then(() => V().toast("note saved"));
+            .then(() => V().toast("note saved"))
+            .catch(error => V().toast(String(error), "error"));
     };
     overlay.querySelector(".ci-grid").appendChild(noteRow);
-    // (315) server groups of this user (from wave-6b membership data).
-    const groups = (V().state.groupByUID?.get(client.unique_id) || []).map((g) => g.name).join(", ");
-    if (groups) {
-        const gRow = document.createElement("div");
-        gRow.className = "ci-note";
-        gRow.innerHTML = `<div class="ci-label">Groups</div><div class="ci-val">${window.__noxaSocial.esc(groups)}</div>`;
-        overlay.querySelector(".ci-grid").appendChild(gRow);
-    }
+    // Current roles from the recipient-filtered member snapshot.
+    const gRow = document.createElement("div");
+    gRow.className = "ci-note ci-member-roles";
+    gRow.innerHTML = `<div class="ci-label"></div><div class="ci-val role-chips"></div>`;
+    const renderRoles = () => renderClientRoles(gRow, client);
+    renderRoles();
+    overlay.querySelector(".ci-grid").appendChild(gRow);
 
     const setVal = (f, text, cls) => {
         const el = overlay.querySelector(`[data-f="${f}"]`);
@@ -392,9 +464,10 @@ function openClientInfo(client) {
     };
 
     const refresh = async () => {
+        if (!isCurrentServerDialog(overlay)) return;
         let info;
         try {
-            info = await window.go.main.App.GetClientInfo(client.client_id);
+            info = await window.go.main.App.GetClientInfoForTab(tabID, client.client_id);
         } catch {
             return; // transient; try again next tick
         }
@@ -427,7 +500,8 @@ function openClientInfo(client) {
     overlay.querySelector(".dlg-ok").onclick = close;
     overlay.onclick = (e) => { if (e.target === overlay) closeDialog(overlay, "cancel"); };
 
-    mountServerDialog(overlay, { onClose: stopRefresh });
+    const stopRoles = window.runtime.EventsOn("snapshot", () => { if (isCurrentServerDialog(overlay)) renderRoles(); });
+    mountServerDialog(overlay, { onClose: () => { stopRefresh(); stopRoles?.(); } });
     refresh();
     refreshTimer = setInterval(refresh, 2000);
 }
@@ -436,6 +510,7 @@ function openClientInfo(client) {
 
 // reasonDialog prompts for a kick reason and invokes cb(reason).
 function reasonDialog(title, client, cb) {
+    const generation = V().state.serverGeneration;
     const overlay = document.createElement("div");
     overlay.className = "dlg-overlay";
     overlay.innerHTML = `
@@ -451,10 +526,15 @@ function reasonDialog(title, client, cb) {
     overlay.querySelector("h3").textContent = title;
     overlay.querySelector(".kick-target").textContent = client.nickname || client.unique_id;
     overlay.querySelector(".dlg-ok").onclick = async () => {
+        if (!isCurrentServerDialog(overlay)) return;
         const reason = overlay.querySelector(".reason").value.trim();
         overlay.remove();
-        const err = await cb(reason);
-        if (err) V().toast("kick failed: " + err, "warn");
+        try {
+            const err = await cb(reason);
+            if (err && generation === V().state.serverGeneration) V().toast(err, "warn");
+        } catch (err) {
+            if (generation === V().state.serverGeneration) V().toast("kick failed: " + err, "warn");
+        }
     };
     overlay.querySelector(".dlg-cancel").onclick = () => overlay.remove();
     overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
@@ -470,7 +550,8 @@ const BAN_DURATIONS = [
     { label: "permanent", seconds: 0 },
 ];
 
-function banDialog(client) {
+function banDialog(client, tabID) {
+    const generation = V().state.serverGeneration;
     const overlay = document.createElement("div");
     overlay.className = "dlg-overlay";
     overlay.innerHTML = `
@@ -489,12 +570,18 @@ function banDialog(client) {
         </div>`;
     overlay.querySelector(".kick-target").textContent = client.nickname || client.unique_id;
     overlay.querySelector(".dlg-ok").onclick = async () => {
+        if (!isCurrentServerDialog(overlay)) return;
         const reason = overlay.querySelector(".reason").value.trim();
         const dur = BAN_DURATIONS[parseInt(overlay.querySelector(".duration").value, 10) || 0];
         overlay.remove();
-        const err = await window.go.main.App.KickClient(client.client_id, true, true, reason, dur.seconds);
-        if (err) V().toast("ban failed: " + err, "warn");
-        else V().toast("banned " + (client.nickname || client.unique_id) + " (" + dur.label + ")");
+        try {
+            const err = await window.go.main.App.KickClientForTab(tabID, client.client_id, true, true, reason, dur.seconds);
+            if (generation !== V().state.serverGeneration) return;
+            if (err) V().toast(err, "warn");
+            else V().toast("ban requested for " + (client.nickname || client.unique_id) + " (" + dur.label + ")");
+        } catch (err) {
+            if (generation === V().state.serverGeneration) V().toast("ban failed: " + err, "warn");
+        }
     };
     overlay.querySelector(".dlg-cancel").onclick = () => overlay.remove();
     overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
@@ -504,16 +591,9 @@ function banDialog(client) {
 
 // --- Channel context menu & edit dialog (24) ---------------------------------
 
-// Quality presets for the channel edit dialog. bitrate is in bits/s;
-// "music channel" = stereo && bitrate >= 96000 (server-side semantics).
-const QUALITY_PRESETS = {
-    voice: { label: "Voice (32 kbps)", bitrate: 32000, fec: false, dtx: false, stereo: false },
-    hq: { label: "HQ Voice (64 kbps)", bitrate: 64000, fec: true, dtx: false, stereo: false },
-    music: { label: "Music (128 kbps stereo)", bitrate: 128000, fec: true, dtx: false, stereo: true },
-};
-
 function openChannelMenu(x, y, channel) {
     closeMenu();
+    const { activeTabID: tabID, serverGeneration: generation } = V().state;
     const isCurrent = channel.ChannelID === V().state.myChannelID;
     const isSubscribed = !!window.__noxaChat?.isSubscribed?.(channel.ChannelID);
     // (320) recent channels for quick rejoin.
@@ -551,6 +631,21 @@ function openChannelMenu(x, y, channel) {
         closeMenu();
         openChannelEdit(channel);
     };
+    const access = document.createElement("a");
+    access.textContent = t("roles.accessTitle");
+    access.onclick = async () => {
+        closeMenu();
+        const generation = V().state.serverGeneration;
+        try {
+            const { openChannelAccess } = await import("./channel-access-ui.js");
+            if (generation === V().state.serverGeneration) openChannelAccess(channel.ChannelID);
+        } catch { if (generation === V().state.serverGeneration) V().toast(t("roles.unavailable"), "warn"); }
+    };
+    menuEl.querySelector('[data-act="edit"]').after(access);
+    const move = document.createElement("a");
+    move.textContent = t("roles.channel.channel_move");
+    move.onclick = () => { closeMenu(); roleChannelDialog("channel_move", channel.ChannelID); };
+    access.after(move);
     menuEl.querySelector('[data-act="create-sub"]').onclick = () => {
         closeMenu();
         openChannelCreate(channel);
@@ -568,9 +663,15 @@ function openChannelMenu(x, y, channel) {
         void copyToClipboard(V().state.lastConnect?.addr || "", { success: "server address copied" });
     };
     for (const a of menuEl.querySelectorAll('[data-act^="recent-"]')) {
-        a.onclick = () => {
+        a.onclick = async () => {
             closeMenu();
-            window.go.main.App.JoinChannel(Number(a.dataset.act.slice(7)));
+            if (generation !== V().state.serverGeneration) return;
+            try {
+                const err = await window.go.main.App.JoinChannelForTab(tabID, Number(a.dataset.act.slice(7)));
+                if (err && generation === V().state.serverGeneration) V().toast(err, "warn");
+            } catch (err) {
+                if (generation === V().state.serverGeneration) V().toast(String(err), "warn");
+            }
         };
     }
     menuEl.querySelector('[data-act="delete"]').onclick = () => {
@@ -628,418 +729,18 @@ function openChannelNotify(channel) {
     mountServerDialog(overlay);
 }
 
-// countSubtree returns how many descendants a channel has (167 warning).
-function countSubtree(channelID) {
-    const byParent = new Map();
-    for (const ch of V().state.channels) {
-        const p = ch.ParentID || 0;
-        if (!byParent.has(p)) byParent.set(p, []);
-        byParent.get(p).push(ch.ChannelID);
-    }
-    let n = 0;
-    const walk = (id) => {
-        for (const child of byParent.get(id) || []) {
-            n++;
-            walk(child);
-        }
-    };
-    walk(channelID);
-    return n;
-}
-
-// confirmChannelDelete warns about the subtree before deleting (167).
 function confirmChannelDelete(channel) {
-    const children = countSubtree(channel.ChannelID);
-    const overlay = document.createElement("div");
-    overlay.className = "dlg-overlay";
-    overlay.innerHTML = `
-        <div class="dlg">
-            <h3>Delete channel</h3>
-            <div class="dlg-text">
-                <p>Delete <b class="ch-del-name"></b>?</p>
-                ${children ? `<p class="warn">⚠ This channel has ${children} sub-channel(s) — they are deleted too.</p>` : ""}
-            </div>
-            <div class="dlg-buttons">
-                <button class="dlg-ok danger-btn">Delete</button>
-                <button class="dlg-cancel">Cancel</button>
-            </div>
-        </div>`;
-    overlay.querySelector(".ch-del-name").textContent = channel.Name;
-    overlay.querySelector(".dlg-ok").onclick = async () => {
-        overlay.remove();
-        const err = await window.go.main.App.DeleteChannel(channel.ChannelID);
-        if (err) V().toast("delete failed: " + err, "warn");
-    };
-    overlay.querySelector(".dlg-cancel").onclick = () => overlay.remove();
-    overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
-    mountServerDialog(overlay);
+    return roleChannelDialog("channel_delete", channel.ChannelID);
 }
 
-// openChannelCreate is the full create dialog (164): name, parent, type,
-// topic, max clients, password, needed join power, Opus preset.
 function openChannelCreate(parent) {
-    const overlay = document.createElement("div");
-    overlay.className = "dlg-overlay";
-    overlay.innerHTML = `
-        <div class="dlg channel-edit">
-            <h3>Create channel</h3>
-            <label class="dlg-label">Name</label>
-            <input type="text" class="dlg-input cc-name" />
-            <label class="dlg-label">Parent</label>
-            <div class="dlg-text cc-parent pm-dim"></div>
-            <label class="dlg-label">Type</label>
-            <select class="dlg-input cc-type">
-                <option value="0">temporary (auto-deleted when empty)</option>
-                <option value="1">semi-permanent</option>
-                <option value="2" selected>permanent</option>
-            </select>
-            <label class="dlg-label">Topic</label>
-            <input type="text" class="dlg-input cc-topic" />
-            <label class="dlg-label">Max clients (0 = unlimited)</label>
-            <input type="number" class="dlg-input cc-maxclients" min="0" value="0" />
-            <label class="dlg-label">Password (empty = none)</label>
-            <input type="password" class="dlg-input cc-password" />
-            <label class="dlg-label" title="joiners need at least this i_channel_join_power">Needed join power</label>
-            <input type="number" class="dlg-input cc-joinpower" min="0" value="0" />
-            <label class="dlg-label">Quality preset</label>
-            <select class="dlg-input cc-preset">
-                <option value="voice">${QUALITY_PRESETS.voice.label}</option>
-                <option value="hq">${QUALITY_PRESETS.hq.label}</option>
-                <option value="music">${QUALITY_PRESETS.music.label}</option>
-            </select>
-            <div class="dlg-buttons">
-                <button class="dlg-ok">Create</button>
-                <button class="dlg-cancel">Cancel</button>
-            </div>
-        </div>`;
-    const q = (sel) => overlay.querySelector(sel);
-    q(".cc-parent").textContent = parent ? "under " + parent.Name : "(root)";
-    q(".dlg-ok").onclick = async () => {
-        const name = q(".cc-name").value.trim();
-        if (!name) {
-            V().toast("channel name is required", "warn");
-            return;
-        }
-        const p = QUALITY_PRESETS[q(".cc-preset").value];
-        const err = await window.go.main.App.CreateChannel(
-            name,
-            q(".cc-topic").value,
-            parent ? parent.ChannelID : 0,
-            parseInt(q(".cc-type").value, 10),
-            parseInt(q(".cc-maxclients").value, 10) || 0,
-            q(".cc-password").value,
-            parseInt(q(".cc-joinpower").value, 10) || 0,
-            p.bitrate, p.fec, p.dtx, p.stereo);
-        overlay.remove();
-        if (err) V().toast("create failed: " + err, "warn");
-        // Permission denials arrive as servererror toasts; on success the
-        // server broadcasts channel_created and the tree refreshes.
-    };
-    q(".dlg-cancel").onclick = () => overlay.remove();
-    overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
-    mountServerDialog(overlay);
-    q(".cc-name").focus();
+    return roleChannelDialog("channel_create", parent?.ChannelID || 0);
 }
 
-function matchPreset(bitrate, fec, dtx, stereo) {
-    for (const [key, p] of Object.entries(QUALITY_PRESETS)) {
-        if (p.bitrate === bitrate && p.fec === fec && p.dtx === dtx && p.stereo === stereo) return key;
-    }
-    return "custom";
-}
+export { humanDuration, inboundAudioByPublisher };
 
-// subtreeOf returns a channel and every descendant of it (168): a channel
-// cannot become its own ancestor.
-function subtreeOf(channelID) {
-    const out = new Set([channelID]);
-    let grew = true;
-    while (grew) {
-        grew = false;
-        for (const c of V().state.channels) {
-            if (!out.has(c.ChannelID) && out.has(c.ParentID || 0)) {
-                out.add(c.ChannelID);
-                grew = true;
-            }
-        }
-    }
-    return out;
-}
-
-// These helpers only transform stats/channel snapshots and are shared by the
-// dialog paths above; exporting them permits focused behavior coverage.
-export { countSubtree, humanDuration, inboundAudioByPublisher, matchPreset, subtreeOf };
-
-// Avoid sending unchanged placement: re-parenting also invalidates server permissions.
-export function channelTreeChanges(channel, next) {
-    const fields = [];
-    if (next.joinPower !== (channel.NeededJoinPower || 0)) {
-        fields.push("join_power");
-    }
-    if (next.orderIndex !== (channel.OrderIndex || 0)) {
-        fields.push("order");
-    }
-    if (next.parentID !== (channel.ParentID || 0)) {
-        fields.push("parent");
-    }
-    if (next.inherit !== !!channel.InheritPermissions) {
-        fields.push("inherit");
-    }
-    return fields;
-}
-
-// Connect the helper text after the shared modal has assigned control IDs.
-export function describeChannelFields(form) {
-    for (const field of form.querySelectorAll(".channel-field")) {
-        const control = field.querySelector("input, select, textarea");
-        const hint = field.querySelector(".channel-field-hint");
-        if (control?.id && hint) {
-            hint.id = control.id + "-hint";
-            control.setAttribute("aria-describedby", hint.id);
-        }
-    }
-}
-
-export function openChannelEdit(channel, { focusJoinPower = false } = {}) {
-    const overlay = document.createElement("div");
-    overlay.className = "dlg-overlay";
-    // (156 honest UI): the server does not auto-assign a channel-creator
-    // group; show the chip when the caller holds channel-modify rights.
-    const adminChip = window.__noxaPerms.canPermManage() || V().state.isAdmin ||
-        (V().state.myPerms?.get("b_channel_modify")?.value > 0)
-        ? `<span class="group-chip ce-admin-chip" title="you hold b_channel_modify here">channel admin</span>`
-        : "";
-    overlay.innerHTML = `
-        <form class="dlg channel-edit channel-editor" novalidate>
-            <header class="channel-dialog-header">
-                <div><h3>Edit channel</h3><div class="ce-name"></div></div>
-                <button type="button" class="channel-dialog-close" aria-label="Close channel editor" title="Close (Esc)">
-                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="m6 6 12 12M6 18 18 6" /></svg>
-                </button>
-            </header>
-            <div class="channel-dialog-body">
-                ${adminChip}
-                <section class="channel-settings-section" aria-label="Channel details">
-                    <div class="channel-field">
-                        <label class="dlg-label">Topic</label>
-                        <input type="text" class="dlg-input ce-topic" placeholder="A short introduction to this channel" />
-                    </div>
-                    <div class="channel-field">
-                        <label class="dlg-label">Description</label>
-                        <textarea class="dlg-input ce-desc" rows="2" placeholder="Add details for people joining"></textarea>
-                    </div>
-                    <div class="channel-field-grid">
-                        <div class="channel-field">
-                            <label class="dlg-label">Participant limit</label>
-                            <input type="number" class="dlg-input ce-maxclients" min="0" />
-                            <span class="channel-field-hint">0 allows unlimited participants.</span>
-                        </div>
-                        <div class="channel-field">
-                            <label class="dlg-label">Message delay (seconds)</label>
-                            <input type="number" class="dlg-input ce-slowmode" min="0" />
-                            <span class="channel-field-hint">0 turns off slow mode.</span>
-                        </div>
-                    </div>
-                </section>
-                <section class="channel-settings-section" aria-label="Audio quality">
-                    <div class="channel-field">
-                        <label class="dlg-label">Audio quality</label>
-                        <select class="dlg-input ce-preset">
-                            <option value="voice">${QUALITY_PRESETS.voice.label}</option>
-                            <option value="hq">${QUALITY_PRESETS.hq.label}</option>
-                            <option value="music">${QUALITY_PRESETS.music.label}</option>
-                            <option value="custom">Custom settings</option>
-                        </select>
-                    </div>
-                    <details class="channel-disclosure">
-                        <summary>Fine-tune audio</summary>
-                        <div class="channel-disclosure-body">
-                            <div class="channel-field">
-                                <label class="dlg-label">Bitrate (bits per second)</label>
-                                <input type="number" class="dlg-input ce-bitrate" min="0" max="512000" step="1000" />
-                                <span class="channel-field-hint">0 uses the server default of 32,000.</span>
-                            </div>
-                            <div class="ce-flags">
-                                <label><input type="checkbox" class="ce-fec" /> Recover lost packets (FEC)</label>
-                                <label><input type="checkbox" class="ce-dtx" /> Reduce traffic during silence (DTX)</label>
-                                <label><input type="checkbox" class="ce-stereo" /> Stereo audio</label>
-                            </div>
-                        </div>
-                    </details>
-                </section>
-                <details class="channel-disclosure channel-section-disclosure">
-                    <summary>Access &amp; placement</summary>
-                    <div class="channel-disclosure-body">
-                        <div class="channel-field-grid">
-                            <div class="channel-field">
-                                <label class="dlg-label">Required join power</label>
-                                <input type="number" class="dlg-input ce-joinpower" min="0" />
-                                <span class="channel-field-hint">0 is open to everyone. Higher values restrict access.</span>
-                            </div>
-                            <div class="channel-field">
-                                <label class="dlg-label">Sort order</label>
-                                <input type="number" class="dlg-input ce-order" />
-                                <span class="channel-field-hint">Lower numbers appear first under the same parent.</span>
-                            </div>
-                        </div>
-                        <div class="channel-field">
-                            <label class="dlg-label">Parent channel</label>
-                            <select class="dlg-input ce-parent"><option value="0">Top level</option></select>
-                        </div>
-                        <label class="channel-checkbox"><input type="checkbox" class="ce-inherit" /> Use the parent’s permissions and join power</label>
-                    </div>
-                </details>
-                <details class="channel-disclosure channel-section-disclosure">
-                    <summary>Channel icon</summary>
-                    <div class="channel-disclosure-body">
-                        <span class="channel-field-hint">Icon changes apply immediately.</span>
-                        <div class="ce-icon-row">
-                            <button type="button" class="ce-icon-upload">Upload icon…</button>
-                            <select class="dlg-input ce-icon-copy" aria-label="Reuse a channel icon">
-                                <option value="0">Reuse an existing icon…</option>
-                            </select>
-                        </div>
-                    </div>
-                </details>
-            </div>
-            <footer class="channel-dialog-footer">
-                <div class="channel-save-error" role="alert" hidden></div>
-                <div class="dlg-buttons">
-                    <button type="button" class="dlg-cancel">Cancel</button>
-                    <button type="submit" class="dlg-ok">Save changes</button>
-                </div>
-            </footer>
-        </form>`;
-    const q = (sel) => overlay.querySelector(sel);
-    q(".ce-name").textContent = channel.Name;
-    q(".ce-topic").value = channel.Topic || "";
-    q(".ce-desc").value = channel.Description || "";
-    q(".ce-maxclients").value = channel.MaxClients || 0;
-    q(".ce-slowmode").value = channel.SlowModeSeconds || 0;
-    // OpusBitrate 0 means the server default (32000); show the effective value.
-    q(".ce-bitrate").value = channel.OpusBitrate || 32000;
-    q(".ce-fec").checked = !!channel.OpusFEC;
-    q(".ce-dtx").checked = !!channel.OpusDTX;
-    q(".ce-stereo").checked = !!channel.OpusStereo;
-    q(".ce-preset").value = matchPreset(
-        channel.OpusBitrate || 32000, !!channel.OpusFEC, !!channel.OpusDTX, !!channel.OpusStereo);
-
-    // (160/163/168/157) tree fields. The parent list omits the channel itself
-    // and its subtree: the server refuses a cycle, and offering one is a
-    // guaranteed error dialog.
-    q(".ce-joinpower").value = channel.NeededJoinPower || 0;
-    q(".ce-order").value = channel.OrderIndex || 0;
-    q(".ce-inherit").checked = !!channel.InheritPermissions;
-    const banned = subtreeOf(channel.ChannelID);
-    const parentSel = q(".ce-parent");
-    for (const c of V().state.channels) {
-        if (banned.has(c.ChannelID)) continue;
-        const opt = document.createElement("option");
-        opt.value = c.ChannelID;
-        opt.textContent = "# " + c.Name;
-        parentSel.appendChild(opt);
-    }
-    parentSel.value = String(channel.ParentID || 0);
-
-    q(".ce-preset").onchange = () => {
-        const p = QUALITY_PRESETS[q(".ce-preset").value];
-        if (!p) return; // custom: leave the fields editable as-is
-        q(".ce-bitrate").value = p.bitrate;
-        q(".ce-fec").checked = p.fec;
-        q(".ce-dtx").checked = p.dtx;
-        q(".ce-stereo").checked = p.stereo;
-    };
-    const markCustom = () => { q(".ce-preset").value = "custom"; };
-    q(".ce-bitrate").oninput = markCustom;
-    q(".ce-fec").onchange = markCustom;
-    q(".ce-dtx").onchange = markCustom;
-    q(".ce-stereo").onchange = markCustom;
-
-    // (271) channel icon: upload (compressed) or reuse from another channel.
-    const copySel = q(".ce-icon-copy");
-    for (const c of V().state.channels) {
-        if (c.HasIcon && c.ChannelID !== channel.ChannelID) {
-            const opt = document.createElement("option");
-            opt.value = c.ChannelID;
-            opt.textContent = "# " + c.Name;
-            copySel.appendChild(opt);
-        }
-    }
-    q(".ce-icon-upload").onclick = async () => {
-        const img = await pickIcon();
-        if (!img || !isCurrentServerDialog(overlay)) return;
-        const err = await window.go.main.App.ChannelIconSet(channel.ChannelID, img.dataBase64, 0);
-        if (!isCurrentServerDialog(overlay)) return;
-        if (err) V().toast("icon failed: " + err, "warn");
-        else V().toast("channel icon updated");
-    };
-    copySel.onchange = async () => {
-        const fromID = parseInt(copySel.value, 10);
-        copySel.value = "0";
-        if (!fromID) return;
-        const err = await window.go.main.App.ChannelIconSet(channel.ChannelID, "", fromID);
-        if (err) V().toast("icon copy failed: " + err, "warn");
-        else V().toast("channel icon reused");
-    };
-
-    const form = q("form");
-    const saveButton = q(".dlg-ok");
-    const saveError = q(".channel-save-error");
-    form.onsubmit = async (event) => {
-        event.preventDefault();
-        if (saveButton.disabled) return;
-        const invalid = [...form.querySelectorAll("input, select, textarea")].find((input) => !input.validity.valid);
-        if (invalid) {
-            const section = invalid.closest("details");
-            if (section) section.open = true;
-            invalid.reportValidity();
-            return;
-        }
-        // Capture placement before awaiting the first request, and send only changes.
-        const joinPower = parseInt(q(".ce-joinpower").value, 10) || 0;
-        const orderIndex = parseInt(q(".ce-order").value, 10) || 0;
-        const parentID = parseInt(parentSel.value, 10) || 0;
-        const inherit = q(".ce-inherit").checked;
-        const fields = channelTreeChanges(channel, { joinPower, orderIndex, parentID, inherit });
-        saveButton.disabled = true;
-        saveButton.textContent = "Saving…";
-        saveError.hidden = true;
-        try {
-            const err = await window.go.main.App.ChannelEdit(
-                channel.ChannelID,
-                q(".ce-topic").value,
-                parseInt(q(".ce-maxclients").value, 10) || 0,
-                parseInt(q(".ce-bitrate").value, 10) || 0,
-                q(".ce-fec").checked,
-                q(".ce-dtx").checked,
-                q(".ce-stereo").checked,
-                q(".ce-desc").value,
-                parseInt(q(".ce-slowmode").value, 10) || 0);
-            if (!isCurrentServerDialog(overlay)) return;
-            if (err) throw new Error(err);
-            if (fields.length) {
-                const treeErr = await window.go.main.App.ChannelEditTree(
-                    channel.ChannelID, fields.join(","), joinPower, orderIndex, parentID, inherit);
-                if (!isCurrentServerDialog(overlay)) return;
-                if (treeErr) throw new Error("Channel details saved, but access or placement could not be updated: " + treeErr);
-            }
-            overlay.remove();
-        } catch (error) {
-            if (!isCurrentServerDialog(overlay)) return;
-            saveError.textContent = error instanceof Error ? error.message : "Could not save changes. Please try again.";
-            saveError.hidden = false;
-        } finally {
-            if (overlay.isConnected) {
-                saveButton.disabled = false;
-                saveButton.textContent = "Save changes";
-            }
-        }
-    };
-    q(".channel-dialog-close").onclick = () => overlay.remove();
-    q(".dlg-cancel").onclick = () => overlay.remove();
-    overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
-    if (focusJoinPower) q(".ce-joinpower").closest("details").open = true;
-    mountServerDialog(overlay, { initialFocus: q(focusJoinPower ? ".ce-joinpower" : ".ce-topic") });
-    describeChannelFields(form);
+export function openChannelEdit(channel) {
+    return roleChannelDialog("channel_edit", channel.ChannelID);
 }
 
 // --- wiring -------------------------------------------------------------------
@@ -1066,6 +767,7 @@ export function initClientInfo() {
         if (channel) openChannelMenu(e.clientX, e.clientY, channel);
     });
     document.addEventListener("click", closeMenu);
+    window.runtime.EventsOn("tab_reset", closeMenu);
     document.addEventListener("keydown", (e) => {
         if (e.key === "Escape") closeMenu();
     });

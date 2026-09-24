@@ -45,7 +45,10 @@ type Config struct {
 	// It prevents idle or stalled clients from exhausting descriptors.
 	FileMaxConnections int   `mapstructure:"file_max_connections"`
 	FileChannelQuotaMB int64 `mapstructure:"file_channel_quota_mb"`
-	FileMaxSizeMB      int64 `mapstructure:"file_max_size_mb"`
+	// FileUserQuotaMB is an independent uploader ceiling for uploads and moves.
+	// It also applies to owners and Administrators; zero means unlimited.
+	FileUserQuotaMB int64 `mapstructure:"file_user_quota_mb"`
+	FileMaxSizeMB   int64 `mapstructure:"file_max_size_mb"`
 	// Quiet hours lift file_max_kbps between these local hours (276), so
 	// backups and big uploads run at full speed when nobody is listening.
 	// Both are 0-23; equal values disable the window. A start after the end
@@ -78,6 +81,11 @@ type Config struct {
 	DefaultOpusFEC       bool          `mapstructure:"default_opus_fec"`
 	DefaultOpusDTX       bool          `mapstructure:"default_opus_dtx"`
 	DefaultOpusStereo    bool          `mapstructure:"default_opus_stereo"`
+	// VideoMaxBitrate caps relayed video RTP bits/s per publisher, across camera,
+	// screen and simulcast layers, with a one-second burst. Zero is unlimited.
+	VideoMaxBitrate int `mapstructure:"video_max_bitrate"`
+	VideoMaxWidth   int `mapstructure:"video_max_width"`
+	VideoMaxHeight  int `mapstructure:"video_max_height"`
 	// EchoChannelName is the name of the loopback test channel: the server
 	// ensures it exists at startup, and publishers in it hear their own audio
 	// routed back (the echo channel is the only channel with self-fan-out).
@@ -126,11 +134,6 @@ type Config struct {
 	// clear would be the one path that escapes ciphertext-at-rest (91-135).
 	// Enable only for a deliberately public, non-sensitive MOTD.
 	ServerInfoMOTD bool `mapstructure:"server_info_motd"`
-
-	// DefaultGroupsEnabled auto-creates the Guest/Member server groups and
-	// auto-assigns them (143/144). Guests virtually hold the Guest group's
-	// permissions; registered users get Member at first login.
-	DefaultGroupsEnabled bool `mapstructure:"default_groups_enabled"`
 
 	// Chat moderation/limits (wave 5a). MaxLength is in UTF-8 bytes
 	// post-decrypt. RateMsgs/RateWindowSeconds is a per-user token bucket.
@@ -251,6 +254,7 @@ func newConfigViper() *viper.Viper {
 	v.SetDefault("file_max_kbps", 0)
 	v.SetDefault("file_max_connections", 128)
 	v.SetDefault("file_channel_quota_mb", 0)
+	v.SetDefault("file_user_quota_mb", 0)
 	v.SetDefault("file_max_size_mb", 100)
 	v.SetDefault("file_quiet_hours_start", 0)
 	v.SetDefault("file_quiet_hours_end", 0)
@@ -286,10 +290,12 @@ func newConfigViper() *viper.Viper {
 	v.SetDefault("chat_search_max_messages", 2000)
 	v.SetDefault("file_tls_enabled", true)
 	v.SetDefault("server_info_motd", false)
-	v.SetDefault("default_groups_enabled", true)
 	v.SetDefault("chat_max_length", 4096)
 	v.SetDefault("client_timeout_seconds", 90)
 	v.SetDefault("default_opus_bitrate", 32000)
+	v.SetDefault("video_max_bitrate", 0)
+	v.SetDefault("video_max_width", 0)
+	v.SetDefault("video_max_height", 0)
 	v.SetDefault("default_opus_fec", true)
 	v.SetDefault("default_opus_dtx", false)
 	v.SetDefault("default_opus_stereo", false)
@@ -478,6 +484,12 @@ func (c *Config) Validate() error {
 	if c.DefaultOpusBitrate < 6_000 || c.DefaultOpusBitrate > 512_000 {
 		errs = append(errs, fmt.Errorf("default_opus_bitrate %d must be between 6000 and 512000", c.DefaultOpusBitrate))
 	}
+	if c.VideoMaxBitrate < 0 || c.VideoMaxBitrate > 100_000_000 {
+		errs = append(errs, fmt.Errorf("video_max_bitrate %d must be between 0 and 100000000", c.VideoMaxBitrate))
+	}
+	if (c.VideoMaxWidth != 0 || c.VideoMaxHeight != 0) && (c.VideoMaxWidth < 1 || c.VideoMaxHeight < 1 || c.VideoMaxWidth > 16383 || c.VideoMaxHeight > 16383) {
+		errs = append(errs, errors.New("video_max_width and video_max_height must both be zero or between 1 and 16383"))
+	}
 
 	if c.FileMaxKBps < 0 {
 		errs = append(errs, fmt.Errorf("file_max_kbps %d must not be negative", c.FileMaxKBps))
@@ -485,11 +497,14 @@ func (c *Config) Validate() error {
 	if c.FileMaxConnections < 1 || c.FileMaxConnections > 10_000 {
 		errs = append(errs, fmt.Errorf("file_max_connections %d must be between 1 and 10000", c.FileMaxConnections))
 	}
-	if c.FileChannelQuotaMB < 0 {
-		errs = append(errs, fmt.Errorf("file_channel_quota_mb %d must not be negative", c.FileChannelQuotaMB))
+	if c.FileChannelQuotaMB < 0 || c.FileChannelQuotaMB > (1<<63-1)/(1024*1024) {
+		errs = append(errs, fmt.Errorf("file_channel_quota_mb %d must fit a nonnegative byte limit", c.FileChannelQuotaMB))
 	}
-	if c.FileMaxSizeMB < 0 {
-		errs = append(errs, fmt.Errorf("file_max_size_mb %d must not be negative", c.FileMaxSizeMB))
+	if c.FileUserQuotaMB < 0 || c.FileUserQuotaMB > (1<<63-1)/(1024*1024) {
+		errs = append(errs, fmt.Errorf("file_user_quota_mb %d must fit a nonnegative byte limit", c.FileUserQuotaMB))
+	}
+	if c.FileMaxSizeMB < 0 || c.FileMaxSizeMB > (1<<63-1)/(1024*1024) {
+		errs = append(errs, fmt.Errorf("file_max_size_mb %d must fit a nonnegative byte limit", c.FileMaxSizeMB))
 	}
 	if c.FileQuietHoursStart < 0 || c.FileQuietHoursStart > 23 {
 		errs = append(errs, fmt.Errorf("file_quiet_hours_start %d must be between 0 and 23", c.FileQuietHoursStart))

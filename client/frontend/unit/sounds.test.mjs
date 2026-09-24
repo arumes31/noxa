@@ -31,14 +31,14 @@ function fixture(options = {}) {
     return { engine, state, ctx, sources, tick: (ms = 1000) => { now += ms; ctx.currentTime += ms / 1000; }, dnd: (v) => { dnd = v; } };
 }
 
-test("all 32 events have unique replacement PCM assets with safe endpoints and levels", () => {
-    assert.equal(SOUND_EVENTS.length, 32);
+test("all 33 events have unique replacement PCM assets with safe endpoints and levels", () => {
+    assert.equal(SOUND_EVENTS.length, 33);
     const directory = new URL("../src/assets/sounds/", import.meta.url);
     const metrics = JSON.parse(readFileSync(new URL("metrics.json", directory), "utf8"));
     const provenance = JSON.parse(readFileSync(new URL("provenance.json", directory), "utf8"));
     const recipes = JSON.parse(readFileSync(new URL("../../../tools/effect-recipes.json", import.meta.url), "utf8"));
     assert.deepEqual(recipes.events.map(event => event.id), SOUND_EVENTS);
-    assert.equal(readdirSync(directory).filter(x => x.endsWith(".wav")).length, 32);
+    assert.equal(readdirSync(directory).filter(x => x.endsWith(".wav")).length, 33);
     const hashes = new Set();
     for (const id of SOUND_EVENTS) {
         const def = SOUND_DEFINITIONS[id];
@@ -66,7 +66,7 @@ test("all 32 events have unique replacement PCM assets with safe endpoints and l
         assert.ok(Math.abs(sum / ((wav.length - 44) / 2)) < .0001, `${id} DC`);
         hashes.add(wav.toString("base64"));
     }
-    assert.equal(hashes.size, 32);
+    assert.equal(hashes.size, 33);
 });
 
 test("global, event, DND and replay gates survive forced previews", async () => {

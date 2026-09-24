@@ -13,10 +13,26 @@
 
 import { settingsEnglish, settingsGerman } from "./settings-messages.js";
 import { interfaceEnglish, interfaceGerman } from "./interface-messages.js";
+import { roleEnglish, roleGerman } from "./role-messages.js";
+import { auditEnglish, auditGerman } from "./audit-messages.js";
 
 import { quickWinEnglish, quickWinGerman } from "./quick-win-messages.js";
+import { uiPolishEnglish, uiPolishGerman } from "./ui-polish-messages.js";
+import { streamEnglish, streamGerman } from "./stream-messages.js";
+import { chatEnglish, chatGerman } from "./chat-messages.js";
+import { conversationEnglish, conversationGerman } from "./conversation-messages.js";
+import { callEnglish, callGerman } from "./call-messages.js";
+import { selectedWinEnglish, selectedWinGerman } from "./selected-win-messages.js";
 
 const en = {
+    ...selectedWinEnglish,
+    ...callEnglish,
+    ...conversationEnglish,
+    ...chatEnglish,
+    ...streamEnglish,
+    ...uiPolishEnglish,
+    ...auditEnglish,
+    ...roleEnglish,
     ...quickWinEnglish,
     ...settingsEnglish,
     ...interfaceEnglish,
@@ -57,6 +73,7 @@ const en = {
     "login.server": "SERVER",
     "login.nickname": "NICKNAME",
     "login.serverPassword": "Server password (optional)",
+    "login.accountPassword": "Account password (optional)",
     "login.connect": "CONNECT",
     "login.recentServers": "RECENT SERVERS",
     "settings.application": "Application",
@@ -79,6 +96,14 @@ const en = {
 };
 
 const de = {
+    ...selectedWinGerman,
+    ...callGerman,
+    ...conversationGerman,
+    ...chatGerman,
+    ...streamGerman,
+    ...uiPolishGerman,
+    ...auditGerman,
+    ...roleGerman,
     ...quickWinGerman,
     ...settingsGerman,
     ...interfaceGerman,
@@ -119,6 +144,7 @@ const de = {
     "login.server": "SERVER",
     "login.nickname": "SPITZNAME",
     "login.serverPassword": "Server-Passwort (optional)",
+    "login.accountPassword": "Konto-Passwort (optional)",
     "login.connect": "VERBINDEN",
     "login.recentServers": "LETZTE SERVER",
     "settings.application": "Anwendung",
@@ -215,7 +241,7 @@ export function applyStaticLabels() {
         }
     };
     const loginLabels = document.querySelectorAll(".login-card label");
-    const keys = ["login.server", "login.nickname", "login.serverPassword"];
+    const keys = ["login.server", "login.nickname", "login.accountPassword", "login.serverPassword"];
     loginLabels.forEach((l, i) => {
         if (keys[i] && l.firstChild) l.firstChild.textContent = t(keys[i]) + " ";
     });

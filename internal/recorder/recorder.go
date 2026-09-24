@@ -35,6 +35,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/pion/rtcp"
 	"github.com/pion/rtp"
 	"go.uber.org/zap"
 
@@ -213,6 +214,7 @@ type startReservation struct {
 	cancel      context.CancelFunc
 	done        chan struct{}
 	processDone <-chan struct{}
+	published   *Session // protected by Recorder.mu; exact session for a stopped startup
 
 	finishOnce sync.Once
 	resultMu   sync.RWMutex
@@ -251,7 +253,8 @@ type ExecFunc func(ctx context.Context, name string, args ...string) Command
 
 // cmdWrapper adapts *exec.Cmd to Command.
 type cmdWrapper struct {
-	cmd *exec.Cmd
+	cmd        *exec.Cmd
+	diagnostic processDiagnostic
 
 	boundRootOnce sync.Once
 	boundRoot     *os.File
@@ -334,7 +337,13 @@ func (w *cmdWrapper) Start() error {
 	}
 	return nil
 }
-func (w *cmdWrapper) Wait() error { return errors.Join(w.cmd.Wait(), w.closeBoundRoot()) }
+func (w *cmdWrapper) Wait() error {
+	err := w.cmd.Wait()
+	if err != nil && len(w.diagnostic.data) != 0 {
+		err = fmt.Errorf("%w: %s", err, strings.TrimSpace(string(w.diagnostic.data)))
+	}
+	return errors.Join(err, w.closeBoundRoot())
+}
 func (w *cmdWrapper) Kill() error {
 	if w.cmd.Process == nil {
 		return nil
@@ -346,7 +355,18 @@ func (w *cmdWrapper) Kill() error {
 func defaultExec(ctx context.Context, name string, args ...string) Command {
 	// #nosec G204 -- the executable and arguments come from trusted server
 	// configuration and are passed directly without invoking a shell.
-	return &cmdWrapper{cmd: exec.CommandContext(ctx, name, args...)}
+	wrapper := &cmdWrapper{cmd: exec.CommandContext(ctx, name, args...)}
+	wrapper.cmd.Stderr = &wrapper.diagnostic
+	return wrapper
+}
+
+// Preserve a bounded diagnostic for failed subprocesses. exec.Cmd.Wait joins
+// its stderr copier before the result is read; arbitrary output cannot grow it.
+type processDiagnostic struct{ data []byte }
+
+func (d *processDiagnostic) Write(data []byte) (int, error) {
+	d.data = append(d.data, data[:min(len(data), 4096-len(d.data))]...)
+	return len(data), nil
 }
 
 // TapRouter is the subset of the SFU voice facade the recorder needs to
@@ -382,6 +402,7 @@ type Session struct {
 	processDone <-chan struct{}
 
 	stopping       atomic.Bool
+	discardEmpty   atomic.Bool
 	forcedStop     atomic.Bool
 	hardTimedOut   atomic.Bool
 	stopOnce       sync.Once
@@ -474,6 +495,12 @@ func (r *Recorder) reportError(operation string) {
 // taps in the router so a copy of the channel's audio and video reaches the
 // process.
 func (r *Recorder) Start(ctx context.Context, channelID int64, router TapRouter) (_ *Session, retErr error) {
+	return r.start(ctx, channelID, router, "", nil)
+}
+
+// start owns one process. ChannelRecorder supplies exactly one media kind for
+// each source segment, so FFmpeg never waits for an absent second input.
+func (r *Recorder) start(ctx context.Context, channelID int64, router TapRouter, kind string, expectedRoot *os.Root) (_ *Session, retErr error) {
 	defer func() {
 		if retErr != nil {
 			r.reportError("start")
@@ -544,6 +571,19 @@ func (r *Recorder) Start(ctx context.Context, channelID int64, router TapRouter)
 			retErr = errors.Join(retErr, root.Close())
 		}
 	}()
+	if expectedRoot != nil {
+		expected, err := expectedRoot.Stat(".")
+		if err != nil {
+			return nil, err
+		}
+		actual, err := root.Stat(".")
+		if err != nil {
+			return nil, err
+		}
+		if !os.SameFile(expected, actual) {
+			return nil, errors.New("recording directory changed during channel session")
+		}
+	}
 	audioPort, err := freeUDPPort()
 	if err != nil {
 		return nil, fmt.Errorf("allocating audio port: %w", err)
@@ -560,7 +600,7 @@ func (r *Recorder) Start(ctx context.Context, channelID int64, router TapRouter)
 		channelID,
 		startedAt,
 		r.cfg.Format,
-		buildSDP(audioPort, videoPort),
+		buildStreamSDP(audioPort, videoPort, kind),
 	)
 	if err != nil {
 		return nil, err
@@ -580,7 +620,7 @@ func (r *Recorder) Start(ctx context.Context, channelID int64, router TapRouter)
 
 	processCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	stopStartupCancellation := context.AfterFunc(startState.ctx, cancel)
-	cmd := r.Exec(processCtx, r.cfg.FFmpegPath, r.buildArgs(sdpPath, outPath)...)
+	cmd := r.Exec(processCtx, r.cfg.FFmpegPath, r.buildStreamArgs(sdpPath, outPath, kind)...)
 	if cmd == nil {
 		stopStartupCancellation()
 		cancel()
@@ -790,7 +830,11 @@ func (r *Recorder) Start(ctx context.Context, channelID int64, router TapRouter)
 	// recording deliberately outlives cancellation of the initiating request.
 	// A false result means cancellation already won the handoff and may have
 	// canceled the process, so publishing would expose a doomed session.
+	// Stop/Close cancellation and publication share this lock: no stop can
+	// capture a reservation after cancellation is disarmed but before publish.
+	r.mu.Lock()
 	if !stopStartupCancellation() {
+		r.mu.Unlock()
 		s.unregister()
 		s.abortTaps()
 		return nil, abort(
@@ -804,7 +848,6 @@ func (r *Recorder) Start(ctx context.Context, channelID int64, router TapRouter)
 		)
 	}
 
-	r.mu.Lock()
 	if r.closed {
 		r.mu.Unlock()
 		s.unregister()
@@ -812,6 +855,7 @@ func (r *Recorder) Start(ctx context.Context, channelID int64, router TapRouter)
 		return nil, abort(ErrClosed, true, s.result, s.unregisterDone, s.tapsDone, s.abortDone)
 	}
 	r.sessions[channelID] = s
+	startState.published = s
 	delete(r.starting, channelID)
 	r.mu.Unlock()
 	startReservationOwned = false
@@ -855,6 +899,12 @@ func (r *Recorder) startCancellationError(cause error) error {
 // ffmpeg to quit gracefully (the "q" command on stdin), and kills the
 // process if it does not exit within the grace period.
 func (r *Recorder) Stop(channelID int64) (retErr error) {
+	return r.StopContext(context.Background(), channelID)
+}
+
+// StopContext stops the recording captured at entry. Cancellation forces that
+// session to terminate but does not release its channel until cleanup finishes.
+func (r *Recorder) StopContext(ctx context.Context, channelID int64) (retErr error) {
 	defer func() {
 		if retErr != nil {
 			r.reportError("stop")
@@ -863,14 +913,16 @@ func (r *Recorder) Stop(channelID int64) (retErr error) {
 	r.mu.Lock()
 	s, ok := r.sessions[channelID]
 	starting := r.starting[channelID]
+	if !ok && starting != nil {
+		starting.cancel()
+	}
 	r.mu.Unlock()
 	if ok {
-		return r.stopSession(s)
+		return r.stopSessionContext(ctx, s)
 	}
 	if starting == nil {
 		return ErrNotRecording
 	}
-	starting.cancel()
 	wait := r.killWait
 	if wait <= 0 {
 		wait = defaultKillWait
@@ -879,14 +931,13 @@ func (r *Recorder) Stop(channelID int64) (retErr error) {
 	defer timer.Stop()
 	select {
 	case <-starting.done:
-		// Startup may have crossed its publication boundary just before this
-		// Stop canceled the reservation. The map transition is atomic, so a
-		// post-completion recheck either owns that Session or confirms cleanup.
+		// Startup may have published just before cancellation. Use its exact
+		// session, never a later replacement that occupies the same channel.
 		r.mu.Lock()
-		published := r.sessions[channelID]
+		published := starting.published
 		r.mu.Unlock()
 		if published != nil {
-			return r.stopSession(published)
+			return r.stopSessionContext(ctx, published)
 		}
 		return starting.result()
 	case <-timer.C:
@@ -894,10 +945,16 @@ func (r *Recorder) Stop(channelID int64) (retErr error) {
 			ErrStopTimeout,
 			errors.New("recording startup cleanup remains in progress; channel stays reserved"),
 		)
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 }
 
 func (r *Recorder) stopSession(s *Session) error {
+	return r.stopSessionContext(context.Background(), s)
+}
+
+func (r *Recorder) stopSessionContext(ctx context.Context, s *Session) error {
 	grace := r.stopGracePeriod
 	if grace <= 0 {
 		grace = defaultStopGracePeriod
@@ -909,6 +966,14 @@ func (r *Recorder) stopSession(s *Session) error {
 	// wedged pipe or router cannot keep this goroutine outside the select.
 	s.requestStop()
 	select {
+	case <-ctx.Done():
+		s.forcedStop.Store(true)
+		s.abortTaps()
+		if s.cancel != nil {
+			s.cancel()
+		}
+		s.startKill()
+		return ctx.Err()
 	case <-s.done:
 		r.logger.Info("recording stopped",
 			zap.Int64("channel_id", s.channelID),
@@ -949,6 +1014,8 @@ func (r *Recorder) stopSession(s *Session) error {
 		select {
 		case <-s.done:
 			return s.stopResult()
+		case <-ctx.Done():
+			return ctx.Err()
 		case <-killTimer.C:
 			// Process ownership is not complete until Wait returns. Keep the
 			// channel reserved so a replacement cannot start alongside a wedged
@@ -1463,7 +1530,11 @@ func (r *Recorder) finalize(s *Session) {
 			cleanupErrs = append(cleanupErrs, fmt.Errorf("removing sdp file: %w", err))
 		}
 		if s.root != nil {
-			if err := secureRecordingOutput(s.root, s.outputName); err != nil {
+			if s.discardEmpty.Load() {
+				if err := s.root.Remove(s.outputName); err != nil && !errors.Is(err, os.ErrNotExist) {
+					cleanupErrs = append(cleanupErrs, err)
+				}
+			} else if err := secureRecordingOutput(s.root, s.outputName); err != nil {
 				cleanupErrs = append(cleanupErrs, err)
 			}
 			if err := s.root.Close(); err != nil {
@@ -1530,6 +1601,12 @@ func (s *Session) requestStop() {
 	s.stopping.Store(true)
 	s.stopOnce.Do(func() {
 		s.unregister()
+		if s.discardEmpty.Load() {
+			s.abortTaps()
+			s.closeControl(false)
+			s.startKill()
+			return
+		}
 		s.closeTapsGracefully()
 		s.closeControl(true)
 	})
@@ -1579,6 +1656,14 @@ func (s *Session) closeControl(graceful bool) {
 				<-s.tapsDone
 				if _, err := io.WriteString(s.stdin, "q"); err != nil {
 					s.addCleanupError(fmt.Errorf("requesting ffmpeg quit: %w", err))
+				}
+				// The demux thread can still be waiting for UDP after stdin quit.
+				// End each drained RTP input so FFmpeg can join it and write trailers.
+				if s.audioTap != nil {
+					s.addCleanupError(s.audioTap.endInput())
+				}
+				if s.videoTap != nil {
+					s.addCleanupError(s.videoTap.tap.endInput())
 				}
 			}
 			if err := s.stdin.Close(); err != nil {
@@ -1679,7 +1764,12 @@ func (s *Session) result() error {
 	defer s.resultMu.RUnlock()
 	var waitErr error
 	if s.waitErr != nil {
-		waitErr = fmt.Errorf("ffmpeg exited: %w", s.waitErr)
+		var exitErr *exec.ExitError
+		killedEmpty := s.discardEmpty.Load() && errors.As(s.waitErr, &exitErr) &&
+			(exitErr.ExitCode() == -1 || runtime.GOOS == "windows" && exitErr.ExitCode() == 1)
+		if !killedEmpty {
+			waitErr = fmt.Errorf("ffmpeg exited: %w", s.waitErr)
+		}
 	}
 	return errors.Join(waitErr, s.killErr, s.tapCloseErr, s.cleanupErr)
 }
@@ -1695,29 +1785,44 @@ func (s *Session) stopResult() error {
 // by the SDP file, apply the configured audio/video output options, and
 // write the output file.
 func (r *Recorder) buildArgs(sdpPath, outPath string) []string {
+	return r.buildStreamArgs(sdpPath, outPath, "")
+}
+
+func (r *Recorder) buildStreamArgs(sdpPath, outPath, kind string) []string {
 	args := []string{
 		"-hide_banner", "-loglevel", "warning",
 		"-protocol_whitelist", "file,udp,rtp",
 		"-i", sdpPath,
 	}
-	args = append(args, r.cfg.AudioArgs...)
-	args = append(args, r.cfg.VideoArgs...)
+	if kind != "video" {
+		args = append(args, r.cfg.AudioArgs...)
+	}
+	if kind != "audio" {
+		args = append(args, r.cfg.VideoArgs...)
+	}
 	return append(args, "-n", outPath)
 }
 
 // buildSDP generates the SDP file describing the two loopback RTP streams
 // (Opus audio, VP8 video) that ffmpeg reads.
 func buildSDP(audioPort, videoPort int) string {
-	return fmt.Sprintf(`v=0
+	return buildStreamSDP(audioPort, videoPort, "")
+}
+
+func buildStreamSDP(audioPort, videoPort int, kind string) string {
+	sdp := `v=0
 o=- 0 0 IN IP4 127.0.0.1
 s=noxa recording
 c=IN IP4 127.0.0.1
 t=0 0
-m=audio %d RTP/AVP 111
-a=rtpmap:111 opus/48000/2
-m=video %d RTP/AVP 96
-a=rtpmap:96 VP8/90000
-`, audioPort, videoPort)
+`
+	if kind != "video" {
+		sdp += fmt.Sprintf("m=audio %d RTP/AVP 111\na=rtpmap:111 opus/48000/2\n", audioPort)
+	}
+	if kind != "audio" {
+		sdp += fmt.Sprintf("m=video %d RTP/AVP 96\na=rtpmap:96 VP8/90000\n", videoPort)
+	}
+	return sdp
 }
 
 // tapID returns the router clientID used for a channel's recording tap.
@@ -1740,8 +1845,9 @@ func freeUDPPort() (int, error) {
 // Tap implements webrtc.TrackWriter, forwarding RTP packets to the ffmpeg
 // process's UDP input.
 type Tap struct {
-	conn *net.UDPConn
-	addr *net.UDPAddr
+	conn       *net.UDPConn
+	addr       *net.UDPAddr
+	lastSource atomic.Uint64 // SSRC + 1; zero means no packet was sent.
 
 	closeOnce sync.Once
 	closeErr  error
@@ -1833,6 +1939,12 @@ func (b *BufferedTap) writeLoop() {
 				return
 			}
 			_, err := b.tap.conn.WriteToUDP(raw, b.tap.addr)
+			if err == nil {
+				var header rtp.Header
+				if _, parseErr := header.Unmarshal(raw); parseErr == nil {
+					b.tap.lastSource.Store(uint64(header.SSRC) + 1)
+				}
+			}
 			b.mu.Lock()
 			b.queued -= len(raw)
 			if err != nil {
@@ -1928,8 +2040,39 @@ func (t *Tap) WriteRTP(pkt *rtp.Packet) error {
 	if err != nil {
 		return err
 	}
+	if err := t.conn.SetWriteDeadline(time.Now().Add(25 * time.Millisecond)); err != nil {
+		return err
+	}
 	_, err = t.conn.WriteToUDP(raw, t.addr)
+	if err == nil {
+		t.lastSource.Store(uint64(pkt.SSRC) + 1)
+	}
 	return err
+}
+
+// endInput sends RTCP BYE after the RTP socket has closed and all writers have
+// drained. A separate bounded socket also works after an idle source stopped.
+func (t *Tap) endInput() error {
+	source := t.lastSource.Load()
+	if source == 0 {
+		return nil
+	}
+	// FFmpeg rejects packets shorter than an RTP header before checking RTCP.
+	// The reason pads this single-source BYE beyond that twelve-byte minimum.
+	packet, err := (&rtcp.Goodbye{Sources: []uint32{uint32((source - 1) & 0xffffffff)}, Reason: "recording stopped"}).Marshal()
+	if err != nil {
+		return err
+	}
+	conn, err := net.DialUDP("udp", nil, &net.UDPAddr{IP: t.addr.IP, Port: t.addr.Port + 1})
+	if err != nil {
+		return fmt.Errorf("opening recorder RTCP input: %w", err)
+	}
+	deadlineErr := conn.SetWriteDeadline(time.Now().Add(25 * time.Millisecond))
+	if deadlineErr != nil {
+		return errors.Join(deadlineErr, conn.Close())
+	}
+	_, err = conn.Write(packet)
+	return errors.Join(err, conn.Close())
 }
 
 // Close releases the tap's socket.

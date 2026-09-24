@@ -69,29 +69,6 @@ func TestMoveCommitsWhenChannelKeyDeliveryIsCancelled(t *testing.T) {
 	}
 }
 
-func TestKickClientRecordsAuditWithCallerContext(t *testing.T) {
-	env := startTestEnv(t, nil)
-	defer env.stop()
-	conn, clientID := dialAuthed(t, env.addr, "user-uid")
-	defer func() { _ = conn.Close() }()
-	env.state.AddChannel(testChannel(1))
-	if err := env.state.MoveClient(clientID, 1); err != nil {
-		t.Fatalf("position client for kick: %v", err)
-	}
-	if err := env.srv.KickClient(context.Background(), "serverquery", clientID, false, "maintenance"); err != nil {
-		t.Fatalf("KickClient: %v", err)
-	}
-	env.groups.mu.Lock()
-	defer env.groups.mu.Unlock()
-	if len(env.groups.audit) == 0 {
-		t.Fatal("KickClient did not write an audit marker")
-	}
-	entry := env.groups.audit[len(env.groups.audit)-1]
-	if entry.Actor != "serverquery" || entry.Action != "kick" || entry.Target != "user-uid" {
-		t.Fatalf("kick audit = %+v", entry)
-	}
-}
-
 func TestKeyRequestHonorsRequestContext(t *testing.T) {
 	env := startTestEnv(t, nil)
 	defer env.stop()
@@ -674,34 +651,6 @@ func TestRotationCoalescing(t *testing.T) {
 	env.srv.rotateScopeKey(ctx, 4)
 	if len(callbacks) != 2 {
 		t.Fatalf("scheduled callbacks after completion = %d, want 2", len(callbacks))
-	}
-}
-
-// TestChatKeyRequestRequiresMembership verifies a non-member's request is
-// answered with Refused rather than sealed keys.
-func TestChatKeyRequestRequiresMembership(t *testing.T) {
-	env := startTestEnv(t, nil)
-	defer env.stop()
-	alice, bob, _, keyID, _ := chatPair(t, env)
-	defer func() { _ = alice.Close() }()
-	defer func() { _ = bob.Close() }()
-
-	env.state.AddChannel(testChannel(2))
-	outsider, _ := dialAuthed(t, env.addr, "admin-uid")
-	defer func() { _ = outsider.Close() }()
-	opub, _ := testX25519(t)
-	publishKey(t, outsider, opub)
-	send(t, outsider, netproto.MsgJoinChannel, netproto.JoinChannel{ChannelID: 2})
-	readChannelKeyFor(t, outsider, 2)
-
-	send(t, outsider, netproto.MsgChatKeyRequest, netproto.ChatKeyRequest{ChannelID: 1, KeyIDs: []uint32{keyID}})
-	f := readOfType(t, outsider, netproto.MsgChatKeyBundle)
-	var bundle netproto.ChatKeyBundle
-	if err := netproto.Decode(f, &bundle); err != nil {
-		t.Fatalf("decode bundle: %v", err)
-	}
-	if len(bundle.Keys) != 0 || len(bundle.Refused) != 1 || bundle.Refused[0] != keyID {
-		t.Fatalf("bundle = %+v, want generation %d refused", bundle, keyID)
 	}
 }
 

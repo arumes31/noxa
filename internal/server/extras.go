@@ -1,21 +1,17 @@
-// extras.go implements the Phase 9 control handlers: avatars, channel icons,
-// privilege-token redemption, complaints, and screen-share declaration.
+// extras.go implements avatar, channel icon, complaint, client information,
+// and screen-share control handlers.
 package server
 
 import (
 	"context"
 	"encoding/base64"
 	"errors"
-	"fmt"
-	"net"
 	"strconv"
 	"time"
 
-	"go.uber.org/zap"
-
+	"noxa/internal/authorization"
 	"noxa/internal/channels"
 	"noxa/internal/netproto"
-	"noxa/internal/permissions"
 	"noxa/internal/store"
 )
 
@@ -27,7 +23,6 @@ const (
 	eventAvatarChanged       = "avatar_changed"
 	eventChannelIconChanged  = "channel_icon_changed"
 	eventScreenshareChanged  = "screenshare_changed"
-	eventTokenUsed           = "token_used"
 	eventServerBannerChanged = "server_banner_changed"
 )
 
@@ -59,17 +54,15 @@ func (s *TCPServer) handleAvatarSet(ctx context.Context, client *Client, f *netp
 	if err := netproto.Decode(f, &msg); err != nil {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "malformed avatar_set: "+err.Error())
 	}
+	return s.roleAction(ctx, client, 0, authorization.UploadAvatar, func(ctx context.Context) error {
+		return s.setAvatar(ctx, client, msg)
+	})
+}
+
+func (s *TCPServer) setAvatar(ctx context.Context, client *Client, msg netproto.AvatarSet) error {
 	if client.userID() == 0 {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, "guests cannot upload avatars")
 	}
-	pc, err := s.permCheckerFor(ctx, client)
-	if err != nil {
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "permission backend unavailable")
-	}
-	if !pc.granted(permissions.PermissionKeyClientAvatarUpload) {
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, "insufficient permission: "+string(permissions.PermissionKeyClientAvatarUpload))
-	}
-
 	raw, ext, err := decodeImage(msg.DataBase64)
 	if err != nil {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, err.Error())
@@ -79,7 +72,7 @@ func (s *TCPServer) handleAvatarSet(ctx context.Context, client *Client, f *netp
 	}
 
 	s.broadcastEvent(eventAvatarChanged, userEvent{ClientID: client.ID, UniqueID: client.UniqueID})
-	return nil
+	return s.acknowledgeAsset(client, msg.AckRequested, netproto.MsgAvatarSet, "", "")
 }
 
 // handleAvatarGet returns another user's avatar, if set.
@@ -88,7 +81,10 @@ func (s *TCPServer) handleAvatarGet(ctx context.Context, client *Client, f *netp
 	if err := netproto.Decode(f, &msg); err != nil {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "malformed avatar_get: "+err.Error())
 	}
+	return s.roleAvatarGet(ctx, client, msg)
+}
 
+func (s *TCPServer) readAvatar(ctx context.Context, client *Client, msg netproto.AvatarGet) error {
 	raw, image, err := s.assets().readAvatar(msg.UniqueID)
 	if err == nil {
 		return s.writeMessage(client, netproto.MsgAvatarData, netproto.AvatarData{
@@ -100,13 +96,32 @@ func (s *TCPServer) handleAvatarGet(ctx context.Context, client *Client, f *netp
 	return s.sendErrorFor(client, requestOrigin(ctx), errCodeNotFound, "no avatar for this user")
 }
 
-// handleChannelIconSet stores an icon for a channel (perm-gated by
-// b_channel_modify) and flags the channel in state.
+// handleChannelIconSet authorizes the target channel before storing its icon.
 func (s *TCPServer) handleChannelIconSet(ctx context.Context, client *Client, f *netproto.Frame) error {
 	var msg netproto.ChannelIconSet
 	if err := netproto.Decode(f, &msg); err != nil {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "malformed channel_icon_set: "+err.Error())
 	}
+	return s.roleAction(ctx, client, msg.ChannelID, authorization.ManageChannels, func(ctx context.Context) error {
+		return s.setChannelIcon(ctx, client, msg, false)
+	})
+}
+
+func (s *TCPServer) handleRoleChannelIconSet(ctx context.Context, client *Client, f *netproto.Frame) error {
+	var msg netproto.ChannelIconSet
+	if err := netproto.Decode(f, &msg); err != nil || msg.ChannelID < 1 || msg.CopyFromChannelID < 0 ||
+		(msg.CopyFromChannelID != 0 && msg.DataBase64 != "") {
+		return s.roleError(ctx, client, authorization.ErrRoleInvalid)
+	}
+	if s.deps == nil || s.deps.Authority == nil {
+		return s.roleError(ctx, client, authorization.ErrRolesNotConfigured)
+	}
+	return s.roleAction(ctx, client, msg.ChannelID, authorization.ManageChannels, func(ctx context.Context) error {
+		return s.setChannelIcon(ctx, client, msg, true)
+	})
+}
+
+func (s *TCPServer) setChannelIcon(ctx context.Context, client *Client, msg netproto.ChannelIconSet, acknowledge bool) error {
 	if s.deps == nil || s.deps.State == nil || s.deps.Channels == nil {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "state backend unavailable")
 	}
@@ -114,17 +129,12 @@ func (s *TCPServer) handleChannelIconSet(ctx context.Context, client *Client, f 
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeNotFound, "channel not found")
 	}
 
-	pc, err := s.permCheckerFor(ctx, client)
-	if err != nil {
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "permission backend unavailable")
-	}
-	if !pc.granted(permissions.PermissionKeyChannelModify) {
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, "insufficient permission: "+string(permissions.PermissionKeyChannelModify))
-	}
-
 	raw, ext, err := decodeImage(msg.DataBase64)
 	if msg.CopyFromChannelID != 0 && msg.DataBase64 == "" {
 		// (271) icon library: reuse another channel's stored icon.
+		if err := s.withRoleAccess(ctx, client, msg.CopyFromChannelID, authorization.ViewChannel, func(context.Context) error { return nil }); err != nil {
+			return err
+		}
 		if _, ok := s.deps.State.GetChannel(msg.CopyFromChannelID); !ok {
 			return s.sendErrorFor(client, requestOrigin(ctx), errCodeNotFound, "source channel not found")
 		}
@@ -138,6 +148,9 @@ func (s *TCPServer) handleChannelIconSet(ctx context.Context, client *Client, f 
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, err.Error())
 	}
 	name := strconv.FormatInt(msg.ChannelID, 10)
+	if acknowledge && ctx.Err() != nil {
+		return s.roleError(ctx, client, ctx.Err())
+	}
 	err = s.deps.Channels.WithChannelLifecycle(msg.ChannelID, func() error {
 		if _, err := s.assets().writeImage("icons", name, ext, raw); err != nil {
 			return err
@@ -155,18 +168,30 @@ func (s *TCPServer) handleChannelIconSet(ctx context.Context, client *Client, f 
 	}
 
 	s.broadcastEvent(eventChannelIconChanged, channelEvent{ChannelID: msg.ChannelID})
+	if acknowledge {
+		auditCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		s.auditInChannels(auditCtx, client.uniqueID(), "channel_icon_set", name, "", msg.ChannelID)
+		cancel()
+		replyCtx, cancelReply := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancelReply()
+		return s.writeMessageInContext(replyCtx, client, netproto.MsgRoleChannelIconSaved, netproto.RoleChannelIconSaved{ChannelID: msg.ChannelID})
+	}
 	return nil
 }
 
-// handleChannelIconGet returns a channel's icon (271; mirrors
-// handleGroupIconGet). Ungated like the group and avatar reads: an icon is
-// presentation data, and the channel list that names it is already visible.
-// An empty payload means no icon, which is a normal answer, not an error.
+// handleChannelIconGet requires channel visibility in role mode. An empty
+// payload means a visible channel has no icon, which is a normal answer.
 func (s *TCPServer) handleChannelIconGet(ctx context.Context, client *Client, f *netproto.Frame) error {
 	var msg netproto.ChannelIconGet
 	if err := netproto.Decode(f, &msg); err != nil {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "malformed channel_icon_get: "+err.Error())
 	}
+	return s.roleAction(ctx, client, msg.ChannelID, authorization.ViewChannel, func(ctx context.Context) error {
+		return s.readChannelIcon(ctx, client, msg)
+	})
+}
+
+func (s *TCPServer) readChannelIcon(ctx context.Context, client *Client, msg netproto.ChannelIconGet) error {
 	if s.deps == nil || s.deps.State == nil || s.deps.Channels == nil {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "state backend unavailable")
 	}
@@ -195,25 +220,24 @@ func (s *TCPServer) handleChannelIconGet(ctx context.Context, client *Client, f 
 
 // --- server icon + banner (270) -----------------------------------------------
 
-// storeBranding writes one admin-only branding image, replacing whatever
+// storeBranding writes one authorized branding image, replacing whatever
 // extension was there before so a png does not linger behind a new jpg.
-func (s *TCPServer) storeBranding(ctx context.Context, client *Client, base, dataBase64, action string) error {
-	pc, err := s.permCheckerFor(ctx, client)
-	if err != nil {
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "permission backend unavailable")
-	}
-	if !pc.admin {
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, "insufficient permission: server branding is admin-only")
-	}
-	raw, ext, err := decodeImage(dataBase64)
-	if err != nil {
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, err.Error())
-	}
-	if _, err := s.assets().writeImage("", base, ext, raw); err != nil {
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "branding write failed")
-	}
-	s.audit(ctx, client.UniqueID, action, "", ext)
-	return nil
+func (s *TCPServer) storeBranding(ctx context.Context, client *Client, base, dataBase64, action string, acknowledge bool, operation netproto.MessageType) error {
+	return s.roleAction(ctx, client, 0, authorization.ManageServer, func(ctx context.Context) error {
+		raw, ext, err := decodeImage(dataBase64)
+		if err != nil {
+			return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, err.Error())
+		}
+		if _, err := s.assets().writeImage("", base, ext, raw); err != nil {
+			return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "branding write failed")
+		}
+		s.audit(ctx, client.UniqueID, action, "", ext)
+		if base == "server_banner" {
+			// Announce only a successful write, while its authorization is pinned.
+			s.broadcastEvent(eventServerBannerChanged, map[string]any{"by": client.UniqueID})
+		}
+		return s.acknowledgeAsset(client, acknowledge, operation, "", "")
+	})
 }
 
 // handleServerBannerSet stores the server banner (admin only, 270).
@@ -222,13 +246,7 @@ func (s *TCPServer) handleServerBannerSet(ctx context.Context, client *Client, f
 	if err := netproto.Decode(f, &msg); err != nil {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "malformed server_banner_set: "+err.Error())
 	}
-	if err := s.storeBranding(ctx, client, "server_banner", msg.DataBase64, "server_banner_set"); err != nil {
-		return err
-	}
-	// Unlike the icon, the banner is a wide masthead every connected client
-	// paints immediately, so announce it instead of waiting for a reconnect.
-	s.broadcastEvent(eventServerBannerChanged, map[string]any{"by": client.UniqueID})
-	return nil
+	return s.storeBranding(ctx, client, "server_banner", msg.DataBase64, "server_banner_set", msg.AckRequested, netproto.MsgServerBannerSet)
 }
 
 // handleServerBannerGet returns the server banner (empty payload when unset).
@@ -252,7 +270,7 @@ func (s *TCPServer) handleServerIconSet(ctx context.Context, client *Client, f *
 	if err := netproto.Decode(f, &msg); err != nil {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "malformed server_icon_set: "+err.Error())
 	}
-	return s.storeBranding(ctx, client, "server_icon", msg.DataBase64, "server_icon_set")
+	return s.storeBranding(ctx, client, "server_icon", msg.DataBase64, "server_icon_set", msg.AckRequested, netproto.MsgServerIconSet)
 }
 
 // handleServerIconGet returns the server icon (empty payload when unset).
@@ -270,222 +288,6 @@ func (s *TCPServer) handleServerIconGet(ctx context.Context, client *Client, f *
 	})
 }
 
-// handleTokenUse redeems a privilege token: the grant (server group or
-// admin) is applied by the store, the permission cache is invalidated, and
-// the client is notified.
-func (s *TCPServer) handleTokenUse(ctx context.Context, client *Client, f *netproto.Frame) error {
-	var msg netproto.TokenUse
-	if err := netproto.Decode(f, &msg); err != nil {
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "malformed token_use: "+err.Error())
-	}
-	if s.deps == nil || s.deps.Tokens == nil {
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "token backend unavailable")
-	}
-	if msg.Token == "" {
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "empty token")
-	}
-	grant, err := s.deps.Tokens.UseTokenForIdentity(ctx, msg.Token, client.userID(), client.UniqueID, client.Username)
-	if err != nil {
-		if errors.Is(err, store.ErrTokenNotFound) {
-			return s.sendErrorFor(client, requestOrigin(ctx), errCodeNotFound, "unknown token")
-		}
-		if errors.Is(err, store.ErrTokenExhausted) {
-			return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "token has no uses left")
-		}
-		s.logger.Warn("token use failed",
-			zap.String("client_id", client.ID),
-			zap.Error(err),
-		)
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "token use failed")
-	}
-	client.promote(grant.UserID, grant.Admin)
-
-	// Invalidate the cached permissions so the grant takes effect now.
-	if s.deps.Perms != nil {
-		var channelID int64
-		if s.deps.State != nil {
-			if sc, ok := s.deps.State.GetClient(client.ID); ok {
-				channelID = sc.ChannelID
-			}
-		}
-		s.deps.Perms.Invalidate(grant.UserID, channelID)
-	}
-
-	s.logger.Info("privilege token used",
-		zap.String("client_id", client.ID),
-		zap.Int64("group_id", grant.GroupID),
-		zap.Bool("promoted", grant.Promoted),
-	)
-	s.audit(ctx, client.UniqueID, "token_use", fmt.Sprintf("group:%d", grant.GroupID), "")
-	if s.deps.Broadcast != nil {
-		payload, err := eventEnvelope(eventTokenUsed, struct {
-			ClientID string `json:"client_id"`
-			GroupID  int64  `json:"group_id"`
-			Promoted bool   `json:"promoted,omitempty"`
-		}{ClientID: client.ID, GroupID: grant.GroupID, Promoted: grant.Promoted})
-		if err == nil {
-			_ = s.deps.Broadcast.BroadcastToClient(client.ID, payload)
-		}
-	}
-	return nil
-}
-
-// --- token management (174) --------------------------------------------------
-
-// serverGroupNameResolver returns a memoized group ID -> name lookup. Group
-// 0 is the admin-granting token and has no group, so it resolves to "".
-func (s *TCPServer) serverGroupNameResolver(ctx context.Context) func(int64) string {
-	cache := make(map[int64]string)
-	return func(groupID int64) string {
-		if groupID == 0 || s.deps == nil || s.deps.Groups == nil {
-			return ""
-		}
-		if n, ok := cache[groupID]; ok {
-			return n
-		}
-		n := ""
-		if g, err := s.deps.Groups.GetGroup(ctx, "server", groupID); err == nil && g != nil {
-			n = g.Name
-		}
-		cache[groupID] = n
-		return n
-	}
-}
-
-// tokensResponse builds the privilege-token list with group display names.
-func (s *TCPServer) tokensResponse(ctx context.Context) (netproto.Tokens, error) {
-	rows, err := s.deps.Tokens.ListTokens(ctx)
-	if err != nil {
-		return netproto.Tokens{}, err
-	}
-	groupName := s.serverGroupNameResolver(ctx)
-	resp := netproto.Tokens{Entries: []netproto.TokenEntry{}}
-	for _, t := range rows {
-		resp.Entries = append(resp.Entries, netproto.TokenEntry{
-			Token:       t.Key,
-			GroupID:     t.GroupID,
-			GroupName:   groupName(t.GroupID),
-			ChannelID:   t.ChannelID,
-			Description: t.Description,
-			CreatedAt:   t.CreatedAt.Unix(),
-			UsedBy:      t.UsedBy,
-		})
-	}
-	return resp, nil
-}
-
-// tokenAdminAllowed reports whether the caller holds the given
-// b_virtualserver_token_* key (174).
-func (s *TCPServer) tokenAdminAllowed(ctx context.Context, client *Client, key permissions.PermissionKey) (*permChecker, bool) {
-	pc, err := s.permCheckerFor(ctx, client)
-	if err != nil {
-		return nil, false
-	}
-	return pc, pc.granted(key)
-}
-
-// handleTokenList returns the privilege tokens (174).
-func (s *TCPServer) handleTokenList(ctx context.Context, client *Client, f *netproto.Frame) error {
-	if err := netproto.Decode(f, &netproto.TokenList{}); err != nil {
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "malformed token_list: "+err.Error())
-	}
-	if s.deps == nil || s.deps.Tokens == nil {
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "token backend unavailable")
-	}
-	if _, ok := s.tokenAdminAllowed(ctx, client, permissions.PermissionKeyVirtualserverTokenList); !ok {
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, "insufficient permission: "+string(permissions.PermissionKeyVirtualserverTokenList))
-	}
-	resp, err := s.tokensResponse(ctx)
-	if err != nil {
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "token list failed")
-	}
-	return s.writeMessage(client, netproto.MsgTokens, resp)
-}
-
-// handleTokenAdd mints a privilege token and replies with the refreshed list
-// so the manager cannot drift (174). The key itself is generated by the
-// store; the wire message carries no token field to honor.
-func (s *TCPServer) handleTokenAdd(ctx context.Context, client *Client, f *netproto.Frame) error {
-	var msg netproto.TokenAdd
-	if err := netproto.Decode(f, &msg); err != nil {
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "malformed token_add: "+err.Error())
-	}
-	if s.deps == nil || s.deps.Tokens == nil {
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "token backend unavailable")
-	}
-	pc, ok := s.tokenAdminAllowed(ctx, client, permissions.PermissionKeyVirtualserverTokenAdd)
-	if !ok {
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, "insufficient permission: "+string(permissions.PermissionKeyVirtualserverTokenAdd))
-	}
-	// A group-less token grants server admin on redemption, so minting one is
-	// an admin act in itself and must not ride b_virtualserver_token_add.
-	if msg.GroupID == 0 && !pc.admin {
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, "only a server admin may create an admin token")
-	}
-	if msg.GroupID != 0 && s.deps.Groups != nil {
-		g, gerr := s.deps.Groups.GetGroup(ctx, "server", msg.GroupID)
-		if gerr != nil {
-			return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "group lookup failed")
-		}
-		if g == nil {
-			return s.sendErrorFor(client, requestOrigin(ctx), errCodeNotFound, "server group not found")
-		}
-	}
-
-	// token_type 1 marks a channel-scoped key; 0 is a plain server group key.
-	tokenType := 0
-	if msg.ChannelID != 0 {
-		tokenType = 1
-	}
-	_, err := s.deps.Tokens.CreateTokenWithMeta(ctx, tokenType, msg.GroupID, msg.ChannelID, msg.Description, 1)
-	if err != nil {
-		s.logger.Warn("token create failed",
-			zap.String("client_id", client.ID),
-			zap.Error(err),
-		)
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "token create failed")
-	}
-	s.audit(ctx, client.UniqueID, "token_add", strconv.FormatInt(msg.GroupID, 10),
-		fmt.Sprintf("channel=%d type=%d", msg.ChannelID, tokenType))
-
-	resp, err := s.tokensResponse(ctx)
-	if err != nil {
-		s.logger.Warn("token created but refreshed list failed", zap.Error(err))
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "token created; token list refresh failed — re-list tokens")
-	}
-	return s.writeMessage(client, netproto.MsgTokens, resp)
-}
-
-// handleTokenDelete revokes a token and replies with the refreshed list (174).
-func (s *TCPServer) handleTokenDelete(ctx context.Context, client *Client, f *netproto.Frame) error {
-	var msg netproto.TokenDelete
-	if err := netproto.Decode(f, &msg); err != nil {
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "malformed token_delete: "+err.Error())
-	}
-	if s.deps == nil || s.deps.Tokens == nil {
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "token backend unavailable")
-	}
-	if _, ok := s.tokenAdminAllowed(ctx, client, permissions.PermissionKeyVirtualserverTokenDelete); !ok {
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, "insufficient permission: "+string(permissions.PermissionKeyVirtualserverTokenDelete))
-	}
-	if msg.Token == "" {
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "empty token")
-	}
-	if err := s.deps.Tokens.DeleteToken(ctx, msg.Token); err != nil {
-		if errors.Is(err, store.ErrTokenNotFound) {
-			return s.sendErrorFor(client, requestOrigin(ctx), errCodeNotFound, "unknown token")
-		}
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "token delete failed")
-	}
-	s.audit(ctx, client.UniqueID, "token_delete", msg.Token, "")
-
-	resp, err := s.tokensResponse(ctx)
-	if err != nil {
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "token list failed")
-	}
-	return s.writeMessage(client, netproto.MsgTokens, resp)
-}
-
 // handleClientInfoQuery returns the connection info of an online client.
 // Self queries always return full data (including own IP/port). For other
 // clients, IP and port are only included when the requester is admin or
@@ -495,58 +297,18 @@ func (s *TCPServer) handleClientInfoQuery(ctx context.Context, client *Client, f
 	if err := netproto.Decode(f, &msg); err != nil {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "malformed client_info_query: "+err.Error())
 	}
-
-	target, ok := s.clientByID(msg.ClientID)
-	if !ok || !target.isAuthed() {
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodeNotFound, "client not found")
-	}
-
-	resp := netproto.ClientInfoResponse{
-		ClientID: target.ID,
-		PingMs:   -1,
-	}
-	{
-		target.mu.RLock()
-		resp.UniqueID = target.UniqueID
-		resp.Nickname = target.Username
-		target.mu.RUnlock()
-	}
-	if s.deps != nil && s.deps.State != nil {
-		if sc, ok := s.deps.State.GetClient(target.ID); ok {
-			resp.ChannelID = sc.ChannelID
-			resp.ConnectedAt = sc.ConnectedAt.Unix()
-		}
-	}
-	st := target.stats()
-	resp.IdleSeconds = int64(time.Since(st.lastActive).Seconds())
-	if st.rttKnown {
-		resp.PingMs = st.rttNs / int64(time.Millisecond)
-	}
-	resp.BytesIn = st.bytesIn
-	resp.BytesOut = st.bytesOut
-
-	// IP/port gating: self, admin, or b_client_remoteaddress_view.
-	showAddr := target.ID == client.ID
-	if !showAddr {
-		pc, err := s.permCheckerFor(ctx, client)
-		if err != nil {
-			return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "permission backend unavailable")
-		}
-		showAddr = pc.granted(permissions.PermissionKeyClientRemoteAddressView)
-	}
-	if showAddr {
-		if host, portStr, err := net.SplitHostPort(target.Conn.RemoteAddr().String()); err == nil {
-			resp.IP = host
-			resp.Port, _ = strconv.Atoi(portStr)
-		}
-	}
-
-	return s.writeMessage(client, netproto.MsgClientInfoResponse, resp)
+	return s.roleClientInfo(ctx, client, msg.ClientID)
 }
 
 // handleComplaint files a complaint against a user. The store enforces the
 // open-complaint limit per reporter.
 func (s *TCPServer) handleComplaint(ctx context.Context, client *Client, f *netproto.Frame) error {
+	return s.rolePolicyRead(ctx, client, func(ctx context.Context) error {
+		return s.fileSessionComplaint(ctx, client, f)
+	})
+}
+
+func (s *TCPServer) fileSessionComplaint(ctx context.Context, client *Client, f *netproto.Frame) error {
 	var msg netproto.Complaint
 	if err := netproto.Decode(f, &msg); err != nil {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "malformed complaint: "+err.Error())
@@ -607,9 +369,16 @@ func (s *TCPServer) complaintsResponse(ctx context.Context) (netproto.Complaints
 	if err != nil {
 		return netproto.Complaints{}, err
 	}
+	return s.complaintRowsResponse(ctx, rows)
+}
+
+func (s *TCPServer) complaintRowsResponse(ctx context.Context, rows []store.Complaint) (netproto.Complaints, error) {
 	nick := s.nicknameResolver(ctx)
 	resp := netproto.Complaints{Entries: []netproto.ComplaintEntry{}}
 	for _, c := range rows {
+		if err := ctx.Err(); err != nil {
+			return netproto.Complaints{}, err
+		}
 		resp.Entries = append(resp.Entries, netproto.ComplaintEntry{
 			TargetUniqueID: c.Target,
 			TargetNickname: nick(c.Target),
@@ -622,12 +391,16 @@ func (s *TCPServer) complaintsResponse(ctx context.Context) (netproto.Complaints
 	return resp, nil
 }
 
-// complaintAdminAllowed gates complaint review. Complaints are moderation
+// withComplaintManagement gates complaint review. Complaints are moderation
 // evidence naming both parties, so they ride the same gate as the ban list
 // rather than a key of their own (173).
-func (s *TCPServer) complaintAdminAllowed(ctx context.Context, client *Client) bool {
-	_, ok := s.banAdminAllowed(ctx, client)
-	return ok
+func (s *TCPServer) withComplaintManagement(ctx context.Context, client *Client, effect func(context.Context) error) error {
+	return s.roleAction(ctx, client, 0, authorization.BanMembers, func(ctx context.Context) error {
+		if s.deps == nil || s.deps.Complaints == nil {
+			return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "complaint backend unavailable")
+		}
+		return effect(ctx)
+	})
 }
 
 // handleComplaintList returns every filed complaint (173).
@@ -635,17 +408,13 @@ func (s *TCPServer) handleComplaintList(ctx context.Context, client *Client, f *
 	if err := netproto.Decode(f, &netproto.ComplaintList{}); err != nil {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "malformed complaint_list: "+err.Error())
 	}
-	if s.deps == nil || s.deps.Complaints == nil {
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "complaint backend unavailable")
-	}
-	if !s.complaintAdminAllowed(ctx, client) {
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, "insufficient permission: "+string(permissions.PermissionKeyClientBan))
-	}
-	resp, err := s.complaintsResponse(ctx)
-	if err != nil {
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "complaint list failed")
-	}
-	return s.writeMessage(client, netproto.MsgComplaints, resp)
+	return s.withComplaintManagement(ctx, client, func(ctx context.Context) error {
+		resp, err := s.complaintsResponse(ctx)
+		if err != nil {
+			return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "complaint list failed")
+		}
+		return s.writeMessage(client, netproto.MsgComplaints, resp)
+	})
 }
 
 // handleComplaintClear resolves complaints against a target and replies with
@@ -655,81 +424,24 @@ func (s *TCPServer) handleComplaintClear(ctx context.Context, client *Client, f 
 	if err := netproto.Decode(f, &msg); err != nil {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "malformed complaint_clear: "+err.Error())
 	}
-	if s.deps == nil || s.deps.Complaints == nil {
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "complaint backend unavailable")
-	}
-	if !s.complaintAdminAllowed(ctx, client) {
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, "insufficient permission: "+string(permissions.PermissionKeyClientBan))
-	}
-	if msg.TargetUniqueID == "" {
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "target_unique_id must not be empty")
-	}
-
-	n, err := s.deps.Complaints.DeleteComplaintsAgainst(ctx, msg.TargetUniqueID, msg.FromUniqueID)
-	if err != nil {
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "complaint clear failed")
-	}
-	if n == 0 {
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodeNotFound, "no matching complaint")
-	}
-	detail := fmt.Sprintf("count=%d", n)
-	if msg.FromUniqueID != "" {
-		detail = fmt.Sprintf("from=%s count=%d", msg.FromUniqueID, n)
-	}
-	s.audit(ctx, client.UniqueID, "complaint_clear", msg.TargetUniqueID, detail)
-
-	resp, err := s.complaintsResponse(ctx)
-	if err != nil {
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "complaint list failed")
-	}
-	return s.writeMessage(client, netproto.MsgComplaints, resp)
-}
-
-// handlePermissionsQuery returns the caller's resolved permission set: one
-// entry per key present in any tier, resolved through the tier hierarchy.
-func (s *TCPServer) handlePermissionsQuery(ctx context.Context, client *Client, f *netproto.Frame) error {
-	if err := netproto.Decode(f, &netproto.PermissionsQuery{}); err != nil {
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "malformed permissions_query: "+err.Error())
-	}
-	pc, err := s.permCheckerFor(ctx, client)
-	if err != nil {
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "permission backend unavailable")
-	}
-
-	resp := netproto.PermissionsResponse{}
-	seen := make(map[permissions.PermissionKey]bool)
-	for tier := permissions.Tier(0); tier <= permissions.TierChannel; tier++ {
-		set, ok := pc.tp.Get(tier)
-		if !ok || set == nil {
-			continue
+	return s.withComplaintManagement(ctx, client, func(ctx context.Context) error {
+		if msg.TargetUniqueID == "" {
+			return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "target_unique_id must not be empty")
 		}
-		for _, key := range set.Keys() {
-			if seen[key] {
-				continue
-			}
-			seen[key] = true
-			p, sourceTier, err := pc.resolver.Resolve(pc.tp, key)
-			if err != nil {
-				continue
-			}
-			resp.Entries = append(resp.Entries, netproto.PermissionEntry{
-				Key:        string(p.Key),
-				Value:      p.Value,
-				Grant:      p.Grant,
-				Skip:       p.Skip,
-				Negate:     p.Negate,
-				SourceTier: sourceTier.String(),
-				Inherited:  sourceTier != tier,
-			})
+
+		n, err := s.clearComplaints(ctx, client.UniqueID, msg)
+		if err != nil {
+			return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "complaint clear failed")
 		}
-	}
-	for _, conflict := range permissions.DetectConflicts(pc.tp) {
-		resp.Conflicts = append(resp.Conflicts, netproto.PermissionConflict{
-			Key: string(conflict.Key), WinningTier: conflict.WinningTier.String(),
-			ShadowedTier: conflict.ShadowedTier.String(), Message: conflict.Message,
-		})
-	}
-	return s.writeMessage(client, netproto.MsgPermissionsResponse, resp)
+		if n == 0 {
+			return s.sendErrorFor(client, requestOrigin(ctx), errCodeNotFound, "no matching complaint")
+		}
+		resp, err := s.complaintsResponse(ctx)
+		if err != nil {
+			return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "complaint list failed")
+		}
+		return s.writeMessage(client, netproto.MsgComplaints, resp)
+	})
 }
 
 // handleScreenShare relays the client's screen-share state to the other
@@ -744,30 +456,5 @@ func (s *TCPServer) handleScreenShare(ctx context.Context, client *Client, f *ne
 	if s.deps == nil || s.deps.State == nil || s.deps.Broadcast == nil {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "state backend unavailable")
 	}
-
-	pc, err := s.permCheckerFor(ctx, client)
-	if err != nil {
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "permission backend unavailable")
-	}
-	if !pc.videoPublishAllowed() {
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, "insufficient permission: "+string(permissions.PermissionKeyClientVideoPublish))
-	}
-	if msg.Active && msg.MaxHeight > 720 && !pc.allowedByDefault(permissions.PermissionKeyClientScreenShare1080p) {
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, "1080p screen sharing is not permitted; use a 720p preset")
-	}
-
-	sc, ok := s.deps.State.GetClient(client.ID)
-	if !ok || sc.ChannelID == 0 {
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodeNotFound, "not in a channel")
-	}
-	payload, err := eventEnvelope(eventScreenshareChanged, struct {
-		ClientID  string `json:"client_id"`
-		Active    bool   `json:"active"`
-		MaxHeight int    `json:"max_height,omitempty"`
-	}{ClientID: client.ID, Active: msg.Active, MaxHeight: msg.MaxHeight})
-	if err != nil {
-		return err
-	}
-	s.deps.Broadcast.BroadcastToChannel(sc.ChannelID, payload)
-	return nil
+	return s.roleScreenShare(ctx, client, msg)
 }

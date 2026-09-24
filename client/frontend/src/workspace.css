@@ -138,6 +138,24 @@ body.details-collapsed #details-toggle { display: inline-flex; position: static;
 #chat-input-row { margin: 10px 16px 16px; padding: 6px; border: 1px solid var(--border); border-radius: 5px; background: var(--bg-raised); align-items: center; gap: 4px; }
 #chat-input-row input, #chat-input-row select { background: transparent; border-color: transparent; border-radius: 4px; padding: 8px; }
 #chat-text { min-width: 0; }
+.composer-count { font-size: 11px; color: var(--text-muted); white-space: nowrap; }
+.composer-count.warn, .voice-hints .warn { color: var(--warning, #efb36f); }
+.voice-hints { display: flex; flex-direction: column; gap: 3px; font-size: 11px; max-width: 360px; overflow-wrap: anywhere; }
+.voice-hints:has(> :not([hidden])) { padding: 4px 8px; }
+.notification-snooze { padding: 12px; border-top: 1px solid var(--border); }
+.notification-snooze button { margin: 4px 6px 4px 0; }
+.notification-snooze p { margin: 4px 0; }
+.vtile-diagnostics { position: absolute; top: 40px; left: 6px; z-index: 5; max-width: calc(100% - 12px); font-size: 11px; color: var(--text); }
+.vtile-diagnostics summary { cursor: pointer; background: #121820e8; padding: 5px 8px; border-radius: 4px; }
+.vtile-diagnostics-body { background: #121820f5; padding: 8px; border-radius: 4px; max-height: 150px; overflow: auto; overflow-wrap: anywhere; }
+.vtile-diagnostics-body p { margin: 3px 0 7px; }
+.vtile-diagnostics-body button { color: inherit; background: var(--bg-panel); border: 1px solid var(--border); border-radius: 4px; padding: 5px 8px; font: inherit; cursor: pointer; }
+.vtile-diagnostics-body button:hover { border-color: var(--text-muted); }
+.vtile-diagnostics:focus-within { outline-offset: 2px; }
+@media (max-width: 720px) {
+    .voice-hints { max-width: 100%; flex-basis: 100%; }
+    .composer-count { white-space: normal; max-width: 100px; }
+}
 #chat-input-row #chat-scope { background: var(--bg-panel) !important; border: 1px solid var(--border); color: var(--text); font-size: .86rem; max-width: 170px; min-height: 36px; cursor: pointer; }
 #chat-input-row #chat-scope:hover { border-color: var(--text-faint); }
 #chat-input-row #chat-scope:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
@@ -225,6 +243,15 @@ body.details-collapsed #details-toggle { display: inline-flex; position: static;
 .voice-options-menu .voice-control { justify-content: flex-start; }
 #hotkey-status { white-space: normal; margin: 0; font: .8rem var(--font-body); }
 .voice-info { margin-left: auto; gap: 4px; max-width: 220px; }
+
+/* Keep controls together; the connection summary has a predictable second row
+   instead of pushing German labels into an extra, partially filled row. */
+#voice-bar > .voice-buttons { flex: 1 1 100%; }
+#voice-bar > .voice-info { flex: 1 1 auto; flex-direction: row; flex-wrap: wrap; align-items: center; gap: 6px 12px; max-width: none; margin-left: 0; }
+#voice-bar > #mic-status:empty { display: none; }
+#voice-bar .voice-disconnect-group { gap: 4px; padding-left: 8px; margin-left: 2px; }
+#voice-bar .voice-control { padding: 7px 8px; gap: 5px; }
+#voice-bar #voice-context { max-width: min(36ch, 60vw); }
 .voice-summary { display: flex; align-items: center; gap: 10px; }
 #voice-latency { flex: none; padding: 2px 0 2px 10px; border: 0; border-left: 1px solid var(--border); border-radius: 0; background: transparent; color: var(--text-dim); font-size: .85rem; font-variant-numeric: tabular-nums; white-space: nowrap; }
 #voice-latency:hover { text-decoration: underline; text-underline-offset: 3px; }

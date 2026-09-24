@@ -1,0 +1,45 @@
+{
+  "capabilities": ["view_channel", "read_history", "send_messages", "connect", "speak", "share_camera", "share_screen"],
+  "presets": [
+    {
+      "key": "public",
+      "overrides": [
+        {"role_id": 10, "capability": "view_channel", "effect": "allow"},
+        {"role_id": 10, "capability": "read_history", "effect": "allow"},
+        {"role_id": 10, "capability": "send_messages", "effect": "allow"},
+        {"role_id": 10, "capability": "connect", "effect": "allow"},
+        {"role_id": 10, "capability": "speak", "effect": "allow"}
+      ],
+      "denied": [],
+      "allowed_from_empty": ["view_channel", "read_history", "send_messages", "connect", "speak"]
+    },
+    {
+      "key": "private",
+      "overrides": [{"role_id": 10, "capability": "view_channel", "effect": "deny"}],
+      "denied": ["view_channel", "read_history", "send_messages", "connect", "speak", "share_camera", "share_screen"],
+      "allowed_from_empty": []
+    },
+    {
+      "key": "readOnlyPreset",
+      "overrides": [
+        {"role_id": 10, "capability": "view_channel", "effect": "allow"},
+        {"role_id": 10, "capability": "read_history", "effect": "allow"},
+        {"role_id": 10, "capability": "send_messages", "effect": "deny"}
+      ],
+      "denied": ["send_messages"],
+      "allowed_from_empty": ["view_channel", "read_history"]
+    },
+    {
+      "key": "listenOnly",
+      "overrides": [
+        {"role_id": 10, "capability": "view_channel", "effect": "allow"},
+        {"role_id": 10, "capability": "connect", "effect": "allow"},
+        {"role_id": 10, "capability": "speak", "effect": "deny"},
+        {"role_id": 10, "capability": "share_camera", "effect": "deny"},
+        {"role_id": 10, "capability": "share_screen", "effect": "deny"}
+      ],
+      "denied": ["speak", "share_camera", "share_screen"],
+      "allowed_from_empty": ["view_channel", "connect"]
+    }
+  ]
+}

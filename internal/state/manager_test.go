@@ -240,18 +240,16 @@ func TestUpdateChannelAppliesPatchUnderLock(t *testing.T) {
 	topic := "after"
 	channelType := 2
 	maxClients := 25
-	inherit := true
 	if !m.UpdateChannel(7, ChannelUpdate{
-		Topic:              &topic,
-		ChannelType:        &channelType,
-		MaxClients:         &maxClients,
-		InheritPermissions: &inherit,
+		Topic:       &topic,
+		ChannelType: &channelType,
+		MaxClients:  &maxClients,
 	}) {
 		t.Fatal("UpdateChannel did not find existing channel")
 	}
 	topic = "mutated patch input"
 	channel, _ := m.GetChannel(7)
-	if channel.Topic != "after" || channel.ChannelType != 2 || channel.MaxClients != 25 || !channel.InheritPermissions {
+	if channel.Topic != "after" || channel.ChannelType != 2 || channel.MaxClients != 25 {
 		t.Fatalf("patched channel = %+v", channel)
 	}
 	if m.UpdateChannel(999, ChannelUpdate{Topic: &topic}) {

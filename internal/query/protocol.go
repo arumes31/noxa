@@ -16,6 +16,7 @@ const (
 	errUnknownCommand          = 256
 	errInvalidParameter        = 512
 	errLoginFailed             = 520
+	errRoleConflict            = 521
 	errServerError             = 1024
 	errInsufficientPermissions = 2568
 	errTooManyConnections      = 1539

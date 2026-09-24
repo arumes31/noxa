@@ -48,12 +48,7 @@ func (s *Server) serve(ctx context.Context, conn net.Conn) {
 		return
 	}
 
-	tr, err := s.consume(init.Token, init.TransferID)
-	if err != nil {
-		writeStatus(conn, false, err.Error())
-		return
-	}
-	active, err := s.activateTransfer(tr, conn)
+	tr, active, err := s.beginTransfer(ctx, init.Token, init.TransferID, conn)
 	if err != nil {
 		writeStatus(conn, false, err.Error())
 		return
@@ -130,7 +125,10 @@ func (s *Server) receiveUpload(ctx context.Context, conn net.Conn, tr *transfer)
 			if received > tr.Size {
 				return fail(errors.New("received more bytes than the declared size"))
 			}
-			if _, err := f.Write(frame.Payload); err != nil {
+			if err := s.withTransferAccess(ctx, tr, func(context.Context) error {
+				_, err := f.Write(frame.Payload)
+				return err
+			}); err != nil {
 				return fail(fmt.Errorf("writing file: %w", err))
 			}
 			_, _ = h.Write(frame.Payload)
@@ -159,7 +157,10 @@ func (s *Server) receiveUpload(ctx context.Context, conn net.Conn, tr *transfer)
 				_ = root.Remove(tmpPath)
 				return fmt.Errorf("closing file: %w", err)
 			}
-			if err := s.finalizeUpload(ctx, tr, root, tmpPath, finalPath, received, sum); err != nil {
+			if err := s.withTransferAccess(ctx, tr, func(ctx context.Context) error {
+				return s.finalizeUpload(ctx, tr, root, tmpPath, finalPath, received, sum)
+			}); err != nil {
+				_ = root.Remove(tmpPath)
 				return err
 			}
 			s.logger.Info("upload complete",
@@ -188,16 +189,27 @@ const maxFileVersions = 3
 // what makes the name unforgeable, so an upload cannot displace the blob an
 // older message still points at.
 func (s *Server) finalizeUpload(ctx context.Context, tr *transfer, root *os.Root, tmpPath, finalPath string, size int64, sum string) error {
-	s.fileOpsMu.RLock()
-	defer s.fileOpsMu.RUnlock()
+	s.fileOpsMu.Lock()
+	defer s.fileOpsMu.Unlock()
+	if tr.revoked.Load() {
+		return ErrAccessRevoked
+	}
 	if s.channelDeleted(tr.ChannelID) {
 		_ = root.Remove(tmpPath)
 		return ErrChannelDeleted
 	}
 	encrypted := isEncryptedAttachment(tr.Name)
+	if err := s.checkFileOwner(ctx, tr.ChannelID, tr.Folder, tr.Name); err != nil {
+		return err
+	}
 	if encrypted && tr.Name != sum[:encryptedNameLen]+encryptedSuffix {
 		_ = root.Remove(tmpPath)
 		return fmt.Errorf("encrypted attachment name is not its content digest")
+	}
+	// Issuance does not reserve bytes. Another upload may have committed since
+	// then, so check fresh usage while holding the publication/mutation lock.
+	if err := s.checkUploadCommitQuota(ctx, tr, size, sum); err != nil {
+		return err
 	}
 
 	// Identical re-upload of the current file: keep the blob, refresh the row.
@@ -214,6 +226,13 @@ func (s *Server) finalizeUpload(ctx context.Context, tr *transfer, root *os.Root
 	// Content-derived .vcx names never collide, so rotation can only burn four
 	// store lookups on a guaranteed miss for them (91-135).
 	if !encrypted {
+		// Rotation also replaces/deletes names. A member cannot overwrite
+		// somebody else's file by claiming the corresponding base name.
+		for version := 1; version <= maxFileVersions; version++ {
+			if err := s.checkFileOwner(ctx, tr.ChannelID, tr.Folder, tr.Name+".v"+strconv.Itoa(version)); err != nil {
+				return err
+			}
+		}
 		s.rotateVersions(ctx, tr, root)
 	}
 
@@ -239,6 +258,37 @@ func (s *Server) finalizeUpload(ctx context.Context, tr *transfer, root *os.Root
 		ChannelID: tr.ChannelID, Folder: tr.Folder, Name: tr.Name,
 		Size: size, SHA256: sum, Uploader: tr.Uploader, Encrypted: encrypted,
 	})
+}
+
+// checkUploadCommitQuota runs under fileOpsMu, before rotation or publication.
+// Existing content is already charged; version removal can only reduce usage.
+func (s *Server) checkUploadCommitQuota(ctx context.Context, tr *transfer, size int64, sum string) error {
+	if s.cfg.ChannelQuotaMB <= 0 && tr.UploaderQuotaMB <= 0 {
+		return nil
+	}
+	channelContent, uploaderContent, err := s.store.FileContentUsage(ctx, tr.ChannelID, sum, tr.Uploader)
+	if err != nil {
+		return fmt.Errorf("checking content quota usage: %w", err)
+	}
+	if s.cfg.ChannelQuotaMB > 0 {
+		q, err := s.ChannelQuotaState(ctx, tr.ChannelID)
+		if err != nil {
+			return fmt.Errorf("checking channel quota: %w", err)
+		}
+		if q.Exceeded(max(0, size-channelContent)) {
+			return fmt.Errorf("%w: %d MiB", ErrQuotaExceeded, s.cfg.ChannelQuotaMB)
+		}
+	}
+	if tr.UploaderQuotaMB > 0 {
+		q, err := s.UploaderQuotaState(ctx, tr.Uploader, tr.UploaderQuotaMB)
+		if err != nil {
+			return fmt.Errorf("checking upload quota: %w", err)
+		}
+		if q.Exceeded(max(0, size-uploaderContent)) {
+			return fmt.Errorf("%w: %d MiB", ErrUploaderQuotaExceeded, tr.UploaderQuotaMB)
+		}
+	}
+	return nil
 }
 
 // rotateVersions shifts <name>.v1..v2 up one slot (dropping the oldest) and
@@ -315,7 +365,12 @@ func (s *Server) sendDownload(ctx context.Context, conn net.Conn, tr *transfer, 
 		n, readErr := f.Read(buf)
 		if n > 0 {
 			chunk := buf[:n]
-			if err := netproto.WriteFrame(conn, &netproto.Frame{Type: frameChunk, Payload: chunk}); err != nil {
+			if err := s.withTransferAccess(ctx, tr, func(context.Context) error {
+				if tr.Principal != nil {
+					_ = conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
+				}
+				return netproto.WriteFrame(conn, &netproto.Frame{Type: frameChunk, Payload: chunk})
+			}); err != nil {
 				return fmt.Errorf("writing chunk: %w", err)
 			}
 			_, _ = h.Write(chunk)
@@ -331,7 +386,12 @@ func (s *Server) sendDownload(ctx context.Context, conn net.Conn, tr *transfer, 
 		}
 	}
 
-	if err := writeJSON(conn, frameDigest, digestMsg{SHA256: hex.EncodeToString(h.Sum(nil))}); err != nil {
+	if err := s.withTransferAccess(ctx, tr, func(context.Context) error {
+		if tr.Principal != nil {
+			_ = conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
+		}
+		return writeJSON(conn, frameDigest, digestMsg{SHA256: hex.EncodeToString(h.Sum(nil))})
+	}); err != nil {
 		return fmt.Errorf("writing digest: %w", err)
 	}
 	s.logger.Info("download complete",

@@ -72,6 +72,9 @@ func (t *tray) onReady() {
 	t.publish = func(p trayPresentation, iconChanged bool) {
 		if iconChanged {
 			systray.SetIcon(trayIcons()[p.icon])
+			if err := setTaskbarIcon(p.icon); err != nil {
+				log.Printf("taskbar icon: %v", err)
+			}
 		}
 		systray.SetTitle(p.title)
 		systray.SetTooltip(p.tooltip)
@@ -105,10 +108,8 @@ func (t *tray) onReady() {
 			case <-t.miDisconnect.ClickedCh:
 				t.disconnectActive()
 			case <-miQuit.ClickedCh:
-				systray.Quit()
-				if t.app.ctx != nil {
-					wailsRuntime.Quit(t.app.ctx)
-				}
+				t.app.Quit()
+				return
 			}
 		}
 	})
@@ -212,6 +213,19 @@ func (t *tray) updateTitle() {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.updateTitleLocked()
+}
+
+// The tray starts before the main window exists. Reapply its latest state once
+// Wails has created the window, even if no voice state has changed since then.
+func trayRefreshWindowIcon() {
+	if trayCtl == nil {
+		return
+	}
+	trayCtl.mu.Lock()
+	defer trayCtl.mu.Unlock()
+	if err := setTaskbarIcon(trayCtl.last.icon); err != nil {
+		log.Printf("taskbar icon: %v", err)
+	}
 }
 
 type trayPresentation struct {

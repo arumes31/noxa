@@ -209,6 +209,32 @@ func (s *Store) FindFileBySHA(ctx context.Context, channelID int64, sha256, excl
 	return &rec, nil
 }
 
+// FileContentUsage returns the bytes of a content hash already charged to a
+// channel and to one uploader in that channel. It matches the quota aggregates.
+func (s *Store) FileContentUsage(ctx context.Context, channelID int64, sha256, uploader string) (int64, int64, error) {
+	var channelBytes, uploaderBytes int64
+	const q = `SELECT COALESCE(MAX(size), 0),
+		COALESCE(MAX(size) FILTER (WHERE uploader = $3), 0)
+		FROM files WHERE channel_id = $1 AND sha256 = $2`
+	if err := s.db.QueryRowContext(ctx, q, channelID, sha256, uploader).Scan(&channelBytes, &uploaderBytes); err != nil {
+		return 0, 0, fmt.Errorf("querying content quota usage: %w", err)
+	}
+	return channelBytes, uploaderBytes, nil
+}
+
+// UploaderContentUsageExcept reports the uploader's remaining charge for a
+// content hash in a channel after excluding the named file being moved out.
+func (s *Store) UploaderContentUsageExcept(ctx context.Context, channelID int64, sha256, uploader, folder, name string) (int64, error) {
+	var size int64
+	const q = `SELECT COALESCE(MAX(size), 0) FROM files
+		WHERE channel_id = $1 AND sha256 = $2 AND uploader = $3
+		AND NOT (folder = $4 AND name = $5)`
+	if err := s.db.QueryRowContext(ctx, q, channelID, sha256, uploader, folder, name).Scan(&size); err != nil {
+		return 0, fmt.Errorf("querying remaining uploader content: %w", err)
+	}
+	return size, nil
+}
+
 // ChannelFileUsage returns the bytes a channel's files physically occupy
 // (265). Identical blobs inside a channel are hard-linked rather than stored
 // twice (275 dedup), so summing logical row sizes charges a deduped copy

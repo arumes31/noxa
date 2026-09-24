@@ -1,0 +1,68 @@
+#sidebar-scroll { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; }
+#sidebar-scroll #channel-tree { flex: none; overflow: visible; padding-bottom: 12px; }
+.group-sidebar { padding: 0 8px 16px; border-top: 1px solid var(--border); }
+.group-sidebar .sidebar-head { margin-inline: 6px; }
+.group-split { display: flex; flex-direction: column; overflow: hidden !important; }
+.group-split #channel-tree, #sidebar-scroll.group-split #channel-tree { flex: var(--channel-share) 1 0; min-height: 0; overflow-y: auto; padding-bottom: 0; box-sizing: border-box; }
+.group-split .group-sidebar { display: flex; flex-direction: column; flex: var(--group-share) 1 0; min-height: 0; padding-bottom: 0; border-top: 0; }
+.group-sidebar .sidebar-head { flex: none; display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.group-sidebar .sidebar-head h2 { margin: 0; min-width: 0; font: inherit; }
+.group-sidebar-body { min-height: 0; overflow-y: auto; padding-bottom: 12px; }
+.group-sidebar-body[hidden], .group-divider[hidden] { display: none; }
+.group-collapse { display: flex; align-items: center; gap: 6px; min-height: 32px; padding: 0; border: 0; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.group-collapse::before { content: ""; width: 6px; height: 6px; flex: none; border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor; transform: rotate(45deg); margin: 0 4px 3px 2px; }
+.group-collapse[aria-expanded=false]::before { transform: rotate(-45deg); margin-bottom: 0; }
+.group-divider { flex: 0 0 8px; cursor: row-resize; touch-action: none; position: relative; }
+.group-divider::after { content: ""; position: absolute; inset: 3px 8px; background: var(--border); border-radius: 2px; }
+.group-divider:hover::after, .group-divider:focus-visible::after, .group-split-dragging .group-divider::after { background: var(--accent); }
+.group-divider:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.group-split-dragging { user-select: none; cursor: row-resize; }
+.group-split.groups-collapsed .group-sidebar { flex: 0 0 auto; }
+.group-split-auto .group-sidebar { flex: 0 1 auto; max-height: 45%; }
+.group-split-auto #channel-tree, #sidebar-scroll.group-split-auto #channel-tree { flex: 1 1 0; }
+.group-create, .group-list, .group-content { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.group-create { margin: 8px 4px 12px; }
+.group-create[hidden], #private-groups[hidden] { display: none; }
+.group-list { gap: 3px; }
+.group-list-item { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 38px; padding: 9px 10px; border: 1px solid transparent; border-radius: 5px; background: transparent; color: var(--text); font: inherit; text-align: left; overflow-wrap: anywhere; }
+.group-list-item:hover { background: var(--bg-hover); }
+.group-list-item[aria-current=true] { background: color-mix(in srgb, var(--accent) 14%, transparent); border-color: color-mix(in srgb, var(--accent) 28%, transparent); color: var(--accent); }
+.group-unread { flex: none; margin-left: auto; border-radius: 10px; padding: 1px 6px; background: var(--accent); color: var(--bg); font-size: 11px; font-variant-numeric: tabular-nums; }
+.group-summary { display: flex; gap: 4px; margin-left: auto; font-size: 11px; }
+.group-summary > span { border-radius: 9px; padding: 1px 5px; background: var(--bg-hover); border: 1px solid var(--border); }
+.group-summary-unread { color: var(--accent); }
+.group-summary > [hidden], .group-list-item[hidden], .group-search-empty[hidden] { display: none; }
+.group-call-status { flex: none; margin-left: auto; font-size: 11px; color: var(--accent); }
+.group-sidebar-status, .group-search-empty { color: var(--muted); font-size: 12px; padding: 0 6px; overflow-wrap: anywhere; }
+#center.private-group-active > :is(#chat-head, #center-tabs, #voice-participants, #chat-pane, #files-pane) { display: none !important; }
+.group-workspace { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 12px; padding: 16px; }
+.group-navigation { display: flex; align-items: center; gap: 8px; }
+.group-navigation > :last-child { margin-left: auto; }
+.group-show-channels { display: none; }
+.group-header { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding-bottom: 12px; border-bottom: 1px solid var(--border); }
+.group-header h3 { flex: 1; margin: 0; min-width: 100px; overflow-wrap: anywhere; font: 600 1.3rem var(--font-body); }
+.group-content { flex: 1; min-height: 0; }
+.group-workspace button, .group-create button, .group-workspace input, .group-workspace textarea, .group-create input { border: 1px solid var(--border); border-radius: 5px; background: var(--bg-raised); color: var(--text); padding: 7px 10px; font: inherit; }
+.group-workspace button:hover, .group-create button:hover { border-color: var(--accent); }
+.group-workspace :focus-visible, .group-sidebar :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.group-workspace button:disabled { opacity: .5; cursor: default; }
+.group-privacy, .group-status, .group-empty { font-size: 12px; color: var(--muted); margin: 0; }
+.group-mute { font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 6px; }
+.group-members { max-height: 180px; overflow: auto; flex-shrink: 0; font-size: .9rem; }
+.group-members summary { padding-block: 6px; cursor: pointer; }
+.group-member, .group-invite, .group-actions { display: flex; gap: 8px; align-items: center; margin-top: 8px; }
+.group-member span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.group-invite input { flex: 1; min-width: 0; }
+.group-messages { flex: 1; min-height: 80px; overflow: auto; padding: 12px 4px; }
+.group-message { margin-bottom: 16px; overflow-wrap: anywhere; }
+.group-message time { margin-left: 8px; color: var(--muted); font-size: 11px; }
+.group-message p { white-space: pre-wrap; margin: 4px 0; line-height: 1.5; }
+.group-composer { display: flex; gap: 8px; margin-top: auto; }
+.group-composer textarea { flex: 1; min-width: 0; resize: vertical; max-height: 120px; }
+.group-composer button { align-self: end; color: var(--accent); }
+@media (max-width: 720px) {
+    .group-workspace { padding: 12px; }
+    .group-show-channels { display: inline-flex; }
+    .group-member { flex-wrap: wrap; }
+    .group-member span { flex-basis: 100%; }
+}

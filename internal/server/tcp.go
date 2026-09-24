@@ -24,12 +24,15 @@ import (
 	"go.uber.org/zap"
 
 	"noxa/internal/auth"
+	"noxa/internal/authorization"
 	"noxa/internal/chatcrypto"
 	"noxa/internal/config"
+	"noxa/internal/filetransfer"
 	"noxa/internal/metrics"
 	"noxa/internal/netproto"
 	"noxa/internal/state"
 	"noxa/internal/tlscert"
+	"noxa/internal/webrtc"
 )
 
 // Error codes sent in MsgError frames.
@@ -51,21 +54,31 @@ type Client struct {
 	UniqueID string // TS3-style unique ID, once authenticated
 	UserID   int64  // database users.id, once authenticated
 
-	mu     sync.RWMutex
-	authed bool
-	admin  bool
+	mu                 sync.RWMutex
+	authed             bool
+	revoked            bool   // role-mode removal closes protected work before socket cleanup
+	disconnectCleaned  bool   // membership/media cleanup is idempotent
+	bot                bool   // authenticated account metadata, not a capability
+	authorizationModel string // negotiated before any authentication path
 	// rulesPending gates a session that still owes the operator's rules an
 	// answer (215). It is per connection, not per account, because a guest
 	// has no users row to record an acceptance against.
 	rulesPending bool
+	// The authentication snapshot covers updates before queue registration.
+	// A pending delivery deadline covers both queue residence and socket writes.
+	mediaLimitsReady           bool
+	mediaLimitsPending         uint64
+	mediaLimitsTimer           *time.Timer
+	mediaLimitsTimerGeneration uint64
 
 	// Activity and connection stats (Client Info dialog).
-	lastActive time.Time // last received frame
-	bytesIn    int64     // payload bytes received
-	bytesOut   int64     // payload bytes sent
-	lastPingAt time.Time // last server-initiated Ping sent
-	rttNs      int64     // smoothed RTT in nanoseconds (EWMA)
-	rttKnown   bool      // whether any Pong was received
+	lastActive     time.Time // last received frame
+	lastPositionAt time.Time // last accepted positional metadata update
+	bytesIn        int64     // payload bytes received
+	bytesOut       int64     // payload bytes sent
+	lastPingAt     time.Time // last server-initiated Ping sent
+	rttNs          int64     // smoothed RTT in nanoseconds (EWMA)
+	rttKnown       bool      // whether any Pong was received
 
 	// Pending challenge-response handshake state (set on Authenticate without
 	// a password, consumed by AuthSignature).
@@ -80,40 +93,51 @@ type Client struct {
 	// to, hence the separate field.
 	x25519Key string
 
-	wmu sync.Mutex // serializes frame writes to Conn
+	wmu contextMutex // serializes frame writes to Conn
+	// Role-mode member operations lock after acquiring the policy lease, so
+	// a concurrent move cannot change the scope checked by a moderation action.
+	// Packet writes share read leases; scope mutations retain exclusive access.
+	roleActionMu sync.RWMutex
 }
 
 // isAuthed reports whether the client has completed authentication.
 func (c *Client) isAuthed() bool {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	return c.authed
+	return c.authed && !c.revoked
 }
 
-// isAdmin reports whether the client authenticated as a server admin.
-func (c *Client) isAdmin() bool {
+func (c *Client) sessionRevoked() bool { c.mu.RLock(); defer c.mu.RUnlock(); return c.revoked }
+
+func (c *Client) revokeSession() { c.mu.Lock(); defer c.mu.Unlock(); c.revoked = true }
+
+func (c *Client) needsDisconnectCleanup() bool {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	return c.admin
+	return c.authed && !c.disconnectCleaned
+}
+
+func (c *Client) markDisconnectCleaned() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.disconnectCleaned = true
+	c.mediaLimitsReady = false
+	c.mediaLimitsPending = 0
+	if c.mediaLimitsTimer != nil {
+		c.mediaLimitsTimer.Stop()
+		c.mediaLimitsTimer = nil
+	}
 }
 
 // setIdentity atomically records the authenticated identity on the client.
-func (c *Client) setIdentity(uniqueID, nickname string, userID int64, admin bool) {
+func (c *Client) setIdentity(uniqueID, nickname string, userID int64, bot bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.UniqueID = uniqueID
 	c.Username = nickname
 	c.UserID = userID
-	c.admin = admin
+	c.bot = userID != 0 && bot
 	c.authed = true
-}
-
-// promote records the durable identity created by a guest token redemption.
-func (c *Client) promote(userID int64, admin bool) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.UserID = userID
-	c.admin = c.admin || admin
 }
 
 func (c *Client) userID() int64 {
@@ -252,10 +276,24 @@ func (c *Client) takeChallenge(uniqueID string) ([]byte, string, bool) {
 
 // TCPServer accepts and serves control-channel connections.
 type TCPServer struct {
-	cfg      *config.Config
-	logger   *zap.Logger
-	deps     *Deps
-	configMu sync.RWMutex
+	privateCallsMu        sync.Mutex
+	privateCalls          map[string]netproto.CallSession
+	privateCallByClient   map[string]string
+	privateCallDirty      map[string]bool
+	roleRecordingOwners   sync.Map   // channel ID -> initiating registered user ID
+	roleRevokedRecordings sync.Map   // channel IDs awaiting cleanup; tap delivery is denied
+	roleRecordingMu       sync.Mutex // serialize recording start/stop and ownership publication
+	// Order: Authority, roleMetadataMu, client roleActionMu, backend locks.
+	// SDP metadata must not cross membership/status changes. Packet delivery
+	// does not acquire this mutex, so a slow SDP reader cannot stall all audio.
+	roleMetadataMu      sync.Mutex
+	cfg                 *config.Config
+	logger              *zap.Logger
+	deps                *Deps
+	configMu            sync.RWMutex
+	configSaveMu        contextMutex // persistence, runtime publication and audit order
+	mediaLimitsRevision uint64       // protected with cfg's media fields by configMu
+	serverTextMu        contextMutex // text edits and join-time re-seal write-back
 
 	// lifecycleMu protects the listener lifecycle, raw accepted-connection
 	// registry, and every connWG.Add. Shutdown transitions to stopping while
@@ -300,18 +338,18 @@ type TCPServer struct {
 
 	// Chat infrastructure (wave 5a): rate limiter, spam tracker, slow-mode
 	// tracker, and the memoised runtime moderation lists (117/118).
-	chatRate     *chatRateLimiter
-	chatSpam     *spamTracker
-	chatSlow     *slowTracker
-	typingRate   *typingTracker
-	chatFilters  *chatFilterCache
-	pokes        pokeTracker
-	beforeHandle func()
-	afterAccept  func()
+	chatRate             *chatRateLimiter
+	callSignalRate       *chatRateLimiter
+	conversationReadRate *chatRateLimiter
+	chatSpam             *spamTracker
+	chatSlow             *slowTracker
+	typingRate           *typingTracker
+	chatFilters          *chatFilterCache
+	pokes                pokeTracker
+	beforeHandle         func()
+	afterAccept          func()
 
 	loginLimiter *auth.LoginFailureLimiter
-
-	permWriteMu sync.Mutex
 
 	mu      sync.RWMutex
 	clients map[string]*Client
@@ -380,24 +418,44 @@ func New(cfg *config.Config, logger *zap.Logger, deps *Deps) *TCPServer {
 		rotationAfter: func(delay time.Duration, callback func()) {
 			time.AfterFunc(delay, callback)
 		},
-		chatRate:     newChatRateLimiter(cfg.ChatRateMsgs, time.Duration(cfg.ChatRateWindowSeconds)*time.Second),
-		chatSpam:     newSpamTracker(),
-		chatSlow:     newSlowTracker(),
-		typingRate:   newTypingTracker(),
-		loginLimiter: loginLimiter,
+		chatRate:             newChatRateLimiter(cfg.ChatRateMsgs, time.Duration(cfg.ChatRateWindowSeconds)*time.Second),
+		callSignalRate:       newChatRateLimiter(32, time.Second),
+		conversationReadRate: newChatRateLimiter(32, time.Second),
+		chatSpam:             newSpamTracker(),
+		chatSlow:             newSlowTracker(),
+		typingRate:           newTypingTracker(),
+		loginLimiter:         loginLimiter,
 
 		chatFilters: &chatFilterCache{},
 	}
 	// Install the voice pipeline callbacks (talk/video permission gates,
 	// speaking-state announcements, and renegotiation offer delivery).
+	if deps != nil && deps.Authority != nil && deps.FileTransfer != nil {
+		deps.FileTransfer.SetAccessGuard(s.guardRoleFileTransfer)
+	}
 	if deps != nil && deps.Voice != nil {
 		deps.Voice.SetHandlers(s.canTalk, s.onSpeakingChanged)
 		deps.Voice.SetVideoHandlers(s.canPublishVideo)
+		if deps.Authority != nil {
+			deps.Voice.SetMediaGuard(s.guardRoleMedia)
+			deps.Voice.SetPublisherGuard(func(webrtc.PublisherAccess) bool { return false })
+			deps.Voice.SetOfferGuard(func(clientID string, send func() error) error {
+				client, ok := s.clientByID(clientID)
+				if !ok {
+					return authorization.ErrRoleForbidden
+				}
+				return s.withRoleChannelControl(context.Background(), client, authorization.Connect, true, func(ctx context.Context, _ int64) error {
+					s.refreshRolePublishers(ctx.Value(roleLeaseKey{}).(roleLease).evaluator)
+					return send()
+				})
+			})
+		}
 		deps.Voice.SetOfferSender(func(clientID, offerSDP string) error {
 			client, ok := s.clientByID(clientID)
 			if !ok {
 				return errors.New("client not connected")
 			}
+			// OfferGuard already holds the current policy and membership lease.
 			return s.writeMessage(client, netproto.MsgWebRTCOffer, netproto.WebRTCOffer{SDP: offerSDP})
 		})
 	}
@@ -773,6 +831,13 @@ func (s *TCPServer) handleConn(ctx context.Context, conn net.Conn) {
 	}
 	s.register(client)
 	defer func() {
+		if s.deps != nil && s.deps.Authority != nil {
+			// Keep the session discoverable until serialized cleanup marks it
+			// revoked; account bans must also find connections already closing.
+			s.onDisconnect(client)
+			s.unregister(client.ID)
+			return
+		}
 		s.unregister(client.ID)
 		s.onDisconnect(client)
 	}()
@@ -873,18 +938,25 @@ func (s *TCPServer) dispatch(ctx context.Context, client *Client, f *netproto.Fr
 	if client.rulesBlocked() && !allowedWhileRulesPending[mt] {
 		return s.sendErrorFor(client, mt, errCodePermissionDenied, "accept the server rules before continuing")
 	}
-
 	switch mt {
+	case netproto.MsgRoleChannelQuery:
+		return s.handleRoleChannelQuery(ctx, client, f)
+	case netproto.MsgRoleChannelChange:
+		return s.handleRoleChannelChange(ctx, client, f)
+	case netproto.MsgRoleQuery:
+		return s.rolePolicyRead(ctx, client, func(ctx context.Context) error { return s.handleRoleQuery(ctx, client, f) })
+	case netproto.MsgRoleMemberQuery:
+		return s.rolePolicyRead(ctx, client, func(ctx context.Context) error { return s.handleRoleMembers(ctx, client, f) })
+	case netproto.MsgRoleChange:
+		return s.handleRoleChange(ctx, client, f)
+	case netproto.MsgAccessCheck:
+		return s.rolePolicyRead(ctx, client, func(ctx context.Context) error { return s.handleAccessCheck(ctx, client, f) })
+	case netproto.MsgChannelAccessPreview:
+		return s.rolePolicyRead(ctx, client, func(ctx context.Context) error { return s.handleChannelAccessPreview(ctx, client, f) })
 	case netproto.MsgAuthenticate:
 		return s.handleAuthenticate(ctx, client, f)
 	case netproto.MsgAuthSignature:
 		return s.handleAuthSignature(ctx, client, f)
-	case netproto.MsgCreateChannel:
-		return s.handleCreateChannel(ctx, client, f)
-	case netproto.MsgChannelEdit:
-		return s.handleChannelEdit(ctx, client, f)
-	case netproto.MsgDeleteChannel:
-		return s.handleDeleteChannel(ctx, client, f)
 	case netproto.MsgJoinChannel:
 		return s.handleJoinChannel(ctx, client, f)
 	case netproto.MsgMoveClient:
@@ -895,6 +967,8 @@ func (s *TCPServer) dispatch(ctx context.Context, client *Client, f *netproto.Fr
 		return s.handleChatSend(ctx, client, f)
 	case netproto.MsgWebRTCOffer:
 		return s.handleWebRTCOffer(ctx, client, f)
+	case netproto.MsgMemberVoiceSet:
+		return s.handleMemberVoiceSet(ctx, client, f)
 	case netproto.MsgWebRTCAnswer:
 		return s.handleWebRTCAnswer(ctx, client, f)
 	case netproto.MsgICECandidate:
@@ -905,6 +979,14 @@ func (s *TCPServer) dispatch(ctx context.Context, client *Client, f *netproto.Fr
 		return s.handlePositionUpdate(ctx, client, f)
 	case netproto.MsgVideoQuality:
 		return s.handleVideoQuality(ctx, client, f)
+	case netproto.MsgVideoStreamControl:
+		return s.handleVideoStreamControl(ctx, client, f)
+	case netproto.MsgPollRequest:
+		return s.handlePoll(ctx, client, f)
+	case netproto.MsgConversationRequest:
+		return s.handleConversation(ctx, client, f)
+	case netproto.MsgCallRequest:
+		return s.handlePrivateCall(ctx, client, f)
 	case netproto.MsgPrioritySpeaker:
 		return s.handlePrioritySpeaker(ctx, client, f)
 	case netproto.MsgRecordingControl:
@@ -943,14 +1025,10 @@ func (s *TCPServer) dispatch(ctx context.Context, client *Client, f *netproto.Fr
 		return s.handleChannelIconSet(ctx, client, f)
 	case netproto.MsgChannelIconGet:
 		return s.handleChannelIconGet(ctx, client, f)
-	case netproto.MsgTokenUse:
-		return s.handleTokenUse(ctx, client, f)
 	case netproto.MsgComplaint:
 		return s.handleComplaint(ctx, client, f)
 	case netproto.MsgScreenShare:
 		return s.handleScreenShare(ctx, client, f)
-	case netproto.MsgPermissionsQuery:
-		return s.handlePermissionsQuery(ctx, client, f)
 	case netproto.MsgKeyPublish:
 		return s.handleKeyPublish(ctx, client, f)
 	case netproto.MsgKeyRequest:
@@ -993,62 +1071,26 @@ func (s *TCPServer) dispatch(ctx context.Context, client *Client, f *netproto.Fr
 		return s.handleServerConfigQuery(ctx, client, f)
 	case netproto.MsgServerConfigSet:
 		return s.handleServerConfigSet(ctx, client, f)
+	case netproto.MsgMediaLimitsSet:
+		return s.handleMediaLimitsSet(ctx, client, f)
 	case netproto.MsgPreKeyPublish:
 		return s.handlePreKeyPublish(ctx, client, f)
 	case netproto.MsgPreKeyQuery:
 		return s.handlePreKeyQuery(ctx, client, f)
 	case netproto.MsgClientInfoQuery:
 		return s.handleClientInfoQuery(ctx, client, f)
-	case netproto.MsgGroupList:
-		return s.handleGroupList(ctx, client, f)
-	case netproto.MsgGroupCreate:
-		return s.handleGroupCreate(ctx, client, f)
-	case netproto.MsgGroupRename:
-		return s.handleGroupRename(ctx, client, f)
-	case netproto.MsgGroupDelete:
-		return s.handleGroupDelete(ctx, client, f)
-	case netproto.MsgGroupAssign:
-		return s.handleGroupAssign(ctx, client, f)
-	case netproto.MsgGroupUnassign:
-		return s.handleGroupUnassign(ctx, client, f)
-	case netproto.MsgGroupIconSet:
-		return s.handleGroupIconSet(ctx, client, f)
-	case netproto.MsgPermSet:
-		return s.handlePermSet(ctx, client, f)
-	case netproto.MsgPermList:
-		return s.handlePermList(ctx, client, f)
-	case netproto.MsgPermUnset:
-		return s.handlePermUnset(ctx, client, f)
-	case netproto.MsgPermTemplateApply:
-		return s.handlePermTemplateApply(ctx, client, f)
-	case netproto.MsgPermTrace:
-		return s.handlePermTrace(ctx, client, f)
 	case netproto.MsgAuditLog:
 		return s.handleAuditLog(ctx, client, f)
-	case netproto.MsgGroupIconGet:
-		return s.handleGroupIconGet(ctx, client, f)
-	case netproto.MsgGroupMembers:
-		return s.handleGroupMembers(ctx, client, f)
-	case netproto.MsgServerAdminList:
-		return s.handleServerAdminList(ctx, client, f)
 	case netproto.MsgBanList:
 		return s.handleBanList(ctx, client, f)
-	case netproto.MsgBanRemove:
-		return s.handleBanRemove(ctx, client, f)
-	case netproto.MsgGroupEdit:
-		return s.handleGroupEdit(ctx, client, f)
-	case netproto.MsgPermCopy:
-		return s.handlePermCopy(ctx, client, f)
+	case netproto.MsgRoleBanRemove:
+		return s.handleRoleBanRemove(ctx, client, f)
+	case netproto.MsgRoleChannelIconSet:
+		return s.handleRoleChannelIconSet(ctx, client, f)
 	case netproto.MsgComplaintList:
 		return s.handleComplaintList(ctx, client, f)
 	case netproto.MsgComplaintClear:
 		return s.handleComplaintClear(ctx, client, f)
-	case netproto.MsgTokenList:
-		return s.handleTokenList(ctx, client, f)
-	case netproto.MsgTokenAdd:
-		return s.handleTokenAdd(ctx, client, f)
-	case netproto.MsgTokenDelete:
-		return s.handleTokenDelete(ctx, client, f)
 	case netproto.MsgServerRulesAccept:
 		return s.handleServerRulesAccept(ctx, client, f)
 	case netproto.MsgChannelSubscribe:
@@ -1134,24 +1176,58 @@ func (s *TCPServer) pingLoop(client *Client, stop <-chan struct{}) {
 // departure to the remaining clients, and trigger the temp-channel cleanup
 // check for the channel it left.
 func (s *TCPServer) onDisconnect(client *Client) {
-	if !client.isAuthed() || s.deps == nil {
+	if !client.needsDisconnectCleanup() || s.deps == nil {
 		return
+	}
+	if s.deps.Authority != nil && s.deps.FileTransfer != nil {
+		s.deps.FileTransfer.RevokeTransfers(func(p filetransfer.Principal, _ int64, _ string) bool {
+			return p.SessionID != client.ID
+		})
 	}
 
 	var channelID int64
 	var wasInvisible bool
-	if s.deps.State != nil {
-		var removed *state.Client
-		if s.deps.Channels != nil {
-			removed, _ = s.deps.Channels.RemoveClient(client.ID)
-		} else {
-			removed, _ = s.deps.State.RemoveClient(client.ID)
+	var alreadyCleaned bool
+	func() {
+		if s.deps.Authority != nil {
+			s.roleMetadataMu.Lock()
+			defer s.roleMetadataMu.Unlock()
+			client.roleActionMu.Lock()
+			defer client.roleActionMu.Unlock()
 		}
-		if removed != nil {
-			channelID = removed.ChannelID
-			wasInvisible = removed.Status == "invisible"
+		if !client.needsDisconnectCleanup() {
+			alreadyCleaned = true
+			return
 		}
+		if s.deps.Authority != nil {
+			client.revokeSession()
+			s.unregister(client.ID)
+		}
+		if s.deps.State != nil {
+			var removed *state.Client
+			if s.deps.Channels != nil {
+				removed, _ = s.deps.Channels.RemoveClient(client.ID)
+			} else {
+				removed, _ = s.deps.State.RemoveClient(client.ID)
+			}
+			if removed != nil {
+				channelID = removed.ChannelID
+				wasInvisible = removed.Status == "invisible"
+			}
+		}
+		// Remove voice metadata in the same membership critical section. Key
+		// rotation below acquires Authority and must run after releasing it.
+		if s.deps.Voice != nil {
+			if err := s.deps.Voice.ClosePeer(client.ID); err != nil {
+				s.logger.Warn("voice session teardown failed", zap.String("client_id", client.ID), zap.Error(err))
+			}
+		}
+		client.markDisconnectCleaned()
+	}()
+	if alreadyCleaned {
+		return
 	}
+	s.disconnectPrivateCall(client.ID)
 
 	if s.deps.Broadcast != nil {
 		s.deps.Broadcast.Unregister(client.ID)
@@ -1177,15 +1253,6 @@ func (s *TCPServer) onDisconnect(client *Client) {
 		s.rotateScopeKey(context.Background(), channelID)
 	}
 
-	// Tear down the client's voice session (peer connection, router state).
-	if s.deps.Voice != nil {
-		if err := s.deps.Voice.ClosePeer(client.ID); err != nil {
-			s.logger.Warn("voice session teardown failed",
-				zap.String("client_id", client.ID),
-				zap.Error(err),
-			)
-		}
-	}
 }
 
 // --- helpers ---------------------------------------------------------------
@@ -1203,17 +1270,47 @@ func (s *TCPServer) metricsSink() metrics.Sink {
 // Writes are serialized per client so handler replies and broadcast events
 // never interleave on the wire.
 func (s *TCPServer) writeMessage(client *Client, mt netproto.MessageType, msg any) error {
+	return s.writeMessageInContext(context.Background(), client, mt, msg)
+}
+
+func (s *TCPServer) writeMessageInContext(ctx context.Context, client *Client, mt netproto.MessageType, msg any) error {
 	frame, err := netproto.Encode(mt, msg)
 	if err != nil {
 		return err
 	}
-	return s.writeFrame(client, frame)
+	return s.writeFrameInContext(ctx, client, frame)
 }
 
-// writeFrame writes a raw frame to the client under the per-client write lock.
-func (s *TCPServer) writeFrame(client *Client, frame *netproto.Frame) error {
-	client.wmu.Lock()
+func (s *TCPServer) writeFrameInContext(ctx context.Context, client *Client, frame *netproto.Frame) error {
+	if err := client.wmu.LockContext(ctx); err != nil {
+		return err
+	}
 	defer client.wmu.Unlock()
+	return s.writeFrameLocked(ctx, client, frame)
+}
+
+// writeFrameLocked requires client.wmu. Authentication takes that lock before
+// reading its configuration baseline, so queued updates cannot overtake it.
+func (s *TCPServer) writeFrameLocked(ctx context.Context, client *Client, frame *netproto.Frame) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	// Explicit operation/reply deadlines also apply in legacy mode. Role-mode
+	// writes additionally have a five-second ceiling so they cannot hold an
+	// authorization lease indefinitely and prevent revocation.
+	deadline, _ := ctx.Deadline()
+	if s.deps != nil && s.deps.Authority != nil {
+		ceiling := time.Now().Add(5 * time.Second)
+		if deadline.IsZero() || ceiling.Before(deadline) {
+			deadline = ceiling
+		}
+	}
+	if !deadline.IsZero() {
+		if err := client.Conn.SetWriteDeadline(deadline); err != nil {
+			return err
+		}
+		defer func() { _ = client.Conn.SetWriteDeadline(time.Time{}) }()
+	}
 	if err := netproto.WriteFrame(client.Conn, frame); err != nil {
 		s.logger.Warn("write error",
 			zap.String("client_id", client.ID),

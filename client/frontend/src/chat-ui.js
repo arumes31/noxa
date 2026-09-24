@@ -8,8 +8,14 @@
 // join/leave collapsing (131), announcement banner (132), MOTD (133), scroll
 // lock (134) and the Ctrl+K quick switcher (135).
 //
-// Threads prefer the protocol reply_to_id field. The legacy quote-prefix
-// resolver remains for history written by older clients.
+// Replies and direct recipients use explicit protocol identities.
+import { resolveParent, directPeer } from "./chat-relations.js";
+import { roleMentionChoices, roleMentionLabel, mentionFlags } from "./role-mentions.js";
+import { createPoll, renderPoll } from "./polls.js";
+import { parsePoll } from "./poll-state.js";
+import { closeConversations, initConversations, isPrivateGroupActive, resetConversations } from "./conversations.js";
+import { sessionUserID } from "./session-identity.js";
+import { chatEnglish } from "./chat-messages.js";
 import { renderMarkdown, escapeHTML, EMOJI } from "./markdown.js";
 import { pickIcon } from "./image-tools.js";
 import { closeDialog, confirmDialog, isCurrentServerDialog, mountServerDialog, promptDialog } from "./modal.js";
@@ -19,10 +25,24 @@ import { parseFileRef, transformCustomEmoji } from "./chat-parsers.js";
 import { captureScope, scopeIsCurrent } from "./scoped-actions.js";
 import { t } from "./i18n.js";
 import { icon } from "./icons.js";
+import { copyToClipboard } from "./clipboard.js";
 import { avatarColor } from "./workspace-ui.js";
 
 const V = () => window.__noxa;
 const $ = (id) => document.getElementById(id);
+
+let composerLimit = null;
+function updateComposerCount() {
+    const input = $("chat-text"), counter = $("chat-length");
+    if (!input || !counter) return;
+    const text = input.value.trim();
+    const bytes = new TextEncoder().encode(text).length;
+    const limit = composerLimit && chatServerIsCurrent(composerLimit.scope) && $("chat-scope").value !== "direct" ? composerLimit.bytes : 0;
+    counter.hidden = text.length === 0;
+    counter.textContent = t(limit > 0 ? "wins.messageLimit" : "wins.characters", { count: [...text].length, bytes, limit });
+    counter.title = t("wins.limitNote");
+    counter.classList.toggle("warn", limit > 0 && bytes >= limit * 0.9);
+}
 const app = () => window.go.main.App;
 
 const PAGE = 50; // history page size (103)
@@ -44,6 +64,7 @@ const unread = new Map(); // channelID -> {n, mention}
 const pmTabs = new Map(); // uid -> {uid, nick, unread, offline, pendingRead}
 const chanTabs = new Map(); // channelID -> {id}; derived from SubscriptionState
 let pendingChannelTab = 0; // activate only after the server confirms subscription
+let channelTabRequest = 0;
 const receipts = new Map(); // clientMsgID -> "delivered" | "read"
 const myReactions = new Map(); // messageID -> Set(emoji) I toggled this session.
 // NOTE (97): history only carries reaction COUNTS, not who reacted, so the
@@ -52,17 +73,26 @@ const myReactions = new Map(); // messageID -> Set(emoji) I toggled this session
 let atBottom = true;
 let newCount = 0;
 let replyTo = null; // message object being replied to (107)
+let replyRevision = 0;
+let draftRevision = 0;
+let activeSend = null;
 let pendingFiles = []; // {name, dataBase64, isImage, dataURL} staged for send (98/100)
-let lastDMTarget = ""; // last unique ID we sent a DM to (echo routing)
 let emojiPanel = null; // open emoji panel element (95)
 let pinsPanel = null; // open pins panel element (109)
+let pinsRequest = 0;
 let searchQ = ""; // live search filter (110)
+let chatViewGeneration = 0;
+let activeSearch = null;
+let searchResultsPanel = null;
+let activeExport = null;
+let exportAttempt = 0;
 let threadPanel = null; // open thread panel element (108)
 let threadRootID = 0; // root message id the thread panel is showing (108)
 
 // Pinned message ids per store key (109). Loaded once per scope alongside
 // history so the 📌 hover button can actually toggle instead of only pinning.
 const pinnedIDs = new Map(); // store key -> Set(messageID)
+const pendingPinChanges = new Map(); // per-ID events received during an initial pin read
 
 // Typing indicators (120): store key -> Map(uniqueID -> {nick, expires}).
 const typers = new Map();
@@ -81,9 +111,9 @@ let customDirty = true;
 const emojiURLs = new Map(); // name -> dataURL | "" (failed)
 const builtInEmoji = [...new Set(Object.values(EMOJI))];
 const EMOJI_CATS = [
-    ["Faces", builtInEmoji.slice(0, 30)],
-    ["Reactions", builtInEmoji.slice(30, 49)],
-    ["Objects & symbols", builtInEmoji.slice(49)],
+    ["chat.faces", builtInEmoji.slice(0, 30)],
+    ["chat.reactions", builtInEmoji.slice(30, 49)],
+    ["chat.objectsSymbols", builtInEmoji.slice(49)],
 ];
 
 // Offline-DM toast batching (123).
@@ -96,6 +126,11 @@ let reconnectAnnouncementUntil = 0;
 // its store once per session, and a write failure is reported once rather than
 // per message.
 let dmPersistWarned = false;
+let dmGeneration = 0;
+let dmRestoreAttempt = null;
+let dmOwner = null;
+let dmIdentityRevision = 0n;
+const closedDMPeers = new Set();
 
 // DM_RESTORE_TABS caps how many stored conversations get a tab back on
 // connect. The bar is a single wrapped row, so restoring 200 peers would bury
@@ -141,6 +176,8 @@ function readExportScope() {
     const exportView = view;
     return {
         generation: V().state.serverGeneration,
+        tabID: V().state.activeTabID,
+        viewGeneration: chatViewGeneration,
         kind: exportView.kind,
         channelID: exportView.kind === "global" ? 0 : (activeChannelID() || 0),
         uid: exportView.kind === "dm" ? exportView.uid : "",
@@ -151,9 +188,143 @@ function exportScopeIsCurrent(scope) {
     return scopeIsCurrent(scope, readExportScope);
 }
 
+function readChatServerScope() {
+    return { generation: V().state.serverGeneration, tabID: V().state.activeTabID };
+}
+
+function chatServerIsCurrent(scope) {
+    return scopeIsCurrent(scope, readChatServerScope);
+}
+
+function readDMHistoryScope() {
+    return { ...readChatServerScope(), dmGeneration };
+}
+
+function dmHistoryScopeIsCurrent(scope) {
+    return scopeIsCurrent(scope, readDMHistoryScope);
+}
+
+function dmRevision(value) {
+    if (typeof value !== "string" || !/^(0|[1-9]\d{0,19})$/.test(value)) return null;
+    const revision = BigInt(value);
+    return revision <= 18446744073709551615n ? revision : null;
+}
+
+function dmOwnerIsCurrent(owner) {
+    return owner === dmOwner && dmHistoryScopeIsCurrent(owner.scope);
+}
+
+function getDMOwner() {
+    if (dmOwner && dmOwnerIsCurrent(dmOwner)) return dmOwner;
+    const owner = { scope: captureScope(readDMHistoryScope), revision: dmIdentityRevision, context: null };
+    dmOwner = owner;
+    // Handle acquisition failure immediately, even if no conversation is open.
+    owner.ready = (async () => {
+        try {
+            const context = await app().DMHistoryContextForTab(owner.scope.tabID || "");
+            if (!dmOwnerIsCurrent(owner)) throw new Error("DM history owner changed");
+            const revision = dmRevision(context?.identity_revision);
+            if (!context || context.tab_id !== (owner.scope.tabID || "") || typeof context.identity_uid !== "string" || !context.identity_uid ||
+                dmRevision(context.activation) === null || revision === null) throw new Error("DM history context unavailable");
+            if (revision !== owner.revision) {
+                // A getter can enter native code after a switch but before its
+                // notification. Start a new owner; never bless its old actions.
+                if (revision > dmIdentityRevision) onDMIdentityChanged(context.identity_revision);
+                throw new Error("DM history owner changed");
+            }
+            owner.context = Object.freeze({ ...context });
+            V().state.myUniqueID = context.identity_uid;
+            return { context: owner.context };
+        } catch (error) {
+            owner.failed = true;
+            return { error };
+        }
+    })();
+    return owner;
+}
+
+function callDMHistory(owner, method, ...args) {
+    const invoke = context => {
+        if (!dmOwnerIsCurrent(owner)) throw new Error("DM history owner changed");
+        return app()[method](context, ...args);
+    };
+    if (owner.context) {
+        try { return Promise.resolve(invoke(owner.context)); } catch (error) { return Promise.reject(error); }
+    }
+    return owner.ready.then(result => {
+        if (result.error) throw result.error;
+        return invoke(result.context);
+    });
+}
+
+function resetDMOwner() {
+    dmGeneration++;
+    dmOwner = null;
+    dmRestoreAttempt = null;
+    dmPersistWarned = false;
+    closedDMPeers.clear();
+}
+
+function onDMIdentityChanged(value) {
+    const revision = dmRevision(value);
+    if (revision === null || revision <= dmIdentityRevision) return;
+    dmIdentityRevision = revision;
+    resetDMHistoryView();
+}
+
+function resetDMHistoryView() {
+    resetDMOwner();
+    pmTabs.clear();
+    for (const key of store.keys()) if (key.startsWith("dm:")) store.delete(key);
+    for (const key of typers.keys()) if (key.startsWith("dm:")) typers.delete(key);
+    for (const batch of offlineBatch.values()) if (batch.timer) clearTimeout(batch.timer);
+    offlineBatch.clear();
+    receipts.clear();
+    closeQS();
+    if (view.kind === "dm") {
+        $("chat-scope").value = "channel";
+        V().setDirectTargetVisible(false);
+        resetNewCount();
+        setView({ kind: "channel" });
+    } else renderTabs();
+    void restorePMTabs();
+}
+
+function cancelChatSearch() {
+    activeSearch?.unsubscribe?.();
+    activeSearch = null;
+    const button = $("chat-search-server");
+    if (button) { button.disabled = false; button.textContent = t("polish.searchAll"); }
+    if (searchResultsPanel) closeDialog(searchResultsPanel);
+}
+
+function invalidateChatViewWork() {
+    $("chat-send-error").classList.add("hidden");
+    chatViewGeneration++;
+    exportAttempt++;
+    cancelChatSearch();
+    activeExport?.progress.close();
+    closePinsPanel();
+    closeReactStrip();
+    activeSend = null;
+    $("chat-send").disabled = false;
+    pendingFiles = [];
+    renderFilePreview();
+    clearReply();
+    resetTypingOut();
+}
+
+function scanProgressCount(data, requestID) {
+    const progress = parseRuntimeObject(data);
+    return progress?.request_id === requestID && Number.isSafeInteger(progress.scanned) && progress.scanned >= 0
+        ? progress.scanned : null;
+}
+
 function readAttachmentSaveScope(channelID) {
     return {
         generation: V().state.serverGeneration,
+        tabID: V().state.activeTabID,
+        viewGeneration: chatViewGeneration,
         channelID,
         viewKey: activeKey(),
     };
@@ -178,7 +349,7 @@ function chatSurfaceVisible(key) {
     const workspace = document.getElementById("app");
     const chatTab = document.getElementById("tab-chat");
     const chatPane = document.getElementById("chat-pane");
-    return key === activeKey() && document.visibilityState === "visible" && document.hasFocus() &&
+    return !isPrivateGroupActive() && key === activeKey() && document.visibilityState === "visible" && document.hasFocus() &&
         workspace && !workspace.classList.contains("hidden") && workspace.getAttribute("aria-hidden") !== "true" &&
         chatTab?.getAttribute("aria-selected") === "true" && !chatPane?.hidden;
 }
@@ -259,6 +430,7 @@ function normalize(d, chID) {
         deleted: !!d.deleted,
         reactions: d.reactions || null,
         mentions: d.mentions || [],
+        role_mentions: d.role_mentions || [],
         e2e: !!d.e2e,
         direct: !!d.direct || !!d.e2e,
         // enc_verified is set by the Go layer after it opened the body itself:
@@ -343,14 +515,11 @@ function hashStr(s) {
 // they do, so the same gate applies to all three.
 const MENTION_ALL_FORMS = ["channel", "here", "everyone"];
 
-// canMentionAll resolves b_chat_mention_all locally so the completer only
-// OFFERS the mass-mention forms to a user who may use them (105). The server
-// enforces the same key independently — this is UI, not security.
+// The server evaluates the role capability when the message is sent. The
+// completer stays discoverable because snapshots intentionally do not expose
+// the caller's full effective capability set.
 function canMentionAll() {
-    const st = V().state;
-    if (st.isAdmin) return true;
-    const e = st.myPerms?.get("b_chat_mention_all");
-    return !!e && e.value !== 0 && !e.negate;
+    return true;
 }
 
 function reEscape(s) {
@@ -381,7 +550,7 @@ function mentionsMe(text) {
 // markMentions wraps @tokens in the rendered body. It walks text nodes only,
 // so it can never introduce markup into user text.
 function markMentions(container) {
-    const re = mentionRe();
+    const re = new RegExp(mentionRe().source + "|<@&([1-9][0-9]{0,18})>", "gi");
     const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT);
     const nodes = [];
     while (walker.nextNode()) nodes.push(walker.currentNode);
@@ -395,7 +564,8 @@ function markMentions(container) {
         const tail = token.splitText(hit[0].length);
         const span = document.createElement("span");
         span.className = "mention-tok";
-        span.textContent = token.nodeValue;
+        span.textContent = hit[2] ? roleMentionLabel(V().state.clients, hit[2]) : token.nodeValue;
+        if (hit[2]) span.title = token.nodeValue;
         token.parentNode.replaceChild(span, token);
         nodes.unshift(tail); // a body can mention more than one name
     }
@@ -408,9 +578,10 @@ function markMentions(container) {
 async function ensureCustomEmoji() {
     if (!customDirty) return;
     const generation = V().state.serverGeneration;
+    const tabID = V().state.activeTabID;
     customDirty = false;
     try {
-        const r = await app().EmojiList();
+        const r = await app().EmojiListForTab(tabID);
         if (generation !== V().state.serverGeneration) return;
         customEmoji = r.emojis || [];
     } catch {
@@ -422,9 +593,10 @@ async function ensureCustomEmoji() {
 async function emojiURL(name) {
     if (emojiURLs.has(name)) return emojiURLs.get(name);
     const generation = V().state.serverGeneration;
+    const tabID = V().state.activeTabID;
     emojiURLs.set(name, ""); // marks "loading/failed until proven otherwise"
     try {
-        const d = await app().EmojiGet(name);
+        const d = await app().EmojiGetForTab(tabID, name);
         if (generation !== V().state.serverGeneration) return "";
         const u = imageDataURL(d);
         if (!u) return "";
@@ -463,13 +635,7 @@ const UNOPENED_BODIES = new Set([
 
 // CHAT_ENCRYPTION_HELP is the single source for what the shield actually
 // promises, so the channel info panel and the README cannot drift apart.
-export const CHAT_ENCRYPTION_HELP =
-    "Channel and global messages are encrypted with a key the server holds, so it can " +
-    "apply moderation at send time but keeps no readable copy: history, pins and " +
-    "attachments are stored sealed. Direct messages are end-to-end encrypted and the " +
-    "server never holds their key. Search runs in this client over decrypted messages — " +
-    "the server cannot match on content. Attachments carry their own key inside the " +
-    "encrypted message body, so a file is exactly as private as the message that links it.";
+export const CHAT_ENCRYPTION_HELP = chatEnglish["chat.encryptionHelp"];
 
 function renderMsg(m) {
     const el = document.createElement("div");
@@ -478,7 +644,10 @@ function renderMsg(m) {
     if (m.mentioned) el.classList.add("mentioned");
     if (m.self) el.classList.add("own");
     if (m.id) el.dataset.msgId = m.id;
+    m.renderKey ||= m.id ? "message-" + m.id : m.clientMsgID ? "client-" + m.clientMsgID : crypto.randomUUID();
+    el.dataset.scrollKey = m.renderKey;
     el.dataset.ts = m.ts;
+    el.dataset.authorGroup = m.deleted || !m.fromUID ? "" : JSON.stringify([m.fromUID, m.from, m.self, m.direct, m.channelID, m.enc, m.e2e]);
     const avatar = document.createElement("span");
     avatar.className = "msg-avatar";
     avatar.setAttribute("aria-hidden", "true");
@@ -499,7 +668,7 @@ function renderMsg(m) {
 
     const tag = document.createElement("span");
     tag.className = "msg-tag";
-    tag.textContent = m.direct ? (m.offline ? "dm · offline" : "dm") : (m.channelID ? "channel" : "global");
+    tag.textContent = t(m.direct ? (m.offline ? "polish.offlineDirect" : "polish.direct") : (m.channelID ? "polish.channel" : "polish.global"));
     el.appendChild(tag);
 
     // (4b/91-135) lock semantics. A placeholder body means the message stayed
@@ -529,7 +698,7 @@ function renderMsg(m) {
     body.className = "msg-text";
     if (m.deleted) {
         body.classList.add("tombstone");
-        body.textContent = "message deleted";
+        body.textContent = t("polish.deleted");
     } else if (unopened) {
         const key = m.text === "[encrypted message — you do not have access]" ? "chat.noAccess"
             : m.text === "[refused: server sent plaintext history]" ? "chat.plaintextRefused"
@@ -543,7 +712,7 @@ function renderMsg(m) {
     if (m.edited && !m.deleted) {
         const em = document.createElement("span");
         em.className = "msg-edited";
-        em.textContent = "(edited)";
+        em.textContent = t("polish.edited");
         el.appendChild(em);
     }
 
@@ -570,14 +739,9 @@ function renderMsg(m) {
 // renderMarkdown (which escapes first); file names only ever go into
 // textContent or DOM properties, never raw HTML.
 function renderBody(container, m) {
-    let text = m.text;
-    let quoteNick = null;
-    const qm = text.match(/^↪ ([^\n:]{1,64}): /);
-    if (qm) {
-        quoteNick = qm[1];
-        text = text.slice(qm[0].length);
-    }
-    if (!quoteNick && m.replyToID) quoteNick = findMsg(m.replyToID)?.from || "message";
+    if (renderPoll(container, m)) return;
+    const text = m.text;
+    const quoteNick = m.replyToID ? (findMsg(m.replyToID)?.from || t("chat.replyMessage")) : null;
     const parts = text.split(/\[file:([^\]]+)\]/);
     let html = "";
     for (let i = 0; i < parts.length; i += 2) html += renderMarkdown(parts[i]);
@@ -587,7 +751,7 @@ function renderBody(container, m) {
         const q = document.createElement("span");
         q.className = "msg-quote";
         q.textContent = "↪ " + quoteNick + ":";
-        q.title = "jump to the quoted message";
+        q.title = t("chat.quoteJump");
         container.insertBefore(q, container.firstChild);
     }
     for (let i = 1; i < parts.length; i += 2) attachFileRef(container, m, parts[i]);
@@ -625,8 +789,8 @@ function attachFileRef(container, m, cap) {
     const inlineImage = IMAGE_EXTS.includes(ext);
     const inlineVideo = VIDEO_EXTS.includes(ext);
     if (inlineImage || inlineVideo) {
-        wrap.textContent = `loading ${inlineVideo ? "video" : "image"} ${name} …`;
-        app().DownloadChatAttachment(chID, ref.storage, ref.key).then((b64) => {
+        wrap.textContent = t(inlineVideo ? "chat.loadingVideo" : "chat.loadingImage", { name });
+        app().DownloadChatAttachmentForTab(previewScope.tabID, chID, ref.storage, ref.key).then((b64) => {
             // Check before touching the wrapper or constructing a renderer data
             // URL: a completed request belongs to the scope that launched it.
             if (!previewIsCurrent()) return;
@@ -639,7 +803,7 @@ function attachFileRef(container, m, cap) {
             // oversized media stays a download chip rather than wedging the
             // webview (100).
             if (b64.length > INLINE_MAX_B64) {
-                wrap.appendChild(downloadChip(chID, ref, name, " (too large to preview)"));
+                wrap.appendChild(downloadChip(chID, ref, name, t("chat.tooLargePreview")));
                 return;
             }
             const el = inlineVideo
@@ -663,17 +827,17 @@ function attachFileRef(container, m, cap) {
             const zoom = document.createElement("button");
             zoom.className = "media-zoom";
             zoom.textContent = "⤢";
-            zoom.title = "open " + name + " full size";
-            zoom.onclick = () => openLightbox(el);
+            zoom.title = t("chat.openFull", { name });
+            zoom.onclick = () => { if (previewIsCurrent()) openLightbox(el); };
             wrap.appendChild(zoom);
-            if (!inlineVideo) el.onclick = () => openLightbox(el); // controls own the click on a video
+            if (!inlineVideo) el.onclick = () => { if (previewIsCurrent()) openLightbox(el); }; // controls own the click on a video
         }).catch((err) => {
             if (!previewIsCurrent()) return;
             wrap.textContent = "";
             if (String(err).includes("too large to preview")) {
-                wrap.appendChild(downloadChip(chID, ref, name, " (too large to preview)"));
+                wrap.appendChild(downloadChip(chID, ref, name, t("chat.tooLargePreview")));
             } else {
-                wrap.textContent = "📎 " + name + " (download failed)";
+                wrap.textContent = "📎 " + name + t("chat.downloadFailed");
             }
         });
     } else {
@@ -687,19 +851,20 @@ function attachFileRef(container, m, cap) {
 // Go saves the decrypted bytes, so an attachment never becomes a base64 data
 // URL or plaintext buffer in the JavaScript download path.
 function downloadChip(chID, ref, name, suffix) {
+    const scope = captureScope(() => readAttachmentSaveScope(chID));
     const b = document.createElement("button");
     b.className = "file-chip";
     b.textContent = "📎 " + name + suffix;
-    b.title = "download " + name;
+    b.title = t("chat.downloadName", { name });
     b.onclick = async () => {
-        const scope = captureScope(() => readAttachmentSaveScope(chID));
+        if (!b.isConnected || b.disabled || !attachmentSaveScopeIsCurrent(scope)) return;
         b.disabled = true;
         try {
-            const path = await app().SaveChatAttachment(chID, ref.storage, ref.key, name);
+            const path = await app().SaveChatAttachmentForTab(scope.tabID, chID, ref.storage, ref.key, name);
             if (!attachmentSaveScopeIsCurrent(scope)) return;
-            if (path) V().toast("saved " + name);
+            if (path) V().toast(t("chat.saved", { name }));
         } catch (e) {
-            if (attachmentSaveScopeIsCurrent(scope)) V().toast("save failed: " + e, "warn");
+            if (attachmentSaveScopeIsCurrent(scope)) V().toast(t("chat.saveFailed", { error: String(e) }), "warn");
         } finally {
             if (attachmentSaveScopeIsCurrent(scope) && b.isConnected) b.disabled = false;
         }
@@ -732,6 +897,7 @@ function openLightbox(node) {
 const QUICK_REACTS = ["👍", "❤️", "😂", "😮", "😢", "🎉", "🔥", "👀"];
 
 function renderReacts(m) {
+    const scope = captureScope(readExportScope);
     const row = document.createElement("span");
     row.className = "msg-reacts";
     const rx = m.reactions || {};
@@ -741,9 +907,10 @@ function renderReacts(m) {
         chip.className = "react-chip";
         if (myReactions.get(m.id)?.has(emoji)) chip.classList.add("own");
         chip.textContent = `${emoji} ${count}`;
-        chip.title = "toggle your reaction";
+        chip.title = t("chat.reactionToggle");
         chip.onclick = (e) => {
             e.stopPropagation();
+            if (!exportScopeIsCurrent(scope)) return;
             toggleReaction(m, emoji);
         };
         row.appendChild(chip);
@@ -752,24 +919,11 @@ function renderReacts(m) {
 }
 
 async function toggleReaction(m, emoji) {
-    const err = await app().ChatReact(m.id, emoji);
-    if (err) {
-        V().toast("reaction failed: " + err, "warn");
-        return;
-    }
-    // Optimistic local toggle; the chat_reaction broadcast carries the new
-    // counts and re-syncs (including the own-highlight via `by`).
-    let set = myReactions.get(m.id);
-    if (!set) {
-        set = new Set();
-        myReactions.set(m.id, set);
-    }
-    if (set.has(emoji)) set.delete(emoji);
-    else set.add(emoji);
-    const rx = { ...(m.reactions || {}) };
-    rx[emoji] = Math.max(0, (rx[emoji] || 0) + (set.has(emoji) ? 1 : -1));
-    m.reactions = rx;
-    refreshReacts(m);
+    const scope = captureScope(readExportScope);
+    if (!await runChatMutation(scope, () => app().ChatReactForTab(scope.tabID, m.id, emoji), "reaction")) return;
+    if (!exportScopeIsCurrent(scope)) return;
+    // The authoritative event supplies counts and ownership, before or after
+    // the acknowledgement.
 }
 
 function refreshReacts(m) {
@@ -791,11 +945,15 @@ function closeReactStrip() {
 function openReactStrip(m, anchorEl) {
     closeReactStrip();
     reactStrip = document.createElement("div");
+    const strip = reactStrip;
+    const scope = captureScope(readExportScope);
+    const currentStrip = () => reactStrip === strip && exportScopeIsCurrent(scope);
     reactStrip.className = "react-strip";
     for (const emoji of QUICK_REACTS) {
         const b = document.createElement("button");
         b.textContent = emoji;
         b.onclick = () => {
+            if (!currentStrip()) return;
             closeReactStrip();
             toggleReaction(m, emoji);
         };
@@ -803,20 +961,23 @@ function openReactStrip(m, anchorEl) {
     }
     // Custom server emoji join the strip once loaded.
     ensureCustomEmoji().then(async () => {
-        if (!reactStrip) return;
+        if (!currentStrip()) return;
         for (const e of customEmoji.slice(0, 8)) {
+            if (!currentStrip()) return;
             const url = await emojiURL(e.name);
-            if (!url || !reactStrip) continue;
+            if (!currentStrip()) return;
+            if (!url) continue;
             const b = document.createElement("button");
             const img = document.createElement("img");
             img.src = url;
             img.alt = ":" + e.name + ":";
             b.appendChild(img);
             b.onclick = () => {
+                if (!currentStrip()) return;
                 closeReactStrip();
                 toggleReaction(m, ":" + e.name + ":");
             };
-            reactStrip.appendChild(b);
+            strip.appendChild(b);
         }
     });
     const r = anchorEl.getBoundingClientRect();
@@ -829,6 +990,7 @@ function openReactStrip(m, anchorEl) {
 // --- hover actions (97/101/102/107/109) --------------------------------------
 
 function renderActions(m) {
+    const scope = captureScope(readExportScope);
     const acts = document.createElement("span");
     acts.className = "msg-actions";
     const mk = (glyph, title, fn) => {
@@ -838,11 +1000,25 @@ function renderActions(m) {
         b.setAttribute("aria-label", title);
         b.onclick = (e) => {
             e.stopPropagation();
+            if (!exportScopeIsCurrent(scope)) return;
             fn();
         };
         acts.appendChild(b);
         return b;
     };
+    const copy = mk("copy", t("wins.copyMessage"), async () => {
+        const current = () => acts.isConnected && exportScopeIsCurrent(scope);
+        if (await copyToClipboard(m.text || "", { success: t("wins.messageCopied"), isCurrent: current }) && current()) {
+            copy.textContent = t("wins.messageCopied");
+            copy.setAttribute("aria-label", t("wins.messageCopied"));
+            const feedback = document.createElement("span");
+            feedback.className = "sr-only";
+            feedback.setAttribute("role", "status");
+            acts.append(feedback);
+            feedback.textContent = t("wins.messageCopied");
+            setTimeout(() => { feedback.remove(); if (copy.isConnected) { copy.innerHTML = icon("copy"); copy.setAttribute("aria-label", t("wins.copyMessage")); } }, 2500);
+        }
+    });
     mk("smile", t("chat.action.react"), () => openReactStrip(m, acts));
     mk("reply", t("chat.action.reply"), () => setReply(m));
     // (108) only messages that are actually part of a chain get the affordance
@@ -850,7 +1026,7 @@ function renderActions(m) {
     const th = threadIndex(activeKey());
     const root = th.rootOf.get(m.id) || m.id;
     if (th.replies.get(root)) mk("thread", t("chat.action.thread"), () => openThread(root));
-    if (m.self && !m.direct) mk("edit", t("chat.action.edit"), () => startEdit(m));
+    if (m.self && !m.direct && !parsePoll(m.text)) mk("edit", t("chat.action.edit"), () => startEdit(m));
     if (m.self) mk("trash", t("chat.action.delete"), () => deleteMsg(m));
     if (!m.direct) {
         const pinned = isPinned(m);
@@ -860,13 +1036,29 @@ function renderActions(m) {
 }
 
 function refreshMsgEl(m) {
+    const log = $("chat-log");
+    const anchor = captureScrollAnchor(log);
     const el = document.querySelector(`#chat-log .msg[data-msg-id="${m.id}"]`);
     if (el) el.replaceWith(renderMsg(m));
+    applySearchFilter();
+    restoreScrollAnchor(log, anchor);
 }
 
 // --- edit / delete (101/102) ---------------------------------------------------
 
+async function runChatMutation(scope, action, label, stillCurrent = () => true) {
+    const current = () => exportScopeIsCurrent(scope) && stillCurrent();
+    if (!current()) return false;
+    let error;
+    try { error = await action(); }
+    catch (e) { error = String(e); }
+    if (!current()) return false;
+    if (error) V().toast(t("chat.mutationFailed", { action: label, error }), "warn");
+    return !error;
+}
+
 function startEdit(m) {
+    const scope = captureScope(readExportScope);
     const el = document.querySelector(`#chat-log .msg[data-msg-id="${m.id}"]`);
     if (!el) return;
     const body = el.querySelector(".msg-text");
@@ -876,33 +1068,35 @@ function startEdit(m) {
     body.replaceWith(input);
     input.focus();
     input.setSelectionRange(input.value.length, input.value.length);
+    const finish = () => {
+        input.onblur = null;
+        if (exportScopeIsCurrent(scope) && input.isConnected) refreshMsgEl(m);
+    };
     input.onkeydown = async (e) => {
         e.stopPropagation();
-        if (e.key === "Escape") refreshMsgEl(m);
+        if (!exportScopeIsCurrent(scope) || !input.isConnected) return;
+        if (e.key === "Escape") finish();
         if (e.key !== "Enter") return;
-        const t = input.value.trim();
-        refreshMsgEl(m); // the chat_edited broadcast refreshes the text
-        if (t && t !== m.text) {
-            const err = await app().ChatEditMessage(m.channelID ?? 0, m.id, t, m.version || 1);
-            if (err) V().toast("edit failed: " + err, "warn");
+        const text = input.value.trim();
+        finish(); // the chat_edited broadcast refreshes the text
+        if (text && text !== m.text) {
+            await runChatMutation(scope, () => app().ChatEditMessageForTab(scope.tabID, m.channelID ?? 0, m.id, text, m.version || 1), t("chat.action.edit"));
         }
     };
-    input.onblur = () => refreshMsgEl(m);
+    input.onblur = finish;
 }
 
 async function deleteMsg(m) {
-    const generation = V().state.serverGeneration;
+    const scope = captureScope(readExportScope);
     const confirmed = await confirmDialog({
-        title: "Delete message?",
-        message: "This removes the message for everyone. This cannot be undone.",
-        confirmLabel: "Delete message",
+        title: t("chat.deleteTitle"),
+        message: t("chat.deleteHelp"),
+        confirmLabel: t("chat.deleteConfirm"),
         danger: true,
         serverScoped: true,
     });
-    if (!confirmed || generation !== V().state.serverGeneration) return;
-    const err = await app().ChatDeleteMessage(m.id);
-    if (generation !== V().state.serverGeneration) return;
-    if (err) V().toast("delete failed: " + err, "warn");
+    if (!confirmed) return;
+    await runChatMutation(scope, () => app().ChatDeleteMessageForTab(scope.tabID, m.id), t("chat.action.delete"));
     // The chat_deleted broadcast renders the tombstone.
 }
 
@@ -920,9 +1114,9 @@ function isPinned(m) {
 // pinMsg toggles. The hover button used to always send pinned=true, so it
 // could pin but never unpin despite saying so (109).
 async function pinMsg(m) {
+    const scope = captureScope(readExportScope);
     const chID = m.channelID ?? 0;
-    const err = await app().ChatPinMessage(chID, m.id, !isPinned(m));
-    if (err) V().toast("pin failed: " + err, "warn"); // permission errors land here (109)
+    await runChatMutation(scope, () => app().ChatPinMessageForTab(scope.tabID, chID, m.id, !isPinned(m)), "pin");
     // The chat_pinned/chat_unpinned broadcast updates the set and the button.
 }
 
@@ -930,11 +1124,23 @@ async function pinMsg(m) {
 // is pinned without the panel being open.
 async function ensurePins(key) {
     if (pinnedIDs.has(key) || !key.startsWith("ch:")) return;
+    const scope = captureScope(readChatServerScope);
     const set = pinSet(key);
+    const changes = new Map();
+    pendingPinChanges.set(key, changes);
     try {
-        const resp = await app().ChatPins(Number(key.slice(3)));
+        const resp = await app().ChatPinsForTab(scope.tabID, Number(key.slice(3)));
+        if (!chatServerIsCurrent(scope) || pinnedIDs.get(key) !== set) return;
+        set.clear();
         for (const p of resp.pins || []) set.add(Number(p.message_id));
+        for (const [id, pinned] of changes) {
+            if (pinned) set.add(id);
+            else set.delete(id);
+        }
     } catch { /* no membership / old server: pins stay unknown, button pins */ }
+    finally {
+        if (pendingPinChanges.get(key) === changes) pendingPinChanges.delete(key);
+    }
 }
 
 // --- reply-to (107) ------------------------------------------------------------
@@ -942,6 +1148,7 @@ async function ensurePins(key) {
 // stored messages and mixed-version servers readable.
 
 function setReply(m) {
+    replyRevision++;
     replyTo = m;
     const bar = $("reply-bar");
     bar.innerHTML = "";
@@ -950,7 +1157,7 @@ function setReply(m) {
     label.textContent = "↪ " + m.from + ": " + m.text.slice(0, 80);
     const x = document.createElement("button");
     x.textContent = "✕";
-    x.title = "cancel reply";
+    x.title = t("chat.replyCancel");
     x.onclick = clearReply;
     bar.appendChild(label);
     bar.appendChild(x);
@@ -959,33 +1166,9 @@ function setReply(m) {
 }
 
 function clearReply() {
+    replyRevision++;
     replyTo = null;
     $("reply-bar").classList.add("hidden");
-}
-
-// QUOTE_RE matches the reply prefix. It is the ONLY link between a reply and
-// its parent — threads (108) resolve the chain from it rather than adding a
-// second mechanism to the wire.
-const QUOTE_RE = /^↪ ([^\n:]{1,64}): /;
-
-// quotedNick returns the nick a message replies to, or "".
-function quotedNick(m) {
-    return (!m.deleted && m.text.match(QUOTE_RE)?.[1]) || "";
-}
-
-// resolveParent finds the message a reply quotes: the newest loaded message
-// from that nick at or before the reply. The prefix carries no id, so this is
-// best-effort by construction — the same rule the quote jump has always used.
-function resolveParent(msgs, m) {
-    if (m.replyToID) return msgs.find((candidate) => candidate.id === m.replyToID) || null;
-    const nick = quotedNick(m);
-    if (!nick) return null;
-    let target = null;
-    for (const c of msgs) {
-        if (c === m) break;
-        if (c.from === nick && c.ts <= m.ts && c.id) target = c;
-    }
-    return target;
 }
 
 function scrollToQuote(quoteEl) {
@@ -995,7 +1178,7 @@ function scrollToQuote(quoteEl) {
     const self = st.msgs.find((x) => x.id === id);
     const target = self ? resolveParent(st.msgs, self) : null;
     if (!target) {
-        V().toast("quoted message not loaded", "info", "alert");
+        V().toast(t("chat.quoteUnavailable"), "info", "alert");
         return;
     }
     flashMsg(target.id);
@@ -1080,10 +1263,10 @@ function renderThreadPanel() {
 
     const head = document.createElement("div");
     head.className = "chat-pop-head";
-    head.textContent = `Thread · ${(th.replies.get(threadRootID) || 0) + 1} messages`;
+    head.textContent = t("chat.threadCount", { count: (th.replies.get(threadRootID) || 0) + 1 });
     const x = document.createElement("button");
     x.textContent = "✕";
-    x.title = "close thread";
+    x.title = t("chat.threadClose");
     x.onclick = closeThreadPanel;
     head.appendChild(x);
     threadPanel.appendChild(head);
@@ -1105,8 +1288,8 @@ function renderThreadPanel() {
     }
     const reply = document.createElement("button");
     reply.className = "thread-reply";
-    reply.textContent = "↩ reply in thread";
-    reply.title = "reply to the last message of this chain";
+    reply.textContent = t("chat.replyThread");
+    reply.title = t("chat.threadReply");
     reply.onclick = () => setReply(chain[chain.length - 1]);
     threadPanel.appendChild(reply);
 }
@@ -1125,6 +1308,8 @@ function refreshThreadFor(id) {
 // ---------------------------------------------------------------------------
 
 function setView(v) {
+    closeConversations();
+    invalidateChatViewWork();
     view = v;
     closeThreadPanel(); // a chain belongs to one scope (108)
     resetTypingOut(); // (120) the next keystroke pings the new scope at once
@@ -1145,8 +1330,14 @@ function setView(v) {
     sendPendingReads();
 }
 
+export function resumeChatView() { setView(view); }
+
 export function openPM(uid, nick) {
     if (!uid) return;
+    // A new user action can recover failed acquisition. Pending descendants
+    // retain their old owner and are never transparently retried.
+    if (dmOwner?.failed && dmOwnerIsCurrent(dmOwner)) resetDMHistoryView();
+    closedDMPeers.delete(uid);
     if (!pmTabs.has(uid)) pmTabs.set(uid, { uid, nick: nick || uid, unread: 0, offline: false, pendingRead: "" });
     if (nick) pmTabs.get(uid).nick = nick;
     activatePM(uid);
@@ -1166,7 +1357,7 @@ async function openE2EEDiagnostics() {
     let d;
     try { d = await app().E2EEDiagnostics(peer); }
     catch (err) {
-        if (generation === V().state.serverGeneration) V().toast("encryption diagnostics failed: " + err, "warn");
+        if (generation === V().state.serverGeneration) V().toast(t("chat.diagnosticsFailed", { error: String(err) }), "warn");
         return;
     }
     if (generation !== V().state.serverGeneration) return;
@@ -1175,17 +1366,17 @@ async function openE2EEDiagnostics() {
     const verified = peer && d.safety_number && V().state.settings?.e2ee_verified?.[peer] === d.safety_number;
     const changed = peer && V().state.settings?.e2ee_verified?.[peer] && !verified;
     overlay.innerHTML = `<div class="dlg e2ee-diagnostics">
-        <h3>End-to-end encryption</h3>
-        <div class="e2ee-status ${changed ? "warn" : verified ? "ok" : ""}">${changed ? "⚠ Safety number changed" : verified ? "✓ Safety number verified" : peer ? "Safety number not verified" : "Channel-key diagnostics"}</div>
+        <h3>${t("chat.e2ee")}</h3>
+        <div class="e2ee-status ${changed ? "warn" : verified ? "ok" : ""}">${changed ? t("chat.safetyChanged") : verified ? t("chat.safetyVerifiedStatus") : peer ? t("chat.safetyUnverified") : t("chat.channelDiagnostics")}</div>
         <dl>
-            <dt>Cipher</dt><dd>${escapeHTML(d.cipher || "unknown")}</dd>
-            <dt>Cached peer keys</dt><dd>${d.cached_peers || 0}</dd>
-            <dt>Channel generations</dt><dd>${d.scope_keys || 0}</dd>
-            <dt>Missing/refused keys</dt><dd>${d.refused_keys || 0}</dd>
-            <dt>Handshakes in flight</dt><dd>${d.pending_key_pulls || 0}</dd>
+            <dt>${t("chat.cipher")}</dt><dd>${escapeHTML(d.cipher || t("chat.unknown"))}</dd>
+            <dt>${t("chat.cachedKeys")}</dt><dd>${d.cached_peers || 0}</dd>
+            <dt>${t("chat.channelGenerations")}</dt><dd>${d.scope_keys || 0}</dd>
+            <dt>${t("chat.missingKeys")}</dt><dd>${d.refused_keys || 0}</dd>
+            <dt>${t("chat.pendingHandshakes")}</dt><dd>${d.pending_key_pulls || 0}</dd>
         </dl>
-        ${peer ? `<label>Safety number</label><pre class="safety-number">${escapeHTML(d.safety_number || "peer key unavailable")}</pre>` : ""}
-        <div class="dlg-buttons">${peer && d.safety_number ? '<button class="dlg-ok verify-safety">Mark verified</button>' : ""}<button class="dlg-cancel">Close</button></div>
+        ${peer ? `<label>${t("chat.safetyNumber")}</label><pre class="safety-number">${escapeHTML(d.safety_number || t("chat.keyUnavailable"))}</pre>` : ""}
+        <div class="dlg-buttons">${peer && d.safety_number ? `<button class="dlg-ok verify-safety">${t("chat.markVerified")}</button>` : ""}<button class="dlg-cancel">${t("chat.close")}</button></div>
     </div>`;
     overlay.querySelector(".dlg-cancel").onclick = () => overlay.remove();
     overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
@@ -1199,12 +1390,12 @@ async function openE2EEDiagnostics() {
         } catch (err) {
             settings.e2ee_verified = previous;
             if (!isCurrentServerDialog(overlay)) return;
-            V().toast("saving safety verification failed: " + err, "warn");
+            V().toast(t("chat.safetySaveFailed", { error: String(err) }), "warn");
             return;
         }
         if (!isCurrentServerDialog(overlay)) return;
         overlay.remove();
-        V().toast("safety number verified");
+        V().toast(t("chat.safetyVerified"));
     });
     mountServerDialog(overlay);
 }
@@ -1225,12 +1416,19 @@ export async function setChannelSubscription(channelID, subscribe) {
     const id = Number(channelID);
     if (!id) return false;
     if (!subscribe && id === V().state.myChannelID) {
-        V().toast("your joined channel is always subscribed", "info", "alert");
+        V().toast(t("chat.joinedSubscribed"), "info", "alert");
         return false;
     }
-    const err = await app().SubscribeChannels([id], !!subscribe);
+    const scope = captureScope(readChatServerScope);
+    let err;
+    try {
+        err = await app().SubscribeChannelsForTab(scope.tabID, [id], !!subscribe);
+    } catch (error) {
+        err = String(error);
+    }
+    if (!chatServerIsCurrent(scope)) return false;
     if (err) {
-        V().toast((subscribe ? "subscribe" : "unsubscribe") + " failed: " + err, "warn");
+        V().toast(t("chat.subscriptionFailed", { error: String(err) }), "warn");
         return false;
     }
     return true;
@@ -1244,13 +1442,15 @@ export async function openChannelTab(channelID) {
         return;
     }
     pendingChannelTab = id;
-    if (!await setChannelSubscription(id, true)) pendingChannelTab = 0;
+    const request = ++channelTabRequest;
+    const scope = captureScope(readChatServerScope);
+    if (!await setChannelSubscription(id, true) && chatServerIsCurrent(scope) && request === channelTabRequest && pendingChannelTab === id) pendingChannelTab = 0;
 }
 
 function closeChannelTab(channelID) {
     const id = Number(channelID);
     if (id === V().state.myChannelID) {
-        V().toast("move to another channel before unsubscribing", "info", "alert");
+        V().toast(t("chat.moveUnsubscribe"), "info", "alert");
         return;
     }
     setChannelSubscription(id, false);
@@ -1295,6 +1495,7 @@ export function onSubscriptions(json) {
 // instead of starting empty. Destroying that log is a separate, explicit act
 // (clearPMHistory) — closing a tab must never delete a conversation (122).
 function closePM(uid) {
+    closedDMPeers.add(uid);
     pmTabs.delete(uid);
     store.delete("dm:" + uid);
     if (view.kind === "dm" && view.uid === uid) {
@@ -1316,7 +1517,7 @@ function renderTabs() {
         const active = activeChannelID() === id && view.kind !== "global" && view.kind !== "dm";
         const el = document.createElement("div");
         el.className = "pm-tab channel-tab" + (active ? " active" : "");
-        el.title = current ? "joined channel" : "subscribed channel";
+        el.title = current ? t("chat.joinedChannel") : t("chat.subscribedChannel");
         const name = document.createElement("span");
         name.className = "pm-tab-name";
         name.textContent = "# " + channelName(id);
@@ -1332,7 +1533,7 @@ function renderTabs() {
             const x = document.createElement("button");
             x.className = "pm-close";
             x.textContent = "✕";
-            x.title = "unsubscribe and close tab";
+            x.title = t("chat.unsubscribeClose");
             x.onclick = (e) => {
                 e.stopPropagation();
                 closeChannelTab(id);
@@ -1344,10 +1545,13 @@ function renderTabs() {
     }
     for (const tab of pmTabs.values()) {
         const el = document.createElement("div");
+        const scope = captureScope(readDMHistoryScope);
+        const current = () => el.isConnected && dmHistoryScopeIsCurrent(scope) && pmTabs.get(tab.uid) === tab;
         el.className = "pm-tab" + (view.kind === "dm" && view.uid === tab.uid ? " active" : "");
-        el.title = "right-click to delete the stored history of this conversation";
+        el.title = t("chat.deleteHistoryHint");
         el.oncontextmenu = (e) => {
             e.preventDefault();
+            if (!current()) return;
             clearPMHistory(tab.uid, tab.nick);
         };
         const name = document.createElement("span");
@@ -1357,8 +1561,8 @@ function renderTabs() {
         if (tab.offline) {
             const b = document.createElement("span");
             b.className = "pm-badge offline";
-            b.textContent = "offline";
-            b.title = "offline messages received";
+            b.textContent = t("chat.offline");
+            b.title = t("chat.offlineReceived");
             el.appendChild(b);
         }
         if (tab.unread > 0) {
@@ -1370,13 +1574,14 @@ function renderTabs() {
         const x = document.createElement("button");
         x.className = "pm-close";
         x.textContent = "✕";
-        x.title = "close tab";
+        x.title = t("chat.tabClose");
         x.onclick = (e) => {
             e.stopPropagation();
+            if (!current()) return;
             closePM(tab.uid);
         };
         el.appendChild(x);
-        el.onclick = () => activatePM(tab.uid);
+        el.onclick = () => { if (current()) activatePM(tab.uid); };
         bar.appendChild(el);
     }
 }
@@ -1419,11 +1624,21 @@ function dmMsg(e, peerNick) {
 // runs in FRONT of whatever already arrived live, so a message that landed
 // before the tab was opened stays newest instead of being replayed twice.
 async function ensureDMHistory(uid) {
-    const st = getStore("dm:" + uid);
-    if (st.loaded || st.loading || !uid) return;
+    const key = "dm:" + uid;
+    const st = getStore(key);
+    if (st.loaded || st.loading || !uid) return false;
+    const scope = captureScope(readDMHistoryScope);
+    const owner = getDMOwner();
+    const attempt = Symbol();
+    st.dmLoadAttempt = attempt;
+    const current = () => dmHistoryScopeIsCurrent(scope) && store.get(key) === st && st.dmLoadAttempt === attempt;
     st.loading = true;
     try {
-        const rows = await app().DMHistoryLoad(uid);
+        const rows = await callDMHistory(owner, "DMHistoryLoadForContext", uid);
+        // A read may already hold the deleted file's contents. Wait for an
+        // overlapping clear: success invalidates this load, failure keeps it.
+        if (st.dmClearPending) await st.dmClearPending;
+        if (!current()) return false;
         const nick = pmTabs.get(uid)?.nick || uid;
         const live = new Set(st.msgs.map((m) => m.clientMsgID).filter(Boolean));
         const older = (rows || []).map((e) => dmMsg(e, nick))
@@ -1432,11 +1647,15 @@ async function ensureDMHistory(uid) {
         const max = V().state.settings?.chat_max_lines || 200;
         while (st.msgs.length > Math.max(max, PAGE)) st.msgs.shift();
     } catch (e) {
-        V().toast("DM history unavailable: " + e, "warn");
+        if (!current()) return false;
+        V().toast(t("chat.dmUnavailable", { error: String(e) }), "warn");
     } finally {
-        st.loading = false;
-        st.loaded = true;
+        if (current()) {
+            st.loading = false;
+            st.loaded = true;
+        }
     }
+    return true;
 }
 
 // dmRecord writes one DM — sent or received — to the peer's sealed log. The
@@ -1444,7 +1663,16 @@ async function ensureDMHistory(uid) {
 // a reconnect does not double the conversation.
 function dmRecord(peer, nick, m) {
     if (!peer) return;
-    app().DMHistoryAppend(peer, nick || "", {
+    const scope = captureScope(readDMHistoryScope);
+    const st = store.get("dm:" + peer);
+    const tab = pmTabs.get(peer);
+    const owner = getDMOwner();
+    const reportFailure = err => {
+        if (!dmHistoryScopeIsCurrent(scope) || store.get("dm:" + peer) !== st || pmTabs.get(peer) !== tab || !err || dmPersistWarned) return;
+        dmPersistWarned = true;
+        V().toast(t("chat.dmNotSaved", { error: String(err) }), "warn");
+    };
+    callDMHistory(owner, "DMHistoryAppendForContext", peer, nick || "", {
         from_unique_id: m.fromUID,
         from_nickname: m.from,
         body: m.text,
@@ -1453,50 +1681,70 @@ function dmRecord(peer, nick, m) {
         client_msg_id: m.clientMsgID,
         offline: m.offline,
         enc_verified: m.encVerified,
-    }).then((err) => {
-        if (!err || dmPersistWarned) return;
-        dmPersistWarned = true;
-        V().toast("DM history is not being saved: " + err, "warn");
-    }).catch(() => { /* the tab still works without a log */ });
+    }).then(reportFailure).catch(reportFailure);
 }
 
 // clearPMHistory is the ONLY path that destroys a conversation, and it says so
 // before it does: the server never had a copy to fall back on (122).
 async function clearPMHistory(uid, nick) {
-    const generation = V().state.serverGeneration;
-    const confirmed = await confirmDialog({
-        title: "Delete stored conversation?",
-        message: `This permanently deletes the stored history with ${nick}. This cannot be undone: these messages are end-to-end encrypted and the server has no copy.`,
-        confirmLabel: "Delete history",
-        danger: true,
-        serverScoped: true,
-    });
-    if (!confirmed || generation !== V().state.serverGeneration) return;
-    const err = await app().DMHistoryClear(uid);
-    if (generation !== V().state.serverGeneration) return;
-    if (err) {
-        V().toast("could not clear DM history: " + err, "warn");
-        return;
+    const key = "dm:" + uid;
+    const st = getStore(key);
+    if (st.dmClearAttempt) return;
+    const scope = captureScope(readDMHistoryScope);
+    const owner = getDMOwner();
+    const tab = pmTabs.get(uid);
+    const attempt = Symbol();
+    st.dmClearAttempt = attempt;
+    let finishClear;
+    const current = () => dmHistoryScopeIsCurrent(scope) && store.get(key) === st && pmTabs.get(uid) === tab && st.dmClearAttempt === attempt;
+    try {
+        const confirmed = await confirmDialog({
+            title: t("chat.deleteHistoryTitle"),
+            message: t("chat.dmDeleteHelp", { name: nick }),
+            confirmLabel: t("chat.deleteHistoryConfirm"),
+            danger: true,
+            serverScoped: true,
+        });
+        if (!confirmed || !current()) return;
+        const cleared = new Set(st.msgs);
+        st.dmClearPending = new Promise(resolve => { finishClear = resolve; });
+        const err = await callDMHistory(owner, "DMHistoryClearForContext", uid);
+        if (!current()) return;
+        if (err) throw new Error(err);
+        st.msgs = st.msgs.filter(message => !cleared.has(message));
+        st.dmLoadAttempt = null;
+        st.loading = false;
+        st.loaded = true;
+        if (view.kind === "dm" && view.uid === uid) renderView();
+        V().toast(t("chat.dmDeleted", { name: nick }), "info");
+    } catch (err) {
+        if (current()) V().toast(t("chat.dmClearFailed", { error: String(err) }), "warn");
+    } finally {
+        if (st.dmClearAttempt === attempt) {
+            st.dmClearAttempt = null;
+            st.dmClearPending = null;
+        }
+        finishClear?.();
     }
-    const st = getStore("dm:" + uid);
-    st.msgs = [];
-    st.loaded = true;
-    if (view.kind === "dm" && view.uid === uid) renderView();
-    V().toast("stored history with " + nick + " deleted", "info");
 }
 
 // restorePMTabs gives conversations with a stored log their tab back, so a
 // restart shows them without waiting for the peer to speak first.
 async function restorePMTabs() {
+    const scope = captureScope(readDMHistoryScope);
+    const owner = getDMOwner();
+    const attempt = Symbol();
+    dmRestoreAttempt = attempt;
     let peers = [];
     try {
-        peers = await app().DMHistoryPeers();
+        peers = await callDMHistory(owner, "DMHistoryPeersForContext");
     } catch {
         return; // no local storage path yet
     }
+    if (!dmHistoryScopeIsCurrent(scope) || dmRestoreAttempt !== attempt) return;
     let added = false;
     for (const p of (peers || []).slice(0, DM_RESTORE_TABS)) {
-        if (!p.unique_id || pmTabs.has(p.unique_id)) continue;
+        if (!p.unique_id || pmTabs.has(p.unique_id) || closedDMPeers.has(p.unique_id)) continue;
         pmTabs.set(p.unique_id, {
             uid: p.unique_id, nick: p.nickname || p.unique_id,
             unread: 0, offline: false, pendingRead: "",
@@ -1523,10 +1771,26 @@ function showNewPill() {
     pill.classList.remove("hidden");
 }
 
+function captureScrollAnchor(log) {
+    if (atBottom) return null;
+    const top = log.getBoundingClientRect().top;
+    const row = [...log.querySelectorAll(".msg[data-scroll-key]:not(.hidden)")].find(el => el.getBoundingClientRect().bottom > top);
+    return row ? { id: row.dataset.scrollKey, offset: row.getBoundingClientRect().top - top, scrollTop: log.scrollTop } : null;
+}
+
+function restoreScrollAnchor(log, anchor) {
+    if (!anchor) return;
+    const row = [...log.querySelectorAll(".msg[data-scroll-key]")].find(el => el.dataset.scrollKey === anchor.id);
+    if (row) log.scrollTop += row.getBoundingClientRect().top - log.getBoundingClientRect().top - anchor.offset;
+    else log.scrollTop = anchor.scrollTop;
+}
+
 function renderView(keepScrollFrom, { suppressMarkRead = false } = {}) {
     const log = $("chat-log");
+    const anchor = log.dataset.viewKey === activeKey() ? captureScrollAnchor(log) : null;
     log.innerHTML = "";
     const key = activeKey();
+    log.dataset.viewKey = key;
     const st = getStore(key);
 
     renderTyping(); // (120) drop the previous scope's indicator before anything else
@@ -1543,14 +1807,16 @@ function renderView(keepScrollFrom, { suppressMarkRead = false } = {}) {
     if (view.kind === "dm") {
         // (122) the local sealed log is this conversation's whole history.
         if (!st.loaded && !st.loading) {
-            ensureDMHistory(view.uid).then(() => {
-                if (activeKey() === key) renderView();
+            const scope = captureScope(readDMHistoryScope);
+            ensureDMHistory(view.uid).then((applied) => {
+                if (applied && dmHistoryScopeIsCurrent(scope) && activeKey() === key && store.get(key) === st) renderView();
             });
         }
     } else {
         if (!st.loaded && !st.loading) {
+            const scope = captureScope(readChatServerScope);
             ensureHistory(key).then(() => {
-                if (activeKey() === key) renderView();
+                if (chatServerIsCurrent(scope) && activeKey() === key && store.get(key) === st) renderView();
             });
         }
         if (st.end && st.loaded && st.msgs.length) {
@@ -1580,7 +1846,7 @@ function renderView(keepScrollFrom, { suppressMarkRead = false } = {}) {
         if (!dividerPlaced && lastRead !== null && m.id > lastRead && !m.self) {
             const div = document.createElement("div");
             div.className = "chat-new-divider";
-            div.textContent = "— new messages —";
+            div.textContent = t("polish.newMessages");
             log.appendChild(div);
             dividerPlaced = true;
         }
@@ -1591,13 +1857,15 @@ function renderView(keepScrollFrom, { suppressMarkRead = false } = {}) {
     updateHeader();
     renderThreadPanel(); // (108) the open chain follows the loaded window
 
-    if (keepScrollFrom !== undefined) {
+    if (anchor) {
+        restoreScrollAnchor(log, anchor);
+    } else if (keepScrollFrom !== undefined) {
         log.scrollTop = log.scrollHeight - keepScrollFrom;
     } else {
         scrollToBottom();
         resetNewCount();
     }
-    if (!suppressMarkRead) markRead(key);
+    if (!suppressMarkRead && !anchor) markRead(key);
 }
 
 function lastReadFor(key) {
@@ -1609,6 +1877,7 @@ function lastReadFor(key) {
 }
 
 function markRead(key) {
+    if (isPrivateGroupActive()) return;
     if (!key.startsWith("ch:")) return;
     const st = getStore(key);
     const newest = st.msgs.length ? st.msgs[st.msgs.length - 1].id : 0;
@@ -1643,12 +1912,34 @@ async function ensureHistory(key) {
 }
 
 async function loadPage(key, beforeID) {
+    const scope = captureScope(readChatServerScope);
     const st = getStore(key);
+    const before = new Map(st.msgs.map(message => [message, {
+        version: message.version, deleted: message.deleted, reactionRevision: message.reactionRevision,
+    }]));
     const chID = Number(key.slice(3));
-    const resp = await app().ChatHistory(chID, beforeID, PAGE);
+    const resp = await app().ChatHistoryForTab(scope.tabID, chID, beforeID, PAGE);
+    if (!chatServerIsCurrent(scope) || store.get(key) !== st) return 0;
     const page = (resp.messages || []).map((x) => attribute(normalize(x, chID))).reverse(); // newest-first → oldest-first
     if (beforeID === 0) {
-        st.msgs = page;
+        // Only changes received during this request outrank its snapshot.
+        // Keep the loaded range contiguous so older-page cursors cannot skip
+        // a gap left by an old cached message from an unsubscribed channel.
+        const firstID = page[0]?.id || 0;
+        const contentChanged = m => !before.has(m) || before.get(m).version !== m.version || before.get(m).deleted !== m.deleted;
+        const reactionsChanged = m => !before.has(m) || before.get(m).reactionRevision !== m.reactionRevision;
+        const currentByID = new Map(st.msgs.map(m => [m.id, m]));
+        const historyIDs = new Set(page.map(m => m.id));
+        const concurrent = st.msgs.filter(m => !historyIDs.has(m.id) && (!firstID || m.id >= firstID) && (contentChanged(m) || reactionsChanged(m)));
+        const merged = page.map(history => {
+            const live = currentByID.get(history.id);
+            if (!live) return history;
+            const body = contentChanged(live) && !history.deleted && (live.deleted || live.version >= history.version) ? live : history;
+            const reactions = reactionsChanged(live) ? live : history;
+            return { ...body, reactions: reactions.reactions, reactionRevision: reactions.reactionRevision, renderKey: live.renderKey };
+        });
+        st.msgs = merged.concat(concurrent)
+            .sort((a, b) => a.id && b.id ? a.id - b.id : a.ts - b.ts);
         st.truncated = !!resp.truncated;
     } else {
         st.msgs = page.concat(st.msgs);
@@ -1662,6 +1953,7 @@ async function loadPage(key, beforeID) {
 
 async function maybeLoadOlder() {
     if (view.kind === "dm") return;
+    const scope = captureScope(readChatServerScope);
     const key = activeKey();
     const st = getStore(key);
     if (st.loading || st.end || !st.loaded || !st.msgs.length) return;
@@ -1669,14 +1961,14 @@ async function maybeLoadOlder() {
     const log = $("chat-log");
     const spinner = document.createElement("div");
     spinner.className = "chat-spinner";
-    spinner.textContent = "loading older messages…";
+    spinner.textContent = t("chat.loadingOlder");
     log.insertBefore(spinner, log.firstChild);
     const prevH = log.scrollHeight;
     try {
         await loadPage(key, st.msgs[0].id);
     } catch { /* keep what we have */ }
     st.loading = false;
-    if (activeKey() !== key) return;
+    if (!chatServerIsCurrent(scope) || activeKey() !== key || store.get(key) !== st) return;
     // Anchor the viewport: content was prepended, so the old scrollHeight
     // as "distance from the new bottom" lands back on the same message.
     renderView(prevH);
@@ -1700,14 +1992,15 @@ export function addChat(d) {
     const key = "ch:" + chID;
     const position = pushMsg(key, m);
     if (position === "duplicate") return false;
-    const directMention = m.mentions.includes(st.myUniqueID) && !m.self;
-    const roleMention = !m.self && /@(admin|moderator|member|guest)\b/i.test(m.text || "");
+    const flags = mentionFlags(m, sessionUserID(st));
+    const directMention = flags.direct && !m.self;
+    const roleMention = flags.role && !m.self;
     const level = st.settings?.chat_notification_level || "all";
     let announcementAllowed = false;
     let announcementEvent = "channel_message";
     let announcementContext = { channelID: m.channelID, className: "messages" };
     let notification = null;
-    if (directMention) {
+    if (directMention || roleMention) {
         m.mentioned = true; // (106) accent highlight
     } else if (!m.self) {
         // (388) keyword highlights: whole-word match gets mention treatment.
@@ -1725,7 +2018,7 @@ export function addChat(d) {
         }
     }
     if (!m.self) {
-        const allowed = level === "all" || (level === "channel_mentions" && directMention) || (level === "role_mentions" && roleMention);
+        const allowed = level === "all" || (level === "channel_mentions" && (directMention || roleMention)) || (level === "role_mentions" && roleMention);
         // A direct/role mention outranks a keyword; an otherwise ordinary
         // message is the fallback. Dispatch one notification per message so
         // the new per-event sound cues never overlap for the same chat line.
@@ -1755,7 +2048,7 @@ export function addChat(d) {
         }
         window.__noxaNotify?.notify(event, text, { ...context, announce: false });
     }
-    if (key === activeKey()) {
+    if (key === activeKey() && !isPrivateGroupActive()) {
         if (position === "append") appendLive(m);
         else renderView();
     } else if (!m.self && !window.__noxaNotify?.channelOverride?.(chID)?.muted) {
@@ -1790,10 +2083,12 @@ function pushMsg(key, m) {
 
 function appendLive(m) {
     const log = $("chat-log");
+    const anchor = captureScrollAnchor(log);
     log.appendChild(renderMsg(m));
     const max = V().state.settings?.chat_max_lines || 200;
     while (log.children.length > max) log.firstChild.remove();
-    if (searchQ) applySearchFilter();
+    applySearchFilter();
+    restoreScrollAnchor(log, anchor);
     refreshThreadFor(m.id); // (108) a reply joins the open chain immediately
     if (atBottom) {
         scrollToBottom();
@@ -1808,9 +2103,7 @@ function appendLive(m) {
 
 function routeDM(d, m) {
     const st = V().state;
-    // New servers identify the echo's recipient; the legacy fallback cannot
-    // distinguish concurrent outgoing peers and is only used if it is absent.
-    const peer = m.self ? (d.to_unique_id || lastDMTarget || (view.kind === "dm" ? view.uid : "")) : (m.fromUID || "");
+    const peer = directPeer(d, m);
     if (!peer) return false;
     const tab = pmTabs.get(peer) || { uid: peer, nick: m.self ? peer : m.from, unread: 0, offline: false, pendingRead: "" };
     if (!pmTabs.has(peer)) pmTabs.set(peer, tab);
@@ -1832,7 +2125,7 @@ function routeDM(d, m) {
         if (b.timer) clearTimeout(b.timer);
         b.timer = setTimeout(() => {
             offlineBatch.delete(peer);
-            const summary = `${b.n} offline message${b.n === 1 ? "" : "s"} from ${b.nick}`;
+            const summary = t("chat.offlineBatch", { count: b.n, name: b.nick });
             window.__noxaNotify?.notify("dm", summary,
                 { uid: peer, className: "messages", kind: "info", announce: false });
             if (chatAnnouncementAllowed("dm", { uid: peer, className: "messages" }, key)) {
@@ -1845,15 +2138,13 @@ function routeDM(d, m) {
     if (!m.self && m.clientMsgID) {
         // (124) delivery receipt immediately; read receipt when the tab is
         // visible and focused (otherwise queued for activation/focus).
-        app().SendChatDelivered(m.fromUID, m.clientMsgID);
-        if (view.kind === "dm" && view.uid === peer && document.hasFocus()) {
-            app().SendChatRead(m.fromUID, m.clientMsgID);
-        } else {
-            tab.pendingRead = m.clientMsgID;
-        }
+        const scope = captureScope(readChatServerScope);
+        void sendChatSignal(() => app().SendChatDeliveredForTab(scope.tabID, m.fromUID, m.clientMsgID));
+        tab.pendingRead = { id: m.clientMsgID, scope };
+        void sendPendingReads();
     }
 
-    if (key === activeKey()) {
+    if (key === activeKey() && !isPrivateGroupActive()) {
         appendLive(m);
     } else if (!m.self) {
         tab.unread++;
@@ -1872,12 +2163,40 @@ function routeDM(d, m) {
     };
 }
 
-function sendPendingReads() {
-    if (view.kind !== "dm" || !document.hasFocus()) return;
+async function sendChatSignal(action) {
+    try { await action(); }
+    catch { /* Typing and delivery are best-effort signals. */ }
+}
+
+async function sendPendingReads() {
+    if (view.kind !== "dm" || !chatSurfaceVisible("dm:" + view.uid)) return;
     const tab = pmTabs.get(view.uid);
-    if (tab?.pendingRead) {
-        app().SendChatRead(tab.uid, tab.pendingRead);
+    if (!tab) return;
+    const queue = tab.readQueue ||= [];
+    if (tab.pendingRead) {
+        const pending = tab.pendingRead;
+        if (chatServerIsCurrent(pending.scope) && !queue.some(entry => entry.id === pending.id)) queue.push(pending);
         tab.pendingRead = "";
+    }
+    if (tab.readAttempt) return;
+    while (queue.length && !chatServerIsCurrent(queue[0].scope)) queue.shift();
+    const entry = queue[0];
+    if (!entry) return;
+    const attempt = { entry };
+    tab.readAttempt = attempt;
+    const current = () => pmTabs.get(tab.uid) === tab && tab.readAttempt === attempt && chatServerIsCurrent(entry.scope);
+    let sent = false;
+    try {
+        const error = await app().SendChatReadForTab(entry.scope.tabID, tab.uid, entry.id);
+        if (!current() || error) return;
+        sent = true;
+        if (queue[0] === entry) queue.shift();
+    } catch { /* Retain this receipt for a later focus/message trigger. */ }
+    finally {
+        if (tab.readAttempt === attempt) tab.readAttempt = null;
+        if (sent && pmTabs.get(tab.uid) === tab && chatServerIsCurrent(entry.scope) && view.kind === "dm" && view.uid === tab.uid && (queue.length || tab.pendingRead)) {
+            void sendPendingReads();
+        }
     }
 }
 
@@ -1933,10 +2252,12 @@ export function onChatDeleted(d) {
 }
 
 export function onChatPinned(d, pinned) {
-    V().sysMsg(pinned ? "a message was pinned" : "a message was unpinned");
+    V().sysMsg(pinned ? t("chat.wasPinned") : t("chat.wasUnpinned"));
     // (109) keep the per-scope pin set current so the 📌 hover button toggles.
     const key = "ch:" + (Number(d.channel_id) || 0);
     const id = Number(d.message_id);
+    // Replay deltas over the initial snapshot without dropping unrelated pins.
+    pendingPinChanges.get(key)?.set(id, pinned);
     if (pinned) pinSet(key).add(id);
     else pinSet(key).delete(id);
     const m = findMsg(id);
@@ -1950,6 +2271,15 @@ export function onChatReaction(d) {
     // The event carries the authoritative counts; the own-highlight only
     // tracks toggles made in this session (history has counts only, 97).
     m.reactions = d.reactions || {};
+    m.reactionRevision = (m.reactionRevision || 0) + 1;
+    if (d.by && d.by === V().state.myUniqueID && typeof d.added === "boolean" && typeof d.emoji === "string" && d.emoji) {
+        let own = myReactions.get(m.id);
+        if (!own) { own = new Set(); myReactions.set(m.id, own); }
+        if (d.added) own.add(d.emoji);
+        else own.delete(d.emoji);
+        m.reactionOwnRevision ??= new Map();
+        m.reactionOwnRevision.set(d.emoji, (m.reactionOwnRevision.get(d.emoji) || 0) + 1);
+    }
     refreshReacts(m);
 }
 
@@ -2010,15 +2340,17 @@ function noteTyping() {
         resetTypingOut();
         return;
     }
+    const captured = captureScope(readSendScope);
+    const [chID, uid] = typingScopeOf();
     const send = () => {
+        if (!scopeIsCurrent(captured, readSendScope)) return;
         typingDebounce = null;
-        const [chID, uid] = typingScopeOf();
         const scope = chID + "|" + uid;
         const now = Date.now();
         if (scope !== typingScope || now - typingSentAt >= TYPING_PING_MS) {
             typingScope = scope;
             typingSentAt = now;
-            app().SendTyping(chID, uid);
+            void sendChatSignal(() => app().SendTypingForTab(captured.tabID, chID, uid));
         }
     };
     if (!typingDebounce) typingDebounce = setTimeout(send, TYPING_DEBOUNCE_MS);
@@ -2083,81 +2415,129 @@ function renderTyping() {
         el.textContent = "";
         return;
     }
-    el.textContent = names.length === 1 ? `${names[0]} is typing…`
-        : names.length === 2 ? `${names[0]} and ${names[1]} are typing…`
-        : `${names.length} people are typing…`;
+    el.textContent = names.length === 1 ? t("chat.typingOne", { name: names[0] })
+        : names.length === 2 ? t("chat.typingTwo", { first: names[0], second: names[1] })
+        : t("chat.typingMany", { count: names.length });
 }
 
 // ---------------------------------------------------------------------------
 // Sending (reply ids 601, file uploads 98/100)
 // ---------------------------------------------------------------------------
 
+function readSendScope() {
+    const scope = $("chat-scope").value;
+    const target = scope === "channel" ? String(activeChannelID() || "")
+        : scope === "direct" ? $("chat-target").value.trim() : "";
+    return { ...readExportScope(), sendScope: scope, target };
+}
+
+function showSendFailure(error, scope, canRetry) {
+    const panel = $("chat-send-error");
+    panel.querySelector("span").textContent = t("polish.sendFailed", { error: String(error) });
+    panel.classList.remove("hidden");
+    const retry = $("chat-retry");
+    retry.textContent = t("polish.retry");
+    retry.hidden = !canRetry();
+    retry.onclick = () => {
+        if (!scopeIsCurrent(scope, readSendScope) || !canRetry()) {
+            panel.classList.add("hidden");
+            return;
+        }
+        void sendMessage();
+    };
+}
+
 export async function sendMessage() {
-    const st = V().state;
+    if (activeSend) return;
     const input = $("chat-text");
-    let text = input.value.trim();
+    const draft = input.value;
+    const text = draft.trim();
+    if (!text && pendingFiles.length === 0) return;
+    $("chat-send-error").classList.add("hidden");
+    const captured = captureScope(readSendScope);
+    const operation = { scope: captured };
+    activeSend = operation;
+    $("chat-send").disabled = true;
+    const current = () => activeSend === operation && scopeIsCurrent(captured, readSendScope);
+    const inputRevision = draftRevision;
+    const parentRevision = replyRevision;
+    let expectedDraft = draft, expectedParent = parentRevision, failure = null;
+    const retryFiles = [];
+    const canRetry = () => draftRevision === inputRevision && replyRevision === expectedParent &&
+        input.value === expectedDraft && pendingFiles.length === retryFiles.length &&
+        pendingFiles.every((file, index) => file === retryFiles[index]);
+    const { sendScope: scope, target } = captured;
+    const parentID = scope === "direct" ? 0 : (replyTo?.id || 0);
     const files = pendingFiles.splice(0);
     renderFilePreview();
-    if (!text && files.length === 0) return;
-
-    const scope = $("chat-scope").value;
-    let target = "";
-    if (scope === "channel") target = String(activeChannelID() || "");
     if (scope === "direct") {
-        target = $("chat-target").value.trim();
-        lastDMTarget = target;
         if (target && !pmTabs.has(target)) openPMKeepView(target);
     }
-
-    // Files are sealed with their own key and uploaded under a content-derived
-    // name; the returned token carries that key inside the encrypted message
-    // body, so the attachment is as private as the message (91-135).
-    const chID = scope === "channel" ? (activeChannelID() || 0) : 0;
-    const retryFiles = [];
-    for (const f of files) {
-        let token;
-        try {
-            token = await app().UploadChatAttachment(chID, f.name, f.dataBase64);
-        } catch (e) {
-            V().sysMsg("upload failed: " + e);
-            retryFiles.push(f);
-            continue;
-        }
-        try {
-            const err = await app().SendChat(scope, target, token);
-            if (err) {
-                V().sysMsg("chat failed: " + err);
+    try {
+        const chID = scope === "channel" ? captured.channelID : 0;
+        for (const f of files) {
+            if (!current()) return;
+            let token;
+            try {
+                token = await app().UploadChatAttachmentForTab(captured.tabID, chID, f.name, f.dataBase64);
+            } catch (e) {
+                if (!current()) return;
+                failure = e;
+                retryFiles.push(f);
+                continue;
+            }
+            if (!current()) return;
+            try {
+                const err = await app().SendChatForTab(captured.tabID, scope, target, token);
+                if (!current()) return;
+                if (err) {
+                    failure = err;
+                    retryFiles.push(f);
+                }
+            } catch (e) {
+                if (!current()) return;
+                failure = e;
                 retryFiles.push(f);
             }
-        } catch (e) {
-            V().sysMsg("chat failed: " + e);
-            retryFiles.push(f);
         }
-    }
-    if (retryFiles.length) {
-        pendingFiles = [...retryFiles, ...pendingFiles];
-        renderFilePreview();
-    }
-
-    if (text) {
-        const parentID = scope === "direct" ? 0 : (replyTo?.id || 0);
-        let err = "";
-        try {
-            err = parentID
-                ? await app().SendChatReply(scope, target, text, parentID)
-                : await app().SendChat(scope, target, text);
-        } catch (e) {
-            V().sysMsg("chat failed: " + e);
-            return;
+        if (!current()) return;
+        if (retryFiles.length) {
+            pendingFiles = [...retryFiles, ...pendingFiles];
+            renderFilePreview();
         }
-        if (err) {
-            V().sysMsg("chat failed: " + err);
-            return;
+        if (text) {
+            let err = "";
+            try {
+                err = parentID
+                    ? await app().SendChatReplyForTab(captured.tabID, scope, target, text, parentID)
+                    : await app().SendChatForTab(captured.tabID, scope, target, text);
+            } catch (e) {
+                failure = e;
+                return;
+            }
+            if (!current()) return;
+            if (err) {
+                failure = err;
+                return;
+            }
+            rememberSent(text);
+            if (replyRevision === parentRevision) {
+                clearReply();
+                expectedParent = replyRevision;
+            }
+            if (draftRevision === inputRevision && input.value === draft) {
+                input.value = "";
+                expectedDraft = "";
+                resetTypingOut();
+            }
         }
-        rememberSent(text);
-        if (replyTo) clearReply();
-        input.value = "";
-        resetTypingOut(); // (120) the message landed; stop claiming to be composing
+    } finally {
+        updateComposerCount();
+        if (failure !== null && current()) showSendFailure(failure, captured, canRetry);
+        if (activeSend === operation) {
+            activeSend = null;
+            $("chat-send").disabled = false;
+        }
     }
 }
 
@@ -2174,11 +2554,13 @@ function recallSent(e) {
     if (e.key === "ArrowUp" && (input.selectionStart === 0 || sentHistoryPos < sentHistory.length) && sentHistoryPos > 0) {
         e.preventDefault();
         if (sentHistoryPos === sentHistory.length) sentHistoryDraft = input.value;
+        draftRevision++;
         input.value = sentHistory[--sentHistoryPos];
         input.selectionStart = input.selectionEnd = input.value.length;
     } else if (e.key === "ArrowDown" && input.selectionEnd === input.value.length && sentHistoryPos < sentHistory.length) {
         e.preventDefault();
         sentHistoryPos++;
+        draftRevision++;
         input.value = sentHistoryPos === sentHistory.length ? sentHistoryDraft : sentHistory[sentHistoryPos];
         input.selectionStart = input.selectionEnd = input.value.length;
     }
@@ -2199,13 +2581,15 @@ function openPMKeepView(uid) {
 // --- file staging: paste / drop (98/100) ---------------------------------------
 
 function stageFiles(fileList) {
+    const scope = captureScope(readSendScope);
     for (const f of fileList) {
         if (f.size > ATTACH_MAX_BYTES) {
-            V().toast(`${f.name || "file"} is larger than ${Math.round(ATTACH_MAX_BYTES / 1048576)} MB — use the file browser`, "warn");
+            V().toast(t("chat.attachmentTooLarge", { name: f.name || t("chat.file"), size: Math.round(ATTACH_MAX_BYTES / 1048576) }), "warn");
             continue;
         }
         const reader = new FileReader();
         reader.onload = () => {
+            if (!scopeIsCurrent(scope, readSendScope)) return;
             const dataURL = reader.result;
             const rawName = (f.name || "image.png").replace(/[\[\]#]/g, "_");
             const extIdx = rawName.lastIndexOf(".");
@@ -2224,7 +2608,7 @@ function stageFiles(fileList) {
             });
             renderFilePreview();
         };
-        reader.onerror = () => V().toast("could not read " + (f.name || "file"), "warn");
+        reader.onerror = () => { if (scopeIsCurrent(scope, readSendScope)) V().toast(t("chat.readFileFailed", { name: f.name || t("chat.file") }), "warn"); };
         reader.readAsDataURL(f);
     }
 }
@@ -2249,7 +2633,7 @@ function renderFilePreview() {
         }
         const x = document.createElement("button");
         x.textContent = "✕";
-        x.title = "remove";
+        x.title = t("chat.remove");
         x.onclick = () => {
             pendingFiles.splice(i, 1);
             renderFilePreview();
@@ -2260,10 +2644,12 @@ function renderFilePreview() {
 }
 
 function insertAtCursor(text) {
+    draftRevision++;
     const input = $("chat-text");
     const pos = input.selectionStart ?? input.value.length;
     input.value = input.value.slice(0, pos) + text + input.value.slice(input.selectionEnd ?? pos);
     input.selectionStart = input.selectionEnd = pos + text.length;
+    updateComposerCount();
     input.focus();
 }
 
@@ -2273,13 +2659,16 @@ function toggleEmojiPanel() {
         return;
     }
     emojiPanel = document.createElement("div");
+    const panel = emojiPanel;
+    const panelGeneration = V().state.serverGeneration;
+    const currentPanel = () => emojiPanel === panel && panelGeneration === V().state.serverGeneration;
     emojiPanel.className = "emoji-panel";
     emojiPanel.onclick = (e) => e.stopPropagation();
 
     for (const [cat, list] of EMOJI_CATS) {
         const head = document.createElement("div");
         head.className = "emoji-cat";
-        head.textContent = cat;
+        head.textContent = t(cat);
         emojiPanel.appendChild(head);
         const grid = document.createElement("div");
         grid.className = "emoji-grid";
@@ -2297,51 +2686,58 @@ function toggleEmojiPanel() {
     // Custom server emoji, cached as data URLs.
     const head = document.createElement("div");
     head.className = "emoji-cat";
-    head.textContent = "Server emoji";
+    head.textContent = t("chat.serverEmoji");
     emojiPanel.appendChild(head);
     // (96) upload is permission-gated server-side, so the button is always
     // offered and a denial comes back as an error frame.
     const up = document.createElement("button");
     up.className = "emoji-upload";
     up.textContent = "+ upload";
-    up.title = "upload a custom server emoji (needs permission)";
+    up.title = t("chat.uploadEmojiHint");
     up.onclick = async (ev) => {
         ev.stopPropagation();
         const generation = V().state.serverGeneration;
+        const tabID = V().state.activeTabID;
         const img = await pickIcon(128, 0.9);
         if (!img?.dataBase64 || generation !== V().state.serverGeneration) return;
         const name = (await promptDialog({
-            title: "Upload custom emoji",
-            label: "Emoji shortcode (letters, digits, _ and -)",
-            confirmLabel: "Upload",
+            title: t("chat.uploadEmojiTitle"),
+            label: t("chat.emojiShortcode"),
+            confirmLabel: t("chat.upload"),
             serverScoped: true,
         }) || "").trim();
         if (!name || generation !== V().state.serverGeneration) return;
-        const err = await app().EmojiUpload(name, img.dataBase64);
-        if (generation !== V().state.serverGeneration) return;
-        if (err) {
-            V().toast("emoji upload failed: " + err, "warn");
-            return;
+        try {
+            const err = await app().EmojiUploadForTab(tabID, name, img.dataBase64);
+            if (generation !== V().state.serverGeneration) return;
+            if (err) {
+                V().toast(t("chat.emojiFailed", { error: String(err) }), "warn");
+                return;
+            }
+            customDirty = true; // refetch so the new one appears in the picker
+            V().toast(t("chat.emojiRequested", { name }));
+        } catch (err) {
+            if (generation === V().state.serverGeneration) V().toast(t("chat.emojiFailed", { error: String(err) }), "warn");
         }
-        customDirty = true; // refetch so the new one appears in the picker
-        V().toast("emoji :" + name + ": uploaded");
     };
     head.appendChild(up);
     const grid = document.createElement("div");
     grid.className = "emoji-grid";
     emojiPanel.appendChild(grid);
     ensureCustomEmoji().then(async () => {
-        if (!emojiPanel) return;
+        if (!currentPanel()) return;
         if (customEmoji.length === 0) {
             const hint = document.createElement("div");
             hint.className = "set-hint";
-            hint.textContent = "none on this server";
+            hint.textContent = t("chat.noEmoji");
             grid.appendChild(hint);
             return;
         }
         for (const e of customEmoji) {
+            if (!currentPanel()) return;
             const url = await emojiURL(e.name);
-            if (!url || !emojiPanel) continue;
+            if (!currentPanel()) return;
+            if (!url) continue;
             const b = document.createElement("button");
             b.title = ":" + e.name + ":";
             const img = document.createElement("img");
@@ -2501,8 +2897,12 @@ async function togglePinsPanel() {
 
 async function loadPinsPanel() {
     if (!pinsPanel) return;
+    const panel = pinsPanel;
+    const request = ++pinsRequest;
+    const scope = captureScope(readExportScope);
+    const current = () => pinsPanel === panel && pinsRequest === request && exportScopeIsCurrent(scope);
     if (view.kind === "channel" && !V().state.myChannelID) {
-        V().toast("join a channel to view its pinned messages — or switch to global", "info", "alert");
+        V().toast(t("chat.joinPins"), "info", "alert");
         closePinsPanel();
         return;
     }
@@ -2510,10 +2910,10 @@ async function loadPinsPanel() {
     pinsPanel.innerHTML = "";
     const head = document.createElement("div");
     head.className = "chat-pop-head";
-    head.textContent = "Pinned messages";
+    head.textContent = t("chat.pinnedTitle");
     const x = document.createElement("button");
     x.textContent = "✕";
-    x.onclick = closePinsPanel;
+    x.onclick = () => { if (current()) closePinsPanel(); };
     head.appendChild(x);
     pinsPanel.appendChild(head);
     let pins = [];
@@ -2521,22 +2921,23 @@ async function loadPinsPanel() {
         // Pins decrypt through the same Go path as history, and the response
         // carries the generations it references, so bodies arrive plaintext
         // and the panel needs no extra round trip (109).
-        const resp = await app().ChatPins(chID);
+        const resp = await app().ChatPinsForTab(scope.tabID, chID);
+        if (!current()) return;
         pins = resp.pins || [];
-        const set = pinSet("ch:" + chID);
-        set.clear();
-        for (const p of pins) set.add(Number(p.message_id));
+        // An authoritative refresh supersedes any still-pending preload.
+        pinnedIDs.set("ch:" + chID, new Set(pins.map(p => Number(p.message_id))));
     } catch (e) {
+        if (!current()) return;
         const err = document.createElement("div");
         err.className = "set-hint warn";
-        err.textContent = "pins unavailable: " + e;
+        err.textContent = t("chat.pinsFailed", { error: String(e) });
         pinsPanel.appendChild(err);
         return;
     }
     if (pins.length === 0) {
         const hint = document.createElement("div");
         hint.className = "set-hint";
-        hint.textContent = "Nothing pinned yet — hover a message and hit 📌.";
+        hint.textContent = t("chat.noPins");
         pinsPanel.appendChild(hint);
         return;
     }
@@ -2550,20 +2951,22 @@ async function loadPinsPanel() {
         row.appendChild(body);
         const jump = document.createElement("button");
         jump.textContent = "↩";
-        jump.title = "jump to message";
+        jump.title = t("chat.messageJump");
         jump.onclick = () => {
+            if (!current()) return;
             if (!flashMsg(p.message_id)) {
-                V().toast("message not loaded — scroll up to load older history", "info", "alert");
+                V().toast(t("chat.messageUnavailable"), "info", "alert");
             }
         };
         row.appendChild(jump);
         const unpin = document.createElement("button");
         unpin.textContent = "✕";
-        unpin.title = "unpin";
+        unpin.title = t("chat.unpin");
         unpin.onclick = async () => {
-            const err = await app().ChatPinMessage(chID, p.message_id, false);
-            if (err) V().toast("unpin failed: " + err, "warn");
-            loadPinsPanel();
+            if (!current() || unpin.disabled) return;
+            unpin.disabled = true;
+            await runChatMutation(scope, () => app().ChatPinMessageForTab(scope.tabID, chID, p.message_id, false), t("chat.unpin"), current);
+            if (current()) await loadPinsPanel();
         };
         row.appendChild(unpin);
         pinsPanel.appendChild(row);
@@ -2580,6 +2983,7 @@ function openSearch() {
 }
 
 function closeSearch() {
+    cancelChatSearch();
     $("chat-search-row").classList.add("hidden");
     $("chat-search").value = "";
     searchQ = "";
@@ -2590,14 +2994,35 @@ function applySearchFilter() {
     const log = $("chat-log");
     const q = searchQ.toLowerCase();
     clearMarks(log);
-    log.querySelectorAll(".msg").forEach((el) => {
+    let matches = 0;
+    const messages = log.querySelectorAll(".msg.rich");
+    messages.forEach((el) => {
         const show = !q || el.textContent.toLowerCase().includes(q);
         el.classList.toggle("hidden", !show);
+        if (show) matches++;
         if (show && q) {
             const body = el.querySelector(".msg-text");
             if (body) markIn(body, q);
         }
     });
+    const count = $("chat-search-count");
+    count.textContent = t("polish.matches", { count: matches, total: messages.length });
+    count.classList.toggle("hidden", !q);
+    groupMessages(log);
+}
+
+function groupMessages(log) {
+    let previous = null;
+    for (const row of log.children) {
+        const stamp = Number(row.dataset.ts);
+        const priorStamp = Number(previous?.dataset.ts);
+        const eligible = row.matches(".msg.rich:not(.hidden):not(.deleted)");
+        const sameAuthor = eligible && previous && row.dataset.authorGroup && row.dataset.authorGroup === previous.dataset.authorGroup;
+        const together = sameAuthor && stamp >= priorStamp && stamp - priorStamp < 5 * 60 * 1000 &&
+            new Date(stamp).toDateString() === new Date(priorStamp).toDateString();
+        row.classList.toggle("grouped", !!together);
+        previous = eligible ? row : null;
+    }
 }
 
 function clearMarks(root) {
@@ -2613,13 +3038,22 @@ function markIn(el, q) {
     const nodes = [];
     while (walker.nextNode()) nodes.push(walker.currentNode);
     for (const node of nodes) {
-        const idx = node.nodeValue.toLowerCase().indexOf(q);
+        const text = node.nodeValue;
+        const folded = text.toLowerCase();
+        let start = 0;
+        let idx = folded.indexOf(q);
         if (idx < 0) continue;
-        const after = node.splitText(idx);
-        after.splitText(q.length);
-        const mark = document.createElement("mark");
-        mark.textContent = after.nodeValue;
-        after.parentNode.replaceChild(mark, after);
+        const fragment = document.createDocumentFragment();
+        while (idx >= 0) {
+            fragment.append(document.createTextNode(text.slice(start, idx)));
+            const mark = document.createElement("mark");
+            mark.textContent = text.slice(idx, idx + q.length);
+            fragment.append(mark);
+            start = idx + q.length;
+            idx = folded.indexOf(q, start);
+        }
+        fragment.append(document.createTextNode(text.slice(start)));
+        node.replaceWith(fragment);
     }
 }
 
@@ -2627,59 +3061,48 @@ function markIn(el, q) {
 // layer applies its own cap, this is only what we ask for.
 const SEARCH_MAX = 2000;
 
-const SEARCH_LABEL = "search all history";
 
 // searchAll runs the full-history search. It is CLIENT-side: App.ChatSearch
 // pages the scope in Go and matches over bodies it decrypted itself, because
 // the server stores only ciphertext and cannot match on content (110).
 async function searchAll() {
-    const generation = V().state.serverGeneration;
+    const scope = captureScope(readExportScope);
+    const dm = scope.kind === "dm" ? getDMOwner() : null;
     const q = $("chat-search").value.trim();
     if (!q) return;
     const btn = $("chat-search-server");
     if (btn && btn.disabled) return;
     if (view.kind === "channel" && !V().state.myChannelID) {
-        V().toast("join a channel to search its history — or switch to global", "info", "alert");
+        V().toast(t("polish.joinSearch"), "info", "alert");
         return;
     }
-    if (view.kind === "dm") {
-        // (122/110) the server is E2EE-blind for DMs, so the only searchable
-        // history is this device's own sealed log.
-        btn.disabled = true;
-        btn.textContent = "searching…";
-        let dm = { messages: [], scanned: 0, undecryptable: 0 };
-        try {
-            dm = await app().DMSearch(view.uid, q, SEARCH_MAX);
-        } catch (e) {
-            if (generation === V().state.serverGeneration) V().toast("search failed: " + e, "warn");
-        }
-        if (generation !== V().state.serverGeneration) return;
-        btn.disabled = false;
-        btn.textContent = SEARCH_LABEL;
-        showSearchResults(q.toLowerCase(), dm.messages || [], dm.scanned || 0, dm.undecryptable || 0);
-        return;
-    }
-    const chID = view.kind === "global" ? 0 : (activeChannelID() || 0);
+    cancelChatSearch();
+    const operation = { id: crypto.randomUUID(), scope, unsubscribe: null };
+    activeSearch = operation;
+    const current = () => activeSearch === operation && exportScopeIsCurrent(scope);
     btn.disabled = true;
-    btn.textContent = "searching…";
+    btn.textContent = t("polish.searching", { count: "" });
     // The paging loop lives in Go now: the keys never cross into the webview
     // and a page can use the store's cap of 200 instead of the UI's 50 (110).
-    const unsub = window.runtime.EventsOn("chatsearch:progress",
-        (n) => { btn.textContent = `searching… ${n}`; });
-    let res = { messages: [], scanned: 0, undecryptable: 0 };
+    operation.unsubscribe = window.runtime.EventsOn("chatsearch:progress", data => {
+        const count = scanProgressCount(data, operation.id);
+        if (current() && count !== null) btn.textContent = t("polish.searching", { count });
+    });
+    let res = null;
     try {
-        res = await app().ChatSearch(chID, q, SEARCH_MAX);
+        res = scope.kind === "dm"
+            ? await callDMHistory(dm, "DMSearchForContext", scope.uid, q, SEARCH_MAX)
+            : await app().ChatSearchForTab(scope.tabID, operation.id, scope.channelID, q, SEARCH_MAX);
     } catch (e) {
-        if (generation === V().state.serverGeneration) V().toast("search failed: " + e, "warn");
+        if (current()) V().toast(t("polish.searchFailed", { error: String(e) }), "warn");
     }
-    if (unsub) unsub();
-    if (generation !== V().state.serverGeneration) return;
-    btn.disabled = false;
-    btn.textContent = SEARCH_LABEL;
-    showSearchResults(q.toLowerCase(), res.messages || [], res.scanned || 0, res.undecryptable || 0);
+    operation.unsubscribe?.();
+    if (!current()) return;
+    cancelChatSearch();
+    if (res) showSearchResults(q.toLowerCase(), res.messages || [], res.scanned || 0, res.undecryptable || 0, scope);
 }
 
-function showSearchResults(q, results, scanned, undecryptable) {
+function showSearchResults(q, results, scanned, undecryptable, scope) {
     const overlay = document.createElement("div");
     overlay.className = "dlg-overlay";
     const dlg = document.createElement("div");
@@ -2688,15 +3111,15 @@ function showSearchResults(q, results, scanned, undecryptable) {
     // A partial search must never look complete: messages under a generation
     // this client cannot obtain are counted, not silently dropped.
     h.textContent = undecryptable > 0
-        ? `${results.length} matches (${undecryptable} messages could not be decrypted)`
-        : `${results.length} matches`;
+        ? t("polish.searchPartial", { count: results.length, missing: undecryptable })
+        : t("polish.searchMatches", { count: results.length });
     dlg.appendChild(h);
     const sub = document.createElement("div");
     sub.className = "set-hint";
     // Scanned is the honest denominator: the search stops at the Go layer's
     // cap, so "0 matches" over a truncated scan is not "not in the history".
-    sub.textContent = `searched ${scanned} message${scanned === 1 ? "" : "s"} of this scope` +
-        (scanned >= SEARCH_MAX ? ` (stopped at the ${SEARCH_MAX}-message cap — narrow the query to reach further back)` : "");
+    sub.textContent = t("polish.searched", { count: scanned }) +
+        (scanned >= SEARCH_MAX ? " · " + t("polish.searchCap", { count: SEARCH_MAX }) : "");
     dlg.appendChild(sub);
     const list = document.createElement("div");
     list.className = "search-list";
@@ -2709,20 +3132,16 @@ function showSearchResults(q, results, scanned, undecryptable) {
     for (const r of results) {
         const row = document.createElement("div");
         row.className = "search-hit";
-        // Escape first, then wrap the match in <mark> (XSS discipline).
-        const esc = escapeHTML((r.body || "").slice(0, 200));
-        const eq = escapeHTML(q).toLowerCase();
-        const idx = esc.toLowerCase().indexOf(eq);
-        row.innerHTML = idx >= 0
-            ? esc.slice(0, idx) + "<mark>" + esc.slice(idx, idx + eq.length) + "</mark>" + esc.slice(idx + eq.length)
-            : esc;
+        row.textContent = (r.body || "").slice(0, 200);
+        markIn(row, q);
         const meta = document.createElement("span");
         meta.className = "search-meta";
         meta.textContent = `${r.from_nickname || "?"} · ${fmtFull((typeof r.sent_at === "number" ? r.sent_at * 1000 : Date.parse(r.sent_at)) || 0)}`;
         row.insertBefore(meta, row.firstChild);
         row.onclick = () => {
-            overlay.remove();
-            if (!flashMsg(r.id)) V().toast("message not in the loaded view — scroll up to load it", "info", "alert");
+            closeDialog(overlay);
+            if (!exportScopeIsCurrent(scope)) return;
+            if (!flashMsg(r.id)) V().toast(t("polish.notLoaded"), "info", "alert");
         };
         list.appendChild(row);
     }
@@ -2731,15 +3150,16 @@ function showSearchResults(q, results, scanned, undecryptable) {
     btns.className = "dlg-buttons";
     const ok = document.createElement("button");
     ok.className = "dlg-ok";
-    ok.textContent = "Close";
-    ok.onclick = () => overlay.remove();
+    ok.textContent = t("polish.close");
+    ok.onclick = () => closeDialog(overlay);
     btns.appendChild(ok);
     dlg.appendChild(btns);
     overlay.appendChild(dlg);
     overlay.onclick = (e) => {
-        if (e.target === overlay) overlay.remove();
+        if (e.target === overlay) closeDialog(overlay);
     };
-    mountServerDialog(overlay);
+    searchResultsPanel = overlay;
+    mountServerDialog(overlay, { onClose: () => { if (searchResultsPanel === overlay) searchResultsPanel = null; } });
 }
 
 // ---------------------------------------------------------------------------
@@ -2748,6 +3168,7 @@ function showSearchResults(q, results, scanned, undecryptable) {
 
 export function refreshHeader() {
     updateHeader();
+    void sendPendingReads();
 }
 
 // fmtSlowMode renders a slow-mode interval the way a person reads it.
@@ -2758,6 +3179,7 @@ function fmtSlowMode(sec) {
 }
 
 function updateHeader() {
+    updateComposerCount();
     const st = V().state;
     const filesOpen = $("files-pane")?.hidden === false;
     let title = "Chat", topic = "";
@@ -2768,7 +3190,7 @@ function updateHeader() {
         title = channel?.Name || "Files";
         topic = channel?.Topic || "";
     } else if (view.kind === "global") {
-        title = "Global chat";
+        title = t("chat.globalTitle");
     } else if (view.kind === "dm") {
         title = "DM — " + (pmTabs.get(view.uid)?.nick || view.uid);
     } else {
@@ -2793,7 +3215,7 @@ function updateHeader() {
     const slowEl = $("chat-slowmode");
     slowEl.textContent = slow > 0 ? "🐢 " + fmtSlowMode(slow) : "";
     slowEl.title = slow > 0
-        ? `slow mode: one message every ${fmtSlowMode(slow)} in this channel (moderators are exempt)`
+        ? t("chat.slowModeHelp", { interval: fmtSlowMode(slow) })
         : "";
     slowEl.classList.toggle("hidden", slow <= 0);
     $("chat-pins-btn").classList.toggle("hidden", view.kind === "dm");
@@ -2808,7 +3230,7 @@ function openDescription() {
     const dlg = document.createElement("div");
     dlg.className = "dlg dlg-wide chan-desc";
     const h = document.createElement("h3");
-    h.textContent = ch ? "# " + ch.Name : "Channel";
+    h.textContent = ch ? "# " + ch.Name : t("chat.channelLabel");
     dlg.appendChild(h);
     const body = document.createElement("div");
     body.className = "chan-desc-body";
@@ -2822,17 +3244,17 @@ function openDescription() {
     // (91-135) one source for the encryption story, so the client and the
     // README cannot drift apart on what the shield actually promises.
     const encH = document.createElement("h4");
-    encH.textContent = "How chat encryption works here";
+    encH.textContent = t("chat.encryptionTitle");
     dlg.appendChild(encH);
     const enc = document.createElement("div");
     enc.className = "set-hint";
-    enc.textContent = CHAT_ENCRYPTION_HELP;
+    enc.textContent = t("chat.encryptionHelp");
     dlg.appendChild(enc);
     const btns = document.createElement("div");
     btns.className = "dlg-buttons";
     const ok = document.createElement("button");
     ok.className = "dlg-ok";
-    ok.textContent = "Close";
+    ok.textContent = t("chat.close");
     ok.onclick = () => overlay.remove();
     btns.appendChild(ok);
     dlg.appendChild(btns);
@@ -2852,17 +3274,17 @@ function exportProgressDialog() {
     const dlg = document.createElement("div");
     dlg.className = "dlg";
     const h = document.createElement("h3");
-    h.textContent = "Exporting chat";
+    h.textContent = t("chat.exportProgressTitle");
     const p = document.createElement("div");
     p.className = "set-hint";
-    p.textContent = "decrypting history…";
+    p.textContent = t("chat.decrypting");
     dlg.appendChild(h);
     dlg.appendChild(p);
     overlay.appendChild(dlg);
     let cleanup = null;
     mountServerDialog(overlay, { onClose: () => cleanup?.() });
     return {
-        update: (n) => { p.textContent = `decrypted ${n} messages…`; },
+        update: (n) => { p.textContent = t("chat.decryptedCount", { count: n }); },
         close: () => closeDialog(overlay),
         setCleanup: (fn) => { cleanup = fn; },
     };
@@ -2876,12 +3298,16 @@ function exportProgressDialog() {
 // export is the one place this client can undo the storage guarantee: it takes
 // an explicit confirm, and the encrypted container is offered first.
 async function exportChat() {
+    const attempt = ++exportAttempt;
+    activeExport?.progress.close();
     const exportScope = captureScope(readExportScope);
+    const dm = exportScope.kind === "dm" ? getDMOwner() : null;
+    const attemptIsCurrent = () => attempt === exportAttempt && exportScopeIsCurrent(exportScope);
     // Without a joined channel the channel view has no scope of its own, and
     // channel id 0 is GLOBAL: exporting it here would hand over a different
     // conversation than the one on screen.
     if (exportScope.kind === "channel" && !exportScope.channelID) {
-        V().toast("join a channel to export its history — or switch to global", "info", "alert");
+        V().toast(t("chat.joinExport"), "info", "alert");
         return;
     }
     const name = exportScope.kind === "dm" ? "dm-" + exportScope.uid.slice(0, 8)
@@ -2889,11 +3315,18 @@ async function exportChat() {
         : (V().state.channels.find((c) => c.ChannelID === exportScope.channelID)?.Name || "channel");
 
     const pass = await askExportPassphrase();
-    if (pass === null || !exportScopeIsCurrent(exportScope)) return; // cancelled or switched
+    if (pass === null || !attemptIsCurrent()) return;
 
     const prog = exportProgressDialog();
-    let unsub = window.runtime.EventsOn("chatexport:progress", (n) => prog.update(n));
+    const operation = { id: crypto.randomUUID(), progress: prog };
+    activeExport = operation;
+    const current = () => activeExport === operation && attemptIsCurrent();
+    let unsub = window.runtime.EventsOn("chatexport:progress", data => {
+        const count = scanProgressCount(data, operation.id);
+        if (current() && count !== null) prog.update(count);
+    });
     prog.setCleanup(() => {
+        if (activeExport === operation) activeExport = null;
         if (!unsub) return;
         unsub();
         unsub = null;
@@ -2901,38 +3334,39 @@ async function exportChat() {
     let res = null;
     try {
         res = exportScope.kind === "dm"
-            ? await app().DMExportHistory(exportScope.uid)
-            : await app().ChatExportHistory(exportScope.channelID, 0);
+            ? await callDMHistory(dm, "DMExportHistoryForContext", exportScope.uid)
+            : await app().ChatExportHistoryForTab(exportScope.tabID, operation.id, exportScope.channelID, 0);
     } catch (e) {
-        if (exportScopeIsCurrent(exportScope)) V().toast("export failed: " + e, "warn");
+        if (current()) V().toast(t("chat.exportFailed", { error: String(e) }), "warn");
     }
+    const ready = current();
     prog.close();
-    if (!res || !exportScopeIsCurrent(exportScope)) return;
+    if (!ready || !res || !attemptIsCurrent()) return;
 
     const contents = res.text || "";
     if (pass !== "") {
         try {
             await app().ExportChatEncrypted(`noxa-${name}.noxachat`, contents, pass);
-            if (!exportScopeIsCurrent(exportScope)) return;
+            if (!attemptIsCurrent()) return;
         } catch (e) {
-            if (!exportScopeIsCurrent(exportScope)) return;
-            V().toast("export failed: " + e, "warn");
+            if (!attemptIsCurrent()) return;
+            V().toast(t("chat.exportFailed", { error: String(e) }), "warn");
             return;
         }
     } else {
         const err = await app().ExportChat(`noxa-${name}.txt`, contents);
-        if (!exportScopeIsCurrent(exportScope)) return;
+        if (!attemptIsCurrent()) return;
         if (err) {
-            V().toast("export failed: " + err, "warn");
+            V().toast(t("chat.exportFailed", { error: String(err) }), "warn");
             return;
         }
     }
     // The same notice rides inside the file; repeating it here is what stops a
     // partial transcript from being taken for a whole one before it is opened.
     if (res.complete === false || res.undecryptable > 0) {
-        V().toast(`exported ${res.messages} messages` +
-            (res.undecryptable > 0 ? `, ${res.undecryptable} unreadable (no key)` : "") +
-            (res.complete === false ? " — stopped at the export limit" : ""), "warn");
+        V().toast(t("chat.exportCount", { count: res.messages }) +
+            (res.undecryptable > 0 ? t("chat.exportUnreadable", { count: res.undecryptable }) : "") +
+            (res.complete === false ? t("chat.exportLimit") : ""), "warn");
     }
 }
 
@@ -2948,16 +3382,16 @@ function askExportPassphrase() {
         const dlg = document.createElement("div");
         dlg.className = "dlg";
         const h = document.createElement("h3");
-        h.textContent = "Export chat";
+        h.textContent = t("chat.exportTitle");
         dlg.appendChild(h);
         const warn = document.createElement("div");
         warn.className = "set-hint warn";
-        warn.textContent = "A plain export writes DECRYPTED messages to a file on your disk. " +
-            "Enter a passphrase to write an encrypted .noxachat instead.";
+        warn.textContent = t("chat.exportWarning");
+
         dlg.appendChild(warn);
         const inp = document.createElement("input");
         inp.type = "password";
-        inp.placeholder = "passphrase (leave empty for a plain export)";
+        inp.placeholder = t("chat.passphraseHint");
         dlg.appendChild(inp);
         const btns = document.createElement("div");
         btns.className = "dlg-buttons";
@@ -2966,20 +3400,20 @@ function askExportPassphrase() {
             closeDialog(overlay, value === null ? "cancel" : "close");
         };
         const cancel = document.createElement("button");
-        cancel.textContent = "Cancel";
+        cancel.textContent = t("chat.cancel");
         cancel.onclick = () => done(null);
         const ok = document.createElement("button");
         ok.className = "dlg-ok";
-        ok.textContent = "Export";
+        ok.textContent = t("chat.export");
         ok.onclick = async () => {
             const p = inp.value;
             if (p === "") {
                 if (confirmingPlainExport) return;
                 confirmingPlainExport = true;
                 const confirmed = await confirmDialog({
-                    title: "Export unencrypted chat?",
-                    message: "This writes decrypted messages to a file on your disk. Anyone who can read that file can read this chat.",
-                    confirmLabel: "Export unencrypted",
+                    title: t("chat.exportPlainTitle"),
+                    message: t("chat.exportPlainHelp"),
+                    confirmLabel: t("chat.exportPlainConfirm"),
                     danger: true,
                     serverScoped: true,
                 });
@@ -3015,17 +3449,17 @@ export function onAnnouncement(d) {
     const text = d.text || "";
     if (!text) return;
     // (385) announcements go through the notification matrix.
-    window.__noxaNotify?.notify("announcement", "announcement: " + text.slice(0, 100), { className: "messages", kind: "warn" });
+    window.__noxaNotify?.notify("announcement", t("chat.announcement", { message: text.slice(0, 100) }), { className: "messages", kind: "warn" });
     const h = hashStr(text);
     const s = V().state.settings;
     if (s?.dismissed_announcement === h) return; // already dismissed
     const b = document.createElement("div");
     b.className = "announce-banner";
-    const t = document.createElement("span");
-    t.textContent = "📢 " + text;
+    const announcementText = document.createElement("span");
+    announcementText.textContent = "📢 " + text;
     const x = document.createElement("button");
     x.textContent = "✕";
-    x.title = "dismiss";
+    x.title = t("chat.dismiss");
     x.onclick = () => {
         b.remove();
         if (s) {
@@ -3033,32 +3467,48 @@ export function onAnnouncement(d) {
             persistSettings();
         }
     };
-    b.appendChild(t);
+    b.appendChild(announcementText);
     b.appendChild(x);
     box.appendChild(b);
 }
 
 export async function onConnect() {
+    initConversations();
     const st = V().state;
-    // myUniqueID drives mention matching and own-message detection.
-    try {
-        st.myUniqueID = await app().IdentityUID();
-    } catch { /* best-effort */ }
+    const { activeTabID: tabID, serverGeneration: generation } = st;
+    const current = () => tabID === st.activeTabID && generation === st.serverGeneration;
+    composerLimit = null;
+    updateComposerCount();
+    const limitScope = readChatServerScope();
+    void Promise.resolve().then(() => app().ServerInfoForTab(tabID)).then(info => {
+        if (!current() || !chatServerIsCurrent(limitScope)) return;
+        composerLimit = { scope: limitScope, bytes: Number.isSafeInteger(info?.chat_max_bytes) ? info.chat_max_bytes : 0 };
+        updateComposerCount();
+    }).catch(() => {});
+    // The context resolves the connection's key, which may differ from the
+    // identity selected for the next connection. Acquisition sets myUniqueID.
+    await getDMOwner().ready;
+    if (!current()) return;
     restorePMTabs(); // (122) conversations that survived the last restart
     try {
-        onSubscriptions({ channel_ids: await app().Subscriptions() });
+        const channelIDs = await app().SubscriptionsForTab(tabID);
+        if (!current()) return;
+        onSubscriptions({ channel_ids: channelIDs });
     } catch { /* the live authoritative event is still the primary path */ }
+    if (!current()) return;
     // (133) surface the server MOTD once per connect. It is a server notice,
     // not a message: styling it as one would put it next to a shield or a lock
     // it has not earned.
     try {
-        const motd = await app().MOTD();
-        if (motd) V().sysMsg("server notice — " + motd);
+        const motd = await app().MOTDForTab(tabID);
+        if (!current()) return;
+        if (motd) V().sysMsg(t("chat.serverNotice", { message: motd }));
     } catch { /* MOTD is best-effort */ }
 }
 
 export function onMyChannelChanged() {
     const st = V().state;
+    if (view.kind === "channel") invalidateChatViewWork();
     if (unread.delete(st.myChannelID)) V().renderTree();
     if (view.kind === "chan" && view.id === st.myChannelID) {
         setView({ kind: "channel" });
@@ -3078,6 +3528,8 @@ export function onChannelsDeleted(channelIDs) {
         chanTabs.delete(id);
         unread.delete(id);
         store.delete("ch:" + id);
+        pinnedIDs.delete("ch:" + id);
+        pendingPinChanges.delete("ch:" + id);
     }
     if (removed.has(pendingChannelTab)) pendingChannelTab = 0;
     if (view.kind === "chan" && removed.has(view.id)) {
@@ -3094,6 +3546,14 @@ export function onChannelsDeleted(channelIDs) {
 // stores, unread badges, PM tabs, and the rendered panes. The tab journal
 // replay rebuilds the view from server frames afterwards.
 export function resetView(options = {}) {
+    composerLimit = null;
+    updateComposerCount();
+    resetConversations();
+    resetDMOwner();
+    V().state.myUniqueID = "";
+    invalidateChatViewWork();
+    closeEmojiPanel();
+    closeReactStrip();
     view = { kind: "channel" };
     store.clear();
     unread.clear();
@@ -3103,7 +3563,6 @@ export function resetView(options = {}) {
     pendingChannelTab = 0;
     replyTo = null;
     pendingFiles = [];
-    lastDMTarget = "";
     newCount = 0;
     jl.verb = null;
     jl.names = [];
@@ -3120,6 +3579,7 @@ export function resetView(options = {}) {
     receipts.clear();
     myReactions.clear();
     pinnedIDs.clear();
+    pendingPinChanges.clear();
     threadCache.clear();
     closeThreadPanel();
     closePinsPanel();
@@ -3218,20 +3678,29 @@ function closeQS() {
 function openQS() {
     closeQS();
     const st = V().state;
+    const { activeTabID: tabID, serverGeneration: generation } = st;
     const items = [];
     for (const ch of st.channels) {
-        items.push({ label: "# " + ch.Name, hint: "channel", action: () => app().JoinChannel(ch.ChannelID) });
+        items.push({ label: "# " + ch.Name, hint: t("chat.channelHint"), action: async () => {
+            if (generation !== st.serverGeneration) return;
+            try {
+                const err = await app().JoinChannelForTab(tabID, ch.ChannelID);
+                if (err && generation === st.serverGeneration) V().toast(err, "warn");
+            } catch (err) {
+                if (generation === st.serverGeneration) V().toast(String(err), "warn");
+            }
+        } });
     }
     for (const c of st.clients) {
         if (c.unique_id && c.unique_id !== st.myUniqueID) {
-            items.push({ label: "@ " + (c.nickname || c.unique_id), hint: "user → PM", action: () => openPM(c.unique_id, c.nickname) });
+            items.push({ label: "@ " + (c.nickname || c.unique_id), hint: t("chat.userHint"), action: () => openPM(c.unique_id, c.nickname) });
         }
     }
     for (const tab of pmTabs.values()) {
-        items.push({ label: "✉ " + tab.nick, hint: "PM tab", action: () => activatePM(tab.uid) });
+        items.push({ label: "✉ " + tab.nick, hint: t("chat.pmTabHint"), action: () => activatePM(tab.uid) });
     }
     for (const tab of chanTabs.values()) {
-        items.push({ label: "# " + channelName(tab.id), hint: "channel tab", action: () => activateChannel(tab.id) });
+        items.push({ label: "# " + channelName(tab.id), hint: t("chat.channelTabHint"), action: () => activateChannel(tab.id) });
     }
 
     qsOverlay = document.createElement("div");
@@ -3239,7 +3708,7 @@ function openQS() {
     const box = document.createElement("div");
     box.className = "qs-box";
     const input = document.createElement("input");
-    input.placeholder = "jump to channel, user or PM tab…";
+    input.placeholder = t("chat.switcherHint");
     const list = document.createElement("div");
     list.className = "qs-list";
     box.appendChild(input);
@@ -3249,6 +3718,8 @@ function openQS() {
         if (e.target === qsOverlay) closeQS();
     };
     const mountedOverlay = qsOverlay;
+    const dmScope = captureScope(readDMHistoryScope);
+    const currentQuickSwitcher = () => qsOverlay === mountedOverlay && mountedOverlay.isConnected && dmHistoryScopeIsCurrent(dmScope);
     mountServerDialog(qsOverlay, {
         initialFocus: input,
         onClose: () => {
@@ -3279,6 +3750,7 @@ function openQS() {
             row.appendChild(l);
             row.appendChild(h);
             row.onclick = () => {
+                if (!currentQuickSwitcher()) return;
                 closeQS();
                 it.action();
             };
@@ -3291,6 +3763,7 @@ function openQS() {
     };
     input.onkeydown = (e) => {
         e.stopPropagation();
+        if (!currentQuickSwitcher()) return;
         if (e.key === "Escape") closeQS();
         if (e.key === "ArrowDown") {
             e.preventDefault();
@@ -3324,8 +3797,9 @@ function handleTabComplete(e) {
         e.preventDefault();
         tabCycle.idx = (tabCycle.idx + 1) % tabCycle.matches.length;
         const pick = tabCycle.matches[tabCycle.idx];
-        input.value = input.value.slice(0, tabCycle.start) + "@" + pick + " " + input.value.slice(tabCycle.end);
-        tabCycle.end = tabCycle.start + pick.length + 2;
+        draftRevision++;
+        input.value = input.value.slice(0, tabCycle.start) + pick + " " + input.value.slice(tabCycle.end);
+        tabCycle.end = tabCycle.start + pick.length + 1;
         input.selectionStart = input.selectionEnd = tabCycle.end;
         return;
     }
@@ -3339,9 +3813,10 @@ function handleTabComplete(e) {
     const names = V().state.clients
         .filter((c) => c.client_id !== V().state.myClientID)
         .map((c) => c.nickname || c.unique_id)
-        .filter((n) => n && n.toLowerCase().startsWith(base));
+        .filter((n) => n && n.toLowerCase().startsWith(base)).map(n => "@" + n);
+    if (view.kind !== "dm") names.push(...roleMentionChoices(V().state.clients, base).map(role => role.token));
     if (canMentionAll()) {
-        for (const f of MENTION_ALL_FORMS) if (f.startsWith(base)) names.push(f);
+        for (const f of MENTION_ALL_FORMS) if (f.startsWith(base)) names.push("@" + f);
     }
     if (names.length === 0) {
         tabCycle = null;
@@ -3350,9 +3825,10 @@ function handleTabComplete(e) {
     e.preventDefault();
     const start = pos - m[0].length;
     const pick = names[0];
-    const end = start + pick.length + 2;
+    const end = start + pick.length + 1;
     tabCycle = { start, end, base, matches: names, idx: 0 };
-    input.value = input.value.slice(0, start) + "@" + pick + " " + input.value.slice(pos);
+    draftRevision++;
+    input.value = input.value.slice(0, start) + pick + " " + input.value.slice(pos);
     input.selectionStart = input.selectionEnd = end;
 }
 
@@ -3361,7 +3837,17 @@ function handleTabComplete(e) {
 // ---------------------------------------------------------------------------
 
 export function initChat() {
+    $("chat-text").addEventListener("input", updateComposerCount);
+    $("chat-text").addEventListener("keyup", updateComposerCount);
+    window.addEventListener("noxa-language-changed", updateComposerCount);
     window.runtime.EventsOn("subscriptions", onSubscriptions);
+    window.runtime.EventsOn("dm_history_identity_changed", onDMIdentityChanged);
+    window.runtime.EventsOn("tab_identity", data => {
+        const identity = parseRuntimeObject(data);
+        if (identity?.tab_id === V().state.activeTabID && typeof identity.identity_uid === "string") {
+            V().state.myUniqueID = identity.identity_uid;
+        }
+    });
     const log = $("chat-log");
 
     applyChatPrefs();
@@ -3374,11 +3860,13 @@ export function initChat() {
         else {
             const uid = $("chat-target").value.trim();
             if (uid) openPM(uid);
+            else invalidateChatViewWork();
         }
     });
     $("chat-target").addEventListener("change", () => {
         const uid = $("chat-target").value.trim();
         if ($("chat-scope").value === "direct" && uid) openPM(uid);
+        else invalidateChatViewWork();
     });
 
     // (134) scroll lock + (103) scroll-up history paging.
@@ -3425,6 +3913,7 @@ export function initChat() {
     $("chat-search-btn").onclick = openSearch;
     $("chat-search-close").onclick = closeSearch;
     $("chat-search").addEventListener("input", () => {
+        cancelChatSearch();
         searchQ = $("chat-search").value.trim();
         applySearchFilter();
     });
@@ -3436,6 +3925,20 @@ export function initChat() {
     $("chat-search-server").onclick = searchAll;
 
     // Emoji picker (95).
+    const pollButton = document.createElement("button");
+    pollButton.id = "chat-poll";
+    pollButton.className = "icon-btn";
+    pollButton.textContent = "▥";
+    pollButton.title = t("poll.create");
+    pollButton.setAttribute("aria-label", t("poll.create"));
+    pollButton.onclick = () => {
+        if (view.kind === "dm" || (view.kind === "channel" && !V().state.myChannelID)) {
+            V().toast(t("poll.channelOnly"), "warn");
+            return;
+        }
+        createPoll(view.kind === "global" ? "global" : "channel", view.kind === "global" ? "" : String(activeChannelID()));
+    };
+    $("chat-emoji").before(pollButton);
     $("chat-emoji").onclick = (e) => {
         e.stopPropagation();
         toggleEmojiPanel();
@@ -3493,11 +3996,16 @@ export function initChat() {
         if (e.key === "Tab") handleTabComplete(e);
         else tabCycle = null;
     });
-    $("chat-text").addEventListener("input", noteTyping);
+    $("chat-text").addEventListener("input", () => {
+        draftRevision++;
+        $("chat-send-error").classList.add("hidden");
+        noteTyping();
+    });
     $("chat-text").addEventListener("blur", resetTypingOut);
 
     // Read receipts need a focused window (124).
     window.addEventListener("focus", sendPendingReads);
+    document.addEventListener("visibilitychange", sendPendingReads);
 
     // Ctrl+F search (110), Ctrl+K quick switcher (135).
     document.addEventListener("keydown", (e) => {
@@ -3523,6 +4031,8 @@ export function initChat() {
     });
 
     window.addEventListener("noxa-language-changed", () => {
+        pollButton.title = t("poll.create");
+        pollButton.setAttribute("aria-label", t("poll.create"));
         const log = $("chat-log");
         const bottomOffset = log.scrollHeight - log.scrollTop;
         const pending = newCount;

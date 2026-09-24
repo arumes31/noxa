@@ -15,6 +15,9 @@ var ErrClientNotFound = errors.New("client not found")
 // ErrChannelNotFound is returned when an operation references an unknown channel.
 var ErrChannelNotFound = errors.New("channel not found")
 
+// ErrChannelFull means an atomic destination reservation exceeded MaxClients.
+var ErrChannelFull = errors.New("channel is full")
+
 // ErrNotInChannel is returned when a client attempts to leave a channel it is
 // not currently a member of.
 var ErrNotInChannel = errors.New("client is not in a channel")
@@ -301,23 +304,21 @@ func (m *Manager) GetChannel(channelID int64) (*Channel, bool) {
 // Manager copies values while holding its lock and never retains these
 // pointers.
 type ChannelUpdate struct {
-	ParentID           *int64
-	Name               *string
-	Topic              *string
-	OrderIndex         *int
-	ChannelType        *int
-	MaxClients         *int
-	PasswordHash       *string
-	NeededJoinPower    *int
-	HasIcon            *bool
-	HasPassword        *bool
-	OpusBitrate        *int
-	OpusFEC            *bool
-	OpusDTX            *bool
-	OpusStereo         *bool
-	SlowModeSeconds    *int
-	Description        *string
-	InheritPermissions *bool
+	ParentID        *int64
+	Name            *string
+	Topic           *string
+	OrderIndex      *int
+	ChannelType     *int
+	MaxClients      *int
+	PasswordHash    *string
+	HasIcon         *bool
+	HasPassword     *bool
+	OpusBitrate     *int
+	OpusFEC         *bool
+	OpusDTX         *bool
+	OpusStereo      *bool
+	SlowModeSeconds *int
+	Description     *string
 }
 
 // UpdateChannel applies a field patch while holding the manager lock. It
@@ -350,9 +351,6 @@ func (m *Manager) UpdateChannel(channelID int64, update ChannelUpdate) bool {
 	if update.PasswordHash != nil {
 		channel.PasswordHash = *update.PasswordHash
 	}
-	if update.NeededJoinPower != nil {
-		channel.NeededJoinPower = *update.NeededJoinPower
-	}
 	if update.HasIcon != nil {
 		channel.HasIcon = *update.HasIcon
 	}
@@ -376,9 +374,6 @@ func (m *Manager) UpdateChannel(channelID int64, update ChannelUpdate) bool {
 	}
 	if update.Description != nil {
 		channel.Description = *update.Description
-	}
-	if update.InheritPermissions != nil {
-		channel.InheritPermissions = *update.InheritPermissions
 	}
 	return true
 }
@@ -559,6 +554,16 @@ func (m *Manager) ChannelMembers(channelID int64) []*Client {
 // channel. It is equivalent to LeaveChannel followed by JoinChannel but
 // performed under a single lock acquisition.
 func (m *Manager) MoveClient(clientID string, targetChannelID int64) error {
+	return m.moveClient(clientID, targetChannelID, false)
+}
+
+// MoveClientWithinCapacity checks and reserves the destination slot atomically.
+// A rejected move retains the original membership and speaking state.
+func (m *Manager) MoveClientWithinCapacity(clientID string, targetChannelID int64) error {
+	return m.moveClient(clientID, targetChannelID, true)
+}
+
+func (m *Manager) moveClient(clientID string, targetChannelID int64, enforceCapacity bool) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -573,6 +578,9 @@ func (m *Manager) MoveClient(clientID string, targetChannelID int64) error {
 
 	if c.ChannelID == targetChannelID {
 		return nil
+	}
+	if enforceCapacity && ch.MaxClients > 0 && len(m.membership[targetChannelID]) >= ch.MaxClients {
+		return ErrChannelFull
 	}
 
 	// Leave previous channel.
@@ -746,7 +754,7 @@ func (m *Manager) SetSpeaking(clientID string, speaking bool) {
 		return
 	}
 
-	if speaking {
+	if speaking && !c.ServerMuted {
 		c.IsSpeaking = true
 		m.speaking[clientID] = &SpeakingState{
 			ClientID:  clientID,
@@ -768,6 +776,36 @@ func (m *Manager) SetPrioritySpeaker(clientID string, active bool) {
 	if c, ok := m.clients[clientID]; ok {
 		c.PrioritySpeaker = active
 	}
+}
+
+func (m *Manager) SetSharing(clientID string, active bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if c, ok := m.clients[clientID]; ok {
+		c.Sharing = active
+	}
+}
+
+// SetServerVoiceState atomically applies the supplied moderation flags.
+func (m *Manager) SetServerVoiceState(clientID string, muted, deafened *bool) (*Client, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	c, ok := m.clients[clientID]
+	if !ok {
+		return nil, ErrClientNotFound
+	}
+	if muted != nil {
+		c.ServerMuted = *muted
+	}
+	if deafened != nil {
+		c.ServerDeafened = *deafened
+	}
+	c.VoiceRevision++
+	if c.ServerMuted {
+		c.IsSpeaking = false
+		delete(m.speaking, clientID)
+	}
+	return cloneClient(c), nil
 }
 
 // SetE2EPublicKey records the client's X25519 public key. It is a no-op for

@@ -19,6 +19,7 @@ import (
 // have a nil Conn. Metadata is an arbitrary string map for per-client extras.
 type Client struct {
 	ClientID   string
+	UserID     int64 `json:"-"` // authenticated account; zero for guests
 	UniqueID   string
 	Nickname   string
 	ChannelID  int64 // 0 means no channel
@@ -26,6 +27,12 @@ type Client struct {
 	// PrioritySpeaker marks TS3-style priority speakers (channel commanders):
 	// clients duck other publishers while a priority speaker talks.
 	PrioritySpeaker bool
+	Sharing         bool
+	// Moderator controls are scoped to this connected session. Self mute and
+	// local per-user volume remain independent client preferences.
+	ServerMuted    bool
+	ServerDeafened bool
+	VoiceRevision  int64
 	// Status/StatusMessage carry the client's presence (wave 8b, 307-309):
 	// "online" ("" counts as online), "away", or "busy", plus a free-form
 	// status message.
@@ -35,7 +42,7 @@ type Client struct {
 	// direct messages and sealed chat-key distribution (wave 4b). Registered
 	// users also persist it in the database; guests live here only.
 	E2EPublicKey string `json:"-"`
-	// IsBot marks accounts holding b_client_is_bot (180); the client renders a
+	// IsBot records display-only bot identity metadata; the client renders a
 	// bot badge instead of a normal presence entry.
 	IsBot       bool
 	ConnectedAt time.Time
@@ -50,23 +57,21 @@ type Client struct {
 //
 // PasswordHash holds the Argon2id hash of the channel password (empty when
 // the channel has no password). It is excluded from JSON serialization so it
-// never leaks into snapshots sent to clients. NeededJoinPower is the
-// i_channel_join_power a client must meet or exceed to join the channel.
+// never leaks into snapshots sent to clients.
 // HasIcon reports whether a channel icon has been uploaded (icons live on
 // disk under the file root).
 type Channel struct {
-	ChannelID       int64
-	ParentID        int64
-	Name            string
-	Topic           string
-	OrderIndex      int
-	ChannelType     int // 0=temp, 1=semi-perm, 2=perm
-	MaxClients      int
-	ClientCount     int // derived, maintained by Manager
-	CreatedAt       time.Time
-	PasswordHash    string `json:"-"`
-	NeededJoinPower int
-	HasIcon         bool
+	ChannelID    int64
+	ParentID     int64
+	Name         string
+	Topic        string
+	OrderIndex   int
+	ChannelType  int // 0=temp, 1=semi-perm, 2=perm
+	MaxClients   int
+	ClientCount  int // derived, maintained by Manager
+	CreatedAt    time.Time
+	PasswordHash string `json:"-"`
+	HasIcon      bool
 	// HasPassword reports (without exposing the hash) that a join password is
 	// set (304 lock icon); it is populated by the snapshot builder. No field
 	// here is renamed for JSON (the one tag present is an exclusion), so
@@ -87,10 +92,6 @@ type Channel struct {
 	// Description is the channel's long description (112/113), rendered
 	// client-side with markdown.
 	Description string
-	// InheritPermissions makes a sub-channel resolve its parent's channel
-	// permissions before its own (157). It also chains the needed join power,
-	// so a gated parent cannot be bypassed by joining a child directly.
-	InheritPermissions bool
 }
 
 // SpeakingState records that a client is currently speaking in a channel.
@@ -136,62 +137,6 @@ func (m *Manager) ChannelAncestors(channelID int64) []int64 {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.ancestorsLocked(channelID)
-}
-
-// ChannelPermissionChain returns channelID followed by the ancestors whose
-// channel permissions it inherits (157): the walk stops at the first channel
-// that does not have InheritPermissions set. The permission resolver reads
-// this to know which channels to merge, nearest (most specific) first.
-func (m *Manager) ChannelPermissionChain(channelID int64) []int64 {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	if _, ok := m.channels[channelID]; !ok {
-		return nil
-	}
-	chain := []int64{channelID}
-	id := channelID
-	for i := 0; i < maxChannelDepth; i++ {
-		ch, ok := m.channels[id]
-		if !ok || !ch.InheritPermissions || ch.ParentID == 0 {
-			break
-		}
-		if _, ok := m.channels[ch.ParentID]; !ok {
-			break
-		}
-		chain = append(chain, ch.ParentID)
-		id = ch.ParentID
-	}
-	return chain
-}
-
-// EffectiveJoinPower returns the needed join power a client must meet to enter
-// channelID: the highest needed power along the inheritance chain (157/168),
-// so re-parenting a channel under a gated parent cannot hand out a back door
-// into the subtree.
-func (m *Manager) EffectiveJoinPower(channelID int64) int {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	ch, ok := m.channels[channelID]
-	if !ok {
-		return 0
-	}
-	needed := ch.NeededJoinPower
-	id := channelID
-	for i := 0; i < maxChannelDepth; i++ {
-		cur, ok := m.channels[id]
-		if !ok || !cur.InheritPermissions || cur.ParentID == 0 {
-			break
-		}
-		parent, ok := m.channels[cur.ParentID]
-		if !ok {
-			break
-		}
-		if parent.NeededJoinPower > needed {
-			needed = parent.NeededJoinPower
-		}
-		id = cur.ParentID
-	}
-	return needed
 }
 
 // ancestorsLocked walks the parent chain with the read lock already held.

@@ -1,5 +1,6 @@
 import { icon, labelButton } from "./icons.js";
 import { getUserVolume, isUserMuted, setUserVolume } from "./audio.js";
+import { currentWhisperRouting } from "./media-controls.js";
 import { t } from "./i18n.js";
 import { setSafeImage } from "./safe-media.js";
 
@@ -24,6 +25,8 @@ function avatar(element, client) {
 
 function voiceState(client) {
     const state = V().state;
+    if (client.server_deafened) return "serverDeafened";
+    if (client.server_muted) return "serverMuted";
     if (client.client_id === state.myClientID) {
         if (state.muted) return "muted";
         return client.is_speaking && client.channel_id === state.myChannelID ? "talking" : "idle";
@@ -62,7 +65,7 @@ export function renderWorkspace() {
         button.querySelector(".participant-name").textContent = name;
         const status = button.querySelector(".participant-state");
         const speaking = statusKey === "speaking" || statusKey === "talking";
-        const statusIcon = speaking ? "signal" : ["muted", "localMuted"].includes(statusKey) ? "micOff" : "mic";
+        const statusIcon = speaking ? "signal" : ["muted", "localMuted", "serverMuted", "serverDeafened"].includes(statusKey) ? "micOff" : "mic";
         labelButton(status, statusIcon, description);
         button.setAttribute("aria-label", t("workspace.memberLabel", { name, state: description.toLowerCase() }));
         button.classList.toggle("speaking", speaking);
@@ -80,6 +83,13 @@ export function renderWorkspace() {
         strip.appendChild(empty);
     }
     const ownChannel = state.channels.find((c) => c.ChannelID === state.myChannelID);
+    const context = $("voice-context");
+    context.textContent = t("polish.connection", {
+        server: state.lastConnect?.addr || t("status.offline"),
+        channel: ownChannel?.Name || t("workspace.noVoice"),
+    });
+    context.title = context.textContent;
+    $("mic-meter").setAttribute("aria-label", t("polish.meter"));
     strip.title = ownChannel ? t("workspace.participantsIn", { channel: ownChannel.Name }) : t("workspace.participants");
     $("server-summary").textContent = t("workspace.online", { count: state.clients.length });
     $("channel-member-count").textContent = t("workspace.inVoice", { count: members.length });
@@ -91,6 +101,7 @@ export function renderWorkspace() {
     $("voice-deafen").setAttribute("aria-label", state.deafened ? t("workspace.undeafen") : t("workspace.deafen"));
     labelButton($("voice-deafen"), state.deafened ? "headphonesOff" : "headphones", state.deafened ? t("workspace.undeafen") : t("workspace.deafen"));
     $("ptt-btn").classList.toggle("hidden", (state.settings?.activation_mode || "ptt") !== "ptt");
+    renderVoiceHints();
     for (const element of document.querySelectorAll("#channel-tree .avatar[data-uid]")) {
         element.style.setProperty("--avatar-color", avatarColor(element.dataset.uid));
     }
@@ -111,23 +122,36 @@ export function renderMember() {
         memberKey = key;
         card.innerHTML = `<div class="member-profile"><div class="card-avatar"></div><div class="member-identity"><div class="card-nick"></div><div class="card-channel"></div><div class="card-groups"></div></div></div>
             <div class="member-audio"><label for="member-volume">${t("workspace.volume")} <output id="member-volume-value" for="member-volume"></output></label><input id="member-volume" type="range" min="0" max="200" step="5" aria-describedby="member-volume-value" />
+            <button id="member-volume-reset" type="button">${t("wins.resetVolume")}</button>
             <button id="member-message" type="button"></button><p id="member-action-error" role="alert" hidden></p></div>
             <details class="member-identity-details"><summary>${t("workspace.identity")}</summary><div class="card-uid mono"></div></details>`;
         const slider = $("member-volume");
         slider.value = Math.round(getUserVolume(client.unique_id) * 100);
-        slider.oninput = () => { $("member-volume-value").textContent = slider.value + "%"; };
+        const showVolume = () => {
+            $("member-volume-value").textContent = Number(slider.value) > 100 ? t("wins.amplified", { value: slider.value }) : slider.value + "%";
+        };
+        slider.oninput = showVolume;
         slider.onchange = async () => {
             const error = $("member-action-error");
             const priorVolume = Math.round(getUserVolume(client.unique_id) * 100);
             error.hidden = true;
+            slider.disabled = true;
+            const reset = $("member-volume-reset");
+            reset.disabled = true;
             try { await setUserVolume(client.unique_id, Number(slider.value)); }
             catch {
                 if (memberKey !== key || !error.isConnected) return;
                 slider.value = priorVolume;
-                $("member-volume-value").textContent = priorVolume + "%";
+                showVolume();
                 error.textContent = t("workspace.volumeFailed");
                 error.hidden = false;
             }
+            finally { slider.disabled = false; reset.disabled = false; }
+        };
+        $("member-volume-reset").onclick = async () => {
+            slider.value = "100";
+            showVolume();
+            await slider.onchange();
         };
         $("member-message").onclick = () => {
             window.__noxaFiles.activateWorkspaceTab("chat");
@@ -142,15 +166,42 @@ export function renderMember() {
     const channel = state.channels.find((c) => c.ChannelID === client.channel_id);
     card.querySelector(".card-channel").textContent = channel ? t("workspace.inChannel", { channel: channel.Name }) : t("workspace.noChannel");
     card.querySelector(".card-uid").textContent = client.unique_id || t("workspace.noIdentity");
-    const groups = state.groupByUID?.get(client.unique_id) || [];
-    card.querySelector(".card-groups").textContent = groups.map((group) => group.name).join(" · ");
+    card.querySelector(".card-groups").textContent = (client.roles || []).map((role) => role.name).join(" · ");
     avatar(card.querySelector(".card-avatar"), client);
     card.querySelector(".card-avatar").classList.toggle("speaking", ["speaking", "talking"].includes(voiceState(client)));
-    $("member-volume-value").textContent = $("member-volume").value + "%";
+    $("member-volume").oninput();
     const isSelf = client.client_id === state.myClientID;
     card.querySelector(".member-audio").hidden = isSelf || !client.unique_id;
     labelButton($("member-message"), "chat", t("workspace.message"));
     $("member-message").setAttribute("aria-label", t("workspace.messagePerson", { name }));
+}
+
+export function renderVoiceHints() {
+    const state = V().state, settings = state.settings || {};
+    const hint = $("voice-shortcut-hint");
+    if (!hint) return;
+    const ptt = (settings.activation_mode || "ptt") === "ptt";
+    const status = state.pttShortcutStatus;
+    const key = status?.spec ?? settings.hotkey_ptt;
+    hint.hidden = !ptt;
+    hint.textContent = !key ? t("wins.pttMissing") : status?.registered === false ? t("wins.pttFailed") : t("wins.pttBinding", { key });
+    hint.classList.toggle("warn", ptt && (!key || status?.registered === false));
+    const routing = currentWhisperRouting();
+    const whisper = $("voice-whisper-preview");
+    const unconfirmed = routing ? routing.status !== "confirmed" : !!settings.whisper_active;
+    whisper.classList.toggle("warn", unconfirmed);
+    if (unconfirmed) {
+        whisper.hidden = false;
+        whisper.textContent = t(routing?.status === "pending" ? "wins.whisperPending" : "wins.whisperUnconfirmed");
+        return;
+    }
+    const config = routing?.config || { active: false, clients: [], channels: [] };
+    const targets = [
+        ...config.clients.map(uid => state.clients.find(client => client.unique_id === uid)?.nickname || t("wins.whisperUnknownMember")),
+        ...config.channels.map(id => t("wins.whisperChannel", { name: state.channels.find(channel => channel.ChannelID === id)?.Name || t("wins.whisperUnknownChannel") })),
+    ];
+    whisper.hidden = !config.active;
+    whisper.textContent = targets.length ? t("wins.whisperTargets", { targets: targets.join(", ") }) : t("wins.whisperNone");
 }
 
 export function initWorkspace() {
@@ -174,11 +225,12 @@ export function initWorkspace() {
     $("voice-disconnect").onclick = () => V().disconnect();
     $("voice-leave-channel").onclick = async () => {
         const generation = V().state.serverGeneration;
+        const tabID = V().state.activeTabID;
         const channel = V().state.myChannelID;
         if (!channel) return;
         $("voice-leave-channel").disabled = true;
         try {
-            const error = await window.go.main.App.JoinChannel(0);
+            const error = await window.go.main.App.JoinChannelForTab(tabID, 0);
             if (error) throw new Error(error);
         } catch (error) {
             if (generation === V().state.serverGeneration) V().toast(t("workspace.leaveFailed", { error: String(error.message || error) }), "warn");
@@ -211,7 +263,9 @@ export function initWorkspace() {
         if (event.key === "Escape" && document.body.classList.contains("channels-open")) {
             document.body.classList.remove("channels-open");
             $("workspace-sidebar-toggle").setAttribute("aria-expanded", "false");
-            $("workspace-sidebar-toggle").focus();
+            const groupToggle = document.querySelector("#center.private-group-active .group-show-channels");
+            groupToggle?.setAttribute("aria-expanded", "false");
+            (groupToggle || $("workspace-sidebar-toggle")).focus();
         }
     });
     renderWorkspace();
@@ -268,6 +322,9 @@ function translateWorkspace() {
     labelButton($("tab-chat"), "chat", t("workspace.chat"));
     labelButton($("tab-files"), "file", t("workspace.files"));
     labelButton($("ptt-btn"), "mic", t("workspace.ptt"));
+    $("ptt-btn").setAttribute("aria-label", t("workspace.ptt"));
+    $("ptt-btn").title = t("workspace.ptt");
+    $("chat-text").setAttribute("aria-label", t("workspace.message"));
     labelButton($("voice-settings"), "settings", t("workspace.audioPreferences"));
     labelButton($("voice-options").querySelector("summary"), "settings", t("workspace.voiceSettings"));
     labelButton($("voice-disconnect"), "disconnect", t("workspace.disconnect"));

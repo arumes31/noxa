@@ -17,6 +17,7 @@
             <h1 id="login-title" class="wordmark"><img class="login-logo" src="/branding/logo.png" width="56" height="56" alt="" />noXa</h1>
             <label for="login-addr">SERVER <input id="login-addr" value="127.0.0.1:12333" autocomplete="url" spellcheck="false" /></label>
             <label for="login-nick">NICKNAME <input id="login-nick" placeholder="nickname" autocomplete="nickname" /></label>
+            <label for="login-accountpw">Account password (optional) <input id="login-accountpw" type="password" placeholder="for a registered account" autocomplete="current-password" /></label>
             <label for="login-serverpw">Server password (optional) <input id="login-serverpw" type="password" placeholder="if required" autocomplete="off" /></label>
             <button id="login-connect" type="submit">CONNECT</button>
             <div id="login-error" role="alert" aria-live="assertive"></div>
@@ -48,12 +49,12 @@
             </div>
             <div class="pane-head sidebar-head"><h2 id="channels-heading">Channels</h2><button id="channel-create-btn" class="icon-btn pane-head-btn" title="Create channel" aria-label="Create channel">+</button></div>
             <div id="tree-tools">
-                <label class="sr-only" for="tree-filter">Filter channels and users</label>
-                <input id="tree-filter" placeholder="Find channels or people…" autocomplete="off" />
+                <label class="sr-only" for="tree-filter">Filter channels, private groups and users</label>
+                <input id="tree-filter" placeholder="Find channels, groups or people…" autocomplete="off" />
                 <button id="tree-collapse" class="icon-btn" title="Collapse all" aria-label="Collapse all channels">▾</button>
                 <button id="tree-expand" class="icon-btn" title="Expand all" aria-label="Expand all channels">▸</button>
             </div>
-            <div id="channel-tree"></div>
+            <div id="sidebar-scroll"><div id="channel-tree"></div></div>
         </aside>
 
         <main id="center" tabindex="-1" aria-label="Voice and chat workspace">
@@ -94,6 +95,7 @@
             <div id="chat-search-row" class="hidden">
                 <label class="sr-only" for="chat-search">Filter loaded messages</label>
                 <input id="chat-search" placeholder="filter loaded messages… (Esc closes)" autocomplete="off" />
+                <span id="chat-search-count" role="status" aria-live="polite" class="hidden"></span>
                 <button id="chat-search-server" title="Decrypt and scan the whole scope history in this client">search all history</button>
                 <button id="chat-search-close" class="icon-btn" title="Close search" aria-label="Close chat search">✕</button>
             </div>
@@ -105,6 +107,7 @@
             <div id="chat-typing" class="hidden" role="status" aria-live="polite"></div>
             <div id="reply-bar" class="hidden"></div>
             <div id="file-preview-row" class="hidden"></div>
+            <div id="chat-send-error" class="hidden" role="status"><span></span><button type="button" id="chat-retry"></button></div>
             <div id="chat-input-row">
                 <select id="chat-scope" aria-label="Message scope">
                     <option value="channel">This channel</option>
@@ -116,7 +119,8 @@
                     <button id="chat-target-toggle" type="button" aria-label="Show connected members" title="Show connected members">⌄</button>
                     <div id="chat-target-options" class="hidden" role="listbox"></div>
                 </div>
-                <input id="chat-text" placeholder="message…" aria-label="Message" autocomplete="off" />
+                <input id="chat-text" placeholder="message…" aria-label="Message" aria-describedby="chat-length" autocomplete="off" />
+                <span id="chat-length" class="composer-count" hidden></span>
                 <input id="chat-file" type="file" multiple class="hidden" aria-label="Choose attachments" />
                 <button id="chat-attach" class="icon-btn" title="Attach files (or paste / drop them here)" aria-label="Attach files">📎</button>
                 <button id="chat-emoji" class="icon-btn" title="Emoji picker" aria-label="Open emoji picker">😊</button>
@@ -141,8 +145,9 @@
         </aside>
         </div>
         <footer id="voice-bar" aria-label="Voice controls">
+            <div class="voice-hints"><span id="voice-shortcut-hint" hidden></span><span id="voice-whisper-preview" hidden></span></div>
             <div class="voice-buttons">
-                <button id="voice-mute" class="voice-control" aria-label="Mute microphone" aria-pressed="false"></button>
+                <div class="voice-microphone"><button id="voice-mute" class="voice-control" aria-label="Mute microphone" aria-pressed="false"></button><div id="mic-meter" class="hidden" role="meter" aria-label="Microphone input level" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div class="mic-fill cool"></div></div><span id="mic-warning" class="hidden" role="status" aria-live="polite"></span></div>
                 <button id="ptt-btn" class="voice-control" title="Hold to talk" aria-label="Push to talk" aria-pressed="false"></button>
                 <button id="voice-deafen" class="voice-control" aria-label="Deafen" aria-pressed="false"></button>
                 <button id="voice-video" class="voice-control" title="Camera" aria-label="Camera" aria-pressed="false"></button>
@@ -156,7 +161,7 @@
                 </div></details>
                 <span class="voice-disconnect-group"><button id="voice-leave-channel" class="voice-control" type="button"></button><button id="voice-disconnect" class="voice-control" type="button"></button></span>
             </div>
-            <div class="voice-info"><div class="voice-summary"><div id="voice-status" role="status" aria-live="polite">Voice disconnected</div><button id="voice-latency" type="button" aria-haspopup="dialog" hidden></button></div><span id="conn-pill" class="pill">offline</span><div id="mic-meter" class="hidden"><div class="mic-fill cool"></div></div></div>
+            <div class="voice-info"><div class="voice-summary"><div id="voice-status" role="status" aria-live="polite">Voice disconnected</div><button id="voice-latency" type="button" aria-haspopup="dialog" hidden></button></div><span id="voice-context"></span><span id="conn-pill" class="pill">offline</span></div>
             <div id="mic-status" class="warn" role="status" aria-live="polite"></div>
         </footer>
     </div>

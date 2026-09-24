@@ -9,6 +9,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"time"
 )
@@ -103,6 +104,9 @@ const settingsVersion = 10
 
 // Settings holds all user preferences.
 type Settings struct {
+	// SettingsBase accompanies frontend edits only, never disk snapshots. It
+	// lets the transaction distinguish edits from unchanged, stale fields.
+	SettingsBase string `json:"settings_base,omitempty"`
 	// SettingsVersion is the generation this file was written by (0 = before
 	// versioning). See migrateSettings.
 	SettingsVersion int `json:"settings_version"`
@@ -123,14 +127,15 @@ type Settings struct {
 	WindowOpacity  int    `json:"window_opacity"`   // (292) 20..100 percent, default 100
 
 	// Accessibility & polish (wave 8c).
-	Language       string `json:"language"`         // (336) "system" | "en" | "de"
-	ReduceMotion   bool   `json:"reduce_motion"`    // (344)
-	SidebarWidth   int    `json:"sidebar_width"`    // (338) px, 0 = default
-	DetailsWidth   int    `json:"details_width"`    // (338) px, 0 = default
-	IdleVideoPause bool   `json:"idle_video_pause"` // (342) default on
-	DNDEnabled     bool   `json:"dnd_enabled"`      // (347)
-	DNDFrom        string `json:"dnd_from"`         // (348) quiet hours start "22:00" ("" = off)
-	DNDTo          string `json:"dnd_to"`           // (348) quiet hours end "07:00"
+	Language                string `json:"language"`                  // (336) "system" | "en" | "de"
+	ReduceMotion            bool   `json:"reduce_motion"`             // (344)
+	SidebarWidth            int    `json:"sidebar_width"`             // (338) px, 0 = default
+	DetailsWidth            int    `json:"details_width"`             // (338) px, 0 = default
+	IdleVideoPause          bool   `json:"idle_video_pause"`          // (342) default on
+	DNDEnabled              bool   `json:"dnd_enabled"`               // (347)
+	NotificationSnoozeUntil int64  `json:"notification_snooze_until"` // Unix milliseconds; independent of DND and quiet hours.
+	DNDFrom                 string `json:"dnd_from"`                  // (348) quiet hours start "22:00" ("" = off)
+	DNDTo                   string `json:"dnd_to"`                    // (348) quiet hours end "07:00"
 
 	// Capture (input / microphone).
 	CaptureDeviceID  string `json:"capture_device_id"`
@@ -198,6 +203,7 @@ type Settings struct {
 	EventSounds              map[string]bool `json:"event_sounds"`         // event name -> enabled
 	WhisperReplyHotkey       string          `json:"whisper_reply_hotkey"` // default "Ctrl+R"
 	VoiceLimiter             bool            `json:"voice_limiter"`        // default on
+	PositionalAudio          bool            `json:"positional_audio"`     // opt-in local game position source
 	GainNormalize            bool            `json:"gain_normalize"`
 
 	// Video (wave 3).
@@ -219,14 +225,15 @@ type Settings struct {
 	DismissedAnnouncement string           `json:"dismissed_announcement"` // hash of the dismissed announcement (132)
 
 	// Social & meta (wave 8b).
-	Contacts        []Contact          `json:"contacts,omitempty"`        // (316)
-	BlockedUsers    []string           `json:"blocked_users,omitempty"`   // (317) unique IDs
-	UserNotes       map[string]string  `json:"user_notes,omitempty"`      // (315) uniqueID -> local note
-	RecentChannels  map[string][]int64 `json:"recent_channels,omitempty"` // (320) server addr -> last 5 channel IDs
-	AutoAwayMinutes int                `json:"auto_away_minutes"`         // (308) 0 = off, default 15
-	AutoAwayMessage string             `json:"auto_away_message"`         // (390) status line other clients see while idle
-	OnboardingDone  bool               `json:"onboarding_done"`           // (329)
-	LastSeenVersion string             `json:"last_seen_version"`         // (330) what's-new tracking
+	Contacts           []Contact          `json:"contacts,omitempty"`      // (316)
+	BlockedUsers       []string           `json:"blocked_users,omitempty"` // (317) unique IDs
+	MutedConversations []string           `json:"muted_conversations,omitempty"`
+	UserNotes          map[string]string  `json:"user_notes,omitempty"`      // (315) uniqueID -> local note
+	RecentChannels     map[string][]int64 `json:"recent_channels,omitempty"` // (320) server addr -> last 5 channel IDs
+	AutoAwayMinutes    int                `json:"auto_away_minutes"`         // (308) 0 = off, default 15
+	AutoAwayMessage    string             `json:"auto_away_message"`         // (390) status line other clients see while idle
+	OnboardingDone     bool               `json:"onboarding_done"`           // (329)
+	LastSeenVersion    string             `json:"last_seen_version"`         // (330) what's-new tracking
 
 	// Identity (wave 9).
 	ActiveIdentity string `json:"active_identity,omitempty"` // (351) identity file stem in identities/
@@ -298,6 +305,7 @@ func DefaultSettings() Settings {
 			"mention": true, "keyword": true, "dm": true, "channel_message": true,
 			"whisper": true, "poke": true, "join_leave": true, "buddy_online": true,
 			"kick": true, "ban": true, "announcement": true, "channel_watch": true,
+			"stream_watch_started": true,
 		},
 		WhisperReplyHotkey: "Ctrl+R",
 		VoiceLimiter:       true,
@@ -595,6 +603,10 @@ func cloneSettings(s Settings) Settings {
 // phases prevents a later mutation from inheriting an earlier candidate that
 // ultimately fails to persist. settingsMu is never held across file I/O.
 func (a *App) updateSettings(mutate func(Settings) Settings) (uint64, error) {
+	return a.updateSettingsChecked(func(current Settings) (Settings, error) { return mutate(current), nil })
+}
+
+func (a *App) updateSettingsChecked(mutate func(Settings) (Settings, error)) (uint64, error) {
 	if hook := a.beforeSettingsTransaction; hook != nil {
 		hook()
 	}
@@ -606,7 +618,12 @@ func (a *App) updateSettings(mutate func(Settings) Settings) (uint64, error) {
 	path := a.settingsFile()
 	a.settingsMu.Unlock()
 
-	candidate := normalizeSettings(cloneSettings(mutate(cloneSettings(committed))))
+	candidate, err := mutate(cloneSettings(committed))
+	if err != nil {
+		return 0, err
+	}
+	candidate.SettingsBase = ""
+	candidate = normalizeSettings(cloneSettings(candidate))
 	if err := settingsSnapshotWriter(path, candidate); err != nil {
 		return 0, err
 	}
@@ -637,7 +654,43 @@ func saveSettingsSnapshot(path string, snapshot Settings) error {
 func (a *App) GetSettings() Settings {
 	a.settingsMu.Lock()
 	defer a.settingsMu.Unlock()
-	return cloneSettings(a.settings)
+	snapshot := cloneSettings(a.settings)
+	snapshot.SettingsBase = ""
+	raw, err := json.Marshal(snapshot)
+	if err != nil {
+		panic("settings must be JSON serializable: " + err.Error())
+	}
+	snapshot.SettingsBase = string(raw)
+	return snapshot
+}
+
+// mergeSettingsEdit applies only fields changed since GetSettings. Conflicts
+// reject the entire transaction; unchanged fields always retain current values.
+func mergeSettingsEdit(current, incoming Settings) (Settings, error) {
+	if incoming.SettingsBase == "" {
+		return mergeGoOwned(current, incoming), nil // Existing native full-replacement callers.
+	}
+	var base Settings
+	if err := json.Unmarshal([]byte(incoming.SettingsBase), &base); err != nil {
+		return Settings{}, errors.New("invalid settings edit baseline; reopen Settings and retry")
+	}
+	incoming.SettingsBase, base.SettingsBase = "", ""
+	incoming, base = mergeGoOwned(current, incoming), mergeGoOwned(current, base)
+	merged := cloneSettings(current)
+	oldValue, newValue, currentValue := reflect.ValueOf(base), reflect.ValueOf(incoming), reflect.ValueOf(current)
+	out := reflect.ValueOf(&merged).Elem()
+	for i := 0; i < oldValue.NumField(); i++ {
+		if oldValue.Type().Field(i).Name == "SettingsBase" || reflect.DeepEqual(oldValue.Field(i).Interface(), newValue.Field(i).Interface()) {
+			continue
+		}
+		if !reflect.DeepEqual(currentValue.Field(i).Interface(), oldValue.Field(i).Interface()) &&
+			!reflect.DeepEqual(currentValue.Field(i).Interface(), newValue.Field(i).Interface()) {
+			field := strings.Split(oldValue.Type().Field(i).Tag.Get("json"), ",")[0]
+			return Settings{}, errors.New("settings changed elsewhere (" + field + "); reopen Settings and retry")
+		}
+		out.Field(i).Set(newValue.Field(i))
+	}
+	return merged, nil
 }
 
 type settingsEffectFamily uint8
@@ -721,6 +774,7 @@ func (a *App) emitSettingsUpdate() {
 // it back on every save, so a copy taken before the Go side wrote them would
 // otherwise wipe them (282 recents, 330 what's-new marker).
 func mergeGoOwned(cur, incoming Settings) Settings {
+	incoming.NotificationSnoozeUntil = cur.NotificationSnoozeUntil
 	incoming.Recents = cur.Recents
 	incoming.LastSeenVersion = cur.LastSeenVersion
 	// (351) the identity manager writes ActiveIdentity while the settings
@@ -733,9 +787,30 @@ func mergeGoOwned(cur, incoming Settings) Settings {
 	return incoming
 }
 
-// SaveSettings replaces and persists the settings. The frontend sends the
-// whole object (Go-owned fields are kept, see mergeGoOwned); hotkey specs
-// are validated and re-applied.
+// SetNotificationSnooze changes only the temporary pause, without applying
+// unrelated window/audio/hotkey settings. Full settings saves preserve it.
+func (a *App) SetNotificationSnooze(minutes int) (int64, error) {
+	if minutes != 0 && minutes != 30 && minutes != 60 {
+		return 0, errors.New("notification snooze must be 0, 30 or 60 minutes")
+	}
+	var until int64
+	_, err := a.updateSettings(func(current Settings) Settings {
+		if minutes > 0 {
+			until = time.Now().Add(time.Duration(minutes) * time.Minute).UnixMilli()
+		}
+		current.NotificationSnoozeUntil = until
+		return current
+	})
+	if err != nil {
+		return 0, err
+	}
+	return until, nil
+}
+
+// SaveSettings merges and persists frontend edits against their GetSettings
+// baseline, rejecting conflicting fields atomically. Native callers without a
+// baseline retain full replacement semantics. Go-owned fields are preserved;
+// hotkey specs are validated and live effects use the committed settings.
 func (a *App) SaveSettings(s Settings) string {
 	s = cloneSettings(s)
 	if err := validateHotkeySpec(s.HotkeyPTT); err != nil {
@@ -763,9 +838,7 @@ func (a *App) SaveSettings(s Settings) string {
 	default:
 		return "invalid announcement language"
 	}
-	generation, err := a.updateSettings(func(current Settings) Settings {
-		return mergeGoOwned(current, s)
-	})
+	generation, err := a.updateSettingsChecked(func(current Settings) (Settings, error) { return mergeSettingsEdit(current, s) })
 	if err != nil {
 		return err.Error()
 	}

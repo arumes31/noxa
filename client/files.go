@@ -33,6 +33,19 @@ func (a *App) FileList(channelID int64, folder string) (netproto.FileListRespons
 	if err != nil {
 		return netproto.FileListResponse{}, err
 	}
+	return cm.fileList(channelID, folder)
+}
+
+// FileListForTab rejects a browser view belonging to a previously active server.
+func (a *App) FileListForTab(tabID string, channelID int64, folder string) (netproto.FileListResponse, error) {
+	cm, err := a.requireTabCM(tabID)
+	if err != nil {
+		return netproto.FileListResponse{}, err
+	}
+	return cm.fileList(channelID, folder)
+}
+
+func (cm *connManager) fileList(channelID int64, folder string) (netproto.FileListResponse, error) {
 	f, err := cm.request(netproto.MsgFileList, netproto.MsgFileListResponse,
 		netproto.FileList{ChannelID: channelID, Folder: folder}, 5*time.Second)
 	if err != nil {
@@ -51,8 +64,21 @@ func (a *App) FileDelete(channelID int64, folder, name string) string {
 	if err != nil {
 		return err.Error()
 	}
-	if err := cm.write(netproto.MsgFileDelete, netproto.FileDelete{
-		ChannelID: channelID, Folder: folder, Name: name,
+	return cm.fileDelete(channelID, folder, name)
+}
+
+// FileDeleteForTab rejects deletion from another server's file browser.
+func (a *App) FileDeleteForTab(tabID string, channelID int64, folder, name string) string {
+	cm, err := a.requireTabCM(tabID)
+	if err != nil {
+		return err.Error()
+	}
+	return cm.fileDelete(channelID, folder, name)
+}
+
+func (cm *connManager) fileDelete(channelID int64, folder, name string) string {
+	if err := cm.mutateFile(netproto.FileMutationSaved{
+		Operation: netproto.MsgFileDelete, ChannelID: channelID, Folder: folder, Name: name,
 	}); err != nil {
 		return err.Error()
 	}
@@ -67,8 +93,21 @@ func (a *App) FileRename(channelID int64, folder, name, newFolder, newName strin
 	if err != nil {
 		return err.Error()
 	}
-	if err := cm.write(netproto.MsgFileRename, netproto.FileRename{
-		ChannelID: channelID, Folder: folder, Name: name,
+	return cm.fileRename(channelID, folder, name, newFolder, newName, newChannelID)
+}
+
+// FileRenameForTab keeps renames and moves on their originating server.
+func (a *App) FileRenameForTab(tabID string, channelID int64, folder, name, newFolder, newName string, newChannelID int64) string {
+	cm, err := a.requireTabCM(tabID)
+	if err != nil {
+		return err.Error()
+	}
+	return cm.fileRename(channelID, folder, name, newFolder, newName, newChannelID)
+}
+
+func (cm *connManager) fileRename(channelID int64, folder, name, newFolder, newName string, newChannelID int64) string {
+	if err := cm.mutateFile(netproto.FileMutationSaved{
+		Operation: netproto.MsgFileRename, ChannelID: channelID, Folder: folder, Name: name,
 		NewFolder: newFolder, NewName: newName, NewChannelID: newChannelID,
 	}); err != nil {
 		return err.Error()
@@ -82,6 +121,19 @@ func (a *App) FileVersions(channelID int64, folder, name string) (netproto.FileV
 	if err != nil {
 		return netproto.FileVersionsResponse{}, err
 	}
+	return cm.fileVersions(channelID, folder, name)
+}
+
+// FileVersionsForTab keeps version inspection on the originating connection.
+func (a *App) FileVersionsForTab(tabID string, channelID int64, folder, name string) (netproto.FileVersionsResponse, error) {
+	cm, err := a.requireTabCM(tabID)
+	if err != nil {
+		return netproto.FileVersionsResponse{}, err
+	}
+	return cm.fileVersions(channelID, folder, name)
+}
+
+func (cm *connManager) fileVersions(channelID int64, folder, name string) (netproto.FileVersionsResponse, error) {
 	f, err := cm.request(netproto.MsgFileVersions, netproto.MsgFileVersionsResponse,
 		netproto.FileVersions{ChannelID: channelID, Folder: folder, Name: name}, 5*time.Second)
 	if err != nil {
@@ -100,6 +152,19 @@ func (a *App) FileLink(channelID int64, folder, name string) (netproto.FileLinkR
 	if err != nil {
 		return netproto.FileLinkResponse{}, err
 	}
+	return cm.fileLink(channelID, folder, name)
+}
+
+// FileLinkForTab creates a link only through the originating server connection.
+func (a *App) FileLinkForTab(tabID string, channelID int64, folder, name string) (netproto.FileLinkResponse, error) {
+	cm, err := a.requireTabCM(tabID)
+	if err != nil {
+		return netproto.FileLinkResponse{}, err
+	}
+	return cm.fileLink(channelID, folder, name)
+}
+
+func (cm *connManager) fileLink(channelID int64, folder, name string) (netproto.FileLinkResponse, error) {
 	f, err := cm.request(netproto.MsgFileLink, netproto.MsgFileLinkResponse,
 		netproto.FileLink{ChannelID: channelID, Folder: folder, Name: name}, 5*time.Second)
 	if err != nil {
@@ -120,7 +185,20 @@ func (a *App) ServerIconSet(dataBase64 string) string {
 	if err != nil {
 		return err.Error()
 	}
-	if err := cm.write(netproto.MsgServerIconSet, netproto.ServerIconSet{DataBase64: dataBase64}); err != nil {
+	return cm.serverIconSet(dataBase64)
+}
+
+// ServerIconSetForTab rejects actions from another server's view.
+func (a *App) ServerIconSetForTab(tabID string, dataBase64 string) string {
+	cm, err := a.requireTabCM(tabID)
+	if err != nil {
+		return err.Error()
+	}
+	return cm.serverIconSet(dataBase64)
+}
+
+func (cm *connManager) serverIconSet(dataBase64 string) string {
+	if err := cm.mutateAsset(netproto.MsgServerIconSet, "", "", dataBase64); err != nil {
 		return err.Error()
 	}
 	return ""
@@ -132,6 +210,19 @@ func (a *App) ServerIconGet() (netproto.ServerIconData, error) {
 	if err != nil {
 		return netproto.ServerIconData{}, err
 	}
+	return cm.serverIconGet()
+}
+
+// ServerIconGetForTab keeps delayed branding refreshes on their original server.
+func (a *App) ServerIconGetForTab(tabID string) (netproto.ServerIconData, error) {
+	cm, err := a.requireTabCM(tabID)
+	if err != nil {
+		return netproto.ServerIconData{}, err
+	}
+	return cm.serverIconGet()
+}
+
+func (cm *connManager) serverIconGet() (netproto.ServerIconData, error) {
 	f, err := cm.request(netproto.MsgServerIconGet, netproto.MsgServerIconData,
 		netproto.ServerIconGet{}, 5*time.Second)
 	if err != nil {
@@ -150,7 +241,20 @@ func (a *App) ServerBannerSet(dataBase64 string) string {
 	if err != nil {
 		return err.Error()
 	}
-	if err := cm.write(netproto.MsgServerBannerSet, netproto.ServerBannerSet{DataBase64: dataBase64}); err != nil {
+	return cm.serverBannerSet(dataBase64)
+}
+
+// ServerBannerSetForTab rejects actions from another server's view.
+func (a *App) ServerBannerSetForTab(tabID string, dataBase64 string) string {
+	cm, err := a.requireTabCM(tabID)
+	if err != nil {
+		return err.Error()
+	}
+	return cm.serverBannerSet(dataBase64)
+}
+
+func (cm *connManager) serverBannerSet(dataBase64 string) string {
+	if err := cm.mutateAsset(netproto.MsgServerBannerSet, "", "", dataBase64); err != nil {
 		return err.Error()
 	}
 	return ""
@@ -162,6 +266,19 @@ func (a *App) ServerBannerGet() (netproto.ServerBannerData, error) {
 	if err != nil {
 		return netproto.ServerBannerData{}, err
 	}
+	return cm.serverBannerGet()
+}
+
+// ServerBannerGetForTab keeps delayed branding refreshes on their original server.
+func (a *App) ServerBannerGetForTab(tabID string) (netproto.ServerBannerData, error) {
+	cm, err := a.requireTabCM(tabID)
+	if err != nil {
+		return netproto.ServerBannerData{}, err
+	}
+	return cm.serverBannerGet()
+}
+
+func (cm *connManager) serverBannerGet() (netproto.ServerBannerData, error) {
 	f, err := cm.request(netproto.MsgServerBannerGet, netproto.MsgServerBannerDat,
 		netproto.ServerBannerGet{}, 5*time.Second)
 	if err != nil {
@@ -180,6 +297,19 @@ func (a *App) ChannelIconGet(channelID int64) (netproto.ChannelIconData, error) 
 	if err != nil {
 		return netproto.ChannelIconData{}, err
 	}
+	return cm.channelIconGet(channelID)
+}
+
+// ChannelIconGetForTab keeps icon queries on their originating server.
+func (a *App) ChannelIconGetForTab(tabID string, channelID int64) (netproto.ChannelIconData, error) {
+	cm, err := a.requireTabCM(tabID)
+	if err != nil {
+		return netproto.ChannelIconData{}, err
+	}
+	return cm.channelIconGet(channelID)
+}
+
+func (cm *connManager) channelIconGet(channelID int64) (netproto.ChannelIconData, error) {
 	f, err := cm.request(netproto.MsgChannelIconGet, netproto.MsgChannelIconData,
 		netproto.ChannelIconGet{ChannelID: channelID}, 5*time.Second)
 	if err != nil {
@@ -198,7 +328,20 @@ func (a *App) EmojiDelete(name string) string {
 	if err != nil {
 		return err.Error()
 	}
-	if err := cm.write(netproto.MsgEmojiDelete, netproto.EmojiDelete{Name: name}); err != nil {
+	return cm.emojiDelete(name)
+}
+
+// EmojiDeleteForTab rejects removals from another server's editor.
+func (a *App) EmojiDeleteForTab(tabID, name string) string {
+	cm, err := a.requireTabCM(tabID)
+	if err != nil {
+		return err.Error()
+	}
+	return cm.emojiDelete(name)
+}
+
+func (cm *connManager) emojiDelete(name string) string {
+	if err := cm.mutateAsset(netproto.MsgEmojiDelete, name, "", ""); err != nil {
 		return err.Error()
 	}
 	return ""
@@ -210,7 +353,20 @@ func (a *App) EmojiRename(name, newName string) string {
 	if err != nil {
 		return err.Error()
 	}
-	if err := cm.write(netproto.MsgEmojiRename, netproto.EmojiRename{Name: name, NewName: newName}); err != nil {
+	return cm.emojiRename(name, newName)
+}
+
+// EmojiRenameForTab rejects renames from another server's editor.
+func (a *App) EmojiRenameForTab(tabID, name, newName string) string {
+	cm, err := a.requireTabCM(tabID)
+	if err != nil {
+		return err.Error()
+	}
+	return cm.emojiRename(name, newName)
+}
+
+func (cm *connManager) emojiRename(name, newName string) string {
+	if err := cm.mutateAsset(netproto.MsgEmojiRename, name, newName, ""); err != nil {
 		return err.Error()
 	}
 	return ""
@@ -222,6 +378,25 @@ func (a *App) ChannelIconSet(channelID int64, dataBase64 string, copyFromChannel
 	cm, err := a.requireCM()
 	if err != nil {
 		return err.Error()
+	}
+	return cm.channelIconSet(channelID, dataBase64, copyFromChannelID)
+}
+
+// ChannelIconSetForTab rejects icon changes from another server's editor.
+func (a *App) ChannelIconSetForTab(tabID string, channelID int64, dataBase64 string, copyFromChannelID int64) string {
+	cm, err := a.requireTabCM(tabID)
+	if err != nil {
+		return err.Error()
+	}
+	return cm.channelIconSet(channelID, dataBase64, copyFromChannelID)
+}
+
+func (cm *connManager) channelIconSet(channelID int64, dataBase64 string, copyFromChannelID int64) string {
+	if cm.usesRoleAuthorization() {
+		if _, err := cm.setRoleChannelIcon(channelID, dataBase64, copyFromChannelID); err != nil {
+			return err.Error()
+		}
+		return ""
 	}
 	if err := cm.write(netproto.MsgChannelIconSet, netproto.ChannelIconSet{
 		ChannelID: channelID, DataBase64: dataBase64, CopyFromChannelID: copyFromChannelID,
@@ -283,6 +458,16 @@ func (a *App) CancelTransfer(id string) {
 		return
 	}
 	cm.cancelTransfers(id)
+}
+
+// CancelTransferForTab rejects cancellation from another server's transfer list.
+func (a *App) CancelTransferForTab(tabID, id string) string {
+	cm, err := a.requireTabCM(tabID)
+	if err != nil {
+		return err.Error()
+	}
+	cm.cancelTransfers(id)
+	return ""
 }
 
 func (m *connManager) trackTransfer(frontendID string, conn net.Conn) func() {
@@ -402,13 +587,26 @@ func (m *connManager) ftEmit(p ftProgress) {
 // events. It returns immediately ("" or an init error); completion arrives
 // as ft_progress status changes.
 func (a *App) UploadFileProgress(id string, channelID int64, folder, name, dataBase64 string) string {
-	data, err := base64.StdEncoding.DecodeString(dataBase64)
-	if err != nil {
-		return "invalid file data"
-	}
 	cm, err := a.requireCM()
 	if err != nil {
 		return err.Error()
+	}
+	return cm.uploadFileProgress(id, channelID, folder, name, dataBase64)
+}
+
+// UploadFileProgressForTab keeps dropped file data on its originating server.
+func (a *App) UploadFileProgressForTab(tabID, id string, channelID int64, folder, name, dataBase64 string) string {
+	cm, err := a.requireTabCM(tabID)
+	if err != nil {
+		return err.Error()
+	}
+	return cm.uploadFileProgress(id, channelID, folder, name, dataBase64)
+}
+
+func (cm *connManager) uploadFileProgress(id string, channelID int64, folder, name, dataBase64 string) string {
+	data, err := base64.StdEncoding.DecodeString(dataBase64)
+	if err != nil {
+		return "invalid file data"
 	}
 	f, err := cm.request(netproto.MsgFileTransferInit, netproto.MsgFileTransferInitResponse,
 		netproto.FileTransferInit{ChannelID: channelID, Direction: "upload", Name: name, Folder: folder, Size: int64(len(data))},
@@ -508,6 +706,23 @@ func (a *App) PickUploadPaths() []string {
 // returns immediately ("" or an init error); completion arrives as ft_progress
 // status changes.
 func (a *App) UploadPathProgress(id string, channelID int64, folder, path string) string {
+	cm, err := a.requireCM()
+	if err != nil {
+		return err.Error()
+	}
+	return cm.uploadPathProgress(id, channelID, folder, path)
+}
+
+// UploadPathProgressForTab binds picker uploads before inspecting local data.
+func (a *App) UploadPathProgressForTab(tabID, id string, channelID int64, folder, path string) string {
+	cm, err := a.requireTabCM(tabID)
+	if err != nil {
+		return err.Error()
+	}
+	return cm.uploadPathProgress(id, channelID, folder, path)
+}
+
+func (cm *connManager) uploadPathProgress(id string, channelID int64, folder, path string) string {
 	st, err := os.Stat(path)
 	if err != nil {
 		return "cannot read " + filepath.Base(path) + ": " + err.Error()
@@ -516,10 +731,6 @@ func (a *App) UploadPathProgress(id string, channelID int64, folder, path string
 		return filepath.Base(path) + " is a folder"
 	}
 	name := filepath.Base(path)
-	cm, err := a.requireCM()
-	if err != nil {
-		return err.Error()
-	}
 	f, err := cm.request(netproto.MsgFileTransferInit, netproto.MsgFileTransferInitResponse,
 		netproto.FileTransferInit{ChannelID: channelID, Direction: "upload", Name: name, Folder: folder, Size: st.Size()},
 		10*time.Second)
@@ -659,6 +870,19 @@ func (a *App) DownloadFileProgress(id string, channelID int64, folder, name, des
 	if err != nil {
 		return err.Error()
 	}
+	return cm.downloadFileProgress(id, channelID, folder, name, destPath, total)
+}
+
+// DownloadFileProgressForTab binds downloads and retries to their source server.
+func (a *App) DownloadFileProgressForTab(tabID, id string, channelID int64, folder, name, destPath string, total int64) string {
+	cm, err := a.requireTabCM(tabID)
+	if err != nil {
+		return err.Error()
+	}
+	return cm.downloadFileProgress(id, channelID, folder, name, destPath, total)
+}
+
+func (cm *connManager) downloadFileProgress(id string, channelID int64, folder, name, destPath string, total int64) string {
 	f, err := cm.request(netproto.MsgFileTransferInit, netproto.MsgFileTransferInitResponse,
 		netproto.FileTransferInit{ChannelID: channelID, Direction: "download", Folder: folder, Name: name},
 		10*time.Second)
@@ -685,6 +909,7 @@ func (a *App) DownloadFileProgress(id string, channelID int64, folder, name, des
 			}
 			p.Error = err.Error()
 		} else {
+			cm.rememberDownload(id, destPath)
 			p.Status = "done"
 			p.Transferred = p.Total
 		}
@@ -802,6 +1027,19 @@ func (a *App) VerifyFile(channelID int64, folder, name, expectedSHA string) (boo
 	if err != nil {
 		return false, err
 	}
+	return cm.verifyFile(channelID, folder, name, expectedSHA)
+}
+
+// VerifyFileForTab keeps the checksum transfer on the originating connection.
+func (a *App) VerifyFileForTab(tabID string, channelID int64, folder, name, expectedSHA string) (bool, error) {
+	cm, err := a.requireTabCM(tabID)
+	if err != nil {
+		return false, err
+	}
+	return cm.verifyFile(channelID, folder, name, expectedSHA)
+}
+
+func (cm *connManager) verifyFile(channelID int64, folder, name, expectedSHA string) (bool, error) {
 	f, err := cm.request(netproto.MsgFileTransferInit, netproto.MsgFileTransferInitResponse,
 		netproto.FileTransferInit{ChannelID: channelID, Direction: "download", Folder: folder, Name: name},
 		10*time.Second)

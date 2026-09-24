@@ -13,6 +13,7 @@ import (
 	"go.uber.org/zap"
 
 	"noxa/internal/auth"
+	"noxa/internal/authorization"
 	"noxa/internal/netproto"
 )
 
@@ -21,6 +22,12 @@ import (
 // users. Afterwards the client receives the current global chat key plus the
 // key of its current channel, sealed to the fresh public key.
 func (s *TCPServer) handleKeyPublish(ctx context.Context, client *Client, f *netproto.Frame) error {
+	return s.rolePolicyRead(ctx, client, func(ctx context.Context) error {
+		return s.publishSessionKey(ctx, client, f)
+	})
+}
+
+func (s *TCPServer) publishSessionKey(ctx context.Context, client *Client, f *netproto.Frame) error {
 	var msg netproto.KeyPublish
 	if err := netproto.Decode(f, &msg); err != nil {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "malformed key_publish: "+err.Error())
@@ -59,6 +66,12 @@ func (s *TCPServer) handleKeyPublish(ctx context.Context, client *Client, f *net
 // state (covers guests), registered users from the database. An empty key
 // means the user never published one (old client).
 func (s *TCPServer) handleKeyRequest(ctx context.Context, client *Client, f *netproto.Frame) error {
+	return s.rolePolicyRead(ctx, client, func(ctx context.Context) error {
+		return s.lookupSessionKey(ctx, client, f)
+	})
+}
+
+func (s *TCPServer) lookupSessionKey(ctx context.Context, client *Client, f *netproto.Frame) error {
 	var msg netproto.KeyRequest
 	if err := netproto.Decode(f, &msg); err != nil {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "malformed key_request: "+err.Error())
@@ -109,6 +122,12 @@ func (s *TCPServer) handleKeyRequest(ctx context.Context, client *Client, f *net
 // established that the client belongs to the scope, so a first generation may
 // be created here.
 func (s *TCPServer) deliverScopeKey(ctx context.Context, client *Client, scope int64) error {
+	return s.withRoleAccess(ctx, client, scope, authorization.ViewChannel, func(ctx context.Context) error {
+		return s.deliverScopeKeyAllowed(ctx, client, scope)
+	})
+}
+
+func (s *TCPServer) deliverScopeKeyAllowed(ctx context.Context, client *Client, scope int64) error {
 	if s.deps == nil || s.deps.State == nil || s.chatKeys == nil || !s.chatKeys.configured() {
 		return nil
 	}
@@ -124,7 +143,7 @@ func (s *TCPServer) deliverScopeKey(ctx context.Context, client *Client, scope i
 	if err != nil {
 		return fmt.Errorf("sealing scope key: %w", err)
 	}
-	if err := s.writeMessage(client, netproto.MsgChannelKey, ck); err != nil {
+	if err := s.writeMessageInContext(ctx, client, netproto.MsgChannelKey, ck); err != nil {
 		return fmt.Errorf("writing scope key: %w", err)
 	}
 	return nil
@@ -136,23 +155,7 @@ func (s *TCPServer) deliverScopeKey(ctx context.Context, client *Client, scope i
 // scope — refusing older generations while still serving their rows would be
 // theatre.
 func (s *TCPServer) scopeReadable(ctx context.Context, client *Client, scope int64) bool {
-	if scope == globalChatScope {
-		return true
-	}
-	if s.deps == nil || s.deps.State == nil {
-		return false
-	}
-	channelID, _, ok := s.deps.State.ClientChannelState(client.ID)
-	if !ok {
-		return false
-	}
-	if channelID == scope {
-		return true
-	}
-	// (312) a subscriber already holds this scope's current generation, so
-	// withholding history and pins would only hide the scrollback it can
-	// decrypt while the live relay flows.
-	return s.deps.State.IsSubscribed(client.ID, scope) && s.subscribeAllowed(ctx, client, scope)
+	return s.roleAllowed(ctx, client, scope, authorization.ViewChannel)
 }
 
 // rotateScopeKey rotates a channel's chat key (a member left) and
@@ -204,12 +207,24 @@ func (s *TCPServer) rotateScopeKey(ctx context.Context, channelID int64) {
 // Redistribution happens strictly AFTER rotate returns: deliverScopeKey ->
 // sealFor -> at re-enters the scope entry's mutex.
 func (s *TCPServer) doRotateScopeKey(ctx context.Context, channelID int64) {
+	if err := s.withRolePolicy(ctx, func(ctx context.Context) error {
+		s.rotateAndDeliverScopeKey(ctx, channelID)
+		return nil
+	}); err != nil {
+		s.logger.Warn("chat key rotation authorization unavailable", zap.Error(err))
+	}
+}
+
+func (s *TCPServer) rotateAndDeliverScopeKey(ctx context.Context, channelID int64) {
 	if _, _, err := s.chatKeys.rotate(ctx, channelID); err != nil {
 		// A stale key is far better than an unreadable channel.
 		s.logger.Warn("chat key rotation failed", zap.Int64("channel_id", channelID), zap.Error(err))
 		return
 	}
 	for _, member := range s.deps.State.ChannelMembers(channelID) {
+		if ctx.Err() != nil {
+			return
+		}
 		if client, ok := s.clientByID(member.ClientID); ok {
 			if err := s.deliverScopeKey(ctx, client, channelID); err != nil {
 				s.logger.Warn("delivering rotated key to member failed",
@@ -224,6 +239,9 @@ func (s *TCPServer) doRotateScopeKey(ctx context.Context, channelID int64) {
 	// them out of the redistribution would strand every one of them on the
 	// retired key and turn their tab into a wall of ⚠ placeholders.
 	for _, client := range s.channelSubscribers(ctx, channelID) {
+		if ctx.Err() != nil {
+			return
+		}
 		if err := s.deliverScopeKey(ctx, client, channelID); err != nil {
 			s.logger.Warn("delivering rotated key to subscriber failed",
 				zap.String("client_id", client.ID),
@@ -244,6 +262,12 @@ func (s *TCPServer) handleChatKeyRequest(ctx context.Context, client *Client, f 
 	if err := netproto.Decode(f, &msg); err != nil {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "malformed chat_key_request: "+err.Error())
 	}
+	return s.roleAction(ctx, client, msg.ChannelID, authorization.ReadHistory, func(ctx context.Context) error {
+		return s.chatKeyRequestAllowed(ctx, client, msg)
+	})
+}
+
+func (s *TCPServer) chatKeyRequestAllowed(ctx context.Context, client *Client, msg netproto.ChatKeyRequest) error {
 	if len(msg.KeyIDs) == 0 || len(msg.KeyIDs) > maxKeysPerResponse {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "key_ids count must be 1..64")
 	}

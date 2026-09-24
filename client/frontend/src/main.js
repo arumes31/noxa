@@ -3,6 +3,14 @@
 // window.runtime.EventsOn(name, cb) receives backend events.
 
 import "@fontsource-variable/sora";
+import "./streams.css";
+import "./polls.css";
+import "./conversations.css";
+import { conversationChanged, filterConversations, privateGroupViewToken } from "./conversations.js";
+import "./private-calls.css";
+import { privateCallChanged, privateCallSignal, stopPrivateCall } from "./private-calls.js";
+import { refreshPolls } from "./polls.js";
+import { SpatialVoice } from "./positional-audio.js";
 import "@fontsource-variable/outfit";
 import "@fontsource-variable/jetbrains-mono";
 import { initMenu } from "./menu.js";
@@ -12,7 +20,7 @@ import { initUpdater, startupAutoCheck } from "./updater.js";
 import { playEvent, playAlert, clearSpeech, initSounds, updateSoundOutput, updateConversationDucking, soundEngine, speechQueue } from "./sounds.js";
 import {
     startMicMeter, stopMicMeter, pttRelease, makeLimiter,
-    getUserVolume, isUserMuted, setUserMuted, registerUserChain, unregisterUserChain,
+    getUserVolume, isUserMuted, refreshUserAudio, registerUserChain, unregisterUserChain,
     setDucking, attachUserNormalizer, detachUserNormalizer, detachAllUserNormalizers,
     captureConstraints, markCaptureProfile, applyCaptureProfile, resumeAudioPlayback, createRemoteAudioSource,
     syncMuteButton, renderMicStatus,
@@ -20,11 +28,14 @@ import {
 import {
     initVideo, videoTrackAdded, videoTrackRemoved, videoSpeaking,
     videoRefreshNames, clearVideoGrid, shareToggle, setLowBandwidth, isLowBandwidth,
-    parseTrackID, SLOT_SCREEN_AUDIO, cameraToggle, resetCameraState, clearRegionBox, trackSlots,
-    renegotiate,
+    parseTrackID, SLOT_SCREEN_AUDIO, cameraToggle, resetCameraState, clearRegionBox,
+    renegotiate, answerRemoteOffer, applyVideoLimits,
 } from "./video.js";
 import * as chatUI from "./chat-ui.js";
-import { initPermsUI } from "./perms-ui.js";
+import { startStreamSession, stopStreamSession, streamSessionIsCurrent, receiveStreamTrack, receiveShareAudio } from "./stream-controls.js";
+import { isCurrentPublication } from "./stream-publication.js";
+import { initPermsUI } from "./roles-access-ui.js";
+import { roleChip } from "./role-presentation.js";
 import { initFilesUI } from "./files-ui.js";
 import { initTabs } from "./tabs.js";
 import { initSocialUI } from "./social-ui.js";
@@ -39,8 +50,10 @@ import { createLiveAnnouncementQueue } from "./live-announcer.js";
 import { dialogFocusableSelector, initModalSystem, mountServerDialog } from "./modal.js";
 import { parseRuntimeObject } from "./runtime-json.js";
 import { icon } from "./icons.js";
-import { initWorkspace, renderWorkspace, renderMember } from "./workspace-ui.js";
+import { initWorkspace, renderWorkspace, renderMember, renderVoiceHints } from "./workspace-ui.js";
 import { createTrayVoiceSync } from "./tray-state.js";
+import { capturePresenceScope, presenceIsCurrent, restorePresenceOnActivity, setPresence } from "./presence.js";
+import { captureMediaScope, mediaScopeIsCurrent, setWhisperRouting } from "./media-controls.js";
 
 const P = () => window.__noxaPerms;
 window.__noxaChat = chatUI;
@@ -66,12 +79,9 @@ const state = {
     myUniqueID: "",
     myNickname: "",
     myChannelID: 0,
-    isAdmin: false,       // server admin flag from the auth response (6b UI gating)
     isGuest: true,        // anonymous sessions cannot perform account-only actions
-    myPerms: new Map(),   // own resolved permissions: key -> {value, grant, skip, negate}
-    serverGroups: [],     // server group list (6b tree presentation)
-    groupByUID: new Map(), // unique_id -> [group entries, sorted by sort_id]
-    groupIcons: new Map(), // group_id -> data url | null
+    authorizationModel: "", // negotiated per session; "pending" while a tab's identity is loading
+    sessionGeneration: 0, // invalidates session snapshots when the connection drops
     myPriority: false, // own priority-speaker flag
     selectedClientID: "",
     pc: null,
@@ -85,9 +95,11 @@ const state = {
     treeFilter: "",               // (319) live tree filter
     multiSelect: new Set(),       // (306) ctrl/shift-selected client IDs
     myStatus: "",                 // (307) own presence status
+    canSetInvisible: false,       // recipient-specific role eligibility
     micState: "unknown", // ok | none | denied
     lastWhispererUID: "", // (33) last user who whispered to me (voice or DM)
     whisperArmed: false,  // (33) whisper-reply hotkey is overriding the whisper list
+    whisperTargetUID: "", // confirmed reply target, independent of later incoming whispers
     whisperPrev: null,    // (33) {clients, channels, active} the hotkey replaced
     avatars: new Map(),  // unique_id -> data url | null
     avatarPending: new Set(),
@@ -108,7 +120,10 @@ const state = {
     trackUsers: new Map(), // media track ID -> {client_id, unique_id, nickname} (per-publisher tracks; wave-3 video tiles)
     shareStream: null,     // getDisplayMedia result while screen sharing
     shareAudioSender: null, // RTCRtpSender of the optional share system-audio track
-    shareAudioTransceiver: null, // its transceiver, reused by the next share in this session
+    shareVideoTransceiver: null, // dedicated screen source, independent of camera
+    shareStarting: null,
+    shareStopping: false,
+    shareAudioTransceiver: null, // dedicated system-audio source for this share
     regionBox: null,       // (71) crop target element, alive for the whole cropped share
 };
 
@@ -284,6 +299,7 @@ async function connectFromLogin() {
     document.querySelector(".login-card").setAttribute("aria-busy", "true");
     const addr = $("login-addr").value.trim();
     const nick = $("login-nick").value.trim();
+    const pw = $("login-accountpw").value;
     const spw = $("login-serverpw").value;
     // A bridge call can outlive a tab switch. Only the tab/generation that
     // initiated this login may announce its eventual failure.
@@ -301,7 +317,7 @@ async function connectFromLogin() {
     const bookmark = state.pendingBookmark?.addr === addr ? state.pendingBookmark.name : "";
     try {
         const { error: err, tabID } = await connectBookmarkTabWithID(
-            bookmark, addr, nick, "", spw);
+            bookmark, addr, nick, pw, spw);
         if (err) {
             // (4a) TOFU fingerprint mismatch: prominent warning + explicit
             // trust action — never silently accepted.
@@ -318,38 +334,28 @@ async function connectFromLogin() {
         // here on. Clearing only on success keeps the retry after a rejected
         // password identifiable.
         state.pendingBookmark = null;
-        const connection = { addr, nick, pw: "", spw, bookmark };
+        if ($("login-addr").value.trim() === addr && $("login-nick").value.trim() === nick &&
+            $("login-accountpw").value === pw) $("login-accountpw").value = "";
+        const connection = { addr, nick, pw, spw, bookmark };
         const ownsActiveTab = await rememberTabConnect(connection, null, tabID);
         if (!ownsActiveTab) return;
         const finalizationGeneration = state.serverGeneration;
+        const sessionGeneration = state.sessionGeneration;
         // A legacy binding has no tab ID, so retain the direct warning path.
         // Current bindings check the exact tab from tabs.js after activation.
         const clockWarning = tabID ? "" : await certificateClockWarning(addr);
         state.reconnectAttempts = 0;
-        let myClientID = "";
-        let isAdmin = false;
-        let isGuest = true;
-        let security = "";
+        let session;
         try {
-            myClientID = await window.go.main.App.ClientID();
-        } catch { /* client-id display/ducking degrade gracefully */ }
-        try {
-            isAdmin = await window.go.main.App.IsAdmin();
-        } catch { /* keep the least-privileged fallback */ }
-        try {
-            isGuest = await window.go.main.App.IsGuest();
-        } catch { /* the credential-derived fallback remains valid */ }
-        try {
-            security = await window.go.main.App.ConnectionSecurity();
-        } catch { /* best-effort status line */ }
+            session = await window.go.main.App.SessionInfoForTab(tabID);
+        } catch { return; }
         if (state.serverGeneration !== finalizationGeneration) return;
         if (!await tabIsActive(tabID)) return;
-        if (state.serverGeneration !== finalizationGeneration) return;
+        if (state.serverGeneration !== finalizationGeneration || state.sessionGeneration !== sessionGeneration || !session.connected) return;
         state.myNickname = nick;
-        state.myClientID = myClientID;
-        state.isAdmin = isAdmin;
-        state.isGuest = isGuest;
-        P()?.redeemPendingToken?.();
+        state.myClientID = session.client_id;
+        state.isGuest = session.is_guest;
+        state.authorizationModel = session.authorization_model || "";
         $("conn-pill").textContent = addr;
         $("conn-pill").classList.add("up");
         $("conn-lock").classList.remove("hidden");
@@ -357,15 +363,13 @@ async function connectFromLogin() {
         refreshPermissions();
         applyWhisperSettings();
         chatUI.onConnect(); // (133) MOTD + myUniqueID for mentions/own-msgs
-        // (6b) group memberships drive tree colors/hoisted sections.
-        P().refreshGroups().then(() => renderTree());
         window.__noxaFiles.loadServerIcon(); // (270) server icon in the sidebar
         window.__noxaSocial.refreshNews(); // (313) server news pane
         startQualitySampler(); // (333) connection quality pill
         noteActivity(); // (308) auto-away timer starts at connect
         playEvent("connection_connected");
         // (4a) surface the connection security as an info line.
-        if (security) sysMsg("connected: " + security);
+        if (session.security) sysMsg("connected: " + session.security);
         warnCertificateClock(clockWarning, addr);
     } catch (e) {
         playCurrentConnectionFailure();
@@ -532,31 +536,27 @@ async function completeReconnect(c, generation, tabID) {
     const ownsActiveTab = await rememberTabConnect(c, generation, tabID);
     if (generation !== reconnectGeneration) return false;
     const finalizationGeneration = state.serverGeneration;
-    state.reconnectAttempts = 0;
+    const sessionGeneration = state.sessionGeneration;
     // A user-selected tab now owns the global UI. The reconnect still
     // succeeded in the background, so stop retrying without painting over it.
-    if (!ownsActiveTab) return true;
-    let myClientID = state.myClientID;
-    let isAdmin = false;
-    let isGuest = !c.pw;
+    if (!ownsActiveTab) {
+        state.reconnectAttempts = 0;
+        return true;
+    }
+    let session;
     try {
-        myClientID = await window.go.main.App.ClientID();
-    } catch { /* client-id display and quality sampling degrade gracefully */ }
-    try {
-        isAdmin = await window.go.main.App.IsAdmin();
-    } catch { /* keep the least-privileged fallback */ }
-    try {
-        isGuest = await window.go.main.App.IsGuest();
-    } catch { /* the credential-derived fallback remains valid */ }
+        session = await window.go.main.App.SessionInfoForTab(tabID);
+    } catch { return generation === reconnectGeneration; }
     if (generation !== reconnectGeneration) return false;
     if (state.serverGeneration !== finalizationGeneration) return true;
     if (!await tabIsActive(tabID)) return true;
     if (state.serverGeneration !== finalizationGeneration) return true;
+    if (state.sessionGeneration !== sessionGeneration || !session.connected) return false;
+    state.reconnectAttempts = 0;
     state.myNickname = c.nick;
-    state.myClientID = myClientID;
-    state.isAdmin = isAdmin;
-    state.isGuest = isGuest;
-    P()?.redeemPendingToken?.();
+    state.myClientID = session.client_id;
+    state.isGuest = session.is_guest;
+    state.authorizationModel = session.authorization_model || "";
     $("conn-pill").textContent = c.addr;
     $("conn-pill").classList.add("up");
     $("conn-lock").classList.remove("hidden");
@@ -564,7 +564,6 @@ async function completeReconnect(c, generation, tabID) {
     refreshPermissions();
     applyWhisperSettings();
     chatUI.onConnect();
-    P()?.refreshGroups?.().then(() => renderTree());
     window.__noxaFiles?.loadServerIcon?.();
     window.__noxaSocial?.refreshNews?.();
     startQualitySampler();
@@ -594,6 +593,7 @@ async function retireReplacedTab(sourceTabID, replacementTabID, c, generation) {
 async function attemptReconnect(c = state.lastConnect, { announceFailure = true, sourceTabID = state.activeTabID } = {}) {
     if (!c || state.reconnectInFlight) return false;
     const generation = reconnectGeneration;
+    const sourceServerGeneration = state.serverGeneration;
     state.reconnectInFlight = true;
     let err = "";
     let tabID = "";
@@ -617,6 +617,7 @@ async function attemptReconnect(c = state.lastConnect, { announceFailure = true,
         return false;
     }
     if (err) {
+        if (sourceTabID !== state.activeTabID || sourceServerGeneration !== state.serverGeneration) return false;
         sysMsg("reconnect failed: " + err);
         if (announceFailure) toast("Reconnect failed: " + err, "warn", "conn");
         return false;
@@ -678,9 +679,12 @@ function scheduleReconnect(
     state.reconnectTimer = setTimeout(async () => {
         clearReconnectTimer();
         if (generation !== reconnectGeneration) return;
+        const sessionGeneration = state.sessionGeneration;
         const connected = await attemptReconnect(reconnectTarget, { announceFailure: false, sourceTabID });
         if (connected) return;
         if (generation !== reconnectGeneration) return;
+        // A disconnect during finalization already scheduled its own recovery.
+        if (sessionGeneration !== state.sessionGeneration) return;
         chatUI.cancelReconnectAnnouncementBatch();
         scheduleReconnect(reconnectTarget, generation, sourceTabID, sourceServerGeneration);
     }, 5000);
@@ -691,15 +695,32 @@ async function reconnectLastServerNow() {
     // delayed menu click already queued by the operating system.
     if (state.reconnectInFlight || reconnectRequestPending) return;
     reconnectRequestPending = true;
+    const sourceTabID = state.activeTabID;
+    const serverGeneration = state.serverGeneration;
+    const sessionGeneration = state.sessionGeneration;
+    const generation = reconnectGeneration;
+    const previous = state.lastSuccessfulConnect;
+    const target = previous ? { ...previous } : null;
+    const fallbackTarget = target ? null : window.__noxaTabs?.quickConnectTarget?.();
+    const current = () => sourceTabID === state.activeTabID && serverGeneration === state.serverGeneration &&
+        sessionGeneration === state.sessionGeneration && generation === reconnectGeneration && previous === state.lastSuccessfulConnect;
     try {
-        let isConnected = $("conn-pill").classList.contains("up");
-        try { isConnected ||= !!(await window.go.main.App.Connected()); } catch { /* visual state is the fallback */ }
-        if (isConnected || state.reconnectInFlight) return;
+        if ($("conn-pill").classList.contains("up")) return;
+        let tabs;
+        try { tabs = await window.go.main.App.ListTabs(); }
+        catch {
+            if (current()) toast("Connection status unavailable. Try reconnecting again.", "warn", "conn");
+            return;
+        }
+        if (!current() || state.reconnectInFlight || !Array.isArray(tabs)) return;
+        const active = tabs.find(tab => tab.active);
+        if ((active?.id || "") !== (sourceTabID || "") || active?.connected) return;
 
         clearReconnectTimer();
-        const c = state.lastSuccessfulConnect;
+        const c = target;
         if (!c) {
-            await window.__noxaTabs?.quickConnectLast?.();
+            await window.__noxaTabs?.quickConnectLast?.(fallbackTarget || null,
+                () => generation !== reconnectGeneration || sessionGeneration !== state.sessionGeneration);
             return;
         }
         // Intentional Disconnect clears lastConnect to suppress automatic
@@ -708,8 +729,9 @@ async function reconnectLastServerNow() {
         state.lastConnect = { ...c };
         chatUI.beginReconnectAnnouncementBatch();
         $("conn-pill").textContent = "reconnecting now…";
-        const connected = await attemptReconnect(state.lastConnect);
+        const connected = await attemptReconnect(state.lastConnect, { sourceTabID });
         if (connected) return;
+        if (!current()) return;
         chatUI.cancelReconnectAnnouncementBatch();
         if (autoReconnectEnabled()) scheduleReconnect();
         else showLogin();
@@ -734,7 +756,7 @@ async function disconnect() {
     clearReconnectTimer();
     chatUI.cancelReconnectAnnouncementBatch();
     try {
-        await window.go.main.App.Disconnect();
+        await window.go.main.App.DisconnectTab(sourceTabID);
     } catch {
         // The local cancellation above is still intentional even when the
         // bridge is already gone. Surface one actionable connection warning
@@ -757,6 +779,7 @@ window.runtime.EventsOn("intentional_disconnect", (tabID) => {
 });
 
 window.runtime.EventsOn("disconnected", () => {
+    state.sessionGeneration++;
     const unexpected = !!state.lastConnect;
     if (unexpected && state.settings?.notify_connection !== false) toast("Connection lost", "warn", "conn");
     if (unexpected) playAlert("connection_lost", { delay: 1200 });
@@ -765,12 +788,15 @@ window.runtime.EventsOn("disconnected", () => {
     // whisper list do not survive a reconnect.
     activeWhisperers.clear();
     state.whisperArmed = false;
+    state.whisperTargetUID = "";
     state.whisperPrev = null;
     state.myChannelID = 0;
     state.myClientID = "";
     resetVoiceSession();
     state.selectedClientID = "";
     state.isGuest = true;
+    state.myStatus = "";
+    state.canSetInvisible = false;
     setDetailsOpen(false);
     $("conn-pill").textContent = "offline";
     $("conn-pill").classList.remove("up");
@@ -793,6 +819,8 @@ window.runtime.EventsOn("servererror", (msg) => {
 // recents list stays frozen at the value read once at startup.
 window.runtime.EventsOn("settings_update", (s) => {
     state.settings = s;
+    refreshUserAudio();
+    renderVoiceHints();
     void updateSoundOutput();
     void applyLiveAudioSettings().catch((error) => toast("Audio settings: " + error.message, "warn"));
 });
@@ -820,22 +848,20 @@ function recentChannels() {
 // ---------------------------------------------------------------------------
 
 let idleTimer = null;
+let activityRevision = 0;
 
 // noteActivity resets the idle timer; after auto_away_minutes without input
 // the client sets itself away, restoring on the next activity.
 function noteActivity() {
-    if (state.myStatus === "away") {
-        state.myStatus = "";
-        window.go.main.App.SetStatus("online", "");
-    }
+    const scope = capturePresenceScope();
+    const revision = ++activityRevision;
+    restorePresenceOnActivity(scope);
     if (idleTimer) clearTimeout(idleTimer);
     const minutes = state.settings?.auto_away_minutes ?? 15;
-    if (minutes <= 0) return;
-    idleTimer = setTimeout(() => {
-        if (!state.myClientID) return;
-        state.myStatus = "away";
-        window.go.main.App.SetStatus("away", "auto-away");
-        sysMsg("auto-away after " + minutes + " min idle");
+    if (minutes <= 0 || !scope.clientID) return;
+    idleTimer = setTimeout(async () => {
+        if (revision !== activityRevision || !presenceIsCurrent(scope)) return;
+        if (await setPresence("away", "auto-away", scope)) sysMsg("auto-away after " + minutes + " min idle");
     }, minutes * 60000);
 }
 
@@ -893,6 +919,7 @@ function startQualitySampler() {
     stopQualitySampler();
     const epoch = qualitySamplerEpoch;
     const generation = state.serverGeneration;
+    const tabID = state.activeTabID;
     let inFlight = false;
     if (state.myClientID) {
         $("voice-latency").hidden = false;
@@ -904,7 +931,7 @@ function startQualitySampler() {
         inFlight = true;
         const clientID = state.myClientID;
         try {
-            const info = await window.go.main.App.GetClientInfo(clientID);
+            const info = await window.go.main.App.GetClientInfoForTab(tabID, clientID);
             if (epoch !== qualitySamplerEpoch || generation !== state.serverGeneration ||
                 clientID !== state.myClientID) return;
             const q = qualityFromPing(info.ping_ms, Number.isFinite(info.ping_ms) && info.ping_ms >= 0);
@@ -977,27 +1004,16 @@ window.runtime.EventsOn("tab_replay_done", (tabID) => {
 window.runtime.EventsOn("snapshot", (json) => {
     const snap = parseRuntimeObject(json);
     if (!snap) return;
-    // broadcast.ClientInfo does not serialize priority_speaker, so carry the
-    // flags over from the previous state (they arrive via
-    // priority_speaker_changed events).
-    const prioByID = new Map(state.clients.filter((c) => c.priority_speaker).map((c) => [c.client_id, true]));
-    // (73) the same applies to the screen-share flag: it arrives only via
-    // screenshare_changed, so a snapshot would otherwise un-label live shares.
-    const shareByID = new Map(state.clients.filter((c) => c.sharing).map((c) => [c.client_id, true]));
+    state.canSetInvisible = snap.can_set_invisible === true;
     state.channels = [];
     state.clients = [];
     lastKnownChannel.clear(); // the snapshot is authoritative
     for (const root of snap.root_channels || []) flattenChannel(root);
     for (const client of snap.unassigned_clients || []) state.clients.push(client);
-    for (const c of state.clients) {
-        if (prioByID.has(c.client_id)) c.priority_speaker = true;
-        if (shareByID.has(c.client_id)) c.sharing = true;
-    }
     // Snapshot replay can beat the async ClientID lookup during a tab switch
     // or reconnect. Reconcile here when the identity is already known; the
     // identity completion path calls the same helper for the opposite order.
     syncOwnChannel();
-    P()?.refreshChannelPermissions();
     // (317) blocked users are locally muted on sight; (318) contact nickname
     // history updates from presence; (383) buddy alerts; (389) channel watch.
     applyBlockAndContacts();
@@ -1012,9 +1028,15 @@ window.runtime.EventsOn("snapshot", (json) => {
 // syncOwnChannel makes channel ownership independent of whether the snapshot
 // / user_moved event or the active-tab ClientID lookup finishes first.
 function syncOwnChannel({ audible = true } = {}) {
+    reconcileSpatialVoice();
+    void refreshPermissions();
     if (!state.myClientID) return;
     const me = state.clients.find((c) => c.client_id === state.myClientID);
     if (!me) return;
+    state.myStatus = me.status || "";
+    state.myPriority = !!me.priority_speaker;
+    $("voice-prio").classList.toggle("active", state.myPriority);
+    $("voice-prio").setAttribute("aria-pressed", String(state.myPriority));
     const channelID = Number(me.channel_id) || 0;
     if (state.myChannelID === channelID) {
         // Identity can resolve while journal replay is still muted. In that
@@ -1058,9 +1080,7 @@ function syncOwnChannel({ audible = true } = {}) {
 function applyBlockAndContacts() {
     const s = state.settings;
     if (!s) return;
-    for (const uid of s.blocked_users || []) {
-        setUserMuted(uid, true);
-    }
+    refreshUserAudio();
     let dirty = false;
     for (const contact of s.contacts || []) {
         const online = state.clients.find((c) => c.unique_id === contact.unique_id);
@@ -1106,26 +1126,11 @@ function flattenChannel(node) {
         // SlowModeSeconds. Dropping it here is why the client could never show
         // or edit the rate limit it is subject to.
         SlowModeSeconds: node.SlowModeSeconds || 0,
-        // (157/160/163) join power, manual sort index and permission
-        // inheritance: the edit dialog and drag-reordering both read them.
-        NeededJoinPower: node.NeededJoinPower || 0,
         OrderIndex: node.OrderIndex || 0,
-        InheritPermissions: !!node.InheritPermissions,
     });
     for (const c of node.clients || []) state.clients.push(c);
     for (const child of node.children || []) flattenChannel(child);
 }
-
-window.runtime.EventsOn("channellist", (json) => {
-    const list = parseRuntimeObject(json);
-    if (!list) return;
-    for (const ch of list.channels || []) {
-        if (!state.channels.find((c) => c.ChannelID === Number(ch.id))) {
-            state.channels.push({ ChannelID: Number(ch.id), ParentID: 0, Name: ch.name, HasIcon: false });
-        }
-    }
-    renderTree();
-});
 
 window.runtime.EventsOn("event", (json) => {
     const env = parseRuntimeObject(json);
@@ -1301,13 +1306,10 @@ window.runtime.EventsOn("event", (json) => {
                 ch.OpusDTX = !!d.opus_dtx;
                 ch.OpusStereo = !!d.opus_stereo;
                 ch.SlowModeSeconds = d.slow_mode_seconds || 0; // (114)
-                ch.NeededJoinPower = d.needed_join_power || 0; // (160)
                 ch.OrderIndex = d.order_index || 0;            // (163)
-                ch.InheritPermissions = !!d.inherit_permissions; // (157)
                 // a re-parent moves the row, so the cached ancestry has to
                 // follow it or the next edit dialog offers a stale parent.
                 ch.ParentID = d.parent_id || 0;
-                P()?.refreshChannelPermissions();
                 if (d.channel_id === state.myChannelID) applyChannelAudio();
                 chatUI.refreshHeader();
             }
@@ -1332,6 +1334,7 @@ window.runtime.EventsOn("event", (json) => {
                 c.status = d.status || "";
                 c.status_message = d.message || "";
             }
+            if (d.client_id === state.myClientID) state.myStatus = d.status || "";
             break;
         }
         // (321/322) poke: toast + sound + taskbar flash.
@@ -1378,6 +1381,28 @@ window.runtime.EventsOn("event", (json) => {
         case "chat_reaction":
             chatUI.onChatReaction(d);
             return;
+        case "poll_changed":
+            refreshPolls(d);
+            return;
+        case "conversation_changed":
+            void conversationChanged(d);
+            return;
+        case "private_call":
+            void privateCallChanged(d);
+            void conversationChanged();
+            return;
+        case "private_call_signal":
+            void privateCallSignal(d);
+            return;
+        case "position": {
+            reconcileSpatialVoice();
+            const member = state.clients.find(client => client.client_id === d.client_id);
+            if (state.settings?.positional_audio && d.channel_id === state.myChannelID && member?.channel_id === state.myChannelID && d.client_id !== state.myClientID) {
+                spatialVoice?.remote(d.client_id, d);
+                spatialVoice?.update(true);
+            }
+            return;
+        }
         // (120) typing relay. Returns early like the other chat events: an
         // indicator changes nothing in the tree and must not trigger a redraw
         // of it on every keystroke of every user.
@@ -1424,6 +1449,9 @@ window.runtime.EventsOn("event", (json) => {
             }
             break;
         }
+        case "stream_watch_started":
+            if (!actionSoundsSuppressed() && isCurrentPublication(d)) playEvent("stream_watch_started");
+            return;
         case "screenshare_changed": {
             // (73) remember who is sharing: the grid labels those tiles, and
             // the camera-off detector (61) must not mistake a still desktop
@@ -1439,27 +1467,9 @@ window.runtime.EventsOn("event", (json) => {
             fetchAvatar(d.unique_id);
             videoRefreshNames();
             break;
-        // wave 6b group events: memberships drive tree colors/hoisted
-        // sections and the details-pane group chips.
-        case "group_assigned":
-            if (d.promoted && d.unique_id === state.myUniqueID) state.isGuest = false;
-            if (d.group_name) {
-                toast((d.by ? "you were " : "") + "added to group " + d.group_name, "info", "alert");
-            }
-            P().refreshGroups().then(() => renderTree());
-            break;
-        case "group_unassigned":
-            if (d.group_name) {
-                toast("removed from group " + d.group_name, "info", "alert");
-            }
-            P().refreshGroups().then(() => renderTree());
-            break;
-        case "group_expired":
-            toast("a timed group membership expired", "info", "alert");
-            P().refreshGroups().then(() => renderTree());
-            break;
     }
     resolveTrackUsers();
+    reconcileSpatialVoice();
     // (389) the snapshot arrives once at login, so only the live join/leave/
     // move events can ever show a channel crossing its watch threshold.
     window.__noxaNotify?.checkChannelWatch();
@@ -1509,11 +1519,7 @@ function renderTree() {
         head.innerHTML = `<span class="hoist-icon"></span><span class="hoist-name"></span>`;
         head.querySelector(".hoist-name").textContent = h.group.name;
         if (h.group.color) head.style.color = h.group.color;
-        if (h.group.icon) {
-            P().groupIconURL(h.group.id).then((url) => {
-                if (url) setSafeImage(head.querySelector(".hoist-icon"), url);
-            });
-        }
+        if (h.group.icon) head.querySelector(".hoist-icon").textContent = h.group.icon;
         sec.appendChild(head);
         for (const c of h.members) sec.appendChild(clientRow(c));
         root.appendChild(sec);
@@ -1562,6 +1568,7 @@ function renderTree() {
         root.appendChild(empty);
     }
     renderDirectTargets();
+    filterConversations();
     renderClientCard();
     chatUI.refreshHeader(); // (111) topic/title follows tree + channel updates
     renderWorkspace();
@@ -1601,6 +1608,7 @@ function setChannelExpanded(channelID, expanded) {
 }
 
 function renderChannel(parentEl, ch, byParent, depth) {
+    const tabID = state.activeTabID, generation = state.serverGeneration;
     const node = document.createElement("div");
     node.className = "channel-node";
     node.style.setProperty("--depth", depth);
@@ -1642,7 +1650,17 @@ function renderChannel(parentEl, ch, byParent, depth) {
         badge.textContent = ub.n > 99 ? "99+" : ub.n;
         el.appendChild(badge);
     }
-    el.onclick = () => window.go.main.App.JoinChannel(ch.ChannelID);
+    el.onclick = async () => {
+        if (generation !== state.serverGeneration) return;
+        const groupView = privateGroupViewToken();
+        try {
+            const err = await window.go.main.App.JoinChannelForTab(tabID, ch.ChannelID);
+            if (err && generation === state.serverGeneration) toast("join failed: " + err, "warn");
+            if (!err && generation === state.serverGeneration && tabID === state.activeTabID && groupView && groupView === privateGroupViewToken()) await chatUI.openChannelTab(ch.ChannelID);
+        } catch (err) {
+            if (generation === state.serverGeneration) toast("join failed: " + err, "warn");
+        }
+    };
     // (163) drag a channel onto another to take that channel's slot among its
     // siblings. The header is separate from its member/child branch, so a
     // member drag can never be relabelled as a channel drag.
@@ -1650,6 +1668,8 @@ function renderChannel(parentEl, ch, byParent, depth) {
     el.addEventListener("dragstart", (e) => {
         if (e.target !== el) return;
         e.dataTransfer.setData("text/noxa-chid", String(ch.ChannelID));
+        e.dataTransfer.setData("text/noxa-tab", tabID);
+        e.dataTransfer.setData("text/noxa-generation", String(generation));
         e.dataTransfer.effectAllowed = "move";
     });
     // (305) drag users onto a channel to move them there.
@@ -1661,24 +1681,30 @@ function renderChannel(parentEl, ch, byParent, depth) {
         }
     });
     el.addEventListener("dragleave", () => el.classList.remove("drop-active"));
-    el.addEventListener("drop", (e) => {
+    el.addEventListener("drop", async (e) => {
         e.preventDefault();
         // sub-channels are nested inside their parent's element, so without
         // this a drop on a child also fires every ancestor's handler.
         e.stopPropagation();
         el.classList.remove("drop-active");
+        if (generation !== state.serverGeneration || e.dataTransfer.getData("text/noxa-tab") !== tabID ||
+            e.dataTransfer.getData("text/noxa-generation") !== String(generation)) return;
         const chid = Number(e.dataTransfer.getData("text/noxa-chid"));
         if (chid) {
-            reorderChannel(chid, ch);
+            await reorderChannel(chid, ch, tabID, generation);
             return;
         }
         const uid = e.dataTransfer.getData("text/noxa-uid");
-        const target = state.clients.find((c) => c.unique_id === uid);
+        const clientID = e.dataTransfer.getData("text/noxa-client");
+        const target = state.clients.find((c) => c.client_id === clientID && c.unique_id === uid);
         if (!target) return;
-        if (target.client_id === state.myClientID) {
-            window.go.main.App.JoinChannel(ch.ChannelID);
-        } else {
-            window.go.main.App.MoveClient(target.client_id, ch.ChannelID);
+        try {
+            const err = target.client_id === state.myClientID
+                ? await window.go.main.App.JoinChannelForTab(tabID, ch.ChannelID)
+                : await window.go.main.App.MoveClientForTab(tabID, target.client_id, ch.ChannelID);
+            if (err && generation === state.serverGeneration) toast("move failed: " + err, "warn");
+        } catch (err) {
+            if (generation === state.serverGeneration) toast("move failed: " + err, "warn");
         }
     });
     node.appendChild(el);
@@ -1728,7 +1754,7 @@ function renderChannel(parentEl, ch, byParent, depth) {
 // 0 is the legitimate "move to root" value and so has no sentinel, and a
 // re-parent drops the server's whole permission cache — so "parent" is only
 // named when the drop actually changes the parent.
-async function reorderChannel(draggedID, target) {
+async function reorderChannel(draggedID, target, tabID, generation) {
     if (draggedID === target.ChannelID) return;
     const dragged = state.channels.find((c) => c.ChannelID === draggedID);
     if (!dragged) return;
@@ -1738,13 +1764,24 @@ async function reorderChannel(draggedID, target) {
     const movingDown = draggedPos >= 0 && targetPos >= 0 && draggedPos < targetPos;
     const targetOrder = target.OrderIndex || 0;
     const order = movingDown ? targetOrder + 1 : targetOrder - 1;
-    const err = await window.go.main.App.ChannelEditTree(
-        draggedID, reparent ? "order,parent" : "order",
-        0, order, target.ParentID || 0, false);
-    if (err) toast("channel reorder failed: " + err, "warn");
+    const current = () => generation === state.serverGeneration && tabID === state.activeTabID;
+    if (!Number.isInteger(order) || order < -2147483648 || order > 2147483647) {
+        toast(t("roles.channel.orderLimit"), "warn");
+        return;
+    }
+    try {
+        const { openRoleChannel } = await import("./channel-lifecycle-ui.js");
+        if (!current()) return;
+        openRoleChannel(reparent ? "channel_move" : "channel_edit", draggedID, {
+            destinationID: target.ParentID || 0, orderIndex: order,
+        });
+    } catch (err) {
+        if (current()) toast("channel reorder failed: " + String(err), "warn");
+    }
 }
 
 function clientRow(c) {
+    const tabID = state.activeTabID, generation = state.serverGeneration;
     const row = document.createElement("div");
     const speakingHere = state.myChannelID !== 0 && c.channel_id === state.myChannelID && c.is_speaking;
     row.className = "client" + (speakingHere ? " speaking" : "") +
@@ -1765,6 +1802,9 @@ function clientRow(c) {
         row.draggable = true;
         row.addEventListener("dragstart", (e) => {
             e.dataTransfer.setData("text/noxa-uid", c.unique_id);
+            e.dataTransfer.setData("text/noxa-tab", tabID);
+            e.dataTransfer.setData("text/noxa-generation", String(generation));
+            e.dataTransfer.setData("text/noxa-client", c.client_id);
             e.dataTransfer.effectAllowed = "copy";
         });
     }
@@ -1785,30 +1825,14 @@ function clientRow(c) {
     const gColor = P().groupColorFor(c.unique_id);
     if (gColor) name.style.color = gColor;
     const g = P().primaryGroup(c.unique_id);
-    if (g) name.title = "group: " + g.name;
+    if (g) name.title = `${t("roles.title")}: ${(c.roles || []).map((r) => r.name).join(", ")}`;
     row.appendChild(av);
     row.appendChild(name);
     // (310) group badge next to the name. Groups without an icon get a text
     // chip in the group colour instead of nothing — colour and hoisting are
     // settable on their own, so an icon is not what makes a group visible.
     if (g) {
-        const gi = document.createElement("span");
-        gi.className = "group-icon";
-        gi.title = "group: " + g.name;
-        if (g.icon) {
-            P().groupIconURL(g.id).then((url) => {
-                if (url) setSafeImage(gi, url);
-                else gi.textContent = g.name;
-            });
-        } else {
-            gi.classList.add("group-badge");
-            gi.textContent = g.name;
-            if (g.color) {
-                gi.style.color = g.color;
-                gi.style.borderColor = g.color;
-            }
-        }
-        row.appendChild(gi);
+        row.appendChild(roleChip(g));
     }
     // (307) priority speaker: the flag is broadcast for every client, so it
     // belongs on their row and not only on my own voice-bar button.
@@ -1958,7 +1982,7 @@ async function fetchAvatar(uniqueID) {
     const generation = state.serverGeneration;
     state.avatarPending.add(uniqueID);
     try {
-        const data = await window.go.main.App.GetAvatar(uniqueID);
+        const data = await window.go.main.App.GetAvatarForTab(state.activeTabID, uniqueID);
         if (generation !== state.serverGeneration) return;
         state.avatars.set(uniqueID, imageDataURL(data));
     } catch {
@@ -2134,11 +2158,81 @@ $("chat-text").addEventListener("keydown", (e) => { if (e.key === "Enter") sendC
 
 let voiceSessionEpoch = 0;
 let voiceStartPromise = null;
+let voiceStartOwner = null;
+let mediaLimitsSequence = 0;
+let mediaLimitsRefresh = null;
+
+// Invalidations carry no snapshot. Coalesce them around a fresh native read;
+// an old tab/peer completion cannot update or tear down its replacement.
+function refreshLiveMediaLimits() {
+    const pc = state.pc;
+    if (!pc) return; // Startup fetches again if its in-flight read was invalidated.
+    const epoch = voiceSessionEpoch;
+    const generation = state.serverGeneration;
+    const session = state.sessionGeneration;
+    const tabID = state.activeTabID;
+    const clientID = state.myClientID;
+    const ownsPeer = () => state.pc === pc && voiceSessionEpoch === epoch && state.serverGeneration === generation &&
+        state.sessionGeneration === session && state.activeTabID === tabID && state.myClientID === clientID;
+    if (mediaLimitsRefresh?.pc === pc && mediaLimitsRefresh.current()) return;
+    const request = { pc, active: true };
+    const current = () => request.active && mediaLimitsRefresh === request && ownsPeer();
+    request.current = current;
+    mediaLimitsRefresh = request;
+    const starting = voiceStartPromise;
+    let timer;
+    const deadline = new Promise((_resolve, reject) => {
+        timer = setTimeout(() => {
+            request.active = false;
+            reject(new Error(t("voice.mediaLimitsFailed")));
+        }, 10000);
+    });
+    const update = (async () => {
+        // Startup owns its initial offer and capture setup; never rebuild it
+        // concurrently or reset its camera state after a live update completes.
+        if (starting) await starting;
+        while (current()) {
+            const sequence = mediaLimitsSequence;
+            const limits = await window.go.main.App.GetMediaLimitsForTab(tabID);
+            if (!current()) return;
+            if (sequence !== mediaLimitsSequence) continue;
+            const result = await applyVideoLimits(limits, current);
+            if (!current()) return;
+            if (result?.dimensionsChanged) {
+                // Refresh negotiated codecs while retaining the live transport;
+                // the server's packet guards already enforce the new limits.
+                await renegotiate(pc, generation, { iceRestart: true }, current);
+            }
+            request.appliedSequence = sequence;
+            if (sequence === mediaLimitsSequence) return;
+        }
+    })();
+    // Wails ignores callback promises. Contain rejection and invalidate pending
+    // browser/bridge work before closing this exact peer on failure or timeout.
+    void Promise.race([update, deadline]).catch(() => {
+        if (mediaLimitsRefresh !== request || !ownsPeer()) return;
+        request.active = false;
+        resetVoiceSession();
+        setVoiceStatus("voice unavailable");
+        sysMsg(t("voice.mediaLimitsFailed"));
+    }).finally(() => {
+        clearTimeout(timer);
+        request.active = false;
+        if (mediaLimitsRefresh === request) {
+            mediaLimitsRefresh = null;
+            // An event can arrive after update resolves but before this promise
+            // cleanup runs. It must not disappear into the completed request.
+            if (ownsPeer() && request.appliedSequence !== mediaLimitsSequence) refreshLiveMediaLimits();
+        }
+    });
+}
 
 // Channel presence owns voice presence. There is deliberately no separate
 // join/leave voice control: a confirmed local channel move establishes the
 // session, while disconnecting or changing server tabs tears it down.
 function ensureVoiceForChannel() {
+    reconcileSpatialVoice();
+    if (state.myChannelID > 0) stopPrivateCall();
     if (state.myChannelID <= 0) {
         if (state.pc || state.localStream || voiceStartPromise ||
             state.micState === "none" || state.micState === "denied") {
@@ -2146,39 +2240,86 @@ function ensureVoiceForChannel() {
         }
         return Promise.resolve(false);
     }
+    if (voiceStartPromise) return voiceStartPromise;
     if (state.pc) {
+        if (!streamSessionIsCurrent(state.pc)) {
+            // A channel move retains microphone voice, but publication and
+            // viewing consent belong to the channel that granted them.
+            for (const track of state.localStream?.getVideoTracks() || []) { track.stop(); state.localStream.removeTrack(track); }
+            state.shareStream?.getTracks().forEach(track => track.stop());
+            state.shareStream = null;
+            state.screenSharing = false;
+            state.shareStarting = null;
+            state.shareStopping = false;
+            resetCameraState();
+            startStreamSession(state.pc, videoTrackAdded, videoTrackRemoved);
+            for (const receiver of state.pc.getReceivers()) {
+                const track = receiver.track;
+                const parsed = parseTrackID(track.id);
+                const publisher = state.clients.find(c => String(c.client_id) === parsed.clientID);
+                if (track.kind === "video") receiveStreamTrack(track, publisher);
+                else if (parsed.slot === SLOT_SCREEN_AUDIO) receiveShareAudio(track, parsed.clientID);
+            }
+        }
         setVoiceStatus("voice on");
         return Promise.resolve(true);
     }
-    if (voiceStartPromise) return voiceStartPromise;
-
     const epoch = voiceSessionEpoch;
+    const owner = {};
+    const cancelled = new Promise(resolve => { owner.cancel = () => resolve(false); });
+    voiceStartOwner = owner;
     setVoiceStatus("voice connecting…");
-    voiceStartPromise = (async () => {
+    const start = (async () => {
         try {
             return await startVoice(epoch);
         } catch (e) {
-            // A tab switch intentionally invalidates the in-flight start; its
-            // replacement session is scheduled in finally without a warning.
-            if (epoch !== voiceSessionEpoch) return false;
+            // Reset releases startup ownership immediately, even when an old
+            // browser/native operation has not returned yet.
+            if (voiceStartOwner !== owner || epoch !== voiceSessionEpoch) return false;
             sysMsg("voice failed: " + e);
             toast("Voice could not start automatically", "warn", "conn");
             teardownVoice();
             resetVoiceUI();
             setVoiceStatus("voice unavailable");
             return false;
-        } finally {
-            voiceStartPromise = null;
-            if (epoch !== voiceSessionEpoch && state.myChannelID > 0 && !state.pc) {
-                queueMicrotask(() => ensureVoiceForChannel());
-            }
         }
     })();
+    voiceStartPromise = Promise.race([start, cancelled]).finally(() => {
+        if (voiceStartOwner === owner) {
+            voiceStartOwner = null;
+            voiceStartPromise = null;
+        }
+    });
     return voiceStartPromise;
+}
+
+async function readInitialMediaLimits(tabID, stillRelevant) {
+    let active = true;
+    let timer;
+    const deadline = new Promise((_resolve, reject) => {
+        timer = setTimeout(() => {
+            active = false;
+            reject(new Error(t("voice.mediaLimitsFailed")));
+        }, 10000);
+    });
+    const read = (async () => {
+        while (active && stillRelevant()) {
+            const sequence = mediaLimitsSequence;
+            const limits = await window.go.main.App.GetMediaLimitsForTab(tabID);
+            if (!active || !stillRelevant()) return null;
+            if (sequence === mediaLimitsSequence) return { limits, sequence };
+        }
+        return null;
+    })();
+    try { return await Promise.race([read, deadline]); }
+    finally { active = false; clearTimeout(timer); }
 }
 
 function resetVoiceSession() {
     voiceSessionEpoch++;
+    voiceStartOwner?.cancel();
+    voiceStartOwner = null;
+    voiceStartPromise = null;
     teardownVoice();
     resetVoiceUI();
     state.micState = "unknown";
@@ -2197,6 +2338,9 @@ function microphoneFailureState(error) {
 }
 
 async function startVoice(expectedEpoch = voiceSessionEpoch) {
+    const generation = state.serverGeneration;
+    const tabID = state.activeTabID;
+    const current = () => expectedEpoch === voiceSessionEpoch && state.serverGeneration === generation && state.activeTabID === tabID && state.myChannelID > 0;
     // Joining never requests a camera. A missing/denied microphone still
     // permits receiving media, sharing a screen, and explicitly enabling video.
     let micErr = null;
@@ -2210,7 +2354,7 @@ async function startVoice(expectedEpoch = voiceSessionEpoch) {
         micErr = e;
         capturedStream = new MediaStream();
     }
-    if (expectedEpoch !== voiceSessionEpoch || state.myChannelID <= 0) {
+    if (!current()) {
         capturedStream.getTracks().forEach((track) => track.stop());
         return false;
     }
@@ -2227,13 +2371,28 @@ async function startVoice(expectedEpoch = voiceSessionEpoch) {
     // list means "client defaults" (plain RTCPeerConnection).
     let iceServers = null;
     try {
-        iceServers = await window.go.main.App.GetICEServers();
+        iceServers = await window.go.main.App.GetICEServersForTab(tabID);
     } catch { /* fall back to client defaults */ }
-    if (expectedEpoch !== voiceSessionEpoch || state.myChannelID <= 0) {
-        state.localStream?.getTracks().forEach((track) => track.stop());
-        state.localStream = null;
+    let mediaLimits = null;
+    let limitsSequence = mediaLimitsSequence;
+    try {
+        if (current()) {
+            const snapshot = await readInitialMediaLimits(tabID, current);
+            mediaLimits = snapshot?.limits;
+            limitsSequence = snapshot?.sequence;
+        }
+    } catch {
+        capturedStream.getTracks().forEach((track) => track.stop());
+        if (state.localStream === capturedStream) state.localStream = null;
+        if (current()) throw new Error(t("voice.mediaLimitsFailed"));
         return false;
     }
+    if (!current()) {
+        capturedStream.getTracks().forEach((track) => track.stop());
+        if (state.localStream === capturedStream) state.localStream = null;
+        return false;
+    }
+    state.mediaLimits = mediaLimits;
     const pc = iceServers && iceServers.length
         ? new RTCPeerConnection({ iceServers })
         : new RTCPeerConnection();
@@ -2242,6 +2401,10 @@ async function startVoice(expectedEpoch = voiceSessionEpoch) {
     // that old peer can never affect the new one.
     if (state.pc && state.pc !== pc) resetICERestart(state.pc);
     state.pc = pc;
+    state.voiceTabID = tabID;
+    // A queued event can run between the read helper returning and this
+    // continuation installing the peer. Reconcile it after startup's offer.
+    if (limitsSequence !== mediaLimitsSequence) refreshLiveMediaLimits();
 
     const audioTrack = state.localStream.getAudioTracks()[0];
     if (audioTrack) {
@@ -2251,19 +2414,25 @@ async function startVoice(expectedEpoch = voiceSessionEpoch) {
     }
 
     pc.onicecandidate = (e) => {
-        if (e.candidate) {
+        if (current() && state.pc === pc && e.candidate) {
             // A candidate can arrive while teardown has already closed the
             // control bridge. There is nothing useful to show for that race,
             // but its rejected promise must not become an unhandled one.
-            void window.go.main.App.SendICECandidate(
-                e.candidate.candidate, e.candidate.sdpMid || "", e.candidate.sdpMLineIndex || 0,
+            void window.go.main.App.SendICECandidateForTab(
+                tabID, e.candidate.candidate, e.candidate.sdpMid || "", e.candidate.sdpMLineIndex || 0,
             ).catch(() => {});
         }
     };
     // (59) ICE restart: re-offer with iceRestart on failed/disconnected,
     // backing off 1s, 2s, 5s, 15s before giving up with a warning toast.
     pc.oniceconnectionstatechange = () => onICEStateChange(pc);
+    const receivedTracks = new Map();
+    startStreamSession(pc, videoTrackAdded, videoTrackRemoved);
     pc.ontrack = (e) => {
+        if (!current() || state.pc !== pc) {
+            e.track.stop();
+            return;
+        }
         // The server labels each track with its publisher and slot (see
         // parseTrackID in video.js), so tracks are attributed without SSRC
         // mapping and a publisher can own more than one of them.
@@ -2272,14 +2441,20 @@ async function startVoice(expectedEpoch = voiceSessionEpoch) {
         state.trackUsers.set(e.track.id, publisher
             ? { client_id: publisher.client_id, unique_id: publisher.unique_id, nickname: publisher.nickname }
             : { client_id: clientID, unique_id: "", nickname: "" });
-        e.track.addEventListener("ended", () => state.trackUsers.delete(e.track.id));
+        receivedTracks.set(e.track.id, e.track);
+        e.track.addEventListener("ended", () => {
+            if (!current() || state.pc !== pc || receivedTracks.get(e.track.id) !== e.track) return;
+            receivedTracks.delete(e.track.id);
+            state.trackUsers.delete(e.track.id);
+            if (e.track.kind === "video") videoTrackRemoved(e.track.id);
+        });
         if (e.track.kind === "video") {
             // (61/73) one grid tile per publisher video slot; removed on ended.
-            videoTrackAdded(e.track.id, e.streams[0], publisher);
-            e.track.addEventListener("ended", () => videoTrackRemoved(e.track.id));
+            receiveStreamTrack(e.track, publisher);
             return;
         }
         if (slot === SLOT_SCREEN_AUDIO) {
+            receiveShareAudio(e.track, clientID);
             // (70) a sharer's system audio is not a second microphone.
             attachShareAudio(e.track, clientID, publisher);
             return;
@@ -2289,10 +2464,7 @@ async function startVoice(expectedEpoch = voiceSessionEpoch) {
         attachRemoteAudio(e.track, publisher);
     };
 
-    const offer = await pc.createOffer();
-    await pc.setLocalDescription(offer);
-    const answerSDP = await window.go.main.App.WebRTCOffer(offer.sdp, trackSlots());
-    await pc.setRemoteDescription({ type: "answer", sdp: answerSDP });
+    await renegotiate(pc, state.serverGeneration, undefined, () => expectedEpoch === voiceSessionEpoch);
 
     if (expectedEpoch !== voiceSessionEpoch || state.pc !== pc || state.myChannelID <= 0) {
         pc.close();
@@ -2388,15 +2560,23 @@ function recomputeDucking() {
 }
 
 // (13) Priority-speaker self toggle in the voice bar.
+let priorityRequest = null;
 $("voice-prio").onclick = async () => {
-    const err = await window.go.main.App.SetPrioritySpeaker(!state.myPriority);
+    if (priorityRequest && mediaScopeIsCurrent(priorityRequest)) return;
+    const scope = captureMediaScope();
+    const active = !state.myPriority;
+    priorityRequest = scope;
+    let err;
+    try { err = await window.go.main.App.SetPrioritySpeakerForTab(scope.tabID, active); }
+    catch (error) { err = String(error); }
+    if (priorityRequest !== scope) return;
+    priorityRequest = null;
+    if (!mediaScopeIsCurrent(scope)) return;
     if (err) {
         sysMsg("priority speaker failed: " + err);
         return;
     }
-    state.myPriority = !state.myPriority;
-    $("voice-prio").classList.toggle("active", state.myPriority);
-    $("voice-prio").setAttribute("aria-pressed", String(state.myPriority));
+    // The authoritative role event/snapshot updates local state.
 };
 
 // (59) ICE restart ladder: on failed/disconnected, re-offer with iceRestart
@@ -2467,13 +2647,7 @@ function scheduleICERestart(pc) {
             return;
         }
         try {
-            const offer = await pc.createOffer({ iceRestart: true });
-            if (!ownsICERestart(pc)) return;
-            await pc.setLocalDescription(offer);
-            if (!ownsICERestart(pc)) return;
-            const answerSDP = await window.go.main.App.WebRTCOffer(offer.sdp, trackSlots());
-            if (!ownsICERestart(pc)) return;
-            await pc.setRemoteDescription({ type: "answer", sdp: answerSDP });
+            await renegotiate(pc, state.serverGeneration, { iceRestart: true }, () => ownsICERestart(pc));
         } catch {
             // Retry scheduling below owns failure feedback. Per-attempt chat
             // lines would flood the conversation during a bad network spell.
@@ -2492,6 +2666,8 @@ function scheduleICERestart(pc) {
 }
 
 function teardownVoice() {
+    stopStreamSession();
+    state.mediaLimits = null;
     stopVoiceMonitor();
     stopMicMeter();
     resetICERestart(state.pc);
@@ -2506,16 +2682,19 @@ function teardownVoice() {
         state.shareStream = null;
         state.shareAudioSender = null;
         state.screenSharing = false;
-        window.go.main.App.SetScreenShare(false);
         $("voice-screen").classList.remove("active");
         $("voice-screen").setAttribute("aria-pressed", "false");
     }
     // the transceiver belongs to the peer connection being closed: keeping the
     // reference would make the next session's share replaceTrack a dead sender.
     state.shareAudioTransceiver = null;
+    state.shareVideoTransceiver = null;
+    state.shareStarting = null;
+    state.shareStopping = false;
     clearRegionBox(); // (71)
     detachRemoteAudio();
     if (state.pc) { state.pc.close(); state.pc = null; }
+    state.voiceTabID = "";
     syncTrayVoice();
     if (state.localStream) {
         for (const t of state.localStream.getTracks()) t.stop();
@@ -2537,9 +2716,10 @@ function setVoiceStatus(text) {
 }
 
 function renderVoiceStatus() {
+    renderVoiceHints();
     const key = { "voice on": "voice.on", "voice off": "voice.off", "voice connecting…": "voice.connecting", "voice unavailable": "voice.unavailable" }[voiceStatusBase];
     $("voice-status").textContent = (key ? t(key) : voiceStatusBase) +
-        (state.whisperArmed ? " · whisper → " + uidName(state.lastWhispererUID) : "");
+        (state.whisperArmed ? " · " + t("polish.whisper", { name: uidName(state.whisperTargetUID) }) : "");
 }
 
 function resetVoiceUI() {
@@ -2657,6 +2837,12 @@ async function retryMicrophoneCapture() {
 }
 
 // Server->client ICE and renegotiation.
+window.runtime.EventsOn("media_limits_changed", () => {
+    mediaLimitsSequence++;
+    refreshLiveMediaLimits();
+});
+$("login-addr").addEventListener("input", () => { $("login-accountpw").value = ""; });
+
 window.runtime.EventsOn("ice", (json) => {
     if (!state.pc) return;
     const c = parseRuntimeObject(json);
@@ -2677,17 +2863,7 @@ window.runtime.EventsOn("offer", (json) => {
     // async rejection here so a failed renegotiation cannot surface globally.
     // A tab reset may replace both the active backend and its peer while the
     // offer is pending, so never answer through the new backend for old SDP.
-    void (async () => {
-        try {
-            await pc.setRemoteDescription({ type: "offer", sdp: o.sdp });
-            const answer = await pc.createAnswer();
-            await pc.setLocalDescription(answer);
-            if (generation !== state.serverGeneration || state.pc !== pc) return;
-            await window.go.main.App.WebRTCAnswer(answer.sdp);
-        } catch {
-            // The peer may have closed or a later negotiation may have won.
-        }
-    })();
+    void answerRemoteOffer(pc, generation, o.sdp).catch(() => {});
 });
 
 // Mute / deafen / PTT ---------------------------------------------------------
@@ -2705,7 +2881,7 @@ function applyVoiceState() {
 // Voice monitor: one interval driving VAD transmission, the mic meter's
 // sibling level feed, the talking-while-muted warning (26), and the
 // talking-to-empty-channel hint (27).
-let mutedTalkStreak = 0, emptyStreak = 0, lastMutedWarn = 0, lastEmptyWarn = 0;
+let mutedTalkStreak = 0, emptyStreak = 0, lastEmptyWarn = 0;
 let voiceMonitorTrack = null;
 let voiceMonitorSource = null;
 
@@ -2750,10 +2926,11 @@ function startVoiceMonitor() {
 
             // (26) talking while muted / PTT off.
             const blocked = state.muted || (mode !== "continuous" && !state.pttActive);
-            if (blocked && level > threshold) {
+            if (blocked && level > threshold && state.settings?.warn_muted_talking !== false) {
                 mutedTalkStreak++;
             } else {
                 mutedTalkStreak = 0;
+                $("mic-warning").classList.add("hidden");
             }
             if (mutedTalkStreak > 10 && (state.settings?.warn_muted_talking !== false)) {
                 warnMutedTalking();
@@ -2793,28 +2970,15 @@ function stopVoiceMonitor() {
         state.voiceMonitorCtx = null;
     }
     mutedTalkStreak = 0;
+    $("mic-warning").classList.add("hidden");
     emptyStreak = 0;
 }
 
-// (26) Talking-while-muted warning: amber banner, rate-limited, dismissible.
+// (26) Keep the blocked-speech warning beside the microphone control.
 function warnMutedTalking() {
-    if (Date.now() - lastMutedWarn < 10000) return;
-    lastMutedWarn = Date.now();
-    const b = $("talk-banner");
-    b.textContent = "You're muted!";
+    const b = $("mic-warning");
+    b.textContent = t(state.muted ? "polish.mutedSpeech" : "polish.pttSpeech");
     b.classList.remove("hidden");
-    b.classList.add("warn-banner");
-    b.onclick = () => {
-        b.classList.add("hidden");
-        b.classList.remove("warn-banner");
-        lastMutedWarn = Date.now();
-    };
-    setTimeout(() => {
-        b.classList.add("hidden");
-        b.classList.remove("warn-banner");
-        b.textContent = "● TALKING";
-        b.onclick = null;
-    }, 2500);
 }
 
 // (27) Talking-to-empty-channel hint.
@@ -2881,6 +3045,40 @@ document.addEventListener("visibilitychange", () => {
 // remoteTracks maps media track ID -> {src, gain, mute, uid} for per-track
 // teardown when a publisher leaves or voice is stopped.
 const remoteTracks = new Map();
+let spatialVoice = null;
+let positionReadPending = false;
+let spatialScope = "";
+
+function reconcileSpatialVoice() {
+    const scope = JSON.stringify([state.activeTabID, state.serverGeneration, state.myChannelID, voiceSessionEpoch]);
+    if (scope !== spatialScope) {
+        spatialScope = scope;
+        spatialVoice?.reset();
+    }
+    spatialVoice?.retainPeers(state.clients.filter(client => client.channel_id === state.myChannelID && client.client_id !== state.myClientID).map(client => client.client_id));
+    spatialVoice?.update(!!state.settings?.positional_audio);
+}
+
+// The native file source is read only while the user has opted in and joined
+// voice. Capture both server and voice scope before any asynchronous work.
+setInterval(async () => {
+    const enabled = !!state.settings?.positional_audio;
+    reconcileSpatialVoice();
+    if (!enabled || positionReadPending || !state.myChannelID || !state.pc || state.pc.connectionState === "closed") return;
+    const { activeTabID: tabID, serverGeneration: generation, myChannelID: channelID } = state;
+    const epoch = voiceSessionEpoch;
+    const current = () => state.settings?.positional_audio && state.activeTabID === tabID && state.serverGeneration === generation && state.myChannelID === channelID && voiceSessionEpoch === epoch;
+    positionReadPending = true;
+    try {
+        const position = await window.go.main.App.ReadPositionalInput();
+        if (!current()) return;
+        spatialVoice?.local(position);
+        spatialVoice?.update(true);
+        await window.go.main.App.PublishPositionForTab(tabID, { channel_id: channelID, context: position.context, x: position.x, y: position.y, z: position.z });
+    } catch {
+        // A game may not be running. Expiry restores ordinary voice playback.
+    } finally { positionReadPending = false; }
+}, 250);
 
 // ensureRemoteChain builds the shared processing tail once per voice session.
 function ensureRemoteChain() {
@@ -2888,6 +3086,7 @@ function ensureRemoteChain() {
     try {
         const ctx = new (window.AudioContext || window.webkitAudioContext)();
         remoteChain.ctx = ctx;
+        spatialVoice = new SpatialVoice(ctx);
         const master = ctx.createGain();
         remoteChain.master = master;
         master.gain.value = state.deafened ? 0 : Math.min(2, (state.settings?.volume ?? 100) / 100);
@@ -2934,13 +3133,16 @@ function attachRemoteAudio(track, publisher) {
         const head = attachUserNormalizer(ctx, track.id, src);
         head.connect(gain);
         gain.connect(mute);
-        mute.connect(remoteChain.master);
+        spatialVoice.attach(track.id, mute, remoteChain.master, publisher?.client_id || "");
 
         const uid = publisher?.unique_id || "";
-        remoteTracks.set(track.id, { src, playback, gain, mute, uid });
+        const entry = { src, playback, gain, mute, uid };
+        remoteTracks.set(track.id, entry);
         if (uid) registerUserChain(uid, gain, mute);
 
-        track.addEventListener("ended", () => detachRemoteTrack(track.id));
+        track.addEventListener("ended", () => {
+            if (remoteTracks.get(track.id) === entry) detachRemoteTrack(track.id);
+        });
     } catch (e) {
         sysMsg("remote audio chain failed: " + e);
     }
@@ -2961,6 +3163,7 @@ function resolveTrackUsers() {
         });
         const t = remoteTracks.get(trackID);
         if (t && !t.uid && publisher.unique_id) {
+            spatialVoice?.peer(trackID, publisher.client_id);
             t.uid = publisher.unique_id;
             registerUserChain(publisher.unique_id, t.gain, t.mute);
         }
@@ -3024,12 +3227,15 @@ function attachShareAudio(track, clientID, publisher) {
         // no auto-level (53) on program audio: it would pump on music and
         // game sound, which is not a quiet speaker that needs lifting.
         gain.connect(remoteChain.master);
-        shareAudio.set(clid, {
+        const entry = {
             trackID: track.id, src, playback, gain, uid: publisher?.unique_id || "",
             volume: 100, muted: false,
-        });
+        };
+        shareAudio.set(clid, entry);
         applyShareAudio(clid);
-        track.addEventListener("ended", () => detachShareAudio(clid));
+        track.addEventListener("ended", () => {
+            if (shareAudio.get(clid) === entry) detachShareAudio(clid);
+        });
     } catch (e) {
         sysMsg("shared audio chain failed: " + e);
     }
@@ -3052,6 +3258,7 @@ function detachRemoteTrack(trackID) {
     const t = remoteTracks.get(trackID);
     if (!t) return;
     remoteTracks.delete(trackID);
+    spatialVoice?.detach(trackID);
     t.playback.pause();
     t.playback.srcObject = null;
     if (t.uid) unregisterUserChain(t.uid);
@@ -3065,6 +3272,7 @@ function detachRemoteTrack(trackID) {
 
 function detachRemoteAudio() {
     for (const trackID of [...remoteTracks.keys()]) detachRemoteTrack(trackID);
+    spatialVoice = null;
     for (const clid of [...shareAudio.keys()]) detachShareAudio(clid); // (70)
     detachAllUserNormalizers(); // (53) stops the shared auto-level ticker
     if (remoteChain.ctx) {
@@ -3076,9 +3284,12 @@ function detachRemoteAudio() {
 }
 
 function setPTT(active) {
+    const scope = captureMediaScope();
+    const epoch = voiceSessionEpoch;
     // (6) PTT release delay: PTT-up is deferred by the configured delay so
     // sentence ends aren't clipped. pttRelease handles cancel-on-repress.
     pttRelease(active, (effective) => {
+        if (!mediaScopeIsCurrent(scope) || voiceSessionEpoch !== epoch) return;
         if (state.pttActive === effective) return;
         state.pttActive = effective;
         $("ptt-btn").classList.toggle("live", effective);
@@ -3128,7 +3339,8 @@ function setDeafened(on) {
     renderTree();
 }
 
-window.runtime.EventsOn("hotkey", (action) => {
+let whisperReplyRequest = null;
+window.runtime.EventsOn("hotkey", async (action) => {
     if (action === "mute_toggle") {
         $("voice-mute").click();
         return;
@@ -3158,10 +3370,17 @@ window.runtime.EventsOn("hotkey", (action) => {
     // the whisper list it replaced (arming permanently would silently reroute
     // every later transmission).
     if (action === "whisper_reply") {
+        if (whisperReplyRequest && mediaScopeIsCurrent(whisperReplyRequest)) return;
+        const scope = captureMediaScope();
         if (state.whisperArmed) {
             const prev = state.whisperPrev || { clients: [], channels: [], active: false };
-            window.go.main.App.WhisperSet(prev.clients, prev.channels, prev.active);
+            whisperReplyRequest = scope;
+            const error = await setWhisperRouting(prev, scope);
+            if (whisperReplyRequest === scope) whisperReplyRequest = null;
+            if (error === null) return;
+            if (error) { sysMsg("whisper reply failed: " + error); return; }
             state.whisperArmed = false;
+            state.whisperTargetUID = "";
             state.whisperPrev = null;
             renderVoiceStatus();
             sysMsg("whisper reply disarmed");
@@ -3172,13 +3391,20 @@ window.runtime.EventsOn("hotkey", (action) => {
             return;
         }
         const s = state.settings || {};
-        state.whisperPrev = {
-            clients: s.whisper_clients || [], channels: s.whisper_channels || [], active: !!s.whisper_active,
+        const previous = {
+            clients: [...(s.whisper_clients || [])], channels: [...(s.whisper_channels || [])], active: !!s.whisper_active,
         };
-        window.go.main.App.WhisperSet([state.lastWhispererUID], [], true);
+        const target = state.lastWhispererUID;
+        whisperReplyRequest = scope;
+        const error = await setWhisperRouting({ clients: [target], channels: [], active: true }, scope);
+        if (whisperReplyRequest === scope) whisperReplyRequest = null;
+        if (error === null) return;
+        if (error) { sysMsg("whisper reply failed: " + error); return; }
+        state.whisperPrev = previous;
+        state.whisperTargetUID = target;
         state.whisperArmed = true;
         renderVoiceStatus();
-        sysMsg("whisper reply armed → " + uidName(state.lastWhispererUID));
+        sysMsg("whisper reply armed → " + uidName(target));
         return;
     }
     if (document.hasFocus() && document.activeElement === $("chat-text")) return;
@@ -3256,7 +3482,16 @@ document.addEventListener("keydown", (e) => {
     rows[next < 0 ? 0 : next].focus();
 });
 
+window.runtime.EventsOn("hotkey_binding", (binding) => {
+    if (binding.action !== "ptt") return;
+    state.pttShortcutStatus = { spec: binding.spec };
+    renderVoiceHints();
+});
 window.runtime.EventsOn("hotkey_status", (st) => {
+    if (st.action === "ptt") {
+        state.pttShortcutStatus = { ...state.pttShortcutStatus, ...st };
+        renderVoiceHints();
+    }
     const el = $("hotkey-status");
     const action = { mute_toggle: "Mute", deafen_toggle: "Deafen", ptt: "Push to talk" }[st.action] || String(st.action || "Voice").replaceAll("_", " ");
     if (st.registered) {
@@ -3274,7 +3509,8 @@ window.runtime.EventsOn("hotkey_status", (st) => {
 // TALK banner: visible whenever PTT is live or we are speaking.
 function updateTalkBanner() {
     const me = state.clients.find((c) => c.client_id === state.myClientID);
-    const talking = state.pttActive || !!(me && me.is_speaking);
+    const talking = !state.muted && (state.pttActive || !!(me && me.is_speaking));
+    $("talk-banner").textContent = "● " + t("polish.talking");
     $("talk-banner").classList.toggle("hidden", !talking);
 }
 
@@ -3288,11 +3524,12 @@ $("voice-lowbw").onclick = () => setLowBandwidth(!isLowBandwidth(), true);
 
 // Whisper (re-applied from settings after connect) -----------------------------
 
-function applyWhisperSettings() {
+async function applyWhisperSettings() {
     const s = state.settings;
     if (!s || !s.whisper_active) return;
     if ((s.whisper_clients?.length || 0) === 0 && (s.whisper_channels?.length || 0) === 0) return;
-    window.go.main.App.WhisperSet(s.whisper_clients || [], s.whisper_channels || [], true);
+    const error = await setWhisperRouting({ clients: s.whisper_clients || [], channels: s.whisper_channels || [], active: true });
+    if (error) sysMsg("whisper configuration failed: " + error);
 }
 
 // ---------------------------------------------------------------------------
@@ -3301,44 +3538,17 @@ function applyWhisperSettings() {
 
 async function refreshPermissions() {
     const area = $("perm-area");
-    const generation = state.serverGeneration;
-    try {
-        const entries = await window.go.main.App.GetPermissions();
-        if (generation !== state.serverGeneration) return;
-        // (6b) keep the resolved set for UI gating (kick/ban/group menus).
-        state.myPerms = new Map((entries || []).map((e) => [e.key, e]));
-        if (!entries || entries.length === 0) {
-            area.innerHTML = `<div class="empty-state">No permissions — guest default</div>`;
-            return;
-        }
-        const table = document.createElement("table");
-        table.className = "perm-grid";
-        table.innerHTML = "<thead><tr><th>key</th><th>value</th><th>flags</th></tr></thead><tbody></tbody>";
-        const body = table.querySelector("tbody");
-        for (const e of entries) {
-            const flags = [e.skip ? "skip" : "", e.negate ? "negate" : ""].filter(Boolean).join(",");
-            const source = e.source_tier ? `effective from ${e.source_tier}${e.inherited ? " (inherited)" : ""}` : "effective permission";
-            const row = document.createElement("tr");
-            row.classList.toggle("inherited", !!e.inherited);
-            row.title = source;
-            const key = document.createElement("td");
-            key.className = "mono";
-            key.textContent = String(e.key ?? "");
-            const value = document.createElement("td");
-            const valuePill = document.createElement("span");
-            valuePill.className = "pill-val";
-            valuePill.textContent = String(e.value ?? "");
-            value.appendChild(valuePill);
-            const flagCell = document.createElement("td");
-            flagCell.textContent = flags + (e.source_tier ? ` · ${e.source_tier}` : "");
-            row.append(key, value, flagCell);
-            body.appendChild(row);
-        }
-        area.replaceChildren(table);
-    } catch {
-        if (generation !== state.serverGeneration) return;
-        area.innerHTML = `<div class="empty-state">Permissions unavailable</div>`;
+    if (state.authorizationModel === "pending") {
+        area.replaceChildren();
+        return;
     }
+    const heading = document.createElement("h3");
+    heading.textContent = t("roles.myRoles");
+    const help = document.createElement("p");
+    help.textContent = t("roles.ownAccessHelp");
+    area.replaceChildren(heading, help);
+    const ownRoles = state.clients.find(client => client.client_id === state.myClientID)?.roles || [];
+    for (const role of [...ownRoles].sort((a, b) => b.position - a.position)) area.appendChild(roleChip(role));
 }
 
 // ---------------------------------------------------------------------------
@@ -3348,7 +3558,7 @@ async function refreshPermissions() {
 window.__noxa = {
     soundEngine,
     speechQueue,
-    state, $, toast, announceLive, sysMsg, showLogin, showWorkspace, disconnect, sendChat, setPTT,
+    state, $, toast, announceLive, sysMsg, showLogin, showWorkspace, disconnect, sendChat, setPTT, noteActivity,
     setDeafened, refreshPermissions, applyVoiceState, applyOutputSettings, applyLiveAudioSettings,
     startVADMonitor: startVoiceMonitor, stopVADMonitor: stopVoiceMonitor,
     connectFromLogin, renderTree, setChannelExpanded, setDetailsOpen, setDirectTargetVisible,
@@ -3358,7 +3568,8 @@ window.__noxa = {
     startQualitySampler, stopQualitySampler,
     voiceOutputDevice: () => ({ active: !!remoteChain.ctx && remoteChain.ctx.state !== "closed", id: typeof remoteChain.ctx?.sinkId === "string" ? remoteChain.ctx.sinkId : "" }),
     checkCertificateClock,
-    ensureVoiceForChannel, resetVoiceSession, retryMicrophoneAccess,
+    ensureVoiceForChannel, resetVoiceSession, retryMicrophoneAccess, renderVoiceStatus,
+    stopPrivateCall,
     // (70) shared system audio controls for the screen tile's context menu.
     shareAudioCtl: {
         get: (clientID) => {
@@ -3387,7 +3598,7 @@ initSettingsUI();
 initClientInfo();
 initVideo();
 initUpdater();
-initPermsUI(); // wave-6b permission/group UI (registers window.__noxaPerms)
+initPermsUI(); // roles-v1 access and moderation UI
 initFilesUI(); // wave-7 file browser/transfers (registers window.__noxaFiles)
 initTabs();    // wave-8a server tabs (registers window.__noxaTabs)
 initSocialUI(); // wave-8b presence/contacts/hover (registers window.__noxaSocial)

@@ -145,6 +145,9 @@ function syncStack() {
 
 function initialFocus(record) {
     if (!record.active || record !== topRecord() || !record.overlay.isConnected) return false;
+    // A delayed frame must not steal focus chosen after the dialog mounted
+    // or after an asynchronous member list finished loading.
+    if (record.overlay.contains(document.activeElement) && canFocusTarget(document.activeElement)) return true;
     syncDialogSemantics(record.overlay);
     let preferred = null;
     if (typeof record.initialFocus === "function") preferred = record.initialFocus(record.overlay);
