@@ -2,6 +2,7 @@ package webrtc
 
 import (
 	"errors"
+	"log"
 	"sync"
 	"time"
 
@@ -106,12 +107,14 @@ func (s *mediaEgressStream) prepare(pkt *rtp.Packet, ticket mediaTicket) (rtp.Pa
 	return out, true
 }
 
-func (s *mediaEgressStream) stop() {
+func (s *mediaEgressStream) stop() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	wasActive := s.active
 	s.active = false
 	clear(s.tickets)
 	clear(s.order[:])
+	return wasActive
 }
 
 func (s *mediaEgressStream) write(header *rtp.Header, payload []byte, attrs interceptor.Attributes, writer interceptor.RTPWriter) (int, error) {
@@ -127,6 +130,7 @@ func (s *mediaEgressStream) write(header *rtp.Header, payload []byte, attrs inte
 		return 0, nil
 	}
 	n := 0
+	var outputError error
 	write := func() error {
 		// Lock order: authority, member movement, video policy, watch, stream, socket.
 		// No router or track lock may be acquired while holding stream.mu.
@@ -147,20 +151,26 @@ func (s *mediaEgressStream) write(header *rtp.Header, payload []byte, attrs inte
 			}
 			out := *header
 			out.CSRC = ticket.csrc
-			var err error
-			n, err = writer.Write(&out, payload, attrs)
-			return err
+			n, outputError = writer.Write(&out, payload, attrs)
+			return outputError
 		}
 		if ticket.router != nil {
 			return ticket.router.withWhisperScope(ticket.delivery, func() error { return ticket.router.withWatch(ticket.delivery, commit) })
 		}
 		return commit()
 	}
+	var err error
 	if ticket.guard != nil {
-		err := ticket.guard(ticket.delivery, write)
-		return n, err
+		err = ticket.guard(ticket.delivery, write)
+	} else {
+		err = write()
 	}
-	err := write()
+	// Retire failed terminal output only after all authorization/policy/watch
+	// and stream read locks unwind. Guard denials do not poison a healthy
+	// transport. Queued packets and NACKs lose their tickets together.
+	if outputError != nil && s.stop() {
+		log.Printf("webrtc: retiring failed media output slot=%s: %v; track rebuild required", ticket.delivery.Slot, outputError)
+	}
 	return n, err
 }
 

@@ -11,8 +11,8 @@ import "context"
 // use its previous codec configuration; peers created after it returns use the
 // new one. Existing peers retain their codecs until rebuilt with HandleOffer.
 // Client notification, capture changes and rebuild scheduling belong to the
-// caller. Like Router.SetVideoLimits, this waits for router output writes and
-// does not flush downstream Pion transport buffers.
+// caller. This waits for active output writes; terminal egress revision checks
+// reject old packets after Pion pacing and on NACK/RTX delivery.
 func (v *Voice) SetVideoLimits(bitsPerSecond int, bounds VideoBounds) error {
 	return v.CommitVideoLimits(context.Background(), bitsPerSecond, bounds, nil)
 }
@@ -26,9 +26,10 @@ func (v *Voice) SetVideoLimits(bitsPerSecond int, bounds VideoBounds) error {
 // commit runs synchronously with the engine and video-output gates held. It
 // must honor ctx, report success only on confirmed persistence, and must not
 // reenter the engine, router or voice. Callers publish notifications afterward.
-// A deadline bounds waiting for stalled output, not WriteRTP itself or any
-// downstream congestion-control/NACK buffers. No locking goroutine survives
-// a canceled wait.
+// A deadline bounds the save wait; independent production socket deadlines bound
+// active writes and failed terminal output is retired after its leases unwind.
+// Buffered packets recheck policy at final egress. Custom writers must bound
+// their own calls. No locking goroutine survives a canceled wait.
 func (v *Voice) CommitVideoLimits(ctx context.Context, bitsPerSecond int, bounds VideoBounds, commit func(context.Context) error) error {
 	if err := validateVideoLimits(bitsPerSecond, bounds); err != nil {
 		return err

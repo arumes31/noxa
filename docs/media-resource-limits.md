@@ -222,9 +222,14 @@ server authority and membership ahead of the output lock. Output writers must
 not call limit setters recursively. `CommitVideoLimits` lets a deadline abandon
 the wait for stalled output, queued updates or the engine lock without leaving
 an asynchronous lock waiter or changing policy. Queued writers prevent new
-readers from continually extending the drain. This cancels the save wait; it
-does not interrupt the already-stalled output or release its authorization lease.
-The peer/lifecycle failure policy remains unfinished.
+readers from continually extending the drain. Canceling the save wait does not
+itself interrupt a write. Independently, production UDP/TCP/TLS media socket
+writes have a 250 ms budget, including contention for the socket write gate;
+scoped recording writes have a 25 ms deadline. A terminal RTP write error retires
+that output and invalidates its tickets after authorization/policy/watch locks
+unwind. Guard denials alone leave healthy output active. Retirement is logged;
+the affected track stays silent until a normal track/peer rebuild or reconnect.
+Custom synchronous writers must provide their own bounded write contract.
 
 Existing VP8 tracks detect bounds generations on every packet and require a new
 in-bounds keyframe after a dimension change, including disabling and re-enabling
@@ -233,8 +238,11 @@ valid dimension reference state. Invalid compound updates leave limits and
 publisher budgets untouched. Existing non-VP8/unknown-codec tracks stop when
 bounds become active; direct uninspected forwarding cannot bypass enabled bounds.
 
-This boundary drains router output calls, not Pion's downstream congestion/NACK
-buffers or already transmitted packets. The internal `Voice.SetVideoLimits`
+The terminal interceptor rechecks authorization, scope and video revision after
+congestion pacing and on NACK/RTX output. Old queued packets are rejected at
+that boundary; physical clearing of every Pion buffer is unnecessary for this
+guarantee. Tickets expire after one second and are bounded per stream. Packets
+already transmitted cannot be revoked. The internal `Voice.SetVideoLimits`
 operation now validates the whole bitrate/dimension pair before changing either
 component and serializes competing updates. It uses the same commit operation
 without persistence and with an unbounded context; runtime management must use
@@ -264,8 +272,8 @@ modification because Pion can return shared MediaEngine entries. This is a
 receiver hint, not proof of encoded dimensions; packet checks remain authoritative
 ([RFC 7741](https://www.rfc-editor.org/rfc/rfc7741.html#section-6.2.2)).
 
-Server-side stalled-writer termination, transport buffer draining and complete
-native-device rehearsal remain unfinished. The desktop runtime editor and the
+Complete native-device and sustained live-stream/recording rehearsal remains
+separate from these deterministic deadline and retransmission tests. The desktop runtime editor and the
 role-aware Query/SSH and gRPC contracts are available when the server advertises
 the capability. Startup controls remain available for offline configuration.
 
