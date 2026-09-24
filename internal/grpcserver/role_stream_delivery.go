@@ -158,7 +158,7 @@ func (c *roleDeliveryConn) observeMessageData(id uint32, data []byte) error {
 			}
 		}
 		n := min(len(data), int(s.remaining))
-		s.remaining -= uint32(n)
+		s.remaining -= uint32(n & 0xffffffff)
 		data = data[n:]
 		if s.remaining == 0 {
 			f := s.fence

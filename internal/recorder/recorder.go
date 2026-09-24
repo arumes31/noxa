@@ -2059,7 +2059,7 @@ func (t *Tap) endInput() error {
 	}
 	// FFmpeg rejects packets shorter than an RTP header before checking RTCP.
 	// The reason pads this single-source BYE beyond that twelve-byte minimum.
-	packet, err := (&rtcp.Goodbye{Sources: []uint32{uint32(source - 1)}, Reason: "recording stopped"}).Marshal()
+	packet, err := (&rtcp.Goodbye{Sources: []uint32{uint32((source - 1) & 0xffffffff)}, Reason: "recording stopped"}).Marshal()
 	if err != nil {
 		return err
 	}

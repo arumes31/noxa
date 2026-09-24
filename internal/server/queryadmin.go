@@ -4,7 +4,6 @@ package server
 import (
 	"context"
 	"strconv"
-
 )
 
 // EffectiveMaxClients returns the current connection cap. Runtime server UI

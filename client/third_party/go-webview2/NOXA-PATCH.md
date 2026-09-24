@@ -5,7 +5,7 @@ Source: github.com/wailsapp/go-webview2 v1.0.23 (upstream LICENSE retained).
 The packaged Windows client exited from Chromium.Focus while Save As was open:
 MoveFocus returned E_INVALIDARG and errorCallback called os.Exit(1).
 
-Only Focus is changed: ignore missing/shutting-down controllers and disabled
+Aside from mechanical gofmt normalization required by CI, only Focus behavior is changed: ignore missing/shutting-down controllers and disabled
 owner windows; log and defer the E_INVALIDARG focus attempt. Other HRESULTs and
 other fatal-error sites retain upstream behavior. No permission policy changes.
 

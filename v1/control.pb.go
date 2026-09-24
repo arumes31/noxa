@@ -178,6 +178,82 @@ func (FileTransferStatus) EnumDescriptor() ([]byte, []int) {
 	return file_control_proto_rawDescGZIP(), []int{2}
 }
 
+// Retained for descriptor compatibility only; use the role-aware APIs.
+//
+// Deprecated: Marked as deprecated in control.proto.
+type Permission int32
+
+const (
+	Permission_PERMISSION_UNSPECIFIED    Permission = 0
+	Permission_PERMISSION_JOIN           Permission = 1
+	Permission_PERMISSION_SPEAK          Permission = 2
+	Permission_PERMISSION_VIDEO          Permission = 3
+	Permission_PERMISSION_CHAT           Permission = 4
+	Permission_PERMISSION_KICK           Permission = 5
+	Permission_PERMISSION_BAN            Permission = 6
+	Permission_PERMISSION_MOVE           Permission = 7
+	Permission_PERMISSION_CREATE_CHANNEL Permission = 8
+	Permission_PERMISSION_DELETE_CHANNEL Permission = 9
+	Permission_PERMISSION_TRANSFER_FILE  Permission = 10
+)
+
+// Enum value maps for Permission.
+var (
+	Permission_name = map[int32]string{
+		0:  "PERMISSION_UNSPECIFIED",
+		1:  "PERMISSION_JOIN",
+		2:  "PERMISSION_SPEAK",
+		3:  "PERMISSION_VIDEO",
+		4:  "PERMISSION_CHAT",
+		5:  "PERMISSION_KICK",
+		6:  "PERMISSION_BAN",
+		7:  "PERMISSION_MOVE",
+		8:  "PERMISSION_CREATE_CHANNEL",
+		9:  "PERMISSION_DELETE_CHANNEL",
+		10: "PERMISSION_TRANSFER_FILE",
+	}
+	Permission_value = map[string]int32{
+		"PERMISSION_UNSPECIFIED":    0,
+		"PERMISSION_JOIN":           1,
+		"PERMISSION_SPEAK":          2,
+		"PERMISSION_VIDEO":          3,
+		"PERMISSION_CHAT":           4,
+		"PERMISSION_KICK":           5,
+		"PERMISSION_BAN":            6,
+		"PERMISSION_MOVE":           7,
+		"PERMISSION_CREATE_CHANNEL": 8,
+		"PERMISSION_DELETE_CHANNEL": 9,
+		"PERMISSION_TRANSFER_FILE":  10,
+	}
+)
+
+func (x Permission) Enum() *Permission {
+	p := new(Permission)
+	*p = x
+	return p
+}
+
+func (x Permission) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (Permission) Descriptor() protoreflect.EnumDescriptor {
+	return file_control_proto_enumTypes[3].Descriptor()
+}
+
+func (Permission) Type() protoreflect.EnumType {
+	return &file_control_proto_enumTypes[3]
+}
+
+func (x Permission) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use Permission.Descriptor instead.
+func (Permission) EnumDescriptor() ([]byte, []int) {
+	return file_control_proto_rawDescGZIP(), []int{3}
+}
+
 type GetServerRulesRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	unknownFields protoimpl.UnknownFields
@@ -576,9 +652,15 @@ func (x *GetServerRulesResponse) GetAcceptedClients() int64 {
 }
 
 type AuthenticateRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Username      string                 `protobuf:"bytes,1,opt,name=username,proto3" json:"username,omitempty"`
-	Password      string                 `protobuf:"bytes,2,opt,name=password,proto3" json:"password,omitempty"`
+	state    protoimpl.MessageState `protogen:"open.v1"`
+	Username string                 `protobuf:"bytes,1,opt,name=username,proto3" json:"username,omitempty"`
+	Password string                 `protobuf:"bytes,2,opt,name=password,proto3" json:"password,omitempty"`
+	// Retained for source/wire compatibility. Authentication ignores this field.
+	//
+	// Deprecated: Marked as deprecated in control.proto.
+	Token         string            `protobuf:"bytes,3,opt,name=token,proto3" json:"token,omitempty"`
+	ClientVersion string            `protobuf:"bytes,4,opt,name=client_version,json=clientVersion,proto3" json:"client_version,omitempty"`
+	Metadata      map[string]string `protobuf:"bytes,5,rep,name=metadata,proto3" json:"metadata,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -627,9 +709,45 @@ func (x *AuthenticateRequest) GetPassword() string {
 	return ""
 }
 
+// Deprecated: Marked as deprecated in control.proto.
+func (x *AuthenticateRequest) GetToken() string {
+	if x != nil {
+		return x.Token
+	}
+	return ""
+}
+
+func (x *AuthenticateRequest) GetClientVersion() string {
+	if x != nil {
+		return x.ClientVersion
+	}
+	return ""
+}
+
+func (x *AuthenticateRequest) GetMetadata() map[string]string {
+	if x != nil {
+		return x.Metadata
+	}
+	return nil
+}
+
 type AuthenticateResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	UserId        string                 `protobuf:"bytes,1,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Legacy clients may still inspect success; failures use gRPC status codes.
+	//
+	// Deprecated: Marked as deprecated in control.proto.
+	Success bool `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
+	// Session tokens are not issued. Each RPC requires authorization metadata.
+	//
+	// Deprecated: Marked as deprecated in control.proto.
+	SessionToken string `protobuf:"bytes,2,opt,name=session_token,json=sessionToken,proto3" json:"session_token,omitempty"`
+	UserId       string `protobuf:"bytes,3,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
+	// Deprecated: Marked as deprecated in control.proto.
+	DisplayName string `protobuf:"bytes,4,opt,name=display_name,json=displayName,proto3" json:"display_name,omitempty"`
+	// Deprecated: Marked as deprecated in control.proto.
+	ExpiresAt int64 `protobuf:"varint,5,opt,name=expires_at,json=expiresAt,proto3" json:"expires_at,omitempty"`
+	// Deprecated: Marked as deprecated in control.proto.
+	Error         string `protobuf:"bytes,6,opt,name=error,proto3" json:"error,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -664,9 +782,49 @@ func (*AuthenticateResponse) Descriptor() ([]byte, []int) {
 	return file_control_proto_rawDescGZIP(), []int{8}
 }
 
+// Deprecated: Marked as deprecated in control.proto.
+func (x *AuthenticateResponse) GetSuccess() bool {
+	if x != nil {
+		return x.Success
+	}
+	return false
+}
+
+// Deprecated: Marked as deprecated in control.proto.
+func (x *AuthenticateResponse) GetSessionToken() string {
+	if x != nil {
+		return x.SessionToken
+	}
+	return ""
+}
+
 func (x *AuthenticateResponse) GetUserId() string {
 	if x != nil {
 		return x.UserId
+	}
+	return ""
+}
+
+// Deprecated: Marked as deprecated in control.proto.
+func (x *AuthenticateResponse) GetDisplayName() string {
+	if x != nil {
+		return x.DisplayName
+	}
+	return ""
+}
+
+// Deprecated: Marked as deprecated in control.proto.
+func (x *AuthenticateResponse) GetExpiresAt() int64 {
+	if x != nil {
+		return x.ExpiresAt
+	}
+	return 0
+}
+
+// Deprecated: Marked as deprecated in control.proto.
+func (x *AuthenticateResponse) GetError() string {
+	if x != nil {
+		return x.Error
 	}
 	return ""
 }
@@ -5815,6 +5973,376 @@ func (x *CancelFileTransferResponse) GetError() string {
 	return ""
 }
 
+// Retained for descriptor compatibility only; use the role-aware APIs.
+//
+// Deprecated: Marked as deprecated in control.proto.
+type CreateChannelRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	ParentId      string                 `protobuf:"bytes,2,opt,name=parent_id,json=parentId,proto3" json:"parent_id,omitempty"`
+	MaxClients    int32                  `protobuf:"varint,3,opt,name=max_clients,json=maxClients,proto3" json:"max_clients,omitempty"`
+	Permanent     bool                   `protobuf:"varint,4,opt,name=permanent,proto3" json:"permanent,omitempty"`
+	Metadata      map[string]string      `protobuf:"bytes,5,rep,name=metadata,proto3" json:"metadata,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CreateChannelRequest) Reset() {
+	*x = CreateChannelRequest{}
+	mi := &file_control_proto_msgTypes[85]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CreateChannelRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CreateChannelRequest) ProtoMessage() {}
+
+func (x *CreateChannelRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_control_proto_msgTypes[85]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CreateChannelRequest.ProtoReflect.Descriptor instead.
+func (*CreateChannelRequest) Descriptor() ([]byte, []int) {
+	return file_control_proto_rawDescGZIP(), []int{85}
+}
+
+func (x *CreateChannelRequest) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *CreateChannelRequest) GetParentId() string {
+	if x != nil {
+		return x.ParentId
+	}
+	return ""
+}
+
+func (x *CreateChannelRequest) GetMaxClients() int32 {
+	if x != nil {
+		return x.MaxClients
+	}
+	return 0
+}
+
+func (x *CreateChannelRequest) GetPermanent() bool {
+	if x != nil {
+		return x.Permanent
+	}
+	return false
+}
+
+func (x *CreateChannelRequest) GetMetadata() map[string]string {
+	if x != nil {
+		return x.Metadata
+	}
+	return nil
+}
+
+// Retained for descriptor compatibility only; use the role-aware APIs.
+//
+// Deprecated: Marked as deprecated in control.proto.
+type CreateChannelResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Success       bool                   `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
+	ChannelId     string                 `protobuf:"bytes,2,opt,name=channel_id,json=channelId,proto3" json:"channel_id,omitempty"`
+	Error         string                 `protobuf:"bytes,3,opt,name=error,proto3" json:"error,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CreateChannelResponse) Reset() {
+	*x = CreateChannelResponse{}
+	mi := &file_control_proto_msgTypes[86]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CreateChannelResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CreateChannelResponse) ProtoMessage() {}
+
+func (x *CreateChannelResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_control_proto_msgTypes[86]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CreateChannelResponse.ProtoReflect.Descriptor instead.
+func (*CreateChannelResponse) Descriptor() ([]byte, []int) {
+	return file_control_proto_rawDescGZIP(), []int{86}
+}
+
+func (x *CreateChannelResponse) GetSuccess() bool {
+	if x != nil {
+		return x.Success
+	}
+	return false
+}
+
+func (x *CreateChannelResponse) GetChannelId() string {
+	if x != nil {
+		return x.ChannelId
+	}
+	return ""
+}
+
+func (x *CreateChannelResponse) GetError() string {
+	if x != nil {
+		return x.Error
+	}
+	return ""
+}
+
+// Retained for descriptor compatibility only; use the role-aware APIs.
+//
+// Deprecated: Marked as deprecated in control.proto.
+type DeleteChannelRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ChannelId     string                 `protobuf:"bytes,1,opt,name=channel_id,json=channelId,proto3" json:"channel_id,omitempty"`
+	Reason        string                 `protobuf:"bytes,2,opt,name=reason,proto3" json:"reason,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DeleteChannelRequest) Reset() {
+	*x = DeleteChannelRequest{}
+	mi := &file_control_proto_msgTypes[87]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DeleteChannelRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DeleteChannelRequest) ProtoMessage() {}
+
+func (x *DeleteChannelRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_control_proto_msgTypes[87]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DeleteChannelRequest.ProtoReflect.Descriptor instead.
+func (*DeleteChannelRequest) Descriptor() ([]byte, []int) {
+	return file_control_proto_rawDescGZIP(), []int{87}
+}
+
+func (x *DeleteChannelRequest) GetChannelId() string {
+	if x != nil {
+		return x.ChannelId
+	}
+	return ""
+}
+
+func (x *DeleteChannelRequest) GetReason() string {
+	if x != nil {
+		return x.Reason
+	}
+	return ""
+}
+
+// Retained for descriptor compatibility only; use the role-aware APIs.
+//
+// Deprecated: Marked as deprecated in control.proto.
+type DeleteChannelResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Success       bool                   `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
+	Error         string                 `protobuf:"bytes,2,opt,name=error,proto3" json:"error,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DeleteChannelResponse) Reset() {
+	*x = DeleteChannelResponse{}
+	mi := &file_control_proto_msgTypes[88]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DeleteChannelResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DeleteChannelResponse) ProtoMessage() {}
+
+func (x *DeleteChannelResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_control_proto_msgTypes[88]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DeleteChannelResponse.ProtoReflect.Descriptor instead.
+func (*DeleteChannelResponse) Descriptor() ([]byte, []int) {
+	return file_control_proto_rawDescGZIP(), []int{88}
+}
+
+func (x *DeleteChannelResponse) GetSuccess() bool {
+	if x != nil {
+		return x.Success
+	}
+	return false
+}
+
+func (x *DeleteChannelResponse) GetError() string {
+	if x != nil {
+		return x.Error
+	}
+	return ""
+}
+
+// Retained for descriptor compatibility only; use the role-aware APIs.
+//
+// Deprecated: Marked as deprecated in control.proto.
+type QueryPermissionsRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ChannelId     string                 `protobuf:"bytes,1,opt,name=channel_id,json=channelId,proto3" json:"channel_id,omitempty"`
+	UserId        string                 `protobuf:"bytes,2,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"` // empty means the authenticated caller
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *QueryPermissionsRequest) Reset() {
+	*x = QueryPermissionsRequest{}
+	mi := &file_control_proto_msgTypes[89]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *QueryPermissionsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*QueryPermissionsRequest) ProtoMessage() {}
+
+func (x *QueryPermissionsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_control_proto_msgTypes[89]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use QueryPermissionsRequest.ProtoReflect.Descriptor instead.
+func (*QueryPermissionsRequest) Descriptor() ([]byte, []int) {
+	return file_control_proto_rawDescGZIP(), []int{89}
+}
+
+func (x *QueryPermissionsRequest) GetChannelId() string {
+	if x != nil {
+		return x.ChannelId
+	}
+	return ""
+}
+
+func (x *QueryPermissionsRequest) GetUserId() string {
+	if x != nil {
+		return x.UserId
+	}
+	return ""
+}
+
+// Retained for descriptor compatibility only; use the role-aware APIs.
+//
+// Deprecated: Marked as deprecated in control.proto.
+type QueryPermissionsResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Granted       []Permission           `protobuf:"varint,1,rep,packed,name=granted,proto3,enum=voicx.v1.Permission" json:"granted,omitempty"`
+	Denied        []Permission           `protobuf:"varint,2,rep,packed,name=denied,proto3,enum=voicx.v1.Permission" json:"denied,omitempty"`
+	IsAdmin       bool                   `protobuf:"varint,3,opt,name=is_admin,json=isAdmin,proto3" json:"is_admin,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *QueryPermissionsResponse) Reset() {
+	*x = QueryPermissionsResponse{}
+	mi := &file_control_proto_msgTypes[90]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *QueryPermissionsResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*QueryPermissionsResponse) ProtoMessage() {}
+
+func (x *QueryPermissionsResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_control_proto_msgTypes[90]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use QueryPermissionsResponse.ProtoReflect.Descriptor instead.
+func (*QueryPermissionsResponse) Descriptor() ([]byte, []int) {
+	return file_control_proto_rawDescGZIP(), []int{90}
+}
+
+func (x *QueryPermissionsResponse) GetGranted() []Permission {
+	if x != nil {
+		return x.Granted
+	}
+	return nil
+}
+
+func (x *QueryPermissionsResponse) GetDenied() []Permission {
+	if x != nil {
+		return x.Denied
+	}
+	return nil
+}
+
+func (x *QueryPermissionsResponse) GetIsAdmin() bool {
+	if x != nil {
+		return x.IsAdmin
+	}
+	return false
+}
+
 var File_control_proto protoreflect.FileDescriptor
 
 const file_control_proto_rawDesc = "" +
@@ -5845,12 +6373,24 @@ const file_control_proto_rawDesc = "" +
 	"\x16GetServerRulesResponse\x12\x12\n" +
 	"\x04text\x18\x01 \x01(\tR\x04text\x12\x12\n" +
 	"\x04hash\x18\x02 \x01(\tR\x04hash\x12)\n" +
-	"\x10accepted_clients\x18\x03 \x01(\x03R\x0facceptedClients\"M\n" +
+	"\x10accepted_clients\x18\x03 \x01(\x03R\x0facceptedClients\"\x94\x02\n" +
 	"\x13AuthenticateRequest\x12\x1a\n" +
 	"\busername\x18\x01 \x01(\tR\busername\x12\x1a\n" +
-	"\bpassword\x18\x02 \x01(\tR\bpassword\"/\n" +
-	"\x14AuthenticateResponse\x12\x17\n" +
-	"\auser_id\x18\x01 \x01(\tR\x06userId\"\xac\x02\n" +
+	"\bpassword\x18\x02 \x01(\tR\bpassword\x12\x18\n" +
+	"\x05token\x18\x03 \x01(\tB\x02\x18\x01R\x05token\x12%\n" +
+	"\x0eclient_version\x18\x04 \x01(\tR\rclientVersion\x12G\n" +
+	"\bmetadata\x18\x05 \x03(\v2+.voicx.v1.AuthenticateRequest.MetadataEntryR\bmetadata\x1a;\n" +
+	"\rMetadataEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xda\x01\n" +
+	"\x14AuthenticateResponse\x12\x1c\n" +
+	"\asuccess\x18\x01 \x01(\bB\x02\x18\x01R\asuccess\x12'\n" +
+	"\rsession_token\x18\x02 \x01(\tB\x02\x18\x01R\fsessionToken\x12\x17\n" +
+	"\auser_id\x18\x03 \x01(\tR\x06userId\x12%\n" +
+	"\fdisplay_name\x18\x04 \x01(\tB\x02\x18\x01R\vdisplayName\x12!\n" +
+	"\n" +
+	"expires_at\x18\x05 \x01(\x03B\x02\x18\x01R\texpiresAt\x12\x18\n" +
+	"\x05error\x18\x06 \x01(\tB\x02\x18\x01R\x05error\"\xac\x02\n" +
 	"\aChannel\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x1b\n" +
@@ -6295,7 +6835,37 @@ const file_control_proto_rawDesc = "" +
 	"\x06reason\x18\x02 \x01(\tR\x06reason\"L\n" +
 	"\x1aCancelFileTransferResponse\x12\x18\n" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x14\n" +
-	"\x05error\x18\x02 \x01(\tR\x05error*m\n" +
+	"\x05error\x18\x02 \x01(\tR\x05error\"\x91\x02\n" +
+	"\x14CreateChannelRequest\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x12\x1b\n" +
+	"\tparent_id\x18\x02 \x01(\tR\bparentId\x12\x1f\n" +
+	"\vmax_clients\x18\x03 \x01(\x05R\n" +
+	"maxClients\x12\x1c\n" +
+	"\tpermanent\x18\x04 \x01(\bR\tpermanent\x12H\n" +
+	"\bmetadata\x18\x05 \x03(\v2,.voicx.v1.CreateChannelRequest.MetadataEntryR\bmetadata\x1a;\n" +
+	"\rMetadataEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01:\x02\x18\x01\"j\n" +
+	"\x15CreateChannelResponse\x12\x18\n" +
+	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x1d\n" +
+	"\n" +
+	"channel_id\x18\x02 \x01(\tR\tchannelId\x12\x14\n" +
+	"\x05error\x18\x03 \x01(\tR\x05error:\x02\x18\x01\"Q\n" +
+	"\x14DeleteChannelRequest\x12\x1d\n" +
+	"\n" +
+	"channel_id\x18\x01 \x01(\tR\tchannelId\x12\x16\n" +
+	"\x06reason\x18\x02 \x01(\tR\x06reason:\x02\x18\x01\"K\n" +
+	"\x15DeleteChannelResponse\x12\x18\n" +
+	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x14\n" +
+	"\x05error\x18\x02 \x01(\tR\x05error:\x02\x18\x01\"U\n" +
+	"\x17QueryPermissionsRequest\x12\x1d\n" +
+	"\n" +
+	"channel_id\x18\x01 \x01(\tR\tchannelId\x12\x17\n" +
+	"\auser_id\x18\x02 \x01(\tR\x06userId:\x02\x18\x01\"\x97\x01\n" +
+	"\x18QueryPermissionsResponse\x12.\n" +
+	"\agranted\x18\x01 \x03(\x0e2\x14.voicx.v1.PermissionR\agranted\x12,\n" +
+	"\x06denied\x18\x02 \x03(\x0e2\x14.voicx.v1.PermissionR\x06denied\x12\x19\n" +
+	"\bis_admin\x18\x03 \x01(\bR\aisAdmin:\x02\x18\x01*m\n" +
 	"\x0eBanPersistence\x12\x1f\n" +
 	"\x1bBAN_PERSISTENCE_UNSPECIFIED\x10\x00\x12\x19\n" +
 	"\x15BAN_PERSISTENCE_SAVED\x10\x01\x12\x1f\n" +
@@ -6310,8 +6880,25 @@ const file_control_proto_rawDesc = "" +
 	" FILE_TRANSFER_STATUS_IN_PROGRESS\x10\x02\x12\"\n" +
 	"\x1eFILE_TRANSFER_STATUS_COMPLETED\x10\x03\x12\x1f\n" +
 	"\x1bFILE_TRANSFER_STATUS_FAILED\x10\x04\x12!\n" +
-	"\x1dFILE_TRANSFER_STATUS_CANCELED\x10\x052\xbe\x16\n" +
-	"\aControl\x12M\n" +
+	"\x1dFILE_TRANSFER_STATUS_CANCELED\x10\x05*\x9c\x02\n" +
+	"\n" +
+	"Permission\x12\x1a\n" +
+	"\x16PERMISSION_UNSPECIFIED\x10\x00\x12\x13\n" +
+	"\x0fPERMISSION_JOIN\x10\x01\x12\x14\n" +
+	"\x10PERMISSION_SPEAK\x10\x02\x12\x14\n" +
+	"\x10PERMISSION_VIDEO\x10\x03\x12\x13\n" +
+	"\x0fPERMISSION_CHAT\x10\x04\x12\x13\n" +
+	"\x0fPERMISSION_KICK\x10\x05\x12\x12\n" +
+	"\x0ePERMISSION_BAN\x10\x06\x12\x13\n" +
+	"\x0fPERMISSION_MOVE\x10\a\x12\x1d\n" +
+	"\x19PERMISSION_CREATE_CHANNEL\x10\b\x12\x1d\n" +
+	"\x19PERMISSION_DELETE_CHANNEL\x10\t\x12\x1c\n" +
+	"\x18PERMISSION_TRANSFER_FILE\x10\n" +
+	"\x1a\x02\x18\x012\xcc\x18\n" +
+	"\aControl\x12^\n" +
+	"\x10QueryPermissions\x12!.voicx.v1.QueryPermissionsRequest\x1a\".voicx.v1.QueryPermissionsResponse\"\x03\x88\x02\x01\x12U\n" +
+	"\rDeleteChannel\x12\x1e.voicx.v1.DeleteChannelRequest\x1a\x1f.voicx.v1.DeleteChannelResponse\"\x03\x88\x02\x01\x12U\n" +
+	"\rCreateChannel\x12\x1e.voicx.v1.CreateChannelRequest\x1a\x1f.voicx.v1.CreateChannelResponse\"\x03\x88\x02\x01\x12M\n" +
 	"\fAuthenticate\x12\x1d.voicx.v1.AuthenticateRequest\x1a\x1e.voicx.v1.AuthenticateResponse\x12M\n" +
 	"\fListChannels\x12\x1d.voicx.v1.ListChannelsRequest\x1a\x1e.voicx.v1.ListChannelsResponse\x12J\n" +
 	"\vChangeRoles\x12\x1c.voicx.v1.ChangeRolesRequest\x1a\x1d.voicx.v1.ChangeRolesResponse\x12P\n" +
@@ -6361,202 +6948,221 @@ func file_control_proto_rawDescGZIP() []byte {
 	return file_control_proto_rawDescData
 }
 
-var file_control_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
-var file_control_proto_msgTypes = make([]protoimpl.MessageInfo, 86)
+var file_control_proto_enumTypes = make([]protoimpl.EnumInfo, 4)
+var file_control_proto_msgTypes = make([]protoimpl.MessageInfo, 94)
 var file_control_proto_goTypes = []any{
 	(BanPersistence)(0),                   // 0: voicx.v1.BanPersistence
 	(FileTransferDirection)(0),            // 1: voicx.v1.FileTransferDirection
 	(FileTransferStatus)(0),               // 2: voicx.v1.FileTransferStatus
-	(*GetServerRulesRequest)(nil),         // 3: voicx.v1.GetServerRulesRequest
-	(*ListCustomMetadataRequest)(nil),     // 4: voicx.v1.ListCustomMetadataRequest
-	(*CustomMetadataEntry)(nil),           // 5: voicx.v1.CustomMetadataEntry
-	(*ListCustomMetadataResponse)(nil),    // 6: voicx.v1.ListCustomMetadataResponse
-	(*ChangeCustomMetadataRequest)(nil),   // 7: voicx.v1.ChangeCustomMetadataRequest
-	(*ChangeCustomMetadataResponse)(nil),  // 8: voicx.v1.ChangeCustomMetadataResponse
-	(*GetServerRulesResponse)(nil),        // 9: voicx.v1.GetServerRulesResponse
-	(*AuthenticateRequest)(nil),           // 10: voicx.v1.AuthenticateRequest
-	(*AuthenticateResponse)(nil),          // 11: voicx.v1.AuthenticateResponse
-	(*Channel)(nil),                       // 12: voicx.v1.Channel
-	(*ListChannelsRequest)(nil),           // 13: voicx.v1.ListChannelsRequest
-	(*ListChannelsResponse)(nil),          // 14: voicx.v1.ListChannelsResponse
-	(*GetServerInfoRequest)(nil),          // 15: voicx.v1.GetServerInfoRequest
-	(*ListComplaintsRequest)(nil),         // 16: voicx.v1.ListComplaintsRequest
-	(*ComplaintRecord)(nil),               // 17: voicx.v1.ComplaintRecord
-	(*ListComplaintsResponse)(nil),        // 18: voicx.v1.ListComplaintsResponse
-	(*ClearComplaintsRequest)(nil),        // 19: voicx.v1.ClearComplaintsRequest
-	(*ClearComplaintsResponse)(nil),       // 20: voicx.v1.ClearComplaintsResponse
-	(*ListAuditLogRequest)(nil),           // 21: voicx.v1.ListAuditLogRequest
-	(*AuditLogRecord)(nil),                // 22: voicx.v1.AuditLogRecord
-	(*ListAuditLogResponse)(nil),          // 23: voicx.v1.ListAuditLogResponse
-	(*ListClientsRequest)(nil),            // 24: voicx.v1.ListClientsRequest
-	(*VisibleClient)(nil),                 // 25: voicx.v1.VisibleClient
-	(*ListClientsResponse)(nil),           // 26: voicx.v1.ListClientsResponse
-	(*GetChannelInfoRequest)(nil),         // 27: voicx.v1.GetChannelInfoRequest
-	(*GetChannelInfoResponse)(nil),        // 28: voicx.v1.GetChannelInfoResponse
-	(*GetRoleStateRequest)(nil),           // 29: voicx.v1.GetRoleStateRequest
-	(*RoleAssignment)(nil),                // 30: voicx.v1.RoleAssignment
-	(*RolePolicySnapshot)(nil),            // 31: voicx.v1.RolePolicySnapshot
-	(*CapabilityDescriptor)(nil),          // 32: voicx.v1.CapabilityDescriptor
-	(*GetRoleStateResponse)(nil),          // 33: voicx.v1.GetRoleStateResponse
-	(*ListRoleMembersRequest)(nil),        // 34: voicx.v1.ListRoleMembersRequest
-	(*RoleMemberIdentity)(nil),            // 35: voicx.v1.RoleMemberIdentity
-	(*ListRoleMembersResponse)(nil),       // 36: voicx.v1.ListRoleMembersResponse
-	(*CheckAccessRequest)(nil),            // 37: voicx.v1.CheckAccessRequest
-	(*RoleAccessDecision)(nil),            // 38: voicx.v1.RoleAccessDecision
-	(*CheckAccessResponse)(nil),           // 39: voicx.v1.CheckAccessResponse
-	(*GetChannelOptionsRequest)(nil),      // 40: voicx.v1.GetChannelOptionsRequest
-	(*ChannelManagementOption)(nil),       // 41: voicx.v1.ChannelManagementOption
-	(*GetChannelOptionsResponse)(nil),     // 42: voicx.v1.GetChannelOptionsResponse
-	(*GetServerInfoResponse)(nil),         // 43: voicx.v1.GetServerInfoResponse
-	(*GetClientInfoRequest)(nil),          // 44: voicx.v1.GetClientInfoRequest
-	(*GetClientInfoResponse)(nil),         // 45: voicx.v1.GetClientInfoResponse
-	(*GetServerConfigRequest)(nil),        // 46: voicx.v1.GetServerConfigRequest
-	(*GetMediaLimitsRequest)(nil),         // 47: voicx.v1.GetMediaLimitsRequest
-	(*SetMediaLimitsRequest)(nil),         // 48: voicx.v1.SetMediaLimitsRequest
-	(*GetMediaLimitsResponse)(nil),        // 49: voicx.v1.GetMediaLimitsResponse
-	(*SetMediaLimitsResponse)(nil),        // 50: voicx.v1.SetMediaLimitsResponse
-	(*GetChatFiltersRequest)(nil),         // 51: voicx.v1.GetChatFiltersRequest
-	(*GetChatFiltersResponse)(nil),        // 52: voicx.v1.GetChatFiltersResponse
-	(*SetServerTextRequest)(nil),          // 53: voicx.v1.SetServerTextRequest
-	(*SetServerTextResponse)(nil),         // 54: voicx.v1.SetServerTextResponse
-	(*SetChatFiltersRequest)(nil),         // 55: voicx.v1.SetChatFiltersRequest
-	(*SetChatFiltersResponse)(nil),        // 56: voicx.v1.SetChatFiltersResponse
-	(*SetServerConfigRequest)(nil),        // 57: voicx.v1.SetServerConfigRequest
-	(*SetServerConfigResponse)(nil),       // 58: voicx.v1.SetServerConfigResponse
-	(*GetServerConfigResponse)(nil),       // 59: voicx.v1.GetServerConfigResponse
-	(*ListBansRequest)(nil),               // 60: voicx.v1.ListBansRequest
-	(*BanRecord)(nil),                     // 61: voicx.v1.BanRecord
-	(*ListBansResponse)(nil),              // 62: voicx.v1.ListBansResponse
-	(*MoveMemberRequest)(nil),             // 63: voicx.v1.MoveMemberRequest
-	(*KickMemberRequest)(nil),             // 64: voicx.v1.KickMemberRequest
-	(*KickMemberResponse)(nil),            // 65: voicx.v1.KickMemberResponse
-	(*BanMemberRequest)(nil),              // 66: voicx.v1.BanMemberRequest
-	(*BanMemberResponse)(nil),             // 67: voicx.v1.BanMemberResponse
-	(*DisconnectMemberRequest)(nil),       // 68: voicx.v1.DisconnectMemberRequest
-	(*DisconnectMemberResponse)(nil),      // 69: voicx.v1.DisconnectMemberResponse
-	(*MoveMemberResponse)(nil),            // 70: voicx.v1.MoveMemberResponse
-	(*RoleDefinition)(nil),                // 71: voicx.v1.RoleDefinition
-	(*ChannelRoleOverride)(nil),           // 72: voicx.v1.ChannelRoleOverride
-	(*ChannelRoleAccess)(nil),             // 73: voicx.v1.ChannelRoleAccess
-	(*ChangeRolesRequest)(nil),            // 74: voicx.v1.ChangeRolesRequest
-	(*ChangeRolesResponse)(nil),           // 75: voicx.v1.ChangeRolesResponse
-	(*RoleChannelSettings)(nil),           // 76: voicx.v1.RoleChannelSettings
-	(*RoleChannelCreationAccess)(nil),     // 77: voicx.v1.RoleChannelCreationAccess
-	(*ChangeChannelRequest)(nil),          // 78: voicx.v1.ChangeChannelRequest
-	(*ChangeChannelResponse)(nil),         // 79: voicx.v1.ChangeChannelResponse
-	(*SetMemberVoiceRequest)(nil),         // 80: voicx.v1.SetMemberVoiceRequest
-	(*SetMemberVoiceResponse)(nil),        // 81: voicx.v1.SetMemberVoiceResponse
-	(*StartFileTransferRequest)(nil),      // 82: voicx.v1.StartFileTransferRequest
-	(*StartFileTransferResponse)(nil),     // 83: voicx.v1.StartFileTransferResponse
-	(*GetFileTransferStatusRequest)(nil),  // 84: voicx.v1.GetFileTransferStatusRequest
-	(*GetFileTransferStatusResponse)(nil), // 85: voicx.v1.GetFileTransferStatusResponse
-	(*CancelFileTransferRequest)(nil),     // 86: voicx.v1.CancelFileTransferRequest
-	(*CancelFileTransferResponse)(nil),    // 87: voicx.v1.CancelFileTransferResponse
-	nil,                                   // 88: voicx.v1.Channel.MetadataEntry
+	(Permission)(0),                       // 3: voicx.v1.Permission
+	(*GetServerRulesRequest)(nil),         // 4: voicx.v1.GetServerRulesRequest
+	(*ListCustomMetadataRequest)(nil),     // 5: voicx.v1.ListCustomMetadataRequest
+	(*CustomMetadataEntry)(nil),           // 6: voicx.v1.CustomMetadataEntry
+	(*ListCustomMetadataResponse)(nil),    // 7: voicx.v1.ListCustomMetadataResponse
+	(*ChangeCustomMetadataRequest)(nil),   // 8: voicx.v1.ChangeCustomMetadataRequest
+	(*ChangeCustomMetadataResponse)(nil),  // 9: voicx.v1.ChangeCustomMetadataResponse
+	(*GetServerRulesResponse)(nil),        // 10: voicx.v1.GetServerRulesResponse
+	(*AuthenticateRequest)(nil),           // 11: voicx.v1.AuthenticateRequest
+	(*AuthenticateResponse)(nil),          // 12: voicx.v1.AuthenticateResponse
+	(*Channel)(nil),                       // 13: voicx.v1.Channel
+	(*ListChannelsRequest)(nil),           // 14: voicx.v1.ListChannelsRequest
+	(*ListChannelsResponse)(nil),          // 15: voicx.v1.ListChannelsResponse
+	(*GetServerInfoRequest)(nil),          // 16: voicx.v1.GetServerInfoRequest
+	(*ListComplaintsRequest)(nil),         // 17: voicx.v1.ListComplaintsRequest
+	(*ComplaintRecord)(nil),               // 18: voicx.v1.ComplaintRecord
+	(*ListComplaintsResponse)(nil),        // 19: voicx.v1.ListComplaintsResponse
+	(*ClearComplaintsRequest)(nil),        // 20: voicx.v1.ClearComplaintsRequest
+	(*ClearComplaintsResponse)(nil),       // 21: voicx.v1.ClearComplaintsResponse
+	(*ListAuditLogRequest)(nil),           // 22: voicx.v1.ListAuditLogRequest
+	(*AuditLogRecord)(nil),                // 23: voicx.v1.AuditLogRecord
+	(*ListAuditLogResponse)(nil),          // 24: voicx.v1.ListAuditLogResponse
+	(*ListClientsRequest)(nil),            // 25: voicx.v1.ListClientsRequest
+	(*VisibleClient)(nil),                 // 26: voicx.v1.VisibleClient
+	(*ListClientsResponse)(nil),           // 27: voicx.v1.ListClientsResponse
+	(*GetChannelInfoRequest)(nil),         // 28: voicx.v1.GetChannelInfoRequest
+	(*GetChannelInfoResponse)(nil),        // 29: voicx.v1.GetChannelInfoResponse
+	(*GetRoleStateRequest)(nil),           // 30: voicx.v1.GetRoleStateRequest
+	(*RoleAssignment)(nil),                // 31: voicx.v1.RoleAssignment
+	(*RolePolicySnapshot)(nil),            // 32: voicx.v1.RolePolicySnapshot
+	(*CapabilityDescriptor)(nil),          // 33: voicx.v1.CapabilityDescriptor
+	(*GetRoleStateResponse)(nil),          // 34: voicx.v1.GetRoleStateResponse
+	(*ListRoleMembersRequest)(nil),        // 35: voicx.v1.ListRoleMembersRequest
+	(*RoleMemberIdentity)(nil),            // 36: voicx.v1.RoleMemberIdentity
+	(*ListRoleMembersResponse)(nil),       // 37: voicx.v1.ListRoleMembersResponse
+	(*CheckAccessRequest)(nil),            // 38: voicx.v1.CheckAccessRequest
+	(*RoleAccessDecision)(nil),            // 39: voicx.v1.RoleAccessDecision
+	(*CheckAccessResponse)(nil),           // 40: voicx.v1.CheckAccessResponse
+	(*GetChannelOptionsRequest)(nil),      // 41: voicx.v1.GetChannelOptionsRequest
+	(*ChannelManagementOption)(nil),       // 42: voicx.v1.ChannelManagementOption
+	(*GetChannelOptionsResponse)(nil),     // 43: voicx.v1.GetChannelOptionsResponse
+	(*GetServerInfoResponse)(nil),         // 44: voicx.v1.GetServerInfoResponse
+	(*GetClientInfoRequest)(nil),          // 45: voicx.v1.GetClientInfoRequest
+	(*GetClientInfoResponse)(nil),         // 46: voicx.v1.GetClientInfoResponse
+	(*GetServerConfigRequest)(nil),        // 47: voicx.v1.GetServerConfigRequest
+	(*GetMediaLimitsRequest)(nil),         // 48: voicx.v1.GetMediaLimitsRequest
+	(*SetMediaLimitsRequest)(nil),         // 49: voicx.v1.SetMediaLimitsRequest
+	(*GetMediaLimitsResponse)(nil),        // 50: voicx.v1.GetMediaLimitsResponse
+	(*SetMediaLimitsResponse)(nil),        // 51: voicx.v1.SetMediaLimitsResponse
+	(*GetChatFiltersRequest)(nil),         // 52: voicx.v1.GetChatFiltersRequest
+	(*GetChatFiltersResponse)(nil),        // 53: voicx.v1.GetChatFiltersResponse
+	(*SetServerTextRequest)(nil),          // 54: voicx.v1.SetServerTextRequest
+	(*SetServerTextResponse)(nil),         // 55: voicx.v1.SetServerTextResponse
+	(*SetChatFiltersRequest)(nil),         // 56: voicx.v1.SetChatFiltersRequest
+	(*SetChatFiltersResponse)(nil),        // 57: voicx.v1.SetChatFiltersResponse
+	(*SetServerConfigRequest)(nil),        // 58: voicx.v1.SetServerConfigRequest
+	(*SetServerConfigResponse)(nil),       // 59: voicx.v1.SetServerConfigResponse
+	(*GetServerConfigResponse)(nil),       // 60: voicx.v1.GetServerConfigResponse
+	(*ListBansRequest)(nil),               // 61: voicx.v1.ListBansRequest
+	(*BanRecord)(nil),                     // 62: voicx.v1.BanRecord
+	(*ListBansResponse)(nil),              // 63: voicx.v1.ListBansResponse
+	(*MoveMemberRequest)(nil),             // 64: voicx.v1.MoveMemberRequest
+	(*KickMemberRequest)(nil),             // 65: voicx.v1.KickMemberRequest
+	(*KickMemberResponse)(nil),            // 66: voicx.v1.KickMemberResponse
+	(*BanMemberRequest)(nil),              // 67: voicx.v1.BanMemberRequest
+	(*BanMemberResponse)(nil),             // 68: voicx.v1.BanMemberResponse
+	(*DisconnectMemberRequest)(nil),       // 69: voicx.v1.DisconnectMemberRequest
+	(*DisconnectMemberResponse)(nil),      // 70: voicx.v1.DisconnectMemberResponse
+	(*MoveMemberResponse)(nil),            // 71: voicx.v1.MoveMemberResponse
+	(*RoleDefinition)(nil),                // 72: voicx.v1.RoleDefinition
+	(*ChannelRoleOverride)(nil),           // 73: voicx.v1.ChannelRoleOverride
+	(*ChannelRoleAccess)(nil),             // 74: voicx.v1.ChannelRoleAccess
+	(*ChangeRolesRequest)(nil),            // 75: voicx.v1.ChangeRolesRequest
+	(*ChangeRolesResponse)(nil),           // 76: voicx.v1.ChangeRolesResponse
+	(*RoleChannelSettings)(nil),           // 77: voicx.v1.RoleChannelSettings
+	(*RoleChannelCreationAccess)(nil),     // 78: voicx.v1.RoleChannelCreationAccess
+	(*ChangeChannelRequest)(nil),          // 79: voicx.v1.ChangeChannelRequest
+	(*ChangeChannelResponse)(nil),         // 80: voicx.v1.ChangeChannelResponse
+	(*SetMemberVoiceRequest)(nil),         // 81: voicx.v1.SetMemberVoiceRequest
+	(*SetMemberVoiceResponse)(nil),        // 82: voicx.v1.SetMemberVoiceResponse
+	(*StartFileTransferRequest)(nil),      // 83: voicx.v1.StartFileTransferRequest
+	(*StartFileTransferResponse)(nil),     // 84: voicx.v1.StartFileTransferResponse
+	(*GetFileTransferStatusRequest)(nil),  // 85: voicx.v1.GetFileTransferStatusRequest
+	(*GetFileTransferStatusResponse)(nil), // 86: voicx.v1.GetFileTransferStatusResponse
+	(*CancelFileTransferRequest)(nil),     // 87: voicx.v1.CancelFileTransferRequest
+	(*CancelFileTransferResponse)(nil),    // 88: voicx.v1.CancelFileTransferResponse
+	(*CreateChannelRequest)(nil),          // 89: voicx.v1.CreateChannelRequest
+	(*CreateChannelResponse)(nil),         // 90: voicx.v1.CreateChannelResponse
+	(*DeleteChannelRequest)(nil),          // 91: voicx.v1.DeleteChannelRequest
+	(*DeleteChannelResponse)(nil),         // 92: voicx.v1.DeleteChannelResponse
+	(*QueryPermissionsRequest)(nil),       // 93: voicx.v1.QueryPermissionsRequest
+	(*QueryPermissionsResponse)(nil),      // 94: voicx.v1.QueryPermissionsResponse
+	nil,                                   // 95: voicx.v1.AuthenticateRequest.MetadataEntry
+	nil,                                   // 96: voicx.v1.Channel.MetadataEntry
+	nil,                                   // 97: voicx.v1.CreateChannelRequest.MetadataEntry
 }
 var file_control_proto_depIdxs = []int32{
-	5,  // 0: voicx.v1.ListCustomMetadataResponse.entries:type_name -> voicx.v1.CustomMetadataEntry
-	88, // 1: voicx.v1.Channel.metadata:type_name -> voicx.v1.Channel.MetadataEntry
-	12, // 2: voicx.v1.ListChannelsResponse.channels:type_name -> voicx.v1.Channel
-	17, // 3: voicx.v1.ListComplaintsResponse.entries:type_name -> voicx.v1.ComplaintRecord
-	22, // 4: voicx.v1.ListAuditLogResponse.entries:type_name -> voicx.v1.AuditLogRecord
-	32, // 5: voicx.v1.ListAuditLogResponse.capabilities:type_name -> voicx.v1.CapabilityDescriptor
-	25, // 6: voicx.v1.ListClientsResponse.clients:type_name -> voicx.v1.VisibleClient
-	71, // 7: voicx.v1.RolePolicySnapshot.roles:type_name -> voicx.v1.RoleDefinition
-	30, // 8: voicx.v1.RolePolicySnapshot.members:type_name -> voicx.v1.RoleAssignment
-	73, // 9: voicx.v1.RolePolicySnapshot.channels:type_name -> voicx.v1.ChannelRoleAccess
-	72, // 10: voicx.v1.GetRoleStateResponse.effective_overrides:type_name -> voicx.v1.ChannelRoleOverride
-	72, // 11: voicx.v1.GetRoleStateResponse.parent_overrides:type_name -> voicx.v1.ChannelRoleOverride
-	31, // 12: voicx.v1.GetRoleStateResponse.policy:type_name -> voicx.v1.RolePolicySnapshot
-	32, // 13: voicx.v1.GetRoleStateResponse.capabilities:type_name -> voicx.v1.CapabilityDescriptor
-	35, // 14: voicx.v1.ListRoleMembersResponse.entries:type_name -> voicx.v1.RoleMemberIdentity
-	38, // 15: voicx.v1.CheckAccessResponse.decision:type_name -> voicx.v1.RoleAccessDecision
-	76, // 16: voicx.v1.GetChannelOptionsResponse.settings:type_name -> voicx.v1.RoleChannelSettings
-	41, // 17: voicx.v1.GetChannelOptionsResponse.roles:type_name -> voicx.v1.ChannelManagementOption
-	41, // 18: voicx.v1.GetChannelOptionsResponse.destinations:type_name -> voicx.v1.ChannelManagementOption
-	61, // 19: voicx.v1.ListBansResponse.bans:type_name -> voicx.v1.BanRecord
-	0,  // 20: voicx.v1.BanMemberResponse.persistence:type_name -> voicx.v1.BanPersistence
-	72, // 21: voicx.v1.ChannelRoleAccess.overrides:type_name -> voicx.v1.ChannelRoleOverride
-	71, // 22: voicx.v1.ChangeRolesRequest.role:type_name -> voicx.v1.RoleDefinition
-	73, // 23: voicx.v1.ChangeRolesRequest.channel:type_name -> voicx.v1.ChannelRoleAccess
-	72, // 24: voicx.v1.RoleChannelCreationAccess.overrides:type_name -> voicx.v1.ChannelRoleOverride
-	77, // 25: voicx.v1.ChangeChannelRequest.access:type_name -> voicx.v1.RoleChannelCreationAccess
-	76, // 26: voicx.v1.ChangeChannelRequest.settings:type_name -> voicx.v1.RoleChannelSettings
-	1,  // 27: voicx.v1.StartFileTransferRequest.direction:type_name -> voicx.v1.FileTransferDirection
-	2,  // 28: voicx.v1.GetFileTransferStatusResponse.status:type_name -> voicx.v1.FileTransferStatus
-	10, // 29: voicx.v1.Control.Authenticate:input_type -> voicx.v1.AuthenticateRequest
-	13, // 30: voicx.v1.Control.ListChannels:input_type -> voicx.v1.ListChannelsRequest
-	74, // 31: voicx.v1.Control.ChangeRoles:input_type -> voicx.v1.ChangeRolesRequest
-	78, // 32: voicx.v1.Control.ChangeChannel:input_type -> voicx.v1.ChangeChannelRequest
-	80, // 33: voicx.v1.Control.SetMemberVoice:input_type -> voicx.v1.SetMemberVoiceRequest
-	63, // 34: voicx.v1.Control.MoveMember:input_type -> voicx.v1.MoveMemberRequest
-	68, // 35: voicx.v1.Control.DisconnectMember:input_type -> voicx.v1.DisconnectMemberRequest
-	64, // 36: voicx.v1.Control.KickMember:input_type -> voicx.v1.KickMemberRequest
-	66, // 37: voicx.v1.Control.BanMember:input_type -> voicx.v1.BanMemberRequest
-	15, // 38: voicx.v1.Control.GetServerInfo:input_type -> voicx.v1.GetServerInfoRequest
-	44, // 39: voicx.v1.Control.GetClientInfo:input_type -> voicx.v1.GetClientInfoRequest
-	46, // 40: voicx.v1.Control.GetServerConfig:input_type -> voicx.v1.GetServerConfigRequest
-	47, // 41: voicx.v1.Control.GetMediaLimits:input_type -> voicx.v1.GetMediaLimitsRequest
-	48, // 42: voicx.v1.Control.SetMediaLimits:input_type -> voicx.v1.SetMediaLimitsRequest
-	57, // 43: voicx.v1.Control.SetServerConfig:input_type -> voicx.v1.SetServerConfigRequest
-	51, // 44: voicx.v1.Control.GetChatFilters:input_type -> voicx.v1.GetChatFiltersRequest
-	55, // 45: voicx.v1.Control.SetChatFilters:input_type -> voicx.v1.SetChatFiltersRequest
-	53, // 46: voicx.v1.Control.SetServerText:input_type -> voicx.v1.SetServerTextRequest
-	4,  // 47: voicx.v1.Control.ListCustomMetadata:input_type -> voicx.v1.ListCustomMetadataRequest
-	7,  // 48: voicx.v1.Control.ChangeCustomMetadata:input_type -> voicx.v1.ChangeCustomMetadataRequest
-	60, // 49: voicx.v1.Control.ListBans:input_type -> voicx.v1.ListBansRequest
-	29, // 50: voicx.v1.Control.GetRoleState:input_type -> voicx.v1.GetRoleStateRequest
-	34, // 51: voicx.v1.Control.ListRoleMembers:input_type -> voicx.v1.ListRoleMembersRequest
-	37, // 52: voicx.v1.Control.CheckAccess:input_type -> voicx.v1.CheckAccessRequest
-	40, // 53: voicx.v1.Control.GetChannelOptions:input_type -> voicx.v1.GetChannelOptionsRequest
-	24, // 54: voicx.v1.Control.ListClients:input_type -> voicx.v1.ListClientsRequest
-	27, // 55: voicx.v1.Control.GetChannelInfo:input_type -> voicx.v1.GetChannelInfoRequest
-	21, // 56: voicx.v1.Control.ListAuditLog:input_type -> voicx.v1.ListAuditLogRequest
-	16, // 57: voicx.v1.Control.ListComplaints:input_type -> voicx.v1.ListComplaintsRequest
-	19, // 58: voicx.v1.Control.ClearComplaints:input_type -> voicx.v1.ClearComplaintsRequest
-	3,  // 59: voicx.v1.Control.GetServerRules:input_type -> voicx.v1.GetServerRulesRequest
-	82, // 60: voicx.v1.Control.StartFileTransfer:input_type -> voicx.v1.StartFileTransferRequest
-	84, // 61: voicx.v1.Control.GetFileTransferStatus:input_type -> voicx.v1.GetFileTransferStatusRequest
-	86, // 62: voicx.v1.Control.CancelFileTransfer:input_type -> voicx.v1.CancelFileTransferRequest
-	11, // 63: voicx.v1.Control.Authenticate:output_type -> voicx.v1.AuthenticateResponse
-	14, // 64: voicx.v1.Control.ListChannels:output_type -> voicx.v1.ListChannelsResponse
-	75, // 65: voicx.v1.Control.ChangeRoles:output_type -> voicx.v1.ChangeRolesResponse
-	79, // 66: voicx.v1.Control.ChangeChannel:output_type -> voicx.v1.ChangeChannelResponse
-	81, // 67: voicx.v1.Control.SetMemberVoice:output_type -> voicx.v1.SetMemberVoiceResponse
-	70, // 68: voicx.v1.Control.MoveMember:output_type -> voicx.v1.MoveMemberResponse
-	69, // 69: voicx.v1.Control.DisconnectMember:output_type -> voicx.v1.DisconnectMemberResponse
-	65, // 70: voicx.v1.Control.KickMember:output_type -> voicx.v1.KickMemberResponse
-	67, // 71: voicx.v1.Control.BanMember:output_type -> voicx.v1.BanMemberResponse
-	43, // 72: voicx.v1.Control.GetServerInfo:output_type -> voicx.v1.GetServerInfoResponse
-	45, // 73: voicx.v1.Control.GetClientInfo:output_type -> voicx.v1.GetClientInfoResponse
-	59, // 74: voicx.v1.Control.GetServerConfig:output_type -> voicx.v1.GetServerConfigResponse
-	49, // 75: voicx.v1.Control.GetMediaLimits:output_type -> voicx.v1.GetMediaLimitsResponse
-	50, // 76: voicx.v1.Control.SetMediaLimits:output_type -> voicx.v1.SetMediaLimitsResponse
-	58, // 77: voicx.v1.Control.SetServerConfig:output_type -> voicx.v1.SetServerConfigResponse
-	52, // 78: voicx.v1.Control.GetChatFilters:output_type -> voicx.v1.GetChatFiltersResponse
-	56, // 79: voicx.v1.Control.SetChatFilters:output_type -> voicx.v1.SetChatFiltersResponse
-	54, // 80: voicx.v1.Control.SetServerText:output_type -> voicx.v1.SetServerTextResponse
-	6,  // 81: voicx.v1.Control.ListCustomMetadata:output_type -> voicx.v1.ListCustomMetadataResponse
-	8,  // 82: voicx.v1.Control.ChangeCustomMetadata:output_type -> voicx.v1.ChangeCustomMetadataResponse
-	62, // 83: voicx.v1.Control.ListBans:output_type -> voicx.v1.ListBansResponse
-	33, // 84: voicx.v1.Control.GetRoleState:output_type -> voicx.v1.GetRoleStateResponse
-	36, // 85: voicx.v1.Control.ListRoleMembers:output_type -> voicx.v1.ListRoleMembersResponse
-	39, // 86: voicx.v1.Control.CheckAccess:output_type -> voicx.v1.CheckAccessResponse
-	42, // 87: voicx.v1.Control.GetChannelOptions:output_type -> voicx.v1.GetChannelOptionsResponse
-	26, // 88: voicx.v1.Control.ListClients:output_type -> voicx.v1.ListClientsResponse
-	28, // 89: voicx.v1.Control.GetChannelInfo:output_type -> voicx.v1.GetChannelInfoResponse
-	23, // 90: voicx.v1.Control.ListAuditLog:output_type -> voicx.v1.ListAuditLogResponse
-	18, // 91: voicx.v1.Control.ListComplaints:output_type -> voicx.v1.ListComplaintsResponse
-	20, // 92: voicx.v1.Control.ClearComplaints:output_type -> voicx.v1.ClearComplaintsResponse
-	9,  // 93: voicx.v1.Control.GetServerRules:output_type -> voicx.v1.GetServerRulesResponse
-	83, // 94: voicx.v1.Control.StartFileTransfer:output_type -> voicx.v1.StartFileTransferResponse
-	85, // 95: voicx.v1.Control.GetFileTransferStatus:output_type -> voicx.v1.GetFileTransferStatusResponse
-	87, // 96: voicx.v1.Control.CancelFileTransfer:output_type -> voicx.v1.CancelFileTransferResponse
-	63, // [63:97] is the sub-list for method output_type
-	29, // [29:63] is the sub-list for method input_type
-	29, // [29:29] is the sub-list for extension type_name
-	29, // [29:29] is the sub-list for extension extendee
-	0,  // [0:29] is the sub-list for field type_name
+	6,  // 0: voicx.v1.ListCustomMetadataResponse.entries:type_name -> voicx.v1.CustomMetadataEntry
+	95, // 1: voicx.v1.AuthenticateRequest.metadata:type_name -> voicx.v1.AuthenticateRequest.MetadataEntry
+	96, // 2: voicx.v1.Channel.metadata:type_name -> voicx.v1.Channel.MetadataEntry
+	13, // 3: voicx.v1.ListChannelsResponse.channels:type_name -> voicx.v1.Channel
+	18, // 4: voicx.v1.ListComplaintsResponse.entries:type_name -> voicx.v1.ComplaintRecord
+	23, // 5: voicx.v1.ListAuditLogResponse.entries:type_name -> voicx.v1.AuditLogRecord
+	33, // 6: voicx.v1.ListAuditLogResponse.capabilities:type_name -> voicx.v1.CapabilityDescriptor
+	26, // 7: voicx.v1.ListClientsResponse.clients:type_name -> voicx.v1.VisibleClient
+	72, // 8: voicx.v1.RolePolicySnapshot.roles:type_name -> voicx.v1.RoleDefinition
+	31, // 9: voicx.v1.RolePolicySnapshot.members:type_name -> voicx.v1.RoleAssignment
+	74, // 10: voicx.v1.RolePolicySnapshot.channels:type_name -> voicx.v1.ChannelRoleAccess
+	73, // 11: voicx.v1.GetRoleStateResponse.effective_overrides:type_name -> voicx.v1.ChannelRoleOverride
+	73, // 12: voicx.v1.GetRoleStateResponse.parent_overrides:type_name -> voicx.v1.ChannelRoleOverride
+	32, // 13: voicx.v1.GetRoleStateResponse.policy:type_name -> voicx.v1.RolePolicySnapshot
+	33, // 14: voicx.v1.GetRoleStateResponse.capabilities:type_name -> voicx.v1.CapabilityDescriptor
+	36, // 15: voicx.v1.ListRoleMembersResponse.entries:type_name -> voicx.v1.RoleMemberIdentity
+	39, // 16: voicx.v1.CheckAccessResponse.decision:type_name -> voicx.v1.RoleAccessDecision
+	77, // 17: voicx.v1.GetChannelOptionsResponse.settings:type_name -> voicx.v1.RoleChannelSettings
+	42, // 18: voicx.v1.GetChannelOptionsResponse.roles:type_name -> voicx.v1.ChannelManagementOption
+	42, // 19: voicx.v1.GetChannelOptionsResponse.destinations:type_name -> voicx.v1.ChannelManagementOption
+	62, // 20: voicx.v1.ListBansResponse.bans:type_name -> voicx.v1.BanRecord
+	0,  // 21: voicx.v1.BanMemberResponse.persistence:type_name -> voicx.v1.BanPersistence
+	73, // 22: voicx.v1.ChannelRoleAccess.overrides:type_name -> voicx.v1.ChannelRoleOverride
+	72, // 23: voicx.v1.ChangeRolesRequest.role:type_name -> voicx.v1.RoleDefinition
+	74, // 24: voicx.v1.ChangeRolesRequest.channel:type_name -> voicx.v1.ChannelRoleAccess
+	73, // 25: voicx.v1.RoleChannelCreationAccess.overrides:type_name -> voicx.v1.ChannelRoleOverride
+	78, // 26: voicx.v1.ChangeChannelRequest.access:type_name -> voicx.v1.RoleChannelCreationAccess
+	77, // 27: voicx.v1.ChangeChannelRequest.settings:type_name -> voicx.v1.RoleChannelSettings
+	1,  // 28: voicx.v1.StartFileTransferRequest.direction:type_name -> voicx.v1.FileTransferDirection
+	2,  // 29: voicx.v1.GetFileTransferStatusResponse.status:type_name -> voicx.v1.FileTransferStatus
+	97, // 30: voicx.v1.CreateChannelRequest.metadata:type_name -> voicx.v1.CreateChannelRequest.MetadataEntry
+	3,  // 31: voicx.v1.QueryPermissionsResponse.granted:type_name -> voicx.v1.Permission
+	3,  // 32: voicx.v1.QueryPermissionsResponse.denied:type_name -> voicx.v1.Permission
+	93, // 33: voicx.v1.Control.QueryPermissions:input_type -> voicx.v1.QueryPermissionsRequest
+	91, // 34: voicx.v1.Control.DeleteChannel:input_type -> voicx.v1.DeleteChannelRequest
+	89, // 35: voicx.v1.Control.CreateChannel:input_type -> voicx.v1.CreateChannelRequest
+	11, // 36: voicx.v1.Control.Authenticate:input_type -> voicx.v1.AuthenticateRequest
+	14, // 37: voicx.v1.Control.ListChannels:input_type -> voicx.v1.ListChannelsRequest
+	75, // 38: voicx.v1.Control.ChangeRoles:input_type -> voicx.v1.ChangeRolesRequest
+	79, // 39: voicx.v1.Control.ChangeChannel:input_type -> voicx.v1.ChangeChannelRequest
+	81, // 40: voicx.v1.Control.SetMemberVoice:input_type -> voicx.v1.SetMemberVoiceRequest
+	64, // 41: voicx.v1.Control.MoveMember:input_type -> voicx.v1.MoveMemberRequest
+	69, // 42: voicx.v1.Control.DisconnectMember:input_type -> voicx.v1.DisconnectMemberRequest
+	65, // 43: voicx.v1.Control.KickMember:input_type -> voicx.v1.KickMemberRequest
+	67, // 44: voicx.v1.Control.BanMember:input_type -> voicx.v1.BanMemberRequest
+	16, // 45: voicx.v1.Control.GetServerInfo:input_type -> voicx.v1.GetServerInfoRequest
+	45, // 46: voicx.v1.Control.GetClientInfo:input_type -> voicx.v1.GetClientInfoRequest
+	47, // 47: voicx.v1.Control.GetServerConfig:input_type -> voicx.v1.GetServerConfigRequest
+	48, // 48: voicx.v1.Control.GetMediaLimits:input_type -> voicx.v1.GetMediaLimitsRequest
+	49, // 49: voicx.v1.Control.SetMediaLimits:input_type -> voicx.v1.SetMediaLimitsRequest
+	58, // 50: voicx.v1.Control.SetServerConfig:input_type -> voicx.v1.SetServerConfigRequest
+	52, // 51: voicx.v1.Control.GetChatFilters:input_type -> voicx.v1.GetChatFiltersRequest
+	56, // 52: voicx.v1.Control.SetChatFilters:input_type -> voicx.v1.SetChatFiltersRequest
+	54, // 53: voicx.v1.Control.SetServerText:input_type -> voicx.v1.SetServerTextRequest
+	5,  // 54: voicx.v1.Control.ListCustomMetadata:input_type -> voicx.v1.ListCustomMetadataRequest
+	8,  // 55: voicx.v1.Control.ChangeCustomMetadata:input_type -> voicx.v1.ChangeCustomMetadataRequest
+	61, // 56: voicx.v1.Control.ListBans:input_type -> voicx.v1.ListBansRequest
+	30, // 57: voicx.v1.Control.GetRoleState:input_type -> voicx.v1.GetRoleStateRequest
+	35, // 58: voicx.v1.Control.ListRoleMembers:input_type -> voicx.v1.ListRoleMembersRequest
+	38, // 59: voicx.v1.Control.CheckAccess:input_type -> voicx.v1.CheckAccessRequest
+	41, // 60: voicx.v1.Control.GetChannelOptions:input_type -> voicx.v1.GetChannelOptionsRequest
+	25, // 61: voicx.v1.Control.ListClients:input_type -> voicx.v1.ListClientsRequest
+	28, // 62: voicx.v1.Control.GetChannelInfo:input_type -> voicx.v1.GetChannelInfoRequest
+	22, // 63: voicx.v1.Control.ListAuditLog:input_type -> voicx.v1.ListAuditLogRequest
+	17, // 64: voicx.v1.Control.ListComplaints:input_type -> voicx.v1.ListComplaintsRequest
+	20, // 65: voicx.v1.Control.ClearComplaints:input_type -> voicx.v1.ClearComplaintsRequest
+	4,  // 66: voicx.v1.Control.GetServerRules:input_type -> voicx.v1.GetServerRulesRequest
+	83, // 67: voicx.v1.Control.StartFileTransfer:input_type -> voicx.v1.StartFileTransferRequest
+	85, // 68: voicx.v1.Control.GetFileTransferStatus:input_type -> voicx.v1.GetFileTransferStatusRequest
+	87, // 69: voicx.v1.Control.CancelFileTransfer:input_type -> voicx.v1.CancelFileTransferRequest
+	94, // 70: voicx.v1.Control.QueryPermissions:output_type -> voicx.v1.QueryPermissionsResponse
+	92, // 71: voicx.v1.Control.DeleteChannel:output_type -> voicx.v1.DeleteChannelResponse
+	90, // 72: voicx.v1.Control.CreateChannel:output_type -> voicx.v1.CreateChannelResponse
+	12, // 73: voicx.v1.Control.Authenticate:output_type -> voicx.v1.AuthenticateResponse
+	15, // 74: voicx.v1.Control.ListChannels:output_type -> voicx.v1.ListChannelsResponse
+	76, // 75: voicx.v1.Control.ChangeRoles:output_type -> voicx.v1.ChangeRolesResponse
+	80, // 76: voicx.v1.Control.ChangeChannel:output_type -> voicx.v1.ChangeChannelResponse
+	82, // 77: voicx.v1.Control.SetMemberVoice:output_type -> voicx.v1.SetMemberVoiceResponse
+	71, // 78: voicx.v1.Control.MoveMember:output_type -> voicx.v1.MoveMemberResponse
+	70, // 79: voicx.v1.Control.DisconnectMember:output_type -> voicx.v1.DisconnectMemberResponse
+	66, // 80: voicx.v1.Control.KickMember:output_type -> voicx.v1.KickMemberResponse
+	68, // 81: voicx.v1.Control.BanMember:output_type -> voicx.v1.BanMemberResponse
+	44, // 82: voicx.v1.Control.GetServerInfo:output_type -> voicx.v1.GetServerInfoResponse
+	46, // 83: voicx.v1.Control.GetClientInfo:output_type -> voicx.v1.GetClientInfoResponse
+	60, // 84: voicx.v1.Control.GetServerConfig:output_type -> voicx.v1.GetServerConfigResponse
+	50, // 85: voicx.v1.Control.GetMediaLimits:output_type -> voicx.v1.GetMediaLimitsResponse
+	51, // 86: voicx.v1.Control.SetMediaLimits:output_type -> voicx.v1.SetMediaLimitsResponse
+	59, // 87: voicx.v1.Control.SetServerConfig:output_type -> voicx.v1.SetServerConfigResponse
+	53, // 88: voicx.v1.Control.GetChatFilters:output_type -> voicx.v1.GetChatFiltersResponse
+	57, // 89: voicx.v1.Control.SetChatFilters:output_type -> voicx.v1.SetChatFiltersResponse
+	55, // 90: voicx.v1.Control.SetServerText:output_type -> voicx.v1.SetServerTextResponse
+	7,  // 91: voicx.v1.Control.ListCustomMetadata:output_type -> voicx.v1.ListCustomMetadataResponse
+	9,  // 92: voicx.v1.Control.ChangeCustomMetadata:output_type -> voicx.v1.ChangeCustomMetadataResponse
+	63, // 93: voicx.v1.Control.ListBans:output_type -> voicx.v1.ListBansResponse
+	34, // 94: voicx.v1.Control.GetRoleState:output_type -> voicx.v1.GetRoleStateResponse
+	37, // 95: voicx.v1.Control.ListRoleMembers:output_type -> voicx.v1.ListRoleMembersResponse
+	40, // 96: voicx.v1.Control.CheckAccess:output_type -> voicx.v1.CheckAccessResponse
+	43, // 97: voicx.v1.Control.GetChannelOptions:output_type -> voicx.v1.GetChannelOptionsResponse
+	27, // 98: voicx.v1.Control.ListClients:output_type -> voicx.v1.ListClientsResponse
+	29, // 99: voicx.v1.Control.GetChannelInfo:output_type -> voicx.v1.GetChannelInfoResponse
+	24, // 100: voicx.v1.Control.ListAuditLog:output_type -> voicx.v1.ListAuditLogResponse
+	19, // 101: voicx.v1.Control.ListComplaints:output_type -> voicx.v1.ListComplaintsResponse
+	21, // 102: voicx.v1.Control.ClearComplaints:output_type -> voicx.v1.ClearComplaintsResponse
+	10, // 103: voicx.v1.Control.GetServerRules:output_type -> voicx.v1.GetServerRulesResponse
+	84, // 104: voicx.v1.Control.StartFileTransfer:output_type -> voicx.v1.StartFileTransferResponse
+	86, // 105: voicx.v1.Control.GetFileTransferStatus:output_type -> voicx.v1.GetFileTransferStatusResponse
+	88, // 106: voicx.v1.Control.CancelFileTransfer:output_type -> voicx.v1.CancelFileTransferResponse
+	70, // [70:107] is the sub-list for method output_type
+	33, // [33:70] is the sub-list for method input_type
+	33, // [33:33] is the sub-list for extension type_name
+	33, // [33:33] is the sub-list for extension extendee
+	0,  // [0:33] is the sub-list for field type_name
 }
 
 func init() { file_control_proto_init() }
@@ -6574,8 +7180,8 @@ func file_control_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_control_proto_rawDesc), len(file_control_proto_rawDesc)),
-			NumEnums:      3,
-			NumMessages:   86,
+			NumEnums:      4,
+			NumMessages:   94,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

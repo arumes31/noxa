@@ -23,7 +23,7 @@ func ToNTP(t time.Time) uint64 {
 
 // ToNTP32 converts a time.Time object to a uint32 NTP timestamp.
 func ToNTP32(t time.Time) uint32 {
-	return uint32(ToNTP(t) >> 16) //nolint:gosec // G115
+	return uint32((ToNTP(t) >> 16) & 0xffffffff)
 }
 
 // ToTime converts a uint64 NTP timestamps to a time.Time object.

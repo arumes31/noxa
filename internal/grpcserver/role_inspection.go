@@ -2,6 +2,7 @@ package grpcserver
 
 import (
 	"context"
+	"math"
 	"slices"
 
 	"google.golang.org/grpc/codes"
@@ -25,7 +26,11 @@ func (c *controlService) GetRoleState(ctx context.Context, req *noxav1.GetRoleSt
 	}
 	return protectedUnaryRead(ctx, c.logger, func(ctx context.Context, deliver func(*noxav1.GetRoleStateResponse) error) error {
 		return b.WithIntegrationRoleState(ctx, p, req.GetChannelId(), func(_ context.Context, state netproto.RoleState) error {
-			return deliver(roleStateToProto(state))
+			response, err := roleStateToProto(state)
+			if err != nil {
+				return err
+			}
+			return deliver(response)
 		})
 	})
 }
@@ -82,6 +87,12 @@ func (c *controlService) GetChannelOptions(ctx context.Context, req *noxav1.GetC
 	return protectedUnaryRead(ctx, c.logger, func(ctx context.Context, deliver func(*noxav1.GetChannelOptionsResponse) error) error {
 		return b.WithIntegrationChannelState(ctx, p, request, func(_ context.Context, state netproto.RoleChannelState) error {
 			s := state.Settings
+			if s.OrderIndex < math.MinInt32 || s.OrderIndex > math.MaxInt32 ||
+				s.MaxClients < 0 || s.MaxClients > math.MaxInt32 ||
+				s.SlowModeSeconds < 0 || s.SlowModeSeconds > math.MaxInt32 ||
+				s.OpusBitrate < 0 || s.OpusBitrate > math.MaxInt32 {
+				return status.Error(codes.Internal, "channel settings exceed protobuf range")
+			}
 			return deliver(&noxav1.GetChannelOptionsResponse{
 				Revision: state.Revision, ChannelId: state.ChannelID, Name: state.Name, AffectedChannels: int64(state.AffectedChannels),
 				CanCreatePermanent: state.CanCreatePermanent, CanCreateTemporary: state.CanCreateTemporary, CanManageAccess: state.CanManageAccess, EveryoneId: state.EveryoneID,
@@ -116,10 +127,13 @@ func channelOptionsToProto(values []netproto.RoleChannelOption) []*noxav1.Channe
 	return result
 }
 
-func roleStateToProto(state netproto.RoleState) *noxav1.GetRoleStateResponse {
+func roleStateToProto(state netproto.RoleState) (*noxav1.GetRoleStateResponse, error) {
 	p := state.Policy
 	policy := &noxav1.RolePolicySnapshot{Revision: p.Revision, OwnerId: p.OwnerID, EveryoneId: p.EveryoneID, DefaultMemberRoleId: p.DefaultMemberRoleID}
 	for _, r := range p.Roles {
+		if r.Position < 0 || r.Position > math.MaxInt32 {
+			return nil, status.Error(codes.Internal, "role position exceeds protobuf range")
+		}
 		policy.Roles = append(policy.Roles, &noxav1.RoleDefinition{Id: r.ID, Name: r.Name, Position: int32(r.Position), Color: r.Color, Icon: r.Icon, Hoist: r.Hoist, Mentionable: r.Mentionable, Permissions: capabilitiesToProto(r.Permissions)})
 	}
 	for _, m := range p.Members {
@@ -132,5 +146,5 @@ func roleStateToProto(state netproto.RoleState) *noxav1.GetRoleStateResponse {
 	for _, c := range state.Capabilities {
 		result.Capabilities = append(result.Capabilities, &noxav1.CapabilityDescriptor{Key: string(c.Key), Group: c.Group, English: c.English, German: c.German, Channel: c.Channel, Requires: capabilitiesToProto(c.Requires)})
 	}
-	return result
+	return result, nil
 }

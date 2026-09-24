@@ -19,6 +19,9 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
+	Control_QueryPermissions_FullMethodName      = "/voicx.v1.Control/QueryPermissions"
+	Control_DeleteChannel_FullMethodName         = "/voicx.v1.Control/DeleteChannel"
+	Control_CreateChannel_FullMethodName         = "/voicx.v1.Control/CreateChannel"
 	Control_Authenticate_FullMethodName          = "/voicx.v1.Control/Authenticate"
 	Control_ListChannels_FullMethodName          = "/voicx.v1.Control/ListChannels"
 	Control_ChangeRoles_FullMethodName           = "/voicx.v1.Control/ChangeRoles"
@@ -62,6 +65,15 @@ const (
 // Control service handles authentication, role-aware management, and file
 // transfer control.
 type ControlClient interface {
+	// Deprecated: Do not use.
+	// Retained for descriptor compatibility; this legacy operation is unimplemented.
+	QueryPermissions(ctx context.Context, in *QueryPermissionsRequest, opts ...grpc.CallOption) (*QueryPermissionsResponse, error)
+	// Deprecated: Do not use.
+	// Retained for descriptor compatibility; this legacy operation is unimplemented.
+	DeleteChannel(ctx context.Context, in *DeleteChannelRequest, opts ...grpc.CallOption) (*DeleteChannelResponse, error)
+	// Deprecated: Do not use.
+	// Retained for descriptor compatibility; this legacy operation is unimplemented.
+	CreateChannel(ctx context.Context, in *CreateChannelRequest, opts ...grpc.CallOption) (*CreateChannelResponse, error)
 	// Authenticate validates credentials and returns the authenticated user ID.
 	Authenticate(ctx context.Context, in *AuthenticateRequest, opts ...grpc.CallOption) (*AuthenticateResponse, error)
 	// ListChannels returns the channel tree.
@@ -128,6 +140,39 @@ type controlClient struct {
 
 func NewControlClient(cc grpc.ClientConnInterface) ControlClient {
 	return &controlClient{cc}
+}
+
+// Deprecated: Do not use.
+func (c *controlClient) QueryPermissions(ctx context.Context, in *QueryPermissionsRequest, opts ...grpc.CallOption) (*QueryPermissionsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(QueryPermissionsResponse)
+	err := c.cc.Invoke(ctx, Control_QueryPermissions_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// Deprecated: Do not use.
+func (c *controlClient) DeleteChannel(ctx context.Context, in *DeleteChannelRequest, opts ...grpc.CallOption) (*DeleteChannelResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DeleteChannelResponse)
+	err := c.cc.Invoke(ctx, Control_DeleteChannel_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// Deprecated: Do not use.
+func (c *controlClient) CreateChannel(ctx context.Context, in *CreateChannelRequest, opts ...grpc.CallOption) (*CreateChannelResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CreateChannelResponse)
+	err := c.cc.Invoke(ctx, Control_CreateChannel_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func (c *controlClient) Authenticate(ctx context.Context, in *AuthenticateRequest, opts ...grpc.CallOption) (*AuthenticateResponse, error) {
@@ -477,6 +522,15 @@ func (c *controlClient) CancelFileTransfer(ctx context.Context, in *CancelFileTr
 // Control service handles authentication, role-aware management, and file
 // transfer control.
 type ControlServer interface {
+	// Deprecated: Do not use.
+	// Retained for descriptor compatibility; this legacy operation is unimplemented.
+	QueryPermissions(context.Context, *QueryPermissionsRequest) (*QueryPermissionsResponse, error)
+	// Deprecated: Do not use.
+	// Retained for descriptor compatibility; this legacy operation is unimplemented.
+	DeleteChannel(context.Context, *DeleteChannelRequest) (*DeleteChannelResponse, error)
+	// Deprecated: Do not use.
+	// Retained for descriptor compatibility; this legacy operation is unimplemented.
+	CreateChannel(context.Context, *CreateChannelRequest) (*CreateChannelResponse, error)
 	// Authenticate validates credentials and returns the authenticated user ID.
 	Authenticate(context.Context, *AuthenticateRequest) (*AuthenticateResponse, error)
 	// ListChannels returns the channel tree.
@@ -545,6 +599,15 @@ type ControlServer interface {
 // pointer dereference when methods are called.
 type UnimplementedControlServer struct{}
 
+func (UnimplementedControlServer) QueryPermissions(context.Context, *QueryPermissionsRequest) (*QueryPermissionsResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method QueryPermissions not implemented")
+}
+func (UnimplementedControlServer) DeleteChannel(context.Context, *DeleteChannelRequest) (*DeleteChannelResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method DeleteChannel not implemented")
+}
+func (UnimplementedControlServer) CreateChannel(context.Context, *CreateChannelRequest) (*CreateChannelResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method CreateChannel not implemented")
+}
 func (UnimplementedControlServer) Authenticate(context.Context, *AuthenticateRequest) (*AuthenticateResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Authenticate not implemented")
 }
@@ -666,6 +729,60 @@ func RegisterControlServer(s grpc.ServiceRegistrar, srv ControlServer) {
 		t.testEmbeddedByValue()
 	}
 	s.RegisterService(&Control_ServiceDesc, srv)
+}
+
+func _Control_QueryPermissions_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(QueryPermissionsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControlServer).QueryPermissions(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Control_QueryPermissions_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControlServer).QueryPermissions(ctx, req.(*QueryPermissionsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Control_DeleteChannel_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DeleteChannelRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControlServer).DeleteChannel(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Control_DeleteChannel_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControlServer).DeleteChannel(ctx, req.(*DeleteChannelRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Control_CreateChannel_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CreateChannelRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControlServer).CreateChannel(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Control_CreateChannel_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControlServer).CreateChannel(ctx, req.(*CreateChannelRequest))
+	}
+	return interceptor(ctx, in, info, handler)
 }
 
 func _Control_Authenticate_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
@@ -1287,6 +1404,18 @@ var Control_ServiceDesc = grpc.ServiceDesc{
 	ServiceName: "voicx.v1.Control",
 	HandlerType: (*ControlServer)(nil),
 	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "QueryPermissions",
+			Handler:    _Control_QueryPermissions_Handler,
+		},
+		{
+			MethodName: "DeleteChannel",
+			Handler:    _Control_DeleteChannel_Handler,
+		},
+		{
+			MethodName: "CreateChannel",
+			Handler:    _Control_CreateChannel_Handler,
+		},
 		{
 			MethodName: "Authenticate",
 			Handler:    _Control_Authenticate_Handler,

@@ -42,7 +42,7 @@ func (v *videoContinuity) translate(pkt *rtp.Packet, now time.Time) (*rtp.Packet
 		out := *pkt
 		out.SequenceNumber += v.sequenceOffset
 		out.Timestamp += v.timestampOffset
-		delta := int16(out.SequenceNumber - v.sequence)
+		delta := rtpSequenceDelta(out.SequenceNumber, v.sequence)
 		if delta < 0 && uint32(-int32(delta)) > v.epochPackets {
 			return nil, false
 		}
@@ -66,15 +66,15 @@ func (v *videoContinuity) translate(pkt *rtp.Packet, now time.Time) (*rtp.Packet
 	if switching {
 		v.sequenceOffset = v.sequence + 1 - pkt.SequenceNumber
 		elapsed := max(int64(1), now.Sub(v.last).Nanoseconds()*90000/int64(time.Second))
-		v.timestampOffset = v.timestamp + uint32(elapsed) - pkt.Timestamp
+		v.timestampOffset = v.timestamp + uint32(elapsed&0xffffffff) - pkt.Timestamp
 		v.tl0Offset = v.tl0 + 1 - descriptor.TL0PICIDX
 		v.keyOffset = v.key + 1 - descriptor.KEYIDX
 	}
 	out := *pkt
 	out.SequenceNumber += v.sequenceOffset
 	out.Timestamp += v.timestampOffset
-	sequenceDelta := int16(out.SequenceNumber - v.sequence)
-	mediaDelta := int16(out.SequenceNumber - v.mediaSequence)
+	sequenceDelta := rtpSequenceDelta(out.SequenceNumber, v.sequence)
+	mediaDelta := rtpSequenceDelta(out.SequenceNumber, v.mediaSequence)
 	if v.seen && !switching && sequenceDelta < 0 && uint32(-int32(sequenceDelta)) > v.epochPackets {
 		return nil, false
 	}
@@ -104,7 +104,7 @@ func (v *videoContinuity) translate(pkt *rtp.Packet, now time.Time) (*rtp.Packet
 				width = 2
 			}
 			rest := append([]byte(nil), header[pos+width:]...)
-			header = append(header[:pos], 0x80|byte(picture>>8), byte(picture))
+			header = append(header[:pos], 0x80|byte(picture>>8), byte(picture&0xff))
 			header = append(header, rest...)
 			pos += 2
 		}
@@ -118,11 +118,11 @@ func (v *videoContinuity) translate(pkt *rtp.Packet, now time.Time) (*rtp.Packet
 		header = append(header, data...)
 		out.Payload = header
 	}
-	if first || switching || int16(out.SequenceNumber-v.sequence) > 0 {
+	if first || switching || sequenceDelta > 0 {
 		if first || switching {
 			v.epochPackets = 0
 		} else {
-			v.epochPackets = min(32768, v.epochPackets+uint32(sequenceDelta))
+			v.epochPackets = min(32768, v.epochPackets+uint32(sequenceDelta&0xffff))
 		}
 		v.sequence = out.SequenceNumber
 	}

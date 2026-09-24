@@ -167,7 +167,7 @@ func (f *FeedbackAdapter) OnTransportCCFeedback(
 		switch chunk := chunk.(type) {
 		case *rtcp.RunLengthChunk:
 			limited := *chunk
-			limited.RunLength = min(chunk.RunLength, uint16(remaining)) //nolint:gosec // bounded by PacketStatusCount
+			limited.RunLength = min(chunk.RunLength, uint16(remaining&0xffff)) // remaining is bounded by PacketStatusCount.
 			n, nextRefTime, acks, err := f.unpackRunLengthChunk(index, refTime, &limited, recvDeltas)
 			if err != nil {
 				return nil, err
@@ -187,7 +187,7 @@ func (f *FeedbackAdapter) OnTransportCCFeedback(
 			refTime = nextRefTime
 			result = append(result, acks...)
 			recvDeltas = recvDeltas[n:]
-			index += uint16(len(limited.SymbolList)) //nolint:gosec // bounded by PacketStatusCount; sequence wraps
+			index += uint16(len(limited.SymbolList) & 0xffff) // bounded by PacketStatusCount; sequence wraps
 			remaining -= len(limited.SymbolList)
 		default:
 			return nil, errInvalidFeedback

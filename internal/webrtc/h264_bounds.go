@@ -78,7 +78,7 @@ func (v *h264BoundsInspector) push(packet *rtp.Packet, now time.Time) (*h264Acce
 	if packet == nil {
 		return v.reject()
 	}
-	if v.seen && int16(packet.SequenceNumber-v.sequence) <= 0 {
+	if v.seen && rtpSequenceDelta(packet.SequenceNumber, v.sequence) <= 0 {
 		return nil, nil
 	}
 	gap := v.seen && (packet.SequenceNumber != v.sequence+1 || packet.SSRC != v.ssrc)
@@ -265,10 +265,14 @@ func parseH264SPS(nal []byte, bounds VideoBounds) (uint32, h264SPS, error) {
 	// Validate the coded size before cropping and before any uint32 arithmetic
 	// in convenience dimension helpers; excessive cropping cannot bypass caps.
 	w, h := (uint64(sps.PicWidthInMbsMinus1)+1)*16, (uint64(sps.PicHeightInMapUnitsMinus1)+1)*16
-	if w > uint64((maxWidth+15)/16*16) || h > uint64((maxHeight+15)/16*16) {
+	if w > 16384 || h > 16384 || w > uint64((maxWidth+15)/16*16) || h > uint64((maxHeight+15)/16*16) {
 		return 0, h264SPS{}, errH264Bounds
 	}
-	macroblocks := int(w / 16 * h / 16)
+	blocks := w / 16 * h / 16
+	if blocks > 1024*1024 {
+		return 0, h264SPS{}, errH264Bounds
+	}
+	macroblocks := int(blocks)
 	if crop := sps.FrameCropping; crop != nil {
 		x := (uint64(crop.LeftOffset) + uint64(crop.RightOffset)) * 2
 		y := (uint64(crop.TopOffset) + uint64(crop.BottomOffset)) * 2
@@ -278,7 +282,7 @@ func parseH264SPS(nal []byte, bounds VideoBounds) (uint32, h264SPS, error) {
 		w -= x
 		h -= y
 	}
-	if w == 0 || h == 0 || w > uint64(maxWidth) || h > uint64(maxHeight) {
+	if w == 0 || h == 0 || w > 16384 || h > 16384 || w > uint64(maxWidth) || h > uint64(maxHeight) {
 		return 0, h264SPS{}, errH264Bounds
 	}
 	return sps.ID, h264SPS{bytes.Clone(nal), int(w), int(h), macroblocks, sps}, nil

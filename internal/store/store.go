@@ -28,7 +28,6 @@ const migrationChecksumConstraint = "schema_migrations_checksum_sha256"
 
 const checksumConstraintProbe = "noxa_migration_checksum_probe_check"
 
-
 type embeddedMigration struct {
 	filename         string
 	content          []byte

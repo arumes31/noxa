@@ -69,7 +69,7 @@ func readPoll(ctx context.Context, tx *sql.Tx, messageID int64, uniqueID string)
 	if err != nil {
 		return state, err
 	}
-	defer rows.Close()
+	defer closeRows(rows)
 	for rows.Next() {
 		var choice, votes int
 		if err := rows.Scan(&choice, &votes); err != nil {

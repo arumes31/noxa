@@ -97,6 +97,9 @@ func TestRoleGRPCMutationAndClosedLegacySurfaces(t *testing.T) {
 	before := authCalls.Load()
 	for _, method := range []string{
 		noxav1.Control_StartFileTransfer_FullMethodName,
+		noxav1.Control_CreateChannel_FullMethodName,
+		noxav1.Control_DeleteChannel_FullMethodName,
+		noxav1.Control_QueryPermissions_FullMethodName,
 	} {
 		if err := conn.Invoke(ctx, method, &noxav1.ListChannelsRequest{}, &noxav1.ListChannelsResponse{}); status.Code(err) != codes.FailedPrecondition {
 			t.Fatalf("%s: %v", method, err)

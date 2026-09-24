@@ -15,9 +15,10 @@ func TestMediaEgressLoopbackSockets(t *testing.T) {
 	for _, name := range []string{"automatic", "shared", "loopback"} {
 		t.Run(name, func(t *testing.T) {
 			network := NetworkConfig{}
-			if name == "shared" {
+			switch name {
+			case "shared":
 				network.UDPAddr = "0.0.0.0:0"
-			} else if name == "loopback" {
+			case "loopback":
 				network.UDPAddr = "127.0.0.1:0"
 				network.ExternalIPs = []string{"127.0.0.1"}
 			}

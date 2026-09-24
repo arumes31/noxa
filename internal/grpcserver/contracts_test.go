@@ -54,8 +54,8 @@ func TestGeneratedServiceContracts(t *testing.T) {
 func TestGeneratedRolesAuthenticationContract(t *testing.T) {
 	request := (&noxav1.AuthenticateRequest{}).ProtoReflect().Descriptor()
 	response := (&noxav1.AuthenticateResponse{}).ProtoReflect().Descriptor()
-	if request.Fields().Len() != 2 || response.Fields().Len() != 1 {
-		t.Fatalf("authentication fields = %d request, %d response; want 2 and 1", request.Fields().Len(), response.Fields().Len())
+	if request.Fields().Len() != 5 || response.Fields().Len() != 6 {
+		t.Fatalf("authentication fields = %d request, %d response; want 5 and 6 for wire compatibility", request.Fields().Len(), response.Fields().Len())
 	}
 	for _, name := range []protoreflect.Name{"username", "password"} {
 		field := request.Fields().ByName(name)
@@ -64,8 +64,8 @@ func TestGeneratedRolesAuthenticationContract(t *testing.T) {
 		}
 	}
 	userID := response.Fields().ByName("user_id")
-	if userID == nil || userID.Number() != 1 || userID.Kind() != protoreflect.StringKind {
-		t.Fatalf("AuthenticateResponse user_id descriptor = %v, want string field 1", userID)
+	if userID == nil || userID.Number() != 3 || userID.Kind() != protoreflect.StringKind {
+		t.Fatalf("AuthenticateResponse user_id descriptor = %v, want string field 3", userID)
 	}
 }
 

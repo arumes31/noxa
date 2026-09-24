@@ -55,7 +55,7 @@ func boundedTransportFeedback(feedback *rtcp.TransportLayerCC, sent uint64) *rtc
 		return nil
 	}
 	// Subtraction intentionally follows the wire's 16-bit sequence space.
-	distance := uint16(sent-1) - feedback.BaseSequenceNumber
+	distance := uint16((sent-1)&0xffff) - feedback.BaseSequenceNumber
 	if uint64(distance) >= min(sent, 250) || feedback.PacketStatusCount > distance+1 {
 		return nil
 	}
@@ -69,7 +69,7 @@ func boundedTransportFeedback(feedback *rtcp.TransportLayerCC, sent uint64) *rtc
 		switch value := chunk.(type) {
 		case *rtcp.RunLengthChunk:
 			copy := *value
-			copy.RunLength = uint16(min(remaining, int(value.RunLength)))
+			copy.RunLength = min(uint16(remaining&0xffff), value.RunLength)
 			remaining -= int(copy.RunLength)
 			out.PacketChunks = append(out.PacketChunks, &copy)
 		case *rtcp.StatusVectorChunk:

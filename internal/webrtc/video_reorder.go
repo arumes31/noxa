@@ -45,7 +45,7 @@ func (q *videoReorder) push(packet *rtp.Packet, codec string, now time.Time, emi
 	if !q.seen {
 		q.seen, q.next = true, packet.SequenceNumber
 	}
-	if int16(packet.SequenceNumber-q.next) < 0 {
+	if rtpSequenceDelta(packet.SequenceNumber, q.next) < 0 {
 		return // already delivered or abandoned after the bounded repair window
 	}
 	if packet.SequenceNumber == q.next {
@@ -65,7 +65,7 @@ func (q *videoReorder) push(packet *rtp.Packet, codec string, now time.Time, emi
 		// Exhaustion declares the oldest gap lost. The inspector still checks
 		// every released packet and rejects unknown/oversized references.
 		q.flush(now, true, emit)
-		if int16(packet.SequenceNumber-q.next) < 0 {
+		if rtpSequenceDelta(packet.SequenceNumber, q.next) < 0 {
 			return
 		}
 	}

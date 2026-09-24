@@ -54,9 +54,10 @@ func (s *TCPServer) handlePrivateCall(ctx context.Context, client *Client, frame
 					history[i].Revision++
 					history[i].EndedAt = time.Now().Unix()
 					for j := range history[i].Participants {
-						if history[i].Participants[j].State == "ringing" {
+						switch history[i].Participants[j].State {
+						case "ringing":
 							history[i].Participants[j].State = "missed"
-						} else if history[i].Participants[j].State == "accepted" {
+						case "accepted":
 							history[i].Participants[j].State = "left"
 						}
 					}

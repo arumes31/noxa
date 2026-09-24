@@ -41,9 +41,9 @@ func (r *h264Bits) ue(maximum uint32) uint32 {
 
 func (r *h264Bits) se(minimum, maximum int32) int32 {
 	u := r.ue(^uint32(0) - 1)
-	value := -int32(u / 2)
+	value := -int32(u >> 1)
 	if u&1 != 0 {
-		value = int32(u/2) + 1
+		value = int32(u>>1) + 1
 	}
 	if value < minimum || value > maximum {
 		r.failed = true
@@ -193,7 +193,7 @@ func parseH264PPS(nal []byte) (uint32, h264PPS, error) {
 		return 0, h264PPS{}, errH264Bounds
 	} // no redundant pictures
 	if r.more() {
-		if r.read(1) != 0 || r.read(1) != 0 {
+		if r.read(2) != 0 {
 			return 0, h264PPS{}, errH264Bounds
 		}
 		r.se(-12, 12)
@@ -234,7 +234,7 @@ func parseH264Slice(nal []byte, ppsSets map[uint32]h264PPS, spsSets map[uint32]h
 		return out, errH264Bounds
 	}
 	sps, ok := spsSets[pps.sps]
-	if !ok || out.firstMB >= uint32(sps.macroblocks) || out.key && (typ != 2 || nal[0]&0x60 == 0) {
+	if !ok || int64(out.firstMB) >= int64(sps.macroblocks) || out.key && (typ != 2 || nal[0]&0x60 == 0) {
 		return out, errH264Bounds
 	}
 	out.picture.frameNum = r.read(int(sps.syntax.Log2MaxFrameNumMinus4) + 4)

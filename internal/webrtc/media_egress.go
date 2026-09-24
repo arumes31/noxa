@@ -103,7 +103,7 @@ func (s *mediaEgressStream) prepare(pkt *rtp.Packet, ticket mediaTicket) (rtp.Pa
 	// Internal CSRC words survive both GCC and NACK/RTX header copies. The
 	// terminal interceptor restores the publisher's CSRCs before SRTP. Never
 	// use source-controlled sequence/timestamp values as permission tickets.
-	out.CSRC = []uint32{uint32(id >> 32), uint32(id)}
+	out.CSRC = []uint32{uint32(id >> 32), uint32(id & 0xffffffff)}
 	return out, true
 }
 

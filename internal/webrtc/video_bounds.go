@@ -46,7 +46,7 @@ type vp8BoundsInspector struct {
 }
 
 func (v *vp8BoundsInspector) stale(pkt *rtp.Packet) bool {
-	return v.seen && int16(pkt.SequenceNumber-v.sequence) <= 0
+	return v.seen && rtpSequenceDelta(pkt.SequenceNumber, v.sequence) <= 0
 }
 
 func (v *vp8BoundsInspector) accept(pkt *rtp.Packet) bool {

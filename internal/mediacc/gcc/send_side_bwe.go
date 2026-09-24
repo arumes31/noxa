@@ -153,8 +153,8 @@ func NewSendSideBWE(opts ...Option) (*SendSideBWE, error) {
 func (e *SendSideBWE) AddStream(info *interceptor.StreamInfo, writer interceptor.RTPWriter) interceptor.RTPWriter {
 	var hdrExtID uint8
 	for _, e := range info.RTPHeaderExtensions {
-		if e.URI == transportCCURI {
-			hdrExtID = uint8(e.ID) //nolint:gosec // G115
+		if e.URI == transportCCURI && e.ID > 0 && e.ID <= 255 {
+			hdrExtID = uint8(e.ID)
 
 			break
 		}

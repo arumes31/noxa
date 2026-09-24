@@ -7,6 +7,18 @@ option go_package = "voicx/v1;voicxv1";
 // Control service handles authentication, role-aware management, and file
 // transfer control.
 service Control {
+  // Retained for descriptor compatibility; this legacy operation is unimplemented.
+  rpc QueryPermissions(QueryPermissionsRequest) returns (QueryPermissionsResponse) {
+    option deprecated = true;
+  }
+  // Retained for descriptor compatibility; this legacy operation is unimplemented.
+  rpc DeleteChannel(DeleteChannelRequest) returns (DeleteChannelResponse) {
+    option deprecated = true;
+  }
+  // Retained for descriptor compatibility; this legacy operation is unimplemented.
+  rpc CreateChannel(CreateChannelRequest) returns (CreateChannelResponse) {
+    option deprecated = true;
+  }
   // Authenticate validates credentials and returns the authenticated user ID.
   rpc Authenticate(AuthenticateRequest) returns (AuthenticateResponse);
   // ListChannels returns the channel tree.
@@ -111,10 +123,21 @@ message GetServerRulesResponse {
 message AuthenticateRequest {
   string username = 1;
   string password = 2;
+  // Retained for source/wire compatibility. Authentication ignores this field.
+  string token = 3 [deprecated = true];
+  string client_version = 4;
+  map<string, string> metadata = 5;
 }
 
 message AuthenticateResponse {
-  string user_id = 1;
+  // Legacy clients may still inspect success; failures use gRPC status codes.
+  bool success = 1 [deprecated = true];
+  // Session tokens are not issued. Each RPC requires authorization metadata.
+  string session_token = 2 [deprecated = true];
+  string user_id = 3;
+  string display_name = 4 [deprecated = true];
+  int64 expires_at = 5 [deprecated = true];
+  string error = 6 [deprecated = true];
 }
 
 // --- Channel management ---
@@ -730,4 +753,67 @@ message CancelFileTransferRequest {
 message CancelFileTransferResponse {
   bool success = 1;
   string error = 2;
+}
+
+// Retained for descriptor compatibility only; use the role-aware APIs.
+message CreateChannelRequest {
+  option deprecated = true;
+  string name = 1;
+  string parent_id = 2;
+  int32 max_clients = 3;
+  bool permanent = 4;
+  map<string, string> metadata = 5;
+}
+
+// Retained for descriptor compatibility only; use the role-aware APIs.
+message CreateChannelResponse {
+  option deprecated = true;
+  bool success = 1;
+  string channel_id = 2;
+  string error = 3;
+}
+
+// Retained for descriptor compatibility only; use the role-aware APIs.
+message DeleteChannelRequest {
+  option deprecated = true;
+  string channel_id = 1;
+  string reason = 2;
+}
+
+// Retained for descriptor compatibility only; use the role-aware APIs.
+message DeleteChannelResponse {
+  option deprecated = true;
+  bool success = 1;
+  string error = 2;
+}
+
+// Retained for descriptor compatibility only; use the role-aware APIs.
+message QueryPermissionsRequest {
+  option deprecated = true;
+  string channel_id = 1;
+  string user_id = 2; // empty means the authenticated caller
+}
+
+// Retained for descriptor compatibility only; use the role-aware APIs.
+message QueryPermissionsResponse {
+  option deprecated = true;
+  repeated Permission granted = 1;
+  repeated Permission denied = 2;
+  bool is_admin = 3;
+}
+
+// Retained for descriptor compatibility only; use the role-aware APIs.
+enum Permission {
+  option deprecated = true;
+  PERMISSION_UNSPECIFIED = 0;
+  PERMISSION_JOIN = 1;
+  PERMISSION_SPEAK = 2;
+  PERMISSION_VIDEO = 3;
+  PERMISSION_CHAT = 4;
+  PERMISSION_KICK = 5;
+  PERMISSION_BAN = 6;
+  PERMISSION_MOVE = 7;
+  PERMISSION_CREATE_CHANNEL = 8;
+  PERMISSION_DELETE_CHANNEL = 9;
+  PERMISSION_TRANSFER_FILE = 10;
 }

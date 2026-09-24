@@ -35,7 +35,7 @@ func newHotkeyLifecycleApp(t *testing.T) (*App, *lifecycleHotkeyRecorder) {
 	}
 	t.Cleanup(func() { hotkeyEventEmitter = original })
 	a := &App{hotkeys: map[string]*hotkeyReg{}}
-	t.Cleanup(func() { a.shutdown(nil) })
+	t.Cleanup(func() { a.shutdown(t.Context()) })
 	return a, recorder
 }
 
@@ -66,7 +66,7 @@ func TestPendingHotkeyCannotInstallAfterShutdown(t *testing.T) {
 	a := &App{hotkeys: map[string]*hotkeyReg{}}
 	a.applyHotkey("ptt", "F8")
 	generation := a.hotkeyGeneration["ptt"]
-	a.shutdown(nil)
+	a.shutdown(t.Context())
 	a.passiveHotkeyLoop("ptt", nil, hotkey.KeyF8, generation)
 	a.applyHotkey("ptt", "F9")
 	if len(a.hotkeys) != 0 {
@@ -145,7 +145,7 @@ func TestHotkeyEventsSuppressedAfterShutdown(t *testing.T) {
 	a, recorder := newHotkeyLifecycleApp(t)
 	generation, _ := installLifecycleHotkey(a, "ptt", "F8")
 	a.publishHotkey("ptt", generation, true)
-	a.shutdown(nil)
+	a.shutdown(t.Context())
 	before := recorder.snapshot()
 	a.publishHotkey("ptt", generation, true)
 	a.publishHotkey("ptt", generation, false)

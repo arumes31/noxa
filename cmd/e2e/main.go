@@ -769,7 +769,7 @@ func (l *lineReader) readLine(timeout time.Duration) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		if n == 0 {
+		if n <= 0 {
 			continue
 		}
 		l.readBytes += uint64(n)

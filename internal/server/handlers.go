@@ -608,6 +608,7 @@ func (s *TCPServer) publishAuthenticatedSession(ctx context.Context, client *Cli
 		if err != nil {
 			s.logger.Warn("broadcast register failed", zap.String("client_id", client.ID), zap.Error(err))
 		} else {
+			// #nosec G118 -- connection-owned pump ends on Unregister or socket failure; authentication request completion must not stop it.
 			go s.broadcastWriter(client, out)
 		}
 	}

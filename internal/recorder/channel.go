@@ -123,6 +123,7 @@ func (c *ChannelRecorder) Start(ctx context.Context, channelID int64, router Tap
 		return nil, ErrCapacity
 	}
 	work, cancel := context.WithCancel(context.Background())
+	// #nosec G115 -- generation is an opaque counter bit pattern, not a signed quantity.
 	s := &channelCapture{owner: c, channelID: channelID, router: router, tapID: tapID(channelID, uint64(c.next.Add(1))), ctx: work, cancel: cancel, ready: make(chan error, 1), done: make(chan struct{}), queue: make(chan capturePacket, 512), children: make(map[captureSource]*captureChild), ownedIDs: make(map[int64]struct{})}
 	c.sessions[channelID] = s
 	c.mu.Unlock()

@@ -70,7 +70,7 @@ func (s *Server) roleUnaryAuth(ctx context.Context, req any, info *grpc.UnarySer
 		return nil, roleStatus(err)
 	}
 	if info.FullMethod == noxav1.Control_Authenticate_FullMethodName {
-		return &noxav1.AuthenticateResponse{UserId: p.UniqueID()}, nil
+		return &noxav1.AuthenticateResponse{Success: true, UserId: p.UniqueID()}, nil
 	}
 	return handler(context.WithValue(ctx, integrationPrincipalKey{}, p), req)
 }
