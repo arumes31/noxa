@@ -61,3 +61,6 @@ require (
 )
 
 replace noxa => ../
+
+// Narrow native modal-focus fix; see third_party/go-webview2/NOXA-PATCH.md.
+replace github.com/wailsapp/go-webview2 => ./third_party/go-webview2
