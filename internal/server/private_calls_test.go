@@ -93,7 +93,7 @@ func (f *privateCallTestStore) StartPrivateGroupCall(ctx context.Context, uid, g
 	return call, f.SavePrivateCall(ctx, call)
 }
 
-func privateCallsTestEnv(t *testing.T) (*testEnv, *privateCallTestStore) {
+func privateCallsTestEnv(t *testing.T, beforeStart ...func(*TCPServer)) (*testEnv, *privateCallTestStore) {
 	t.Helper()
 	backend := serverRoleFixture()
 	backend.policy.Roles[0].Permissions = []authorization.Capability{authorization.ViewChannel, authorization.Connect}
@@ -105,7 +105,7 @@ func privateCallsTestEnv(t *testing.T) (*testEnv, *privateCallTestStore) {
 		ID: "ce7189ed-d3d5-442b-b147-241ea9cb3fb9", Name: "Private group", Owner: "user-uid", Revision: 1, Epoch: 1,
 		Members: []netproto.ConversationMember{{UniqueID: "admin-uid", JoinedEpoch: 1}, {UniqueID: "user-uid", JoinedEpoch: 1}},
 	}}
-	env := startTestEnvDeps(t, nil, nil, func(d *Deps) { d.Authority = authority; d.Chat = chat })
+	env := startTestEnvLogger(t, nil, nil, func(d *Deps) { d.Authority = authority; d.Chat = chat }, nil, beforeStart...)
 	return env, chat
 }
 

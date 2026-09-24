@@ -877,7 +877,7 @@ func startTestEnvDeps(t *testing.T, _ any, mutateCfg func(*config.Config), mutat
 
 // startTestEnvLogger is startTestEnvDeps with the server's logger supplied by
 // the caller, so a test can assert on what the pipeline logs (91).
-func startTestEnvLogger(t *testing.T, _ any, mutateCfg func(*config.Config), mutateDeps func(*Deps), logger *zap.Logger) *testEnv {
+func startTestEnvLogger(t *testing.T, _ any, mutateCfg func(*config.Config), mutateDeps func(*Deps), logger *zap.Logger, beforeStart ...func(*TCPServer)) *testEnv {
 	t.Helper()
 	if logger == nil {
 		logger = testLogger()
@@ -968,6 +968,9 @@ func startTestEnvLogger(t *testing.T, _ any, mutateCfg func(*config.Config), mut
 		mutateCfg(cfg)
 	}
 	srv := New(cfg, logger, deps)
+	for _, configure := range beforeStart {
+		configure(srv)
+	}
 	// Mirror the binary's boot order: the global generation is minted once,
 	// eagerly, so nothing on a hot path ever mints (91).
 	if err := srv.EnsureGlobalScopeKey(context.Background()); err != nil && deps.ScopeKeys != nil {

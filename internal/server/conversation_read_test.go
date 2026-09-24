@@ -15,11 +15,14 @@ func (*readPositionTestStore) MarkConversationRead(context.Context, string, stri
 }
 
 func TestConversationReadPositionsHaveIndependentRateLimit(t *testing.T) {
-	env, backend := privateCallsTestEnv(t)
+	env, _ := privateCallsTestEnv(t, func(srv *TCPServer) {
+		// Install all fixture state before the listener's connectivity probe can
+		// read server settings through the chat store.
+		srv.deps.Chat = &readPositionTestStore{srv.deps.Chat.(*privateCallTestStore)}
+		srv.chatRate = newChatRateLimiter(1, time.Hour)
+		srv.conversationReadRate = newChatRateLimiter(2, time.Hour)
+	})
 	defer env.stop()
-	env.srv.deps.Chat = &readPositionTestStore{backend}
-	env.srv.chatRate = newChatRateLimiter(1, time.Hour)
-	env.srv.conversationReadRate = newChatRateLimiter(2, time.Hour)
 	client, _ := dialAuthed(t, env.addr, "user-uid")
 	defer func() { _ = client.Close() }()
 	request := netproto.ConversationRequest{Action: "mark_read", ID: "eb185ca2-1034-489d-a6ce-0a6f90c57101", ReadMessageID: 1}
