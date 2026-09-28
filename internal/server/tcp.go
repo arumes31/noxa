@@ -983,6 +983,10 @@ func (s *TCPServer) dispatch(ctx context.Context, client *Client, f *netproto.Fr
 		return s.handleVideoStreamControl(ctx, client, f)
 	case netproto.MsgPollRequest:
 		return s.handlePoll(ctx, client, f)
+	case netproto.MsgDiscussionRequest:
+		return s.handleDiscussion(ctx, client, f)
+	case netproto.MsgWebhookRequest:
+		return s.handleWebhook(ctx, client, f)
 	case netproto.MsgConversationRequest:
 		return s.handleConversation(ctx, client, f)
 	case netproto.MsgCallRequest:

@@ -183,7 +183,9 @@ type Settings struct {
 	UpdatesAutoCheck bool   `json:"updates_auto_check"`
 
 	// Voice UX (wave 1).
-	UserVolumes              map[string]int  `json:"user_volumes"`         // uniqueID -> volume 0..200
+	UserVolumes              map[string]int  `json:"user_volumes"` // uniqueID -> volume 0..200
+	UserShareVolumes         map[string]int  `json:"user_share_volumes"`
+	MutedShareUsers          []string        `json:"muted_share_users"`
 	MutedUsers               []string        `json:"muted_users"`          // uniqueIDs muted locally
 	PTTReleaseDelayMs        int             `json:"ptt_release_delay_ms"` // 0..2000
 	WarnMutedTalking         bool            `json:"warn_muted_talking"`   // default on
@@ -207,8 +209,22 @@ type Settings struct {
 	GainNormalize            bool            `json:"gain_normalize"`
 
 	// Video (wave 3).
-	CameraFPS    int  `json:"camera_fps"`    // 15 | 30 | 60 (default 30)
-	LowBandwidth bool `json:"low_bandwidth"` // (88) low-bandwidth mode
+	CameraFPS                 int    `json:"camera_fps"`    // 15 | 30 | 60 (default 30)
+	LowBandwidth              bool   `json:"low_bandwidth"` // (88) low-bandwidth mode
+	CameraDeviceID            string `json:"camera_device_id"`
+	CameraBackground          string `json:"camera_background"`       // none | blur | replace
+	CameraBackgroundScene     string `json:"camera_background_scene"` // slate | warm | studio
+	GamingOverlay             bool   `json:"gaming_overlay"`          // default on, can be disabled
+	GamingOverlayPosition     string `json:"gaming_overlay_position"`
+	GamingOverlayMonitor      string `json:"gaming_overlay_monitor"`
+	GamingOverlayScale        int    `json:"gaming_overlay_scale"`
+	GamingOverlayOpacity      int    `json:"gaming_overlay_opacity"`
+	GamingOverlaySpeakersOnly bool   `json:"gaming_overlay_speakers_only"`
+	GamingOverlayX            int    `json:"gaming_overlay_x"` // percentage of available travel
+	GamingOverlayY            int    `json:"gaming_overlay_y"`
+	CameraBackgroundImage     string `json:"camera_background_image"`
+	CameraBlurStrength        int    `json:"camera_blur_strength"`
+	CameraMirrorPreview       bool   `json:"camera_mirror_preview"`
 
 	// Security (wave 4a).
 	AllowPlaintext bool              `json:"allow_plaintext"`         // allow plaintext control connections (dev servers)
@@ -307,17 +323,25 @@ func DefaultSettings() Settings {
 			"kick": true, "ban": true, "announcement": true, "channel_watch": true,
 			"stream_watch_started": true,
 		},
-		WhisperReplyHotkey: "Ctrl+R",
-		VoiceLimiter:       true,
-		CameraFPS:          30,
-		ChatTimestamps:     "absolute",
-		ChatDensity:        "comfortable",
-		ChatFontSize:       14,
-		ChatLayout:         "irc",
-		SysJoinLeave:       true,
-		SysKick:            true,
-		AutoAwayMinutes:    15,
-		AutoAwayMessage:    defaultAutoAwayMessage,
+		WhisperReplyHotkey:    "Ctrl+R",
+		VoiceLimiter:          true,
+		CameraFPS:             30,
+		CameraBackground:      "none",
+		CameraBackgroundScene: "slate",
+		GamingOverlay:         true,
+		GamingOverlayPosition: "top-right",
+		GamingOverlayScale:    100,
+		GamingOverlayOpacity:  88,
+		CameraBlurStrength:    14,
+		CameraMirrorPreview:   true,
+		ChatTimestamps:        "absolute",
+		ChatDensity:           "comfortable",
+		ChatFontSize:          14,
+		ChatLayout:            "irc",
+		SysJoinLeave:          true,
+		SysKick:               true,
+		AutoAwayMinutes:       15,
+		AutoAwayMessage:       defaultAutoAwayMessage,
 	}
 }
 
@@ -460,6 +484,14 @@ func migrateEventSoundSplits(s *Settings) {
 // (modes, enums, hotkey syntax) are validated by SaveSettings and are never
 // silently rewritten.
 func normalizeSettings(s Settings) Settings {
+	s.GamingOverlayScale = clampSetting(s.GamingOverlayScale, 75, 200)
+	s.GamingOverlayOpacity = clampSetting(s.GamingOverlayOpacity, 20, 100)
+	s.GamingOverlayX = clampSetting(s.GamingOverlayX, 0, 100)
+	s.GamingOverlayY = clampSetting(s.GamingOverlayY, 0, 100)
+	s.CameraBlurStrength = clampSetting(s.CameraBlurStrength, 2, 30)
+	for uid, volume := range s.UserShareVolumes {
+		s.UserShareVolumes[uid] = clampSetting(volume, 0, 200)
+	}
 	s.SoundPack = "noxa"
 	s.SoundVolume = clampSetting(s.SoundVolume, 0, 200)
 	s.SpeechVolume = clampSetting(s.SpeechVolume, 0, 200)
@@ -827,6 +859,30 @@ func (a *App) SaveSettings(s Settings) string {
 	}
 	if s.Volume < 0 || s.Volume > 200 {
 		return "volume must be 0..200"
+	}
+	if s.CameraFPS != 0 && s.CameraFPS != 15 && s.CameraFPS != 30 && s.CameraFPS != 60 {
+		return "camera frame rate must be 15, 30 or 60"
+	}
+	switch s.CameraBackground {
+	case "", "none", "blur", "replace":
+	default:
+		return "invalid camera background mode"
+	}
+	switch s.CameraBackgroundScene {
+	case "", "slate", "warm", "studio", "custom":
+	default:
+		return "invalid camera background scene"
+	}
+	switch s.GamingOverlayPosition {
+	case "", "top-left", "top-right", "bottom-left", "bottom-right", "custom":
+	default:
+		return "invalid gaming overlay position"
+	}
+	if len(s.GamingOverlayMonitor) > 128 {
+		return "invalid gaming overlay monitor"
+	}
+	if err := validateCameraBackground(s.CameraBackgroundImage); err != nil {
+		return err.Error()
 	}
 	switch s.ChatNotificationLevel {
 	case "direct", "channel_mentions", "role_mentions", "all":

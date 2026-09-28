@@ -1,5 +1,7 @@
 import { icon, labelButton } from "./icons.js";
-import { getUserVolume, isUserMuted, setUserVolume } from "./audio.js";
+import { isUserMuted } from "./audio.js";
+import { bindMemberVolume } from "./member-volume.js";
+import { memberTarget } from "./member-target.js";
 import { currentWhisperRouting } from "./media-controls.js";
 import { t } from "./i18n.js";
 import { setSafeImage } from "./safe-media.js";
@@ -7,6 +9,11 @@ import { setSafeImage } from "./safe-media.js";
 const V = () => window.__noxa;
 const $ = (id) => document.getElementById(id);
 let memberKey = "";
+let memberPreview = null;
+
+export function cancelMemberVolumePreview() {
+    memberPreview?.control.cancel();
+}
 
 export function avatarColor(name = "") {
     const colors = ["#70b7f5", "#aa92e8", "#73c590", "#ec91b3", "#efb36f"];
@@ -59,6 +66,7 @@ export function renderWorkspace() {
             strip.appendChild(button);
         }
         current.delete(client.client_id);
+        memberTarget(button, client.unique_id, client.nickname, { clientID: client.client_id, openOnClick: false });
         const name = (client.nickname || client.unique_id) + (client.client_id === state.myClientID ? t("workspace.you") : "");
         const statusKey = voiceState(client);
         const description = t("workspace.voice." + statusKey);
@@ -111,6 +119,9 @@ export function renderMember() {
     const state = V().state;
     const client = state.clients.find((c) => c.client_id === state.selectedClientID);
     const card = $("client-card");
+    if (memberPreview && (!client || memberPreview.key !== `${state.serverGeneration}:${client.client_id}:${client.unique_id}`)) {
+        memberPreview.control(); memberPreview = null;
+    }
     if (!client) {
         memberKey = "";
         card.innerHTML = `<p class="empty-state">${t("workspace.selectMember")}</p>`;
@@ -126,33 +137,13 @@ export function renderMember() {
             <button id="member-message" type="button"></button><p id="member-action-error" role="alert" hidden></p></div>
             <details class="member-identity-details"><summary>${t("workspace.identity")}</summary><div class="card-uid mono"></div></details>`;
         const slider = $("member-volume");
-        slider.value = Math.round(getUserVolume(client.unique_id) * 100);
-        const showVolume = () => {
-            $("member-volume-value").textContent = Number(slider.value) > 100 ? t("wins.amplified", { value: slider.value }) : slider.value + "%";
-        };
-        slider.oninput = showVolume;
-        slider.onchange = async () => {
-            const error = $("member-action-error");
-            const priorVolume = Math.round(getUserVolume(client.unique_id) * 100);
-            error.hidden = true;
-            slider.disabled = true;
-            const reset = $("member-volume-reset");
-            reset.disabled = true;
-            try { await setUserVolume(client.unique_id, Number(slider.value)); }
-            catch {
-                if (memberKey !== key || !error.isConnected) return;
-                slider.value = priorVolume;
-                showVolume();
-                error.textContent = t("workspace.volumeFailed");
-                error.hidden = false;
-            }
-            finally { slider.disabled = false; reset.disabled = false; }
-        };
-        $("member-volume-reset").onclick = async () => {
-            slider.value = "100";
-            showVolume();
-            await slider.onchange();
-        };
+        const error = $("member-action-error");
+        const control = bindMemberVolume(slider, $("member-volume-value"), $("member-volume-reset"), client.unique_id, {
+            format: value => Number(value) > 100 ? t("wins.amplified", { value }) : value + "%",
+            onSave: () => { error.hidden = true; },
+            onError: () => { error.textContent = t("workspace.volumeFailed"); error.hidden = false; },
+        });
+        memberPreview = { key, control };
         $("member-message").onclick = () => {
             window.__noxaFiles.activateWorkspaceTab("chat");
             V().openPM(client.unique_id, client.nickname);
@@ -163,13 +154,16 @@ export function renderMember() {
     const name = client.nickname || client.unique_id;
     $("member-heading").textContent = name;
     card.querySelector(".card-nick").textContent = name;
+    memberTarget(card.querySelector(".card-nick"), client.unique_id, name, { clientID: client.client_id });
+    card.querySelector(".card-avatar").dataset.memberUid = client.unique_id;
+    card.querySelector(".card-avatar").dataset.memberClientId = client.client_id;
     const channel = state.channels.find((c) => c.ChannelID === client.channel_id);
     card.querySelector(".card-channel").textContent = channel ? t("workspace.inChannel", { channel: channel.Name }) : t("workspace.noChannel");
     card.querySelector(".card-uid").textContent = client.unique_id || t("workspace.noIdentity");
     card.querySelector(".card-groups").textContent = (client.roles || []).map((role) => role.name).join(" · ");
     avatar(card.querySelector(".card-avatar"), client);
     card.querySelector(".card-avatar").classList.toggle("speaking", ["speaking", "talking"].includes(voiceState(client)));
-    $("member-volume").oninput();
+    memberPreview.control.refresh();
     const isSelf = client.client_id === state.myClientID;
     card.querySelector(".member-audio").hidden = isSelf || !client.unique_id;
     labelButton($("member-message"), "chat", t("workspace.message"));

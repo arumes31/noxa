@@ -1,0 +1,28 @@
+export const contextEnglish = {
+    "context.personalVolume": "Voice volume · Only for you",
+    "context.resetVolume": "Reset volume to 100%",
+    "context.move": "Move to channel…",
+    "context.searchChannels": "Search channels",
+    "context.join": "Join voice",
+    "context.leave": "Leave voice",
+    "context.noChannels": "No matching channels",
+    "context.memberGone": "This member is no longer connected.",
+    "context.multipleSessions": "This member has several connected devices. Select a device in the channel tree.",
+    "context.clearHistory": "Delete local history…",
+    "context.openConversation": "Open conversation",
+    "context.closeConversation": "Close conversation",
+};
+export const contextGerman = {
+    "context.personalVolume": "Sprachlautstärke · Nur für dich",
+    "context.resetVolume": "Lautstärke auf 100% zurücksetzen",
+    "context.move": "In Kanal verschieben…",
+    "context.searchChannels": "Kanäle suchen",
+    "context.join": "Sprachkanal betreten",
+    "context.leave": "Sprachkanal verlassen",
+    "context.noChannels": "Keine passenden Kanäle",
+    "context.memberGone": "Dieses Mitglied ist nicht mehr verbunden.",
+    "context.multipleSessions": "Dieses Mitglied hat mehrere verbundene Geräte. Wähle ein Gerät im Kanalbaum.",
+    "context.clearHistory": "Lokalen Verlauf löschen…",
+    "context.openConversation": "Unterhaltung öffnen",
+    "context.closeConversation": "Unterhaltung schließen",
+};

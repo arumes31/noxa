@@ -38,7 +38,10 @@ var (
 
 // App is the Wails application.
 type App struct {
-	ctx context.Context
+	overlayMu      sync.Mutex
+	overlay        gamingOverlayWindow
+	overlayStopped bool
+	ctx            context.Context
 	// Attachment seams keep the native dialog, transfer, and final replacement
 	// independently testable without putting plaintext or destination paths on
 	// the Wails/JavaScript boundary. Nil fields use production implementations.
@@ -280,6 +283,7 @@ func (a *App) SetWindowOpacity(pct int) string {
 
 // shutdown is called when the app closes.
 func (a *App) shutdown(_ context.Context) {
+	a.closeGamingOverlay()
 	a.lifecycleMu.Lock()
 	if a.lifecycleCancel != nil {
 		a.lifecycleCancel()

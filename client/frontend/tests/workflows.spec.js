@@ -816,6 +816,7 @@ test.describe("DM identity context lifecycle", () => {
         await page.evaluate(() => window.__noxaChat.openPM("peer", "Peer"));
         await expect(page.locator("#chat-log")).toContainText("stored for storage-identity");
         await page.locator(".pm-tab").click({ button: "right" });
+        await page.getByRole("menuitem", { name: "Delete local history…", exact: true }).click();
         await page.evaluate(() => { window.__dmIdentity.native.identity_uid = "replacement-identity"; window.__dmIdentity.native.identity_revision = "2"; });
         await page.getByRole("button", { name: "Delete history", exact: true }).click();
         await expect.poll(() => page.evaluate(() => window.__dmIdentity.calls.filter(call => call[0] === "DMHistoryClear").length)).toBe(1);
@@ -1056,6 +1057,7 @@ test.describe("DM history callback ownership", () => {
     });
     async function requestClear(page) {
         await page.locator(".pm-tab").first().click({ button: "right" });
+        await page.getByRole("menuitem", { name: "Delete local history…", exact: true }).click();
         await page.getByRole("button", { name: "Delete history", exact: true }).click();
         await expect.poll(() => page.evaluate(() => window.__dmScope.clears.length)).toBe(1);
     }
@@ -1125,6 +1127,7 @@ test.describe("DM history callback ownership", () => {
     test("clear confirmation cannot delete a reopened peer", async ({ page }) => {
         await page.evaluate(() => window.__noxaChat.openPM("peer", "Peer"));
         await page.locator(".pm-tab").click({ button: "right" });
+        await page.getByRole("menuitem", { name: "Delete local history…", exact: true }).click();
         await page.evaluate(() => {
             document.querySelector(".pm-tab .pm-close").click();
             window.__noxaChat.openPM("peer", "Peer");
@@ -3515,6 +3518,7 @@ test("persisted audio settings report an apply warning and allow retry", async (
     await installSaveScenario(page);
     await page.evaluate(() => {
         window.__saveMode = "success";
+        window.__noxa.state.settings.noise_suppression = true;
         window.__noxa.applyLiveAudioSettings = async () => { throw new Error("microphone unavailable"); };
         window.__noxa.openSettings("capture");
     });
@@ -3522,6 +3526,12 @@ test("persisted audio settings report an apply warning and allow retry", async (
     await expect(page.locator(".settings-save-status")).toHaveText("Settings saved, but audio changes could not be applied: microphone unavailable");
     await expect(page.locator("#settings-overlay")).toBeVisible();
     expect(await page.evaluate(() => window.__saveAttempts)).toBe(1);
+    const suppression = page.getByLabel("Noise suppression", { exact: true });
+    const initial = await suppression.isChecked();
+    await suppression.setChecked(!initial);
+    await expect(page.locator(".settings-save-status")).toContainText("Unsaved changes");
+    await suppression.setChecked(initial);
+    await expect(page.locator(".settings-save-status")).toHaveText("Settings saved, but audio changes could not be applied: microphone unavailable");
     await page.evaluate(() => { window.__noxa.applyLiveAudioSettings = async () => {}; });
     await page.locator("#set-ok").click();
     await expect(page.locator("#settings-overlay")).toHaveCount(0);
@@ -3870,7 +3880,7 @@ test("client language translates every settings page and persists on Apply @a11y
     await expect(page.getByRole("spinbutton", { name: "Chat max. Zeilen", exact: true })).toHaveValue("500");
     await page.screenshot({ path: testInfo.outputPath("settings-german-application.png") });
     const pages = [
-        ["Anwendung", "Chat max. Zeilen"], ["Aufnahme", "Aufnahmegerät"],
+        ["Anwendung", "Chat max. Zeilen"], ["Aufnahme", "Aufnahmegerät"], ["Kamera", "Kamerabildrate"],
         ["Wiedergabe", "Ausgabegerät"], ["Tastenkürzel", "Als neues Profil speichern…"],
         ["Flüstern", "Flüstern aktivieren"], ["Downloads", "Downloadordner"],
         ["Chat", "Zeitstempel"], ["Sicherheit", "Identitäten"],
@@ -4522,8 +4532,8 @@ test("B3 participant strip follows live channel membership and opens member cont
     await expect(strip.getByRole("button")).toHaveCount(4);
     await strip.getByRole("button", { name: /Mia.*speaking/ }).click();
     await expect(page.locator("#client-card .card-nick")).toHaveText("Mia");
-    await page.getByRole("slider", { name: "User volume" }).fill("75");
-    await page.getByRole("slider", { name: "User volume" }).press("Tab");
+    await page.getByRole("slider", { name: "Voice volume · Only for you" }).fill("75");
+    await page.getByRole("slider", { name: "Voice volume · Only for you" }).press("Tab");
     await expect.poll(() => page.evaluate(() => window.__savedSettings?.user_volumes?.["uid-mia"])).toBe(75);
     await page.getByRole("button", { name: "Message Mia", exact: true }).click();
     await expect(page.locator("#chat-head-title")).toContainText("Mia");
@@ -4657,7 +4667,7 @@ test("B3 restores the persisted member volume after a failed save", async ({ pag
         });
     });
     await page.locator('#voice-participants [data-client-id="mia"]').click();
-    const slider = page.getByRole("slider", { name: "User volume" });
+    const slider = page.getByRole("slider", { name: "Voice volume · Only for you" });
     await slider.fill("75");
     await expect.poll(() => page.evaluate(() => window.__noxa.state.settings.user_volumes?.["uid-mia"])).toBe(75);
     await page.evaluate(() => { window.__failVolumeSave = true; });
@@ -4680,12 +4690,12 @@ test("B3 ignores a volume save failure after selecting another member", async ({
         });
     });
     await page.locator('#voice-participants [data-client-id="mia"]').click();
-    await page.getByRole("slider", { name: "User volume" }).fill("150");
+    await page.getByRole("slider", { name: "Voice volume · Only for you" }).fill("150");
     await expect.poll(() => page.evaluate(() => typeof window.__finishVolumeSave)).toBe("function");
     await page.locator('#voice-participants [data-client-id="alex"]').click();
     await page.evaluate(() => window.__finishVolumeSave("disk full"));
     await expect(page.locator("#client-card .card-nick")).toHaveText("Alex");
-    await expect(page.getByRole("slider", { name: "User volume" })).toHaveValue("100");
+    await expect(page.getByRole("slider", { name: "Voice volume · Only for you" })).toHaveValue("100");
     await expect(page.locator("#member-volume-value")).toHaveText("100%");
     await expect(page.locator("#member-action-error")).toBeHidden();
 });
@@ -5859,7 +5869,7 @@ test("camera settings preview requires an explicit test and releases capture on 
             window.__previewTrack = stream.getVideoTracks()[0];
             return stream;
         };
-        window.__noxa.openSettings("capture");
+        window.__noxa.openSettings("camera");
     });
     expect(await page.evaluate(() => window.__cameraRequests)).toBe(0);
     const start = page.getByRole("button", { name: "Test camera", exact: true });
@@ -5870,7 +5880,7 @@ test("camera settings preview requires an explicit test and releases capture on 
     await start.click();
     await page.locator('[data-page="playback"]').click();
     expect(await page.evaluate(() => window.__previewTrack.readyState)).toBe("ended");
-    await page.locator('[data-page="capture"]').click();
+    await page.locator('[data-page="camera"]').click();
     await start.click();
     await page.getByRole("button", { name: "Cancel", exact: true }).click();
     expect(await page.evaluate(() => window.__previewTrack.readyState)).toBe("ended");
@@ -5880,7 +5890,7 @@ test("camera settings preview requires an explicit test and releases capture on 
 test("a camera test resolved after settings closes is immediately stopped", async ({ page }) => {
     await page.evaluate(() => {
         navigator.mediaDevices.getUserMedia = () => new Promise((resolve) => { window.__resolveCamera = resolve; });
-        window.__noxa.openSettings("capture");
+        window.__noxa.openSettings("camera");
     });
     await page.getByRole("button", { name: "Test camera", exact: true }).click();
     await page.getByRole("button", { name: "Cancel", exact: true }).click();
@@ -6268,6 +6278,52 @@ test("video CPU pressure does not flap quality around its threshold", async ({ p
     expect(await qualities()).toEqual(["low"]);
     await page.clock.runFor(3000);
     await expect.poll(qualities).toEqual(["low", "mid"]);
+});
+
+test("camera settings have their own searchable section and preserve drafts across navigation", async ({ page }) => {
+    await page.evaluate(() => {
+        const app = window.go.main.App;
+        window.go.main.App = new Proxy(app, { get(target, key) {
+            if (key === "GetSettings") return async () => structuredClone(window.__savedSettings || window.__noxa.state.settings);
+            return target[key];
+        } });
+        window.__noxa.openSettings("capture");
+    });
+    await expect(page.getByRole("button", { name: "Test camera", exact: true })).toHaveCount(0);
+    const capture = page.getByRole("tab", { name: "Capture", exact: true });
+    await capture.focus();
+    await page.keyboard.press("ArrowDown");
+    await expect(page.getByRole("tab", { name: "Camera", exact: true })).toBeFocused();
+    await page.keyboard.press("Enter");
+    await page.getByLabel("Camera frame rate", { exact: true }).selectOption("60");
+    await capture.click();
+    await page.getByLabel("Search settings", { exact: true }).fill("camera frame rate");
+    const hit = page.locator(".set-search-hit");
+    await expect(hit).toContainText("Camera");
+    await hit.click();
+    await expect(page.getByRole("tab", { name: "Camera", exact: true })).toHaveAttribute("aria-selected", "true");
+    await expect(page.getByLabel("Camera frame rate", { exact: true })).toHaveValue("60");
+    await page.locator("#set-apply").click();
+    await expect(page.locator(".settings-save-status")).toHaveText("Changes applied");
+    expect(await page.evaluate(() => window.__savedSettings.camera_fps)).toBe(60);
+    await page.getByLabel("Camera frame rate", { exact: true }).selectOption("15");
+    await page.locator("#set-cancel").click();
+    await page.evaluate(() => window.__noxa.openSettings("camera"));
+    await expect(page.getByLabel("Camera frame rate", { exact: true })).toHaveValue("60");
+});
+
+test("settings explain when saved changes and temporary previews take effect", async ({ page }) => {
+    await page.evaluate(() => window.__noxa.openSettings("capture"));
+    await expect(page.getByLabel("Echo cancellation", { exact: true })).toHaveAccessibleDescription("Applies immediately after saving.");
+    await expect(page.locator("#settings-content")).not.toContainText("next reconnects");
+    await page.getByRole("tab", { name: "Camera", exact: true }).click();
+    await expect(page.getByLabel("Camera frame rate", { exact: true })).toHaveAccessibleDescription("After saving, start or restart the camera to use these settings. Restart the local test to preview them.");
+    await expect(page.locator("#settings-content")).toContainText("Preview only — stays on this device and does not start a call.");
+    await page.getByRole("tab", { name: "Playback", exact: true }).click();
+    await expect(page.getByLabel("Voice limiter (compressor)", { exact: true })).toHaveAccessibleDescription("Requires voice reconnect after saving.");
+    await page.getByRole("tab", { name: "Application", exact: true }).click();
+    await expect(page.getByLabel("Window opacity", { exact: true })).toHaveAccessibleDescription("Preview now; Apply or OK keeps the change. Cancel restores the saved appearance.");
+    await expect(page.getByLabel("Check for updates at startup", { exact: true })).toHaveAccessibleDescription("After saving, takes effect at the next app start.");
 });
 
 test("video CPU pressure respects efficient decoding and discards stale polls", async ({ page }) => {

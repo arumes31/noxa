@@ -761,8 +761,19 @@ func (m *connManager) teeFrameIfEnabled(dir string, f *netproto.Frame, on bool) 
 	})
 }
 
+type requestFailure struct {
+	response netproto.Error
+}
+
+func (e *requestFailure) Error() string { return e.response.Message }
+
 // request sends a message and waits for a typed response.
 func (m *connManager) request(send, reply netproto.MessageType, msg any, timeout time.Duration) (*netproto.Frame, error) {
+	return m.requestOn(nil, send, reply, msg, timeout)
+}
+
+// requestOn pins retries to the connection that started the operation.
+func (m *connManager) requestOn(expected net.Conn, send, reply netproto.MessageType, msg any, timeout time.Duration) (*netproto.Frame, error) {
 	gate := m.requestGate(reply)
 	gate.Lock()
 	defer gate.Unlock()
@@ -770,7 +781,7 @@ func (m *connManager) request(send, reply netproto.MessageType, msg any, timeout
 	ch := make(chan requestResult, 1)
 	m.mu.Lock()
 	conn := m.conn
-	if conn == nil {
+	if conn == nil || (expected != nil && conn != expected) {
 		m.mu.Unlock()
 		return nil, fmt.Errorf("not connected")
 	}
@@ -803,7 +814,7 @@ func (m *connManager) request(send, reply netproto.MessageType, msg any, timeout
 		if f.Type == uint16(netproto.MsgError) {
 			var e netproto.Error
 			if err := netproto.Decode(f, &e); err == nil && e.Message != "" {
-				return nil, fmt.Errorf("%s", e.Message)
+				return nil, &requestFailure{response: e}
 			}
 			return nil, fmt.Errorf("server error")
 		}

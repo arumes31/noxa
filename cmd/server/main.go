@@ -793,6 +793,7 @@ func run() (retErr error) {
 	// (231) the event stream for bots, on the health listener next to
 	// /metrics. Integration roles govern the filtered stream.
 	healthServer.Handle("/events", eventbus.HandlerWithRoleBackend(events, qBackend, logger, loginLimiter, m))
+	healthServer.Handle("/hooks/", tcpServer.IncomingWebhookHandler())
 	registerEventBusMetrics(m.Registry(), events, logger)
 
 	// (232) the gRPC API on the reserved port shares the roles-v1 backend.

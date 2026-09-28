@@ -350,9 +350,28 @@ export async function applyCaptureProfile(pc, stream, ch) {
 // registerUserChain, so per-sender volume/mute is audible.
 // ---------------------------------------------------------------------------
 
+const volumePreviews = new Map();
+const volumeListeners = new Set();
+
+export function onUserVolumeChange(listener) {
+    volumeListeners.add(listener);
+    return () => volumeListeners.delete(listener);
+}
+
+export function previewUserVolume(uid, pct, owner) {
+    volumePreviews.set(uid, { volume: Math.min(200, Math.max(0, Number(pct) || 0)), owner });
+    applyUserAudio(uid);
+}
+
+export function clearUserVolumePreview(uid, owner) {
+    if (volumePreviews.get(uid)?.owner !== owner) return;
+    volumePreviews.delete(uid);
+    applyUserAudio(uid);
+}
+
 export function getUserVolume(uid) {
     const s = V().state.settings;
-    return (s?.user_volumes?.[uid] ?? 100) / 100;
+    return (volumePreviews.get(uid)?.volume ?? s?.user_volumes?.[uid] ?? 100) / 100;
 }
 
 export function isUserMuted(uid) {
@@ -360,14 +379,56 @@ export function isUserMuted(uid) {
     return (s?.muted_users || []).includes(uid) || (s?.blocked_users || []).includes(uid);
 }
 
+// Program audio has its own persisted preference. Muting a microphone must not
+// mute the movie being shared; blocking a person still suppresses both sources.
+const shareAudioListeners = new Set();
+const shareVolumePending = new Map(), shareMutePending = new Map();
+export function onShareAudioChange(listener) {
+    shareAudioListeners.add(listener);
+    return () => shareAudioListeners.delete(listener);
+}
+export function getUserShareVolume(uid) {
+    const value = Number(shareVolumePending.get(uid)?.value ?? V().state.settings?.user_share_volumes?.[uid] ?? 100);
+    return Math.min(200, Math.max(0, Number.isFinite(value) ? value : 100)) / 100;
+}
+export function isUserShareMuted(uid) {
+    const settings = V().state.settings;
+    return (shareMutePending.get(uid)?.value ?? (settings?.muted_share_users || []).includes(uid)) || (settings?.blocked_users || []).includes(uid);
+}
+function mutateSharePreference(uid, pending, value, mutate) {
+    if (!uid) return Promise.resolve();
+    const request = { value };
+    pending.set(uid, request);
+    for (const listener of shareAudioListeners) listener(uid);
+    return updateLocalSettings(mutate).finally(() => {
+        if (pending.get(uid) === request) pending.delete(uid);
+        for (const listener of shareAudioListeners) listener(uid);
+    });
+}
+export function setUserShareVolume(uid, percent) {
+    const volume = Math.round(Math.min(200, Math.max(0, Number(percent) || 0)));
+    return mutateSharePreference(uid, shareVolumePending, volume, settings => { settings.user_share_volumes = { ...settings.user_share_volumes, [uid]: volume }; });
+}
+export function setUserShareMuted(uid, muted) {
+    return mutateSharePreference(uid, shareMutePending, !!muted, settings => {
+        const users = new Set(settings.muted_share_users || []);
+        if (muted) users.add(uid);
+        else users.delete(uid);
+        settings.muted_share_users = [...users];
+    });
+}
+
 function mutateAudioPreference(uid, mutate) {
     return updateLocalSettings(mutate).then(() => {
         applyUserAudio(uid);
+        for (const listener of shareAudioListeners) listener(uid);
     });
 }
 
 export function setUserVolume(uid, pct) {
-    return mutateAudioPreference(uid, s => { s.user_volumes = { ...s.user_volumes, [uid]: pct }; });
+    return mutateAudioPreference(uid, s => { s.user_volumes = { ...s.user_volumes, [uid]: pct }; }).then(() => {
+        for (const listener of volumeListeners) listener(uid);
+    });
 }
 
 export function setUserMuted(uid, muted) {
@@ -390,6 +451,7 @@ export function setUserBlocked(uid, blocked) {
 
 export function refreshUserAudio() {
     for (const uid of userNodes.keys()) applyUserAudio(uid);
+    for (const listener of shareAudioListeners) listener();
 }
 
 // userNodes maps uniqueID -> {gain: GainNode, mute: GainNode}.

@@ -1,4 +1,5 @@
 import { t } from "./i18n.js";
+import { voiceMessageButton, renderVoiceMessage } from "./voice-messages.js";
 import { confirmDialog, promptDialog } from "./modal.js";
 import { startPrivateCall, showCallHistory } from "./private-calls.js";
 import { sessionUserID } from "./session-identity.js";
@@ -47,6 +48,10 @@ function button(key, action) {
 export function openConversations() {
     initConversations();
     workspace?.open();
+}
+export async function openConversationsAt(groupID, messageID = 0) {
+    initConversations();
+    await workspace?.jump(groupID, Number(messageID));
 }
 export function closeConversations() { workspace?.close(); }
 export function isPrivateGroupActive() { return !!workspace?.active(); }
@@ -115,6 +120,7 @@ export function initConversations() {
     let listedGroups = [];
     let hiddenSurfaces = null;
     let viewToken = null;
+    let jumpTarget = 0;
     const current = () => panel.isConnected && tabID === V().state.activeTabID && serverGeneration === V().state.serverGeneration;
     const visible = () => current() && !panel.hidden;
     const setVisible = show => {
@@ -335,6 +341,17 @@ export function initConversations() {
         input.dataset.groupId = group.id;
         input.oninput = () => drafts.set(group.id, input.value);
         const send = button("group.send"); send.type = "submit"; composer.append(input, send); content.append(composer);
+        composer.append(voiceMessageButton(() => {
+            const recordingView = viewToken;
+            const groupID = group.id;
+            let pending = null;
+            return { tabID, channelID: 0, isCurrent: () => visible() && viewToken === recordingView && selected === groupID
+                && listedGroups.some(listed => listed.id === groupID && listed.members.some(member => member.unique_id === uid() && !member.pending)), send: async body => {
+                if (!pending || pending.body !== body) pending = { body, reference: crypto.randomUUID() };
+                await app().SendConversationForTab(tabID, groupID, body, pending.reference);
+                return "";
+            } };
+        }));
         composer.onsubmit = async event => {
             event.preventDefault();
             if (mutationPending || !input.value.trim() || !current()) return;
@@ -351,7 +368,7 @@ export function initConversations() {
             } catch (error) { fail(error); }
             finally { mutationPending = false; send.disabled = false; if (current()) void refresh(); }
         };
-        let before = 0;
+        let before = jumpTarget > 0 ? jumpTarget + 1 : 0;
         let loading = false;
         let latestRendered = 0;
         messages.onscroll = () => {
@@ -366,7 +383,14 @@ export function initConversations() {
                 const fragment = document.createDocumentFragment();
                 for (const message of [...result.messages].reverse()) {
                     const row = el("article", "group-message");
-                    row.append(el("strong", "", label(message.from_unique_id)), el("time", "", new Date(message.created_at * 1000).toLocaleString()), el("p", "", blocked(message.from_unique_id) ? t("group.blocked") : message.body));
+                    row.dataset.messageId = String(message.id);
+                    const body = el("div", "group-message-body");
+                    if (blocked(message.from_unique_id)) body.textContent = t("group.blocked");
+                    else if (!renderVoiceMessage(body, message.body, { tabID, channelID: 0, isCurrent: () => current() && token === generation })) body.textContent = message.body;
+                    row.append(el("strong", "", label(message.from_unique_id)), el("time", "", new Date(message.created_at * 1000).toLocaleString()), body);
+                    if (!blocked(message.from_unique_id)) row.append(button("messages.save", () => {
+                        if (current() && token === generation) void window.__noxaMessageTools?.save({ kind: "group", group_id: group.id, message_id: message.id });
+                    }));
                     fragment.append(row);
                 }
                 const initial = !before;
@@ -384,6 +408,13 @@ export function initConversations() {
         };
         older.onclick = history;
         await history();
+        const target = jumpTarget;
+        if (target && current() && token === generation) {
+            const found = messages.querySelector(`[data-message-id="${target}"]`);
+            if (found) { found.scrollIntoView({ block: "center" }); found.classList.add("message-reference-flash"); setTimeout(() => found.classList.remove("message-reference-flash"), 2000); }
+            else status.textContent = t("messages.notFound");
+            jumpTarget = 0;
+        }
     };
     create.onsubmit = event => { event.preventDefault(); void mutate(null, "create", "", { name: name.value.trim() }); };
     const refreshHandler = () => {
@@ -407,6 +438,7 @@ export function initConversations() {
     workspace = {
         current, filter, active: visible, token: () => visible() ? viewToken : null,
         open: () => { setVisible(true); layout.expand(); create.hidden = false; add.setAttribute("aria-expanded", "true"); name.focus(); },
+        jump: async (id, messageID) => { saveDraft(); selected = id; jumpTarget = messageID; setVisible(true); layout.expand(); await refresh(); if (current() && selected !== id) status.textContent = t("messages.notFound"); },
         close: () => { saveDraft(); setVisible(false); },
         destroy: () => { ++generation; window.clearInterval(sidebarPoll); window.removeEventListener("noxa-language-changed", languageChanged); window.removeEventListener("focus", focusChanged); document.removeEventListener("visibilitychange", focusChanged); setVisible(false); layout.destroy(); sidebar.remove(); panel.remove(); drafts.clear(); memberForms.clear(); references.clear(); },
     };

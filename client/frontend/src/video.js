@@ -5,8 +5,11 @@
 import { copyToClipboard } from "./clipboard.js";
 import { formatBitrate, summarizeStream } from "./connection-stats.js";
 import { GridCompositor } from "./grid-compositor.js";
+import { captureCamera, applyCameraPreview } from "./camera-capture.js";
+export { cameraConstraints } from "./camera-capture.js";
 import { captureMediaScope, mediaScopeIsCurrent } from "./media-controls.js";
 import { startPublication, stopPublication } from "./stream-publication.js";
+import { closeContextMenu, mountContextMenu, contextMenuKey } from "./context-menu.js";
 
 import { isCurrentServerDialog, mountServerDialog } from "./modal.js";
 import { setSafeImage } from "./safe-media.js";
@@ -155,6 +158,13 @@ export function videoTrackAdded(trackID, stream, publisher, watchControls) {
         el.oncontextmenu = (e) => {
             e.preventDefault();
             openTileMenu(e.clientX, e.clientY, t);
+        };
+        el.tabIndex = 0;
+        el.setAttribute("aria-haspopup", "menu");
+        el.onkeydown = e => {
+            if (!contextMenuKey(e)) return;
+            e.preventDefault(); e.stopPropagation();
+            openTileMenu(undefined, undefined, t);
         };
         t = {
             el, video, nameEl, kindEl, badgeEl, track: null, stream: null,
@@ -360,6 +370,7 @@ function toggleFocus(clid) {
 }
 
 export function initVideo() {
+    window.addEventListener("noxa-camera-preferences-changed", syncCameraButton);
     window.addEventListener("noxa-language-changed", () => { syncCameraButton(); syncShareButton(); syncLowBandwidthButton(); });
     syncCameraButton();
     syncShareButton();
@@ -422,14 +433,11 @@ async function pushQuality() {
     }
 }
 
-let qMenuEl = null;
-
 // openTileMenu is the tile right-click menu: the shared receive-quality
 // preference (63) plus, when the tile's publisher is sharing system audio,
 // that share's own volume/mute (70).
 function openTileMenu(x, y, t) {
-    if (qMenuEl) qMenuEl.remove();
-    qMenuEl = document.createElement("div");
+    const qMenuEl = document.createElement("div");
     qMenuEl.className = "ctx-menu";
     const cur = qualityPref;
     const sa = V().shareAudioCtl?.get(t.clientID) || null;
@@ -448,23 +456,18 @@ function openTileMenu(x, y, t) {
             <input type="range" aria-label="${tLabel("polish.sharedAudio")}" aria-valuetext="${sa.volume}%" min="0" max="200" value="${sa.volume}" />
         </div>
         <a class="ctx-note">${tLabel("polish.sharedAudioHelp")}</a>` : "");
-    qMenuEl.style.left = Math.min(x, window.innerWidth - 260) + "px";
-    qMenuEl.style.top = Math.min(y, window.innerHeight - (sa ? 320 : 200)) + "px";
-    qMenuEl.onclick = (e) => e.stopPropagation();
     for (const a of qMenuEl.querySelectorAll("a[data-q]")) {
         a.onclick = () => {
             qualityPref = a.dataset.q;
             pushQuality();
-            qMenuEl.remove();
-            qMenuEl = null;
+            closeContextMenu(qMenuEl, true);
         };
     }
-    qMenuEl.querySelector("[data-grid-pip]").onclick = () => openGridOverlay();
+    qMenuEl.querySelector("[data-grid-pip]").onclick = () => { closeContextMenu(qMenuEl, true); void openGridOverlay(); };
     if (sa && tileIsScreen(t)) {
         qMenuEl.querySelector('a[data-sa="mute"]').onclick = () => {
             V().shareAudioCtl.setMuted(t.clientID, !sa.muted);
-            qMenuEl.remove();
-            qMenuEl = null;
+            closeContextMenu(qMenuEl, true);
         };
         const slider = qMenuEl.querySelector(".ctx-volume input");
         slider.oninput = () => {
@@ -473,12 +476,7 @@ function openTileMenu(x, y, t) {
             V().shareAudioCtl.setVolume(t.clientID, parseInt(slider.value, 10));
         };
     }
-    document.body.appendChild(qMenuEl);
-    const close = () => { if (qMenuEl) { qMenuEl.remove(); qMenuEl = null; } };
-    setTimeout(() => {
-        document.addEventListener("click", close, { once: true });
-        document.addEventListener("keydown", (e) => { if (e.key === "Escape") close(); }, { once: true });
-    });
+    mountContextMenu(qMenuEl, { x, y, trigger: t.el });
 }
 
 async function openGridOverlay() {
@@ -1396,11 +1394,6 @@ async function doStopShare() {
 let cameraOff = true;
 let cameraRequest = null;
 
-export function cameraConstraints(settings, limits) {
-    if (limits?.video_max_width) return videoConstraints(640, 360, settings?.camera_fps || 30, limits);
-    return { width: 640, height: 360, frameRate: { ideal: settings?.camera_fps || 30 } };
-}
-
 // syncCameraButton reflects camera availability and state in the voice bar.
 function syncCameraButton() {
     const { state, $ } = V();
@@ -1418,6 +1411,7 @@ function syncCameraButton() {
     btn.setAttribute("aria-label", btn.title);
     $("local-video").classList.toggle("hidden", !cam || cameraOff);
     const preview = $("local-video");
+    applyCameraPreview(preview, state.settings);
     const stream = enabled ? state.localStream : null;
     if (preview.srcObject !== stream) {
         preview.srcObject = stream;
@@ -1428,6 +1422,7 @@ function syncCameraButton() {
 // resetCameraState clears the toggle for a fresh (or ended) voice session.
 export function resetCameraState() {
     cameraOff = true;
+    cameraRequest?.controller?.abort();
     cameraRequest = null;
     sharePresetBitrate = 0;
     syncCameraButton();
@@ -1475,7 +1470,7 @@ async function startCamera() {
     const localStream = state.localStream;
     const generation = state.serverGeneration;
     const tabID = state.activeTabID;
-    const request = {};
+    const request = { controller: new AbortController() };
     const cameraScope = captureMediaScope();
     cameraRequest = request;
     const current = () => mediaScopeIsCurrent(cameraScope) && cameraRequest === request && state.pc === pc &&
@@ -1483,7 +1478,8 @@ async function startCamera() {
     syncCameraButton();
     let stream, sender, transceiver;
     try {
-        stream = await navigator.mediaDevices.getUserMedia({ audio: false, video: cameraConstraints(state.settings, state.mediaLimits) });
+        const capture = await captureCamera(state.settings, state.mediaLimits, { signal: request.controller.signal });
+        stream = capture.stream;
         if (!current()) return;
         const cam = stream.getVideoTracks()[0];
         if (!cam) throw new Error("no camera track available");

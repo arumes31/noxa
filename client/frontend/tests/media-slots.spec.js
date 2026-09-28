@@ -613,6 +613,22 @@ test("failed screen publication releases capture and preserves camera", async ({
     await expect(page.locator("#voice-screen")).toBeEnabled();
 });
 
+test("saved camera mirroring refreshes the local preview without replacing its outgoing track", async ({ page }) => {
+    await page.evaluate(() => {
+        const grid = document.createElement("div"); grid.id = "video-grid"; document.body.append(grid);
+        window.__media.video.initVideo();
+        window.__noxa.state.settings.camera_mirror_preview = false;
+        window.dispatchEvent(new Event("noxa-camera-preferences-changed"));
+    });
+    await expect(page.locator("#local-video")).toHaveCSS("transform", "none");
+    await page.evaluate(() => {
+        window.__noxa.state.settings.camera_mirror_preview = true;
+        window.dispatchEvent(new Event("noxa-camera-preferences-changed"));
+    });
+    await expect(page.locator("#local-video")).toHaveCSS("transform", "matrix(-1, 0, 0, 1, 0, 0)");
+    expect(await page.evaluate(() => window.__media.cameraSender.track === window.__media.camera)).toBe(true);
+});
+
 test("denied screen confirmation releases capture and preserves camera", async ({ page }) => {
     await page.evaluate(() => { window.__media.delayShareControl = true; });
     await page.locator("#voice-screen").click();

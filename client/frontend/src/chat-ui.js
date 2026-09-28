@@ -10,9 +10,14 @@
 //
 // Replies and direct recipients use explicit protocol identities.
 import { resolveParent, directPeer } from "./chat-relations.js";
+import { voiceMessageButton, renderVoiceMessage } from "./voice-messages.js";
+import { initMessageTools, saveMessageReference } from "./message-tools.js";
 import { roleMentionChoices, roleMentionLabel, mentionFlags } from "./role-mentions.js";
+import { memberTarget } from "./member-target.js";
+import { mountContextMenu, closeContextMenu, contextMenuKey } from "./context-menu.js";
 import { createPoll, renderPoll } from "./polls.js";
 import { parsePoll } from "./poll-state.js";
+import { closeDiscussions, initDiscussions, openDiscussions, renderForumChannel, resetDiscussions } from "./discussions.js";
 import { closeConversations, initConversations, isPrivateGroupActive, resetConversations } from "./conversations.js";
 import { sessionUserID } from "./session-identity.js";
 import { chatEnglish } from "./chat-messages.js";
@@ -550,13 +555,16 @@ function mentionsMe(text) {
 // markMentions wraps @tokens in the rendered body. It walks text nodes only,
 // so it can never introduce markup into user text.
 function markMentions(container) {
-    const re = new RegExp(mentionRe().source + "|<@&([1-9][0-9]{0,18})>", "gi");
+    const members = V().state.clients || [];
+    const names = [...new Set(members.map(c => c.nickname).filter(Boolean))].sort((a, b) => b.length - a.length);
+    const memberPattern = names.length ? "|@(?:" + names.map(reEscape).join("|") + ")(?![\\w-])" : "";
+    const re = new RegExp(mentionRe().source + "|<@&([1-9][0-9]{0,18})>" + memberPattern, "gi");
     const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT);
     const nodes = [];
     while (walker.nextNode()) nodes.push(walker.currentNode);
     while (nodes.length) {
         const node = nodes.shift();
-        if (node.parentNode?.closest?.(".md-code, .md-pre, .mention-tok")) continue;
+        if (node.parentNode?.closest?.("a, .md-code, .md-pre, .mention-tok")) continue;
         re.lastIndex = 0;
         const hit = re.exec(node.nodeValue);
         if (!hit) continue;
@@ -566,6 +574,10 @@ function markMentions(container) {
         span.className = "mention-tok";
         span.textContent = hit[2] ? roleMentionLabel(V().state.clients, hit[2]) : token.nodeValue;
         if (hit[2]) span.title = token.nodeValue;
+        else if (!MENTION_ALL_FORMS.some(name => `@${name}`.toLocaleLowerCase() === token.nodeValue.toLocaleLowerCase())) {
+            const matches = members.filter(c => `@${c.nickname}`.toLocaleLowerCase() === token.nodeValue.toLocaleLowerCase());
+            if (matches.length === 1) memberTarget(span, matches[0].unique_id, matches[0].nickname);
+        }
         token.parentNode.replaceChild(span, token);
         nodes.unshift(tail); // a body can mention more than one name
     }
@@ -664,6 +676,8 @@ function renderMsg(m) {
     const from = document.createElement("span");
     from.className = "msg-from" + (m.self ? " self" : "");
     from.textContent = m.from + ":";
+    memberTarget(from, m.fromUID, m.from);
+    if (m.fromUID) { avatar.dataset.memberUid = m.fromUID; avatar.dataset.memberName = m.from; }
     el.appendChild(from);
 
     const tag = document.createElement("span");
@@ -729,7 +743,35 @@ function renderMsg(m) {
 
     if (!m.deleted && m.id) {
         el.appendChild(renderReacts(m));
-        el.appendChild(renderActions(m));
+        const actions = renderActions(m);
+        el.appendChild(actions);
+        el.tabIndex = 0;
+        el.setAttribute("aria-haspopup", "menu");
+        const openMenu = event => {
+            if (event.target.closest('[data-member-uid], input, textarea, a, video')) return;
+            event.preventDefault(); event.stopPropagation();
+            const menu = document.createElement("div"); menu.className = "ctx-menu";
+            for (const action of actions.querySelectorAll("button")) {
+                const item = document.createElement("button"); item.className = "ctx-action";
+                item.textContent = action.getAttribute("aria-label") || action.title;
+                item.disabled = action.disabled;
+                item.onclick = () => { closeContextMenu(menu, true); if (el.isConnected) action.click(); };
+                menu.append(item);
+            }
+            mountContextMenu(menu, { trigger: el, x: event.clientX, y: event.clientY });
+        };
+        el.oncontextmenu = openMenu;
+        el.onkeydown = event => { if (contextMenuKey(event)) openMenu(event); };
+    }
+    if (!m.deleted && m.direct && (m.clientMsgID || m.localSeq) && view.kind === "dm") {
+        const peer = view.uid, owner = getDMOwner(), scope = captureScope(readExportScope);
+        const save = document.createElement("button"); save.className = "icon-btn"; save.textContent = "☆"; save.title = t("messages.save"); save.setAttribute("aria-label", t("messages.save"));
+        save.onclick = async () => {
+            const ready = await owner.ready;
+            if (ready.error || !dmOwnerIsCurrent(owner) || !exportScopeIsCurrent(scope) || !save.isConnected) return;
+            await saveMessageReference({ kind: "dm", peer_id: peer, client_message_id: m.clientMsgID || "", local_seq: m.localSeq || 0 }, ready.context);
+        };
+        el.append(save);
     }
     return el;
 }
@@ -739,6 +781,8 @@ function renderMsg(m) {
 // renderMarkdown (which escapes first); file names only ever go into
 // textContent or DOM properties, never raw HTML.
 function renderBody(container, m) {
+    const voiceScope = captureScope(() => readInlineAttachmentScope(m.isDM ? 0 : Number(m.channelID) || 0));
+    if (!m.deleted && renderVoiceMessage(container, m.text, { tabID: voiceScope.tabID, channelID: voiceScope.channelID, isCurrent: () => inlineAttachmentScopeIsCurrent(voiceScope, container) })) return;
     if (renderPoll(container, m)) return;
     const text = m.text;
     const quoteNick = m.replyToID ? (findMsg(m.replyToID)?.from || t("chat.replyMessage")) : null;
@@ -1021,11 +1065,13 @@ function renderActions(m) {
     });
     mk("smile", t("chat.action.react"), () => openReactStrip(m, acts));
     mk("reply", t("chat.action.reply"), () => setReply(m));
+    if (!m.direct && m.id) mk("pin", t("messages.save"), () => saveMessageReference({ kind: "channel", channel_id: scope.channelID, message_id: m.id }));
     // (108) only messages that are actually part of a chain get the affordance
     // — on everything else a thread button would open a panel of one.
     const th = threadIndex(activeKey());
     const root = th.rootOf.get(m.id) || m.id;
     if (th.replies.get(root)) mk("thread", t("chat.action.thread"), () => openThread(root));
+    if (!m.direct && activeChannelID() > 0) mk("thread", t("discussion.start"), () => openDiscussions(activeChannelID(), m));
     if (m.self && !m.direct && !parsePoll(m.text)) mk("edit", t("chat.action.edit"), () => startEdit(m));
     if (m.self) mk("trash", t("chat.action.delete"), () => deleteMsg(m));
     if (!m.direct) {
@@ -1308,6 +1354,7 @@ function refreshThreadFor(id) {
 // ---------------------------------------------------------------------------
 
 function setView(v) {
+    closeDiscussions();
     closeConversations();
     invalidateChatViewWork();
     view = v;
@@ -1549,11 +1596,24 @@ function renderTabs() {
         const current = () => el.isConnected && dmHistoryScopeIsCurrent(scope) && pmTabs.get(tab.uid) === tab;
         el.className = "pm-tab" + (view.kind === "dm" && view.uid === tab.uid ? " active" : "");
         el.title = t("chat.deleteHistoryHint");
-        el.oncontextmenu = (e) => {
-            e.preventDefault();
+        const openMenu = (e, keyboard = false) => {
+            e.preventDefault(); e.stopPropagation();
             if (!current()) return;
-            clearPMHistory(tab.uid, tab.nick);
+            const menu = document.createElement("div"); menu.className = "ctx-menu";
+            const add = (key, action, danger = false) => {
+                const button = document.createElement("button"); button.type = "button"; button.className = "ctx-action" + (danger ? " ctx-danger" : "");
+                button.textContent = t(key); button.onclick = () => { closeContextMenu(menu); if (current()) action(); };
+                menu.append(button);
+            };
+            add("context.openConversation", () => activatePM(tab.uid));
+            add("context.closeConversation", () => closePM(tab.uid));
+            const divider = document.createElement("div"); divider.className = "ctx-divider"; menu.append(divider);
+            add("context.clearHistory", () => clearPMHistory(tab.uid, tab.nick), true);
+            mountContextMenu(menu, { x: keyboard ? undefined : e.clientX, y: keyboard ? undefined : e.clientY, trigger: el });
         };
+        el.tabIndex = 0; el.setAttribute("aria-haspopup", "menu");
+        el.oncontextmenu = e => openMenu(e);
+        el.onkeydown = e => { if (contextMenuKey(e)) openMenu(e, true); };
         const name = document.createElement("span");
         name.className = "pm-tab-name";
         name.textContent = tab.nick;
@@ -1600,6 +1660,7 @@ function dmMsg(e, peerNick) {
     const self = !!e.self;
     return {
         id: 0,
+        localSeq: Number(e.seq) || 0,
         from: e.from_nickname || (self ? st.myNickname : peerNick) || "?",
         fromUID: e.from_unique_id || "",
         text: e.body || "",
@@ -1794,6 +1855,10 @@ function renderView(keepScrollFrom, { suppressMarkRead = false } = {}) {
     const st = getStore(key);
 
     renderTyping(); // (120) drop the previous scope's indicator before anything else
+
+    if (renderForumChannel(log, activeChannelID(), () => {
+        if (activeKey() === key) renderView();
+    })) { updateHeader(); return; }
 
     if (view.kind === "channel" && !V().state.myChannelID) {
         const hint = document.createElement("div");
@@ -3546,6 +3611,7 @@ export function onChannelsDeleted(channelIDs) {
 // stores, unread badges, PM tabs, and the rendered panes. The tab journal
 // replay rebuilds the view from server frames afterwards.
 export function resetView(options = {}) {
+    resetDiscussions();
     composerLimit = null;
     updateComposerCount();
     resetConversations();
@@ -3837,6 +3903,8 @@ function handleTabComplete(e) {
 // ---------------------------------------------------------------------------
 
 export function initChat() {
+    initMessageTools({ unread: unreadMessageReferences, jump: jumpMessageReference });
+    initDiscussions(() => activeChannelID());
     $("chat-text").addEventListener("input", updateComposerCount);
     $("chat-text").addEventListener("keyup", updateComposerCount);
     window.addEventListener("noxa-language-changed", updateComposerCount);
@@ -3985,6 +4053,17 @@ export function initChat() {
         if (e.dataTransfer?.files?.length) stageFiles(e.dataTransfer.files);
     });
     $("chat-attach").onclick = () => $("chat-file").click();
+    $("chat-attach").after(voiceMessageButton(() => {
+        const scope = captureScope(readSendScope);
+        const parent = scope.sendScope === "direct" ? 0 : replyTo?.id || 0;
+        return {
+            tabID: scope.tabID, channelID: scope.sendScope === "channel" ? scope.channelID : 0,
+            isCurrent: () => scopeIsCurrent(scope, readSendScope),
+            send: token => parent
+                ? app().SendChatReplyForTab(scope.tabID, scope.sendScope, scope.target, token, parent)
+                : app().SendChatForTab(scope.tabID, scope.sendScope, scope.target, token),
+        };
+    }));
     $("chat-file").addEventListener("change", (e) => {
         if (e.target.files?.length) stageFiles(e.target.files);
         e.target.value = ""; // picking the same file twice must re-stage it
@@ -4050,4 +4129,62 @@ export function initChat() {
 
 export function unreadFor(chID) {
     return unread.get(chID) || null;
+}
+
+export function unreadMessageReferences() {
+    const channels = [...unread.entries()].filter(([channelID]) => channelID === 0 || subscribed(channelID)).map(([channelID, value]) => ({
+        kind: "channel", channel_id: channelID,
+        message_id: getStore(`ch:${channelID}`).msgs.filter(message => !message.self && message.id).at(-1)?.id || 0,
+        name: V().state.channels.find(channel => Number(channel.ChannelID) === channelID)?.Name || (channelID ? `#${channelID}` : "Global"),
+        count: value.n, mention: value.mention,
+    }));
+    return channels.concat([...pmTabs.values()].filter(peer => peer.unread > 0).map(peer => ({ kind: "dm", peer_id: peer.uid, name: peer.nick, count: peer.unread })));
+}
+
+// Historical jumps open an authenticated context window without splicing a
+// disconnected old page into the live store (which would create paging gaps).
+export async function jumpMessageReference(reference) {
+    if (reference.kind === "dm") {
+        if (!reference.client_message_id && !reference.local_seq) { openPM(reference.peer_id, reference.name); return; }
+        const owner = getDMOwner();
+        const rows = await callDMHistory(owner, "DMHistoryLoadForContext", reference.peer_id);
+        if (!dmOwnerIsCurrent(owner)) return;
+        const entry = rows.find(row => reference.client_message_id ? row.client_msg_id === reference.client_message_id : Number(row.seq) === Number(reference.local_seq));
+        if (!entry) { V().toast(t("messages.notFound"), "warn"); return; }
+        const index = rows.indexOf(entry), name = pmTabs.get(reference.peer_id)?.nick || reference.peer_id;
+        const context = rows.slice(Math.max(0, index - 19), index + 1).map(row => dmMsg(row, name));
+        showMessageReferenceContext(`DM · ${name}`, context, context.at(-1));
+        return;
+    }
+    const scope = captureScope(readChatServerScope);
+    const channelID = Number(reference.channel_id), targetID = Number(reference.message_id);
+    if (!targetID) { if (channelID) await openChannelTab(channelID); else setView({ kind: "global" }); return; }
+    const page = await app().ChatHistoryForTab(scope.tabID, channelID, targetID + 1, 20);
+    if (!chatServerIsCurrent(scope)) return;
+    if (!(page.messages || []).some(message => message.id === targetID && !message.deleted && message.enc_verified)) {
+        V().toast(t("messages.notFound"), "warn"); return;
+    }
+    if (channelID === (activeChannelID() || 0) && flashMsg(targetID)) return;
+    const messages = [...page.messages].reverse().map(message => attribute(normalize(message, channelID)));
+    const name = V().state.channels.find(channel => Number(channel.ChannelID) === channelID)?.Name || (channelID ? `#${channelID}` : "Global");
+    showMessageReferenceContext(name, messages, messages.find(message => message.id === targetID));
+}
+
+function showMessageReferenceContext(name, messages, target) {
+    const overlay = document.createElement("div"); overlay.className = "dlg-overlay";
+    const box = document.createElement("section"); box.className = "dlg message-tools-dialog";
+    const heading = document.createElement("h2"); heading.textContent = name;
+    const list = document.createElement("div"); list.className = "message-tools-list";
+    for (const message of messages) {
+        const row = document.createElement("article"); row.className = "message-tool-result"; row.dataset.messageId = String(message.id);
+        const author = document.createElement("strong"); author.textContent = message.from || "?";
+        const body = document.createElement("p");
+        // Attachment secrets remain inside the existing scoped renderer.
+        renderBody(body, message);
+        row.append(author, body); list.append(row);
+        if (message === target) row.classList.add("message-reference-flash");
+    }
+    const close = document.createElement("button"); close.textContent = t("messages.close"); close.onclick = () => closeDialog(overlay);
+    box.append(heading, list, close); overlay.append(box); mountServerDialog(overlay);
+    list.querySelector(".message-reference-flash")?.scrollIntoView({ block: "center" });
 }

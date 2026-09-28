@@ -84,8 +84,14 @@ func (s *TCPServer) lookupSessionKey(ctx context.Context, client *Client, f *net
 	}
 	// Keep public-key lookups separate from chat traffic, while still
 	// bounding their database cost and preventing user enumeration at scale.
-	if s.chatRate != nil && !s.chatRate.allow(client.UniqueID+":key", time.Now()) {
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "key lookup rate limit exceeded — slow down")
+	if s.chatRate != nil {
+		allowed, retry := s.chatRate.allowWithRetry(client.UniqueID+":key", time.Now(), s.chatRate.max)
+		if !allowed {
+			return s.writeMessage(client, netproto.MsgError, netproto.Error{
+				Code: errCodeMalformed, Message: "key lookup rate limit exceeded — slow down",
+				OriginType: uint16(requestOrigin(ctx)), RetryAfterMS: retry.Milliseconds() + 1,
+			})
+		}
 	}
 
 	var pub string

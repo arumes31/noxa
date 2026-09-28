@@ -1,20 +1,22 @@
 import { expect, test } from "./fixtures.js";
 
-test.use({ launchOptions: { args: ["--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream", "--autoplay-policy=no-user-gesture-required"] }, permissions: ["microphone"] });
+test.use({ launchOptions: { args: ["--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream", "--autoplay-policy=no-user-gesture-required"] }, permissions: ["microphone", "camera"] });
 
-for (const signalingMode of ["normal", "gathering", "candidates-first"]) {
+for (const signalingMode of ["normal", "gathering", "candidates-first", "group-media"]) {
 test(`real peer call captures only after acceptance and tears down without joining a channel${signalingMode === "normal" ? "" : ` (${signalingMode})`}`, async ({ newIsolatedPage }) => {
+    test.setTimeout(60000);
     const pages = new Map();
     const heldDescriptions = new Map();
     const candidateBatches = [];
+    const participantIDs = signalingMode === "group-media" ? ["alice", "bob", "charlie"] : ["alice", "bob"];
     let call = null;
     let revision = 0;
     const notify = () => { for (const page of pages.values()) void page.evaluate(id => window.__callsModule.privateCallChanged({ id }), call.id).catch(() => {}); };
-    for (const uid of ["alice", "bob"]) {
-        const page = await newIsolatedPage({ permissions: ["microphone"] }); pages.set(uid, page);
+    for (const uid of participantIDs) {
+        const page = await newIsolatedPage({ permissions: ["microphone", "camera"] }); pages.set(uid, page);
         await page.route("**/__call_test__", route => route.fulfill({ contentType: "text/html", body: '<!doctype html><title>Call test</title><link rel="stylesheet" href="/src/private-calls.css">' }));
         await page.exposeFunction("requestCall", async request => {
-            if (request.action === "start") call = { id: "call-1", caller: uid, revision: ++revision, created_at: Math.floor(Date.now()/1000), ring_until: Math.floor(Date.now()/1000)+30, ended_at: 0, participants: [{ unique_id: "alice", client_id: "a", state: "accepted" }, { unique_id: "bob", client_id: "b", state: "ringing" }] };
+            if (request.action === "start") call = { id: "call-1", caller: uid, revision: ++revision, created_at: Math.floor(Date.now()/1000), ring_until: Math.floor(Date.now()/1000)+30, ended_at: 0, participants: participantIDs.map(id => ({ unique_id: id, client_id: id, state: id === uid ? "accepted" : "ringing" })) };
             if (request.action === "accept") { call.participants.find(participant => participant.unique_id === uid).state = "accepted"; call.revision = ++revision; }
             if (request.action === "start" || request.action === "accept") setTimeout(notify, 0);
             return { action: request.action, call: structuredClone(call) };
@@ -40,8 +42,10 @@ test(`real peer call captures only after acceptance and tears down without joini
         });
         await page.exposeFunction("stopCall", async () => { call.ended_at = Math.floor(Date.now()/1000); call.revision = ++revision; setTimeout(notify, 0); });
         await page.goto("http://127.0.0.1:12364/__call_test__");
-        await page.evaluate(async ({ uid, signalingMode }) => {
-            window.__captures = 0; window.__streams = []; window.__peers = []; window.__channelMoves = 0; window.__warnings = []; window.__hostCandidates = 0;
+        await page.evaluate(async ({ uid, signalingMode, participantIDs }) => {
+            window.__captures = 0; window.__streams = []; window.__peers = []; window.__channelMoves = 0; window.__warnings = []; window.__hostCandidates = 0; window.__callGains = [];
+            const createGain = AudioContext.prototype.createGain;
+            AudioContext.prototype.createGain = function () { const gain = createGain.call(this); window.__callGains.push(gain); return gain; };
             const getMedia = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
             navigator.mediaDevices.getUserMedia = async constraints => { window.__captures++; const stream = await getMedia(constraints); window.__streams.push(stream); return stream; };
             const OriginalPeer = window.RTCPeerConnection;
@@ -52,7 +56,7 @@ test(`real peer call captures only after acceptance and tears down without joini
                     if (signalingMode === "gathering") Object.defineProperty(this, "iceGatheringState", { get: () => "gathering" });
                 }
             };
-            window.__noxa = { state: { activeTabID: "server-a", serverGeneration: 1, myUniqueID: "local-device-key", myClientID: uid, myChannelID: 0, muted: false, deafened: false, settings: { activation_mode: "continuous", blocked_users: [] }, clients: [{ client_id: "alice", unique_id: "alice", nickname: "Alice" }, { client_id: "bob", unique_id: "bob", nickname: "Bob" }] }, toast: message => window.__warnings.push(message), resetVoiceSession() {} };
+            window.__noxa = { state: { activeTabID: "server-a", serverGeneration: 1, myUniqueID: "local-device-key", myClientID: uid, myChannelID: 0, muted: false, deafened: false, settings: { activation_mode: "continuous", blocked_users: [] }, clients: participantIDs.map(id => ({ client_id: id, unique_id: id, nickname: id[0].toUpperCase() + id.slice(1) })) }, toast: message => window.__warnings.push(message), resetVoiceSession() {} };
             window.go = { main: { App: {
                 PrivateCallForTab: (_tab, request) => window.requestCall(request),
                 GetICEServersForTab: async () => [],
@@ -60,9 +64,11 @@ test(`real peer call captures only after acceptance and tears down without joini
                 OpenPrivateCallDescriptionForTab: async (_tab, signal) => signal.description,
                 StopPrivateCallForTab: () => window.stopCall(),
                 JoinChannelForTab: async () => { window.__channelMoves++; return ""; },
+                SaveSettings: async value => { window.__savedSettings = structuredClone(value); return ""; },
+                GetSettings: async () => structuredClone(window.__savedSettings),
             } } };
             window.__callsModule = await import("/src/private-calls.js");
-        }, { uid, signalingMode });
+        }, { uid, signalingMode, participantIDs });
     }
     const alice = pages.get("alice"), bob = pages.get("bob");
     try {
@@ -71,8 +77,12 @@ test(`real peer call captures only after acceptance and tears down without joini
         expect(await alice.evaluate(() => window.__captures)).toBe(0);
         expect(await bob.evaluate(() => window.__captures)).toBe(0);
         await bob.getByRole("button", { name: "Accept", exact: true }).click();
+        if (pages.has("charlie")) {
+            await pages.get("charlie").getByRole("button", { name: "Accept", exact: true }).click();
+            await pages.get("charlie").getByRole("button", { name: "Mute microphone", exact: true }).click();
+        }
         for (const page of pages.values()) {
-            await expect.poll(() => page.evaluate(() => window.__peers.map(peer => peer.connectionState)), { timeout: 15000 }).toEqual(["connected"]);
+            await expect.poll(() => page.evaluate(() => window.__peers.map(peer => peer.connectionState)), { timeout: 15000 }).toEqual(participantIDs.slice(1).map(() => "connected"));
             expect(await page.evaluate(() => window.__captures)).toBe(1);
             expect(await page.evaluate(() => window.__channelMoves)).toBe(0);
             if (signalingMode !== "normal") {
@@ -89,8 +99,155 @@ test(`real peer call captures only after acceptance and tears down without joini
             expect(candidateBatches.some(batch => batch.from === "bob" && batch.candidates.length > 0)).toBe(true);
             expect(heldDescriptions.size).toBe(0);
         }
+        // Read the actual processed playback stream, not just gain settings or
+        // network counters: the receive graph must deliver decoded samples.
+        // Chrome's fake microphone has long silent intervals. Send a steady
+        // tone over the real peer connection for deterministic level checks.
+        await alice.evaluate(async () => {
+            const context = new AudioContext(); await context.resume();
+            const tone = context.createOscillator(), gain = context.createGain(), output = context.createMediaStreamDestination();
+            tone.frequency.value = 440; gain.gain.value = 0.1;
+            tone.connect(gain); gain.connect(output); tone.start();
+            const sender = window.__peers[0].getSenders().find(sender => sender.track?.kind === "audio");
+            window.__testTone = { context, tone, output, sender, original: sender.track };
+            await sender.replaceTrack(output.stream.getAudioTracks()[0]);
+        });
+        await bob.evaluate(async () => {
+            const context = new AudioContext(); await context.resume();
+            const source = context.createMediaStreamSource(document.querySelector("audio").srcObject);
+            const analyser = context.createAnalyser(); source.connect(analyser);
+            window.__playbackMeter = { context, source, analyser };
+        });
+        const playbackLevel = () => bob.evaluate(() => {
+            const analyser = window.__playbackMeter.analyser;
+            const samples = new Float32Array(analyser.fftSize); analyser.getFloatTimeDomainData(samples);
+            return Math.sqrt(samples.reduce((sum, sample) => sum + sample * sample, 0) / samples.length);
+        });
+        await expect.poll(playbackLevel).toBeGreaterThan(0.001);
+        // Playback settings must apply to an existing private call without
+        // replacing the peer, including master mute and per-user attenuation.
+        for (const [master, user, expected] of [[0, 100, 0], [50, 50, 0.25], [100, 200, 2], [200, 200, 4], [100, 100, 1]]) {
+            await bob.evaluate(({ master, user }) => {
+                window.__noxa.state.settings.volume = master;
+                window.__noxa.state.settings.user_volumes = { alice: user };
+            }, { master, user });
+            await expect.poll(() => bob.evaluate(() => document.querySelector("audio").volume * window.__callGains[0].gain.value)).toBe(expected);
+            if (expected === 0) await expect.poll(playbackLevel).toBeLessThan(0.00001);
+            else await expect.poll(async () => Math.abs(await playbackLevel() - 0.0707 * expected)).toBeLessThan(0.015);
+        }
+        await bob.evaluate(() => window.__playbackMeter.context.close());
+        await alice.evaluate(async () => {
+            const test = window.__testTone; await test.sender.replaceTrack(test.original);
+            test.tone.stop(); test.output.stream.getTracks().forEach(track => track.stop()); await test.context.close();
+        });
+        if (["normal", "group-media"].includes(signalingMode)) {
+            // Start camera from both negotiation roles after audio connected.
+            for (const page of pages.values()) {
+                await expect(page.getByRole("button", { name: "Start camera", exact: true })).toBeVisible();
+                await page.getByRole("button", { name: "Start camera", exact: true }).click();
+            }
+            for (const page of pages.values()) {
+                await expect(page.locator('.call-media-tile[data-local="false"][data-source="camera"] video')).toHaveCount(participantIDs.length - 1);
+                await expect.poll(() => page.evaluate(() => [...document.querySelectorAll('.call-media-tile[data-local="false"] video')].every(video => video.videoWidth > 0))).toBe(true);
+            }
+            await alice.evaluate(() => {
+                navigator.mediaDevices.getDisplayMedia = async options => {
+                    window.__displayOptions = options;
+                    const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+                    window.__displayStream = stream;
+                    return stream;
+                };
+            });
+            await alice.getByRole("checkbox", { name: "Include screen audio" }).check();
+            await alice.getByRole("button", { name: "Share screen", exact: true }).click();
+            await expect(bob.locator('.call-media-tile[data-local="false"][data-source="screen"] video')).toBeVisible();
+            await expect.poll(() => bob.evaluate(async () => [...(await window.__peers[0].getStats()).values()].filter(stat => stat.type === "inbound-rtp" && stat.kind === "video" && stat.bytesReceived > 0).length)).toBe(2);
+            expect(await alice.evaluate(() => window.__displayOptions.audio)).toBe(true);
+            expect(await alice.evaluate(() => window.__peers[0].getSenders().filter(sender => sender.track?.kind === "audio").length)).toBe(2);
+            if (signalingMode === "normal") {
+                const screen = bob.locator('.call-media-tile[data-local="false"][data-source="screen"]');
+                await screen.getByRole("slider", { name: "Shared audio", exact: true }).fill("35");
+                await expect.poll(() => bob.evaluate(() => window.__savedSettings?.user_share_volumes?.alice)).toBe(35);
+                await bob.evaluate(() => { window.__noxa.state.settings.muted_users = ["alice"]; });
+                await expect.poll(() => bob.evaluate(() => window.__callGains.slice(0, 2).map(gain => Number(gain.gain.value.toFixed(2))))).toEqual([0, 0.35]);
+                // A real tone on the separate negotiated share-audio sender must
+                // remain audible when the same member's microphone is muted.
+                await alice.evaluate(async () => {
+                    const context = new AudioContext(); await context.resume();
+                    const tone = context.createOscillator(), gain = context.createGain(), output = context.createMediaStreamDestination();
+                    gain.gain.value = 0.1; tone.connect(gain); gain.connect(output); tone.start();
+                    const sender = window.__peers[0].getSenders().find(sender => sender.track === window.__displayStream.getAudioTracks()[0]);
+                    window.__shareTone = { context, tone, output, sender, original: sender.track }; await sender.replaceTrack(output.stream.getAudioTracks()[0]);
+                });
+                await bob.evaluate(async () => {
+                    const context = new AudioContext(); await context.resume();
+                    const source = context.createMediaStreamSource(document.querySelector("audio").srcObject);
+                    const analyser = context.createAnalyser(); source.connect(analyser); window.__playbackMeter = { context, source, analyser };
+                });
+                await expect.poll(async () => Math.abs(await playbackLevel() - 0.0707 * 0.35)).toBeLessThan(0.008);
+                await screen.getByRole("button", { name: "Mute shared audio", exact: true }).click();
+                await expect.poll(playbackLevel).toBeLessThan(0.00001);
+                await screen.getByRole("button", { name: "Unmute shared audio", exact: true }).click();
+                await expect.poll(playbackLevel).toBeGreaterThan(0.015);
+                await bob.evaluate(() => { window.__noxa.state.settings.muted_users = []; return window.__playbackMeter.context.close(); });
+                await alice.evaluate(async () => {
+                    const tone = window.__shareTone; await tone.sender.replaceTrack(tone.original); tone.tone.stop(); tone.output.stream.getTracks().forEach(track => track.stop()); await tone.context.close();
+                });
+            }
+            await alice.getByRole("button", { name: "Stop camera", exact: true }).click();
+            await expect(bob.locator('.call-media-tile[data-local="false"][data-source="camera"]')).toHaveCount(participantIDs.length - 2);
+            await expect(bob.locator('.call-media-tile[data-local="false"][data-source="screen"]')).toHaveCount(1);
+            await alice.getByRole("button", { name: "Stop sharing", exact: true }).click();
+            await expect(bob.locator('.call-media-tile[data-local="false"][data-source="screen"]')).toHaveCount(0);
+            expect(await alice.evaluate(() => window.__displayStream.getTracks().every(track => track.readyState === "ended"))).toBe(true);
+        }
         await alice.getByRole("button", { name: "Mute microphone", exact: true }).click();
+        await expect(alice.getByRole("button", { name: "Unmute microphone", exact: true })).toHaveAttribute("aria-pressed", "true");
+        await expect(alice.getByRole("button", { name: "Unmute microphone", exact: true })).toHaveClass(/voice-control/);
         await expect.poll(() => alice.evaluate(() => window.__streams[0].getAudioTracks()[0].enabled)).toBe(false);
+        await bob.evaluate(() => { window.__noxa.state.settings.activation_mode = "ptt"; });
+        const talk = bob.getByRole("button", { name: "Hold to talk", exact: true });
+        await expect(talk).toBeVisible();
+        await expect.poll(() => bob.evaluate(() => window.__streams[0].getAudioTracks()[0].enabled)).toBe(false);
+        await talk.focus(); await bob.keyboard.down("Space");
+        await expect(talk).toHaveAttribute("aria-pressed", "true");
+        await expect.poll(() => bob.evaluate(() => window.__streams[0].getAudioTracks()[0].enabled)).toBe(true);
+        await bob.keyboard.up("Space");
+        await expect.poll(() => bob.evaluate(() => window.__streams[0].getAudioTracks()[0].enabled)).toBe(false);
+        await bob.evaluate(() => { window.__noxa.state.settings.activation_mode = "continuous"; });
+        await expect(talk).toHaveCount(0);
+        await expect.poll(() => bob.evaluate(() => window.__streams[0].getAudioTracks()[0].enabled)).toBe(true);
+        await bob.evaluate(() => {
+            window.__sinks = [];
+            document.querySelector("audio").setSinkId = async id => { window.__sinks.push(id); };
+            window.__noxa.state.settings.playback_device_id = "headset";
+        });
+        await expect.poll(() => bob.evaluate(() => window.__sinks)).toEqual(["headset"]);
+        await bob.evaluate(() => { window.__noxa.state.settings.playback_device_id = ""; });
+        await expect.poll(() => bob.evaluate(() => window.__sinks)).toEqual(["headset", ""]);
+        // A delayed old device switch must settle before the new one runs.
+        await bob.evaluate(() => {
+            window.__sinks = [];
+            document.querySelector("audio").setSinkId = async id => {
+                window.__sinks.push(id);
+                if (id === "slow") await new Promise(resolve => { window.__releaseSink = resolve; });
+                window.__currentSink = id;
+            };
+            window.__noxa.state.settings.playback_device_id = "slow";
+        });
+        await expect.poll(() => bob.evaluate(() => window.__sinks)).toEqual(["slow"]);
+        await bob.evaluate(() => { window.__noxa.state.settings.playback_device_id = "latest"; });
+        await bob.evaluate(() => window.__releaseSink());
+        await expect.poll(() => bob.evaluate(() => window.__currentSink)).toBe("latest");
+        await bob.evaluate(() => {
+            window.__failedSinkCalls = 0;
+            document.querySelector("audio").setSinkId = async () => { window.__failedSinkCalls++; throw new Error("test output unavailable"); };
+            window.__noxa.state.settings.playback_device_id = "unavailable";
+        });
+        await expect.poll(() => bob.evaluate(() => window.__warnings.filter(w => w.includes("test output unavailable")).length)).toBe(1);
+        await bob.evaluate(() => { window.__noxa.state.settings.activation_mode = "ptt"; });
+        await expect(talk).toBeVisible();
+        expect(await bob.evaluate(() => window.__failedSinkCalls)).toBe(1);
         await bob.getByRole("button", { name: "Mute call audio", exact: true }).click();
         expect(await bob.evaluate(() => [...document.querySelectorAll("audio")].every(audio => audio.muted))).toBe(true);
         await alice.getByRole("button", { name: "End call", exact: true }).click();
@@ -103,6 +260,33 @@ test(`real peer call captures only after acceptance and tears down without joini
         throw error;
     } finally { await Promise.all([...pages.values()].map(page => page.close())); }
 });
+}
+
+for (const source of ["camera", "screen"]) {
+    test(`late private-call ${source} capture after ending a call is released`, async ({ page }) => {
+        await mountCallRaceFixture(page);
+        await page.evaluate(async source => {
+            await window.__callsModule.startPrivateCall("alice");
+            window.__mediaPermissionRequested = false;
+            const getMedia = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
+            const delayed = async () => {
+                window.__mediaPermissionRequested = true;
+                await new Promise(resolve => { window.__allowMedia = resolve; });
+                const stream = await getMedia({ video: true, audio: source === "screen" });
+                window.__lateMedia = stream;
+                return stream;
+            };
+            if (source === "camera") navigator.mediaDevices.getUserMedia = delayed;
+            else navigator.mediaDevices.getDisplayMedia = delayed;
+        }, source);
+        await page.getByRole("button", { name: source === "camera" ? "Start camera" : "Share screen", exact: true }).click();
+        await expect.poll(() => page.evaluate(() => window.__mediaPermissionRequested)).toBe(true);
+        await page.getByRole("button", { name: "End call", exact: true }).click();
+        await page.evaluate(() => window.__allowMedia());
+        await expect.poll(() => page.evaluate(() => window.__lateMedia?.getTracks().every(track => track.readyState === "ended"))).toBe(true);
+        await expect(page.locator(".call-media-tile")).toHaveCount(0);
+        await expect(page.locator(".private-call-panel")).toHaveCount(0);
+    });
 }
 
 // These races use the real browser capture/peer APIs. Only the native control

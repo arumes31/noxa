@@ -20,7 +20,7 @@ func TestMediaEgressRetiresFailedOutput(t *testing.T) {
 	for _, failure := range []struct {
 		name string
 		err  error
-	}{{"deadline", os.ErrDeadlineExceeded}, {"closed transport", io.ErrClosedPipe}} {
+	}{{"closed transport", io.ErrClosedPipe}} {
 		t.Run(failure.name, func(t *testing.T) {
 			registry := &mediaEgressRegistry{}
 			stream := &mediaEgressStream{active: true, registry: registry}
@@ -44,6 +44,50 @@ func TestMediaEgressRetiresFailedOutput(t *testing.T) {
 				t.Error("failed output accepted another packet")
 			}
 		})
+	}
+}
+
+func TestMediaEgressRecoversAfterTimeout(t *testing.T) {
+	registry := &mediaEgressRegistry{}
+	stream := &mediaEgressStream{active: true, registry: registry}
+	source := &rtp.Packet{Header: rtp.Header{Version: 2}, Payload: []byte{1}}
+	checks := 0
+	ticket := mediaTicket{guard: func(_ MediaDelivery, write func() error) error {
+		checks++
+		return write()
+	}}
+	packet, _ := stream.prepare(source, ticket)
+	queued, _ := stream.prepare(source, ticket)
+	attempts := 0
+	writer := interceptor.RTPWriterFunc(func(_ *rtp.Header, payload []byte, _ interceptor.Attributes) (int, error) {
+		attempts++
+		if attempts == 1 {
+			return 0, &net.OpError{Op: "write", Net: "udp", Err: os.ErrDeadlineExceeded}
+		}
+		return len(payload), nil
+	})
+	if _, err := stream.write(&packet.Header, packet.Payload, nil, writer); !errors.Is(err, os.ErrDeadlineExceeded) {
+		t.Fatalf("write error = %v", err)
+	}
+	// Neither the failed packet's NACK nor an already queued packet may retry.
+	_, _ = stream.write(&packet.Header, packet.Payload, nil, writer)
+	_, _ = stream.write(&queued.Header, queued.Payload, nil, writer)
+	if attempts != 1 {
+		t.Fatalf("stale packets retried: %d", attempts)
+	}
+	if _, ok := stream.prepare(source, ticket); ok {
+		t.Fatal("failed transport accepted a packet during cooldown")
+	}
+	time.Sleep(mediaSocketWriteTimeout + 10*time.Millisecond)
+	fresh, ok := stream.prepare(source, ticket)
+	if !ok {
+		t.Fatal("transient timeout permanently disabled output")
+	}
+	if n, err := stream.write(&fresh.Header, fresh.Payload, nil, writer); err != nil || n != len(source.Payload) {
+		t.Fatalf("recovered write = %d, %v", n, err)
+	}
+	if attempts != 2 || checks != 2 {
+		t.Fatalf("writes = %d, authorization checks = %d; want 2 each", attempts, checks)
 	}
 }
 

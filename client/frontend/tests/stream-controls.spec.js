@@ -111,6 +111,29 @@ test("three active streams never overlap in a height-constrained chat pane", asy
     }
 });
 
+test("one channel member can show camera and screen tiles and stop either independently", async ({ page }) => {
+    await page.evaluate(() => {
+        window.__streams.streams.push({ publisher_id: "alice", slot: "cam", generation: "3", preview_at: 0, watch_revision: "0" });
+        const track = document.createElement("canvas").captureStream(1).getVideoTracks()[0];
+        Object.defineProperty(track, "id", { value: "alice|cam" });
+        window.__streams.camera = track;
+        window.__streams.controls.receiveStreamTrack(track, { client_id: "alice" });
+    });
+    const camera = page.locator('[data-publisher="alice"][data-slot="cam"]');
+    const screen = page.locator('[data-publisher="alice"][data-slot="screen"]');
+    await camera.getByRole("button", { name: "Watch", exact: true }).click();
+    await screen.getByRole("button", { name: "Watch", exact: true }).click();
+    await expect(page.locator('.vtile[data-clid="alice"]')).toHaveCount(2);
+    expect(await page.evaluate(() => [window.__streams.camera.enabled, window.__streams.tracks.get("alice").enabled, window.__streams.sharedAudio.enabled])).toEqual([true, true, true]);
+    await page.locator('.vtile[data-clid="alice"]').filter({ has: page.locator('video') }).first().getByRole("button", { name: "Stop watching", exact: true }).click();
+    expect(await page.evaluate(() => [window.__streams.camera.enabled, window.__streams.tracks.get("alice").enabled, window.__streams.sharedAudio.enabled])).toEqual([false, true, true]);
+    await expect(page.locator('.vtile[data-clid="alice"]')).toHaveCount(1);
+    await page.locator('.vtile[data-clid="alice"]').getByRole("button", { name: "Stop watching", exact: true }).click();
+    expect(await page.evaluate(() => window.__streams.sharedAudio.enabled)).toBe(false);
+    await camera.getByRole("button", { name: "Watch", exact: true }).click();
+    expect(await page.evaluate(() => [window.__streams.camera.enabled, window.__streams.sharedAudio.enabled])).toEqual([true, false]);
+});
+
 test("catalog invalidation stops publication without cancelling a newly accepted generation", async ({ page }) => {
     const result = await page.evaluate(async () => {
         const p = await import("/src/stream-publication.js");

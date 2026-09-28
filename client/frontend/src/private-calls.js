@@ -1,7 +1,11 @@
 import { t } from "./i18n.js";
-import { captureConstraints, getUserVolume, isUserMuted } from "./audio.js";
+import { captureConstraints, createRemoteAudioSource, getUserVolume, isUserMuted, getUserShareVolume, isUserShareMuted } from "./audio.js";
 import { closeDialog, confirmDialog, isCurrentServerDialog, mountServerDialog } from "./modal.js";
 import { sessionUserID } from "./session-identity.js";
+import { memberTarget } from "./member-target.js";
+import { icon } from "./icons.js";
+import { answerCallMedia, createCallMedia, offerCallMedia } from "./private-call-media.js";
+import { callUndockButton, closeCallUndock } from "./call-undocking.js";
 
 const V = () => window.__noxa;
 const app = () => window.go.main.App;
@@ -25,11 +29,26 @@ function failCall(owner, error) {
     report(error); stopPrivateCall();
 }
 function node(tag, text) { const element = document.createElement(tag); if (text !== undefined) element.textContent = text; return element; }
-function action(key, callback) { const button = node("button", t(key)); button.type = "button"; button.onclick = callback; return button; }
+function action(key, callback) {
+    const button = node("button"); button.type = "button"; button.className = "voice-control call-control"; button.onclick = callback;
+    const symbol = { "call.mute": "mic", "call.unmute": "micOff", "call.deafen": "headphones", "call.undeafen": "headphonesOff", "call.end": "disconnect", "call.decline": "disconnect", "call.accept": "check", "workspace.ptt": "mic" }[key];
+    if (symbol) button.innerHTML = icon(symbol);
+    button.append(node("span", t(key)));
+    if (["call.mute", "call.unmute", "call.deafen", "call.undeafen", "workspace.ptt"].includes(key)) button.setAttribute("aria-pressed", String(["call.unmute", "call.undeafen"].includes(key)));
+    if (["call.end", "call.decline"].includes(key)) button.classList.add("call-end");
+    return button;
+}
 function closePeer(peer) {
     clearTimeout(peer.candidateTimer); clearTimeout(peer.connectTimer);
     peer.pc.onicecandidate = null; peer.pc.close();
     peer.audio.srcObject = null; peer.audio.remove();
+    peer.closeMedia?.();
+    for (const remote of peer.audioSources?.values() || []) {
+        remote.src.disconnect();
+        if (remote.playback) { remote.playback.pause(); remote.playback.srcObject = null; }
+    }
+    peer.audioSources?.clear(); peer.gain?.disconnect(); peer.shareGain?.disconnect(); peer.analyser?.disconnect();
+    peer.destination?.stream.getTracks().forEach(track => track.stop());
     peer.localCandidates.length = 0; peer.remoteCandidates.length = 0;
 }
 
@@ -65,10 +84,12 @@ export function stopPrivateCall() {
     rememberCall(callKey(owner.tabID, owner.generation, owner.call.id), Infinity);
     clearInterval(owner.poll);
     clearInterval(owner.audioTick);
+    owner.media.close();
     owner.stream?.getTracks().forEach(track => track.stop());
     owner.monitorTrack?.stop();
     void owner.context?.close().catch(() => {});
     for (const peer of owner.peers.values()) closePeer(peer);
+    closeCallUndock(owner.panel);
     owner.panel.remove();
     if (!owner.call.ended_at) void app().StopPrivateCallForTab(owner.tabID, owner.call.id).catch(() => {});
 }
@@ -98,12 +119,16 @@ async function applyCall(call, tabID, generation) {
     if (!session) {
         const panel = node("aside"); panel.className = "private-call-panel"; panel.setAttribute("aria-label", t("call.active"));
         session = { call, tabID, generation, uid, panel, peers: new Map(), stream: null, capture: null, ice: [], muted: false, deafened: false, pollBusy: false, signals: Promise.resolve(), queuedSignals: 0, nextSignalAt: 0 };
+        session.media = createCallMedia(session, { current, acceptedPeer, label, report, render });
         document.body.append(panel);
         if (me.state === "ringing") window.__noxaNotify?.notify("poke", t("call.incomingFrom", { name: label(call.caller) }), { uid: call.caller });
         const owner = session;
+        const releaseHold = () => { owner.ptt = false; if (current(owner)) syncAudio(owner); };
+        panel.addEventListener("noxa-call-docking", releaseHold);
+        panel.addEventListener("noxa-call-blur", releaseHold);
         owner.audioTick = setInterval(() => { if (current(owner)) syncAudio(owner); }, 50);
         owner.poll = setInterval(async () => {
-            if (!current(owner) || (owner.stream && V().state.myChannelID > 0)) { stopPrivateCall(); return; }
+            if (!current(owner) || V().state.myChannelID > 0) { stopPrivateCall(); return; }
             syncAudio(owner);
             if (owner.pollBusy) return;
             owner.pollBusy = true;
@@ -118,6 +143,7 @@ async function applyCall(call, tabID, generation) {
     for (const [peerID, peer] of owner.peers) {
         if (!accepted.some(member => member.unique_id === peerID) || blocked(peerID)) { closePeer(peer); owner.peers.delete(peerID); }
     }
+    owner.media.updateGrid();
     if (me.state !== "accepted" || accepted.length < 2) return;
     try {
         await ensureCapture(owner);
@@ -140,11 +166,17 @@ async function applyCall(call, tabID, generation) {
 }
 
 function render(owner) {
+    owner.ptt = false;
+    owner.hold = null;
     const me = owner.call.participants.find(peer => peer.unique_id === owner.uid);
     const incoming = me?.state === "ringing";
     const accepted = owner.call.participants.filter(peer => peer.state === "accepted").length;
     const title = node("strong", t(incoming ? "call.incoming" : accepted < 2 ? "call.ringing" : "call.active"));
-    const people = node("p", owner.call.participants.filter(peer => ["accepted", "ringing"].includes(peer.state)).map(peer => label(peer.unique_id)).join(", "));
+    const people = node("p");
+    for (const participant of owner.call.participants.filter(peer => ["accepted", "ringing"].includes(peer.state))) {
+        const person = node("button", label(participant.unique_id)); person.type = "button"; person.className = "call-participant";
+        memberTarget(person, participant.unique_id, label(participant.unique_id), { clientID: participant.client_id }); people.append(person);
+    }
     const controls = node("div"); controls.className = "private-call-controls";
     if (incoming) {
         controls.append(action("call.accept", async () => {
@@ -156,17 +188,44 @@ function render(owner) {
         }), action("call.decline", stopPrivateCall));
     } else {
         controls.append(action(owner.muted ? "call.unmute" : "call.mute", () => { owner.muted = !owner.muted; syncAudio(owner); render(owner); }), action(owner.deafened ? "call.undeafen" : "call.deafen", () => { owner.deafened = !owner.deafened; syncAudio(owner); render(owner); }), action("call.end", stopPrivateCall));
-        if ((V().state.settings?.activation_mode || "ptt") === "ptt") {
-            const hold = action("workspace.ptt");
-            const release = () => { owner.ptt = false; syncAudio(owner); };
-            hold.onpointerdown = event => { hold.setPointerCapture(event.pointerId); owner.ptt = true; syncAudio(owner); };
-            hold.onpointerup = release; hold.onpointercancel = release; hold.onlostpointercapture = release; hold.onblur = release;
-            hold.onkeydown = event => { if (event.key === " " || event.key === "Enter") { event.preventDefault(); owner.ptt = true; syncAudio(owner); } };
-            hold.onkeyup = release;
-            controls.prepend(hold);
-        }
+        controls.append(owner.media.controls());
+        controls.append(callUndockButton(owner.panel));
+        const hold = action("workspace.ptt"); owner.hold = hold;
+        const release = () => { owner.ptt = false; syncAudio(owner); };
+        hold.onpointerdown = event => { hold.setPointerCapture(event.pointerId); owner.ptt = true; syncAudio(owner); };
+        hold.onpointerup = release; hold.onpointercancel = release; hold.onlostpointercapture = release; hold.onblur = release;
+        hold.onkeydown = event => { if (event.key === " " || event.key === "Enter") { event.preventDefault(); owner.ptt = true; syncAudio(owner); } };
+        hold.onkeyup = release;
     }
-    owner.panel.replaceChildren(title, people, controls);
+    owner.controls = controls;
+    syncPTTControl(owner, V().state.settings?.activation_mode || "ptt");
+    owner.panel.replaceChildren(title, people, owner.media.grid, controls);
+    owner.media.updateGrid();
+}
+
+function syncPTTControl(owner, mode) {
+    if (owner.activationMode !== mode) { owner.ptt = false; owner.activationMode = mode; }
+    if (!owner.hold) return;
+    if (mode === "ptt") {
+        if (owner.hold.parentNode !== owner.controls) owner.controls.prepend(owner.hold);
+    } else if (owner.hold.parentNode) {
+        if (document.activeElement === owner.hold) owner.hold.nextElementSibling?.focus();
+        owner.hold.remove();
+    }
+}
+
+function syncPeerOutput(owner, uid, peer) {
+    const device = V().state.settings?.playback_device_id || "";
+    if (typeof peer.audio.setSinkId !== "function" || peer.sinkRequested === device) return;
+    peer.sinkRequested = device;
+    // Serialize native device switches; a slower old switch cannot win last.
+    peer.sinkTask = (peer.sinkTask || Promise.resolve()).then(async () => {
+        if (!current(owner) || owner.peers.get(uid) !== peer || peer.sinkRequested !== device) return;
+        try { await peer.audio.setSinkId(device); }
+        catch (error) {
+            if (current(owner) && owner.peers.get(uid) === peer && peer.sinkRequested === device) report(error);
+        }
+    });
 }
 
 async function ensureCapture(owner) {
@@ -177,14 +236,14 @@ async function ensureCapture(owner) {
         catch { stream = new MediaStream(); if (current(owner)) V().toast?.(t("call.audioFailed"), "warn"); }
         if (!current(owner)) { stream.getTracks().forEach(track => track.stop()); return; }
         owner.stream = stream;
+        owner.context = new AudioContext();
         if (stream.getAudioTracks()[0]) {
-            owner.context = new AudioContext();
             owner.monitorTrack = stream.getAudioTracks()[0].clone(); owner.monitorTrack.enabled = true;
             const source = owner.context.createMediaStreamSource(new MediaStream([owner.monitorTrack]));
             owner.analyser = owner.context.createAnalyser(); owner.analyser.fftSize = 512;
             source.connect(owner.analyser); owner.samples = new Uint8Array(owner.analyser.frequencyBinCount);
-            void owner.context.resume().catch(() => {});
         }
+        void owner.context.resume().catch(() => {});
         owner.ice = await app().GetICEServersForTab(owner.tabID);
         syncAudio(owner);
     })();
@@ -192,18 +251,25 @@ async function ensureCapture(owner) {
 }
 
 function syncAudio(owner) {
+    owner.hold?.setAttribute("aria-pressed", String(!!owner.ptt));
     const state = V().state;
     const mode = state.settings?.activation_mode || "ptt";
+    syncPTTControl(owner, mode);
     if (owner.analyser) {
         owner.analyser.getByteTimeDomainData(owner.samples);
         const level = owner.samples.reduce((sum, value) => sum + Math.abs(value-128), 0) / owner.samples.length / 128;
+        owner.speaking = level > 0.015;
         if (level > (state.settings?.vad_threshold ?? 50) / 100 * 0.2) owner.lastVoice = Date.now();
     }
     const transmit = mode === "continuous" || (mode === "vad" ? Date.now() - (owner.lastVoice || 0) < 300 : owner.ptt || state.pttActive);
     for (const track of owner.stream?.getAudioTracks() || []) track.enabled = !!(!owner.muted && !state.muted && transmit);
     for (const [uid, peer] of owner.peers) {
-        peer.audio.muted = !!(owner.deafened || state.deafened || blocked(uid) || isUserMuted(uid));
-        peer.audio.volume = Math.min(1, Math.max(0, getUserVolume(uid)));
+        if (!acceptedPeer(owner, uid)) { closePeer(peer); owner.peers.delete(uid); owner.media.updateGrid(); continue; }
+        syncPeerOutput(owner, uid, peer);
+        peer.audio.muted = !!(owner.deafened || state.deafened || blocked(uid));
+        const master = Math.min(2, Math.max(0, (state.settings?.volume ?? 100) / 100));
+        if (peer.gain) peer.gain.gain.value = isUserMuted(uid) ? 0 : master * Math.min(2, Math.max(0, getUserVolume(uid)));
+        if (peer.shareGain) peer.shareGain.gain.value = isUserShareMuted(uid) ? 0 : master * getUserShareVolume(uid);
     }
 }
 
@@ -214,6 +280,7 @@ function ensurePeer(owner, uid) {
     // Keep playback separate from the panel, which rerenders as call state changes.
     audio.hidden = true; document.body.append(audio);
     const peer = { pc, audio, started: false, chain: Promise.resolve(), localCandidates: [], remoteCandidates: [], localCandidateCount: 0, remoteCandidateCount: 0, descriptionSent: false, candidateTimer: null };
+    peer.closeMedia = () => owner.media.closePeer(peer);
     owner.peers.set(uid, peer);
     peer.connectTimer = setTimeout(() => {
         if (acceptedPeer(owner, uid) && owner.peers.get(uid) === peer && pc.connectionState !== "connected") failCall(owner, t("call.connecting"));
@@ -230,11 +297,32 @@ function ensurePeer(owner, uid) {
     // otherwise produces a receive-only answer despite a live microphone.
     if (track) pc.addTrack(track, owner.stream);
     else if (owner.uid < uid) pc.addTransceiver("audio", { direction: "recvonly" });
+    if (owner.uid < uid) {
+        offerCallMedia(peer);
+        owner.media.attachChannel(peer, uid, pc.createDataChannel("call-media"));
+        void owner.media.syncPeer(peer, uid).catch(report);
+    } else pc.ondatachannel = event => owner.media.attachChannel(peer, uid, event.channel);
     pc.ontrack = event => {
-        if (!current(owner)) return;
-        audio.srcObject = event.streams[0] || new MediaStream([event.track]);
+        if (!acceptedPeer(owner, uid) || owner.peers.get(uid) !== peer) return;
+        if (event.track.kind === "video") { owner.media.receiveVideo(peer, event); return; }
+        peer.audioSources ||= new Map();
+        if (peer.audioSources.has(event.track.id)) return;
+        const remote = createRemoteAudioSource(owner.context, event.track);
+        peer.audioSources.set(event.track.id, remote);
+        if (!peer.gain) {
+            peer.gain = owner.context.createGain();
+            peer.destination = owner.context.createMediaStreamDestination();
+            peer.gain.connect(peer.destination);
+            peer.shareGain = owner.context.createGain();
+            peer.shareGain.connect(peer.destination);
+            peer.analyser = owner.context.createAnalyser(); peer.analyser.fftSize = 256;
+            peer.samples = new Uint8Array(peer.analyser.frequencyBinCount);
+            peer.gain.connect(peer.analyser);
+            audio.srcObject = peer.destination.stream;
+        }
+        const audioIndex = pc.getTransceivers().filter(transceiver => transceiver.receiver.track.kind === "audio").indexOf(event.transceiver);
+        remote.src.connect(audioIndex === 1 ? peer.shareGain : peer.gain);
         syncAudio(owner);
-        if (typeof audio.setSinkId === "function" && V().state.settings?.playback_device_id) void audio.setSinkId(V().state.settings.playback_device_id).catch(report);
         void audio.play().catch(report);
     };
     pc.onconnectionstatechange = () => {
@@ -319,6 +407,8 @@ export async function privateCallSignal(signal) {
             if (description.type === "offer") {
                 if (owner.uid < signal.from || peer.pc.signalingState !== "stable") return;
                 await peer.pc.setRemoteDescription({ type: "offer", sdp: description.sdp });
+                answerCallMedia(peer);
+                await owner.media.syncPeer(peer, signal.from);
                 await peer.pc.setLocalDescription(await peer.pc.createAnswer());
                 await sendDescription(owner, signal.from, peer.pc);
             } else if (description.type === "answer" && peer.pc.signalingState === "have-local-offer") await peer.pc.setRemoteDescription({ type: "answer", sdp: description.sdp });
@@ -327,6 +417,24 @@ export async function privateCallSignal(signal) {
         await peer.chain;
     } catch (error) { failCall(owner, error); }
 }
+
+function overlaySnapshot() {
+    const owner = session;
+    if (!owner || !current(owner)) return null;
+    return {
+        active: true, label: t("call.active"), muted: !!(owner.muted || V().state.muted), deafened: !!(owner.deafened || V().state.deafened),
+        speakers: owner.call.participants.filter(participant => participant.state === "accepted").map(participant => {
+            const uid = participant.unique_id, peer = owner.peers.get(uid);
+            let speaking = uid === owner.uid && !!owner.speaking && !!owner.stream?.getAudioTracks().some(track => track.enabled);
+            if (peer?.analyser) {
+                peer.analyser.getByteTimeDomainData(peer.samples);
+                speaking = !peer.audio.muted && peer.samples.some(sample => Math.abs(sample - 128) > 3);
+            }
+            return { name: label(uid), speaking, muted: uid === owner.uid ? !!(owner.muted || V().state.muted) : isUserMuted(uid) || blocked(uid) };
+        }),
+    };
+}
+window.__noxaPrivateCalls = { overlaySnapshot };
 
 export async function showCallHistory() {
     const overlay = node("div"); overlay.className = "dlg-overlay";

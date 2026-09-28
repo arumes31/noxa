@@ -32,6 +32,9 @@ func findMainWindow() uintptr {
 	}
 	var hwnd uintptr
 	cb := syscall.NewCallback(func(h uintptr, l uintptr) uintptr {
+		if isGamingOverlayWindow(h) {
+			return 1
+		}
 		var windowPID uint32
 		// #nosec G103 -- GetWindowThreadProcessId requires a writable DWORD pointer.
 		_, _, _ = procGetWindowPID.Call(h, uintptr(unsafe.Pointer(&windowPID)))

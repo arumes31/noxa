@@ -1,5 +1,12 @@
 // Settings translations. Keep both catalogs and placeholder names in sync.
 export const settingsEnglish = {
+    "settings.camera": "Camera",
+    "settings.timing.saved": "Applies immediately after saving.",
+    "settings.timing.reconnect": "Requires voice reconnect after saving.",
+    "settings.timing.camera": "After saving, start or restart the camera to use these settings. Restart the local test to preview them.",
+    "settings.timing.startup": "After saving, takes effect at the next app start.",
+    "settings.timing.appearancePreview": "Preview now; Apply or OK keeps the change. Cancel restores the saved appearance.",
+    "settings.timing.localPreview": "Preview only — stays on this device and does not start a call.",
     "settings.positional.enabled": "Positional voice audio",
     "settings.positional.hint": "Opt in to share game positions with your voice channel. A game adapter must update the local input file. Missing or stale data restores normal voice; screen-share audio stays unchanged.",
     "settings.positional.copyPath": "Copy game input path",
@@ -289,7 +296,6 @@ export const settingsEnglish = {
     "settings.devices.failed": "Could not list audio devices: {detail}. Check media permissions, then retry.",
     "settings.calibration.result": " noise floor {floor}% → threshold set to {threshold}",
     "settings.ptt.delay": "PTT release delay (ms)",
-    "settings.capture.reconnect": "Capture changes apply when voice next reconnects.",
     "settings.identity.level": "security level {level} (counter {counter})",
     "settings.identity.delete": "Delete identity \"{name}\"?",
     "settings.identity.delete.unbacked": "\"{name}\" has NEVER been exported. Deleting it loses that account on every server forever. Delete anyway?",
@@ -349,6 +355,13 @@ export const settingsEnglish = {
 };
 
 export const settingsGerman = {
+    "settings.camera": "Kamera",
+    "settings.timing.saved": "Gilt sofort nach dem Speichern.",
+    "settings.timing.reconnect": "Nach dem Speichern die Sprachverbindung neu herstellen.",
+    "settings.timing.camera": "Nach dem Speichern die Kamera starten oder neu starten, um diese Einstellungen zu nutzen. Für die Vorschau den lokalen Test neu starten.",
+    "settings.timing.startup": "Gilt nach dem Speichern ab dem nächsten App-Start.",
+    "settings.timing.appearancePreview": "Sofortige Vorschau; Übernehmen oder OK behält die Änderung. Abbrechen stellt das gespeicherte Aussehen wieder her.",
+    "settings.timing.localPreview": "Nur Vorschau — bleibt auf diesem Gerät und startet keinen Anruf.",
     "settings.positional.enabled": "Positionsabhängiger Sprachklang",
     "settings.positional.hint": "Teilt bei Aktivierung Spielpositionen mit deinem Sprachkanal. Ein Spieladapter muss die lokale Eingabedatei aktualisieren. Ohne aktuelle Daten bleibt der Sprachklang normal; Bildschirmton bleibt unverändert.",
     "settings.positional.copyPath": "Pfad für Spieldaten kopieren",
@@ -638,7 +651,6 @@ export const settingsGerman = {
     "settings.devices.failed": "Audiogeräte konnten nicht aufgelistet werden: {detail}. Prüfe die Medienberechtigungen und versuche es erneut.",
     "settings.calibration.result": " Grundrauschen {floor}% → Schwellenwert auf {threshold} gesetzt",
     "settings.ptt.delay": "PTT-Nachlaufzeit (ms)",
-    "settings.capture.reconnect": "Aufnahmeänderungen gelten ab der nächsten Sprachverbindung.",
     "settings.identity.level": "Sicherheitsstufe {level} (Zähler {counter})",
     "settings.identity.delete": "Identität „{name}“ löschen?",
     "settings.identity.delete.unbacked": "„{name}“ wurde NOCH NIE exportiert. Beim Löschen verlierst du dieses Konto auf allen Servern dauerhaft. Trotzdem löschen?",

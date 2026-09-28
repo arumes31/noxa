@@ -1,5 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { registerHooks } from "node:module";
+
+// Vite owns stylesheet loading; these Node tests exercise module behavior.
+registerHooks({
+    load(url, context, nextLoad) {
+        if (url.endsWith(".css")) return { format: "module", source: "export {};", shortCircuit: true };
+        return nextLoad(url, context);
+    },
+});
 
 const globalRestorations = new WeakMap();
 

@@ -1,10 +1,10 @@
 // settings-ui.js — TS3-style settings dialog with left icon nav.
 import { icon } from "./icons.js";
+import { gamingOverlaySettings } from "./gaming-overlay-settings.js";
 import { captureMediaScope, mediaScopeIsCurrent, setWhisperRouting } from "./media-controls.js";
 import { currentLanguage, t } from "./i18n.js";
 import { copyToClipboard } from "./clipboard.js";
-import { captureConstraints } from "./audio.js";
-import { MicCheck } from "./mic-check.js";
+import { createMicCheck } from "./mic-check-ui.js";
 import { percentageInput } from "./percentage-input.js";
 import { previewSounds, previewSpeech, speechPreviewLabel, audioStatus, SPEECH_EVENTS, stopPreviews, updateSoundOutput, SOUND_EVENT_GROUPS, testAll } from "./sounds.js";
 import { MATRIX_EVENTS, defaultMatrixRow } from "./notifications.js";
@@ -12,13 +12,14 @@ import { renderVoiceHints } from "./workspace-ui.js";
 import { associateControlLabel, wrappedIndex } from "./a11y.js";
 import { createMediaDeviceInventory } from "./media-devices.js";
 import { closeDialog, mountDialog } from "./modal.js";
-import { cameraConstraints } from "./video.js";
+import { captureCamera, prepareCameraBackground, applyCameraPreview } from "./camera-capture.js";
 
 const V = () => window.__noxa;
 
 const PAGES = [
     { id: "application", icon: "settings", label: "settings.application" },
     { id: "capture", icon: "mic", label: "settings.capture" },
+    { id: "camera", icon: "camera", label: "settings.camera" },
     { id: "playback", icon: "speaker", label: "settings.playback" },
     { id: "hotkeys", icon: "keyboard", label: "settings.hotkeys" },
     { id: "whisper", icon: "whisper", label: "settings.whisper" },
@@ -47,6 +48,7 @@ async function commit(snapshot) {
     // when persistence succeeds but applying an audio device subsequently fails.
     for (const key of Object.keys(draft)) delete draft[key];
     Object.assign(draft, structuredClone(V().state.settings));
+    window.dispatchEvent(new Event("noxa-camera-preferences-changed"));
     renderVoiceHints();
     try {
         await V().applyLiveAudioSettings();
@@ -62,7 +64,20 @@ async function commit(snapshot) {
     return true;
 }
 
-function row(label, control) {
+let timingSerial = 0;
+
+function timingNote(key, controls = []) {
+    const note = document.createElement("div");
+    note.className = "settings-timing";
+    note.id = `settings-timing-${++timingSerial}`;
+    note.textContent = t(`settings.timing.${key}`);
+    for (const control of controls) {
+        control.setAttribute("aria-describedby", [control.getAttribute("aria-describedby"), note.id].filter(Boolean).join(" "));
+    }
+    return note;
+}
+
+function row(label, control, timing) {
     const el = document.createElement("div");
     el.className = "set-row";
     const l = document.createElement("label");
@@ -79,6 +94,13 @@ function row(label, control) {
     if (control.querySelector?.(".audio-percent")) {
         associateControlLabel(l, control.querySelector('input[type="range"]'));
         control.querySelector(".audio-percent").setAttribute("aria-label", label + " (%)");
+    }
+    if (timing) {
+        const caption = document.createElement("div");
+        caption.className = "set-field-caption";
+        l.replaceWith(caption);
+        const controls = control.matches?.("input, select, textarea, button") ? [control] : [...control.querySelectorAll("input, select, textarea, button")];
+        caption.append(l, timingNote(timing, controls));
     }
     return el;
 }
@@ -180,7 +202,7 @@ function devicePicker(kind, selectedId, onchange, label) {
     status.setAttribute("aria-live", "polite");
 
     let loaded = false;
-    const deviceType = t(kind === "audioinput" ? "settings.devices.capture" : "settings.devices.playback");
+    const deviceType = t(kind === "videoinput" ? "camera.devices" : kind === "audioinput" ? "settings.devices.capture" : "settings.devices.playback");
     const refresh = async (force = false) => {
         currentId = select.value || currentId;
         if (!loaded) select.disabled = true;
@@ -188,7 +210,7 @@ function devicePicker(kind, selectedId, onchange, label) {
         refreshBtn.textContent = t("settings.refreshing");
         wrap.setAttribute("aria-busy", "true");
         status.classList.remove("warn");
-        status.textContent = force ? t("settings.refreshing.audio.devices") : t("settings.loading.audio.devices");
+        status.textContent = kind === "videoinput" ? t("camera.devicesLoading") : force ? t("settings.refreshing.audio.devices") : t("settings.loading.audio.devices");
 
         try {
             const inventory = await deviceInventory.load(force);
@@ -207,6 +229,7 @@ function devicePicker(kind, selectedId, onchange, label) {
             // row() associates the initial select with its visible label.
             // Preserve that ID so the replacement remains labelled.
             next.id = select.id;
+            if (select.hasAttribute("aria-describedby")) next.setAttribute("aria-describedby", select.getAttribute("aria-describedby"));
             select.replaceWith(next);
             select = next;
             loaded = true;
@@ -257,7 +280,7 @@ function pageApplication() {
     el.appendChild(row(t("settings.toasts.for.join.leave"), checkbox(s.notify_join_leave, (v) => { s.notify_join_leave = v; })));
     el.appendChild(row(t("settings.toasts.for.connection.events"), checkbox(s.notify_connection, (v) => { s.notify_connection = v; })));
     el.appendChild(row(t("settings.reconnect.on.connection.loss.5.tries"), checkbox(s.reconnect_on_loss, (v) => { s.reconnect_on_loss = v; })));
-    el.appendChild(row(t("settings.check.for.updates.at.startup"), checkbox(s.updates_auto_check !== false, (v) => { s.updates_auto_check = v; })));
+    el.appendChild(row(t("settings.check.for.updates.at.startup"), checkbox(s.updates_auto_check !== false, (v) => { s.updates_auto_check = v; }), "startup"));
 
     // Presence (308/390): the idle timer and the status line it publishes.
     const psep = document.createElement("div");
@@ -306,6 +329,7 @@ function pageApplication() {
     el.appendChild(row(t("settings.ui.font"), fontSel));
     el.appendChild(row(t("settings.ui.font.size"), slider(s.ui_font_size || 14, 10, 20, (v) => { s.ui_font_size = v; })));
     el.appendChild(row(t("settings.always.on.top"), checkbox(s.always_on_top, (v) => { s.always_on_top = v; })));
+    el.append(gamingOverlaySettings(s, { row, checkbox, slider, hint }));
     el.appendChild(row(t("settings.compact.mode"), checkbox(s.compact_mode, (v) => { s.compact_mode = v; })));
     el.appendChild(row(t("settings.reduce.motion"), checkbox(s.reduce_motion, (v) => { s.reduce_motion = v; })));
     el.appendChild(row(t("settings.pause.video.when.unfocused"), checkbox(s.idle_video_pause !== false, (v) => { s.idle_video_pause = v; })));
@@ -316,7 +340,7 @@ function pageApplication() {
     const opacity = slider(s.window_opacity || 100, 20, 100, (v) => { s.window_opacity = v; });
     opacity.querySelector("input").addEventListener("change",
         () => window.go.main.App.SetWindowOpacity(s.window_opacity || 100));
-    el.appendChild(row(t("settings.window.opacity"), opacity));
+    el.appendChild(row(t("settings.window.opacity"), opacity, "appearancePreview"));
     el.appendChild(themeEditor(s)); // (295)
     const css = document.createElement("textarea");
     css.className = "dlg-input user-css";
@@ -626,7 +650,7 @@ function themeEditor(s) {
         cell.appendChild(txt);
         grid.appendChild(cell);
     }
-    wrap.appendChild(grid);
+    wrap.append(timingNote("appearancePreview", grid.querySelectorAll("input")), grid);
     const reset = document.createElement("button");
     reset.textContent = t("settings.reset.theme.colors");
     reset.onclick = () => {
@@ -648,8 +672,14 @@ function pageCapture() {
         s.capture_device_id,
         (v) => { s.capture_device_id = v; },
         t("settings.capture.devices"),
-    )));
+    ), "saved"));
 
+    const microphone = createMicCheck(s, {
+        onStart: cleanup => { stopMicCheck(); stopMicCheck = cleanup; },
+        onThreshold: value => { for (const input of vadRow.querySelectorAll("input")) input.value = value; },
+    });
+    el.append(timingNote("localPreview"), microphone.root);
+    el.addEventListener("change", () => microphone.refresh());
     // Activation mode.
     const modeWrap = document.createElement("div");
     modeWrap.className = "set-modes";
@@ -667,14 +697,60 @@ function pageCapture() {
         l.appendChild(document.createTextNode(" " + label));
         modeWrap.appendChild(l);
     }
-    el.appendChild(modeWrap);
+    el.append(timingNote("saved", modeWrap.querySelectorAll("input")), modeWrap);
 
-    const vadRow = row(t("settings.vad.threshold"), slider(s.vad_threshold, 1, 100, (v) => { s.vad_threshold = v; }, true));
+    const vadRow = row(t("settings.vad.threshold"), slider(s.vad_threshold, 1, 100, (v) => { s.vad_threshold = v; }, true), "saved");
     vadRow.style.display = (s.activation_mode || "ptt") === "vad" ? "" : "none";
     el.appendChild(vadRow);
 
-    el.appendChild(row(t("settings.echo.cancellation"), checkbox(s.echo_cancellation !== false, (v) => { s.echo_cancellation = v; })));
-    el.appendChild(row(t("settings.noise.suppression"), checkbox(s.noise_suppression !== false, (v) => { s.noise_suppression = v; })));
+    el.appendChild(row(t("settings.echo.cancellation"), checkbox(s.echo_cancellation !== false, (v) => { s.echo_cancellation = v; }), "saved"));
+    el.appendChild(row(t("settings.noise.suppression"), checkbox(s.noise_suppression !== false, (v) => { s.noise_suppression = v; }), "saved"));
+    el.appendChild(row(t("settings.ptt.delay"), slider(s.ptt_release_delay_ms || 0, 0, 2000, (v) => { s.ptt_release_delay_ms = v; }), "saved"));
+    // The music profile overrides these two, so say so where they live.
+    el.appendChild(hint(t("settings.music.channels.stereo.96.kbit.s.or.more.capture.in.stereo.with.echo.cancell")));
+    return el;
+}
+
+function pageCamera() {
+    const s = settings();
+    const el = document.createElement("div");
+
+    el.appendChild(row(t("camera.device"), devicePicker("videoinput", s.camera_device_id, value => { s.camera_device_id = value; }, t("camera.device")), "camera"));
+    const effect = document.createElement("select");
+    for (const [value, label] of [["none", "camera.none"], ["blur", "camera.blur"], ["replace", "camera.replace"]]) {
+        const option = document.createElement("option"); option.value = value; option.textContent = t(label); effect.appendChild(option);
+    }
+    effect.value = s.camera_background || "none";
+    const scene = document.createElement("select");
+    for (const value of ["slate", "warm", "studio", "custom"]) {
+        const option = document.createElement("option"); option.value = value; option.textContent = t("camera." + value); scene.appendChild(option);
+    }
+    scene.value = s.camera_background_scene || "slate";
+    scene.onchange = () => { s.camera_background_scene = scene.value; };
+    const sceneRow = row(t("camera.scene"), scene, "camera");
+    sceneRow.classList.toggle("hidden", effect.value !== "replace");
+    effect.onchange = () => { s.camera_background = effect.value; sceneRow.classList.toggle("hidden", effect.value !== "replace"); };
+    el.append(row(t("camera.effect"), effect, "camera"), sceneRow, hint(t("camera.private")));
+    const imagePicker = document.createElement("input"); imagePicker.type = "file"; imagePicker.accept = "image/png,image/jpeg,image/webp";
+    const imageStatus = hint(""); imageStatus.setAttribute("role", "status");
+    const removeImage = document.createElement("button"); removeImage.type = "button"; removeImage.textContent = t("camera.removeImage"); removeImage.disabled = !s.camera_background_image;
+    let imageRevision = 0;
+    imagePicker.onchange = async () => {
+        const revision = ++imageRevision; imageStatus.textContent = "";
+        if (!imagePicker.files[0]) return;
+        try {
+            const data = await prepareCameraBackground(imagePicker.files[0]);
+            if (!el.isConnected || revision !== imageRevision) return;
+            s.camera_background_image = data; s.camera_background_scene = "custom"; s.camera_background = "replace";
+            scene.value = "custom"; effect.value = "replace"; sceneRow.classList.remove("hidden"); removeImage.disabled = false;
+            el.dispatchEvent(new Event("change", {bubbles:true}));
+        } catch (error) { if (el.isConnected && revision === imageRevision) imageStatus.textContent = error.message || String(error); }
+    };
+    removeImage.onclick = () => { imageRevision++; s.camera_background_image = ""; s.camera_background_scene = "slate"; scene.value = "slate"; imagePicker.value = ""; removeImage.disabled = true; el.dispatchEvent(new Event("change", {bubbles:true})); };
+    el.append(row(t("camera.chooseImage"), imagePicker, "camera"), hint(t("camera.imageHint")), removeImage, imageStatus);
+    el.append(row(t("camera.blurStrength"), slider(s.camera_blur_strength ?? 14, 2, 30, value => { s.camera_blur_strength = value; }), "camera"));
+    const mirror = checkbox(s.camera_mirror_preview !== false, value => { s.camera_mirror_preview = value; applyCameraPreview(preview, s); });
+    el.append(row(t("camera.mirror"), mirror));
 
     // Camera capture starts only when enabled or explicitly tested.
     const fpsSelect = document.createElement("select");
@@ -686,9 +762,10 @@ function pageCapture() {
     }
     fpsSelect.value = String(s.camera_fps || 30);
     fpsSelect.onchange = () => { s.camera_fps = parseInt(fpsSelect.value, 10); };
-    el.appendChild(row(t("settings.camera.frame.rate"), fpsSelect));
+    el.appendChild(row(t("settings.camera.frame.rate"), fpsSelect, "camera"));
     el.appendChild(hint(t("settings.camera.is.off.when.joining.turn.it.on.in.the.voice.controls.or.test.it.here")));
     const cameraTest = document.createElement("div");
+    cameraTest.className = "camera-test";
     const cameraBtn = document.createElement("button");
     cameraBtn.type = "button";
     cameraBtn.textContent = t("settings.test.camera");
@@ -696,17 +773,23 @@ function pageCapture() {
     preview.autoplay = true;
     preview.playsInline = true;
     preview.muted = true;
+    applyCameraPreview(preview, s);
     preview.hidden = true;
     preview.style.maxWidth = "100%";
     preview.setAttribute("aria-label", t("settings.camera.test.preview"));
     const cameraStatus = hint("");
     cameraStatus.setAttribute("role", "status");
     let testing = false;
-    let testStream = null;
+    let testCapture = null;
+    let testController = null;
+    let revision = 0;
     const stop = () => {
+        revision++;
         testing = false;
-        testStream?.getTracks().forEach((track) => track.stop());
-        testStream = null;
+        testController?.abort();
+        testController = null;
+        testCapture?.stop();
+        testCapture = null;
         preview.srcObject = null;
         preview.hidden = true;
         cameraBtn.disabled = false;
@@ -717,108 +800,44 @@ function pageCapture() {
         stopCameraTest();
         stopCameraTest = stop;
         testing = true;
+        const request = ++revision;
+        testController = new AbortController();
         cameraBtn.disabled = true;
-        cameraStatus.textContent = "";
+        cameraStatus.textContent = t("camera.loading");
         try {
-            const stream = await navigator.mediaDevices.getUserMedia({ audio: false, video: cameraConstraints(s) });
-            if (!testing || !cameraTest.isConnected) {
-                stream.getTracks().forEach((track) => track.stop());
+            const capture = await captureCamera(s, undefined, { signal: testController.signal });
+            if (!testing || request !== revision || !cameraTest.isConnected) {
+                capture.stop();
                 return;
             }
-            testStream = stream;
-            preview.srcObject = stream;
+            testCapture = capture;
+            capture.stream.getVideoTracks()[0]?.addEventListener("ended", () => {
+                if (testCapture !== capture) return;
+                stop();
+                cameraStatus.textContent = t("camera.ended");
+            }, { once: true });
+            preview.srcObject = capture.stream;
             preview.hidden = false;
+            cameraStatus.textContent = "";
             cameraBtn.textContent = t("settings.stop.camera.test");
         } catch (error) {
-            if (testing) {
+            if (testing && request === revision) {
                 stop();
                 cameraStatus.textContent = t("settings.camera.test.failed") + (error.message || error.name);
             }
         } finally {
-            cameraBtn.disabled = false;
+            if (request === revision) cameraBtn.disabled = false;
         }
     };
-    cameraTest.append(cameraBtn, preview, cameraStatus);
+    el.addEventListener("change", event => {
+        if (event.target === mirror) return;
+        if (!testing) return;
+        stop();
+        cameraStatus.textContent = t("camera.previewRestart");
+    });
+    cameraTest.append(timingNote("localPreview", [cameraBtn]), cameraBtn, preview, cameraStatus);
     el.appendChild(cameraTest);
 
-    el.appendChild(row(t("settings.ptt.delay"), slider(s.ptt_release_delay_ms || 0, 0, 2000, (v) => { s.ptt_release_delay_ms = v; })));
-    el.appendChild(hint(t("settings.capture.reconnect")));
-    // (25) the music profile overrides these two, so say so where they live.
-    el.appendChild(hint(t("settings.music.channels.stereo.96.kbit.s.or.more.capture.in.stereo.with.echo.cancell")));
-
-    const testWrap = document.createElement("div");
-    testWrap.className = "mic-test";
-    const startBtn = document.createElement("button");
-    startBtn.type = "button";
-    startBtn.textContent = t("settings.begin.test");
-    const stopBtn = document.createElement("button");
-    stopBtn.type = "button";
-    stopBtn.textContent = t("settings.stop");
-    stopBtn.hidden = true;
-    const bar = document.createElement("div");
-    bar.className = "mic-bar"; bar.hidden = true;
-    const fill = document.createElement("div");
-    fill.className = "mic-fill"; bar.appendChild(fill);
-    const testStatus = hint("");
-    testStatus.id = "mic-test-status"; testStatus.setAttribute("role", "status");
-    const calBtn = document.createElement("button");
-    calBtn.type = "button";
-    calBtn.textContent = t("settings.auto.calibrate.5s.ambient");
-    const calStatus = hint("");
-    calStatus.id = "mic-calibration-status"; calStatus.setAttribute("role", "status");
-    const loopChk = checkbox(false, enabled => mic.setLoopback(enabled));
-    loopChk.disabled = true;
-    const mic = new MicCheck({
-        onState: (status, mode) => {
-            const busy = status !== "idle";
-            startBtn.disabled = busy; calBtn.disabled = busy;
-            stopBtn.hidden = !busy;
-            bar.hidden = !busy || mode !== "test";
-            loopChk.disabled = status !== "active" || mode !== "test";
-            if (!busy) loopChk.checked = false;
-            if (status === "requesting") {
-                testStatus.textContent = ""; calStatus.textContent = "";
-                (mode === "test" ? testStatus : calStatus).textContent = t("settings.mic.requesting");
-            } else if (status === "active" && mode === "test") {
-                testStatus.textContent = t("settings.mic.listening");
-            }
-        },
-        onLevel: level => { fill.style.width = level * 100 + "%"; },
-        onSilence: silent => { testStatus.textContent = t(silent ? "settings.mic.silent" : "settings.mic.detected"); },
-        onCountdown: seconds => { calStatus.textContent = t("settings.mic.countdown", { seconds }); },
-        onCalibrated: result => {
-            s.vad_threshold = result.suggested;
-            const controls = vadRow.querySelectorAll("input");
-            for (const control of controls) control.value = result.suggested;
-            calStatus.textContent = t("settings.calibration.result", { floor: (result.floor * 100).toFixed(1), threshold: result.suggested });
-        },
-        onError: (error, mode) => {
-            const status = mode === "test" ? testStatus : calStatus;
-            const key = { NotAllowedError: "settings.mic.denied", SecurityError: "settings.mic.denied",
-                NotFoundError: "settings.mic.missing", NotReadableError: "settings.mic.unavailable" }[error.name];
-            status.textContent = key ? t(key) : t("settings.mic.test.failed") + (error.message || error.name);
-        },
-    });
-    const begin = mode => {
-        if (mic.current) return;
-        stopMicCheck();
-        stopMicCheck = () => mic.stop();
-        const channel = V().state.channels?.find(channel => channel.ChannelID === V().state.myChannelID);
-        void mic.start(mode, captureConstraints(channel, s));
-    };
-    startBtn.onclick = () => begin("test");
-    calBtn.onclick = () => begin("calibration");
-    stopBtn.onclick = () => {
-        const mode = mic.current?.mode;
-        mic.stop();
-        (mode === "calibration" ? calStatus : testStatus).textContent = t("settings.mic.stopped");
-    };
-    testWrap.append(startBtn, stopBtn, bar);
-    el.append(testWrap, testStatus, row(t("settings.loopback.test.hear.yourself.use.headphones"), loopChk));
-    const calWrap = document.createElement("div");
-    calWrap.className = "mic-test";
-    calWrap.append(calBtn, calStatus);
-    el.appendChild(calWrap);
     return el;
 }
 
@@ -848,13 +867,13 @@ function pagePlayback() {
         s.playback_device_id,
         (v) => { s.playback_device_id = v; },
         t("settings.playback.devices"),
-    )));
+    ), "saved"));
     el.appendChild(row(t("settings.voice.volume"), slider(s.volume, 0, 200, (v) => {
         s.volume = v;
         const rv = document.getElementById("remote-video");
         if (rv) V().applyOutputSettings(rv);
-    }, true)));
-    el.appendChild(row(t("settings.voice.limiter.compressor"), checkbox(s.voice_limiter !== false, (v) => { s.voice_limiter = v; })));
+    }, true), "saved"));
+    el.appendChild(row(t("settings.voice.limiter.compressor"), checkbox(s.voice_limiter !== false, (v) => { s.voice_limiter = v; }), "reconnect"));
     el.appendChild(row(t("settings.positional.enabled"), checkbox(!!s.positional_audio, (v) => { s.positional_audio = v; })));
     el.appendChild(hint(t("settings.positional.hint")));
     const positionPath = document.createElement("button");
@@ -866,14 +885,14 @@ function pagePlayback() {
         } catch (error) { V().toast(String(error), "warn"); }
     };
     el.appendChild(row(t("settings.positional.source"), positionPath));
-    el.appendChild(row(t("settings.per.user.gain.normalization.cap.4x"), checkbox(s.gain_normalize, (v) => { s.gain_normalize = v; })));
+    el.appendChild(row(t("settings.per.user.gain.normalization.cap.4x"), checkbox(s.gain_normalize, (v) => { s.gain_normalize = v; }), "reconnect"));
     // (53) each publisher is levelled on its own chain, so a loud speaker no
     // longer sets the gain for a quiet one.
     el.appendChild(hint(t("settings.normalization.levels.every.speaker.separately.limiter.and.normalizer.apply")));
     const testBtn = document.createElement("button");
     testBtn.textContent = t("settings.play.test.sound");
     testBtn.onclick = () => previewSounds(["own_channel_join"], s);
-    el.appendChild(row(t("settings.test"), testBtn));
+    el.appendChild(row(t("settings.test"), testBtn, "localPreview"));
     return el;
 }
 
@@ -911,6 +930,7 @@ function hotkeyCapture(initial, oncapture) {
                 b.textContent = parts.join("+");
                 stopCapture();
                 oncapture(parts.join("+"));
+                b.dispatchEvent(new Event("change", { bubbles: true }));
             }
         };
         const stopCapture = () => {
@@ -1076,6 +1096,7 @@ function pageDownloads() {
         if (dir) {
             s.download_folder = dir;
             folder.textContent = dir;
+            change.dispatchEvent(new Event("change", { bubbles: true }));
         }
     };
     const wrap = document.createElement("div");
@@ -1525,6 +1546,7 @@ function pageNotifications() {
 const PAGE_BUILDERS = {
     application: pageApplication,
     capture: pageCapture,
+    camera: pageCamera,
     playback: pagePlayback,
     hotkeys: pageHotkeys,
     whisper: pageWhisper,
@@ -1708,10 +1730,24 @@ function openSettings(pageId = "application") {
 
     let saving = false;
     const saveStatus = overlay.querySelector(".settings-save-status");
+    let savedDraft = JSON.stringify(draft), lastDraft = savedDraft, applyFailure = "";
+    saveStatus.hidden = false;
+    saveStatus.textContent = t("settings.clean");
+    const markChanges = () => queueMicrotask(() => {
+        const next = JSON.stringify(draft);
+        if (saving || next === lastDraft || !overlay.isConnected) return;
+        lastDraft = next;
+        saveStatus.classList.toggle("warn", !!applyFailure);
+        saveStatus.textContent = applyFailure
+            ? (next === savedDraft ? applyFailure : `${t("settings.unsaved")} · ${applyFailure}`)
+            : t(next === savedDraft ? "settings.clean" : "settings.unsaved");
+    });
+    for (const event of ["input", "change", "click"]) content.addEventListener(event, markChanges);
     const applyAll = async () => {
         if (saving) return false;
         saving = true;
         const snapshot = structuredClone(draft);
+        let persisted = false;
         const nextWhisperConfig = whisperConfig(snapshot);
         // Applying the whisper editor explicitly reapplies routing, including
         // a configuration saved locally but rejected before reopening it.
@@ -1736,7 +1772,9 @@ function openSettings(pageId = "application") {
         saveStatus.textContent = t("common.saving");
         try {
             await commit(snapshot);
+            persisted = true;
             if (!overlay.isConnected) return false;
+            savedDraft = lastDraft = JSON.stringify(draft);
             refreshDraftControls();
             // Local preferences also save while disconnected. A live whisper
             // update belongs only to the server where this dialog opened.
@@ -1755,17 +1793,22 @@ function openSettings(pageId = "application") {
                     V().renderVoiceStatus();
                 }
             }
-            saveStatus.textContent = t("settings.saved");
+            applyFailure = "";
+            saveStatus.textContent = t("settings.applied");
             return true;
         } catch (error) {
             // Persistence already rebased nested draft objects. Rebind controls
             // even if audio application failed, so subsequent edits reach them.
-            if (error instanceof SavedAudioSettingsError) refreshDraftControls();
+            if (error instanceof SavedAudioSettingsError) {
+                savedDraft = lastDraft = JSON.stringify(draft);
+                refreshDraftControls();
+            }
             if (overlay.isConnected) {
                 saveStatus.textContent = error instanceof SavedAudioSettingsError
                     ? error.message
                     : t("menu.saveFailed", { error: error.message || String(error) });
                 saveStatus.classList.add("warn");
+                if (persisted || error instanceof SavedAudioSettingsError) applyFailure = saveStatus.textContent;
             }
             return false;
         } finally {

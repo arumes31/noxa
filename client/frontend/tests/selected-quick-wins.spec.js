@@ -122,7 +122,7 @@ test("settings Apply refreshes its edit baseline before the next edit", async ({
     });
     await page.getByRole("spinbutton", { name: "Chat max lines", exact: true }).fill("777");
     await page.locator("#set-apply").click();
-    await expect(page.locator(".settings-save-status")).toHaveText("Settings saved.");
+    await expect(page.locator(".settings-save-status")).toHaveText("Changes applied");
     await page.getByRole("spinbutton", { name: "Chat max lines", exact: true }).fill("888");
     await page.locator("#set-apply").click();
     await expect.poll(() => page.evaluate(() => window.__saved.chat_max_lines)).toBe(888);

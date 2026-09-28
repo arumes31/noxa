@@ -785,10 +785,38 @@ func (m *connManager) peerPubKey(uniqueID string) ([32]byte, bool) {
 	defer m.pubKeys.finishFetch(uniqueID, epoch)
 	// The directory request happens without the cache lock. Followers wait on
 	// the per-UID channel above and then re-read the result.
-	f, err := m.request(netproto.MsgKeyRequest, netproto.MsgKeyResponse,
-		netproto.KeyRequest{UniqueID: uniqueID}, 5*time.Second)
-	if err != nil {
-		return [32]byte{}, false
+	m.mu.Lock()
+	conn := m.conn
+	m.mu.Unlock()
+	deadline := time.Now().Add(10 * time.Second)
+	var f *netproto.Frame
+	for attempt := 0; ; attempt++ {
+		select {
+		case <-done: // Disconnect cleared this cache generation.
+			return [32]byte{}, false
+		default:
+		}
+		var err error
+		f, err = m.requestOn(conn, netproto.MsgKeyRequest, netproto.MsgKeyResponse,
+			netproto.KeyRequest{UniqueID: uniqueID}, 5*time.Second)
+		if err == nil {
+			break
+		}
+		var failure *requestFailure
+		if attempt >= 2 || !errors.As(err, &failure) || failure.response.RetryAfterMS <= 0 || failure.response.RetryAfterMS > 10_000 {
+			return [32]byte{}, false
+		}
+		delay := time.Duration(failure.response.RetryAfterMS) * time.Millisecond
+		if time.Now().Add(delay).After(deadline) {
+			return [32]byte{}, false
+		}
+		timer := time.NewTimer(delay)
+		select {
+		case <-done:
+			timer.Stop()
+			return [32]byte{}, false
+		case <-timer.C:
+		}
 	}
 	var resp netproto.KeyResponse
 	if err := netproto.Decode(f, &resp); err != nil || resp.UniqueID != uniqueID || resp.PublicKey == "" {

@@ -133,6 +133,12 @@ func TestKeyRequestRateLimitUsesDedicatedNamespace(t *testing.T) {
 	if err := netproto.Decode(response, &responseErr); err != nil || responseErr.Code != errCodeMalformed {
 		t.Fatalf("rate-limit response = %+v, decode err=%v", responseErr, err)
 	}
+	var retry struct {
+		AfterMS int64 `json:"retry_after_ms"`
+	}
+	if err := netproto.Decode(response, &retry); err != nil || retry.AfterMS <= 0 || retry.AfterMS > time.Hour.Milliseconds()+1 {
+		t.Fatalf("missing or invalid key retry delay: %+v, %v", retry, err)
+	}
 }
 
 // testX25519 generates a throwaway X25519 keypair for tests.

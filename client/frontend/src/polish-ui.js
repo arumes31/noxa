@@ -256,6 +256,7 @@ const notifViews = new Set();
 
 // recordNotification appends to the bell history (session-persisted, 50).
 export function recordNotification(kind, text, ctx = {}) {
+    window.dispatchEvent(new CustomEvent("noxa-overlay-notification", { detail: String(text) }));
     notifHistory.unshift({ kind, text, at: Date.now(), ...ctx, tabID: V().state.activeTabID });
     if (notifHistory.length > 50) notifHistory.pop();
     for (const render of notifViews) render();

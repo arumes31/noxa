@@ -23,8 +23,21 @@ import { chatEnglish, chatGerman } from "./chat-messages.js";
 import { conversationEnglish, conversationGerman } from "./conversation-messages.js";
 import { callEnglish, callGerman } from "./call-messages.js";
 import { selectedWinEnglish, selectedWinGerman } from "./selected-win-messages.js";
+import { contextEnglish, contextGerman } from "./context-messages.js";
+import { micEnglish, micGerman } from "./mic-messages.js";
+import { cameraEnglish, cameraGerman } from "./camera-messages.js";
+import { callMediaEnglish, callMediaGerman } from "./call-media-messages.js";
+import { discussionEnglish, discussionGerman } from "./forum-messages.js";
+import { voiceMessageEnglish, voiceMessageGerman } from "./voice-message-messages.js";
+import { overlayEnglish, overlayGerman } from "./gaming-overlay-messages.js";
+import { communicationExtrasEnglish, communicationExtrasGerman } from "./communication-extras-messages.js";
+import { messageToolsEnglish, messageToolsGerman } from "./message-tools-messages.js";
+import { webhookEnglish, webhookGerman } from "./webhook-messages.js";
 
 const en = {
+    ...cameraEnglish, ...callMediaEnglish, ...discussionEnglish, ...voiceMessageEnglish, ...overlayEnglish, ...communicationExtrasEnglish, ...messageToolsEnglish, ...webhookEnglish,
+    ...contextEnglish,
+    ...micEnglish,
     ...selectedWinEnglish,
     ...callEnglish,
     ...conversationEnglish,
@@ -96,6 +109,9 @@ const en = {
 };
 
 const de = {
+    ...cameraGerman, ...callMediaGerman, ...discussionGerman, ...voiceMessageGerman, ...overlayGerman, ...communicationExtrasGerman, ...messageToolsGerman, ...webhookGerman,
+    ...contextGerman,
+    ...micGerman,
     ...selectedWinGerman,
     ...callGerman,
     ...conversationGerman,

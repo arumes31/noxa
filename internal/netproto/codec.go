@@ -134,6 +134,10 @@ const (
 // String returns a human-readable name for the message type.
 func (m MessageType) String() string {
 	switch m {
+	case MsgDiscussionRequest:
+		return "DiscussionRequest"
+	case MsgDiscussionResult:
+		return "DiscussionResult"
 	case MsgCallRequest:
 		return "CallRequest"
 	case MsgCallResult:
@@ -595,6 +599,8 @@ type Error struct {
 	// newer clients can distinguish a command failure from an unrelated
 	// fire-and-forget server error.
 	OriginType uint16 `json:"origin_type,omitempty"`
+	// RetryAfterMS is an optional backoff for a throttled, read-only request.
+	RetryAfterMS int64 `json:"retry_after_ms,omitempty"`
 }
 
 // Ping is a liveness probe. Payload is ignored.

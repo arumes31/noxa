@@ -3,6 +3,7 @@ package webrtc
 import (
 	"errors"
 	"log"
+	"net"
 	"sync"
 	"time"
 
@@ -64,6 +65,7 @@ type mediaTicket struct {
 type mediaEgressStream struct {
 	mu         sync.RWMutex
 	active     bool
+	retryAfter time.Time
 	registry   *mediaEgressRegistry
 	tickets    map[uint64]*mediaTicket
 	order      [mediaTicketCount]uint64
@@ -89,7 +91,7 @@ func (s *mediaEgressStream) prepare(pkt *rtp.Packet, ticket mediaTicket) (rtp.Pa
 	ticket.csrc = append([]uint32(nil), pkt.CSRC...)
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if !s.active {
+	if !s.active || time.Now().Before(s.retryAfter) {
 		return rtp.Packet{}, false
 	}
 	if s.tickets == nil {
@@ -165,10 +167,18 @@ func (s *mediaEgressStream) write(header *rtp.Header, payload []byte, attrs inte
 	} else {
 		err = write()
 	}
-	// Retire failed terminal output only after all authorization/policy/watch
-	// and stream read locks unwind. Guard denials do not poison a healthy
-	// transport. Queued packets and NACKs lose their tickets together.
-	if outputError != nil && s.stop() {
+	// Handle failed output only after all authorization/policy/watch and
+	// stream read locks unwind. A socket deadline does not invalidate ICE:
+	// discard its backlog, then let fresh, reauthorized packets try again.
+	// The cooldown bounds repeated attempts against a stalled transport.
+	var timeout net.Error
+	if errors.As(outputError, &timeout) && timeout.Timeout() {
+		s.mu.Lock()
+		clear(s.tickets)
+		clear(s.order[:])
+		s.retryAfter = time.Now().Add(mediaSocketWriteTimeout)
+		s.mu.Unlock()
+	} else if outputError != nil && s.stop() {
 		log.Printf("webrtc: retiring failed media output slot=%s: %v; track rebuild required", ticket.delivery.Slot, outputError)
 	}
 	return n, err

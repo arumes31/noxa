@@ -52,7 +52,7 @@ Settings persist to `<UserConfigDir>/noxa/settings.json` (identity to
 
 **Camera privacy**: Voice sessions start with the camera off. Camera access
 requires turning it on in the voice controls or selecting **Test camera** in
-Settings → Capture. Turning the camera off releases its capture track. The
+Settings → Camera. Turning the camera off releases its capture track. The
 settings preview stays local and stops on Stop, page changes, or dialog close.
 
 **No-mic machines**: `getUserMedia` failures permit a receive-only voice join
@@ -66,13 +66,35 @@ failures, and connection loss.
 
 - **Per-user volume & local mute** — right-click a user → Volume slider
   (0–200%) or Mute locally; persisted per unique ID in `settings.json`.
+  The same personal controls are available from chat authors, member mentions,
+  member cards, the voice participant strip, and private-call participants. Volume previews while dragging,
+  saves on release, and can be reset to 100%; cancelling restores the saved
+  level. Member cards stay synchronized with changes made in menus and keep
+  keyboard focus after saving. Private calls multiply personal volume by the
+  master voice volume and apply output-device and activation-mode changes live.
   The server emits one audio track per publisher (track ID = publisher
   client ID, carried in the MSID), and each track gets its own gain+mute
   node pair in the shared WebAudio chain, so per-sender volume/mute is
   audible.
+- **Context menus** — Shift+F10 or the Menu key opens member, channel,
+  message, and video menus. Up/Down selects actions, Left/Right adjusts a
+  volume slider, and Escape closes the menu and restores focus. Menus fit
+  the window and scroll when needed. Member menus include a searchable,
+  server-authorized “Move to channel…” action; channel menus offer explicit
+  Join/Leave voice actions. Direct-message tabs offer Open, Close, and a
+  separately confirmed Delete local history action. Moderation from a member
+  card targets that exact connected session. Identity-only menus require a
+  session selected in the tree when the same member has multiple devices online.
 - **Mic level meter** in the voice bar while voice is joined (green/amber/
-  red gradient); **mic test with loopback playback** (Capture settings);
-  **VAD auto-calibrate** (5 s ambient → noise floor → suggested threshold).
+  red gradient), with **local microphone testing** in Capture settings.
+- **Microphone setup** — Capture settings place local testing beneath device
+  selection: average and held peak levels in dBFS, clipping/quiet feedback,
+  a voice-activation threshold marker, and a push-to-talk preview. Five-second
+  recordings and live monitoring use the selected playback device; recordings
+  are discarded when leaving the page. Device/processing edits restart capture.
+  Guided calibration measures five seconds of quiet and five seconds of speech,
+  then offers a threshold to preview and explicitly accept. The settings footer
+  distinguishes unsaved changes, applied changes, and failures to apply live audio.
 - **PTT release delay** slider (0–2000 ms) so sentence ends aren't clipped.
 - **Voice detection** uses a local microphone track independent of the
   transmitted track, so silence, mute, and PTT release cannot disable the
@@ -120,8 +142,8 @@ failures, and connection loss.
 - **Focus mode** — click a tile for the large view; the others keep playing
   in a filmstrip row below. Click again or press Esc to return to the grid.
   This is how you watch multiple simultaneous screen shares: every share is
-  a tile (a single user's share replaces their camera slot — one video track
-  per publisher).
+  a separate tile. A publisher's camera and screen share can run together,
+  with independent watch/stop controls.
 - **Quality selector** — right-click a tile → Auto/High/Mid/Low, sent as
   `MsgVideoQuality` (the server routes the RID f/h/q simulcast layer). Note:
   the preference is per subscriber connection, so it applies to all incoming
@@ -140,8 +162,12 @@ failures, and connection loss.
   missing.
 - **Stop-share confirm** — stopping a share while others are in the channel
   asks first ("N users may be watching").
-- **Camera frame rate** — Capture settings: 15/30/60 fps applied to
+- **Camera frame rate** — Camera settings: 15/30/60 fps applied to
   `getUserMedia` video constraints + `contentHint` (`motion` at 60).
+  Saved changes take effect on the next camera start; restart a local test
+  to preview an unsaved frame rate. Timing notes beside settings distinguish
+  immediate application after saving, voice reconnect, next app start, and
+  temporary local previews. Camera and microphone tests stop on page exit.
 - **Low-bandwidth mode** — 📶 toggle in the voice bar (persisted): outgoing
   video is capped to a single 150 kbps layer, incoming video requests the
   low simulcast layer, and tile rendering is paused with a LOW BANDWIDTH
@@ -426,8 +452,8 @@ The files UI (`frontend/src/files-ui.js`, bindings in `files.go`) adds a
   `RTCPeerConnection`, with SDP offer/answer and ICE candidates bridged
   through the Go backend over the control channel. Hardware encode/decode is
   browser-managed (Chromium picks HW acceleration automatically when
-  available; there is no JS flag to force it). The server emits one audio and
-  one video track per publisher (track ID = publisher client ID via MSID) and
+  available; there is no JS flag to force it). The server emits separate microphone,
+  camera, screen and share-audio tracks per publisher (slot-qualified IDs via MSID) and
   renegotiates over the control channel when membership changes; on ICE
   failure the client re-offers with `iceRestart` and a 1s/2s/5s/15s backoff
   ladder before warning.
@@ -598,10 +624,48 @@ request/response round-trip works.
 
 ## Notes / limitations
 
+### Calls, camera, discussions and voice messages
+
+- Channel, private and group calls support simultaneous camera and screen-sharing tiles,
+  with optional display audio when the operating system's picker provides it.
+  Camera and screen capture require explicit actions and stop when the call ends.
+- Settings → Camera selects the device and an offline background effect: blur
+  or a replacement scene/custom local image. Blur strength is adjustable and
+  mirroring applies only to your local preview. Uploaded images are resized and
+  stored locally; person segmentation runs locally using
+  bundled assets. Effects cap processing at 15 fps; ordinary camera capture
+  retains the selected frame rate and server limits.
+- Channel discussions provide persistent independent threads and forum boards,
+  tags, membership, following, unread state, and archive/reopen controls. Message
+  bodies use channel encryption; titles and tags are server-visible metadata.
+  See [threads and forums](../docs/threads-and-forums.md) for permissions and migration.
+- The microphone button in channel, private-group and discussion composers
+  records up to five minutes or 5 MiB. Preview, discard or send the recording as
+  an encrypted attachment; recipients explicitly load it for inline playback.
+  Playback follows the output device, voice volume and Deafen settings. Controls
+  include duration, seeking, playback speed and local resume history (30 days,
+  at most 100 hashed references). Local previews show a decoded waveform;
+  received waveforms fill while listening without fully decoding untrusted
+  attachments into memory.
+- Calls stay docked by default. **Undock call** opens an optional always-on-top
+  window when Document Picture-in-Picture is supported; closing it returns the
+  controls to the main window without ending the call.
+- Shared audio has a separate personal mute and 0–200% volume setting per member,
+  independent of that member's microphone volume. Deafen still silences both.
+- The inbox, older-history search and personal saved collections provide message
+  navigation. See [message tools](../docs/message-tools.md) for scope and persistence.
+- Discussion controls include title/tag editing, pinning, resolved status and
+  inactivity archiving. Channel managers can create/revoke incoming text webhooks;
+  see [incoming webhooks](../docs/incoming-webhooks.md) for HTTPS setup and limits.
+- Settings → Application → Gaming overlay is enabled by default on Windows and
+  can be disabled. A separate, nonactivating window shows current voice speakers,
+  mute state and brief notifications on a selected monitor. Settings provide
+  position presets or a draggable preview, size, opacity and speakers-only mode.
+  It passes input through and supports windowed/borderless games. Exclusive
+  fullscreen and other operating systems are not supported.
+
 - The frontend is a scaffold: channel icons and avatars are stored/flagged
   but not rendered yet; permission editing is read-only.
-- Screen sharing replaces the camera track (one video track per peer —
-  server limitation, documented in the root README).
 - `wails build` was verified on Windows 11 + WebView2 runtime. On other
   platforms install the Wails platform prerequisites (see
   https://wails.io/docs/gettingstarted/installation).

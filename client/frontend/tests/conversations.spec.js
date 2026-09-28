@@ -58,6 +58,109 @@ test.beforeEach(async ({ page }) => {
     await expect(page.locator(".group-list-item")).toHaveCount(2);
 });
 
+test("group voice recording survives incoming messages and sends to the same group", async ({ page }) => {
+    await page.evaluate(() => {
+        window.__voiceContext = new AudioContext();
+        const tone = window.__voiceContext.createOscillator(), output = window.__voiceContext.createMediaStreamDestination();
+        tone.connect(output); tone.start(); window.__voiceStream = output.stream;
+        navigator.mediaDevices.getUserMedia = async () => output.stream;
+        window.go.main.App.UploadChatAttachmentForTab = async () => "[file:recording#key#voice.weba]";
+    });
+    await page.getByRole("button", { name: "Raid <script>", exact: true }).click();
+    await page.getByRole("button", { name: "Record voice message", exact: true }).click();
+    await page.getByRole("button", { name: "Start recording", exact: true }).click();
+    await expect(page.getByRole("button", { name: "Stop recording", exact: true })).toBeEnabled();
+    await page.evaluate(() => {
+        window.__groupMessages.push({ id: 101, conversation_id: "g1", from_unique_id: "bob", body: "Message while recording", created_at: 1 });
+        return window.__conversationModule.conversationChanged({ id: "g1", message_id: 101 });
+    });
+    await expect(page.locator(".group-messages")).toContainText("Message while recording");
+    // The next recording status tick must preserve the session after refresh.
+    await expect(page.locator(".voice-message-dialog [role=status]")).toContainText("Recording");
+    expect(await page.evaluate(() => window.__voiceStream.getTracks()[0].readyState)).toBe("live");
+    await page.getByRole("button", { name: "Stop recording", exact: true }).click();
+    await expect(page.getByRole("button", { name: "Send voice message", exact: true })).toBeEnabled();
+    await page.evaluate(() => window.__conversationModule.conversationChanged({ id: "g1", message_id: 102 }));
+    await page.getByRole("button", { name: "Send voice message", exact: true }).click();
+    await expect(page.locator(".voice-message-dialog")).toHaveCount(0);
+    expect(await page.evaluate(() => window.__groupCalls.filter(([, request]) => request.action === "send").map(([, request]) => request.id))).toEqual(["g1"]);
+    expect(await page.evaluate(() => window.__voiceStream.getTracks()[0].readyState)).toBe("ended");
+    await page.evaluate(() => window.__voiceContext.close());
+});
+
+test("group voice rerecord uses a new send reference while retries retain the original", async ({ page }) => {
+    await page.evaluate(() => {
+        window.__voiceContext = new AudioContext();
+        const tone = window.__voiceContext.createOscillator(); tone.start();
+        navigator.mediaDevices.getUserMedia = async () => {
+            const output = window.__voiceContext.createMediaStreamDestination(); tone.connect(output); return output.stream;
+        };
+        window.__voiceUploads = 0; window.__voiceSends = []; window.__storedVoice = new Map();
+        window.go.main.App.UploadChatAttachmentForTab = async () => `[file:recording-${++window.__voiceUploads}#key#voice.weba]`;
+        window.go.main.App.SendConversationForTab = async (_tab, _group, body, reference) => {
+            window.__voiceSends.push({ body, reference });
+            // Simulate the server's reference deduplication and a lost response.
+            if (!window.__storedVoice.has(reference)) window.__storedVoice.set(reference, body);
+            if (window.__voiceSends.length <= 2) throw new Error("send response lost");
+            return 1;
+        };
+    });
+    await page.getByRole("button", { name: "Raid <script>", exact: true }).click();
+    await page.getByRole("button", { name: "Record voice message", exact: true }).click();
+    const record = async () => {
+        await page.getByRole("button", { name: "Start recording", exact: true }).click();
+        await expect(page.getByRole("button", { name: "Stop recording", exact: true })).toBeEnabled();
+        await expect(page.locator(".voice-message-dialog [role=status]")).toContainText("Recording");
+        await page.getByRole("button", { name: "Stop recording", exact: true }).click();
+        await expect(page.getByRole("button", { name: "Send voice message", exact: true })).toBeEnabled();
+    };
+    await record();
+    for (let attempt = 1; attempt <= 2; attempt++) {
+        await page.getByRole("button", { name: "Send voice message", exact: true }).click();
+        await expect.poll(() => page.evaluate(() => window.__voiceSends.length)).toBe(attempt);
+        await expect(page.locator(".voice-message-dialog [role=status]")).toContainText("send response lost");
+    }
+    await record();
+    await page.getByRole("button", { name: "Send voice message", exact: true }).click();
+    await expect(page.locator(".voice-message-dialog")).toHaveCount(0);
+    const sends = await page.evaluate(() => window.__voiceSends);
+    expect(sends[0].reference).toBe(sends[1].reference);
+    expect(sends[0].body).toBe(sends[1].body);
+    expect(sends[2].body).not.toBe(sends[0].body);
+    expect(sends[2].reference).not.toBe(sends[0].reference);
+    expect(await page.evaluate(() => [...window.__storedVoice.values()])).toEqual([sends[0].body, sends[2].body]);
+    expect(await page.evaluate(() => window.__voiceUploads)).toBe(2);
+    await page.evaluate(() => window.__voiceContext.close());
+});
+
+for (const change of ["navigation", "membership"]) {
+    test(`group voice recording stops after ${change} changes`, async ({ page }) => {
+        await page.evaluate(() => {
+            window.__voiceContext = new AudioContext();
+            const output = window.__voiceContext.createMediaStreamDestination(); window.__voiceStream = output.stream;
+            navigator.mediaDevices.getUserMedia = async () => output.stream;
+        });
+        await page.getByRole("button", { name: "Raid <script>", exact: true }).click();
+        await page.getByRole("button", { name: "Record voice message", exact: true }).click();
+        await page.getByRole("button", { name: "Start recording", exact: true }).click();
+        await expect(page.getByRole("button", { name: "Stop recording", exact: true })).toBeEnabled();
+        await page.evaluate(async change => {
+            if (change === "navigation") {
+                // A quick away-and-back transition must still cancel capture.
+                document.querySelector('.group-list-item[data-group-id="g2"]').click();
+                document.querySelector('.group-list-item[data-group-id="g1"]').click();
+            } else {
+                window.__groups[0].members = window.__groups[0].members.filter(member => member.unique_id !== "alice");
+                await window.__conversationModule.conversationChanged({ id: "g1" });
+            }
+        }, change);
+        await expect(page.locator(".voice-message-dialog")).toHaveCount(0);
+        expect(await page.evaluate(() => window.__voiceStream.getTracks()[0].readyState)).toBe("ended");
+        expect(await page.evaluate(() => window.__groupCalls.filter(([, request]) => request.action === "send"))).toEqual([]);
+        await page.evaluate(() => window.__voiceContext.close());
+    });
+}
+
 test("group refresh preserves typing focus and selection; notifications honor mute and current membership", async ({ page }) => {
     await page.getByRole("button", { name: "Raid <script>", exact: true }).click();
     const composer = page.getByRole("textbox", { name: "Message this group" });
@@ -154,7 +257,7 @@ test("new visible messages queue behind a delayed read acknowledgment", async ({
         window.__groupMessages.push({ id: 702, conversation_id: "g1", from_unique_id: "bob", body: "Second", created_at: 1 });
         window.__conversationModule.conversationChanged({ id: "g1", message_id: 702 });
     });
-    await expect(page.locator(".group-message p").filter({ hasText: "Second" })).toBeVisible();
+    await expect(page.locator(".group-message-body").filter({ hasText: "Second" })).toBeVisible();
     await page.evaluate(() => { window.__markGate = null; window.__releaseMark(); });
     await expect.poll(() => page.evaluate(() => window.__readPositions.g1)).toBe(702);
 });
@@ -170,7 +273,7 @@ test("reading older group messages does not mark new arrivals read until scrolli
         window.__conversationModule.conversationChanged({ id: "g1", message_id: 31 });
     });
     await expect(page.locator('.group-list-item[data-group-id="g1"] .group-unread')).toHaveText("1");
-    await expect(page.locator(".group-message p").filter({ hasText: "New arrival" })).toHaveCount(1);
+    await expect(page.locator(".group-message-body").filter({ hasText: "New arrival" })).toHaveCount(1);
     expect(await page.evaluate(() => window.__readPositions.g1)).toBe(30);
     await page.locator(".group-messages").evaluate(node => { node.scrollTop = node.scrollHeight; });
     await expect.poll(() => page.evaluate(() => window.__readPositions.g1)).toBe(31);
@@ -233,7 +336,7 @@ test("same-group refresh preserves expanded members and invitation draft focus a
         window.__groupMessages.push({ id: 71, conversation_id: "g1", from_unique_id: "bob", body: "Refresh completed marker", created_at: Math.floor(Date.now() / 1000) });
         window.__conversationModule.conversationChanged({ id: "g1" });
     });
-    await expect(page.locator(".group-message p")).toHaveText("Refresh completed marker");
+    await expect(page.locator(".group-message-body")).toHaveText("Refresh completed marker");
     expect(await invite.evaluate(input => ({
         expanded: input.closest("details").open,
         value: input.value,
@@ -326,7 +429,7 @@ test("invitations require acceptance; drafts never move into another private gro
     await page.evaluate(() => window.__conversationModule.conversationChanged());
     await expect(page.getByRole("textbox", { name: "Message this group" })).toHaveValue("raid-only draft");
     await page.getByRole("button", { name: "Send", exact: true }).click();
-    await expect(page.locator(".group-message p")).toHaveText("raid-only draft");
+    await expect(page.locator(".group-message-body")).toHaveText("raid-only draft");
     await expect(page.getByRole("textbox", { name: "Message this group" })).toHaveValue("");
     const sends = await page.evaluate(() => window.__groupCalls.filter(([, command]) => command.action === "send"));
     expect(sends).toHaveLength(1);

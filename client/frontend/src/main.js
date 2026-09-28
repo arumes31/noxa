@@ -15,12 +15,17 @@ import "@fontsource-variable/outfit";
 import "@fontsource-variable/jetbrains-mono";
 import { initMenu } from "./menu.js";
 import { initSettingsUI } from "./settings-ui.js";
+import { initGamingOverlay, overlayNotification } from "./gaming-overlay.js";
+import { initChannelUndocking } from "./call-undocking.js";
+import { refreshVoicePlayback } from "./voice-messages.js";
+import { discussionChanged } from "./discussions.js";
 import { initClientInfo } from "./clientinfo.js";
 import { initUpdater, startupAutoCheck } from "./updater.js";
 import { playEvent, playAlert, clearSpeech, initSounds, updateSoundOutput, updateConversationDucking, soundEngine, speechQueue } from "./sounds.js";
 import {
     startMicMeter, stopMicMeter, pttRelease, makeLimiter,
     getUserVolume, isUserMuted, refreshUserAudio, registerUserChain, unregisterUserChain,
+    getUserShareVolume, isUserShareMuted, setUserShareVolume, setUserShareMuted, onShareAudioChange,
     setDucking, attachUserNormalizer, detachUserNormalizer, detachAllUserNormalizers,
     captureConstraints, markCaptureProfile, applyCaptureProfile, resumeAudioPlayback, createRemoteAudioSource,
     syncMuteButton, renderMicStatus,
@@ -50,7 +55,7 @@ import { createLiveAnnouncementQueue } from "./live-announcer.js";
 import { dialogFocusableSelector, initModalSystem, mountServerDialog } from "./modal.js";
 import { parseRuntimeObject } from "./runtime-json.js";
 import { icon } from "./icons.js";
-import { initWorkspace, renderWorkspace, renderMember, renderVoiceHints } from "./workspace-ui.js";
+import { initWorkspace, renderWorkspace, renderMember, renderVoiceHints, cancelMemberVolumePreview } from "./workspace-ui.js";
 import { createTrayVoiceSync } from "./tray-state.js";
 import { capturePresenceScope, presenceIsCurrent, restorePresenceOnActivity, setPresence } from "./presence.js";
 import { captureMediaScope, mediaScopeIsCurrent, setWhisperRouting } from "./media-controls.js";
@@ -820,6 +825,7 @@ window.runtime.EventsOn("servererror", (msg) => {
 window.runtime.EventsOn("settings_update", (s) => {
     state.settings = s;
     refreshUserAudio();
+    renderMember();
     renderVoiceHints();
     void updateSoundOutput();
     void applyLiveAudioSettings().catch((error) => toast("Audio settings: " + error.message, "warn"));
@@ -1383,6 +1389,9 @@ window.runtime.EventsOn("event", (json) => {
             return;
         case "poll_changed":
             refreshPolls(d);
+            return;
+        case "discussion_changed":
+            void discussionChanged(d);
             return;
         case "conversation_changed":
             void conversationChanged(d);
@@ -2010,6 +2019,7 @@ function renderClientCard() {
 // somebody or explicitly asks for server/permission details. At narrower
 // widths CSS presents the same panel as a drawer instead of shrinking chat.
 function setDetailsOpen(open) {
+    if (!open) cancelMemberVolumePreview();
     const details = $("details");
     const toggle = $("details-toggle");
     const restoreFocus = !open && details.contains(document.activeElement);
@@ -2525,6 +2535,7 @@ function applyLiveAudioSettings() {
         }
         // Local preview elements must stay muted to avoid microphone feedback.
         applyOutputSettings($("remote-video"));
+        refreshVoicePlayback();
     });
     return liveAudioSettings;
 }
@@ -3187,12 +3198,15 @@ function resolveTrackUsers() {
 // because the reason to mute someone is usually that they are noisy while you
 // are watching what they share — killing the show with the talker is wrong.
 // Priority-speaker ducking (14) does apply: it exists to make one voice
-// audible over everything else, program audio included. The two controls are
-// session-local; settings.user_volumes/muted_users stay the voice registry.
+// audible over everything else, program audio included. Preferences persist by
+// unique ID independently from settings.user_volumes/muted_users.
 // ---------------------------------------------------------------------------
 
 // shareAudio maps publisher client ID -> {trackID, src, gain, uid, volume, muted}.
 const shareAudio = new Map();
+onShareAudioChange(uid => {
+    for (const [clientID, entry] of shareAudio) if (!uid || entry.uid === uid) applyShareAudio(clientID);
+});
 
 // SHARE_DUCK_FACTOR must match audio.js's DUCK_FACTOR: these chains are not in
 // its per-user registry, so setDucking cannot reach them.
@@ -3211,6 +3225,10 @@ function applyDucking(active, exceptUIDs) {
 function applyShareAudio(clientID) {
     const n = shareAudio.get(String(clientID));
     if (!n) return;
+    if (n.uid) {
+        n.volume = getUserShareVolume(n.uid) * 100;
+        n.muted = isUserShareMuted(n.uid);
+    }
     const duck = shareDuckActive && !shareDuckExempt.has(n.uid) ? SHARE_DUCK_FACTOR : 1;
     n.gain.gain.value = (n.muted ? 0 : n.volume / 100) * duck;
 }
@@ -3333,6 +3351,7 @@ syncMuteButton($("voice-mute"), state.muted);
 function setDeafened(on) {
     if (state.deafened === on) return;
     state.deafened = on;
+    refreshVoicePlayback();
     $("remote-video").muted = on;
     if (remoteChain.master) remoteChain.master.gain.value = on ? 0 : Math.min(2, (state.settings?.volume ?? 100) / 100);
     playEvent(on ? "deafen_on" : "deafen_off");
@@ -3341,6 +3360,10 @@ function setDeafened(on) {
 
 let whisperReplyRequest = null;
 window.runtime.EventsOn("hotkey", async (action) => {
+    if (["ptt_down", "ptt_up"].includes(action)) {
+        const preview = new CustomEvent("noxa-mic-test-ptt", { detail: action, cancelable: true });
+        if (!window.dispatchEvent(preview)) { setPTT(false); return; }
+    }
     if (action === "mute_toggle") {
         $("voice-mute").click();
         return;
@@ -3579,12 +3602,20 @@ window.__noxa = {
         setMuted: (clientID, muted) => {
             const n = shareAudio.get(String(clientID));
             if (!n) return;
+            if (n.uid) {
+                void setUserShareMuted(n.uid, muted).catch(error => sysMsg(String(error)));
+                return;
+            }
             n.muted = !!muted;
             applyShareAudio(clientID);
         },
         setVolume: (clientID, pct) => {
             const n = shareAudio.get(String(clientID));
             if (!n) return;
+            if (n.uid) {
+                void setUserShareVolume(n.uid, pct).catch(error => sysMsg(String(error)));
+                return;
+            }
             n.volume = Math.max(0, Math.min(200, pct | 0));
             applyShareAudio(clientID);
         },
@@ -3595,6 +3626,9 @@ initModalSystem();
 initSounds();
 initMenu();
 initSettingsUI();
+void initGamingOverlay();
+initChannelUndocking();
+window.addEventListener("noxa-overlay-notification", event => overlayNotification(event.detail));
 initClientInfo();
 initVideo();
 initUpdater();

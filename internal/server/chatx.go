@@ -81,6 +81,11 @@ func (l *chatRateLimiter) allow(uid string, now time.Time) bool {
 }
 
 func (l *chatRateLimiter) allowLimit(uid string, now time.Time, limit int) bool {
+	allowed, _ := l.allowWithRetry(uid, now, limit)
+	return allowed
+}
+
+func (l *chatRateLimiter) allowWithRetry(uid string, now time.Time, limit int) (bool, time.Duration) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if limit <= 0 {
@@ -92,10 +97,10 @@ func (l *chatRateLimiter) allowLimit(uid string, now time.Time, limit int) bool 
 		l.buckets[uid] = b
 	}
 	if b.tokens <= 0 {
-		return false
+		return false, b.reset.Sub(now)
 	}
 	b.tokens--
-	return true
+	return true, 0
 }
 
 func (s *TCPServer) chatActionLimit(context.Context, *Client) int {

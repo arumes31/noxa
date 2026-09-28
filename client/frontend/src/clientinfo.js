@@ -8,6 +8,10 @@ import { t } from "./i18n.js";
 import { roleChip } from "./role-presentation.js";
 import { startPrivateCall } from "./private-calls.js";
 import { updateLocalSettings } from "./settings-store.js";
+import { closeContextMenu, mountContextMenu, contextMenuKey } from "./context-menu.js";
+import { bindMemberVolume } from "./member-volume.js";
+import { openMemberMove } from "./member-move.js";
+import { escapeHTML } from "./markdown.js";
 
 const V = () => window.__noxa;
 
@@ -22,13 +26,18 @@ async function roleChannelDialog(kind, channelID) {
 let menuEl = null;
 
 function closeMenu() {
-    if (menuEl) {
-        menuEl.remove();
-        menuEl = null;
-    }
+    if (menuEl) closeContextMenu(menuEl);
 }
 
-function openContextMenu(x, y, client) {
+function replacementTrigger(trigger) {
+    const row = trigger?.closest("#channel-tree .client, #channel-tree .channel");
+    if (!row) return undefined;
+    const attribute = row.dataset.clid ? "data-clid" : "data-chid";
+    const id = row.getAttribute(attribute);
+    return () => document.querySelector(`#channel-tree [${attribute}="${CSS.escape(id)}"]`);
+}
+
+function openContextMenu(x, y, client, trigger) {
     closeMenu();
     const tabID = V().state.activeTabID;
     const disconnectTarget = { clientID: client.client_id, channelID: client.channel_id };
@@ -38,7 +47,7 @@ function openContextMenu(x, y, client) {
     // to all of them.
     const sel = V().state.multiSelect;
     if (sel && sel.size > 1 && sel.has(client.client_id)) {
-        return openBatchMenu(x, y, [...sel]);
+        return openBatchMenu(x, y, [...sel], trigger);
     }
     const muted = isUserMuted(client.unique_id);
     const volPct = Math.round(getUserVolume(client.unique_id) * 100);
@@ -67,6 +76,7 @@ function openContextMenu(x, y, client) {
             <span>Volume <span class="mono ctx-vol-pct">${volPct}%</span></span>
             <input type="range" min="0" max="200" value="${volPct}" />
         </div>
+        <button type="button" class="ctx-action" data-act="reset-volume">${t("context.resetVolume")}</button>
         ${mod.length ? `<div class="ctx-divider"></div>${mod.join("")}` : ""}`;
     menuEl.style.left = Math.min(x, window.innerWidth - 240) + "px";
     menuEl.style.top = Math.min(y, window.innerHeight - 260) + "px";
@@ -75,7 +85,7 @@ function openContextMenu(x, y, client) {
     if (client.unique_id && client.client_id !== V().state.myClientID) {
         const generation = V().state.serverGeneration;
         const call = document.createElement("button");
-        call.type = "button"; call.className = "ctx-action"; call.textContent = t("call.start");
+        call.type = "button"; call.className = "ctx-action"; call.dataset.act = "call"; call.textContent = t("call.start");
         call.onclick = () => {
             closeMenu();
             if (tabID === V().state.activeTabID && generation === V().state.serverGeneration) void startPrivateCall(client.unique_id);
@@ -176,20 +186,25 @@ function openContextMenu(x, y, client) {
         banDialog(client, tabID);
     };
     const slider = menuEl.querySelector('.ctx-volume input');
-    slider.oninput = () => {
-        menuEl.querySelector(".ctx-vol-pct").textContent = slider.value + "%";
-    };
-    slider.onchange = async () => {
-        try { await setUserVolume(client.unique_id, parseInt(slider.value, 10)); }
-        catch (error) { V().toast(String(error), "error"); }
-    };
-
-    document.body.appendChild(menuEl);
+    const disposeVolume = bindMemberVolume(slider, menuEl.querySelector(".ctx-vol-pct"), menuEl.querySelector('[data-act="reset-volume"]'), client.unique_id);
+    if (client.client_id && client.client_id !== V().state.myClientID) {
+        const move = document.createElement("button"); move.type = "button"; move.className = "ctx-action";
+        move.textContent = t("context.move"); move.onclick = () => { closeMenu(); openMemberMove(client); };
+        menuEl.append(move);
+    }
+    if (!client.client_id) {
+        for (const item of menuEl.querySelectorAll('[data-act="info"], [data-act="poke"], [data-act="kick-ch"], [data-act="kick-srv"], [data-act="ban"], [data-act="call"], button:not([data-act])')) {
+            if (client.multipleSessions && item.dataset.act === "call") continue;
+            item.classList.add("disabled"); item.setAttribute("aria-disabled", "true"); item.onclick = null; item.title = t(client.multipleSessions ? "context.multipleSessions" : "context.memberGone");
+        }
+    }
+    const menu = menuEl;
+    mountContextMenu(menu, { x, y, trigger, resolveTrigger: replacementTrigger(trigger), onClose: () => { disposeVolume(); if (menuEl === menu) menuEl = null; } });
 }
 
 // openBatchMenu is the multi-select context menu (306): actions apply to
 // every selected user.
-function openBatchMenu(x, y, clientIDs) {
+function openBatchMenu(x, y, clientIDs, trigger) {
     closeMenu();
     const tabID = V().state.activeTabID, generation = V().state.serverGeneration;
     const myID = V().state.myClientID;
@@ -231,7 +246,8 @@ function openBatchMenu(x, y, clientIDs) {
         }
         V().toast("kick requests sent for " + others.length + " users");
     };
-    document.body.appendChild(menuEl);
+    const menu = menuEl;
+    mountContextMenu(menu, { x, y, trigger, resolveTrigger: replacementTrigger(trigger), onClose: () => { if (menuEl === menu) menuEl = null; } });
 }
 
 // inboundAudioByPublisher maps a publisher's client ID -> its inbound-rtp
@@ -591,7 +607,7 @@ function banDialog(client, tabID) {
 
 // --- Channel context menu & edit dialog (24) ---------------------------------
 
-function openChannelMenu(x, y, channel) {
+function openChannelMenu(x, y, channel, trigger) {
     closeMenu();
     const { activeTabID: tabID, serverGeneration: generation } = V().state;
     const isCurrent = channel.ChannelID === V().state.myChannelID;
@@ -601,10 +617,11 @@ function openChannelMenu(x, y, channel) {
         .map((id) => V().state.channels.find((c) => c.ChannelID === id))
         .filter(Boolean)
         .filter((c) => c.ChannelID !== channel.ChannelID)
-        .map((c) => `<a data-act="recent-${c.ChannelID}">↩ # ${c.Name}</a>`);
+        .map((c) => `<a data-act="recent-${c.ChannelID}">↩ # ${escapeHTML(c.Name)}</a>`);
     menuEl = document.createElement("div");
     menuEl.className = "ctx-menu";
     menuEl.innerHTML = `
+        <a data-act="voice">${t(isCurrent ? "context.leave" : "context.join")}</a>
         <a data-act="open-chat">Open chat tab</a>
         <a data-act="subscription" class="${isCurrent ? "disabled" : ""}">${isCurrent ? "✓ Joined (always subscribed)" : isSubscribed ? "✓ Unsubscribe" : "Subscribe"}</a>
         <div class="ctx-divider"></div>
@@ -619,6 +636,14 @@ function openChannelMenu(x, y, channel) {
     menuEl.style.left = Math.min(x, window.innerWidth - 240) + "px";
     menuEl.style.top = Math.min(y, window.innerHeight - 260) + "px";
     menuEl.onclick = (e) => e.stopPropagation();
+    menuEl.querySelector('[data-act="voice"]').onclick = async () => {
+        closeMenu();
+        if (generation !== V().state.serverGeneration || tabID !== V().state.activeTabID) return;
+        try {
+            const error = await window.go.main.App.JoinChannelForTab(tabID, isCurrent ? 0 : channel.ChannelID);
+            if (error && generation === V().state.serverGeneration) V().toast(error, "warn");
+        } catch (error) { if (generation === V().state.serverGeneration) V().toast(String(error), "warn"); }
+    };
     menuEl.querySelector('[data-act="open-chat"]').onclick = () => {
         closeMenu();
         window.__noxaChat?.openChannelTab?.(channel.ChannelID);
@@ -678,7 +703,8 @@ function openChannelMenu(x, y, channel) {
         closeMenu();
         confirmChannelDelete(channel);
     };
-    document.body.appendChild(menuEl);
+    const menu = menuEl;
+    mountContextMenu(menu, { x, y, trigger, resolveTrigger: replacementTrigger(trigger), onClose: () => { if (menuEl === menu) menuEl = null; } });
 }
 
 // (320) recentChannels returns the current server's recent channel IDs.
@@ -753,21 +779,29 @@ export function initClientInfo() {
         e.stopPropagation();
         openChannelCreate(null);
     };
-    tree.addEventListener("contextmenu", (e) => {
-        e.preventDefault();
-        const row = e.target.closest(".client");
-        if (row && row.dataset.clid) {
-            const client = V().state.clients.find((c) => c.client_id === row.dataset.clid);
-            if (client) openContextMenu(e.clientX, e.clientY, client);
+    const open = (e, keyboard = false) => {
+        const row = e.target.closest('[data-member-uid], #channel-tree .client');
+        const x = keyboard ? undefined : e.clientX, y = keyboard ? undefined : e.clientY;
+        if (row) {
+            const uid = row.dataset.memberUid;
+            const clientID = row.dataset.memberClientId || row.dataset.clid;
+            const matches = V().state.clients.filter(c => (!uid || c.unique_id === uid) && (!clientID || c.client_id === clientID));
+            // Session-specific actions must never fall back to another device.
+            const client = (matches.length === 1 ? matches[0] : null)
+                || (uid ? { unique_id: uid, nickname: row.dataset.memberName || row.textContent, client_id: "", channel_id: 0, multipleSessions: matches.length > 1 } : null);
+            if (client) { e.preventDefault(); e.stopPropagation(); openContextMenu(x, y, client, row); }
             return;
         }
-        const chRow = e.target.closest(".channel");
+        const chRow = e.target.closest("#channel-tree .channel");
         if (!chRow || !chRow.dataset.chid) return;
         const channel = V().state.channels.find((c) => c.ChannelID === Number(chRow.dataset.chid));
-        if (channel) openChannelMenu(e.clientX, e.clientY, channel);
-    });
+        if (channel) { e.preventDefault(); e.stopPropagation(); openChannelMenu(x, y, channel, chRow); }
+    };
+    document.addEventListener("contextmenu", e => open(e));
+    document.addEventListener("noxa:member-menu", e => open(e, true));
+    document.addEventListener("keydown", e => { if (contextMenuKey(e)) open(e, true); });
     document.addEventListener("click", closeMenu);
-    window.runtime.EventsOn("tab_reset", closeMenu);
+    window.runtime.EventsOn("tab_reset", () => closeContextMenu());
     document.addEventListener("keydown", (e) => {
         if (e.key === "Escape") closeMenu();
     });
