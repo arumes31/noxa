@@ -148,7 +148,7 @@ func overlayProcedure(hwnd, message, wparam, lparam uintptr) uintptr {
 			var paint overlayPaint
 			// #nosec G103 -- Win32 consumes ABI-shaped stack structs synchronously.
 			dc, _, _ := overlayBegin.Call(hwnd, uintptr(unsafe.Pointer(&paint)))
-			defer overlayEnd.Call(hwnd, uintptr(unsafe.Pointer(&paint)))
+			defer func() { _, _, _ = overlayEnd.Call(hwnd, uintptr(unsafe.Pointer(&paint))) }()
 			_, _, _ = overlayFill.Call(dc, uintptr(unsafe.Pointer(&paint.Rect)), window.brush)
 			_, _, _ = overlayBackground.Call(dc, 1)
 			fontHeight := int32(-14 * snapshot.Scale / 100)
@@ -157,10 +157,10 @@ func overlayProcedure(hwnd, message, wparam, lparam uintptr) uintptr {
 			if font == 0 {
 				font, _, _ = overlayStock.Call(17)
 			} else {
-				defer overlayDelete.Call(font)
+				defer func() { _, _, _ = overlayDelete.Call(font) }()
 			}
 			old, _, _ := overlaySelect.Call(dc, font)
-			defer overlaySelect.Call(dc, old)
+			defer func() { _, _, _ = overlaySelect.Call(dc, old) }()
 			for i, line := range strings.Split(gamingOverlayText(snapshot), "\n") {
 				color := uintptr(0x00E8E8E8)
 				if strings.HasPrefix(line, "●") {
@@ -227,9 +227,9 @@ func (w *nativeOverlay) run(ready chan<- error) {
 		ready <- fmt.Errorf("create gaming overlay: %w", err)
 		return
 	}
-	defer overlayDestroy.Call(hwnd)
+	defer func() { _, _, _ = overlayDestroy.Call(hwnd) }()
 	w.brush, _, _ = overlayBrush.Call(0x00251C12)
-	defer overlayDelete.Call(w.brush)
+	defer func() { _, _, _ = overlayDelete.Call(w.brush) }()
 	overlayWindows.Store(hwnd, w)
 	defer overlayWindows.Delete(hwnd)
 	_, _, _ = overlayAlpha.Call(hwnd, 0, 224, 2)

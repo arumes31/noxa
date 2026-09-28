@@ -3,6 +3,8 @@ package main
 import (
 	"strings"
 	"unicode"
+
+	"noxa/internal/safecast"
 )
 
 // GamingOverlaySnapshot contains display-only voice state, never session keys.
@@ -159,9 +161,12 @@ func selectOverlayMonitor(monitors []GamingOverlayMonitor, id string) GamingOver
 
 func gamingOverlayPlacement(s GamingOverlaySnapshot, monitor GamingOverlayMonitor) (x, y, width, height int32) {
 	s = normalizeGamingOverlay(s)
-	scale := int32(s.Scale)
+	// Normalization bounds scale to 75–200, coordinates to 0–100 and text
+	// to twelve lines. Checked conversions also make the native ABI explicit.
+	scale, _ := safecast.IntToInt32(s.Scale)
+	lines, _ := safecast.IntToInt32(len(strings.Split(gamingOverlayText(s), "\n")))
 	width = min(348*scale/100, monitor.workWidth)
-	height = min(int32(22+len(strings.Split(gamingOverlayText(s), "\n"))*23)*scale/100, monitor.workHeight)
+	height = min((22+lines*23)*scale/100, monitor.workHeight)
 	margin := min(int32(16), max(int32(0), min(monitor.workWidth-width, monitor.workHeight-height)/2))
 	x, y = monitor.workWidth-width-margin, margin
 	if strings.HasSuffix(s.Position, "left") {
@@ -171,7 +176,9 @@ func gamingOverlayPlacement(s GamingOverlaySnapshot, monitor GamingOverlayMonito
 		y = monitor.workHeight - height - margin
 	}
 	if s.Position == "custom" {
-		x, y = (monitor.workWidth-width)*int32(s.X)/100, (monitor.workHeight-height)*int32(s.Y)/100
+		percentX, _ := safecast.IntToInt32(s.X)
+		percentY, _ := safecast.IntToInt32(s.Y)
+		x, y = (monitor.workWidth-width)*percentX/100, (monitor.workHeight-height)*percentY/100
 	}
 	return monitor.workLeft + max(int32(0), x), monitor.workTop + max(int32(0), y), width, height
 }

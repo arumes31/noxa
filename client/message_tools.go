@@ -126,12 +126,7 @@ func (a *App) SavedMessagesForTab(tabID string, request SavedMessageRequest) (Sa
 	path := filepath.Join(dir, hex.EncodeToString(owner[:])+".json")
 	savedMessagesMu.Lock()
 	defer savedMessagesMu.Unlock()
-	file, err := os.Open(path)
-	var raw []byte
-	if err == nil {
-		raw, err = io.ReadAll(io.LimitReader(file, 1024*1024+1))
-		_ = file.Close()
-	}
+	raw, err := readSavedMessageReferences(dir, filepath.Base(path))
 	if err == nil {
 		if len(raw) > 1024*1024 || json.Unmarshal(raw, &result.References) != nil {
 			return result, errors.New("invalid saved messages file")
@@ -183,6 +178,20 @@ func (a *App) SavedMessagesForTab(tabID string, request SavedMessageRequest) (Sa
 		return result, err
 	}
 	return result, nil
+}
+
+func readSavedMessageReferences(dir, name string) ([]byte, error) {
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = root.Close() }()
+	file, err := root.Open(name)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = file.Close() }()
+	return io.ReadAll(io.LimitReader(file, 1024*1024+1))
 }
 
 type HistorySearchFilter struct {

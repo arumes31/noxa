@@ -11,6 +11,27 @@ import (
 	"noxa/internal/netproto"
 )
 
+func TestSavedMessageReadsStayInsideTheirDirectory(t *testing.T) {
+	parent := t.TempDir()
+	dir := filepath.Join(parent, "saved-messages")
+	if err := os.Mkdir(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(parent, "outside.json"), []byte(`[]`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readSavedMessageReferences(dir, "../outside.json"); err == nil {
+		t.Fatal("read escaped the saved-message directory")
+	}
+	if err := os.WriteFile(filepath.Join(dir, "bounded.json"), []byte(strings.Repeat("x", 2*1024*1024)), 0600); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := readSavedMessageReferences(dir, "bounded.json")
+	if err != nil || len(raw) != 1024*1024+1 {
+		t.Fatalf("read limit: got %d bytes, error %v", len(raw), err)
+	}
+}
+
 func TestSavedMessagesPersistReferencesAndIsolateServers(t *testing.T) {
 	a, cm := newPipedApp(t, func(*netproto.Frame) (netproto.MessageType, any, bool) { return 0, nil, false })
 	a.settingsPath = filepath.Join(t.TempDir(), "settings.json")

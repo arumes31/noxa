@@ -19,7 +19,7 @@ func TestWebhookHTTPRejectsMalformedRequests(t *testing.T) {
 		{"POST", "/hooks/1", "Bearer " + strings.Repeat("a", 43), `{"content":"test"}{}`, 400},
 		{"POST", "/hooks/1", "Bearer " + strings.Repeat("a", 43), `{"content":"` + strings.Repeat("x", 13000) + `"}`, 400},
 	} {
-		req := httptest.NewRequest(tc.method, tc.path, strings.NewReader(tc.body))
+		req := httptest.NewRequestWithContext(t.Context(), tc.method, tc.path, strings.NewReader(tc.body))
 		req.Header.Set("Authorization", tc.token)
 		req.Header.Set("Content-Type", "application/json")
 		rec := httptest.NewRecorder()

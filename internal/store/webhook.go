@@ -28,7 +28,8 @@ func (s *Store) ManageWebhook(ctx context.Context, r netproto.WebhookRequest, cr
 		return out, err
 	}
 	defer rollbackRoleTx(tx, &retErr)
-	if r.Action == "create" {
+	switch r.Action {
+	case "create":
 		// Serialize channel quotas without holding a process-wide lock.
 		var channel int64
 		if err = tx.QueryRowContext(ctx, `SELECT id FROM channels WHERE id=$1 FOR UPDATE`, r.ChannelID).Scan(&channel); err != nil {
@@ -42,7 +43,7 @@ func (s *Store) ManageWebhook(ctx context.Context, r netproto.WebhookRequest, cr
 			return out, ErrWebhookDenied
 		}
 		err = tx.QueryRowContext(ctx, `INSERT INTO incoming_webhooks(channel_id,creator_id,name,token_hash) VALUES($1,$2,$3,$4) RETURNING id`, r.ChannelID, creator, r.Name, hash).Scan(&out.ID)
-	} else if r.Action == "revoke" {
+	case "revoke":
 		_, err = tx.ExecContext(ctx, `DELETE FROM incoming_webhooks WHERE id=$1 AND channel_id=$2`, r.ID, r.ChannelID)
 	}
 	if err != nil {
