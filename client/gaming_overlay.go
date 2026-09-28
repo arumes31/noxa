@@ -136,11 +136,9 @@ func (a *App) PreviewGamingOverlay(settings Settings) string {
 		return ""
 	}
 	if a.overlay == nil {
-		window, err := newNativeGamingOverlay()
-		if err != nil {
-			return err.Error()
+		if message := a.createGamingOverlayLocked(); message != "" {
+			return message
 		}
-		a.overlay = window
 	}
 	a.overlay.Preview(s)
 	return ""
@@ -196,11 +194,9 @@ func (a *App) UpdateGamingOverlay(s GamingOverlaySnapshot) string {
 		return ""
 	}
 	if a.overlay == nil && s.Active {
-		window, err := newNativeGamingOverlay()
-		if err != nil {
-			return err.Error()
+		if message := a.createGamingOverlayLocked(); message != "" {
+			return message
 		}
-		a.overlay = window
 	}
 	if a.overlay != nil {
 		a.overlay.Update(s)

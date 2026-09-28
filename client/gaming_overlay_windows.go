@@ -179,6 +179,16 @@ func overlayProcedure(hwnd, message, wparam, lparam uintptr) uintptr {
 	return result
 }
 
+// createGamingOverlayLocked initializes the platform window while overlayMu is held.
+func (a *App) createGamingOverlayLocked() string {
+	window, err := newNativeGamingOverlay()
+	if err != nil {
+		return err.Error()
+	}
+	a.overlay = window
+	return ""
+}
+
 func newNativeGamingOverlay() (gamingOverlayWindow, error) {
 	w := &nativeOverlay{stop: make(chan struct{}), done: make(chan struct{})}
 	ready := make(chan error, 1)
