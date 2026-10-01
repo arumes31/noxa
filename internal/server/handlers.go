@@ -1383,12 +1383,12 @@ func (s *TCPServer) sendDirectByUniqueID(ctx context.Context, client *Client, ms
 // deliverSpooled sends any spooled offline messages for the user to the
 // client as offline chat events and marks them delivered.
 func (s *TCPServer) deliverSpooled(ctx context.Context, client *Client, userID int64) {
-	if s.deps.Spool == nil || s.deps.Broadcast == nil {
+	if userID <= 0 || s.deps.Spool == nil || s.deps.Broadcast == nil {
 		return
 	}
 	// Concurrent sessions must not both read and deliver the same pending row.
 	// A fixed stripe set bounds memory while retaining single-recipient delivery.
-	lock := &s.spoolDelivery[uint64(userID)%uint64(len(s.spoolDelivery))]
+	lock := &s.spoolDelivery[userID%int64(len(s.spoolDelivery))]
 	lock.Lock()
 	defer lock.Unlock()
 	deviceKey, _ := s.senderDMKey(client)

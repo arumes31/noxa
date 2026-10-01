@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"math"
 	"sync"
 	"testing"
 	"time"
@@ -10,6 +11,41 @@ import (
 	"noxa/internal/netproto"
 	"noxa/internal/store"
 )
+
+type recordingSpoolLookup struct {
+	SpoolStore
+	users []int64
+}
+
+func (s *recordingSpoolLookup) PendingMessages(_ context.Context, userID int64) ([]store.SpooledMessage, error) {
+	s.users = append(s.users, userID)
+	return nil, nil
+}
+
+func TestSpooledDeliveryRequiresPositiveUserID(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		id     int64
+		lookup bool
+	}{
+		{"negative", -1, false},
+		{"minimum", math.MinInt64, false},
+		{"guest", 0, false},
+		{"registered", 1, true},
+		{"maximum", math.MaxInt64, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			env := startTestEnv(t, nil)
+			defer env.stop()
+			spool := &recordingSpoolLookup{}
+			env.srv.deps.Spool = spool
+			env.srv.deliverSpooled(t.Context(), &Client{ID: "test"}, tc.id)
+			if (len(spool.users) == 1) != tc.lookup {
+				t.Fatalf("spool lookups = %v, expected lookup %v", spool.users, tc.lookup)
+			}
+		})
+	}
+}
 
 func TestDirectMessageBindsAuthenticatedDeviceKeys(t *testing.T) {
 	env := startTestEnv(t, nil)
