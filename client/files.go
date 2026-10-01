@@ -945,6 +945,11 @@ func resumeState(destPath string) (*os.File, int64, hash.Hash, error) {
 // interrupted attempt leaves a resumable remnant instead of a truncated file
 // that looks complete.
 func (m *connManager) ftDownloadProgress(id string, ep ftEndpoint, token, transferID, destPath string, p *ftProgress) error {
+	release, err := reserveDownloadDestination(destPath)
+	if err != nil {
+		return err
+	}
+	defer release()
 	partPath := destPath + partSuffix
 	out, have, h, err := resumeState(destPath)
 	if err != nil {
@@ -989,10 +994,13 @@ func (m *connManager) ftDownloadProgress(id string, ep ftEndpoint, token, transf
 	)
 	closeErr := out.Close()
 	if err != nil {
-		if errors.Is(err, errFileDigestMismatch) {
+		if errors.Is(err, errFileDigestMismatch) ||
+			(have > 0 && p.Transferred == have && errors.Is(err, errFileTransferRejected)) {
 			// A stale remnant from a different version of the file would
-			// poison every retry, so drop it and let the next attempt start
-			// clean.
+			// poison every retry. An explicit server rejection before any
+			// new bytes also invalidates the resumed request (for example,
+			// an offset beyond a replacement file). Preserve partials on
+			// transport interruptions so ordinary retries still resume.
 			_ = os.Remove(partPath)
 		}
 		if isClosedConn(err) {

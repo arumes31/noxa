@@ -34,6 +34,7 @@ const fb = {
     loaded: false,
 };
 let serverViewGeneration = 0;
+let fileListSequence = 0;
 
 function readFileView() {
     return {
@@ -189,6 +190,7 @@ function fmtDate(ts) {
 
 // refreshFiles reloads the current folder listing.
 async function refreshFiles() {
+    const sequence = ++fileListSequence;
     fb.loaded = false;
     const pane = document.getElementById("files-pane");
     const list = pane.querySelector(".fb-list");
@@ -199,21 +201,22 @@ async function refreshFiles() {
         return;
     }
     const scope = captureScope(readFileView);
+    const current = () => sequence === fileListSequence && fileViewIsCurrent(scope);
     list.setAttribute("aria-busy", "true");
     list.innerHTML = `<div class="empty-state" role="status">${t("files.loading")}</div>`;
     try {
         const resp = await App().FileListForTab(scope.tabID, scope.channelID, scope.folder);
-        if (!fileViewIsCurrent(scope)) return;
+        if (!current()) return;
         fb.entries = resp.entries || [];
         fb.folders = resp.folders || [];
         fb.used = resp.used_bytes || 0;
         fb.quota = resp.quota_bytes || 0;
     } catch (err) {
-        if (!fileViewIsCurrent(scope)) return;
+        if (!current()) return;
         list.innerHTML = `<div class="empty-state" role="alert">${esc(t("files.listFailed", { error: String(err) }))}</div>`;
         return;
     } finally {
-        if (fileViewIsCurrent(scope)) {
+        if (current()) {
             list.removeAttribute("aria-busy");
         }
     }
@@ -860,28 +863,44 @@ function drawSpark() {
 function renderTransfers() {
     if (!trWin.open) return;
     const list = trWin.overlay.querySelector(".tr-list");
-    list.innerHTML = "";
     const rows = [...transfers.values()].filter(transfer => transfer.tabID === V().state.activeTabID).sort((a, b) => b.started - a.started);
     if (rows.length === 0) {
         list.innerHTML = `<div class="empty-state">${t("files.noTransfers")}</div>`;
         return;
     }
-    for (const transfer of rows) {
-        const row = document.createElement("div");
+    const focused = list.contains(document.activeElement) ? document.activeElement : null;
+    const existing = new Map([...list.querySelectorAll(".tr-row")].map(row => [row.dataset.transferKey, row]));
+    const visible = new Set(rows.map(transfer => transferKey(transfer.tabID, transfer.id)));
+    for (const [key, row] of existing) if (!visible.has(key)) row.remove();
+    list.querySelector(".empty-state")?.remove();
+    for (const [index, transfer] of rows.entries()) {
+        const key = transferKey(transfer.tabID, transfer.id);
+        const row = existing.get(key) || document.createElement("div");
+        if (!existing.has(key)) {
+            row.dataset.transferKey = key;
+            row.innerHTML = `<span class="tr-dir"></span><span class="tr-name"></span>
+                <span class="tr-bar"><span class="tr-fill"></span></span>
+                <span class="tr-meta mono"></span><span class="tr-status mono"></span>`;
+        }
         row.className = "tr-row " + transfer.status;
         const pct = transfer.total > 0 ? Math.min(100, Math.round(transfer.transferred / transfer.total * 100)) : 0;
         const eta = transfer.status === "active" && transfer.bps > 0 && transfer.total > 0
             ? formatTransferETA((transfer.total - transfer.transferred) / transfer.bps)
             : "";
         const resumed = transfer.resumed > 0 ? t("files.resumed", { size: humanBytes(transfer.resumed) }) : "";
-        row.innerHTML = `
-            <span class="tr-dir">${icon(transfer.direction === "upload" ? "upload" : "download")}</span>
-            <span class="tr-name" title="${esc(transfer.name)}">${esc(transfer.name)}</span>
-            <span class="tr-bar"><span class="tr-fill" style="width:${pct}%"></span></span>
-            <span class="tr-meta mono">${pct}% · ${humanBytes(transfer.bps || 0)}/s ${eta ? "· " + eta : ""}${resumed}</span>
-            <span class="tr-status mono">${esc(t("files.transfer." + (["active", "done", "error", "failed", "cancelled", "canceled", "queued"].includes(transfer.status) ? transfer.status : "unknown")))}${transfer.error ? ": " + esc(transfer.error) : ""}</span>`;
-        if (transfer.status === "done" && transfer.direction === "download") {
-            const open = document.createElement("button");
+        row.querySelector(".tr-dir").innerHTML = icon(transfer.direction === "upload" ? "upload" : "download");
+        row.querySelector(".tr-name").textContent = transfer.name;
+        row.querySelector(".tr-name").title = transfer.name;
+        row.querySelector(".tr-fill").style.width = `${pct}%`;
+        row.querySelector(".tr-meta").textContent = `${pct}% · ${humanBytes(transfer.bps || 0)}/s ${eta ? "· " + eta : ""}${resumed}`;
+        row.querySelector(".tr-status").textContent = t("files.transfer." + (["active", "done", "error", "failed", "cancelled", "canceled", "queued"].includes(transfer.status) ? transfer.status : "unknown")) + (transfer.error ? ": " + transfer.error : "");
+        const action = transfer.status === "done" && transfer.direction === "download" ? "open"
+            : transfer.status === "active" ? "cancel"
+                : transfer.status !== "done" && canRetryDownload(downloadArgs.get(key)) ? "retry" : "";
+        if (row.dataset.action !== action) row.querySelector("button")?.remove();
+        row.dataset.action = action;
+        if (action === "open") {
+            const open = row.querySelector("button") || document.createElement("button");
             open.type = "button";
             labelButton(open, "folder", t("polish.openFolder"));
             open.onclick = async () => {
@@ -893,9 +912,9 @@ function renderTransfers() {
                     if (V().state.activeTabID === transfer.tabID) V().toast(t("polish.openFolderFailed", { error: String(error) }), "warn");
                 }
             };
-            row.appendChild(open);
-        } else if (transfer.status === "active") {
-            const cancel = document.createElement("button");
+            if (!open.parentElement) row.appendChild(open);
+        } else if (action === "cancel") {
+            const cancel = row.querySelector("button") || document.createElement("button");
             cancel.className = "icon-btn";
             cancel.innerHTML = icon("close");
             cancel.setAttribute("aria-label", t("files.cancelTransfer"));
@@ -910,11 +929,11 @@ function renderTransfers() {
                     if (transferScopeIsCurrent(scope)) V().toast(String(err), "warn");
                 }
             };
-            row.appendChild(cancel);
-        } else if (transfer.status !== "done" && canRetryDownload(downloadArgs.get(transferKey(transfer.tabID, transfer.id)))) {
+            if (!cancel.parentElement) row.appendChild(cancel);
+        } else if (action === "retry") {
             // (259) retrying into the same destination picks up where the
             // interrupted attempt stopped instead of re-fetching the whole file.
-            const retry = document.createElement("button");
+            const retry = row.querySelector("button") || document.createElement("button");
             retry.className = "icon-btn";
             labelButton(retry, "refresh", t("files.resume"));
             retry.title = t("files.resumeHelp");
@@ -924,10 +943,11 @@ function renderTransfers() {
                 transfer.history = [];
                 startDownload({ ...args, scope: { ...args.scope, generation: serverViewGeneration } }, transfer.id);
             };
-            row.appendChild(retry);
+            if (!retry.parentElement) row.appendChild(retry);
         }
-        list.appendChild(row);
+        if (list.children[index] !== row) list.insertBefore(row, list.children[index] || null);
     }
+    if (focused?.isConnected && document.activeElement !== focused) focused.focus({ preventScroll: true });
 }
 
 // --- server icon + banner (270) ------------------------------------------------

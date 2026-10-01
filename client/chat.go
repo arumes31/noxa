@@ -1890,6 +1890,18 @@ func ftDownloadStream(conn net.Conn, init any, out io.Writer, maxBytes, total in
 					return total, err
 				}
 			}
+		case ftStatus:
+			var status struct {
+				OK    bool   `json:"ok"`
+				Error string `json:"error"`
+			}
+			if err := json.Unmarshal(f.Payload, &status); err != nil {
+				return total, err
+			}
+			if status.OK {
+				return total, errors.New("download completed without a digest")
+			}
+			return total, fmt.Errorf("%w: %s", errFileTransferRejected, status.Error)
 		case ftDigest:
 			var d struct {
 				SHA256 string `json:"sha256"`
@@ -1911,6 +1923,7 @@ func ftDownloadStream(conn net.Conn, init any, out io.Writer, maxBytes, total in
 }
 
 var errFileDigestMismatch = errors.New("file digest mismatch")
+var errFileTransferRejected = errors.New("transfer rejected")
 
 var fileTransferIdleTimeout = 30 * time.Second
 
