@@ -4240,7 +4240,9 @@ test("selected quick wins retain voice context and explicit mute semantics", asy
     await expect(page.locator("#voice-mute")).toHaveText("Microphone muted");
     await expect(page.locator("#voice-mute svg")).toHaveCount(1);
     await expect(page.getByRole("button", { name: "Leave voice channel", exact: true })).toBeVisible();
+    await page.locator("#voice-options > summary").click();
     await expect(page.getByRole("button", { name: "Disconnect server", exact: true })).toBeVisible();
+    await page.keyboard.press("Escape");
     await page.getByRole("tab", { name: "Files", exact: true }).click();
     await expect(page.locator("#voice-context")).toContainText("Public");
 });
@@ -4529,11 +4531,12 @@ test("selected quick wins fullscreen keeps names and share audio has independent
 test("B3 participant strip follows live channel membership and opens member controls", async ({ page }) => {
     await showB3Workspace(page);
     const strip = page.getByRole("region", { name: "Voice participants" });
-    await expect(strip.getByRole("button")).toHaveCount(4);
+    await expect(strip.locator(".participant")).toHaveCount(4);
+    await expect(strip.locator(".participant-menu")).toHaveCount(4);
     await strip.getByRole("button", { name: /Mia.*speaking/ }).click();
     await expect(page.locator("#client-card .card-nick")).toHaveText("Mia");
-    await page.getByRole("slider", { name: "Voice volume · Only for you" }).fill("75");
-    await page.getByRole("slider", { name: "Voice volume · Only for you" }).press("Tab");
+    await page.getByRole("slider", { name: "Microphone volume · Only for you" }).fill("75");
+    await page.getByRole("slider", { name: "Microphone volume · Only for you" }).press("Tab");
     await expect.poll(() => page.evaluate(() => window.__savedSettings?.user_volumes?.["uid-mia"])).toBe(75);
     await page.getByRole("button", { name: "Message Mia", exact: true }).click();
     await expect(page.locator("#chat-head-title")).toContainText("Mia");
@@ -4667,7 +4670,7 @@ test("B3 restores the persisted member volume after a failed save", async ({ pag
         });
     });
     await page.locator('#voice-participants [data-client-id="mia"]').click();
-    const slider = page.getByRole("slider", { name: "Voice volume · Only for you" });
+    const slider = page.getByRole("slider", { name: "Microphone volume · Only for you" });
     await slider.fill("75");
     await expect.poll(() => page.evaluate(() => window.__noxa.state.settings.user_volumes?.["uid-mia"])).toBe(75);
     await page.evaluate(() => { window.__failVolumeSave = true; });
@@ -4690,12 +4693,12 @@ test("B3 ignores a volume save failure after selecting another member", async ({
         });
     });
     await page.locator('#voice-participants [data-client-id="mia"]').click();
-    await page.getByRole("slider", { name: "Voice volume · Only for you" }).fill("150");
+    await page.getByRole("slider", { name: "Microphone volume · Only for you" }).fill("150");
     await expect.poll(() => page.evaluate(() => typeof window.__finishVolumeSave)).toBe("function");
     await page.locator('#voice-participants [data-client-id="alex"]').click();
     await page.evaluate(() => window.__finishVolumeSave("disk full"));
     await expect(page.locator("#client-card .card-nick")).toHaveText("Alex");
-    await expect(page.getByRole("slider", { name: "Voice volume · Only for you" })).toHaveValue("100");
+    await expect(page.getByRole("slider", { name: "Microphone volume · Only for you" })).toHaveValue("100");
     await expect(page.locator("#member-volume-value")).toHaveText("100%");
     await expect(page.locator("#member-action-error")).toBeHidden();
 });
@@ -4717,7 +4720,10 @@ test("B3 fits desktop and small windows without losing the composer or toolbar",
         await page.setViewportSize(viewport);
         await expect(page.locator("#chat-text")).toBeVisible();
         await expect(page.locator("#voice-mute")).toBeVisible();
+        await expect(page.locator("#voice-leave-channel")).toBeVisible();
+        await page.locator("#voice-options > summary").click();
         await expect(page.locator("#voice-disconnect")).toBeVisible();
+        await page.keyboard.press("Escape");
         const bounds = await page.evaluate(() => ({
             overflow: document.documentElement.scrollWidth > innerWidth,
             composer: document.getElementById("chat-input-row").getBoundingClientRect().bottom,
@@ -4774,10 +4780,12 @@ test.beforeEach(async ({ page }) => {
         };
         const app = new Proxy({}, {
             get(_target, nativeMethod) {
+                if (nativeMethod === "ReconnectTab" && !window.__tabScopedReconnect) return undefined;
                 return async (...args) => {
                     let method = nativeMethod;
                     window.__calls[method] = (window.__calls[method] || 0) + 1;
                     (window.__callArgs[method] ||= []).push(structuredClone(args));
+                    if (method === "ReconnectTab") return window.__reconnectTabHandler(...args);
                     if (method.endsWith("ForContext")) {
                         method = method.replace(/ForContext$/, "");
                         args = args.slice(1);
@@ -5017,6 +5025,7 @@ for (const flow of ["login", "reconnect"]) test(`session snapshot keeps an offli
 test("session snapshot leaves one retry scheduled after a disconnect during recovery", async ({ page }) => {
     await page.clock.install();
     await page.evaluate(() => {
+        Math.random = () => 0;
         const original = window.go.main.App;
         window.__sessionSnapshotPending = false;
         const gate = new Promise((resolve) => { window.__releaseSessionSnapshot = resolve; });
@@ -5048,6 +5057,7 @@ test("session snapshot leaves one retry scheduled after a disconnect during reco
 test("session snapshot preserves the retry limit after repeated offline reconnects", async ({ page }) => {
     await page.clock.install();
     await page.evaluate(() => {
+        Math.random = () => 0;
         const original = window.go.main.App;
         window.go.main.App = new Proxy(original, { get(target, method) {
             if (method === "SessionInfoForTab") return async () => ({
@@ -6576,6 +6586,256 @@ test("failed automatic reconnect preserves the dropped server tab", async ({ pag
     expect(await page.evaluate(() => window.__tabs.map((tab) => tab.id))).toEqual(["dropped-tab"]);
 });
 
+test("automatic reconnect spreads repeated login admission collisions", async ({ page }) => {
+    await page.clock.install({ time: new Date("2026-09-28T12:00:00Z") });
+    await page.clock.pauseAt(new Date("2026-09-28T12:00:01Z"));
+    await page.evaluate(() => {
+        Math.random = () => 0.8;
+        const started = Date.now();
+        const state = window.__noxa.state;
+        state.activeTabID = "dropped-tab";
+        state.settings.reconnect_on_loss = true;
+        state.lastConnect = { addr: "voice.example:12333", nick: "Alice", pw: "secret", spw: "", bookmark: "" };
+        window.__tabs = [{ id: "dropped-tab", addr: state.lastConnect.addr, nickname: "Alice", connected: false, active: true }];
+        // Another client sharing the source address reserves the login slot
+        // on each synchronized five-second retry. A later retry can succeed.
+        window.__connectBookmarkHandler = async (_bookmark, addr, nickname) => {
+            if ((Date.now() - started) % 5000 < 500) return { error: "too many failed logins, try again later" };
+            window.__tabs = [{ id: "replacement", addr, nickname, connected: true, active: true }];
+            for (const callback of window.__events.tab_reset || []) callback("replacement");
+            return { tab_id: "replacement", error: "" };
+        };
+        for (const callback of window.__events.disconnected || []) callback();
+    });
+    await page.clock.runFor(5000);
+    await expect(page.locator("#conn-pill")).toHaveText("retry 2/5 in 9s…");
+    await page.clock.runFor(8999);
+    expect(await page.evaluate(() => window.__calls.ConnectBookmarkTabWithID)).toBe(1);
+    await page.clock.runFor(1);
+    await expect(page.locator("#conn-pill")).toHaveClass(/\bup\b/);
+    expect(await page.evaluate(() => window.__calls.ConnectBookmarkTabWithID)).toBe(2);
+});
+
+test("background reconnect failures preserve the selected connected server", async ({ page }) => {
+    await page.clock.install({ time: new Date("2026-09-28T12:00:00Z") });
+    await page.clock.pauseAt(new Date("2026-09-28T12:00:01Z"));
+    await page.evaluate(async () => {
+        Math.random = () => 0;
+        const state = window.__noxa.state;
+        state.activeTabID = "dropped-tab";
+        state.settings.reconnect_on_loss = true;
+        state.lastConnect = { addr: "dropped.example:12333", nick: "Alice", pw: "secret", spw: "", bookmark: "" };
+        state.tabConnects.set("other-tab", { addr: "other.example:12333", nick: "Bob", pw: "other", spw: "", bookmark: "" });
+        window.__tabs = [
+            { id: "dropped-tab", addr: state.lastConnect.addr, nickname: "Alice", connected: false, active: true },
+            { id: "other-tab", addr: "other.example:12333", nickname: "Bob", connected: true, active: false },
+        ];
+        window.__connectBookmarkResult = "connection refused";
+        window.__noxa.showWorkspace(false);
+        for (const callback of window.__events.disconnected || []) callback();
+        await window.go.main.App.SetActiveTab("other-tab");
+    });
+    await expect(page.locator("#conn-pill")).toHaveText("other.example:12333");
+    await page.clock.runFor(1000);
+    await expect(page.locator("#conn-pill")).toHaveText("other.example:12333");
+    for (let attempt = 1; attempt <= 5; attempt++) {
+        await page.clock.runFor(attempt === 1 ? 4000 : 5000);
+        await expect.poll(() => page.evaluate(() => window.__calls.ConnectBookmarkTabWithID || 0)).toBe(attempt);
+    }
+    await expect(page.locator("#conn-pill")).toHaveText("other.example:12333");
+    await expect(page.locator("#conn-pill")).toHaveClass(/\bup\b/);
+    await expect(page.locator("#login-overlay")).not.toBeVisible();
+    expect(await page.evaluate(() => window.__callArgs.ConnectBookmarkTabWithID.every((args) => args[1] === "dropped.example:12333"))).toBe(true);
+});
+
+test("a newly disconnected foreground tab owns the automatic reconnect timer", async ({ page }) => {
+    await page.clock.install({ time: new Date("2026-09-28T12:00:00Z") });
+    await page.clock.pauseAt(new Date("2026-09-28T12:00:01Z"));
+    await page.evaluate(async () => {
+        Math.random = () => 0;
+        const state = window.__noxa.state;
+        state.activeTabID = "dropped-tab";
+        state.settings.reconnect_on_loss = true;
+        state.lastConnect = { addr: "dropped.example:12333", nick: "Alice", pw: "secret", spw: "", bookmark: "" };
+        state.tabConnects.set("other-tab", { addr: "other.example:12333", nick: "Bob", pw: "other", spw: "", bookmark: "" });
+        window.__tabs = [
+            { id: "dropped-tab", addr: state.lastConnect.addr, nickname: "Alice", connected: false, active: true },
+            { id: "other-tab", addr: "other.example:12333", nickname: "Bob", connected: true, active: false },
+        ];
+        window.__connectBookmarkResult = "connection refused";
+        for (const callback of window.__events.disconnected || []) callback();
+        await window.go.main.App.SetActiveTab("other-tab");
+    });
+    await expect(page.locator("#conn-pill")).toHaveText("other.example:12333");
+    await page.clock.runFor(1000);
+    await page.evaluate(() => {
+        window.__tabs.find(tab => tab.id === "other-tab").connected = false;
+        for (const callback of window.__events.disconnected || []) callback();
+    });
+    await page.clock.runFor(5000);
+    expect(await page.evaluate(() => window.__callArgs.ConnectBookmarkTabWithID.map(args => args[1]))).toEqual(["other.example:12333"]);
+    expect(await page.evaluate(() => window.__noxa.state.reconnectAttempts)).toBe(2);
+});
+
+test.describe("per-tab automatic reconnect", () => {
+    test.beforeEach(async ({ page }) => {
+        await page.clock.install({ time: new Date("2026-09-28T12:00:00Z") });
+        await page.clock.pauseAt(new Date("2026-09-28T12:00:01Z"));
+        await page.evaluate(async () => {
+            Math.random = () => 0;
+            window.__tabScopedReconnect = true;
+            const state = window.__noxa.state;
+            state.settings.reconnect_on_loss = true;
+            window.__tabs = [
+                { id: "tab-a", addr: "a.example:12333", nickname: "Alice", connected: true, active: true },
+                { id: "tab-b", addr: "b.example:12333", nickname: "Bob", connected: true, active: false },
+            ];
+            for (const tab of window.__tabs) state.tabConnects.set(tab.id, { addr: tab.addr, nick: tab.nickname, pw: `${tab.id}-password`, spw: `${tab.id}-server`, bookmark: "" });
+            window.__reconnectTabHandler = async (tabID) => {
+                if (window.__tabReconnectGate) await window.__tabReconnectGate;
+                const tab = window.__tabs.find(tab => tab.id === tabID);
+                if (!tab) return { error: "closed tab" };
+                if (window.__tabReconnectFailure?.[tabID]) return { error: "connection refused" };
+                tab.connected = true;
+                if (tab.active) for (const cb of window.__events.tab_reset || []) cb(tabID);
+                for (const cb of window.__events.tab_update || []) cb(structuredClone(window.__tabs));
+                return { tab_id: tabID, error: "" };
+            };
+            window.__loseTab = tabID => {
+                const tab = window.__tabs.find(tab => tab.id === tabID);
+                tab.connected = false;
+                if (tab.active) for (const cb of window.__events.disconnected || []) cb();
+                for (const cb of window.__events.tab_disconnected || []) cb(tabID);
+                for (const cb of window.__events.tab_update || []) cb(structuredClone(window.__tabs));
+            };
+            window.__noxa.showWorkspace(false);
+            await window.go.main.App.SetActiveTab("tab-a");
+        });
+        // Let the workspace's initial animation-frame focus handoff finish
+        // before exercising focus preservation during later recovery.
+        await page.clock.runFor(16);
+        await expect(page.locator("#conn-pill")).toHaveText("a.example:12333");
+    });
+
+    test("recovers an inactive tab without changing selection, focus or credentials", async ({ page }) => {
+        await page.locator("#chat-text").focus();
+        await expect(page.locator("#chat-text")).toBeFocused();
+        await page.evaluate(() => {
+            window.__loseTab("tab-b");
+            window.__noxa.state.tabConnects.set("tab-b", { addr: "unrelated.example", nick: "Carol", pw: "changed", spw: "changed" });
+        });
+        await page.clock.runFor(5000);
+        await expect.poll(() => page.evaluate(() => window.__tabs.find(tab => tab.id === "tab-b").connected)).toBe(true);
+        expect(await page.evaluate(() => window.__callArgs.ReconnectTab)).toEqual([["tab-b", "tab-b-password", "tab-b-server"]]);
+        expect(await page.evaluate(() => ({ active: window.__noxa.state.activeTabID, selected: window.__noxa.state.lastConnect.addr, previous: window.__noxa.state.lastSuccessfulConnect.addr, tabs: window.__tabs.map(tab => tab.id) }))).toEqual({ active: "tab-a", selected: "a.example:12333", previous: "a.example:12333", tabs: ["tab-a", "tab-b"] });
+        await expect(page.locator("#conn-pill")).toHaveText("a.example:12333");
+        await expect(page.locator("#chat-text")).toBeFocused();
+        expect(await page.evaluate(() => window.__noxa.state.tabConnects.get("tab-b").pw)).toBe("tab-b-password");
+        await page.evaluate(() => window.__loseTab("tab-b"));
+        await page.clock.runFor(5000);
+        expect(await page.evaluate(() => window.__callArgs.ReconnectTab)).toEqual(Array(2).fill(["tab-b", "tab-b-password", "tab-b-server"]));
+    });
+
+    test("opting out clears the active retry countdown", async ({ page }) => {
+        await page.evaluate(() => window.__loseTab("tab-a"));
+        await expect(page.locator("#conn-pill")).toHaveText("retry 1/5 in 5s…");
+        await page.evaluate(() => {
+            for (const cb of window.__events.settings_update || []) cb({ ...window.__noxa.state.settings, reconnect_on_loss: false });
+        });
+        await expect(page.locator("#conn-pill")).toHaveText("offline");
+        await page.clock.runFor(60000);
+        expect(await page.evaluate(() => window.__calls.ReconnectTab || 0)).toBe(0);
+    });
+
+    test("a second connection loss during finalization keeps retrying the same tab", async ({ page }) => {
+        await page.evaluate(() => {
+            const app = window.go.main.App;
+            const connect = window.__reconnectTabHandler;
+            window.__reconnectTabHandler = async (...args) => {
+                const result = await connect(...args);
+                window.__holdRecoveryStatus = true;
+                return result;
+            };
+            window.go.main.App = new Proxy(app, { get(target, key) {
+                if (key !== "ListTabs") return target[key];
+                return async () => {
+                    const tabs = structuredClone(window.__tabs);
+                    if (window.__holdRecoveryStatus) {
+                        window.__holdRecoveryStatus = false;
+                        await new Promise(resolve => { window.__releaseRecoveryStatus = resolve; });
+                    }
+                    return tabs;
+                };
+            }});
+            window.__loseTab("tab-b");
+        });
+        await page.clock.runFor(5000);
+        await expect.poll(() => page.evaluate(() => !!window.__releaseRecoveryStatus)).toBe(true);
+        await page.evaluate(() => { window.__loseTab("tab-b"); window.__releaseRecoveryStatus(); });
+        await page.clock.runFor(5000);
+        expect(await page.evaluate(() => window.__calls.ReconnectTab)).toBe(2);
+    });
+
+    test("independent failures do not consume or reset another tab's retry budget", async ({ page }) => {
+        await page.evaluate(() => { window.__tabReconnectFailure = { "tab-a": true }; window.__loseTab("tab-a"); window.__loseTab("tab-b"); });
+        await page.clock.runFor(5000);
+        expect(await page.evaluate(() => window.__callArgs.ReconnectTab.map(args => args[0]).sort())).toEqual(["tab-a", "tab-b"]);
+        expect(await page.evaluate(() => window.__noxa.state.reconnectAttempts)).toBe(2);
+        await expect(page.locator("#conn-pill")).toHaveText("retry 2/5 in 5s…");
+        for (let attempt = 2; attempt <= 5; attempt++) await page.clock.runFor(5000);
+        await page.clock.runFor(10000);
+        expect(await page.evaluate(() => window.__callArgs.ReconnectTab.filter(args => args[0] === "tab-a").length)).toBe(5);
+        expect(await page.evaluate(() => window.__callArgs.ReconnectTab.filter(args => args[0] === "tab-b").length)).toBe(1);
+        await expect(page.locator("#login-overlay")).toBeHidden();
+    });
+
+    test("switching away during recovery keeps the newly selected server active", async ({ page }) => {
+        await page.evaluate(async () => {
+            await window.go.main.App.SetActiveTab("tab-b");
+            window.__tabReconnectGate = new Promise(resolve => { window.__finishTabReconnect = resolve; });
+            window.__loseTab("tab-b");
+        });
+        await page.clock.runFor(5000);
+        await page.evaluate(() => window.go.main.App.SetActiveTab("tab-a"));
+        await expect(page.locator("#conn-pill")).toHaveText("a.example:12333");
+        await page.evaluate(() => window.__finishTabReconnect());
+        await expect.poll(() => page.evaluate(() => window.__tabs.find(tab => tab.id === "tab-b").connected)).toBe(true);
+        await expect(page.locator("#conn-pill")).toHaveText("a.example:12333");
+        expect(await page.evaluate(() => window.__noxa.state.lastConnect.addr)).toBe("a.example:12333");
+    });
+
+    test("closing a tab cancels its pending recovery and forgets credentials", async ({ page }) => {
+        await page.evaluate(() => {
+            window.__tabReconnectGate = new Promise(resolve => { window.__finishTabReconnect = resolve; });
+            window.__loseTab("tab-b");
+        });
+        await page.clock.runFor(5000);
+        await page.evaluate(() => {
+            window.__tabs = window.__tabs.filter(tab => tab.id !== "tab-b");
+            for (const cb of window.__events.tab_closed || []) cb("tab-b");
+            for (const cb of window.__events.tab_update || []) cb(structuredClone(window.__tabs));
+            window.__finishTabReconnect();
+        });
+        await page.clock.runFor(60000);
+        expect(await page.evaluate(() => window.__calls.ReconnectTab)).toBe(1);
+        expect(await page.evaluate(() => window.__noxa.state.tabConnects.has("tab-b"))).toBe(false);
+        await expect(page.locator("#conn-pill")).toHaveText("a.example:12333");
+    });
+
+    for (const reason of ["disabled", "server removal"]) test(`pending background retry stops after ${reason}`, async ({ page }) => {
+        await page.evaluate(reason => {
+            window.__loseTab("tab-b");
+            if (reason === "disabled") {
+                const settings = { ...window.__noxa.state.settings, reconnect_on_loss: false };
+                for (const cb of window.__events.settings_update || []) cb(settings);
+            } else for (const cb of window.__events.tab_reconnect_disabled || []) cb("tab-b");
+        }, reason);
+        await page.clock.runFor(60000);
+        expect(await page.evaluate(() => window.__calls.ReconnectTab || 0)).toBe(0);
+        await expect(page.locator("#conn-pill")).toHaveText("a.example:12333");
+    });
+});
+
 test("automatic reconnect does not retire a source tab that is connected again", async ({ page }) => {
     await page.clock.install();
     await page.evaluate(() => {
@@ -6643,7 +6903,7 @@ test("labels screen-share controls and explains low-bandwidth data use", async (
             };
         } });
     });
-    await page.getByLabel("Voice options", { exact: true }).click();
+    await page.getByLabel("More voice options", { exact: true }).click();
     const shareButton = page.locator("#voice-screen");
     const lowBandwidthButton = page.locator("#voice-lowbw");
 
@@ -7982,8 +8242,16 @@ test("nests connected members below channels and offers them as direct-message t
     await page.locator("#chat-scope").selectOption("direct");
     await page.locator("#chat-target").focus();
     await expect(page.locator("#chat-target-options .target-option")).toHaveCount(2);
+    await page.locator("#chat-target").fill("Car");
     await page.locator("#chat-target-options .target-option", { hasText: "Carol" }).click();
     await expect(page.locator("#chat-target")).toHaveValue("user-c");
+    await expect(page.locator("#pm-tabs .pm-tab:not(.channel-tab)")).toHaveCount(1);
+    await page.locator("#chat-target-toggle").click();
+    await expect(page.locator("#chat-target-options")).toBeVisible();
+    await page.locator("#chat-target-toggle").click();
+    await expect(page.locator("#chat-target-options")).toBeHidden();
+    await page.locator("#chat-target-toggle").click();
+    await expect(page.locator("#chat-target-options")).toBeVisible();
 });
 
 test("uses the B3 console composition without losing responsive navigation", async ({ page }) => {
@@ -8033,6 +8301,9 @@ test("uses the B3 console composition without losing responsive navigation", asy
     await page.getByRole("button", { name: "Close details", exact: true }).click();
     await page.getByRole("button", { name: "Show channels", exact: true }).click();
     await expect(page.locator('.channel[data-chid="1"]')).toBeVisible();
+    await page.getByRole("button", { name: "Close channels", exact: true }).click();
+    await expect(page.locator("#sidebar")).toBeHidden();
+    await expect(page.getByRole("button", { name: "Show channels", exact: true })).toBeFocused();
 });
 
 test("exposes named landmarks, controls, live regions, and a visible focus ring", async ({ page }) => {

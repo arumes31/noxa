@@ -160,6 +160,8 @@ export function DisconnectMemberForTab(arg1:string,arg2:string,arg3:number,arg4:
 
 export function DisconnectTab(arg1:string):Promise<void>;
 
+export function DiscussionForTab(arg1:string,arg2:netproto.DiscussionRequest):Promise<netproto.DiscussionResult>;
+
 export function DownloadAndApply(arg1:main.UpdateInfo):Promise<string>;
 
 export function DownloadChatAttachment(arg1:number,arg2:string,arg3:string):Promise<string>;
@@ -226,6 +228,8 @@ export function FileVersionsForTab(arg1:string,arg2:number,arg3:string,arg4:stri
 
 export function FlashWindow():Promise<string>;
 
+export function GamingOverlayAvailable():Promise<boolean>;
+
 export function GetAvatar(arg1:string):Promise<netproto.AvatarData>;
 
 export function GetAvatarForTab(arg1:string,arg2:string):Promise<netproto.AvatarData>;
@@ -233,6 +237,8 @@ export function GetAvatarForTab(arg1:string,arg2:string):Promise<netproto.Avatar
 export function GetClientInfo(arg1:string):Promise<netproto.ClientInfoResponse>;
 
 export function GetClientInfoForTab(arg1:string,arg2:string):Promise<netproto.ClientInfoResponse>;
+
+export function GetGamingOverlayMonitors():Promise<Array<main.GamingOverlayMonitor>>;
 
 export function GetICEServers():Promise<Array<netproto.ICEServer>>;
 
@@ -249,6 +255,8 @@ export function GetServerConfigForTab(arg1:string):Promise<netproto.ServerConfig
 export function GetSettings():Promise<main.Settings>;
 
 export function Greet(arg1:string):Promise<string>;
+
+export function HistorySearchPageForTab(arg1:string,arg2:main.HistorySearchFilter):Promise<main.HistorySearchPage>;
 
 export function IdentityBackupPending():Promise<boolean>;
 
@@ -310,6 +318,8 @@ export function PositionalInputPath():Promise<string>;
 
 export function PreviewChannelAccessForTab(arg1:string,arg2:netproto.ChannelAccessPreview):Promise<authorization.ChannelAccessImpact>;
 
+export function PreviewGamingOverlay(arg1:main.Settings):Promise<string>;
+
 export function PrivateCallForTab(arg1:string,arg2:netproto.CallRequest):Promise<netproto.CallResult>;
 
 export function PublishPositionForTab(arg1:string,arg2:netproto.PositionUpdate):Promise<string>;
@@ -317,6 +327,8 @@ export function PublishPositionForTab(arg1:string,arg2:netproto.PositionUpdate):
 export function Quit():Promise<void>;
 
 export function ReadPositionalInput():Promise<main.PositionalInput>;
+
+export function ReconnectTab(arg1:string,arg2:string,arg3:string):Promise<main.ConnectTabResult>;
 
 export function RecordRecent(arg1:string,arg2:string):Promise<void>;
 
@@ -347,6 +359,8 @@ export function SaveChatAttachment(arg1:number,arg2:string,arg3:string,arg4:stri
 export function SaveChatAttachmentForTab(arg1:string,arg2:number,arg3:string,arg4:string,arg5:string):Promise<string>;
 
 export function SaveSettings(arg1:main.Settings):Promise<string>;
+
+export function SavedMessagesForTab(arg1:string,arg2:main.SavedMessageRequest):Promise<main.SavedMessageResult>;
 
 export function SendChat(arg1:string,arg2:string,arg3:string):Promise<string>;
 
@@ -476,6 +490,8 @@ export function TrayMention():Promise<void>;
 
 export function TrustServerFingerprint(arg1:string,arg2:string):Promise<string>;
 
+export function UpdateGamingOverlay(arg1:main.GamingOverlaySnapshot):Promise<string>;
+
 export function UploadChatAttachment(arg1:number,arg2:string,arg3:string):Promise<string>;
 
 export function UploadChatAttachmentForTab(arg1:string,arg2:number,arg3:string,arg4:string):Promise<string>;
@@ -503,6 +519,8 @@ export function WebRTCAnswerForTab(arg1:string,arg2:string):Promise<void>;
 export function WebRTCOffer(arg1:string,arg2:Array<netproto.TrackSlot>):Promise<string>;
 
 export function WebRTCOfferForTab(arg1:string,arg2:string,arg3:Array<netproto.TrackSlot>):Promise<string>;
+
+export function WebhookForTab(arg1:string,arg2:netproto.WebhookRequest):Promise<netproto.WebhookResult>;
 
 export function WhatsNew():Promise<string>;
 

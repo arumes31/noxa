@@ -8,7 +8,8 @@ import "./polls.css";
 import "./conversations.css";
 import { conversationChanged, filterConversations, privateGroupViewToken } from "./conversations.js";
 import "./private-calls.css";
-import { privateCallChanged, privateCallSignal, stopPrivateCall } from "./private-calls.js";
+import { privateCallChanged, privateCallSignal, stopPrivateCall, applyPrivateCallAudioSettings } from "./private-calls.js";
+import { createTabReconnects } from "./tab-reconnect.js";
 import { refreshPolls } from "./polls.js";
 import { SpatialVoice } from "./positional-audio.js";
 import "@fontsource-variable/outfit";
@@ -496,13 +497,13 @@ async function checkCertificateClock(addr, tabID = "") {
 // rememberTabConnect files the credential record under the tab it belongs to
 // (281): switching away and back must restore the record a reconnect needs,
 // and only the connect call knows the password.
-async function rememberTabConnect(c, expectedGeneration = null, tabID = "") {
+async function rememberTabConnect(c, expectedGeneration = null, tabID = "", current = () => true) {
     const active = await activeTabInfo();
-    if (expectedGeneration !== null && expectedGeneration !== reconnectGeneration) return false;
-    state.lastSuccessfulConnect = { ...c };
+    if (!current() || (expectedGeneration !== null && expectedGeneration !== reconnectGeneration)) return false;
     if (tabID) state.tabConnects.set(tabID, c);
     else if (active) state.tabConnects.set(active.id, c);
     if (tabID && (active?.id !== tabID || (state.activeTabID && state.activeTabID !== tabID))) return false;
+    state.lastSuccessfulConnect = { ...c };
     state.lastConnect = c;
     return true;
 }
@@ -512,6 +513,7 @@ let reconnectRequestPending = false;
 let reconnectGeneration = 0;
 let reconnectFailureSounded = false;
 let reconnectCueTimer = null;
+let reconnectTimerSourceTabID = "";
 
 function autoReconnectEnabled() {
     // Missing settings and pre-setting-version profiles inherit the safer
@@ -534,12 +536,13 @@ function clearReconnectTimer() {
     }
 }
 
-async function completeReconnect(c, generation, tabID) {
+async function completeReconnect(c, generation, tabID, current = () => true) {
+    const alive = () => current() && (generation === null || generation === reconnectGeneration);
     // The backend query must precede unrelated awaits so it reads the tab the
     // reconnect just created. The message below also names that server.
     const clockWarning = tabID ? "" : await certificateClockWarning(c.addr);
-    const ownsActiveTab = await rememberTabConnect(c, generation, tabID);
-    if (generation !== reconnectGeneration) return false;
+    const ownsActiveTab = await rememberTabConnect(c, generation, tabID, alive);
+    if (!alive()) return false;
     const finalizationGeneration = state.serverGeneration;
     const sessionGeneration = state.sessionGeneration;
     // A user-selected tab now owns the global UI. The reconnect still
@@ -551,10 +554,11 @@ async function completeReconnect(c, generation, tabID) {
     let session;
     try {
         session = await window.go.main.App.SessionInfoForTab(tabID);
-    } catch { return generation === reconnectGeneration; }
-    if (generation !== reconnectGeneration) return false;
+    } catch { return alive(); }
+    if (!alive()) return false;
     if (state.serverGeneration !== finalizationGeneration) return true;
     if (!await tabIsActive(tabID)) return true;
+    if (!alive()) return false;
     if (state.serverGeneration !== finalizationGeneration) return true;
     if (state.sessionGeneration !== sessionGeneration || !session.connected) return false;
     state.reconnectAttempts = 0;
@@ -576,7 +580,7 @@ async function completeReconnect(c, generation, tabID) {
     playEvent("connection_reconnected");
     clearSpeech("connection");
     warnCertificateClock(clockWarning, c.addr);
-    return generation === reconnectGeneration;
+    return alive();
 }
 
 async function retireReplacedTab(sourceTabID, replacementTabID, c, generation) {
@@ -650,7 +654,7 @@ function scheduleReconnect(
             playAlert("reconnect_failed");
         }
         chatUI.cancelReconnectAnnouncementBatch();
-        showLogin();
+        if (ownsSource()) showLogin();
         return;
     }
     // Pin the retry series to the connection that dropped. A tab switch may
@@ -669,17 +673,26 @@ function scheduleReconnect(
         }, 550);
     }
     state.reconnectAttempts++;
-    chatUI.beginReconnectAnnouncementBatch();
-    sysMsg(`reconnecting in 5s (attempt ${state.reconnectAttempts}/5)…`);
-    $("conn-pill").textContent = `retry ${state.reconnectAttempts}/5 in 5s…`;
-    let countdown = 4;
+    reconnectTimerSourceTabID = sourceTabID;
+    // Peers behind one address share server login admission. Keep the first
+    // recovery prompt, but spread later attempts so collisions do not repeat
+    // in lockstep and exhaust every client's bounded retry budget.
+    const delay = 5000 + (state.reconnectAttempts > 1 ? Math.floor(Math.random() * 5000) : 0);
+    const seconds = Math.ceil(delay / 1000);
+    if (ownsSource()) {
+        chatUI.beginReconnectAnnouncementBatch();
+        sysMsg(`reconnecting in ${seconds}s (attempt ${state.reconnectAttempts}/5)…`);
+        $("conn-pill").textContent = `retry ${state.reconnectAttempts}/5 in ${seconds}s…`;
+    }
+    let countdown = seconds - 1;
     reconnectCountdownTimer = setInterval(() => {
         if (countdown <= 0 || !state.reconnectTimer) {
             clearInterval(reconnectCountdownTimer);
             reconnectCountdownTimer = null;
             return;
         }
-        $("conn-pill").textContent = `retry ${state.reconnectAttempts}/5 in ${countdown--}s…`;
+        if (ownsSource()) $("conn-pill").textContent = `retry ${state.reconnectAttempts}/5 in ${countdown}s…`;
+        countdown--;
     }, 1000);
     state.reconnectTimer = setTimeout(async () => {
         clearReconnectTimer();
@@ -692,8 +705,69 @@ function scheduleReconnect(
         if (sessionGeneration !== state.sessionGeneration) return;
         chatUI.cancelReconnectAnnouncementBatch();
         scheduleReconnect(reconnectTarget, generation, sourceTabID, sourceServerGeneration);
-    }, 5000);
+    }, delay);
 }
+
+const scopedReconnectAvailable = () => typeof window.go.main.App.ReconnectTab === "function";
+const tabReconnects = createTabReconnects({
+    enabled: autoReconnectEnabled,
+    connect: (tabID, target) => window.go.main.App.ReconnectTab(tabID, target.pw || "", target.spw || ""),
+    async complete(tabID, target, current) {
+        const tab = (await window.go.main.App.ListTabs()).find(tab => tab.id === tabID);
+        if (!current()) return false;
+        if (!tab?.connected) return false;
+        state.tabConnects.set(tabID, { ...target });
+        if (state.activeTabID !== tabID) return true;
+        return completeReconnect(target, null, tabID, current);
+    },
+    changed(tabID, entry) {
+        if (state.activeTabID !== tabID) return;
+        state.reconnectAttempts = entry?.attempts || 0;
+        state.reconnectInFlight = !!entry?.inFlight;
+        if (entry && !entry.exhausted) {
+            $("conn-pill").textContent = entry.inFlight ? `reconnecting (attempt ${entry.attempts}/5)…`
+                : `retry ${entry.attempts}/5 in ${entry.remaining}s…`;
+        } else if (!entry && /^(retry \d\/5 in |reconnecting \(attempt )/.test($("conn-pill").textContent)) {
+            $("conn-pill").textContent = "offline";
+            chatUI.cancelReconnectAnnouncementBatch();
+        }
+    },
+    scheduled(tabID, entry) {
+        if (state.activeTabID !== tabID) return;
+        chatUI.beginReconnectAnnouncementBatch();
+        sysMsg(`reconnecting in ${entry.remaining}s (attempt ${entry.attempts}/5)…`);
+        if (entry.attempts === 1) playEvent("connection_reconnecting");
+    },
+    failed(tabID, error) {
+        if (state.activeTabID === tabID) sysMsg("reconnect failed: " + error);
+    },
+    async exhausted(tabID, _target, current) {
+        if (state.activeTabID !== tabID) return;
+        const generation = state.serverGeneration;
+        let tabs;
+        try { tabs = await window.go.main.App.ListTabs(); } catch { return; }
+        if (!current() || state.activeTabID !== tabID || state.serverGeneration !== generation || tabs.find(tab => tab.id === tabID)?.connected) return;
+        chatUI.cancelReconnectAnnouncementBatch();
+        playAlert("reconnect_failed");
+        $("conn-pill").textContent = "offline — reconnect failed";
+        if (!tabs.some(tab => tab.connected)) showLogin();
+    },
+});
+window.runtime.EventsOn("tab_disconnected", tabID => {
+    if (scopedReconnectAvailable()) tabReconnects.start(String(tabID), state.tabConnects.get(String(tabID)));
+});
+window.runtime.EventsOn("tab_closed", tabID => {
+    tabID = String(tabID);
+    tabReconnects.cancel(tabID);
+    state.tabConnects.delete(tabID);
+});
+window.runtime.EventsOn("tab_reconnect_disabled", tabID => tabReconnects.cancel(String(tabID)));
+window.runtime.EventsOn("tab_reset", tabID => {
+    // tabs.js commits its view synchronously in the same native event batch.
+    queueMicrotask(() => {
+        if (scopedReconnectAvailable() && state.activeTabID === tabID) tabReconnects.refresh(tabID);
+    });
+});
 
 async function reconnectLastServerNow() {
     // The native menu is disabled while connected. Keep this guard for a
@@ -722,6 +796,7 @@ async function reconnectLastServerNow() {
         if ((active?.id || "") !== (sourceTabID || "") || active?.connected) return;
 
         clearReconnectTimer();
+        tabReconnects.cancel(sourceTabID);
         const c = target;
         if (!c) {
             await window.__noxaTabs?.quickConnectLast?.(fallbackTarget || null,
@@ -757,6 +832,7 @@ async function disconnect() {
     const ownsSource = () => sourceServerGeneration === state.serverGeneration
         && sourceTabID === state.activeTabID;
     reconnectGeneration++;
+    tabReconnects.cancel(sourceTabID);
     state.lastConnect = null; // intentional disconnect: no reconnect
     clearReconnectTimer();
     chatUI.cancelReconnectAnnouncementBatch();
@@ -784,6 +860,14 @@ window.runtime.EventsOn("intentional_disconnect", (tabID) => {
 });
 
 window.runtime.EventsOn("disconnected", () => {
+    // A selected server that drops takes over the one foreground retry
+    // timer. Otherwise the previous server's callback can cancel this new
+    // timer and keep spending its budget on the wrong connection.
+    if (state.reconnectTimer && reconnectTimerSourceTabID !== state.activeTabID) {
+        reconnectGeneration++;
+        clearReconnectTimer();
+        state.reconnectAttempts = 0;
+    }
     state.sessionGeneration++;
     const unexpected = !!state.lastConnect;
     if (unexpected && state.settings?.notify_connection !== false) toast("Connection lost", "warn", "conn");
@@ -809,7 +893,7 @@ window.runtime.EventsOn("disconnected", () => {
 
     // Unexpected loss reconnects by default. An explicit false setting opts
     // out; intentional disconnects clear lastConnect before this event.
-    scheduleReconnect();
+    if (!scopedReconnectAvailable()) scheduleReconnect();
 });
 
 window.runtime.EventsOn("servererror", (msg) => {
@@ -823,9 +907,13 @@ window.runtime.EventsOn("servererror", (msg) => {
 // so the merged blob it pushes is the authoritative cache — without this the
 // recents list stays frozen at the value read once at startup.
 window.runtime.EventsOn("settings_update", (s) => {
+    const memberStateChanged = ["muted_users", "blocked_users"].some((key) =>
+        JSON.stringify(state.settings?.[key] || []) !== JSON.stringify(s?.[key] || []));
     state.settings = s;
+    if (!autoReconnectEnabled()) tabReconnects.cancelAll();
     refreshUserAudio();
-    renderMember();
+    if (memberStateChanged) renderTree();
+    else renderMember();
     renderVoiceHints();
     void updateSoundOutput();
     void applyLiveAudioSettings().catch((error) => toast("Audio settings: " + error.message, "warn"));
@@ -2126,6 +2214,9 @@ function renderDirectTargets(show = false) {
         option.querySelector("strong").textContent = client.nickname || client.unique_id;
         option.querySelector("small").textContent = client.unique_id;
         option.querySelector(".target-option-channel").textContent = channel?.Name || "no channel";
+        // Keep the search field focused until selection; its blur/change would
+        // otherwise open a DM for the search text and rebuild this option.
+        option.onpointerdown = (event) => event.preventDefault();
         option.onclick = () => {
             input.value = client.unique_id;
             hideDirectTargets();
@@ -2142,10 +2233,12 @@ function renderDirectTargets(show = false) {
 
 $("chat-target").addEventListener("focus", () => renderDirectTargets(true));
 $("chat-target").addEventListener("input", () => renderDirectTargets(true));
+$("chat-target-toggle").onpointerdown = (event) => event.preventDefault();
 $("chat-target-toggle").onclick = () => {
     const opening = $("chat-target-options").classList.contains("hidden");
-    renderDirectTargets(opening);
-    if (opening) $("chat-target").focus();
+    if (!opening) { hideDirectTargets(); return; }
+    renderDirectTargets(true);
+    $("chat-target").focus();
 };
 document.addEventListener("pointerdown", (event) => {
     if (!event.target.closest("#chat-target-picker")) hideDirectTargets();
@@ -2528,6 +2621,7 @@ function applyLiveAudioSettings() {
     liveAudioSettings = liveAudioSettings.catch(() => {}).then(async () => {
         const error = await applyChannelAudio();
         if (error) throw error;
+        await applyPrivateCallAudioSettings();
         applyVoiceState();
         if (remoteChain.ctx) await selectAudioOutput(remoteChain.ctx);
         if (remoteChain.master) {

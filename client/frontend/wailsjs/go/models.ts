@@ -651,6 +651,157 @@ export namespace main {
 	        this.pending_key_pulls = source["pending_key_pulls"];
 	    }
 	}
+	export class GamingOverlayMonitor {
+	    id: string;
+	    name: string;
+	    width: number;
+	    height: number;
+	    primary: boolean;
+
+	    static createFrom(source: any = {}) {
+	        return new GamingOverlayMonitor(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.name = source["name"];
+	        this.width = source["width"];
+	        this.height = source["height"];
+	        this.primary = source["primary"];
+	    }
+	}
+	export class GamingOverlaySpeaker {
+	    name: string;
+	    speaking: boolean;
+	    muted: boolean;
+
+	    static createFrom(source: any = {}) {
+	        return new GamingOverlaySpeaker(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.speaking = source["speaking"];
+	        this.muted = source["muted"];
+	    }
+	}
+	export class GamingOverlaySnapshot {
+	    active: boolean;
+	    title: string;
+	    status: string;
+	    speakers: GamingOverlaySpeaker[];
+	    notification: string;
+	    position: string;
+	    monitor: string;
+	    scale: number;
+	    opacity: number;
+	    x: number;
+	    y: number;
+
+	    static createFrom(source: any = {}) {
+	        return new GamingOverlaySnapshot(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.active = source["active"];
+	        this.title = source["title"];
+	        this.status = source["status"];
+	        this.speakers = this.convertValues(source["speakers"], GamingOverlaySpeaker);
+	        this.notification = source["notification"];
+	        this.position = source["position"];
+	        this.monitor = source["monitor"];
+	        this.scale = source["scale"];
+	        this.opacity = source["opacity"];
+	        this.x = source["x"];
+	        this.y = source["y"];
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+
+	export class HistorySearchFilter {
+	    channel_id: number;
+	    thread_id: number;
+	    before_id: number;
+	    query: string;
+	    sender: string;
+	    after: number;
+	    before: number;
+	    has_attachment: boolean;
+
+	    static createFrom(source: any = {}) {
+	        return new HistorySearchFilter(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.channel_id = source["channel_id"];
+	        this.thread_id = source["thread_id"];
+	        this.before_id = source["before_id"];
+	        this.query = source["query"];
+	        this.sender = source["sender"];
+	        this.after = source["after"];
+	        this.before = source["before"];
+	        this.has_attachment = source["has_attachment"];
+	    }
+	}
+	export class HistorySearchPage {
+	    messages: netproto.ChatHistoryEntry[];
+	    scanned: number;
+	    undecryptable: number;
+	    complete: boolean;
+	    next_before_id: number;
+
+	    static createFrom(source: any = {}) {
+	        return new HistorySearchPage(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.messages = this.convertValues(source["messages"], netproto.ChatHistoryEntry);
+	        this.scanned = source["scanned"];
+	        this.undecryptable = source["undecryptable"];
+	        this.complete = source["complete"];
+	        this.next_before_id = source["next_before_id"];
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	export class HotkeyProfile {
 	    ptt?: string;
 	    mute_toggle?: string;
@@ -799,6 +950,100 @@ export namespace main {
 	        this.last_used = source["last_used"];
 	    }
 	}
+	export class SavedMessageReference {
+	    kind: string;
+	    channel_id?: number;
+	    thread_id?: number;
+	    group_id?: string;
+	    peer_id?: string;
+	    client_message_id?: string;
+	    local_seq?: number;
+	    message_id: number;
+	    collection: string;
+	    saved_at: number;
+
+	    static createFrom(source: any = {}) {
+	        return new SavedMessageReference(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.kind = source["kind"];
+	        this.channel_id = source["channel_id"];
+	        this.thread_id = source["thread_id"];
+	        this.group_id = source["group_id"];
+	        this.peer_id = source["peer_id"];
+	        this.client_message_id = source["client_message_id"];
+	        this.local_seq = source["local_seq"];
+	        this.message_id = source["message_id"];
+	        this.collection = source["collection"];
+	        this.saved_at = source["saved_at"];
+	    }
+	}
+	export class SavedMessageRequest {
+	    action: string;
+	    reference: SavedMessageReference;
+	    dm_owner?: DMHistoryContext;
+
+	    static createFrom(source: any = {}) {
+	        return new SavedMessageRequest(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.action = source["action"];
+	        this.reference = this.convertValues(source["reference"], SavedMessageReference);
+	        this.dm_owner = this.convertValues(source["dm_owner"], DMHistoryContext);
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class SavedMessageResult {
+	    references: SavedMessageReference[];
+
+	    static createFrom(source: any = {}) {
+	        return new SavedMessageResult(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.references = this.convertValues(source["references"], SavedMessageReference);
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	export class SessionInfo {
 	    authorization_model: string;
 	    client_id: string;
@@ -873,6 +1118,8 @@ export namespace main {
 	    reconnect_on_loss: boolean;
 	    updates_auto_check: boolean;
 	    user_volumes: Record<string, number>;
+	    user_share_volumes: Record<string, number>;
+	    muted_share_users: string[];
 	    muted_users: string[];
 	    ptt_release_delay_ms: number;
 	    warn_muted_talking: boolean;
@@ -896,6 +1143,20 @@ export namespace main {
 	    gain_normalize: boolean;
 	    camera_fps: number;
 	    low_bandwidth: boolean;
+	    camera_device_id: string;
+	    camera_background: string;
+	    camera_background_scene: string;
+	    gaming_overlay: boolean;
+	    gaming_overlay_position: string;
+	    gaming_overlay_monitor: string;
+	    gaming_overlay_scale: number;
+	    gaming_overlay_opacity: number;
+	    gaming_overlay_speakers_only: boolean;
+	    gaming_overlay_x: number;
+	    gaming_overlay_y: number;
+	    camera_background_image: string;
+	    camera_blur_strength: number;
+	    camera_mirror_preview: boolean;
 	    allow_plaintext: boolean;
 	    e2ee_verified?: Record<string, string>;
 	    chat_timestamps: string;
@@ -981,6 +1242,8 @@ export namespace main {
 	        this.reconnect_on_loss = source["reconnect_on_loss"];
 	        this.updates_auto_check = source["updates_auto_check"];
 	        this.user_volumes = source["user_volumes"];
+	        this.user_share_volumes = source["user_share_volumes"];
+	        this.muted_share_users = source["muted_share_users"];
 	        this.muted_users = source["muted_users"];
 	        this.ptt_release_delay_ms = source["ptt_release_delay_ms"];
 	        this.warn_muted_talking = source["warn_muted_talking"];
@@ -1004,6 +1267,20 @@ export namespace main {
 	        this.gain_normalize = source["gain_normalize"];
 	        this.camera_fps = source["camera_fps"];
 	        this.low_bandwidth = source["low_bandwidth"];
+	        this.camera_device_id = source["camera_device_id"];
+	        this.camera_background = source["camera_background"];
+	        this.camera_background_scene = source["camera_background_scene"];
+	        this.gaming_overlay = source["gaming_overlay"];
+	        this.gaming_overlay_position = source["gaming_overlay_position"];
+	        this.gaming_overlay_monitor = source["gaming_overlay_monitor"];
+	        this.gaming_overlay_scale = source["gaming_overlay_scale"];
+	        this.gaming_overlay_opacity = source["gaming_overlay_opacity"];
+	        this.gaming_overlay_speakers_only = source["gaming_overlay_speakers_only"];
+	        this.gaming_overlay_x = source["gaming_overlay_x"];
+	        this.gaming_overlay_y = source["gaming_overlay_y"];
+	        this.camera_background_image = source["camera_background_image"];
+	        this.camera_blur_strength = source["camera_blur_strength"];
+	        this.camera_mirror_preview = source["camera_mirror_preview"];
 	        this.allow_plaintext = source["allow_plaintext"];
 	        this.e2ee_verified = source["e2ee_verified"];
 	        this.chat_timestamps = source["chat_timestamps"];
@@ -1298,6 +1575,7 @@ export namespace netproto {
 	    unique_id: string;
 	    client_id: string;
 	    state: string;
+	    public_key?: string;
 
 	    static createFrom(source: any = {}) {
 	        return new CallParticipant(source);
@@ -1308,6 +1586,7 @@ export namespace netproto {
 	        this.unique_id = source["unique_id"];
 	        this.client_id = source["client_id"];
 	        this.state = source["state"];
+	        this.public_key = source["public_key"];
 	    }
 	}
 	export class CallRequest {
@@ -1338,6 +1617,7 @@ export namespace netproto {
 	    ring_until: number;
 	    ended_at?: number;
 	    revision: number;
+	    key_binding?: boolean;
 	    participants: CallParticipant[];
 
 	    static createFrom(source: any = {}) {
@@ -1353,6 +1633,7 @@ export namespace netproto {
 	        this.ring_until = source["ring_until"];
 	        this.ended_at = source["ended_at"];
 	        this.revision = source["revision"];
+	        this.key_binding = source["key_binding"];
 	        this.participants = this.convertValues(source["participants"], CallParticipant);
 	    }
 
@@ -1912,6 +2193,145 @@ export namespace netproto {
 	        this.conversations = this.convertValues(source["conversations"], Conversation);
 	        this.messages = this.convertValues(source["messages"], ConversationMessage);
 	        this.message_id = source["message_id"];
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+
+	export class DiscussionRequest {
+	    action: string;
+	    channel_id: number;
+	    thread_id?: number;
+	    root_message_id?: number;
+	    before_id?: number;
+	    before_pinned?: boolean;
+	    title?: string;
+	    tags?: string[];
+	    text?: string;
+	    body_enc?: string;
+	    key_id?: number;
+	    request_id?: string;
+	    archived?: boolean;
+	    subscribed?: boolean;
+	    forum?: boolean;
+	    pinned?: boolean;
+	    resolved?: boolean;
+	    auto_archive_hours?: number;
+
+	    static createFrom(source: any = {}) {
+	        return new DiscussionRequest(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.action = source["action"];
+	        this.channel_id = source["channel_id"];
+	        this.thread_id = source["thread_id"];
+	        this.root_message_id = source["root_message_id"];
+	        this.before_id = source["before_id"];
+	        this.before_pinned = source["before_pinned"];
+	        this.title = source["title"];
+	        this.tags = source["tags"];
+	        this.text = source["text"];
+	        this.body_enc = source["body_enc"];
+	        this.key_id = source["key_id"];
+	        this.request_id = source["request_id"];
+	        this.archived = source["archived"];
+	        this.subscribed = source["subscribed"];
+	        this.forum = source["forum"];
+	        this.pinned = source["pinned"];
+	        this.resolved = source["resolved"];
+	        this.auto_archive_hours = source["auto_archive_hours"];
+	    }
+	}
+	export class DiscussionThread {
+	    id: number;
+	    channel_id: number;
+	    root_message_id?: number;
+	    title: string;
+	    tags: string[];
+	    author: string;
+	    archived: boolean;
+	    pinned: boolean;
+	    resolved: boolean;
+	    joined: boolean;
+	    subscribed: boolean;
+	    unread: boolean;
+	    message_count: number;
+	    updated_at: number;
+
+	    static createFrom(source: any = {}) {
+	        return new DiscussionThread(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.channel_id = source["channel_id"];
+	        this.root_message_id = source["root_message_id"];
+	        this.title = source["title"];
+	        this.tags = source["tags"];
+	        this.author = source["author"];
+	        this.archived = source["archived"];
+	        this.pinned = source["pinned"];
+	        this.resolved = source["resolved"];
+	        this.joined = source["joined"];
+	        this.subscribed = source["subscribed"];
+	        this.unread = source["unread"];
+	        this.message_count = source["message_count"];
+	        this.updated_at = source["updated_at"];
+	    }
+	}
+	export class DiscussionResult {
+	    action: string;
+	    channel_id: number;
+	    thread_id?: number;
+	    forum: boolean;
+	    auto_archive_hours: number;
+	    tags: string[];
+	    threads: DiscussionThread[];
+	    messages: ChatHistoryEntry[];
+	    keys?: ChannelKey[];
+	    refused?: number[];
+	    has_more: boolean;
+	    can_manage: boolean;
+	    can_moderate: boolean;
+
+	    static createFrom(source: any = {}) {
+	        return new DiscussionResult(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.action = source["action"];
+	        this.channel_id = source["channel_id"];
+	        this.thread_id = source["thread_id"];
+	        this.forum = source["forum"];
+	        this.auto_archive_hours = source["auto_archive_hours"];
+	        this.tags = source["tags"];
+	        this.threads = this.convertValues(source["threads"], DiscussionThread);
+	        this.messages = this.convertValues(source["messages"], ChatHistoryEntry);
+	        this.keys = this.convertValues(source["keys"], ChannelKey);
+	        this.refused = source["refused"];
+	        this.has_more = source["has_more"];
+	        this.can_manage = source["can_manage"];
+	        this.can_moderate = source["can_moderate"];
 	    }
 
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -2757,6 +3177,82 @@ export namespace netproto {
 	        this.streams = this.convertValues(source["streams"], VideoStream);
 	        this.jpeg = source["jpeg"];
 	        this.preview_at = source["preview_at"];
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class WebhookEntry {
+	    id: number;
+	    channel_id: number;
+	    name: string;
+	    created_at: number;
+
+	    static createFrom(source: any = {}) {
+	        return new WebhookEntry(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.channel_id = source["channel_id"];
+	        this.name = source["name"];
+	        this.created_at = source["created_at"];
+	    }
+	}
+	export class WebhookRequest {
+	    action: string;
+	    channel_id: number;
+	    id?: number;
+	    name?: string;
+
+	    static createFrom(source: any = {}) {
+	        return new WebhookRequest(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.action = source["action"];
+	        this.channel_id = source["channel_id"];
+	        this.id = source["id"];
+	        this.name = source["name"];
+	    }
+	}
+	export class WebhookResult {
+	    action: string;
+	    channel_id: number;
+	    hooks: WebhookEntry[];
+	    id?: number;
+	    token?: string;
+	    health_port: number;
+
+	    static createFrom(source: any = {}) {
+	        return new WebhookResult(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.action = source["action"];
+	        this.channel_id = source["channel_id"];
+	        this.hooks = this.convertValues(source["hooks"], WebhookEntry);
+	        this.id = source["id"];
+	        this.token = source["token"];
+	        this.health_port = source["health_port"];
 	    }
 
 		convertValues(a: any, classs: any, asMap: boolean = false): any {

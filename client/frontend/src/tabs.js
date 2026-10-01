@@ -64,39 +64,40 @@ function bookmarkFor(t) {
 // tabs left, the login dialog comes back up.
 function renderTabs(tabs) {
     const bar = document.getElementById("server-tabs");
-    bar.innerHTML = "";
+    const focused = bar.contains(document.activeElement) ? document.activeElement : null;
+    const existing = new Map([...bar.querySelectorAll(".srv-tab[data-tab-id]")].map(tab => [tab.dataset.tabId, tab]));
+    const visible = new Set((tabs || []).map(tab => tab.id));
+    for (const [id, element] of existing) if (!visible.has(id)) element.remove();
     if (!tabs || tabs.length === 0) {
         V().showLogin();
         renderRecents();
     } else if (tabs.some((t) => t.connected)) {
         V().showWorkspace(false);
     }
-    for (const t of tabs || []) {
-        const el = document.createElement("div");
+    for (const [index, t] of (tabs || []).entries()) {
+        const el = existing.get(t.id) || document.createElement("div");
         el.className = "srv-tab" + (t.active ? " active" : "") + (t.connected ? "" : " offline");
         el.dataset.tabId = t.id;
-        const select = document.createElement("button");
-        select.type = "button";
-        select.className = "srv-tab-select";
+        if (!existing.has(t.id)) {
+            el.innerHTML = '<button type="button" class="srv-tab-select"><span class="srv-tab-dot"></span><span class="srv-tab-label"></span></button><button type="button" class="srv-tab-x">✕</button>';
+        }
+        const select = el.querySelector(".srv-tab-select");
         select.setAttribute("aria-current", t.active ? "page" : "false");
-        el.appendChild(select);
         // (284) bookmark colour: the dot identifies the server at a glance and
         // the underline of the active tab picks the same colour up.
         const bm = bookmarkFor(t);
         {
             if (bm?.color) el.style.setProperty("--tab-color", bm.color);
-            const dot = document.createElement("span");
-            dot.className = "srv-tab-dot";
-            if (bm?.color) dot.style.background = bm.color;
+            else el.style.removeProperty("--tab-color");
+            const dot = select.querySelector(".srv-tab-dot");
+            dot.style.background = bm?.color || "";
             dot.title = t.connected ? "Connected" : "Offline";
-            select.appendChild(dot);
         }
-        const label = document.createElement("span");
-        label.className = "srv-tab-label";
+        const label = select.querySelector(".srv-tab-label");
         label.textContent = bm?.name || t.addr || "Server";
         label.title = (t.nickname || "?") + " @ " + (t.addr || "?") + (t.connected ? "" : " (offline)");
-        select.appendChild(label);
         select.setAttribute("aria-label", (t.nickname || "?") + " @ " + (t.addr || "?") + (t.connected ? "" : ", offline"));
+        select.querySelector(".srv-badge")?.remove();
         if (t.mentions > 0) {
             const b = document.createElement("span");
             b.className = "srv-badge mention";
@@ -110,17 +111,13 @@ function renderTabs(tabs) {
             b.title = t.unread + " unread message(s)";
             select.appendChild(b);
         }
-        const x = document.createElement("button");
-        x.className = "srv-tab-x";
-        x.type = "button";
-        x.textContent = "✕";
+        const x = el.querySelector(".srv-tab-x");
         x.title = "disconnect and close tab";
         x.setAttribute("aria-label", "Disconnect and close " + label.textContent);
         x.onclick = (e) => {
             e.stopPropagation();
             void closeTab(t.id);
         };
-        el.appendChild(x);
         const activate = () => {
             if (!t.active) App().SetActiveTab(t.id);
         };
@@ -131,17 +128,18 @@ function renderTabs(tabs) {
         el.onclick = () => {
             activate();
         };
-        bar.appendChild(el);
+        if (bar.children[index] !== el) bar.insertBefore(el, bar.children[index] || null);
     }
     // "+" tab opens the login dialog for a new connection.
-    const plus = document.createElement("button");
+    const plus = bar.querySelector("#srv-tab-plus") || document.createElement("button");
     plus.id = "srv-tab-plus";
     plus.className = "srv-tab plus";
     plus.textContent = "+";
     plus.title = "connect to another server (new tab)";
     plus.setAttribute("aria-label", "Connect to another server");
     plus.onclick = () => V().showLogin();
-    bar.appendChild(plus);
+    if (bar.lastElementChild !== plus) bar.appendChild(plus);
+    if (focused?.isConnected && focused.getClientRects().length && document.activeElement !== focused) focused.focus({ preventScroll: true });
 }
 
 // refreshTabIdentity re-reads the identity of the newly activated connection

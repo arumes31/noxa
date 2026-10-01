@@ -314,6 +314,10 @@ export function DisconnectTab(arg1) {
   return window['go']['main']['App']['DisconnectTab'](arg1);
 }
 
+export function DiscussionForTab(arg1, arg2) {
+  return window['go']['main']['App']['DiscussionForTab'](arg1, arg2);
+}
+
 export function DownloadAndApply(arg1) {
   return window['go']['main']['App']['DownloadAndApply'](arg1);
 }
@@ -446,6 +450,10 @@ export function FlashWindow() {
   return window['go']['main']['App']['FlashWindow']();
 }
 
+export function GamingOverlayAvailable() {
+  return window['go']['main']['App']['GamingOverlayAvailable']();
+}
+
 export function GetAvatar(arg1) {
   return window['go']['main']['App']['GetAvatar'](arg1);
 }
@@ -460,6 +468,10 @@ export function GetClientInfo(arg1) {
 
 export function GetClientInfoForTab(arg1, arg2) {
   return window['go']['main']['App']['GetClientInfoForTab'](arg1, arg2);
+}
+
+export function GetGamingOverlayMonitors() {
+  return window['go']['main']['App']['GetGamingOverlayMonitors']();
 }
 
 export function GetICEServers() {
@@ -492,6 +504,10 @@ export function GetSettings() {
 
 export function Greet(arg1) {
   return window['go']['main']['App']['Greet'](arg1);
+}
+
+export function HistorySearchPageForTab(arg1, arg2) {
+  return window['go']['main']['App']['HistorySearchPageForTab'](arg1, arg2);
 }
 
 export function IdentityBackupPending() {
@@ -614,6 +630,10 @@ export function PreviewChannelAccessForTab(arg1, arg2) {
   return window['go']['main']['App']['PreviewChannelAccessForTab'](arg1, arg2);
 }
 
+export function PreviewGamingOverlay(arg1) {
+  return window['go']['main']['App']['PreviewGamingOverlay'](arg1);
+}
+
 export function PrivateCallForTab(arg1, arg2) {
   return window['go']['main']['App']['PrivateCallForTab'](arg1, arg2);
 }
@@ -628,6 +648,10 @@ export function Quit() {
 
 export function ReadPositionalInput() {
   return window['go']['main']['App']['ReadPositionalInput']();
+}
+
+export function ReconnectTab(arg1, arg2, arg3) {
+  return window['go']['main']['App']['ReconnectTab'](arg1, arg2, arg3);
 }
 
 export function RecordRecent(arg1, arg2) {
@@ -688,6 +712,10 @@ export function SaveChatAttachmentForTab(arg1, arg2, arg3, arg4, arg5) {
 
 export function SaveSettings(arg1) {
   return window['go']['main']['App']['SaveSettings'](arg1);
+}
+
+export function SavedMessagesForTab(arg1, arg2) {
+  return window['go']['main']['App']['SavedMessagesForTab'](arg1, arg2);
 }
 
 export function SendChat(arg1, arg2, arg3) {
@@ -946,6 +974,10 @@ export function TrustServerFingerprint(arg1, arg2) {
   return window['go']['main']['App']['TrustServerFingerprint'](arg1, arg2);
 }
 
+export function UpdateGamingOverlay(arg1) {
+  return window['go']['main']['App']['UpdateGamingOverlay'](arg1);
+}
+
 export function UploadChatAttachment(arg1, arg2, arg3) {
   return window['go']['main']['App']['UploadChatAttachment'](arg1, arg2, arg3);
 }
@@ -1000,6 +1032,10 @@ export function WebRTCOffer(arg1, arg2) {
 
 export function WebRTCOfferForTab(arg1, arg2, arg3) {
   return window['go']['main']['App']['WebRTCOfferForTab'](arg1, arg2, arg3);
+}
+
+export function WebhookForTab(arg1, arg2) {
+  return window['go']['main']['App']['WebhookForTab'](arg1, arg2);
 }
 
 export function WhatsNew() {

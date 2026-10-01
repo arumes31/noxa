@@ -23,7 +23,7 @@ import (
 	"noxa/internal/netproto"
 )
 
-// ConnectTabResult identifies the tab created by a successful connection.
+// ConnectTabResult identifies the tab created or recovered by a connection.
 type ConnectTabResult struct {
 	TabID string `json:"tab_id"`
 	Error string `json:"error"`
@@ -48,10 +48,14 @@ type journalEntry struct {
 
 // tabState bundles a tab's manager with its replay journal and badges.
 type tabState struct {
-	cm        *connManager
-	info      TabInfo
-	journal   []journalEntry // events since the last snapshot
-	transfers []ftProgress   // latest state per active transfer plus recent completions
+	cm                  *connManager
+	info                TabInfo
+	journal             []journalEntry // events since the last snapshot
+	transfers           []ftProgress   // latest state per active transfer plus recent completions
+	bookmark            string
+	replacement         *tabState
+	reconnectAllowed    bool
+	reconnectSuppressed bool
 }
 
 // tabsMu guards tabs/activeID and every mutable tabState field.
@@ -65,17 +69,22 @@ const journalCap = 2000
 type tabSink struct {
 	app   *App
 	tabID string
+	owner *connManager
 }
 
 // Emit implements eventSink.
 func (s tabSink) Emit(name string, payload any) {
-	s.app.relayTabEvent(s.tabID, name, payload)
+	s.app.relayTabEventFrom(s.tabID, s.owner, name, payload)
 }
 
 // relayTabEvent forwards active-tab events to the frontend and journals every
 // tab's state-carrying events. Active events must be journaled too: they are
 // the state that has to be replayed after switching away and back.
 func (a *App) relayTabEvent(tabID, name string, payload any) {
+	a.relayTabEventFrom(tabID, nil, name, payload)
+}
+
+func (a *App) relayTabEventFrom(tabID string, owner *connManager, name string, payload any) {
 	// Snapshot the nickname before taking tabsMu: tab state is protected by
 	// tabsMu, while connection state belongs to the manager. They must not be
 	// nested in that order.
@@ -85,10 +94,15 @@ func (a *App) relayTabEvent(tabID, name string, payload any) {
 		cm = ts.cm
 	}
 	a.tabsMu.Unlock()
+	if owner != nil {
+		cm = owner
+	}
 	nickname := ""
+	clientID := ""
 	if cm != nil {
 		cm.mu.Lock()
 		nickname = cm.nickname
+		clientID = cm.clientID
 		cm.mu.Unlock()
 	}
 
@@ -102,11 +116,30 @@ func (a *App) relayTabEvent(tabID, name string, payload any) {
 		// closed. It is never safe to route that event to the current tab.
 		return
 	}
+	registered := ts
+	provisional := false
+	if owner != nil && ts.cm != owner {
+		if ts.replacement == nil || ts.replacement.cm != owner {
+			a.tabsMu.Unlock()
+			return
+		}
+		ts = ts.replacement
+		provisional = true
+		active = false
+	}
 	mention := false
 	if name == "disconnected" {
 		ts.info.Connected = false
+		ts.reconnectAllowed = !ts.reconnectSuppressed
 	}
 	text, _ := payload.(string)
+	suppressed := tabReconnectSuppressed(name, text, clientID)
+	if suppressed {
+		ts.reconnectSuppressed = true
+		ts.reconnectAllowed = false
+		registered.reconnectSuppressed = true
+		registered.reconnectAllowed = false
+	}
 	switch name {
 	case "ft_progress":
 		if progress, ok := payload.(ftProgress); ok {
@@ -125,6 +158,42 @@ func (a *App) relayTabEvent(tabID, name string, payload any) {
 		}
 	}
 	a.tabsMu.Unlock()
+	if suppressed {
+		a.activationPublishMu.Lock()
+		a.tabsMu.Lock()
+		current := a.tabs[tabID] == registered
+		a.tabsMu.Unlock()
+		if current {
+			a.emitPlain("tab_reconnect_disabled", tabID)
+		}
+		a.activationPublishMu.Unlock()
+	}
+	if provisional {
+		return
+	}
+	if name == "disconnected" {
+		// A loss belongs to its manager even when another tab is selected.
+		// Serialize publication with replacement so an old reader cannot
+		// schedule a retry after its successor has already been installed.
+		a.activationPublishMu.Lock()
+		a.tabsMu.Lock()
+		current := a.tabs[tabID] == ts
+		selected := a.activeID == tabID
+		allowed := ts.reconnectAllowed
+		a.tabsMu.Unlock()
+		if current {
+			if selected {
+				traySetConnected(false)
+				a.emitPlain(name, payload)
+			}
+			if allowed {
+				a.emitPlain("tab_disconnected", tabID)
+			}
+			a.emitTabsUpdate()
+		}
+		a.activationPublishMu.Unlock()
+		return
+	}
 
 	if mention {
 		// (290) mention in a background tab: flash the taskbar + badge.
@@ -140,24 +209,36 @@ func (a *App) relayTabEvent(tabID, name string, payload any) {
 		stillActive := a.activeID == tabID && a.activationGeneration == generation && a.tabs[tabID] == ts
 		a.tabsMu.Unlock()
 		if stillActive {
-			if name == "disconnected" {
-				traySetConnected(false)
-			}
 			a.emitPlain(name, payload)
-			if name == "disconnected" {
-				a.emitTabsUpdate()
-			}
 		}
 		a.activationPublishMu.Unlock()
 		return
 	}
 	if name != "snapshot" && name != "subscriptions" &&
-		name != "server_rules" && name != "event" && name != "disconnected" {
+		name != "server_rules" && name != "event" {
 		// ice/offer/avatar/servererror from background tabs: drop (voice is
 		// active-tab only this wave).
 		return
 	}
 	a.emitTabsUpdate()
+}
+
+func tabReconnectSuppressed(name, payload, clientID string) bool {
+	if name != "event" {
+		return false
+	}
+	var event struct {
+		Type string `json:"type"`
+		Data struct {
+			ClientID   string `json:"client_id"`
+			FromServer bool   `json:"from_server"`
+			Ban        bool   `json:"ban"`
+		} `json:"data"`
+	}
+	if json.Unmarshal([]byte(payload), &event) != nil {
+		return false
+	}
+	return event.Type == "server_shutdown" || (event.Type == "kicked" && event.Data.ClientID == clientID && (event.Data.FromServer || event.Data.Ban))
 }
 
 // countBadge increments unread/mention counters for background chat events.
@@ -254,18 +335,8 @@ func (a *App) newTab() (string, *tabState) {
 }
 
 func (a *App) newTabWithIdentity(identity *identity) (string, *tabState) {
-	a.settingsMu.Lock()
-	allowPlaintext := a.settings.AllowPlaintext
-	a.settingsMu.Unlock()
 	id := fmt.Sprintf("tab-%d", a.tabSeq.Add(1))
-	cm := newConnManager(a.ctx)
-	cm.id = identity
-	cm.tabID = id
-	cm.sink = tabSink{app: a, tabID: id}
-	cm.allowPlaintext = allowPlaintext
-	if a.knownServers != nil {
-		cm.knownServers = a.knownServers
-	}
+	cm := a.newTabManager(id, identity)
 	ts := &tabState{cm: cm, info: TabInfo{ID: id}}
 	a.tabsMu.Lock()
 	if a.tabs == nil {
@@ -275,6 +346,21 @@ func (a *App) newTabWithIdentity(identity *identity) (string, *tabState) {
 	a.tabOrder = append(a.tabOrder, id)
 	a.tabsMu.Unlock()
 	return id, ts
+}
+
+func (a *App) newTabManager(id string, identity *identity) *connManager {
+	a.settingsMu.Lock()
+	allowPlaintext := a.settings.AllowPlaintext
+	a.settingsMu.Unlock()
+	cm := newConnManager(a.ctx)
+	cm.id = identity
+	cm.tabID = id
+	cm.sink = tabSink{app: a, tabID: id, owner: cm}
+	cm.allowPlaintext = allowPlaintext
+	if a.knownServers != nil {
+		cm.knownServers = a.knownServers
+	}
+	return cm
 }
 
 // newIdentityTab pins the selected key before dialing. Selecting or regenerating
@@ -447,6 +533,7 @@ func (a *App) ConnectBookmarkTabWithID(bookmark, addr, nickname, password, serve
 	a.tabsMu.Lock()
 	ts.info.Addr = addr
 	ts.info.Nickname = nickname
+	ts.bookmark = bookmark
 	a.tabsMu.Unlock()
 	a.onTabConnected(ts.cm, bookmark, addr, nickname)
 	a.activate(id)
@@ -483,6 +570,7 @@ func (a *App) ConnectGuestBookmarkTabWithID(bookmark, addr, nickname string) Con
 	a.tabsMu.Lock()
 	ts.info.Addr = addr
 	ts.info.Nickname = nickname
+	ts.bookmark = bookmark
 	a.tabsMu.Unlock()
 	a.onTabConnected(ts.cm, bookmark, addr, nickname)
 	a.activate(id)
@@ -594,6 +682,7 @@ func (a *App) closeTab(tabID string, intentional bool) {
 		a.tabsMu.Unlock()
 		return
 	}
+	replacement := ts.replacement
 	idx := -1
 	for i, id := range a.tabOrder {
 		if id == tabID {
@@ -630,7 +719,11 @@ func (a *App) closeTab(tabID string, intentional bool) {
 	if wasConnected {
 		a.emitPlain("intentional_disconnect", tabID)
 	}
+	a.emitPlain("tab_closed", tabID)
 	ts.cm.disconnect()
+	if replacement != nil {
+		replacement.cm.disconnect()
+	}
 	if wasActive {
 		a.finishActivateSerialized(next, activeCM, journal, generation)
 	} else {
