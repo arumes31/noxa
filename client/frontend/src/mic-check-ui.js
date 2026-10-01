@@ -63,7 +63,8 @@ export function createMicCheck(settings, { onStart }) {
     function setThreshold(value) {
         if (!Number.isFinite(value)) return;
         settings.vad_threshold = Math.max(1, Math.min(100, Math.round(value)));
-        previewThreshold = null; lastAbove = -Infinity;
+        if (previewThreshold !== null) previewThreshold = settings.vad_threshold;
+        lastAbove = -Infinity;
         refreshThreshold();
         root.dispatchEvent(new Event("input", { bubbles: true }));
     }
@@ -112,8 +113,9 @@ export function createMicCheck(settings, { onStart }) {
     const calibration = element("div", "mic-test");
     const calibrate = button("mic.calibrate", () => begin("calibration"), calibration);
     const calStatus = element("p", "set-hint"); calStatus.id = "mic-calibration-status"; calStatus.setAttribute("role", "status");
-    const preview = button("mic.previewThreshold", () => { previewThreshold = suggested; begin("test", true); }, calibration); preview.hidden = true;
+    const preview = button("mic.previewThreshold", () => begin("test", true), calibration); preview.hidden = true;
     const use = button("mic.use", () => {
+        previewThreshold = null;
         setThreshold(suggested); use.hidden = preview.hidden = true;
     }, calibration); use.hidden = true;
     root.append(actions, device, meter, scale, thresholdField, thresholdHelp, readings, status, thresholdLabel, transmission, shortcut, keyStatus,
@@ -131,6 +133,7 @@ export function createMicCheck(settings, { onStart }) {
             stop.hidden = !busy; loop.disabled = state !== "active" || mode !== "test";
             ptt.hidden = state !== "active" || mode !== "test" || settings.activation_mode !== "ptt";
             if (!busy) {
+                previewThreshold = null;
                 loop.checked = false; hold(false); transmission.textContent = "";
                 fill.style.width = "0%"; peak.style.left = "0%"; bar.setAttribute("aria-valuenow", "-60");
             }
@@ -178,6 +181,7 @@ export function createMicCheck(settings, { onStart }) {
         playbackError = false;
         currentProfile = profile();
         if (!keepSuggestion) { suggested = previewThreshold = null; use.hidden = preview.hidden = true; calStatus.textContent = ""; }
+        else previewThreshold = suggested;
         events = new AbortController();
         window.addEventListener("blur", () => hold(false), { signal: events.signal });
         window.addEventListener("noxa-mic-test-ptt", event => {

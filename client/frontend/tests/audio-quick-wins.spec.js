@@ -218,6 +218,38 @@ test("guided calibration measures quiet and speech then waits for explicit thres
     await expectReleased(page);
 });
 
+test("calibration preview stays in VAD while adjusting its threshold from PTT mode", async ({ page }) => {
+    await calibrate(page).click();
+    await expect(page.locator("#mic-calibration-status")).toContainText("Speak normally", { timeout: 7000 });
+    await page.evaluate(() => {
+        const tone = window.__micInput.createOscillator(), gain = window.__micInput.createGain();
+        gain.gain.value = 0.15; tone.connect(gain).connect(window.__micDestination); tone.start();
+        void window.__micInput.resume();
+    });
+    await expect(calibrate(page)).toBeEnabled({ timeout: 7000 });
+    await page.getByRole("button", { name: "Preview suggested threshold", exact: true }).click();
+    const slider = page.getByRole("slider", { name: "VAD threshold", exact: true });
+    await slider.focus(); await page.keyboard.press("End");
+    await expect(slider).toBeVisible();
+    await expect(slider).toHaveAttribute("aria-valuenow", "100");
+    await expect(page.locator(".mic-transmission")).toHaveText("Below threshold");
+    const bounds = await slider.boundingBox();
+    await page.mouse.click(bounds.x + bounds.width * 2 / 3, bounds.y + bounds.height / 2);
+    await expect(slider).toBeVisible();
+    await expect(slider).toHaveAttribute("aria-valuenow", "50");
+    await page.getByRole("spinbutton", { name: "VAD threshold", exact: true }).fill("10");
+    await expect(slider).toHaveAttribute("aria-valuenow", "10");
+    await expect(page.getByRole("button", { name: "Test push-to-talk", exact: true })).toBeHidden();
+    expect(await page.evaluate(() => window.__quickSavedSettings.vad_threshold)).toBe(25);
+    await page.getByRole("button", { name: "Stop", exact: true }).click();
+    await expect(slider).toBeHidden();
+    await page.getByRole("button", { name: "Preview suggested threshold", exact: true }).click();
+    await expect(slider).toBeVisible();
+    await page.getByRole("button", { name: "Use suggested threshold", exact: true }).click();
+    await expect(slider).toBeHidden();
+    await expect(page.getByRole("button", { name: "Test push-to-talk", exact: true })).toBeVisible();
+});
+
 test("microphone meter exposes decibels and a keyboard-only transmission preview", async ({ page }) => {
     await begin(page).click();
     await expect(page.getByRole("meter", { name: "Microphone level" })).toBeVisible();

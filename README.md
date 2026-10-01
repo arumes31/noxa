@@ -15,7 +15,7 @@
 [![Docker Image](https://img.shields.io/docker/v/arumes31/noxa?label=ghcr.io&logo=docker)](https://github.com/arumes31/noxa/pkgs/container/noxa)
 [![License](https://img.shields.io/github/license/arumes31/noxa)](LICENSE)
 
-[Architecture](#-system-architecture) • [Features](#-key-features) • [Quick Start](#-quick-start) • [Server Setup](#new-server-setup) • [Permissions](#-roles-and-channel-access) • [ServerQuery API](#-serverquery-admin-protocol) • [Configuration](#-configuration-reference)
+[Architecture](#️-system-architecture) • [Features](#-key-features) • [Quick Start](#-quick-start) • [Server Setup](#new-server-setup) • [Permissions](#️-roles-and-channel-access) • [ServerQuery API](#-serverquery-admin-protocol) • [Configuration](#️-configuration-reference)
 
 ---
 
@@ -316,11 +316,12 @@ certificate/key or use a TLS-enabled database. In Compose, explicitly pass any
 additional `NOXA_*` settings in the `noxa.environment` section; entries in `.env`
 are only used where the Compose file references them.
 
-Publish the control TCP port `12333`, file-transfer TCP port `12336`, and the
-configured UDP media ports. WebRTC needs reachable ICE candidates and suitable
+Publish the control TCP port `12333`, file-transfer TCP port `12336`, the UDP
+keepalive port configured by `NOXA_UDP_ADDR` (default UDP `12334`), and the
+configured WebRTC media ports. WebRTC needs reachable ICE candidates and suitable
 NAT/firewall or TURN configuration; UDP `12334` alone is not the voice transport.
 Keep administration and health ports private. See the
-[configuration reference](#-configuration-reference) for listener settings.
+[configuration reference](#️-configuration-reference) for listener settings.
 
 Back up PostgreSQL together with the matching chat/PII keys, uploaded files,
 recordings, TLS identity and configuration. Verify a restore before relying on
