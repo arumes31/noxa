@@ -19,6 +19,9 @@ type PeerConnectionWrapper struct {
 	pc       *webrtc.PeerConnection
 	clientID string
 	logger   *zap.Logger
+	// Immutable codec bounds captured when the engine creates this peer.
+	videoBounds VideoBounds
+	egress      *mediaEgressRegistry
 
 	// localCandidates forwards ICE candidates generated locally. It is never
 	// closed (see Close); consumers should also select on Done.
@@ -36,6 +39,7 @@ type PeerConnectionWrapper struct {
 	onTrack func(track *webrtc.TrackRemote, receiver *webrtc.RTPReceiver)
 
 	closeOnce sync.Once
+	signalMu  sync.Mutex
 	closed    chan struct{}
 }
 
@@ -97,6 +101,22 @@ func (w *PeerConnectionWrapper) RemoteSDP() <-chan webrtc.SessionDescription {
 // HandleOffer sets the remote description (an offer SDP), creates an answer,
 // sets the local description, and returns the answer SDP string.
 func (w *PeerConnectionWrapper) HandleOffer(sdp string) (string, error) {
+	return w.handleOffer(sdp, nil)
+}
+
+func (w *PeerConnectionWrapper) handleOffer(sdp string, bounds *VideoBounds) (result string, resultErr error) {
+	w.signalMu.Lock()
+	defer w.signalMu.Unlock()
+	if w.pc.SignalingState() == webrtc.SignalingStateHaveLocalOffer {
+		return "", ErrOfferCollision
+	}
+	defer func() {
+		// Pion cannot roll back a partially applied remote offer. Glare leaves
+		// have-local-offer intact and can be retried after its answer instead.
+		if resultErr != nil && w.pc.SignalingState() == webrtc.SignalingStateHaveRemoteOffer {
+			resultErr = fmt.Errorf("%w: %v", ErrPeerReset, resultErr)
+		}
+	}()
 	offer := webrtc.SessionDescription{Type: webrtc.SDPTypeOffer, SDP: sdp}
 	if err := w.pc.SetRemoteDescription(offer); err != nil {
 		return "", fmt.Errorf("setting remote offer: %w", err)
@@ -106,6 +126,12 @@ func (w *PeerConnectionWrapper) HandleOffer(sdp string) (string, error) {
 	default:
 	}
 
+	if bounds != nil {
+		w.videoBounds = *bounds
+	}
+	if err := w.setVideoBoundsCodecPreferences(); err != nil {
+		return "", err
+	}
 	answer, err := w.pc.CreateAnswer(nil)
 	if err != nil {
 		return "", fmt.Errorf("creating answer: %w", err)
@@ -129,6 +155,8 @@ func (w *PeerConnectionWrapper) HandleOffer(sdp string) (string, error) {
 // HandleAnswer sets the remote description (an answer SDP) after a local offer
 // has been created and sent.
 func (w *PeerConnectionWrapper) HandleAnswer(sdp string) error {
+	w.signalMu.Lock()
+	defer w.signalMu.Unlock()
 	answer := webrtc.SessionDescription{Type: webrtc.SDPTypeAnswer, SDP: sdp}
 	if err := w.pc.SetRemoteDescription(answer); err != nil {
 		return fmt.Errorf("setting remote answer: %w", err)
@@ -148,8 +176,13 @@ func (w *PeerConnectionWrapper) HandleAnswer(sdp string) error {
 // returns its SDP. It returns an error when the connection is not in the
 // stable signaling state (e.g. a previous offer is still unanswered).
 func (w *PeerConnectionWrapper) CreateOffer() (string, error) {
+	w.signalMu.Lock()
+	defer w.signalMu.Unlock()
 	if w.pc.SignalingState() != webrtc.SignalingStateStable {
 		return "", fmt.Errorf("signaling state %s is not stable", w.pc.SignalingState())
+	}
+	if err := w.setVideoBoundsCodecPreferences(); err != nil {
+		return "", err
 	}
 	offer, err := w.pc.CreateOffer(nil)
 	if err != nil {

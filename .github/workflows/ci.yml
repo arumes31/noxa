@@ -200,7 +200,7 @@ jobs:
           (cd client && go build ./...)
 
       - name: benchmark smoke
-        run: go test -count=1 -run '^$' -bench=. -benchtime=1x ./internal/netproto ./internal/chatcrypto ./internal/permissions ./internal/filetransfer
+        run: go test -count=1 -run '^$' -bench=. -benchtime=1x ./internal/netproto ./internal/chatcrypto ./internal/authorization ./internal/filetransfer
 
       - name: test and enforce coverage
         run: |
@@ -262,32 +262,28 @@ jobs:
           createdb "$source_db"
           NOXA_DATABASE_URL="postgres://noxa:noxa@localhost:5432/$source_db?sslmode=disable" \
             go run ./cmd/migrate -timeout 2m
-          # Exercise relational user/channel/permission data, not only an
+          # Exercise relational user/channel/role data, not only an
           # empty migration ledger. These identities are disposable fixtures.
           psql --dbname="$source_db" --set=ON_ERROR_STOP=1 <<'SQL'
           BEGIN;
           INSERT INTO users (unique_id, nickname) VALUES ('backup-fixture', 'Restore fixture');
           INSERT INTO channels (name, channel_type, created_by)
             SELECT 'Backup channel', 2, id FROM users WHERE unique_id = 'backup-fixture';
-          INSERT INTO server_groups (name) VALUES ('Backup group');
-          INSERT INTO permissions (permission_key, value, grant_value, skip_flag, negate_flag)
-            VALUES ('i_client_talk_power', 25, 10, false, false);
-          INSERT INTO server_group_members (user_id, server_group_id)
-            SELECT u.id, g.id FROM users u CROSS JOIN server_groups g
-            WHERE u.unique_id = 'backup-fixture' AND g.name = 'Backup group';
-          INSERT INTO server_group_permissions (server_group_id, permission_id)
-            SELECT g.id, p.id FROM server_groups g CROSS JOIN permissions p
-            WHERE g.name = 'Backup group' AND p.permission_key = 'i_client_talk_power';
+          INSERT INTO auth_roles (name, position) VALUES ('Backup role', 1);
+          INSERT INTO auth_role_grants (role_id, capability)
+            SELECT id, 'speak' FROM auth_roles WHERE name = 'Backup role';
+          INSERT INTO auth_member_roles (user_id, role_id)
+            SELECT u.id, r.id FROM users u CROSS JOIN auth_roles r
+            WHERE u.unique_id = 'backup-fixture' AND r.name = 'Backup role';
           COMMIT;
           SQL
-          fixture_query="SELECT u.unique_id, u.nickname, c.name, g.name,
-            p.permission_key, p.value, p.grant_value, p.skip_flag, p.negate_flag
+          fixture_query="SELECT u.unique_id, u.nickname, c.name, r.name,
+            r.position, g.capability
             FROM users u JOIN channels c ON c.created_by = u.id
-            JOIN server_group_members m ON m.user_id = u.id
-            JOIN server_groups g ON g.id = m.server_group_id
-            JOIN server_group_permissions gp ON gp.server_group_id = g.id
-            JOIN permissions p ON p.id = gp.permission_id
-            WHERE u.unique_id = 'backup-fixture' ORDER BY c.id, g.id, p.id"
+            JOIN auth_member_roles m ON m.user_id = u.id
+            JOIN auth_roles r ON r.id = m.role_id
+            JOIN auth_role_grants g ON g.role_id = r.id
+            WHERE u.unique_id = 'backup-fixture' ORDER BY c.id, r.id, g.capability"
           source_fixture="$(psql --dbname="$source_db" --tuples-only --no-align --command="$fixture_query")"
           test -n "$source_fixture"
           pg_dump --format=custom --no-owner --file="$backup" "$source_db"

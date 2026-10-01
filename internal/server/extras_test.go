@@ -1,12 +1,11 @@
-// extras_test.go covers the Phase 9 control handlers: server password,
-// avatars, channel icons, token use, complaints, and screen share.
+// extras_test.go covers server password, avatars, channel icons, complaints,
+// client information, and screen share.
 package server
 
 import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
-	"fmt"
 	"net"
 	"strings"
 	"sync"
@@ -14,70 +13,12 @@ import (
 	"time"
 
 	"noxa/internal/auth"
+	"noxa/internal/authorization"
 	"noxa/internal/netproto"
-	"noxa/internal/permissions"
 	"noxa/internal/store"
 )
 
 // --- fakes ------------------------------------------------------------------
-
-// fakeTokens implements TokenBackend with canned outcomes.
-type fakeTokens struct {
-	mu        sync.Mutex
-	used      []string
-	grants    map[string]int64 // token -> groupID (0 = admin grant)
-	exhausted map[string]bool
-	rows      []store.Token
-	nextID    int64
-}
-
-func (f *fakeTokens) UseTokenForIdentity(_ context.Context, key string, userID int64, _ string, _ string) (store.TokenGrant, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.used = append(f.used, key)
-	if f.exhausted[key] {
-		return store.TokenGrant{}, store.ErrTokenExhausted
-	}
-	g, ok := f.grants[key]
-	if !ok {
-		return store.TokenGrant{}, store.ErrTokenNotFound
-	}
-	promoted := userID == 0
-	if promoted {
-		userID = 99
-	}
-	return store.TokenGrant{UserID: userID, GroupID: g, Admin: g == 0, Promoted: promoted}, nil
-}
-
-func (f *fakeTokens) ListTokens(context.Context) ([]store.Token, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return append([]store.Token(nil), f.rows...), nil
-}
-
-func (f *fakeTokens) CreateTokenWithMeta(_ context.Context, tokenType int, groupID, channelID int64, description string, maxUses int) (string, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.nextID++
-	key := fmt.Sprintf("generated-%d", f.nextID)
-	f.rows = append(f.rows, store.Token{
-		ID: f.nextID, Key: key, Type: tokenType, GroupID: groupID, ChannelID: channelID,
-		MaxUses: maxUses, CreatedAt: time.Unix(1700000000, 0), Description: description,
-	})
-	return key, nil
-}
-
-func (f *fakeTokens) DeleteToken(_ context.Context, key string) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	for i, t := range f.rows {
-		if t.Key == key {
-			f.rows = append(f.rows[:i], f.rows[i+1:]...)
-			return nil
-		}
-	}
-	return store.ErrTokenNotFound
-}
 
 // fakeComplaints implements ComplaintBackend, enforcing the open-complaint
 // limit per reporter like the store does.
@@ -169,7 +110,7 @@ func TestServerPassword(t *testing.T) {
 	// Missing server password: rejected.
 	conn := dialRetry(t, env.addr)
 	defer func() { _ = conn.Close() }()
-	send(t, conn, netproto.MsgAuthenticate, netproto.Authenticate{Username: "user-uid", Password: "pw"})
+	send(t, conn, netproto.MsgAuthenticate, netproto.Authenticate{Username: "user-uid", Password: "pw", AuthorizationModels: []string{netproto.AuthorizationModelRolesV1}})
 	f := readOfType(t, conn, netproto.MsgAuthResponse)
 	var resp netproto.AuthResponse
 	if err := netproto.Decode(f, &resp); err != nil {
@@ -180,7 +121,7 @@ func TestServerPassword(t *testing.T) {
 	}
 
 	// Wrong server password: rejected.
-	send(t, conn, netproto.MsgAuthenticate, netproto.Authenticate{Username: "user-uid", Password: "pw", ServerPassword: "wrong"})
+	send(t, conn, netproto.MsgAuthenticate, netproto.Authenticate{Username: "user-uid", Password: "pw", ServerPassword: "wrong", AuthorizationModels: []string{netproto.AuthorizationModelRolesV1}})
 	f = readOfType(t, conn, netproto.MsgAuthResponse)
 	if err := netproto.Decode(f, &resp); err != nil {
 		t.Fatalf("decode: %v", err)
@@ -190,7 +131,7 @@ func TestServerPassword(t *testing.T) {
 	}
 
 	// Correct server password: accepted.
-	send(t, conn, netproto.MsgAuthenticate, netproto.Authenticate{Username: "user-uid", Password: "pw", ServerPassword: "hunter2"})
+	send(t, conn, netproto.MsgAuthenticate, netproto.Authenticate{Username: "user-uid", Password: "pw", ServerPassword: "hunter2", AuthorizationModels: []string{netproto.AuthorizationModelRolesV1}})
 	f = readOfType(t, conn, netproto.MsgAuthResponse)
 	if err := netproto.Decode(f, &resp); err != nil {
 		t.Fatalf("decode: %v", err)
@@ -204,8 +145,7 @@ func TestServerPassword(t *testing.T) {
 
 // TestAvatarSetGet verifies avatar validation and the set/get round-trip.
 func TestAvatarSetGet(t *testing.T) {
-	perms := tieredWith(boolPerm(permissions.PermissionKeyClientAvatarUpload, true))
-	env := startTestEnv(t, &perms)
+	env := startTestEnvWithCapabilities(t, authorization.UploadAvatar)
 	defer env.stop()
 
 	conn, _ := dialAuthed(t, env.addr, "user-uid")
@@ -242,8 +182,7 @@ func TestAvatarSetGet(t *testing.T) {
 
 // TestAvatarOversize verifies oversized images are rejected.
 func TestAvatarOversize(t *testing.T) {
-	perms := tieredWith(boolPerm(permissions.PermissionKeyClientAvatarUpload, true))
-	env := startTestEnv(t, &perms)
+	env := startTestEnvWithCapabilities(t, authorization.UploadAvatar)
 	defer env.stop()
 
 	conn, _ := dialAuthed(t, env.addr, "user-uid")
@@ -264,8 +203,7 @@ func TestAvatarOversize(t *testing.T) {
 
 // TestAvatarChangedEvent verifies other clients get avatar_changed on set.
 func TestAvatarChangedEvent(t *testing.T) {
-	perms := tieredWith(boolPerm(permissions.PermissionKeyClientAvatarUpload, true))
-	env := startTestEnv(t, &perms)
+	env := startTestEnvWithCapabilities(t, authorization.UploadAvatar)
 	defer env.stop()
 
 	adminConn, _ := dialAuthed(t, env.addr, "admin-uid")
@@ -314,10 +252,9 @@ func TestChannelIconSet(t *testing.T) {
 	userConn, _ := dialAuthed(t, env.addr, "user-uid")
 	defer func() { _ = userConn.Close() }()
 
-	send(t, adminConn, netproto.MsgCreateChannel, netproto.CreateChannel{Name: "Lobby", Type: 2})
-	readOfType(t, adminConn, netproto.MsgChannelList)
+	env.state.AddChannel(testChannel(1))
 
-	// Non-admin without b_channel_modify: denied.
+	// A member without ManageChannels is denied.
 	send(t, userConn, netproto.MsgChannelIconSet, netproto.ChannelIconSet{ChannelID: 1, DataBase64: b64(tinyPNG)})
 	f := readOfType(t, userConn, netproto.MsgError)
 	var e netproto.Error
@@ -338,67 +275,6 @@ func TestChannelIconSet(t *testing.T) {
 }
 
 // --- token use ---------------------------------------------------------------
-
-// TestTokenUse verifies redemption applies the grant, invalidates the
-// permission cache, and notifies the client.
-func TestTokenUse(t *testing.T) {
-	env := startTestEnv(t, nil)
-	defer env.stop()
-	env.tokens.grants = map[string]int64{"tok-abc": 5}
-
-	conn, userID := dialAuthed(t, env.addr, "user-uid")
-	defer func() { _ = conn.Close() }()
-
-	send(t, conn, netproto.MsgTokenUse, netproto.TokenUse{Token: "tok-abc"})
-	data := readEventOfType(t, conn, eventTokenUsed)
-	var ev struct {
-		ClientID string `json:"client_id"`
-		GroupID  int64  `json:"group_id"`
-	}
-	if err := json.Unmarshal(data, &ev); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
-	if ev.ClientID != userID || ev.GroupID != 5 {
-		t.Fatalf("token_used = %+v", ev)
-	}
-
-	env.perms.mu.Lock()
-	defer env.perms.mu.Unlock()
-	if len(env.perms.invalidations) != 1 || env.perms.invalidations[0][0] != 2 { // user-uid has user ID 2
-		t.Fatalf("invalidations = %v", env.perms.invalidations)
-	}
-}
-
-// TestTokenUseUnknown verifies unknown and exhausted tokens are rejected.
-func TestTokenUseUnknown(t *testing.T) {
-	env := startTestEnv(t, nil)
-	defer env.stop()
-	env.tokens.exhausted = map[string]bool{"tok-old": true}
-
-	conn, _ := dialAuthed(t, env.addr, "user-uid")
-	defer func() { _ = conn.Close() }()
-
-	send(t, conn, netproto.MsgTokenUse, netproto.TokenUse{Token: "nope"})
-	f := readOfType(t, conn, netproto.MsgError)
-	var e netproto.Error
-	if err := netproto.Decode(f, &e); err != nil {
-		t.Fatalf("decode error: %v", err)
-	}
-	if e.Code != errCodeNotFound {
-		t.Fatalf("unknown token error = %d, want %d", e.Code, errCodeNotFound)
-	}
-
-	send(t, conn, netproto.MsgTokenUse, netproto.TokenUse{Token: "tok-old"})
-	f = readOfType(t, conn, netproto.MsgError)
-	if err := netproto.Decode(f, &e); err != nil {
-		t.Fatalf("decode error: %v", err)
-	}
-	if e.Code != errCodeMalformed {
-		t.Fatalf("exhausted token error = %d, want %d", e.Code, errCodeMalformed)
-	}
-}
-
-// --- complaints ---------------------------------------------------------------
 
 // TestComplaint verifies filing works up to the per-reporter limit.
 func TestComplaint(t *testing.T) {
@@ -457,8 +333,7 @@ func TestScreenShare(t *testing.T) {
 	userConn, userID := dialAuthed(t, env.addr, "user-uid")
 	defer func() { _ = userConn.Close() }()
 
-	send(t, adminConn, netproto.MsgCreateChannel, netproto.CreateChannel{Name: "Lobby", Type: 2})
-	readOfType(t, adminConn, netproto.MsgChannelList)
+	env.state.AddChannel(testChannel(1))
 	send(t, adminConn, netproto.MsgJoinChannel, netproto.JoinChannel{ChannelID: 1})
 	send(t, userConn, netproto.MsgJoinChannel, netproto.JoinChannel{ChannelID: 1})
 	waitFor(t, "both in channel", func() bool {
@@ -479,16 +354,9 @@ func TestScreenShare(t *testing.T) {
 	}
 }
 
-// TestScreenShareDenied verifies a negated video publish permission denies
-// screen sharing.
+// TestScreenShareDenied verifies screen sharing requires ShareScreen.
 func TestScreenShareDenied(t *testing.T) {
-	perms := tieredWith(&permissions.Permission{
-		Key:    permissions.PermissionKeyClientVideoPublish,
-		Type:   permissions.PermissionTypeBoolean,
-		Value:  0,
-		Negate: true,
-	})
-	env := startTestEnv(t, &perms)
+	env := startTestEnvWithCapabilities(t)
 	defer env.stop()
 
 	conn, _ := dialAuthed(t, env.addr, "user-uid")
@@ -507,69 +375,16 @@ func TestScreenShareDenied(t *testing.T) {
 
 // --- permissions query -----------------------------------------------------
 
-// TestPermissionsQuery verifies the resolved permission set is returned.
-func TestPermissionsQuery(t *testing.T) {
-	perms := tieredWith(
-		boolPerm(permissions.PermissionKeyChannelCreateTemporary, true),
-		intPerm(permissions.PermissionKeyChannelJoinPower, 75),
-	)
-	env := startTestEnv(t, &perms)
-	defer env.stop()
-
-	conn, _ := dialAuthed(t, env.addr, "user-uid")
-	defer func() { _ = conn.Close() }()
-
-	send(t, conn, netproto.MsgPermissionsQuery, netproto.PermissionsQuery{})
-	f := readOfType(t, conn, netproto.MsgPermissionsResponse)
-	var resp netproto.PermissionsResponse
-	if err := netproto.Decode(f, &resp); err != nil {
-		t.Fatalf("decode response: %v", err)
-	}
-	if len(resp.Entries) != 2 {
-		t.Fatalf("entries = %+v, want 2", resp.Entries)
-	}
-	byKey := make(map[string]netproto.PermissionEntry, len(resp.Entries))
-	for _, e := range resp.Entries {
-		byKey[e.Key] = e
-	}
-	if e := byKey["b_channel_create_temporary"]; e.Value != 1 {
-		t.Errorf("create_temporary = %+v, want value 1", e)
-	}
-	if e := byKey["i_channel_join_power"]; e.Value != 75 {
-		t.Errorf("join_power = %+v, want value 75", e)
-	}
-}
-
-// TestPermissionsQueryEmpty verifies an empty set returns no entries.
-func TestPermissionsQueryEmpty(t *testing.T) {
-	env := startTestEnv(t, nil)
-	defer env.stop()
-
-	conn, _ := dialAuthed(t, env.addr, "user-uid")
-	defer func() { _ = conn.Close() }()
-
-	send(t, conn, netproto.MsgPermissionsQuery, netproto.PermissionsQuery{})
-	f := readOfType(t, conn, netproto.MsgPermissionsResponse)
-	var resp netproto.PermissionsResponse
-	if err := netproto.Decode(f, &resp); err != nil {
-		t.Fatalf("decode response: %v", err)
-	}
-	if len(resp.Entries) != 0 {
-		t.Fatalf("entries = %+v, want empty", resp.Entries)
-	}
-}
-
-// --- anonymous / guest login -------------------------------------------------
-
 // dialGuest connects and authenticates as an anonymous guest, returning the
 // connection and the auth response.
 func dialGuest(t *testing.T, addr, nickname, serverPassword string) (net.Conn, netproto.AuthResponse) {
 	t.Helper()
 	conn := dialRetry(t, addr)
 	send(t, conn, netproto.MsgAuthenticate, netproto.Authenticate{
-		Anonymous:      true,
-		Nickname:       nickname,
-		ServerPassword: serverPassword,
+		AuthorizationModels: []string{netproto.AuthorizationModelRolesV1},
+		Anonymous:           true,
+		Nickname:            nickname,
+		ServerPassword:      serverPassword,
 	})
 	f := readOfType(t, conn, netproto.MsgAuthResponse)
 	var resp netproto.AuthResponse
@@ -642,7 +457,7 @@ func TestAnonymousServerPassword(t *testing.T) {
 	// Without server password: rejected.
 	conn := dialRetry(t, env.addr)
 	defer func() { _ = conn.Close() }()
-	send(t, conn, netproto.MsgAuthenticate, netproto.Authenticate{Anonymous: true, Nickname: "g"})
+	send(t, conn, netproto.MsgAuthenticate, netproto.Authenticate{Anonymous: true, Nickname: "g", AuthorizationModels: []string{netproto.AuthorizationModelRolesV1}})
 	f := readOfType(t, conn, netproto.MsgAuthResponse)
 	var resp netproto.AuthResponse
 	if err := netproto.Decode(f, &resp); err != nil {
@@ -653,7 +468,7 @@ func TestAnonymousServerPassword(t *testing.T) {
 	}
 
 	// With server password: accepted.
-	send(t, conn, netproto.MsgAuthenticate, netproto.Authenticate{Anonymous: true, Nickname: "g", ServerPassword: "hunter2"})
+	send(t, conn, netproto.MsgAuthenticate, netproto.Authenticate{Anonymous: true, Nickname: "g", ServerPassword: "hunter2", AuthorizationModels: []string{netproto.AuthorizationModelRolesV1}})
 	f = readOfType(t, conn, netproto.MsgAuthResponse)
 	if err := netproto.Decode(f, &resp); err != nil {
 		t.Fatalf("decode: %v", err)
@@ -671,7 +486,7 @@ func TestAnonymousBannedIP(t *testing.T) {
 
 	conn := dialRetry(t, env.addr)
 	defer func() { _ = conn.Close() }()
-	send(t, conn, netproto.MsgAuthenticate, netproto.Authenticate{Anonymous: true, Nickname: "g"})
+	send(t, conn, netproto.MsgAuthenticate, netproto.Authenticate{Anonymous: true, Nickname: "g", AuthorizationModels: []string{netproto.AuthorizationModelRolesV1}})
 	f := readOfType(t, conn, netproto.MsgAuthResponse)
 	var resp netproto.AuthResponse
 	if err := netproto.Decode(f, &resp); err != nil {
@@ -679,26 +494,6 @@ func TestAnonymousBannedIP(t *testing.T) {
 	}
 	if resp.OK {
 		t.Fatal("IP-banned guest auth succeeded")
-	}
-}
-
-// TestAnonymousCreateDenied verifies guests cannot create channels (default
-// deny-on-unset semantics).
-func TestAnonymousCreateDenied(t *testing.T) {
-	env := startTestEnv(t, nil)
-	defer env.stop()
-
-	conn, _ := dialGuest(t, env.addr, "guesty", "")
-	defer func() { _ = conn.Close() }()
-
-	send(t, conn, netproto.MsgCreateChannel, netproto.CreateChannel{Name: "nope", Type: 0})
-	f := readOfType(t, conn, netproto.MsgError)
-	var e netproto.Error
-	if err := netproto.Decode(f, &e); err != nil {
-		t.Fatalf("decode error: %v", err)
-	}
-	if e.Code != errCodePermissionDenied {
-		t.Fatalf("error code = %d, want %d", e.Code, errCodePermissionDenied)
 	}
 }
 
@@ -721,9 +516,10 @@ func TestGuestWithIdentity(t *testing.T) {
 	conn := dialRetry(t, env.addr)
 	defer func() { _ = conn.Close() }()
 	send(t, conn, netproto.MsgAuthenticate, netproto.Authenticate{
-		Username:  uid,
-		Anonymous: true,
-		Nickname:  "keyguest",
+		Username:            uid,
+		Anonymous:           true,
+		Nickname:            "keyguest",
+		AuthorizationModels: []string{netproto.AuthorizationModelRolesV1},
 	})
 	f := readOfType(t, conn, netproto.MsgAuthChallenge)
 	var ch netproto.AuthChallenge
@@ -769,9 +565,10 @@ func TestNicknamePasswordLogin(t *testing.T) {
 	conn := dialRetry(t, env.addr)
 	defer func() { _ = conn.Close() }()
 	send(t, conn, netproto.MsgAuthenticate, netproto.Authenticate{
-		Username:  "user", // nickname, not the unique ID
-		Password:  "pw",
-		PublicKey: "CLIENT-PUB-PEM",
+		Username:            "user", // nickname, not the unique ID
+		Password:            "pw",
+		PublicKey:           "CLIENT-PUB-PEM",
+		AuthorizationModels: []string{netproto.AuthorizationModelRolesV1},
 	})
 	f := readOfType(t, conn, netproto.MsgAuthResponse)
 	var resp netproto.AuthResponse
@@ -837,7 +634,7 @@ func TestChallengeAuthWithBoundKey(t *testing.T) {
 
 	conn := dialRetry(t, env.addr)
 	defer func() { _ = conn.Close() }()
-	send(t, conn, netproto.MsgAuthenticate, netproto.Authenticate{Username: uid, Nickname: "user", Anonymous: true})
+	send(t, conn, netproto.MsgAuthenticate, netproto.Authenticate{Username: uid, Nickname: "user", Anonymous: true, AuthorizationModels: []string{netproto.AuthorizationModelRolesV1}})
 	f := readOfType(t, conn, netproto.MsgAuthChallenge)
 	var ch netproto.AuthChallenge
 	if err := netproto.Decode(f, &ch); err != nil {
@@ -927,8 +724,7 @@ func TestClientInfoOtherGuestDenied(t *testing.T) {
 // TestClientInfoOtherGranted verifies the remote-address permission grants
 // IP visibility.
 func TestClientInfoOtherGranted(t *testing.T) {
-	perms := tieredWith(boolPerm(permissions.PermissionKeyClientRemoteAddressView, true))
-	env := startTestEnv(t, &perms)
+	env := startTestEnvWithCapabilities(t, authorization.ViewRemoteAddresses)
 	defer env.stop()
 
 	bobConn, bobID := dialAuthed(t, env.addr, "user-uid")
@@ -1121,11 +917,9 @@ func TestComplaintReviewDenied(t *testing.T) {
 	}
 }
 
-// TestComplaintReviewBanPermission verifies b_client_ban, not admin status,
-// is enough to review complaints.
+// TestComplaintReviewBanPermission verifies BanMembers grants complaint review.
 func TestComplaintReviewBanPermission(t *testing.T) {
-	tp := tieredWith(boolPerm(permissions.PermissionKeyClientBan, true))
-	env := startTestEnv(t, &tp)
+	env := startTestEnvWithCapabilities(t, authorization.BanMembers)
 	defer env.stop()
 
 	conn, _ := dialAuthed(t, env.addr, "user-uid")
@@ -1143,180 +937,3 @@ func TestComplaintReviewBanPermission(t *testing.T) {
 }
 
 // --- token management (174) --------------------------------------------------
-
-// TestTokenManagement verifies the list/add/delete round-trip: the server
-// mints the key, resolves the group name, audits, and replies with the
-// refreshed list every time.
-func TestTokenManagement(t *testing.T) {
-	env := startTestEnv(t, nil)
-	defer env.stop()
-
-	gid, err := env.groups.CreateGroup(context.Background(), "server", "Moderator", 0)
-	if err != nil {
-		t.Fatalf("CreateGroup: %v", err)
-	}
-
-	conn, _ := dialAuthed(t, env.addr, "admin-uid")
-	defer func() { _ = conn.Close() }()
-
-	send(t, conn, netproto.MsgTokenList, netproto.TokenList{})
-	f := readOfType(t, conn, netproto.MsgTokens)
-	var resp netproto.Tokens
-	if err := netproto.Decode(f, &resp); err != nil {
-		t.Fatalf("decode tokens: %v", err)
-	}
-	if len(resp.Entries) != 0 {
-		t.Fatalf("initial entries = %+v", resp.Entries)
-	}
-
-	send(t, conn, netproto.MsgTokenAdd, netproto.TokenAdd{
-		GroupID: gid, ChannelID: 7, Description: "for the new mod",
-	})
-	f = readOfType(t, conn, netproto.MsgTokens)
-	if err := netproto.Decode(f, &resp); err != nil {
-		t.Fatalf("decode tokens: %v", err)
-	}
-	if len(resp.Entries) != 1 {
-		t.Fatalf("after add entries = %+v", resp.Entries)
-	}
-	e := resp.Entries[0]
-	if e.Token == "" {
-		t.Fatal("server did not generate a token key")
-	}
-	if e.GroupID != gid || e.GroupName != "Moderator" {
-		t.Fatalf("group not resolved: %+v", e)
-	}
-	if e.ChannelID != 7 || e.Description != "for the new mod" {
-		t.Fatalf("metadata lost: %+v", e)
-	}
-
-	send(t, conn, netproto.MsgTokenDelete, netproto.TokenDelete{Token: e.Token})
-	f = readOfType(t, conn, netproto.MsgTokens)
-	if err := netproto.Decode(f, &resp); err != nil {
-		t.Fatalf("decode tokens: %v", err)
-	}
-	if len(resp.Entries) != 0 {
-		t.Fatalf("after delete entries = %+v", resp.Entries)
-	}
-
-	send(t, conn, netproto.MsgTokenDelete, netproto.TokenDelete{Token: "nope"})
-	if ferr := readError(t, conn); ferr.Code != errCodeNotFound {
-		t.Fatalf("unknown token delete error = %d, want %d", ferr.Code, errCodeNotFound)
-	}
-
-	actions := env.groups.auditActions()
-	var add, del int
-	for _, a := range actions {
-		switch a {
-		case "token_add":
-			add++
-		case "token_delete":
-			del++
-		}
-	}
-	if add != 1 || del != 1 {
-		t.Fatalf("audit actions = %v", actions)
-	}
-}
-
-// TestTokenManagementDenied verifies each operation is gated by its own
-// b_virtualserver_token_* key.
-func TestTokenManagementDenied(t *testing.T) {
-	env := startTestEnv(t, nil)
-	defer env.stop()
-
-	conn, _ := dialAuthed(t, env.addr, "user-uid")
-	defer func() { _ = conn.Close() }()
-
-	for _, tc := range []struct {
-		name string
-		mt   netproto.MessageType
-		msg  any
-	}{
-		{"list", netproto.MsgTokenList, netproto.TokenList{}},
-		{"add", netproto.MsgTokenAdd, netproto.TokenAdd{GroupID: 3}},
-		{"delete", netproto.MsgTokenDelete, netproto.TokenDelete{Token: "x"}},
-	} {
-		send(t, conn, tc.mt, tc.msg)
-		if e := readError(t, conn); e.Code != errCodePermissionDenied {
-			t.Fatalf("%s error = %d, want %d", tc.name, e.Code, errCodePermissionDenied)
-		}
-	}
-}
-
-// TestTokenAddGranted verifies b_virtualserver_token_add alone lets a
-// non-admin mint a group token, but not a group-less admin token.
-func TestTokenAddGranted(t *testing.T) {
-	tp := tieredWith(boolPerm(permissions.PermissionKeyVirtualserverTokenAdd, true))
-	env := startTestEnv(t, &tp)
-	defer env.stop()
-
-	gid, err := env.groups.CreateGroup(context.Background(), "server", "Moderator", 0)
-	if err != nil {
-		t.Fatalf("CreateGroup: %v", err)
-	}
-
-	conn, _ := dialAuthed(t, env.addr, "user-uid")
-	defer func() { _ = conn.Close() }()
-
-	send(t, conn, netproto.MsgTokenAdd, netproto.TokenAdd{GroupID: gid})
-	f := readOfType(t, conn, netproto.MsgTokens)
-	var resp netproto.Tokens
-	if err := netproto.Decode(f, &resp); err != nil {
-		t.Fatalf("decode tokens: %v", err)
-	}
-	if len(resp.Entries) != 1 {
-		t.Fatalf("entries = %+v", resp.Entries)
-	}
-
-	// An admin-granting (group-less) token needs more than the add key.
-	send(t, conn, netproto.MsgTokenAdd, netproto.TokenAdd{})
-	if e := readError(t, conn); e.Code != errCodePermissionDenied {
-		t.Fatalf("admin token error = %d, want %d", e.Code, errCodePermissionDenied)
-	}
-
-	// A token for a group that does not exist is refused.
-	send(t, conn, netproto.MsgTokenAdd, netproto.TokenAdd{GroupID: 4242})
-	if e := readError(t, conn); e.Code != errCodeNotFound {
-		t.Fatalf("unknown group error = %d, want %d", e.Code, errCodeNotFound)
-	}
-}
-
-// TestTokenUseGuestPromotes verifies every connected identity can redeem a
-// token and a guest becomes a durable user before the grant is applied.
-func TestTokenUseGuestPromotes(t *testing.T) {
-	env := startTestEnv(t, nil)
-	defer env.stop()
-	env.tokens.grants = map[string]int64{"tok-abc": 5}
-
-	conn := dialRetry(t, env.addr)
-	defer func() { _ = conn.Close() }()
-	send(t, conn, netproto.MsgAuthenticate, netproto.Authenticate{Anonymous: true, Nickname: "guest"})
-	f := readOfType(t, conn, netproto.MsgAuthResponse)
-	var ar netproto.AuthResponse
-	if err := netproto.Decode(f, &ar); err != nil {
-		t.Fatalf("decode auth: %v", err)
-	}
-	if !ar.OK {
-		t.Fatalf("guest auth failed: %s", ar.Reason)
-	}
-
-	send(t, conn, netproto.MsgTokenUse, netproto.TokenUse{Token: "tok-abc"})
-	data := readEventOfType(t, conn, eventTokenUsed)
-	var event struct {
-		ClientID string `json:"client_id"`
-		GroupID  int64  `json:"group_id"`
-		Promoted bool   `json:"promoted"`
-	}
-	if err := json.Unmarshal(data, &event); err != nil {
-		t.Fatalf("decode token event: %v", err)
-	}
-	if event.ClientID != ar.ClientID || event.GroupID != 5 || !event.Promoted {
-		t.Fatalf("guest token event = %+v", event)
-	}
-	env.tokens.mu.Lock()
-	defer env.tokens.mu.Unlock()
-	if len(env.tokens.used) != 1 || env.tokens.used[0] != "tok-abc" {
-		t.Fatalf("guest redemption did not reach the store: %v", env.tokens.used)
-	}
-}

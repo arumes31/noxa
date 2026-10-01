@@ -2,61 +2,10 @@ package server
 
 import (
 	"context"
-	"errors"
 	"testing"
 
 	"noxa/internal/config"
-	"noxa/internal/permissions"
 )
-
-func TestPermOverviewResolvesTierPrecedenceAndLoadArguments(t *testing.T) {
-	tp := permissions.NewTieredPermissions()
-	key := permissions.PermissionKey("i_test_power")
-	high := permissions.NewPermissionSet()
-	high.Set(&permissions.Permission{Key: key, Type: permissions.PermissionTypeInteger, Value: 4, Grant: 9})
-	low := permissions.NewPermissionSet()
-	low.Set(&permissions.Permission{Key: key, Type: permissions.PermissionTypeInteger, Value: 99, Grant: 99})
-	tp.Set(permissions.TierServerGroup, high)
-	tp.Set(permissions.TierChannel, low)
-	var loadedUser, loadedChannel int64
-	env := startTestEnvDeps(t, &tp, nil, func(deps *Deps) {
-		deps.Perms.(*fakePerms).loadForClientFn = func(_ context.Context, userID, channelID int64) (permissions.TieredPermissions, error) {
-			loadedUser, loadedChannel = userID, channelID
-			return tp, nil
-		}
-	})
-	defer env.stop()
-	env.auth.users["user-uid"].IsAdmin = true
-
-	got, admin, err := env.srv.PermOverview(context.Background(), "user-uid", 42)
-	if err != nil {
-		t.Fatalf("PermOverview: %v", err)
-	}
-	if loadedUser != 2 || loadedChannel != 42 {
-		t.Fatalf("LoadForClient arguments = (%d, %d), want (2, 42)", loadedUser, loadedChannel)
-	}
-	if !admin {
-		t.Fatal("PermOverview did not return the authoritative admin flag")
-	}
-	if len(got) != 1 || got[0].Key != string(key) || got[0].Value != 4 || got[0].Grant != 9 || got[0].Tier != "server_group" {
-		t.Fatalf("PermOverview = %+v, want server-group winning permission", got)
-	}
-}
-
-func TestPermOverviewReturnsLookupAndLoadErrors(t *testing.T) {
-	env := startTestEnv(t, nil)
-	defer env.stop()
-	if _, _, err := env.srv.PermOverview(context.Background(), "missing", 0); err == nil {
-		t.Fatal("PermOverview succeeded for a missing user")
-	}
-	loadErr := errors.New("injected permission load failure")
-	env.perms.loadForClientFn = func(context.Context, int64, int64) (permissions.TieredPermissions, error) {
-		return permissions.TieredPermissions{}, loadErr
-	}
-	if _, _, err := env.srv.PermOverview(context.Background(), "user-uid", 0); !errors.Is(err, loadErr) {
-		t.Fatalf("PermOverview load error = %v, want injected error", err)
-	}
-}
 
 func TestEffectiveMaxClientsUsesOnlyValidNonNegativeOverride(t *testing.T) {
 	env := startTestEnvFull(t, nil, func(cfg *config.Config) { cfg.MaxClients = 9 })

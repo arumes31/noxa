@@ -1,11 +1,19 @@
 import { icon, labelButton } from "./icons.js";
-import { getUserVolume, isUserMuted, setUserVolume } from "./audio.js";
+import { isUserMuted } from "./audio.js";
+import { bindMemberVolume } from "./member-volume.js";
+import { memberTarget } from "./member-target.js";
+import { currentWhisperRouting } from "./media-controls.js";
 import { t } from "./i18n.js";
 import { setSafeImage } from "./safe-media.js";
 
 const V = () => window.__noxa;
 const $ = (id) => document.getElementById(id);
 let memberKey = "";
+let memberPreview = null;
+
+export function cancelMemberVolumePreview() {
+    memberPreview?.control.cancel();
+}
 
 export function avatarColor(name = "") {
     const colors = ["#70b7f5", "#aa92e8", "#73c590", "#ec91b3", "#efb36f"];
@@ -24,6 +32,8 @@ function avatar(element, client) {
 
 function voiceState(client) {
     const state = V().state;
+    if (client.server_deafened) return "serverDeafened";
+    if (client.server_muted) return "serverMuted";
     if (client.client_id === state.myClientID) {
         if (state.muted) return "muted";
         return client.is_speaking && client.channel_id === state.myChannelID ? "talking" : "idle";
@@ -42,6 +52,8 @@ export function renderWorkspace() {
     for (const client of members) {
         let button = current.get(client.client_id);
         if (!button) {
+            const card = document.createElement("div");
+            card.className = "participant-card";
             button = document.createElement("button");
             button.type = "button";
             button.className = "participant";
@@ -53,16 +65,26 @@ export function renderWorkspace() {
                 V().setDetailsOpen(true);
                 V().renderTree();
             };
-            strip.appendChild(button);
+            const menu = document.createElement("button");
+            menu.type = "button";
+            menu.className = "participant-menu icon-btn";
+            menu.innerHTML = icon("more");
+            card.append(button, menu);
+            strip.appendChild(card);
         }
         current.delete(client.client_id);
+        memberTarget(button, client.unique_id, client.nickname, { clientID: client.client_id, openOnClick: false });
         const name = (client.nickname || client.unique_id) + (client.client_id === state.myClientID ? t("workspace.you") : "");
+        const menu = button.parentElement.querySelector(".participant-menu");
+        memberTarget(menu, client.unique_id, client.nickname, { clientID: client.client_id });
+        menu.title = t("context.memberOptions", { name });
+        menu.setAttribute("aria-label", menu.title);
         const statusKey = voiceState(client);
         const description = t("workspace.voice." + statusKey);
         button.querySelector(".participant-name").textContent = name;
         const status = button.querySelector(".participant-state");
         const speaking = statusKey === "speaking" || statusKey === "talking";
-        const statusIcon = speaking ? "signal" : ["muted", "localMuted"].includes(statusKey) ? "micOff" : "mic";
+        const statusIcon = speaking ? "signal" : ["muted", "localMuted", "serverMuted", "serverDeafened"].includes(statusKey) ? "micOff" : "mic";
         labelButton(status, statusIcon, description);
         button.setAttribute("aria-label", t("workspace.memberLabel", { name, state: description.toLowerCase() }));
         button.classList.toggle("speaking", speaking);
@@ -70,8 +92,8 @@ export function renderWorkspace() {
         avatar(button.querySelector(".avatar"), client);
     }
     for (const element of current.values()) {
-        if (element === document.activeElement) $("details-toggle").focus();
-        element.remove();
+        if (element.parentElement.contains(document.activeElement)) $("details-toggle").focus();
+        element.parentElement.remove();
     }
     if (!members.length) {
         const empty = document.createElement("p");
@@ -80,6 +102,13 @@ export function renderWorkspace() {
         strip.appendChild(empty);
     }
     const ownChannel = state.channels.find((c) => c.ChannelID === state.myChannelID);
+    const context = $("voice-context");
+    context.textContent = t("polish.connection", {
+        server: state.lastConnect?.addr || t("status.offline"),
+        channel: ownChannel?.Name || t("workspace.noVoice"),
+    });
+    context.title = context.textContent;
+    $("mic-meter").setAttribute("aria-label", t("polish.meter"));
     strip.title = ownChannel ? t("workspace.participantsIn", { channel: ownChannel.Name }) : t("workspace.participants");
     $("server-summary").textContent = t("workspace.online", { count: state.clients.length });
     $("channel-member-count").textContent = t("workspace.inVoice", { count: members.length });
@@ -91,6 +120,7 @@ export function renderWorkspace() {
     $("voice-deafen").setAttribute("aria-label", state.deafened ? t("workspace.undeafen") : t("workspace.deafen"));
     labelButton($("voice-deafen"), state.deafened ? "headphonesOff" : "headphones", state.deafened ? t("workspace.undeafen") : t("workspace.deafen"));
     $("ptt-btn").classList.toggle("hidden", (state.settings?.activation_mode || "ptt") !== "ptt");
+    renderVoiceHints();
     for (const element of document.querySelectorAll("#channel-tree .avatar[data-uid]")) {
         element.style.setProperty("--avatar-color", avatarColor(element.dataset.uid));
     }
@@ -100,6 +130,9 @@ export function renderMember() {
     const state = V().state;
     const client = state.clients.find((c) => c.client_id === state.selectedClientID);
     const card = $("client-card");
+    if (memberPreview && (!client || memberPreview.key !== `${state.serverGeneration}:${client.client_id}:${client.unique_id}`)) {
+        memberPreview.control(); memberPreview = null;
+    }
     if (!client) {
         memberKey = "";
         card.innerHTML = `<p class="empty-state">${t("workspace.selectMember")}</p>`;
@@ -111,24 +144,17 @@ export function renderMember() {
         memberKey = key;
         card.innerHTML = `<div class="member-profile"><div class="card-avatar"></div><div class="member-identity"><div class="card-nick"></div><div class="card-channel"></div><div class="card-groups"></div></div></div>
             <div class="member-audio"><label for="member-volume">${t("workspace.volume")} <output id="member-volume-value" for="member-volume"></output></label><input id="member-volume" type="range" min="0" max="200" step="5" aria-describedby="member-volume-value" />
+            <button id="member-volume-reset" type="button">${t("wins.resetVolume")}</button>
             <button id="member-message" type="button"></button><p id="member-action-error" role="alert" hidden></p></div>
             <details class="member-identity-details"><summary>${t("workspace.identity")}</summary><div class="card-uid mono"></div></details>`;
         const slider = $("member-volume");
-        slider.value = Math.round(getUserVolume(client.unique_id) * 100);
-        slider.oninput = () => { $("member-volume-value").textContent = slider.value + "%"; };
-        slider.onchange = async () => {
-            const error = $("member-action-error");
-            const priorVolume = Math.round(getUserVolume(client.unique_id) * 100);
-            error.hidden = true;
-            try { await setUserVolume(client.unique_id, Number(slider.value)); }
-            catch {
-                if (memberKey !== key || !error.isConnected) return;
-                slider.value = priorVolume;
-                $("member-volume-value").textContent = priorVolume + "%";
-                error.textContent = t("workspace.volumeFailed");
-                error.hidden = false;
-            }
-        };
+        const error = $("member-action-error");
+        const control = bindMemberVolume(slider, $("member-volume-value"), $("member-volume-reset"), client.unique_id, {
+            format: value => Number(value) > 100 ? t("wins.amplified", { value }) : value + "%",
+            onSave: () => { error.hidden = true; },
+            onError: () => { error.textContent = t("workspace.volumeFailed"); error.hidden = false; },
+        });
+        memberPreview = { key, control };
         $("member-message").onclick = () => {
             window.__noxaFiles.activateWorkspaceTab("chat");
             V().openPM(client.unique_id, client.nickname);
@@ -139,23 +165,53 @@ export function renderMember() {
     const name = client.nickname || client.unique_id;
     $("member-heading").textContent = name;
     card.querySelector(".card-nick").textContent = name;
+    memberTarget(card.querySelector(".card-nick"), client.unique_id, name, { clientID: client.client_id });
+    card.querySelector(".card-avatar").dataset.memberUid = client.unique_id;
+    card.querySelector(".card-avatar").dataset.memberClientId = client.client_id;
     const channel = state.channels.find((c) => c.ChannelID === client.channel_id);
     card.querySelector(".card-channel").textContent = channel ? t("workspace.inChannel", { channel: channel.Name }) : t("workspace.noChannel");
     card.querySelector(".card-uid").textContent = client.unique_id || t("workspace.noIdentity");
-    const groups = state.groupByUID?.get(client.unique_id) || [];
-    card.querySelector(".card-groups").textContent = groups.map((group) => group.name).join(" · ");
+    card.querySelector(".card-groups").textContent = (client.roles || []).map((role) => role.name).join(" · ");
     avatar(card.querySelector(".card-avatar"), client);
     card.querySelector(".card-avatar").classList.toggle("speaking", ["speaking", "talking"].includes(voiceState(client)));
-    $("member-volume-value").textContent = $("member-volume").value + "%";
+    memberPreview.control.refresh();
     const isSelf = client.client_id === state.myClientID;
     card.querySelector(".member-audio").hidden = isSelf || !client.unique_id;
     labelButton($("member-message"), "chat", t("workspace.message"));
     $("member-message").setAttribute("aria-label", t("workspace.messagePerson", { name }));
 }
 
+export function renderVoiceHints() {
+    const state = V().state, settings = state.settings || {};
+    const hint = $("voice-shortcut-hint");
+    if (!hint) return;
+    const ptt = (settings.activation_mode || "ptt") === "ptt";
+    const status = state.pttShortcutStatus;
+    const key = status?.spec ?? settings.hotkey_ptt;
+    hint.hidden = !ptt;
+    hint.textContent = !key ? t("wins.pttMissing") : status?.registered === false ? t("wins.pttFailed") : t("wins.pttBinding", { key });
+    hint.classList.toggle("warn", ptt && (!key || status?.registered === false));
+    const routing = currentWhisperRouting();
+    const whisper = $("voice-whisper-preview");
+    const unconfirmed = routing ? routing.status !== "confirmed" : !!settings.whisper_active;
+    whisper.classList.toggle("warn", unconfirmed);
+    if (unconfirmed) {
+        whisper.hidden = false;
+        whisper.textContent = t(routing?.status === "pending" ? "wins.whisperPending" : "wins.whisperUnconfirmed");
+        return;
+    }
+    const config = routing?.config || { active: false, clients: [], channels: [] };
+    const targets = [
+        ...config.clients.map(uid => state.clients.find(client => client.unique_id === uid)?.nickname || t("wins.whisperUnknownMember")),
+        ...config.channels.map(id => t("wins.whisperChannel", { name: state.channels.find(channel => channel.ChannelID === id)?.Name || t("wins.whisperUnknownChannel") })),
+    ];
+    whisper.hidden = !config.active;
+    whisper.textContent = targets.length ? t("wins.whisperTargets", { targets: targets.join(", ") }) : t("wins.whisperNone");
+}
+
 export function initWorkspace() {
     const icons = {
-        "details-close": "close", "details-toggle": "users", "channel-create-btn": "plus",
+        "details-close": "close", "details-toggle": "users", "channel-create-btn": "plus", "workspace-sidebar-close": "close",
         "notif-bell": "bell", "chat-search-btn": "search", "chat-pins-btn": "pin",
         "chat-info-btn": "info", "chat-e2ee-btn": "lock", "chat-export-btn": "download",
         "chat-attach": "attach", "chat-emoji": "smile", "chat-send": "send", "tab-transfers": "transfer",
@@ -174,11 +230,12 @@ export function initWorkspace() {
     $("voice-disconnect").onclick = () => V().disconnect();
     $("voice-leave-channel").onclick = async () => {
         const generation = V().state.serverGeneration;
+        const tabID = V().state.activeTabID;
         const channel = V().state.myChannelID;
         if (!channel) return;
         $("voice-leave-channel").disabled = true;
         try {
-            const error = await window.go.main.App.JoinChannel(0);
+            const error = await window.go.main.App.JoinChannelForTab(tabID, 0);
             if (error) throw new Error(error);
         } catch (error) {
             if (generation === V().state.serverGeneration) V().toast(t("workspace.leaveFailed", { error: String(error.message || error) }), "warn");
@@ -186,7 +243,33 @@ export function initWorkspace() {
             if (generation === V().state.serverGeneration) $("voice-leave-channel").disabled = !V().state.myChannelID;
         }
     };
-    $("voice-options").addEventListener("toggle", () => { if ($("voice-options").open) void refreshVoiceDevices(); });
+    const positionVoiceOptions = () => {
+        const options = $("voice-options");
+        if (!options.open) return;
+        const anchor = options.querySelector("summary").getBoundingClientRect();
+        const menu = options.querySelector(".voice-options-menu");
+        menu.style.left = `${Math.max(8, Math.min(anchor.right - menu.offsetWidth, innerWidth - menu.offsetWidth - 8))}px`;
+        menu.style.top = `${Math.max(8, anchor.top - menu.offsetHeight - 8)}px`;
+    };
+    $("voice-options").addEventListener("toggle", () => {
+        if ($("voice-options").open) { positionVoiceOptions(); void refreshVoiceDevices().then(positionVoiceOptions); }
+    });
+    window.addEventListener("resize", positionVoiceOptions);
+    $("voice-options").addEventListener("keydown", event => {
+        if (event.key !== "Escape" || !$("voice-options").open) return;
+        event.preventDefault(); event.stopPropagation();
+        $("voice-options").open = false;
+        $("voice-options").querySelector("summary").focus();
+    });
+    $("voice-options").addEventListener("click", event => {
+        if (event.target.closest("#voice-settings, #voice-disconnect, [data-channel-undock]")) {
+            $("voice-options").open = false;
+            if ($("voice-options").contains(document.activeElement)) $("voice-options").querySelector("summary").focus();
+        }
+    });
+    document.addEventListener("pointerdown", event => {
+        if (!$("voice-options").contains(event.target)) $("voice-options").open = false;
+    });
     navigator.mediaDevices?.addEventListener?.("devicechange", () => { if ($("voice-options").open) void refreshVoiceDevices(); });
     window.addEventListener("noxa-language-changed", () => {
         translateWorkspace();
@@ -207,12 +290,16 @@ export function initWorkspace() {
             if (innerWidth <= 720) $("center").focus();
         }
     });
+    const closeChannels = () => {
+        document.body.classList.remove("channels-open");
+        $("workspace-sidebar-toggle").setAttribute("aria-expanded", "false");
+        const groupToggle = document.querySelector("#center.private-group-active .group-show-channels");
+        groupToggle?.setAttribute("aria-expanded", "false");
+        (groupToggle || $("workspace-sidebar-toggle")).focus();
+    };
+    $("workspace-sidebar-close").onclick = closeChannels;
     document.addEventListener("keydown", (event) => {
-        if (event.key === "Escape" && document.body.classList.contains("channels-open")) {
-            document.body.classList.remove("channels-open");
-            $("workspace-sidebar-toggle").setAttribute("aria-expanded", "false");
-            $("workspace-sidebar-toggle").focus();
-        }
+        if (event.key === "Escape" && document.body.classList.contains("channels-open")) closeChannels();
     });
     renderWorkspace();
     renderMember();
@@ -233,6 +320,7 @@ function translateWorkspace() {
         ["#tree-collapse", "aria-label", "workspace.labels.collapseAllChannels"],
         ["#tree-expand", "aria-label", "workspace.labels.expandAllChannels"],
         ["#workspace-sidebar-toggle", "aria-label", "workspace.labels.showChannels"],
+        ["#workspace-sidebar-close", "aria-label", "workspace.labels.closeChannels"],
         ["#chat-search-btn", "aria-label", "workspace.labels.searchChat"],
         ["#chat-search-btn", "title", "workspace.labels.searchChatCtrlF"],
         [".channel-actions > summary", "aria-label", "workspace.labels.moreChannelActions"],
@@ -268,8 +356,12 @@ function translateWorkspace() {
     labelButton($("tab-chat"), "chat", t("workspace.chat"));
     labelButton($("tab-files"), "file", t("workspace.files"));
     labelButton($("ptt-btn"), "mic", t("workspace.ptt"));
+    $("ptt-btn").setAttribute("aria-label", t("workspace.ptt"));
+    $("ptt-btn").title = t("workspace.ptt");
+    $("chat-text").setAttribute("aria-label", t("workspace.message"));
     labelButton($("voice-settings"), "settings", t("workspace.audioPreferences"));
-    labelButton($("voice-options").querySelector("summary"), "settings", t("workspace.voiceSettings"));
+    labelButton($("voice-options").querySelector("summary"), "more", t("context.voiceMore"));
+    $("voice-options").querySelector("summary").setAttribute("aria-label", t("context.voiceMoreLabel"));
     labelButton($("voice-disconnect"), "disconnect", t("workspace.disconnect"));
 
     for (const [id, glyph, key] of [

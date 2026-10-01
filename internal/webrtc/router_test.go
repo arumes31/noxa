@@ -74,7 +74,9 @@ func makeAudioPacket(t *testing.T, seq uint16, level int) *rtp.Packet {
 			Timestamp:      uint32(seq) * 960,
 			SSRC:           4242,
 		},
-		Payload: []byte{0xde, 0xad},
+		// Forwarding tests use this opaque fixture for audio and video. A
+		// minimal VP8 keyframe also exercises validated video continuity.
+		Payload: []byte{0x10, 0, 0, 0, 0x9d, 1, 0x2a, 0x80, 2, 0x68, 1},
 	}
 	if level >= 0 {
 		if err := pkt.SetExtension(1, []byte{byte(level)}); err != nil {
@@ -528,10 +530,18 @@ func TestTrackSlotMSID(t *testing.T) {
 		t.Fatal("screen audio shares the microphone's stream ID; the browser then feeds both through one gain chain")
 	}
 
-	// Undeclaring the slot tears the extra track down again.
+	// Undeclaring publication leaves a silent binding for the next share.
+	transceivers := len(r.pubPeers["b"].pc.GetTransceivers())
 	r.SetTrackSlots("a", nil)
-	if pubTrackFor(r, "b", "a").audio[SlotScreenAudio] != nil {
-		t.Fatal("undeclaring the screen-audio slot left its output track behind")
+	if pubTrackFor(r, "b", "a").audio[SlotScreenAudio] != share {
+		t.Fatal("undeclaring the screen-audio slot destroyed its reusable binding")
+	}
+	for range 10 {
+		r.SetTrackSlots("a", map[string]string{"shared-audio": SlotScreenAudio})
+		r.SetTrackSlots("a", nil)
+	}
+	if len(r.pubPeers["b"].pc.GetTransceivers()) != transceivers {
+		t.Fatal("publication cycles grew the SDP")
 	}
 	if pubTrackFor(r, "b", "a").audio[SlotMic] == nil {
 		t.Fatal("undeclaring an extra slot dropped the default slot")
@@ -803,6 +813,12 @@ func TestVoiceHandleOfferConcurrentMove(t *testing.T) {
 		moved.Do(func() { r.JoinChannel(9, "c1") })
 	})
 
+	// A fresh browser transport still rebuilds; ordinary camera offers reuse it.
+	replacement := newClientPC(t)
+	offer, err = replacement.CreateOffer(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if _, err := v.HandleOffer("c1", offer.SDP, nil); err != nil {
 		t.Fatalf("re-offer HandleOffer: %v", err)
 	}

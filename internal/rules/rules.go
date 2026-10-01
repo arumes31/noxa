@@ -117,6 +117,21 @@ func (s *Service) AcceptedCount(ctx context.Context) (int, error) {
 	if err != nil || hash == "" {
 		return 0, err
 	}
+	return s.acceptedCountForHash(ctx, hash)
+}
+
+// Inspect returns management information for one wording. Count acceptances
+// for the returned hash even if the configured text changes during the read.
+func (s *Service) Inspect(ctx context.Context) (text, hash string, accepted int, err error) {
+	text, hash, err = s.Text(ctx)
+	if err != nil || hash == "" {
+		return text, hash, 0, err
+	}
+	accepted, err = s.acceptedCountForHash(ctx, hash)
+	return text, hash, accepted, err
+}
+
+func (s *Service) acceptedCountForHash(ctx context.Context, hash string) (int, error) {
 	var n int
 	if err := s.db.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM server_rules_acceptance WHERE rules_hash = $1`, hash).Scan(&n); err != nil {

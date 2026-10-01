@@ -266,6 +266,17 @@ type fixedRemoteAddrConn struct {
 func (c fixedRemoteAddrConn) RemoteAddr() net.Addr { return c.remote }
 
 func TestVerifyFileStreamsBeyondLegacyBufferLimit(t *testing.T) {
+	for _, scoped := range []bool{false, true} {
+		name := "legacy"
+		if scoped {
+			name = "tab-bound"
+		}
+		t.Run(name, func(t *testing.T) { verifyFileStreamsBeyondLegacyBufferLimit(t, scoped) })
+	}
+}
+
+func verifyFileStreamsBeyondLegacyBufferLimit(t *testing.T, scoped bool) {
+	t.Helper()
 	controlClient, controlServer := net.Pipe()
 	wrappedControl := fixedRemoteAddrConn{Conn: controlClient, remote: fixedTransferAddr("127.0.0.1:12333")}
 	cm := newConnManager(context.Background())
@@ -276,6 +287,15 @@ func TestVerifyFileStreamsBeyondLegacyBufferLimit(t *testing.T) {
 	cm.transferEpoch = 1
 	cm.mu.Unlock()
 	app := appWithCM(cm)
+	app.activeID = "a"
+	app.tabs = map[string]*tabState{"a": {cm: cm}}
+	if scoped {
+		for _, tabID := range []string{"", "b", "missing"} {
+			if _, err := app.VerifyFileForTab(tabID, 1, "", "large.bin", "digest"); err == nil {
+				t.Fatalf("accepted checksum request from %q", tabID)
+			}
+		}
+	}
 	go serveFrames(controlServer, func(frame *netproto.Frame) (netproto.MessageType, any, bool) {
 		if netproto.MessageType(frame.Type) != netproto.MsgFileTransferInit {
 			return 0, nil, false
@@ -310,7 +330,13 @@ func TestVerifyFileStreamsBeyondLegacyBufferLimit(t *testing.T) {
 		transferDigest(chunks...),
 		&netproto.Frame{Type: ftStatus, Payload: []byte(`{"ok":true}`)},
 	)
-	ok, err := app.VerifyFile(1, "", "large.bin", transferDigest(chunks...))
+	var ok bool
+	var err error
+	if scoped {
+		ok, err = app.VerifyFileForTab("a", 1, "", "large.bin", transferDigest(chunks...))
+	} else {
+		ok, err = app.VerifyFile(1, "", "large.bin", transferDigest(chunks...))
+	}
 	if err != nil || !ok {
 		t.Fatalf("streaming verify = %v, %v", ok, err)
 	}

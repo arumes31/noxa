@@ -1,0 +1,10 @@
+[Unit]
+Description=Consistent noXa database, files and keys backup
+Requires=docker.service
+After=docker.service
+
+[Service]
+Type=oneshot
+UMask=0077
+ExecStart=/bin/sh /container/noxa/config/backup-full.sh
+TimeoutStartSec=300

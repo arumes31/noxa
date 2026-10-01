@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"noxa/internal/authorization"
 	"noxa/internal/netproto"
-	"noxa/internal/permissions"
 )
 
 func TestPokeTrackerZeroValueIsolationCapacityAndExpiry(t *testing.T) {
@@ -108,21 +108,22 @@ func TestPokeTrackerConcurrentDistinctFloodStaysBounded(t *testing.T) {
 func TestSetStatus(t *testing.T) {
 	env := startTestEnv(t, nil)
 	defer env.stop()
+	env.state.AddChannel(testChannel(1))
 
 	aliceConn, aliceID := dialAuthed(t, env.addr, "user-uid")
 	defer func() { _ = aliceConn.Close() }()
-	bobConn, _ := dialAuthed(t, env.addr, "admin-uid")
+	bobConn, bobID := dialAuthed(t, env.addr, "admin-uid")
 	defer func() { _ = bobConn.Close() }()
+	if err := env.state.MoveClient(aliceID, 1); err != nil {
+		t.Fatal(err)
+	}
+	if err := env.state.MoveClient(bobID, 1); err != nil {
+		t.Fatal(err)
+	}
 
-	send(t, aliceConn, netproto.MsgSetStatus, netproto.SetStatus{Status: "away", Message: "brb"})
-	data := readEventOfType(t, bobConn, "status_changed")
-	var evt statusEvent
-	if err := json.Unmarshal(data, &evt); err != nil {
-		t.Fatalf("decode event: %v", err)
-	}
-	if evt.ClientID != aliceID || evt.Status != "away" || evt.Message != "brb" {
-		t.Fatalf("event = %+v", evt)
-	}
+	send(t, aliceConn, netproto.MsgSetStatus, netproto.SetStatus{Status: "away", Message: "brb", AckRequested: true})
+	readOfType(t, aliceConn, netproto.MsgStatusSaved)
+	readOfType(t, bobConn, netproto.MsgSnapshot)
 
 	sc, ok := env.state.GetClient(aliceID)
 	if !ok || sc.Status != "away" || sc.StatusMessage != "brb" {
@@ -130,8 +131,9 @@ func TestSetStatus(t *testing.T) {
 	}
 
 	// "online" clears the status.
-	send(t, aliceConn, netproto.MsgSetStatus, netproto.SetStatus{Status: "online"})
-	readEventOfType(t, bobConn, "status_changed")
+	send(t, aliceConn, netproto.MsgSetStatus, netproto.SetStatus{Status: "online", AckRequested: true})
+	readOfType(t, aliceConn, netproto.MsgStatusSaved)
+	readOfType(t, bobConn, netproto.MsgSnapshot)
 	sc, _ = env.state.GetClient(aliceID)
 	if sc.Status != "" {
 		t.Fatalf("status after clearing = %q", sc.Status)
@@ -146,9 +148,7 @@ func TestSetStatus(t *testing.T) {
 
 // TestPoke verifies the gate, the relay, and the cooldown (321/322).
 func TestPoke(t *testing.T) {
-	// Caller needs b_client_poke (deny-on-unset).
-	perms := tieredWith(boolPerm(permissions.PermissionKeyClientPoke, true))
-	env := startTestEnv(t, &perms)
+	env := startTestEnvWithCapabilities(t, authorization.PokeMembers)
 	defer env.stop()
 
 	aliceConn, aliceID := dialAuthed(t, env.addr, "user-uid")
@@ -206,6 +206,9 @@ func TestServerInfoQuery(t *testing.T) {
 	}
 	if resp.Version == "" || resp.Platform == "" || resp.ClientsOnline < 1 {
 		t.Fatalf("server info = %+v", resp)
+	}
+	if resp.ChatMaxBytes != 2000 {
+		t.Fatalf("chat byte limit = %d, want 2000", resp.ChatMaxBytes)
 	}
 }
 
@@ -288,8 +291,7 @@ func TestInvisibleSnapshotFiltering(t *testing.T) {
 	defer func() { _ = userConn.Close() }()
 
 	// Both users must be in a channel to appear in snapshots.
-	send(t, adminConn, netproto.MsgCreateChannel, netproto.CreateChannel{Name: "Lobby", Type: 2})
-	readOfType(t, adminConn, netproto.MsgChannelList)
+	env.state.AddChannel(testChannel(1))
 	send(t, adminConn, netproto.MsgJoinChannel, netproto.JoinChannel{ChannelID: 1})
 	send(t, userConn, netproto.MsgJoinChannel, netproto.JoinChannel{ChannelID: 1})
 	waitFor(t, "both clients in channel", func() bool {
@@ -298,7 +300,14 @@ func TestInvisibleSnapshotFiltering(t *testing.T) {
 
 	// Admin goes invisible.
 	send(t, adminConn, netproto.MsgSetStatus, netproto.SetStatus{Status: "invisible"})
-	readEventOfType(t, userConn, "user_left") // looks like a leave to non-admins
+	waitFor(t, "admin to become invisible", func() bool {
+		for _, client := range env.state.ListClients() {
+			if client.UniqueID == "admin-uid" {
+				return client.Status == "invisible"
+			}
+		}
+		return false
+	})
 
 	// Non-admin snapshot: admin hidden, user visible.
 	uids := snapshotUIDs(t, env.addr, "user-uid")
@@ -317,7 +326,14 @@ func TestInvisibleSnapshotFiltering(t *testing.T) {
 
 	// Coming back: non-admin sees a join.
 	send(t, adminConn, netproto.MsgSetStatus, netproto.SetStatus{Status: "online"})
-	readEventOfType(t, userConn, "user_joined")
+	waitFor(t, "admin to return online", func() bool {
+		for _, client := range env.state.ListClients() {
+			if client.UniqueID == "admin-uid" {
+				return client.Status == ""
+			}
+		}
+		return false
+	})
 	uids = snapshotUIDs(t, env.addr, "user-uid")
 	if !uids["admin-uid"] {
 		t.Fatal("admin missing after returning online")

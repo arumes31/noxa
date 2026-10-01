@@ -931,6 +931,20 @@ func TestProcessExitWhileTapRegistrationIsWedgedReturnsBounded(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("Start remained blocked behind AddTap after process exit")
 	}
+	// ErrStartupCleanupTimeout returns before asynchronous artifact cleanup is
+	// guaranteed to finish. Verify it completes while AddTap is still wedged,
+	// without assuming its goroutine or filesystem wins the 20ms response timer.
+	artifactDeadline := time.Now().Add(time.Second)
+	for {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			t.Fatalf("read recording directory: %v", err)
+		}
+		if len(entries) == 0 || time.Now().After(artifactDeadline) {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
 	assertRecordingDirEmpty(t, dir)
 	if _, err := recorder.Start(context.Background(), 54, &fakeTapRouter{}); !errors.Is(err, ErrAlreadyRecording) {
 		t.Fatalf("replacement during late AddTap cleanup = %v, want ErrAlreadyRecording", err)

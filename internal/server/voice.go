@@ -12,9 +12,9 @@ import (
 
 	"go.uber.org/zap"
 
+	"noxa/internal/authorization"
 	"noxa/internal/channels"
 	"noxa/internal/netproto"
-	"noxa/internal/permissions"
 	"noxa/internal/recorder"
 	"noxa/internal/webrtc"
 )
@@ -60,6 +60,7 @@ var _ trackSlotDeclarer = (*webrtc.Voice)(nil)
 // handle the whisper-reply hotkey whispers back to (33); Speaking mirrors the
 // speaking event so the receiver can clear the indicator again.
 type whisperEvent struct {
+	ChannelID    int64  `json:"channel_id,omitempty"`
 	FromClientID string `json:"from_client_id"`
 	FromUniqueID string `json:"from_unique_id"`
 	FromNickname string `json:"from_nickname"`
@@ -89,10 +90,12 @@ type speakingEvent struct {
 // positionEvent is the payload of position events, relaying a client's 3D
 // position to the other members of its channel.
 type positionEvent struct {
-	ClientID string  `json:"client_id"`
-	X        float64 `json:"x"`
-	Y        float64 `json:"y"`
-	Z        float64 `json:"z"`
+	Context   string  `json:"context"`
+	ChannelID int64   `json:"channel_id"`
+	ClientID  string  `json:"client_id"`
+	X         float64 `json:"x"`
+	Y         float64 `json:"y"`
+	Z         float64 `json:"z"`
 }
 
 // handleWebRTCOffer establishes a WebRTC session for the client: it forwards
@@ -107,7 +110,13 @@ func (s *TCPServer) handleWebRTCOffer(ctx context.Context, client *Client, f *ne
 	if s.deps == nil || s.deps.Voice == nil {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "voice backend unavailable")
 	}
+	return s.roleChannelControl(ctx, client, authorization.Connect, true, func(ctx context.Context, _ int64) error {
+		s.refreshRolePublishers(ctx.Value(roleLeaseKey{}).(roleLease).evaluator)
+		return s.applyWebRTCOffer(ctx, client, msg)
+	})
+}
 
+func (s *TCPServer) applyWebRTCOffer(ctx context.Context, client *Client, msg netproto.WebRTCOffer) error {
 	// The slot declaration has to land BEFORE the offer is applied: the
 	// backend builds this client's output tracks while answering, and the
 	// other members' extra output tracks are added from here too (70).
@@ -125,17 +134,35 @@ func (s *TCPServer) handleWebRTCOffer(ctx context.Context, client *Client, f *ne
 		func(candidate, sdpMid string, mlineIndex uint16) {
 			// Push server-side candidates to the client as they are gathered.
 			// Write errors (e.g. disconnect) are logged by writeMessage.
-			_ = s.writeMessage(client, netproto.MsgICECandidate, netproto.ICECandidate{
+			_ = s.writeVoiceSignal(client, netproto.MsgICECandidate, netproto.ICECandidate{
 				Candidate:     candidate,
 				SDPMid:        sdpMid,
 				SDPMLineIndex: mlineIndex,
 			})
 		})
+	// A peer rebuild retires publications; ordinary renegotiation preserves them.
+	// Reconcile even after a failed rebuild, while channel-control locks are held.
+	sharing := false
+	for _, stream := range s.deps.Voice.VideoPublications(client.ID) {
+		if stream.PublisherID == client.ID && stream.Slot == webrtc.SlotScreen {
+			sharing = true
+			break
+		}
+	}
+	s.deps.State.SetSharing(client.ID, sharing)
 	if err != nil {
+		if errors.Is(err, webrtc.ErrOfferCollision) {
+			return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, webrtc.ErrOfferCollision.Error())
+		}
 		s.logger.Warn("webrtc offer failed",
 			zap.String("client_id", client.ID),
 			zap.Error(err),
 		)
+		if errors.Is(err, webrtc.ErrPeerReset) {
+			// End this control session so the desktop reconnects with a fresh
+			// peer instead of retaining a permanently stuck DTLS transport.
+			return err
+		}
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "webrtc offer failed")
 	}
 	return s.writeMessage(client, netproto.MsgWebRTCAnswer, netproto.WebRTCAnswer{SDP: answer})
@@ -151,6 +178,12 @@ func (s *TCPServer) handleWebRTCAnswer(ctx context.Context, client *Client, f *n
 	if s.deps == nil || s.deps.Voice == nil {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "voice backend unavailable")
 	}
+	return s.roleChannelControl(ctx, client, authorization.Connect, true, func(ctx context.Context, _ int64) error {
+		return s.applyWebRTCAnswer(ctx, client, msg)
+	})
+}
+
+func (s *TCPServer) applyWebRTCAnswer(ctx context.Context, client *Client, msg netproto.WebRTCAnswer) error {
 	if err := s.deps.Voice.HandleAnswer(client.ID, msg.SDP); err != nil {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeNotFound, "webrtc answer failed: no active session")
 	}
@@ -166,6 +199,12 @@ func (s *TCPServer) handleICECandidate(ctx context.Context, client *Client, f *n
 	if s.deps == nil || s.deps.Voice == nil {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "voice backend unavailable")
 	}
+	return s.roleChannelControl(ctx, client, authorization.Connect, true, func(context.Context, int64) error {
+		return s.applyICECandidate(client, msg)
+	})
+}
+
+func (s *TCPServer) applyICECandidate(client *Client, msg netproto.ICECandidate) error {
 	if err := s.deps.Voice.AddICECandidate(client.ID, msg.Candidate, msg.SDPMid, msg.SDPMLineIndex); err != nil {
 		s.logger.Debug("ice candidate rejected",
 			zap.String("client_id", client.ID),
@@ -187,30 +226,7 @@ func (s *TCPServer) handleWhisperSet(ctx context.Context, client *Client, f *net
 	if s.deps == nil || s.deps.Voice == nil {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "voice backend unavailable")
 	}
-
-	pc, err := s.permCheckerFor(ctx, client)
-	if err != nil {
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "permission backend unavailable")
-	}
-	if !pc.whisperAllowed() {
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, "insufficient permission: "+string(permissions.PermissionKeyClientWhisperPower))
-	}
-
-	clientIDs := make([]string, 0, len(msg.UniqueIDs))
-	for _, uid := range msg.UniqueIDs {
-		if tc, ok := s.clientByUniqueID(uid); ok {
-			clientIDs = append(clientIDs, tc.ID)
-		}
-	}
-	s.deps.Voice.SetWhisper(client.ID, clientIDs, msg.ChannelIDs, msg.Active)
-
-	s.logger.Debug("whisper configured",
-		zap.String("client_id", client.ID),
-		zap.Bool("active", msg.Active),
-		zap.Int("targets", len(clientIDs)),
-		zap.Int("channels", len(msg.ChannelIDs)),
-	)
-	return nil
+	return s.roleWhisperSet(ctx, client, msg)
 }
 
 // handlePositionUpdate relays the client's 3D position to the other members
@@ -224,23 +240,7 @@ func (s *TCPServer) handlePositionUpdate(ctx context.Context, client *Client, f 
 	if s.deps == nil || s.deps.State == nil || s.deps.Broadcast == nil {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "state backend unavailable")
 	}
-
-	sc, ok := s.deps.State.GetClient(client.ID)
-	if !ok || sc.ChannelID == 0 {
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodeNotFound, "not in a channel")
-	}
-
-	payload, err := eventEnvelope(eventPosition, positionEvent{
-		ClientID: client.ID,
-		X:        msg.X,
-		Y:        msg.Y,
-		Z:        msg.Z,
-	})
-	if err != nil {
-		return err
-	}
-	s.deps.Broadcast.BroadcastToChannel(sc.ChannelID, payload)
-	return nil
+	return s.rolePositionUpdate(ctx, client, msg)
 }
 
 // handlePrioritySpeaker toggles the calling client's priority-speaker flag
@@ -255,30 +255,7 @@ func (s *TCPServer) handlePrioritySpeaker(ctx context.Context, client *Client, f
 	if s.deps == nil || s.deps.State == nil {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "state backend unavailable")
 	}
-
-	pc, err := s.permCheckerFor(ctx, client)
-	if err != nil {
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "permission backend unavailable")
-	}
-	if !pc.granted(permissions.PermissionKeyClientPrioritySpeaker) {
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, "insufficient permission: "+string(permissions.PermissionKeyClientPrioritySpeaker))
-	}
-
-	s.deps.State.SetPrioritySpeaker(client.ID, msg.Active)
-	var channelID int64
-	if sc, ok := s.deps.State.GetClient(client.ID); ok {
-		channelID = sc.ChannelID
-	}
-	s.broadcastEvent(eventPrioritySpeakerChanged, prioritySpeakerEvent{
-		ClientID:  client.ID,
-		ChannelID: channelID,
-		Active:    msg.Active,
-	})
-	s.logger.Debug("priority speaker toggled",
-		zap.String("client_id", client.ID),
-		zap.Bool("active", msg.Active),
-	)
-	return nil
+	return s.rolePrioritySpeaker(ctx, client, msg)
 }
 
 // handleVideoQuality sets the client's preferred simulcast layer for the
@@ -291,14 +268,20 @@ func (s *TCPServer) handleVideoQuality(ctx context.Context, client *Client, f *n
 	if s.deps == nil || s.deps.Voice == nil {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "voice backend unavailable")
 	}
+	return s.roleChannelControl(ctx, client, authorization.Connect, true, func(ctx context.Context, _ int64) error {
+		return s.applyVideoQuality(ctx, client, msg)
+	})
+}
+
+func (s *TCPServer) applyVideoQuality(ctx context.Context, client *Client, msg netproto.VideoQuality) error {
 	if err := s.deps.Voice.SetVideoQuality(client.ID, msg.Quality); err != nil {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, err.Error())
 	}
-	return nil
+	return s.acknowledgeMediaControl(client, msg.AckRequested, netproto.MediaControlSaved{Operation: netproto.MsgVideoQuality, Quality: msg.Quality})
 }
 
 // handleRecordingControl starts or stops a server-side recording of a
-// channel. Gated by b_virtualserver_recording (or server admin).
+// channel, gated by the current RecordChannel capability.
 func (s *TCPServer) handleRecordingControl(ctx context.Context, client *Client, f *netproto.Frame) error {
 	var msg netproto.RecordingControl
 	if err := netproto.Decode(f, &msg); err != nil {
@@ -307,15 +290,17 @@ func (s *TCPServer) handleRecordingControl(ctx context.Context, client *Client, 
 	if s.deps == nil || s.deps.Recorder == nil || s.deps.Voice == nil {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "recording backend unavailable")
 	}
+	return s.roleAction(ctx, client, msg.ChannelID, authorization.RecordChannel, func(ctx context.Context) error {
+		if msg.ChannelID <= 0 || client.userID() <= 0 || client.rulesBlocked() {
+			return authorization.ErrRoleForbidden
+		}
+		s.roleRecordingMu.Lock()
+		defer s.roleRecordingMu.Unlock()
+		return s.recordingControlAllowed(ctx, client, msg)
+	})
+}
 
-	pc, err := s.permCheckerFor(ctx, client)
-	if err != nil {
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "permission backend unavailable")
-	}
-	if !pc.admin && !pc.granted(permissions.PermissionKeyVirtualserverRecording) {
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, "insufficient permission: "+string(permissions.PermissionKeyVirtualserverRecording))
-	}
-
+func (s *TCPServer) recordingControlAllowed(ctx context.Context, client *Client, msg netproto.RecordingControl) error {
 	switch msg.Action {
 	case "start":
 		if s.deps.Channels == nil {
@@ -336,6 +321,8 @@ func (s *TCPServer) handleRecordingControl(ctx context.Context, client *Client, 
 		if session == nil {
 			return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "recording start failed: empty session")
 		}
+		s.roleRecordingOwners.Store(msg.ChannelID, client.userID())
+		s.roleRevokedRecordings.Delete(msg.ChannelID)
 		s.logger.Info("recording started",
 			zap.String("client_id", client.ID),
 			zap.Int64("channel_id", msg.ChannelID),
@@ -345,6 +332,8 @@ func (s *TCPServer) handleRecordingControl(ctx context.Context, client *Client, 
 		if err := s.deps.Recorder.Stop(msg.ChannelID); err != nil {
 			return s.sendErrorFor(client, requestOrigin(ctx), errCodeNotFound, "recording stop failed: "+err.Error())
 		}
+		s.roleRecordingOwners.Delete(msg.ChannelID)
+		s.roleRevokedRecordings.Delete(msg.ChannelID)
 		s.logger.Info("recording stopped",
 			zap.String("client_id", client.ID),
 			zap.Int64("channel_id", msg.ChannelID),
@@ -357,9 +346,7 @@ func (s *TCPServer) handleRecordingControl(ctx context.Context, client *Client, 
 
 // --- voice callbacks (installed on the voice backend at server construction) -
 
-// canTalk is the router's talk-permission gate: it resolves the client's
-// permissions in their current channel context and evaluates
-// i_client_talk_power.
+// canTalk evaluates Speak in the client's current channel and current mute state.
 func (s *TCPServer) canTalk(clientID string) bool {
 	client, ok := s.clientByID(clientID)
 	if !ok {
@@ -367,15 +354,11 @@ func (s *TCPServer) canTalk(clientID string) bool {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), mediaPermissionTimeout)
 	defer cancel()
-	pc, err := s.permCheckerFor(ctx, client)
-	if err != nil {
-		return false
-	}
-	return pc.talkAllowed()
+	member, present := s.deps.State.GetClient(clientID)
+	return present && member.ChannelID > 0 && !member.ServerMuted && !client.rulesBlocked() && s.roleAllowed(ctx, client, member.ChannelID, authorization.Speak)
 }
 
-// canPublishVideo is the router's video-publish gate: it evaluates
-// b_client_video_publish in the client's current channel context.
+// canPublishVideo checks the client's current video capabilities and channel.
 func (s *TCPServer) canPublishVideo(clientID string) bool {
 	client, ok := s.clientByID(clientID)
 	if !ok {
@@ -383,11 +366,9 @@ func (s *TCPServer) canPublishVideo(clientID string) bool {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), mediaPermissionTimeout)
 	defer cancel()
-	pc, err := s.permCheckerFor(ctx, client)
-	if err != nil {
-		return false
-	}
-	return pc.videoPublishAllowed()
+	channelID, _, present := s.deps.State.ClientChannelState(clientID)
+	return present && channelID > 0 && !client.rulesBlocked() &&
+		(s.roleAllowed(ctx, client, channelID, authorization.ShareCamera) || s.roleAllowed(ctx, client, channelID, authorization.ShareScreen))
 }
 
 // onSpeakingChanged is the router's speaking-state callback: it updates the
@@ -406,6 +387,7 @@ func (s *TCPServer) onSpeakingChanged(clientID string, speaking bool) {
 	if !ok {
 		return
 	}
+	speaking = stateClient.IsSpeaking
 
 	var targets []string
 	if wt, ok := s.deps.Voice.(whisperTargeter); ok {
@@ -421,7 +403,7 @@ func (s *TCPServer) onSpeakingChanged(clientID string, speaking bool) {
 		return
 	}
 
-	ev := whisperEvent{FromClientID: clientID, Speaking: speaking}
+	ev := whisperEvent{FromClientID: clientID, ChannelID: stateClient.ChannelID, Speaking: speaking}
 	if c, ok := s.clientByID(clientID); ok {
 		ev.FromUniqueID = c.uniqueID()
 		ev.FromNickname = c.Username

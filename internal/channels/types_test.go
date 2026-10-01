@@ -81,7 +81,7 @@ func TestChannelSpecValidate(t *testing.T) {
 			name: "valid permanent with optional fields",
 			spec: ChannelSpec{
 				Name: "Music", Type: ChannelTypePermanent, ParentID: 7,
-				MaxClients: -1, NeededJoinPower: 42, OpusBitrate: 64_000,
+				MaxClients: -1, OpusBitrate: 64_000,
 			},
 		},
 		{

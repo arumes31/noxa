@@ -385,14 +385,13 @@ func TestTabJournalAndBadges(t *testing.T) {
 	a.activate(id1) // tab 2 stays in the background
 
 	a.relayTabEvent(ts2.info.ID, "snapshot", `{"root_channels":[]}`)
-	a.relayTabEvent(ts2.info.ID, "channellist", `{"channels":[]}`)
 	a.relayTabEvent(ts2.info.ID, "subscriptions", `{"channel_ids":[7]}`)
 	a.relayTabEvent(ts2.info.ID, "server_rules", `{"text":"be kind","hash":"v1"}`)
 	a.relayTabEvent(ts2.info.ID, "event", `{"type":"chat","data":{"from":"bob","text":"hello"}}`)
 	a.relayTabEvent(ts2.info.ID, "event", `{"type":"chat","data":{"from":"bob","text":"hey @friend you there"}}`)
 
-	if len(ts2.journal) != 6 {
-		t.Fatalf("journal = %d entries, want 6", len(ts2.journal))
+	if len(ts2.journal) != 5 {
+		t.Fatalf("journal = %d entries, want 5", len(ts2.journal))
 	}
 	if ts2.info.Unread != 2 {
 		t.Fatalf("unread = %d, want 2", ts2.info.Unread)
@@ -435,15 +434,14 @@ func TestActiveTabJournalTracksSessionChanges(t *testing.T) {
 }
 
 // TestTabReplayUsesCachedFrames verifies activation replays the cached
-// snapshot/list frames through the connManager itself (281 replay source).
+// snapshot frame through the connManager itself.
 func TestTabReplayUsesCachedFrames(t *testing.T) {
 	a := newTabApp(t)
 	_, ts := a.newTab()
 	// Simulate frames that arrived while the tab was in the background.
 	ts.cm.dispatch(&netproto.Frame{Type: uint16(netproto.MsgSnapshot), Payload: []byte(`{"root_channels":[]}`)})
-	ts.cm.dispatch(&netproto.Frame{Type: uint16(netproto.MsgChannelList), Payload: []byte(`{"channels":[]}`)})
-	if ts.cm.lastSnapshot == "" || ts.cm.lastChannelList == "" {
-		t.Fatal("frames not cached on the connManager")
+	if ts.cm.lastSnapshot == "" {
+		t.Fatal("snapshot not cached on the connManager")
 	}
 }
 
@@ -603,10 +601,11 @@ func serveTabAuthConnection(conn net.Conn) {
 		nickname = authenticate.Username
 	}
 	response, err := netproto.Encode(netproto.MsgAuthResponse, netproto.AuthResponse{
-		OK:       true,
-		ClientID: "client",
-		UniqueID: "user",
-		Nickname: nickname,
+		OK:                 true,
+		AuthorizationModel: netproto.AuthorizationModelRolesV1,
+		ClientID:           "client",
+		UniqueID:           "user",
+		Nickname:           nickname,
 	})
 	if err != nil || netproto.WriteFrame(conn, response) != nil {
 		return

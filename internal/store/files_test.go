@@ -5,10 +5,145 @@ package store
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"testing"
 	"time"
+
+	"github.com/lib/pq"
 )
+
+func TestFileGlobalScopeDB(t *testing.T) {
+	for _, scenario := range []string{"fresh", "upgrade"} {
+		t.Run(scenario, func(t *testing.T) {
+			s := testScratchStore(t)
+			ctx := t.Context()
+			if scenario == "upgrade" {
+				applyPreLedgerMigrations(t, s, "037")
+				if _, err := s.DB().ExecContext(ctx, `CREATE TABLE schema_migrations (
+					filename TEXT PRIMARY KEY,
+					checksum TEXT NOT NULL,
+					applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+					CONSTRAINT schema_migrations_checksum_sha256 CHECK (checksum ~ '^[0-9a-f]{64}$')
+				)`); err != nil {
+					t.Fatal(err)
+				}
+				for _, name := range migrationNames(t) {
+					if name >= "037" {
+						break
+					}
+					if _, err := s.DB().ExecContext(ctx, `INSERT INTO schema_migrations (filename, checksum)
+						VALUES ($1, $2)`, name, migrationChecksum(t, name)); err != nil {
+						t.Fatal(err)
+					}
+				}
+				var foreignKey *pq.Error
+				err := s.AddFile(ctx, FileRecord{ChannelID: 0, Name: "before.noxac", SHA256: "before"})
+				if !errors.As(err, &foreignKey) || foreignKey.Code != "23503" {
+					t.Fatalf("old schema did not reject scope zero: %v", err)
+				}
+			} else if err := s.Migrate(); err != nil {
+				t.Fatal(err)
+			}
+			var channelID int64
+			if err := s.DB().QueryRowContext(ctx, `INSERT INTO channels (name, channel_type) VALUES ('file-scope-test', 2) RETURNING id`).Scan(&channelID); err != nil {
+				t.Fatal(err)
+			}
+			if err := s.AddFile(ctx, FileRecord{ChannelID: channelID, Name: "existing.txt", SHA256: "existing", Size: 11}); err != nil {
+				t.Fatal(err)
+			}
+			if err := s.Migrate(); err != nil {
+				t.Fatal(err)
+			}
+			if existing, err := s.GetFile(ctx, channelID, "", "existing.txt"); err != nil || existing.Size != 11 {
+				t.Fatalf("existing channel file after migration = %+v, %v", existing, err)
+			}
+
+			global := FileRecord{ChannelID: 0, Folder: "attachments", Name: "voice.noxac", Size: 10, SHA256: "initial", Uploader: "scope-test", Encrypted: true}
+			if err := s.AddFile(ctx, global); err != nil {
+				t.Fatalf("add global attachment: %v", err)
+			}
+			global.Size, global.SHA256 = 20, "replacement"
+			if err := s.AddFile(ctx, global); err != nil {
+				t.Fatalf("replace global attachment: %v", err)
+			}
+			files, err := s.ListFiles(ctx, 0, "attachments")
+			if err != nil || len(files) != 1 || files[0].ChannelID != 0 || files[0].Size != 20 || !files[0].Encrypted {
+				t.Fatalf("global upsert = %+v, %v", files, err)
+			}
+			copy := global
+			copy.Folder = "copies"
+			if err := s.AddFile(ctx, copy); err != nil {
+				t.Fatal(err)
+			}
+			folders, err := s.ListFileFolders(ctx, 0)
+			if err != nil || len(folders) != 2 || folders[0] != "attachments" || folders[1] != "copies" {
+				t.Fatalf("global folders = %v, %v", folders, err)
+			}
+			if found, err := s.FindFileBySHA(ctx, 0, global.SHA256, global.Folder, global.Name); err != nil || found == nil || found.Folder != "copies" {
+				t.Fatalf("global dedup = %+v, %v", found, err)
+			}
+			if used, err := s.ChannelFileUsage(ctx, 0); err != nil || used != 20 {
+				t.Fatalf("global quota = %d, %v", used, err)
+			}
+			if channel, uploader, err := s.FileContentUsage(ctx, 0, global.SHA256, global.Uploader); err != nil || channel != 20 || uploader != 20 {
+				t.Fatalf("global content usage = %d/%d, %v", channel, uploader, err)
+			}
+			if used, err := s.UploaderContentUsageExcept(ctx, 0, global.SHA256, global.Uploader, global.Folder, global.Name); err != nil || used != 20 {
+				t.Fatalf("global remaining usage = %d, %v", used, err)
+			}
+			if err := s.MoveFile(ctx, 0, global.Folder, global.Name, channelID, "", global.Name); err != nil {
+				t.Fatalf("global to channel move: %v", err)
+			}
+			if used, err := s.UploaderFileUsage(ctx, global.Uploader); err != nil || used != 40 {
+				t.Fatalf("cross-scope quota = %d, %v", used, err)
+			}
+			if err := s.MoveFile(ctx, channelID, "", global.Name, 0, "copies", global.Name); !errors.Is(err, ErrFileExists) {
+				t.Fatalf("global destination collision = %v", err)
+			}
+			if err := s.MoveFile(ctx, channelID, "", global.Name, 0, "", "moved.noxac"); err != nil {
+				t.Fatalf("channel to global move: %v", err)
+			}
+			if rec, err := s.GetFile(ctx, 0, "", "moved.noxac"); err != nil || rec.ChannelID != 0 || !rec.Encrypted {
+				t.Fatalf("moved global attachment = %+v, %v", rec, err)
+			}
+
+			const missingChannel = int64(9223372036854775807)
+			invalid := global
+			invalid.ChannelID = missingChannel
+			for _, err := range []error{
+				s.AddFile(ctx, invalid),
+				s.MoveFile(ctx, 0, "", "moved.noxac", missingChannel, "", "missing.noxac"),
+			} {
+				var foreignKey *pq.Error
+				if !errors.As(err, &foreignKey) || foreignKey.Code != "23503" {
+					t.Fatalf("missing real-channel foreign key was not enforced: %v", err)
+				}
+			}
+			if _, err := s.DB().ExecContext(ctx, `DELETE FROM channels WHERE id = $1`, channelID); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := s.GetFile(ctx, channelID, "", "existing.txt"); !errors.Is(err, ErrFileNotFound) {
+				t.Fatalf("real-channel file survived channel deletion: %v", err)
+			}
+			if _, err := s.GetFile(ctx, 0, "", "moved.noxac"); err != nil {
+				t.Fatalf("channel deletion removed global attachment: %v", err)
+			}
+			if err := s.DeleteFile(ctx, 0, "", "moved.noxac"); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := s.GetFile(ctx, 0, "", "moved.noxac"); !errors.Is(err, ErrFileNotFound) {
+				t.Fatalf("deleted global attachment remains: %v", err)
+			}
+			if err := s.Migrate(); err != nil {
+				t.Fatalf("repeat migration: %v", err)
+			}
+			if _, err := s.GetFile(ctx, 0, "copies", global.Name); err != nil {
+				t.Fatalf("repeat migration removed global attachment: %v", err)
+			}
+		})
+	}
+}
 
 // TestFilesDB covers the folder-aware file metadata: add/list per folder,
 // rename/move, version listing, dedup lookup, and delete.
@@ -164,5 +299,37 @@ func TestFileQuotaUsageDB(t *testing.T) {
 	none, err := s.UploaderFileUsage(ctx, "")
 	if err != nil || none != 0 {
 		t.Errorf("empty uploader usage = %d, err=%v, want 0", none, err)
+	}
+	for _, tc := range []struct {
+		name, hash, who   string
+		channel, uploader int64
+	}{
+		{"deduplicated", "sha-dup-" + suffix, uploader, 1000, 1000},
+		{"another_uploader", "sha-other-" + suffix, uploader, 500, 0},
+		{"missing_hash", "absent", uploader, 0, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			channel, personal, err := s.FileContentUsage(ctx, chA, tc.hash, tc.who)
+			if err != nil || channel != tc.channel || personal != tc.uploader {
+				t.Fatalf("content usage = %d/%d, %v; want %d/%d", channel, personal, err, tc.channel, tc.uploader)
+			}
+		})
+	}
+	for _, tc := range []struct {
+		name               string
+		channel            int64
+		folder, file, hash string
+		want               int64
+	}{
+		{"source_copy_remains", chA, "", "one.bin", "sha-dup-" + suffix, 1000},
+		{"last_reference", chB, "", "three.bin", "sha-dup-" + suffix, 0},
+		{"other_uploader", chA, "", "missing", "sha-other-" + suffix, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := s.UploaderContentUsageExcept(ctx, tc.channel, tc.hash, uploader, tc.folder, tc.file)
+			if err != nil || got != tc.want {
+				t.Fatalf("remaining content = %d, %v; want %d", got, err, tc.want)
+			}
+		})
 	}
 }

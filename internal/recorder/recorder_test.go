@@ -465,6 +465,70 @@ func TestRecorderConcurrentStartCloseReportsStartFailureOnce(t *testing.T) {
 
 // TestStopKillsStuckProcess verifies Stop kills ffmpeg when it does not exit
 // within the recorder's grace period.
+func TestStopContextForcesCapturedProcessOnCancellation(t *testing.T) {
+	r := New(testConfig(privateTempDir(t)), testLogger())
+	exec := &fakeExec{}
+	r.Exec = exec.run
+	t.Cleanup(func() { _ = r.Close() })
+	if _, err := r.Start(t.Context(), 3, &fakeTapRouter{}); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	started := time.Now()
+	if err := r.StopContext(ctx, 3); !errors.Is(err, context.Canceled) {
+		t.Fatalf("StopContext: %v", err)
+	}
+	if time.Since(started) > time.Second {
+		t.Fatal("cancelled stop waited for the normal grace period")
+	}
+	select {
+	case <-exec.cmd.waitDone:
+	case <-time.After(time.Second):
+		t.Fatal("cancelled stop did not kill the captured process")
+	}
+	exec.cmd.mu.Lock()
+	killed := exec.cmd.killed
+	exec.cmd.mu.Unlock()
+	if !killed {
+		t.Fatal("cancelled stop left the process running")
+	}
+}
+
+func TestStopContextCancelsStartupBeforePublication(t *testing.T) {
+	r := New(testConfig(privateTempDir(t)), testLogger())
+	r.killWait = 25 * time.Millisecond
+	exec := &fakeExec{}
+	r.Exec = exec.run
+	router := newBlockingAddRouter()
+	t.Cleanup(func() { closeIfOpen(router.release); _ = r.Close() })
+	started := make(chan error, 1)
+	go func() { _, err := r.Start(t.Context(), 3, router); started <- err }()
+	select {
+	case <-router.started:
+	case <-time.After(time.Second):
+		t.Fatal("startup did not reach tap registration")
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if err := r.StopContext(ctx, 3); !errors.Is(err, context.Canceled) {
+		t.Fatalf("StopContext: %v", err)
+	}
+	assertBlockedStartupResourcesStopped(t, exec, router)
+	closeIfOpen(router.release)
+	select {
+	case err := <-started:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("cancelled startup published: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("cancelled startup did not finish")
+	}
+	if r.SessionCount() != 0 {
+		t.Fatal("cancelled reservation became an active recording")
+	}
+}
+
 func TestStopKillsStuckProcess(t *testing.T) {
 	r := New(testConfig(privateTempDir(t)), testLogger())
 	r.stopGracePeriod = 25 * time.Millisecond

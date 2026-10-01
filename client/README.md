@@ -1,9 +1,8 @@
 # noxa
 
 Wails v2 desktop client for the noxa voice/chat server (see the repository
-root README for the server). **Status: scaffold** — the core flows work end
-to end (connect/auth, channel tree, chat, voice over WebRTC, permissions
-grid); polish (recording UI, complaint UI) comes later.
+root README for the server). Core flows include connect/auth, the channel
+tree, chat, voice over WebRTC and role-based administration.
 
 ## UI
 
@@ -13,7 +12,7 @@ fontsource — fully offline in WebView2):
 - **Client Info** — right-click any user in the channel tree for a context
   menu (Client Info, private message, copy unique ID). The TS3-style dialog
   shows connection/idle time (ticking), ping (or `unknown`), client address
-  (IP only for self or with `b_client_remoteaddress_view`), and transfer
+  (IP only for self or with ViewConnectionInfo), and transfer
   stats — live-refreshing every 2s.
 - **Server information** — click the server name, the latency readout, or
   Connections → Server information. Shows server details and your connection's
@@ -21,11 +20,9 @@ fontsource — fully offline in WebView2):
   Refreshes every 2s while visible (server metadata every 10s); closing or hiding
   it stops polling. Missing metrics show `—`; platform requires an updated server.
   Tools → Connection stats opens the same dialog, including optional history charts.
-- **Channel edit** — right-click a channel → Edit channel: topic, max
-  clients, and a quality preset select (Voice 32 kbps / HQ Voice 64 kbps
-  +FEC / Music 128 kbps stereo / Custom) pre-filling bitrate and the
-  FEC/DTX/Stereo flags. Gated server-side by `b_channel_modify`; the result
-  arrives as a `channel_updated` broadcast that refreshes the tree.
+- **Channel edit** — right-click a channel → Edit channel for its topic,
+  limits and audio settings. ManageChannels authorizes the revision-checked
+  save; the channel tree refreshes from the resulting server state.
 - **Menu bar** (TS3-style): Connections (Connect/Disconnect/Quit), Bookmarks
   (save/connect/manage server bookmarks — passwords are never stored), Self
   (nickname, avatar, mute/deafen), Permissions, Tools (Settings, Whisper
@@ -55,7 +52,7 @@ Settings persist to `<UserConfigDir>/noxa/settings.json` (identity to
 
 **Camera privacy**: Voice sessions start with the camera off. Camera access
 requires turning it on in the voice controls or selecting **Test camera** in
-Settings → Capture. Turning the camera off releases its capture track. The
+Settings → Camera. Turning the camera off releases its capture track. The
 settings preview stays local and stops on Stop, page changes, or dialog close.
 
 **No-mic machines**: `getUserMedia` failures permit a receive-only voice join
@@ -69,13 +66,35 @@ failures, and connection loss.
 
 - **Per-user volume & local mute** — right-click a user → Volume slider
   (0–200%) or Mute locally; persisted per unique ID in `settings.json`.
+  The same personal controls are available from chat authors, member mentions,
+  member cards, the voice participant strip, and private-call participants. Volume previews while dragging,
+  saves on release, and can be reset to 100%; cancelling restores the saved
+  level. Member cards stay synchronized with changes made in menus and keep
+  keyboard focus after saving. Private calls multiply personal volume by the
+  master voice volume and apply output-device and activation-mode changes live.
   The server emits one audio track per publisher (track ID = publisher
   client ID, carried in the MSID), and each track gets its own gain+mute
   node pair in the shared WebAudio chain, so per-sender volume/mute is
   audible.
+- **Context menus** — Shift+F10 or the Menu key opens member, channel,
+  message, and video menus. Up/Down selects actions, Left/Right adjusts a
+  volume slider, and Escape closes the menu and restores focus. Menus fit
+  the window and scroll when needed. Member menus include a searchable,
+  server-authorized “Move to channel…” action; channel menus offer explicit
+  Join/Leave voice actions. Direct-message tabs offer Open, Close, and a
+  separately confirmed Delete local history action. Moderation from a member
+  card targets that exact connected session. Identity-only menus require a
+  session selected in the tree when the same member has multiple devices online.
 - **Mic level meter** in the voice bar while voice is joined (green/amber/
-  red gradient); **mic test with loopback playback** (Capture settings);
-  **VAD auto-calibrate** (5 s ambient → noise floor → suggested threshold).
+  red gradient), with **local microphone testing** in Capture settings.
+- **Microphone setup** — Capture settings place local testing beneath device
+  selection: average and held peak levels in dBFS, clipping/quiet feedback,
+  a voice-activation threshold marker, and a push-to-talk preview. Five-second
+  recordings and live monitoring use the selected playback device; recordings
+  are discarded when leaving the page. Device/processing edits restart capture.
+  Guided calibration measures five seconds of quiet and five seconds of speech,
+  then offers a threshold to preview and explicitly accept. The settings footer
+  distinguishes unsaved changes, applied changes, and failures to apply live audio.
 - **PTT release delay** slider (0–2000 ms) so sentence ends aren't clipped.
 - **Voice detection** uses a local microphone track independent of the
   transmitted track, so silence, mute, and PTT release cannot disable the
@@ -98,7 +117,7 @@ failures, and connection loss.
   packets received/lost, audio level — from `getStats()`, refreshed every
   2 s.
 - **Priority speaker & ducking** — the PRIO button in the voice bar toggles
-  your priority-speaker flag (server-gated by `b_client_priority_speaker`).
+  your priority-speaker flag (server-gated by PrioritySpeaker).
   While another priority speaker in your channel is talking, all
   non-priority publishers are ducked to 25% (−12 dB); priority speakers are
   exempt. Un-ducking is delayed 500 ms so sentence gaps don't pump the gain.
@@ -123,8 +142,8 @@ failures, and connection loss.
 - **Focus mode** — click a tile for the large view; the others keep playing
   in a filmstrip row below. Click again or press Esc to return to the grid.
   This is how you watch multiple simultaneous screen shares: every share is
-  a tile (a single user's share replaces their camera slot — one video track
-  per publisher).
+  a separate tile. A publisher's camera and screen share can run together,
+  with independent watch/stop controls.
 - **Quality selector** — right-click a tile → Auto/High/Mid/Low, sent as
   `MsgVideoQuality` (the server routes the RID f/h/q simulcast layer). Note:
   the preference is per subscriber connection, so it applies to all incoming
@@ -143,8 +162,12 @@ failures, and connection loss.
   missing.
 - **Stop-share confirm** — stopping a share while others are in the channel
   asks first ("N users may be watching").
-- **Camera frame rate** — Capture settings: 15/30/60 fps applied to
+- **Camera frame rate** — Camera settings: 15/30/60 fps applied to
   `getUserMedia` video constraints + `contentHint` (`motion` at 60).
+  Saved changes take effect on the next camera start; restart a local test
+  to preview an unsaved frame rate. Timing notes beside settings distinguish
+  immediate application after saving, voice reconnect, next app start, and
+  temporary local previews. Camera and microphone tests stop on page exit.
 - **Low-bandwidth mode** — 📶 toggle in the voice bar (persisted): outgoing
   video is capped to a single 150 kbps layer, incoming video requests the
   low simulcast layer, and tile rendering is paused with a LOW BANDWIDTH
@@ -250,61 +273,18 @@ per-message elements with full metadata instead of plain text lines:
 - **Quick switcher (135)**: Ctrl+K fuzzy-jumps to channels, online users
   (opens a PM tab), and open PM tabs.
 
-## Permissions & Groups (wave 6b)
+## Roles and channel access
 
-Permission/group administration lives in `frontend/src/perms-ui.js` (+ the new
-bindings in `groups.go`). All views degrade gracefully: privileged menu items
-are always visible, but without the required permission (or admin) the dialog
-shows a "requires …" notice instead of controls; the server re-checks every
-write and denials arrive as toasts (grant-cap errors included).
+The Roles manager creates ordered roles with named capabilities. Members can
+hold several roles; their color, icon and hoisted display use the highest
+applicable role. The owner and Administrator role have protected authority.
+The server checks every protected operation against the current policy.
 
-- **Permission Manager** (Permissions menu): tabs for Server Groups / Clients /
-  Channel / Channel Groups. The right side is the editable permission grid
-  (136) — click a row for the inline editor (value + grant inputs, skip/negate
-  checkboxes with tooltips, Set/Unset). A filter box searches
-  keys (154); ⬇ exports the target's permission overrides as JSON (148). Override values are
-  read via the `PermList` request; after each write the grid re-queries.
-  On the Channel tab, `i_channel_needed_join_power` shows the channel's
-  **Required join power** setting. Click its row, then **Edit channel…** to
-  change it. This channel setting has no grant/skip/negate flags and is not
-  part of the permission-override export. Parent join requirements still
-  apply when permission inheritance is enabled.
-- **Server Admins** (Permission Manager, admins only): lists every admin
-  identity, including offline accounts, separately from ordinary groups.
-  **Create admin key…** opens the admin-key manager to create a single-use,
-  server-wide key or review and revoke existing admin keys. The server
-  independently checks admin status for both roster access and admin-key
-  creation. The roster requires an updated server (protocol messages 131/132);
-  older servers show an unavailable notice while existing key management
-  remains usable. Member permissions do not change the admin flag.
-- **Trace** (137/155): on the Clients tab, each row's editor has a Trace
-  button — a panel showing the effective value, the winning tier highlighted,
-  and every tier's contribution in resolver order.
-- **Group management** (138-141): create/rename/delete groups (deleting a
-  non-empty group needs the force confirm), member lists with unassign,
-  assign via online-user dropdown or unique-ID entry, an optional duration in
-  minutes (timed memberships, 145), and drag & drop of users from the channel
-  tree onto the members panel. Channel-group membership is channel-scoped
-  (channel picker). Group icons upload from the group's action bar (177).
-- **Templates** (142): "Template…" per group/user target — guest/member/
-  moderator/admin picker, confirm, applied through the write path (audited).
-- **Audit Log** (149/197, Tools menu): paged table (time, actor, action,
-  target, detail), action filter, "Load older" paging.
-- **Bans** (172, Tools menu): ban list with reason/issuer/expiry and lift
-  buttons. The user context menu (right-click) gains Kick from channel/server
-  (reason dialog, 170) and Ban (reason + 5m/1h/1d/permanent presets, 171),
-  pre-gated by your resolved kick/ban powers.
-- **Channel dialogs** (164/167): right-click a channel — full create dialog
-  (name, parent, type, topic, max clients, password, needed join power, Opus
-  preset; root create via the + button in the sidebar), edit dialog with
-  description, and delete with a subtree-count warning. A "channel admin"
-  chip shows when you hold `b_channel_modify` (156 is UI-only; the server has
-  no creator auto-assignment). Re-parenting is not in this wave (server gap —
-  `ChannelEdit` has no parent field).
-- **Tree presentation** (177-179): hoisted server groups render as sections
-  above the channels (with group icons), nickname colors come from the first
-  applicable group by sort order, and the details card shows a user's group
-  chips (143-145 display).
+Channel access supports parent sync and explicit role or member Allow/Deny
+overrides. The channel editor offers Public, Private, Read-only and Listen-only
+presets, previews affected members and saves with a revision-checked
+acknowledgement. **Check access** explains a member's effective result without
+granting access. Bans and audit history use the same role-scoped controls.
 
 ## Files & Media (wave 7)
 
@@ -329,7 +309,7 @@ The files UI (`frontend/src/files-ui.js`, bindings in `files.go`) adds a
   direction, progress, speed, ETA, status, cancel, and a live aggregate
   throughput sparkline.
 - **Images (268/269/274)**: the avatar dialog crops/zooms on a canvas and
-  outputs 256×256 PNG; icons (server/channel/group) are downscaled to 1024px
+  outputs 256×256 PNG; icons (server/channel) are downscaled to 1024px
   and recompressed JPEG q0.85; animated GIF/WebP always pass through
   untouched so animation survives. The server icon (admin, Self menu) renders
   in the sidebar; the channel edit dialog can upload an icon or reuse one
@@ -375,7 +355,7 @@ The files UI (`frontend/src/files-ui.js`, bindings in `files.go`) adds a
 
 - **Tree polish (302-306, 310, 319)**: collapse/expand-all buttons +
   double-click toggle, client counts `[n/max]`, password lock icons (new
-  `has_password` snapshot flag), group icons next to names, live filter box,
+  `has_password` snapshot flag), role icons next to names, live filter box,
   drag users onto channels (self joins, others via the new `MoveClient`
   binding), ctrl/shift multi-select with a batch context menu.
 - **Presence (307-309)**: `MsgSetStatus` (online/away/busy + message)
@@ -387,7 +367,7 @@ The files UI (`frontend/src/files-ui.js`, bindings in `files.go`) adds a
   permission check and a 30 s per-target cooldown).
 - **Information (313-315, 323-325)**: server news pane
   (`MsgServerInfoQuery`: name/version/uptime/counts/MOTD), client-info
-  additions (avatar lightbox, groups, local per-user notes persisted in
+  additions (avatar lightbox, roles, local per-user notes persisted in
   settings), 500 ms hover cards for users and channels, copy helpers
   (UID / channel ID / server address).
 - **Diagnostics (326-328, 332/333)**: Help → Export logs (zip), Tools →
@@ -472,8 +452,8 @@ The files UI (`frontend/src/files-ui.js`, bindings in `files.go`) adds a
   `RTCPeerConnection`, with SDP offer/answer and ICE candidates bridged
   through the Go backend over the control channel. Hardware encode/decode is
   browser-managed (Chromium picks HW acceleration automatically when
-  available; there is no JS flag to force it). The server emits one audio and
-  one video track per publisher (track ID = publisher client ID via MSID) and
+  available; there is no JS flag to force it). The server emits separate microphone,
+  camera, screen and share-audio tracks per publisher (slot-qualified IDs via MSID) and
   renegotiates over the control channel when membership changes; on ICE
   failure the client re-offers with `iceRestart` and a 1s/2s/5s/15s backoff
   ladder before warning.
@@ -493,12 +473,10 @@ Wave 5b adds `ChatHistory`, `ChatEditMessage`, `ChatDeleteMessage`,
 `SendChatRead`, `EmojiList`, `EmojiGet`, `UploadFile`, `DownloadFile`,
 `ExportChat` and `MOTD` (message of the day from the auth response).
 
-Wave 6b adds `IsAdmin`, `GroupList`, `GroupCreate`, `GroupRename`,
-`GroupDelete`, `GroupAssign`, `GroupUnassign`, `GroupMembers`,
-`GroupIconSet`, `GroupIconGet`, `PermList`, `PermSet`, `PermUnset`,
-`PermTemplateApply`, `PermTrace`, `AuditLog`, `BanList`, `BanRemove`,
-`KickClient`, `CreateChannel`, `DeleteChannel`; `ChannelEdit` gained the
-`description` argument.
+Role administration uses tab-bound `RoleStateForTab`, `RoleChangeForTab`,
+`RoleMembersForTab`, `RoleChannelStateForTab`, `ChangeRoleChannelForTab`
+and `PreviewChannelAccessForTab` bindings. Legacy group, numeric-permission
+and privilege-key bindings have been removed.
 
 Wave 7 adds `FileList`, `FileDelete`, `FileRename`, `FileVersions`,
 `FileLink`, `VerifyFile`, `ServerIconSet`, `ServerIconGet`,
@@ -646,10 +624,48 @@ request/response round-trip works.
 
 ## Notes / limitations
 
+### Calls, camera, discussions and voice messages
+
+- Channel, private and group calls support simultaneous camera and screen-sharing tiles,
+  with optional display audio when the operating system's picker provides it.
+  Camera and screen capture require explicit actions and stop when the call ends.
+- Settings → Camera selects the device and an offline background effect: blur
+  or a replacement scene/custom local image. Blur strength is adjustable and
+  mirroring applies only to your local preview. Uploaded images are resized and
+  stored locally; person segmentation runs locally using
+  bundled assets. Effects cap processing at 15 fps; ordinary camera capture
+  retains the selected frame rate and server limits.
+- Channel discussions provide persistent independent threads and forum boards,
+  tags, membership, following, unread state, and archive/reopen controls. Message
+  bodies use channel encryption; titles and tags are server-visible metadata.
+  See [threads and forums](../docs/threads-and-forums.md) for permissions and migration.
+- The microphone button in channel, private-group and discussion composers
+  records up to five minutes or 5 MiB. Preview, discard or send the recording as
+  an encrypted attachment; recipients explicitly load it for inline playback.
+  Playback follows the output device, voice volume and Deafen settings. Controls
+  include duration, seeking, playback speed and local resume history (30 days,
+  at most 100 hashed references). Local previews show a decoded waveform;
+  received waveforms fill while listening without fully decoding untrusted
+  attachments into memory.
+- Calls stay docked by default. **Undock call** opens an optional always-on-top
+  window when Document Picture-in-Picture is supported; closing it returns the
+  controls to the main window without ending the call.
+- Shared audio has a separate personal mute and 0–200% volume setting per member,
+  independent of that member's microphone volume. Deafen still silences both.
+- The inbox, older-history search and personal saved collections provide message
+  navigation. See [message tools](../docs/message-tools.md) for scope and persistence.
+- Discussion controls include title/tag editing, pinning, resolved status and
+  inactivity archiving. Channel managers can create/revoke incoming text webhooks;
+  see [incoming webhooks](../docs/incoming-webhooks.md) for HTTPS setup and limits.
+- Settings → Application → Gaming overlay is enabled by default on Windows and
+  can be disabled. A separate, nonactivating window shows current voice speakers,
+  mute state and brief notifications on a selected monitor. Settings provide
+  position presets or a draggable preview, size, opacity and speakers-only mode.
+  It passes input through and supports windowed/borderless games. Exclusive
+  fullscreen and other operating systems are not supported.
+
 - The frontend is a scaffold: channel icons and avatars are stored/flagged
   but not rendered yet; permission editing is read-only.
-- Screen sharing replaces the camera track (one video track per peer —
-  server limitation, documented in the root README).
 - `wails build` was verified on Windows 11 + WebView2 runtime. On other
   platforms install the Wails platform prerequisites (see
   https://wails.io/docs/gettingstarted/installation).

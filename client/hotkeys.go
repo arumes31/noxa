@@ -33,6 +33,7 @@ type hotkeyReg struct {
 	hk       *hotkey.Hotkey
 	cancel   chan struct{}
 	stopOnce sync.Once
+	pressed  bool // guarded by App.hkMu
 }
 
 func (r *hotkeyReg) stop() {
@@ -140,10 +141,23 @@ func (a *App) ApplyHotkeyProfile(name string) {
 // the new spec. An empty spec unbinds the action.
 func (a *App) applyHotkey(action, spec string) {
 	a.hkMu.Lock()
+	if a.hotkeysClosed {
+		a.hkMu.Unlock()
+		return
+	}
+	if a.hotkeyGeneration == nil {
+		a.hotkeyGeneration = make(map[string]uint64)
+	}
+	a.hotkeyGeneration[action]++
+	generation := a.hotkeyGeneration[action]
 	if reg, ok := a.hotkeys[action]; ok {
+		if action == "ptt" && reg.pressed {
+			a.emitHotkey("ptt_up")
+		}
 		reg.stop()
 		delete(a.hotkeys, action)
 	}
+	hotkeyEventEmitter(a, "hotkey_binding", map[string]string{"action": action, "spec": spec})
 	a.hkMu.Unlock()
 	if spec == "" {
 		return
@@ -152,28 +166,28 @@ func (a *App) applyHotkey(action, spec string) {
 	mods, key, err := parseHotkeySpec(spec)
 	if err != nil {
 		log.Printf("hotkey %s spec %q invalid: %v", action, spec, err)
-		a.emitHotkeyStatus(hotkeyStatus{Action: action, Error: err.Error()})
+		a.publishHotkeyStatus(hotkeyStatus{Action: action, Error: err.Error()}, generation)
 		return
 	}
 	if !allowHotkeyRegistration {
 		return
 	}
 	if passiveHotkeyAvailable() {
-		go guardCrash("hotkey "+action, func() { a.passiveHotkeyLoop(action, mods, key) })
+		go guardCrash("hotkey "+action, func() { a.passiveHotkeyLoop(action, mods, key, generation) })
 		return
 	}
 	// recover is per-goroutine: hotkey callbacks need their own guard (331).
-	go guardCrash("hotkey "+action, func() { a.hotkeyLoop(action, mods, key) })
+	go guardCrash("hotkey "+action, func() { a.hotkeyLoop(action, mods, key, generation) })
 }
 
 // passiveHotkeyLoop observes a configured chord without registering it as an
 // exclusive OS hotkey, so normal typing and application shortcuts continue to
 // receive the same key events.
-func (a *App) passiveHotkeyLoop(action string, mods []hotkey.Modifier, key hotkey.Key) {
+func (a *App) passiveHotkeyLoop(action string, mods []hotkey.Modifier, key hotkey.Key, generation uint64) {
 	cancel := make(chan struct{})
 	reg := &hotkeyReg{cancel: cancel}
 	a.hkMu.Lock()
-	if _, exists := a.hotkeys[action]; exists {
+	if a.hotkeysClosed || a.hotkeyGeneration[action] != generation || a.hotkeys[action] != nil {
 		a.hkMu.Unlock()
 		return
 	}
@@ -190,36 +204,27 @@ func (a *App) passiveHotkeyLoop(action string, mods []hotkey.Modifier, key hotke
 	}()
 
 	log.Printf("hotkey %s registered (passive)", action)
-	a.emitHotkeyStatus(hotkeyStatus{Action: action, Registered: true})
+	a.publishHotkeyStatus(hotkeyStatus{Action: action, Registered: true}, generation)
 	err := monitorPassiveHotkey(mods, key, cancel,
 		func() {
-			if action == "ptt" {
-				log.Printf("hotkey ptt_down fired")
-				a.emitHotkey("ptt_down")
-				return
-			}
-			log.Printf("hotkey %s fired", action)
-			a.emitHotkey(action)
+			a.publishHotkey(action, generation, true)
 		},
 		func() {
-			if action == "ptt" {
-				log.Printf("hotkey ptt_up fired")
-				a.emitHotkey("ptt_up")
-			}
+			a.publishHotkey(action, generation, false)
 		})
 	if err != nil {
 		log.Printf("hotkey %s disabled: %v", action, err)
-		a.emitHotkeyStatus(hotkeyStatus{Action: action, Error: err.Error()})
+		a.publishHotkeyStatus(hotkeyStatus{Action: action, Error: err.Error()}, generation)
 	}
 }
 
 // hotkeyLoop registers one hotkey (retrying once on failure) and forwards
 // its events to the frontend until cancelled.
-func (a *App) hotkeyLoop(action string, mods []hotkey.Modifier, key hotkey.Key) {
+func (a *App) hotkeyLoop(action string, mods []hotkey.Modifier, key hotkey.Key, generation uint64) {
 	hk, err := registerHotkey(action, mods, key)
 	if err != nil {
 		log.Printf("hotkey %s disabled: %v", action, err)
-		a.emitHotkeyStatus(hotkeyStatus{Action: action, Error: err.Error()})
+		a.publishHotkeyStatus(hotkeyStatus{Action: action, Error: err.Error()}, generation)
 		return
 	}
 	log.Printf("hotkey %s registered", action)
@@ -228,7 +233,7 @@ func (a *App) hotkeyLoop(action string, mods []hotkey.Modifier, key hotkey.Key) 
 	reg := &hotkeyReg{hk: hk, cancel: cancel}
 	a.hkMu.Lock()
 	// A newer registration may already have replaced us.
-	if _, exists := a.hotkeys[action]; exists {
+	if a.hotkeysClosed || a.hotkeyGeneration[action] != generation || a.hotkeys[action] != nil {
 		a.hkMu.Unlock()
 		_ = hk.Unregister()
 		return
@@ -248,25 +253,16 @@ func (a *App) hotkeyLoop(action string, mods []hotkey.Modifier, key hotkey.Key) 
 		}
 	}()
 
-	a.emitHotkeyStatus(hotkeyStatus{Action: action, Registered: true})
+	a.publishHotkeyStatus(hotkeyStatus{Action: action, Registered: true}, generation)
 
 	for {
 		select {
 		case <-cancel:
 			return
 		case <-hk.Keydown():
-			if action == "ptt" {
-				log.Printf("hotkey ptt_down fired")
-				a.emitHotkey("ptt_down")
-			} else {
-				log.Printf("hotkey %s fired", action)
-				a.emitHotkey(action)
-			}
+			a.publishHotkey(action, generation, true)
 		case <-hk.Keyup():
-			if action == "ptt" {
-				log.Printf("hotkey ptt_up fired")
-				a.emitHotkey("ptt_up")
-			}
+			a.publishHotkey(action, generation, false)
 		}
 	}
 }
@@ -374,14 +370,43 @@ func (a *App) applySettingsHotkeys(s Settings) {
 
 // emitHotkey sends a hotkey event to the frontend.
 func (a *App) emitHotkey(action string) {
+	hotkeyEventEmitter(a, "hotkey", action)
+}
+
+var hotkeyEventEmitter = func(a *App, event string, data any) {
 	if a.ctx != nil {
-		wailsRuntime.EventsEmit(a.ctx, "hotkey", action)
+		wailsRuntime.EventsEmit(a.ctx, event, data)
 	}
 }
 
-// emitHotkeyStatus sends a hotkey_status event to the frontend.
-func (a *App) emitHotkeyStatus(status hotkeyStatus) {
-	if a.ctx != nil {
-		wailsRuntime.EventsEmit(a.ctx, "hotkey_status", status)
+// Publication and replacement share the lock: an old worker cannot publish
+// after a replacement, including the release generated when polling stops.
+func (a *App) publishHotkey(action string, generation uint64, pressed bool) {
+	a.hkMu.Lock()
+	defer a.hkMu.Unlock()
+	reg := a.hotkeys[action]
+	if a.hotkeysClosed || a.hotkeyGeneration[action] != generation || reg == nil {
+		return
+	}
+	if action == "ptt" {
+		if reg.pressed == pressed {
+			return
+		}
+		reg.pressed = pressed
+		if pressed {
+			a.emitHotkey("ptt_down")
+		} else {
+			a.emitHotkey("ptt_up")
+		}
+	} else if pressed {
+		a.emitHotkey(action)
+	}
+}
+
+func (a *App) publishHotkeyStatus(status hotkeyStatus, generation uint64) {
+	a.hkMu.Lock()
+	defer a.hkMu.Unlock()
+	if !a.hotkeysClosed && a.hotkeyGeneration[status.Action] == generation {
+		hotkeyEventEmitter(a, "hotkey_status", status)
 	}
 }

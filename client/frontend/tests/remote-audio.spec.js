@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./fixtures.js";
 
 // Use real WebRTC receivers: a synthetic local MediaStream bypasses the
 // Chromium decoder-start issue and can pass while remote callers stay silent.

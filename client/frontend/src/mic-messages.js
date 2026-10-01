@@ -1,0 +1,31 @@
+export const micEnglish = {
+    "mic.title": "Test your microphone", "mic.preview": "Preview only · Settings apply after you choose Apply. Your existing call is unchanged.",
+    "mic.start": "Begin Test", "mic.record": "Record 5 seconds", "mic.listen": "Listen to recording", "mic.again": "Record again", "mic.stopPlayback": "Stop playback",
+    "mic.recordHelp": "Speak normally. The sample stays on this device and is discarded when you leave this page.",
+    "mic.recording": "Recording — {seconds}s remaining", "mic.recorded": "Recording ready. Listen, or record again.",
+    "mic.average": "Average {level} dBFS", "mic.peak": "Peak {level} dBFS", "mic.meter": "Microphone level", "mic.idle": "Start a test to check your level.",
+    "mic.silent": "No signal detected", "mic.quiet": "Very quiet — move closer or raise your microphone input level.", "mic.good": "Good level", "mic.clipping": "Clipping — lower your microphone input level.",
+    "mic.device": "Testing: {name}", "mic.deviceUnknown": "Microphone (device name unavailable)", "mic.output": "Listen through: {name}",
+    "mic.threshold": "Voice activation threshold: {value}%", "mic.transmit": "Would transmit", "mic.below": "Below threshold", "mic.release": "Release delay", "mic.waitPTT": "Hold your push-to-talk shortcut or the test button.",
+    "mic.ptt": "Test push-to-talk", "mic.shortcut": "Active shortcut: {key}", "mic.noShortcut": "No active shortcut. Set one in Hotkeys, or use the test button.", "mic.keyDetected": "Shortcut detected", "mic.keyReleased": "Shortcut released",
+    "mic.calibrate": "Calibrate voice activation", "mic.ambient": "Stay quiet — measuring background noise ({seconds}s)", "mic.speech": "Speak normally — measuring your voice ({seconds}s)",
+    "mic.suggestion": "Suggested threshold: {value}%. Preview it before applying.", "mic.use": "Use suggested threshold", "mic.previewThreshold": "Preview suggested threshold", "mic.calibrationFailed": "Could not separate voice from background noise. Move closer to the microphone and try again.",
+    "mic.changed": "Microphone settings changed. Test restarted; previous sample and calibration were discarded.", "mic.outputFailed": "Could not play through the selected output: {error}",
+    "settings.clean": "All changes applied", "settings.unsaved": "Unsaved changes · Apply to save", "settings.applied": "Changes applied",
+};
+
+export const micGerman = {
+    "mic.title": "Mikrofon testen", "mic.preview": "Nur Vorschau · Einstellungen gelten erst nach Anwenden. Dein bestehender Anruf bleibt unverändert.",
+    "mic.start": "Test starten", "mic.record": "5 Sekunden aufnehmen", "mic.listen": "Aufnahme anhören", "mic.again": "Erneut aufnehmen", "mic.stopPlayback": "Wiedergabe stoppen",
+    "mic.recordHelp": "Sprich normal. Die Aufnahme bleibt auf diesem Gerät und wird beim Verlassen dieser Seite verworfen.",
+    "mic.recording": "Aufnahme — noch {seconds}s", "mic.recorded": "Aufnahme bereit. Anhören oder erneut aufnehmen.",
+    "mic.average": "Mittelwert {level} dBFS", "mic.peak": "Spitze {level} dBFS", "mic.meter": "Mikrofonpegel", "mic.idle": "Starte einen Test, um deinen Pegel zu prüfen.",
+    "mic.silent": "Kein Signal erkannt", "mic.quiet": "Sehr leise — gehe näher heran oder erhöhe den Mikrofon-Eingangspegel.", "mic.good": "Guter Pegel", "mic.clipping": "Übersteuerung — senke den Mikrofon-Eingangspegel.",
+    "mic.device": "Im Test: {name}", "mic.deviceUnknown": "Mikrofon (Gerätename nicht verfügbar)", "mic.output": "Anhören über: {name}",
+    "mic.threshold": "Sprachaktivierungsschwelle: {value}%", "mic.transmit": "Würde senden", "mic.below": "Unter der Schwelle", "mic.release": "Nachlaufzeit", "mic.waitPTT": "Halte dein Push-to-Talk-Kürzel oder die Testtaste gedrückt.",
+    "mic.ptt": "Push-to-Talk testen", "mic.shortcut": "Aktives Kürzel: {key}", "mic.noShortcut": "Kein aktives Kürzel. Lege eines unter Tastenkürzel fest oder nutze die Testtaste.", "mic.keyDetected": "Kürzel erkannt", "mic.keyReleased": "Kürzel losgelassen",
+    "mic.calibrate": "Sprachaktivierung kalibrieren", "mic.ambient": "Sei leise — Hintergrundgeräusche werden gemessen ({seconds}s)", "mic.speech": "Sprich normal — deine Stimme wird gemessen ({seconds}s)",
+    "mic.suggestion": "Empfohlene Schwelle: {value}%. Prüfe die Vorschau vor dem Übernehmen.", "mic.use": "Empfohlene Schwelle übernehmen", "mic.previewThreshold": "Empfohlene Schwelle testen", "mic.calibrationFailed": "Stimme und Hintergrund konnten nicht getrennt werden. Gehe näher ans Mikrofon und versuche es erneut.",
+    "mic.changed": "Mikrofoneinstellungen geändert. Test neu gestartet; vorige Aufnahme und Kalibrierung verworfen.", "mic.outputFailed": "Wiedergabe über den gewählten Ausgang fehlgeschlagen: {error}",
+    "settings.clean": "Alle Änderungen angewendet", "settings.unsaved": "Ungespeicherte Änderungen · Zum Speichern anwenden", "settings.applied": "Änderungen angewendet",
+};

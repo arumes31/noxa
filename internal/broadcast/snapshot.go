@@ -11,6 +11,7 @@ package broadcast
 import (
 	"time"
 
+	"noxa/internal/authorization"
 	"noxa/internal/state"
 )
 
@@ -18,19 +19,25 @@ import (
 // omits the net.Conn field so snapshots can be safely marshaled and sent over
 // the wire.
 type ClientInfo struct {
-	ClientID    string    `json:"client_id"`
-	UniqueID    string    `json:"unique_id"`
-	Nickname    string    `json:"nickname"`
-	ChannelID   int64     `json:"channel_id"`
-	IsSpeaking  bool      `json:"is_speaking"`
-	ConnectedAt time.Time `json:"connected_at"`
+	UserID      int64                          `json:"-"`
+	Roles       []authorization.RoleAppearance `json:"roles,omitempty"`
+	ClientID    string                         `json:"client_id"`
+	UniqueID    string                         `json:"unique_id"`
+	Nickname    string                         `json:"nickname"`
+	ChannelID   int64                          `json:"channel_id"`
+	IsSpeaking  bool                           `json:"is_speaking"`
+	ConnectedAt time.Time                      `json:"connected_at"`
 	// PrioritySpeaker marks TS3-style priority speakers (14); clients duck
 	// other publishers while a priority speaker in their channel talks.
-	PrioritySpeaker bool `json:"priority_speaker,omitempty"`
+	PrioritySpeaker bool  `json:"priority_speaker,omitempty"`
+	Sharing         bool  `json:"sharing,omitempty"`
+	ServerMuted     bool  `json:"server_muted,omitempty"`
+	ServerDeafened  bool  `json:"server_deafened,omitempty"`
+	VoiceRevision   int64 `json:"voice_revision,omitempty"`
 	// Status/StatusMessage carry the client's presence (307-309).
 	Status        string `json:"status,omitempty"`
 	StatusMessage string `json:"status_message,omitempty"`
-	// IsBot marks accounts holding b_client_is_bot (180).
+	// IsBot is display-only account identity metadata in role mode.
 	IsBot bool `json:"is_bot,omitempty"`
 }
 
@@ -46,7 +53,9 @@ type ChannelNode struct {
 // TreeSnapshot is the full nested view of the server's channel tree and the
 // users currently connected.
 type TreeSnapshot struct {
-	RootChannels []*ChannelNode `json:"root_channels"`
+	// CanSetInvisible is recipient-specific role authority, never a legacy admin flag.
+	CanSetInvisible bool           `json:"can_set_invisible,omitempty"`
+	RootChannels    []*ChannelNode `json:"root_channels"`
 	// UnassignedClients includes authenticated users who have not joined a
 	// channel yet, so later move events can resolve their existing identities.
 	UnassignedClients []*ClientInfo `json:"unassigned_clients,omitempty"`
@@ -63,12 +72,17 @@ func clientToInfo(c *state.Client) ClientInfo {
 	}
 	return ClientInfo{
 		ClientID:        c.ClientID,
+		UserID:          c.UserID,
 		UniqueID:        c.UniqueID,
 		Nickname:        c.Nickname,
 		ChannelID:       c.ChannelID,
 		IsSpeaking:      c.IsSpeaking,
 		ConnectedAt:     c.ConnectedAt,
 		PrioritySpeaker: c.PrioritySpeaker,
+		Sharing:         c.Sharing,
+		ServerMuted:     c.ServerMuted,
+		ServerDeafened:  c.ServerDeafened,
+		VoiceRevision:   c.VoiceRevision,
 		Status:          c.Status,
 		StatusMessage:   c.StatusMessage,
 		IsBot:           c.IsBot,

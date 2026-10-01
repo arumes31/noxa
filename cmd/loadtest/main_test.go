@@ -13,9 +13,9 @@ import (
 	"go.uber.org/zap"
 
 	"noxa/internal/auth"
+	"noxa/internal/authorization"
 	"noxa/internal/broadcast"
 	"noxa/internal/config"
-	"noxa/internal/permissions"
 	"noxa/internal/server"
 	"noxa/internal/state"
 	"noxa/internal/tlscert"
@@ -70,19 +70,23 @@ func (fakeAuth) GetE2EPublicKey(context.Context, string) (string, error) {
 	return "", auth.ErrUserNotFound
 }
 
-// fakePerms implements server.PermLoader with an empty permission set.
-type fakePerms struct{}
+type fakeRolePolicy struct{}
 
-func (fakePerms) LoadForClient(context.Context, int64, int64) (permissions.TieredPermissions, error) {
-	return permissions.NewTieredPermissions(), nil
+func (fakeRolePolicy) RolePolicy(context.Context) (authorization.RolePolicy, error) {
+	return authorization.RolePolicy{
+		Revision:   1,
+		OwnerID:    1,
+		EveryoneID: 10,
+		Roles: []authorization.Role{{
+			ID: 10, Name: "@everyone",
+			Permissions: []authorization.Capability{authorization.ViewChannel, authorization.Connect, authorization.SendMessages, authorization.ReadHistory},
+		}},
+		Channels: []authorization.ChannelPolicy{{ChannelID: 1}},
+	}, nil
 }
 
-func (fakePerms) Invalidate(int64, int64) {}
-
-func (fakePerms) InvalidateAll() {}
-
-func (fakePerms) LoadGroupPermissions(context.Context, int64) (permissions.PermissionSet, error) {
-	return permissions.NewPermissionSet(), nil
+func (fakeRolePolicy) ChangeRolePolicy(context.Context, int64, authorization.RoleChange) (authorization.RolePolicy, error) {
+	return authorization.RolePolicy{}, authorization.ErrRoleForbidden
 }
 
 // TestLoadtestSmoke runs the simulator against a real in-process server and
@@ -97,16 +101,28 @@ func TestLoadtestSmoke(t *testing.T) {
 
 	logger := zap.NewNop()
 	sm := state.New(logger)
+	sm.AddChannel(&state.Channel{ChannelID: 1, Name: "Load"})
 	bc := broadcast.New(logger, sm)
 	defer bc.Close()
+	keys, kek := loadTestKeys(t)
+	roles := fakeRolePolicy{}
+	authority, err := authorization.NewAuthority(t.Context(), roles, func(context.Context, *authorization.RoleEvaluator, *authorization.RoleEvaluator) error { return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	srv := server.New(&config.Config{TCPAddr: addr, ChatAllowPlaintext: true}, logger, &server.Deps{
 		Auth:      fakeAuth{},
 		State:     sm,
 		Broadcast: bc,
-		Perms:     fakePerms{},
-		Resolver:  permissions.NewResolver(),
+		Roles:     roles,
+		Authority: authority,
+		ScopeKeys: keys,
+		ChatKEK:   kek,
 	})
+	if err := srv.EnsureGlobalScopeKey(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	errCh := make(chan error, 1)
@@ -127,14 +143,14 @@ func TestLoadtestSmoke(t *testing.T) {
 	opts := options{
 		addr:     addr,
 		clients:  3,
-		duration: 2600 * time.Millisecond,
+		duration: 1200 * time.Millisecond,
 		ramp:     100 * time.Millisecond,
 		uniqueID: "lt-uid",
 		password: "pw",
-		channel:  0,
+		channel:  1,
 	}
 	if err := run(context.Background(), opts, &st); err != nil {
-		t.Fatalf("run: %v", err)
+		t.Fatalf("run: %v auth=%d sessions=%d confirmed=%d received=%d sent=%d", err, st.authOK.Load(), st.sessionFail.Load(), st.chatParticipants.Load(), st.chatRecv.Load(), st.chatSent.Load())
 	}
 
 	if got := st.connectsOK.Load(); got != 3 {

@@ -9,12 +9,9 @@ import (
 func TestJoinZeroLeavesChannelWithoutDisconnecting(t *testing.T) {
 	env := startTestEnv(t, nil)
 	defer env.stop()
-	admin, _ := dialAuthed(t, env.addr, "admin-uid")
-	defer func() { _ = admin.Close() }()
 	user, userID := dialAuthed(t, env.addr, "user-uid")
 	defer func() { _ = user.Close() }()
-	send(t, admin, netproto.MsgCreateChannel, netproto.CreateChannel{Name: "Voice", Type: 2})
-	readOfType(t, admin, netproto.MsgChannelList)
+	env.state.AddChannel(testChannel(1))
 	send(t, user, netproto.MsgJoinChannel, netproto.JoinChannel{ChannelID: 1})
 	waitFor(t, "user joined", func() bool {
 		client, ok := env.state.GetClient(userID)

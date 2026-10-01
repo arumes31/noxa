@@ -612,6 +612,28 @@
         "sourceFileSha256": "d0bc0fcba496d73df1da8c145e5330df75f87ab5a4f33a9b71461b006b5c338e",
         "trimStartMs": 20.34013605442177
       }
+    ],
+    "stream_watch_started": [
+      {
+        "source": "kenney",
+        "file": "Audio/select_007.ogg",
+        "lengthMs": 45,
+        "weight": 0.6,
+        "atMs": 0,
+        "lowpassHz": 4500,
+        "sourceFileSha256": "cd4390dd2b24f09016a5fa1be63334fa0f1859811f4cf29c02e8e2750f6a2cd0",
+        "trimStartMs": 0.0
+      },
+      {
+        "source": "ui",
+        "file": "Audio/rollover2.ogg",
+        "lengthMs": 60,
+        "weight": 1,
+        "atMs": 90,
+        "lowpassHz": 0,
+        "sourceFileSha256": "d0bc0fcba496d73df1da8c145e5330df75f87ab5a4f33a9b71461b006b5c338e",
+        "trimStartMs": 20.34013605442177
+      }
     ]
   }
 }

@@ -24,7 +24,7 @@ func TestSocialBindings(t *testing.T) {
 	}
 	var status netproto.SetStatus
 	if err := netproto.Decode(nextFrame(t, frames, netproto.MsgSetStatus), &status); err != nil ||
-		status.Status != "away" || status.Message != "Stepped out" {
+		status.Status != "away" || status.Message != "Stepped out" || status.AckRequested {
 		t.Fatalf("SetStatus payload = %+v, %v", status, err)
 	}
 

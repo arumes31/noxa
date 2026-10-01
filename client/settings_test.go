@@ -23,6 +23,7 @@ func TestSettingsRoundTrip(t *testing.T) {
 	}
 
 	s.ChatMaxLines = 42
+	s.NotificationSnoozeUntil = 1800000000000
 	s.Volume = 150
 	s.HotkeyPTT = "F5"
 	s.Bookmarks = []Bookmark{{Name: "local", Addr: "127.0.0.1:12333", Nickname: "alice"}}
@@ -44,6 +45,9 @@ func TestSettingsRoundTrip(t *testing.T) {
 	}
 
 	loaded := loadSettingsAt(path)
+	if loaded.NotificationSnoozeUntil != s.NotificationSnoozeUntil {
+		t.Fatalf("notification snooze lost after reload: %d", loaded.NotificationSnoozeUntil)
+	}
 	if loaded.ChatMaxLines != 42 || loaded.Volume != 150 || loaded.HotkeyPTT != "F5" {
 		t.Fatalf("reloaded = %+v", loaded)
 	}
@@ -236,6 +240,10 @@ func TestSaveSettingsKeepsGoOwnedFields(t *testing.T) {
 	}
 	// What the frontend cached before the connect happened.
 	stale := a.GetSettings()
+	until, err := a.SetNotificationSnooze(30)
+	if err != nil || until <= 0 {
+		t.Fatalf("set snooze: %d, %v", until, err)
+	}
 
 	a.RecordRecent("127.0.0.1:12333", "alice")
 	a.settings.LastSeenVersion = "9.9"
@@ -254,8 +262,39 @@ func TestSaveSettingsKeepsGoOwnedFields(t *testing.T) {
 		t.Fatalf("frontend-owned volume = %d, want 120", a.settings.Volume)
 	}
 	loaded := loadSettingsAt(a.settingsPath)
+	if loaded.NotificationSnoozeUntil != until {
+		t.Fatalf("stale settings save replaced snooze: %d, want %d", loaded.NotificationSnoozeUntil, until)
+	}
 	if len(loaded.Recents) != 1 || loaded.LastSeenVersion != "9.9" {
 		t.Fatalf("persisted settings = %+v / %q", loaded.Recents, loaded.LastSeenVersion)
+	}
+}
+
+func TestNotificationSnoozeTransaction(t *testing.T) {
+	a := &App{settings: DefaultSettings(), settingsPath: filepath.Join(t.TempDir(), "settings.json")}
+	a.settings.Volume = 135
+	a.settings.DNDEnabled = true
+	for _, minutes := range []int{30, 60, 0} {
+		until, err := a.SetNotificationSnooze(minutes)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := loadSettingsAt(a.settingsPath)
+		if got.Volume != 135 || !got.DNDEnabled || got.NotificationSnoozeUntil != until {
+			t.Fatalf("snooze changed unrelated settings or failed persistence: %+v", got)
+		}
+		if minutes == 0 && until != 0 {
+			t.Fatal("cancel left snooze active")
+		}
+	}
+	if _, err := a.SetNotificationSnooze(10); err == nil {
+		t.Fatal("unsupported snooze accepted")
+	}
+	originalWriter := settingsSnapshotWriter
+	t.Cleanup(func() { settingsSnapshotWriter = originalWriter })
+	settingsSnapshotWriter = func(string, Settings) error { return errors.New("disk unavailable") }
+	if _, err := a.SetNotificationSnooze(30); err == nil || a.GetSettings().NotificationSnoozeUntil != 0 {
+		t.Fatal("failed write changed live snooze")
 	}
 }
 

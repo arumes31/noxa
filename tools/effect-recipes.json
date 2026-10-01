@@ -926,6 +926,37 @@
           "lowpassHz": 0
         }
       ]
+    },
+    {
+      "id": "stream_watch_started",
+      "label": "Someone started watching your stream",
+      "category": "Notifications",
+      "character": "Soft rising pair of short textured contacts",
+      "duration": 0.185,
+      "priority": 1,
+      "gain": 1,
+      "cooldown": 250,
+      "concurrency": "replace same event within session; priority admission",
+      "rmsDB": -37,
+      "peakCeiling": 0.075,
+      "parts": [
+        {
+          "source": "kenney",
+          "file": "Audio/select_007.ogg",
+          "lengthMs": 45,
+          "weight": 0.6,
+          "atMs": 0,
+          "lowpassHz": 4500
+        },
+        {
+          "source": "ui",
+          "file": "Audio/rollover2.ogg",
+          "lengthMs": 60,
+          "weight": 1,
+          "atMs": 90,
+          "lowpassHz": 0
+        }
+      ]
     }
   ]
 }

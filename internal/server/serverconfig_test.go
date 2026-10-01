@@ -13,6 +13,16 @@ func (m memorySettings) GetServerSetting(_ context.Context, key string) (string,
 	return m[key], 0, nil
 }
 
+func (m memorySettings) GetPlainServerSettings(_ context.Context, keys []string) (map[string]string, error) {
+	values := make(map[string]string)
+	for _, key := range keys {
+		if value, exists := m[key]; exists {
+			values[key] = value
+		}
+	}
+	return values, nil
+}
+
 func TestLoadPersistedServerConfig(t *testing.T) {
 	cfg := &config.Config{MaxClients: 10, ClientTimeoutSeconds: 90, DefaultOpusBitrate: 32000}
 	err := LoadPersistedServerConfig(context.Background(), cfg, memorySettings{

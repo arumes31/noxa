@@ -49,6 +49,9 @@ func TestSubscriberRTPDoesNotForwardPublisherExtensions(t *testing.T) {
 			attachFakePeer(t, e, r, "subscriber")
 			r.JoinChannel(1, "subscriber")
 			r.JoinChannel(1, "publisher")
+			if slot == SlotCam {
+				testVideoPublication(t, r, "publisher", "subscriber", slot)
+			}
 			registerVideoSource(r, "publisher", SlotCam, "", 4242)
 			output := pubTrackFor(r, "subscriber", "publisher").slots(slotKinds[slot])[slot]
 			capture := &extensionCapture{}
@@ -60,6 +63,9 @@ func TestSubscriberRTPDoesNotForwardPublisherExtensions(t *testing.T) {
 				t.Fatal(err)
 			}
 			packet := makeAudioPacket(t, 42, 33)
+			if slot == SlotCam {
+				packet.Payload = boundsKeyPacket(1, 1, 640, 360).Payload
+			}
 			// Publisher MID and transport-cc IDs belong to its own negotiation.
 			if err := packet.SetExtension(3, []byte("0")); err != nil {
 				t.Fatal(err)

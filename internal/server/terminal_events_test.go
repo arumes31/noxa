@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"net"
 	"testing"
@@ -8,6 +9,39 @@ import (
 
 	"noxa/internal/netproto"
 )
+
+type terminalDeadlineConn struct {
+	*blockingTCPConn
+	deadline time.Time
+	writes   int
+}
+
+func (c *terminalDeadlineConn) SetWriteDeadline(deadline time.Time) error {
+	if !deadline.IsZero() {
+		c.deadline = deadline
+	}
+	return nil
+}
+
+func (c *terminalDeadlineConn) Write(p []byte) (int, error) { c.writes++; return len(p), nil }
+
+func TestTerminalEventUsesRemainingCleanupBudget(t *testing.T) {
+	conn := &terminalDeadlineConn{blockingTCPConn: newBlockingTCPConn()}
+	client := &Client{Conn: conn}
+	srv := &TCPServer{}
+	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
+	want, _ := ctx.Deadline()
+	srv.sendTerminalEventInContext(ctx, client, "kicked", struct{}{})
+	if !conn.deadline.Equal(want) || conn.writes == 0 {
+		t.Fatalf("notification renewed deadline: %v instead of %v", conn.deadline, want)
+	}
+	cancel()
+	writes := conn.writes
+	srv.sendTerminalEventInContext(ctx, client, "kicked", struct{}{})
+	if conn.writes != writes {
+		t.Fatal("expired cleanup attempted a notification")
+	}
+}
 
 func TestTerminalEventDeliveredBeforeClose(t *testing.T) {
 	writer, reader := net.Pipe()

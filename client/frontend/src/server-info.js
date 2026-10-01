@@ -1,7 +1,8 @@
 import { closeDialog, isCurrentServerDialog, mountServerDialog } from "./modal.js";
 import { icon } from "./icons.js";
 import { copyToClipboard } from "./clipboard.js";
-import { formatBytes, formatDuration, measured, summarizeMedia } from "./connection-stats.js";
+import { formatBytes, formatBitrate, formatDuration, measured, summarizeMedia, summarizeVideoProcessing } from "./connection-stats.js";
+import { t } from "./i18n.js";
 
 const V = () => window.__noxa;
 let currentOverlay = null;
@@ -12,6 +13,7 @@ export function openServerInfo() {
         currentOverlay.focus();
         return;
     }
+    const { activeTabID: tabID, myClientID: clientID } = V().state;
     const overlay = document.createElement("div");
     overlay.className = "dlg-overlay";
     const field = (key) => `<span data-stat="${key}">—</span>`;
@@ -48,6 +50,13 @@ export function openServerInfo() {
                         </tbody>
                     </table>
                     <p class="server-info-note">In = received · Out = sent. Data excludes protocol headers. Audio loss is cumulative for current streams; — means unavailable.</p>
+                    <details class="server-info-processing"><summary>${t("streams.processing")}</summary>
+                        <dl class="server-info-details">
+                            <dt>${t("streams.encoding")}</dt><dd data-video-processors="encoders">—</dd>
+                            <dt>${t("streams.decoding")}</dt><dd data-video-processors="decoders">—</dd>
+                        </dl>
+                        <p class="server-info-note">${t("streams.processingNote")}</p>
+                    </details>
                     <details class="server-info-history"><summary>Recent latency &amp; audio loss</summary>
                         <div class="stats-label">Server latency · ms · last 60 seconds</div><canvas class="stats-rtt" width="560" height="80" role="img" aria-label="Recent server latency"></canvas>
                         <div class="stats-label">Incoming audio loss · % · last 60 seconds</div><canvas class="stats-loss" width="560" height="60" role="img" aria-label="Recent incoming audio loss"></canvas>
@@ -100,8 +109,8 @@ export function openServerInfo() {
             const app = window.go.main.App;
             const refreshServer = !server || Date.now() - serverAt >= 10000;
             const [infoResult, serverResult, mediaResult] = await Promise.allSettled([
-                Promise.resolve().then(() => app.GetClientInfo(state.myClientID)),
-                Promise.resolve().then(() => refreshServer ? app.ServerInfo() : server),
+                Promise.resolve().then(() => app.GetClientInfoForTab(tabID, clientID)),
+                Promise.resolve().then(() => refreshServer ? app.ServerInfoForTab(tabID) : server),
                 Promise.resolve().then(() => pc?.getStats()),
             ]);
             busy = false;
@@ -128,7 +137,23 @@ export function openServerInfo() {
             // The server counts bytes_in as uploads and bytes_out as downloads.
             set("control-in", formatBytes(info?.bytes_out));
             set("control-out", formatBytes(info?.bytes_in));
-            const media = summarizeMedia(mediaResult.status === "fulfilled" && pc === state.pc ? mediaResult.value : null, pc === previousPC ? previous : null);
+            const report = mediaResult.status === "fulfilled" && pc === state.pc ? mediaResult.value : null;
+            const media = summarizeMedia(report, pc === previousPC ? previous : null);
+            const processing = summarizeVideoProcessing(report);
+            for (const [direction, processors] of Object.entries(processing)) {
+                const element = overlay.querySelector(`[data-video-processors="${direction}"]`);
+                const labels = [...new Set(processors.map((processor) => t("streams.processor", {
+                    codec: processor.codec || t("streams.notReported"),
+                    implementation: processor.implementation || t("streams.notReported"),
+                    efficiency: t(processor.powerEfficient === true ? "streams.reportedYes" :
+                        processor.powerEfficient === false ? "streams.reportedNo" : "streams.notReported"),
+                })))];
+                element.replaceChildren(...(labels.length ? labels : ["—"]).map((label) => {
+                    const row = document.createElement("div");
+                    row.textContent = label;
+                    return row;
+                }));
+            }
             previous = media;
             previousPC = pc;
             if (mediaResult.status === "rejected" && pc === state.pc) errors.push("Media statistics unavailable. Retrying…");
@@ -136,7 +161,7 @@ export function openServerInfo() {
             set("jitter", measured(media.jitter) ? `${media.jitter.toFixed(1)} ms` : "—");
             for (const [key, value] of [["media-in", media.inBytes], ["media-out", media.outBytes]]) set(key, formatBytes(value));
             for (const [key, value] of [["packets-in", media.inPackets], ["packets-out", media.outPackets]]) set(key, measured(value) ? value.toLocaleString() : "—");
-            for (const [key, value] of [["rate-in", media.inRate], ["rate-out", media.outRate]]) set(key, measured(value) ? `${formatBytes(value)}/s` : "—");
+            for (const [key, value] of [["rate-in", media.inRate], ["rate-out", media.outRate]]) set(key, formatBitrate(measured(value) ? value * 8 : null));
             history.push({ at: Date.now(), ping, loss: media.loss });
             while (history.length && history[0].at < Date.now() - 60000) history.shift();
             drawHistory();

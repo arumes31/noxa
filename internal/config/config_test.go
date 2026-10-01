@@ -27,6 +27,9 @@ func TestLoadFromEnv(t *testing.T) {
 	t.Setenv("NOXA_REDIS_ADDR", "redis:6379")
 	t.Setenv("NOXA_REDIS_PASSWORD", "secret")
 	t.Setenv("NOXA_MAX_CLIENTS", "512")
+	t.Setenv("NOXA_VIDEO_MAX_BITRATE", "3000000")
+	t.Setenv("NOXA_VIDEO_MAX_WIDTH", "1920")
+	t.Setenv("NOXA_VIDEO_MAX_HEIGHT", "1080")
 	t.Setenv("NOXA_RECORDING_MAX_CONCURRENT", "7")
 	t.Setenv("NOXA_RECORDING_WINDOWS_ACL_READY", "true")
 
@@ -68,6 +71,9 @@ func TestLoadFromEnv(t *testing.T) {
 		{"RedisAddr", cfg.RedisAddr, "redis:6379"},
 		{"RedisPassword", cfg.RedisPassword, "secret"},
 		{"MaxClients", cfg.MaxClients, 512},
+		{"VideoMaxBitrate", cfg.VideoMaxBitrate, 3000000},
+		{"VideoMaxWidth", cfg.VideoMaxWidth, 1920},
+		{"VideoMaxHeight", cfg.VideoMaxHeight, 1080},
 		{"Recording.MaxConcurrent", cfg.Recording.MaxConcurrent, 7},
 		{"Recording.WindowsACLReady", cfg.Recording.WindowsACLReady, true},
 	}
@@ -309,6 +315,11 @@ func TestValidateRejectsUnsafeValues(t *testing.T) {
 			wantErr: "query_allow_remote",
 		},
 		{name: "zero clients", mutate: func(c *Config) { c.MaxClients = 0 }, wantErr: "max_clients"},
+		{name: "negative video bitrate", mutate: func(c *Config) { c.VideoMaxBitrate = -1 }, wantErr: "video_max_bitrate"},
+		{name: "incomplete video dimensions", mutate: func(c *Config) { c.VideoMaxWidth = 1280 }, wantErr: "video_max_width"},
+		{name: "negative video dimensions", mutate: func(c *Config) { c.VideoMaxWidth = -1; c.VideoMaxHeight = 720 }, wantErr: "video_max_width"},
+		{name: "excessive video dimensions", mutate: func(c *Config) { c.VideoMaxWidth = 16384; c.VideoMaxHeight = 720 }, wantErr: "video_max_width"},
+		{name: "excessive video bitrate", mutate: func(c *Config) { c.VideoMaxBitrate = 100_000_001 }, wantErr: "video_max_bitrate"},
 		{
 			name:    "zero client timeout",
 			mutate:  func(c *Config) { c.ClientTimeoutSeconds = 0 },
@@ -320,6 +331,10 @@ func TestValidateRejectsUnsafeValues(t *testing.T) {
 			wantErr: "shutdown_timeout",
 		},
 		{name: "negative file limit", mutate: func(c *Config) { c.FileMaxSizeMB = -1 }, wantErr: "file_max_size_mb"},
+		{name: "overflowing file limit", mutate: func(c *Config) { c.FileMaxSizeMB = 1 << 43 }, wantErr: "file_max_size_mb"},
+		{name: "overflowing channel quota", mutate: func(c *Config) { c.FileChannelQuotaMB = 1 << 43 }, wantErr: "file_channel_quota_mb"},
+		{name: "negative uploader quota", mutate: func(c *Config) { c.FileUserQuotaMB = -1 }, wantErr: "file_user_quota_mb"},
+		{name: "overflowing uploader quota", mutate: func(c *Config) { c.FileUserQuotaMB = 1 << 43 }, wantErr: "file_user_quota_mb"},
 		{name: "zero file connections", mutate: func(c *Config) { c.FileMaxConnections = 0 }, wantErr: "file_max_connections"},
 		{name: "too many file connections", mutate: func(c *Config) { c.FileMaxConnections = 10_001 }, wantErr: "file_max_connections"},
 		{name: "zero Redis dial timeout", mutate: func(c *Config) { c.RedisDialTimeout = 0 }, wantErr: "redis_dial_timeout"},

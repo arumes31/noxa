@@ -3,6 +3,7 @@
 // limiter/per-user normalizer, and the per-user volume/mute registry.
 import { labelButton } from "./icons.js";
 import { t } from "./i18n.js";
+import { updateLocalSettings } from "./settings-store.js";
 
 const V = () => window.__noxa;
 
@@ -45,10 +46,10 @@ export function syncMuteButton(button, muted) {
 export function renderMicStatus(container, micState, onRetry, videoOnly = true, successFocus = null) {
     if (!container) return null;
     container.replaceChildren();
-    const suffix = videoOnly ? " — video only" : "";
+    const suffix = videoOnly ? t("polish.videoOnly") : "";
     const message = micState === "denied"
-        ? `Microphone access denied${suffix}`
-        : micState === "none" ? `No microphone found${suffix}` : "";
+        ? t("polish.micDenied") + suffix
+        : micState === "none" ? t("polish.micMissing") + suffix : "";
     if (!message) return null;
 
     const text = document.createElement("span");
@@ -58,12 +59,12 @@ export function renderMicStatus(container, micState, onRetry, videoOnly = true, 
     const retry = document.createElement("button");
     retry.type = "button";
     retry.className = "mic-retry";
-    retry.textContent = "Retry microphone access";
+    retry.textContent = t("polish.micRetry");
     retry.onclick = async () => {
         const retryHadFocus = document.activeElement === retry;
         let recovered = false;
         retry.disabled = true;
-        retry.textContent = "Retrying…";
+        retry.textContent = t("polish.retrying");
         try {
             recovered = !!(await onRetry?.());
         } finally {
@@ -74,7 +75,7 @@ export function renderMicStatus(container, micState, onRetry, videoOnly = true, 
             // mounted failure case so the user can make another attempt.
             if (retry.isConnected) {
                 retry.disabled = false;
-                retry.textContent = "Retry microphone access";
+                retry.textContent = t("polish.micRetry");
             }
         }
     };
@@ -99,13 +100,20 @@ export function startMicMeter(stream) {
     }
     el.classList.remove("hidden");
     const fill = el.querySelector(".mic-fill");
+    meterAnalyser = {};
     try {
         const ctx = new (window.AudioContext || window.webkitAudioContext)();
-        const src = ctx.createMediaStreamSource(stream);
+        meterAnalyser.ctx = ctx;
+        const track = stream.getAudioTracks()[0].clone();
+        meterAnalyser.track = track;
+        track.enabled = true;
+        const src = ctx.createMediaStreamSource(new MediaStream([track]));
+        meterAnalyser.src = src;
         const an = ctx.createAnalyser();
         an.fftSize = 512;
         src.connect(an);
-        meterAnalyser = { ctx, an };
+        meterAnalyser = { ctx, an, src, track };
+        void ctx.resume().catch(() => {});
         const buf = new Uint8Array(an.frequencyBinCount);
         const tick = () => {
             an.getByteTimeDomainData(buf);
@@ -113,12 +121,13 @@ export function startMicMeter(stream) {
             for (const v of buf) sum += Math.abs(v - 128);
             const level = Math.min(1, (sum / buf.length / 128) * 5);
             fill.style.width = level * 100 + "%";
+            el.setAttribute("aria-valuenow", String(Math.round(level * 100)));
             fill.className = "mic-fill " + (level > 0.7 ? "hot" : level > 0.35 ? "warm" : "cool");
             meterRaf = requestAnimationFrame(tick);
         };
         tick();
     } catch {
-        el.classList.add("hidden");
+        stopMicMeter();
     }
 }
 
@@ -128,7 +137,9 @@ export function stopMicMeter() {
         meterRaf = null;
     }
     if (meterAnalyser) {
-        meterAnalyser.ctx.close().catch(() => {});
+        meterAnalyser.src?.disconnect();
+        meterAnalyser.track?.stop();
+        void meterAnalyser.ctx?.close().catch(() => {});
         meterAnalyser = null;
     }
     const el = document.getElementById("mic-meter");
@@ -339,40 +350,109 @@ export async function applyCaptureProfile(pc, stream, ch) {
 // registerUserChain, so per-sender volume/mute is audible.
 // ---------------------------------------------------------------------------
 
+const volumePreviews = new Map();
+const volumeListeners = new Set();
+
+export function onUserVolumeChange(listener) {
+    volumeListeners.add(listener);
+    return () => volumeListeners.delete(listener);
+}
+
+export function previewUserVolume(uid, pct, owner) {
+    volumePreviews.set(uid, { volume: Math.min(200, Math.max(0, Number(pct) || 0)), owner });
+    applyUserAudio(uid);
+}
+
+export function clearUserVolumePreview(uid, owner) {
+    if (volumePreviews.get(uid)?.owner !== owner) return;
+    volumePreviews.delete(uid);
+    applyUserAudio(uid);
+}
+
 export function getUserVolume(uid) {
     const s = V().state.settings;
-    return (s?.user_volumes?.[uid] ?? 100) / 100;
+    return (volumePreviews.get(uid)?.volume ?? s?.user_volumes?.[uid] ?? 100) / 100;
 }
 
 export function isUserMuted(uid) {
     const s = V().state.settings;
-    return (s?.muted_users || []).includes(uid);
+    return (s?.muted_users || []).includes(uid) || (s?.blocked_users || []).includes(uid);
 }
 
-export async function setUserVolume(uid, pct) {
-    const s = Object.assign({}, V().state.settings);
-    s.user_volumes = Object.assign({}, s.user_volumes, { [uid]: pct });
-    const error = await saveAll(s);
-    if (error) throw new Error(error);
-    applyUserAudio(uid);
+// Program audio has its own persisted preference. Muting a microphone must not
+// mute the movie being shared; blocking a person still suppresses both sources.
+const shareAudioListeners = new Set();
+const shareVolumePending = new Map(), shareMutePending = new Map();
+export function onShareAudioChange(listener) {
+    shareAudioListeners.add(listener);
+    return () => shareAudioListeners.delete(listener);
+}
+export function getUserShareVolume(uid) {
+    const value = Number(shareVolumePending.get(uid)?.value ?? V().state.settings?.user_share_volumes?.[uid] ?? 100);
+    return Math.min(200, Math.max(0, Number.isFinite(value) ? value : 100)) / 100;
+}
+export function isUserShareMuted(uid) {
+    const settings = V().state.settings;
+    return (shareMutePending.get(uid)?.value ?? (settings?.muted_share_users || []).includes(uid)) || (settings?.blocked_users || []).includes(uid);
+}
+function mutateSharePreference(uid, pending, value, mutate) {
+    if (!uid) return Promise.resolve();
+    const request = { value };
+    pending.set(uid, request);
+    for (const listener of shareAudioListeners) listener(uid);
+    return updateLocalSettings(mutate).finally(() => {
+        if (pending.get(uid) === request) pending.delete(uid);
+        for (const listener of shareAudioListeners) listener(uid);
+    });
+}
+export function setUserShareVolume(uid, percent) {
+    const volume = Math.round(Math.min(200, Math.max(0, Number(percent) || 0)));
+    return mutateSharePreference(uid, shareVolumePending, volume, settings => { settings.user_share_volumes = { ...settings.user_share_volumes, [uid]: volume }; });
+}
+export function setUserShareMuted(uid, muted) {
+    return mutateSharePreference(uid, shareMutePending, !!muted, settings => {
+        const users = new Set(settings.muted_share_users || []);
+        if (muted) users.add(uid);
+        else users.delete(uid);
+        settings.muted_share_users = [...users];
+    });
 }
 
-export async function setUserMuted(uid, muted) {
-    const s = Object.assign({}, V().state.settings);
-    const set = new Set(s.muted_users || []);
-    if (muted) set.add(uid);
-    else set.delete(uid);
-    s.muted_users = [...set];
-    await saveAll(s);
-    applyUserAudio(uid);
+function mutateAudioPreference(uid, mutate) {
+    return updateLocalSettings(mutate).then(() => {
+        applyUserAudio(uid);
+        for (const listener of shareAudioListeners) listener(uid);
+    });
 }
 
-async function saveAll(s) {
-    const err = await window.go.main.App.SaveSettings(s);
-    // (282) re-read rather than caching the copy we sent: the Go side owns
-    // fields the frontend never has (recents, what's-new marker).
-    if (!err) V().state.settings = await window.go.main.App.GetSettings();
-    return err;
+export function setUserVolume(uid, pct) {
+    return mutateAudioPreference(uid, s => { s.user_volumes = { ...s.user_volumes, [uid]: pct }; }).then(() => {
+        for (const listener of volumeListeners) listener(uid);
+    });
+}
+
+export function setUserMuted(uid, muted) {
+    return mutateAudioPreference(uid, s => {
+        const users = new Set(s.muted_users || []);
+        if (muted) users.add(uid);
+        else users.delete(uid);
+        s.muted_users = [...users];
+    });
+}
+
+export function setUserBlocked(uid, blocked) {
+    return mutateAudioPreference(uid, s => {
+        const users = new Set(s.blocked_users || []);
+        if (blocked) users.add(uid);
+        else users.delete(uid);
+        s.blocked_users = [...users];
+    });
+}
+
+export function refreshUserAudio() {
+    for (const uid of userNodes.keys()) applyUserAudio(uid);
+    for (const listener of volumeListeners) listener();
+    for (const listener of shareAudioListeners) listener();
 }
 
 // userNodes maps uniqueID -> {gain: GainNode, mute: GainNode}.

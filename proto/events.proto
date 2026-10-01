@@ -4,6 +4,8 @@ package voicx.v1;
 
 option go_package = "voicx/v1;voicxv1";
 
+import "control.proto";
+
 // Events service streams server-side events to clients. Clients open a stream
 // and receive events scoped to their session (channels they are in, the
 // server, and direct notifications).
@@ -14,6 +16,8 @@ service Events {
 
 message SubscribeEventsRequest {
   // Optional filter of event types to receive; empty means all.
+  // roles-v1 accepts ROLE_SNAPSHOT, optionally with USER_SPEAKING. Snapshots
+  // are required to reconcile membership, visibility and speaking revocation.
   repeated EventType event_types = 1;
 }
 
@@ -27,6 +31,8 @@ enum EventType {
   EVENT_TYPE_USER_MOVED = 6;
   EVENT_TYPE_USER_KICKED = 7;
   EVENT_TYPE_USER_BANNED = 8;
+  // roles-v1 structural updates replace the entire filtered discovery state.
+  EVENT_TYPE_ROLE_SNAPSHOT = 9;
 }
 
 // Event is the envelope for all server events. Exactly one payload field is set.
@@ -43,6 +49,7 @@ message Event {
     UserMovedEvent user_moved = 15;
     UserKickedEvent user_kicked = 16;
     UserBannedEvent user_banned = 17;
+    RoleSnapshotEvent role_snapshot = 18;
   }
 }
 
@@ -81,6 +88,13 @@ message UserMovedEvent {
   string from_channel_id = 2;
   string to_channel_id = 3;
   string moved_by = 4; // connected client/session ID of the actor
+}
+
+message RoleSnapshotEvent {
+  repeated GetChannelInfoResponse channels = 1;
+  repeated VisibleClient clients = 2;
+  // Replaces the entire visible speaking set, including when empty.
+  repeated string speaking_client_ids = 3;
 }
 
 message UserKickedEvent {

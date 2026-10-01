@@ -231,6 +231,7 @@ export function showServerRules(json) {
     document.querySelector(".identity-backup-nag")?.remove();
     resetServerRules();
     rulesHash = rules.hash;
+    const tabID = V().state.activeTabID;
 
     const overlay = document.createElement("div");
     overlay.className = "dlg-overlay server-rules-gate";
@@ -277,18 +278,33 @@ export function showServerRules(json) {
     rulesOverlay = overlay;
 
     decline.onclick = async () => {
+        if (!isCurrentServerDialog(overlay)) return;
         decline.disabled = true;
         accept.disabled = true;
         status.textContent = "disconnecting…";
-        await App().Disconnect();
+        try {
+            await App().DisconnectTab(tabID);
+        } catch (err) {
+            if (!isCurrentServerDialog(overlay)) return;
+            status.textContent = String(err);
+            decline.disabled = false;
+            accept.disabled = false;
+            return;
+        }
         if (isCurrentServerDialog(overlay)) resetServerRules();
     };
     accept.onclick = async () => {
+        if (!isCurrentServerDialog(overlay)) return;
         decline.disabled = true;
         accept.disabled = true;
         status.textContent = "recording acceptance…";
-        const acceptedHash = rulesHash;
-        const err = await App().AcceptServerRules(acceptedHash);
+        const acceptedHash = rules.hash;
+        let err;
+        try {
+            err = await App().AcceptServerRulesForTab(tabID, acceptedHash);
+        } catch (error) {
+            err = String(error);
+        }
         if (!isCurrentServerDialog(overlay)) return;
         if (err) {
             status.textContent = err;

@@ -1,7 +1,5 @@
-// subscriptions.go implements channel subscriptions (312): a client that
-// holds i_channel_subscribe_power over a channel's
-// i_channel_needed_subscribe_power receives that channel's chat without
-// standing in it.
+// subscriptions.go implements role-authorized channel subscriptions (312).
+// A client with ViewChannel receives that channel's chat without standing in it.
 //
 // Key distribution is the whole difficulty. Channel chat is sealed under the
 // channel's scope key and the server relays ciphertext, so a subscriber that
@@ -13,23 +11,19 @@
 // caller that has published no X25519 key is REFUSED outright rather than
 // subscribed into a stream of unreadable ciphertext.
 //
-// Entitlement is re-checked on the relay path, not only at subscribe time:
-// the permission write sites push MsgPermsInvalid but have no seam that could
-// tell this registry a grant was revoked, so the first message after a
-// revocation is what drops the subscription.
+// Entitlement is re-checked on the relay path, not only at subscribe time, so
+// the first message after a role revocation drops the subscription.
 package server
 
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sort"
-	"strings"
 	"time"
 
-	"go.uber.org/zap"
-
+	"noxa/internal/authorization"
 	"noxa/internal/netproto"
-	"noxa/internal/permissions"
 )
 
 // maxSubscribeTargets caps one ChannelSubscribe request and maxSubscriptions
@@ -71,7 +65,7 @@ func (s *TCPServer) handleChannelSubscribe(ctx context.Context, client *Client, 
 		// The channel the caller stands in is implicit, so it survives this
 		// unconditionally: it is not in the explicit set to begin with.
 		s.deps.State.Unsubscribe(client.ID, msg.ChannelIDs)
-		return s.sendSubscriptionState(client)
+		return s.sendSubscriptionState(ctx, client)
 	}
 
 	currentChannelID, e2ePublicKey, ok := s.deps.State.ClientChannelState(client.ID)
@@ -92,102 +86,15 @@ func (s *TCPServer) handleChannelSubscribe(ctx context.Context, client *Client, 
 	for _, id := range s.deps.State.Subscriptions(client.ID) {
 		held[id] = true
 	}
-	var add []int64
-	var refused []string
-	for _, id := range msg.ChannelIDs {
-		switch {
-		case id == globalChatScope:
-			refused = append(refused, "0 (global chat already reaches every client)")
-		case id == currentChannelID:
-			// Implicitly subscribed; the reply carries it either way.
-		case held[id]:
-			// Already subscribed.
-		default:
-			if _, ok := s.deps.State.GetChannel(id); !ok {
-				refused = append(refused, fmt.Sprintf("%d (no such channel)", id))
-				continue
-			}
-			if !s.subscribeAllowed(ctx, client, id) {
-				refused = append(refused, fmt.Sprintf("%d (insufficient %s)", id,
-					permissions.PermissionKeyChannelSubscribePower))
-				continue
-			}
-			held[id] = true
-			add = append(add, id)
-		}
-	}
-	if len(held) > maxSubscriptions {
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed,
-			fmt.Sprintf("too many subscriptions (max %d) — unsubscribe first", maxSubscriptions))
-	}
-
-	s.deps.State.Subscribe(client.ID, add)
-	for _, id := range add {
-		// The caller is entitled to this scope, which is what authorises
-		// minting its first generation here.
-		if err := s.deliverScopeKey(ctx, client, id); err != nil {
-			s.deps.State.Unsubscribe(client.ID, []int64{id})
-			refused = append(refused, fmt.Sprintf("%d (key delivery failed)", id))
-			continue
-		}
-		if client.userID() != 0 && s.deps.Groups != nil {
-			groupID, applied, err := s.deps.Groups.ApplyChannelGroupAutoAssignment(ctx, client.userID(), id)
-			if err != nil {
-				s.logger.Warn("channel-group auto assignment failed", zap.Int64("channel_id", id), zap.Error(err))
-			} else if applied {
-				if s.deps.Perms != nil {
-					s.deps.Perms.Invalidate(client.userID(), id)
-				}
-				s.audit(ctx, "system", "channel_group_auto_assign", client.UniqueID,
-					fmt.Sprintf("channel=%d group=%d", id, groupID))
-				s.notifyPermsInvalid("channel_group_auto_assign", []string{client.UniqueID})
-			}
-		}
-	}
-	if len(refused) > 0 {
-		_ = s.sendErrorFor(client, requestOrigin(ctx), errCodePermissionDenied,
-			"not subscribed to channel(s): "+strings.Join(refused, ", "))
-	}
-	return s.sendSubscriptionState(client)
+	return s.subscribeWithRoles(ctx, client, msg.ChannelIDs, held, currentChannelID)
 }
 
 // subscribeAllowed reports whether client may subscribe to channelID.
 //
-// Both sides resolve in the TARGET channel's context: the needed power is a
-// channel-tier permission, so loading it for the channel the caller happens
-// to stand in would gate every target on an unrelated channel's setting.
-//
-// An unset i_channel_subscribe_power is DENIED rather than treated as 0.
-// Subscribing hands out a channel's scope key, so it follows the house rule
-// for privileged actions (kick/move/ban) and not the open default of join —
-// otherwise granting nothing would silently make every channel's chat
-// readable by everyone the moment this shipped.
+// The role check is evaluated in the target channel's context because a
+// subscription hands the caller that channel's scope key.
 func (s *TCPServer) subscribeAllowed(ctx context.Context, client *Client, channelID int64) bool {
-	if client.isAdmin() {
-		return true
-	}
-	if s.deps == nil || s.deps.Perms == nil || s.deps.Resolver == nil {
-		return false
-	}
-	tp := permissions.NewTieredPermissions()
-	if client.userID() == 0 {
-		set, err := s.guestGroupSet(ctx)
-		if err != nil {
-			return false
-		}
-		if set != nil {
-			tp.Set(permissions.TierServerGroup, set)
-		}
-	} else {
-		loaded, err := s.deps.Perms.LoadForClient(ctx, client.userID(), channelID)
-		if err != nil {
-			return false
-		}
-		tp = loaded
-	}
-	pc := &permChecker{resolver: s.deps.Resolver, tp: tp}
-	return pc.powerAtLeast(permissions.PermissionKeyChannelSubscribePower,
-		pc.neededPower(permissions.PermissionKeyChannelNeededSubscribePower))
+	return s.roleAllowed(ctx, client, channelID, authorization.ViewChannel)
 }
 
 // subscriptionSet returns the authoritative set for a client: its explicit
@@ -215,9 +122,21 @@ func (s *TCPServer) subscriptionSet(client *Client) []int64 {
 }
 
 // sendSubscriptionState pushes the authoritative set to one client.
-func (s *TCPServer) sendSubscriptionState(client *Client) error {
-	return s.writeMessage(client, netproto.MsgSubscriptionState,
-		netproto.SubscriptionState{ChannelIDs: s.subscriptionSet(client)})
+func (s *TCPServer) sendSubscriptionState(ctx context.Context, client *Client) error {
+	return s.withRoleSession(ctx, client, func(ctx context.Context) error {
+		return s.sendRoleSubscriptionStateInContext(ctx, client, ctx.Value(roleLeaseKey{}).(roleLease).evaluator)
+	})
+}
+
+func (s *TCPServer) sendRoleSubscriptionState(client *Client, e *authorization.RoleEvaluator) error {
+	return s.sendRoleSubscriptionStateInContext(context.Background(), client, e)
+}
+
+func (s *TCPServer) sendRoleSubscriptionStateInContext(ctx context.Context, client *Client, e *authorization.RoleEvaluator) error {
+	ids := slices.DeleteFunc(s.subscriptionSet(client), func(id int64) bool {
+		return !e.Evaluate(client.userID(), id, authorization.ViewChannel).Allowed
+	})
+	return s.writeMessageInContext(ctx, client, netproto.MsgSubscriptionState, netproto.SubscriptionState{ChannelIDs: ids})
 }
 
 // channelSubscribers returns the connected clients that receive channelID's
@@ -229,6 +148,9 @@ func (s *TCPServer) channelSubscribers(ctx context.Context, channelID int64) []*
 	}
 	var out, revoked []*Client
 	for _, sc := range s.deps.State.ChannelSubscribers(channelID) {
+		if ctx.Err() != nil {
+			return nil
+		}
 		if sc.ChannelID == channelID {
 			continue // a member is already served by the channel fan-out
 		}
@@ -236,15 +158,24 @@ func (s *TCPServer) channelSubscribers(ctx context.Context, channelID int64) []*
 		if !ok {
 			continue
 		}
-		if !s.subscribeAllowed(ctx, client, channelID) {
+		allowed := s.subscribeAllowed(ctx, client, channelID)
+		// Cancellation is not a permission decision. In particular, an expired
+		// key fanout must not unsubscribe otherwise authorized readers.
+		if ctx.Err() != nil {
+			return nil
+		}
+		if !allowed {
 			revoked = append(revoked, client)
 			continue
 		}
 		out = append(out, client)
 	}
 	for _, c := range revoked {
+		if ctx.Err() != nil {
+			return nil
+		}
 		s.deps.State.Unsubscribe(c.ID, []int64{channelID})
-		_ = s.sendSubscriptionState(c)
+		_ = s.sendSubscriptionState(ctx, c)
 	}
 	return out
 }
@@ -255,18 +186,69 @@ func (s *TCPServer) broadcastChannelScoped(ctx context.Context, channelID int64,
 	if s.deps == nil || s.deps.Broadcast == nil {
 		return
 	}
-	s.deps.Broadcast.BroadcastToChannel(channelID, payload)
-	for _, c := range s.channelSubscribers(ctx, channelID) {
-		_ = s.deps.Broadcast.BroadcastToClient(c.ID, payload)
+	if s.deps.State == nil {
+		return
 	}
+	guarded, err := eventEnvelope(roleChannelDelivery, roleChannelEvent{ChannelID: channelID, Payload: payload})
+	if err != nil {
+		return
+	}
+	for _, sc := range s.deps.State.ListClients() {
+		if channelID != 0 && sc.ChannelID != channelID && !s.deps.State.IsSubscribed(sc.ClientID, channelID) {
+			continue
+		}
+		if client, ok := s.clientByID(sc.ClientID); ok {
+			_ = s.withRoleAccess(ctx, client, channelID, authorization.ViewChannel, func(context.Context) error {
+				return s.deps.Broadcast.BroadcastToClient(client.ID, guarded)
+			})
+		}
+	}
+}
+
+// Each subscription and its key delivery share a policy revision. Hidden and
+// absent targets use the same refusal; no legacy automatic group grant runs.
+func (s *TCPServer) subscribeWithRoles(ctx context.Context, client *Client, targets []int64, held map[int64]bool, currentChannelID int64) error {
+	refused := false
+	for _, id := range targets {
+		err := s.withRoleAccess(ctx, client, id, authorization.ViewChannel, func(ctx context.Context) error {
+			if id <= 0 {
+				return authorization.ErrRoleForbidden
+			}
+			if _, ok := s.deps.State.GetChannel(id); !ok {
+				return authorization.ErrRoleForbidden
+			}
+			if id == currentChannelID || held[id] {
+				return nil
+			}
+			if len(held) >= maxSubscriptions {
+				return authorization.ErrRoleForbidden
+			}
+			s.deps.State.Subscribe(client.ID, []int64{id})
+			if err := s.deliverScopeKey(ctx, client, id); err != nil {
+				s.deps.State.Unsubscribe(client.ID, []int64{id})
+				return err
+			}
+			held[id] = true
+			return nil
+		})
+		if err != nil {
+			refused = true
+		}
+	}
+	if refused {
+		if err := s.sendErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, "one or more channels are unavailable for subscription"); err != nil {
+			return err
+		}
+	}
+	return s.sendSubscriptionState(ctx, client)
 }
 
 // pushSubscriptionStateTo re-pushes the authoritative set to the named
 // clients, so a drop they did not ask for still reaches them.
-func (s *TCPServer) pushSubscriptionStateTo(clientIDs []string) {
+func (s *TCPServer) pushSubscriptionStateTo(ctx context.Context, clientIDs []string) {
 	for _, id := range clientIDs {
 		if client, ok := s.clientByID(id); ok {
-			_ = s.sendSubscriptionState(client)
+			_ = s.sendSubscriptionState(ctx, client)
 		}
 	}
 }

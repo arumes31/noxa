@@ -9,7 +9,7 @@ require (
 	golang.design/x/hotkey v0.6.1
 	golang.org/x/crypto v0.57.0
 	golang.org/x/sys v0.48.0
-	noxa v0.4.3
+	noxa v0.5.0
 )
 
 require (
@@ -61,3 +61,6 @@ require (
 )
 
 replace noxa => ../
+
+// Narrow native modal-focus fix; see third_party/go-webview2/NOXA-PATCH.md.
+replace github.com/wailsapp/go-webview2 => ./third_party/go-webview2

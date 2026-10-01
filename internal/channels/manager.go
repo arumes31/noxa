@@ -13,6 +13,7 @@ import (
 	"go.uber.org/zap"
 
 	"noxa/internal/auth"
+	"noxa/internal/authorization"
 	"noxa/internal/safecast"
 	"noxa/internal/state"
 	"noxa/internal/store"
@@ -50,11 +51,6 @@ type DeletedMember struct {
 	ClientID  string
 	ChannelID int64
 }
-
-// ChannelAdminGroupName is the channel group a channel's creator is assigned
-// to on that channel (156). The group is seeded by the group bootstrap; when
-// it does not exist the assignment is skipped.
-const ChannelAdminGroupName = "Channel Admin"
 
 // maxChannelDepth caps the recursive ancestor walk used by the cycle guard.
 const maxChannelDepth = 64
@@ -130,15 +126,18 @@ type ChannelManager struct {
 	mu                    sync.Mutex
 	timers                map[int64]*cleanupTimer
 	nextCleanupGeneration uint64
+	cleanupStopped        bool
 
 	// treeMu is shared by every supported channel lifecycle operation. Normal
 	// per-channel work takes a read lock; subtree deletion takes the write lock
 	// so discovery, the cascading database delete, timer cancellation, and the
 	// in-memory removal form one observable operation.
-	treeMu       sync.RWMutex
-	channelLocks keyedMutexPool[int64]
-	clientLocks  keyedMutexPool[string]
-	testHooks    channelManagerHooks
+	treeMu        sync.RWMutex
+	roleMode      bool                     // protected by treeMu; configured before serving
+	roleAuthority *authorization.Authority // cleanup only; never acquired with treeMu held
+	channelLocks  keyedMutexPool[int64]
+	clientLocks   keyedMutexPool[string]
+	testHooks     channelManagerHooks
 
 	cleanupHandlerMu sync.RWMutex
 	cleanupHandler   func(DeleteResult)
@@ -250,6 +249,9 @@ func (m *ChannelManager) CreateChannel(ctx context.Context, spec ChannelSpec) (i
 	}
 	m.treeMu.RLock()
 	defer m.treeMu.RUnlock()
+	if m.roleMode {
+		return 0, ErrRoleLifecycleRequired
+	}
 
 	// Verify the parent channel exists if specified.
 	if spec.ParentID != 0 {
@@ -289,9 +291,9 @@ func (m *ChannelManager) CreateChannel(ctx context.Context, spec ChannelSpec) (i
 	}
 
 	const q = `INSERT INTO channels
-	          (parent_id, name, topic, order_index, channel_type, max_clients, password_hash, created_by, needed_join_power,
+	          (parent_id, name, topic, order_index, channel_type, max_clients, password_hash, created_by,
 	           opus_bitrate, opus_fec, opus_dtx, opus_stereo)
-	          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+	          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 	          RETURNING id, created_at`
 	var (
 		channelID int64
@@ -306,7 +308,6 @@ func (m *ChannelManager) CreateChannel(ctx context.Context, spec ChannelSpec) (i
 		maxClients,
 		passwordHash,
 		createdBy,
-		spec.NeededJoinPower,
 		spec.OpusBitrate,
 		spec.OpusFEC,
 		spec.OpusDTX,
@@ -318,24 +319,20 @@ func (m *ChannelManager) CreateChannel(ctx context.Context, spec ChannelSpec) (i
 
 	// Register in the in-memory state manager.
 	m.state.AddChannel(&state.Channel{
-		ChannelID:       channelID,
-		ParentID:        spec.ParentID,
-		Name:            spec.Name,
-		Topic:           spec.Topic,
-		OrderIndex:      spec.OrderIndex,
-		ChannelType:     int(spec.Type),
-		MaxClients:      spec.MaxClients,
-		CreatedAt:       createdAt,
-		PasswordHash:    passwordHash.String,
-		NeededJoinPower: spec.NeededJoinPower,
-		OpusBitrate:     spec.OpusBitrate,
-		OpusFEC:         spec.OpusFEC,
-		OpusDTX:         spec.OpusDTX,
-		OpusStereo:      spec.OpusStereo,
+		ChannelID:    channelID,
+		ParentID:     spec.ParentID,
+		Name:         spec.Name,
+		Topic:        spec.Topic,
+		OrderIndex:   spec.OrderIndex,
+		ChannelType:  int(spec.Type),
+		MaxClients:   spec.MaxClients,
+		CreatedAt:    createdAt,
+		PasswordHash: passwordHash.String,
+		OpusBitrate:  spec.OpusBitrate,
+		OpusFEC:      spec.OpusFEC,
+		OpusDTX:      spec.OpusDTX,
+		OpusStereo:   spec.OpusStereo,
 	})
-
-	// The creator administers what they created (156).
-	m.assignChannelAdmin(ctx, spec.CreatedBy, channelID)
 
 	m.logger.Info("channel created",
 		zap.Int64("channel_id", channelID),
@@ -369,9 +366,9 @@ func (m *ChannelManager) LoadIntoState(ctx context.Context) (int, error) {
 
 	const q = `SELECT id, COALESCE(parent_id, 0), name, COALESCE(topic, ''),
 	          order_index, channel_type, COALESCE(max_clients, 0), created_at,
-	          COALESCE(password_hash, ''), COALESCE(needed_join_power, 0),
+	          COALESCE(password_hash, ''),
 	          opus_bitrate, opus_fec, opus_dtx, opus_stereo, slow_mode_seconds,
-	          COALESCE(description, ''), inherit_permissions
+	          COALESCE(description, '')
 	          FROM channels ORDER BY id`
 	rows, err := m.store.DB().QueryContext(ctx, q)
 	if err != nil {
@@ -386,9 +383,9 @@ func (m *ChannelManager) LoadIntoState(ctx context.Context) (int, error) {
 		var channelType int16
 		if err := rows.Scan(&ch.ChannelID, &ch.ParentID, &ch.Name, &ch.Topic,
 			&ch.OrderIndex, &channelType, &ch.MaxClients, &ch.CreatedAt,
-			&ch.PasswordHash, &ch.NeededJoinPower,
+			&ch.PasswordHash,
 			&ch.OpusBitrate, &ch.OpusFEC, &ch.OpusDTX, &ch.OpusStereo, &ch.SlowModeSeconds,
-			&ch.Description, &ch.InheritPermissions); err != nil {
+			&ch.Description); err != nil {
 			return count, fmt.Errorf("scanning channel row: %w", err)
 		}
 		parsedType, err := ParseChannelType(int(channelType))
@@ -431,6 +428,9 @@ func (m *ChannelManager) DeleteChannel(ctx context.Context, channelID int64) err
 func (m *ChannelManager) DeleteChannelSubtree(ctx context.Context, channelID int64) (DeleteResult, error) {
 	m.treeMu.Lock()
 	defer m.treeMu.Unlock()
+	if m.roleMode {
+		return DeleteResult{}, ErrRoleLifecycleRequired
+	}
 	return m.deleteChannelLocked(ctx, channelID)
 }
 
@@ -548,6 +548,9 @@ func (m *ChannelManager) SetChannelType(ctx context.Context, channelID int64, ne
 	}
 	m.treeMu.RLock()
 	defer m.treeMu.RUnlock()
+	if m.roleMode {
+		return ErrRoleLifecycleRequired
+	}
 	unlock := m.lockChannels(channelID)
 	defer unlock()
 
@@ -651,9 +654,6 @@ func (m *ChannelManager) UpdateChannel(ctx context.Context, channelID int64, upd
 	if upd.MaxClients != nil && *upd.MaxClients < 0 {
 		return fmt.Errorf("%w: max clients must be >= 0", ErrInvalidSpec)
 	}
-	if upd.NeededJoinPower != nil && *upd.NeededJoinPower < 0 {
-		return fmt.Errorf("%w: needed join power must be >= 0", ErrInvalidSpec)
-	}
 	// Build the SET clause from the non-nil fields only.
 	var sets []string
 	var args []any
@@ -692,9 +692,6 @@ func (m *ChannelManager) UpdateChannel(ctx context.Context, channelID int64, upd
 	if upd.Description != nil {
 		add("description", *upd.Description)
 	}
-	if upd.NeededJoinPower != nil {
-		add("needed_join_power", *upd.NeededJoinPower)
-	}
 	if upd.OrderIndex != nil {
 		add("order_index", *upd.OrderIndex)
 	}
@@ -704,9 +701,6 @@ func (m *ChannelManager) UpdateChannel(ctx context.Context, channelID int64, upd
 		} else {
 			add("parent_id", *upd.ParentID)
 		}
-	}
-	if upd.InheritPermissions != nil {
-		add("inherit_permissions", *upd.InheritPermissions)
 	}
 	if len(sets) == 0 {
 		return nil // nothing to do
@@ -723,6 +717,9 @@ func (m *ChannelManager) UpdateChannel(ctx context.Context, channelID int64, upd
 		unlockTree = m.treeMu.RUnlock
 	}
 	defer unlockTree()
+	if m.roleMode {
+		return ErrRoleLifecycleRequired
+	}
 	oldParentID := int64(0)
 	lockedChannelIDs := []int64{channelID}
 	if upd.ParentID != nil {
@@ -802,18 +799,16 @@ func (m *ChannelManager) UpdateChannel(ctx context.Context, channelID int64, upd
 	// Mirror the change into the in-memory state through its ownership
 	// boundary; GetChannel returns a snapshot and is never a mutation handle.
 	reloaded, err := m.mirrorChannelUpdate(ctx, channelID, state.ChannelUpdate{
-		ParentID:           upd.ParentID,
-		Topic:              upd.Topic,
-		OrderIndex:         upd.OrderIndex,
-		MaxClients:         upd.MaxClients,
-		NeededJoinPower:    upd.NeededJoinPower,
-		OpusBitrate:        upd.OpusBitrate,
-		OpusFEC:            upd.OpusFEC,
-		OpusDTX:            upd.OpusDTX,
-		OpusStereo:         upd.OpusStereo,
-		SlowModeSeconds:    upd.SlowModeSeconds,
-		Description:        upd.Description,
-		InheritPermissions: upd.InheritPermissions,
+		ParentID:        upd.ParentID,
+		Topic:           upd.Topic,
+		OrderIndex:      upd.OrderIndex,
+		MaxClients:      upd.MaxClients,
+		OpusBitrate:     upd.OpusBitrate,
+		OpusFEC:         upd.OpusFEC,
+		OpusDTX:         upd.OpusDTX,
+		OpusStereo:      upd.OpusStereo,
+		SlowModeSeconds: upd.SlowModeSeconds,
+		Description:     upd.Description,
 	})
 	if err != nil {
 		return fmt.Errorf("channel update committed but state reconciliation failed: %w", err)
@@ -852,6 +847,16 @@ func (m *ChannelManager) MoveClient(clientID string, targetChannelID int64) (int
 // and event publication) that must be ordered before a competing subtree
 // deletion. It must not call back into ChannelManager.
 func (m *ChannelManager) MoveClientWithLifecycle(clientID string, targetChannelID int64, afterMove func(oldChannelID int64)) (int64, error) {
+	return m.moveClientWithLifecycle(clientID, targetChannelID, afterMove, false)
+}
+
+// MoveClientWithinCapacity preserves lifecycle ordering while enforcing the
+// channel's resource limit for every role, including the owner.
+func (m *ChannelManager) MoveClientWithinCapacity(clientID string, targetChannelID int64, afterMove func(int64)) (int64, error) {
+	return m.moveClientWithLifecycle(clientID, targetChannelID, afterMove, true)
+}
+
+func (m *ChannelManager) moveClientWithLifecycle(clientID string, targetChannelID int64, afterMove func(int64), enforceCapacity bool) (int64, error) {
 	m.treeMu.RLock()
 	defer m.treeMu.RUnlock()
 	unlockClient := m.clientLocks.lock(clientID)
@@ -864,7 +869,11 @@ func (m *ChannelManager) MoveClientWithLifecycle(clientID string, targetChannelI
 	unlockChannels := m.lockChannels(oldChannelID, targetChannelID)
 	defer unlockChannels()
 
-	if err := m.state.MoveClient(clientID, targetChannelID); err != nil {
+	move := m.state.MoveClient
+	if enforceCapacity {
+		move = m.state.MoveClientWithinCapacity
+	}
+	if err := move(clientID, targetChannelID); err != nil {
 		return oldChannelID, err
 	}
 	m.cancelCleanupLocked(targetChannelID)
@@ -988,7 +997,14 @@ func (m *ChannelManager) StartCleanupWatcher(channelID int64) {
 // startCleanupWatcherLocked replaces the active token for channelID. The
 // caller must hold the channel lifecycle lock.
 func (m *ChannelManager) startCleanupWatcherLocked(channelID int64) {
+	if m.roleMode && m.roleAuthority == nil {
+		return // Role-aware cleanup is installed separately; never fall back.
+	}
 	m.mu.Lock()
+	if m.cleanupStopped {
+		m.mu.Unlock()
+		return
+	}
 
 	// Cancel any existing timer for this channel.
 	if existing, ok := m.timers[channelID]; ok {
@@ -1039,13 +1055,25 @@ func (m *ChannelManager) cancelCleanupLocked(channelID int64) {
 // leaf/emptiness check and database/state deletion. External notification runs
 // only after that lock is released.
 func (m *ChannelManager) cleanupCallback(channelID int64, expected *cleanupTimer) {
+	m.treeMu.RLock()
+	roleMode, authority := m.roleMode, m.roleAuthority
+	m.treeMu.RUnlock()
+	if roleMode {
+		if authority != nil {
+			m.cleanupRoleChannel(authority, channelID, expected)
+		}
+		return
+	}
 	result, err := func() (DeleteResult, error) {
 		m.treeMu.Lock()
 		defer m.treeMu.Unlock()
+		if m.roleMode {
+			return DeleteResult{}, nil
+		}
 
 		m.mu.Lock()
 		active, ok := m.timers[channelID]
-		if expected == nil || !ok || active != expected || active.generation != expected.generation {
+		if m.cleanupStopped || expected == nil || !ok || active != expected || active.generation != expected.generation {
 			m.mu.Unlock()
 			return DeleteResult{}, nil
 		}
@@ -1092,11 +1120,16 @@ func (m *ChannelManager) cleanupCallback(channelID int64, expected *cleanupTimer
 	m.notifyCleanupDelete(result)
 }
 
-// Close cancels all pending cleanup timers. It should be called on server
-// shutdown to avoid goroutine leaks.
+// Close permanently stops cleanup and cancels pending timers. In-flight
+// callbacks cannot rearm watchers after server shutdown.
 func (m *ChannelManager) Close() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.cleanupStopped = true
+	m.cancelAllCleanupLocked()
+}
+
+func (m *ChannelManager) cancelAllCleanupLocked() {
 	for id, t := range m.timers {
 		t.timer.Stop()
 		delete(m.timers, id)
@@ -1245,22 +1278,20 @@ func (m *ChannelManager) mirrorPersistedChannel(channel *state.Channel) {
 	channelType := channel.ChannelType
 	hasPassword := channel.PasswordHash != ""
 	if !m.state.UpdateChannel(channel.ChannelID, state.ChannelUpdate{
-		ParentID:           &channel.ParentID,
-		Name:               &channel.Name,
-		Topic:              &channel.Topic,
-		OrderIndex:         &channel.OrderIndex,
-		ChannelType:        &channelType,
-		MaxClients:         &channel.MaxClients,
-		PasswordHash:       &channel.PasswordHash,
-		HasPassword:        &hasPassword,
-		NeededJoinPower:    &channel.NeededJoinPower,
-		OpusBitrate:        &channel.OpusBitrate,
-		OpusFEC:            &channel.OpusFEC,
-		OpusDTX:            &channel.OpusDTX,
-		OpusStereo:         &channel.OpusStereo,
-		SlowModeSeconds:    &channel.SlowModeSeconds,
-		Description:        &channel.Description,
-		InheritPermissions: &channel.InheritPermissions,
+		ParentID:        &channel.ParentID,
+		Name:            &channel.Name,
+		Topic:           &channel.Topic,
+		OrderIndex:      &channel.OrderIndex,
+		ChannelType:     &channelType,
+		MaxClients:      &channel.MaxClients,
+		PasswordHash:    &channel.PasswordHash,
+		HasPassword:     &hasPassword,
+		OpusBitrate:     &channel.OpusBitrate,
+		OpusFEC:         &channel.OpusFEC,
+		OpusDTX:         &channel.OpusDTX,
+		OpusStereo:      &channel.OpusStereo,
+		SlowModeSeconds: &channel.SlowModeSeconds,
+		Description:     &channel.Description,
 	}) {
 		m.state.AddChannel(channel)
 	}
@@ -1274,14 +1305,12 @@ func channelMatchesUpdate(channel *state.Channel, update ChannelUpdate) bool {
 		(update.Topic == nil || channel.Topic == *update.Topic) &&
 		(update.OrderIndex == nil || channel.OrderIndex == *update.OrderIndex) &&
 		(update.MaxClients == nil || channel.MaxClients == *update.MaxClients) &&
-		(update.NeededJoinPower == nil || channel.NeededJoinPower == *update.NeededJoinPower) &&
 		(update.OpusBitrate == nil || channel.OpusBitrate == *update.OpusBitrate) &&
 		(update.OpusFEC == nil || channel.OpusFEC == *update.OpusFEC) &&
 		(update.OpusDTX == nil || channel.OpusDTX == *update.OpusDTX) &&
 		(update.OpusStereo == nil || channel.OpusStereo == *update.OpusStereo) &&
 		(update.SlowModeSeconds == nil || channel.SlowModeSeconds == *update.SlowModeSeconds) &&
-		(update.Description == nil || channel.Description == *update.Description) &&
-		(update.InheritPermissions == nil || channel.InheritPermissions == *update.InheritPermissions)
+		(update.Description == nil || channel.Description == *update.Description)
 }
 
 // mirrorChannelUpdate applies a patch to state and reloads the authoritative
@@ -1311,47 +1340,14 @@ func (m *ChannelManager) mirrorChannelUpdate(
 }
 
 func (m *ChannelManager) loadChannelState(ctx context.Context, channelID int64) (*state.Channel, error) {
-	const q = `SELECT id, COALESCE(parent_id, 0), name, COALESCE(topic, ''),
-	          order_index, channel_type, COALESCE(max_clients, 0), created_at,
-	          COALESCE(password_hash, ''), COALESCE(needed_join_power, 0),
-	          opus_bitrate, opus_fec, opus_dtx, opus_stereo, slow_mode_seconds,
-	          COALESCE(description, ''), inherit_permissions
-	          FROM channels WHERE id = $1`
-	var (
-		channel     state.Channel
-		channelType int16
-	)
-	err := m.store.DB().QueryRowContext(ctx, q, channelID).Scan(
-		&channel.ChannelID,
-		&channel.ParentID,
-		&channel.Name,
-		&channel.Topic,
-		&channel.OrderIndex,
-		&channelType,
-		&channel.MaxClients,
-		&channel.CreatedAt,
-		&channel.PasswordHash,
-		&channel.NeededJoinPower,
-		&channel.OpusBitrate,
-		&channel.OpusFEC,
-		&channel.OpusDTX,
-		&channel.OpusStereo,
-		&channel.SlowModeSeconds,
-		&channel.Description,
-		&channel.InheritPermissions,
-	)
+	channel, err := scanChannelState(m.store.DB().QueryRowContext(ctx, channelStateSelect+` WHERE id = $1`, channelID))
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, ErrChannelNotFound
 		}
 		return nil, fmt.Errorf("loading committed channel: %w", err)
 	}
-	parsedType, err := ParseChannelType(int(channelType))
-	if err != nil {
-		return nil, fmt.Errorf("channel %d has invalid stored type %d: %w", channelID, channelType, err)
-	}
-	channel.ChannelType = int(parsedType)
-	return &channel, nil
+	return channel, nil
 }
 
 // validateMoveTx checks that channelID may be re-parented under newParentID
@@ -1391,37 +1387,6 @@ func (m *ChannelManager) validateMoveTx(ctx context.Context, tx *sql.Tx, channel
 		}
 		current = parent.Int64
 	}
-}
-
-// assignChannelAdmin gives the channel's creator the channel-admin group on
-// the channel they just created (156). A missing group or a failed assignment
-// is logged and ignored: channel creation must not fail because the group
-// bootstrap has not seeded ChannelAdminGroupName.
-func (m *ChannelManager) assignChannelAdmin(ctx context.Context, userID, channelID int64) {
-	if userID == 0 || m.store == nil {
-		return
-	}
-	g, err := m.store.FindGroupByName(ctx, "channel", ChannelAdminGroupName)
-	if err != nil || g == nil {
-		m.logger.Debug("channel admin group unavailable, skipping auto-assign",
-			zap.Int64("channel_id", channelID),
-			zap.Error(err),
-		)
-		return
-	}
-	if err := m.store.AssignChannelGroup(ctx, g.ID, userID, channelID); err != nil {
-		m.logger.Warn("channel admin auto-assign failed",
-			zap.Int64("channel_id", channelID),
-			zap.Int64("user_id", userID),
-			zap.Error(err),
-		)
-		return
-	}
-	m.logger.Info("channel admin assigned to creator",
-		zap.Int64("channel_id", channelID),
-		zap.Int64("user_id", userID),
-		zap.Int64("channel_group_id", g.ID),
-	)
 }
 
 // channelExists reports whether a channel with the given ID exists in the

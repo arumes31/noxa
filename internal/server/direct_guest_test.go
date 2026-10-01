@@ -29,7 +29,7 @@ func TestDirectMessagesReachOnlineGuestsByUniqueID(t *testing.T) {
 					return conn, "user-uid"
 				}
 				conn := dialRetry(t, env.addr)
-				send(t, conn, netproto.MsgAuthenticate, netproto.Authenticate{Anonymous: true, Nickname: nickname})
+				send(t, conn, netproto.MsgAuthenticate, netproto.Authenticate{Anonymous: true, Nickname: nickname, AuthorizationModels: []string{netproto.AuthorizationModelRolesV1}})
 				var response netproto.AuthResponse
 				if err := netproto.Decode(readOfType(t, conn, netproto.MsgAuthResponse), &response); err != nil {
 					t.Fatal(err)

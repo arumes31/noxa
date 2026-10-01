@@ -22,6 +22,7 @@ func TestResultRejectsIncompleteLoad(t *testing.T) {
 			var st stats
 			st.connectsOK.Store(tc.connects)
 			st.authOK.Store(tc.auth)
+			st.chatParticipants.Store(tc.auth)
 			st.webrtcOK.Store(tc.media)
 			st.connectsFail.Store(tc.connectFail)
 			st.authFail.Store(tc.authFail)

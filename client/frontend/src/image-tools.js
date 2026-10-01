@@ -65,10 +65,10 @@ function loadImage(file) {
 
 // passthroughAnimated returns the file unchanged when it is an animated
 // format (269); null otherwise.
-async function passthroughAnimated(file) {
+async function passthroughAnimated(file, current = () => true) {
     if (file.type !== "image/gif" && file.type !== "image/webp") return null;
     if (file.size > MAX_UPLOAD) {
-        V().toast("animated image too large (max 256 KiB)", "warn");
+        if (current()) V().toast("animated image too large (max 256 KiB)", "warn");
         return { dataBase64: "", contentType: "" };
     }
     return { dataBase64: await readFileBase64(file), contentType: file.type };
@@ -96,8 +96,14 @@ export async function pickAvatar(options = {}) {
 // fits, then shrink the canvas if quality alone is not enough.
 export async function pickIcon(maxDim = 1024, quality = 0.85) {
     const file = await pickFile();
-    if (!file) return null;
-    const anim = await passthroughAnimated(file);
+    return prepareIcon(file, maxDim, quality);
+}
+
+// File-input callers can keep preparation and feedback inside their own view.
+export async function prepareIcon(file, maxDim = 1024, quality = 0.85, current = () => true) {
+    if (!file || !current()) return null;
+    const anim = await passthroughAnimated(file, current);
+    if (!current()) return null;
     if (anim) return anim.dataBase64 ? anim : null;
     if (file.size > 8 * 1024 * 1024) {
         V().toast("image too large (max 8 MiB)", "warn");
@@ -108,6 +114,7 @@ export async function pickIcon(maxDim = 1024, quality = 0.85) {
         const loaded = await loadImage(file);
         const { img } = loaded;
         objectURL = loaded.url;
+        if (!current()) return null;
         let dim = maxDim;
         let best = null;
         for (let attempt = 0; attempt < 4; attempt++) {
@@ -128,10 +135,10 @@ export async function pickIcon(maxDim = 1024, quality = 0.85) {
             }
             dim = Math.max(128, Math.round(dim / 2));
         }
-        V().toast("image could not be compressed under 256 KiB", "warn");
+        if (current()) V().toast("image could not be compressed under 256 KiB", "warn");
         return null;
     } catch {
-        V().toast("cannot read image", "warn");
+        if (current()) V().toast("cannot read image", "warn");
         return null;
     } finally {
         if (objectURL) URL.revokeObjectURL(objectURL);

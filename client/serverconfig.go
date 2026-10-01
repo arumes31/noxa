@@ -7,12 +7,16 @@ import (
 )
 
 // GetServerConfig returns the effective runtime settings exposed to server
-// administrators. The server is authoritative and rejects non-admin callers.
+// managers. The server checks ManageServer in role mode and legacy admin otherwise.
 func (a *App) GetServerConfig() (netproto.ServerConfig, error) {
 	m, err := a.requireCM()
 	if err != nil {
 		return netproto.ServerConfig{}, err
 	}
+	return m.getServerConfig()
+}
+
+func (m *connManager) getServerConfig() (netproto.ServerConfig, error) {
 	f, err := m.request(netproto.MsgServerConfigQuery, netproto.MsgServerConfigResponse,
 		netproto.ServerConfigQuery{}, 5*time.Second)
 	if err != nil {
@@ -31,6 +35,10 @@ func (a *App) SetServerConfig(cfg netproto.ServerConfig) (netproto.ServerConfig,
 	if err != nil {
 		return netproto.ServerConfig{}, err
 	}
+	return m.setServerConfig(cfg)
+}
+
+func (m *connManager) setServerConfig(cfg netproto.ServerConfig) (netproto.ServerConfig, error) {
 	f, err := m.request(netproto.MsgServerConfigSet, netproto.MsgServerConfigResponse, cfg, 5*time.Second)
 	if err != nil {
 		return netproto.ServerConfig{}, err
@@ -40,4 +48,22 @@ func (a *App) SetServerConfig(cfg netproto.ServerConfig) (netproto.ServerConfig,
 		return netproto.ServerConfig{}, err
 	}
 	return applied, nil
+}
+
+// GetServerConfigForTab reads only the server shown when the editor opened.
+func (a *App) GetServerConfigForTab(tabID string) (netproto.ServerConfig, error) {
+	m, err := a.requireTabCM(tabID)
+	if err != nil {
+		return netproto.ServerConfig{}, err
+	}
+	return m.getServerConfig()
+}
+
+// SetServerConfigForTab cannot redirect a delayed editor save to another tab.
+func (a *App) SetServerConfigForTab(tabID string, cfg netproto.ServerConfig) (netproto.ServerConfig, error) {
+	m, err := a.requireTabCM(tabID)
+	if err != nil {
+		return netproto.ServerConfig{}, err
+	}
+	return m.setServerConfig(cfg)
 }

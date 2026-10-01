@@ -243,10 +243,12 @@ func (s *Server) serve(ctx context.Context, conn net.Conn) {
 	}
 
 	s.runSession(ctx, &session{
-		r:               bufio.NewReader(conn),
-		w:               conn,
-		setReadDeadline: conn.SetReadDeadline,
-		remoteIP:        remoteIP(conn),
+		r:                bufio.NewReader(conn),
+		w:                conn,
+		setReadDeadline:  conn.SetReadDeadline,
+		setWriteDeadline: conn.SetWriteDeadline,
+		closeTransport:   conn.Close,
+		remoteIP:         remoteIP(conn),
 	})
 }
 

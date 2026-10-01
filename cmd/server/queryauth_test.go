@@ -1,20 +1,15 @@
 package main
 
 import (
-	"context"
+	"reflect"
 	"testing"
 
-	"noxa/internal/auth"
+	"noxa/internal/query"
 )
 
-func TestQueryBackendHidesUnknownAccount(t *testing.T) {
-	backend := &queryBackend{
-		passwordAuthenticator: func(context.Context, string, string) (bool, error) {
-			return false, auth.ErrUserNotFound
-		},
-	}
-	ok, admin, err := backend.Authenticate(context.Background(), "missing", "password")
-	if err != nil || ok || admin {
-		t.Fatalf("Authenticate unknown = ok=%t admin=%t err=%v, want false false nil", ok, admin, err)
+func TestQueryBackendHasNoLegacyPasswordAuthentication(t *testing.T) {
+	var _ query.Backend = (*queryBackend)(nil)
+	if _, ok := reflect.TypeFor[*queryBackend]().MethodByName("Authenticate"); ok {
+		t.Fatal("query backend still exposes legacy password authentication")
 	}
 }

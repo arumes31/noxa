@@ -79,9 +79,7 @@ func (a *AuthService) RegisterUser(ctx context.Context, nickname, password strin
 		return "", fmt.Errorf("hashing password: %w", err)
 	}
 
-	const q = `INSERT INTO users (unique_id, nickname, password_hash, public_key, created_at)
-	          VALUES ($1, $2, $3, $4, NOW())`
-	_, err = a.store.DB().ExecContext(ctx, q, uniqueID, nickname, hash, pubPEM)
+	_, err = a.store.RegisterUserWithDefaultRole(ctx, uniqueID, nickname, hash, pubPEM)
 	if err != nil {
 		if isUniqueViolation(err) {
 			return "", ErrUserExists
@@ -154,16 +152,16 @@ type User struct {
 	ID       int64
 	UniqueID string
 	Nickname string
-	IsAdmin  bool
+	IsBot    bool // identity metadata; never grants authority or bypasses limits
 }
 
 // LookupUser returns the user row for the given unique ID. It returns
 // ErrUserNotFound when no such user exists.
 func (a *AuthService) LookupUser(ctx context.Context, uniqueID string) (*User, error) {
 	var u User
-	const q = `SELECT id, unique_id, COALESCE(nickname, ''), is_admin FROM users WHERE unique_id = $1`
+	const q = `SELECT id, unique_id, COALESCE(nickname, ''), is_bot FROM users WHERE unique_id = $1`
 	err := a.store.DB().QueryRowContext(ctx, q, uniqueID).
-		Scan(&u.ID, &u.UniqueID, &u.Nickname, &u.IsAdmin)
+		Scan(&u.ID, &u.UniqueID, &u.Nickname, &u.IsBot)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, ErrUserNotFound
@@ -221,10 +219,10 @@ func (a *AuthService) AuthenticateNickname(ctx context.Context, nickname, passwo
 		u    User
 		hash string
 	)
-	const q = `SELECT id, unique_id, COALESCE(nickname, ''), is_admin, COALESCE(password_hash, '')
+	const q = `SELECT id, unique_id, COALESCE(nickname, ''), is_bot, COALESCE(password_hash, '')
 	          FROM users WHERE nickname = $1`
 	err := a.store.DB().QueryRowContext(ctx, q, nickname).
-		Scan(&u.ID, &u.UniqueID, &u.Nickname, &u.IsAdmin, &hash)
+		Scan(&u.ID, &u.UniqueID, &u.Nickname, &u.IsBot, &hash)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			a.verifyUnknownPassword(password)
@@ -262,7 +260,7 @@ func (a *AuthService) AuthenticateIdentifier(ctx context.Context, identifier, pa
 
 func (a *AuthService) lookupCredentialByIdentifier(ctx context.Context, identifier string) (passwordCredential, error) {
 	var credential passwordCredential
-	const q = `SELECT id, unique_id, COALESCE(nickname, ''), is_admin, COALESCE(password_hash, '')
+	const q = `SELECT id, unique_id, COALESCE(nickname, ''), is_bot, COALESCE(password_hash, '')
 	          FROM users
 	          WHERE unique_id = $1 OR nickname = $1
 	          ORDER BY CASE WHEN unique_id = $1 THEN 0 ELSE 1 END
@@ -271,7 +269,7 @@ func (a *AuthService) lookupCredentialByIdentifier(ctx context.Context, identifi
 		&credential.user.ID,
 		&credential.user.UniqueID,
 		&credential.user.Nickname,
-		&credential.user.IsAdmin,
+		&credential.user.IsBot,
 		&credential.hash,
 	)
 	return credential, err
@@ -303,9 +301,9 @@ func (a *AuthService) passwordVerifier() func(password, encodedHash string) erro
 // a nickname login (the account's unique ID stays canonical).
 func (a *AuthService) LookupUserByPublicKey(ctx context.Context, publicKey string) (*User, error) {
 	var u User
-	const q = `SELECT id, unique_id, COALESCE(nickname, ''), is_admin FROM users WHERE public_key = $1`
+	const q = `SELECT id, unique_id, COALESCE(nickname, ''), is_bot FROM users WHERE public_key = $1`
 	err := a.store.DB().QueryRowContext(ctx, q, publicKey).
-		Scan(&u.ID, &u.UniqueID, &u.Nickname, &u.IsAdmin)
+		Scan(&u.ID, &u.UniqueID, &u.Nickname, &u.IsBot)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, ErrUserNotFound

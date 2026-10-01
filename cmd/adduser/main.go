@@ -2,12 +2,11 @@
 //
 // Usage:
 //
-//	adduser -nickname <name> -password <pw> [-admin] [-db <dsn>] [-migration-timeout 5m]
+//	adduser -nickname <name> -password <pw> [-bot] [-integration] [-db <dsn>] [-migration-timeout 5m]
 //
 // The database DSN comes from -db, then NOXA_DATABASE_URL. Migrations are
-// applied (idempotent). With -admin the user gets the is_admin flag
-// (RegisterUser creates non-admin users, so it is set with a follow-up
-// UPDATE).
+// applied (idempotent). The database process lease requires the server to be
+// stopped so an opt-in default role cannot be assigned behind its live cache.
 //
 // Exit codes: 0 on success, and also 0 when the user already exists
 // (idempotent for provisioning scripts); 1 on real errors.
@@ -36,7 +35,8 @@ func main() {
 func runMain() int {
 	nickname := flag.String("nickname", "", "user nickname (required)")
 	password := flag.String("password", "", "user password (required)")
-	admin := flag.Bool("admin", false, "grant server admin (users.is_admin)")
+	bot := flag.Bool("bot", false, "mark an account as a bot (identity only; grants no permissions)")
+	integration := flag.Bool("integration", false, "allow role-mode integration login (grants no permissions)")
 	dsn := flag.String("db", "", "database DSN (default: NOXA_DATABASE_URL; required when unset)")
 	migrationTimeout := flag.Duration("migration-timeout", 5*time.Minute,
 		"maximum time to wait for the migration lock and apply migrations")
@@ -49,7 +49,7 @@ func runMain() int {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	if err := run(ctx, *nickname, *password, *admin, *dsn, *migrationTimeout); err != nil {
+	if err := run(ctx, *nickname, *password, *bot, *integration, *dsn, *migrationTimeout); err != nil {
 		if errors.Is(err, auth.ErrUserExists) {
 			fmt.Printf("user %q already exists (no changes made)\n", *nickname)
 			return 0
@@ -63,10 +63,10 @@ func runMain() int {
 func run(
 	ctx context.Context,
 	nickname, password string,
-	admin bool,
+	bot, integration bool,
 	dsn string,
 	migrationTimeout time.Duration,
-) error {
+) (retErr error) {
 	if ctx == nil {
 		return errors.New("command context is nil")
 	}
@@ -77,6 +77,11 @@ func run(
 	if err != nil {
 		return err
 	}
+	lease, err := store.AcquireRoleProcessLease(ctx, dsn)
+	if err != nil {
+		return fmt.Errorf("acquiring offline role process lease: %w", err)
+	}
+	defer func() { retErr = errors.Join(retErr, lease.Close()) }()
 
 	logger, err := zap.NewProduction()
 	if err != nil {
@@ -95,7 +100,10 @@ func run(
 	}()
 
 	migrationCtx, cancelMigration := context.WithTimeout(ctx, migrationTimeout)
-	err = dbStore.MigrateContext(migrationCtx)
+	err = dbStore.EnsureFreshInstall(migrationCtx)
+	if err == nil {
+		err = dbStore.MigrateContext(migrationCtx)
+	}
 	cancelMigration()
 	if err != nil {
 		return fmt.Errorf("running migrations: %w", err)
@@ -105,19 +113,30 @@ func run(
 	defer cancel()
 
 	authSvc := auth.New(dbStore, logger)
+	if err := lease.Check(ctx); err != nil {
+		return fmt.Errorf("checking offline role process lease before registration: %w", err)
+	}
 	uniqueID, err := authSvc.RegisterUser(ctx, nickname, password)
 	if err != nil {
 		return err
 	}
 
-	if admin {
-		const q = `UPDATE users SET is_admin = TRUE WHERE unique_id = $1`
-		if _, err := dbStore.DB().ExecContext(ctx, q, uniqueID); err != nil {
-			return fmt.Errorf("granting admin: %w", err)
+	if bot {
+		if _, err := dbStore.DB().ExecContext(ctx, `UPDATE users SET is_bot = TRUE WHERE unique_id = $1`, uniqueID); err != nil {
+			return fmt.Errorf("marking bot identity: %w", err)
 		}
 	}
 
-	fmt.Printf("registered user %q\nunique_id: %s\nadmin: %v\n", nickname, uniqueID, admin)
+	if integration {
+		if _, err := dbStore.DB().ExecContext(ctx, `UPDATE users SET integration_enabled = TRUE WHERE unique_id = $1`, uniqueID); err != nil {
+			return fmt.Errorf("enabling integration identity: %w", err)
+		}
+	}
+	if err := lease.Check(ctx); err != nil {
+		return fmt.Errorf("checking offline role process lease after registration: %w", err)
+	}
+
+	fmt.Printf("registered user %q\nunique_id: %s\nbot: %v\nintegration: %v\n", nickname, uniqueID, bot, integration)
 	return nil
 }
 

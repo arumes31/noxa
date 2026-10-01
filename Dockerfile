@@ -61,7 +61,10 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     -mod=readonly -trimpath \
     -ldflags="-s -w -buildid= ${NOXA_LDFLAGS} \
       -X=noxa/internal/version.UpdateRepo=${NOXA_UPDATE_REPO}" \
-    -o /out/noxa ./cmd/server
+    -o /out/noxa ./cmd/server && \
+    CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -mod=readonly -trimpath -ldflags="-s -w" -o /out/adduser ./cmd/adduser && \
+    CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -mod=readonly -trimpath -ldflags="-s -w" -o /out/role-setup ./cmd/role-setup && \
+    CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -mod=readonly -trimpath -ldflags="-s -w" -o /out/e2e ./cmd/e2e
 
 # -----------------------------------------------------------------------------
 # Runtime stage
@@ -73,7 +76,7 @@ FROM alpine:3.24@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec4
 # wget:           used by the HEALTHCHECK below.
 # Require the patched OpenSSL libraries even when the pinned base contains older
 # packages. Keep upgrades scoped to these libraries and their package dependencies.
-RUN apk add --no-cache --upgrade ca-certificates tzdata wget \
+RUN apk add --no-cache --upgrade ca-certificates tzdata wget ffmpeg \
     'libcrypto3>=3.5.8-r0' 'libssl3>=3.5.8-r0'
 
 # Create a non-root user/group with a fixed UID for predictable permissions.
@@ -90,6 +93,7 @@ RUN mkdir -p /data/files /data/recordings \
 
 # Copy the compiled binary from the builder stage.
 COPY --from=builder --chown=10001:10001 /out/noxa /out/noxa
+COPY --from=builder --chown=10001:10001 /out/adduser /out/role-setup /out/e2e /out/
 COPY --chown=10001:10001 scripts/secret-env.sh /usr/local/lib/noxa/secret-env.sh
 COPY --chown=10001:10001 scripts/noxa-entrypoint.sh /usr/local/bin/noxa-entrypoint.sh
 RUN chmod 0555 /usr/local/lib/noxa/secret-env.sh /usr/local/bin/noxa-entrypoint.sh

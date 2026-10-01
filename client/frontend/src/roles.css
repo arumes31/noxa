@@ -1,0 +1,65 @@
+.roles-dialog { width: min(960px, 96vw); max-height: 92vh; display: flex; flex-direction: column; padding: 1.5rem; gap: 1rem; }
+.audit-records { overflow-y: auto; min-height: 0; }
+.audit-record { padding: 1rem 0; border-bottom: 1px solid var(--border); overflow-wrap: anywhere; }
+.audit-record h4 { margin: .35rem 0; }
+.audit-text { white-space: pre-wrap; }
+.audit-changes { width: 100%; table-layout: fixed; border-collapse: collapse; margin: .75rem 0; font-size: .9rem; }
+.audit-changes th, .audit-changes td { text-align: left; vertical-align: top; padding: .5rem; border-bottom: 1px solid var(--border); white-space: pre-wrap; }
+.voice-moderation-dialog { width: min(520px, 96vw); overflow-y: auto; }
+.channel-lifecycle-dialog { width: min(640px, 96vw); }
+.channel-lifecycle-dialog fieldset { border: 0; padding: 0; min-width: 0; }
+.channel-lifecycle-dialog .role-checkbox { display: flex; align-items: center; gap: .5rem; margin: .5rem 0; }
+.channel-lifecycle-dialog .role-checkbox input { flex: 0 0 auto; }
+.roles-header, .roles-footer { display: flex; align-items: center; gap: .75rem; }
+.roles-header h3, .role-status { margin: 0; flex: 1; }
+.roles-body { display: grid; grid-template-columns: 15rem minmax(0, 1fr); min-height: 0; flex: 1; overflow: hidden; border-block: 1px solid var(--border); }
+.roles-sidebar { padding: 1rem 1rem 1rem 0; display: flex; flex-direction: column; gap: .75rem; border-right: 1px solid var(--border); min-height: 0; }
+.role-list { overflow: auto; flex: 1; }
+.role-list-row { display: flex; align-items: center; gap: .25rem; margin-bottom: .25rem; }
+.role-list-row button { min-height: 2.5rem; }
+.role-select { flex: 1; min-width: 0; text-align: left; overflow-wrap: anywhere; }
+.role-select[aria-pressed=true] { background: var(--bg-hover); border-color: var(--text-dim); }
+.role-color-dot { display: inline-block; width: .65rem; height: .65rem; border-radius: 50%; background: var(--text-dim); margin-right: .5rem; }
+.roles-editor { overflow: auto; padding: 1rem 0 1rem 1.5rem; min-height: 15rem; }
+.role-form { border: 0; padding: 0; margin: 0; min-width: 0; }
+.role-field { display: flex; flex-direction: column; gap: .5rem; margin-bottom: 1rem; font-size: .9rem; }
+.role-field[hidden] { display: none; }
+.role-field:has(input[type=checkbox]) { flex-direction: row-reverse; justify-content: flex-end; align-items: center; }
+.role-cosmetics { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+.role-hint { color: var(--text-dim); font-size: .85rem; line-height: 1.5; margin: 0; }
+.role-capability { display: flex; align-items: flex-start; gap: .75rem; padding: .75rem 0; border-bottom: 1px solid var(--border); cursor: pointer; }
+.role-capability input { margin-top: .25rem; }
+.role-capability small { display: block; margin-top: .25rem; }
+.role-group-title { font-size: .9rem; margin: 1.5rem 0 .25rem; }
+.role-error { color: var(--danger); margin: 0; line-height: 1.5; }
+.role-error:empty { display: none; }
+.channel-icon-preview { display: grid; place-items: center; min-height: 8rem; margin-bottom: 1rem; }
+.channel-icon-preview img { max-width: 100%; max-height: 10rem; object-fit: contain; }
+.roles-dialog button { padding: .5rem .75rem; }
+.roles-dialog input[type=checkbox] { accent-color: var(--text-dim); }
+.role-member-list { overflow: auto; min-height: 10rem; }
+.channel-access-content { overflow: auto; min-height: 0; }
+.channel-access-content .roles-header { flex-wrap: wrap; margin-bottom: 1rem; }
+.access-override { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: .5rem 0; border-bottom: 1px solid var(--border); }
+.access-override select { width: 9rem; flex-shrink: 0; }
+.access-check { border-top: 1px solid var(--border); padding-top: 1rem; margin-top: 1rem; }
+.access-check > p { margin-top: .75rem; }
+.channel-impact { border-top: 1px solid var(--border); padding-top: 1rem; margin-top: 1rem; }
+.channel-impact > p { margin: .75rem 0; }
+.channel-impact-member { padding: .75rem 0; border-bottom: 1px solid var(--border); overflow-wrap: anywhere; }
+.channel-impact-member h5 { margin: 0 0 .5rem; font-size: 1rem; }
+.channel-impact-member ul { padding-left: 1.25rem; }
+.role-search-results { display: flex; gap: .5rem; flex-wrap: wrap; }
+.role-member-row { display: flex; align-items: center; gap: .75rem; padding: .75rem 0; border-bottom: 1px solid var(--border); }
+.role-member-name { flex: 1; overflow-wrap: anywhere; }
+.role-chips { display: flex; flex-wrap: wrap; gap: .25rem; }
+.role-chip { font-size: .85rem; border: 1px solid var(--border); padding: .15rem .5rem; border-radius: 1rem; }
+.roles-dialog :focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
+@media (max-width: 640px) {
+    .roles-dialog { padding: 1rem; }
+    .roles-body { display: flex; flex-direction: column; overflow: auto; }
+    .roles-sidebar { max-height: 14rem; flex-shrink: 0; border-right: 0; border-bottom: 1px solid var(--border); padding-right: 0; }
+    .roles-editor { overflow: visible; padding-left: 0; }
+    .roles-footer { flex-wrap: wrap; }
+    .role-status { flex-basis: 100%; }
+}

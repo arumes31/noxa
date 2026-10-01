@@ -318,10 +318,37 @@ func (f *fakeFileStore) UploaderFileUsage(_ context.Context, uploader string) (i
 	return total, nil
 }
 
+func (f *fakeFileStore) FileContentUsage(_ context.Context, channelID int64, sha256, uploader string) (int64, int64, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var channelBytes, uploaderBytes int64
+	for _, rec := range f.files {
+		if rec.ChannelID == channelID && rec.SHA256 == sha256 {
+			channelBytes = max(channelBytes, rec.Size)
+			if rec.Uploader == uploader {
+				uploaderBytes = max(uploaderBytes, rec.Size)
+			}
+		}
+	}
+	return channelBytes, uploaderBytes, nil
+}
+
 func (f *fakeFileStore) addedCount() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return len(f.added)
+}
+
+func (f *fakeFileStore) UploaderContentUsageExcept(_ context.Context, channelID int64, sha256, uploader, folder, name string) (int64, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var size int64
+	for _, rec := range f.files {
+		if rec.ChannelID == channelID && rec.SHA256 == sha256 && rec.Uploader == uploader && (rec.Folder != folder || rec.Name != name) {
+			size = max(size, rec.Size)
+		}
+	}
+	return size, nil
 }
 
 // TestTokenLifecycle verifies issue, single-use consume, ID matching, and

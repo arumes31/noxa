@@ -13,9 +13,9 @@ import (
 	"testing"
 	"time"
 
+	"noxa/internal/authorization"
 	"noxa/internal/config"
 	"noxa/internal/netproto"
-	"noxa/internal/permissions"
 	"noxa/internal/state"
 )
 
@@ -127,7 +127,7 @@ func TestChatHistoryEncryptedRoundTrip(t *testing.T) {
 // history: without it any authenticated client, guest included, enumerates
 // the ids, authors, timestamps and bodies of a channel it never joined.
 func TestChatPinsRequiresMembership(t *testing.T) {
-	env := startTestEnv(t, permsWithPin())
+	env := startTestEnvWithCapabilities(t, authorization.ManageMessages)
 	defer env.stop()
 	alice, bob, key, keyID, _ := chatPair(t, env)
 	defer func() { _ = alice.Close() }()
@@ -142,14 +142,9 @@ func TestChatPinsRequiresMembership(t *testing.T) {
 	send(t, alice, netproto.MsgChatPin, netproto.ChatPin{ChannelID: 1, MessageID: chat.ID, Pinned: true})
 	readEventOfType(t, alice, eventChatPinned)
 
-	// An outsider joins channel 2 and asks for channel 1's pins.
-	env.state.AddChannel(testChannel(2))
+	// An outsider asks for channel 1's pins without joining it.
 	outsider, _ := dialAuthed(t, env.addr, "admin-uid")
 	defer func() { _ = outsider.Close() }()
-	opub, _ := testX25519(t)
-	publishKey(t, outsider, opub)
-	send(t, outsider, netproto.MsgJoinChannel, netproto.JoinChannel{ChannelID: 2})
-	readChannelKeyFor(t, outsider, 2)
 
 	send(t, outsider, netproto.MsgChatPins, netproto.ChatPins{ChannelID: 1})
 	f := readOfType(t, outsider, netproto.MsgError)
@@ -503,8 +498,9 @@ func TestChatEditDelete(t *testing.T) {
 		t.Fatalf("stored after edit = %+v", stored)
 	}
 
-	// Delete by a non-owner non-admin is denied: alice (admin) sends a
-	// message, bob (no permissions) tries to delete it. Read alice's message
+	// Delete by a non-owner is normalized to not-found so message visibility
+	// cannot be used as an oracle. Alice sends a message and bob tries to
+	// delete it. Read alice's message
 	// specifically (bob's own echoes may still be buffered).
 	sendEncChat(t, alice, key, keyID, "1", "admin's message")
 	data = readChatFrom(t, bob, "admin")
@@ -516,8 +512,8 @@ func TestChatEditDelete(t *testing.T) {
 	if err := netproto.Decode(f, &e); err != nil {
 		t.Fatalf("decode error: %v", err)
 	}
-	if e.Code != errCodePermissionDenied {
-		t.Fatalf("non-owner delete: error = %d, want permission denied", e.Code)
+	if e.Code != errCodeNotFound {
+		t.Fatalf("non-owner delete: error = %d, want not found", e.Code)
 	}
 
 	// Owner deletes → chat_deleted + tombstone.
@@ -540,11 +536,10 @@ func TestChatEditDelete(t *testing.T) {
 	}
 }
 
-// TestChatDeleteAny verifies b_chat_delete_any lets a moderator delete
-// others' messages.
+// TestChatDeleteAny verifies ManageMessages lets a moderator delete others'
+// messages.
 func TestChatDeleteAny(t *testing.T) {
-	perms := tieredWith(boolPerm(permissions.PermissionKeyChatDeleteAny, true))
-	env := startTestEnv(t, &perms)
+	env := startTestEnvWithCapabilities(t, authorization.ManageMessages)
 	defer env.stop()
 	alice, bob, key, keyID, _ := chatPair(t, env)
 	defer func() { _ = alice.Close() }()
@@ -595,20 +590,17 @@ func TestSlowMode(t *testing.T) {
 		t.Fatalf("error = %q, want slow mode rejection", e.Message)
 	}
 
-	// The bypass is b_chat_slowmode_bypass, and alice (admin) holds it by
-	// bypassing every check: two messages back to back both land.
+	// Alice is the protected owner, so two messages back to back both land.
 	sendEncChat(t, alice, key, ck.KeyID, "3", "bypass one")
 	readEventOfType(t, bob, eventChat)
 	sendEncChat(t, alice, key, ck.KeyID, "3", "bypass two")
 	readEventOfType(t, bob, eventChat)
 }
 
-// TestSlowModeBypassPermission pins the documented bypass key for a
-// non-admin: without b_chat_slowmode_bypass the second message is rejected,
-// with it both land (114).
+// TestSlowModeBypassPermission verifies BypassSlowmode allows consecutive
+// messages (114).
 func TestSlowModeBypassPermission(t *testing.T) {
-	perms := tieredWith(boolPerm(permissions.PermissionKeyChatSlowmodeBypass, true))
-	env := startTestEnv(t, &perms)
+	env := startTestEnvWithCapabilities(t, authorization.BypassSlowmode)
 	defer env.stop()
 	alice, bob, key, keyID, _ := chatPair(t, env)
 	defer func() { _ = alice.Close() }()
@@ -839,7 +831,7 @@ func TestChatFiltersRuntimeManaged(t *testing.T) {
 
 	// Reading the lists is gated too: they say exactly what to evade.
 	send(t, bob, netproto.MsgChatFilterGet, netproto.ChatFilterGet{})
-	expectChatError(t, bob, string(permissionKeyChatFilterManage))
+	expectChatError(t, bob, "cannot manage")
 
 	// The admin sees the config defaults, flagged as not yet overridden.
 	send(t, alice, netproto.MsgChatFilterGet, netproto.ChatFilterGet{})
@@ -877,22 +869,6 @@ func TestChatFiltersRuntimeManaged(t *testing.T) {
 	env.groups.mu.Unlock()
 	if !audited {
 		t.Fatal("chat_filter_set was not audited")
-	}
-}
-
-// TestChatFilterManageIsDelegable proves the gate is the permission and not
-// admin-ness: a non-admin holding b_chat_filter_manage may manage the lists.
-func TestChatFilterManageIsDelegable(t *testing.T) {
-	perms := tieredWith(boolPerm(permissionKeyChatFilterManage, true))
-	env := startTestEnv(t, &perms)
-	defer env.stop()
-	bob, _ := dialAuthed(t, env.addr, "user-uid")
-	defer func() { _ = bob.Close() }()
-
-	words := "delegated"
-	send(t, bob, netproto.MsgChatFilterSet, netproto.ChatFilterSet{WordFilter: &words})
-	if got := readFilterResponse(t, bob); got.WordFilter != "delegated" || got.FromConfig {
-		t.Fatalf("filters = %+v", got)
 	}
 }
 
@@ -972,8 +948,7 @@ func readChatFrom(t *testing.T, conn net.Conn, from string) json.RawMessage {
 
 // TestChatPins verifies the pin gate, event, and listing (109).
 func TestChatPins(t *testing.T) {
-	perms := tieredWith(boolPerm(permissions.PermissionKeyChannelModify, true))
-	env := startTestEnv(t, &perms)
+	env := startTestEnvWithCapabilities(t, authorization.ManageMessages)
 	defer env.stop()
 	alice, bob, key, keyID, _ := chatPair(t, env)
 	defer func() { _ = alice.Close() }()
@@ -986,7 +961,6 @@ func TestChatPins(t *testing.T) {
 		t.Fatalf("unmarshal chat: %v", err)
 	}
 
-	// admin-uid is admin (bypasses); user-uid has b_channel_modify via perms.
 	send(t, alice, netproto.MsgChatPin, netproto.ChatPin{ChannelID: 1, MessageID: chat.ID, Pinned: true})
 	readEventOfType(t, bob, "chat_pinned")
 
@@ -1035,11 +1009,13 @@ func TestChatReact(t *testing.T) {
 		MessageID int64          `json:"message_id"`
 		Reactions map[string]int `json:"reactions"`
 		Added     bool           `json:"added"`
+		Emoji     string         `json:"emoji"`
+		By        string         `json:"by"`
 	}
 	if err := json.Unmarshal(data, &react); err != nil {
 		t.Fatalf("unmarshal chat_reaction: %v", err)
 	}
-	if react.MessageID != chat.ID || react.Reactions["👍"] != 1 || !react.Added {
+	if react.MessageID != chat.ID || react.Reactions["👍"] != 1 || !react.Added || react.Emoji != "👍" || react.By != "admin-uid" {
 		t.Fatalf("chat_reaction = %+v", react)
 	}
 
@@ -1051,11 +1027,13 @@ func TestChatReact(t *testing.T) {
 		MessageID int64          `json:"message_id"`
 		Reactions map[string]int `json:"reactions"`
 		Added     bool           `json:"added"`
+		Emoji     string         `json:"emoji"`
+		By        string         `json:"by"`
 	}
 	if err := json.Unmarshal(data, &react2); err != nil {
 		t.Fatalf("unmarshal chat_reaction: %v", err)
 	}
-	if react2.Added || react2.Reactions["👍"] != 0 {
+	if react2.Added || react2.Reactions["👍"] != 0 || react2.Emoji != "👍" || react2.By != "admin-uid" {
 		t.Fatalf("after toggle off = %+v", react2)
 	}
 }
@@ -1110,8 +1088,7 @@ func TestDMReceipts(t *testing.T) {
 // TestEmojiUpload verifies the emoji upload gate, storage, event, and list
 // (96).
 func TestEmojiUpload(t *testing.T) {
-	perms := tieredWith(boolPerm(permissions.PermissionKeyEmojiManage, true))
-	env := startTestEnv(t, &perms)
+	env := startTestEnvWithCapabilities(t, authorization.ManageEmoji)
 	defer env.stop()
 	alice, bob, _, _, _ := chatPair(t, env)
 	defer func() { _ = alice.Close() }()
@@ -1123,7 +1100,7 @@ func TestEmojiUpload(t *testing.T) {
 	c2, _ := dialAuthed(t, env2.addr, "user-uid")
 	defer func() { _ = c2.Close() }()
 	send(t, c2, netproto.MsgEmojiUpload, netproto.EmojiUpload{Name: "party", DataBase64: b64e(tinyPNG)})
-	expectChatError(t, c2, "insufficient permission")
+	expectChatError(t, c2, "cannot manage")
 
 	// With permission: upload works, event fires, list contains it.
 	send(t, alice, netproto.MsgEmojiUpload, netproto.EmojiUpload{Name: "party", DataBase64: b64e(tinyPNG)})
@@ -1147,7 +1124,7 @@ func TestMOTDSealedInAuthResponse(t *testing.T) {
 	const canary = "canary-7f3a"
 	env := startTestEnvFull(t, nil, func(c *config.Config) { c.ChatAllowPlaintext = false })
 	defer env.stop()
-	if err := env.srv.SetServerSettingAndAnnounce(t.Context(), "motd", canary); err != nil {
+	if err := env.srv.setServerSettingAndAnnounce(t.Context(), "motd", canary, "test"); err != nil {
 		t.Fatalf("set motd: %v", err)
 	}
 	if v, _, _ := env.chat.GetServerSetting(t.Context(), "motd"); v == canary {
@@ -1180,7 +1157,7 @@ func TestMOTDSealedInAuthResponse(t *testing.T) {
 func dialAuthedPlain(t *testing.T, addr, uniqueID string) (net.Conn, netproto.AuthResponse) {
 	t.Helper()
 	conn := dialRetry(t, addr)
-	send(t, conn, netproto.MsgAuthenticate, netproto.Authenticate{Username: uniqueID, Password: "pw"})
+	send(t, conn, netproto.MsgAuthenticate, netproto.Authenticate{Username: uniqueID, Password: "pw", AuthorizationModels: []string{netproto.AuthorizationModelRolesV1}})
 	f := readOfType(t, conn, netproto.MsgAuthResponse)
 	var resp netproto.AuthResponse
 	if err := netproto.Decode(f, &resp); err != nil {
@@ -1210,7 +1187,7 @@ func TestAnnouncementSealed(t *testing.T) {
 	}
 	global := unsealScopeKey(t, resp.ChatKeys[0], pub, priv)
 
-	if err := env.srv.SetServerSettingAndAnnounce(t.Context(), "announcement", canary); err != nil {
+	if err := env.srv.setServerSettingAndAnnounce(t.Context(), "announcement", canary, "test"); err != nil {
 		t.Fatalf("SetServerSettingAndAnnounce: %v", err)
 	}
 	if v, _, _ := env.chat.GetServerSetting(t.Context(), "announcement"); v == canary {
@@ -1274,54 +1251,6 @@ func TestAnnouncementSealed(t *testing.T) {
 	}
 }
 
-// TestServerTextSealed verifies SendServerText seals in all three target
-// modes. Mode 1 is a server notice sealed under the GLOBAL key, not an E2EE
-// direct message — the server has no DM key and never did.
-func TestServerTextSealed(t *testing.T) {
-	const canary = "canary-7f3a"
-	env := startTestEnv(t, nil)
-	defer env.stop()
-
-	apub, apriv := testX25519(t)
-	alice, resp := dialAuthedX25519(t, env.addr, "admin-uid", apub)
-	defer func() { _ = alice.Close() }()
-	global := unsealScopeKey(t, resp.ChatKeys[0], apub, apriv)
-	clientID := resp.ClientID
-
-	publishKey(t, alice, apub)
-	env.state.AddChannel(testChannel(1))
-	send(t, alice, netproto.MsgJoinChannel, netproto.JoinChannel{ChannelID: 1})
-	ck := readChannelKeyFor(t, alice, 1)
-	channelKey := unsealScopeKey(t, ck, apub, apriv)
-
-	for _, tc := range []struct {
-		name   string
-		mode   int
-		target string
-		key    [32]byte
-		keyID  uint32
-	}{
-		{"direct notice", 1, clientID, global, resp.ChatKeys[0].KeyID},
-		{"channel", 2, "1", channelKey, ck.KeyID},
-		{"global", 3, "", global, resp.ChatKeys[0].KeyID},
-	} {
-		if err := env.srv.SendServerText(tc.mode, tc.target, canary); err != nil {
-			t.Fatalf("%s: SendServerText: %v", tc.name, err)
-		}
-		data := readEventOfType(t, alice, eventChat)
-		var chat netproto.ChatBroadcast
-		if err := json.Unmarshal(data, &chat); err != nil {
-			t.Fatalf("%s: unmarshal chat: %v", tc.name, err)
-		}
-		if !chat.Enc || chat.KeyID != tc.keyID {
-			t.Fatalf("%s: enc/key = %v/%d, want true/%d", tc.name, chat.Enc, chat.KeyID, tc.keyID)
-		}
-		if got := openScopeTest(t, tc.key, chat.Text); got != canary {
-			t.Fatalf("%s: opens to %q, want %q", tc.name, got, canary)
-		}
-	}
-}
-
 // TestServerInfoMOTDPlaintextIsOptIn pins the only way a MOTD can leave the
 // server unsealed (313): an operator setting server_info_motd. The default
 // must stay off, or the server-info reply reopens the plaintext path the rest
@@ -1337,7 +1266,7 @@ func TestServerInfoMOTDPlaintextIsOptIn(t *testing.T) {
 
 	env := startTestEnvFull(t, nil, func(c *config.Config) { c.ServerInfoMOTD = true })
 	defer env.stop()
-	if err := env.srv.SetServerSettingAndAnnounce(t.Context(), "motd", motd); err != nil {
+	if err := env.srv.setServerSettingAndAnnounce(t.Context(), "motd", motd, "test"); err != nil {
 		t.Fatalf("set motd: %v", err)
 	}
 	conn, _ := dialAuthed(t, env.addr, "user-uid")
@@ -1354,7 +1283,7 @@ func TestServerInfoMOTDPlaintextIsOptIn(t *testing.T) {
 
 	off := startTestEnvFull(t, nil, func(c *config.Config) { c.ServerInfoMOTD = false })
 	defer off.stop()
-	if err := off.srv.SetServerSettingAndAnnounce(t.Context(), "motd", motd); err != nil {
+	if err := off.srv.setServerSettingAndAnnounce(t.Context(), "motd", motd, "test"); err != nil {
 		t.Fatalf("set motd: %v", err)
 	}
 	conn2, _ := dialAuthed(t, off.addr, "user-uid")

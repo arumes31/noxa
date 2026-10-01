@@ -34,15 +34,15 @@ func TestMessageTypeString(t *testing.T) {
 	names := []string{
 		"Authenticate",
 		"AuthResponse",
-		"CreateChannel",
-		"ChannelList",
+		"Unknown(3)",
+		"Unknown(4)",
 		"ChatSend",
 		"ChatBroadcast",
 		"Error",
 		"Ping",
 		"Pong",
 		"JoinChannel",
-		"DeleteChannel",
+		"Unknown(11)",
 		"MoveClient",
 		"KickClient",
 		"Snapshot",
@@ -64,14 +64,14 @@ func TestMessageTypeString(t *testing.T) {
 		"AvatarGet",
 		"AvatarData",
 		"ChannelIconSet",
-		"TokenUse",
+		"Unknown(33)",
 		"Complaint",
 		"ScreenShare",
-		"PermissionsQuery",
-		"PermissionsResponse",
+		"Unknown(36)",
+		"Unknown(37)",
 		"ClientInfoQuery",
 		"ClientInfoResponse",
-		"ChannelEdit",
+		"Unknown(40)",
 		"PrioritySpeaker",
 		"KeyPublish",
 		"KeyRequest",
@@ -93,30 +93,30 @@ func TestMessageTypeString(t *testing.T) {
 		"ChatReact",
 		"EmojiGet",
 		"EmojiData",
-		"GroupList",
-		"GroupListResponse",
-		"GroupCreate",
-		"GroupRename",
-		"GroupDelete",
-		"GroupAssign",
-		"GroupUnassign",
-		"PermSet",
-		"PermUnset",
-		"PermTemplateApply",
-		"PermTrace",
-		"PermTraceResponse",
+		"Unknown(62)",
+		"Unknown(63)",
+		"Unknown(64)",
+		"Unknown(65)",
+		"Unknown(66)",
+		"Unknown(67)",
+		"Unknown(68)",
+		"Unknown(69)",
+		"Unknown(70)",
+		"Unknown(71)",
+		"Unknown(72)",
+		"Unknown(73)",
 		"AuditLog",
 		"AuditLogResponse",
-		"GroupIconSet",
-		"GroupIconGet",
-		"GroupIconData",
-		"GroupMembers",
-		"GroupMembersResponse",
+		"Unknown(76)",
+		"Unknown(77)",
+		"Unknown(78)",
+		"Unknown(79)",
+		"Unknown(80)",
 		"BanList",
 		"BanListResponse",
-		"BanRemove",
-		"PermList",
-		"PermListResponse",
+		"Unknown(83)",
+		"Unknown(84)",
+		"Unknown(85)",
 		"FileDelete",
 		"FileRename",
 		"FileVersions",
@@ -135,16 +135,16 @@ func TestMessageTypeString(t *testing.T) {
 		"ChatFilterGet",
 		"ChatFilterSet",
 		"ChatFilterResponse",
-		"GroupEdit",
-		"PermCopy",
-		"PermsInvalid",
+		"Unknown(104)",
+		"Unknown(105)",
+		"Unknown(106)",
 		"ComplaintList",
 		"Complaints",
 		"ComplaintClear",
-		"TokenList",
-		"Tokens",
-		"TokenAdd",
-		"TokenDelete",
+		"Unknown(110)",
+		"Unknown(111)",
+		"Unknown(112)",
+		"Unknown(113)",
 		"ChannelIconGet",
 		"ChannelIconData",
 		"ServerBannerSet",
@@ -162,8 +162,49 @@ func TestMessageTypeString(t *testing.T) {
 		"PreKeyPublish",
 		"PreKeyQuery",
 		"PreKeyBundle",
-		"ServerAdminList",
-		"ServerAdmins",
+		"Unknown(131)",
+		"Unknown(132)",
+		"RoleQuery",
+		"RoleState",
+		"RoleChange",
+		"RoleChangeResult",
+		"AccessCheck",
+		"AccessCheckResult",
+		"RoleMemberQuery",
+		"RoleMembers",
+		"MemberVoiceSet",
+		"MemberVoiceState",
+		"RoleChannelQuery",
+		"RoleChannelState",
+		"RoleChannelChange",
+		"RoleChannelResult",
+		"RoleBanRemove",
+		"RoleBanRemoved",
+		"RoleChannelIconSet",
+		"RoleChannelIconSaved",
+		"ChannelAccessPreview",
+		"ChannelAccessImpact",
+		"ChatMutationSaved",
+		"ChatAccepted",
+		"PokeAccepted",
+		"ClientMoved",
+		"ClientRemoved",
+		"ChannelJoined",
+		"AssetMutationSaved",
+		"FileMutationSaved",
+		"StatusSaved",
+		"MediaControlSaved",
+		"MediaLimitsChanged",
+		"MediaLimitsSet",
+		"MediaLimitsSaved",
+		"VideoStreamControl",
+		"VideoStreamResult",
+		"PollRequest",
+		"PollState",
+		"ConversationRequest",
+		"ConversationResult",
+		"CallRequest",
+		"CallResult",
 	}
 
 	for i, want := range names {
@@ -187,20 +228,20 @@ func TestMessageTypeString(t *testing.T) {
 // Encode/Decode round-trip with all fields intact.
 func TestCodecRoundTrip(t *testing.T) {
 	t.Run("Authenticate", func(t *testing.T) {
-		in := Authenticate{Username: "uid-abc", Password: "secret", ServerPassword: "spw", Nickname: "guesty", Anonymous: true, Token: "tok"}
+		in := Authenticate{Username: "uid-abc", Password: "secret", ServerPassword: "spw", Nickname: "guesty", Anonymous: true, Token: "tok", AuthorizationModels: []string{AuthorizationModelRolesV1}}
 		var out Authenticate
 		roundTrip(t, MsgAuthenticate, in, &out)
-		if out != in {
+		if !reflect.DeepEqual(out, in) {
 			t.Errorf("got %+v, want %+v", out, in)
 		}
 	})
 
 	t.Run("AuthResponse", func(t *testing.T) {
-		in := AuthResponse{OK: true, ClientID: "c-1", UniqueID: "uid-abc", Nickname: "dan", Reason: "x"}
+		in := AuthResponse{OK: true, ClientID: "c-1", UniqueID: "uid-abc", Nickname: "dan", Reason: "x", AuthorizationModel: AuthorizationModelRolesV1}
 		var out AuthResponse
 		roundTrip(t, MsgAuthResponse, in, &out)
 		if out.OK != in.OK || out.ClientID != in.ClientID || out.UniqueID != in.UniqueID ||
-			out.Nickname != in.Nickname || out.Reason != in.Reason || len(out.ICEServers) != 0 {
+			out.Nickname != in.Nickname || out.Reason != in.Reason || len(out.ICEServers) != 0 || out.AuthorizationModel != in.AuthorizationModel {
 			t.Errorf("got %+v, want %+v", out, in)
 		}
 	})
@@ -215,15 +256,6 @@ func TestCodecRoundTrip(t *testing.T) {
 		if len(out.ICEServers) != 2 ||
 			out.ICEServers[0].URLs[0] != "stun:stun.example.com:12340" ||
 			out.ICEServers[1].Username != "123:uid" || out.ICEServers[1].Credential != "cred" {
-			t.Errorf("got %+v, want %+v", out, in)
-		}
-	})
-
-	t.Run("CreateChannel", func(t *testing.T) {
-		in := CreateChannel{Name: "Lobby", Topic: "t", ParentID: 3, Type: 2, MaxClients: 8, Password: "pw", NeededJoinPower: 25}
-		var out CreateChannel
-		roundTrip(t, MsgCreateChannel, in, &out)
-		if out != in {
 			t.Errorf("got %+v, want %+v", out, in)
 		}
 	})
@@ -270,15 +302,6 @@ func TestCodecRoundTrip(t *testing.T) {
 		in := JoinChannel{ChannelID: 42, Password: "pw"}
 		var out JoinChannel
 		roundTrip(t, MsgJoinChannel, in, &out)
-		if out != in {
-			t.Errorf("got %+v, want %+v", out, in)
-		}
-	})
-
-	t.Run("DeleteChannel", func(t *testing.T) {
-		in := DeleteChannel{ChannelID: 42}
-		var out DeleteChannel
-		roundTrip(t, MsgDeleteChannel, in, &out)
 		if out != in {
 			t.Errorf("got %+v, want %+v", out, in)
 		}
@@ -417,15 +440,6 @@ func TestCodecRoundTrip(t *testing.T) {
 		in := ChannelIconSet{ChannelID: 7, DataBase64: "aGVsbG8="}
 		var out ChannelIconSet
 		roundTrip(t, MsgChannelIconSet, in, &out)
-		if out != in {
-			t.Errorf("got %+v, want %+v", out, in)
-		}
-	})
-
-	t.Run("TokenUse", func(t *testing.T) {
-		in := TokenUse{Token: "abc123"}
-		var out TokenUse
-		roundTrip(t, MsgTokenUse, in, &out)
 		if out != in {
 			t.Errorf("got %+v, want %+v", out, in)
 		}

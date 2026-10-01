@@ -14,6 +14,12 @@ import (
 const maxPublishedOneTimePreKeys = 100
 
 func (s *TCPServer) handlePreKeyPublish(ctx context.Context, client *Client, f *netproto.Frame) error {
+	return s.rolePolicyRead(ctx, client, func(ctx context.Context) error {
+		return s.publishSessionPreKeys(ctx, client, f)
+	})
+}
+
+func (s *TCPServer) publishSessionPreKeys(ctx context.Context, client *Client, f *netproto.Frame) error {
 	var msg netproto.PreKeyPublish
 	if err := netproto.Decode(f, &msg); err != nil {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "malformed prekey publish")
@@ -58,6 +64,12 @@ func (s *TCPServer) handlePreKeyPublish(ctx context.Context, client *Client, f *
 }
 
 func (s *TCPServer) handlePreKeyQuery(ctx context.Context, client *Client, f *netproto.Frame) error {
+	return s.rolePolicyRead(ctx, client, func(ctx context.Context) error {
+		return s.querySessionPreKeys(ctx, client, f)
+	})
+}
+
+func (s *TCPServer) querySessionPreKeys(ctx context.Context, client *Client, f *netproto.Frame) error {
 	var msg netproto.PreKeyQuery
 	if err := netproto.Decode(f, &msg); err != nil || msg.UniqueID == "" {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "target unique ID is required")

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -344,7 +345,12 @@ func TestSaveSettingsAndSpecializedEffectsConverge(t *testing.T) {
 				saved.HotkeyPTT = "Ctrl+S"
 				saved.AlwaysOnTop = false
 				runSave := func() {
-					if got := a.SaveSettings(saved); got != "" {
+					got := a.SaveSettings(saved)
+					if saveLast && special.name != "always_on_top" {
+						if !strings.Contains(got, "changed elsewhere") {
+							t.Fatalf("expected conflict, got %q", got)
+						}
+					} else if got != "" {
 						t.Fatal(got)
 					}
 				}
@@ -360,9 +366,6 @@ func TestSaveSettingsAndSpecializedEffectsConverge(t *testing.T) {
 					}
 				}
 				want := special.want
-				if saveLast {
-					want = special.value(saved)
-				}
 				if got := special.live(recorder); got != want {
 					t.Fatalf("live %s = %v, want %v", special.name, got, want)
 				}
@@ -421,14 +424,26 @@ func TestSaveSettingsAndSpecializedEffectsConverge(t *testing.T) {
 			oldDone := make(chan string, 1)
 			go func() { oldDone <- special.run(a) }()
 			<-entered // the specialized family owns the older ticket.
-			if got := a.SaveSettings(saved); got != "" {
-				t.Fatal(got)
-			}
+			want := a.GetSettings()
+			gotSave := a.SaveSettings(saved)
 			close(release)
 			if got := <-oldDone; got != "" {
 				t.Fatal(got)
 			}
-			assertSettingsLiveConverged(t, a, recorder, saved)
+			if special.name == "always_on_top" {
+				if gotSave != "" {
+					t.Fatal(gotSave)
+				}
+				want.WindowOpacity, want.HotkeyPTT = saved.WindowOpacity, saved.HotkeyPTT
+			} else if !strings.Contains(gotSave, "changed elsewhere") {
+				t.Fatalf("expected conflict, got %q", gotSave)
+			}
+			// Initialize effect families untouched by the rejected transaction,
+			// then verify their state agrees with the surviving commit.
+			if got := a.SaveSettings(a.GetSettings()); got != "" {
+				t.Fatal(got)
+			}
+			assertSettingsLiveConverged(t, a, recorder, want)
 		})
 	}
 }

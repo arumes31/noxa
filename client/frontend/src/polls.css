@@ -1,0 +1,14 @@
+.chat-poll { display: grid; gap: 8px; max-width: 440px; padding: 12px; border: 1px solid var(--border); border-radius: 8px; }
+.poll-question { font-size: 1.05em; overflow-wrap: anywhere; }
+.poll-hint, .poll-status { font-size: 12px; opacity: .8; margin: 0; }
+.poll-options { display: grid; gap: 6px; }
+.poll-option { display: flex; justify-content: space-between; gap: 12px; padding: 9px 12px; text-align: left; border: 1px solid var(--border); border-radius: 5px; background: linear-gradient(90deg, #22d3ee24 var(--poll-percent), transparent var(--poll-percent)); color: inherit; overflow-wrap: anywhere; }
+.poll-option[aria-pressed=true] { border-color: #22d3ee; box-shadow: inset 3px 0 #22d3ee; }
+.poll-option:focus-visible { outline: 2px solid #22d3ee; outline-offset: 2px; }
+.poll-count { font-variant-numeric: tabular-nums; }
+.poll-actions { display: flex; justify-content: space-between; gap: 12px; }
+.poll-actions button { color: inherit; background: transparent; border: 0; cursor: pointer; padding: 5px; }
+.poll-dialog { width: min(460px, 94vw); display: grid; gap: 14px; }
+.poll-field { display: grid; gap: 6px; }
+.poll-field input, .poll-field textarea, .poll-field select { width: 100%; box-sizing: border-box; }
+.poll-field input[type=checkbox] { width: auto; justify-self: start; }

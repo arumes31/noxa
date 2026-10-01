@@ -14,10 +14,24 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	"noxa/internal/auth"
+	"noxa/internal/broadcast"
 	"noxa/internal/eventbus"
 	"noxa/internal/query"
 	noxav1 "noxa/v1"
 )
+
+type blockingSnapshotBackend struct {
+	*eventTestBackend
+	read func(context.Context) error
+}
+
+func (b *blockingSnapshotBackend) WithIntegrationSnapshot(ctx context.Context, _ auth.IntegrationPrincipal, deliver func(context.Context, *broadcast.TreeSnapshot) error) error {
+	if err := b.read(ctx); err != nil {
+		return err
+	}
+	return deliver(ctx, &broadcast.TreeSnapshot{})
+}
 
 func TestServerExternalShutdownRetiresCancellationWatcher(t *testing.T) {
 	bus := eventbus.New(zap.NewNop())
@@ -83,7 +97,9 @@ func TestServerShutdownGracefullyDrainsUnaryAndRefusesNewRPCs(t *testing.T) {
 	var releaseOnce sync.Once
 	defer func() { releaseOnce.Do(func() { close(release) }) }()
 	var calls atomic.Int32
-	backend := &stubBackend{listChannelsFn: func(context.Context) []query.ChannelInfo {
+	backend := &blockingSnapshotBackend{eventTestBackend: &eventTestBackend{roleGRPCBackend: &roleGRPCBackend{authenticate: func(context.Context, string, string, string) (auth.IntegrationPrincipal, error) {
+		return auth.IntegrationPrincipal{}, nil
+	}}}, read: func(context.Context) error {
 		if calls.Add(1) == 1 {
 			close(entered)
 			<-release
@@ -98,7 +114,7 @@ func TestServerShutdownGracefullyDrainsUnaryAndRefusesNewRPCs(t *testing.T) {
 	client := noxav1.NewControlClient(dialGRPC(t, addr))
 	firstDone := make(chan error, 1)
 	go func() {
-		_, err := client.ListChannels(authCtx(t, "admin-uid", "pw"), &noxav1.ListChannelsRequest{})
+		_, err := client.ListChannels(roleAuthCtx(t, "admin-uid", "pw"), &noxav1.ListChannelsRequest{})
 		firstDone <- err
 	}()
 	<-entered
@@ -111,7 +127,7 @@ func TestServerShutdownGracefullyDrainsUnaryAndRefusesNewRPCs(t *testing.T) {
 	}()
 	waitForGRPCListenerClosed(t, addr)
 
-	_, err := client.ListChannels(authCtx(t, "admin-uid", "pw"), &noxav1.ListChannelsRequest{})
+	_, err := client.ListChannels(roleAuthCtx(t, "admin-uid", "pw"), &noxav1.ListChannelsRequest{})
 	if status.Code(err) != codes.Unavailable {
 		t.Fatalf("new RPC during graceful shutdown = %v, want Unavailable", err)
 	}
@@ -134,15 +150,20 @@ func TestServerShutdownGracefullyDrainsUnaryAndRefusesNewRPCs(t *testing.T) {
 func TestServerShutdownForcesOpenEventStreamAtDeadline(t *testing.T) {
 	bus := eventbus.New(zap.NewNop())
 	defer bus.Close()
-	srv, addr, cancel, errCh := startGRPCServer(t, &stubBackend{}, bus, nil)
+	srv, addr, cancel, errCh := startGRPCServer(t, &eventTestBackend{roleGRPCBackend: &roleGRPCBackend{authenticate: func(context.Context, string, string, string) (auth.IntegrationPrincipal, error) {
+		return auth.IntegrationPrincipal{}, nil
+	}}}, bus, nil)
 	defer cancel()
 
 	stream, err := noxav1.NewEventsClient(dialGRPC(t, addr)).Subscribe(
-		authCtx(t, "admin-uid", "pw"), &noxav1.SubscribeEventsRequest{})
+		roleAuthCtx(t, "admin-uid", "pw"), &noxav1.SubscribeEventsRequest{})
 	if err != nil {
 		t.Fatalf("Subscribe: %v", err)
 	}
 	waitForSubscribers(t, bus, 1)
+	if _, err := stream.Recv(); err != nil {
+		t.Fatalf("initial role snapshot: %v", err)
+	}
 
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer shutdownCancel()
@@ -255,13 +276,15 @@ func TestServerFatalServeErrorShutsDownExistingTransport(t *testing.T) {
 	entered := make(chan struct{})
 	backendDone := make(chan error, 1)
 	var calls atomic.Int32
-	backend := &stubBackend{listChannelsFn: func(ctx context.Context) []query.ChannelInfo {
+	backend := &blockingSnapshotBackend{eventTestBackend: &eventTestBackend{roleGRPCBackend: &roleGRPCBackend{authenticate: func(context.Context, string, string, string) (auth.IntegrationPrincipal, error) {
+		return auth.IntegrationPrincipal{}, nil
+	}}}, read: func(ctx context.Context) error {
 		if calls.Add(1) == 1 {
 			close(entered)
 			<-ctx.Done()
 			backendDone <- ctx.Err()
 		}
-		return nil
+		return ctx.Err()
 	}}
 	bus := eventbus.New(zap.NewNop())
 	defer bus.Close()
@@ -276,7 +299,7 @@ func TestServerFatalServeErrorShutsDownExistingTransport(t *testing.T) {
 
 	client := noxav1.NewControlClient(dialGRPC(t, listener.Addr().String()))
 	firstDone := make(chan error, 1)
-	firstCtx := authCtx(t, "admin-uid", "pw")
+	firstCtx := roleAuthCtx(t, "admin-uid", "pw")
 	go func() {
 		_, err := client.ListChannels(firstCtx, &noxav1.ListChannelsRequest{})
 		firstDone <- err
@@ -295,7 +318,7 @@ func TestServerFatalServeErrorShutsDownExistingTransport(t *testing.T) {
 	if !srv.draining.Load() {
 		t.Fatal("fatal Serve error did not initiate shutdown")
 	}
-	_, newErr := client.ListChannels(authCtx(t, "admin-uid", "pw"), &noxav1.ListChannelsRequest{})
+	_, newErr := client.ListChannels(roleAuthCtx(t, "admin-uid", "pw"), &noxav1.ListChannelsRequest{})
 	if status.Code(newErr) != codes.Unavailable {
 		t.Fatalf("new RPC after fatal Serve error = %v, want Unavailable", newErr)
 	}

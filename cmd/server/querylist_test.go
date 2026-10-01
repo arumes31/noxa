@@ -1,20 +1,16 @@
-// querylist_test.go covers the ServerQuery channel listing order (163).
+// querylist_test.go covers channel ordering shared by client and integration snapshots.
 package main
 
 import (
-	"context"
 	"testing"
 
 	"go.uber.org/zap"
 
-	"noxa/internal/query"
 	"noxa/internal/state"
 )
 
-// TestListChannelsTotalOrder verifies channellist uses the total
-// (parent, order index, id) order, so a ServerQuery bot and the connected
-// clients never disagree about where a channel sits. Siblings sharing an
-// order index are the case the old unstable sort reshuffled.
+// TestListChannelsTotalOrder verifies the state tree's total
+// (parent, order index, id) order used by client and integration snapshots.
 func TestListChannelsTotalOrder(t *testing.T) {
 	sm := state.New(zap.NewNop())
 	sm.AddChannel(&state.Channel{ChannelID: 1, Name: "Root", OrderIndex: 5})
@@ -23,32 +19,22 @@ func TestListChannelsTotalOrder(t *testing.T) {
 		sm.AddChannel(&state.Channel{ChannelID: id, ParentID: 1, Name: "Child", OrderIndex: 0})
 	}
 
-	q := &queryBackend{stateMgr: sm}
 	want := []int64{2, 1, 10, 20, 30}
 	// Repeat: an unstable sort on a non-total key only misbehaves sometimes.
 	for i := 0; i < 20; i++ {
-		got := q.ListChannels(context.Background())
+		got := sm.ChannelTreeOrdered()
 		if len(got) != len(want) {
-			t.Fatalf("channellist returned %d rows, want %d", len(got), len(want))
+			t.Fatalf("channel tree returned %d rows, want %d", len(got), len(want))
 		}
 		for j, id := range want {
 			if got[j].ChannelID != id {
-				t.Fatalf("channellist order = %v, want %v", ids(got), want)
+				t.Fatalf("channel tree order = %v, want %v", channelIDs(got), want)
 			}
 		}
 	}
 }
 
-func TestQueryBackendCreateChannelRejectsNarrowingWraparound(t *testing.T) {
-	t.Parallel()
-
-	q := &queryBackend{}
-	if _, err := q.CreateChannel(context.Background(), query.ChannelCreateParams{Name: "invalid", Type: 256}); err == nil {
-		t.Fatal("CreateChannel accepted type 256 as temporary channel type 0")
-	}
-}
-
-func ids(rows []query.ChannelInfo) []int64 {
+func channelIDs(rows []*state.Channel) []int64 {
 	out := make([]int64, 0, len(rows))
 	for _, r := range rows {
 		out = append(out, r.ChannelID)

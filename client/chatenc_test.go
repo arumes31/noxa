@@ -308,7 +308,8 @@ func TestMOTDDecryptedBeforeConnectReturns(t *testing.T) {
 			return
 		}
 		_ = netproto.WriteFrame(conn, mustEncode(netproto.MsgAuthResponse, netproto.AuthResponse{
-			OK: true, ClientID: "c1", UniqueID: "u1", Nickname: "alice",
+			OK: true, AuthorizationModel: netproto.AuthorizationModelRolesV1,
+			ClientID: "c1", UniqueID: "u1", Nickname: "alice",
 			MOTD: blob, MOTDEnc: true, MOTDKeyID: 4,
 			ChatKeys: []netproto.ChannelKey{{
 				ChannelID: 0, KeyID: 4,

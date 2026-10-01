@@ -13,8 +13,8 @@ import (
 
 	"go.uber.org/zap"
 
+	"noxa/internal/authorization"
 	"noxa/internal/netproto"
-	"noxa/internal/permissions"
 	"noxa/internal/store"
 )
 
@@ -33,34 +33,6 @@ func portFromAddress(address string) (int, error) {
 	return int(port), nil
 }
 
-// permCheckerInChannel resolves the client's permissions as they apply in a
-// given channel rather than in the one they currently occupy (262): a move
-// has to be judged where the file lands, and channel-tier grants differ per
-// channel. Guests hold the same virtual set everywhere, so they need no
-// second lookup.
-func (s *TCPServer) permCheckerInChannel(ctx context.Context, client *Client, channelID int64) (*permChecker, error) {
-	if client.userID() == 0 {
-		return s.permCheckerFor(ctx, client)
-	}
-	if s.deps == nil || s.deps.Perms == nil || s.deps.Resolver == nil {
-		return nil, errPermsUnavailable
-	}
-	tp, err := s.deps.Perms.LoadForClient(ctx, client.userID(), channelID)
-	if err != nil {
-		return nil, fmt.Errorf("loading permissions: %w", err)
-	}
-	return &permChecker{resolver: s.deps.Resolver, tp: tp, admin: client.isAdmin()}, nil
-}
-
-// uploadQuotaMB resolves the caller's personal upload ceiling. Admins are
-// never capped.
-func (pc *permChecker) uploadQuotaMB() int64 {
-	if pc.admin {
-		return 0
-	}
-	return int64(pc.power(permissions.PermissionKeyFTUploadQuotaMB))
-}
-
 // handleFileTransferInit issues a single-use transfer token after a
 // permission check (upload/download power; unset = allowed, negated =
 // denied) and the file-transfer backend's own validation (size cap, both
@@ -73,49 +45,7 @@ func (s *TCPServer) handleFileTransferInit(ctx context.Context, client *Client, 
 	if s.deps == nil || s.deps.FileTransfer == nil {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "file transfer backend unavailable")
 	}
-
-	pc, err := s.permCheckerFor(ctx, client)
-	if err != nil {
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "permission backend unavailable")
-	}
-
-	var transferID, token string
-	switch msg.Direction {
-	case "upload":
-		if !pc.ftUploadAllowed() {
-			return s.sendErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, "insufficient permission: "+string(permissions.PermissionKeyFTFileUploadPower))
-		}
-		transferID, token, err = s.deps.FileTransfer.InitUpload(ctx, msg.ChannelID, msg.Folder, msg.Name, msg.Size, client.UniqueID, pc.uploadQuotaMB())
-	case "download":
-		if !pc.ftDownloadAllowed() {
-			return s.sendErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, "insufficient permission: "+string(permissions.PermissionKeyFTFileDownloadPower))
-		}
-		transferID, token, err = s.deps.FileTransfer.InitDownload(ctx, msg.ChannelID, msg.Folder, msg.Name)
-	default:
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "direction must be upload or download")
-	}
-	if err != nil {
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "file transfer init failed: "+err.Error())
-	}
-
-	s.logger.Info("file transfer token issued",
-		zap.String("client_id", client.ID),
-		zap.String("direction", msg.Direction),
-		zap.Int64("channel_id", msg.ChannelID),
-		zap.String("name", msg.Name),
-	)
-	resp := netproto.FileTransferInitResponse{
-		TransferID: transferID,
-		Token:      token,
-		Port:       s.deps.FileTransfer.Port(),
-	}
-	// The data port presents the SAME certificate as the control channel, so
-	// the client re-uses the pin it already holds. Without these an
-	// un-upgraded client hangs in a handshake instead of failing legibly.
-	if fp := s.deps.FileTransfer.Fingerprint(); fp != "" {
-		resp.TLS, resp.TLSFingerprint = true, fp
-	}
-	return s.writeMessage(client, netproto.MsgFileTransferInitResponse, resp)
+	return s.roleFileTransferInit(ctx, client, msg)
 }
 
 // fileEntries maps store records to wire entries.
@@ -152,43 +82,37 @@ func (s *TCPServer) handleFileList(ctx context.Context, client *Client, f *netpr
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "legacy path field supports only empty or /")
 	}
 
-	pc, err := s.permCheckerFor(ctx, client)
-	if err != nil {
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "permission backend unavailable")
-	}
-	if !pc.ftDownloadAllowed() {
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, "insufficient permission: "+string(permissions.PermissionKeyFTFileDownloadPower))
-	}
+	return s.fileReadAction(ctx, client, msg.ChannelID, func(ctx context.Context) error {
+		files, err := s.deps.FileTransfer.ListFiles(ctx, msg.ChannelID, folder)
+		if err != nil {
+			return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "listing files failed")
+		}
+		folders, err := s.deps.FileTransfer.ListFileFolders(ctx, msg.ChannelID)
+		if err != nil {
+			return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "listing folders failed")
+		}
+		used, quota, err := s.deps.FileTransfer.ChannelQuota(ctx, msg.ChannelID)
+		if err != nil {
+			return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "reading quota failed")
+		}
 
-	files, err := s.deps.FileTransfer.ListFiles(ctx, msg.ChannelID, folder)
-	if err != nil {
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "listing files failed")
-	}
-	folders, err := s.deps.FileTransfer.ListFileFolders(ctx, msg.ChannelID)
-	if err != nil {
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "listing folders failed")
-	}
-	used, quota, err := s.deps.FileTransfer.ChannelQuota(ctx, msg.ChannelID)
-	if err != nil {
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "reading quota failed")
-	}
-
-	return s.writeMessage(client, netproto.MsgFileListResponse, netproto.FileListResponse{
-		Entries:    fileEntries(files),
-		Folders:    folders,
-		UsedBytes:  used,
-		QuotaBytes: quota,
+		return s.writeMessage(client, netproto.MsgFileListResponse, netproto.FileListResponse{
+			Entries:    fileEntries(files),
+			Folders:    folders,
+			UsedBytes:  used,
+			QuotaBytes: quota,
+		})
 	})
+}
+
+func (s *TCPServer) fileReadAction(ctx context.Context, client *Client, channelID int64, effect func(context.Context) error) error {
+	return s.roleAction(ctx, client, channelID, authorization.DownloadFiles, effect)
 }
 
 // fileManageAllowed gates file delete/rename (263): the uploader and holders
 // of b_ft_delete (admins bypass) may manage a file.
 func (s *TCPServer) fileManageAllowed(ctx context.Context, client *Client, channelID int64, folder, name string) error {
-	pc, err := s.permCheckerFor(ctx, client)
-	if err != nil {
-		return fmt.Errorf("permission backend unavailable")
-	}
-	if pc.admin || pc.granted(permissions.PermissionKeyFTFileDelete) {
+	if s.roleAllowed(ctx, client, channelID, authorization.ManageFiles) {
 		return nil
 	}
 	files, err := s.deps.FileTransfer.ListFiles(ctx, channelID, folder)
@@ -200,8 +124,7 @@ func (s *TCPServer) fileManageAllowed(ctx context.Context, client *Client, chann
 			if rec.Uploader == client.UniqueID {
 				return nil
 			}
-			return fmt.Errorf("insufficient permission: only the uploader or %s holders may manage this file",
-				permissions.PermissionKeyFTFileDelete)
+			return authorization.ErrRoleForbidden
 		}
 	}
 	return fmt.Errorf("file not found")
@@ -213,17 +136,25 @@ func (s *TCPServer) handleFileDelete(ctx context.Context, client *Client, f *net
 	if err := netproto.Decode(f, &msg); err != nil {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "malformed file_delete: "+err.Error())
 	}
+	if msg.AckRequested && (msg.ChannelID < 0 || msg.Name == "") {
+		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "invalid file mutation")
+	}
 	if s.deps == nil || s.deps.FileTransfer == nil {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "file transfer backend unavailable")
 	}
-	if err := s.fileManageAllowed(ctx, client, msg.ChannelID, msg.Folder, msg.Name); err != nil {
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, err.Error())
-	}
-	if err := s.deps.FileTransfer.DeleteFile(ctx, msg.ChannelID, msg.Folder, msg.Name); err != nil {
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodeNotFound, "delete failed: "+err.Error())
-	}
-	s.audit(ctx, client.UniqueID, "file_delete", fmt.Sprintf("%d:%s/%s", msg.ChannelID, msg.Folder, msg.Name), "")
-	return nil
+	return s.roleAction(ctx, client, msg.ChannelID, authorization.ViewChannel, func(ctx context.Context) error {
+		if err := s.fileManageAllowed(ctx, client, msg.ChannelID, msg.Folder, msg.Name); err != nil {
+			return s.sendErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, err.Error())
+		}
+		ctx = s.roleFileContext(ctx, client, msg.ChannelID)
+		if err := s.deps.FileTransfer.DeleteFile(ctx, msg.ChannelID, msg.Folder, msg.Name); err != nil {
+			return s.sendErrorFor(client, requestOrigin(ctx), errCodeNotFound, "delete failed: "+err.Error())
+		}
+		s.auditInChannels(ctx, client.UniqueID, "file_delete", fmt.Sprintf("%d:%s/%s", msg.ChannelID, msg.Folder, msg.Name), "", msg.ChannelID)
+		return s.acknowledgeFile(client, msg.AckRequested, netproto.FileMutationSaved{
+			Operation: netproto.MsgFileDelete, ChannelID: msg.ChannelID, Folder: msg.Folder, Name: msg.Name,
+		})
+	})
 }
 
 // handleFileRename renames/moves a channel file (record + blob), audited.
@@ -232,45 +163,49 @@ func (s *TCPServer) handleFileRename(ctx context.Context, client *Client, f *net
 	if err := netproto.Decode(f, &msg); err != nil {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "malformed file_rename: "+err.Error())
 	}
+	if msg.AckRequested && (msg.ChannelID < 0 || msg.NewChannelID < 0 || msg.Name == "") {
+		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "invalid file mutation")
+	}
 	if s.deps == nil || s.deps.FileTransfer == nil {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "file transfer backend unavailable")
 	}
 	if msg.NewName == "" {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "new_name is required")
 	}
-	if err := s.fileManageAllowed(ctx, client, msg.ChannelID, msg.Folder, msg.Name); err != nil {
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, err.Error())
-	}
-	target := msg.NewChannelID
-	if target == 0 {
-		target = msg.ChannelID
-	}
-	if target != msg.ChannelID {
-		// (262) a cross-channel move is an upload into the destination as much
-		// as a delete from the source, so it needs the upload right THERE:
-		// managing a file in one channel must not be a way to push it into a
-		// channel the mover cannot write to.
-		if s.deps.State == nil {
-			return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "state backend unavailable")
+	return s.roleAction(ctx, client, msg.ChannelID, authorization.ViewChannel, func(ctx context.Context) error {
+		if err := s.fileManageAllowed(ctx, client, msg.ChannelID, msg.Folder, msg.Name); err != nil {
+			return s.sendErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, err.Error())
 		}
-		if _, ok := s.deps.State.GetChannel(target); !ok {
-			return s.sendErrorFor(client, requestOrigin(ctx), errCodeNotFound, "target channel not found")
+		target := msg.NewChannelID
+		if target == 0 {
+			target = msg.ChannelID
 		}
-		pc, err := s.permCheckerInChannel(ctx, client, target)
-		if err != nil {
-			return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "permission backend unavailable")
+		if target != msg.ChannelID {
+			if !s.roleAllowed(ctx, client, target, authorization.UploadFiles) {
+				return authorization.ErrRoleForbidden
+			}
+			// (262) a cross-channel move is an upload into the destination as much
+			// as a delete from the source, so it needs the upload right THERE:
+			// managing a file in one channel must not be a way to push it into a
+			// channel the mover cannot write to.
+			if s.deps.State == nil {
+				return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "state backend unavailable")
+			}
+			if _, ok := s.deps.State.GetChannel(target); !ok {
+				return s.sendErrorFor(client, requestOrigin(ctx), errCodeNotFound, "target channel not found")
+			}
 		}
-		if !pc.ftUploadAllowed() {
-			return s.sendErrorFor(client, requestOrigin(ctx), errCodePermissionDenied,
-				"insufficient permission in the target channel: "+string(permissions.PermissionKeyFTFileUploadPower))
+		ctx = s.roleFileContext(ctx, client, msg.ChannelID)
+		if err := s.deps.FileTransfer.MoveFile(ctx, msg.ChannelID, msg.Folder, msg.Name, target, msg.NewFolder, msg.NewName); err != nil {
+			return s.sendErrorFor(client, requestOrigin(ctx), errCodeNotFound, "rename failed: "+err.Error())
 		}
-	}
-	if err := s.deps.FileTransfer.MoveFile(ctx, msg.ChannelID, msg.Folder, msg.Name, target, msg.NewFolder, msg.NewName); err != nil {
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodeNotFound, "rename failed: "+err.Error())
-	}
-	s.audit(ctx, client.UniqueID, "file_rename", fmt.Sprintf("%d:%s/%s", msg.ChannelID, msg.Folder, msg.Name),
-		fmt.Sprintf("to %d:%s/%s", target, msg.NewFolder, msg.NewName))
-	return nil
+		s.auditInChannels(ctx, client.UniqueID, "file_rename", fmt.Sprintf("%d:%s/%s", msg.ChannelID, msg.Folder, msg.Name),
+			fmt.Sprintf("to %d:%s/%s", target, msg.NewFolder, msg.NewName), msg.ChannelID, target)
+		return s.acknowledgeFile(client, msg.AckRequested, netproto.FileMutationSaved{
+			Operation: netproto.MsgFileRename, ChannelID: msg.ChannelID, Folder: msg.Folder, Name: msg.Name,
+			NewChannelID: msg.NewChannelID, NewFolder: msg.NewFolder, NewName: msg.NewName,
+		})
+	})
 }
 
 // handleFileVersions lists a file's rotated old versions (264).
@@ -282,19 +217,14 @@ func (s *TCPServer) handleFileVersions(ctx context.Context, client *Client, f *n
 	if s.deps == nil || s.deps.FileTransfer == nil {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "file transfer backend unavailable")
 	}
-	pc, err := s.permCheckerFor(ctx, client)
-	if err != nil {
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "permission backend unavailable")
-	}
-	if !pc.ftDownloadAllowed() {
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, "insufficient permission: "+string(permissions.PermissionKeyFTFileDownloadPower))
-	}
-	files, err := s.deps.FileTransfer.ListFileVersions(ctx, msg.ChannelID, msg.Folder, msg.Name)
-	if err != nil {
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "listing versions failed")
-	}
-	return s.writeMessage(client, netproto.MsgFileVersionsResponse, netproto.FileVersionsResponse{
-		Entries: fileEntries(files),
+	return s.fileReadAction(ctx, client, msg.ChannelID, func(ctx context.Context) error {
+		files, err := s.deps.FileTransfer.ListFileVersions(ctx, msg.ChannelID, msg.Folder, msg.Name)
+		if err != nil {
+			return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "listing versions failed")
+		}
+		return s.writeMessage(client, netproto.MsgFileVersionsResponse, netproto.FileVersionsResponse{
+			Entries: fileEntries(files),
+		})
 	})
 }
 
@@ -309,25 +239,10 @@ func (s *TCPServer) handleFileLink(ctx context.Context, client *Client, f *netpr
 	if s.deps == nil || s.deps.FileTransfer == nil {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "file transfer backend unavailable")
 	}
-	pc, err := s.permCheckerFor(ctx, client)
-	if err != nil {
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "permission backend unavailable")
-	}
-	if !pc.admin {
-		files, err := s.deps.FileTransfer.ListFiles(ctx, msg.ChannelID, msg.Folder)
-		if err != nil {
-			return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "checking file owner failed")
-		}
-		owner := false
-		for _, rec := range files {
-			if rec.Name == msg.Name && rec.Uploader == client.UniqueID {
-				owner = true
-			}
-		}
-		if !owner {
-			return s.sendErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, "only the uploader or an admin may create download links")
-		}
-	}
+	return s.roleFileLink(ctx, client, msg)
+}
+
+func (s *TCPServer) fileLinkAllowed(ctx context.Context, client *Client, msg netproto.FileLink) error {
 	port, err := portFromAddress(s.cfg.HealthAddr)
 	if err != nil {
 		s.logger.Warn("invalid health address for download link", zap.String("addr", s.cfg.HealthAddr), zap.Error(err))
@@ -337,15 +252,16 @@ func (s *TCPServer) handleFileLink(ctx context.Context, client *Client, f *netpr
 	if err != nil {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeNotFound, "link failed: "+err.Error())
 	}
-	s.audit(ctx, client.UniqueID, "file_link", fmt.Sprintf("%d:%s/%s", msg.ChannelID, msg.Folder, msg.Name), "")
+	s.auditInChannels(ctx, client.UniqueID, "file_link", fmt.Sprintf("%d:%s/%s", msg.ChannelID, msg.Folder, msg.Name), "", msg.ChannelID)
 
 	// The client builds the final URL from its own control host (the server
 	// cannot know its published address behind Docker/NAT). The health listener
 	// serving /dl is plaintext, regardless of the TLS control connection.
 	return s.writeMessage(client, netproto.MsgFileLinkResponse, netproto.FileLinkResponse{
-		Path:       "/dl/" + token,
-		Scheme:     "http",
-		HealthPort: port,
-		ExpiresAt:  expires.Unix(),
+		Path:         "/dl/" + token,
+		Scheme:       "http",
+		HealthPort:   port,
+		ExpiresAt:    expires.Unix(),
+		SessionBound: true,
 	})
 }

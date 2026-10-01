@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./fixtures.js";
 
 // Real WebAudio and silent MediaStream tracks, with only the native capture
 // boundary controlled so permission races do not depend on physical hardware.
@@ -16,7 +16,8 @@ test.beforeEach(async ({ page }) => {
         };
         window.__quickSavedSettings = structuredClone(settings);
         window.__quickSaveCount = 0;
-        window.runtime = { EventsOn: () => () => {}, EventsEmit() {}, WindowIsFullscreen: async () => false };
+        window.__events = {};
+        window.runtime = { EventsOn: (name, fn) => { (window.__events[name] ||= []).push(fn); return () => {}; }, EventsEmit() {}, WindowIsFullscreen: async () => false };
         window.go = { main: { App: new Proxy({}, { get(_target, method) {
             return async (...args) => {
                 if (method === "GetSettings") return structuredClone(window.__quickSavedSettings);
@@ -51,7 +52,8 @@ test.beforeEach(async ({ page }) => {
         navigator.mediaDevices.getUserMedia = async (constraints) => {
             window.__micRequests.push(structuredClone(constraints));
             if (window.__denyMic) throw new DOMException("Browser permission refused", "NotAllowedError");
-            const stream = window.__micInput.createMediaStreamDestination().stream;
+            window.__micDestination = window.__micInput.createMediaStreamDestination();
+            const stream = window.__micDestination.stream;
             window.__micTracks.push(...stream.getTracks());
             if (window.__delayMic) await new Promise(resolve => { window.__resolveMic = resolve; });
             return stream;
@@ -61,7 +63,7 @@ test.beforeEach(async ({ page }) => {
 });
 
 const begin = page => page.getByRole("button", { name: "Begin Test", exact: true });
-const calibrate = page => page.getByRole("button", { name: "Auto-calibrate (5s ambient)", exact: true });
+const calibrate = page => page.getByRole("button", { name: "Calibrate voice activation", exact: true });
 const loopback = page => page.getByLabel("Loopback test (hear yourself — use headphones!)", { exact: true });
 
 async function leaveCapture(page, exit) {
@@ -142,14 +144,144 @@ test("microphone testing and calibration cannot capture at the same time", async
     await expect.poll(() => page.evaluate(() => window.__micTracks.every(track => track.readyState === "ended"))).toBe(true);
 });
 
-test("ambient calibration counts down from five seconds and releases capture on completion", async ({ page }, testInfo) => {
+test("guided calibration measures quiet and speech then waits for explicit threshold acceptance", async ({ page }, testInfo) => {
     await calibrate(page).click();
     const status = page.locator("#mic-calibration-status");
     await expect(status).toContainText(/5\s*s/);
     await expect(status).toContainText(/4\s*s/);
     await page.screenshot({ path: testInfo.outputPath("microphone-calibration.png") });
-    await expect(calibrate(page)).toBeEnabled({ timeout: 8000 });
-    await expect(status).toContainText(/floor|threshold/i);
+    await expect(status).toContainText("Speak normally", { timeout: 7000 });
+    await page.evaluate(() => {
+        const tone = window.__micInput.createOscillator(), gain = window.__micInput.createGain();
+        gain.gain.value = 0.15; tone.connect(gain).connect(window.__micDestination); tone.start();
+        window.__micTone = tone; void window.__micInput.resume();
+    });
+    await expect(calibrate(page)).toBeEnabled({ timeout: 7000 });
+    await expect(status).toContainText("Suggested threshold");
+    expect(await page.evaluate(() => window.__quickSavedSettings.vad_threshold)).toBe(25);
+    await page.getByRole("button", { name: "Use suggested threshold", exact: true }).click();
+    await expect(page.locator(".settings-save-status")).toContainText("Unsaved changes");
+    await expectReleased(page);
+});
+
+test("microphone meter exposes decibels and a keyboard-only transmission preview", async ({ page }) => {
+    await begin(page).click();
+    await expect(page.getByRole("meter", { name: "Microphone level" })).toBeVisible();
+    await expect(page.locator(".mic-readings")).toContainText("dBFS");
+    await expect(page.locator("#mic-test-status")).toHaveText("No signal detected");
+    const talk = page.getByRole("button", { name: "Test push-to-talk", exact: true });
+    await talk.focus(); await page.keyboard.down("Space");
+    await expect(page.locator(".mic-transmission")).toHaveText("Would transmit");
+    await page.keyboard.up("Space");
+    await expect(talk).toHaveAttribute("aria-pressed", "false");
+    await page.evaluate(() => window.__events.hotkey.forEach(fn => fn("ptt_down")));
+    await expect(page.locator(".mic-key-status")).toHaveText("Shortcut detected");
+    expect(await page.evaluate(() => window.__noxa.state.pttActive)).toBe(false);
+    await page.evaluate(() => window.__events.hotkey.forEach(fn => fn("ptt_up")));
+    await expect(page.locator(".mic-key-status")).toHaveText("Shortcut released");
+});
+
+test("changing processing during a test replaces capture without saving settings", async ({ page }) => {
+    await begin(page).click();
+    await expect.poll(() => page.evaluate(() => window.__micRequests.length)).toBe(1);
+    await page.getByLabel("Noise suppression", { exact: true }).uncheck();
+    await expect.poll(() => page.evaluate(() => window.__micRequests.length)).toBe(2);
+    expect(await page.evaluate(() => window.__micTracks[0].readyState)).toBe("ended");
+    expect(await page.evaluate(() => window.__micRequests[1].audio.noiseSuppression)).toBe(false);
+    expect(await page.evaluate(() => window.__quickSavedSettings.noise_suppression)).toBe(true);
+    await expect(page.locator(".mic-device")).toContainText("Testing:");
+    await expect(page.locator(".settings-save-status")).toContainText("Unsaved changes");
+    await page.locator("#set-apply").click();
+    await expect(page.locator(".settings-save-status")).toHaveText("Changes applied");
+});
+
+test("recording is bounded, plays on the selected output, and is discarded on exit", async ({ page }) => {
+    await page.evaluate(() => {
+        window.__noxa.state.settings.playback_device_id = "test-headset";
+        window.__noxa.openSettings("capture");
+        window.__sinkCalls = [];
+        HTMLMediaElement.prototype.setSinkId = async function (id) { window.__sinkCalls.push(id); window.__previewAudio = this; };
+        const revoke = URL.revokeObjectURL.bind(URL); window.__revoked = [];
+        URL.revokeObjectURL = url => { window.__revoked.push(url); revoke(url); };
+    });
+    await page.getByRole("button", { name: "Record 5 seconds", exact: true }).click();
+    await expect(page.locator("#mic-test-status")).toContainText("Recording —");
+    await page.evaluate(() => {
+        const tone = window.__micInput.createOscillator(), gain = window.__micInput.createGain();
+        gain.gain.value = 0.1; tone.connect(gain).connect(window.__micDestination); tone.start();
+        window.__micTone = tone; void window.__micInput.resume();
+    });
+    const listen = page.getByRole("button", { name: "Listen to recording", exact: true });
+    await expect(listen).toBeEnabled({ timeout: 8000 });
+    await expectReleased(page);
+    await listen.click();
+    await expect.poll(() => page.evaluate(() => window.__sinkCalls)).toEqual(["test-headset"]);
+    await expect.poll(() => page.evaluate(() => window.__previewAudio.paused)).toBe(false);
+    await page.locator("#set-cancel").click();
+    expect(await page.evaluate(() => ({ paused: window.__previewAudio.paused, revoked: window.__revoked.length }))).toEqual({ paused: true, revoked: 1 });
+});
+
+test("monitoring uses the chosen output and reports device failures without losing capture", async ({ page }) => {
+    await page.evaluate(() => {
+        window.__noxa.state.settings.playback_device_id = "missing-headset";
+        window.__noxa.openSettings("capture");
+        HTMLMediaElement.prototype.setSinkId = async () => { throw new Error("Output disconnected"); };
+        const create = AudioContext.prototype.createMediaStreamDestination;
+        window.__loopbackTracks = [];
+        AudioContext.prototype.createMediaStreamDestination = function () {
+            const node = create.call(this); window.__loopbackTracks.push(...node.stream.getTracks()); return node;
+        };
+    });
+    await begin(page).click(); await loopback(page).click();
+    await expect(page.locator("#mic-test-status")).toContainText("Output disconnected");
+    await expect(loopback(page)).not.toBeChecked();
+    expect(await page.evaluate(() => window.__micTracks[0].readyState)).toBe("live");
+    expect(await page.evaluate(() => window.__loopbackTracks.map(track => track.readyState))).toEqual(["ended"]);
+});
+
+test("microphone settings expose a threshold preview and remain usable in narrow windows", async ({ page }, testInfo) => {
+    await page.getByLabel("Voice Activity Detection", { exact: true }).check();
+    await begin(page).click();
+    await expect(page.locator(".mic-threshold-label")).toHaveText("Voice activation threshold: 25%");
+    await expect(page.locator(".mic-transmission")).toHaveText("Below threshold");
+    await page.evaluate(() => {
+        const tone = window.__micInput.createOscillator(), gain = window.__micInput.createGain();
+        gain.gain.value = 0.15; tone.connect(gain).connect(window.__micDestination); tone.start();
+        window.__micTone = tone; void window.__micInput.resume();
+    });
+    await expect(page.locator(".mic-transmission")).toHaveText("Would transmit");
+    await expect(page.locator("#mic-test-status")).toHaveText("Good level");
+    for (const width of [1280, 640]) {
+        await page.setViewportSize({ width, height: 900 });
+        await page.getByRole("meter").scrollIntoViewIfNeeded();
+        expect(await page.locator("#settings-content").evaluate(el => el.scrollWidth <= el.clientWidth)).toBe(true);
+        await page.screenshot({ path: testInfo.outputPath(`microphone-${width}.png`) });
+    }
+    await page.evaluate(() => window.__micTone.stop());
+    await expect(page.locator(".mic-transmission")).toHaveText("Below threshold");
+});
+
+test("leaving during output selection never starts delayed microphone playback", async ({ page }) => {
+    await page.evaluate(() => {
+        HTMLMediaElement.prototype.setSinkId = function () {
+            window.__delayedAudio = this;
+            return new Promise(resolve => { window.__finishOutput = resolve; });
+        };
+    });
+    await begin(page).click(); await loopback(page).check();
+    await expect.poll(() => page.evaluate(() => typeof window.__finishOutput)).toBe("function");
+    await page.locator("#set-cancel").click();
+    await page.evaluate(() => window.__finishOutput());
+    expect(await page.evaluate(() => ({ paused: window.__delayedAudio.paused, stream: window.__delayedAudio.srcObject }))).toEqual({ paused: true, stream: null });
+    await expectReleased(page);
+});
+
+test("cancelled recordings never publish a late replay sample", async ({ page }) => {
+    await page.getByRole("button", { name: "Record 5 seconds", exact: true }).click();
+    await expect(page.locator("#mic-test-status")).toContainText("Recording —");
+    await page.locator("#set-cancel").click();
+    await page.evaluate(() => window.__noxa.openSettings("capture"));
+    await expect(page.getByRole("button", { name: "Listen to recording", exact: true })).toBeDisabled();
     await expectReleased(page);
 });
 

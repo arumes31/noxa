@@ -11,9 +11,9 @@
 //	    [-tls | -tls-fingerprint <sha256> | -tls-insecure]
 //
 // Authentication uses a single shared account for all simulated clients
-// (noxa allows multiple connections per unique ID). Create a test user
-// first (there is no protocol-level registration; use psql or an admin
-// token flow), e.g. via a one-off Go snippet calling auth.RegisterUser.
+// (noxa allows multiple connections per unique ID). Provision a test account
+// with cmd/adduser and grant the test capabilities through the role editor.
+// Authentication always uses roles-v1 with encrypted, confirmed role traffic.
 package main
 
 import (
@@ -22,8 +22,10 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"crypto/tls"
+	"encoding/base64"
 	"encoding/binary"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -45,40 +47,44 @@ import (
 
 // options holds the load-test parameters.
 type options struct {
-	addr        string
-	udpAddr     string
-	clients     int
-	duration    time.Duration
-	ramp        time.Duration
-	uniqueID    string
-	password    string
-	channel     int64
-	udp         bool
-	anonymous   bool
-	tlsVerify   bool
-	tlsPin      string
-	tlsInsecure bool
-	webrtc      bool
-	relayOnly   bool
+	addr               string
+	udpAddr            string
+	clients            int
+	duration           time.Duration
+	ramp               time.Duration
+	uniqueID           string
+	password           string
+	channel            int64
+	udp                bool
+	anonymous          bool
+	tlsVerify          bool
+	tlsPin             string
+	tlsInsecure        bool
+	webrtc             bool
+	relayOnly          bool
+	authorizationModel string
+	loginGate          chan struct{}
 }
 
 // stats accumulates load-test results.
 type stats struct {
-	connectsOK      atomic.Int64
-	connectsFail    atomic.Int64
-	authOK          atomic.Int64
-	authFail        atomic.Int64
-	authFailures    sync.Map // client index -> authFailure; at most one per client
-	sessionFail     atomic.Int64
-	chatSent        atomic.Int64
-	chatRecv        atomic.Int64
-	pongs           atomic.Int64
-	webrtcOK        atomic.Int64
-	webrtcFail      atomic.Int64
-	rtpSent         atomic.Int64
-	rtpRecv         atomic.Int64
-	rtpReceivers    atomic.Int64
-	receiverPackets sync.Map // client index -> *atomic.Int64
+	connectsOK       atomic.Int64
+	connectsFail     atomic.Int64
+	authOK           atomic.Int64
+	authFail         atomic.Int64
+	authFailures     sync.Map // client index -> authFailure; at most one per client
+	sessionFail      atomic.Int64
+	chatSent         atomic.Int64
+	chatRecv         atomic.Int64
+	chatConfirmed    sync.Map // client index -> first encrypted self-echo observed
+	chatParticipants atomic.Int64
+	pongs            atomic.Int64
+	webrtcOK         atomic.Int64
+	webrtcFail       atomic.Int64
+	rtpSent          atomic.Int64
+	rtpRecv          atomic.Int64
+	rtpReceivers     atomic.Int64
+	receiverPackets  sync.Map // client index -> *atomic.Int64
 
 	// authLatencyBuckets: <10ms, <50ms, <100ms, <500ms, <1s, >=1s.
 	authLatency [6]atomic.Int64
@@ -112,6 +118,8 @@ func (s *stats) recordAuthFailure(index int, stage string, err error) {
 		failure.category = "malformed_response"
 	case stage == "rejected":
 		failure.category = "rejected"
+	case errors.Is(err, errAuthorizationModel):
+		failure.category = "authorization_model_mismatch"
 	case errors.As(err, &transportErr) && transportErr.Timeout():
 		failure.category = "timeout"
 	}
@@ -138,6 +146,9 @@ func (s *stats) result(opts options) error {
 	}
 	if s.sessionFail.Load() != 0 {
 		return errors.New("one or more control sessions failed before the requested duration")
+	}
+	if selectedAuthorizationModel(opts) == netproto.AuthorizationModelRolesV1 && s.chatParticipants.Load() != want {
+		return errors.New("encrypted chat acceptance was not observed for every requested client")
 	}
 	if opts.webrtc {
 		if s.webrtcOK.Load() != want || s.webrtcFail.Load() != 0 || s.rtpSent.Load() == 0 {
@@ -173,16 +184,24 @@ func (s *stats) bucketLatency(d time.Duration) {
 // print writes the final report.
 func (s *stats) print(opts options) {
 	fmt.Println("--- loadtest report ---")
-	fmt.Printf("clients=%d duration=%s ramp=%s\n", opts.clients, opts.duration, opts.ramp)
+	fmt.Printf("clients=%d duration=%s ramp=%s authorization_model=%s\n", opts.clients, opts.duration, opts.ramp, opts.authorizationModel)
 	fmt.Printf("connects: ok=%d fail=%d\n", s.connectsOK.Load(), s.connectsFail.Load())
 	fmt.Printf("auth:     ok=%d fail=%d\n", s.authOK.Load(), s.authFail.Load())
+	modelMismatch := false
 	for i := 0; i < opts.clients; i++ {
 		if failure, ok := s.authFailures.Load(i); ok {
 			fmt.Printf("auth_failure client=%d %s\n", i, failure.(authFailure))
+			modelMismatch = modelMismatch || failure.(authFailure).category == "authorization_model_mismatch"
 		}
+	}
+	if modelMismatch {
+		fmt.Println("the server must support authorization_model=roles-v1")
 	}
 	fmt.Printf("sessions: fail=%d\n", s.sessionFail.Load())
 	fmt.Printf("chat:     sent=%d received=%d\n", s.chatSent.Load(), s.chatRecv.Load())
+	if selectedAuthorizationModel(opts) == netproto.AuthorizationModelRolesV1 {
+		fmt.Printf("chat:     confirmed_clients=%d\n", s.chatParticipants.Load())
+	}
 	fmt.Printf("pongs:    %d\n", s.pongs.Load())
 	if opts.webrtc {
 		fmt.Printf("webrtc:  ok=%d fail=%d opus_rtp_sent=%d opus_rtp_received=%d receivers=%d\n", s.webrtcOK.Load(), s.webrtcFail.Load(), s.rtpSent.Load(), s.rtpRecv.Load(), s.rtpReceivers.Load())
@@ -216,6 +235,7 @@ func main() {
 	flag.BoolVar(&opts.tlsInsecure, "tls-insecure", false, "dial with unverified TLS 1.3 (explicit loopback-only test mode)")
 	flag.BoolVar(&opts.webrtc, "webrtc", false, "publish a continuous Opus RTP stream from every simulated client")
 	flag.BoolVar(&opts.relayOnly, "ice-relay-only", false, "require TURN relay candidates (for the Toxiproxy chaos profile)")
+	flag.StringVar(&opts.authorizationModel, "authorization-model", netproto.AuthorizationModelRolesV1, "required server authorization model (roles-v1)")
 	flag.Parse()
 
 	if _, _, err := controlTLSConfig(opts); err != nil {
@@ -246,8 +266,16 @@ func main() {
 // run executes the load test: it starts opts.clients simulated clients,
 // staggered over the ramp period, waits for the duration, and returns.
 func run(ctx context.Context, opts options, st *stats) error {
+	if err := validateAuthorizationModel(opts.authorizationModel); err != nil {
+		return err
+	}
 	ctx, cancel := context.WithTimeout(ctx, opts.duration)
 	defer cancel()
+	// Account clients share an IP and principal. Serialize only authentication
+	// so their in-flight verifications respect the server's login limiter.
+	if !opts.anonymous {
+		opts.loginGate = make(chan struct{}, 1)
+	}
 
 	var wg sync.WaitGroup
 	for i := 0; i < opts.clients; i++ {
@@ -397,6 +425,34 @@ func isLoopbackEndpoint(addr string) bool {
 
 // simulateClient is one simulated client connection lifecycle.
 func simulateClient(ctx context.Context, opts options, st *stats, index int) {
+	if err := validateAuthorizationModel(opts.authorizationModel); err != nil {
+		st.recordAuthFailure(index, "model", errAuthorizationModel)
+		return
+	}
+	model := selectedAuthorizationModel(opts)
+	var chat *loadChat
+	if model == netproto.AuthorizationModelRolesV1 {
+		var err error
+		chat, err = newLoadChat()
+		if err != nil {
+			st.recordAuthFailure(index, "keys", err)
+			return
+		}
+	}
+	// Do not open waiting sockets: the server's authentication deadline starts
+	// when it accepts a connection, before this client's turn in the gate.
+	var releaseLogin func()
+	if opts.loginGate != nil {
+		select {
+		case opts.loginGate <- struct{}{}:
+		case <-ctx.Done():
+			st.recordAuthFailure(index, "wait", ctx.Err())
+			return
+		}
+		var released sync.Once
+		releaseLogin = func() { released.Do(func() { <-opts.loginGate }) }
+		defer releaseLogin()
+	}
 	conn, err := dialControl(opts)
 	if err != nil {
 		st.connectsFail.Add(1)
@@ -410,6 +466,10 @@ func simulateClient(ctx context.Context, opts options, st *stats, index int) {
 	authMsg := netproto.Authenticate{Username: opts.uniqueID, Password: opts.password}
 	if opts.anonymous {
 		authMsg = netproto.Authenticate{Anonymous: true, Nickname: fmt.Sprintf("loadtest-%d", index)}
+	}
+	if chat != nil {
+		authMsg.AuthorizationModels = []string{model}
+		authMsg.X25519PublicKey = base64.StdEncoding.EncodeToString(chat.public[:])
 	}
 	start := time.Now()
 	if err := writeMsg(conn, netproto.MsgAuthenticate, authMsg); err != nil {
@@ -428,13 +488,32 @@ func simulateClient(ctx context.Context, opts options, st *stats, index int) {
 		return
 	}
 	if !resp.OK {
+		if resp.AuthorizationModel != "" && resp.AuthorizationModel != model {
+			st.recordAuthFailure(index, "model", errAuthorizationModel)
+			return
+		}
 		st.recordAuthFailure(index, "rejected", nil)
 		return
 	}
+	if resp.AuthorizationModel != model {
+		st.recordAuthFailure(index, "model", errAuthorizationModel)
+		return
+	}
 	st.authOK.Add(1)
+	if releaseLogin != nil {
+		releaseLogin()
+	}
+	if chat != nil {
+		for _, key := range resp.ChatKeys {
+			if err := chat.install(key); err != nil {
+				st.sessionFail.Add(1)
+				return
+			}
+		}
+	}
 
 	// Consume the snapshot.
-	if _, err := readOfType(conn, netproto.MsgSnapshot, 5*time.Second); err != nil {
+	if _, err := readOfType(conn, netproto.MsgSnapshot, 5*time.Second, chat.observe); err != nil {
 		st.sessionFail.Add(1)
 		return
 	}
@@ -445,11 +524,17 @@ func simulateClient(ctx context.Context, opts options, st *stats, index int) {
 			st.sessionFail.Add(1)
 			return
 		}
+		if chat != nil {
+			if err := awaitRoleJoin(conn, chat, resp.ClientID, opts.channel); err != nil {
+				st.sessionFail.Add(1)
+				return
+			}
+		}
 	}
 
 	var pc *webrtc.PeerConnection
 	if opts.webrtc {
-		pc, err = startOpusPublisher(conn, resp.ICEServers, opts.relayOnly, ctx, st, index)
+		pc, err = startOpusPublisher(conn, resp.ICEServers, opts.relayOnly, ctx, st, index, chat.observe)
 		if err != nil {
 			st.webrtcFail.Add(1)
 			return
@@ -467,18 +552,49 @@ func simulateClient(ctx context.Context, opts options, st *stats, index int) {
 
 	// Reader: count incoming pongs and chat events.
 	readErr := make(chan error, 1)
-	go func() {
+	readTraffic := func() error {
 		for {
 			f, err := netproto.ReadFrame(conn)
 			if err != nil {
-				readErr <- err
-				return
+				return err
 			}
 			switch netproto.MessageType(f.Type) {
 			case netproto.MsgPong:
 				st.pongs.Add(1)
 			case netproto.MsgEvent:
-				st.chatRecv.Add(1)
+				if chat != nil {
+					received, confirmed, err := chat.receive(f, resp.ClientID)
+					if err != nil {
+						return err
+					}
+					if received {
+						st.chatRecv.Add(1)
+					}
+					if confirmed {
+						if _, loaded := st.chatConfirmed.LoadOrStore(index, true); !loaded {
+							st.chatParticipants.Add(1)
+						}
+					}
+				} else {
+					var event struct {
+						Type string `json:"type"`
+					}
+					if json.Unmarshal(f.Payload, &event) == nil && event.Type == "chat" {
+						st.chatRecv.Add(1)
+					}
+				}
+			case netproto.MsgError:
+				return errControlRejected
+			case netproto.MsgChannelKey:
+				if chat != nil {
+					var key netproto.ChannelKey
+					if err := netproto.Decode(f, &key); err != nil {
+						return err
+					}
+					if err := chat.install(key); err != nil {
+						return err
+					}
+				}
 			case netproto.MsgPing:
 				// Answer server-initiated keepalive pings.
 				_ = writeMsg(conn, netproto.MsgPong, netproto.Pong{})
@@ -497,30 +613,59 @@ func simulateClient(ctx context.Context, opts options, st *stats, index int) {
 						if ctx.Err() == nil {
 							st.webrtcFail.Add(1)
 						}
-						readErr <- err
-						return
+						return err
 					}
 				}
 			}
 		}
+	}
+	readerDone := make(chan struct{})
+	go func() {
+		defer close(readerDone)
+		err := readTraffic()
+		if err != nil && (ctx.Err() == nil || errors.Is(err, errControlRejected)) {
+			st.sessionFail.Add(1)
+		}
+		readErr <- err
 	}()
+	defer func() { _ = conn.Close(); <-readerDone }()
+	if chat != nil {
+		message, err := chat.message()
+		if err != nil {
+			st.sessionFail.Add(1)
+			return
+		}
+		if err := writeMsg(conn, netproto.MsgChatSend, message); err != nil {
+			st.sessionFail.Add(1)
+			return
+		}
+		st.chatSent.Add(1)
+	}
 
 	chatTicker := time.NewTicker(2 * time.Second)
 	defer chatTicker.Stop()
 	pingTicker := time.NewTicker(5 * time.Second)
 	defer pingTicker.Stop()
+	var chatSequence uint64
 
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-readErr:
-			if ctx.Err() == nil {
-				st.sessionFail.Add(1)
-			}
 			return
 		case <-chatTicker.C:
-			if err := writeMsg(conn, netproto.MsgChatSend, netproto.ChatSend{Text: "loadtest ping"}); err != nil {
+			chatSequence++
+			message := netproto.ChatSend{Text: fmt.Sprintf("loadtest ping %d %d", index, chatSequence)}
+			if chat != nil {
+				var err error
+				message, err = chat.message()
+				if err != nil {
+					st.sessionFail.Add(1)
+					return
+				}
+			}
+			if err := writeMsg(conn, netproto.MsgChatSend, message); err != nil {
 				if ctx.Err() == nil {
 					st.sessionFail.Add(1)
 				}
@@ -541,7 +686,7 @@ func simulateClient(ctx context.Context, opts options, st *stats, index int) {
 // startOpusPublisher creates a real Pion peer and writes a valid Opus silence
 // packet every 20ms. Waiting for local ICE gathering avoids a separate client
 // trickle writer and makes the 100-client runner deterministic on localhost.
-func startOpusPublisher(conn net.Conn, supplied []netproto.ICEServer, relayOnly bool, ctx context.Context, st *stats, index int) (*webrtc.PeerConnection, error) {
+func startOpusPublisher(conn net.Conn, supplied []netproto.ICEServer, relayOnly bool, ctx context.Context, st *stats, index int, observers ...func(*netproto.Frame) error) (*webrtc.PeerConnection, error) {
 	configuration := webrtc.Configuration{}
 	if relayOnly {
 		configuration.ICETransportPolicy = webrtc.ICETransportPolicyRelay
@@ -616,7 +761,7 @@ func startOpusPublisher(conn net.Conn, supplied []netproto.ICEServer, relayOnly 
 		_ = pc.Close()
 		return nil, err
 	}
-	answer, earlyCandidates, earlyOffer, err := readWebRTCAnswer(conn, 10*time.Second)
+	answer, earlyCandidates, earlyOffer, err := readWebRTCAnswer(conn, 10*time.Second, observers...)
 	if err != nil {
 		_ = pc.Close()
 		return nil, err
@@ -705,7 +850,7 @@ func readRTPIdentifiers(source io.Reader) (uint16, uint32, uint32, error) {
 		binary.BigEndian.Uint32(seed[6:10]), nil
 }
 
-func readWebRTCAnswer(conn net.Conn, timeout time.Duration) (netproto.WebRTCAnswer, []netproto.ICECandidate, *netproto.Frame, error) {
+func readWebRTCAnswer(conn net.Conn, timeout time.Duration, observers ...func(*netproto.Frame) error) (netproto.WebRTCAnswer, []netproto.ICECandidate, *netproto.Frame, error) {
 	_ = conn.SetReadDeadline(time.Now().Add(timeout))
 	defer func() { _ = conn.SetReadDeadline(time.Time{}) }()
 	var candidates []netproto.ICECandidate
@@ -715,7 +860,14 @@ func readWebRTCAnswer(conn net.Conn, timeout time.Duration) (netproto.WebRTCAnsw
 		if err != nil {
 			return netproto.WebRTCAnswer{}, nil, nil, err
 		}
+		for _, observe := range observers {
+			if err := observe(f); err != nil {
+				return netproto.WebRTCAnswer{}, nil, nil, err
+			}
+		}
 		switch netproto.MessageType(f.Type) {
+		case netproto.MsgError:
+			return netproto.WebRTCAnswer{}, nil, nil, errors.New("server rejected media setup")
 		case netproto.MsgWebRTCOffer:
 			// A peer can have only one unanswered local offer. Bound buffering
 			// even if a broken server sends repeated offers without an answer.
@@ -788,13 +940,18 @@ var errMalformedServerReply = errors.New("malformed server error frame")
 
 // readOfType reads frames until the requested type, a server rejection, or
 // the deadline. Requesting MsgError explicitly still returns its raw frame.
-func readOfType(conn net.Conn, mt netproto.MessageType, timeout time.Duration) (*netproto.Frame, error) {
+func readOfType(conn net.Conn, mt netproto.MessageType, timeout time.Duration, observers ...func(*netproto.Frame) error) (*netproto.Frame, error) {
 	_ = conn.SetReadDeadline(time.Now().Add(timeout))
 	defer func() { _ = conn.SetReadDeadline(time.Time{}) }()
 	for {
 		f, err := netproto.ReadFrame(conn)
 		if err != nil {
 			return nil, err
+		}
+		for _, observe := range observers {
+			if err := observe(f); err != nil {
+				return nil, err
+			}
 		}
 		if netproto.MessageType(f.Type) == mt {
 			return f, nil

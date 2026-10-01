@@ -3,7 +3,9 @@
 package webrtc
 
 import (
+	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -57,6 +59,108 @@ func establishVoiceSession(t *testing.T, v *Voice, clientPC *webrtc.PeerConnecti
 type offerRecorder struct {
 	mu   sync.Mutex
 	sdps []string
+}
+
+func TestClientReofferPreservesMediaTransport(t *testing.T) {
+	v := runtimeVoice(t)
+	e := v.engine
+	client := newClientPC(t)
+	establishVoiceSession(t, v, client, "camera")
+	peer := e.PeerConnection("camera")
+	if _, err := client.AddTransceiverFromKind(webrtc.RTPCodecTypeVideo); err != nil {
+		t.Fatal(err)
+	}
+	establishVoiceSession(t, v, client, "camera")
+	if e.PeerConnection("camera") != peer {
+		t.Fatal("camera renegotiation replaced the live DTLS transport")
+	}
+	select {
+	case <-peer.Done():
+		t.Fatal("camera renegotiation closed the existing peer")
+	default:
+	}
+}
+
+func TestOfferCollisionPreservesOutstandingServerOffer(t *testing.T) {
+	v := runtimeVoice(t)
+	client := newClientPC(t)
+	establishVoiceSession(t, v, client, "collision")
+	peer := v.engine.PeerConnection("collision")
+	serverOffer, err := peer.CreateOffer()
+	if err != nil {
+		t.Fatal(err)
+	}
+	clientOffer, err := client.CreateOffer(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := v.HandleOffer("collision", clientOffer.SDP, nil); !errors.Is(err, ErrOfferCollision) {
+		t.Fatalf("collision = %v", err)
+	}
+	if peer.pc.SignalingState() != webrtc.SignalingStateHaveLocalOffer {
+		t.Fatal("collision discarded server offer")
+	}
+	if err := client.SetRemoteDescription(webrtc.SessionDescription{Type: webrtc.SDPTypeOffer, SDP: serverOffer}); err != nil {
+		t.Fatal(err)
+	}
+	answer, err := client.CreateAnswer(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := client.SetLocalDescription(answer); err != nil {
+		t.Fatal(err)
+	}
+	if err := peer.HandleAnswer(answer.SDP); err != nil {
+		t.Fatal(err)
+	}
+	establishVoiceSession(t, v, client, "collision")
+	if v.engine.PeerConnection("collision") != peer {
+		t.Fatal("collision replaced transport")
+	}
+}
+
+func TestPartiallyAppliedReofferRequiresReconnect(t *testing.T) {
+	v := runtimeVoice(t)
+	client := newClientPC(t)
+	establishVoiceSession(t, v, client, "broken-offer")
+	offer, err := client.CreateOffer(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(offer.SDP, "\r\n")
+	kept := lines[:0]
+	for _, line := range lines {
+		if !strings.HasPrefix(line, "a=ice-ufrag:") && !strings.HasPrefix(line, "a=ice-pwd:") {
+			kept = append(kept, line)
+		}
+	}
+	_, err = v.HandleOffer("broken-offer", strings.Join(kept, "\r\n"), nil)
+	if !errors.Is(err, ErrPeerReset) {
+		t.Fatalf("partially applied SDP error = %v, want reconnect", err)
+	}
+}
+
+func TestReplacementTrackRetiresOnlySupersededClaim(t *testing.T) {
+	r := NewRouter(nil)
+	r.SetTrackSlots("publisher", map[string]string{"old-screen": SlotScreen, "mic": SlotMic})
+	key := SlotScreen + slotSep + "f"
+	old, ok := r.claimSlot("publisher", key, "old-screen")
+	if !ok {
+		t.Fatal("initial screen rejected")
+	}
+	mic, _ := r.claimSlot("publisher", SlotMic, "mic")
+	if _, ok := r.claimSlot("publisher", key, "intruder"); ok {
+		t.Fatal("undeclared duplicate stole the live screen")
+	}
+	r.SetTrackSlots("publisher", map[string]string{"new-screen": SlotScreen, "mic": SlotMic})
+	next, ok := r.claimSlot("publisher", key, "new-screen")
+	if !ok || r.ownsSlot("publisher", key, old) || !r.ownsSlot("publisher", SlotMic, mic) {
+		t.Fatal("replacement failed to retire only the superseded reader")
+	}
+	r.releaseSlot("publisher", key, old)
+	if !r.ownsSlot("publisher", key, next) {
+		t.Fatal("old reader cleanup released the replacement")
+	}
 }
 
 func (o *offerRecorder) add(sdp string) {

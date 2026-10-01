@@ -159,6 +159,68 @@ func TestPeerPubKeyRejectsMismatchedDirectoryUID(t *testing.T) {
 	}
 }
 
+func TestPeerPubKeyRetryBounds(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		retryMS int64
+		want    int
+	}{
+		{"ordinary error", 0, 1},
+		{"invalid delay", -1, 1},
+		{"excessive delay", 1 << 62, 1},
+		{"persistent throttling", 1, 3},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var requests atomic.Int32
+			_, cm := newPipedApp(t, func(*netproto.Frame) (netproto.MessageType, any, bool) {
+				requests.Add(1)
+				return netproto.MsgError, netproto.Error{Code: 2, Message: "lookup failed", OriginType: uint16(netproto.MsgKeyRequest), RetryAfterMS: tc.retryMS}, true
+			})
+			if _, ok := cm.peerPubKey("peer"); ok {
+				t.Fatal("failed lookup returned a key")
+			}
+			if got := int(requests.Load()); got != tc.want {
+				t.Fatalf("requests = %d, want %d", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestPeerPubKeyDisconnectCancelsBackoff(t *testing.T) {
+	limited := make(chan struct{}, 1)
+	_, cm := newPipedApp(t, func(*netproto.Frame) (netproto.MessageType, any, bool) {
+		limited <- struct{}{}
+		return netproto.MsgError, netproto.Error{Code: 2, Message: "try later", OriginType: uint16(netproto.MsgKeyRequest), RetryAfterMS: 5000}, true
+	})
+	result := make(chan bool, 1)
+	go func() { _, ok := cm.peerPubKey("peer"); result <- ok }()
+	<-limited
+	// Wait until the response has left the request slot, so this exercises
+	// cancellation of the retry wait, not cancellation of an in-flight read.
+	deadline := time.Now().Add(time.Second)
+	for {
+		cm.mu.Lock()
+		_, pending := cm.pending[netproto.MsgKeyResponse]
+		cm.mu.Unlock()
+		if !pending {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("rate-limit response was not dispatched")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	cm.disconnect()
+	select {
+	case ok := <-result:
+		if ok {
+			t.Fatal("disconnected lookup returned a key")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("disconnect did not cancel key retry backoff")
+	}
+}
+
 func TestScopeDecryptFollowersQueueForReplay(t *testing.T) {
 	store := newScopeKeyStore()
 	var got []string

@@ -7,7 +7,7 @@ import (
 )
 
 func TestRunRejectsInvalidMigrationBounds(t *testing.T) {
-	if err := run(context.Background(), "name", "password", false, "postgres://unused", 0); err == nil ||
+	if err := run(context.Background(), "name", "password", false, false, "postgres://unused", 0); err == nil ||
 		!strings.Contains(err.Error(), "positive") {
 		t.Fatalf("run(zero timeout) error = %v, want timeout validation", err)
 	}

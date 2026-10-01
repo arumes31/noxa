@@ -319,6 +319,16 @@ export const SOUND_DEFINITIONS = {
         "gain": 1,
         "cooldown": 250,
         "concurrency": "replace same event within session; priority admission"
+    },
+    "stream_watch_started": {
+        "label": "Someone started watching your stream",
+        "category": "Notifications",
+        "character": "Soft rising pair of short textured contacts",
+        "duration": 0.185,
+        "priority": 1,
+        "gain": 1,
+        "cooldown": 250,
+        "concurrency": "replace same event within session; priority admission"
     }
 };
 export const SOUND_URLS = {
@@ -354,6 +364,7 @@ export const SOUND_URLS = {
     ban: new URL("./assets/sounds/ban.wav", import.meta.url).href,
     announcement: new URL("./assets/sounds/announcement.wav", import.meta.url).href,
     channel_watch: new URL("./assets/sounds/channel_watch.wav", import.meta.url).href,
+    stream_watch_started: new URL("./assets/sounds/stream_watch_started.wav", import.meta.url).href,
 };
 export const SOUND_EVENTS = Object.keys(SOUND_DEFINITIONS);
 export const SOUND_EVENT_GROUPS = [
@@ -507,6 +518,10 @@ export const SOUND_EVENT_GROUPS = [
             [
                 "channel_watch",
                 "Channel watch"
+            ],
+            [
+                "stream_watch_started",
+                "Someone started watching your stream"
             ]
         ]
     }

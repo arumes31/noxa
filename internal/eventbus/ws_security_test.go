@@ -33,12 +33,8 @@ func testWSHandlerConfig(now func() time.Time) wsHandlerConfig {
 func TestWSHandlerRejectsUnsafeRequestsBeforeAuthentication(t *testing.T) {
 	bus := New(zap.NewNop())
 	defer bus.Close()
-	var authCalls atomic.Int64
-	auth := func(context.Context, string, string) (bool, bool, error) {
-		authCalls.Add(1)
-		return true, true, nil
-	}
-	handler := Handler(bus, auth, zap.NewNop())
+	backend := &roleWSBackend{}
+	handler := HandlerWithRoleBackend(bus, backend, zap.NewNop(), nil, nil)
 
 	for _, tc := range []struct {
 		name       string
@@ -81,8 +77,8 @@ func TestWSHandlerRejectsUnsafeRequestsBeforeAuthentication(t *testing.T) {
 			}
 		})
 	}
-	if authCalls.Load() != 0 {
-		t.Fatalf("authentication calls = %d, want 0", authCalls.Load())
+	if backend.logins.Load() != 0 {
+		t.Fatalf("authentication calls = %d, want 0", backend.logins.Load())
 	}
 }
 
@@ -92,8 +88,8 @@ func TestWSHandlerFailsClosedWithoutDependencies(t *testing.T) {
 	bus := New(zap.NewNop())
 	defer bus.Close()
 	for _, handler := range []http.Handler{
-		Handler(nil, testAuth, zap.NewNop()),
-		Handler(bus, nil, zap.NewNop()),
+		HandlerWithRoleBackend(nil, &roleWSBackend{}, zap.NewNop(), nil, nil),
+		HandlerWithRoleBackend(bus, nil, zap.NewNop(), nil, nil),
 	} {
 		recorder := httptest.NewRecorder()
 		handler.ServeHTTP(recorder, request.Clone(request.Context()))
@@ -144,8 +140,9 @@ func TestWSAuthenticatedPlainHTTPRequestDoesNotPanic(t *testing.T) {
 	defer bus.Close()
 	request := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "http://localhost/events", nil)
 	request.SetBasicAuth("admin-uid", "pw")
+	request.Header.Set("Noxa-Authorization-Model", "roles-v1")
 	recorder := httptest.NewRecorder()
-	Handler(bus, testAuth, zap.NewNop()).ServeHTTP(recorder, request)
+	HandlerWithRoleBackend(bus, &roleWSBackend{}, zap.NewNop(), nil, nil).ServeHTTP(recorder, request)
 	if recorder.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400", recorder.Code)
 	}
@@ -182,12 +179,16 @@ func TestWSHandlerRateLimitsAuthentication(t *testing.T) {
 	defer bus.Close()
 	cfg := testWSHandlerConfig(time.Now)
 	cfg.maxAuthAttempts = 2
-	handler := newWSHandler(bus, testAuth, zap.NewNop(), cfg)
+	cfg.roleBackend = &roleWSBackend{authenticate: func(context.Context, string, string, string) (auth.IntegrationPrincipal, error) {
+		return auth.IntegrationPrincipal{}, auth.ErrIntegrationDenied
+	}}
+	handler := newWSHandler(bus, zap.NewNop(), cfg)
 
 	for attempt := 1; attempt <= 3; attempt++ {
 		request := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "http://localhost/events", nil)
 		request.RemoteAddr = "192.0.2.15:4321"
 		request.SetBasicAuth("admin-uid", "wrong")
+		request.Header.Set("Noxa-Authorization-Model", "roles-v1")
 		recorder := httptest.NewRecorder()
 		handler.ServeHTTP(recorder, request)
 		want := http.StatusUnauthorized
@@ -216,20 +217,22 @@ func TestWSHandlerReservesSharedLoginKDF(t *testing.T) {
 	entered := make(chan struct{}, 1)
 	release := make(chan struct{})
 	var calls atomic.Int32
-	authenticate := func(context.Context, string, string) (bool, bool, error) {
+	authenticate := func(context.Context, string, string, string) (auth.IntegrationPrincipal, error) {
 		calls.Add(1)
 		entered <- struct{}{}
 		<-release
-		return false, false, nil
+		return auth.IntegrationPrincipal{}, auth.ErrIntegrationDenied
 	}
 	cfg := testWSHandlerConfig(time.Now)
 	cfg.maxAuthAttempts = 10
 	cfg.loginLimiter = limiter
-	handler := newWSHandler(bus, authenticate, zap.NewNop(), cfg)
+	cfg.roleBackend = &roleWSBackend{authenticate: authenticate}
+	handler := newWSHandler(bus, zap.NewNop(), cfg)
 
 	first := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "http://localhost/events", nil)
 	first.RemoteAddr = "192.0.2.10:1000"
 	first.SetBasicAuth("first", "wrong")
+	first.Header.Set("Noxa-Authorization-Model", "roles-v1")
 	firstResult := make(chan int, 1)
 	go func() {
 		recorder := httptest.NewRecorder()
@@ -245,6 +248,7 @@ func TestWSHandlerReservesSharedLoginKDF(t *testing.T) {
 	second := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "http://localhost/events", nil)
 	second.RemoteAddr = "192.0.2.11:1000"
 	second.SetBasicAuth("second", "wrong")
+	second.Header.Set("Noxa-Authorization-Model", "roles-v1")
 	secondRecorder := httptest.NewRecorder()
 	handler.ServeHTTP(secondRecorder, second)
 	if secondRecorder.Code != http.StatusTooManyRequests {
@@ -263,7 +267,7 @@ func TestWSHandlerReservesSharedLoginKDF(t *testing.T) {
 func TestWSRejectsCrossOriginHandshake(t *testing.T) {
 	bus := New(zap.NewNop())
 	defer bus.Close()
-	server := httptest.NewServer(Handler(bus, testAuth, zap.NewNop()))
+	server := httptest.NewServer(HandlerWithRoleBackend(bus, &roleWSBackend{}, zap.NewNop(), nil, nil))
 	defer server.Close()
 
 	endpoint := "ws" + strings.TrimPrefix(server.URL, "http")
@@ -272,6 +276,7 @@ func TestWSRejectsCrossOriginHandshake(t *testing.T) {
 		t.Fatal(err)
 	}
 	config.Header.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte("admin-uid:pw")))
+	config.Header.Set("Noxa-Authorization-Model", "roles-v1")
 	if conn, err := websocket.DialConfig(config); err == nil {
 		_ = conn.Close()
 		t.Fatal("cross-origin websocket handshake succeeded")
@@ -281,7 +286,7 @@ func TestWSRejectsCrossOriginHandshake(t *testing.T) {
 func TestWSAllowsBotWithoutOrigin(t *testing.T) {
 	bus := New(zap.NewNop())
 	defer bus.Close()
-	server := httptest.NewServer(Handler(bus, testAuth, zap.NewNop()))
+	server := httptest.NewServer(HandlerWithRoleBackend(bus, &roleWSBackend{}, zap.NewNop(), nil, nil))
 	defer server.Close()
 
 	conn, err := (&net.Dialer{}).DialContext(t.Context(), "tcp", server.Listener.Addr().String())
@@ -296,7 +301,8 @@ func TestWSAllowsBotWithoutOrigin(t *testing.T) {
 		"Connection: Upgrade\r\n" +
 		"Sec-WebSocket-Version: 13\r\n" +
 		"Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n" +
-		"Authorization: Basic " + authorization + "\r\n\r\n"
+		"Authorization: Basic " + authorization + "\r\n" +
+		"Noxa-Authorization-Model: roles-v1\r\n\r\n"
 	if _, err := io.WriteString(conn, request); err != nil {
 		t.Fatal(err)
 	}
@@ -316,17 +322,19 @@ func TestWSLimitsConcurrentStreamsAndIncomingFrames(t *testing.T) {
 	cfg := testWSHandlerConfig(time.Now)
 	cfg.maxConnections = 1
 	cfg.maxAuthAttempts = 10
-	server := httptest.NewServer(newWSHandler(bus, testAuth, zap.NewNop(), cfg))
+	cfg.roleBackend = &roleWSBackend{}
+	server := httptest.NewServer(newWSHandler(bus, zap.NewNop(), cfg))
 	defer server.Close()
 	endpoint := "ws" + strings.TrimPrefix(server.URL, "http")
 
-	first := dialWS(t, endpoint, "admin-uid", "pw")
+	first := dialRoleWS(t, server.URL)
 	waitForSubscribers(t, bus, 1)
 	config, err := websocket.NewConfig(endpoint, server.URL)
 	if err != nil {
 		t.Fatal(err)
 	}
 	config.Header.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte("admin-uid:pw")))
+	config.Header.Set("Noxa-Authorization-Model", "roles-v1")
 	if conn, err := websocket.DialConfig(config); err == nil {
 		_ = conn.Close()
 		t.Fatal("second websocket stream exceeded connection limit")

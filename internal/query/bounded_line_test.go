@@ -23,7 +23,7 @@ func (r *countedLineReader) Read(p []byte) (int, error) {
 func TestQueryRejectsOversizedLineBeforeTerminator(t *testing.T) {
 	for _, suffix := range []string{"", "\nversion\n"} {
 		t.Run("suffix="+suffix, func(t *testing.T) {
-			s := New("", nil, newFakeBackend())
+			s := New("", nil, &roleQueryBackend{})
 			s.MaxLineLength = 32
 			input := &countedLineReader{r: strings.NewReader(strings.Repeat("x", 64*1024) + suffix)}
 			var output bytes.Buffer
@@ -44,7 +44,7 @@ func TestQueryRejectsOversizedLineBeforeTerminator(t *testing.T) {
 func TestQueryLineLimitBoundaryAndEOF(t *testing.T) {
 	for _, input := range []string{"help\n", "help\r\n", "help"} {
 		t.Run(input, func(t *testing.T) {
-			s := New("", nil, newFakeBackend())
+			s := New("", nil, &roleQueryBackend{})
 			s.MaxLineLength = 4
 			var output bytes.Buffer
 			s.runSession(context.Background(), &session{r: bufio.NewReader(strings.NewReader(input)), w: &output})

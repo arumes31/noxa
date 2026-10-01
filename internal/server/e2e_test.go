@@ -20,6 +20,7 @@ import (
 	"golang.org/x/crypto/nacl/box"
 	"golang.org/x/crypto/nacl/secretbox"
 
+	"noxa/internal/authorization"
 	"noxa/internal/chatcrypto"
 	"noxa/internal/config"
 	"noxa/internal/netproto"
@@ -66,29 +67,6 @@ func TestMoveCommitsWhenChannelKeyDeliveryIsCancelled(t *testing.T) {
 				}
 			}
 		}
-	}
-}
-
-func TestKickClientRecordsAuditWithCallerContext(t *testing.T) {
-	env := startTestEnv(t, nil)
-	defer env.stop()
-	conn, clientID := dialAuthed(t, env.addr, "user-uid")
-	defer func() { _ = conn.Close() }()
-	env.state.AddChannel(testChannel(1))
-	if err := env.state.MoveClient(clientID, 1); err != nil {
-		t.Fatalf("position client for kick: %v", err)
-	}
-	if err := env.srv.KickClient(context.Background(), "serverquery", clientID, false, "maintenance"); err != nil {
-		t.Fatalf("KickClient: %v", err)
-	}
-	env.groups.mu.Lock()
-	defer env.groups.mu.Unlock()
-	if len(env.groups.audit) == 0 {
-		t.Fatal("KickClient did not write an audit marker")
-	}
-	entry := env.groups.audit[len(env.groups.audit)-1]
-	if entry.Actor != "serverquery" || entry.Action != "kick" || entry.Target != "user-uid" {
-		t.Fatalf("kick audit = %+v", entry)
 	}
 }
 
@@ -155,6 +133,12 @@ func TestKeyRequestRateLimitUsesDedicatedNamespace(t *testing.T) {
 	var responseErr netproto.Error
 	if err := netproto.Decode(response, &responseErr); err != nil || responseErr.Code != errCodeMalformed {
 		t.Fatalf("rate-limit response = %+v, decode err=%v", responseErr, err)
+	}
+	var retry struct {
+		AfterMS int64 `json:"retry_after_ms"`
+	}
+	if err := netproto.Decode(response, &retry); err != nil || retry.AfterMS <= 0 || retry.AfterMS > time.Hour.Milliseconds()+1 {
+		t.Fatalf("missing or invalid key retry delay: %+v, %v", retry, err)
 	}
 }
 
@@ -252,6 +236,82 @@ func TestKeyPublishAndRequest(t *testing.T) {
 	}
 	if resp2.PublicKey != "" {
 		t.Fatalf("unknown user key = %q, want empty", resp2.PublicKey)
+	}
+}
+
+func TestKeyPublishSkipsUnreadableAutomaticScopes(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		channelID int64
+		wantKey   bool
+	}{
+		{name: "not in a channel"},
+		{name: "channel access without global access", channelID: 1, wantKey: true},
+		{name: "unreadable current channel", channelID: 2},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			backend := serverRoleFixture()
+			backend.policy.Channels = []authorization.ChannelPolicy{
+				{ChannelID: 1, Overrides: []authorization.RoleOverride{
+					{RoleID: 10, Capability: authorization.ViewChannel, Effect: authorization.Allow},
+				}},
+				{ChannelID: 2},
+			}
+			authority, err := authorization.NewAuthority(t.Context(), backend, func(context.Context, *authorization.RoleEvaluator, *authorization.RoleEvaluator) error { return nil })
+			if err != nil {
+				t.Fatal(err)
+			}
+			env := startTestEnvDeps(t, nil, nil, func(deps *Deps) { deps.Authority = authority })
+			defer env.stop()
+			conn, clientID := dialAuthed(t, env.addr, "admin-uid")
+			defer func() { _ = conn.Close() }()
+			if test.channelID != 0 {
+				env.state.AddChannel(testChannel(test.channelID))
+				if err := env.state.MoveClient(clientID, test.channelID); err != nil {
+					t.Fatal(err)
+				}
+			}
+			pub, priv := testX25519(t)
+			send(t, conn, netproto.MsgKeyPublish, netproto.KeyPublish{PublicKey: b64e(pub[:])})
+			// A subsequent Pong is a barrier for the publication and every
+			// optional key response, without a timing-based absence assertion.
+			send(t, conn, netproto.MsgPing, netproto.Ping{})
+			keys := 0
+			for {
+				frame := readFrame(t, conn)
+				kind := netproto.MessageType(frame.Type)
+				if kind == netproto.MsgPong {
+					break
+				}
+				if kind == netproto.MsgError {
+					t.Fatalf("publishing own key returned an unsolicited error: %s", frame.Payload)
+				}
+				if kind != netproto.MsgChannelKey {
+					continue
+				}
+				var key netproto.ChannelKey
+				if err := netproto.Decode(frame, &key); err != nil {
+					t.Fatal(err)
+				}
+				if !test.wantKey || key.ChannelID != test.channelID {
+					t.Fatalf("received unauthorized scope key for channel %d", key.ChannelID)
+				}
+				if len(unseal(t, key, pub, priv)) != 32 {
+					t.Fatal("channel key did not decrypt")
+				}
+				keys++
+			}
+			if test.wantKey && keys != 1 {
+				t.Fatalf("received %d allowed channel keys, want 1", keys)
+			}
+			if got := env.auth.e2eByUID["admin-uid"]; got != b64e(pub[:]) {
+				t.Fatal("own public key was not persisted")
+			}
+			send(t, conn, netproto.MsgChatKeyRequest, netproto.ChatKeyRequest{ChannelID: 0, KeyIDs: []uint32{1}})
+			if response := readError(t, conn); response.Code != errCodePermissionDenied || response.OriginType != uint16(netproto.MsgChatKeyRequest) {
+				t.Fatalf("explicit global key request was not denied: %+v", response)
+			}
+		})
 	}
 }
 
@@ -674,34 +734,6 @@ func TestRotationCoalescing(t *testing.T) {
 	env.srv.rotateScopeKey(ctx, 4)
 	if len(callbacks) != 2 {
 		t.Fatalf("scheduled callbacks after completion = %d, want 2", len(callbacks))
-	}
-}
-
-// TestChatKeyRequestRequiresMembership verifies a non-member's request is
-// answered with Refused rather than sealed keys.
-func TestChatKeyRequestRequiresMembership(t *testing.T) {
-	env := startTestEnv(t, nil)
-	defer env.stop()
-	alice, bob, _, keyID, _ := chatPair(t, env)
-	defer func() { _ = alice.Close() }()
-	defer func() { _ = bob.Close() }()
-
-	env.state.AddChannel(testChannel(2))
-	outsider, _ := dialAuthed(t, env.addr, "admin-uid")
-	defer func() { _ = outsider.Close() }()
-	opub, _ := testX25519(t)
-	publishKey(t, outsider, opub)
-	send(t, outsider, netproto.MsgJoinChannel, netproto.JoinChannel{ChannelID: 2})
-	readChannelKeyFor(t, outsider, 2)
-
-	send(t, outsider, netproto.MsgChatKeyRequest, netproto.ChatKeyRequest{ChannelID: 1, KeyIDs: []uint32{keyID}})
-	f := readOfType(t, outsider, netproto.MsgChatKeyBundle)
-	var bundle netproto.ChatKeyBundle
-	if err := netproto.Decode(f, &bundle); err != nil {
-		t.Fatalf("decode bundle: %v", err)
-	}
-	if len(bundle.Keys) != 0 || len(bundle.Refused) != 1 || bundle.Refused[0] != keyID {
-		t.Fatalf("bundle = %+v, want generation %d refused", bundle, keyID)
 	}
 }
 

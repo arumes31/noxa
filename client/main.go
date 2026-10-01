@@ -57,6 +57,7 @@ func runWails(app *App) {
 		},
 		BackgroundColour: &options.RGBA{R: 27, G: 38, B: 54, A: 1},
 		OnStartup:        app.startup,
+		OnDomReady:       app.domReady,
 		OnShutdown:       app.shutdown,
 		// (287) close-to-tray: the close button hides the window instead
 		// of quitting when the setting is on.

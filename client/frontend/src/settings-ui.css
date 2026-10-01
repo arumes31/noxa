@@ -1,0 +1,9 @@
+@media (max-width: 600px) {
+    .settings-dialog { flex-direction: column; }
+    .settings-nav { width: auto; flex-direction: row; flex-shrink: 0; overflow-x: auto; border-right: 0; border-bottom: 1px solid var(--border); }
+    .settings-nav-item { width: auto; flex: 0 0 auto; white-space: nowrap; }
+    .settings-main { min-height: 0; }
+    .settings-dialog .set-row:has(.set-slider) { flex-direction: column; align-items: stretch; }
+    .settings-dialog .set-slider { min-width: 0; }
+    .settings-dialog .set-slider input[type="range"] { flex: 1; min-width: 0; }
+}

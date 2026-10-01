@@ -1,0 +1,28 @@
+export const overlayEnglish = {
+    'overlay.enabled': 'Gaming overlay', 'overlay.position': 'Overlay position',
+    'overlay.hint': 'Shows voice participants and notifications above borderless/windowed games on the selected monitor. Clicks pass through. Enabled by default; turn it off here. Exclusive fullscreen is not supported.',
+    'overlay.monitor': 'Overlay monitor', 'overlay.primary': 'Primary monitor', 'overlay.custom': 'Custom position',
+    'overlay.scale': 'Overlay size', 'overlay.opacity': 'Overlay opacity', 'overlay.speakersOnly': 'Show only speaking members',
+    'overlay.drag': 'Move overlay preview', 'overlay.dragHelp': 'Drag the preview or use arrow keys to position it. Hold Shift for larger steps. Apply saves your changes.',
+    'overlay.sample': 'noXa · Preview\n● Alex\n· Sam', 'overlay.sampleSpeaking': 'noXa · Preview\n● Alex',
+    'overlay.coordinates': 'Position: {x}% horizontal, {y}% vertical', 'overlay.preview': 'Preview on monitor',
+    'overlay.previewShown': 'Example overlay shown for five seconds. Your preferences are saved only when you choose Apply.',
+    'overlay.missingMonitor': '{name} (disconnected; using primary monitor)',
+    'overlay.unavailable': 'The native gaming overlay is available on Windows.',
+    'overlay.top-left': 'Top left', 'overlay.top-right': 'Top right', 'overlay.bottom-left': 'Bottom left', 'overlay.bottom-right': 'Bottom right',
+    'overlay.muted': 'Microphone muted', 'overlay.deafened': 'Deafened', 'overlay.ready': 'Voice connected', 'overlay.failed': 'Gaming overlay unavailable: {error}',
+};
+export const overlayGerman = {
+    'overlay.enabled': 'Gaming-Overlay', 'overlay.position': 'Overlay-Position',
+    'overlay.hint': 'Zeigt Sprachchat-Teilnehmer und Benachrichtigungen über Spielen im Fenster oder randlosen Modus auf dem gewählten Bildschirm. Mausklicks werden durchgereicht. Standardmäßig aktiv; hier ausschaltbar. Exklusives Vollbild wird nicht unterstützt.',
+    'overlay.monitor': 'Overlay-Bildschirm', 'overlay.primary': 'Hauptbildschirm', 'overlay.custom': 'Eigene Position',
+    'overlay.scale': 'Overlay-Größe', 'overlay.opacity': 'Overlay-Deckkraft', 'overlay.speakersOnly': 'Nur sprechende Mitglieder anzeigen',
+    'overlay.drag': 'Overlay-Vorschau verschieben', 'overlay.dragHelp': 'Vorschau ziehen oder mit Pfeiltasten verschieben. Umschalt vergrößert die Schritte. Übernehmen speichert die Änderungen.',
+    'overlay.sample': 'noXa · Vorschau\n● Alex\n· Sam', 'overlay.sampleSpeaking': 'noXa · Vorschau\n● Alex',
+    'overlay.coordinates': 'Position: {x}% waagrecht, {y}% senkrecht', 'overlay.preview': 'Auf Bildschirm testen',
+    'overlay.previewShown': 'Beispiel-Overlay für fünf Sekunden angezeigt. Erst Übernehmen speichert deine Einstellungen.',
+    'overlay.missingMonitor': '{name} (getrennt; Hauptbildschirm wird verwendet)',
+    'overlay.unavailable': 'Das native Gaming-Overlay ist unter Windows verfügbar.',
+    'overlay.top-left': 'Oben links', 'overlay.top-right': 'Oben rechts', 'overlay.bottom-left': 'Unten links', 'overlay.bottom-right': 'Unten rechts',
+    'overlay.muted': 'Mikrofon stumm', 'overlay.deafened': 'Ton deaktiviert', 'overlay.ready': 'Sprachverbindung aktiv', 'overlay.failed': 'Gaming-Overlay nicht verfügbar: {error}',
+};

@@ -112,7 +112,7 @@ func (a *App) RegenerateIdentity() string {
 	if err := saveIdentityAt(path, id); err != nil {
 		return err.Error()
 	}
-	a.forgetCachedIdentity(id)
+	a.invalidateIdentityContexts()
 	uid, err := id.uniqueID()
 	if err != nil {
 		return err.Error()

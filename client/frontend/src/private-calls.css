@@ -1,0 +1,28 @@
+.private-call-panel { position: fixed; right: 16px; bottom: 104px; z-index: 15000; width: min(360px, calc(100vw - 32px)); padding: 16px; color: var(--text); background: var(--panel, #14212a); border: 1px solid var(--accent, #22d3ee); border-radius: 8px; box-shadow: 0 4px 20px #0005; }
+.private-call-panel p { overflow-wrap: anywhere; margin: 8px 0 12px; }
+.private-call-controls { display: flex; flex-wrap: wrap; gap: 8px; }
+.private-call-controls .call-control { white-space: normal; text-align: left; }
+.call-control[aria-pressed="true"] { color: var(--warn); border-color: var(--warn); background: var(--bg-hover); }
+.call-control.call-end { color: var(--danger); }
+.call-control:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.call-participant { color: inherit; background: transparent; border: 1px solid var(--border); border-radius: 4px; margin: 0 4px 4px 0; padding: 3px 6px; cursor: pointer; }
+.call-history { width: min(640px, 94vw); max-height: 80vh; overflow: auto; }
+.call-history p { padding: 8px 0; border-bottom: 1px solid var(--border); overflow-wrap: anywhere; }
+.private-call-panel { max-height: calc(100vh - 128px); overflow-y: auto; }
+.private-call-panel.has-media { width: min(640px, calc(100vw - 32px)); }
+.call-media-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(210px, 100%), 1fr)); gap: 8px; margin-bottom: 12px; }
+.call-media-grid[hidden] { display: none; }
+.call-media-tile { position: relative; margin: 0; min-width: 0; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; background: #000; }
+.call-media-tile video { display: block; width: 100%; aspect-ratio: 16 / 9; object-fit: contain; }
+.call-media-tile figcaption { padding: 5px 36px 5px 8px; font-size: .85rem; overflow-wrap: anywhere; color: #fff; }
+.call-media-expand { position: absolute; bottom: 3px; right: 4px; display: grid; place-items: center; width: 28px; height: 28px; color: #fff; background: #111; border: 1px solid #777; border-radius: 4px; }
+.call-media-expand svg { width: 16px; height: 16px; }
+.call-media-expand:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.call-media-tile:fullscreen video { height: calc(100vh - 36px); }
+.call-screen-audio { display: flex; align-items: center; gap: 6px; width: 100%; font-size: .85rem; }
+.call-share-audio { display: flex; align-items: center; gap: 6px; padding: 6px 8px; color: var(--text); background: var(--panel); font-size: .8rem; }
+.call-share-audio input { min-width: 32px; flex: 1; width: 80px; }
+.call-share-audio button { max-width: 45%; white-space: normal; font-size: inherit; }
+.call-share-audio output { min-width: 4ch; text-align: right; }
+.call-media-expand { top: 4px; bottom: auto; }
+@media (max-height: 420px) { .private-call-panel { bottom: 12px; max-height: calc(100vh - 24px); } }

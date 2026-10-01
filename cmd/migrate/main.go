@@ -59,7 +59,12 @@ func run(ctx context.Context, timeout time.Duration) (runErr error) {
 		}
 	}()
 
-	logger.Info("running database migrations", zap.String("database_url", cfg.RedactedDatabaseURL()))
+	logger.Info("initializing fresh-version schema", zap.String("database_url", cfg.RedactedDatabaseURL()))
+	lease, err := store.AcquireRoleProcessLease(ctx, cfg.DatabaseURL)
+	if err != nil {
+		return fmt.Errorf("acquiring offline role process lease: %w", err)
+	}
+	defer func() { runErr = errors.Join(runErr, lease.Close()) }()
 
 	s, err := store.New(cfg.DatabaseURL, logger,
 		cfg.DBMaxOpenConns, cfg.DBMaxIdleConns, cfg.DBConnMaxLifetime)
@@ -73,12 +78,22 @@ func run(ctx context.Context, timeout time.Duration) (runErr error) {
 	}()
 
 	migrationCtx, cancelMigration := context.WithTimeout(ctx, timeout)
-	err = s.MigrateContext(migrationCtx)
+	if err := lease.Check(migrationCtx); err != nil {
+		cancelMigration()
+		return fmt.Errorf("checking offline role process lease before migration: %w", err)
+	}
+	err = s.EnsureFreshInstall(migrationCtx)
+	if err == nil {
+		err = s.MigrateContext(migrationCtx)
+	}
+	if err == nil {
+		err = lease.Check(migrationCtx)
+	}
 	cancelMigration()
 	if err != nil {
 		return fmt.Errorf("applying migrations: %w", err)
 	}
 
-	logger.Info("migrations completed successfully")
+	logger.Info("fresh-version schema ready")
 	return nil
 }
