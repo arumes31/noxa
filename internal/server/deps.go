@@ -61,7 +61,7 @@ type BanStore interface {
 // Messages may be E2EE ciphertext; fromUniqueID lets the recipient fetch the
 // sender's public key at delivery time. It is satisfied by *store.Store.
 type SpoolStore interface {
-	SpoolMessage(ctx context.Context, fromUserID, toUserID int64, fromUniqueID, message string) error
+	SpoolMessage(ctx context.Context, fromUserID, toUserID int64, fromUniqueID, message string, binding ...store.DMKeyBinding) error
 	PendingMessages(ctx context.Context, toUserID int64) ([]store.SpooledMessage, error)
 	MarkMessagesDelivered(ctx context.Context, ids []int64) error
 }

@@ -50,14 +50,19 @@ func (s *TCPServer) publishSessionKey(ctx context.Context, client *Client, f *ne
 		}
 	}
 
-	// Key delivery: global scope + the client's current channel (if any).
-	if err := s.deliverScopeKey(ctx, client, globalChatScope); err != nil {
+	// Publishing one's public key does not require access to global chat.
+	// Automatic scope delivery is optional; denied scopes send no key, while
+	// explicit key requests keep their normal authorization errors.
+	if err := s.deliverScopeKey(ctx, client, globalChatScope); err != nil && !errors.Is(err, authorization.ErrRoleForbidden) {
 		return fmt.Errorf("delivering global scope key: %w", err)
 	}
 	if sc, ok := s.deps.State.GetClient(client.ID); ok && sc.ChannelID != 0 {
-		if err := s.deliverScopeKey(ctx, client, sc.ChannelID); err != nil {
+		if err := s.deliverScopeKey(ctx, client, sc.ChannelID); err != nil && !errors.Is(err, authorization.ErrRoleForbidden) {
 			return fmt.Errorf("delivering channel scope key: %w", err)
 		}
+	}
+	if client.userID() > 0 {
+		s.deliverSpooled(ctx, client, client.userID())
 	}
 	return nil
 }

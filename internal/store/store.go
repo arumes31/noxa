@@ -600,21 +600,42 @@ func (s *Store) DB() *sql.DB {
 
 // SpooledMessage is an offline chat message awaiting delivery to a user.
 type SpooledMessage struct {
-	ID           int64
-	FromUserID   int64
-	FromUniqueID string // sender unique ID (needed to open E2EE DMs)
-	FromName     string // sender nickname at send time, empty if unknown
-	Message      string
-	SentAt       time.Time
+	ID                 int64
+	FromUserID         int64
+	FromUniqueID       string // sender unique ID (needed to open E2EE DMs)
+	FromName           string // sender nickname at send time, empty if unknown
+	Message            string
+	SentAt             time.Time
+	SenderPublicKey    string
+	RecipientPublicKey string
+	ClientMsgID        string
+}
+
+// DMKeyBinding identifies the device keys used for an encrypted direct message.
+// The server authenticates these keys before storing the ciphertext.
+type DMKeyBinding struct {
+	SenderPublicKey    string
+	RecipientPublicKey string
+	ClientMsgID        string
 }
 
 // SpoolMessage stores an offline message for later delivery. For E2EE direct
 // messages, message is base64 ciphertext the server cannot read and
-// fromUniqueID lets the recipient fetch the sender's public key.
-func (s *Store) SpoolMessage(ctx context.Context, fromUserID, toUserID int64, fromUniqueID, message string) error {
-	const q = `INSERT INTO offline_messages (from_user_id, to_user_id, from_unique_id, message)
-	          VALUES ($1, $2, $3, $4)`
-	if _, err := s.db.ExecContext(ctx, q, fromUserID, toUserID, fromUniqueID, message); err != nil {
+// fromUniqueID lets a legacy recipient fetch the sender's public key. A binding
+// preserves the exact sender and recipient keys without modifying ciphertext.
+func (s *Store) SpoolMessage(ctx context.Context, fromUserID, toUserID int64, fromUniqueID, message string, bindings ...DMKeyBinding) error {
+	if len(bindings) > 1 {
+		return errors.New("spooling offline message: multiple key bindings")
+	}
+	var binding DMKeyBinding
+	if len(bindings) == 1 {
+		binding = bindings[0]
+	}
+	const q = `INSERT INTO offline_messages
+	          (from_user_id, to_user_id, from_unique_id, message, sender_public_key, recipient_public_key, client_msg_id)
+	          VALUES ($1, $2, $3, $4, $5, $6, $7)`
+	if _, err := s.db.ExecContext(ctx, q, fromUserID, toUserID, fromUniqueID, message,
+		binding.SenderPublicKey, binding.RecipientPublicKey, binding.ClientMsgID); err != nil {
 		return fmt.Errorf("spooling offline message: %w", err)
 	}
 	return nil
@@ -623,11 +644,12 @@ func (s *Store) SpoolMessage(ctx context.Context, fromUserID, toUserID int64, fr
 // PendingMessages returns all undelivered offline messages for a user, oldest
 // first.
 func (s *Store) PendingMessages(ctx context.Context, toUserID int64) ([]SpooledMessage, error) {
-	const q = `SELECT om.id, om.from_user_id, om.from_unique_id, COALESCE(u.nickname, ''), om.message, om.sent_at
+	const q = `SELECT om.id, om.from_user_id, om.from_unique_id, COALESCE(u.nickname, ''), om.message, om.sent_at,
+	                 om.sender_public_key, om.recipient_public_key, om.client_msg_id
 	          FROM offline_messages om
 	          LEFT JOIN users u ON u.id = om.from_user_id
 	          WHERE om.to_user_id = $1 AND om.delivered_at IS NULL
-	          ORDER BY om.sent_at`
+	          ORDER BY om.sent_at, om.id`
 	rows, err := s.db.QueryContext(ctx, q, toUserID)
 	if err != nil {
 		return nil, fmt.Errorf("querying offline messages: %w", err)
@@ -637,7 +659,8 @@ func (s *Store) PendingMessages(ctx context.Context, toUserID int64) ([]SpooledM
 	var out []SpooledMessage
 	for rows.Next() {
 		var m SpooledMessage
-		if err := rows.Scan(&m.ID, &m.FromUserID, &m.FromUniqueID, &m.FromName, &m.Message, &m.SentAt); err != nil {
+		if err := rows.Scan(&m.ID, &m.FromUserID, &m.FromUniqueID, &m.FromName, &m.Message, &m.SentAt,
+			&m.SenderPublicKey, &m.RecipientPublicKey, &m.ClientMsgID); err != nil {
 			return nil, fmt.Errorf("scanning offline message: %w", err)
 		}
 		out = append(out, m)

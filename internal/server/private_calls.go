@@ -15,6 +15,8 @@ import (
 const eventPrivateCall = "private_call"
 const eventPrivateCallSignal = "private_call_signal"
 
+var errCallKeyUnavailable = errors.New("participant encryption key unavailable; reconnect and try again")
+
 type privateCallStore interface {
 	SavePrivateCall(context.Context, netproto.CallSession) error
 	PrivateCallHistory(context.Context, string) ([]netproto.CallSession, error)
@@ -130,6 +132,10 @@ func (s *TCPServer) startPrivateCall(ctx context.Context, client *Client, reques
 	if (request.Target == "") == (request.ConversationID == "") {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "choose a user or private group")
 	}
+	callerKey, published := s.senderDMKey(client)
+	if !published {
+		return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, errCallKeyUnavailable.Error())
+	}
 	s.roleMetadataMu.Lock()
 	defer s.roleMetadataMu.Unlock()
 	s.privateCallsMu.Lock()
@@ -145,7 +151,7 @@ func (s *TCPServer) startPrivateCall(ctx context.Context, client *Client, reques
 	}
 	build := func(uids []string) (netproto.CallSession, error) {
 		now := time.Now().Unix()
-		call := netproto.CallSession{ID: uuid.NewString(), ConversationID: request.ConversationID, Caller: client.UniqueID, CreatedAt: now, RingUntil: now + 30, Revision: 1, Participants: []netproto.CallParticipant{{UniqueID: client.UniqueID, ClientID: client.ID, State: "accepted"}}}
+		call := netproto.CallSession{ID: uuid.NewString(), ConversationID: request.ConversationID, Caller: client.UniqueID, CreatedAt: now, RingUntil: now + 30, Revision: 1, KeyBinding: true, Participants: []netproto.CallParticipant{{UniqueID: client.UniqueID, ClientID: client.ID, State: "accepted", PublicKey: callerKey}}}
 		e := ctx.Value(roleLeaseKey{}).(roleLease).evaluator
 		for _, uid := range uids {
 			if uid == client.UniqueID {
@@ -155,7 +161,11 @@ func (s *TCPServer) startPrivateCall(ctx context.Context, client *Client, reques
 			if !found || !target.isAuthed() || target.userID() <= 0 || target.rulesBlocked() || s.privateCallByClient[target.ID] != "" || !s.rolePokeTargetVisible(e, client, target.ID) || !e.Evaluate(target.userID(), 0, authorization.Connect).Allowed {
 				continue
 			}
-			call.Participants = append(call.Participants, netproto.CallParticipant{UniqueID: uid, ClientID: target.ID, State: "ringing"})
+			key, published := s.senderDMKey(target)
+			if !published {
+				return call, errCallKeyUnavailable
+			}
+			call.Participants = append(call.Participants, netproto.CallParticipant{UniqueID: uid, ClientID: target.ID, State: "ringing", PublicKey: key})
 		}
 		if len(call.Participants) < 2 {
 			return call, netproto.ErrCallDenied
@@ -181,6 +191,9 @@ func (s *TCPServer) startPrivateCall(ctx context.Context, client *Client, reques
 		})
 	}
 	if err != nil {
+		if errors.Is(err, errCallKeyUnavailable) {
+			return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, err.Error())
+		}
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "call unavailable: no available participants or storage failure")
 	}
 	s.publishPrivateCallLocked(call)

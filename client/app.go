@@ -639,7 +639,7 @@ func sendChatWith(cm *connManager, scope, target, text string, replyToID int64) 
 	if scope != "direct" {
 		msg.ReplyToID = replyToID
 	}
-	if err := cm.sendChatAcknowledged(msg); err != nil {
+	if err := cm.sendChatWithKeyRetry(msg, text); err != nil {
 		return err.Error()
 	}
 	return ""

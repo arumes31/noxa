@@ -26,6 +26,7 @@ import (
 	"noxa/internal/netproto"
 	"noxa/internal/recorder"
 	"noxa/internal/state"
+	"noxa/internal/store"
 )
 
 // Broadcast event types sent in MsgEvent envelopes.
@@ -1254,6 +1255,26 @@ func (s *TCPServer) sendSessionChat(ctx context.Context, client *Client, f *netp
 			chat.ToUniqueID = target.uniqueID()
 		}
 	}
+	var binding []store.DMKeyBinding
+	if msg.RecipientPublicKey != "" {
+		recipientKey, valid := canonicalDMKey(msg.RecipientPublicKey)
+		if !msg.Enc || msg.KeyID != 0 || !valid {
+			return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "invalid direct-message key binding")
+		}
+		senderKey, published := s.senderDMKey(client)
+		if !published {
+			return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "publish an encryption key before sending a bound direct message")
+		}
+		msg.RecipientPublicKey = recipientKey
+		chat.SenderPublicKey, chat.RecipientPublicKey = senderKey, recipientKey
+		binding = []store.DMKeyBinding{{SenderPublicKey: senderKey, RecipientPublicKey: recipientKey, ClientMsgID: msg.ClientMsgID}}
+		if msg.ToClientID != "" {
+			target, _ := s.boundDMRecipient(chat.ToUniqueID, msg.ToClientID, recipientKey)
+			if target == nil {
+				return s.rejectStaleDMKey(client)
+			}
+		}
+	}
 	payload, err := eventEnvelope(eventChat, chat)
 	if err != nil {
 		return err
@@ -1261,7 +1282,7 @@ func (s *TCPServer) sendSessionChat(ctx context.Context, client *Client, f *netp
 
 	switch {
 	case msg.ToUniqueID != "":
-		return s.sendDirectByUniqueID(ctx, client, msg, payload)
+		return s.sendDirectByUniqueID(ctx, client, msg, payload, binding...)
 	default: // msg.ToClientID != ""
 		if err := s.deps.Broadcast.BroadcastToClient(msg.ToClientID, payload); err != nil {
 			return s.sendErrorFor(client, requestOrigin(ctx), errCodeNotFound, "target client not reachable")
@@ -1279,10 +1300,18 @@ func (s *TCPServer) sendSessionChat(ctx context.Context, client *Client, f *netp
 // unique ID. If the user is online the message is delivered immediately (and
 // echoed to the sender); otherwise it is spooled into offline_messages for
 // delivery at their next login.
-func (s *TCPServer) sendDirectByUniqueID(ctx context.Context, client *Client, msg netproto.ChatSend, payload []byte) error {
+func (s *TCPServer) sendDirectByUniqueID(ctx context.Context, client *Client, msg netproto.ChatSend, payload []byte, binding ...store.DMKeyBinding) error {
 	// Guests have authenticated live identities but no account row. Resolve
 	// the online session before consulting account storage for offline spooling.
-	if tc, ok := s.clientByUniqueID(msg.ToUniqueID); ok {
+	tc, _ := s.clientByUniqueID(msg.ToUniqueID)
+	if msg.RecipientPublicKey != "" {
+		var online bool
+		tc, online = s.boundDMRecipient(msg.ToUniqueID, "", msg.RecipientPublicKey)
+		if tc == nil && online {
+			return s.rejectStaleDMKey(client)
+		}
+	}
+	if tc != nil {
 		if err := s.deps.Broadcast.BroadcastToClient(tc.ID, payload); err != nil {
 			return s.sendErrorFor(client, requestOrigin(ctx), errCodeNotFound, "target client not reachable")
 		}
@@ -1311,6 +1340,16 @@ func (s *TCPServer) sendDirectByUniqueID(ctx context.Context, client *Client, ms
 	if s.deps.Spool == nil {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeNotFound, "target user is offline")
 	}
+	if msg.RecipientPublicKey != "" {
+		storedKey, err := s.deps.Auth.GetE2EPublicKey(ctx, msg.ToUniqueID)
+		if err != nil {
+			return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "recipient encryption key unavailable")
+		}
+		key, valid := canonicalDMKey(storedKey)
+		if !valid || key != msg.RecipientPublicKey {
+			return s.rejectStaleDMKey(client)
+		}
+	}
 	// A DM has no scope key, so the server cannot seal one on the sender's
 	// behalf: a plaintext DM to an offline user would land in the spool in
 	// the clear. Relaying it live is the sender's choice; persisting it is
@@ -1320,7 +1359,7 @@ func (s *TCPServer) sendDirectByUniqueID(ctx context.Context, client *Client, ms
 	}
 	// E2EE DMs are spooled as ciphertext the server cannot read; the sender's
 	// unique ID travels along so the recipient can fetch the public key.
-	if err := s.deps.Spool.SpoolMessage(ctx, client.userID(), target.ID, client.UniqueID, msg.Text); err != nil {
+	if err := s.deps.Spool.SpoolMessage(ctx, client.userID(), target.ID, client.UniqueID, msg.Text, binding...); err != nil {
 		s.logger.Warn("spooling message failed",
 			zap.String("client_id", client.ID),
 			zap.Error(err),
@@ -1347,6 +1386,12 @@ func (s *TCPServer) deliverSpooled(ctx context.Context, client *Client, userID i
 	if s.deps.Spool == nil || s.deps.Broadcast == nil {
 		return
 	}
+	// Concurrent sessions must not both read and deliver the same pending row.
+	// A fixed stripe set bounds memory while retaining single-recipient delivery.
+	lock := &s.spoolDelivery[uint64(userID)%uint64(len(s.spoolDelivery))]
+	lock.Lock()
+	defer lock.Unlock()
+	deviceKey, _ := s.senderDMKey(client)
 	msgs, err := s.deps.Spool.PendingMessages(ctx, userID)
 	if err != nil {
 		s.logger.Warn("loading spooled messages failed",
@@ -1361,19 +1406,29 @@ func (s *TCPServer) deliverSpooled(ctx context.Context, client *Client, userID i
 
 	ids := make([]int64, 0, len(msgs))
 	for _, m := range msgs {
+		if m.SenderPublicKey != "" || m.RecipientPublicKey != "" {
+			_, senderValid := canonicalDMKey(m.SenderPublicKey)
+			recipient, recipientValid := canonicalDMKey(m.RecipientPublicKey)
+			if !senderValid || !recipientValid || recipient != deviceKey {
+				continue // Retain ciphertext for the device that can actually open it.
+			}
+		}
 		// Every spooled row is E2EE ciphertext: 012 deleted the undelivered
 		// pre-4b plaintext rows and offline_messages_sealed stops new ones,
 		// so there is no plaintext replay branch left to take (91).
 		payload, err := eventEnvelope(eventChat, netproto.ChatBroadcast{
-			FromClientID: strconv.FormatInt(m.FromUserID, 10),
-			FromUniqueID: m.FromUniqueID,
-			From:         m.FromName,
-			ToUniqueID:   client.uniqueID(),
-			Text:         m.Message,
-			Direct:       true,
-			Offline:      true,
-			Enc:          true,
-			E2E:          true,
+			FromClientID:       strconv.FormatInt(m.FromUserID, 10),
+			FromUniqueID:       m.FromUniqueID,
+			From:               m.FromName,
+			ToUniqueID:         client.uniqueID(),
+			Text:               m.Message,
+			Direct:             true,
+			Offline:            true,
+			Enc:                true,
+			E2E:                true,
+			SenderPublicKey:    m.SenderPublicKey,
+			RecipientPublicKey: m.RecipientPublicKey,
+			ClientMsgID:        m.ClientMsgID,
 		})
 		if err != nil {
 			continue

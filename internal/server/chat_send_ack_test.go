@@ -12,6 +12,7 @@ import (
 	"noxa/internal/authorization"
 	"noxa/internal/broadcast"
 	"noxa/internal/netproto"
+	"noxa/internal/store"
 )
 
 type gatedChatSendStore struct {
@@ -31,11 +32,11 @@ type gatedChatSpool struct {
 	before func() error
 }
 
-func (s *gatedChatSpool) SpoolMessage(ctx context.Context, from, to int64, uid, body string) error {
+func (s *gatedChatSpool) SpoolMessage(ctx context.Context, from, to int64, uid, body string, binding ...store.DMKeyBinding) error {
 	if err := s.before(); err != nil {
 		return err
 	}
-	return s.fakeSpool.SpoolMessage(ctx, from, to, uid, body)
+	return s.fakeSpool.SpoolMessage(ctx, from, to, uid, body, binding...)
 }
 
 type chatSendFence struct {

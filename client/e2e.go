@@ -206,6 +206,14 @@ func (c *pubKeyCache) put(uid string, key [32]byte) {
 	c.putLocked(uid, key)
 }
 
+func (c *pubKeyCache) forgetKey(uid string, rejected [32]byte) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if current, ok := c.keys[uid]; ok && current.key == rejected {
+		delete(c.keys, uid)
+	}
+}
+
 // putAt admits a fetch result only if its connection epoch is still current.
 // An old leader completing after reconnect must never repopulate this cache.
 func (c *pubKeyCache) putAt(uid string, key [32]byte, epoch uint64) bool {
@@ -858,7 +866,7 @@ func (m *connManager) encryptChat(scope, target, text string) (netproto.ChatSend
 			return netproto.ChatSend{}, err
 		}
 		// (124) client-generated ref for delivery/read receipts.
-		return netproto.ChatSend{ToUniqueID: uniqueID, Text: blob, Enc: true, ClientMsgID: newClientMsgID()}, nil
+		return netproto.ChatSend{ToUniqueID: uniqueID, Text: blob, Enc: true, ClientMsgID: newClientMsgID(), RecipientPublicKey: base64.StdEncoding.EncodeToString(peer[:])}, nil
 
 	case "channel":
 		var channelID int64
@@ -936,6 +944,8 @@ func presentChat(chat *netproto.ChatBroadcast) {
 	chat.Enc = false
 	chat.E2E = false
 	chat.KeyID = 0
+	chat.SenderPublicKey = ""
+	chat.RecipientPublicKey = ""
 }
 
 // decryptChatEvent unseals a live chat broadcast.
@@ -1130,7 +1140,7 @@ func (m *connManager) decryptDMAsync(chat netproto.ChatBroadcast, payload string
 	if err != nil {
 		return
 	}
-	_, priv, err := id.x25519()
+	pub, priv, err := id.x25519()
 	if err != nil {
 		return
 	}
@@ -1145,7 +1155,18 @@ func (m *connManager) decryptDMAsync(chat netproto.ChatBroadcast, payload string
 	}
 	var peer [32]byte
 	ok := false
-	if peerUID != "" {
+	if chat.SenderPublicKey != "" || chat.RecipientPublicKey != "" {
+		sender, senderOK := parseDMPublicKey(chat.SenderPublicKey)
+		recipient, recipientOK := parseDMPublicKey(chat.RecipientPublicKey)
+		if senderOK && recipientOK {
+			switch {
+			case chat.FromUniqueID == ownUID && sender == pub:
+				peer, ok = recipient, chat.ToUniqueID != ""
+			case chat.ToUniqueID == ownUID && recipient == pub:
+				peer, ok = sender, chat.FromUniqueID != ""
+			}
+		}
+	} else if peerUID != "" {
 		peer, ok = m.peerPubKey(peerUID)
 	}
 	if !ok {
@@ -1158,6 +1179,16 @@ func (m *connManager) decryptDMAsync(chat netproto.ChatBroadcast, payload string
 	}
 	presentChat(&chat)
 	m.emit("event", rewrapChat("chat", chat, payload))
+}
+
+func parseDMPublicKey(encoded string) ([32]byte, bool) {
+	raw, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil || len(raw) != 32 {
+		return [32]byte{}, false
+	}
+	var key [32]byte
+	copy(key[:], raw)
+	return key, true
 }
 
 // rewrapChat re-encodes a (decrypted) chat broadcast into its event

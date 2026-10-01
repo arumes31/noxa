@@ -122,6 +122,16 @@ func privateCallRequest(t *testing.T, conn net.Conn, request netproto.CallReques
 	return *response.Call
 }
 
+func dialCallAuthed(t *testing.T, env *testEnv, uid string) (net.Conn, string) {
+	t.Helper()
+	conn, id := dialAuthed(t, env.addr, uid)
+	key, _ := testX25519(t)
+	send(t, conn, netproto.MsgKeyPublish, netproto.KeyPublish{PublicKey: b64e(key[:])})
+	send(t, conn, netproto.MsgPing, netproto.Ping{})
+	readOfType(t, conn, netproto.MsgPong)
+	return conn, id
+}
+
 func assertPrivateCallChannelZero(t *testing.T, env *testEnv, ids ...string) {
 	t.Helper()
 	for _, id := range ids {
@@ -160,9 +170,9 @@ func assertQueuedPrivateSignal(t *testing.T, env *testEnv, recipient *Client, pa
 func TestPrivateCallChannelZeroLifecycleAndSignals(t *testing.T) {
 	env, _ := privateCallsTestEnv(t)
 	defer env.stop()
-	caller, callerID := dialAuthed(t, env.addr, "admin-uid")
+	caller, callerID := dialCallAuthed(t, env, "admin-uid")
 	defer func() { _ = caller.Close() }()
-	callee, calleeID := dialAuthed(t, env.addr, "user-uid")
+	callee, calleeID := dialCallAuthed(t, env, "user-uid")
 	defer func() { _ = callee.Close() }()
 	call := privateCallRequest(t, caller, netproto.CallRequest{Action: "start", Target: "user-uid"})
 	if call.ID == "" || call.Caller != "admin-uid" || len(call.Participants) != 2 || call.EndedAt != 0 {
@@ -217,9 +227,9 @@ func TestPrivateCallTrickleSignalsDoNotUseChatWindow(t *testing.T) {
 	defer env.stop()
 	// Simulate an operator's deliberately long chat anti-spam window.
 	env.srv.chatRate = newChatRateLimiter(5, time.Minute)
-	caller, _ := dialAuthed(t, env.addr, "admin-uid")
+	caller, _ := dialCallAuthed(t, env, "admin-uid")
 	defer func() { _ = caller.Close() }()
-	callee, _ := dialAuthed(t, env.addr, "user-uid")
+	callee, _ := dialCallAuthed(t, env, "user-uid")
 	defer func() { _ = callee.Close() }()
 	call := privateCallRequest(t, caller, netproto.CallRequest{Action: "start", Target: "user-uid"})
 	privateCallRequest(t, callee, netproto.CallRequest{Action: "accept", ID: call.ID})
@@ -236,9 +246,9 @@ func TestPrivateCallTrickleSignalsDoNotUseChatWindow(t *testing.T) {
 func TestPrivateCallDeclineAndBusyDoNotMoveChannels(t *testing.T) {
 	env, _ := privateCallsTestEnv(t)
 	defer env.stop()
-	caller, callerID := dialAuthed(t, env.addr, "admin-uid")
+	caller, callerID := dialCallAuthed(t, env, "admin-uid")
 	defer func() { _ = caller.Close() }()
-	callee, calleeID := dialAuthed(t, env.addr, "user-uid")
+	callee, calleeID := dialCallAuthed(t, env, "user-uid")
 	defer func() { _ = callee.Close() }()
 	call := privateCallRequest(t, caller, netproto.CallRequest{Action: "start", Target: "user-uid"})
 	for _, attempt := range []struct {
@@ -266,9 +276,9 @@ func TestPrivateCallDeclineAndBusyDoNotMoveChannels(t *testing.T) {
 func TestPrivateCallRejectsUnauthenticatedGuestAndDifferentSession(t *testing.T) {
 	env, _ := privateCallsTestEnv(t)
 	defer env.stop()
-	caller, _ := dialAuthed(t, env.addr, "admin-uid")
+	caller, _ := dialCallAuthed(t, env, "admin-uid")
 	defer func() { _ = caller.Close() }()
-	callee, _ := dialAuthed(t, env.addr, "user-uid")
+	callee, _ := dialCallAuthed(t, env, "user-uid")
 	defer func() { _ = callee.Close() }()
 	call := privateCallRequest(t, caller, netproto.CallRequest{Action: "start", Target: "user-uid"})
 	for _, kind := range []string{"unauthenticated", "guest", "different session", "revoked session"} {
@@ -306,9 +316,9 @@ func TestPrivateCallRejectsUnauthenticatedGuestAndDifferentSession(t *testing.T)
 func TestPrivateCallKickClearsCallBeforeDisconnectCleanup(t *testing.T) {
 	env, backend := privateCallsTestEnv(t)
 	defer env.stop()
-	caller, callerID := dialAuthed(t, env.addr, "admin-uid")
+	caller, callerID := dialCallAuthed(t, env, "admin-uid")
 	defer func() { _ = caller.Close() }()
-	callee, calleeID := dialAuthed(t, env.addr, "user-uid")
+	callee, calleeID := dialCallAuthed(t, env, "user-uid")
 	defer func() { _ = callee.Close() }()
 	call := privateCallRequest(t, caller, netproto.CallRequest{Action: "start", Target: "user-uid"})
 	privateCallRequest(t, callee, netproto.CallRequest{Action: "accept", ID: call.ID})
@@ -347,9 +357,9 @@ func TestPrivateCallKickClearsCallBeforeDisconnectCleanup(t *testing.T) {
 func TestPrivateCallQueuedSignalRejectsRevokedPublisherBeforeCallCleanup(t *testing.T) {
 	env, _ := privateCallsTestEnv(t)
 	defer env.stop()
-	caller, callerID := dialAuthed(t, env.addr, "admin-uid")
+	caller, callerID := dialCallAuthed(t, env, "admin-uid")
 	defer func() { _ = caller.Close() }()
-	callee, calleeID := dialAuthed(t, env.addr, "user-uid")
+	callee, calleeID := dialCallAuthed(t, env, "user-uid")
 	defer func() { _ = callee.Close() }()
 	call := privateCallRequest(t, caller, netproto.CallRequest{Action: "start", Target: "user-uid"})
 	privateCallRequest(t, callee, netproto.CallRequest{Action: "accept", ID: call.ID})
@@ -366,9 +376,9 @@ func TestPrivateCallQueuedSignalRejectsRevokedPublisherBeforeCallCleanup(t *test
 func TestPrivateGroupRemovalRevokesCallerAndQueuedSignals(t *testing.T) {
 	env, backend := privateCallsTestEnv(t)
 	defer env.stop()
-	caller, callerID := dialAuthed(t, env.addr, "admin-uid")
+	caller, callerID := dialCallAuthed(t, env, "admin-uid")
 	defer func() { _ = caller.Close() }()
-	callee, calleeID := dialAuthed(t, env.addr, "user-uid")
+	callee, calleeID := dialCallAuthed(t, env, "user-uid")
 	defer func() { _ = callee.Close() }()
 	call := privateCallRequest(t, caller, netproto.CallRequest{Action: "start", ConversationID: backend.group.ID})
 	privateCallRequest(t, callee, netproto.CallRequest{Action: "accept", ID: call.ID})

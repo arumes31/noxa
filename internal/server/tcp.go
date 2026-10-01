@@ -276,6 +276,7 @@ func (c *Client) takeChallenge(uniqueID string) ([]byte, string, bool) {
 
 // TCPServer accepts and serves control-channel connections.
 type TCPServer struct {
+	spoolDelivery         [64]sync.Mutex
 	privateCallsMu        sync.Mutex
 	privateCalls          map[string]netproto.CallSession
 	privateCallByClient   map[string]string

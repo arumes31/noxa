@@ -777,7 +777,7 @@ type spooledEntry struct {
 	toUserID int64
 }
 
-func (f *fakeSpool) SpoolMessage(_ context.Context, fromUserID, toUserID int64, fromUniqueID, message string) error {
+func (f *fakeSpool) SpoolMessage(_ context.Context, fromUserID, toUserID int64, fromUniqueID, message string, bindings ...store.DMKeyBinding) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.nextID++
@@ -792,6 +792,12 @@ func (f *fakeSpool) SpoolMessage(_ context.Context, fromUserID, toUserID int64, 
 		},
 		toUserID: toUserID,
 	})
+	if len(bindings) > 0 {
+		last := &f.pending[len(f.pending)-1]
+		last.SenderPublicKey = bindings[0].SenderPublicKey
+		last.RecipientPublicKey = bindings[0].RecipientPublicKey
+		last.ClientMsgID = bindings[0].ClientMsgID
+	}
 	return nil
 }
 

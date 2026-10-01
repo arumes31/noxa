@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"net"
 	"time"
 
 	"noxa/internal/netproto"
@@ -25,12 +26,15 @@ func (m *connManager) writeChatMutation(kind netproto.MessageType, messageID int
 	return nil
 }
 
-func (m *connManager) sendChatAcknowledged(msg netproto.ChatSend) error {
+func (m *connManager) sendChatAcknowledgedOn(conn net.Conn, msg netproto.ChatSend) error {
+	if conn == nil {
+		return fmt.Errorf("not connected")
+	}
 	msg.AckRequested = m.usesRoleAuthorization()
 	if !msg.AckRequested {
-		return m.write(netproto.MsgChatSend, msg)
+		return m.writeConn(conn, netproto.MsgChatSend, msg)
 	}
-	f, err := m.request(netproto.MsgChatSend, netproto.MsgChatAccepted, msg, 15*time.Second)
+	f, err := m.requestOn(conn, netproto.MsgChatSend, netproto.MsgChatAccepted, msg, 15*time.Second)
 	if err != nil {
 		return err
 	}

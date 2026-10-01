@@ -11,9 +11,10 @@ var ErrCallDenied = errors.New("call unavailable or access denied")
 var ErrCallInvalid = errors.New("invalid call action")
 
 type CallParticipant struct {
-	UniqueID string `json:"unique_id"`
-	ClientID string `json:"client_id"`
-	State    string `json:"state"` // ringing, accepted, declined, missed, left
+	UniqueID  string `json:"unique_id"`
+	ClientID  string `json:"client_id"`
+	State     string `json:"state"` // ringing, accepted, declined, missed, left
+	PublicKey string `json:"public_key,omitempty"`
 }
 
 type CallSession struct {
@@ -24,6 +25,7 @@ type CallSession struct {
 	RingUntil      int64             `json:"ring_until"`
 	EndedAt        int64             `json:"ended_at,omitempty"`
 	Revision       int64             `json:"revision"`
+	KeyBinding     bool              `json:"key_binding,omitempty"`
 	Participants   []CallParticipant `json:"participants"`
 }
 

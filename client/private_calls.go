@@ -142,13 +142,13 @@ func (a *App) SendPrivateCallDescriptionForTab(tabID, callID, target, kind, sdp 
 	if err != nil {
 		return err
 	}
-	_, priv, err := id.x25519()
+	ownPub, priv, err := id.x25519()
 	if err != nil {
 		return err
 	}
-	pub, found := m.peerPubKey(target)
-	if !found {
-		return errors.New("call peer encryption key unavailable")
+	pub, err := m.privateCallPeerKey(callID, target, ownPub)
+	if err != nil {
+		return err
 	}
 	m.mu.Lock()
 	uid := m.uniqueID
@@ -193,16 +193,59 @@ func (a *App) OpenPrivateCallDescriptionForTab(tabID string, signal netproto.Cal
 	if err != nil {
 		return PrivateCallDescription{}, err
 	}
-	_, priv, err := id.x25519()
+	ownPub, priv, err := id.x25519()
 	if err != nil {
 		return PrivateCallDescription{}, err
 	}
-	pub, found := m.peerPubKey(signal.From)
-	if !found {
-		return PrivateCallDescription{}, errors.New("call sender encryption key unavailable")
+	pub, err := m.privateCallPeerKey(signal.CallID, signal.From, ownPub)
+	if err != nil {
+		return PrivateCallDescription{}, err
 	}
 	m.mu.Lock()
 	uid := m.uniqueID
 	m.mu.Unlock()
 	return openPrivateCallDescription(signal, uid, pub, priv)
+}
+
+// Call membership pins one device per account. Resolve its immutable key from
+// the authenticated call snapshot, never the account-wide DM directory cache.
+func (m *connManager) privateCallPeerKey(callID, target string, ownPub [32]byte) ([32]byte, error) {
+	result, err := m.privateCallRequest(netproto.CallRequest{Action: "get", ID: callID})
+	if err != nil {
+		return [32]byte{}, err
+	}
+	m.mu.Lock()
+	uid := m.uniqueID
+	m.mu.Unlock()
+	call := result.Call
+	me, _ := call.Participant(uid) // privateCallRequest checked this session.
+	peer, found := call.Participant(target)
+	if call.EndedAt != 0 || me.State != "accepted" || !found || peer.State != "accepted" || target == uid {
+		return [32]byte{}, errors.New("call participant is no longer active")
+	}
+	bound := call.KeyBinding
+	for _, participant := range call.Participants {
+		bound = bound || participant.PublicKey != ""
+	}
+	if !bound {
+		key, found := m.peerPubKey(target)
+		if !found {
+			return key, errors.New("call peer encryption key unavailable")
+		}
+		return key, nil
+	}
+	if !call.KeyBinding {
+		return [32]byte{}, errors.New("invalid call device key binding")
+	}
+	for _, participant := range call.Participants {
+		if _, valid := parseDMPublicKey(participant.PublicKey); !valid || participant.ClientID == "" {
+			return [32]byte{}, errors.New("invalid call participant encryption key")
+		}
+	}
+	localKey, _ := parseDMPublicKey(me.PublicKey)
+	if localKey != ownPub {
+		return [32]byte{}, errors.New("call belongs to another encryption device")
+	}
+	key, _ := parseDMPublicKey(peer.PublicKey)
+	return key, nil
 }

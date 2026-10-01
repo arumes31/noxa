@@ -20,6 +20,7 @@ import (
 	"golang.org/x/crypto/nacl/box"
 	"golang.org/x/crypto/nacl/secretbox"
 
+	"noxa/internal/authorization"
 	"noxa/internal/chatcrypto"
 	"noxa/internal/config"
 	"noxa/internal/netproto"
@@ -235,6 +236,82 @@ func TestKeyPublishAndRequest(t *testing.T) {
 	}
 	if resp2.PublicKey != "" {
 		t.Fatalf("unknown user key = %q, want empty", resp2.PublicKey)
+	}
+}
+
+func TestKeyPublishSkipsUnreadableAutomaticScopes(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		channelID int64
+		wantKey   bool
+	}{
+		{name: "not in a channel"},
+		{name: "channel access without global access", channelID: 1, wantKey: true},
+		{name: "unreadable current channel", channelID: 2},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			backend := serverRoleFixture()
+			backend.policy.Channels = []authorization.ChannelPolicy{
+				{ChannelID: 1, Overrides: []authorization.RoleOverride{
+					{RoleID: 10, Capability: authorization.ViewChannel, Effect: authorization.Allow},
+				}},
+				{ChannelID: 2},
+			}
+			authority, err := authorization.NewAuthority(t.Context(), backend, func(context.Context, *authorization.RoleEvaluator, *authorization.RoleEvaluator) error { return nil })
+			if err != nil {
+				t.Fatal(err)
+			}
+			env := startTestEnvDeps(t, nil, nil, func(deps *Deps) { deps.Authority = authority })
+			defer env.stop()
+			conn, clientID := dialAuthed(t, env.addr, "admin-uid")
+			defer func() { _ = conn.Close() }()
+			if test.channelID != 0 {
+				env.state.AddChannel(testChannel(test.channelID))
+				if err := env.state.MoveClient(clientID, test.channelID); err != nil {
+					t.Fatal(err)
+				}
+			}
+			pub, priv := testX25519(t)
+			send(t, conn, netproto.MsgKeyPublish, netproto.KeyPublish{PublicKey: b64e(pub[:])})
+			// A subsequent Pong is a barrier for the publication and every
+			// optional key response, without a timing-based absence assertion.
+			send(t, conn, netproto.MsgPing, netproto.Ping{})
+			keys := 0
+			for {
+				frame := readFrame(t, conn)
+				kind := netproto.MessageType(frame.Type)
+				if kind == netproto.MsgPong {
+					break
+				}
+				if kind == netproto.MsgError {
+					t.Fatalf("publishing own key returned an unsolicited error: %s", frame.Payload)
+				}
+				if kind != netproto.MsgChannelKey {
+					continue
+				}
+				var key netproto.ChannelKey
+				if err := netproto.Decode(frame, &key); err != nil {
+					t.Fatal(err)
+				}
+				if !test.wantKey || key.ChannelID != test.channelID {
+					t.Fatalf("received unauthorized scope key for channel %d", key.ChannelID)
+				}
+				if len(unseal(t, key, pub, priv)) != 32 {
+					t.Fatal("channel key did not decrypt")
+				}
+				keys++
+			}
+			if test.wantKey && keys != 1 {
+				t.Fatalf("received %d allowed channel keys, want 1", keys)
+			}
+			if got := env.auth.e2eByUID["admin-uid"]; got != b64e(pub[:]) {
+				t.Fatal("own public key was not persisted")
+			}
+			send(t, conn, netproto.MsgChatKeyRequest, netproto.ChatKeyRequest{ChannelID: 0, KeyIDs: []uint32{1}})
+			if response := readError(t, conn); response.Code != errCodePermissionDenied || response.OriginType != uint16(netproto.MsgChatKeyRequest) {
+				t.Fatalf("explicit global key request was not denied: %+v", response)
+			}
+		})
 	}
 }
 

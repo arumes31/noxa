@@ -1,10 +1,77 @@
 package main
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"testing"
 	"time"
 )
+
+func TestDirectMessageDeviceKeyBinding(t *testing.T) {
+	alice, bob := newTestConnManager(), newTestConnManager()
+	alice.id, bob.id = mustTempIdentity(t), mustTempIdentity(t)
+	alice.uniqueID, bob.uniqueID = "alice-account", "bob-account"
+	alicePub, alicePriv, _ := alice.id.x25519()
+	bobPub, _, _ := bob.id.x25519()
+	otherDevice, _ := genPair(t)
+	ciphertext, err := sealDM("bound device message", bobPub, alicePriv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name              string
+		manager           *connManager
+		sender, recipient string
+		verified          bool
+	}{
+		{"recipient ignores another sender device in UID cache", bob, base64.StdEncoding.EncodeToString(alicePub[:]), base64.StdEncoding.EncodeToString(bobPub[:]), true},
+		{"sender echo ignores rotated recipient directory key", alice, base64.StdEncoding.EncodeToString(alicePub[:]), base64.StdEncoding.EncodeToString(bobPub[:]), true},
+		{"malformed sender binding cannot fall back", bob, "invalid", base64.StdEncoding.EncodeToString(bobPub[:]), false},
+		{"partial binding cannot fall back", bob, "", base64.StdEncoding.EncodeToString(bobPub[:]), false},
+		{"different recipient device cannot consume binding", bob, base64.StdEncoding.EncodeToString(alicePub[:]), base64.StdEncoding.EncodeToString(otherDevice[:]), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			alice.pubKeys.put("bob-account", otherDevice)
+			bob.pubKeys.put("alice-account", otherDevice)
+			if !tc.verified {
+				bob.pubKeys.put("alice-account", alicePub)
+			}
+			sink := make(dmPresentationSink, 1)
+			tc.manager.sink = sink
+			payload, err := json.Marshal(map[string]any{"type": "chat", "data": map[string]any{
+				"direct": true, "from_unique_id": "alice-account", "to_unique_id": "bob-account", "enc": true, "text": ciphertext,
+				"sender_public_key": tc.sender, "recipient_public_key": tc.recipient,
+			}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if result := tc.manager.maybeDecryptEvent(string(payload)); result != "" {
+				t.Fatal("expected asynchronous decrypt")
+			}
+			select {
+			case result := <-sink:
+				var event struct {
+					Data struct {
+						Text     string `json:"text"`
+						Verified bool   `json:"enc_verified"`
+					} `json:"data"`
+				}
+				if err := json.Unmarshal([]byte(result), &event); err != nil {
+					t.Fatal(err)
+				}
+				want := missingKeyText
+				if tc.verified {
+					want = "bound device message"
+				}
+				if event.Data.Text != want || event.Data.Verified != tc.verified {
+					t.Fatalf("device binding not honored: %s", result)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("missing decrypted event")
+			}
+		})
+	}
+}
 
 type dmPresentationSink chan string
 

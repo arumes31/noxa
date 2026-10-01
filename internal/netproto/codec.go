@@ -556,6 +556,9 @@ type ChatSend struct {
 	// DM delivery/read receipts (wave 5a) can reference the message without
 	// a database id (DMs are true E2EE and not stored server-side).
 	ClientMsgID string `json:"client_msg_id,omitempty"`
+	// RecipientPublicKey binds a direct message to the device key used to seal
+	// it. Empty keeps the legacy UID-only routing contract.
+	RecipientPublicKey string `json:"recipient_public_key,omitempty"`
 }
 
 // ChatBroadcast is a chat message the server fans out to interested clients.
@@ -588,6 +591,10 @@ type ChatBroadcast struct {
 	Mentions     []string `json:"mentions,omitempty"`
 	RoleMentions []string `json:"role_mentions,omitempty"`
 	ClientMsgID  string   `json:"client_msg_id,omitempty"`
+	// These keys are stamped by the server from the authenticated sender and
+	// the recipient binding. They never replace local ciphertext verification.
+	SenderPublicKey    string `json:"sender_public_key,omitempty"`
+	RecipientPublicKey string `json:"recipient_public_key,omitempty"`
 }
 
 // Error carries a server-side error to the client.
@@ -601,6 +608,9 @@ type Error struct {
 	OriginType uint16 `json:"origin_type,omitempty"`
 	// RetryAfterMS is an optional backoff for a throttled, read-only request.
 	RetryAfterMS int64 `json:"retry_after_ms,omitempty"`
+	// RecipientKeyStale rejects a direct send before relay or durable acceptance.
+	// Only this explicit rejection permits one fresh-key encryption retry.
+	RecipientKeyStale bool `json:"recipient_key_stale,omitempty"`
 }
 
 // Ping is a liveness probe. Payload is ignored.
