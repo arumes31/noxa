@@ -7,7 +7,7 @@ test.beforeEach(async ({ page }) => {
         window.runtime = { EventsOn: (name, fn) => { (window.__events[name] ||= []).push(fn); return () => {}; }, EventsEmit() {}, WindowIsFullscreen: async () => false, BrowserOpenURL: url => window.__links.push(url) };
         window.go = { main: { App: new Proxy({}, { get(_target, method) { return async (...args) => {
             if (method === "GetSettings") return structuredClone(window.__saved);
-            if (method === "SaveSettings") { if (window.__saveFail) return "save failed"; window.__saved = structuredClone(args[0]); return ""; }
+            if (method === "SaveSettings") { if (window.__saveWait) await window.__saveWait; if (window.__saveFail) return "save failed"; window.__saved = structuredClone(args[0]); return ""; }
             if (method === "MoveClientForTab") { window.__moves.push(args); return window.__moveError || ""; }
             if (method === "JoinChannelForTab") { window.__joins.push(args); return ""; }
             if (["ListTabs", "GetPermissions", "SubscriptionsForTab", "DMHistoryLoadForContext"].includes(method)) return [];
@@ -28,13 +28,71 @@ test.beforeEach(async ({ page }) => {
             clients: [{ client_id: "self", unique_id: "me", nickname: "Me", channel_id: 1 }, { client_id: "alice", unique_id: "alice-uid", nickname: "Alice", channel_id: 1 }] });
         v.renderTree();
         window.__gain = { gain: { value: 1 } };
-        (await import("/src/audio.js")).registerUserChain("alice-uid", window.__gain, { gain: { value: 1 } });
+        window.__mute = { gain: { value: 1 } };
+        (await import("/src/audio.js")).registerUserChain("alice-uid", window.__gain, window.__mute);
     });
+});
+
+test("visible member menu exposes separate personal microphone and screen-share volumes", async ({ page }) => {
+    const trigger = page.getByRole('button', { name: 'Member options for Alice', exact: true });
+    await trigger.click();
+    const microphone = page.getByRole('slider', { name: 'Microphone volume · Only for you', exact: true });
+    const share = page.getByRole('slider', { name: 'Screen-share audio · Only for you', exact: true });
+    await expect(microphone).toHaveValue('100');
+    if (process.env.NOXA_UI_SCREENSHOTS) await page.screenshot({ path: '.cache/ui-improvements-member-menu.png' });
+    await share.fill('45');
+    await share.dispatchEvent('change');
+    await expect.poll(() => page.evaluate(() => window.__saved.user_share_volumes?.['alice-uid'])).toBe(45);
+    await expect(microphone).toHaveValue('100');
+    expect(await page.evaluate(() => window.__gain.gain.value)).toBe(1);
+    await page.keyboard.press('Escape');
+    await expect(trigger).toBeFocused();
+    await page.keyboard.press('Enter');
+    await expect(share).toHaveValue('45');
+});
+
+test("voice More keeps secondary actions available and restores keyboard focus", async ({ page }) => {
+    await page.setViewportSize({ width: 640, height: 480 });
+    const more = page.locator('#voice-options > summary');
+    await expect(more).toHaveAccessibleName('More voice options');
+    await expect(page.locator('#voice-disconnect')).toBeHidden();
+    await expect(page.locator('#voice-leave-channel')).toBeVisible();
+    await more.click();
+    await expect(page.locator('#voice-disconnect')).toBeVisible();
+    const bounds = await page.locator('.voice-options-menu').boundingBox();
+    expect(bounds.x).toBeGreaterThanOrEqual(0);
+    expect(bounds.y).toBeGreaterThanOrEqual(0);
+    expect(bounds.x + bounds.width).toBeLessThanOrEqual(640);
+    expect(bounds.y + bounds.height).toBeLessThanOrEqual(480);
+    if (process.env.NOXA_UI_SCREENSHOTS) await page.screenshot({ path: '.cache/ui-improvements-compact.png' });
+    await page.locator('#voice-settings').focus();
+    await page.keyboard.press('Escape');
+    await expect(page.locator('#voice-disconnect')).toBeHidden();
+    await expect(more).toBeFocused();
+    await more.click();
+    await page.locator('#voice-settings').click();
+    await expect(page.locator('#settings-overlay')).toBeVisible();
+    await expect(page.locator('#voice-disconnect')).toBeHidden();
+});
+
+test("personal screen-share volume restores on failed save and resets independently", async ({ page }) => {
+    await page.getByRole('button', { name: 'Member options for Alice', exact: true }).click();
+    const share = page.getByRole('slider', { name: 'Screen-share audio · Only for you', exact: true });
+    await page.evaluate(() => { window.__saveFail = true; });
+    await share.fill('25'); await share.dispatchEvent('change');
+    await expect(share).toHaveValue('100');
+    await expect(share).toBeEnabled();
+    await page.evaluate(() => { window.__saveFail = false; });
+    await share.fill('65'); await share.dispatchEvent('change');
+    await expect.poll(() => page.evaluate(() => window.__saved.user_share_volumes?.['alice-uid'])).toBe(65);
+    await page.getByRole('menuitem', { name: 'Reset screen-share audio to 100%', exact: true }).click();
+    await expect.poll(() => page.evaluate(() => window.__saved.user_share_volumes?.['alice-uid'])).toBe(100);
+    expect(await page.evaluate(() => window.__gain.gain.value)).toBe(1);
 });
 
 test("member volume previews without saving and resets from the menu", async ({ page }) => {
     await page.locator('.client[data-clid="alice"]').click({ button: "right" });
-    const slider = page.locator(".ctx-menu input[type=range]");
+    const slider = page.locator(".ctx-menu .ctx-volume input[type=range]");
     await slider.evaluate(input => { input.value = "150"; input.dispatchEvent(new Event("input", { bubbles: true })); });
     expect(await page.evaluate(() => window.__gain.gain.value)).toBe(1.5);
     expect(await page.evaluate(() => window.__saved.user_volumes["alice-uid"])).toBeUndefined();
@@ -73,7 +131,7 @@ test("channel menu has explicit join and leave actions", async ({ page }) => {
 
 test("failed volume save and cancelled drag restore the saved level", async ({ page }) => {
     await page.locator('.client[data-clid="alice"]').click({ button: "right" });
-    const slider = page.locator(".ctx-menu input[type=range]");
+    const slider = page.locator(".ctx-menu .ctx-volume input[type=range]");
     await slider.evaluate(input => { input.value = "25"; input.dispatchEvent(new Event("input", { bubbles: true })); });
     expect(await page.evaluate(() => window.__gain.gain.value)).toBe(0.25);
     await page.keyboard.press("Escape");
@@ -117,7 +175,7 @@ test("authors and mentions share the member menu and messages support keyboard a
     const row = page.locator('.msg[data-msg-id="501"]');
     for (const target of [row.locator(".msg-from"), row.locator(".mention-tok")]) {
         await target.click();
-        await expect(page.getByRole("slider", { name: "Voice volume · Only for you" })).toBeVisible();
+        await expect(page.getByRole("slider", { name: "Microphone volume · Only for you" })).toBeVisible();
         await page.keyboard.press("Escape");
         await expect(target).toBeFocused();
     }
@@ -170,7 +228,7 @@ test("video tile menu supports keyboard navigation within a short viewport", asy
 test("keyboard volume adjustment can continue to reset and other menu actions", async ({ page }) => {
     const member = page.locator('.client[data-clid="alice"]');
     await member.focus(); await page.keyboard.press("Shift+F10");
-    const slider = page.locator(".ctx-menu input"); await slider.focus();
+    const slider = page.locator(".ctx-menu .ctx-volume input"); await slider.focus();
     await page.keyboard.press("ArrowRight");
     await expect.poll(() => page.evaluate(() => window.__saved.user_volumes["alice-uid"])).toBeGreaterThan(100);
     await page.keyboard.press("ArrowDown");
@@ -207,7 +265,7 @@ test('member card reflects volume saved through the member menu', async ({page})
     await page.evaluate(()=>window.__noxa.setDetailsOpen(true));
     await expect(page.locator('#member-volume')).toHaveValue('100');
     await page.locator('.client[data-clid="alice"]').click({button:'right'});
-    const slider=page.locator('.ctx-menu input'); await slider.fill('160'); await slider.dispatchEvent('change');
+    const slider=page.locator('.ctx-menu .ctx-volume input'); await slider.fill('160'); await slider.dispatchEvent('change');
     await expect.poll(()=>page.evaluate(()=>window.__saved.user_volumes['alice-uid'])).toBe(160);
     await page.keyboard.press('Escape');
     await page.evaluate(()=>window.__noxa.renderTree());
@@ -255,7 +313,7 @@ test("identity-only author menu never picks an arbitrary connected device", asyn
     await page.locator('.msg[data-msg-id="601"] .msg-from').click();
     await expect(page.getByRole("menuitem", { name: "Kick from server…", exact: true })).toHaveAttribute("aria-disabled", "true");
     await expect(page.getByRole("menuitem", { name: "Move to channel…", exact: true })).toHaveCount(0);
-    await expect(page.getByRole("slider", { name: "Voice volume · Only for you" })).toBeEnabled();
+    await expect(page.getByRole("slider", { name: "Microphone volume · Only for you" })).toBeEnabled();
     await expect(page.locator('.ctx-menu [data-act="call"]')).not.toHaveAttribute("aria-disabled", "true");
     await expect(page.locator('.ctx-menu [data-act="call"]')).toBeEnabled();
 });
@@ -293,4 +351,136 @@ test("voice participant keyboard menu preserves its existing selection click", a
     await participant.focus(); await page.keyboard.press("Shift+F10");
     await expect(page.getByRole("menuitem", { name: "Reset volume to 100%" })).toBeVisible();
     await page.keyboard.press("Escape"); await expect(participant).toBeFocused();
+});
+
+test("live settings update refreshes both personal volume controls", async ({ page }) => {
+    await page.getByRole('button', { name: 'Member options for Alice', exact: true }).click();
+    await page.evaluate(() => {
+        window.__saved.user_volumes['alice-uid'] = 65;
+        window.__saved.user_share_volumes = { 'alice-uid': 25 };
+        for (const callback of window.__events.settings_update || []) callback(structuredClone(window.__saved));
+    });
+    await expect(page.getByRole('slider', { name: 'Microphone volume · Only for you', exact: true })).toHaveValue('65');
+    await expect(page.getByRole('slider', { name: 'Screen-share audio · Only for you', exact: true })).toHaveValue('25');
+});
+
+test("keyboard mute returns focus to its member control", async ({ page }) => {
+    const trigger = page.getByRole('button', { name: 'Member options for Alice', exact: true });
+    await trigger.focus(); await page.keyboard.press('Enter');
+    await page.getByRole('menuitem', { name: 'Mute locally', exact: true }).focus();
+    await page.keyboard.press('Enter');
+    await expect.poll(() => page.evaluate(() => window.__saved.muted_users)).toEqual(['alice-uid']);
+    await expect(trigger).toBeFocused();
+});
+
+test("member mute uses the current state after a live settings update", async ({ page }) => {
+    const trigger = page.getByRole('button', { name: 'Member options for Alice', exact: true });
+    await trigger.click();
+    await page.evaluate(() => {
+        window.__saved.muted_users = ['alice-uid'];
+        for (const callback of window.__events.settings_update || []) callback(structuredClone(window.__saved));
+    });
+    const mute = page.locator('.ctx-menu [data-act="mute"]');
+    await expect(mute).toHaveText('✓ Mute locally');
+    await expect(page.locator('.participant[data-client-id="alice"]')).toContainText('Muted for you');
+    await expect(page.locator('.client[data-clid="alice"] .status-icons[title="muted locally"]')).toBeVisible();
+    await mute.click();
+    await expect.poll(() => page.evaluate(() => window.__saved.muted_users)).toEqual([]);
+});
+
+test("member Escape restores focus while a volume save is pending", async ({ page }) => {
+    await page.evaluate(() => { window.__saveWait = new Promise(resolve => { window.__releaseSave = resolve; }); });
+    const trigger = page.getByRole('button', { name: 'Member options for Alice', exact: true });
+    await trigger.click();
+    const slider = page.getByRole('slider', { name: 'Microphone volume · Only for you', exact: true });
+    await slider.focus(); await page.keyboard.press('ArrowRight');
+    await expect(slider).toBeDisabled();
+    await page.keyboard.press('Escape');
+    await expect(page.getByRole('menu')).toHaveCount(0);
+    await expect(trigger).toBeFocused();
+    await page.evaluate(() => window.__releaseSave());
+    await expect.poll(() => page.evaluate(() => window.__saved.user_volumes['alice-uid'])).toBe(101);
+});
+
+test("adjusting and resetting a muted microphone preserves its mute", async ({ page }) => {
+    await page.evaluate(() => {
+        window.__saved.muted_users = ['alice-uid'];
+        for (const callback of window.__events.settings_update || []) callback(structuredClone(window.__saved));
+    });
+    await page.getByRole('button', { name: 'Member options for Alice', exact: true }).click();
+    await expect(page.locator('.ctx-menu [data-act="mute"]')).toHaveText('✓ Mute locally');
+    const slider = page.getByRole('slider', { name: 'Microphone volume · Only for you', exact: true });
+    await slider.fill('140'); await slider.dispatchEvent('change');
+    await expect.poll(() => page.evaluate(() => window.__saved.user_volumes['alice-uid'])).toBe(140);
+    await page.getByRole('menuitem', { name: 'Reset volume to 100%', exact: true }).click();
+    await expect(slider).toHaveValue('100');
+    expect(await page.evaluate(() => window.__mute.gain.value)).toBe(0);
+    await page.locator('.ctx-menu [data-act="mute"]').click();
+    await expect.poll(() => page.evaluate(() => window.__mute.gain.value)).toBe(1);
+});
+
+test.describe('member controls on touch screens', () => {
+    test.use({ hasTouch: true, viewport: { width: 644, height: 480 } });
+    test('visible menu remains reachable and contained in a compact touch window', async ({ page }) => {
+        const trigger = page.getByRole('button', { name: 'Member options for Alice', exact: true });
+        await trigger.tap();
+        const menu = page.getByRole('menu');
+        await expect(menu).toBeVisible();
+        const box = await menu.boundingBox();
+        expect(box.x).toBeGreaterThanOrEqual(0);
+        expect(box.y).toBeGreaterThanOrEqual(0);
+        expect(box.x + box.width).toBeLessThanOrEqual(644);
+        expect(box.y + box.height).toBeLessThanOrEqual(480);
+        const slider = page.getByRole('slider', { name: 'Screen-share audio · Only for you', exact: true });
+        await expect(slider).toBeVisible();
+        if (process.env.NOXA_UI_AUDIT_SCREENSHOTS) await page.screenshot({ path: '.cache/ui-audit-members/member-menu-compact.png' });
+        await page.keyboard.press('Escape');
+        await expect(trigger).toBeFocused();
+    });
+});
+
+test("member menu exposes and toggles the existing independent screen-share mute", async ({ page }) => {
+    await page.evaluate(() => {
+        window.__saved.muted_share_users = ['alice-uid'];
+        for (const callback of window.__events.settings_update || []) callback(structuredClone(window.__saved));
+    });
+    const trigger = page.getByRole('button', { name: 'Member options for Alice', exact: true });
+    await trigger.click();
+    const shareMute = page.locator('.ctx-menu [data-act="mute-share"]');
+    await expect(shareMute).toHaveText('✓ Mute screen-share audio');
+    expect(await page.evaluate(() => window.__mute.gain.value)).toBe(1);
+    await shareMute.click();
+    await expect.poll(() => page.evaluate(() => window.__saved.muted_share_users)).toEqual([]);
+    await trigger.click();
+    await expect(shareMute).toHaveText('Mute screen-share audio');
+    await page.evaluate(() => { window.__saveFail = true; });
+    await shareMute.click();
+    await expect(page.locator('#toasts')).toContainText('save failed');
+    await trigger.click();
+    await expect(shareMute).toHaveText('Mute screen-share audio');
+    expect(await page.evaluate(() => window.__saved.muted_users ?? [])).toEqual([]);
+    expect(await page.evaluate(() => window.__saved.user_share_volumes ?? {})).toEqual({});
+});
+
+test("member mute immediately updates its visible participant state", async ({ page }) => {
+    const trigger = page.getByRole('button', { name: 'Member options for Alice', exact: true });
+    await trigger.click();
+    await page.locator('.ctx-menu [data-act="mute"]').click();
+    await expect.poll(() => page.evaluate(() => window.__saved.muted_users)).toEqual(['alice-uid']);
+    await expect(page.locator('.participant[data-client-id="alice"]')).toContainText('Muted for you');
+});
+
+test("another session of my account has session controls but cannot call its own account", async ({ page }) => {
+    await page.evaluate(() => {
+        const v = window.__noxa;
+        v.state.myUniqueID = "local-storage-key";
+        v.state.clients.push({ client_id: "self-phone", unique_id: "me", nickname: "My phone", channel_id: 1 });
+        v.renderTree();
+    });
+    await page.locator('.client[data-clid="self-phone"]').click({ button: 'right' });
+    await expect(page.locator('.ctx-menu [data-act="call"]')).toHaveCount(0);
+    await expect(page.getByRole('menuitem', { name: 'Client Info', exact: true })).toBeVisible();
+    await page.getByRole('menuitem', { name: 'Move to channel…', exact: true }).click();
+    await page.getByRole('button', { name: 'Team', exact: true }).click();
+    expect(await page.evaluate(() => window.__moves)).toEqual([["one", "self-phone", 2]]);
 });

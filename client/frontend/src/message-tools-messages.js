@@ -13,6 +13,7 @@ export const messageToolsEnglish = {
     "messages.inboxPartial": "Some sources could not be loaded. Refresh to try again.", "messages.notFound": "This message is unavailable or you no longer have access.",
     "messages.scopeLimit": "Showing a partial thread list. Use the thread browser to reach older threads.",
     "messages.moreThreads": "Load more threads",
+    "messages.invalidDates": "The start date must be on or before the end date.",
 };
 export const messageToolsGerman = {
     "messages.inbox": "Posteingang", "messages.search": "Verlauf durchsuchen", "messages.saved": "Gespeicherte Nachrichten", "messages.save": "Nachricht speichern",
@@ -29,4 +30,5 @@ export const messageToolsGerman = {
     "messages.inboxPartial": "Einige Quellen konnten nicht geladen werden. Bitte aktualisieren.", "messages.notFound": "Diese Nachricht ist nicht verfügbar oder der Zugriff wurde entzogen.",
     "messages.scopeLimit": "Die Thread-Liste ist unvollständig. Ältere Threads sind im Thread-Browser erreichbar.",
     "messages.moreThreads": "Weitere Threads laden",
+    "messages.invalidDates": "Das Startdatum muss vor oder am Enddatum liegen.",
 };

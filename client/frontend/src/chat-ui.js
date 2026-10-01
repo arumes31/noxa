@@ -459,7 +459,7 @@ function normalize(d, chID) {
 // mention of me loses its highlight the moment it is reloaded (106).
 function attribute(m) {
     const st = V().state;
-    m.self = m.fromUID ? m.fromUID === st.myUniqueID : m.from === st.myNickname;
+    m.self = m.fromUID ? m.fromUID === sessionUserID(st) : m.from === st.myNickname;
     m.mentioned = !m.self && !m.deleted && mentionsMe(m.text);
     return m;
 }
@@ -2046,7 +2046,7 @@ async function maybeLoadOlder() {
 export function addChat(d) {
     const st = V().state;
     const m = normalize(d);
-    m.self = m.fromUID ? m.fromUID === st.myUniqueID : m.from === st.myNickname;
+    m.self = m.fromUID ? m.fromUID === sessionUserID(st) : m.from === st.myNickname;
     clearTyping(m.fromUID); // (120) their message landed; they are done typing
 
     if (m.direct) {
@@ -2337,7 +2337,7 @@ export function onChatReaction(d) {
     // tracks toggles made in this session (history has counts only, 97).
     m.reactions = d.reactions || {};
     m.reactionRevision = (m.reactionRevision || 0) + 1;
-    if (d.by && d.by === V().state.myUniqueID && typeof d.added === "boolean" && typeof d.emoji === "string" && d.emoji) {
+    if (d.by && d.by === sessionUserID(V().state) && typeof d.added === "boolean" && typeof d.emoji === "string" && d.emoji) {
         let own = myReactions.get(m.id);
         if (!own) { own = new Set(); myReactions.set(m.id, own); }
         if (d.added) own.add(d.emoji);
@@ -2428,7 +2428,7 @@ function noteTyping() {
 export function onTyping(d) {
     const st = V().state;
     const uid = d.unique_id || "";
-    if (!uid || uid === st.myUniqueID || d.client_id === st.myClientID) return;
+    if (!uid || uid === sessionUserID(st) || d.client_id === st.myClientID) return;
     const key = "ch:" + (Number(d.channel_id) || 0);
     if (!typers.has(key)) typers.set(key, new Map());
     typers.get(key).set(uid, { nick: d.nickname || uid, expires: Date.now() + TYPING_TTL_MS });
@@ -3758,7 +3758,7 @@ function openQS() {
         } });
     }
     for (const c of st.clients) {
-        if (c.unique_id && c.unique_id !== st.myUniqueID) {
+        if (c.unique_id && c.unique_id !== sessionUserID(st)) {
             items.push({ label: "@ " + (c.nickname || c.unique_id), hint: t("chat.userHint"), action: () => openPM(c.unique_id, c.nickname) });
         }
     }

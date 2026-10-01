@@ -55,3 +55,36 @@ test('recording continues beyond two minutes and stops at five minutes', async c
     assert.equal(ready, 1);
     assert.equal(await (await recorder.stop()).blob.text(), 'audio');
 });
+
+test('recording meter uses its capture and releases audio nodes on discard', async context => {
+    context.mock.timers.enable({ apis: ['setInterval', 'setTimeout'] });
+    let closed = 0, disconnected = 0, stopped = 0;
+    const levels = [], connections = [];
+    const stream = { getTracks: () => [{ stop() { stopped++; } }] };
+    const analyser = { fftSize: 0, getFloatTimeDomainData(samples) { samples.fill(0.1); }, disconnect() { disconnected++; } };
+    const recording = createVoiceRecording({ Recorder, capture: async () => stream, onLevel: level => levels.push(level), createContext: () => ({
+        createMediaStreamSource(received) { assert.equal(received, stream); return { connect(target) { connections.push(target); }, disconnect() { disconnected++; } }; },
+        createAnalyser: () => analyser, resume: async () => {}, close: async () => { closed++; },
+    }) });
+    await recording.start();
+    context.mock.timers.tick(100);
+    assert.equal(levels.length, 1);
+    assert.equal(levels[0].quality, 'good');
+    assert.deepEqual(connections, [analyser]);
+    recording.discard();
+    context.mock.timers.tick(1000);
+    assert.equal(levels.length, 1);
+    assert.equal(disconnected, 2);
+    assert.equal(closed, 1);
+    assert.equal(stopped, 1);
+});
+
+test('meter failure leaves recording usable', async () => {
+    const levels = [];
+    const recording = createVoiceRecording({ Recorder, capture: async () => ({ getTracks: () => [{ stop() {} }] }),
+        onLevel: level => levels.push(level), createContext: () => { throw new Error('Unavailable'); } });
+    await recording.start();
+    assert.deepEqual(levels, [null]);
+    assert.equal(await (await recording.stop()).blob.text(), 'audio');
+    recording.dispose();
+});

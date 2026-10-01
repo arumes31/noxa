@@ -15,7 +15,14 @@ export function openRolesManager() {
     openOverlay = overlay;
     const dialog = roleElement("section", "dlg roles-dialog");
     const header = roleElement("header", "roles-header");
-    header.append(roleElement("h3", "", t("roles.title")), roleButton(t("roles.members"), openRoleMembers), roleButton(t("common.close"), () => closeDialog(overlay, "cancel")));
+    header.append(roleElement("h3", "", t("roles.title")), roleButton(t("roles.members"), async () => {
+        if (model.busy || !await discardConfirmed() || !current()) return;
+        model.draft = roleDraft(model.saved);
+        model.dirty = false;
+        model.busy = true;
+        render();
+        openRoleMembers({ onClose: () => { if (current()) load(); } });
+    }), roleButton(t("common.close"), () => closeDialog(overlay, "cancel")));
     const help = roleElement("p", "role-hint", t("roles.help"));
     const defaultRoleField = roleElement("label", "role-field");
     const defaultRoleSelect = roleElement("select");
@@ -146,6 +153,7 @@ export function openRolesManager() {
     };
     const load = async () => {
         model.busy = true;
+        model.needsRefresh = true;
         error.textContent = "";
         render();
         try { await refresh(); }

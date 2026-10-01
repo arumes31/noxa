@@ -2,7 +2,7 @@ import { expect, test } from "./fixtures.js";
 
 test.use({ launchOptions: { args: ["--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream", "--autoplay-policy=no-user-gesture-required"] }, permissions: ["microphone", "camera"] });
 
-for (const signalingMode of ["normal", "gathering", "candidates-first", "group-media"]) {
+for (const signalingMode of ["normal", "gathering", "candidates-first", "group-media", "capture-recovery"]) {
 test(`real peer call captures only after acceptance and tears down without joining a channel${signalingMode === "normal" ? "" : ` (${signalingMode})`}`, async ({ newIsolatedPage }) => {
     test.setTimeout(60000);
     const pages = new Map();
@@ -47,7 +47,11 @@ test(`real peer call captures only after acceptance and tears down without joini
             const createGain = AudioContext.prototype.createGain;
             AudioContext.prototype.createGain = function () { const gain = createGain.call(this); window.__callGains.push(gain); return gain; };
             const getMedia = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
-            navigator.mediaDevices.getUserMedia = async constraints => { window.__captures++; const stream = await getMedia(constraints); window.__streams.push(stream); return stream; };
+            navigator.mediaDevices.getUserMedia = async constraints => {
+                window.__captures++;
+                if (signalingMode === "capture-recovery" && window.__captures === 1) throw new DOMException("Microphone temporarily unavailable", "NotReadableError");
+                const stream = await getMedia(constraints); window.__streams.push(stream); return stream;
+            };
             const OriginalPeer = window.RTCPeerConnection;
             window.RTCPeerConnection = class extends OriginalPeer {
                 constructor(...args) {
@@ -89,6 +93,13 @@ test(`real peer call captures only after acceptance and tears down without joini
                 expect(await page.evaluate(() => window.__hostCandidates)).toBeGreaterThan(0);
                 if (signalingMode === "gathering") expect(await page.evaluate(() => window.__peers[0].iceGatheringState)).toBe("gathering");
             }
+            if (signalingMode === "capture-recovery") {
+                await page.evaluate(() => window.__callsModule.applyPrivateCallAudioSettings());
+                expect(await page.evaluate(() => window.__captures)).toBe(2);
+                expect(await page.evaluate(() => window.__peers[0].getSenders().some(sender => sender.track === window.__streams[0].getAudioTracks()[0]))).toBe(true);
+            }
+        }
+        for (const page of pages.values()) {
             await expect.poll(() => page.evaluate(async () => {
                 const stats = await window.__peers[0].getStats();
                 return [...stats.values()].filter(report => report.type === "inbound-rtp" && report.kind === "audio").reduce((sum, report) => sum + (report.bytesReceived || 0), 0);
@@ -140,6 +151,19 @@ test(`real peer call captures only after acceptance and tears down without joini
             const test = window.__testTone; await test.sender.replaceTrack(test.original);
             test.tone.stop(); test.output.stream.getTracks().forEach(track => track.stop()); await test.context.close();
         });
+        if (["normal", "group-media"].includes(signalingMode)) {
+            await alice.getByRole("button", { name: "Mute microphone", exact: true }).click();
+            await alice.evaluate(async () => {
+                window.__previousCallMic = window.__streams[0].getAudioTracks()[0];
+                window.__noxa.state.settings.noise_suppression = false;
+                await window.__callsModule.applyPrivateCallAudioSettings();
+            });
+            expect(await alice.evaluate(() => window.__captures)).toBe(2);
+            expect(await alice.evaluate(() => window.__previousCallMic.readyState)).toBe("ended");
+            expect(await alice.evaluate(() => window.__peers.every(peer => peer.connectionState === "connected" && peer.getSenders().some(sender => sender.track === window.__streams[1].getAudioTracks()[0] && !sender.track.enabled)))).toBe(true);
+            await alice.getByRole("button", { name: "Unmute microphone", exact: true }).click();
+            await expect.poll(() => alice.evaluate(() => window.__streams[1].getAudioTracks()[0].enabled)).toBe(true);
+        }
         if (["normal", "group-media"].includes(signalingMode)) {
             // Start camera from both negotiation roles after audio connected.
             for (const page of pages.values()) {
@@ -204,7 +228,7 @@ test(`real peer call captures only after acceptance and tears down without joini
         await alice.getByRole("button", { name: "Mute microphone", exact: true }).click();
         await expect(alice.getByRole("button", { name: "Unmute microphone", exact: true })).toHaveAttribute("aria-pressed", "true");
         await expect(alice.getByRole("button", { name: "Unmute microphone", exact: true })).toHaveClass(/voice-control/);
-        await expect.poll(() => alice.evaluate(() => window.__streams[0].getAudioTracks()[0].enabled)).toBe(false);
+        await expect.poll(() => alice.evaluate(() => window.__streams.filter(stream => stream.getAudioTracks().length).every(stream => stream.getAudioTracks()[0].readyState === "ended" || !stream.getAudioTracks()[0].enabled))).toBe(true);
         await bob.evaluate(() => { window.__noxa.state.settings.activation_mode = "ptt"; });
         const talk = bob.getByRole("button", { name: "Hold to talk", exact: true });
         await expect(talk).toBeVisible();
@@ -253,7 +277,7 @@ test(`real peer call captures only after acceptance and tears down without joini
         await alice.getByRole("button", { name: "End call", exact: true }).click();
         for (const page of pages.values()) {
             await expect(page.locator(".private-call-panel")).toHaveCount(0);
-            expect(await page.evaluate(() => window.__streams[0].getTracks().every(track => track.readyState === "ended"))).toBe(true);
+            expect(await page.evaluate(() => window.__streams.every(stream => stream.getTracks().every(track => track.readyState === "ended")))).toBe(true);
         }
     } catch (error) {
         for (const [uid, page] of pages) console.log(uid, JSON.stringify(await page.evaluate(async () => ({ warnings: window.__warnings, peers: await Promise.all(window.__peers.map(async peer => ({ state: peer.connectionState, transceivers: peer.getTransceivers().map(t => ({ current: t.currentDirection, desired: t.direction, sender: t.sender.track?.readyState, enabled: t.sender.track?.enabled, receiver: t.receiver.track?.readyState })), stats: [...(await peer.getStats()).values()].filter(s => s.type === "outbound-rtp" || s.type === "inbound-rtp").map(s => ({ type: s.type, kind: s.kind, sent: s.bytesSent, received: s.bytesReceived })) }))) }))));
@@ -342,6 +366,47 @@ async function mountCallRaceFixture(page) {
     });
 }
 
+test("incoming private call remains answerable while already in a voice channel", async ({ page }) => {
+    await mountCallRaceFixture(page);
+    await page.clock.install();
+    await page.evaluate(async () => {
+        window.__noxa.state.myUniqueID = "alice";
+        window.__noxa.state.myChannelID = 7;
+        await window.__callsModule.privateCallChanged({ id: "call-old" });
+    });
+    await expect(page.getByRole("button", { name: "Accept", exact: true })).toBeVisible();
+    await page.clock.runFor(4500);
+    await expect(page.getByRole("button", { name: "Accept", exact: true })).toBeVisible();
+    expect(await page.evaluate(() => ({ channel: window.__noxa.state.myChannelID, captures: window.__captures, stops: window.__stops }))).toEqual({ channel: 7, captures: 0, stops: [] });
+    await page.getByRole("button", { name: "Decline", exact: true }).click();
+    await expect(page.locator(".private-call-panel")).toHaveCount(0);
+    expect(await page.evaluate(() => window.__stops)).toEqual(["call-old"]);
+});
+
+test("cancelled incoming call cannot leave voice through an already open confirmation", async ({ page }) => {
+    await mountCallRaceFixture(page);
+    await page.evaluate(async () => {
+        window.__noxa.state.myUniqueID = "alice";
+        window.__noxa.state.myChannelID = 7;
+        window.__channelMoves = 0;
+        window.go.main.App.JoinChannelForTab = async () => {
+            window.__channelMoves++;
+            window.__noxa.state.myChannelID = 0;
+            return "";
+        };
+        await window.__callsModule.privateCallChanged({ id: "call-old" });
+    });
+    await page.getByRole("button", { name: "Accept", exact: true }).click();
+    await expect(page.getByRole("dialog")).toBeVisible();
+    await page.evaluate(async () => {
+        window.__call = { ...window.__call, revision: 2, ended_at: Math.floor(Date.now() / 1000) };
+        await window.__callsModule.privateCallChanged({ id: "call-old" });
+    });
+    await expect(page.locator(".private-call-panel")).toHaveCount(0);
+    await page.getByRole("button", { name: "Confirm", exact: true }).click();
+    expect(await page.evaluate(() => ({ channel: window.__noxa.state.myChannelID, moves: window.__channelMoves, captures: window.__captures }))).toEqual({ channel: 7, moves: 0, captures: 0 });
+});
+
 for (const knownCall of [false, true]) {
     test(`offer preceding call-state refresh is replayed (${knownCall ? "sender still ringing" : "no local call yet"})`, async ({ page }) => {
         await mountCallRaceFixture(page);
@@ -390,6 +455,86 @@ test("ICE configuration failure after capture releases microphone and closes the
     await expect.poll(() => page.evaluate(() => window.__allTracks.length > 0 && window.__allTracks.every(track => track.readyState === "ended"))).toBe(true);
     await expect(page.locator(".private-call-panel")).toHaveCount(0);
     expect(await page.evaluate(() => window.__stops)).toContain("call-ice-failure");
+});
+
+test("private-call microphone switch failure preserves the live capture and allows retry", async ({ page }) => {
+    await mountCallRaceFixture(page);
+    await page.evaluate(async () => {
+        window.__call = window.__makeCall("call-old", 2, true);
+        await window.__callsModule.startPrivateCall("alice");
+        window.__oldCallMic = window.__streams[0].getAudioTracks()[0];
+        window.__noxa.state.settings.capture_device_id = "missing-audit-microphone";
+        try { await window.__callsModule.applyPrivateCallAudioSettings(); } catch (error) { window.__captureError = error.name; }
+    });
+    expect(await page.evaluate(() => window.__captureError)).toBeTruthy();
+    expect(await page.evaluate(() => window.__oldCallMic.readyState)).toBe("live");
+    expect(await page.evaluate(() => window.__peers[0].getSenders().some(sender => sender.track === window.__oldCallMic))).toBe(true);
+    await page.evaluate(async () => {
+        window.__noxa.state.settings.capture_device_id = "";
+        window.__noxa.state.settings.noise_suppression = false;
+        await window.__callsModule.applyPrivateCallAudioSettings();
+    });
+    expect(await page.evaluate(() => window.__oldCallMic.readyState)).toBe("ended");
+    await page.getByRole("button", { name: "End call", exact: true }).click();
+    expect(await page.evaluate(() => window.__allTracks.every(track => track.readyState === "ended"))).toBe(true);
+});
+
+test("ending a private call releases a microphone switch still waiting for capture", async ({ page }) => {
+    await mountCallRaceFixture(page);
+    await page.evaluate(async () => {
+        window.__call = window.__makeCall("call-old", 2, true);
+        await window.__callsModule.startPrivateCall("alice");
+        const capture = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
+        navigator.mediaDevices.getUserMedia = async constraints => {
+            await new Promise(resolve => { window.__allowCaptureSwitch = resolve; });
+            window.__lateSwitch = await capture(constraints); return window.__lateSwitch;
+        };
+        window.__noxa.state.settings.noise_suppression = false;
+        window.__captureSwitch = window.__callsModule.applyPrivateCallAudioSettings();
+    });
+    await expect.poll(() => page.evaluate(() => typeof window.__allowCaptureSwitch)).toBe("function");
+    await page.getByRole("button", { name: "End call", exact: true }).click();
+    await page.evaluate(async () => { window.__allowCaptureSwitch(); await window.__captureSwitch; });
+    expect(await page.evaluate(() => window.__lateSwitch.getTracks().every(track => track.readyState === "ended"))).toBe(true);
+    expect(await page.evaluate(() => window.__allTracks.every(track => track.readyState === "ended"))).toBe(true);
+    await expect(page.locator(".private-call-panel")).toHaveCount(0);
+});
+
+test("an ended private-call microphone can recover without changing its capture profile", async ({ page }) => {
+    await mountCallRaceFixture(page);
+    await page.evaluate(async () => {
+        window.__call = window.__makeCall("call-old", 2, true);
+        await window.__callsModule.startPrivateCall("alice");
+        window.__oldCallMic = window.__streams[0].getAudioTracks()[0]; window.__oldCallMic.stop();
+        await window.__callsModule.applyPrivateCallAudioSettings();
+    });
+    expect(await page.evaluate(() => window.__captures)).toBe(2);
+    expect(await page.evaluate(() => window.__peers[0].getSenders().some(sender => sender.track === window.__streams[1].getAudioTracks()[0] && sender.track.readyState === "live"))).toBe(true);
+    await page.getByRole("button", { name: "End call", exact: true }).click();
+    expect(await page.evaluate(() => window.__allTracks.every(track => track.readyState === "ended"))).toBe(true);
+});
+
+test("partial group microphone swap failure rolls every active peer back before retry", async ({ page }) => {
+    await mountCallRaceFixture(page);
+    await page.evaluate(async () => {
+        window.__call = window.__makeCall("call-old", 2, true);
+        window.__call.participants.push({ unique_id: "charlie", client_id: "c", state: "accepted" });
+        await window.__callsModule.startPrivateCall("alice");
+        window.__oldCallMic = window.__streams[0].getAudioTracks()[0]; window.__initialTrackCount = window.__allTracks.length;
+        window.__rejectingSender = window.__peers[1].getSenders().find(sender => sender.track === window.__oldCallMic);
+        window.__replaceTrack = window.__rejectingSender.replaceTrack.bind(window.__rejectingSender);
+        window.__rejectingSender.replaceTrack = async track => { if (track !== window.__oldCallMic) throw new Error("Device swap rejected"); return window.__replaceTrack(track); };
+        window.__noxa.state.settings.noise_suppression = false;
+        try { await window.__callsModule.applyPrivateCallAudioSettings(); } catch (error) { window.__captureError = error.message; }
+    });
+    expect(await page.evaluate(() => window.__captureError)).toBe("Device swap rejected");
+    expect(await page.evaluate(() => window.__peers.every(peer => peer.getSenders().some(sender => sender.track === window.__oldCallMic && sender.track.readyState === "live")))).toBe(true);
+    expect(await page.evaluate(() => window.__allTracks.slice(window.__initialTrackCount).every(track => track.readyState === "ended"))).toBe(true);
+    await page.evaluate(async () => { window.__rejectingSender.replaceTrack = window.__replaceTrack; await window.__callsModule.applyPrivateCallAudioSettings(); });
+    expect(await page.evaluate(() => window.__oldCallMic.readyState)).toBe("ended");
+    expect(await page.evaluate(() => window.__peers.every(peer => peer.getSenders().some(sender => sender.track === window.__streams.at(-1).getAudioTracks()[0] && sender.track.readyState === "live")))).toBe(true);
+    await page.getByRole("button", { name: "End call", exact: true }).click();
+    expect(await page.evaluate(() => window.__allTracks.every(track => track.readyState === "ended"))).toBe(true);
 });
 
 test("delayed active call response cannot resurrect an ended call", async ({ page }) => {

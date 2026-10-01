@@ -21,15 +21,26 @@ function copyPresentation(target) {
 
 export function closeCallUndock(panel) { panels.get(panel)?.dock(); }
 
+function restoreCallFocus(panel, trigger) {
+    for (const control of new Set([trigger, ...(triggers.get(panel) || [])])) {
+        if (!control?.isConnected || control.ownerDocument !== document) continue;
+        const closedOptions = control.closest('details:not([open])');
+        const target = closedOptions?.querySelector(':scope > summary') || control;
+        if (target.disabled || !target.getClientRects().length) continue;
+        target.focus({ preventScroll: true });
+        return;
+    }
+}
+
 export function callUndockButton(panel) {
-    const button = document.createElement('button'); button.type = 'button'; button.className = 'call-control';
+    const button = document.createElement('button'); button.type = 'button'; button.className = 'call-control ui-button';
     const refresh = () => { button.textContent = t(panels.has(panel) ? 'call.dock' : 'call.undock'); button.setAttribute('aria-pressed', String(panels.has(panel))); };
     refresh();
     if (!triggers.has(panel)) triggers.set(panel, new Set());
     triggers.get(panel).add(button);
     if (!window.documentPictureInPicture) { button.disabled = true; button.title = t('call.undockUnavailable'); }
     button.onclick = async () => {
-        if (panels.has(panel)) { closeCallUndock(panel); refresh(); return; }
+        if (panels.has(panel)) { panels.get(panel).dock(true); refresh(); return; }
         if (opening || !panel.isConnected) return;
         opening = true; button.disabled = true;
         try {
@@ -39,13 +50,13 @@ export function callUndockButton(panel) {
             const anchor = document.createComment('docked call position'); panel.before(anchor);
             let closed = false;
             const blur = () => panel.dispatchEvent(new Event('noxa-call-blur'));
-            const dock = () => {
+            const dock = (restoreFocus = false) => {
                 if (closed) return; closed = true;
                 panel.dispatchEvent(new Event('noxa-call-docking'));
                 if (anchor.parentNode) anchor.replaceWith(panel);
                 else panel.remove();
                 panels.delete(panel); if (active?.panel === panel) active = null;
-                target.removeEventListener('pagehide', dock); window.removeEventListener('beforeunload', dock);
+                target.removeEventListener('pagehide', onPageHide); window.removeEventListener('beforeunload', dock);
                 target.removeEventListener('blur', blur);
                 if (!target.closed) target.close();
                 // Call controls may have been recreated by a membership update.
@@ -53,10 +64,14 @@ export function callUndockButton(panel) {
                     if (!control.isConnected) { triggers.get(panel).delete(control); continue; }
                     control.textContent = t('call.undock'); control.setAttribute('aria-pressed', 'false');
                 }
+                // User docking returns to a visible control; teardown and
+                // switching calls preserve focus in the active workspace.
+                if (restoreFocus === true) restoreCallFocus(panel, button);
             };
+            const onPageHide = () => dock(true);
             panels.set(panel, { dock }); active = { panel, dock };
             copyPresentation(target); target.document.title = t('call.active'); target.document.body.append(panel);
-            target.addEventListener('pagehide', dock, { once: true }); window.addEventListener('beforeunload', dock, { once: true });
+            target.addEventListener('pagehide', onPageHide, { once: true }); window.addEventListener('beforeunload', dock, { once: true });
             target.addEventListener('blur', blur);
             refresh();
         } catch (error) { window.__noxa?.toast?.(t('call.failed', { error: error.message || String(error) }), 'warn'); }
@@ -74,7 +89,8 @@ export function initChannelUndocking() {
     if (!bar || bar.querySelector('[data-channel-undock]')) return;
     const panel = document.createElement('section'); panel.className = 'undocked-channel'; panel.hidden = true;
     document.body.append(panel);
-    const undock = callUndockButton(panel); undock.dataset.channelUndock = ''; bar.append(undock);
+    const undock = callUndockButton(panel); undock.dataset.channelUndock = ''; undock.classList.add('voice-control');
+    (bar.querySelector('.voice-secondary-actions') || bar).append(undock);
     const title = document.createElement('h2'), people = document.createElement('p'), controls = document.createElement('div'), grid = document.createElement('div');
     controls.className = 'undocked-channel-controls'; grid.className = 'undocked-channel-grid';
     panel.append(title, people, controls, grid, callUndockButton(panel));

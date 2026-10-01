@@ -216,7 +216,7 @@ export function initConversations() {
                 }
                 item.setAttribute("aria-current", String(visible() && group.id === selected));
                 item.onclick = () => {
-                    saveDraft(); selected = group.id; setVisible(true);
+                    saveDraft(); selected = group.id; jumpTarget = 0; status.textContent = ""; setVisible(true);
                     document.body.classList.remove("channels-open");
                     document.getElementById("workspace-sidebar-toggle")?.setAttribute("aria-expanded", "false");
                     channels.setAttribute("aria-expanded", "false");
@@ -229,7 +229,7 @@ export function initConversations() {
             if (focusedGroup && document.activeElement === document.body) [...list.children].find(item => item.dataset.groupId === focusedGroup)?.focus({ preventScroll: true });
             if (sidebarOnly) return;
             const group = groups.find(group => group.id === selected);
-            if (!group) { saveDraft(); selected = ""; content.replaceChildren(el("p", "group-empty", t("group.empty"))); return; }
+            if (!group) { saveDraft(); selected = ""; jumpTarget = 0; content.replaceChildren(el("p", "group-empty", t("group.empty"))); return; }
             const activeInput = document.activeElement;
             const selector = activeInput?.matches(".group-composer textarea") ? ".group-composer textarea" : ".group-invite input";
             const selection = content.contains(activeInput) && activeInput?.matches(selector) && content.dataset.groupId === group.id
@@ -280,6 +280,7 @@ export function initConversations() {
         const top = el("header", "group-header"); top.append(el("h3", "", group.name), button("group.refresh", () => void refresh()));
         content.replaceChildren(top, el("p", "group-privacy", t("group.private")));
         if (me?.pending) {
+            jumpTarget = 0;
             const actions = el("div", "group-actions");
             actions.append(button("group.accept", () => mutate(group, "accept")), button("group.decline", () => mutate(group, "decline")));
             content.append(actions); return;
@@ -370,6 +371,7 @@ export function initConversations() {
         };
         let before = jumpTarget > 0 ? jumpTarget + 1 : 0;
         let loading = false;
+        let historyError = "";
         let latestRendered = 0;
         messages.onscroll = () => {
             if (!loading && messages.scrollHeight - messages.scrollTop - messages.clientHeight <= 24) void markRead(group, latestRendered, token);
@@ -380,6 +382,8 @@ export function initConversations() {
             try {
                 const result = await request({ action: "history", id: group.id, before_id: before });
                 if (!current() || token !== generation) return;
+                if (historyError && status.textContent === historyError) status.textContent = "";
+                historyError = "";
                 const fragment = document.createDocumentFragment();
                 for (const message of [...result.messages].reverse()) {
                     const row = el("article", "group-message");
@@ -403,18 +407,23 @@ export function initConversations() {
                     messages.scrollTop = preserveScroll ? previousScrollTop : messages.scrollHeight;
                     if (!preserveScroll) void markRead(group, latestRendered, token);
                 }
-            } catch (error) { if (token === generation) fail(error); }
+                const target = jumpTarget;
+                if (target) {
+                    const found = messages.querySelector(`[data-message-id="${target}"]`);
+                    if (found) { found.scrollIntoView({ block: "center" }); found.classList.add("message-reference-flash"); setTimeout(() => found.classList.remove("message-reference-flash"), 2000); }
+                    else status.textContent = t("messages.notFound");
+                    jumpTarget = 0;
+                }
+            } catch (error) {
+                if (current() && token === generation) {
+                    fail(error); historyError = status.textContent;
+                    older.disabled = false;
+                }
+            }
             finally { loading = false; }
         };
         older.onclick = history;
         await history();
-        const target = jumpTarget;
-        if (target && current() && token === generation) {
-            const found = messages.querySelector(`[data-message-id="${target}"]`);
-            if (found) { found.scrollIntoView({ block: "center" }); found.classList.add("message-reference-flash"); setTimeout(() => found.classList.remove("message-reference-flash"), 2000); }
-            else status.textContent = t("messages.notFound");
-            jumpTarget = 0;
-        }
     };
     create.onsubmit = event => { event.preventDefault(); void mutate(null, "create", "", { name: name.value.trim() }); };
     const refreshHandler = () => {

@@ -76,7 +76,7 @@ test("group voice recording survives incoming messages and sends to the same gro
     });
     await expect(page.locator(".group-messages")).toContainText("Message while recording");
     // The next recording status tick must preserve the session after refresh.
-    await expect(page.locator(".voice-message-dialog [role=status]")).toContainText("Recording");
+    await expect(page.locator(".voice-message-dialog [role=status]:not(.voice-recording-warning)")).toContainText("Recording");
     expect(await page.evaluate(() => window.__voiceStream.getTracks()[0].readyState)).toBe("live");
     await page.getByRole("button", { name: "Stop recording", exact: true }).click();
     await expect(page.getByRole("button", { name: "Send voice message", exact: true })).toBeEnabled();
@@ -96,6 +96,14 @@ test("group voice rerecord uses a new send reference while retries retain the or
             const output = window.__voiceContext.createMediaStreamDestination(); tone.connect(output); return output.stream;
         };
         window.__voiceUploads = 0; window.__voiceSends = []; window.__storedVoice = new Map();
+        window.__encodedVoiceChunks = 0;
+        const Recorder = window.MediaRecorder;
+        window.MediaRecorder = class extends Recorder {
+            constructor(...args) {
+                super(...args);
+                this.addEventListener('dataavailable', event => { if (event.data.size) window.__encodedVoiceChunks++; });
+            }
+        };
         window.go.main.App.UploadChatAttachmentForTab = async () => `[file:recording-${++window.__voiceUploads}#key#voice.weba]`;
         window.go.main.App.SendConversationForTab = async (_tab, _group, body, reference) => {
             window.__voiceSends.push({ body, reference });
@@ -108,9 +116,11 @@ test("group voice rerecord uses a new send reference while retries retain the or
     await page.getByRole("button", { name: "Raid <script>", exact: true }).click();
     await page.getByRole("button", { name: "Record voice message", exact: true }).click();
     const record = async () => {
+        const previousChunks = await page.evaluate(() => window.__encodedVoiceChunks);
         await page.getByRole("button", { name: "Start recording", exact: true }).click();
         await expect(page.getByRole("button", { name: "Stop recording", exact: true })).toBeEnabled();
-        await expect(page.locator(".voice-message-dialog [role=status]")).toContainText("Recording");
+        await expect(page.locator(".voice-message-dialog [role=status]:not(.voice-recording-warning)")).toContainText("Recording");
+        await expect.poll(() => page.evaluate(() => window.__encodedVoiceChunks)).toBeGreaterThan(previousChunks);
         await page.getByRole("button", { name: "Stop recording", exact: true }).click();
         await expect(page.getByRole("button", { name: "Send voice message", exact: true })).toBeEnabled();
     };
@@ -118,7 +128,7 @@ test("group voice rerecord uses a new send reference while retries retain the or
     for (let attempt = 1; attempt <= 2; attempt++) {
         await page.getByRole("button", { name: "Send voice message", exact: true }).click();
         await expect.poll(() => page.evaluate(() => window.__voiceSends.length)).toBe(attempt);
-        await expect(page.locator(".voice-message-dialog [role=status]")).toContainText("send response lost");
+        await expect(page.locator(".voice-message-dialog [role=status]:not(.voice-recording-warning)")).toContainText("send response lost");
     }
     await record();
     await page.getByRole("button", { name: "Send voice message", exact: true }).click();
@@ -414,6 +424,70 @@ test("retrying an uncertain send after refresh keeps its deduplication reference
     await expect.poll(() => page.evaluate(() => window.__groupCalls.filter(([, command]) => command.action === "send").length)).toBe(2);
     const references = await page.evaluate(() => window.__groupCalls.filter(([, command]) => command.action === "send").map(([, command]) => command.reference));
     expect(references[0]).toBe(references[1]);
+});
+
+test("older group history remains retryable after a transient page failure", async ({ page }, testInfo) => {
+    await page.evaluate(() => {
+        const original = window.go.main.App.ConversationForTab;
+        window.__historyRequests = [];
+        window.go.main.App.ConversationForTab = async (tab, command) => {
+            if (command.action !== "history") return original(tab, command);
+            window.__historyRequests.push(command.before_id);
+            if (window.__historyRequests.length === 2) throw new Error("History temporarily unavailable");
+            const newest = command.before_id ? command.before_id - 1 : 50;
+            return { conversations: [], messages: Array.from({ length: 25 }, (_, index) => ({
+                id: newest - index, conversation_id: "g1", from_unique_id: "bob",
+                body: `Historical message ${newest - index}`, created_at: 1,
+            })) };
+        };
+    });
+    await page.getByRole("button", { name: "Raid <script>", exact: true }).click();
+    await expect(page.locator(".group-message")).toHaveCount(25);
+    const older = page.getByRole("button", { name: "Load older messages", exact: true });
+    await older.click();
+    await expect(page.locator(".group-status")).toContainText("History temporarily unavailable");
+    await page.screenshot({ path: testInfo.outputPath("history-retry.png") });
+    await expect(older).toBeEnabled();
+    await older.click();
+    await expect(page.locator(".group-message")).toHaveCount(50);
+    await expect(page.locator(".group-status")).toHaveText("");
+    expect(await page.evaluate(() => window.__historyRequests)).toEqual([0, 26, 26]);
+    expect(await page.locator(".group-message").evaluateAll(rows => new Set(rows.map(row => row.dataset.messageId)).size)).toBe(50);
+});
+
+test("an unavailable saved group reference does not constrain the next group history", async ({ page }) => {
+    await page.evaluate(async () => {
+        window.__groupMessages.push({ id: 200, conversation_id: "g1", from_unique_id: "bob", body: "Latest accessible message", created_at: 1 });
+        const original = window.go.main.App.ConversationForTab;
+        window.go.main.App.ConversationForTab = async (tab, command) => {
+            const result = await original(tab, command);
+            if (command.action === "history" && command.before_id) result.messages = result.messages.filter(message => message.id < command.before_id);
+            return result;
+        };
+        await window.__conversationModule.openConversationsAt("removed-group", 123);
+    });
+    await expect(page.locator(".group-status")).toContainText("no longer have access");
+    await page.getByRole("button", { name: /Raid <script>/ }).click();
+    await expect(page.locator(".group-messages")).toContainText("Latest accessible message");
+    await expect(page.locator(".group-status")).toHaveText("");
+    expect(await page.evaluate(() => window.__groupCalls.filter(([, request]) => request.action === "history").at(-1)[1].before_id)).toBe(0);
+});
+
+test("a saved group message jump retries a failed history request before resolving its target", async ({ page }) => {
+    await page.evaluate(async () => {
+        window.__groupMessages.push({ id: 123, conversation_id: "g1", from_unique_id: "bob", body: "Saved group message", created_at: 1 });
+        const original = window.go.main.App.ConversationForTab;
+        let failOnce = true;
+        window.go.main.App.ConversationForTab = async (tab, command) => {
+            if (failOnce && command.action === "history") { failOnce = false; throw new Error("History retry required"); }
+            return original(tab, command);
+        };
+        await window.__conversationModule.openConversationsAt("g1", 123);
+    });
+    await expect(page.locator(".group-status")).toContainText("History retry required");
+    await page.getByRole("button", { name: "Load older messages", exact: true }).click();
+    await expect(page.locator('.group-message[data-message-id="123"]')).toHaveClass(/message-reference-flash/);
+    await expect(page.locator(".group-status")).toHaveText("");
 });
 
 test("invitations require acceptance; drafts never move into another private group", async ({ page }) => {

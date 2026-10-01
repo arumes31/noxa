@@ -52,13 +52,13 @@ function closePeer(peer) {
     peer.localCandidates.length = 0; peer.remoteCandidates.length = 0;
 }
 
-async function leaveChannelForCall(tabID, generation) {
+async function leaveChannelForCall(tabID, generation, ownsCall = () => true) {
     if (!V().state.myChannelID) return true;
     if (!await confirmDialog({ title: t("call.leaveVoice"), message: t("call.leaveHelp"), serverScoped: true })) return false;
-    if (V().state.activeTabID !== tabID || V().state.serverGeneration !== generation) return false;
+    if (!ownsCall() || V().state.activeTabID !== tabID || V().state.serverGeneration !== generation) return false;
     const error = await app().JoinChannelForTab(tabID, 0);
     if (error) throw new Error(error);
-    if (V().state.activeTabID !== tabID || V().state.serverGeneration !== generation) return false;
+    if (!ownsCall() || V().state.activeTabID !== tabID || V().state.serverGeneration !== generation) return false;
     V().resetVoiceSession();
     return true;
 }
@@ -86,7 +86,7 @@ export function stopPrivateCall() {
     clearInterval(owner.audioTick);
     owner.media.close();
     owner.stream?.getTracks().forEach(track => track.stop());
-    owner.monitorTrack?.stop();
+    releaseCaptureMonitor(owner);
     void owner.context?.close().catch(() => {});
     for (const peer of owner.peers.values()) closePeer(peer);
     closeCallUndock(owner.panel);
@@ -128,7 +128,8 @@ async function applyCall(call, tabID, generation) {
         panel.addEventListener("noxa-call-blur", releaseHold);
         owner.audioTick = setInterval(() => { if (current(owner)) syncAudio(owner); }, 50);
         owner.poll = setInterval(async () => {
-            if (!current(owner) || V().state.myChannelID > 0) { stopPrivateCall(); return; }
+            const inCall = owner.call.participants.some(peer => peer.unique_id === owner.uid && peer.state === "accepted");
+            if (!current(owner) || (inCall && V().state.myChannelID > 0)) { stopPrivateCall(); return; }
             syncAudio(owner);
             if (owner.pollBusy) return;
             owner.pollBusy = true;
@@ -181,7 +182,7 @@ function render(owner) {
     if (incoming) {
         controls.append(action("call.accept", async () => {
             try {
-                if (!current(owner) || !await leaveChannelForCall(owner.tabID, owner.generation) || !current(owner)) return;
+                if (!current(owner) || !await leaveChannelForCall(owner.tabID, owner.generation, () => current(owner)) || !current(owner)) return;
                 const result = await app().PrivateCallForTab(owner.tabID, { action: "accept", id: owner.call.id });
                 if (current(owner)) await applyCall(result.call, owner.tabID, owner.generation);
             } catch (error) { if (current(owner)) report(error); }
@@ -232,22 +233,83 @@ async function ensureCapture(owner) {
     if (owner.capture) return owner.capture;
     owner.capture = (async () => {
         let stream;
-        try { stream = await navigator.mediaDevices.getUserMedia({ audio: captureConstraints(null), video: false }); }
+        const constraints = captureConstraints(null);
+        try { stream = await navigator.mediaDevices.getUserMedia({ audio: constraints, video: false }); }
         catch { stream = new MediaStream(); if (current(owner)) V().toast?.(t("call.audioFailed"), "warn"); }
         if (!current(owner)) { stream.getTracks().forEach(track => track.stop()); return; }
         owner.stream = stream;
+        owner.captureProfile = JSON.stringify(constraints);
         owner.context = new AudioContext();
-        if (stream.getAudioTracks()[0]) {
-            owner.monitorTrack = stream.getAudioTracks()[0].clone(); owner.monitorTrack.enabled = true;
-            const source = owner.context.createMediaStreamSource(new MediaStream([owner.monitorTrack]));
-            owner.analyser = owner.context.createAnalyser(); owner.analyser.fftSize = 512;
-            source.connect(owner.analyser); owner.samples = new Uint8Array(owner.analyser.frequencyBinCount);
-        }
+        if (stream.getAudioTracks()[0]) Object.assign(owner, captureMonitor(owner, stream.getAudioTracks()[0]));
         void owner.context.resume().catch(() => {});
         owner.ice = await app().GetICEServersForTab(owner.tabID);
         syncAudio(owner);
     })();
     return owner.capture;
+}
+
+function releaseCaptureMonitor(monitor) {
+    monitor.monitorTrack?.stop(); monitor.monitorSource?.disconnect(); monitor.analyser?.disconnect();
+}
+
+function captureMonitor(owner, track) {
+    const monitor = {};
+    try {
+        monitor.monitorTrack = track.clone(); monitor.monitorTrack.enabled = true;
+        monitor.monitorSource = owner.context.createMediaStreamSource(new MediaStream([monitor.monitorTrack]));
+        monitor.analyser = owner.context.createAnalyser(); monitor.analyser.fftSize = 512;
+        monitor.monitorSource.connect(monitor.analyser); monitor.samples = new Uint8Array(monitor.analyser.frequencyBinCount);
+        return monitor;
+    } catch (error) { releaseCaptureMonitor(monitor); throw error; }
+}
+
+function queueCapture(owner, update) {
+    const task = owner.capture.then(update);
+    // A failed switch keeps the old microphone usable and permits a later retry.
+    owner.capture = task.catch(() => {});
+    return task;
+}
+
+// Settings and call negotiation share this capture queue. A new peer cannot
+// attach the old microphone while an accepted group call is switching devices.
+export function applyPrivateCallAudioSettings() {
+    const owner = session;
+    if (!owner?.capture || !current(owner)) return Promise.resolve();
+    return queueCapture(owner, async () => {
+        if (!current(owner)) return;
+        const constraints = captureConstraints(null), profile = JSON.stringify(constraints);
+        const previous = owner.stream?.getAudioTracks()[0];
+        if (previous?.readyState === "live" && profile === owner.captureProfile) return;
+        let fresh, monitor;
+        try {
+            fresh = await navigator.mediaDevices.getUserMedia({ audio: constraints, video: false });
+            if (!current(owner)) return;
+            const next = fresh.getAudioTracks()[0];
+            if (!next) throw new Error(t("call.audioFailed"));
+            // A new track starts silent until the current mute/PTT state has
+            // been applied, including changes made while permission was pending.
+            next.enabled = false;
+            monitor = captureMonitor(owner, next);
+            const swaps = [...owner.peers].flatMap(([uid, peer]) => {
+                const sender = peer.voiceSender || (previous && peer.pc.getSenders().find(sender => sender.track === previous));
+                return sender && acceptedPeer(owner, uid) ? [{ uid, peer, sender }] : [];
+            });
+            const outcomes = await Promise.allSettled(swaps.map(({ sender }) => sender.replaceTrack(next)));
+            if (!current(owner)) return;
+            const active = swap => owner.peers.get(swap.uid) === swap.peer && acceptedPeer(owner, swap.uid);
+            const failed = outcomes.find((outcome, index) => outcome.status === "rejected" && active(swaps[index]));
+            if (failed) {
+                const rollbacks = await Promise.allSettled(swaps.filter(swap => active(swap) && swap.sender.track === next).map(({ sender }) => sender.replaceTrack(previous || null)));
+                if (rollbacks.some(outcome => outcome.status === "rejected")) failCall(owner, failed.reason);
+                throw failed.reason;
+            }
+            releaseCaptureMonitor(owner); Object.assign(owner, monitor); monitor = null;
+            if (previous) owner.stream.removeTrack(previous);
+            owner.stream.addTrack(next); previous?.stop();
+            owner.captureProfile = profile; fresh = null;
+            syncAudio(owner);
+        } finally { fresh?.getTracks().forEach(track => track.stop()); if (monitor) releaseCaptureMonitor(monitor); }
+    });
 }
 
 function syncAudio(owner) {
@@ -295,8 +357,8 @@ function ensurePeer(owner, uid) {
     // addTrack allows the answerer to reuse the offer's audio transceiver.
     // A pre-created addTransceiver on the answerer remains unassociated and
     // otherwise produces a receive-only answer despite a live microphone.
-    if (track) pc.addTrack(track, owner.stream);
-    else if (owner.uid < uid) pc.addTransceiver("audio", { direction: "recvonly" });
+    if (track) peer.voiceSender = pc.addTrack(track, owner.stream);
+    else if (owner.uid < uid) peer.voiceSender = pc.addTransceiver("audio", { direction: "sendrecv" }).sender;
     if (owner.uid < uid) {
         offerCallMedia(peer);
         owner.media.attachChannel(peer, uid, pc.createDataChannel("call-media"));
@@ -408,6 +470,16 @@ export async function privateCallSignal(signal) {
                 if (owner.uid < signal.from || peer.pc.signalingState !== "stable") return;
                 await peer.pc.setRemoteDescription({ type: "offer", sdp: description.sdp });
                 answerCallMedia(peer);
+                // Reserve bidirectional microphone transport even if initial
+                // capture failed, so choosing a working device can recover it.
+                await queueCapture(owner, async () => {
+                    if (!acceptedPeer(owner, signal.from) || peer.pc.signalingState === "closed") return;
+                    const microphone = peer.pc.getTransceivers().find(item => item.receiver.track.kind === "audio");
+                    if (!microphone) return;
+                    microphone.direction = "sendrecv"; peer.voiceSender = microphone.sender;
+                    const track = owner.stream.getAudioTracks()[0] || null;
+                    if (microphone.sender.track !== track) await microphone.sender.replaceTrack(track);
+                });
                 await owner.media.syncPeer(peer, signal.from);
                 await peer.pc.setLocalDescription(await peer.pc.createAnswer());
                 await sendDescription(owner, signal.from, peer.pc);

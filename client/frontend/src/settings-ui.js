@@ -13,6 +13,7 @@ import { associateControlLabel, wrappedIndex } from "./a11y.js";
 import { createMediaDeviceInventory } from "./media-devices.js";
 import { closeDialog, mountDialog } from "./modal.js";
 import { captureCamera, prepareCameraBackground, applyCameraPreview } from "./camera-capture.js";
+import "./settings-ui.css";
 
 const V = () => window.__noxa;
 
@@ -117,7 +118,8 @@ function numberInput(value, min, max, onchange = () => {}) {
     const i = document.createElement("input");
     i.type = "number";
     i.min = min; i.max = max; i.value = value;
-    i.onchange = () => onchange(parseInt(i.value, 10));
+    i.required = true;
+    i.onchange = () => { if (i.checkValidity()) onchange(i.valueAsNumber); };
     return i;
 }
 
@@ -341,13 +343,14 @@ function pageApplication() {
     opacity.querySelector("input").addEventListener("change",
         () => window.go.main.App.SetWindowOpacity(s.window_opacity || 100));
     el.appendChild(row(t("settings.window.opacity"), opacity, "appearancePreview"));
-    el.appendChild(themeEditor(s)); // (295)
     const css = document.createElement("textarea");
     css.className = "dlg-input user-css";
     css.rows = 4;
     css.placeholder = t("settings.custom.css.overrides.e.g.channel.letter.spacing.0.5px");
     css.value = s.user_css || "";
-    css.onchange = () => { s.user_css = css.value; };
+    const themeColors = themeEditor(s, value => { css.value = value; });
+    el.appendChild(themeColors.root); // (295)
+    css.onchange = () => { s.user_css = css.value; themeColors.refresh(); };
     el.appendChild(row(t("settings.user.css"), css));
     return el;
 }
@@ -610,7 +613,7 @@ function currentVar(name, overrides) {
 
 // themeEditor builds the CSS-variable editor (295): every swatch rewrites the
 // managed block in user_css, which applyAppearance injects as a stylesheet.
-function themeEditor(s) {
+function themeEditor(s, onChange) {
     const wrap = document.createElement("div");
     const head = document.createElement("div");
     head.className = "set-subhead";
@@ -618,9 +621,10 @@ function themeEditor(s) {
     wrap.appendChild(head);
     const grid = document.createElement("div");
     grid.className = "theme-grid";
-    const overrides = parseThemeOverrides(s.user_css);
+    let overrides = parseThemeOverrides(s.user_css);
     const apply = () => {
         s.user_css = writeThemeOverrides(s.user_css, overrides);
+        onChange(s.user_css);
         // Preview by writing the same style element applyAppearance owns. A
         // full applyAppearance would rebuild the menu bar on every frame of a
         // swatch drag; cancelling the dialog calls it and restores the saved
@@ -651,17 +655,21 @@ function themeEditor(s) {
         grid.appendChild(cell);
     }
     wrap.append(timingNote("appearancePreview", grid.querySelectorAll("input")), grid);
+    const refresh = () => {
+        overrides = parseThemeOverrides(s.user_css);
+        for (const [i, [name]] of THEME_VARS.entries()) {
+            grid.children[i].querySelector("input").value = currentVar(name, overrides);
+        }
+    };
     const reset = document.createElement("button");
     reset.textContent = t("settings.reset.theme.colors");
     reset.onclick = () => {
         for (const k of Object.keys(overrides)) delete overrides[k];
         apply();
-        for (const [i, [name]] of THEME_VARS.entries()) {
-            grid.children[i].querySelector("input").value = currentVar(name, overrides);
-        }
+        refresh();
     };
     wrap.appendChild(reset);
-    return wrap;
+    return { root: wrap, refresh };
 }
 
 function pageCapture() {
@@ -913,6 +921,7 @@ function hotkeyCapture(initial, oncapture) {
     b.textContent = initial || t("settings.click.and.press.a.key");
     b.onclick = () => {
         cancelHotkeyCapture();
+        const previousLabel = b.textContent;
         b.textContent = t("settings.press.keys");
         b.classList.add("capturing");
         const onKey = (e) => {
@@ -927,8 +936,8 @@ function hotkeyCapture(initial, oncapture) {
             if (key.length === 1) key = key.toUpperCase();
             if (!["Control", "Alt", "Shift", "Meta"].includes(e.key)) {
                 parts.push(key);
-                b.textContent = parts.join("+");
                 stopCapture();
+                b.textContent = parts.join("+");
                 oncapture(parts.join("+"));
                 b.dispatchEvent(new Event("change", { bubbles: true }));
             }
@@ -936,6 +945,7 @@ function hotkeyCapture(initial, oncapture) {
         const stopCapture = () => {
             document.removeEventListener("keydown", onKey, true);
             b.classList.remove("capturing");
+            b.textContent = previousLabel;
             if (stopActiveHotkeyCapture === stopCapture) stopActiveHotkeyCapture = null;
         };
         stopActiveHotkeyCapture = stopCapture;
@@ -994,6 +1004,7 @@ function pageHotkeys() {
     el.appendChild(rowsEl);
 
     const renderRows = () => {
+        cancelHotkeyCapture();
         rowsEl.innerHTML = "";
         const prof = (s.hotkey_profiles || {})[curProfile];
         for (const [action, label, field, profField] of ACTIONS) {
@@ -1693,18 +1704,26 @@ function openSettings(pageId = "application") {
             row.onclick = () => {
                 search.value = "";
                 renderPage(h.page);
-                content.querySelectorAll(".set-row").forEach((r) => {
-                    if ((r.querySelector(".set-label")?.textContent || r.textContent || "").toLowerCase().includes(h.label.slice(0, 20))) {
-                        r.classList.add("set-hit");
-                        r.scrollIntoView({ block: "center" });
-                    }
-                });
+                const match = [...content.querySelectorAll(".set-row, .set-subhead, .set-hint, button")].find(r =>
+                    (r.querySelector(".set-label")?.textContent || r.textContent || "").toLowerCase().trim() === h.label);
+                if (!match) return;
+                const highlighted = match.closest(".set-row") || match;
+                highlighted.classList.add("set-hit");
+                highlighted.scrollIntoView({ block: "center" });
+                const selector = "input:not([disabled]):not([type=hidden]), select:not([disabled]), textarea:not([disabled]), button:not([disabled])";
+                const target = match.matches(selector) ? match : match.querySelector(selector);
+                if (target) target.focus({ preventScroll: true });
+                else { highlighted.tabIndex = -1; highlighted.focus({ preventScroll: true }); }
             };
             content.appendChild(row);
         }
     };
 
     const nav = overlay.querySelector(".settings-nav");
+    const narrowLayout = window.matchMedia("(max-width: 600px)");
+    const updateNavOrientation = () => nav.setAttribute("aria-orientation", narrowLayout.matches ? "horizontal" : "vertical");
+    updateNavOrientation();
+    narrowLayout.addEventListener("change", updateNavOrientation);
     for (const p of PAGES) {
         const item = document.createElement("button");
         item.type = "button";
@@ -1716,12 +1735,12 @@ function openSettings(pageId = "application") {
         item.setAttribute("aria-selected", "false");
         item.tabIndex = -1;
         item.innerHTML = `<span class="nav-icon" aria-hidden="true">${icon(p.icon)}</span><span>${t(p.label)}</span>`;
-        item.onclick = () => renderPage(p.id);
+        item.onclick = () => { search.value = ""; renderPage(p.id); };
         item.addEventListener("keydown", (event) => {
-            if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
+            if (!["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(event.key)) return;
             event.preventDefault();
             const items = [...nav.querySelectorAll(".settings-nav-item")];
-            const next = wrappedIndex(items.indexOf(item), items.length, event.key === "ArrowDown" ? 1 : -1);
+            const next = wrappedIndex(items.indexOf(item), items.length, ["ArrowDown", "ArrowRight"].includes(event.key) ? 1 : -1);
             items[next].focus();
             items[next].click();
         });
@@ -1745,6 +1764,9 @@ function openSettings(pageId = "application") {
     for (const event of ["input", "change", "click"]) content.addEventListener(event, markChanges);
     const applyAll = async () => {
         if (saving) return false;
+        for (const control of content.querySelectorAll("input,select,textarea")) {
+            if (!control.reportValidity()) return false;
+        }
         saving = true;
         const snapshot = structuredClone(draft);
         let persisted = false;
@@ -1834,6 +1856,7 @@ function openSettings(pageId = "application") {
     mountDialog(overlay, {
         onCancel: () => !saving,
         onClose: () => {
+            narrowLayout.removeEventListener("change", updateNavOrientation);
             window.removeEventListener("noxa-audio-status", refreshAudioStatus);
             window.removeEventListener("noxa-audio-preview-blocked", previewBlocked);
             stopPreviews();

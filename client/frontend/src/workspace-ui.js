@@ -52,6 +52,8 @@ export function renderWorkspace() {
     for (const client of members) {
         let button = current.get(client.client_id);
         if (!button) {
+            const card = document.createElement("div");
+            card.className = "participant-card";
             button = document.createElement("button");
             button.type = "button";
             button.className = "participant";
@@ -63,11 +65,20 @@ export function renderWorkspace() {
                 V().setDetailsOpen(true);
                 V().renderTree();
             };
-            strip.appendChild(button);
+            const menu = document.createElement("button");
+            menu.type = "button";
+            menu.className = "participant-menu icon-btn";
+            menu.innerHTML = icon("more");
+            card.append(button, menu);
+            strip.appendChild(card);
         }
         current.delete(client.client_id);
         memberTarget(button, client.unique_id, client.nickname, { clientID: client.client_id, openOnClick: false });
         const name = (client.nickname || client.unique_id) + (client.client_id === state.myClientID ? t("workspace.you") : "");
+        const menu = button.parentElement.querySelector(".participant-menu");
+        memberTarget(menu, client.unique_id, client.nickname, { clientID: client.client_id });
+        menu.title = t("context.memberOptions", { name });
+        menu.setAttribute("aria-label", menu.title);
         const statusKey = voiceState(client);
         const description = t("workspace.voice." + statusKey);
         button.querySelector(".participant-name").textContent = name;
@@ -81,8 +92,8 @@ export function renderWorkspace() {
         avatar(button.querySelector(".avatar"), client);
     }
     for (const element of current.values()) {
-        if (element === document.activeElement) $("details-toggle").focus();
-        element.remove();
+        if (element.parentElement.contains(document.activeElement)) $("details-toggle").focus();
+        element.parentElement.remove();
     }
     if (!members.length) {
         const empty = document.createElement("p");
@@ -200,7 +211,7 @@ export function renderVoiceHints() {
 
 export function initWorkspace() {
     const icons = {
-        "details-close": "close", "details-toggle": "users", "channel-create-btn": "plus",
+        "details-close": "close", "details-toggle": "users", "channel-create-btn": "plus", "workspace-sidebar-close": "close",
         "notif-bell": "bell", "chat-search-btn": "search", "chat-pins-btn": "pin",
         "chat-info-btn": "info", "chat-e2ee-btn": "lock", "chat-export-btn": "download",
         "chat-attach": "attach", "chat-emoji": "smile", "chat-send": "send", "tab-transfers": "transfer",
@@ -232,7 +243,33 @@ export function initWorkspace() {
             if (generation === V().state.serverGeneration) $("voice-leave-channel").disabled = !V().state.myChannelID;
         }
     };
-    $("voice-options").addEventListener("toggle", () => { if ($("voice-options").open) void refreshVoiceDevices(); });
+    const positionVoiceOptions = () => {
+        const options = $("voice-options");
+        if (!options.open) return;
+        const anchor = options.querySelector("summary").getBoundingClientRect();
+        const menu = options.querySelector(".voice-options-menu");
+        menu.style.left = `${Math.max(8, Math.min(anchor.right - menu.offsetWidth, innerWidth - menu.offsetWidth - 8))}px`;
+        menu.style.top = `${Math.max(8, anchor.top - menu.offsetHeight - 8)}px`;
+    };
+    $("voice-options").addEventListener("toggle", () => {
+        if ($("voice-options").open) { positionVoiceOptions(); void refreshVoiceDevices().then(positionVoiceOptions); }
+    });
+    window.addEventListener("resize", positionVoiceOptions);
+    $("voice-options").addEventListener("keydown", event => {
+        if (event.key !== "Escape" || !$("voice-options").open) return;
+        event.preventDefault(); event.stopPropagation();
+        $("voice-options").open = false;
+        $("voice-options").querySelector("summary").focus();
+    });
+    $("voice-options").addEventListener("click", event => {
+        if (event.target.closest("#voice-settings, #voice-disconnect, [data-channel-undock]")) {
+            $("voice-options").open = false;
+            if ($("voice-options").contains(document.activeElement)) $("voice-options").querySelector("summary").focus();
+        }
+    });
+    document.addEventListener("pointerdown", event => {
+        if (!$("voice-options").contains(event.target)) $("voice-options").open = false;
+    });
     navigator.mediaDevices?.addEventListener?.("devicechange", () => { if ($("voice-options").open) void refreshVoiceDevices(); });
     window.addEventListener("noxa-language-changed", () => {
         translateWorkspace();
@@ -253,14 +290,16 @@ export function initWorkspace() {
             if (innerWidth <= 720) $("center").focus();
         }
     });
+    const closeChannels = () => {
+        document.body.classList.remove("channels-open");
+        $("workspace-sidebar-toggle").setAttribute("aria-expanded", "false");
+        const groupToggle = document.querySelector("#center.private-group-active .group-show-channels");
+        groupToggle?.setAttribute("aria-expanded", "false");
+        (groupToggle || $("workspace-sidebar-toggle")).focus();
+    };
+    $("workspace-sidebar-close").onclick = closeChannels;
     document.addEventListener("keydown", (event) => {
-        if (event.key === "Escape" && document.body.classList.contains("channels-open")) {
-            document.body.classList.remove("channels-open");
-            $("workspace-sidebar-toggle").setAttribute("aria-expanded", "false");
-            const groupToggle = document.querySelector("#center.private-group-active .group-show-channels");
-            groupToggle?.setAttribute("aria-expanded", "false");
-            (groupToggle || $("workspace-sidebar-toggle")).focus();
-        }
+        if (event.key === "Escape" && document.body.classList.contains("channels-open")) closeChannels();
     });
     renderWorkspace();
     renderMember();
@@ -281,6 +320,7 @@ function translateWorkspace() {
         ["#tree-collapse", "aria-label", "workspace.labels.collapseAllChannels"],
         ["#tree-expand", "aria-label", "workspace.labels.expandAllChannels"],
         ["#workspace-sidebar-toggle", "aria-label", "workspace.labels.showChannels"],
+        ["#workspace-sidebar-close", "aria-label", "workspace.labels.closeChannels"],
         ["#chat-search-btn", "aria-label", "workspace.labels.searchChat"],
         ["#chat-search-btn", "title", "workspace.labels.searchChatCtrlF"],
         [".channel-actions > summary", "aria-label", "workspace.labels.moreChannelActions"],
@@ -320,7 +360,8 @@ function translateWorkspace() {
     $("ptt-btn").title = t("workspace.ptt");
     $("chat-text").setAttribute("aria-label", t("workspace.message"));
     labelButton($("voice-settings"), "settings", t("workspace.audioPreferences"));
-    labelButton($("voice-options").querySelector("summary"), "settings", t("workspace.voiceSettings"));
+    labelButton($("voice-options").querySelector("summary"), "more", t("context.voiceMore"));
+    $("voice-options").querySelector("summary").setAttribute("aria-label", t("context.voiceMoreLabel"));
     labelButton($("voice-disconnect"), "disconnect", t("workspace.disconnect"));
 
     for (const [id, glyph, key] of [

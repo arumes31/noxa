@@ -23,8 +23,70 @@ test('optional call undock moves live controls and media, then close docks witho
     await page.evaluate(()=>window.documentPictureInPicture.window.close());
     await expect(page.locator('#undock-test')).toBeVisible();
     await expect(page.locator('#undock-test').getByRole('button',{name:'Undock call',exact:true})).toBeVisible();
+    await expect(page.locator('#undock-test').getByRole('button',{name:'Undock call',exact:true})).toBeFocused();
     expect(await page.evaluate(()=>window.__undockStream.getVideoTracks()[0].readyState)).toBe('live');
     await page.evaluate(()=>window.__undockStream.getTracks().forEach(track=>track.stop()));
+});
+
+test('docking restores focus to a recreated call control without changing background focus on teardown', async ({page}) => {
+    await page.evaluate(async () => {
+        const module = await import('/src/call-undocking.js');
+        const panel = document.createElement('aside'); panel.id = 'undock-test';
+        panel.append(module.callUndockButton(panel)); document.body.append(panel);
+        const draft = document.createElement('input'); draft.id = 'other-draft'; document.body.append(draft);
+        window.__panel = panel; window.__undockModule = module;
+    });
+    await page.getByRole('button', {name:'Undock call', exact:true}).press('Enter');
+    await expect.poll(() => page.evaluate(() => window.__panel.ownerDocument !== document)).toBe(true);
+    await page.evaluate(() => {
+        const control = window.__undockModule.callUndockButton(window.__panel);
+        window.__panel.replaceChildren(control);
+        control.click();
+    });
+    await expect(page.getByRole('button', {name:'Undock call', exact:true})).toBeFocused();
+    await page.getByRole('button', {name:'Undock call', exact:true}).click();
+    await expect.poll(() => page.evaluate(() => window.__panel.ownerDocument !== document)).toBe(true);
+    await page.locator('#other-draft').focus();
+    await page.evaluate(() => { window.__undockModule.closeCallUndock(window.__panel); window.__panel.remove(); });
+    await expect(page.locator('#other-draft')).toBeFocused();
+});
+
+test('channel docking restores focus to the closed voice options summary', async ({page}) => {
+    await page.evaluate(async () => {
+        document.body.innerHTML = '<div id="voice-bar"><div class="voice-buttons"><details id="voice-options"><summary>More voice options</summary><div class="voice-secondary-actions"></div></details></div></div>';
+        window.__noxa = {state:{pc:{}, activeTabID:'one', serverGeneration:1, myChannelID:1, channels:[], clients:[], settings:{activation_mode:'continuous'}}};
+        (await import('/src/call-undocking.js')).initChannelUndocking();
+        const options = document.getElementById('voice-options');
+        options.addEventListener('click', event => {
+            if (!event.target.closest('[data-channel-undock]')) return;
+            options.open = false;
+            if (options.contains(document.activeElement)) options.querySelector('summary').focus();
+        });
+    });
+    await page.getByText('More voice options', {exact:true}).click();
+    await page.locator('[data-channel-undock]').click();
+    await expect.poll(() => page.evaluate(() => !!window.documentPictureInPicture.window)).toBe(true);
+    await page.evaluate(() => window.documentPictureInPicture.window.close());
+    await expect(page.locator('#voice-options > summary')).toBeFocused();
+});
+
+test('a delayed undock request cannot reopen a removed call', async ({page}) => {
+    await page.evaluate(async () => {
+        const module = await import('/src/call-undocking.js');
+        const request = window.documentPictureInPicture.requestWindow.bind(window.documentPictureInPicture);
+        window.documentPictureInPicture.requestWindow = async options => {
+            const target = await request(options);
+            return new Promise(resolve => { window.__finishUndock = () => resolve(target); });
+        };
+        const panel = document.createElement('aside'); panel.id = 'undock-test';
+        panel.append(module.callUndockButton(panel)); document.body.append(panel);
+        window.__panel = panel; window.__undockModule = module;
+    });
+    await page.getByRole('button', {name:'Undock call', exact:true}).click();
+    await page.waitForFunction(() => !!window.__finishUndock);
+    await page.evaluate(() => { window.__undockModule.closeCallUndock(window.__panel); window.__panel.remove(); window.__finishUndock(); });
+    await expect.poll(() => page.evaluate(() => window.documentPictureInPicture.window === null)).toBe(true);
+    await expect(page.locator('#undock-test')).toHaveCount(0);
 });
 
 test('ending a call closes its detached window and a late request cannot resurrect it', async ({page}) => {

@@ -3,7 +3,7 @@ import { closeDialog, confirmDialog, isCurrentServerDialog, mountServerDialog } 
 import { roleButton, roleElement } from "./role-editor-view.js";
 import { roleChip } from "./role-presentation.js";
 
-export function openRoleMembers() {
+export function openRoleMembers({ onClose } = {}) {
     const app = window.go.main.App;
     const tabID = window.__noxa.state.activeTabID;
     const overlay = roleElement("div", "dlg-overlay");
@@ -23,6 +23,7 @@ export function openRoleMembers() {
     const roleSelect = roleElement("select", "dlg-input");
     roleLabel.append(roleSelect);
     let snapshot, entries = [], more = false, busy = false, needsRefresh = false, transferred = false, serial = 0, timer;
+    let pendingChange = null;
     const selected = new Set();
     const results = new Map();
     const current = () => isCurrentServerDialog(overlay);
@@ -96,7 +97,8 @@ export function openRoleMembers() {
             const ids = member.role_ids.filter((id) => id !== roleID);
             if (adding) ids.push(roleID);
             try {
-                const ack = await app.RoleChangeForTab(tabID, { kind: "member_roles_set", expected_revision: snapshot.policy.revision, user_id: member.user_id, role_ids: ids });
+                pendingChange = app.RoleChangeForTab(tabID, { kind: "member_roles_set", expected_revision: snapshot.policy.revision, user_id: member.user_id, role_ids: ids });
+                const ack = await pendingChange;
                 if (!current()) return;
                 snapshot.policy.revision = ack.revision;
                 member.role_ids = ids;
@@ -133,7 +135,8 @@ export function openRoleMembers() {
         if (!accepted) { busy = false; render(); return; }
         error.textContent = "";
         try {
-            const ack = await app.RoleChangeForTab(tabID, { kind: "owner_transfer", expected_revision: snapshot.policy.revision, user_id: member.user_id });
+            pendingChange = app.RoleChangeForTab(tabID, { kind: "owner_transfer", expected_revision: snapshot.policy.revision, user_id: member.user_id });
+            const ack = await pendingChange;
             if (!current()) return;
             snapshot.policy.revision = ack.revision;
             snapshot.policy.owner_id = member.user_id;
@@ -155,6 +158,13 @@ export function openRoleMembers() {
     footer.append(status, refreshButton, add, remove, transfer);
     dialog.append(header, searchLabel, roleLabel, list, moreButton, error, footer);
     overlay.append(dialog);
-    mountServerDialog(overlay, { onClose: () => { serial++; clearTimeout(timer); } });
+    mountServerDialog(overlay, { onClose: () => {
+        serial++;
+        clearTimeout(timer);
+        // A dismissed dialog can still have a committed change in flight.
+        // Refresh its parent only after that change succeeds or fails.
+        const settled = () => onClose?.();
+        Promise.resolve(pendingChange).then(settled, settled);
+    } });
     load();
 }

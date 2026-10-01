@@ -10,7 +10,7 @@ const V = () => window.__noxa;
 const app = () => window.go.main.App;
 let hooks = {};
 const el = (tag, className = "", text) => { const node = document.createElement(tag); node.className = className; if (text !== undefined) node.textContent = text; return node; };
-const button = (key, action) => { const node = el("button", "", t(key)); node.type = "button"; node.onclick = action; return node; };
+const button = (key, action) => { const node = el("button", "ui-button", t(key)); node.type = "button"; node.onclick = action; return node; };
 const field = (key, control) => { const label = el("label", "message-tools-field", t(key)); control.setAttribute("aria-label", t(key)); label.append(control); return label; };
 const input = (type = "text") => { const node = el("input"); node.type = type; return node; };
 const channelName = id => V().state.channels?.find(channel => Number(channel.ChannelID) === Number(id))?.Name || (Number(id) === 0 ? "Global" : `#${id}`);
@@ -75,7 +75,7 @@ export function openSavedMessages() {
     };
     const mutate = async (action, reference) => {
         if (!dlg.current()) return;
-        const controls = [...dlg.box.querySelectorAll("button,input,select")]; controls.forEach(control => { control.disabled = true; });
+        const controls = [...dlg.controls.querySelectorAll("button,input,select"), ...dlg.list.querySelectorAll("button,input,select")]; controls.forEach(control => { control.disabled = true; });
         try { const owner = reference.kind === "dm" ? await dmOwner : null; if (!dlg.current()) return; const result = await app().SavedMessagesForTab(dlg.tabID, { action, reference, ...(owner ? { dm_owner: owner } : {}) }); if (dlg.current()) { refs = result.references || []; render(); } }
         catch (error) { if (dlg.current()) dlg.status.textContent = t("messages.failed", { error: String(error) }); }
         finally { controls.forEach(control => { control.disabled = false; }); }
@@ -128,6 +128,7 @@ export function openHistorySearch() {
     const checkbox = el("label", "message-tools-check", t("messages.attachment")); checkbox.prepend(attachment);
     dlg.controls.append(field("messages.text", query), field("messages.sender", sender), field("messages.channel", channel), field("messages.thread", thread), field("messages.after", after), field("messages.before", before), checkbox);
     const actions = el("div", "message-tools-controls"); dlg.controls.after(actions);
+    const form = el("form", "message-tools-form"); dlg.controls.before(form); form.append(dlg.controls, actions);
     let operation = null, threadSequence = 0, threadCursor = null;
     const moreThreads = button("messages.moreThreads", () => loadThreads(false)); moreThreads.hidden = true; dlg.controls.append(moreThreads);
     const loadThreads = async reset => {
@@ -146,14 +147,23 @@ export function openHistorySearch() {
         } catch (error) { if (dlg.current() && sequence === threadSequence) { dlg.status.textContent = t("messages.failed", { error: String(error) }); moreThreads.hidden = false; } }
     };
     channel.onchange = () => loadThreads(true);
-    const run = button("messages.run", () => scan(false)), stop = button("messages.stop", () => { if (operation) operation.cancelled = true; }), more = button("messages.continue", () => scan(true));
+    const run = button("messages.run"), stop = button("messages.stop", () => { if (operation) operation.cancelled = true; }), more = button("messages.continue", () => scan(true));
+    run.type = "submit";
+    form.onsubmit = event => { event.preventDefault(); void scan(false); };
+    for (const control of [after, before]) control.addEventListener("input", () => {
+        if (!after.hasAttribute("aria-invalid")) return;
+        after.removeAttribute("aria-invalid"); before.removeAttribute("aria-invalid"); dlg.status.textContent = "";
+    });
     stop.disabled = true; more.hidden = true; actions.append(run, stop, more);
     const scan = async resume => {
         if (!dlg.current() || run.disabled) return;
         if (!resume) {
             const start = after.value ? Math.floor(new Date(`${after.value}T00:00:00`).getTime() / 1000) : 0;
             const end = before.value ? Math.floor(new Date(`${before.value}T23:59:59`).getTime() / 1000) : 0;
-            if (start && end && start > end) { after.focus(); return; }
+            if (start && end && start > end) {
+                after.setAttribute("aria-invalid", "true"); before.setAttribute("aria-invalid", "true");
+                dlg.status.textContent = t("messages.invalidDates"); after.focus(); return;
+            }
             const channels = channel.value === "all" ? [...(V().state.channels || []).map(item => Number(item.ChannelID)), 0] : [Number(channel.value)];
             operation = { channels, index: 0, cursor: 0, scanned: 0, missing: 0, errors: [], filter: { query: query.value.trim(), sender: sender.value.trim(), after: start, before: end, has_attachment: attachment.checked, thread_id: Number(thread.value) }, cancelled: false };
             dlg.list.replaceChildren();

@@ -47,6 +47,21 @@ test("saved references can be organized and removed without storing message plai
     await page.getByRole("button", { name: "Remove", exact: true }).click();
     await expect(page.locator(".message-tool-result")).toHaveCount(0);
 });
+
+test("saved messages can close while their backend request is pending", async ({ page }) => {
+    await open(page);
+    await page.evaluate(() => {
+        window.go.main.App.SavedMessagesForTab = async () => new Promise(resolve => { window.__finishSavedRequest = resolve; });
+    });
+    await page.getByRole("button", { name: "Saved messages", exact: true }).click();
+    await page.waitForFunction(() => typeof window.__finishSavedRequest === "function");
+    const close = page.getByRole("button", { name: "Close", exact: true });
+    await expect(close).toBeEnabled();
+    await close.click();
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+    await page.evaluate(() => window.__finishSavedRequest({ references: [{ kind: "channel", channel_id: 7, message_id: 42 }] }));
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+});
 test("late search results cannot enter another server session", async ({ page }) => {
     await open(page); await page.getByRole("button", { name: "Search history", exact: true }).click();
     await page.evaluate(() => { window.__hold = true; });

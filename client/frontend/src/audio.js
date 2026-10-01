@@ -451,6 +451,7 @@ export function setUserBlocked(uid, blocked) {
 
 export function refreshUserAudio() {
     for (const uid of userNodes.keys()) applyUserAudio(uid);
+    for (const listener of volumeListeners) listener();
     for (const listener of shareAudioListeners) listener();
 }
 

@@ -1,5 +1,65 @@
 import { expect, test } from "./fixtures.js";
 
+test("role editor refreshes after managing member assignments", async ({ page }) => {
+    await page.getByRole("button", { name: "Roles", exact: true }).click();
+    const roles = page.getByRole("dialog", { name: "Roles", exact: true });
+    await roles.getByRole("button", { name: "Member", exact: true }).click();
+    await roles.getByRole("button", { name: "Members", exact: true }).click();
+    const members = page.getByRole("dialog", { name: "Members", exact: true });
+    await members.getByRole("combobox").selectOption("30");
+    await members.getByRole("checkbox", { name: /^Bob\b/ }).check();
+    await members.getByRole("button", { name: "Add role", exact: true }).click();
+    await expect(members.getByRole("status")).toHaveText("0 selected");
+    await members.getByRole("button", { name: "Close", exact: true }).click();
+    await roles.getByLabel("Role name", { exact: true }).fill("Members renamed");
+    await roles.getByRole("button", { name: "Save", exact: true }).click();
+    await expect(roles.getByRole("status")).toHaveText("Role saved.");
+    await expect(roles.locator(".role-error")).toBeEmpty();
+    expect(await page.evaluate(() => window.__roleCalls.at(-1))).toMatchObject({
+        kind: "role_update", expected_revision: 2, role: { id: 20, name: "Members renamed" },
+    });
+});
+
+test("opening member management preserves an unconfirmed role draft", async ({ page }) => {
+    await page.getByRole("button", { name: "Roles", exact: true }).click();
+    const roles = page.getByRole("dialog", { name: "Roles", exact: true });
+    await roles.getByRole("button", { name: "Member", exact: true }).click();
+    await roles.getByLabel("Role name", { exact: true }).fill("Draft name");
+    await roles.getByRole("button", { name: "Members", exact: true }).click();
+    await page.getByRole("button", { name: "Cancel", exact: true }).click();
+    await expect(page.getByRole("dialog", { name: "Members", exact: true })).toHaveCount(0);
+    await expect(roles.getByLabel("Role name", { exact: true })).toHaveValue("Draft name");
+    await roles.getByRole("button", { name: "Members", exact: true }).click();
+    await page.getByRole("dialog", { name: "Roles", exact: true }).last().getByRole("button", { name: "Discard changes", exact: true }).click();
+    const members = page.getByRole("dialog", { name: "Members", exact: true });
+    await expect(members.getByRole("checkbox", { name: /^Bob\b/ })).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(roles.getByLabel("Role name", { exact: true })).toHaveValue("Member");
+    await expect(roles.getByRole("button", { name: "Members", exact: true })).toBeFocused();
+});
+
+test("closing member management waits for its pending assignment before refreshing", async ({ page }) => {
+    await page.getByRole("button", { name: "Roles", exact: true }).click();
+    const roles = page.getByRole("dialog", { name: "Roles", exact: true });
+    await roles.getByRole("button", { name: "Member", exact: true }).click();
+    await roles.getByRole("button", { name: "Members", exact: true }).click();
+    const members = page.getByRole("dialog", { name: "Members", exact: true });
+    await members.getByRole("combobox").selectOption("30");
+    await members.getByRole("checkbox", { name: /^Bob\b/ }).check();
+    await page.evaluate(() => { window.__roleGate = new Promise(resolve => { window.__releaseAssignment = resolve; }); });
+    await members.getByRole("button", { name: "Add role", exact: true }).click();
+    await expect.poll(() => page.evaluate(() => window.__roleCalls.length)).toBe(1);
+    await members.getByRole("button", { name: "Close", exact: true }).click();
+    await expect(members).toHaveCount(0);
+    await expect(roles.getByLabel("Role name", { exact: true })).toBeDisabled();
+    await page.evaluate(() => { window.__releaseAssignment(); window.__roleGate = null; });
+    await expect.poll(() => page.evaluate(() => window.__roleState.policy.revision)).toBe(2);
+    await roles.getByLabel("Role name", { exact: true }).fill("After pending change");
+    await roles.getByRole("button", { name: "Save", exact: true }).click();
+    await expect(roles.getByRole("status")).toHaveText("Role saved.");
+    expect(await page.evaluate(() => window.__roleCalls.at(-1).expected_revision)).toBe(2);
+});
+
 test("role mentionability saves and reloads independently of permissions", async ({ page }) => {
     await page.getByRole("button", { name: "Roles", exact: true }).click();
     await page.getByRole("button", { name: "Member", exact: true }).click();

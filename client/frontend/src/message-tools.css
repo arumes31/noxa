@@ -1,9 +1,10 @@
 .message-tools-actions { display:flex; align-items:center; gap:4px; flex-wrap:wrap; }
-.message-tools-actions button { font-size:11px; padding:5px 8px; }
+.message-tools-actions button { font-size:.85rem; padding:6px 8px; }
 .message-tools-dialog { width:min(760px,94vw); max-height:88vh; display:flex; flex-direction:column; gap:12px; }
 .message-tools-heading { display:flex; align-items:center; justify-content:space-between; gap:12px; }
 .message-tools-heading h2 { margin:0; font-size:18px; }
 .message-tools-controls { display:flex; align-items:end; gap:10px; flex-wrap:wrap; }
+.message-tools-form { display:flex; flex-direction:column; gap:10px; min-width:0; }
 .message-tools-field { display:flex; flex-direction:column; gap:5px; font-size:12px; flex:1 1 150px; }
 .message-tools-field input,.message-tools-field select { width:100%; min-width:0; }
 .message-tools-check { display:flex; align-items:center; gap:6px; font-size:12px; }
@@ -14,4 +15,4 @@
 .message-tool-status { font-size:12px; white-space:pre-line; margin:0; }
 .message-tools-hint { font-size:12px; color:var(--text-muted); margin:0; }
 .message-reference-flash { outline:2px solid var(--accent,#8aa7ff); outline-offset:2px; }
-@media(max-width:600px) { .message-tools-actions button { font-size:10px; padding:4px; } .message-tools-dialog { padding:16px; } }
+@media(max-width:600px) { .message-tools-actions button { font-size:.8rem; padding:6px; } .message-tools-dialog { padding:16px; } }

@@ -37,6 +37,24 @@ async function record(page, milliseconds = 350) {
     await expect(page.getByRole('button', { name: 'Send voice message', exact: true })).toBeEnabled();
 }
 
+test('recording shows a live meter, formatted elapsed time and an approaching-limit warning', async ({ page }) => {
+    await page.clock.install();
+    await page.getByRole('button', { name: 'Record voice message', exact: true }).click();
+    await page.getByRole('button', { name: 'Start recording', exact: true }).click();
+    await expect(page.getByRole('button', { name: 'Stop recording', exact: true })).toBeEnabled();
+    const meter = page.getByRole('meter', { name: 'Recording microphone level' });
+    await expect(meter).toBeVisible();
+    await expect.poll(async () => Number(await meter.getAttribute('aria-valuenow'))).toBeGreaterThan(-60);
+    await page.clock.fastForward(92000);
+    await expect(page.locator('.voice-recording-time')).toHaveText('1:32 / 5:00');
+    await page.clock.fastForward(178000);
+    await expect(page.locator('.voice-recording-time')).toHaveText('4:30 / 5:00');
+    await expect(page.getByText('30 seconds left. Recording stops automatically at 5:00.', { exact: true })).toBeVisible();
+    if (process.env.NOXA_UI_SCREENSHOTS) await page.screenshot({ path: '.cache/ui-improvements-recording.png' });
+    await page.getByRole('button', { name: 'Discard', exact: true }).click();
+    await expect.poll(() => page.evaluate(() => window.__tracks.every(track => track.readyState === 'ended'))).toBe(true);
+});
+
 test('record, preview, encrypted attachment send and lazy inline playback', async ({ page }) => {
     await record(page);
     await expect(page.getByLabel('Voice message playback')).toBeVisible();
@@ -83,8 +101,39 @@ test('invalid voice payload remains retryable and never creates an unsafe player
     await page.evaluate(() => window.__voiceModule.renderVoiceMessage(document.querySelector('#fixture'), '[file:store#key#voice.weba]', { tabID: 'server-a', channelID: 7 }));
     await page.getByRole('button', { name: 'Load voice message', exact: true }).click();
     await expect(page.getByText('Voice message unavailable', { exact: true })).toBeVisible();
-    await expect(page.getByRole('button', { name: 'Load voice message', exact: true })).toBeEnabled();
+    await expect(page.getByRole('button', { name: 'Retry voice message', exact: true })).toBeEnabled();
     await expect(page.locator('audio')).toHaveCount(0);
+});
+
+test('unplayable voice attachment can be downloaded again without reopening the conversation', async ({ page }) => {
+    await record(page);
+    await page.getByRole('button', { name: 'Send voice message', exact: true }).click();
+    await expect(page.locator('.voice-message-dialog')).toHaveCount(0);
+    await page.evaluate(() => {
+        const valid = window.__audio;
+        window.go.main.App.DownloadChatAttachmentForTab = async () => ++window.__downloads === 1 ? btoa('damaged audio') : valid;
+        window.__voiceModule.renderVoiceMessage(document.querySelector('#fixture'), window.__sent[0], { tabID: 'server-a', channelID: 7 });
+    });
+    await page.getByRole('button', { name: 'Load voice message', exact: true }).click();
+    await expect(page.getByText('Voice message unavailable', { exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Retry voice message', exact: true })).toBeEnabled();
+    await expect(page.locator('.voice-playback-details')).toHaveCount(0);
+    await page.getByRole('button', { name: 'Retry voice message', exact: true }).click();
+    await expect(page.getByLabel('Voice message playback')).toBeVisible();
+    await expect.poll(() => page.getByLabel('Voice message playback').evaluate(audio => audio.readyState)).toBeGreaterThan(0);
+    await page.getByLabel('Voice message playback').evaluate(audio => audio.play());
+    expect(await page.evaluate(() => window.__downloads)).toBe(2);
+});
+
+test('keyboard loading keeps focus on the voice playback controls', async ({ page }) => {
+    await record(page);
+    await page.getByRole('button', { name: 'Send voice message', exact: true }).click();
+    await expect(page.locator('.voice-message-dialog')).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Record voice message', exact: true })).toBeFocused();
+    await page.evaluate(() => window.__voiceModule.renderVoiceMessage(document.querySelector('#fixture'), window.__sent[0], { tabID: 'server-a', channelID: 7 }));
+    await page.getByRole('button', { name: 'Load voice message', exact: true }).focus();
+    await page.keyboard.press('Enter');
+    await expect(page.getByLabel('Voice message playback')).toBeFocused();
 });
 
 test('voice waveform, seeking, speed and private local resume survive reopening', async ({ page }) => {

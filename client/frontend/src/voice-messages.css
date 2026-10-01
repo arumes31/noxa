@@ -2,6 +2,15 @@
 .voice-message audio, .voice-message-dialog audio { width: min(100%, 340px); height: 40px; }
 .voice-message-dialog { max-width: min(480px, 90vw); }
 .voice-message-dialog p { line-height: 1.5; }
+.voice-recording-feedback { display: grid; grid-template-columns: 1fr auto; gap: 10px; align-items: center; padding: 12px 0; }
+.voice-recording-feedback[hidden] { display: none; }
+.voice-recording-time { grid-column: 1 / -1; font-size: 1.4rem; font-variant-numeric: tabular-nums; }
+.voice-recording-meter { height: 10px; border: 1px solid var(--border); background: var(--bg-panel); overflow: hidden; border-radius: 4px; }
+.voice-recording-meter > span { display: block; height: 100%; width: 0; background: var(--accent); }
+.voice-recording-meter[data-quality="clipping"] > span { background: var(--danger); }
+.voice-recording-quality { max-width: 200px; font-size: .85rem; }
+.voice-recording-warning { color: var(--warn); }
+.voice-recording-warning:empty { display: none; }
 .voice-message-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
 .voice-message-actions button, .voice-message button { padding: 7px 12px; color: var(--text); background: var(--bg-hover); border: 1px solid var(--border); border-radius: 5px; cursor: pointer; }
 .voice-message-actions button:disabled { opacity: .5; cursor: default; }

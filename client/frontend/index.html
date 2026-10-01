@@ -47,7 +47,7 @@
                 <span id="conn-lock" class="hidden" title="control channel TLS + chat payload encryption on">🔒</span>
                 <button id="notif-bell" class="icon-btn" title="Notifications" aria-label="Notifications, 0 unread">🔔<span id="notif-badge" class="hidden"></span></button>
             </div>
-            <div class="pane-head sidebar-head"><h2 id="channels-heading">Channels</h2><button id="channel-create-btn" class="icon-btn pane-head-btn" title="Create channel" aria-label="Create channel">+</button></div>
+            <div class="pane-head sidebar-head"><h2 id="channels-heading">Channels</h2><button id="workspace-sidebar-close" class="icon-btn pane-head-btn" type="button" aria-label="Close channels"></button><button id="channel-create-btn" class="icon-btn pane-head-btn" title="Create channel" aria-label="Create channel">+</button></div>
             <div id="tree-tools">
                 <label class="sr-only" for="tree-filter">Filter channels, private groups and users</label>
                 <input id="tree-filter" placeholder="Find channels, groups or people…" autocomplete="off" />
@@ -152,14 +152,16 @@
                 <button id="voice-deafen" class="voice-control" aria-label="Deafen" aria-pressed="false"></button>
                 <button id="voice-video" class="voice-control" title="Camera" aria-label="Camera" aria-pressed="false"></button>
                 <button id="voice-screen" class="voice-control" title="Start sharing" aria-label="Start sharing" aria-pressed="false"></button>
-                <details id="voice-options"><summary class="voice-control" aria-label="Voice options">Voice options</summary><div class="voice-options-menu">
+                <button id="voice-leave-channel" class="voice-control" type="button"></button>
+                <details id="voice-options"><summary class="voice-control" aria-label="More voice options">More</summary><div class="voice-options-menu">
                     <dl class="voice-devices"><dt id="voice-input-label">Microphone</dt><dd id="voice-input-device"></dd><dt id="voice-output-label">Audio output</dt><dd id="voice-output-device"></dd></dl>
                     <button id="voice-settings" class="voice-control" type="button"></button>
                     <button id="voice-prio" class="voice-control" title="Priority speaker" aria-label="Priority speaker" aria-pressed="false">Priority speaker</button>
                     <button id="voice-lowbw" class="voice-control" title="Low-bandwidth mode" aria-label="Low-bandwidth mode" aria-pressed="false">Low bandwidth</button>
                     <span id="hotkey-status" role="status" aria-live="polite"></span>
+                    <div class="voice-secondary-actions"></div>
+                    <button id="voice-disconnect" class="voice-control" type="button"></button>
                 </div></details>
-                <span class="voice-disconnect-group"><button id="voice-leave-channel" class="voice-control" type="button"></button><button id="voice-disconnect" class="voice-control" type="button"></button></span>
             </div>
             <div class="voice-info"><div class="voice-summary"><div id="voice-status" role="status" aria-live="polite">Voice disconnected</div><button id="voice-latency" type="button" aria-haspopup="dialog" hidden></button></div><span id="voice-context"></span><span id="conn-pill" class="pill">offline</span></div>
             <div id="mic-status" class="warn" role="status" aria-live="polite"></div>

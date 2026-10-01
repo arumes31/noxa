@@ -4,11 +4,12 @@ let active = null;
 export function closeContextMenu(expected, restoreFocus = false) {
     if (!active || (expected && expected !== active.menu)) return;
     const owner = active;
+    const focusedInside = owner.menu.contains(document.activeElement);
     active = null;
     owner.events.abort();
     owner.menu.remove();
     owner.onClose?.();
-    if (restoreFocus) {
+    if (restoreFocus || focusedInside) {
         const target = owner.trigger?.isConnected ? owner.trigger : owner.resolveTrigger?.();
         if (target?.isConnected) target.focus();
     }
@@ -36,8 +37,12 @@ export function mountContextMenu(menu, { x, y, trigger = document.activeElement,
     menu.style.top = `${Math.max(gap, Math.min(y ?? anchor?.bottom ?? gap, innerHeight - bounds.height - gap))}px`;
     const items = () => [...menu.querySelectorAll('[role="menuitem"], input')].filter(item => !item.disabled && item.getAttribute("aria-disabled") !== "true" && !item.hidden);
     menu.addEventListener("click", event => event.stopPropagation(), { signal: events.signal });
+    // Saving temporarily disables range inputs and can move focus to body.
+    // Escape must still dismiss the menu and return to its original control.
+    document.addEventListener("keydown", event => {
+        if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); closeContextMenu(menu, true); }
+    }, { signal: events.signal, capture: true });
     menu.addEventListener("keydown", event => {
-        if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); closeContextMenu(menu, true); return; }
         if (event.key === "Tab") { closeContextMenu(menu, true); return; }
         // Left/Right adjust a range; Up/Down continue through menu actions.
         if (event.target.matches("input") && !(event.target.type === "range" && ["ArrowDown", "ArrowUp"].includes(event.key))) return;
