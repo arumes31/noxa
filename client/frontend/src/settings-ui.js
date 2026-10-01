@@ -684,7 +684,6 @@ function pageCapture() {
 
     const microphone = createMicCheck(s, {
         onStart: cleanup => { stopMicCheck(); stopMicCheck = cleanup; },
-        onThreshold: value => { for (const input of vadRow.querySelectorAll("input")) input.value = value; },
     });
     el.append(timingNote("localPreview"), microphone.root);
     el.addEventListener("change", () => microphone.refresh());
@@ -699,17 +698,13 @@ function pageCapture() {
         r.checked = (s.activation_mode || "ptt") === id;
         r.onchange = () => {
             s.activation_mode = id;
-            vadRow.style.display = id === "vad" ? "" : "none";
+            microphone.refresh();
         };
         l.appendChild(r);
         l.appendChild(document.createTextNode(" " + label));
         modeWrap.appendChild(l);
     }
     el.append(timingNote("saved", modeWrap.querySelectorAll("input")), modeWrap);
-
-    const vadRow = row(t("settings.vad.threshold"), slider(s.vad_threshold, 1, 100, (v) => { s.vad_threshold = v; }, true), "saved");
-    vadRow.style.display = (s.activation_mode || "ptt") === "vad" ? "" : "none";
-    el.appendChild(vadRow);
 
     el.appendChild(row(t("settings.echo.cancellation"), checkbox(s.echo_cancellation !== false, (v) => { s.echo_cancellation = v; }), "saved"));
     el.appendChild(row(t("settings.noise.suppression"), checkbox(s.noise_suppression !== false, (v) => { s.noise_suppression = v; }), "saved"));
