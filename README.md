@@ -4,8 +4,6 @@
 
 # noXa
 
-Previously VoicX. See the [rename and upgrade notes](docs/RENAME.md) for existing installations.
-
 **Next-Generation High-Performance Real-Time Communication Platform**
 
 *Ultra-low latency SFU voice & video engine, zero-trust E2EE chat messaging, PostgreSQL multi-tenant state persistence, and named roles, role hierarchy, and channel access overrides.*
@@ -17,7 +15,7 @@ Previously VoicX. See the [rename and upgrade notes](docs/RENAME.md) for existin
 [![Docker Image](https://img.shields.io/docker/v/arumes31/noxa?label=ghcr.io&logo=docker)](https://github.com/arumes31/noxa/pkgs/container/noxa)
 [![License](https://img.shields.io/github/license/arumes31/noxa)](LICENSE)
 
-[Architecture](#-system-architecture) • [Features](#-key-features) • [Quick Start](#-quick-start) • [Permissions](#-roles-and-channel-access) • [ServerQuery API](#-serverquery-admin-protocol) • [Configuration](#-configuration-reference)
+[Architecture](#️-system-architecture) • [Features](#-key-features) • [Quick Start](#-quick-start) • [Server Setup](#new-server-setup) • [Permissions](#️-roles-and-channel-access) • [ServerQuery API](#-serverquery-admin-protocol) • [Configuration](#️-configuration-reference)
 
 ---
 
@@ -121,11 +119,12 @@ The current server and client require the coordinated `roles-v1` model and a fre
    cd noxa
    ```
 
-2. Create an explicit local-development environment, then launch PostgreSQL,
-   Redis, and the server:
+2. Create an explicit local-development environment, build the server image,
+   and start its database and Redis dependencies:
    ```bash
    cp .env.example .env
-   docker compose up -d
+   docker compose build noxa
+   docker compose up -d postgres redis
    ```
 
    The sample environment is for host-local development. Before exposing a
@@ -142,10 +141,8 @@ The current server and client require the coordinated `roles-v1` model and a fre
    Production startup rejects the sample credential and plaintext database
    transport.
 
-3. View initial startup log (includes the generated **Admin Privilege Token**):
-   ```bash
-   docker compose logs -f noxa
-   ```
+3. Follow [New server setup](#new-server-setup) below to create the owner,
+   activate roles, and start the server. Admin privilege tokens have been retired.
 
 ### Option 2: Building from Source
 
@@ -171,8 +168,9 @@ make build
 # Inspect the exact version embedded by this source state
 make version
 
-# Run migrations and start server
-NOXA_DATABASE_URL="postgres://noxa:noxa@localhost:5432/noxa?sslmode=disable" ./bin/noxa-server
+# After creating the owner and activating roles (see New server setup below),
+# start a local-development server. Use your configured database URL.
+NOXA_DEV_MODE=true NOXA_DATABASE_URL="postgres://noxa:noxa@localhost:5432/noxa?sslmode=disable" ./bin/noxa-server
 ```
 
 On Windows PowerShell, use the equivalent native wrapper:
@@ -197,6 +195,137 @@ dirty trees receive deterministic commit/content metadata automatically; see
 [`docs/versioning.md`](docs/versioning.md). Plain `go build` and `wails build`
 also use Go's embedded VCS information, while the Make targets additionally
 stamp the exact dirty-tree fingerprint into the binary.
+
+---
+
+## New server setup
+
+Use a fresh PostgreSQL database and matching current server/client versions.
+These steps initialize a new installation; do not run them to reset an existing
+server. The examples use Bash and the repository's Compose service name `noxa`.
+Keep the development stack restricted to your machine while setting it up; the
+sample Compose file publishes ports on all host interfaces.
+
+### 1. Create the first account and make it the owner
+
+After the Docker build and dependency startup above, keep the server stopped
+while running the offline setup commands:
+
+```bash
+docker compose stop noxa
+read -r -s -p 'Choose an owner account password: ' OWNER_PASSWORD; printf '\n'
+docker compose run --rm --no-deps noxa /out/adduser \
+  -nickname owner -password "$OWNER_PASSWORD"
+unset OWNER_PASSWORD
+```
+
+Store the password securely and copy the exact `unique_id` printed by `adduser`.
+The password prompt avoids saving the literal password in shell history, but the
+current CLI passes it as a process argument; run this on a trusted operator host.
+`adduser` initializes the fresh schema and creates an account; it does not grant
+administrative rights by itself. If it reports that the account already exists,
+it has not changed that account's password.
+
+Replace the placeholder below with that exact ID, not the nickname:
+
+```bash
+docker compose run --rm --no-deps noxa /out/role-setup \
+  -owner-uid '<unique_id from adduser>' \
+  -activate -confirm ACTIVATE-ROLES-V1 \
+  -chat-master-key-file /data/keys/chat_master.key \
+  -query-timeout 30s
+docker compose up -d noxa
+docker compose logs --tail=50 noxa
+docker compose exec noxa wget -qO- http://127.0.0.1:12337/readyz
+```
+
+Confirm the setup report says `active: true` and readiness returns `ok`.
+Activation is a one-time operation and refuses to run alongside a serving
+server. The selected account becomes **Server owner**, with full administrative
+access. There is no first-join admin claim or privilege token.
+
+For a source installation, build `go build -o bin/adduser ./cmd/adduser` and
+`go build -o bin/role-setup ./cmd/role-setup`. With the server stopped, export
+your `NOXA_DATABASE_URL` and run those binaries with the same arguments. Set
+`-chat-master-key-file` to the server's actual key path (default
+`./data/keys/chat_master.key`) and share the same configured key override, if any.
+See [role setup and activation](docs/role-setup-preflight.md) for inspection,
+failure recovery and process-lock details.
+
+### 2. Connect as owner and grant administrators
+
+Open the desktop client, connect to `localhost:12333` (or your server's hostname),
+and enter `owner` as the nickname and the chosen **Account password**. A server
+join password, if configured, is separate from the account password. Compare the
+server certificate fingerprint with its startup log before trusting it.
+
+Open **Permissions → Roles**, then **Members**. Find a registered member,
+select the **Administrator** role and choose **Add role** to grant admin access.
+Only the owner can grant Administrator or transfer ownership. Keep this role
+limited to trusted operators; use Moderator for routine moderation.
+
+To provision another password account, stop the server, run `adduser` with a
+different nickname/password, then start the server again. Grant its role through
+the owner account. Ownership transfer is available in the Members view; it gives
+the recipient ownership and removes your owner protection.
+
+### 3. Configure roles and member defaults
+
+The initial policy is closed: `@everyone` has no grants, the Member, Moderator
+and Administrator roles are unassigned, and no default member role is selected.
+
+1. In **Permissions → Roles**, select an existing role or **Create role**. Use
+   **Start from a template** for Member or Moderator, adjust the permissions,
+   and save. Roles add permissions together; a role's name alone grants nothing.
+2. Order roles with **Move role up/down**. Managers can only manage roles and
+   moderate members below their permitted hierarchy; a permission checkbox
+   alone does not bypass that hierarchy.
+3. Use **Members → Add role** for existing registered accounts. As owner, set
+   **Role for new members** if future registrations should automatically receive
+   Member. This saves immediately and does not change existing accounts or
+   guests; Administrator cannot be assigned automatically.
+4. Configure `@everyone` only for access you intend every member and guest to
+   have. Keep moderation and server-management permissions in dedicated roles.
+
+### 4. Open channels and verify access
+
+Right-click a channel and choose **Channel access**. Existing channels
+start with **View channel → Deny** for `@everyone`, so assigning Member alone
+does not make them visible.
+
+- For a members-only channel, keep that deny and add a Member role override
+  allowing **View channel**, along with the desired chat/voice permissions and
+  their prerequisites.
+- For a public channel, use the **Public** preset and review its `@everyone`
+  permissions before saving. Presets change `@everyone`; other exceptions still
+  apply.
+- Use **Sync with parent** for child channels that should follow the parent's
+  access policy, or **Customize this channel** for separate rules. Changes to a
+  parent's policy also affect its synced children.
+- Save, then use **Check access** for a regular member and a guest. It checks
+  saved permissions, not unsaved edits, passwords, bans or resource limits.
+  Also connect with a non-admin account to check joining, chat and voice;
+  owner/admin access bypasses configurable channel overrides.
+
+### 5. Prepare the server for other users
+
+Before exposing it, configure production database credentials and PostgreSQL
+TLS, set `NOXA_DEV_MODE=false`, and choose your server admission policy. Setting
+`POSTGRES_SSLMODE` alone does not enable TLS on PostgreSQL: configure its
+certificate/key or use a TLS-enabled database. In Compose, explicitly pass any
+additional `NOXA_*` settings in the `noxa.environment` section; entries in `.env`
+are only used where the Compose file references them.
+
+Publish the control TCP port `12333`, file-transfer TCP port `12336`, the UDP
+keepalive port configured by `NOXA_UDP_ADDR` (default UDP `12334`), and the
+configured WebRTC media ports. WebRTC needs reachable ICE candidates and suitable
+NAT/firewall or TURN configuration; UDP `12334` alone is not the voice transport.
+Keep administration and health ports private. See the
+[configuration reference](#️-configuration-reference) for listener settings.
+
+Back up PostgreSQL together with the matching chat/PII keys, uploaded files,
+recordings, TLS identity and configuration. Verify a restore before relying on
+the installation; see [backup and restore](docs/operations/backup-restore.md).
 
 ---
 

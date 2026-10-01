@@ -1,4 +1,5 @@
 export const micEnglish = {
+    "mic.adjustThreshold": "Drag the marker to adjust voice activation while testing. Arrow keys adjust by 1%. Apply to save for live voice.",
     "mic.title": "Test your microphone", "mic.preview": "Preview only · Settings apply after you choose Apply. Your existing call is unchanged.",
     "mic.start": "Begin Test", "mic.record": "Record 5 seconds", "mic.listen": "Listen to recording", "mic.again": "Record again", "mic.stopPlayback": "Stop playback",
     "mic.recordHelp": "Speak normally. The sample stays on this device and is discarded when you leave this page.",
@@ -15,6 +16,7 @@ export const micEnglish = {
 };
 
 export const micGerman = {
+    "mic.adjustThreshold": "Ziehe die Markierung, um die Sprachaktivierung beim Testen anzupassen. Pfeiltasten ändern den Wert um 1 %. Mit Anwenden für Live-Sprache speichern.",
     "mic.title": "Mikrofon testen", "mic.preview": "Nur Vorschau · Einstellungen gelten erst nach Anwenden. Dein bestehender Anruf bleibt unverändert.",
     "mic.start": "Test starten", "mic.record": "5 Sekunden aufnehmen", "mic.listen": "Aufnahme anhören", "mic.again": "Erneut aufnehmen", "mic.stopPlayback": "Wiedergabe stoppen",
     "mic.recordHelp": "Sprich normal. Die Aufnahme bleibt auf diesem Gerät und wird beim Verlassen dieser Seite verworfen.",

@@ -66,6 +66,60 @@ const begin = page => page.getByRole("button", { name: "Begin Test", exact: true
 const calibrate = page => page.getByRole("button", { name: "Calibrate voice activation", exact: true });
 const loopback = page => page.getByLabel("Loopback test (hear yourself — use headphones!)", { exact: true });
 
+test("VAD threshold adjusts on the meter with pointer and keyboard without saving", async ({ page }, testInfo) => {
+    await page.getByLabel("Voice Activity Detection", { exact: true }).check();
+    const slider = page.getByRole("slider", { name: "VAD threshold", exact: true });
+    await expect(slider).toBeVisible();
+    await slider.focus();
+    await page.keyboard.press("ArrowRight");
+    await expect(slider).toHaveAttribute("aria-valuenow", "26");
+    await begin(page).click();
+    await expect(page.getByRole("meter", { name: "Microphone level" })).toBeVisible();
+    const bounds = await slider.boundingBox();
+    // Drag to -20 dBFS: amplitude .1, hence 50% of the VAD amplitude range (.2).
+    await page.mouse.move(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(bounds.x + bounds.width * 2 / 3, bounds.y + bounds.height / 2, { steps: 5 });
+    await page.mouse.up();
+    await expect(slider).toHaveAttribute("aria-valuenow", "50");
+    await expect(page.getByRole("spinbutton", { name: "VAD threshold", exact: true })).toHaveValue("50");
+    await expect(page.locator(".settings-save-status")).toContainText("Unsaved changes");
+    expect(await page.evaluate(() => window.__quickSavedSettings.vad_threshold)).toBe(25);
+    expect(await page.evaluate(() => window.__micRequests.length)).toBe(1);
+    await page.screenshot({ path: testInfo.outputPath("vad-on-meter.png") });
+    await slider.focus(); await page.keyboard.press("Home");
+    await expect(slider).toHaveAttribute("aria-valuenow", "1");
+    await page.keyboard.press("End");
+    await expect(slider).toHaveAttribute("aria-valuenow", "100");
+    await page.locator("#set-cancel").click();
+    expect(await page.evaluate(() => window.__quickSavedSettings.vad_threshold)).toBe(25);
+});
+
+test("meter threshold changes live transmission preview and Apply persists it in compact settings", async ({ page }, testInfo) => {
+    await page.setViewportSize({ width: 740, height: 720 });
+    await expect(page.locator(".mic-threshold-field")).toBeHidden();
+    await page.getByLabel("Voice Activity Detection", { exact: true }).check();
+    await begin(page).click();
+    await expect.poll(() => page.evaluate(() => window.__micRequests.length)).toBe(1);
+    await page.evaluate(() => {
+        const tone = window.__micInput.createOscillator(), gain = window.__micInput.createGain();
+        gain.gain.value = 0.15; tone.connect(gain).connect(window.__micDestination); tone.start();
+        void window.__micInput.resume();
+    });
+    const number = page.getByRole("spinbutton", { name: "VAD threshold", exact: true });
+    await number.fill("100");
+    await expect(page.locator(".mic-transmission")).toHaveText("Below threshold");
+    await number.fill("10");
+    await expect(page.locator(".mic-transmission")).toHaveText("Would transmit");
+    await expect(page.getByRole("slider", { name: "VAD threshold", exact: true })).toHaveAttribute("aria-valuenow", "10");
+    await page.screenshot({ path: testInfo.outputPath("vad-compact.png") });
+    await page.locator("#set-apply").click();
+    expect(await page.evaluate(() => window.__quickSavedSettings.vad_threshold)).toBe(10);
+    await page.getByLabel("Continuous Transmission", { exact: true }).check();
+    await expect(page.locator(".mic-threshold-control")).toBeHidden();
+    await expect(page.locator(".mic-threshold-field")).toBeHidden();
+});
+
 async function leaveCapture(page, exit) {
     if (exit === "close") await page.locator("#set-cancel").click();
     else await page.locator('[data-page="playback"]').click();
@@ -162,6 +216,38 @@ test("guided calibration measures quiet and speech then waits for explicit thres
     await page.getByRole("button", { name: "Use suggested threshold", exact: true }).click();
     await expect(page.locator(".settings-save-status")).toContainText("Unsaved changes");
     await expectReleased(page);
+});
+
+test("calibration preview stays in VAD while adjusting its threshold from PTT mode", async ({ page }) => {
+    await calibrate(page).click();
+    await expect(page.locator("#mic-calibration-status")).toContainText("Speak normally", { timeout: 7000 });
+    await page.evaluate(() => {
+        const tone = window.__micInput.createOscillator(), gain = window.__micInput.createGain();
+        gain.gain.value = 0.15; tone.connect(gain).connect(window.__micDestination); tone.start();
+        void window.__micInput.resume();
+    });
+    await expect(calibrate(page)).toBeEnabled({ timeout: 7000 });
+    await page.getByRole("button", { name: "Preview suggested threshold", exact: true }).click();
+    const slider = page.getByRole("slider", { name: "VAD threshold", exact: true });
+    await slider.focus(); await page.keyboard.press("End");
+    await expect(slider).toBeVisible();
+    await expect(slider).toHaveAttribute("aria-valuenow", "100");
+    await expect(page.locator(".mic-transmission")).toHaveText("Below threshold");
+    const bounds = await slider.boundingBox();
+    await page.mouse.click(bounds.x + bounds.width * 2 / 3, bounds.y + bounds.height / 2);
+    await expect(slider).toBeVisible();
+    await expect(slider).toHaveAttribute("aria-valuenow", "50");
+    await page.getByRole("spinbutton", { name: "VAD threshold", exact: true }).fill("10");
+    await expect(slider).toHaveAttribute("aria-valuenow", "10");
+    await expect(page.getByRole("button", { name: "Test push-to-talk", exact: true })).toBeHidden();
+    expect(await page.evaluate(() => window.__quickSavedSettings.vad_threshold)).toBe(25);
+    await page.getByRole("button", { name: "Stop", exact: true }).click();
+    await expect(slider).toBeHidden();
+    await page.getByRole("button", { name: "Preview suggested threshold", exact: true }).click();
+    await expect(slider).toBeVisible();
+    await page.getByRole("button", { name: "Use suggested threshold", exact: true }).click();
+    await expect(slider).toBeHidden();
+    await expect(page.getByRole("button", { name: "Test push-to-talk", exact: true })).toBeVisible();
 });
 
 test("microphone meter exposes decibels and a keyboard-only transmission preview", async ({ page }) => {
@@ -297,7 +383,7 @@ test("closing pending calibration stops the late track without changing a reopen
     await page.evaluate(() => window.__noxa.openSettings("capture"));
     await page.evaluate(() => window.__resolveMic());
     await expect.poll(() => page.evaluate(() => window.__micTracks.map(track => track.readyState))).toEqual(["ended"]);
-    await expect(page.getByRole("slider", { name: "VAD threshold", exact: true })).toHaveValue("25");
+    await expect(page.getByRole("slider", { name: "VAD threshold", exact: true })).toHaveAttribute("aria-valuenow", "25");
     await expect(page.locator("#mic-calibration-status")).toBeEmpty();
     await expect(calibrate(page)).toBeEnabled();
     expect(await page.evaluate(() => window.__micContexts.every(context => context.state === "closed"))).toBe(true);

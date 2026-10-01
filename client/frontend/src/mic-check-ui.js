@@ -12,7 +12,7 @@ const position = db => `${Math.max(0, Math.min(100, (db + 60) / 60 * 100))}%`;
 const decibels = db => db <= -60 ? "≤−60" : db.toFixed(1);
 const text = (node, value) => { if (node.textContent !== value) node.textContent = value; };
 
-export function createMicCheck(settings, { onStart, onThreshold }) {
+export function createMicCheck(settings, { onStart }) {
     const root = element("section", "mic-check"); root.setAttribute("aria-label", t("mic.title"));
     root.append(element("h3", "set-subhead", t("mic.title")), element("p", "set-hint", t("mic.preview")));
     const actions = element("div", "mic-test");
@@ -23,19 +23,75 @@ export function createMicCheck(settings, { onStart, onThreshold }) {
     const record = button("mic.record", () => begin("record"));
     const stop = button("settings.stop", () => { mic.stop(); status.textContent = t("settings.mic.stopped"); }); stop.hidden = true;
     const device = element("p", "set-hint mic-device");
-    const bar = element("div", "mic-bar"); bar.hidden = true;
+    const meter = element("div", "mic-meter-control");
+    const bar = element("div", "mic-bar");
     bar.setAttribute("role", "meter"); bar.setAttribute("aria-label", t("mic.meter"));
     bar.setAttribute("aria-valuemin", "-60"); bar.setAttribute("aria-valuemax", "0"); bar.setAttribute("aria-valuenow", "-60");
     const fill = element("div", "mic-fill"), peak = element("span", "mic-peak"), threshold = element("span", "mic-threshold");
-    bar.append(fill, peak, threshold);
+    bar.append(fill, peak);
+    const thresholdControl = element("div", "mic-threshold-control");
+    thresholdControl.tabIndex = 0;
+    thresholdControl.setAttribute("role", "slider");
+    thresholdControl.setAttribute("aria-label", t("settings.vad.threshold"));
+    thresholdControl.setAttribute("aria-valuemin", "1"); thresholdControl.setAttribute("aria-valuemax", "100");
+    thresholdControl.append(threshold);
+    meter.append(bar, thresholdControl);
     const scale = element("div", "mic-scale"); scale.setAttribute("aria-hidden", "true");
     for (const db of [-60, -48, -36, -24, -12, 0]) scale.append(element("span", "", String(db)));
     const readings = element("p", "mic-readings");
     const status = element("p", "set-hint", t("mic.idle")); status.id = "mic-test-status"; status.setAttribute("role", "status");
     const transmission = element("p", "mic-transmission"); transmission.setAttribute("role", "status");
     const thresholdLabel = element("p", "set-hint mic-threshold-label");
+    const thresholdField = element("label", "mic-threshold-field");
+    const thresholdNumber = element("input", ""); thresholdNumber.type = "number";
+    thresholdNumber.min = "1"; thresholdNumber.max = "100"; thresholdNumber.step = "1";
+    thresholdNumber.setAttribute("aria-label", t("settings.vad.threshold"));
+    thresholdField.append(document.createTextNode(t("settings.vad.threshold") + " "), thresholdNumber, document.createTextNode(" %"));
+    const thresholdHelp = element("p", "set-hint", t("mic.adjustThreshold"));
     const ptt = button("mic.ptt", undefined); ptt.hidden = true; ptt.setAttribute("aria-pressed", "false");
     let held = false, lastAbove = -Infinity, lastMode = "", suggested = null, previewThreshold = null, playbackError = false;
+    function refreshThreshold() {
+        const value = previewThreshold ?? settings.vad_threshold ?? 50;
+        const enabled = previewThreshold !== null || settings.activation_mode === "vad";
+        thresholdControl.hidden = thresholdField.hidden = thresholdHelp.hidden = thresholdLabel.hidden = !enabled;
+        threshold.style.left = position(micDB(value / 100 * 0.2));
+        thresholdControl.setAttribute("aria-valuenow", String(value));
+        thresholdControl.setAttribute("aria-valuetext", `${value}% (${decibels(micDB(value / 100 * 0.2))} dBFS)`);
+        thresholdNumber.value = value;
+        thresholdLabel.textContent = t("mic.threshold", { value });
+    }
+    function setThreshold(value) {
+        if (!Number.isFinite(value)) return;
+        settings.vad_threshold = Math.max(1, Math.min(100, Math.round(value)));
+        if (previewThreshold !== null) previewThreshold = settings.vad_threshold;
+        lastAbove = -Infinity;
+        refreshThreshold();
+        root.dispatchEvent(new Event("input", { bubbles: true }));
+    }
+    const pointerThreshold = event => {
+        const bounds = thresholdControl.getBoundingClientRect();
+        if (!bounds.width) return;
+        const db = Math.max(0, Math.min(1, (event.clientX - bounds.left) / bounds.width)) * 60 - 60;
+        setThreshold(10 ** (db / 20) / 0.2 * 100);
+    };
+    thresholdControl.onpointerdown = event => {
+        if (event.button !== 0) return;
+        event.preventDefault(); thresholdControl.focus();
+        thresholdControl.setPointerCapture(event.pointerId); pointerThreshold(event);
+    };
+    thresholdControl.onpointermove = event => { if (thresholdControl.hasPointerCapture(event.pointerId)) pointerThreshold(event); };
+    thresholdControl.onpointerup = thresholdControl.onpointercancel = event => {
+        if (thresholdControl.hasPointerCapture(event.pointerId)) thresholdControl.releasePointerCapture(event.pointerId);
+    };
+    thresholdControl.onkeydown = event => {
+        const value = previewThreshold ?? settings.vad_threshold ?? 50;
+        const values = { ArrowLeft: value - 1, ArrowDown: value - 1, ArrowRight: value + 1, ArrowUp: value + 1,
+            PageDown: value - 10, PageUp: value + 10, Home: 1, End: 100 };
+        if (Object.hasOwn(values, event.key)) { event.preventDefault(); setThreshold(values[event.key]); }
+    };
+    thresholdNumber.oninput = () => { if (thresholdNumber.validity.valid && thresholdNumber.value !== "") setThreshold(thresholdNumber.valueAsNumber); };
+    thresholdNumber.onchange = () => { setThreshold(thresholdNumber.valueAsNumber); refreshThreshold(); };
+    refreshThreshold();
     const hold = down => { held = down; ptt.setAttribute("aria-pressed", String(down)); };
     ptt.onpointerdown = event => { ptt.setPointerCapture(event.pointerId); hold(true); };
     ptt.onpointerup = ptt.onpointercancel = ptt.onlostpointercapture = ptt.onblur = () => hold(false);
@@ -57,12 +113,12 @@ export function createMicCheck(settings, { onStart, onThreshold }) {
     const calibration = element("div", "mic-test");
     const calibrate = button("mic.calibrate", () => begin("calibration"), calibration);
     const calStatus = element("p", "set-hint"); calStatus.id = "mic-calibration-status"; calStatus.setAttribute("role", "status");
-    const preview = button("mic.previewThreshold", () => { previewThreshold = suggested; begin("test", true); }, calibration); preview.hidden = true;
+    const preview = button("mic.previewThreshold", () => begin("test", true), calibration); preview.hidden = true;
     const use = button("mic.use", () => {
-        settings.vad_threshold = suggested; previewThreshold = null; onThreshold(suggested);
-        root.dispatchEvent(new Event("input", { bubbles: true })); use.hidden = preview.hidden = true;
+        previewThreshold = null;
+        setThreshold(suggested); use.hidden = preview.hidden = true;
     }, calibration); use.hidden = true;
-    root.append(actions, device, bar, scale, readings, status, thresholdLabel, transmission, shortcut, keyStatus,
+    root.append(actions, device, meter, scale, thresholdField, thresholdHelp, readings, status, thresholdLabel, transmission, shortcut, keyStatus,
         loopLabel, output, element("p", "set-hint", t("mic.recordHelp")), recordings, calibration, calStatus);
     let events = null;
     const channel = () => window.__noxa.state.channels?.find(ch => ch.ChannelID === window.__noxa.state.myChannelID);
@@ -74,9 +130,14 @@ export function createMicCheck(settings, { onStart, onThreshold }) {
         onState: (state, mode) => {
             const busy = state !== "idle";
             start.disabled = record.disabled = calibrate.disabled = busy;
-            stop.hidden = !busy; bar.hidden = !busy; loop.disabled = state !== "active" || mode !== "test";
+            stop.hidden = !busy; loop.disabled = state !== "active" || mode !== "test";
             ptt.hidden = state !== "active" || mode !== "test" || settings.activation_mode !== "ptt";
-            if (!busy) { loop.checked = false; hold(false); transmission.textContent = ""; }
+            if (!busy) {
+                previewThreshold = null;
+                loop.checked = false; hold(false); transmission.textContent = "";
+                fill.style.width = "0%"; peak.style.left = "0%"; bar.setAttribute("aria-valuenow", "-60");
+            }
+            refreshThreshold();
             if (state === "requesting") {
                 status.textContent = t("settings.mic.requesting"); listen.disabled = true;
                 device.textContent = ""; readings.textContent = ""; hold(false); lastAbove = -Infinity;
@@ -92,8 +153,6 @@ export function createMicCheck(settings, { onStart, onThreshold }) {
             const mode = previewThreshold !== null ? "vad" : settings.activation_mode || "ptt";
             if (mode !== lastMode) { hold(false); lastAbove = -Infinity; lastMode = mode; }
             const value = previewThreshold ?? settings.vad_threshold ?? 50;
-            threshold.hidden = thresholdLabel.hidden = mode !== "vad";
-            threshold.style.left = position(micDB(value / 100 * 0.2)); thresholdLabel.textContent = t("mic.threshold", { value });
             ptt.hidden = mode !== "ptt" || mic.current.mode !== "test";
             const above = level.mean > value / 100 * 0.2;
             if (above) lastAbove = performance.now();
@@ -122,6 +181,7 @@ export function createMicCheck(settings, { onStart, onThreshold }) {
         playbackError = false;
         currentProfile = profile();
         if (!keepSuggestion) { suggested = previewThreshold = null; use.hidden = preview.hidden = true; calStatus.textContent = ""; }
+        else previewThreshold = suggested;
         events = new AbortController();
         window.addEventListener("blur", () => hold(false), { signal: events.signal });
         window.addEventListener("noxa-mic-test-ptt", event => {
@@ -139,6 +199,7 @@ export function createMicCheck(settings, { onStart, onThreshold }) {
     }
     loop.onchange = async () => { playbackError = false; try { await mic.setLoopback(loop.checked); } catch (error) { if (root.isConnected) outputError(error); } };
     return { root, refresh: () => {
+        refreshThreshold();
         if (currentProfile === profile()) return;
         currentProfile = profile();
         const mode = mic.current?.mode;
