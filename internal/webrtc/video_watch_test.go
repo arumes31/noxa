@@ -80,6 +80,38 @@ func TestVideoWatchReportsOnlyNewViewerStarts(t *testing.T) {
 	}
 }
 
+func TestVideoViewerCountIsPublisherOnlyAndExpiresWithWatch(t *testing.T) {
+	r := NewRouter(nil)
+	for _, id := range []string{"pub", "a", "b"} {
+		r.JoinChannel(1, id)
+	}
+	generation := testVideoPublication(t, r, "pub", "a", SlotScreen)
+	testVideoPublication(t, r, "pub", "b", SlotScreen)
+	assertCount := func(want int) {
+		t.Helper()
+		streams := r.VideoPublications("pub")
+		if len(streams) != 1 || streams[0].ViewerCount == nil || *streams[0].ViewerCount != want {
+			t.Fatalf("count wanted=%d streams=%+v", want, streams)
+		}
+	}
+	assertCount(2)
+	if r.VideoPublications("a")[0].ViewerCount != nil {
+		t.Fatal("disclosed watcher count to another subscriber")
+	}
+	if _, err := r.WatchVideo("a", "pub", SlotScreen, generation, 2, r.VideoWatchSession("a"), false); err != nil {
+		t.Fatal(err)
+	}
+	assertCount(1)
+	r.DetachPeerKeepChannel("b")
+	assertCount(0)
+	if _, err := r.WatchVideo("b", "pub", SlotScreen, generation, 1, r.VideoWatchSession("b"), true); err != nil {
+		t.Fatal(err)
+	}
+	assertCount(1)
+	r.SetPublisherGuard(func(p PublisherAccess) bool { return p.SubscriberID != "b" })
+	assertCount(0)
+}
+
 func TestVideoWatchStopDrainsFinalWrite(t *testing.T) {
 	r := NewRouter(nil)
 	r.JoinChannel(1, "pub")

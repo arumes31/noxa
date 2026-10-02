@@ -163,6 +163,19 @@ test(`real peer call captures only after acceptance and tears down without joini
             expect(await alice.evaluate(() => window.__peers.every(peer => peer.connectionState === "connected" && peer.getSenders().some(sender => sender.track === window.__streams[1].getAudioTracks()[0] && !sender.track.enabled)))).toBe(true);
             await alice.getByRole("button", { name: "Unmute microphone", exact: true }).click();
             await expect.poll(() => alice.evaluate(() => window.__streams[1].getAudioTracks()[0].enabled)).toBe(true);
+            await alice.getByRole("button", { name: "Mute call audio", exact: true }).click();
+            await expect.poll(() => alice.evaluate(() => window.__streams[1].getAudioTracks()[0].enabled)).toBe(false);
+            await alice.getByRole("button", { name: "Unmute call audio", exact: true }).click();
+            await expect.poll(() => alice.evaluate(() => window.__streams[1].getAudioTracks()[0].enabled)).toBe(true);
+            await alice.getByRole("button", { name: "Mute microphone", exact: true }).click();
+            await alice.getByRole("button", { name: "Mute call audio", exact: true }).click();
+            await alice.getByRole("button", { name: "Unmute call audio", exact: true }).click();
+            expect(await alice.evaluate(() => window.__streams[1].getAudioTracks()[0].enabled)).toBe(false);
+            await alice.getByRole("button", { name: "Unmute microphone", exact: true }).click();
+            await alice.evaluate(() => { window.__noxa.state.deafened = true; });
+            await expect.poll(() => alice.evaluate(() => window.__streams[1].getAudioTracks()[0].enabled)).toBe(false);
+            await alice.evaluate(() => { window.__noxa.state.deafened = false; });
+            await expect.poll(() => alice.evaluate(() => window.__streams[1].getAudioTracks()[0].enabled)).toBe(true);
         }
         if (["normal", "group-media"].includes(signalingMode)) {
             // Start camera from both negotiation roles after audio connected.

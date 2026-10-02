@@ -1,6 +1,7 @@
 import { captureMediaScope, mediaScopeIsCurrent } from "./media-controls.js";
 import { streamRequest, stopPublications, publicationSnapshot, reconcilePublications } from "./stream-publication.js";
 import { t } from "./i18n.js";
+import { updateShareViewers } from "./share-status.js";
 
 const V = () => window.__noxa;
 let session = null;
@@ -155,6 +156,7 @@ async function poll(s) {
         const result = await streamRequest(s.scope, { action: "list" });
         if (!current(s)) return;
         reconcilePublications(publications, result.streams);
+        updateShareViewers(result.streams);
         if (s.watchSession && s.watchSession !== result.session) {
             for (const entry of s.streams.values()) { entry.watching = false; applyWatch(s, entry); entry.card.remove(); }
             s.streams.clear();

@@ -4590,7 +4590,6 @@ test("B3 shows your detected speech even when your own playback is muted or deaf
     await page.evaluate(() => {
         const v = window.__noxa;
         v.state.settings.muted_users = ["uid-daniel"];
-        v.setDeafened(true);
         for (const cb of window.__events.event) cb(JSON.stringify({
             type: "speaking_changed", data: { client_id: "daniel", speaking: true },
         }));
@@ -4609,6 +4608,10 @@ test("B3 shows your detected speech even when your own playback is muted or deaf
     });
     await expect(self).toContainText("In voice");
     await expect(self).not.toHaveClass(/speaking/);
+    await page.locator("#voice-deafen").click();
+    await expect(self).toContainText("Microphone muted");
+    await page.locator("#voice-deafen").click();
+    await expect(self).toContainText("In voice");
     await page.locator("#voice-mute").click();
     await expect(self).toContainText("Microphone muted");
 });
@@ -4633,8 +4636,12 @@ test("tray follows detected self speech, input/output mute, and voice teardown w
     });
     expect(await page.evaluate(() => window.__calls.SetTrayVoiceState)).toBe(count);
     await page.locator("#voice-deafen").click();
-    await expect.poll(flags).toEqual([true, false, true]);
+    await expect.poll(flags).toEqual([false, true, true]);
+    await page.locator("#voice-deafen").click();
+    await expect.poll(flags).toEqual([true, false, false]);
     await page.locator("#voice-mute").click();
+    await expect.poll(flags).toEqual([false, true, false]);
+    await page.locator("#voice-deafen").click();
     await expect.poll(flags).toEqual([false, true, true]);
     await page.locator("#voice-deafen").click();
     await expect.poll(flags).toEqual([false, true, false]);
@@ -4642,6 +4649,46 @@ test("tray follows detected self speech, input/output mute, and voice teardown w
     await expect.poll(flags).toEqual([true, false, false]);
     await page.evaluate(() => window.__noxa.resetVoiceSession());
     await expect.poll(flags).toEqual([false, false, false]);
+});
+
+test("deafen disables microphone transmission and preserves manual mute when restored", async ({ page }) => {
+    await showB3Workspace(page);
+    await page.evaluate(() => {
+        const ctx = new AudioContext(), stream = ctx.createMediaStreamDestination().stream;
+        window.__deafenTest = { ctx, stream };
+        window.__noxa.state.localStream = stream;
+        window.__noxa.state.settings.activation_mode = "continuous";
+        window.__noxa.applyVoiceState();
+    });
+    const transmitting = () => page.evaluate(() => window.__deafenTest.stream.getAudioTracks()[0].enabled);
+    await expect.poll(transmitting).toBe(true);
+    await page.locator("#voice-deafen").click();
+    await expect.poll(transmitting).toBe(false);
+    await expect(page.locator("#voice-mute")).toHaveAttribute("aria-pressed", "true");
+    await page.locator("#voice-deafen").click();
+    await expect.poll(transmitting).toBe(true);
+    await page.locator("#voice-mute").click();
+    await page.locator("#voice-deafen").click();
+    await page.locator("#voice-deafen").click();
+    await expect.poll(transmitting).toBe(false);
+    await page.locator("#voice-deafen").click();
+    await page.locator("#voice-mute").click();
+    await expect(page.locator("#voice-deafen")).toHaveAttribute("aria-pressed", "false");
+    await expect.poll(transmitting).toBe(true);
+    await page.evaluate(() => { window.__noxa.state.localStream = null; window.__deafenTest.stream.getTracks().forEach(t => t.stop()); return window.__deafenTest.ctx.close(); });
+});
+
+test("other members expose microphone and speaker state independently of local mute", async ({ page }) => {
+    await showB3Workspace(page);
+    await page.evaluate(() => {
+        const v = window.__noxa;
+        Object.assign(v.state.clients.find(c => c.client_id === "mia"), { self_muted: true });
+        Object.assign(v.state.clients.find(c => c.client_id === "alex"), { self_muted: true, self_deafened: true });
+        v.renderTree();
+    });
+    await expect(page.locator('#voice-participants [data-client-id="mia"]')).toContainText("Microphone muted");
+    await expect(page.locator('#voice-participants [data-client-id="alex"]')).toContainText("Speakers and microphone muted");
+    await expect(page.locator('#channel-tree [data-clid="alex"] [aria-label="Speakers and microphone muted"]')).toBeVisible();
 });
 
 test("B3 keeps voice controls outside the Chat and Files panels @a11y", async ({ page }) => {

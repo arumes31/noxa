@@ -420,6 +420,8 @@ export function SetActiveTab(arg1:string):Promise<void>;
 
 export function SetAlwaysOnTop(arg1:boolean):Promise<void>;
 
+export function SetAudioStateForTab(arg1:string,arg2:boolean,arg3:boolean):Promise<string>;
+
 export function SetAvatar(arg1:string):Promise<string>;
 
 export function SetAvatarForTab(arg1:string,arg2:string):Promise<string>;

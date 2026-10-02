@@ -38,7 +38,9 @@ function voiceState(client) {
         if (state.muted) return "muted";
         return client.is_speaking && client.channel_id === state.myChannelID ? "talking" : "idle";
     }
+    if (client.self_deafened) return "deafened";
     if (isUserMuted(client.unique_id)) return "localMuted";
+    if (client.self_muted) return "muted";
     if (client.is_speaking && client.channel_id === state.myChannelID) return "speaking";
     return "idle";
 }
@@ -80,11 +82,11 @@ export function renderWorkspace() {
         menu.title = t("context.memberOptions", { name });
         menu.setAttribute("aria-label", menu.title);
         const statusKey = voiceState(client);
-        const description = t("workspace.voice." + statusKey);
+        const description = t(statusKey === "deafened" ? "audioState.deafened" : "workspace.voice." + statusKey);
         button.querySelector(".participant-name").textContent = name;
         const status = button.querySelector(".participant-state");
         const speaking = statusKey === "speaking" || statusKey === "talking";
-        const statusIcon = speaking ? "signal" : ["muted", "localMuted", "serverMuted", "serverDeafened"].includes(statusKey) ? "micOff" : "mic";
+        const statusIcon = speaking ? "signal" : ["deafened", "serverDeafened"].includes(statusKey) ? "headphonesOff" : ["muted", "localMuted", "serverMuted"].includes(statusKey) ? "micOff" : "mic";
         labelButton(status, statusIcon, description);
         button.setAttribute("aria-label", t("workspace.memberLabel", { name, state: description.toLowerCase() }));
         button.classList.toggle("speaking", speaking);

@@ -3,7 +3,7 @@ import { expect, test } from "./fixtures.js";
 test.beforeEach(async ({ page }) => {
     await page.route("**/media-slots-fixture", (route) => route.fulfill({ contentType: "text/html", body: `<!doctype html>
         <button id="voice-screen">Share</button><button id="voice-video">Camera</button>
-        <video id="local-video"></video><div id="mic-status"></div><button id="ptt-btn">Talk</button>` }));
+        <video id="local-video"></video><div id="mic-status"></div><button id="ptt-btn">Talk</button><section id="sharing-status" hidden></section>` }));
     await page.goto("/media-slots-fixture");
     await page.evaluate(async () => {
         const capture = () => document.createElement("canvas").captureStream(1);
@@ -102,6 +102,82 @@ test("repeated screen shares reuse senders and declare shared audio after every 
         await expect.poll(() => page.evaluate(() => !!window.__noxa.state.shareStopping)).toBe(false);
     }
     await page.evaluate(() => window.__media.audioContext.close());
+});
+
+for (const [preset, fps, bitrate] of [["hd", 30, 5000000], ["hdMotion", 60, 8000000]]) {
+    test(`${preset} requests Full HD capture and restores its encoding budget`, async ({ page }) => {
+        await page.locator("#voice-screen").click();
+        await page.locator(".sh-preset").selectOption(preset);
+        await page.getByRole("button", { name: "Start sharing", exact: true }).click();
+        await expect(page.locator("#sharing-status")).toBeVisible();
+        const result = await page.evaluate(() => ({ options: window.__media.captureOptions,
+            encodings: window.__noxa.state.shareVideoTransceiver.sender.getParameters().encodings }));
+        expect(result.options.video.width.ideal).toBe(1920);
+        expect(result.options.video.height.ideal).toBe(1080);
+        expect(result.options.video.frameRate.ideal).toBe(fps);
+        expect(result.encodings[0].maxBitrate).toBe(bitrate);
+    });
+}
+
+test("sharing status shows sent quality, audio, honest viewer counts and an expandable live preview", async ({ page }) => {
+    await page.locator("#voice-screen").click();
+    await page.getByRole("button", { name: "Start sharing", exact: true }).click();
+    const panel = page.locator("#sharing-status");
+    await expect(panel).toContainText("You're sharing: Screen");
+    await expect(panel).toContainText("System audio off");
+    await expect(panel).toContainText("Viewer count unavailable");
+    await page.evaluate(async () => {
+        const sender = window.__noxa.state.shareVideoTransceiver.sender;
+        sender.getStats = async () => new Map([["sent", { type: "outbound-rtp", kind: "video", framesEncoded: 10,
+            frameWidth: 160, frameHeight: 90, framesPerSecond: 28, qualityLimitationReason: "bandwidth" }]]);
+        const module = await import("/src/share-status.js");
+        module.updateShareViewers([{ publisher_id: "self", slot: "screen", generation: "1", viewer_count: 0 }]);
+    });
+    await expect(panel).toContainText("Sending 160 × 90 · 28 fps");
+    await expect(panel).toContainText("Nobody is watching");
+    await expect(panel.locator(".sharing-warning")).toContainText("network bandwidth");
+    await page.evaluate(async () => (await import("/src/share-status.js")).updateShareViewers([{ publisher_id: "self", slot: "screen", generation: "1", viewer_count: 2 }]));
+    await expect(panel).toContainText("Watching: 2");
+    await panel.locator("summary").click();
+    await expect.poll(() => page.evaluate(() => !!document.querySelector("#sharing-status video").srcObject)).toBe(true);
+    await panel.locator("summary").click();
+    await expect.poll(() => page.evaluate(() => document.querySelector("#sharing-status video").srcObject)).toBe(null);
+    await panel.getByRole("button", { name: "Stop sharing", exact: true }).click();
+    await expect(panel).toBeHidden();
+    expect(await page.evaluate(() => window.__media.camera.readyState)).toBe("live");
+});
+
+test("changing sources keeps the old share on cancel, preserves the preset and stops only replaced capture", async ({ page }) => {
+    await page.locator("#voice-screen").click();
+    await page.locator(".sh-preset").selectOption("hd");
+    await page.getByRole("button", { name: "Start sharing", exact: true }).click();
+    const panel = page.locator("#sharing-status");
+    await expect(panel.getByRole("button", { name: "Change source" })).toBeEnabled();
+    await panel.getByRole("button", { name: "Change source" }).click();
+    await expect(page.locator(".sh-preset")).toHaveValue("hd");
+    await page.getByRole("button", { name: "Cancel", exact: true }).click();
+    await expect(panel).toBeVisible();
+    expect(await page.evaluate(() => window.__media.displayTracks[0].readyState)).toBe("live");
+    await panel.getByRole("button", { name: "Change source" }).click();
+    await page.getByLabel("Window", { exact: true }).check();
+    await page.getByRole("button", { name: "Start sharing", exact: true }).click();
+    await expect(panel).toContainText("You're sharing: Window");
+    const result = await page.evaluate(() => ({ tracks: window.__media.displayTracks.map(t => t.readyState), camera: window.__media.camera.readyState }));
+    expect(result).toEqual({ tracks: ["ended", "live"], camera: "live" });
+});
+
+test("a replacement region keeps its crop target after stopping the old source", async ({ page }) => {
+    await page.locator("#voice-screen").click();
+    await page.getByRole("button", { name: "Start sharing", exact: true }).click();
+    await expect(page.locator(".sharing-change")).toBeEnabled();
+    await page.locator(".sharing-change").click();
+    await page.getByLabel("Region of this app", { exact: true }).check();
+    await page.getByRole("button", { name: "Start sharing", exact: true }).click();
+    await page.locator(".region-ok").click();
+    await expect(page.locator("#sharing-status")).toContainText("You're sharing: Region of this app");
+    expect(await page.evaluate(() => window.__noxa.state.regionBox?.isConnected)).toBe(true);
+    await page.locator(".sharing-stop").click();
+    await expect(page.locator(".region-box")).toHaveCount(0);
 });
 
 test("slot declarations preserve negotiated MSID after replacing a real browser sender", async ({ page }) => {

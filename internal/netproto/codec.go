@@ -172,6 +172,10 @@ func (m MessageType) String() string {
 		return "DisplayNameSet"
 	case MsgDisplayNameSaved:
 		return "DisplayNameSaved"
+	case MsgAudioStateSet:
+		return "AudioStateSet"
+	case MsgAudioStateSaved:
+		return "AudioStateSaved"
 	case MsgMediaControlSaved:
 		return "MediaControlSaved"
 	case MsgVideoStreamControl:

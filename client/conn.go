@@ -56,6 +56,8 @@ type connManager struct {
 	mu                 sync.Mutex
 	writeMu            sync.Mutex
 	displayNameMu      sync.Mutex
+	audioStateMu       sync.Mutex
+	supportsAudioState bool
 	conn               net.Conn
 	connEpoch          uint64
 	addr               string // control address (tab info)
@@ -491,6 +493,7 @@ func (m *connManager) connectWith(addr string, authMsg netproto.Authenticate, si
 	m.nickname = resp.Nickname
 	m.displayName = authMsg.Nickname
 	m.authorizationModel = resp.AuthorizationModel
+	m.supportsAudioState = slices.Contains(resp.Capabilities, netproto.CapabilityAudioState)
 	m.isGuest = authMsg.Anonymous
 	m.iceServers = resp.ICEServers
 	m.mediaLimits = netproto.MediaLimits{}

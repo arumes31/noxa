@@ -2339,3 +2339,18 @@ body.details-collapsed #app-body {
     #chat-input-row { flex-wrap: wrap; }
     #chat-target-picker { order: -1; flex: 1 0 100%; }
 }
+/* The publisher's status stays visible above both workspace panels. */
+.sharing-status { flex: 0 0 auto; margin: 0 12px 8px; padding: 10px 12px; border: 1px solid var(--accent); border-radius: 6px; background: var(--bg-panel); }
+.sharing-heading { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.sharing-source { flex: 1 1 200px; min-width: 0; overflow-wrap: anywhere; }
+.sharing-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.sharing-actions button { font: inherit; color: var(--text); padding: 6px 10px; background: var(--bg-hover); border: 1px solid var(--border); border-radius: 4px; cursor: pointer; }
+.sharing-actions button:hover { border-color: var(--accent); }
+.sharing-actions button.danger { color: var(--danger); border-color: var(--danger); }
+.sharing-actions button:disabled { opacity: .6; cursor: wait; }
+.sharing-meta, .sharing-warning { margin: 6px 0 0; font-size: .85em; }
+.sharing-meta { color: var(--text-dim); }
+.sharing-warning { color: var(--warn); }
+.sharing-preview { margin-top: 8px; }
+.sharing-preview summary { cursor: pointer; width: fit-content; }
+.sharing-preview video { display: block; margin-top: 8px; width: min(100%, 480px); max-height: min(240px, 30vh); object-fit: contain; background: #000; }

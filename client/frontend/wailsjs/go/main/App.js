@@ -834,6 +834,10 @@ export function SetAlwaysOnTop(arg1) {
   return window['go']['main']['App']['SetAlwaysOnTop'](arg1);
 }
 
+export function SetAudioStateForTab(arg1, arg2, arg3) {
+  return window['go']['main']['App']['SetAudioStateForTab'](arg1, arg2, arg3);
+}
+
 export function SetAvatar(arg1) {
   return window['go']['main']['App']['SetAvatar'](arg1);
 }

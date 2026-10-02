@@ -40,6 +40,7 @@ import {
 } from "./video.js";
 import * as chatUI from "./chat-ui.js";
 import { startStreamSession, stopStreamSession, streamSessionIsCurrent, receiveStreamTrack, receiveShareAudio } from "./stream-controls.js";
+import { publishAudioState } from "./audio-state.js";
 import { isCurrentPublication } from "./stream-publication.js";
 import { initPermsUI } from "./roles-access-ui.js";
 import { roleChip } from "./role-presentation.js";
@@ -1686,6 +1687,7 @@ function renderTree() {
     renderClientCard();
     chatUI.refreshHeader(); // (111) topic/title follows tree + channel updates
     renderWorkspace();
+    publishAudioState();
     syncTrayVoice();
     restoreTreeFocus(root, focusState);
 }
@@ -1966,6 +1968,18 @@ function clientRow(c) {
         row.appendChild(st);
     }
     // (10) Own status icons: muted / deafened / screen sharing.
+    if (c.client_id !== state.myClientID) {
+        for (const [visible, glyph, key] of [[c.server_muted || c.self_muted || c.self_deafened, "micOff", c.server_muted ? "workspace.voice.serverMuted" : "workspace.voice.muted"],
+            [c.server_deafened || c.self_deafened, "headphonesOff", c.server_deafened ? "workspace.voice.serverDeafened" : "audioState.deafened"]]) {
+            if (!visible) continue;
+            const status = document.createElement("span");
+            status.className = "status-icons";
+            status.innerHTML = icon(glyph);
+            status.title = t(key);
+            status.setAttribute("aria-label", t(key));
+            row.append(status);
+        }
+    }
     if (c.client_id === state.myClientID) {
         const icons = document.createElement("span");
         icons.className = "status-icons";
@@ -2993,7 +3007,7 @@ window.runtime.EventsOn("offer", (json) => {
 function applyVoiceState() {
     if (!state.localStream) return;
     const mode = state.settings?.activation_mode || "ptt";
-    let audible = !state.muted;
+    let audible = !state.muted && !state.deafened;
     // ptt and vad both gate transmission on the (hotkey- or VAD-driven)
     // pttActive flag; continuous always transmits.
     if (mode !== "continuous") audible = audible && state.pttActive;
@@ -3449,6 +3463,10 @@ $("ptt-btn").addEventListener("keyup", (event) => {
 $("ptt-btn").addEventListener("blur", () => setPTT(false));
 
 $("voice-mute").onclick = () => {
+    if (state.deafened) {
+        setDeafened(false);
+        state.muted = true; // An explicit unmute overrides the pre-deafen state.
+    }
     state.muted = !state.muted;
     syncMuteButton($("voice-mute"), state.muted);
     window.go.main.App.SetMuted(state.muted);
@@ -3456,17 +3474,25 @@ $("voice-mute").onclick = () => {
     else playEvent("mic_on");
     applyVoiceState();
     renderTree();
+    publishAudioState();
 };
 syncMuteButton($("voice-mute"), state.muted);
 
+let mutedBeforeDeafen = false;
 function setDeafened(on) {
     if (state.deafened === on) return;
+    if (on) { mutedBeforeDeafen = state.muted; state.muted = true; }
+    else state.muted = mutedBeforeDeafen;
     state.deafened = on;
+    syncMuteButton($("voice-mute"), state.muted);
+    window.go.main.App.SetMuted(state.muted);
+    applyVoiceState();
     refreshVoicePlayback();
     $("remote-video").muted = on;
     if (remoteChain.master) remoteChain.master.gain.value = on ? 0 : Math.min(2, (state.settings?.volume ?? 100) / 100);
     playEvent(on ? "deafen_on" : "deafen_off");
     renderTree();
+    publishAudioState();
 }
 
 let whisperReplyRequest = null;

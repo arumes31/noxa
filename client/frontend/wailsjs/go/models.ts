@@ -3153,6 +3153,7 @@ export namespace netproto {
 	    }
 	}
 	export class VideoStream {
+	    viewer_count?: number;
 	    watch_revision: number;
 	    publisher_id: string;
 	    slot: string;
@@ -3166,6 +3167,7 @@ export namespace netproto {
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.watch_revision = source["watch_revision"];
+	        this.viewer_count = source["viewer_count"];
 	        this.publisher_id = source["publisher_id"];
 	        this.slot = source["slot"];
 	        this.generation = source["generation"];

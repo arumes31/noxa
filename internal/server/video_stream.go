@@ -66,7 +66,7 @@ func (s *TCPServer) handleVideoStreamControl(ctx context.Context, client *Client
 		case "list":
 			result.Session = voice.VideoWatchSession(client.ID)
 			for _, stream := range voice.VideoPublications(client.ID) {
-				result.Streams = append(result.Streams, netproto.VideoStream{PublisherID: stream.PublisherID, Slot: stream.Slot, Generation: stream.Generation, PreviewAt: stream.PreviewAt, WatchRevision: stream.WatchRevision})
+				result.Streams = append(result.Streams, netproto.VideoStream{PublisherID: stream.PublisherID, Slot: stream.Slot, Generation: stream.Generation, PreviewAt: stream.PreviewAt, WatchRevision: stream.WatchRevision, ViewerCount: stream.ViewerCount})
 			}
 		}
 		if err != nil {

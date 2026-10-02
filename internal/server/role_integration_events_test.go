@@ -39,7 +39,7 @@ func integrationEventFixture(t *testing.T) (*TCPServer, *authorization.RoleEvalu
 
 func TestIntegrationStructuralEventsDiscardRawMetadata(t *testing.T) {
 	s, e := integrationEventFixture(t)
-	for _, kind := range []string{eventUserJoined, eventUserLeft, eventUserMoved, eventChannelCreated, eventChannelDeleted, eventChannelUpdated, eventStatusChanged, eventNicknameChanged, eventMemberVoiceChanged, eventKicked} {
+	for _, kind := range []string{eventUserJoined, eventUserLeft, eventUserMoved, eventChannelCreated, eventChannelDeleted, eventChannelUpdated, eventStatusChanged, eventNicknameChanged, eventMemberVoiceChanged, eventAudioStateChanged, eventKicked} {
 		result, err := s.projectIntegrationEvent(context.Background(), e, 5, "viewer", eventbus.Event{Type: kind, Seq: 999, Data: json.RawMessage(`{"reason":"private-reason","from_channel_id":1,"nickname":"private-nickname"}`)})
 		if err != nil || result.Snapshot == nil || result.Speaking != nil {
 			t.Fatalf("%s: %+v %v", kind, result, err)

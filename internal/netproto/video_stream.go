@@ -20,6 +20,7 @@ type VideoStreamControl struct {
 
 type VideoStream struct {
 	WatchRevision uint64 `json:"watch_revision,string"`
+	ViewerCount   *int   `json:"viewer_count,omitempty"`
 	PublisherID   string `json:"publisher_id"`
 	Slot          string `json:"slot"`
 	Generation    uint64 `json:"generation,string"`

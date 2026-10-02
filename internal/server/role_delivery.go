@@ -130,7 +130,7 @@ func (s *TCPServer) roleBroadcastFrame(client *Client, payload []byte, e *author
 				return nil, err
 			}
 		}
-	case eventUserJoined, eventUserLeft, eventUserMoved, eventChannelCreated, eventChannelDeleted, eventChannelUpdated, eventStatusChanged, eventNicknameChanged, eventMemberVoiceChanged:
+	case eventUserJoined, eventUserLeft, eventUserMoved, eventChannelCreated, eventChannelDeleted, eventChannelUpdated, eventStatusChanged, eventNicknameChanged, eventMemberVoiceChanged, eventAudioStateChanged:
 		return netproto.Encode(netproto.MsgSnapshot, buildRoleSnapshot(s.deps.State, e, client.userID(), client.uniqueID()))
 	case eventAvatarChanged, eventSpeakingChanged, eventPrioritySpeakerChanged, eventPosition, eventScreenshareChanged:
 		var event struct {

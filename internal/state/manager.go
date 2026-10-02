@@ -818,6 +818,18 @@ func (m *Manager) SetE2EPublicKey(clientID, publicKey string) {
 	}
 }
 
+// SetAudioState records self controls independently of moderator restrictions.
+func (m *Manager) SetAudioState(clientID string, muted, deafened bool) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	c, ok := m.clients[clientID]
+	if !ok {
+		return false
+	}
+	c.SelfMuted, c.SelfDeafened = muted || deafened, deafened
+	return true
+}
+
 // SetNickname changes a session's public name without changing its identity.
 func (m *Manager) SetNickname(clientID, nickname string) bool {
 	m.mu.Lock()

@@ -1026,6 +1026,8 @@ func (s *TCPServer) dispatch(ctx context.Context, client *Client, f *netproto.Fr
 		return s.handleSetStatus(ctx, client, f)
 	case netproto.MsgDisplayNameSet:
 		return s.handleDisplayNameSet(ctx, client, f)
+	case netproto.MsgAudioStateSet:
+		return s.handleAudioStateSet(ctx, client, f)
 	case netproto.MsgPoke:
 		return s.handlePoke(ctx, client, f)
 	case netproto.MsgServerInfoQuery:

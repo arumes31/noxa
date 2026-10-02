@@ -8,7 +8,8 @@ import { GridCompositor } from "./grid-compositor.js";
 import { captureCamera, applyCameraPreview } from "./camera-capture.js";
 export { cameraConstraints } from "./camera-capture.js";
 import { captureMediaScope, mediaScopeIsCurrent } from "./media-controls.js";
-import { startPublication, stopPublication } from "./stream-publication.js";
+import { startPublication, stopPublication, publicationSnapshot } from "./stream-publication.js";
+import { startShareStatus, stopShareStatus, refreshShareStatus } from "./share-status.js";
 import { closeContextMenu, mountContextMenu, contextMenuKey } from "./context-menu.js";
 
 import { isCurrentServerDialog, mountServerDialog } from "./modal.js";
@@ -864,6 +865,8 @@ const SHARE_PRESETS = {
     text: { width: 1920, height: 1080, fps: 15, bitrate: 2500000 },
     balanced: { width: 1280, height: 720, fps: 30, bitrate: 1500000 },
     motion: { width: 1280, height: 720, fps: 60, bitrate: 2500000 },
+    hd: { width: 1920, height: 1080, fps: 30, bitrate: 5000000 },
+    hdMotion: { width: 1920, height: 1080, fps: 60, bitrate: 8000000 },
 };
 
 // (71) Chromium puts cropTo on BrowserCaptureMediaStreamTrack, a SUBCLASS of
@@ -881,6 +884,7 @@ function syncShareButton() {
     const btn = V().$("voice-screen");
     if (!btn) return;
     const sharing = !!V().state.screenSharing;
+    if (!sharing) stopShareStatus();
     btn.disabled = !!V().state.shareStarting || !!V().state.shareStopping;
     const label = sharing ? tLabel("voice.stopShare") : tLabel("voice.startShare");
     btn.classList.toggle("active", sharing);
@@ -888,6 +892,7 @@ function syncShareButton() {
     btn.setAttribute("aria-label", label);
     btn.title = label;
     labelButton(btn, "screen", sharing ? tLabel("voice.stopShare") : tLabel("voice.share"));
+    refreshShareStatus();
 }
 
 // shareToggle is the voice-screen button handler: stop when sharing
@@ -902,7 +907,7 @@ export async function shareToggle() {
     openShareDialog();
 }
 
-function openShareDialog() {
+function openShareDialog(replacing = false, initialPreset = "balanced") {
     const dialogID = ++shareDialogID;
     const sourceName = `shsrc-${dialogID}`;
     const qualityID = `share-quality-${dialogID}`;
@@ -925,6 +930,8 @@ function openShareDialog() {
                 <option value="balanced">${tLabel("polish.presetBalanced")}</option>
                 <option value="text">${tLabel("polish.presetText")}</option>
                 <option value="motion">${tLabel("polish.presetMotion")}</option>
+                <option value="hd">${tLabel("share.hd")}</option>
+                <option value="hdMotion">${tLabel("share.hdMotion")}</option>
             </select>
             <label class="share-audio" for="${audioID}"><input type="checkbox" class="sh-audio" id="${audioID}" /> ${tLabel("polish.systemAudio")}</label>
             <div class="dlg-buttons">
@@ -933,6 +940,8 @@ function openShareDialog() {
             </div>
         </div>`;
     overlay.querySelector(".dlg-cancel").onclick = () => overlay.remove();
+    overlay.querySelector(".sh-preset").value = initialPreset;
+    if (replacing) overlay.querySelector(".sh-audio").checked = !!V().state.shareStream?.getAudioTracks().some(track => track.readyState === "live");
     overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
     overlay.querySelector(".dlg-ok").onclick = async () => {
         if (!isCurrentServerDialog(overlay)) return;
@@ -941,11 +950,11 @@ function openShareDialog() {
         const withAudio = overlay.querySelector(".sh-audio").checked;
         overlay.remove();
         const { state } = V();
-        if (state.shareStarting || state.shareStopping || state.screenSharing) return;
+        if (state.shareStarting || state.shareStopping || (!!state.screenSharing !== replacing)) return;
         const request = {};
         state.shareStarting = request;
         syncShareButton();
-        try { await startShare({ surface, preset, withAudio }); }
+        try { await startShare({ surface, preset, withAudio, replacing }); }
         finally {
             if (state.shareStarting === request) { state.shareStarting = null; syncShareButton(); }
         }
@@ -972,7 +981,7 @@ function openShareDialog() {
 // picker ultimately decides what is shareable), publishes a dedicated screen
 // track independently of the camera, optionally merges display
 // audio (70), and applies the quality preset (72).
-async function startShare({ surface, preset, withAudio }) {
+async function startShare({ surface, preset, withAudio, replacing = false }) {
     const { state } = V();
     const generation = state.serverGeneration;
     const tabID = state.activeTabID;
@@ -981,7 +990,9 @@ async function startShare({ surface, preset, withAudio }) {
     const shareScope = captureMediaScope();
     const current = () => mediaScopeIsCurrent(shareScope) && state.serverGeneration === generation && state.activeTabID === tabID && state.pc === peerConnection;
     let shareTransceiver = null;
+    let nextRegion = null;
     const discardDisplay = (stream) => {
+        nextRegion?.remove();
         stream?.getTracks().forEach((track) => track.stop());
         shareTransceiver?.stop();
         if (state.shareVideoTransceiver === shareTransceiver) state.shareVideoTransceiver = null;
@@ -991,6 +1002,7 @@ async function startShare({ surface, preset, withAudio }) {
             state.shareAudioSender = null;
         }
     };
+    const previousDisplay = state.shareStream;
     const p = SHARE_PRESETS[preset] || SHARE_PRESETS.balanced;
     const limits = state.mediaLimits;
     const video = videoConstraints(p.width, p.height, p.fps, limits);
@@ -1051,8 +1063,8 @@ async function startShare({ surface, preset, withAudio }) {
     };
 
     if (surface === "region") {
-        const ok = await pickRegionAndCrop(screenTrack, current);
-        if (!ok || !current()) {
+        nextRegion = await pickRegionAndCrop(screenTrack, current);
+        if (!nextRegion || !current()) {
             discardDisplay(display);
             return; // cancelled
         }
@@ -1060,11 +1072,17 @@ async function startShare({ surface, preset, withAudio }) {
 
     if (!trackFitsVideoLimits(screenTrack, state.mediaLimits)) {
         discardDisplay(display);
-        clearRegionBox();
         V().sysMsg(tLabel("voice.mediaDimensionsFailed"));
         return;
     }
+    // Keep the current source alive while the picker is open or cancelled.
+    if (replacing) {
+        if (state.shareStream !== previousDisplay || !state.screenSharing) { discardDisplay(display); return; }
+        await doStopShare();
+        if (!current() || shareEnded || screenTrack.readyState === "ended") { nextRegion?.remove(); discardDisplay(display); return; }
+    }
     state.shareStream = display;
+    state.regionBox = nextRegion;
     sharePresetBitrate = p.bitrate;
     if (peerConnection) {
         // The dedicated screen transceiver survives publication stops.
@@ -1182,6 +1200,10 @@ async function startShare({ surface, preset, withAudio }) {
         return;
     }
     syncShareButton();
+    startShareStatus({ stream: display, pc: peerConnection, scope: shareScope, preset: p, surface,
+        generation: publicationSnapshot().find(p => p.publication.slot === "screen")?.generation,
+        stop: () => { V().$("voice-screen").focus(); void doStopShare(); }, change: () => openShareDialog(true, preset),
+        reduction: () => lowBandwidth ? "share.lowBandwidth" : sendCpuPressure ? "share.cpu" : "" });
 }
 
 // pickRegionAndCrop shows a draggable/resizable box over the app; on confirm
@@ -1211,7 +1233,7 @@ function pickRegionAndCrop(track, isCurrent = () => true) {
         };
         const cancel = () => {
             box.remove();
-            finish(false);
+            finish(null);
         };
         cancelPendingRegion = cancel;
 
@@ -1251,8 +1273,7 @@ function pickRegionAndCrop(track, isCurrent = () => true) {
                 // the border box and therefore outside the captured rect.
                 box.innerHTML = "";
                 box.classList.add("cropping");
-                V().state.regionBox = box;
-                finish(true);
+                finish(box);
             } catch (e) {
                 if (!settled && isCurrent()) V().sysMsg("region capture failed: " + (e.message || e.name));
                 cancel();
@@ -1421,6 +1442,7 @@ function syncCameraButton() {
 
 // resetCameraState clears the toggle for a fresh (or ended) voice session.
 export function resetCameraState() {
+    stopShareStatus();
     cameraOff = true;
     cameraRequest?.controller?.abort();
     cameraRequest = null;
