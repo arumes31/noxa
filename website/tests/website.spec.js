@@ -132,7 +132,7 @@ test('all local assets and full-image links work beneath the selected base path'
   }
   const assets = await page.evaluate(() => [
     ...Array.from(document.querySelectorAll('img[src],script[src]'), node => node.getAttribute('src')),
-    ...Array.from(document.querySelectorAll('link[rel="stylesheet"],link[rel~="icon"],a[data-full]'), node => node.getAttribute('href')),
+    ...Array.from(document.querySelectorAll('link[rel="stylesheet"],link[rel~="icon"],link[rel="apple-touch-icon"],a[data-full]'), node => node.getAttribute('href')),
   ]);
   expect(assets.length).toBeGreaterThanOrEqual(6);
   for (const asset of new Set(assets.filter(Boolean))) {
@@ -145,8 +145,12 @@ test('all local assets and full-image links work beneath the selected base path'
   for (const image of await page.locator('a[data-full] img').all()) {
     await expect.poll(() => image.evaluate(node => node.complete && node.naturalWidth > 0)).toBe(true);
     expect(await image.getAttribute('alt')).toBeTruthy();
-    expect(Number(await image.getAttribute('width'))).toBeGreaterThan(0);
-    expect(Number(await image.getAttribute('height'))).toBeGreaterThan(0);
+    const dimensions = await image.evaluate(node => ({
+      width: Number(node.getAttribute('width')), height: Number(node.getAttribute('height')),
+      actualWidth: node.naturalWidth, actualHeight: node.naturalHeight,
+    }));
+    expect(dimensions.width).toBe(dimensions.actualWidth);
+    expect(dimensions.height).toBe(dimensions.actualHeight);
   }
 });
 
