@@ -145,7 +145,7 @@ body.details-collapsed #details-toggle { display: inline-flex; position: static;
 .msg.rich .msg-time { grid-column: 3; grid-row: 1; font: .8rem var(--font-body); }
 .msg.rich .msg-tag { grid-column: 4; grid-row: 1; justify-self: start; font-size: .72rem; }
 .msg.rich .msg-text { grid-column: 2 / -1; grid-row: 2; line-height: 1.55; }
-.msg.rich .msg-lock, .msg.rich .msg-edited, .msg.rich .msg-receipt, .msg.rich .msg-reactions { grid-column: 2 / -1; }
+.msg.rich .msg-edited, .msg.rich .msg-receipt, .msg.rich .msg-reactions { grid-column: 2 / -1; }
 .msg.rich.own { border: 0; background: transparent; }
 .msg.rich.mentioned { background: var(--accent-dim); }
 #chat-log.chat-bubbles .msg.rich { display: flex; }

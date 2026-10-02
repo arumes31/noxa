@@ -5940,6 +5940,34 @@ test("ignores a delayed microphone failure after the voice session changes", asy
     expect(await page.evaluate(() => window.__noxa.state.micState)).toBe("unknown");
 });
 
+test("encryption badges follow short, grouped, and wrapped message text inline", async ({ page }) => {
+    await page.evaluate(() => {
+        const v = window.__noxa;
+        v.showWorkspace();
+        v.state.myChannelID = 1;
+        for (const [index, text] of ["Short message", "Grouped message", "A wrapped encrypted message ".repeat(25)].entries()) {
+            window.__noxaChat.addChat({ id: 9800 + index, channel_id: 1, from_unique_id: "peer", from: "Peer", text, enc_verified: true });
+        }
+    });
+    const messages = page.locator('#chat-log .msg[data-msg-id^="980"]');
+    await expect(messages).toHaveCount(3);
+    await expect(messages.nth(1)).toHaveClass(/grouped/);
+    for (const message of await messages.all()) {
+        await expect(message.locator(".msg-text > .msg-lock:last-child")).toHaveCount(1);
+        await expect(message.locator(".msg-lock")).toHaveAttribute("title", /encrypted/);
+        const geometry = await message.evaluate(row => {
+            const body = row.querySelector(".msg-text"), lock = body.lastChild;
+            const range = document.createRange();
+            range.setStart(body, 0); range.setEndBefore(lock);
+            const text = [...range.getClientRects()].at(-1), badge = lock.getBoundingClientRect();
+            return { gap: badge.left - text.right, vertical: Math.abs(badge.top - text.top) };
+        });
+        expect(geometry.gap).toBeGreaterThanOrEqual(0);
+        expect(geometry.gap).toBeLessThan(12);
+        expect(geometry.vertical).toBeLessThan(8);
+    }
+});
+
 test("routes decrypted direct messages and echoes without mixing global chat or peers", async ({ page }) => {
     await page.evaluate(() => {
         const { state } = window.__noxa;
