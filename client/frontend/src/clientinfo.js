@@ -1,6 +1,6 @@
 // clientinfo.js — right-click context menu on channel-tree users and the
 // TS3-style Client Info dialog (live-refreshing).
-import { getUserVolume, isUserMuted, setUserMuted, setUserVolume, setUserBlocked, onShareAudioChange, isUserShareMuted, setUserShareMuted } from "./audio.js";
+import { setUserMuted, setUserBlocked } from "./audio.js";
 import { copyToClipboard } from "./clipboard.js";
 import { pickIcon } from "./image-tools.js";
 import { closeDialog, isCurrentServerDialog, mountServerDialog } from "./modal.js";
@@ -9,7 +9,7 @@ import { roleChip } from "./role-presentation.js";
 import { startPrivateCall } from "./private-calls.js";
 import { updateLocalSettings } from "./settings-store.js";
 import { closeContextMenu, mountContextMenu, contextMenuKey } from "./context-menu.js";
-import { bindMemberVolume, bindMemberShareVolume } from "./member-volume.js";
+import { memberAudioControls } from "./member-audio-ui.js";
 import { openMemberMove } from "./member-move.js";
 import { escapeHTML } from "./markdown.js";
 import { sessionUserID } from "./session-identity.js";
@@ -50,8 +50,6 @@ function openContextMenu(x, y, client, trigger) {
     if (sel && sel.size > 1 && sel.has(client.client_id)) {
         return openBatchMenu(x, y, [...sel], trigger);
     }
-    const muted = isUserMuted(client.unique_id);
-    const volPct = Math.round(getUserVolume(client.unique_id) * 100);
     // (169-171) moderation entries are pre-gated by the caller's resolved
     // powers; the server re-checks and errors still toast.
     const mod = [];
@@ -66,25 +64,16 @@ function openContextMenu(x, y, client, trigger) {
         mod.push(`<a data-act="ban">Ban…</a>`);
     }
     menuEl = document.createElement("div");
-    menuEl.className = "ctx-menu";
+    menuEl.className = "ctx-menu ctx-member-menu";
     menuEl.innerHTML = `
-        <a data-act="info">Client Info</a>
         <a data-act="pm">Send private message</a>
-        <a data-act="copy">Copy unique ID</a>
+        <a data-act="info">Client Info</a>
         <div class="ctx-divider"></div>
-        <a data-act="mute">${muted ? "✓ " : ""}Mute locally</a>
-        <div class="ctx-volume">
-            <span>${t("context.personalVolume")} <span class="mono ctx-vol-pct">${volPct}%</span></span>
-            <input type="range" min="0" max="200" value="${volPct}" />
-        </div>
-        <button type="button" class="ctx-action" data-act="reset-volume">${t("context.resetVolume")}</button>
-        <a data-act="mute-share">${isUserShareMuted(client.unique_id) ? "✓ " : ""}${t("context.shareMute")}</a>
-        <div class="ctx-share-volume">
-            <span>${t("context.shareVolume")} <output>100%</output></span>
-            <input type="range" min="0" max="200" value="100" />
-        </div>
-        <button type="button" class="ctx-action" data-act="reset-share-volume">${t("context.shareVolumeReset")}</button>
-        ${mod.length ? `<div class="ctx-divider"></div>${mod.join("")}` : ""}`;
+        <div class="ctx-audio-host"></div>
+        ${mod.length ? `<div class="ctx-divider"></div>${mod.join("")}` : ""}
+        <a data-act="copy">Copy unique ID</a>`;
+    const audioControls = memberAudioControls(client);
+    menuEl.querySelector(".ctx-audio-host").replaceWith(audioControls.element);
     menuEl.style.left = Math.min(x, window.innerWidth - 240) + "px";
     menuEl.style.top = Math.min(y, window.innerHeight - 260) + "px";
     menuEl.onclick = (e) => e.stopPropagation();
@@ -123,7 +112,7 @@ function openContextMenu(x, y, client, trigger) {
             closeMenu();
             if (tabID === V().state.activeTabID && generation === V().state.serverGeneration) void startPrivateCall(client.unique_id);
         };
-        menuEl.append(call);
+        menuEl.querySelector(".ctx-divider").before(call);
     }
     if (client.channel_id > 0 && client.client_id !== V().state.myClientID) {
         const voice = document.createElement("button");
@@ -161,28 +150,6 @@ function openContextMenu(x, y, client, trigger) {
     menuEl.querySelector('[data-act="copy"]').onclick = () => {
         closeMenu();
         void copyToClipboard(client.unique_id, { success: "unique ID copied" });
-    };
-    const muteAct = menuEl.querySelector('[data-act="mute"]');
-    const shareMuteAct = menuEl.querySelector('[data-act="mute-share"]');
-    const disposeMute = onShareAudioChange(changedUID => {
-        if (changedUID && changedUID !== client.unique_id) return;
-        muteAct.textContent = `${isUserMuted(client.unique_id) ? "✓ " : ""}Mute locally`;
-        shareMuteAct.textContent = `${isUserShareMuted(client.unique_id) ? "✓ " : ""}${t("context.shareMute")}`;
-    });
-    muteAct.onclick = async () => {
-        closeMenu();
-        try {
-            await setUserMuted(client.unique_id, !isUserMuted(client.unique_id));
-            V().renderTree();
-            V().toast((isUserMuted(client.unique_id) ? "muted " : "unmuted ") + (client.nickname || client.unique_id) + " locally");
-        } catch (error) { V().toast(String(error), "error"); }
-    };
-    shareMuteAct.onclick = async () => {
-        closeMenu();
-        try {
-            await setUserShareMuted(client.unique_id, !isUserShareMuted(client.unique_id));
-            V().toast(t(isUserShareMuted(client.unique_id) ? "context.shareMuted" : "context.shareUnmuted", { name: client.nickname || client.unique_id }));
-        } catch (error) { V().toast(String(error), "error"); }
     };
     // (170) kick with reason dialog; (171) ban with duration presets.
     const pokeAct = menuEl.querySelector('[data-act="poke"]');
@@ -234,9 +201,6 @@ function openContextMenu(x, y, client, trigger) {
         closeMenu();
         banDialog(client, tabID);
     };
-    const slider = menuEl.querySelector('.ctx-volume input');
-    const disposeVolume = bindMemberVolume(slider, menuEl.querySelector(".ctx-vol-pct"), menuEl.querySelector('[data-act="reset-volume"]'), client.unique_id);
-    const disposeShareVolume = bindMemberShareVolume(menuEl.querySelector('.ctx-share-volume input'), menuEl.querySelector('.ctx-share-volume output'), menuEl.querySelector('[data-act="reset-share-volume"]'), client.unique_id);
     if (client.client_id && client.client_id !== V().state.myClientID) {
         const move = document.createElement("button"); move.type = "button"; move.className = "ctx-action";
         move.textContent = t("context.move"); move.onclick = () => { closeMenu(); openMemberMove(client); };
@@ -248,8 +212,10 @@ function openContextMenu(x, y, client, trigger) {
             item.classList.add("disabled"); item.setAttribute("aria-disabled", "true"); item.onclick = null; item.title = t(client.multipleSessions ? "context.multipleSessions" : "context.memberGone");
         }
     }
+    const copyDivider = document.createElement("div"); copyDivider.className = "ctx-divider";
+    menuEl.append(copyDivider, menuEl.querySelector('[data-act="copy"]'));
     const menu = menuEl;
-    mountContextMenu(menu, { x, y, trigger, resolveTrigger: replacementTrigger(trigger), onClose: () => { disposeVolume(); disposeShareVolume(); disposeMute(); if (menuEl === menu) menuEl = null; } });
+    mountContextMenu(menu, { x, y, trigger, resolveTrigger: replacementTrigger(trigger), onClose: () => { audioControls.dispose(); if (menuEl === menu) menuEl = null; } });
 }
 
 // openBatchMenu is the multi-select context menu (306): actions apply to

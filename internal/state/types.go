@@ -28,6 +28,8 @@ type Client struct {
 	// clients duck other publishers while a priority speaker talks.
 	PrioritySpeaker bool
 	Sharing         bool
+	SelfMuted       bool
+	SelfDeafened    bool
 	// Moderator controls are scoped to this connected session. Self mute and
 	// local per-user volume remain independent client preferences.
 	ServerMuted    bool

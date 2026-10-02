@@ -689,8 +689,9 @@ function renderMsg(m) {
     // sealed, which must not look like an ordinary encrypted message.
     const unopened = !m.deleted && UNOPENED_BODIES.has(m.text);
     if (unopened) el.classList.add("missing-key");
+    let lock;
     if (m.e2e || m.enc || unopened) {
-        const lock = document.createElement("span");
+        lock = document.createElement("span");
         lock.className = "msg-lock";
         if (unopened) {
             lock.innerHTML = icon("warning");
@@ -705,7 +706,6 @@ function renderMsg(m) {
             lock.setAttribute("aria-label", t("chat.channelHelp"));
             lock.title = t("chat.channelHelp");
         }
-        el.appendChild(lock);
     }
 
     const body = document.createElement("span");
@@ -721,6 +721,7 @@ function renderMsg(m) {
     } else {
         renderBody(body, m);
     }
+    if (lock) body.appendChild(lock);
     el.appendChild(body);
 
     if (m.edited && !m.deleted) {

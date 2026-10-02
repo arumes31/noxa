@@ -163,6 +163,19 @@ test(`real peer call captures only after acceptance and tears down without joini
             expect(await alice.evaluate(() => window.__peers.every(peer => peer.connectionState === "connected" && peer.getSenders().some(sender => sender.track === window.__streams[1].getAudioTracks()[0] && !sender.track.enabled)))).toBe(true);
             await alice.getByRole("button", { name: "Unmute microphone", exact: true }).click();
             await expect.poll(() => alice.evaluate(() => window.__streams[1].getAudioTracks()[0].enabled)).toBe(true);
+            await alice.getByRole("button", { name: "Mute call audio", exact: true }).click();
+            await expect.poll(() => alice.evaluate(() => window.__streams[1].getAudioTracks()[0].enabled)).toBe(false);
+            await alice.getByRole("button", { name: "Unmute call audio", exact: true }).click();
+            await expect.poll(() => alice.evaluate(() => window.__streams[1].getAudioTracks()[0].enabled)).toBe(true);
+            await alice.getByRole("button", { name: "Mute microphone", exact: true }).click();
+            await alice.getByRole("button", { name: "Mute call audio", exact: true }).click();
+            await alice.getByRole("button", { name: "Unmute call audio", exact: true }).click();
+            expect(await alice.evaluate(() => window.__streams[1].getAudioTracks()[0].enabled)).toBe(false);
+            await alice.getByRole("button", { name: "Unmute microphone", exact: true }).click();
+            await alice.evaluate(() => { window.__noxa.state.deafened = true; });
+            await expect.poll(() => alice.evaluate(() => window.__streams[1].getAudioTracks()[0].enabled)).toBe(false);
+            await alice.evaluate(() => { window.__noxa.state.deafened = false; });
+            await expect.poll(() => alice.evaluate(() => window.__streams[1].getAudioTracks()[0].enabled)).toBe(true);
         }
         if (["normal", "group-media"].includes(signalingMode)) {
             // Start camera from both negotiation roles after audio connected.
@@ -182,7 +195,7 @@ test(`real peer call captures only after acceptance and tears down without joini
                     return stream;
                 };
             });
-            await alice.getByRole("checkbox", { name: "Include screen audio" }).check();
+            await alice.getByRole("combobox", { name: "Share audio", exact: true }).selectOption("system");
             await alice.getByRole("button", { name: "Share screen", exact: true }).click();
             await expect(bob.locator('.call-media-tile[data-local="false"][data-source="screen"] video')).toBeVisible();
             await expect.poll(() => bob.evaluate(async () => [...(await window.__peers[0].getStats()).values()].filter(stat => stat.type === "inbound-rtp" && stat.kind === "video" && stat.bytesReceived > 0).length)).toBe(2);
@@ -284,6 +297,37 @@ test(`real peer call captures only after acceptance and tears down without joini
         throw error;
     } finally { await Promise.all([...pages.values()].map(page => page.close())); }
 });
+}
+
+for (const audioLabel of ["Application Audio", "System Audio"]) {
+    test(`private-call application audio validates the captured source (${audioLabel})`, async ({ page }) => {
+        await mountCallRaceFixture(page);
+        await page.evaluate(async audioLabel => {
+            await window.__callsModule.startPrivateCall("alice");
+            navigator.mediaDevices.getDisplayMedia = async options => {
+                window.__displayOptions = options;
+                const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+                const video = stream.getVideoTracks()[0], settings = video.getSettings();
+                video.getSettings = () => ({ ...settings, displaySurface: "window" });
+                Object.defineProperty(stream.getAudioTracks()[0], "label", { value: audioLabel });
+                window.__displayStream = stream;
+                return stream;
+            };
+        }, audioLabel);
+        await page.getByRole("combobox", { name: "Share audio", exact: true }).selectOption("application");
+        await page.getByRole("button", { name: "Share screen", exact: true }).click();
+        if (audioLabel === "Application Audio") {
+            await expect(page.locator('.call-media-tile[data-local="true"][data-source="screen"]')).toBeVisible();
+            await expect(page.getByRole("combobox", { name: "Share audio", exact: true })).toBeDisabled();
+            await page.getByRole("button", { name: "Stop sharing", exact: true }).click();
+        } else {
+            await expect.poll(() => page.evaluate(() => window.__warnings.join(" "))).toContain("Application-only audio was not available");
+            await expect(page.locator('.call-media-tile[data-source="screen"]')).toHaveCount(0);
+        }
+        expect(await page.evaluate(() => window.__displayStream.getTracks().every(t => t.readyState === "ended"))).toBe(true);
+        expect(await page.evaluate(() => window.__displayOptions)).toMatchObject({ video: { displaySurface: "window" }, windowAudio: "window", systemAudio: "exclude" });
+        await expect(page.getByRole("combobox", { name: "Share audio", exact: true })).toHaveValue("application");
+    });
 }
 
 for (const source of ["camera", "screen"]) {

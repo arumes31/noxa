@@ -9,6 +9,8 @@ export const SPEECH_ASSETS = {
         permission_denied: { url: new URL("./assets/speech/en/permission_denied.wav", import.meta.url).href, duration: 2.8560544217687074, transcript: "You do not have permission to perform this action." },
         moved_by_admin: { url: new URL("./assets/speech/en/moved_by_admin.wav", import.meta.url).href, duration: 1.8575963718820863, transcript: "You were moved to another channel." },
         server_shutdown: { url: new URL("./assets/speech/en/server_shutdown.wav", import.meta.url).href, duration: 1.8924263038548752, transcript: "The server is shutting down." },
+        user_join: { url: new URL("./assets/speech/en/user_join.wav", import.meta.url).href, duration: 1.4512471655328798, transcript: "User joined your channel." },
+        user_leave: { url: new URL("./assets/speech/en/user_leave.wav", import.meta.url).href, duration: 1.4048072562358276, transcript: "User left your channel." },
         test: { url: new URL("./assets/speech/en/test.wav", import.meta.url).href, duration: 2.4961451247165534, transcript: "This is a noXa spoken notification." },
     },
     de: {
@@ -20,6 +22,8 @@ export const SPEECH_ASSETS = {
         permission_denied: { url: new URL("./assets/speech/de/permission_denied.wav", import.meta.url).href, duration: 2.0742403628117914, transcript: "Du hast keine Berechtigung für diese Aktion." },
         moved_by_admin: { url: new URL("./assets/speech/de/moved_by_admin.wav", import.meta.url).href, duration: 2.1452154195011337, transcript: "Du wurdest in einen anderen Channel verschoben." },
         server_shutdown: { url: new URL("./assets/speech/de/server_shutdown.wav", import.meta.url).href, duration: 1.6096598639455781, transcript: "Der Server wird heruntergefahren." },
+        user_join: { url: new URL("./assets/speech/de/user_join.wav", import.meta.url).href, duration: 1.835328798185941, transcript: "Ein Benutzer hat deinen Channel betreten." },
+        user_leave: { url: new URL("./assets/speech/de/user_leave.wav", import.meta.url).href, duration: 1.720453514739229, transcript: "Ein Benutzer hat deinen Channel verlassen." },
         test: { url: new URL("./assets/speech/de/test.wav", import.meta.url).href, duration: 2.5004988662131518, transcript: "Dies ist eine gesprochene noXa-Benachrichtigung." },
     },
 };

@@ -1,6 +1,6 @@
 """Development-only static speech rendering. Never imported or run by noXa.
 
-Usage: python tools/generate-speech.py --models .cache/noxa-speech-models
+Usage: python tools/generate-speech.py --models .cache/noxa-speech-models [--events user_join user_leave]
 Requires piper-tts==1.4.2 and numpy in an isolated environment.
 Model directory contains en.onnx, de.onnx, matching .json files and provenance.json.
 """
@@ -16,16 +16,23 @@ from piper import PiperVoice, SynthesisConfig
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--models', type=Path, required=True)
+parser.add_argument('--events', nargs='+', help='Render only these events; retain other existing recordings and metrics')
 args = parser.parse_args()
 root = Path(__file__).resolve().parents[1]
 out = root / 'client/frontend/src/assets/speech'
 lines = json.loads((Path(__file__).parent / 'speech-lines.json').read_text(encoding='utf-8'))
-assets, metrics = {}, {}
+if args.events and set(args.events) - {event for phrases in lines.values() for event in phrases}:
+    parser.error('Unknown speech event')
+assets = {}
+metrics = json.loads((out / 'metrics.json').read_text(encoding='utf-8')) if args.events else {}
 for language, phrases in lines.items():
     voice = PiperVoice.load(str(args.models / (language + '.onnx')))
     (out / language).mkdir(parents=True, exist_ok=True)
     assets[language] = {}
     for event, text in phrases.items():
+        if args.events and event not in args.events:
+            assets[language][event] = metrics[f'{language}/{event}']['duration']
+            continue
         raw = io.BytesIO()
         with wave.open(raw, 'wb') as wav:
             voice.synthesize_wav(text, wav, syn_config=SynthesisConfig(length_scale=1.08, noise_scale=.55, noise_w_scale=.7))

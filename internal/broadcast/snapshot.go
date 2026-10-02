@@ -31,6 +31,8 @@ type ClientInfo struct {
 	// other publishers while a priority speaker in their channel talks.
 	PrioritySpeaker bool  `json:"priority_speaker,omitempty"`
 	Sharing         bool  `json:"sharing,omitempty"`
+	SelfMuted       bool  `json:"self_muted,omitempty"`
+	SelfDeafened    bool  `json:"self_deafened,omitempty"`
 	ServerMuted     bool  `json:"server_muted,omitempty"`
 	ServerDeafened  bool  `json:"server_deafened,omitempty"`
 	VoiceRevision   int64 `json:"voice_revision,omitempty"`
@@ -80,6 +82,8 @@ func clientToInfo(c *state.Client) ClientInfo {
 		ConnectedAt:     c.ConnectedAt,
 		PrioritySpeaker: c.PrioritySpeaker,
 		Sharing:         c.Sharing,
+		SelfMuted:       c.SelfMuted,
+		SelfDeafened:    c.SelfDeafened,
 		ServerMuted:     c.ServerMuted,
 		ServerDeafened:  c.ServerDeafened,
 		VoiceRevision:   c.VoiceRevision,

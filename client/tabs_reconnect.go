@@ -19,6 +19,9 @@ func (a *App) ReconnectTab(tabID, password, serverPassword string) ConnectTabRes
 	}
 	info, bookmark, old := source.info, source.bookmark, source.cm
 	a.tabsMu.Unlock()
+	old.mu.Lock()
+	displayName := old.displayName
+	old.mu.Unlock()
 	a.settingsMu.Lock()
 	enabled := a.settings.ReconnectOnLoss
 	a.settingsMu.Unlock()
@@ -54,7 +57,7 @@ func (a *App) ReconnectTab(tabID, password, serverPassword string) ConnectTabRes
 		a.tabsMu.Unlock()
 		cm.disconnect()
 	}()
-	if failure := cm.connect(info.Addr, info.Nickname, password, serverPassword); failure != "" {
+	if failure := cm.connectNamed(info.Addr, info.Nickname, displayName, password, serverPassword); failure != "" {
 		if failure == errFingerprintMismatch.Error() {
 			failure = fingerprintMismatchMessage(cm)
 		}

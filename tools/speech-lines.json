@@ -8,6 +8,8 @@
     "permission_denied": "You do not have permission to perform this action.",
     "moved_by_admin": "You were moved to another channel.",
     "server_shutdown": "The server is shutting down.",
+    "user_join": "User joined your channel.",
+    "user_leave": "User left your channel.",
     "test": "This is a noXa spoken notification."
   },
   "de": {
@@ -19,6 +21,8 @@
     "permission_denied": "Du hast keine Berechtigung für diese Aktion.",
     "moved_by_admin": "Du wurdest in einen anderen Channel verschoben.",
     "server_shutdown": "Der Server wird heruntergefahren.",
+    "user_join": "Ein Benutzer hat deinen Channel betreten.",
+    "user_leave": "Ein Benutzer hat deinen Channel verlassen.",
     "test": "Dies ist eine gesprochene noXa-Benachrichtigung."
   }
 }

@@ -15,6 +15,7 @@ import { SpatialVoice } from "./positional-audio.js";
 import "@fontsource-variable/outfit";
 import "@fontsource-variable/jetbrains-mono";
 import { initMenu } from "./menu.js";
+import { updateLocalSettings } from "./settings-store.js";
 import { initSettingsUI } from "./settings-ui.js";
 import { initGamingOverlay, overlayNotification } from "./gaming-overlay.js";
 import { initChannelUndocking } from "./call-undocking.js";
@@ -39,6 +40,7 @@ import {
 } from "./video.js";
 import * as chatUI from "./chat-ui.js";
 import { startStreamSession, stopStreamSession, streamSessionIsCurrent, receiveStreamTrack, receiveShareAudio } from "./stream-controls.js";
+import { publishAudioState } from "./audio-state.js";
 import { isCurrentPublication } from "./stream-publication.js";
 import { initPermsUI } from "./roles-access-ui.js";
 import { roleChip } from "./role-presentation.js";
@@ -65,6 +67,7 @@ const P = () => window.__noxaPerms;
 window.__noxaChat = chatUI;
 
 const $ = (id) => document.getElementById(id);
+$("login-display-name").addEventListener("input", () => { $("login-display-name").dataset.edited = "true"; });
 const publishTrayVoice = createTrayVoiceSync((...flags) => window.go.main.App.SetTrayVoiceState(...flags));
 
 function syncTrayVoice() {
@@ -230,6 +233,9 @@ function applyAppearance() {
 (async () => {
     try {
         state.settings = await window.go.main.App.GetSettings();
+        if (!$("login-display-name").value && !$("login-display-name").dataset.edited) {
+            $("login-display-name").value = state.settings?.display_name || "";
+        }
         void updateSoundOutput();
         // (88) reflect the persisted low-bandwidth mode in the voice bar.
         if (state.settings?.low_bandwidth) setLowBandwidth(true, false);
@@ -305,6 +311,7 @@ async function connectFromLogin() {
     document.querySelector(".login-card").setAttribute("aria-busy", "true");
     const addr = $("login-addr").value.trim();
     const nick = $("login-nick").value.trim();
+    const displayName = $("login-display-name").value.trim();
     const pw = $("login-accountpw").value;
     const spw = $("login-serverpw").value;
     // A bridge call can outlive a tab switch. Only the tab/generation that
@@ -317,13 +324,12 @@ async function connectFromLogin() {
         }
     };
     $("login-error").textContent = "";
-    // (334) a nickname override replaces the login nickname, so addr+nickname
-    // no longer identifies the bookmark this login came from: forward the name
-    // the bookmark menu stashed, unless the dialog was retargeted since.
+    // Forward the originating bookmark independently of login/display names,
+    // unless the dialog was retargeted since.
     const bookmark = state.pendingBookmark?.addr === addr ? state.pendingBookmark.name : "";
     try {
         const { error: err, tabID } = await connectBookmarkTabWithID(
-            bookmark, addr, nick, pw, spw);
+            bookmark, addr, nick, pw, spw, displayName);
         if (err) {
             // (4a) TOFU fingerprint mismatch: prominent warning + explicit
             // trust action — never silently accepted.
@@ -342,7 +348,7 @@ async function connectFromLogin() {
         state.pendingBookmark = null;
         if ($("login-addr").value.trim() === addr && $("login-nick").value.trim() === nick &&
             $("login-accountpw").value === pw) $("login-accountpw").value = "";
-        const connection = { addr, nick, pw, spw, bookmark };
+        const connection = { addr, nick, pw, spw, bookmark, displayName };
         const ownsActiveTab = await rememberTabConnect(connection, null, tabID);
         if (!ownsActiveTab) return;
         const finalizationGeneration = state.serverGeneration;
@@ -358,7 +364,7 @@ async function connectFromLogin() {
         if (state.serverGeneration !== finalizationGeneration) return;
         if (!await tabIsActive(tabID)) return;
         if (state.serverGeneration !== finalizationGeneration || state.sessionGeneration !== sessionGeneration || !session.connected) return;
-        state.myNickname = nick;
+        state.myNickname = session.nickname || displayName || nick;
         state.myClientID = session.client_id;
         state.isGuest = session.is_guest;
         state.authorizationModel = session.authorization_model || "";
@@ -377,6 +383,12 @@ async function connectFromLogin() {
         // (4a) surface the connection security as an info line.
         if (session.security) sysMsg("connected: " + session.security);
         warnCertificateClock(clockWarning, addr);
+        if ((state.settings?.display_name || "") !== displayName) {
+            try { await updateLocalSettings(s => { s.display_name = displayName; }); }
+            catch (error) {
+                if (state.serverGeneration === finalizationGeneration) toast(t("menu.saveFailed", { error: String(error) }), "warn");
+            }
+        }
     } catch (e) {
         playCurrentConnectionFailure();
         $("login-error").textContent = String(e);
@@ -433,7 +445,12 @@ function normalizeConnectResult(result) {
     };
 }
 
-async function connectBookmarkTabWithID(bookmark, addr, nick, pw, spw) {
+async function connectBookmarkTabWithID(bookmark, addr, nick, pw, spw, displayName = "") {
+    if (displayName) {
+        const named = window.go.main.App.ConnectNamedBookmarkTabWithID;
+        if (typeof named !== "function") throw new Error(t("menu.displayNameUnavailable"));
+        return normalizeConnectResult(await named(bookmark, addr, nick, displayName, pw, spw));
+    }
     const method = window.go.main.App.ConnectBookmarkTabWithID;
     if (typeof method === "function") {
         return normalizeConnectResult(await method(bookmark, addr, nick, pw, spw));
@@ -562,7 +579,7 @@ async function completeReconnect(c, generation, tabID, current = () => true) {
     if (state.serverGeneration !== finalizationGeneration) return true;
     if (state.sessionGeneration !== sessionGeneration || !session.connected) return false;
     state.reconnectAttempts = 0;
-    state.myNickname = c.nick;
+    state.myNickname = session.nickname || c.displayName || c.nick;
     state.myClientID = session.client_id;
     state.isGuest = session.is_guest;
     state.authorizationModel = session.authorization_model || "";
@@ -608,7 +625,7 @@ async function attemptReconnect(c = state.lastConnect, { announceFailure = true,
     let tabID = "";
     try {
         const result = await connectBookmarkTabWithID(
-            c.bookmark || "", c.addr, c.nick, c.pw, c.spw);
+            c.bookmark || "", c.addr, c.nick, c.pw, c.spw, c.displayName);
         err = result.error;
         tabID = result.tabID;
     } catch (cause) {
@@ -1127,6 +1144,7 @@ function syncOwnChannel({ audible = true } = {}) {
     if (!state.myClientID) return;
     const me = state.clients.find((c) => c.client_id === state.myClientID);
     if (!me) return;
+    state.myNickname = me.nickname || state.myNickname;
     state.myStatus = me.status || "";
     state.myPriority = !!me.priority_speaker;
     $("voice-prio").classList.toggle("active", state.myPriority);
@@ -1669,6 +1687,7 @@ function renderTree() {
     renderClientCard();
     chatUI.refreshHeader(); // (111) topic/title follows tree + channel updates
     renderWorkspace();
+    publishAudioState();
     syncTrayVoice();
     restoreTreeFocus(root, focusState);
 }
@@ -1949,6 +1968,18 @@ function clientRow(c) {
         row.appendChild(st);
     }
     // (10) Own status icons: muted / deafened / screen sharing.
+    if (c.client_id !== state.myClientID) {
+        for (const [visible, glyph, key] of [[c.server_muted || c.self_muted || c.self_deafened, "micOff", c.server_muted ? "workspace.voice.serverMuted" : "workspace.voice.muted"],
+            [c.server_deafened || c.self_deafened, "headphonesOff", c.server_deafened ? "workspace.voice.serverDeafened" : "audioState.deafened"]]) {
+            if (!visible) continue;
+            const status = document.createElement("span");
+            status.className = "status-icons";
+            status.innerHTML = icon(glyph);
+            status.title = t(key);
+            status.setAttribute("aria-label", t(key));
+            row.append(status);
+        }
+    }
     if (c.client_id === state.myClientID) {
         const icons = document.createElement("span");
         icons.className = "status-icons";
@@ -2976,7 +3007,7 @@ window.runtime.EventsOn("offer", (json) => {
 function applyVoiceState() {
     if (!state.localStream) return;
     const mode = state.settings?.activation_mode || "ptt";
-    let audible = !state.muted;
+    let audible = !state.muted && !state.deafened;
     // ptt and vad both gate transmission on the (hotkey- or VAD-driven)
     // pttActive flag; continuous always transmits.
     if (mode !== "continuous") audible = audible && state.pttActive;
@@ -3432,6 +3463,10 @@ $("ptt-btn").addEventListener("keyup", (event) => {
 $("ptt-btn").addEventListener("blur", () => setPTT(false));
 
 $("voice-mute").onclick = () => {
+    if (state.deafened) {
+        setDeafened(false);
+        state.muted = true; // An explicit unmute overrides the pre-deafen state.
+    }
     state.muted = !state.muted;
     syncMuteButton($("voice-mute"), state.muted);
     window.go.main.App.SetMuted(state.muted);
@@ -3439,17 +3474,25 @@ $("voice-mute").onclick = () => {
     else playEvent("mic_on");
     applyVoiceState();
     renderTree();
+    publishAudioState();
 };
 syncMuteButton($("voice-mute"), state.muted);
 
+let mutedBeforeDeafen = false;
 function setDeafened(on) {
     if (state.deafened === on) return;
+    if (on) { mutedBeforeDeafen = state.muted; state.muted = true; }
+    else state.muted = mutedBeforeDeafen;
     state.deafened = on;
+    syncMuteButton($("voice-mute"), state.muted);
+    window.go.main.App.SetMuted(state.muted);
+    applyVoiceState();
     refreshVoicePlayback();
     $("remote-video").muted = on;
     if (remoteChain.master) remoteChain.master.gain.value = on ? 0 : Math.min(2, (state.settings?.volume ?? 100) / 100);
     playEvent(on ? "deafen_on" : "deafen_off");
     renderTree();
+    publishAudioState();
 }
 
 let whisperReplyRequest = null;

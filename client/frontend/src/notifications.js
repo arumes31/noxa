@@ -3,7 +3,7 @@
 // muted channels (387), and DND (347/348, still badging silently). Also the
 // buddy-online watcher (383), keyword highlights (388), channel watch
 // (389), and the alpha notice (215).
-import { playEvent } from "./sounds.js";
+import { playAlert, playEvent } from "./sounds.js";
 import { closeDialog, isCurrentServerDialog, mountDialog, mountServerDialog } from "./modal.js";
 
 const V = () => window.__noxa;
@@ -117,7 +117,9 @@ function playEventSound(event, soundEvent = event) {
     if (V().state.replayingTabID
         || settings?.event_sounds?.[event] === false
         || settings?.event_sounds?.[soundEvent] === false) return;
-    playEvent(soundEvent);
+    const speechEvent = { user_join: "user_join", user_leave: "user_leave", user_move_in: "user_join", user_move_out: "user_leave" }[soundEvent];
+    if (speechEvent) playAlert(speechEvent, { effect: soundEvent });
+    else playEvent(soundEvent);
 }
 
 // ---------------------------------------------------------------------------

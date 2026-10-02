@@ -168,6 +168,14 @@ func (m MessageType) String() string {
 		return "FileMutationSaved"
 	case MsgStatusSaved:
 		return "StatusSaved"
+	case MsgDisplayNameSet:
+		return "DisplayNameSet"
+	case MsgDisplayNameSaved:
+		return "DisplayNameSaved"
+	case MsgAudioStateSet:
+		return "AudioStateSet"
+	case MsgAudioStateSaved:
+		return "AudioStateSaved"
 	case MsgMediaControlSaved:
 		return "MediaControlSaved"
 	case MsgVideoStreamControl:
@@ -440,10 +448,11 @@ type Authenticate struct {
 	Username            string   `json:"username"`
 	Password            string   `json:"password,omitempty"`
 	ServerPassword      string   `json:"server_password,omitempty"`
-	Nickname            string   `json:"nickname,omitempty"`
-	Anonymous           bool     `json:"anonymous,omitempty"`
-	PublicKey           string   `json:"public_key,omitempty"`
-	Token               string   `json:"token,omitempty"`
+	// Nickname is an optional public display name, separate from Username.
+	Nickname  string `json:"nickname,omitempty"`
+	Anonymous bool   `json:"anonymous,omitempty"`
+	PublicKey string `json:"public_key,omitempty"`
+	Token     string `json:"token,omitempty"`
 	// X25519PublicKey is the client's ENCRYPTION key (base64, 32 bytes) — the
 	// same value MsgKeyPublish carries. PublicKey above is the Ed25519
 	// identity key and cannot be sealed to, so this is supplied at auth time

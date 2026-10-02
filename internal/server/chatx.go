@@ -352,9 +352,9 @@ func (s *TCPServer) routeScopedChat(ctx context.Context, client *Client, msg net
 		var inserted bool
 		var err error
 		if isPoll {
-			id, inserted, err = s.deps.Chat.(pollStore).StoreChatPoll(ctx, channelID, uid, client.Username, bodyEnc, keyID, msg.ClientMsgID, poll)
+			id, inserted, err = s.deps.Chat.(pollStore).StoreChatPoll(ctx, channelID, uid, client.nickname(), bodyEnc, keyID, msg.ClientMsgID, poll)
 		} else {
-			id, inserted, err = s.deps.Chat.StoreChatMessage(ctx, channelID, uid, client.Username, bodyEnc, keyID, msg.ReplyToID, msg.ClientMsgID)
+			id, inserted, err = s.deps.Chat.StoreChatMessage(ctx, channelID, uid, client.nickname(), bodyEnc, keyID, msg.ReplyToID, msg.ClientMsgID)
 		}
 		if err != nil {
 			// Relaying anyway would turn a constraint violation into
@@ -380,7 +380,7 @@ func (s *TCPServer) routeScopedChat(ctx context.Context, client *Client, msg net
 		ChannelID:    channelIDStr,
 		FromClientID: client.ID,
 		FromUniqueID: uid,
-		From:         client.Username,
+		From:         client.nickname(),
 		Text:         bodyEnc,
 		Enc:          true,
 		KeyID:        keyID,
@@ -1191,7 +1191,7 @@ func (s *TCPServer) relaySessionTyping(ctx context.Context, client *Client, f *n
 	data := typingEvent{
 		ClientID:  client.ID,
 		UniqueID:  client.UniqueID,
-		Nickname:  client.Username,
+		Nickname:  client.nickname(),
 		ChannelID: msg.ChannelID,
 	}
 	if msg.ToUniqueID == "" {

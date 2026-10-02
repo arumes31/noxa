@@ -2,6 +2,7 @@
 import { isActivationKey, wrappedIndex } from "./a11y.js";
 import { closeDialog, mountDialog } from "./modal.js";
 import { copyToClipboard } from "./clipboard.js";
+import { openDisplayNameDialog } from "./display-name-ui.js";
 
 const V = () => window.__noxa;
 
@@ -250,21 +251,21 @@ async function bookmarkCurrent() {
     const c = state.lastConnect;
     const name = c.nick + " @ " + c.addr;
     const bookmarks = (currentSettings().bookmarks || []).filter((b) => !(b.addr === c.addr && b.nickname === c.nick));
-    bookmarks.push({ name, addr: c.addr, nickname: c.nick });
+    bookmarks.push({ name, addr: c.addr, nickname: c.nick, nickname_override: c.displayName || "" });
     if (await saveSettings({ bookmarks })) toast(t("menu.bookmarkSaved", { name }));
 }
 
 async function connectBookmark(b) {
     const { state, toast, $ } = V();
     $("login-addr").value = b.addr;
-    // (334) per-server nickname override applies at connect.
-    $("login-nick").value = b.nickname_override || b.nickname;
+    // Keep the account login; the bookmark overrides only its public name.
+    $("login-nick").value = b.nickname;
+    $("login-display-name").value = b.nickname_override || state.settings?.display_name || "";
     $("login-serverpw").value = "";
     $("login-accountpw").value = "";
     state.lastConnect = null;
     V().showLogin();
-    // (334) the override is what gets sent as the login nickname, so the
-    // connect must carry the bookmark name to stay identifiable. Stashed
+    // Carry the bookmark name independently of its display-name override. Stashed
     // after showLogin, which drops the previous login's stash.
     state.pendingBookmark = { name: b.name, addr: b.addr };
     toast(t("menu.bookmarkLoaded"));
@@ -546,15 +547,7 @@ export function initMenu() {
     bmItem.onclick = (e) => { renderBookmarkMenu(); origClick(e); };
 
     const self = buildMenu(t("menu.self"), [
-        menuAction(t("menu.changeNickname"), () => {
-            dlgPrompt(t("menu.nicknameTitle"), t("menu.nicknamePrompt"), V().state.myNickname, (v) => {
-                if (v) {
-                    $("login-nick").value = v;
-                    V().state.myNickname = v;
-                    V().sysMsg(t("menu.nicknameSet", { nickname: v }));
-                }
-            });
-        }),
+        menuAction(t("menu.changeNickname"), openDisplayNameDialog),
         menuAction(t("menu.setStatus"), () => {
             if (!V().state.myClientID) return V().toast(t("menu.notConnected"), "warn");
             window.__noxaSocial.openStatusPicker();

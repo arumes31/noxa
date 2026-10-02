@@ -1510,7 +1510,7 @@ function pageNotifications() {
     const speechControls = document.createElement("div");
     speechControls.className = "sound-controls";
     speechControls.appendChild(speechButton(t("settings.preview.all.speech"), Object.keys(SPEECH_EVENTS)));
-    for (const [category, label] of [["connection", "settings.speak.connection.problems"], ["admin", "settings.speak.administrative.actions"]]) {
+    for (const [category, label] of [["connection", "settings.speak.connection.problems"], ["admin", "settings.speak.administrative.actions"], ["channel", "settings.speak.channel.activity"]]) {
         speechControls.appendChild(speechButton(t("settings.preview", { label: t(label) }), Object.keys(SPEECH_EVENTS).filter(id => SPEECH_EVENTS[id].category === category)));
     }
     el.appendChild(speechControls);

@@ -16,7 +16,9 @@
         <form class="login-card" aria-labelledby="login-title">
             <h1 id="login-title" class="wordmark"><img class="login-logo" src="/branding/logo.png" width="56" height="56" alt="" />noXa</h1>
             <label for="login-addr">SERVER <input id="login-addr" value="127.0.0.1:12333" autocomplete="url" spellcheck="false" /></label>
-            <label for="login-nick">NICKNAME <input id="login-nick" placeholder="nickname" autocomplete="nickname" /></label>
+            <label for="login-nick">Account login / guest name <input id="login-nick" placeholder="owner" autocomplete="username" /></label>
+            <label for="login-display-name">Display name (optional) <input id="login-display-name" placeholder="Daniel" autocomplete="nickname" aria-describedby="login-display-name-hint" /></label>
+            <p id="login-display-name-hint" class="hint">Visible to everyone. Your account login stays unchanged.</p>
             <label for="login-accountpw">Account password (optional) <input id="login-accountpw" type="password" placeholder="for a registered account" autocomplete="current-password" /></label>
             <label for="login-serverpw">Server password (optional) <input id="login-serverpw" type="password" placeholder="if required" autocomplete="off" /></label>
             <button id="login-connect" type="submit">CONNECT</button>
@@ -89,6 +91,7 @@
                 <button id="tab-transfers" class="icon-btn" title="Transfers" aria-label="Open transfers" aria-haspopup="dialog">⇅</button>
             </div>
             <section id="voice-participants" role="region" aria-label="Voice participants"></section>
+            <section id="sharing-status" class="sharing-status" hidden></section>
             <section id="chat-pane" role="tabpanel" aria-labelledby="tab-chat">
             <div id="banner-box"></div>
             <div id="talk-banner" class="hidden" role="status" aria-live="assertive">● TALKING</div>

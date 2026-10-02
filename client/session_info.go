@@ -4,6 +4,7 @@ package main
 type SessionInfo struct {
 	AuthorizationModel string `json:"authorization_model"`
 	ClientID           string `json:"client_id"`
+	Nickname           string `json:"nickname"`
 	IsGuest            bool   `json:"is_guest"`
 	Connected          bool   `json:"connected"`
 	Security           string `json:"security"`
@@ -23,7 +24,7 @@ func (a *App) SessionInfoForTab(tabID string) (SessionInfo, error) {
 	}
 	return SessionInfo{
 		AuthorizationModel: m.authorizationModel,
-		ClientID:           m.clientID, IsGuest: m.isGuest,
+		ClientID:           m.clientID, Nickname: m.nickname, IsGuest: m.isGuest,
 		Connected: true, Security: connectionSecurity(m.tlsUsed, m.fingerprint, m.newServer),
 	}, nil
 }

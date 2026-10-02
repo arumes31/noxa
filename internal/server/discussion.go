@@ -57,7 +57,7 @@ func (s *TCPServer) handleDiscussion(ctx context.Context, client *Client, frame 
 		case "archive", "reopen", "edit", "resolve":
 			capability = authorization.ManageMessages
 			if !s.roleAllowed(ctx, client, r.ChannelID, capability) {
-				current, err := backend.Discussion(ctx, netproto.DiscussionRequest{Action: "state", ChannelID: r.ChannelID, ThreadID: r.ThreadID}, client.UniqueID, client.Username)
+				current, err := backend.Discussion(ctx, netproto.DiscussionRequest{Action: "state", ChannelID: r.ChannelID, ThreadID: r.ThreadID}, client.UniqueID, client.nickname())
 				if err != nil || len(current.Threads) != 1 || current.Threads[0].Author != client.UniqueID {
 					return s.sendErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, "only the author or a moderator can archive this thread")
 				}
@@ -75,7 +75,7 @@ func (s *TCPServer) handleDiscussion(ctx context.Context, client *Client, frame 
 					return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, err.Error())
 				}
 			}
-			result, err := backend.Discussion(ctx, r, client.UniqueID, client.Username)
+			result, err := backend.Discussion(ctx, r, client.UniqueID, client.nickname())
 			if err != nil {
 				switch {
 				case errors.Is(err, sql.ErrNoRows):

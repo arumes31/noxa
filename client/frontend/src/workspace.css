@@ -132,6 +132,26 @@ body.details-collapsed #details-toggle { display: inline-flex; position: static;
 .ctx-share-volume output { font-variant-numeric: tabular-nums; }
 .ctx-volume > span, .ctx-share-volume > span { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
 .ctx-volume .ctx-vol-pct, .ctx-share-volume output { flex-shrink: 0; }
+.ctx-member-menu { width: min(310px, calc(100vw - 16px)); }
+.ctx-member-audio h4 { margin: 8px 10px 4px; font-size: .78rem; color: var(--text-dim); font-weight: 500; }
+.ctx-member-audio .ctx-audio-group { border: 0; margin: 0; min-width: 0; padding: 4px 10px; gap: 2px; }
+.ctx-audio-header { display: flex; align-items: center; gap: 5px; }
+.ctx-audio-label { flex: 1; min-width: 0; font-size: .8rem; }
+.ctx-audio-icon { display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; width: 32px; height: 32px; padding: 6px; border: 0; background: transparent; color: var(--text-dim); border-radius: 4px; cursor: pointer; }
+.ctx-audio-icon .ui-icon { width: 16px; height: 16px; }
+.ctx-audio-icon:hover { background: var(--bg-hover); color: var(--text); }
+.ctx-audio-icon[aria-pressed="true"] { color: var(--warn); background: var(--bg-hover); }
+.ctx-audio-percent { display: flex; align-items: center; gap: 1px; color: var(--text-dim); font-size: .8rem; }
+.ctx-audio-percent input { width: 3.2em; padding: 3px 2px; text-align: right; border: 1px solid transparent; border-radius: 3px; background: transparent; color: var(--text); font: inherit; font-variant-numeric: tabular-nums; appearance: textfield; }
+.ctx-audio-percent input::-webkit-inner-spin-button, .ctx-audio-percent input::-webkit-outer-spin-button { appearance: none; margin: 0; }
+.ctx-audio-percent input:hover, .ctx-audio-percent input:focus-visible { border-color: var(--border); background: var(--bg); }
+.ctx-audio-group.amplified .ctx-audio-percent input { color: var(--accent); }
+.ctx-audio-group:disabled { opacity: .5; }
+.ctx-member-audio .ctx-audio-range { position: relative; padding-bottom: 13px; }
+.ctx-member-audio .ctx-audio-range input { width: 100%; margin: 0; accent-color: var(--accent); }
+.ctx-audio-baseline { position: absolute; top: 16px; left: 50%; transform: translateX(-50%); color: var(--text-faint); font-size: .65rem; line-height: 1; }
+.ctx-audio-baseline::before { content: ""; display: block; width: 1px; height: 4px; margin: 0 auto 1px; background: var(--text-faint); }
+.ctx-audio-unavailable { margin: 1px 10px 6px; color: var(--text-dim); font-size: .75rem; }
 #chat-pane { gap: 0; overflow: hidden; }
 #banner-box:empty { display: none; }
 #banner-box { margin: 0; }
@@ -145,7 +165,7 @@ body.details-collapsed #details-toggle { display: inline-flex; position: static;
 .msg.rich .msg-time { grid-column: 3; grid-row: 1; font: .8rem var(--font-body); }
 .msg.rich .msg-tag { grid-column: 4; grid-row: 1; justify-self: start; font-size: .72rem; }
 .msg.rich .msg-text { grid-column: 2 / -1; grid-row: 2; line-height: 1.55; }
-.msg.rich .msg-lock, .msg.rich .msg-edited, .msg.rich .msg-receipt, .msg.rich .msg-reactions { grid-column: 2 / -1; }
+.msg.rich .msg-edited, .msg.rich .msg-receipt, .msg.rich .msg-reactions { grid-column: 2 / -1; }
 .msg.rich.own { border: 0; background: transparent; }
 .msg.rich.mentioned { background: var(--accent-dim); }
 #chat-log.chat-bubbles .msg.rich { display: flex; }

@@ -2,6 +2,7 @@ import { t } from "./i18n.js";
 import { icon } from "./icons.js";
 import { getUserShareVolume, isUserShareMuted, onShareAudioChange, setUserShareMuted, setUserShareVolume } from "./audio.js";
 import { applyCameraPreview } from "./camera-capture.js";
+import { displayAudioOptions, validateDisplayAudio } from "./display-audio.js";
 
 const sources = ["camera", "screen"];
 const liveTrack = (capture, kind) => capture?.stream.getTracks().find(track => track.kind === kind && track.readyState === "live") || null;
@@ -29,7 +30,7 @@ export function createCallMedia(owner, { current, acceptedPeer, label, report, r
     const localTiles = new Map();
     const grid = document.createElement("div"); grid.className = "call-media-grid";
     window.addEventListener("noxa-camera-preferences-changed", updateGrid);
-    let includeAudio = false;
+    let audioMode = "none";
     const canPublish = () => current(owner) && owner.call.participants.some(peer => peer.unique_id === owner.uid && peer.state === "accepted");
     const state = () => ({ camera: !!liveTrack(captures.camera, "video"), screen: !!liveTrack(captures.screen, "video") });
 
@@ -134,9 +135,11 @@ export function createCallMedia(owner, { current, acceptedPeer, label, report, r
                 if (!canPublish() || requests[source] !== request) return;
                 capture = await captureCamera(window.__noxa.state.settings || {}, undefined, { signal: request.controller.signal });
             } else {
-                const stream = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: { ideal: 15, max: 30 } }, audio: includeAudio });
+                const video = { frameRate: { ideal: 15, max: 30 } };
+                if (audioMode === "application") video.displaySurface = "window";
+                const stream = await navigator.mediaDevices.getDisplayMedia({ video, ...displayAudioOptions(audioMode) });
                 capture = { stream, stop: () => stream.getTracks().forEach(track => track.stop()) };
-                if (!includeAudio) stream.getAudioTracks().forEach(track => { track.stop(); stream.removeTrack(track); });
+                validateDisplayAudio(stream, audioMode);
             }
             if (!canPublish() || requests[source] !== request) { capture.stop(); return; }
             const track = liveTrack(capture, "video");
@@ -149,7 +152,7 @@ export function createCallMedia(owner, { current, acceptedPeer, label, report, r
             capture?.stop();
             if (requests[source] === request || captures[source] === capture) {
                 requests[source] = null; captures[source] = null;
-                if (current(owner)) { updateGrid(); render(owner); void syncPeers().catch(report); report(error); }
+                if (current(owner)) { updateGrid(); render(owner); void syncPeers().catch(report); report(error.message === "share.applicationUnavailable" ? new Error(t(error.message)) : error); }
             }
         }
     }
@@ -164,10 +167,15 @@ export function createCallMedia(owner, { current, acceptedPeer, label, report, r
             button.onclick = () => { void toggle(source); }; fragment.append(button);
         }
         const label = document.createElement("label"); label.className = "call-screen-audio";
-        const checkbox = document.createElement("input"); checkbox.type = "checkbox"; checkbox.checked = includeAudio;
-        checkbox.disabled = !!captures.screen || !!requests.screen;
-        checkbox.onchange = () => { includeAudio = checkbox.checked; };
-        label.append(checkbox, document.createTextNode(t("call.media.screenAudio"))); fragment.append(label);
+        const select = document.createElement("select");
+        for (const [value, key] of [["none", "audioNone"], ["application", "audioApplication"], ["system", "audioSystem"]]) {
+            const option = document.createElement("option"); option.value = value; option.textContent = t(`share.${key}`); select.append(option);
+        }
+        select.value = audioMode;
+        select.disabled = !!captures.screen || !!requests.screen;
+        select.onchange = () => { audioMode = select.value; };
+        select.title = t("share.applicationHelp");
+        label.append(document.createTextNode(t("share.audio")), select); fragment.append(label);
         return fragment;
     }
     function attachChannel(peer, uid, channel) {

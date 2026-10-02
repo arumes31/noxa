@@ -23,6 +23,7 @@ type VideoPublication struct {
 	Generation    uint64 `json:"generation"`
 	PreviewAt     int64  `json:"preview_at"`
 	WatchRevision uint64 `json:"watch_revision"`
+	ViewerCount   *int   `json:"viewer_count,omitempty"`
 }
 
 func watchSlot(slot string) string {
@@ -147,7 +148,21 @@ func (r *Router) VideoPublications(subscriber string) []VideoPublication {
 			if watch := r.watches[watchKey{subscriber, key.publisher, key.slot}]; watch.session == r.watchSessions[subscriber] {
 				revision = watch.revision
 			}
-			list = append(list, VideoPublication{key.publisher, key.slot, generation, previewAt, revision})
+			stream := VideoPublication{PublisherID: key.publisher, Slot: key.slot, Generation: generation, PreviewAt: previewAt, WatchRevision: revision}
+			// Only the publisher sees an aggregate count. Watcher identities,
+			// including invisible members, never leave the router.
+			if subscriber == key.publisher {
+				count := 0
+				for watcher, watch := range r.watches {
+					if watcher.publisher == key.publisher && watcher.slot == key.slot && watcher.subscriber != subscriber &&
+						watch.active && watch.publication == generation && watch.session == r.watchSessions[watcher.subscriber] &&
+						r.clientChan[watcher.subscriber] == r.clientChan[subscriber] && r.publisherAllowedLocked(watcher.subscriber, key.publisher) {
+						count++
+					}
+				}
+				stream.ViewerCount = &count
+			}
+			list = append(list, stream)
 		}
 	}
 	sort.Slice(list, func(i, j int) bool {

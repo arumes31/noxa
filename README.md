@@ -85,6 +85,7 @@ graph TD
 * **Pion WebRTC SFU**: Zero-copy packet fan-out supporting hundreds of concurrent speakers.
 * **Opus Codec Optimization**: Dynamic SDP fmtp line rewriting per channel for variable bitrate (16–128 kbps), Forward Error Correction (FEC), and Discontinuous Transmission (DTX).
 * **Simulcast Video**: Dynamic quality tier selection (`high`, `mid`, `low` RID layers) based on subscriber network conditions.
+* **Screen-share audio choices**: In channel shares and private calls, choose **No audio**, **Shared application**, or **System audio**. Application audio requires a window and a supported capture runtime; enable audio in the system picker. It can include other windows of the same application. If application-only capture cannot be confirmed, the client rejects it instead of sharing system audio.
 * **Priority Commander**: Automatic audio ducking (−12 dB attenuation) across non-priority channels when a Priority Speaker talks.
 * **Whisper Routing**: Point-to-point and cross-channel targeted voice transmission bypasses standard channel boundaries.
 
@@ -255,9 +256,16 @@ failure recovery and process-lock details.
 ### 2. Connect as owner and grant administrators
 
 Open the desktop client, connect to `localhost:12333` (or your server's hostname),
-and enter `owner` as the nickname and the chosen **Account password**. A server
+and enter `owner` as the **Account login / guest name** and the chosen **Account password**. A server
 join password, if configured, is separate from the account password. Compare the
 server certificate fingerprint with its startup log before trusting it.
+
+To appear as `Daniel`, enter it in the optional **Display name** field. Everyone
+on the server sees that name; the `owner` login, identity, and roles stay the same.
+Use **Self → Change display name** to change it during a session. The client saves
+your preferred name for future connections; a bookmark's **Display name override**
+takes precedence. Names must contain 1–64 characters without control characters.
+Live changes require a server version that supports display names.
 
 Open **Permissions → Roles**, then **Members**. Find a registered member,
 select the **Administrator** role and choose **Add role** to grant admin access.

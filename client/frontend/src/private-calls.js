@@ -188,7 +188,16 @@ function render(owner) {
             } catch (error) { if (current(owner)) report(error); }
         }), action("call.decline", stopPrivateCall));
     } else {
-        controls.append(action(owner.muted ? "call.unmute" : "call.mute", () => { owner.muted = !owner.muted; syncAudio(owner); render(owner); }), action(owner.deafened ? "call.undeafen" : "call.deafen", () => { owner.deafened = !owner.deafened; syncAudio(owner); render(owner); }), action("call.end", stopPrivateCall));
+        controls.append(action(owner.muted ? "call.unmute" : "call.mute", () => {
+            if (owner.deafened) { owner.deafened = false; owner.muted = false; }
+            else owner.muted = !owner.muted;
+            syncAudio(owner); render(owner);
+        }), action(owner.deafened ? "call.undeafen" : "call.deafen", () => {
+            if (!owner.deafened) { owner.mutedBeforeDeafen = owner.muted; owner.muted = true; }
+            else owner.muted = owner.mutedBeforeDeafen;
+            owner.deafened = !owner.deafened;
+            syncAudio(owner); render(owner);
+        }), action("call.end", stopPrivateCall));
         controls.append(owner.media.controls());
         controls.append(callUndockButton(owner.panel));
         const hold = action("workspace.ptt"); owner.hold = hold;
@@ -324,7 +333,7 @@ function syncAudio(owner) {
         if (level > (state.settings?.vad_threshold ?? 50) / 100 * 0.2) owner.lastVoice = Date.now();
     }
     const transmit = mode === "continuous" || (mode === "vad" ? Date.now() - (owner.lastVoice || 0) < 300 : owner.ptt || state.pttActive);
-    for (const track of owner.stream?.getAudioTracks() || []) track.enabled = !!(!owner.muted && !state.muted && transmit);
+    for (const track of owner.stream?.getAudioTracks() || []) track.enabled = !!(!owner.muted && !owner.deafened && !state.muted && !state.deafened && transmit);
     for (const [uid, peer] of owner.peers) {
         if (!acceptedPeer(owner, uid)) { closePeer(peer); owner.peers.delete(uid); owner.media.updateGrid(); continue; }
         syncPeerOutput(owner, uid, peer);

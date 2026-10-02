@@ -64,6 +64,14 @@ test("group voice recording survives incoming messages and sends to the same gro
         const tone = window.__voiceContext.createOscillator(), output = window.__voiceContext.createMediaStreamDestination();
         tone.connect(output); tone.start(); window.__voiceStream = output.stream;
         navigator.mediaDevices.getUserMedia = async () => output.stream;
+        window.__encodedVoiceChunks = 0;
+        const Recorder = window.MediaRecorder;
+        window.MediaRecorder = class extends Recorder {
+            constructor(...args) {
+                super(...args);
+                this.addEventListener('dataavailable', event => { if (event.data.size) window.__encodedVoiceChunks++; });
+            }
+        };
         window.go.main.App.UploadChatAttachmentForTab = async () => "[file:recording#key#voice.weba]";
     });
     await page.getByRole("button", { name: "Raid <script>", exact: true }).click();
@@ -78,6 +86,7 @@ test("group voice recording survives incoming messages and sends to the same gro
     // The next recording status tick must preserve the session after refresh.
     await expect(page.locator(".voice-message-dialog [role=status]:not(.voice-recording-warning)")).toContainText("Recording");
     expect(await page.evaluate(() => window.__voiceStream.getTracks()[0].readyState)).toBe("live");
+    await expect.poll(() => page.evaluate(() => window.__encodedVoiceChunks)).toBeGreaterThan(0);
     await page.getByRole("button", { name: "Stop recording", exact: true }).click();
     await expect(page.getByRole("button", { name: "Send voice message", exact: true })).toBeEnabled();
     await page.evaluate(() => window.__conversationModule.conversationChanged({ id: "g1", message_id: 102 }));

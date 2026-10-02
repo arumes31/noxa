@@ -38,7 +38,12 @@ async function closeTab(tabID) {
     }
 }
 
-async function connectGuestBookmarkWithID(bookmark, addr, nick) {
+async function connectGuestBookmarkWithID(bookmark, addr, nick, displayName = "") {
+    if (displayName) {
+        const result = await App().ConnectNamedBookmarkTabWithID(bookmark, addr, nick, displayName, "", "");
+        if (typeof result === "string") return { tabID: "", error: result };
+        return { tabID: String(result?.tab_id || ""), error: String(result?.error || "") };
+    }
     const method = App().ConnectGuestBookmarkTabWithID;
     const result = typeof method === "function"
         ? await method(bookmark, addr, nick)
@@ -95,8 +100,8 @@ function renderTabs(tabs) {
         }
         const label = select.querySelector(".srv-tab-label");
         label.textContent = bm?.name || t.addr || "Server";
-        label.title = (t.nickname || "?") + " @ " + (t.addr || "?") + (t.connected ? "" : " (offline)");
-        select.setAttribute("aria-label", (t.nickname || "?") + " @ " + (t.addr || "?") + (t.connected ? "" : ", offline"));
+        label.title = (t.display_name || t.nickname || "?") + " @ " + (t.addr || "?") + (t.connected ? "" : " (offline)");
+        select.setAttribute("aria-label", (t.display_name || t.nickname || "?") + " @ " + (t.addr || "?") + (t.connected ? "" : ", offline"));
         select.querySelector(".srv-badge")?.remove();
         if (t.mentions > 0) {
             const b = document.createElement("span");
@@ -184,11 +189,11 @@ async function refreshTabIdentity(tabID) {
         // The login can finish while ListTabs is pending. Its credential-bearing
         // record takes precedence over this metadata-only fallback.
         state.lastConnect = state.tabConnects.get(tabID) || (info
-            ? { addr: info.addr, nick: info.nickname, pw: "", spw: "", bookmark: "" }
+            ? { addr: info.addr, nick: info.nickname, displayName: info.display_name || "", pw: "", spw: "", bookmark: "" }
             : null);
         if (info) state.tabConnects.set(tabID, state.lastConnect);
     }
-    state.myNickname = state.lastConnect ? state.lastConnect.nick : "";
+    state.myNickname = session.nickname || state.clients.find(c => c.client_id === state.myClientID)?.nickname || state.lastConnect?.displayName || state.lastConnect?.nick || "";
     if (state.lastConnect) state.lastSuccessfulConnect = { ...state.lastConnect };
     V().renderTree();
     return session;
@@ -285,12 +290,12 @@ function onTabReset(tabID) {
 async function autoConnectBookmarks() {
     const flagged = (V().state.settings?.bookmarks || []).filter((b) => b.auto_connect);
     for (const b of flagged) {
-        // (334) the per-server nickname override is what gets sent, so the
-        // bookmark must be named explicitly for the backend to find it.
-        const nick = b.nickname_override || b.nickname;
+        // A public-name override must not replace the account login.
+        const nick = b.nickname;
+        const displayName = b.nickname_override || V().state.settings?.display_name || "";
         const requestServerGeneration = V().state.serverGeneration;
         const requestTabID = activeTabID;
-        const { error: err, tabID } = await connectGuestBookmarkWithID(b.name, b.addr, nick);
+        const { error: err, tabID } = await connectGuestBookmarkWithID(b.name, b.addr, nick, displayName);
         if (err !== "") {
             playSourceConnectionFailure(requestTabID, requestServerGeneration);
             // Account login needed: prefill for the user.
@@ -298,6 +303,7 @@ async function autoConnectBookmarks() {
             $("login-addr").value = b.addr;
             $("login-accountpw").value = "";
             $("login-nick").value = nick;
+            $("login-display-name").value = displayName;
             V().state.pendingBookmark = { name: b.name, addr: b.addr };
             V().sysMsg?.("auto-connect needs your password for " + b.addr);
         } else {
@@ -326,13 +332,13 @@ async function quickConnectLast(target = quickConnectTarget(), isCancelled = () 
         return;
     }
     // Passwords are never stored: guest logins connect directly, account
-    // bookmarks prefill the login dialog. (334) the override is the nickname
-    // actually sent, so the bookmark name goes along; recents have neither.
-    const nick = target.nickname_override || target.nickname;
+    // bookmarks prefill the login dialog. Forward the public name separately.
+    const nick = target.nickname;
+    const displayName = target.nickname_override || V().state.settings?.display_name || "";
     const requestServerGeneration = V().state.serverGeneration;
     const requestTabID = activeTabID;
     const { error: err, tabID } = await connectGuestBookmarkWithID(
-        target.name || "", target.addr, nick);
+        target.name || "", target.addr, nick, displayName);
     if (isCancelled()) {
         if (!err && tabID) {
             try { await App().CloseTab(tabID); } catch { /* best-effort stale-tab cleanup */ }
@@ -346,6 +352,7 @@ async function quickConnectLast(target = quickConnectTarget(), isCancelled = () 
         $("login-addr").value = target.addr;
         $("login-accountpw").value = "";
         $("login-nick").value = nick;
+        $("login-display-name").value = displayName;
         V().showLogin();
         // stashed after showLogin, which drops the previous login's stash: a
         // recent has no bookmark name and must leave none behind (334).
@@ -382,6 +389,7 @@ function renderRecents() {
             document.getElementById("login-addr").value = r.addr;
             document.getElementById("login-accountpw").value = "";
             document.getElementById("login-nick").value = r.nickname || "";
+            document.getElementById("login-display-name").value = s.display_name || "";
         };
         const edit = row.querySelector(".recent-edit");
         edit.title = "Edit recent server";
@@ -392,6 +400,7 @@ function renderRecents() {
             addr.value = r.addr;
             document.getElementById("login-accountpw").value = "";
             document.getElementById("login-nick").value = r.nickname || "";
+            document.getElementById("login-display-name").value = s.display_name || "";
             V().state.pendingBookmark = null;
             addr.focus();
             addr.select();

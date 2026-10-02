@@ -76,7 +76,11 @@ func gatedReconnectServer(t *testing.T) (string, <-chan netproto.Authenticate, c
 		case <-stop:
 			return
 		}
-		response, _ := netproto.Encode(netproto.MsgAuthResponse, netproto.AuthResponse{OK: true, AuthorizationModel: netproto.AuthorizationModelRolesV1, ClientID: "recovered-client", UniqueID: "original-user", Nickname: request.Username})
+		nickname := request.Nickname
+		if nickname == "" {
+			nickname = request.Username
+		}
+		response, _ := netproto.Encode(netproto.MsgAuthResponse, netproto.AuthResponse{OK: true, AuthorizationModel: netproto.AuthorizationModelRolesV1, ClientID: "recovered-client", UniqueID: "original-user", Nickname: nickname})
 		if netproto.WriteFrame(conn, response) != nil {
 			return
 		}
@@ -130,6 +134,7 @@ func prepareReconnect(t *testing.T, addr string) (*App, string, *tabState, *iden
 func TestReconnectTabPreservesSelectionIdentityAndBufferedEvents(t *testing.T) {
 	addr, requests, release := gatedReconnectServer(t)
 	a, tabID, source, identity := prepareReconnect(t, addr)
+	source.cm.displayName = "Daniel"
 	otherID, other := a.newTabWithIdentity(mustTempIdentity(t))
 	var mu sync.Mutex
 	var emitted []journalEntry
@@ -142,7 +147,7 @@ func TestReconnectTabPreservesSelectionIdentityAndBufferedEvents(t *testing.T) {
 	result := make(chan ConnectTabResult, 1)
 	go func() { result <- a.ReconnectTab(tabID, "original-password", "original-server-password") }()
 	request := waitReconnect(t, requests)
-	if request.Username != "original-account" || request.Password != "original-password" || request.ServerPassword != "original-server-password" || request.PublicKey != identity.PublicKey || request.X25519PublicKey != identity.X25519Public {
+	if request.Username != "original-account" || request.Nickname != "Daniel" || request.Password != "original-password" || request.ServerPassword != "original-server-password" || request.PublicKey != identity.PublicKey || request.X25519PublicKey != identity.X25519Public {
 		t.Fatal("reconnect did not retain original account credentials and encryption identity")
 	}
 	a.activate(otherID)

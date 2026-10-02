@@ -37,7 +37,7 @@ async function boot(page, scenario = {}) {
         } }) } };
     }, scenario);
     await page.goto("/");
-    await expect(page.locator(".login-card")).toHaveClass(/in/);
+    await expect(page.locator(".login-card")).toHaveClass(/(?:^|\s)in(?:\s|$)/);
 }
 
 test("startup offers update before connecting and checks once", async ({ page }) => {

@@ -3854,8 +3854,8 @@ test("German menus translate remaining actions and bookmark dialogs", async ({ p
     await expect(dialog).toContainText("Noch keine Lesezeichen");
     await dialog.getByRole("button", { name: "Schließen", exact: true }).click();
     await page.getByRole("menuitem", { name: "Selbst", exact: true }).click();
-    await page.getByRole("menuitem", { name: "Spitznamen ändern…", exact: true }).click();
-    await expect(page.getByRole("dialog", { name: "Spitznamen ändern", exact: true })).toContainText("Spitzname für die nächste Verbindung:");
+    await page.getByRole("menuitem", { name: "Anzeigenamen ändern…", exact: true }).click();
+    await expect(page.getByRole("dialog", { name: "Anzeigenamen ändern", exact: true })).toContainText("Anzeigename");
     await page.getByRole("button", { name: "Abbrechen", exact: true }).click();
 });
 
@@ -3947,6 +3947,43 @@ test("terminal audio finishes its cue before speech and suppresses disconnect ca
     expect(gap).toBeGreaterThanOrEqual(140);
     expect(gap).toBeLessThan(400);
     await expect(page.getByText(/visual-only-reason/).first()).toBeVisible();
+});
+
+test("channel joins and leaves play bundled speech and respect notification preferences", async ({ page }) => {
+    await page.evaluate(async () => {
+        const { state, soundEngine, speechQueue } = window.__noxa;
+        Object.assign(state.settings, { language: "en", play_sounds: true, effects_enabled: false,
+            spoken_messages: true, speech_volume: 100, event_sounds: {}, speech_events: {}, notify_matrix: {}, dnd_enabled: false });
+        state.myClientID = "client-a"; state.myChannelID = 7; state.replayingTabID = "";
+        state.clients = [{ client_id: "client-a", unique_id: "user-a", nickname: "Alice", channel_id: 7 },
+            { client_id: "client-b", unique_id: "user-b", nickname: "Bob", channel_id: 2 }];
+        await soundEngine.preload(); await soundEngine.resume(); speechQueue.clear();
+        window.__channelSpeech = [];
+        const play = soundEngine.play.bind(soundEngine);
+        soundEngine.play = (id, options) => {
+            const played = play(id, options);
+            if (played) window.__channelSpeech.push(id);
+            return played;
+        };
+        window.__moveSpeechPeer = channel_id => {
+            for (const cb of window.__events.event) cb(JSON.stringify({ type: "user_moved", data: { client_id: "client-b", channel_id } }));
+        };
+        window.__moveSpeechPeer(7);
+    });
+    await expect.poll(() => page.evaluate(() => window.__channelSpeech)).toEqual(["speech_en_user_join"]);
+    await page.evaluate(() => { window.__noxa.speechQueue.clear(); window.__moveSpeechPeer(2); });
+    await expect.poll(() => page.evaluate(() => window.__channelSpeech)).toEqual(["speech_en_user_join", "speech_en_user_leave"]);
+    await page.evaluate(() => {
+        const { state, speechQueue } = window.__noxa;
+        speechQueue.clear(); window.__channelSpeech = [];
+        state.settings.notify_matrix.join_leave = { sound: false };
+        window.__moveSpeechPeer(7);
+    });
+    expect(await page.evaluate(() => window.__noxa.speechQueue.pending.length)).toBe(0);
+    expect(await page.evaluate(() => window.__channelSpeech)).toEqual([]);
+    await page.evaluate(() => window.__noxa.openSettings("notifications"));
+    await expect(page.getByRole("button", { name: "Preview User joined your channel.", exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Preview User left your channel.", exact: true })).toBeVisible();
 });
 
 test("individual and all speech previews use draft settings and stop on close", async ({ page }, testInfo) => {
@@ -4535,8 +4572,8 @@ test("B3 participant strip follows live channel membership and opens member cont
     await expect(strip.locator(".participant-menu")).toHaveCount(4);
     await strip.getByRole("button", { name: /Mia.*speaking/ }).click();
     await expect(page.locator("#client-card .card-nick")).toHaveText("Mia");
-    await page.getByRole("slider", { name: "Microphone volume · Only for you" }).fill("75");
-    await page.getByRole("slider", { name: "Microphone volume · Only for you" }).press("Tab");
+    await page.getByRole("slider", { name: "Voice volume" }).fill("75");
+    await page.getByRole("slider", { name: "Voice volume" }).press("Tab");
     await expect.poll(() => page.evaluate(() => window.__savedSettings?.user_volumes?.["uid-mia"])).toBe(75);
     await page.getByRole("button", { name: "Message Mia", exact: true }).click();
     await expect(page.locator("#chat-head-title")).toContainText("Mia");
@@ -4553,7 +4590,6 @@ test("B3 shows your detected speech even when your own playback is muted or deaf
     await page.evaluate(() => {
         const v = window.__noxa;
         v.state.settings.muted_users = ["uid-daniel"];
-        v.setDeafened(true);
         for (const cb of window.__events.event) cb(JSON.stringify({
             type: "speaking_changed", data: { client_id: "daniel", speaking: true },
         }));
@@ -4572,6 +4608,10 @@ test("B3 shows your detected speech even when your own playback is muted or deaf
     });
     await expect(self).toContainText("In voice");
     await expect(self).not.toHaveClass(/speaking/);
+    await page.locator("#voice-deafen").click();
+    await expect(self).toContainText("Microphone muted");
+    await page.locator("#voice-deafen").click();
+    await expect(self).toContainText("In voice");
     await page.locator("#voice-mute").click();
     await expect(self).toContainText("Microphone muted");
 });
@@ -4596,8 +4636,12 @@ test("tray follows detected self speech, input/output mute, and voice teardown w
     });
     expect(await page.evaluate(() => window.__calls.SetTrayVoiceState)).toBe(count);
     await page.locator("#voice-deafen").click();
-    await expect.poll(flags).toEqual([true, false, true]);
+    await expect.poll(flags).toEqual([false, true, true]);
+    await page.locator("#voice-deafen").click();
+    await expect.poll(flags).toEqual([true, false, false]);
     await page.locator("#voice-mute").click();
+    await expect.poll(flags).toEqual([false, true, false]);
+    await page.locator("#voice-deafen").click();
     await expect.poll(flags).toEqual([false, true, true]);
     await page.locator("#voice-deafen").click();
     await expect.poll(flags).toEqual([false, true, false]);
@@ -4605,6 +4649,46 @@ test("tray follows detected self speech, input/output mute, and voice teardown w
     await expect.poll(flags).toEqual([true, false, false]);
     await page.evaluate(() => window.__noxa.resetVoiceSession());
     await expect.poll(flags).toEqual([false, false, false]);
+});
+
+test("deafen disables microphone transmission and preserves manual mute when restored", async ({ page }) => {
+    await showB3Workspace(page);
+    await page.evaluate(() => {
+        const ctx = new AudioContext(), stream = ctx.createMediaStreamDestination().stream;
+        window.__deafenTest = { ctx, stream };
+        window.__noxa.state.localStream = stream;
+        window.__noxa.state.settings.activation_mode = "continuous";
+        window.__noxa.applyVoiceState();
+    });
+    const transmitting = () => page.evaluate(() => window.__deafenTest.stream.getAudioTracks()[0].enabled);
+    await expect.poll(transmitting).toBe(true);
+    await page.locator("#voice-deafen").click();
+    await expect.poll(transmitting).toBe(false);
+    await expect(page.locator("#voice-mute")).toHaveAttribute("aria-pressed", "true");
+    await page.locator("#voice-deafen").click();
+    await expect.poll(transmitting).toBe(true);
+    await page.locator("#voice-mute").click();
+    await page.locator("#voice-deafen").click();
+    await page.locator("#voice-deafen").click();
+    await expect.poll(transmitting).toBe(false);
+    await page.locator("#voice-deafen").click();
+    await page.locator("#voice-mute").click();
+    await expect(page.locator("#voice-deafen")).toHaveAttribute("aria-pressed", "false");
+    await expect.poll(transmitting).toBe(true);
+    await page.evaluate(() => { window.__noxa.state.localStream = null; window.__deafenTest.stream.getTracks().forEach(t => t.stop()); return window.__deafenTest.ctx.close(); });
+});
+
+test("other members expose microphone and speaker state independently of local mute", async ({ page }) => {
+    await showB3Workspace(page);
+    await page.evaluate(() => {
+        const v = window.__noxa;
+        Object.assign(v.state.clients.find(c => c.client_id === "mia"), { self_muted: true });
+        Object.assign(v.state.clients.find(c => c.client_id === "alex"), { self_muted: true, self_deafened: true });
+        v.renderTree();
+    });
+    await expect(page.locator('#voice-participants [data-client-id="mia"]')).toContainText("Microphone muted");
+    await expect(page.locator('#voice-participants [data-client-id="alex"]')).toContainText("Speakers and microphone muted");
+    await expect(page.locator('#channel-tree [data-clid="alex"] [aria-label="Speakers and microphone muted"]')).toBeVisible();
 });
 
 test("B3 keeps voice controls outside the Chat and Files panels @a11y", async ({ page }) => {
@@ -4670,7 +4754,7 @@ test("B3 restores the persisted member volume after a failed save", async ({ pag
         });
     });
     await page.locator('#voice-participants [data-client-id="mia"]').click();
-    const slider = page.getByRole("slider", { name: "Microphone volume · Only for you" });
+    const slider = page.getByRole("slider", { name: "Voice volume" });
     await slider.fill("75");
     await expect.poll(() => page.evaluate(() => window.__noxa.state.settings.user_volumes?.["uid-mia"])).toBe(75);
     await page.evaluate(() => { window.__failVolumeSave = true; });
@@ -4693,12 +4777,12 @@ test("B3 ignores a volume save failure after selecting another member", async ({
         });
     });
     await page.locator('#voice-participants [data-client-id="mia"]').click();
-    await page.getByRole("slider", { name: "Microphone volume · Only for you" }).fill("150");
+    await page.getByRole("slider", { name: "Voice volume" }).fill("150");
     await expect.poll(() => page.evaluate(() => typeof window.__finishVolumeSave)).toBe("function");
     await page.locator('#voice-participants [data-client-id="alex"]').click();
     await page.evaluate(() => window.__finishVolumeSave("disk full"));
     await expect(page.locator("#client-card .card-nick")).toHaveText("Alex");
-    await expect(page.getByRole("slider", { name: "Microphone volume · Only for you" })).toHaveValue("100");
+    await expect(page.getByRole("slider", { name: "Voice volume" })).toHaveValue("100");
     await expect(page.locator("#member-volume-value")).toHaveText("100%");
     await expect(page.locator("#member-action-error")).toBeHidden();
 });
@@ -5940,6 +6024,34 @@ test("ignores a delayed microphone failure after the voice session changes", asy
     expect(await page.evaluate(() => window.__noxa.state.micState)).toBe("unknown");
 });
 
+test("encryption badges follow short, grouped, and wrapped message text inline", async ({ page }) => {
+    await page.evaluate(() => {
+        const v = window.__noxa;
+        v.showWorkspace();
+        v.state.myChannelID = 1;
+        for (const [index, text] of ["Short message", "Grouped message", "A wrapped encrypted message ".repeat(25)].entries()) {
+            window.__noxaChat.addChat({ id: 9800 + index, channel_id: 1, from_unique_id: "peer", from: "Peer", text, enc_verified: true });
+        }
+    });
+    const messages = page.locator('#chat-log .msg[data-msg-id^="980"]');
+    await expect(messages).toHaveCount(3);
+    await expect(messages.nth(1)).toHaveClass(/grouped/);
+    for (const message of await messages.all()) {
+        await expect(message.locator(".msg-text > .msg-lock:last-child")).toHaveCount(1);
+        await expect(message.locator(".msg-lock")).toHaveAttribute("title", /encrypted/);
+        const geometry = await message.evaluate(row => {
+            const body = row.querySelector(".msg-text"), lock = body.lastChild;
+            const range = document.createRange();
+            range.setStart(body, 0); range.setEndBefore(lock);
+            const text = [...range.getClientRects()].at(-1), badge = lock.getBoundingClientRect();
+            return { gap: badge.left - text.right, vertical: Math.abs(badge.top - text.top) };
+        });
+        expect(geometry.gap).toBeGreaterThanOrEqual(0);
+        expect(geometry.gap).toBeLessThan(12);
+        expect(geometry.vertical).toBeLessThan(8);
+    }
+});
+
 test("routes decrypted direct messages and echoes without mixing global chat or peers", async ({ page }) => {
     await page.evaluate(() => {
         const { state } = window.__noxa;
@@ -6927,7 +7039,7 @@ test("labels screen-share controls and explains low-bandwidth data use", async (
     await expect(shareDialog.getByRole("group", { name: "Source" })).toBeVisible();
     await expect(shareDialog.getByRole("radio")).toHaveCount(3);
     await expect(shareDialog.getByRole("combobox", { name: "Quality preset" })).toBeVisible();
-    await expect(shareDialog.getByRole("checkbox", { name: "Include system audio" })).toBeVisible();
+    await expect(shareDialog.getByRole("combobox", { name: "Share audio", exact: true })).toHaveValue("none");
     await auditAccessibility(page, "screen-share dialog");
 
     await page.evaluate(() => {
@@ -9346,7 +9458,7 @@ test("uses grouped, distinct action sounds without replaying historical tab acti
         const { soundEngine } = window.__noxa;
         await soundEngine.preload();
         await soundEngine.resume();
-        if (soundEngine.buffers.size !== 51 || soundEngine.ctx.state !== "running") throw new Error(JSON.stringify({ buffers: soundEngine.buffers.size, state: soundEngine.ctx.state, warnings: [...soundEngine.warnings] }));
+        if (soundEngine.buffers.size !== 55 || soundEngine.ctx.state !== "running") throw new Error(JSON.stringify({ buffers: soundEngine.buffers.size, state: soundEngine.ctx.state, warnings: [...soundEngine.warnings] }));
         let clock = 0;
         soundEngine.now = () => clock += 1000;
         const originalSource = soundEngine.ctx.createBufferSource.bind(soundEngine.ctx);
@@ -9554,7 +9666,7 @@ test("scopes connection failures and active-tab close sounds", async ({ page }) 
         const { soundEngine } = window.__noxa;
         await soundEngine.preload();
         await soundEngine.resume();
-        if (soundEngine.buffers.size !== 51 || soundEngine.ctx.state !== "running") throw new Error(JSON.stringify({ buffers: soundEngine.buffers.size, state: soundEngine.ctx.state, warnings: [...soundEngine.warnings] }));
+        if (soundEngine.buffers.size !== 55 || soundEngine.ctx.state !== "running") throw new Error(JSON.stringify({ buffers: soundEngine.buffers.size, state: soundEngine.ctx.state, warnings: [...soundEngine.warnings] }));
         let clock = 0;
         soundEngine.now = () => clock += 1000;
         const originalSource = soundEngine.ctx.createBufferSource.bind(soundEngine.ctx);

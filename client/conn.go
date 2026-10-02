@@ -55,12 +55,16 @@ type connManager struct {
 
 	mu                 sync.Mutex
 	writeMu            sync.Mutex
+	displayNameMu      sync.Mutex
+	audioStateMu       sync.Mutex
+	supportsAudioState bool
 	conn               net.Conn
 	connEpoch          uint64
 	addr               string // control address (tab info)
 	clientID           string
 	uniqueID           string
 	nickname           string
+	displayName        string // requested public name; separate from the account login
 	isGuest            bool
 	authorizationModel string
 	closed             bool
@@ -329,6 +333,17 @@ func (m *connManager) certificateValiditySnapshot() (notBefore, notAfter time.Ti
 // the client's own Ed25519 identity (key-derived unique ID). It returns ""
 // on success or the failure reason.
 func (m *connManager) connect(addr, nickname, password, serverPassword string) string {
+	return m.connectNamed(addr, nickname, "", password, serverPassword)
+}
+
+func (m *connManager) connectNamed(addr, nickname, displayName, password, serverPassword string) string {
+	if displayName != "" {
+		var err error
+		displayName, err = netproto.NormalizeDisplayName(displayName)
+		if err != nil {
+			return err.Error()
+		}
+	}
 	id, err := m.identity()
 	if err != nil {
 		return err.Error()
@@ -341,6 +356,7 @@ func (m *connManager) connect(addr, nickname, password, serverPassword string) s
 	if password != "" {
 		return m.connectWith(addr, netproto.Authenticate{
 			Username:        nickname, // unique ID or nickname; the server resolves both
+			Nickname:        displayName,
 			Password:        password,
 			ServerPassword:  serverPassword,
 			PublicKey:       id.PublicKey,
@@ -353,6 +369,9 @@ func (m *connManager) connect(addr, nickname, password, serverPassword string) s
 	uid, err := id.uniqueID()
 	if err != nil {
 		return err.Error()
+	}
+	if displayName != "" {
+		nickname = displayName
 	}
 	return m.connectWith(addr, netproto.Authenticate{
 		Username:        uid,
@@ -472,7 +491,9 @@ func (m *connManager) connectWith(addr string, authMsg netproto.Authenticate, si
 	m.clientID = resp.ClientID
 	m.uniqueID = resp.UniqueID
 	m.nickname = resp.Nickname
+	m.displayName = authMsg.Nickname
 	m.authorizationModel = resp.AuthorizationModel
+	m.supportsAudioState = slices.Contains(resp.Capabilities, netproto.CapabilityAudioState)
 	m.isGuest = authMsg.Anonymous
 	m.iceServers = resp.ICEServers
 	m.mediaLimits = netproto.MediaLimits{}
