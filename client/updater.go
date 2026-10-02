@@ -212,15 +212,41 @@ func (a *App) CheckForUpdate() (UpdateInfo, error) {
 	return info, nil
 }
 
+type updateProgress struct {
+	Percent        int     `json:"percent"`
+	BytesPerSecond float64 `json:"bytes_per_second"`
+}
+
+type updateProgressSampler struct {
+	lastTime  time.Time
+	lastBytes int64
+}
+
+func (s *updateProgressSampler) sample(written, total int64, now time.Time, complete bool) (updateProgress, bool) {
+	elapsed := now.Sub(s.lastTime)
+	if (!complete && elapsed < 250*time.Millisecond) || (complete && written > 0 && written == s.lastBytes) {
+		return updateProgress{}, false
+	}
+	progress := updateProgress{Percent: -1}
+	if total > 0 {
+		progress.Percent = int(min(written*100/total, 100))
+	}
+	if elapsed > 0 {
+		progress.BytesPerSecond = float64(written-s.lastBytes) / elapsed.Seconds()
+	}
+	s.lastTime, s.lastBytes = now, written
+	return progress, true
+}
+
 // downloadTo downloads rawURL to destPath, enforcing maxBytes and reporting
-// progress as 0..100 (or -1 when the total is unknown).
+// percentage (-1 for unknown totals) and the recent byte transfer rate.
 func downloadTo(
 	ctx context.Context,
 	rawURL string,
 	destRoot *os.Root,
 	destName string,
 	maxBytes int64,
-	onProgress func(percent int),
+	onProgress func(updateProgress),
 ) (retErr error) {
 	u, err := parseUpdateURL(rawURL)
 	if err != nil {
@@ -257,6 +283,7 @@ func downloadTo(
 
 	total := resp.ContentLength
 	var written int64
+	sampler := updateProgressSampler{lastTime: time.Now()}
 	buf := make([]byte, 64*1024)
 	for {
 		n, err := resp.Body.Read(buf)
@@ -268,14 +295,8 @@ func downloadTo(
 				return fmt.Errorf("write update file: %w", werr)
 			}
 			written += int64(n)
-			if total > 0 {
-				percent := written * 100 / total
-				if percent > 100 {
-					percent = 100
-				}
-				onProgress(int(percent))
-			} else {
-				onProgress(-1)
+			if progress, report := sampler.sample(written, total, time.Now(), false); report && onProgress != nil {
+				onProgress(progress)
 			}
 		}
 		if err == io.EOF {
@@ -284,6 +305,9 @@ func downloadTo(
 		if err != nil {
 			return fmt.Errorf("read update response: %w", err)
 		}
+	}
+	if progress, report := sampler.sample(written, total, time.Now(), true); report && onProgress != nil {
+		onProgress(progress)
 	}
 	if err := out.Sync(); err != nil {
 		return fmt.Errorf("sync update file: %w", err)
@@ -328,8 +352,8 @@ func verifyChecksum(root *os.Root, fileName, checksumsText, assetName string) er
 
 // DownloadAndApply downloads the update asset, verifies its checksum, and
 // self-applies it (renaming the running exe via minio/selfupdate). It emits
-// update_progress events with percent values. Returns "" on success or the
-// failure reason; on failure the old version keeps running untouched.
+// update_progress events with percentage and transfer-rate details. Returns ""
+// on success or the failure reason; on failure the old version keeps running.
 func (a *App) DownloadAndApply(info UpdateInfo) string {
 	fresh, err := a.CheckForUpdate()
 	if err != nil {
@@ -357,11 +381,11 @@ func (a *App) DownloadAndApply(info UpdateInfo) string {
 	}
 	defer func() { _ = tmpRoot.Close() }()
 
-	a.emitUpdateProgress(0)
-	if err := downloadTo(ctx, info.SHA256URL, tmpRoot, checksumsName, maxManifestSize, func(int) {}); err != nil {
+	a.emitUpdateProgress(updateProgress{})
+	if err := downloadTo(ctx, info.SHA256URL, tmpRoot, checksumsName, maxManifestSize, nil); err != nil {
 		return err.Error()
 	}
-	if err := downloadTo(ctx, info.SignatureURL, tmpRoot, checksumsSignatureName, maxSignatureSize, func(int) {}); err != nil {
+	if err := downloadTo(ctx, info.SignatureURL, tmpRoot, checksumsSignatureName, maxSignatureSize, nil); err != nil {
 		return err.Error()
 	}
 	sums, err := tmpRoot.ReadFile(checksumsName)
@@ -401,9 +425,9 @@ func (a *App) DownloadAndApply(info UpdateInfo) string {
 }
 
 // emitUpdateProgress sends an update_progress event to the frontend.
-func (a *App) emitUpdateProgress(percent int) {
+func (a *App) emitUpdateProgress(progress updateProgress) {
 	if a.ctx != nil {
-		wailsRuntime.EventsEmit(a.ctx, "update_progress", percent)
+		wailsRuntime.EventsEmit(a.ctx, "update_progress", progress.Percent, progress)
 	}
 }
 

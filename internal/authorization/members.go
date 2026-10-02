@@ -2,6 +2,8 @@ package authorization
 
 // MemberQuery searches registered identities for the authorized management
 // scope. Pagination is by immutable user ID; role assignments share Revision.
+// An exact native lookup may also return one online key-verified guest with
+// UserID zero, eligible for explicit enrollment through MemberRolesSet.
 type MemberQuery struct {
 	ChannelID        int64  `json:"channel_id"`
 	ExpectedRevision int64  `json:"expected_revision"`

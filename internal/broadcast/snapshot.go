@@ -50,6 +50,15 @@ type ChannelNode struct {
 	state.Channel
 	Children []*ChannelNode `json:"children"`
 	Clients  []*ClientInfo  `json:"clients"`
+	Access   *ChannelAccess `json:"access,omitempty"`
+}
+
+// ChannelAccess describes role restrictions without disclosing the policy or
+// role names. CanConnect is specific to the snapshot's viewer; passwords are
+// advertised separately by HasPassword. Legacy snapshots omit this metadata.
+type ChannelAccess struct {
+	Restricted bool `json:"restricted"`
+	CanConnect bool `json:"can_connect"`
 }
 
 // TreeSnapshot is the full nested view of the server's channel tree and the

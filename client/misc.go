@@ -5,6 +5,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -126,6 +127,15 @@ func (a *App) RegenerateIdentity() string {
 // The copy carries the private key in the clear so it still opens on a new
 // machine even when the stored file is OS-protected (354).
 func (a *App) ExportIdentity(id string) string {
+	_, err := a.BackupIdentity(id)
+	if err != nil {
+		return err.Error()
+	}
+	return ""
+}
+
+// BackupIdentity reports cancellation separately from a completed export.
+func (a *App) BackupIdentity(id string) (bool, error) {
 	// Prepare a detached snapshot under identityMu, but never hold that lock
 	// across the native dialog or destination write.
 	a.identityMu.Lock()
@@ -133,26 +143,26 @@ func (a *App) ExportIdentity(id string) string {
 		var err error
 		if id, _, err = a.resolveActive(); err != nil {
 			a.identityMu.Unlock()
-			return err.Error()
+			return false, err
 		}
 	}
 	src, err := identityPathFor(id)
 	if err != nil {
 		a.identityMu.Unlock()
-		return err.Error()
+		return false, err
 	}
 	loaded, err := loadIdentityAtStrict(src)
 	if err != nil {
 		a.identityMu.Unlock()
-		return err.Error()
+		return false, err
 	}
 	a.identityMu.Unlock()
 	dest, err := wailsRuntime.SaveFileDialog(a.ctx, wailsRuntime.SaveDialogOptions{
-		Title:           "Export identity",
+		Title:           "Back up identity",
 		DefaultFilename: "noxa-identity-" + id + ".json",
 	})
 	if err != nil || dest == "" {
-		return "" // cancelled
+		return false, err
 	}
 	out := *loaded
 	out.Protection = ""
@@ -160,10 +170,10 @@ func (a *App) ExportIdentity(id string) string {
 	// #nosec G117 -- portable identity backup intentionally contains its private key and is written owner-only.
 	raw, err := json.MarshalIndent(&out, "", "  ")
 	if err != nil {
-		return err.Error()
+		return false, err
 	}
 	if err := writePrivateFileAtomic(dest, raw); err != nil {
-		return err.Error()
+		return false, err
 	}
 	// Commit the backup marker only after re-reading the live source while
 	// serialized with regenerate/import/delete. stampIdentityExported compares
@@ -172,15 +182,25 @@ func (a *App) ExportIdentity(id string) string {
 	err = stampIdentityExported(src, loaded, out.ExportedAt)
 	a.identityMu.Unlock()
 	if err != nil {
-		return err.Error()
+		return false, err
 	}
-	return ""
+	return true, nil
 }
 
 // ImportIdentity adds a user-chosen identity file as a NEW identity and makes
 // it active (351). Importing never overwrites a stored key: the file it would
 // replace may be the only copy of an account the user still needs.
 func (a *App) ImportIdentity() string {
+	_, err := a.RestoreIdentity()
+	if err != nil {
+		return err.Error()
+	}
+	return ""
+}
+
+// RestoreIdentity distinguishes a cancelled file picker from a successful
+// import, including selecting an already stored identity.
+func (a *App) RestoreIdentity() (bool, error) {
 	src, err := wailsRuntime.OpenFileDialog(a.ctx, wailsRuntime.OpenDialogOptions{
 		Title: "Import identity",
 		Filters: []wailsRuntime.FileFilter{
@@ -188,26 +208,26 @@ func (a *App) ImportIdentity() string {
 		},
 	})
 	if err != nil || src == "" {
-		return "" // cancelled
+		return false, err
 	}
 	// #nosec G304 -- src is explicitly selected by the local user in the
 	// native identity-import dialog and must be read to perform the import.
 	data, err := os.ReadFile(src)
 	if err != nil {
-		return err.Error()
+		return false, err
 	}
 	// Decode BEFORE anything is written: a protected file from another
 	// machine has to be rejected with a message, not stored unreadable (354).
 	loaded, err := decodeIdentity(data)
 	if err != nil {
-		return err.Error()
+		return false, err
 	}
 	a.identityMu.Lock()
 	msg := a.adoptImportedIdentityLocked(loaded, filepath.Base(src))
 	a.identityMu.Unlock()
 	if msg != "" {
-		return msg
+		return false, errors.New(msg)
 	}
 	log.Printf("identity imported from %s", src)
-	return ""
+	return true, nil
 }

@@ -14,17 +14,18 @@ export function openChannelAccess(channelID) {
     const header = roleElement("header", "roles-header");
     header.append(roleElement("h3", "", t("roles.accessTitle")), roleButton(t("common.close"), () => closeDialog(overlay, "cancel")));
     const content = roleElement("div", "channel-access-content");
-    const status = roleElement("p", "role-hint", t("roles.loading"));
+    const status = roleElement("p", "role-status", t("roles.channel.loading"));
     status.setAttribute("role", "status");
     const error = roleElement("p", "role-error");
     error.setAttribute("role", "alert");
     let snapshot, saved, draft, busy = false, dirty = false, needsRefresh = false, subject = { role_id: 0 }, searchSerial = 0;
     let impactView, reviewedDraft = "";
+    let saving = false, savedMessage = false;
     const memberNames = new Map();
     const current = () => isCurrentServerDialog(overlay);
     const confirm = (message) => confirmDialog({ title: t("roles.accessTitle"), message,
         confirmLabel: t("common.apply"), cancelLabel: t("common.cancel"), serverScoped: true });
-    const setDirty = () => { dirty = JSON.stringify(saved) !== JSON.stringify(draft); reviewedDraft = ""; impactView?.invalidate(); buttons(); };
+    const setDirty = () => { savedMessage = false; dirty = JSON.stringify(saved) !== JSON.stringify(draft); reviewedDraft = ""; impactView?.invalidate(); buttons(); };
     const change = () => ({ kind: "channel_access_set", expected_revision: snapshot.policy.revision, channel: draft });
     const syncedOverrides = () => saved.synced ? snapshot.effective_overrides || snapshot.parent_overrides || [] : snapshot.parent_overrides || [];
     const syncDescription = () => {
@@ -41,7 +42,8 @@ export function openChannelAccess(channelID) {
         save.disabled = busy || !dirty || needsRefresh || reviewedDraft !== JSON.stringify(draft);
         discard.disabled = busy || !dirty;
         refreshButton.disabled = busy;
-        status.textContent = busy ? t("roles.saving") : dirty ? t("roles.unsaved") : "";
+        status.textContent = busy ? t(saving ? "roles.saving" : "roles.channel.loading") : dirty ? t("roles.unsaved") : savedMessage ? t("roles.accessSaved") : "";
+        save.textContent = t(saving ? "roles.saving" : "common.save");
         impactView?.update();
     };
     const render = () => {
@@ -126,7 +128,8 @@ export function openChannelAccess(channelID) {
         content.append(accessCheckPanel({ tabID, channelID, snapshot, current, memberID: () => subject.user_id || 0,
             memberName: subject.user_id ? memberNames.get(subject.user_id) || t("roles.memberReference", { id: subject.user_id }) : t("roles.guest") }));
     };
-    const load = async () => {
+    const load = async (afterSave = false) => {
+        savedMessage = false;
         busy = true; buttons();
         try {
             const next = await app.RoleStateForTab(tabID, channelID);
@@ -135,12 +138,13 @@ export function openChannelAccess(channelID) {
             if (!channel) throw new Error("channel unavailable");
             snapshot = next; saved = structuredClone(channel); draft = structuredClone(channel);
             dirty = needsRefresh = false; reviewedDraft = ""; subject = { role_id: next.policy.everyone_id }; error.textContent = "";
-        } catch { if (current()) error.textContent = t("roles.unavailable"); }
+            savedMessage = afterSave;
+        } catch { if (current()) { needsRefresh = true; error.textContent = t(afterSave ? "roles.accessRefreshFailed" : "roles.unavailable"); } }
         finally { if (current()) { busy = false; buttons(); render(); } }
     };
     const save = roleButton(t("common.save"), async () => {
         if (busy || needsRefresh || !dirty || reviewedDraft !== JSON.stringify(draft) || !current()) return;
-        busy = true; buttons(); render();
+        busy = saving = true; savedMessage = false; error.textContent = ""; buttons(); render();
         try {
             const result = await app.RoleChangeForTab(tabID, change());
             if (!current()) return;
@@ -150,9 +154,9 @@ export function openChannelAccess(channelID) {
                 error.textContent = t("roles.enforcementPending");
                 return;
             }
-            await load();
-        } catch { if (current()) { needsRefresh = true; error.textContent = t("roles.conflict"); } }
-        finally { if (current()) { busy = false; buttons(); render(); } }
+            await load(true);
+        } catch (failure) { if (current()) { needsRefresh = true; error.textContent = t(/conflict|changed|refresh/i.test(String(failure)) ? "roles.conflict" : "roles.accessFailed"); } }
+        finally { if (current()) { busy = saving = false; buttons(); render(); } }
     });
     const discard = roleButton(t("roles.discard"), () => { draft = structuredClone(saved); dirty = false; buttons(); render(); });
     const refreshButton = roleButton(t("roles.refresh"), async () => { if ((!dirty || await confirm(t("roles.discardAsk"))) && current()) load(); });
@@ -160,6 +164,7 @@ export function openChannelAccess(channelID) {
     footer.append(status, refreshButton, discard, save);
     dialog.append(header, content, error, footer); overlay.append(dialog);
     mountServerDialog(overlay, { onCancel: () => {
+        if (busy) return false;
         if (!dirty) return true;
         confirm(t("roles.discardAsk")).then((accepted) => { if (accepted && current()) closeDialog(overlay); });
         return false;

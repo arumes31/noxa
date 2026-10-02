@@ -38,7 +38,9 @@ func (s *Store) RoleMembers(ctx context.Context, actorID int64, query authorizat
 		return authorization.MemberPage{}, authorization.ErrRoleConflict
 	}
 	pattern := "%" + strings.NewReplacer(`\`, `\\`, "%", `\%`, "_", `\_`).Replace(strings.TrimSpace(query.Search)) + "%"
-	rows, err := tx.QueryContext(ctx, `SELECT id,unique_id,COALESCE(nickname,'') FROM users WHERE id>$1 AND (nickname ILIKE $2 OR unique_id ILIKE $2) ORDER BY id LIMIT 101`, query.AfterID, pattern)
+	rows, err := tx.QueryContext(ctx, `SELECT id,unique_id,COALESCE(identity_display_name,nickname,'') FROM users
+		WHERE id>$1 AND (nickname ILIKE $2 OR identity_display_name ILIKE $2 OR unique_id ILIKE $2)
+		ORDER BY id LIMIT 101`, query.AfterID, pattern)
 	if err != nil {
 		return authorization.MemberPage{}, err
 	}

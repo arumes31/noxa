@@ -24,6 +24,7 @@ func TestRoleChangesUsePreChangeAuthority(t *testing.T) {
 		{"owner may assign admin", 1, RoleChange{Kind: MemberRolesSet, UserID: 3, RoleIDs: []int64{40}}, nil},
 		{"everyone is permanent", 1, RoleChange{Kind: RoleDelete, RoleID: 10}, ErrRoleInvalid},
 		{"guest cannot change policy", 0, RoleChange{Kind: RoleDelete, RoleID: 20}, ErrRoleForbidden},
+		{"generic API cannot enroll identities", 1, RoleChange{Kind: MemberRolesSet, MemberUniqueID: "guest", UserID: 3, RoleIDs: []int64{20}}, ErrRoleInvalid},
 		{"manager cannot reorder above admin", 2, RoleChange{Kind: RolesReorder, RoleIDs: []int64{10, 40, 20, 30}}, ErrRoleForbidden},
 		{"owner can reorder", 1, RoleChange{Kind: RolesReorder, RoleIDs: []int64{10, 40, 20, 30}}, nil},
 		{"duplicate reorder rejected", 1, RoleChange{Kind: RolesReorder, RoleIDs: []int64{10, 20, 20, 30}}, ErrRoleInvalid},

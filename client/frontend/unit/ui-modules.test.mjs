@@ -592,6 +592,16 @@ test("frontend UI module behaviors", { concurrency: false }, async (t) => {
         const mapped = clientInfo.inboundAudioByPublisher([direct, legacyTrack, legacyInbound, video]);
         assert.equal(mapped.get("42"), direct);
         assert.equal(mapped.get("99"), legacyInbound);
+        // Chromium can retain the track ID generated before a publisher
+        // joined. The current SDP's MID/MSID identifies whose audio it is.
+        const received = { id: "voice", type: "inbound-rtp", kind: "audio", mid: "0", trackIdentifier: "browser-generated-id" };
+        const screen = { id: "share", type: "inbound-rtp", kind: "audio", mid: "1", trackIdentifier: "another-generated-id" };
+        const sdp = "v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\na=mid:0\r\na=msid:noxa-member member\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\na=mid:1\r\na=msid:noxa-member|screenaudio member|screenaudio\r\n";
+        const negotiated = clientInfo.inboundAudioByPublisher([received, screen], sdp);
+        assert.equal(negotiated.get("member"), received);
+        assert.equal(negotiated.size, 1);
+        assert.equal(clientInfo.inboundAudioByPublisher([received], sdp.replace("a=msid:noxa-member member", "a=msid:noxa-replacement replacement")).has("member"), false);
+        assert.equal(clientInfo.inboundAudioByPublisher([received], sdp.replace("m=audio 9", "m=audio 0")).size, 0);
         assert.equal(clientInfo.humanBytes(0), "0 B");
         assert.equal(clientInfo.humanBytes(1024), "1.0 KiB");
         assert.equal(clientInfo.humanBytes(1024 * 1024), "1.0 MiB");

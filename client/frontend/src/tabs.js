@@ -7,6 +7,7 @@
 import { closeServerDialogs } from "./modal.js";
 import { clearSpeech } from "./sounds.js";
 import { initConversations } from "./conversations.js";
+import { retainPresenceTabs } from "./presence.js";
 
 const V = () => window.__noxa;
 const App = () => window.go.main.App;
@@ -72,6 +73,7 @@ function renderTabs(tabs) {
     const focused = bar.contains(document.activeElement) ? document.activeElement : null;
     const existing = new Map([...bar.querySelectorAll(".srv-tab[data-tab-id]")].map(tab => [tab.dataset.tabId, tab]));
     const visible = new Set((tabs || []).map(tab => tab.id));
+    retainPresenceTabs(visible);
     for (const [id, element] of existing) if (!visible.has(id)) element.remove();
     if (!tabs || tabs.length === 0) {
         V().showLogin();

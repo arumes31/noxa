@@ -86,6 +86,7 @@ graph TD
 * **Opus Codec Optimization**: Dynamic SDP fmtp line rewriting per channel for variable bitrate (16–128 kbps), Forward Error Correction (FEC), and Discontinuous Transmission (DTX).
 * **Simulcast Video**: Dynamic quality tier selection (`high`, `mid`, `low` RID layers) based on subscriber network conditions.
 * **Screen-share audio choices**: In channel shares and private calls, choose **No audio**, **Shared application**, or **System audio**. Application audio requires a window and a supported capture runtime; enable audio in the system picker. It can include other windows of the same application. If application-only capture cannot be confirmed, the client rejects it instead of sharing system audio.
+* **Screen-share resolution**: The channel share dialog offers 720p, 1080p, 1440p, 4K, **Original source resolution**, and **Custom** dimensions (160–8192 pixels, 15/30/60 fps). Higher quality shows a performance warning and a video traffic estimate. Server limits, low-bandwidth mode and available hardware/network capacity still apply.
 * **Priority Commander**: Automatic audio ducking (−12 dB attenuation) across non-priority channels when a Priority Speaker talks.
 * **Whisper Routing**: Point-to-point and cross-channel targeted voice transmission bypasses standard channel boundaries.
 
@@ -299,8 +300,12 @@ and Administrator roles are unassigned, and no default member role is selected.
    guests; Administrator cannot be assigned automatically.
    You can also right-click a member and choose **Assign roles…**; this appears
    only when your permissions and role hierarchy allow managing that member.
-   You can also right-click a member and choose **Assign roles…**; this appears
-   only when your permissions and role hierarchy allow managing that member.
+   This also works for guests using a saved client identity. Adding their first
+   role registers that identity for persistent assignments, applies the role
+   immediately and retains it on reconnect. Opening the menu changes nothing.
+   Ephemeral guests without an identity key cannot retain role assignments.
+   Update the server as well as the client to use guest role assignment and
+   public display names (including display names for the owner account).
 4. Configure `@everyone` only for access you intend every member and guest to
    have. Keep moderation and server-management permissions in dedicated roles.
 

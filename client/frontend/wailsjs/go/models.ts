@@ -349,6 +349,7 @@ export namespace authorization {
 	    role_id: number;
 	    role_ids: number[];
 	    user_id: number;
+	    member_unique_id?: string;
 	    channel: ChannelPolicy;
 
 	    static createFrom(source: any = {}) {
@@ -363,6 +364,7 @@ export namespace authorization {
 	        this.role_id = source["role_id"];
 	        this.role_ids = source["role_ids"];
 	        this.user_id = source["user_id"];
+	        this.member_unique_id = source["member_unique_id"];
 	        this.channel = this.convertValues(source["channel"], ChannelPolicy);
 	    }
 
@@ -901,6 +903,7 @@ export namespace main {
 	    level: number;
 	    counter: number;
 	    error?: string;
+	    cancelled?: boolean;
 
 	    static createFrom(source: any = {}) {
 	        return new IdentityLevelResult(source);
@@ -911,6 +914,7 @@ export namespace main {
 	        this.level = source["level"];
 	        this.counter = source["counter"];
 	        this.error = source["error"];
+	        this.cancelled = source["cancelled"];
 	    }
 	}
 	export class NotifyChannels {

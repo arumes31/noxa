@@ -253,8 +253,8 @@ export const SOUND_DEFINITIONS = {
     "poke": {
         "label": "Poke",
         "category": "Notifications",
-        "character": "Focused dry control snap",
-        "duration": 0.165,
+        "character": "G05: David says Wake up! followed by a double beep",
+        "duration": 1.031875,
         "priority": 2,
         "gain": 1,
         "cooldown": 100,

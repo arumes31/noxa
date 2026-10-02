@@ -444,6 +444,7 @@ test.describe("acknowledged channel icon editor", () => {
         await page.evaluate(() => window.__finishIconSave());
         await expect(dialog).toHaveCount(0);
         await expect(page.getByLabel("Topic", { exact: true })).toHaveValue("Unsaved settings");
+        await expect(page.locator(".channel-lifecycle-dialog .role-status")).toHaveText("Channel icon saved.");
         expect(await page.evaluate(() => window.__channelCalls)).toEqual([]);
         await expect(page.getByRole("button", { name: "Channel icon", exact: true })).toBeFocused();
     });

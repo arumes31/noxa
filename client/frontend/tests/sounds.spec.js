@@ -55,7 +55,7 @@ test("static speech decodes and frequent contact cues survive mandatory repetiti
         const active=engine.active.size,retiring=engine.retiring.size;
         await engine.dispose();return {counts,active,retiring,speech};
     });
-    expect(result.speech).toBe(22);expect(result.active).toBe(0);expect(result.retiring).toBe(0);
+    expect(result.speech).toBe(30);expect(result.active).toBe(0);expect(result.retiring).toBe(0);
     expect(result.counts).toEqual({ptt_on:100,ptt_off:100,user_join:50,user_leave:50,channel_message:50,mic_on:50,mic_off:50,own_channel_switch:30});
 });
 
@@ -64,7 +64,7 @@ test("replacement sound set decodes, completes Test All, and releases all source
         window.__noxa = { state: { settings: { play_sounds: false, sound_volume: 100 } } };
         window.__noxaPolish = { dndActive: () => false };
         const { SoundEngine } = await import("/src/sound-engine.js");
-        const { SOUND_EVENTS } = await import("/src/sound-catalog.js");
+        const { SOUND_EVENTS, SOUND_DEFINITIONS } = await import("/src/sound-catalog.js");
         const engine = new SoundEngine({
             getState: () => window.__noxa.state, isDND: () => false,
             createContext: () => new AudioContext({ latencyHint: "interactive" }),
@@ -72,7 +72,7 @@ test("replacement sound set decodes, completes Test All, and releases all source
         });
         await engine.preload(); await engine.resume();
         const count = engine.buffers.size;
-        const durations = [...engine.buffers.values()].map(b => b.duration);
+        const durations = Object.fromEntries([...engine.buffers].map(([name, buffer]) => [name, buffer.duration]));
         const ctx = engine.ctx;
         const source = ctx.createBufferSource.bind(ctx);
         let created = 0, ended = 0;
@@ -83,7 +83,7 @@ test("replacement sound set decodes, completes Test All, and releases all source
         };
         for (const name of SOUND_EVENTS) {
             if (!engine.play(name, { preview: true })) throw Error("Preview failed: " + name);
-            await new Promise(r => setTimeout(r, 500));
+            await new Promise(r => setTimeout(r, SOUND_DEFINITIONS[name].duration * 1000 + 60));
         }
         const active = engine.active.size;
         await engine.dispose();
@@ -94,7 +94,8 @@ test("replacement sound set decodes, completes Test All, and releases all source
     expect(result.ended).toBe(33);
     expect(result.active).toBe(0);
     expect(result.closed).toBe("closed");
-    expect(Math.max(...result.durations)).toBeLessThan(.501);
+    expect(result.durations.poke).toBeCloseTo(1.031875, 4);
+    expect(Math.max(...Object.entries(result.durations).filter(([name]) => name !== "poke").map(([, duration]) => duration))).toBeLessThan(.501);
 });
 
 test("four simultaneous cues at maximum gain retain headroom in real WebAudio", async ({ page }) => {

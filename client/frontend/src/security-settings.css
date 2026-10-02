@@ -1,0 +1,38 @@
+.security-page { line-height: 1.5; font-size: .93rem; }
+.security-page p { margin: .5rem 0; }
+.security-page h4, .security-page h5 { margin: 0 0 .4rem; font-size: 1rem; }
+.security-page .warn { color: var(--warn); }
+.security-page label { display: flex; flex-direction: column; gap: .4rem; }
+.security-page input, .security-page select { max-width: 100%; min-width: 0; padding: .5rem; }
+.security-page select { width: 100%; }
+.security-page button { padding: .5rem .7rem; white-space: normal; background: var(--bg-hover); border: 1px solid var(--border); border-radius: 6px; color: var(--text); font: inherit; cursor: pointer; }
+.security-page button:disabled { opacity: .55; cursor: default; }
+.security-page button.danger-btn { color: var(--danger); border-color: var(--danger); }
+.security-identities { border: 0; padding: 0; margin: 0; min-width: 0; }
+.security-identities > legend { padding: 0; font-weight: 600; font-size: 1.05rem; }
+.security-timing { color: var(--text-dim); }
+.security-cards { display: grid; gap: .75rem; margin: 1rem 0; }
+.identity-card { padding: 1rem; border: 1px solid var(--border); border-radius: 8px; min-width: 0; }
+.identity-selected { border-color: var(--accent); }
+.identity-heading { display: flex; align-items: start; justify-content: space-between; gap: .5rem; }
+.identity-heading > div { min-width: 0; overflow-wrap: anywhere; }
+.identity-selected-label { color: var(--accent); font-size: .86rem; }
+.identity-exported { color: var(--text-dim); }
+.security-actions { display: flex; flex-wrap: wrap; align-items: end; gap: .5rem; margin: .75rem 0; }
+.security-page .identity-backup { border-color: var(--accent); color: var(--accent); }
+.security-details { margin-top: .8rem; }
+.security-details > summary { cursor: pointer; padding: .4rem 0; font-weight: 500; }
+.identity-uid { overflow-wrap: anywhere; font-family: var(--font-mono); font-size: .85rem; }
+.identity-more { position: relative; flex: 0 0 auto; }
+.identity-more > summary { list-style: none; padding: .1rem .65rem; cursor: pointer; font-size: 1.3rem; border: 1px solid var(--border); border-radius: 5px; }
+.identity-more[open] { display: flex; flex-direction: column; align-items: end; gap: .4rem; }
+.identity-more[open] > button { max-width: 12rem; }
+.security-section { border-top: 1px solid var(--border); padding-top: 1rem; margin-top: 1.25rem; }
+.security-page .security-checkbox { flex-direction: row; align-items: center; gap: .6rem; }
+.security-status:not(:empty), .security-error:not(:empty) { padding: .7rem; border: 1px solid var(--border); border-radius: 6px; overflow-wrap: anywhere; }
+.security-status, .security-error { position: sticky; top: 0; z-index: 1; background: var(--bg-raised); }
+.security-status { color: var(--accent); }
+.security-error { color: var(--warn); }
+.security-status:empty, .security-error:empty { display: none; }
+.security-progress progress { display: block; width: 100%; margin: .7rem 0; }
+.security-page :focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }

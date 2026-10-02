@@ -669,7 +669,10 @@ function renderMsg(m) {
 
     const time = document.createElement("span");
     time.className = "msg-time mono";
-    time.textContent = fmtTime(m.ts);
+    const stamp = document.createElement("span");
+    stamp.className = "msg-timestamp";
+    stamp.textContent = fmtTime(m.ts);
+    time.appendChild(stamp);
     time.title = fmtFull(m.ts);
     el.appendChild(time);
 
@@ -721,7 +724,7 @@ function renderMsg(m) {
     } else {
         renderBody(body, m);
     }
-    if (lock) body.appendChild(lock);
+    if (lock) time.appendChild(lock);
     el.appendChild(body);
 
     if (m.edited && !m.deleted) {
@@ -3045,15 +3048,18 @@ async function loadPinsPanel() {
 
 function openSearch() {
     $("chat-search-row").classList.remove("hidden");
+    $("chat-search-btn").setAttribute("aria-expanded", "true");
     $("chat-search").focus();
 }
 
 function closeSearch() {
     cancelChatSearch();
     $("chat-search-row").classList.add("hidden");
+    $("chat-search-btn").setAttribute("aria-expanded", "false");
     $("chat-search").value = "";
     searchQ = "";
     applySearchFilter();
+    $("chat-search-btn").focus();
 }
 
 function applySearchFilter() {
@@ -3710,7 +3716,7 @@ export function applyChatPrefs() {
     log.style.setProperty("--chat-font-size", (s.chat_font_size || 14) + "px");
     // Timestamps re-render live when the mode changes (126).
     log.querySelectorAll(".msg[data-ts]").forEach((el) => {
-        const t = el.querySelector(".msg-time");
+        const t = el.querySelector(".msg-timestamp");
         if (t) t.textContent = fmtTime(Number(el.dataset.ts));
     });
 }
@@ -3979,7 +3985,7 @@ export function initChat() {
     $("chat-info-btn").onclick = openDescription;
     $("chat-e2ee-btn").onclick = openE2EEDiagnostics;
     $("chat-export-btn").onclick = exportChat;
-    $("chat-search-btn").onclick = openSearch;
+    $("chat-search-btn").onclick = () => $("chat-search-row").classList.contains("hidden") ? openSearch() : closeSearch();
     $("chat-search-close").onclick = closeSearch;
     $("chat-search").addEventListener("input", () => {
         cancelChatSearch();

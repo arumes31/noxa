@@ -36,6 +36,14 @@
       "download": "https://opengameart.org/sites/default/files/sounds_6.zip",
       "archive": "paper.zip",
       "sha256": "aa1889414310c7cfdd8dc291c19d4e4fc21ec987e9238b0d961fb72449c263a4"
+    },
+    "poke_g05": {
+      "title": "User-selected G05 poke audition",
+      "type": "generated-recording",
+      "voice": "Microsoft David Desktop",
+      "engine": "Windows System.Speech",
+      "license": "Generated Windows speech output; not part of the CC0 sample libraries",
+      "description": "Locally rendered Wake up! plus an original synthesized double beep; selected by the user on 2026-10-02."
     }
   },
   "edits": {
@@ -471,14 +479,14 @@
     ],
     "poke": [
       {
-        "source": "ui",
-        "file": "Audio/switch30.ogg",
-        "lengthMs": 150,
-        "weight": 1,
-        "atMs": 0,
-        "lowpassHz": 0,
-        "sourceFileSha256": "d220abb5218fccc6d37649e17e7cce2a4e253f474332d9ea2b0f0518264aff5a",
-        "trimStartMs": 118.73015873015873
+        "source": "poke_g05",
+        "file": "G05.wav",
+        "sourceFileSha256": "69ce65a84a1005a3c9bf8bcf2d7f83ca8b396839fb0b33259d5e314b2b3e1c6c",
+        "transcript": "Wake up!",
+        "sequence": "Speech, 60 ms gap, double beep",
+        "lengthMs": 1031.875,
+        "gain": 0.18673125063600285,
+        "processing": "Uniform gain only; preserves the full selected speech and cue timing"
       }
     ],
     "join_leave": [

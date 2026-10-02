@@ -7,7 +7,7 @@ test("remote WebRTC audio reaches the processing graph", async ({ page }) => {
     await page.goto("/audio-check");
     await page.locator("body").click({ position: { x: 5, y: 5 } });
     await page.evaluate(async () => {
-        const { createRemoteAudioSource } = await import("/src/audio.js");
+        const { createRemoteAudioSource, createAudioLevelSampler } = await import("/src/audio.js");
         const sender = new RTCPeerConnection();
         const receiver = new RTCPeerConnection();
         sender.onicecandidate = e => { if (e.candidate) void receiver.addIceCandidate(e.candidate); };
@@ -28,7 +28,7 @@ test("remote WebRTC audio reaches the processing graph", async ({ page }) => {
             const source = createRemoteAudioSource(context, track);
             const analyser = context.createAnalyser();
             source.src.connect(analyser).connect(context.destination);
-            Object.assign(window.__remoteAudioCheck, { ...source, analyser });
+            Object.assign(window.__remoteAudioCheck, { ...source, analyser, sampleLevel: createAudioLevelSampler(context, source.src) });
         };
         const offer = await sender.createOffer();
         await sender.setLocalDescription(offer);
@@ -45,6 +45,7 @@ test("remote WebRTC audio reaches the processing graph", async ({ page }) => {
         return Math.sqrt(samples.reduce((sum, value) => sum + value * value, 0) / samples.length);
     })).toBeGreaterThan(0.01);
     expect(await page.evaluate(() => window.__remoteAudioCheck.playback.muted)).toBe(true);
+    await expect.poll(() => page.evaluate(() => window.__remoteAudioCheck.sampleLevel())).toBeGreaterThan(0.01);
     await page.evaluate(async () => {
         const { sender, receiver, context, oscillator, playback, src } = window.__remoteAudioCheck;
         playback.pause();

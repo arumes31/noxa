@@ -83,6 +83,27 @@ test("channel announcement preferences and notification matrix suppress speech",
     delete f.state.settings.notify_matrix;
     f.state.settings.event_sounds = { user_move_out: false };
     assert.equal(f.queue.allowed("user_leave", f.state.settings, false, "user_move_out"), false);
+    assert.equal(f.queue.allowed("user_moved_out", f.state.settings, false), false);
+    delete f.state.settings.event_sounds;
+    assert.equal(f.queue.allowed("user_moved_out", f.state.settings, false), true);
+    f.state.settings.notify_matrix = { join_leave: { sound: false } };
+    assert.equal(f.queue.allowed("user_moved_out", f.state.settings, false), false);
+});
+
+test("channel joins, forced moves and kicks have separate recordings and preferences", () => {
+    for (const event of ["channel_join", "user_kicked", "user_kicked_channel", "moved_by_admin", "user_moved_out"]) {
+        const f = fixture();
+        assert.equal(f.queue.enqueue(event, { delay: 0 }), true);
+        assert.equal(f.played[0].id, `speech_en_${event}`);
+        f.queue.clear();
+        f.state.settings.speech_events = { [event]: false };
+        assert.equal(f.queue.allowed(event, f.state.settings, false), false);
+    }
+    const f = fixture();
+    f.state.settings.speech_removal = false;
+    assert.equal(f.queue.allowed("user_kicked", f.state.settings, false), false);
+    assert.equal(f.queue.allowed("user_kicked_channel", f.state.settings, false), false);
+    assert.equal(f.queue.allowed("channel_join", f.state.settings, false), true);
 });
 
 test("live alerts take precedence over previews both during the effect gap and during speech", () => {

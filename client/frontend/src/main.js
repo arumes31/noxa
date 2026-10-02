@@ -26,7 +26,7 @@ import { initUpdater, startupAutoCheck } from "./updater.js";
 import { playEvent, playAlert, clearSpeech, initSounds, updateSoundOutput, updateConversationDucking, soundEngine, speechQueue } from "./sounds.js";
 import {
     startMicMeter, stopMicMeter, pttRelease, makeLimiter,
-    getUserVolume, isUserMuted, refreshUserAudio, registerUserChain, unregisterUserChain,
+    getUserVolume, isUserMuted, refreshUserAudio, registerUserChain, unregisterUserChain, createAudioLevelSampler,
     getUserShareVolume, isUserShareMuted, setUserShareVolume, setUserShareMuted, onShareAudioChange,
     setDucking, attachUserNormalizer, detachUserNormalizer, detachAllUserNormalizers,
     captureConstraints, markCaptureProfile, applyCaptureProfile, resumeAudioPlayback, createRemoteAudioSource,
@@ -60,7 +60,7 @@ import { parseRuntimeObject } from "./runtime-json.js";
 import { icon } from "./icons.js";
 import { initWorkspace, renderWorkspace, renderMember, renderVoiceHints, cancelMemberVolumePreview } from "./workspace-ui.js";
 import { createTrayVoiceSync } from "./tray-state.js";
-import { capturePresenceScope, presenceIsCurrent, restorePresenceOnActivity, setPresence } from "./presence.js";
+import { capturePresenceScope, presenceIsCurrent, desiredPresence, restorePresenceOnActivity, setPresence } from "./presence.js";
 import { captureMediaScope, mediaScopeIsCurrent, setWhisperRouting } from "./media-controls.js";
 
 const P = () => window.__noxaPerms;
@@ -961,7 +961,7 @@ function recentChannels() {
 let idleTimer = null;
 let activityRevision = 0;
 
-// noteActivity resets the idle timer; after auto_away_minutes without input
+// noteActivity resets the idle timer; after auto_away_minutes without input or speech
 // the client sets itself away, restoring on the next activity.
 function noteActivity() {
     const scope = capturePresenceScope();
@@ -971,8 +971,8 @@ function noteActivity() {
     const minutes = state.settings?.auto_away_minutes ?? 15;
     if (minutes <= 0 || !scope.clientID) return;
     idleTimer = setTimeout(async () => {
-        if (revision !== activityRevision || !presenceIsCurrent(scope)) return;
-        if (await setPresence("away", "auto-away", scope)) sysMsg("auto-away after " + minutes + " min idle");
+        if (revision !== activityRevision || !presenceIsCurrent(scope) || desiredPresence()) return;
+        if (await setPresence("away", "auto-away", scope, true)) sysMsg("auto-away after " + minutes + " min idle");
     }, minutes * 60000);
 }
 
@@ -1156,7 +1156,7 @@ function syncOwnChannel({ audible = true } = {}) {
         // must flush the pending new-tab join from this equality branch.
         const initialCuePending = state.pendingInitialChannelCueTabID === state.activeTabID;
         if (initialCuePending && channelID > 0 && !actionSoundsSuppressed()) {
-            playEvent("own_channel_join");
+            playAlert("channel_join");
             state.pendingInitialChannelCueTabID = "";
         }
         ensureVoiceForChannel();
@@ -1169,8 +1169,7 @@ function syncOwnChannel({ audible = true } = {}) {
     let playedCue = false;
     if ((audible || initialCuePending) && !actionSoundsSuppressed()) {
         if (channelID > 0) {
-            if (previousChannelID > 0) playEvent("own_channel_switch");
-            else playEvent("own_channel_join");
+            playAlert("channel_join", { effect: previousChannelID > 0 ? "own_channel_switch" : "own_channel_join" });
             playedCue = true;
         } else if (previousChannelID > 0) {
             playEvent("own_channel_leave");
@@ -1226,6 +1225,7 @@ function flattenChannel(node) {
         // (304) lock icon — the field is read under both spellings so a json
         // tag on the server's Channel struct cannot silently drop the lock.
         HasPassword: !!(node.has_password ?? node.HasPassword),
+        Access: node.access || null,
         ClientCount: node.ClientCount || 0, // (303) [n/max]
         Topic: node.Topic || "",
         Description: node.Description || "",
@@ -1315,8 +1315,7 @@ window.runtime.EventsOn("event", (json) => {
                 if (!actionSoundsSuppressed()) {
                     if (nextChannelID > 0 && nextChannelID !== previousChannelID) {
                         if (forcedMove) playAlert("moved_by_admin", { effect: previousChannelID > 0 ? "own_channel_switch" : "own_channel_join" });
-                        else if (previousChannelID > 0) playEvent("own_channel_switch");
-                        else playEvent("own_channel_join");
+                        else playAlert("channel_join", { effect: previousChannelID > 0 ? "own_channel_switch" : "own_channel_join" });
                         playedOwnCue = true;
                     } else if (nextChannelID === 0 && previousChannelID > 0) {
                         playEvent("own_channel_leave");
@@ -1343,9 +1342,11 @@ window.runtime.EventsOn("event", (json) => {
                         soundEvent: "user_move_in", noSound: actionSoundsSuppressed() });
             } else if (c && previousRemoteChannelID === state.myChannelID && state.myChannelID !== 0
                 && previousRemoteChannelID !== nextChannelID) {
+                const forcedMove = nextChannelID > 0 && d.by_client_id && d.by_client_id !== d.client_id;
                 window.__noxaNotify?.notify("join_leave", (c.nickname || "someone") + " moved out of your channel",
                     { channelID: previousRemoteChannelID, className: "joins", kind: "info",
-                        soundEvent: "user_move_out", noSound: actionSoundsSuppressed() });
+                        soundEvent: "user_move_out", speechEvent: forcedMove ? "user_moved_out" : "user_leave",
+                        noSound: actionSoundsSuppressed() });
             }
             recomputeDucking();
             break;
@@ -1449,12 +1450,12 @@ window.runtime.EventsOn("event", (json) => {
             if (d.client_id === state.myClientID) state.myStatus = d.status || "";
             break;
         }
-        // (321/322) poke: toast + sound + taskbar flash.
+        // Incoming pokes use a persistent popup, plus the configured sound/flash.
         case "poke":
             // (385) pokes dispatch through the notification matrix.
             window.__noxaNotify?.notify("poke",
                 `poke from ${d.from_nickname || "someone"}${d.message ? ": " + d.message : ""}`,
-                { className: "messages", kind: "warn" });
+                { className: "messages", kind: "warn", poke: { sender: d.from_nickname, message: d.message } });
             break;
         // (32) directed whisper signal — the server sends it only to the
         // targets of an active whisper, so its mere arrival means "whispered
@@ -1465,7 +1466,10 @@ window.runtime.EventsOn("event", (json) => {
             break;
         case "speaking_changed": {
             const c = state.clients.find((c) => c.client_id === d.client_id);
+            if (c && d.channel_id !== undefined && d.channel_id !== c.channel_id) break;
             if (c) c.is_speaking = d.speaking;
+            if (d.speaking && d.client_id === state.myClientID && state.myChannelID &&
+                d.channel_id === state.myChannelID && !state.replayingTabID && !state.muted && !state.deafened) noteActivity();
             // (343) announce speaking events to the screen-reader region.
             if (d.speaking) window.__noxaPolish?.announce((c ? c.nickname || c.unique_id : "someone") + " started speaking");
             updateTalkBanner();
@@ -1550,7 +1554,8 @@ window.runtime.EventsOn("event", (json) => {
             const description = self ? (d.ban ? "You were banned from the server." : d.from_server ? "You were kicked from the server." : "You were removed from the channel.") : "Client " + (d.ban ? "banned" : "kicked");
             // (385) kicks dispatch through the notification matrix.
             window.__noxaNotify?.notify("kick", description + (d.reason ? " Reason: " + d.reason : ""),
-                { className: "messages", kind: "warn", soundEvent: d.ban ? "ban" : "kick", noSound: self });
+                { className: "messages", kind: "warn", soundEvent: d.ban ? "ban" : "kick", noSound: self,
+                    speechEvent: !self && !d.ban ? (d.from_server ? "user_kicked" : "user_kicked_channel") : undefined });
             if (self && !actionSoundsSuppressed()) {
                 if (d.from_server || d.ban) {
                     state.lastConnect = null;
@@ -1733,7 +1738,15 @@ function renderChannel(parentEl, ch, byParent, depth) {
     el.dataset.chid = ch.ChannelID;
     el.tabIndex = 0; // (298) keyboard navigation
     el.setAttribute("role", "treeitem"); // (343)
-    el.setAttribute("aria-label", "channel " + ch.Name + (ch.HasPassword ? ", password protected" : ""));
+    const restricted = ch.Access?.restricted === true;
+    const cannotJoin = ch.Access?.can_connect === false;
+    const accessLabels = [];
+    if (restricted) accessLabels.push(t("channel.access.private"));
+    if (ch.HasPassword) accessLabels.push(t("channel.access.password"));
+    if (cannotJoin) accessLabels.push(t("channel.access.denied"));
+    el.classList.toggle("access-denied", cannotJoin);
+    el.setAttribute("aria-label", "channel " + ch.Name + (accessLabels.length ? ", " + accessLabels.join(", ") : ""));
+    el.title = accessLabels.join(" · ") || t("channel.access.open");
     el.innerHTML = `<span class="ch-disclosure" aria-hidden="true">${icon("chevron")}</span><span class="ch-icon">${icon("speaker")}</span><span class="ch-name"></span>`;
     el.querySelector(".ch-name").textContent = ch.Name;
     // (387) muted channel icon.
@@ -1744,13 +1757,13 @@ function renderChannel(parentEl, ch, byParent, depth) {
         mute.title = "channel muted (notifications off)";
         el.querySelector(".ch-name").appendChild(mute);
     }
-    // (304) password lock; (303) client count [n/max].
-    if (ch.HasPassword) {
-        const lock = document.createElement("span");
-        lock.className = "ch-lock";
-        lock.textContent = " 🔒";
-        lock.title = "password-protected channel";
-        el.querySelector(".ch-name").appendChild(lock);
+    if (restricted || cannotJoin || ch.HasPassword) {
+        const badges = document.createElement("span");
+        badges.className = "ch-access-badges";
+        badges.setAttribute("aria-hidden", "true");
+        if (restricted || cannotJoin) badges.innerHTML += `<span class="ch-access-lock">${icon("lock")}</span>`;
+        if (ch.HasPassword) badges.innerHTML += `<span class="ch-access-key">${icon("key")}</span>`;
+        el.querySelector(".ch-icon").appendChild(badges);
     }
     if (ch.ClientCount > 0 || ch.MaxClients > 0) {
         const count = document.createElement("span");
@@ -1768,6 +1781,7 @@ function renderChannel(parentEl, ch, byParent, depth) {
     }
     el.onclick = async () => {
         if (generation !== state.serverGeneration) return;
+        if (cannotJoin) { toast(t("channel.access.denied"), "warn"); return; }
         const groupView = privateGroupViewToken();
         try {
             const err = await window.go.main.App.JoinChannelForTab(tabID, ch.ChannelID);
@@ -3042,6 +3056,8 @@ function startVoiceMonitor() {
         void ctx.resume().catch(() => {});
         const buf = new Uint8Array(analyser.frequencyBinCount);
         let lastVoice = 0;
+        let lastActivity = -Infinity;
+        const presenceScope = capturePresenceScope();
         state.vadMonitor = setInterval(() => {
             analyser.getByteTimeDomainData(buf);
             let sum = 0;
@@ -3061,7 +3077,15 @@ function startVoiceMonitor() {
             }
 
             // (26) talking while muted / PTT off.
-            const blocked = state.muted || (mode !== "continuous" && !state.pttActive);
+            const blocked = state.muted || state.deafened || (mode !== "continuous" && !state.pttActive);
+            // Count actual transmitted speech even when the app is in the
+            // background. Refresh at most once a second during long speech.
+            const speaking = level > threshold || state.clients.some(c => c.client_id === state.myClientID && c.channel_id === state.myChannelID && c.is_speaking);
+            if (!blocked && speaking && state.myChannelID && !state.replayingTabID &&
+                presenceIsCurrent(presenceScope) && Date.now() - lastActivity >= 1000) {
+                lastActivity = Date.now();
+                noteActivity();
+            }
             if (blocked && level > threshold && state.settings?.warn_muted_talking !== false) {
                 mutedTalkStreak++;
             } else {
@@ -3282,6 +3306,13 @@ function attachRemoteAudio(track, publisher) {
     } catch (e) {
         sysMsg("remote audio chain failed: " + e);
     }
+}
+
+function readRemoteAudioLevel(trackID) {
+    const entry = remoteTracks.get(trackID);
+    if (!entry || !remoteChain.ctx || remoteChain.ctx.state === "closed") return null;
+    entry.sampleLevel ||= createAudioLevelSampler(remoteChain.ctx, entry.src);
+    return entry.sampleLevel();
 }
 
 // resolveTrackUsers re-attributes tracks whose renegotiation arrived before
@@ -3720,7 +3751,7 @@ window.__noxa = {
     speechQueue,
     state, $, toast, announceLive, sysMsg, showLogin, showWorkspace, disconnect, sendChat, setPTT, noteActivity,
     setDeafened, refreshPermissions, applyVoiceState, applyOutputSettings, applyLiveAudioSettings,
-    startVADMonitor: startVoiceMonitor, stopVADMonitor: stopVoiceMonitor,
+    startVADMonitor: startVoiceMonitor, stopVADMonitor: stopVoiceMonitor, readRemoteAudioLevel,
     connectFromLogin, renderTree, setChannelExpanded, setDetailsOpen, setDirectTargetVisible,
     clientName, initials, fetchAvatar,
     applyAppearance, toggleCompact, recentChannels, syncOwnChannel,

@@ -1,6 +1,7 @@
 // updater.js — Check for updates modal + startup auto-check.
 import { closeDialog, mountDialog } from "./modal.js";
 import { t } from "./i18n.js";
+import { formatBytes } from "./connection-stats.js";
 
 const V = () => window.__noxa;
 
@@ -29,6 +30,7 @@ function showUpdateModal() {
             <div class="upd-progress hidden">
                 <div class="upd-bar"><div class="upd-fill"></div></div>
                 <div class="upd-pct mono"></div>
+                <div class="upd-speed mono"></div>
             </div>
             <div class="dlg-buttons">
                 <button class="upd-retry hidden">${t("common.retry")}</button>
@@ -110,16 +112,29 @@ async function startDownload(m, info) {
 
     const fill = m.querySelector(".upd-fill");
     const pct = m.querySelector(".upd-pct");
+    const speed = m.querySelector(".upd-speed");
+    const showSpeed = rate => { speed.textContent = t("updater.speed", { speed: rate === null ? "—" : `${formatBytes(rate)}/s` }); };
+    let stallTimer = null;
     fill.style.width = "0%";
     pct.textContent = "0%";
-    const onProgress = (p) => {
-        if (p >= 0) {
-            fill.style.width = p + "%";
-            pct.textContent = p + "%";
+    showSpeed(null);
+    const onProgress = (p, details) => {
+        if (Number.isFinite(p)) {
+            fill.style.width = Math.max(0, Math.min(100, p)) + "%";
+            pct.textContent = p >= 0 ? Math.min(100, p) + "%" : "—";
+        }
+        clearTimeout(stallTimer);
+        const rate = details?.bytes_per_second;
+        if (Number.isFinite(rate) && rate >= 0) {
+            showSpeed(rate);
+            stallTimer = setTimeout(() => showSpeed(0), 1500);
+        } else {
+            showSpeed(null);
         }
     };
     let progressUnsub = window.runtime.EventsOn("update_progress", onProgress);
     const unsubscribe = () => {
+        clearTimeout(stallTimer);
         if (!progressUnsub) return;
         progressUnsub();
         progressUnsub = null;
@@ -154,6 +169,7 @@ async function startDownload(m, info) {
 function showRestart(m) {
     const status = m.querySelector(".upd-status");
     const btn = m.querySelector(".upd-update");
+    m.querySelector(".upd-progress").classList.add("hidden");
     status.textContent = t("updater.restartRequired");
     status.classList.remove("warn");
     btn.classList.remove("hidden");

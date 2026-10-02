@@ -1,4 +1,4 @@
-"""Offline editing of licensed samples into finished noXa effects. No synthesis.
+"""Offline editing of source samples and preservation of approved recordings.
 
 Requires numpy, scipy and soundfile in the development audio environment.
 Source archives are pinned by SHA-256; --download explicitly fetches missing ones.
@@ -15,8 +15,6 @@ import wave
 import zipfile
 
 import numpy as np
-import soundfile as sf
-from scipy.signal import butter, resample_poly, sosfilt
 
 ROOT = Path(__file__).resolve().parents[1]
 ASSETS = ROOT / 'client/frontend/src/assets/sounds'
@@ -32,6 +30,8 @@ def load_sources(spec, download):
     cache.mkdir(parents=True, exist_ok=True)
     sources = {}
     for key, package in spec['sources'].items():
+        if package.get('type') == 'generated-recording':
+            continue
         path = cache / package['archive']
         if not path.exists():
             if not download:
@@ -48,6 +48,9 @@ def load_sources(spec, download):
 
 
 def source_part(part, sources):
+    import soundfile as sf
+    from scipy.signal import butter, resample_poly, sosfilt
+
     source = sources[part['source']]
     data = source.read(part['file']) if isinstance(source, zipfile.ZipFile) else source
     samples, rate = sf.read(io.BytesIO(data), dtype='float64', always_2d=True)
@@ -73,7 +76,30 @@ def source_part(part, sources):
     return samples, {**part, 'sourceFileSha256': sha(data), 'trimStartMs': start * 1000 / rate}
 
 
+def preserved_recording(event):
+    recording = event['recording']
+    data = (ROOT / recording['path']).read_bytes()
+    if sha(data) != recording['sha256']:
+        raise ValueError(f'Approved recording checksum mismatch: {event["id"]}')
+    with wave.open(io.BytesIO(data), 'rb') as wav:
+        if (wav.getnchannels(), wav.getsampwidth(), wav.getframerate()) != (1, 2, RATE):
+            raise ValueError(f'Invalid approved recording format: {event["id"]}')
+        pcm = np.frombuffer(wav.readframes(wav.getnframes()), dtype='<i2')
+    samples = pcm.astype(float) / 32768
+    duration = len(pcm) / RATE
+    peak = float(np.max(np.abs(samples)))
+    if (abs(duration - event['duration']) > 1 / RATE or not 0 < peak <= .115
+            or pcm[0] != 0 or pcm[-1] != 0 or abs(samples.mean()) >= .0001):
+        raise ValueError(f'Invalid approved recording levels or duration: {event["id"]}')
+    return data, {'title': f'noXa — {event["label"]}', 'duration': duration,
+                  'peak': peak, 'dc': float(samples.mean()),
+                  'rmsDB': float(10 * np.log10(np.mean(samples ** 2))),
+                  'targetRmsDB': event['rmsDB'], 'sha256': sha(data)}, recording['edits']
+
+
 def master(event, sources):
+    if 'recording' in event:
+        return preserved_recording(event)
     samples = np.zeros(round(event['duration'] * RATE))
     edits = []
     for part in event['parts']:
