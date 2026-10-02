@@ -373,6 +373,8 @@ body.details-collapsed #details-toggle { display: inline-flex; position: static;
     #local-video { bottom: 65px; }
 }
 body.compact #app { display: flex; }
+#compact-exit { display: none; }
+body.compact #compact-exit { display: block; flex: none; align-self: flex-end; margin: 8px 12px; padding: 8px 12px; min-height: 36px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-panel); color: var(--text); font: inherit; cursor: pointer; }
 body.compact #app-body { flex: 1; }
 body.compact #voice-participants { display: flex; }
 body.compact #voice-bar { flex: none; }
