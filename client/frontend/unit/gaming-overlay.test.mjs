@@ -1,6 +1,29 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { overlayVoiceState } from '../src/gaming-overlay-state.js';
+import { createOverlayVisibility, overlayVoiceState } from '../src/gaming-overlay-state.js';
+
+test('connection overlay expires even while voice state keeps updating', () => {
+    const visible = createOverlayVisibility();
+    const state = { activeTabID: 'a', serverGeneration: 1, sessionGeneration: 1, myChannelID: 1 };
+    const snapshot = { active: true, title: 'Lobby', speakers: [] };
+    assert.equal(visible(state, snapshot, 1000).active, true);
+    assert.equal(visible(state, { ...snapshot, speakers: [{ name: 'Talking', speaking: true }] }, 5999).active, true);
+    assert.equal(visible(state, snapshot, 6000).active, false);
+    assert.equal(visible(state, { ...snapshot, muted: true }, 10000).active, false);
+    assert.equal(visible({ ...state, myChannelID: 2 }, snapshot, 11000).active, true);
+    assert.equal(visible({ ...state, myChannelID: 2 }, snapshot, 16000).active, false);
+});
+
+test('reconnection starts a fresh notice and disconnection hides immediately', () => {
+    const visible = createOverlayVisibility();
+    const state = { activeTabID: 'a', serverGeneration: 1, sessionGeneration: 1, myChannelID: 1 };
+    const snapshot = { active: true };
+    visible(state, snapshot, 0);
+    assert.equal(visible(state, snapshot, 6000).active, false);
+    assert.equal(visible({ ...state, sessionGeneration: 2 }, snapshot, 7000).active, true);
+    assert.equal(visible(state, { active: false }, 7001).active, false);
+    assert.equal(visible(state, snapshot, 7002).active, true);
+});
 
 test('overlay defaults enabled only in active voice and respects the off switch', () => {
     const state = { settings: {}, channels: [{ ChannelID: 1, Name: 'Lobby' }], clients: [], myChannelID: 1, pc: {} };

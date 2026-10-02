@@ -1,5 +1,5 @@
 import { t } from './i18n.js';
-import { overlayVoiceState } from './gaming-overlay-state.js';
+import { createOverlayVisibility, overlayVoiceState } from './gaming-overlay-state.js';
 import { dndActive } from './polish-ui.js';
 
 let notification = null;
@@ -11,10 +11,11 @@ export async function initGamingOverlay() {
     const app = window.go?.main?.App;
     if (!app?.GamingOverlayAvailable || !await app.GamingOverlayAvailable().catch(() => false)) return;
     let pending = false, warned = false, stopped = false, last = '', heartbeat = 0;
+    const visible = createOverlayVisibility();
     const update = async () => {
         if (pending || stopped) return;
         const state = window.__noxa.state;
-        const snapshot = overlayVoiceState(state, window.__noxaPrivateCalls?.overlaySnapshot?.());
+        const snapshot = visible(state, overlayVoiceState(state, window.__noxaPrivateCalls?.overlaySnapshot?.()));
         if (snapshot.active) {
             snapshot.status = t(snapshot.deafened ? 'overlay.deafened' : snapshot.muted ? 'overlay.muted' : 'overlay.ready');
             if (notification?.until > Date.now() && notification.tabID === state.activeTabID && notification.generation === state.serverGeneration && !dndActive(state.settings)) snapshot.notification = notification.text;

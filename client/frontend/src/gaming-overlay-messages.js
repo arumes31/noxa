@@ -1,6 +1,6 @@
 export const overlayEnglish = {
     'overlay.enabled': 'Gaming overlay', 'overlay.position': 'Overlay position',
-    'overlay.hint': 'Shows voice participants and notifications above borderless/windowed games on the selected monitor. Clicks pass through. Enabled by default; turn it off here. Exclusive fullscreen is not supported.',
+    'overlay.hint': 'Shows voice participants for five seconds when joining or reconnecting to a server or channel, then hides automatically. Appears above borderless/windowed games on the selected monitor; clicks pass through. Exclusive fullscreen is not supported.',
     'overlay.monitor': 'Overlay monitor', 'overlay.primary': 'Primary monitor', 'overlay.custom': 'Custom position',
     'overlay.scale': 'Overlay size', 'overlay.opacity': 'Overlay opacity', 'overlay.speakersOnly': 'Show only speaking members',
     'overlay.drag': 'Move overlay preview', 'overlay.dragHelp': 'Drag the preview or use arrow keys to position it. Hold Shift for larger steps. Apply saves your changes.',
@@ -14,7 +14,7 @@ export const overlayEnglish = {
 };
 export const overlayGerman = {
     'overlay.enabled': 'Gaming-Overlay', 'overlay.position': 'Overlay-Position',
-    'overlay.hint': 'Zeigt Sprachchat-Teilnehmer und Benachrichtigungen über Spielen im Fenster oder randlosen Modus auf dem gewählten Bildschirm. Mausklicks werden durchgereicht. Standardmäßig aktiv; hier ausschaltbar. Exklusives Vollbild wird nicht unterstützt.',
+    'overlay.hint': 'Zeigt Sprachchat-Teilnehmer beim Beitritt oder erneuten Verbinden zu einem Server oder Kanal für fünf Sekunden und blendet sich danach aus. Erscheint über Spielen im Fenster oder randlosen Modus auf dem gewählten Bildschirm; Mausklicks werden durchgereicht. Exklusives Vollbild wird nicht unterstützt.',
     'overlay.monitor': 'Overlay-Bildschirm', 'overlay.primary': 'Hauptbildschirm', 'overlay.custom': 'Eigene Position',
     'overlay.scale': 'Overlay-Größe', 'overlay.opacity': 'Overlay-Deckkraft', 'overlay.speakersOnly': 'Nur sprechende Mitglieder anzeigen',
     'overlay.drag': 'Overlay-Vorschau verschieben', 'overlay.dragHelp': 'Vorschau ziehen oder mit Pfeiltasten verschieben. Umschalt vergrößert die Schritte. Übernehmen speichert die Änderungen.',
