@@ -10,6 +10,7 @@ export { cameraConstraints } from "./camera-capture.js";
 import { captureMediaScope, mediaScopeIsCurrent } from "./media-controls.js";
 import { startPublication, stopPublication, publicationSnapshot } from "./stream-publication.js";
 import { startShareStatus, stopShareStatus, refreshShareStatus } from "./share-status.js";
+import { displayAudioOptions, validateDisplayAudio } from "./display-audio.js";
 import { closeContextMenu, mountContextMenu, contextMenuKey } from "./context-menu.js";
 
 import { isCurrentServerDialog, mountServerDialog } from "./modal.js";
@@ -907,7 +908,7 @@ export async function shareToggle() {
     openShareDialog();
 }
 
-function openShareDialog(replacing = false, initialPreset = "balanced") {
+function openShareDialog(replacing = false, initialPreset = "balanced", initialAudio = "none", initialSurface = "monitor") {
     const dialogID = ++shareDialogID;
     const sourceName = `shsrc-${dialogID}`;
     const qualityID = `share-quality-${dialogID}`;
@@ -933,7 +934,13 @@ function openShareDialog(replacing = false, initialPreset = "balanced") {
                 <option value="hd">${tLabel("share.hd")}</option>
                 <option value="hdMotion">${tLabel("share.hdMotion")}</option>
             </select>
-            <label class="share-audio" for="${audioID}"><input type="checkbox" class="sh-audio" id="${audioID}" /> ${tLabel("polish.systemAudio")}</label>
+            <label class="dlg-label" for="${audioID}">${tLabel("share.audio")}</label>
+            <select class="dlg-input sh-audio" id="${audioID}" aria-describedby="${audioID}-help">
+                <option value="none">${tLabel("share.audioNone")}</option>
+                <option value="application">${tLabel("share.audioApplication")}</option>
+                <option value="system">${tLabel("share.audioSystem")}</option>
+            </select>
+            <p class="set-hint" id="${audioID}-help">${tLabel("share.applicationHelp")}</p>
             <div class="dlg-buttons">
                 <button class="dlg-ok">${tLabel("voice.startShare")}</button>
                 <button class="dlg-cancel">${tLabel("polish.cancel")}</button>
@@ -941,20 +948,29 @@ function openShareDialog(replacing = false, initialPreset = "balanced") {
         </div>`;
     overlay.querySelector(".dlg-cancel").onclick = () => overlay.remove();
     overlay.querySelector(".sh-preset").value = initialPreset;
-    if (replacing) overlay.querySelector(".sh-audio").checked = !!V().state.shareStream?.getAudioTracks().some(track => track.readyState === "live");
+    const audioSelect = overlay.querySelector(".sh-audio");
+    audioSelect.value = replacing && V().state.shareStream?.getAudioTracks().some(track => track.readyState === "live") ? initialAudio : "none";
+    overlay.querySelector(`input[value="${initialSurface}"]`).checked = true;
+    const syncAudioSource = () => {
+        const application = overlay.querySelector('input[value="window"]').checked;
+        audioSelect.querySelector('[value="application"]').disabled = !application;
+        if (!application && audioSelect.value === "application") audioSelect.value = "none";
+    };
+    for (const source of overlay.querySelectorAll(`input[name="${sourceName}"]`)) source.onchange = syncAudioSource;
+    syncAudioSource();
     overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
     overlay.querySelector(".dlg-ok").onclick = async () => {
         if (!isCurrentServerDialog(overlay)) return;
         const surface = overlay.querySelector(`input[name="${sourceName}"]:checked`).value;
         const preset = overlay.querySelector(".sh-preset").value;
-        const withAudio = overlay.querySelector(".sh-audio").checked;
+        const audioMode = audioSelect.value;
         overlay.remove();
         const { state } = V();
         if (state.shareStarting || state.shareStopping || (!!state.screenSharing !== replacing)) return;
         const request = {};
         state.shareStarting = request;
         syncShareButton();
-        try { await startShare({ surface, preset, withAudio, replacing }); }
+        try { await startShare({ surface, preset, audioMode, replacing }); }
         finally {
             if (state.shareStarting === request) { state.shareStarting = null; syncShareButton(); }
         }
@@ -981,7 +997,7 @@ function openShareDialog(replacing = false, initialPreset = "balanced") {
 // picker ultimately decides what is shareable), publishes a dedicated screen
 // track independently of the camera, optionally merges display
 // audio (70), and applies the quality preset (72).
-async function startShare({ surface, preset, withAudio, replacing = false }) {
+async function startShare({ surface, preset, audioMode, replacing = false }) {
     const { state } = V();
     const generation = state.serverGeneration;
     const tabID = state.activeTabID;
@@ -1007,7 +1023,7 @@ async function startShare({ surface, preset, withAudio, replacing = false }) {
     const limits = state.mediaLimits;
     const video = videoConstraints(p.width, p.height, p.fps, limits);
     if (surface !== "region") video.displaySurface = surface; // 69: "monitor" | "window"
-    const gdm = { video, audio: !!withAudio };
+    const gdm = { video, ...displayAudioOptions(audioMode) };
     if (surface === "region") {
         // (71) Region Capture only applies to a self-capture of this app's own
         // surface. Without these the picker hands back a monitor/window track
@@ -1020,20 +1036,20 @@ async function startShare({ surface, preset, withAudio, replacing = false }) {
         display = await navigator.mediaDevices.getDisplayMedia(gdm);
     } catch (e) {
         if (!current()) return;
-        if (withAudio) {
+        if (audioMode === "system" && e.name !== "NotAllowedError" && e.name !== "AbortError") {
             // (70) WebView2 may refuse display audio (works on Windows for
             // screen/tab shares) — retry video-only and say so.
             V().sysMsg("system audio not available for this share (" + (e.message || e.name) + "); sharing video only");
             try {
                 display = await navigator.mediaDevices.getDisplayMedia(Object.assign({}, gdm, { audio: false }));
-                withAudio = false;
+                audioMode = "none";
             } catch (e2) {
                 if (!current()) return;
                 V().sysMsg("screen capture failed: " + (e2.message || e2.name));
                 return;
             }
         } else {
-            V().sysMsg("screen capture failed: " + (e.message || e.name));
+            V().sysMsg(audioMode === "application" ? tLabel("share.applicationUnavailable") : "screen capture failed: " + (e.message || e.name));
             return;
         }
     }
@@ -1041,6 +1057,9 @@ async function startShare({ surface, preset, withAudio, replacing = false }) {
         discardDisplay(display);
         return;
     }
+    try { validateDisplayAudio(display, audioMode); }
+    catch (error) { discardDisplay(display); V().sysMsg(tLabel(error.message)); return; }
+    if (audioMode === "system" && !display.getAudioTracks().length) V().sysMsg(tLabel("share.audioNotSelected"));
     const screenTrack = display.getVideoTracks()[0];
     if (!screenTrack) {
         discardDisplay(display);
@@ -1129,7 +1148,7 @@ async function startShare({ surface, preset, withAudio, replacing = false }) {
     }
     // (70) merge display audio as a second published audio track (the server
     // fans out every publisher audio track) + renegotiate.
-    const displayAudio = withAudio ? display.getAudioTracks()[0] : null;
+    const displayAudio = display.getAudioTracks()[0];
     if (displayAudio && peerConnection) {
         if (!state.shareAudioTransceiver) {
             let tr = null;
@@ -1200,9 +1219,9 @@ async function startShare({ surface, preset, withAudio, replacing = false }) {
         return;
     }
     syncShareButton();
-    startShareStatus({ stream: display, pc: peerConnection, scope: shareScope, preset: p, surface,
+    startShareStatus({ stream: display, pc: peerConnection, scope: shareScope, preset: p, surface, audioMode,
         generation: publicationSnapshot().find(p => p.publication.slot === "screen")?.generation,
-        stop: () => { V().$("voice-screen").focus(); void doStopShare(); }, change: () => openShareDialog(true, preset),
+        stop: () => { V().$("voice-screen").focus(); void doStopShare(); }, change: () => openShareDialog(true, preset, audioMode, surface),
         reduction: () => lowBandwidth ? "share.lowBandwidth" : sendCpuPressure ? "share.cpu" : "" });
 }
 

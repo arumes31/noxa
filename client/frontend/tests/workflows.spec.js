@@ -7039,7 +7039,7 @@ test("labels screen-share controls and explains low-bandwidth data use", async (
     await expect(shareDialog.getByRole("group", { name: "Source" })).toBeVisible();
     await expect(shareDialog.getByRole("radio")).toHaveCount(3);
     await expect(shareDialog.getByRole("combobox", { name: "Quality preset" })).toBeVisible();
-    await expect(shareDialog.getByRole("checkbox", { name: "Include system audio" })).toBeVisible();
+    await expect(shareDialog.getByRole("combobox", { name: "Share audio", exact: true })).toHaveValue("none");
     await auditAccessibility(page, "screen-share dialog");
 
     await page.evaluate(() => {

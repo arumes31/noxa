@@ -67,7 +67,8 @@ function render(s) {
     const fps = Number.isFinite(sample?.fps) && sample.fps >= 0 ? `${Math.round(sample.fps)} fps` : "— fps";
     const audio = s.stream.getAudioTracks().some(track => track.readyState === "live" && track.enabled);
     const viewers = s.viewers === null ? t("share.viewersUnknown") : s.viewers === 0 ? t("share.noViewers") : t("share.viewers", { count: s.viewers });
-    s.root.querySelector(".sharing-meta").textContent = `${t("share.sending", { dimensions, fps })} · ${t(audio ? "share.audioOn" : "share.audioOff")} · ${viewers}`;
+    const audioText = t(!audio ? "share.audioOff" : s.audioMode === "application" ? "share.applicationOn" : "share.audioOn");
+    s.root.querySelector(".sharing-meta").textContent = `${t("share.sending", { dimensions, fps })} · ${audioText} · ${viewers}`;
     const reason = s.reduction() || (sample?.reason === "cpu" ? "share.cpu" : sample?.reason === "bandwidth" ? "share.bandwidth" :
         sample?.width > 0 && sample.width < Math.min(settings.width || s.preset.width, s.preset.width) ? "share.reduced" : "");
     const limits = window.__noxa.state.mediaLimits;

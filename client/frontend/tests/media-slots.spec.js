@@ -92,7 +92,7 @@ test("repeated screen shares reuse senders and declare shared audio after every 
     });
     for (let i = 0; i < 3; i++) {
         await page.locator("#voice-screen").click();
-        await page.locator(".sh-audio").check();
+        await page.locator(".sh-audio").selectOption("system");
         await page.getByRole("dialog").getByRole("button", { name: "Start sharing", exact: true }).click();
         await expect.poll(() => page.evaluate(() => !!window.__noxa.state.screenSharing)).toBe(true);
         expect(await page.evaluate(() => window.__media.offers.at(-1).map(t => t.slot).sort())).toEqual(["cam", "screen", "screenaudio"]);
@@ -103,6 +103,68 @@ test("repeated screen shares reuse senders and declare shared audio after every 
     }
     await page.evaluate(() => window.__media.audioContext.close());
 });
+
+async function installApplicationCapture(page, label = "Application Audio", surface = "window") {
+    await page.evaluate(({ label, surface }) => {
+        window.__media.audioContext = new AudioContext();
+        Object.defineProperty(navigator.mediaDevices, "getDisplayMedia", { configurable: true, value: async options => {
+            window.__media.captureOptions = options;
+            const video = document.createElement("canvas").captureStream(1).getVideoTracks()[0];
+            video.getSettings = () => ({ displaySurface: surface });
+            const audio = window.__media.audioContext.createMediaStreamDestination().stream.getAudioTracks()[0];
+            Object.defineProperty(audio, "label", { value: label });
+            const stream = new MediaStream([video, audio]);
+            window.__media.displayTracks.push(...stream.getTracks());
+            return stream;
+        } });
+    }, { label, surface });
+}
+
+test("application audio requires a window and never switches silently to system audio", async ({ page }) => {
+    await page.locator("#voice-screen").click();
+    await expect(page.locator('.sh-audio option[value="application"]')).toBeDisabled();
+    await page.getByLabel("Window", { exact: true }).check();
+    await page.locator(".sh-audio").selectOption("application");
+    await page.getByLabel("Screen", { exact: true }).check();
+    await expect(page.locator(".sh-audio")).toHaveValue("none");
+    await expect(page.locator('.sh-audio option[value="application"]')).toBeDisabled();
+});
+
+test("application audio publishes in its own slot, labels status and survives source changes", async ({ page }) => {
+    await installApplicationCapture(page);
+    await page.locator("#voice-screen").click();
+    await page.getByLabel("Window", { exact: true }).check();
+    await page.locator(".sh-audio").selectOption("application");
+    await page.getByRole("button", { name: "Start sharing", exact: true }).click();
+    await expect(page.locator("#sharing-status")).toContainText("Application audio on");
+    expect(await page.evaluate(() => window.__media.captureOptions)).toMatchObject({ video: { displaySurface: "window" },
+        audio: true, windowAudio: "window", systemAudio: "exclude", monitorTypeSurfaces: "exclude", surfaceSwitching: "exclude" });
+    expect(await page.evaluate(() => window.__media.offers.at(-1).map(t => t.slot))).toContain("screenaudio");
+    await page.locator(".sharing-change").click();
+    await expect(page.locator(".sh-audio")).toHaveValue("application");
+    await expect(page.getByLabel("Window", { exact: true })).toBeChecked();
+    await page.getByRole("button", { name: "Start sharing", exact: true }).click();
+    await expect(page.locator("#sharing-status")).toContainText("Application audio on");
+    await expect.poll(() => page.evaluate(() => window.__media.displayTracks.map(t => t.readyState))).toEqual(["ended", "ended", "live", "live"]);
+});
+
+for (const [label, surface] of [["System Audio", "window"], ["", "window"], ["Application Audio", "monitor"]]) {
+    test(`application capture blocks broader or unknown audio (${label}/${surface}) before replacing the old share`, async ({ page }) => {
+        await page.locator("#voice-screen").click();
+        await page.getByRole("button", { name: "Start sharing", exact: true }).click();
+        await expect(page.locator(".sharing-change")).toBeEnabled();
+        await installApplicationCapture(page, label, surface);
+        const before = await page.evaluate(() => window.__media.offers.length);
+        await page.locator(".sharing-change").click();
+        await page.getByLabel("Window", { exact: true }).check();
+        await page.locator(".sh-audio").selectOption("application");
+        await page.getByRole("button", { name: "Start sharing", exact: true }).click();
+        await expect.poll(() => page.evaluate(() => window.__media.errors.join(" "))).toContain("Application-only audio was not available");
+        expect(await page.evaluate(() => window.__media.offers.length)).toBe(before);
+        expect(await page.evaluate(() => window.__media.displayTracks.map(t => t.readyState))).toEqual(["live", "ended", "ended"]);
+        await expect(page.locator("#sharing-status")).toContainText("Share audio off");
+    });
+}
 
 for (const [preset, fps, bitrate] of [["hd", 30, 5000000], ["hdMotion", 60, 8000000]]) {
     test(`${preset} requests Full HD capture and restores its encoding budget`, async ({ page }) => {
@@ -124,7 +186,7 @@ test("sharing status shows sent quality, audio, honest viewer counts and an expa
     await page.getByRole("button", { name: "Start sharing", exact: true }).click();
     const panel = page.locator("#sharing-status");
     await expect(panel).toContainText("You're sharing: Screen");
-    await expect(panel).toContainText("System audio off");
+    await expect(panel).toContainText("Share audio off");
     await expect(panel).toContainText("Viewer count unavailable");
     await page.evaluate(async () => {
         const sender = window.__noxa.state.shareVideoTransceiver.sender;
