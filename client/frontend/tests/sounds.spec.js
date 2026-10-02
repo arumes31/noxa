@@ -55,7 +55,7 @@ test("static speech decodes and frequent contact cues survive mandatory repetiti
         const active=engine.active.size,retiring=engine.retiring.size;
         await engine.dispose();return {counts,active,retiring,speech};
     });
-    expect(result.speech).toBe(18);expect(result.active).toBe(0);expect(result.retiring).toBe(0);
+    expect(result.speech).toBe(22);expect(result.active).toBe(0);expect(result.retiring).toBe(0);
     expect(result.counts).toEqual({ptt_on:100,ptt_off:100,user_join:50,user_leave:50,channel_message:50,mic_on:50,mic_off:50,own_channel_switch:30});
 });
 

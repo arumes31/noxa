@@ -8,6 +8,8 @@ export const SPEECH_EVENTS = {
     connection_lost: { priority: 5, category: "connection", effect: "connection_lost" },
     moved_by_admin: { priority: 4, category: "admin", effect: "own_channel_switch" },
     permission_denied: { priority: 4, category: "admin", effect: "server_error" },
+    user_join: { priority: 1, category: "channel", effect: "user_join", matrix: "join_leave", cooldown: 1000 },
+    user_leave: { priority: 1, category: "channel", effect: "user_leave", matrix: "join_leave", cooldown: 1000 },
     test: { priority: 4, category: "test" },
 };
 
@@ -24,11 +26,11 @@ export class SpeechQueue {
         this.pending = []; this.current = null; this.timer = null; this.last = new Map();
     }
 
-    allowed(event, settings, preview) {
+    allowed(event, settings, preview, effect = SPEECH_EVENTS[event]?.effect) {
         const def = SPEECH_EVENTS[event];
         if (!def || !settings || this.isDND(settings) || settings.spoken_messages === false) return false;
         if (!preview && (settings.play_sounds === false || this.getState()?.replayingTabID)) return false;
-        if (settings.speech_events?.[event] === false || settings.event_sounds?.[def.effect] === false) return false;
+        if (settings.speech_events?.[event] === false || settings.event_sounds?.[effect] === false) return false;
         if (def.matrix && (settings.notify_matrix?.[def.matrix]?.sound === false || settings.event_sounds?.[def.matrix] === false)) return false;
         if (event === "permission_denied" && settings.speech_permissions === false) return false;
         if (["banned", "kicked", "kicked_channel"].includes(event) && settings.speech_removal === false) return false;
@@ -51,8 +53,8 @@ export class SpeechQueue {
         const selected = settings || this.getState()?.settings;
         const now = this.now(), def = SPEECH_EVENTS[event], scope = this.scope();
         const key = scope + ":" + event;
-        const coolingDown = !preview && now - (this.last.get(key) ?? -Infinity) < 10000;
-        const item = { event, scope, priority: def.priority, settings, preview, onEnded,
+        const coolingDown = !preview && now - (this.last.get(key) ?? -Infinity) < (def.cooldown ?? 10000);
+        const item = { event, scope, priority: def.priority, settings, preview, onEnded, effect: effect || def.effect,
             ready: now + delay, expires: now + 8000, waitingEffect: false };
         let effectPlayed = false;
         if (withEffect && (!def.matrix || (selected?.notify_matrix?.[def.matrix]?.sound !== false && selected?.event_sounds?.[def.matrix] !== false))) {
@@ -65,7 +67,7 @@ export class SpeechQueue {
                 } });
             if (!effectPlayed) item.waitingEffect = false;
         }
-        if (coolingDown || !this.allowed(event, selected, preview)) return effectPlayed;
+        if (coolingDown || !this.allowed(event, selected, preview, item.effect)) return effectPlayed;
         if (!preview && this.current?.scope === scope && this.current?.priority > def.priority) return effectPlayed;
         if (!preview) {
             this.last.set(key, now);
@@ -87,7 +89,7 @@ export class SpeechQueue {
         while (this.pending.length) {
             const item = this.pending[0], now = this.now();
             const settings = item.settings || this.getState()?.settings;
-            if (item.expires < now || (!item.preview && item.scope !== this.scope()) || !this.allowed(item.event, settings, item.preview)) { this.pending.shift(); item.onEnded?.(); continue; }
+            if (item.expires < now || (!item.preview && item.scope !== this.scope()) || !this.allowed(item.event, settings, item.preview, item.effect)) { this.pending.shift(); item.onEnded?.(); continue; }
             if (item.waitingEffect) {
                 this.timer = this.schedule(() => this.pump(), Math.max(1, item.expires - now + 1));
                 return;
@@ -132,7 +134,7 @@ export class SpeechQueue {
     }
 
     reconcile() {
-        if (this.current && !this.allowed(this.current.event, this.current.settings || this.getState()?.settings, this.current.preview)) this.stopCurrent();
+        if (this.current && !this.allowed(this.current.event, this.current.settings || this.getState()?.settings, this.current.preview, this.current.effect)) this.stopCurrent();
         this.pump();
     }
 }

@@ -33,7 +33,7 @@ test("each fixed speech event has valid English/German PCM and no orphaned clips
     for (const language of ["en", "de"]) {
         assert.deepEqual(Object.keys(SPEECH_ASSETS[language]).sort(), Object.keys(SPEECH_EVENTS).sort());
         const directory = new URL("../src/assets/speech/"+language+"/",import.meta.url);
-        assert.equal(readdirSync(directory).filter(f=>f.endsWith(".wav")).length, 9);
+        assert.equal(readdirSync(directory).filter(f=>f.endsWith(".wav")).length, Object.keys(SPEECH_EVENTS).length);
         for (const [event, clip] of Object.entries(SPEECH_ASSETS[language])) {
             const wav = readFileSync(new URL(event+".wav", directory));
             assert.equal(wav.toString("ascii",0,4),"RIFF"); assert.equal(wav.readUInt16LE(22),1);
@@ -55,6 +55,34 @@ test("preview never interrupts a live critical announcement", () => {
     f.queue.enqueue("banned", { delay: 0 });
     assert.equal(f.queue.enqueue("test", { preview: true, delay: 0 }), false);
     assert.equal(f.queue.current.event, "banned");
+});
+
+test("channel announcements use the selected cue, repeat after a short cooldown and yield to critical speech", () => {
+    const f = fixture();
+    f.state.settings.event_sounds = { user_join: false, user_move_in: true };
+    assert.equal(f.queue.enqueue("user_join", { withEffect: true, effect: "user_move_in" }), true);
+    assert.equal(f.played[0].id, "user_move_in");
+    f.played[0].options.onEnded(); f.tick(150);
+    assert.equal(f.played[1].id, "speech_en_user_join");
+    f.played[1].options.onEnded(); f.tick(1000);
+    assert.equal(f.queue.enqueue("user_join", { effect: "user_move_in", delay: 0 }), true);
+    assert.equal(f.played.at(-1).id, "speech_en_user_join");
+    f.queue.enqueue("banned", { delay: 0 });
+    assert.equal(f.queue.current.event, "banned");
+    assert.equal(f.queue.enqueue("user_leave", { delay: 0 }), false);
+});
+
+test("channel announcement preferences and notification matrix suppress speech", () => {
+    const f = fixture();
+    assert.equal(f.queue.allowed("user_join", f.state.settings, false), true);
+    f.state.settings.speech_events = { user_join: false };
+    assert.equal(f.queue.allowed("user_join", f.state.settings, false), false);
+    assert.equal(f.queue.allowed("user_leave", f.state.settings, false), true);
+    f.state.settings.notify_matrix = { join_leave: { sound: false } };
+    assert.equal(f.queue.allowed("user_leave", f.state.settings, false), false);
+    delete f.state.settings.notify_matrix;
+    f.state.settings.event_sounds = { user_move_out: false };
+    assert.equal(f.queue.allowed("user_leave", f.state.settings, false, "user_move_out"), false);
 });
 
 test("live alerts take precedence over previews both during the effect gap and during speech", () => {

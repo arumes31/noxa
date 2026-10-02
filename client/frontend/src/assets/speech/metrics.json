@@ -160,5 +160,41 @@
     "peak": 0.114990234375,
     "rmsDB": -35.157858394249445,
     "sha256": "2428e2251a08d020d64ad430134ccb48fb0b286f749e08365974a799061ea8b5"
+  },
+  "en/user_join": {
+    "title": "noXa — user_join",
+    "text": "User joined your channel.",
+    "duration": 1.4512471655328798,
+    "sampleRate": 22050,
+    "peak": 0.114990234375,
+    "rmsDB": -33.13668489411414,
+    "sha256": "a65ef683e01995dd03e1c58dc83838cf550ccd310b023f60756b2ce93ac2bcac"
+  },
+  "en/user_leave": {
+    "title": "noXa — user_leave",
+    "text": "User left your channel.",
+    "duration": 1.4048072562358276,
+    "sampleRate": 22050,
+    "peak": 0.114990234375,
+    "rmsDB": -34.78456300294909,
+    "sha256": "1d8cb37decfae16ac3febf5b8b2a9fe3fcf9305759c73817e12f5d0276252f00"
+  },
+  "de/user_join": {
+    "title": "noXa — user_join",
+    "text": "Ein Benutzer hat deinen Channel betreten.",
+    "duration": 1.835328798185941,
+    "sampleRate": 22050,
+    "peak": 0.114990234375,
+    "rmsDB": -32.16017425390019,
+    "sha256": "ace8e5e106b77ae2085341ebb2e614f13ff7e8afdc0401134fa621999b430eee"
+  },
+  "de/user_leave": {
+    "title": "noXa — user_leave",
+    "text": "Ein Benutzer hat deinen Channel verlassen.",
+    "duration": 1.720453514739229,
+    "sampleRate": 22050,
+    "peak": 0.114990234375,
+    "rmsDB": -32.40135178067319,
+    "sha256": "5a217b9308968a7fefa50b46bc82e51ce13773709488d63ea298e8581c164e79"
   }
 }

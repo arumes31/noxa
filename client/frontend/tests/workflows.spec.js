@@ -3949,6 +3949,43 @@ test("terminal audio finishes its cue before speech and suppresses disconnect ca
     await expect(page.getByText(/visual-only-reason/).first()).toBeVisible();
 });
 
+test("channel joins and leaves play bundled speech and respect notification preferences", async ({ page }) => {
+    await page.evaluate(async () => {
+        const { state, soundEngine, speechQueue } = window.__noxa;
+        Object.assign(state.settings, { language: "en", play_sounds: true, effects_enabled: false,
+            spoken_messages: true, speech_volume: 100, event_sounds: {}, speech_events: {}, notify_matrix: {}, dnd_enabled: false });
+        state.myClientID = "client-a"; state.myChannelID = 7; state.replayingTabID = "";
+        state.clients = [{ client_id: "client-a", unique_id: "user-a", nickname: "Alice", channel_id: 7 },
+            { client_id: "client-b", unique_id: "user-b", nickname: "Bob", channel_id: 2 }];
+        await soundEngine.preload(); await soundEngine.resume(); speechQueue.clear();
+        window.__channelSpeech = [];
+        const play = soundEngine.play.bind(soundEngine);
+        soundEngine.play = (id, options) => {
+            const played = play(id, options);
+            if (played) window.__channelSpeech.push(id);
+            return played;
+        };
+        window.__moveSpeechPeer = channel_id => {
+            for (const cb of window.__events.event) cb(JSON.stringify({ type: "user_moved", data: { client_id: "client-b", channel_id } }));
+        };
+        window.__moveSpeechPeer(7);
+    });
+    await expect.poll(() => page.evaluate(() => window.__channelSpeech)).toEqual(["speech_en_user_join"]);
+    await page.evaluate(() => { window.__noxa.speechQueue.clear(); window.__moveSpeechPeer(2); });
+    await expect.poll(() => page.evaluate(() => window.__channelSpeech)).toEqual(["speech_en_user_join", "speech_en_user_leave"]);
+    await page.evaluate(() => {
+        const { state, speechQueue } = window.__noxa;
+        speechQueue.clear(); window.__channelSpeech = [];
+        state.settings.notify_matrix.join_leave = { sound: false };
+        window.__moveSpeechPeer(7);
+    });
+    expect(await page.evaluate(() => window.__noxa.speechQueue.pending.length)).toBe(0);
+    expect(await page.evaluate(() => window.__channelSpeech)).toEqual([]);
+    await page.evaluate(() => window.__noxa.openSettings("notifications"));
+    await expect(page.getByRole("button", { name: "Preview User joined your channel.", exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Preview User left your channel.", exact: true })).toBeVisible();
+});
+
 test("individual and all speech previews use draft settings and stop on close", async ({ page }, testInfo) => {
     await page.evaluate(() => {
         Object.assign(window.__noxa.state.settings, { language: "en", spoken_messages: true, effects_enabled: false,
@@ -9374,7 +9411,7 @@ test("uses grouped, distinct action sounds without replaying historical tab acti
         const { soundEngine } = window.__noxa;
         await soundEngine.preload();
         await soundEngine.resume();
-        if (soundEngine.buffers.size !== 51 || soundEngine.ctx.state !== "running") throw new Error(JSON.stringify({ buffers: soundEngine.buffers.size, state: soundEngine.ctx.state, warnings: [...soundEngine.warnings] }));
+        if (soundEngine.buffers.size !== 55 || soundEngine.ctx.state !== "running") throw new Error(JSON.stringify({ buffers: soundEngine.buffers.size, state: soundEngine.ctx.state, warnings: [...soundEngine.warnings] }));
         let clock = 0;
         soundEngine.now = () => clock += 1000;
         const originalSource = soundEngine.ctx.createBufferSource.bind(soundEngine.ctx);
@@ -9582,7 +9619,7 @@ test("scopes connection failures and active-tab close sounds", async ({ page }) 
         const { soundEngine } = window.__noxa;
         await soundEngine.preload();
         await soundEngine.resume();
-        if (soundEngine.buffers.size !== 51 || soundEngine.ctx.state !== "running") throw new Error(JSON.stringify({ buffers: soundEngine.buffers.size, state: soundEngine.ctx.state, warnings: [...soundEngine.warnings] }));
+        if (soundEngine.buffers.size !== 55 || soundEngine.ctx.state !== "running") throw new Error(JSON.stringify({ buffers: soundEngine.buffers.size, state: soundEngine.ctx.state, warnings: [...soundEngine.warnings] }));
         let clock = 0;
         soundEngine.now = () => clock += 1000;
         const originalSource = soundEngine.ctx.createBufferSource.bind(soundEngine.ctx);
