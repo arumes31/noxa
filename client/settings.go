@@ -39,7 +39,7 @@ type Bookmark struct {
 	Color       string `json:"color,omitempty"`        // (284) tab/dot color
 	AutoConnect bool   `json:"auto_connect,omitempty"` // (286) connect on startup (guest/prefill)
 	Profile     string `json:"profile,omitempty"`      // (300) hotkey profile name
-	// Per-server overrides (334/335): NicknameOverride replaces the login
+	// Per-server overrides (334/335): NicknameOverride replaces the public
 	// nickname; AvatarOverrideB64 (base64 image) is uploaded after connect.
 	NicknameOverride  string `json:"nickname_override,omitempty"`
 	AvatarOverrideB64 string `json:"avatar_override_b64,omitempty"`
@@ -113,6 +113,9 @@ type Settings struct {
 
 	Bookmarks []Bookmark     `json:"bookmarks"`
 	Recents   []RecentServer `json:"recents"` // (282) last 10 servers
+
+	// DisplayName is the preferred public name; account logins stay in bookmarks.
+	DisplayName string `json:"display_name,omitempty"`
 
 	// Window / system integration (wave 8a).
 	AlwaysOnTop    bool   `json:"always_on_top"`    // (291)

@@ -38,7 +38,7 @@ func (s *TCPServer) projectIntegrationEvent(ctx context.Context, e *authorizatio
 		return result, authorization.ErrAuthorizationUnavailable
 	}
 	switch event.Type {
-	case eventUserJoined, eventUserLeft, eventUserMoved, eventChannelCreated, eventChannelDeleted, eventChannelUpdated, eventStatusChanged, eventMemberVoiceChanged, eventKicked:
+	case eventUserJoined, eventUserLeft, eventUserMoved, eventChannelCreated, eventChannelDeleted, eventChannelUpdated, eventStatusChanged, eventNicknameChanged, eventMemberVoiceChanged, eventKicked:
 		snapshot, err := s.integrationSnapshot(ctx, e, viewerID, viewerUID)
 		return broadcast.IntegrationEvent{Snapshot: snapshot}, err
 	case eventSpeakingChanged:

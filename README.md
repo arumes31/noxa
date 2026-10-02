@@ -255,9 +255,16 @@ failure recovery and process-lock details.
 ### 2. Connect as owner and grant administrators
 
 Open the desktop client, connect to `localhost:12333` (or your server's hostname),
-and enter `owner` as the nickname and the chosen **Account password**. A server
+and enter `owner` as the **Account login / guest name** and the chosen **Account password**. A server
 join password, if configured, is separate from the account password. Compare the
 server certificate fingerprint with its startup log before trusting it.
+
+To appear as `Daniel`, enter it in the optional **Display name** field. Everyone
+on the server sees that name; the `owner` login, identity, and roles stay the same.
+Use **Self → Change display name** to change it during a session. The client saves
+your preferred name for future connections; a bookmark's **Display name override**
+takes precedence. Names must contain 1–64 characters without control characters.
+Live changes require a server version that supports display names.
 
 Open **Permissions → Roles**, then **Members**. Find a registered member,
 select the **Administrator** role and choose **Add role** to grant admin access.

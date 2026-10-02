@@ -341,6 +341,7 @@ export namespace authorization {
 	        this.permissions = source["permissions"];
 	    }
 	}
+
 	export class RoleChange {
 	    kind: string;
 	    expected_revision: number;
@@ -1087,6 +1088,7 @@ export namespace main {
 	export class SessionInfo {
 	    authorization_model: string;
 	    client_id: string;
+	    nickname: string;
 	    is_guest: boolean;
 	    connected: boolean;
 	    security: string;
@@ -1099,6 +1101,7 @@ export namespace main {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.authorization_model = source["authorization_model"];
 	        this.client_id = source["client_id"];
+	        this.nickname = source["nickname"];
 	        this.is_guest = source["is_guest"];
 	        this.connected = source["connected"];
 	        this.security = source["security"];
@@ -1109,6 +1112,7 @@ export namespace main {
 	    settings_version: number;
 	    bookmarks: Bookmark[];
 	    recents: RecentServer[];
+	    display_name?: string;
 	    always_on_top: boolean;
 	    minimize_to_tray: boolean;
 	    close_to_tray: boolean;
@@ -1233,6 +1237,7 @@ export namespace main {
 	        this.settings_version = source["settings_version"];
 	        this.bookmarks = this.convertValues(source["bookmarks"], Bookmark);
 	        this.recents = this.convertValues(source["recents"], RecentServer);
+	        this.display_name = source["display_name"];
 	        this.always_on_top = source["always_on_top"];
 	        this.minimize_to_tray = source["minimize_to_tray"];
 	        this.close_to_tray = source["close_to_tray"];
@@ -1370,6 +1375,7 @@ export namespace main {
 	    id: string;
 	    addr: string;
 	    nickname: string;
+	    display_name: string;
 	    connected: boolean;
 	    active: boolean;
 	    unread: number;
@@ -1384,6 +1390,7 @@ export namespace main {
 	        this.id = source["id"];
 	        this.addr = source["addr"];
 	        this.nickname = source["nickname"];
+	        this.display_name = source["display_name"];
 	        this.connected = source["connected"];
 	        this.active = source["active"];
 	        this.unread = source["unread"];

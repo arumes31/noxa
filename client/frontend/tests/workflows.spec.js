@@ -3854,8 +3854,8 @@ test("German menus translate remaining actions and bookmark dialogs", async ({ p
     await expect(dialog).toContainText("Noch keine Lesezeichen");
     await dialog.getByRole("button", { name: "Schließen", exact: true }).click();
     await page.getByRole("menuitem", { name: "Selbst", exact: true }).click();
-    await page.getByRole("menuitem", { name: "Spitznamen ändern…", exact: true }).click();
-    await expect(page.getByRole("dialog", { name: "Spitznamen ändern", exact: true })).toContainText("Spitzname für die nächste Verbindung:");
+    await page.getByRole("menuitem", { name: "Anzeigenamen ändern…", exact: true }).click();
+    await expect(page.getByRole("dialog", { name: "Anzeigenamen ändern", exact: true })).toContainText("Anzeigename");
     await page.getByRole("button", { name: "Abbrechen", exact: true }).click();
 });
 

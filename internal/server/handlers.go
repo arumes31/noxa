@@ -113,6 +113,13 @@ func (s *TCPServer) handleAuthenticate(ctx context.Context, client *Client, f *n
 	if !s.negotiateAuthorization(client, msg.AuthorizationModels) {
 		return s.rejectAuthorizationModel(client)
 	}
+	if msg.Nickname != "" {
+		name, err := netproto.NormalizeDisplayName(msg.Nickname)
+		if err != nil {
+			return s.writeMessage(client, netproto.MsgAuthResponse, netproto.AuthResponse{Reason: err.Error()})
+		}
+		msg.Nickname = name
+	}
 	// (133) the encryption key is captured before any auth path branches, so
 	// finishAuth can seal the global generation and the MOTD into the reply
 	// whichever path completes.
@@ -222,7 +229,7 @@ func (s *TCPServer) handleAuthenticate(ctx context.Context, client *Client, f *n
 		}
 	}
 	attempt.Succeed(principalScope)
-	return s.completeAuthForUser(ctx, client, user)
+	return s.completeAuthForUser(ctx, client, user, msg.Nickname)
 }
 
 func (s *TCPServer) verifyServerPassword(password, encodedHash string) error {
@@ -269,7 +276,7 @@ func (s *TCPServer) handleAuthSignature(ctx context.Context, client *Client, f *
 	}
 	defer attempt.Cancel()
 
-	challenge, _, ok := client.takeChallenge(msg.UniqueID)
+	challenge, nickname, ok := client.takeChallenge(msg.UniqueID)
 	if !ok {
 		attempt.Fail()
 		s.metricsSink().IncAuthFailure("tcp", "invalid_credentials")
@@ -296,7 +303,7 @@ func (s *TCPServer) handleAuthSignature(ctx context.Context, client *Client, f *
 	}
 
 	attempt.Succeed(principalScope)
-	return s.completeAuth(ctx, client, msg.UniqueID)
+	return s.completeAuth(ctx, client, msg.UniqueID, nickname)
 }
 
 // handleGuestSignature verifies a signature against the presented public
@@ -349,7 +356,7 @@ func (s *TCPServer) handleGuestSignature(ctx context.Context, client *Client, ms
 	// Registered user with this identity? Then it is a normal login.
 	if _, err := s.deps.Auth.LookupUser(ctx, uniqueID); err == nil {
 		attempt.Succeed(principalScope)
-		return s.completeAuth(ctx, client, uniqueID)
+		return s.completeAuth(ctx, client, uniqueID, nickname)
 	} else if !errors.Is(err, auth.ErrUserNotFound) {
 		s.logger.Warn("user lookup failed",
 			zap.String("client_id", client.ID),
@@ -362,7 +369,7 @@ func (s *TCPServer) handleGuestSignature(ctx context.Context, client *Client, ms
 	// ID stays canonical even though it differs from the key-derived one.
 	if user, err := s.deps.Auth.LookupUserByPublicKey(ctx, msg.PublicKey); err == nil {
 		attempt.Succeed(principalScope)
-		return s.completeAuthForUser(ctx, client, user)
+		return s.completeAuthForUser(ctx, client, user, nickname)
 	} else if !errors.Is(err, auth.ErrUserNotFound) {
 		s.logger.Warn("user lookup by public key failed",
 			zap.String("client_id", client.ID),
@@ -404,7 +411,7 @@ func (s *TCPServer) banRejectReason(ctx context.Context, client *Client, uniqueI
 
 // completeAuth finishes a successful registered-user authentication (any
 // method): it resolves the user record and calls completeAuthForUser.
-func (s *TCPServer) completeAuth(ctx context.Context, client *Client, uniqueID string) error {
+func (s *TCPServer) completeAuth(ctx context.Context, client *Client, uniqueID, displayName string) error {
 	user, err := s.deps.Auth.LookupUser(ctx, uniqueID)
 	if err != nil {
 		if errors.Is(err, auth.ErrUserNotFound) {
@@ -416,22 +423,25 @@ func (s *TCPServer) completeAuth(ctx context.Context, client *Client, uniqueID s
 		)
 		return s.writeMessage(client, netproto.MsgAuthResponse, netproto.AuthResponse{Reason: "internal error"})
 	}
-	return s.completeAuthForUser(ctx, client, user)
+	return s.completeAuthForUser(ctx, client, user, displayName)
 }
 
 // completeAuthForUser finishes authentication for an already-resolved user
-// record: the account's unique ID is the canonical identity, its nickname
-// the display name.
-func (s *TCPServer) completeAuthForUser(ctx context.Context, client *Client, user *auth.User) error {
+// record. A display name never changes the canonical account identity.
+func (s *TCPServer) completeAuthForUser(ctx context.Context, client *Client, user *auth.User, displayName string) error {
 	nickname := user.Nickname
+	if displayName != "" {
+		nickname = displayName
+	}
 	if nickname == "" {
 		nickname = user.UniqueID
 	}
 	return s.finishAuth(ctx, client, authIdentity{
-		uniqueID: user.UniqueID,
-		nickname: nickname,
-		userID:   user.ID,
-		bot:      user.IsBot,
+		uniqueID:   user.UniqueID,
+		nickname:   nickname,
+		userID:     user.ID,
+		bot:        user.IsBot,
+		customName: displayName != "",
 	})
 }
 
@@ -442,21 +452,22 @@ func (s *TCPServer) completeGuestAuth(ctx context.Context, client *Client, uniqu
 	if nickname == "" {
 		nickname = "guest"
 	}
-	nickname = s.dedupeNickname(nickname)
 	return s.finishAuth(ctx, client, authIdentity{
-		uniqueID: uniqueID,
-		nickname: nickname,
-		guest:    true,
+		uniqueID:   uniqueID,
+		nickname:   nickname,
+		guest:      true,
+		customName: true,
 	})
 }
 
 // authIdentity is the resolved identity of an authenticated client.
 type authIdentity struct {
-	uniqueID string
-	nickname string
-	userID   int64
-	bot      bool
-	guest    bool
+	uniqueID   string
+	nickname   string
+	userID     int64
+	bot        bool
+	guest      bool
+	customName bool
 }
 
 // finishAuth is the shared tail of all auth paths: record the identity,
@@ -489,6 +500,9 @@ func (s *TCPServer) finishAuth(ctx context.Context, client *Client, id authIdent
 		}
 		if rejection != "" {
 			return authorization.ErrRoleForbidden
+		}
+		if id.customName {
+			id.nickname = s.dedupeNickname(id.nickname)
 		}
 		client.setIdentity(id.uniqueID, id.nickname, id.userID, id.bot)
 		s.publishAuthenticatedSession(ctx, client, id)
@@ -809,7 +823,12 @@ func (s *TCPServer) dedupeNickname(nickname string) string {
 		return nickname
 	}
 	for i := 2; ; i++ {
-		candidate := fmt.Sprintf("%s#%d", nickname, i)
+		suffix := fmt.Sprintf("#%d", i)
+		base := []rune(nickname)
+		if limit := netproto.MaxDisplayNameLength - len(suffix); len(base) > limit {
+			base = base[:limit]
+		}
+		candidate := string(base) + suffix
 		if !taken[candidate] {
 			return candidate
 		}
@@ -1243,7 +1262,7 @@ func (s *TCPServer) sendSessionChat(ctx context.Context, client *Client, f *netp
 		ChannelID:    msg.ChannelID,
 		FromClientID: client.ID,
 		FromUniqueID: client.UniqueID,
-		From:         client.Username,
+		From:         client.nickname(),
 		Text:         msg.Text,
 		Enc:          msg.Enc,
 		KeyID:        msg.KeyID,

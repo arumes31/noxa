@@ -8,7 +8,7 @@ inventory describes source contracts, not a deployment or physical-device test.
 
 | Surface | Current contract | Remaining work |
 | --- | --- | --- |
-| Session snapshots, login/reconnect and cached metadata | Expected-tab snapshots include the negotiated authorization model; activation defers legacy queries while identity is pending. Tray reconnect freezes source and destination before its native status read; see `native-session-state.md` | End-to-end cutover rehearsal. |
+| Session snapshots, login/reconnect and cached metadata | Expected-tab snapshots include the negotiated authorization model and actual public nickname. Named logins and live display-name acknowledgements keep the account login and identity unchanged; reconnect retains the requested name. Activation defers legacy queries while identity is pending. Tray reconnect freezes source and destination before its native status read; see `native-session-state.md` | End-to-end cutover rehearsal. |
 | Rules acceptance/decline, subscriptions, avatars | Expected-tab reads/writes; decline closes the exact tab; rules/subscriptions use authoritative events | Complete. Native write success is submission, not acceptance. |
 | Role/member/channel/access/voice editors and audit viewer | Expected-tab methods and guarded editor lifecycle | Final human UX and threat review with the complete role workflow. |
 | Chat history, typing, receipts, sends and mutations | Captured connections; role-mode sends distinguish stored/relayed/queued outcomes; see `native-chat-reads.md` | End-to-end cutover rehearsal. |

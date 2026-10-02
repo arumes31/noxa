@@ -140,6 +140,12 @@ func (c *Client) setIdentity(uniqueID, nickname string, userID int64, bot bool) 
 	c.authed = true
 }
 
+func (c *Client) nickname() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.Username
+}
+
 func (c *Client) userID() int64 {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
@@ -1018,6 +1024,8 @@ func (s *TCPServer) dispatch(ctx context.Context, client *Client, f *netproto.Fr
 		return s.handleServerBannerGet(ctx, client, f)
 	case netproto.MsgSetStatus:
 		return s.handleSetStatus(ctx, client, f)
+	case netproto.MsgDisplayNameSet:
+		return s.handleDisplayNameSet(ctx, client, f)
 	case netproto.MsgPoke:
 		return s.handlePoke(ctx, client, f)
 	case netproto.MsgServerInfoQuery:
@@ -1242,13 +1250,13 @@ func (s *TCPServer) onDisconnect(client *Client) {
 			s.broadcastToAdmins(eventUserLeft, userEvent{
 				ClientID: client.ID,
 				UniqueID: client.UniqueID,
-				Nickname: client.Username,
+				Nickname: client.nickname(),
 			})
 		} else {
 			s.broadcastEvent(eventUserLeft, userEvent{
 				ClientID: client.ID,
 				UniqueID: client.UniqueID,
-				Nickname: client.Username,
+				Nickname: client.nickname(),
 			})
 		}
 	}

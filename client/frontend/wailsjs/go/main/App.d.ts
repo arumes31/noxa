@@ -114,6 +114,8 @@ export function ConnectGuestBookmarkTabWithID(arg1:string,arg2:string,arg3:strin
 
 export function ConnectGuestTab(arg1:string,arg2:string):Promise<string>;
 
+export function ConnectNamedBookmarkTabWithID(arg1:string,arg2:string,arg3:string,arg4:string,arg5:string,arg6:string):Promise<main.ConnectTabResult>;
+
 export function ConnectTab(arg1:string,arg2:string,arg3:string,arg4:string):Promise<string>;
 
 export function Connected():Promise<boolean>;
@@ -423,6 +425,8 @@ export function SetAvatar(arg1:string):Promise<string>;
 export function SetAvatarForTab(arg1:string,arg2:string):Promise<string>;
 
 export function SetDebugFrames(arg1:boolean):Promise<void>;
+
+export function SetDisplayNameForTab(arg1:string,arg2:string):Promise<string>;
 
 export function SetHotkey(arg1:string,arg2:string):Promise<string>;
 

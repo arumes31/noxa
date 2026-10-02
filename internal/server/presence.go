@@ -187,7 +187,7 @@ func (s *TCPServer) sendPoke(ctx context.Context, client, target *Client, msg ne
 
 	payload, err := eventEnvelope(eventPoke, pokeEvent{
 		FromClientID: client.ID,
-		FromNickname: client.Username,
+		FromNickname: client.nickname(),
 		Message:      msg.Message,
 	})
 	if err != nil {

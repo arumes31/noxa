@@ -818,6 +818,18 @@ func (m *Manager) SetE2EPublicKey(clientID, publicKey string) {
 	}
 }
 
+// SetNickname changes a session's public name without changing its identity.
+func (m *Manager) SetNickname(clientID, nickname string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	c, ok := m.clients[clientID]
+	if !ok {
+		return false
+	}
+	c.Nickname = nickname
+	return true
+}
+
 // SetStatus updates the client's presence status and message (wave 8b). It
 // is a no-op for unknown clients.
 func (m *Manager) SetStatus(clientID, status, message string) {

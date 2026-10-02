@@ -85,7 +85,9 @@ const en = {
     "common.create": "Create",
     "common.apply": "Apply",
     "login.server": "SERVER",
-    "login.nickname": "NICKNAME",
+    "login.nickname": "Account login / guest name",
+    "login.displayName": "Display name (optional)",
+    "login.displayNameHint": "Visible to everyone. Your account login stays unchanged.",
     "login.serverPassword": "Server password (optional)",
     "login.accountPassword": "Account password (optional)",
     "login.connect": "CONNECT",
@@ -160,7 +162,9 @@ const de = {
     "common.create": "Erstellen",
     "common.apply": "Anwenden",
     "login.server": "SERVER",
-    "login.nickname": "SPITZNAME",
+    "login.nickname": "Konto-Login / Gastname",
+    "login.displayName": "Anzeigename (optional)",
+    "login.displayNameHint": "Für alle sichtbar. Dein Konto-Login bleibt unverändert.",
     "login.serverPassword": "Server-Passwort (optional)",
     "login.accountPassword": "Konto-Passwort (optional)",
     "login.connect": "VERBINDEN",
@@ -259,11 +263,12 @@ export function applyStaticLabels() {
         }
     };
     const loginLabels = document.querySelectorAll(".login-card label");
-    const keys = ["login.server", "login.nickname", "login.accountPassword", "login.serverPassword"];
+    const keys = ["login.server", "login.nickname", "login.displayName", "login.accountPassword", "login.serverPassword"];
     loginLabels.forEach((l, i) => {
         if (keys[i] && l.firstChild) l.firstChild.textContent = t(keys[i]) + " ";
     });
     const btn = document.getElementById("login-connect");
+    set("login-display-name-hint", "login.displayNameHint");
     if (btn) btn.textContent = t("login.connect");
     const recentsHead = [...document.querySelectorAll(".login-card .pane-head")].pop();
     if (recentsHead) recentsHead.textContent = t("login.recentServers");

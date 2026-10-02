@@ -406,7 +406,7 @@ func (s *TCPServer) onSpeakingChanged(clientID string, speaking bool) {
 	ev := whisperEvent{FromClientID: clientID, ChannelID: stateClient.ChannelID, Speaking: speaking}
 	if c, ok := s.clientByID(clientID); ok {
 		ev.FromUniqueID = c.uniqueID()
-		ev.FromNickname = c.Username
+		ev.FromNickname = c.nickname()
 	}
 	payload, err := eventEnvelope(eventWhisper, ev)
 	if err != nil {

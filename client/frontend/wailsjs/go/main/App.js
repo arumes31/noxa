@@ -222,6 +222,10 @@ export function ConnectGuestTab(arg1, arg2) {
   return window['go']['main']['App']['ConnectGuestTab'](arg1, arg2);
 }
 
+export function ConnectNamedBookmarkTabWithID(arg1, arg2, arg3, arg4, arg5, arg6) {
+  return window['go']['main']['App']['ConnectNamedBookmarkTabWithID'](arg1, arg2, arg3, arg4, arg5, arg6);
+}
+
 export function ConnectTab(arg1, arg2, arg3, arg4) {
   return window['go']['main']['App']['ConnectTab'](arg1, arg2, arg3, arg4);
 }
@@ -840,6 +844,10 @@ export function SetAvatarForTab(arg1, arg2) {
 
 export function SetDebugFrames(arg1) {
   return window['go']['main']['App']['SetDebugFrames'](arg1);
+}
+
+export function SetDisplayNameForTab(arg1, arg2) {
+  return window['go']['main']['App']['SetDisplayNameForTab'](arg1, arg2);
 }
 
 export function SetHotkey(arg1, arg2) {

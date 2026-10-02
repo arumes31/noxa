@@ -63,6 +63,7 @@ body {
 #login-overlay {
     position: fixed; inset: 0; z-index: 30;
     display: flex; align-items: center; justify-content: center;
+    overflow-y: auto; padding: 16px;
     background:
         radial-gradient(1200px 600px at 20% -10%, rgba(46, 230, 168, 0.05), transparent 60%),
         radial-gradient(900px 500px at 90% 110%, rgba(240, 179, 90, 0.04), transparent 55%),
@@ -70,6 +71,7 @@ body {
 }
 .login-card {
     width: 360px; padding: 32px;
+    max-width: 100%; margin: auto; flex-shrink: 0;
     background: var(--bg-raised);
     border: 1px solid var(--border);
     border-radius: 12px;
@@ -79,6 +81,7 @@ body {
     transition: opacity .35s ease, transform .35s ease;
 }
 .login-card.in { opacity: 1; transform: translateY(0); }
+#login-display-name-hint { margin: -6px 0 0; font-size: .7857rem; color: var(--text-dim); line-height: 1.4; }
 .login-card .wordmark { margin: 0; font-size: 2.4286rem; }
 .login-card label {
     display: flex; flex-direction: column; gap: 5px;

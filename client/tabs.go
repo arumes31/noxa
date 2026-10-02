@@ -31,13 +31,14 @@ type ConnectTabResult struct {
 
 // TabInfo describes one server tab for the tab bar.
 type TabInfo struct {
-	ID        string `json:"id"`
-	Addr      string `json:"addr"`
-	Nickname  string `json:"nickname"`
-	Connected bool   `json:"connected"`
-	Active    bool   `json:"active"`
-	Unread    int    `json:"unread"`
-	Mentions  int    `json:"mentions"`
+	ID          string `json:"id"`
+	Addr        string `json:"addr"`
+	Nickname    string `json:"nickname"`
+	DisplayName string `json:"display_name"`
+	Connected   bool   `json:"connected"`
+	Active      bool   `json:"active"`
+	Unread      int    `json:"unread"`
+	Mentions    int    `json:"mentions"`
 }
 
 // journalEntry is one buffered state-carrying event of a background tab.
@@ -486,6 +487,7 @@ func (a *App) ListTabs() []TabInfo {
 			ts.cm.mu.Lock()
 			addr, nickname := ts.cm.addr, ts.cm.nickname
 			ts.cm.mu.Unlock()
+			info.DisplayName = nickname
 			if info.Addr == "" {
 				info.Addr = addr
 			}
@@ -506,15 +508,19 @@ func (a *App) ConnectTab(addr, nickname, password, serverPassword string) string
 }
 
 // ConnectBookmarkTab is ConnectTab with the originating bookmark's Name.
-// Bookmarks must be identified explicitly: a nickname override (334)
-// replaces the login nickname before connecting, so addr+nickname no longer
-// identifies the bookmark that per-server settings (300/335) belong to.
+// Bookmarks are identified explicitly so their per-server settings remain
+// associated with the account login when its public display name changes.
 func (a *App) ConnectBookmarkTab(bookmark, addr, nickname, password, serverPassword string) string {
 	return a.ConnectBookmarkTabWithID(bookmark, addr, nickname, password, serverPassword).Error
 }
 
 // ConnectBookmarkTabWithID connects in a new tab and returns that tab's ID.
 func (a *App) ConnectBookmarkTabWithID(bookmark, addr, nickname, password, serverPassword string) ConnectTabResult {
+	return a.ConnectNamedBookmarkTabWithID(bookmark, addr, nickname, "", password, serverPassword)
+}
+
+// ConnectNamedBookmarkTabWithID keeps the account login separate from its public display name.
+func (a *App) ConnectNamedBookmarkTabWithID(bookmark, addr, nickname, displayName, password, serverPassword string) ConnectTabResult {
 	if addr == "" || nickname == "" {
 		return ConnectTabResult{Error: "server address and nickname are required"}
 	}
@@ -522,7 +528,7 @@ func (a *App) ConnectBookmarkTabWithID(bookmark, addr, nickname, password, serve
 	if identityErr != nil {
 		return ConnectTabResult{Error: identityErr.Error()}
 	}
-	err := ts.cm.connect(addr, nickname, password, serverPassword)
+	err := ts.cm.connectNamed(addr, nickname, displayName, password, serverPassword)
 	if err != "" {
 		a.removeTab(id)
 		if err == errFingerprintMismatch.Error() {
