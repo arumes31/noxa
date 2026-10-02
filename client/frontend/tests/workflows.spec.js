@@ -9864,7 +9864,9 @@ test("uses grouped, distinct action sounds without replaying historical tab acti
         const { soundEngine } = window.__noxa;
         await soundEngine.preload();
         await soundEngine.resume();
-        if (soundEngine.buffers.size !== 55 || soundEngine.ctx.state !== "running") throw new Error(JSON.stringify({ buffers: soundEngine.buffers.size, state: soundEngine.ctx.state, warnings: [...soundEngine.warnings] }));
+        const expectedSounds = Object.keys(soundEngine.definitions);
+        const missingSounds = expectedSounds.filter(name => !soundEngine.buffers.has(name));
+        if (missingSounds.length || soundEngine.buffers.size !== expectedSounds.length || soundEngine.ctx.state !== "running") throw new Error(JSON.stringify({ buffers: soundEngine.buffers.size, expected: expectedSounds.length, missing: missingSounds, state: soundEngine.ctx.state, warnings: [...soundEngine.warnings] }));
         let clock = 0;
         soundEngine.now = () => clock += 1000;
         const originalSource = soundEngine.ctx.createBufferSource.bind(soundEngine.ctx);
@@ -10072,7 +10074,9 @@ test("scopes connection failures and active-tab close sounds", async ({ page }) 
         const { soundEngine } = window.__noxa;
         await soundEngine.preload();
         await soundEngine.resume();
-        if (soundEngine.buffers.size !== 55 || soundEngine.ctx.state !== "running") throw new Error(JSON.stringify({ buffers: soundEngine.buffers.size, state: soundEngine.ctx.state, warnings: [...soundEngine.warnings] }));
+        const expectedSounds = Object.keys(soundEngine.definitions);
+        const missingSounds = expectedSounds.filter(name => !soundEngine.buffers.has(name));
+        if (missingSounds.length || soundEngine.buffers.size !== expectedSounds.length || soundEngine.ctx.state !== "running") throw new Error(JSON.stringify({ buffers: soundEngine.buffers.size, expected: expectedSounds.length, missing: missingSounds, state: soundEngine.ctx.state, warnings: [...soundEngine.warnings] }));
         let clock = 0;
         soundEngine.now = () => clock += 1000;
         const originalSource = soundEngine.ctx.createBufferSource.bind(soundEngine.ctx);
