@@ -619,7 +619,7 @@ test("member context menu assigns a role to the preselected target using the key
     await target.focus(); await page.keyboard.press("Shift+F10");
     const assign = page.getByRole("menuitem", { name: "Assign roles…", exact: true });
     await expect(assign).toBeVisible();
-    await page.keyboard.press("ArrowDown");
+    await page.keyboard.press("ArrowDown"); await page.keyboard.press("ArrowDown");
     await expect(assign).toBeFocused();
     await page.keyboard.press("Enter");
     const dialog = page.getByRole("dialog", { name: "Members", exact: true });

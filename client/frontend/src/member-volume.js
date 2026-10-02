@@ -4,7 +4,7 @@ import { getUserShareVolume, setUserShareVolume, onShareAudioChange } from "./au
 
 export function bindMemberShareVolume(slider, output, reset, uid) {
     let saving = false, editing = false;
-    const show = () => { output.textContent = `${slider.value}%`; slider.setAttribute("aria-valuetext", output.textContent); };
+    const show = () => showVolume(slider, output, `${slider.value}%`);
     const refresh = () => { if (!saving && !editing) { slider.value = Math.round(getUserShareVolume(uid) * 100); show(); } };
     slider.setAttribute("aria-label", t("context.shareVolume"));
     slider.oninput = () => { editing = true; show(); };
@@ -13,11 +13,12 @@ export function bindMemberShareVolume(slider, output, reset, uid) {
         if (saving) return;
         const focused = document.activeElement;
         saving = true; slider.disabled = reset.disabled = true;
+        if (output.tagName === "INPUT") output.disabled = true;
         try { await setUserShareVolume(uid, Number(slider.value)); }
         catch (error) { if (slider.isConnected) window.__noxa.toast(String(error), "error"); }
         finally {
             saving = editing = false; slider.disabled = reset.disabled = false; refresh();
-            if ((focused === slider || focused === reset) && focused.isConnected && document.activeElement === document.body) focused.focus();
+            if ((focused === slider || focused === reset || focused === output) && focused.isConnected && document.activeElement === document.body) focused.focus();
         }
     };
     reset.onclick = () => { slider.value = "100"; show(); void slider.onchange(); };
@@ -29,7 +30,7 @@ export function bindMemberVolume(slider, output, reset, uid, { format = value =>
     const owner = Symbol("volume preview");
     let saving = false;
     let editing = false;
-    const show = () => { output.textContent = format(slider.value); slider.setAttribute("aria-valuetext", output.textContent); };
+    const show = () => showVolume(slider, output, format(slider.value));
     const refresh = () => { if (!saving && !editing) { slider.value = Math.round(getUserVolume(uid) * 100); show(); } };
     const restore = () => { editing = false; clearUserVolumePreview(uid, owner); refresh(); };
     restore();
@@ -40,12 +41,13 @@ export function bindMemberVolume(slider, output, reset, uid, { format = value =>
         if (saving) return;
         const focused = document.activeElement;
         saving = true; slider.disabled = reset.disabled = true;
+        if (output.tagName === "INPUT") output.disabled = true;
         onSave?.();
         try { await setUserVolume(uid, Number(slider.value)); }
         catch (error) { if (slider.isConnected) { if (onError) onError(error); else window.__noxa.toast(String(error), "error"); } }
         finally {
             saving = false; slider.disabled = reset.disabled = false; restore();
-            if ((focused === slider || focused === reset) && focused.isConnected && document.activeElement === document.body) focused.focus();
+            if ((focused === slider || focused === reset || focused === output) && focused.isConnected && document.activeElement === document.body) focused.focus();
         }
     };
     reset.onclick = () => { slider.value = "100"; slider.oninput(); void slider.onchange(); };
@@ -54,4 +56,12 @@ export function bindMemberVolume(slider, output, reset, uid, { format = value =>
     dispose.refresh = refresh;
     dispose.cancel = restore;
     return dispose;
+}
+
+function showVolume(slider, output, text) {
+    if (output.tagName === "INPUT") { output.value = slider.value; output.disabled = slider.disabled; }
+    else output.textContent = text;
+    const amplified = Number(slider.value) > 100;
+    slider.closest(".ctx-audio-group")?.classList.toggle("amplified", amplified);
+    slider.setAttribute("aria-valuetext", amplified ? `${text} · ${t("context.amplified")}` : text);
 }

@@ -35,7 +35,7 @@ export function mountContextMenu(menu, { x, y, trigger = document.activeElement,
     const bounds = menu.getBoundingClientRect();
     menu.style.left = `${Math.max(gap, Math.min(x ?? anchor?.left ?? gap, innerWidth - bounds.width - gap))}px`;
     menu.style.top = `${Math.max(gap, Math.min(y ?? anchor?.bottom ?? gap, innerHeight - bounds.height - gap))}px`;
-    const items = () => [...menu.querySelectorAll('[role="menuitem"], input')].filter(item => !item.disabled && item.getAttribute("aria-disabled") !== "true" && !item.hidden);
+    const items = () => [...menu.querySelectorAll('[role="menuitem"], input')].filter(item => !item.matches(":disabled") && item.getAttribute("aria-disabled") !== "true" && !item.hidden);
     menu.addEventListener("click", event => event.stopPropagation(), { signal: events.signal });
     // Saving temporarily disables range inputs and can move focus to body.
     // Escape must still dismiss the menu and return to its original control.

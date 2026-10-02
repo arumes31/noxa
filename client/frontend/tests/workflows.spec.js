@@ -4535,8 +4535,8 @@ test("B3 participant strip follows live channel membership and opens member cont
     await expect(strip.locator(".participant-menu")).toHaveCount(4);
     await strip.getByRole("button", { name: /Mia.*speaking/ }).click();
     await expect(page.locator("#client-card .card-nick")).toHaveText("Mia");
-    await page.getByRole("slider", { name: "Microphone volume · Only for you" }).fill("75");
-    await page.getByRole("slider", { name: "Microphone volume · Only for you" }).press("Tab");
+    await page.getByRole("slider", { name: "Voice volume" }).fill("75");
+    await page.getByRole("slider", { name: "Voice volume" }).press("Tab");
     await expect.poll(() => page.evaluate(() => window.__savedSettings?.user_volumes?.["uid-mia"])).toBe(75);
     await page.getByRole("button", { name: "Message Mia", exact: true }).click();
     await expect(page.locator("#chat-head-title")).toContainText("Mia");
@@ -4670,7 +4670,7 @@ test("B3 restores the persisted member volume after a failed save", async ({ pag
         });
     });
     await page.locator('#voice-participants [data-client-id="mia"]').click();
-    const slider = page.getByRole("slider", { name: "Microphone volume · Only for you" });
+    const slider = page.getByRole("slider", { name: "Voice volume" });
     await slider.fill("75");
     await expect.poll(() => page.evaluate(() => window.__noxa.state.settings.user_volumes?.["uid-mia"])).toBe(75);
     await page.evaluate(() => { window.__failVolumeSave = true; });
@@ -4693,12 +4693,12 @@ test("B3 ignores a volume save failure after selecting another member", async ({
         });
     });
     await page.locator('#voice-participants [data-client-id="mia"]').click();
-    await page.getByRole("slider", { name: "Microphone volume · Only for you" }).fill("150");
+    await page.getByRole("slider", { name: "Voice volume" }).fill("150");
     await expect.poll(() => page.evaluate(() => typeof window.__finishVolumeSave)).toBe("function");
     await page.locator('#voice-participants [data-client-id="alex"]').click();
     await page.evaluate(() => window.__finishVolumeSave("disk full"));
     await expect(page.locator("#client-card .card-nick")).toHaveText("Alex");
-    await expect(page.getByRole("slider", { name: "Microphone volume · Only for you" })).toHaveValue("100");
+    await expect(page.getByRole("slider", { name: "Voice volume" })).toHaveValue("100");
     await expect(page.locator("#member-volume-value")).toHaveText("100%");
     await expect(page.locator("#member-action-error")).toBeHidden();
 });
