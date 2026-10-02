@@ -280,9 +280,16 @@ the capability. Startup controls remain available for offline configuration.
 - Channel Opus bitrate/FEC/DTX/stereo are audio settings, not permission powers.
 - Receive quality (`high`, `mid`, `low`) selects an available simulcast layer with
   fallback. A layer name is not proof of its encoded resolution or bitrate.
-- Client screen presets request 720p or 1080p capture and set sender bitrate
-  preferences. Low-bandwidth mode applies an additional local cap. These are
-  cooperative encoder controls.
+- Channel screen-share presets offer 720p, 1080p, 1440p and 4K. Original source
+  resolution leaves capture dimensions unrestricted except for server bounds;
+  Custom accepts 160–8192 pixels per dimension and 15, 30 or 60 fps. The source
+  keeps its aspect ratio. 1440p uses a 10 Mbit/s video budget; 4K and Original use
+  20 Mbit/s. Custom budgets scale with pixels and frame rate, capped at 40 Mbit/s.
+  The dialog shows the budget and approximate GB/hour at that rate (excluding
+  audio and protocol overhead), with a CPU/GPU and traffic warning for demanding
+  settings. Low-bandwidth mode and server limits remain additional caps. Actual
+  sent dimensions are shown separately in the sharing status; presets are
+  cooperative encoder controls, not guarantees of delivered quality.
 - The retired `b_client_issue_screenshare_1080p` switch checked only the
   client's declared capture height. ShareScreen now authorizes publication,
   and the independent bounds above enforce encoded VP8 dimensions.

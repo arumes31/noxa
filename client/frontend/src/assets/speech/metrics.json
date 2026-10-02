@@ -19,12 +19,12 @@
   },
   "en/kicked_channel": {
     "title": "noXa — kicked_channel",
-    "text": "You were removed from the channel.",
-    "duration": 1.555736961451247,
+    "text": "You were kicked from the channel.",
+    "duration": 1.4396371882086167,
     "sampleRate": 22050,
     "peak": 0.114990234375,
-    "rmsDB": -35.36414328026632,
-    "sha256": "9a3411e3591a6cd822c74358028cc17890fed4bb846ae2b12ac3cc533f92e940"
+    "rmsDB": -36.98466847309382,
+    "sha256": "0ca888dbe3509b5198e915e1b4b8cbec77052f07af874591d753401cf8bc315d"
   },
   "en/connection_lost": {
     "title": "noXa — connection_lost",
@@ -55,12 +55,12 @@
   },
   "en/moved_by_admin": {
     "title": "noXa — moved_by_admin",
-    "text": "You were moved to another channel.",
-    "duration": 1.8575963718820863,
+    "text": "You were moved.",
+    "duration": 0.9520181405895691,
     "sampleRate": 22050,
     "peak": 0.114990234375,
-    "rmsDB": -34.837699251230646,
-    "sha256": "bc65610e7992ff4e57891fe7a244df4eec350136c068a07205056cc0b052a866"
+    "rmsDB": -32.911206381719175,
+    "sha256": "15b4a018edaf69b9dce9a2c556c667ce07d82e0dcf4121c4950d051854140e67"
   },
   "en/server_shutdown": {
     "title": "noXa — server_shutdown",
@@ -101,11 +101,11 @@
   "de/kicked_channel": {
     "title": "noXa — kicked_channel",
     "text": "Du wurdest aus dem Channel entfernt.",
-    "duration": 1.7229024943310658,
+    "duration": 1.7473922902494332,
     "sampleRate": 22050,
     "peak": 0.114990234375,
-    "rmsDB": -33.27137787011289,
-    "sha256": "df0bd0662903f079b6192b28b64854ccf2df9463be94f67f53e312ce5ca2b45a"
+    "rmsDB": -32.41992949970273,
+    "sha256": "61e9cf98d2f5165727e62b65aaa5c3b8769ac3436e7ebbf62341397f063597ce"
   },
   "de/connection_lost": {
     "title": "noXa — connection_lost",
@@ -136,12 +136,12 @@
   },
   "de/moved_by_admin": {
     "title": "noXa — moved_by_admin",
-    "text": "Du wurdest in einen anderen Channel verschoben.",
-    "duration": 2.1452154195011337,
+    "text": "Du wurdest verschoben.",
+    "duration": 1.1711111111111112,
     "sampleRate": 22050,
     "peak": 0.114990234375,
-    "rmsDB": -32.887362990337415,
-    "sha256": "bea3bca95a609f1aff168669e853ddacd35c87339f07abec50d22d20dcc2dc23"
+    "rmsDB": -33.46657614282184,
+    "sha256": "814592210907a75f9fb3ece7ed1e04f41bc52cbc9a775459c912da823b773bbd"
   },
   "de/server_shutdown": {
     "title": "noXa — server_shutdown",
@@ -196,5 +196,77 @@
     "peak": 0.114990234375,
     "rmsDB": -32.40135178067319,
     "sha256": "5a217b9308968a7fefa50b46bc82e51ce13773709488d63ea298e8581c164e79"
+  },
+  "en/user_kicked": {
+    "title": "noXa — user_kicked",
+    "text": "User was kicked from the server.",
+    "duration": 1.7647165532879818,
+    "sampleRate": 22050,
+    "peak": 0.114990234375,
+    "rmsDB": -35.01707352709054,
+    "sha256": "a39ecb410e6d9312b4021d658120d58e08f333d9f14fb47c26560b17b8a2eccf"
+  },
+  "en/user_kicked_channel": {
+    "title": "noXa — user_kicked_channel",
+    "text": "User was kicked from the channel.",
+    "duration": 1.7298866213151927,
+    "sampleRate": 22050,
+    "peak": 0.114990234375,
+    "rmsDB": -33.51012014205848,
+    "sha256": "a02260502db6908779f67e73e90db29c822b70b59d3f9b1e350344b7c7d350f2"
+  },
+  "en/channel_join": {
+    "title": "noXa — channel_join",
+    "text": "Channel joined.",
+    "duration": 1.172607709750567,
+    "sampleRate": 22050,
+    "peak": 0.114990234375,
+    "rmsDB": -37.640057005093496,
+    "sha256": "a786e7ff48ba3a067970fda0602d8a2cfff08063d8dfa82d05c7edad9e6386d2"
+  },
+  "de/user_kicked": {
+    "title": "noXa — user_kicked",
+    "text": "Ein Benutzer wurde vom Server entfernt.",
+    "duration": 2.1589115646258503,
+    "sampleRate": 22050,
+    "peak": 0.114990234375,
+    "rmsDB": -32.62531576888684,
+    "sha256": "91151d94287e329c417a4c1b1e4edf31953318a1646cf8aa4849f2f9582908c7"
+  },
+  "de/user_kicked_channel": {
+    "title": "noXa — user_kicked_channel",
+    "text": "Ein Benutzer wurde aus dem Channel entfernt.",
+    "duration": 2.0755102040816324,
+    "sampleRate": 22050,
+    "peak": 0.114990234375,
+    "rmsDB": -32.65652123572846,
+    "sha256": "aef558dd428ade29ea6014bb38c992c0076c2e80908dba4d11459e1da24a3ade"
+  },
+  "de/channel_join": {
+    "title": "noXa — channel_join",
+    "text": "Channel betreten.",
+    "duration": 1.0578684807256236,
+    "sampleRate": 22050,
+    "peak": 0.114990234375,
+    "rmsDB": -33.94535497647689,
+    "sha256": "f2d88308a021e94c2a05351389764762e14aeea185f38ece61db4fe6eaa0996e"
+  },
+  "en/user_moved_out": {
+    "title": "noXa — user_moved_out",
+    "text": "User was moved from your channel.",
+    "duration": 1.8924263038548752,
+    "sampleRate": 22050,
+    "peak": 0.114990234375,
+    "rmsDB": -34.694205020320304,
+    "sha256": "0e71870ee42d4f36ddb14a6f6923e878be3f16de087c2f5a1f76f26d30542a99"
+  },
+  "de/user_moved_out": {
+    "title": "noXa — user_moved_out",
+    "text": "Ein Benutzer wurde aus deinem Channel verschoben.",
+    "duration": 2.125759637188209,
+    "sampleRate": 22050,
+    "peak": 0.114990234375,
+    "rmsDB": -32.43154249845253,
+    "sha256": "18f752cac2790c20a6d04601bc56edfe4950dfd166b4247b21d08ba0e598c952"
   }
 }

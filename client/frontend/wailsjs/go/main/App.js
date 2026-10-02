@@ -18,6 +18,10 @@ export function ApplyHotkeyProfile(arg1) {
   return window['go']['main']['App']['ApplyHotkeyProfile'](arg1);
 }
 
+export function ApplyIdentityProtection() {
+  return window['go']['main']['App']['ApplyIdentityProtection']();
+}
+
 export function AuditLog(arg1, arg2) {
   return window['go']['main']['App']['AuditLog'](arg1, arg2);
 }
@@ -26,12 +30,20 @@ export function AuditLogForTab(arg1, arg2, arg3) {
   return window['go']['main']['App']['AuditLogForTab'](arg1, arg2, arg3);
 }
 
+export function BackupIdentity(arg1) {
+  return window['go']['main']['App']['BackupIdentity'](arg1);
+}
+
 export function BanList() {
   return window['go']['main']['App']['BanList']();
 }
 
 export function BanListForTab(arg1) {
   return window['go']['main']['App']['BanListForTab'](arg1);
+}
+
+export function CancelIdentityLevel(arg1) {
+  return window['go']['main']['App']['CancelIdentityLevel'](arg1);
 }
 
 export function CancelTransfer(arg1) {
@@ -672,6 +684,14 @@ export function RemoveRoleBanForTab(arg1, arg2) {
 
 export function RenameIdentity(arg1, arg2) {
   return window['go']['main']['App']['RenameIdentity'](arg1, arg2);
+}
+
+export function ResetIdentity(arg1, arg2) {
+  return window['go']['main']['App']['ResetIdentity'](arg1, arg2);
+}
+
+export function RestoreIdentity() {
+  return window['go']['main']['App']['RestoreIdentity']();
 }
 
 export function RoleChange(arg1) {

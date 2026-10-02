@@ -105,6 +105,10 @@ func (s *Store) PrepareRolePolicy(ctx context.Context, ownerID int64) (_ authori
 // checks, hierarchy comparisons, revision changes and auditing share this lock
 // and transaction; a rejected or stale operation cannot partially apply.
 func (s *Store) ChangeRolePolicy(ctx context.Context, actorID int64, change authorization.RoleChange) (_ authorization.RolePolicy, retErr error) {
+	return s.changeRolePolicy(ctx, actorID, change, nil)
+}
+
+func (s *Store) changeRolePolicy(ctx context.Context, actorID int64, change authorization.RoleChange, guest *roleGuestIdentity) (_ authorization.RolePolicy, retErr error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return authorization.RolePolicy{}, err
@@ -113,6 +117,11 @@ func (s *Store) ChangeRolePolicy(ctx context.Context, actorID int64, change auth
 	before, err := readRolePolicy(ctx, tx, true)
 	if err != nil {
 		return authorization.RolePolicy{}, err
+	}
+	if guest != nil {
+		if err := enrollRoleGuest(ctx, tx, guest, &change); err != nil {
+			return authorization.RolePolicy{}, err
+		}
 	}
 	if change.Kind == authorization.RoleCreate {
 		if change.Role.ID != 0 {

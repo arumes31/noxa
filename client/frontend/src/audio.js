@@ -28,6 +28,21 @@ export function createRemoteAudioSource(context, track) {
     return { src, playback };
 }
 
+// Sample decoded audio before user volume/mute. Chromium can report a zero
+// RTP audioLevel when the muted media element feeds playback through WebAudio.
+// The source owns this branch; disconnecting it releases the sampler input.
+export function createAudioLevelSampler(context, source) {
+    const analyser = context.createAnalyser();
+    analyser.fftSize = 512;
+    source.connect(analyser);
+    const samples = new Float32Array(analyser.fftSize);
+    return () => {
+        if (context.state !== "running") return null;
+        analyser.getFloatTimeDomainData(samples);
+        return Math.min(1, Math.sqrt(samples.reduce((sum, value) => sum + value * value, 0) / samples.length));
+    };
+}
+
 // Keep the voice-bar action aligned with what the next activation will do.
 // A pressed mute button offers t("voice.unmute") to both pointer and screen-reader
 // users instead of continuing to announce the state-changing action as Mute.

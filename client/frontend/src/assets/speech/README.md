@@ -2,8 +2,8 @@
 
 These WAVs are rendered during development. The shipped client only loads and
 plays them. No voice models, TTS engine, dynamic text or network TTS is packaged.
-English and German each contain nine fixed phrases, including the preview and
-separate channel/server removal messages. Source text: tools/speech-lines.json.
+English and German include fixed phrases for channel activity, forced moves,
+channel/server removal and a preview. Source text: tools/speech-lines.json.
 
 ## Sources and redistribution
 

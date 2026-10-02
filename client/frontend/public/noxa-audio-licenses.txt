@@ -1,7 +1,12 @@
 noXa audio sources and redistribution
 
-Effects: CC0-1.0. noXa edits are also dedicated under CC0-1.0.
+Sample-based effects: CC0-1.0. noXa edits of these samples are also dedicated under CC0-1.0.
 https://creativecommons.org/publicdomain/zero/1.0/legalcode
+
+Poke (G05): "Wake up!" rendered locally with Microsoft David Desktop using
+Windows System.Speech, followed by an original synthesized double beep.
+This recording is separate from the CC0 sample libraries listed below.
+The checked-in WAV is used directly; no Windows voice engine is shipped.
 
 Source archives and each edit are identified in the repository at:
 client/frontend/src/assets/sounds/provenance.json

@@ -1,6 +1,7 @@
 // settings-ui.js — TS3-style settings dialog with left icon nav.
 import { icon } from "./icons.js";
 import { gamingOverlaySettings } from "./gaming-overlay-settings.js";
+import { securitySettings } from "./security-settings.js";
 import { captureMediaScope, mediaScopeIsCurrent, setWhisperRouting } from "./media-controls.js";
 import { currentLanguage, t } from "./i18n.js";
 import { copyToClipboard } from "./clipboard.js";
@@ -38,6 +39,7 @@ let stopMicCheck = () => {};
 function settings() { return draft; }
 
 class SavedAudioSettingsError extends Error {}
+class SavedIdentityProtectionError extends Error {}
 
 async function commit(snapshot) {
     const err = await window.go.main.App.SaveSettings(snapshot);
@@ -1171,198 +1173,7 @@ function pageChat() {
     return el;
 }
 
-// refreshIdentities repaints the identity manager table (351) from the Go
-// side, which owns the store.
-async function refreshIdentities(tbody) {
-    let list = [];
-    try {
-        list = await window.go.main.App.ListIdentities();
-    } catch (e) {
-        tbody.innerHTML = "";
-        const tr = document.createElement("tr");
-        tr.innerHTML = `<td colspan="6" class="warn"></td>`;
-        tr.querySelector("td").textContent = t("settings.identities.unavailable") + e;
-        tbody.appendChild(tr);
-        return;
-    }
-    // (351) the draft is a clone taken when the dialog opened; switching an
-    // identity writes settings behind its back, so mirror it or OK reverts it.
-    const active = list.find((x) => x.active);
-    if (active && settings()) settings().active_identity = active.id;
-    tbody.innerHTML = "";
-    for (const e of list) {
-        const tr = document.createElement("tr");
-        if (e.active) tr.classList.add("id-active");
-
-        const name = document.createElement("td");
-        name.textContent = (e.active ? "● " : "") + e.name;
-        name.title = e.path;
-        tr.appendChild(name);
-
-        const uid = document.createElement("td");
-        uid.className = "mono id-uid";
-        uid.textContent = e.unique_id ? e.unique_id.slice(0, 16) + "…" : t("settings.unreadable");
-        uid.title = e.unique_id || "";
-        uid.onclick = () => {
-            if (!e.unique_id) return;
-            void copyToClipboard(e.unique_id, { success: t("settings.unique.id.copied"), isCurrent: () => uid.isConnected });
-        };
-        tr.appendChild(uid);
-
-        // (352) proof-of-work level on the unique ID.
-        const lvl = document.createElement("td");
-        lvl.className = "mono";
-        lvl.textContent = String(e.security_level ?? 0);
-        tr.appendChild(lvl);
-
-        // (354) which storage mode the key is actually in.
-        const prot = document.createElement("td");
-        prot.textContent = e.protection === "dpapi" ? "🔒 DPAPI" : t("settings.plaintext");
-        prot.title = e.protection === "dpapi"
-            ? t("settings.private.key.sealed.to.this.windows.account.a.copy.of.this.file.will.not.ope")
-            : t("settings.private.key.stored.in.the.clear.no.os.key.store.in.use");
-        tr.appendChild(prot);
-
-        // (353) backup state.
-        const backup = document.createElement("td");
-        backup.textContent = e.exported_at ? "✓ " + e.exported_at : t("settings.never");
-        if (!e.exported_at) backup.className = "warn";
-        tr.appendChild(backup);
-
-        const actions = document.createElement("td");
-        actions.className = "id-actions";
-        const mk = (label, title, fn) => {
-            const b = document.createElement("button");
-            b.textContent = label;
-            b.title = title;
-            b.onclick = fn;
-            actions.appendChild(b);
-            return b;
-        };
-        mk(t("settings.use"), t("settings.make.this.the.identity.used.on.the.next.connect"), async () => {
-            const err = await window.go.main.App.SwitchIdentity(e.id);
-            if (err) V().toast(t("settings.switch.failed") + err, "warn");
-            else V().toast(t("settings.active.identity") + e.name + t("settings.reconnect.to.use.it"), "warn");
-            refreshIdentities(tbody);
-        }).disabled = e.active;
-        mk(t("settings.rename"), t("settings.change.the.display.label"), async () => {
-            const name = prompt(t("settings.identity.name"), e.name);
-            if (!name) return;
-            const err = await window.go.main.App.RenameIdentity(e.id, name);
-            if (err) V().toast(t("settings.rename.failed") + err, "warn");
-            refreshIdentities(tbody);
-        });
-        mk(t("settings.export"), t("settings.save.a.portable.backup.of.this.identity"), async () => {
-            const err = await window.go.main.App.ExportIdentity(e.id);
-            if (err) V().toast(t("settings.export.failed") + err, "warn");
-            else V().toast(t("settings.identity.exported.keep.the.file.safe"));
-            refreshIdentities(tbody);
-        });
-        mk(t("settings.level"), t("settings.raise.the.proof.of.work.security.level"), async () => {
-            const target = parseInt(prompt(t("settings.target.security.level.leading.zero.bits.1.40"), String((e.security_level || 0) + 4)), 10);
-            if (!target) return;
-            V().toast(t("settings.computing.security.level.up.to.30s"));
-            const res = await window.go.main.App.ImproveIdentityLevel(e.id, target, 30);
-            if (res.error) V().toast(t("settings.level.failed") + res.error, "warn");
-            else V().toast(t("settings.identity.level", { level: res.level, counter: res.counter }));
-            refreshIdentities(tbody);
-        });
-        mk(t("settings.delete"), t("settings.remove.this.identity.from.this.machine"), async () => {
-            const warn = e.exported_at
-                ? t("settings.identity.delete", { name: e.name })
-                : t("settings.identity.delete.unbacked", { name: e.name });
-            if (!confirm(warn)) return;
-            const err = await window.go.main.App.DeleteIdentity(e.id, true);
-            if (err) V().toast(t("settings.delete.failed") + err, "warn");
-            refreshIdentities(tbody);
-        }).classList.add("danger-btn");
-        tr.appendChild(actions);
-        tbody.appendChild(tr);
-    }
-}
-
-function pageSecurity() {
-    const s = settings();
-    const el = document.createElement("div");
-
-    // (351) multiple identities: the identity IS the account, so the manager
-    // is the primary control here.
-    const sub = document.createElement("div");
-    sub.className = "set-subhead";
-    sub.textContent = t("settings.identities");
-    el.appendChild(sub);
-
-    const table = document.createElement("table");
-    table.className = "perm-grid identity-grid";
-    table.innerHTML = `<thead><tr>${["name", "uid", "level.heading", "storage", "backup"].map(key => `<th>${t("settings.identity." + key)}</th>`).join("")}<th></th></tr></thead><tbody></tbody>`;
-    const tbody = table.querySelector("tbody");
-    const tableScroll = document.createElement("div");
-    tableScroll.className = "identity-table-scroll";
-    tableScroll.tabIndex = 0;
-    tableScroll.setAttribute("role", "region");
-    tableScroll.setAttribute("aria-label", t("settings.identities"));
-    tableScroll.appendChild(table);
-    el.appendChild(tableScroll);
-    // Search builds detached pages to index their labels; only
-    // the page that is really on screen may hit the identity store, which
-    // unseals a protected key per row.
-    setTimeout(() => { if (tbody.isConnected) refreshIdentities(tbody); }, 0);
-
-    const bar = document.createElement("div");
-    bar.className = "set-folder";
-    const newBtn = document.createElement("button");
-    newBtn.textContent = t("settings.new.identity");
-    newBtn.onclick = async () => {
-        const name = prompt(t("settings.name.for.the.new.identity.e.g.gaming"));
-        if (!name) return;
-        const err = await window.go.main.App.CreateIdentity(name);
-        if (err) V().toast(t("settings.create.failed") + err, "warn");
-        refreshIdentities(tbody);
-    };
-    const importBtn = document.createElement("button");
-    importBtn.textContent = t("settings.import");
-    importBtn.onclick = async () => {
-        const err = await window.go.main.App.ImportIdentity();
-        if (err) V().toast(t("settings.import.failed") + err, "warn");
-        else V().toast(t("settings.identity.imported.and.selected.reconnect.to.use.it"), "warn");
-        refreshIdentities(tbody);
-    };
-    const regen = document.createElement("button");
-    regen.className = "danger-btn";
-    regen.textContent = t("settings.regenerate.active");
-    regen.onclick = async () => {
-        if (!confirm(t("settings.regenerating.replaces.the.active.identity.s.key.servers.will.see.you.as.a.n"))) return;
-        const uid = await window.go.main.App.RegenerateIdentity();
-        V().toast(t("settings.identity.regenerated") + uid.slice(0, 16) + t("settings.reconnect.to.use.it.alternate"), "warn");
-        refreshIdentities(tbody);
-    };
-    bar.append(newBtn, importBtn, regen);
-    el.appendChild(bar);
-    el.appendChild(hint(t("settings.the.active.identity.is.used.on.the.next.connect.click.a.unique.id.to.copy.i")));
-
-    // (354) key storage at rest, with its fallback stated plainly.
-    const protSel = document.createElement("select");
-    for (const [v, label] of [["auto", t("settings.use.the.os.key.store.when.available.default")], ["off", t("settings.always.store.in.plaintext")]]) {
-        const o = document.createElement("option");
-        o.value = v;
-        o.textContent = label;
-        protSel.appendChild(o);
-    }
-    protSel.value = s.identity_key_protection === "off" ? "off" : "auto";
-    protSel.onchange = () => { s.identity_key_protection = protSel.value; };
-    el.appendChild(row(t("settings.private.key.storage"), protSel));
-    el.appendChild(hint(t("settings.on.windows.the.private.key.is.sealed.with.dpapi.to.your.user.account.so.a.s")));
-
-    // (4a) Transport security: TLS is the default; plaintext is an explicit
-    // dev opt-in.
-    const tsub = document.createElement("div");
-    tsub.className = "set-subhead";
-    tsub.textContent = t("settings.transport");
-    el.appendChild(tsub);
-    el.appendChild(row(t("settings.allow.plaintext.connections.dev.servers"), checkbox(!!s.allow_plaintext, (v) => { s.allow_plaintext = v; })));
-    el.appendChild(hint(t("settings.server.connections.use.tls.with.trust.on.first.use.fingerprint.pinning.know")));
-    return el;
-}
+function pageSecurity() { return securitySettings(settings()); }
 
 function pageNotifications() {
     const s = settings();
@@ -1419,6 +1230,7 @@ function pageNotifications() {
         tbody.appendChild(tr);
     }
     el.appendChild(matrix);
+    el.appendChild(hint(t("settings.pokePopup")));
     el.appendChild(hint(t("settings.previews.use.your.sound.volume.and.event.choices.dnd.silences.all.previews")));
     // (347/348) do-not-disturb: toggle + quiet hours schedule.
     el.appendChild(row(t("settings.do.not.disturb"), checkbox(s.dnd_enabled, (v) => { s.dnd_enabled = v; })));
@@ -1564,6 +1376,7 @@ const PAGE_BUILDERS = {
 };
 
 function renderPage(id) {
+    document.querySelector(".security-page")?.dispose();
     stopPreviews();
     stopMicCheck();
     stopCameraTest();
@@ -1597,6 +1410,7 @@ function translateDialog(overlay) {
 
 function openSettings(pageId = "application") {
     if (document.getElementById("settings-overlay")?.getAttribute("aria-busy") === "true") return;
+    if (document.getElementById("settings-overlay")?.dataset.identityBusy === "true") return;
     draft = JSON.parse(JSON.stringify(V().state.settings || {}));
     const whisperScope = captureMediaScope();
     const whisperConfig = (s) => JSON.stringify([!!s?.whisper_active, s?.whisper_clients || [], s?.whisper_channels || []]);
@@ -1742,7 +1556,7 @@ function openSettings(pageId = "application") {
         nav.appendChild(item);
     }
 
-    let saving = false;
+    let saving = false, protectionPending = false;
     const saveStatus = overlay.querySelector(".settings-save-status");
     let savedDraft = JSON.stringify(draft), lastDraft = savedDraft, applyFailure = "";
     saveStatus.hidden = false;
@@ -1758,12 +1572,16 @@ function openSettings(pageId = "application") {
     });
     for (const event of ["input", "change", "click"]) content.addEventListener(event, markChanges);
     const applyAll = async () => {
-        if (saving) return false;
+        if (saving || overlay.dataset.identityBusy === "true") return false;
         for (const control of content.querySelectorAll("input,select,textarea")) {
             if (!control.reportValidity()) return false;
         }
         saving = true;
         const snapshot = structuredClone(draft);
+        const protectionMode = value => value === "off" ? "off" : "auto";
+        protectionPending ||= protectionMode(snapshot.identity_key_protection) !== protectionMode(V().state.settings.identity_key_protection)
+            || overlay.querySelector(".settings-nav-item.active")?.dataset.page === "security";
+        const applyingProtection = protectionPending;
         let persisted = false;
         const nextWhisperConfig = whisperConfig(snapshot);
         // Applying the whisper editor explicitly reapplies routing, including
@@ -1792,6 +1610,11 @@ function openSettings(pageId = "application") {
             persisted = true;
             if (!overlay.isConnected) return false;
             savedDraft = lastDraft = JSON.stringify(draft);
+            if (protectionPending) {
+                try { await window.go.main.App.ApplyIdentityProtection(); }
+                catch (failure) { throw new SavedIdentityProtectionError(t("security.protectionFailed", { error: failure.message || String(failure) })); }
+                protectionPending = false;
+            }
             refreshDraftControls();
             // Local preferences also save while disconnected. A live whisper
             // update belongs only to the server where this dialog opened.
@@ -1811,17 +1634,17 @@ function openSettings(pageId = "application") {
                 }
             }
             applyFailure = "";
-            saveStatus.textContent = t("settings.applied");
+            saveStatus.textContent = t("settings.applied") + (applyingProtection ? " " + t("security.protectionApplied") : "");
             return true;
         } catch (error) {
             // Persistence already rebased nested draft objects. Rebind controls
             // even if audio application failed, so subsequent edits reach them.
-            if (error instanceof SavedAudioSettingsError) {
+            if (error instanceof SavedAudioSettingsError || error instanceof SavedIdentityProtectionError) {
                 savedDraft = lastDraft = JSON.stringify(draft);
                 refreshDraftControls();
             }
             if (overlay.isConnected) {
-                saveStatus.textContent = error instanceof SavedAudioSettingsError
+                saveStatus.textContent = error instanceof SavedAudioSettingsError || error instanceof SavedIdentityProtectionError
                     ? error.message
                     : t("menu.saveFailed", { error: error.message || String(error) });
                 saveStatus.classList.add("warn");
@@ -1849,8 +1672,9 @@ function openSettings(pageId = "application") {
 
     translateDialog(overlay);
     mountDialog(overlay, {
-        onCancel: () => !saving,
+        onCancel: () => !saving && overlay.dataset.identityBusy !== "true",
         onClose: () => {
+            content.querySelector(".security-page")?.dispose();
             narrowLayout.removeEventListener("change", updateNavOrientation);
             window.removeEventListener("noxa-audio-status", refreshAudioStatus);
             window.removeEventListener("noxa-audio-preview-blocked", previewBlocked);

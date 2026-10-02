@@ -492,6 +492,33 @@ test("member batch shows committed and failed results separately", async ({ page
     expect(await page.evaluate(() => window.__roleCalls.map((c) => c.expected_revision))).toEqual([1, 2]);
 });
 
+test("channel access confirms saving and retains success until the next edit", async ({ page }, testInfo) => {
+    await page.getByRole("button", { name: "Channel access", exact: true }).click();
+    await page.getByRole("button", { name: "Private", exact: true }).click();
+    await page.getByRole("button", { name: "Preview role changes", exact: true }).click();
+    await page.evaluate(() => { window.__roleGate = new Promise(resolve => { window.__finishRole = resolve; }); });
+    await page.getByRole("button", { name: "Save", exact: true }).click();
+    await expect(page.locator(".roles-footer [role=status]")).toHaveText("Saving…");
+    await expect(page.getByRole("button", { name: "Saving…", exact: true })).toBeDisabled();
+    await page.evaluate(() => window.__finishRole());
+    await expect(page.locator(".roles-footer [role=status]")).toHaveText("Channel access saved.");
+    await expect(page.getByRole("button", { name: "Save", exact: true })).toBeDisabled();
+    await page.screenshot({ path: testInfo.outputPath("channel-access-saved.png") });
+    await page.getByRole("button", { name: "Public", exact: true }).click();
+    await expect(page.locator(".roles-footer [role=status]")).toHaveText("You have unsaved changes.");
+});
+
+test("channel access distinguishes an acknowledged save from a failed reload", async ({ page }) => {
+    await page.getByRole("button", { name: "Channel access", exact: true }).click();
+    await page.getByRole("button", { name: "Private", exact: true }).click();
+    await page.getByRole("button", { name: "Preview role changes", exact: true }).click();
+    await page.evaluate(() => { window.go.main.App.RoleStateForTab = async () => { throw new Error("offline"); }; });
+    await page.getByRole("button", { name: "Save", exact: true }).click();
+    await expect(page.locator(".role-error")).toContainText("Channel access was saved, but could not be reloaded");
+    await expect(page.getByRole("button", { name: "Save", exact: true })).toBeDisabled();
+    expect(await page.evaluate(() => window.__roleCalls.length)).toBe(1);
+});
+
 test("channel presets save ordinary overrides and access check stays read-only", async ({ page }) => {
     await page.getByRole("button", { name: "Channel access", exact: true }).click();
     await page.getByRole("button", { name: "Private", exact: true }).click();
@@ -628,6 +655,35 @@ test("member context menu assigns a role to the preselected target using the key
     await dialog.getByRole("combobox").selectOption("30");
     await dialog.getByRole("button", { name: "Add role", exact: true }).click();
     await expect.poll(() => page.evaluate(() => window.__roleCalls.at(-1))).toMatchObject({ kind: "member_roles_set", user_id: 3, role_ids: [20, 30] });
+});
+
+test("owner can assign a role to a verified guest without registering on menu open", async ({ page }) => {
+    await installMemberContextMenu(page);
+    await page.evaluate(() => {
+        const app = window.go.main.App;
+        let enrolled = false;
+        app.RoleMembersForTab = async (_tabID, query) => ({ revision: window.__roleState.policy.revision, more: false,
+            entries: query.search === "bob" ? [{ user_id: enrolled ? 4 : 0, nickname: "Bob", unique_id: "bob", role_ids: enrolled ? [30] : [], manageable: true }] : [] });
+        app.RoleChangeForTab = async (_tabID, change) => {
+            window.__roleCalls.push(structuredClone(change)); enrolled = true;
+            return { revision: ++window.__roleState.policy.revision };
+        };
+    });
+    await page.getByText("Bob session", { exact: true }).click({ button: "right" });
+    await page.getByRole("menuitem", { name: "Assign roles…", exact: true }).click();
+    const dialog = page.getByRole("dialog", { name: "Members", exact: true });
+    await expect(dialog.getByRole("checkbox", { name: /^Bob\b/ })).toBeChecked();
+    expect(await page.evaluate(() => window.__roleCalls)).toEqual([]);
+    await expect(dialog.getByRole("button", { name: "Transfer ownership", exact: true })).toBeDisabled();
+    await expect(dialog.getByRole("button", { name: "Remove role", exact: true })).toBeDisabled();
+    await dialog.getByRole("combobox").selectOption("30");
+    await dialog.getByRole("button", { name: "Add role", exact: true }).click();
+    await expect.poll(() => page.evaluate(() => window.__roleCalls)).toEqual([
+        { kind: "member_roles_set", expected_revision: 1, user_id: 0, member_unique_id: "bob", role_ids: [30] },
+    ]);
+    await expect(dialog.getByRole("checkbox", { name: /^Bob\b/ })).toBeChecked();
+    await expect(dialog.getByRole("button", { name: "Remove role", exact: true })).toBeEnabled();
+    await expect(dialog).toContainText("Moderator");
 });
 
 for (const reason of ["actor", "target", "server switch"]) test(`member context menu does not offer assignment after ${reason} restriction`, async ({ page }) => {

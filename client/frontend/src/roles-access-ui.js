@@ -115,6 +115,7 @@ async function openChatFilters() {
             </div>
         </div>
         <div class="dlg-buttons">
+            <p class="cf-status role-status" role="status"></p>
             <button class="dlg-cancel cf-reload">Reload</button>
             <button class="dlg-ok cf-save">Save</button>
         </div>`);
@@ -122,6 +123,9 @@ async function openChatFilters() {
     let lastFilters = null;
     let busy = false;
     let needsReload = true;
+    for (const input of overlay.querySelectorAll("textarea")) input.addEventListener("input", () => {
+        if (!busy && !needsReload) q(".cf-status").textContent = t("roles.unsaved");
+    });
     const controls = () => {
         for (const input of overlay.querySelectorAll("textarea")) input.disabled = busy || !lastFilters;
         q(".cf-reload").disabled = busy;
@@ -140,14 +144,16 @@ async function openChatFilters() {
         if (busy || !isCurrentServerDialog(overlay)) return;
         busy = true;
         needsReload = true;
+        q(".cf-status").textContent = t("roles.filtersLoading");
         controls();
         try {
             const response = await App().ChatFilterGetForTab(tabID);
             if (!isCurrentServerDialog(overlay)) return;
             fill(response);
             needsReload = false;
+            q(".cf-status").textContent = "";
         } catch (error) {
-            if (isCurrentServerDialog(overlay)) q(".cf-source").textContent = "loading filters failed: " + error;
+            if (isCurrentServerDialog(overlay)) { q(".cf-source").textContent = "loading filters failed: " + error; q(".cf-status").textContent = ""; }
         } finally {
             busy = false;
             if (isCurrentServerDialog(overlay)) controls();
@@ -158,6 +164,7 @@ async function openChatFilters() {
         if (busy || needsReload || !lastFilters || !isCurrentServerDialog(overlay)) return;
         if (lastFilters.from_config && !confirm("Saving will override config.yaml with database settings. Proceed?")) return;
         busy = true;
+        q(".cf-status").textContent = t("common.saving");
         controls();
         try {
             const response = await App().ChatFilterSetForTab(
@@ -165,11 +172,12 @@ async function openChatFilters() {
             if (!isCurrentServerDialog(overlay)) return;
             fill(response);
             needsReload = false;
-            toastAudit("chat filters updated");
+            q(".cf-status").textContent = t("roles.filtersSaved");
         } catch (error) {
             needsReload = true;
             if (isCurrentServerDialog(overlay)) {
                 q(".cf-source").textContent = "Reload the server filters before saving again.";
+                q(".cf-status").textContent = t("roles.accessFailed");
                 V().toast("chat filter save failed: " + error, "warn");
             }
         } finally {

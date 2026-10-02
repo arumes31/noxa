@@ -25,6 +25,7 @@ const paths = {
     smile: '<circle cx="12" cy="12" r="10"/><path d="M8 14a4 4 0 0 0 8 0M8 8h.01M16 8h.01"/>',
     send: '<path d="m3 3 19 9-19 9 4-9zM7 12h15"/>',
     lock: '<rect x="5" y="10" width="14" height="12" rx="2"/><path d="M8 10V6a4 4 0 0 1 8 0v4M12 15v3"/>',
+    key: '<circle cx="8" cy="8" r="5"/><path d="m12 12 9 9M17 17l3-3M14 14l3-3"/>',
     bell: '<path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4"/>',
     pin: '<path d="m16 3 5 5-4 2-3 6-6-6 6-3zM3 21l8-8"/>',
     info: '<circle cx="12" cy="12" r="10"/><path d="M12 11v6M12 7h.01"/>',

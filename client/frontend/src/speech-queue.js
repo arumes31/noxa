@@ -8,6 +8,10 @@ export const SPEECH_EVENTS = {
     connection_lost: { priority: 5, category: "connection", effect: "connection_lost" },
     moved_by_admin: { priority: 4, category: "admin", effect: "own_channel_switch" },
     permission_denied: { priority: 4, category: "admin", effect: "server_error" },
+    user_kicked: { priority: 3, category: "admin", effect: "kick", matrix: "kick", cooldown: 1000 },
+    user_kicked_channel: { priority: 3, category: "admin", effect: "kick", matrix: "kick", cooldown: 1000 },
+    channel_join: { priority: 2, category: "channel", effect: "own_channel_join", cooldown: 1000 },
+    user_moved_out: { priority: 2, category: "channel", effect: "user_move_out", matrix: "join_leave", cooldown: 1000 },
     user_join: { priority: 1, category: "channel", effect: "user_join", matrix: "join_leave", cooldown: 1000 },
     user_leave: { priority: 1, category: "channel", effect: "user_leave", matrix: "join_leave", cooldown: 1000 },
     test: { priority: 4, category: "test" },
@@ -33,7 +37,7 @@ export class SpeechQueue {
         if (settings.speech_events?.[event] === false || settings.event_sounds?.[effect] === false) return false;
         if (def.matrix && (settings.notify_matrix?.[def.matrix]?.sound === false || settings.event_sounds?.[def.matrix] === false)) return false;
         if (event === "permission_denied" && settings.speech_permissions === false) return false;
-        if (["banned", "kicked", "kicked_channel"].includes(event) && settings.speech_removal === false) return false;
+        if (["banned", "kicked", "kicked_channel", "user_kicked", "user_kicked_channel"].includes(event) && settings.speech_removal === false) return false;
         return def.category === "test" || settings["speech_" + def.category] !== false;
     }
 

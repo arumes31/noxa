@@ -1,6 +1,34 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { videoConstraints, trackFitsVideoLimits, capVideoEncodings } from "../src/media-limits.js";
+import { shareQuality, screenShareConstraints } from "../src/screen-share-quality.js";
+
+test("screen resolutions have finite budgets and honor server bounds", () => {
+    for (const [preset, width, height, bitrate] of [["qhd", 2560, 1440, 10000000], ["uhd", 3840, 2160, 20000000]]) {
+        const profile = shareQuality(preset);
+        assert.deepEqual(profile, { width, height, fps: 30, bitrate });
+        assert.deepEqual(screenShareConstraints(profile), { width: { ideal: width, max: width }, height: { ideal: height, max: height }, frameRate: { ideal: 30, max: 30 } });
+        assert.deepEqual(screenShareConstraints(profile, { video_max_width: 1280, video_max_height: 720 }).height, { ideal: 720, max: 720 });
+    }
+});
+
+test("original capture removes size preferences while retaining server and frame-rate limits", () => {
+    const profile = shareQuality("original");
+    assert.deepEqual(screenShareConstraints(profile), { width: {}, height: {}, frameRate: { ideal: 30, max: 30 } });
+    assert.deepEqual(screenShareConstraints(profile, { video_max_width: 1920, video_max_height: 1080 }), {
+        width: { max: 1920 }, height: { max: 1080 }, frameRate: { ideal: 30, max: 30 },
+    });
+});
+
+test("custom capture validates dimensions and frame rate before allocating a bounded budget", () => {
+    assert.equal(shareQuality("custom", { width: 3440, height: 1440, fps: 30 }).bitrate, 12000000);
+    assert.equal(shareQuality("custom", { width: 8192, height: 8192, fps: 60 }).bitrate, 40000000);
+    for (const value of [0, 159, 8193, -1, 1920.5, NaN, Infinity, "1920"]) {
+        assert.equal(shareQuality("custom", { width: value, height: 1080, fps: 30 }), null);
+        assert.equal(shareQuality("custom", { width: 1920, height: value, fps: 30 }), null);
+    }
+    assert.equal(shareQuality("custom", { width: 1920, height: 1080, fps: 0 }), null);
+});
 
 const limits = { video_max_width: 320, video_max_height: 200, video_max_bitrate: 1000000 };
 test("capture bounds reduce either dimension without stretching the preferred aspect ratio", () => {
