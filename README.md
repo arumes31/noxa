@@ -264,6 +264,11 @@ select the **Administrator** role and choose **Add role** to grant admin access.
 Only the owner can grant Administrator or transfer ownership. Keep this role
 limited to trusted operators; use Moderator for routine moderation.
 
+In **Permissions → Roles**, the owner can enable **Protect from deletion** for
+important roles. Administrator roles start protected. To delete a protected
+role, the owner must turn protection off and save first. Deletion then requires
+confirmation in a modal and removes the role's assignments and channel overrides.
+
 To provision another password account, stop the server, run `adduser` with a
 different nickname/password, then start the server again. Grant its role through
 the owner account. Ownership transfer is available in the Members view; it gives
@@ -284,6 +289,10 @@ and Administrator roles are unassigned, and no default member role is selected.
    **Role for new members** if future registrations should automatically receive
    Member. This saves immediately and does not change existing accounts or
    guests; Administrator cannot be assigned automatically.
+   You can also right-click a member and choose **Assign roles…**; this appears
+   only when your permissions and role hierarchy allow managing that member.
+   You can also right-click a member and choose **Assign roles…**; this appears
+   only when your permissions and role hierarchy allow managing that member.
 4. Configure `@everyone` only for access you intend every member and guest to
    have. Keep moderation and server-management permissions in dedicated roles.
 
@@ -292,6 +301,22 @@ and Administrator roles are unassigned, and no default member role is selected.
 Right-click a channel and choose **Channel access**. Existing channels
 start with **View channel → Deny** for `@everyone`, so assigning Member alone
 does not make them visible.
+
+**Edit channel** also opens **Channel access** and lets you keep, replace, or
+remove the channel password. Access rules are edited separately; save metadata
+first or confirm discarding unsaved edits when opening access settings.
+
+Use **Preview role changes** before saving an access draft. Each role is checked
+with `@everyone`. Search by name or unique ID to inspect a member's saved and
+proposed permissions, including their combined roles and individual overrides.
+
+**Edit channel** also opens **Channel access** and lets you keep, replace, or
+remove the channel password. Access rules are edited separately; save metadata
+first or confirm discarding unsaved edits when opening access settings.
+
+Use **Preview role changes** before saving an access draft. Each role is checked
+with `@everyone`. Search by name or unique ID to inspect a member's saved and
+proposed permissions, including their combined roles and individual overrides.
 
 - For a members-only channel, keep that deny and add a Member role override
   allowing **View channel**, along with the desired chat/voice permissions and

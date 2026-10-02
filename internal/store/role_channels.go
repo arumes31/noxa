@@ -36,6 +36,7 @@ type RoleChannelCreate struct {
 // RoleChannelSettings replaces editable metadata at an expected policy
 // revision. Tree placement and access are separate, explicit operations.
 type RoleChannelSettings struct {
+	PasswordHash                                         *string `json:"-"`
 	Name, Topic, Description                             string
 	OrderIndex, MaxClients, SlowModeSeconds, OpusBitrate int
 	OpusFEC, OpusDTX, OpusStereo                         bool
@@ -155,6 +156,9 @@ func (s *Store) changeRoleChannel(ctx context.Context, actorID int64, change aut
 		_, err = tx.ExecContext(ctx, `UPDATE channels SET name=$2,topic=$3,description=$4,order_index=$5,max_clients=NULLIF($6,0),slow_mode_seconds=$7,opus_bitrate=$8,opus_fec=$9,opus_dtx=$10,opus_stereo=$11 WHERE id=$1`,
 			change.ChannelID, settings.Name, settings.Topic, settings.Description, settings.OrderIndex, settings.MaxClients, settings.SlowModeSeconds,
 			settings.OpusBitrate, settings.OpusFEC, settings.OpusDTX, settings.OpusStereo)
+		if err == nil && settings.PasswordHash != nil {
+			_, err = tx.ExecContext(ctx, `UPDATE channels SET password_hash=$2 WHERE id=$1`, change.ChannelID, *settings.PasswordHash)
+		}
 	case authorization.ChannelCreate:
 		_, err = tx.ExecContext(ctx, `INSERT INTO channels
 			(id,parent_id,name,topic,order_index,channel_type,max_clients,password_hash,created_by,opus_bitrate,opus_fec,opus_dtx,opus_stereo,description,slow_mode_seconds)

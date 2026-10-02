@@ -76,6 +76,7 @@ export function renderRoleForm(host, model, changed) {
         select.onchange = () => {
             draft.permissions = roleTemplate(select.value, snapshot.grantable_capabilities || []);
             draft.name = select.options[select.selectedIndex].textContent;
+            draft.deletion_protected = select.value === "administrator";
             changed(true);
         };
         label.append(select);
@@ -93,6 +94,11 @@ export function renderRoleForm(host, model, changed) {
     form.append(cosmetics);
     field(form, t("roles.hoist"), "checkbox", draft.hoist, (value) => { draft.hoist = value; changed(); });
     if (!draft.id || draft.id !== snapshot.policy.everyone_id) field(form, t("roles.mentionable"), "checkbox", draft.mentionable, (value) => { draft.mentionable = value; changed(); });
+    if (draft.id !== snapshot.policy.everyone_id) {
+        const protect = field(form, t("roles.protectDeletion"), "checkbox", draft.deletion_protected, (value) => { draft.deletion_protected = value; changed(); });
+        protect.disabled = snapshot.actor_id !== snapshot.policy.owner_id;
+        form.append(roleElement("p", "role-hint", t("roles.protectDeletionHelp")));
+    }
     const search = field(form, t("roles.search"), "search", "", () => {});
     const list = roleElement("div", "role-capabilities");
     const capabilityName = (key) => snapshot.capabilities.find((c) => c.key === key)?.[currentLanguage()] || key;

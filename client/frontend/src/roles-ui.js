@@ -113,6 +113,7 @@ export function openRolesManager() {
     const discard = roleButton(t("roles.discard"), () => { model.draft = roleDraft(model.saved); model.dirty = false; error.textContent = ""; render(); });
     const remove = roleButton(t("common.delete"), async () => {
         const id = model.draft.id;
+        if (model.saved?.deletion_protected) return;
         if (!await ask(t("roles.deleteAsk", { name: model.draft.name }), true) || !current() || id !== model.draft.id) return;
         commit({ kind: "role_delete", role_id: id });
     });
@@ -122,7 +123,7 @@ export function openRolesManager() {
         create.disabled = model.busy || !model.snapshot || model.needsRefresh;
         refreshButton.disabled = model.busy;
         defaultRoleSelect.disabled = model.busy || model.dirty || model.needsRefresh;
-        remove.disabled = model.busy || model.dirty || !model.draft?.id || model.draft.id === model.snapshot?.policy.everyone_id ||
+        remove.disabled = model.busy || model.dirty || model.saved?.deletion_protected || !model.draft?.id || model.draft.id === model.snapshot?.policy.everyone_id ||
             !model.snapshot?.manageable_role_ids.includes(model.draft.id) || model.needsRefresh;
         if (model.busy) status.textContent = t(model.snapshot ? "roles.saving" : "roles.loading");
         else if (model.dirty) status.textContent = t("roles.unsaved");

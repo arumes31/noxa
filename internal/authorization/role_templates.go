@@ -9,6 +9,6 @@ func StarterRoles() []Role {
 	return []Role{
 		{Name: "Member", Position: 1, Permissions: base},
 		{Name: "Moderator", Position: 2, Permissions: moderator},
-		{Name: "Administrator", Position: 3, Permissions: []Capability{Administrator}},
+		{Name: "Administrator", Position: 3, DeletionProtected: true, Permissions: []Capability{Administrator}},
 	}
 }

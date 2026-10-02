@@ -3,6 +3,7 @@ import { closeDialog, confirmDialog, isCurrentServerDialog, mountServerDialog } 
 import { roleButton, roleElement } from "./role-editor-view.js";
 import { applyChannelPreset } from "./channel-access-state.js";
 import { openChannelIcon } from "./channel-icon-ui.js";
+import { openChannelAccess } from "./channel-access-ui.js";
 import { channelImpactPanel } from "./channel-impact-ui.js";
 import "./roles.css";
 
@@ -23,6 +24,7 @@ export function openRoleChannel(kind, channelID = 0, { destinationID, orderIndex
     const status = roleElement("p", "role-status"); status.setAttribute("role", "status");
     let snapshot, draft, busy = false, dirty = false, needsRefresh = false, committed = false;
     let preset = "inherit", selectedRoles = new Set(), destination = 0, sync = false;
+    let passwordAction = "keep";
     let impactView, reviewedTree = "";
     const access = () => {
         const overrides = applyChannelPreset([], snapshot.everyone_id, preset);
@@ -48,14 +50,14 @@ export function openRoleChannel(kind, channelID = 0, { destinationID, orderIndex
         impactView?.update();
     };
     const field = (key, type = "text", min = null, max = null, host = form) => {
-        const label = roleElement("label", "role-field", t(`roles.channel.${key}`));
+        const label = roleElement("label", "role-field", t(`roles.channel.${key === "password" && kind === "channel_edit" ? "newPassword" : key}`));
         const input = roleElement(key === "description" ? "textarea" : "input", "dlg-input");
         if (input.tagName === "INPUT") input.type = type;
         input.value = draft[key] ?? "";
         if (min !== null) input.min = String(min);
         if (max !== null) input.max = String(max);
         if (key === "name") input.maxLength = 255;
-        if (key === "password") { input.maxLength = 4096; input.autocomplete = "new-password"; }
+        if (key === "password") { input.maxLength = 4096; input.autocomplete = "new-password"; input.required = kind === "channel_edit"; }
         const validateText = () => {
             const limit = key === "name" ? 255 : key === "password" ? 4096 : null;
             const value = key === "name" ? input.value.trim() : input.value;
@@ -84,6 +86,19 @@ export function openRoleChannel(kind, channelID = 0, { destinationID, orderIndex
         form.append(roleElement("p", "role-hint", snapshot.name || t("roles.channel.root")));
         if (kind === "channel_create" || kind === "channel_edit") {
             field("name"); field("topic"); field("description");
+            if (kind === "channel_edit") {
+                select("roles.channel.passwordAction", [["keep", t("roles.channel.passwordKeep")], ["set", t("roles.channel.passwordSet")], ["remove", t("roles.channel.passwordRemove")]], passwordAction, value => {
+                    passwordAction = value; draft.password = ""; render();
+                });
+                if (passwordAction === "set") field("password", "password");
+                form.append(roleButton(t("roles.accessTitle"), async () => {
+                    if (busy || !current()) return;
+                    if (dirty && !await confirm(t("roles.channel.discard"))) return;
+                    if (!current()) return;
+                    closeDialog(overlay);
+                    openChannelAccess(channelID);
+                }, !snapshot.can_manage_access));
+            }
             const advanced = roleElement("details", "channel-disclosure");
             advanced.open = orderIndex !== undefined;
             advanced.append(roleElement("summary", "", t("roles.channel.advanced")));
@@ -154,6 +169,7 @@ export function openRoleChannel(kind, channelID = 0, { destinationID, orderIndex
             snapshot = next; draft = structuredClone(next.settings);
             draft.channel_type = next.can_create_permanent ? 2 : 0; draft.password = "";
             preset = "inherit"; selectedRoles = new Set(); sync = false;
+            passwordAction = "keep";
             destination = destinationID ?? next.destinations[0]?.id ?? 0;
             if (orderIndex !== undefined) draft.order_index = orderIndex;
             dirty = orderIndex !== undefined; needsRefresh = false; reviewedTree = ""; error.textContent = "";
@@ -173,6 +189,10 @@ export function openRoleChannel(kind, channelID = 0, { destinationID, orderIndex
         if (kind === "channel_create" || kind === "channel_edit") {
             const { channel_type: channelType, password, ...settings } = draft;
             request.settings = { ...settings, name: settings.name.trim() };
+            if (kind === "channel_edit" && passwordAction !== "keep") {
+                request.set_password = true;
+                request.password = passwordAction === "remove" ? "" : password;
+            }
             if (kind === "channel_create") {
                 request.channel_type = channelType; request.password = password; request.parent_id = channelID;
                 if (preset !== "inherit") {

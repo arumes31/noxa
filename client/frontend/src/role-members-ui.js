@@ -3,7 +3,7 @@ import { closeDialog, confirmDialog, isCurrentServerDialog, mountServerDialog } 
 import { roleButton, roleElement } from "./role-editor-view.js";
 import { roleChip } from "./role-presentation.js";
 
-export function openRoleMembers({ onClose } = {}) {
+export function openRoleMembers({ onClose, memberUID = "" } = {}) {
     const app = window.go.main.App;
     const tabID = window.__noxa.state.activeTabID;
     const overlay = roleElement("div", "dlg-overlay");
@@ -13,6 +13,7 @@ export function openRoleMembers({ onClose } = {}) {
     const searchLabel = roleElement("label", "role-field", t("roles.searchMembers"));
     const search = roleElement("input", "dlg-input");
     search.type = "search";
+    search.value = memberUID;
     searchLabel.append(search);
     const list = roleElement("div", "role-member-list");
     const status = roleElement("p", "role-hint");
@@ -82,6 +83,10 @@ export function openRoleMembers({ onClose } = {}) {
             more = page.more;
             needsRefresh = false;
             if (!append) { selected.clear(); results.clear(); }
+            if (!append && memberUID && search.value === memberUID) {
+                const target = entries.find(member => member.unique_id === memberUID && member.manageable);
+                if (target) selected.add(target.user_id);
+            }
         } catch { if (current() && request === serial) error.textContent = t("roles.unavailable"); }
         finally { if (current() && request === serial) { busy = false; render(); } }
     };

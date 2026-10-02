@@ -52,6 +52,41 @@ func TestRoleStoreChannelSettingsEditIsAtomicAndPreservesAccess(t *testing.T) {
 	}
 }
 
+func TestRoleStoreChannelPasswordKeepSetRemove(t *testing.T) {
+	s, owner, _ := roleTestStore(t)
+	p, err := s.PrepareRolePolicy(t.Context(), owner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := p.Channels[0].ChannelID
+	hash := "prepared-password-hash"
+	settings := RoleChannelSettings{Name: "Password test", PasswordHash: &hash}
+	for _, action := range []string{"set", "keep", "remove"} {
+		if action == "keep" {
+			settings.PasswordHash = nil
+		}
+		if action == "remove" {
+			empty := ""
+			settings.PasswordHash = &empty
+		}
+		p, err = s.EditRoleChannel(t.Context(), owner, id, p.Revision, settings)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var saved string
+		if err := s.DB().QueryRowContext(t.Context(), `SELECT password_hash FROM channels WHERE id=$1`, id).Scan(&saved); err != nil {
+			t.Fatal(err)
+		}
+		want := hash
+		if action == "remove" {
+			want = ""
+		}
+		if saved != want {
+			t.Fatalf("%s password=%q want=%q", action, saved, want)
+		}
+	}
+}
+
 func TestRoleStoreTemporaryCleanupHasSystemAuditAndCannotCascade(t *testing.T) {
 	s, owner, _ := roleTestStore(t)
 	p, err := s.PrepareRolePolicy(t.Context(), owner)

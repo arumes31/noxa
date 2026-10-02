@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 
@@ -17,6 +18,76 @@ type memoryRoleChannels struct {
 	created *store.RoleChannelCreate
 	edited  *store.RoleChannelSettings
 	change  authorization.ChannelTreeChange
+}
+
+func TestRoleChannelEditPasswordActions(t *testing.T) {
+	for _, action := range []string{"keep", "set", "remove", "unauthorized", "admission revoked"} {
+		t.Run(action, func(t *testing.T) {
+			backend := serverRoleFixture()
+			a, err := authorization.NewAuthority(t.Context(), backend, func(context.Context, *authorization.RoleEvaluator, *authorization.RoleEvaluator) error { return nil })
+			if err != nil {
+				t.Fatal(err)
+			}
+			var writer *memoryRoleChannels
+			env := startTestEnvDeps(t, nil, nil, func(d *Deps) {
+				d.Authority = a
+				writer = &memoryRoleChannels{ChannelBackend: d.Channels, backend: backend}
+				d.Channels = writer
+			})
+			defer env.stop()
+			request := netproto.RoleChannelChange{Kind: authorization.ChannelEdit, ChannelID: 1, ExpectedRevision: 1, Settings: &netproto.RoleChannelSettings{Name: "Updated"}, SetPassword: action != "keep"}
+			if action != "keep" && action != "remove" {
+				request.Password = "new-channel-password"
+			}
+			actor := backend.policy.OwnerID
+			if action == "unauthorized" {
+				actor = 999
+			}
+			checks := 0
+			_, err = env.srv.changeRoleChannel(t.Context(), actor, request, func(context.Context) error {
+				checks++
+				if action == "admission revoked" && checks == 2 {
+					return auth.ErrIntegrationDenied
+				}
+				return nil
+			})
+			if action == "unauthorized" || action == "admission revoked" {
+				if err == nil || writer.edited != nil {
+					t.Fatalf("unauthorized edit persisted: %v", err)
+				}
+				return
+			}
+			if err != nil || writer.edited == nil {
+				t.Fatalf("edit: %v", err)
+			}
+			hash := writer.edited.PasswordHash
+			switch action {
+			case "keep":
+				if hash != nil {
+					t.Fatal("metadata edit replaced password")
+				}
+			case "remove":
+				if hash == nil || *hash != "" {
+					t.Fatal("password not cleared")
+				}
+			case "set":
+				if hash == nil || auth.VerifyPassword(request.Password, *hash) != nil {
+					t.Fatal("password not hashed")
+				}
+			}
+			data, err := json.Marshal(writer.edited)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var audit map[string]any
+			if err := json.Unmarshal(data, &audit); err != nil {
+				t.Fatal(err)
+			}
+			if _, exists := audit["PasswordHash"]; exists {
+				t.Fatal("password hash exposed in JSON")
+			}
+		})
+	}
 }
 
 func TestRoleChannelMoveCarriesExplicitOrderToWriter(t *testing.T) {

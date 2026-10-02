@@ -2,6 +2,12 @@ import { channelLifecycleEnglish, channelLifecycleGerman } from "./channel-lifec
 import { accessImpactEnglish, accessImpactGerman } from "./access-impact-messages.js";
 
 export const roleEnglish = {
+    "roles.assignMenu": "Assign roles…",
+    "roles.channel.passwordAction": "Channel password",
+    "roles.channel.newPassword": "New password",
+    "roles.channel.passwordKeep": "Keep current password",
+    "roles.channel.passwordSet": "Set a new password",
+    "roles.channel.passwordRemove": "Remove password",
     "roles.defaultRole": "Role for new members",
     "roles.defaultRoleNone": "No additional role",
     "roles.defaultRoleHelp": "Saved immediately. Applies only to accounts created after this change; guests and existing members keep their roles. Administrator roles cannot be assigned automatically.",
@@ -61,6 +67,8 @@ export const roleEnglish = {
     "roles.up": "Move role up",
     "roles.down": "Move role down",
     "roles.deleteAsk": "Delete “{name}”? Its assignments and channel overrides will also be removed.",
+    "roles.protectDeletion": "Protect from deletion",
+    "roles.protectDeletionHelp": "Only the owner can change deletion protection. Turn it off and save before deleting this role.",
     "roles.noMatches": "No permissions match your search.",
     "roles.server": "Server",
     "roles.access": "Channel access",
@@ -126,6 +134,14 @@ export const roleEnglish = {
 };
 
 export const roleGerman = {
+    "roles.assignMenu": "Rollen zuweisen…",
+    "roles.channel.passwordAction": "Kanalpasswort",
+    "roles.channel.newPassword": "Neues Passwort",
+    "roles.channel.passwordKeep": "Aktuelles Passwort behalten",
+    "roles.channel.passwordSet": "Neues Passwort festlegen",
+    "roles.channel.passwordRemove": "Passwort entfernen",
+    "roles.protectDeletion": "Vor dem Löschen schützen",
+    "roles.protectDeletionHelp": "Nur der Eigentümer kann den Löschschutz ändern. Deaktiviere ihn und speichere, bevor du diese Rolle löschst.",
     "roles.defaultRole": "Rolle für neue Mitglieder",
     "roles.defaultRoleNone": "Keine zusätzliche Rolle",
     "roles.defaultRoleHelp": "Wird sofort gespeichert. Gilt nur für danach erstellte Konten; Gäste und bestehende Mitglieder behalten ihre Rollen. Administratorrollen können nicht automatisch zugewiesen werden.",

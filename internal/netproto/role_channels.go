@@ -72,6 +72,7 @@ type RoleChannelChange struct {
 	Settings    *RoleChannelSettings `json:"settings,omitempty"`
 	ChannelType int                  `json:"channel_type"`
 	Password    string               `json:"password,omitempty"`
+	SetPassword bool                 `json:"set_password,omitempty"`
 }
 
 type RoleChannelResult struct {

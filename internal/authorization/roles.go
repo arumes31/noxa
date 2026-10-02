@@ -11,14 +11,15 @@ import (
 
 // Role grants server-wide capabilities; unset never negates another role.
 type Role struct {
-	ID          int64        `json:"id"`
-	Name        string       `json:"name"`
-	Position    int          `json:"position"`
-	Color       string       `json:"color"`
-	Icon        string       `json:"icon"`
-	Hoist       bool         `json:"hoist"`
-	Mentionable bool         `json:"mentionable"`
-	Permissions []Capability `json:"permissions"`
+	ID                int64        `json:"id"`
+	Name              string       `json:"name"`
+	Position          int          `json:"position"`
+	Color             string       `json:"color"`
+	Icon              string       `json:"icon"`
+	Hoist             bool         `json:"hoist"`
+	Mentionable       bool         `json:"mentionable"`
+	DeletionProtected bool         `json:"deletion_protected"`
+	Permissions       []Capability `json:"permissions"`
 }
 
 type RoleMember struct {

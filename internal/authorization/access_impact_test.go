@@ -101,4 +101,22 @@ func TestChannelAccessImpactResyncAndMemberException(t *testing.T) {
 	if len(impact.Members[0].Changes) != 0 || !reflect.DeepEqual(impact.Members[1].Changes, []AccessImpactChange{{Capability: Speak, Before: true, After: false}}) {
 		t.Fatalf("resync: %+v", impact)
 	}
+	if len(impact.Roles) != 2 || impact.Roles[0].RoleID != 10 || impact.Roles[0].Name != "@everyone" ||
+		!reflect.DeepEqual(impact.Roles[0].Changes, impact.Members[1].Changes) || len(impact.Roles[1].Changes) != 0 {
+		t.Fatalf("role baselines must ignore individual exceptions and preserve Administrator bypass: %+v", impact.Roles)
+	}
+	for _, member := range impact.Members {
+		found := false
+		for _, decision := range member.Permissions {
+			if decision.Capability == Speak {
+				found = true
+				if !decision.Before || decision.After != (member.UserID == 3) {
+					t.Fatalf("individual permissions: %+v", member)
+				}
+			}
+		}
+		if !found {
+			t.Fatal("unchanged permissions must be included in member lookup")
+		}
+	}
 }
