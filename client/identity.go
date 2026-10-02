@@ -7,6 +7,7 @@
 package main
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
@@ -536,15 +537,24 @@ func keyProtectionWanted() bool { return keyProtectionSetting() != "off" }
 // failure falls back to the plaintext file — refusing to write would cost the
 // user a key they can never recover.
 func saveIdentityAt(path string, id *identity) error {
+	return saveIdentityWithProtection(path, id, keyProtectionWanted(), false)
+}
+
+// Explicit protection changes fail closed: an OS-store failure must not
+// replace a protected credential with a plaintext one.
+func saveIdentityWithProtection(path string, id *identity, wanted, strict bool) error {
 	out := *id
 	out.Protection = ""
-	if keyProtectionWanted() && keyProtectionAvailable() {
+	if wanted && keyProtectionAvailable() {
 		for _, field := range []*string{&out.PrivateKey, &out.X25519Private} {
 			if *field == "" {
 				continue // legacy identities may not have an encryption key yet
 			}
 			blob, err := protectBytes([]byte(*field))
 			if err != nil {
+				if strict {
+					return fmt.Errorf("protect identity: %w", err)
+				}
 				out = *id
 				out.Protection = ""
 				log.Printf("key protection unavailable, storing identity in plaintext: %v", err)
@@ -637,23 +647,26 @@ func securityLevelOf(pubB64 string, counter uint64) int {
 	return bits
 }
 
-// improveSecurityLevel searches for a counter reaching target, giving up at
-// the deadline. It returns the best counter/level found (never worse than the
+// improveSecurityLevel searches for a counter reaching target until cancelled
+// or its deadline expires. It returns the best counter/level found (never worse than the
 // one it started from).
-func improveSecurityLevel(id *identity, target int, deadline time.Time) (uint64, int) {
+func improveSecurityLevel(ctx context.Context, id *identity, target int) (uint64, int) {
 	pub, err := auth.LoadPublicKey(id.PublicKey)
 	if err != nil {
 		return id.Counter, id.SecurityLevel
 	}
 	pubB64 := base64.StdEncoding.EncodeToString(pub)
 	bestCounter, bestLevel := id.Counter, securityLevelOf(pubB64, id.Counter)
+	if ctx.Err() != nil {
+		return bestCounter, bestLevel
+	}
 	for counter := id.Counter + 1; bestLevel < target; counter++ {
 		if lvl := securityLevelOf(pubB64, counter); lvl > bestLevel {
 			bestCounter, bestLevel = counter, lvl
 		}
 		// The deadline check is amortised: hashing is fast enough that
 		// checking the clock every iteration would dominate the loop.
-		if counter%20000 == 0 && time.Now().After(deadline) {
+		if counter%20000 == 0 && ctx.Err() != nil {
 			break
 		}
 	}
@@ -678,9 +691,10 @@ type IdentityEntry struct {
 
 // IdentityLevelResult reports the outcome of a security-level search (352).
 type IdentityLevelResult struct {
-	Level   int    `json:"level"`
-	Counter uint64 `json:"counter"`
-	Error   string `json:"error,omitempty"`
+	Level     int    `json:"level"`
+	Counter   uint64 `json:"counter"`
+	Error     string `json:"error,omitempty"`
+	Cancelled bool   `json:"cancelled,omitempty"`
 }
 
 // entryFor builds the manager row for one identity file.
@@ -943,14 +957,29 @@ func (a *App) DeleteIdentity(id string, confirmUnexported bool) string {
 // security level (352), giving up after maxSeconds. The counter is persisted
 // so the level survives a restart.
 func (a *App) ImproveIdentityLevel(id string, target, maxSeconds int) IdentityLevelResult {
-	a.identityMu.Lock()
-	defer a.identityMu.Unlock()
 	if target < 1 || target > 40 {
 		return IdentityLevelResult{Error: "target level must be 1..40"}
 	}
 	if maxSeconds < 1 || maxSeconds > 300 {
 		maxSeconds = 30
 	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(maxSeconds)*time.Second)
+	a.identityLevelMu.Lock()
+	if a.identityLevelCancel != nil {
+		a.identityLevelMu.Unlock()
+		cancel()
+		return IdentityLevelResult{Error: "an identity calculation is already running"}
+	}
+	a.identityLevelID, a.identityLevelCancel = id, cancel
+	a.identityLevelMu.Unlock()
+	defer func() {
+		cancel()
+		a.identityLevelMu.Lock()
+		a.identityLevelID, a.identityLevelCancel = "", nil
+		a.identityLevelMu.Unlock()
+	}()
+	a.identityMu.Lock()
+	defer a.identityMu.Unlock()
 	path, err := identityPathFor(id)
 	if err != nil {
 		return IdentityLevelResult{Error: err.Error()}
@@ -959,7 +988,7 @@ func (a *App) ImproveIdentityLevel(id string, target, maxSeconds int) IdentityLe
 	if err != nil {
 		return IdentityLevelResult{Error: err.Error()}
 	}
-	counter, level := improveSecurityLevel(loaded, target, time.Now().Add(time.Duration(maxSeconds)*time.Second))
+	counter, level := improveSecurityLevel(ctx, loaded, target)
 	if level > loaded.SecurityLevel {
 		loaded.Counter, loaded.SecurityLevel = counter, level
 		if err := saveIdentityAt(path, loaded); err != nil {
@@ -967,7 +996,7 @@ func (a *App) ImproveIdentityLevel(id string, target, maxSeconds int) IdentityLe
 		}
 		a.invalidateIdentityContexts()
 	}
-	return IdentityLevelResult{Level: loaded.SecurityLevel, Counter: loaded.Counter}
+	return IdentityLevelResult{Level: loaded.SecurityLevel, Counter: loaded.Counter, Cancelled: errors.Is(ctx.Err(), context.Canceled)}
 }
 
 // IdentityBackupPending reports whether the ACTIVE identity has never been

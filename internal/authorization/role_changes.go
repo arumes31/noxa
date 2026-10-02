@@ -31,6 +31,8 @@ const (
 // RoleChange describes one atomic operation. Actor identity is supplied by the
 // authenticated transport, never taken from this request. RoleCreate's ID is
 // allocated by the store; role order is lowest first, including @everyone.
+// The native transport alone resolves MemberUniqueID for an online verified
+// guest's first MemberRolesSet; UserID must be zero and RoleIDs nonempty.
 type RoleChange struct {
 	Kind             RoleChangeKind `json:"kind"`
 	ExpectedRevision int64          `json:"expected_revision"`
@@ -38,6 +40,7 @@ type RoleChange struct {
 	RoleID           int64          `json:"role_id"`
 	RoleIDs          []int64        `json:"role_ids"`
 	UserID           int64          `json:"user_id"`
+	MemberUniqueID   string         `json:"member_unique_id,omitempty"`
 	Channel          ChannelPolicy  `json:"channel"`
 }
 
@@ -45,6 +48,11 @@ type RoleChange struct {
 // a separate validated snapshot. Persistence must serialize read/check/write
 // and commit the audit record together with the new revision.
 func ApplyRoleChange(p RolePolicy, actorID int64, change RoleChange) (RolePolicy, error) {
+	// Live guest enrollment is resolved by the native server/store adapter,
+	// never by the generic policy API or an integration transport.
+	if change.MemberUniqueID != "" {
+		return RolePolicy{}, ErrRoleInvalid
+	}
 	e, err := NewRoleEvaluator(p)
 	if err != nil {
 		return RolePolicy{}, fmt.Errorf("invalid current policy: %w", err)

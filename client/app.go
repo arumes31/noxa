@@ -117,6 +117,10 @@ type App struct {
 	// are account credentials, so interleaving a switch/regeneration/delete
 	// must never select one path and write another.
 	identityMu sync.Mutex
+	// Cancellation must not wait for the identity-store lock held by the search.
+	identityLevelMu     sync.Mutex
+	identityLevelID     string
+	identityLevelCancel context.CancelFunc
 	// identityGeneration invalidates local-history contexts even when the
 	// selected identity is changed away and back before the UI catches up.
 	// It is guarded by identityMu.

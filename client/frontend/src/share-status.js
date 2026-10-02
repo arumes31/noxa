@@ -70,15 +70,16 @@ function render(s) {
     const audioText = t(!audio ? "share.audioOff" : s.audioMode === "application" ? "share.applicationOn" : "share.audioOn");
     s.root.querySelector(".sharing-meta").textContent = `${t("share.sending", { dimensions, fps })} · ${audioText} · ${viewers}`;
     const reason = s.reduction() || (sample?.reason === "cpu" ? "share.cpu" : sample?.reason === "bandwidth" ? "share.bandwidth" :
-        sample?.width > 0 && sample.width < Math.min(settings.width || s.preset.width, s.preset.width) ? "share.reduced" : "");
+        sample?.width > 0 && sample.width < (s.preset.original ? settings.width : Math.min(settings.width || s.preset.width, s.preset.width)) ? "share.reduced" : "");
     const limits = window.__noxa.state.mediaLimits;
-    const capped = (limits?.video_max_width > 0 && limits.video_max_width < s.preset.width) ||
+    const capped = (s.preset.original && limits?.video_max_width > 0) || (limits?.video_max_width > 0 && limits.video_max_width < s.preset.width) ||
         (limits?.video_max_height > 0 && limits.video_max_height < s.preset.height) ||
         (limits?.video_max_bitrate > 0 && limits.video_max_bitrate < s.preset.bitrate);
     const warning = s.root.querySelector(".sharing-warning");
-    warning.textContent = reason ? t(reason) : capped ? t("share.serverLimit") : "";
+    warning.textContent = reason ? t(reason) : capped ? t(s.preset.original ? "share.originalServerLimit" : "share.serverLimit") : "";
     warning.hidden = !warning.textContent;
-    s.root.querySelector(".sharing-meta").title = t("share.selected", { width: s.preset.width, height: s.preset.height, fps: s.preset.fps, bitrate: formatBitrate(s.preset.bitrate) });
+    s.root.querySelector(".sharing-meta").title = t(s.preset.original ? "share.selectedOriginal" : "share.selected", {
+        width: s.preset.width, height: s.preset.height, fps: s.preset.fps, bitrate: formatBitrate(s.preset.bitrate) });
 }
 
 async function poll(s) {

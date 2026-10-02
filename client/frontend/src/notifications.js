@@ -5,6 +5,7 @@
 // (389), and the alpha notice (215).
 import { playAlert, playEvent } from "./sounds.js";
 import { closeDialog, isCurrentServerDialog, mountDialog, mountServerDialog } from "./modal.js";
+import { showIncomingPoke } from "./poke-ui.js";
 
 const V = () => window.__noxa;
 const App = () => window.go.main.App;
@@ -89,26 +90,33 @@ export function notificationOutputAllowed(event, ctx = {}, output = "toast") {
 // notify is the single dispatch point for user-facing notifications:
 // DND → record-only; muted/overridden channels → filtered; matrix → which
 // outputs fire. ctx: {channelID, uid, className ("messages"|"mentions"|"joins"),
-// noSound, soundEvent, announce}. soundEvent chooses a more specific cue but
+// noSound, soundEvent, speechEvent, announce}. soundEvent chooses a more specific cue but
 // never bypasses this event's matrix row or channel override.
+// poke: {sender, message} replaces the toast with an incoming-poke popup.
 export function notify(event, text, ctx = {}) {
     // (346) always record in the notification center (even under DND).
     window.__noxaPolish?.recordNotification(event, text, ctx);
+    // Restore poke history without reopening acknowledged popups on tab replay.
+    const incomingPoke = event === "poke" && ctx.poke;
+    if (incomingPoke && V().state.replayingTabID) return;
     if (window.__noxaPolish?.dndActive?.()) return;
     if (!overrideAllows(ctx.channelID, ctx.className || "messages", true)) return;
     const row = matrixRow(event);
     if (row.toast) {
-        const kind = ctx.kind || "info";
-        V().toast(text, kind, ctx.category || TOAST_CATEGORY[event] || "alert", { announce: false, record: false });
-        if (ctx.announce !== false) V().announceLive(text, kind === "warn" ? "assertive" : "polite");
+        if (incomingPoke) showIncomingPoke(incomingPoke);
+        else {
+            const kind = ctx.kind || "info";
+            V().toast(text, kind, ctx.category || TOAST_CATEGORY[event] || "alert", { announce: false, record: false });
+            if (ctx.announce !== false) V().announceLive(text, kind === "warn" ? "assertive" : "polite");
+        }
     }
-    if (row.sound && !ctx.noSound) playEventSound(event, ctx.soundEvent);
+    if (row.sound && !ctx.noSound) playEventSound(event, ctx.soundEvent, ctx.speechEvent);
     if (row.flash) App().FlashWindow();
     if (row.native && !document.hasFocus()) App().Notify("noXa " + event, text.slice(0, 200));
 }
 
 // Precise action cues share the notification matrix's policy.
-function playEventSound(event, soundEvent = event) {
+function playEventSound(event, soundEvent = event, speechEvent) {
     if (window.__noxaPolish?.dndActive?.()) return;
     const settings = V().state.settings;
     // Matrix sound permission is checked by notify() before this point. These
@@ -117,7 +125,7 @@ function playEventSound(event, soundEvent = event) {
     if (V().state.replayingTabID
         || settings?.event_sounds?.[event] === false
         || settings?.event_sounds?.[soundEvent] === false) return;
-    const speechEvent = { user_join: "user_join", user_leave: "user_leave", user_move_in: "user_join", user_move_out: "user_leave" }[soundEvent];
+    speechEvent ||= { user_join: "user_join", user_leave: "user_leave", user_move_in: "user_join", user_move_out: "user_leave" }[soundEvent];
     if (speechEvent) playAlert(speechEvent, { effect: soundEvent });
     else playEvent(soundEvent);
 }

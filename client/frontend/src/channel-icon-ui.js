@@ -5,7 +5,7 @@ import { prepareIcon } from "./image-tools.js";
 import { imageDataURL, setSafeImage } from "./safe-media.js";
 import "./roles.css";
 
-export function openChannelIcon(channelID) {
+export function openChannelIcon(channelID, { onSaved } = {}) {
     const app = window.go.main.App, tabID = window.__noxa.state.activeTabID;
     const overlay = roleElement("div", "dlg-overlay");
     const dialog = roleElement("form", "dlg roles-dialog channel-icon-dialog");
@@ -88,7 +88,11 @@ export function openChannelIcon(channelID) {
         busy = saving = true; error.textContent = ""; controls();
         try {
             await app.SetRoleChannelIconForTab(tabID, channelID, draft.data, draft.source);
-            if (current()) { draft = null; closeDialog(overlay, "saved"); }
+            if (current()) {
+                draft = null; closeDialog(overlay, "saved");
+                if (onSaved) onSaved();
+                else window.__noxa.toast?.(t("roles.iconSaved"));
+            }
         } catch { if (current()) { needsRefresh = true; error.textContent = t("roles.iconEditor.failed"); } }
         finally { if (current()) { busy = saving = false; controls(); } }
     });

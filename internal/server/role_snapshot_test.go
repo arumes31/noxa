@@ -44,6 +44,54 @@ func TestRoleSnapshotHidesResourcesCountsAndParentReferences(t *testing.T) {
 	}
 }
 
+func TestRoleSnapshotDescribesChannelAccessForEachViewer(t *testing.T) {
+	sm := state.New(testLogger())
+	sm.AddChannel(&state.Channel{ChannelID: 1, Name: "Public"})
+	sm.AddChannel(&state.Channel{ChannelID: 2, Name: "Private"})
+	sm.AddChannel(&state.Channel{ChannelID: 3, ParentID: 2, Name: "Inherited"})
+	sm.AddChannel(&state.Channel{ChannelID: 4, Name: "Hidden"})
+	policy := serverRoleFixture().policy
+	policy.Roles[0].Permissions = []authorization.Capability{authorization.ViewChannel, authorization.Connect}
+	policy.Roles = append(policy.Roles, authorization.Role{ID: 20, Name: "Private role", Position: 1})
+	policy.Members = []authorization.RoleMember{{UserID: 1, RoleIDs: []int64{20}}}
+	policy.Channels = []authorization.ChannelPolicy{
+		{ChannelID: 1},
+		{ChannelID: 2, Overrides: []authorization.RoleOverride{
+			{RoleID: 10, Capability: authorization.Connect, Effect: authorization.Deny},
+			{RoleID: 20, Capability: authorization.Connect, Effect: authorization.Allow},
+		}},
+		{ChannelID: 3, ParentID: 2, Synced: true},
+		{ChannelID: 4, Overrides: []authorization.RoleOverride{{RoleID: 10, Capability: authorization.ViewChannel, Effect: authorization.Deny}}},
+	}
+	evaluator, err := authorization.NewRoleEvaluator(policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, actorID := range []int64{0, 1, 2} {
+		view := buildRoleSnapshot(sm, evaluator, actorID, "viewer")
+		raw, err := json.Marshal(view)
+		if err != nil {
+			t.Fatal(err)
+		}
+		channels := append([]*broadcast.ChannelNode(nil), view.RootChannels...)
+		for len(channels) > 0 {
+			channel := channels[0]
+			channels = append(channels[1:], channel.Children...)
+			if channel.Access == nil {
+				t.Fatalf("actor %d channel %d: access metadata missing", actorID, channel.ChannelID)
+			}
+			wantRestricted := channel.ChannelID != 1
+			wantConnect := channel.ChannelID == 1 || actorID != 0
+			if channel.Access.Restricted != wantRestricted || channel.Access.CanConnect != wantConnect {
+				t.Fatalf("actor %d channel %d: unexpected access %+v", actorID, channel.ChannelID, channel.Access)
+			}
+		}
+		if actorID != 2 && strings.Contains(string(raw), "Hidden") || strings.Contains(string(raw), "Private role") {
+			t.Fatalf("access summary exposed private resources: %s", raw)
+		}
+	}
+}
+
 func TestRoleLoginSnapshotCarriesAuthenticatedMemberCosmetics(t *testing.T) {
 	backend := serverRoleFixture()
 	backend.policy.Roles = append(backend.policy.Roles, authorization.Role{ID: 20, Name: "Member", Position: 1, Color: "#abcdef"})

@@ -6,9 +6,31 @@ import (
 	"strings"
 	"testing"
 
+	"noxa/internal/auth"
 	"noxa/internal/authorization"
 	"noxa/internal/netproto"
 )
+
+func TestOwnerKeyLoginKeepsDisplayName(t *testing.T) {
+	for _, bound := range []bool{false, true} {
+		t.Run(map[bool]string{false: "account challenge", true: "bound identity"}[bound], func(t *testing.T) {
+			env := startTestEnv(t, nil)
+			defer env.stop()
+			public, private, err := auth.GenerateIdentityKeyPair()
+			if err != nil {
+				t.Fatal(err)
+			}
+			env.auth.pubkeys["admin-uid"] = public
+			env.auth.pubkeyIndex[public] = env.auth.users["admin-uid"]
+			conn, response := dialNamedIdentity(t, env.addr, "admin-uid", public, private, "Daniel", bound)
+			defer func() { _ = conn.Close() }()
+			member, _ := env.state.GetClient(response.ClientID)
+			if !response.OK || response.Nickname != "Daniel" || response.UniqueID != "admin-uid" || member.UserID != 1 {
+				t.Fatalf("owner alias changed identity or was discarded: %+v, %+v", response, member)
+			}
+		})
+	}
+}
 
 func TestAccountDisplayNamePreservesAuthenticatedIdentity(t *testing.T) {
 	env := startTestEnv(t, nil)

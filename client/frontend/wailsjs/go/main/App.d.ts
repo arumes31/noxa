@@ -12,13 +12,19 @@ export function ApplyAndRestart():Promise<string>;
 
 export function ApplyHotkeyProfile(arg1:string):Promise<void>;
 
+export function ApplyIdentityProtection():Promise<void>;
+
 export function AuditLog(arg1:number,arg2:number):Promise<netproto.AuditLogResponse>;
 
 export function AuditLogForTab(arg1:string,arg2:number,arg3:number):Promise<netproto.AuditLogResponse>;
 
+export function BackupIdentity(arg1:string):Promise<boolean>;
+
 export function BanList():Promise<netproto.BanListResponse>;
 
 export function BanListForTab(arg1:string):Promise<netproto.BanListResponse>;
+
+export function CancelIdentityLevel(arg1:string):Promise<boolean>;
 
 export function CancelTransfer(arg1:string):Promise<void>;
 
@@ -339,6 +345,10 @@ export function RegenerateIdentity():Promise<string>;
 export function RemoveRoleBanForTab(arg1:string,arg2:number):Promise<netproto.RoleBanRemoved>;
 
 export function RenameIdentity(arg1:string,arg2:string):Promise<string>;
+
+export function ResetIdentity(arg1:string,arg2:string):Promise<void>;
+
+export function RestoreIdentity():Promise<boolean>;
 
 export function RoleChange(arg1:authorization.RoleChange):Promise<netproto.RoleChangeResult>;
 

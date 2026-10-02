@@ -267,19 +267,38 @@ function openBatchMenu(x, y, clientIDs, trigger) {
     mountContextMenu(menu, { x, y, trigger, resolveTrigger: replacementTrigger(trigger), onClose: () => { if (menuEl === menu) menuEl = null; } });
 }
 
-// inboundAudioByPublisher maps a publisher's client ID -> its inbound-rtp
-// audio stat. The SFU gives every publisher its own MediaStream and sets the
-// track ID to the publisher's client ID, so a stat is attributable via
-// trackIdentifier (or the legacy "track" stat it references) (57).
-function inboundAudioByPublisher(stats) {
+// A receiver created before a publisher joins can keep its browser-generated
+// track ID after renegotiation. Resolve the report's MID through the current
+// remote MSID instead; only microphone slots belong in the Voice section.
+function inboundAudioByPublisher(stats, remoteSDP = "") {
+    const byMid = new Map();
+    let section = null;
+    const finishSection = () => {
+        if (section?.mid != null) byMid.set(section.mid, section.active ? section.trackID : "");
+    };
+    for (const line of remoteSDP.split(/\r?\n/)) {
+        if (line.startsWith("m=")) {
+            finishSection();
+            const [kind, port] = line.slice(2).split(/\s+/);
+            section = { active: kind === "audio" && port !== "0", trackID: "" };
+        } else if (section) {
+            if (line.startsWith("a=mid:")) section.mid = line.slice(6);
+            else if (line.startsWith("a=msid:")) section.trackID = line.slice(7).trim().split(/\s+/)[1] || "";
+            else if (line === "a=inactive" || line === "a=recvonly") section.active = false;
+        }
+    }
+    finishSection();
     const byID = new Map();
     stats.forEach((r) => byID.set(r.id, r));
     const map = new Map();
     stats.forEach((r) => {
         if (r.type !== "inbound-rtp") return;
         if (r.kind !== "audio" && r.mediaType !== "audio") return;
-        const tid = r.trackIdentifier || (r.trackId ? byID.get(r.trackId)?.trackIdentifier : "");
-        if (tid) map.set(String(tid), r);
+        const tid = byMid.has(r.mid) ? byMid.get(r.mid)
+            : r.trackIdentifier || (r.trackId ? byID.get(r.trackId)?.trackIdentifier : "");
+        if (!tid) return;
+        const [publisher, slot] = String(tid).split("|");
+        if (!slot || slot === "mic") map.set(publisher, r);
     });
     return map;
 }
@@ -310,19 +329,21 @@ async function refreshVoiceStats(overlay, client) {
         return;
     }
     try {
-        const stats = await state.pc.getStats();
+        const pc = state.pc;
+        const stats = await pc.getStats();
         if (!isCurrentServerDialog(overlay)) return;
+        if (state.pc !== pc) { blank("— (voice reconnecting)"); return; }
         if (client.client_id === state.myClientID) {
             refreshOwnVoiceStats(stats, setVal, blank);
             return;
         }
-        const byPub = inboundAudioByPublisher(stats);
+        const byPub = inboundAudioByPublisher(stats, pc.remoteDescription?.sdp);
         let inbound = byPub.get(String(client.client_id));
-        // fall back to the track registry: a reconnect can leave the dialog's
-        // client ID stale while the attributed track is still live.
-        if (!inbound && client.unique_id) {
+        // Older reports may only expose an attributed track ID. Never use a
+        // different session of the same account or its screen-share audio.
+        if (!inbound) {
             for (const [trackID, u] of state.trackUsers || []) {
-                if (u.unique_id === client.unique_id && byPub.has(String(trackID))) {
+                if (u.client_id === client.client_id && byPub.has(String(trackID))) {
                     inbound = byPub.get(String(trackID));
                     break;
                 }
@@ -356,7 +377,9 @@ async function refreshVoiceStats(overlay, client) {
             ? ((inbound.concealedSamples || 0) / samples * 100).toFixed(2) + " % (" + (inbound.concealmentEvents || 0) + " events)"
             : "—");
         setVal("packets", recv + " recv / " + lost + " lost");
-        setVal("level", inbound.audioLevel != null ? (inbound.audioLevel * 100).toFixed(0) + " %" : "—");
+        const receiver = pc.getTransceivers?.().find(transceiver => transceiver.mid === inbound.mid)?.receiver;
+        const level = V().readRemoteAudioLevel?.(receiver?.track?.id || inbound.trackIdentifier) ?? inbound.audioLevel;
+        setVal("level", level != null ? (level * 100).toFixed(0) + " %" : "—");
     } catch { /* stats unavailable */ }
 }
 

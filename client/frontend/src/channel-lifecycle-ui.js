@@ -26,6 +26,7 @@ export function openRoleChannel(kind, channelID = 0, { destinationID, orderIndex
     let preset = "inherit", selectedRoles = new Set(), destination = 0, sync = false;
     let passwordAction = "keep";
     let impactView, reviewedTree = "";
+    let feedback = "";
     const access = () => {
         const overrides = applyChannelPreset([], snapshot.everyone_id, preset);
         if (preset === "private") for (const roleID of selectedRoles) overrides.push({ role_id: roleID, capability: "view_channel", effect: "allow" });
@@ -46,7 +47,7 @@ export function openRoleChannel(kind, channelID = 0, { destinationID, orderIndex
         refresh.disabled = busy || committed;
         close.disabled = busy;
         overlay.dataset.blocking = String(busy);
-        status.textContent = busy ? t(snapshot ? "roles.saving" : "roles.channel.loading") : committed ? t("roles.enforcementPending") : "";
+        status.textContent = busy ? t(snapshot ? "roles.saving" : "roles.channel.loading") : committed ? t("roles.enforcementPending") : feedback;
         impactView?.update();
     };
     const field = (key, type = "text", min = null, max = null, host = form) => {
@@ -114,7 +115,7 @@ export function openRoleChannel(kind, channelID = 0, { destinationID, orderIndex
             }
             advanced.append(settings); form.append(advanced);
             if (kind === "channel_edit") form.append(roleButton(t("roles.iconEditor.title"), () => {
-                if (!busy && current()) openChannelIcon(channelID);
+                if (!busy && current()) openChannelIcon(channelID, { onSaved: () => { if (current()) { feedback = t("roles.iconSaved"); controls(); } } });
             }));
         }
         if (kind === "channel_create") {
@@ -210,7 +211,10 @@ export function openRoleChannel(kind, channelID = 0, { destinationID, orderIndex
             const result = await app.ChangeRoleChannelForTab(tabID, request);
             if (!current()) return;
             committed = true; dirty = false;
-            if (!result.enforcement_pending) closeDialog(overlay, "saved");
+            if (!result.enforcement_pending) {
+                closeDialog(overlay, "saved");
+                window.__noxa.toast?.(t(`roles.channel.done.${kind}`));
+            }
         } catch { if (current()) { needsRefresh = true; error.textContent = t("roles.channel.failed"); } }
         finally { if (current()) { busy = false; controls(); } }
     });

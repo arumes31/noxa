@@ -2,6 +2,7 @@ import { t } from "./i18n.js";
 import { closeDialog, confirmDialog, isCurrentServerDialog, mountServerDialog } from "./modal.js";
 import { roleButton, roleElement } from "./role-editor-view.js";
 import { roleChip } from "./role-presentation.js";
+import "./roles.css";
 
 export function openRoleMembers({ onClose, memberUID = "" } = {}) {
     const app = window.go.main.App;
@@ -32,7 +33,8 @@ export function openRoleMembers({ onClose, memberUID = "" } = {}) {
         status.textContent = transferred ? t("roles.ownerTransferred") : busy ? t("roles.loading") : t("roles.selected", { count: selected.size });
         add.disabled = remove.disabled = busy || needsRefresh || transferred || !selected.size || !roleSelect.value;
         transfer.hidden = !snapshot || snapshot.actor_id !== snapshot.policy.owner_id;
-        transfer.disabled = busy || needsRefresh || transferred || selected.size !== 1;
+        transfer.disabled = busy || needsRefresh || transferred || selected.size !== 1 || selected.has(0);
+        if (selected.has(0)) remove.disabled = true;
         refreshButton.disabled = busy || transferred;
         moreButton.hidden = !more;
         moreButton.disabled = busy || transferred;
@@ -95,6 +97,7 @@ export function openRoleMembers({ onClose, memberUID = "" } = {}) {
         clearTimeout(timer);
         const roleID = Number(roleSelect.value);
         const members = entries.filter((m) => selected.has(m.user_id));
+        let enrolled = false;
         busy = true;
         render();
         error.textContent = "";
@@ -102,13 +105,15 @@ export function openRoleMembers({ onClose, memberUID = "" } = {}) {
             const ids = member.role_ids.filter((id) => id !== roleID);
             if (adding) ids.push(roleID);
             try {
-                pendingChange = app.RoleChangeForTab(tabID, { kind: "member_roles_set", expected_revision: snapshot.policy.revision, user_id: member.user_id, role_ids: ids });
+                pendingChange = app.RoleChangeForTab(tabID, { kind: "member_roles_set", expected_revision: snapshot.policy.revision, user_id: member.user_id, role_ids: ids,
+                    ...(member.user_id === 0 ? { member_unique_id: member.unique_id } : {}) });
                 const ack = await pendingChange;
                 if (!current()) return;
                 snapshot.policy.revision = ack.revision;
                 member.role_ids = ids;
                 results.set(member.user_id, "roles.applied");
                 selected.delete(member.user_id);
+                enrolled ||= member.user_id === 0;
                 if (ack.enforcement_pending) {
                     needsRefresh = true;
                     error.textContent = t("roles.enforcementPending");
@@ -123,6 +128,7 @@ export function openRoleMembers({ onClose, memberUID = "" } = {}) {
             }
         }
         if (current()) { busy = false; render(); }
+        if (enrolled && !needsRefresh && current()) await load();
     };
     const add = roleButton(t("roles.assign"), () => apply(true), true);
     const remove = roleButton(t("roles.unassign"), () => apply(false), true);

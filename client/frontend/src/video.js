@@ -11,6 +11,7 @@ import { captureMediaScope, mediaScopeIsCurrent } from "./media-controls.js";
 import { startPublication, stopPublication, publicationSnapshot } from "./stream-publication.js";
 import { startShareStatus, stopShareStatus, refreshShareStatus } from "./share-status.js";
 import { displayAudioOptions, validateDisplayAudio } from "./display-audio.js";
+import { shareQuality, screenShareConstraints, createShareQualityControls } from "./screen-share-quality.js";
 import { closeContextMenu, mountContextMenu, contextMenuKey } from "./context-menu.js";
 
 import { isCurrentServerDialog, mountServerDialog } from "./modal.js";
@@ -788,8 +789,9 @@ export function applyVideoLimits(limits, stillRelevant = () => true) {
                     const preferred = capturePreferences.get(track) || {
                         width: settings.width || 640, height: settings.height || 360, fps: settings.frameRate || 30,
                     };
-                    await track.applyConstraints({ ...track.getConstraints(),
-                        ...videoConstraints(preferred.width, preferred.height, preferred.fps, state.mediaLimits) });
+                    await track.applyConstraints({ ...track.getConstraints(), ...(preferred.screen
+                        ? screenShareConstraints(preferred, state.mediaLimits)
+                        : videoConstraints(preferred.width, preferred.height, preferred.fps, state.mediaLimits)) });
                     if (!current()) return null;
                     // A user can end a source while constraints are pending.
                     if (track.readyState !== "ended" && !trackFitsVideoLimits(track, state.mediaLimits)) {
@@ -860,16 +862,6 @@ let sharePresetBitrate = 0;
 // Screen share (69-72, 85)
 // ---------------------------------------------------------------------------
 
-// Share quality presets (72): applied via getDisplayMedia constraints plus a
-// sender maxBitrate cap.
-const SHARE_PRESETS = {
-    text: { width: 1920, height: 1080, fps: 15, bitrate: 2500000 },
-    balanced: { width: 1280, height: 720, fps: 30, bitrate: 1500000 },
-    motion: { width: 1280, height: 720, fps: 60, bitrate: 2500000 },
-    hd: { width: 1920, height: 1080, fps: 30, bitrate: 5000000 },
-    hdMotion: { width: 1920, height: 1080, fps: 60, bitrate: 8000000 },
-};
-
 // (71) Chromium puts cropTo on BrowserCaptureMediaStreamTrack, a SUBCLASS of
 // MediaStreamTrack — probing the base prototype reports "unsupported" on every
 // browser that actually has the API. The base check stays as a fallback for
@@ -908,7 +900,7 @@ export async function shareToggle() {
     openShareDialog();
 }
 
-function openShareDialog(replacing = false, initialPreset = "balanced", initialAudio = "none", initialSurface = "monitor") {
+function openShareDialog(replacing = false, initialPreset = "balanced", initialAudio = "none", initialSurface = "monitor", custom = {}) {
     const dialogID = ++shareDialogID;
     const sourceName = `shsrc-${dialogID}`;
     const qualityID = `share-quality-${dialogID}`;
@@ -926,14 +918,7 @@ function openShareDialog(replacing = false, initialPreset = "balanced", initialA
                     <input type="radio" name="${sourceName}" value="region" ${regionSupported ? "" : "disabled"} /> ${tLabel("polish.region")}
                 </label>
             </fieldset>
-            <label class="dlg-label" for="${qualityID}">${tLabel("polish.preset")}</label>
-            <select class="dlg-input sh-preset" id="${qualityID}">
-                <option value="balanced">${tLabel("polish.presetBalanced")}</option>
-                <option value="text">${tLabel("polish.presetText")}</option>
-                <option value="motion">${tLabel("polish.presetMotion")}</option>
-                <option value="hd">${tLabel("share.hd")}</option>
-                <option value="hdMotion">${tLabel("share.hdMotion")}</option>
-            </select>
+            <div class="sh-quality"></div>
             <label class="dlg-label" for="${audioID}">${tLabel("share.audio")}</label>
             <select class="dlg-input sh-audio" id="${audioID}" aria-describedby="${audioID}-help">
                 <option value="none">${tLabel("share.audioNone")}</option>
@@ -947,7 +932,8 @@ function openShareDialog(replacing = false, initialPreset = "balanced", initialA
             </div>
         </div>`;
     overlay.querySelector(".dlg-cancel").onclick = () => overlay.remove();
-    overlay.querySelector(".sh-preset").value = initialPreset;
+    const quality = createShareQualityControls(qualityID, { preset: initialPreset, custom });
+    overlay.querySelector(".sh-quality").appendChild(quality.element);
     const audioSelect = overlay.querySelector(".sh-audio");
     audioSelect.value = replacing && V().state.shareStream?.getAudioTracks().some(track => track.readyState === "live") ? initialAudio : "none";
     overlay.querySelector(`input[value="${initialSurface}"]`).checked = true;
@@ -961,8 +947,9 @@ function openShareDialog(replacing = false, initialPreset = "balanced", initialA
     overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
     overlay.querySelector(".dlg-ok").onclick = async () => {
         if (!isCurrentServerDialog(overlay)) return;
+        const selected = quality.read();
+        if (!selected) return;
         const surface = overlay.querySelector(`input[name="${sourceName}"]:checked`).value;
-        const preset = overlay.querySelector(".sh-preset").value;
         const audioMode = audioSelect.value;
         overlay.remove();
         const { state } = V();
@@ -970,7 +957,7 @@ function openShareDialog(replacing = false, initialPreset = "balanced", initialA
         const request = {};
         state.shareStarting = request;
         syncShareButton();
-        try { await startShare({ surface, preset, audioMode, replacing }); }
+        try { await startShare({ surface, ...selected, audioMode, replacing }); }
         finally {
             if (state.shareStarting === request) { state.shareStarting = null; syncShareButton(); }
         }
@@ -997,7 +984,7 @@ function openShareDialog(replacing = false, initialPreset = "balanced", initialA
 // picker ultimately decides what is shareable), publishes a dedicated screen
 // track independently of the camera, optionally merges display
 // audio (70), and applies the quality preset (72).
-async function startShare({ surface, preset, audioMode, replacing = false }) {
+async function startShare({ surface, preset, custom, audioMode, replacing = false }) {
     const { state } = V();
     const generation = state.serverGeneration;
     const tabID = state.activeTabID;
@@ -1019,9 +1006,10 @@ async function startShare({ surface, preset, audioMode, replacing = false }) {
         }
     };
     const previousDisplay = state.shareStream;
-    const p = SHARE_PRESETS[preset] || SHARE_PRESETS.balanced;
+    const p = shareQuality(preset, custom);
+    if (!p) return;
     const limits = state.mediaLimits;
-    const video = videoConstraints(p.width, p.height, p.fps, limits);
+    const video = screenShareConstraints(p, limits);
     if (surface !== "region") video.displaySurface = surface; // 69: "monitor" | "window"
     const gdm = { video, ...displayAudioOptions(audioMode) };
     if (surface === "region") {
@@ -1066,8 +1054,8 @@ async function startShare({ surface, preset, audioMode, replacing = false }) {
         V().sysMsg("screen capture produced no video track");
         return;
     }
-    capturePreferences.set(screenTrack, p);
-    screenTrack.contentHint = preset === "text" ? "detail" : "motion";
+    capturePreferences.set(screenTrack, { ...p, screen: true });
+    screenTrack.contentHint = preset === "text" || p.original || p.height > 1080 ? "detail" : "motion";
     let shareEnded = false;
     screenTrack.onended = () => {
         shareEnded = true;
@@ -1221,7 +1209,7 @@ async function startShare({ surface, preset, audioMode, replacing = false }) {
     syncShareButton();
     startShareStatus({ stream: display, pc: peerConnection, scope: shareScope, preset: p, surface, audioMode,
         generation: publicationSnapshot().find(p => p.publication.slot === "screen")?.generation,
-        stop: () => { V().$("voice-screen").focus(); void doStopShare(); }, change: () => openShareDialog(true, preset, audioMode, surface),
+        stop: () => { V().$("voice-screen").focus(); void doStopShare(); }, change: () => openShareDialog(true, preset, audioMode, surface, custom),
         reduction: () => lowBandwidth ? "share.lowBandwidth" : sendCpuPressure ? "share.cpu" : "" });
 }
 

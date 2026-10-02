@@ -181,6 +181,87 @@ for (const [preset, fps, bitrate] of [["hd", 30, 5000000], ["hdMotion", 60, 8000
     });
 }
 
+for (const [preset, width, height, bitrate] of [["qhd", 2560, 1440, 10000000], ["uhd", 3840, 2160, 20000000]]) {
+    test(`${preset} shares high resolution with a traffic warning and bounded sender budget`, async ({ page }) => {
+        await page.locator("#voice-screen").click();
+        await page.locator(".sh-preset").selectOption(preset);
+        await expect(page.locator(".share-quality-warning")).toContainText("CPU/GPU");
+        await expect(page.locator(".share-budget")).toContainText(`${bitrate / 1000000} Mbit/s`);
+        await page.getByRole("button", { name: "Start sharing", exact: true }).click();
+        await expect(page.locator("#sharing-status")).toBeVisible();
+        expect(await page.evaluate(() => window.__media.captureOptions.video)).toMatchObject({
+            width: { ideal: width, max: width }, height: { ideal: height, max: height }, frameRate: { ideal: 30, max: 30 },
+        });
+        expect(await page.evaluate(() => window.__noxa.state.shareVideoTransceiver.sender.getParameters().encodings[0].maxBitrate)).toBe(bitrate);
+    });
+}
+
+test("custom sharing validates dimensions and retains size and frame rate when changing sources", async ({ page }) => {
+    await page.locator("#voice-screen").click();
+    await page.locator(".sh-preset").selectOption("custom");
+    await page.getByLabel("Width (px)", { exact: true }).fill("9000");
+    await page.getByRole("button", { name: "Start sharing", exact: true }).click();
+    expect(await page.evaluate(() => window.__media.captureOptions)).toBeUndefined();
+    await expect(page.getByLabel("Width (px)", { exact: true })).toBeFocused();
+    await page.getByLabel("Width (px)", { exact: true }).fill("3440");
+    await page.getByLabel("Height (px)", { exact: true }).fill("1440");
+    await page.getByLabel("Frame rate", { exact: true }).selectOption("60");
+    await expect(page.locator(".share-budget")).toContainText("24 Mbit/s");
+    await page.getByRole("button", { name: "Start sharing", exact: true }).click();
+    await expect(page.locator(".sharing-change")).toBeEnabled();
+    expect(await page.evaluate(() => window.__media.captureOptions.video)).toMatchObject({
+        width: { ideal: 3440, max: 3440 }, height: { ideal: 1440, max: 1440 }, frameRate: { ideal: 60, max: 60 },
+    });
+    await page.locator(".sharing-change").click();
+    await expect(page.locator(".sh-preset")).toHaveValue("custom");
+    await expect(page.getByLabel("Width (px)", { exact: true })).toHaveValue("3440");
+    await expect(page.getByLabel("Height (px)", { exact: true })).toHaveValue("1440");
+    await expect(page.getByLabel("Frame rate", { exact: true })).toHaveValue("60");
+    await page.getByRole("button", { name: "Cancel", exact: true }).click();
+    expect(await page.evaluate(() => window.__media.displayTracks[0].readyState)).toBe("live");
+});
+
+test("original sharing removes resolution preferences and restores source dimensions after a server limit", async ({ page }) => {
+    await page.locator("#voice-screen").click();
+    await page.locator(".sh-preset").selectOption("original");
+    await expect(page.locator(".share-quality-warning")).toBeVisible();
+    await page.getByRole("button", { name: "Start sharing", exact: true }).click();
+    await expect(page.locator("#sharing-status")).toBeVisible();
+    expect(await page.evaluate(() => window.__media.captureOptions.video)).toMatchObject({ width: {}, height: {} });
+    await expect(page.locator(".sharing-meta")).toHaveAttribute("title", /Original source resolution/);
+    const result = await page.evaluate(async () => {
+        const track = window.__noxa.state.shareStream.getVideoTracks()[0];
+        const applied = [];
+        let settings = { width: 3840, height: 2160 };
+        track.getSettings = () => settings;
+        track.applyConstraints = async constraints => {
+            applied.push(constraints);
+            settings = { width: constraints.width.max || 3840, height: constraints.height.max || 2160 };
+        };
+        await window.__media.video.applyVideoLimits({ video_max_width: 1280, video_max_height: 720, video_max_bitrate: 2000000 });
+        const capped = window.__noxa.state.shareVideoTransceiver.sender.getParameters().encodings[0].maxBitrate;
+        await window.__media.video.applyVideoLimits({ video_max_width: 0, video_max_height: 0, video_max_bitrate: 0 });
+        return { applied, settings, capped, restored: window.__noxa.state.shareVideoTransceiver.sender.getParameters().encodings[0].maxBitrate };
+    });
+    expect(result.applied.map(c => [c.width, c.height])).toEqual([[{ max: 1280 }, { max: 720 }], [{}, {}]]);
+    expect(result.settings).toEqual({ width: 3840, height: 2160 });
+    expect(result.capped).toBe(850000);
+    expect(result.restored).toBe(20000000);
+    await page.locator(".sharing-change").click();
+    await expect(page.locator(".sh-preset")).toHaveValue("original");
+});
+
+test("high-resolution requests still respect server size and bitrate limits", async ({ page }) => {
+    await page.evaluate(() => { window.__noxa.state.mediaLimits = { video_max_width: 1280, video_max_height: 720, video_max_bitrate: 4000000 }; });
+    await page.locator("#voice-screen").click();
+    await page.locator(".sh-preset").selectOption("uhd");
+    await expect(page.locator(".media-limit-hint")).toContainText("1280");
+    await page.getByRole("button", { name: "Start sharing", exact: true }).click();
+    await expect(page.locator("#sharing-status")).toBeVisible();
+    expect(await page.evaluate(() => window.__media.captureOptions.video)).toMatchObject({ width: { ideal: 1280, max: 1280 }, height: { ideal: 720, max: 720 } });
+    expect(await page.evaluate(() => window.__noxa.state.shareVideoTransceiver.sender.getParameters().encodings[0].maxBitrate)).toBe(1700000);
+});
+
 test("sharing status shows sent quality, audio, honest viewer counts and an expandable live preview", async ({ page }) => {
     await page.locator("#voice-screen").click();
     await page.getByRole("button", { name: "Start sharing", exact: true }).click();
@@ -517,8 +598,8 @@ test("dimension relaxation retains a screen's original preset and disabled captu
         await window.__media.video.applyVideoLimits({ video_max_width: 0, video_max_height: 0 });
         return { applied, enabled: track.enabled, state: track.readyState };
     });
-    expect(result.applied.map(value => value.width)).toEqual([{ ideal: 320, max: 320 }, { ideal: 1280 }]);
-    expect(result.applied.map(value => value.height)).toEqual([{ ideal: 180, max: 180 }, { ideal: 720 }]);
+    expect(result.applied.map(value => value.width)).toEqual([{ ideal: 320, max: 320 }, { ideal: 1280, max: 1280 }]);
+    expect(result.applied.map(value => value.height)).toEqual([{ ideal: 180, max: 180 }, { ideal: 720, max: 720 }]);
     expect(result.enabled).toBe(false);
     expect(result.state).toBe("live");
 });

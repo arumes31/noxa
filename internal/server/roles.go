@@ -37,6 +37,15 @@ func (s *TCPServer) handleRoleMembers(ctx context.Context, client *Client, f *ne
 	if err != nil {
 		return s.roleError(ctx, client, err)
 	}
+	// Exact identity lookups from the member menu may select an online guest.
+	// Merely opening the menu never registers the guest or changes permissions.
+	if _, canEnroll := s.deps.Roles.(roleGuestStore); canEnroll && query.ChannelID == 0 && query.AfterID == 0 && len(page.Entries) == 0 {
+		if target, ok := s.roleGuest(query.Search); ok {
+			page.Entries = append(page.Entries, authorization.MemberIdentity{
+				UniqueID: query.Search, Nickname: target.nickname(), RoleIDs: []int64{}, Manageable: true,
+			})
+		}
+	}
 	return s.writeMessage(client, netproto.MsgRoleMembers, page)
 }
 
@@ -175,12 +184,17 @@ func (s *TCPServer) handleRoleChange(ctx context.Context, client *Client, f *net
 	}
 	var p authorization.RolePolicy
 	var err error
-	p, err = s.deps.Authority.ChangeRolePolicyValidated(ctx, client.userID(), change, func(context.Context) error {
+	validate := func(context.Context) error {
 		if client.sessionRevoked() || client.rulesBlocked() {
 			return authorization.ErrRoleForbidden
 		}
 		return nil
-	})
+	}
+	if change.MemberUniqueID != "" {
+		p, err = s.assignGuestRoles(ctx, client, change, validate)
+	} else {
+		p, err = s.deps.Authority.ChangeRolePolicyValidated(ctx, client.userID(), change, validate)
+	}
 	if err != nil && !errors.Is(err, authorization.ErrEnforcementPending) {
 		return s.roleError(ctx, client, err)
 	}

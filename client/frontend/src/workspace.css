@@ -74,7 +74,12 @@ body.details-collapsed #app-body { grid-template-columns: minmax(210px, var(--si
 .channel.mine { background: var(--accent-dim); border-left-color: var(--accent); color: var(--text); }
 .channel.mine .ch-name { color: var(--text); }
 .channel.mine .ch-icon { color: var(--accent); }
-.ch-icon { display: flex; align-items: center; }
+.ch-icon { display: flex; align-items: center; position: relative; flex: none; }
+.ch-access-badges { position: absolute; display: flex; right: -6px; bottom: -4px; gap: 1px; }
+.ch-access-badges > span { display: flex; padding: 1px; border-radius: 3px; background: var(--bg-panel); color: var(--text); }
+.ch-access-badges .ui-icon { width: 10px; height: 10px; stroke-width: 2.2; }
+.ch-access-badges > .ch-access-key { color: var(--warn); }
+.channel.access-denied .ch-name, .channel.access-denied .ch-icon { color: var(--text-faint); }
 .ch-disclosure { display: flex; align-items: center; width: 12px; flex: none; }
 .ch-disclosure .ui-icon { width: 12px; height: 12px; }
 .channel[aria-expanded="false"] .ch-disclosure { transform: rotate(-90deg); }

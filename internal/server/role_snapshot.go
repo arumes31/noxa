@@ -53,6 +53,11 @@ func buildRoleSnapshotContext(ctx context.Context, sm *state.Manager, evaluator 
 		children := node.Children
 		node.Children = nil
 		if evaluator.Evaluate(actorID, node.ChannelID, authorization.ViewChannel).Allowed {
+			node.Access = &broadcast.ChannelAccess{
+				Restricted: !evaluator.Evaluate(0, node.ChannelID, authorization.ViewChannel).Allowed ||
+					!evaluator.Evaluate(0, node.ChannelID, authorization.Connect).Allowed,
+				CanConnect: evaluator.Evaluate(actorID, node.ChannelID, authorization.Connect).Allowed,
+			}
 			if err := decorateMembers(node.Clients); err != nil {
 				return err
 			}

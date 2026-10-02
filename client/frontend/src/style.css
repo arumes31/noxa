@@ -313,7 +313,7 @@ body:not(.details-collapsed) #details-toggle { display: none; }
 /* (128) no font-size here: #chat-log carries --chat-font-size, and a rule on
    .msg outranks it by specificity, which made the chat font-size setting inert. */
 .msg { display: flex; align-items: baseline; gap: 8px; margin: 3px 0; }
-.msg-time { color: var(--text-faint); font-size: 0.7857rem; flex: 0 0 auto; }
+.msg-time { color: var(--text-faint); font-size: 0.7857rem; flex: 0 0 auto; white-space: nowrap; }
 .msg-from { color: var(--text-dim); font-weight: 600; flex: 0 0 auto; }
 .msg-from.self { color: var(--accent); }
 .msg-tag {
@@ -472,6 +472,14 @@ body:not(.details-collapsed) #details-toggle { display: none; }
     display: flex; flex-direction: column; gap: 12px;
 }
 .dlg.dlg-wide { width: 480px; }
+.incoming-poke #incoming-poke-list {
+    min-height: 0; max-height: 50dvh; overflow: auto;
+    overflow-wrap: anywhere; user-select: text;
+}
+.incoming-poke-entry + .incoming-poke-entry {
+    border-top: 1px solid var(--border); margin-top: 12px; padding-top: 12px;
+}
+.incoming-poke-entry p { margin: 6px 0 0; white-space: pre-wrap; }
 .dlg h3 { margin: 0; font-family: var(--font-display); font-size: 1.1429rem; }
 .dlg-label { font-size: 0.8571rem; color: var(--text-dim); }
 .dlg-input {
@@ -650,13 +658,14 @@ body:not(.details-collapsed) #details-toggle { display: none; }
 .upd-current { font-size: 0.7857rem; color: var(--text-faint); }
 .upd-status { font-size: 1rem; min-height: 20px; }
 .upd-status .warn { color: var(--warn); }
-.upd-progress { display: flex; align-items: center; gap: 10px; }
+.upd-progress { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
 .upd-bar {
     flex: 1; height: 12px; border-radius: 6px;
     background: var(--bg); border: 1px solid var(--border); overflow: hidden;
 }
 .upd-fill { height: 100%; width: 0; background: var(--accent); transition: width .15s ease; }
 .upd-pct { font-size: 0.8571rem; color: var(--text-dim); min-width: 40px; text-align: right; }
+.upd-speed { font-size: 0.8571rem; color: var(--text-dim); white-space: nowrap; }
 .version-foot { display: block; margin-top: 2px; }
 
 /* ---------------------------------------------------------------- wave 1 voice UX */
@@ -678,7 +687,7 @@ body:not(.details-collapsed) #details-toggle { display: none; }
 #chat-log .msg.grouped { margin-top: 0; padding-top: 3px; padding-bottom: 3px; }
 #chat-log .msg.grouped .msg-avatar { display: none; }
 #chat-log .msg.grouped .msg-from, #chat-log .msg.grouped .msg-tag { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
-#chat-log .msg.grouped .msg-time { grid-column: 1; grid-row: 1; align-self: baseline; justify-self: center; color: var(--text-dim); font-size: .75rem; }
+#chat-log .msg.grouped .msg-time { display: none; }
 #chat-log .msg.grouped .msg-text { grid-row: 1; }
 
 .status-icons { margin-left: auto; font-size: 0.7857rem; }
@@ -818,6 +827,14 @@ body:not(.details-collapsed) #details-toggle { display: none; }
 
 /* ---------------------------------------------------------------- share dialog (69-72) */
 .share-dlg h3 { margin: 0 0 10px; }
+.dlg.share-dlg { width: 480px; }
+.share-custom { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-top: 12px; }
+.share-custom[hidden] { display: none; }
+.share-custom label { min-width: 0; color: var(--text-dim); font-size: 0.8571rem; }
+.share-custom .dlg-input { margin-top: 5px; min-width: 0; }
+.share-quality-controls p { margin: 10px 0 0; overflow-wrap: anywhere; }
+.share-quality-warning { padding: 10px; border: 1px solid var(--warn); border-radius: 3px; }
+@media (max-width: 420px) { .share-custom { grid-template-columns: 1fr; } }
 .share-sources {
     display: flex; gap: 14px; flex-wrap: wrap; min-width: 0;
     margin: 0 0 10px; padding: 10px 12px 12px;

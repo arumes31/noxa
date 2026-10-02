@@ -13,6 +13,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"testing"
+	"time"
 
 	"noxa/internal/updatemanifest"
 	"noxa/internal/version"
@@ -229,12 +230,82 @@ func TestDownloadToEnforcesLimit(t *testing.T) {
 		t.Fatalf("open root: %v", err)
 	}
 	defer func() { _ = root.Close() }()
-	err = downloadTo(context.Background(), srv.URL, root, "download", 4, func(int) {})
+	err = downloadTo(context.Background(), srv.URL, root, "download", 4, nil)
 	if err == nil {
 		t.Fatal("expected oversized download to fail")
 	}
 	if _, statErr := root.Stat("download"); !os.IsNotExist(statErr) {
 		t.Fatalf("partial download was not removed: %v", statErr)
+	}
+}
+
+func TestUpdateProgressSamplesTransferredBytes(t *testing.T) {
+	start := time.Unix(0, 0)
+	sampler := updateProgressSampler{lastTime: start}
+	if _, ok := sampler.sample(100, 10240, start.Add(100*time.Millisecond), false); ok {
+		t.Fatal("progress events should be throttled")
+	}
+	progress, ok := sampler.sample(1024, 10240, start.Add(500*time.Millisecond), false)
+	if !ok || progress.Percent != 10 || progress.BytesPerSecond != 2048 {
+		t.Fatalf("first sample: %+v, reported=%v", progress, ok)
+	}
+	progress, ok = sampler.sample(1536, -1, start.Add(1500*time.Millisecond), false)
+	if !ok || progress.Percent != -1 || progress.BytesPerSecond != 512 {
+		t.Fatalf("unknown total after a slower interval: %+v, reported=%v", progress, ok)
+	}
+	progress, ok = sampler.sample(1600, 1600, start.Add(1510*time.Millisecond), true)
+	if !ok || progress.Percent != 100 || progress.BytesPerSecond != 6400 {
+		t.Fatalf("final partial interval: %+v, reported=%v", progress, ok)
+	}
+	if _, ok := sampler.sample(1600, 1600, start.Add(1520*time.Millisecond), true); ok {
+		t.Fatal("duplicate completion should not overwrite the speed with zero")
+	}
+}
+
+func TestUpdateProgressEmptyDownload(t *testing.T) {
+	start := time.Unix(0, 0)
+	sampler := updateProgressSampler{lastTime: start}
+	progress, ok := sampler.sample(0, -1, start, true)
+	if !ok || progress.BytesPerSecond != 0 || progress.Percent != -1 {
+		t.Fatalf("empty transfer should not divide by zero: %+v", progress)
+	}
+}
+
+func TestDownloadToReportsSpeedForKnownAndUnknownSizes(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		chunked bool
+		percent int
+	}{{name: "known size", percent: 100}, {name: "unknown size", chunked: true, percent: -1}} {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				const data = "download data"
+				if !tt.chunked {
+					w.Header().Set("Content-Length", fmt.Sprint(len(data)))
+				}
+				w.(http.Flusher).Flush()
+				// Separate headers from the body by more than the Windows clock
+				// resolution so this HTTP test observes a measurable transfer.
+				time.Sleep(100 * time.Millisecond)
+				_, _ = w.Write([]byte(data))
+			}))
+			defer srv.Close()
+			root, err := os.OpenRoot(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = root.Close() }()
+			progress := []updateProgress{}
+			err = downloadTo(context.Background(), srv.URL, root, "download", 1024, func(p updateProgress) {
+				progress = append(progress, p)
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(progress) == 0 || progress[len(progress)-1].Percent != tt.percent || progress[len(progress)-1].BytesPerSecond <= 0 {
+				t.Fatalf("missing final speed for %s: %+v", tt.name, progress)
+			}
+		})
 	}
 }
 
@@ -244,7 +315,7 @@ func TestDownloadToRejectsInsecureRemoteURL(t *testing.T) {
 		t.Fatalf("open root: %v", err)
 	}
 	defer func() { _ = root.Close() }()
-	err = downloadTo(context.Background(), "http://example.com/update", root, "download", 1024, func(int) {})
+	err = downloadTo(context.Background(), "http://example.com/update", root, "download", 1024, nil)
 	if err == nil {
 		t.Fatal("expected insecure remote URL to fail")
 	}

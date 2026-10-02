@@ -129,6 +129,16 @@ func (m *Manager) GetClient(clientID string) (*Client, bool) {
 	return cloneClient(c), true
 }
 
+// EnrollClient attaches an explicitly granted account ID without replacing
+// concurrent channel, audio or presence state. The caller holds its policy gate.
+func (m *Manager) EnrollClient(clientID, uniqueID string, userID int64) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if c := m.clients[clientID]; c != nil && c.UniqueID == uniqueID && c.UserID == 0 && userID > 0 {
+		c.UserID = userID
+	}
+}
+
 // GetClientByUniqueID returns the online client with the given unique ID and
 // whether it was found.
 func (m *Manager) GetClientByUniqueID(uniqueID string) (*Client, bool) {

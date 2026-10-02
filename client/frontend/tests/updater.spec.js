@@ -77,6 +77,39 @@ test("update shows progress, prevents duplicates, then restarts", async ({ page 
     expect(await page.evaluate(() => window.__events.update_progress.length)).toBe(0);
 });
 
+test("download speed handles units, stalls, unknown sizes and completion", async ({ page }) => {
+    await boot(page, { downloadPending: true });
+    await page.clock.install();
+    await page.getByRole("button", { name: "Update now" }).click();
+    const speed = page.locator(".upd-speed");
+    await expect(speed).toHaveText("Speed: —");
+    await page.evaluate(() => window.__events.update_progress.forEach(cb => cb(55, { bytes_per_second: 524288 })));
+    await expect(speed).toHaveText("Speed: 512.00 KiB/s");
+    await page.evaluate(() => window.__events.update_progress.forEach(cb => cb(-1, { bytes_per_second: 2621440 })));
+    await expect(speed).toHaveText("Speed: 2.50 MiB/s");
+    await expect(page.locator(".upd-pct")).toHaveText("—");
+    await page.clock.runFor(2000);
+    await expect(speed).toHaveText("Speed: 0 B/s");
+    await page.evaluate(() => window.__events.update_progress.forEach(cb => cb(75, { bytes_per_second: 1048576 })));
+    await expect(speed).toHaveText("Speed: 1.00 MiB/s");
+    await page.evaluate(() => window.__finishDownload());
+    await expect(page.getByRole("button", { name: "Restart now" })).toBeVisible();
+    await expect(page.locator(".upd-progress")).toBeHidden();
+    expect(await page.evaluate(() => window.__events.update_progress.length)).toBe(0);
+});
+
+test("retry clears the previous attempt's download speed", async ({ page }) => {
+    await boot(page, { downloadPending: true, downloadError: "connection lost" });
+    await page.getByRole("button", { name: "Update now" }).click();
+    await page.evaluate(() => window.__events.update_progress.forEach(cb => cb(50, { bytes_per_second: 1048576 })));
+    await expect(page.locator(".upd-speed")).toHaveText("Speed: 1.00 MiB/s");
+    await page.evaluate(() => window.__finishDownload());
+    await expect(page.locator(".upd-progress")).toBeHidden();
+    await page.getByRole("button", { name: "Update now" }).click();
+    await expect(page.locator(".upd-speed")).toHaveText("Speed: —");
+    await page.evaluate(() => window.__finishDownload());
+});
+
 for (const scenario of [{ downloadError: "update rejected: checksum mismatch" }, { downloadThrows: true }]) {
     test(`download failure is visible and retry works ${JSON.stringify(scenario)}`, async ({ page }) => {
         await boot(page, scenario);
@@ -157,6 +190,10 @@ test("German updater translates failure, retry, progress and restart", async ({ 
     await expect(dialog.locator(".upd-status")).toHaveText("Update verfügbar: v0.4.1 (1.0 MiB)");
     await dialog.getByRole("button", { name: "Jetzt aktualisieren", exact: true }).click();
     await expect(dialog.locator(".upd-status")).toHaveText("Wird heruntergeladen…");
+    await page.evaluate(() => {
+        for (const cb of window.__events.update_progress) cb(50, { bytes_per_second: 1048576 });
+    });
+    await expect(dialog.locator(".upd-speed")).toHaveText("Geschwindigkeit: 1.00 MiB/s");
     await page.evaluate(() => window.__finishDownload());
     await expect(dialog.getByRole("button", { name: "Jetzt neu starten", exact: true })).toBeVisible();
     await expect(dialog.locator(".upd-status")).toHaveText("Update angewendet — Neustart erforderlich");

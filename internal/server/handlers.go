@@ -15,6 +15,7 @@ import (
 	"io/fs"
 	"net"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -379,6 +380,9 @@ func (s *TCPServer) handleGuestSignature(ctx context.Context, client *Client, ms
 	}
 
 	attempt.Succeed(principalScope)
+	client.mu.Lock()
+	client.verifiedGuestKey = msg.PublicKey
+	client.mu.Unlock()
 	return s.completeGuestAuth(ctx, client, uniqueID, nickname)
 }
 
@@ -500,6 +504,17 @@ func (s *TCPServer) finishAuth(ctx context.Context, client *Client, id authIdent
 		}
 		if rejection != "" {
 			return authorization.ErrRoleForbidden
+		}
+		// A role manager may have enrolled this proven identity while its
+		// handshake waited for the policy gate. Join with the committed member
+		// ID instead of publishing a second session with guest permissions.
+		if id.guest && id.userID == 0 && !strings.HasPrefix(id.uniqueID, "guest:") {
+			user, err := s.deps.Auth.LookupUser(ctx, id.uniqueID)
+			if err == nil {
+				id.userID, id.bot, id.guest = user.ID, user.IsBot, false
+			} else if !errors.Is(err, auth.ErrUserNotFound) {
+				return err
+			}
 		}
 		if id.customName {
 			id.nickname = s.dedupeNickname(id.nickname)
