@@ -1,0 +1,14 @@
+{
+  "sourceCommit": "c2697e44a45172f9055063b90f00bac234657029",
+  "browser": "151.0.7922.34",
+  "viewport": "1280x800",
+  "scale": 1,
+  "locale": "en-GB",
+  "timezone": "UTC",
+  "fixtureTime": "2026-10-02T18:35:00Z",
+  "fixture": "website/scripts/capture-client.mjs",
+  "data": "Fictional local-only demo data",
+  "appChat": "Full actual frontend viewport",
+  "appRoles": "Actual Roles dialog crop",
+  "generatedAt": "2026-10-02T20:48:10.347Z"
+}

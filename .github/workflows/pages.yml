@@ -1,0 +1,95 @@
+name: Website
+
+on:
+  # Validate every PR so a required "Website validation" check never remains
+  # pending merely because an unrelated PR did not match a path filter.
+  pull_request:
+  push:
+    branches: [main]
+    paths:
+      - 'website/**'
+      - '.github/workflows/pages.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: website-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  validate:
+    name: Website validation
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: website
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: website/package-lock.json
+
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - name: Validate static content and browser behavior
+        run: npm test
+
+      # Network availability is independent from the deterministic browser
+      # suite. Confirm the download contract before preparing a deployment.
+      - name: Verify the latest Windows release asset
+        if: >-
+          github.ref == 'refs/heads/main' &&
+          github.event.repository.default_branch == 'main' &&
+          (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+        run: npm run check:release
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+
+      - name: Upload validated public files
+        if: >-
+          github.ref == 'refs/heads/main' &&
+          github.event.repository.default_branch == 'main' &&
+          (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+        uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: website/public
+          # The static-content checks allow only .nojekyll as a hidden file.
+          include-hidden-files: true
+
+  deploy:
+    name: Publish GitHub Pages
+    needs: validate
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      github.event.repository.default_branch == 'main' &&
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      pages: write
+      id-token: write
+    concurrency:
+      group: github-pages-production
+      cancel-in-progress: false
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Read Pages configuration
+        uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
+        with:
+          enablement: false
+
+      - name: Publish the validated artifact
+        id: deployment
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
