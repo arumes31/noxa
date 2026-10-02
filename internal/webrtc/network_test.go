@@ -12,7 +12,7 @@ import (
 
 func TestSharedUDPPortCandidatesAndCleanup(t *testing.T) {
 	e, err := NewWithNetwork(testLogger(), nil, false, NetworkConfig{
-		UDPAddr: ":0", ExternalIPs: []string{"203.0.113.10", "100.103.150.8"},
+		UDPAddr: ":0", ExternalIPs: []string{"203.0.113.10", "100.64.0.10"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -49,7 +49,7 @@ func TestSharedUDPPortCandidatesAndCleanup(t *testing.T) {
 		case <-time.After(10 * time.Second):
 			t.Fatal("ICE gathering timed out")
 		}
-		for _, ip := range []string{"203.0.113.10", "100.103.150.8"} {
+		for _, ip := range []string{"203.0.113.10", "100.64.0.10"} {
 			if !strings.Contains(pc.LocalDescription().SDP, ip+" "+port+" typ host") {
 				t.Fatalf("missing forwarded UDP candidate: %s", pc.LocalDescription().SDP)
 			}

@@ -12,7 +12,7 @@ func TestWebRTCNetworkEnvironment(t *testing.T) {
 	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
 	v.AutomaticEnv()
 	t.Setenv("NOXA_WEBRTC_UDP_ADDR", ":12341")
-	t.Setenv("NOXA_WEBRTC_EXTERNAL_IPS", "203.0.113.10,100.103.150.8")
+	t.Setenv("NOXA_WEBRTC_EXTERNAL_IPS", "203.0.113.10,100.64.0.10")
 	cfg, err := decodeConfig(v)
 	if err != nil {
 		t.Fatal(err)

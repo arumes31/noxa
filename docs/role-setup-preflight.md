@@ -91,8 +91,7 @@ permissions or content, and the active server has no legacy fallback.
 
 Activation still does not verify owner password/key possession, bans, backup
 integrity or asset recovery. Rehearse on an isolated fresh database, verify
-owner login and recovery, and test backup restoration before launch. See
-[the approved plan](../tasks/plan.md) and the
+owner login and recovery, and test backup restoration before launch. See the
 [backup/restore procedure](operations/backup-restore.md).
 
 Validation uses disposable PostgreSQL databases: exact-ID selection, read-only

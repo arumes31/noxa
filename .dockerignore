@@ -57,5 +57,10 @@ docker-compose*.yml
 .DS_Store
 Thumbs.db
 
+# Private deployments and internal work notes
+deploy/
+tasks/
+.kilo/
+
 # Local config that should not be baked into the image
 config.yaml
