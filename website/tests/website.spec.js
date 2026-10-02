@@ -69,7 +69,7 @@ for (const width of [320, 390, 768, 1440, 1920]) {
       expect(bounds.x + bounds.width).toBeLessThanOrEqual(width + 1);
     }
     if (width === 390) {
-      await page.evaluate(() => scrollTo(0, 0));
+      await page.evaluate(() => scrollTo({ top: 0, left: 0, behavior: 'instant' }));
       const download = page.locator('.hero a').filter({ hasText: 'Download for Windows' });
       await expect(download).toBeVisible();
       const bounds = await download.boundingBox();
@@ -79,7 +79,7 @@ for (const width of [320, 390, 768, 1440, 1920]) {
       expect(heroImage.y).toBeGreaterThan(bounds.y + bounds.height);
     }
     if (width === 390 || width === 1440) {
-      await page.evaluate(() => scrollTo(0, 0));
+      await page.evaluate(() => scrollTo({ top: 0, left: 0, behavior: 'instant' }));
       await page.screenshot({ path: testInfo.outputPath(`signature-${width}.png`), fullPage: true });
     }
   });
