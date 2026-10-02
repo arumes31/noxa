@@ -25,6 +25,9 @@ const test = base.extend({
   },
 });
 
+// Exercise CSS scrolling consistently across local and Linux CI browser defaults.
+test.use({ launchOptions: { args: ['--enable-smooth-scrolling'] } });
+
 async function ready(page) {
   await page.goto('./');
   await page.locator('.hero img').waitFor();
@@ -230,9 +233,12 @@ test.describe('without JavaScript', () => {
       await expect(link).toHaveAttribute('href', downloadURL);
     }
     const fullImage = page.locator('a[data-full]').first();
-    const href = await fullImage.getAttribute('href');
-    await fullImage.click();
-    await expect(page).toHaveURL(new RegExp(href.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '$'));
+    const target = new URL(await fullImage.getAttribute('href'), page.url()).href;
+    // Exercise native keyboard activation even while the section scroll animates.
+    await fullImage.focus();
+    await expect(fullImage).toBeFocused();
+    await page.keyboard.press('Enter');
+    await expect(page).toHaveURL(target);
     await expect(page.locator('img')).toBeVisible();
   });
 });
