@@ -9,6 +9,7 @@ test.beforeEach(async ({ page }) => {
             if (method === "GetSettings") return structuredClone(settings);
             if (method === "SaveSettings") { Object.assign(settings, args[0]); window.__overlaySaved = args[0]; return ""; }
             if (method === "GamingOverlayAvailable") return window.__overlayAvailable !== false;
+            if (method === "UpdateGamingOverlay") { (window.__overlayUpdates ||= []).push(structuredClone(args[0])); return ""; }
             if (method === "GetGamingOverlayMonitors") return [{ id: "primary", name: "Display 1", width: 1920, height: 1080, primary: true }, { id: "left", name: "Display 2", width: 1280, height: 720, primary: false }];
             if (method === "PreviewGamingOverlay") { window.__overlayPreview = args[0]; return ""; }
             if (["ListTabs", "GetPermissions"].includes(method)) return [];
@@ -20,6 +21,26 @@ test.beforeEach(async ({ page }) => {
     });
     await page.goto("/");
     await page.waitForFunction(() => !!window.__noxa?.openSettings);
+});
+
+test("voice overlay hides after five seconds and reappears only on a new connection", async ({ page }) => {
+    await page.evaluate(() => {
+        Object.assign(window.__noxa.state, { myChannelID: 1, pc: {}, channels: [{ ChannelID: 1, Name: "Lobby" }], clients: [] });
+    });
+    await expect.poll(() => page.evaluate(() => window.__overlayUpdates?.at(-1)?.active)).toBe(true);
+    await page.evaluate(() => { window.__noxa.state.clients.push({ channel_id: 1, nickname: "Speaker", is_speaking: true }); });
+    await expect.poll(() => page.evaluate(() => window.__overlayUpdates.at(-1).speakers?.[0]?.name)).toBe("Speaker");
+    await expect.poll(() => page.evaluate(() => window.__overlayUpdates.at(-1).active), { timeout: 7000 }).toBe(false);
+    await page.evaluate(() => { window.__noxa.state.muted = true; });
+    // Polling and speaking/mute changes must not restart the expired notice.
+    await page.waitForTimeout(600);
+    expect(await page.evaluate(() => window.__overlayUpdates.at(-1))).toEqual({ active: false });
+    await page.evaluate(() => { window.__noxa.state.myChannelID = 2; });
+    await expect.poll(() => page.evaluate(() => window.__overlayUpdates.at(-1).active)).toBe(true);
+    await page.evaluate(() => { window.__noxa.state.pc = null; });
+    await expect.poll(() => page.evaluate(() => window.__overlayUpdates.at(-1).active)).toBe(false);
+    await page.evaluate(() => { window.__noxa.state.pc = {}; window.__noxa.state.sessionGeneration++; });
+    await expect.poll(() => page.evaluate(() => window.__overlayUpdates.at(-1).active)).toBe(true);
 });
 
 test("overlay preferences stay drafts until Apply, support keyboard positioning and native preview", async ({ page }) => {
