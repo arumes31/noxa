@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#0e171c">
+  <title>noXa — A place to belong</title>
+  <meta name="description" content="Self-hosted voice, video, and chat for your community. Download the noXa Windows desktop client or set up your own server. Public alpha.">
+  <link rel="canonical" href="https://arumes31.github.io/noxa/">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="noXa">
+  <meta property="og:title" content="noXa — More than a call. A place to belong.">
+  <meta property="og:description" content="Voice, video, and chat for the people who make your day. Meet them in a space you control.">
+  <meta property="og:url" content="https://arumes31.github.io/noxa/">
+  <meta property="og:image" content="https://arumes31.github.io/noxa/assets/branding/icon-512.png">
+  <meta property="og:image:width" content="512">
+  <meta property="og:image:height" content="512">
+  <meta property="og:image:alt" content="The noXa app icon">
+  <meta name="twitter:card" content="summary">
+  <link rel="icon" type="image/png" sizes="32x32" href="assets/branding/favicon-32.png">
+  <link rel="apple-touch-icon" href="assets/branding/apple-touch-icon.png">
+  <link rel="stylesheet" href="assets/css/site.css">
+  <script defer src="assets/js/site.js"></script>
+</head>
+<body>
+  <a class="skip" href="#overview">Skip to content</a>
+  <svg class="icon-definitions" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+    <symbol id="download-icon" viewBox="0 0 24 24"><path d="M12 3v12m-5-5 5 5 5-5M5 16v4h14v-4"/></symbol>
+    <symbol id="arrow-icon" viewBox="0 0 24 24"><path d="M7 17 17 7M7 7h10v10"/></symbol>
+    <symbol id="voice-icon" viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="12" rx="3"/><path d="M6 10v2a6 6 0 0 0 12 0v-2M12 18v3m-3 0h6"/></symbol>
+    <symbol id="screen-icon" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8m-4-4v4"/></symbol>
+    <symbol id="lock-icon" viewBox="0 0 24 24"><rect x="5" y="10" width="14" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3M12 14v3"/></symbol>
+    <symbol id="server-icon" viewBox="0 0 24 24"><rect x="4" y="3" width="16" height="7" rx="2"/><rect x="4" y="14" width="16" height="7" rx="2"/><path d="M8 6.5h.01M8 17.5h.01M12 6.5h5m-5 11h5"/></symbol>
+    <symbol id="headphones-icon" viewBox="0 0 24 24"><path d="M4 13v-1a8 8 0 0 1 16 0v1"/><rect x="3" y="12" width="4" height="8" rx="2"/><rect x="17" y="12" width="4" height="8" rx="2"/></symbol>
+    <symbol id="check-icon" viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></symbol>
+  </svg>
+
+  <header class="site-header wrap">
+    <a class="brand" href="#overview" aria-label="noXa home">
+      <span class="wordmark">no<span>X</span>a</span><span class="alpha">Alpha</span>
+    </a>
+    <button class="menu-button" type="button" aria-controls="navigation" aria-expanded="false" aria-label="Open navigation" hidden>
+      <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
+    </button>
+    <nav class="nav-links" id="navigation" aria-label="Main navigation">
+      <a href="#features">Features</a>
+      <a href="#screenshots">A closer look</a>
+      <a href="https://github.com/arumes31/noxa#new-server-setup">Self-host</a>
+      <a href="https://github.com/arumes31/noxa">GitHub <svg class="icon" aria-hidden="true"><use href="#arrow-icon"/></svg></a>
+    </nav>
+    <a class="header-download" href="https://github.com/arumes31/noxa/releases/latest/download/noxa-client-windows-amd64.exe">
+      <svg class="icon" aria-hidden="true"><use href="#download-icon"/></svg> Download noXa
+    </a>
+  </header>
+
+  <main>
+    <section class="hero" id="overview" aria-labelledby="hero-heading" tabindex="-1">
+      <div class="wrap hero-inner">
+        <div class="hero-copy">
+          <p class="eyebrow"><span class="dot"></span> Self-hosted. Shared with your people.</p>
+          <h1 id="hero-heading">More than a call.<br><em>A place<br>to belong.</em></h1>
+          <p class="lede">Voice, video, and chat for the people who make your day. Meet them in a space you control.</p>
+          <div class="actions">
+            <a class="btn" href="https://github.com/arumes31/noxa/releases/latest/download/noxa-client-windows-amd64.exe"><svg class="icon" aria-hidden="true"><use href="#download-icon"/></svg> Download for Windows</a>
+            <a class="btn secondary" href="https://github.com/arumes31/noxa/releases">All releases <svg class="icon" aria-hidden="true"><use href="#arrow-icon"/></svg></a>
+          </div>
+          <p class="release-note">Windows x64 · Public alpha · <a href="https://github.com/arumes31/noxa/releases/latest">Latest release on GitHub</a></p>
+        </div>
+        <div class="hero-art">
+          <div class="pill"><svg class="icon" aria-hidden="true"><use href="#headphones-icon"/></svg> A little closer, wherever you are.</div>
+          <figure class="app-shot">
+            <a class="image-link" href="assets/screenshots/app-chat.png" data-full aria-label="Enlarge channels and conversations screenshot">
+              <img src="assets/screenshots/app-chat.png" width="1280" height="800" fetchpriority="high" alt="noXa desktop client showing a community's channels, members, and conversation with fictional demo data.">
+            </a>
+            <figcaption><span>Channels &amp; conversations · Actual client · Demo data</span><a href="assets/screenshots/app-chat.png">View larger <svg class="icon" aria-hidden="true"><use href="#arrow-icon"/></svg></a></figcaption>
+          </figure>
+          <div class="float-label"><svg class="icon" aria-hidden="true"><use href="#voice-icon"/></svg><div>A place that feels like yours<small>Your community · Your server</small></div></div>
+        </div>
+      </div>
+    </section>
+
+    <ul class="wrap proof-strip" aria-label="Made for your community">
+      <li><svg class="icon" aria-hidden="true"><use href="#voice-icon"/></svg> Voice &amp; video</li>
+      <li><svg class="icon" aria-hidden="true"><use href="#screen-icon"/></svg> Screen sharing</li>
+      <li><svg class="icon" aria-hidden="true"><use href="#lock-icon"/></svg> E2EE direct messages</li>
+      <li><svg class="icon" aria-hidden="true"><use href="#server-icon"/></svg> Self-hosted server</li>
+    </ul>
+
+    <section class="section wrap" id="features" aria-labelledby="features-heading">
+      <div class="section-heading">
+        <h2 id="features-heading">All the ways to feel closer.</h2>
+        <p>Voice, video, and chat in one desktop app. A self-hosted space for your community.</p>
+      </div>
+      <div class="features">
+        <article class="feature">
+          <svg class="icon" aria-hidden="true"><use href="#voice-icon"/></svg>
+          <h3>Drop into voice.</h3>
+          <p>Find your people in a voice channel. Talk, turn on your camera, and spend a little time together.</p>
+        </article>
+        <article class="feature">
+          <svg class="icon" aria-hidden="true"><use href="#screen-icon"/></svg>
+          <h3>Show, don’t just tell.</h3>
+          <p>Share a screen or a window to bring everyone into the same conversation. Capture options depend on your system.</p>
+        </article>
+        <article class="feature">
+          <svg class="icon" aria-hidden="true"><use href="#lock-icon"/></svg>
+          <h3>Keep DMs personal.</h3>
+          <p>End-to-end encrypted direct messages for your one-to-one conversations.</p>
+        </article>
+      </div>
+    </section>
+
+    <section class="section story wrap" id="screenshots" aria-labelledby="story-heading">
+      <figure class="app-shot">
+        <a class="image-link" href="assets/screenshots/app-roles.png" data-full aria-label="Enlarge roles and permissions screenshot">
+          <img src="assets/screenshots/app-roles.png" width="960" height="712" loading="lazy" decoding="async" alt="noXa role editor with named community roles and permission controls, using fictional demo data.">
+        </a>
+        <figcaption><span>Roles &amp; permissions · Actual client · Demo data</span><a href="assets/screenshots/app-roles.png">View larger <svg class="icon" aria-hidden="true"><use href="#arrow-icon"/></svg></a></figcaption>
+      </figure>
+      <div class="story-copy">
+        <p class="eyebrow"><span class="dot"></span> Make it your own</p>
+        <h2 id="story-heading">Your community.<br>Your way of doing things.</h2>
+        <p>Organize your channels, set up named roles, and decide who has access. Host the noXa server on infrastructure you choose.</p>
+        <a class="text-link" href="https://github.com/arumes31/noxa#new-server-setup">Explore server setup <svg class="icon" aria-hidden="true"><use href="#arrow-icon"/></svg></a>
+        <ul class="mini-facts" aria-label="Server controls">
+          <li><svg class="icon" aria-hidden="true"><use href="#check-icon"/></svg> Named roles</li>
+          <li><svg class="icon" aria-hidden="true"><use href="#check-icon"/></svg> Channel access</li>
+          <li><svg class="icon" aria-hidden="true"><use href="#check-icon"/></svg> Self-hosting</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="wrap download-section" id="download" aria-labelledby="download-heading">
+      <div>
+        <h2 id="download-heading">Your next conversation<br>starts here.</h2>
+        <p>Get the noXa desktop client and connect to your community.<br>Public alpha · Windows x64</p>
+      </div>
+      <div>
+        <a class="btn" href="https://github.com/arumes31/noxa/releases/latest/download/noxa-client-windows-amd64.exe"><svg class="icon" aria-hidden="true"><use href="#download-icon"/></svg> Download for Windows</a>
+        <a class="under" href="https://github.com/arumes31/noxa/releases/latest">All release assets &amp; release details <svg class="icon" aria-hidden="true"><use href="#arrow-icon"/></svg></a>
+      </div>
+    </section>
+  </main>
+
+  <footer class="wrap site-footer">
+    <a class="footer-brand" href="#overview" aria-label="noXa home"><span class="wordmark">no<span>X</span>a</span></a>
+    <nav aria-label="Footer navigation">
+      <a href="https://github.com/arumes31/noxa">GitHub</a>
+      <a href="https://github.com/arumes31/noxa/releases">Releases</a>
+      <a href="https://github.com/arumes31/noxa#new-server-setup">Server setup</a>
+      <a href="https://github.com/arumes31/noxa/issues">Report an issue</a>
+    </nav>
+  </footer>
+
+  <dialog class="lightbox" aria-label="Product screenshot" aria-describedby="image-caption">
+    <button type="button" aria-label="Close image" autofocus><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M6 18 18 6"/></svg></button>
+    <img alt="">
+    <p id="image-caption">noXa desktop client · Fictional demo data</p>
+  </dialog>
+</body>
+</html>

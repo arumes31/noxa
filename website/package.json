@@ -1,0 +1,17 @@
+{
+  "name": "noxa-website",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "preview": "node scripts/serve.mjs",
+    "test": "node --test tests/server.test.mjs && playwright test",
+    "test:browser": "playwright test",
+    "check:release": "node scripts/check-release.mjs"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.62.1"
+  }
+}
