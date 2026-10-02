@@ -81,6 +81,12 @@ func ApplyRoleChange(p RolePolicy, actorID int64, change RoleChange) (RolePolicy
 			}
 		}
 		r := change.Role
+		if r.DeletionProtected && !owner {
+			return RolePolicy{}, ErrRoleForbidden
+		}
+		if slices.Contains(r.Permissions, Administrator) {
+			r.DeletionProtected = true
+		}
 		r.Position = 1
 		r.Permissions = slices.Clone(r.Permissions)
 		next.Roles = append(next.Roles, r)
@@ -90,6 +96,9 @@ func ApplyRoleChange(p RolePolicy, actorID int64, change RoleChange) (RolePolicy
 			return RolePolicy{}, ErrRoleInvalid
 		}
 		if !e.CanManageRole(actorID, old.ID) {
+			return RolePolicy{}, ErrRoleForbidden
+		}
+		if old.DeletionProtected != change.Role.DeletionProtected && !owner {
 			return RolePolicy{}, ErrRoleForbidden
 		}
 		if !canGrantCapabilities(e, actorID, 0, addedCapabilities(old.Permissions, change.Role.Permissions)) {
@@ -105,6 +114,9 @@ func ApplyRoleChange(p RolePolicy, actorID int64, change RoleChange) (RolePolicy
 			}
 		}
 	case RoleDelete:
+		if e.roles[change.RoleID].DeletionProtected {
+			return RolePolicy{}, ErrRoleForbidden
+		}
 		if change.RoleID == p.EveryoneID {
 			return RolePolicy{}, ErrRoleInvalid
 		}

@@ -164,12 +164,17 @@ func (s *TCPServer) changeRoleChannel(ctx context.Context, actor int64, request 
 	change := authorization.ChannelTreeChange{Kind: request.Kind, ExpectedRevision: request.ExpectedRevision, ChannelID: request.ChannelID, ParentID: request.ParentID, SyncToParent: request.SyncToParent, OrderIndex: request.OrderIndex}
 	var settings store.RoleChannelSettings
 	if request.Settings != nil {
-		settings = store.RoleChannelSettings(*request.Settings)
+		r := request.Settings
+		settings = store.RoleChannelSettings{Name: r.Name, Topic: r.Topic, Description: r.Description, OrderIndex: r.OrderIndex,
+			MaxClients: r.MaxClients, SlowModeSeconds: r.SlowModeSeconds, OpusBitrate: r.OpusBitrate, OpusFEC: r.OpusFEC, OpusDTX: r.OpusDTX, OpusStereo: r.OpusStereo}
 		if !settings.Valid() {
 			return netproto.RoleChannelResult{}, authorization.ErrRoleInvalid
 		}
 	}
 	var create *store.RoleChannelCreate
+	if request.SetPassword && request.Kind != authorization.ChannelEdit {
+		return netproto.RoleChannelResult{}, authorization.ErrRoleInvalid
+	}
 	switch request.Kind {
 	case authorization.ChannelCreate:
 		if request.Settings == nil || request.ChannelID != 0 || request.SyncToParent || request.ChannelType < 0 || request.ChannelType > 2 || len(request.Password) > 4096 {
@@ -212,8 +217,31 @@ func (s *TCPServer) changeRoleChannel(ctx context.Context, actor int64, request 
 		}
 		create = &store.RoleChannelCreate{Name: settings.Name, Topic: settings.Topic, Description: settings.Description, OrderIndex: settings.OrderIndex, ChannelType: request.ChannelType, MaxClients: settings.MaxClients, SlowModeSeconds: settings.SlowModeSeconds, PasswordHash: passwordHash, OpusBitrate: settings.OpusBitrate, OpusFEC: settings.OpusFEC, OpusDTX: settings.OpusDTX, OpusStereo: settings.OpusStereo}
 	case authorization.ChannelEdit, authorization.ChannelMove, authorization.ChannelDelete:
-		if request.ChannelID < 1 || request.Access != nil || request.Password != "" || request.ChannelType != 0 || (request.Kind == authorization.ChannelEdit) != (request.Settings != nil) || (request.Kind != authorization.ChannelMove && (request.ParentID != 0 || request.SyncToParent)) {
+		if request.ChannelID < 1 || request.Access != nil || (request.Password != "" && !request.SetPassword) || len(request.Password) > 4096 || request.ChannelType != 0 || (request.Kind == authorization.ChannelEdit) != (request.Settings != nil) || (request.Kind != authorization.ChannelMove && (request.ParentID != 0 || request.SyncToParent)) {
 			return netproto.RoleChannelResult{}, authorization.ErrRoleInvalid
+		}
+		if request.SetPassword {
+			err := s.withRolePolicy(ctx, func(ctx context.Context) error {
+				if validate != nil {
+					if err := validate(ctx); err != nil {
+						return err
+					}
+				}
+				p := ctx.Value(roleLeaseKey{}).(roleLease).evaluator.Policy()
+				_, err := authorization.ApplyChannelTreeChange(p, actor, change)
+				return err
+			})
+			if err != nil {
+				return netproto.RoleChannelResult{}, err
+			}
+			hash := ""
+			if request.Password != "" {
+				hash, err = auth.HashPassword(request.Password)
+				if err != nil {
+					return netproto.RoleChannelResult{}, err
+				}
+			}
+			settings.PasswordHash = &hash
 		}
 	default:
 		return netproto.RoleChannelResult{}, authorization.ErrRoleInvalid

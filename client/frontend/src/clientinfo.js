@@ -89,6 +89,32 @@ function openContextMenu(x, y, client, trigger) {
     menuEl.style.top = Math.min(y, window.innerHeight - 260) + "px";
     menuEl.onclick = (e) => e.stopPropagation();
 
+    if (client.unique_id && client.client_id !== V().state.myClientID) {
+        const roleMenu = menuEl, generation = V().state.serverGeneration;
+        const current = () => roleMenu === menuEl && generation === V().state.serverGeneration && tabID === V().state.activeTabID;
+        void (async () => {
+            try {
+                const app = window.go.main.App;
+                const snapshot = await app.RoleStateForTab(tabID, 0);
+                if (!current() || !snapshot.manageable_role_ids?.some(id => id !== snapshot.policy.everyone_id)) return;
+                const page = await app.RoleMembersForTab(tabID, { search: client.unique_id, expected_revision: snapshot.policy.revision });
+                if (!current() || page.revision !== snapshot.policy.revision || !page.entries?.some(member => member.unique_id === client.unique_id && member.manageable)) return;
+                const assign = document.createElement("button");
+                assign.type = "button"; assign.className = "ctx-action"; assign.textContent = t("roles.assignMenu");
+                assign.setAttribute("role", "menuitem"); assign.tabIndex = -1;
+                assign.onclick = async () => {
+                    if (!current()) return;
+                    closeMenu();
+                    try {
+                        const { openRoleMembers } = await import("./role-members-ui.js");
+                        if (generation === V().state.serverGeneration && tabID === V().state.activeTabID) openRoleMembers({ memberUID: client.unique_id });
+                    } catch { if (generation === V().state.serverGeneration) V().toast(t("roles.unavailable"), "warn"); }
+                };
+                roleMenu.querySelector('[data-act="info"]').after(assign);
+            } catch { /* Assignment is unavailable for this actor or target. */ }
+        })();
+    }
+
     if (client.unique_id && client.unique_id !== sessionUserID(V().state) && client.client_id !== V().state.myClientID) {
         const generation = V().state.serverGeneration;
         const call = document.createElement("button");

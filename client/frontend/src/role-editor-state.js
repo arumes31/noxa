@@ -3,6 +3,7 @@
 export function roleDraft(role = {}) {
     return { id: role.id || 0, name: role.name || "", position: role.position || 0,
         color: role.color || "", icon: role.icon || "", hoist: !!role.hoist, mentionable: !!role.mentionable,
+        deletion_protected: !!role.deletion_protected,
         permissions: [...(role.permissions || [])].sort() };
 }
 

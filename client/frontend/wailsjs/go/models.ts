@@ -38,9 +38,44 @@ export namespace authorization {
 	        this.requires = source["requires"];
 	    }
 	}
+	export class RoleAccessImpact {
+	    role_id: number;
+	    name: string;
+	    changes: AccessImpactChange[];
+
+	    static createFrom(source: any = {}) {
+	        return new RoleAccessImpact(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.role_id = source["role_id"];
+	        this.name = source["name"];
+	        this.changes = this.convertValues(source["changes"], AccessImpactChange);
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	export class MemberAccessImpact {
 	    user_id: number;
 	    changes: AccessImpactChange[];
+	    permissions: AccessImpactChange[];
 
 	    static createFrom(source: any = {}) {
 	        return new MemberAccessImpact(source);
@@ -50,6 +85,7 @@ export namespace authorization {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.user_id = source["user_id"];
 	        this.changes = this.convertValues(source["changes"], AccessImpactChange);
+	        this.permissions = this.convertValues(source["permissions"], AccessImpactChange);
 	    }
 
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -74,6 +110,7 @@ export namespace authorization {
 	    revision: number;
 	    channel_id: number;
 	    members: MemberAccessImpact[];
+	    roles: RoleAccessImpact[];
 
 	    static createFrom(source: any = {}) {
 	        return new ChannelAccessImpact(source);
@@ -84,6 +121,7 @@ export namespace authorization {
 	        this.revision = source["revision"];
 	        this.channel_id = source["channel_id"];
 	        this.members = this.convertValues(source["members"], MemberAccessImpact);
+	        this.roles = this.convertValues(source["roles"], RoleAccessImpact);
 	    }
 
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -283,6 +321,7 @@ export namespace authorization {
 	    icon: string;
 	    hoist: boolean;
 	    mentionable: boolean;
+	    deletion_protected: boolean;
 	    permissions: string[];
 
 	    static createFrom(source: any = {}) {
@@ -298,6 +337,7 @@ export namespace authorization {
 	        this.icon = source["icon"];
 	        this.hoist = source["hoist"];
 	        this.mentionable = source["mentionable"];
+	        this.deletion_protected = source["deletion_protected"];
 	        this.permissions = source["permissions"];
 	    }
 	}
@@ -2811,6 +2851,7 @@ export namespace netproto {
 	    settings?: RoleChannelSettings;
 	    channel_type: number;
 	    password?: string;
+	    set_password?: boolean;
 
 	    static createFrom(source: any = {}) {
 	        return new RoleChannelChange(source);
@@ -2828,6 +2869,7 @@ export namespace netproto {
 	        this.settings = this.convertValues(source["settings"], RoleChannelSettings);
 	        this.channel_type = source["channel_type"];
 	        this.password = source["password"];
+	        this.set_password = source["set_password"];
 	    }
 
 		convertValues(a: any, classs: any, asMap: boolean = false): any {

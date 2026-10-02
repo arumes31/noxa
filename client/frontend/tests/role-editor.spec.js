@@ -1,5 +1,36 @@
 import { expect, test } from "./fixtures.js";
 
+test("protected roles require an owner save before modal-confirmed deletion", async ({ page }) => {
+    await page.evaluate(() => { window.__roleState.policy.roles.find(r => r.id === 20).deletion_protected = true; });
+    await page.getByRole("button", { name: "Roles", exact: true }).click();
+    const roles = page.getByRole("dialog", { name: "Roles", exact: true }).first();
+    await roles.getByRole("button", { name: "Member", exact: true }).click();
+    const remove = roles.getByRole("button", { name: "Delete", exact: true });
+    await expect(remove).toBeDisabled();
+    await roles.getByLabel("Protect from deletion", { exact: true }).uncheck();
+    await expect(remove).toBeDisabled();
+    await roles.getByRole("button", { name: "Save", exact: true }).click();
+    await expect(remove).toBeEnabled();
+    expect(await page.evaluate(() => window.__roleCalls.at(-1).role.deletion_protected)).toBe(false);
+    await remove.click();
+    const confirmation = page.getByRole("dialog", { name: "Roles", exact: true }).last();
+    await expect(confirmation).toContainText('Delete “Member”?');
+    await confirmation.getByRole("button", { name: "Cancel", exact: true }).click();
+    expect(await page.evaluate(() => window.__roleCalls.some(c => c.kind === "role_delete"))).toBe(false);
+    await remove.click();
+    await confirmation.getByRole("button", { name: "Delete", exact: true }).click();
+    await expect.poll(() => page.evaluate(() => window.__roleCalls.at(-1).kind)).toBe("role_delete");
+});
+
+test("delegated role managers cannot change deletion protection", async ({ page }) => {
+    await page.evaluate(() => { window.__roleState.actor_id = 2; window.__roleState.policy.roles.find(r => r.id === 20).deletion_protected = true; });
+    await page.getByRole("button", { name: "Roles", exact: true }).click();
+    const roles = page.getByRole("dialog", { name: "Roles", exact: true });
+    await roles.getByRole("button", { name: "Member", exact: true }).click();
+    await expect(roles.getByLabel("Protect from deletion", { exact: true })).toBeDisabled();
+    await expect(roles.getByRole("button", { name: "Delete", exact: true })).toBeDisabled();
+});
+
 test("role editor refreshes after managing member assignments", async ({ page }) => {
     await page.getByRole("button", { name: "Roles", exact: true }).click();
     const roles = page.getByRole("dialog", { name: "Roles", exact: true });
@@ -88,7 +119,7 @@ test("child access remains editable without disclosing parent policy", async ({ 
     await page.getByRole("button", { name: "Customize this channel", exact: true }).click();
     await expect(page.getByRole("combobox", { name: "View channel", exact: true })).toHaveValue("deny");
     await expect(page.getByRole("button", { name: "Sync with parent", exact: true })).toBeDisabled();
-    await page.getByRole("button", { name: "Preview member changes", exact: true }).click();
+    await page.getByRole("button", { name: "Preview role changes", exact: true }).click();
     await page.getByRole("button", { name: "Save", exact: true }).click();
     const change = await page.evaluate(() => window.__roleCalls[0]);
     expect(change.channel.synced).toBe(false);
@@ -131,7 +162,8 @@ test.beforeEach(async ({ page }) => {
                 if (window.__impactGate) await window.__impactGate;
                 if (window.__impactFailure) throw new Error("preview unavailable");
                 return window.__impactResponse || { revision: window.__roleState.policy.revision, channel_id: query.scope_channel_id || query.change.channel.channel_id,
-                    members: query.user_ids.map(id => ({ user_id: id, changes: id === 1 ? [] : [{ capability: "view_channel", before: true, after: false }] })) };
+                    roles: window.__roleState.policy.roles.map(role => ({ role_id: role.id, name: role.name, changes: [{ capability: "view_channel", before: true, after: false }] })),
+                    members: query.user_ids.map(id => ({ user_id: id, permissions: [{ capability: "view_channel", before: true, after: id === 1 }], changes: id === 1 ? [] : [{ capability: "view_channel", before: true, after: false }] })) };
             },
             CheckAccess: async (query) => {
                 window.__lastAccessCheck = query;
@@ -241,7 +273,7 @@ test("native tab activation rejects an old role draft before frontend reset", as
     expect(await page.evaluate(() => window.__tabCalls.at(-1))).toEqual({ name: "RoleChange", tabID: "server-a" });
 });
 
-test("parent draft previews a synced descendant with a scoped roster", async ({ page }) => {
+test("parent draft previews a synced descendant without enumerating members", async ({ page }) => {
     await page.evaluate(() => {
         window.__roleState.impact_channel_ids = [4];
         window.__noxa.state.channels = [{ ChannelID: 4, Name: "Design" }];
@@ -252,18 +284,18 @@ test("parent draft previews a synced descendant with a scoped roster", async ({ 
     await expect(scope.getByRole("option")).toHaveCount(2);
     await expect(scope).toContainText("Design (#4)");
     await scope.selectOption("4");
-    await page.getByRole("button", { name: "Preview member changes", exact: true }).click();
+    await page.getByRole("button", { name: "Preview role changes", exact: true }).click();
     await expect(page.getByRole("button", { name: "Save", exact: true })).toBeEnabled();
     expect(await page.evaluate(() => window.__impactCalls.at(-1))).toMatchObject({ scope_channel_id: 4,
         change: { channel: { channel_id: 2 } } });
-    expect(await page.evaluate(() => window.__rosterCalls.at(-1).channel_id)).toBe(4);
+    expect(await page.evaluate(() => window.__rosterCalls)).toBeUndefined();
     await scope.selectOption("2");
     await expect(page.getByRole("button", { name: "Save", exact: true })).toBeDisabled();
     await expect(page.locator(".channel-impact-member")).toHaveCount(0);
-    await page.getByRole("button", { name: "Preview member changes", exact: true }).click();
+    await page.getByRole("button", { name: "Preview role changes", exact: true }).click();
     await expect(page.getByRole("button", { name: "Save", exact: true })).toBeEnabled();
     expect(await page.evaluate(() => window.__impactCalls.at(-1).scope_channel_id)).toBeUndefined();
-    expect(await page.evaluate(() => window.__rosterCalls.at(-1).channel_id)).toBe(2);
+    expect(await page.evaluate(() => window.__rosterCalls)).toBeUndefined();
 });
 
 test("late scoped preview cannot authorize a different descendant", async ({ page }) => {
@@ -273,13 +305,13 @@ test("late scoped preview cannot authorize a different descendant", async ({ pag
     const scope = page.getByRole("combobox", { name: "Preview channel", exact: true });
     await scope.selectOption("4");
     await page.evaluate(() => { window.__impactGate = new Promise(resolve => { window.__finishImpact = resolve; }); });
-    await page.getByRole("button", { name: "Preview member changes", exact: true }).click();
+    await page.getByRole("button", { name: "Preview role changes", exact: true }).click();
     await expect.poll(() => page.evaluate(() => window.__impactCalls?.length)).toBe(1);
     await scope.selectOption("5");
     await page.evaluate(() => window.__finishImpact());
     await expect(page.getByRole("button", { name: "Save", exact: true })).toBeDisabled();
     await expect(page.locator(".channel-impact-member")).toHaveCount(0);
-    await page.getByRole("button", { name: "Preview member changes", exact: true }).click();
+    await page.getByRole("button", { name: "Preview role changes", exact: true }).click();
     await expect(page.getByRole("button", { name: "Save", exact: true })).toBeEnabled();
     expect(await page.evaluate(() => window.__impactCalls.at(-1).scope_channel_id)).toBe(5);
 });
@@ -292,7 +324,7 @@ test("scoped preview rejects a response for the edited parent", async ({ page })
     await page.getByRole("button", { name: "Channel access", exact: true }).click();
     await page.getByRole("button", { name: "Private", exact: true }).click();
     await page.getByRole("combobox", { name: "Preview channel", exact: true }).selectOption("4");
-    await page.getByRole("button", { name: "Preview member changes", exact: true }).click();
+    await page.getByRole("button", { name: "Preview role changes", exact: true }).click();
     await expect(page.locator(".channel-impact [role=status]")).toContainText("could not");
     await expect(page.getByRole("button", { name: "Save", exact: true })).toBeDisabled();
 });
@@ -303,12 +335,12 @@ test("changing override subject cannot retain a descendant review after panel re
     await page.getByRole("button", { name: "Private", exact: true }).click();
     const scope = page.getByRole("combobox", { name: "Preview channel", exact: true });
     await scope.selectOption("4");
-    await page.getByRole("button", { name: "Preview member changes", exact: true }).click();
+    await page.getByRole("button", { name: "Preview role changes", exact: true }).click();
     await expect(page.getByRole("button", { name: "Save", exact: true })).toBeEnabled();
     await page.getByRole("combobox", { name: "Role or member", exact: true }).selectOption("role:20");
     await expect(scope).toHaveValue("2");
     await expect(page.getByRole("button", { name: "Save", exact: true })).toBeDisabled();
-    await page.getByRole("button", { name: "Preview member changes", exact: true }).click();
+    await page.getByRole("button", { name: "Preview role changes", exact: true }).click();
     await expect(page.getByRole("button", { name: "Save", exact: true })).toBeEnabled();
 });
 
@@ -333,7 +365,7 @@ test("member batch stops on native activation between acknowledgements", async (
 test("channel access save and preview stay bound to the opening tab", async ({ page }) => {
     await page.getByRole("button", { name: "Channel access", exact: true }).click();
     await page.getByRole("button", { name: "Private", exact: true }).click();
-    await page.getByRole("button", { name: "Preview member changes", exact: true }).click();
+    await page.getByRole("button", { name: "Preview role changes", exact: true }).click();
     await expect(page.getByRole("button", { name: "Save", exact: true })).toBeEnabled();
     await page.evaluate(() => { window.__nativeTabID = "server-b"; });
     await page.getByRole("button", { name: "Save", exact: true }).click();
@@ -465,8 +497,8 @@ test("channel presets save ordinary overrides and access check stays read-only",
     await page.getByRole("button", { name: "Private", exact: true }).click();
     await expect(page.getByRole("combobox", { name: "View channel", exact: true })).toHaveValue("deny");
     await expect(page.getByRole("button", { name: "Save", exact: true })).toBeDisabled();
-    await page.getByRole("button", { name: "Preview member changes", exact: true }).click();
-    await expect(page.locator(".channel-impact-members")).toContainText("View channel: Allowed → Denied");
+    await page.getByRole("button", { name: "Preview role changes", exact: true }).click();
+    await expect(page.locator(".channel-impact-members").first()).toContainText("View channel: Allowed → Denied");
     expect(await page.evaluate(() => window.__roleCalls.length)).toBe(0);
     await page.getByRole("button", { name: "Save", exact: true }).click();
     await expect(page.getByRole("button", { name: "Save", exact: true })).toBeDisabled();
@@ -484,12 +516,12 @@ test("sync confirmation replaces custom policy and Customize copies parent overr
     await page.getByRole("button", { name: "Sync with parent", exact: true }).click();
     await expect(page.getByRole("dialog").last()).toContainText("@everyone · View channel: Allow → Deny");
     await page.getByRole("button", { name: "Apply", exact: true }).click();
-    await page.getByRole("button", { name: "Preview member changes", exact: true }).click();
+    await page.getByRole("button", { name: "Preview role changes", exact: true }).click();
     await page.getByRole("button", { name: "Save", exact: true }).click();
     await expect(page.getByRole("button", { name: "Customize this channel", exact: true })).toBeEnabled();
     await page.getByRole("button", { name: "Customize this channel", exact: true }).click();
     await expect(page.getByRole("combobox", { name: "View channel", exact: true })).toHaveValue("deny");
-    await page.getByRole("button", { name: "Preview member changes", exact: true }).click();
+    await page.getByRole("button", { name: "Preview role changes", exact: true }).click();
     await page.getByRole("button", { name: "Save", exact: true }).click();
     await expect.poll(() => page.evaluate(() => window.__roleCalls.length)).toBe(2);
     expect(await page.evaluate(() => window.__roleCalls[0].channel)).toMatchObject({ synced: true, overrides: [] });
@@ -569,40 +601,104 @@ test("German access preview supports keyboard checking in a compact dialog", asy
     await page.screenshot({ path: "../../.cache/role-access-de.png" });
 });
 
-test.describe("draft member impact", () => {
+async function installMemberContextMenu(page) {
+    await page.evaluate(async () => {
+        window.runtime = { EventsOn() {} };
+        window.__noxa.$ = id => document.getElementById(id);
+        window.__noxa.toast = () => {};
+        Object.assign(window.__noxa.state, { myClientID: "self", clients: [{ client_id: "bob-session", unique_id: "bob", nickname: "Bob", channel_id: 2 }], settings: {} });
+        document.body.insertAdjacentHTML("beforeend", '<button id="channel-create-btn">New channel</button><div id="channel-tree"><div tabindex="0" class="client" data-clid="bob-session">Bob session</div></div>');
+        const { initClientInfo } = await import("/src/clientinfo.js");
+        initClientInfo();
+    });
+}
+
+test("member context menu assigns a role to the preselected target using the keyboard", async ({ page }) => {
+    await installMemberContextMenu(page);
+    const target = page.getByText("Bob session", { exact: true });
+    await target.focus(); await page.keyboard.press("Shift+F10");
+    const assign = page.getByRole("menuitem", { name: "Assign roles…", exact: true });
+    await expect(assign).toBeVisible();
+    await page.keyboard.press("ArrowDown");
+    await expect(assign).toBeFocused();
+    await page.keyboard.press("Enter");
+    const dialog = page.getByRole("dialog", { name: "Members", exact: true });
+    await expect(dialog.getByRole("searchbox")).toHaveValue("bob");
+    await expect(dialog.getByRole("checkbox", { name: /^Bob\b/ })).toBeChecked();
+    await dialog.getByRole("combobox").selectOption("30");
+    await dialog.getByRole("button", { name: "Add role", exact: true }).click();
+    await expect.poll(() => page.evaluate(() => window.__roleCalls.at(-1))).toMatchObject({ kind: "member_roles_set", user_id: 3, role_ids: [20, 30] });
+});
+
+for (const reason of ["actor", "target", "server switch"]) test(`member context menu does not offer assignment after ${reason} restriction`, async ({ page }) => {
+    await installMemberContextMenu(page);
+    await page.evaluate(reason => {
+        if (reason === "actor") window.__roleState.manageable_role_ids = [];
+        if (reason === "target") window.__roleMembers.find(m => m.unique_id === "bob").manageable = false;
+        if (reason === "server switch") window.__membersGate = new Promise(resolve => { window.__finishMemberMenu = resolve; });
+    }, reason);
+    await page.getByText("Bob session", { exact: true }).click({ button: "right" });
+    if (reason === "server switch") {
+        await expect.poll(() => page.evaluate(() => window.__rosterCalls?.length || 0)).toBe(1);
+        await page.evaluate(() => { window.__noxa.state.serverGeneration++; window.__finishMemberMenu(); });
+    } else await expect.poll(() => page.evaluate(() => window.__tabCalls.length)).toBeGreaterThan(0);
+    await expect(page.getByRole("menuitem", { name: "Assign roles…", exact: true })).toHaveCount(0);
+    expect(await page.evaluate(() => window.__roleCalls)).toEqual([]);
+});
+
+test.describe("draft role and member impact", () => {
     test.beforeEach(async ({ page }) => {
         await page.getByRole("button", { name: "Channel access", exact: true }).click();
         await page.getByRole("button", { name: "Private", exact: true }).click();
     });
-    test("shows guest and protected member results without saving, then invalidates on edit", async ({ page }) => {
+    test("shows roles without enumerating members, then invalidates on edit", async ({ page }) => {
         const save = page.getByRole("button", { name: "Save", exact: true });
         await expect(save).toBeDisabled();
-        await page.getByRole("button", { name: "Preview member changes", exact: true }).click();
+        await page.getByRole("button", { name: "Preview role changes", exact: true }).click();
         await expect(save).toBeEnabled();
         const rows = page.locator(".channel-impact-member");
-        await expect(rows).toHaveCount(4);
-        await expect(rows.filter({ hasText: "Owner" })).toContainText("No permission changes");
+        await expect(rows).toHaveCount(3);
+        await expect(rows.first()).toContainText("@everyone");
+        expect(await page.evaluate(() => window.__tabCalls.some(c => c.name === "RoleMembers"))).toBe(false);
         await expect(rows.first()).toContainText("Allowed → Denied");
-        expect(await page.evaluate(() => window.__impactCalls[0].user_ids)).toEqual([0, 1, 2, 3]);
+        expect(await page.evaluate(() => window.__impactCalls[0].user_ids)).toEqual([0]);
         expect(await page.evaluate(() => window.__roleCalls)).toEqual([]);
         await page.getByRole("combobox", { name: "View channel", exact: true }).selectOption("allow");
         await expect(rows).toHaveCount(0); await expect(save).toBeDisabled();
     });
     test("an earlier draft reply cannot authorize saving the edited draft", async ({ page }) => {
         await page.evaluate(() => { window.__impactGate = new Promise(resolve => { window.__finishImpact = resolve; }); });
-        await page.getByRole("button", { name: "Preview member changes", exact: true }).click();
+        await page.getByRole("button", { name: "Preview role changes", exact: true }).click();
         await expect.poll(() => page.evaluate(() => window.__impactCalls?.length)).toBe(1);
         await page.getByRole("combobox", { name: "View channel", exact: true }).selectOption("allow");
         await page.evaluate(() => { window.__finishImpact(); window.__impactGate = null; });
         await expect(page.locator(".channel-impact-member")).toHaveCount(0);
         await expect(page.getByRole("button", { name: "Save", exact: true })).toBeDisabled();
-        await page.getByRole("button", { name: "Preview member changes", exact: true }).click();
+        await page.getByRole("button", { name: "Preview role changes", exact: true }).click();
         await expect(page.getByRole("button", { name: "Save", exact: true })).toBeEnabled();
         expect(await page.evaluate(() => window.__impactCalls[1].change.channel.overrides[0].effect)).toBe("allow");
     });
+    test("member search includes unchanged permissions and clears stale matches", async ({ page }) => {
+        const search = page.getByLabel("Find member permissions (name or unique ID)");
+        const check = page.getByRole("button", { name: "Check member permissions", exact: true });
+        await expect(check).toBeDisabled();
+        await search.fill("Owner"); await search.press("Enter");
+        await expect(page.locator(".channel-impact-member").filter({ hasText: "Owner" })).toContainText("Allowed → Allowed");
+        expect(await page.evaluate(() => window.__impactCalls.at(-1).user_ids)).toEqual([1]);
+        await search.fill("Alice");
+        await expect(page.locator(".channel-impact-member").filter({ hasText: "Owner" })).toHaveCount(0);
+        await check.click();
+        await expect(page.locator(".channel-impact-member").filter({ hasText: "Alice" })).toContainText("Allowed → Denied");
+        expect(await page.evaluate(() => window.__rosterCalls.at(-1).search)).toBe("Alice");
+        expect(await page.evaluate(() => window.__roleCalls)).toEqual([]);
+        await search.fill("Nobody matches"); await check.click();
+        await expect(page.locator(".channel-impact-member")).toHaveCount(3);
+        await expect(page.locator(".channel-impact")).toContainText("No matching members");
+    });
     test("native activation between roster and preview rejects the old draft", async ({ page }) => {
         await page.evaluate(() => { window.__membersGate = new Promise(resolve => { window.__finishMembers = resolve; }); });
-        await page.getByRole("button", { name: "Preview member changes", exact: true }).click();
+        await page.getByLabel("Find member permissions (name or unique ID)").fill("Alice");
+        await page.getByRole("button", { name: "Check member permissions", exact: true }).click();
         await expect.poll(() => page.evaluate(() => window.__tabCalls.at(-1)?.name)).toBe("RoleMembers");
         await page.evaluate(() => { window.__nativeTabID = "server-b"; window.__finishMembers(); });
         await expect(page.locator(".channel-impact")).toContainText("The draft could not be checked");
@@ -611,7 +707,8 @@ test.describe("draft member impact", () => {
     });
     test("server reset during roster loading stops the preview request", async ({ page }) => {
         await page.evaluate(() => { window.__membersGate = new Promise(resolve => { window.__finishMembers = resolve; }); });
-        await page.getByRole("button", { name: "Preview member changes", exact: true }).click();
+        await page.getByLabel("Find member permissions (name or unique ID)").fill("Alice");
+        await page.getByRole("button", { name: "Check member permissions", exact: true }).click();
         await expect.poll(() => page.evaluate(() => window.__tabCalls.at(-1)?.name)).toBe("RoleMembers");
         await page.evaluate(async () => {
             window.__noxa.state.serverGeneration++;
@@ -623,19 +720,20 @@ test.describe("draft member impact", () => {
     });
     test("bounded pages explicitly disclose remaining members", async ({ page }) => {
         await page.evaluate(() => { window.__roleMembers = Array.from({ length: 103 }, (_, i) => ({ user_id: i + 1, nickname: `Member ${i + 1}`, unique_id: `uid-${i + 1}` })); });
-        await page.getByRole("button", { name: "Preview member changes", exact: true }).click();
-        await expect(page.locator(".channel-impact-member")).toHaveCount(101);
+        await page.getByLabel("Find member permissions (name or unique ID)").fill("Member");
+        await page.getByRole("button", { name: "Check member permissions", exact: true }).click();
+        await expect(page.locator(".channel-impact-member")).toHaveCount(103);
         await expect(page.locator(".channel-impact")).toContainText("not a complete server impact report");
         await page.getByRole("button", { name: "Next members", exact: true }).click();
-        await expect(page.locator(".channel-impact-member")).toHaveCount(4);
+        await expect(page.locator(".channel-impact-member")).toHaveCount(6);
         await expect(page.locator(".channel-impact-member").first()).toContainText("Allowed → Denied");
-        await expect(page.locator(".channel-impact-member").nth(1)).toContainText("Member 101");
-        await expect(page.getByRole("button", { name: "Next members", exact: true })).toBeDisabled();
-        expect(await page.evaluate(() => window.__impactCalls.map(c => c.user_ids.length))).toEqual([101, 4]);
+        await expect(page.locator(".channel-impact-member").nth(3)).toContainText("Member 101");
+        await expect(page.getByRole("button", { name: "Next members", exact: true })).toBeHidden();
+        expect(await page.evaluate(() => window.__impactCalls.map(c => c.user_ids.length))).toEqual([100, 3]);
     });
     test("mismatched revision cannot enable saving", async ({ page }) => {
         await page.evaluate(() => { window.__impactResponse = { revision: 2, channel_id: 2, members: [] }; });
-        await page.getByRole("button", { name: "Preview member changes", exact: true }).click();
+        await page.getByRole("button", { name: "Preview role changes", exact: true }).click();
         await expect(page.locator(".channel-impact")).toContainText("The draft could not be checked");
         await expect(page.getByRole("button", { name: "Save", exact: true })).toBeDisabled();
         expect(await page.evaluate(() => window.__roleCalls)).toEqual([]);
@@ -650,9 +748,9 @@ test("German draft impact fits a compact dialog and supports keyboard review", a
     const scope = page.getByRole("combobox", { name: "Kanal für die Vorschau", exact: true });
     await scope.focus(); await page.keyboard.press("ArrowDown"); await page.keyboard.press("Enter");
     await expect(scope).toHaveValue("4");
-    const preview = page.getByRole("button", { name: "Mitgliedsänderungen prüfen", exact: true });
+    const preview = page.getByRole("button", { name: "Rollenänderungen prüfen", exact: true });
     await preview.focus(); await page.keyboard.press("Enter");
-    await expect(page.locator(".channel-impact-members")).toContainText("Erlaubt → Verweigert");
+    await expect(page.locator(".channel-impact-members").first()).toContainText("Erlaubt → Verweigert");
     await expect(preview).toBeFocused();
     await expect(page.getByRole("button", { name: "Speichern", exact: true })).toBeEnabled();
     expect(await page.evaluate(() => window.__impactCalls.at(-1).scope_channel_id)).toBe(4);

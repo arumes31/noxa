@@ -9,7 +9,14 @@ type AccessImpactChange struct {
 }
 
 type MemberAccessImpact struct {
-	UserID  int64                `json:"user_id"`
+	UserID      int64                `json:"user_id"`
+	Changes     []AccessImpactChange `json:"changes"`
+	Permissions []AccessImpactChange `json:"permissions"`
+}
+
+type RoleAccessImpact struct {
+	RoleID  int64                `json:"role_id"`
+	Name    string               `json:"name"`
 	Changes []AccessImpactChange `json:"changes"`
 }
 
@@ -19,6 +26,7 @@ type ChannelAccessImpact struct {
 	Revision  int64                `json:"revision"`
 	ChannelID int64                `json:"channel_id"`
 	Members   []MemberAccessImpact `json:"members"`
+	Roles     []RoleAccessImpact   `json:"roles"`
 }
 
 // PreviewChannelAccess applies the same pre-change authorization and validation
@@ -76,6 +84,28 @@ func validImpactSubjects(userIDs []int64) bool {
 func compareChannelAccess(ctx context.Context, before, after *RoleEvaluator, revision, channelID int64, userIDs []int64) (ChannelAccessImpact, error) {
 	result := ChannelAccessImpact{Revision: revision, ChannelID: channelID, Members: make([]MemberAccessImpact, 0, len(userIDs))}
 	capabilities := Capabilities()
+	// Compare each role with @everyone and no individual overrides. Evaluator
+	// copies use guest ID zero so no account gains owner or member exceptions.
+	for _, role := range before.policy.Roles {
+		if err := ctx.Err(); err != nil {
+			return ChannelAccessImpact{}, err
+		}
+		oldRole, newRole := *before, *after
+		oldRole.members = map[int64][]int64{0: {role.ID}}
+		newRole.members = map[int64][]int64{0: {role.ID}}
+		impact := RoleAccessImpact{RoleID: role.ID, Name: role.Name, Changes: []AccessImpactChange{}}
+		for _, capability := range capabilities {
+			if !capability.Channel {
+				continue
+			}
+			old := oldRole.Evaluate(0, channelID, capability.Key).Allowed
+			next := newRole.Evaluate(0, channelID, capability.Key).Allowed
+			if old != next {
+				impact.Changes = append(impact.Changes, AccessImpactChange{Capability: capability.Key, Before: old, After: next})
+			}
+		}
+		result.Roles = append(result.Roles, impact)
+	}
 	for _, id := range userIDs {
 		if err := ctx.Err(); err != nil {
 			return ChannelAccessImpact{}, err
@@ -87,6 +117,7 @@ func compareChannelAccess(ctx context.Context, before, after *RoleEvaluator, rev
 			}
 			old := before.Evaluate(id, result.ChannelID, capability.Key).Allowed
 			next := after.Evaluate(id, result.ChannelID, capability.Key).Allowed
+			member.Permissions = append(member.Permissions, AccessImpactChange{Capability: capability.Key, Before: old, After: next})
 			if old != next {
 				member.Changes = append(member.Changes, AccessImpactChange{Capability: capability.Key, Before: old, After: next})
 			}

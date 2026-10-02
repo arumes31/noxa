@@ -23,7 +23,7 @@ test.beforeEach(async ({ page }) => {
                 window.__impactCalls ||= []; window.__impactCalls.push(structuredClone(query));
                 if (window.__impactGate) await window.__impactGate;
                 if (window.__impactFailure) throw new Error("preview failed");
-                return { revision: 7, channel_id: query.scope_channel_id || query.tree.channel_id, members: query.user_ids.map(user_id => ({ user_id,
+                return { revision: 7, channel_id: query.scope_channel_id || query.tree.channel_id, roles: [{ role_id: 10, name: "@everyone", changes: [{ capability: "view_channel", before: false, after: true }] }], members: query.user_ids.map(user_id => ({ user_id,
                     changes: [{ capability: "view_channel", before: query.tree.kind === "channel_move", after: query.tree.kind === "channel_create" }] })) };
             },
             RoleChannelState: async ({ kind }) => {
@@ -89,7 +89,7 @@ test("create private channel waits for acknowledgement and sends ordinary overri
     await page.getByRole("combobox", { name: "Channel access", exact: true }).selectOption("private");
     await page.getByLabel("Team", { exact: true }).check();
     await expect(page.getByRole("button", { name: "Create", exact: true })).toBeDisabled();
-    await page.getByRole("button", { name: "Preview member changes", exact: true }).click();
+    await page.getByRole("button", { name: "Preview role changes", exact: true }).click();
     await expect(page.getByRole("button", { name: "Create", exact: true })).toBeEnabled();
     await page.evaluate(() => { window.__channelGate = new Promise((resolve) => { window.__channelFinish = resolve; }); });
     await page.getByRole("button", { name: "Create", exact: true }).click();
@@ -106,12 +106,48 @@ for (const preset of presetContract.presets) test(`${preset.key} creation previe
     await page.getByLabel("Channel name", { exact: true }).fill("Preset fixture");
     await page.getByRole("combobox", { name: "Channel access", exact: true }).selectOption(preset.key);
     await expect(page.getByRole("button", { name: "Create", exact: true })).toBeDisabled();
-    await page.getByRole("button", { name: "Preview member changes", exact: true }).click();
+    await page.getByRole("button", { name: "Preview role changes", exact: true }).click();
     await expect(page.getByRole("button", { name: "Create", exact: true })).toBeEnabled();
     expect(await page.evaluate(() => window.__impactCalls.at(-1).tree.access.overrides)).toEqual(preset.overrides);
     await page.getByRole("button", { name: "Create", exact: true }).click();
     await expect(page.getByRole("dialog")).toHaveCount(0);
     expect(await page.evaluate(() => window.__channelCalls[0].access)).toEqual({ synced: false, overrides: preset.overrides });
+});
+
+for (const action of ["keep", "set", "remove"]) test(`channel edit ${action} password is explicit`, async ({ page }) => {
+    await page.getByText("Edit dialog", { exact: true }).click();
+    await page.getByRole("combobox", { name: "Channel password", exact: true }).selectOption(action);
+    if (action === "set") {
+        await page.getByRole("button", { name: "Save changes", exact: true }).click();
+        expect(await page.evaluate(() => window.__channelCalls)).toEqual([]);
+        await page.getByLabel("New password", { exact: true }).fill("new-password");
+    }
+    await page.getByRole("button", { name: "Save changes", exact: true }).click();
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+    const request = await page.evaluate(() => window.__channelCalls[0]);
+    expect(request.set_password).toBe(action === "keep" ? undefined : true);
+    expect(request.password).toBe(action === "set" ? "new-password" : action === "remove" ? "" : undefined);
+    expect(request.settings.password).toBeUndefined();
+});
+
+test("edit channel opens access after confirming discard of metadata edits", async ({ page }) => {
+    await page.evaluate(() => { window.go.main.App.RoleStateForTab = async (tab, id) => { window.__accessOpened = { tab, id }; throw new Error("fixture"); }; });
+    await page.getByText("Edit dialog", { exact: true }).click();
+    await page.getByLabel("Topic", { exact: true }).fill("Unsaved topic");
+    await page.getByRole("button", { name: "Channel access", exact: true }).click();
+    await page.getByRole("button", { name: "Cancel", exact: true }).click();
+    expect(await page.evaluate(() => window.__accessOpened)).toBeUndefined();
+    await expect(page.getByLabel("Topic", { exact: true })).toHaveValue("Unsaved topic");
+    await page.getByRole("button", { name: "Channel access", exact: true }).click();
+    await page.getByRole("button", { name: "Apply", exact: true }).click();
+    await expect.poll(() => page.evaluate(() => window.__accessOpened)).toEqual({ tab: "server-a", id: 1 });
+    expect(await page.evaluate(() => window.__channelCalls)).toEqual([]);
+});
+
+test("edit channel hides access editing from actors without permission", async ({ page }) => {
+    await page.evaluate(() => { window.__channelState.can_manage_access = false; });
+    await page.getByText("Edit dialog", { exact: true }).click();
+    await expect(page.getByRole("button", { name: "Channel access", exact: true })).toBeDisabled();
 });
 
 test("native tab activation cannot redirect a channel edit before frontend reset", async ({ page }) => {
@@ -130,15 +166,15 @@ test("creation preview contains only policy and invalidates on role or lifetime 
     await page.getByLabel("Channel name", { exact: true }).fill("Staff");
     await page.getByLabel("Password (empty = none)", { exact: true }).fill("secret");
     await page.getByRole("combobox", { name: "Channel access", exact: true }).selectOption("private");
-    const preview = page.getByRole("button", { name: "Preview member changes", exact: true });
+    const preview = page.getByRole("button", { name: "Preview role changes", exact: true });
     const save = page.getByRole("button", { name: "Create", exact: true });
     await preview.click();
     await expect(save).toBeEnabled();
     await expect(page.getByRole("dialog")).toContainText("does not exist yet");
     expect(await page.evaluate(() => window.__impactCalls[0])).toEqual({ tree: { kind: "channel_create", expected_revision: 7,
         channel_id: 0, parent_id: 1, temporary: false, access: { channel_id: 0, parent_id: 1, synced: false,
-            overrides: [{ role_id: 10, capability: "view_channel", effect: "deny" }] } }, user_ids: [0, 2] });
-    expect(await page.evaluate(() => window.__rosterCalls[0].channel_id)).toBe(1);
+            overrides: [{ role_id: 10, capability: "view_channel", effect: "deny" }] } }, user_ids: [0] });
+    expect(await page.evaluate(() => window.__rosterCalls)).toBeUndefined();
     expect(await page.evaluate(() => window.__channelCalls)).toEqual([]);
     await page.getByLabel("Team", { exact: true }).check();
     await expect(save).toBeDisabled();
@@ -158,13 +194,13 @@ test("late creation preview cannot authorize a changed policy draft", async ({ p
     await page.getByText("Create dialog", { exact: true }).click();
     await page.getByRole("combobox", { name: "Channel access", exact: true }).selectOption("private");
     await page.evaluate(() => { window.__impactGate = new Promise(resolve => { window.__finishImpact = resolve; }); });
-    await page.getByRole("button", { name: "Preview member changes", exact: true }).click();
+    await page.getByRole("button", { name: "Preview role changes", exact: true }).click();
     await expect.poll(() => page.evaluate(() => window.__impactCalls?.length)).toBe(1);
     await page.getByLabel("Team", { exact: true }).check();
     await page.evaluate(() => window.__finishImpact());
     await expect(page.getByRole("button", { name: "Create", exact: true })).toBeDisabled();
     await expect(page.locator(".channel-impact-member")).toHaveCount(0);
-    await page.getByRole("button", { name: "Preview member changes", exact: true }).click();
+    await page.getByRole("button", { name: "Preview role changes", exact: true }).click();
     await expect(page.getByRole("button", { name: "Create", exact: true })).toBeEnabled();
 });
 
@@ -172,7 +208,7 @@ test("move preview cannot survive a destination change or a failed retry", async
     await page.evaluate(() => { window.__channelState.destinations[1].can_sync = true; });
     await page.getByText("Move dialog", { exact: true }).click();
     const access = page.getByRole("combobox", { name: "Channel access", exact: true });
-    const preview = page.getByRole("button", { name: "Preview member changes", exact: true });
+    const preview = page.getByRole("button", { name: "Preview role changes", exact: true });
     const save = page.getByRole("button", { name: "Move", exact: true });
     await access.selectOption("sync");
     await preview.click();
@@ -193,24 +229,24 @@ test("native activation prevents a pending tree preview from enabling save", asy
     await page.getByText("Create dialog", { exact: true }).click();
     await page.getByRole("combobox", { name: "Channel access", exact: true }).selectOption("private");
     await page.evaluate(() => { window.__nativeTabID = "server-b"; });
-    await page.getByRole("button", { name: "Preview member changes", exact: true }).click();
+    await page.getByRole("button", { name: "Preview role changes", exact: true }).click();
     await expect(page.locator(".channel-impact [role=status]")).toContainText("could not");
     await expect(page.getByRole("button", { name: "Create", exact: true })).toBeDisabled();
     expect(await page.evaluate(() => window.__impactCalls || [])).toEqual([]);
-    expect(await page.evaluate(() => window.__tabCalls.at(-1))).toEqual({ name: "RoleMembers", tabID: "server-a" });
+    expect(await page.evaluate(() => window.__tabCalls.at(-1))).toEqual({ name: "PreviewChannelAccess", tabID: "server-a" });
 });
 
-test("root creation previews the root roster and German grants with keyboard controls", async ({ page }, testInfo) => {
+test("root creation previews roles and German grants with keyboard controls", async ({ page }, testInfo) => {
     await page.setViewportSize({ width: 390, height: 800 });
     await page.evaluate(() => { window.language("de"); window.openRoleChannel("channel_create", 0); });
-    const preview = page.getByRole("button", { name: "Mitgliedsänderungen prüfen", exact: true });
+    const preview = page.getByRole("button", { name: "Rollenänderungen prüfen", exact: true });
     await preview.focus();
     await page.keyboard.press("Enter");
-    await expect(page.locator(".channel-impact-member")).toHaveCount(2);
+    await expect(page.locator(".channel-impact-member")).toHaveCount(1);
     await expect(preview).toBeFocused();
     await expect(page.locator(".channel-impact")).toContainText("Dieser Kanal existiert noch nicht");
     await expect(page.locator(".channel-impact-member").first()).toContainText("Kanal sehen");
-    expect(await page.evaluate(() => window.__rosterCalls[0].channel_id)).toBe(0);
+    expect(await page.evaluate(() => window.__rosterCalls)).toBeUndefined();
     expect(await page.evaluate(() => window.__impactCalls[0].tree)).toMatchObject({ channel_id: 0, parent_id: 0,
         access: { channel_id: 0, parent_id: 0, synced: true } });
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
@@ -241,7 +277,7 @@ test("move keeps access by default and sync requires confirmation", async ({ pag
     await page.getByRole("combobox", { name: "Destination", exact: true }).selectOption("0");
     await page.getByRole("combobox", { name: "Channel access", exact: true }).selectOption("sync");
     await expect(page.getByRole("button", { name: "Move", exact: true })).toBeDisabled();
-    await page.getByRole("button", { name: "Preview member changes", exact: true }).click();
+    await page.getByRole("button", { name: "Preview role changes", exact: true }).click();
     await page.getByRole("button", { name: "Move", exact: true }).click();
     await expect(page.getByRole("dialog").last()).toContainText("may change who can see");
     await page.getByRole("button", { name: "Cancel", exact: true }).click();
@@ -257,11 +293,11 @@ test("synced move previews descendant access without changing the moved source",
     await page.getByText("Move dialog", { exact: true }).click();
     await page.getByRole("combobox", { name: "Channel access", exact: true }).selectOption("sync");
     await page.getByRole("combobox", { name: "Preview channel", exact: true }).selectOption("5");
-    await page.getByRole("button", { name: "Preview member changes", exact: true }).click();
+    await page.getByRole("button", { name: "Preview role changes", exact: true }).click();
     await expect(page.getByRole("button", { name: "Move", exact: true })).toBeEnabled();
     expect(await page.evaluate(() => window.__impactCalls.at(-1))).toMatchObject({ scope_channel_id: 5,
         tree: { channel_id: 1, parent_id: 0, sync_to_parent: true } });
-    expect(await page.evaluate(() => window.__rosterCalls.at(-1).channel_id)).toBe(5);
+    expect(await page.evaluate(() => window.__rosterCalls)).toBeUndefined();
     await page.getByRole("button", { name: "Move", exact: true }).click();
     await page.getByRole("button", { name: "Apply", exact: true }).click();
     await expect(page.getByRole("dialog")).toHaveCount(0);

@@ -3,6 +3,7 @@
 package store
 
 import (
+	"errors"
 	"reflect"
 	"testing"
 
@@ -34,6 +35,7 @@ func TestRoleMentionabilityPersistenceRoundTrip(t *testing.T) {
 	for step, mentionable := range []bool{false, true, false} {
 		if step != 0 {
 			role.Mentionable = mentionable
+			role.DeletionProtected = mentionable
 			p, err = s.ChangeRolePolicy(t.Context(), owner, authorization.RoleChange{Kind: authorization.RoleUpdate, ExpectedRevision: p.Revision, Role: role})
 			if err != nil {
 				t.Fatal(err)
@@ -56,6 +58,12 @@ func TestRoleMentionabilityPersistenceRoundTrip(t *testing.T) {
 		}
 		if !found || loaded.Revision != p.Revision {
 			t.Fatalf("step=%d role found=%t revision=%d want=%d", step, found, loaded.Revision, p.Revision)
+		}
+		if role.DeletionProtected {
+			_, err := s.ChangeRolePolicy(t.Context(), owner, authorization.RoleChange{Kind: authorization.RoleDelete, ExpectedRevision: p.Revision, RoleID: role.ID})
+			if !errors.Is(err, authorization.ErrRoleForbidden) {
+				t.Fatalf("protected deletion: %v", err)
+			}
 		}
 	}
 }
