@@ -49,7 +49,7 @@ func TestDisplayNameWaitsForMatchingAcknowledgement(t *testing.T) {
 
 func TestNamedLoginSeparatesAccountAndDisplayName(t *testing.T) {
 	addr, requests, release := gatedReconnectServer(t)
-	cm := newConnManager(nil)
+	cm := newConnManager(t.Context())
 	cm.sink = &eventRecorder{}
 	cm.id = mustTempIdentity(t)
 	t.Cleanup(cm.disconnect)
