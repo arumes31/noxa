@@ -83,7 +83,7 @@ same gap-free, final-egress TWCC accounting.
 RTP padding bytes count toward video pacing and TWCC throughput, including
 empty-payload probes; packet size is the header, media payload, and padding.
 
-Native sustained validation is tracked in `tasks/deployment-finish.md`; unit
+Validate sustained playback with real native clients before release; unit
 coverage alone is not proof of playback reliability.
 
 Remove the copy when an upstream release includes these fixes and the

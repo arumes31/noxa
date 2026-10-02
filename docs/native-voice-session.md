@@ -43,6 +43,5 @@ use explicit tab IDs; the screen-control workflow negotiates with an in-page
 peer rather than assuming a workspace has an active voice connection.
 
 Confirmed media controls are described in `native-media-controls.md`. Physical
-capture/revocation/ICE rehearsal remains in `native-api-inventory.md` and
-`../tasks/todo.md`. This is not a claim
-of complete permission cutover or physical-device validation.
+capture/revocation/ICE rehearsal remains in `native-api-inventory.md`. This is
+not a claim of complete permission cutover or physical-device validation.

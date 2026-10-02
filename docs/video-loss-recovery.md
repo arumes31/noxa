@@ -47,5 +47,5 @@ pacing and transport-feedback throughput.
 Regression coverage includes actual-engine NACK generation and RTX responses,
 padding serialization through Pion, sequence and PictureID wrap/reordering,
 late oversized packets, frame-size enforcement and current-versus-desired
-layer recovery. Native deployment measurements are recorded separately in
-`tasks/deployment-finish.md`.
+layer recovery. Unit coverage alone does not certify sustained native playback
+reliability; validate it with real clients before release.

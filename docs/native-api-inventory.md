@@ -27,7 +27,6 @@ bridge access, native menu callbacks and server-originated events also need
 inspection. Retired group/permission/token methods must not be mechanically
 translated into role APIs. Audit and ban operations are separate retained features.
 
-See the current checkpoint at the top of
-`tasks/permission-implementation-status.md` for release evidence and remaining
-live media/recording/device verification. Dated implementation sections describe
-historical gaps and must not be read as current deployment status.
+Live media, recording and physical-device verification remain release gates.
+Dated implementation sections describe historical gaps and must not be read as
+current deployment status.

@@ -15,15 +15,25 @@ coverage.txt
 
 # Environment
 .env
+.env.*
+!.env.example
+*.pem
+*.key
+*.pfx
+*.p12
 docker/secrets/*
 !docker/secrets/.empty
 
 # Local runtime data
-/data/files/
-/data/recordings/
+/data/
+*.log
+*.db
+*.sqlite
+*.sqlite3
 
 # Editor / OS
 .DS_Store
+Thumbs.db
 .idea/
 .vscode/
 *.swp
@@ -31,10 +41,12 @@ docker/secrets/*
 # Go
 vendor/
 go.work.sum
-/.cache/
+.cache/
 /.lintcache*/
 
-# Local deployment overrides
+# Private deployment files and local worktrees
+/deploy/
+/.kilo/
 /docker-compose.orderotto-dev.yml
 
 # Docs
@@ -42,6 +54,16 @@ BACKLOG.md
 GOAL.md
 /DESIGN.md
 /docs/plans/
+/tasks/
+/docs/operations/orderotto-dev.md
+
+# Local audit and validation reports
+/docs/client-audit-*.md
+/docs/client-followup-fixes-*.md
+/docs/client-update-validation-*.md
+/docs/native-ui-integration-*.md
+/docs/quality-audit-*.md
+/docs/teamspeak-discord-gap-analysis-*.md
 
 # Generated frontend metadata
 /client/frontend/package.json.md5
