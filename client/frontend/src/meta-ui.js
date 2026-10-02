@@ -121,7 +121,7 @@ function escapeHtml(s) {
 const openStatsPage = openServerInfo;
 
 // ---------------------------------------------------------------------------
-// Onboarding (329) + what's new (330) + crash toast (331)
+// Onboarding (329) + crash toast (331)
 // ---------------------------------------------------------------------------
 
 // maybeOnboard shows the first-run wizard (skipped when done before).
@@ -181,26 +181,6 @@ function maybeOnboard() {
     mountDialog(overlay, { onClose: () => { void done(); } });
 }
 
-// maybeWhatsNew shows release notes after an update (330).
-async function maybeWhatsNew() {
-    try {
-        const notes = await App().WhatsNew();
-        if (!notes) return;
-        const overlay = document.createElement("div");
-        overlay.className = "dlg-overlay";
-        overlay.innerHTML = `
-            <div class="dlg">
-                <h3>What's new</h3>
-                <div class="dlg-text whatsnew-body"></div>
-                <div class="dlg-buttons"><button class="dlg-ok">Nice</button></div>
-            </div>`;
-        overlay.querySelector(".whatsnew-body").textContent = notes;
-        overlay.querySelector(".dlg-ok").onclick = () => overlay.remove();
-        overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
-        mountDialog(overlay);
-    } catch { /* best-effort */ }
-}
-
 // maybeCrashToast reports a previous crash (331).
 async function maybeCrashToast() {
     try {
@@ -224,10 +204,9 @@ export function initMetaUI() {
     for (const id of ["server-name", "voice-latency"]) {
         document.getElementById(id)?.addEventListener("click", openServerInfo);
     }
-    // Startup flows: crash report, what's new, onboarding (in that order).
+    // Startup flows: crash report and onboarding.
     setTimeout(() => {
         maybeCrashToast();
-        maybeWhatsNew();
         setTimeout(maybeOnboard, 400);
     }, 600);
 }

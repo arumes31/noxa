@@ -210,6 +210,7 @@ export function renderVoiceHints() {
 }
 
 export function initWorkspace() {
+    $("compact-exit").onclick = () => V().toggleCompact();
     const icons = {
         "details-close": "close", "details-toggle": "users", "channel-create-btn": "plus", "workspace-sidebar-close": "close",
         "notif-bell": "bell", "chat-search-btn": "search", "chat-pins-btn": "pin",
@@ -352,6 +353,7 @@ function translateWorkspace() {
         }
     }
 
+    $("compact-exit").textContent = t("menu.exitCompact");
     $("chat-send").setAttribute("aria-label", t("workspace.send"));
     labelButton($("tab-chat"), "chat", t("workspace.chat"));
     labelButton($("tab-files"), "file", t("workspace.files"));
