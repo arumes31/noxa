@@ -152,10 +152,10 @@ export function createVideoGrid({ applySendCaps, syncCameraButton, syncShareButt
         t.watchControls = watchControls || null;
         if (watchControls) t.el.append(watchControls);
         t.el.dataset.clid = clid;
-        // (61) select by track id and render from a private stream, so a tile can
-        // never follow another slot or publisher even if the ontrack stream ever
-        // carries more than one track.
-        const vt = stream?.getVideoTracks().find((tr) => tr.id === key) || null;
+        // The receiver supplies a private, single-track stream. Its browser ID
+        // can differ from the negotiated publisher/slot key after MID reuse.
+        const tracks = stream?.getVideoTracks() || [];
+        const vt = tracks.length === 1 ? tracks[0] : tracks.find(track => track.id === key) || null;
         t.track = vt;
         t.diagnostics = null;
         t.diagnosticsPC = null;

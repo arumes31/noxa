@@ -64,6 +64,18 @@ test("two independent watches, stop, and shared audio controls leave voice intac
     await expect(bobVideo.getByRole("button", { name: "Ansehen beenden", exact: true })).toBeVisible();
 });
 
+test("watch uses negotiated publisher identity when a browser reuses an opaque receiver track", async ({ page }) => {
+    await page.evaluate(() => {
+        const track = document.createElement("canvas").captureStream(1).getVideoTracks()[0];
+        window.__reusedReceiver = track;
+        window.__streams.controls.receiveStreamTrack(track, { client_id: "alice" }, "alice|screen");
+    });
+    await page.locator('[data-publisher="alice"] .stream-watch').click();
+    expect(await page.evaluate(() => window.__reusedReceiver.enabled)).toBe(true);
+    await expect(page.locator('.vtile[data-clid="alice"][data-slot="screen"]')).toBeVisible();
+    await expect.poll(() => page.evaluate(() => document.querySelector('.vtile[data-clid="alice"] video').srcObject.getVideoTracks()[0] === window.__reusedReceiver)).toBe(true);
+});
+
 test("watch overlays the preview and stop moves inside the active stream", async ({ page }) => {
     const card = page.locator('[data-publisher="alice"]');
     for (const width of [360, 1008]) {

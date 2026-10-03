@@ -558,6 +558,28 @@ test("an ended private-call microphone can recover without changing its capture 
     expect(await page.evaluate(() => window.__allTracks.every(track => track.readyState === "ended"))).toBe(true);
 });
 
+test("hardware loss in a private call waits for explicit retry and keeps the call connected", async ({ page }) => {
+    await mountCallRaceFixture(page);
+    await page.evaluate(async () => {
+        window.__call = window.__makeCall("call-old", 2, true);
+        await window.__callsModule.startPrivateCall("alice");
+        window.__oldCallMic = window.__streams[0].getAudioTracks()[0];
+        window.__oldPeer = window.__peers[0];
+        window.__oldCallMic.dispatchEvent(new Event("ended"));
+        await window.__callsModule.applyPrivateCallAudioSettings();
+    });
+    await expect(page.getByText(/Microphone disconnected:/)).toBeVisible();
+    expect(await page.evaluate(() => window.__captures)).toBe(1);
+    expect(await page.evaluate(() => window.__oldCallMic.readyState)).toBe("ended");
+    await expect.poll(() => page.evaluate(() => window.__oldPeer.getSenders().every(sender => !sender.track))).toBe(true);
+    await page.getByRole("button", { name: "Retry microphone access" }).click();
+    await expect.poll(() => page.evaluate(() => window.__captures)).toBe(2);
+    await expect(page.getByText(/Microphone disconnected:/)).toHaveCount(0);
+    expect(await page.evaluate(() => window.__peers[0] === window.__oldPeer && window.__oldPeer.getSenders().some(sender => sender.track === window.__streams[1].getAudioTracks()[0]))).toBe(true);
+    await page.getByRole("button", { name: "End call", exact: true }).click();
+    expect(await page.evaluate(() => window.__allTracks.every(track => track.readyState === "ended"))).toBe(true);
+});
+
 test("partial group microphone swap failure rolls every active peer back before retry", async ({ page }) => {
     await mountCallRaceFixture(page);
     await page.evaluate(async () => {

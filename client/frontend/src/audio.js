@@ -58,11 +58,11 @@ export function syncMuteButton(button, muted) {
 // Render microphone capture failures with an in-context recovery action. The
 // callback remains with main.js because recovery can renegotiate the live
 // voice session; this helper owns only the compact status interaction.
-export function renderMicStatus(container, micState, onRetry, videoOnly = true, successFocus = null) {
+export function renderMicStatus(container, micState, onRetry, videoOnly = true, successFocus = null, recovery = {}) {
     if (!container) return null;
     container.replaceChildren();
     const suffix = videoOnly ? t("polish.videoOnly") : "";
-    const message = micState === "denied"
+    const message = micState === "disconnected" ? t("audio.micDisconnected", { name: recovery.name || t("audio.micUnknown") }) : micState === "denied"
         ? t("polish.micDenied") + suffix
         : micState === "none" ? t("polish.micMissing") + suffix : "";
     if (!message) return null;
@@ -95,6 +95,17 @@ export function renderMicStatus(container, micState, onRetry, videoOnly = true, 
         }
     };
     container.appendChild(retry);
+    if (micState === "disconnected" && recovery.choose) {
+        const choose = document.createElement("button");
+        choose.type = "button"; choose.className = "mic-retry";
+        choose.textContent = t("audio.chooseMicrophone");
+        choose.title = t("audio.micRecoveryHelp");
+        choose.onclick = recovery.choose;
+        container.appendChild(choose);
+        const help = document.createElement("span");
+        help.textContent = t("audio.micRecoveryHelp");
+        container.appendChild(help);
+    }
     return retry;
 }
 
@@ -314,6 +325,7 @@ export function markCaptureProfile(track, ch) {
 export async function applyCaptureProfile(pc, stream, ch) {
     const cur = stream?.getAudioTracks()[0] || null;
     if (!cur) return { track: null, changed: false };
+    const initialState = cur.readyState;
     const want = JSON.stringify(captureConstraints(ch));
     if (trackProfiles.get(cur) === want) return { track: cur, changed: false };
     // a move and a channel_updated can land together: a second capture while
@@ -332,7 +344,8 @@ export async function applyCaptureProfile(pc, stream, ch) {
             fresh.getTracks().forEach((t) => t.stop());
             return { track: cur, changed: false };
         }
-        if (pc?.connectionState === "closed") {
+        const current = () => pc?.connectionState !== "closed" && (cur.readyState !== "ended" || initialState === "ended") && stream.getAudioTracks().includes(cur);
+        if (!current()) {
             fresh.getTracks().forEach((track) => track.stop());
             return { track: cur, changed: false };
         }
@@ -343,6 +356,12 @@ export async function applyCaptureProfile(pc, stream, ch) {
         if (sender) {
             try {
                 await sender.replaceTrack(next);
+                if (!current()) {
+                    next.enabled = false;
+                    if (sender.track === next) await sender.replaceTrack(null).catch(() => {});
+                    next.stop();
+                    return { track: null, changed: false };
+                }
             } catch (error) {
                 next.stop();
                 return { track: cur, changed: false, error };

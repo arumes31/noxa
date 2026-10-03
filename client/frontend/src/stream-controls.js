@@ -12,13 +12,23 @@ export function streamSessionIsCurrent(pc) { return !!session && session.pc === 
 
 // Receiver bindings stay negotiated while unwatched. Playback follows only
 // acknowledged intent; the router separately enforces packet delivery.
-export function receiveStreamTrack(track, publisher) {
+export function receiveStreamTrack(track, publisher, trackID = track.id) {
     const s = session;
     if (!s || !current(s)) { track.enabled = false; return; }
-    s.tracks.set(track.id, { track, publisher });
+    s.tracks.set(trackID, { track, publisher });
     track.enabled = false;
-    const entry = s.streams.get(track.id);
+    const entry = s.streams.get(trackID);
     applyWatch(s, entry);
+    if (entry) renderEntry(s, entry);
+}
+
+export function removeStreamTrack(track, trackID) {
+    const s = session;
+    if (!s || s.tracks.get(trackID)?.track !== track) return;
+    s.tracks.delete(trackID);
+    track.enabled = false;
+    s.removeVideo(trackID);
+    const entry = s.streams.get(trackID);
     if (entry) renderEntry(s, entry);
 }
 
@@ -27,6 +37,13 @@ export function receiveShareAudio(track, publisherID) {
     if (!s || !current(s)) { track.enabled = false; return; }
     s.audio.set(String(publisherID), track);
     track.enabled = !!s.streams.get(`${publisherID}|screen`)?.watching;
+}
+
+export function removeShareAudio(track, publisherID) {
+    if (session?.audio.get(String(publisherID)) === track) {
+        session.audio.delete(String(publisherID));
+        track.enabled = false;
+    }
 }
 
 function applyWatch(s, entry) {

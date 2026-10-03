@@ -3,6 +3,7 @@ import { SpatialVoice } from "./positional-audio.js";
 import { makeLimiter, registerUserChain, unregisterUserChain, createAudioLevelSampler, getUserShareVolume, isUserShareMuted, onShareAudioChange, setDucking, attachUserNormalizer, detachUserNormalizer, detachAllUserNormalizers, resumeAudioPlayback, createRemoteAudioSource } from "./audio.js";
 import { parseTrackID } from "./video.js";
 import { t } from "./i18n.js";
+import { watchAudioOutput } from "./microphone-recovery.js";
 
 export function createRemoteAudio({ state, toast, sysMsg, voiceEpoch }) {
     // Output settings: volume + sink for remote media elements.
@@ -44,6 +45,7 @@ export function createRemoteAudio({ state, toast, sysMsg, voiceEpoch }) {
     // (track ID = publisher client ID) make per-user volume/mute/auto-level
     // audible; the registries themselves live in audio.js.
     const remoteChain = { ctx: null, master: null };
+    watchAudioOutput(() => remoteChain.ctx && state.settings?.playback_device_id, () => toast(t("audio.outputDisconnected"), "warn"));
 
     function resumeRemoteAudio() {
         for (const { playback } of [...remoteTracks.values(), ...shareAudio.values()]) {
@@ -179,11 +181,11 @@ export function createRemoteAudio({ state, toast, sysMsg, voiceEpoch }) {
     function resolveTrackUsers() {
         for (const [trackID, u] of state.trackUsers) {
             if (u.unique_id) continue;
-            const { clientID } = parseTrackID(trackID);
+            const { clientID } = parseTrackID(u.track_id || trackID);
             const publisher = state.clients.find((c) => String(c.client_id) === clientID);
             if (!publisher) continue;
             state.trackUsers.set(trackID, {
-                client_id: publisher.client_id, unique_id: publisher.unique_id, nickname: publisher.nickname,
+                client_id: publisher.client_id, unique_id: publisher.unique_id, nickname: publisher.nickname, track_id: u.track_id,
             });
             const t = remoteTracks.get(trackID);
             if (t && !t.uid && publisher.unique_id) {
@@ -314,5 +316,5 @@ export function createRemoteAudio({ state, toast, sysMsg, voiceEpoch }) {
         state.trackUsers.clear();
     }
 
-    return { selectAudioOutput, applyOutputSettings, remoteChain, get spatialVoice() { return spatialVoice; }, reconcileSpatialVoice, attachRemoteAudio, readRemoteAudioLevel, resolveTrackUsers, shareAudio, applyDucking, applyShareAudio, attachShareAudio, detachRemoteAudio };
+    return { selectAudioOutput, applyOutputSettings, remoteChain, get spatialVoice() { return spatialVoice; }, reconcileSpatialVoice, attachRemoteAudio, readRemoteAudioLevel, resolveTrackUsers, shareAudio, applyDucking, applyShareAudio, attachShareAudio, detachRemoteTrack, detachShareAudio, detachRemoteAudio };
 }

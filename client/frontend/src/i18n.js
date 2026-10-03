@@ -1,3 +1,4 @@
+import { audioRecoveryEnglish, audioRecoveryGerman } from "./audio-recovery-messages.js";
 // i18n.js — wave-8c lightweight internationalization (336).
 //
 // USAGE PATTERN (how to add strings):
@@ -36,6 +37,7 @@ import { messageToolsEnglish, messageToolsGerman } from "./message-tools-message
 import { webhookEnglish, webhookGerman } from "./webhook-messages.js";
 
 const en = {
+    ...audioRecoveryEnglish,
     ...cameraEnglish, ...callMediaEnglish, ...discussionEnglish, ...voiceMessageEnglish, ...overlayEnglish, ...communicationExtrasEnglish, ...messageToolsEnglish, ...webhookEnglish,
     ...contextEnglish,
     ...micEnglish,
@@ -114,6 +116,7 @@ const en = {
 };
 
 const de = {
+    ...audioRecoveryGerman,
     ...cameraGerman, ...callMediaGerman, ...discussionGerman, ...voiceMessageGerman, ...overlayGerman, ...communicationExtrasGerman, ...messageToolsGerman, ...webhookGerman,
     ...contextGerman,
     ...micGerman,

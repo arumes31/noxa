@@ -1,5 +1,6 @@
 import { t } from "./i18n.js";
-import { captureConstraints, createRemoteAudioSource, getUserVolume, isUserMuted, getUserShareVolume, isUserShareMuted } from "./audio.js";
+import { captureConstraints, createRemoteAudioSource, getUserVolume, isUserMuted, getUserShareVolume, isUserShareMuted, renderMicStatus } from "./audio.js";
+import { watchMicrophone, watchAudioOutput } from "./microphone-recovery.js";
 import { closeDialog, confirmDialog, isCurrentServerDialog, mountServerDialog } from "./modal.js";
 import { sessionUserID } from "./session-identity.js";
 import { memberTarget } from "./member-target.js";
@@ -84,6 +85,8 @@ export function stopPrivateCall() {
     rememberCall(callKey(owner.tabID, owner.generation, owner.call.id), Infinity);
     clearInterval(owner.poll);
     clearInterval(owner.audioTick);
+    owner.stopWatchingMicrophone?.();
+    owner.stopWatchingOutput?.();
     owner.media.close();
     owner.stream?.getTracks().forEach(track => track.stop());
     releaseCaptureMonitor(owner);
@@ -123,6 +126,7 @@ async function applyCall(call, tabID, generation) {
         document.body.append(panel);
         if (me.state === "ringing") window.__noxaNotify?.notify("poke", t("call.incomingFrom", { name: label(call.caller) }), { uid: call.caller });
         const owner = session;
+        owner.stopWatchingOutput = watchAudioOutput(() => current(owner) && V().state.settings?.playback_device_id, () => V().toast?.(t("audio.outputDisconnected"), "warn"));
         const releaseHold = () => { owner.ptt = false; if (current(owner)) syncAudio(owner); };
         panel.addEventListener("noxa-call-docking", releaseHold);
         panel.addEventListener("noxa-call-blur", releaseHold);
@@ -210,12 +214,21 @@ function render(owner) {
     owner.controls = controls;
     syncPTTControl(owner, V().state.settings?.activation_mode || "ptt");
     owner.panel.replaceChildren(title, people, owner.media.grid, controls);
+    if (owner.captureLost) {
+        const recovery = node("div"); recovery.setAttribute("role", "status");
+        renderMicStatus(recovery, "disconnected", async () => {
+            try { await applyPrivateCallAudioSettings({ retry: true }); return !owner.captureLost; }
+            catch (error) { if (current(owner)) report(error); return false; }
+        }, false, controls.querySelector("button"), { name: owner.lostMicrophoneName, choose: () => V().openSettings?.("capture") });
+        owner.panel.append(recovery);
+    }
     owner.media.updateGrid();
 }
 
 function syncPTTControl(owner, mode) {
     if (owner.activationMode !== mode) { owner.ptt = false; owner.activationMode = mode; }
     if (!owner.hold) return;
+    owner.hold.disabled = !!owner.captureLost;
     if (mode === "ptt") {
         if (owner.hold.parentNode !== owner.controls) owner.controls.prepend(owner.hold);
     } else if (owner.hold.parentNode) {
@@ -250,6 +263,7 @@ async function ensureCapture(owner) {
         owner.captureProfile = JSON.stringify(constraints);
         owner.context = new AudioContext();
         if (stream.getAudioTracks()[0]) Object.assign(owner, captureMonitor(owner, stream.getAudioTracks()[0]));
+        watchCallMicrophone(owner);
         void owner.context.resume().catch(() => {});
         owner.ice = await app().GetICEServersForTab(owner.tabID);
         syncAudio(owner);
@@ -259,6 +273,23 @@ async function ensureCapture(owner) {
 
 function releaseCaptureMonitor(monitor) {
     monitor.monitorTrack?.stop(); monitor.monitorSource?.disconnect(); monitor.analyser?.disconnect();
+}
+
+function watchCallMicrophone(owner) {
+    owner.stopWatchingMicrophone?.();
+    const track = owner.stream?.getAudioTracks()[0];
+    owner.stopWatchingMicrophone = watchMicrophone(track, lost => {
+        if (!current(owner) || !owner.stream.getAudioTracks().includes(lost)) return;
+        owner.captureLost = true; owner.captureEpoch = (owner.captureEpoch || 0) + 1;
+        owner.lostMicrophoneName = lost.label;
+        owner.ptt = false; owner.speaking = false;
+        lost.enabled = false; owner.stream.removeTrack(lost); lost.stop();
+        releaseCaptureMonitor(owner); owner.analyser = null;
+        for (const peer of owner.peers.values()) {
+            if (peer.voiceSender?.track === lost) void peer.voiceSender.replaceTrack(null).catch(error => { if (current(owner)) report(error); });
+        }
+        render(owner);
+    });
 }
 
 function captureMonitor(owner, track) {
@@ -281,18 +312,19 @@ function queueCapture(owner, update) {
 
 // Settings and call negotiation share this capture queue. A new peer cannot
 // attach the old microphone while an accepted group call is switching devices.
-export function applyPrivateCallAudioSettings() {
+export function applyPrivateCallAudioSettings({ retry = false } = {}) {
     const owner = session;
     if (!owner?.capture || !current(owner)) return Promise.resolve();
     return queueCapture(owner, async () => {
-        if (!current(owner)) return;
+        if (!current(owner) || (owner.captureLost && !retry)) return;
+        const epoch = owner.captureEpoch || 0;
         const constraints = captureConstraints(null), profile = JSON.stringify(constraints);
         const previous = owner.stream?.getAudioTracks()[0];
         if (previous?.readyState === "live" && profile === owner.captureProfile) return;
         let fresh, monitor;
         try {
             fresh = await navigator.mediaDevices.getUserMedia({ audio: constraints, video: false });
-            if (!current(owner)) return;
+            if (!current(owner) || epoch !== (owner.captureEpoch || 0)) return;
             const next = fresh.getAudioTracks()[0];
             if (!next) throw new Error(t("call.audioFailed"));
             // A new track starts silent until the current mute/PTT state has
@@ -305,6 +337,10 @@ export function applyPrivateCallAudioSettings() {
             });
             const outcomes = await Promise.allSettled(swaps.map(({ sender }) => sender.replaceTrack(next)));
             if (!current(owner)) return;
+            if (epoch !== (owner.captureEpoch || 0)) {
+                await Promise.allSettled(swaps.filter(({ sender }) => sender.track === next).map(({ sender }) => sender.replaceTrack(null)));
+                return;
+            }
             const active = swap => owner.peers.get(swap.uid) === swap.peer && acceptedPeer(owner, swap.uid);
             const failed = outcomes.find((outcome, index) => outcome.status === "rejected" && active(swaps[index]));
             if (failed) {
@@ -315,8 +351,9 @@ export function applyPrivateCallAudioSettings() {
             releaseCaptureMonitor(owner); Object.assign(owner, monitor); monitor = null;
             if (previous) owner.stream.removeTrack(previous);
             owner.stream.addTrack(next); previous?.stop();
-            owner.captureProfile = profile; fresh = null;
-            syncAudio(owner);
+            owner.captureProfile = profile; owner.captureLost = false; fresh = null;
+            watchCallMicrophone(owner);
+            syncAudio(owner); render(owner);
         } finally { fresh?.getTracks().forEach(track => track.stop()); if (monitor) releaseCaptureMonitor(monitor); }
     });
 }

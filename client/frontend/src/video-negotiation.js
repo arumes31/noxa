@@ -1,5 +1,6 @@
 // Serializes offers and answers for one peer, including ICE restart collisions.
 import { SLOT_SCREEN, SLOT_SCREEN_AUDIO } from "./media-track-id.js";
+import { reconcileRemoteMedia } from "./remote-media.js";
 const V = () => window.__noxa;
 
 // trackSlots declares which slot each outbound track occupies (70). The router
@@ -78,6 +79,7 @@ async function applyPendingRemoteOffer(peerConnection, pending) {
         if (!current() || !identity || identity !== remoteICEIdentity(offerSDP)) return false;
         await peerConnection.setRemoteDescription({ type: "offer", sdp: offerSDP });
         if (!current()) return;
+        reconcileRemoteMedia(peerConnection);
         const answer = await peerConnection.createAnswer();
         if (!current()) return;
         await peerConnection.setLocalDescription(answer);
@@ -108,6 +110,7 @@ export async function negotiateOffer(peerConnection, generation, offerOptions, s
         ensureCurrent();
         await peerConnection.setRemoteDescription({ type: "answer", sdp: answerSDP });
         ensureCurrent();
+        reconcileRemoteMedia(peerConnection);
         return;
       } catch (e) {
         await peerConnection?.setLocalDescription({ type: "rollback" }).catch(() => {});

@@ -1,4 +1,5 @@
 import { createConnectionQuality } from './connection-quality.js';
+import { watchMicrophone } from "./microphone-recovery.js";
 import { createRemoteAudio } from './remote-audio.js';
 import { createChannelTree } from './channel-tree.js';
 // noxa client frontend — voice ops console (vanilla JS).
@@ -36,7 +37,9 @@ import {
     renegotiate, answerRemoteOffer, applyVideoLimits,
 } from "./video.js";
 import * as chatUI from "./chat-ui.js";
-import { startStreamSession, stopStreamSession, streamSessionIsCurrent, receiveStreamTrack, receiveShareAudio } from "./stream-controls.js";
+import { startStreamSession, stopStreamSession, streamSessionIsCurrent, receiveStreamTrack, removeStreamTrack, receiveShareAudio, removeShareAudio } from "./stream-controls.js";
+import { startRemoteMedia } from "./remote-media.js";
+import { remoteTrackID } from "./media-track-id.js";
 import { publishAudioState } from "./audio-state.js";
 import { isCurrentPublication } from "./stream-publication.js";
 import { initPermsUI } from "./roles-access-ui.js";
@@ -196,7 +199,10 @@ function applyAppearance() {
     setLanguage(s.language || "system");
     root.lang = currentLanguage();
     applyStaticLabels();
-    if (previousLanguage !== currentLanguage()) window.dispatchEvent(new Event("noxa-language-changed"));
+    if (previousLanguage !== currentLanguage()) {
+        window.dispatchEvent(new Event("noxa-language-changed"));
+        if (state.micState === "disconnected") setMicState(state.micState);
+    }
     syncMuteButton($("voice-mute"), state.muted);
     renderVoiceStatus();
     initMenu();
@@ -1761,6 +1767,26 @@ $("chat-text").addEventListener("keydown", (e) => { if (e.key === "Enter") sendC
 // ---------------------------------------------------------------------------
 
 let voiceSessionEpoch = 0;
+let stopRemoteMedia = () => {};
+let stopWatchingMicrophone = () => {};
+let lostMicrophoneName = "";
+
+function watchCurrentMicrophone() {
+    stopWatchingMicrophone();
+    const stream = state.localStream, pc = state.pc, epoch = voiceSessionEpoch;
+    const track = stream?.getAudioTracks()[0];
+    stopWatchingMicrophone = watchMicrophone(track, lost => {
+        if (state.pc !== pc || state.localStream !== stream || voiceSessionEpoch !== epoch || !stream.getAudioTracks().includes(lost)) return;
+        lostMicrophoneName = lost.label;
+        lost.enabled = false;
+        stream.removeTrack(lost); lost.stop();
+        stopMicMeter(); stopVoiceMonitor(); setPTT(false);
+        for (const sender of pc.getSenders()) {
+            if (sender.track === lost) void sender.replaceTrack(null).catch(() => {});
+        }
+        setMicState("disconnected");
+    });
+}
 let voiceStartPromise = null;
 let voiceStartOwner = null;
 let mediaLimitsSequence = 0;
@@ -1859,9 +1885,11 @@ function ensureVoiceForChannel() {
             startStreamSession(state.pc, videoTrackAdded, videoTrackRemoved);
             for (const receiver of state.pc.getReceivers()) {
                 const track = receiver.track;
-                const parsed = parseTrackID(track.id);
+                const trackID = remoteTrackID(state.pc, track);
+                if (!trackID) continue;
+                const parsed = parseTrackID(trackID);
                 const publisher = state.clients.find(c => String(c.client_id) === parsed.clientID);
-                if (track.kind === "video") receiveStreamTrack(track, publisher);
+                if (track.kind === "video") receiveStreamTrack(track, publisher, trackID);
                 else if (parsed.slot === SLOT_SCREEN_AUDIO) receiveShareAudio(track, parsed.clientID);
             }
         }
@@ -2016,6 +2044,7 @@ async function startVoice(expectedEpoch = voiceSessionEpoch) {
     } else {
         pc.addTransceiver("audio", { direction: "recvonly" });
     }
+    watchCurrentMicrophone();
 
     pc.onicecandidate = (e) => {
         if (current() && state.pc === pc && e.candidate) {
@@ -2030,43 +2059,36 @@ async function startVoice(expectedEpoch = voiceSessionEpoch) {
     // (59) ICE restart: re-offer with iceRestart on failed/disconnected,
     // backing off 1s, 2s, 5s, 15s before giving up with a warning toast.
     pc.oniceconnectionstatechange = () => onICEStateChange(pc);
-    const receivedTracks = new Map();
+    stopRemoteMedia();
     startStreamSession(pc, videoTrackAdded, videoTrackRemoved);
-    pc.ontrack = (e) => {
-        if (!current() || state.pc !== pc) {
-            e.track.stop();
-            return;
-        }
-        // The server labels each track with its publisher and slot (see
-        // parseTrackID in video.js), so tracks are attributed without SSRC
-        // mapping and a publisher can own more than one of them.
-        const { clientID, slot } = parseTrackID(e.track.id);
+    stopRemoteMedia = startRemoteMedia(pc, () => current() && state.pc === pc, (track, trackID) => {
+        const { clientID, slot } = parseTrackID(trackID);
         const publisher = state.clients.find((c) => String(c.client_id) === clientID) || null;
-        state.trackUsers.set(e.track.id, publisher
-            ? { client_id: publisher.client_id, unique_id: publisher.unique_id, nickname: publisher.nickname }
-            : { client_id: clientID, unique_id: "", nickname: "" });
-        receivedTracks.set(e.track.id, e.track);
-        e.track.addEventListener("ended", () => {
-            if (!current() || state.pc !== pc || receivedTracks.get(e.track.id) !== e.track) return;
-            receivedTracks.delete(e.track.id);
-            state.trackUsers.delete(e.track.id);
-            if (e.track.kind === "video") videoTrackRemoved(e.track.id);
+        state.trackUsers.set(track.id, {
+            client_id: clientID, unique_id: publisher?.unique_id || "", nickname: publisher?.nickname || "", track_id: trackID,
         });
-        if (e.track.kind === "video") {
-            // (61/73) one grid tile per publisher video slot; removed on ended.
-            receiveStreamTrack(e.track, publisher);
+        if (track.kind === "video") {
+            receiveStreamTrack(track, publisher, trackID);
             return;
         }
         if (slot === SLOT_SCREEN_AUDIO) {
-            receiveShareAudio(e.track, clientID);
+            receiveShareAudio(track, clientID);
             // (70) a sharer's system audio is not a second microphone.
-            attachShareAudio(e.track, clientID, publisher);
+            attachShareAudio(track, clientID, publisher);
             return;
         }
-        // Audio: route through the WebAudio chain (per-user gain hook,
-        // limiter, normalizer) instead of the video element.
-        attachRemoteAudio(e.track, publisher);
-    };
+        track.enabled = true;
+        attachRemoteAudio(track, publisher);
+    }, (track, trackID) => {
+        state.trackUsers.delete(track.id);
+        if (track.kind === "video") removeStreamTrack(track, trackID);
+        else if (parseTrackID(trackID).slot === SLOT_SCREEN_AUDIO) {
+            const { clientID } = parseTrackID(trackID);
+            removeShareAudio(track, clientID);
+            remoteAudio.detachShareAudio(clientID);
+        }
+        else remoteAudio.detachRemoteTrack(track.id);
+    });
 
     await renegotiate(pc, state.serverGeneration, undefined, () => expectedEpoch === voiceSessionEpoch);
 
@@ -2107,6 +2129,7 @@ async function applyChannelAudio() {
     // stereo/DSP constraints cannot be changed on a live track.
     const { track, changed, error } = await applyCaptureProfile(state.pc, state.localStream, ch);
     if (changed) {
+        watchCurrentMicrophone();
         startVoiceMonitor();
         startMicMeter(state.localStream);
         applyVoiceState();
@@ -2272,6 +2295,9 @@ function scheduleICERestart(pc) {
 }
 
 function teardownVoice() {
+    stopRemoteMedia();
+    stopWatchingMicrophone();
+    lostMicrophoneName = "";
     stopStreamSession();
     state.mediaLimits = null;
     stopVoiceMonitor();
@@ -2343,9 +2369,13 @@ function setMicState(s) {
     state.micState = s;
     const el = $("mic-status");
     const videoOnly = !!state.localStream?.getVideoTracks?.().length;
-    renderMicStatus(el, s, retryMicrophoneAccess, videoOnly, $("ptt-btn"));
+    renderMicStatus(el, s, retryMicrophoneAccess, videoOnly, $("ptt-btn"), {
+        name: lostMicrophoneName, choose: () => window.__noxa.openSettings("capture"),
+    });
     if (s === "ok") {
         $("ptt-btn").disabled = false;
+    } else if (s === "disconnected") {
+        $("ptt-btn").disabled = true;
     } else if (s === "none") {
         $("ptt-btn").disabled = true;
         sysMsg(videoOnly ? "no microphone found; joined voice video-only" :
@@ -2376,7 +2406,7 @@ async function retryMicrophoneCapture() {
     if (!state.pc || !state.localStream) {
         return ensureVoiceForChannel();
     }
-    if (state.localStream.getAudioTracks().length > 0) {
+    if (state.localStream.getAudioTracks().some(track => track.readyState !== "ended")) {
         setMicState("ok");
         return true;
     }
@@ -2406,6 +2436,7 @@ async function retryMicrophoneCapture() {
         return false;
     }
 
+    audioTrack.enabled = false;
     localStream.addTrack(audioTrack);
     markCaptureProfile(audioTrack, state.channels.find((channel) => channel.ChannelID === state.myChannelID));
     let transceiver = null;
@@ -2420,6 +2451,7 @@ async function retryMicrophoneCapture() {
         startVoiceMonitor();
         startMicMeter(localStream);
         applyVoiceState();
+        watchCurrentMicrophone();
         setMicState("ok");
         setVoiceStatus("voice on");
         sysMsg("microphone connected");

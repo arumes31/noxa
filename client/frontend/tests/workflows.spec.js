@@ -5773,7 +5773,7 @@ test("voice monitor releases its local capture on restart and disconnect", async
     });
 });
 
-test("retries a missing microphone without interrupting video or screen sharing", async ({ page }) => {
+test("retries a missing or disconnected microphone without interrupting video or screen sharing", async ({ page }) => {
     await page.evaluate(() => {
         window.__noxa.showWorkspace(false);
         window.__getUserMediaCalls = 0;
@@ -5786,7 +5786,6 @@ test("retries a missing microphone without interrupting video or screen sharing"
         window.__cameraTrack = videoStream.getVideoTracks()[0];
         const audioContext = new AudioContext();
         window.__retryAudioContext = audioContext;
-        const audioStream = audioContext.createMediaStreamDestination().stream;
         navigator.mediaDevices.getUserMedia = async (constraints) => {
             window.__getUserMediaCalls++;
             if (constraints.video) window.__cameraRequests++;
@@ -5794,7 +5793,7 @@ test("retries a missing microphone without interrupting video or screen sharing"
                 throw new DOMException("test permission denial", "NotAllowedError");
             }
             if (constraints.video) return videoStream;
-            if (constraints.audio) return audioStream;
+            if (constraints.audio) return audioContext.createMediaStreamDestination().stream;
             return new MediaStream();
         };
 
@@ -5883,6 +5882,20 @@ test("retries a missing microphone without interrupting video or screen sharing"
         unpublishedShare: 0,
         slots: ["cam", "mic"],
     });
+
+    const capturesBeforeLoss = await page.evaluate(() => window.__getUserMediaCalls);
+    await page.evaluate(() => {
+        window.__lostTrack = window.__noxa.state.localStream.getAudioTracks()[0];
+        window.__lostTrack.dispatchEvent(new Event("ended"));
+    });
+    await expect(page.locator("#mic-status")).toContainText("Microphone disconnected:");
+    await expect(page.getByRole("button", { name: "Choose microphone…" })).toBeVisible();
+    await expect(page.locator("#ptt-btn")).toBeDisabled();
+    expect(await page.evaluate(() => window.__getUserMediaCalls)).toBe(capturesBeforeLoss);
+    expect(await page.evaluate(() => ({ ended: window.__lostTrack.readyState, samePeer: window.__noxa.state.pc === window.__pcBeforeMicRetry, camera: window.__cameraTrack.readyState, sharing: window.__noxa.state.screenSharing }))).toEqual({ ended: "ended", samePeer: true, camera: "live", sharing: true });
+    await retry.click();
+    await expect(page.locator("#mic-status")).toBeEmpty();
+    expect(await page.evaluate(() => window.__getUserMediaCalls)).toBe(capturesBeforeLoss + 1);
 
     await page.evaluate(() => { window.__noxa.state.screenSharing = false; });
     await page.getByRole("button", { name: "Camera on — click to turn off", exact: true }).click();
