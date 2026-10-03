@@ -75,6 +75,25 @@ test("login keeps owner credentials separate from the public display name", asyn
     expect(await page.evaluate(() => JSON.stringify(window.__settings))).not.toContain("test-account-password");
 });
 
+test("a rejected login keeps optional credentials and restores the connect action", async ({ page }) => {
+    await page.evaluate(() => {
+        const app = window.go.main.App;
+        window.go.main.App = new Proxy(app, { get(target, method) {
+            if (method === "ConnectNamedBookmarkTabWithID") return async () => ({ error: "Account password is incorrect" });
+            return target[method];
+        } });
+    });
+    await page.locator("#login-nick").fill("owner");
+    await page.locator("#login-options > summary").click();
+    await page.locator("#login-accountpw").fill("retry-password");
+    await page.locator("#login-connect").click();
+    await expect(page.locator("#login-error")).toHaveText("Account password is incorrect");
+    await expect(page.locator("#login-accountpw")).toHaveValue("retry-password");
+    await expect(page.locator("#login-connect")).toBeEnabled();
+    await expect(page.locator("#login-connect")).toHaveAccessibleName("Connect");
+    await expect(page.locator("#login-connect svg")).toBeVisible();
+});
+
 test("live edits wait for server success and preserve the login", async ({ page }) => {
     await connected(page);
     await openRename(page);
