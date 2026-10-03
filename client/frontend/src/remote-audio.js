@@ -52,7 +52,7 @@ export function createRemoteAudio({ state, toast, sysMsg, voiceEpoch }) {
             if (playback.paused) void playback.play().catch(() => {});
         }
         void resumeAudioPlayback(remoteChain.ctx).catch(() => {
-            toast("Voice playback could not start. Check your output device and try again.", "warn");
+            toast(t("runtime.playbackFailed"), "warn");
         });
     }
     window.addEventListener("pointerdown", resumeRemoteAudio, { passive: true });
@@ -125,7 +125,7 @@ export function createRemoteAudio({ state, toast, sysMsg, voiceEpoch }) {
             resumeRemoteAudio();
             return true;
         } catch (e) {
-            sysMsg("remote audio chain failed: " + e);
+            sysMsg(t("runtime.remoteAudioFailed", { error: String(e) }));
             return false;
         }
     }
@@ -163,7 +163,7 @@ export function createRemoteAudio({ state, toast, sysMsg, voiceEpoch }) {
                 if (remoteTracks.get(track.id) === entry) detachRemoteTrack(track.id);
             });
         } catch (e) {
-            sysMsg("remote audio chain failed: " + e);
+            sysMsg(t("runtime.remoteAudioFailed", { error: String(e) }));
         }
     }
 
@@ -270,7 +270,7 @@ export function createRemoteAudio({ state, toast, sysMsg, voiceEpoch }) {
                 if (shareAudio.get(clid) === entry) detachShareAudio(clid);
             });
         } catch (e) {
-            sysMsg("shared audio chain failed: " + e);
+            sysMsg(t("runtime.shareAudioFailed", { error: String(e) }));
         }
     }
 

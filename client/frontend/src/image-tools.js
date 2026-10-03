@@ -1,3 +1,5 @@
+import { escapeHTML as escapeTranslation } from "./markdown.js";
+import { t } from "./i18n.js";
 // image-tools.js — wave-7 image upload helpers (268/269/274). Avatars get a
 // preview dialog with crop/zoom and are resized to 256x256 PNG on a canvas;
 // icons are downscaled to max 1024px and recompressed as JPEG q0.85 (274).
@@ -68,7 +70,7 @@ function loadImage(file) {
 async function passthroughAnimated(file, current = () => true) {
     if (file.type !== "image/gif" && file.type !== "image/webp") return null;
     if (file.size > MAX_UPLOAD) {
-        if (current()) V().toast("animated image too large (max 256 KiB)", "warn");
+        if (current()) V().toast(t("desktop.animated.image.too.large.max.256.kib"), "warn");
         return { dataBase64: "", contentType: "" };
     }
     return { dataBase64: await readFileBase64(file), contentType: file.type };
@@ -83,7 +85,7 @@ export async function pickAvatar(options = {}) {
     if (!generationCurrent(options)) return null;
     if (anim) return anim.dataBase64 ? anim : null;
     if (file.size > 8 * 1024 * 1024) {
-        V().toast("image too large (max 8 MiB)", "warn");
+        V().toast(t("desktop.image.too.large.max.8.mib"), "warn");
         return null;
     }
     return cropDialog(file, options);
@@ -106,7 +108,7 @@ export async function prepareIcon(file, maxDim = 1024, quality = 0.85, current =
     if (!current()) return null;
     if (anim) return anim.dataBase64 ? anim : null;
     if (file.size > 8 * 1024 * 1024) {
-        V().toast("image too large (max 8 MiB)", "warn");
+        V().toast(t("desktop.image.too.large.max.8.mib"), "warn");
         return null;
     }
     let objectURL = "";
@@ -135,10 +137,10 @@ export async function prepareIcon(file, maxDim = 1024, quality = 0.85, current =
             }
             dim = Math.max(128, Math.round(dim / 2));
         }
-        if (current()) V().toast("image could not be compressed under 256 KiB", "warn");
+        if (current()) V().toast(t("desktop.image.could.not.be.compressed.under.256.kib"), "warn");
         return null;
     } catch {
-        if (current()) V().toast("cannot read image", "warn");
+        if (current()) V().toast(t("desktop.cannot.read.image"), "warn");
         return null;
     } finally {
         if (objectURL) URL.revokeObjectURL(objectURL);
@@ -164,7 +166,7 @@ function cropDialog(file, options = {}) {
         try {
             ({ img, url } = await loadImage(file));
         } catch {
-            if (generationCurrent(options)) V().toast("cannot read image", "warn");
+            if (generationCurrent(options)) V().toast(t("desktop.cannot.read.image"), "warn");
             return resolve(null);
         }
         if (!generationCurrent(options)) {
@@ -175,14 +177,14 @@ function cropDialog(file, options = {}) {
         overlay.className = "dlg-overlay";
         overlay.innerHTML = `
             <div class="dlg img-edit">
-                <h3>Set avatar</h3>
+                <h3>${escapeTranslation(t("desktop.set.avatar"))}</h3>
                 <div class="img-preview"><canvas width="256" height="256"></canvas></div>
-                <label class="dlg-label">zoom</label>
+                <label class="dlg-label">${escapeTranslation(t("desktop.zoom"))}</label>
                 <input type="range" class="img-zoom" min="100" max="300" value="100" />
-                <div class="dlg-text img-hint">drag the preview to reposition · output 256×256 PNG</div>
+                <div class="dlg-text img-hint">${escapeTranslation(t("desktop.drag.the.preview.to.reposition.output.256.256.png"))}</div>
                 <div class="dlg-buttons">
-                    <button class="dlg-ok">Use image</button>
-                    <button class="dlg-cancel">Cancel</button>
+                    <button class="dlg-ok">${escapeTranslation(t("desktop.use.image"))}</button>
+                    <button class="dlg-cancel">${escapeTranslation(t("desktop.cancel"))}</button>
                 </div>
             </div>`;
         const canvas = overlay.querySelector("canvas");

@@ -1,3 +1,4 @@
+import { t } from "./i18n.js";
 // Shared modal lifecycle and focus stack.
 //
 // Dialog authors should use mountDialog() and put all resource teardown in
@@ -351,7 +352,7 @@ function promiseDialog(options, { prompt = false } = {}) {
         const dialog = document.createElement("div");
         dialog.className = "dlg";
         const title = document.createElement("h3");
-        title.textContent = options.title || (prompt ? "Enter a value" : "Confirm action");
+        title.textContent = options.title || (prompt ? t("desktop.enter.a.value") : t("desktop.confirm.action"));
         dialog.appendChild(title);
         appendDialogText(dialog, options.danger ? "set-hint warn" : "dlg-text", options.message);
 
@@ -359,7 +360,7 @@ function promiseDialog(options, { prompt = false } = {}) {
         if (prompt) {
             const label = document.createElement("label");
             label.className = "dlg-label";
-            label.textContent = options.label || "Value";
+            label.textContent = options.label || t("desktop.value");
             dialog.appendChild(label);
             input = document.createElement("input");
             input.className = "dlg-input";
@@ -374,11 +375,11 @@ function promiseDialog(options, { prompt = false } = {}) {
         const cancel = document.createElement("button");
         cancel.type = "button";
         cancel.className = "dlg-cancel";
-        cancel.textContent = options.cancelLabel || "Cancel";
+        cancel.textContent = options.cancelLabel || t("desktop.cancel");
         const accept = document.createElement("button");
         accept.type = "button";
         accept.className = options.danger ? "dlg-ok danger-btn" : "dlg-ok";
-        accept.textContent = options.confirmLabel || (prompt ? "OK" : "Confirm");
+        accept.textContent = options.confirmLabel || (prompt ? t("desktop.ok") : t("desktop.confirm"));
         const finish = (value, reason) => {
             if (settled) return;
             result = value;

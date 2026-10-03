@@ -1,3 +1,4 @@
+import { escapeHTML as escapeTranslation } from "./markdown.js";
 // clientinfo.js — right-click context menu on channel-tree users and the
 // TS3-style Client Info dialog (live-refreshing).
 import { setUserMuted, setUserBlocked } from "./audio.js";
@@ -54,24 +55,24 @@ function openContextMenu(x, y, client, trigger) {
     // powers; the server re-checks and errors still toast.
     const mod = [];
     if (client.client_id !== V().state.myClientID) {
-        mod.push(`<a data-act="poke">Poke…</a>`);
+        mod.push(`<a data-act="poke">${escapeTranslation(t("runtime.poke"))}</a>`);
         const isContact = (V().state.settings?.contacts || []).some((c) => c.unique_id === client.unique_id);
-        mod.push(`<a data-act="contact">${isContact ? "✓ " : ""}Add to contacts</a>`);
+        mod.push(`<a data-act="contact">${isContact ? "✓ " : ""}${escapeTranslation(t("runtime.addContact"))}</a>`);
         const isBlocked = (V().state.settings?.blocked_users || []).includes(client.unique_id);
-        mod.push(`<a data-act="block">${isBlocked ? "✓ " : ""}Block (hide chat + mute)</a>`);
-        if (disconnectTarget.channelID > 0) mod.push(`<a data-act="kick-ch">Kick from channel…</a>`);
-        mod.push(`<a data-act="kick-srv">Kick from server…</a>`);
-        mod.push(`<a data-act="ban">Ban…</a>`);
+        mod.push(`<a data-act="block">${isBlocked ? "✓ " : ""}${escapeTranslation(t("runtime.blockContact"))}</a>`);
+        if (disconnectTarget.channelID > 0) mod.push(`<a data-act="kick-ch">${escapeTranslation(t("runtime.kickChannel"))}</a>`);
+        mod.push(`<a data-act="kick-srv">${escapeTranslation(t("runtime.kickServer"))}</a>`);
+        mod.push(`<a data-act="ban">${escapeTranslation(t("runtime.ban"))}</a>`);
     }
     menuEl = document.createElement("div");
     menuEl.className = "ctx-menu ctx-member-menu";
     menuEl.innerHTML = `
-        <a data-act="pm">Send private message</a>
-        <a data-act="info">Client Info</a>
+        <a data-act="pm">${escapeTranslation(t("desktop.send.private.message"))}</a>
+        <a data-act="info">${escapeTranslation(t("desktop.client.info"))}</a>
         <div class="ctx-divider"></div>
         <div class="ctx-audio-host"></div>
         ${mod.length ? `<div class="ctx-divider"></div>${mod.join("")}` : ""}
-        <a data-act="copy">Copy unique ID</a>`;
+        <a data-act="copy">${escapeTranslation(t("desktop.copy.unique.id"))}</a>`;
     const audioControls = memberAudioControls(client);
     menuEl.querySelector(".ctx-audio-host").replaceWith(audioControls.element);
     menuEl.style.left = Math.min(x, window.innerWidth - 240) + "px";
@@ -149,7 +150,7 @@ function openContextMenu(x, y, client, trigger) {
     };
     menuEl.querySelector('[data-act="copy"]').onclick = () => {
         closeMenu();
-        void copyToClipboard(client.unique_id, { success: "unique ID copied" });
+        void copyToClipboard(client.unique_id, { success: t("desktop.unique.id.copied") });
     };
     // (170) kick with reason dialog; (171) ban with duration presets.
     const pokeAct = menuEl.querySelector('[data-act="poke"]');
@@ -162,7 +163,7 @@ function openContextMenu(x, y, client, trigger) {
         closeMenu();
         const s = V().state.settings;
         if ((s.contacts || []).some((c) => c.unique_id === client.unique_id)) {
-            V().toast("already a contact");
+            V().toast(t("desktop.already.a.contact"));
             return;
         }
         try {
@@ -170,7 +171,7 @@ function openContextMenu(x, y, client, trigger) {
                 if ((current.contacts || []).some(c => c.unique_id === client.unique_id)) return;
                 current.contacts = [...(current.contacts || []), { unique_id: client.unique_id, label: "" }];
             });
-            V().toast("contact added");
+            V().toast(t("desktop.contact.added"));
         } catch (error) { V().toast(String(error), "error"); }
     };
     const blockAct = menuEl.querySelector('[data-act="block"]');
@@ -181,7 +182,7 @@ function openContextMenu(x, y, client, trigger) {
         try {
             await setUserBlocked(client.unique_id, !blocked);
             V().renderTree();
-            V().toast(blocked ? "unblocked" : "blocked — chat hidden, voice muted locally");
+            V().toast(blocked ? t("desktop.unblocked") : t("desktop.blocked.chat.hidden.voice.muted.locally"));
         } catch (error) { V().toast(String(error), "error"); }
     };
     const kickAct = menuEl.querySelector('[data-act="kick-ch"]');
@@ -228,9 +229,9 @@ function openBatchMenu(x, y, clientIDs, trigger) {
     const disconnectTargets = others.map(clientID => ({ clientID, channelID: V().state.clients.find(c => c.client_id === clientID)?.channel_id }));
     menuEl = document.createElement("div");
     menuEl.className = "ctx-menu";
-    const entries = [`<a data-act="count" class="ctx-head">${clientIDs.length} selected</a>`];
-    entries.push(`<a data-act="mute">Mute all locally</a>`);
-    if (others.length) entries.push(`<a data-act="kick">Kick all from channel</a>`);
+    const entries = [`<a data-act="count" class="ctx-head">${escapeTranslation(t("runtime.selectedMembers", { count: clientIDs.length }))}</a>`];
+    entries.push(`<a data-act="mute">${escapeTranslation(t("runtime.muteAll"))}</a>`);
+    if (others.length) entries.push(`<a data-act="kick">${escapeTranslation(t("runtime.kickAll"))}</a>`);
     menuEl.innerHTML = entries.join("");
     menuEl.style.left = Math.min(x, window.innerWidth - 240) + "px";
     menuEl.style.top = Math.min(y, window.innerHeight - 200) + "px";
@@ -244,7 +245,7 @@ function openBatchMenu(x, y, clientIDs, trigger) {
                 if (c) await setUserMuted(c.unique_id, true);
             }
             V().renderTree();
-            V().toast("muted " + clientIDs.length + " users locally");
+            V().toast(t("desktop.muted") + clientIDs.length + t("desktop.users.locally"));
         } catch (error) { V().toast(String(error), "error"); }
     };
     const kick = menuEl.querySelector('[data-act="kick"]');
@@ -257,11 +258,11 @@ function openBatchMenu(x, y, clientIDs, trigger) {
                 if (generation !== V().state.serverGeneration) return;
                 if (err) { V().toast(err, "warn"); return; }
             } catch (err) {
-                if (generation === V().state.serverGeneration) V().toast("kick failed: " + err, "warn");
+                if (generation === V().state.serverGeneration) V().toast(t("desktop.kick.failed") + err, "warn");
                 return;
             }
         }
-        V().toast("kick requests sent for " + others.length + " users");
+        V().toast(t("desktop.kick.requests.sent.for") + others.length + t("desktop.users"));
     };
     const menu = menuEl;
     mountContextMenu(menu, { x, y, trigger, resolveTrigger: replacementTrigger(trigger), onClose: () => { if (menuEl === menu) menuEl = null; } });
@@ -325,14 +326,14 @@ async function refreshVoiceStats(overlay, client) {
         setVal("level", "—");
     };
     if (!state.pc) {
-        blank("— (no voice)");
+        blank(t("desktop.no.voice"));
         return;
     }
     try {
         const pc = state.pc;
         const stats = await pc.getStats();
         if (!isCurrentServerDialog(overlay)) return;
-        if (state.pc !== pc) { blank("— (voice reconnecting)"); return; }
+        if (state.pc !== pc) { blank(t("desktop.voice.reconnecting")); return; }
         if (client.client_id === state.myClientID) {
             refreshOwnVoiceStats(stats, setVal, blank);
             return;
@@ -350,7 +351,7 @@ async function refreshVoiceStats(overlay, client) {
             }
         }
         if (!inbound) {
-            blank("— no stream from this user");
+            blank(t("desktop.no.stream.from.this.user"));
             return;
         }
         const lost = inbound.packetsLost || 0;
@@ -374,9 +375,9 @@ async function refreshVoiceStats(overlay, client) {
         // buffer had to invent.
         const samples = inbound.totalSamplesReceived || 0;
         setVal("conceal", samples > 0
-            ? ((inbound.concealedSamples || 0) / samples * 100).toFixed(2) + " % (" + (inbound.concealmentEvents || 0) + " events)"
+            ? ((inbound.concealedSamples || 0) / samples * 100).toFixed(2) + " % (" + (inbound.concealmentEvents || 0) + t("desktop.events")
             : "—");
-        setVal("packets", recv + " recv / " + lost + " lost");
+        setVal("packets", recv + t("desktop.recv") + lost + t("desktop.lost"));
         const receiver = pc.getTransceivers?.().find(transceiver => transceiver.mid === inbound.mid)?.receiver;
         const level = V().readRemoteAudioLevel?.(receiver?.track?.id || inbound.trackIdentifier) ?? inbound.audioLevel;
         setVal("level", level != null ? (level * 100).toFixed(0) + " %" : "—");
@@ -395,21 +396,21 @@ function refreshOwnVoiceStats(stats, setVal, blank) {
         if (r.type === "media-source" && audio && !source) source = r;
     });
     if (!outbound && !source) {
-        blank("— not publishing");
+        blank(t("desktop.not.publishing"));
         return;
     }
     if (remoteIn) {
         const lost = remoteIn.packetsLost || 0;
         const sent = outbound?.packetsSent || 0;
-        setVal("loss", sent > 0 ? (lost / sent * 100).toFixed(1) + " % (reported by server)" : "—");
+        setVal("loss", sent > 0 ? (lost / sent * 100).toFixed(1) + t("desktop.reported.by.server") : "—");
         setVal("jitter", ((remoteIn.jitter || 0) * 1000).toFixed(1) + " ms");
     } else {
-        setVal("loss", "— (no receiver report yet)");
+        setVal("loss", t("desktop.no.receiver.report.yet"));
         setVal("jitter", "—");
     }
-    setVal("jbd", "— (outgoing)");
-    setVal("conceal", "— (outgoing)");
-    setVal("packets", (outbound?.packetsSent || 0) + " sent");
+    setVal("jbd", t("desktop.outgoing"));
+    setVal("conceal", t("desktop.outgoing"));
+    setVal("packets", (outbound?.packetsSent || 0) + t("desktop.sent"));
     const level = source?.audioLevel ?? outbound?.audioLevel;
     setVal("level", level != null ? (level * 100).toFixed(0) + " %" : "—");
 }
@@ -452,38 +453,38 @@ function openClientInfo(client) {
     overlay.innerHTML = `
         <div class="dlg client-info">
             <div class="ci-title">
-                <span role="heading" aria-level="3">Connection Info</span>
+                <span role="heading" aria-level="3">${escapeTranslation(t("desktop.connection.info"))}</span>
                 <span class="ci-nick"></span>
             </div>
             <div class="ci-grid">
-                <div class="ci-label">Client name</div><div class="ci-val" data-f="nick"></div>
-                <div class="ci-label">Unique ID</div>
+                <div class="ci-label">${escapeTranslation(t("desktop.client.name"))}</div><div class="ci-val" data-f="nick"></div>
+                <div class="ci-label">${escapeTranslation(t("desktop.unique.id"))}</div>
                 <div class="ci-val">
                     <span class="mono" data-f="uid"></span>
-                    <button class="ci-copy" title="copy">⧉</button>
+                    <button class="ci-copy" title="${escapeTranslation(t("desktop.copy"))}">⧉</button>
                 </div>
-                <div class="ci-label">Connection time</div><div class="ci-val" data-f="conn"></div>
-                <div class="ci-label">Idle time</div><div class="ci-val" data-f="idle"></div>
-                <div class="ci-label">Ping</div><div class="ci-val" data-f="ping"></div>
-                <div class="ci-label">Client address</div><div class="ci-val" data-f="addr"></div>
-                <div class="ci-label">Transfer in</div><div class="ci-val" data-f="bin"></div>
-                <div class="ci-label">Transfer out</div><div class="ci-val" data-f="bout"></div>
+                <div class="ci-label">${escapeTranslation(t("desktop.connection.time"))}</div><div class="ci-val" data-f="conn"></div>
+                <div class="ci-label">${escapeTranslation(t("desktop.idle.time"))}</div><div class="ci-val" data-f="idle"></div>
+                <div class="ci-label">${escapeTranslation(t("desktop.ping"))}</div><div class="ci-val" data-f="ping"></div>
+                <div class="ci-label">${escapeTranslation(t("desktop.client.address"))}</div><div class="ci-val" data-f="addr"></div>
+                <div class="ci-label">${escapeTranslation(t("desktop.transfer.in"))}</div><div class="ci-val" data-f="bin"></div>
+                <div class="ci-label">${escapeTranslation(t("desktop.transfer.out"))}</div><div class="ci-val" data-f="bout"></div>
             </div>
-            <div class="ci-voice-head">Voice</div>
+            <div class="ci-voice-head">${escapeTranslation(t("desktop.voice"))}</div>
             <div class="ci-grid">
-                <div class="ci-label">Packet loss</div><div class="ci-val" data-f="loss"></div>
-                <div class="ci-label">Jitter</div><div class="ci-val" data-f="jitter"></div>
-                <div class="ci-label">Jitter buffer</div><div class="ci-val" data-f="jbd"></div>
-                <div class="ci-label">Concealment</div><div class="ci-val" data-f="conceal"></div>
-                <div class="ci-label">Packets</div><div class="ci-val" data-f="packets"></div>
-                <div class="ci-label">Audio level</div><div class="ci-val" data-f="level"></div>
+                <div class="ci-label">${escapeTranslation(t("desktop.packet.loss"))}</div><div class="ci-val" data-f="loss"></div>
+                <div class="ci-label">${escapeTranslation(t("desktop.jitter"))}</div><div class="ci-val" data-f="jitter"></div>
+                <div class="ci-label">${escapeTranslation(t("desktop.jitter.buffer"))}</div><div class="ci-val" data-f="jbd"></div>
+                <div class="ci-label">${escapeTranslation(t("desktop.concealment"))}</div><div class="ci-val" data-f="conceal"></div>
+                <div class="ci-label">${escapeTranslation(t("desktop.packets"))}</div><div class="ci-val" data-f="packets"></div>
+                <div class="ci-label">${escapeTranslation(t("desktop.audio.level"))}</div><div class="ci-val" data-f="level"></div>
             </div>
-            <div class="dlg-buttons"><button class="dlg-ok">Close</button></div>
+            <div class="dlg-buttons"><button class="dlg-ok">${escapeTranslation(t("desktop.close"))}</button></div>
         </div>`;
 
     overlay.querySelector(".ci-nick").textContent = client.nickname || client.unique_id;
     overlay.querySelector(".ci-copy").onclick = () => {
-        void copyToClipboard(client.unique_id, { success: "unique ID copied", isCurrent: () => overlay.isConnected });
+        void copyToClipboard(client.unique_id, { success: t("desktop.unique.id.copied"), isCurrent: () => overlay.isConnected });
     };
     // (314) avatar full view on click; (325) click-to-copy chips.
     const card = document.querySelector(`#client-card .card-avatar img`);
@@ -495,13 +496,13 @@ function openClientInfo(client) {
     const noteRow = document.createElement("div");
     noteRow.className = "ci-note";
     noteRow.innerHTML = `
-        <div class="ci-label">Local note</div>
-        <div class="ci-val"><input class="dlg-input ci-note-input" placeholder="only you see this…" /></div>`;
+        <div class="ci-label">${escapeTranslation(t("desktop.local.note"))}</div>
+        <div class="ci-val"><input class="dlg-input ci-note-input" placeholder="${escapeTranslation(t("desktop.only.you.see.this"))}" /></div>`;
     const noteInput = noteRow.querySelector(".ci-note-input");
     noteInput.value = window.__noxaSocial.userNote(client.unique_id);
     noteInput.onchange = () => {
         window.__noxaSocial.saveUserNote(client.unique_id, noteInput.value.trim())
-            .then(() => V().toast("note saved"))
+            .then(() => V().toast(t("desktop.note.saved")))
             .catch(error => V().toast(String(error), "error"));
     };
     overlay.querySelector(".ci-grid").appendChild(noteRow);
@@ -532,11 +533,11 @@ function openClientInfo(client) {
         overlay.querySelector('[data-f="uid"]').textContent = info.unique_id;
         setVal("conn", humanDuration(Date.now() / 1000 - info.connected_at));
         setVal("idle", humanDuration(info.idle_seconds));
-        setVal("ping", info.ping_ms >= 0 ? info.ping_ms + " ms" : "unknown");
+        setVal("ping", info.ping_ms >= 0 ? info.ping_ms + " ms" : t("desktop.unknown"));
         if (info.ip) {
             setVal("addr", info.ip + ":" + info.port);
         } else {
-            setVal("addr", "hidden — requires b_client_remoteaddress_view", "ci-muted");
+            setVal("addr", t("desktop.hidden.requires.b.client.remoteaddress.view"), "ci-muted");
         }
         setVal("bin", humanBytes(info.bytes_in));
         setVal("bout", humanBytes(info.bytes_out));
@@ -573,10 +574,10 @@ function reasonDialog(title, client, cb) {
         <div class="dlg">
             <h3></h3>
             <div class="dlg-text kick-target"></div>
-            <input type="text" class="dlg-input reason" placeholder="reason (optional)" />
+            <input type="text" class="dlg-input reason" placeholder="${escapeTranslation(t("desktop.reason.optional"))}" />
             <div class="dlg-buttons">
-                <button class="dlg-ok">Kick</button>
-                <button class="dlg-cancel">Cancel</button>
+                <button class="dlg-ok">${escapeTranslation(t("desktop.kick"))}</button>
+                <button class="dlg-cancel">${escapeTranslation(t("desktop.cancel"))}</button>
             </div>
         </div>`;
     overlay.querySelector("h3").textContent = title;
@@ -589,7 +590,7 @@ function reasonDialog(title, client, cb) {
             const err = await cb(reason);
             if (err && generation === V().state.serverGeneration) V().toast(err, "warn");
         } catch (err) {
-            if (generation === V().state.serverGeneration) V().toast("kick failed: " + err, "warn");
+            if (generation === V().state.serverGeneration) V().toast(t("desktop.kick.failed") + err, "warn");
         }
     };
     overlay.querySelector(".dlg-cancel").onclick = () => overlay.remove();
@@ -600,10 +601,10 @@ function reasonDialog(title, client, cb) {
 
 // banDialog prompts for reason + duration preset and bans the client (171).
 const BAN_DURATIONS = [
-    { label: "5 minutes", seconds: 300 },
-    { label: "1 hour", seconds: 3600 },
-    { label: "1 day", seconds: 86400 },
-    { label: "permanent", seconds: 0 },
+    { label: "desktop.5.minutes", seconds: 300 },
+    { label: "desktop.1.hour", seconds: 3600 },
+    { label: "desktop.1.day", seconds: 86400 },
+    { label: "desktop.permanent", seconds: 0 },
 ];
 
 function banDialog(client, tabID) {
@@ -612,16 +613,16 @@ function banDialog(client, tabID) {
     overlay.className = "dlg-overlay";
     overlay.innerHTML = `
         <div class="dlg">
-            <h3>Ban client</h3>
+            <h3>${escapeTranslation(t("desktop.ban.client"))}</h3>
             <div class="dlg-text kick-target"></div>
-            <input type="text" class="dlg-input reason" placeholder="reason (optional)" />
-            <label class="dlg-label">Duration</label>
+            <input type="text" class="dlg-input reason" placeholder="${escapeTranslation(t("desktop.reason.optional"))}" />
+            <label class="dlg-label">${escapeTranslation(t("desktop.duration"))}</label>
             <select class="dlg-input duration">
-                ${BAN_DURATIONS.map((d, i) => `<option value="${i}">${d.label}</option>`).join("")}
+                ${BAN_DURATIONS.map((d, i) => `<option value="${i}">${escapeTranslation(t(d.label))}</option>`).join("")}
             </select>
             <div class="dlg-buttons">
-                <button class="dlg-ok danger-btn">Ban</button>
-                <button class="dlg-cancel">Cancel</button>
+                <button class="dlg-ok danger-btn">${escapeTranslation(t("desktop.ban"))}</button>
+                <button class="dlg-cancel">${escapeTranslation(t("desktop.cancel"))}</button>
             </div>
         </div>`;
     overlay.querySelector(".kick-target").textContent = client.nickname || client.unique_id;
@@ -634,9 +635,9 @@ function banDialog(client, tabID) {
             const err = await window.go.main.App.KickClientForTab(tabID, client.client_id, true, true, reason, dur.seconds);
             if (generation !== V().state.serverGeneration) return;
             if (err) V().toast(err, "warn");
-            else V().toast("ban requested for " + (client.nickname || client.unique_id) + " (" + dur.label + ")");
+            else V().toast(t("desktop.ban.requested.for") + (client.nickname || client.unique_id) + " (" + t(dur.label) + ")");
         } catch (err) {
-            if (generation === V().state.serverGeneration) V().toast("ban failed: " + err, "warn");
+            if (generation === V().state.serverGeneration) V().toast(t("desktop.ban.failed") + err, "warn");
         }
     };
     overlay.querySelector(".dlg-cancel").onclick = () => overlay.remove();
@@ -662,17 +663,17 @@ function openChannelMenu(x, y, channel, trigger) {
     menuEl.className = "ctx-menu";
     menuEl.innerHTML = `
         <a data-act="voice">${t(isCurrent ? "context.leave" : "context.join")}</a>
-        <a data-act="open-chat">Open chat tab</a>
-        <a data-act="subscription" class="${isCurrent ? "disabled" : ""}">${isCurrent ? "✓ Joined (always subscribed)" : isSubscribed ? "✓ Unsubscribe" : "Subscribe"}</a>
+        <a data-act="open-chat">${escapeTranslation(t("desktop.open.chat.tab"))}</a>
+        <a data-act="subscription" class="${isCurrent ? "disabled" : ""}">${escapeTranslation(isCurrent ? t("runtime.joinedSubscribed") : isSubscribed ? "✓ " + t("runtime.unsubscribe") : t("runtime.subscribe"))}</a>
         <div class="ctx-divider"></div>
-        <a data-act="edit">Edit channel</a>
-        <a data-act="notify">Notifications…</a>
-        <a data-act="create-sub">Create sub-channel…</a>
-        <a data-act="copy-id">Copy channel ID</a>
-        <a data-act="copy-addr">Copy server address</a>
+        <a data-act="edit">${escapeTranslation(t("desktop.edit.channel"))}</a>
+        <a data-act="notify">${escapeTranslation(t("desktop.notifications"))}</a>
+        <a data-act="create-sub">${escapeTranslation(t("desktop.create.sub.channel"))}</a>
+        <a data-act="copy-id">${escapeTranslation(t("desktop.copy.channel.id"))}</a>
+        <a data-act="copy-addr">${escapeTranslation(t("desktop.copy.server.address"))}</a>
         ${recent.length ? `<div class="ctx-divider"></div>${recent.join("")}` : ""}
         <div class="ctx-divider"></div>
-        <a data-act="delete" class="ctx-danger">Delete channel…</a>`;
+        <a data-act="delete" class="ctx-danger">${escapeTranslation(t("desktop.delete.channel"))}</a>`;
     menuEl.style.left = Math.min(x, window.innerWidth - 240) + "px";
     menuEl.style.top = Math.min(y, window.innerHeight - 260) + "px";
     menuEl.onclick = (e) => e.stopPropagation();
@@ -721,11 +722,11 @@ function openChannelMenu(x, y, channel, trigger) {
     };
     menuEl.querySelector('[data-act="copy-id"]').onclick = () => {
         closeMenu();
-        void copyToClipboard(String(channel.ChannelID), { success: "channel ID copied" });
+        void copyToClipboard(String(channel.ChannelID), { success: t("desktop.channel.id.copied") });
     };
     menuEl.querySelector('[data-act="copy-addr"]').onclick = () => {
         closeMenu();
-        void copyToClipboard(V().state.lastConnect?.addr || "", { success: "server address copied" });
+        void copyToClipboard(V().state.lastConnect?.addr || "", { success: t("desktop.server.address.copied") });
     };
     for (const a of menuEl.querySelectorAll('[data-act^="recent-"]')) {
         a.onclick = async () => {
@@ -762,20 +763,20 @@ function openChannelNotify(channel) {
     overlay.className = "dlg-overlay";
     const sel = (cls, val) => `
         <select class="dlg-input ${cls}">
-            ${["inherit", "on", "off"].map((v) => `<option value="${v}" ${v === (val || "inherit") ? "selected" : ""}>${v}</option>`).join("")}
+            ${["inherit", "on", "off"].map((v) => `<option value="${v}" ${v === (val || "inherit") ? "selected" : ""}>${escapeTranslation(t(`runtime.${v}`))}</option>`).join("")}
         </select>`;
     overlay.innerHTML = `
         <div class="dlg">
-            <h3>Notifications: #${window.__noxaSocial.esc(channel.Name)}</h3>
-            <label class="dlg-label">Messages</label>${sel("cn-messages", ov.messages)}
-            <label class="dlg-label">Mentions & keywords</label>${sel("cn-mentions", ov.mentions)}
-            <label class="dlg-label">Joins & leaves</label>${sel("cn-joins", ov.joins)}
-            <label class="dlg-label"><input type="checkbox" class="cn-muted" ${ov.muted ? "checked" : ""} /> Mute channel entirely</label>
-            <label class="dlg-label">Watch: toast when user count reaches (0 = off)</label>
+            <h3>${escapeTranslation(t("desktop.notifications.d755ad"))}${window.__noxaSocial.esc(channel.Name)}</h3>
+            <label class="dlg-label">${escapeTranslation(t("desktop.messages"))}</label>${sel("cn-messages", ov.messages)}
+            <label class="dlg-label">${escapeTranslation(t("desktop.mentions.keywords"))}</label>${sel("cn-mentions", ov.mentions)}
+            <label class="dlg-label">${escapeTranslation(t("desktop.joins.leaves"))}</label>${sel("cn-joins", ov.joins)}
+            <label class="dlg-label"><input type="checkbox" class="cn-muted" ${ov.muted ? "checked" : ""} /> ${escapeTranslation(t("desktop.mute.channel.entirely"))}</label>
+            <label class="dlg-label">${escapeTranslation(t("desktop.watch.toast.when.user.count.reaches.0.off"))}</label>
             <input type="number" class="dlg-input cn-watch" min="0" value="${ov.watch_threshold || 0}" />
             <div class="dlg-buttons">
-                <button class="dlg-ok">Save</button>
-                <button class="dlg-cancel">Cancel</button>
+                <button class="dlg-ok">${escapeTranslation(t("desktop.save"))}</button>
+                <button class="dlg-cancel">${escapeTranslation(t("desktop.cancel"))}</button>
             </div>
         </div>`;
     const q = (s) => overlay.querySelector(s);
@@ -788,7 +789,7 @@ function openChannelNotify(channel) {
             watch_threshold: parseInt(q(".cn-watch").value, 10) || 0,
         });
         overlay.remove();
-        V().toast("channel notifications saved");
+        V().toast(t("desktop.channel.notifications.saved"));
     };
     q(".dlg-cancel").onclick = () => overlay.remove();
     overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };

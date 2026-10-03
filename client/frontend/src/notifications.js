@@ -1,3 +1,5 @@
+import { escapeHTML as escapeTranslation } from "./markdown.js";
+import { t } from "./i18n.js";
 // notifications.js — wave-9 notification dispatch (383-391, 215): a central
 // notify() honoring the matrix (385), per-channel overrides (386/391),
 // muted channels (387), and DND (347/348, still badging silently). Also the
@@ -227,7 +229,7 @@ export function showServerRules(json) {
     try {
         rules = typeof json === "string" ? JSON.parse(json) : json;
     } catch {
-        V().toast("server sent malformed rules", "warn");
+        V().toast(t("desktop.server.sent.malformed.rules"), "warn");
         return;
     }
     if (!rules?.text || !rules?.hash) {
@@ -249,10 +251,10 @@ export function showServerRules(json) {
     const dlg = document.createElement("div");
     dlg.className = "dlg dlg-wide";
     const title = document.createElement("h3");
-    title.textContent = "Server rules";
+    title.textContent = t("desktop.server.rules");
     const intro = document.createElement("p");
     intro.className = "dlg-text";
-    intro.textContent = "You must accept these rules before joining channels or using chat.";
+    intro.textContent = t("desktop.you.must.accept.these.rules.before.joining.channels.or.using");
     const body = document.createElement("div");
     body.className = "dlg-text server-rules-text";
     body.textContent = rules.text; // operator text is data, never HTML
@@ -262,10 +264,10 @@ export function showServerRules(json) {
     buttons.className = "dlg-buttons";
     const decline = document.createElement("button");
     decline.className = "dlg-cancel";
-    decline.textContent = "Decline and disconnect";
+    decline.textContent = t("desktop.decline.and.disconnect");
     const accept = document.createElement("button");
     accept.className = "dlg-ok";
-    accept.textContent = "Accept";
+    accept.textContent = t("desktop.accept");
     buttons.appendChild(decline);
     buttons.appendChild(accept);
     dlg.appendChild(title);
@@ -291,7 +293,7 @@ export function showServerRules(json) {
         if (!isCurrentServerDialog(overlay)) return;
         decline.disabled = true;
         accept.disabled = true;
-        status.textContent = "disconnecting…";
+        status.textContent = t("desktop.disconnecting");
         try {
             await App().DisconnectTab(tabID);
         } catch (err) {
@@ -307,7 +309,7 @@ export function showServerRules(json) {
         if (!isCurrentServerDialog(overlay)) return;
         decline.disabled = true;
         accept.disabled = true;
-        status.textContent = "recording acceptance…";
+        status.textContent = t("desktop.recording.acceptance");
         const acceptedHash = rules.hash;
         let err;
         try {
@@ -326,7 +328,7 @@ export function showServerRules(json) {
         // keeps a dropped response from stranding the user behind dead buttons.
         responseTimer = setTimeout(() => {
             if (rulesOverlay === overlay && rulesHash === acceptedHash) {
-                status.textContent = "no response from server — try again";
+                status.textContent = t("desktop.no.response.from.server.try.again");
                 decline.disabled = false;
                 accept.disabled = false;
             }
@@ -347,13 +349,12 @@ export function maybeAlphaNotice(force = false) {
     overlay.className = "dlg-overlay alpha-notice";
     overlay.innerHTML = `
         <div class="dlg">
-            <h3>noXa is alpha software</h3>
+            <h3>${escapeTranslation(t("desktop.noxa.is.alpha.software"))}</h3>
             <div class="dlg-text">
-                <p>noXa ${ver} is under construction — expect bugs and rough edges.
-                Please report issues on the project tracker (Help → About has the link).</p>
-                <label class="dlg-label"><input type="checkbox" class="alpha-skip" /> don't show again for this version</label>
+                <p>${escapeTranslation(t("runtime.alphaHelp", { version: ver }))}</p>
+                <label class="dlg-label"><input type="checkbox" class="alpha-skip" /> ${escapeTranslation(t("desktop.don.t.show.again.for.this.version"))}</label>
             </div>
-            <div class="dlg-buttons"><button class="dlg-ok">Got it</button></div>
+            <div class="dlg-buttons"><button class="dlg-ok">${escapeTranslation(t("desktop.got.it"))}</button></div>
         </div>`;
     overlay.querySelector(".dlg-ok").onclick = async () => {
         if (overlay.querySelector(".alpha-skip").checked) {
@@ -392,26 +393,25 @@ export async function maybeIdentityBackupNag(force = false) {
     overlay.className = "dlg-overlay identity-backup-nag";
     overlay.innerHTML = `
         <div class="dlg">
-            <h3>Back up your identity</h3>
+            <h3>${escapeTranslation(t("desktop.back.up.your.identity"))}</h3>
             <div class="dlg-text">
-                <p>Your identity key has never been exported. It <b>is</b> your account on every
-                server you have joined — if this machine dies, no one can restore it for you.</p>
-                <p>Export it once and keep the file somewhere safe.</p>
+                <p>${escapeTranslation(t("desktop.your.identity.key.has.never.been.exported.it"))} <b>${escapeTranslation(t("desktop.is"))}</b> ${escapeTranslation(t("desktop.your.account.on.every.server.you.have.joined.if.this"))}</p>
+                <p>${escapeTranslation(t("desktop.export.it.once.and.keep.the.file.somewhere.safe"))}</p>
             </div>
             <div class="dlg-buttons">
-                <button class="dlg-ok">Export now…</button>
-                <button class="dlg-cancel">Later</button>
+                <button class="dlg-ok">${escapeTranslation(t("desktop.export.now"))}</button>
+                <button class="dlg-cancel">${escapeTranslation(t("desktop.later"))}</button>
             </div>
         </div>`;
     overlay.querySelector(".dlg-ok").onclick = async () => {
         const err = await App().ExportIdentity("");
         if (err) {
-            V().toast("export failed: " + err, "warn");
+            V().toast(t("desktop.export.failed") + err, "warn");
             return;
         }
         overlay.remove();
-        if (await App().IdentityBackupPending()) V().toast("identity not exported yet", "warn");
-        else V().toast("identity exported — keep the file safe");
+        if (await App().IdentityBackupPending()) V().toast(t("desktop.identity.not.exported.yet"), "warn");
+        else V().toast(t("desktop.identity.exported.keep.the.file.safe"));
     };
     overlay.querySelector(".dlg-cancel").onclick = () => {
         backupNagSnoozed = true;

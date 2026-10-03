@@ -1,3 +1,4 @@
+import { escapeHTML as escapeTranslation } from "./markdown.js";
 // roles-access-ui.js — roles-v1 access and moderation surfaces.
 import { closeDialog, isCurrentServerDialog, mountServerDialog, registerDialogLifecycle } from "./modal.js";
 import { memberRoles, hoistedRoles, roleColor } from "./role-presentation.js";
@@ -25,7 +26,7 @@ function confirmDlg(title, bodyHtml, okLabel, danger) {
             <h3></h3>
             <div class="dlg-text confirm-body"></div>
             <div class="dlg-buttons">
-                <button class="dlg-cancel">Cancel</button>
+                <button class="dlg-cancel">${escapeTranslation(t("desktop.cancel"))}</button>
                 <button class="dlg-ok ${danger ? "danger-btn" : ""}"></button>
             </div>`);
         dlg.querySelector("h3").textContent = title;
@@ -54,7 +55,7 @@ function fmtTime(unix) {
 }
 
 function toastAudit(what) {
-    V().toast(what + " — recorded in the audit log");
+    V().toast(what + t("desktop.recorded.in.the.audit.log"));
 }
 
 function primaryGroup(uid) {
@@ -93,31 +94,31 @@ async function openChatFilters() {
     const tabID = V().state.activeTabID;
     const { overlay, q } = modal("audit", `
         <div class="pm-head">
-            <h3>Chat Filters</h3>
-            <button class="icon-btn cf-close" title="Close">✕</button>
+            <h3>${escapeTranslation(t("desktop.chat.filters"))}</h3>
+            <button class="icon-btn cf-close" title="${escapeTranslation(t("desktop.close"))}">✕</button>
         </div>
         <div class="cf-source empty-state"></div>
         <div class="cf-body">
             <div class="cf-field">
-                <b>Word filter</b>
-                <div class="pm-dim">comma-separated; each entry is a case-insensitive substring of the message</div>
+                <b>${escapeTranslation(t("desktop.word.filter"))}</b>
+                <div class="pm-dim">${escapeTranslation(t("desktop.comma.separated.each.entry.is.a.case.insensitive.substring.of"))}</div>
                 <textarea class="dlg-input cf-words" rows="3"></textarea>
             </div>
             <div class="cf-field">
-                <b>Link blacklist</b>
-                <div class="pm-dim">comma-separated hosts; matches the host itself or any subdomain of it</div>
+                <b>${escapeTranslation(t("desktop.link.blacklist"))}</b>
+                <div class="pm-dim">${escapeTranslation(t("desktop.comma.separated.hosts.matches.the.host.itself.or.any.subdomain"))}</div>
                 <textarea class="dlg-input cf-black" rows="3"></textarea>
             </div>
             <div class="cf-field">
-                <b>Link whitelist</b>
-                <div class="pm-dim">comma-separated hosts; while non-empty EVERY link in a message must match one</div>
+                <b>${escapeTranslation(t("desktop.link.whitelist"))}</b>
+                <div class="pm-dim">${escapeTranslation(t("desktop.comma.separated.hosts.while.non.empty.every.link.in.a"))}</div>
                 <textarea class="dlg-input cf-white" rows="3"></textarea>
             </div>
         </div>
         <div class="dlg-buttons">
             <p class="cf-status role-status" role="status"></p>
-            <button class="dlg-cancel cf-reload">Reload</button>
-            <button class="dlg-ok cf-save">Save</button>
+            <button class="dlg-cancel cf-reload">${escapeTranslation(t("desktop.reload"))}</button>
+            <button class="dlg-ok cf-save">${escapeTranslation(t("desktop.save"))}</button>
         </div>`);
     q(".cf-close").onclick = () => closeDialog(overlay);
     let lastFilters = null;
@@ -137,8 +138,8 @@ async function openChatFilters() {
         q(".cf-black").value = response.link_blacklist || "";
         q(".cf-white").value = response.link_whitelist || "";
         q(".cf-source").textContent = response.from_config
-            ? "In force from config.yaml. Saving copies these lists into the server database."
-            : "In force from the server database.";
+            ? t("desktop.in.force.from.config.yaml.saving.copies.these.lists.into")
+            : t("desktop.in.force.from.the.server.database");
     };
     const load = async () => {
         if (busy || !isCurrentServerDialog(overlay)) return;
@@ -153,7 +154,7 @@ async function openChatFilters() {
             needsReload = false;
             q(".cf-status").textContent = "";
         } catch (error) {
-            if (isCurrentServerDialog(overlay)) { q(".cf-source").textContent = "loading filters failed: " + error; q(".cf-status").textContent = ""; }
+            if (isCurrentServerDialog(overlay)) { q(".cf-source").textContent = t("desktop.loading.filters.failed") + error; q(".cf-status").textContent = ""; }
         } finally {
             busy = false;
             if (isCurrentServerDialog(overlay)) controls();
@@ -162,7 +163,7 @@ async function openChatFilters() {
     q(".cf-reload").onclick = load;
     q(".cf-save").onclick = async () => {
         if (busy || needsReload || !lastFilters || !isCurrentServerDialog(overlay)) return;
-        if (lastFilters.from_config && !confirm("Saving will override config.yaml with database settings. Proceed?")) return;
+        if (lastFilters.from_config && !confirm(t("desktop.saving.will.override.config.yaml.with.database.settings.proceed"))) return;
         busy = true;
         q(".cf-status").textContent = t("common.saving");
         controls();
@@ -176,9 +177,9 @@ async function openChatFilters() {
         } catch (error) {
             needsReload = true;
             if (isCurrentServerDialog(overlay)) {
-                q(".cf-source").textContent = "Reload the server filters before saving again.";
+                q(".cf-source").textContent = t("desktop.reload.the.server.filters.before.saving.again");
                 q(".cf-status").textContent = t("roles.accessFailed");
-                V().toast("chat filter save failed: " + error, "warn");
+                V().toast(t("desktop.chat.filter.save.failed") + error, "warn");
             }
         } finally {
             busy = false;
@@ -192,8 +193,8 @@ async function openBanList() {
     const tabID = V().state.activeTabID;
     const { overlay, dlg, q } = modal("audit", `
         <div class="pm-head">
-            <h3>Bans</h3>
-            <button class="icon-btn ban-close" title="Close">✕</button>
+            <h3>${escapeTranslation(t("desktop.bans"))}</h3>
+            <button class="icon-btn ban-close" title="${escapeTranslation(t("desktop.close"))}">✕</button>
         </div>
         <div class="ban-list"></div>`);
     q(".ban-close").onclick = () => closeDialog(overlay);
@@ -222,7 +223,7 @@ async function openBanList() {
             status.textContent = "";
         } catch (error) {
             if (!isCurrentServerDialog(overlay)) return;
-            list.innerHTML = `<div class="empty-state">ban list failed: ${esc(error)}</div>`;
+            list.innerHTML = `<div class="empty-state">${escapeTranslation(t("desktop.ban.list.failed"))} ${esc(error)}</div>`;
             needsRefresh = true;
             status.textContent = "";
             return;
@@ -230,10 +231,10 @@ async function openBanList() {
             busy = false;
             if (isCurrentServerDialog(overlay)) controls();
         }
-        list.innerHTML = bans.length ? "" : '<div class="empty-state">no bans</div>';
+        list.innerHTML = bans.length ? "" : `<div class="empty-state">${escapeTranslation(t("desktop.no.bans"))}</div>`;
         const table = document.createElement("table");
         table.className = "perm-grid audit-grid";
-        table.innerHTML = "<thead><tr><th>target</th><th>reason</th><th>banned by</th><th>expires</th><th></th></tr></thead><tbody></tbody>";
+        table.innerHTML = `<thead><tr><th>${escapeTranslation(t("desktop.target"))}</th><th>${escapeTranslation(t("desktop.reason"))}</th><th>${escapeTranslation(t("desktop.banned.by"))}</th><th>${escapeTranslation(t("desktop.expires"))}</th><th></th></tr></thead><tbody></tbody>`;
         const body = table.querySelector("tbody");
         for (const ban of bans) {
             const row = document.createElement("tr");
@@ -243,12 +244,12 @@ async function openBanList() {
                 <td class="ban-reason"></td>
                 <td class="mono ban-author"></td>
                 <td class="mono ban-expiry"></td>
-                <td><button class="mem-del ban-lift" title="Lift ban">✕</button></td>`;
+                <td><button class="mem-del ban-lift" title="${escapeTranslation(t("desktop.lift.ban"))}">✕</button></td>`;
             row.querySelector(".ban-value").textContent = (ban.value || "").slice(0, 16) + "…";
             row.querySelector(".ban-value").title = ban.value || "";
             row.querySelector(".ban-reason").textContent = ban.reason || "";
             row.querySelector(".ban-author").textContent = (ban.banned_by || "").slice(0, 10);
-            row.querySelector(".ban-expiry").textContent = ban.expires_at ? fmtTime(ban.expires_at) : "permanent";
+            row.querySelector(".ban-expiry").textContent = ban.expires_at ? fmtTime(ban.expires_at) : t("desktop.permanent");
             row.querySelector(".ban-lift").onclick = async () => {
                 if (busy || needsRefresh || !isCurrentServerDialog(overlay)) return;
                 const confirmed = await confirmDlg("Lift ban", "Lift this ban?", "Lift", true);
@@ -284,26 +285,26 @@ async function openComplaints() {
     const tabID = V().state.activeTabID;
     const { overlay, q } = modal("audit", `
         <div class="pm-head">
-            <h3>Complaints</h3>
-            <button class="icon-btn cp-close" title="Close">✕</button>
+            <h3>${escapeTranslation(t("desktop.complaints"))}</h3>
+            <button class="icon-btn cp-close" title="${escapeTranslation(t("desktop.close"))}">✕</button>
         </div>
         <div class="cp-list"></div>`);
     q(".cp-close").onclick = () => closeDialog(overlay);
     const render = (entries) => {
         const list = q(".cp-list");
-        list.innerHTML = entries.length ? "" : '<div class="empty-state">no complaints</div>';
+        list.innerHTML = entries.length ? "" : `<div class="empty-state">${escapeTranslation(t("desktop.no.complaints"))}</div>`;
         if (!entries.length) return;
         const table = document.createElement("table");
         table.className = "perm-grid audit-grid";
-        table.innerHTML = "<thead><tr><th>against</th><th>from</th><th>reason</th><th>filed</th><th></th></tr></thead><tbody></tbody>";
+        table.innerHTML = `<thead><tr><th>${escapeTranslation(t("desktop.against"))}</th><th>${escapeTranslation(t("desktop.from"))}</th><th>${escapeTranslation(t("desktop.reason"))}</th><th>${escapeTranslation(t("desktop.filed"))}</th><th></th></tr></thead><tbody></tbody>`;
         const body = table.querySelector("tbody");
         for (const entry of entries) {
             const row = document.createElement("tr");
             row.innerHTML = `
                 <td class="cp-target"></td><td class="cp-from"></td><td class="cp-reason"></td>
                 <td class="mono">${fmtTime(entry.created_at)}</td>
-                <td><button class="mem-del cp-one" title="Clear this complaint">✕</button>
-                    <button class="mem-del cp-all" title="Clear every complaint against this user">✕ all</button></td>`;
+                <td><button class="mem-del cp-one" title="${escapeTranslation(t("desktop.clear.this.complaint"))}">✕</button>
+                    <button class="mem-del cp-all" title="${escapeTranslation(t("desktop.clear.every.complaint.against.this.user"))}">${escapeTranslation(t("desktop.all"))}</button></td>`;
             row.querySelector(".cp-target").textContent = entry.target_nickname || entry.target_unique_id;
             row.querySelector(".cp-target").title = entry.target_unique_id;
             row.querySelector(".cp-from").textContent = entry.from_nickname || entry.from_unique_id;
@@ -328,7 +329,7 @@ async function openComplaints() {
             render(response.entries || []);
             toastAudit("complaints cleared");
         } catch (error) {
-            if (isCurrentServerDialog(overlay)) V().toast("clear failed: " + error, "warn");
+            if (isCurrentServerDialog(overlay)) V().toast(t("desktop.clear.failed") + error, "warn");
         }
     };
     try {
@@ -336,7 +337,7 @@ async function openComplaints() {
         if (isCurrentServerDialog(overlay)) render(response.entries || []);
     } catch (error) {
         if (isCurrentServerDialog(overlay)) {
-            q(".cp-list").innerHTML = `<div class="empty-state">complaint list failed: ${esc(error)}</div>`;
+            q(".cp-list").innerHTML = `<div class="empty-state">${escapeTranslation(t("desktop.complaint.list.failed"))} ${esc(error)}</div>`;
         }
     }
 }

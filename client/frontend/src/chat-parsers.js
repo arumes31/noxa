@@ -1,7 +1,7 @@
 import { escapeHTML } from "./markdown.js";
 import { isSafeImageDataURL } from "./safe-media.js";
 
-// parseFileRef mirrors client/chat.go. Zero or one separator remains a plain
+// parseFileRef mirrors client/chat_attachments.go. Zero or one separator remains a plain
 // legacy reference so historical messages stay readable; only two separators
 // carry an attachment storage key and display name.
 export function parseFileRef(capture) {

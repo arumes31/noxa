@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { afterEach, describe, it, mock } from "node:test";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
+import { parse } from "acorn";
+import { analyze } from "eslint-scope";
 import { settingsEnglish, settingsGerman } from "../src/settings-messages.js";
 import { interfaceEnglish, interfaceGerman } from "../src/interface-messages.js";
 import { SOUND_DEFINITIONS, SOUND_EVENT_GROUPS } from "../src/sound-catalog.js";
@@ -22,6 +24,49 @@ afterEach(() => {
 });
 
 describe("language selection and translation", () => {
+    it("resolves every static translation call and matches placeholders in all message catalogs", async () => {
+        const root = new URL("../src/", import.meta.url);
+        const strings = node => node?.type === "Literal" && typeof node.value === "string" ? [node.value]
+            : node?.type === "ConditionalExpression" ? [...strings(node.consequent), ...strings(node.alternate)] : [];
+        const visit = (node, callback) => {
+            if (!node || typeof node !== "object") return;
+            callback(node);
+            for (const value of Object.values(node)) {
+                if (Array.isArray(value)) value.forEach(child => visit(child, callback));
+                else if (value?.type) visit(value, callback);
+            }
+        };
+        for (const file of readdirSync(root).filter(name => name.endsWith(".js"))) {
+            const source = readFileSync(new URL(file, root), "utf8");
+            if (file.endsWith("-messages.js") && /export const \w+English\s*=/.test(source)) {
+                const exports = await import(new URL(file, root));
+                for (const name of Object.keys(exports).filter(name => name.endsWith("English"))) {
+                    const english = exports[name], german = exports[name.replace(/English$/, "German")];
+                    assert.ok(german, `${file}: missing German catalog`);
+                    assert.deepEqual(Object.keys(english).sort(), Object.keys(german).sort(), file);
+                    const placeholders = text => [...text.matchAll(/\{([\w.]+)\}/g)].map(match => match[1]).sort();
+                    for (const key of Object.keys(english)) assert.deepEqual(placeholders(english[key]), placeholders(german[key]), `${file}: ${key}`);
+                }
+                continue;
+            }
+            const ast = parse(source, { ecmaVersion: "latest", sourceType: "module", ranges: true });
+            const translators = new Set(ast.body.filter(node => node.type === "ImportDeclaration" && node.source.value === "./i18n.js")
+                .flatMap(node => node.specifiers.filter(specifier => specifier.imported?.name === "t").map(specifier => specifier.local.name)));
+            const calls = new Set();
+            visit(ast, node => {
+                if (node.type === "Literal" && typeof node.value === "string") assert.ok(!node.value.includes("${escapeTranslation("), `${file}: interpolation inside an ordinary string`);
+                if (node.type !== "CallExpression" || !translators.has(node.callee?.name)) return;
+                calls.add(node.callee);
+                for (const key of strings(node.arguments[0])) for (const language of ["en", "de"]) {
+                    setLanguage(language);
+                    assert.notEqual(t(key), key, `${file}: missing ${language} ${key}`);
+                }
+            });
+            for (const scope of analyze(ast, { ecmaVersion: 2024, sourceType: "module" }).scopes) for (const reference of scope.references) {
+                if (calls.has(reference.identifier)) assert.equal(reference.resolved?.defs[0]?.type, "ImportBinding", `${file}: translator is shadowed`);
+            }
+        }
+    });
     it("covers menu and updater text in both languages with matching placeholders", () => {
         assert.deepEqual(Object.keys(interfaceEnglish).sort(), Object.keys(interfaceGerman).sort());
         for (const [key, english] of Object.entries(interfaceEnglish)) {

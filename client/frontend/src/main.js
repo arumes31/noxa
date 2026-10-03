@@ -201,6 +201,7 @@ function applyAppearance() {
     applyStaticLabels();
     if (previousLanguage !== currentLanguage()) {
         window.dispatchEvent(new Event("noxa-language-changed"));
+        renderTree();
         if (state.micState === "disconnected") setMicState(state.micState);
     }
     syncMuteButton($("voice-mute"), state.muted);
@@ -321,7 +322,7 @@ async function connectFromLogin() {
     if (submit.disabled) return;
     const submitLabel = submit.textContent;
     submit.disabled = true;
-    submit.textContent = "CONNECTING…";
+    submit.textContent = t("runtime.connecting");
     document.querySelector(".login-card").setAttribute("aria-busy", "true");
     const addr = $("login-addr").value.trim();
     const nick = $("login-nick").value.trim();
@@ -395,7 +396,7 @@ async function connectFromLogin() {
         noteActivity(); // (308) auto-away timer starts at connect
         playEvent("connection_connected");
         // (4a) surface the connection security as an info line.
-        if (session.security) sysMsg("connected: " + session.security);
+        if (session.security) sysMsg(t("runtime.connected", { security: session.security }));
         warnCertificateClock(clockWarning, addr);
         if ((state.settings?.display_name || "") !== displayName) {
             try { await updateLocalSettings(s => { s.display_name = displayName; }); }
@@ -423,27 +424,30 @@ async function showFingerprintWarning(addr, detail) {
     overlay.className = "dlg-overlay";
     overlay.innerHTML = `
         <div class="dlg share-dlg fp-warn">
-            <h3>⚠ Server certificate changed</h3>
-            <p class="dlg-text">The TLS fingerprint of <span class="mono"></span> does not match the pinned one. This could be a man-in-the-middle attack — or a legitimate server reinstall.</p>
+            <h3></h3>
+            <p class="dlg-text fp-explanation"></p>
             <p class="dlg-text mono fp-detail"></p>
             <div class="dlg-buttons">
-                <button class="dlg-cancel">Abort</button>
-                <button class="dlg-ok danger-btn">Trust new fingerprint</button>
+                <button class="dlg-cancel"></button>
+                <button class="dlg-ok danger-btn"></button>
             </div>
         </div>`;
-    overlay.querySelector("span.mono").textContent = addr;
+    overlay.querySelector("h3").textContent = t("runtime.certificateTitle");
+    overlay.querySelector(".fp-explanation").textContent = t("runtime.certificateHelp", { server: addr });
+    overlay.querySelector(".dlg-cancel").textContent = t("runtime.abort");
+    overlay.querySelector(".dlg-ok").textContent = t("runtime.trustNew");
     overlay.querySelector(".fp-detail").textContent = detail;
     overlay.querySelector(".dlg-cancel").onclick = () => overlay.remove();
     overlay.querySelector(".dlg-ok").onclick = async () => {
         if (!presented) {
             overlay.remove();
-            $("login-error").textContent = "trust failed: the server did not provide a valid replacement fingerprint";
+            $("login-error").textContent = t("runtime.trustInvalid");
             return;
         }
         const err = await window.go.main.App.TrustServerFingerprint(addr, presented);
         overlay.remove();
         if (err) {
-            $("login-error").textContent = "trust failed: " + err;
+            $("login-error").textContent = t("runtime.trustFailed", { error: err });
             return;
         }
         connectFromLogin();
@@ -508,7 +512,7 @@ async function certificateClockWarning(expectedAddr = "", expectedTabID = "") {
 
 function warnCertificateClock(warning, addr) {
     if (!warning) return;
-    const context = addr ? `Certificate timing warning for ${addr}: ` : "Certificate timing warning: ";
+    const context = addr ? t("runtime.clockWarningFor", { server: addr }) : t("runtime.clockWarning");
     sysMsg(context + warning);
     toast(context + warning, "warn", "alert");
 }
@@ -626,7 +630,7 @@ async function retireReplacedTab(sourceTabID, replacementTabID, c, generation) {
         await window.go.main.App.CloseTab(sourceTabID);
         state.tabConnects.delete(sourceTabID);
     } catch (error) {
-        sysMsg("reconnected, but could not close the previous server tab: " + String(error));
+        sysMsg(t("runtime.closeOldTab", { error: String(error) }));
     }
 }
 
@@ -658,8 +662,8 @@ async function attemptReconnect(c = state.lastConnect, { announceFailure = true,
     }
     if (err) {
         if (sourceTabID !== state.activeTabID || sourceServerGeneration !== state.serverGeneration) return false;
-        sysMsg("reconnect failed: " + err);
-        if (announceFailure) toast("Reconnect failed: " + err, "warn", "conn");
+        sysMsg(t("runtime.reconnectFailed", { error: err }));
+        if (announceFailure) toast(t("runtime.reconnectToast", { error: err }), "warn", "conn");
         return false;
     }
     const completed = await completeReconnect(c, generation, tabID);
@@ -712,8 +716,8 @@ function scheduleReconnect(
     const seconds = Math.ceil(delay / 1000);
     if (ownsSource()) {
         chatUI.beginReconnectAnnouncementBatch();
-        sysMsg(`reconnecting in ${seconds}s (attempt ${state.reconnectAttempts}/5)…`);
-        $("conn-pill").textContent = `retry ${state.reconnectAttempts}/5 in ${seconds}s…`;
+        sysMsg(t("runtime.reconnectCountdown", { seconds, attempt: state.reconnectAttempts }));
+        $("conn-pill").textContent = t("runtime.retry", { seconds, attempt: state.reconnectAttempts });
     }
     let countdown = seconds - 1;
     reconnectCountdownTimer = setInterval(() => {
@@ -722,7 +726,7 @@ function scheduleReconnect(
             reconnectCountdownTimer = null;
             return;
         }
-        if (ownsSource()) $("conn-pill").textContent = `retry ${state.reconnectAttempts}/5 in ${countdown}s…`;
+        if (ownsSource()) $("conn-pill").textContent = t("runtime.retry", { seconds: countdown, attempt: state.reconnectAttempts });
         countdown--;
     }, 1000);
     state.reconnectTimer = setTimeout(async () => {
@@ -756,21 +760,23 @@ const tabReconnects = createTabReconnects({
         state.reconnectAttempts = entry?.attempts || 0;
         state.reconnectInFlight = !!entry?.inFlight;
         if (entry && !entry.exhausted) {
-            $("conn-pill").textContent = entry.inFlight ? `reconnecting (attempt ${entry.attempts}/5)…`
-                : `retry ${entry.attempts}/5 in ${entry.remaining}s…`;
-        } else if (!entry && /^(retry \d\/5 in |reconnecting \(attempt )/.test($("conn-pill").textContent)) {
-            $("conn-pill").textContent = "offline";
+            $("conn-pill").textContent = entry.inFlight ? t("runtime.reconnectAttempt", { attempt: entry.attempts })
+                : t("runtime.retry", { seconds: entry.remaining, attempt: entry.attempts });
+            $("conn-pill").dataset.reconnectLabel = $("conn-pill").textContent;
+        } else if (!entry && $("conn-pill").textContent === $("conn-pill").dataset.reconnectLabel) {
+            delete $("conn-pill").dataset.reconnectLabel;
+            $("conn-pill").textContent = t("runtime.offline");
             chatUI.cancelReconnectAnnouncementBatch();
         }
     },
     scheduled(tabID, entry) {
         if (state.activeTabID !== tabID) return;
         chatUI.beginReconnectAnnouncementBatch();
-        sysMsg(`reconnecting in ${entry.remaining}s (attempt ${entry.attempts}/5)…`);
+        sysMsg(t("runtime.reconnectCountdown", { seconds: entry.remaining, attempt: entry.attempts }));
         if (entry.attempts === 1) playEvent("connection_reconnecting");
     },
     failed(tabID, error) {
-        if (state.activeTabID === tabID) sysMsg("reconnect failed: " + error);
+        if (state.activeTabID === tabID) sysMsg(t("runtime.reconnectFailed", { error }));
     },
     async exhausted(tabID, _target, current) {
         if (state.activeTabID !== tabID) return;
@@ -780,7 +786,7 @@ const tabReconnects = createTabReconnects({
         if (!current() || state.activeTabID !== tabID || state.serverGeneration !== generation || tabs.find(tab => tab.id === tabID)?.connected) return;
         chatUI.cancelReconnectAnnouncementBatch();
         playAlert("reconnect_failed");
-        $("conn-pill").textContent = "offline — reconnect failed";
+        $("conn-pill").textContent = t("runtime.offlineFailed");
         if (!tabs.some(tab => tab.connected)) showLogin();
     },
 });
@@ -819,7 +825,7 @@ async function reconnectLastServerNow() {
         let tabs;
         try { tabs = await window.go.main.App.ListTabs(); }
         catch {
-            if (current()) toast("Connection status unavailable. Try reconnecting again.", "warn", "conn");
+            if (current()) toast(t("runtime.connectionUnknown"), "warn", "conn");
             return;
         }
         if (!current() || state.reconnectInFlight || !Array.isArray(tabs)) return;
@@ -839,7 +845,7 @@ async function reconnectLastServerNow() {
         // user explicitly chooses the tray action.
         state.lastConnect = { ...c };
         chatUI.beginReconnectAnnouncementBatch();
-        $("conn-pill").textContent = "reconnecting now…";
+        $("conn-pill").textContent = t("runtime.reconnectingNow");
         const connected = await attemptReconnect(state.lastConnect, { sourceTabID });
         if (connected) return;
         if (!current()) return;
@@ -874,7 +880,7 @@ async function disconnect() {
         // bridge is already gone. Surface one actionable connection warning
         // instead of leaking an unhandled tray-event rejection.
         if (wasVisiblyConnected && ownsSource()) {
-            toast("disconnect failed", "warn", "conn");
+            toast(t("runtime.disconnectFailed"), "warn", "conn");
             playEvent("connection_failed");
         }
     }
@@ -886,7 +892,7 @@ async function disconnect() {
 window.runtime.EventsOn("intentional_disconnect", (tabID) => {
     if (String(tabID || "") !== state.activeTabID) return;
     clearSpeech();
-    if (state.settings?.notify_connection !== false) toast("Disconnected", "info", "conn");
+    if (state.settings?.notify_connection !== false) toast(t("runtime.disconnected"), "info", "conn");
     playEvent("connection_disconnected");
 });
 
@@ -901,9 +907,9 @@ window.runtime.EventsOn("disconnected", () => {
     }
     state.sessionGeneration++;
     const unexpected = !!state.lastConnect;
-    if (unexpected && state.settings?.notify_connection !== false) toast("Connection lost", "warn", "conn");
+    if (unexpected && state.settings?.notify_connection !== false) toast(t("runtime.connectionLost"), "warn", "conn");
     if (unexpected) playAlert("connection_lost", { delay: 1200 });
-    sysMsg("disconnected from server");
+    sysMsg(t("runtime.serverDisconnected"));
     // (32/33) whisper state is per-connection: client IDs and the server-side
     // whisper list do not survive a reconnect.
     activeWhisperers.clear();
@@ -919,7 +925,7 @@ window.runtime.EventsOn("disconnected", () => {
     state.canSetInvisible = false;
     state.ownAuthority = "";
     setDetailsOpen(false);
-    $("conn-pill").textContent = "offline";
+    $("conn-pill").textContent = t("runtime.offline");
     $("conn-pill").classList.remove("up");
     stopQualitySampler();
 
@@ -930,7 +936,7 @@ window.runtime.EventsOn("disconnected", () => {
 
 window.runtime.EventsOn("servererror", (msg) => {
     const text = String(msg).replace(/^\d+:\s*/, "");
-    toast(text || "The server rejected that action", "warn");
+    toast(text || t("runtime.actionRejected"), "warn");
     if (/^insufficient permission[: ]|^permission denied\b/i.test(text)) playAlert("permission_denied");
     else playEvent("server_error");
 });
@@ -948,7 +954,7 @@ window.runtime.EventsOn("settings_update", (s) => {
     else renderMember();
     renderVoiceHints();
     void updateSoundOutput();
-    void applyLiveAudioSettings().catch((error) => toast("Audio settings: " + error.message, "warn"));
+    void applyLiveAudioSettings().catch((error) => toast(t("runtime.audioSettings", { error: error.message }), "warn"));
 });
 
 // (320) recordRecentChannel tracks the last 5 joined channels per server
@@ -987,7 +993,7 @@ function noteActivity() {
     if (minutes <= 0 || !scope.clientID) return;
     idleTimer = setTimeout(async () => {
         if (revision !== activityRevision || !presenceIsCurrent(scope) || desiredPresence()) return;
-        if (await setPresence("away", "auto-away", scope, true)) sysMsg("auto-away after " + minutes + " min idle");
+        if (await setPresence("away", "auto-away", scope, true)) sysMsg(t("runtime.autoAway", { minutes }));
     }, minutes * 60000);
 }
 
@@ -1168,7 +1174,7 @@ window.runtime.EventsOn("event", (json) => {
             // (307) the server omits channel_id on user_joined, and an
             // invisible→visible return is announced as leave+join: restore the
             // channel remembered from the leave so the user is not stranded in
-            // channel 0 ("no channel") until the next user_moved.
+            // channel 0 (t("runtime.noChannel")) until the next user_moved.
             const existing = state.clients.find((client) => client.client_id === d.client_id);
             const joinedChannel = d.channel_id ?? lastKnownChannel.get(d.client_id) ?? existing?.channel_id ?? 0;
             lastKnownChannel.delete(d.client_id);
@@ -1185,7 +1191,7 @@ window.runtime.EventsOn("event", (json) => {
                 chatUI.sysJoinLeave(d.nickname || d.unique_id || "someone", "joined"); // (130/131)
                 if (joinedChannel === state.myChannelID && state.myChannelID !== 0) {
                     // (385) joins in my channel dispatch through the matrix.
-                    window.__noxaNotify?.notify("join_leave", (d.nickname || "someone") + " joined your channel",
+                    window.__noxaNotify?.notify("join_leave", t("runtime.joined", { name: d.nickname || t("runtime.someone") }),
                         { channelID: state.myChannelID, className: "joins", kind: "info",
                             soundEvent: "user_join", noSound: actionSoundsSuppressed() });
                 }
@@ -1206,7 +1212,7 @@ window.runtime.EventsOn("event", (json) => {
                 }
                 chatUI.sysJoinLeave(was.nickname || was.unique_id || "someone", "left"); // (130/131)
                 if (was.client_id !== state.myClientID && was.channel_id === state.myChannelID && state.myChannelID !== 0) {
-                    window.__noxaNotify?.notify("join_leave", (was.nickname || "someone") + " left your channel",
+                    window.__noxaNotify?.notify("join_leave", t("runtime.left", { name: was.nickname || t("runtime.someone") }),
                         { channelID: state.myChannelID, className: "joins", kind: "info",
                             soundEvent: "user_leave", noSound: actionSoundsSuppressed() });
                 }
@@ -1252,13 +1258,13 @@ window.runtime.EventsOn("event", (json) => {
                 ensureVoiceForChannel();
             } else if (c && nextChannelID === state.myChannelID && state.myChannelID !== 0
                 && previousRemoteChannelID !== nextChannelID) {
-                window.__noxaNotify?.notify("join_leave", (c.nickname || "someone") + " moved into your channel",
+                window.__noxaNotify?.notify("join_leave", t("runtime.movedIn", { name: c.nickname || t("runtime.someone") }),
                     { channelID: state.myChannelID, className: "joins", kind: "info",
                         soundEvent: "user_move_in", noSound: actionSoundsSuppressed() });
             } else if (c && previousRemoteChannelID === state.myChannelID && state.myChannelID !== 0
                 && previousRemoteChannelID !== nextChannelID) {
                 const forcedMove = nextChannelID > 0 && d.by_client_id && d.by_client_id !== d.client_id;
-                window.__noxaNotify?.notify("join_leave", (c.nickname || "someone") + " moved out of your channel",
+                window.__noxaNotify?.notify("join_leave", t("runtime.movedOut", { name: c.nickname || t("runtime.someone") }),
                     { channelID: previousRemoteChannelID, className: "joins", kind: "info",
                         soundEvent: "user_move_out", speechEvent: forcedMove ? "user_moved_out" : "user_leave",
                         noSound: actionSoundsSuppressed() });
@@ -1351,7 +1357,7 @@ window.runtime.EventsOn("event", (json) => {
                 $("voice-prio").classList.toggle("active", d.active);
                 $("voice-prio").setAttribute("aria-pressed", String(!!d.active));
             }
-            sysMsg(clientName(d.client_id) + (d.active ? " is now a priority speaker" : " is no longer a priority speaker"));
+            sysMsg(t(d.active ? "runtime.priorityOn" : "runtime.priorityOff", { name: clientName(d.client_id) }));
             recomputeDucking();
             break;
         }
@@ -1369,7 +1375,7 @@ window.runtime.EventsOn("event", (json) => {
         case "poke":
             // (385) pokes dispatch through the notification matrix.
             window.__noxaNotify?.notify("poke",
-                `poke from ${d.from_nickname || "someone"}${d.message ? ": " + d.message : ""}`,
+                t("runtime.pokeFrom", { name: d.from_nickname || t("runtime.someone"), message: d.message ? ": " + d.message : "" }),
                 { className: "messages", kind: "warn", poke: { sender: d.from_nickname, message: d.message } });
             break;
         // (32) directed whisper signal — the server sends it only to the
@@ -1386,7 +1392,7 @@ window.runtime.EventsOn("event", (json) => {
             if (d.speaking && d.client_id === state.myClientID && state.myChannelID &&
                 d.channel_id === state.myChannelID && !state.replayingTabID && !state.muted && !state.deafened) noteActivity();
             // (343) announce speaking events to the screen-reader region.
-            if (d.speaking) window.__noxaPolish?.announce((c ? c.nickname || c.unique_id : "someone") + " started speaking");
+            if (d.speaking) window.__noxaPolish?.announce(t("runtime.startedSpeaking", { name: c ? c.nickname || c.unique_id : t("runtime.someone") }));
             updateTalkBanner();
             videoSpeaking(d.client_id, d.speaking);
             recomputeDucking();
@@ -1460,15 +1466,15 @@ window.runtime.EventsOn("event", (json) => {
                 state.lastConnect = null;
                 clearReconnectTimer();
                 playAlert("server_shutdown");
-                toast("The server is shutting down.", "warn", "conn");
+                toast(t("runtime.shutdown"), "warn", "conn");
             }
             break;
         case "kicked": {
             const self = d.client_id === state.myClientID;
             const removal = d.ban ? "banned" : d.from_server ? "kicked" : "kicked_channel";
-            const description = self ? (d.ban ? "You were banned from the server." : d.from_server ? "You were kicked from the server." : "You were removed from the channel.") : "Client " + (d.ban ? "banned" : "kicked");
+            const description = self ? (d.ban ? t("runtime.selfBanned") : d.from_server ? t("runtime.selfKicked") : t("runtime.selfRemoved")) : t(d.ban ? "runtime.clientBanned" : "runtime.clientKicked");
             // (385) kicks dispatch through the notification matrix.
-            window.__noxaNotify?.notify("kick", description + (d.reason ? " Reason: " + d.reason : ""),
+            window.__noxaNotify?.notify("kick", description + (d.reason ? t("runtime.reason", { reason: d.reason }) : ""),
                 { className: "messages", kind: "warn", soundEvent: d.ban ? "ban" : "kick", noSound: self,
                     speechEvent: !self && !d.ban ? (d.from_server ? "user_kicked" : "user_kicked_channel") : undefined });
             if (self && !actionSoundsSuppressed()) {
@@ -1480,7 +1486,7 @@ window.runtime.EventsOn("event", (json) => {
                 playAlert(removal);
             }
             if (state.settings?.sys_kick !== false) { // (130) category filter
-                sysMsg("client " + d.client_id + " was kicked" + (d.reason ? " (" + d.reason + ")" : ""));
+                sysMsg(t("runtime.kicked", { id: d.client_id, reason: d.reason ? " (" + d.reason + ")" : "" }));
             }
             break;
         }
@@ -1494,7 +1500,7 @@ window.runtime.EventsOn("event", (json) => {
             const sharer = state.clients.find((c) => c.client_id === d.client_id);
             if (sharer) sharer.sharing = !!d.active;
             videoRefreshNames();
-            sysMsg(clientName(d.client_id) + (d.active ? " started" : " stopped") + " screen sharing");
+            sysMsg(t(d.active ? "runtime.shareStarted" : "runtime.shareStopped", { name: clientName(d.client_id) }));
             break;
         }
         case "avatar_changed":
@@ -1561,9 +1567,9 @@ function onWhisperReceived(clientID, uniqueID, nickname) {
     // (317) blocked users stay silent here too.
     if (uid && (state.settings?.blocked_users || []).includes(uid)) return;
     if (uid) state.lastWhispererUID = uid;
-    const who = nickname || c?.nickname || uid || clientID || "someone";
+    const who = nickname || c?.nickname || uid || clientID || t("runtime.someone");
     trayMention();
-    window.__noxaNotify?.notify("whisper", who + " is whispering to you",
+    window.__noxaNotify?.notify("whisper", t("runtime.whispering", { name: who }),
         { uid, className: "messages", kind: "warn", noSound: !state.settings?.whisper_sound });
 }
 
@@ -1708,7 +1714,7 @@ function renderDirectTargets(show = false) {
     if (clients.length === 0) {
         const empty = document.createElement("div");
         empty.className = "target-empty";
-        empty.textContent = state.clients.length > 1 ? "No matching connected members" : "No other members connected";
+        empty.textContent = state.clients.length > 1 ? t("runtime.noMatchingMembers") : t("runtime.noOtherMembers");
         options.appendChild(empty);
     }
     for (const client of clients) {
@@ -1720,7 +1726,7 @@ function renderDirectTargets(show = false) {
         option.innerHTML = `<span class="target-option-dot"></span><span class="target-option-copy"><strong></strong><small class="target-option-meta mono"></small></span><span class="target-option-channel"></span>`;
         option.querySelector("strong").textContent = client.nickname || client.unique_id;
         option.querySelector("small").textContent = client.unique_id;
-        option.querySelector(".target-option-channel").textContent = channel?.Name || "no channel";
+        option.querySelector(".target-option-channel").textContent = channel?.Name || t("runtime.noChannel");
         // Keep the search field focused until selection; its blur/change would
         // otherwise open a DM for the search text and rebuild this option.
         option.onpointerdown = (event) => event.preventDefault();
@@ -1908,8 +1914,8 @@ function ensureVoiceForChannel() {
             // Reset releases startup ownership immediately, even when an old
             // browser/native operation has not returned yet.
             if (voiceStartOwner !== owner || epoch !== voiceSessionEpoch) return false;
-            sysMsg("voice failed: " + e);
-            toast("Voice could not start automatically", "warn", "conn");
+            sysMsg(t("runtime.voiceFailed", { error: String(e) }));
+            toast(t("runtime.voiceStartFailed"), "warn", "conn");
             teardownVoice();
             resetVoiceUI();
             setVoiceStatus("voice unavailable");
@@ -2202,7 +2208,7 @@ $("voice-prio").onclick = async () => {
     priorityRequest = null;
     if (!mediaScopeIsCurrent(scope)) return;
     if (err) {
-        sysMsg("priority speaker failed: " + err);
+        sysMsg(t("runtime.priorityFailed", { error: err }));
         return;
     }
     // The authoritative role event/snapshot updates local state.
@@ -2261,7 +2267,7 @@ function scheduleICERestart(pc) {
     if (iceFailures >= ICE_BACKOFF_MS.length) {
         if (!iceFailureNotified) {
             iceFailureNotified = true;
-            toast("Voice connection unstable — reconnect if it does not recover", "warn", "conn");
+            toast(t("runtime.voiceUnstable"), "warn", "conn");
         }
         return;
     }
@@ -2378,12 +2384,12 @@ function setMicState(s) {
         $("ptt-btn").disabled = true;
     } else if (s === "none") {
         $("ptt-btn").disabled = true;
-        sysMsg(videoOnly ? "no microphone found; joined voice video-only" :
-            "no microphone found; voice capture unavailable");
+        sysMsg(videoOnly ? t("runtime.micMissingVideo") :
+            t("runtime.micMissing"));
     } else if (s === "denied") {
         $("ptt-btn").disabled = true;
-        sysMsg(videoOnly ? "microphone access denied; joined voice video-only" :
-            "microphone access denied; voice capture unavailable");
+        sysMsg(videoOnly ? t("runtime.micDeniedVideo") :
+            t("runtime.micDenied"));
     }
 }
 
@@ -2454,7 +2460,7 @@ async function retryMicrophoneCapture() {
         watchCurrentMicrophone();
         setMicState("ok");
         setVoiceStatus("voice on");
-        sysMsg("microphone connected");
+        sysMsg(t("runtime.micConnected"));
         return true;
     } catch (error) {
         localStream.removeTrack(audioTrack);
@@ -2465,7 +2471,7 @@ async function retryMicrophoneCapture() {
         } catch { /* the peer connection may already be closed */ }
         if (!current()) return false;
         setMicState(state.micState === "denied" ? "denied" : "none");
-        sysMsg("microphone retry failed: " + (error?.message || error));
+        sysMsg(t("runtime.micRetryFailed", { error: error?.message || error }));
         return false;
     } finally {
         for (const track of capturedStream.getTracks()) {
@@ -2633,7 +2639,7 @@ function warnMutedTalking() {
 function warnEmptyChannel() {
     if (Date.now() - lastEmptyWarn < 30000) return;
     lastEmptyWarn = Date.now();
-    toast("Nobody is in your channel", "info", "alert");
+    toast(t("runtime.nobody"), "info", "alert");
 }
 
 function setPTT(active) {
@@ -2718,7 +2724,7 @@ window.runtime.EventsOn("hotkey", async (action) => {
     if (action === "deafen_toggle") {
         const { state, setDeafened, sysMsg } = window.__noxa;
         setDeafened(!state.deafened);
-        sysMsg(state.deafened ? "deafened (incoming audio off)" : "undeafened");
+        sysMsg(state.deafened ? t("runtime.deafened") : t("runtime.undeafened"));
         return;
     }
     // (285) quick connect: last-used bookmark/recent in a new tab.
@@ -2748,16 +2754,16 @@ window.runtime.EventsOn("hotkey", async (action) => {
             const error = await setWhisperRouting(prev, scope);
             if (whisperReplyRequest === scope) whisperReplyRequest = null;
             if (error === null) return;
-            if (error) { sysMsg("whisper reply failed: " + error); return; }
+            if (error) { sysMsg(t("runtime.whisperFailed", { error })); return; }
             state.whisperArmed = false;
             state.whisperTargetUID = "";
             state.whisperPrev = null;
             renderVoiceStatus();
-            sysMsg("whisper reply disarmed");
+            sysMsg(t("runtime.whisperDisarmed"));
             return;
         }
         if (!state.lastWhispererUID) {
-            toast("no whisper to reply to", "info", "alert");
+            toast(t("runtime.noWhisper"), "info", "alert");
             return;
         }
         const s = state.settings || {};
@@ -2769,12 +2775,12 @@ window.runtime.EventsOn("hotkey", async (action) => {
         const error = await setWhisperRouting({ clients: [target], channels: [], active: true }, scope);
         if (whisperReplyRequest === scope) whisperReplyRequest = null;
         if (error === null) return;
-        if (error) { sysMsg("whisper reply failed: " + error); return; }
+        if (error) { sysMsg(t("runtime.whisperFailed", { error })); return; }
         state.whisperPrev = previous;
         state.whisperTargetUID = target;
         state.whisperArmed = true;
         renderVoiceStatus();
-        sysMsg("whisper reply armed → " + uidName(target));
+        sysMsg(t("runtime.whisperArmed", { name: uidName(target) }));
         return;
     }
     if (document.hasFocus() && document.activeElement === $("chat-text")) return;
@@ -2863,16 +2869,16 @@ window.runtime.EventsOn("hotkey_status", (st) => {
         renderVoiceHints();
     }
     const el = $("hotkey-status");
-    const action = { mute_toggle: "Mute", deafen_toggle: "Deafen", ptt: "Push to talk" }[st.action] || String(st.action || "Voice").replaceAll("_", " ");
+    const action = { mute_toggle: t("runtime.actionMute"), deafen_toggle: t("runtime.actionDeafen"), ptt: t("runtime.actionPTT") }[st.action] || String(st.action || t("runtime.actionVoice")).replaceAll("_", " ");
     if (st.registered) {
-        el.textContent = action + " shortcut active";
+        el.textContent = t("runtime.shortcutActive", { action });
         el.classList.remove("err");
-        el.title = st.action + " hotkey active";
+        el.title = t("runtime.hotkeyActive", { action: st.action });
     } else {
-        el.textContent = action + " shortcut unavailable";
+        el.textContent = t("runtime.shortcutUnavailable", { action });
         el.classList.add("err");
-        el.title = st.action + " hotkey failed: " + (st.error || "");
-        toast("hotkey failed: " + st.action + " — " + (st.error || "registration failed"), "warn", "conn");
+        el.title = t("runtime.hotkeyFailed", { action: st.action, error: st.error || "" });
+        toast(t("runtime.hotkeyToast", { action: st.action, error: st.error || t("runtime.registrationFailed") }), "warn", "conn");
     }
 });
 
@@ -2899,7 +2905,7 @@ async function applyWhisperSettings() {
     if (!s || !s.whisper_active) return;
     if ((s.whisper_clients?.length || 0) === 0 && (s.whisper_channels?.length || 0) === 0) return;
     const error = await setWhisperRouting({ clients: s.whisper_clients || [], channels: s.whisper_channels || [], active: true });
-    if (error) sysMsg("whisper configuration failed: " + error);
+    if (error) sysMsg(t("runtime.whisperConfig", { error }));
 }
 
 // ---------------------------------------------------------------------------

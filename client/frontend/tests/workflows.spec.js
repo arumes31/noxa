@@ -4439,6 +4439,26 @@ async function showB3Workspace(page) {
     });
 }
 
+test("desktop language changes refresh speaking labels and reopened server details", async ({ page }) => {
+    await showB3Workspace(page);
+    await expect(page.locator('#channel-tree [aria-label*="Mia"]').first()).toHaveAttribute("aria-label", /speaking/);
+    await page.evaluate(() => {
+        window.__noxa.state.settings.language = "de";
+        window.__noxa.applyAppearance();
+    });
+    await expect(page.locator('#channel-tree [aria-label*="Mia"]').first()).toHaveAttribute("aria-label", /spricht/);
+    await prepareServerInformation(page);
+    await page.locator("#server-name").click();
+    await expect(page.getByRole("dialog", { name: "Serverinformationen", exact: true })).toBeVisible();
+    await page.keyboard.press("Escape");
+    await page.evaluate(() => {
+        window.__noxa.state.settings.language = "en";
+        window.__noxa.applyAppearance();
+    });
+    await page.locator("#server-name").click();
+    await expect(page.getByRole("dialog", { name: "Server information", exact: true })).toBeVisible();
+});
+
 test.describe("incoming poke popup", () => {
     test.beforeEach(async ({ page }) => {
         await showB3Workspace(page);

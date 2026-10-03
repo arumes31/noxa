@@ -30,11 +30,11 @@ describe("Batch 7C frontend hardening contracts", () => {
 
     it("contains control-bridge errors and emits one ICE warning per outage", async () => {
         const main = await source("../src/main.js");
-        assert.match(main, /await window\.go\.main\.App\.DisconnectTab\(sourceTabID\);[\s\S]{0,600}catch \{[\s\S]{0,600}toast\("disconnect failed", "warn", "conn"\)/);
+        assert.match(main, /await window\.go\.main\.App\.DisconnectTab\(sourceTabID\);[\s\S]{0,600}catch \{[\s\S]{0,600}toast\(t\("runtime.disconnectFailed"\), "warn", "conn"\)/);
         assert.match(main, /void window\.go\.main\.App\.SendICECandidateForTab\([\s\S]{0,180}\)\.catch\(\(\) => \{\}\)/);
         assert.match(main, /const ICE_BACKOFF_MS = \[1000, 2000, 5000, 15000\]/);
         assert.match(main, /let iceFailureNotified = false/);
-        assert.match(main, /if \(!iceFailureNotified\) \{[\s\S]{0,180}Voice connection unstable/);
+        assert.match(main, /if \(!iceFailureNotified\) \{[\s\S]{0,180}toast\(t\("runtime.voiceUnstable"\)/);
         assert.doesNotMatch(main, /sysMsg\("ice restart failed/);
     });
 

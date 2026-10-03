@@ -1,3 +1,4 @@
+import { escapeHTML as escapeTranslation } from "./markdown.js";
 // video-publication.js — camera/screen capture and publication lifecycle.
 import { captureCamera, applyCameraPreview } from "./camera-capture.js";
 import { captureMediaScope, mediaScopeIsCurrent } from "./media-controls.js";
@@ -317,17 +318,17 @@ export function createVideoPublication({ policy }) {
             if (audioMode === "system" && e.name !== "NotAllowedError" && e.name !== "AbortError") {
                 // (70) WebView2 may refuse display audio (works on Windows for
                 // screen/tab shares) — retry video-only and say so.
-                V().sysMsg("system audio not available for this share (" + (e.message || e.name) + "); sharing video only");
+                V().sysMsg(tLabel("runtime.shareVideoOnly", { error: e.message || e.name }));
                 try {
                     display = await navigator.mediaDevices.getDisplayMedia(Object.assign({}, gdm, { audio: false }));
                     audioMode = "none";
                 } catch (e2) {
                     if (!current()) return;
-                    V().sysMsg("screen capture failed: " + (e2.message || e2.name));
+                    V().sysMsg(tLabel("desktop.screen.capture.failed") + (e2.message || e2.name));
                     return;
                 }
             } else {
-                V().sysMsg(audioMode === "application" ? tLabel("share.applicationUnavailable") : "screen capture failed: " + (e.message || e.name));
+                V().sysMsg(audioMode === "application" ? tLabel("share.applicationUnavailable") : tLabel("desktop.screen.capture.failed") + (e.message || e.name));
                 return;
             }
         }
@@ -341,7 +342,7 @@ export function createVideoPublication({ policy }) {
         const screenTrack = display.getVideoTracks()[0];
         if (!screenTrack) {
             discardDisplay(display);
-            V().sysMsg("screen capture produced no video track");
+            V().sysMsg(tLabel("desktop.screen.capture.produced.no.video.track"));
             return;
         }
         capturePreferences.set(screenTrack, { ...p, screen: true });
@@ -411,7 +412,7 @@ export function createVideoPublication({ policy }) {
                     discardDisplay(display);
                     return;
                 }
-                V().sysMsg("publishing screen share failed: " + (e.message || e.name));
+                V().sysMsg(tLabel("desktop.publishing.screen.share.failed") + (e.message || e.name));
                 // a rollback only drops transceivers created by applying a remote
                 // description, so this one survives with its direction flip and
                 // would be re-offered — stop it to keep the dead m-line out of
@@ -447,7 +448,7 @@ export function createVideoPublication({ policy }) {
                         discardDisplay(display);
                         return;
                     }
-                    V().sysMsg("publishing share audio failed: " + (e.message || e.name));
+                    V().sysMsg(tLabel("desktop.publishing.share.audio.failed") + (e.message || e.name));
                     // a rollback keeps this transceiver, so without the stop() the
                     // dead track is re-offered on the next renegotiation.
                     try { tr?.stop(); } catch { /* nothing left to stop */ }
@@ -469,7 +470,7 @@ export function createVideoPublication({ policy }) {
                         discardDisplay(display);
                         return;
                     }
-                    V().sysMsg("publishing share audio failed: " + (e.message || e.name));
+                    V().sysMsg(tLabel("desktop.publishing.share.audio.failed") + (e.message || e.name));
                     displayAudio.stop();
                 }
             }
@@ -492,7 +493,7 @@ export function createVideoPublication({ policy }) {
             return;
         }
         if (shareErr) {
-            V().sysMsg("screen share permission failed: " + shareErr);
+            V().sysMsg(tLabel("desktop.screen.share.permission.failed") + shareErr);
             await doStopShare();
             return;
         }
@@ -500,7 +501,7 @@ export function createVideoPublication({ policy }) {
         startShareStatus({ stream: display, pc: peerConnection, scope: shareScope, preset: p, surface, audioMode,
             generation: publicationSnapshot().find(p => p.publication.slot === "screen")?.generation,
             stop: () => { V().$("voice-screen").focus(); void doStopShare(); }, change: () => openShareDialog(true, preset, audioMode, surface, custom),
-            reduction: () => policy.lowBandwidth ? "share.policy.lowBandwidth" : policy.sendCpuPressure ? "share.cpu" : "" });
+            reduction: () => policy.lowBandwidth ? "share.lowBandwidth" : policy.sendCpuPressure ? "share.cpu" : "" });
     }
 
     // pickRegionAndCrop shows a draggable/resizable box over the app; on confirm
@@ -517,9 +518,9 @@ export function createVideoPublication({ policy }) {
             const box = document.createElement("div");
             box.className = "region-box";
             box.innerHTML = `
-                <div class="region-title">drag to move · drag corner to resize</div>
-                <button class="region-ok">Crop &amp; share</button>
-                <button class="region-cancel">Cancel</button>`;
+                <div class="region-title">${escapeTranslation(tLabel("desktop.drag.to.move.drag.corner.to.resize"))}</div>
+                <button class="region-ok">${escapeTranslation(tLabel("desktop.crop.share"))}</button>
+                <button class="region-cancel">${escapeTranslation(tLabel("desktop.cancel"))}</button>`;
             document.body.appendChild(box);
             let settled = false;
             const finish = (value) => {
@@ -572,7 +573,7 @@ export function createVideoPublication({ policy }) {
                     box.classList.add("cropping");
                     finish(box);
                 } catch (e) {
-                    if (!settled && isCurrent()) V().sysMsg("region capture failed: " + (e.message || e.name));
+                    if (!settled && isCurrent()) V().sysMsg(tLabel("desktop.region.capture.failed") + (e.message || e.name));
                     cancel();
                 }
             };
@@ -699,7 +700,7 @@ export function createVideoPublication({ policy }) {
             await stopPublication("screen");
             if (pc && current()) await renegotiate(pc, generation);
         } catch (error) {
-            if (current()) V().sysMsg("stopping screen share failed: " + (error.message || error.name));
+            if (current()) V().sysMsg(tLabel("desktop.stopping.screen.share.failed") + (error.message || error.name));
         } finally {
             if (current()) { state.shareStopping = false; syncShareButton(); }
         }
@@ -847,7 +848,7 @@ export function createVideoPublication({ policy }) {
             cameraOff = false;
             cam.onended = () => { if (state.localStream === localStream) void stopCamera(); };
         } catch (error) {
-            if (current()) V().sysMsg("camera unavailable: " + (error.message || error.name));
+            if (current()) V().sysMsg(tLabel("desktop.camera.unavailable") + (error.message || error.name));
         } finally {
             if (!current() || cameraOff) {
                 for (const track of stream?.getTracks() || []) {

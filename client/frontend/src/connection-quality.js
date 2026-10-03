@@ -1,4 +1,5 @@
 // connection-quality.js — connection quality sampling and freshness.
+import { t } from "./i18n.js";
 
 
 export function createConnectionQuality({ $, state }) {
@@ -16,10 +17,10 @@ export function createConnectionQuality({ $, state }) {
 
     function qualitySampleAge(at, now = Date.now()) {
         const seconds = Math.max(0, Math.floor((now - at) / 1000));
-        if (seconds < 5) return "just now";
-        if (seconds < 60) return `${seconds} second${seconds === 1 ? "" : "s"} ago`;
+        if (seconds < 5) return t("runtime.justNow");
+        if (seconds < 60) return t(seconds === 1 ? "runtime.secondAgo" : "runtime.secondsAgo", { count: seconds });
         const minutes = Math.floor(seconds / 60);
-        return `${minutes} minute${minutes === 1 ? "" : "s"} ago`;
+        return t(minutes === 1 ? "runtime.minuteAgo" : "runtime.minutesAgo", { count: minutes });
     }
 
     function renderQualitySample() {
@@ -28,8 +29,9 @@ export function createConnectionQuality({ $, state }) {
         const latency = $("voice-latency");
         const stale = Date.now() - lastQualitySample.at >= 15000;
         const quality = stale ? "stale" : lastQualitySample.quality;
-        const text = `${lastQualitySample.pingMs} ms${stale ? " · stale" : ""}`;
-        const label = `Server latency: ${lastQualitySample.pingMs} milliseconds, ${quality}`;
+        const qualityLabel = t(`runtime.quality.${quality}`);
+        const text = `${lastQualitySample.pingMs} ms${stale ? " · " + qualityLabel : ""}`;
+        const label = t("runtime.latencyLabel", { ping: lastQualitySample.pingMs, quality: qualityLabel });
         // The existing age ticker runs each second; only change visible DOM when
         // the value or freshness actually changes. No layout reads or new timers.
         if (latency.textContent !== text) latency.textContent = text;
@@ -37,9 +39,8 @@ export function createConnectionQuality({ $, state }) {
         if (latency.getAttribute("aria-label") !== label) latency.setAttribute("aria-label", label);
         if (latency.hidden) latency.hidden = false;
         if (pill.dataset.quality !== quality) pill.dataset.quality = quality;
-        pill.title = `connection quality: ${lastQualitySample.quality} ` +
-            `(RTT ${lastQualitySample.pingMs} ms, sampled ${qualitySampleAge(lastQualitySample.at)})`;
-        const title = `Server round-trip latency, ${quality}. Sampled ${qualitySampleAge(lastQualitySample.at)}. Open server information.`;
+        pill.title = t("runtime.qualityTitle", { quality: t(`runtime.quality.${lastQualitySample.quality}`), ping: lastQualitySample.pingMs, age: qualitySampleAge(lastQualitySample.at) });
+        const title = t("runtime.latencyTitle", { quality: qualityLabel, age: qualitySampleAge(lastQualitySample.at) });
         if (latency.title !== title) latency.title = title;
     }
 
@@ -52,7 +53,7 @@ export function createConnectionQuality({ $, state }) {
         if (state.myClientID) {
             $("voice-latency").hidden = false;
             $("voice-latency").textContent = "— ms";
-            $("voice-latency").setAttribute("aria-label", "Server latency: waiting for a sample");
+            $("voice-latency").setAttribute("aria-label", t("runtime.latencyWaiting"));
         }
         const sample = async () => {
             if (!state.myClientID || inFlight) return;
@@ -93,7 +94,7 @@ export function createConnectionQuality({ $, state }) {
         lastQualitySample = null;
         const pill = $("conn-pill");
         delete pill.dataset.quality;
-        pill.title = pill.classList.contains("up") ? "" : "Offline — no current RTT sample";
+        pill.title = pill.classList.contains("up") ? "" : t("runtime.latencyOffline");
         const latency = $("voice-latency");
         latency.hidden = true;
         latency.textContent = "";

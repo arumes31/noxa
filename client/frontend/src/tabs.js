@@ -1,3 +1,5 @@
+import { escapeHTML as escapeTranslation } from "./markdown.js";
+import { t as translate } from "./i18n.js";
 // tabs.js — wave-8a multi-server tabs (281): the TS3-style server tab bar
 // above the panes, tab switching with state reset/replay, unread/mention
 // badges, quick connect (285), and auto-connect on startup (286). The
@@ -98,29 +100,29 @@ function renderTabs(tabs) {
             else el.style.removeProperty("--tab-color");
             const dot = select.querySelector(".srv-tab-dot");
             dot.style.background = bm?.color || "";
-            dot.title = t.connected ? "Connected" : "Offline";
+            dot.title = t.connected ? translate("desktop.connected") : translate("desktop.offline.a17947");
         }
         const label = select.querySelector(".srv-tab-label");
-        label.textContent = bm?.name || t.addr || "Server";
-        label.title = (t.display_name || t.nickname || "?") + " @ " + (t.addr || "?") + (t.connected ? "" : " (offline)");
-        select.setAttribute("aria-label", (t.display_name || t.nickname || "?") + " @ " + (t.addr || "?") + (t.connected ? "" : ", offline"));
+        label.textContent = bm?.name || t.addr || translate("desktop.server");
+        label.title = (t.display_name || t.nickname || "?") + " @ " + (t.addr || "?") + (t.connected ? "" : translate("desktop.offline.151c6e"));
+        select.setAttribute("aria-label", (t.display_name || t.nickname || "?") + " @ " + (t.addr || "?") + (t.connected ? "" : translate("desktop.offline.a0e628")));
         select.querySelector(".srv-badge")?.remove();
         if (t.mentions > 0) {
             const b = document.createElement("span");
             b.className = "srv-badge mention";
             b.textContent = t.mentions;
-            b.title = t.mentions + " unread mention(s)";
+            b.title = t.mentions + translate("desktop.unread.mention.s");
             select.appendChild(b);
         } else if (t.unread > 0) {
             const b = document.createElement("span");
             b.className = "srv-badge";
             b.textContent = t.unread > 99 ? "99+" : t.unread;
-            b.title = t.unread + " unread message(s)";
+            b.title = t.unread + translate("desktop.unread.message.s");
             select.appendChild(b);
         }
         const x = el.querySelector(".srv-tab-x");
-        x.title = "disconnect and close tab";
-        x.setAttribute("aria-label", "Disconnect and close " + label.textContent);
+        x.title = translate("desktop.disconnect.and.close.tab");
+        x.setAttribute("aria-label", translate("desktop.disconnect.and.close") + label.textContent);
         x.onclick = (e) => {
             e.stopPropagation();
             void closeTab(t.id);
@@ -142,8 +144,8 @@ function renderTabs(tabs) {
     plus.id = "srv-tab-plus";
     plus.className = "srv-tab plus";
     plus.textContent = "+";
-    plus.title = "connect to another server (new tab)";
-    plus.setAttribute("aria-label", "Connect to another server");
+    plus.title = translate("desktop.connect.to.another.server.new.tab");
+    plus.setAttribute("aria-label", translate("desktop.connect.to.another.server"));
     plus.onclick = () => V().showLogin();
     if (bar.lastElementChild !== plus) bar.appendChild(plus);
     if (focused?.isConnected && focused.getClientRects().length && document.activeElement !== focused) focused.focus({ preventScroll: true });
@@ -223,10 +225,10 @@ function onTabReset(tabID) {
     V().stopQualitySampler?.();
     const connectionPill = $("conn-pill");
     connectionPill.classList.remove("up");
-    connectionPill.textContent = tabID ? "switching…" : "offline";
+    connectionPill.textContent = tabID ? translate("desktop.switching") : translate("desktop.offline");
     connectionPill.title = tabID
-        ? "Connection status is refreshing"
-        : "Offline — no current RTT sample";
+        ? translate("desktop.connection.status.is.refreshing")
+        : translate("desktop.offline.no.current.rtt.sample");
     closeServerDialogs();
     V().stopPrivateCall?.();
     // Voice is active-tab only: fully tear down capture and WebRTC before the
@@ -268,7 +270,7 @@ function onTabReset(tabID) {
         V().refreshPermissions();
         if (session.connected && state.myClientID) {
             initConversations();
-            connectionPill.textContent = state.lastConnect?.addr || "connected";
+            connectionPill.textContent = state.lastConnect?.addr || translate("desktop.connected.12a7bd");
             connectionPill.classList.add("up");
             connectionPill.title = "";
             V().startQualitySampler?.();
@@ -277,8 +279,8 @@ function onTabReset(tabID) {
             if (!current()) return;
         } else {
             connectionPill.textContent = state.lastConnect?.addr
-                ? `${state.lastConnect.addr} (offline)`
-                : "offline";
+                ? state.lastConnect.addr + translate("desktop.offline.151c6e")
+                : translate("desktop.offline");
             connectionPill.classList.remove("up");
             V().stopQualitySampler?.();
         }
@@ -308,7 +310,7 @@ async function autoConnectBookmarks() {
             $("login-nick").value = nick;
             $("login-display-name").value = displayName;
             V().state.pendingBookmark = { name: b.name, addr: b.addr };
-            V().sysMsg?.("auto-connect needs your password for " + b.addr);
+            V().sysMsg?.(translate("desktop.auto.connect.needs.your.password.for") + b.addr);
         } else {
             // The successful call activates its tab and emits tab_reset before
             // resolving. Capture that generation now, then make the delayed
@@ -331,7 +333,7 @@ function quickConnectTarget() {
 // (285, default Ctrl+Shift+C). Tray callers pass their captured target.
 async function quickConnectLast(target = quickConnectTarget(), isCancelled = () => false) {
     if (!target) {
-        V().toast("no bookmark or recent server to quick-connect", "warn");
+        V().toast(translate("desktop.no.bookmark.or.recent.server.to.quick.connect"), "warn");
         return;
     }
     // Passwords are never stored: guest logins connect directly, account
@@ -377,14 +379,14 @@ function renderRecents() {
     const s = V().state.settings || {};
     const recents = s.recents || [];
     const bms = s.bookmarks || [];
-    area.innerHTML = recents.length ? "" : `<div class="empty-state">no recent servers</div>`;
+    area.innerHTML = recents.length ? "" : `<div class="empty-state">${escapeTranslation(translate("desktop.no.recent.servers"))}</div>`;
     for (const r of recents) {
         const row = document.createElement("div");
         row.className = "recent-row";
         const starred = bms.some((b) => b.addr === r.addr && b.nickname === r.nickname);
-        row.innerHTML = `<button type="button" class="recent-star" title="bookmark">${starred ? "★" : "☆"}</button>
+        row.innerHTML = `<button type="button" class="recent-star" title="${escapeTranslation(translate("desktop.bookmark"))}">${starred ? "★" : "☆"}</button>
             <button type="button" class="recent-label"></button>
-            <button type="button" class="recent-edit">Edit</button>`;
+            <button type="button" class="recent-edit">${escapeTranslation(translate("desktop.edit"))}</button>`;
         const label = row.querySelector(".recent-label");
         const serverLabel = (r.nickname || "?") + " @ " + r.addr;
         label.textContent = serverLabel;
@@ -395,8 +397,8 @@ function renderRecents() {
             document.getElementById("login-display-name").value = s.display_name || "";
         };
         const edit = row.querySelector(".recent-edit");
-        edit.title = "Edit recent server";
-        edit.setAttribute("aria-label", `Edit recent server ${r.nickname || "server"} at ${r.addr}`);
+        edit.title = translate("desktop.edit.recent.server");
+        edit.setAttribute("aria-label", translate("runtime.editRecentServer", { name: r.nickname || translate("desktop.server"), address: r.addr }));
         edit.onclick = (event) => {
             event.stopPropagation();
             const addr = document.getElementById("login-addr");
@@ -418,7 +420,7 @@ function renderRecents() {
                 s.bookmarks = [...bms, { name: (r.nickname || "?") + " @ " + r.addr, addr: r.addr, nickname: r.nickname }];
             }
             const err = await App().SaveSettings(s);
-            if (err) V().toast("save failed: " + err, "warn");
+            if (err) V().toast(translate("desktop.save.failed") + err, "warn");
             // (282) re-read the merged truth: recents recorded while the save
             // was in flight are not in the copy we sent.
             else V().state.settings = await App().GetSettings();

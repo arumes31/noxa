@@ -1,3 +1,4 @@
+import { escapeHTML as escapeTranslation } from "./markdown.js";
 // polish-ui.js — wave-8c polish & accessibility: pane transitions (337),
 // resizable panes (338), detachable chat (339), fullscreen video (340),
 // zen mode (341), idle video pause (342), screen-reader labels + live
@@ -139,7 +140,7 @@ function toggleChatPopout() {
     }
     chatPop = document.createElement("div");
     chatPop.className = "chat-popout";
-    chatPop.innerHTML = `<div class="chat-pop-head">chat — drag me <button class="icon-btn chat-pop-close" aria-label="Close chat popout">✕</button></div>`;
+    chatPop.innerHTML = `<div class="chat-pop-head">${escapeTranslation(t("desktop.chat.drag.me"))} <button class="icon-btn chat-pop-close" aria-label="${escapeTranslation(t("desktop.close.chat.popout"))}">✕</button></div>`;
     const wrap = document.getElementById("chat-wrap");
     const inputRow = document.getElementById("chat-input-row");
     const wrapMarker = document.createComment("chat-wrap-marker");
@@ -183,7 +184,7 @@ function toggleZen() {
     if (on && !ind) {
         ind = document.createElement("button");
         ind.id = "zen-indicator";
-        ind.textContent = "zen — click or hotkey to exit";
+        ind.textContent = t("desktop.zen.click.or.hotkey.to.exit");
         ind.onclick = toggleZen;
         document.body.appendChild(ind);
     } else if (!on && ind) {
@@ -228,7 +229,7 @@ function initIdleVideoPause() {
 function initA11y() {
     const tree = document.getElementById("channel-tree");
     tree.setAttribute("role", "tree");
-    tree.setAttribute("aria-label", "channels and users");
+    tree.setAttribute("aria-label", t("desktop.channels.and.users"));
     const chatLog = document.getElementById("chat-log");
     chatLog.setAttribute("role", "log");
     // History is rerendered for filters, pagination and tab switches. Keep it
@@ -270,7 +271,7 @@ function updateBellBadge() {
     badge.textContent = n > 0 ? (n > 9 ? "9+" : n) : "";
     badge.classList.toggle("hidden", n === 0);
     document.getElementById("notif-bell")?.setAttribute(
-        "aria-label", `Notifications, ${n} unread`);
+        "aria-label", t("runtime.unreadNotifications", { count: n }));
 }
 
 // dndActive reports whether DND is on (toggle or quiet hours, 347/348).
@@ -367,9 +368,9 @@ function openNotifCenter() {
     overlay.innerHTML = `
         <div class="dlg notif-center">
             <div class="pm-head">
-                <h3>${"Notifications"}</h3>
-                <button class="icon-btn nc-clear" title="Clear all" aria-label="Clear all notifications">${icon("trash")}</button>
-                <button class="icon-btn nc-close" title="Close" aria-label="Close notifications">${icon("close")}</button>
+                <h3>${escapeTranslation(t("runtime.notifications"))}</h3>
+                <button class="icon-btn nc-clear" title="${escapeTranslation(t("desktop.clear.all"))}" aria-label="${escapeTranslation(t("desktop.clear.all.notifications"))}">${icon("trash")}</button>
+                <button class="icon-btn nc-close" title="${escapeTranslation(t("desktop.close"))}" aria-label="${escapeTranslation(t("desktop.close.notifications"))}">${icon("close")}</button>
             </div>
             <div class="nc-list"></div>
             <div class="nc-snooze"></div>

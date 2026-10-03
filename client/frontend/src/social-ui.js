@@ -1,3 +1,5 @@
+import { escapeHTML as escapeTranslation } from "./markdown.js";
+import { t } from "./i18n.js";
 // social-ui.js — wave-8b social/UX features: presence status picker +
 // auto-away display (307-309), contacts & block list (316-318), hover cards
 // (323/324), poke dialog (321/322), per-user notes + avatar lightbox + copy
@@ -8,13 +10,12 @@ import { humanBytes } from "./clientinfo.js";
 import { setUserBlocked } from "./audio.js";
 import { isCurrentServerDialog, mountServerDialog } from "./modal.js";
 import { setSafeImage } from "./safe-media.js";
-import { capturePresenceScope, setPresence } from "./presence.js";
+import { capturePresenceScope, setPresence, presenceLabel } from "./presence.js";
 import { updateLocalSettings } from "./settings-store.js";
 
 const V = () => window.__noxa;
 const App = () => window.go.main.App;
 
-const STATUS_LABELS = { "": "online", away: "away", busy: "busy", invisible: "invisible" };
 
 // ---------------------------------------------------------------------------
 // Tree tools (302/319)
@@ -57,18 +58,18 @@ function openStatusPicker() {
     overlay.className = "dlg-overlay";
     overlay.innerHTML = `
         <div class="dlg">
-            <h3>My status</h3>
+            <h3>${escapeTranslation(t("desktop.my.status"))}</h3>
             <select class="dlg-input st-sel">
-                <option value="online">🟢 online</option>
-                <option value="away">🕐 away</option>
-                <option value="busy">⛔ busy</option>
-                ${canSetInvisible ? '<option value="invisible">👻 invisible (admin only)</option>' : ""}
+                <option value="online">${escapeTranslation(t("desktop.online"))}</option>
+                <option value="away">${escapeTranslation(t("desktop.away"))}</option>
+                <option value="busy">${escapeTranslation(t("desktop.busy"))}</option>
+                ${canSetInvisible ? `<option value="invisible">${escapeTranslation(t("runtime.invisibleAdmin"))}</option>` : ""}
             </select>
-            <label class="dlg-label">Status message (optional)</label>
-            <input class="dlg-input st-msg" maxlength="200" placeholder="e.g. in a meeting" />
+            <label class="dlg-label">${escapeTranslation(t("desktop.status.message.optional"))}</label>
+            <input class="dlg-input st-msg" maxlength="200" placeholder="${escapeTranslation(t("desktop.e.g.in.a.meeting"))}" />
             <div class="dlg-buttons">
-                <button class="dlg-ok">Set</button>
-                <button class="dlg-cancel">Cancel</button>
+                <button class="dlg-ok">${escapeTranslation(t("desktop.set"))}</button>
+                <button class="dlg-cancel">${escapeTranslation(t("desktop.cancel"))}</button>
             </div>
         </div>`;
     const sel = overlay.querySelector(".st-sel");
@@ -79,7 +80,7 @@ function openStatusPicker() {
         const msg = overlay.querySelector(".st-msg").value.trim();
         overlay.remove();
         if (await setPresence(status, msg, scope)) {
-            V().sysMsg("status: " + STATUS_LABELS[state.myStatus] + (msg ? " — " + msg : ""));
+            V().sysMsg(t("desktop.status") + presenceLabel(state.myStatus) + (msg ? " — " + msg : ""));
         }
     };
     overlay.querySelector(".dlg-cancel").onclick = () => overlay.remove();
@@ -99,24 +100,24 @@ function openContacts() {
         const s = state.settings || {};
         const contacts = s.contacts || [];
         const list = overlay.querySelector(".ct-list");
-        list.innerHTML = contacts.length ? "" : `<div class="empty-state">No contacts yet</div>`;
+        list.innerHTML = contacts.length ? "" : `<div class="empty-state">${escapeTranslation(t("desktop.no.contacts.yet"))}</div>`;
         for (const c of contacts) {
             const online = state.clients.find((x) => x.unique_id === c.unique_id);
             const row = document.createElement("div");
             row.className = "ct-row";
             row.innerHTML = `
-                <span class="ct-dot ${online ? "on" : ""}" title="${online ? "online" : "offline"}"></span>
+                <span class="ct-dot ${online ? "on" : ""}" title="${escapeTranslation(online ? presenceLabel("") : t("runtime.offline"))}"></span>
                 <span class="ct-name"></span>
-                <span class="ct-hist mono" title="nickname history"></span>
-                <button class="ct-block" title="block/unblock"></button>
-                <button class="ct-del" title="remove">✕</button>`;
+                <span class="ct-hist mono" title="${escapeTranslation(t("desktop.nickname.history"))}"></span>
+                <button class="ct-block" title="${escapeTranslation(t("desktop.block.unblock"))}"></button>
+                <button class="ct-del" title="${escapeTranslation(t("desktop.remove"))}">✕</button>`;
             row.querySelector(".ct-name").textContent = (c.label || online?.nickname || c.unique_id.slice(0, 12)) + (online ? " — " + online.nickname : "");
             row.querySelector(".ct-hist").textContent = (c.nick_history || []).slice(-3).join(", ");
             const blocked = (s.blocked_users || []).includes(c.unique_id);
             // (383) buddy alert toggle.
             const watch = document.createElement("button");
             watch.textContent = c.notify_online ? "🔔" : "🔕";
-            watch.title = c.notify_online ? "notify when online: on" : "notify when online: off";
+            watch.title = c.notify_online ? t("desktop.notify.when.online.on") : t("desktop.notify.when.online.off");
             watch.onclick = async () => {
                 try {
                     await updateLocalSettings(current => {
@@ -130,7 +131,7 @@ function openContacts() {
             row.insertBefore(watch, row.querySelector(".ct-block"));
             const blockBtn = row.querySelector(".ct-block");
             blockBtn.textContent = blocked ? "🚫" : "🔇";
-            blockBtn.title = blocked ? "unblock" : "block (hide chat + mute voice)";
+            blockBtn.title = blocked ? t("desktop.unblock") : t("desktop.block.hide.chat.mute.voice");
             blockBtn.onclick = async () => {
                 try { await setUserBlocked(c.unique_id, !blocked); }
                 catch (error) { V().toast(String(error), "error"); return; }
@@ -151,21 +152,21 @@ function openContacts() {
     };
     overlay.innerHTML = `
         <div class="dlg dlg-wide">
-            <h3>Contacts</h3>
+            <h3>${escapeTranslation(t("desktop.contacts"))}</h3>
             <div class="ct-add">
-                <input class="dlg-input ct-uid" placeholder="unique ID" />
-                <input class="dlg-input ct-label" placeholder="label (optional)" />
-                <button class="ct-add-btn">Add</button>
+                <input class="dlg-input ct-uid" placeholder="${escapeTranslation(t("desktop.unique.id.0d7a37"))}" />
+                <input class="dlg-input ct-label" placeholder="${escapeTranslation(t("desktop.label.optional"))}" />
+                <button class="ct-add-btn">${escapeTranslation(t("desktop.add"))}</button>
             </div>
             <div class="ct-list"></div>
-            <div class="dlg-buttons"><button class="dlg-ok">Close</button></div>
+            <div class="dlg-buttons"><button class="dlg-ok">${escapeTranslation(t("desktop.close"))}</button></div>
         </div>`;
     overlay.querySelector(".ct-add-btn").onclick = async () => {
         const s = state.settings || {};
         const uid = overlay.querySelector(".ct-uid").value.trim();
         if (!uid) return;
         if ((s.contacts || []).some((c) => c.unique_id === uid)) {
-            V().toast("contact already exists", "warn");
+            V().toast(t("desktop.contact.already.exists"), "warn");
             return;
         }
         const label = overlay.querySelector(".ct-label").value.trim();
@@ -240,20 +241,20 @@ function initHoverCards() {
                         <b>${esc(c.nickname || c.unique_id)}</b>
                     </div>
                     <div class="hc-line mono">${esc((c.unique_id || "").slice(0, 20))}…</div>
-                    ${g ? `<div class="hc-line">group: ${esc(g.name)}</div>` : ""}
-                    ${c.status ? `<div class="hc-line">status: ${esc(c.status)}${c.status_message ? " — " + esc(c.status_message) : ""}</div>` : ""}
-                    <div class="hc-line">channel: ${esc(V().state.channels.find((x) => x.ChannelID === c.channel_id)?.Name || "none")}</div>`, av);
+                    ${g ? `<div class="hc-line">${esc(t("runtime.groupValue", { name: g.name }))}</div>` : ""}
+                    ${c.status ? `<div class="hc-line">${esc(t("runtime.statusValue", { status: presenceLabel(c.status) }))}${c.status_message ? " — " + esc(c.status_message) : ""}</div>` : ""}
+                    <div class="hc-line">${esc(t("runtime.channelValue", { name: V().state.channels.find((x) => x.ChannelID === c.channel_id)?.Name || t("runtime.none") }))}</div>`, av);
             }, 500);
         } else if (chRow) {
             const ch = V().state.channels.find((x) => x.ChannelID === Number(chRow.dataset.chid));
             if (!ch) return;
             hoverTimer = setTimeout(() => {
-                const quality = ch.OpusBitrate ? Math.round(ch.OpusBitrate / 1000) + " kbps" : "default 32 kbps";
+                const quality = ch.OpusBitrate ? Math.round(ch.OpusBitrate / 1000) + " kbps" : t("runtime.defaultBitrate");
                 showHoverCard(e.clientX + 12, e.clientY + 12, `
                     <div class="hc-head"><b># ${esc(ch.Name)}</b></div>
                     ${ch.Topic ? `<div class="hc-line">${esc(ch.Topic)}</div>` : ""}
-                    <div class="hc-line">clients: ${ch.ClientCount}${ch.MaxClients ? "/" + ch.MaxClients : ""}${ch.HasPassword ? " · 🔒" : ""}</div>
-                    <div class="hc-line">codec: Opus ${quality}${ch.OpusStereo ? " stereo" : ""}${ch.OpusFEC ? " +FEC" : ""}</div>`);
+                    <div class="hc-line">${esc(t("runtime.clientsValue", { count: ch.ClientCount }))}${ch.MaxClients ? "/" + ch.MaxClients : ""}${ch.HasPassword ? " · 🔒" : ""}</div>
+                    <div class="hc-line">${esc(t("runtime.codecValue", { codec: "Opus " + quality }))}${ch.OpusStereo ? " stereo" : ""}${ch.OpusFEC ? " +FEC" : ""}</div>`);
             }, 500);
         }
     });
@@ -271,12 +272,12 @@ function openPoke(client) {
     overlay.className = "dlg-overlay";
     overlay.innerHTML = `
         <div class="dlg">
-            <h3>Poke</h3>
+            <h3>${escapeTranslation(t("desktop.poke"))}</h3>
             <div class="dlg-text poke-target"></div>
-            <input class="dlg-input poke-msg" maxlength="200" placeholder="message (optional)" />
+            <input class="dlg-input poke-msg" maxlength="200" placeholder="${escapeTranslation(t("desktop.message.optional"))}" />
             <div class="dlg-buttons">
-                <button class="dlg-ok">Poke</button>
-                <button class="dlg-cancel">Cancel</button>
+                <button class="dlg-ok">${escapeTranslation(t("desktop.poke"))}</button>
+                <button class="dlg-cancel">${escapeTranslation(t("desktop.cancel"))}</button>
             </div>
         </div>`;
     overlay.querySelector(".poke-target").textContent = client.nickname || client.unique_id;
@@ -286,9 +287,9 @@ function openPoke(client) {
         overlay.remove();
         try {
             const err = await App().PokeForTab(tabID, client.client_id, msg);
-            if (err && generation === V().state.serverGeneration) V().toast("poke failed: " + err, "warn");
+            if (err && generation === V().state.serverGeneration) V().toast(t("desktop.poke.failed") + err, "warn");
         } catch (err) {
-            if (generation === V().state.serverGeneration) V().toast("poke failed: " + err, "warn");
+            if (generation === V().state.serverGeneration) V().toast(t("desktop.poke.failed") + err, "warn");
         }
     };
     overlay.querySelector(".dlg-cancel").onclick = () => overlay.remove();
@@ -306,7 +307,7 @@ async function refreshNews() {
     const generation = V().state.serverGeneration;
     const tabID = V().state.activeTabID;
     if (!V().state.myClientID) {
-        area.innerHTML = `<div class="empty-state">offline</div>`;
+        area.innerHTML = `<div class="empty-state">${escapeTranslation(t("desktop.offline"))}</div>`;
         return;
     }
     try {
@@ -316,15 +317,15 @@ async function refreshNews() {
         const serverName = document.getElementById("server-name");
         if (serverName && info.name) {
             serverName.textContent = info.name;
-            serverName.title = `${info.name} — Server information`;
+            serverName.title = `${info.name} — ${t("desktop.server.information")}`;
         }
         area.innerHTML = `
             <div class="news-line"><b>${esc(info.name)}</b></div>
-            <div class="news-line mono">${esc(info.version)} · ${info.clients_online}/${info.max_clients} clients · ${info.channels_online} channels · up ${up}m</div>
+            <div class="news-line mono">${esc(info.version)} · ${esc(t("runtime.serverSummary", { clients: info.clients_online, max: info.max_clients, channels: info.channels_online, minutes: up }))}</div>
             ${motd ? `<div class="news-motd">${esc(motd)}</div>` : ""}`;
     } catch {
         if (generation !== V().state.serverGeneration) return;
-        area.innerHTML = `<div class="empty-state">server info unavailable</div>`;
+        area.innerHTML = `<div class="empty-state">${escapeTranslation(t("desktop.server.info.unavailable"))}</div>`;
     }
 }
 
@@ -345,9 +346,9 @@ function avatarLightbox(dataUrl) {
 function resetServerView() {
     hideHoverCard();
     const serverName = document.getElementById("server-name");
-    if (serverName) serverName.textContent = "Server";
+    if (serverName) serverName.textContent = t("desktop.server");
     const area = document.getElementById("news-area");
-    if (area) area.innerHTML = `<div class="empty-state">loading server…</div>`;
+    if (area) area.innerHTML = `<div class="empty-state">${escapeTranslation(t("desktop.loading.server"))}</div>`;
 }
 
 // userNote loads/saves the local per-user note (315).

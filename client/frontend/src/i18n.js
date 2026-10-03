@@ -1,5 +1,3 @@
-import { networkEchoEnglish, networkEchoGerman } from "./network-echo-messages.js";
-import { audioRecoveryEnglish, audioRecoveryGerman } from "./audio-recovery-messages.js";
 // i18n.js — wave-8c lightweight internationalization (336).
 //
 // USAGE PATTERN (how to add strings):
@@ -14,6 +12,10 @@ import { audioRecoveryEnglish, audioRecoveryGerman } from "./audio-recovery-mess
 //      startup). Every settings page uses the same catalogs.
 
 import { settingsEnglish, settingsGerman } from "./settings-messages.js";
+import { audioRecoveryEnglish, audioRecoveryGerman } from "./audio-recovery-messages.js";
+import { networkEchoEnglish, networkEchoGerman } from "./network-echo-messages.js";
+import { runtimeEnglish, runtimeGerman } from "./runtime-messages.js";
+import { desktopEnglish, desktopGerman } from "./desktop-messages.js";
 import { securityEnglish, securityGerman } from "./security-messages.js";
 import { interfaceEnglish, interfaceGerman } from "./interface-messages.js";
 import { roleEnglish, roleGerman } from "./role-messages.js";
@@ -38,6 +40,8 @@ import { messageToolsEnglish, messageToolsGerman } from "./message-tools-message
 import { webhookEnglish, webhookGerman } from "./webhook-messages.js";
 
 const en = {
+    ...desktopEnglish,
+    ...runtimeEnglish,
     ...networkEchoEnglish,
     ...audioRecoveryEnglish,
     ...cameraEnglish, ...callMediaEnglish, ...discussionEnglish, ...voiceMessageEnglish, ...overlayEnglish, ...communicationExtrasEnglish, ...messageToolsEnglish, ...webhookEnglish,
@@ -118,6 +122,8 @@ const en = {
 };
 
 const de = {
+    ...desktopGerman,
+    ...runtimeGerman,
     ...networkEchoGerman,
     ...audioRecoveryGerman,
     ...cameraGerman, ...callMediaGerman, ...discussionGerman, ...voiceMessageGerman, ...overlayGerman, ...communicationExtrasGerman, ...messageToolsGerman, ...webhookGerman,

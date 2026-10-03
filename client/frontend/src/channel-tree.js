@@ -6,6 +6,7 @@ import { publishAudioState } from "./audio-state.js";
 import { roleChip } from "./role-presentation.js";
 import { setSafeImage } from "./safe-media.js";
 import { t } from "./i18n.js";
+import { presenceLabel } from "./presence.js";
 import { icon } from "./icons.js";
 import { renderWorkspace } from "./workspace-ui.js";
 
@@ -52,7 +53,7 @@ export function createChannelTree({ P, $, syncTrayVoice, state, toast, fetchAvat
         if (state.channels.length === 0) {
             const empty = document.createElement("div");
             empty.className = "empty-state";
-            empty.textContent = "No channels yet";
+            empty.textContent = t("runtime.noChannels");
             root.appendChild(empty);
         }
         const byParent = new Map();
@@ -89,7 +90,7 @@ export function createChannelTree({ P, $, syncTrayVoice, state, toast, fetchAvat
             const empty = document.createElement("div");
             empty.className = "empty-state";
             empty.setAttribute("role", "status");
-            empty.textContent = "No matching channels or users";
+            empty.textContent = t("runtime.noMatch");
             root.appendChild(empty);
         }
         renderDirectTargets();
@@ -150,7 +151,7 @@ export function createChannelTree({ P, $, syncTrayVoice, state, toast, fetchAvat
         if (ch.HasPassword) accessLabels.push(t("channel.access.password"));
         if (cannotJoin) accessLabels.push(t("channel.access.denied"));
         el.classList.toggle("access-denied", cannotJoin);
-        el.setAttribute("aria-label", "channel " + ch.Name + (accessLabels.length ? ", " + accessLabels.join(", ") : ""));
+        el.setAttribute("aria-label", t("runtime.channelName", { name: ch.Name }) + (accessLabels.length ? ", " + accessLabels.join(", ") : ""));
         el.title = accessLabels.join(" · ") || t("channel.access.open");
         el.innerHTML = `<span class="ch-disclosure" aria-hidden="true">${icon("chevron")}</span><span class="ch-icon">${icon("speaker")}</span><span class="ch-name"></span>`;
         el.querySelector(".ch-name").textContent = ch.Name;
@@ -159,7 +160,7 @@ export function createChannelTree({ P, $, syncTrayVoice, state, toast, fetchAvat
             const mute = document.createElement("span");
             mute.className = "ch-lock";
             mute.textContent = " 🔕";
-            mute.title = "channel muted (notifications off)";
+            mute.title = t("runtime.channelMuted");
             el.querySelector(".ch-name").appendChild(mute);
         }
         if (restricted || cannotJoin || ch.HasPassword) {
@@ -190,10 +191,10 @@ export function createChannelTree({ P, $, syncTrayVoice, state, toast, fetchAvat
             const groupView = privateGroupViewToken();
             try {
                 const err = await window.go.main.App.JoinChannelForTab(tabID, ch.ChannelID);
-                if (err && generation === state.serverGeneration) toast("join failed: " + err, "warn");
+                if (err && generation === state.serverGeneration) toast(t("runtime.joinFailed", { error: String(err) }), "warn");
                 if (!err && generation === state.serverGeneration && tabID === state.activeTabID && groupView && groupView === privateGroupViewToken()) await chatUI.openChannelTab(ch.ChannelID);
             } catch (err) {
-                if (generation === state.serverGeneration) toast("join failed: " + err, "warn");
+                if (generation === state.serverGeneration) toast(t("runtime.joinFailed", { error: String(err) }), "warn");
             }
         };
         // (163) drag a channel onto another to take that channel's slot among its
@@ -237,9 +238,9 @@ export function createChannelTree({ P, $, syncTrayVoice, state, toast, fetchAvat
                 const err = target.client_id === state.myClientID
                     ? await window.go.main.App.JoinChannelForTab(tabID, ch.ChannelID)
                     : await window.go.main.App.MoveClientForTab(tabID, target.client_id, ch.ChannelID);
-                if (err && generation === state.serverGeneration) toast("move failed: " + err, "warn");
+                if (err && generation === state.serverGeneration) toast(t("runtime.moveFailed", { error: String(err) }), "warn");
             } catch (err) {
-                if (generation === state.serverGeneration) toast("move failed: " + err, "warn");
+                if (generation === state.serverGeneration) toast(t("runtime.moveFailed", { error: String(err) }), "warn");
             }
         });
         node.appendChild(el);
@@ -267,7 +268,7 @@ export function createChannelTree({ P, $, syncTrayVoice, state, toast, fetchAvat
                 const list = document.createElement("div");
                 list.className = "channel-members";
                 list.setAttribute("role", "group");
-                list.setAttribute("aria-label", ch.Name + " members");
+                list.setAttribute("aria-label", t("runtime.members", { name: ch.Name }));
                 for (const c of members) list.appendChild(clientRow(c));
                 node.appendChild(list);
             }
@@ -276,7 +277,7 @@ export function createChannelTree({ P, $, syncTrayVoice, state, toast, fetchAvat
                 const branch = document.createElement("div");
                 branch.className = "channel-children";
                 branch.setAttribute("role", "group");
-                branch.setAttribute("aria-label", ch.Name + " subchannels");
+                branch.setAttribute("aria-label", t("runtime.subchannels", { name: ch.Name }));
                 for (const child of children) renderChannel(branch, child, byParent, depth + 1);
                 node.appendChild(branch);
             }
@@ -311,7 +312,7 @@ export function createChannelTree({ P, $, syncTrayVoice, state, toast, fetchAvat
                 destinationID: target.ParentID || 0, orderIndex: order,
             });
         } catch (err) {
-            if (current()) toast("channel reorder failed: " + String(err), "warn");
+            if (current()) toast(t("runtime.reorderFailed", { error: String(err) }), "warn");
         }
     }
 
@@ -326,11 +327,11 @@ export function createChannelTree({ P, $, syncTrayVoice, state, toast, fetchAvat
         row.tabIndex = 0; // (298) keyboard navigation
         row.setAttribute("role", "treeitem"); // (343)
         row.setAttribute("aria-selected", String(state.multiSelect.has(c.client_id)));
-        row.setAttribute("aria-label", (c.nickname || c.unique_id || "user") +
-            (c.status ? ", " + c.status : "") + (speakingHere ? ", speaking" : "") +
-            (c.priority_speaker ? ", priority speaker" : "") +
-            (c.client_id === state.myClientID && state.muted ? ", muted" : "") +
-            (c.client_id === state.myClientID && state.deafened ? ", deafened" : ""));
+        row.setAttribute("aria-label", [c.nickname || c.unique_id || t("runtime.user"),
+            c.status && presenceLabel(c.status), speakingHere && t("runtime.speaking"),
+            c.priority_speaker && t("runtime.priority"),
+            c.client_id === state.myClientID && state.muted && t("runtime.muted"),
+            c.client_id === state.myClientID && state.deafened && t("runtime.deaf")].filter(Boolean).join(", "));
         // (140/305) users are draggable (group assign in the manager; move by
         // dropping onto a channel).
         if (c.unique_id) {
@@ -375,7 +376,7 @@ export function createChannelTree({ P, $, syncTrayVoice, state, toast, fetchAvat
             const pr = document.createElement("span");
             pr.className = "status-icons";
             pr.textContent = " ★";
-            pr.title = "priority speaker";
+            pr.title = t("runtime.priority");
             row.appendChild(pr);
         }
         // (307-309) presence status icons; (381) invisible marker (admin view).
@@ -383,7 +384,7 @@ export function createChannelTree({ P, $, syncTrayVoice, state, toast, fetchAvat
             const st = document.createElement("span");
             st.className = "status-icons";
             st.textContent = c.status === "away" ? " 🕐" : c.status === "busy" ? " ⛔" : " 👻";
-            st.title = c.status + (c.status_message ? ": " + c.status_message : "");
+            st.title = presenceLabel(c.status) + (c.status_message ? ": " + c.status_message : "");
             row.appendChild(st);
         }
         // (10) Own status icons: muted / deafened / screen sharing.
@@ -410,7 +411,7 @@ export function createChannelTree({ P, $, syncTrayVoice, state, toast, fetchAvat
                 const dnd = document.createElement("span");
                 dnd.className = "status-icons";
                 dnd.textContent = " 🌙";
-                dnd.title = "do not disturb active";
+                dnd.title = t("runtime.dnd");
                 row.appendChild(dnd);
             }
         } else if (isUserMuted(c.unique_id)) {
@@ -418,14 +419,14 @@ export function createChannelTree({ P, $, syncTrayVoice, state, toast, fetchAvat
             const icons = document.createElement("span");
             icons.className = "status-icons";
             icons.textContent = " 🔕";
-            icons.title = "muted locally";
+            icons.title = t("runtime.mutedLocally");
             row.appendChild(icons);
         }
         if (speakingHere) {
             const voice = document.createElement("span");
             voice.className = "client-voice-state";
-            voice.title = "Talking in your channel";
-            voice.setAttribute("aria-label", "talking");
+            voice.title = t("runtime.talkingHere");
+            voice.setAttribute("aria-label", t("runtime.talking"));
             voice.innerHTML = "<i></i><i></i><i></i>";
             row.appendChild(voice);
         }

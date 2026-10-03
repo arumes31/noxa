@@ -1,3 +1,4 @@
+import { escapeHTML as escapeTranslation } from "./markdown.js";
 // video-grid.js — received stream tiles, quality selection and diagnostics.
 import { copyToClipboard } from "./clipboard.js";
 import { formatBitrate, summarizeStream } from "./connection-stats.js";
@@ -74,8 +75,8 @@ export function createVideoGrid({ applySendCaps, syncCameraButton, syncShareButt
                     <span class="vtile-preview-age hidden"></span>
                 </div>
                 <details class="vtile-diagnostics"><summary></summary><div class="vtile-diagnostics-body"><p class="vtile-codec"></p><p class="vtile-rate"></p><p class="vtile-traffic-note"></p><button class="vtile-copy-diagnostics" type="button"></button></div></details>
-                <button class="vtile-pip icon-btn" title="floating always-on-top video">▣</button>
-                <button class="vtile-fullscreen icon-btn" title="fullscreen (Esc exits)">⛶</button>`;
+                <button class="vtile-pip icon-btn" title="${escapeTranslation(tLabel("desktop.floating.always.on.top.video"))}">▣</button>
+                <button class="vtile-fullscreen icon-btn" title="${escapeTranslation(tLabel("desktop.fullscreen.esc.exits"))}">⛶</button>`;
             const video = el.querySelector("video");
             const nameEl = el.querySelector(".vtile-name");
             const kindEl = el.querySelector(".vtile-kind");
@@ -391,7 +392,7 @@ export function createVideoGrid({ applySendCaps, syncCameraButton, syncShareButt
         qualityRequest = null;
         if (err) {
             lastSentQuality = "";
-            V().sysMsg("video quality failed: " + err);
+            V().sysMsg(tLabel("desktop.video.quality.failed") + err);
         }
     }
 
@@ -443,7 +444,7 @@ export function createVideoGrid({ applySendCaps, syncCameraButton, syncShareButt
 
     async function openGridOverlay() {
         if (!document.pictureInPictureEnabled || tiles.size === 0) {
-            V().sysMsg("floating grid is unavailable");
+            V().sysMsg(tLabel("desktop.floating.grid.is.unavailable"));
             return;
         }
         stopGridOverlay();
@@ -477,7 +478,7 @@ export function createVideoGrid({ applySendCaps, syncCameraButton, syncShareButt
             await output.requestPictureInPicture();
         } catch (err) {
             stopGridOverlay();
-            V().sysMsg("floating grid failed: " + (err.message || err));
+            V().sysMsg(tLabel("desktop.floating.grid.failed") + (err.message || err));
         }
     }
 
@@ -576,7 +577,7 @@ export function createVideoGrid({ applySendCaps, syncCameraButton, syncShareButt
             if (nextReceive !== receiveCpuPressure || nextSend !== sendCpuPressure) {
                 const hadPressure = receiveCpuPressure || sendCpuPressure;
                 if ((nextReceive || nextSend) !== hadPressure) {
-                    V().sysMsg(nextReceive || nextSend ? `CPU ${cpu.toFixed(0)}% — reducing software video resolution` : "Video processing recovered — restoring resolution");
+                    V().sysMsg(nextReceive || nextSend ? tLabel("runtime.cpuReduction", { cpu: cpu.toFixed(0) }) : tLabel("desktop.video.processing.recovered.restoring.resolution"));
                 }
             }
             if (nextReceive !== receiveCpuPressure) {

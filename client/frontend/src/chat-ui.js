@@ -844,7 +844,7 @@ function attachFileRef(container, m, cap) {
             if (!previewIsCurrent()) return;
             wrap.textContent = "";
             if (!b64) {
-                wrap.textContent = "📎 " + name + " (unavailable)";
+                wrap.textContent = "📎 " + name + t("desktop.unavailable");
                 return;
             }
             // A data: URL costs ~4/3 of the payload again in the renderer, so
@@ -870,7 +870,7 @@ function attachFileRef(container, m, cap) {
                 el.src = `data:image/${ext === "jpg" ? "jpeg" : ext};base64,${b64}`;
             }
             if (!previewIsCurrent()) return;
-            el.title = inlineVideo ? name : name + " — click to zoom";
+            el.title = inlineVideo ? name : name + t("desktop.click.to.zoom");
             wrap.appendChild(el);
             const zoom = document.createElement("button");
             zoom.className = "media-zoom";
@@ -1652,7 +1652,7 @@ function renderTabs() {
 
 // --- local DM history (122) ---------------------------------------------------
 // A DM is true E2EE and the server keeps nothing, so the sealed per-peer log
-// in client/chat.go is the entire history: without these calls a conversation
+// in client/chat_dm_history.go is the entire history: without these calls a conversation
 // exists only until the process exits.
 
 // dmMsg converts one stored DMEntry into the renderer's message shape. The
@@ -2761,7 +2761,7 @@ function toggleEmojiPanel() {
     // offered and a denial comes back as an error frame.
     const up = document.createElement("button");
     up.className = "emoji-upload";
-    up.textContent = "+ upload";
+    up.textContent = t("desktop.upload");
     up.title = t("chat.uploadEmojiHint");
     up.onclick = async (ev) => {
         ev.stopPropagation();
@@ -3016,7 +3016,7 @@ async function loadPinsPanel() {
         const body = document.createElement("span");
         body.className = "pin-body";
         const msg = p.message || {};
-        body.textContent = `${msg.from_nickname || "?"}: ${msg.deleted ? "(deleted)" : (msg.body || "").slice(0, 120)}`;
+        body.textContent = `${msg.from_nickname || "?"}: ${msg.deleted ? t("runtime.deleted") : (msg.body || "").slice(0, 120)}`;
         row.appendChild(body);
         const jump = document.createElement("button");
         jump.textContent = "↩";
@@ -3668,7 +3668,7 @@ export function resetView(options = {}) {
     $("pm-tabs").classList.add("hidden");
     $("reply-bar").classList.add("hidden");
     $("file-preview-row").classList.add("hidden");
-    $("chat-head-title").textContent = "Chat";
+    $("chat-head-title").textContent = t("desktop.chat");
     $("chat-topic").classList.add("hidden");
     renderTabs();
     // (122) DM logs are sealed to the IDENTITY, not to a server, so the same

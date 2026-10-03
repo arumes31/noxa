@@ -1,4 +1,9 @@
 // Presence changes share ownership across manual controls and the idle timer.
+import { t } from "./i18n.js";
+
+export function presenceLabel(status) {
+    return t(`runtime.presence.${["away", "busy", "invisible"].includes(status) ? status : "online"}`);
+}
 const V = () => window.__noxa;
 let pending = null;
 let intent = 0;

@@ -1,3 +1,4 @@
+import { escapeHTML as escapeTranslation } from "./markdown.js";
 // meta-ui.js — wave-8b meta features: debug console (327), connection stats
 // page (328), onboarding wizard (329), what's-new dialog (330), crash report
 // toast (331).
@@ -23,13 +24,13 @@ function openDebugConsole() {
     overlay.innerHTML = `
         <div class="dlg debug-console">
             <div class="pm-head">
-                <h3>Debug console</h3>
-                <button class="icon-btn dbg-close" title="Close">✕</button>
+                <h3>${escapeTranslation(t("desktop.debug.console"))}</h3>
+                <button class="icon-btn dbg-close" title="${escapeTranslation(t("desktop.close"))}">✕</button>
             </div>
             <div class="dbg-toolbar">
-                <input class="dlg-input dbg-filter" placeholder="filter by type…" />
-                <button class="dbg-pause">⏸ pause</button>
-                <button class="dbg-clear">clear</button>
+                <input class="dlg-input dbg-filter" placeholder="${escapeTranslation(t("desktop.filter.by.type"))}" />
+                <button class="dbg-pause">${escapeTranslation(t("desktop.pause"))}</button>
+                <button class="dbg-clear">${escapeTranslation(t("desktop.clear"))}</button>
             </div>
             <div class="dbg-list mono" tabindex="0"></div>
             <div class="dbg-follow"><button class="dbg-jump hidden" type="button"></button></div>
@@ -52,7 +53,7 @@ function openDebugConsole() {
     };
     overlay.querySelector(".dbg-pause").onclick = (e) => {
         dbg.paused = !dbg.paused;
-        e.target.textContent = dbg.paused ? "▶ resume" : "⏸ pause";
+        e.target.textContent = dbg.paused ? t("desktop.resume") : t("desktop.pause");
     };
     overlay.querySelector(".dbg-clear").onclick = () => {
         dbg.rows = [];
@@ -132,9 +133,9 @@ function maybeOnboard() {
     overlay.className = "dlg-overlay";
     let step = 0;
     const steps = [
-        { title: "Welcome to noXa", body: `<p>Your <b>identity</b> is an Ed25519 key pair generated locally — it is your account for guest logins and challenge auth. It never leaves this machine unless you export it.</p><p>Pick a nickname for your first connect:</p><input class="dlg-input ob-nick" placeholder="nickname" />` },
-        { title: "Microphone check", body: `<p>Open Settings → Capture and use the <b>mic test</b> to verify your input level.</p><button class="dlg-ok ob-mic">Open capture settings</button>` },
-        { title: "Connect", body: `<p>Enter a server address and connect — bookmarks and recents make the next time one click.</p>` },
+        { title: t("desktop.welcome.to.noxa"), body: `<p>${escapeTranslation(t("desktop.your"))} <b>${escapeTranslation(t("desktop.identity"))}</b> ${escapeTranslation(t("desktop.is.an.ed25519.key.pair.generated.locally.it.is.your"))}</p><p>${escapeTranslation(t("desktop.pick.a.nickname.for.your.first.connect"))}</p><input class="dlg-input ob-nick" placeholder="${escapeTranslation(t("desktop.nickname"))}" />` },
+        { title: t("desktop.microphone.check"), body: `<p>${escapeTranslation(t("desktop.open.settings.capture.and.use.the"))} <b>${escapeTranslation(t("desktop.mic.test"))}</b> ${escapeTranslation(t("desktop.to.verify.your.input.level"))}</p><button class="dlg-ok ob-mic">${escapeTranslation(t("desktop.open.capture.settings"))}</button>` },
+        { title: t("desktop.connect"), body: `<p>${escapeTranslation(t("desktop.enter.a.server.address.and.connect.bookmarks.and.recents.make"))}</p>` },
     ];
     let completed = false;
     const done = async () => {
@@ -150,8 +151,8 @@ function maybeOnboard() {
                 <h3>${st.title}</h3>
                 <div class="dlg-text ob-body">${st.body}</div>
                 <div class="dlg-buttons">
-                    <button class="dlg-cancel ob-skip">Skip</button>
-                    <button class="dlg-ok ob-next">${step === steps.length - 1 ? "Done" : "Next"}</button>
+                    <button class="dlg-cancel ob-skip">${escapeTranslation(t("desktop.skip"))}</button>
+                    <button class="dlg-ok ob-next">${escapeTranslation(t(step === steps.length - 1 ? "runtime.done" : "runtime.next"))}</button>
                 </div>
                 <div class="ob-dots">${steps.map((_, i) => i === step ? "●" : "○").join(" ")}</div>
             </div>`;
@@ -186,8 +187,8 @@ async function maybeCrashToast() {
     try {
         const crash = await App().LastCrash();
         if (!crash) return;
-        V().toast("noXa crashed last time — a crash log was saved (Help → Export logs)", "warn", "conn");
-        V().sysMsg("previous crash detected; export logs via Help → Export logs");
+        V().toast(t("desktop.noxa.crashed.last.time.a.crash.log.was.saved.help"), "warn", "conn");
+        V().sysMsg(t("runtime.previousCrash"));
     } catch { /* best-effort */ }
 }
 
