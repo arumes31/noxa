@@ -6,7 +6,7 @@ require (
 	github.com/getlantern/systray v1.2.2
 	github.com/minio/selfupdate v0.6.0
 	github.com/wailsapp/wails/v2 v2.16.0
-	golang.design/x/hotkey v0.6.1
+	golang.design/x/hotkey v0.6.4
 	golang.org/x/crypto v0.57.0
 	golang.org/x/sys v0.48.0
 	noxa v0.5.0
