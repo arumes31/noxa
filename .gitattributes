@@ -1,4 +1,6 @@
 graphify-out/graph.json merge=graphify
 internal/store/migrations/*.sql text eol=lf
 *.sh text eol=lf
+go.mod text eol=lf
+go.sum text eol=lf
 client/frontend/public/camera/vision*.js text eol=lf

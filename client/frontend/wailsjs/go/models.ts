@@ -3115,6 +3115,7 @@ export namespace netproto {
 	    }
 	}
 	export class ServerInfoResponse {
+	    echo_channel_id?: number;
 	    chat_max_bytes?: number;
 	    name: string;
 	    version: string;
@@ -3131,6 +3132,7 @@ export namespace netproto {
 
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.echo_channel_id = source["echo_channel_id"];
 	        this.chat_max_bytes = source["chat_max_bytes"];
 	        this.name = source["name"];
 	        this.version = source["version"];
