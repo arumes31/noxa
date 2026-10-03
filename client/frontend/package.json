@@ -12,7 +12,7 @@
     "test": "npm run test:unit && npm run test:e2e",
     "test:a11y": "playwright test tests/workflows.spec.js --grep @a11y",
     "test:unit": "npm run test:unit:core && npm run test:unit:ui && npm run test:unit:tray && npm run test:unit:stats && npm run test:unit:sounds && npm run test:unit:roles && npm run test:unit:media && npm run test:unit:communication",
-    "test:unit:communication": "node --test unit/polls.test.mjs unit/positional-audio.test.mjs unit/media-replay.test.mjs unit/media-cryptor.test.mjs unit/mic-check.test.mjs unit/camera-capture.test.mjs unit/display-audio.test.mjs unit/voice-recording.test.mjs unit/voice-playback.test.mjs unit/gaming-overlay.test.mjs unit/microphone-recovery.test.mjs unit/remote-media.test.mjs",
+    "test:unit:communication": "node --test unit/polls.test.mjs unit/positional-audio.test.mjs unit/media-replay.test.mjs unit/media-cryptor.test.mjs unit/mic-check.test.mjs unit/camera-capture.test.mjs unit/display-audio.test.mjs unit/voice-recording.test.mjs unit/voice-playback.test.mjs unit/gaming-overlay.test.mjs unit/microphone-recovery.test.mjs unit/remote-media.test.mjs unit/tab-reconnect.test.mjs",
     "test:unit:media": "node --test --experimental-test-coverage --test-coverage-include=src/media-limits.js --test-coverage-lines=90 --test-coverage-functions=90 --test-coverage-branches=80 unit/media-limits.test.mjs",
     "test:unit:roles": "node --test unit/role-editor-state.test.mjs unit/channel-access-state.test.mjs unit/audit-format.test.mjs unit/role-presentation.test.mjs unit/role-mentions.test.mjs",
     "test:unit:sounds": "node --test unit/sounds.test.mjs unit/speech.test.mjs unit/closing-audio.test.mjs",

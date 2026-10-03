@@ -575,6 +575,8 @@ export namespace main {
 	export class ConnectTabResult {
 	    tab_id: string;
 	    error: string;
+	    terminal?: boolean;
+	    warning?: string;
 
 	    static createFrom(source: any = {}) {
 	        return new ConnectTabResult(source);
@@ -584,6 +586,8 @@ export namespace main {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.tab_id = source["tab_id"];
 	        this.error = source["error"];
+	        this.terminal = source["terminal"];
+	        this.warning = source["warning"];
 	    }
 	}
 	export class Contact {

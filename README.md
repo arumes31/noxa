@@ -448,6 +448,18 @@ Bookmarks retain the entered hostname and resolve it again on reconnect.
 Certificate pins stay tied to that hostname (with default port `12333`), so
 changing the SRV target does not bypass an existing pin.
 
+After an unexpected connection loss or server restart, each server tab retries
+automatically until the server returns. Attempts use exponential backoff with
+jitter, capped at 30 seconds between attempts. The connection status shows the
+next attempt; **Cancel reconnect**, **Disconnect**, or closing the tab stops
+recovery. The reconnect-on-loss setting can disable it altogether. Authentication
+rejections and certificate trust failures stop automatic recovery and require
+manual attention; changed certificates are never automatically trusted.
+Recovery keeps the same tab and requests its previous voice channel through the
+normal permission checks. If that channel is unavailable or needs a password,
+the client reports the failure and lets you choose a channel. Mute, deafen, and
+voice activation mode are retained; cameras and screen sharing remain off.
+
 This uses standard [DNS SRV records (RFC 2782)](https://www.rfc-editor.org/rfc/rfc2782)
 and Go's [priority/weight-ordered SRV resolver](https://pkg.go.dev/net#Resolver.LookupSRV).
 

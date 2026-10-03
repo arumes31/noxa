@@ -1,8 +1,11 @@
 package main
 
 import (
+	"encoding/json"
 	"log"
+	"slices"
 
+	"noxa/internal/broadcast"
 	"noxa/internal/netproto"
 )
 
@@ -17,7 +20,7 @@ func (a *App) ReconnectTab(tabID, password, serverPassword string) ConnectTabRes
 		a.tabsMu.Unlock()
 		return ConnectTabResult{Error: "server tab is not available for automatic reconnect"}
 	}
-	info, bookmark, old := source.info, source.bookmark, source.cm
+	info, bookmark, old, channel := source.info, source.bookmark, source.cm, source.lastVoiceChannel
 	a.tabsMu.Unlock()
 	old.mu.Lock()
 	displayName := old.displayName
@@ -58,10 +61,32 @@ func (a *App) ReconnectTab(tabID, password, serverPassword string) ConnectTabRes
 		cm.disconnect()
 	}()
 	if failure := cm.connectNamed(info.Addr, info.Nickname, displayName, password, serverPassword); failure != "" {
+		cm.mu.Lock()
+		terminal := cm.reconnectTerminal
+		cm.mu.Unlock()
 		if failure == errFingerprintMismatch.Error() {
 			failure = fingerprintMismatchMessage(cm)
 		}
-		return ConnectTabResult{Error: failure}
+		return ConnectTabResult{Error: failure, Terminal: terminal}
+	}
+	// Cancellation during authentication cannot close a socket that connectWith
+	// has not installed yet. Recheck ownership before sending any post-login work.
+	a.settingsMu.Lock()
+	enabled = a.settings.ReconnectOnLoss
+	a.settingsMu.Unlock()
+	a.tabsMu.Lock()
+	owned := enabled && a.tabs[tabID] == source && source.replacement == candidate && source.reconnectAllowed && !candidate.reconnectSuppressed
+	a.tabsMu.Unlock()
+	if !owned {
+		return ConnectTabResult{Error: "server tab changed during reconnect", Terminal: true}
+	}
+	// The normal join is permission-checked and acknowledged by the server.
+	// Never reuse a channel password or force membership after policy changes.
+	warning := ""
+	if channel > 0 {
+		if failure := cm.joinChannel(channel); failure != "" {
+			warning = failure
+		}
 	}
 	// Reapply only this connection's avatar. A background recovery must never
 	// replace the selected server's hotkey profile or selected local identity.
@@ -97,10 +122,81 @@ func (a *App) ReconnectTab(tabID, password, serverPassword string) ConnectTabRes
 	a.tabsMu.Unlock()
 	committed = true
 	old.disconnect()
+	if channel > 0 && warning == "" {
+		// A membership broadcast may follow its acknowledgement and arrive after
+		// replay. Tell the frontend which exact automatic move must retain audio
+		// privacy settings even in that ordering.
+		a.emitPlain("tab_voice_restored", map[string]any{"tab_id": tabID, "client_id": cm.clientIDSnapshot(), "channel_id": channel})
+	}
 	if selected {
 		a.finishActivateSerialized(tabID, cm, journal, generation)
 	} else {
 		a.emitTabsUpdate()
 	}
-	return ConnectTabResult{TabID: tabID}
+	return ConnectTabResult{TabID: tabID, Warning: warning}
+}
+
+func (m *connManager) markReconnectTerminal() {
+	m.mu.Lock()
+	m.reconnectTerminal = true
+	m.mu.Unlock()
+}
+
+// Called with tabsMu held, including for inactive tabs and provisional managers.
+func rememberReconnectChannel(tab *tabState, name, payload, clientID string) {
+	if clientID == "" {
+		return
+	}
+	if name == "snapshot" {
+		var snapshot broadcast.TreeSnapshot
+		if json.Unmarshal([]byte(payload), &snapshot) != nil {
+			return
+		}
+		var visit func([]*broadcast.ChannelNode)
+		visit = func(nodes []*broadcast.ChannelNode) {
+			for _, node := range nodes {
+				if node == nil {
+					continue
+				}
+				for _, member := range node.Clients {
+					if member != nil && member.ClientID == clientID {
+						tab.lastVoiceChannel = member.ChannelID
+					}
+				}
+				visit(node.Children)
+			}
+		}
+		visit(snapshot.RootChannels)
+		for _, member := range snapshot.UnassignedClients {
+			if member != nil && member.ClientID == clientID {
+				tab.lastVoiceChannel = 0
+			}
+		}
+	} else if name == "event" {
+		var event struct {
+			Type string `json:"type"`
+			Data struct {
+				ClientID   string  `json:"client_id"`
+				ChannelID  int64   `json:"channel_id"`
+				ChannelIDs []int64 `json:"channel_ids"`
+			} `json:"data"`
+		}
+		if json.Unmarshal([]byte(payload), &event) != nil {
+			return
+		}
+		switch event.Type {
+		case "user_moved":
+			if event.Data.ClientID == clientID {
+				tab.lastVoiceChannel = event.Data.ChannelID
+			}
+		case "kicked":
+			if event.Data.ClientID == clientID {
+				tab.lastVoiceChannel = 0
+			}
+		case "channel_deleted":
+			if event.Data.ChannelID == tab.lastVoiceChannel || slices.Contains(event.Data.ChannelIDs, tab.lastVoiceChannel) {
+				tab.lastVoiceChannel = 0
+			}
+		}
+	}
 }

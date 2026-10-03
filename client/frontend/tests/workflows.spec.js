@@ -5498,11 +5498,11 @@ test("session snapshot leaves one retry scheduled after a disconnect during reco
     });
     await page.clock.runFor(100);
     expect(await page.evaluate(() => window.__noxa.state.reconnectAttempts)).toBe(2);
-    await page.clock.runFor(4900);
+    await page.clock.runFor(7900);
     expect(await page.evaluate(() => window.__calls.ConnectBookmarkTabWithID)).toBe(2);
 });
 
-test("session snapshot preserves the retry limit after repeated offline reconnects", async ({ page }) => {
+test("session snapshot keeps retrying during a prolonged outage", async ({ page }) => {
     await page.clock.install();
     await page.evaluate(() => {
         Math.random = () => 0;
@@ -5518,13 +5518,13 @@ test("session snapshot preserves the retry limit after repeated offline reconnec
         state.lastConnect = { addr: "closed.example:12333", nick: "Alice", pw: "", spw: "", bookmark: "" };
         for (const callback of window.__events.disconnected) callback();
     });
-    for (let attempt = 1; attempt <= 5; attempt++) {
-        await page.clock.runFor(5000);
+    for (let attempt = 1; attempt <= 8; attempt++) {
+        await page.clock.runFor(attempt === 1 ? 5000 : attempt === 2 ? 8000 : attempt === 3 ? 16000 : 24000);
         await expect.poll(() => page.evaluate(() => window.__calls.ConnectBookmarkTabWithID || 0)).toBe(attempt);
     }
     await page.clock.runFor(10000);
-    expect(await page.evaluate(() => window.__calls.ConnectBookmarkTabWithID)).toBe(5);
-    expect(await page.evaluate(() => window.__noxa.state.reconnectAttempts)).toBe(5);
+    expect(await page.evaluate(() => window.__calls.ConnectBookmarkTabWithID)).toBe(8);
+    expect(await page.evaluate(() => window.__noxa.state.reconnectAttempts)).toBe(9);
     await expect(page.locator("#conn-pill")).not.toHaveClass(/\bup\b/);
 });
 
@@ -7107,8 +7107,8 @@ test("automatic reconnect spreads repeated login admission collisions", async ({
         for (const callback of window.__events.disconnected || []) callback();
     });
     await page.clock.runFor(5000);
-    await expect(page.locator("#conn-pill")).toHaveText("retry 2/5 in 9s…");
-    await page.clock.runFor(8999);
+    await expect(page.locator("#conn-pill")).toHaveText("retry 2 in 10s…");
+    await page.clock.runFor(9599);
     expect(await page.evaluate(() => window.__calls.ConnectBookmarkTabWithID)).toBe(1);
     await page.clock.runFor(1);
     await expect(page.locator("#conn-pill")).toHaveClass(/\bup\b/);
@@ -7138,7 +7138,7 @@ test("background reconnect failures preserve the selected connected server", asy
     await page.clock.runFor(1000);
     await expect(page.locator("#conn-pill")).toHaveText("other.example:12333");
     for (let attempt = 1; attempt <= 5; attempt++) {
-        await page.clock.runFor(attempt === 1 ? 4000 : 5000);
+        await page.clock.runFor(attempt === 1 ? 4000 : attempt === 2 ? 8000 : attempt === 3 ? 16000 : 24000);
         await expect.poll(() => page.evaluate(() => window.__calls.ConnectBookmarkTabWithID || 0)).toBe(attempt);
     }
     await expect(page.locator("#conn-pill")).toHaveText("other.example:12333");
@@ -7237,7 +7237,7 @@ test.describe("per-tab automatic reconnect", () => {
 
     test("opting out clears the active retry countdown", async ({ page }) => {
         await page.evaluate(() => window.__loseTab("tab-a"));
-        await expect(page.locator("#conn-pill")).toHaveText("retry 1/5 in 5s…");
+        await expect(page.locator("#conn-pill")).toHaveText("retry 1 in 5s…");
         await page.evaluate(() => {
             for (const cb of window.__events.settings_update || []) cb({ ...window.__noxa.state.settings, reconnect_on_loss: false });
         });
@@ -7271,21 +7271,128 @@ test.describe("per-tab automatic reconnect", () => {
         await page.clock.runFor(5000);
         await expect.poll(() => page.evaluate(() => !!window.__releaseRecoveryStatus)).toBe(true);
         await page.evaluate(() => { window.__loseTab("tab-b"); window.__releaseRecoveryStatus(); });
-        await page.clock.runFor(5000);
+        await page.clock.runFor(8000);
         expect(await page.evaluate(() => window.__calls.ReconnectTab)).toBe(2);
     });
 
-    test("independent failures do not consume or reset another tab's retry budget", async ({ page }) => {
+    test("independent failures continue beyond the old limit and recover after a long outage", async ({ page }) => {
         await page.evaluate(() => { window.__tabReconnectFailure = { "tab-a": true }; window.__loseTab("tab-a"); window.__loseTab("tab-b"); });
         await page.clock.runFor(5000);
         expect(await page.evaluate(() => window.__callArgs.ReconnectTab.map(args => args[0]).sort())).toEqual(["tab-a", "tab-b"]);
         expect(await page.evaluate(() => window.__noxa.state.reconnectAttempts)).toBe(2);
-        await expect(page.locator("#conn-pill")).toHaveText("retry 2/5 in 5s…");
-        for (let attempt = 2; attempt <= 5; attempt++) await page.clock.runFor(5000);
-        await page.clock.runFor(10000);
-        expect(await page.evaluate(() => window.__callArgs.ReconnectTab.filter(args => args[0] === "tab-a").length)).toBe(5);
+        await expect(page.locator("#conn-pill")).toHaveText("retry 2 in 8s…");
+        for (let attempt = 2; attempt <= 8; attempt++) await page.clock.runFor(attempt === 2 ? 8000 : attempt === 3 ? 16000 : 24000);
+        expect(await page.evaluate(() => window.__callArgs.ReconnectTab.filter(args => args[0] === "tab-a").length)).toBe(8);
         expect(await page.evaluate(() => window.__callArgs.ReconnectTab.filter(args => args[0] === "tab-b").length)).toBe(1);
+        await page.evaluate(() => { window.__tabReconnectFailure["tab-a"] = false; });
+        await page.clock.runFor(24000);
+        await expect(page.locator("#conn-pill")).toHaveText("a.example:12333");
+        await expect(page.locator("#reconnect-cancel")).toBeHidden();
+        await page.clock.runFor(60000);
+        expect(await page.evaluate(() => window.__callArgs.ReconnectTab.filter(args => args[0] === "tab-a").length)).toBe(9);
         await expect(page.locator("#login-overlay")).toBeHidden();
+    });
+
+    test("server shutdown retains recovery intent and Cancel stays disconnected", async ({ page }) => {
+        await page.evaluate(() => {
+            for (const callback of window.__events.event) callback(JSON.stringify({ type: "server_shutdown", data: {} }));
+            window.__loseTab("tab-a");
+        });
+        await expect(page.locator("#reconnect-cancel")).toBeVisible();
+        expect(await page.evaluate(() => window.__noxa.state.lastConnect.addr)).toBe("a.example:12333");
+        await page.locator("#reconnect-cancel").click();
+        await page.clock.runFor(300000);
+        expect(await page.evaluate(() => window.__calls.ReconnectTab || 0)).toBe(0);
+        expect(await page.evaluate(() => window.__callArgs.DisconnectTab.at(-1))).toEqual(["tab-a"]);
+    });
+
+    test("reconnect controls remain actionable in German", async ({ page }, testInfo) => {
+        await page.evaluate(() => {
+            window.__noxa.state.settings.language = "de";
+            window.__noxa.applyAppearance();
+            window.__loseTab("tab-a");
+        });
+        await expect(page.locator("#conn-pill")).toHaveText("Versuch 1 in 5s…");
+        await expect(page.getByRole("button", { name: "Verbindungsversuche abbrechen", exact: true })).toBeVisible();
+        await page.screenshot({ path: testInfo.outputPath("reconnect-german.png") });
+    });
+
+    test("terminal trust or authentication errors stop and explain manual action", async ({ page }) => {
+        await page.evaluate(() => {
+            window.__reconnectTabHandler = async () => ({ terminal: true, error: "certificate changed" });
+            window.__loseTab("tab-a");
+        });
+        await page.clock.runFor(5000);
+        await expect(page.locator("#reconnect-cancel")).toBeHidden();
+        await expect(page.locator("#toasts")).toContainText("Connect manually to resolve this: certificate changed");
+        await page.clock.runFor(300000);
+        expect(await page.evaluate(() => window.__calls.ReconnectTab)).toBe(1);
+    });
+
+    test("an explicit tray retry never turns native authentication failure into endless legacy retries", async ({ page }) => {
+        await page.evaluate(() => {
+            const state = window.__noxa.state;
+            state.lastSuccessfulConnect = state.lastConnect;
+            window.__tabs[0].connected = false;
+            document.getElementById("conn-pill").classList.remove("up");
+            window.__connectBookmarkResult = "invalid credentials";
+            for (const cb of window.__events.tray_reconnect) cb();
+        });
+        await expect.poll(() => page.evaluate(() => window.__calls.ConnectBookmarkTabWithID || 0)).toBe(1);
+        await page.clock.runFor(300000);
+        expect(await page.evaluate(() => window.__calls.ConnectBookmarkTabWithID)).toBe(1);
+    });
+
+    test("background rejoin failures remain visible when its tab is selected", async ({ page }) => {
+        await page.evaluate(() => {
+            const connect = window.__reconnectTabHandler;
+            window.__reconnectTabHandler = async (...args) => ({ ...await connect(...args), warning: "channel password required" });
+            window.__loseTab("tab-b");
+        });
+        await page.clock.runFor(5000);
+        await expect(page.locator("#toasts")).not.toContainText("channel password required");
+        await page.evaluate(() => window.go.main.App.SetActiveTab("tab-b"));
+        await expect(page.locator("#toasts")).toContainText("Select a channel to join: channel password required");
+    });
+
+    test("recovery snapshot and membership replay preserve deafen, mute and PTT mode", async ({ page }) => {
+        await page.evaluate(() => {
+            const state = window.__noxa.state;
+            window.__noxa.setDeafened(true);
+            state.settings.activation_mode = "ptt";
+            const connect = window.__reconnectTabHandler;
+            window.__reconnectTabHandler = async (...args) => {
+                const result = await connect(...args);
+                state.myClientID = "restored";
+                const snapshot = JSON.stringify({ root_channels: [{ ChannelID: 7, clients: [{ client_id: "restored", channel_id: 7 }] }] });
+                for (const callback of window.__events.snapshot) callback(snapshot);
+                return result;
+            };
+            window.__loseTab("tab-a");
+        });
+        await page.clock.runFor(5000);
+        expect(await page.evaluate(() => {
+            const s = window.__noxa.state;
+            return { muted: s.muted, deafened: s.deafened, mode: s.settings.activation_mode, camera: s.localStream?.getVideoTracks().length || 0 };
+        })).toEqual({ muted: true, deafened: true, mode: "ptt", camera: 0 });
+    });
+
+    test("an acknowledged automatic rejoin preserves deafen when its move arrives after replay", async ({ page }) => {
+        await page.evaluate(() => {
+            const state = window.__noxa.state;
+            window.__noxa.setDeafened(true);
+            state.myClientID = "restored";
+            state.myChannelID = 0;
+            state.replayingTabID = "";
+            for (const cb of window.__events.tab_voice_restored) cb({ tab_id: "tab-a", client_id: "restored", channel_id: 7 });
+            window.__moveRestored = channel => {
+                for (const cb of window.__events.event) cb(JSON.stringify({ type: "user_moved", data: { client_id: "restored", channel_id: channel } }));
+            };
+            window.__moveRestored(7);
+        });
+        expect(await page.evaluate(() => ({ muted: window.__noxa.state.muted, deafened: window.__noxa.state.deafened }))).toEqual({ muted: true, deafened: true });
+        await page.evaluate(() => window.__moveRestored(8));
+        expect(await page.evaluate(() => window.__noxa.state.deafened)).toBe(false);
     });
 
     test("switching away during recovery keeps the newly selected server active", async ({ page }) => {
@@ -7724,7 +7831,7 @@ test("undeafens after a confirmed channel join but preserves deafen on duplicate
     expect(await page.evaluate(() => window.__noxa.state.deafened)).toBe(false);
 });
 
-test("undeafens when a snapshot confirms joining a channel", async ({ page }) => {
+test("snapshot reconciliation preserves deafen without an explicit live channel move", async ({ page }) => {
     await showB3Workspace(page);
     await page.evaluate(() => {
         window.__noxa.setDeafened(true);
@@ -7734,8 +7841,8 @@ test("undeafens when a snapshot confirms joining a channel", async ({ page }) =>
             }], children: [] }],
         }));
     });
-    await expect(page.getByRole("button", { name: "Deafen", exact: true })).toHaveAttribute("aria-pressed", "false");
-    expect(await page.locator("#remote-video").evaluate((element) => element.muted)).toBe(false);
+    await expect(page.getByRole("button", { name: "Undeafen", exact: true })).toHaveAttribute("aria-pressed", "true");
+    expect(await page.locator("#remote-video").evaluate((element) => element.muted)).toBe(true);
 });
 
 test.describe("tab-bound file inspection", () => {
@@ -9285,11 +9392,11 @@ test("keeps reconnect countdown changes visual and announces the failure once", 
         window.__noxa.state.lastConnect = { addr: "voice.example:12333", nick: "Alice", pw: "", spw: "" };
         for (const callback of window.__events.disconnected || []) callback();
     });
-    await expect(page.locator("#conn-pill")).toContainText("retry 1/5 in 5s");
+    await expect(page.locator("#conn-pill")).toContainText("retry 1 in 5s");
     await expect(page.locator("#alert-announcer")).toHaveText("Connection lost");
     await expect(page.locator("#conn-pill")).not.toHaveAttribute("aria-live", /.+/);
     await page.waitForTimeout(1100);
-    await expect(page.locator("#conn-pill")).toContainText("retry 1/5 in 4s");
+    await expect(page.locator("#conn-pill")).toContainText("retry 1 in 4s");
     await expect(page.locator("#alert-announcer")).toHaveText("Connection lost");
 });
 

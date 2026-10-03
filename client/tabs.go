@@ -25,8 +25,10 @@ import (
 
 // ConnectTabResult identifies the tab created or recovered by a connection.
 type ConnectTabResult struct {
-	TabID string `json:"tab_id"`
-	Error string `json:"error"`
+	TabID    string `json:"tab_id"`
+	Error    string `json:"error"`
+	Terminal bool   `json:"terminal,omitempty"`
+	Warning  string `json:"warning,omitempty"`
 }
 
 // TabInfo describes one server tab for the tab bar.
@@ -57,6 +59,7 @@ type tabState struct {
 	replacement         *tabState
 	reconnectAllowed    bool
 	reconnectSuppressed bool
+	lastVoiceChannel    int64
 }
 
 // tabsMu guards tabs/activeID and every mutable tabState field.
@@ -134,6 +137,7 @@ func (a *App) relayTabEventFrom(tabID string, owner *connManager, name string, p
 		ts.reconnectAllowed = !ts.reconnectSuppressed
 	}
 	text, _ := payload.(string)
+	rememberReconnectChannel(ts, name, text, clientID)
 	suppressed := tabReconnectSuppressed(name, text, clientID)
 	if suppressed {
 		ts.reconnectSuppressed = true
@@ -239,7 +243,7 @@ func tabReconnectSuppressed(name, payload, clientID string) bool {
 	if json.Unmarshal([]byte(payload), &event) != nil {
 		return false
 	}
-	return event.Type == "server_shutdown" || (event.Type == "kicked" && event.Data.ClientID == clientID && (event.Data.FromServer || event.Data.Ban))
+	return event.Type == "kicked" && event.Data.ClientID == clientID && (event.Data.FromServer || event.Data.Ban)
 }
 
 // countBadge increments unread/mention counters for background chat events.

@@ -68,6 +68,7 @@ type connManager struct {
 	isGuest            bool
 	authorizationModel string
 	closed             bool
+	reconnectTerminal  bool // authenticated rejection or trust failure; guarded by mu
 	// The latest snapshot is replayed when a tab becomes active.
 	lastSnapshot string
 	// lastSubscriptions is the newest authoritative subscription set (312).
@@ -394,9 +395,15 @@ type challengeSigner func(challenge []byte) (signature []byte, publicKey string,
 // challenge handshake is completed. It returns "" on success or the failure
 // reason.
 func (m *connManager) connectWith(addr string, authMsg netproto.Authenticate, signer challengeSigner) string {
+	m.mu.Lock()
+	m.reconnectTerminal = false
+	m.mu.Unlock()
 	authMsg.AuthorizationModels = []string{netproto.AuthorizationModelRolesV1}
 	conn, err := m.dialTransport(addr)
 	if err != nil {
+		if errors.Is(err, errFingerprintMismatch) || errors.Is(err, errTrustStoreUnavailable) {
+			m.markReconnectTerminal()
+		}
 		return err.Error()
 	}
 
@@ -445,6 +452,7 @@ func (m *connManager) connectWith(addr string, authMsg netproto.Authenticate, si
 			return err.Error()
 		}
 		if resp.OK && resp.MediaLimitsRevision != 0 && !hasCompleteAuthMediaLimits(f) {
+			m.markReconnectTerminal()
 			_ = conn.Close()
 			return "invalid server media limits"
 		}
@@ -453,6 +461,9 @@ func (m *connManager) connectWith(addr string, authMsg netproto.Authenticate, si
 
 	if !resp.OK {
 		_ = conn.Close()
+		if resp.Reason != "internal error" && resp.Reason != "too many failed logins, try again later" {
+			m.markReconnectTerminal()
+		}
 		if resp.Reason != "" {
 			return resp.Reason
 		}
@@ -460,10 +471,12 @@ func (m *connManager) connectWith(addr string, authMsg netproto.Authenticate, si
 	}
 
 	if resp.AuthorizationModel != netproto.AuthorizationModelRolesV1 {
+		m.markReconnectTerminal()
 		_ = conn.Close()
 		return "unsupported server authorization model; upgrade noXa"
 	}
 	if (resp.MediaLimits != nil && !resp.MediaLimits.Valid()) || (resp.MediaLimitsRevision != 0 && resp.MediaLimits == nil) {
+		m.markReconnectTerminal()
 		_ = conn.Close()
 		return "invalid server media limits"
 	}

@@ -13,7 +13,7 @@ import "./conversations.css";
 import { conversationChanged } from "./conversations.js";
 import "./private-calls.css";
 import { privateCallChanged, privateCallSignal, stopPrivateCall, applyPrivateCallAudioSettings } from "./private-calls.js";
-import { createTabReconnects } from "./tab-reconnect.js";
+import { createTabReconnects, reconnectDelay } from "./tab-reconnect.js";
 import { refreshPolls } from "./polls.js";
 
 import "@fontsource-variable/outfit";
@@ -549,7 +549,6 @@ async function rememberTabConnect(c, expectedGeneration = null, tabID = "", curr
 let reconnectCountdownTimer = null;
 let reconnectRequestPending = false;
 let reconnectGeneration = 0;
-let reconnectFailureSounded = false;
 let reconnectCueTimer = null;
 let reconnectTimerSourceTabID = "";
 
@@ -686,11 +685,7 @@ function scheduleReconnect(
     const ownsSource = () => generation === reconnectGeneration
         && sourceServerGeneration === state.serverGeneration
         && sourceTabID === state.activeTabID;
-    if (generation !== reconnectGeneration || !autoReconnectEnabled() || !target || state.reconnectAttempts >= 5) {
-        if (target && state.reconnectAttempts >= 5 && !reconnectFailureSounded && ownsSource()) {
-            reconnectFailureSounded = true;
-            playAlert("reconnect_failed");
-        }
+    if (generation !== reconnectGeneration || !autoReconnectEnabled() || !target) {
         chatUI.cancelReconnectAnnouncementBatch();
         if (ownsSource()) showLogin();
         return;
@@ -700,7 +695,6 @@ function scheduleReconnect(
     const reconnectTarget = { ...target };
 
     if (state.reconnectAttempts === 0) {
-        reconnectFailureSounded = false;
         // Let the loss contour complete before the recovery contour starts.
         // The timer is cancelled by a manual disconnect or a newer connection.
         reconnectCueTimer = setTimeout(() => {
@@ -712,10 +706,8 @@ function scheduleReconnect(
     }
     state.reconnectAttempts++;
     reconnectTimerSourceTabID = sourceTabID;
-    // Peers behind one address share server login admission. Keep the first
-    // recovery prompt, but spread later attempts so collisions do not repeat
-    // in lockstep and exhaust every client's bounded retry budget.
-    const delay = 5000 + (state.reconnectAttempts > 1 ? Math.floor(Math.random() * 5000) : 0);
+    // Spread peers behind the same address without giving up during an outage.
+    const delay = reconnectDelay(state.reconnectAttempts);
     const seconds = Math.ceil(delay / 1000);
     if (ownsSource()) {
         chatUI.beginReconnectAnnouncementBatch();
@@ -747,9 +739,28 @@ function scheduleReconnect(
 }
 
 const scopedReconnectAvailable = () => typeof window.go.main.App.ReconnectTab === "function";
+const reconnectNotices = new Map();
+const restoredVoiceChannels = new Map();
+window.runtime.EventsOn("tab_voice_restored", restored => {
+    if (restored?.tab_id && restored.client_id && Number(restored.channel_id) > 0) {
+        restoredVoiceChannels.set(restored.tab_id, { clientID: restored.client_id, channelID: Number(restored.channel_id) });
+    }
+});
+function showReconnectNotice(tabID) {
+    const notice = reconnectNotices.get(tabID);
+    if (!notice || state.activeTabID !== tabID) return;
+    reconnectNotices.delete(tabID);
+    const message = t(notice.key, { error: notice.error });
+    sysMsg(message);
+    toast(message, "warn");
+}
 const tabReconnects = createTabReconnects({
     enabled: autoReconnectEnabled,
     connect: (tabID, target) => window.go.main.App.ReconnectTab(tabID, target.pw || "", target.spw || ""),
+    warning(tabID, error) {
+        reconnectNotices.set(tabID, { key: "runtime.rejoinFailed", error });
+        showReconnectNotice(tabID);
+    },
     async complete(tabID, target, current) {
         const tab = (await window.go.main.App.ListTabs()).find(tab => tab.id === tabID);
         if (!current()) return false;
@@ -760,9 +771,11 @@ const tabReconnects = createTabReconnects({
     },
     changed(tabID, entry) {
         if (state.activeTabID !== tabID) return;
+        reconnectCancel.textContent = t("runtime.cancelReconnect");
+        reconnectCancel.hidden = !entry;
         state.reconnectAttempts = entry?.attempts || 0;
         state.reconnectInFlight = !!entry?.inFlight;
-        if (entry && !entry.exhausted) {
+        if (entry) {
             $("conn-pill").textContent = entry.inFlight ? t("runtime.reconnectAttempt", { attempt: entry.attempts })
                 : t("runtime.retry", { seconds: entry.remaining, attempt: entry.attempts });
             $("conn-pill").dataset.reconnectLabel = $("conn-pill").textContent;
@@ -781,17 +794,25 @@ const tabReconnects = createTabReconnects({
     failed(tabID, error) {
         if (state.activeTabID === tabID) sysMsg(t("runtime.reconnectFailed", { error }));
     },
-    async exhausted(tabID, _target, current) {
+    stopped(tabID, error) {
+        reconnectNotices.set(tabID, { key: "runtime.reconnectStopped", error });
+        showReconnectNotice(tabID);
         if (state.activeTabID !== tabID) return;
-        const generation = state.serverGeneration;
-        let tabs;
-        try { tabs = await window.go.main.App.ListTabs(); } catch { return; }
-        if (!current() || state.activeTabID !== tabID || state.serverGeneration !== generation || tabs.find(tab => tab.id === tabID)?.connected) return;
         chatUI.cancelReconnectAnnouncementBatch();
         playAlert("reconnect_failed");
         $("conn-pill").textContent = t("runtime.offlineFailed");
-        if (!tabs.some(tab => tab.connected)) showLogin();
     },
+});
+const reconnectCancel = document.createElement("button");
+reconnectCancel.id = "reconnect-cancel";
+reconnectCancel.type = "button";
+reconnectCancel.textContent = t("runtime.cancelReconnect");
+reconnectCancel.hidden = true;
+reconnectCancel.onclick = () => { void disconnect(); };
+$("conn-pill").after(reconnectCancel);
+window.addEventListener("noxa-language-changed", () => {
+    reconnectCancel.textContent = t("runtime.cancelReconnect");
+    tabReconnects.refresh(state.activeTabID);
 });
 window.runtime.EventsOn("tab_disconnected", tabID => {
     if (scopedReconnectAvailable()) tabReconnects.start(String(tabID), state.tabConnects.get(String(tabID)));
@@ -799,6 +820,8 @@ window.runtime.EventsOn("tab_disconnected", tabID => {
 window.runtime.EventsOn("tab_closed", tabID => {
     tabID = String(tabID);
     tabReconnects.cancel(tabID);
+    reconnectNotices.delete(tabID);
+    restoredVoiceChannels.delete(tabID);
     state.tabConnects.delete(tabID);
 });
 window.runtime.EventsOn("tab_reconnect_disabled", tabID => tabReconnects.cancel(String(tabID)));
@@ -806,6 +829,7 @@ window.runtime.EventsOn("tab_reset", tabID => {
     // tabs.js commits its view synchronously in the same native event batch.
     queueMicrotask(() => {
         if (scopedReconnectAvailable() && state.activeTabID === tabID) tabReconnects.refresh(tabID);
+        showReconnectNotice(tabID);
     });
 });
 
@@ -853,7 +877,10 @@ async function reconnectLastServerNow() {
         if (connected) return;
         if (!current()) return;
         chatUI.cancelReconnectAnnouncementBatch();
-        if (autoReconnectEnabled()) scheduleReconnect();
+        // This is an explicit retry after a user disconnect or terminal error.
+        // A native client must not fall into the legacy unclassified retry loop.
+        if (scopedReconnectAvailable()) showLogin();
+        else if (autoReconnectEnabled()) scheduleReconnect();
         else showLogin();
     } finally {
         reconnectRequestPending = false;
@@ -1088,7 +1115,8 @@ function syncOwnChannel({ audible = true } = {}) {
     }
     const previousChannelID = state.myChannelID;
     state.myChannelID = channelID;
-    if (channelID > 0) setDeafened(false);
+    // Snapshot/identity reconciliation is not an explicit request to unmute.
+    // In particular, recovering a server must retain deafen and its mute state.
     const initialCuePending = state.pendingInitialChannelCueTabID === state.activeTabID;
     let playedCue = false;
     if ((audible || initialCuePending) && !actionSoundsSuppressed()) {
@@ -1231,10 +1259,15 @@ window.runtime.EventsOn("event", (json) => {
             if (c) c.channel_id = nextChannelID;
             if (d.client_id === state.myClientID) {
                 const previousChannelID = state.myChannelID;
+                const restored = restoredVoiceChannels.get(state.activeTabID);
+                const automaticRestore = restored?.clientID === d.client_id && restored.channelID === nextChannelID;
+                // A live different move also consumes the marker; historical
+                // default-channel moves during replay do not.
+                if (automaticRestore || !actionSoundsSuppressed()) restoredVoiceChannels.delete(state.activeTabID);
                 const forcedMove = nextChannelID > 0 && nextChannelID !== previousChannelID
                     && d.by_client_id && d.by_client_id !== state.myClientID;
                 state.myChannelID = nextChannelID;
-                if (nextChannelID > 0 && nextChannelID !== previousChannelID) setDeafened(false);
+                if (nextChannelID > 0 && nextChannelID !== previousChannelID && !actionSoundsSuppressed() && !automaticRestore) setDeafened(false);
                 let playedOwnCue = false;
                 if (!actionSoundsSuppressed()) {
                     if (nextChannelID > 0 && nextChannelID !== previousChannelID) {
@@ -1466,8 +1499,6 @@ window.runtime.EventsOn("event", (json) => {
             return;
         case "server_shutdown":
             if (!actionSoundsSuppressed()) {
-                state.lastConnect = null;
-                clearReconnectTimer();
                 playAlert("server_shutdown");
                 toast(t("runtime.shutdown"), "warn", "conn");
             }

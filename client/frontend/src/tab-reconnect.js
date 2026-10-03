@@ -1,5 +1,11 @@
-// One bounded retry series per native server tab. A record owns its captured
+// One retry series per native server tab. A record owns its captured
 // credentials and timers; replacing or canceling it invalidates every await.
+export function reconnectDelay(attempt, random = Math.random) {
+    if (attempt <= 1) return 5000;
+    const ceiling = Math.min(30000, 10000 * 2 ** Math.min(2, attempt - 2));
+    return Math.floor(ceiling * (0.8 + 0.2 * random()));
+}
+
 export function createTabReconnects(options) {
     const entries = new Map();
     const current = entry => entries.get(entry.tabID) === entry;
@@ -19,14 +25,8 @@ export function createTabReconnects(options) {
     function schedule(entry) {
         if (!current(entry)) return;
         if (!options.enabled()) { cancel(entry.tabID); return; }
-        if (entry.attempts >= 5) {
-            entry.exhausted = true;
-            notify(entry);
-            void options.exhausted?.(entry.tabID, entry.target, () => current(entry));
-            return;
-        }
         entry.attempts++;
-        const delay = 5000 + (entry.attempts > 1 ? Math.floor(Math.random() * 5000) : 0);
+        const delay = (options.delay || reconnectDelay)(entry.attempts);
         entry.remaining = Math.ceil(delay / 1000);
         options.scheduled?.(entry.tabID, entry);
         entry.countdown = setInterval(() => {
@@ -47,8 +47,16 @@ export function createTabReconnects(options) {
                 const result = await options.connect(entry.tabID, entry.target);
                 if (!current(entry)) return;
                 error = String(result?.error || "");
+                if (result?.terminal) {
+                    cancel(entry.tabID);
+                    options.stopped?.(entry.tabID, error);
+                    return;
+                }
                 if (!error && attemptCurrent() && await options.complete(entry.tabID, entry.target, attemptCurrent)) {
-                    if (attemptCurrent()) cancel(entry.tabID);
+                    if (attemptCurrent()) {
+                        if (result?.warning) options.warning?.(entry.tabID, result.warning);
+                        cancel(entry.tabID);
+                    }
                     else { entry.inFlight = false; schedule(entry); }
                     return;
                 }
@@ -66,7 +74,7 @@ export function createTabReconnects(options) {
             const existing = entries.get(tabID);
             if (existing) {
                 // A newly recovered socket can fail while its status query is
-                // pending. Keep the budget, but reject that stale success.
+                // pending. Keep the backoff, but reject that stale success.
                 existing.lossVersion++;
                 return;
             }

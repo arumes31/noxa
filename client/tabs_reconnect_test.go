@@ -85,8 +85,12 @@ func gatedReconnectServer(t *testing.T) (string, <-chan netproto.Authenticate, c
 			return
 		}
 		for {
-			if _, err := netproto.ReadFrame(conn); err != nil {
+			frame, err := netproto.ReadFrame(conn)
+			if err != nil {
 				return
+			}
+			if netproto.MessageType(frame.Type) == netproto.MsgJoinChannel {
+				t.Error("canceled authentication sent a channel join")
 			}
 		}
 	}()
@@ -224,6 +228,7 @@ func TestReconnectTabCanceledWhileAuthenticating(t *testing.T) {
 		t.Run(action, func(t *testing.T) {
 			addr, requests, release := gatedReconnectServer(t)
 			a, tabID, source, _ := prepareReconnect(t, addr)
+			source.lastVoiceChannel = 7
 			result := make(chan ConnectTabResult, 1)
 			go func() { result <- a.ReconnectTab(tabID, "password", "") }()
 			waitReconnect(t, requests)
@@ -243,7 +248,7 @@ func TestReconnectTabCanceledWhileAuthenticating(t *testing.T) {
 				a.settings.ReconnectOnLoss = false
 				a.settingsMu.Unlock()
 			case "server removal":
-				source.cm.sink.Emit("event", `{"type":"server_shutdown","data":{}}`)
+				source.cm.sink.Emit("event", `{"type":"kicked","data":{"client_id":"","from_server":true}}`)
 			}
 			close(release)
 			if got := waitReconnect(t, result); got.Error == "" {
@@ -318,7 +323,7 @@ func TestTabReconnectSuppression(t *testing.T) {
 		name, event string
 		allowed     bool
 	}{
-		{"shutdown", `{"type":"server_shutdown","data":{}}`, false},
+		{"shutdown", `{"type":"server_shutdown","data":{}}`, true},
 		{"server kick", `{"type":"kicked","data":{"client_id":"self","from_server":true}}`, false},
 		{"ban", `{"type":"kicked","data":{"client_id":"self","ban":true}}`, false},
 		{"channel kick", `{"type":"kicked","data":{"client_id":"self"}}`, true},
