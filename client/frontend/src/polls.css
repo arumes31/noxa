@@ -8,7 +8,18 @@
 .poll-count { font-variant-numeric: tabular-nums; }
 .poll-actions { display: flex; justify-content: space-between; gap: 12px; }
 .poll-actions button { color: inherit; background: transparent; border: 0; cursor: pointer; padding: 5px; }
-.poll-dialog { width: min(460px, 94vw); display: grid; gap: 14px; }
-.poll-field { display: grid; gap: 6px; }
-.poll-field input, .poll-field textarea, .poll-field select { width: 100%; box-sizing: border-box; }
-.poll-field input[type=checkbox] { width: auto; justify-self: start; }
+.dlg.poll-dialog { width: 460px; display: flex; gap: 18px; padding: 24px; }
+.poll-dialog h2 { margin: 0 0 4px; font-family: var(--font-display); font-size: 1.4286rem; }
+.poll-field { display: grid; gap: 8px; min-width: 0; font-weight: 500; }
+.poll-field .dlg-input { min-width: 0; min-height: 40px; font-weight: 400; line-height: 1.5; }
+.poll-field textarea.dlg-input { min-height: 120px; resize: vertical; }
+.poll-check { display: flex; align-items: center; gap: 10px; min-height: 36px; cursor: pointer; }
+.poll-check input { width: 16px; height: 16px; margin: 0; flex-shrink: 0; accent-color: var(--accent); cursor: pointer; }
+.poll-dialog .poll-status { color: var(--danger); opacity: 1; overflow-wrap: anywhere; }
+.poll-dialog .poll-status:empty { display: none; }
+.poll-dialog .dlg-buttons { padding-top: 16px; border-top: 1px solid var(--border); }
+.poll-dialog .dlg-buttons button { min-height: 38px; }
+@media (max-width: 480px) {
+    .dlg.poll-dialog { padding: 18px; gap: 16px; }
+    .poll-dialog .dlg-buttons button { flex: 1; }
+}

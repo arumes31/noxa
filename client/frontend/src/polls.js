@@ -98,7 +98,14 @@ export function createPoll(scope, target) {
     dialog.append(node("h2", "", t("poll.create")));
     const field = (label, input) => {
         const wrap = node("label", "poll-field", label);
-        wrap.append(input); dialog.append(wrap); return input;
+        if (input.type === "checkbox") {
+            wrap.classList.add("poll-check");
+            wrap.prepend(input);
+        } else {
+            input.classList.add("dlg-input");
+            wrap.append(input);
+        }
+        dialog.append(wrap); return input;
     };
     const question = field(t("poll.question"), node("input", ""));
     question.maxLength = 300; question.required = true;

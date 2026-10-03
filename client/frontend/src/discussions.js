@@ -25,7 +25,12 @@ const el = (tag, className = "", text) => {
     return node;
 };
 const button = (key, action) => { const node = el("button", "", t(key)); node.type = "button"; node.onclick = action; return node; };
-const field = (key, input) => { const label = el("label", "discussion-field", t(key)); label.append(input); return label; };
+const field = (key, input) => {
+    const label = el("label", input.type === "checkbox" ? "discussion-check" : "discussion-field", t(key));
+    if (input.type === "checkbox") label.prepend(input);
+    else { input.classList.add("dlg-input"); label.append(input); }
+    return label;
+};
 const requestID = () => crypto.randomUUID();
 
 export function closeDiscussions() { if (active) closeDialog(active.overlay, "navigate"); }
@@ -171,19 +176,23 @@ export function openDiscussions(channelID, source = null, initialThreadID = 0, t
         if (selected) renderThread(); else renderList();
     };
     const renderList = () => {
-        const state = el("select"); state.setAttribute("aria-label", t("discussion.archived"));
+        const state = el("select", "dlg-input"); state.setAttribute("aria-label", t("discussion.archived"));
         for (const [value, key] of [["false", "discussion.active"], ["true", "discussion.archived"]]) { const option = el("option", "", t(key)); option.value = value; state.append(option); }
         state.value = String(archived); state.onchange = () => { archived = state.value === "true"; void refresh(); };
-        const tags = el("select"); tags.setAttribute("aria-label", t("discussion.tags"));
+        const tags = el("select", "dlg-input"); tags.setAttribute("aria-label", t("discussion.tags"));
         const all = el("option", "", t("discussion.allTags")); all.value = ""; tags.append(all);
         for (const name of data.tags || []) { const option = el("option", "", name); option.value = name; tags.append(option); }
         tags.value = tag; tags.onchange = () => { tag = tags.value; void refresh(); };
         const followed = el("input"); followed.type = "checkbox"; followed.checked = following;
         followed.onchange = () => { following = followed.checked; render(); };
-        const followLabel = field("discussion.following", followed); followLabel.className = "discussion-check";
-        toolbar.append(button("discussion.new", () => createForm()), state, tags, followLabel, button("discussion.refresh", refresh));
+        const followLabel = field("discussion.following", followed);
+        const filters = el("div", "discussion-filters");
+        filters.append(state, tags, followLabel);
+        const newPost = button("discussion.new", () => createForm()); newPost.className = "discussion-new";
+        toolbar.append(newPost, button("discussion.refresh", refresh));
         if (data.can_manage) toolbar.append(button("discussion.configure", configure));
         if (data.can_manage) toolbar.append(button("webhook.title", () => openWebhooks(channelID)));
+        toolbar.append(filters);
         content.append(el("p", "discussion-hint", t("discussion.membership")));
         const shown = posts.filter(post => !following || post.subscribed).sort((a,b) => Number(b.pinned)-Number(a.pinned));
         if (!shown.length) content.append(el("p", "discussion-hint", t("discussion.empty")));
@@ -244,7 +253,7 @@ export function openDiscussions(channelID, source = null, initialThreadID = 0, t
         const body = el("textarea"); body.required = true; body.maxLength = 12000;
         if (sourceMessage) body.value = sourceMessage.text || "";
         const tags = el("div", "discussion-tags"); const selectedTags = new Set();
-        for (const tag of data?.tags || []) { const check = el("input"); check.type = "checkbox"; check.onchange = () => check.checked ? selectedTags.add(tag) : selectedTags.delete(tag); const label = el("label", "discussion-check", tag); label.append(check); tags.append(label); }
+        for (const tag of data?.tags || []) { const check = el("input"); check.type = "checkbox"; check.onchange = () => check.checked ? selectedTags.add(tag) : selectedTags.delete(tag); const label = el("label", "discussion-check", tag); label.prepend(check); tags.append(label); }
         const submit = button("discussion.create", null); submit.type = "submit";
         form.append(field("discussion.titleField", title), field("discussion.body", body), tags, el("p", "discussion-hint", t("discussion.metadata")), submit);
         form.append(voiceMessageButton(() => ({ tabID, channelID, isCurrent: () => current() && form.isConnected && mode === "create", send: async token => { body.value = token; return ""; } })));
@@ -266,7 +275,7 @@ export function openDiscussions(channelID, source = null, initialThreadID = 0, t
     const configure = () => {
         mode = "configure"; toolbar.replaceChildren(button("discussion.back", back)); content.replaceChildren();
         const form = el("form", "discussion-field"); const forum = el("input"); forum.type = "checkbox"; forum.checked = data.forum;
-        const forumLabel = field("discussion.forumMode", forum); forumLabel.className = "discussion-check";
+        const forumLabel = field("discussion.forumMode", forum);
         const tags = el("textarea"); tags.value = (data.tags || []).join("\n"); tags.maxLength = 396;
         const submit = button("discussion.save", null); submit.type = "submit";
         const archive = el("select");
