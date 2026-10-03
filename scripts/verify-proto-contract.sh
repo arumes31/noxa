@@ -88,7 +88,7 @@ require_job(
     "SHA-pinned setup-go using go.mod",
 )
 require_job(
-    r"bufbuild/buf-action@fd21066df7214747548607aaa45548ba2b9bc1ff.*?setup_only: true.*?version: 1\.72\.0",
+    r"bufbuild/buf-action@85aebf73123b5c15fd5528aaecbf9129cddf7fa7.*?setup_only: true.*?version: 1\.72\.0",
     "SHA-pinned Buf 1.72.0 setup-only action",
 )
 require_job(r"name: lint protobuf contracts\n\s+run: buf lint", "visible buf lint")
