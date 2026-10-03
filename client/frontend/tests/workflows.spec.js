@@ -8929,8 +8929,11 @@ test("uses the B3 console composition without losing responsive navigation", asy
     await expect(page.getByRole("button", { name: "Show channels", exact: true })).toBeFocused();
 });
 
-test("exposes named landmarks, controls, live regions, and a visible focus ring", async ({ page }) => {
-    await expect(page.getByRole("dialog", { name: "noxa" })).toBeVisible();
+test("@a11y exposes named landmarks, controls, live regions, and a visible focus ring", async ({ page }) => {
+    const login = page.getByRole("dialog", { name: "Connect to your server", exact: true });
+    await expect(login).toBeVisible();
+    await expect(login.getByRole("heading", { name: "Connect to your server", level: 1 })).toBeVisible();
+    await expect(page.getByRole("region", { name: "Recent servers", exact: true })).toBeVisible();
     await expect(page.getByRole("textbox", { name: /^server$/i })).toBeVisible();
     await expect(page.getByRole("button", { name: "Connect" })).toBeVisible();
     await expect(page.locator("#login-error")).toHaveAttribute("role", "alert");
