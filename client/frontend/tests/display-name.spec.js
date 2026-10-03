@@ -79,7 +79,9 @@ test("a rejected login keeps optional credentials and restores the connect actio
     await page.evaluate(() => {
         const app = window.go.main.App;
         window.go.main.App = new Proxy(app, { get(target, method) {
-            if (method === "ConnectNamedBookmarkTabWithID") return async () => ({ error: "Account password is incorrect" });
+            if (["ConnectNamedBookmarkTabWithID", "ConnectBookmarkTabWithID"].includes(method)) {
+                return async () => ({ error: "Account password is incorrect" });
+            }
             return target[method];
         } });
     });
