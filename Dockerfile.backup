@@ -3,7 +3,7 @@
 # install packages at startup.
 FROM rclone/rclone:1.72.0@sha256:0eb18825ac9732c21c11d654007170572bbd495352bb6dbb624f18e4f462c496 AS rclone
 
-FROM postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777
+FROM postgres:18-alpine@sha256:77f585114c32fbca283dc835b0596f4e52b51b4c6662d7810b2f4084f60a1873
 
 # rclone's official image installs its binary at this path.
 COPY --from=rclone /usr/local/bin/rclone /usr/local/bin/rclone
