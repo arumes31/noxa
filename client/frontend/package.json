@@ -27,7 +27,7 @@
     "@fontsource-variable/jetbrains-mono": "^5.3.0",
     "@fontsource-variable/outfit": "^5.3.0",
     "@fontsource-variable/sora": "^5.3.0",
-    "@mediapipe/tasks-vision": "0.10.32",
+    "@mediapipe/tasks-vision": "1.0.1",
     "livekit-client": "2.22.3"
   },
   "devDependencies": {
