@@ -105,6 +105,7 @@ async function startDownload(m, info) {
     const btn = m.querySelector(".upd-update");
     const prog = m.querySelector(".upd-progress");
     btn.disabled = true;
+    btn.textContent = t("updater.processing");
     m.querySelector(".upd-close").disabled = true;
     status.classList.remove("warn");
     prog.classList.remove("hidden");
@@ -162,6 +163,7 @@ async function startDownload(m, info) {
         btn.disabled = false;
     } finally {
         downloading = false;
+        if (!applied) btn.textContent = t("updater.updateNow");
         m.querySelector(".upd-close").disabled = false;
     }
 }

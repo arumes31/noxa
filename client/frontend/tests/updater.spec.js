@@ -63,11 +63,12 @@ for (const scenario of [{ enabled: false }, { available: false }, { offline: tru
     });
 }
 
-test("update shows progress, prevents duplicates, then restarts", async ({ page }) => {
+test("update shows progress, prevents duplicates, then restarts", async ({ page }, testInfo) => {
     await boot(page, { downloadPending: true });
     await page.getByRole("button", { name: "Update now" }).click();
     await expect(page.locator(".upd-pct")).toHaveText("50%");
-    await expect(page.getByRole("button", { name: "Update now" })).toBeDisabled();
+    await expect(page.getByRole("button", { name: "Processing…", exact: true })).toBeDisabled();
+    await page.getByRole("dialog", { name: "Check for updates" }).screenshot({ path: testInfo.outputPath("update-processing.png") });
     await page.keyboard.press("Escape");
     await expect(page.locator(".update-dlg")).toBeVisible();
     await page.evaluate(() => window.__finishDownload());
@@ -190,6 +191,7 @@ test("German updater translates failure, retry, progress and restart", async ({ 
     await expect(dialog.locator(".upd-status")).toHaveText("Update verfügbar: v0.4.1 (1.0 MiB)");
     await dialog.getByRole("button", { name: "Jetzt aktualisieren", exact: true }).click();
     await expect(dialog.locator(".upd-status")).toHaveText("Wird heruntergeladen…");
+    await expect(dialog.getByRole("button", { name: "Wird verarbeitet…", exact: true })).toBeDisabled();
     await page.evaluate(() => {
         for (const cb of window.__events.update_progress) cb(50, { bytes_per_second: 1048576 });
     });
