@@ -206,6 +206,10 @@ export function ComplaintListForTab(arg1) {
   return window['go']['main']['App']['ComplaintListForTab'](arg1);
 }
 
+export function CompleteClose() {
+  return window['go']['main']['App']['CompleteClose']();
+}
+
 export function Connect(arg1, arg2, arg3, arg4) {
   return window['go']['main']['App']['Connect'](arg1, arg2, arg3, arg4);
 }
@@ -664,6 +668,10 @@ export function Quit() {
 
 export function ReadPositionalInput() {
   return window['go']['main']['App']['ReadPositionalInput']();
+}
+
+export function ReadyForCloseNotifications() {
+  return window['go']['main']['App']['ReadyForCloseNotifications']();
 }
 
 export function ReconnectTab(arg1, arg2, arg3) {

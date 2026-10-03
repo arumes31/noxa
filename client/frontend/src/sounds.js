@@ -11,7 +11,8 @@ const definitions = { ...SOUND_DEFINITIONS }, urls = { ...SOUND_URLS };
 for (const [language, clips] of Object.entries(SPEECH_ASSETS)) {
     for (const [event, clip] of Object.entries(clips)) {
         const id = "speech_" + language + "_" + event;
-        definitions[id] = { duration: clip.duration, priority: SPEECH_EVENTS[event].priority, cooldown: 0, category: "Speech" };
+        definitions[id] = { duration: clip.duration, priority: SPEECH_EVENTS[event].priority, cooldown: 0, category: "Speech",
+            application: SPEECH_EVENTS[event].category === "application" };
         urls[id] = clip.url;
     }
 }
@@ -36,6 +37,22 @@ export function playAlert(event, options) {
     return speechQueue.enqueue(event, { ...options, withEffect: true });
 }
 export function clearSpeech(category) { speechQueue.clear(category); }
+export async function playClosingAnnouncement() {
+    const settings = V()?.state.settings;
+    const id = "speech_" + speechLanguage(settings, navigator.language) + "_client_closing";
+    if (!speechQueue.allowed("client_closing", settings, false)
+        || !soundEngine.allowed(id, { settings, volume: settings?.speech_volume ?? 100 })) return;
+    stopPreviews();
+    speechQueue.clear();
+    await Promise.all([soundEngine.preload([id]), soundEngine.resume()]);
+    await soundEngine.setOutput(settings.playback_device_id);
+    await new Promise(resolve => {
+        // Closing belongs to the application, so a server switch or journal
+        // replay must not cancel it with the per-server announcement queue.
+        if (!speechQueue.allowed("client_closing", V()?.state.settings, false)
+            || !soundEngine.play(id, { scope: "application", volume: settings.speech_volume ?? 100, onEnded: resolve })) resolve();
+    });
+}
 export function speechPreviewLabel(event, settings) {
     return SPEECH_ASSETS[speechLanguage(settings, navigator.language)]?.[event]?.transcript || event;
 }

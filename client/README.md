@@ -342,6 +342,11 @@ The files UI (`frontend/src/files-ui.js`, bindings in `files.go`) adds a
   event) and window opacity is not supported by the WebView2 backend — both
   are honestly disabled/marked.
 - **Compact mode (293)**: View menu / hotkey / setting — voice bar only.
+- **Closing announcement**: X, Alt+F4, and menu/tray Quit play “Closing. Good
+  bye.” before exiting (German follows the speech language). Notifications
+  settings control its volume and per-event toggle; master mute and DND apply.
+  Closing to the tray and update restarts stay silent. Exit continues if audio
+  is unavailable, with a four-second fallback for an unresponsive renderer.
 - **Themes & fonts (294-297)**: dark/light/high-contrast variable sets,
   accent color picker, scoped user-CSS textarea, UI font family + size, all
   live-applied.

@@ -10,6 +10,81 @@ test.beforeEach(async ({ page }) => {
     await page.goto("/__sounds_test__");
 });
 
+for (const language of ["en", "de"]) {
+    test(`native close waits for the ${language} goodbye recording to finish`, async ({ page }) => {
+        const result = await page.evaluate(async language => {
+            window.__noxa = { state: { replayingTabID: "connecting-server", settings: { play_sounds: true, spoken_messages: true, speech_language: language, speech_volume: 75 } } };
+            window.__noxaPolish = { dndActive: () => false };
+            const { soundEngine, clearSpeech } = await import("/src/sounds.js");
+            const { initClosingAudio } = await import("/src/closing-audio.js");
+            const { SPEECH_ASSETS } = await import("/src/speech-catalog.js");
+            let onClose, ready = false, completions = 0, ended = false, endedAtClose = false;
+            const played = [];
+            const play = soundEngine.play.bind(soundEngine);
+            soundEngine.play = (id, options) => {
+                const started = play(id, { ...options, onEnded: () => { ended = true; options.onEnded?.(); } });
+                if (started) {
+                    played.push(id);
+                    clearSpeech(); // A tab replay/reset must not truncate goodbye.
+                }
+                return started;
+            };
+            initClosingAudio({
+                runtime: { EventsOn(_name, callback) { onClose = callback; } },
+                app: {
+                    ReadyForCloseNotifications() { ready = typeof onClose === "function"; },
+                    CompleteClose() { completions++; endedAtClose = ended; },
+                },
+            });
+            const start = performance.now();
+            const first = onClose(), second = onClose();
+            const immediateCompletions = completions;
+            await Promise.all([first, second]);
+            const elapsed = performance.now() - start;
+            const active = soundEngine.active.size;
+            await soundEngine.dispose();
+            return { ready, played, completions, immediateCompletions, endedAtClose, elapsed, active,
+                duration: SPEECH_ASSETS[language].client_closing.duration };
+        }, language);
+        expect(result.ready).toBe(true);
+        expect(result.played).toEqual([`speech_${language}_client_closing`]);
+        expect(result.immediateCompletions).toBe(0);
+        expect(result.completions).toBe(1);
+        expect(result.endedAtClose).toBe(true);
+        expect(result.active).toBe(0);
+        expect(result.elapsed).toBeGreaterThanOrEqual(result.duration * 1000 - 100);
+        expect(result.elapsed).toBeLessThan(4000);
+    });
+}
+
+test("closing stays silent for notification preferences and acknowledges unavailable audio", async ({ page }) => {
+    const result = await page.evaluate(async () => {
+        window.__noxa = { state: { settings: {} } };
+        let dnd = false;
+        window.__noxaPolish = { dndActive: () => dnd };
+        const { soundEngine } = await import("/src/sounds.js");
+        const { initClosingAudio } = await import("/src/closing-audio.js");
+        let completions = 0, plays = 0;
+        const play = soundEngine.play.bind(soundEngine);
+        soundEngine.play = (...args) => { const started = play(...args); if (started) plays++; return started; };
+        const variants = [{ play_sounds: false }, { spoken_messages: false }, { speech_volume: 0 }, { speech_events: { client_closing: false } }, { dnd: true }, { unavailable: true }];
+        for (const variant of variants) {
+            window.__noxa.state.settings = { play_sounds: true, spoken_messages: true, speech_volume: 100, ...variant };
+            dnd = !!variant.dnd;
+            if (variant.unavailable) soundEngine.load = async () => { throw new Error("missing recording"); };
+            let onClose;
+            initClosingAudio({
+                runtime: { EventsOn(_name, callback) { onClose = callback; } },
+                app: { ReadyForCloseNotifications() {}, CompleteClose() { completions++; } },
+            });
+            await onClose();
+        }
+        await soundEngine.dispose();
+        return { completions, plays };
+    });
+    expect(result).toEqual({ completions: 6, plays: 0 });
+});
+
 test("rejected previews cannot reroute a pending live announcement", async ({ page }) => {
     const result = await page.evaluate(async () => {
         window.__noxa = { state: { settings: { play_sounds: true, spoken_messages: true, sound_volume: 100 }, activeTabID: "one" } };
@@ -55,7 +130,7 @@ test("static speech decodes and frequent contact cues survive mandatory repetiti
         const active=engine.active.size,retiring=engine.retiring.size;
         await engine.dispose();return {counts,active,retiring,speech};
     });
-    expect(result.speech).toBe(30);expect(result.active).toBe(0);expect(result.retiring).toBe(0);
+    expect(result.speech).toBe(32);expect(result.active).toBe(0);expect(result.retiring).toBe(0);
     expect(result.counts).toEqual({ptt_on:100,ptt_off:100,user_join:50,user_leave:50,channel_message:50,mic_on:50,mic_off:50,own_channel_switch:30});
 });
 

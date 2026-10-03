@@ -1,5 +1,6 @@
 {
   "en": {
+    "client_closing": "Closing. Good bye.",
     "banned": "You were banned from the server.",
     "kicked": "You were kicked from the server.",
     "kicked_channel": "You were kicked from the channel.",
@@ -17,6 +18,7 @@
     "test": "This is a noXa spoken notification."
   },
   "de": {
+    "client_closing": "Wird geschlossen. Auf Wiedersehen.",
     "banned": "Du wurdest vom Server gebannt.",
     "kicked": "Du wurdest vom Server entfernt.",
     "kicked_channel": "Du wurdest aus dem Channel entfernt.",
