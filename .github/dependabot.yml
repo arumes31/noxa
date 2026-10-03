@@ -13,6 +13,12 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+    ignore:
+      # Upstream confirms 1.84.0 is patched, but GO-2026-6443 still flags it.
+      # Retain patched 1.83.2 until the database or a later stable release fixes
+      # the mismatch; never suppress the CI vulnerability check.
+      - dependency-name: "google.golang.org/grpc"
+        versions: ["1.84.0"]
 
   - package-ecosystem: "gomod"
     directory: "/client"
@@ -38,3 +44,8 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+    ignore:
+      # pg_dump/pg_restore must match the supported PostgreSQL 16 server.
+      # Upgrade these together with a rehearsed database/restore migration.
+      - dependency-name: "postgres"
+        update-types: ["version-update:semver-major"]
