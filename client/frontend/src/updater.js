@@ -8,12 +8,13 @@ const V = () => window.__noxa;
 let modal = null;
 let startupChecked = false;
 let downloading = false;
+let restarting = false;
 let applied = false;
 const progressCleanup = new WeakMap();
 const checking = new WeakSet();
 
 function closeModal() {
-    if (modal && !downloading) {
+    if (modal && !downloading && !restarting) {
         closeDialog(modal);
     }
 }
@@ -34,6 +35,7 @@ function showUpdateModal() {
             </div>
             <div class="dlg-buttons">
                 <button class="upd-retry hidden">${t("common.retry")}</button>
+                <button class="upd-cancel hidden">${t("updater.cancelDownload")}</button>
                 <button class="upd-update hidden">${t("updater.updateNow")}</button>
                 <button class="upd-close">${t("common.close")}</button>
             </div>
@@ -43,7 +45,7 @@ function showUpdateModal() {
     const mounted = modal;
     mounted.querySelector(".upd-retry").onclick = () => runCheck(mounted);
     mountDialog(modal, {
-        onCancel: () => !downloading,
+        onCancel: () => !downloading && !restarting,
         onClose: () => {
             progressCleanup.get(mounted)?.();
             progressCleanup.delete(mounted);
@@ -104,6 +106,26 @@ async function startDownload(m, info) {
     const status = m.querySelector(".upd-status");
     const btn = m.querySelector(".upd-update");
     const prog = m.querySelector(".upd-progress");
+    const cancel = m.querySelector(".upd-cancel");
+    let phase = "downloading";
+    let attemptActive = true;
+    cancel.classList.remove("hidden");
+    cancel.disabled = false;
+    cancel.textContent = t("updater.cancelDownload");
+    cancel.onclick = async () => {
+        cancel.disabled = true;
+        cancel.textContent = t("updater.cancelling");
+        try {
+            const accepted = await window.go.main.App.CancelUpdate();
+            if (!attemptActive) return;
+            if (!accepted) cancel.classList.add("hidden");
+        } catch (error) {
+            if (!attemptActive || phase !== "downloading") return;
+            status.textContent = t("updater.cancelFailed", { error });
+            cancel.disabled = false;
+            cancel.textContent = t("updater.cancelDownload");
+        }
+    };
     btn.disabled = true;
     btn.textContent = t("updater.processing");
     m.querySelector(".upd-close").disabled = true;
@@ -120,6 +142,7 @@ async function startDownload(m, info) {
     pct.textContent = "0%";
     showSpeed(null);
     const onProgress = (p, details) => {
+        if (phase !== "downloading") return;
         if (Number.isFinite(p)) {
             fill.style.width = Math.max(0, Math.min(100, p)) + "%";
             pct.textContent = p >= 0 ? Math.min(100, p) + "%" : "—";
@@ -134,8 +157,20 @@ async function startDownload(m, info) {
         }
     };
     let progressUnsub = window.runtime.EventsOn("update_progress", onProgress);
+    let phaseUnsub = window.runtime.EventsOn("update_phase", nextPhase => {
+        if (!["downloading", "verifying", "installing", "ready"].includes(nextPhase)) return;
+        phase = nextPhase;
+        status.textContent = t(`updater.${phase === "ready" ? "restartRequired" : phase}`);
+        if (phase !== "downloading") {
+            clearTimeout(stallTimer);
+            cancel.classList.add("hidden");
+            prog.classList.add("hidden");
+        }
+    });
     const unsubscribe = () => {
         clearTimeout(stallTimer);
+        phaseUnsub?.();
+        phaseUnsub = null;
         if (!progressUnsub) return;
         progressUnsub();
         progressUnsub = null;
@@ -147,8 +182,9 @@ async function startDownload(m, info) {
         const err = await window.go.main.App.DownloadAndApply(info);
         unsubscribe();
         if (err) {
-            status.textContent = t("updater.updateFailed", { error: err });
-            status.classList.add("warn");
+            const cancelled = err === "update cancelled";
+            status.textContent = cancelled ? t("updater.cancelled") : t("updater.updateFailed", { error: err });
+            status.classList.toggle("warn", !cancelled);
             prog.classList.add("hidden");
             btn.disabled = false;
             return;
@@ -162,7 +198,9 @@ async function startDownload(m, info) {
         prog.classList.add("hidden");
         btn.disabled = false;
     } finally {
+        attemptActive = false;
         downloading = false;
+        cancel.classList.add("hidden");
         if (!applied) btn.textContent = t("updater.updateNow");
         m.querySelector(".upd-close").disabled = false;
     }
@@ -178,7 +216,12 @@ function showRestart(m) {
     btn.textContent = t("updater.restartNow");
     btn.disabled = false;
     btn.onclick = async () => {
+        if (restarting) return;
+        restarting = true;
         btn.disabled = true;
+        btn.textContent = t("updater.processing");
+        m.querySelector(".upd-close").disabled = true;
+        status.textContent = t("updater.starting");
         try {
             const error = await window.go.main.App.ApplyAndRestart();
             if (error) throw new Error(error);
@@ -186,6 +229,20 @@ function showRestart(m) {
             status.textContent = t("updater.restartFailed", { error });
             status.classList.add("warn");
             btn.disabled = false;
+            // A failed replacement may have been rolled back by the native
+            // launcher. Offer a fresh download instead of restarting it again.
+            try {
+                if (await window.go.main.App.GetUpdatePhase() === "restored") {
+                    applied = false;
+                    btn.textContent = t("updater.updateNow");
+                    btn.classList.add("hidden");
+                    m.querySelector(".upd-retry").classList.remove("hidden");
+                }
+            } catch { /* Keep the original restart error visible. */ }
+        } finally {
+            restarting = false;
+            if (applied) btn.textContent = t("updater.restartNow");
+            m.querySelector(".upd-close").disabled = false;
         }
     };
 }

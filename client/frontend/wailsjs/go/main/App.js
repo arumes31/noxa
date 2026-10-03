@@ -54,6 +54,10 @@ export function CancelTransferForTab(arg1, arg2) {
   return window['go']['main']['App']['CancelTransferForTab'](arg1, arg2);
 }
 
+export function CancelUpdate() {
+  return window['go']['main']['App']['CancelUpdate']();
+}
+
 export function CertificateClockWarning() {
   return window['go']['main']['App']['CertificateClockWarning']();
 }
@@ -208,6 +212,10 @@ export function ComplaintListForTab(arg1) {
 
 export function CompleteClose() {
   return window['go']['main']['App']['CompleteClose']();
+}
+
+export function ConfirmUpdateStartup() {
+  return window['go']['main']['App']['ConfirmUpdateStartup']();
 }
 
 export function Connect(arg1, arg2, arg3, arg4) {
@@ -520,6 +528,10 @@ export function GetServerConfigForTab(arg1) {
 
 export function GetSettings() {
   return window['go']['main']['App']['GetSettings']();
+}
+
+export function GetUpdatePhase() {
+  return window['go']['main']['App']['GetUpdatePhase']();
 }
 
 export function Greet(arg1) {

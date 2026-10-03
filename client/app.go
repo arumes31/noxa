@@ -38,6 +38,7 @@ var (
 
 // App is the Wails application.
 type App struct {
+	update         updateOperation
 	overlayMu      sync.Mutex
 	overlay        gamingOverlayWindow
 	overlayStopped bool

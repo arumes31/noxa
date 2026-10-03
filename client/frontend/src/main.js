@@ -245,7 +245,8 @@ function applyAppearance() {
 // Login / connection
 // ---------------------------------------------------------------------------
 
-(async () => {
+const startupInitialized = (async () => {
+    let settingsInitialized = false;
     try {
         state.settings = await window.go.main.App.GetSettings();
         if (!$("login-display-name").value && !$("login-display-name").dataset.edited) {
@@ -254,6 +255,7 @@ function applyAppearance() {
         void updateSoundOutput();
         // (88) reflect the persisted low-bandwidth mode in the voice bar.
         if (state.settings?.low_bandwidth) setLowBandwidth(true, false);
+        settingsInitialized = true;
     } catch {
         state.settings = null;
     }
@@ -271,6 +273,7 @@ function applyAppearance() {
     } catch { /* version display is best-effort */ }
     document.querySelector(".login-card").classList.add("in");
     startupAutoCheck();
+    return settingsInitialized;
 })();
 
 function showLogin() {
@@ -3002,3 +3005,8 @@ initPolishUI(); // wave-8c polish/a11y (registers window.__noxaPolish)
 initNotifications(); // wave-9 notification matrix (registers window.__noxaNotify)
 chatUI.initChat(); // wave-5b chat UI (must run after __noxa exists)
 initWorkspace();
+
+// A replacement is ready only once native settings and all UI modules have
+// initialized. A startup exception leaves the old app's recovery guard active.
+void startupInitialized.then(ready => ready && window.go.main.App.ConfirmUpdateStartup())
+    .catch(error => console.warn("Update startup confirmation failed", error));

@@ -15,7 +15,11 @@ async function boot(page, scenario = {}) {
         window.go = { main: { App: new Proxy({}, { get: (_, method) => async () => {
             window.__calls[method] = (window.__calls[method] || 0) + 1;
             const s = window.__scenario;
-            if (method === "GetSettings") return { onboarding_done: true, alpha_dismissed: "0.4.0", updates_auto_check: s.enabled !== false, notification_matrix: {} };
+            if (method === "GetSettings") {
+                if (s.settingsThrows) throw new Error("settings bridge unavailable");
+                if (s.settingsPending) await new Promise(resolve => { window.__finishSettings = resolve; });
+                return { onboarding_done: true, alpha_dismissed: "0.4.0", updates_auto_check: s.enabled !== false, notification_matrix: {} };
+            }
             if (method === "ClientVersionShort") return "0.4.0";
             if (method === "CheckForUpdate") {
                 if (s.checkPending) await new Promise((resolve) => { window.__finishCheck = resolve; });
@@ -28,7 +32,15 @@ async function boot(page, scenario = {}) {
                 if (s.downloadThrows) throw new Error("connection lost");
                 return s.downloadError || "";
             }
+            if (method === "CancelUpdate") {
+                if (s.cancelThrows) throw new Error("cancel unavailable");
+                s.downloadError = "update cancelled";
+                window.__finishDownload?.();
+                return true;
+            }
+            if (method === "GetUpdatePhase") return s.restored ? "restored" : "ready";
             if (method === "ApplyAndRestart") {
+                if (s.restartPending) await new Promise(resolve => { window.__finishRestart = resolve; });
                 if (s.restartThrows) throw new Error("launch failed");
                 return s.restartError || "";
             }
@@ -37,8 +49,24 @@ async function boot(page, scenario = {}) {
         } }) } };
     }, scenario);
     await page.goto("/");
-    await expect(page.locator(".login-card")).toHaveClass(/(?:^|\s)in(?:\s|$)/);
+    if (!scenario.settingsPending) await expect(page.locator(".login-card")).toHaveClass(/(?:^|\s)in(?:\s|$)/);
 }
+
+test("replacement readiness waits for native startup and rendered login", async ({ page }) => {
+    await boot(page, { settingsPending: true, enabled: false });
+    await page.waitForFunction(() => typeof window.__finishSettings === "function");
+    expect(await page.evaluate(() => window.__calls.ConfirmUpdateStartup)).toBeUndefined();
+    await page.evaluate(() => window.__finishSettings());
+    await expect(page.locator(".login-card")).toHaveClass(/(?:^|\s)in(?:\s|$)/);
+    await expect.poll(() => page.evaluate(() => window.__calls.ConfirmUpdateStartup)).toBe(1);
+});
+
+test("broken native settings startup cannot confirm a healthy replacement", async ({ page }) => {
+    await boot(page, { settingsThrows: true });
+    await expect(page.locator(".login-card")).toHaveClass(/(?:^|\s)in(?:\s|$)/);
+    await expect(page.getByRole("button", { name: "Update now" })).toBeVisible();
+    expect(await page.evaluate(() => window.__calls.ConfirmUpdateStartup)).toBeUndefined();
+});
 
 test("startup offers update before connecting and checks once", async ({ page }) => {
     await boot(page);
@@ -53,6 +81,59 @@ test("startup offers update before connecting and checks once", async ({ page })
     await dialog.getByRole("button", { name: "Close", exact: true }).click();
     await expect(dialog).toHaveCount(0);
     await expect(page.locator("#login-addr")).toBeEnabled();
+});
+
+test("download can be cancelled and retried without showing an installation failure", async ({ page }) => {
+    await boot(page, { downloadPending: true });
+    await page.getByRole("button", { name: "Update now" }).click();
+    await page.getByRole("button", { name: "Cancel download", exact: true }).click();
+    await expect(page.locator(".upd-status")).toHaveText("Download cancelled. You can try again.");
+    await expect(page.locator(".upd-status")).not.toHaveClass(/warn/);
+    await expect(page.getByRole("button", { name: "Update now" })).toBeEnabled();
+    expect(await page.evaluate(() => window.__events.update_phase.length)).toBe(0);
+    await page.evaluate(() => { window.__scenario = {}; });
+    await page.getByRole("button", { name: "Update now" }).click();
+    await expect(page.getByRole("button", { name: "Restart now" })).toBeVisible();
+});
+
+test("verification and installation show distinct stages and cannot be cancelled", async ({ page }) => {
+    await boot(page, { downloadPending: true });
+    await page.getByRole("button", { name: "Update now" }).click();
+    await expect(page.getByRole("button", { name: "Cancel download", exact: true })).toBeVisible();
+    for (const [phase, label] of [["verifying", "Verifying update…"], ["installing", "Installing update…"]]) {
+        await page.evaluate(phase => window.__events.update_phase.forEach(cb => cb(phase)), phase);
+        await expect(page.locator(".upd-status")).toHaveText(label);
+        await expect(page.locator(".upd-cancel")).toBeHidden();
+        await expect(page.getByRole("button", { name: "Processing…", exact: true })).toBeDisabled();
+        await expect(page.locator(".upd-speed")).toBeHidden();
+    }
+    await page.evaluate(() => window.__finishDownload());
+    await expect(page.locator(".upd-status")).toHaveText("Ready to restart");
+    expect(await page.evaluate(() => window.__events.update_phase.length)).toBe(0);
+});
+
+test("a restored failed startup offers a fresh update check", async ({ page }) => {
+    await boot(page, { restartError: "Previous version restored after startup failed", restored: true });
+    await page.getByRole("button", { name: "Update now" }).click();
+    await page.getByRole("button", { name: "Restart now" }).click();
+    await expect(page.locator(".upd-status")).toContainText("Previous version restored");
+    await expect(page.getByRole("button", { name: "Restart now" })).toBeHidden();
+    await page.getByRole("button", { name: "Retry", exact: true }).click();
+    await expect(page.getByRole("button", { name: "Update now" })).toBeEnabled();
+});
+
+test("restart remains visibly processing until startup succeeds or recovers", async ({ page }) => {
+    await boot(page, { restartPending: true, restartError: "startup failed" });
+    await page.getByRole("button", { name: "Update now" }).click();
+    await page.getByRole("button", { name: "Restart now" }).click();
+    await expect(page.getByRole("button", { name: "Processing…", exact: true })).toBeDisabled();
+    await expect(page.locator(".upd-status")).toContainText("Starting the updated app");
+    await page.keyboard.press("Escape");
+    await expect(page.locator(".update-dlg")).toBeVisible();
+    await expect(page.getByRole("button", { name: "Close", exact: true })).toBeDisabled();
+    await page.evaluate(() => window.__finishRestart());
+    await expect(page.getByRole("button", { name: "Restart now" })).toBeEnabled();
+    await expect(page.locator(".upd-status")).toContainText("startup failed");
 });
 
 for (const scenario of [{ enabled: false }, { available: false }, { offline: true }]) {
@@ -196,8 +277,14 @@ test("German updater translates failure, retry, progress and restart", async ({ 
         for (const cb of window.__events.update_progress) cb(50, { bytes_per_second: 1048576 });
     });
     await expect(dialog.locator(".upd-speed")).toHaveText("Geschwindigkeit: 1.00 MiB/s");
+    await expect(dialog.getByRole("button", { name: "Download abbrechen", exact: true })).toBeVisible();
+    for (const [phase, label] of [["verifying", "Update wird geprüft…"], ["installing", "Update wird installiert…"]]) {
+        await page.evaluate(phase => window.__events.update_phase.forEach(cb => cb(phase)), phase);
+        await expect(dialog.locator(".upd-status")).toHaveText(label);
+        await expect(dialog.locator(".upd-cancel")).toBeHidden();
+    }
     await page.evaluate(() => window.__finishDownload());
     await expect(dialog.getByRole("button", { name: "Jetzt neu starten", exact: true })).toBeVisible();
-    await expect(dialog.locator(".upd-status")).toHaveText("Update angewendet — Neustart erforderlich");
+    await expect(dialog.locator(".upd-status")).toHaveText("Bereit zum Neustart");
     await dialog.getByRole("button", { name: "Schließen", exact: true }).click();
 });

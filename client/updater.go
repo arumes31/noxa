@@ -8,17 +8,16 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/url"
 	"os"
-	"os/exec"
 	"strings"
 	"time"
 
-	"github.com/minio/selfupdate"
 	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
 
 	"noxa/internal/updatemanifest"
@@ -109,8 +108,8 @@ func readLimited(r io.Reader, limit int64) ([]byte, error) {
 	return b, nil
 }
 
-// fetchLatestRelease queries the latest release from the configured repo.
-func fetchLatestRelease(apiBase string) (*githubRelease, error) {
+// fetchLatestReleaseContext queries the configured repo with a cancellable request.
+func fetchLatestReleaseContext(parent context.Context, apiBase string) (*githubRelease, error) {
 	if version.UpdateRepo == "" || version.UpdateRepo == "noxa/noxa" {
 		return nil, fmt.Errorf("no update source configured (UpdateRepo placeholder)")
 	}
@@ -127,7 +126,7 @@ func fetchLatestRelease(apiBase string) (*githubRelease, error) {
 	base.RawQuery = ""
 	base.Fragment = ""
 
-	ctx, cancel := context.WithTimeout(context.Background(), metadataTimeout)
+	ctx, cancel := context.WithTimeout(parent, metadataTimeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base.String(), nil)
 	if err != nil {
@@ -172,7 +171,11 @@ func validRepoPart(part string) bool {
 // CheckForUpdate compares the latest GitHub release against the embedded
 // version and returns update metadata.
 func (a *App) CheckForUpdate() (UpdateInfo, error) {
-	rel, err := fetchLatestRelease(updateAPIBase)
+	return checkForUpdateContext(context.Background())
+}
+
+func checkForUpdateContext(ctx context.Context) (UpdateInfo, error) {
+	rel, err := fetchLatestReleaseContext(ctx, updateAPIBase)
 	if err != nil {
 		return UpdateInfo{}, err
 	}
@@ -354,8 +357,18 @@ func verifyChecksum(root *os.Root, fileName, checksumsText, assetName string) er
 // self-applies it (renaming the running exe via minio/selfupdate). It emits
 // update_progress events with percentage and transfer-rate details. Returns ""
 // on success or the failure reason; on failure the old version keeps running.
-func (a *App) DownloadAndApply(info UpdateInfo) string {
-	fresh, err := a.CheckForUpdate()
+func (a *App) DownloadAndApply(info UpdateInfo) (result string) {
+	ctx, finish, err := a.beginUpdate()
+	if err != nil {
+		return err.Error()
+	}
+	defer finish()
+	defer func() {
+		if result != "" && ctx.Err() == context.Canceled {
+			result = "update cancelled"
+		}
+	}()
+	fresh, err := checkForUpdateContext(ctx)
 	if err != nil {
 		return "update metadata could not be revalidated: " + err.Error()
 	}
@@ -366,9 +379,6 @@ func (a *App) DownloadAndApply(info UpdateInfo) string {
 		return fmt.Sprintf("update changed from %s to %s; confirm the new version", info.Version, fresh.Version)
 	}
 	info = fresh
-
-	ctx, cancel := context.WithTimeout(context.Background(), updateTimeout)
-	defer cancel()
 
 	tmpDir, err := os.MkdirTemp("", "noxa-update-*")
 	if err != nil {
@@ -402,6 +412,9 @@ func (a *App) DownloadAndApply(info UpdateInfo) string {
 	if err := downloadTo(ctx, info.URL, tmpRoot, clientAssetName, maxClientAssetSize, a.emitUpdateProgress); err != nil {
 		return err.Error()
 	}
+	if err := a.updatePhase(ctx, "verifying"); err != nil {
+		return err.Error()
+	}
 	if err := verifyChecksum(tmpRoot, clientAssetName, string(sums), clientAssetName); err != nil {
 		return "update rejected: " + err.Error()
 	}
@@ -414,13 +427,20 @@ func (a *App) DownloadAndApply(info UpdateInfo) string {
 		_ = f.Close()
 		return "update rejected: invalid Windows AMD64 executable: " + err.Error()
 	}
-	if err := selfupdate.Apply(f, selfupdate.Options{}); err != nil {
+	if err := a.updatePhase(ctx, "installing"); err != nil {
+		_ = f.Close()
+		return err.Error()
+	}
+	if err := applyClientUpdate(f); err != nil {
 		_ = f.Close()
 		return fmt.Sprintf("self-update failed (old version still running): %v", err)
 	}
 	if err := f.Close(); err != nil {
 		return fmt.Sprintf("close applied update: %v", err)
 	}
+	// Applying is synchronous and cannot be cancelled; a successful replacement
+	// is ready even if its download deadline elapsed during filesystem work.
+	_ = a.updatePhase(context.Background(), "ready")
 	return ""
 }
 
@@ -437,12 +457,27 @@ func (a *App) ApplyAndRestart() string {
 	if a.ctx == nil {
 		return "application window is not available"
 	}
+	a.update.mu.Lock()
+	if a.update.running {
+		a.update.mu.Unlock()
+		return "an update is already processing"
+	}
+	a.update.running = true
+	a.update.mu.Unlock()
+	defer func() {
+		a.update.mu.Lock()
+		a.update.running = false
+		a.update.mu.Unlock()
+	}()
 	exe, err := os.Executable()
 	if err != nil {
 		return err.Error()
 	}
 	// #nosec G204 -- exe is the current executable path returned by the OS, not user input.
 	if err := restartLaunch(exe); err != nil {
+		if errors.Is(err, errUpdateRestored) {
+			_ = a.updatePhase(context.Background(), "restored")
+		}
 		return err.Error()
 	}
 	a.quitting.Store(true)
@@ -450,12 +485,6 @@ func (a *App) ApplyAndRestart() string {
 	return ""
 }
 
-var restartLaunch = func(exe string) error {
-	// #nosec G204 -- exe is the current executable path returned by the OS.
-	cmd := exec.Command(exe)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	return cmd.Start()
-}
+var restartLaunch = launchUpdatedClient
 
 var wailsQuit = wailsRuntime.Quit

@@ -30,6 +30,8 @@ export function CancelTransfer(arg1:string):Promise<void>;
 
 export function CancelTransferForTab(arg1:string,arg2:string):Promise<string>;
 
+export function CancelUpdate():Promise<boolean>;
+
 export function CertificateClockWarning():Promise<string>;
 
 export function ChangeRoleChannel(arg1:netproto.RoleChannelChange):Promise<netproto.RoleChannelResult>;
@@ -107,6 +109,8 @@ export function ComplaintList():Promise<netproto.Complaints>;
 export function ComplaintListForTab(arg1:string):Promise<netproto.Complaints>;
 
 export function CompleteClose():Promise<void>;
+
+export function ConfirmUpdateStartup():Promise<void>;
 
 export function Connect(arg1:string,arg2:string,arg3:string,arg4:string):Promise<string>;
 
@@ -263,6 +267,8 @@ export function GetServerConfig():Promise<netproto.ServerConfig>;
 export function GetServerConfigForTab(arg1:string):Promise<netproto.ServerConfig>;
 
 export function GetSettings():Promise<main.Settings>;
+
+export function GetUpdatePhase():Promise<string>;
 
 export function Greet(arg1:string):Promise<string>;
 
