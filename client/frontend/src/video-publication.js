@@ -226,11 +226,18 @@ export function createVideoPublication({ policy }) {
         const quality = createShareQualityControls(qualityID, { preset: initialPreset, custom });
         overlay.querySelector(".sh-quality").appendChild(quality.element);
         const audioSelect = overlay.querySelector(".sh-audio");
-        audioSelect.value = replacing && V().state.shareStream?.getAudioTracks().some(track => track.readyState === "live") ? initialAudio : "none";
+        const audioChoices = new Map();
+        if (replacing) audioChoices.set(initialSurface,
+            V().state.shareStream?.getAudioTracks().some(track => track.readyState === "live") ? initialAudio : "none");
         overlay.querySelector(`input[value="${initialSurface}"]`).checked = true;
+        const selectedSurface = () => overlay.querySelector(`input[name="${sourceName}"]:checked`).value;
+        // Keep explicit choices per source so toggling sources cannot undo an override.
+        audioSelect.onchange = () => audioChoices.set(selectedSurface(), audioSelect.value);
         const syncAudioSource = () => {
-            const application = overlay.querySelector('input[value="window"]').checked;
+            const surface = selectedSurface();
+            const application = surface === "window";
             audioSelect.querySelector('[value="application"]').disabled = !application;
+            audioSelect.value = audioChoices.get(surface) ?? (application ? "application" : "none");
             if (!application && audioSelect.value === "application") audioSelect.value = "none";
         };
         for (const source of overlay.querySelectorAll(`input[name="${sourceName}"]`)) source.onchange = syncAudioSource;

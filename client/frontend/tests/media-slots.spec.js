@@ -122,19 +122,49 @@ async function installApplicationCapture(page, label = "Application Audio", surf
 
 test("application audio requires a window and never switches silently to system audio", async ({ page }) => {
     await page.locator("#voice-screen").click();
+    await expect(page.locator(".sh-audio")).toHaveValue("none");
     await expect(page.locator('.sh-audio option[value="application"]')).toBeDisabled();
     await page.getByLabel("Window", { exact: true }).check();
-    await page.locator(".sh-audio").selectOption("application");
+    await expect(page.locator(".sh-audio")).toHaveValue("application");
     await page.getByLabel("Screen", { exact: true }).check();
     await expect(page.locator(".sh-audio")).toHaveValue("none");
     await expect(page.locator('.sh-audio option[value="application"]')).toBeDisabled();
+    await page.getByLabel("Region of this app", { exact: true }).check();
+    await expect(page.locator(".sh-audio")).toHaveValue("none");
+    await expect(page.locator('.sh-audio option[value="application"]')).toBeDisabled();
+    await page.getByLabel("Window", { exact: true }).check();
+    await expect(page.locator(".sh-audio")).toHaveValue("application");
 });
+
+for (const mode of ["none", "system"]) {
+    test(`window sharing honors the ${mode} audio override across source changes and reopening`, async ({ page }) => {
+        await installApplicationCapture(page, "System Audio");
+        await page.locator("#voice-screen").click();
+        await page.getByLabel("Window", { exact: true }).check();
+        await expect(page.locator(".sh-audio")).toHaveValue("application");
+        await page.locator(".sh-audio").selectOption(mode);
+        await page.getByLabel("Screen", { exact: true }).check();
+        await page.getByLabel("Window", { exact: true }).check();
+        await expect(page.locator(".sh-audio")).toHaveValue(mode);
+        await page.getByRole("button", { name: "Start sharing", exact: true }).click();
+        await expect(page.locator("#sharing-status")).toContainText(mode === "none" ? "Share audio off" : "System audio on");
+        expect(await page.evaluate(() => window.__media.captureOptions)).toMatchObject({
+            video: { displaySurface: "window" }, audio: mode === "system", windowAudio: mode === "system" ? "system" : "exclude",
+        });
+        await page.locator(".sharing-change").click();
+        await expect(page.getByLabel("Window", { exact: true })).toBeChecked();
+        await expect(page.locator(".sh-audio")).toHaveValue(mode);
+        await page.getByLabel("Screen", { exact: true }).check();
+        await page.getByLabel("Window", { exact: true }).check();
+        await expect(page.locator(".sh-audio")).toHaveValue(mode);
+    });
+}
 
 test("application audio publishes in its own slot, labels status and survives source changes", async ({ page }) => {
     await installApplicationCapture(page);
     await page.locator("#voice-screen").click();
     await page.getByLabel("Window", { exact: true }).check();
-    await page.locator(".sh-audio").selectOption("application");
+    await expect(page.locator(".sh-audio")).toHaveValue("application");
     await page.getByRole("button", { name: "Start sharing", exact: true }).click();
     await expect(page.locator("#sharing-status")).toContainText("Application audio on");
     expect(await page.evaluate(() => window.__media.captureOptions)).toMatchObject({ video: { displaySurface: "window" },
@@ -303,6 +333,8 @@ test("changing sources keeps the old share on cancel, preserves the preset and s
     expect(await page.evaluate(() => window.__media.displayTracks[0].readyState)).toBe("live");
     await panel.getByRole("button", { name: "Change source" }).click();
     await page.getByLabel("Window", { exact: true }).check();
+    await expect(page.locator(".sh-audio")).toHaveValue("application");
+    await page.locator(".sh-audio").selectOption("none");
     await page.getByRole("button", { name: "Start sharing", exact: true }).click();
     await expect(panel).toContainText("You're sharing: Window");
     const result = await page.evaluate(() => ({ tracks: window.__media.displayTracks.map(t => t.readyState), camera: window.__media.camera.readyState }));
