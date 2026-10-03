@@ -87,14 +87,20 @@ func applyClientUpdate(asset io.Reader) error {
 
 func hashUpdateExecutable(path string) ([sha256.Size]byte, error) {
 	var empty [sha256.Size]byte
-	info, err := os.Lstat(path)
+	root, err := os.OpenRoot(filepath.Dir(path))
+	if err != nil {
+		return empty, err
+	}
+	defer func() { _ = root.Close() }()
+	name := filepath.Base(path)
+	info, err := root.Lstat(name)
 	if err != nil {
 		return empty, err
 	}
 	if !info.Mode().IsRegular() {
 		return empty, fmt.Errorf("executable is not a regular file")
 	}
-	f, err := os.Open(path)
+	f, err := root.Open(name)
 	if err != nil {
 		return empty, err
 	}
