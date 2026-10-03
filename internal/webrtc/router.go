@@ -197,6 +197,9 @@ type Router struct {
 	// Control changes take Router.mu before watchMu. Final writes never acquire
 	// Router.mu: authority -> video policy -> watch -> egress -> socket.
 	watchMu           contextRWMutex
+	echoScopeMu       contextRWMutex
+	echoScopeEpoch    uint64
+	echoMembers       map[string]uint64
 	whisperScopeMu    contextRWMutex
 	whisperScopeEpoch uint64
 	whisperScopes     map[string]whisperScope
@@ -261,8 +264,8 @@ type Router struct {
 	onRenegotiate func(subscriberID string)
 
 	// echoChannel, when non-zero, is the loopback test channel: publishers in
-	// it get a self pair track and hear their own audio (the only channel
-	// with self-fan-out). Set via SetEchoChannel.
+	// it get a self pair track and receive only their own media. Media never
+	// crosses between echo participants or into other channels or taps.
 	echoChannel int64
 
 	// channelAudio, when set, resolves a channel's Opus audio configuration
@@ -306,12 +309,28 @@ func (r *Router) SetRenegotiateHook(fn func(subscriberID string)) {
 }
 
 // SetEchoChannel sets the loopback test channel (15): publishers in this
-// channel get a self pair track and receive their own audio back. 0 disables
+// channel get a self pair track and receive only their own media. 0 disables
 // the echo channel.
 func (r *Router) SetEchoChannel(channelID int64) {
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	r.echoChannel = channelID
+	r.refreshEchoScopeLocked()
+	r.refreshWhisperScopesLocked()
+	renegotiate := r.prunePublishersLocked()
+	if channelID != 0 {
+		for client := range r.members[channelID] {
+			if r.addPublisherLocked(client, client) {
+				renegotiate[client] = true
+			}
+		}
+	}
+	hook := r.onRenegotiate
+	r.mu.Unlock()
+	if hook != nil {
+		for sub := range renegotiate {
+			hook(sub)
+		}
+	}
 }
 
 // EchoChannel returns the currently configured loopback channel; zero disables it.
@@ -399,11 +418,12 @@ func (r *Router) JoinChannel(channelID int64, clientID string) {
 	}
 	set[clientID] = true
 	r.clientChan[clientID] = channelID
+	r.refreshEchoScopeLocked()
 	r.refreshWhisperScopesLocked()
 
 	// Create publisher tracks between the new member and every existing
 	// member that has a peer connection.
-	renegotiate := make(map[string]bool)
+	renegotiate := r.prunePublishersLocked()
 	for other := range set {
 		if other == clientID {
 			continue
@@ -478,6 +498,7 @@ func (r *Router) leaveChannelLocked(channelID int64, clientID string) {
 		r.invalidateVideoLocked(clientID)
 		delete(r.clientChan, clientID)
 	}
+	r.refreshEchoScopeLocked()
 	r.refreshWhisperScopesLocked()
 	r.logger.Debug("router: client left channel",
 		zap.Int64("channel_id", channelID),
@@ -1041,10 +1062,18 @@ func (r *Router) WhisperTargets(clientID string) []string {
 // the whisperer itself. Callers must hold at least a read lock.
 func (r *Router) whisperTargetsLocked(clientID string, cfg *whisperConfig) map[string]bool {
 	out := make(map[string]bool)
+	if r.inEchoLocked(clientID) {
+		return out
+	}
 	for c := range cfg.clients {
-		out[c] = true
+		if !r.inEchoLocked(c) {
+			out[c] = true
+		}
 	}
 	for ch := range cfg.channels {
+		if r.echoChannel != 0 && ch == r.echoChannel {
+			continue
+		}
 		for c := range r.members[ch] {
 			out[c] = true
 		}
@@ -1187,8 +1216,8 @@ func (r *Router) detachPeer(clientID string, leaveChannel bool) {
 // of the sender's current channel. Each subscriber receives the packet on its
 // dedicated (publisher, slot) track; a packet whose slot has no output track
 // is dropped rather than written somewhere else (70). Taps (e.g. recorders)
-// receive it on their single output track. The sender never receives its own
-// audio. It returns the number of successful writes.
+// receive it on their single output track. In the echo channel, only the
+// sender receives its own audio. It returns the number of successful writes.
 //
 // pkt is passed to every writer unchanged and uncloned (see TrackWriter's
 // aliasing contract). The two slices built here — targetSubscribersLocked's
@@ -1291,23 +1320,16 @@ func (r *Router) senderTapID(senderID string) string {
 }
 
 // targetSubscribersLocked computes the subscriber IDs that should receive
-// senderID's media right now (whisper targets or channel members, sender
-// excluded). Callers must hold at least a read lock.
+// senderID's media right now (whisper targets or other channel members, or
+// only the sender in echo). Callers must hold at least a read lock.
 func (r *Router) targetSubscribersLocked(senderID, slot string) []string {
 	out := make([]string, 0, 8)
+	if r.inEchoLocked(senderID) {
+		return append(out, senderID)
+	}
 
 	if cfg, ok := r.whispers[senderID]; slot == SlotMic && ok && cfg.active {
-		seen := make(map[string]bool)
-		for clientID := range cfg.clients {
-			seen[clientID] = true
-		}
-		for channelID := range cfg.channels {
-			for clientID := range r.members[channelID] {
-				seen[clientID] = true
-			}
-		}
-		delete(seen, senderID)
-		for clientID := range seen {
+		for clientID := range r.whisperTargetsLocked(senderID, cfg) {
 			out = append(out, clientID)
 		}
 		return out
@@ -1318,7 +1340,7 @@ func (r *Router) targetSubscribersLocked(senderID, slot string) []string {
 		return out
 	}
 	for clientID := range r.members[channelID] {
-		if clientID == senderID && channelID != r.echoChannel {
+		if clientID == senderID {
 			continue
 		}
 		out = append(out, clientID)
@@ -1878,7 +1900,7 @@ type videoSourceRef struct {
 func (r *Router) videoPublishersLocked(channelID int64, exclude string) []videoSourceRef {
 	var out []videoSourceRef
 	for publisherID, bySlot := range r.videoSources {
-		if publisherID == exclude || !r.members[channelID][publisherID] {
+		if publisherID == exclude || !r.members[channelID][publisherID] || !r.echoPublisherAllowedLocked(exclude, publisherID) {
 			continue
 		}
 		for slot := range bySlot {

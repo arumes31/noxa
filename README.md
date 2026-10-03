@@ -93,7 +93,7 @@ graph TD
 * **Priority Commander**: Automatic audio ducking (−12 dB attenuation) across non-priority channels when a Priority Speaker talks.
 * **Whisper Routing**: Point-to-point and cross-channel targeted voice transmission bypasses standard channel boundaries.
 * **Microphone recovery**: If the selected microphone disconnects, receiving audio and video continues. Choose and apply a device in **Capture** settings, then select **Retry microphone**. A replacement microphone never starts automatically.
-* **Network echo test**: In **Capture** settings, explicitly join the server's echo channel to hear your microphone through the normal voice connection. Mute and push-to-talk still apply; wear headphones, and remember that others in this shared channel can hear you. The return button restores your previous channel while the test remains active on that server tab. Each server automatically creates `Echo Test` on startup after role setup, granting admitted users permission to view, join and speak only in that channel. Existing channels with the configured name retain their access rules. Set Docker environment variable `NOXA_ECHO_CHANNEL_ENABLED=false` and recreate the server container to disable creation and loopback; existing channels and history are retained. Configure the name with `NOXA_ECHO_CHANNEL_NAME` or `echo_channel_name` in YAML.
+* **Network echo test**: In **Capture** settings, explicitly join the server's echo channel to hear your microphone through the normal voice connection. Only you hear your microphone: other participants cannot hear you and you cannot hear them. Echo media is excluded from whispers, cross-participant video, and channel recordings. Mute and push-to-talk still apply; wear headphones. The return button restores your previous channel while the test remains active on that server tab. Each server automatically creates `Echo Test` on startup after role setup, granting admitted users permission to view, join and speak only in that channel. Existing channels with the configured name retain their access rules, custom metadata and history; startup updates only the known old system-created echo topic. Set Docker environment variable `NOXA_ECHO_CHANNEL_ENABLED=false` and recreate the server container to disable creation and loopback; existing channels and history are retained. Configure the name with `NOXA_ECHO_CHANNEL_NAME` or `echo_channel_name` in YAML.
 
 ### 💬 End-to-End Encrypted & Scope-Keyed Messaging
 * **True E2EE Direct Messaging**: Signal-style X25519 prekey bundles with Double-Ratchet forward secrecy.
@@ -160,6 +160,14 @@ highest stable patch tag; rerunning a published commit reuses its tag.
 release line. CI stamps the actual release patch into the binaries, Windows
 package resources, and signed manifest. Prerelease tags do not advance the stable
 sequence. Change the synchronized baseline declarations to start a new release line.
+
+The desktop updater shows download, verification, installation and restart stages.
+Downloads can be cancelled before verification begins. **Restart now** keeps the
+current app open until the replacement confirms startup; failed startup restores
+the previous executable without rolling back settings, identity or chat history.
+This automatic recovery applies to the supervised restart, not a later manual
+launch after closing the app. A uniquely named `.noxa-previous-*.exe` backup is
+retained beside the executable for manual recovery.
 
 #### Prerequisites
 * **Go**: `>= 1.27.1` (both Go modules declare this minimum)

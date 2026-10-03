@@ -64,12 +64,14 @@ export function createNetworkEchoTest() {
     root.append(start, status);
     const origin = { scope: scope() };
     const ownsUI = () => root.isConnected && current(origin);
-    const available = info => Number.isSafeInteger(info?.echo_channel_id) && info.echo_channel_id > 0 && V().state.channels.some(channel => channel.ChannelID === info.echo_channel_id);
+    const accessible = info => Number.isSafeInteger(info?.echo_channel_id) && info.echo_channel_id > 0 && V().state.channels.some(channel => channel.ChannelID === info.echo_channel_id);
+    const available = info => accessible(info) && info.echo_private === true;
+    const unavailable = info => t(accessible(info) && info.echo_private !== true ? "echo.updateRequired" : "echo.unavailable");
     const read = () => app().ServerInfoForTab(origin.scope.tab);
     if (origin.scope.client && origin.scope.tab) {
         void Promise.resolve().then(read).then(info => {
             if (!ownsUI()) return;
-            start.disabled = !!session || !available(info); status.textContent = session ? t("echo.running") : start.disabled ? t("echo.unavailable") : "";
+            start.disabled = !!session || !available(info); status.textContent = session ? t("echo.running") : start.disabled ? unavailable(info) : "";
         }).catch(() => { if (ownsUI()) status.textContent = t("echo.unavailable"); });
     } else status.textContent = t("echo.unavailable");
     start.onclick = async () => {
@@ -80,7 +82,7 @@ export function createNetworkEchoTest() {
         try {
             const info = await read();
             if (!ownsUI() || session !== owner) { dispose(owner); return; }
-            if (!available(info)) throw new Error(t("echo.unavailable"));
+            if (!available(info)) throw new Error(unavailable(info));
             owner.channel = info.echo_channel_id;
             if (owner.previous === owner.channel) owner.previous = 0;
             const error = await app().JoinChannelForTab(owner.scope.tab, owner.channel);

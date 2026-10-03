@@ -162,8 +162,14 @@ func TestEchoChannelSelfHearing(t *testing.T) {
 	}
 
 	r.JoinChannel(99, "b")
-	if sent := r.ForwardRTP("a", SlotMic, pkt); sent != 2 {
-		t.Fatalf("echo forward sent = %d, want 2 (self + b)", sent)
+	if pubTrackFor(r, "a", "b") != nil || pubTrackFor(r, "b", "a") != nil {
+		t.Fatal("echo created cross-participant publisher tracks")
+	}
+	if pubTrackFor(r, "b", "b") == nil {
+		t.Fatal("second echo participant has no self pair")
+	}
+	if sent := r.ForwardRTP("a", SlotMic, pkt); sent != 1 {
+		t.Fatalf("echo forward sent = %d, want 1 (self only)", sent)
 	}
 
 	// Moving to a normal channel tears the self pair down and re-excludes

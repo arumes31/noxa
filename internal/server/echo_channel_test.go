@@ -34,6 +34,7 @@ func TestServerInfoOnlyExposesActiveVisibleEchoChannel(t *testing.T) {
 			send(t, conn, netproto.MsgServerInfoQuery, netproto.ServerInfoQuery{})
 			var response struct {
 				EchoChannelID int64 `json:"echo_channel_id"`
+				EchoPrivate   bool  `json:"echo_private"`
 			}
 			if err := netproto.Decode(readOfType(t, conn, netproto.MsgServerInfoResponse), &response); err != nil {
 				t.Fatal(err)
@@ -45,6 +46,9 @@ func TestServerInfoOnlyExposesActiveVisibleEchoChannel(t *testing.T) {
 			}
 			if response.EchoChannelID != want {
 				t.Errorf("configured=%d identity=%s echo=%d, want %d", channelID, uid, response.EchoChannelID, want)
+			}
+			if response.EchoPrivate != (want > 0) {
+				t.Errorf("configured=%d identity=%s private echo=%t, want %t", channelID, uid, response.EchoPrivate, want > 0)
 			}
 		}
 		env.stop()

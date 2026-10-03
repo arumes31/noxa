@@ -12,6 +12,7 @@ type MediaDelivery struct {
 	Whisper, Tap                  bool
 	SourceEpoch                   uint64
 	WhisperRevision               uint64
+	EchoEpoch                     uint64
 	Codec                         string
 	Publication, WatchEpoch       uint64
 }
@@ -41,7 +42,7 @@ func (r *Router) mediaCommit(delivery MediaDelivery, guard MediaGuard, videoRevi
 					return nil
 				}
 			}
-			return r.withWhisperScope(delivery, func() error { return r.withWatch(delivery, write) })
+			return r.withMediaScope(delivery, write)
 		}
 		if guard != nil {
 			return guard(delivery, commit)
@@ -71,8 +72,9 @@ type mediaOutput struct {
 // mediaOutputLocked captures scope with routing, rather than guessing the scope
 // later from a client that may have moved in between selection and delivery.
 func (r *Router) mediaOutputLocked(sender, recipient, slot string, tap bool, writer TrackWriter) mediaOutput {
-	whisper := slot == SlotMic && r.whispers[sender] != nil && r.whispers[sender].active
+	whisper := slot == SlotMic && r.whisperActiveLocked(sender, r.whispers[sender])
 	delivery := MediaDelivery{SenderID: sender, RecipientID: recipient, ChannelID: r.clientChan[sender], RecipientChannelID: r.clientChan[recipient], Slot: slot, Whisper: whisper, Tap: tap, SourceEpoch: r.slotClaims[sender][slot].token, Codec: "audio/opus"}
+	delivery.EchoEpoch = r.echoMembers[sender]
 	r.captureWatch(&delivery)
 	if slot == SlotMic && r.whispers[sender] != nil {
 		delivery.WhisperRevision = r.whispers[sender].revision

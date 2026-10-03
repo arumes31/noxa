@@ -92,6 +92,7 @@ func (s *TCPServer) buildRoleServerInfo(ctx context.Context, e *authorization.Ro
 			id := voice.EchoChannel()
 			if _, exists := s.deps.State.GetChannel(id); id > 0 && exists && e.Evaluate(actorID, id, authorization.ViewChannel).Allowed {
 				resp.EchoChannelID = id
+				resp.EchoPrivate = true
 			}
 		}
 		snapshot, err := buildRoleSnapshotContext(ctx, s.deps.State, e, actorID, actorUID)

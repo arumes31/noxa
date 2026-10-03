@@ -12,9 +12,9 @@ type PublisherAccess struct {
 type PublisherGuard func(PublisherAccess) bool
 
 func (r *Router) publisherAllowedLocked(subscriber, publisher string) bool {
-	return r.publisherGuard == nil || r.publisherGuard(PublisherAccess{
+	return r.echoPublisherAllowedLocked(subscriber, publisher) && (r.publisherGuard == nil || r.publisherGuard(PublisherAccess{
 		publisher, subscriber, r.clientChan[publisher], r.clientChan[subscriber],
-	})
+	}))
 }
 
 // SetPublisherGuard installs a snapshot and synchronously removes forbidden
@@ -28,7 +28,8 @@ func (r *Router) SetPublisherGuard(guard PublisherGuard) {
 	r.prunePublishersLocked()
 }
 
-func (r *Router) prunePublishersLocked() {
+func (r *Router) prunePublishersLocked() map[string]bool {
+	renegotiate := make(map[string]bool)
 	r.watchMu.Lock()
 	for key := range r.watches {
 		if !r.publisherAllowedLocked(key.subscriber, key.publisher) {
@@ -41,11 +42,14 @@ func (r *Router) prunePublishersLocked() {
 	for sub, publishers := range r.pubTracks {
 		for pub := range publishers {
 			if !r.publisherAllowedLocked(sub, pub) {
-				r.removePublisherLocked(sub, pub)
+				if r.removePublisherLocked(sub, pub) {
+					renegotiate[sub] = true
+				}
 				delete(r.whisperPairs[pub], sub)
 			}
 		}
 	}
+	return renegotiate
 }
 
 // PrepareSubscriber refreshes this subscriber's tracks without recursively

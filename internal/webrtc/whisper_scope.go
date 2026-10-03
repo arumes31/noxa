@@ -22,8 +22,9 @@ func (r *Router) refreshWhisperScopesLocked() {
 		}
 	}
 	for sender, cfg := range r.whispers {
+		active := r.whisperActiveLocked(sender, cfg)
 		targets := map[string]bool{}
-		if cfg.active {
+		if active {
 			for recipient := range r.whisperTargetsLocked(sender, cfg) {
 				if r.clientChan[recipient] > 0 {
 					targets[recipient] = true
@@ -31,13 +32,13 @@ func (r *Router) refreshWhisperScopesLocked() {
 			}
 		}
 		previous, found := r.whisperScopes[sender]
-		if found && previous.active == cfg.active && maps.Equal(previous.targets, targets) {
+		if found && previous.active == active && maps.Equal(previous.targets, targets) {
 			cfg.revision = previous.revision
 			continue
 		}
 		r.whisperScopeEpoch++
 		cfg.revision = r.whisperScopeEpoch
-		r.whisperScopes[sender] = whisperScope{active: cfg.active, revision: cfg.revision, targets: targets}
+		r.whisperScopes[sender] = whisperScope{active: active, revision: cfg.revision, targets: targets}
 	}
 }
 

@@ -134,7 +134,7 @@ func (s *mediaEgressStream) write(header *rtp.Header, payload []byte, attrs inte
 	n := 0
 	var outputError error
 	write := func() error {
-		// Lock order: authority, member movement, video policy, watch, stream, socket.
+		// Lock order: authority, member movement, video policy, echo, whisper, watch, stream, socket.
 		// No router or track lock may be acquired while holding stream.mu.
 		if ticket.router != nil && (ticket.delivery.Slot == SlotCam || ticket.delivery.Slot == SlotScreen) {
 			if !ticket.router.videoPolicyMu.TryRLock() {
@@ -157,7 +157,7 @@ func (s *mediaEgressStream) write(header *rtp.Header, payload []byte, attrs inte
 			return outputError
 		}
 		if ticket.router != nil {
-			return ticket.router.withWhisperScope(ticket.delivery, func() error { return ticket.router.withWatch(ticket.delivery, commit) })
+			return ticket.router.withMediaScope(ticket.delivery, commit)
 		}
 		return commit()
 	}
