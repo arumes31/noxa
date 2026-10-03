@@ -1,5 +1,6 @@
 export const networkEchoEnglish = {
     "echo.title": "Network echo test",
+    "echo.channelHint": "Echo test — hear your microphone back",
     "echo.help": "Hear your microphone through this server's normal voice connection. Only you hear your microphone; other participants cannot hear you and you cannot hear them. Use headphones. Saved capture settings and normal mute/push-to-talk controls apply.",
     "echo.start": "Start network echo test",
     "echo.unavailable": "This server has no accessible network echo test channel.",
@@ -17,6 +18,7 @@ export const networkEchoEnglish = {
 };
 export const networkEchoGerman = {
     "echo.title": "Netzwerk-Echotest",
+    "echo.channelHint": "Echotest — höre dein Mikrofonsignal",
     "echo.help": "Höre dein Mikrofon über die normale Sprachverbindung dieses Servers. Nur du hörst dein Mikrofon; andere Teilnehmer hören dich nicht und du hörst sie nicht. Verwende Kopfhörer. Gespeicherte Aufnahmeeinstellungen sowie Stummschaltung und Push-to-Talk gelten weiterhin.",
     "echo.start": "Netzwerk-Echotest starten",
     "echo.unavailable": "Dieser Server hat keinen zugänglichen Kanal für einen Netzwerk-Echotest.",

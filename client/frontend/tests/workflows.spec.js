@@ -1,5 +1,73 @@
 import { expect, test } from "./fixtures.js";
 
+test.describe("echo channel icon", () => {
+    test.beforeEach(async ({ page }) => {
+        await page.evaluate(() => {
+            const v = window.__noxa;
+            v.showWorkspace(false);
+            Object.assign(v.state, { activeTabID: "echo-a", myClientID: "", myChannelID: 0 });
+            window.__echoIconRequests = [];
+            window.__echoIconPending = false;
+            window.go.main.App = new Proxy(window.go.main.App, { get(target, key) {
+                if (key !== "ServerInfoForTab") return target[key];
+                return tabID => {
+                    if (window.__echoIconFailed) return Promise.reject(new Error("unavailable"));
+                    if (!window.__echoIconPending) return Promise.resolve({ echo_channel_id: 7 });
+                    return new Promise(resolve => window.__echoIconRequests.push({ tabID, resolve }));
+                };
+            } });
+            window.__echoIconSnapshot = () => {
+                const snapshot = { root_channels: [
+                    { ChannelID: 7, Name: "Microphone check", clients: [], children: [] },
+                    { ChannelID: 8, Name: "Echo Test", clients: [], children: [] },
+                ] };
+                for (const callback of window.__events.snapshot || []) callback(JSON.stringify(snapshot));
+            };
+        });
+    });
+
+    test("uses the server channel ID instead of its name and describes the microphone icon", async ({ page }) => {
+        await page.evaluate(() => window.__echoIconSnapshot());
+        const echo = page.locator('.channel[data-chid="7"]');
+        const ordinary = page.locator('.channel[data-chid="8"]');
+        await expect(echo).toHaveAttribute("title", /Echo test — hear your microphone back/);
+        await expect(echo).toHaveAccessibleName(/Microphone check.*Echo test/);
+        await expect(echo.locator(".ch-icon svg rect")).toHaveCount(1);
+        await expect(ordinary).not.toHaveAttribute("title", /Echo test/);
+        await expect(ordinary.locator(".ch-icon svg rect")).toHaveCount(0);
+    });
+
+    for (const change of ["server", "session", "snapshot"]) {
+        test(`ignores stale echo metadata after a newer ${change}`, async ({ page }) => {
+            await page.evaluate(() => { window.__echoIconPending = true; window.__echoIconSnapshot(); });
+            await expect.poll(() => page.evaluate(() => window.__echoIconRequests.length)).toBe(1);
+            await page.evaluate(change => {
+                if (change === "server") {
+                    window.__noxa.state.activeTabID = "echo-b";
+                    window.__noxa.state.serverGeneration++;
+                }
+                if (change === "session") window.__noxa.state.sessionGeneration++;
+                window.__echoIconSnapshot();
+            }, change);
+            await expect.poll(() => page.evaluate(() => window.__echoIconRequests.length)).toBe(2);
+            await page.evaluate(async () => {
+                window.__echoIconRequests[1].resolve({ echo_channel_id: 0 });
+                await Promise.resolve();
+                window.__echoIconRequests[0].resolve({ echo_channel_id: 7 });
+                await Promise.resolve();
+            });
+            await expect(page.locator('.channel[data-chid="7"]')).not.toHaveAttribute("title", /Echo test/);
+            await expect(page.locator('.channel[data-chid="7"] .ch-icon svg rect')).toHaveCount(0);
+        });
+    }
+
+    test("keeps regular channel icons if server metadata is unavailable", async ({ page }) => {
+        await page.evaluate(() => { window.__echoIconFailed = true; window.__echoIconSnapshot(); });
+        await expect(page.locator('.channel[data-chid="7"]')).toBeVisible();
+        await expect(page.locator('.channel[data-chid="7"]')).not.toHaveAttribute("title", /Echo test/);
+    });
+});
+
 test.describe("persistent polls", () => {
     test.beforeEach(async ({ page }) => {
         await page.evaluate(() => {

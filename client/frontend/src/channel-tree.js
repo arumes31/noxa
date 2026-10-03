@@ -9,8 +9,26 @@ import { t } from "./i18n.js";
 import { presenceLabel } from "./presence.js";
 import { icon } from "./icons.js";
 import { renderWorkspace } from "./workspace-ui.js";
+import { captureScope, scopeIsCurrent } from "./scoped-actions.js";
 
 export function createChannelTree({ P, $, syncTrayVoice, state, toast, fetchAvatar, renderClientCard, setDetailsOpen, renderDirectTargets }) {
+    const readEchoScope = () => ({ tabID: state.activeTabID, generation: state.serverGeneration, session: state.sessionGeneration });
+    let echoInfo = null;
+
+    async function refreshEchoChannel() {
+        const request = { scope: captureScope(readEchoScope), channelID: 0 };
+        echoInfo = request;
+        if (!request.scope.tabID) return;
+        try {
+            const info = await window.go.main.App.ServerInfoForTab(request.scope.tabID);
+            if (echoInfo !== request || !scopeIsCurrent(request.scope, readEchoScope)) return;
+            if (Number.isSafeInteger(info?.echo_channel_id) && info.echo_channel_id > 0) {
+                request.channelID = info.echo_channel_id;
+                renderTree();
+            }
+        } catch { /* Optional metadata: keep the regular channel icon when unavailable. */ }
+    }
+
     function recomputeClientCounts() {
         const counts = new Map();
         for (const c of state.clients) counts.set(c.channel_id, (counts.get(c.channel_id) || 0) + 1);
@@ -146,14 +164,16 @@ export function createChannelTree({ P, $, syncTrayVoice, state, toast, fetchAvat
         el.setAttribute("role", "treeitem"); // (343)
         const restricted = ch.Access?.restricted === true;
         const cannotJoin = ch.Access?.can_connect === false;
+        const isEcho = echoInfo?.channelID > 0 && echoInfo.channelID === ch.ChannelID && scopeIsCurrent(echoInfo.scope, readEchoScope);
         const accessLabels = [];
+        if (isEcho) accessLabels.push(t("echo.channelHint"));
         if (restricted) accessLabels.push(t("channel.access.private"));
         if (ch.HasPassword) accessLabels.push(t("channel.access.password"));
         if (cannotJoin) accessLabels.push(t("channel.access.denied"));
         el.classList.toggle("access-denied", cannotJoin);
         el.setAttribute("aria-label", t("runtime.channelName", { name: ch.Name }) + (accessLabels.length ? ", " + accessLabels.join(", ") : ""));
         el.title = accessLabels.join(" · ") || t("channel.access.open");
-        el.innerHTML = `<span class="ch-disclosure" aria-hidden="true">${icon("chevron")}</span><span class="ch-icon">${icon("speaker")}</span><span class="ch-name"></span>`;
+        el.innerHTML = `<span class="ch-disclosure" aria-hidden="true">${icon("chevron")}</span><span class="ch-icon">${icon(isEcho ? "echo" : "speaker")}</span><span class="ch-name"></span>`;
         el.querySelector(".ch-name").textContent = ch.Name;
         // (387) muted channel icon.
         if (window.__noxaNotify?.channelOverride?.(ch.ChannelID)?.muted) {
@@ -464,5 +484,5 @@ export function createChannelTree({ P, $, syncTrayVoice, state, toast, fetchAvat
         return c ? (c.nickname || c.unique_id) : clientID;
     }
 
-    return { expandMyBranch, renderTree, setChannelExpanded, initials, clientName };
+    return { expandMyBranch, renderTree, refreshEchoChannel, setChannelExpanded, initials, clientName };
 }

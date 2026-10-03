@@ -144,7 +144,7 @@ const remoteAudio = createRemoteAudio({ state, toast, sysMsg, voiceEpoch: () => 
 const { selectAudioOutput, applyOutputSettings, remoteChain, reconcileSpatialVoice, attachRemoteAudio, readRemoteAudioLevel, resolveTrackUsers, shareAudio, applyDucking, applyShareAudio, attachShareAudio, detachRemoteAudio } = remoteAudio;
 
 
-const { expandMyBranch, renderTree, setChannelExpanded, initials, clientName } = createChannelTree({ P, $, syncTrayVoice, state, toast, fetchAvatar, renderClientCard, setDetailsOpen, renderDirectTargets });
+const { expandMyBranch, renderTree, refreshEchoChannel, setChannelExpanded, initials, clientName } = createChannelTree({ P, $, syncTrayVoice, state, toast, fetchAvatar, renderClientCard, setDetailsOpen, renderDirectTargets });
 
 
 // ---------------------------------------------------------------------------
@@ -1074,6 +1074,7 @@ window.runtime.EventsOn("snapshot", (json) => {
     lastKnownChannel.clear(); // the snapshot is authoritative
     for (const root of snap.root_channels || []) flattenChannel(root);
     for (const client of snap.unassigned_clients || []) state.clients.push(client);
+    void refreshEchoChannel();
     // Snapshot replay can beat the async ClientID lookup during a tab switch
     // or reconnect. Reconcile here when the identity is already known; the
     // identity completion path calls the same helper for the opposite order.
