@@ -24,6 +24,7 @@ import { discussionChanged } from "./discussions.js";
 import { initClientInfo } from "./clientinfo.js";
 import { initUpdater, startupAutoCheck } from "./updater.js";
 import { playEvent, playAlert, clearSpeech, initSounds, updateSoundOutput, updateConversationDucking, soundEngine, speechQueue } from "./sounds.js";
+import { initClosingAudio } from "./closing-audio.js";
 import {
     startMicMeter, stopMicMeter, pttRelease, makeLimiter,
     getUserVolume, isUserMuted, refreshUserAudio, registerUserChain, unregisterUserChain, createAudioLevelSampler,
@@ -3792,6 +3793,7 @@ window.__noxa = {
 
 initModalSystem();
 initSounds();
+initClosingAudio();
 initMenu();
 initSettingsUI();
 void initGamingOverlay();

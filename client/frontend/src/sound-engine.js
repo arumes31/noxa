@@ -130,7 +130,7 @@ export class SoundEngine {
         const def = this.definitions[name];
         if (!Object.hasOwn(this.definitions, name) || !settings) return "unavailable";
         if (!options.preview && settings.play_sounds === false) return "master_muted";
-        if (!options.preview && state?.replayingTabID) return "history";
+        if (!options.preview && !def.application && state?.replayingTabID) return "history";
         if (this.isDND(settings)) return "dnd";
         if (def.category !== "Speech" && settings.effects_enabled === false) return "effects_disabled";
         if (settings.event_sounds?.[name] === false) return "event_disabled";

@@ -53,6 +53,11 @@ type App struct {
 	// Wails invokes beforeClose for programmatic Quit as well as window close.
 	// Explicit Quit and update restart bypass close-to-tray.
 	quitting atomic.Bool
+	// closeMu guards the renderer readiness and one pending goodbye handshake.
+	closeMu                 sync.Mutex
+	closeNotificationsReady bool
+	closePending            bool
+	closeTimer              *time.Timer
 	// cm is the ACTIVE tab's connManager (281 multi-server tabs): all
 	// bindings keep operating on it. Background tabs live in tabs and their
 	// events are journaled/replayed by tabs.go. Access via cmLoad/cmStore
@@ -137,18 +142,7 @@ func NewApp() *App {
 }
 
 func (a *App) beforeClose(ctx context.Context) bool {
-	if a.quitting.Load() {
-		return false
-	}
-	a.settingsMu.Lock()
-	closeToTray := a.settings.CloseToTray
-	a.settingsMu.Unlock()
-	if closeToTray {
-		windowHide(ctx)
-		windowMarkHidden()
-		return true
-	}
-	return false
+	return a.requestClose(ctx, false)
 }
 
 // Quit exits explicitly, even when closing the window normally hides it.
@@ -156,8 +150,9 @@ func (a *App) Quit() {
 	if a.ctx == nil {
 		return
 	}
-	a.quitting.Store(true)
-	wailsQuit(a.ctx)
+	if !a.requestClose(a.ctx, true) && !a.quitting.Swap(true) {
+		wailsQuit(a.ctx)
+	}
 }
 
 // cmLoad returns the active tab's connManager (may be nil).
@@ -287,6 +282,7 @@ func (a *App) SetWindowOpacity(pct int) string {
 
 // shutdown is called when the app closes.
 func (a *App) shutdown(_ context.Context) {
+	a.cancelCloseNotification()
 	a.closeGamingOverlay()
 	a.lifecycleMu.Lock()
 	if a.lifecycleCancel != nil {

@@ -41,6 +41,8 @@ func TestApplyAndRestartExitsWithCloseToTrayEnabled(t *testing.T) {
 	})
 	app := &App{ctx: context.Background(), settings: DefaultSettings()}
 	app.settings.CloseToTray = true
+	app.ReadyForCloseNotifications()
+	app.eventEmit = func(string, any) { t.Error("update restart waited for goodbye audio") }
 	hides := 0
 	windowHide = func(context.Context) { hides++ }
 	windowMarkHidden = func() {}

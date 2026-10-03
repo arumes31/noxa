@@ -268,5 +268,23 @@
     "peak": 0.114990234375,
     "rmsDB": -32.43154249845253,
     "sha256": "18f752cac2790c20a6d04601bc56edfe4950dfd166b4247b21d08ba0e598c952"
+  },
+  "en/client_closing": {
+    "title": "noXa — client_closing",
+    "text": "Closing. Good bye.",
+    "duration": 1.3699773242630386,
+    "sampleRate": 22050,
+    "peak": 0.114990234375,
+    "rmsDB": -33.82612055069666,
+    "sha256": "c4d7c98f58872deb899d218866ba0388d655f3351be1db9f5e3a995297f3d198"
+  },
+  "de/client_closing": {
+    "title": "noXa — client_closing",
+    "text": "Wird geschlossen. Auf Wiedersehen.",
+    "duration": 1.8165532879818593,
+    "sampleRate": 22050,
+    "peak": 0.114990234375,
+    "rmsDB": -34.42116417751492,
+    "sha256": "c9fb27b10fc7bae750686c38b4f542ce7d1b6571540a815f5a7065f06a7ca348"
   }
 }

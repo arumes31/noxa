@@ -106,6 +106,8 @@ export function ComplaintList():Promise<netproto.Complaints>;
 
 export function ComplaintListForTab(arg1:string):Promise<netproto.Complaints>;
 
+export function CompleteClose():Promise<void>;
+
 export function Connect(arg1:string,arg2:string,arg3:string,arg4:string):Promise<string>;
 
 export function ConnectBookmarkTab(arg1:string,arg2:string,arg3:string,arg4:string,arg5:string):Promise<string>;
@@ -335,6 +337,8 @@ export function PublishPositionForTab(arg1:string,arg2:netproto.PositionUpdate):
 export function Quit():Promise<void>;
 
 export function ReadPositionalInput():Promise<main.PositionalInput>;
+
+export function ReadyForCloseNotifications():Promise<void>;
 
 export function ReconnectTab(arg1:string,arg2:string,arg3:string):Promise<main.ConnectTabResult>;
 

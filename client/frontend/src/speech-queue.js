@@ -1,5 +1,6 @@
 // Fixed clip IDs only. This module has no text input, TTS or asset-generation path.
 export const SPEECH_EVENTS = {
+    client_closing: { priority: 8, category: "application" },
     banned: { priority: 7, category: "admin", effect: "ban", matrix: "kick" },
     kicked: { priority: 6, category: "admin", effect: "kick", matrix: "kick" },
     kicked_channel: { priority: 6, category: "admin", effect: "kick", matrix: "kick" },
@@ -33,7 +34,7 @@ export class SpeechQueue {
     allowed(event, settings, preview, effect = SPEECH_EVENTS[event]?.effect) {
         const def = SPEECH_EVENTS[event];
         if (!def || !settings || this.isDND(settings) || settings.spoken_messages === false) return false;
-        if (!preview && (settings.play_sounds === false || this.getState()?.replayingTabID)) return false;
+        if (!preview && (settings.play_sounds === false || (def.category !== "application" && this.getState()?.replayingTabID))) return false;
         if (settings.speech_events?.[event] === false || settings.event_sounds?.[effect] === false) return false;
         if (def.matrix && (settings.notify_matrix?.[def.matrix]?.sound === false || settings.event_sounds?.[def.matrix] === false)) return false;
         if (event === "permission_denied" && settings.speech_permissions === false) return false;
