@@ -102,6 +102,8 @@ services:
         read_only: true
         bind: { create_host_path: false }
     environment:
+      NOXA_ECHO_CHANNEL_ENABLED: ${NOXA_ECHO_CHANNEL_ENABLED:-true}
+      NOXA_ECHO_CHANNEL_NAME: ${NOXA_ECHO_CHANNEL_NAME:-Echo Test}
       # --- Logging ---
       NOXA_LOG_LEVEL: ${NOXA_LOG_LEVEL:-info}
       # Required explicit choice: the sample .env selects local development.

@@ -69,8 +69,9 @@ db_max_open_conns: 25
 db_max_idle_conns: 5
 db_conn_max_lifetime: 30m
 
-# Echo test channel (15): ensured to exist at startup; publishers in it hear
-# their own audio routed back. Empty disables the echo channel.
+# Created automatically at startup; publishers hear their own audio routed back.
+# False disables creation and loopback without deleting channels or history.
+echo_channel_enabled: true
 echo_channel_name: "Echo Test"
 channel_temp_lifetime_seconds: 60
 

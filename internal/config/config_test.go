@@ -131,6 +131,9 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.MaxClients != 1024 {
 		t.Errorf("MaxClients = %d, want 1024", cfg.MaxClients)
 	}
+	if !cfg.EchoChannelEnabled || cfg.EchoChannelName != "Echo Test" {
+		t.Errorf("echo defaults = %t %q", cfg.EchoChannelEnabled, cfg.EchoChannelName)
+	}
 	if cfg.FileMaxConnections != 128 {
 		t.Errorf("FileMaxConnections = %d, want 128", cfg.FileMaxConnections)
 	}

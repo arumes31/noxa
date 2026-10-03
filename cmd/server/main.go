@@ -391,6 +391,11 @@ func run() (retErr error) {
 		zap.Int64("scope_key_generations", scopeKeyCount),
 	)
 
+	// Provision before either authority or channel state captures the tree.
+	echoChannelID, err := ensureEchoChannel(ctx, dbStore, cfg)
+	if err != nil {
+		return fmt.Errorf("ensuring echo channel: %w", err)
+	}
 	var tcpServer *server.TCPServer
 	roleAuthority, err := authorization.NewAuthority(ctx, activeRoleBackend{dbStore},
 		func(ctx context.Context, before, after *authorization.RoleEvaluator) error {
@@ -443,22 +448,6 @@ func run() (retErr error) {
 		return fmt.Errorf("loading channels into state: %w", err)
 	}
 	logger.Info("persisted channels loaded", zap.Int("count", loadedChannels))
-
-	// Echo test channel (15): ensure the loopback channel exists; publishers
-	// in it hear their own audio routed back. Empty name disables it.
-	var echoChannelID int64
-	if cfg.EchoChannelName != "" {
-		for _, ch := range stateManager.ChannelTreeOrdered() {
-			if ch.Name == cfg.EchoChannelName {
-				echoChannelID = ch.ChannelID
-				break
-			}
-		}
-		if echoChannelID == 0 {
-			logger.Warn("configured echo channel is missing; loopback stays disabled until the channel is created through roles-v1",
-				zap.String("name", cfg.EchoChannelName))
-		}
-	}
 
 	// Construct bounded metrics before any service starts. Component counters
 	// are registered as scrape-time callbacks below as their dependencies are

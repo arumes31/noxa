@@ -86,6 +86,8 @@ type Config struct {
 	VideoMaxBitrate int `mapstructure:"video_max_bitrate"`
 	VideoMaxWidth   int `mapstructure:"video_max_width"`
 	VideoMaxHeight  int `mapstructure:"video_max_height"`
+	// EchoChannelEnabled controls automatic provisioning and audio loopback.
+	EchoChannelEnabled bool `mapstructure:"echo_channel_enabled"`
 	// EchoChannelName is the name of the loopback test channel: the server
 	// ensures it exists at startup, and publishers in it hear their own audio
 	// routed back (the echo channel is the only channel with self-fan-out).
@@ -272,6 +274,7 @@ func newConfigViper() *viper.Viper {
 	v.SetDefault("pprof_enabled", false)
 	v.SetDefault("shutdown_timeout", 30*time.Second)
 	v.SetDefault("max_clients", 1024)
+	v.SetDefault("echo_channel_enabled", true)
 	v.SetDefault("echo_channel_name", "Echo Test")
 	// 60s matches channels.DefaultCleanupDelay (165).
 	v.SetDefault("channel_temp_lifetime_seconds", 60)
