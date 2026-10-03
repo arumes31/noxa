@@ -153,6 +153,9 @@ func (v *Voice) SetEchoChannel(channelID int64) {
 	v.router.SetEchoChannel(channelID)
 }
 
+// EchoChannel reports the active loopback channel for authorized discovery.
+func (v *Voice) EchoChannel() int64 { return v.router.EchoChannel() }
+
 // SetChannelAudioLookup installs the per-channel Opus configuration resolver
 // (21-25): it drives SDP fmtp rewriting (per subscriber channel) and
 // music-channel detection (talk-gate bypass). See

@@ -1,0 +1,6 @@
+.network-echo { padding-block: 12px; border-block: 1px solid var(--border); }
+.network-echo h3 { font-size: 1rem; }
+.network-echo p { max-width: 65ch; line-height: 1.5; }
+.network-echo-session { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 8px 12px; border-bottom: 1px solid var(--border); }
+.network-echo-session span { flex: 1 1 30ch; }
+.network-echo button, .network-echo-session button { min-height: 36px; }

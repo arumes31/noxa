@@ -6,6 +6,7 @@ import { captureMediaScope, mediaScopeIsCurrent, setWhisperRouting } from "./med
 import { currentLanguage, t } from "./i18n.js";
 import { copyToClipboard } from "./clipboard.js";
 import { createMicCheck } from "./mic-check-ui.js";
+import { createNetworkEchoTest } from "./network-echo.js";
 import { percentageInput } from "./percentage-input.js";
 import { previewSounds, previewSpeech, speechPreviewLabel, audioStatus, SPEECH_EVENTS, stopPreviews, updateSoundOutput, SOUND_EVENT_GROUPS, testAll } from "./sounds.js";
 import { MATRIX_EVENTS, defaultMatrixRow } from "./notifications.js";
@@ -688,6 +689,7 @@ function pageCapture() {
         onStart: cleanup => { stopMicCheck(); stopMicCheck = cleanup; },
     });
     el.append(timingNote("localPreview"), microphone.root);
+    el.append(createNetworkEchoTest());
     el.addEventListener("change", () => microphone.refresh());
     // Activation mode.
     const modeWrap = document.createElement("div");

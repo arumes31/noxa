@@ -314,6 +314,13 @@ func (r *Router) SetEchoChannel(channelID int64) {
 	r.echoChannel = channelID
 }
 
+// EchoChannel returns the currently configured loopback channel; zero disables it.
+func (r *Router) EchoChannel() int64 {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.echoChannel
+}
+
 // SetChannelAudioLookup installs the resolver for per-channel Opus audio
 // configuration. Nil disables music-channel detection (the talk-power gate
 // then applies everywhere).

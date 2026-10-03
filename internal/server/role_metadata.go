@@ -88,6 +88,12 @@ func (s *TCPServer) buildRoleServerInfo(ctx context.Context, e *authorization.Ro
 		resp.MOTD = s.serverSettingPlain(ctx, "motd")
 	}
 	if s.deps.State != nil {
+		if voice, ok := s.deps.Voice.(interface{ EchoChannel() int64 }); ok {
+			id := voice.EchoChannel()
+			if _, exists := s.deps.State.GetChannel(id); id > 0 && exists && e.Evaluate(actorID, id, authorization.ViewChannel).Allowed {
+				resp.EchoChannelID = id
+			}
+		}
 		snapshot, err := buildRoleSnapshotContext(ctx, s.deps.State, e, actorID, actorUID)
 		if err != nil {
 			return netproto.ServerInfoResponse{}, err

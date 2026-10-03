@@ -1,3 +1,4 @@
+import { networkEchoEnglish, networkEchoGerman } from "./network-echo-messages.js";
 import { audioRecoveryEnglish, audioRecoveryGerman } from "./audio-recovery-messages.js";
 // i18n.js — wave-8c lightweight internationalization (336).
 //
@@ -37,6 +38,7 @@ import { messageToolsEnglish, messageToolsGerman } from "./message-tools-message
 import { webhookEnglish, webhookGerman } from "./webhook-messages.js";
 
 const en = {
+    ...networkEchoEnglish,
     ...audioRecoveryEnglish,
     ...cameraEnglish, ...callMediaEnglish, ...discussionEnglish, ...voiceMessageEnglish, ...overlayEnglish, ...communicationExtrasEnglish, ...messageToolsEnglish, ...webhookEnglish,
     ...contextEnglish,
@@ -116,6 +118,7 @@ const en = {
 };
 
 const de = {
+    ...networkEchoGerman,
     ...audioRecoveryGerman,
     ...cameraGerman, ...callMediaGerman, ...discussionGerman, ...voiceMessageGerman, ...overlayGerman, ...communicationExtrasGerman, ...messageToolsGerman, ...webhookGerman,
     ...contextGerman,
