@@ -1,4 +1,4 @@
-// handlers_chat.go contains the TCP control chat handlers.
+// handlers_chat.go routes live chat and delivers spooled direct messages.
 package server
 
 import (

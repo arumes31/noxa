@@ -1,4 +1,4 @@
-// handlers_auth.go contains the TCP control auth handlers.
+// handlers_auth.go implements TCP authentication handshakes and identity checks.
 package server
 
 import (

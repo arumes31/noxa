@@ -50,7 +50,10 @@ func TestServerRulesAcceptancePreservesSessionGate(t *testing.T) {
 			defer env.stop()
 			conn := dialRetry(t, env.addr)
 			defer func() { _ = conn.Close() }()
-			request := netproto.Authenticate{Username: "user-uid", Password: "pw", AuthorizationModels: []string{netproto.AuthorizationModelRolesV1}}
+			request := netproto.Authenticate{
+				Username: "user-uid", Password: "pw",
+				AuthorizationModels: []string{netproto.AuthorizationModelRolesV1},
+			}
 			if tt.guest {
 				request.Username, request.Password, request.Anonymous = "", "", true
 			}

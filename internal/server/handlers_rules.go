@@ -1,4 +1,4 @@
-// handlers_rules.go contains the TCP control rules handlers.
+// handlers_rules.go gates sessions on accepting the current server rules.
 package server
 
 import (

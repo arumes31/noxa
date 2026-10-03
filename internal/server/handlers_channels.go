@@ -1,4 +1,4 @@
-// handlers_channels.go contains the TCP control channels handlers.
+// handlers_channels.go implements channel lifecycle and membership changes.
 package server
 
 import (

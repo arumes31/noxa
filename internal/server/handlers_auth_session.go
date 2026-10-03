@@ -1,4 +1,4 @@
-// handlers_auth_session.go contains the TCP control auth session handlers.
+// handlers_auth_session.go publishes authenticated sessions and their initial state.
 package server
 
 import (

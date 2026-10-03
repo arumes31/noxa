@@ -3,7 +3,7 @@
 // using the netproto wire format, dispatches them to per-message-type
 // handlers, and tracks connected clients in a thread-safe registry.
 //
-// The handlers live in handlers.go and are wired to the auth, state,
+// The handlers live in handlers_*.go and are wired to the auth, state,
 // channels, broadcast, and permissions backends via Deps (see deps.go). A
 // client must authenticate before any command other than Authenticate and
 // Ping is accepted.
