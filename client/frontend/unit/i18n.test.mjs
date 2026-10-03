@@ -165,11 +165,14 @@ describe("language selection and translation", () => {
 describe("applyStaticLabels", () => {
     it("updates the login labels, button, and recent-servers heading", () => {
         setLanguage("de");
-        const keys = ["login.title", "login.server", "login.nickname", "login.displayName", "login.accountPassword", "login.serverPassword", "login.optional", "login.optionalHint", "login.connect", "login.recentServers"];
+        const keys = ["login.server", "login.nickname", "login.displayName", "login.accountPassword", "login.serverPassword", "login.optional", "login.optionalHint", "login.connect", "login.recentServers"];
         const labels = keys.map(loginI18n => ({ dataset: { loginI18n }, textContent: "old" }));
+        const attributes = {};
+        const login = { dataset: { loginI18nAriaLabel: "workspace.labels.serverConnection" }, setAttribute(name, value) { attributes[name] = value; } };
         globalThis.document = {
             querySelectorAll(selector) {
                 if (selector === "[data-login-i18n]") return labels;
+                if (selector === "[data-login-i18n-aria-label]") return [login];
                 return [];
             },
         };
@@ -178,8 +181,9 @@ describe("applyStaticLabels", () => {
 
         assert.deepEqual(
             labels.map((label) => label.textContent),
-            ["Mit deinem Server verbinden", "Server", "Konto-Login / Gastname", "Anzeigename (optional)", "Konto-Passwort (optional)", "Server-Passwort (optional)", "Optionale Angaben", "Anzeigename · Passwörter", "Verbinden", "Letzte Server"],
+            ["Server", "Konto-Login / Gastname", "Anzeigename (optional)", "Konto-Passwort (optional)", "Server-Passwort (optional)", "Optionale Angaben", "Anzeigename · Passwörter", "Verbinden", "Letzte Server"],
         );
+        assert.equal(attributes["aria-label"], "Serververbindung");
     });
 
     it("tolerates missing optional DOM elements", () => {

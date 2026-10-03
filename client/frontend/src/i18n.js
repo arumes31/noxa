@@ -94,7 +94,6 @@ const en = {
     "common.delete": "Delete",
     "common.create": "Create",
     "common.apply": "Apply",
-    "login.title": "Connect to your server",
     "login.optional": "Optional details",
     "login.optionalHint": "Display name · Passwords",
     "login.identity": "Identity auto-generated — stored locally",
@@ -182,7 +181,6 @@ const de = {
     "common.delete": "Löschen",
     "common.create": "Erstellen",
     "common.apply": "Anwenden",
-    "login.title": "Mit deinem Server verbinden",
     "login.optional": "Optionale Angaben",
     "login.optionalHint": "Anzeigename · Passwörter",
     "login.identity": "Identität automatisch erstellt — lokal gespeichert",
@@ -281,5 +279,8 @@ export function t(key, vars) {
 export function applyStaticLabels() {
     for (const element of document.querySelectorAll("[data-login-i18n]")) {
         element.textContent = t(element.dataset.loginI18n);
+    }
+    for (const element of document.querySelectorAll("[data-login-i18n-aria-label]")) {
+        element.setAttribute("aria-label", t(element.dataset.loginI18nAriaLabel));
     }
 }

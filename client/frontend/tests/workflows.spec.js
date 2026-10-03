@@ -8930,9 +8930,8 @@ test("uses the B3 console composition without losing responsive navigation", asy
 });
 
 test("@a11y exposes named landmarks, controls, live regions, and a visible focus ring", async ({ page }) => {
-    const login = page.getByRole("dialog", { name: "Connect to your server", exact: true });
+    const login = page.getByRole("dialog", { name: "Server connection", exact: true });
     await expect(login).toBeVisible();
-    await expect(login.getByRole("heading", { name: "Connect to your server", level: 1 })).toBeVisible();
     await expect(page.getByRole("region", { name: "Recent servers", exact: true })).toBeVisible();
     await expect(page.getByRole("textbox", { name: /^server$/i })).toBeVisible();
     await expect(page.getByRole("button", { name: "Connect" })).toBeVisible();
