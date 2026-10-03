@@ -5,7 +5,7 @@ import { remoteTrackIDs, remoteTrackID } from "../src/media-track-id.js";
 
 const description = (id, direction = "sendonly") => `v=0\r\nm=video 9 UDP/TLS/RTP/SAVPF 96\r\na=mid:2\r\na=${direction}\r\na=msid:noxa-stream ${id}\r\n`;
 function fixture() {
-    const track = Object.assign(new EventTarget(), { id: "browser-generated-id", kind: "video", readyState: "live" });
+    const track = Object.assign(new EventTarget(), { id: "browser-generated-id", kind: "video", readyState: "live", stops: 0, stop() { this.stops++; this.readyState = "ended"; } });
     const transceiver = { mid: "2", receiver: { track } };
     const pc = { remoteDescription: { sdp: description("alice|screen") }, getTransceivers: () => [transceiver] };
     const changes = [];
@@ -69,6 +69,23 @@ test("a superseded session ignores queued track events and SDP changes", () => {
     const stop = startRemoteMedia(f.pc, () => false, () => assert.fail("stale attachment"), () => {});
     f.pc.ontrack({ track: f.track, transceiver: f.transceiver });
     reconcileRemoteMedia(f.pc);
+    assert.equal(f.track.readyState, "ended");
+    assert.equal(f.track.stops, 1);
+    stop();
+});
+
+test("track events without receiver metadata replace the previous publisher binding", () => {
+    const track = () => Object.assign(new EventTarget(), { id: "publisher|cam", kind: "video", readyState: "live" });
+    const first = track(), second = track();
+    const pc = { remoteDescription: null, getTransceivers: () => [] };
+    const playback = new Map();
+    const stop = startRemoteMedia(pc, () => true, (track, id) => playback.set(id, track), (_track, id) => playback.delete(id));
+    pc.ontrack({ track: first });
+    pc.ontrack({ track: second });
+    first.dispatchEvent(new Event("ended"));
+    assert.equal(playback.get("publisher|cam"), second);
+    second.dispatchEvent(new Event("ended"));
+    assert.equal(playback.size, 0);
     stop();
 });
 

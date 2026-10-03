@@ -46,9 +46,11 @@ export function startRemoteMedia(pc, current, onTrack, onRemoved) {
         for (const [receiver, { track, id }] of targets) bind(receiver, track, id);
     };
     pc.ontrack = event => {
+        if (!active || !current()) { event.track.stop(); return; }
         if (remoteTrackIDs(pc.remoteDescription?.sdp).size && pc.getTransceivers) { reconcile(); return; }
         const transceiver = event.transceiver || pc.getTransceivers?.().find(item => item.receiver.track === event.track);
-        bind(event.receiver || transceiver?.receiver || event.track, event.track, remoteTrackID(pc, event.track, transceiver));
+        const id = remoteTrackID(pc, event.track, transceiver);
+        bind(event.receiver || transceiver?.receiver || id, event.track, id);
     };
     sessions.set(pc, reconcile);
     return () => {
