@@ -9442,6 +9442,24 @@ test("moves focus explicitly between login and the connected workspace", async (
     await expect(page.locator("#app")).toHaveAttribute("aria-hidden", "false");
 });
 
+test("permission inspector distinguishes server ownership from assigned roles", async ({ page }) => {
+    await page.evaluate(() => {
+        window.__noxa.state.ownAuthority = "owner";
+        window.__noxa.state.authorizationModel = "roles-v1";
+        window.__noxa.state.clients = [{ client_id: "owner-session", roles: [] }];
+        window.__noxa.state.myClientID = "owner-session";
+        window.__noxa.showWorkspace();
+        window.__noxa.refreshPermissions();
+        window.__noxa.setDetailsOpen(true);
+    });
+    await expect(page.locator("#perm-area")).toContainText("Server owner");
+    await expect(page.locator("#perm-area")).toContainText("You do not need an assigned role.");
+    await expect(page.locator("#perm-area")).not.toContainText("@everyone applies to you");
+    await page.evaluate(() => { window.__noxa.state.ownAuthority = "member"; window.__noxa.refreshPermissions(); });
+    await expect(page.locator("#perm-area")).not.toContainText("Server owner");
+    await expect(page.locator("#perm-area")).toContainText("@everyone applies to you");
+});
+
 test("computes names for settings and generated dialog controls", async ({ page }) => {
     await page.evaluate(() => window.__noxa.openSettings("application"));
     await expect(page.locator('#settings-content input[type="number"]').first()).toHaveAccessibleName("Chat max lines");

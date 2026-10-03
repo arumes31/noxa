@@ -83,6 +83,22 @@ test.beforeEach(async ({ page }) => {
     await page.waitForFunction(() => window.ready);
 });
 
+test("channel creation explains why access changes need review", async ({ page }) => {
+    await page.getByText("Create dialog", { exact: true }).click();
+    await page.getByLabel("Channel name", { exact: true }).fill("Staff");
+    await page.getByRole("combobox", { name: "Channel access", exact: true }).selectOption("private");
+    await expect(page.getByRole("status").filter({ hasText: "Preview role changes before creating this channel." })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Create", exact: true })).toBeDisabled();
+});
+
+test("Enter submits a valid channel draft through the same acknowledged path", async ({ page }) => {
+    await page.getByText("Create dialog", { exact: true }).click();
+    await page.getByLabel("Channel name", { exact: true }).fill("New room");
+    await page.getByLabel("Channel name", { exact: true }).press("Enter");
+    await expect.poll(() => page.evaluate(() => window.__channelCalls.length)).toBe(1);
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+});
+
 test("create private channel waits for acknowledgement and sends ordinary overrides", async ({ page }) => {
     await page.getByText("Create dialog", { exact: true }).click();
     await page.getByLabel("Channel name", { exact: true }).fill("Staff");

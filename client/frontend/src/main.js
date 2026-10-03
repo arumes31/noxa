@@ -106,6 +106,7 @@ const state = {
     multiSelect: new Set(),       // (306) ctrl/shift-selected client IDs
     myStatus: "",                 // (307) own presence status
     canSetInvisible: false,       // recipient-specific role eligibility
+    ownAuthority: "",            // server-reported owner/administrator/member/guest
     micState: "unknown", // ok | none | denied
     lastWhispererUID: "", // (33) last user who whispered to me (voice or DM)
     whisperArmed: false,  // (33) whisper-reply hotkey is overriding the whisper list
@@ -904,6 +905,7 @@ window.runtime.EventsOn("disconnected", () => {
     state.isGuest = true;
     state.myStatus = "";
     state.canSetInvisible = false;
+    state.ownAuthority = "";
     setDetailsOpen(false);
     $("conn-pill").textContent = "offline";
     $("conn-pill").classList.remove("up");
@@ -1117,6 +1119,7 @@ window.runtime.EventsOn("snapshot", (json) => {
     const snap = parseRuntimeObject(json);
     if (!snap) return;
     state.canSetInvisible = snap.can_set_invisible === true;
+    state.ownAuthority = ["owner", "administrator", "member", "guest"].includes(snap.own_authority) ? snap.own_authority : "";
     state.channels = [];
     state.clients = [];
     lastKnownChannel.clear(); // the snapshot is authoritative
@@ -3737,8 +3740,15 @@ async function refreshPermissions() {
     const heading = document.createElement("h3");
     heading.textContent = t("roles.myRoles");
     const help = document.createElement("p");
-    help.textContent = t("roles.ownAccessHelp");
+    help.textContent = t(state.ownAuthority === "owner" ? "roles.ownerAccessHelp" :
+        state.ownAuthority === "administrator" ? "roles.administratorAccessHelp" : "roles.ownAccessHelp");
     area.replaceChildren(heading, help);
+    if (state.ownAuthority === "owner" || state.ownAuthority === "administrator") {
+        const authority = document.createElement("strong");
+        authority.className = "role-chip";
+        authority.textContent = t(`roles.authority.${state.ownAuthority}`);
+        area.appendChild(authority);
+    }
     const ownRoles = state.clients.find(client => client.client_id === state.myClientID)?.roles || [];
     for (const role of [...ownRoles].sort((a, b) => b.position - a.position)) area.appendChild(roleChip(role));
 }

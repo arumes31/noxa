@@ -22,7 +22,16 @@ func buildRoleSnapshotContext(ctx context.Context, sm *state.Manager, evaluator 
 	}
 	showStats := evaluator.Evaluate(actorID, 0, authorization.ViewConnectionInfo).Allowed
 	snapshot := broadcast.BuildSnapshot(sm, showStats, uniqueID)
-	snapshot.CanSetInvisible = evaluator.Evaluate(actorID, 0, authorization.Administrator).Allowed
+	authority := evaluator.Evaluate(actorID, 0, authorization.Administrator)
+	snapshot.CanSetInvisible = authority.Allowed
+	switch {
+	case authority.Reason == "owner", authority.Reason == "administrator":
+		snapshot.OwnAuthority = authority.Reason
+	case actorID == 0:
+		snapshot.OwnAuthority = "guest"
+	default:
+		snapshot.OwnAuthority = "member"
+	}
 	decorateMembers := func(members []*broadcast.ClientInfo) error {
 		for _, member := range members {
 			if err := ctx.Err(); err != nil {

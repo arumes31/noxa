@@ -64,6 +64,8 @@ type ChannelAccess struct {
 // TreeSnapshot is the full nested view of the server's channel tree and the
 // users currently connected.
 type TreeSnapshot struct {
+	// OwnAuthority describes the recipient's authority, independently of cosmetic roles.
+	OwnAuthority string `json:"own_authority,omitempty"`
 	// CanSetInvisible is recipient-specific role authority, never a legacy admin flag.
 	CanSetInvisible bool           `json:"can_set_invisible,omitempty"`
 	RootChannels    []*ChannelNode `json:"root_channels"`

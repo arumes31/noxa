@@ -12,6 +12,32 @@ import (
 	"noxa/internal/state"
 )
 
+func TestRoleSnapshotReportsViewerAuthorityWithoutImplyingOwnershipFromRoles(t *testing.T) {
+	sm := state.New(testLogger())
+	policy := serverRoleFixture().policy
+	policy.Roles = append(policy.Roles, authorization.Role{ID: 40, Name: "Admin", Position: 1, Permissions: []authorization.Capability{authorization.Administrator}})
+	policy.Members = []authorization.RoleMember{{UserID: 3, RoleIDs: []int64{40}}}
+	evaluator, err := authorization.NewRoleEvaluator(policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for actorID, want := range map[int64]string{0: "guest", 1: "member", 2: "owner", 3: "administrator"} {
+		data, err := json.Marshal(buildRoleSnapshot(sm, evaluator, actorID, "viewer"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var got struct {
+			OwnAuthority string `json:"own_authority"`
+		}
+		if err := json.Unmarshal(data, &got); err != nil {
+			t.Fatal(err)
+		}
+		if got.OwnAuthority != want {
+			t.Errorf("actor %d authority = %q, want %q", actorID, got.OwnAuthority, want)
+		}
+	}
+}
+
 func TestRoleSnapshotHidesResourcesCountsAndParentReferences(t *testing.T) {
 	sm := state.New(testLogger())
 	sm.AddChannel(&state.Channel{ChannelID: 1, Name: "private-parent", ClientCount: 20})

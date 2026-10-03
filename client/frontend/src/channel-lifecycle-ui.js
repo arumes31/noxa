@@ -47,7 +47,9 @@ export function openRoleChannel(kind, channelID = 0, { destinationID, orderIndex
         refresh.disabled = busy || committed;
         close.disabled = busy;
         overlay.dataset.blocking = String(busy);
-        status.textContent = busy ? t(snapshot ? "roles.saving" : "roles.channel.loading") : committed ? t("roles.enforcementPending") : feedback;
+        status.textContent = busy ? t(snapshot ? "roles.saving" : "roles.channel.loading") : committed ? t("roles.enforcementPending") :
+            snapshot && !needsRefresh && !reviewed() ? t(kind === "channel_create" ? "roles.channel.reviewCreate" : "roles.channel.reviewMove") : feedback;
+        save.title = !reviewed() ? status.textContent : "";
         impactView?.update();
     };
     const field = (key, type = "text", min = null, max = null, host = form) => {
