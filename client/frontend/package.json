@@ -33,7 +33,7 @@
   "devDependencies": {
     "@playwright/test": "^1.62.1",
     "acorn": "8.15.0",
-    "eslint-scope": "8.4.0",
+    "eslint-scope": "9.1.2",
     "vite": "^8.2.0"
   }
 }
