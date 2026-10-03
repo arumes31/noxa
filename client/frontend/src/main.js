@@ -805,6 +805,7 @@ const tabReconnects = createTabReconnects({
 });
 const reconnectCancel = document.createElement("button");
 reconnectCancel.id = "reconnect-cancel";
+reconnectCancel.className = "ui-button";
 reconnectCancel.type = "button";
 reconnectCancel.textContent = t("runtime.cancelReconnect");
 reconnectCancel.hidden = true;
