@@ -103,7 +103,10 @@ func (r *Router) WatchVideo(subscriber, publisher, slot string, generation, revi
 		}
 		r.watches[key] = videoWatch{generation, revision, r.watchEpoch, session, active}
 	}
-	started = active && (!old.active || old.session != session || old.publication != generation)
+	// A newer active revision is an explicit retry. Notify the publisher again
+	// so paused screen capture can produce a fresh frame; exact retries remain
+	// idempotent and stale revisions were rejected above.
+	started = active && (!old.active || old.session != session || old.publication != generation || revision > old.revision)
 	r.watchMu.Unlock()
 	r.mu.RUnlock()
 	if active {

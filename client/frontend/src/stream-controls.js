@@ -2,6 +2,7 @@ import { captureMediaScope, mediaScopeIsCurrent } from "./media-controls.js";
 import { streamRequest, stopPublications, publicationSnapshot, reconcilePublications } from "./stream-publication.js";
 import { t } from "./i18n.js";
 import { updateShareViewers } from "./share-status.js";
+import { streamRecovery } from "./stream-recovery.js";
 
 const V = () => window.__noxa;
 let session = null;
@@ -18,6 +19,7 @@ export function receiveStreamTrack(track, publisher, trackID = track.id) {
     s.tracks.set(trackID, { track, publisher });
     track.enabled = false;
     const entry = s.streams.get(trackID);
+    if (entry) entry.receiverEnded = false;
     applyWatch(s, entry);
     if (entry) renderEntry(s, entry);
 }
@@ -29,6 +31,7 @@ export function removeStreamTrack(track, trackID) {
     track.enabled = false;
     s.removeVideo(trackID);
     const entry = s.streams.get(trackID);
+    if (entry) entry.receiverEnded = track.readyState === "ended";
     if (entry) renderEntry(s, entry);
 }
 
@@ -57,10 +60,18 @@ function applyWatch(s, entry) {
     if (entry.slot === "screen" && s.audio.has(entry.publisher_id)) s.audio.get(entry.publisher_id).enabled = entry.watching;
 }
 
-async function toggleWatch(s, entry) {
-    if (!current(s) || entry.pending) return;
-    const restoreFocus = document.activeElement === entry.watchButton;
-    const active = !entry.watching;
+async function toggleWatch(s, entry, retry = false) {
+    if (!current(s) || s.streams.get(key(entry)) !== entry || entry.pending) return;
+    if (retry && !streamRecovery(entry, s.tracks.get(key(entry))?.track).retry) return;
+    if (entry.available === false) {
+        entry.card.remove();
+        s.streams.delete(key(entry));
+        s.container.hidden = ![...s.streams.values()].some(item => !item.card.hidden);
+        return;
+    }
+    const focusButton = retry ? entry.retryButton : entry.watchButton;
+    const restoreFocus = document.activeElement === focusButton;
+    const active = retry || !entry.watching;
     entry.pending = true;
     entry.error = "";
     entry.revision++;
@@ -73,8 +84,10 @@ async function toggleWatch(s, entry) {
     renderEntry(s, entry);
     try {
         await streamRequest(s.scope, { action: "watch", publisher_id: entry.publisher_id, slot: entry.slot, generation: entry.generation, revision: String(entry.revision), session: s.watchSession, active });
-        if (!current(s) || s.streams.get(key(entry)) !== entry) return;
+        if (!current(s) || s.streams.get(key(entry)) !== entry || entry.available === false) return;
         entry.watching = active;
+        entry.watchStartedAt = Date.now();
+        entry.recoverySince = entry.watchStartedAt;
         applyWatch(s, entry);
     } catch (error) {
         if (current(s)) entry.error = t("streams.failed", { error: String(error) });
@@ -82,7 +95,7 @@ async function toggleWatch(s, entry) {
         entry.pending = false;
         if (current(s) && s.streams.get(key(entry)) === entry) {
             renderEntry(s, entry);
-            if (restoreFocus && (document.activeElement === document.body || document.activeElement === entry.watchButton)) {
+            if (restoreFocus && (document.activeElement === document.body || document.activeElement === focusButton)) {
                 entry.watchButton.focus({ preventScroll: true });
             }
         }
@@ -104,7 +117,7 @@ function renderEntry(s, entry) {
     }
     card.hidden = inVideo;
     s.container.hidden = ![...s.streams.values()].some(item => !item.card.hidden);
-    const actionLabel = t(entry.pending ? "streams.updating" : entry.watching ? "streams.stop" : "streams.watch");
+    const actionLabel = t(entry.available === false ? "streams.dismiss" : entry.pending ? "streams.updating" : entry.watching ? "streams.stop" : "streams.watch");
     button.textContent = inVideo ? "×" : actionLabel;
     button.setAttribute("aria-label", actionLabel);
     button.title = actionLabel;
@@ -112,10 +125,18 @@ function renderEntry(s, entry) {
     button.setAttribute("aria-pressed", String(entry.watching));
     const seconds = entry.previewAt ? Math.max(0, Math.floor((Date.now() - entry.previewAt) / 1000)) : 0;
     const track = s.tracks.get(key(entry))?.track;
-    entry.liveStatus.textContent = entry.error || entry.pollError || (track?.muted ? t("streams.waiting") : "");
+    const recovery = streamRecovery(entry, track);
+    const status = recovery.state === "idle" ? "" : t(`streams.${recovery.state}`);
+    entry.retryButton.textContent = t("streams.retry");
+    entry.retryButton.hidden = !recovery.retry;
+    entry.retryButton.disabled = entry.pending;
+    const recoveryContainer = inVideo ? entry.liveRecovery : card;
+    if (entry.retryButton.parentElement !== recoveryContainer) recoveryContainer.append(entry.retryButton);
+    const terminal = recovery.state === "ended" || recovery.state === "stopped";
+    entry.liveStatus.textContent = terminal ? status : entry.error || entry.pollError || (recovery.state === "live" ? "" : status);
     entry.liveStatus.hidden = !entry.liveStatus.textContent;
-    card.querySelector(".stream-status").textContent = entry.error || entry.pollError || (entry.watching
-        ? t(track && !track.muted ? (V().state.settings?.low_bandwidth ? "streams.paused" : "streams.live") : "streams.waiting")
+    card.querySelector(".stream-status").textContent = terminal ? status : entry.error || entry.pollError || (entry.watching
+        ? status
         : entry.previewAt ? t(seconds > 150 ? "streams.stale" : "streams.previewAge", { seconds }) : t("streams.noPreview"));
     if (entry.error || entry.pollError) card.querySelector(".stream-status").setAttribute("role", "alert");
     else card.querySelector(".stream-status").removeAttribute("role");
@@ -149,7 +170,14 @@ function createEntry(s, stream) {
     entry.liveStatus = document.createElement("p");
     entry.liveStatus.className = "stream-live-notice";
     entry.liveStatus.setAttribute("role", "status");
-    entry.liveControls.append(entry.liveStatus);
+    entry.liveRecovery = document.createElement("div");
+    entry.liveRecovery.className = "stream-recovery";
+    entry.liveRecovery.append(entry.liveStatus);
+    entry.liveControls.append(entry.liveRecovery);
+    entry.retryButton = document.createElement("button");
+    entry.retryButton.className = "stream-retry";
+    entry.retryButton.type = "button";
+    entry.retryButton.onclick = () => { void toggleWatch(s, entry, true); };
     entry.liveControls.onclick = event => event.stopPropagation();
     entry.liveControls.oncontextmenu = event => event.stopPropagation();
     card.querySelector(".stream-watch").onclick = () => { void toggleWatch(s, entry); };
@@ -182,14 +210,23 @@ async function poll(s) {
         const available = new Map(result.streams.filter(stream => stream.publisher_id !== s.scope.clientID).map(stream => [key(stream), stream]));
         for (const [id, entry] of s.streams) {
             if (available.get(id)?.generation === entry.generation) continue;
+            const wasWatching = entry.watching || entry.pending || entry.available === false;
             entry.watching = false;
             applyWatch(s, entry);
+            if (!available.has(id) && wasWatching) {
+                entry.available = false;
+                renderEntry(s, entry);
+                continue;
+            }
             entry.card.remove();
             s.streams.delete(id);
         }
         for (const [id, stream] of available) {
             let entry = s.streams.get(id);
             if (!entry) { entry = createEntry(s, stream); s.streams.set(id, entry); }
+            entry.available = true;
+            const revision = BigInt(stream.watch_revision);
+            if (revision > entry.revision) entry.revision = revision;
             entry.pollError = "";
             if (stream.preview_at && stream.preview_at !== entry.previewAt) {
                 const preview = await streamRequest(s.scope, { action: "preview", publisher_id: stream.publisher_id, slot: stream.slot, generation: stream.generation });

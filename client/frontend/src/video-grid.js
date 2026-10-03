@@ -304,6 +304,10 @@ export function createVideoGrid({ applySendCaps, syncCameraButton, syncShareButt
         const track = t.track;
         const live = !!track && track.readyState === "live" && track.enabled && !track.muted;
         const active = !!t.watchControls || live && t.flowing;
+        t.el.dataset.streamState = track?.readyState === "ended" ? "ended"
+            : !live || t.video.readyState < 2 ? "waiting"
+            : lowBandwidth && t.video.paused ? "paused"
+            : !t.flowing ? "stalled" : "live";
         t.el.classList.toggle("hidden", !active);
         t.el.classList.toggle("has-video", live && t.flowing && t.video.readyState >= 2);
         layoutGrid();
@@ -672,6 +676,7 @@ export function createVideoGrid({ applySendCaps, syncCameraButton, syncShareButt
             // every tile ends up frozen on a picture rather than on an avatar.
             if (on) { if (t.video.readyState >= 2) t.video.pause(); }
             else t.video.play().catch(() => {});
+            updateTileVideo(t);
             updatePreviewAge(t);
         }
         applySendCaps();

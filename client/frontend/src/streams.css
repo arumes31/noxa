@@ -33,7 +33,11 @@
 .stream-live-controls { position: absolute; inset: 0; pointer-events: none; z-index: 3; }
 .stream-live-controls > * { pointer-events: auto; }
 .stream-live-controls .stream-watch { left: auto; top: 6px; right: 6px; transform: none; width: 32px; height: 32px; min-height: 32px; padding: 0; font-size: 22px; line-height: 1; }
-.stream-live-notice { position: absolute; top: 40px; left: 6px; right: 6px; padding: 6px; margin: 0; background: #102a36ed; color: #fff; font-size: 12px; }
+.stream-recovery { position: absolute; top: 40px; left: 6px; right: 6px; }
+.stream-live-notice { padding: 6px; margin: 0; background: #102a36ed; color: #fff; font-size: 12px; }
+.stream-retry { margin-top: 6px; min-height: 32px; padding: 4px 10px; border: 1px solid #a5efff; border-radius: 6px; color: #fff; background: #102a36ed; cursor: pointer; }
+.stream-retry:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+.stream-retry[hidden], .stream-live-notice[hidden] { display: none; }
 .stream-live-controls .stream-audio { position: absolute; left: 6px; right: 6px; bottom: 6px; margin: 0; padding: 4px 6px; border-radius: 4px; background: #102a36ed; color: #fff; gap: 6px; }
 .stream-live-controls .stream-audio button { flex: 0 1 auto; font: inherit; font-size: 11px; color: inherit; background: transparent; border: 1px solid #86a7b3; border-radius: 4px; min-height: 28px; }
 .stream-live-controls .stream-audio input { width: 60px; min-width: 40px; }

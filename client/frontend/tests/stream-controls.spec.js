@@ -198,3 +198,133 @@ test("delayed watch acknowledgement leaves a newer keyboard focus choice intact"
     await expect(page.locator('.vtile[data-clid="alice"]').getByRole("button", { name: "Stop watching", exact: true })).toBeVisible();
     await expect(chat).toBeFocused();
 });
+
+async function waitForMissingStream(page) {
+    await page.clock.install();
+    await page.evaluate(() => {
+        const s = window.__streams;
+        s.controls.removeStreamTrack(s.tracks.get("alice"), "alice|screen");
+    });
+    await page.locator('[data-publisher="alice"] .stream-watch').click();
+    await page.clock.runFor(12_000);
+    return page.locator('[data-publisher="alice"]');
+}
+
+test("persistent waiting retries with a fresh revision and keeps voice connected", async ({ page }) => {
+    const card = await waitForMissingStream(page);
+    await expect(card.getByRole("button", { name: "Retry stream", exact: true })).toBeVisible();
+    await card.getByRole("button", { name: "Retry stream", exact: true }).click();
+    expect(await page.evaluate(() => window.__streams.calls.filter(call => call.action === "watch").map(call => [call.active, call.revision, call.generation, call.session]))).toEqual([[true, "1", "1", "10"], [true, "2", "1", "10"]]);
+    expect(await page.evaluate(() => !!window.__noxa.state.pc)).toBe(true);
+    await expect(card.getByRole("button", { name: "Stop watching", exact: true })).toBeVisible();
+});
+
+test("retry failure stays actionable and late retry cannot attach to a replacement session", async ({ page }) => {
+    const card = await waitForMissingStream(page);
+    await page.evaluate(() => {
+        const original = window.go.main.App.VideoStreamControlForTab;
+        window.go.main.App.VideoStreamControlForTab = async (tab, msg) => {
+            if (msg.action === "watch" && !window.__streams.delayWatch) throw new Error("Retry unavailable");
+            return original(tab, msg);
+        };
+    });
+    await card.getByRole("button", { name: "Retry stream", exact: true }).click();
+    await expect(card.locator(".stream-status")).toContainText("Retry unavailable");
+    await expect(card.getByRole("button", { name: "Retry stream", exact: true })).toBeEnabled();
+    await page.evaluate(() => { window.__streams.delayWatch = true; });
+    await card.getByRole("button", { name: "Retry stream", exact: true }).click();
+    await page.evaluate(() => {
+        window.__streams.session = "11";
+        window.__streams.start();
+        window.__streams.resolveWatch();
+    });
+    await expect(page.getByRole("button", { name: "Watch", exact: true })).toHaveCount(2);
+    expect(await page.evaluate(() => [...window.__streams.shown])).toEqual([]);
+});
+
+test("confirmed publication stop replaces waiting with a dismissible stopped notice", async ({ page }) => {
+    const card = await waitForMissingStream(page);
+    await page.evaluate(() => { window.__streams.streams = window.__streams.streams.filter(s => s.publisher_id !== "alice"); });
+    await page.clock.runFor(3_000);
+    await expect(card.locator(".stream-status")).toHaveText("Stream stopped");
+    await expect(card.getByRole("button", { name: "Retry stream", exact: true })).toBeHidden();
+    await card.getByRole("button", { name: "Dismiss", exact: true }).click();
+    await expect(card).toHaveCount(0);
+    expect(await page.evaluate(() => !!window.__noxa.state.pc)).toBe(true);
+});
+
+test("decoded static screens and intentional low bandwidth pauses do not offer recovery", async ({ page }) => {
+    await page.locator('[data-publisher="alice"] .stream-watch').click();
+    const tile = page.locator('.vtile[data-clid="alice"]');
+    await expect(tile).toHaveClass(/has-video/);
+    await page.clock.install();
+    await page.clock.runFor(18_000);
+    await expect(tile.getByRole("button", { name: "Retry stream", exact: true })).toBeHidden();
+    await page.evaluate(async () => { (await import("/src/video.js")).setLowBandwidth(true); });
+    await page.clock.runFor(18_000);
+    await expect(tile.getByRole("button", { name: "Retry stream", exact: true })).toBeHidden();
+});
+
+test("ended receiver has a truthful translated notice until a replacement track arrives", async ({ page }) => {
+    await page.clock.install();
+    await page.locator('[data-publisher="alice"] .stream-watch').click();
+    await page.evaluate(() => {
+        const s = window.__streams, track = s.tracks.get("alice");
+        track.stop();
+        s.controls.removeStreamTrack(track, "alice|screen");
+    });
+    const card = page.locator('[data-publisher="alice"]');
+    await expect(card.locator(".stream-status")).toHaveText("Video track ended. Ask the sender to restart this stream.");
+    await expect(page.getByRole("button", { name: "Retry stream", exact: true })).toBeHidden();
+    await page.evaluate(async () => { (await import("/src/i18n.js")).setLanguage("de"); window.dispatchEvent(new Event("noxa-language-changed")); });
+    await expect(card.locator(".stream-status")).toHaveText("Die Videospur wurde beendet. Bitte den Sender, den Stream neu zu starten.");
+    await page.evaluate(() => {
+        const canvas = document.createElement("canvas");
+        canvas.getContext("2d").fillRect(0, 0, 100, 100);
+        window.__streams.controls.receiveStreamTrack(canvas.captureStream(1).getVideoTracks()[0], { client_id: "alice" }, "alice|screen");
+    });
+    await expect(card).toBeHidden();
+    await expect(page.locator('.vtile[data-clid="alice"] .stream-live-notice')).not.toContainText("Die Videospur wurde beendet");
+});
+
+test("late retry cannot resume a newer publication", async ({ page }) => {
+    const card = await waitForMissingStream(page);
+    await page.evaluate(() => { window.__streams.delayWatch = true; });
+    await card.getByRole("button", { name: "Retry stream", exact: true }).click();
+    await page.evaluate(() => { window.__streams.streams[0].generation = "99"; });
+    await page.clock.runFor(3_000);
+    await page.evaluate(() => window.__streams.resolveWatch());
+    await expect(card.getByRole("button", { name: "Watch", exact: true })).toBeVisible();
+    expect(await page.evaluate(() => [...window.__streams.shown])).toEqual([]);
+    await page.evaluate(async () => { (await import("/src/i18n.js")).setLanguage("de"); window.dispatchEvent(new Event("noxa-language-changed")); });
+    await expect(card.getByRole("button", { name: "Ansehen", exact: true })).toBeVisible();
+});
+
+test("camera diagnostics expose a stalled stream and successful retry clears the warning on decoded video", async ({ page }) => {
+    await page.clock.install();
+    await page.evaluate(() => {
+        const s = window.__streams;
+        s.streams[0].slot = "cam";
+        s.canvas = document.createElement("canvas");
+        s.canvas.getContext("2d").fillRect(0, 0, 100, 100);
+        const track = s.canvas.captureStream(1).getVideoTracks()[0];
+        Object.defineProperty(track, "id", { value: "alice|cam" });
+        s.camera = track;
+        s.controls.receiveStreamTrack(track, { client_id: "alice" });
+        window.__noxa.state.pc.getStats = async () => new Map([["camera", { type: "inbound-rtp", kind: "video", trackIdentifier: "alice|cam", frameWidth: 640, framesDecoded: 1 }]]);
+        window.__noxa.state.pc.getSenders = () => [];
+        window.go.main.App.SystemCPUPercent = async () => 10;
+    });
+    await page.clock.runFor(3_000);
+    await page.locator('[data-publisher="alice"][data-slot="cam"] .stream-watch').click();
+    await page.evaluate(() => window.__streams.camera.requestFrame());
+    const tile = page.locator('.vtile[data-clid="alice"][data-slot="cam"]');
+    await expect(tile).toHaveClass(/has-video/);
+    await page.clock.runFor(21_000);
+    await expect(tile.locator(".stream-live-notice")).toContainText("Video has stalled");
+    await tile.getByRole("button", { name: "Retry stream", exact: true }).click();
+    await page.evaluate(() => window.__streams.camera.requestFrame());
+    await page.clock.runFor(3_000);
+    await expect(tile.getByRole("button", { name: "Retry stream", exact: true })).toBeHidden();
+    await expect(tile).toHaveClass(/has-video/);
+});

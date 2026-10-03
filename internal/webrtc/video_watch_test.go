@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/pion/interceptor"
+	"github.com/pion/rtcp"
 	"github.com/pion/rtp"
 )
 
@@ -53,7 +54,7 @@ func TestVideoWatchRejectsEarlierReceiverSession(t *testing.T) {
 	}
 }
 
-func TestVideoWatchReportsOnlyNewViewerStarts(t *testing.T) {
+func TestVideoWatchReportsNewViewerStartsAndExplicitRetries(t *testing.T) {
 	r := NewRouter(nil)
 	r.JoinChannel(1, "pub")
 	r.JoinChannel(1, "sub")
@@ -66,7 +67,7 @@ func TestVideoWatchReportsOnlyNewViewerStarts(t *testing.T) {
 		revision                  uint64
 		active, started, rejected bool
 	}{
-		{1, true, true, false}, {1, true, false, false}, {2, true, false, false},
+		{1, true, true, false}, {1, true, false, false}, {2, true, true, false},
 		{3, false, false, false}, {2, true, false, true}, {4, true, true, false},
 	} {
 		started, err := r.WatchVideo("sub", "pub", SlotScreen, generation, tc.revision, session, tc.active)
@@ -77,6 +78,25 @@ func TestVideoWatchReportsOnlyNewViewerStarts(t *testing.T) {
 	r.JoinChannel(2, "sub")
 	if started, err := r.WatchVideo("sub", "pub", SlotScreen, generation, 5, session, true); started || err == nil {
 		t.Fatal("unauthorized viewer start")
+	}
+}
+
+func TestVideoWatchRetryRequestsFreshKeyframe(t *testing.T) {
+	r := NewRouter(nil)
+	r.JoinChannel(1, "pub")
+	r.JoinChannel(1, "sub")
+	generation := testVideoPublication(t, r, "pub", "sub", SlotScreen)
+	writer := &fakeRTCPWriter{}
+	r.mu.Lock()
+	r.rtcpWriters["pub"] = writer
+	r.mu.Unlock()
+	registerVideoSource(r, "pub", SlotScreen, "", 8123)
+	started, err := r.WatchVideo("sub", "pub", SlotScreen, generation, 2, r.VideoWatchSession("sub"), true)
+	if err != nil || !started || writer.pliCount() != 1 {
+		t.Fatalf("retry started=%v err=%v PLI=%d", started, err, writer.pliCount())
+	}
+	if got := writer.pkts[0][0].(*rtcp.PictureLossIndication).MediaSSRC; got != 8123 {
+		t.Fatalf("retry keyframe source=%d", got)
 	}
 }
 
