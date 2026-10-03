@@ -6,6 +6,14 @@
 .git
 .gitignore
 .gitattributes
+.github/
+
+# Separate frontend projects and development-only content
+# Server and backup images only use the root Go module and runtime scripts.
+client/
+website/
+docs/
+tools/
 
 # Environment / secrets
 .env
@@ -22,6 +30,10 @@ docker/secrets/*
 # Editor / IDE config
 .vscode/
 .idea/
+.agents/
+.claude/
+.codex/
+.impeccable/
 *.swp
 *.swo
 
@@ -32,13 +44,13 @@ bin/
 build/
 data/
 .cache/
+.tmp/
 temp/
 .lintcache*/
 graphify-out/
-client/frontend/node_modules/
-client/frontend/dist/
-client/frontend/test-results/
-client/frontend/playwright-report/
+**/node_modules/
+**/playwright-report/
+**/test-results/
 *.exe
 *.test
 *.out
