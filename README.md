@@ -8,6 +8,8 @@
 
 *Ultra-low latency SFU voice & video engine, zero-trust E2EE chat messaging, PostgreSQL multi-tenant state persistence, and named roles, role hierarchy, and channel access overrides.*
 
+<img width="1280" height="800" alt="grafik" src="https://github.com/user-attachments/assets/d3ed3136-b468-476c-8e99-2de600d3c0f5" />
+
 [![CI](https://github.com/arumes31/noxa/actions/workflows/ci.yml/badge.svg)](https://github.com/arumes31/noxa/actions/workflows/ci.yml)
 [![golangci-lint](https://github.com/arumes31/noxa/actions/workflows/golangci-lint.yml/badge.svg)](https://github.com/arumes31/noxa/actions/workflows/golangci-lint.yml)
 [![Security Analysis](https://github.com/arumes31/noxa/actions/workflows/security.yml/badge.svg)](https://github.com/arumes31/noxa/actions/workflows/security.yml)
