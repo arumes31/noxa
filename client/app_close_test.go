@@ -100,10 +100,13 @@ func TestCloseNotificationTimeout(t *testing.T) {
 	t.Cleanup(func() { wailsQuit = originalQuit })
 	synctest.Test(t, func(t *testing.T) {
 		app := &App{ctx: t.Context()}
-		events, quits := 0, 0
+		events := 0
+		// Advancing fake time does not synchronize the test's reads with the
+		// timer callback's writes; the callback runs in a separate goroutine.
+		var quits atomic.Int32
 		app.eventEmit = func(string, any) { events++ }
 		wailsQuit = func(ctx context.Context) {
-			quits++
+			quits.Add(1)
 			if app.beforeClose(ctx) {
 				t.Error("timeout exit was intercepted")
 			}
@@ -112,14 +115,14 @@ func TestCloseNotificationTimeout(t *testing.T) {
 		app.Quit()
 		time.Sleep(closeNotificationTimeout - time.Nanosecond)
 		synctest.Wait()
-		if quits != 0 || events != 1 {
-			t.Fatalf("before timeout: events=%d quits=%d", events, quits)
+		if quits.Load() != 0 || events != 1 {
+			t.Fatalf("before timeout: events=%d quits=%d", events, quits.Load())
 		}
 		time.Sleep(time.Nanosecond)
 		synctest.Wait()
 		app.CompleteClose()
-		if quits != 1 || events != 1 {
-			t.Fatalf("after timeout and late acknowledgement: events=%d quits=%d", events, quits)
+		if quits.Load() != 1 || events != 1 {
+			t.Fatalf("after timeout and late acknowledgement: events=%d quits=%d", events, quits.Load())
 		}
 	})
 }
