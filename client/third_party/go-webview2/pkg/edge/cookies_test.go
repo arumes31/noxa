@@ -1,6 +1,7 @@
 package edge
 
 import (
+	"runtime"
 	"testing"
 	"time"
 	"unsafe"
@@ -12,6 +13,11 @@ import (
 )
 
 func TestCookieManager(t *testing.T) {
+	// COM, the window message pump, and all cookie calls must share one STA.
+	// t.Run starts a new goroutine, so keep the assertions on this thread too.
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
 	// Initialize COM
 	err := windows.CoInitializeEx(0, windows.COINIT_APARTMENTTHREADED)
 	if err != nil {
@@ -59,17 +65,40 @@ func TestCookieManager(t *testing.T) {
 	}
 	defer w32.DestroyWindow(hwnd)
 
-	_, _, _ = w32.User32ShowWindow.Call(hwnd, w32.SWShow)
-	_, _, _ = w32.User32UpdateWindow.Call(hwnd)
-	_, _, _ = w32.User32SetFocus.Call(hwnd)
-
 	// Create a new Chromium instance
 	chromium := NewChromium()
 	require.NotNil(t, chromium, "Chromium instance should not be nil")
+	chromium.DataPath = t.TempDir()
 
 	// Initialize WebView2
 	success := chromium.Embed(uintptr(hwnd))
 	require.True(t, success, "WebView2 initialization should succeed")
+	var browserProcess windows.Handle
+	defer func() {
+		chromium.ShuttingDown()
+		hr, _, _ := chromium.controller.vtbl.Close.Call(uintptr(unsafe.Pointer(chromium.controller)))
+		assert.Equal(t, uintptr(windows.S_OK), hr, "Should close the test browser")
+		// GetCoreWebView2 and the explicit AddRef in controller initialization
+		// each own a reference. Release both before the controller/environment.
+		chromium.webview.vtbl.Release.Call(uintptr(unsafe.Pointer(chromium.webview)))
+		chromium.webview.vtbl.Release.Call(uintptr(unsafe.Pointer(chromium.webview)))
+		chromium.controller.Release()
+		chromium.environment.vtbl.Release.Call(uintptr(unsafe.Pointer(chromium.environment)))
+		// Browser process termination can finish after Close returns. Wait for
+		// its profile to be released before testing removes the directory.
+		if browserProcess != 0 {
+			defer windows.CloseHandle(browserProcess)
+			result, err := windows.WaitForSingleObject(browserProcess, 10_000)
+			assert.NoError(t, err)
+			assert.Equal(t, uint32(windows.WAIT_OBJECT_0), result, "Test browser should exit")
+		}
+	}()
+	var browserPID uint32
+	hr, _, _ := chromium.webview.vtbl.GetBrowserProcessID.Call(
+		uintptr(unsafe.Pointer(chromium.webview)), uintptr(unsafe.Pointer(&browserPID)))
+	require.Equal(t, uintptr(windows.S_OK), hr)
+	browserProcess, err = windows.OpenProcess(windows.SYNCHRONIZE, false, browserPID)
+	require.NoError(t, err)
 
 	// Get the cookie manager
 	cookieManager, err := chromium.GetCookieManager()
@@ -81,7 +110,8 @@ func TestCookieManager(t *testing.T) {
 	err = cookieManager.DeleteAllCookies()
 	require.NoError(t, err, "Should delete all cookies without error")
 
-	t.Run("Test Cookie Creation and Properties", func(t *testing.T) {
+	// Cookie creation and properties.
+	{
 		// Create a new cookie
 		cookie, err := cookieManager.CreateCookie("testCookie", "testValue", "example.com", "/test")
 		require.NoError(t, err, "Should create cookie without error")
@@ -143,9 +173,10 @@ func TestCookieManager(t *testing.T) {
 		sameSite, err := cookie.GetSameSite()
 		assert.NoError(t, err, "Should get SameSite without error")
 		assert.Equal(t, int32(2), sameSite, "Cookie SameSite should be Lax")
-	})
+	}
 
-	t.Run("Test Cookie Management", func(t *testing.T) {
+	// Cookie management.
+	{
 		// Create and add a cookie
 		cookie, err := cookieManager.CreateCookie("managedCookie", "testValue", "example.com", "/test")
 		require.NoError(t, err, "Should create cookie without error")
@@ -161,5 +192,5 @@ func TestCookieManager(t *testing.T) {
 		// Delete all cookies
 		err = cookieManager.DeleteAllCookies()
 		assert.NoError(t, err, "Should delete all cookies without error")
-	})
+	}
 }
