@@ -30,7 +30,7 @@ func restartFixture(t *testing.T, addr, rejection, joinRejection string, moveGat
 		if err != nil {
 			return
 		}
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 		if _, err = netproto.ReadFrame(conn); err != nil {
 			return
 		}
@@ -80,7 +80,8 @@ func restartFixture(t *testing.T, addr, rejection, joinRejection string, moveGat
 
 func TestReconnectAfterProlongedOutageRestoresAuthorizedChannel(t *testing.T) {
 	// Reserve then close a local endpoint to reproduce a stopped server.
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	var listenConfig net.ListenConfig
+	listener, err := listenConfig.Listen(t.Context(), "tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
