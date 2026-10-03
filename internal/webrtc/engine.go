@@ -15,7 +15,7 @@ import (
 
 	"github.com/pion/ice/v4"
 	"github.com/pion/sdp/v3"
-	"github.com/pion/transport/v4/stdnet"
+	"github.com/pion/transport/v5/stdnet"
 	"github.com/pion/webrtc/v4"
 	"go.uber.org/zap"
 )

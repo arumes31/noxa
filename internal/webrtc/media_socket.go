@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/pion/transport/v4"
+	"github.com/pion/transport/v5"
 )
 
 const mediaSocketWriteTimeout = 250 * time.Millisecond
