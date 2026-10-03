@@ -30,9 +30,15 @@ export function memberAudioControls(client) {
         };
         number.onkeydown = event => { if (event.key === "Enter") { event.preventDefault(); number.onchange(); } };
         let savingMute = false;
+        let renderedMute;
         const refreshMute = () => {
             const muted = share ? isUserShareMuted(uid) : isUserMuted(uid);
-            mute.innerHTML = icon(muted ? "speakerOff" : "speaker");
+            // A volume input can save on blur between pointerdown and pointerup
+            // on this icon. Replacing the unchanged SVG then cancels the click.
+            if (renderedMute !== muted) {
+                mute.innerHTML = icon(muted ? "speakerOff" : "speaker");
+                renderedMute = muted;
+            }
             mute.setAttribute("aria-pressed", String(muted));
             mute.title = mute.ariaLabel = t(share ? (muted ? "context.shareUnmute" : "context.shareMute") : (muted ? "context.voiceUnmute" : "context.voiceMute"));
             mute.disabled = savingMute;
