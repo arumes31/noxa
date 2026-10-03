@@ -4,19 +4,33 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+    groups:
+      codeql:
+        patterns:
+          - "github/codeql-action/*"
 
-  - package-ecosystem: "gmod"
+  - package-ecosystem: "gomod"
     directory: "/"
     schedule:
       interval: "weekly"
 
-  - package-ecosystem: "gmod"
+  - package-ecosystem: "gomod"
     directory: "/client"
     schedule:
       interval: "weekly"
 
   - package-ecosystem: "npm"
     directory: "/client/frontend"
+    schedule:
+      interval: "weekly"
+
+  - package-ecosystem: "gomod"
+    directory: "/client/third_party/go-webview2"
+    schedule:
+      interval: "weekly"
+
+  - package-ecosystem: "npm"
+    directory: "/website"
     schedule:
       interval: "weekly"
 
