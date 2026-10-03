@@ -9,28 +9,39 @@
     <link rel="apple-touch-icon" href="/branding/apple-touch-icon.png" sizes="180x180" />
     <link rel="stylesheet" href="/src/style.css" />
     <link rel="stylesheet" href="/src/workspace.css" />
+    <link rel="stylesheet" href="/src/login.css" />
 </head>
 <body class="details-collapsed">
     <!-- Login overlay -->
     <div id="login-overlay">
+      <main class="login-shell">
+        <div class="login-brand wordmark"><img class="login-logo" src="/branding/logo.png" width="80" height="80" alt="" />noXa</div>
         <form class="login-card" aria-labelledby="login-title">
-            <h1 id="login-title" class="wordmark"><img class="login-logo" src="/branding/logo.png" width="56" height="56" alt="" />noXa</h1>
-            <label for="login-addr">SERVER <input id="login-addr" value="127.0.0.1:12333" autocomplete="url" spellcheck="false" /></label>
-            <label for="login-nick">Account login / guest name <input id="login-nick" placeholder="owner" autocomplete="username" /></label>
-            <label for="login-display-name">Display name (optional) <input id="login-display-name" placeholder="NoxaUser" autocomplete="nickname" aria-describedby="login-display-name-hint" /></label>
-            <p id="login-display-name-hint" class="hint">Visible to everyone. Your account login stays unchanged.</p>
-            <label for="login-accountpw">Account password (optional) <input id="login-accountpw" type="password" placeholder="for a registered account" autocomplete="current-password" /></label>
-            <label for="login-serverpw">Server password (optional) <input id="login-serverpw" type="password" placeholder="if required" autocomplete="off" /></label>
-            <button id="login-connect" type="submit">CONNECT</button>
+            <h1 id="login-title" data-login-i18n="login.title">Connect to your server</h1>
+            <label for="login-addr"><span data-login-i18n="login.server">Server</span><span class="login-input"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="7" rx="1.5"/><rect x="3" y="14" width="18" height="7" rx="1.5"/><path d="M6 6.5h.01M6 17.5h.01M15 6.5h3M15 17.5h3"/></svg><input id="login-addr" value="127.0.0.1:12333" autocomplete="url" spellcheck="false" /></span></label>
+            <label for="login-nick"><span data-login-i18n="login.nickname">Account login / guest name</span><span class="login-input"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="7" r="4"/><path d="M3 21v-3a5 5 0 0 1 5-5h8a5 5 0 0 1 5 5v3Z"/></svg><input id="login-nick" placeholder="owner" autocomplete="username" /></span></label>
+            <details id="login-options">
+              <summary><svg class="login-chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="m5 9 7 7 7-7"/></svg><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="10" width="14" height="11" rx="2"/><path d="M8 10V6a4 4 0 0 1 8 0v4M12 14v3"/></svg><span><span data-login-i18n="login.optional">Optional details</span><small data-login-i18n="login.optionalHint">Display name · Passwords</small></span></summary>
+              <div class="login-options-fields">
+            <label for="login-display-name"><span data-login-i18n="login.displayName">Display name (optional)</span><input id="login-display-name" placeholder="NoxaUser" autocomplete="nickname" aria-describedby="login-display-name-hint" /></label>
+            <p id="login-display-name-hint" class="hint" data-login-i18n="login.displayNameHint">Visible to everyone. Your account login stays unchanged.</p>
+            <label for="login-accountpw"><span data-login-i18n="login.accountPassword">Account password (optional)</span><input id="login-accountpw" type="password" placeholder="for a registered account" autocomplete="current-password" /></label>
+            <label for="login-serverpw"><span data-login-i18n="login.serverPassword">Server password (optional)</span><input id="login-serverpw" type="password" placeholder="if required" autocomplete="off" /></label>
+              </div>
+            </details>
+            <button id="login-connect" type="submit"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 11v2M7 7v10M12 3v18M17 7v10M21 11v2"/></svg><span id="login-connect-label" data-login-i18n="login.connect">Connect</span></button>
             <div id="login-error" role="alert" aria-live="assertive"></div>
-            <div class="pane-head">RECENT SERVERS</div>
-            <div id="login-recents" role="region" aria-label="Recent servers"></div>
+        </form>
+        <section class="login-recents-panel" aria-labelledby="login-recents-title">
+            <h2 id="login-recents-title" data-login-i18n="login.recentServers">Recent servers</h2>
+            <div id="login-recents"></div>
+        </section>
             <div class="identity-footnote">
-                Identity auto-generated — stored locally
+                <span data-login-i18n="login.identity">Identity auto-generated — stored locally</span>
                 <span class="mono" id="login-identity"></span>
                 <span class="mono version-foot" id="login-version"></span>
             </div>
-        </form>
+      </main>
     </div>
 
     <div id="toasts" role="region" aria-label="Notifications"></div>

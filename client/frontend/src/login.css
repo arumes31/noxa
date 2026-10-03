@@ -1,0 +1,174 @@
+/* The login palette is independent of the connected workspace theme. */
+#login-overlay {
+    --login-text: #edf5ff;
+    --login-muted: #a0c6df;
+    --login-accent: #00d3ed;
+    --login-border: #33789b;
+    color-scheme: dark;
+    display: block;
+    padding: 60px 24px 28px;
+    color: var(--login-text);
+    background: #071e2d url("/branding/login-waves.svg") center center / cover no-repeat;
+    scrollbar-color: #33789b #071e2d;
+    scroll-padding-block: 16px;
+}
+.login-shell { width: 600px; max-width: 100%; margin-inline: auto; }
+.login-brand {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 18px;
+    margin: 0 0 36px;
+    color: var(--login-accent);
+    font-size: 3.857rem;
+    line-height: 1;
+    letter-spacing: -.04em;
+}
+#login-overlay .login-logo { width: 80px; height: 80px; filter: brightness(1.2); }
+#login-overlay .login-card,
+.login-recents-panel {
+    width: 100%;
+    border: 1px solid var(--login-border);
+    border-radius: 18px;
+    background: rgb(7 29 45 / 92%);
+    box-shadow: none;
+}
+#login-overlay .login-card {
+    margin: 0;
+    padding: 38px 41px 32px;
+    gap: 22px;
+    opacity: 1;
+    transform: none;
+    transition: none;
+}
+#login-title {
+    margin: 0 0 -6px;
+    color: var(--login-text);
+    font: 600 2.143rem/1.3 var(--font-body);
+    letter-spacing: -.015em;
+}
+#login-overlay .login-card label {
+    gap: 7px;
+    color: var(--login-text);
+    font: 400 1.286rem/1.4 var(--font-body);
+    letter-spacing: 0;
+}
+.login-input { display: flex; position: relative; align-items: center; }
+#login-overlay svg {
+    width: 24px;
+    height: 24px;
+    flex: none;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.7;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+}
+.login-input > svg { position: absolute; left: 17px; color: #94d2ef; pointer-events: none; }
+#login-overlay .login-card input {
+    width: 100%;
+    min-width: 0;
+    min-height: 54px;
+    padding: 12px 16px;
+    color: var(--login-text);
+    background: #0b273b;
+    border: 1px solid var(--login-border);
+    border-radius: 8px;
+    font: 400 1.429rem/1.4 var(--font-body);
+    caret-color: var(--login-accent);
+}
+#login-overlay .login-input input { padding-left: 64px; }
+#login-overlay input::placeholder { color: var(--login-muted); opacity: 1; }
+#login-overlay .login-card input:focus {
+    border-color: var(--login-accent);
+    outline: 1px solid var(--login-accent);
+    outline-offset: -1px;
+}
+#login-options { border: 1px solid var(--login-border); border-radius: 8px; background: #102d42; }
+#login-options summary {
+    display: flex;
+    align-items: center;
+    gap: 18px;
+    min-height: 78px;
+    padding: 15px 20px;
+    list-style: none;
+    cursor: pointer;
+    font-size: 1.286rem;
+    line-height: 1.35;
+}
+#login-options summary::-webkit-details-marker { display: none; }
+#login-options summary > span { min-width: 0; }
+#login-options summary small { display: block; margin-top: 2px; color: var(--login-muted); font-size: 1.143rem; }
+#login-options[open] .login-chevron { transform: rotate(180deg); }
+#login-options summary:hover { background: rgb(51 120 155 / 12%); border-radius: 8px; }
+.login-options-fields { display: flex; flex-direction: column; gap: 18px; padding: 0 20px 22px; }
+#login-overlay #login-display-name-hint { margin: -11px 0 0; color: var(--login-muted); font-size: 1rem; }
+#login-overlay #login-connect {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    gap: 15px;
+    min-height: 60px;
+    margin: 0;
+    padding: 12px 20px;
+    border: 1px solid var(--login-accent);
+    border-radius: 9px;
+    background: var(--login-accent);
+    color: #021925;
+    font: 600 1.714rem/1.3 var(--font-body);
+    letter-spacing: 0;
+    scroll-margin-block: 16px;
+}
+#login-overlay #login-connect:hover { background: #3de4f6; }
+#login-overlay #login-connect:active { transform: none; background: #00bfd9; }
+#login-overlay #login-connect:disabled { cursor: wait; opacity: .65; }
+#login-overlay :is(button, summary):focus-visible { outline: 2px solid var(--login-accent); outline-offset: 4px; }
+#login-overlay #login-connect:focus-visible { outline-color: var(--login-text); }
+#login-error:empty { display: none; }
+#login-overlay #login-error { margin: -8px 0 0; color: #ffb0b8; font-size: 1.143rem; overflow-wrap: anywhere; }
+.login-recents-panel { margin-top: 18px; padding: 23px 41px 16px; }
+#login-recents-title { margin: 0 0 7px; color: var(--login-text); font: 500 1.429rem/1.4 var(--font-body); }
+#login-overlay #login-recents { margin: 0; max-height: 248px; scrollbar-color: var(--login-border) transparent; }
+#login-overlay .recent-row { gap: 14px; min-height: 61px; padding: 7px 0; font-size: 1.286rem; }
+#login-overlay .recent-row + .recent-row { border-top: 1px solid #244e68; }
+#login-overlay .recent-label { color: var(--login-text); padding: 8px 0; min-height: 42px; }
+#login-overlay .recent-label:hover { color: var(--login-accent); }
+#login-overlay .recent-star { color: #ffc65d; padding: 0; width: 36px; min-height: 44px; flex: none; font-size: 2.143rem; }
+#login-overlay .recent-edit { padding: 8px 19px; min-height: 42px; color: var(--login-text); border: 1px solid #295977; border-radius: 8px; background: #102d42; font: 400 1.286rem/1.3 var(--font-body); }
+#login-overlay .recent-edit:hover { border-color: var(--login-accent); }
+#login-overlay .empty-state { padding: 15px 0 12px; text-align: left; color: var(--login-muted); font-size: 1.143rem; }
+#login-overlay .identity-footnote { display: flex; flex-wrap: wrap; justify-content: center; gap: 5px 12px; margin: 16px 0 0; padding: 0; border: 0; color: var(--login-muted); font-size: .857rem; }
+#login-overlay .identity-footnote .mono { color: inherit; font-size: inherit; }
+#login-overlay .identity-footnote .mono:empty { display: none; }
+@media (max-height: 850px) {
+    #login-overlay { padding-top: 24px; }
+    .login-brand { margin-bottom: 24px; font-size: 3rem; }
+    #login-overlay .login-logo { width: 60px; height: 60px; }
+    #login-overlay .login-card { padding: 26px 32px; gap: 18px; }
+    #login-title { font-size: 1.857rem; }
+    #login-overlay .login-card input { min-height: 48px; padding-block: 9px; }
+    #login-options summary { min-height: 68px; padding-block: 10px; }
+    #login-overlay #login-connect { min-height: 52px; }
+    .login-recents-panel { padding: 18px 32px 12px; margin-top: 16px; }
+    #login-overlay .recent-row { min-height: 52px; padding-block: 4px; }
+}
+@media (max-width: 600px) {
+    #login-overlay { padding: 24px 16px; background-size: auto 100%; }
+    .login-brand { margin-bottom: 24px; font-size: 3rem; }
+    #login-overlay .login-logo { width: 60px; height: 60px; }
+    #login-overlay .login-card { padding: 26px 22px; gap: 20px; }
+    #login-title { font-size: 1.714rem; }
+    #login-overlay .login-card label { font-size: 1.143rem; }
+    #login-overlay .login-card input { font-size: 1.286rem; }
+    #login-options summary { padding-inline: 14px; gap: 12px; }
+    #login-options summary small { font-size: 1rem; }
+    .login-options-fields { padding-inline: 14px; }
+    .login-recents-panel { padding: 20px 22px 12px; }
+    #login-overlay .recent-row { gap: 9px; font-size: 1.071rem; }
+    #login-overlay .recent-edit { padding-inline: 12px; font-size: 1.071rem; }
+    #login-overlay .recent-star { width: 28px; font-size: 1.857rem; }
+}
+@media (forced-colors: active) {
+    #login-overlay { background: Canvas; color: CanvasText; }
+    #login-overlay :is(.login-card, .login-recents-panel, #login-options) { border-color: CanvasText; }
+}

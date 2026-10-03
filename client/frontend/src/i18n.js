@@ -94,14 +94,20 @@ const en = {
     "common.delete": "Delete",
     "common.create": "Create",
     "common.apply": "Apply",
-    "login.server": "SERVER",
+    "login.title": "Connect to your server",
+    "login.optional": "Optional details",
+    "login.optionalHint": "Display name · Passwords",
+    "login.identity": "Identity auto-generated — stored locally",
+    "login.connecting": "Connecting…",
+    "login.emptyRecents": "Your recent servers will appear here.",
+    "login.server": "Server",
     "login.nickname": "Account login / guest name",
     "login.displayName": "Display name (optional)",
     "login.displayNameHint": "Visible to everyone. Your account login stays unchanged.",
     "login.serverPassword": "Server password (optional)",
     "login.accountPassword": "Account password (optional)",
-    "login.connect": "CONNECT",
-    "login.recentServers": "RECENT SERVERS",
+    "login.connect": "Connect",
+    "login.recentServers": "Recent servers",
     "settings.application": "Application",
     "settings.capture": "Capture",
     "settings.playback": "Playback",
@@ -176,14 +182,20 @@ const de = {
     "common.delete": "Löschen",
     "common.create": "Erstellen",
     "common.apply": "Anwenden",
-    "login.server": "SERVER",
+    "login.title": "Mit deinem Server verbinden",
+    "login.optional": "Optionale Angaben",
+    "login.optionalHint": "Anzeigename · Passwörter",
+    "login.identity": "Identität automatisch erstellt — lokal gespeichert",
+    "login.connecting": "Verbindung wird hergestellt…",
+    "login.emptyRecents": "Deine letzten Server erscheinen hier.",
+    "login.server": "Server",
     "login.nickname": "Konto-Login / Gastname",
     "login.displayName": "Anzeigename (optional)",
     "login.displayNameHint": "Für alle sichtbar. Dein Konto-Login bleibt unverändert.",
     "login.serverPassword": "Server-Passwort (optional)",
     "login.accountPassword": "Konto-Passwort (optional)",
-    "login.connect": "VERBINDEN",
-    "login.recentServers": "LETZTE SERVER",
+    "login.connect": "Verbinden",
+    "login.recentServers": "Letzte Server",
     "settings.application": "Anwendung",
     "settings.capture": "Aufnahme",
     "settings.playback": "Wiedergabe",
@@ -267,25 +279,7 @@ export function t(key, vars) {
 
 // applyStaticLabels re-labels the static index.html surfaces (login card).
 export function applyStaticLabels() {
-    const set = (id, key) => {
-        const el = document.getElementById(id);
-        if (!el) return;
-        if (el.tagName === "INPUT" || el.tagName === "BUTTON") {
-            if (el.tagName === "BUTTON") el.textContent = t(key);
-            else if (el.previousSibling?.textContent !== undefined) { /* labels are text nodes */ }
-        } else {
-            el.textContent = t(key);
-        }
-    };
-    const loginLabels = document.querySelectorAll(".login-card label");
-    const keys = ["login.server", "login.nickname", "login.displayName", "login.accountPassword", "login.serverPassword"];
-    loginLabels.forEach((l, i) => {
-        if (keys[i] && l.firstChild) l.firstChild.textContent = t(keys[i]) + " ";
-    });
-    const btn = document.getElementById("login-connect");
-    set("login-display-name-hint", "login.displayNameHint");
-    if (btn) btn.textContent = t("login.connect");
-    const recentsHead = [...document.querySelectorAll(".login-card .pane-head")].pop();
-    if (recentsHead) recentsHead.textContent = t("login.recentServers");
-    void set;
+    for (const element of document.querySelectorAll("[data-login-i18n]")) {
+        element.textContent = t(element.dataset.loginI18n);
+    }
 }

@@ -305,7 +305,7 @@ function showWorkspace(focus = true) {
 $("login-overlay").addEventListener("keydown", (event) => {
     if (event.key !== "Tab" || $("login-overlay").classList.contains("hidden")) return;
     const items = [...$("login-overlay").querySelectorAll(dialogFocusableSelector)]
-        .filter((element) => !element.disabled && element.tabIndex >= 0 && element.getClientRects().length > 0);
+        .filter((element) => !element.disabled && element.tabIndex >= 0 && element.checkVisibility());
     if (items.length === 0) return;
     const index = items.indexOf(document.activeElement);
     const next = event.shiftKey
@@ -323,9 +323,10 @@ document.querySelector(".login-card").addEventListener("submit", (event) => {
 async function connectFromLogin() {
     const submit = $("login-connect");
     if (submit.disabled) return;
-    const submitLabel = submit.textContent;
+    const label = $("login-connect-label");
+    const submitLabel = label.textContent;
     submit.disabled = true;
-    submit.textContent = t("runtime.connecting");
+    label.textContent = t("login.connecting");
     document.querySelector(".login-card").setAttribute("aria-busy", "true");
     const addr = $("login-addr").value.trim();
     const nick = $("login-nick").value.trim();
@@ -412,7 +413,7 @@ async function connectFromLogin() {
         $("login-error").textContent = String(e);
     } finally {
         submit.disabled = false;
-        submit.textContent = submitLabel;
+        label.textContent = submitLabel;
         document.querySelector(".login-card").removeAttribute("aria-busy");
     }
 }

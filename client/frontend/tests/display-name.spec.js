@@ -54,8 +54,17 @@ async function openRename(page) {
 
 test("login keeps owner credentials separate from the public display name", async ({ page }, testInfo) => {
     await page.getByLabel("Account login / guest name", { exact: true }).fill("owner");
+    const optional = page.locator("#login-options > summary");
+    await expect(page.locator("#login-display-name")).toBeHidden();
+    await page.locator("#login-nick").press("Tab");
+    await expect(optional).toBeFocused();
+    await optional.press("Enter");
     await page.getByLabel("Display name (optional)", { exact: true }).fill("Daniel");
     await page.getByLabel("Account password (optional)", { exact: true }).fill("test-account-password");
+    await optional.click();
+    await expect(page.locator("#login-accountpw")).toBeHidden();
+    await optional.press("Tab");
+    await expect(page.locator("#login-connect")).toBeFocused();
     await page.locator(".login-card").screenshot({ path: testInfo.outputPath("display-name-login.png") });
     await page.locator("#login-connect").click();
     await expect(page.locator("#login-overlay")).toBeHidden();
@@ -170,9 +179,11 @@ test("saved display names are restored on startup", async ({ page }) => {
 test("short windows can scroll the whole login form", async ({ page }) => {
     await page.setViewportSize({ width: 560, height: 480 });
     expect((await page.locator("#login-addr").boundingBox()).y).toBeGreaterThanOrEqual(0);
+    await page.locator("#login-options > summary").click();
+    await page.locator("#login-serverpw").fill("server-password");
     await page.locator("#login-connect").scrollIntoViewIfNeeded();
     const button = await page.locator("#login-connect").boundingBox();
     expect(button.y).toBeGreaterThanOrEqual(0);
-    expect(button.y + button.height).toBeLessThanOrEqual(480);
+    expect(Math.round(button.y + button.height)).toBeLessThanOrEqual(480);
     expect(await page.locator("#login-overlay").evaluate(el => el.scrollHeight > el.clientHeight)).toBe(true);
 });

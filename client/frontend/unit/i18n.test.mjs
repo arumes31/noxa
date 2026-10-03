@@ -165,16 +165,11 @@ describe("language selection and translation", () => {
 describe("applyStaticLabels", () => {
     it("updates the login labels, button, and recent-servers heading", () => {
         setLanguage("de");
-        const labels = Array.from({ length: 5 }, () => ({ firstChild: { textContent: "old" } }));
-        const connect = { textContent: "old" };
-        const paneHeads = [{ textContent: "other" }, { textContent: "old" }];
+        const keys = ["login.title", "login.server", "login.nickname", "login.displayName", "login.accountPassword", "login.serverPassword", "login.optional", "login.optionalHint", "login.connect", "login.recentServers"];
+        const labels = keys.map(loginI18n => ({ dataset: { loginI18n }, textContent: "old" }));
         globalThis.document = {
-            getElementById(id) {
-                return id === "login-connect" ? connect : null;
-            },
             querySelectorAll(selector) {
-                if (selector === ".login-card label") return labels;
-                if (selector === ".login-card .pane-head") return paneHeads;
+                if (selector === "[data-login-i18n]") return labels;
                 return [];
             },
         };
@@ -182,11 +177,9 @@ describe("applyStaticLabels", () => {
         applyStaticLabels();
 
         assert.deepEqual(
-            labels.map((label) => label.firstChild.textContent),
-            ["SERVER ", "Konto-Login / Gastname ", "Anzeigename (optional) ", "Konto-Passwort (optional) ", "Server-Passwort (optional) "],
+            labels.map((label) => label.textContent),
+            ["Mit deinem Server verbinden", "Server", "Konto-Login / Gastname", "Anzeigename (optional)", "Konto-Passwort (optional)", "Server-Passwort (optional)", "Optionale Angaben", "Anzeigename · Passwörter", "Verbinden", "Letzte Server"],
         );
-        assert.equal(connect.textContent, "VERBINDEN");
-        assert.equal(paneHeads[1].textContent, "LETZTE SERVER");
     });
 
     it("tolerates missing optional DOM elements", () => {

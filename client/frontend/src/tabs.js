@@ -379,7 +379,8 @@ function renderRecents() {
     const s = V().state.settings || {};
     const recents = s.recents || [];
     const bms = s.bookmarks || [];
-    area.innerHTML = recents.length ? "" : `<div class="empty-state">${escapeTranslation(translate("desktop.no.recent.servers"))}</div>`;
+    area.innerHTML = recents.length ? "" : `<div class="empty-state" data-login-i18n="login.emptyRecents"></div>`;
+    if (!recents.length) area.firstElementChild.textContent = translate("login.emptyRecents");
     for (const r of recents) {
         const row = document.createElement("div");
         row.className = "recent-row";

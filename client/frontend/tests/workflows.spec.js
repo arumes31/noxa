@@ -6705,6 +6705,7 @@ test("warns after connect when the local clock is outside certificate validity",
 });
 
 test("login submits an account password separately and clears the input after success", async ({ page }) => {
+    await page.locator("#login-options > summary").click();
     await page.locator("#login-nick").fill("registered-member");
     await page.locator("#login-accountpw").fill("account-test-password");
     await page.locator("#login-serverpw").fill("server-test-password");
@@ -6732,6 +6733,7 @@ test("does not paint a completed login over a tab selected during finalization",
     });
     await page.locator("#login-addr").fill("new.example:12333");
     await page.locator("#login-nick").fill("Alice");
+    await page.locator("#login-options > summary").click();
     await page.locator("#login-serverpw").fill("secret");
     await page.getByRole("button", { name: "Connect" }).click();
     await expect.poll(() => page.evaluate(() => window.__calls.SessionInfoForTab || 0)).toBeGreaterThan(0);
@@ -6922,6 +6924,7 @@ test("late tab metadata cannot erase successful login credentials", async ({ pag
     await expect.poll(() => page.evaluate(() => typeof window.__releaseTabMetadata)).toBe("function");
     await page.locator("#login-addr").fill("voice.example:12333");
     await page.locator("#login-nick").fill("Alice");
+    await page.locator("#login-options > summary").click();
     await page.locator("#login-accountpw").fill("account-secret");
     await page.locator("#login-serverpw").fill("server-secret");
     await page.locator("#login-connect").click();
@@ -9551,6 +9554,7 @@ test("cancels server-bound image actions across active-tab resets", async ({ pag
 test("moves focus explicitly between login and the connected workspace", async ({ page }, testInfo) => {
     await expect(page.locator("#login-addr")).toBeFocused();
     await expect(page.locator(".skip-link")).toBeHidden();
+    await page.locator("#login-options > summary").click();
     await expect(page.locator("#login-serverpw")).toHaveAttribute("autocomplete", "off");
     await expect(page.locator(".login-card input[type=password]")).toHaveCount(2);
     await expect(page.locator("#login-accountpw")).toHaveAccessibleName("Account password (optional)");
