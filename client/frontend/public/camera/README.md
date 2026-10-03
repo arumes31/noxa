@@ -3,7 +3,7 @@
 Camera effects run in a dedicated local worker. No frames or model requests are
 sent to an external service. Disabling effects avoids loading these assets.
 
-Runtime: `@mediapipe/tasks-vision` **0.10.32** (Apache-2.0), pinned in package-lock.json.
+Runtime: `@mediapipe/tasks-vision` **1.0.1** (Apache-2.0), pinned in package-lock.json.
 The bundled `vision_bundle.js` (renamed from `.cjs` for browser MIME handling), `vision_wasm_nosimd_internal.js`, and
 `vision_wasm_nosimd_internal.wasm` are unmodified copies of that package. The
 non-SIMD CPU runtime supports machines without WebAssembly SIMD.
