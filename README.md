@@ -92,6 +92,8 @@ graph TD
 * **Screen-share resolution**: The channel share dialog offers 720p, 1080p, 1440p, 4K, **Original source resolution**, and **Custom** dimensions (160–8192 pixels, 15/30/60 fps). Higher quality shows a performance warning and a video traffic estimate. Server limits, low-bandwidth mode and available hardware/network capacity still apply.
 * **Priority Commander**: Automatic audio ducking (−12 dB attenuation) across non-priority channels when a Priority Speaker talks.
 * **Whisper Routing**: Point-to-point and cross-channel targeted voice transmission bypasses standard channel boundaries.
+* **Microphone recovery**: If the selected microphone disconnects, receiving audio and video continues. Choose and apply a device in **Capture** settings, then select **Retry microphone**. A replacement microphone never starts automatically.
+* **Network echo test**: In **Capture** settings, explicitly join the server's echo channel to hear your microphone through the normal voice connection. Mute and push-to-talk still apply; wear headphones, and remember that others in this shared channel can hear you. The return button restores your previous channel while the test remains active on that server tab. Administrators must create an accessible channel matching `echo_channel_name` (default `Echo Test`) and restart the server; without that channel, the test is unavailable.
 
 ### 💬 End-to-End Encrypted & Scope-Keyed Messaging
 * **True E2EE Direct Messaging**: Signal-style X25519 prekey bundles with Double-Ratchet forward secrecy.
