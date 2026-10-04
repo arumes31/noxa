@@ -543,9 +543,11 @@ export function applyUserAudio(uid) {
 
 export function makeLimiter(ctx) {
     const comp = ctx.createDynamicsCompressor();
-    comp.threshold.value = -12;
-    comp.knee.value = 20;
-    comp.ratio.value = 8;
+    // Protect loud peaks without compressing ordinary conversation levels.
+    // The old wide knee at -12 dB reduced personal volume adjustments.
+    comp.threshold.value = -3;
+    comp.knee.value = 0;
+    comp.ratio.value = 20;
     comp.attack.value = 0.003;
     comp.release.value = 0.2;
     return comp;

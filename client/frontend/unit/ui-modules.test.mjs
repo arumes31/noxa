@@ -241,8 +241,8 @@ test("frontend UI module behaviors", { concurrency: false }, async (t) => {
             attack: { value: 0 }, knee: { value: 0 }, ratio: { value: 0 }, release: { value: 0 }, threshold: { value: 0 },
         };
         assert.equal(audio.makeLimiter({ createDynamicsCompressor: () => compressor }), compressor);
-        assert.equal(compressor.threshold.value, -12);
-        assert.equal(compressor.ratio.value, 8);
+        assert.equal(compressor.threshold.value, -3);
+        assert.equal(compressor.ratio.value, 20);
         const normalized = audio.makeNormalizer(
             { createGain: () => ({ gain: { value: 1 } }) },
             { frequencyBinCount: 2, getByteTimeDomainData: (buffer) => buffer.set([128, 144]) },
