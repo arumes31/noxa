@@ -2,6 +2,7 @@ import { createConnectionQuality } from './connection-quality.js';
 import { watchMicrophone } from "./microphone-recovery.js";
 import { createRemoteAudio } from './remote-audio.js';
 import { createChannelTree } from './channel-tree.js';
+import { captureChannelPresence, channelPresenceChanges } from './channel-presence.js';
 // noxa client frontend — voice ops console (vanilla JS).
 // Wails bridge: window.go.main.App.<Method>(...) calls the Go backend;
 // window.runtime.EventsOn(name, cb) receives backend events.
@@ -1048,6 +1049,7 @@ function noteActivity() {
 // accumulate for the whole session.
 const lastKnownChannel = new Map();
 const LAST_CHANNEL_MAX = 200;
+let snapshotPresenceScope = '';
 
 function actionSoundsSuppressed() {
     return !!state.replayingTabID;
@@ -1067,6 +1069,7 @@ window.runtime.EventsOn("tab_replay_done", (tabID) => {
 window.runtime.EventsOn("snapshot", (json) => {
     const snap = parseRuntimeObject(json);
     if (!snap) return;
+    const previousPresence = captureChannelPresence(state);
     state.canSetInvisible = snap.can_set_invisible === true;
     state.ownAuthority = ["owner", "administrator", "member", "guest"].includes(snap.own_authority) ? snap.own_authority : "";
     state.channels = [];
@@ -1079,6 +1082,16 @@ window.runtime.EventsOn("snapshot", (json) => {
     // or reconnect. Reconcile here when the identity is already known; the
     // identity completion path calls the same helper for the opposite order.
     syncOwnChannel();
+    const nextPresence = captureChannelPresence(state);
+    // Role-filtered servers send snapshots for membership changes. Compare the
+    // live state (also updated by legacy events), never replayed tab history.
+    if (snapshotPresenceScope === previousPresence.scope) {
+        for (const change of channelPresenceChanges(previousPresence, nextPresence)) {
+            window.__noxaNotify?.notify("join_leave", t(change.message, { name: change.client.nickname || t("runtime.someone") }),
+                { channelID: state.myChannelID, className: "joins", kind: "info", soundEvent: change.soundEvent, speechEvent: change.speechEvent });
+        }
+    }
+    snapshotPresenceScope = nextPresence.scope;
     // (317) blocked users are locally muted on sight; (318) contact nickname
     // history updates from presence; (383) buddy alerts; (389) channel watch.
     applyBlockAndContacts();
@@ -1248,7 +1261,7 @@ window.runtime.EventsOn("event", (json) => {
                 if (was.client_id !== state.myClientID && was.channel_id === state.myChannelID && state.myChannelID !== 0) {
                     window.__noxaNotify?.notify("join_leave", t("runtime.left", { name: was.nickname || t("runtime.someone") }),
                         { channelID: state.myChannelID, className: "joins", kind: "info",
-                            soundEvent: "user_leave", noSound: actionSoundsSuppressed() });
+                            soundEvent: "user_leave", speechEvent: "user_disconnected", noSound: actionSoundsSuppressed() });
                 }
             }
             videoTrackRemoved(d.client_id);
@@ -1305,7 +1318,7 @@ window.runtime.EventsOn("event", (json) => {
                 const forcedMove = nextChannelID > 0 && d.by_client_id && d.by_client_id !== d.client_id;
                 window.__noxaNotify?.notify("join_leave", t("runtime.movedOut", { name: c.nickname || t("runtime.someone") }),
                     { channelID: previousRemoteChannelID, className: "joins", kind: "info",
-                        soundEvent: "user_move_out", speechEvent: forcedMove ? "user_moved_out" : "user_leave",
+                        soundEvent: "user_move_out", speechEvent: forcedMove ? "user_moved_out" : nextChannelID > 0 ? "user_moved" : "user_leave",
                         noSound: actionSoundsSuppressed() });
             }
             recomputeDucking();

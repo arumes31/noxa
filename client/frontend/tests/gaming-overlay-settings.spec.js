@@ -73,8 +73,12 @@ test("global and private-call mute controls hide the overlay until cleared", asy
     await expect.poll(() => page.evaluate(() => window.__overlayUpdates.at(-1).active)).toBe(true);
 });
 
-test("overlay preferences stay drafts until Apply, support keyboard positioning and native preview", async ({ page }) => {
+test("overlay preferences stay drafts until Apply, support keyboard positioning and native preview", async ({ page }, testInfo) => {
     await page.evaluate(() => window.__noxa.openSettings("application"));
+    await expect(page.getByLabel("Voice overlay", { exact: true })).toHaveCount(0);
+    await page.getByRole("tab", { name: "Overlay", exact: true }).click();
+    await expect(page.getByRole("tabpanel", { name: "Overlay", exact: true })).toBeVisible();
+    await page.screenshot({ path: testInfo.outputPath("overlay-settings-section.png") });
     await expect(page.getByLabel("Voice overlay", { exact: true })).toBeChecked();
     await expect(page.getByLabel("Overlay monitor", { exact: true })).toHaveValue("");
     await page.getByLabel("Overlay monitor", { exact: true }).selectOption("left");
@@ -94,6 +98,14 @@ test("overlay preferences stay drafts until Apply, support keyboard positioning 
     expect(await page.evaluate(() => window.__overlaySaved)).toBeUndefined();
     await page.getByRole("button", { name: "Apply", exact: true }).click();
     expect(await page.evaluate(() => window.__overlaySaved)).toMatchObject(draft);
+    await page.getByRole("tab", { name: "Application", exact: true }).click();
+    await page.locator("#settings-search").fill("Overlay opacity");
+    const hit = page.locator(".set-search-hit");
+    await expect(hit).toHaveCount(1);
+    await expect(hit.locator(".set-search-page")).toHaveText("Overlay");
+    await hit.click();
+    await expect(page.getByRole("tab", { name: "Overlay", exact: true })).toHaveAttribute("aria-selected", "true");
+    await expect(page.getByLabel("Overlay opacity", { exact: true })).toHaveValue("40");
 });
 
 test("speaker avatars reach the native overlay as bounded thumbnails and clear across sessions", async ({ page }) => {
@@ -126,7 +138,7 @@ test("speaker avatars reach the native overlay as bounded thumbnails and clear a
 });
 
 test("overlay animation overrides system motion settings and has its own saved toggle", async ({ page }) => {
-    await page.evaluate(() => window.__noxa.openSettings("application"));
+    await page.evaluate(() => window.__noxa.openSettings("overlay"));
     const bars = page.locator(".overlay-sample-wave i");
     await expect(bars).toHaveCount(22);
     const motion = await bars.evaluateAll(items => items.map(item => {
@@ -151,7 +163,7 @@ test("overlay animation overrides system motion settings and has its own saved t
 
 test("overlay preview drag remains bounded and Cancel discards draft position", async ({ page }) => {
     await page.setViewportSize({ width: 800, height: 900 });
-    await page.evaluate(() => window.__noxa.openSettings("application"));
+    await page.evaluate(() => window.__noxa.openSettings("overlay"));
     const sample = page.getByRole("button", { name: "Move overlay preview" });
     await sample.scrollIntoViewIfNeeded();
     const tile = await sample.boundingBox(), area = await page.locator(".overlay-position-preview").boundingBox();
@@ -160,12 +172,12 @@ test("overlay preview drag remains bounded and Cancel discards draft position", 
     await expect(page.locator(".overlay-position-readout")).toContainText("0% horizontal, 100% vertical");
     await page.getByRole("button", { name: "Cancel", exact: true }).click();
     expect(await page.evaluate(() => window.__overlaySaved)).toBeUndefined();
-    await page.evaluate(() => window.__noxa.openSettings("application"));
+    await page.evaluate(() => window.__noxa.openSettings("overlay"));
     await expect(page.getByLabel("Overlay position", { exact: true })).toHaveValue("center-left");
 });
 
 test("unsupported native overlays disable controls with a clear explanation", async ({ page }) => {
-    await page.evaluate(() => { window.__overlayAvailable = false; window.__noxa.openSettings("application"); });
+    await page.evaluate(() => { window.__overlayAvailable = false; window.__noxa.openSettings("overlay"); });
     await expect(page.getByLabel("Voice overlay", { exact: true })).toBeDisabled();
     await expect(page.getByRole("button", { name: "Preview on monitor", exact: true })).toBeDisabled();
     await expect(page.getByText("The native voice overlay is available on Windows.", { exact: true })).toBeVisible();

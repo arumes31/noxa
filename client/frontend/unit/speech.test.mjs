@@ -105,7 +105,7 @@ test("channel announcement preferences and notification matrix suppress speech",
 });
 
 test("channel joins, forced moves and kicks have separate recordings and preferences", () => {
-    for (const event of ["channel_join", "user_kicked", "user_kicked_channel", "moved_by_admin", "user_moved_out"]) {
+    for (const event of ["channel_join", "user_kicked", "user_kicked_channel", "moved_by_admin", "user_moved_out", "user_disconnected", "user_moved"]) {
         const f = fixture();
         assert.equal(f.queue.enqueue(event, { delay: 0 }), true);
         assert.equal(f.played[0].id, `speech_en_${event}`);

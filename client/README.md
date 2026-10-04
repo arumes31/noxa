@@ -347,6 +347,10 @@ The files UI (`frontend/src/files-ui.js`, bindings in `files.go`) adds a
   settings control its volume and per-event toggle; master mute and DND apply.
   Closing to the tray and update restarts stay silent. Exit continues if audio
   is unavailable, with a four-second fallback for an unresponsive renderer.
+- **Channel announcements**: live membership snapshots announce users joining,
+  leaving, disconnecting or moving out of your current voice channel. English
+  and German recordings follow Notifications speech and join/leave preferences.
+  Initial connection, reconnect and tab-history replay do not announce old changes.
 - **Themes & fonts (294-297)**: dark/light/high-contrast variable sets,
   accent color picker, scoped user-CSS textarea, UI font family + size, all
   live-applied.
@@ -662,7 +666,7 @@ request/response round-trip works.
 - Discussion controls include title/tag editing, pinning, resolved status and
   inactivity archiving. Channel managers can create/revoke incoming text webhooks;
   see [incoming webhooks](../docs/incoming-webhooks.md) for HTTPS setup and limits.
-- Settings → Application → Gaming overlay is enabled by default on Windows and
+- Settings → Overlay contains the voice overlay controls. It is enabled by default on Windows and
   can be disabled. Only active, unmuted speakers appear, each with a circular
   avatar, name and animated cyan activity indicator on a transparent background.
   It defaults to the left edge at 45% of the primary monitor work-area height, expanding

@@ -24,6 +24,7 @@ const PAGES = [
     { id: "capture", icon: "mic", label: "settings.capture" },
     { id: "camera", icon: "camera", label: "settings.camera" },
     { id: "playback", icon: "speaker", label: "settings.playback" },
+    { id: "overlay", icon: "screen", label: "settings.overlay" },
     { id: "hotkeys", icon: "keyboard", label: "settings.hotkeys" },
     { id: "whisper", icon: "whisper", label: "settings.whisper" },
     { id: "downloads", icon: "download", label: "settings.downloads" },
@@ -334,7 +335,6 @@ function pageApplication() {
     el.appendChild(row(t("settings.ui.font"), fontSel));
     el.appendChild(row(t("settings.ui.font.size"), slider(s.ui_font_size || 14, 10, 20, (v) => { s.ui_font_size = v; })));
     el.appendChild(row(t("settings.always.on.top"), checkbox(s.always_on_top, (v) => { s.always_on_top = v; })));
-    el.append(gamingOverlaySettings(s, { row, checkbox, slider, hint }));
     el.appendChild(row(t("settings.compact.mode"), checkbox(s.compact_mode, (v) => { s.compact_mode = v; })));
     el.appendChild(row(t("settings.reduce.motion"), checkbox(s.reduce_motion, (v) => { s.reduce_motion = v; })));
     el.appendChild(row(t("settings.close.to.tray"), checkbox(s.close_to_tray, (v) => { s.close_to_tray = v; })));
@@ -1362,11 +1362,14 @@ function pageNotifications() {
     return el;
 }
 
+function pageOverlay() { return gamingOverlaySettings(settings(), { row, checkbox, slider, hint }); }
+
 const PAGE_BUILDERS = {
     application: pageApplication,
     capture: pageCapture,
     camera: pageCamera,
     playback: pagePlayback,
+    overlay: pageOverlay,
     hotkeys: pageHotkeys,
     whisper: pageWhisper,
     downloads: pageDownloads,

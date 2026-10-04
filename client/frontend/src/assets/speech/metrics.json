@@ -322,5 +322,41 @@
     "peak": 0.114990234375,
     "rmsDB": -33.20787919917718,
     "sha256": "4cfb7a613c9fd66e15f3e8d35dd4ca07df40d32f4cbc659825157d78c1a04b44"
+  },
+  "en/user_disconnected": {
+    "title": "noXa — user_disconnected",
+    "text": "User disconnected.",
+    "duration": 1.253877551020408,
+    "sampleRate": 22050,
+    "peak": 0.114990234375,
+    "rmsDB": -34.894501185115274,
+    "sha256": "24145a8aa0efcc0b40e267fa7583b872eb56c95cfd5b6cf44eec8f75a6f2a64f"
+  },
+  "en/user_moved": {
+    "title": "noXa — user_moved",
+    "text": "User moved.",
+    "duration": 1.1029478458049886,
+    "sampleRate": 22050,
+    "peak": 0.114990234375,
+    "rmsDB": -34.75321988192991,
+    "sha256": "29f993aae0a1a09f3706322ac31925c4b80dd03bc843f33ce198d41da60dbe90"
+  },
+  "de/user_disconnected": {
+    "title": "noXa — user_disconnected",
+    "text": "Ein Benutzer hat die Verbindung getrennt.",
+    "duration": 1.8825396825396825,
+    "sampleRate": 22050,
+    "peak": 0.114990234375,
+    "rmsDB": -35.04095814795151,
+    "sha256": "8b27a6a519eaae9c162f1fd6a65d5be7e7dc452e9424284068b3255c03c8c3c5"
+  },
+  "de/user_moved": {
+    "title": "noXa — user_moved",
+    "text": "Ein Benutzer hat den Channel gewechselt.",
+    "duration": 1.6461224489795918,
+    "sampleRate": 22050,
+    "peak": 0.114990234375,
+    "rmsDB": -32.12504305115408,
+    "sha256": "0f15e6b3d9baca2a4e2441babdcdafb929c4a4cec6572751b3c1c2225e769c2e"
   }
 }

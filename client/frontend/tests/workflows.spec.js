@@ -4175,7 +4175,7 @@ test("client language translates every settings page and persists on Apply @a11y
     await page.screenshot({ path: testInfo.outputPath("settings-german-application.png") });
     const pages = [
         ["Anwendung", "Chat max. Zeilen"], ["Aufnahme", "Aufnahmegerät"], ["Kamera", "Kamerabildrate"],
-        ["Wiedergabe", "Ausgabegerät"], ["Tastenkürzel", "Als neues Profil speichern…"],
+        ["Wiedergabe", "Ausgabegerät"], ["Overlay", "Sprach-Overlay"], ["Tastenkürzel", "Als neues Profil speichern…"],
         ["Flüstern", "Flüstern aktivieren"], ["Downloads", "Downloadordner"],
         ["Chat", "Zeitstempel"], ["Sicherheit", "Deine Identitäten"],
         ["Server", "Maximale Clientanzahl (0 = unbegrenzt)"],
@@ -4329,7 +4329,7 @@ test("channel joins and leaves play bundled speech and respect notification pref
     });
     await expect.poll(() => page.evaluate(() => window.__channelSpeech)).toEqual(["speech_en_user_join"]);
     await page.evaluate(() => { window.__noxa.speechQueue.clear(); window.__moveSpeechPeer(2, "client-b"); });
-    await expect.poll(() => page.evaluate(() => window.__channelSpeech)).toEqual(["speech_en_user_join", "speech_en_user_leave"]);
+    await expect.poll(() => page.evaluate(() => window.__channelSpeech)).toEqual(["speech_en_user_join", "speech_en_user_moved"]);
     await page.evaluate(() => {
         const { state, speechQueue } = window.__noxa;
         speechQueue.clear(); window.__channelSpeech = [];
