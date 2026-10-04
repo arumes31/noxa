@@ -67,7 +67,7 @@ failures, and connection loss.
 - **Per-user volume & local mute** — right-click a user → Volume slider
   (0–200%) or Mute locally; persisted per unique ID in `settings.json`.
   The same personal controls are available from chat authors, member mentions,
-  member cards, the voice participant strip, and private-call participants. Volume previews while dragging,
+  member cards and private-call participants. Volume previews while dragging,
   saves on release, and can be reset to 100%; cancelling restores the saved
   level. Member cards stay synchronized with changes made in menus and keep
   keyboard focus after saving. Private calls multiply personal volume by the

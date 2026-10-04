@@ -5120,12 +5120,12 @@ test("selected quick wins fullscreen keeps names and share audio has independent
     await expect(page.locator("#video-grid")).toBeHidden();
 });
 
-test("B3 participant strip follows live channel membership and opens member controls", async ({ page }) => {
+test("B3 channel sidebar provides member controls without duplicating participants above chat", async ({ page }, testInfo) => {
     await showB3Workspace(page);
-    const strip = page.getByRole("region", { name: "Voice participants" });
-    await expect(strip.locator(".participant")).toHaveCount(4);
-    await expect(strip.locator(".participant-menu")).toHaveCount(4);
-    await strip.getByRole("button", { name: /Mia.*speaking/ }).click();
+    await expect(page.locator("#voice-participants")).toHaveCount(0);
+    await expect(page.locator("#channel-tree .client")).toHaveCount(4);
+    await page.screenshot({ path: testInfo.outputPath("workspace-without-participant-strip.png") });
+    await page.locator('#channel-tree .client[data-clid="mia"]').click();
     await expect(page.locator("#client-card .card-nick")).toHaveText("Mia");
     await page.getByRole("slider", { name: "Voice volume" }).fill("75");
     await page.getByRole("slider", { name: "Voice volume" }).press("Tab");
@@ -5136,8 +5136,7 @@ test("B3 participant strip follows live channel membership and opens member cont
         window.__noxa.state.myChannelID = 3;
         window.__noxa.renderTree();
     });
-    await expect(strip.getByRole("button")).toHaveCount(0);
-    await expect(strip).toContainText("No one else is here yet");
+    await expect(page.locator("#channel-member-count")).toHaveText("0 in voice");
 });
 
 test("B3 shows your detected speech even when your own playback is muted or deafened", async ({ page }) => {
@@ -5149,26 +5148,25 @@ test("B3 shows your detected speech even when your own playback is muted or deaf
             type: "speaking_changed", data: { client_id: "daniel", speaking: true },
         }));
     });
-    const self = page.locator('#voice-participants [data-client-id="daniel"]');
-    await expect(self).toContainText("Talking");
+    const self = page.locator('#channel-tree .client[data-clid="daniel"]');
+    await expect(self).toHaveAccessibleName(/speaking/);
     await expect(self).toHaveClass(/speaking/);
-    await expect(page.locator('#channel-tree .client[data-clid="daniel"]')).toHaveClass(/speaking/);
     await page.getByRole("tab", { name: "Files", exact: true }).click();
     await expect(self).toBeVisible();
-    await expect(self).toContainText("Talking");
+    await expect(self).toHaveAccessibleName(/speaking/);
     await page.evaluate(() => {
         for (const cb of window.__events.event) cb(JSON.stringify({
             type: "speaking_changed", data: { client_id: "daniel", speaking: false },
         }));
     });
-    await expect(self).toContainText("In voice");
+    await expect(self).not.toHaveAccessibleName(/muted|speaking/);
     await expect(self).not.toHaveClass(/speaking/);
     await page.locator("#voice-deafen").click();
-    await expect(self).toContainText("Microphone muted");
+    await expect(self).toHaveAccessibleName(/muted/);
     await page.locator("#voice-deafen").click();
-    await expect(self).toContainText("In voice");
+    await expect(self).not.toHaveAccessibleName(/muted|speaking/);
     await page.locator("#voice-mute").click();
-    await expect(self).toContainText("Microphone muted");
+    await expect(self).toHaveAccessibleName(/muted/);
 });
 
 test("tray follows detected self speech, input/output mute, and voice teardown without polling", async ({ page }) => {
@@ -5241,8 +5239,7 @@ test("other members expose microphone and speaker state independently of local m
         Object.assign(v.state.clients.find(c => c.client_id === "alex"), { self_muted: true, self_deafened: true });
         v.renderTree();
     });
-    await expect(page.locator('#voice-participants [data-client-id="mia"]')).toContainText("Microphone muted");
-    await expect(page.locator('#voice-participants [data-client-id="alex"]')).toContainText("Speakers and microphone muted");
+    await expect(page.locator('#channel-tree .client[data-clid="mia"] [aria-label="Microphone muted"]')).toBeVisible();
     await expect(page.locator('#channel-tree [data-clid="alex"] [aria-label="Speakers and microphone muted"]')).toBeVisible();
 });
 
@@ -5308,7 +5305,7 @@ test("B3 restores the persisted member volume after a failed save", async ({ pag
             },
         });
     });
-    await page.locator('#voice-participants [data-client-id="mia"]').click();
+    await page.locator('#channel-tree .client[data-clid="mia"]').click();
     const slider = page.getByRole("slider", { name: "Voice volume" });
     await slider.fill("75");
     await expect.poll(() => page.evaluate(() => window.__noxa.state.settings.user_volumes?.["uid-mia"])).toBe(75);
@@ -5331,10 +5328,10 @@ test("B3 ignores a volume save failure after selecting another member", async ({
             },
         });
     });
-    await page.locator('#voice-participants [data-client-id="mia"]').click();
+    await page.locator('#channel-tree .client[data-clid="mia"]').click();
     await page.getByRole("slider", { name: "Voice volume" }).fill("150");
     await expect.poll(() => page.evaluate(() => typeof window.__finishVolumeSave)).toBe("function");
-    await page.locator('#voice-participants [data-client-id="alex"]').click();
+    await page.locator('#channel-tree .client[data-clid="alex"]').click();
     await page.evaluate(() => window.__finishVolumeSave("disk full"));
     await expect(page.locator("#client-card .card-nick")).toHaveText("Alex");
     await expect(page.getByRole("slider", { name: "Voice volume" })).toHaveValue("100");

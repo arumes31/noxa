@@ -28,7 +28,7 @@ button { font-family: inherit; }
 .ui-button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 34px; padding: 6px 10px; border: 1px solid var(--border); border-radius: 4px; background: var(--bg-raised); color: var(--text); font: inherit; cursor: pointer; }
 .ui-button:hover { background: var(--bg-hover); border-color: var(--text-muted); }
 .ui-button:disabled { opacity: .55; cursor: not-allowed; }
-.ui-button:focus-visible, .participant-menu:focus-visible, .voice-control:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.ui-button:focus-visible, .voice-control:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 input, textarea { caret-color: var(--accent); }
 ::selection { color: var(--bg); background: var(--accent); }
 
@@ -88,7 +88,7 @@ body.details-collapsed #app-body { grid-template-columns: minmax(210px, var(--si
 .channel-members { margin: 4px 0 10px 18px; padding: 0; border-left: 1px solid var(--border); }
 .client { min-height: 35px; margin-left: calc(var(--depth) * 12px + 6px); padding: 4px 7px; border: 0; border-radius: 4px; color: var(--text-dim); }
 .client.selected { border: 0; background: var(--bg-hover); color: var(--text); }
-.client .avatar, .participant .avatar, .card-avatar, .msg-avatar { color: #101820; background: var(--avatar-color, #70b7f5); border: 0; font-weight: 600; }
+.client .avatar, .card-avatar, .msg-avatar { color: #101820; background: var(--avatar-color, #70b7f5); border: 0; font-weight: 600; }
 .client .avatar { width: 26px; height: 26px; flex-basis: 26px; }
 .client.speaking .avatar, .card-avatar.speaking { box-shadow: none; animation: none; }
 .status-icons { display: inline-flex; align-items: center; gap: 3px; }
@@ -116,21 +116,6 @@ body.details-collapsed #details-toggle { display: inline-flex; position: static;
 #center-tabs { flex: none; min-height: 44px; padding: 0 14px; background: var(--bg-raised); }
 #center-tabs button { display: inline-flex; align-items: center; gap: 8px; padding: 10px 14px; font: 500 1rem var(--font-body); letter-spacing: 0; text-transform: none; }
 #center-tabs #tab-transfers { padding: 5px; }
-#voice-participants { display: flex; flex: none; gap: 8px; padding: 14px 18px; max-height: 98px; overflow-x: auto; border-bottom: 1px solid var(--border); }
-.participant { display: flex; align-items: center; gap: 10px; min-width: 130px; max-width: 190px; flex: 1 0 130px; padding: 10px; border: 1px solid var(--border); border-radius: 5px; background: var(--bg-raised); color: var(--text); text-align: left; cursor: pointer; }
-.participant:hover, .participant.selected { background: var(--bg-hover); }
-.participant.speaking { border-color: var(--accent); background: var(--accent-dim); }
-.participant .avatar { width: 34px; height: 34px; flex-basis: 34px; font-size: .95rem; }
-.participant-copy { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
-.participant-name { font-size: .9rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.participant-state { display: flex; align-items: center; gap: 5px; color: var(--text-faint); font-size: .75rem; }
-.participant-state .ui-icon { width: 14px; height: 14px; }
-.participant.speaking .participant-state { color: var(--accent); }
-.participant-empty { margin: 5px 0; font-size: .9rem; color: var(--text-faint); }
-.participant-card { display: flex; flex: 1 0 170px; max-width: 235px; min-width: 0; }
-.participant-card .participant { flex: 1 1 auto; min-width: 0; max-width: none; border-radius: 5px 0 0 5px; border-right: 0; }
-.participant-menu.icon-btn { flex: 0 0 32px; align-self: stretch; width: 32px; height: auto; border: 1px solid var(--border); border-radius: 0 5px 5px 0; background: var(--bg-raised); color: var(--text-muted); }
-.participant-menu.icon-btn:hover { color: var(--text); background: var(--bg-hover); }
 .ctx-volume, .ctx-share-volume { display: flex; flex-direction: column; gap: 6px; padding: 8px 12px; }
 .ctx-share-volume { border-top: 1px solid var(--border); }
 .ctx-share-volume input { width: 100%; accent-color: var(--accent); }
@@ -362,8 +347,6 @@ body.details-collapsed #details-toggle { display: inline-flex; position: static;
     .voice-info { max-width: 220px; }
     .voice-control, #ptt-btn.voice-control { padding: 8px; font-size: .84rem; }
     .voice-control .ui-icon { width: 17px; height: 17px; }
-    #voice-participants { padding: 10px 12px; }
-    .participant { min-width: 124px; flex-basis: 124px; padding: 8px; }
 }
 @media (max-width: 720px) {
     #app { grid-template-columns: minmax(0, 1fr); grid-template-rows: 34px 36px minmax(0, 1fr) auto; }
@@ -383,9 +366,6 @@ body.details-collapsed #details-toggle { display: inline-flex; position: static;
     #chat-topic { font-size: .83rem; }
     #center-tabs { min-height: 35px; }
     #center-tabs button { padding: 7px 10px; font-size: .9rem; }
-    #voice-participants { padding: 8px 12px; }
-    .participant { flex-basis: 116px; min-width: 116px; padding: 6px; gap: 7px; }
-    .participant .avatar { width: 27px; height: 27px; flex-basis: 27px; }
     #voice-bar { grid-row: 4; padding: 6px; }
     .voice-buttons { gap: 4px; }
     .voice-control, #ptt-btn.voice-control { padding: 6px; min-height: 32px; font-size: .78rem; gap: 4px; }
@@ -401,7 +381,5 @@ body.compact #app { display: flex; }
 #compact-exit { display: none; }
 body.compact #compact-exit { display: block; flex: none; align-self: flex-end; margin: 8px 12px; padding: 8px 12px; min-height: 36px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-panel); color: var(--text); font: inherit; cursor: pointer; }
 body.compact #app-body { flex: 1; }
-body.compact #voice-participants { display: flex; }
 body.compact #voice-bar { flex: none; }
-body.zen #voice-participants { flex-wrap: wrap; max-height: none; }
-@media (prefers-reduced-motion: reduce) { .participant, .client { transition: none; } }
+@media (prefers-reduced-motion: reduce) { .client { transition: none; } }

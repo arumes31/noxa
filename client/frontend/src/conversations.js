@@ -126,7 +126,7 @@ export function initConversations() {
     const setVisible = show => {
         viewToken = show ? {} : null;
         if (show && !hiddenSurfaces) {
-            hiddenSurfaces = new Map(["chat-head", "center-tabs", "voice-participants", "chat-pane", "files-pane"].map(id => document.getElementById(id)).filter(Boolean).map(element => [element, element.hidden]));
+            hiddenSurfaces = new Map(["chat-head", "center-tabs", "chat-pane", "files-pane"].map(id => document.getElementById(id)).filter(Boolean).map(element => [element, element.hidden]));
             for (const element of hiddenSurfaces.keys()) element.hidden = true;
         } else if (!show && hiddenSurfaces) {
             for (const [element, hidden] of hiddenSurfaces) element.hidden = hidden;
