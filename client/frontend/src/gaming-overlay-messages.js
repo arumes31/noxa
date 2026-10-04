@@ -1,7 +1,7 @@
 export const overlayEnglish = {
     'overlay.animate': 'Animate speaking indicators', 'overlay.animateHint': 'Uses its own motion setting, even when Windows animations are disabled.',
     'overlay.enabled': 'Voice overlay', 'overlay.position': 'Overlay position',
-    'overlay.hint': 'Shows who is speaking on your desktop and over windowed or borderless games. Only active speakers appear, each with an avatar and animated indicator. Defaults to the middle of the left edge of your primary monitor, growing upward and downward and hides when everyone is quiet. Clicks pass through. Exclusive fullscreen is not supported.',
+    'overlay.hint': 'Shows who is speaking on your desktop and over windowed or borderless games. Only active speakers appear, each with an avatar and animated indicator. Defaults to the middle of the left edge of your primary monitor, growing upward and downward. Hides when you mute or deafen, or when everyone is quiet. Clicks pass through. Exclusive fullscreen is not supported.',
     'overlay.monitor': 'Overlay monitor', 'overlay.primary': 'Primary monitor', 'overlay.custom': 'Custom position',
     'overlay.scale': 'Overlay size', 'overlay.opacity': 'Overlay opacity',
     'overlay.drag': 'Move overlay preview', 'overlay.dragHelp': 'Drag the preview or use arrow keys to position it. Hold Shift for larger steps. Apply saves your changes.',
@@ -15,7 +15,7 @@ export const overlayEnglish = {
 export const overlayGerman = {
     'overlay.animate': 'Sprechanzeigen animieren', 'overlay.animateHint': 'Eigene Bewegungseinstellung, auch wenn Windows-Animationen deaktiviert sind.',
     'overlay.enabled': 'Sprach-Overlay', 'overlay.position': 'Overlay-Position',
-    'overlay.hint': 'Zeigt auf dem Desktop und über Spielen im Fenster oder randlosen Modus, wer spricht. Nur sprechende Personen erscheinen, jeweils mit Avatar und animierter Anzeige. Standardmäßig mittig links auf dem Hauptbildschirm, nach oben und unten wachsend; bei Stille wird das Overlay ausgeblendet. Mausklicks werden durchgereicht. Exklusives Vollbild wird nicht unterstützt.',
+    'overlay.hint': 'Zeigt auf dem Desktop und über Spielen im Fenster oder randlosen Modus, wer spricht. Nur sprechende Personen erscheinen, jeweils mit Avatar und animierter Anzeige. Standardmäßig mittig links auf dem Hauptbildschirm, nach oben und unten wachsend. Wird ausgeblendet, wenn du dein Mikrofon oder den Ton deaktivierst oder niemand spricht. Mausklicks werden durchgereicht. Exklusives Vollbild wird nicht unterstützt.',
     'overlay.monitor': 'Overlay-Bildschirm', 'overlay.primary': 'Hauptbildschirm', 'overlay.custom': 'Eigene Position',
     'overlay.scale': 'Overlay-Größe', 'overlay.opacity': 'Overlay-Deckkraft',
     'overlay.drag': 'Overlay-Vorschau verschieben', 'overlay.dragHelp': 'Vorschau ziehen oder mit Pfeiltasten verschieben. Umschalt vergrößert die Schritte. Übernehmen speichert die Änderungen.',

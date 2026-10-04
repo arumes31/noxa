@@ -39,10 +39,37 @@ test("voice overlay shows only active speakers and hides immediately on silence"
     await page.evaluate(() => { window.__noxa.state.muted = true; });
     await expect.poll(() => page.evaluate(() => window.__overlayUpdates.at(-1).active)).toBe(false);
     await page.evaluate(() => { window.__noxa.state.clients[1].is_speaking = true; });
+    await page.waitForTimeout(600);
+    expect(await page.evaluate(() => window.__overlayUpdates.at(-1))).toEqual({ active: false });
+    await page.evaluate(() => { window.__noxa.state.muted = false; window.__noxa.state.clients[0].is_speaking = false; });
+    await expect.poll(() => page.evaluate(() => window.__overlayUpdates.at(-1).speakers?.[0])).toMatchObject({ name: "Peer", speaking: true });
+    await page.evaluate(() => { window.__noxa.state.deafened = true; });
+    await expect.poll(() => page.evaluate(() => window.__overlayUpdates.at(-1))).toEqual({ active: false });
+    await page.evaluate(() => { window.__noxa.state.deafened = false; });
     await expect.poll(() => page.evaluate(() => window.__overlayUpdates.at(-1).speakers?.[0])).toMatchObject({ name: "Peer", speaking: true });
     await page.evaluate(() => { window.__noxa.state.pc = null; });
     await expect.poll(() => page.evaluate(() => window.__overlayUpdates.at(-1).active)).toBe(false);
     await page.evaluate(() => { window.__noxa.state.pc = {}; window.__noxa.state.sessionGeneration++; });
+    await expect.poll(() => page.evaluate(() => window.__overlayUpdates.at(-1).active)).toBe(true);
+});
+
+test("global and private-call mute controls hide the overlay until cleared", async ({ page }) => {
+    await page.evaluate(() => {
+        window.__overlayCall = { active: true, label: "Private call", speakers: [{ id: "peer", name: "Peer", speaking: true }] };
+        window.__noxaPrivateCalls.overlaySnapshot = () => window.__overlayCall;
+    });
+    for (const target of ["global", "private-call"]) {
+        for (const flag of ["muted", "deafened"]) {
+            await expect.poll(() => page.evaluate(() => window.__overlayUpdates.at(-1).speakers?.[0])).toMatchObject({ name: "Peer", speaking: true });
+            await page.evaluate(({ target, flag }) => {
+                (target === "global" ? window.__noxa.state : window.__overlayCall)[flag] = true;
+            }, { target, flag });
+            await expect.poll(() => page.evaluate(() => window.__overlayUpdates.at(-1))).toEqual({ active: false });
+            await page.evaluate(({ target, flag }) => {
+                (target === "global" ? window.__noxa.state : window.__overlayCall)[flag] = false;
+            }, { target, flag });
+        }
+    }
     await expect.poll(() => page.evaluate(() => window.__overlayUpdates.at(-1).active)).toBe(true);
 });
 

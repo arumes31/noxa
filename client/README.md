@@ -667,7 +667,9 @@ request/response round-trip works.
   avatar, name and animated cyan activity indicator on a transparent background.
   It defaults to the left edge at 45% of the primary monitor work-area height, expanding
   upward and downward as speakers join, with compact 40 px avatars
-  (80% size), and hides when everyone is quiet. The native animation continues
+  (80% size), and hides when everyone is quiet or you mute/deafen in the main
+  controls or an active private call. Unmuting/undeafening restores the overlay
+  if someone is speaking. The native animation continues
   while noXa is unfocused and even when Windows animations are disabled. The
   separate "Animate speaking indicators" setting can disable overlay motion.
   Settings provide monitor selection, position presets or a draggable preview,

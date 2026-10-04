@@ -22,9 +22,25 @@ test('silence hides immediately, including joining or reconnecting', () => {
     for (const sessionGeneration of [1, 2]) assert.deepEqual(overlayVoiceState({ ...s, sessionGeneration }), { active: false });
 });
 
-test('self mute and deafen do not hide another active speaker', () => {
-    for (const privacy of [{ muted: true }, { deafened: true }]) {
-        assert.deepEqual(overlayVoiceState({ ...state(), ...privacy }).speakers.map(s => s.name), ['Peer']);
+test('self mute or deafen hides all speakers until both are cleared', () => {
+    const s = state();
+    for (const privacy of [{ muted: true, deafened: false }, { muted: false, deafened: true }, { muted: true, deafened: true }]) {
+        Object.assign(s, privacy);
+        assert.deepEqual(overlayVoiceState(s), { active: false });
+    }
+    Object.assign(s, { muted: false, deafened: false });
+    assert.deepEqual(overlayVoiceState(s).speakers.map(s => s.name), ['Me', 'Peer']);
+    s.clients.forEach(client => { client.is_speaking = false; });
+    assert.deepEqual(overlayVoiceState(s), { active: false });
+});
+
+test('global and private-call mute or deafen hide the whole private-call overlay', () => {
+    const call = { active: true, label: 'Private call', speakers: [{ id: 'alice', name: 'Alice', speaking: true }] };
+    for (const flag of ['muted', 'deafened']) {
+        assert.deepEqual(overlayVoiceState({ ...state(), [flag]: true }, call), { active: false });
+        assert.deepEqual(overlayVoiceState(state(), { ...call, [flag]: true }), { active: false });
+        assert.deepEqual(overlayVoiceState(state(), { ...call, [flag]: false }).speakers, call.speakers);
+        assert.equal(overlayVoiceState(state(), { ...call, active: false, [flag]: true }).title, 'Lobby');
     }
 });
 
