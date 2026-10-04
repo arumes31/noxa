@@ -14,6 +14,35 @@ concurrency:
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
+  build-metadata:
+    name: Shared build version
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      version: ${{ steps.version.outputs.NOXA_VERSION }}
+      commit: ${{ steps.version.outputs.NOXA_COMMIT }}
+      build-date: ${{ steps.version.outputs.NOXA_BUILD_DATE }}
+      dirty: ${{ steps.version.outputs.NOXA_DIRTY }}
+      prerelease: ${{ steps.version.outputs.NOXA_PRERELEASE }}
+      ldflags: ${{ steps.version.outputs.NOXA_LDFLAGS }}
+      tag: ${{ steps.version.outputs.tag }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: Select one version for every artifact
+        id: version
+        shell: bash
+        run: |
+          if [[ "$GITHUB_EVENT_NAME" == push && ( "$GITHUB_REF" == refs/heads/main || "$GITHUB_REF" == refs/tags/v* ) ]]; then
+            bash scripts/prepare-release.sh
+          fi
+          go run ./cmd/version -check -format github >> "$GITHUB_OUTPUT"
+
   proto-contract:
     name: Proto contract
     runs-on: ubuntu-latest
@@ -334,10 +363,16 @@ jobs:
       security-events: write
 
   docker:
-    needs: [proto-contract, test, frontend-e2e, security-gate]
+    needs: [build-metadata, proto-contract, test, frontend-e2e, security-gate]
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    env:
+      NOXA_VERSION: ${{ needs.build-metadata.outputs.version }}
+      NOXA_COMMIT: ${{ needs.build-metadata.outputs.commit }}
+      NOXA_BUILD_DATE: ${{ needs.build-metadata.outputs.build-date }}
+      NOXA_DIRTY: ${{ needs.build-metadata.outputs.dirty }}
+      NOXA_PRERELEASE: ${{ needs.build-metadata.outputs.prerelease }}
     permissions:
       contents: read
       packages: write
@@ -350,10 +385,6 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
-
-      - name: compute version metadata
-        shell: bash
-        run: go run ./cmd/version -check -format github >> "$GITHUB_ENV"
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
@@ -374,6 +405,8 @@ jobs:
         uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         with:
           images: ghcr.io/${{ github.repository }}
+          labels: |
+            org.opencontainers.image.version=${{ env.NOXA_VERSION }}
           tags: |
             type=schedule
             type=ref,event=branch
@@ -403,19 +436,30 @@ jobs:
           provenance: mode=max
           sbom: true
 
+      - name: Verify published server build version
+        if: github.event_name != 'pull_request'
+        shell: bash
+        run: |
+          image="ghcr.io/$GITHUB_REPOSITORY:sha-${NOXA_COMMIT:0:7}"
+          docker pull --platform linux/amd64 "$image"
+          test "$(docker run --rm --network none --platform linux/amd64 --entrypoint /out/noxa "$image" --version)" = "$NOXA_VERSION"
+          test "$(docker image inspect "$image" --format '{{index .Config.Labels "org.opencontainers.image.version"}}')" = "$NOXA_VERSION"
+
   release-lint:
     if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
     uses: ./.github/workflows/golangci-lint.yml
 
   release-build:
-    needs: [proto-contract, test, frontend-e2e, client-windows, webview2, security-gate, release-lint]
+    needs: [build-metadata, proto-contract, test, frontend-e2e, client-windows, webview2, security-gate, release-lint]
     if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
     runs-on: windows-latest
     timeout-minutes: 45
     outputs:
-      tag: ${{ steps.release-metadata.outputs.tag }}
-      prerelease: ${{ steps.release-metadata.outputs.prerelease }}
+      tag: ${{ needs.build-metadata.outputs.tag }}
+      prerelease: ${{ needs.build-metadata.outputs.prerelease }}
     env:
+      NOXA_VERSION: ${{ needs.build-metadata.outputs.version }}
+      NOXA_LDFLAGS: ${{ needs.build-metadata.outputs.ldflags }}
       NOXA_UPDATE_PUBLIC_KEYS: ${{ vars.NOXA_UPDATE_PUBLIC_KEYS || vars.VOICX_UPDATE_PUBLIC_KEYS }}
       NOXA_UPDATE_REPO: ${{ github.repository }}
     permissions:
@@ -435,11 +479,6 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24
-
-      - name: prepare release version metadata
-        id: release-metadata
-        shell: bash
-        run: bash scripts/prepare-release.sh
 
       - name: validate update public-key configuration
         shell: bash
