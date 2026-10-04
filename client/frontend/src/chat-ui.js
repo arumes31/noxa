@@ -66,7 +66,7 @@ let view = { kind: "channel" };
 let subscriptions = [];
 const store = new Map(); // key -> {msgs, hasMore, end, loading, loaded}
 const unread = new Map(); // channelID -> {n, mention}
-const pmTabs = new Map(); // uid -> {uid, nick, unread, offline, pendingRead}
+const pmTabs = new Map(); // uid -> {uid, nick, unread, unreadAt, offline, pendingRead}
 const chanTabs = new Map(); // channelID -> {id}; derived from SubscriptionState
 let pendingChannelTab = 0; // activate only after the server confirms subscription
 let channelTabRequest = 0;
@@ -1374,6 +1374,7 @@ function setView(v) {
         const tab = pmTabs.get(v.uid);
         if (tab) {
             tab.unread = 0;
+            tab.unreadAt = undefined;
             tab.offline = false;
         }
     }
@@ -1631,6 +1632,12 @@ function renderTabs() {
             el.appendChild(b);
         }
         if (tab.unread > 0) {
+            el.classList.add("has-unread");
+            if (Number.isFinite(tab.unreadAt)) {
+                el.classList.add("unread-arrival");
+                // Rebuilding the tab bar must preserve the fast/slow pulse timeline.
+                el.style.setProperty("--pm-unread-elapsed", `-${Math.max(0, Date.now() - tab.unreadAt)}ms`);
+            }
             const dot = document.createElement("span");
             dot.className = "pm-unread";
             dot.textContent = tab.unread;
@@ -2218,6 +2225,7 @@ function routeDM(d, m) {
         appendLive(m);
     } else if (!m.self) {
         tab.unread++;
+        if (!st.replayingTabID) tab.unreadAt = Date.now();
     }
     renderTabs();
     return {

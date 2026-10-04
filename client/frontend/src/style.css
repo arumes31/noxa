@@ -946,6 +946,22 @@ mark { background: var(--warn); color: #3a2a05; border-radius: 2px; padding: 0 1
 }
 .pm-tab:hover { border-color: var(--border-accent); color: var(--text); }
 .pm-tab.active { background: var(--bg-hover); color: var(--text); border-color: var(--border-accent); }
+.pm-tab.has-unread {
+    border-color: var(--accent); color: var(--text);
+    animation: pm-unread-pulse 3.6s ease-in-out infinite;
+}
+.pm-tab.has-unread.unread-arrival {
+    animation: pm-unread-arrival 1.2s ease-in-out 3, pm-unread-pulse 3.6s ease-in-out infinite;
+    animation-delay: var(--pm-unread-elapsed), calc(3.6s + var(--pm-unread-elapsed));
+}
+@keyframes pm-unread-arrival {
+    0%, 100% { border-color: color-mix(in srgb, var(--accent) 35%, var(--border)); box-shadow: 0 0 0 0 transparent; }
+    50% { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-dim); }
+}
+@keyframes pm-unread-pulse {
+    0%, 100% { border-color: color-mix(in srgb, var(--accent) 35%, var(--border)); box-shadow: 0 0 0 0 transparent; }
+    50% { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-dim); }
+}
 .pm-close {
     border: 0; background: none; color: var(--text-faint); cursor: pointer; font-size: 0.7857rem; padding: 0 2px;
 }

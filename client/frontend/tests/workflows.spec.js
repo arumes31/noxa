@@ -6533,6 +6533,103 @@ test("encryption badges sit beside dates and stay hidden on grouped follow-ups",
     await messages.first().screenshot({ path: testInfo.outputPath("encryption-next-to-date.png") });
 });
 
+test.describe("unread private-message tab pulse", () => {
+    test.beforeEach(async ({ page }) => {
+        await page.emulateMedia({ reducedMotion: "no-preference" });
+        await page.clock.setFixedTime(new Date("2026-10-04T12:00:00Z"));
+        await page.evaluate(() => {
+            window.__dmStorageIdentity = "alpha";
+            Object.assign(window.__noxa.state, { myUniqueID: "alpha", myNickname: "ALPHA" });
+            window.__noxa.showWorkspace();
+            window.__receivePM = (id, peer = "bravo", self = false) => window.__noxaChat.addChat({
+                direct: true, to_unique_id: self ? peer : "alpha", from_unique_id: self ? "alpha" : peer,
+                from: self ? "ALPHA" : peer.toUpperCase(), text: id, client_msg_id: id, enc_verified: true,
+            });
+        });
+    });
+
+    const peerTab = page => page.locator("#pm-tabs .pm-tab").filter({ hasText: "BRAVO" });
+
+    test("pulses faster on arrival, continues slowly, and stops when opened", async ({ page }) => {
+        await page.evaluate(() => window.__receivePM("new-message"));
+        const tab = peerTab(page);
+        await expect(tab.locator(".pm-unread")).toHaveText("1");
+        const animations = await tab.evaluate(el => el.getAnimations().map(animation => {
+            const timing = animation.effect.getTiming();
+            return { duration: timing.duration, iterations: String(timing.iterations), delay: timing.delay || 0 };
+        }));
+        expect(animations).toEqual([
+            { duration: 1200, iterations: "3", delay: 0 },
+            { duration: 3600, iterations: "Infinity", delay: 3600 },
+        ]);
+        // Advance both CSS timelines past arrival: the slow border must still change.
+        const borders = await tab.evaluate(el => {
+            const animations = el.getAnimations();
+            for (const animation of animations) { animation.pause(); animation.currentTime = 3600; }
+            const low = getComputedStyle(el).borderTopColor;
+            for (const animation of animations) animation.currentTime = 5400;
+            return [low, getComputedStyle(el).borderTopColor];
+        });
+        expect(borders[0]).not.toBe(borders[1]);
+        await tab.click();
+        await expect(tab.locator(".pm-unread")).toHaveCount(0);
+        await expect(tab).toHaveCSS("animation-name", "none");
+        await page.evaluate(() => window.__receivePM("already-open"));
+        await expect(tab.locator(".pm-unread")).toHaveCount(0);
+        await expect(tab).toHaveCSS("animation-name", "none");
+        await page.evaluate(() => window.__receivePM("own-message", "charlie", true));
+        await expect(page.locator("#pm-tabs .has-unread")).toHaveCount(0);
+    });
+
+    test("preserves pulse timing across unrelated messages and restarts only for a new message", async ({ page }) => {
+        await page.evaluate(() => window.__receivePM("first"));
+        await page.clock.setFixedTime(new Date("2026-10-04T12:00:02Z"));
+        await page.evaluate(() => window.__receivePM("another-peer", "charlie"));
+        await expect(peerTab(page)).toHaveCSS("animation-delay", "-2s, 1.6s");
+        await page.evaluate(() => window.__receivePM("first"));
+        await expect(peerTab(page).locator(".pm-unread")).toHaveText("1");
+        await expect(peerTab(page)).toHaveCSS("animation-delay", "-2s, 1.6s");
+        await page.clock.setFixedTime(new Date("2026-10-04T12:01:00Z"));
+        await page.evaluate(() => window.__receivePM("later-peer", "charlie"));
+        await expect(peerTab(page)).toHaveCSS("animation-delay", "-60s, -56.4s");
+        await expect(peerTab(page)).toHaveCSS("animation-iteration-count", "3, infinite");
+        await page.evaluate(() => window.__receivePM("second"));
+        await expect(peerTab(page).locator(".pm-unread")).toHaveText("2");
+        await expect(peerTab(page)).toHaveCSS("animation-delay", "0s, 3.6s");
+    });
+
+    test("restored unread messages use the slow pulse without replaying arrival", async ({ page }) => {
+        await page.evaluate(() => {
+            window.__noxa.state.replayingTabID = "restoring-server";
+            window.__receivePM("replayed");
+        });
+        await expect(peerTab(page).locator(".pm-unread")).toHaveText("1");
+        await expect(peerTab(page)).toHaveCSS("animation-duration", "3.6s");
+        await expect(peerTab(page)).toHaveCSS("animation-iteration-count", "infinite");
+        await page.evaluate(() => {
+            window.__noxa.state.replayingTabID = "";
+            window.__receivePM("fresh");
+        });
+        await expect(peerTab(page)).toHaveCSS("animation-duration", "1.2s, 3.6s");
+    });
+
+    test("keeps a steady unread border with either reduced-motion setting", async ({ page }) => {
+        await page.emulateMedia({ reducedMotion: "reduce" });
+        await page.evaluate(() => window.__receivePM("accessible-message"));
+        const tab = peerTab(page);
+        await expect(tab).toHaveCSS("animation-name", "none");
+        const unreadBorder = await tab.evaluate(el => getComputedStyle(el).borderTopColor);
+        await expect(tab.locator(".pm-unread")).toHaveCSS("color", unreadBorder);
+        await page.emulateMedia({ reducedMotion: "no-preference" });
+        await page.evaluate(() => { document.documentElement.dataset.reduceMotion = "1"; });
+        await expect(tab).toHaveCSS("animation-name", "none");
+        await expect(tab).toHaveCSS("border-top-color", unreadBorder);
+        await tab.click();
+        await expect(tab.locator(".pm-unread")).toHaveCount(0);
+        await expect(tab).not.toHaveClass(/has-unread/);
+    });
+});
+
 test("routes decrypted direct messages and echoes without mixing global chat or peers", async ({ page }) => {
     await page.evaluate(() => {
         const { state } = window.__noxa;
