@@ -5219,6 +5219,14 @@ test("tray follows detected self speech, input/output mute, and voice teardown w
     await page.locator("#voice-deafen").click();
     await expect.poll(flags).toEqual([false, true, true]);
     await page.locator("#voice-deafen").click();
+    await expect.poll(flags).toEqual([false, false, false]);
+    // Restoring the microphone must not revive speech from before deafen.
+    const speak = () => page.evaluate(() => {
+        for (const cb of window.__events.event) cb(JSON.stringify({
+            type: "speaking_changed", data: { client_id: "daniel", speaking: true },
+        }));
+    });
+    await speak();
     await expect.poll(flags).toEqual([true, false, false]);
     await page.locator("#voice-mute").click();
     await expect.poll(flags).toEqual([false, true, false]);
@@ -5227,6 +5235,8 @@ test("tray follows detected self speech, input/output mute, and voice teardown w
     await page.locator("#voice-deafen").click();
     await expect.poll(flags).toEqual([false, true, false]);
     await page.locator("#voice-mute").click();
+    await expect.poll(flags).toEqual([false, false, false]);
+    await speak();
     await expect.poll(flags).toEqual([true, false, false]);
     await page.evaluate(() => window.__noxa.resetVoiceSession());
     await expect.poll(flags).toEqual([false, false, false]);
