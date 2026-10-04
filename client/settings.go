@@ -140,11 +140,11 @@ type Settings struct {
 	DNDTo                   string `json:"dnd_to"`                    // (348) quiet hours end "07:00"
 
 	// Capture (input / microphone).
-	CaptureDeviceID  string `json:"capture_device_id"`
-	ActivationMode   string `json:"activation_mode"` // "ptt" | "vad" | "continuous"
-	VADThreshold     int    `json:"vad_threshold"`   // 0..100
-	EchoCancellation bool   `json:"echo_cancellation"`
-	NoiseSuppression bool   `json:"noise_suppression"`
+	CaptureDeviceID  string  `json:"capture_device_id"`
+	ActivationMode   string  `json:"activation_mode"` // "ptt" | "vad" | "continuous"
+	VADThreshold     float64 `json:"vad_threshold"`   // 0..100; UI supports 0.1% steps
+	EchoCancellation bool    `json:"echo_cancellation"`
+	NoiseSuppression bool    `json:"noise_suppression"`
 
 	// Playback (output).
 	PlaybackDeviceID string `json:"playback_device_id"`

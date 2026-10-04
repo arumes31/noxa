@@ -44,7 +44,7 @@ export function createMicCheck(settings, { onStart }) {
     const thresholdLabel = element("p", "set-hint mic-threshold-label");
     const thresholdField = element("label", "mic-threshold-field");
     const thresholdNumber = element("input", ""); thresholdNumber.type = "number";
-    thresholdNumber.min = "1"; thresholdNumber.max = "100"; thresholdNumber.step = "1";
+    thresholdNumber.min = "1"; thresholdNumber.max = "100"; thresholdNumber.step = "0.1";
     thresholdNumber.setAttribute("aria-label", t("settings.vad.threshold"));
     thresholdField.append(document.createTextNode(t("settings.vad.threshold") + " "), thresholdNumber, document.createTextNode(" %"));
     const thresholdHelp = element("p", "set-hint", t("mic.adjustThreshold"));
@@ -62,7 +62,7 @@ export function createMicCheck(settings, { onStart }) {
     }
     function setThreshold(value) {
         if (!Number.isFinite(value)) return;
-        settings.vad_threshold = Math.max(1, Math.min(100, Math.round(value)));
+        settings.vad_threshold = Math.max(1, Math.min(100, Math.round(value * 10) / 10));
         if (previewThreshold !== null) previewThreshold = settings.vad_threshold;
         lastAbove = -Infinity;
         refreshThreshold();
@@ -85,7 +85,8 @@ export function createMicCheck(settings, { onStart }) {
     };
     thresholdControl.onkeydown = event => {
         const value = previewThreshold ?? settings.vad_threshold ?? 50;
-        const values = { ArrowLeft: value - 1, ArrowDown: value - 1, ArrowRight: value + 1, ArrowUp: value + 1,
+        const step = event.shiftKey ? 1 : 0.1;
+        const values = { ArrowLeft: value - step, ArrowDown: value - step, ArrowRight: value + step, ArrowUp: value + step,
             PageDown: value - 10, PageUp: value + 10, Home: 1, End: 100 };
         if (Object.hasOwn(values, event.key)) { event.preventDefault(); setThreshold(values[event.key]); }
     };

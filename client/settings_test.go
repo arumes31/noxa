@@ -59,6 +59,24 @@ func TestSettingsRoundTrip(t *testing.T) {
 	}
 }
 
+func TestVADThresholdPreservesFineAndLegacyValues(t *testing.T) {
+	for _, value := range []string{"1.2", "1.5", "1.8", "3", "50"} {
+		t.Run(value, func(t *testing.T) {
+			s := DefaultSettings()
+			if err := json.Unmarshal([]byte(`{"vad_threshold":`+value+`}`), &s); err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(t.TempDir(), "settings.json")
+			if err := saveSettingsAt(path, s); err != nil {
+				t.Fatal(err)
+			}
+			if got := loadSettingsAt(path); got.VADThreshold != s.VADThreshold {
+				t.Fatalf("threshold changed on reload: got %v, want %v", got.VADThreshold, s.VADThreshold)
+			}
+		})
+	}
+}
+
 func TestSettingsPresentationBoundsOnSaveAndLoad(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "settings.json")
 	s := DefaultSettings()
