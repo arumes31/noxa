@@ -136,3 +136,27 @@ func TestRoleHierarchyAndSnapshotIsolation(t *testing.T) {
 		t.Fatal("caller mutated evaluator snapshot")
 	}
 }
+
+func TestMoveHierarchyAllowsPeersWithoutGrantingOtherModeration(t *testing.T) {
+	p := roleFixture()
+	p.Members = append(p.Members, RoleMember{UserID: 5, RoleIDs: []int64{20}})
+	e, err := NewRoleEvaluator(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		actor, target int64
+		want          bool
+	}{
+		{3, 5, true}, {3, 0, true}, {6, 7, true}, {1, 4, true},
+		{3, 2, false}, {3, 4, false}, {3, 1, false}, {3, 3, false},
+		{0, 3, false}, {-1, 3, false}, {3, -1, false},
+	} {
+		if got := e.CanMoveMember(tc.actor, tc.target); got != tc.want {
+			t.Errorf("CanMoveMember(%d, %d) = %v, want %v", tc.actor, tc.target, got, tc.want)
+		}
+	}
+	if e.CanManageMember(3, 5) || e.CanManageMember(6, 7) {
+		t.Fatal("peer movement relaxed unrelated moderation")
+	}
+}

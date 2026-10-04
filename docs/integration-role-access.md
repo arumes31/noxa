@@ -169,7 +169,7 @@ ten-second delivery window.
 
 `membermove data=<escaped JSON>` accepts `client_id` and destination
 `channel_id`. The actor needs MoveMembers in both the current source and
-destination, a higher role than the target, and visibility of an invisible
+destination, an equal or higher role than the target, and visibility of an invisible
 target via ViewConnectionInfo when applicable. The target must be able to
 Connect at the destination and must have accepted server rules. Capacity
 limits apply even to the owner; a full destination returns error 521.

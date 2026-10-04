@@ -57,6 +57,71 @@ func TestRoleMoveRequiresVisibleTargetAndBothScopes(t *testing.T) {
 	}
 }
 
+func TestRoleMovePeerRequiresPermissionAndProtectsHigherRoles(t *testing.T) {
+	for _, tc := range []struct {
+		name                       string
+		grant, higher, owner, self bool
+	}{
+		{name: "permitted peer", grant: true},
+		{name: "ungranted peer"},
+		{name: "higher role", grant: true, higher: true},
+		{name: "owner", grant: true, owner: true},
+		{name: "self", grant: true, self: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			backend := serverRoleFixture()
+			backend.policy.OwnerID = 3
+			if tc.owner {
+				backend.policy.OwnerID = 2
+			}
+			backend.policy.Roles[0].Permissions = []authorization.Capability{authorization.ViewChannel, authorization.Connect}
+			memberRole := authorization.Role{ID: 20, Name: "Member", Position: 1}
+			if tc.grant {
+				memberRole.Permissions = []authorization.Capability{authorization.MoveMembers}
+			}
+			backend.policy.Roles = append(backend.policy.Roles, memberRole, authorization.Role{ID: 30, Name: "Moderator", Position: 2})
+			targetRole := int64(20)
+			if tc.higher {
+				targetRole = 30
+			}
+			backend.policy.Members = []authorization.RoleMember{{UserID: 1, RoleIDs: []int64{20}}, {UserID: 2, RoleIDs: []int64{targetRole}}}
+			backend.policy.Channels = append(backend.policy.Channels, authorization.ChannelPolicy{ChannelID: 2})
+			authority, err := authorization.NewAuthority(t.Context(), backend, func(context.Context, *authorization.RoleEvaluator, *authorization.RoleEvaluator) error { return nil })
+			if err != nil {
+				t.Fatal(err)
+			}
+			env := startTestEnvDeps(t, nil, nil, func(d *Deps) { d.Authority = authority })
+			defer env.stop()
+			env.state.AddChannel(testChannel(1))
+			env.state.AddChannel(testChannel(2))
+			actor, actorID := dialAuthed(t, env.addr, "admin-uid")
+			defer func() { _ = actor.Close() }()
+			target, targetID := dialAuthed(t, env.addr, "user-uid")
+			defer func() { _ = target.Close() }()
+			if tc.self {
+				targetID = actorID
+			}
+			if err := env.state.MoveClient(targetID, 1); err != nil {
+				t.Fatal(err)
+			}
+			send(t, actor, netproto.MsgMoveClient, netproto.MoveClient{ClientID: targetID, ChannelID: 2, AckRequested: true})
+			allowed := tc.grant && !tc.higher && !tc.owner && !tc.self
+			if allowed {
+				readOfType(t, actor, netproto.MsgClientMoved)
+			} else {
+				readRoleMediaDenial(t, actor)
+			}
+			want := int64(1)
+			if allowed {
+				want = 2
+			}
+			if channel, _, _ := env.state.ClientChannelState(targetID); channel != want {
+				t.Fatalf("channel = %d, want %d", channel, want)
+			}
+		})
+	}
+}
+
 func TestRoleJoinEnforcesPasswordAndOwnerCapacityLimit(t *testing.T) {
 	backend := serverRoleFixture()
 	backend.policy.Roles[0].Permissions = []authorization.Capability{authorization.ViewChannel, authorization.Connect}
