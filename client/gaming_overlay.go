@@ -10,6 +10,7 @@ import (
 // GamingOverlaySnapshot contains display-only voice state, never session keys.
 type GamingOverlaySnapshot struct {
 	Active       bool                   `json:"active"`
+	Animate      bool                   `json:"animate"`
 	Title        string                 `json:"title"`
 	Status       string                 `json:"status"`
 	Speakers     []GamingOverlaySpeaker `json:"speakers"`
@@ -109,6 +110,7 @@ func (a *App) GamingOverlayAvailable() bool { return nativeGamingOverlayAvailabl
 func (a *App) GetGamingOverlayMonitors() []GamingOverlayMonitor { return nativeGamingOverlayMonitors() }
 
 func overlayPresentation(s GamingOverlaySnapshot, settings Settings) GamingOverlaySnapshot {
+	s.Animate = settings.GamingOverlayAnimate
 	s.Position, s.Monitor = settings.GamingOverlayPosition, settings.GamingOverlayMonitor
 	s.Scale, s.Opacity = settings.GamingOverlayScale, settings.GamingOverlayOpacity
 	s.X, s.Y = settings.GamingOverlayX, settings.GamingOverlayY

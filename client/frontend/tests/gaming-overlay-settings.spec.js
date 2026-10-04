@@ -98,7 +98,7 @@ test("speaker avatars reach the native overlay as bounded thumbnails and clear a
     await expect.poll(() => page.evaluate(() => window.__overlayUpdates.at(-1))).toEqual({ active: false });
 });
 
-test("preview indicators animate independently and respect reduced motion", async ({ page }) => {
+test("overlay animation overrides system motion settings and has its own saved toggle", async ({ page }) => {
     await page.evaluate(() => window.__noxa.openSettings("application"));
     const bars = page.locator(".overlay-sample-wave i");
     await expect(bars).toHaveCount(22);
@@ -108,7 +108,18 @@ test("preview indicators animate independently and respect reduced motion", asyn
     expect(motion.every(item => item.animation === "overlay-speaking")).toBe(true);
     expect(motion[0].delay).not.toBe(motion[11].delay);
     await page.emulateMedia({ reducedMotion: "reduce" });
+    await expect(bars.first()).toHaveCSS("animation-name", "overlay-speaking");
+    const animation = page.getByLabel("Animate speaking indicators", { exact: true });
+    await expect(animation).toBeChecked();
+    await animation.uncheck();
     await expect(bars.first()).toHaveCSS("animation-name", "none");
+    await page.getByRole("button", { name: "Preview on monitor", exact: true }).click();
+    expect(await page.evaluate(() => window.__overlayPreview.gaming_overlay_animate)).toBe(false);
+    expect(await page.evaluate(() => window.__overlaySaved)).toBeUndefined();
+    await page.getByRole("button", { name: "Apply", exact: true }).click();
+    expect(await page.evaluate(() => window.__overlaySaved.gaming_overlay_animate)).toBe(false);
+    await animation.check();
+    await expect(bars.first()).toHaveCSS("animation-name", "overlay-speaking");
 });
 
 test("overlay preview drag remains bounded and Cancel discards draft position", async ({ page }) => {

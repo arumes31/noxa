@@ -12,17 +12,18 @@ func TestCameraAndOverlaySettingsDefaultsAndPersistence(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := loadSettingsAt(path)
-	if !s.GamingOverlay || s.GamingOverlayPosition != "center-left" || s.CameraBackground != "none" {
+	if !s.GamingOverlay || !s.GamingOverlayAnimate || s.GamingOverlayPosition != "center-left" || s.CameraBackground != "none" {
 		t.Fatal("new settings defaults missing")
 	}
 	s.CameraDeviceID = "usb-camera"
 	s.CameraBackground = "blur"
 	s.GamingOverlay = false
+	s.GamingOverlayAnimate = false
 	if err := saveSettingsAt(path, s); err != nil {
 		t.Fatal(err)
 	}
 	got := loadSettingsAt(path)
-	if got.CameraDeviceID != "usb-camera" || got.CameraBackground != "blur" || got.GamingOverlay {
+	if got.CameraDeviceID != "usb-camera" || got.CameraBackground != "blur" || got.GamingOverlay || got.GamingOverlayAnimate {
 		t.Fatal("camera/overlay settings did not persist")
 	}
 }

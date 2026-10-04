@@ -19,7 +19,7 @@ func TestNativeGamingOverlay(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer window.Close()
-	snapshot := normalizeGamingOverlay(GamingOverlaySnapshot{Active: true, Title: "Overlay UI test", Status: "Muted", Speakers: []GamingOverlaySpeaker{{Name: "Alice", Speaking: true}}})
+	snapshot := normalizeGamingOverlay(GamingOverlaySnapshot{Active: true, Animate: true, Title: "Overlay UI test", Status: "Muted", Speakers: []GamingOverlaySpeaker{{Name: "Alice", Speaking: true}}})
 	window.Update(snapshot)
 	var hwnd uintptr
 	overlayWindows.Range(func(key, _ any) bool { hwnd = key.(uintptr); return false })
@@ -52,7 +52,7 @@ func TestNativeGamingOverlay(t *testing.T) {
 	if rect.Left != x || rect.Top != y || rect.Right-rect.Left != width || rect.Bottom-rect.Top != height {
 		t.Fatalf("default overlay is not positioned on the primary desktop: %+v", rect)
 	}
-	preview := normalizeGamingOverlay(GamingOverlaySnapshot{Active: true, Title: "Preview", Monitor: monitors[0].ID, Position: "custom", X: 100, Y: 100, Scale: 150, Opacity: 40, Speakers: []GamingOverlaySpeaker{{Name: "Alex", Speaking: true}}})
+	preview := normalizeGamingOverlay(GamingOverlaySnapshot{Active: true, Animate: true, Title: "Preview", Monitor: monitors[0].ID, Position: "custom", X: 100, Y: 100, Scale: 150, Opacity: 40, Speakers: []GamingOverlaySpeaker{{Name: "Alex", Speaking: true}}})
 	window.Preview(preview)
 	window.Update(GamingOverlaySnapshot{}) // routine idle poll must not hide a preview
 	x, y, width, height = gamingOverlayPlacement(preview, monitors[0])

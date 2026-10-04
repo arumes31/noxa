@@ -225,7 +225,6 @@ func (w *nativeOverlay) run(ready chan<- error) {
 		}
 	}()
 	started := time.Now()
-	var animate int32 = 1
 	visible := false
 	var monitors []GamingOverlayMonitor
 	var monitorRefresh time.Time
@@ -265,15 +264,12 @@ func (w *nativeOverlay) run(ready chan<- error) {
 		}
 		if time.Since(monitorRefresh) > time.Second {
 			monitors, monitorRefresh = nativeGamingOverlayMonitors(), time.Now()
-			// Honor the Windows accessibility animation preference.
-			// #nosec G103 -- SystemParametersInfo writes one Win32 BOOL synchronously.
-			_, _, _ = overlayWorkArea.Call(0x1042, 0, uintptr(unsafe.Pointer(&animate)), 0)
 		}
 		monitor := selectOverlayMonitor(monitors, s.Monitor)
 		x, y, width, height := gamingOverlayPlacement(s, monitor)
 		encoded, _ := json.Marshal(s)
 		key := fmt.Sprintf("%s|%d,%d,%d,%d", encoded, x, y, width, height)
-		if key == last && visible && animate == 0 {
+		if key == last && visible && !s.Animate {
 			continue
 		}
 		if key != last || renderer == nil {
@@ -294,7 +290,7 @@ func (w *nativeOverlay) run(ready chan<- error) {
 			last = key
 		}
 		seconds := time.Since(started).Seconds()
-		if animate == 0 {
+		if !s.Animate {
 			seconds = 0
 		}
 		if err = surface.present(hwnd, renderer.render(seconds), x, y, s.Opacity); err != nil {

@@ -100,7 +100,7 @@ type HotkeyProfile struct {
 // serialized default changes, and add the repair to migrateSettings:
 // loading merges the file ONTO the defaults, so a field an older client always
 // wrote wins over the new default unless it is explicitly repaired.
-const settingsVersion = 11
+const settingsVersion = 12
 
 // Settings holds all user preferences.
 type Settings struct {
@@ -217,6 +217,7 @@ type Settings struct {
 	CameraBackground      string `json:"camera_background"`       // none | blur | replace
 	CameraBackgroundScene string `json:"camera_background_scene"` // slate | warm | studio
 	GamingOverlay         bool   `json:"gaming_overlay"`          // default on, can be disabled
+	GamingOverlayAnimate  bool   `json:"gaming_overlay_animate"`  // independent of Windows animation preferences
 	GamingOverlayPosition string `json:"gaming_overlay_position"`
 	GamingOverlayMonitor  string `json:"gaming_overlay_monitor"`
 	GamingOverlayScale    int    `json:"gaming_overlay_scale"`
@@ -329,6 +330,7 @@ func DefaultSettings() Settings {
 		CameraBackground:      "none",
 		CameraBackgroundScene: "slate",
 		GamingOverlay:         true,
+		GamingOverlayAnimate:  true,
 		GamingOverlayPosition: "center-left",
 		GamingOverlayScale:    80,
 		GamingOverlayOpacity:  88,

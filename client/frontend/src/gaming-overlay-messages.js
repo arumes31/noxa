@@ -1,4 +1,5 @@
 export const overlayEnglish = {
+    'overlay.animate': 'Animate speaking indicators', 'overlay.animateHint': 'Uses its own motion setting, even when Windows animations are disabled.',
     'overlay.enabled': 'Voice overlay', 'overlay.position': 'Overlay position',
     'overlay.hint': 'Shows who is speaking on your desktop and over windowed or borderless games. Only active speakers appear, each with an avatar and animated indicator. Defaults to the middle of the left edge of your primary monitor, growing upward and downward and hides when everyone is quiet. Clicks pass through. Exclusive fullscreen is not supported.',
     'overlay.monitor': 'Overlay monitor', 'overlay.primary': 'Primary monitor', 'overlay.custom': 'Custom position',
@@ -12,6 +13,7 @@ export const overlayEnglish = {
     'overlay.muted': 'Microphone muted', 'overlay.deafened': 'Deafened', 'overlay.ready': 'Voice connected', 'overlay.failed': 'Voice overlay unavailable: {error}',
 };
 export const overlayGerman = {
+    'overlay.animate': 'Sprechanzeigen animieren', 'overlay.animateHint': 'Eigene Bewegungseinstellung, auch wenn Windows-Animationen deaktiviert sind.',
     'overlay.enabled': 'Sprach-Overlay', 'overlay.position': 'Overlay-Position',
     'overlay.hint': 'Zeigt auf dem Desktop und über Spielen im Fenster oder randlosen Modus, wer spricht. Nur sprechende Personen erscheinen, jeweils mit Avatar und animierter Anzeige. Standardmäßig mittig links auf dem Hauptbildschirm, nach oben und unten wachsend; bei Stille wird das Overlay ausgeblendet. Mausklicks werden durchgereicht. Exklusives Vollbild wird nicht unterstützt.',
     'overlay.monitor': 'Overlay-Bildschirm', 'overlay.primary': 'Hauptbildschirm', 'overlay.custom': 'Eigene Position',

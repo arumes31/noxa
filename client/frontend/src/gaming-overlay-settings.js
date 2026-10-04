@@ -34,6 +34,7 @@ export function gamingOverlaySettings(settings, { row, checkbox, slider, hint })
         sample.style.left = `${x}%`; sample.style.top = `${y}%`; sample.style.transform = `translate(-${x}%, -${translateY}%)`;
         sample.style.opacity = String((settings.gaming_overlay_opacity ?? 88) / 100);
         sample.style.fontSize = `${(settings.gaming_overlay_scale ?? 80) / 100}em`;
+        sample.classList.toggle("overlay-motion-disabled", settings.gaming_overlay_animate === false);
         coordinates.textContent = t("overlay.coordinates", { x, y });
     };
     const setPosition = (x, y) => {
@@ -69,6 +70,8 @@ export function gamingOverlaySettings(settings, { row, checkbox, slider, hint })
         row(t("overlay.monitor"), monitor, "saved"), row(t("overlay.position"), position, "saved"),
         row(t("overlay.scale"), slider(settings.gaming_overlay_scale ?? 80, 75, 200, value => { settings.gaming_overlay_scale = value; render(); }, true), "saved"),
         row(t("overlay.opacity"), slider(settings.gaming_overlay_opacity ?? 88, 20, 100, value => { settings.gaming_overlay_opacity = value; render(); }, true), "saved"),
+        row(t("overlay.animate"), checkbox(settings.gaming_overlay_animate !== false, value => { settings.gaming_overlay_animate = value; render(); }), "saved"),
+        hint(t("overlay.animateHint")),
         preview, coordinates, hint(t("overlay.dragHelp")));
     const nativePreview = document.createElement("button"); nativePreview.type = "button"; nativePreview.textContent = t("overlay.preview");
     const status = hint(t("overlay.hint")); status.setAttribute("role", "status");

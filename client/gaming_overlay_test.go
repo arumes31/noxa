@@ -53,6 +53,19 @@ func TestGamingOverlayDefaultsAndSilentState(t *testing.T) {
 	}
 }
 
+func TestGamingOverlayAnimationUsesIndependentSavedPreference(t *testing.T) {
+	s := GamingOverlaySnapshot{Active: true, Speakers: []GamingOverlaySpeaker{{Name: "Alice", Speaking: true}}}
+	settings := DefaultSettings()
+	if !overlayPresentation(s, settings).Animate {
+		t.Fatal("overlay must animate by default, independently of system motion settings")
+	}
+	settings.GamingOverlayAnimate = false
+	s.Animate = true // The frontend cannot override the saved native preference.
+	if overlayPresentation(s, settings).Animate {
+		t.Fatal("ignored the overlay's disabled animation preference")
+	}
+}
+
 func TestGamingOverlayMonitorPlacementAndBounds(t *testing.T) {
 	monitors := []GamingOverlayMonitor{
 		{ID: "primary", Primary: true, Width: 1920, Height: 1080, workWidth: 1920, workHeight: 1040},

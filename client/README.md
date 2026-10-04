@@ -668,7 +668,8 @@ request/response round-trip works.
   It defaults to the left edge at 45% of the primary monitor work-area height, expanding
   upward and downward as speakers join, with compact 40 px avatars
   (80% size), and hides when everyone is quiet. The native animation continues
-  while noXa is unfocused and respects Windows' animation accessibility setting.
+  while noXa is unfocused and even when Windows animations are disabled. The
+  separate "Animate speaking indicators" setting can disable overlay motion.
   Settings provide monitor selection, position presets or a draggable preview,
   size and opacity. Missing avatars fall back to initials. The activity waveform
   indicates speaking, not measured volume.

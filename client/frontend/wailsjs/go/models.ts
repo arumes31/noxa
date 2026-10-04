@@ -740,6 +740,7 @@ export namespace main {
 	}
 	export class GamingOverlaySnapshot {
 	    active: boolean;
+	    animate: boolean;
 	    title: string;
 	    status: string;
 	    speakers: GamingOverlaySpeaker[];
@@ -758,6 +759,7 @@ export namespace main {
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.active = source["active"];
+	        this.animate = source["animate"];
 	        this.title = source["title"];
 	        this.status = source["status"];
 	        this.speakers = this.convertValues(source["speakers"], GamingOverlaySpeaker);
@@ -1202,6 +1204,7 @@ export namespace main {
 	    camera_background: string;
 	    camera_background_scene: string;
 	    gaming_overlay: boolean;
+	    gaming_overlay_animate: boolean;
 	    gaming_overlay_position: string;
 	    gaming_overlay_monitor: string;
 	    gaming_overlay_scale: number;
@@ -1325,6 +1328,7 @@ export namespace main {
 	        this.camera_background = source["camera_background"];
 	        this.camera_background_scene = source["camera_background_scene"];
 	        this.gaming_overlay = source["gaming_overlay"];
+	        this.gaming_overlay_animate = source["gaming_overlay_animate"];
 	        this.gaming_overlay_position = source["gaming_overlay_position"];
 	        this.gaming_overlay_monitor = source["gaming_overlay_monitor"];
 	        this.gaming_overlay_scale = source["gaming_overlay_scale"];
