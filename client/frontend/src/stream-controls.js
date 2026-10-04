@@ -11,6 +11,23 @@ const current = s => session === s && V().state.pc === s.pc && mediaScopeIsCurre
 
 export function streamSessionIsCurrent(pc) { return !!session && session.pc === pc && current(session); }
 
+export function memberScreenStream(clientID) {
+    const s = session;
+    if (!s || !current(s)) return null;
+    const entry = s.streams.get(`${clientID}|screen`);
+    if (entry) return { active: entry.available !== false, watching: entry.available !== false && entry.watching };
+    const member = V().state.clients.find(client => String(client.client_id) === String(clientID));
+    return s.catalogLoaded && member?.channel_id === s.scope.channelID ? { active: false, watching: false } : null;
+}
+
+function refreshMemberStreams(s) {
+    const signature = JSON.stringify([...s.streams.values()].filter(entry => entry.slot === "screen")
+        .map(entry => [entry.publisher_id, entry.available !== false, entry.watching]).sort((a, b) => a[0].localeCompare(b[0])));
+    if (signature === s.memberSignature) return;
+    s.memberSignature = signature;
+    V().renderTree?.();
+}
+
 // Receiver bindings stay negotiated while unwatched. Playback follows only
 // acknowledged intent; the router separately enforces packet delivery.
 export function receiveStreamTrack(track, publisher, trackID = track.id) {
@@ -95,6 +112,7 @@ async function toggleWatch(s, entry, retry = false) {
         entry.pending = false;
         if (current(s) && s.streams.get(key(entry)) === entry) {
             renderEntry(s, entry);
+            refreshMemberStreams(s);
             if (restoreFocus && (document.activeElement === document.body || document.activeElement === focusButton)) {
                 entry.watchButton.focus({ preventScroll: true });
             }
@@ -200,6 +218,7 @@ async function poll(s) {
         const publications = publicationSnapshot();
         const result = await streamRequest(s.scope, { action: "list" });
         if (!current(s)) return;
+        s.catalogLoaded = true;
         reconcilePublications(publications, result.streams);
         updateShareViewers(result.streams);
         if (s.watchSession && s.watchSession !== result.session) {
@@ -248,7 +267,10 @@ async function poll(s) {
             renderEntry(s, entry);
         }
     } finally {
-        if (current(s)) s.timer = setTimeout(() => { void poll(s); }, 3000);
+        if (current(s)) {
+            refreshMemberStreams(s);
+            s.timer = setTimeout(() => { void poll(s); }, 3000);
+        }
     }
 }
 
@@ -276,6 +298,7 @@ export function stopStreamSession() {
         for (const entry of s.streams.values()) { entry.watching = false; applyWatch(s, entry); }
         s.media.before(s.grid);
         s.media.remove();
+        V().renderTree?.();
     }
     stopPublications();
 }

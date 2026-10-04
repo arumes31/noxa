@@ -1782,11 +1782,8 @@ function renderDirectTargets(show = false) {
         option.type = "button";
         option.className = "target-option" + (client.channel_id === state.myChannelID ? " same-channel" : "");
         option.setAttribute("role", "option");
-        const channel = state.channels.find((item) => item.ChannelID === client.channel_id);
-        option.innerHTML = `<span class="target-option-dot"></span><span class="target-option-copy"><strong></strong><small class="target-option-meta mono"></small></span><span class="target-option-channel"></span>`;
+        option.innerHTML = `<span class="target-option-dot" aria-hidden="true"></span><span class="target-option-copy"><strong></strong></span>`;
         option.querySelector("strong").textContent = client.nickname || client.unique_id;
-        option.querySelector("small").textContent = client.unique_id;
-        option.querySelector(".target-option-channel").textContent = channel?.Name || t("runtime.noChannel");
         // Keep the search field focused until selection; its blur/change would
         // otherwise open a DM for the search text and rebuild this option.
         option.onpointerdown = (event) => event.preventDefault();

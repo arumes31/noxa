@@ -1849,6 +1849,47 @@ test.describe("tab-bound chat mutations", () => {
             await page.locator(".react-strip button").first().click();
         }
     }
+    test("right-click reactions stay open until an emoji is selected", async ({ page }) => {
+        await page.locator('#chat-log .msg[data-msg-id="71"] .msg-text').click({ button: "right" });
+        await page.getByRole("menuitem", { name: "More reactions…", exact: true }).click();
+        await expect(page.locator(".react-strip")).toBeVisible();
+        await page.locator(".react-strip button").first().click();
+        expect(await page.evaluate(() => window.__mutationScope.effects)).toEqual([["ChatReact", "server-a", 71, "👍"]]);
+    });
+    test("message quick reactions support keyboard selection and reject stale menus", async ({ page }) => {
+        const message = page.locator('#chat-log .msg[data-msg-id="71"]');
+        await message.focus(); await page.keyboard.press("Shift+F10");
+        await expect(page.getByRole("menuitem", { name: "React with 👍", exact: true })).toBeFocused();
+        await page.keyboard.press("ArrowRight"); await page.keyboard.press("Enter");
+        expect(await page.evaluate(() => window.__mutationScope.effects)).toEqual([["ChatReact", "server-a", 71, "❤️"]]);
+        await expect(page.getByRole("menu")).toHaveCount(0);
+        await expect(message).toBeFocused();
+        await message.click({ button: "right" });
+        await page.evaluate(() => { window.__noxa.state.myChannelID = 2; window.__noxaChat.onMyChannelChanged(); });
+        await page.getByRole("menuitem", { name: "React with 👍", exact: true }).click();
+        expect(await page.evaluate(() => window.__mutationScope.effects)).toHaveLength(1);
+        await page.keyboard.press("Escape");
+    });
+    test("GIF messages expose quick reactions inside narrow viewports", async ({ page }, testInfo) => {
+        await page.setViewportSize({ width: 390, height: 700 });
+        await page.evaluate(() => {
+            const app = window.go.main.App;
+            window.go.main.App = new Proxy(app, { get(target, key) {
+                if (key === "DownloadChatAttachmentForTab") return async () => "R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
+                return target[key];
+            } });
+            window.__noxaChat.addChat({ id: 72, channel_id: 1, from: "Other", text: "[file:animation.vcx#dGVzdA==#animation.gif]" });
+        });
+        await page.locator('.msg[data-msg-id="72"] img.msg-img').click({ button: "right" });
+        const menu = page.locator(".msg-context-menu");
+        await expect(menu.locator(".msg-quick-reactions button")).toHaveCount(8);
+        const bounds = await menu.boundingBox();
+        expect(bounds.x).toBeGreaterThanOrEqual(8);
+        expect(bounds.x + bounds.width).toBeLessThanOrEqual(382);
+        await page.screenshot({ path: testInfo.outputPath("quick-reactions.png") });
+        await page.getByRole("menuitem", { name: "React with 😂", exact: true }).click();
+        expect(await page.evaluate(() => window.__mutationScope.effects)).toEqual([["ChatReact", "server-a", 72, "😂"]]);
+    });
     for (const authority of ["owner", "administrator", "member", "guest"]) {
         test(`${authority} gets the appropriate delete control on another author's channel message`, async ({ page }) => {
             await page.evaluate(authority => {
@@ -5037,6 +5078,34 @@ test("private group workspace keeps hidden channel messages unread until returni
     await expect(page.locator('#chat-log [data-msg-id="9202"]')).toBeVisible();
     expect(await page.evaluate(() => window.__noxa.chatUnread(2))).toBeNull();
     await expect.poll(() => page.evaluate(() => window.__savedSettings?.last_read_channels?.[2])).toBe(9202);
+});
+
+test("chat follows newest messages after delayed images and viewport resizing", async ({ page }) => {
+    await showB3Workspace(page);
+    await page.evaluate(() => {
+        const app = window.go.main.App;
+        window.go.main.App = new Proxy(app, { get(target, key) {
+            if (key === "DownloadChatAttachmentForTab") return () => new Promise(resolve => { window.__finishChatImage = resolve; });
+            return target[key];
+        } });
+        window.__noxaChat.onMyChannelChanged();
+        for (let id = 1; id <= 50; id++) window.__noxaChat.addChat({ id, channel_id: 2, from: "Alex", text: "Message " + id });
+        window.__noxaChat.addChat({ id: 51, channel_id: 2, from: "Alex", text: "[file:photo.vcx#dGVzdA==#photo.png]" });
+    });
+    const log = page.locator("#chat-log");
+    const bottomGap = () => log.evaluate(el => el.scrollHeight - el.clientHeight - el.scrollTop);
+    await expect.poll(bottomGap).toBeLessThan(3);
+    await page.evaluate(() => {
+        const canvas = document.createElement("canvas"); canvas.width = 100; canvas.height = 300;
+        window.__finishChatImage(canvas.toDataURL("image/png").split(",")[1]);
+    });
+    await expect(page.locator('.msg[data-msg-id="51"] .msg-img')).toBeVisible();
+    await expect.poll(bottomGap).toBeLessThan(3);
+    await page.setViewportSize({ width: 900, height: 560 });
+    await expect.poll(bottomGap).toBeLessThan(3);
+    await page.evaluate(() => window.__noxaChat.addChat({ id: 52, channel_id: 2, from: "Alex", text: "Newest message" }));
+    await expect.poll(bottomGap).toBeLessThan(3);
+    await expect(page.locator('.msg[data-msg-id="52"]')).toBeInViewport();
 });
 
 test("selected quick wins anchor scrollback across trimming and language changes", async ({ page }) => {
@@ -9338,6 +9407,7 @@ test("nests connected members below channels and offers them as direct-message t
     await page.locator("#chat-scope").selectOption("direct");
     await page.locator("#chat-target").focus();
     await expect(page.locator("#chat-target-options .target-option")).toHaveCount(2);
+    await expect(page.locator("#chat-target-options .target-option")).toHaveText(["Bob", "Carol"]);
     await page.locator("#chat-target").fill("Car");
     await page.locator("#chat-target-options .target-option", { hasText: "Carol" }).click();
     await expect(page.locator("#chat-target")).toHaveValue("user-c");

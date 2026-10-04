@@ -10,6 +10,7 @@
 //
 // Replies and direct recipients use explicit protocol identities.
 import { resolveParent, directPeer } from "./chat-relations.js";
+import { manageChatGIFPlayback, originalGIFSource } from "./chat-gif-playback.js";
 import { voiceMessageButton, renderVoiceMessage } from "./voice-messages.js";
 import { initMessageTools, saveMessageReference } from "./message-tools.js";
 import { roleMentionChoices, roleMentionLabel, mentionFlags } from "./role-mentions.js";
@@ -754,12 +755,25 @@ function renderMsg(m) {
         const openMenu = event => {
             if (event.target.closest('[data-member-uid], input, textarea, a, video')) return;
             event.preventDefault(); event.stopPropagation();
-            const menu = document.createElement("div"); menu.className = "ctx-menu";
+            closeReactStrip();
+            const menu = document.createElement("div"); menu.className = "ctx-menu msg-context-menu";
+            const scope = captureScope(readExportScope);
+            menu.appendChild(quickReactionBar(m, menu, el, scope));
             for (const action of actions.querySelectorAll("button")) {
                 const item = document.createElement("button"); item.className = "ctx-action";
-                item.textContent = action.getAttribute("aria-label") || action.title;
+                const reaction = action.dataset.action === "react";
+                item.textContent = reaction ? t("chat.moreReactions") : action.getAttribute("aria-label") || action.title;
                 item.disabled = action.disabled;
-                item.onclick = () => { closeContextMenu(menu, true); if (el.isConnected) action.click(); };
+                item.onclick = event => {
+                    // Closing removes the menu's propagation guard. Keep this
+                    // click from immediately dismissing the newly opened picker.
+                    event.stopPropagation();
+                    const current = menu.isConnected && el.isConnected && exportScopeIsCurrent(scope);
+                    closeContextMenu(menu, true);
+                    if (!current) return;
+                    if (reaction) openReactStrip(m, el);
+                    else action.click();
+                };
                 menu.append(item);
             }
             mountContextMenu(menu, { trigger: el, x: event.clientX, y: event.clientY });
@@ -926,6 +940,7 @@ function openLightbox(node) {
     const ov = document.createElement("div");
     ov.className = "dlg-overlay lightbox";
     const big = node.cloneNode(true);
+    if (big.tagName === "IMG") big.src = originalGIFSource(node);
     big.removeAttribute("class");
     big.removeAttribute("title");
     if (big.tagName === "VIDEO") {
@@ -943,6 +958,33 @@ function openLightbox(node) {
 // --- reactions (97) -----------------------------------------------------------
 
 const QUICK_REACTS = ["👍", "❤️", "😂", "😮", "😢", "🎉", "🔥", "👀"];
+
+function quickReactionBar(m, menu, trigger, scope) {
+    const bar = document.createElement("div");
+    bar.className = "msg-quick-reactions";
+    bar.setAttribute("role", "group");
+    bar.setAttribute("aria-label", t("chat.reactions"));
+    for (const emoji of QUICK_REACTS) {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.textContent = emoji;
+        button.setAttribute("aria-label", t("chat.reactWith", { emoji }));
+        button.onclick = event => {
+            event.stopPropagation();
+            if (!menu.isConnected || !trigger.isConnected || !exportScopeIsCurrent(scope)) return;
+            closeContextMenu(menu, true);
+            void toggleReaction(m, emoji);
+        };
+        bar.appendChild(button);
+    }
+    bar.onkeydown = event => {
+        if (!["ArrowLeft", "ArrowRight"].includes(event.key)) return;
+        event.preventDefault(); event.stopPropagation();
+        const buttons = [...bar.children], index = buttons.indexOf(document.activeElement);
+        buttons[(index + (event.key === "ArrowRight" ? 1 : -1) + buttons.length) % buttons.length].focus();
+    };
+    return bar;
+}
 
 function renderReacts(m) {
     const scope = captureScope(readExportScope);
@@ -1067,7 +1109,7 @@ function renderActions(m) {
             setTimeout(() => { feedback.remove(); if (copy.isConnected) { copy.innerHTML = icon("copy"); copy.setAttribute("aria-label", t("wins.copyMessage")); } }, 2500);
         }
     });
-    mk("smile", t("chat.action.react"), () => openReactStrip(m, acts));
+    mk("smile", t("chat.action.react"), () => openReactStrip(m, acts)).dataset.action = "react";
     mk("reply", t("chat.action.reply"), () => setReply(m));
     if (!m.direct && m.id) mk("pin", t("messages.save"), () => saveMessageReference({ kind: "channel", channel_id: scope.channelID, message_id: m.id }));
     // (108) only messages that are actually part of a chain get the affordance
@@ -1829,6 +1871,7 @@ async function restorePMTabs() {
 
 function scrollToBottom() {
     const log = $("chat-log");
+    atBottom = true;
     log.scrollTop = log.scrollHeight;
 }
 
@@ -3935,6 +3978,29 @@ export function initChat() {
     const log = $("chat-log");
 
     applyChatPrefs();
+    const stopGIFPlayback = manageChatGIFPlayback(document.body, ".msg img, .lightbox img");
+
+    // Attachments, wrapped text and viewport changes can grow the conversation
+    // after appendLive has scrolled. Keep following the newest message until
+    // the user scrolls into history; observe rows as well as the viewport.
+    let lastViewportHeight = log.clientHeight, lastContentHeight = log.scrollHeight;
+    const rememberChatLayout = () => { lastViewportHeight = log.clientHeight; lastContentHeight = log.scrollHeight; };
+    const followLatest = () => {
+        if (atBottom) scrollToBottom();
+        rememberChatLayout();
+    };
+    const chatResize = new ResizeObserver(followLatest);
+    chatResize.observe(log);
+    const chatRows = new MutationObserver(records => {
+        for (const record of records) {
+            for (const node of record.removedNodes) if (node.nodeType === 1) chatResize.unobserve(node);
+            for (const node of record.addedNodes) if (node.nodeType === 1) chatResize.observe(node);
+        }
+    });
+    chatRows.observe(log, { childList: true });
+    log.addEventListener("load", followLatest, true);
+    log.addEventListener("loadedmetadata", followLatest, true);
+    window.addEventListener("pagehide", () => { chatResize.disconnect(); chatRows.disconnect(); stopGIFPlayback(); }, { once: true });
 
     // Scope selector drives the active view (channel/global/direct).
     $("chat-scope").addEventListener("change", () => {
@@ -3955,7 +4021,11 @@ export function initChat() {
 
     // (134) scroll lock + (103) scroll-up history paging.
     log.addEventListener("scroll", () => {
+        // Layout can dispatch scroll before ResizeObserver. That does not mean
+        // the user chose to leave the bottom of the conversation.
+        if (atBottom && (log.clientHeight !== lastViewportHeight || log.scrollHeight !== lastContentHeight)) scrollToBottom();
         atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 30;
+        rememberChatLayout();
         if (atBottom) {
             resetNewCount();
             markRead(activeKey());

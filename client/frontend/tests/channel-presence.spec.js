@@ -92,6 +92,33 @@ for (const flag of ['self_muted', 'self_deafened', 'server_muted']) {
     });
 }
 
+test('stream badges distinguish sharing from watching and clear stopped publications', async ({ page }, testInfo) => {
+    await page.evaluate(async () => {
+        window.__noxa.showWorkspace(false);
+        window.__membership(7, { sharing: true });
+        window.__screenCatalog = [{ publisher_id: 'peer', slot: 'screen', generation: '1', preview_at: 0, watch_revision: '0' }];
+        const app = window.go.main.App;
+        window.go.main.App = new Proxy(app, { get(target, method) {
+            if (method !== 'VideoStreamControlForTab') return target[method];
+            return async (_tab, request) => ({ ...request, streams: window.__screenCatalog, session: '1' });
+        } });
+        window.__streamControls = await import('/src/stream-controls.js');
+        window.__streamControls.startStreamSession(window.__noxa.state.pc, () => null, () => {});
+    });
+    const member = page.locator('.client[data-clid="peer"]');
+    await expect(member.getByRole('img', { name: 'Sharing a stream', exact: true })).toBeVisible();
+    await expect(member.locator('.client-stream-state')).not.toHaveClass(/watching/);
+    await page.getByRole('button', { name: 'Watch', exact: true }).click();
+    await expect(member.getByRole('img', { name: 'You’re watching this stream', exact: true })).toBeVisible();
+    await expect(member.locator('.client-stream-state')).toHaveClass(/watching/);
+    await page.screenshot({ path: testInfo.outputPath('watching-stream.png') });
+    await page.getByRole('button', { name: 'Stop watching', exact: true }).click();
+    await expect(member.getByRole('img', { name: 'Sharing a stream', exact: true })).toBeVisible();
+    await page.evaluate(() => { window.__screenCatalog = []; });
+    await expect(member.locator('.client-stream-state')).toHaveCount(0);
+    await page.evaluate(() => window.__streamControls.stopStreamSession());
+});
+
 test('own mute immediately hides speaking before the server reply', async ({ page }) => {
     await page.evaluate(() => {
         const { state, renderTree } = window.__noxa;

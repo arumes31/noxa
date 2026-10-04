@@ -206,6 +206,8 @@ body:not(.details-collapsed) #details-toggle { display: none; }
 .client:hover { background: var(--bg-hover); }
 .client.selected { background: var(--bg-hover); color: var(--text); }
 .client-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.client-stream-state { display: inline-flex; flex: 0 0 18px; width: 18px; height: 18px; color: var(--accent); }
+.client-stream-state .ui-icon { width: 100%; height: 100%; }
 .client-voice-state {
     display: inline-flex; align-items: end; gap: 2px; width: 16px; height: 14px;
     margin-left: auto; color: var(--accent); flex: 0 0 16px;
@@ -357,14 +359,12 @@ body:not(.details-collapsed) #details-toggle { display: none; }
 }
 .target-option:hover, .target-option:focus-visible { background: var(--bg-hover); outline: none; }
 .target-option-dot {
-    grid-row: 1 / span 2; align-self: center; width: 8px; height: 8px;
+    align-self: center; width: 8px; height: 8px;
     border-radius: 50%; background: var(--text-faint);
 }
 .target-option.same-channel .target-option-dot { background: var(--accent); box-shadow: 0 0 0 3px var(--accent-dim); }
-.target-option-copy { display: flex; align-items: baseline; gap: 7px; min-width: 0; overflow: hidden; white-space: nowrap; font-weight: 600; }
-.target-option-copy strong { overflow: hidden; text-overflow: ellipsis; }
-.target-option-meta { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-faint); font: 0.7143rem var(--font-mono); }
-.target-option-channel { grid-column: 2; color: var(--text-dim); font-size: 0.7143rem; }
+.target-option-copy { min-width: 0; overflow: hidden; white-space: nowrap; font-weight: 600; }
+.target-option-copy strong { display: block; overflow: hidden; text-overflow: ellipsis; }
 .target-empty { padding: 10px; color: var(--text-faint); font-size: 0.8571rem; }
 #chat-send {
     flex: none;
@@ -1029,6 +1029,16 @@ mark { background: var(--warn); color: #3a2a05; border-radius: 2px; padding: 0 1
 .msg-actions button:hover { background: var(--bg-hover); color: var(--text); }
 
 /* reactions (97) */
+.msg-context-menu { width: 304px; }
+.msg-quick-reactions {
+    display: grid; grid-template-columns: repeat(8, minmax(0, 1fr)); gap: 2px;
+    padding: 3px 0 7px; margin-bottom: 4px; border-bottom: 1px solid var(--border);
+}
+.msg-quick-reactions button {
+    min-width: 0; height: 34px; padding: 0; border: 0; border-radius: 5px;
+    background: transparent; color: var(--text); font-size: 1.15rem; cursor: pointer;
+}
+.msg-quick-reactions button:hover { background: var(--bg-hover); }
 .msg-reacts { display: inline-flex; gap: 4px; margin-left: 8px; flex-wrap: wrap; }
 .react-chip {
     padding: 1px 7px; border-radius: 999px; cursor: pointer; font-size: 0.7857rem;
