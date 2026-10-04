@@ -168,6 +168,71 @@ test("custom role mentions complete stable IDs and render safe role names", asyn
 });
 
 test.describe("own role overview", () => {
+    test("permission inspector follows the selected member and live role updates", async ({ page }) => {
+        await page.evaluate(() => {
+            const v = window.__noxa;
+            Object.assign(v.state, {
+                authorizationModel: "roles-v1", ownAuthority: "owner", myClientID: "self", myChannelID: 1,
+                channels: [{ ChannelID: 1, Name: "Lobby", ParentID: 0 }],
+                clients: [
+                    { client_id: "self", unique_id: "self-uid", nickname: "Owner", channel_id: 1, roles: [{ id: 1, name: "Own role", position: 1 }] },
+                    { client_id: "peer", unique_id: "peer-uid", nickname: "Peer", channel_id: 1, roles: [{ id: 2, name: "Guest role", position: 1 }] },
+                ],
+            });
+            v.showWorkspace(false);
+            v.renderTree();
+        });
+        await page.locator('#channel-tree .client[data-clid="peer"]').click();
+        const section = page.locator("#details .inspector-section:last-of-type");
+        await expect(section.locator("summary")).toHaveText("Roles");
+        await section.locator("summary").click();
+        await expect(page.locator("#perm-area h3")).toBeVisible();
+        await expect(page.locator("#perm-area h3")).toHaveText("Roles — Peer");
+        await expect(section).not.toContainText("Your resolved permissions");
+        await expect(page.locator("#perm-area .role-chip")).toHaveText(["Guest role"]);
+        await expect(page.locator("#perm-area")).not.toContainText("You own this server");
+        await page.evaluate(() => {
+            const v = window.__noxa;
+            const clients = structuredClone(v.state.clients);
+            clients[1].roles = [{ id: 3, name: "Moderator <team>", position: 2 }];
+            for (const callback of window.__events.snapshot) callback(JSON.stringify({ own_authority: "owner", root_channels: [{ ChannelID: 1, Name: "Lobby", ParentID: 0, clients }] }));
+        });
+        await expect(page.locator("#perm-area .role-chip")).toHaveText(["Moderator <team>"]);
+        await expect(page.locator("#perm-area team")).toHaveCount(0);
+        await page.evaluate(() => {
+            window.__noxa.state.clients.find(c => c.client_id === "peer").roles = [];
+            window.__noxa.renderTree();
+        });
+        await expect(page.locator("#perm-area")).toContainText("No assigned roles.");
+        await expect(page.locator("#perm-area .role-chip")).toHaveCount(0);
+        await page.getByRole("menubar").getByRole("menuitem", { name: "Permissions", exact: true }).click();
+        await page.getByRole("menuitem", { name: "My roles", exact: true }).click();
+        await expect(page.locator("#perm-area h3")).toHaveText("My roles");
+        await expect(page.locator("#perm-area")).toContainText("Server owner");
+        await expect(page.locator("#perm-area")).toContainText("Own role");
+        await expect(page.locator('#channel-tree .client[data-clid="self"]')).toHaveAttribute("aria-selected", "true");
+        await expect(page.locator('#channel-tree .client[data-clid="peer"]')).toHaveAttribute("aria-selected", "false");
+    });
+
+    test("permission inspector does not show your roles when the selected member leaves", async ({ page }) => {
+        await page.evaluate(() => {
+            const v = window.__noxa;
+            Object.assign(v.state, { authorizationModel: "roles-v1", ownAuthority: "owner", myClientID: "self", selectedClientID: "departed",
+                clients: [{ client_id: "self", roles: [{ id: 1, name: "Own role", position: 1 }] },
+                    { client_id: "departed", nickname: "Departing member", roles: [{ id: 2, name: "Guest role", position: 1 }] }] });
+            v.showWorkspace(false);
+            v.setDetailsOpen(true);
+            v.renderTree();
+        });
+        await expect(page.locator("#perm-area .role-chip")).toHaveText(["Guest role"]);
+        await page.evaluate(() => {
+            window.__noxa.state.clients = window.__noxa.state.clients.filter(client => client.client_id !== "departed");
+            window.__noxa.renderTree();
+        });
+        await expect(page.locator("#perm-area .role-chip")).toHaveCount(0);
+        await expect(page.locator("#perm-area")).not.toContainText("You own this server");
+    });
+
     test("role overview uses visible own roles without retired queries", async ({ page }) => {
         await page.evaluate(async () => {
             const v = window.__noxa;

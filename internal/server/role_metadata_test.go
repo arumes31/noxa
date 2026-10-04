@@ -126,3 +126,46 @@ func TestRoleClientMetadataFiltersHiddenMembersAndSensitiveFields(t *testing.T) 
 		t.Fatalf("hidden population exposed: %+v %v", info, err)
 	}
 }
+
+func TestClientInfoIdleIgnoresControlTraffic(t *testing.T) {
+	env := startTestEnv(t, nil)
+	defer env.stop()
+	conn, clientID := dialAuthed(t, env.addr, "user-uid")
+	defer func() { _ = conn.Close() }()
+
+	// Backdate this silent connection instead of waiting on wall-clock sleeps.
+	member, _ := env.state.GetClient(clientID)
+	member.ConnectedAt = time.Now().Add(-time.Minute)
+	env.state.AddClient(member)
+	before := queryClientInfo(t, conn, clientID)
+	if before.IdleSeconds < 60 {
+		t.Fatalf("silent connection idle = %d, want at least 60", before.IdleSeconds)
+	}
+	send(t, conn, netproto.MsgPing, netproto.Ping{})
+	readOfType(t, conn, netproto.MsgPong)
+	send(t, conn, netproto.MsgChatSend, netproto.ChatSend{Text: "still not speaking"})
+	after := queryClientInfo(t, conn, clientID)
+	if after.IdleSeconds < before.IdleSeconds || after.BytesIn <= before.BytesIn {
+		t.Fatalf("control traffic reset voice idle or lost byte accounting: before=%+v after=%+v", before, after)
+	}
+
+	env.srv.onSpeakingChanged(clientID, true)
+	if info := queryClientInfo(t, conn, clientID); info.IdleSeconds != 0 {
+		t.Fatalf("speaking client idle = %d, want 0", info.IdleSeconds)
+	}
+	env.srv.onSpeakingChanged(clientID, false)
+	member, _ = env.state.GetClient(clientID)
+	if member.LastSpokeAt.IsZero() {
+		t.Fatal("stopping speech did not record the start of voice idle")
+	}
+	member.LastSpokeAt = time.Now().Add(-15 * time.Second)
+	env.state.AddClient(member)
+	if info := queryClientInfo(t, conn, clientID); info.IdleSeconds < 15 || info.IdleSeconds >= before.IdleSeconds {
+		t.Fatalf("idle should be measured from the end of speech: %+v", info)
+	}
+	member.LastSpokeAt = time.Now().Add(time.Minute)
+	env.state.AddClient(member)
+	if info := queryClientInfo(t, conn, clientID); info.IdleSeconds != 0 {
+		t.Fatalf("clock change produced negative idle: %+v", info)
+	}
+}

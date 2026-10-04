@@ -275,7 +275,7 @@ func (m *Manager) removeChannelLocked(channelID int64) {
 	for cid, ss := range m.speaking {
 		if ss.ChannelID == channelID {
 			if c, ok := m.clients[cid]; ok {
-				c.IsSpeaking = false
+				m.stopSpeakingLocked(c)
 			}
 			delete(m.speaking, cid)
 		}
@@ -529,8 +529,7 @@ func (m *Manager) LeaveChannel(clientID string) error {
 
 	// Clear speaking state for the client when leaving a channel.
 	if _, ok := m.speaking[clientID]; ok {
-		delete(m.speaking, clientID)
-		c.IsSpeaking = false
+		m.stopSpeakingLocked(c)
 	}
 
 	c.ChannelID = 0
@@ -606,8 +605,7 @@ func (m *Manager) moveClient(clientID string, targetChannelID int64, enforceCapa
 		}
 		// Clear speaking state on move.
 		if _, ok := m.speaking[clientID]; ok {
-			delete(m.speaking, clientID)
-			c.IsSpeaking = false
+			m.stopSpeakingLocked(c)
 		}
 	}
 
@@ -774,8 +772,17 @@ func (m *Manager) SetSpeaking(clientID string, speaking bool) {
 		return
 	}
 
+	m.stopSpeakingLocked(c)
+}
+
+// stopSpeakingLocked preserves the end of speech across repeated silent updates.
+// The caller holds m.mu.
+func (m *Manager) stopSpeakingLocked(c *Client) {
+	if c.IsSpeaking {
+		c.LastSpokeAt = time.Now()
+	}
 	c.IsSpeaking = false
-	delete(m.speaking, clientID)
+	delete(m.speaking, c.ClientID)
 }
 
 // SetPrioritySpeaker updates the client's PrioritySpeaker flag. It is a no-op
@@ -812,8 +819,7 @@ func (m *Manager) SetServerVoiceState(clientID string, muted, deafened *bool) (*
 	}
 	c.VoiceRevision++
 	if c.ServerMuted {
-		c.IsSpeaking = false
-		delete(m.speaking, clientID)
+		m.stopSpeakingLocked(c)
 	}
 	return cloneClient(c), nil
 }

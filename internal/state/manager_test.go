@@ -516,6 +516,58 @@ func TestSpeaking(t *testing.T) {
 	}
 }
 
+func TestSpeakingStopRecordsVoiceIdleOnce(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		stop func(*Manager) error
+	}{
+		{"silence", func(m *Manager) error { m.SetSpeaking("talker", false); return nil }},
+		{"move", func(m *Manager) error { return m.MoveClient("talker", 2) }},
+		{"leave", func(m *Manager) error { return m.LeaveChannel("talker") }},
+		{"channel removal", func(m *Manager) error { m.RemoveChannel(1); return nil }},
+		{"moderator mute", func(m *Manager) error {
+			muted := true
+			_, err := m.SetServerVoiceState("talker", &muted, nil)
+			return err
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			m := newTestManager(t)
+			m.AddChannel(&Channel{ChannelID: 1})
+			m.AddChannel(&Channel{ChannelID: 2})
+			m.AddClient(&Client{ClientID: "talker", ConnectedAt: time.Now().Add(-time.Hour)})
+			if err := m.JoinChannel("talker", 1); err != nil {
+				t.Fatal(err)
+			}
+			m.SetSpeaking("talker", false)
+			if client, _ := m.GetClient("talker"); !client.LastSpokeAt.IsZero() {
+				t.Fatal("a silent client acquired a speech timestamp")
+			}
+			m.SetSpeaking("talker", true)
+			before := time.Now()
+			if err := tc.stop(m); err != nil {
+				t.Fatal(err)
+			}
+			stopped, _ := m.GetClient("talker")
+			if stopped.IsSpeaking || stopped.LastSpokeAt.Before(before) || stopped.LastSpokeAt.After(time.Now()) {
+				t.Fatalf("speech stop timestamp missing or invalid: %+v", stopped)
+			}
+			if m.IsSpeaking("talker") {
+				t.Fatal("speaking map was not cleared")
+			}
+			m.SetSpeaking("talker", false)
+			m.SetStatus("talker", "away", "quiet")
+			if stopped.ServerMuted {
+				m.SetSpeaking("talker", true)
+			}
+			if current, _ := m.GetClient("talker"); !current.LastSpokeAt.Equal(stopped.LastSpokeAt) {
+				t.Fatal("silent or presence updates reset voice idle")
+			}
+		})
+	}
+}
+
 func TestChannelTreeOrdering(t *testing.T) {
 	m := newTestManager(t)
 

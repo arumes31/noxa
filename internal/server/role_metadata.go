@@ -46,7 +46,15 @@ func (s *TCPServer) buildRoleClientInfo(e *authorization.RoleEvaluator, actorID 
 	if showStats {
 		st := target.stats()
 		resp.ConnectedAt = member.ConnectedAt.Unix()
-		resp.IdleSeconds = int64(time.Since(st.lastActive).Seconds())
+		if !member.IsSpeaking {
+			idleSince := member.LastSpokeAt
+			if idleSince.IsZero() {
+				idleSince = member.ConnectedAt
+			}
+			if !idleSince.IsZero() {
+				resp.IdleSeconds = max(0, int64(time.Since(idleSince).Seconds()))
+			}
+		}
 		if st.rttKnown {
 			resp.PingMs = st.rttNs / int64(time.Millisecond)
 		}

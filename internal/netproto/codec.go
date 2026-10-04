@@ -1419,7 +1419,7 @@ type ClientInfoResponse struct {
 	Nickname    string `json:"nickname"`
 	ChannelID   int64  `json:"channel_id"`
 	ConnectedAt int64  `json:"connected_at"` // unix seconds
-	IdleSeconds int64  `json:"idle_seconds"`
+	IdleSeconds int64  `json:"idle_seconds"` // since speech stopped, or login if never spoken; zero while speaking
 	PingMs      int64  `json:"ping_ms"`
 	IP          string `json:"ip,omitempty"`
 	Port        int    `json:"port,omitempty"`

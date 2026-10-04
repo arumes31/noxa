@@ -341,8 +341,7 @@ function translateWorkspace() {
         ["#voice-bar", "aria-label", "workspace.labels.voiceControls"],
         ["#center", "aria-label", "workspace.labels.voiceAndChatWorkspace"],
         ["#details .inspector-section:first-of-type summary", "text", "workspace.labels.serverConnection"],
-        ["#details .inspector-section:last-of-type summary", "text", "workspace.labels.yourPermissions"],
-        [".inspector-hint", "text", "workspace.labels.yourResolvedPermissionsOnThisServer"],
+        ["#details .inspector-section:last-of-type summary", "text", "roles.title"],
         [".skip-link", "text", "workspace.labels.skipToMessageComposer"],
         ["#server-name", "title", "workspace.labels.serverInformation"],
     ]) {

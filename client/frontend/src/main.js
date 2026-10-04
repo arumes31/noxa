@@ -1651,6 +1651,7 @@ async function fetchAvatar(uniqueID) {
 
 function renderClientCard() {
     renderMember();
+    void refreshPermissions();
 }
 
 // The inspector is contextual: keep the workspace wide until the user selects
@@ -2951,24 +2952,32 @@ async function applyWhisperSettings() {
 
 async function refreshPermissions() {
     const area = $("perm-area");
-    if (state.authorizationModel === "pending") {
+    const targetID = state.selectedClientID || state.myClientID;
+    const target = state.clients.find(client => client.client_id === targetID);
+    const self = targetID === state.myClientID;
+    if (state.authorizationModel === "pending" || (state.selectedClientID && !target)) {
         area.replaceChildren();
         return;
     }
     const heading = document.createElement("h3");
-    heading.textContent = t("roles.myRoles");
+    heading.textContent = self ? t("roles.myRoles") : t("roles.memberRoles", { name: target.nickname || target.unique_id });
     const help = document.createElement("p");
-    help.textContent = t(state.ownAuthority === "owner" ? "roles.ownerAccessHelp" :
+    help.textContent = !self ? t("roles.memberAccessHelp") : t(state.ownAuthority === "owner" ? "roles.ownerAccessHelp" :
         state.ownAuthority === "administrator" ? "roles.administratorAccessHelp" : "roles.ownAccessHelp");
     area.replaceChildren(heading, help);
-    if (state.ownAuthority === "owner" || state.ownAuthority === "administrator") {
+    if (self && (state.ownAuthority === "owner" || state.ownAuthority === "administrator")) {
         const authority = document.createElement("strong");
         authority.className = "role-chip";
         authority.textContent = t(`roles.authority.${state.ownAuthority}`);
         area.appendChild(authority);
     }
-    const ownRoles = state.clients.find(client => client.client_id === state.myClientID)?.roles || [];
-    for (const role of [...ownRoles].sort((a, b) => b.position - a.position)) area.appendChild(roleChip(role));
+    const roles = target?.roles || [];
+    for (const role of [...roles].sort((a, b) => b.position - a.position)) area.appendChild(roleChip(role));
+    if (!self && roles.length === 0) {
+        const empty = document.createElement("p");
+        empty.textContent = t("roles.noAssignedRoles");
+        area.appendChild(empty);
+    }
 }
 
 // ---------------------------------------------------------------------------

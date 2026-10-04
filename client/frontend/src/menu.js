@@ -569,7 +569,9 @@ export function initMenu() {
 
     const permissions = buildMenu(t("menu.permissions"), [
         menuAction(() => t("roles.myRoles"), () => {
-            V().refreshPermissions();
+            V().state.selectedClientID = V().state.myClientID;
+            V().state.multiSelect = new Set([V().state.myClientID]);
+            V().renderTree();
             V().setDetailsOpen(true);
         }),
         menuAction(() => t("roles.title"), async () => {

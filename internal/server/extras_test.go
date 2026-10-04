@@ -774,8 +774,7 @@ func TestClientInfoUnknown(t *testing.T) {
 	}
 }
 
-// TestClientInfoActivityTracking verifies received frames bump the
-// last-active/bytes counters.
+// TestClientInfoActivityTracking verifies received frames bump byte counters.
 func TestClientInfoActivityTracking(t *testing.T) {
 	env := startTestEnv(t, nil)
 	defer env.stop()
@@ -784,14 +783,11 @@ func TestClientInfoActivityTracking(t *testing.T) {
 	defer func() { _ = conn.Close() }()
 
 	before := queryClientInfo(t, conn, clientID)
-	// Send a chat message to bump activity.
+	// Send a chat message to increase received bytes.
 	send(t, conn, netproto.MsgChatSend, netproto.ChatSend{Text: "bump"})
 	after := queryClientInfo(t, conn, clientID)
 	if after.BytesIn <= before.BytesIn {
 		t.Fatalf("bytes_in did not increase: before=%d after=%d", before.BytesIn, after.BytesIn)
-	}
-	if after.IdleSeconds > before.IdleSeconds+2 {
-		t.Fatalf("idle not refreshed: before=%d after=%d", before.IdleSeconds, after.IdleSeconds)
 	}
 }
 

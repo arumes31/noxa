@@ -229,11 +229,10 @@ func ewmaRTT(prev, sample int64, known bool) int64 {
 
 // clientStats returns a snapshot of the Client Info stats.
 type clientStats struct {
-	lastActive time.Time
-	bytesIn    int64
-	bytesOut   int64
-	rttNs      int64
-	rttKnown   bool
+	bytesIn  int64
+	bytesOut int64
+	rttNs    int64
+	rttKnown bool
 }
 
 // stats returns a snapshot of the activity stats.
@@ -241,11 +240,10 @@ func (c *Client) stats() clientStats {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return clientStats{
-		lastActive: c.lastActive,
-		bytesIn:    c.bytesIn,
-		bytesOut:   c.bytesOut,
-		rttNs:      c.rttNs,
-		rttKnown:   c.rttKnown,
+		bytesIn:  c.bytesIn,
+		bytesOut: c.bytesOut,
+		rttNs:    c.rttNs,
+		rttKnown: c.rttKnown,
 	}
 }
 

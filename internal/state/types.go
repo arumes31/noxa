@@ -24,6 +24,8 @@ type Client struct {
 	Nickname   string
 	ChannelID  int64 // 0 means no channel
 	IsSpeaking bool
+	// LastSpokeAt records when speech last stopped, independently of network traffic.
+	LastSpokeAt time.Time `json:"-"`
 	// PrioritySpeaker marks TS3-style priority speakers (channel commanders):
 	// clients duck other publishers while a priority speaker talks.
 	PrioritySpeaker bool
