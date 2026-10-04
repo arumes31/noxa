@@ -316,17 +316,49 @@ for (const audioLabel of ["Application Audio", "System Audio"]) {
         }, audioLabel);
         await page.getByRole("combobox", { name: "Share audio", exact: true }).selectOption("application");
         await page.getByRole("button", { name: "Share screen", exact: true }).click();
-        if (audioLabel === "Application Audio") {
-            await expect(page.locator('.call-media-tile[data-local="true"][data-source="screen"]')).toBeVisible();
-            await expect(page.getByRole("combobox", { name: "Share audio", exact: true })).toBeDisabled();
-            await page.getByRole("button", { name: "Stop sharing", exact: true }).click();
-        } else {
-            await expect.poll(() => page.evaluate(() => window.__warnings.join(" "))).toContain("Application-only audio was not available");
-            await expect(page.locator('.call-media-tile[data-source="screen"]')).toHaveCount(0);
+        await expect(page.locator('.call-media-tile[data-local="true"][data-source="screen"]')).toBeVisible();
+        await expect(page.getByRole("combobox", { name: "Share audio", exact: true })).toBeDisabled();
+        if (audioLabel !== "Application Audio") {
+            await expect.poll(() => page.evaluate(() => window.__warnings.join(" "))).toContain("Application audio unavailable. Sharing without audio.");
+            expect(await page.evaluate(() => window.__displayStream.getAudioTracks().length)).toBe(0);
         }
+        await page.getByRole("button", { name: "Stop sharing", exact: true }).click();
         expect(await page.evaluate(() => window.__displayStream.getTracks().every(t => t.readyState === "ended"))).toBe(true);
         expect(await page.evaluate(() => window.__displayOptions)).toMatchObject({ video: { displaySurface: "window" }, windowAudio: "window", systemAudio: "exclude" });
-        await expect(page.getByRole("combobox", { name: "Share audio", exact: true })).toHaveValue("application");
+        await expect(page.getByRole("combobox", { name: "Share audio", exact: true })).toHaveValue(audioLabel === "Application Audio" ? "application" : "none");
+    });
+}
+
+for (const captureError of ["NotReadableError", "NotSupportedError", "NotAllowedError", "AbortError"]) {
+    test(`private-call application audio handles ${captureError}`, async ({ page }) => {
+        await mountCallRaceFixture(page);
+        await page.evaluate(async captureError => {
+            await window.__callsModule.startPrivateCall("alice");
+            window.__displayAttempts = [];
+            navigator.mediaDevices.getDisplayMedia = async options => {
+                window.__displayAttempts.push(options);
+                if (options.audio) throw new DOMException("audio unavailable", captureError);
+                window.__displayStream = await navigator.mediaDevices.getUserMedia({ video: true });
+                return window.__displayStream;
+            };
+        }, captureError);
+        await page.getByRole("combobox", { name: "Share audio", exact: true }).selectOption("application");
+        await page.getByRole("button", { name: "Share screen", exact: true }).click();
+        const cancelled = ["NotAllowedError", "AbortError"].includes(captureError);
+        if (cancelled) {
+            await expect(page.getByRole("button", { name: "Share screen", exact: true })).toBeVisible();
+            await expect(page.locator('.call-media-tile[data-source="screen"]')).toHaveCount(0);
+            expect(await page.evaluate(() => window.__displayAttempts.length)).toBe(1);
+            expect(await page.evaluate(() => window.__warnings.join(" "))).not.toContain("Sharing without audio");
+        } else {
+            await expect(page.locator('.call-media-tile[data-local="true"][data-source="screen"]')).toBeVisible();
+            expect(await page.evaluate(() => window.__displayAttempts.length)).toBe(2);
+            expect(await page.evaluate(() => window.__displayAttempts[1])).toMatchObject({ audio: false, windowAudio: "exclude", systemAudio: "exclude" });
+            expect(await page.evaluate(() => window.__warnings)).toEqual(["Application audio unavailable. Sharing without audio."]);
+            await expect(page.getByRole("combobox", { name: "Share audio", exact: true })).toHaveValue("none");
+            await page.getByRole("button", { name: "Stop sharing", exact: true }).click();
+            expect(await page.evaluate(() => window.__displayStream.getTracks().every(track => track.readyState === "ended"))).toBe(true);
+        }
     });
 }
 

@@ -38,10 +38,11 @@ test.beforeEach(async ({ page }) => {
             },
         };
         const cameraSender = pc.addTransceiver(camera, { direction: "sendrecv" }).sender;
-        window.__media = { camera, cameraSender, offers: [], errors: [], displayTracks: [] };
+        window.__media = { camera, cameraSender, offers: [], errors: [], notices: [], displayTracks: [] };
         window.__noxa = { state: { pc, localStream, serverGeneration: 1, activeTabID: "media-tab", settings: {}, myChannelID: 1,
             myClientID: "self", clients: [{ client_id: "peer", channel_id: 1 }] },
-            $: id => document.getElementById(id), sysMsg: message => window.__media.errors.push(message) };
+            $: id => document.getElementById(id), sysMsg: message => window.__media.errors.push(message),
+            toast: message => window.__media.notices.push(message) };
         window.go = { main: { App: { WebRTCOfferForTab: async (tab, _sdp, slots) => {
             if (tab !== "media-tab") throw new Error("wrong server tab");
             if (window.__media.failOffer) throw new Error("offer rejected");
@@ -179,7 +180,7 @@ test("application audio publishes in its own slot, labels status and survives so
 });
 
 for (const [label, surface] of [["System Audio", "window"], ["", "window"], ["Application Audio", "monitor"]]) {
-    test(`application capture blocks broader or unknown audio (${label}/${surface}) before replacing the old share`, async ({ page }) => {
+    test(`application capture replaces the old share with video only for ${label}/${surface}`, async ({ page }) => {
         await page.locator("#voice-screen").click();
         await page.getByRole("button", { name: "Start sharing", exact: true }).click();
         await expect(page.locator(".sharing-change")).toBeEnabled();
@@ -189,9 +190,49 @@ for (const [label, surface] of [["System Audio", "window"], ["", "window"], ["Ap
         await page.getByLabel("Window", { exact: true }).check();
         await page.locator(".sh-audio").selectOption("application");
         await page.getByRole("button", { name: "Start sharing", exact: true }).click();
-        await expect.poll(() => page.evaluate(() => window.__media.errors.join(" "))).toContain("Application-only audio was not available");
-        expect(await page.evaluate(() => window.__media.offers.length)).toBe(before);
-        expect(await page.evaluate(() => window.__media.displayTracks.map(t => t.readyState))).toEqual(["live", "ended", "ended"]);
+        await expect.poll(() => page.evaluate(() => window.__media.notices)).toEqual(["Application audio unavailable. Sharing without audio."]);
+        expect(await page.evaluate(() => window.__media.offers.length)).toBeGreaterThan(before);
+        expect(await page.evaluate(() => window.__media.offers.at(-1).map(t => t.slot))).not.toContain("screenaudio");
+        expect(await page.evaluate(() => window.__media.displayTracks.filter(t => t.kind === "video").map(t => t.readyState))).toEqual(["ended", "live"]);
+        expect(await page.evaluate(() => window.__media.displayTracks.filter(t => t.kind === "audio").map(t => t.readyState))).toEqual(["ended"]);
+        expect(await page.evaluate(() => window.__media.errors)).toEqual([]);
+        await expect(page.locator("#sharing-status")).toContainText("Share audio off");
+    });
+}
+
+test("window capture without an audio track starts video and notifies once", async ({ page }) => {
+    await page.locator("#voice-screen").click();
+    await page.getByLabel("Window", { exact: true }).check();
+    await page.getByRole("button", { name: "Start sharing", exact: true }).click();
+    await expect(page.locator("#sharing-status")).toContainText("Share audio off");
+    expect(await page.evaluate(() => window.__media.displayTracks.map(t => t.readyState))).toEqual(["live"]);
+    expect(await page.evaluate(() => window.__media.notices)).toEqual(["Application audio unavailable. Sharing without audio."]);
+});
+
+for (const error of ["NotReadableError", "NotSupportedError", "NotAllowedError", "AbortError"]) {
+    test(`window audio capture handles ${error} without losing the old share on cancellation`, async ({ page }) => {
+        await page.locator("#voice-screen").click();
+        await page.getByRole("button", { name: "Start sharing", exact: true }).click();
+        await expect(page.locator(".sharing-change")).toBeEnabled();
+        await page.evaluate(error => {
+            const capture = navigator.mediaDevices.getDisplayMedia;
+            window.__media.captureAttempts = [];
+            Object.defineProperty(navigator.mediaDevices, "getDisplayMedia", { configurable: true, value: async options => {
+                window.__media.captureAttempts.push(options);
+                if (options.audio) throw new DOMException("capture audio unavailable", error);
+                return capture(options);
+            } });
+        }, error);
+        await page.locator(".sharing-change").click();
+        await page.getByLabel("Window", { exact: true }).check();
+        await page.locator(".sh-audio").selectOption("application");
+        await page.getByRole("button", { name: "Start sharing", exact: true }).click();
+        await expect.poll(() => page.evaluate(() => !!window.__noxa.state.shareStarting)).toBe(false);
+        const cancelled = ["NotAllowedError", "AbortError"].includes(error);
+        expect(await page.evaluate(() => window.__media.captureAttempts.length)).toBe(cancelled ? 1 : 2);
+        expect(await page.evaluate(() => window.__media.displayTracks.map(t => t.readyState))).toEqual(cancelled ? ["live"] : ["ended", "live"]);
+        expect(await page.evaluate(() => window.__media.notices)).toEqual(cancelled ? [] : ["Application audio unavailable. Sharing without audio."]);
+        if (!cancelled) expect(await page.evaluate(() => window.__media.captureAttempts[1])).toMatchObject({ audio: false, windowAudio: "exclude", systemAudio: "exclude" });
         await expect(page.locator("#sharing-status")).toContainText("Share audio off");
     });
 }

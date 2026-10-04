@@ -277,6 +277,7 @@ export function createVideoPublication({ policy }) {
     // track independently of the camera, optionally merges display
     // audio (70), and applies the quality preset (72).
     async function startShare({ surface, preset, custom, audioMode, replacing = false }) {
+        const requestedAudioMode = audioMode;
         const { state } = V();
         const generation = state.serverGeneration;
         const tabID = state.activeTabID;
@@ -316,12 +317,11 @@ export function createVideoPublication({ policy }) {
             display = await navigator.mediaDevices.getDisplayMedia(gdm);
         } catch (e) {
             if (!current()) return;
-            if (audioMode === "system" && e.name !== "NotAllowedError" && e.name !== "AbortError") {
-                // (70) WebView2 may refuse display audio (works on Windows for
-                // screen/tab shares) — retry video-only and say so.
-                V().sysMsg(tLabel("runtime.shareVideoOnly", { error: e.message || e.name }));
+            if (audioMode !== "none" && e.name !== "NotAllowedError" && e.name !== "AbortError") {
+                // A runtime can refuse display audio. Retry without audio, but
+                // never reopen the picker after cancellation or denied access.
                 try {
-                    display = await navigator.mediaDevices.getDisplayMedia(Object.assign({}, gdm, { audio: false }));
+                    display = await navigator.mediaDevices.getDisplayMedia({ ...gdm, ...displayAudioOptions("none") });
                     audioMode = "none";
                 } catch (e2) {
                     if (!current()) return;
@@ -329,7 +329,7 @@ export function createVideoPublication({ policy }) {
                     return;
                 }
             } else {
-                V().sysMsg(audioMode === "application" ? tLabel("share.applicationUnavailable") : tLabel("desktop.screen.capture.failed") + (e.message || e.name));
+                V().sysMsg(tLabel("desktop.screen.capture.failed") + (e.message || e.name));
                 return;
             }
         }
@@ -337,9 +337,7 @@ export function createVideoPublication({ policy }) {
             discardDisplay(display);
             return;
         }
-        try { validateDisplayAudio(display, audioMode); }
-        catch (error) { discardDisplay(display); V().sysMsg(tLabel(error.message)); return; }
-        if (audioMode === "system" && !display.getAudioTracks().length) V().sysMsg(tLabel("share.audioNotSelected"));
+        audioMode = validateDisplayAudio(display, audioMode);
         const screenTrack = display.getVideoTracks()[0];
         if (!screenTrack) {
             discardDisplay(display);
@@ -497,6 +495,9 @@ export function createVideoPublication({ policy }) {
             return;
         }
         syncShareButton();
+        if (requestedAudioMode !== "none" && audioMode === "none") {
+            V().toast(tLabel(requestedAudioMode === "application" ? "share.applicationUnavailable" : "share.audioNotSelected"), "warn");
+        }
         startShareStatus({ stream: display, pc: peerConnection, scope: shareScope, preset: p, surface, audioMode,
             generation: publicationSnapshot().find(p => p.publication.slot === "screen")?.generation,
             stop: () => { V().$("voice-screen").focus(); void doStopShare(); }, change: () => openShareDialog(true, preset, audioMode, surface, custom),
