@@ -1,5 +1,5 @@
 import { t } from "./i18n.js";
-import { captureConstraints, createRemoteAudioSource, getUserVolume, isUserMuted, getUserShareVolume, isUserShareMuted, renderMicStatus } from "./audio.js";
+import { captureConstraints, createRemoteAudioSource, getUserVolume, isUserMuted, getUserShareVolume, isUserShareMuted, renderMicStatus, VAD_RELEASE_MS } from "./audio.js";
 import { watchMicrophone, watchAudioOutput } from "./microphone-recovery.js";
 import { closeDialog, confirmDialog, isCurrentServerDialog, mountServerDialog } from "./modal.js";
 import { sessionUserID } from "./session-identity.js";
@@ -369,7 +369,7 @@ function syncAudio(owner) {
         owner.speaking = level > 0.015;
         if (level > (state.settings?.vad_threshold ?? 50) / 100 * 0.2) owner.lastVoice = Date.now();
     }
-    const transmit = mode === "continuous" || (mode === "vad" ? Date.now() - (owner.lastVoice || 0) < 300 : owner.ptt || state.pttActive);
+    const transmit = mode === "continuous" || (mode === "vad" ? Date.now() - (owner.lastVoice || 0) < VAD_RELEASE_MS : owner.ptt || state.pttActive);
     for (const track of owner.stream?.getAudioTracks() || []) track.enabled = !!(!owner.muted && !owner.deafened && !state.muted && !state.deafened && transmit);
     for (const [uid, peer] of owner.peers) {
         if (!acceptedPeer(owner, uid)) { closePeer(peer); owner.peers.delete(uid); owner.media.updateGrid(); continue; }

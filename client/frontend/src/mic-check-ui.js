@@ -1,6 +1,6 @@
 import { MicCheck, micDB } from "./mic-check.js";
 import { t } from "./i18n.js";
-import { captureConstraints } from "./audio.js";
+import { captureConstraints, VAD_RELEASE_MS } from "./audio.js";
 import "./mic-check.css";
 
 function element(tag, className, text) {
@@ -156,7 +156,7 @@ export function createMicCheck(settings, { onStart }) {
             ptt.hidden = mode !== "ptt" || mic.current.mode !== "test";
             const above = level.mean > value / 100 * 0.2;
             if (above) lastAbove = performance.now();
-            const active = mode === "continuous" || (mode === "ptt" ? held : performance.now() - lastAbove < 300);
+            const active = mode === "continuous" || (mode === "ptt" ? held : performance.now() - lastAbove < VAD_RELEASE_MS);
             transmission.dataset.active = String(active);
             text(transmission, t(active ? mode === "vad" && !above ? "mic.release" : "mic.transmit" : mode === "ptt" ? "mic.waitPTT" : "mic.below"));
             const binding = window.__noxa.state.pttShortcutStatus;

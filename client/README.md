@@ -35,6 +35,9 @@ fontsource — fully offline in WebView2):
   download UI itself is future work), Chat (max lines, per-scope file
   logging), Security (identity manager: UID display/copy, export/import,
   regenerate), Notifications (toast + synthesized sound toggles).
+- Voice activation keeps transmission open for 450 ms after the last detected
+  speech to preserve quiet word endings. Channels, private calls, and the mic
+  preview use the same release time; mute and deafen remain immediate.
 - **Left** — wordmark + connection pill, channel tree with nesting indent
   lines, users with avatar circles (initials fallback) and a pulsing
   speaking glow ring.

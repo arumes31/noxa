@@ -30,7 +30,7 @@ import { initClientInfo } from "./clientinfo.js";
 import { initUpdater, startupAutoCheck } from "./updater.js";
 import { playEvent, playAlert, clearSpeech, initSounds, updateSoundOutput, updateConversationDucking, soundEngine, speechQueue } from "./sounds.js";
 import { initClosingAudio } from "./closing-audio.js";
-import { startMicMeter, stopMicMeter, pttRelease, refreshUserAudio, setUserShareVolume, setUserShareMuted, captureConstraints, markCaptureProfile, applyCaptureProfile, syncMuteButton, renderMicStatus } from "./audio.js";
+import { startMicMeter, stopMicMeter, pttRelease, refreshUserAudio, setUserShareVolume, setUserShareMuted, captureConstraints, markCaptureProfile, applyCaptureProfile, syncMuteButton, renderMicStatus, VAD_RELEASE_MS } from "./audio.js";
 import {
     initVideo, videoTrackAdded, videoTrackRemoved, videoSpeaking,
     videoRefreshNames, clearVideoGrid, shareToggle, setLowBandwidth, isLowBandwidth,
@@ -2624,7 +2624,7 @@ function startVoiceMonitor() {
                 if (level > threshold) {
                     lastVoice = Date.now();
                     if (!state.pttActive) setPTT(true);
-                } else if (state.pttActive && Date.now() - lastVoice > 300) {
+                } else if (state.pttActive && Date.now() - lastVoice > VAD_RELEASE_MS) {
                     setPTT(false);
                 }
             }

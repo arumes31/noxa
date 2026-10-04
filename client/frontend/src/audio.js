@@ -7,6 +7,9 @@ import { updateLocalSettings } from "./settings-store.js";
 
 const V = () => window.__noxa;
 
+// Keep quiet word endings audible in channels, private calls, and the mic preview.
+export const VAD_RELEASE_MS = 450;
+
 // Incoming tracks arrive outside a user gesture. Resume their WebAudio context
 // explicitly and retry from user interaction if autoplay initially suspends it.
 export async function resumeAudioPlayback(context) {
