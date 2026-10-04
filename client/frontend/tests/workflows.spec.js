@@ -8212,8 +8212,9 @@ test("removes cascaded deleted channels and displaces every cached member safely
     await expect(page.locator("#voice-status")).toHaveText("voice off");
 });
 
-test("starts voice, plays the original channel join cue, and switches channels", async ({ page }) => {
+test("starts voice and uses channel effect cues when speech is disabled", async ({ page }) => {
     await page.evaluate(async () => {
+        window.__noxa.state.settings.spoken_messages = false;
         window.__getUserMediaCalls = 0;
         window.__playedMedia = [];
         const engine = window.__noxa.soundEngine;
@@ -10512,6 +10513,8 @@ test("uses grouped, distinct action sounds without replaying historical tab acti
         state.settings = {
             ...state.settings,
             activation_mode: "ptt",
+            // This test covers effect fallback; speech preference has its own suite.
+            spoken_messages: false,
             ptt_release_delay_ms: 0,
             event_sounds: {},
             notify_matrix: {},
@@ -10692,6 +10695,7 @@ test("uses grouped, distinct action sounds without replaying historical tab acti
     expect(result.groups).toEqual(expect.arrayContaining([
         "Connection", "Your channel", "Other users", "Voice controls", "Notifications",
     ]));
+    await page.getByText("Individual sound effects", { exact: true }).click();
     await expect(page.getByText("Channel message", { exact: true })).toBeVisible();
 });
 
