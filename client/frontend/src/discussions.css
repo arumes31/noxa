@@ -3,6 +3,7 @@
 .discussion-header h2{flex:1;margin:0;font-family:var(--font-display);font-size:1.4286rem;overflow-wrap:anywhere}
 .discussion-dialog .discussion-toolbar button{min-height:36px}
 .discussion-dialog .discussion-new{border-color:var(--accent);background:var(--accent-dim);color:var(--accent)}
+.discussion-dialog .discussion-delete{color:var(--danger)}
 .discussion-filters{display:flex;align-items:center;flex-wrap:wrap;gap:10px;width:100%;min-width:0;margin-top:4px;padding-top:12px;border-top:1px solid var(--border)}
 .discussion-filters .dlg-input{flex:1 1 120px;width:auto;min-width:0;min-height:38px;max-width:100%}
 .discussion-filters .discussion-check{min-height:38px;padding:0 4px}

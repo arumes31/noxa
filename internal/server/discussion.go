@@ -52,7 +52,7 @@ func (s *TCPServer) handleDiscussion(ctx context.Context, client *Client, frame 
 			capability = authorization.SendMessages
 		case "configure":
 			capability = authorization.ManageChannels
-		case "pin":
+		case "pin", "delete", "delete_message":
 			capability = authorization.ManageMessages
 		case "archive", "reopen", "edit", "resolve":
 			capability = authorization.ManageMessages
@@ -93,7 +93,9 @@ func (s *TCPServer) handleDiscussion(ctx context.Context, client *Client, frame 
 				}
 				gens := map[uint32]bool{}
 				for _, m := range result.Messages {
-					gens[m.KeyID] = true
+					if !m.Deleted {
+						gens[m.KeyID] = true
+					}
 				}
 				result.Keys, result.Refused, _ = s.scopeKeyBundle(ctx, r.ChannelID, pub, gens)
 			}
@@ -101,9 +103,18 @@ func (s *TCPServer) handleDiscussion(ctx context.Context, client *Client, frame 
 			result.CanModerate = s.roleAllowed(ctx, client, r.ChannelID, authorization.ManageMessages)
 			if mutation && r.Action != "subscribe" && r.Action != "join" && r.Action != "leave" {
 				event := map[string]any{"channel_id": r.ChannelID, "thread_id": result.ThreadID, "new_message": r.Action == "send" || r.Action == "create", "author": client.UniqueID}
-				s.broadcastScope(ctx, r.ChannelID, "discussion_changed", event)
+				if r.Action == "delete" {
+					event["deleted"] = true
+				}
+				if r.Action == "delete_message" {
+					event["deleted_message_id"] = r.MessageID
+				}
+				deleted := r.Action == "delete" || r.Action == "delete_message"
+				if !deleted {
+					s.broadcastScope(ctx, r.ChannelID, "discussion_changed", event)
+				}
 				if result.ThreadID > 0 {
-					s.notifyDiscussionFollowers(ctx, backend, r.ChannelID, result.ThreadID, event)
+					s.notifyDiscussionReaders(ctx, backend, r.ChannelID, result.ThreadID, event, deleted)
 				}
 			}
 			return s.writeCommittedReply(client, netproto.MsgDiscussionResult, result)
@@ -111,18 +122,22 @@ func (s *TCPServer) handleDiscussion(ctx context.Context, client *Client, frame 
 	})
 }
 
-func (s *TCPServer) notifyDiscussionFollowers(ctx context.Context, backend discussionStore, channelID, threadID int64, event any) {
+func (s *TCPServer) notifyDiscussionReaders(ctx context.Context, backend discussionStore, channelID, threadID int64, event any, allReaders bool) {
 	if s.deps.State == nil || s.deps.Broadcast == nil {
 		return
 	}
 	clients := s.deps.State.ListClients()
-	online := make([]string, 0, len(clients))
-	for _, client := range clients {
-		online = append(online, client.UniqueID)
-	}
-	followers, err := backend.DiscussionFollowers(ctx, threadID, online)
-	if err != nil {
-		return
+	var followers map[string]bool
+	if !allReaders {
+		online := make([]string, 0, len(clients))
+		for _, client := range clients {
+			online = append(online, client.UniqueID)
+		}
+		var err error
+		followers, err = backend.DiscussionFollowers(ctx, threadID, online)
+		if err != nil {
+			return
+		}
 	}
 	payload, err := eventEnvelope("discussion_changed", event)
 	if err != nil {
@@ -132,8 +147,10 @@ func (s *TCPServer) notifyDiscussionFollowers(ctx context.Context, backend discu
 	if err != nil {
 		return
 	}
+	// Deletions invalidate every authorized open view, including readers who
+	// have not followed or whose join raced with the deletion transaction.
 	for _, sc := range clients {
-		if !followers[sc.UniqueID] || sc.ChannelID == channelID || s.deps.State.IsSubscribed(sc.ClientID, channelID) {
+		if !allReaders && (!followers[sc.UniqueID] || sc.ChannelID == channelID || s.deps.State.IsSubscribed(sc.ClientID, channelID)) {
 			continue
 		}
 		if client, ok := s.clientByID(sc.ClientID); ok {

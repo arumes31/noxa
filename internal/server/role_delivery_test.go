@@ -10,6 +10,43 @@ import (
 	"noxa/internal/netproto"
 )
 
+func TestRoleQueuedDiscussionDeliveryRechecksReadHistory(t *testing.T) {
+	backend := serverRoleFixture()
+	backend.policy.Roles[0].Permissions = []authorization.Capability{authorization.ViewChannel, authorization.ReadHistory}
+	authority, err := authorization.NewAuthority(t.Context(), backend, func(context.Context, *authorization.RoleEvaluator, *authorization.RoleEvaluator) error { return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	env := startTestEnvDeps(t, nil, nil, func(d *Deps) { d.Authority = authority })
+	defer env.stop()
+	conn, id := dialAuthed(t, env.addr, "admin-uid")
+	defer func() { _ = conn.Close() }()
+	client, _ := env.srv.clientByID(id)
+	inner, err := eventEnvelope("discussion_changed", map[string]any{"channel_id": 1, "thread_id": 7, "deleted": true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	queued, err := eventEnvelope(roleChannelDelivery, roleChannelEvent{ChannelID: 1, Payload: inner})
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, err := authorization.NewRoleEvaluator(backend.policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if frame, err := env.srv.roleBroadcastFrame(client, queued, before); err != nil || frame == nil || string(frame.Payload) != string(inner) {
+		t.Fatalf("authorized discussion update: %+v %v", frame, err)
+	}
+	backend.policy.Roles[0].Permissions = []authorization.Capability{authorization.ViewChannel}
+	after, err := authorization.NewRoleEvaluator(backend.policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if frame, err := env.srv.roleBroadcastFrame(client, queued, after); err != nil || frame != nil {
+		t.Fatalf("discussion update survived read-history revocation: %+v %v", frame, err)
+	}
+}
+
 func TestRoleQueuedDeliveryUsesCurrentPolicy(t *testing.T) {
 	backend := serverRoleFixture()
 	backend.policy.Roles[0].Permissions = []authorization.Capability{authorization.ViewChannel, authorization.Connect, authorization.Speak, authorization.Whisper}

@@ -1,5 +1,5 @@
 import { t } from "./i18n.js";
-import { closeDialog, isCurrentServerDialog, mountServerDialog } from "./modal.js";
+import { closeDialog, confirmDialog, isCurrentServerDialog, mountServerDialog } from "./modal.js";
 import { sessionUserID } from "./session-identity.js";
 import { voiceMessageButton, renderVoiceMessage } from "./voice-messages.js";
 import { openWebhooks } from "./webhooks.js";
@@ -38,7 +38,7 @@ export function resetDiscussions() { closeDiscussions(); channelBoards.clear(); 
 export async function discussionChanged(event) {
     const board = channelBoards.get(boardKey(Number(event.channel_id)));
     if (board) { board.loaded = false; board.repaint?.(); }
-    if (active && Number(event.channel_id) === active.channelID) { active.refresh(); return; }
+    if (active && Number(event.channel_id) === active.channelID) { active.changed(event); return; }
     if (!event.new_message || !event.thread_id || event.author === sessionUserID(V().state) || notifying) return;
     const { activeTabID: tabID, serverGeneration: generation } = V().state;
     notifying = true;
@@ -120,6 +120,7 @@ export function openDiscussions(channelID, source = null, initialThreadID = 0, t
     dialog.append(header, toolbar, content, status);
     let busy = false, pendingRefresh = false, selected = initialThreadID, data = null, archived = false, tag = "", following = false;
     let mode = "list", replyDraft = "", messages = [], posts = [], requestSequence = 0;
+    const deletedMessages = new Set();
     let targetPages = 0;
     const current = () => isCurrentServerDialog(overlay) && tabID === V().state.activeTabID && generation === V().state.serverGeneration;
     const disable = value => { for (const control of dialog.querySelectorAll("button,input,textarea,select")) control.disabled = value; };
@@ -137,6 +138,10 @@ export function openDiscussions(channelID, source = null, initialThreadID = 0, t
                 if (board) { board.loaded = false; board.repaint?.(); }
             }
             if (action === "create") selected = result.thread_id;
+            if (action === "delete") {
+                selected = 0; messages = []; replyDraft = ""; targetMessageID = 0;
+                pendingRefresh = true;
+            }
             if (selected) {
                 mode = "thread";
                 const merged = append ? [...(result.messages || []), ...messages] : [...(result.messages || [])];
@@ -170,6 +175,17 @@ export function openDiscussions(channelID, source = null, initialThreadID = 0, t
         return selected ? request("get") : request("list", { archived, tags: tag ? [tag] : [] });
     };
     const back = () => { selected = 0; replyDraft = ""; mode = "list"; void refresh(); };
+    const deleteContent = async (messageID = 0) => {
+        const threadID = selected;
+        const confirmed = await confirmDialog({
+            title: t(messageID ? "chat.deleteTitle" : "discussion.deleteTitle"),
+            message: t(messageID ? "chat.deleteHelp" : "discussion.deleteHelp"),
+            confirmLabel: t(messageID ? "chat.deleteConfirm" : "discussion.delete"),
+            danger: true, serverScoped: true,
+        });
+        if (!confirmed || !current() || selected !== threadID) return;
+        await request(messageID ? "delete_message" : "delete", messageID ? { message_id: messageID } : {});
+    };
     const render = () => {
         toolbar.replaceChildren(); content.replaceChildren();
         heading.textContent = selected ? data.threads?.[0]?.title || t("discussion.title") : t(data.forum ? "discussion.forum" : "discussion.title");
@@ -221,15 +237,27 @@ export function openDiscussions(channelID, source = null, initialThreadID = 0, t
             toolbar.append(button("discussion.edit", () => editThread(thread)), button(thread.resolved ? "discussion.unresolve" : "discussion.resolve", () => request("resolve", { resolved: !thread.resolved })));
         }
         if (data.can_moderate) toolbar.append(button(thread.pinned ? "discussion.unpin" : "discussion.pin", () => request("pin", { pinned: !thread.pinned })));
+        if (data.can_moderate) {
+            const remove = button("discussion.delete", () => deleteContent());
+            remove.className = "discussion-delete";
+            toolbar.append(remove);
+        }
         if (thread.root_message_id) content.append(el("p", "discussion-hint", t("discussion.source")));
         if (data.has_more && messages.length) content.append(button("discussion.loadMore", () => request("get", { before_id: messages[0].id }, true)));
         for (const message of messages) {
             const row = el("article", "discussion-message");
             row.dataset.discussionMessage = message.id;
             const body = el("div", "discussion-message-body");
-            if (!renderVoiceMessage(body, message.body, { tabID, channelID, isCurrent: current })) body.textContent = message.body || "";
+            const deleted = message.deleted || deletedMessages.has(message.id);
+            if (deleted) body.textContent = t("polish.deleted");
+            else if (!renderVoiceMessage(body, message.body, { tabID, channelID, isCurrent: current })) body.textContent = message.body || "";
             row.append(el("strong", "", message.from_nickname), el("span", "discussion-meta", ` · ${new Date(message.sent_at * 1000).toLocaleString()}`), body);
-            if (window.__noxaMessageTools?.save) row.append(button("discussion.saveMessage", () => window.__noxaMessageTools.save({kind:"thread", channel_id:channelID, thread_id:selected, message_id:message.id})));
+            if (!deleted && window.__noxaMessageTools?.save) row.append(button("discussion.saveMessage", () => window.__noxaMessageTools.save({kind:"thread", channel_id:channelID, thread_id:selected, message_id:message.id})));
+            if (!deleted && data.can_moderate) {
+                const remove = button("chat.deleteConfirm", () => deleteContent(message.id));
+                remove.className = "discussion-delete";
+                row.append(remove);
+            }
             content.append(row);
         }
         if (thread.archived || !thread.joined) { content.append(el("p", "discussion-hint", t(thread.archived ? "discussion.archivedHint" : "discussion.joinHint"))); return; }
@@ -290,7 +318,25 @@ export function openDiscussions(channelID, source = null, initialThreadID = 0, t
         };
         content.append(form);
     };
-    active = { overlay, channelID, refresh };
+    active = { overlay, channelID, refresh, changed(event) {
+        if (Number(event.thread_id) === selected) {
+            if (event.deleted) {
+                requestSequence++;
+                selected = 0; messages = []; replyDraft = ""; targetMessageID = 0; mode = "list";
+                toolbar.replaceChildren(); content.replaceChildren();
+                heading.textContent = t("discussion.title");
+            } else if (Number(event.deleted_message_id) > 0) {
+                const messageID = Number(event.deleted_message_id);
+                deletedMessages.add(messageID);
+                const row = content.querySelector(`[data-discussion-message="${messageID}"]`);
+                if (row) {
+                    row.querySelector(".discussion-message-body").textContent = t("polish.deleted");
+                    for (const control of row.querySelectorAll("button")) control.remove();
+                }
+            }
+        }
+        void refresh();
+    } };
     mountServerDialog(overlay, { onClose: () => { requestSequence++; if (active?.overlay === overlay) active = null; } });
     void request(selected ? "get" : "list").then(ok => { if (ok && source && current()) createForm(source); });
 }

@@ -30,7 +30,16 @@ async function open(page) {
             if (request.action === "archive" || request.action === "reopen") thread.archived = request.action === "archive";
             if (request.action === "join" || request.action === "leave") { thread.joined = request.action === "join"; thread.subscribed = thread.joined; }
             if (request.action === "subscribe") thread.subscribed = request.subscribed;
-            return { action: request.action, channel_id: request.channel_id, thread_id: thread?.id || 0, forum: db.forum, tags: db.tags, auto_archive_hours:db.auto_archive_hours||0, can_manage: true, can_moderate: true, has_more: false,
+            if (request.action === "delete_message") {
+                const message = db.messages.get(thread.id).find(message => message.id === request.message_id);
+                if (!message.deleted) thread.message_count--;
+                Object.assign(message, { deleted: true, body: "" });
+            }
+            if (request.action === "delete") {
+                db.threads = db.threads.filter(value => value.id !== thread.id);
+                db.messages.delete(thread.id); thread = null;
+            }
+            return { action: request.action, channel_id: request.channel_id, thread_id: thread?.id || request.thread_id || 0, forum: db.forum, tags: db.tags, auto_archive_hours:db.auto_archive_hours||0, can_manage: true, can_moderate: window.__canModerate !== false, has_more: false,
                 threads: structuredClone(thread ? [thread] : db.threads.filter(thread => thread.archived === Boolean(request.archived) && (request.tags || []).every(tag => thread.tags.includes(tag)))),
                 messages: structuredClone(thread ? db.messages.get(thread.id) : []) };
         } } } };
@@ -47,6 +56,59 @@ async function create(page) {
     await page.getByLabel("Message", { exact: true }).fill("Which microphone works best?");
     await page.getByRole("button", { name: "Create post", exact: true }).click();
     await expect(page.getByRole("heading", { name: "Audio troubleshooting" })).toBeVisible();
+}
+
+test("moderators confirm deletion of another author's reply and whole thread", async ({ page }) => {
+    await open(page); await create(page);
+    await page.evaluate(() => { window.__discussionData.threads[0].author = "other"; });
+    await page.getByRole("button", { name: "Refresh", exact: true }).click();
+    await page.locator(".discussion-message").getByRole("button", { name: "Delete message", exact: true }).click();
+    await page.getByRole("button", { name: "Cancel", exact: true }).click();
+    expect(await page.evaluate(() => window.__requests.some(r => r.action === "delete_message"))).toBe(false);
+    await page.locator(".discussion-message").getByRole("button", { name: "Delete message", exact: true }).click();
+    await page.getByRole("dialog", { name: "Delete message?", exact: true }).getByRole("button", { name: "Delete message", exact: true }).click();
+    await expect(page.locator(".discussion-message-body")).toHaveText("Message deleted");
+    await expect(page.locator(".discussion-message button")).toHaveCount(0);
+    expect(await page.evaluate(() => window.__requests.find(r => r.action === "delete_message"))).toMatchObject({ tabID: "server-a", channel_id: 7, thread_id: 1, message_id: 1 });
+    await page.getByRole("button", { name: "Delete thread", exact: true }).click();
+    await expect(page.getByRole("dialog", { name: "Delete thread?", exact: true })).toContainText("all its replies");
+    await page.getByRole("dialog", { name: "Delete thread?", exact: true }).getByRole("button", { name: "Delete thread", exact: true }).click();
+    await expect(page.getByRole("heading", { name: "Channel threads", exact: true })).toBeVisible();
+    await expect(page.locator(".discussion-post")).toHaveCount(0);
+    expect(await page.evaluate(() => window.__requests.find(r => r.action === "delete"))).toMatchObject({ tabID: "server-a", channel_id: 7, thread_id: 1 });
+});
+
+test("members cannot delete discussion content and server changes cancel confirmed deletion", async ({ page }) => {
+    await open(page); await create(page);
+    await page.evaluate(() => { window.__canModerate = false; });
+    await page.getByRole("button", { name: "Refresh", exact: true }).click();
+    await expect(page.getByRole("button", { name: "Delete thread", exact: true })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Delete message", exact: true })).toHaveCount(0);
+    await page.evaluate(() => { window.__canModerate = true; });
+    await page.getByRole("button", { name: "Refresh", exact: true }).click();
+    await page.getByRole("button", { name: "Delete thread", exact: true }).click();
+    await page.evaluate(() => { window.__noxa.state.serverGeneration++; });
+    await page.getByRole("dialog", { name: "Delete thread?", exact: true }).getByRole("button", { name: "Delete thread", exact: true }).click();
+    expect(await page.evaluate(() => window.__requests.some(r => r.action === "delete"))).toBe(false);
+});
+
+for (const wholeThread of [false, true]) {
+    test(`external ${wholeThread ? "thread" : "reply"} deletion clears content despite an older history response`, async ({ page }) => {
+        await open(page); await create(page);
+        await page.evaluate(() => { window.__hold = true; });
+        await page.getByRole("button", { name: "Refresh", exact: true }).click();
+        await expect.poll(() => page.evaluate(() => typeof window.__resolve)).toBe("function");
+        await page.evaluate(async wholeThread => {
+            const stale = { action: "get", channel_id: 7, thread_id: 1, threads: structuredClone(window.__discussionData.threads), messages: structuredClone(window.__discussionData.messages.get(1)), can_moderate: true };
+            await window.__discussions.discussionChanged({ channel_id: 7, thread_id: 1, ...(wholeThread ? { deleted: true } : { deleted_message_id: 1 }) });
+            window.__hold = false;
+            if (wholeThread) window.__discussionData.threads = [];
+            window.__resolve(stale);
+        }, wholeThread);
+        await expect(page.locator(".discussion-content")).not.toContainText("Which microphone works best?");
+        if (wholeThread) await expect(page.getByRole("heading", { name: "Channel threads", exact: true })).toBeVisible();
+        else await expect(page.locator(".discussion-message-body")).toHaveText("Message deleted");
+    });
 }
 
 test("forum configuration, tagged posts, replies, membership and archive lifecycle", async ({ page }) => {

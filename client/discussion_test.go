@@ -34,6 +34,40 @@ func TestDiscussionBridgeEncryptsAndStripsWireMaterial(t *testing.T) {
 	}
 }
 
+func TestDiscussionBridgeDeletionScopeAndTombstones(t *testing.T) {
+	for _, action := range []string{"delete", "delete_message"} {
+		t.Run(action, func(t *testing.T) {
+			app, cm := newPipedApp(t, func(frame *netproto.Frame) (netproto.MessageType, any, bool) {
+				var request netproto.DiscussionRequest
+				if err := netproto.Decode(frame, &request); err != nil {
+					t.Error(err)
+				}
+				if request.Action != action || request.ChannelID != 7 || request.ThreadID != 11 || (action == "delete_message" && request.MessageID != 42) {
+					t.Errorf("unexpected deletion target: %+v", request)
+				}
+				out := netproto.DiscussionResult{Action: action, ChannelID: 7, ThreadID: 11}
+				if action == "delete_message" {
+					out.Messages = []netproto.ChatHistoryEntry{{ID: 42, Deleted: true, Body: "must not render", KeyID: 3}}
+				}
+				return netproto.MsgDiscussionResult, out, true
+			})
+			app.tabs = map[string]*tabState{"a": {cm: cm}}
+			app.activeID = "a"
+			r := netproto.DiscussionRequest{Action: action, ChannelID: 7, ThreadID: 11}
+			if action == "delete_message" {
+				r.MessageID = 42
+			}
+			out, err := app.DiscussionForTab("a", r)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if action == "delete_message" && (!out.Messages[0].Deleted || out.Messages[0].Body != "" || out.Messages[0].KeyID != 0) {
+				t.Fatalf("tombstone leaked content: %+v", out)
+			}
+		})
+	}
+}
+
 func TestDiscussionBridgeRetainsOriginKeysAcrossTabChange(t *testing.T) {
 	entered, release := make(chan struct{}), make(chan struct{})
 	key := randKey(t)

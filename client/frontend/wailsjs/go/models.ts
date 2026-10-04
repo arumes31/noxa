@@ -2273,6 +2273,7 @@ export namespace netproto {
 	    action: string;
 	    channel_id: number;
 	    thread_id?: number;
+	    message_id?: number;
 	    root_message_id?: number;
 	    before_id?: number;
 	    before_pinned?: boolean;
@@ -2298,6 +2299,7 @@ export namespace netproto {
 	        this.action = source["action"];
 	        this.channel_id = source["channel_id"];
 	        this.thread_id = source["thread_id"];
+	        this.message_id = source["message_id"];
 	        this.root_message_id = source["root_message_id"];
 	        this.before_id = source["before_id"];
 	        this.before_pinned = source["before_pinned"];

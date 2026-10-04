@@ -1784,6 +1784,32 @@ test.describe("tab-bound chat mutations", () => {
             await page.locator(".react-strip button").first().click();
         }
     }
+    for (const authority of ["owner", "administrator", "member", "guest"]) {
+        test(`${authority} gets the appropriate delete control on another author's channel message`, async ({ page }) => {
+            await page.evaluate(authority => {
+                window.__noxa.state.ownAuthority = authority;
+                window.__noxaChat.addChat({ id: 72, channel_id: 1, from_unique_id: "other", from: "Other", text: "moderated message" });
+            }, authority);
+            const message = page.locator('#chat-log .msg[data-msg-id="72"]');
+            const remove = message.getByRole("button", { name: "delete", exact: true });
+            if (authority === "member" || authority === "guest") {
+                await expect(remove).toHaveCount(0);
+                return;
+            }
+            await message.hover();
+            await expect(remove).toBeVisible({ timeout: 3000 });
+            await remove.click();
+            await page.getByRole("button", { name: "Delete message", exact: true }).click();
+            expect(await page.evaluate(() => window.__mutationScope.effects)).toEqual([["ChatDeleteMessage", "server-a", 72]]);
+            await expect(message.getByRole("button", { name: "edit", exact: true })).toHaveCount(0);
+            await page.evaluate(() => {
+                window.__noxaChat.openPM("peer", "Peer");
+                window.__noxaChat.addChat({ id: 73, direct: true, enc_verified: true, from_unique_id: "peer", from: "Peer", client_msg_id: "private-incoming", text: "private reply" });
+            });
+            await expect(page.locator("#chat-log")).toContainText("private reply");
+            await expect(page.locator('#chat-log button[title="delete"]')).toHaveCount(0);
+        });
+    }
     for (const action of ["edit", "delete", "pin", "react"]) {
         test(`native activation cannot redirect ${action}`, async ({ page }) => {
             await page.evaluate(() => { window.__mutationScope.nativeTab = "server-b"; });

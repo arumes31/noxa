@@ -8,6 +8,95 @@ import (
 	"noxa/internal/netproto"
 )
 
+func TestDiscussionDeletionScopesTombstonesAndRetries(t *testing.T) {
+	s := pollTestStore(t)
+	var channel, otherChannel, sourceID int64
+	for _, id := range []*int64{&channel, &otherChannel} {
+		if err := s.db.QueryRowContext(t.Context(), `INSERT INTO channels(name,channel_type) VALUES('Moderation',2) RETURNING id`).Scan(id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.db.QueryRowContext(t.Context(), `INSERT INTO chat_messages(scope,channel_id,from_unique_id,body_enc,key_id) VALUES(1,$1,'author','source ciphertext',1) RETURNING id`, channel).Scan(&sourceID); err != nil {
+		t.Fatal(err)
+	}
+	call := func(r netproto.DiscussionRequest, uid string) netproto.DiscussionResult {
+		t.Helper()
+		out, err := s.Discussion(t.Context(), r, uid, uid)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+	create := netproto.DiscussionRequest{Action: "create", ChannelID: channel, RootMessageID: sourceID, Title: "Remove this thread", RequestID: "create-1", BodyEnc: "first ciphertext", KeyID: 1}
+	created := call(create, "author")
+	id := created.ThreadID
+	other := create
+	other.RequestID = "create-2"
+	second := call(other, "author")
+	remove := netproto.DiscussionRequest{Action: "delete_message", ChannelID: channel, ThreadID: id, MessageID: second.Messages[0].ID}
+	if _, err := s.Discussion(t.Context(), remove, "moderator", "Moderator"); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("cross-thread deletion: %v", err)
+	}
+	remove.ChannelID, remove.MessageID = otherChannel, created.Messages[0].ID
+	if _, err := s.Discussion(t.Context(), remove, "moderator", "Moderator"); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("cross-channel deletion: %v", err)
+	}
+	remove.ChannelID = channel
+	call(netproto.DiscussionRequest{Action: "join", ChannelID: channel, ThreadID: id}, "follower")
+	write := netproto.DiscussionRequest{Action: "send", ChannelID: channel, ThreadID: id, RequestID: "reply-1", BodyEnc: "reply ciphertext", KeyID: 1}
+	reply := call(write, "author")
+	remove.MessageID = reply.Messages[0].ID
+	call(netproto.DiscussionRequest{Action: "archive", ChannelID: channel, ThreadID: id}, "author")
+	deleted := call(remove, "moderator") // Nonmember moderation also works on archived threads.
+	if !deleted.Messages[0].Deleted || deleted.Messages[0].BodyEnc != "" || deleted.Threads[0].MessageCount != 1 {
+		t.Fatalf("message deletion did not clear content/count: %+v", deleted)
+	}
+	call(remove, "moderator") // Retrying deletion is harmless.
+	follower := call(netproto.DiscussionRequest{Action: "state", ChannelID: channel, ThreadID: id}, "follower")
+	if follower.Threads[0].Unread {
+		t.Fatal("deleted reply remains unread")
+	}
+	call(netproto.DiscussionRequest{Action: "reopen", ChannelID: channel, ThreadID: id}, "author")
+	retried := call(write, "author")
+	if len(retried.Messages) != 2 || !retried.Messages[0].Deleted || retried.Messages[0].BodyEnc != "" {
+		t.Fatalf("retry resurrected removed reply: %+v", retried)
+	}
+	wrong := netproto.DiscussionRequest{Action: "delete", ChannelID: otherChannel, ThreadID: id}
+	if _, err := s.Discussion(t.Context(), wrong, "moderator", "Moderator"); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("cross-channel thread deletion: %v", err)
+	}
+	call(netproto.DiscussionRequest{Action: "delete", ChannelID: channel, ThreadID: id}, "moderator")
+	for _, action := range []string{"get", "history", "state", "join", "reopen", "send"} {
+		r := write
+		r.Action = action
+		if _, err := s.Discussion(t.Context(), r, "author", "Author"); !errors.Is(err, sql.ErrNoRows) {
+			t.Fatalf("deleted thread accepts %s: %v", action, err)
+		}
+	}
+	if _, err := s.Discussion(t.Context(), create, "author", "Author"); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("retry resurrected removed thread: %v", err)
+	}
+	for _, archived := range []bool{false, true} {
+		list := call(netproto.DiscussionRequest{Action: "list", ChannelID: channel, Archived: archived}, "moderator")
+		for _, thread := range list.Threads {
+			if thread.ID == id {
+				t.Fatal("deleted thread still listed")
+			}
+		}
+	}
+	var remains bool
+	if err := s.db.QueryRowContext(t.Context(), `SELECT EXISTS(SELECT 1 FROM discussion_members WHERE thread_id=$1) OR EXISTS(SELECT 1 FROM discussion_messages WHERE thread_id=$1 AND (body_enc<>'' OR deleted_at IS NULL)) OR EXISTS(SELECT 1 FROM discussion_threads WHERE id=$1 AND (title<>'' OR cardinality(tags)>0 OR deleted_at IS NULL))`, id).Scan(&remains); err != nil || remains {
+		t.Fatalf("deleted thread retains content or memberships: %t, %v", remains, err)
+	}
+	if err := s.db.QueryRowContext(t.Context(), `SELECT EXISTS(SELECT 1 FROM chat_messages WHERE id=$1 AND body_enc='source ciphertext' AND deleted_at IS NULL)`, sourceID).Scan(&remains); err != nil || !remains {
+		t.Fatalf("source channel message was changed: %t, %v", remains, err)
+	}
+	untouched := call(netproto.DiscussionRequest{Action: "get", ChannelID: channel, ThreadID: second.ThreadID}, "moderator")
+	if len(untouched.Messages) != 1 || untouched.Messages[0].Deleted {
+		t.Fatal("another thread was changed")
+	}
+}
+
 func TestDiscussionPersistenceMembershipArchiveAndScope(t *testing.T) {
 	s := pollTestStore(t)
 	var channel int64

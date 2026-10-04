@@ -59,7 +59,7 @@ func (s *Store) Discussion(ctx context.Context, r netproto.DiscussionRequest, ui
 		out.AutoArchiveHours = r.AutoArchiveHours
 	}
 	if out.AutoArchiveHours > 0 {
-		_, err = tx.ExecContext(ctx, `UPDATE discussion_threads SET archived=TRUE WHERE channel_id=$1 AND NOT archived AND last_activity_at <= NOW()-($2 * INTERVAL '1 hour')`, r.ChannelID, out.AutoArchiveHours)
+		_, err = tx.ExecContext(ctx, `UPDATE discussion_threads SET archived=TRUE WHERE channel_id=$1 AND deleted_at IS NULL AND NOT archived AND last_activity_at <= NOW()-($2 * INTERVAL '1 hour')`, r.ChannelID, out.AutoArchiveHours)
 		if err != nil {
 			return out, err
 		}
@@ -91,11 +91,32 @@ func (s *Store) Discussion(ctx context.Context, r netproto.DiscussionRequest, ui
 	}
 	if r.ThreadID > 0 {
 		var archived bool
-		err = tx.QueryRowContext(ctx, `SELECT archived FROM discussion_threads WHERE id=$1 AND channel_id=$2 FOR UPDATE`, r.ThreadID, r.ChannelID).Scan(&archived)
+		err = tx.QueryRowContext(ctx, `SELECT archived FROM discussion_threads WHERE id=$1 AND channel_id=$2 AND deleted_at IS NULL FOR UPDATE`, r.ThreadID, r.ChannelID).Scan(&archived)
 		if err != nil {
 			return out, err
 		}
 		switch r.Action {
+		case "delete":
+			if _, err = tx.ExecContext(ctx, `UPDATE discussion_threads SET deleted_at=NOW(),title='',tags='{}',root_message_id=NULL,pinned=FALSE,resolved=FALSE,archived=TRUE WHERE id=$1`, r.ThreadID); err != nil {
+				return out, err
+			}
+			if _, err = tx.ExecContext(ctx, `UPDATE discussion_messages SET body_enc='',deleted_at=COALESCE(deleted_at,NOW()) WHERE thread_id=$1`, r.ThreadID); err != nil {
+				return out, err
+			}
+			if _, err = tx.ExecContext(ctx, `DELETE FROM discussion_members WHERE thread_id=$1`, r.ThreadID); err != nil {
+				return out, err
+			}
+			return out, tx.Commit()
+		case "delete_message":
+			var result sql.Result
+			result, err = tx.ExecContext(ctx, `UPDATE discussion_messages SET body_enc='',deleted_at=COALESCE(deleted_at,NOW()) WHERE id=$1 AND thread_id=$2`, r.MessageID, r.ThreadID)
+			if err == nil {
+				var count int64
+				count, err = result.RowsAffected()
+				if err == nil && count == 0 {
+					return out, sql.ErrNoRows
+				}
+			}
 		case "edit":
 			for _, tag := range r.Tags {
 				if !slices.Contains(out.Tags, tag) {
@@ -147,13 +168,13 @@ func (s *Store) Discussion(ctx context.Context, r netproto.DiscussionRequest, ui
 			return out, err
 		}
 		if r.Action != "state" {
-			rows, e := tx.QueryContext(ctx, `SELECT id,from_unique_id,from_nickname,body_enc,key_id,extract(epoch FROM sent_at)::bigint FROM discussion_messages WHERE thread_id=$1 AND ($2::bigint=0 OR id<$2) ORDER BY id DESC LIMIT 51`, r.ThreadID, r.BeforeID)
+			rows, e := tx.QueryContext(ctx, `SELECT id,from_unique_id,from_nickname,body_enc,key_id,extract(epoch FROM sent_at)::bigint,deleted_at IS NOT NULL FROM discussion_messages WHERE thread_id=$1 AND ($2::bigint=0 OR id<$2) ORDER BY id DESC LIMIT 51`, r.ThreadID, r.BeforeID)
 			if e != nil {
 				return out, e
 			}
 			for rows.Next() {
 				var m netproto.ChatHistoryEntry
-				if e = rows.Scan(&m.ID, &m.FromUniqueID, &m.FromNickname, &m.BodyEnc, &m.KeyID, &m.SentAt); e != nil {
+				if e = rows.Scan(&m.ID, &m.FromUniqueID, &m.FromNickname, &m.BodyEnc, &m.KeyID, &m.SentAt, &m.Deleted); e != nil {
 					closeRows(rows)
 					return out, e
 				}
@@ -179,7 +200,7 @@ func (s *Store) Discussion(ctx context.Context, r netproto.DiscussionRequest, ui
 	if r.Action == "configure" {
 		r.Tags = []string{}
 	}
-	rows, err := tx.QueryContext(ctx, `SELECT t.id,t.channel_id,COALESCE(t.root_message_id,0),t.title,t.tags,t.author,t.archived,m.unique_id IS NOT NULL,COALESCE(m.subscribed,FALSE),COALESCE(m.subscribed,FALSE) AND COALESCE(m.last_read_id,0)<COALESCE((SELECT max(id) FROM discussion_messages WHERE thread_id=t.id),0),(SELECT count(*) FROM discussion_messages WHERE thread_id=t.id),extract(epoch FROM t.updated_at)::bigint,t.pinned,t.resolved FROM discussion_threads t LEFT JOIN discussion_members m ON m.thread_id=t.id AND m.unique_id=$2 WHERE t.channel_id=$1 AND ($3::bigint=0 OR t.id=$3) AND ($3::bigint>0 OR (t.archived=$4 AND ($5::bigint=0 OR t.pinned<$7 OR (t.pinned=$7 AND t.id<$5)))) AND ($3::bigint>0 OR t.tags @> $6::text[]) AND (NOT $8 OR COALESCE(m.subscribed,FALSE)) ORDER BY t.pinned DESC,t.id DESC LIMIT 51`, r.ChannelID, uid, r.ThreadID, r.Archived, func() int64 {
+	rows, err := tx.QueryContext(ctx, `SELECT t.id,t.channel_id,COALESCE(t.root_message_id,0),t.title,t.tags,t.author,t.archived,m.unique_id IS NOT NULL,COALESCE(m.subscribed,FALSE),COALESCE(m.subscribed,FALSE) AND COALESCE(m.last_read_id,0)<COALESCE((SELECT max(id) FROM discussion_messages WHERE thread_id=t.id AND deleted_at IS NULL),0),(SELECT count(*) FROM discussion_messages WHERE thread_id=t.id AND deleted_at IS NULL),extract(epoch FROM t.updated_at)::bigint,t.pinned,t.resolved FROM discussion_threads t LEFT JOIN discussion_members m ON m.thread_id=t.id AND m.unique_id=$2 WHERE t.channel_id=$1 AND t.deleted_at IS NULL AND ($3::bigint=0 OR t.id=$3) AND ($3::bigint>0 OR (t.archived=$4 AND ($5::bigint=0 OR t.pinned<$7 OR (t.pinned=$7 AND t.id<$5)))) AND ($3::bigint>0 OR t.tags @> $6::text[]) AND (NOT $8 OR COALESCE(m.subscribed,FALSE)) ORDER BY t.pinned DESC,t.id DESC LIMIT 51`, r.ChannelID, uid, r.ThreadID, r.Archived, func() int64 {
 		if r.ThreadID > 0 {
 			return 0
 		}

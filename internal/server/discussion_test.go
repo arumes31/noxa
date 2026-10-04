@@ -43,6 +43,16 @@ func TestDiscussionAuthorizationBeforeMutation(t *testing.T) {
 		{"resolve others denied", "resolve", []authorization.Capability{authorization.ViewChannel, authorization.ReadHistory, authorization.SendMessages}, false, false, false},
 		{"pin author denied", "pin", []authorization.Capability{authorization.ViewChannel, authorization.ReadHistory, authorization.SendMessages}, false, true, false},
 		{"pin moderator", "pin", []authorization.Capability{authorization.ViewChannel, authorization.ReadHistory, authorization.ManageMessages}, false, false, true},
+		{"delete moderator", "delete", []authorization.Capability{authorization.ViewChannel, authorization.ReadHistory, authorization.ManageMessages}, false, false, true},
+		{"delete administrator", "delete", []authorization.Capability{authorization.Administrator}, false, false, true},
+		{"delete owner", "delete", nil, false, false, true},
+		{"delete message moderator", "delete_message", []authorization.Capability{authorization.ViewChannel, authorization.ReadHistory, authorization.ManageMessages}, false, false, true},
+		{"delete message administrator", "delete_message", []authorization.Capability{authorization.Administrator}, false, false, true},
+		{"delete message owner", "delete_message", nil, false, false, true},
+		{"delete message denied", "delete_message", []authorization.Capability{authorization.ViewChannel, authorization.ReadHistory, authorization.SendMessages}, false, false, false},
+		{"delete other denied", "delete", []authorization.Capability{authorization.ViewChannel, authorization.ReadHistory, authorization.SendMessages}, false, false, false},
+		{"delete author denied", "delete", []authorization.Capability{authorization.ViewChannel, authorization.ReadHistory, authorization.SendMessages}, false, true, false},
+		{"delete hidden denied", "delete", []authorization.Capability{authorization.ViewChannel, authorization.ReadHistory, authorization.ManageMessages}, true, false, false},
 		{"no history", "list", []authorization.Capability{authorization.ViewChannel}, false, false, false},
 		{"hidden", "list", []authorization.Capability{authorization.ViewChannel, authorization.ReadHistory}, true, false, false},
 		{"join", "join", []authorization.Capability{authorization.ViewChannel, authorization.ReadHistory}, false, false, true},
@@ -57,6 +67,14 @@ func TestDiscussionAuthorizationBeforeMutation(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			policy := serverRoleFixture()
 			policy.policy.Roles[0].Permissions = tc.caps
+			if tc.name == "delete administrator" || tc.name == "delete message administrator" {
+				policy.policy.Roles[0].Permissions = nil
+				policy.policy.Roles = append(policy.policy.Roles, authorization.Role{ID: 20, Name: "Administrator", Position: 1, Permissions: tc.caps})
+				policy.policy.Members = []authorization.RoleMember{{UserID: 1, RoleIDs: []int64{20}}}
+			}
+			if tc.name == "delete owner" || tc.name == "delete message owner" {
+				policy.policy.OwnerID = 1
+			}
 			if tc.hidden {
 				policy.policy.Channels[0].Overrides = []authorization.RoleOverride{{RoleID: 10, Capability: authorization.ViewChannel, Effect: authorization.Deny}}
 			}
@@ -76,6 +94,9 @@ func TestDiscussionAuthorizationBeforeMutation(t *testing.T) {
 			publishKey(t, conn, pub)
 			r := netproto.DiscussionRequest{Action: tc.action, ChannelID: 1, ThreadID: 42, RequestID: "request-1"}
 			r.Title = "Edited title"
+			if tc.action == "delete_message" {
+				r.MessageID = 17
+			}
 			if tc.action == "list" || tc.action == "configure" {
 				r.ThreadID = 0
 			}

@@ -21,6 +21,7 @@ type DiscussionRequest struct {
 	Action           string   `json:"action"`
 	ChannelID        int64    `json:"channel_id"`
 	ThreadID         int64    `json:"thread_id,omitempty"`
+	MessageID        int64    `json:"message_id,omitempty"`
 	RootMessageID    int64    `json:"root_message_id,omitempty"`
 	BeforeID         int64    `json:"before_id,omitempty"`
 	BeforePinned     bool     `json:"before_pinned,omitempty"`
@@ -72,6 +73,9 @@ type DiscussionResult struct {
 }
 
 func (r DiscussionRequest) Validate() error {
+	if r.MessageID < 0 || (r.Action != "delete_message" && r.MessageID != 0) {
+		return ErrDiscussionInvalid
+	}
 	if r.AutoArchiveHours != 0 && r.AutoArchiveHours != 24 && r.AutoArchiveHours != 72 && r.AutoArchiveHours != 168 {
 		return ErrDiscussionInvalid
 	}
@@ -102,7 +106,11 @@ func (r DiscussionRequest) Validate() error {
 		if r.ThreadID <= 0 || strings.TrimSpace(r.Title) == "" {
 			return ErrDiscussionInvalid
 		}
-	case "get", "history", "state", "join", "leave", "subscribe", "archive", "reopen", "pin", "resolve":
+	case "delete_message":
+		if r.ThreadID <= 0 || r.MessageID <= 0 {
+			return ErrDiscussionInvalid
+		}
+	case "get", "history", "state", "join", "leave", "subscribe", "archive", "reopen", "pin", "resolve", "delete":
 		if r.ThreadID <= 0 {
 			return ErrDiscussionInvalid
 		}

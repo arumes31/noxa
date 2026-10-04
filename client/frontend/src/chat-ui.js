@@ -1077,7 +1077,8 @@ function renderActions(m) {
     if (th.replies.get(root)) mk("thread", t("chat.action.thread"), () => openThread(root));
     if (!m.direct && activeChannelID() > 0) mk("thread", t("discussion.start"), () => openDiscussions(activeChannelID(), m));
     if (m.self && !m.direct && !parsePoll(m.text)) mk("edit", t("chat.action.edit"), () => startEdit(m));
-    if (m.self) mk("trash", t("chat.action.delete"), () => deleteMsg(m));
+    const canModerate = !m.direct && ["owner", "administrator"].includes(V().state.ownAuthority);
+    if (m.self || canModerate) mk("trash", t("chat.action.delete"), () => deleteMsg(m));
     if (!m.direct) {
         const pinned = isPinned(m);
         mk("pin", pinned ? t("chat.action.unpin") : t("chat.action.pin"), () => pinMsg(m));

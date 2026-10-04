@@ -119,6 +119,9 @@ func (s *TCPServer) roleBroadcastFrame(client *Client, payload []byte, e *author
 		if err := json.Unmarshal(payload, &scoped); err != nil {
 			return nil, err
 		}
+		if scoped.Type == "discussion_changed" && !e.Evaluate(client.userID(), event.ChannelID, authorization.ReadHistory).Allowed {
+			return nil, nil
+		}
 		if scoped.Type == eventChat {
 			var chat netproto.ChatBroadcast
 			if err := json.Unmarshal(scoped.Data, &chat); err != nil {
