@@ -1,4 +1,5 @@
 // Fixed clip IDs only. This module has no text input, TTS or asset-generation path.
+import { soundVolume } from "./sound-engine.js";
 export const SPEECH_EVENTS = {
     client_closing: { priority: 8, category: "application" },
     banned: { priority: 7, category: "admin", effect: "ban", matrix: "kick" },
@@ -64,20 +65,13 @@ export class SpeechQueue {
         const key = scope + ":" + event;
         const coolingDown = !preview && now - (this.last.get(key) ?? -Infinity) < (def.cooldown ?? 10000);
         const item = { event, scope, priority: def.priority, settings, preview, onEnded, effect: effect || def.effect,
-            ready: now + delay, expires: now + 8000, waitingEffect: false };
-        let effectPlayed = false;
-        if (withEffect && (!def.matrix || (selected?.notify_matrix?.[def.matrix]?.sound !== false && selected?.event_sounds?.[def.matrix] !== false))) {
-            item.waitingEffect = true;
-            effectPlayed = this.engine.play(effect || def.effect, { settings: selected, scope,
-                onEnded: () => {
-                    item.waitingEffect = false;
-                    item.ready = Math.max(item.ready, this.now() + 150);
-                    this.pump();
-                } });
-            if (!effectPlayed) item.waitingEffect = false;
-        }
-        if (coolingDown || !this.allowed(event, selected, preview, item.effect)) return effectPlayed;
-        if (!preview && this.current?.scope === scope && this.current?.priority > def.priority) return effectPlayed;
+            ready: now + delay, expires: now + 8000, withEffect };
+        // Choose one audible representation. A muted/disabled or missing voice
+        // recording may use its effect, but never prefix working speech with it.
+        const language = speechLanguage(selected, this.systemLanguage());
+        if (!this.allowed(event, selected, preview, item.effect) || !soundVolume(selected?.speech_volume ?? 100)
+            || !this.assets[language]?.[event]) return this.fallbackEffect(item, selected);
+        if (coolingDown || (!preview && this.current?.scope === scope && this.current?.priority > def.priority)) return false;
         if (!preview) {
             this.last.set(key, now);
             while (this.last.size > 128) this.last.delete(this.last.keys().next().value);
@@ -92,6 +86,13 @@ export class SpeechQueue {
         return true;
     }
 
+    fallbackEffect(item, settings) {
+        const def = SPEECH_EVENTS[item.event];
+        if (!item.withEffect || (def.matrix && (settings?.notify_matrix?.[def.matrix]?.sound === false
+            || settings?.event_sounds?.[def.matrix] === false))) return false;
+        return this.engine.play(item.effect, { settings, scope: item.scope, preview: item.preview, onEnded: item.onEnded });
+    }
+
     pump() {
         if (this.current) return;
         this.cancel(this.timer); this.timer = null;
@@ -99,10 +100,6 @@ export class SpeechQueue {
             const item = this.pending[0], now = this.now();
             const settings = item.settings || this.getState()?.settings;
             if (item.expires < now || (!item.preview && item.scope !== this.scope()) || !this.allowed(item.event, settings, item.preview, item.effect)) { this.pending.shift(); item.onEnded?.(); continue; }
-            if (item.waitingEffect) {
-                this.timer = this.schedule(() => this.pump(), Math.max(1, item.expires - now + 1));
-                return;
-            }
             if (item.ready > now) { this.timer = this.schedule(() => this.pump(), item.ready - now); return; }
             this.pending.shift();
             const language = speechLanguage(settings, this.systemLanguage());
@@ -115,7 +112,7 @@ export class SpeechQueue {
                 onEnded: () => { if (this.current === playing) { this.current = null; item.onEnded?.(); this.pump(); } } });
             if (played) return;
             this.current = null;
-            item.onEnded?.();
+            if (!this.fallbackEffect(item, settings)) item.onEnded?.();
         }
     }
 

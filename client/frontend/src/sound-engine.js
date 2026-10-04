@@ -84,11 +84,11 @@ export class SoundEngine {
         return this.resuming;
     }
 
-    setOutput(id = "") {
+    setOutput(id = "", { retry = false } = {}) {
         const ctx = this.context();
         if (!ctx) return Promise.resolve();
         const sink = typeof id === "string" ? id : "";
-        if (this.requestedSink === sink) return this.output;
+        if (this.requestedSink === sink && !retry) return this.output;
         this.requestedSink = sink;
         this.outputReady = false;
         this.setOutputState("routing");

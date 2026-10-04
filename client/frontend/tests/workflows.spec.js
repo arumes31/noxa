@@ -4212,7 +4212,35 @@ test("client language translates every settings page and persists on Apply @a11y
     expect(errors).toEqual([]);
 });
 
-test("terminal audio finishes its cue before speech and suppresses disconnect cascades", async ({ page }) => {
+test("notification settings group controls and keep device selection shared @a11y", async ({ page }, testInfo) => {
+    await page.evaluate(() => window.__noxa.openSettings("notifications"));
+    const output = page.locator(".notification-output");
+    await expect(output.getByRole("button", { name: "Test spoken message", exact: true })).toBeVisible();
+    await output.getByRole("combobox", { name: "Output device", exact: true }).selectOption("speaker-usb");
+    await page.getByRole("tab", { name: "Playback", exact: true }).click();
+    await expect(page.getByRole("combobox", { name: "Output device", exact: true })).toHaveValue("speaker-usb");
+    await page.getByRole("tab", { name: "Notifications", exact: true }).click();
+    await expect(page.locator(".notification-event-speech")).not.toHaveAttribute("open");
+    await page.getByRole("textbox", { name: "Search settings", exact: true }).fill("You were banned");
+    await page.locator(".set-search-hit").first().click();
+    await expect(page.locator(".notification-event-speech")).toHaveAttribute("open");
+    await page.locator(".notification-event-speech > summary").click();
+    for (const width of [1280, 390]) {
+        await page.setViewportSize({ width, height: 900 });
+        await page.locator("#settings-content").evaluate(el => { el.scrollTop = 0; });
+        await expect(page.locator(".notification-settings")).toBeVisible();
+        expect(await page.locator("#settings-content").evaluate(el => el.scrollWidth <= el.clientWidth + 1)).toBe(true);
+        await auditAccessibility(page, `notification settings ${width}`);
+        await page.screenshot({ path: testInfo.outputPath(`notification-settings-${width}.png`) });
+        await page.locator(".notify-matrix").scrollIntoViewIfNeeded();
+        expect(await page.locator("#settings-content").evaluate(el => el.scrollWidth <= el.clientWidth + 1)).toBe(true);
+        await page.screenshot({ path: testInfo.outputPath(`notification-matrix-${width}.png`) });
+    }
+    await page.getByRole("button", { name: "Cancel", exact: true }).click();
+    expect(await page.evaluate(() => window.__noxa.state.settings.playback_device_id)).toBe("");
+});
+
+test("terminal audio speaks once without a beep or disconnect cascade", async ({ page }) => {
     await page.evaluate(async () => {
         const { state, soundEngine, speechQueue } = window.__noxa;
         Object.assign(state.settings, { play_sounds: true, effects_enabled: true, spoken_messages: true,
@@ -4236,10 +4264,7 @@ test("terminal audio finishes its cue before speech and suppresses disconnect ca
     });
     await expect.poll(() => page.evaluate(() => window.__audioTimeline.some(x => x.id === "speech_en_banned" && x.start))).toBeTruthy();
     const timeline = await page.evaluate(() => window.__audioTimeline);
-    expect(timeline.filter(x => x.start).map(x => x.id)).toEqual(["ban", "speech_en_banned"]);
-    const gap = timeline.find(x => x.id === "speech_en_banned" && x.start).start - timeline.find(x => x.id === "ban" && x.end).end;
-    expect(gap).toBeGreaterThanOrEqual(140);
-    expect(gap).toBeLessThan(400);
+    expect(timeline.filter(x => x.start).map(x => x.id)).toEqual(["speech_en_banned"]);
     await expect(page.getByText(/visual-only-reason/).first()).toBeVisible();
 });
 
@@ -4339,6 +4364,7 @@ test("channel joins and leaves play bundled speech and respect notification pref
     expect(await page.evaluate(() => window.__noxa.speechQueue.pending.length)).toBe(0);
     expect(await page.evaluate(() => window.__channelSpeech)).toEqual([]);
     await page.evaluate(() => window.__noxa.openSettings("notifications"));
+    await page.locator(".notification-event-speech > summary").click();
     await expect(page.getByRole("button", { name: "Preview User joined your channel.", exact: true })).toBeVisible();
     await expect(page.getByRole("button", { name: "Preview User left your channel.", exact: true })).toBeVisible();
     await expect(page.getByRole("button", { name: "Preview User was moved from your channel.", exact: true })).toBeVisible();
@@ -4351,6 +4377,7 @@ test("individual and all speech previews use draft settings and stop on close", 
             speech_admin: true, speech_connection: true, speech_events: {}, event_sounds: {}, notify_matrix: {}, dnd_enabled: false });
         window.__noxa.openSettings("notifications");
     });
+    await page.locator(".notification-event-speech > summary").click();
     await expect(page.getByRole("button", { name: "Preview You were banned from the server.", exact: true })).toBeVisible();
     await page.getByRole("button", { name: "Preview You were banned from the server.", exact: true }).click();
     await expect.poll(() => page.evaluate(() => window.__noxa.speechQueue.current?.event)).toBe("banned");
@@ -4417,6 +4444,7 @@ test("sound previews use draft volume, finish Test All, and cancel on close @a11
         window.__noxa.openSettings("notifications");
     });
     const volume = page.getByRole("slider", { name: "Sound volume", exact: true });
+    await page.locator(".notification-event-effects > summary").click();
     await volume.fill("0");
     await page.getByRole("button", { name: "Preview Joined channel", exact: true }).click();
     expect(await page.evaluate(() => window.__previewedSounds.length)).toBe(0);

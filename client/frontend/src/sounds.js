@@ -82,6 +82,9 @@ export function audioStatus(settings = V()?.state.settings) {
     add(output === "routing", "routing");
     add(output === "uninitialized", "uninitialized");
     add(soundEngine.ctx?.state === "suspended", "suspended");
+    const failed = [...soundEngine.warnings].filter(warning => warning.startsWith("could not load ")
+        && !soundEngine.buffers.has(warning.slice("could not load ".length))).length;
+    add(failed, "assets_failed", failed);
     return reasons;
 }
 function previewFeedback(reason = "") {
@@ -93,7 +96,9 @@ function previewAllowed() {
 async function preparePreview(settings, generation) {
     await Promise.all([preloadSounds(settings), soundEngine.resume()]);
     if (generation !== previewGeneration || !previewAllowed()) return false;
-    await soundEngine.setOutput(settings?.playback_device_id);
+    // A transient startup/device failure must not leave previews on a cached
+    // failed route after voice has successfully opened the selected device.
+    await soundEngine.setOutput(settings?.playback_device_id, { retry: true });
     if (generation !== previewGeneration || !previewAllowed()) {
         void soundEngine.setOutput(V()?.state.settings?.playback_device_id);
         return false;
@@ -173,7 +178,7 @@ export function updateSoundOutput() {
     updateConversationDucking();
     speechQueue.reconcile();
     void preloadSounds();
-    return soundEngine.setOutput(V()?.state.settings?.playback_device_id);
+    return soundEngine.setOutput(V()?.state.settings?.playback_device_id, { retry: true });
 }
 
 export function initSounds() {

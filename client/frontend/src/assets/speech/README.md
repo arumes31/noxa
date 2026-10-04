@@ -29,5 +29,8 @@ identify the shipped outputs.
 
 Language policy: German UI/system locale selects German; English and unsupported
 locales select English. A missing selected file is logged once and omitted;
-there is no generated or other-language fallback. Human listening review remains
+the action uses its sound effect when available. Enabled speech replaces the
+action's beep, so each alert plays one sound. Disabled or zero-volume speech also
+falls back to the effect, subject to the existing notification and sound gates.
+There is no generated or other-language fallback. Human listening review remains
 necessary to certify pronunciation, tone and comfort.

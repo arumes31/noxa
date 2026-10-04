@@ -469,6 +469,7 @@ test("notification silence explanations reflect unsaved gates, zero volumes, and
     await page.getByRole("spinbutton", { name: "Speech volume (%)", exact: true }).fill("0");
     await expect(status).toContainText("Effects volume is 0%");
     await expect(status).toContainText("Announcement volume is 0%");
+    await page.locator(".notification-event-effects > summary").click();
     await page.getByLabel("Push-to-talk on", { exact: true }).uncheck();
     await expect(status).toContainText("Disabled sound events: 1");
     await page.locator("#set-cancel").click();
@@ -501,6 +502,7 @@ test("announcement language changes only fixed speech, previews the chosen asset
     await expect(language).toHaveValue("de");
     await language.scrollIntoViewIfNeeded();
     await page.screenshot({ path: testInfo.outputPath("notification-audio-controls.png") });
+    await page.locator(".notification-event-speech > summary").click();
     await page.getByRole("button", { name: "Preview Du wurdest vom Server gebannt.", exact: true }).click();
     await expect.poll(() => page.evaluate(() => window.__quickPlayed.includes("speech_de_banned"))).toBe(true);
     await page.getByRole("button", { name: "Stop preview", exact: true }).click();
@@ -514,6 +516,7 @@ test("announcement language changes only fixed speech, previews the chosen asset
     await expect(language).toHaveValue("de");
     await expect(page.getByLabel("Lower routine sounds during conversations", { exact: true })).toBeChecked();
     await language.selectOption("en");
+    await page.locator(".notification-event-speech > summary").click();
     await expect(page.getByRole("button", { name: "Preview You were banned from the server.", exact: true })).toBeVisible();
     await page.locator("#set-cancel").click();
     await page.evaluate(() => window.__noxa.openSettings("notifications"));

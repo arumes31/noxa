@@ -290,3 +290,16 @@ test("failure of both selected and fallback outputs remains silent", async () =>
     assert.equal(f.engine.play("ban"), false);
     assert.equal(f.sources.length, 0);
 });
+
+test("an explicit output retry recovers a device without requiring a selection change", async () => {
+    const f = fixture(); await f.engine.preload();
+    f.state.settings.playback_device_id = "headset";
+    f.ctx.setSinkId = async () => { throw Error("temporarily unavailable"); };
+    await f.engine.setOutput("headset");
+    assert.equal(f.engine.outputState, "unavailable");
+    f.ctx.setSinkId = async id => { f.ctx.sinkId = id; };
+    await f.engine.setOutput("headset", { retry: true });
+    assert.equal(f.engine.outputState, "ready");
+    assert.equal(f.ctx.sinkId, "headset");
+    assert.equal(f.engine.play("dm"), true);
+});

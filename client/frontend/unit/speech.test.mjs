@@ -61,10 +61,10 @@ test("channel announcements use the selected cue, repeat after a short cooldown 
     const f = fixture();
     f.state.settings.event_sounds = { user_join: false, user_move_in: true };
     assert.equal(f.queue.enqueue("user_join", { withEffect: true, effect: "user_move_in" }), true);
-    assert.equal(f.played[0].id, "user_move_in");
-    f.played[0].options.onEnded(); f.tick(150);
-    assert.equal(f.played[1].id, "speech_en_user_join");
-    f.played[1].options.onEnded(); f.tick(1000);
+    assert.equal(f.played.length, 0);
+    f.tick(150);
+    assert.deepEqual(f.played.map(item => item.id), ["speech_en_user_join"]);
+    f.played[0].options.onEnded(); f.tick(1000);
     assert.equal(f.queue.enqueue("user_join", { effect: "user_move_in", delay: 0 }), true);
     assert.equal(f.played.at(-1).id, "speech_en_user_join");
     f.queue.enqueue("banned", { delay: 0 });
@@ -130,13 +130,13 @@ test("live alerts take precedence over previews both during the effect gap and d
     assert.equal(f.queue.current.event, "connection_lost");
 });
 
-test("speech cooldown does not hide subsequent rejected-action effects", () => {
+test("speech cooldown suppresses the whole announcement without adding a beep", () => {
     const f = fixture();
     f.queue.enqueue("permission_denied", { delay: 0 });
     f.played[0].options.onEnded();
     f.tick(1000);
-    assert.equal(f.queue.enqueue("permission_denied", { withEffect: true }), true);
-    assert.equal(f.played.at(-1).id, "server_error");
+    assert.equal(f.queue.enqueue("permission_denied", { withEffect: true }), false);
+    assert.deepEqual(f.played.map(item => item.id), ["speech_en_permission_denied"]);
     assert.equal(f.queue.pending.length, 0);
 });
 
@@ -197,16 +197,12 @@ test("distinct sessions do not share critical cooldowns and stale generations ar
     assert.equal(f.played.length, 1);
 });
 
-test("effect completion, then a 150ms gap, gates speech; speech-only remains available", () => {
+test("spoken alerts replace effects even when both sound categories are enabled", () => {
     const f = fixture();
     f.engine.definitions = { ban: { duration: .22 } };
     assert.equal(f.queue.enqueue("banned", { withEffect: true }), true);
-    assert.equal(f.played[0].id, "ban");
-    f.tick(1000);
-    assert.equal(f.played.length, 1);
-    f.played[0].options.onEnded();
-    f.tick(149); assert.equal(f.played.length, 1);
-    f.tick(1); assert.equal(f.played[1].id, "speech_en_banned");
+    f.tick(149); assert.equal(f.played.length, 0);
+    f.tick(1); assert.deepEqual(f.played.map(item => item.id), ["speech_en_banned"]);
     f.queue.clear();
     f.state.activeTabID = "two";
     f.state.settings.effects_enabled = false;
@@ -217,4 +213,20 @@ test("effect completion, then a 150ms gap, gates speech; speech-only remains ava
     f.queue.enqueue("banned", { withEffect: true });
     f.tick(150);
     assert.equal(f.played.at(-1).id, "speech_en_banned");
+});
+
+test("disabled, silent or unavailable speech falls back to exactly one effect", () => {
+    for (const settings of [{ spoken_messages: false }, { speech_volume: 0 }, { speech_events: { banned: false } }]) {
+        const f = fixture();
+        Object.assign(f.state.settings, settings);
+        assert.equal(f.queue.enqueue("banned", { withEffect: true }), true);
+        f.tick(1000);
+        assert.deepEqual(f.played.map(item => item.id), ["ban"]);
+    }
+    const f = fixture();
+    const play = f.engine.play;
+    f.engine.play = (id, options) => id.startsWith("speech_") ? false : play.call(f.engine, id, options);
+    f.queue.enqueue("banned", { withEffect: true });
+    f.tick(150);
+    assert.deepEqual(f.played.map(item => item.id), ["ban"]);
 });

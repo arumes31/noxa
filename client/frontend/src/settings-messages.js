@@ -1,5 +1,15 @@
 // Settings translations. Keep both catalogs and placeholder names in sync.
 export const settingsEnglish = {
+    "settings.notifications.output": "Sound & output",
+    "settings.notifications.effects": "Sound effects",
+    "settings.notifications.speech": "Spoken announcements",
+    "settings.notifications.delivery": "Notification delivery",
+    "settings.notifications.quiet": "Quiet hours & voice hints",
+    "settings.notifications.eventEffects": "Individual sound effects",
+    "settings.notifications.eventSpeech": "Individual spoken announcements",
+    "settings.notifications.sameOutput": "Voice, effects and speech share this output, with separate volumes. Tests use unsaved settings and retry the selected device.",
+    "settings.notifications.speechReplaces": "When an announcement is enabled, its recording replaces the beep. Events without speech use sound effects; unavailable or disabled speech falls back to its effect.",
+    "settings.audio.assets_failed": "{count} sound files could not be loaded. Click a test to retry.",
     "settings.camera": "Camera",
     "settings.timing.saved": "Applies immediately after saving.",
     "settings.timing.reconnect": "Requires voice reconnect after saving.",
@@ -355,6 +365,16 @@ export const settingsEnglish = {
 };
 
 export const settingsGerman = {
+    "settings.notifications.output": "Ton & Ausgabe",
+    "settings.notifications.effects": "Soundeffekte",
+    "settings.notifications.speech": "Gesprochene Meldungen",
+    "settings.notifications.delivery": "Benachrichtigungsarten",
+    "settings.notifications.quiet": "Ruhezeiten & Sprachhinweise",
+    "settings.notifications.eventEffects": "Einzelne Soundeffekte",
+    "settings.notifications.eventSpeech": "Einzelne gesprochene Meldungen",
+    "settings.notifications.sameOutput": "Sprache, Effekte und Ansagen nutzen diese Ausgabe mit getrennten Lautstärken. Tests nutzen ungespeicherte Einstellungen und versuchen die Geräteausgabe erneut.",
+    "settings.notifications.speechReplaces": "Eine aktivierte Sprachmeldung ersetzt den Signalton. Ereignisse ohne Sprachmeldung nutzen Soundeffekte. Ist die Sprachmeldung deaktiviert oder nicht verfügbar, wird ihr Soundeffekt verwendet.",
+    "settings.audio.assets_failed": "{count} Audiodateien konnten nicht geladen werden. Starte einen Test, um es erneut zu versuchen.",
     "settings.camera": "Kamera",
     "settings.timing.saved": "Gilt sofort nach dem Speichern.",
     "settings.timing.reconnect": "Nach dem Speichern die Sprachverbindung neu herstellen.",

@@ -106,6 +106,33 @@ test("rejected previews cannot reroute a pending live announcement", async ({ pa
     expect(result.pending).toEqual(["kicked"]);
 });
 
+test("notification previews retry a failed selected output and report missing assets", async ({ page }) => {
+    const result = await page.evaluate(async () => {
+        window.__noxa = { state: { settings: { play_sounds: true, sound_volume: 100, playback_device_id: "headset" } } };
+        const { soundEngine, previewSounds, audioStatus } = await import("/src/sounds.js");
+        const context = soundEngine.context();
+        context.setSinkId = async () => { throw new Error("device temporarily unavailable"); };
+        await soundEngine.preload();
+        const before = soundEngine.outputState;
+        const routes = [], played = [];
+        context.setSinkId = async id => { routes.push(id); };
+        const play = soundEngine.play.bind(soundEngine);
+        soundEngine.play = (id, options) => { const ok = play(id, options); if (ok) played.push(id); return ok; };
+        await previewSounds(["dm"]);
+        const after = soundEngine.outputState;
+        soundEngine.buffers.delete("dm");
+        soundEngine.report("could not load dm");
+        const reasons = audioStatus();
+        await soundEngine.dispose();
+        return { before, after, routes, played, reasons };
+    });
+    expect(result.before).toBe("unavailable");
+    expect(result.after).toBe("ready");
+    expect(result.routes).toEqual(["headset"]);
+    expect(result.played).toEqual(["dm"]);
+    expect(result.reasons).toContainEqual({ reason: "assets_failed", count: 1 });
+});
+
 test("static speech decodes and frequent contact cues survive mandatory repetition", async ({ page }) => {
     test.setTimeout(120000);
     const result=await page.evaluate(async()=>{
