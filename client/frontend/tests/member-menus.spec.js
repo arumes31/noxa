@@ -110,11 +110,14 @@ test("voice More keeps secondary actions available and restores keyboard focus",
     await expect(page.locator('#voice-leave-channel')).toBeVisible();
     await more.click();
     await expect(page.locator('#voice-disconnect')).toBeVisible();
-    const bounds = await page.locator('.voice-options-menu').boundingBox();
-    expect(bounds.x).toBeGreaterThanOrEqual(0);
-    expect(bounds.y).toBeGreaterThanOrEqual(0);
-    expect(bounds.x + bounds.width).toBeLessThanOrEqual(640);
-    expect(bounds.y + bounds.height).toBeLessThanOrEqual(480);
+    // The details toggle and device refresh position the menu asynchronously.
+    await expect(async () => {
+        const bounds = await page.locator('.voice-options-menu').boundingBox();
+        expect(bounds.x).toBeGreaterThanOrEqual(0);
+        expect(bounds.y).toBeGreaterThanOrEqual(0);
+        expect(bounds.x + bounds.width).toBeLessThanOrEqual(640);
+        expect(bounds.y + bounds.height).toBeLessThanOrEqual(480);
+    }).toPass();
     if (process.env.NOXA_UI_SCREENSHOTS) await page.screenshot({ path: '.cache/ui-improvements-compact.png' });
     await page.locator('#voice-settings').focus();
     await page.keyboard.press('Escape');

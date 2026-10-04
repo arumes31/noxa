@@ -4245,6 +4245,8 @@ test("terminal audio finishes its cue before speech and suppresses disconnect ca
 
 for (const scenario of [
     { name: "own channel join", event: "channel_join", move: true },
+    { name: "own channel leave", event: "channel_leave", leave: true },
+    { name: "German own channel leave", event: "channel_leave", leave: true, language: "de" },
     { name: "forced own channel move", event: "moved_by_admin", forcedMove: true, self: true },
     { name: "forced member channel move", event: "user_moved_out", forcedMove: true },
     { name: "German forced own channel move", event: "moved_by_admin", forcedMove: true, self: true, language: "de" },
@@ -4270,7 +4272,12 @@ for (const scenario of [
             return played;
         };
         window.__dispatchSpokenEvent = () => {
-            if (scenario.forcedMove) {
+            if (scenario.leave) {
+                state.myChannelID = 7; state.clients[0].channel_id = 7;
+                for (const cb of window.__events.event) cb(JSON.stringify({ type: "user_moved", data: {
+                    client_id: "speech-self", channel_id: 0,
+                } }));
+            } else if (scenario.forcedMove) {
                 state.myChannelID = 7;
                 state.clients = [
                     { client_id: "speech-self", nickname: "Alice", channel_id: 7 },
@@ -5916,6 +5923,85 @@ test("voice activation reopens after silence and keeps mute and PTT private", as
     });
 });
 
+test("server recovery restores real voice when ICE arrives before its answer", async ({ page }) => {
+    await page.evaluate(async () => {
+        const v = window.__noxa;
+        v.showWorkspace(false);
+        v.state.settings.reconnect_on_loss = false;
+        v.state.settings.activation_mode = "continuous";
+        v.state.muted = false;
+        v.state.deafened = false;
+        window.__tabs = [{ id: "voice-recovery", addr: "voice.example", connected: true, active: true }];
+        const input = new AudioContext();
+        await input.setSinkId({ type: "none" });
+        await input.resume();
+        const oscillator = input.createOscillator();
+        const destination = input.createMediaStreamDestination();
+        oscillator.connect(destination); oscillator.start();
+        navigator.mediaDevices.getUserMedia = async () => new MediaStream([destination.stream.getAudioTracks()[0].clone()]);
+        const originalPeer = window.RTCPeerConnection;
+        window.__recoveryPeers = [];
+        window.RTCPeerConnection = class extends originalPeer {
+            constructor(...args) { super(...args); this.acceptedICE = 0; window.__recoveryPeers.push(this); }
+            async addIceCandidate(candidate) { await super.addIceCandidate(candidate); this.acceptedICE++; }
+        };
+        let remote;
+        window.__recoveryRound = 0;
+        const app = window.go.main.App;
+        window.go.main.App = new Proxy(app, { get(target, key) {
+            if (key === "GetICEServersForTab") return async () => [];
+            if (key === "SendICECandidateForTab") return async (_tab, candidate, sdpMid, sdpMLineIndex) => {
+                await remote.addIceCandidate({ candidate, sdpMid, sdpMLineIndex });
+            };
+            if (key !== "WebRTCOfferForTab") return target[key];
+            return async (_tab, sdp) => {
+                remote = new originalPeer();
+                window.__recoveryRemote = remote;
+                await remote.setRemoteDescription({ type: "offer", sdp });
+                const candidates = [];
+                const gathered = new Promise(resolve => { remote.onicecandidate = ({ candidate }) => {
+                    if (candidate) candidates.push(candidate.toJSON()); else resolve();
+                }; });
+                const answer = await remote.createAnswer();
+                await remote.setLocalDescription(answer);
+                await gathered;
+                if (window.__recoveryRound === 1) return remote.localDescription.sdp;
+                // Native ICE events can beat the asynchronous offer response.
+                for (const candidate of candidates) for (const cb of window.__events.ice) cb(JSON.stringify({
+                    candidate: candidate.candidate, sdp_mid: candidate.sdpMid, sdp_mline_index: candidate.sdpMLineIndex,
+                }));
+                return answer.sdp;
+            };
+        } });
+        window.__recoverVoice = () => {
+            window.__recoveryRound++;
+            window.__activeClient = `voice-self-${window.__recoveryRound}`;
+            for (const cb of window.__events.tab_reset) cb("voice-recovery");
+            for (const cb of window.__events.snapshot) cb(JSON.stringify({ root_channels: [{ ChannelID: 7, Name: "Lobby", clients: [
+                { client_id: window.__activeClient, nickname: "Self", channel_id: 7 },
+            ] }] }));
+            for (const cb of window.__events.tab_replay_done) cb("voice-recovery");
+        };
+        window.__closeVoiceFixture = async () => { v.resetVoiceSession(); remote.close(); oscillator.stop(); await input.close(); };
+        window.__recoverVoice();
+    });
+    await expect.poll(() => page.evaluate(() => window.__noxa.state.pc?.connectionState)).toBe("connected");
+    await page.evaluate(() => {
+        window.__originalVoicePeer = window.__noxa.state.pc;
+        window.__recoveryRemote.close();
+        for (const cb of window.__events.disconnected) cb();
+        window.__recoverVoice();
+    });
+    await expect.poll(() => page.evaluate(() => window.__noxa.state.pc?.acceptedICE || 0)).toBeGreaterThan(0);
+    await expect.poll(() => page.evaluate(() => window.__noxa.state.pc?.connectionState)).toBe("connected");
+    await expect.poll(() => page.evaluate(async () => [...await window.__recoveryRemote.getStats()]
+        .filter(([, report]) => report.type === "inbound-rtp" && report.kind === "audio")
+        .reduce((total, [, report]) => total + report.packetsReceived, 0))).toBeGreaterThan(5);
+    expect(await page.evaluate(() => window.__originalVoicePeer.connectionState)).toBe("closed");
+    expect(await page.evaluate(() => window.__calls.JoinChannelForTab || 0)).toBe(0);
+    await page.evaluate(() => window.__closeVoiceFixture());
+});
+
 test("voice monitor releases its local capture on restart and disconnect", async ({ page }) => {
     const result = await page.evaluate(async () => {
         const v = window.__noxa;
@@ -7455,7 +7541,10 @@ test.describe("per-tab automatic reconnect", () => {
                 if (!tab) return { error: "closed tab" };
                 if (window.__tabReconnectFailure?.[tabID]) return { error: "connection refused" };
                 tab.connected = true;
-                if (tab.active) for (const cb of window.__events.tab_reset || []) cb(tabID);
+                if (tab.active) {
+                    for (const cb of window.__events.tab_reset || []) cb(tabID);
+                    for (const cb of window.__events.tab_replay_done || []) cb(tabID);
+                }
                 for (const cb of window.__events.tab_update || []) cb(structuredClone(window.__tabs));
                 return { tab_id: tabID, error: "" };
             };
@@ -7473,6 +7562,27 @@ test.describe("per-tab automatic reconnect", () => {
         // before exercising focus preservation during later recovery.
         await page.clock.runFor(16);
         await expect(page.locator("#conn-pill")).toHaveText("a.example:12333");
+    });
+
+    for (const language of ["en", "de"]) test(`successful foreground recovery speaks in ${language}`, async ({ page }) => {
+        await page.evaluate(async language => {
+            const { state, soundEngine, speechQueue } = window.__noxa;
+            Object.assign(state.settings, { speech_language: language, play_sounds: true, effects_enabled: false,
+                spoken_messages: true, speech_connection: true, speech_volume: 100, speech_events: {}, event_sounds: {}, dnd_enabled: false });
+            await soundEngine.preload(); await soundEngine.resume(); speechQueue.clear();
+            window.__recoverySpeech = [];
+            const play = soundEngine.play.bind(soundEngine);
+            soundEngine.play = (id, options) => {
+                const played = play(id, options);
+                if (played && id.includes("connection_reconnected")) window.__recoverySpeech.push(id);
+                return played;
+            };
+            window.__loseTab("tab-a");
+        }, language);
+        await page.clock.runFor(5000);
+        await expect(page.locator("#reconnect-cancel")).toBeHidden();
+        await page.clock.runFor(200);
+        await expect.poll(() => page.evaluate(() => window.__recoverySpeech)).toEqual([`speech_${language}_connection_reconnected`]);
     });
 
     test("recovers an inactive tab without changing selection, focus or credentials", async ({ page }) => {

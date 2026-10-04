@@ -72,6 +72,20 @@ test("channel announcements use the selected cue, repeat after a short cooldown 
     assert.equal(f.queue.enqueue("user_leave", { delay: 0 }), false);
 });
 
+test("leaving voice and reconnecting speak in both languages and respect category preferences", () => {
+    for (const event of ["channel_leave", "connection_reconnected"]) {
+        for (const language of ["en", "de"]) {
+            const f = fixture();
+            f.state.settings.speech_language = language;
+            assert.equal(f.queue.enqueue(event, { delay: 0 }), true);
+            assert.equal(f.played[0].id, `speech_${language}_${event}`);
+            f.queue.clear();
+            f.state.settings[`speech_${SPEECH_EVENTS[event].category}`] = false;
+            assert.equal(f.queue.allowed(event, f.state.settings, false), false);
+        }
+    }
+});
+
 test("channel announcement preferences and notification matrix suppress speech", () => {
     const f = fixture();
     assert.equal(f.queue.allowed("user_join", f.state.settings, false), true);

@@ -286,5 +286,41 @@
     "peak": 0.114990234375,
     "rmsDB": -34.42116417751492,
     "sha256": "c9fb27b10fc7bae750686c38b4f542ce7d1b6571540a815f5a7065f06a7ca348"
+  },
+  "en/channel_leave": {
+    "title": "noXa — channel_leave",
+    "text": "Voice channel left.",
+    "duration": 1.3815873015873017,
+    "sampleRate": 22050,
+    "peak": 0.114990234375,
+    "rmsDB": -33.540412862306354,
+    "sha256": "ff65c1b958c098b8b67f8a11b314b036f3309dc8c0f1181b4f4fc68425dea515"
+  },
+  "en/connection_reconnected": {
+    "title": "noXa — connection_reconnected",
+    "text": "Reconnected to the server.",
+    "duration": 1.5905668934240362,
+    "sampleRate": 22050,
+    "peak": 0.114990234375,
+    "rmsDB": -33.53354473020992,
+    "sha256": "fd0ac83b191a054fee8019ad910e8faca04fdc74ad216069d1c760a69ebcee1f"
+  },
+  "de/channel_leave": {
+    "title": "noXa — channel_leave",
+    "text": "Sprachkanal verlassen.",
+    "duration": 1.3747845804988663,
+    "sampleRate": 22050,
+    "peak": 0.114990234375,
+    "rmsDB": -32.898440903310046,
+    "sha256": "55a6a7e0b4f1f65cfb55ca5d7fed640185414720c7a13dc7b03f37388cb63c11"
+  },
+  "de/connection_reconnected": {
+    "title": "noXa — connection_reconnected",
+    "text": "Verbindung zum Server wiederhergestellt.",
+    "duration": 1.9943310657596371,
+    "sampleRate": 22050,
+    "peak": 0.114990234375,
+    "rmsDB": -33.20787919917718,
+    "sha256": "4cfb7a613c9fd66e15f3e8d35dd4ca07df40d32f4cbc659825157d78c1a04b44"
   }
 }

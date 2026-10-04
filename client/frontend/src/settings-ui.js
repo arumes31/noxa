@@ -708,7 +708,7 @@ function pageCapture() {
         l.appendChild(document.createTextNode(" " + label));
         modeWrap.appendChild(l);
     }
-    el.append(timingNote("saved", modeWrap.querySelectorAll("input")), modeWrap);
+    el.prepend(timingNote("saved", modeWrap.querySelectorAll("input")), modeWrap);
 
     el.appendChild(row(t("settings.echo.cancellation"), checkbox(s.echo_cancellation !== false, (v) => { s.echo_cancellation = v; }), "saved"));
     el.appendChild(row(t("settings.noise.suppression"), checkbox(s.noise_suppression !== false, (v) => { s.noise_suppression = v; }), "saved"));

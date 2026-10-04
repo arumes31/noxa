@@ -34,7 +34,7 @@ import {
     initVideo, videoTrackAdded, videoTrackRemoved, videoSpeaking,
     videoRefreshNames, clearVideoGrid, shareToggle, setLowBandwidth, isLowBandwidth,
     parseTrackID, SLOT_SCREEN_AUDIO, cameraToggle, resetCameraState, clearRegionBox,
-    renegotiate, answerRemoteOffer, applyVideoLimits,
+    renegotiate, answerRemoteOffer, queuePeerNegotiation, applyVideoLimits,
 } from "./video.js";
 import * as chatUI from "./chat-ui.js";
 import { startStreamSession, stopStreamSession, streamSessionIsCurrent, receiveStreamTrack, removeStreamTrack, receiveShareAudio, removeShareAudio } from "./stream-controls.js";
@@ -615,8 +615,8 @@ async function completeReconnect(c, generation, tabID, current = () => true) {
     window.__noxaSocial?.refreshNews?.();
     startQualitySampler();
     noteActivity();
-    playEvent("connection_reconnected");
     clearSpeech("connection");
+    playAlert("connection_reconnected");
     warnCertificateClock(clockWarning, c.addr);
     return alive();
 }
@@ -1127,7 +1127,7 @@ function syncOwnChannel({ audible = true } = {}) {
             playAlert("channel_join", { effect: previousChannelID > 0 ? "own_channel_switch" : "own_channel_join" });
             playedCue = true;
         } else if (previousChannelID > 0) {
-            playEvent("own_channel_leave");
+            playAlert("channel_leave");
             playedCue = true;
         }
     }
@@ -1278,7 +1278,7 @@ window.runtime.EventsOn("event", (json) => {
                         else playAlert("channel_join", { effect: previousChannelID > 0 ? "own_channel_switch" : "own_channel_join" });
                         playedOwnCue = true;
                     } else if (nextChannelID === 0 && previousChannelID > 0) {
-                        playEvent("own_channel_leave");
+                        playAlert("channel_leave");
                         playedOwnCue = true;
                     }
                 }
@@ -1356,7 +1356,7 @@ window.runtime.EventsOn("event", (json) => {
                 state.expandedVirtual.delete(channelID);
             }
             if (selfDisplaced) {
-                if (state.myChannelID > 0 && !actionSoundsSuppressed()) playEvent("own_channel_leave");
+                if (state.myChannelID > 0 && !actionSoundsSuppressed()) playAlert("channel_leave");
                 state.myChannelID = 0;
             }
             chatUI.onChannelsDeleted([...deleted]);
@@ -2526,13 +2526,21 @@ window.runtime.EventsOn("media_limits_changed", () => {
 $("login-addr").addEventListener("input", () => { $("login-accountpw").value = ""; });
 
 window.runtime.EventsOn("ice", (json) => {
-    if (!state.pc) return;
+    const pc = state.pc;
+    if (!pc) return;
     const c = parseRuntimeObject(json);
     if (!c) return;
-    state.pc.addIceCandidate({
-        candidate: c.candidate,
-        sdpMid: c.sdp_mid || null,
-        sdpMLineIndex: c.sdp_mline_index ?? null,
+    const generation = state.serverGeneration;
+    // Native ICE events may beat the offer's asynchronous answer. Queue them
+    // behind that negotiation so the remote description exists before adding
+    // candidates, and discard work belonging to a replaced voice session.
+    void queuePeerNegotiation(pc, async () => {
+        if (state.pc !== pc || state.serverGeneration !== generation || !pc.remoteDescription) return;
+        await pc.addIceCandidate({
+            candidate: c.candidate,
+            sdpMid: c.sdp_mid || null,
+            sdpMLineIndex: c.sdp_mline_index ?? null,
+        });
     }).catch(() => {});
 });
 
