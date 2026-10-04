@@ -8,7 +8,7 @@ import { copyToClipboard } from "./clipboard.js";
 import { createMicCheck } from "./mic-check-ui.js";
 import { createNetworkEchoTest } from "./network-echo.js";
 import { percentageInput } from "./percentage-input.js";
-import { previewSounds, previewSpeech, speechPreviewLabel, audioStatus, SPEECH_EVENTS, stopPreviews, updateSoundOutput, SOUND_EVENT_GROUPS, testAll } from "./sounds.js";
+import { previewSounds, previewSpeech, speechPreviewLabel, speechEventEnabled, audioStatus, SPEECH_EVENTS, stopPreviews, updateSoundOutput, SOUND_EVENT_GROUPS, testAll } from "./sounds.js";
 import { MATRIX_EVENTS, defaultMatrixRow } from "./notifications.js";
 import { renderVoiceHints } from "./workspace-ui.js";
 import { associateControlLabel, wrappedIndex } from "./a11y.js";
@@ -1310,8 +1310,8 @@ function pageNotifications() {
     const status = document.createElement("div");
     status.className = "set-hint";
     status.setAttribute("role", "status");
-    const onLabel = (label, event) => {
-        status.textContent = label ? t("settings.playing", { label: t("settings.sound." + event) }) : t("settings.preview.finished");
+    const onLabel = (label, event, spoken) => {
+        status.textContent = label ? t("settings.playing", { label: spoken ? label : t("settings.sound." + event) }) : t("settings.preview.finished");
     };
     const button = (label, events) => {
         const b = document.createElement("button");
@@ -1350,13 +1350,13 @@ function pageNotifications() {
     speechEvents.className = "notification-event-speech";
     const speechSummary = document.createElement("summary");
     speechSummary.textContent = t("settings.notifications.eventSpeech");
-    speechEvents.append(speechSummary, speechControls);
-    speech.appendChild(speechEvents);
+    speechEvents.appendChild(speechSummary);
+    speech.append(speechControls, speechEvents);
     for (const event of Object.keys(SPEECH_EVENTS)) {
         const label = speechPreviewLabel(event, s);
         const controls = document.createElement("div");
         controls.className = "sound-controls";
-        if (event !== "test") controls.appendChild(checkbox(s.speech_events?.[event] !== false, enabled => {
+        if (event !== "test") controls.appendChild(checkbox(speechEventEnabled(s, event), enabled => {
             s.speech_events ||= {};
             s.speech_events[event] = enabled;
         }));
@@ -1369,7 +1369,7 @@ function pageNotifications() {
         const heading = document.createElement("div");
         heading.className = "set-subhead sound-controls";
         const label = document.createElement("span");
-        label.textContent = t("settings.soundgroup." + group.events[0][0]);
+        label.textContent = t("settings.soundgroup." + group.key);
         heading.append(label, button(t("settings.preview", { label: currentLanguage() === "en" ? label.textContent.toLowerCase() : label.textContent }), group.events.map(([event]) => event)));
         eventEffects.appendChild(heading);
         for (const [event] of group.events) {

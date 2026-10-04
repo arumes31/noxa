@@ -50,7 +50,8 @@ test("all 33 events have unique replacement PCM assets with safe endpoints and l
             const recording = recipes.events.find(event => event.id === id).recording;
             assert.equal(recording.sha256, metrics[id].sha256, "regeneration preserves the approved poke");
             assert.equal(recording.path, "client/frontend/src/assets/sounds/poke.wav");
-            assert.equal(def.duration, 1.031875);
+            assert.equal(def.duration, 0.6);
+            assert.equal(recording.edits[0].sequence, "Speech only; trailing double beep removed");
         }
         assert.ok(provenance.edits[id].length > 0, `${id} source provenance`);
         for (const edit of provenance.edits[id]) {

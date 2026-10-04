@@ -226,12 +226,12 @@
   },
   "poke": {
     "title": "noXa \u2014 Poke",
-    "duration": 1.031875,
+    "duration": 0.6,
     "peak": 0.11199951171875,
-    "dc": -8.564392003583686e-08,
-    "rmsDB": -32.99946114832019,
-    "targetRmsDB": -32.99946114832019,
-    "sha256": "7e5ba62a579ae6eb91b96778338319c349dc020396951da2c54280d534f9f0c7"
+    "dc": 1.8511878119574652e-06,
+    "rmsDB": -31.784741224487355,
+    "targetRmsDB": -31.784741224487355,
+    "sha256": "1e8b4e99d88e5e914b09b3dd5c3aa16c66859148e1f9cb397452e90f0a84bb6e"
   },
   "join_leave": {
     "title": "noXa \u2014 Join/leave (your channel)",

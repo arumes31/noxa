@@ -1,5 +1,13 @@
 {
   "en": {
+    "microphone_muted": "Microphone muted.",
+    "microphone_unmuted": "Microphone activated.",
+    "sound_muted": "Sound muted.",
+    "sound_unmuted": "Sound activated.",
+    "microphone_muted": "Microphone muted.",
+    "microphone_unmuted": "Microphone activated.",
+    "sound_muted": "Sound muted.",
+    "sound_unmuted": "Sound activated.",
     "client_closing": "Closing. Good bye.",
     "banned": "You were banned from the server.",
     "kicked": "You were kicked from the server.",
@@ -22,6 +30,14 @@
     "test": "This is a noXa spoken notification."
   },
   "de": {
+    "microphone_muted": "Mikrofon stummgeschaltet.",
+    "microphone_unmuted": "Mikrofon aktiviert.",
+    "sound_muted": "Ton stummgeschaltet.",
+    "sound_unmuted": "Ton aktiviert.",
+    "microphone_muted": "Mikrofon stummgeschaltet.",
+    "microphone_unmuted": "Mikrofon aktiviert.",
+    "sound_muted": "Ton stummgeschaltet.",
+    "sound_unmuted": "Ton aktiviert.",
     "client_closing": "Wird geschlossen. Auf Wiedersehen.",
     "banned": "Du wurdest vom Server gebannt.",
     "kicked": "Du wurdest vom Server entfernt.",

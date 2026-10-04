@@ -1,13 +1,15 @@
 // All event/preview paths share one original PCM sound set.
 import { SoundEngine } from "./sound-engine.js";
-import { SOUND_EVENTS, SOUND_DEFINITIONS, SOUND_URLS } from "./sound-catalog.js";
+import { SOUND_DEFINITIONS, SOUND_URLS } from "./sound-catalog.js";
+import { SPOKEN_ACTIONS, EFFECT_EVENTS as SOUND_EVENTS } from "./notification-audio.js";
 import { SPEECH_ASSETS } from "./speech-catalog.js";
 import { SpeechQueue, SPEECH_EVENTS, speechLanguage } from "./speech-queue.js";
-export { SPEECH_EVENTS } from "./speech-queue.js";
-export { SOUND_EVENTS, SOUND_EVENT_GROUPS } from "./sound-catalog.js";
+export { SPEECH_EVENTS, speechEventEnabled } from "./speech-queue.js";
+export { EFFECT_EVENTS as SOUND_EVENTS, EFFECT_GROUPS as SOUND_EVENT_GROUPS } from "./notification-audio.js";
 
 const V = () => window.__noxa;
-const definitions = { ...SOUND_DEFINITIONS }, urls = { ...SOUND_URLS };
+const definitions = Object.fromEntries(SOUND_EVENTS.map(id => [id, SOUND_DEFINITIONS[id]]));
+const urls = Object.fromEntries(SOUND_EVENTS.map(id => [id, SOUND_URLS[id]]));
 for (const [language, clips] of Object.entries(SPEECH_ASSETS)) {
     for (const [event, clip] of Object.entries(clips)) {
         const id = "speech_" + language + "_" + event;
@@ -34,7 +36,7 @@ export const speechQueue = new SpeechQueue({ engine: soundEngine, assets: SPEECH
 export function playSpeech(event, options) { return speechQueue.enqueue(event, options); }
 export function playAlert(event, options) {
     stopPreviews();
-    return speechQueue.enqueue(event, { ...options, withEffect: true });
+    return speechQueue.enqueue(event, options);
 }
 export function clearSpeech(category) { speechQueue.clear(category); }
 export async function playClosingAnnouncement() {
@@ -72,7 +74,7 @@ export function audioStatus(settings = V()?.state.settings) {
     add(settings.speech_volume === 0, "speech_zero");
     const disabled = SOUND_EVENTS.filter(event => settings.event_sounds?.[event] === false).length;
     add(disabled, "disabled_events", disabled);
-    const matrixDisabled = SOUND_EVENTS.filter(event => settings.notify_matrix?.[event]?.sound === false).length;
+    const matrixDisabled = Object.values(settings.notify_matrix || {}).filter(row => row?.sound === false).length;
     add(matrixDisabled, "disabled_notifications", matrixDisabled);
     const speechDisabled = Object.keys(SPEECH_EVENTS).filter(event => !speechQueue.allowed(event, { ...settings, play_sounds: true, spoken_messages: true, dnd_enabled: false, dnd_from: "", dnd_to: "" }, true)).length;
     add(speechDisabled, "disabled_speech", speechDisabled);
@@ -105,31 +107,43 @@ async function preparePreview(settings, generation) {
     }
     return true;
 }
-export async function previewSpeech(settings, events = ["test"], onLabel = () => {}) {
+async function previewAudio(items, settings, onLabel) {
     if (!previewAllowed()) { previewFeedback("busy"); return; }
     previewFeedback();
     stopPreviews();
     const generation = previewGeneration;
     if (!await preparePreview(settings, generation)) return;
-    for (const event of events) {
+    for (const { event, speech = false, effect } of items) {
         if (generation !== previewGeneration) return;
-        const id = "speech_" + speechLanguage(settings, navigator.language) + "_" + event;
-        const reason = soundEngine.blockReason(id, { settings, preview: true, volume: settings?.speech_volume ?? 100 });
-        if (reason || !speechQueue.allowed(event, settings, true)) {
+        const id = speech ? "speech_" + speechLanguage(settings, navigator.language) + "_" + event : event;
+        const options = { settings, preview: true, ...(speech ? { volume: settings?.speech_volume ?? 100 } : {}) };
+        const reason = soundEngine.blockReason(id, options);
+        if (reason || (speech && !speechQueue.allowed(event, settings, true, effect))) {
             previewFeedback(reason || (settings?.spoken_messages === false ? "speech_disabled" : "event_disabled"));
             continue;
         }
-        onLabel(event);
+        onLabel(speech ? speechPreviewLabel(event, settings) : SOUND_DEFINITIONS[event].label, event, speech);
         await new Promise(resolve => {
             finishDelay = resolve;
-            if (!playSpeech(event, { settings, preview: true, delay: 0, onEnded: resolve })) resolve();
+            const onEnded = () => {
+                if (generation !== previewGeneration) { resolve(); return; }
+                previewTimer = setTimeout(resolve, 180);
+            };
+            const played = speech ? playSpeech(event, { ...options, effect, delay: 0, onEnded })
+                : soundEngine.play(event, { ...options, onEnded });
+            if (!played) resolve();
         });
-        finishDelay = null;
+        finishDelay = null; previewTimer = null;
     }
     if (generation === previewGeneration) onLabel("");
 }
 
+export function previewSpeech(settings, events = ["test"], onLabel = () => {}) {
+    return previewAudio(events.map(event => ({ event, speech: true })), settings, (_label, event = "") => onLabel(event));
+}
+
 export function playEvent(name) {
+    if (Object.hasOwn(SPOKEN_ACTIONS, name)) return playAlert(SPOKEN_ACTIONS[name], { effect: name });
     return soundEngine.play(name);
 }
 
@@ -150,30 +164,17 @@ export function stopPreviews() {
 
 // Previews bypass only master mute/history, preserving DND, per-event choices
 // and volume. Draft settings never mutate saved preferences.
-export async function previewSounds(events = SOUND_EVENTS, settings = V()?.state.settings, onLabel = () => {}) {
-    if (!previewAllowed()) { previewFeedback("busy"); return; }
-    previewFeedback();
-    stopPreviews();
-    const generation = previewGeneration;
-    if (!await preparePreview(settings, generation)) return;
-    for (const name of events) {
-        if (generation !== previewGeneration) return;
-        if (!Object.hasOwn(SOUND_DEFINITIONS, name)) continue;
-        await new Promise(resolve => {
-            finishDelay = resolve;
-            const played = soundEngine.play(name, { preview: true, settings, onEnded: () => {
-                if (generation !== previewGeneration) { resolve(); return; }
-                previewTimer = setTimeout(resolve, 180);
-            } });
-            if (played) onLabel(SOUND_DEFINITIONS[name].label, name);
-            else { previewFeedback(soundEngine.blockReason(name, { preview: true, settings }) || "busy"); resolve(); }
-        });
-        finishDelay = null; previewTimer = null;
-    }
-    if (generation === previewGeneration) onLabel("");
+export function previewSounds(events = SOUND_EVENTS, settings = V()?.state.settings, onLabel = () => {}) {
+    return previewAudio(events.map(event => Object.hasOwn(SPOKEN_ACTIONS, event)
+        ? { event: SPOKEN_ACTIONS[event], speech: true, effect: event } : { event }), settings, onLabel);
 }
 
-export function testAll(settings, onLabel) { return previewSounds(SOUND_EVENTS, settings, onLabel); }
+export function testAll(settings, onLabel = () => {}) {
+    return previewAudio([
+        ...Object.keys(SPEECH_EVENTS).map(event => ({ event, speech: true })),
+        ...SOUND_EVENTS.map(event => ({ event })),
+    ], settings, onLabel);
+}
 export function updateSoundOutput() {
     updateConversationDucking();
     speechQueue.reconcile();

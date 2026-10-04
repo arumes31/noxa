@@ -106,6 +106,74 @@ test("rejected previews cannot reroute a pending live announcement", async ({ pa
     expect(result.pending).toEqual(["kicked"]);
 });
 
+for (const language of ["en", "de"]) {
+    test(`Test All plays every ${language} announcement once and no retired click`, async ({ page }) => {
+        test.setTimeout(100_000);
+        const result = await page.evaluate(async language => {
+            const settings = { spoken_messages: true, speech_language: language, speech_volume: 100, sound_volume: 100 };
+            window.__noxa = { state: { settings, activeTabID: "one" } };
+            window.__noxaPolish = { dndActive: () => false };
+            const { soundEngine, testAll, SPEECH_EVENTS, SOUND_EVENTS } = await import("/src/sounds.js");
+            const { SPOKEN_ACTIONS } = await import("/src/notification-audio.js");
+            const played = [], labels = [];
+            const play = soundEngine.play.bind(soundEngine);
+            soundEngine.play = (id, options) => { const started = play(id, options); if (started) played.push(id); return started; };
+            await testAll(settings, label => labels.push(label));
+            const retired = Object.keys(SPOKEN_ACTIONS).filter(id => soundEngine.definitions[id]);
+            const active = soundEngine.active.size;
+            await soundEngine.dispose();
+            return { played, retired, active, labels, expected: [
+                ...Object.keys(SPEECH_EVENTS).map(event => `speech_${language}_${event}`), ...SOUND_EVENTS,
+            ] };
+        }, language);
+        expect(result.played).toEqual(result.expected);
+        expect(result.retired).toEqual([]);
+        expect(result.active).toBe(0);
+        expect(result.labels.at(-1)).toBe("");
+        expect(result.labels).not.toContain(undefined);
+    });
+}
+
+test("legacy channel previews use speech and stopping Test All cancels the rest", async ({ page }) => {
+    const result = await page.evaluate(async () => {
+        const settings = { spoken_messages: true, sound_volume: 100, speech_volume: 100 };
+        window.__noxa = { state: { settings, activeTabID: "one" } };
+        window.__noxaPolish = { dndActive: () => false };
+        const { previewSounds, testAll, stopPreviews, soundEngine } = await import("/src/sounds.js");
+        const played = [], play = soundEngine.play.bind(soundEngine);
+        soundEngine.play = (id, options) => { const started = play(id, options); if (started) played.push(id); return started; };
+        await previewSounds(["own_channel_join", "join_leave", "kick"], settings);
+        const previews = [...played]; played.length = 0;
+        await testAll(settings, label => { if (label) setTimeout(stopPreviews, 50); });
+        await new Promise(resolve => setTimeout(resolve, 300));
+        const active = soundEngine.active.size;
+        await soundEngine.dispose();
+        return { previews, played, active };
+    });
+    expect(result.previews).toEqual(["speech_en_channel_join", "speech_en_user_join", "speech_en_kicked"]);
+    expect(result.played).toEqual(["speech_en_microphone_muted"]);
+    expect(result.active).toBe(0);
+});
+
+test("microphone and deafen actions dispatch their spoken recordings, never click effects", async ({ page }) => {
+    const result = await page.evaluate(async () => {
+        window.__noxa = { state: { settings: { spoken_messages: true, speech_volume: 100, sound_volume: 100 } } };
+        window.__noxaPolish = { dndActive: () => false };
+        const { playEvent, soundEngine, speechQueue } = await import("/src/sounds.js");
+        await soundEngine.preload(); await soundEngine.resume();
+        const played = [], play = soundEngine.play.bind(soundEngine);
+        soundEngine.play = (id, options) => { const started = play(id, options); if (started) played.push(id); return started; };
+        for (const action of ["mic_off", "mic_on", "deafen_on", "deafen_off"]) {
+            playEvent(action);
+            await new Promise(resolve => setTimeout(resolve, 200));
+            speechQueue.clear();
+        }
+        await soundEngine.dispose();
+        return played;
+    });
+    expect(result).toEqual(["speech_en_microphone_muted", "speech_en_microphone_unmuted", "speech_en_sound_muted", "speech_en_sound_unmuted"]);
+});
+
 test("notification previews retry a failed selected output and report missing assets", async ({ page }) => {
     const result = await page.evaluate(async () => {
         window.__noxa = { state: { settings: { play_sounds: true, sound_volume: 100, playback_device_id: "headset" } } };
@@ -157,7 +225,7 @@ test("static speech decodes and frequent contact cues survive mandatory repetiti
         const active=engine.active.size,retiring=engine.retiring.size;
         await engine.dispose();return {counts,active,retiring,speech};
     });
-    expect(result.speech).toBe(40);expect(result.active).toBe(0);expect(result.retiring).toBe(0);
+    expect(result.speech).toBe(48);expect(result.active).toBe(0);expect(result.retiring).toBe(0);
     expect(result.counts).toEqual({ptt_on:100,ptt_off:100,user_join:50,user_leave:50,channel_message:50,mic_on:50,mic_off:50,own_channel_switch:30});
 });
 
@@ -196,7 +264,7 @@ test("replacement sound set decodes, completes Test All, and releases all source
     expect(result.ended).toBe(33);
     expect(result.active).toBe(0);
     expect(result.closed).toBe("closed");
-    expect(result.durations.poke).toBeCloseTo(1.031875, 4);
+    expect(result.durations.poke).toBeCloseTo(0.6, 4);
     expect(Math.max(...Object.entries(result.durations).filter(([name]) => name !== "poke").map(([, duration]) => duration))).toBeLessThan(.501);
 });
 

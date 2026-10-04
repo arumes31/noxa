@@ -215,18 +215,51 @@ test("spoken alerts replace effects even when both sound categories are enabled"
     assert.equal(f.played.at(-1).id, "speech_en_banned");
 });
 
-test("disabled, silent or unavailable speech falls back to exactly one effect", () => {
-    for (const settings of [{ spoken_messages: false }, { speech_volume: 0 }, { speech_events: { banned: false } }]) {
+test("explicit speech choices override retired effect toggles without bypassing the matrix", () => {
+    const f = fixture();
+    f.state.settings.event_sounds = { own_channel_join: false, user_join: false };
+    assert.equal(f.queue.allowed("channel_join", f.state.settings, false), false);
+    f.state.settings.speech_events = { channel_join: true, user_join: true };
+    assert.equal(f.queue.allowed("channel_join", f.state.settings, false), true);
+    assert.equal(f.queue.allowed("user_join", f.state.settings, false), true);
+    f.state.settings.notify_matrix = { join_leave: { sound: false } };
+    assert.equal(f.queue.allowed("user_join", f.state.settings, false), false);
+});
+
+test("mute and deafen announcements follow the latest state without stale or duplicate effects", () => {
+    for (const [muted, unmuted] of [["microphone_muted", "microphone_unmuted"], ["sound_muted", "sound_unmuted"]]) {
         const f = fixture();
-        Object.assign(f.state.settings, settings);
-        assert.equal(f.queue.enqueue("banned", { withEffect: true }), true);
+        assert.equal(f.queue.enqueue(muted, { delay: 0 }), true);
+        const ended = f.played[0].options.onEnded;
+        assert.equal(f.queue.enqueue(unmuted, { delay: 0 }), true);
+        assert.equal(f.queue.current.event, unmuted);
+        ended();
+        assert.equal(f.queue.current.event, unmuted);
+        assert.deepEqual(f.played.map(item => item.id), [`speech_en_${muted}`, `speech_en_${unmuted}`]);
+        f.queue.clear();
+        assert.equal(f.queue.enqueue(muted), true);
+        assert.equal(f.queue.enqueue(unmuted), true);
+        f.tick(150);
+        assert.equal(f.queue.current.event, unmuted);
+        assert.equal(f.queue.pending.length, 0);
+    }
+});
+
+test("every spoken action stays silent when disabled or unavailable, without an effect fallback", () => {
+    for (const event of Object.keys(SPEECH_EVENTS)) for (const language of ["en", "de"]) {
+    for (const settings of [{ spoken_messages: false }, { speech_volume: 0 }, { speech_events: { [event]: false } }]) {
+        const f = fixture();
+        Object.assign(f.state.settings, settings, { speech_language: language });
+        assert.equal(f.queue.enqueue(event, { withEffect: true }), false, event);
         f.tick(1000);
-        assert.deepEqual(f.played.map(item => item.id), ["ban"]);
+        assert.deepEqual(f.played, [], event);
     }
     const f = fixture();
     const play = f.engine.play;
     f.engine.play = (id, options) => id.startsWith("speech_") ? false : play.call(f.engine, id, options);
-    f.queue.enqueue("banned", { withEffect: true });
+    f.state.settings.speech_language = language;
+    f.queue.enqueue(event, { withEffect: true });
     f.tick(150);
-    assert.deepEqual(f.played.map(item => item.id), ["ban"]);
+    assert.deepEqual(f.played, [], event);
+    }
 });

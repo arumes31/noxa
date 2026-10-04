@@ -483,10 +483,10 @@
         "file": "G05.wav",
         "sourceFileSha256": "69ce65a84a1005a3c9bf8bcf2d7f83ca8b396839fb0b33259d5e314b2b3e1c6c",
         "transcript": "Wake up!",
-        "sequence": "Speech, 60 ms gap, double beep",
-        "lengthMs": 1031.875,
+        "sequence": "Speech only; trailing double beep removed",
+        "lengthMs": 600,
         "gain": 0.18673125063600285,
-        "processing": "Uniform gain only; preserves the full selected speech and cue timing"
+        "processing": "Uniform gain; retain the first 600 ms of the selected recording, ending in silence before the beeps"
       }
     ],
     "join_leave": [

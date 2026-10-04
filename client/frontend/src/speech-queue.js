@@ -1,6 +1,10 @@
 // Fixed clip IDs only. This module has no text input, TTS or asset-generation path.
 import { soundVolume } from "./sound-engine.js";
 export const SPEECH_EVENTS = {
+    microphone_muted: { priority: 3, category: "audio", family: "microphone", effect: "mic_off", cooldown: 0 },
+    microphone_unmuted: { priority: 3, category: "audio", family: "microphone", effect: "mic_on", cooldown: 0 },
+    sound_muted: { priority: 3, category: "audio", family: "deafen", effect: "deafen_on", cooldown: 0 },
+    sound_unmuted: { priority: 3, category: "audio", family: "deafen", effect: "deafen_off", cooldown: 0 },
     client_closing: { priority: 8, category: "application" },
     banned: { priority: 7, category: "admin", effect: "ban", matrix: "kick" },
     kicked: { priority: 6, category: "admin", effect: "kick", matrix: "kick" },
@@ -30,6 +34,12 @@ export function speechLanguage(settings, systemLanguage = "en") {
     return typeof selected === "string" && selected.toLowerCase().startsWith("de") ? "de" : "en";
 }
 
+// Explicit speech choices take precedence over legacy effect switches. Keep
+// old muted choices until the user configures the corresponding announcement.
+export function speechEventEnabled(settings, event, effect = SPEECH_EVENTS[event]?.effect) {
+    return settings?.speech_events?.[event] ?? (settings?.event_sounds?.[effect] !== false);
+}
+
 export class SpeechQueue {
     constructor({ engine, assets, getState, isDND, systemLanguage = () => "en", now = () => Date.now(), schedule = (fn, ms) => setTimeout(fn, ms), cancel = id => clearTimeout(id) }) {
         Object.assign(this, { engine, assets, getState, isDND, systemLanguage, now, schedule, cancel });
@@ -40,7 +50,7 @@ export class SpeechQueue {
         const def = SPEECH_EVENTS[event];
         if (!def || !settings || this.isDND(settings) || settings.spoken_messages === false) return false;
         if (!preview && (settings.play_sounds === false || (def.category !== "application" && this.getState()?.replayingTabID))) return false;
-        if (settings.speech_events?.[event] === false || settings.event_sounds?.[effect] === false) return false;
+        if (!speechEventEnabled(settings, event, effect)) return false;
         if (def.matrix && (settings.notify_matrix?.[def.matrix]?.sound === false || settings.event_sounds?.[def.matrix] === false)) return false;
         if (event === "permission_denied" && settings.speech_permissions === false) return false;
         if (["banned", "kicked", "kicked_channel", "user_kicked", "user_kicked_channel"].includes(event) && settings.speech_removal === false) return false;
@@ -56,7 +66,7 @@ export class SpeechQueue {
         return (this.current && !this.current.preview) || this.pending.some(item => !item.preview);
     }
 
-    enqueue(event, { settings, preview = false, delay = 150, withEffect = false, effect, onEnded } = {}) {
+    enqueue(event, { settings, preview = false, delay = 150, effect, onEnded } = {}) {
         if (!Object.hasOwn(SPEECH_EVENTS, event)) return false;
         if (preview && this.hasLiveSpeech()) return false;
         if (!preview) this.stopPreview();
@@ -65,12 +75,12 @@ export class SpeechQueue {
         const key = scope + ":" + event;
         const coolingDown = !preview && now - (this.last.get(key) ?? -Infinity) < (def.cooldown ?? 10000);
         const item = { event, scope, priority: def.priority, settings, preview, onEnded, effect: effect || def.effect,
-            ready: now + delay, expires: now + 8000, withEffect };
-        // Choose one audible representation. A muted/disabled or missing voice
-        // recording may use its effect, but never prefix working speech with it.
+            ready: now + delay, expires: now + 8000 };
+        // Spoken actions never play an effect, even when their recording is
+        // disabled, silent or unavailable.
         const language = speechLanguage(selected, this.systemLanguage());
         if (!this.allowed(event, selected, preview, item.effect) || !soundVolume(selected?.speech_volume ?? 100)
-            || !this.assets[language]?.[event]) return this.fallbackEffect(item, selected);
+            || !this.assets[language]?.[event]) return false;
         if (coolingDown || (!preview && this.current?.scope === scope && this.current?.priority > def.priority)) return false;
         if (!preview) {
             this.last.set(key, now);
@@ -78,19 +88,13 @@ export class SpeechQueue {
         }
         // Terminal/high-priority messages replace obsolete connection/admin speech.
         this.pending = this.pending.filter(entry => entry.scope !== scope || entry.priority > def.priority);
-        if (this.current && (preview || (this.current.scope === scope && def.priority > this.current.priority))) this.stopCurrent();
+        const replacesCurrentState = def.family && SPEECH_EVENTS[this.current?.event]?.family === def.family;
+        if (this.current && (preview || (this.current.scope === scope && (def.priority > this.current.priority || replacesCurrentState)))) this.stopCurrent();
         this.pending.push(item);
         this.pending.sort((a, b) => b.priority - a.priority);
         this.pending = this.pending.slice(0, 3);
         this.pump();
         return true;
-    }
-
-    fallbackEffect(item, settings) {
-        const def = SPEECH_EVENTS[item.event];
-        if (!item.withEffect || (def.matrix && (settings?.notify_matrix?.[def.matrix]?.sound === false
-            || settings?.event_sounds?.[def.matrix] === false))) return false;
-        return this.engine.play(item.effect, { settings, scope: item.scope, preview: item.preview, onEnded: item.onEnded });
     }
 
     pump() {
@@ -112,7 +116,7 @@ export class SpeechQueue {
                 onEnded: () => { if (this.current === playing) { this.current = null; item.onEnded?.(); this.pump(); } } });
             if (played) return;
             this.current = null;
-            if (!this.fallbackEffect(item, settings)) item.onEnded?.();
+            item.onEnded?.();
         }
     }
 

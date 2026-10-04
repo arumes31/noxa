@@ -358,5 +358,77 @@
     "peak": 0.114990234375,
     "rmsDB": -32.12504305115408,
     "sha256": "0f15e6b3d9baca2a4e2441babdcdafb929c4a4cec6572751b3c1c2225e769c2e"
+  },
+  "en/microphone_muted": {
+    "title": "noXa — microphone_muted",
+    "text": "Microphone muted.",
+    "duration": 1.1377777777777778,
+    "sampleRate": 22050,
+    "peak": 0.114990234375,
+    "rmsDB": -39.691697880726,
+    "sha256": "e036411c0a7d1c0350eb6ff2b8f3852fbcc4b8b931ab99ec40b195a78bed5f79"
+  },
+  "en/microphone_unmuted": {
+    "title": "noXa — microphone_unmuted",
+    "text": "Microphone activated.",
+    "duration": 1.4396371882086167,
+    "sampleRate": 22050,
+    "peak": 0.114990234375,
+    "rmsDB": -39.705120589739316,
+    "sha256": "476f4337864acc85f4a508af32edc03ccc2502401c40c4ff7cfe56ff4e90a179"
+  },
+  "en/sound_muted": {
+    "title": "noXa — sound_muted",
+    "text": "Sound muted.",
+    "duration": 1.0565079365079366,
+    "sampleRate": 22050,
+    "peak": 0.114990234375,
+    "rmsDB": -37.001195867964405,
+    "sha256": "0d6a0e3da1c5fde9860d1b89811e6540407eb15046246037bd1309bc0c13df67"
+  },
+  "en/sound_unmuted": {
+    "title": "noXa — sound_unmuted",
+    "text": "Sound activated.",
+    "duration": 1.3699773242630386,
+    "sampleRate": 22050,
+    "peak": 0.114990234375,
+    "rmsDB": -36.28972675360471,
+    "sha256": "0a0294ea7866b5169cf30ea7e86d90676ec1dadd8a5b88e877883c279e408e93"
+  },
+  "de/microphone_muted": {
+    "title": "noXa — microphone_muted",
+    "text": "Mikrofon stummgeschaltet.",
+    "duration": 1.4170975056689343,
+    "sampleRate": 22050,
+    "peak": 0.114990234375,
+    "rmsDB": -34.15999470913778,
+    "sha256": "50667b3c911413c6b25d4a07f3b00f0d9445c84ed07860f5133a472e19f49d66"
+  },
+  "de/microphone_unmuted": {
+    "title": "noXa — microphone_unmuted",
+    "text": "Mikrofon aktiviert.",
+    "duration": 1.2440816326530613,
+    "sampleRate": 22050,
+    "peak": 0.114990234375,
+    "rmsDB": -34.6159051600053,
+    "sha256": "dd0afaf9732c68f7b40b947295ab9cc98c5b209c06632f7ce5db402b76785f96"
+  },
+  "de/sound_muted": {
+    "title": "noXa — sound_muted",
+    "text": "Ton stummgeschaltet.",
+    "duration": 0.9946485260770975,
+    "sampleRate": 22050,
+    "peak": 0.114990234375,
+    "rmsDB": -33.433746113438715,
+    "sha256": "36c5d864e209ba915b149254117e3b9af040cc5de93276bc848e60f98555f0e8"
+  },
+  "de/sound_unmuted": {
+    "title": "noXa — sound_unmuted",
+    "text": "Ton aktiviert.",
+    "duration": 0.8885714285714286,
+    "sampleRate": 22050,
+    "peak": 0.114990234375,
+    "rmsDB": -34.389442191758036,
+    "sha256": "57c173cc7f252fd22fbc5bfa33bc035a0cbf1f70f9b60bdf04270f40ed98b283"
   }
 }

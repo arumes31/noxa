@@ -4430,6 +4430,7 @@ test("static speech follows language, rare events, draft volume and mute setting
 });
 
 test("sound previews use draft volume, finish Test All, and cancel on close @a11y", async ({ page }) => {
+    test.setTimeout(90_000);
     await page.evaluate(async () => {
         const { state, soundEngine } = window.__noxa;
         state.settings = { ...state.settings, play_sounds: false, sound_volume: 100, event_sounds: {}, dnd_enabled: false };
@@ -4446,17 +4447,17 @@ test("sound previews use draft volume, finish Test All, and cancel on close @a11
     const volume = page.getByRole("slider", { name: "Sound volume", exact: true });
     await page.locator(".notification-event-effects > summary").click();
     await volume.fill("0");
-    await page.getByRole("button", { name: "Preview Joined channel", exact: true }).click();
+    await page.getByRole("button", { name: "Preview Push-to-talk on", exact: true }).click();
     expect(await page.evaluate(() => window.__previewedSounds.length)).toBe(0);
     await volume.fill("200");
-    await page.getByRole("button", { name: "Preview Joined channel", exact: true }).click();
-    await expect.poll(() => page.evaluate(() => window.__previewedSounds.at(-1))).toEqual({ name: "own_channel_join", volume: 200 });
+    await page.getByRole("button", { name: "Preview Push-to-talk on", exact: true }).click();
+    await expect.poll(() => page.evaluate(() => window.__previewedSounds.at(-1))).toEqual({ name: "ptt_on", volume: 200 });
     expect(await page.evaluate(() => window.__noxa.state.settings.sound_volume)).toBe(100);
     await page.getByRole("button", { name: "Stop preview", exact: true }).click();
     await page.evaluate(() => { window.__previewedSounds = []; });
     await page.getByRole("button", { name: "Test all sounds", exact: true }).click();
-    await expect(page.getByRole("status").filter({ hasText: "Preview finished" })).toBeVisible({ timeout: 20000 });
-    expect(await page.evaluate(() => new Set(window.__previewedSounds.map(x => x.name)).size)).toBe(33);
+    await expect(page.getByRole("status").filter({ hasText: "Preview finished" })).toBeVisible({ timeout: 70_000 });
+    expect(await page.evaluate(() => new Set(window.__previewedSounds.map(x => x.name)).size)).toBe(41);
     await page.getByRole("button", { name: "Preview connection", exact: true }).click();
     await page.getByRole("button", { name: "Cancel", exact: true }).click();
     await expect.poll(() => page.evaluate(() => window.__noxa.soundEngine.active.size)).toBe(0);
@@ -8222,7 +8223,7 @@ test("removes cascaded deleted channels and displaces every cached member safely
     await expect(page.locator("#voice-status")).toHaveText("voice off");
 });
 
-test("starts voice and uses channel effect cues when speech is disabled", async ({ page }) => {
+test("starts voice silently when channel speech is disabled", async ({ page }) => {
     await page.evaluate(async () => {
         window.__noxa.state.settings.spoken_messages = false;
         window.__getUserMediaCalls = 0;
@@ -8256,9 +8257,7 @@ test("starts voice and uses channel effect cues when speech is disabled", async 
 
     await expect(page.locator("#voice-join")).toHaveCount(0);
     await expect.poll(() => page.evaluate(() => window.__getUserMediaCalls)).toBeGreaterThan(0);
-    await expect.poll(() => page.evaluate(
-        () => window.__playedMedia.some((src) => src.includes("channel_join")),
-    )).toBe(true);
+    expect(await page.evaluate(() => window.__playedMedia)).toEqual([]);
     await expect(page.locator("#voice-status")).toHaveText("voice unavailable");
     await expect(page.locator("#mic-status > span")).toHaveText("Microphone access denied");
 
@@ -8277,9 +8276,9 @@ test("starts voice and uses channel effect cues when speech is disabled", async 
         const moved = JSON.stringify({ type: "user_moved", data: { client_id: "client-a", channel_id: 43 } });
         for (const cb of window.__events.event || []) cb(moved);
     });
-    // A switch uses its own authored cue and does not replay channel join.
+    // Disabling channel speech must not revive the retired click on a switch.
     await expect.poll(() => page.evaluate(() => window.__noxa.state.myChannelID)).toBe(43);
-    await expect.poll(() => page.evaluate(() => window.__playedMedia.at(-1))).toBe("own_channel_switch");
+    expect(await page.evaluate(() => window.__playedMedia)).toEqual([]);
     await page.evaluate(() => {
         const moved = JSON.stringify({ type: "user_moved", data: { client_id: "client-a", channel_id: 0 } });
         for (const cb of window.__events.event || []) cb(moved);
@@ -10495,7 +10494,7 @@ test("debounces keyboard pane persistence and refreshes separator values", async
     )).toBe(0);
 });
 
-test("uses grouped, distinct action sounds without replaying historical tab activity", async ({ page }) => {
+test("disabled speech stays silent while unrelated effects work and history stays silent", async ({ page }) => {
     const result = await page.evaluate(async () => {
         const tones = [];
         const media = [];
@@ -10523,7 +10522,7 @@ test("uses grouped, distinct action sounds without replaying historical tab acti
         state.settings = {
             ...state.settings,
             activation_mode: "ptt",
-            // This test covers effect fallback; speech preference has its own suite.
+            // Speech has no effect fallback; unrelated effects remain enabled.
             spoken_messages: false,
             ptt_release_delay_ms: 0,
             event_sounds: {},
@@ -10678,32 +10677,32 @@ test("uses grouped, distinct action sounds without replaying historical tab acti
             replayFirstCueCleared, liveMoveInitialMedia, liveMoveCueCleared, groups };
     });
 
-    expect(result.moveIn).toEqual(["user_move_in"]);
-    expect(result.moveOut).toEqual(["user_move_out"]);
+    expect(result.moveIn).toEqual([]);
+    expect(result.moveOut).toEqual([]);
     expect(result.matrixOff).toEqual([]);
-    expect(result.custom).toEqual(["user_move_out"]);
+    expect(result.custom).toEqual([]);
     expect(result.replay).toEqual([]);
     expect(result.disabledSpecific).toEqual([]);
-    expect(result.afterReplay).toEqual(["user_move_in"]);
+    expect(result.afterReplay).toEqual([]);
     expect(result.keywordChat).toEqual(["keyword"]);
     expect(result.roleChat).toEqual(["mention"]);
     expect(result.ordinaryChat).toEqual(["channel_message"]);
     expect(result.ownJoin).toEqual([]);
-    expect(result.ownJoinMedia).toBe(1);
-    expect(result.ownSwitch).toEqual(["own_channel_switch"]);
-    expect(result.channelDeletion).toEqual(["own_channel_leave"]);
+    expect(result.ownJoinMedia).toBe(0);
+    expect(result.ownSwitch).toEqual([]);
+    expect(result.channelDeletion).toEqual([]);
     expect(result.vadPTT).toEqual([]);
     expect(result.ptt).toEqual(["ptt_on"]);
-    expect(result.deafen).toEqual(["deafen_on"]);
+    expect(result.deafen).toEqual([]);
     expect(result.guestConnect).toEqual(["connection_connected"]);
-    expect(result.guestInitialJoinMedia).toBe(1);
+    expect(result.guestInitialJoinMedia).toBe(0);
     expect(result.guestInitialCueCleared).toBe(true);
-    expect(result.replayFirstIdentityMedia).toBe(1);
+    expect(result.replayFirstIdentityMedia).toBe(0);
     expect(result.replayFirstCueCleared).toBe(true);
-    expect(result.liveMoveInitialMedia).toBe(1);
+    expect(result.liveMoveInitialMedia).toBe(0);
     expect(result.liveMoveCueCleared).toBe(true);
     expect(result.groups).toEqual(expect.arrayContaining([
-        "Connection", "Your channel", "Other users", "Voice controls", "Notifications",
+        "Connection", "Voice controls", "Notifications",
     ]));
     await page.getByText("Individual sound effects", { exact: true }).click();
     await expect(page.getByText("Channel message", { exact: true })).toBeVisible();
