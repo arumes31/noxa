@@ -79,6 +79,9 @@ test("removed GIFs and a disposed controller cannot resume obsolete images", asy
     await page.evaluate(() => { window.__removedGIF = document.getElementById("offscreen"); window.__removedGIF.remove(); });
     await focusWindow(page, true);
     expect(await page.evaluate(() => window.__removedGIF.src)).toMatch(/^data:image\/png/);
+    // IntersectionObserver reports visibility asynchronously. Establish resumed
+    // playback before testing that disposal prevents a later background pause.
+    await expect(page.locator("#visible")).toHaveAttribute("src", gif);
     await page.evaluate(() => window.__stopGIF());
     await focusWindow(page, false); await page.clock.runFor(60_000);
     await expect(page.locator("#visible")).toHaveAttribute("src", gif);
