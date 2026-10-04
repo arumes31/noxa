@@ -50,6 +50,19 @@ test("each fixed speech event has valid English/German PCM and no orphaned clips
     }
 });
 
+test("German announcements retain the selected D33 voice, Channel wording and shipped attribution", () => {
+    const provenance = JSON.parse(readFileSync(new URL("../src/assets/speech/provenance.json", import.meta.url)));
+    assert.equal(provenance.models.de, "de/de_DE/mls/medium/de_DE-mls-medium");
+    assert.equal(provenance.authoring.de.audition, "D33");
+    assert.equal(provenance.authoring.de.speaker_id, 9);
+    assert.equal(provenance.authoring.de.source_speaker, "9132");
+    assert.equal(SPEECH_ASSETS.de.user_join.transcript, "Benutzer ist dem Channel beigetreten.");
+    for (const clip of Object.values(SPEECH_ASSETS.de)) assert.doesNotMatch(clip.transcript, /kanal/i);
+    const notice = readFileSync(new URL("../public/noxa-audio-licenses.txt", import.meta.url), "utf8");
+    assert.match(notice, /Multilingual LibriSpeech/);
+    assert.match(notice, /creativecommons\.org\/licenses\/by\/4\.0\//);
+});
+
 test("preview never interrupts a live critical announcement", () => {
     const f = fixture();
     f.queue.enqueue("banned", { delay: 0 });

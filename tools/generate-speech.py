@@ -1,7 +1,7 @@
 """Development-only static speech rendering. Never imported or run by noXa.
 
 Usage: python tools/generate-speech.py --models .cache/noxa-speech-models [--events user_join user_leave]
-Requires piper-tts==1.4.2 and numpy in an isolated environment.
+Requires piper-tts==1.4.2, numpy and onnx in an isolated environment.
 Model directory contains en.onnx, de.onnx, matching .json files and provenance.json.
 """
 import argparse
@@ -9,14 +9,57 @@ import hashlib
 import importlib.metadata
 import io
 import json
+import math
 import wave
 from pathlib import Path
 import numpy as np
 from piper import PiperVoice, SynthesisConfig
+from piper.config import PiperConfig
+
+
+def load_german_voice(models, settings):
+    import onnx
+    import onnxruntime as ort
+
+    config = json.loads((models / 'de.onnx.json').read_text(encoding='utf-8'))
+    assert config['speaker_id_map'][settings['source_speaker']] == settings['speaker_id']
+    model = onnx.load(str(models / 'de.onnx'))
+    # Expose existing duration predictions; weights and inference stay unchanged.
+    model.graph.output.append(onnx.helper.make_tensor_value_info(
+        settings['alignment_output'], onnx.TensorProto.FLOAT, [1, 1, 'phonemes']))
+    onnx.checker.check_model(model)
+    options = ort.SessionOptions()
+    options.intra_op_num_threads = 1
+    options.inter_op_num_threads = 1
+    session = ort.InferenceSession(model.SerializeToString(), sess_options=options,
+                                   providers=['CPUExecutionProvider'])
+    return PiperVoice(session=session, config=PiperConfig.from_dict(config))
+
+
+def render_german(voice, text, settings):
+    for word, pronunciation in settings['pronunciation'].items():
+        text = text.replace(word, pronunciation)
+    phonemes = [p for sentence in voice.phonemize(text) for p in sentence]
+    # MLS needs audiobook-length context. One inference avoids Piper's sentence
+    # splitting; only the final repetition becomes the shipped announcement.
+    repeats = max(settings['minimum_repetitions'],
+                  math.ceil(settings['minimum_context_phonemes'] / len(phonemes)))
+    prefix = (phonemes + [' ']) * (repeats - 1)
+    ids = voice.phonemes_to_ids(prefix + phonemes)
+    start = len(voice.phonemes_to_ids(prefix)) - 1
+    samples, counts = voice.phoneme_ids_to_audio(ids, SynthesisConfig(
+        speaker_id=settings['speaker_id'], length_scale=settings['length_scale'],
+        noise_scale=settings['noise_scale'], noise_w_scale=settings['noise_w_scale']),
+        include_alignments=True)
+    assert counts is not None and len(counts) == len(ids) and counts.sum() == len(samples)
+    rate = voice.config.sample_rate
+    offset = max(0, int(counts[:start].sum()) - round(rate * settings['alignment_padding_ms'] / 1000))
+    return rate, samples[offset:].astype(np.float64)
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--models', type=Path, required=True)
 parser.add_argument('--events', nargs='+', help='Render only these events; retain other existing recordings and metrics')
+parser.add_argument('--languages', nargs='+', choices=['en', 'de'], default=['en', 'de'])
 args = parser.parse_args()
 root = Path(__file__).resolve().parents[1]
 out = root / 'client/frontend/src/assets/speech'
@@ -24,31 +67,46 @@ lines = json.loads((Path(__file__).parent / 'speech-lines.json').read_text(encod
 if args.events and set(args.events) - {event for phrases in lines.values() for event in phrases}:
     parser.error('Unknown speech event')
 assets = {}
-metrics = json.loads((out / 'metrics.json').read_text(encoding='utf-8')) if args.events else {}
+provenance = json.loads((out / 'provenance.json').read_text(encoding='utf-8'))
+assert importlib.metadata.version('piper-tts') == '1.4.2'
+model_provenance = json.loads((args.models / 'provenance.json').read_text(encoding='utf-8'))
+assert model_provenance['models'] == provenance['models'] and model_provenance['revision'] == provenance['revision'], 'Download the current authoring models first'
+for name, digest in provenance.get('checksums', {}).items():
+    if name.split('.')[0] in args.languages:
+        assert hashlib.sha256((args.models / name).read_bytes()).hexdigest() == digest, name
+metrics = json.loads((out / 'metrics.json').read_text(encoding='utf-8'))
 for language, phrases in lines.items():
-    voice = PiperVoice.load(str(args.models / (language + '.onnx')))
+    german = provenance['authoring']['de'] if language == 'de' else None
+    voice = None
+    if language in args.languages:
+        voice = load_german_voice(args.models, german) if german else PiperVoice.load(str(args.models / (language + '.onnx')))
     (out / language).mkdir(parents=True, exist_ok=True)
     assets[language] = {}
     for event, text in phrases.items():
-        if args.events and event not in args.events:
+        if voice is None or (args.events and event not in args.events):
+            assert metrics[f'{language}/{event}']['text'] == text, f'Regenerate changed text: {language}/{event}'
             assets[language][event] = metrics[f'{language}/{event}']['duration']
             continue
-        raw = io.BytesIO()
-        with wave.open(raw, 'wb') as wav:
-            voice.synthesize_wav(text, wav, syn_config=SynthesisConfig(length_scale=1.08, noise_scale=.55, noise_w_scale=.7))
-        raw.seek(0)
-        with wave.open(raw, 'rb') as wav:
-            assert wav.getnchannels() == 1 and wav.getsampwidth() == 2
-            rate = wav.getframerate()
-            samples = np.frombuffer(wav.readframes(wav.getnframes()), dtype='<i2').astype(np.float64) / 32768
+        if german:
+            event_settings = {**german, **german.get('events', {}).get(event, {})}
+            rate, samples = render_german(voice, text, event_settings)
+        else:
+            raw = io.BytesIO()
+            with wave.open(raw, 'wb') as wav:
+                voice.synthesize_wav(text, wav, syn_config=SynthesisConfig(length_scale=1.08, noise_scale=.55, noise_w_scale=.7))
+            raw.seek(0)
+            with wave.open(raw, 'rb') as wav:
+                assert wav.getnchannels() == 1 and wav.getsampwidth() == 2
+                rate = wav.getframerate()
+                samples = np.frombuffer(wav.readframes(wav.getnframes()), dtype='<i2').astype(np.float64) / 32768
         assert rate in (22050, 24000, 48000) and np.isfinite(samples).all()
         active = np.flatnonzero(np.abs(samples) > .002)
         assert len(active), f'{language}/{event}: empty clip'
-        # Preserve consonant edges with 25ms padding; remove neural-model trailing silence.
-        pad = round(rate * .025)
-        samples = samples[max(0, active[0]-pad):min(len(samples), active[-1]+pad+1)].copy()
+        leading = round(rate * (german['leading_padding_ms'] if german else 25) / 1000)
+        trailing = round(rate * (german['trailing_padding_ms'] if german else 25) / 1000)
+        samples = samples[max(0, active[0]-leading):min(len(samples), active[-1]+trailing+1)].copy()
         samples -= samples.mean()
-        ramp = np.linspace(0, 1, round(rate*.005))
+        ramp = np.linspace(0, 1, round(rate * (german['endpoint_fade_ms'] if german else 5) / 1000))
         samples[:len(ramp)] *= ramp
         samples[-len(ramp):] *= ramp[::-1]
         rms = np.sqrt(np.mean(samples**2))
@@ -77,11 +135,5 @@ for language, events in assets.items():
 catalog += '};\n'
 (root / 'client/frontend/src/speech-catalog.js').write_text(catalog, encoding='utf-8')
 (out / 'metrics.json').write_text(json.dumps(metrics, indent=2, ensure_ascii=False)+'\n', encoding='utf-8')
-provenance = json.loads((args.models/'provenance.json').read_text())
-provenance['authoring'] = {'tool': f'piper-tts {importlib.metadata.version("piper-tts")}', 'length_scale': 1.08,
-    'noise_scale': .55, 'noise_w_scale': .7, 'peak_ceiling': .115,
-    'target_rms_dbfs': -31, 'silence_threshold': .002, 'edge_padding_ms': 25,
-    'endpoint_fade_ms': 5, 'runtime_generation': False}
-(out / 'provenance.json').write_text(json.dumps(provenance, indent=2)+'\n', encoding='utf-8')
-for language in assets:
+for language in args.languages:
     (out / (language+'-MODEL_CARD')).write_bytes((args.models/(language+'-MODEL_CARD')).read_bytes())

@@ -1,15 +1,15 @@
-# Model card for thorsten (medium)
+# Model card for mls (medium)
 
 * Language: de_DE (German, Germany)
-* Speakers: 1
+* Speakers: 236
 * Quality: medium
 * Samplerate: 22,050Hz
 
 ## Dataset
 
-* URL: https://github.com/thorstenMueller/Thorsten-Voice
-* License: CC0
+* URL: http://openslr.org/94/
+* License: CC-BY 4.0
 
 ## Training
 
-Finetuned from U.S. English lessac voice (medium quality).
+Trained from scratch

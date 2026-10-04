@@ -11,10 +11,40 @@
     "silence_threshold": 0.002,
     "edge_padding_ms": 25,
     "endpoint_fade_ms": 5,
-    "runtime_generation": false
+    "runtime_generation": false,
+    "de": {
+      "audition": "D33",
+      "speaker_id": 9,
+      "source_speaker": "9132",
+      "length_scale": 1,
+      "noise_scale": 0.333,
+      "noise_w_scale": 0.333,
+      "minimum_context_phonemes": 200,
+      "minimum_repetitions": 3,
+      "alignment_output": "w_ceil",
+      "alignment_padding_ms": 25,
+      "leading_padding_ms": 40,
+      "trailing_padding_ms": 60,
+      "endpoint_fade_ms": 6,
+      "pronunciation": {
+        "Channel": "[[tʃˈɛnəl]]",
+        "Server": "[[sˈɛrvɜ]]",
+        "noXa-": "Noksa-"
+      },
+      "events": {
+        "banned": { "length_scale": 1.15 },
+        "kicked": { "length_scale": 1.15 },
+        "user_kicked": { "length_scale": 1.15 },
+        "server_shutdown": { "length_scale": 1.15 }
+      }
+    }
   },
   "models": {
     "en": "en/en_US/ljspeech/high/en_US-ljspeech-high",
-    "de": "de/de_DE/thorsten/medium/de_DE-thorsten-medium"
+    "de": "de/de_DE/mls/medium/de_DE-mls-medium"
+  },
+  "checksums": {
+    "de.onnx": "69cd1d2aa5a35839a518966fcc4924b5f93e5f8c948ed0752b1a616ad53f65bf",
+    "de.onnx.json": "b0af1c89ddfdc72d32e015729b0e89b99eec13c2c8caa1db7488d98e9e570b40"
   }
 }

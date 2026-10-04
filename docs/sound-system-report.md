@@ -2,13 +2,15 @@
 
 ## Status
 
+2026-10-04 German voice update: all 24 German announcements use the selected audition D33 (MLS speaker 9 / source 9132). The join announcement is "Benutzer ist dem Channel beigetreten." German speech consistently uses "Channel". Model provenance, generation settings and CC BY 4.0 attribution are included with the fixed recordings; English recordings retain their existing voice.
+
 2026-10-02 poke update: the user selected G05, “Wake up!” in the Microsoft David Desktop voice followed by a double beep. The 1.031875-second static recording replaces the dry poke and is pinned in the authoring recipe. Uniform gain adjustment retains the existing 0.115 peak ceiling; its actual peak is 0.112 and RMS about -33 dBFS. This is an explicit user-approved exception to the earlier non-tonal pack direction and the sample libraries' CC0 provenance; the Windows-generated voice is recorded separately in the source notice. The 32 sound/speech unit tests, frontend build and focused Web Audio preview/headroom tests pass.
 
-The implementation ships 33 effects and 30 English/German speech recordings. The production application only plays bundled files. The original 50 recordings replace the previous pack; the additional viewer-start cue uses the same licensed source collection. The design target is Hybrid Professional Console + Modern Desktop.
+The implementation ships 33 effects and 48 English/German speech recordings. The production application only plays bundled files. The original 50 recordings replaced the previous pack; the additional viewer-start cue uses the same licensed source collection. The design target is Hybrid Professional Console + Modern Desktop.
 
 **Approved for implementation after the metallic, drum-like and instrumental sources were removed.** The user's final instruction was “ok implement.” The corrected assets are integrated into production event playback, settings previews and the application build. The initial two noise-based auditions were rejected as too similar and are not shipped. Approval to implement does not constitute a complete fatigue or platform listening review. This report does not certify natural pronunciation, long-session comfort, physical headphone/speaker routing, or final native multi-client behavior. Audition files are in `.cache/noxa-audition/`.
 
-The checked-out repository is `https://github.com/arumes31/noxa.git`, on the existing `codex/fix-live-audio-and-members` branch. The remote was inspected, not renamed. No commit, push, release or deployment was performed by this task.
+The original sound rework was prepared in `https://github.com/arumes31/noxa.git` on `codex/fix-live-audio-and-members`. Subsequent voice updates follow the project's normal release workflow.
 
 ## Audio architecture
 
@@ -63,16 +65,16 @@ Offline work consists of onset trimming, downmixing, resampling, rumble/DC clean
 Speech was rendered afresh from complete fixed sentences using development-only Piper 1.4.2, not converted from old speech files. The selected voices and licensing evidence are recorded in `assets/speech/README.md`, pinned model cards and `provenance.json`:
 
 - English: en_US-ljspeech-high. Its [model card](https://huggingface.co/rhasspy/piper-voices/blob/main/en/en_US/ljspeech/high/MODEL_CARD) identifies the public-domain [LJ Speech dataset](https://keithito.com/LJ-Speech-Dataset/).
-- German: de_DE-thorsten-medium. Its [model card](https://huggingface.co/rhasspy/piper-voices/blob/main/de/de_DE/thorsten/medium/MODEL_CARD) identifies Thorsten Voice under CC0.
+- German: selected audition D33, de_DE-mls-medium speaker 9 (MLS source speaker 9132). Its [model card](https://huggingface.co/rhasspy/piper-voices/blob/1162a9173d0ce503555aed757976b7a9912eae4c/de/de_DE/mls/medium/MODEL_CARD) identifies Multilingual LibriSpeech under CC BY 4.0. The bundled audio notice includes attribution and describes the edits.
 - Pinned voice repository revision: `1162a9173d0ce503555aed757976b7a9912eae4c`. The model weights and GPL-licensed Piper tool are development dependencies only and are not included in the application. These generated fixed sentences contain no copied application sound branding.
-- Authoring parameters: length scale 1.08; noise scale 0.55; noise width 0.7; 25 ms edge padding; 5 ms endpoint fades; target RMS -31 dBFS subject to 0.115 peak ceiling. These are applied only during authoring and are recorded in provenance.json.
+- English authoring: length scale 1.08; noise scale 0.55; noise width 0.7; 25 ms edge padding; 5 ms endpoint fades. German D33: length scale 1; both noise scales 0.333; repeated context with phoneme-aligned extraction, 40/60 ms leading/trailing padding and 6 ms fades. Both target RMS -31 dBFS subject to a 0.115 peak ceiling. Full parameters are recorded in provenance.json.
 - Effects and speech `metrics.json` record file hashes, durations and measured levels. Speech catalogs include the exact rendered transcripts. Tests check hashes, valid PCM, non-silence, safe peaks and registry/transcript consistency.
 
 Authoring commands:
 
 ```text
 uv --cache-dir .cache/uv venv .cache/noxa-audio-env --python 3.12
-uv --cache-dir .cache/uv pip install --python .cache/noxa-audio-env/Scripts/python.exe piper-tts==1.4.2 numpy==2.5.3 scipy==1.17.1 soundfile==0.13.1
+uv --cache-dir .cache/uv pip install --python .cache/noxa-audio-env/Scripts/python.exe piper-tts==1.4.2 numpy==2.5.3 onnx==1.23.1 scipy==1.17.1 soundfile==0.13.1
 node tools/generate-sounds.mjs --download
 python tools/download-speech-models.py
 .cache/noxa-audio-env/Scripts/python.exe tools/generate-speech.py --models .cache/noxa-speech-models

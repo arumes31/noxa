@@ -108,8 +108,17 @@ Archive SHA-256: aa1889414310c7cfdd8dc291c19d4e4fc21ec987e9238b0d961fb72449c263a
 Speech: complete fixed noXa English and German sentences rendered offline.
 English: Piper en_US-ljspeech-high, based on public-domain LJ Speech.
 https://keithito.com/LJ-Speech-Dataset/
-German: Piper de_DE-thorsten-medium, based on CC0 Thorsten Voice.
-https://github.com/thorstenMueller/Thorsten-Voice
+German: D33, Piper de_DE-mls-medium, speaker ID 9 (MLS source speaker 9132).
+Model published by rhasspy / Michael Hansen:
+https://huggingface.co/rhasspy/piper-voices/blob/1162a9173d0ce503555aed757976b7a9912eae4c/de/de_DE/mls/medium/MODEL_CARD
+Based on Multilingual LibriSpeech (MLS), 2020:
+Vineel Pratap, Qiantong Xu, Anuroop Sriram, Gabriel Synnaeve and Ronan Collobert.
+https://www.openslr.org/94/
+Dataset and German noXa recordings: Creative Commons Attribution 4.0 International (CC BY 4.0).
+https://creativecommons.org/licenses/by/4.0/
+https://creativecommons.org/licenses/by/4.0/legalcode
+Changes: synthesized noXa sentences, pronunciation overrides, context cropping,
+silence trimming, endpoint fades and loudness normalization. No endorsement implied.
 Voice source revision: 1162a9173d0ce503555aed757976b7a9912eae4c
 https://huggingface.co/rhasspy/piper-voices
 Piper tooling and model weights are not included in the application.
