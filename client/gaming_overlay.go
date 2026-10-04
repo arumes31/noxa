@@ -32,6 +32,8 @@ type GamingOverlayMonitor struct {
 }
 
 type GamingOverlaySpeaker struct {
+	ID       string `json:"id"`
+	Avatar   string `json:"avatar"`
 	Name     string `json:"name"`
 	Speaking bool   `json:"speaking"`
 	Muted    bool   `json:"muted"`
@@ -65,12 +67,12 @@ func normalizeGamingOverlay(s GamingOverlaySnapshot) GamingOverlaySnapshot {
 	s.Status = overlayText(s.Status, 64)
 	s.Notification = overlayText(s.Notification, 140)
 	switch s.Position {
-	case "top-left", "top-right", "bottom-left", "bottom-right", "custom":
+	case "center-left", "top-left", "top-right", "bottom-left", "bottom-right", "custom":
 	default:
-		s.Position = "top-right"
+		s.Position = "center-left"
 	}
 	if s.Scale == 0 {
-		s.Scale = 100
+		s.Scale = 80
 	}
 	if s.Opacity == 0 {
 		s.Opacity = 88
@@ -79,31 +81,27 @@ func normalizeGamingOverlay(s GamingOverlaySnapshot) GamingOverlaySnapshot {
 	s.Opacity = clampSetting(s.Opacity, 20, 100)
 	s.X, s.Y = clampSetting(s.X, 0, 100), clampSetting(s.Y, 0, 100)
 	s.Monitor = overlayText(s.Monitor, 128)
-	if len(s.Speakers) > 8 {
-		s.Speakers = s.Speakers[:8]
+	visible := make([]GamingOverlaySpeaker, 0, min(8, len(s.Speakers)))
+	for _, speaker := range s.Speakers {
+		if !speaker.Speaking || speaker.Muted {
+			continue
+		}
+		speaker.Name = overlayText(speaker.Name, 48)
+		speaker.ID = overlayText(speaker.ID, 160)
+		if len(speaker.Avatar) > 32768 {
+			speaker.Avatar = ""
+		}
+		visible = append(visible, speaker)
+		if len(visible) == 8 {
+			break
+		}
 	}
-	s.Speakers = append([]GamingOverlaySpeaker(nil), s.Speakers...)
-	for i := range s.Speakers {
-		s.Speakers[i].Name = overlayText(s.Speakers[i].Name, 48)
+	s.Speakers = visible
+	if len(visible) == 0 {
+		s.Active = false
+		s.Title, s.Status, s.Notification = "", "", ""
 	}
 	return s
-}
-
-func gamingOverlayText(s GamingOverlaySnapshot) string {
-	lines := []string{"noXa · " + s.Title, s.Status}
-	for _, speaker := range s.Speakers {
-		prefix := "· "
-		if speaker.Speaking {
-			prefix = "● "
-		} else if speaker.Muted {
-			prefix = "× "
-		}
-		lines = append(lines, prefix+speaker.Name)
-	}
-	if s.Notification != "" {
-		lines = append(lines, s.Notification)
-	}
-	return strings.Join(lines, "\n")
 }
 
 func (a *App) GamingOverlayAvailable() bool { return nativeGamingOverlayAvailable() }
@@ -114,22 +112,13 @@ func overlayPresentation(s GamingOverlaySnapshot, settings Settings) GamingOverl
 	s.Position, s.Monitor = settings.GamingOverlayPosition, settings.GamingOverlayMonitor
 	s.Scale, s.Opacity = settings.GamingOverlayScale, settings.GamingOverlayOpacity
 	s.X, s.Y = settings.GamingOverlayX, settings.GamingOverlayY
-	if settings.GamingOverlaySpeakersOnly {
-		visible := make([]GamingOverlaySpeaker, 0, len(s.Speakers))
-		for _, speaker := range s.Speakers {
-			if speaker.Speaking {
-				visible = append(visible, speaker)
-			}
-		}
-		s.Speakers = visible
-	}
 	return normalizeGamingOverlay(s)
 }
 
 // PreviewGamingOverlay uses only bounded presentation preferences; names are
 // examples, and no account, channel or notification data enters the preview.
 func (a *App) PreviewGamingOverlay(settings Settings) string {
-	s := overlayPresentation(GamingOverlaySnapshot{Active: true, Title: "Overlay preview", Status: "Microphone muted", Speakers: []GamingOverlaySpeaker{{Name: "Alex", Speaking: true}, {Name: "Sam"}}}, settings)
+	s := overlayPresentation(GamingOverlaySnapshot{Active: true, Speakers: []GamingOverlaySpeaker{{ID: "preview-alex", Name: "Alex", Speaking: true}, {ID: "preview-sam", Name: "Sam", Speaking: true}}}, settings)
 	a.overlayMu.Lock()
 	defer a.overlayMu.Unlock()
 	if a.overlayStopped || a.ctx == nil {
@@ -158,13 +147,14 @@ func selectOverlayMonitor(monitors []GamingOverlayMonitor, id string) GamingOver
 }
 
 func gamingOverlayPlacement(s GamingOverlaySnapshot, monitor GamingOverlayMonitor) (x, y, width, height int32) {
+	s.Active = true // Placement also serves the empty settings preview.
 	s = normalizeGamingOverlay(s)
-	// Normalization bounds scale to 75–200, coordinates to 0–100 and text
-	// to twelve lines. Checked conversions also make the native ABI explicit.
+	// Normalization bounds scale to 75–200, coordinates to 0–100 and
+	// speakers to eight. Checked conversions also make the native ABI explicit.
 	scale, _ := safecast.IntToInt32(s.Scale)
-	lines, _ := safecast.IntToInt32(len(strings.Split(gamingOverlayText(s), "\n")))
-	width = min(348*scale/100, monitor.workWidth)
-	height = min((22+lines*23)*scale/100, monitor.workHeight)
+	rows, _ := safecast.IntToInt32(max(1, len(s.Speakers)))
+	width = min(280*scale/100, monitor.workWidth)
+	height = min((rows*76-12)*scale/100, monitor.workHeight)
 	margin := min(int32(16), max(int32(0), min(monitor.workWidth-width, monitor.workHeight-height)/2))
 	x, y = monitor.workWidth-width-margin, margin
 	if strings.HasSuffix(s.Position, "left") {
@@ -172,6 +162,11 @@ func gamingOverlayPlacement(s GamingOverlaySnapshot, monitor GamingOverlayMonito
 	}
 	if strings.HasPrefix(s.Position, "bottom") {
 		y = monitor.workHeight - height - margin
+	}
+	if s.Position == "center-left" {
+		// Slightly above center leaves the desktop taskbar/HUD clear. Keep the
+		// anchor fixed as active speakers expand the stack in both directions.
+		y = monitor.workHeight*45/100 - height/2
 	}
 	if s.Position == "custom" {
 		percentX, _ := safecast.IntToInt32(s.X)

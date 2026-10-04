@@ -719,6 +719,8 @@ export namespace main {
 	    }
 	}
 	export class GamingOverlaySpeaker {
+	    id: string;
+	    avatar: string;
 	    name: string;
 	    speaking: boolean;
 	    muted: boolean;
@@ -729,6 +731,8 @@ export namespace main {
 
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.avatar = source["avatar"];
 	        this.name = source["name"];
 	        this.speaking = source["speaking"];
 	        this.muted = source["muted"];
@@ -1202,7 +1206,6 @@ export namespace main {
 	    gaming_overlay_monitor: string;
 	    gaming_overlay_scale: number;
 	    gaming_overlay_opacity: number;
-	    gaming_overlay_speakers_only: boolean;
 	    gaming_overlay_x: number;
 	    gaming_overlay_y: number;
 	    camera_background_image: string;
@@ -1326,7 +1329,6 @@ export namespace main {
 	        this.gaming_overlay_monitor = source["gaming_overlay_monitor"];
 	        this.gaming_overlay_scale = source["gaming_overlay_scale"];
 	        this.gaming_overlay_opacity = source["gaming_overlay_opacity"];
-	        this.gaming_overlay_speakers_only = source["gaming_overlay_speakers_only"];
 	        this.gaming_overlay_x = source["gaming_overlay_x"];
 	        this.gaming_overlay_y = source["gaming_overlay_y"];
 	        this.camera_background_image = source["camera_background_image"];

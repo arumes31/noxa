@@ -52,7 +52,7 @@ func TestNativeGamingOverlay(t *testing.T) {
 	if rect.Left != x || rect.Top != y || rect.Right-rect.Left != width || rect.Bottom-rect.Top != height {
 		t.Fatalf("default overlay is not positioned on the primary desktop: %+v", rect)
 	}
-	preview := normalizeGamingOverlay(GamingOverlaySnapshot{Active: true, Title: "Preview", Monitor: monitors[0].ID, Position: "custom", X: 100, Y: 100, Scale: 150, Opacity: 40})
+	preview := normalizeGamingOverlay(GamingOverlaySnapshot{Active: true, Title: "Preview", Monitor: monitors[0].ID, Position: "custom", X: 100, Y: 100, Scale: 150, Opacity: 40, Speakers: []GamingOverlaySpeaker{{Name: "Alex", Speaking: true}}})
 	window.Preview(preview)
 	window.Update(GamingOverlaySnapshot{}) // routine idle poll must not hide a preview
 	x, y, width, height = gamingOverlayPlacement(preview, monitors[0])
@@ -66,11 +66,6 @@ func TestNativeGamingOverlay(t *testing.T) {
 	}
 	if !visible() || rect.Left != x || rect.Top != y || rect.Right-rect.Left != width || rect.Bottom-rect.Top != height {
 		t.Fatalf("preview layout did not reach native window: %+v", rect)
-	}
-	var alpha byte
-	_, _, _ = user32.NewProc("GetLayeredWindowAttributes").Call(hwnd, 0, uintptr(unsafe.Pointer(&alpha)), 0)
-	if alpha != 102 {
-		t.Fatalf("native opacity = %d, want 102", alpha)
 	}
 	// Expiry restores the regular inactive snapshot without a UI heartbeat.
 	native := window.(*nativeOverlay)

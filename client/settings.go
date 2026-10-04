@@ -100,7 +100,7 @@ type HotkeyProfile struct {
 // serialized default changes, and add the repair to migrateSettings:
 // loading merges the file ONTO the defaults, so a field an older client always
 // wrote wins over the new default unless it is explicitly repaired.
-const settingsVersion = 10
+const settingsVersion = 11
 
 // Settings holds all user preferences.
 type Settings struct {
@@ -211,22 +211,21 @@ type Settings struct {
 	GainNormalize            bool            `json:"gain_normalize"`
 
 	// Video (wave 3).
-	CameraFPS                 int    `json:"camera_fps"`    // 15 | 30 | 60 (default 30)
-	LowBandwidth              bool   `json:"low_bandwidth"` // (88) low-bandwidth mode
-	CameraDeviceID            string `json:"camera_device_id"`
-	CameraBackground          string `json:"camera_background"`       // none | blur | replace
-	CameraBackgroundScene     string `json:"camera_background_scene"` // slate | warm | studio
-	GamingOverlay             bool   `json:"gaming_overlay"`          // default on, can be disabled
-	GamingOverlayPosition     string `json:"gaming_overlay_position"`
-	GamingOverlayMonitor      string `json:"gaming_overlay_monitor"`
-	GamingOverlayScale        int    `json:"gaming_overlay_scale"`
-	GamingOverlayOpacity      int    `json:"gaming_overlay_opacity"`
-	GamingOverlaySpeakersOnly bool   `json:"gaming_overlay_speakers_only"`
-	GamingOverlayX            int    `json:"gaming_overlay_x"` // percentage of available travel
-	GamingOverlayY            int    `json:"gaming_overlay_y"`
-	CameraBackgroundImage     string `json:"camera_background_image"`
-	CameraBlurStrength        int    `json:"camera_blur_strength"`
-	CameraMirrorPreview       bool   `json:"camera_mirror_preview"`
+	CameraFPS             int    `json:"camera_fps"`    // 15 | 30 | 60 (default 30)
+	LowBandwidth          bool   `json:"low_bandwidth"` // (88) low-bandwidth mode
+	CameraDeviceID        string `json:"camera_device_id"`
+	CameraBackground      string `json:"camera_background"`       // none | blur | replace
+	CameraBackgroundScene string `json:"camera_background_scene"` // slate | warm | studio
+	GamingOverlay         bool   `json:"gaming_overlay"`          // default on, can be disabled
+	GamingOverlayPosition string `json:"gaming_overlay_position"`
+	GamingOverlayMonitor  string `json:"gaming_overlay_monitor"`
+	GamingOverlayScale    int    `json:"gaming_overlay_scale"`
+	GamingOverlayOpacity  int    `json:"gaming_overlay_opacity"`
+	GamingOverlayX        int    `json:"gaming_overlay_x"` // percentage of available travel
+	GamingOverlayY        int    `json:"gaming_overlay_y"`
+	CameraBackgroundImage string `json:"camera_background_image"`
+	CameraBlurStrength    int    `json:"camera_blur_strength"`
+	CameraMirrorPreview   bool   `json:"camera_mirror_preview"`
 
 	// Security (wave 4a).
 	AllowPlaintext bool              `json:"allow_plaintext"`         // allow plaintext control connections (dev servers)
@@ -330,8 +329,8 @@ func DefaultSettings() Settings {
 		CameraBackground:      "none",
 		CameraBackgroundScene: "slate",
 		GamingOverlay:         true,
-		GamingOverlayPosition: "top-right",
-		GamingOverlayScale:    100,
+		GamingOverlayPosition: "center-left",
+		GamingOverlayScale:    80,
 		GamingOverlayOpacity:  88,
 		CameraBlurStrength:    14,
 		CameraMirrorPreview:   true,
@@ -451,6 +450,12 @@ func migrateSettings(s Settings) Settings {
 				s.EventSounds["ban"] = kick
 			}
 		}
+	}
+	if s.SettingsVersion < 11 && s.GamingOverlayScale == 100 {
+		s.GamingOverlayScale = 80
+	}
+	if s.SettingsVersion < 11 && s.GamingOverlayPosition == "top-right" {
+		s.GamingOverlayPosition = "center-left"
 	}
 	s.SettingsVersion = settingsVersion
 	return s
@@ -875,7 +880,7 @@ func (a *App) SaveSettings(s Settings) string {
 		return "invalid camera background scene"
 	}
 	switch s.GamingOverlayPosition {
-	case "", "top-left", "top-right", "bottom-left", "bottom-right", "custom":
+	case "", "center-left", "top-left", "top-right", "bottom-left", "bottom-right", "custom":
 	default:
 		return "invalid gaming overlay position"
 	}

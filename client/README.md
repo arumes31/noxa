@@ -663,9 +663,15 @@ request/response round-trip works.
   inactivity archiving. Channel managers can create/revoke incoming text webhooks;
   see [incoming webhooks](../docs/incoming-webhooks.md) for HTTPS setup and limits.
 - Settings → Application → Gaming overlay is enabled by default on Windows and
-  can be disabled. A separate, nonactivating window shows current voice speakers,
-  mute state and brief notifications on a selected monitor. Settings provide
-  position presets or a draggable preview, size, opacity and speakers-only mode.
+  can be disabled. Only active, unmuted speakers appear, each with a circular
+  avatar, name and animated cyan activity indicator on a transparent background.
+  It defaults to the left edge at 45% of the primary monitor work-area height, expanding
+  upward and downward as speakers join, with compact 40 px avatars
+  (80% size), and hides when everyone is quiet. The native animation continues
+  while noXa is unfocused and respects Windows' animation accessibility setting.
+  Settings provide monitor selection, position presets or a draggable preview,
+  size and opacity. Missing avatars fall back to initials. The activity waveform
+  indicates speaking, not measured volume.
   It passes input through and supports windowed/borderless games. Exclusive
   fullscreen and other operating systems are not supported.
 

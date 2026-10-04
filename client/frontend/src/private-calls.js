@@ -548,7 +548,7 @@ function overlaySnapshot() {
                 peer.analyser.getByteTimeDomainData(peer.samples);
                 speaking = !peer.audio.muted && peer.samples.some(sample => Math.abs(sample - 128) > 3);
             }
-            return { name: label(uid), speaking, muted: uid === owner.uid ? !!(owner.muted || V().state.muted) : isUserMuted(uid) || blocked(uid) };
+            return { id: uid, name: label(uid), speaking, muted: uid === owner.uid ? !!(owner.muted || V().state.muted) : isUserMuted(uid) || blocked(uid) };
         }),
     };
 }

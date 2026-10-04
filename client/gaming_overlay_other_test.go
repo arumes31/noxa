@@ -13,7 +13,7 @@ func TestGamingOverlayUnavailablePlatform(t *testing.T) {
 	if got := a.PreviewGamingOverlay(DefaultSettings()); got != unavailable {
 		t.Fatalf("preview returned %q, want %q", got, unavailable)
 	}
-	if got := a.UpdateGamingOverlay(GamingOverlaySnapshot{Active: true}); got != unavailable {
+	if got := a.UpdateGamingOverlay(GamingOverlaySnapshot{Active: true, Speakers: []GamingOverlaySpeaker{{Name: "Alice", Speaking: true}}}); got != unavailable {
 		t.Fatalf("active update returned %q, want %q", got, unavailable)
 	}
 	if got := a.UpdateGamingOverlay(GamingOverlaySnapshot{}); got != "" {

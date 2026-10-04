@@ -23,15 +23,14 @@ test.beforeEach(async ({ page }) => {
     await page.waitForFunction(() => !!window.__noxa?.openSettings);
 });
 
-test("voice overlay follows self and other speakers after the join notice expires", async ({ page }) => {
+test("voice overlay shows only active speakers and hides immediately on silence", async ({ page }) => {
     await page.evaluate(() => {
         Object.assign(window.__noxa.state, { myClientID: 1, myChannelID: 1, pc: {}, channels: [{ ChannelID: 1, Name: "Lobby" }], clients: [
-            { client_id: 1, channel_id: 1, nickname: "Self", is_speaking: false },
-            { client_id: 2, channel_id: 1, nickname: "Peer", is_speaking: false },
+            { client_id: 1, channel_id: 1, nickname: "Self", unique_id: "self-uid", is_speaking: false },
+            { client_id: 2, channel_id: 1, nickname: "Peer", unique_id: "peer-uid", is_speaking: false },
         ] });
     });
-    await expect.poll(() => page.evaluate(() => window.__overlayUpdates?.at(-1)?.active)).toBe(true);
-    await expect.poll(() => page.evaluate(() => window.__overlayUpdates.at(-1).active), { timeout: 7000 }).toBe(false);
+    await expect.poll(() => page.evaluate(() => window.__overlayUpdates?.at(-1)?.active)).toBe(false);
     await page.evaluate(() => { window.__noxa.state.clients[0].is_speaking = true; });
     await expect.poll(() => page.evaluate(() => window.__overlayUpdates.at(-1).speakers?.[0])).toMatchObject({ name: "Self", speaking: true });
     // Continuous speech must survive the old five-second visibility limit.
@@ -54,20 +53,62 @@ test("overlay preferences stay drafts until Apply, support keyboard positioning 
     await page.getByLabel("Overlay monitor", { exact: true }).selectOption("left");
     await page.getByLabel("Overlay size", { exact: true }).fill("150");
     await page.getByLabel("Overlay opacity", { exact: true }).fill("40");
-    await page.getByLabel("Show only speaking members", { exact: true }).check();
+    await expect(page.getByLabel("Show only speaking members", { exact: true })).toHaveCount(0);
     const sample = page.getByRole("button", { name: "Move overlay preview" });
-    await sample.focus(); await page.keyboard.press("Shift+ArrowLeft"); await page.keyboard.press("ArrowDown");
+    await sample.focus(); await page.keyboard.press("Shift+ArrowRight"); await page.keyboard.press("ArrowDown");
     await expect(page.getByLabel("Overlay position", { exact: true })).toHaveValue("custom");
-    await expect(page.locator(".overlay-position-readout")).toContainText("90% horizontal, 1% vertical");
-    await expect(sample).not.toContainText("Sam");
+    await expect(page.locator(".overlay-position-readout")).toContainText("10% horizontal, 46% vertical");
+    await expect(sample).toContainText("Sam");
     expect(await page.evaluate(() => window.__overlaySaved)).toBeUndefined();
     await page.getByRole("button", { name: "Preview on monitor", exact: true }).click();
     const draft = await page.evaluate(() => window.__overlayPreview);
-    expect(draft).toMatchObject({ gaming_overlay_monitor: "left", gaming_overlay_scale: 150, gaming_overlay_opacity: 40, gaming_overlay_speakers_only: true, gaming_overlay_position: "custom", gaming_overlay_x: 90, gaming_overlay_y: 1 });
+    expect(draft).toMatchObject({ gaming_overlay_monitor: "left", gaming_overlay_scale: 150, gaming_overlay_opacity: 40, gaming_overlay_position: "custom", gaming_overlay_x: 10, gaming_overlay_y: 46 });
     expect(Object.keys(draft).every(key => key.startsWith("gaming_overlay"))).toBe(true);
     expect(await page.evaluate(() => window.__overlaySaved)).toBeUndefined();
     await page.getByRole("button", { name: "Apply", exact: true }).click();
     expect(await page.evaluate(() => window.__overlaySaved)).toMatchObject(draft);
+});
+
+test("speaker avatars reach the native overlay as bounded thumbnails and clear across sessions", async ({ page }) => {
+    await page.evaluate(() => {
+        const canvas = document.createElement("canvas"); canvas.width = 128; canvas.height = 256;
+        const ctx = canvas.getContext("2d"); ctx.fillStyle = "#dc0000"; ctx.fillRect(0, 0, 128, 256);
+        const state = window.__noxa.state;
+        state.avatars.set("peer-uid", canvas.toDataURL("image/png"));
+        Object.assign(state, { myClientID: 1, myChannelID: 1, pc: {}, clients: [
+            { client_id: 2, channel_id: 1, unique_id: "peer-uid", nickname: "Peer", is_speaking: true },
+            { client_id: 3, channel_id: 1, unique_id: "quiet-uid", nickname: "Quiet", is_speaking: false },
+        ] });
+    });
+    await expect.poll(() => page.evaluate(() => window.__overlayUpdates.at(-1).speakers?.[0]?.avatar)).toMatch(/^data:image\/png;base64,/);
+    const avatar = await page.evaluate(async () => {
+        const snapshot = window.__overlayUpdates.at(-1);
+        const source = snapshot.speakers[0].avatar;
+        const img = new Image(); img.src = source; await img.decode();
+        return { count: snapshot.speakers.length, width: img.naturalWidth, height: img.naturalHeight, bytes: source.length };
+    });
+    expect(avatar).toMatchObject({ count: 1, width: 64, height: 64 }); expect(avatar.bytes).toBeLessThanOrEqual(32768);
+    await page.evaluate(() => {
+        const state = window.__noxa.state;
+        state.serverGeneration++; state.avatars.clear();
+        state.avatars.set("peer-uid", "https://invalid.example/avatar.png");
+    });
+    await expect.poll(() => page.evaluate(() => window.__overlayUpdates.at(-1).speakers?.[0]?.avatar)).toBe("");
+    await page.evaluate(() => { window.__noxa.state.clients[0].is_speaking = false; });
+    await expect.poll(() => page.evaluate(() => window.__overlayUpdates.at(-1))).toEqual({ active: false });
+});
+
+test("preview indicators animate independently and respect reduced motion", async ({ page }) => {
+    await page.evaluate(() => window.__noxa.openSettings("application"));
+    const bars = page.locator(".overlay-sample-wave i");
+    await expect(bars).toHaveCount(22);
+    const motion = await bars.evaluateAll(items => items.map(item => {
+        const css = getComputedStyle(item); return { animation: css.animationName, delay: css.animationDelay };
+    }));
+    expect(motion.every(item => item.animation === "overlay-speaking")).toBe(true);
+    expect(motion[0].delay).not.toBe(motion[11].delay);
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    await expect(bars.first()).toHaveCSS("animation-name", "none");
 });
 
 test("overlay preview drag remains bounded and Cancel discards draft position", async ({ page }) => {
@@ -82,7 +123,7 @@ test("overlay preview drag remains bounded and Cancel discards draft position", 
     await page.getByRole("button", { name: "Cancel", exact: true }).click();
     expect(await page.evaluate(() => window.__overlaySaved)).toBeUndefined();
     await page.evaluate(() => window.__noxa.openSettings("application"));
-    await expect(page.getByLabel("Overlay position", { exact: true })).toHaveValue("top-right");
+    await expect(page.getByLabel("Overlay position", { exact: true })).toHaveValue("center-left");
 });
 
 test("unsupported native overlays disable controls with a clear explanation", async ({ page }) => {

@@ -12,7 +12,7 @@ import (
 
 func TestCommunicationPresentationBounds(t *testing.T) {
 	s := DefaultSettings()
-	if s.GamingOverlayScale != 100 || s.GamingOverlayOpacity != 88 || s.CameraBlurStrength != 14 || !s.CameraMirrorPreview {
+	if s.GamingOverlayScale != 80 || s.GamingOverlayOpacity != 88 || s.CameraBlurStrength != 14 || !s.CameraMirrorPreview {
 		t.Fatal("unexpected presentation defaults")
 	}
 	s.GamingOverlayScale, s.GamingOverlayOpacity, s.CameraBlurStrength = 900, 0, 200
