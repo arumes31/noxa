@@ -22,6 +22,10 @@ const mediaAudioPackets = 256
 const mediaAudioBytes = 128 * 1024
 const mediaAudioLifetime = 100 * time.Millisecond
 
+// Enough initial headroom for a Full HD stream while receiver feedback starts.
+// This is not a floor: GCC may immediately reduce it on a constrained path.
+const mediaInitialBitrate = 6_000_000
+
 type pacedStream struct {
 	writer    interceptor.RTPWriter
 	active    bool // protected by mediaPacer.mu
@@ -58,7 +62,7 @@ type mediaPacer struct {
 }
 
 func newMediaPacer() *mediaPacer {
-	p := &mediaPacer{streams: make(map[uint32]*pacedStream), bitrate: 1_500_000, stop: make(chan struct{}), done: make(chan struct{})}
+	p := &mediaPacer{streams: make(map[uint32]*pacedStream), bitrate: mediaInitialBitrate, stop: make(chan struct{}), done: make(chan struct{})}
 	go p.run()
 	return p
 }
@@ -290,7 +294,7 @@ func (f mediaCCFactory) NewInterceptor(id string) (interceptor.Interceptor, erro
 	pacer := newMediaPacer()
 	pacer.egress = f.registry
 	factory, err := cc.NewInterceptor(func() (cc.BandwidthEstimator, error) {
-		estimator, err := gcc.NewSendSideBWE(gcc.SendSideBWEInitialBitrate(1_500_000), gcc.SendSideBWEPacer(pacer))
+		estimator, err := gcc.NewSendSideBWE(gcc.SendSideBWEInitialBitrate(mediaInitialBitrate), gcc.SendSideBWEPacer(pacer))
 		if err != nil {
 			return nil, err
 		}

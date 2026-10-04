@@ -4,6 +4,13 @@ Copied from `github.com/pion/interceptor v0.1.48` (`pkg/gcc`,
 `internal/cc`, and `internal/ntp`), with its MIT license and upstream tests.
 Internal import paths are adjusted for this repository.
 
+Send history retains 4096 packets instead of 250 so normal feedback RTTs at
+high video bitrates do not evict every report. The relay uses this same bound
+when validating feedback. New receivers start with a 6 Mbps estimate, then
+adapt through GCC without a fixed bitrate floor. Pacing authorization retains
+4096 tickets, enough for the bounded packet queue and recent retransmissions;
+the one-second expiry and final permission checks still apply.
+
 TWCC feedback consumes only the declared packet status count; unused symbols
 in its final chunk are not packet losses. Receive deltas advance even for
 packets evicted from send history, while only matched packets enter congestion

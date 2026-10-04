@@ -18,7 +18,7 @@ func TestTWCCEvictionPreservesDeltasAndSequenceNumbers(t *testing.T) {
 			adapter := NewFeedbackAdapter()
 			// Exercise the actual bounded history: sequences zero through six
 			// are evicted, covering an entire two-bit status vector.
-			for i := uint16(0); i <= 256; i++ {
+			for i := range uint16(FeedbackHistorySize + 7) {
 				adapter.history.add(Acknowledgment{SequenceNumber: i, Size: 1200, Departure: time.Unix(100, 0)})
 			}
 			var first rtcp.PacketStatusChunk = &rtcp.RunLengthChunk{RunLength: 7, PacketStatusSymbol: rtcp.TypeTCCPacketReceivedSmallDelta}
@@ -43,6 +43,21 @@ func TestTWCCEvictionPreservesDeltasAndSequenceNumbers(t *testing.T) {
 			require.Equal(t, time.Time{}.Add(70*time.Millisecond), acks[1].Arrival)
 		})
 	}
+}
+
+func TestTWCCHistoryRetainsHighBitrateFeedback(t *testing.T) {
+	adapter := NewFeedbackAdapter()
+	for i := range uint16(1000) {
+		adapter.history.add(Acknowledgment{SequenceNumber: i, Size: 1200, Departure: time.Unix(100, 0)})
+	}
+	feedback := &rtcp.TransportLayerCC{PacketStatusCount: 400, ReferenceTime: 1,
+		PacketChunks: []rtcp.PacketStatusChunk{&rtcp.RunLengthChunk{RunLength: 400, PacketStatusSymbol: rtcp.TypeTCCPacketReceivedSmallDelta}}}
+	for range 400 {
+		feedback.RecvDeltas = append(feedback.RecvDeltas, &rtcp.RecvDelta{Type: rtcp.TypeTCCPacketReceivedSmallDelta, Delta: 250})
+	}
+	acks, err := adapter.OnTransportCCFeedback(time.Now(), feedback)
+	require.NoError(t, err)
+	require.Len(t, acks, 400, "normal feedback delay must not erase a high-bitrate sample")
 }
 
 func TestTWCCUnknownPacketStillRequiresReceiveDelta(t *testing.T) {

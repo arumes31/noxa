@@ -11,6 +11,7 @@ import (
 	"github.com/pion/rtcp"
 	"github.com/pion/rtp"
 	"github.com/pion/sdp/v3"
+	mediacc "noxa/internal/mediacc/cc"
 	"noxa/internal/mediacc/gcc"
 )
 
@@ -201,7 +202,7 @@ func (r *feedbackRecorder) WriteRTCP(packets []rtcp.Packet, _ interceptor.Attrib
 func TestFeedbackWaitsForInFlightHistoryInsertion(t *testing.T) {
 	p := newMediaPacer()
 	t.Cleanup(func() { _ = p.Close() })
-	p.sent, p.transportSequence = 250, 250
+	p.sent, p.transportSequence = mediacc.FeedbackHistorySize, mediacc.FeedbackHistorySize
 	entered, release, sent := make(chan struct{}), make(chan struct{}), make(chan struct{})
 	writer := interceptor.RTPWriterFunc(func(*rtp.Header, []byte, interceptor.Attributes) (int, error) {
 		close(entered)
@@ -256,11 +257,21 @@ func TestTransportFeedbackIgnoresWirePaddingAndEvictedHistory(t *testing.T) {
 	if len(original.SymbolList) <= 1 {
 		t.Fatal("shared RTCP feedback was mutated")
 	}
-	if boundedTransportFeedback(&decoded, 251) != nil || boundedTransportFeedback(&decoded, 0) != nil {
+	if boundedTransportFeedback(&decoded, mediacc.FeedbackHistorySize+1) != nil || boundedTransportFeedback(&decoded, 0) != nil {
 		t.Fatal("unknown send history reached estimator")
 	}
 	decoded.BaseSequenceNumber = 65535
 	if boundedTransportFeedback(&decoded, 65536) == nil {
 		t.Fatal("wire sequence wrap rejected")
+	}
+}
+
+func TestTransportFeedbackRetainsHighBitrateReports(t *testing.T) {
+	// 400 packets is less than 100 ms of 50 Mbps video. The old 250-packet
+	// history discarded this valid report and stopped capacity discovery.
+	feedback := &rtcp.TransportLayerCC{BaseSequenceNumber: 0, PacketStatusCount: 400,
+		PacketChunks: []rtcp.PacketStatusChunk{&rtcp.RunLengthChunk{RunLength: 400}}}
+	if boundedTransportFeedback(feedback, 500) == nil {
+		t.Fatal("valid high-bitrate feedback discarded before congestion control")
 	}
 }

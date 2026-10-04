@@ -7974,7 +7974,7 @@ test("labels screen-share controls and explains low-bandwidth data use", async (
     await expect(shareDialog.getByRole("combobox", { name: "Share audio", exact: true })).toHaveValue("none");
     await auditAccessibility(page, "screen-share dialog");
     await shareDialog.getByRole("combobox", { name: "Quality preset" }).selectOption("uhd");
-    await expect(shareDialog.locator(".share-budget")).toContainText("no preset upload cap");
+    await expect(shareDialog.locator(".share-budget")).toContainText("50 Mbps");
     await expect(shareDialog.locator(".share-quality-warning")).toBeVisible();
     await shareDialog.getByRole("combobox", { name: "Quality preset" }).selectOption("custom");
     await shareDialog.getByLabel("Width (px)", { exact: true }).fill("3440");

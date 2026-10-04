@@ -4,11 +4,36 @@ import (
 	"bytes"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/pion/interceptor"
 	"github.com/pion/rtp"
 )
+
+func TestMediaPacerStartsFullHDWithoutExpiringItsPackets(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		p := newMediaPacer()
+		defer func() { _ = p.Close() }()
+		var written atomic.Int32
+		p.AddStream(1, interceptor.RTPWriterFunc(func(*rtp.Header, []byte, interceptor.Attributes) (int, error) {
+			written.Add(1)
+			return 1200, nil
+		}))
+		// A new viewer must receive a 4.8 Mbps stream while feedback starts,
+		// instead of losing pieces of every frame to the local 500 ms queue.
+		for range 100 {
+			for range 5 {
+				_, _ = p.Write(&rtp.Header{Version: 2, SSRC: 1}, make([]byte, 1188), nil)
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		time.Sleep(mediaPacerLifetime)
+		if got := written.Load(); got != 500 {
+			t.Fatalf("startup pacing discarded %d of 500 Full HD packets", 500-got)
+		}
+	})
+}
 
 func TestMediaCCRegistersPrimaryAndRTXAndCopiesPackets(t *testing.T) {
 	i, err := (mediaCCFactory{}).NewInterceptor("test")

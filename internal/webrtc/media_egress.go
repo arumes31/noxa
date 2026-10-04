@@ -12,7 +12,9 @@ import (
 	"github.com/pion/webrtc/v4"
 )
 
-const mediaTicketCount = 512
+// Retain the whole bounded pacing queue plus recent NACK retransmissions.
+// Count and lifetime remain bounded; every write still rechecks authority.
+const mediaTicketCount = 4096
 const mediaTicketLifetime = time.Second
 
 // Admission avoids filling queues with already-denied media. It releases its
