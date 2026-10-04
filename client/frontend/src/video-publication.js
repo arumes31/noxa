@@ -13,6 +13,10 @@ import { videoConstraints, trackFitsVideoLimits, capVideoEncodings } from "./med
 import { t as tLabel } from "./i18n.js";
 import { renegotiate, negotiateOffer, queuePeerNegotiation } from "./video-negotiation.js";
 const V = () => window.__noxa;
+// An unset maxBitrate invokes Chromium's ~2.5 Mbps default for larger frames.
+// Match the relay's 50 Mbps congestion-controller ceiling; this is headroom,
+// not a target or minimum. Actual throughput still follows network feedback.
+const SCREEN_BITRATE_HEADROOM = 50000000;
 
 export function createVideoPublication({ policy }) {
     // videoSender returns the sender of a video transceiver this client can send
@@ -122,9 +126,12 @@ export function createVideoPublication({ policy }) {
             const sources = [videoSenderFor(pc), screenSender].filter(sender => sender &&
                 (sender === pendingVideoSenders.get(pc) || (sender.track && sender.track.readyState !== "ended"))).map(sender => {
                 const parameters = sender.getParameters();
-                return { sender, parameters, encodings: parameters.encodings || [] };
+                if (sender === screenSender) parameters.degradationPreference =
+                    sender.track?.contentHint === "motion" ? "balanced" : "maintain-resolution";
+                return { sender, parameters, encodings: parameters.encodings || [],
+                    bitrateHeadroom: sender === screenSender ? SCREEN_BITRATE_HEADROOM : Infinity };
             });
-            capVideoEncodings(sources, state.mediaLimits, policy.lowBandwidth ? policy.lowBandwidthBitrate : policy.sendCpuPressure ? 500000 : 0);
+            capVideoEncodings(sources, state.mediaLimits, policy.lowBandwidth ? policy.lowBandwidthBitrate : 0);
             for (const { sender, parameters, encodings } of sources) {
                 if (!current()) return;
                 if (encodings.length) await sender.setParameters(parameters);
@@ -345,7 +352,7 @@ export function createVideoPublication({ policy }) {
             return;
         }
         capturePreferences.set(screenTrack, { ...p, screen: true });
-        screenTrack.contentHint = preset === "text" || p.original || p.height > 1080 ? "detail" : "motion";
+        screenTrack.contentHint = preset === "text" ? "text" : p.fps > 30 ? "motion" : "detail";
         let shareEnded = false;
         screenTrack.onended = () => {
             shareEnded = true;
@@ -501,7 +508,7 @@ export function createVideoPublication({ policy }) {
         startShareStatus({ stream: display, pc: peerConnection, scope: shareScope, preset: p, surface, audioMode,
             generation: publicationSnapshot().find(p => p.publication.slot === "screen")?.generation,
             stop: () => { V().$("voice-screen").focus(); void doStopShare(); }, change: () => openShareDialog(true, preset, audioMode, surface, custom),
-            reduction: () => policy.lowBandwidth ? "share.lowBandwidth" : policy.sendCpuPressure ? "share.cpu" : "" });
+            reduction: () => policy.lowBandwidth ? "share.lowBandwidth" : "" });
     }
 
     // pickRegionAndCrop shows a draggable/resizable box over the app; on confirm

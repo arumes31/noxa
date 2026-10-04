@@ -77,3 +77,21 @@ test("low-bandwidth mode divides its own ceiling across camera and screen", () =
     capVideoEncodings(sources, {}, 150000);
     assert.equal(sources.flatMap(s => s.encodings).filter(e => e.active).reduce((n, e) => n + e.maxBitrate, 0), 150000);
 });
+
+test("screen encoder headroom overrides browser defaults but yields to explicit budgets", () => {
+    const screen = { encodings: [{}], bitrateHeadroom: 50000000 };
+    const camera = { encodings: [{ rid: "q" }, { rid: "h" }, { rid: "f" }] };
+    const sources = [camera, screen];
+    capVideoEncodings(sources, {}, 0);
+    assert.equal(screen.encodings[0].maxBitrate, 50000000);
+    assert.equal(screen.encodings[0].scaleResolutionDownBy, 1);
+    assert.equal(camera.encodings[2].maxBitrate, undefined);
+    capVideoEncodings(sources, { video_max_bitrate: 4000000 }, 0);
+    assert.equal(screen.encodings[0].maxBitrate, 1700000);
+    capVideoEncodings(sources, {}, 150000);
+    assert.equal(screen.encodings[0].maxBitrate, 75000);
+    assert.equal(screen.encodings[0].scaleResolutionDownBy, 2);
+    capVideoEncodings(sources, {}, 0);
+    assert.equal(screen.encodings[0].maxBitrate, 50000000);
+    assert.equal(screen.encodings[0].scaleResolutionDownBy, 1);
+});

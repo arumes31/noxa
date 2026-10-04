@@ -37,7 +37,6 @@ export function createVideoGrid({ applySendCaps, syncCameraButton, syncShareButt
     let qualityRequest = null;
     let cpuPressure = false;
     let receiveCpuPressure = false;
-    let sendCpuPressure = false;
     let cpuRecoverySince = null;
     let statsPollRequest = null;
     let autoNetworkQuality = "high";
@@ -224,7 +223,6 @@ export function createVideoGrid({ applySendCaps, syncCameraButton, syncShareButt
         statsPollRequest = null;
         cpuPressure = false;
         receiveCpuPressure = false;
-        sendCpuPressure = false;
         cpuRecoverySince = null;
         for (const key of [...tiles.keys()]) videoTrackRemoved(key);
         focusedID = null;
@@ -525,14 +523,13 @@ export function createVideoGrid({ applySendCaps, syncCameraButton, syncShareButt
             const cpu = await window.go.main.App.SystemCPUPercent();
             if (!current()) return;
             const byTrack = new Map(); // trackIdentifier -> {w, frames}
-            const decoders = [], encoders = [];
+            const decoders = [];
             let availableIncomingBitrate = 0;
             stats.forEach((r) => {
                 if (r.type === "inbound-rtp" && (r.kind === "video" || r.mediaType === "video")) {
                     byTrack.set(r.trackIdentifier, { w: r.frameWidth || 0, frames: r.framesDecoded || 0 });
                     if (r.framesDecoded > 0) decoders.push(r);
                 }
-                if (r.type === "outbound-rtp" && r.kind === "video" && r.active !== false && r.framesEncoded > 0) encoders.push(r);
                 if (r.type === "candidate-pair" && (r.nominated || r.selected) && r.state === "succeeded") {
                     availableIncomingBitrate = Math.max(availableIncomingBitrate, r.availableIncomingBitrate || 0);
                 }
@@ -566,22 +563,13 @@ export function createVideoGrid({ applySendCaps, syncCameraButton, syncShareButt
             // instead of reacting to other applications' CPU use. Missing stats
             // retain the software fallback; this flag is not proof of a GPU codec.
             const nextReceive = cpuPressure && !(decoders.length && decoders.every(r => r.powerEfficientDecoder === true));
-            const publishingVideo = encoders.length > 0 || request.pc.getSenders().some(sender => sender.track?.kind === "video" && sender.track.readyState !== "ended");
-            const nextSend = cpuPressure && publishingVideo && !(encoders.length && encoders.every(r => r.powerEfficientEncoder === true));
-            if (nextReceive !== receiveCpuPressure || nextSend !== sendCpuPressure) {
-                const hadPressure = receiveCpuPressure || sendCpuPressure;
-                if ((nextReceive || nextSend) !== hadPressure) {
-                    V().sysMsg(nextReceive || nextSend ? tLabel("runtime.cpuReduction", { cpu: cpu.toFixed(0) }) : tLabel("desktop.video.processing.recovered.restoring.resolution"));
-                }
-            }
+            // Encoding already adapts to its own CPU budget in WebRTC. System
+            // load from a game must not impose a second bitrate/resolution cut.
             if (nextReceive !== receiveCpuPressure) {
+                V().sysMsg(nextReceive ? tLabel("runtime.cpuReduction", { cpu: cpu.toFixed(0) }) : tLabel("desktop.video.processing.recovered.restoring.resolution"));
                 receiveCpuPressure = nextReceive;
                 lastSentQuality = "";
                 pushQuality();
-            }
-            if (nextSend !== sendCpuPressure) {
-                sendCpuPressure = nextSend;
-                applySendCaps();
             }
             for (const t of tiles.values()) {
                 const s = (t.track && byTrack.get(t.track.id)) || null;
@@ -678,5 +666,5 @@ export function createVideoGrid({ applySendCaps, syncCameraButton, syncShareButt
         }
     }
 
-    return { videoTrackAdded, videoTrackRemoved, videoSpeaking, videoRefreshNames, clearVideoGrid, initVideo, isLowBandwidth, setLowBandwidth, get lowBandwidth() { return lowBandwidth; }, get sendCpuPressure() { return sendCpuPressure; }, lowBandwidthBitrate: LOW_BW_BITRATE };
+    return { videoTrackAdded, videoTrackRemoved, videoSpeaking, videoRefreshNames, clearVideoGrid, initVideo, isLowBandwidth, setLowBandwidth, get lowBandwidth() { return lowBandwidth; }, lowBandwidthBitrate: LOW_BW_BITRATE };
 }

@@ -7281,7 +7281,7 @@ test("video CPU pressure respects efficient decoding and discards stale polls", 
     expect(await page.evaluate(() => window.__calls.SetVideoQualityForTab || 0)).toBe(0);
 });
 
-test("video CPU pressure treats sender and receiver efficiency independently", async ({ page }) => {
+test("system CPU pressure reduces software decoding without clamping a healthy sender", async ({ page }) => {
     await page.clock.install();
     await page.evaluate(async () => {
         window.__efficientSender = true;
@@ -7313,7 +7313,7 @@ test("video CPU pressure treats sender and receiver efficiency independently", a
     await page.evaluate(() => { window.__efficientSender = false; window.__efficientReceiver = true; });
     await page.clock.runFor(3000);
     await expect.poll(() => page.evaluate(() => window.__callArgs.SetVideoQualityForTab?.at(-1)?.[1])).toBe("mid");
-    await expect.poll(() => page.evaluate(() => window.__senderCaps.at(-1)?.encodings[0]?.maxBitrate)).toBe(500000);
+    expect(await page.evaluate(() => window.__senderCaps)).toEqual([]);
 });
 
 test("late tab metadata cannot erase successful login credentials", async ({ page }) => {
