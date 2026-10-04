@@ -103,3 +103,37 @@ test('own mute immediately hides speaking before the server reply', async ({ pag
     await page.evaluate(() => document.getElementById('voice-mute').click());
     await expect(row.locator('.client-voice-state')).toHaveCount(0);
 });
+
+test('channel members stay alphabetical across snapshots and shift selection follows that order', async ({ page }) => {
+    await page.evaluate(() => {
+        window.__orderedMembers = [
+            { client_id: 'self', unique_id: 'self', nickname: 'Zoe' },
+            { client_id: 'bob', unique_id: 'bob', nickname: 'bob' },
+            { client_id: 'alex-z', unique_id: 'z', nickname: 'alex' },
+            { client_id: 'user10', unique_id: 'user10', nickname: 'User10' },
+            { client_id: 'alice', unique_id: 'alice', nickname: 'Alice' },
+            { client_id: 'user2', unique_id: 'user2', nickname: 'User2' },
+            { client_id: 'alex-a', unique_id: 'a', nickname: 'Alex' },
+        ].map(member => ({ ...member, channel_id: 7 }));
+        window.__orderedSnapshot = () => {
+            const snapshot = { root_channels: [{ ChannelID: 7, Name: 'Members', clients: window.__orderedMembers }] };
+            for (const callback of window.__events.snapshot) callback(JSON.stringify(snapshot));
+        };
+        window.__orderedSnapshot();
+    });
+    const order = () => page.locator('.channel-members .client').evaluateAll(rows => rows.map(row => row.dataset.clid));
+    const expected = ['alex-a', 'alex-z', 'alice', 'bob', 'user2', 'user10', 'self'];
+    expect(await order()).toEqual(expected);
+    await page.evaluate(() => {
+        window.__orderedMembers.reverse();
+        window.__orderedMembers.find(member => member.client_id === 'bob').is_speaking = true;
+        window.__orderedMembers.find(member => member.client_id === 'alice').self_muted = true;
+        window.__orderedSnapshot();
+    });
+    expect(await order()).toEqual(expected);
+    await page.evaluate(() => {
+        document.querySelector('.channel-members [data-clid="alice"]').click();
+        document.querySelector('.channel-members [data-clid="user2"]').dispatchEvent(new MouseEvent('click', { bubbles: true, shiftKey: true }));
+    });
+    expect(await page.locator('.channel-members .client.selected').evaluateAll(rows => rows.map(row => row.dataset.clid))).toEqual(['alice', 'bob', 'user2']);
+});

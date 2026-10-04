@@ -11,6 +11,8 @@ import { icon } from "./icons.js";
 import { renderWorkspace } from "./workspace-ui.js";
 import { captureScope, scopeIsCurrent } from "./scoped-actions.js";
 
+const memberNameOrder = new Intl.Collator(undefined, { sensitivity: "base", numeric: true });
+
 export function createChannelTree({ P, $, syncTrayVoice, state, toast, fetchAvatar, renderClientCard, setDetailsOpen, renderDirectTargets }) {
     const readEchoScope = () => ({ tabID: state.activeTabID, generation: state.serverGeneration, session: state.sessionGeneration });
     let echoInfo = null;
@@ -283,7 +285,7 @@ export function createChannelTree({ P, $, syncTrayVoice, state, toast, fetchAvat
             if (expandable) setChannelExpanded(ch.ChannelID, collapsed);
         };
         if (!collapsed) {
-            const members = state.clients.filter((c) => c.channel_id === ch.ChannelID);
+            const members = channelMembers(ch.ChannelID);
             if (members.length > 0) {
                 const list = document.createElement("div");
                 list.className = "channel-members";
@@ -334,6 +336,15 @@ export function createChannelTree({ P, $, syncTrayVoice, state, toast, fetchAvat
         } catch (err) {
             if (current()) toast(t("runtime.reorderFailed", { error: String(err) }), "warn");
         }
+    }
+
+    function channelMembers(channelID) {
+        // Snapshots originate from a server map. Tie identical names to identity
+        // so speech, mute and presence updates cannot shuffle the visible rows.
+        return state.clients.filter(c => c.channel_id === channelID).sort((a, b) =>
+            memberNameOrder.compare(a.nickname || a.unique_id || "", b.nickname || b.unique_id || "") ||
+            String(a.unique_id || "").localeCompare(String(b.unique_id || "")) ||
+            String(a.client_id).localeCompare(String(b.client_id)));
     }
 
     function clientRow(c) {
@@ -457,7 +468,7 @@ export function createChannelTree({ P, $, syncTrayVoice, state, toast, fetchAvat
                 if (state.multiSelect.has(c.client_id)) state.multiSelect.delete(c.client_id);
                 else state.multiSelect.add(c.client_id);
             } else if (e.shiftKey && state.selectedClientID) {
-                const rows = state.clients.filter((x) => x.channel_id === c.channel_id);
+                const rows = channelMembers(c.channel_id);
                 const ids = rows.map((x) => x.client_id);
                 const a = ids.indexOf(state.selectedClientID);
                 const b = ids.indexOf(c.client_id);
