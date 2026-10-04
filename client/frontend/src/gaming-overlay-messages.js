@@ -1,6 +1,6 @@
 export const overlayEnglish = {
-    'overlay.enabled': 'Gaming overlay', 'overlay.position': 'Overlay position',
-    'overlay.hint': 'Shows voice participants for five seconds when joining or reconnecting to a server or channel, then hides automatically. Appears above borderless/windowed games on the selected monitor; clicks pass through. Exclusive fullscreen is not supported.',
+    'overlay.enabled': 'Voice overlay', 'overlay.position': 'Overlay position',
+    'overlay.hint': 'Shows who is speaking on your desktop and over windowed or borderless games. Uses the primary monitor by default. Appears briefly when joining voice, stays visible while you or others speak, and hides after a short silence. Clicks pass through. Exclusive fullscreen is not supported.',
     'overlay.monitor': 'Overlay monitor', 'overlay.primary': 'Primary monitor', 'overlay.custom': 'Custom position',
     'overlay.scale': 'Overlay size', 'overlay.opacity': 'Overlay opacity', 'overlay.speakersOnly': 'Show only speaking members',
     'overlay.drag': 'Move overlay preview', 'overlay.dragHelp': 'Drag the preview or use arrow keys to position it. Hold Shift for larger steps. Apply saves your changes.',
@@ -8,13 +8,13 @@ export const overlayEnglish = {
     'overlay.coordinates': 'Position: {x}% horizontal, {y}% vertical', 'overlay.preview': 'Preview on monitor',
     'overlay.previewShown': 'Example overlay shown for five seconds. Your preferences are saved only when you choose Apply.',
     'overlay.missingMonitor': '{name} (disconnected; using primary monitor)',
-    'overlay.unavailable': 'The native gaming overlay is available on Windows.',
+    'overlay.unavailable': 'The native voice overlay is available on Windows.',
     'overlay.top-left': 'Top left', 'overlay.top-right': 'Top right', 'overlay.bottom-left': 'Bottom left', 'overlay.bottom-right': 'Bottom right',
-    'overlay.muted': 'Microphone muted', 'overlay.deafened': 'Deafened', 'overlay.ready': 'Voice connected', 'overlay.failed': 'Gaming overlay unavailable: {error}',
+    'overlay.muted': 'Microphone muted', 'overlay.deafened': 'Deafened', 'overlay.ready': 'Voice connected', 'overlay.failed': 'Voice overlay unavailable: {error}',
 };
 export const overlayGerman = {
-    'overlay.enabled': 'Gaming-Overlay', 'overlay.position': 'Overlay-Position',
-    'overlay.hint': 'Zeigt Sprachchat-Teilnehmer beim Beitritt oder erneuten Verbinden zu einem Server oder Kanal für fünf Sekunden und blendet sich danach aus. Erscheint über Spielen im Fenster oder randlosen Modus auf dem gewählten Bildschirm; Mausklicks werden durchgereicht. Exklusives Vollbild wird nicht unterstützt.',
+    'overlay.enabled': 'Sprach-Overlay', 'overlay.position': 'Overlay-Position',
+    'overlay.hint': 'Zeigt auf dem Desktop und über Spielen im Fenster oder randlosen Modus, wer spricht. Verwendet standardmäßig den Hauptbildschirm. Erscheint kurz beim Beitritt zum Sprachchat, bleibt sichtbar, während du oder andere sprechen, und blendet sich nach einer kurzen Sprechpause aus. Mausklicks werden durchgereicht. Exklusives Vollbild wird nicht unterstützt.',
     'overlay.monitor': 'Overlay-Bildschirm', 'overlay.primary': 'Hauptbildschirm', 'overlay.custom': 'Eigene Position',
     'overlay.scale': 'Overlay-Größe', 'overlay.opacity': 'Overlay-Deckkraft', 'overlay.speakersOnly': 'Nur sprechende Mitglieder anzeigen',
     'overlay.drag': 'Overlay-Vorschau verschieben', 'overlay.dragHelp': 'Vorschau ziehen oder mit Pfeiltasten verschieben. Umschalt vergrößert die Schritte. Übernehmen speichert die Änderungen.',
@@ -22,7 +22,7 @@ export const overlayGerman = {
     'overlay.coordinates': 'Position: {x}% waagrecht, {y}% senkrecht', 'overlay.preview': 'Auf Bildschirm testen',
     'overlay.previewShown': 'Beispiel-Overlay für fünf Sekunden angezeigt. Erst Übernehmen speichert deine Einstellungen.',
     'overlay.missingMonitor': '{name} (getrennt; Hauptbildschirm wird verwendet)',
-    'overlay.unavailable': 'Das native Gaming-Overlay ist unter Windows verfügbar.',
+    'overlay.unavailable': 'Das native Sprach-Overlay ist unter Windows verfügbar.',
     'overlay.top-left': 'Oben links', 'overlay.top-right': 'Oben rechts', 'overlay.bottom-left': 'Unten links', 'overlay.bottom-right': 'Unten rechts',
-    'overlay.muted': 'Mikrofon stumm', 'overlay.deafened': 'Ton deaktiviert', 'overlay.ready': 'Sprachverbindung aktiv', 'overlay.failed': 'Gaming-Overlay nicht verfügbar: {error}',
+    'overlay.muted': 'Mikrofon stumm', 'overlay.deafened': 'Ton deaktiviert', 'overlay.ready': 'Sprachverbindung aktiv', 'overlay.failed': 'Sprach-Overlay nicht verfügbar: {error}',
 };

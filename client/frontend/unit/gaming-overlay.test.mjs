@@ -2,16 +2,50 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createOverlayVisibility, overlayVoiceState } from '../src/gaming-overlay-state.js';
 
-test('connection overlay expires even while voice state keeps updating', () => {
+test('voice overlay returns for speech and stays visible through a conversation', () => {
     const visible = createOverlayVisibility();
     const state = { activeTabID: 'a', serverGeneration: 1, sessionGeneration: 1, myChannelID: 1 };
     const snapshot = { active: true, title: 'Lobby', speakers: [] };
     assert.equal(visible(state, snapshot, 1000).active, true);
-    assert.equal(visible(state, { ...snapshot, speakers: [{ name: 'Talking', speaking: true }] }, 5999).active, true);
     assert.equal(visible(state, snapshot, 6000).active, false);
-    assert.equal(visible(state, { ...snapshot, muted: true }, 10000).active, false);
-    assert.equal(visible({ ...state, myChannelID: 2 }, snapshot, 11000).active, true);
-    assert.equal(visible({ ...state, myChannelID: 2 }, snapshot, 16000).active, false);
+    const talking = { ...snapshot, speakers: [{ name: 'Talking', speaking: true }] };
+    assert.equal(visible(state, talking, 7000).active, true);
+    assert.equal(visible(state, talking, 30000).active, true);
+    assert.equal(visible(state, snapshot, 31000).active, true);
+    assert.equal(visible(state, snapshot, 31500).active, false);
+    assert.equal(visible(state, talking, 40000).active, true);
+    assert.equal(visible({ ...state, myChannelID: 2 }, snapshot, 41000).active, true);
+    assert.equal(visible({ ...state, myChannelID: 2 }, snapshot, 46000).active, false);
+});
+
+test('muted participants cannot keep the voice overlay visible', () => {
+    const visible = createOverlayVisibility();
+    const state = { activeTabID: 'a', myChannelID: 1 };
+    const snapshot = { active: true, speakers: [{ name: 'Muted', speaking: true, muted: true }] };
+    visible(state, snapshot, 0);
+    assert.equal(visible(state, snapshot, 5000).active, false);
+});
+
+test('self speech respects microphone mute and deafen while peer speech remains independent', () => {
+    const state = { settings: {}, channels: [], myChannelID: 1, myClientID: 'self', pc: {}, clients: [
+        { client_id: 'self', channel_id: 1, nickname: 'Me', is_speaking: true },
+        { client_id: 'peer', channel_id: 1, nickname: 'Peer', is_speaking: true },
+    ] };
+    assert.equal(overlayVoiceState(state).speakers.find(s => s.name === 'Me').speaking, true);
+    for (const privacy of [{ muted: true }, { deafened: true }]) {
+        const speakers = overlayVoiceState({ ...state, ...privacy }).speakers;
+        assert.equal(speakers.find(s => s.name === 'Me').speaking, false);
+        assert.equal(speakers.find(s => s.name === 'Me').muted, true);
+        assert.equal(speakers.find(s => s.name === 'Peer').speaking, true);
+    }
+});
+
+test('peer mute and deafen flags suppress stale speech highlights', () => {
+    const state = { settings: {}, channels: [], myChannelID: 1, pc: {}, clients: [] };
+    for (const flag of ['input_muted', 'self_muted', 'self_deafened', 'server_muted']) {
+        state.clients = [{ channel_id: 1, nickname: 'Peer', is_speaking: true, [flag]: true }];
+        assert.deepEqual(overlayVoiceState(state).speakers, [{ name: 'Peer', speaking: false, muted: true }]);
+    }
 });
 
 test('reconnection starts a fresh notice and disconnection hides immediately', () => {

@@ -23,20 +23,24 @@ test.beforeEach(async ({ page }) => {
     await page.waitForFunction(() => !!window.__noxa?.openSettings);
 });
 
-test("voice overlay hides after five seconds and reappears only on a new connection", async ({ page }) => {
+test("voice overlay follows self and other speakers after the join notice expires", async ({ page }) => {
     await page.evaluate(() => {
-        Object.assign(window.__noxa.state, { myChannelID: 1, pc: {}, channels: [{ ChannelID: 1, Name: "Lobby" }], clients: [] });
+        Object.assign(window.__noxa.state, { myClientID: 1, myChannelID: 1, pc: {}, channels: [{ ChannelID: 1, Name: "Lobby" }], clients: [
+            { client_id: 1, channel_id: 1, nickname: "Self", is_speaking: false },
+            { client_id: 2, channel_id: 1, nickname: "Peer", is_speaking: false },
+        ] });
     });
     await expect.poll(() => page.evaluate(() => window.__overlayUpdates?.at(-1)?.active)).toBe(true);
-    await page.evaluate(() => { window.__noxa.state.clients.push({ channel_id: 1, nickname: "Speaker", is_speaking: true }); });
-    await expect.poll(() => page.evaluate(() => window.__overlayUpdates.at(-1).speakers?.[0]?.name)).toBe("Speaker");
     await expect.poll(() => page.evaluate(() => window.__overlayUpdates.at(-1).active), { timeout: 7000 }).toBe(false);
-    await page.evaluate(() => { window.__noxa.state.muted = true; });
-    // Polling and speaking/mute changes must not restart the expired notice.
-    await page.waitForTimeout(600);
-    expect(await page.evaluate(() => window.__overlayUpdates.at(-1))).toEqual({ active: false });
-    await page.evaluate(() => { window.__noxa.state.myChannelID = 2; });
+    await page.evaluate(() => { window.__noxa.state.clients[0].is_speaking = true; });
+    await expect.poll(() => page.evaluate(() => window.__overlayUpdates.at(-1).speakers?.[0])).toMatchObject({ name: "Self", speaking: true });
+    // Continuous speech must survive the old five-second visibility limit.
+    await page.waitForTimeout(5500);
     await expect.poll(() => page.evaluate(() => window.__overlayUpdates.at(-1).active)).toBe(true);
+    await page.evaluate(() => { window.__noxa.state.muted = true; });
+    await expect.poll(() => page.evaluate(() => window.__overlayUpdates.at(-1).active)).toBe(false);
+    await page.evaluate(() => { window.__noxa.state.clients[1].is_speaking = true; });
+    await expect.poll(() => page.evaluate(() => window.__overlayUpdates.at(-1).speakers?.[0])).toMatchObject({ name: "Peer", speaking: true });
     await page.evaluate(() => { window.__noxa.state.pc = null; });
     await expect.poll(() => page.evaluate(() => window.__overlayUpdates.at(-1).active)).toBe(false);
     await page.evaluate(() => { window.__noxa.state.pc = {}; window.__noxa.state.sessionGeneration++; });
@@ -45,7 +49,8 @@ test("voice overlay hides after five seconds and reappears only on a new connect
 
 test("overlay preferences stay drafts until Apply, support keyboard positioning and native preview", async ({ page }) => {
     await page.evaluate(() => window.__noxa.openSettings("application"));
-    await expect(page.getByLabel("Gaming overlay", { exact: true })).toBeChecked();
+    await expect(page.getByLabel("Voice overlay", { exact: true })).toBeChecked();
+    await expect(page.getByLabel("Overlay monitor", { exact: true })).toHaveValue("");
     await page.getByLabel("Overlay monitor", { exact: true }).selectOption("left");
     await page.getByLabel("Overlay size", { exact: true }).fill("150");
     await page.getByLabel("Overlay opacity", { exact: true }).fill("40");
@@ -82,7 +87,7 @@ test("overlay preview drag remains bounded and Cancel discards draft position", 
 
 test("unsupported native overlays disable controls with a clear explanation", async ({ page }) => {
     await page.evaluate(() => { window.__overlayAvailable = false; window.__noxa.openSettings("application"); });
-    await expect(page.getByLabel("Gaming overlay", { exact: true })).toBeDisabled();
+    await expect(page.getByLabel("Voice overlay", { exact: true })).toBeDisabled();
     await expect(page.getByRole("button", { name: "Preview on monitor", exact: true })).toBeDisabled();
-    await expect(page.getByText("The native gaming overlay is available on Windows.", { exact: true })).toBeVisible();
+    await expect(page.getByText("The native voice overlay is available on Windows.", { exact: true })).toBeVisible();
 });
