@@ -2,11 +2,49 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 
 	"noxa/internal/authorization"
 	"noxa/internal/netproto"
 )
+
+func TestRoleMemberPokeReachesOwnerWithoutManageMemberPermission(t *testing.T) {
+	backend := serverRoleFixture()
+	backend.policy.Roles[0].Permissions = []authorization.Capability{authorization.ViewChannel, authorization.PokeMembers}
+	authority, err := authorization.NewAuthority(t.Context(), backend, func(context.Context, *authorization.RoleEvaluator, *authorization.RoleEvaluator) error { return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	env := startTestEnvDeps(t, nil, nil, func(d *Deps) { d.Authority = authority })
+	defer env.stop()
+	sender, senderID := dialAuthed(t, env.addr, "admin-uid") // Non-owner in the roles-v1 fixture.
+	defer func() { _ = sender.Close() }()
+	owner, ownerID := dialAuthed(t, env.addr, "user-uid")
+	defer func() { _ = owner.Close() }()
+	e, err := authorization.NewRoleEvaluator(backend.policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e.CanManageMember(1, 2) {
+		t.Fatal("fixture unexpectedly permits managing the owner")
+	}
+	send(t, sender, netproto.MsgPoke, netproto.Poke{ClientID: ownerID, Message: "owner poke", AckRequested: true})
+	var accepted netproto.PokeAccepted
+	if err := netproto.Decode(readOfType(t, sender, netproto.MsgPokeAccepted), &accepted); err != nil {
+		t.Fatal(err)
+	}
+	if accepted.ClientID != ownerID {
+		t.Fatal("incorrect poke acknowledgement")
+	}
+	var event pokeEvent
+	if err := json.Unmarshal(readEventOfType(t, owner, eventPoke), &event); err != nil {
+		t.Fatal(err)
+	}
+	if event.FromClientID != senderID || event.Message != "owner poke" {
+		t.Fatalf("incorrect owner delivery: %+v", event)
+	}
+}
 
 func TestRolePokesCheckCapabilityVisibilityAndQueuedRevocation(t *testing.T) {
 	backend := serverRoleFixture()
