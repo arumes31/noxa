@@ -23,12 +23,12 @@ export function manageChatGIFPlayback(root, selector = "img") {
             const context = canvas.getContext("2d");
             if (!context) return;
             context.drawImage(image, 0, 0, canvas.width, canvas.height);
-            const still = canvas.toDataURL("image/png");
-            // Preserve the intrinsic dimensions when the bounded preview is smaller.
-            if (!image.hasAttribute("width") && !image.hasAttribute("height")) {
-                image.width = image.naturalWidth;
-                image.height = image.naturalHeight;
-            }
+            const pixels = canvas.toDataURL("image/png");
+            // This fixed SVG contains only our canvas PNG and numeric dimensions.
+            // It preserves intrinsic sizing without forcing CSS width/height,
+            // which would distort images constrained by max-width/max-height.
+            const frame = `<svg xmlns="http://www.w3.org/2000/svg" width="${image.naturalWidth}" height="${image.naturalHeight}" viewBox="0 0 ${image.naturalWidth} ${image.naturalHeight}"><image href="${pixels}" width="100%" height="100%"/></svg>`;
+            const still = "data:image/svg+xml," + encodeURIComponent(frame);
             originals.set(image, state.source);
             state.paused = true;
             image.src = still;
