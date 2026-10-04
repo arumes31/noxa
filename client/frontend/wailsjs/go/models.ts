@@ -1135,7 +1135,6 @@ export namespace main {
 	    reduce_motion: boolean;
 	    sidebar_width: number;
 	    details_width: number;
-	    idle_video_pause: boolean;
 	    dnd_enabled: boolean;
 	    notification_snooze_until: number;
 	    dnd_from: string;
@@ -1260,7 +1259,6 @@ export namespace main {
 	        this.reduce_motion = source["reduce_motion"];
 	        this.sidebar_width = source["sidebar_width"];
 	        this.details_width = source["details_width"];
-	        this.idle_video_pause = source["idle_video_pause"];
 	        this.dnd_enabled = source["dnd_enabled"];
 	        this.notification_snooze_until = source["notification_snooze_until"];
 	        this.dnd_from = source["dnd_from"];

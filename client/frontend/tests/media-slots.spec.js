@@ -196,8 +196,8 @@ for (const [label, surface] of [["System Audio", "window"], ["", "window"], ["Ap
     });
 }
 
-for (const [preset, fps, bitrate] of [["hd", 30, 5000000], ["hdMotion", 60, 8000000]]) {
-    test(`${preset} requests Full HD capture and restores its encoding budget`, async ({ page }) => {
+for (const [preset, fps] of [["hd", 30], ["hdMotion", 60]]) {
+    test(`${preset} requests Full HD capture without a preset bitrate cap`, async ({ page }) => {
         await page.locator("#voice-screen").click();
         await page.locator(".sh-preset").selectOption(preset);
         await page.getByRole("button", { name: "Start sharing", exact: true }).click();
@@ -207,22 +207,22 @@ for (const [preset, fps, bitrate] of [["hd", 30, 5000000], ["hdMotion", 60, 8000
         expect(result.options.video.width.ideal).toBe(1920);
         expect(result.options.video.height.ideal).toBe(1080);
         expect(result.options.video.frameRate.ideal).toBe(fps);
-        expect(result.encodings[0].maxBitrate).toBe(bitrate);
+        expect(result.encodings[0].maxBitrate).toBeUndefined();
     });
 }
 
-for (const [preset, width, height, bitrate] of [["qhd", 2560, 1440, 10000000], ["uhd", 3840, 2160, 20000000]]) {
-    test(`${preset} shares high resolution with a traffic warning and bounded sender budget`, async ({ page }) => {
+for (const [preset, width, height] of [["qhd", 2560, 1440], ["uhd", 3840, 2160]]) {
+    test(`${preset} shares high resolution with a traffic warning and adaptive bitrate`, async ({ page }) => {
         await page.locator("#voice-screen").click();
         await page.locator(".sh-preset").selectOption(preset);
         await expect(page.locator(".share-quality-warning")).toContainText("CPU/GPU");
-        await expect(page.locator(".share-budget")).toContainText(`${bitrate / 1000000} Mbit/s`);
+        await expect(page.locator(".share-budget")).toContainText("no preset upload cap");
         await page.getByRole("button", { name: "Start sharing", exact: true }).click();
         await expect(page.locator("#sharing-status")).toBeVisible();
         expect(await page.evaluate(() => window.__media.captureOptions.video)).toMatchObject({
             width: { ideal: width, max: width }, height: { ideal: height, max: height }, frameRate: { ideal: 30, max: 30 },
         });
-        expect(await page.evaluate(() => window.__noxa.state.shareVideoTransceiver.sender.getParameters().encodings[0].maxBitrate)).toBe(bitrate);
+        expect(await page.evaluate(() => window.__noxa.state.shareVideoTransceiver.sender.getParameters().encodings[0].maxBitrate)).toBeUndefined();
     });
 }
 
@@ -236,7 +236,7 @@ test("custom sharing validates dimensions and retains size and frame rate when c
     await page.getByLabel("Width (px)", { exact: true }).fill("3440");
     await page.getByLabel("Height (px)", { exact: true }).fill("1440");
     await page.getByLabel("Frame rate", { exact: true }).selectOption("60");
-    await expect(page.locator(".share-budget")).toContainText("24 Mbit/s");
+    await expect(page.locator(".share-budget")).toContainText("no preset upload cap");
     await page.getByRole("button", { name: "Start sharing", exact: true }).click();
     await expect(page.locator(".sharing-change")).toBeEnabled();
     expect(await page.evaluate(() => window.__media.captureOptions.video)).toMatchObject({
@@ -276,7 +276,7 @@ test("original sharing removes resolution preferences and restores source dimens
     expect(result.applied.map(c => [c.width, c.height])).toEqual([[{ max: 1280 }, { max: 720 }], [{}, {}]]);
     expect(result.settings).toEqual({ width: 3840, height: 2160 });
     expect(result.capped).toBe(850000);
-    expect(result.restored).toBe(20000000);
+    expect(result.restored).toBeUndefined();
     await page.locator(".sharing-change").click();
     await expect(page.locator(".sh-preset")).toHaveValue("original");
 });
@@ -440,7 +440,7 @@ test("live bitrate updates preserve captures and redistribute both sender budget
             offers: window.__media.offers.length - offers, camera: window.__media.camera.readyState, screen: state.shareStream.getVideoTracks()[0].readyState };
     });
     expect(result).toEqual({ changed: { changed: true, dimensionsChanged: false }, duplicate: { changed: false, dimensionsChanged: false },
-        budgets: [255000, 255000], restored: [undefined, 1500000], offers: 0, camera: "live", screen: "live" });
+        budgets: [255000, 255000], restored: [undefined, undefined], offers: 0, camera: "live", screen: "live" });
 });
 
 test("live bitrate changes apply to a negotiated browser sender", async ({ page }) => {
@@ -897,7 +897,8 @@ test("denied screen confirmation releases capture and preserves camera", async (
 test("quality failure from an old peer cannot report against the replacement session", async ({ page }) => {
     await page.evaluate(() => {
         window.__media.delayQualityControl = true;
-        window.__media.video.setIdleQualityOverride(true);
+        const grid = document.createElement("div"); grid.id = "video-grid"; document.body.append(grid);
+        void window.__media.video.setLowBandwidth(true, false);
     });
     await expect.poll(() => page.evaluate(() => typeof window.__media.finishQualityControl)).toBe("function");
     expect(await page.evaluate(() => window.__media.qualityControl)).toEqual(["media-tab", "low"]);

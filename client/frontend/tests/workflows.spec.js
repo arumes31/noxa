@@ -4534,6 +4534,31 @@ test("server information shows reported video processors without inventing GPU s
     await expect(receive).toHaveText("—");
 });
 
+for (const hidden of [false, true]) {
+    test(`watched video keeps playing without focus even with legacy idle setting (hidden=${hidden})`, async ({ page }) => {
+        await page.evaluate(async hidden => {
+            window.__noxa.state.settings.idle_video_pause = true;
+            Object.defineProperty(document, "hidden", { configurable: true, value: hidden });
+            const video = document.createElement("video");
+            video.id = "background-playback-regression";
+            video.muted = true;
+            const canvas = document.createElement("canvas");
+            canvas.getContext("2d").fillRect(0, 0, 10, 10);
+            video.srcObject = canvas.captureStream(1);
+            document.getElementById("video-grid").append(video);
+            await video.play();
+        }, hidden);
+        await page.clock.install();
+        await page.evaluate(() => {
+            window.dispatchEvent(new Event("blur"));
+            document.dispatchEvent(new Event("visibilitychange"));
+        });
+        await page.clock.fastForward(61000);
+        expect(await page.locator("#background-playback-regression").evaluate(video => video.paused)).toBe(false);
+        await page.evaluate(() => document.getElementById("background-playback-regression").srcObject.getTracks().forEach(track => track.stop()));
+    });
+}
+
 test("server information suspends hidden polling, avoids overlapping calls and stops on close", async ({ page }) => {
     await prepareServerInformation(page);
     await page.clock.install();
@@ -7905,7 +7930,7 @@ test("labels screen-share controls and explains low-bandwidth data use", async (
     await expect(shareDialog.getByRole("combobox", { name: "Share audio", exact: true })).toHaveValue("none");
     await auditAccessibility(page, "screen-share dialog");
     await shareDialog.getByRole("combobox", { name: "Quality preset" }).selectOption("uhd");
-    await expect(shareDialog.locator(".share-budget")).toContainText("20 Mbit/s");
+    await expect(shareDialog.locator(".share-budget")).toContainText("no preset upload cap");
     await expect(shareDialog.locator(".share-quality-warning")).toBeVisible();
     await shareDialog.getByRole("combobox", { name: "Quality preset" }).selectOption("custom");
     await shareDialog.getByLabel("Width (px)", { exact: true }).fill("3440");

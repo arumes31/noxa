@@ -1,10 +1,9 @@
 import { escapeHTML as escapeTranslation } from "./markdown.js";
 // polish-ui.js — wave-8c polish & accessibility: pane transitions (337),
 // resizable panes (338), detachable chat (339), fullscreen video (340),
-// zen mode (341), idle video pause (342), screen-reader labels + live
+// zen mode (341), screen-reader labels + live
 // announcements (343), notification center (346), DND (347/348), and tree
 // virtualization (349).
-import { setIdleQualityOverride } from "./video.js";
 import { isActivationKey } from "./a11y.js";
 import { mountDialog } from "./modal.js";
 import { icon } from "./icons.js";
@@ -191,35 +190,6 @@ function toggleZen() {
         ind.remove();
     }
     window.__noxaFiles?.restoreVisibleWorkspaceFocus?.();
-}
-
-// ---------------------------------------------------------------------------
-// Idle video pause (342)
-// ---------------------------------------------------------------------------
-
-let idleVideoTimer = null;
-let idleVideoPaused = false;
-
-function initIdleVideoPause() {
-    window.addEventListener("blur", () => {
-        if (!(V().state.settings?.idle_video_pause !== false)) return;
-        idleVideoTimer = setTimeout(() => {
-            idleVideoPaused = true;
-            document.querySelectorAll("#video-grid video, #remote-video").forEach((v) => v.pause());
-            if (V().state.pc) setIdleQualityOverride(true);
-        }, 60000);
-    });
-    window.addEventListener("focus", () => {
-        if (idleVideoTimer) {
-            clearTimeout(idleVideoTimer);
-            idleVideoTimer = null;
-        }
-        if (idleVideoPaused) {
-            idleVideoPaused = false;
-            document.querySelectorAll("#video-grid video, #remote-video").forEach((v) => v.play().catch(() => {}));
-            setIdleQualityOverride(false); // video.js re-applies the user's pref
-        }
-    });
 }
 
 // ---------------------------------------------------------------------------
@@ -451,7 +421,6 @@ function injectFakeTree(n) {
 
 export function initPolishUI() {
     initResizablePanes();
-    initIdleVideoPause();
     initA11y();
     document.getElementById("notif-bell").onclick = openNotifCenter;
     window.__noxaPolish = { toggleChatPopout, toggleZen, openNotifCenter, announce, recordNotification, dndActive, virtualizeEnabled, myBranchIDs };

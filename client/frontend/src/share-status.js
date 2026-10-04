@@ -1,5 +1,4 @@
 import { t } from "./i18n.js";
-import { formatBitrate } from "./connection-stats.js";
 import { mediaScopeIsCurrent } from "./media-controls.js";
 
 let session = null;
@@ -74,12 +73,12 @@ function render(s) {
     const limits = window.__noxa.state.mediaLimits;
     const capped = (s.preset.original && limits?.video_max_width > 0) || (limits?.video_max_width > 0 && limits.video_max_width < s.preset.width) ||
         (limits?.video_max_height > 0 && limits.video_max_height < s.preset.height) ||
-        (limits?.video_max_bitrate > 0 && limits.video_max_bitrate < s.preset.bitrate);
+        limits?.video_max_bitrate > 0;
     const warning = s.root.querySelector(".sharing-warning");
     warning.textContent = reason ? t(reason) : capped ? t(s.preset.original ? "share.originalServerLimit" : "share.serverLimit") : "";
     warning.hidden = !warning.textContent;
     s.root.querySelector(".sharing-meta").title = t(s.preset.original ? "share.selectedOriginal" : "share.selected", {
-        width: s.preset.width, height: s.preset.height, fps: s.preset.fps, bitrate: formatBitrate(s.preset.bitrate) });
+        width: s.preset.width, height: s.preset.height, fps: s.preset.fps });
 }
 
 async function poll(s) {

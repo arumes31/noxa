@@ -122,8 +122,7 @@ export function createVideoPublication({ policy }) {
             const sources = [videoSenderFor(pc), screenSender].filter(sender => sender &&
                 (sender === pendingVideoSenders.get(pc) || (sender.track && sender.track.readyState !== "ended"))).map(sender => {
                 const parameters = sender.getParameters();
-                return { sender, parameters, encodings: parameters.encodings || [],
-                    preset: sender === screenSender ? sharePresetBitrate || Infinity : Infinity };
+                return { sender, parameters, encodings: parameters.encodings || [] };
             });
             capVideoEncodings(sources, state.mediaLimits, policy.lowBandwidth ? policy.lowBandwidthBitrate : policy.sendCpuPressure ? 500000 : 0);
             for (const { sender, parameters, encodings } of sources) {
@@ -143,11 +142,6 @@ export function createVideoPublication({ policy }) {
         if (limits?.video_max_bitrate) parts.push(tLabel("voice.mediaBitrate", { bitrate: limits.video_max_bitrate / 1000 }));
         return parts.join(" ");
     }
-
-    // sharePresetBitrate is the active share's preset ceiling (72), 0 when idle.
-    // applySendCaps needs it so leaving low-bandwidth
-    // mode mid-share restores the preset instead of uncapping the share.
-    let sharePresetBitrate = 0;
 
     // ---------------------------------------------------------------------------
     // Screen share (69-72, 85)
@@ -388,7 +382,6 @@ export function createVideoPublication({ policy }) {
         }
         state.shareStream = display;
         state.regionBox = nextRegion;
-        sharePresetBitrate = p.bitrate;
         if (peerConnection) {
             // The dedicated screen transceiver survives publication stops.
             try {
@@ -426,7 +419,6 @@ export function createVideoPublication({ policy }) {
                 // videoSender()'s reach.
                 discardDisplay(display);
                 state.shareStream = null;
-                sharePresetBitrate = 0;
                 applySendCaps();
                 clearRegionBox(); // (71) nothing is being cropped after this
                 return;
@@ -700,7 +692,6 @@ export function createVideoPublication({ policy }) {
             state.shareStream = null;
         }
         clearRegionBox(); // (71)
-        sharePresetBitrate = 0;
         applySendCaps();
         syncCameraButton();
         try {
@@ -751,7 +742,6 @@ export function createVideoPublication({ policy }) {
         cameraOff = true;
         cameraRequest?.controller?.abort();
         cameraRequest = null;
-        sharePresetBitrate = 0;
         syncCameraButton();
         syncShareButton();
     }

@@ -337,7 +337,6 @@ function pageApplication() {
     el.append(gamingOverlaySettings(s, { row, checkbox, slider, hint }));
     el.appendChild(row(t("settings.compact.mode"), checkbox(s.compact_mode, (v) => { s.compact_mode = v; })));
     el.appendChild(row(t("settings.reduce.motion"), checkbox(s.reduce_motion, (v) => { s.reduce_motion = v; })));
-    el.appendChild(row(t("settings.pause.video.when.unfocused"), checkbox(s.idle_video_pause !== false, (v) => { s.idle_video_pause = v; })));
     el.appendChild(row(t("settings.close.to.tray"), checkbox(s.close_to_tray, (v) => { s.close_to_tray = v; })));
     el.appendChild(row(t("settings.minimize.to.tray"), checkbox(s.minimize_to_tray, (v) => { s.minimize_to_tray = v; })));
     // (292) the floor keeps the window clickable. Applied on release, not per

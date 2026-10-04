@@ -19,8 +19,8 @@ export function trackFitsVideoLimits(track, limits) {
 // Reserve 15% for RTP overhead; the server's packet meter remains authoritative.
 export function capVideoEncodings(sources, limits, localCap) {
     const budget = limits?.video_max_bitrate > 0 ? Math.floor(limits.video_max_bitrate * 0.85 / sources.length) : Infinity;
-    for (const { encodings, preset = Infinity } of sources) {
-        const cap = Math.min(budget, preset, localCap ? Math.floor(localCap / sources.length) : Infinity);
+    for (const { encodings } of sources) {
+        const cap = Math.min(budget, localCap ? Math.floor(localCap / sources.length) : Infinity);
         const activeCount = Math.min(localCap ? 1 : encodings.length, cap);
         encodings.forEach((encoding, i) => {
             encoding.active = i < activeCount;

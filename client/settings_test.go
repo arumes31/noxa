@@ -523,9 +523,6 @@ func TestSettingsWave8c(t *testing.T) {
 	if s.Language != "" && s.Language != "system" {
 		t.Fatalf("default language = %q", s.Language)
 	}
-	if !s.IdleVideoPause {
-		t.Fatal("idle video pause should default on")
-	}
 	if s.HotkeyZen != "Ctrl+Shift+Z" {
 		t.Fatalf("zen hotkey default = %q", s.HotkeyZen)
 	}

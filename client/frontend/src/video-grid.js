@@ -35,7 +35,6 @@ export function createVideoGrid({ applySendCaps, syncCameraButton, syncShareButt
     let qualityPref = "auto"; // auto | high | mid | low
     let lastSentQuality = "";
     let qualityRequest = null;
-    let idleOverride = false; // (342) window idle: force low without losing the pref
     let cpuPressure = false;
     let receiveCpuPressure = false;
     let sendCpuPressure = false;
@@ -358,20 +357,11 @@ export function createVideoGrid({ applySendCaps, syncCameraButton, syncShareButt
     // effectiveQuality maps the preference to a concrete layer. Auto heuristic:
     // focused view -> high, grid view -> mid, low-bandwidth mode -> low.
     function effectiveQuality() {
-        if (lowBandwidth || idleOverride || receiveCpuPressure) return "low";
+        if (lowBandwidth || receiveCpuPressure) return "low";
         if (qualityPref !== "auto") return qualityPref;
         const viewQuality = focusedID ? "high" : "mid";
         const rank = { low: 0, mid: 1, high: 2 };
         return rank[autoNetworkQuality] < rank[viewQuality] ? autoNetworkQuality : viewQuality;
-    }
-
-    // setIdleQualityOverride is the idle-pause hook (342). It goes through the
-    // state machine so lastSentQuality stays in sync with the server and the
-    // user's preference comes back on resume.
-    function setIdleQualityOverride(on) {
-        if (idleOverride === on) return;
-        idleOverride = on;
-        pushQuality();
     }
 
     // pushQuality sends MsgVideoQuality when the effective layer changed.
@@ -632,8 +622,7 @@ export function createVideoGrid({ applySendCaps, syncCameraButton, syncShareButt
 
     let lowBandwidth = false;
 
-    // LOW_BW_BITRATE is the send ceiling of the mode; a screen share must not lift
-    // it (88), so the share preset caps are clamped to it while the mode is on.
+    // Camera and screen share split this user-selected send ceiling.
     const LOW_BW_BITRATE = 150000;
     const LOW_BW_HOURLY_MB = Math.ceil(LOW_BW_BITRATE * 60 * 60 / 8 / 1000000);
     const LOW_BW_ESTIMATE_ID = "voice-lowbw-estimate";
@@ -689,5 +678,5 @@ export function createVideoGrid({ applySendCaps, syncCameraButton, syncShareButt
         }
     }
 
-    return { videoTrackAdded, videoTrackRemoved, videoSpeaking, videoRefreshNames, clearVideoGrid, initVideo, setIdleQualityOverride, isLowBandwidth, setLowBandwidth, get lowBandwidth() { return lowBandwidth; }, get sendCpuPressure() { return sendCpuPressure; }, lowBandwidthBitrate: LOW_BW_BITRATE };
+    return { videoTrackAdded, videoTrackRemoved, videoSpeaking, videoRefreshNames, clearVideoGrid, initVideo, isLowBandwidth, setLowBandwidth, get lowBandwidth() { return lowBandwidth; }, get sendCpuPressure() { return sendCpuPressure; }, lowBandwidthBitrate: LOW_BW_BITRATE };
 }

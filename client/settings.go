@@ -134,7 +134,6 @@ type Settings struct {
 	ReduceMotion            bool   `json:"reduce_motion"`             // (344)
 	SidebarWidth            int    `json:"sidebar_width"`             // (338) px, 0 = default
 	DetailsWidth            int    `json:"details_width"`             // (338) px, 0 = default
-	IdleVideoPause          bool   `json:"idle_video_pause"`          // (342) default on
 	DNDEnabled              bool   `json:"dnd_enabled"`               // (347)
 	NotificationSnoozeUntil int64  `json:"notification_snooze_until"` // Unix milliseconds; independent of DND and quiet hours.
 	DNDFrom                 string `json:"dnd_from"`                  // (348) quiet hours start "22:00" ("" = off)
@@ -282,7 +281,6 @@ func DefaultSettings() Settings {
 		HotkeyMute:            "Ctrl+M",
 		HotkeyQuickConnect:    "Ctrl+Shift+C",
 		HotkeyZen:             "Ctrl+Shift+Z",
-		IdleVideoPause:        true,
 		Theme:                 "dark",
 		UIFont:                "outfit",
 		UIFontSize:            14,
