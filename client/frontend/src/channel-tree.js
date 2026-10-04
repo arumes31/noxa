@@ -2,7 +2,7 @@
 import { filterConversations, privateGroupViewToken } from "./conversations.js";
 import { isUserMuted } from "./audio.js";
 import * as chatUI from "./chat-ui.js";
-import { publishAudioState } from "./audio-state.js";
+import { isClientMicrophoneMuted, publishAudioState } from "./audio-state.js";
 import { roleChip } from "./role-presentation.js";
 import { setSafeImage } from "./safe-media.js";
 import { t } from "./i18n.js";
@@ -339,7 +339,7 @@ export function createChannelTree({ P, $, syncTrayVoice, state, toast, fetchAvat
     function clientRow(c) {
         const tabID = state.activeTabID, generation = state.serverGeneration;
         const row = document.createElement("div");
-        const speakingHere = state.myChannelID !== 0 && c.channel_id === state.myChannelID && c.is_speaking;
+        const speakingHere = state.myChannelID !== 0 && c.channel_id === state.myChannelID && c.is_speaking && !isClientMicrophoneMuted(c, state);
         row.className = "client" + (speakingHere ? " speaking" : "") +
             (state.multiSelect.has(c.client_id) ? " selected" : "") +
             (c.status === "away" || c.status === "busy" || c.status === "invisible" ? " " + c.status : "");

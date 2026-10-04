@@ -762,7 +762,7 @@ func (m *Manager) SetSpeaking(clientID string, speaking bool) {
 		return
 	}
 
-	if speaking && !c.ServerMuted {
+	if speaking && !c.ServerMuted && !c.SelfMuted && !c.SelfDeafened {
 		c.IsSpeaking = true
 		m.speaking[clientID] = &SpeakingState{
 			ClientID:  clientID,
@@ -843,6 +843,9 @@ func (m *Manager) SetAudioState(clientID string, muted, deafened bool) bool {
 		return false
 	}
 	c.SelfMuted, c.SelfDeafened = muted || deafened, deafened
+	if c.SelfMuted {
+		m.stopSpeakingLocked(c)
+	}
 	return true
 }
 

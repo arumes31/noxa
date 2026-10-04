@@ -27,9 +27,9 @@ test.beforeEach(async ({ page }) => {
             if (played && id.startsWith('speech_')) window.__spoken.push(id);
             return played;
         };
-        window.__membership = (peerChannel = 7) => {
+        window.__membership = (peerChannel = 7, audioState = {}) => {
             const clients = [{ client_id: 'self', nickname: 'Self', channel_id: 7 }];
-            if (peerChannel !== null) clients.push({ client_id: 'peer', nickname: 'Peer', channel_id: peerChannel });
+            if (peerChannel !== null) clients.push({ client_id: 'peer', nickname: 'Peer', channel_id: peerChannel, ...audioState });
             const snapshot = { root_channels: [7, 8].map(id => ({ ChannelID: id, Name: 'Channel ' + id,
                 clients: clients.filter(client => client.channel_id === id) })), unassigned_clients: clients.filter(client => !client.channel_id) };
             for (const callback of window.__events.snapshot) callback(JSON.stringify(snapshot));
@@ -64,3 +64,42 @@ for (const condition of ['replay', 'reconnect', 'tab switch', 'notifications dis
         expect(await page.evaluate(() => window.__spoken)).toEqual([]);
     });
 }
+
+for (const flag of ['self_muted', 'self_deafened', 'server_muted']) {
+    test(`speaking indicator clears for ${flag}, including late activity`, async ({ page }) => {
+        const row = page.locator('.client[data-clid="peer"]');
+        await page.evaluate(() => {
+            window.__activity = speaking => {
+                for (const callback of window.__events.event) callback(JSON.stringify({ type: 'speaking_changed', data: { client_id: 'peer', channel_id: 7, speaking } }));
+            };
+            window.__activity(true);
+        });
+        await expect(row.locator('.client-voice-state')).toHaveCount(1);
+        await page.evaluate(flag => {
+            const { state, renderTree } = window.__noxa;
+            state.clients.find(c => c.client_id === 'peer')[flag] = true;
+            renderTree();
+        }, flag);
+        await expect(row.locator('.client-voice-state')).toHaveCount(0);
+        await page.evaluate(() => window.__activity(true));
+        await expect(row).not.toHaveClass(/speaking/);
+        expect(await page.evaluate(() => window.__noxa.state.clients.find(c => c.client_id === 'peer').is_speaking)).toBe(false);
+        await page.evaluate(flag => { window.__noxa.state.clients.find(c => c.client_id === 'peer')[flag] = false; window.__activity(true); }, flag);
+        await expect(row.locator('.client-voice-state')).toHaveCount(1);
+        await page.evaluate(flag => window.__membership(7, { [flag]: true, is_speaking: true }), flag);
+        await expect(row.locator('.client-voice-state')).toHaveCount(0);
+        expect(await page.evaluate(() => window.__noxa.state.clients.find(c => c.client_id === 'peer').is_speaking)).toBe(false);
+    });
+}
+
+test('own mute immediately hides speaking before the server reply', async ({ page }) => {
+    await page.evaluate(() => {
+        const { state, renderTree } = window.__noxa;
+        state.clients.find(c => c.client_id === 'self').is_speaking = true;
+        renderTree();
+    });
+    const row = page.locator('.client[data-clid="self"]');
+    await expect(row.locator('.client-voice-state')).toHaveCount(1);
+    await page.evaluate(() => document.getElementById('voice-mute').click());
+    await expect(row.locator('.client-voice-state')).toHaveCount(0);
+});

@@ -41,7 +41,7 @@ import * as chatUI from "./chat-ui.js";
 import { startStreamSession, stopStreamSession, streamSessionIsCurrent, receiveStreamTrack, removeStreamTrack, receiveShareAudio, removeShareAudio } from "./stream-controls.js";
 import { startRemoteMedia } from "./remote-media.js";
 import { remoteTrackID } from "./media-track-id.js";
-import { publishAudioState } from "./audio-state.js";
+import { isClientMicrophoneMuted, publishAudioState } from "./audio-state.js";
 import { isCurrentPublication } from "./stream-publication.js";
 import { initPermsUI } from "./roles-access-ui.js";
 import { roleChip } from "./role-presentation.js";
@@ -1077,6 +1077,12 @@ window.runtime.EventsOn("snapshot", (json) => {
     lastKnownChannel.clear(); // the snapshot is authoritative
     for (const root of snap.root_channels || []) flattenChannel(root);
     for (const client of snap.unassigned_clients || []) state.clients.push(client);
+    for (const client of state.clients) {
+        if (isClientMicrophoneMuted(client, state)) {
+            client.is_speaking = false;
+            videoSpeaking(client.client_id, false);
+        }
+    }
     void refreshEchoChannel();
     // Snapshot replay can beat the async ClientID lookup during a tab switch
     // or reconnect. Reconcile here when the identity is already known; the
@@ -1100,6 +1106,8 @@ window.runtime.EventsOn("snapshot", (json) => {
     videoRefreshNames(); // (61/73) tile labels follow the refreshed client list
     window.__noxaNotify?.checkBuddyOnline();
     window.__noxaNotify?.checkChannelWatch();
+    updateTalkBanner();
+    recomputeDucking();
     renderTree();
 });
 
@@ -1440,13 +1448,14 @@ window.runtime.EventsOn("event", (json) => {
         case "speaking_changed": {
             const c = state.clients.find((c) => c.client_id === d.client_id);
             if (c && d.channel_id !== undefined && d.channel_id !== c.channel_id) break;
-            if (c) c.is_speaking = d.speaking;
-            if (d.speaking && d.client_id === state.myClientID && state.myChannelID &&
+            const speaking = !!d.speaking && !!c && !isClientMicrophoneMuted(c, state);
+            if (c) c.is_speaking = speaking;
+            if (speaking && d.client_id === state.myClientID && state.myChannelID &&
                 d.channel_id === state.myChannelID && !state.replayingTabID && !state.muted && !state.deafened) noteActivity();
             // (343) announce speaking events to the screen-reader region.
-            if (d.speaking) window.__noxaPolish?.announce(t("runtime.startedSpeaking", { name: c ? c.nickname || c.unique_id : t("runtime.someone") }));
+            if (speaking) window.__noxaPolish?.announce(t("runtime.startedSpeaking", { name: c.nickname || c.unique_id }));
             updateTalkBanner();
-            videoSpeaking(d.client_id, d.speaking);
+            videoSpeaking(d.client_id, speaking);
             recomputeDucking();
             break;
         }
@@ -2572,6 +2581,11 @@ window.runtime.EventsOn("offer", (json) => {
 // Mute / deafen / PTT ---------------------------------------------------------
 
 function applyVoiceState() {
+    if (state.muted || state.deafened) {
+        const me = state.clients.find(c => c.client_id === state.myClientID);
+        if (me) me.is_speaking = false;
+        videoSpeaking(state.myClientID, false);
+    }
     if (!state.localStream) return;
     const mode = state.settings?.activation_mode || "ptt";
     let audible = !state.muted && !state.deafened;

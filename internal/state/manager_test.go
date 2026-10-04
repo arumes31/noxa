@@ -522,6 +522,8 @@ func TestSpeakingStopRecordsVoiceIdleOnce(t *testing.T) {
 		stop func(*Manager) error
 	}{
 		{"silence", func(m *Manager) error { m.SetSpeaking("talker", false); return nil }},
+		{"self mute", func(m *Manager) error { m.SetAudioState("talker", true, false); return nil }},
+		{"self deafen", func(m *Manager) error { m.SetAudioState("talker", false, true); return nil }},
 		{"move", func(m *Manager) error { return m.MoveClient("talker", 2) }},
 		{"leave", func(m *Manager) error { return m.LeaveChannel("talker") }},
 		{"channel removal", func(m *Manager) error { m.RemoveChannel(1); return nil }},
@@ -558,11 +560,24 @@ func TestSpeakingStopRecordsVoiceIdleOnce(t *testing.T) {
 			}
 			m.SetSpeaking("talker", false)
 			m.SetStatus("talker", "away", "quiet")
-			if stopped.ServerMuted {
+			if stopped.ServerMuted || stopped.SelfMuted {
 				m.SetSpeaking("talker", true)
+				if m.IsSpeaking("talker") {
+					t.Fatal("late speaking update reactivated a muted client")
+				}
 			}
 			if current, _ := m.GetClient("talker"); !current.LastSpokeAt.Equal(stopped.LastSpokeAt) {
 				t.Fatal("silent or presence updates reset voice idle")
+			}
+			if stopped.SelfMuted {
+				m.SetAudioState("talker", false, false)
+				if m.IsSpeaking("talker") {
+					t.Fatal("unmute restored stale speaking state")
+				}
+				m.SetSpeaking("talker", true)
+				if !m.IsSpeaking("talker") {
+					t.Fatal("fresh speech after unmute was ignored")
+				}
 			}
 		})
 	}
