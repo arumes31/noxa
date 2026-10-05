@@ -783,13 +783,18 @@ function renderMsg(m) {
     }
     if (!m.deleted && m.direct && (m.clientMsgID || m.localSeq) && view.kind === "dm") {
         const peer = view.uid, owner = getDMOwner(), scope = captureScope(readExportScope);
-        const save = document.createElement("button"); save.className = "icon-btn"; save.textContent = "☆"; save.title = t("messages.save"); save.setAttribute("aria-label", t("messages.save"));
+        const save = document.createElement("button");
+        save.type = "button";
+        save.className = "msg-save";
+        save.textContent = "☆";
+        save.title = t("messages.save");
+        save.setAttribute("aria-label", t("messages.save"));
         save.onclick = async () => {
             const ready = await owner.ready;
             if (ready.error || !dmOwnerIsCurrent(owner) || !exportScopeIsCurrent(scope) || !save.isConnected) return;
             await saveMessageReference({ kind: "dm", peer_id: peer, client_message_id: m.clientMsgID || "", local_seq: m.localSeq || 0 }, ready.context);
         };
-        el.append(save);
+        time.append(save);
     }
     return el;
 }
