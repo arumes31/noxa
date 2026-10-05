@@ -138,6 +138,7 @@ body.details-collapsed #details-toggle { display: inline-flex; position: static;
 .ctx-member-audio .ctx-audio-range input { width: 100%; margin: 0; accent-color: var(--accent); }
 .ctx-audio-baseline { position: absolute; top: 16px; left: 50%; transform: translateX(-50%); color: var(--text-faint); font-size: .65rem; line-height: 1; }
 .ctx-audio-baseline::before { content: ""; display: block; width: 1px; height: 4px; margin: 0 auto 1px; background: var(--text-faint); }
+.ctx-audio-max { position: absolute; top: 21px; right: 0; color: var(--text-faint); font-size: .65rem; line-height: 1; }
 .ctx-audio-unavailable { margin: 1px 10px 6px; color: var(--text-dim); font-size: .75rem; }
 #chat-pane { gap: 0; overflow: hidden; }
 #banner-box:empty { display: none; }

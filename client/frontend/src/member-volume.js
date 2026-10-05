@@ -59,9 +59,11 @@ export function bindMemberVolume(slider, output, reset, uid, { format = value =>
 }
 
 function showVolume(slider, output, text) {
-    if (output.tagName === "INPUT") { output.value = slider.value; output.disabled = slider.disabled; }
-    else output.textContent = text;
     const amplified = Number(slider.value) > 100;
+    const label = amplified ? `${text} · +${Number(((Number(slider.value) - 100) / 5).toFixed(1))} dB` : text;
+    if (output.tagName === "INPUT") { output.value = slider.value; output.disabled = slider.disabled; }
+    else output.textContent = label;
+    output.title = label;
     slider.closest(".ctx-audio-group")?.classList.toggle("amplified", amplified);
-    slider.setAttribute("aria-valuetext", amplified ? `${text} · ${t("context.amplified")}` : text);
+    slider.setAttribute("aria-valuetext", label);
 }

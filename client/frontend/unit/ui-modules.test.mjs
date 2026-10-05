@@ -225,23 +225,23 @@ test("frontend UI module behaviors", { concurrency: false }, async (t) => {
         const gainNode = { gain: { value: 0 } };
         const muteNode = { gain: { value: 0 } };
         audio.registerUserChain("alice", gainNode, muteNode);
-        assert.equal(gainNode.gain.value, 0.6);
+        assert.equal(gainNode.gain.value, 0.36);
         audio.setDucking(true, []);
-        assert.equal(gainNode.gain.value, 0.15);
+        assert.equal(gainNode.gain.value, 0.09);
         audio.setDucking(true, ["alice"]);
-        assert.equal(gainNode.gain.value, 0.6);
+        assert.equal(gainNode.gain.value, 0.36);
         await audio.setUserMuted("alice", true);
         assert.equal(gainNode.gain.value, 0);
         assert.equal(muteNode.gain.value, 0);
         assert.deepEqual(saved[0].muted_users, ["alice"]);
         audio.setDucking(false, []);
-        audio.unregisterUserChain("alice");
+        audio.unregisterUserChain("alice", gainNode);
 
         const compressor = {
             attack: { value: 0 }, knee: { value: 0 }, ratio: { value: 0 }, release: { value: 0 }, threshold: { value: 0 },
         };
         assert.equal(audio.makeLimiter({ createDynamicsCompressor: () => compressor }), compressor);
-        assert.equal(compressor.threshold.value, -3);
+        assert.equal(compressor.threshold.value, -6);
         assert.equal(compressor.ratio.value, 20);
         const normalized = audio.makeNormalizer(
             { createGain: () => ({ gain: { value: 1 } }) },

@@ -117,10 +117,10 @@ test(`real peer call captures only after acceptance and tears down without joini
         await alice.evaluate(async () => {
             const context = new AudioContext(); await context.resume();
             const tone = context.createOscillator(), gain = context.createGain(), output = context.createMediaStreamDestination();
-            tone.frequency.value = 440; gain.gain.value = 0.1;
+            tone.frequency.value = 440; gain.gain.value = 0.01;
             tone.connect(gain); gain.connect(output); tone.start();
             const sender = window.__peers[0].getSenders().find(sender => sender.track?.kind === "audio");
-            window.__testTone = { context, tone, output, sender, original: sender.track };
+            window.__testTone = { context, tone, gain, output, sender, original: sender.track };
             await sender.replaceTrack(output.stream.getAudioTracks()[0]);
         });
         await bob.evaluate(async () => {
@@ -135,17 +135,28 @@ test(`real peer call captures only after acceptance and tears down without joini
             return Math.sqrt(samples.reduce((sum, sample) => sum + sample * sample, 0) / samples.length);
         });
         await expect.poll(playbackLevel).toBeGreaterThan(0.001);
+        await expect.poll(playbackLevel).toBeLessThan(0.015);
+        const unityLevel = await playbackLevel();
         // Playback settings must apply to an existing private call without
         // replacing the peer, including master mute and per-user attenuation.
-        for (const [master, user, expected] of [[0, 100, 0], [50, 50, 0.25], [100, 200, 2], [200, 200, 4], [100, 100, 1]]) {
+        for (const [master, user, expected] of [[0, 100, 0], [50, 50, 0.125], [100, 200, 10], [200, 200, 20], [100, 100, 1]]) {
             await bob.evaluate(({ master, user }) => {
                 window.__noxa.state.settings.volume = master;
                 window.__noxa.state.settings.user_volumes = { alice: user };
             }, { master, user });
             await expect.poll(() => bob.evaluate(() => document.querySelector("audio").volume * window.__callGains[0].gain.value)).toBe(expected);
             if (expected === 0) await expect.poll(playbackLevel).toBeLessThan(0.00001);
-            else await expect.poll(async () => Math.abs(await playbackLevel() - 0.0707 * expected)).toBeLessThan(0.015);
+            else await expect.poll(async () => Math.abs(await playbackLevel() / unityLevel - expected)).toBeLessThan(Math.max(0.05, expected * 0.08));
         }
+        await alice.evaluate(() => { window.__testTone.gain.gain.value = 0.3; });
+        await bob.evaluate(() => { window.__noxa.state.settings.user_volumes = { alice: 200 }; });
+        await expect.poll(playbackLevel).toBeGreaterThan(0.2);
+        await expect.poll(() => bob.evaluate(() => {
+            const analyser = window.__playbackMeter.analyser;
+            const samples = new Float32Array(analyser.fftSize); analyser.getFloatTimeDomainData(samples);
+            return samples.reduce((peak, sample) => Math.max(peak, Math.abs(sample)), 0);
+        })).toBeLessThan(1);
+        await bob.evaluate(() => { window.__noxa.state.settings.user_volumes = { alice: 100 }; });
         await bob.evaluate(() => window.__playbackMeter.context.close());
         await alice.evaluate(async () => {
             const test = window.__testTone; await test.sender.replaceTrack(test.original);
@@ -206,7 +217,7 @@ test(`real peer call captures only after acceptance and tears down without joini
                 await screen.getByRole("slider", { name: "Shared audio", exact: true }).fill("35");
                 await expect.poll(() => bob.evaluate(() => window.__savedSettings?.user_share_volumes?.alice)).toBe(35);
                 await bob.evaluate(() => { window.__noxa.state.settings.muted_users = ["alice"]; });
-                await expect.poll(() => bob.evaluate(() => window.__callGains.slice(0, 2).map(gain => Number(gain.gain.value.toFixed(2))))).toEqual([0, 0.35]);
+                await expect.poll(() => bob.evaluate(() => window.__callGains.slice(0, 2).map(gain => Number(gain.gain.value.toFixed(2))))).toEqual([0, 0.12]);
                 // A real tone on the separate negotiated share-audio sender must
                 // remain audible when the same member's microphone is muted.
                 await alice.evaluate(async () => {
@@ -221,11 +232,11 @@ test(`real peer call captures only after acceptance and tears down without joini
                     const source = context.createMediaStreamSource(document.querySelector("audio").srcObject);
                     const analyser = context.createAnalyser(); source.connect(analyser); window.__playbackMeter = { context, source, analyser };
                 });
-                await expect.poll(async () => Math.abs(await playbackLevel() - 0.0707 * 0.35)).toBeLessThan(0.008);
+                await expect.poll(async () => Math.abs(await playbackLevel() - unityLevel * 10 * 0.35 ** 2)).toBeLessThan(0.002);
                 await screen.getByRole("button", { name: "Mute shared audio", exact: true }).click();
                 await expect.poll(playbackLevel).toBeLessThan(0.00001);
                 await screen.getByRole("button", { name: "Unmute shared audio", exact: true }).click();
-                await expect.poll(playbackLevel).toBeGreaterThan(0.015);
+                await expect.poll(playbackLevel).toBeGreaterThan(0.008);
                 await bob.evaluate(() => { window.__noxa.state.settings.muted_users = []; return window.__playbackMeter.context.close(); });
                 await alice.evaluate(async () => {
                     const tone = window.__shareTone; await tone.sender.replaceTrack(tone.original); tone.tone.stop(); tone.output.stream.getTracks().forEach(track => track.stop()); await tone.context.close();

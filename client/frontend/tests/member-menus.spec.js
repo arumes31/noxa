@@ -59,7 +59,7 @@ test("exact percentages, amplification, and mute preserve independent audio pref
     const share = page.getByRole('spinbutton', { name: 'Screen-share audio percentage', exact: true });
     await voice.fill('145'); await voice.press('Enter');
     await expect.poll(() => page.evaluate(() => window.__saved.user_volumes['alice-uid'])).toBe(145);
-    await expect(page.getByRole('slider', { name: 'Voice volume', exact: true })).toHaveAttribute('aria-valuetext', '145% · Amplified');
+    await expect(page.getByRole('slider', { name: 'Voice volume', exact: true })).toHaveAttribute('aria-valuetext', '145% · +9 dB');
     await share.fill('40'); await share.press('Enter');
     await expect.poll(() => page.evaluate(() => window.__saved.user_share_volumes['alice-uid'])).toBe(40);
     await page.getByRole('menuitem', { name: 'Mute voice for me', exact: true }).click();
@@ -149,7 +149,7 @@ test("member volume previews without saving and resets from the menu", async ({ 
     await page.locator('.client[data-clid="alice"]').click({ button: "right" });
     const slider = page.locator(".ctx-menu .ctx-volume input[type=range]");
     await slider.evaluate(input => { input.value = "150"; input.dispatchEvent(new Event("input", { bubbles: true })); });
-    expect(await page.evaluate(() => window.__gain.gain.value)).toBe(1.5);
+    expect(await page.evaluate(() => window.__gain.gain.value)).toBeCloseTo(Math.sqrt(10));
     expect(await page.evaluate(() => window.__saved.user_volumes["alice-uid"])).toBeUndefined();
     await slider.dispatchEvent("change");
     await expect.poll(() => page.evaluate(() => window.__saved.user_volumes["alice-uid"])).toBe(150);
@@ -188,7 +188,7 @@ test("failed volume save and cancelled drag restore the saved level", async ({ p
     await page.locator('.client[data-clid="alice"]').click({ button: "right" });
     const slider = page.locator(".ctx-menu .ctx-volume input[type=range]");
     await slider.evaluate(input => { input.value = "25"; input.dispatchEvent(new Event("input", { bubbles: true })); });
-    expect(await page.evaluate(() => window.__gain.gain.value)).toBe(0.25);
+    expect(await page.evaluate(() => window.__gain.gain.value)).toBe(0.0625);
     await page.keyboard.press("Escape");
     expect(await page.evaluate(() => window.__gain.gain.value)).toBe(1);
     await page.evaluate(() => { window.__saveFail = true; });
@@ -396,7 +396,7 @@ test("settings and speaking updates preserve an active member-volume drag", asyn
     });
     await expect(slider).toHaveValue("145");
     await page.keyboard.press("Escape");
-    expect(await page.evaluate(() => window.__gain.gain.value)).toBe(0.7);
+    expect(await page.evaluate(() => window.__gain.gain.value)).toBeCloseTo(0.49);
 });
 
 test("channel member keyboard menu preserves its existing selection click", async ({ page }) => {

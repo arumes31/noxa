@@ -1,5 +1,5 @@
 import { t } from "./i18n.js";
-import { captureConstraints, createRemoteAudioSource, getUserVolume, isUserMuted, getUserShareVolume, isUserShareMuted, renderMicStatus, VAD_RELEASE_MS } from "./audio.js";
+import { captureConstraints, createRemoteAudioSource, makeLimiter, personalVolumeGain, getUserVolume, isUserMuted, getUserShareVolume, isUserShareMuted, renderMicStatus, VAD_RELEASE_MS } from "./audio.js";
 import { watchMicrophone, watchAudioOutput } from "./microphone-recovery.js";
 import { closeDialog, confirmDialog, isCurrentServerDialog, mountServerDialog } from "./modal.js";
 import { sessionUserID } from "./session-identity.js";
@@ -48,7 +48,7 @@ function closePeer(peer) {
         remote.src.disconnect();
         if (remote.playback) { remote.playback.pause(); remote.playback.srcObject = null; }
     }
-    peer.audioSources?.clear(); peer.gain?.disconnect(); peer.shareGain?.disconnect(); peer.analyser?.disconnect();
+    peer.audioSources?.clear(); peer.gain?.disconnect(); peer.shareGain?.disconnect(); peer.limiter?.disconnect(); peer.analyser?.disconnect();
     peer.destination?.stream.getTracks().forEach(track => track.stop());
     peer.localCandidates.length = 0; peer.remoteCandidates.length = 0;
 }
@@ -376,8 +376,8 @@ function syncAudio(owner) {
         syncPeerOutput(owner, uid, peer);
         peer.audio.muted = !!(owner.deafened || state.deafened || blocked(uid));
         const master = Math.min(2, Math.max(0, (state.settings?.volume ?? 100) / 100));
-        if (peer.gain) peer.gain.gain.value = isUserMuted(uid) ? 0 : master * Math.min(2, Math.max(0, getUserVolume(uid)));
-        if (peer.shareGain) peer.shareGain.gain.value = isUserShareMuted(uid) ? 0 : master * getUserShareVolume(uid);
+        if (peer.gain) peer.gain.gain.value = isUserMuted(uid) ? 0 : master * personalVolumeGain(getUserVolume(uid));
+        if (peer.shareGain) peer.shareGain.gain.value = isUserShareMuted(uid) ? 0 : master * personalVolumeGain(getUserShareVolume(uid));
     }
 }
 
@@ -420,9 +420,13 @@ function ensurePeer(owner, uid) {
         if (!peer.gain) {
             peer.gain = owner.context.createGain();
             peer.destination = owner.context.createMediaStreamDestination();
-            peer.gain.connect(peer.destination);
+            if (V().state.settings?.voice_limiter !== false) {
+                peer.limiter = makeLimiter(owner.context);
+                peer.limiter.connect(peer.destination);
+            }
+            peer.gain.connect(peer.limiter || peer.destination);
             peer.shareGain = owner.context.createGain();
-            peer.shareGain.connect(peer.destination);
+            peer.shareGain.connect(peer.limiter || peer.destination);
             peer.analyser = owner.context.createAnalyser(); peer.analyser.fftSize = 256;
             peer.samples = new Uint8Array(peer.analyser.frequencyBinCount);
             peer.gain.connect(peer.analyser);

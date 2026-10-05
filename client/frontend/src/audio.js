@@ -411,6 +411,14 @@ export function getUserVolume(uid) {
     return (volumePreviews.get(uid)?.volume ?? s?.user_volumes?.[uid] ?? 100) / 100;
 }
 
+// 100% stays at unity. Below it, a square taper makes attenuation useful;
+// above it, each 5 percentage points adds 1 dB, up to +20 dB at 200%.
+export function personalVolumeGain(volume) {
+    const value = Number(volume);
+    const bounded = Math.min(2, Math.max(0, Number.isFinite(value) ? value : 1));
+    return bounded <= 1 ? bounded ** 2 : 10 ** (bounded - 1);
+}
+
 export function isUserMuted(uid) {
     const s = V().state.settings;
     return (s?.muted_users || []).includes(uid) || (s?.blocked_users || []).includes(uid);
@@ -492,18 +500,23 @@ export function refreshUserAudio() {
     for (const listener of shareAudioListeners) listener();
 }
 
-// userNodes maps uniqueID -> {gain: GainNode, mute: GainNode}.
+// An identity can publish from several sessions at once. Retiring one track
+// must not orphan the other sessions' personal volume and mute controls.
 const userNodes = new Map();
 
 // registerUserChain creates the per-user gain nodes for a remote audio
 // chain (used when a track can be attributed to a user).
 export function registerUserChain(uid, gainNode, muteNode) {
-    userNodes.set(uid, { gain: gainNode, mute: muteNode });
+    if (!userNodes.has(uid)) userNodes.set(uid, new Map());
+    userNodes.get(uid).set(gainNode, muteNode);
     applyUserAudio(uid);
 }
 
-export function unregisterUserChain(uid) {
-    userNodes.delete(uid);
+export function unregisterUserChain(uid, gainNode) {
+    const nodes = userNodes.get(uid);
+    if (!nodes) return;
+    nodes.delete(gainNode);
+    if (!nodes.size) userNodes.delete(uid);
 }
 
 // ---------------------------------------------------------------------------
@@ -529,12 +542,15 @@ function duckMultiplier(uid) {
 }
 
 export function applyUserAudio(uid) {
-    const n = userNodes.get(uid);
-    if (!n) return;
+    const nodes = userNodes.get(uid);
+    if (!nodes) return;
     // gain and mute are in series, so the duck factor belongs on exactly one
     // of them — applying it to both squares it (14: -24 dB, not -12 dB).
-    n.gain.gain.value = (isUserMuted(uid) ? 0 : getUserVolume(uid)) * duckMultiplier(uid);
-    n.mute.gain.value = isUserMuted(uid) ? 0 : 1;
+    const muted = isUserMuted(uid);
+    for (const [gain, mute] of nodes) {
+        gain.gain.value = (muted ? 0 : personalVolumeGain(getUserVolume(uid))) * duckMultiplier(uid);
+        mute.gain.value = muted ? 0 : 1;
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -545,7 +561,8 @@ export function makeLimiter(ctx) {
     const comp = ctx.createDynamicsCompressor();
     // Protect loud peaks without compressing ordinary conversation levels.
     // The old wide knee at -12 dB reduced personal volume adjustments.
-    comp.threshold.value = -3;
+    // Leave headroom for the +20 dB personal boost and the master volume.
+    comp.threshold.value = -6;
     comp.knee.value = 0;
     comp.ratio.value = 20;
     comp.attack.value = 0.003;
