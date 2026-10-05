@@ -74,20 +74,20 @@ for (const flag of ['self_muted', 'self_deafened', 'server_muted']) {
             };
             window.__activity(true);
         });
-        await expect(row.locator('.client-voice-state')).toHaveCount(1);
+        await expect(row.locator('.speaking-avatar canvas')).toHaveCount(1);
         await page.evaluate(flag => {
             const { state, renderTree } = window.__noxa;
             state.clients.find(c => c.client_id === 'peer')[flag] = true;
             renderTree();
         }, flag);
-        await expect(row.locator('.client-voice-state')).toHaveCount(0);
+        await expect(row.locator('.speaking-avatar canvas')).toHaveCount(0);
         await page.evaluate(() => window.__activity(true));
         await expect(row).not.toHaveClass(/speaking/);
         expect(await page.evaluate(() => window.__noxa.state.clients.find(c => c.client_id === 'peer').is_speaking)).toBe(false);
         await page.evaluate(flag => { window.__noxa.state.clients.find(c => c.client_id === 'peer')[flag] = false; window.__activity(true); }, flag);
-        await expect(row.locator('.client-voice-state')).toHaveCount(1);
+        await expect(row.locator('.speaking-avatar canvas')).toHaveCount(1);
         await page.evaluate(flag => window.__membership(7, { [flag]: true, is_speaking: true }), flag);
-        await expect(row.locator('.client-voice-state')).toHaveCount(0);
+        await expect(row.locator('.speaking-avatar canvas')).toHaveCount(0);
         expect(await page.evaluate(() => window.__noxa.state.clients.find(c => c.client_id === 'peer').is_speaking)).toBe(false);
     });
 }
@@ -126,9 +126,9 @@ test('own mute immediately hides speaking before the server reply', async ({ pag
         renderTree();
     });
     const row = page.locator('.client[data-clid="self"]');
-    await expect(row.locator('.client-voice-state')).toHaveCount(1);
+    await expect(row.locator('.speaking-avatar canvas')).toHaveCount(1);
     await page.evaluate(() => document.getElementById('voice-mute').click());
-    await expect(row.locator('.client-voice-state')).toHaveCount(0);
+    await expect(row.locator('.speaking-avatar canvas')).toHaveCount(0);
 });
 
 test('channel members stay alphabetical across snapshots and shift selection follows that order', async ({ page }) => {
