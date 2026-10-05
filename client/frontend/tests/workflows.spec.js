@@ -3025,6 +3025,20 @@ test.describe("tab-bound member actions and branding", () => {
         ]);
     });
 
+    test("Enter submits one poke and Escape cancels without sending", async ({ page }) => {
+        await page.evaluate(() => window.__noxaSocial.openPoke(window.__noxa.state.clients[0]));
+        await page.locator(".poke-msg").fill("  Hello Alice  ");
+        await page.locator(".poke-msg").press("Enter");
+        await expect.poll(() => page.evaluate(() => window.__actions.calls)).toEqual([
+            { name: "Poke", tabID: "server-a", args: ["alice", "Hello Alice"] },
+        ]);
+        await expect(page.locator(".poke-msg")).toHaveCount(0);
+        await page.evaluate(() => window.__noxaSocial.openPoke(window.__noxa.state.clients[0]));
+        await page.locator(".poke-msg").press("Escape");
+        await expect(page.locator(".poke-msg")).toHaveCount(0);
+        expect(await page.evaluate(() => window.__actions.calls.length)).toBe(1);
+    });
+
     test("kick and poke prompts cannot act on another native tab", async ({ page }) => {
         await page.locator('.client[data-clid="alice"]').click({ button: "right" });
         await page.locator('[data-act="kick-srv"]').click();
@@ -5092,6 +5106,7 @@ test("chat follows newest messages after delayed images and viewport resizing", 
         for (let id = 1; id <= 50; id++) window.__noxaChat.addChat({ id, channel_id: 2, from: "Alex", text: "Message " + id });
         window.__noxaChat.addChat({ id: 51, channel_id: 2, from: "Alex", text: "[file:photo.vcx#dGVzdA==#photo.png]" });
     });
+
     const log = page.locator("#chat-log");
     const bottomGap = () => log.evaluate(el => el.scrollHeight - el.clientHeight - el.scrollTop);
     await expect.poll(bottomGap).toBeLessThan(3);
@@ -10098,6 +10113,7 @@ test("cancels server-bound image actions across active-tab resets", async ({ pag
 
 test("moves focus explicitly between login and the connected workspace", async ({ page }, testInfo) => {
     await expect(page.locator("#login-addr")).toBeFocused();
+    await page.locator("#login-addr").fill("127.0.0.1:12333");
     await expect(page.locator(".skip-link")).toBeHidden();
     await page.locator("#login-options > summary").click();
     await expect(page.locator("#login-serverpw")).toHaveAttribute("autocomplete", "off");
