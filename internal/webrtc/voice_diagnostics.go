@@ -50,10 +50,16 @@ func (r *Router) voiceReceiverReports(clientID string) []netproto.VoiceServerTra
 			}
 			sample := output.receiverReport
 			age := max(0, now.Sub(sample.receivedAt).Milliseconds())
+			// RTCP encodes cumulative loss as signed 24-bit, despite Pion's
+			// unsigned field. Widen before subtracting to avoid overflow.
+			lost := int64(sample.report.TotalLost & 0xffffff)
+			if lost&0x800000 != 0 {
+				lost -= 0x1000000
+			}
 			result = append(result, netproto.VoiceServerTrack{
 				SSRC: sample.report.SSRC, PublisherID: publisher, Slot: slot,
 				ReceivedAt: sample.receivedAt.UnixMilli(), AgeMS: age, Stale: age > 15000,
-				PacketsLost:  int32(sample.report.TotalLost<<8) >> 8,
+				PacketsLost:  lost,
 				FractionLost: float64(sample.report.FractionLost) / 256,
 				JitterMS:     float64(sample.report.Jitter) / 48, // Opus RTP clock: 48 kHz.
 			})

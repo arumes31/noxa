@@ -36,10 +36,12 @@ func TestVoiceReceiverReportsUseAudioBindingAndRTCPUnits(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
 		lost     uint32
-		wantLost int32
+		wantLost int64
 	}{
 		{"positive loss", 7, 7},
 		{"negative signed 24 bit loss", 0xfffffe, -2},
+		{"minimum signed 24 bit loss", 0x800000, -8388608},
+		{"maximum signed 24 bit loss", 0x7fffff, 8388607},
 		{"new zero replaces old sample", 0, 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

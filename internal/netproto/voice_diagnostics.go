@@ -128,7 +128,7 @@ type VoiceServerTrack struct {
 	ReceivedAt   int64   `json:"received_at"`
 	AgeMS        int64   `json:"age_ms"`
 	Stale        bool    `json:"stale"`
-	PacketsLost  int32   `json:"packets_lost"`
+	PacketsLost  int64   `json:"packets_lost"`
 	FractionLost float64 `json:"fraction_lost"`
 	JitterMS     float64 `json:"jitter_ms"`
 }
