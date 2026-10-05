@@ -888,23 +888,24 @@ func TestCleanupTimer_DeletesEmptyTemporary(t *testing.T) {
 		t.Fatalf("expected 1 timer after leave, got %d", mgr.CleanupTimersCount())
 	}
 
-	// Wait for the cleanup goroutine to fire and delete the channel.
-	pollCondition(t, 2*time.Second, func() bool {
-		return !channelExistsInDB(t, s, id)
-	}, "channel still in DB after cleanup delay")
-	if _, ok := sm.GetChannel(id); ok {
-		t.Fatal("channel still in state after cleanup")
-	}
-	if mgr.CleanupTimersCount() != 0 {
-		t.Fatalf("expected 0 timers after cleanup, got %d", mgr.CleanupTimersCount())
-	}
+	// The database commit precedes the in-memory update. Wait for the
+	// completion callback before asserting both parts of the deletion.
 	select {
 	case result := <-deleted:
 		if result.RootID != id || len(result.ChannelIDs) != 1 || result.ChannelIDs[0] != id {
 			t.Fatalf("cleanup deletion result = %+v", result)
 		}
-	case <-time.After(time.Second):
+	case <-time.After(2 * time.Second):
 		t.Fatal("cleanup deletion was not published to the side-effect sink")
+	}
+	if channelExistsInDB(t, s, id) {
+		t.Fatal("channel still in DB after cleanup")
+	}
+	if _, ok := sm.GetChannel(id); ok {
+		t.Fatal("channel still in state after cleanup")
+	}
+	if mgr.CleanupTimersCount() != 0 {
+		t.Fatalf("expected 0 timers after cleanup, got %d", mgr.CleanupTimersCount())
 	}
 }
 
