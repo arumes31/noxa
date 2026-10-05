@@ -79,9 +79,10 @@ type ChannelOverride struct {
 // RecentServer is one entry of the connect history (282; max 10, no
 // passwords).
 type RecentServer struct {
-	Addr     string `json:"addr"`
-	Nickname string `json:"nickname"`
-	LastUsed int64  `json:"last_used"` // unix
+	Addr        string `json:"addr"`
+	Nickname    string `json:"nickname"`
+	DisplayName string `json:"display_name,omitempty"`
+	LastUsed    int64  `json:"last_used"` // unix
 }
 
 // HotkeyProfile is a named set of hotkey specs (300): per-server profiles
@@ -936,10 +937,14 @@ func (a *App) applyAllSettingsEffects(ticket uint64) error {
 // RecordRecent prepends addr+nickname to the connect history (282): most
 // recent first, deduped, capped at 10. Called after a successful connect.
 func (a *App) RecordRecent(addr, nickname string) {
+	a.recordRecentConnection(addr, nickname, "")
+}
+
+func (a *App) recordRecentConnection(addr, nickname, displayName string) {
 	if addr == "" {
 		return
 	}
-	rec := RecentServer{Addr: addr, Nickname: nickname, LastUsed: time.Now().Unix()}
+	rec := RecentServer{Addr: addr, Nickname: nickname, DisplayName: displayName, LastUsed: time.Now().Unix()}
 	_, err := a.updateSettings(func(current Settings) Settings {
 		out := []RecentServer{rec}
 		for _, r := range current.Recents {

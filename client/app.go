@@ -38,11 +38,12 @@ var (
 
 // App is the Wails application.
 type App struct {
-	update         updateOperation
-	overlayMu      sync.Mutex
-	overlay        gamingOverlayWindow
-	overlayStopped bool
-	ctx            context.Context
+	loginCredentials loginCredentialState
+	update           updateOperation
+	overlayMu        sync.Mutex
+	overlay          gamingOverlayWindow
+	overlayStopped   bool
+	ctx              context.Context
 	// Attachment seams keep the native dialog, transfer, and final replacement
 	// independently testable without putting plaintext or destination paths on
 	// the Wails/JavaScript boundary. Nil fields use production implementations.

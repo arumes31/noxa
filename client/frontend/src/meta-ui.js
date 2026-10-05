@@ -168,7 +168,9 @@ function maybeOnboard() {
         };
         overlay.querySelector(".ob-next").onclick = () => {
             const nick = overlay.querySelector(".ob-nick");
-            if (nick && nick.value.trim()) document.getElementById("login-nick").value = nick.value.trim();
+            if (nick && nick.value.trim()) void window.__noxa.prefillLogin({
+                addr: document.getElementById("login-addr").value, nickname: nick.value.trim(),
+            });
             step++;
             if (step >= steps.length) {
                 closeDialog(overlay);

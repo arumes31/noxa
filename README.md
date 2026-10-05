@@ -276,10 +276,18 @@ server certificate fingerprint with its startup log before trusting it.
 
 To appear as `Daniel`, enter it in the optional **Display name** field. Everyone
 on the server sees that name; the `owner` login, identity, and roles stay the same.
-Use **Self → Change display name** to change it during a session. The client saves
-your preferred name for future connections; a bookmark's **Display name override**
-takes precedence. Names must contain 1–64 characters without control characters.
+Use **Self → Change display name** to change it during a session. The login form
+restores the server, account and optional display name from the last successful
+connection. A new installation starts with empty fields; a bookmark's **Display
+name override** applies when loading that bookmark. Names must contain 1–64 characters without control characters.
 Live changes require a server version that supports display names.
+
+Under **Optional details**, **Remember passwords for this connection** stores
+account and server passwords separately from settings, protected by Windows
+DPAPI for the current OS account. It is opt-in per server/account pair. Uncheck it
+to delete that pair's saved passwords immediately. Failed connections do not
+replace the remembered profile or passwords. Platforms without OS protection
+can remember connection details but do not store passwords.
 
 Open **Permissions → Roles**, then **Members**. Find a registered member,
 select the **Administrator** role and choose **Add role** to grant admin access.

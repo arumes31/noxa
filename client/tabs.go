@@ -60,6 +60,7 @@ type tabState struct {
 	reconnectAllowed    bool
 	reconnectSuppressed bool
 	lastVoiceChannel    int64
+	loginPasswords      *loginPasswords // native-only credentials for reconnecting a saved login
 }
 
 // tabsMu guards tabs/activeID and every mutable tabState field.
@@ -545,7 +546,7 @@ func (a *App) ConnectNamedBookmarkTabWithID(bookmark, addr, nickname, displayNam
 	ts.info.Nickname = nickname
 	ts.bookmark = bookmark
 	a.tabsMu.Unlock()
-	a.onTabConnected(ts.cm, bookmark, addr, nickname)
+	a.onTabConnected(ts.cm, bookmark, addr, nickname, displayName)
 	a.activate(id)
 	return ConnectTabResult{TabID: id}
 }
@@ -582,7 +583,7 @@ func (a *App) ConnectGuestBookmarkTabWithID(bookmark, addr, nickname string) Con
 	ts.info.Nickname = nickname
 	ts.bookmark = bookmark
 	a.tabsMu.Unlock()
-	a.onTabConnected(ts.cm, bookmark, addr, nickname)
+	a.onTabConnected(ts.cm, bookmark, addr, nickname, "")
 	a.activate(id)
 	return ConnectTabResult{TabID: id}
 }
@@ -630,8 +631,8 @@ func (a *App) lookupBookmark(name, addr, nickname string) *Bookmark {
 // hotkey profile (300), and uploads the avatar override (335). cm is the
 // newly connected tab's manager (it is not active yet); bookmark is the
 // originating bookmark's Name ("" = direct login).
-func (a *App) onTabConnected(cm *connManager, bookmark, addr, nickname string) {
-	a.RecordRecent(addr, nickname)
+func (a *App) onTabConnected(cm *connManager, bookmark, addr, nickname, displayName string) {
+	a.recordRecentConnection(addr, nickname, displayName)
 	b := a.lookupBookmark(bookmark, addr, nickname)
 	if b == nil {
 		a.ApplyHotkeyProfile("default")

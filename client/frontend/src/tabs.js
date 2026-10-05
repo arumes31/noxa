@@ -289,26 +289,21 @@ function onTabReset(tabID) {
     });
 }
 
-// autoConnect fires flagged bookmarks at startup (286). Passwords are never
-// stored, so account bookmarks can only prefill the login dialog; guest
-// logins (empty password) connect directly. Documented limitation.
+// Explicitly flagged bookmarks retain their guest auto-connect behavior.
+// Account login uses the prefilled form and its scoped saved-password choice.
 async function autoConnectBookmarks() {
     const flagged = (V().state.settings?.bookmarks || []).filter((b) => b.auto_connect);
     for (const b of flagged) {
         // A public-name override must not replace the account login.
         const nick = b.nickname;
-        const displayName = b.nickname_override || V().state.settings?.display_name || "";
+        const displayName = b.nickname_override || "";
         const requestServerGeneration = V().state.serverGeneration;
         const requestTabID = activeTabID;
         const { error: err, tabID } = await connectGuestBookmarkWithID(b.name, b.addr, nick, displayName);
         if (err !== "") {
             playSourceConnectionFailure(requestTabID, requestServerGeneration);
             // Account login needed: prefill for the user.
-            const { $ } = V();
-            $("login-addr").value = b.addr;
-            $("login-accountpw").value = "";
-            $("login-nick").value = nick;
-            $("login-display-name").value = displayName;
+            void V().prefillLogin({ ...b, display_name: displayName });
             V().state.pendingBookmark = { name: b.name, addr: b.addr };
             V().sysMsg?.(translate("desktop.auto.connect.needs.your.password.for") + b.addr);
         } else {
@@ -336,10 +331,10 @@ async function quickConnectLast(target = quickConnectTarget(), isCancelled = () 
         V().toast(translate("desktop.no.bookmark.or.recent.server.to.quick.connect"), "warn");
         return;
     }
-    // Passwords are never stored: guest logins connect directly, account
-    // bookmarks prefill the login dialog. Forward the public name separately.
+    // This shortcut tries guest login, then loads the form for account login.
+    // Forward the public name separately from the account identity.
     const nick = target.nickname;
-    const displayName = target.nickname_override || V().state.settings?.display_name || "";
+    const displayName = target.display_name ?? target.nickname_override ?? "";
     const requestServerGeneration = V().state.serverGeneration;
     const requestTabID = activeTabID;
     const { error: err, tabID } = await connectGuestBookmarkWithID(
@@ -353,11 +348,7 @@ async function quickConnectLast(target = quickConnectTarget(), isCancelled = () 
     if (err !== "") {
         if (requestServerGeneration !== V().state.serverGeneration || requestTabID !== activeTabID) return;
         playSourceConnectionFailure(requestTabID, requestServerGeneration);
-        const { $ } = V();
-        $("login-addr").value = target.addr;
-        $("login-accountpw").value = "";
-        $("login-nick").value = nick;
-        $("login-display-name").value = displayName;
+        void V().prefillLogin({ ...target, display_name: displayName });
         V().showLogin();
         // stashed after showLogin, which drops the previous login's stash: a
         // recent has no bookmark name and must leave none behind (334).
@@ -391,23 +382,14 @@ function renderRecents() {
         const label = row.querySelector(".recent-label");
         const serverLabel = (r.nickname || "?") + " @ " + r.addr;
         label.textContent = serverLabel;
-        label.onclick = () => {
-            document.getElementById("login-addr").value = r.addr;
-            document.getElementById("login-accountpw").value = "";
-            document.getElementById("login-nick").value = r.nickname || "";
-            document.getElementById("login-display-name").value = s.display_name || "";
-        };
+        label.onclick = () => { void V().prefillLogin(r); };
         const edit = row.querySelector(".recent-edit");
         edit.title = translate("desktop.edit.recent.server");
         edit.setAttribute("aria-label", translate("runtime.editRecentServer", { name: r.nickname || translate("desktop.server"), address: r.addr }));
         edit.onclick = (event) => {
             event.stopPropagation();
             const addr = document.getElementById("login-addr");
-            addr.value = r.addr;
-            document.getElementById("login-accountpw").value = "";
-            document.getElementById("login-nick").value = r.nickname || "";
-            document.getElementById("login-display-name").value = s.display_name || "";
-            V().state.pendingBookmark = null;
+            void V().prefillLogin(r);
             addr.focus();
             addr.select();
         };

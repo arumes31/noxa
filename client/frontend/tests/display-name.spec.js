@@ -53,6 +53,7 @@ async function openRename(page) {
 }
 
 test("login keeps owner credentials separate from the public display name", async ({ page }, testInfo) => {
+    await page.locator("#login-addr").fill("server.example");
     await page.getByLabel("Account login / guest name", { exact: true }).fill("owner");
     const optional = page.locator("#login-options > summary");
     await expect(page.locator("#login-display-name")).toBeHidden();
@@ -68,9 +69,9 @@ test("login keeps owner credentials separate from the public display name", asyn
     await page.locator(".login-card").screenshot({ path: testInfo.outputPath("display-name-login.png") });
     await page.locator("#login-connect").click();
     await expect(page.locator("#login-overlay")).toBeHidden();
-    expect(await page.evaluate(() => window.__namedLogins[0])).toEqual(["", "127.0.0.1:12333", "owner", "Daniel", "test-account-password", ""]);
+    expect(await page.evaluate(() => window.__namedLogins[0])).toEqual(["", "server.example", "owner", "Daniel", "test-account-password", ""]);
     await expect.poll(() => page.evaluate(() => window.__noxa.state.myNickname)).toBe("Daniel");
-    await expect.poll(() => page.evaluate(() => window.__settings.display_name)).toBe("Daniel");
+    expect(await page.evaluate(() => window.__settings.display_name)).toBeUndefined();
     expect(await page.evaluate(() => window.__noxa.state.lastConnect.nick)).toBe("owner");
     expect(await page.evaluate(() => JSON.stringify(window.__settings))).not.toContain("test-account-password");
 });
@@ -190,11 +191,11 @@ test("a failed preference save reports the failure after a successful public ren
     expect(await page.evaluate(() => window.__settings.display_name)).toBeUndefined();
 });
 
-test("saved display names are restored on startup", async ({ page }) => {
-    await page.addInitScript(() => { window.__settings.display_name = "Daniel"; });
+test("the recent connection's display name is restored on startup", async ({ page }) => {
+    await page.addInitScript(() => { window.__settings.recents = [{ addr: "server.example", nickname: "owner", display_name: "Daniel" }]; });
     await page.reload();
     await expect(page.locator("#login-display-name")).toHaveValue("Daniel");
-    await expect(page.locator("#login-nick")).toHaveValue("");
+    await expect(page.locator("#login-nick")).toHaveValue("owner");
 });
 
 test("short windows can scroll the whole login form", async ({ page }) => {

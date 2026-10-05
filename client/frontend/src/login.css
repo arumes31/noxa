@@ -97,6 +97,9 @@
 #login-options summary:hover { background: rgb(51 120 155 / 12%); border-radius: 8px; }
 .login-options-fields { display: flex; flex-direction: column; gap: 18px; padding: 0 20px 22px; }
 #login-overlay #login-display-name-hint { margin: -11px 0 0; color: var(--login-muted); font-size: 1rem; }
+#login-overlay .login-remember { display: flex; flex-direction: row; align-items: start; gap: 10px; font-size: 1rem; }
+#login-overlay .login-card #login-remember-passwords { width: 18px; height: 18px; min-height: 0; flex: none; margin: 2px 0 0; padding: 0; accent-color: var(--login-accent); }
+#login-overlay #login-password-hint { margin: -10px 0 0 28px; color: var(--login-muted); font-size: .929rem; }
 #login-overlay #login-connect {
     display: flex;
     justify-content: center;

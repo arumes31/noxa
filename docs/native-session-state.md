@@ -25,6 +25,29 @@ limit and single retry ownership. These are local session-state guarantees;
 server permission enforcement, committed operation acknowledgements and the
 broader authorization cutover remain separate work.
 
+## Remembered login credentials
+
+`ConnectLogin` accepts an explicit request to remember passwords and separate
+flags for using a saved account/server password. Empty input alone never opts
+into a saved secret. `GetLoginPasswordStatus` returns only capability, presence
+and errors; decrypted passwords remain in the native process. Protected files
+are keyed by server/account and validate that scope after decryption. Settings
+contain only recent addresses, account names and explicit display names.
+
+Passwords are saved only after successful authentication. `ForgetLoginPasswords`
+deletes the protected entry and increments that scope's revision so an already
+pending connect cannot save it again. Storage errors are reported without
+falling back to plaintext. Active tabs retain transient native credentials for
+automatic reconnect, including through replacement tabs; manual reconnect can
+request saved credentials again without returning them to JavaScript.
+
+The login controller discards stale password-presence replies after retargeting,
+clears both password fields when the server/account changes, and refreshes
+presence after a successful save. Late startup settings do not overwrite a form
+the user has started editing. The form prefills the newest successful recent
+profile and requires Connect or Enter; remembering a profile does not enable
+automatic startup connection.
+
 ## Rules, subscriptions and avatar reads
 
 `AcceptServerRulesForTab`, `SubscribeChannelsForTab` and `GetAvatarForTab`

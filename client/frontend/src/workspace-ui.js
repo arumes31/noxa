@@ -279,7 +279,6 @@ function translateWorkspace() {
         ["#tab-transfers", "aria-label", "workspace.labels.openTransfers"],
         ["#chat-file", "aria-label", "workspace.labels.chooseAttachments"],
         ["#voice-options > summary", "aria-label", "workspace.labels.voiceOptions"],
-        ["#login-serverpw", "placeholder", "workspace.labels.ifRequired"],
         ["#login-nick", "placeholder", "workspace.labels.nickname"],
         ["#workspace-tablist", "aria-label", "workspace.labels.workspaceViews"],
         ["#voice-bar", "aria-label", "workspace.labels.voiceControls"],

@@ -95,6 +95,16 @@ const en = {
     "common.create": "Create",
     "common.apply": "Apply",
     "login.optional": "Optional details",
+    "login.serverPlaceholder": "Server address",
+    "login.displayPlaceholder": "Use account name",
+    "login.accountPasswordPlaceholder": "For a registered account",
+    "login.rememberPasswords": "Remember passwords for this connection",
+    "login.savedPassword": "Saved password",
+    "login.passwordProtection": "Protected by your operating system. Uncheck to delete saved passwords.",
+    "login.passwordUnavailable": "Protected password storage is unavailable on this device.",
+    "login.passwordLookupFailed": "Saved passwords could not be checked. Enter them again.",
+    "login.passwordForgetFailed": "Saved passwords could not be deleted. Please try again.",
+    "login.connectionChanged": "Connection details changed. Please connect again.",
     "login.optionalHint": "Display name · Passwords",
     "login.identity": "Identity auto-generated — stored locally",
     "login.connecting": "Connecting…",
@@ -182,6 +192,16 @@ const de = {
     "common.create": "Erstellen",
     "common.apply": "Anwenden",
     "login.optional": "Optionale Angaben",
+    "login.serverPlaceholder": "Serveradresse",
+    "login.displayPlaceholder": "Kontonamen verwenden",
+    "login.accountPasswordPlaceholder": "Für ein registriertes Konto",
+    "login.rememberPasswords": "Passwörter für diese Verbindung merken",
+    "login.savedPassword": "Gespeichertes Passwort",
+    "login.passwordProtection": "Vom Betriebssystem geschützt. Häkchen entfernen, um gespeicherte Passwörter zu löschen.",
+    "login.passwordUnavailable": "Geschütztes Speichern von Passwörtern ist auf diesem Gerät nicht verfügbar.",
+    "login.passwordLookupFailed": "Gespeicherte Passwörter konnten nicht geprüft werden. Bitte erneut eingeben.",
+    "login.passwordForgetFailed": "Gespeicherte Passwörter konnten nicht gelöscht werden. Bitte erneut versuchen.",
+    "login.connectionChanged": "Verbindungsdaten wurden geändert. Bitte erneut verbinden.",
     "login.optionalHint": "Anzeigename · Passwörter",
     "login.identity": "Identität automatisch erstellt — lokal gespeichert",
     "login.connecting": "Verbindung wird hergestellt…",
@@ -277,6 +297,9 @@ export function t(key, vars) {
 
 // applyStaticLabels re-labels the static index.html surfaces (login card).
 export function applyStaticLabels() {
+    for (const element of document.querySelectorAll("[data-login-i18n-placeholder]")) {
+        element.setAttribute("placeholder", t(element.dataset.loginI18nPlaceholder));
+    }
     for (const element of document.querySelectorAll("[data-login-i18n]")) {
         element.textContent = t(element.dataset.loginI18n);
     }

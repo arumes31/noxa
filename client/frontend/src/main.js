@@ -1,4 +1,5 @@
 import { createConnectionQuality } from './connection-quality.js';
+import { createLoginMemory } from './login-memory.js';
 import { watchMicrophone } from "./microphone-recovery.js";
 import { createRemoteAudio } from './remote-audio.js';
 import { createChannelTree } from './channel-tree.js';
@@ -68,7 +69,6 @@ const P = () => window.__noxaPerms;
 window.__noxaChat = chatUI;
 
 const $ = (id) => document.getElementById(id);
-$("login-display-name").addEventListener("input", () => { $("login-display-name").dataset.edited = "true"; });
 const publishTrayVoice = createTrayVoiceSync((...flags) => window.go.main.App.SetTrayVoiceState(...flags));
 
 function syncTrayVoice() {
@@ -246,13 +246,12 @@ function applyAppearance() {
 // Login / connection
 // ---------------------------------------------------------------------------
 
+const loginMemory = createLoginMemory({ $, settings: () => state.settings, clearBookmark: () => { state.pendingBookmark = null; } });
 const startupInitialized = (async () => {
     let settingsInitialized = false;
     try {
         state.settings = await window.go.main.App.GetSettings();
-        if (!$("login-display-name").value && !$("login-display-name").dataset.edited) {
-            $("login-display-name").value = state.settings?.display_name || "";
-        }
+        void loginMemory.restore(state.settings);
         void updateSoundOutput();
         // (88) reflect the persisted low-bandwidth mode in the voice bar.
         if (state.settings?.low_bandwidth) setLowBandwidth(true, false);
@@ -348,8 +347,10 @@ async function connectFromLogin() {
     // unless the dialog was retargeted since.
     const bookmark = state.pendingBookmark?.addr === addr ? state.pendingBookmark.name : "";
     try {
-        const { error: err, tabID } = await connectBookmarkTabWithID(
-            bookmark, addr, nick, pw, spw, displayName);
+        const loginRequest = await loginMemory.request();
+        const { error: err, tabID, warning } = loginRequest
+            ? normalizeConnectResult(await window.go.main.App.ConnectLogin({ ...loginRequest, bookmark }))
+            : await connectBookmarkTabWithID(bookmark, addr, nick, pw, spw, displayName);
         if (err) {
             // (4a) TOFU fingerprint mismatch: prominent warning + explicit
             // trust action — never silently accepted.
@@ -369,6 +370,11 @@ async function connectFromLogin() {
         if ($("login-addr").value.trim() === addr && $("login-nick").value.trim() === nick &&
             $("login-accountpw").value === pw) $("login-accountpw").value = "";
         const connection = { addr, nick, pw, spw, bookmark, displayName };
+        if (loginRequest) {
+            connection.savedAccount = loginRequest.use_saved_account;
+            connection.savedServer = loginRequest.use_saved_server;
+            loginMemory.connected(loginRequest);
+        }
         const ownsActiveTab = await rememberTabConnect(connection, null, tabID);
         if (!ownsActiveTab) return;
         const finalizationGeneration = state.serverGeneration;
@@ -403,12 +409,7 @@ async function connectFromLogin() {
         // (4a) surface the connection security as an info line.
         if (session.security) sysMsg(t("runtime.connected", { security: session.security }));
         warnCertificateClock(clockWarning, addr);
-        if ((state.settings?.display_name || "") !== displayName) {
-            try { await updateLocalSettings(s => { s.display_name = displayName; }); }
-            catch (error) {
-                if (state.serverGeneration === finalizationGeneration) toast(t("menu.saveFailed", { error: String(error) }), "warn");
-            }
-        }
+        if (warning) toast(warning, "warn");
     } catch (e) {
         playCurrentConnectionFailure();
         $("login-error").textContent = String(e);
@@ -465,6 +466,7 @@ function normalizeConnectResult(result) {
     return {
         tabID: String(result?.tab_id || ""),
         error: String(result?.error || ""),
+        warning: String(result?.warning || ""),
     };
 }
 
@@ -646,8 +648,13 @@ async function attemptReconnect(c = state.lastConnect, { announceFailure = true,
     let err = "";
     let tabID = "";
     try {
-        const result = await connectBookmarkTabWithID(
-            c.bookmark || "", c.addr, c.nick, c.pw, c.spw, c.displayName);
+        const result = c.savedAccount || c.savedServer
+            ? normalizeConnectResult(await window.go.main.App.ConnectLogin({
+                bookmark: c.bookmark || "", addr: c.addr, nickname: c.nick, display_name: c.displayName || "",
+                password: c.pw, server_password: c.spw,
+                use_saved_account: !!c.savedAccount, use_saved_server: !!c.savedServer,
+            }))
+            : await connectBookmarkTabWithID(c.bookmark || "", c.addr, c.nick, c.pw, c.spw, c.displayName);
         err = result.error;
         tabID = result.tabID;
     } catch (cause) {
@@ -2542,7 +2549,6 @@ window.runtime.EventsOn("media_limits_changed", () => {
     mediaLimitsSequence++;
     refreshLiveMediaLimits();
 });
-$("login-addr").addEventListener("input", () => { $("login-accountpw").value = ""; });
 
 window.runtime.EventsOn("ice", (json) => {
     const pc = state.pc;
@@ -3017,6 +3023,7 @@ async function refreshPermissions() {
 // ---------------------------------------------------------------------------
 
 window.__noxa = {
+    prefillLogin: loginMemory.select,
     soundEngine,
     speechQueue,
     state, $, toast, announceLive, sysMsg, showLogin, showWorkspace, disconnect, sendChat, setPTT, noteActivity,

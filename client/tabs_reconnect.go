@@ -21,6 +21,9 @@ func (a *App) ReconnectTab(tabID, password, serverPassword string) ConnectTabRes
 		return ConnectTabResult{Error: "server tab is not available for automatic reconnect"}
 	}
 	info, bookmark, old, channel := source.info, source.bookmark, source.cm, source.lastVoiceChannel
+	if source.loginPasswords != nil {
+		password, serverPassword = source.loginPasswords.Password, source.loginPasswords.ServerPassword
+	}
 	a.tabsMu.Unlock()
 	old.mu.Lock()
 	displayName := old.displayName
@@ -39,7 +42,8 @@ func (a *App) ReconnectTab(tabID, password, serverPassword string) ConnectTabRes
 		return ConnectTabResult{Error: "the original server connection is unavailable"}
 	}
 	cm := a.newTabManager(tabID, identity)
-	candidate := &tabState{cm: cm, info: info, bookmark: bookmark}
+	candidate := &tabState{cm: cm, info: info, bookmark: bookmark,
+		loginPasswords: &loginPasswords{Password: password, ServerPassword: serverPassword}}
 	candidate.info.Connected = false
 	a.tabsMu.Lock()
 	if a.tabs[tabID] != source || !source.reconnectAllowed || source.replacement != nil {
