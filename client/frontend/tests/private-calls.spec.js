@@ -134,9 +134,20 @@ test(`real peer call captures only after acceptance and tears down without joini
             const samples = new Float32Array(analyser.fftSize); analyser.getFloatTimeDomainData(samples);
             return Math.sqrt(samples.reduce((sum, sample) => sum + sample * sample, 0) / samples.length);
         });
-        await expect.poll(playbackLevel).toBeGreaterThan(0.001);
-        await expect.poll(playbackLevel).toBeLessThan(0.015);
-        const unityLevel = await playbackLevel();
+        // replaceTrack can leave buffered microphone samples and codec/limiter
+        // transients in playback. Calibrate from a settled window of decoded
+        // audio, not a single sample taken while the receive path is changing.
+        const unitySamples = [];
+        let unityLevel;
+        await expect.poll(async () => {
+            unitySamples.push(await playbackLevel());
+            if (unitySamples.length > 8) unitySamples.shift();
+            const mean = unitySamples.reduce((sum, level) => sum + level, 0) / unitySamples.length;
+            const low = Math.min(...unitySamples), high = Math.max(...unitySamples);
+            const settled = unitySamples.length === 8 && low > 0.001 && high < 0.015 && high - low < mean * 0.03;
+            if (settled) unityLevel = mean;
+            return settled;
+        }, { intervals: [100], message: "decoded test tone settles before measuring playback gain" }).toBe(true);
         // Playback settings must apply to an existing private call without
         // replacing the peer, including master mute and per-user attenuation.
         for (const [master, user, expected] of [[0, 100, 0], [50, 50, 0.125], [100, 200, 10], [200, 200, 20], [100, 100, 1]]) {
