@@ -11,12 +11,14 @@ import { icon } from "./icons.js";
 import { memberScreenStream } from "./stream-controls.js";
 import { renderWorkspace } from "./workspace-ui.js";
 import { captureScope, scopeIsCurrent } from "./scoped-actions.js";
+import { createSpeakingAvatars, speakingAvatar } from "./speaking-avatar.js";
 
 const memberNameOrder = new Intl.Collator(undefined, { sensitivity: "base", numeric: true });
 
 export function createChannelTree({ P, $, syncTrayVoice, state, toast, fetchAvatar, renderClientCard, setDetailsOpen, renderDirectTargets }) {
     const readEchoScope = () => ({ tabID: state.activeTabID, generation: state.serverGeneration, session: state.sessionGeneration });
     let echoInfo = null;
+    let speakingAvatars = null;
 
     async function refreshEchoChannel() {
         const request = { scope: captureScope(readEchoScope), channelID: 0 };
@@ -122,6 +124,8 @@ export function createChannelTree({ P, $, syncTrayVoice, state, toast, fetchAvat
         publishAudioState();
         syncTrayVoice();
         restoreTreeFocus(root, focusState);
+        speakingAvatars ||= createSpeakingAvatars(root);
+        speakingAvatars.refresh();
     }
 
     function captureTreeFocus(root) {
@@ -398,7 +402,7 @@ export function createChannelTree({ P, $, syncTrayVoice, state, toast, fetchAvat
         if (gColor) name.style.color = gColor;
         const g = P().primaryGroup(c.unique_id);
         if (g) name.title = `${t("roles.title")}: ${(c.roles || []).map((r) => r.name).join(", ")}`;
-        row.appendChild(av);
+        row.appendChild(speakingHere ? speakingAvatar(av) : av);
         row.appendChild(name);
         if (sharing) {
             const indicator = document.createElement("span");
@@ -466,14 +470,6 @@ export function createChannelTree({ P, $, syncTrayVoice, state, toast, fetchAvat
             icons.textContent = " 🔕";
             icons.title = t("runtime.mutedLocally");
             row.appendChild(icons);
-        }
-        if (speakingHere) {
-            const voice = document.createElement("span");
-            voice.className = "client-voice-state";
-            voice.title = t("runtime.talkingHere");
-            voice.setAttribute("aria-label", t("runtime.talking"));
-            voice.innerHTML = "<i></i><i></i><i></i>";
-            row.appendChild(voice);
         }
         row.onclick = (e) => {
             e.stopPropagation();

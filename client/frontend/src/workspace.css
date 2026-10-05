@@ -93,9 +93,6 @@ body.details-collapsed #app-body { grid-template-columns: minmax(210px, var(--si
 .client.speaking .avatar, .card-avatar.speaking { box-shadow: none; animation: none; }
 .status-icons { display: inline-flex; align-items: center; gap: 3px; }
 .status-icons .ui-icon { width: 16px; height: 16px; }
-.client-voice-state i { height: 9px; }
-.client-voice-state i:nth-child(2) { height: 14px; }
-.client-voice-state i:nth-child(3) { height: 6px; }
 
 #center { position: relative; display: flex; flex-direction: column; min-height: 0; padding: 0; gap: 0; background: var(--bg); }
 #center::before { display: none; background-image: none; }

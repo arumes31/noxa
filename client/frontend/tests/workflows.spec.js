@@ -9401,8 +9401,8 @@ test("nests connected members below channels and offers them as direct-message t
     const lobby = page.locator('.channel-node:has(> .channel[data-chid="1"])');
     await expect(lobby.locator(':scope > .channel-members > .client')).toHaveCount(2);
     await expect(page.locator('.channel[data-chid="1"] .client')).toHaveCount(0);
-    await expect(page.locator('.client[data-clid="client-b"] .client-voice-state')).toBeVisible();
-    await expect(page.locator('.client[data-clid="client-c"] .client-voice-state')).toHaveCount(0);
+    await expect(page.locator('.client[data-clid="client-b"] .speaking-avatar')).toBeVisible();
+    await expect(page.locator('.client[data-clid="client-c"] .speaking-avatar')).toHaveCount(0);
 
     await page.locator("#chat-scope").selectOption("direct");
     await page.locator("#chat-target").focus();
