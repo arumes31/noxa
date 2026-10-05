@@ -4,43 +4,60 @@
 
 # noXa
 
-**Next-Generation High-Performance Real-Time Communication Platform**
+**Self-hosted voice, video, screen sharing, and chat**
 
-*Ultra-low latency SFU voice & video engine, zero-trust E2EE chat messaging, PostgreSQL multi-tenant state persistence, and named roles, role hierarchy, and channel access overrides.*
+*Go server, Wails desktop client, Pion WebRTC media routing, PostgreSQL persistence, and named roles with channel access overrides.*
 
 [![CI](https://github.com/arumes31/noxa/actions/workflows/ci.yml/badge.svg)](https://github.com/arumes31/noxa/actions/workflows/ci.yml)
 [![golangci-lint](https://github.com/arumes31/noxa/actions/workflows/golangci-lint.yml/badge.svg)](https://github.com/arumes31/noxa/actions/workflows/golangci-lint.yml)
 [![Security Analysis](https://github.com/arumes31/noxa/actions/workflows/security.yml/badge.svg)](https://github.com/arumes31/noxa/actions/workflows/security.yml)
 [![Go Version](https://img.shields.io/github/go-mod/go-version/arumes31/noxa)](https://go.dev/)
-[![Docker Image](https://img.shields.io/docker/v/arumes31/noxa?label=ghcr.io&logo=docker)](https://github.com/arumes31/noxa/pkgs/container/noxa)
+[![Container Image](https://img.shields.io/badge/container-ghcr.io-blue?logo=docker)](https://github.com/arumes31/noxa/pkgs/container/noxa)
 [![License](https://img.shields.io/github/license/arumes31/noxa)](LICENSE)
 
-[Architecture](#️-system-architecture) • [Features](#-key-features) • [Quick Start](#-quick-start) • [Server Setup](#new-server-setup) • [Permissions](#️-roles-and-channel-access) • [ServerQuery API](#-serverquery-admin-protocol) • [Configuration](#️-configuration-reference)
+[Architecture](#architecture) • [Features](#features) • [Quick Start](#quick-start) • [Server Setup](#new-server-setup) • [Permissions](#permissions) • [ServerQuery API](#serverquery) • [Configuration](#configuration) • [Development](#development-and-checks) • [Operations](#operations)
 
 ---
 
-<img width="1280" height="800" alt="grafik" src="https://github.com/user-attachments/assets/d3ed3136-b468-476c-8e99-2de600d3c0f5" />
+<img width="1280" height="800" alt="noXa desktop client" src="https://github.com/user-attachments/assets/d3ed3136-b468-476c-8e99-2de600d3c0f5" />
 
 
 </div>
 
 ## 🌟 Overview
 
-**noXa** is an enterprise-grade, self-hosted real-time communication platform written in Go. Designed for high concurrency and operational clarity, noXa couples a lightweight binary control protocol with a **Pion WebRTC SFU engine** for sub-100ms multi-party audio/video fan-out, end-to-end encrypted messaging, and granular administrative control.
+**noXa** combines voice channels, camera and screen sharing, direct and group
+conversations, and channel forums in a desktop client. Its Go server uses a
+framed control protocol, a **Pion WebRTC SFU**, PostgreSQL for persistent state,
+and optional Redis pub/sub. Named roles control access and moderation.
+
+The published desktop binary targets **Windows x64**. The Wails source also has
+Linux/macOS platform code; CI exercises Windows and Linux, but does not publish
+Linux/macOS desktop releases. The Vite frontend uses the native Go bridge: it is
+not a standalone browser client. [`website/`](website/README.md) is a separate
+static product/download website.
 
 > [!NOTE]
-> **Zero-Trust Security**: Direct messages are fully E2EE using X25519 Double-Ratchet key agreements. The server stores only channel history under persisted scope keys; direct message bodies never hit the server database in plaintext or unwrapped ciphertext.
+> **Encryption boundaries:** Desktop direct-message bodies use X25519 +
+> XSalsa20-Poly1305 (NaCl box); the server relays encrypted payloads, including
+> offline delivery. The current desktop DM path does not use the repository's
+> X3DH/Double Ratchet library, so it does not provide that library's per-message
+> forward secrecy. Channel/global messages and forum bodies use server-managed
+> scope keys and can be decrypted by the server. Channel audio/video uses
+> WebRTC DTLS-SRTP to the SFU; channel media E2EE is
+> [not yet integrated](docs/media-e2ee-integration.md).
 
 ---
+
+<a id="architecture"></a>
 
 ## 🏗️ System Architecture
 
 ```mermaid
 graph TD
     subgraph Clients["Clients"]
-        Wails["Wails Desktop Application\n(Windows / Linux / macOS)"]
-        WebUI["Web Browser Client\n(HTML5 / WebRTC / ES6)"]
-        Bot["ServerQuery Bot / CLI\n(TCP Telnet / SSH)"]
+        Wails["Wails Desktop Client\nGo bridge + webview UI / WebRTC"]
+        Bot["Integration clients / CLI\nServerQuery / gRPC / events"]
     end
 
     subgraph CoreServer["noXa Server Core"]
@@ -48,24 +65,27 @@ graph TD
         Keepalive["UDP Keepalive Worker Pool\n:12334"]
         WebRTC["Pion WebRTC SFU Engine\n(DTLS-SRTP / ICE / Opus)"]
         Query["ServerQuery Admin Protocol\n127.0.0.1:12335 (Raw) / :12339 (SSH opt-in)"]
+        GRPC["gRPC Administration\n127.0.0.1:12338 (loopback only)"]
         FileXfer["File Transfer Service\n:12336 (TLS 1.3 / Token Authorized)"]
-        Health["Health & Metrics Service\n:12337 (/healthz, /readyz)"]
+        Health["HTTP Service :12337\nHealth, metrics, events, webhooks, file links"]
     end
 
     subgraph DataStore["Persistence & Messaging"]
         Postgres[(PostgreSQL 16\nStore, State, Audit Logs)]
-        Redis[(Redis 7\nPub/Sub & Rate Limiting)]
+        Redis[(Redis 7\nOptional pub/sub)]
     end
 
     Wails <-->|TLS Control JSON| Control
     Wails <-->|UDP WebRTC Media| WebRTC
-    WebUI <-->|WebSockets / WebRTC| WebRTC
     Bot <-->|TCP Text Commands| Query
+    Bot <-->|gRPC| GRPC
+    Bot <-->|Authorized event WebSocket| Health
     Wails <-->|Token Upload/Download| FileXfer
 
     Control --> Postgres
     Control --> Redis
     Query --> Postgres
+    GRPC --> Query
     WebRTC --> Control
 ```
 
@@ -75,31 +95,50 @@ graph TD
 | :--- | :--- | :--- | :--- |
 | **`TCP :12333`** | Control Engine | Length-prefixed JSON frames over TLS 1.3 | Ed25519 Challenge / Argon2id / TOFU Pinning |
 | **`UDP :12334`** | Connection Probes | Datagram Ping/Pong Keepalive | Session Token Verification |
-| **`UDP Dynamic`** | WebRTC SFU Engine | DTLS-SRTP (Opus audio, H.264/VP8 video) | ICE candidate negotiation & SRTP encryption |
+| **`UDP dynamic or configured port`** | WebRTC SFU Engine | DTLS-SRTP (Opus audio, negotiated video codecs) | ICE candidate negotiation & SRTP encryption; separate from the keepalive listener |
 | **`TCP 127.0.0.1:12335`** | ServerQuery Protocol | Line-based ASCII / UTF-8 plaintext stream | Loopback by default; remote binding requires explicit opt-in, and SSH is preferred |
 | **`TCP :12336`** | File Transfer Engine | Binary frames over TLS 1.3 | TOFU-pinned certificate plus an ephemeral single-use token |
-| **`TCP :12337`** | Health & Prometheus | HTTP GET (`/healthz`, `/readyz`, `/metrics`) | Liveness/readiness follow the listener bind; metrics are loopback-only unless explicitly enabled; pprof is disabled by default and loopback-only |
+| **`TCP :12337`** | HTTP services | Health/readiness, Prometheus, `/debug/voice`, `/events`, `/hooks/`, `/dl/` | Voice diagnostics stay loopback-only; metrics require explicit remote opt-in; pprof is opt-in and loopback-only. Remote authenticated HTTP routes need an HTTPS proxy |
+| **`TCP 127.0.0.1:12338`** | gRPC administration | Plaintext gRPC | Integration account authentication and current roles; loopback binding is mandatory |
+| **`TCP :12339`** | ServerQuery over SSH | SSH-wrapped command stream | Disabled by default; integration credentials and `roles-v1` negotiation |
 
 ---
 
+<a id="features"></a>
+
 ## ✨ Key Features
 
-### 🎙️ Sub-100ms Voice & Video SFU
-* **Pion WebRTC SFU**: Zero-copy packet fan-out supporting hundreds of concurrent speakers.
-* **Opus Codec Optimization**: Dynamic SDP fmtp line rewriting per channel for variable bitrate (16–128 kbps), Forward Error Correction (FEC), and Discontinuous Transmission (DTX).
-* **Simulcast Video**: Dynamic quality tier selection (`high`, `mid`, `low` RID layers) based on subscriber network conditions.
+### 🎙️ Voice, video, and screen sharing
+
+* **Pion WebRTC SFU**: Routes individual publisher tracks to authorized subscribers, with separate camera, screen, microphone, and shared-audio streams.
+* **Opus controls**: Per-channel bitrate, Forward Error Correction (FEC), Discontinuous Transmission (DTX), and stereo settings. The default bitrate is 32 kbps; latency and capacity depend on the network and host.
+* **Simulcast video**: Subscriber quality selection using full/half/quarter (`f`/`h`/`q`) RID layers where published.
 * **Screen-share audio choices**: In channel shares and private calls, choose **No audio**, **Shared application**, or **System audio**. Application audio requires a window and a supported capture runtime; enable audio in the system picker. It can include other windows of the same application. If application-only capture is unavailable or cannot be confirmed, video still starts without audio and a short notification explains the fallback. System audio is only shared when explicitly selected.
 * **Screen-share resolution**: The channel share dialog offers 720p, 1080p, 1440p, 4K, **Original source resolution**, and **Custom** dimensions (160–8192 pixels, 15/30/60 fps). The encoder has 50 Mbps of headroom instead of Chromium's implicit ~2.5 Mbps default; this is a ceiling, not a target or minimum. Normal presets preserve resolution, while 60 fps presets balance resolution and frame rate. WebRTC adapts to actual network and encoder capacity without an additional system-CPU-triggered 500 kbps cap. Server limits and explicit Low bandwidth mode still apply.
-* **Priority Commander**: Automatic audio ducking (−12 dB attenuation) across non-priority channels when a Priority Speaker talks.
+* **Priority speaker**: Non-priority publishers in the current voice channel are ducked to 25% gain (about −12 dB) while a priority speaker talks.
 * **Whisper Routing**: Point-to-point and cross-channel targeted voice transmission bypasses standard channel boundaries.
 * **Microphone recovery**: If the selected microphone disconnects, receiving audio and video continues. Choose and apply a device in **Capture** settings, then select **Retry microphone**. A replacement microphone never starts automatically.
+* **Personal audio controls**: Separate per-member voice and screen-share volume/mute controls. Personal volume uses 100% as unity and reaches +20 dB at the 200% endpoint, with a limiter for loud peaks. Capture settings include push-to-talk, voice activation with a 450 ms release hold, continuous transmission, and local microphone testing.
+* **Private calls**: Accepted direct/group calls carry voice, camera, and screen sharing without moving participants into a voice channel.
 * **Network echo test**: In **Capture** settings, explicitly join the server's echo channel to hear your microphone through the normal voice connection. Only you hear your microphone: other participants cannot hear you and you cannot hear them. Echo media is excluded from whispers, cross-participant video, and channel recordings. Mute and push-to-talk still apply; wear headphones. The return button restores your previous channel while the test remains active on that server tab. Each server automatically creates `Echo Test` on startup after role setup, granting admitted users permission to view, join and speak only in that channel. Existing channels with the configured name retain their access rules, custom metadata and history; startup updates only the known old system-created echo topic. Set Docker environment variable `NOXA_ECHO_CHANNEL_ENABLED=false` and recreate the server container to disable creation and loopback; existing channels and history are retained. Configure the name with `NOXA_ECHO_CHANNEL_NAME` or `echo_channel_name` in YAML.
 
-### 💬 End-to-End Encrypted & Scope-Keyed Messaging
-* **True E2EE Direct Messaging**: Signal-style X25519 prekey bundles with Double-Ratchet forward secrecy.
-* **Channel Scope Key Rotation**: Channel message bodies are sealed with scope keys; server stores ciphertext and manages scope key generations.
-* **Rich Messaging Controls**: Channel history search, pinned messages, emoji reactions, typing indicators, read receipts, and `@mention` notifications.
-* **Automated Moderation**: Regex link whitelisting/blacklisting, duplicate message suppression, rate limiting, and word filtering.
+### 💬 Messaging and collaboration
+
+* **Encrypted messages and attachments**: Direct messages use recipient keys; channel/global bodies use server-managed scope-key generations. Attachment keys travel inside their encrypted message bodies.
+* **Message tools**: Emoji reactions, replies, pins, polls, voice messages, typing indicators, read receipts, and mentions. [Inbox, history search, and saved messages](docs/message-tools.md) are scoped to the current server; history search decrypts and matches bodies in the native client.
+* **Threads and forums**: Persistent posts/replies, tags, following, unread state, archive/reopen, resolved questions, and pinned posts, under the parent channel's access rules. See [threads and forums](docs/threads-and-forums.md).
+* **Incoming webhooks**: Revocable, channel-scoped integration tokens; posts remain subject to the creator's current access. See [incoming webhooks](docs/incoming-webhooks.md).
+* **Moderation**: Role-controlled message and thread moderation, domain allow/block lists, word filters, duplicate suppression, and rate limits. Server-side content filtering does not inspect E2EE direct-message bodies.
+
+### 🖥️ Desktop experience
+
+* **Connections**: Multiple server tabs, bookmarks, last-successful-connection prefilling, optional OS-protected password storage, and automatic reconnect after connection loss.
+* **Speaking and unread indicators**: Animated avatar highlights, alphabetical channel member lists, stream indicators, and unread direct-message badges that keep pulsing until opened.
+* **Windows overlay**: Individual active speakers with avatars and animation over the desktop or windowed/borderless games. Configure it in **Settings → Overlay**; local mute/deafen hides it. Exclusive-fullscreen games may cover the overlay.
+* **Notifications**: Per-event controls, volume and previews, with bundled English/German spoken announcements. Events with speech use that recording without a duplicate beep. Playback follows the selected audio output device; no network TTS service is required.
+* **Diagnostics**: Client Info exposes visible members' ping and reported client version; owners and administrators can inspect receiver-side voice quality. See [Operations](#operations).
+
+<a id="permissions"></a>
 
 ### 🛡️ Roles and Channel Access
 
@@ -113,7 +152,16 @@ The current server and client require the coordinated `roles-v1` model and a fre
 
 ---
 
+<a id="quick-start"></a>
+
 ## ⚡ Quick Start
+
+For the desktop client, download `noxa-client-windows-amd64.exe` from
+[GitHub Releases](https://github.com/arumes31/noxa/releases/latest).
+Releases also include `noxa-server-linux-amd64`, checksums, and a signed manifest.
+Container builds publish `linux/amd64` and `linux/arm64` images to
+[`ghcr.io/arumes31/noxa`](https://github.com/arumes31/noxa/pkgs/container/noxa).
+See [update signing](docs/update-signing.md) for verification and signing-key setup.
 
 > [!TIP]
 > The fastest way to run noXa is using **Docker Compose**.
@@ -126,7 +174,7 @@ The current server and client require the coordinated `roles-v1` model and a fre
    cd noxa
    ```
 
-2. Create an explicit local-development environment, build the server image,
+2. Create an explicit development environment, build the server image,
    and start its database and Redis dependencies:
    ```bash
    cp .env.example .env
@@ -134,7 +182,8 @@ The current server and client require the coordinated `roles-v1` model and a fre
    docker compose up -d postgres redis
    ```
 
-   The sample environment is for host-local development. Before exposing a
+   The sample uses development credentials and publishes ports on all host
+   interfaces. Restrict it with host bindings/firewall rules during setup. Before exposing a
    deployment, set `NOXA_DEV_MODE=false`, replace the sample PostgreSQL
    credential, and set `POSTGRES_SSLMODE` to `require`, `verify-ca`, or
    `verify-full` (or supply `NOXA_COMPOSE_DATABASE_URL` with that sslmode).
@@ -148,12 +197,17 @@ The current server and client require the coordinated `roles-v1` model and a fre
    Production startup rejects the sample credential and plaintext database
    transport.
 
+   For an external PostgreSQL URL, use both Compose files on every command:
+   `docker compose -f docker-compose.yml -f docker-compose.external-db.yml ...`.
+   The override removes the bundled database dependency; start only `redis`
+   instead of `postgres redis`, and ensure the external database is ready.
+
 3. Follow [New server setup](#new-server-setup) below to create the owner,
    activate roles, and start the server. Admin privilege tokens have been retired.
 
 ### Option 2: Building from Source
 
-Successful `main` builds publish signed stable releases, starting with `v0.4.3`,
+Successful `main` builds publish signed stable releases
 and mark them **Latest** for the client updater. Each new commit advances the
 highest stable patch tag; rerunning a published commit reuses its tag.
 `VERSION` and the package declarations set the minimum version on that major/minor
@@ -170,12 +224,16 @@ launch after closing the app. A uniquely named `.noxa-previous-*.exe` backup is
 retained beside the executable for manual recovery.
 
 #### Prerequisites
-* **Go**: `>= 1.27.1` (both Go modules declare this minimum)
+
+* **Go**: `>= 1.27.1` for the root and client modules; the separately tested WebView2 fork declares its own version.
 * **Node.js**: `>= 24`
 * **Wails CLI**: `go install github.com/wailsapp/wails/v2/cmd/wails@v2.16.0` (match `client/go.mod`)
 * **PostgreSQL**: `>= 16`
+* **Desktop platform dependencies**: WebView2 on Windows; GTK 3, WebKitGTK 4.1, Ayatana AppIndicator, X11/XTest development libraries on Linux. The [CI workflow](.github/workflows/ci.yml) lists the Linux packages it installs.
+* **Optional services**: Redis 7 for pub/sub, TURN for restrictive NATs, and FFmpeg for server recording (included in the Docker image).
 
 #### Build Backend Server
+
 ```bash
 # Build the standalone server with automatic Git version metadata
 make build
@@ -185,7 +243,7 @@ make version
 
 # After creating the owner and activating roles (see New server setup below),
 # start a local-development server. Use your configured database URL.
-NOXA_DEV_MODE=true NOXA_DATABASE_URL="postgres://noxa:noxa@localhost:5432/noxa?sslmode=disable" ./bin/noxa-server
+NOXA_DEV_MODE=true NOXA_DATABASE_URL="postgres://noxa:noxa@localhost:5432/noxa?sslmode=disable" ./bin/noxa
 ```
 
 On Windows PowerShell, use the equivalent native wrapper:
@@ -195,7 +253,12 @@ On Windows PowerShell, use the equivalent native wrapper:
 ./scripts/build.ps1 server
 ```
 
+`make build` writes `bin/noxa`; the PowerShell server wrapper writes
+`bin/noxa-server.exe`. For a source installation without Redis, also set
+`NOXA_REDIS_ENABLED=false`.
+
 #### Build Desktop Client
+
 ```bash
 # From the repository root
 make client-build
@@ -210,6 +273,12 @@ dirty trees receive deterministic commit/content metadata automatically; see
 [`docs/versioning.md`](docs/versioning.md). Plain `go build` and `wails build`
 also use Go's embedded VCS information, while the Make targets additionally
 stamp the exact dirty-tree fingerprint into the binary.
+
+The client build writes to `client/build/bin/`. Custom builds that need the
+signed updater must embed trusted public keys using `NOXA_UPDATE_PUBLIC_KEYS`
+for Make or `-UpdatePublicKeys` for the PowerShell wrapper; see
+[update signing](docs/update-signing.md). The private signing key is never part
+of the client build.
 
 ---
 
@@ -344,14 +413,6 @@ Use **Preview role changes** before saving an access draft. Each role is checked
 with `@everyone`. Search by name or unique ID to inspect a member's saved and
 proposed permissions, including their combined roles and individual overrides.
 
-**Edit channel** also opens **Channel access** and lets you keep, replace, or
-remove the channel password. Access rules are edited separately; save metadata
-first or confirm discarding unsaved edits when opening access settings.
-
-Use **Preview role changes** before saving an access draft. Each role is checked
-with `@everyone`. Search by name or unique ID to inspect a member's saved and
-proposed permissions, including their combined roles and individual overrides.
-
 - For a members-only channel, keep that deny and add a Member role override
   allowing **View channel**, along with the desired chat/voice permissions and
   their prerequisites.
@@ -380,7 +441,27 @@ keepalive port configured by `NOXA_UDP_ADDR` (default UDP `12334`), and the
 configured WebRTC media ports. WebRTC needs reachable ICE candidates and suitable
 NAT/firewall or TURN configuration; UDP `12334` alone is not the voice transport.
 Keep administration and health ports private. See the
-[configuration reference](#️-configuration-reference) for listener settings.
+[configuration reference](#configuration) for listener settings.
+
+For a Docker bridge or port-forwarded host, a fixed WebRTC UDP port is easier to
+publish than the default dynamic ports. For example, add the following to the
+`noxa` service in a Compose override, replacing the documentation IP with your
+public IPv4 address:
+
+```yaml
+services:
+  noxa:
+    environment:
+      NOXA_WEBRTC_UDP_ADDR: ":12367"
+      NOXA_WEBRTC_EXTERNAL_IPS: "203.0.113.10"
+    ports:
+      - "12367:12367/udp"
+```
+
+Forward/allow that same UDP port at the router and firewall. External IP
+advertising requires a fixed UDP listener; it does not create a port forwarding
+rule. Configure STUN/TURN for your network as needed. The bundled `turn` profile
+and its relay-port settings are described in [`.env.example`](.env.example).
 
 Back up PostgreSQL together with the matching chat/PII keys, uploaded files,
 recordings, TLS identity and configuration. Verify a restore before relying on
@@ -388,12 +469,25 @@ the installation; see [backup and restore](docs/operations/backup-restore.md).
 
 ---
 
+<a id="configuration"></a>
+
 ## ⚙️ Configuration Reference
 
-noXa can be configured via environment variables or a YAML configuration file (`config.yaml`).
+`NOXA_*` environment variables override `config.yaml`, which is searched first
+in the working directory and then in `/etc/noxa`; missing values use built-in
+defaults. Nested YAML keys use underscores in environment variables, for example
+`webrtc.udp_addr` becomes `NOXA_WEBRTC_UDP_ADDR`. The server does not load `.env`
+itself; Docker Compose uses it for interpolation.
+
+This table lists commonly used settings and built-in defaults. See
+[`internal/config/config.go`](internal/config/config.go) for the complete schema
+and validation, [`config.yaml`](config.yaml) for a development example, and
+[`docker-compose.yml`](docker-compose.yml) for container-specific overrides.
 
 | Environment Variable | Default Value | Description |
 | :--- | :--- | :--- |
+| `NOXA_SERVER_NAME` / `NOXA_SERVER_PASSWORD` | `noXa` / empty | Displayed server name and optional admission password |
+| `NOXA_DEV_MODE` | `true` | Development logging/validation; explicitly set `false` for production |
 | `NOXA_TCP_ADDR` | `:12333` | Primary control TCP listener address |
 | `NOXA_UDP_ADDR` | `:12334` | UDP keepalive ping/pong listener address |
 | `NOXA_GRPC_ADDR` | `127.0.0.1:12338` | Plaintext gRPC administration listener; loopback is mandatory |
@@ -408,6 +502,7 @@ noXa can be configured via environment variables or a YAML configuration file (`
 | `NOXA_SHUTDOWN_TIMEOUT` | `30s` | Positive total grace period shared by all services during orderly shutdown |
 | `NOXA_DATABASE_URL` | `postgres://...` | PostgreSQL connection URL |
 | `NOXA_REDIS_ADDR` | `localhost:6379` | Optional Redis address for pub/sub fanout |
+| `NOXA_REDIS_ENABLED` | `true` | Set `false` to run without Redis; the supplied Compose stack starts Redis by default |
 | `NOXA_TLS_ENABLED` | `true` | Enable TLS 1.3 encryption on control port |
 | `NOXA_TLS_DIR` | `./data/tls` | Directory storing the generated TLS certificate and key |
 | `NOXA_TLS_CERT_FILE` / `NOXA_TLS_KEY_FILE` | empty | Custom certificate and key; both must be configured together |
@@ -422,14 +517,28 @@ noXa can be configured via environment variables or a YAML configuration file (`
 | `NOXA_CHAT_KEY_ROTATE_MIN_SECONDS` | `60` | Minimum interval used to coalesce scope-key rotations |
 | `NOXA_CHAT_SEARCH_MAX_MESSAGES` | `2000` | Maximum history messages scanned by client-side search |
 | `NOXA_CHAT_MAX_LENGTH` | `4096` | Maximum decrypted chat payload size in UTF-8 bytes |
-| `NOXA_DEFAULT_GROUPS_ENABLED` | `true` | Auto-create and assign the built-in Guest and Member groups |
+| `NOXA_ECHO_CHANNEL_ENABLED` / `NOXA_ECHO_CHANNEL_NAME` | `true` / `Echo Test` | Create the network echo channel and enable isolated loopback |
+| `NOXA_DEFAULT_OPUS_BITRATE` | `32000` | Default voice bitrate in bits/s |
+| `NOXA_VIDEO_MAX_BITRATE` | `0` | Per-publisher video RTP ceiling in bits/s across slots/layers; `0` means unlimited |
+| `NOXA_VIDEO_MAX_WIDTH` / `NOXA_VIDEO_MAX_HEIGHT` | `0` / `0` | Encoded video bounds; both zero means unlimited. Nonzero paired bounds require VP8 |
+| `NOXA_WEBRTC_UDP_ADDR` | empty | Shared IPv4 WebRTC UDP listener; empty uses dynamic ports |
+| `NOXA_WEBRTC_EXTERNAL_IPS` | empty | Public IPv4 addresses forwarding the fixed WebRTC UDP listener |
+| `NOXA_WEBRTC_ICE_SERVERS` | `stun:stun.l.google.com:19302` | ICE server URLs for the SFU |
+| `NOXA_TURN_SECRET` / `NOXA_TURN_URIS` | empty / empty | TURN shared secret and advertised relay URIs |
 | `NOXA_TURN_CREDENTIALS_TTL` | `24h` | TURN credential lifetime; must be positive and at most 30 days |
-| `NOXA_REDIS_DIAL_TIMEOUT` / `READ_TIMEOUT` / `WRITE_TIMEOUT` | `5s` / `3s` / `3s` | Redis client timeouts when Redis is enabled |
+| `NOXA_REDIS_DIAL_TIMEOUT` / `NOXA_REDIS_READ_TIMEOUT` / `NOXA_REDIS_WRITE_TIMEOUT` | `5s` / `3s` / `3s` | Redis client timeouts when Redis is enabled |
 | `NOXA_REDIS_TLS_ENABLED` | `false` | Enable verified Redis TLS (TLS 1.2+); optional server name and CA file use `NOXA_REDIS_TLS_SERVER_NAME` / `NOXA_REDIS_TLS_CA_FILE` |
+| `NOXA_RECORDING_ENABLED` / `NOXA_RECORDING_DIR` | `false` / `recordings` | Opt-in server recording; requires FFmpeg and recording permissions |
+| `NOXA_RECORDING_MAX_CONCURRENT` | `4` | Combined budget for starting and active recording sessions |
 
 `NOXA_CHAT_MASTER_KEY` takes precedence over `NOXA_CHAT_MASTER_KEY_FILE`.
 Use secret injection for the override; it accepts either a single base64 32-byte
 key or a newline-separated `id:base64` key ring for key rotation.
+
+Default member assignment is managed through **Permissions → Roles** in the
+active `roles-v1` policy. The retired `NOXA_DEFAULT_GROUPS_ENABLED` setting does
+not configure current roles. Video ceilings can also be managed through the
+authorized media-limits interface; see [media resource limits](docs/media-resource-limits.md).
 
 ### Join by hostname with DNS SRV
 
@@ -498,6 +607,8 @@ fingerprint. Later changes fail closed. For a planned rotation:
 
 ---
 
+<a id="serverquery"></a>
+
 ## 💻 ServerQuery Admin Protocol
 
 noXa exposes a line-based administrative text interface on `127.0.0.1:12335`
@@ -552,6 +663,54 @@ assume fixed IDs or a universal administrator account.
 
 ---
 
+## Development and checks
+
+Build the frontend before Go client tests so embedded assets are present:
+
+```sh
+# From the repository root
+npm --prefix client/frontend ci
+npm --prefix client/frontend run build
+go test ./...
+```
+
+Then run client and browser checks in their respective directories:
+
+```sh
+cd client
+go test -tags=integration -count=1 ./...
+cd frontend
+npx playwright install chromium
+npm run quality
+npm run test:e2e
+```
+
+On Linux, install the desktop libraries listed above and Playwright's Chromium
+system dependencies (`npx playwright install --with-deps chromium`). Headless
+native-client tests in CI use `xvfb-run -a go test ./...`.
+
+| Command | Scope |
+| :--- | :--- |
+| `make test` | Root and client Go tests; supplies an embed placeholder, but does not run browser tests |
+| `go run ./cmd/version -check` | Check synchronized baseline versions and report the current source version |
+| `npm run quality` in `client/frontend` | Frontend lint, unit tests/coverage, accessibility scenarios, and production build |
+| `npm run test:e2e` in `client/frontend` | Full Playwright browser regression suite |
+| `go test ./...` in `client/third_party/go-webview2` | Standalone Windows WebView2 fork tests |
+| `buf lint` / `make proto` | Lint protobuf contracts / regenerate committed Go stubs; CI pins Buf 1.72.0 |
+
+Database-backed tests need a **disposable PostgreSQL database** through
+`NOXA_TEST_DATABASE_URL`; some fixtures also create scratch databases and need
+that privilege. Without a configured reachable test database, some cases skip.
+Use a separate test instance, not a production database. CI starts PostgreSQL 16
+and Redis 7, runs Go race/coverage checks (70% root-internal and 50% client
+minimums), Windows client tests, browser tests, protobuf checks, lint, security
+analysis, and a backup/restore drill. Passing a local subset does not replace
+these gates. [`.github/workflows/ci.yml`](.github/workflows/ci.yml) contains the
+exact commands; [role E2E testing](docs/role-e2e-testing.md) describes the live
+protocol fixtures. Website checks are separate in [`website/README.md`](website/README.md).
+
+---
+
 ## 📂 Project Structure
 
 ```
@@ -560,25 +719,35 @@ noxa/
 │   ├── desktop_windows.go      # Windows COM thread affinity & tray setup
 │   ├── frontend/               # Single-page UI (Vite / ES6 / Modular CSS)
 │   ├── hotkeys.go              # Global hotkey registration engine
+│   ├── third_party/go-webview2/ # Locally maintained WebView2 Go module
 │   └── ptt_windows.go          # Win32 Virtual Key low-level PTT observer
 ├── cmd/
+│   ├── adduser/                # Offline account provisioning
+│   ├── role-setup/             # Owner selection and roles-v1 activation
 │   ├── server/                 # Standalone noXa Server entrypoint
+│   ├── signrelease/            # Release manifest signing and verification
+│   ├── version/                # Shared build/release version calculator
 │   └── migrate/                # Standalone DB migration utility
 ├── internal/
 │   ├── auth/                   # Ed25519 challenge & Argon2id authentication
 │   ├── broadcast/              # Outbound message fanout & snapshot engine
 │   ├── channels/               # Active channel tree manager
-│   ├── e2ee/                   # Signal-style X25519 Double-Ratchet crypto
+│   ├── e2ee/                   # Crypto primitives, ratchet library, attachment chunks
 │   ├── filetransfer/           # Token-authenticated file pipeline
 │   ├── netproto/               # Binary frame codec & JSON message definitions
 │   ├── authorization/          # Named roles and channel access evaluation
 │   ├── query/                  # ServerQuery line-based admin protocol
 │   ├── store/                  # PostgreSQL data access layer & migrations
-│   └── webrtc/                 # Pion WebRTC SFU engine & Opus mixer
+│   └── webrtc/                 # Pion WebRTC SFU, routing and RTCP diagnostics
+├── docs/                       # Authorization, media, signing and operator guides
+├── proto/                      # Protobuf sources and Buf generation policy
+├── v1/                         # Generated Go protocol code
+├── website/                    # Static product/download site and its tests
 ├── .github/
 │   └── workflows/              # GitHub Actions (CI, Security, Docker, Lint)
 ├── Dockerfile                  # Multi-stage production container image
-├── docker-compose.yml          # Production Docker stack
+├── docker-compose.yml          # Development defaults; harden before production
+├── docker-compose.external-db.yml # Override for external PostgreSQL
 └── README.md                   # System documentation
 ```
 
@@ -606,27 +775,6 @@ resize it when replacing icons, rather than converting it back to JPEG.
 
 ---
 
-## Branding assets
-
-The transparent noXa logo is used on the login screen, in the application menu,
-and at the top of this README. The original turquoise artwork is preserved;
-the checkerboard background has been removed from the source JPEG.
-
-| Asset | Location |
-| :--- | :--- |
-| Transparent logo (732 × 732) | [`client/frontend/public/branding/logo.png`](client/frontend/public/branding/logo.png) |
-| Browser favicon (16–256 px) | [`client/frontend/public/favicon.ico`](client/frontend/public/favicon.ico) |
-| PNG icons (32, 180, 192, 512 px) | [`client/frontend/public/branding/`](client/frontend/public/branding/) |
-| Desktop app icon (1024 × 1024) | [`client/build/appicon.png`](client/build/appicon.png) |
-| Windows app and installer icon | [`client/build/windows/icon.ico`](client/build/windows/icon.ico) |
-
-The frontend includes the favicon and Apple touch icon links. Vite copies the
-public assets into the frontend build; Wails uses the desktop assets when the
-application is rebuilt. Keep the transparent PNG as the branding source and
-resize it when replacing icons, rather than converting it back to JPEG.
-
----
-
 ## Operations
 
 Production operators should adopt the repository's
@@ -636,12 +784,35 @@ the [backup and restore drill](docs/operations/backup-restore.md), and keep the
 deployment being operated. Update these documents when architecture, telemetry,
 or recovery procedures change.
 
+### Voice diagnostics
+
+**Client Info** shows ping and reported client version for visible members.
+Owners and administrators additionally see **Reception on this member's client**:
+loss, concealment, jitter-buffer delay, and output state as reported by that
+receiver. Older clients may show an unknown version and no client report;
+server-side RTCP feedback can still provide loss/jitter measurements.
+
+Operators can query the loopback-only health endpoint from inside the server
+container. With the repository's Compose service name:
+
+```sh
+docker compose exec noxa wget -qO- 'http://127.0.0.1:12337/debug/voice?nickname=Example'
+```
+
+Use either `nickname` or `client_id`, or omit the filter for a bounded snapshot.
+Reports contain counters, not audio; only the latest report is retained in
+memory, and samples older than 15 seconds are marked stale. The endpoint stays
+loopback-only even if remote metrics are enabled. See
+[receiver voice diagnostics](docs/voice-diagnostics.md) for interpretation and
+access details.
+
 ---
 
-## 🔒 Security & Vulnerability Reporting
+## 🔒 Security
 
-noXa is engineered around a strict security posture:
-- **Challenge Authentication**: Public key cryptography prevents password sniffing over untrusted networks.
+The implementation includes:
+
+- **Authentication**: Ed25519 identity challenges and Argon2id password verification, carried over the TLS control connection.
 - **Strict TOFU Certificate Pinning**: Clients pin self-signed TLS certificates on first connect.
 - **PII Storage Protection**: Sensitive user metadata columns are encrypted at rest with AES-256-GCM authenticated data.
 - **Delegated Role Management**: Managers can manage only lower roles and cannot grant capabilities they do not hold. Only the owner can grant Administrator.
@@ -650,4 +821,8 @@ noXa is engineered around a strict security posture:
 
 ## 📄 License
 
-This project is licensed under the **MIT License**. See the [LICENSE](LICENSE) file for complete details.
+The project code is licensed under the **MIT License**; see [LICENSE](LICENSE).
+Bundled third-party assets retain their own terms. In particular, German spoken
+announcements include CC BY 4.0 attribution; see the
+[speech asset notes](client/frontend/src/assets/speech/README.md) and bundled
+[audio notices](client/frontend/public/noxa-audio-licenses.txt).
