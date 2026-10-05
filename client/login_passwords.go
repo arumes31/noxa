@@ -51,7 +51,7 @@ func (s loginPasswordStore) load(addr, nickname string) (loginPasswords, error) 
 	if err != nil {
 		return empty, err
 	}
-	defer root.Close()
+	defer func() { _ = root.Close() }()
 	f, err := root.Open(name)
 	if errors.Is(err, os.ErrNotExist) {
 		return empty, nil
@@ -59,7 +59,7 @@ func (s loginPasswordStore) load(addr, nickname string) (loginPasswords, error) 
 	if err != nil {
 		return empty, err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	if !s.available {
 		return empty, errors.New("OS password protection is unavailable")
 	}
@@ -112,7 +112,7 @@ func (s loginPasswordStore) remove(addr, nickname string) error {
 	if err != nil {
 		return err
 	}
-	defer root.Close()
+	defer func() { _ = root.Close() }()
 	if err = root.Remove(name); errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
