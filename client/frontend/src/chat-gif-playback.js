@@ -23,14 +23,27 @@ export function manageChatGIFPlayback(root, selector = "img") {
             const context = canvas.getContext("2d");
             if (!context) return;
             context.drawImage(image, 0, 0, canvas.width, canvas.height);
-            const pixels = canvas.toDataURL("image/png");
+            let pixels = "";
+            try { pixels = canvas.toDataURL("image/png"); }
+            catch {
+                // Remote GIFs without CORS still allow drawing, but not reading
+                // canvas pixels. Display that canvas over an inert image instead.
+                const wrapper = document.createElement("span");
+                wrapper.style.cssText = "display:inline-block;position:relative;max-width:100%;line-height:0";
+                image.before(wrapper);
+                wrapper.append(image, canvas);
+                canvas.style.cssText = "position:absolute;inset:0;width:100%;height:100%;pointer-events:none";
+                canvas.setAttribute("aria-hidden", "true");
+                state.wrapper = wrapper;
+            }
             // This fixed SVG contains only our canvas PNG and numeric dimensions.
             // It preserves intrinsic sizing without forcing CSS width/height,
             // which would distort images constrained by max-width/max-height.
-            const frame = `<svg xmlns="http://www.w3.org/2000/svg" width="${image.naturalWidth}" height="${image.naturalHeight}" viewBox="0 0 ${image.naturalWidth} ${image.naturalHeight}"><image href="${pixels}" width="100%" height="100%"/></svg>`;
+            const frame = `<svg xmlns="http://www.w3.org/2000/svg" width="${image.naturalWidth}" height="${image.naturalHeight}" viewBox="0 0 ${image.naturalWidth} ${image.naturalHeight}">${pixels ? `<image href="${pixels}" width="100%" height="100%"/>` : ""}</svg>`;
             const still = "data:image/svg+xml," + encodeURIComponent(frame);
             originals.set(image, state.source);
             state.paused = true;
+            state.still = still;
             image.src = still;
         } catch {
             // A failed decode cannot replace a usable image with an empty frame.
@@ -38,9 +51,11 @@ export function manageChatGIFPlayback(root, selector = "img") {
     }
 
     function update(image, state) {
-        if (suspended) pause(image, state);
+        if (suspended || state.visible === false) pause(image, state);
         else if (!background && state.visible && state.paused) {
             state.paused = false;
+            state.wrapper?.replaceWith(image);
+            state.wrapper = null;
             image.src = state.source;
         }
     }
@@ -55,8 +70,19 @@ export function manageChatGIFPlayback(root, selector = "img") {
     });
 
     function register(image) {
-        if (images.has(image) || !image.src.startsWith("data:image/gif;base64,")) return;
-        const state = { source: image.src, visible: false, paused: false };
+        if (!image.matches(selector)) return;
+        const previous = images.get(image);
+        if (previous && (image.src === previous.source || image.src === previous.still)) return;
+        if (previous) {
+            previous.wrapper?.replaceWith(image);
+            originals.delete(image);
+            visibility.unobserve(image);
+            images.delete(image);
+        }
+        // Markdown embeds often use extensionless CDN URLs. Their animation
+        // format is unknown, so freeze any remote image when playback is paused.
+        if (!/^(?:data:image\/gif[;,]|https?:|blob:)/i.test(image.src)) return;
+        const state = { source: image.src, visible: null, paused: false };
         images.set(image, state);
         visibility.observe(image);
         update(image, state);
@@ -69,13 +95,16 @@ export function manageChatGIFPlayback(root, selector = "img") {
     }
 
     const changes = new MutationObserver(records => {
-        for (const record of records) for (const node of record.addedNodes) scan(node);
+        for (const record of records) {
+            if (record.type === "attributes") register(record.target);
+            else for (const node of record.addedNodes) scan(node);
+        }
         for (const image of images.keys()) if (!root.contains(image)) {
             visibility.unobserve(image);
             images.delete(image);
         }
     });
-    changes.observe(root, { childList: true, subtree: true });
+    changes.observe(root, { childList: true, subtree: true, attributes: true, attributeFilter: ["src"] });
     scan(root);
     root.addEventListener("load", event => {
         const state = images.get(event.target);
@@ -91,8 +120,8 @@ export function manageChatGIFPlayback(root, selector = "img") {
         }, GIF_BACKGROUND_DELAY);
     }
 
-    function focusChanged() {
-        const next = document.hidden || !document.hasFocus();
+    function focusChanged(event) {
+        const next = document.hidden || (event.type === "blur" ? true : !document.hasFocus());
         if (next === background) return;
         background = next;
         clearTimeout(timer); timer = null;

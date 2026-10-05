@@ -29,6 +29,15 @@ async function focusWindow(page, focused) {
     }, focused);
 }
 
+test("offscreen GIFs stop immediately and scrolling resumes only visible images", async ({ page }) => {
+    await expect(page.locator("#visible")).toHaveAttribute("src", gif);
+    await expect(page.locator("#offscreen")).toHaveAttribute("src", frozen);
+    await page.locator("#chat").evaluate(element => { element.scrollTop = element.scrollHeight; });
+    await page.clock.runFor(50);
+    await expect(page.locator("#offscreen")).toHaveAttribute("src", gif);
+    await expect(page.locator("#visible")).toHaveAttribute("src", frozen);
+});
+
 test("GIFs pause after one unfocused minute and only visible images resume", async ({ page }) => {
     await focusWindow(page, false);
     await page.clock.runFor(59_000);
@@ -75,6 +84,25 @@ test("hidden windows and newly loaded GIFs pause without altering PNGs or video"
     expect(await page.evaluate(() => window.__videoPauseCalls)).toBe(0);
 });
 
+test("remote GIFs and asynchronously assigned sources freeze without CORS and resume only onscreen", async ({ page }) => {
+    await page.route("https://gif.example/**", route => route.fulfill({ contentType: "image/gif", body: Buffer.from(gif.split(",")[1], "base64") }));
+    await page.evaluate(async () => {
+        const image = document.createElement("img"); image.id = "remote-gif"; image.width = image.height = 100;
+        document.getElementById("chat").prepend(image);
+        await Promise.resolve();
+        image.src = "https://gif.example/animation";
+    });
+    await expect(page.locator("#remote-gif")).toHaveAttribute("src", "https://gif.example/animation");
+    await expect.poll(() => page.locator("#remote-gif").evaluate(image => image.complete && image.naturalWidth > 0)).toBe(true);
+    await focusWindow(page, false); await page.clock.runFor(60_000);
+    await expect(page.locator("#remote-gif")).toHaveAttribute("src", frozen);
+    await expect(page.locator("#chat canvas")).toHaveCount(1);
+    await focusWindow(page, true);
+    await expect(page.locator("#remote-gif")).toHaveAttribute("src", "https://gif.example/animation");
+    await expect(page.locator("#chat canvas")).toHaveCount(0);
+    await expect(page.locator("#offscreen")).toHaveAttribute("src", frozen);
+});
+
 test("removed GIFs and a disposed controller cannot resume obsolete images", async ({ page }) => {
     await focusWindow(page, false); await page.clock.runFor(60_000);
     await page.evaluate(() => { window.__removedGIF = document.getElementById("offscreen"); window.__removedGIF.remove(); });
@@ -99,7 +127,7 @@ test("frozen GIF previews preserve large landscape and portrait layout and pixel
             // The controller identifies GIF URLs; a static test bitmap supplies
             // deterministic dimensions and pixels through the browser decoder.
             image.src = canvas.toDataURL().replace("image/png", "image/gif");
-            root.append(image); await image.decode();
+            await image.decode(); root.append(image);
             const box = image.getBoundingClientRect(); dimensions.push([box.width, box.height]);
         }
         return dimensions;
