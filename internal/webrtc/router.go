@@ -138,6 +138,7 @@ func defaultSlot(kind webrtc.RTPCodecType) string {
 // pubSlot is one output track (and its sender) for a single (subscriber,
 // publisher, slot) triple.
 type pubSlot struct {
+	receiverReport  *audioReceiverReport // protected by Router.mu; expires with this binding
 	track           *webrtc.TrackLocalStaticRTP
 	sender          *webrtc.RTPSender
 	egress          *mediaEgressStream
@@ -2017,7 +2018,11 @@ func (r *Router) rtcpRelayLoop(clientID string, sender *webrtc.RTPSender) {
 			return
 		}
 		for _, pkt := range pkts {
-			switch pkt.(type) {
+			switch report := pkt.(type) {
+			case *rtcp.ReceiverReport:
+				r.recordAudioReceiverReports(clientID, sender, report.Reports)
+			case *rtcp.SenderReport:
+				r.recordAudioReceiverReports(clientID, sender, report.Reports)
 			case *rtcp.PictureLossIndication, *rtcp.FullIntraRequest:
 				r.relayKeyframeRequest(clientID, sender)
 			}

@@ -266,6 +266,7 @@ func (m *Manager) removeChannelLocked(channelID int64) {
 		for clientID := range members {
 			if c, ok := m.clients[clientID]; ok {
 				c.ChannelID = 0
+				c.ChannelEpoch++
 			}
 		}
 		delete(m.membership, channelID)
@@ -488,6 +489,7 @@ func (m *Manager) JoinChannel(clientID string, channelID int64) error {
 	}
 
 	c.ChannelID = channelID
+	c.ChannelEpoch++
 	members, ok := m.membership[channelID]
 	if !ok {
 		members = make(map[string]bool)
@@ -533,6 +535,7 @@ func (m *Manager) LeaveChannel(clientID string) error {
 	}
 
 	c.ChannelID = 0
+	c.ChannelEpoch++
 	m.logger.Debug("state: client left channel",
 		zap.String("client_id", clientID),
 		zap.Int64("channel_id", channelID))
@@ -611,6 +614,7 @@ func (m *Manager) moveClient(clientID string, targetChannelID int64, enforceCapa
 
 	// Join target channel.
 	c.ChannelID = targetChannelID
+	c.ChannelEpoch++
 	members, ok := m.membership[targetChannelID]
 	if !ok {
 		members = make(map[string]bool)

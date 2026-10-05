@@ -104,8 +104,24 @@ func TestRoleClientMetadataFiltersHiddenMembersAndSensitiveFields(t *testing.T) 
 		}
 		return result
 	}
-	if got := query(member, ownerID); got.IP != "" || got.ConnectedAt != 0 || got.BytesIn != 0 {
-		t.Fatalf("legacy admin received sensitive fields: %+v", got)
+	if got := query(member, ownerID); got.PingMs != -1 {
+		t.Fatalf("unmeasured member ping = %d, want -1", got.PingMs)
+	}
+	target, ok := env.srv.clientByID(ownerID)
+	if !ok {
+		t.Fatal("connected member missing")
+	}
+	target.mu.Lock()
+	target.rttKnown, target.rttNs = true, int64(73*time.Millisecond)
+	target.mu.Unlock()
+	ownerState, _ := env.state.GetClient(ownerID)
+	ownerState.ConnectedAt = time.Now().Add(-time.Minute)
+	env.state.AddClient(ownerState)
+	if got := query(member, ownerID); got.PingMs != 73 {
+		t.Errorf("visible member ping = %d, want 73 without sensitive-metadata permission", got.PingMs)
+	}
+	if got := query(member, ownerID); got.IP != "" || got.Port != 0 || got.ConnectedAt != 0 || got.IdleSeconds != 0 || got.BytesIn != 0 || got.BytesOut != 0 {
+		t.Fatalf("ordinary member received sensitive fields: %+v", got)
 	}
 	if got := query(member, memberID); got.IP == "" || got.ConnectedAt == 0 {
 		t.Fatalf("self information missing: %+v", got)
@@ -113,6 +129,12 @@ func TestRoleClientMetadataFiltersHiddenMembersAndSensitiveFields(t *testing.T) 
 	if got := query(owner, memberID); got.IP == "" || got.ConnectedAt == 0 {
 		t.Fatalf("role owner lacks metadata: %+v", got)
 	}
+	env.state.SetStatus(ownerID, "invisible", "")
+	send(t, member, netproto.MsgClientInfoQuery, netproto.ClientInfoQuery{ClientID: ownerID})
+	if got := readError(t, member); got.Code != errCodeNotFound {
+		t.Fatalf("invisible member response: %+v", got)
+	}
+	env.state.SetStatus(ownerID, "online", "")
 	if err := env.state.MoveClient(ownerID, 1); err != nil {
 		t.Fatal(err)
 	}

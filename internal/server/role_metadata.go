@@ -43,8 +43,16 @@ func (s *TCPServer) buildRoleClientInfo(e *authorization.RoleEvaluator, actorID 
 		return netproto.ClientInfoResponse{}, authorization.ErrRoleForbidden
 	}
 	resp := netproto.ClientInfoResponse{ClientID: member.ClientID, UniqueID: member.UniqueID, Nickname: member.Nickname, ChannelID: member.ChannelID, PingMs: -1}
+	// Latency is ordinary presence metadata for an already visible member.
+	// Detailed connection statistics and remote addresses keep their own gates.
+	st := target.stats()
+	target.mu.RLock()
+	resp.ClientVersion = target.clientVersion
+	target.mu.RUnlock()
+	if st.rttKnown {
+		resp.PingMs = st.rttNs / int64(time.Millisecond)
+	}
 	if showStats {
-		st := target.stats()
 		resp.ConnectedAt = member.ConnectedAt.Unix()
 		if !member.IsSpeaking {
 			idleSince := member.LastSpokeAt
@@ -55,9 +63,6 @@ func (s *TCPServer) buildRoleClientInfo(e *authorization.RoleEvaluator, actorID 
 				resp.IdleSeconds = max(0, int64(time.Since(idleSince).Seconds()))
 			}
 		}
-		if st.rttKnown {
-			resp.PingMs = st.rttNs / int64(time.Millisecond)
-		}
 		resp.BytesIn, resp.BytesOut = st.bytesIn, st.bytesOut
 	}
 	if self || e.Evaluate(actorID, 0, authorization.ViewRemoteAddresses).Allowed {
@@ -65,6 +70,9 @@ func (s *TCPServer) buildRoleClientInfo(e *authorization.RoleEvaluator, actorID 
 			resp.IP = host
 			resp.Port, _ = strconv.Atoi(port)
 		}
+	}
+	if e.Evaluate(actorID, 0, authorization.Administrator).Allowed {
+		resp.VoiceDiagnostics = s.voiceDiagnostics(target)
 	}
 	return resp, nil
 }

@@ -37,6 +37,12 @@ func (s *TCPServer) handleAuthenticate(ctx context.Context, client *Client, f *n
 	if client.isAuthed() {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "already authenticated")
 	}
+	if !netproto.ValidClientVersion(msg.ClientVersion) {
+		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "invalid client version")
+	}
+	client.mu.Lock()
+	client.clientVersion = msg.ClientVersion
+	client.mu.Unlock()
 	if !s.negotiateAuthorization(client, msg.AuthorizationModels) {
 		return s.rejectAuthorizationModel(client)
 	}

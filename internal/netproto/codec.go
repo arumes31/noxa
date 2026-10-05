@@ -134,6 +134,8 @@ const (
 // String returns a human-readable name for the message type.
 func (m MessageType) String() string {
 	switch m {
+	case MsgVoiceTelemetry:
+		return "VoiceTelemetry"
 	case MsgDiscussionRequest:
 		return "DiscussionRequest"
 	case MsgDiscussionResult:
@@ -443,6 +445,8 @@ func (m MessageType) String() string {
 // PublicKey in AuthSignature then authenticates the client as a guest with a
 // stable, key-derived unique ID even when no users row exists.
 type Authenticate struct {
+	// ClientVersion is optional, self-reported build metadata, never authority.
+	ClientVersion string `json:"client_version,omitempty"`
 	// AuthorizationModels lists the replacement policy models this client supports.
 	AuthorizationModels []string `json:"authorization_models,omitempty"`
 	Username            string   `json:"username"`
@@ -1414,17 +1418,19 @@ type ClientInfoQuery struct {
 // a server Ping). IP and Port are empty/0 unless the requester is the
 // target itself, an admin, or holds b_client_remoteaddress_view.
 type ClientInfoResponse struct {
-	ClientID    string `json:"client_id"`
-	UniqueID    string `json:"unique_id"`
-	Nickname    string `json:"nickname"`
-	ChannelID   int64  `json:"channel_id"`
-	ConnectedAt int64  `json:"connected_at"` // unix seconds
-	IdleSeconds int64  `json:"idle_seconds"` // since speech stopped, or login if never spoken; zero while speaking
-	PingMs      int64  `json:"ping_ms"`
-	IP          string `json:"ip,omitempty"`
-	Port        int    `json:"port,omitempty"`
-	BytesIn     int64  `json:"bytes_in"`
-	BytesOut    int64  `json:"bytes_out"`
+	ClientVersion    string            `json:"client_version,omitempty"`
+	ClientID         string            `json:"client_id"`
+	UniqueID         string            `json:"unique_id"`
+	Nickname         string            `json:"nickname"`
+	ChannelID        int64             `json:"channel_id"`
+	ConnectedAt      int64             `json:"connected_at"` // unix seconds
+	IdleSeconds      int64             `json:"idle_seconds"` // since speech stopped, or login if never spoken; zero while speaking
+	PingMs           int64             `json:"ping_ms"`
+	IP               string            `json:"ip,omitempty"`
+	Port             int               `json:"port,omitempty"`
+	BytesIn          int64             `json:"bytes_in"`
+	BytesOut         int64             `json:"bytes_out"`
+	VoiceDiagnostics *VoiceDiagnostics `json:"voice_diagnostics,omitempty"`
 }
 
 // Encode marshals a message into a Frame with the given type.

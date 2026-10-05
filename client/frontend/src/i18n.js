@@ -20,6 +20,7 @@ import { securityEnglish, securityGerman } from "./security-messages.js";
 import { interfaceEnglish, interfaceGerman } from "./interface-messages.js";
 import { roleEnglish, roleGerman } from "./role-messages.js";
 import { auditEnglish, auditGerman } from "./audit-messages.js";
+import { voiceDiagnosticsEnglish, voiceDiagnosticsGerman } from "./voice-diagnostics-messages.js";
 
 import { quickWinEnglish, quickWinGerman } from "./quick-win-messages.js";
 import { uiPolishEnglish, uiPolishGerman } from "./ui-polish-messages.js";
@@ -40,6 +41,7 @@ import { messageToolsEnglish, messageToolsGerman } from "./message-tools-message
 import { webhookEnglish, webhookGerman } from "./webhook-messages.js";
 
 const en = {
+    ...voiceDiagnosticsEnglish,
     ...desktopEnglish,
     ...runtimeEnglish,
     ...networkEchoEnglish,
@@ -137,6 +139,7 @@ const en = {
 };
 
 const de = {
+    ...voiceDiagnosticsGerman,
     ...desktopGerman,
     ...runtimeGerman,
     ...networkEchoGerman,

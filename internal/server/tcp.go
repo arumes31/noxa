@@ -72,13 +72,17 @@ type Client struct {
 	mediaLimitsTimerGeneration uint64
 
 	// Activity and connection stats (Client Info dialog).
-	lastActive     time.Time // last received frame
-	lastPositionAt time.Time // last accepted positional metadata update
-	bytesIn        int64     // payload bytes received
-	bytesOut       int64     // payload bytes sent
-	lastPingAt     time.Time // last server-initiated Ping sent
-	rttNs          int64     // smoothed RTT in nanoseconds (EWMA)
-	rttKnown       bool      // whether any Pong was received
+	lastActive          time.Time // last received frame
+	lastPositionAt      time.Time // last accepted positional metadata update
+	bytesIn             int64     // payload bytes received
+	bytesOut            int64     // payload bytes sent
+	lastPingAt          time.Time // last server-initiated Ping sent
+	rttNs               int64     // smoothed RTT in nanoseconds (EWMA)
+	rttKnown            bool      // whether any Pong was received
+	voiceTelemetry      *netproto.VoiceTelemetry
+	voiceTelemetryAt    time.Time
+	voiceTelemetryEpoch uint64
+	clientVersion       string // self-reported at authentication, protected by mu
 
 	// Pending challenge-response handshake state (set on Authenticate without
 	// a password, consumed by AuthSignature).
@@ -1094,6 +1098,8 @@ func (s *TCPServer) dispatch(ctx context.Context, client *Client, f *netproto.Fr
 		return s.handlePreKeyQuery(ctx, client, f)
 	case netproto.MsgClientInfoQuery:
 		return s.handleClientInfoQuery(ctx, client, f)
+	case netproto.MsgVoiceTelemetry:
+		return s.handleVoiceTelemetry(ctx, client, f)
 	case netproto.MsgAuditLog:
 		return s.handleAuditLog(ctx, client, f)
 	case netproto.MsgBanList:

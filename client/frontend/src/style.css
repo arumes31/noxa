@@ -629,6 +629,13 @@ body:not(.details-collapsed) #details-toggle { display: none; }
     padding-bottom: 10px; border-bottom: 1px solid var(--border);
 }
 .ci-nick { color: var(--text-dim); }
+.ci-receiver-diagnostics { border-top: 1px solid var(--border); padding-top: 12px; font-size: .9286rem; }
+.ci-receiver-diagnostics summary { cursor: pointer; color: var(--accent); font-weight: 600; }
+.ci-diagnostic-content p { line-height: 1.5; }
+.ci-diagnostic-content h4 { font-size: inherit; margin: 16px 0 8px; }
+.ci-diagnostic-track { padding: 10px 0; border-bottom: 1px solid var(--border); }
+.ci-diagnostic-track strong { display: block; margin-bottom: 8px; overflow-wrap: anywhere; }
+.ci-diagnostic-stale { color: var(--warn); }
 .ci-grid {
     display: grid; grid-template-columns: 150px 1fr; gap: 8px 12px;
     font-size: 0.9286rem;

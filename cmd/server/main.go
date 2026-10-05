@@ -745,6 +745,7 @@ func run() (retErr error) {
 		ICEServers:         iceServersProvider(cfg, logger),
 	})
 	channelMgr.EnableRoleMode(roleAuthority)
+	healthServer.HandleLocalGET("/debug/voice", tcpServer.VoiceDiagnosticsHandler())
 	// Remove orphaned file data before serving. Role-mode channel timers remain
 	// disabled until the Authority is attached and its initial Reload completes.
 	// No listener is accepting file work yet.

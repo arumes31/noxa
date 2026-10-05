@@ -2,6 +2,7 @@ import { createConnectionQuality } from './connection-quality.js';
 import { createLoginMemory } from './login-memory.js';
 import { watchMicrophone } from "./microphone-recovery.js";
 import { createRemoteAudio } from './remote-audio.js';
+import { startVoiceDiagnostics } from './voice-diagnostics.js';
 import { createChannelTree } from './channel-tree.js';
 import { captureChannelPresence, channelPresenceChanges } from './channel-presence.js';
 // noxa client frontend — voice ops console (vanilla JS).
@@ -143,6 +144,11 @@ const { startQualitySampler, stopQualitySampler } = createConnectionQuality({ $,
 
 const remoteAudio = createRemoteAudio({ state, toast, sysMsg, voiceEpoch: () => voiceSessionEpoch });
 const { selectAudioOutput, applyOutputSettings, remoteChain, reconcileSpatialVoice, attachRemoteAudio, readRemoteAudioLevel, resolveTrackUsers, shareAudio, applyDucking, applyShareAudio, attachShareAudio, detachRemoteAudio } = remoteAudio;
+startVoiceDiagnostics({
+    state,
+    output: () => ({ state: remoteChain.ctx?.state || "unavailable", latencyMS: Number.isFinite(remoteChain.ctx?.outputLatency) ? remoteChain.ctx.outputLatency * 1000 : null }),
+    bridge: (tabID, report) => window.go?.main?.App.ReportVoiceDiagnosticsForTab?.(tabID, report),
+});
 
 
 const { expandMyBranch, renderTree, refreshEchoChannel, setChannelExpanded, initials, clientName } = createChannelTree({ P, $, syncTrayVoice, state, toast, fetchAvatar, renderClientCard, setDetailsOpen, renderDirectTargets });

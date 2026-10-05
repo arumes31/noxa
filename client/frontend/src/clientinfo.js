@@ -14,6 +14,7 @@ import { memberAudioControls } from "./member-audio-ui.js";
 import { openMemberMove } from "./member-move.js";
 import { escapeHTML } from "./markdown.js";
 import { sessionUserID } from "./session-identity.js";
+import { renderReceiverDiagnostics } from "./voice-diagnostics-ui.js";
 
 const V = () => window.__noxa;
 
@@ -458,6 +459,7 @@ function openClientInfo(client) {
             </div>
             <div class="ci-grid">
                 <div class="ci-label">${escapeTranslation(t("desktop.client.name"))}</div><div class="ci-val" data-f="nick"></div>
+                <div class="ci-label">${escapeTranslation(t("diagnostics.version"))}</div><div class="ci-val" data-f="version"></div>
                 <div class="ci-label">${escapeTranslation(t("desktop.unique.id"))}</div>
                 <div class="ci-val">
                     <span class="mono" data-f="uid"></span>
@@ -470,7 +472,7 @@ function openClientInfo(client) {
                 <div class="ci-label">${escapeTranslation(t("desktop.transfer.in"))}</div><div class="ci-val" data-f="bin"></div>
                 <div class="ci-label">${escapeTranslation(t("desktop.transfer.out"))}</div><div class="ci-val" data-f="bout"></div>
             </div>
-            <div class="ci-voice-head">${escapeTranslation(t("desktop.voice"))}</div>
+            <div class="ci-voice-head">${escapeTranslation(t(client.client_id === V().state.myClientID ? "diagnostics.sentHere" : "diagnostics.receivedHere"))}</div>
             <div class="ci-grid">
                 <div class="ci-label">${escapeTranslation(t("desktop.packet.loss"))}</div><div class="ci-val" data-f="loss"></div>
                 <div class="ci-label">${escapeTranslation(t("desktop.jitter"))}</div><div class="ci-val" data-f="jitter"></div>
@@ -520,18 +522,23 @@ function openClientInfo(client) {
         if (cls) el.className = "ci-val " + cls;
     };
 
+    let refreshSequence = 0;
     const refresh = async () => {
         if (!isCurrentServerDialog(overlay)) return;
+        const sequence = ++refreshSequence;
         let info;
         try {
             info = await window.go.main.App.GetClientInfoForTab(tabID, client.client_id);
         } catch {
+            if (sequence === refreshSequence) renderReceiverDiagnostics(overlay, null);
             return; // transient; try again next tick
         }
-        if (!isCurrentServerDialog(overlay)) return;
+        if (!isCurrentServerDialog(overlay) || sequence !== refreshSequence) return;
         setVal("nick", info.nickname);
+        setVal("version", info.client_version || t("desktop.unknown"));
+        renderReceiverDiagnostics(overlay, info.voice_diagnostics, V().state.clients);
         overlay.querySelector('[data-f="uid"]').textContent = info.unique_id;
-        setVal("conn", humanDuration(Date.now() / 1000 - info.connected_at));
+        setVal("conn", info.connected_at > 0 ? humanDuration(Date.now() / 1000 - info.connected_at) : t("desktop.unknown"));
         setVal("idle", humanDuration(info.idle_seconds));
         setVal("ping", info.ping_ms >= 0 ? info.ping_ms + " ms" : t("desktop.unknown"));
         if (info.ip) {
