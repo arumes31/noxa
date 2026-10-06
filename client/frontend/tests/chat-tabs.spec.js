@@ -284,3 +284,31 @@ test("incoming updates keep the open All chats menu announced as expanded", asyn
     await expect(page.getByRole("button", { name: /^All chats/ })).toBeFocused();
     await expect(page.getByRole("button", { name: /^All chats/ })).toHaveAttribute("aria-expanded", "false");
 });
+
+for (const operation of ["scope change", "disposal"]) {
+    test(`tab ${operation} leaves an unrelated message context menu open`, async ({ page }) => {
+        await mount(page);
+        await page.evaluate(async () => {
+            const { mountContextMenu } = await import("/src/context-menu.js");
+            const menu = document.createElement("div");
+            menu.className = "ctx-menu";
+            const react = document.createElement("button");
+            react.textContent = "React to message";
+            react.onclick = () => { window.__messageReacted = true; };
+            menu.append(react);
+            mountContextMenu(menu, { x: 20, y: 120 });
+        });
+        await expect(page.getByRole("menuitem", { name: "React to message" })).toBeFocused();
+        await page.evaluate(operation => {
+            if (operation === "disposal") window.__tabsFixture.dispose();
+            else {
+                window.__tabsFixture.state.scope = "server-b/identity-b/session-b";
+                window.__tabsFixture.render();
+            }
+        }, operation);
+        await expect(page.getByRole("menuitem", { name: "React to message" })).toBeVisible();
+        await expect(page.getByRole("menuitem", { name: "React to message" })).toBeFocused();
+        await page.keyboard.press("Enter");
+        expect(await page.evaluate(() => window.__messageReacted)).toBe(true);
+    });
+}

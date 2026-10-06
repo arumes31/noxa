@@ -100,7 +100,7 @@ export function createChatTabs(root, { onLayoutChange, onRefresh } = {}) {
         const wasMore = document.activeElement === more;
         const oldIndex = ordered().findIndex(item => item.key === previous);
         const scroll = !changedScope && list ? list.scrollLeft : 0;
-        if (changedScope) { closeContextMenu(menu); drag = null; activeKey = null; }
+        if (changedScope) { if (menu) closeContextMenu(menu); drag = null; activeKey = null; }
         // Replacing the gesture's source node cancels the drag as well.
         drag = null;
         scope = options.scope; ready = options.ready;
@@ -189,5 +189,5 @@ export function createChatTabs(root, { onLayoutChange, onRefresh } = {}) {
         activeKey = nextActive;
         onRefresh?.();
     }
-    return { render, dispose() { closeContextMenu(menu); drag = null; items = []; root.replaceChildren(); } };
+    return { render, dispose() { if (menu) closeContextMenu(menu); drag = null; items = []; root.replaceChildren(); } };
 }
