@@ -215,7 +215,9 @@ test("ordinary stream viewers can inspect the sender, server and receiver path",
             window.__streams.diagnosticCalls++;
             return { publisher_id: publisher, slot, generation, session,
                 sender_report: { age_ms: 1000, stale: false, rows: [{ ssrc: 42, slot, generation, sample_ms: 5000,
-                    capture_fps: 60, encoded_fps: 12, sent_fps: 12, reported_fps: 60 }] },
+                    capture_fps: 60, encoded_fps: 12, sent_fps: 12, reported_fps: 60,
+                    available_outgoing_bitrate_bps: 12000000, transport_rtt_ms: 40, remote_rtt_ms: 80, remote_fraction_lost: 0.02,
+                    encoding_max_bitrate_bps: 50000000, encoding_active: true, bandwidth_limited_ms: 2000, cpu_limited_ms: 0 }] },
                 layers: [{ ssrc: 42, rid: "f", ingress: stage }], forwarding: { source_ssrc: 42, stage } };
         };
     });
@@ -226,6 +228,10 @@ test("ordinary stream viewers can inspect the sender, server and receiver path",
     await expect(page.locator('[data-stage="capture"]')).toHaveText('60.0 fps');
     await expect(page.locator('[data-stage="encoded"]')).toHaveText('12.0 fps');
     await expect(page.locator('[data-stage="ingress"]')).toHaveText('12.0 fps');
+    for (const [key, value] of [["transportBudget", "12.00 Mbit/s"], ["transportRTT", "40.0 ms"], ["remoteRTT", "80.0 ms"],
+        ["remoteLoss", "2.0%"], ["encodingCap", "50.00 Mbit/s"], ["encodingActive", "yes"], ["bandwidthLimited", "2000.0 ms"], ["cpuLimited", "0.0 ms"]]) {
+        await expect(page.locator(`[data-stage="${key}"]`)).toHaveText(value);
+    }
     await page.setViewportSize({ width: 360, height: 729 });
     expect(await page.locator('.vtile-diagnostics-body').evaluate(el => el.scrollWidth <= el.clientWidth + 1)).toBe(true);
     await page.evaluate(async () => { (await import('/src/i18n.js')).setLanguage('de'); window.dispatchEvent(new Event('noxa-language-changed')); });

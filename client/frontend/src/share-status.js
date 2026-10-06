@@ -2,7 +2,7 @@ import { t } from "./i18n.js";
 import { mediaScopeIsCurrent } from "./media-controls.js";
 import { copyToClipboard } from "./clipboard.js";
 import { formatBitrate } from "./connection-stats.js";
-import { collectVideoSenders, primaryVideoSender, videoSenderFrameRateReduced } from "./video-sender-stats.js";
+import { collectVideoSenders, primaryVideoSender, videoSenderEncodingSettings, videoSenderFrameRateReduced } from "./video-sender-stats.js";
 import { publicationUploadActive } from "./stream-publication.js";
 import "./share-status.css";
 
@@ -103,6 +103,13 @@ function renderDetails(s) {
         ["share.encodedFPS", display(sample?.encoded_fps, " fps")], ["share.sentFPS", display(sample?.sent_fps, " fps")],
         ["share.reportedFPS", display(sample?.reported_fps, " fps")], ["share.sendBitrate", formatBitrate(sample?.bitrate_bps)],
         ["share.targetBitrate", formatBitrate(sample?.target_bitrate_bps)],
+        ["share.transportBudget", formatBitrate(sample?.available_outgoing_bitrate_bps)],
+        ["share.transportRTT", display(sample?.transport_rtt_ms, " ms")],
+        ["share.remoteRTT", display(sample?.remote_rtt_ms, " ms")],
+        ["share.remoteLoss", display(Number.isFinite(sample?.remote_fraction_lost) ? sample.remote_fraction_lost * 100 : null, "%")],
+        ["share.encodingCap", formatBitrate(sample?.encoding_max_bitrate_bps)],
+        ["share.encodingActive", t(sample?.encoding_active === true ? "streams.reportedYes" : sample?.encoding_active === false ? "streams.reportedNo" : "streams.notReported")],
+        ["share.bandwidthLimited", display(sample?.bandwidth_limited_ms, " ms")], ["share.cpuLimited", display(sample?.cpu_limited_ms, " ms")],
         ["share.retryBitrate", `${formatBitrate(sample?.retransmit_bitrate_bps)} · ${display(sample?.retransmit_percent, "%")}`],
         ["share.keyframes", display(sample?.key_frames_delta)], ["share.frameBytes", display(sample?.frame_bytes, " B")],
         ["share.encodeTime", display(sample?.encode_ms, " ms")], ["share.sendDelay", display(sample?.send_delay_ms, " ms")],
@@ -126,7 +133,7 @@ async function poll(s) {
     try {
         const sender = window.__noxa.state.shareVideoTransceiver?.sender;
         const source = { slot: "screen", generation: s.generation, trackID: s.track.id, senderScoped: true,
-            requestedFPS: s.preset.fps, settingsFPS: s.track.getSettings().frameRate };
+            requestedFPS: s.preset.fps, settingsFPS: s.track.getSettings().frameRate, encodings: videoSenderEncodingSettings(sender) };
         let deadline;
         const report = sender?.getStats ? await Promise.race([sender.getStats(), new Promise((_, reject) => {
             deadline = setTimeout(() => reject(new Error("stats timeout")), 10000);

@@ -56,3 +56,44 @@ func TestVideoSenderTelemetryIsBoundedAndAllowlisted(t *testing.T) {
 		t.Fatalf("generation or missing measurement changed: %s, %v", raw, err)
 	}
 }
+
+func TestVideoSenderFeedbackDiagnosticsRemainOptionalAndBounded(t *testing.T) {
+	base := `{"ssrc":123,"slot":"screen","generation":"42","sample_ms":5000,`
+	for _, fields := range []string{
+		`"available_outgoing_bitrate_bps":1000000001`, `"available_outgoing_bitrate_bps":-1`,
+		`"transport_rtt_ms":60001`, `"remote_rtt_ms":-1`, `"remote_fraction_lost":1.01`,
+		`"encoding_max_bitrate_bps":1000000001`, `"encoding_active":"yes"`,
+		`"bandwidth_limited_ms":5001`, `"cpu_limited_ms":-1`,
+		`"bandwidth_limited_ms":3000,"cpu_limited_ms":3000`,
+		`"sample_ms":null,"cpu_limited_ms":1`,
+	} {
+		var value VideoSenderDiagnostics
+		if err := json.Unmarshal([]byte(base+fields+`}`), &value); err == nil && value.Valid() {
+			t.Fatalf("invalid sender feedback accepted: %s", fields)
+		}
+	}
+	for _, fields := range []string{
+		`"available_outgoing_bitrate_bps":null,"encoding_active":null`,
+		`"available_outgoing_bitrate_bps":8000000,"transport_rtt_ms":40,"remote_rtt_ms":80,"remote_fraction_lost":0.02,"encoding_max_bitrate_bps":50000000,"encoding_active":true,"bandwidth_limited_ms":2000,"cpu_limited_ms":0`,
+		`"encoding_active":false,"remote_fraction_lost":0,"remote_rtt_ms":0`,
+	} {
+		var value VideoSenderDiagnostics
+		if err := json.Unmarshal([]byte(base+fields+`}`), &value); err != nil || !value.Valid() {
+			t.Fatalf("valid optional sender feedback rejected: %s: %v", fields, err)
+		}
+		raw, err := json.Marshal(value)
+		var roundTrip map[string]any
+		if err != nil || json.Unmarshal(raw, &roundTrip) != nil {
+			t.Fatal("feedback round trip failed", err)
+		}
+		var input map[string]any
+		if err := json.Unmarshal([]byte(base+fields+`}`), &input); err != nil {
+			t.Fatal(err)
+		}
+		for key, expected := range input {
+			if roundTrip[key] != expected {
+				t.Fatalf("%s changed from %v to %v", key, expected, roundTrip[key])
+			}
+		}
+	}
+}

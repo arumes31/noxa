@@ -2,41 +2,51 @@ package netproto
 
 const CapabilityStreamDiagnostics = "stream_diagnostics_v1"
 
-// VideoSenderDiagnostics reports one current publication encoding. All rates
-// are interval measurements; nil means unavailable or an initial/reset sample.
+// VideoSenderDiagnostics reports one current publication encoding. Measured
+// rates and limitation durations use SampleMS; encoder targets/settings and
+// transport estimates are snapshots. Nil means unavailable or an initial/reset
+// sample. Transport capacity is shared, not a per-encoding bitrate allowance.
 type VideoSenderDiagnostics struct {
-	SSRC                  uint32   `json:"ssrc"`
-	RID                   string   `json:"rid"`
-	Slot                  string   `json:"slot"`
-	Generation            uint64   `json:"generation,string"`
-	SampleMS              *float64 `json:"sample_ms"`
-	RequestedFPS          *float64 `json:"requested_fps"`
-	SettingsFPS           *float64 `json:"settings_fps"`
-	CaptureFPS            *float64 `json:"capture_fps"`
-	EncodedFPS            *float64 `json:"encoded_fps"`
-	SentFPS               *float64 `json:"sent_fps"`
-	ReportedFPS           *float64 `json:"reported_fps"`
-	Width                 *float64 `json:"width"`
-	Height                *float64 `json:"height"`
-	BitrateBPS            *float64 `json:"bitrate_bps"`
-	TargetBitrateBPS      *float64 `json:"target_bitrate_bps"`
-	RetransmitBitrateBPS  *float64 `json:"retransmit_bitrate_bps"`
-	RetransmitPercent     *float64 `json:"retransmit_percent"`
-	FrameBytes            *float64 `json:"frame_bytes"`
-	EncodeMS              *float64 `json:"encode_ms"`
-	SendDelayMS           *float64 `json:"send_delay_ms"`
-	QualityReason         string   `json:"quality_reason"`
-	Codec                 string   `json:"codec"`
-	EncoderImplementation string   `json:"encoder_implementation"`
-	PowerEfficient        *bool    `json:"power_efficient"`
-	FramesEncoded         *float64 `json:"frames_encoded"`
-	FramesSent            *float64 `json:"frames_sent"`
-	KeyFrames             *float64 `json:"key_frames"`
-	KeyFramesDelta        *float64 `json:"key_frames_delta"`
-	PacketsSent           *float64 `json:"packets_sent"`
-	BytesSent             *float64 `json:"bytes_sent"`
-	RetransmittedPackets  *float64 `json:"retransmitted_packets"`
-	RetransmittedBytes    *float64 `json:"retransmitted_bytes"`
+	SSRC                        uint32   `json:"ssrc"`
+	RID                         string   `json:"rid"`
+	Slot                        string   `json:"slot"`
+	Generation                  uint64   `json:"generation,string"`
+	SampleMS                    *float64 `json:"sample_ms"`
+	RequestedFPS                *float64 `json:"requested_fps"`
+	SettingsFPS                 *float64 `json:"settings_fps"`
+	CaptureFPS                  *float64 `json:"capture_fps"`
+	EncodedFPS                  *float64 `json:"encoded_fps"`
+	SentFPS                     *float64 `json:"sent_fps"`
+	ReportedFPS                 *float64 `json:"reported_fps"`
+	Width                       *float64 `json:"width"`
+	Height                      *float64 `json:"height"`
+	BitrateBPS                  *float64 `json:"bitrate_bps"`
+	TargetBitrateBPS            *float64 `json:"target_bitrate_bps"`
+	AvailableOutgoingBitrateBPS *float64 `json:"available_outgoing_bitrate_bps"`
+	TransportRTTMS              *float64 `json:"transport_rtt_ms"`
+	RemoteRTTMS                 *float64 `json:"remote_rtt_ms"`
+	RemoteFractionLost          *float64 `json:"remote_fraction_lost"`
+	EncodingMaxBitrateBPS       *float64 `json:"encoding_max_bitrate_bps"`
+	EncodingActive              *bool    `json:"encoding_active"`
+	BandwidthLimitedMS          *float64 `json:"bandwidth_limited_ms"`
+	CPULimitedMS                *float64 `json:"cpu_limited_ms"`
+	RetransmitBitrateBPS        *float64 `json:"retransmit_bitrate_bps"`
+	RetransmitPercent           *float64 `json:"retransmit_percent"`
+	FrameBytes                  *float64 `json:"frame_bytes"`
+	EncodeMS                    *float64 `json:"encode_ms"`
+	SendDelayMS                 *float64 `json:"send_delay_ms"`
+	QualityReason               string   `json:"quality_reason"`
+	Codec                       string   `json:"codec"`
+	EncoderImplementation       string   `json:"encoder_implementation"`
+	PowerEfficient              *bool    `json:"power_efficient"`
+	FramesEncoded               *float64 `json:"frames_encoded"`
+	FramesSent                  *float64 `json:"frames_sent"`
+	KeyFrames                   *float64 `json:"key_frames"`
+	KeyFramesDelta              *float64 `json:"key_frames_delta"`
+	PacketsSent                 *float64 `json:"packets_sent"`
+	BytesSent                   *float64 `json:"bytes_sent"`
+	RetransmittedPackets        *float64 `json:"retransmitted_packets"`
+	RetransmittedBytes          *float64 `json:"retransmitted_bytes"`
 }
 
 func (r VideoSenderDiagnostics) Valid() bool {
@@ -68,7 +78,7 @@ func (r VideoSenderDiagnostics) Valid() bool {
 			return false
 		}
 	}
-	for _, n := range []*float64{r.SampleMS, r.EncodeMS, r.SendDelayMS} {
+	for _, n := range []*float64{r.SampleMS, r.EncodeMS, r.SendDelayMS, r.TransportRTTMS, r.RemoteRTTMS} {
 		if !diagnosticNumber(n, 0, 60000) {
 			return false
 		}
@@ -83,7 +93,7 @@ func (r VideoSenderDiagnostics) Valid() bool {
 			return false
 		}
 	}
-	for _, n := range []*float64{r.BitrateBPS, r.TargetBitrateBPS, r.RetransmitBitrateBPS, r.FrameBytes} {
+	for _, n := range []*float64{r.BitrateBPS, r.TargetBitrateBPS, r.AvailableOutgoingBitrateBPS, r.EncodingMaxBitrateBPS, r.RetransmitBitrateBPS, r.FrameBytes} {
 		if !diagnosticNumber(n, 0, 1000000000) {
 			return false
 		}
@@ -97,7 +107,19 @@ func (r VideoSenderDiagnostics) Valid() bool {
 	if r.RetransmittedPackets != nil && r.PacketsSent != nil && *r.RetransmittedPackets > *r.PacketsSent {
 		return false
 	}
-	return diagnosticNumber(r.RetransmitPercent, 0, 100)
+	var limitedMS float64
+	for _, n := range []*float64{r.BandwidthLimitedMS, r.CPULimitedMS} {
+		if n != nil {
+			if r.SampleMS == nil || *r.SampleMS <= 0 || !diagnosticNumber(n, 0, *r.SampleMS) {
+				return false
+			}
+			limitedMS += *n
+		}
+	}
+	if r.SampleMS != nil && limitedMS > *r.SampleMS {
+		return false
+	}
+	return diagnosticNumber(r.RetransmitPercent, 0, 100) && diagnosticNumber(r.RemoteFractionLost, 0, 1)
 }
 
 type VideoSenderReport struct {

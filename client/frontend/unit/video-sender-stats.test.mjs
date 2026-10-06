@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { collectVideoSenders, primaryVideoSender, rememberVideoSenderProfile, videoSenderSources, videoSenderFrameRateReduced } from "../src/video-sender-stats.js";
+import { collectVideoSenders, primaryVideoSender, rememberVideoSenderProfile, videoSenderEncodingSettings, videoSenderSources, videoSenderFrameRateReduced } from "../src/video-sender-stats.js";
 
 const context = { slot: "screen", generation: "42", trackID: "private-track", mid: "2", requestedFPS: 60, settingsFPS: 60 };
 const row = changes => ({ id: "out", type: "outbound-rtp", kind: "video", ssrc: 22, rid: "f", mid: "2", mediaSourceId: "source", codecId: "codec",
@@ -118,7 +118,70 @@ test("runtime source metadata is restricted to current acknowledged capture and 
     const state = { pc, activeTabID: "a", serverGeneration: 3, sessionGeneration: 4 };
     const entry = { generation: "42", publication: { pc, track, slot: "screen", generation: "42", scope: { tabID: "a", generation: 3, session: 4 } } };
     assert.deepEqual(videoSenderSources(state, [entry]), [{ ...context, settingsFPS: 30 }]);
+    pc.getTransceivers = () => [{ mid: "2", sender: { track, getParameters: () => ({ encodings: [{ rid: "f", active: true, maxBitrate: 50000000 }] }) } }];
+    assert.deepEqual(videoSenderSources(state, [entry])[0].encodings, [{ rid: "f", active: true, maxBitrate: 50000000 }]);
     for (const other of [{ ...state, activeTabID: "b" }, { ...state, pc: {} }, { ...state, sessionGeneration: 5 }]) assert.deepEqual(videoSenderSources(other, [entry]), []);
     track.readyState = "ended"; assert.deepEqual(videoSenderSources(state, [entry]), []);
     track.readyState = "live"; entry.publication.generation = "43"; assert.deepEqual(videoSenderSources(state, [entry]), []);
+});
+
+const feedbackReport = (changes = {}) => {
+    const result = report({ ...after.get("out"), transportId: "transport", remoteId: "remote", qualityLimitationDurations: { bandwidth: 14, cpu: 2 }, ...changes });
+    result.set("transport", { id: "transport", type: "transport", selectedCandidatePairId: "pair" });
+    result.set("pair", { id: "pair", type: "candidate-pair", timestamp: 6000, availableOutgoingBitrate: 8e6, currentRoundTripTime: 0.04, localCandidateId: "private-address" });
+    result.set("remote", { id: "remote", type: "remote-inbound-rtp", kind: "video", localId: "out", ssrc: 22, timestamp: 5800, roundTripTime: 0.08, fractionLost: 0.02 });
+    return result;
+};
+const feedbackBefore = report({ ...before.get("out"), qualityLimitationDurations: { bandwidth: 12, cpu: 2 } });
+
+test("sender diagnostics distinguish shared transport budget, remote feedback and applied encoding cap", () => {
+    const source = { ...context, encodings: [{ rid: "f", active: true, maxBitrate: 50e6 }, { rid: "q", active: false, maxBitrate: 1e6 }] };
+    const result = collect(feedbackReport(), feedbackBefore, source, source);
+    assert.equal(result.available_outgoing_bitrate_bps, 8e6); assert.equal(result.transport_rtt_ms, 40);
+    assert.equal(result.remote_rtt_ms, 80); assert.equal(result.remote_fraction_lost, 0.02);
+    assert.equal(result.encoding_max_bitrate_bps, 50e6); assert.equal(result.encoding_active, true);
+    assert.equal(result.bandwidth_limited_ms, 2000); assert.equal(result.cpu_limited_ms, 0);
+    assert.doesNotMatch(JSON.stringify(result), /private-address|localCandidateId|remoteId|selectedCandidatePairId/);
+});
+
+test("feedback diagnostics reject unrelated, stale, future and invalid browser measurements", () => {
+    for (const change of [{ localId: "other" }, { ssrc: 23 }, { type: "inbound-rtp" }, { timestamp: 500 }, { timestamp: 6001 }, { roundTripTime: Infinity, fractionLost: -1 }, { roundTripTime: null, fractionLost: null }]) {
+        const stats = feedbackReport(); Object.assign(stats.get("remote"), change);
+        const result = collect(stats, feedbackBefore);
+        assert.equal(result.remote_rtt_ms, null); assert.equal(result.remote_fraction_lost, null);
+    }
+    for (const change of [{ timestamp: -10000 }, { timestamp: 6001 }, { type: "local-candidate" }, { availableOutgoingBitrate: Infinity, currentRoundTripTime: -1 }, { availableOutgoingBitrate: null, currentRoundTripTime: null }]) {
+        const stats = feedbackReport(); Object.assign(stats.get("pair"), change);
+        const result = collect(stats, feedbackBefore);
+        assert.equal(result.available_outgoing_bitrate_bps, null); assert.equal(result.transport_rtt_ms, null);
+    }
+    const wrongTransport = feedbackReport({ transportId: "unknown" });
+    assert.equal(collect(wrongTransport, feedbackBefore).available_outgoing_bitrate_bps, null);
+    assert.equal(collect(feedbackReport({ remoteId: "unknown" }), feedbackBefore).remote_rtt_ms, null);
+});
+
+test("actual sender settings are copied narrowly and preserve explicit false/zero", () => {
+    const parameters = { encodings: [{ active: false, maxBitrate: 0, ssrc: 123, privateId: "secret" }] };
+    const copied = videoSenderEncodingSettings({ getParameters: () => parameters });
+    parameters.encodings[0].active = true;
+    assert.deepEqual(copied, [{ rid: "", active: false, maxBitrate: 0 }]);
+    const result = collect(report({ ...after.get("out"), rid: undefined }), before, { ...context, encodings: copied });
+    assert.equal(result.encoding_active, false); assert.equal(result.encoding_max_bitrate_bps, 0);
+    assert.equal(videoSenderEncodingSettings({ getParameters: () => { throw new Error("closed"); } }), undefined);
+    assert.equal(videoSenderEncodingSettings({}), undefined);
+});
+
+test("new, reset and invalid limitation counters stay unknown rather than inventing duration", () => {
+    for (const [stats, old, source, oldSource] of [
+        [feedbackReport(), null, context, context],
+        [feedbackReport(), feedbackBefore, { ...context, generation: "43" }, context],
+        [feedbackReport({ qualityLimitationDurations: { bandwidth: 11, cpu: 1 } }), feedbackBefore, context, context],
+        [feedbackReport({ qualityLimitationDurations: { bandwidth: 20, cpu: Infinity } }), feedbackBefore, context, context],
+    ]) {
+        const result = collect(stats, old, source, oldSource);
+        assert.equal(result.bandwidth_limited_ms, null); assert.equal(result.cpu_limited_ms, null);
+    }
+    const missing = collect();
+    for (const key of ["available_outgoing_bitrate_bps", "transport_rtt_ms", "remote_rtt_ms", "remote_fraction_lost", "encoding_active", "encoding_max_bitrate_bps", "bandwidth_limited_ms", "cpu_limited_ms"]) assert.equal(missing[key], null, key);
+    assert.equal(collect(feedbackReport(), null).remote_rtt_ms, null, "old receiver report must not be relabeled on publication start");
 });
