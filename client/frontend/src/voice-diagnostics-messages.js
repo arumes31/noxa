@@ -18,6 +18,11 @@ export const voiceDiagnosticsEnglish = {
     "diagnostics.noTracks": "No incoming audio tracks reported.",
     "diagnostics.lossJitter": "Loss / jitter",
     "diagnostics.bufferConcealment": "Buffer / concealment",
+    "diagnostics.interval": "Recent measurement",
+    "diagnostics.bufferDelays": "Buffer / target / minimum",
+    "diagnostics.concealmentParts": "Concealment: total / non-silent / silent",
+    "diagnostics.timeStretch": "Playback: accelerated / slowed",
+    "diagnostics.bufferMeaning": "Buffer, target and minimum are interval averages, not end-to-end latency. Silent concealment does not establish lost speech; playback adaptation removes or inserts samples to adjust timing.",
 };
 
 export const voiceDiagnosticsGerman = {
@@ -40,4 +45,9 @@ export const voiceDiagnosticsGerman = {
     "diagnostics.noTracks": "Keine eingehenden Audiotracks gemeldet.",
     "diagnostics.lossJitter": "Verlust / Jitter",
     "diagnostics.bufferConcealment": "Puffer / Fehlerüberbrückung",
+    "diagnostics.interval": "Aktuelles Messintervall",
+    "diagnostics.bufferDelays": "Puffer / Ziel / Minimum",
+    "diagnostics.concealmentParts": "Überbrückung: gesamt / nicht still / still",
+    "diagnostics.timeStretch": "Wiedergabe: beschleunigt / verlangsamt",
+    "diagnostics.bufferMeaning": "Puffer, Ziel und Minimum sind Intervallmittelwerte, nicht die Gesamtlatenz. Stilleüberbrückung belegt keine verlorene Sprache; die Wiedergabe entfernt oder ergänzt Samples zur Zeitanpassung.",
 };

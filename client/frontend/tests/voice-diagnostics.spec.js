@@ -180,3 +180,59 @@ test("administrator receiver diagnostics fit a narrow German client window", asy
     expect(layout.right).toBeLessThanOrEqual(480);
     await dialog.screenshot({ path: testInfo.outputPath("administrator-receiver-diagnostics-de-narrow.png") });
 });
+
+test.describe("recent adaptive playback measurements", () => {
+
+test.beforeEach(async ({ page }) => {
+    await page.route("**/voice-diagnostics-test", route => route.fulfill({ contentType: "text/html", body: `<!doctype html><html lang="en"><head><link rel="stylesheet" href="/src/style.css"></head><body><div class="dlg-overlay"><div class="dlg client-info"><div class="dlg-buttons"><button>Close</button></div></div></div></body></html>` }));
+    await page.goto("/voice-diagnostics-test");
+});
+
+const render = async (page, track) => page.evaluate(async track => {
+    const { setLanguage } = await import("/src/i18n.js");
+    const { renderReceiverDiagnostics } = await import("/src/voice-diagnostics-ui.js");
+    setLanguage("en");
+    renderReceiverDiagnostics(document.querySelector(".dlg-overlay"), {
+        nickname: "Receiver", client_report: { age_ms: 0, stale: false, report: {
+            volume: 100, voice_limiter: true, gain_normalize: false,
+            output_state: "running", output_latency_ms: 20, tracks: [track],
+        } },
+    }, [{ client_id: "publisher", nickname: "Alice <admin>" }]);
+}, track);
+
+test("owner diagnostics show recent delay, silence and playback adaptation separately", async ({ page }) => {
+    await render(page, { publisher_id: "publisher", sample_ms: 5000,
+        buffer_ms: 501, buffer_target_ms: 400, buffer_minimum_ms: 399,
+        loss_percent: 0, jitter_ms: 20, concealment_percent: 1.5,
+        non_silent_concealment_percent: 0.3, silent_concealment_percent: 1.2,
+        acceleration_percent: 2.1, deceleration_percent: 0,
+    });
+    await page.getByText("Reception on this member’s client · Owner / Admin", { exact: true }).click();
+    const track = page.locator(".ci-diagnostic-track");
+    await expect(track.getByText("Alice <admin>", { exact: true })).toBeVisible();
+    await expect(track.getByText("5.0 s", { exact: true })).toBeVisible();
+    await expect(track.getByText("501.0 ms / 400.0 ms / 399.0 ms", { exact: true })).toBeVisible();
+    await expect(track.getByText("1.5% / 0.3% / 1.2%", { exact: true })).toBeVisible();
+    await expect(track.getByText("2.1% / 0.0%", { exact: true })).toBeVisible();
+    await expect(page.getByText(/not end-to-end latency/)).toBeVisible();
+    await expect(track.locator("admin")).toHaveCount(0);
+});
+
+test("older clients display unknown optional measurements instead of healthy zeros", async ({ page }) => {
+    await render(page, { publisher_id: "publisher", sample_ms: 5000,
+        buffer_ms: 501, buffer_target_ms: 400, concealment_percent: 1.5,
+    });
+    await page.getByText("Reception on this member’s client · Owner / Admin", { exact: true }).click();
+    const track = page.locator(".ci-diagnostic-track");
+    await expect(track.getByText("501.0 ms / 400.0 ms / —", { exact: true })).toBeVisible();
+    await expect(track.getByText("1.5% / — / —", { exact: true })).toBeVisible();
+    await expect(track.getByText("— / —", { exact: true })).toHaveCount(2);
+    await expect(track).not.toContainText("0.0%");
+    await page.evaluate(async () => {
+        const { renderReceiverDiagnostics } = await import("/src/voice-diagnostics-ui.js");
+        renderReceiverDiagnostics(document.querySelector(".dlg-overlay"), null);
+    });
+    await expect(page.locator('[data-role="receiver-diagnostics"]')).toHaveCount(0);
+});
+
+});

@@ -43,7 +43,7 @@ func setWindowOpacity(pct int) error {
 			return fmt.Errorf("window opacity unavailable: %s: %w", name, err)
 		}
 	}
-	hwnd := findMainWindow()
+	hwnd := findOpacityWindow()
 	if hwnd == 0 {
 		return fmt.Errorf("no window yet")
 	}

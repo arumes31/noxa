@@ -2,7 +2,7 @@
 // raw RTCStats, device identifiers, addresses and media content stay local.
 const number = (value, min = 0, max = Number.MAX_SAFE_INTEGER) => Number.isFinite(value) && value >= min && value <= max ? value : null;
 const milliseconds = value => Number.isFinite(value) ? number(value * 1000, 0, 60000) : null;
-const delta = (now, before, field) => Number.isFinite(now?.[field]) && Number.isFinite(before?.[field]) && now[field] >= before[field] ? now[field] - before[field] : null;
+const delta = (now, before, field, minimum = 0) => number(now?.[field], minimum) !== null && number(before?.[field], minimum) !== null && now[field] >= before[field] ? now[field] - before[field] : null;
 const ratio = (part, total, scale = 100) => part !== null && total !== null && total > 0 ? number(part / total * scale, 0, scale === 100 ? 100 : 60000) : null;
 
 export function collectVoiceTelemetry(state, stats, previousStats, output = {}) {
@@ -24,18 +24,32 @@ export function collectVoiceTelemetry(state, stats, previousStats, output = {}) 
         const elapsed = delta(stat, previous, "timestamp");
         const sample = elapsed > 0 && elapsed <= 60000 ? elapsed : null;
         if (sample === null) previous = null;
-        const received = delta(stat, previous, "packetsReceived"), lost = delta(stat, previous, "packetsLost");
+        const received = delta(stat, previous, "packetsReceived"), lost = delta(stat, previous, "packetsLost", -Number.MAX_SAFE_INTEGER);
         const emitted = delta(stat, previous, "jitterBufferEmittedCount");
+        const samples = delta(stat, previous, "totalSamplesReceived");
+        const concealed = delta(stat, previous, "concealedSamples"), silent = delta(stat, previous, "silentConcealedSamples");
+        // Silent concealment is a subset, not additional lost speech. A reset
+        // or inconsistent subset cannot establish a recent non-silent rate.
+        const validSilent = number(stat.silentConcealedSamples) !== null && number(stat.concealedSamples) !== null && stat.silentConcealedSamples <= stat.concealedSamples;
+        const validPreviousSilent = number(previous?.silentConcealedSamples) !== null && number(previous?.concealedSamples) !== null && previous.silentConcealedSamples <= previous.concealedSamples;
+        const splitConcealment = validSilent && validPreviousSilent && concealed !== null && silent !== null && silent <= concealed;
         tracks.push({
             track_id: trackID, publisher_id: String(publisher).slice(0, 80), codec: String(stats.get(stat.codecId)?.mimeType || "").slice(0, 40),
             sample_ms: sample,
             packets_received: number(stat.packetsReceived), packets_lost: number(stat.packetsLost, -Number.MAX_SAFE_INTEGER), bytes_received: number(stat.bytesReceived),
             total_samples: number(stat.totalSamplesReceived), concealed_samples: number(stat.concealedSamples), concealment_events: number(stat.concealmentEvents),
+            silent_concealed_samples: validSilent ? number(stat.silentConcealedSamples) : null,
+            accelerated_samples: number(stat.removedSamplesForAcceleration), decelerated_samples: number(stat.insertedSamplesForDeceleration),
             jitter_ms: milliseconds(stat.jitter), audio_level: number(stat.audioLevel, 0, 1),
             loss_percent: ratio(lost, received !== null && lost !== null ? received + lost : null),
-            concealment_percent: ratio(delta(stat, previous, "concealedSamples"), delta(stat, previous, "totalSamplesReceived")),
+            concealment_percent: ratio(concealed, samples),
+            silent_concealment_percent: splitConcealment ? ratio(silent, samples) : null,
+            non_silent_concealment_percent: splitConcealment ? ratio(concealed - silent, samples) : null,
+            acceleration_percent: ratio(delta(stat, previous, "removedSamplesForAcceleration"), samples),
+            deceleration_percent: ratio(delta(stat, previous, "insertedSamplesForDeceleration"), samples),
             buffer_ms: ratio(delta(stat, previous, "jitterBufferDelay"), emitted, 1000),
             buffer_target_ms: ratio(delta(stat, previous, "jitterBufferTargetDelay"), emitted, 1000),
+            buffer_minimum_ms: ratio(delta(stat, previous, "jitterBufferMinimumDelay"), emitted, 1000),
         });
     }
     return {

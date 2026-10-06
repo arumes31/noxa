@@ -70,6 +70,96 @@ test("loss, concealment and jitter buffers describe the recent interval instead 
     assert.equal(track.audio_level, 0.3);
 });
 
+test("silence concealment and adaptive playback describe the same recent sample interval", () => {
+    const before = previous({ silentConcealedSamples: 800, jitterBufferMinimumDelay: 20,
+        removedSamplesForAcceleration: 4000, insertedSamplesForDeceleration: 100 });
+    const now = receiver({ silentConcealedSamples: 840, jitterBufferMinimumDelay: 23,
+        removedSamplesForAcceleration: 4100, insertedSamplesForDeceleration: 120 });
+    const { tracks: [track] } = collectVoiceTelemetry(stateFixture(), snapshot(now), snapshot(before), {});
+    assert.equal(track.silent_concealed_samples, 840);
+    near(track.silent_concealment_percent, 0.4);
+    near(track.non_silent_concealment_percent, 0.1);
+    near(track.buffer_minimum_ms, 30);
+    assert.equal(track.accelerated_samples, 4100);
+    assert.equal(track.decelerated_samples, 120);
+    near(track.acceleration_percent, 1);
+    near(track.deceleration_percent, 0.2);
+});
+
+test("adaptive playback and silence fields stay unknown on missing, reset or replaced stats", () => {
+    const before = previous({ silentConcealedSamples: 800, jitterBufferMinimumDelay: 20,
+        removedSamplesForAcceleration: 4000, insertedSamplesForDeceleration: 100, ssrc: 12 });
+    const now = receiver({ silentConcealedSamples: 840, jitterBufferMinimumDelay: 23,
+        removedSamplesForAcceleration: 4100, insertedSamplesForDeceleration: 120, ssrc: 12 });
+    for (const [current, old] of [
+        [now, undefined],
+        [now, snapshot({ ...before, ssrc: 13 })],
+        [{ ...now, timestamp: before.timestamp }, snapshot(before)],
+        [{ ...now, silentConcealedSamples: 799, jitterBufferMinimumDelay: 19,
+            removedSamplesForAcceleration: 3999, insertedSamplesForDeceleration: 99 }, snapshot(before)],
+        [receiver(), snapshot(previous())],
+    ]) {
+        const { tracks: [track] } = collectVoiceTelemetry(stateFixture(), snapshot(current), old, {});
+        for (const field of ["silent_concealment_percent", "non_silent_concealment_percent", "buffer_minimum_ms",
+            "acceleration_percent", "deceleration_percent"]) assert.equal(track[field], null, field);
+    }
+});
+
+test("inconsistent silent concealment subsets cannot claim healthy speech or silence", () => {
+    for (const [concealed, silent] of [[1050, 1100], [1010, 840], [1050, NaN]]) {
+        const { tracks: [track] } = collectVoiceTelemetry(stateFixture(),
+            snapshot(receiver({ concealedSamples: concealed, silentConcealedSamples: silent })),
+            snapshot(previous({ silentConcealedSamples: 800 })), {});
+        assert.equal(track.silent_concealment_percent, null);
+        assert.equal(track.non_silent_concealment_percent, null);
+    }
+});
+
+test("nonfinite or negative adaptive counters remain unknown rather than entering a report", () => {
+    for (const value of [undefined, NaN, Infinity, -1]) {
+        const { tracks: [track] } = collectVoiceTelemetry(stateFixture(), snapshot(receiver({
+            silentConcealedSamples: value, removedSamplesForAcceleration: value,
+            insertedSamplesForDeceleration: value, jitterBufferMinimumDelay: value,
+        })), snapshot(previous()), {});
+        for (const field of ["silent_concealed_samples", "accelerated_samples", "decelerated_samples",
+            "silent_concealment_percent", "non_silent_concealment_percent", "buffer_minimum_ms", "acceleration_percent", "deceleration_percent"]) {
+            assert.equal(track[field], null, field);
+        }
+    }
+});
+
+test("malformed adaptive counter baselines cannot produce a positive interval rate", () => {
+    for (const [oldValue, value] of [[-2, -1], [Number.MAX_SAFE_INTEGER + 1, Number.MAX_SAFE_INTEGER + 3]]) {
+        const { tracks: [track] } = collectVoiceTelemetry(stateFixture(), snapshot(receiver({
+            removedSamplesForAcceleration: value, insertedSamplesForDeceleration: value, jitterBufferMinimumDelay: value,
+        })), snapshot(previous({ removedSamplesForAcceleration: oldValue,
+            insertedSamplesForDeceleration: oldValue, jitterBufferMinimumDelay: oldValue })), {});
+        for (const field of ["accelerated_samples", "decelerated_samples", "acceleration_percent", "deceleration_percent", "buffer_minimum_ms"]) {
+            assert.equal(track[field], null, field);
+        }
+    }
+});
+
+test("owner diagnostics label recent buffering and separate silence from non-silent concealment", async () => {
+    const { renderReceiverDiagnostics } = await import("../src/voice-diagnostics-ui.js");
+    const content = { innerHTML: "" };
+    const section = { querySelector: () => content };
+    const overlay = { querySelector: () => section };
+    renderReceiverDiagnostics(overlay, { nickname: "Receiver", client_report: { age_ms: 0, report: {
+        output_state: "running", tracks: [{ publisher_id: "publisher", sample_ms: 5000,
+            buffer_ms: 501, buffer_target_ms: 400, buffer_minimum_ms: 399,
+            concealment_percent: 1.5, silent_concealment_percent: 1.2, non_silent_concealment_percent: 0.3,
+            acceleration_percent: 2.1, deceleration_percent: 0,
+        }],
+    } } }, [{ client_id: "publisher", nickname: "Alice <admin>" }]);
+    assert.match(content.innerHTML, /Alice &lt;admin&gt;/);
+    assert.match(content.innerHTML, /501\.0 ms \/ 400\.0 ms \/ 399\.0 ms/);
+    assert.match(content.innerHTML, /1\.5% \/ 0\.3% \/ 1\.2%/);
+    assert.match(content.innerHTML, /2\.1% \/ 0\.0%/);
+    assert.match(content.innerHTML, /5\.0 s/);
+    assert.match(content.innerHTML, /end-to-end latency/);
+});
+
 test("first, idle, replaced and reset receiver samples do not claim healthy zero loss or concealment", () => {
     const cases = [
         [receiver(), undefined],

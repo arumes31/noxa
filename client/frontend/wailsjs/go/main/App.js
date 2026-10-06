@@ -246,6 +246,10 @@ export function ConnectGuestTab(arg1, arg2) {
   return window['go']['main']['App']['ConnectGuestTab'](arg1, arg2);
 }
 
+export function ConnectLogin(arg1) {
+  return window['go']['main']['App']['ConnectLogin'](arg1);
+}
+
 export function ConnectNamedBookmarkTabWithID(arg1, arg2, arg3, arg4, arg5, arg6) {
   return window['go']['main']['App']['ConnectNamedBookmarkTabWithID'](arg1, arg2, arg3, arg4, arg5, arg6);
 }
@@ -478,6 +482,10 @@ export function FlashWindow() {
   return window['go']['main']['App']['FlashWindow']();
 }
 
+export function ForgetLoginPasswords(arg1, arg2) {
+  return window['go']['main']['App']['ForgetLoginPasswords'](arg1, arg2);
+}
+
 export function GamingOverlayAvailable() {
   return window['go']['main']['App']['GamingOverlayAvailable']();
 }
@@ -508,6 +516,10 @@ export function GetICEServers() {
 
 export function GetICEServersForTab(arg1) {
   return window['go']['main']['App']['GetICEServersForTab'](arg1);
+}
+
+export function GetLoginPasswordStatus(arg1, arg2) {
+  return window['go']['main']['App']['GetLoginPasswordStatus'](arg1, arg2);
 }
 
 export function GetMediaLimits() {
@@ -704,6 +716,10 @@ export function RemoveRoleBanForTab(arg1, arg2) {
 
 export function RenameIdentity(arg1, arg2) {
   return window['go']['main']['App']['RenameIdentity'](arg1, arg2);
+}
+
+export function ReportVoiceDiagnosticsForTab(arg1, arg2) {
+  return window['go']['main']['App']['ReportVoiceDiagnosticsForTab'](arg1, arg2);
 }
 
 export function ResetIdentity(arg1, arg2) {

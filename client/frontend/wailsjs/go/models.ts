@@ -927,6 +927,54 @@ export namespace main {
 	        this.cancelled = source["cancelled"];
 	    }
 	}
+	export class LoginPasswordStatus {
+	    supported: boolean;
+	    available: boolean;
+	    account_saved: boolean;
+	    server_saved: boolean;
+	    error?: string;
+
+	    static createFrom(source: any = {}) {
+	        return new LoginPasswordStatus(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.supported = source["supported"];
+	        this.available = source["available"];
+	        this.account_saved = source["account_saved"];
+	        this.server_saved = source["server_saved"];
+	        this.error = source["error"];
+	    }
+	}
+	export class LoginRequest {
+	    bookmark: string;
+	    addr: string;
+	    nickname: string;
+	    display_name: string;
+	    password: string;
+	    server_password: string;
+	    remember_passwords: boolean;
+	    use_saved_account: boolean;
+	    use_saved_server: boolean;
+
+	    static createFrom(source: any = {}) {
+	        return new LoginRequest(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.bookmark = source["bookmark"];
+	        this.addr = source["addr"];
+	        this.nickname = source["nickname"];
+	        this.display_name = source["display_name"];
+	        this.password = source["password"];
+	        this.server_password = source["server_password"];
+	        this.remember_passwords = source["remember_passwords"];
+	        this.use_saved_account = source["use_saved_account"];
+	        this.use_saved_server = source["use_saved_server"];
+	    }
+	}
 	export class NotifyChannels {
 	    toast: boolean;
 	    sound: boolean;
@@ -992,6 +1040,7 @@ export namespace main {
 	export class RecentServer {
 	    addr: string;
 	    nickname: string;
+	    display_name?: string;
 	    last_used: number;
 
 	    static createFrom(source: any = {}) {
@@ -1002,6 +1051,7 @@ export namespace main {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.addr = source["addr"];
 	        this.nickname = source["nickname"];
+	        this.display_name = source["display_name"];
 	        this.last_used = source["last_used"];
 	    }
 	}
@@ -2001,7 +2051,262 @@ export namespace netproto {
 		    return a;
 		}
 	}
+	export class VoiceServerTrack {
+	    ssrc: number;
+	    publisher_id: string;
+	    slot: string;
+	    received_at: number;
+	    age_ms: number;
+	    stale: boolean;
+	    packets_lost: number;
+	    fraction_lost: number;
+	    jitter_ms: number;
+
+	    static createFrom(source: any = {}) {
+	        return new VoiceServerTrack(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.ssrc = source["ssrc"];
+	        this.publisher_id = source["publisher_id"];
+	        this.slot = source["slot"];
+	        this.received_at = source["received_at"];
+	        this.age_ms = source["age_ms"];
+	        this.stale = source["stale"];
+	        this.packets_lost = source["packets_lost"];
+	        this.fraction_lost = source["fraction_lost"];
+	        this.jitter_ms = source["jitter_ms"];
+	    }
+	}
+	export class VoiceTransportDiagnostics {
+	    connection_state: string;
+	    receiver_reports: VoiceServerTrack[];
+
+	    static createFrom(source: any = {}) {
+	        return new VoiceTransportDiagnostics(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.connection_state = source["connection_state"];
+	        this.receiver_reports = this.convertValues(source["receiver_reports"], VoiceServerTrack);
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class VoiceReceiverDiagnostics {
+	    track_id: string;
+	    publisher_id: string;
+	    codec: string;
+	    sample_ms?: number;
+	    packets_received?: number;
+	    packets_lost?: number;
+	    bytes_received?: number;
+	    total_samples?: number;
+	    concealed_samples?: number;
+	    concealment_events?: number;
+	    silent_concealed_samples?: number;
+	    accelerated_samples?: number;
+	    decelerated_samples?: number;
+	    jitter_ms?: number;
+	    loss_percent?: number;
+	    concealment_percent?: number;
+	    silent_concealment_percent?: number;
+	    non_silent_concealment_percent?: number;
+	    acceleration_percent?: number;
+	    deceleration_percent?: number;
+	    buffer_ms?: number;
+	    buffer_target_ms?: number;
+	    buffer_minimum_ms?: number;
+	    audio_level?: number;
+
+	    static createFrom(source: any = {}) {
+	        return new VoiceReceiverDiagnostics(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.track_id = source["track_id"];
+	        this.publisher_id = source["publisher_id"];
+	        this.codec = source["codec"];
+	        this.sample_ms = source["sample_ms"];
+	        this.packets_received = source["packets_received"];
+	        this.packets_lost = source["packets_lost"];
+	        this.bytes_received = source["bytes_received"];
+	        this.total_samples = source["total_samples"];
+	        this.concealed_samples = source["concealed_samples"];
+	        this.concealment_events = source["concealment_events"];
+	        this.silent_concealed_samples = source["silent_concealed_samples"];
+	        this.accelerated_samples = source["accelerated_samples"];
+	        this.decelerated_samples = source["decelerated_samples"];
+	        this.jitter_ms = source["jitter_ms"];
+	        this.loss_percent = source["loss_percent"];
+	        this.concealment_percent = source["concealment_percent"];
+	        this.silent_concealment_percent = source["silent_concealment_percent"];
+	        this.non_silent_concealment_percent = source["non_silent_concealment_percent"];
+	        this.acceleration_percent = source["acceleration_percent"];
+	        this.deceleration_percent = source["deceleration_percent"];
+	        this.buffer_ms = source["buffer_ms"];
+	        this.buffer_target_ms = source["buffer_target_ms"];
+	        this.buffer_minimum_ms = source["buffer_minimum_ms"];
+	        this.audio_level = source["audio_level"];
+	    }
+	}
+	export class VoiceTelemetry {
+	    truncated?: boolean;
+	    channel_id: number;
+	    client_version: string;
+	    connection_state: string;
+	    output_state: string;
+	    output_latency_ms?: number;
+	    rtt_ms?: number;
+	    muted: boolean;
+	    deafened: boolean;
+	    volume: number;
+	    voice_limiter: boolean;
+	    gain_normalize: boolean;
+	    tracks: VoiceReceiverDiagnostics[];
+
+	    static createFrom(source: any = {}) {
+	        return new VoiceTelemetry(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.truncated = source["truncated"];
+	        this.channel_id = source["channel_id"];
+	        this.client_version = source["client_version"];
+	        this.connection_state = source["connection_state"];
+	        this.output_state = source["output_state"];
+	        this.output_latency_ms = source["output_latency_ms"];
+	        this.rtt_ms = source["rtt_ms"];
+	        this.muted = source["muted"];
+	        this.deafened = source["deafened"];
+	        this.volume = source["volume"];
+	        this.voice_limiter = source["voice_limiter"];
+	        this.gain_normalize = source["gain_normalize"];
+	        this.tracks = this.convertValues(source["tracks"], VoiceReceiverDiagnostics);
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class VoiceClientReport {
+	    received_at: number;
+	    age_ms: number;
+	    stale: boolean;
+	    report: VoiceTelemetry;
+
+	    static createFrom(source: any = {}) {
+	        return new VoiceClientReport(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.received_at = source["received_at"];
+	        this.age_ms = source["age_ms"];
+	        this.stale = source["stale"];
+	        this.report = this.convertValues(source["report"], VoiceTelemetry);
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class VoiceDiagnostics {
+	    client_version: string;
+	    server_version: string;
+	    observed_at: number;
+	    client_id: string;
+	    nickname: string;
+	    channel_id: number;
+	    ping_ms: number;
+	    client_report?: VoiceClientReport;
+	    transport?: VoiceTransportDiagnostics;
+
+	    static createFrom(source: any = {}) {
+	        return new VoiceDiagnostics(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.client_version = source["client_version"];
+	        this.server_version = source["server_version"];
+	        this.observed_at = source["observed_at"];
+	        this.client_id = source["client_id"];
+	        this.nickname = source["nickname"];
+	        this.channel_id = source["channel_id"];
+	        this.ping_ms = source["ping_ms"];
+	        this.client_report = this.convertValues(source["client_report"], VoiceClientReport);
+	        this.transport = this.convertValues(source["transport"], VoiceTransportDiagnostics);
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	export class ClientInfoResponse {
+	    client_version?: string;
 	    client_id: string;
 	    unique_id: string;
 	    nickname: string;
@@ -2013,6 +2318,7 @@ export namespace netproto {
 	    port?: number;
 	    bytes_in: number;
 	    bytes_out: number;
+	    voice_diagnostics?: VoiceDiagnostics;
 
 	    static createFrom(source: any = {}) {
 	        return new ClientInfoResponse(source);
@@ -2020,6 +2326,7 @@ export namespace netproto {
 
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.client_version = source["client_version"];
 	        this.client_id = source["client_id"];
 	        this.unique_id = source["unique_id"];
 	        this.nickname = source["nickname"];
@@ -2031,7 +2338,26 @@ export namespace netproto {
 	        this.port = source["port"];
 	        this.bytes_in = source["bytes_in"];
 	        this.bytes_out = source["bytes_out"];
+	        this.voice_diagnostics = this.convertValues(source["voice_diagnostics"], VoiceDiagnostics);
 	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
 	}
 	export class ComplaintEntry {
 	    target_unique_id: string;
@@ -3171,8 +3497,8 @@ export namespace netproto {
 	    }
 	}
 	export class VideoStream {
-	    viewer_count?: number;
 	    watch_revision: number;
+	    viewer_count?: number;
 	    publisher_id: string;
 	    slot: string;
 	    generation: number;
@@ -3266,6 +3592,7 @@ export namespace netproto {
 		    return a;
 		}
 	}
+
 	export class WebhookEntry {
 	    id: number;
 	    channel_id: number;

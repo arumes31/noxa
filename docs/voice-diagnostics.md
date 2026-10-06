@@ -30,6 +30,30 @@ A sample older than
 15 seconds is marked stale. Missing initial/reset measurements are null, not zero.
 This is not a recording or durable history service.
 
+## Interpreting receiver measurements
+
+The expanded receiver table shows the sample interval alongside these values:
+
+| Measurement | Meaning |
+| --- | --- |
+| Buffer actual / target / minimum | Average time spent in the receiver's jitter buffer, desired delay, and the minimum delay estimated without external playout constraints, in milliseconds. These are interval averages, not total microphone-to-speaker latency. |
+| Concealment total / non-silent / silent | Samples generated to replace missing or late audio, split into non-silent output and generated silence. Silent concealment is included in the total; it must not be added to it again. |
+| Acceleration / deceleration | Samples removed or inserted by adaptive playback to change buffer residence. A sustained rate can help explain time-stretched or uneven playback even when reported packet loss is low. |
+
+Concealment and adaptive-playback percentages use the change in total received
+samples over the displayed interval as their common denominator. Cumulative
+counters remain available in the operator JSON, separately from these rates.
+The first sample, a counter reset, a replaced peer/track or an unsupported browser
+counter displays **—**, rather than a healthy-looking zero. Older clients can still
+report the original measurements without the new optional fields.
+
+Compare actual buffer residence with its target and minimum before changing
+playout settings. If all three grow together, forcing a smaller playback target
+does not remove the cause of the receiver's estimated delay and may replace it
+with more missing audio. Compare affected and healthy receivers, then examine
+sender timing and server forwarding. Low RTT or packet loss alone does not prove
+smooth packet arrival or audible quality.
+
 The server also retains the latest RTCP receiver report for each active outgoing
 audio binding, including older clients. It validates the sender and SSRC, identifies
 the source publisher/slot, and converts the Opus 48 kHz clock to milliseconds.

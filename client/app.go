@@ -36,6 +36,10 @@ var (
 	windowMarkHidden      = trayMarkHidden
 )
 
+// The native window normally exists before DOM-ready. Stop startup polling
+// after 20 seconds; DOM-ready gets a final attempt if initialization was slow.
+const windowOpacityStartupAttempts = 50
+
 // App is the Wails application.
 type App struct {
 	loginCredentials loginCredentialState
@@ -52,6 +56,7 @@ type App struct {
 	chatAttachmentWrite      func(string, []byte) error
 	lifecycleMu              sync.Mutex
 	lifecycleCancel          context.CancelFunc
+	lifecycleStopped         bool
 	// Wails invokes beforeClose for programmatic Quit as well as window close.
 	// Explicit Quit and update restart bypass close-to-tray.
 	quitting atomic.Bool
@@ -173,7 +178,10 @@ func (a *App) requireCM() (*connManager, error) {
 // cmStore sets the active tab's connManager.
 func (a *App) cmStore(cm *connManager) { a.cm.Store(cm) }
 
-func (a *App) domReady(context.Context) {
+func (a *App) domReady(ctx context.Context) {
+	if err := a.restoreWindowOpacityOnce(ctx); err != nil && err != context.Canceled {
+		log.Printf("window opacity at DOM-ready: %v", err)
+	}
 	trayRefreshWindowIcon()
 }
 
@@ -199,6 +207,7 @@ func (a *App) startup(ctx context.Context) {
 	}
 	watchCtx, cancel := context.WithCancel(ctx)
 	a.lifecycleCancel = cancel
+	a.lifecycleStopped = false
 	a.lifecycleMu.Unlock()
 	go guardCrash("window-opacity", func() { a.restoreWindowOpacity(watchCtx) })
 	go guardCrash("window-watch", func() { a.watchMinimized(watchCtx) })
@@ -211,24 +220,36 @@ func (a *App) startup(ctx context.Context) {
 func (a *App) restoreWindowOpacity(ctx context.Context) {
 	tick := time.NewTicker(lifecyclePollInterval)
 	defer tick.Stop()
-	for {
+	for range windowOpacityStartupAttempts {
 		select {
 		case <-ctx.Done():
 			return
 		case <-tick.C:
 		}
-		// (292) the layered-window call needs an HWND, which only exists once
-		// the window is up; the first success ends the retry.
-		a.settingsMu.Lock()
-		opacity := a.settings.WindowOpacity
-		a.settingsMu.Unlock()
-		a.opacityMu.Lock()
-		err := windowOpacityApply(opacity)
-		a.opacityMu.Unlock()
-		if err == nil {
+		err := a.restoreWindowOpacityOnce(ctx)
+		if err == nil || err == context.Canceled {
 			return
 		}
 	}
+}
+
+func (a *App) restoreWindowOpacityOnce(ctx context.Context) error {
+	// Use the same effect ordering as settings edits, then read the newest
+	// snapshot after acquiring the native effect lock. A delayed startup or
+	// DOM-ready restore must not overwrite a newer user-selected opacity.
+	a.settingsEffectMu.Lock()
+	defer a.settingsEffectMu.Unlock()
+	a.opacityMu.Lock()
+	defer a.opacityMu.Unlock()
+	a.lifecycleMu.Lock()
+	defer a.lifecycleMu.Unlock()
+	if a.lifecycleStopped || ctx.Err() != nil {
+		return context.Canceled
+	}
+	a.settingsMu.Lock()
+	opacity := a.settings.WindowOpacity
+	a.settingsMu.Unlock()
+	return windowOpacityApply(opacity)
 }
 
 func (a *App) watchMinimized(ctx context.Context) {
@@ -287,6 +308,7 @@ func (a *App) shutdown(_ context.Context) {
 	a.cancelCloseNotification()
 	a.closeGamingOverlay()
 	a.lifecycleMu.Lock()
+	a.lifecycleStopped = true
 	if a.lifecycleCancel != nil {
 		a.lifecycleCancel()
 		a.lifecycleCancel = nil

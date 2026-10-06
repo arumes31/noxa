@@ -33,22 +33,35 @@ type VoiceTelemetry struct {
 // Percentages and buffer delays describe SampleMS, not the entire call.
 // Missing, initial or reset measurements are null, never a false healthy zero.
 type VoiceReceiverDiagnostics struct {
-	TrackID            string   `json:"track_id"`
-	PublisherID        string   `json:"publisher_id"`
-	Codec              string   `json:"codec"`
-	SampleMS           *float64 `json:"sample_ms"`
-	PacketsReceived    *float64 `json:"packets_received"`
-	PacketsLost        *float64 `json:"packets_lost"`
-	BytesReceived      *float64 `json:"bytes_received"`
-	TotalSamples       *float64 `json:"total_samples"`
-	ConcealedSamples   *float64 `json:"concealed_samples"`
-	ConcealmentEvents  *float64 `json:"concealment_events"`
-	JitterMS           *float64 `json:"jitter_ms"`
-	LossPercent        *float64 `json:"loss_percent"`
-	ConcealmentPercent *float64 `json:"concealment_percent"`
-	BufferMS           *float64 `json:"buffer_ms"`
-	BufferTargetMS     *float64 `json:"buffer_target_ms"`
-	AudioLevel         *float64 `json:"audio_level"`
+	TrackID           string   `json:"track_id"`
+	PublisherID       string   `json:"publisher_id"`
+	Codec             string   `json:"codec"`
+	SampleMS          *float64 `json:"sample_ms"`
+	PacketsReceived   *float64 `json:"packets_received"`
+	PacketsLost       *float64 `json:"packets_lost"`
+	BytesReceived     *float64 `json:"bytes_received"`
+	TotalSamples      *float64 `json:"total_samples"`
+	ConcealedSamples  *float64 `json:"concealed_samples"`
+	ConcealmentEvents *float64 `json:"concealment_events"`
+	// Optional cumulative counters distinguish silence concealment and adaptive
+	// playback from lost speech. Older clients leave them nil.
+	SilentConcealedSamples *float64 `json:"silent_concealed_samples,omitempty"`
+	AcceleratedSamples     *float64 `json:"accelerated_samples,omitempty"`
+	DeceleratedSamples     *float64 `json:"decelerated_samples,omitempty"`
+	JitterMS               *float64 `json:"jitter_ms"`
+	LossPercent            *float64 `json:"loss_percent"`
+	ConcealmentPercent     *float64 `json:"concealment_percent"`
+	// These interval percentages all use delta(TotalSamples) as denominator.
+	SilentConcealmentPercent    *float64 `json:"silent_concealment_percent,omitempty"`
+	NonSilentConcealmentPercent *float64 `json:"non_silent_concealment_percent,omitempty"`
+	AccelerationPercent         *float64 `json:"acceleration_percent,omitempty"`
+	DecelerationPercent         *float64 `json:"deceleration_percent,omitempty"`
+	BufferMS                    *float64 `json:"buffer_ms"`
+	BufferTargetMS              *float64 `json:"buffer_target_ms"`
+	// Minimum delay excludes external playout constraints. All buffer values are
+	// interval averages, not instantaneous or end-to-end latency.
+	BufferMinimumMS *float64 `json:"buffer_minimum_ms,omitempty"`
+	AudioLevel      *float64 `json:"audio_level"`
 }
 
 func diagnosticText(s string, maximum int) bool {
@@ -94,7 +107,7 @@ func (m VoiceTelemetry) Valid() bool {
 			return false
 		}
 		seen[t.TrackID] = true
-		for _, n := range []*float64{t.PacketsReceived, t.BytesReceived, t.TotalSamples, t.ConcealedSamples, t.ConcealmentEvents} {
+		for _, n := range []*float64{t.PacketsReceived, t.BytesReceived, t.TotalSamples, t.ConcealedSamples, t.ConcealmentEvents, t.SilentConcealedSamples, t.AcceleratedSamples, t.DeceleratedSamples} {
 			if !diagnosticNumber(n, 0, 9007199254740991) {
 				return false
 			}
@@ -102,12 +115,20 @@ func (m VoiceTelemetry) Valid() bool {
 		if !diagnosticNumber(t.PacketsLost, -9007199254740991, 9007199254740991) {
 			return false
 		}
-		for _, n := range []*float64{t.SampleMS, t.JitterMS, t.BufferMS, t.BufferTargetMS} {
+		for _, n := range []*float64{t.SampleMS, t.JitterMS, t.BufferMS, t.BufferTargetMS, t.BufferMinimumMS} {
 			if !diagnosticNumber(n, 0, 60000) {
 				return false
 			}
 		}
-		if !diagnosticNumber(t.LossPercent, 0, 100) || !diagnosticNumber(t.ConcealmentPercent, 0, 100) || !diagnosticNumber(t.AudioLevel, 0, 1) {
+		for _, n := range []*float64{t.LossPercent, t.ConcealmentPercent, t.SilentConcealmentPercent, t.NonSilentConcealmentPercent, t.AccelerationPercent, t.DecelerationPercent} {
+			if !diagnosticNumber(n, 0, 100) {
+				return false
+			}
+		}
+		if !diagnosticNumber(t.AudioLevel, 0, 1) {
+			return false
+		}
+		if t.SilentConcealedSamples != nil && t.ConcealedSamples != nil && *t.SilentConcealedSamples > *t.ConcealedSamples {
 			return false
 		}
 	}

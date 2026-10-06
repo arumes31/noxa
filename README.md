@@ -788,8 +788,9 @@ or recovery procedures change.
 
 **Client Info** shows ping and reported client version for visible members.
 Owners and administrators additionally see **Reception on this member's client**:
-loss, concealment, jitter-buffer delay, and output state as reported by that
-receiver. Older clients may show an unknown version and no client report;
+loss, silent/non-silent concealment, actual/target/minimum jitter-buffer delay,
+adaptive playback acceleration/deceleration, and output state as reported by that
+receiver. Unsupported counters display **—**. Older clients may show an unknown version and no client report;
 server-side RTCP feedback can still provide loss/jitter measurements.
 
 Operators can query the loopback-only health endpoint from inside the server

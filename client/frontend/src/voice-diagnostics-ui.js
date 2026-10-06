@@ -29,10 +29,14 @@ export function renderReceiverDiagnostics(overlay, diagnostic, clients = []) {
         parts.push(`<div class="ci-grid">${row(t("diagnostics.output"), `${report.output_state} · ${metric(report.output_latency_ms, " ms")}`)}${row(t("diagnostics.processing"), t("diagnostics.processingValue", {
             volume: report.volume, limiter: t(report.voice_limiter ? "diagnostics.on" : "diagnostics.off"), normalization: t(report.gain_normalize ? "diagnostics.on" : "diagnostics.off"),
         }))}</div>`);
+        parts.push(`<p class="ci-muted">${esc(t("diagnostics.bufferMeaning"))}</p>`);
         for (const track of (report.tracks || []).slice(0, 64)) {
             parts.push(card(name(track.publisher_id),
+                row(t("diagnostics.interval"), metric(Number.isFinite(track.sample_ms) ? track.sample_ms / 1000 : null, " s")) +
                 row(t("diagnostics.lossJitter"), `${metric(track.loss_percent, "%")} / ${metric(track.jitter_ms, " ms")}`) +
-                row(t("diagnostics.bufferConcealment"), `${metric(track.buffer_ms, " ms")} / ${metric(track.concealment_percent, "%")}`)));
+                row(t("diagnostics.bufferDelays"), `${metric(track.buffer_ms, " ms")} / ${metric(track.buffer_target_ms, " ms")} / ${metric(track.buffer_minimum_ms, " ms")}`) +
+                row(t("diagnostics.concealmentParts"), `${metric(track.concealment_percent, "%")} / ${metric(track.non_silent_concealment_percent, "%")} / ${metric(track.silent_concealment_percent, "%")}`) +
+                row(t("diagnostics.timeStretch"), `${metric(track.acceleration_percent, "%")} / ${metric(track.deceleration_percent, "%")}`)));
         }
         if (!report.tracks?.length) parts.push(`<p class="ci-muted">${esc(t("diagnostics.noTracks"))}</p>`);
     } else parts.push(`<p class="ci-muted">${esc(t("diagnostics.missing"))}</p>`);

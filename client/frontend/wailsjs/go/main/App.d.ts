@@ -126,6 +126,8 @@ export function ConnectGuestBookmarkTabWithID(arg1:string,arg2:string,arg3:strin
 
 export function ConnectGuestTab(arg1:string,arg2:string):Promise<string>;
 
+export function ConnectLogin(arg1:main.LoginRequest):Promise<main.ConnectTabResult>;
+
 export function ConnectNamedBookmarkTabWithID(arg1:string,arg2:string,arg3:string,arg4:string,arg5:string,arg6:string):Promise<main.ConnectTabResult>;
 
 export function ConnectTab(arg1:string,arg2:string,arg3:string,arg4:string):Promise<string>;
@@ -242,6 +244,8 @@ export function FileVersionsForTab(arg1:string,arg2:number,arg3:string,arg4:stri
 
 export function FlashWindow():Promise<string>;
 
+export function ForgetLoginPasswords(arg1:string,arg2:string):Promise<string>;
+
 export function GamingOverlayAvailable():Promise<boolean>;
 
 export function GetAvatar(arg1:string):Promise<netproto.AvatarData>;
@@ -257,6 +261,8 @@ export function GetGamingOverlayMonitors():Promise<Array<main.GamingOverlayMonit
 export function GetICEServers():Promise<Array<netproto.ICEServer>>;
 
 export function GetICEServersForTab(arg1:string):Promise<Array<netproto.ICEServer>>;
+
+export function GetLoginPasswordStatus(arg1:string,arg2:string):Promise<main.LoginPasswordStatus>;
 
 export function GetMediaLimits():Promise<netproto.MediaLimits>;
 
@@ -355,6 +361,8 @@ export function RegenerateIdentity():Promise<string>;
 export function RemoveRoleBanForTab(arg1:string,arg2:number):Promise<netproto.RoleBanRemoved>;
 
 export function RenameIdentity(arg1:string,arg2:string):Promise<string>;
+
+export function ReportVoiceDiagnosticsForTab(arg1:string,arg2:netproto.VoiceTelemetry):Promise<void>;
 
 export function ResetIdentity(arg1:string,arg2:string):Promise<void>;
 
