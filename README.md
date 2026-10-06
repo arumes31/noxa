@@ -112,15 +112,17 @@ graph TD
 
 * **Pion WebRTC SFU**: Routes individual publisher tracks to authorized subscribers, with separate camera, screen, microphone, and shared-audio streams.
 * **Opus controls**: Per-channel bitrate, Forward Error Correction (FEC), Discontinuous Transmission (DTX), and stereo settings. The default bitrate is 32 kbps; latency and capacity depend on the network and host.
-* **Simulcast video**: Subscriber quality selection using full/half/quarter (`f`/`h`/`q`) RID layers where published.
+* **Independent stream quality**: Each watched camera or screen share has its own Auto/High/Medium/Low control. Several shares can use High simultaneously. New channel screen shares publish full/half/quarter (`f`/`h`/`q`) simulcast layers where supported; older or single-layer publishers may still deliver their only available resolution. Auto allocates the runtime's reported receive bandwidth among streams, prioritizes the focused share, and leaves manual choices intact. Missing bandwidth estimates remain unknown. Explicit Low bandwidth mode overrides every stream; older servers retain the labelled connection-wide control.
 * **Screen-share audio choices**: In channel shares and private calls, choose **No audio**, **Shared application**, or **System audio**. Application audio requires a window and a supported capture runtime; enable audio in the system picker. It can include other windows of the same application. If application-only capture is unavailable or cannot be confirmed, video still starts without audio and a short notification explains the fallback. System audio is only shared when explicitly selected.
 * **Screen-share resolution**: The channel share dialog offers 720p, 1080p, 1440p, 4K, **Original source resolution**, and **Custom** dimensions (160–8192 pixels, 15/30/60 fps). The encoder has 50 Mbps of headroom instead of Chromium's implicit ~2.5 Mbps default; this is a ceiling, not a target or minimum. Normal presets preserve resolution, while 60 fps presets balance resolution and frame rate. WebRTC adapts to actual network and encoder capacity without an additional system-CPU-triggered 500 kbps cap. Server limits and explicit Low bandwidth mode still apply.
+* **Live share controls**: **Change quality** adjusts a running channel share's resolution and frame rate without reopening the capture picker or changing its source/audio. Simulcast layers share the source's bitrate budget, with most headroom reserved for full resolution. Watched-stream details show measured resolution, decoded frames per second, codec and payload bitrate separately from the requested quality.
 * **Priority speaker**: Non-priority publishers in the current voice channel are ducked to 25% gain (about −12 dB) while a priority speaker talks.
 * **Whisper Routing**: Point-to-point and cross-channel targeted voice transmission bypasses standard channel boundaries.
 * **Microphone recovery**: If the selected microphone disconnects, receiving audio and video continues. Choose and apply a device in **Capture** settings, then select **Retry microphone**. A replacement microphone never starts automatically.
 * **Personal audio controls**: Separate per-member voice and screen-share volume/mute controls. Personal volume uses 100% as unity and reaches +20 dB at the 200% endpoint, with a limiter for loud peaks. Capture settings include push-to-talk, voice activation with a 450 ms release hold, continuous transmission, and local microphone testing.
 * **Private calls**: Accepted direct/group calls carry voice, camera, and screen sharing without moving participants into a voice channel.
 * **Network echo test**: In **Capture** settings, explicitly join the server's echo channel to hear your microphone through the normal voice connection. Only you hear your microphone: other participants cannot hear you and you cannot hear them. Echo media is excluded from whispers, cross-participant video, and channel recordings. Mute and push-to-talk still apply; wear headphones. The return button restores your previous channel while the test remains active on that server tab. Each server automatically creates `Echo Test` on startup after role setup, granting admitted users permission to view, join and speak only in that channel. Existing channels with the configured name retain their access rules, custom metadata and history; startup updates only the known old system-created echo topic. Set Docker environment variable `NOXA_ECHO_CHANNEL_ENABLED=false` and recreate the server container to disable creation and loopback; existing channels and history are retained. Configure the name with `NOXA_ECHO_CHANNEL_NAME` or `echo_channel_name` in YAML.
+* **Connection benchmark**: A separate, explicitly started test in **Capture** sends synthetic Opus packets for 20 seconds through the server's actual WebRTC endpoint and private Echo Test. It uses a temporary guest with the current server's pinned certificate, without microphone/speaker access or moving your existing voice connection. Results include round-trip timing, arrival gaps and unmatched packets after a short drain period; Cancel, tab disconnect and application shutdown clean up the guest. Guest admission and private echo support are required. This measures packet delivery, not perceived audio quality or maximum video throughput.
 
 ### 💬 Messaging and collaboration
 
@@ -136,7 +138,7 @@ graph TD
 * **Speaking and unread indicators**: Animated avatar highlights, alphabetical channel member lists, stream indicators, and unread direct-message badges that keep pulsing until opened.
 * **Windows overlay**: Individual active speakers with avatars and animation over the desktop or windowed/borderless games. Configure it in **Settings → Overlay**; local mute/deafen hides it. Exclusive-fullscreen games may cover the overlay.
 * **Notifications**: Per-event controls, volume and previews, with bundled English/German spoken announcements. Events with speech use that recording without a duplicate beep. Playback follows the selected audio output device; no network TTS service is required.
-* **Diagnostics**: Client Info exposes visible members' ping and reported client version; owners and administrators can inspect receiver-side voice quality. See [Operations](#operations).
+* **Diagnostics**: A playback-health badge evaluates recent voice buffering, concealment and loss separately from ping. Client Info exposes visible members' ping and reported client version; owners and administrators can inspect recent voice history and correlated sender/SFU/receiver measurements. See [Operations](#operations).
 
 <a id="permissions"></a>
 
@@ -695,6 +697,7 @@ native-client tests in CI use `xvfb-run -a go test ./...`.
 | `go run ./cmd/version -check` | Check synchronized baseline versions and report the current source version |
 | `npm run quality` in `client/frontend` | Frontend lint, unit tests/coverage, accessibility scenarios, and production build |
 | `npm run test:e2e` in `client/frontend` | Full Playwright browser regression suite |
+| `go test -tags integration -run '^TestBrowserScreenSimulcast$' -count=1 ./internal/webrtc` | Real Chromium publishers/receiver through a local SFU; requires the frontend dependencies and installed Chromium |
 | `go test ./...` in `client/third_party/go-webview2` | Standalone Windows WebView2 fork tests |
 | `buf lint` / `make proto` | Lint protobuf contracts / regenerate committed Go stubs; CI pins Buf 1.72.0 |
 
@@ -708,6 +711,12 @@ analysis, and a backup/restore drill. Passing a local subset does not replace
 these gates. [`.github/workflows/ci.yml`](.github/workflows/ci.yml) contains the
 exact commands; [role E2E testing](docs/role-e2e-testing.md) describes the live
 protocol fixtures. Website checks are separate in [`website/README.md`](website/README.md).
+
+The browser/SFU test checks two simultaneous High shares and independent
+full/half/quarter-resolution switches using synthetic canvas capture. CI runs
+the 720p30 profile. On an idle development machine, set
+`NOXA_BROWSER_MEDIA_PERF=1` to include the more demanding 1080p60 profile; its
+observed frame rate still depends on software-encoder and host capacity.
 
 ---
 
@@ -798,6 +807,15 @@ also included in the operator snapshot. Missing or reset counters remain unknown
 Packets can arrive and still be rejected by playout, so low network loss alone
 does not prove uninterrupted audio.
 
+The separate playback-health badge reports recent playback conditions rather
+than grading ping. Unknown output, missing/truncated measurements and stale
+reports cannot establish healthy playback. Selected ICE protocol and candidate
+types are shown without collecting candidate addresses; these cannot identify
+an underlying VPN route or relay. Owner/admin diagnostics correlate fresh
+publisher SSRCs, SFU ingress/publication observations, subscriber output SSRCs
+and receiver reports. Their sample windows and clocks differ, so comparisons
+do not establish exact per-stage packet loss or one-way latency.
+
 When buffer delay grows, compare the target with the browser's minimum, packet
 arrival timing and the selected media route. A VPN exit node or relay can affect
 media even when the server has a public address. Test a different route before
@@ -812,8 +830,11 @@ docker compose exec noxa wget -qO- 'http://127.0.0.1:12337/debug/voice?nickname=
 ```
 
 Use either `nickname` or `client_id`, or omit the filter for a bounded snapshot.
-Reports contain counters, not audio; only the latest report is retained in
-memory, and samples older than 15 seconds are marked stale. The endpoint stays
+Reports contain counters, not audio. In addition to the latest detailed report,
+the server retains up to 60 compact summary samples over five minutes in memory
+per client. History is isolated by connection, channel epoch and media session;
+it is cleared on the relevant lifecycle changes. Samples older than 15 seconds
+are marked stale. The endpoint stays
 loopback-only even if remote metrics are enabled. See
 [receiver voice diagnostics](docs/voice-diagnostics.md) for interpretation and
 access details.

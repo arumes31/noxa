@@ -42,6 +42,10 @@ export function BanListForTab(arg1) {
   return window['go']['main']['App']['BanListForTab'](arg1);
 }
 
+export function CancelConnectionBenchmark(arg1, arg2) {
+  return window['go']['main']['App']['CancelConnectionBenchmark'](arg1, arg2);
+}
+
 export function CancelIdentityLevel(arg1) {
   return window['go']['main']['App']['CancelIdentityLevel'](arg1);
 }
@@ -260,6 +264,10 @@ export function ConnectTab(arg1, arg2, arg3, arg4) {
 
 export function Connected() {
   return window['go']['main']['App']['Connected']();
+}
+
+export function ConnectionBenchmarkStatusForTab(arg1, arg2) {
+  return window['go']['main']['App']['ConnectionBenchmarkStatusForTab'](arg1, arg2);
 }
 
 export function ConnectionSecurity() {
@@ -986,6 +994,10 @@ export function SetStatusForTab(arg1, arg2, arg3) {
   return window['go']['main']['App']['SetStatusForTab'](arg1, arg2, arg3);
 }
 
+export function SetStreamVideoQualityForTab(arg1, arg2, arg3, arg4, arg5, arg6) {
+  return window['go']['main']['App']['SetStreamVideoQualityForTab'](arg1, arg2, arg3, arg4, arg5, arg6);
+}
+
 export function SetTrayVoiceState(arg1, arg2, arg3) {
   return window['go']['main']['App']['SetTrayVoiceState'](arg1, arg2, arg3);
 }
@@ -1000,6 +1012,10 @@ export function SetVideoQualityForTab(arg1, arg2) {
 
 export function SetWindowOpacity(arg1) {
   return window['go']['main']['App']['SetWindowOpacity'](arg1);
+}
+
+export function StartConnectionBenchmark(arg1) {
+  return window['go']['main']['App']['StartConnectionBenchmark'](arg1);
 }
 
 export function StopPrivateCallForTab(arg1, arg2) {
@@ -1020,6 +1036,10 @@ export function Subscriptions() {
 
 export function SubscriptionsForTab(arg1) {
   return window['go']['main']['App']['SubscriptionsForTab'](arg1);
+}
+
+export function SupportsStreamVideoQualityForTab(arg1) {
+  return window['go']['main']['App']['SupportsStreamVideoQualityForTab'](arg1);
 }
 
 export function SwitchIdentity(arg1) {

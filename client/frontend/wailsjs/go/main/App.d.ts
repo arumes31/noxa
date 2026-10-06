@@ -24,6 +24,8 @@ export function BanList():Promise<netproto.BanListResponse>;
 
 export function BanListForTab(arg1:string):Promise<netproto.BanListResponse>;
 
+export function CancelConnectionBenchmark(arg1:string,arg2:string):Promise<void>;
+
 export function CancelIdentityLevel(arg1:string):Promise<boolean>;
 
 export function CancelTransfer(arg1:string):Promise<void>;
@@ -133,6 +135,8 @@ export function ConnectNamedBookmarkTabWithID(arg1:string,arg2:string,arg3:strin
 export function ConnectTab(arg1:string,arg2:string,arg3:string,arg4:string):Promise<string>;
 
 export function Connected():Promise<boolean>;
+
+export function ConnectionBenchmarkStatusForTab(arg1:string,arg2:string):Promise<main.ConnectionBenchmarkStatus>;
 
 export function ConnectionSecurity():Promise<string>;
 
@@ -496,6 +500,8 @@ export function SetStatus(arg1:string,arg2:string):Promise<string>;
 
 export function SetStatusForTab(arg1:string,arg2:string,arg3:string):Promise<string>;
 
+export function SetStreamVideoQualityForTab(arg1:string,arg2:string,arg3:string,arg4:string,arg5:string,arg6:string):Promise<string>;
+
 export function SetTrayVoiceState(arg1:boolean,arg2:boolean,arg3:boolean):Promise<void>;
 
 export function SetVideoQuality(arg1:string):Promise<string>;
@@ -503,6 +509,8 @@ export function SetVideoQuality(arg1:string):Promise<string>;
 export function SetVideoQualityForTab(arg1:string,arg2:string):Promise<string>;
 
 export function SetWindowOpacity(arg1:number):Promise<string>;
+
+export function StartConnectionBenchmark(arg1:string):Promise<main.ConnectionBenchmarkStatus>;
 
 export function StopPrivateCallForTab(arg1:string,arg2:string):Promise<void>;
 
@@ -513,6 +521,8 @@ export function SubscribeChannelsForTab(arg1:string,arg2:Array<number>,arg3:bool
 export function Subscriptions():Promise<Array<number>>;
 
 export function SubscriptionsForTab(arg1:string):Promise<Array<number>>;
+
+export function SupportsStreamVideoQualityForTab(arg1:string):Promise<boolean>;
 
 export function SwitchIdentity(arg1:string):Promise<string>;
 

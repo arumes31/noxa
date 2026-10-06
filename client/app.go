@@ -42,12 +42,13 @@ const windowOpacityStartupAttempts = 50
 
 // App is the Wails application.
 type App struct {
-	loginCredentials loginCredentialState
-	update           updateOperation
-	overlayMu        sync.Mutex
-	overlay          gamingOverlayWindow
-	overlayStopped   bool
-	ctx              context.Context
+	connectionBenchmark connectionBenchmarkOperation
+	loginCredentials    loginCredentialState
+	update              updateOperation
+	overlayMu           sync.Mutex
+	overlay             gamingOverlayWindow
+	overlayStopped      bool
+	ctx                 context.Context
 	// Attachment seams keep the native dialog, transfer, and final replacement
 	// independently testable without putting plaintext or destination paths on
 	// the Wails/JavaScript boundary. Nil fields use production implementations.
@@ -305,6 +306,7 @@ func (a *App) SetWindowOpacity(pct int) string {
 
 // shutdown is called when the app closes.
 func (a *App) shutdown(_ context.Context) {
+	a.cancelConnectionBenchmark()
 	a.cancelCloseNotification()
 	a.closeGamingOverlay()
 	a.lifecycleMu.Lock()

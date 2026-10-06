@@ -468,6 +468,83 @@ export namespace authorization {
 
 }
 
+export namespace connectionbenchmark {
+
+	export class Timing {
+	    p50_ms: number;
+	    p95_ms: number;
+	    max_ms: number;
+
+	    static createFrom(source: any = {}) {
+	        return new Timing(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.p50_ms = source["p50_ms"];
+	        this.p95_ms = source["p95_ms"];
+	        this.max_ms = source["max_ms"];
+	    }
+	}
+	export class Result {
+	    duration_seconds: number;
+	    interval_ms: number;
+	    drain_seconds: number;
+	    sent: number;
+	    returned: number;
+	    unreturned: number;
+	    duplicates: number;
+	    reordered: number;
+	    round_trip?: Timing;
+	    arrival_gap?: Timing;
+	    send_lateness?: Timing;
+	    protocol: string;
+	    candidate_type: string;
+	    server_version: string;
+
+	    static createFrom(source: any = {}) {
+	        return new Result(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.duration_seconds = source["duration_seconds"];
+	        this.interval_ms = source["interval_ms"];
+	        this.drain_seconds = source["drain_seconds"];
+	        this.sent = source["sent"];
+	        this.returned = source["returned"];
+	        this.unreturned = source["unreturned"];
+	        this.duplicates = source["duplicates"];
+	        this.reordered = source["reordered"];
+	        this.round_trip = this.convertValues(source["round_trip"], Timing);
+	        this.arrival_gap = this.convertValues(source["arrival_gap"], Timing);
+	        this.send_lateness = this.convertValues(source["send_lateness"], Timing);
+	        this.protocol = source["protocol"];
+	        this.candidate_type = source["candidate_type"];
+	        this.server_version = source["server_version"];
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+
+}
+
 export namespace main {
 
 	export class Bookmark {
@@ -589,6 +666,44 @@ export namespace main {
 	        this.terminal = source["terminal"];
 	        this.warning = source["warning"];
 	    }
+	}
+	export class ConnectionBenchmarkStatus {
+	    id: string;
+	    phase: string;
+	    elapsed_seconds: number;
+	    result?: connectionbenchmark.Result;
+	    error?: string;
+
+	    static createFrom(source: any = {}) {
+	        return new ConnectionBenchmarkStatus(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.phase = source["phase"];
+	        this.elapsed_seconds = source["elapsed_seconds"];
+	        this.result = this.convertValues(source["result"], connectionbenchmark.Result);
+	        this.error = source["error"];
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
 	}
 	export class Contact {
 	    unique_id: string;
@@ -2051,6 +2166,146 @@ export namespace netproto {
 		    return a;
 		}
 	}
+	export class VoiceCorrelatedPath {
+	    publisher_id: string;
+	    slot: string;
+	    output_ssrc: number;
+	    ingress?: VoiceIngressDiagnostics;
+	    sender?: VoiceSenderDiagnostics;
+	    sender_age_ms?: number;
+	    receiver?: VoiceReceiverDiagnostics;
+	    feedback?: VoiceServerTrack;
+
+	    static createFrom(source: any = {}) {
+	        return new VoiceCorrelatedPath(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.publisher_id = source["publisher_id"];
+	        this.slot = source["slot"];
+	        this.output_ssrc = source["output_ssrc"];
+	        this.ingress = this.convertValues(source["ingress"], VoiceIngressDiagnostics);
+	        this.sender = this.convertValues(source["sender"], VoiceSenderDiagnostics);
+	        this.sender_age_ms = source["sender_age_ms"];
+	        this.receiver = this.convertValues(source["receiver"], VoiceReceiverDiagnostics);
+	        this.feedback = this.convertValues(source["feedback"], VoiceServerTrack);
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class VoiceHistoryPoint {
+	    observed_at: number;
+	    track_count: number;
+	    loss_percent?: number;
+	    discard_percent?: number;
+	    concealment_percent?: number;
+	    buffer_ms?: number;
+	    rtt_ms?: number;
+	    output_state: string;
+
+	    static createFrom(source: any = {}) {
+	        return new VoiceHistoryPoint(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.observed_at = source["observed_at"];
+	        this.track_count = source["track_count"];
+	        this.loss_percent = source["loss_percent"];
+	        this.discard_percent = source["discard_percent"];
+	        this.concealment_percent = source["concealment_percent"];
+	        this.buffer_ms = source["buffer_ms"];
+	        this.rtt_ms = source["rtt_ms"];
+	        this.output_state = source["output_state"];
+	    }
+	}
+	export class VoiceIngressDiagnostics {
+	    publication: string;
+	    ssrc: number;
+	    started_at: number;
+	    age_ms: number;
+	    stale: boolean;
+	    packets: number;
+	    bytes: number;
+	    sample_ms: number;
+	    packets_per_second?: number;
+	    jitter_ms: number;
+	    max_gap_ms: number;
+	    burst_packets: number;
+
+	    static createFrom(source: any = {}) {
+	        return new VoiceIngressDiagnostics(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.publication = source["publication"];
+	        this.ssrc = source["ssrc"];
+	        this.started_at = source["started_at"];
+	        this.age_ms = source["age_ms"];
+	        this.stale = source["stale"];
+	        this.packets = source["packets"];
+	        this.bytes = source["bytes"];
+	        this.sample_ms = source["sample_ms"];
+	        this.packets_per_second = source["packets_per_second"];
+	        this.jitter_ms = source["jitter_ms"];
+	        this.max_gap_ms = source["max_gap_ms"];
+	        this.burst_packets = source["burst_packets"];
+	    }
+	}
+	export class VoiceMediaPath {
+	    publisher_id: string;
+	    slot: string;
+	    output_ssrc: number;
+	    ingress?: VoiceIngressDiagnostics;
+
+	    static createFrom(source: any = {}) {
+	        return new VoiceMediaPath(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.publisher_id = source["publisher_id"];
+	        this.slot = source["slot"];
+	        this.output_ssrc = source["output_ssrc"];
+	        this.ingress = this.convertValues(source["ingress"], VoiceIngressDiagnostics);
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	export class VoiceServerTrack {
 	    ssrc: number;
 	    publisher_id: string;
@@ -2082,6 +2337,7 @@ export namespace netproto {
 	export class VoiceTransportDiagnostics {
 	    connection_state: string;
 	    receiver_reports: VoiceServerTrack[];
+	    paths?: VoiceMediaPath[];
 
 	    static createFrom(source: any = {}) {
 	        return new VoiceTransportDiagnostics(source);
@@ -2091,6 +2347,7 @@ export namespace netproto {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.connection_state = source["connection_state"];
 	        this.receiver_reports = this.convertValues(source["receiver_reports"], VoiceServerTrack);
+	        this.paths = this.convertValues(source["paths"], VoiceMediaPath);
 	    }
 
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -2111,7 +2368,48 @@ export namespace netproto {
 		    return a;
 		}
 	}
+	export class VoiceSenderDiagnostics {
+	    ssrc: number;
+	    sample_ms?: number;
+	    packets_sent?: number;
+	    bytes_sent?: number;
+	    packets_per_second?: number;
+	    bitrate_bps?: number;
+
+	    static createFrom(source: any = {}) {
+	        return new VoiceSenderDiagnostics(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.ssrc = source["ssrc"];
+	        this.sample_ms = source["sample_ms"];
+	        this.packets_sent = source["packets_sent"];
+	        this.bytes_sent = source["bytes_sent"];
+	        this.packets_per_second = source["packets_per_second"];
+	        this.bitrate_bps = source["bitrate_bps"];
+	    }
+	}
+	export class VoiceICETransport {
+	    protocol: string;
+	    local_candidate: string;
+	    remote_candidate: string;
+	    relay_protocol: string;
+
+	    static createFrom(source: any = {}) {
+	        return new VoiceICETransport(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.protocol = source["protocol"];
+	        this.local_candidate = source["local_candidate"];
+	        this.remote_candidate = source["remote_candidate"];
+	        this.relay_protocol = source["relay_protocol"];
+	    }
+	}
 	export class VoiceReceiverDiagnostics {
+	    ssrc?: number;
 	    track_id: string;
 	    publisher_id: string;
 	    codec: string;
@@ -2145,6 +2443,7 @@ export namespace netproto {
 
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.ssrc = source["ssrc"];
 	        this.track_id = source["track_id"];
 	        this.publisher_id = source["publisher_id"];
 	        this.codec = source["codec"];
@@ -2174,6 +2473,7 @@ export namespace netproto {
 	    }
 	}
 	export class VoiceTelemetry {
+	    session_id?: string;
 	    truncated?: boolean;
 	    channel_id: number;
 	    client_version: string;
@@ -2187,6 +2487,8 @@ export namespace netproto {
 	    voice_limiter: boolean;
 	    gain_normalize: boolean;
 	    tracks: VoiceReceiverDiagnostics[];
+	    transport?: VoiceICETransport;
+	    senders?: VoiceSenderDiagnostics[];
 
 	    static createFrom(source: any = {}) {
 	        return new VoiceTelemetry(source);
@@ -2194,6 +2496,7 @@ export namespace netproto {
 
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.session_id = source["session_id"];
 	        this.truncated = source["truncated"];
 	        this.channel_id = source["channel_id"];
 	        this.client_version = source["client_version"];
@@ -2207,6 +2510,8 @@ export namespace netproto {
 	        this.voice_limiter = source["voice_limiter"];
 	        this.gain_normalize = source["gain_normalize"];
 	        this.tracks = this.convertValues(source["tracks"], VoiceReceiverDiagnostics);
+	        this.transport = this.convertValues(source["transport"], VoiceICETransport);
+	        this.senders = this.convertValues(source["senders"], VoiceSenderDiagnostics);
 	    }
 
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -2273,6 +2578,8 @@ export namespace netproto {
 	    ping_ms: number;
 	    client_report?: VoiceClientReport;
 	    transport?: VoiceTransportDiagnostics;
+	    history?: VoiceHistoryPoint[];
+	    paths?: VoiceCorrelatedPath[];
 
 	    static createFrom(source: any = {}) {
 	        return new VoiceDiagnostics(source);
@@ -2289,6 +2596,8 @@ export namespace netproto {
 	        this.ping_ms = source["ping_ms"];
 	        this.client_report = this.convertValues(source["client_report"], VoiceClientReport);
 	        this.transport = this.convertValues(source["transport"], VoiceTransportDiagnostics);
+	        this.history = this.convertValues(source["history"], VoiceHistoryPoint);
+	        this.paths = this.convertValues(source["paths"], VoiceCorrelatedPath);
 	    }
 
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -3596,6 +3905,17 @@ export namespace netproto {
 		    return a;
 		}
 	}
+
+
+
+
+
+
+
+
+
+
+
 
 	export class WebhookEntry {
 	    id: number;
