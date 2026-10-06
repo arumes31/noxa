@@ -1,4 +1,6 @@
-// Native GIF images have no pause API. Replace them with a static preview while
+import { animatedChatImageSource } from "./chat-animation-source.js";
+
+// Native animated images have no pause API. Replace them with a static preview while
 // suspended and retain the original bytes for playback and the full-size viewer.
 const originals = new WeakMap();
 export const GIF_BACKGROUND_DELAY = 60_000;
@@ -26,7 +28,7 @@ export function manageChatGIFPlayback(root, selector = "img") {
             let pixels = "";
             try { pixels = canvas.toDataURL("image/png"); }
             catch {
-                // Remote GIFs without CORS still allow drawing, but not reading
+                // Remote animations without CORS allow drawing, but not reading
                 // canvas pixels. Display that canvas over an inert image instead.
                 const wrapper = document.createElement("span");
                 wrapper.style.cssText = "display:inline-block;position:relative;max-width:100%;line-height:0";
@@ -51,6 +53,24 @@ export function manageChatGIFPlayback(root, selector = "img") {
     }
 
     function update(image, state) {
+        if (state.video) {
+            // Only recorded chat attachments belong to this policy. A node
+            // switched to a live MediaStream must never be paused or resumed.
+            if (image.srcObject) { state.resume = false; return; }
+            if (suspended || state.visible === false) {
+                if (!image.paused) {
+                    state.resume = true;
+                    state.ownPauses++;
+                    image.pause();
+                }
+            } else if (!background && state.visible && state.resume) {
+                state.resume = false;
+                // Autoplay policies may reject resuming audible content. Leave
+                // the native controls available rather than retrying in a loop.
+                image.play()?.catch(() => {});
+            }
+            return;
+        }
         if (suspended || state.visible === false) pause(image, state);
         else if (!background && state.visible && state.paused) {
             state.paused = false;
@@ -71,6 +91,8 @@ export function manageChatGIFPlayback(root, selector = "img") {
 
     function register(image) {
         if (!image.matches(selector)) return;
+        const video = image.tagName === "VIDEO";
+        if ((!video && image.tagName !== "IMG") || (video && image.srcObject)) return;
         const previous = images.get(image);
         if (previous && (image.src === previous.source || image.src === previous.still)) return;
         if (previous) {
@@ -81,8 +103,8 @@ export function manageChatGIFPlayback(root, selector = "img") {
         }
         // Markdown embeds often use extensionless CDN URLs. Their animation
         // format is unknown, so freeze any remote image when playback is paused.
-        if (!/^(?:data:image\/gif[;,]|https?:|blob:)/i.test(image.src)) return;
-        const state = { source: image.src, visible: null, paused: false };
+        if (video ? !/^(?:data:video\/|https?:|blob:)/i.test(image.src) : !animatedChatImageSource(image.src)) return;
+        const state = { source: image.src, visible: null, paused: false, video, resume: false, ownPauses: 0 };
         images.set(image, state);
         visibility.observe(image);
         update(image, state);
@@ -100,6 +122,7 @@ export function manageChatGIFPlayback(root, selector = "img") {
             else for (const node of record.addedNodes) scan(node);
         }
         for (const image of images.keys()) if (!root.contains(image)) {
+            if (images.get(image).video && !image.srcObject) image.pause();
             visibility.unobserve(image);
             images.delete(image);
         }
@@ -109,6 +132,18 @@ export function manageChatGIFPlayback(root, selector = "img") {
     root.addEventListener("load", event => {
         const state = images.get(event.target);
         if (state) update(event.target, state);
+    }, { capture: true, signal: events.signal });
+    root.addEventListener("play", event => {
+        const state = images.get(event.target);
+        if (state?.video) update(event.target, state);
+    }, { capture: true, signal: events.signal });
+    root.addEventListener("pause", event => {
+        const state = images.get(event.target);
+        if (!state?.video) return;
+        // A policy pause queues the same DOM event as a manual pause. Consume
+        // only our own events so manually paused clips never auto-start later.
+        if (state.ownPauses) state.ownPauses--;
+        else state.resume = false;
     }, { capture: true, signal: events.signal });
 
     function beginBackgroundDelay() {
@@ -137,6 +172,7 @@ export function manageChatGIFPlayback(root, selector = "img") {
     if (background) beginBackgroundDelay();
     return () => {
         clearTimeout(timer);
+        for (const [image, state] of images) if (state.video && !image.srcObject) image.pause();
         events.abort(); changes.disconnect(); visibility.disconnect(); images.clear();
     };
 }

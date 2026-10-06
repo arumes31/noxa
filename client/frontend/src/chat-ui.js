@@ -11,6 +11,7 @@
 // Replies and direct recipients use explicit protocol identities.
 import { resolveParent, directPeer } from "./chat-relations.js";
 import { manageChatGIFPlayback, originalGIFSource } from "./chat-gif-playback.js";
+import { appendUnreadBadge, createUnreadTabEffects } from "./chat-unread.js";
 import { voiceMessageButton, renderVoiceMessage } from "./voice-messages.js";
 import { initMessageTools, saveMessageReference } from "./message-tools.js";
 import { roleMentionChoices, roleMentionLabel, mentionFlags } from "./role-mentions.js";
@@ -66,7 +67,8 @@ let view = { kind: "channel" };
 // replaced wholesale, never merged, so the client cannot accumulate drift.
 let subscriptions = [];
 const store = new Map(); // key -> {msgs, hasMore, end, loading, loaded}
-const unread = new Map(); // channelID -> {n, mention}
+const unread = new Map(); // channelID -> {n, mention, unreadAt}
+let unreadEffects = null;
 const pmTabs = new Map(); // uid -> {uid, nick, unread, unreadAt, offline, pendingRead}
 const chanTabs = new Map(); // channelID -> {id}; derived from SubscriptionState
 let pendingChannelTab = 0; // activate only after the server confirms subscription
@@ -1624,10 +1626,7 @@ function renderTabs() {
         el.appendChild(name);
         const badge = unread.get(id);
         if (badge?.n > 0) {
-            const dot = document.createElement("span");
-            dot.className = "pm-unread" + (badge.mention ? " mention" : "");
-            dot.textContent = badge.n;
-            el.appendChild(dot);
+            appendUnreadBadge(el, badge.n, badge.unreadAt, badge.mention);
         }
         if (!current) {
             const x = document.createElement("button");
@@ -1666,7 +1665,13 @@ function renderTabs() {
         };
         el.tabIndex = 0; el.setAttribute("aria-haspopup", "menu");
         el.oncontextmenu = e => openMenu(e);
-        el.onkeydown = e => { if (contextMenuKey(e)) openMenu(e, true); };
+        el.onkeydown = e => {
+            if (contextMenuKey(e)) openMenu(e, true);
+            else if (e.target === el && (e.key === "Enter" || e.key === " ")) {
+                e.preventDefault();
+                if (current()) activatePM(tab.uid);
+            }
+        };
         const name = document.createElement("span");
         name.className = "pm-tab-name";
         name.textContent = tab.nick;
@@ -1679,16 +1684,7 @@ function renderTabs() {
             el.appendChild(b);
         }
         if (tab.unread > 0) {
-            el.classList.add("has-unread");
-            if (Number.isFinite(tab.unreadAt)) {
-                el.classList.add("unread-arrival");
-                // Rebuilding the tab bar must preserve the fast/slow pulse timeline.
-                el.style.setProperty("--pm-unread-elapsed", `-${Math.max(0, Date.now() - tab.unreadAt)}ms`);
-            }
-            const dot = document.createElement("span");
-            dot.className = "pm-unread";
-            dot.textContent = tab.unread;
-            el.appendChild(dot);
+            appendUnreadBadge(el, tab.unread, tab.unreadAt);
         }
         const x = document.createElement("button");
         x.className = "pm-close";
@@ -1703,6 +1699,7 @@ function renderTabs() {
         el.onclick = () => { if (current()) activatePM(tab.uid); };
         bar.appendChild(el);
     }
+    unreadEffects?.refresh();
 }
 
 // --- local DM history (122) ---------------------------------------------------
@@ -2183,6 +2180,7 @@ export function addChat(d) {
         const u = unread.get(chID) || { n: 0, mention: false };
         u.n++;
         u.mention = u.mention || m.mentioned;
+        if (!st.replayingTabID) u.unreadAt = Date.now();
         unread.set(chID, u);
         V().renderTree();
         renderTabs();
@@ -3967,6 +3965,8 @@ function handleTabComplete(e) {
 // ---------------------------------------------------------------------------
 
 export function initChat() {
+    unreadEffects?.dispose();
+    unreadEffects = createUnreadTabEffects($("pm-tabs"));
     initMessageTools({ unread: unreadMessageReferences, jump: jumpMessageReference });
     initDiscussions(() => activeChannelID());
     $("chat-text").addEventListener("input", updateComposerCount);
@@ -3983,7 +3983,7 @@ export function initChat() {
     const log = $("chat-log");
 
     applyChatPrefs();
-    const stopGIFPlayback = manageChatGIFPlayback(document.body, ".msg img, .lightbox img");
+    const stopGIFPlayback = manageChatGIFPlayback(document.body, ".msg img, .lightbox img, .msg video.msg-video, .lightbox video");
 
     // Attachments, wrapped text and viewport changes can grow the conversation
     // after appendLive has scrolled. Keep following the newest message until
@@ -4005,7 +4005,7 @@ export function initChat() {
     chatRows.observe(log, { childList: true });
     log.addEventListener("load", followLatest, true);
     log.addEventListener("loadedmetadata", followLatest, true);
-    window.addEventListener("pagehide", () => { chatResize.disconnect(); chatRows.disconnect(); stopGIFPlayback(); }, { once: true });
+    window.addEventListener("pagehide", () => { chatResize.disconnect(); chatRows.disconnect(); stopGIFPlayback(); unreadEffects?.dispose(); }, { once: true });
 
     // Scope selector drives the active view (channel/global/direct).
     $("chat-scope").addEventListener("change", () => {

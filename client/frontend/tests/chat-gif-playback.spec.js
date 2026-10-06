@@ -2,6 +2,11 @@ import { test, expect } from "./fixtures.js";
 
 const gif = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
 const frozen = /^data:image\/svg\+xml,/;
+// Two 24px red/blue frames, encoded with Pillow (120ms per frame, looping).
+const animations = {
+    WebP: "data:image/webp;base64,UklGRuQAAABXRUJQVlA4WAoAAAACAAAAFwAAFwAAQU5JTQYAAAAAAAAAAABBTk1GXAAAAAAAAAAAABcAABcAAHgAAAJWUDggRAAAALADAJ0BKhgAGAA+bTSWR6QjIiEoCACADYllAMkCgH4AAtaQY7UAAP7wm0P/yC5YXXI1//ID/kB/yA//kB/+m9mp84AAQU5NRlQAAAAAAAAAAAAXAAAXAAB4AAAAVlA4IDwAAADUAgCdASoYABgAPm00lkeCgIAAANiWUAdgAExQ4dowAP75Hdv//kB//kB//kB//ID//iF3shz/9P4AAAA=",
+    APNG: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABgAAAAYCAIAAABvFaqvAAAACGFjVEwAAAACAAAAAPONk3AAAAAaZmNUTAAAAAAAAAAYAAAAGAAAAAAAAAAAAAMAGQAAwc5QbgAAACpJREFUeJxj/M9AHcBEJXMYRg0iDEbDiDAYDSPCYDSMCIPRMCIMBl8YAQB7qgEvQEYNfwAAABpmY1RMAAAAAQAAABgAAAAYAAAAAAAAAAAAAwAZAABavbq6AAAAMGZkQVQAAAACeJxjZGD4z0ANwEQVUxhGDSIGjAY2YTAaRoTBaBgRBqNhRBgMvjACAHmsAS/omww2AAAAAElFTkSuQmCC",
+};
 
 test.beforeEach(async ({ page }) => {
     await page.route("**/__gif_playback__", route => route.fulfill({ contentType: "text/html", body:
@@ -147,4 +152,43 @@ test("frozen GIF previews preserve large landscape and portrait layout and pixel
         }));
     }
     expect(after).toEqual(before);
+});
+
+for (const [format, source] of Object.entries(animations)) {
+    test(`animated ${format} attachments pause offscreen and after a background minute, then resume only onscreen`, async ({ page }) => {
+        await page.evaluate(async source => {
+            for (const image of document.images) image.src = source;
+            await Promise.all([...document.images].map(image => image.decode()));
+        }, source);
+        await expect(page.locator("#offscreen")).toHaveAttribute("src", frozen);
+        await expect(page.locator("#visible")).toHaveAttribute("src", source);
+        await focusWindow(page, false);
+        await page.clock.runFor(59_000);
+        await expect(page.locator("#visible")).toHaveAttribute("src", source);
+        await page.clock.runFor(1_000);
+        await expect(page.locator("#visible")).toHaveAttribute("src", frozen);
+        expect(await page.locator("#visible").evaluate(image => window.__originalGIF(image))).toBe(source);
+        await focusWindow(page, true);
+        await expect(page.locator("#visible")).toHaveAttribute("src", source);
+        await expect(page.locator("#offscreen")).toHaveAttribute("src", frozen);
+        await page.locator("#chat").evaluate(element => { element.scrollTop = element.scrollHeight; });
+        await page.clock.runFor(50);
+        await expect(page.locator("#offscreen")).toHaveAttribute("src", source);
+        await expect(page.locator("#visible")).toHaveAttribute("src", frozen);
+    });
+}
+
+test("static PNG and WebP data attachments keep their original sources", async ({ page }) => {
+    const sources = await page.evaluate(() => {
+        const canvas = document.createElement("canvas"); canvas.width = canvas.height = 24;
+        const result = {};
+        for (const format of ["png", "webp"]) {
+            const image = document.createElement("img"); image.id = "static-" + format;
+            result[format] = image.src = canvas.toDataURL("image/" + format);
+            document.getElementById("chat").append(image);
+        }
+        return result;
+    });
+    await focusWindow(page, false); await page.clock.runFor(60_000);
+    for (const [format, source] of Object.entries(sources)) await expect(page.locator("#static-" + format)).toHaveAttribute("src", source);
 });
