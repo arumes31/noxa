@@ -7296,6 +7296,7 @@ test("video CPU pressure does not flap quality around its threshold", async ({ p
         window.__testCPU = 90;
         const app = window.go.main.App;
         window.go.main.App = new Proxy(app, { get(target, key) {
+            if (key === "SupportsStreamVideoQualityForTab") return async () => false;
             if (key === "SystemCPUPercent") return async () => {
                 if (window.__rejectCPU) throw new Error("CPU telemetry unavailable");
                 return window.__testCPU;
@@ -7307,22 +7308,24 @@ test("video CPU pressure does not flap quality around its threshold", async ({ p
         video.videoTrackAdded(stream.getVideoTracks()[0].id, stream, { client_id: "peer", nickname: "Peer" });
     });
     const qualities = () => page.evaluate(() => (window.__callArgs.SetVideoQualityForTab || []).map(args => args[1]));
+    // The legacy server receives the grid's initial preference before any CPU sample.
+    await expect.poll(qualities).toEqual(["mid"]);
     await page.clock.runFor(3000);
-    await expect.poll(qualities).toEqual(["low"]);
+    await expect.poll(qualities).toEqual(["mid", "low"]);
     for (const cpu of [84, 86, 84, 75, 69, 80]) {
         await page.evaluate(value => { window.__testCPU = value; }, cpu);
         await page.clock.runFor(3000);
     }
-    expect(await qualities()).toEqual(["low"]);
+    expect(await qualities()).toEqual(["mid", "low"]);
     await page.evaluate(() => { window.__testCPU = 60; });
     await page.clock.runFor(12000);
     await page.evaluate(() => { window.__rejectCPU = true; });
     await page.clock.runFor(6000);
     await page.evaluate(() => { window.__rejectCPU = false; });
     await page.clock.runFor(15000);
-    expect(await qualities()).toEqual(["low"]);
+    expect(await qualities()).toEqual(["mid", "low"]);
     await page.clock.runFor(3000);
-    await expect.poll(qualities).toEqual(["low", "mid"]);
+    await expect.poll(qualities).toEqual(["mid", "low", "mid"]);
 });
 
 test("camera settings have their own searchable section and preserve drafts across navigation", async ({ page }) => {
@@ -7380,6 +7383,7 @@ test("video CPU pressure respects efficient decoding and discards stale polls", 
         Object.assign(state, { activeTabID: "video-tab", myClientID: "self", myChannelID: 1, pc });
         const app = window.go.main.App;
         window.go.main.App = new Proxy(app, { get(target, key) {
+            if (key === "SupportsStreamVideoQualityForTab") return async () => false;
             if (key === "SystemCPUPercent") return async () => {
                 if (window.__delayCPU) return await new Promise(resolve => { window.__finishCPU = resolve; });
                 return 95;
@@ -7390,8 +7394,10 @@ test("video CPU pressure respects efficient decoding and discards stale polls", 
         const stream = document.createElement("canvas").captureStream(1);
         window.__videoForCPU.videoTrackAdded(stream.getVideoTracks()[0].id, stream, { client_id: "peer", nickname: "Peer" });
     });
+    const qualities = () => page.evaluate(() => window.__callArgs.SetVideoQualityForTab || []);
+    await expect.poll(qualities).toEqual([["video-tab", "mid"]]);
     await page.clock.runFor(9000);
-    expect(await page.evaluate(() => window.__calls.SetVideoQualityForTab || 0)).toBe(0);
+    expect(await qualities()).toEqual([["video-tab", "mid"]]);
     await page.evaluate(() => { window.__efficientDecoder = false; window.__delayCPU = true; });
     await page.clock.runFor(3000);
     await expect.poll(() => page.evaluate(() => typeof window.__finishCPU)).toBe("function");
@@ -7401,7 +7407,7 @@ test("video CPU pressure respects efficient decoding and discards stale polls", 
         window.__finishCPU(95);
     });
     await page.clock.runFor(3000);
-    expect(await page.evaluate(() => window.__calls.SetVideoQualityForTab || 0)).toBe(0);
+    expect(await qualities()).toEqual([["video-tab", "mid"]]);
 });
 
 test("system CPU pressure reduces software decoding without clamping a healthy sender", async ({ page }) => {
