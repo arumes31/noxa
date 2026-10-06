@@ -27,6 +27,37 @@ func audioReceiverReportFixture(t *testing.T) (*Router, *pubSlot) {
 	return router, tracks.audio[SlotMic]
 }
 
+func TestVoiceIngressBindsPublicationAndMeasuresArrivalBursts(t *testing.T) {
+	router, output := audioReceiverReportFixture(t)
+	started := time.Now()
+	router.slotClaims["speaker"] = map[string]slotClaim{SlotMic: {token: 41}}
+	ingress := router.startAudioIngress("speaker", SlotMic, 41)
+	for i, offset := range []time.Duration{0, 20 * time.Millisecond, 520 * time.Millisecond, 521 * time.Millisecond} {
+		ingress.observe(&rtp.Packet{Header: rtp.Header{SSRC: 456, Timestamp: uint32(i) * 960}, Payload: []byte{1, 2}}, started.Add(offset))
+	}
+	paths := router.voiceMediaPaths("listener", started.Add(time.Second))
+	if len(paths) != 1 || paths[0].OutputSSRC != uint32(output.sender.GetParameters().Encodings[0].SSRC) {
+		t.Fatalf("wrong output binding: %+v", paths)
+	}
+	input := paths[0].Ingress
+	if input == nil || input.SSRC != 456 || input.Publication != "41" || input.Packets != 4 || input.MaxGapMS != 500 || input.BurstPackets != 1 {
+		t.Fatalf("wrong ingress observations: %+v", input)
+	}
+	router.slotClaims["speaker"][SlotMic] = slotClaim{token: 42}
+	replacement := router.startAudioIngress("speaker", SlotMic, 42)
+	router.startAudioIngress("speaker", SlotMic, 41)
+	router.stopAudioIngress("speaker", SlotMic, ingress)
+	replacement.observe(&rtp.Packet{Header: rtp.Header{SSRC: 789}}, started.Add(time.Second))
+	paths = router.voiceMediaPaths("listener", started.Add(2*time.Second))
+	if len(paths) != 1 || paths[0].Ingress.SSRC != 789 || paths[0].Ingress.Packets != 1 {
+		t.Fatalf("old publication contaminated new one: %+v", paths)
+	}
+	router.DetachPeer("speaker")
+	if len(router.voiceMediaPaths("listener", time.Now())) != 0 {
+		t.Fatal("retired publisher retained path")
+	}
+}
+
 func TestVoiceReceiverReportsUseAudioBindingAndRTCPUnits(t *testing.T) {
 	router, output := audioReceiverReportFixture(t)
 	ssrc := uint32(output.sender.GetParameters().Encodings[0].SSRC)

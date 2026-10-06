@@ -212,9 +212,10 @@ type Router struct {
 	watchSessions     map[string]uint64
 
 	mu           sync.RWMutex
-	members      map[int64]map[string]bool         // channelID -> member clientIDs
-	clientChan   map[string]int64                  // clientID -> current channelID
-	pubTracks    map[string]map[string]*pubTrack   // subscriberID -> publisherID -> tracks
+	members      map[int64]map[string]bool       // channelID -> member clientIDs
+	clientChan   map[string]int64                // clientID -> current channelID
+	pubTracks    map[string]map[string]*pubTrack // subscriberID -> publisherID -> tracks
+	audioIngress map[publicationKey]*audioIngressDiagnostic
 	pubPeers     map[string]*PeerConnectionWrapper // subscriberID -> its wrapper
 	outputs      map[string]TrackWriter            // tap clientID -> audio output track (recorder taps only)
 	videoOutputs map[string]TrackWriter            // tap clientID -> video output track (taps only)
@@ -1180,6 +1181,11 @@ func (r *Router) detachPeer(clientID string, leaveChannel bool) {
 	// The inbound tracks die with the peer connection, so their slots are
 	// free again even if the read loops have not noticed yet.
 	delete(r.slotClaims, clientID)
+	for key := range r.audioIngress {
+		if key.publisher == clientID {
+			delete(r.audioIngress, key)
+		}
+	}
 	if leaveChannel {
 		delete(r.trackSlots, clientID)
 	}
@@ -1363,6 +1369,8 @@ func (r *Router) ReadLoop(clientID, slot string, track TrackReader, extID uint8)
 		return
 	}
 	defer r.releaseSlot(clientID, slot, token)
+	ingress := r.startAudioIngress(clientID, slot, token)
+	defer r.stopAudioIngress(clientID, slot, ingress)
 
 	if slot != SlotMic {
 		// Screen audio must not drive the microphone speaking indicator.
@@ -1377,6 +1385,7 @@ func (r *Router) ReadLoop(clientID, slot string, track TrackReader, extID uint8)
 		if err != nil || !r.ownsSlot(clientID, slot, token) {
 			break
 		}
+		ingress.observe(pkt, time.Now())
 
 		// RTP level metadata is optional and supplied by the publisher. It
 		// must never decide whether authorization is checked. Recheck each
@@ -1964,7 +1973,7 @@ func (r *Router) preferredRIDLocked(subscriber, publisher, slot string) string {
 	src := r.videoSources[publisher][slot]
 	seen := r.videoSeen[videoSourceRef{publisher, slot}]
 	now := time.Now()
-	for _, candidate := range layerFallback(r.layerPrefLocked(subscriber)) {
+	for _, candidate := range layerFallback(r.streamLayerPrefLocked(subscriber, publisher, slot)) {
 		last := seen[candidate]
 		if _, ok := src[candidate]; ok && (last.IsZero() || now.Sub(last) < time.Second) {
 			return candidate

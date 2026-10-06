@@ -167,7 +167,7 @@ func (s *TCPServer) finishAuth(ctx context.Context, client *Client, id authIdent
 		UniqueID:           id.uniqueID,
 		Nickname:           id.nickname,
 		TLSFingerprint:     s.tlsFingerprint,
-		Capabilities:       []string{netproto.CapabilityAudioState, netproto.CapabilityVoiceTelemetry},
+		Capabilities:       []string{netproto.CapabilityAudioState, netproto.CapabilityVoiceTelemetry, netproto.CapabilityStreamVideoQuality},
 	}
 	if s.deps.ICEServers != nil {
 		resp.ICEServers = s.deps.ICEServers(id.uniqueID)

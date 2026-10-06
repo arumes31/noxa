@@ -7,6 +7,29 @@ import (
 	"testing"
 )
 
+func TestVoiceTelemetryValidatesTransportAndSenderAllowlist(t *testing.T) {
+	t.Parallel()
+	report := extendedVoiceDiagnostic(t, `"ssrc":123`)
+	if err := json.Unmarshal([]byte(`{"transport":{"protocol":"udp","local_candidate":"relay","remote_candidate":"host","relay_protocol":"tcp"},"senders":[{"ssrc":456,"sample_ms":5000,"packets_sent":250,"packets_per_second":50,"bitrate_bps":32000}]}`), &report); err != nil {
+		t.Fatal(err)
+	}
+	if !report.Valid() {
+		t.Fatal("valid additive transport/sender fields rejected")
+	}
+	if report.Transport == nil || len(report.Senders) != 1 || report.Tracks[0].SSRC == nil {
+		t.Fatal("new fields were discarded")
+	}
+	report.Transport.Protocol = "192.0.2.9"
+	if report.Valid() {
+		t.Fatal("non-enumerated transport data accepted")
+	}
+	report.Transport.Protocol = "udp"
+	report.Senders = append(report.Senders, report.Senders[0])
+	if report.Valid() {
+		t.Fatal("duplicate sender SSRC accepted")
+	}
+}
+
 func extendedVoiceDiagnostic(t *testing.T, extra string) VoiceTelemetry {
 	t.Helper()
 	var report VoiceTelemetry

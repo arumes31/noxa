@@ -730,6 +730,12 @@ type PositionUpdate struct {
 type VideoQuality struct {
 	Quality      string `json:"quality"`
 	AckRequested bool   `json:"ack_requested,omitempty"`
+	// Optional scoped selection requires CapabilityStreamVideoQuality. Both
+	// lifetime tokens must match the recipient's active watch.
+	PublisherID string `json:"publisher_id,omitempty"`
+	Slot        string `json:"slot,omitempty"`
+	Generation  uint64 `json:"generation,string,omitempty"`
+	Session     uint64 `json:"session,string,omitempty"`
 }
 
 // RecordingControl starts or stops a server-side recording of a channel.

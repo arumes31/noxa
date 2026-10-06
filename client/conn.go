@@ -54,23 +54,24 @@ type connManager struct {
 	// plain names.
 	tabID string
 
-	mu                     sync.Mutex
-	writeMu                sync.Mutex
-	displayNameMu          sync.Mutex
-	audioStateMu           sync.Mutex
-	supportsAudioState     bool
-	supportsVoiceTelemetry bool
-	conn                   net.Conn
-	connEpoch              uint64
-	addr                   string // control address (tab info)
-	clientID               string
-	uniqueID               string
-	nickname               string
-	displayName            string // requested public name; separate from the account login
-	isGuest                bool
-	authorizationModel     string
-	closed                 bool
-	reconnectTerminal      bool // authenticated rejection or trust failure; guarded by mu
+	mu                         sync.Mutex
+	writeMu                    sync.Mutex
+	displayNameMu              sync.Mutex
+	audioStateMu               sync.Mutex
+	supportsAudioState         bool
+	supportsVoiceTelemetry     bool
+	supportsStreamVideoQuality bool
+	conn                       net.Conn
+	connEpoch                  uint64
+	addr                       string // control address (tab info)
+	clientID                   string
+	uniqueID                   string
+	nickname                   string
+	displayName                string // requested public name; separate from the account login
+	isGuest                    bool
+	authorizationModel         string
+	closed                     bool
+	reconnectTerminal          bool // authenticated rejection or trust failure; guarded by mu
 	// The latest snapshot is replayed when a tab becomes active.
 	lastSnapshot string
 	// lastSubscriptions is the newest authoritative subscription set (312).
@@ -511,6 +512,7 @@ func (m *connManager) connectWith(addr string, authMsg netproto.Authenticate, si
 	m.authorizationModel = resp.AuthorizationModel
 	m.supportsAudioState = slices.Contains(resp.Capabilities, netproto.CapabilityAudioState)
 	m.supportsVoiceTelemetry = slices.Contains(resp.Capabilities, netproto.CapabilityVoiceTelemetry)
+	m.supportsStreamVideoQuality = slices.Contains(resp.Capabilities, netproto.CapabilityStreamVideoQuality)
 	m.isGuest = authMsg.Anonymous
 	m.iceServers = resp.ICEServers
 	m.mediaLimits = netproto.MediaLimits{}

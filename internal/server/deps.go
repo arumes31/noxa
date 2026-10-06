@@ -99,6 +99,7 @@ type VoiceBackend interface {
 	SetWhisper(clientID string, clients []string, channels []int64, active bool)
 	// SetVideoQuality sets the client's preferred simulcast layer.
 	SetVideoQuality(clientID, quality string) error
+	SetStreamVideoQuality(subscriber, publisher, slot string, generation, session uint64, quality string) error
 	PublishVideo(publisher, slot string, generation uint64, active bool) (uint64, error)
 	WatchVideo(subscriber, publisher, slot string, generation, revision, session uint64, active bool) (bool, error)
 	VideoWatchSession(subscriber string) uint64

@@ -82,6 +82,9 @@ type Client struct {
 	voiceTelemetry      *netproto.VoiceTelemetry
 	voiceTelemetryAt    time.Time
 	voiceTelemetryEpoch uint64
+	voiceHistory        []netproto.VoiceHistoryPoint
+	voiceHistoryEpoch   uint64
+	voiceHistorySession string
 	clientVersion       string // self-reported at authentication, protected by mu
 
 	// Pending challenge-response handshake state (set on Authenticate without

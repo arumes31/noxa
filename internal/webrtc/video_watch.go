@@ -13,6 +13,7 @@ type watchKey struct{ subscriber, publisher, slot string }
 type videoWatch struct {
 	publication, revision, epoch, session uint64
 	active                                bool
+	qualityRID                            string
 }
 
 // VideoPublication is a current, explicitly announced camera or screen source.
@@ -101,7 +102,11 @@ func (r *Router) WatchVideo(subscriber, publisher, slot string, generation, revi
 		if r.watches == nil {
 			r.watches = make(map[watchKey]videoWatch)
 		}
-		r.watches[key] = videoWatch{generation, revision, r.watchEpoch, session, active}
+		qualityRID := ""
+		if active && old.active && old.publication == generation && old.session == session {
+			qualityRID = old.qualityRID
+		}
+		r.watches[key] = videoWatch{publication: generation, revision: revision, epoch: r.watchEpoch, session: session, active: active, qualityRID: qualityRID}
 	}
 	// A newer active revision is an explicit retry. Notify the publisher again
 	// so paused screen capture can produce a fresh frame; exact retries remain

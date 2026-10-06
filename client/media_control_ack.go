@@ -21,7 +21,8 @@ func (cm *connManager) mediaControl(want netproto.MediaControlSaved) string {
 	case netproto.MsgScreenShare:
 		msg = netproto.ScreenShare{Active: want.Active, MaxHeight: want.MaxHeight, AckRequested: ack}
 	case netproto.MsgVideoQuality:
-		msg = netproto.VideoQuality{Quality: want.Quality, AckRequested: ack}
+		msg = netproto.VideoQuality{Quality: want.Quality, AckRequested: ack, PublisherID: want.PublisherID,
+			Slot: want.Slot, Generation: want.Generation, Session: want.Session}
 	default:
 		return "unsupported media control"
 	}
@@ -62,6 +63,7 @@ func validateMediaControlReply(f *netproto.Frame, want netproto.MediaControlSave
 	}
 	if saved.Operation != want.Operation || saved.ClientID != want.ClientID || saved.Active != want.Active ||
 		saved.MaxHeight != want.MaxHeight || saved.Quality != want.Quality ||
+		saved.PublisherID != want.PublisherID || saved.Slot != want.Slot || saved.Generation != want.Generation || saved.Session != want.Session ||
 		!slices.Equal(saved.UniqueIDs, want.UniqueIDs) || !slices.Equal(saved.ChannelIDs, want.ChannelIDs) {
 		return errors.New("media control acknowledgement does not match the request")
 	}
