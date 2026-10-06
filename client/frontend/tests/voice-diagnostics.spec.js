@@ -54,6 +54,29 @@ async function openInfo(page) {
     return page.getByRole("dialog", { name: /Connection Info|Verbindungsinformationen/ });
 }
 
+test("speaking events retain a short phrase until its diagnostic interval ends", async ({ page }) => {
+    const result = await page.evaluate(async () => {
+        const { collectVoiceTelemetry } = await import("/src/voice-diagnostics.js");
+        const state = window.__noxa.state;
+        state.pc = { connectionState: "connected", getStats: async () => new Map() };
+        const before = { id: "voice", type: "inbound-rtp", kind: "audio", trackIdentifier: "c-alice",
+            timestamp: performance.timeOrigin + performance.now() - 100, totalAudioEnergy: 0, totalSamplesDuration: 5 };
+        for (const speaking of [true, false]) {
+            for (const event of window.__events.event || []) event(JSON.stringify({ type: "speaking_changed",
+                data: { client_id: "c-alice", channel_id: 7, speaking } }));
+        }
+        const now = { ...before, timestamp: performance.timeOrigin + performance.now() + 1, totalSamplesDuration: 5.1 };
+        const later = { ...now, timestamp: now.timestamp + 1000, totalSamplesDuration: 6.1 };
+        const stats = row => new Map([[row.id, row]]);
+        return {
+            speaking: state.clients.find(client => client.client_id === "c-alice").is_speaking,
+            endedPhrase: collectVoiceTelemetry(state, stats(now), stats(before)).tracks[0].audio_active,
+            quietInterval: collectVoiceTelemetry(state, stats(later), stats(now)).tracks[0].audio_active,
+        };
+    });
+    expect(result).toEqual({ speaking: false, endedPhrase: true, quietInterval: false });
+});
+
 async function provideDiagnostics(page) {
     await page.evaluate(() => {
         window.__info.voice_diagnostics = {

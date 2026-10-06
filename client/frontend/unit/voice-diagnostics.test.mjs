@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { collectVoiceTelemetry, startVoiceDiagnostics, voicePlaybackHealth, selectedVoiceTransport } from "../src/voice-diagnostics.js";
+import { collectVoiceTelemetry, startVoiceDiagnostics, voicePlaybackHealth, selectedVoiceTransport, noteVoiceActivity } from "../src/voice-diagnostics.js";
 
 const settle = () => new Promise(resolve => setImmediate(resolve));
 const snapshot = (...rows) => new Map(rows.map(row => [row.id, row]));
@@ -44,6 +44,57 @@ test("transport exposes only the selected pair's allowlisted types and never its
     stats.get("local").protocol = "secret";
     assert.equal(selectedVoiceTransport(stats).protocol, "unknown");
     assert.doesNotMatch(JSON.stringify(selectedVoiceTransport(stats)), /10\.1|private|secret/);
+});
+
+test("quiet intervals do not grade comfort noise or buffering as impaired speech", () => {
+    const quiet = { sample_ms: 5000, audio_active: false, loss_percent: 0, discard_percent: 0,
+        non_silent_concealment_percent: 12, buffer_ms: 400 };
+    const report = { connection_state: "connected", output_state: "running", tracks: [quiet] };
+    assert.deepEqual(voicePlaybackHealth(report), { quality: "idle", reasons: ["idle"] });
+    assert.equal(voicePlaybackHealth({ ...report, tracks: [quiet, { ...quiet, audio_active: true, buffer_ms: 40, non_silent_concealment_percent: 0 }] }).quality, "good");
+    assert.equal(voicePlaybackHealth({ ...report, tracks: [{ ...quiet, audio_active: true }] }).quality, "poor");
+    assert.equal(voicePlaybackHealth({ ...report, tracks: [{ ...quiet, loss_percent: 4 }] }).quality, "poor");
+    assert.equal(voicePlaybackHealth({ ...report, tracks: [{ ...quiet, discard_percent: 2 }] }).quality, "fair");
+    assert.equal(voicePlaybackHealth({ ...report, output_state: "suspended" }).quality, "poor");
+    assert.equal(voicePlaybackHealth({ ...report, connection_state: "disconnected" }).quality, "unknown");
+    assert.equal(voicePlaybackHealth({ ...report, output_state: "unavailable" }).quality, "unknown");
+    assert.equal(voicePlaybackHealth({ ...report, truncated: true }).quality, "unknown");
+    assert.equal(voicePlaybackHealth(report, 16000).quality, "stale");
+    assert.equal(voicePlaybackHealth({ ...report, tracks: [{ ...quiet, audio_active: null }] }).quality, "poor", "missing activity never invents silence");
+});
+
+test("audio activity covers the measured interval, not just an instantaneous zero level", () => {
+    const old = previous({ totalAudioEnergy: 1, totalSamplesDuration: 10 });
+    const current = receiver({ totalAudioEnergy: 1, totalSamplesDuration: 11, audioLevel: 0 });
+    const collect = (now = current, before = old, state = stateFixture()) =>
+        collectVoiceTelemetry(state, snapshot(now), snapshot(before)).tracks[0].audio_active;
+    assert.equal(collect(), null, "zero RTP energy alone cannot prove silence through Chromium WebAudio playback");
+    assert.equal(collect({ ...current, totalAudioEnergy: 1.01 }), true, "speech earlier in the interval stays active");
+    assert.equal(collect({ ...current, totalAudioEnergy: 1.00000001 }), null);
+    assert.equal(collect(current, old, { ...stateFixture(), clients: [{ client_id: "c-alice", is_speaking: true }] }), true, "expected speech cannot be hidden by lost audio");
+    const sharing = stateFixture();
+    sharing.clients = [{ client_id: "c-alice", is_speaking: true }];
+    sharing.trackUsers.get("browser-track-a").track_id = "c-alice|screenaudio";
+    assert.equal(collect(current, old, sharing), null, "talking into a microphone does not activate a separate silent share-audio track");
+    const quiet = { ...stateFixture(), clients: [{ client_id: "c-alice", is_speaking: false }] };
+    assert.equal(collect(current, old, quiet), false);
+    quiet.replayingTabID = quiet.activeTabID;
+    noteVoiceActivity(quiet, "c-alice", 1500);
+    quiet.replayingTabID = "";
+    assert.equal(collect(current, old, quiet), false, "replayed historical transitions cannot become current speech");
+    noteVoiceActivity(quiet, "c-alice", 1500);
+    assert.equal(collect(current, old, quiet), true, "a phrase ending before this poll still counts");
+    assert.equal(collect({ ...current, timestamp: 3000 }, current, quiet), false, "the next entirely quiet interval is idle");
+    for (const change of [state => { state.activeTabID = "other"; }, state => { state.serverGeneration++; },
+        state => { state.myChannelID++; }, state => { state.pc = { ...state.pc }; }]) {
+        const scoped = { ...quiet }; change(scoped);
+        assert.equal(collect(current, old, scoped), false, "speech evidence does not cross a connection scope");
+    }
+    for (const now of [{ ...current, totalAudioEnergy: undefined }, { ...current, totalAudioEnergy: 0.5 },
+        { ...current, totalSamplesDuration: 10 }, { ...current, totalAudioEnergy: Infinity },
+        { ...current, totalAudioEnergy: 3 }, { ...current, timestamp: old.timestamp }, { ...current, ssrc: 123 }]) {
+        assert.equal(collect(now), null, "missing, reset, inconsistent or replaced stats remain unknown");
+    }
 });
 
 test("outbound audio telemetry preserves SSRC and interval counters without sending track/device IDs", () => {

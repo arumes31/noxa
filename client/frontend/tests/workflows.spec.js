@@ -6996,6 +6996,176 @@ test.describe("chat tab layout storage", () => {
     });
 });
 
+test.describe("recently closed chats", () => {
+    test.beforeEach(async ({ page }) => {
+        await page.evaluate(async () => {
+            window.__dmStorageIdentity = "alpha";
+            Object.assign(window.__noxa.state, { activeTabID: "recent-a", myUniqueID: "alpha", myChannelID: 1,
+                channels: [{ ChannelID: 1, Name: "Lobby" }, { ChannelID: 2, Name: "Gaming" }, { ChannelID: 3, Name: "Other" }] });
+            window.__recentState = { subscriptions: [1, 2, 3], requests: [], warnings: [], reply: true, deny: false };
+            window.__noxa.toast = text => window.__recentState.warnings.push(text);
+            const original = window.go.main.App;
+            window.go.main.App = new Proxy(original, { get(target, key) {
+                if (key === "SubscriptionsForTab") return async () => [...window.__recentState.subscriptions];
+                if (key === "ConversationForTab") return async () => ({ conversations: [], messages: [] });
+                if (key === "DMHistoryPeersForContext") return async () => [];
+                if (key === "SubscribeChannelsForTab") return async (tabID, ids, subscribe) => {
+                    const state = window.__recentState;
+                    state.requests.push({ tabID, ids, subscribe });
+                    if (state.holdWrite) return new Promise(resolve => { state.releaseWrite = () => resolve(""); });
+                    if (state.reply) {
+                        if (!state.deny) state.subscriptions = subscribe
+                            ? [...new Set([...state.subscriptions, ...ids])]
+                            : state.subscriptions.filter(id => !ids.includes(id));
+                        queueMicrotask(() => window.__noxaChat.onSubscriptions({ channel_ids: state.subscriptions }));
+                    }
+                    return "";
+                };
+                return target[key];
+            } });
+            window.__noxa.showWorkspace(false);
+            await window.__noxaChat.onConnect();
+        });
+        await expect(page.locator('[data-chat-key="ch:2"]')).toHaveCount(1);
+    });
+
+    test("reopens the last explicitly closed DM with Ctrl+Shift+T and keeps only ten recent chats", async ({ page }) => {
+        for (let index = 0; index < 12; index++) {
+            await page.evaluate(index => window.__noxaChat.openPM("closed-" + index, "Friend " + index), index);
+            await page.getByRole("button", { name: "Close Friend " + index, exact: true }).click();
+        }
+        await page.getByRole("button", { name: "All chats", exact: true }).click();
+        await expect(page.getByText("Recently closed", { exact: true })).toBeVisible();
+        await expect(page.getByRole("menuitem", { name: /^Reopen Friend/ })).toHaveCount(10);
+        await expect(page.getByRole("menuitem", { name: "Reopen Friend 0", exact: true })).toHaveCount(0);
+        const screenshot = test.info().outputPath("recently-closed-chats.png");
+        await page.screenshot({ path: screenshot });
+        await test.info().attach("Recently closed chats", { path: screenshot, contentType: "image/png" });
+        await page.keyboard.press("Escape");
+        await page.locator("#chat-text").focus();
+        await page.keyboard.press("Control+Shift+T");
+        await expect(page.locator('[data-chat-key="dm:closed-11"] .pm-tab-select')).toHaveAttribute("aria-selected", "true");
+        await page.getByRole("button", { name: "All chats", exact: true }).click();
+        await expect(page.getByRole("menuitem", { name: /^Reopen Friend/ })).toHaveCount(9);
+        await page.getByRole("menuitem", { name: "Reopen Friend 5", exact: true }).click();
+        await expect(page.locator('[data-chat-key="dm:closed-5"] .pm-tab-select')).toHaveAttribute("aria-selected", "true");
+    });
+
+    test("channel reopen waits for authorization and preserves history after rejection", async ({ page }) => {
+        await page.getByRole("button", { name: "Close # Gaming", exact: true }).click();
+        await expect(page.locator('[data-chat-key="ch:2"]')).toHaveCount(0);
+        await page.clock.install();
+        await page.evaluate(() => { window.__recentState.deny = true; });
+        await page.keyboard.press("Control+Shift+T");
+        await expect.poll(() => page.evaluate(() => window.__recentState.requests.length)).toBe(2);
+        await page.clock.fastForward(10_001);
+        await expect.poll(() => page.evaluate(() => window.__recentState.warnings.some(text => text.includes("could not be reopened")))).toBe(true);
+        await page.getByRole("button", { name: "All chats", exact: true }).click();
+        await expect(page.getByRole("menuitem", { name: "Reopen # Gaming", exact: true })).toBeEnabled();
+        await page.keyboard.press("Escape");
+        await page.evaluate(() => { window.__recentState.deny = false; });
+        await page.keyboard.press("Control+Shift+T");
+        await expect(page.locator('[data-chat-key="ch:2"] .pm-tab-select')).toHaveAttribute("aria-selected", "true");
+        await page.getByRole("button", { name: "All chats", exact: true }).click();
+        await expect(page.getByRole("menuitem", { name: "Reopen # Gaming", exact: true })).toHaveCount(0);
+    });
+
+    test("a hung subscription write times out without losing the closed chat", async ({ page }) => {
+        await page.getByRole("button", { name: "Close # Gaming", exact: true }).click();
+        await expect(page.locator('[data-chat-key="ch:2"]')).toHaveCount(0);
+        await page.clock.install();
+        await page.evaluate(() => { window.__recentState.holdWrite = true; });
+        await page.keyboard.press("Control+Shift+T");
+        await expect.poll(() => page.evaluate(() => window.__recentState.requests.length)).toBe(2);
+        await page.clock.fastForward(10_001);
+        await expect.poll(() => page.evaluate(() => window.__recentState.warnings.some(text => text.includes("could not be reopened")))).toBe(true);
+        await page.getByRole("button", { name: "All chats", exact: true }).click();
+        await expect(page.getByRole("menuitem", { name: "Reopen # Gaming", exact: true })).toBeEnabled();
+        await page.evaluate(() => window.__recentState.releaseWrite());
+        await expect(page.locator('[data-chat-key="ch:2"]')).toHaveCount(0);
+        await expect(page.getByRole("menuitem", { name: "Reopen # Gaming", exact: true })).toBeEnabled();
+    });
+
+    test("a delayed channel reopen does not consume a more recently closed DM", async ({ page }) => {
+        await page.getByRole("button", { name: "Close # Gaming", exact: true }).click();
+        await expect(page.locator('[data-chat-key="ch:2"]')).toHaveCount(0);
+        await page.evaluate(() => { window.__recentState.reply = false; });
+        await page.keyboard.press("Control+Shift+T");
+        await expect.poll(() => page.evaluate(() => window.__recentState.requests.length)).toBe(2);
+        await page.evaluate(() => window.__noxaChat.onSubscriptions({ channel_ids: [1, 3] }));
+        await page.evaluate(() => window.__noxaChat.openPM("new-close", "New close"));
+        await page.getByRole("button", { name: "Close New close", exact: true }).click();
+        await page.evaluate(() => window.__noxaChat.onSubscriptions({ channel_ids: [1, 2, 3] }));
+        await expect(page.locator('[data-chat-key="ch:2"] .pm-tab-select')).toHaveAttribute("aria-selected", "true");
+        await page.getByRole("button", { name: "All chats", exact: true }).click();
+        await expect(page.getByRole("menuitem", { name: "Reopen New close", exact: true })).toBeVisible();
+        await expect(page.getByRole("menuitem", { name: "Reopen # Gaming", exact: true })).toHaveCount(0);
+    });
+
+    test("forced removals and deleted channels cannot be reopened from recent chats", async ({ page }) => {
+        await page.getByRole("button", { name: "Close # Gaming", exact: true }).click();
+        await expect(page.locator('[data-chat-key="ch:2"]')).toHaveCount(0);
+        await page.evaluate(() => {
+            window.__noxaChat.onSubscriptions({ channel_ids: [1] });
+            window.__noxa.state.channels = [{ ChannelID: 1, Name: "Lobby" }];
+            window.__noxaChat.onChannelsDeleted([2, 3]);
+        });
+        await page.keyboard.press("Control+Shift+T");
+        expect(await page.evaluate(() => window.__recentState.requests.length)).toBe(1);
+        await page.getByRole("button", { name: "All chats", exact: true }).click();
+        await expect(page.getByRole("menuitem", { name: /^Reopen / })).toHaveCount(0);
+    });
+
+    test("a channel deleted while close confirmation is pending never enters recent chats", async ({ page }) => {
+        await page.evaluate(() => { window.__recentState.reply = false; });
+        await page.getByRole("button", { name: "Close # Gaming", exact: true }).click();
+        await expect.poll(() => page.evaluate(() => window.__recentState.requests.length)).toBe(1);
+        await page.evaluate(() => {
+            window.__noxa.state.channels = window.__noxa.state.channels.filter(channel => channel.ChannelID !== 2);
+            window.__noxaChat.onChannelsDeleted([2]);
+        });
+        await expect(page.locator('[data-chat-key="ch:2"]')).toHaveCount(0);
+        await page.getByRole("button", { name: "All chats", exact: true }).click();
+        await expect(page.getByRole("menuitem", { name: /^Reopen / })).toHaveCount(0);
+        expect(await page.evaluate(() => window.__recentState.warnings)).toEqual([]);
+    });
+
+    test("switching servers invalidates closed chat entries and pending reopens", async ({ page }) => {
+        await page.getByRole("button", { name: "Close # Gaming", exact: true }).click();
+        await expect(page.locator('[data-chat-key="ch:2"]')).toHaveCount(0);
+        await page.evaluate(() => { window.__recentState.reply = false; });
+        await page.keyboard.press("Control+Shift+T");
+        await expect.poll(() => page.evaluate(() => window.__recentState.requests.length)).toBe(2);
+        await page.evaluate(() => {
+            window.__noxa.state.activeTabID = "recent-b";
+            window.__noxa.state.serverGeneration++;
+            window.__noxaChat.resetView();
+            window.__noxaChat.onSubscriptions({ channel_ids: [1, 2, 3] });
+        });
+        await expect(page.locator('[data-chat-key="ch:1"] .pm-tab-select')).toHaveAttribute("aria-selected", "true");
+        await page.getByRole("button", { name: "All chats", exact: true }).click();
+        await expect(page.getByRole("menuitem", { name: /^Reopen / })).toHaveCount(0);
+        expect(await page.evaluate(() => window.__recentState.requests.length)).toBe(2);
+    });
+
+    test("identity changes clear recent chats and modal dialogs keep the undo shortcut inactive", async ({ page }) => {
+        await page.evaluate(() => window.__noxaChat.openPM("identity-peer", "Identity friend"));
+        await page.getByRole("button", { name: "Close Identity friend", exact: true }).click();
+        await page.evaluate(() => window.__noxa.openSettings("application"));
+        await page.keyboard.press("Control+Shift+T");
+        await expect(page.locator('[data-chat-key="dm:identity-peer"]')).toHaveCount(0);
+        await page.keyboard.press("Escape");
+        await page.evaluate(() => {
+            window.__dmStorageIdentity = "beta";
+            for (const callback of window.__events.dm_history_identity_changed || []) callback("1");
+        });
+        await page.keyboard.press("Control+Shift+T");
+        await expect(page.locator('[data-chat-key="dm:identity-peer"]')).toHaveCount(0);
+        await page.getByRole("button", { name: "All chats", exact: true }).click();
+        await expect(page.getByRole("menuitem", { name: /^Reopen / })).toHaveCount(0);
+    });
+});
+
 test.describe("unread private-message tab pulse", () => {
     test.beforeEach(async ({ page }) => {
         await page.emulateMedia({ reducedMotion: "no-preference" });

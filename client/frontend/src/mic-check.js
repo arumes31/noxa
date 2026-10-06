@@ -14,7 +14,8 @@ export function recommendThreshold(ambient, speech) {
     const percentile = (values, position) => [...values].sort((a, b) => a - b)[Math.floor((values.length - 1) * position)] || 0;
     const floor = percentile(ambient, 0.9), voice = percentile(speech, 0.75);
     const level = Math.max(0.002, floor * 1.5, floor + (voice - floor) * 0.25);
-    const suggested = Math.min(100, Math.max(1, Math.ceil(level / 0.2 * 100)));
+    // Round conservatively on the same 0.1% grid as the manual control.
+    const suggested = Math.min(100, Math.max(1, Math.ceil(level / 0.2 * 1000) / 10));
     return { floor, voice, suggested, valid: voice > Math.max(0.005, floor * 2) && suggested / 100 * 0.2 < voice };
 }
 

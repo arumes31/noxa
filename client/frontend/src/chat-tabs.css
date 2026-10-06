@@ -13,4 +13,6 @@
 .pm-tabs-total { font-size: 11px; color: var(--accent); font-family: var(--font-mono); }
 .chat-tabs-menu { min-width: 210px; overflow-y: auto; }
 .chat-tabs-menu .ctx-action { white-space: normal; overflow-wrap: anywhere; }
+.chat-tabs-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-top: 6px; padding: 10px 12px 6px; border-top: 1px solid var(--border); color: var(--text-faint); font-size: 0.7857rem; }
+.chat-tabs-heading kbd { font: inherit; white-space: nowrap; }
 @media (max-width: 700px) { #pm-tabs .pm-tab { max-width: 170px; } }

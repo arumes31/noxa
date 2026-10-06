@@ -7,7 +7,7 @@ import "./chat-tabs.css";
 // Layout contains stable references only. Membership and actions always come
 // from the current server/identity, never from saved layout metadata.
 export function createChatTabs(root, { onLayoutChange, onRefresh } = {}) {
-    let items = [], layout = { order: [], pinned: [] }, scope, ready = false;
+    let items = [], recentlyClosed = [], layout = { order: [], pinned: [] }, scope, ready = false;
     let list, more, activeKey, menu = null, menuIsAll = false, drag = null;
     const pinned = key => layout.pinned.includes(key);
     const find = key => items.find(item => item.key === key);
@@ -60,6 +60,12 @@ export function createChatTabs(root, { onLayoutChange, onRefresh } = {}) {
         const ownedMenu = menu;
         menuIsAll = trigger === more;
         for (const action of actions) {
+            if (action.heading) {
+                const heading = document.createElement("div"); heading.className = "chat-tabs-heading";
+                const label = document.createElement("span"); label.textContent = action.heading;
+                const shortcut = document.createElement("kbd"); shortcut.textContent = "Ctrl+Shift+T";
+                heading.append(label, shortcut); menu.append(heading); continue;
+            }
             const button = document.createElement("button"); button.type = "button"; button.className = "ctx-action";
             button.textContent = action.label; button.disabled = !!action.disabled;
             if (action.danger) button.classList.add("ctx-danger");
@@ -105,9 +111,9 @@ export function createChatTabs(root, { onLayoutChange, onRefresh } = {}) {
         drag = null;
         scope = options.scope; ready = options.ready;
         const captured = scope;
-        items = nextItems; layout = nextLayout;
+        items = nextItems; layout = nextLayout; recentlyClosed = options.recentlyClosed || [];
         const nextActive = items.find(item => item.active)?.key;
-        root.replaceChildren(); root.classList.toggle("hidden", items.length === 0);
+        root.replaceChildren(); root.classList.toggle("hidden", items.length === 0 && recentlyClosed.length === 0);
         list = document.createElement("div"); list.className = "pm-tab-list";
         list.setAttribute("role", "tablist"); list.setAttribute("aria-label", t("chat.tabsLabel"));
         const tabs = ordered();
@@ -174,7 +180,14 @@ export function createChatTabs(root, { onLayoutChange, onRefresh } = {}) {
         if (total) { const count = document.createElement("span"); count.className = "pm-tabs-total"; count.textContent = total > 99 ? "99+" : String(total); more.append(count); more.setAttribute("aria-label", `${t("chat.tabsAll")}, ${t("chat.tabsUnread", { count: total })}`); }
         const trigger = more;
         more.onclick = () => {
-            if (scope === captured && root.contains(trigger)) mountMenu(trigger, ordered().map(item => ({ label: description(item), run: () => { find(item.key)?.open(); focus(item.key); } })));
+            if (scope !== captured || !root.contains(trigger)) return;
+            const actions = ordered().map(item => ({ label: description(item), run: () => { find(item.key)?.open(); focus(item.key); } }));
+            if (recentlyClosed.length) {
+                actions.push({ heading: t("chat.tabsRecentlyClosed") });
+                actions.push(...recentlyClosed.map(item => ({ label: t("chat.tabsReopen", { name: item.name }), disabled: item.pending,
+                    run: () => recentlyClosed.find(entry => entry.key === item.key)?.open() })));
+            }
+            mountMenu(trigger, actions);
         };
         root.append(list, more); list.scrollLeft = scroll;
         const panel = document.getElementById("chat-wrap");
@@ -189,5 +202,17 @@ export function createChatTabs(root, { onLayoutChange, onRefresh } = {}) {
         activeKey = nextActive;
         onRefresh?.();
     }
-    return { render, dispose() { if (menu) closeContextMenu(menu); drag = null; items = []; root.replaceChildren(); } };
+    const reopenShortcut = event => {
+        if (event.defaultPrevented || event.repeat || !event.ctrlKey || !event.shiftKey || event.altKey || event.metaKey || event.key.toLowerCase() !== "t") return;
+        if (!root.isConnected || !root.getClientRects().length || document.querySelector(".dlg-overlay:not(.hidden), dialog[open]")) return;
+        const latest = recentlyClosed[0];
+        if (!latest || latest.pending) return;
+        event.preventDefault(); latest.open();
+    };
+    document.addEventListener("keydown", reopenShortcut);
+    return { render, dispose() {
+        if (menu) closeContextMenu(menu);
+        document.removeEventListener("keydown", reopenShortcut);
+        drag = null; items = []; recentlyClosed = []; root.replaceChildren();
+    } };
 }

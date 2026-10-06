@@ -155,6 +155,46 @@ test("received details show measured dimensions and FPS separately from requeste
     await page.screenshot({ path: testInfo.outputPath('received-quality.png') });
 });
 
+test("voice telemetry and watched-stream diagnostics share collection without sharing delta baselines", async ({ page }) => {
+    await page.clock.install();
+    await page.evaluate(async () => {
+        const state = window.__noxa.state;
+        state.trackUsers = new Map([["alice|mic", { client_id: "alice" }]]);
+        state.pc.connectionState = "connected";
+        window.__streams.statsCalls = 0;
+        window.__streams.voiceReports = [];
+        window.go.main.App.SystemCPUPercent = async () => 10;
+        state.pc.getStats = async () => {
+            const n = ++window.__streams.statsCalls;
+            return new Map([["video", { id: "video", type: "inbound-rtp", kind: "video", ssrc: 42,
+                trackIdentifier: "alice|screen", timestamp: n * 3000, framesDecoded: n * 90,
+                bytesReceived: n * 1500000, frameWidth: 1920, frameHeight: 1080 }],
+            ["audio", { id: "audio", type: "inbound-rtp", kind: "audio", ssrc: 43,
+                trackIdentifier: "alice|mic", timestamp: n * 3000, packetsReceived: n * 150,
+                bytesReceived: n * 10000, packetsLost: 0, totalSamplesReceived: n * 144000,
+                concealedSamples: 0, silentConcealedSamples: 0 }]]);
+        };
+        const { startVoiceDiagnostics } = await import("/src/voice-diagnostics.js");
+        window.__streams.stopVoiceStats = startVoiceDiagnostics({ state, intervalMS: 3000,
+            bridge: async (_tab, report) => window.__streams.voiceReports.push(report) });
+    });
+    await expect.poll(() => page.evaluate(() => window.__streams.voiceReports.length)).toBe(1);
+    await page.locator('[data-publisher="alice"] .stream-watch').click();
+    await page.clock.fastForward(3000);
+    await expect(page.locator(".vtile-received")).toContainText("— fps");
+    await expect.poll(() => page.evaluate(() => window.__streams.voiceReports.length)).toBe(2);
+    expect(await page.evaluate(() => window.__streams.statsCalls)).toBe(2);
+    expect(await page.evaluate(() => window.__streams.voiceReports[1].tracks[0].sample_ms)).toBe(3000);
+    await page.clock.fastForward(3000);
+    await expect(page.locator(".vtile-received")).toContainText("30.0 fps");
+    expect(await page.evaluate(() => window.__streams.statsCalls)).toBe(3);
+    await page.evaluate(() => window.__streams.stopVoiceStats());
+    await page.clock.fastForward(3000);
+    await expect(page.locator(".vtile-received")).toContainText("30.0 fps");
+    expect(await page.evaluate(() => window.__streams.statsCalls)).toBe(4);
+    expect(await page.evaluate(() => window.__streams.voiceReports.length)).toBe(3);
+});
+
 test("older servers expose an honest connection-wide quality control", async ({ page }) => {
     await page.evaluate(() => {
         window.go.main.App.SupportsStreamVideoQualityForTab = async () => false;
@@ -199,8 +239,10 @@ for (const failure of ["reject", "pending"]) test(`receiver diagnostics expire w
     await page.getByRole("button", { name: "Copy this stream’s diagnostics" }).click();
     expect(await page.evaluate(() => JSON.parse(window.__streams.copied).receiver)).toBe(null);
     await page.evaluate(() => { window.__streams.statsMode = "healthy"; window.__streams.resolveStats?.(); });
-    if (failure === "pending") await expect(page.locator(".vtile-received")).toContainText("— fps");
-    else { await page.clock.fastForward(3000); await expect(page.locator(".vtile-received")).toContainText("— fps"); }
+    // Timed-out native results are discarded; recovery begins with the next
+    // scheduled fresh collection rather than the late, stale completion.
+    await page.clock.fastForward(3000);
+    await expect(page.locator(".vtile-received")).toContainText("— fps");
     await page.clock.fastForward(3000);
     await expect(page.locator(".vtile-received")).toContainText("30.0 fps");
 });

@@ -120,7 +120,7 @@ graph TD
 * **Priority speaker**: Non-priority publishers in the current voice channel are ducked to 25% gain (about −12 dB) while a priority speaker talks.
 * **Whisper Routing**: Point-to-point and cross-channel targeted voice transmission bypasses standard channel boundaries.
 * **Microphone recovery**: If the selected microphone disconnects, receiving audio and video continues. Choose and apply a device in **Capture** settings, then select **Retry microphone**. A replacement microphone never starts automatically.
-* **Personal audio controls**: Separate per-member voice and screen-share volume/mute controls. Personal volume uses 100% as unity and reaches +20 dB at the 200% endpoint, with a limiter for loud peaks. Capture settings include push-to-talk, voice activation with a 450 ms release hold, continuous transmission, and local microphone testing.
+* **Personal audio controls**: Separate per-member voice and screen-share volume/mute controls. Personal volume uses 100% as unity and reaches +20 dB at the 200% endpoint, with a limiter for loud peaks. Capture settings include push-to-talk, voice activation with a 450 ms release hold, continuous transmission, and local microphone testing. Guided microphone calibration recommends thresholds in the same 0.1% steps as the manual control.
 * **Private calls**: Accepted direct/group calls carry voice, camera, and screen sharing without moving participants into a voice channel.
 * **Network echo test**: In **Capture** settings, explicitly join the server's echo channel to hear your microphone through the normal voice connection. Only you hear your microphone: other participants cannot hear you and you cannot hear them. Echo media is excluded from whispers, cross-participant video, and channel recordings. Mute and push-to-talk still apply; wear headphones. The return button restores your previous channel while the test remains active on that server tab. Each server automatically creates `Echo Test` on startup after role setup, granting admitted users permission to view, join and speak only in that channel. Existing channels with the configured name retain their access rules, custom metadata and history; startup updates only the known old system-created echo topic. Set Docker environment variable `NOXA_ECHO_CHANNEL_ENABLED=false` and recreate the server container to disable creation and loopback; existing channels and history are retained. Configure the name with `NOXA_ECHO_CHANNEL_NAME` or `echo_channel_name` in YAML.
 * **Connection benchmark**: A separate, explicitly started test in **Capture** sends synthetic Opus packets for 20 seconds through the server's actual WebRTC endpoint and private Echo Test. It uses a temporary guest with the current server's pinned certificate, without microphone/speaker access or moving your existing voice connection. Results include round-trip timing, arrival gaps and unmatched packets after a short drain period; Cancel, tab disconnect and application shutdown clean up the guest. Guest admission and private echo support are required. This measures packet delivery, not perceived audio quality or maximum video throughput.
@@ -129,7 +129,7 @@ graph TD
 
 * **Encrypted messages and attachments**: Direct messages use recipient keys; channel/global bodies use server-managed scope-key generations. Attachment keys travel inside their encrypted message bodies.
 * **Message tools**: Emoji reactions, replies, pins, polls, voice messages, typing indicators, read receipts, and mentions. [Inbox, history search, and saved messages](docs/message-tools.md) are scoped to the current server; history search decrypts and matches bodies in the native client.
-* **Chat navigation**: Channel and direct-message tabs stay on one row, with an **All chats** menu for overflow. Right-click to pin or reorder, or drag within the pinned/unpinned section. Arrow keys move focus, Enter opens a chat, and Ctrl+Shift+Left/Right reorders it. Order and pins are saved locally, encrypted and separated by server and identity; closing a tab removes its pin.
+* **Chat navigation**: Channel and direct-message tabs stay on one row, with an **All chats** menu for overflow. Right-click to pin or reorder, or drag within the pinned/unpinned section. Arrow keys move focus, Enter opens a chat, and Ctrl+Shift+Left/Right reorders it. Order and pins are saved locally, encrypted and separated by server and identity; closing a tab removes its pin. **Recently closed** in All chats and **Ctrl+Shift+T** reopen explicitly closed chats from the current session (up to ten); channel access is checked again. This list resets when the server or identity changes.
 * **Chat media**: Enlarging an attached video keeps the same player, playback position, volume, speed and pause state. Animated images and chat videos pause offscreen or after a minute without window focus; only visible media resumes, and manually paused videos stay paused.
 * **Threads and forums**: Persistent posts/replies, tags, following, unread state, archive/reopen, resolved questions, and pinned posts, under the parent channel's access rules. See [threads and forums](docs/threads-and-forums.md).
 * **Incoming webhooks**: Revocable, channel-scoped integration tokens; posts remain subject to the creator's current access. See [incoming webhooks](docs/incoming-webhooks.md).
@@ -819,6 +819,18 @@ an underlying VPN route or relay. Owner/admin diagnostics correlate fresh
 publisher SSRCs, SFU ingress/publication observations, subscriber output SSRCs
 and receiver reports. Their sample windows and clocks differ, so comparisons
 do not establish exact per-stage packet loss or one-way latency.
+
+Updated receivers retain speaking transitions across the measurement interval,
+instead of relying on a single instantaneous audio level. Zero RTP energy alone
+does not prove silence because Chromium can report it during WebAudio playback.
+Known quiet microphone intervals show a
+neutral **idle** status rather than grading comfort-noise buffering or concealment
+as impaired speech. Actual packet loss/discards and suspended output still surface;
+missing activity measurements remain unknown. This only changes diagnostics, not VAD.
+Owners/admins can inspect buffer, speech-concealment and loss timelines alongside
+the accessible history table. Missing values and collection gaps remain gaps.
+Voice, watched-stream, Client Info and Server Info diagnostics share peer-scoped
+RTCStats collections (at most 250 ms old), retaining their own interval baselines.
 
 When buffer delay grows, compare the target with the browser's minimum, packet
 arrival timing and the selected media route. A VPN exit node or relay can affect

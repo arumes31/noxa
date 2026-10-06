@@ -1,11 +1,35 @@
 import { t } from "./i18n.js";
 import { escapeHTML } from "./markdown.js";
 import { voicePlaybackHealth } from "./voice-diagnostics.js";
+import { voiceHistoryModel } from "./voice-history.js";
 
 const esc = value => escapeHTML(String(value ?? ""));
 const metric = (value, suffix = "") => Number.isFinite(value) ? `${value.toFixed(1)}${suffix}` : "—";
 const row = (label, value) => `<div class="ci-label">${esc(label)}</div><div class="ci-val">${esc(value)}</div>`;
 const age = sample => t(sample.stale ? "diagnostics.stale" : "diagnostics.fresh", { seconds: Math.max(0, Math.round((sample.age_ms || 0) / 1000)) });
+
+function historyHTML(diagnostic) {
+    const model = voiceHistoryModel(diagnostic.history, diagnostic.observed_at);
+    if (!model.points.length) return "";
+    const clock = at => new Date(at).toLocaleTimeString();
+    const x = at => (2 + (at - model.start) / (model.end - model.start) * 316).toFixed(2);
+    const charts = model.series.map(series => {
+        const label = t(`diagnostics.${series.label}`), range = `0–${series.maximum} ${series.unit}`;
+        const y = value => (64 - value / series.maximum * 60).toFixed(2);
+        const lines = series.segments.map(segment => `<polyline points="${segment.map(point => `${x(point.at)},${y(point.value)}`).join(" ")}"/>`).join("");
+        const dots = series.segments.flat().map(point => `<circle cx="${x(point.at)}" cy="${y(point.value)}" r="2"><title>${esc(`${clock(point.at)} · ${metric(point.value, " " + series.unit)}`)}</title></circle>`).join("");
+        const description = t("diagnostics.historyChart", { label, range, start: clock(model.start), end: clock(model.end) });
+        return `<figure class="ci-history-chart" data-metric="${series.key}"><figcaption><strong>${esc(label)}</strong><span>${esc(range)}</span></figcaption>
+            <svg viewBox="0 0 320 68" preserveAspectRatio="none" role="img" aria-label="${esc(description)}"><path class="ci-history-grid" d="M2 4H318M2 34H318M2 64H318"/>${lines}${dots}</svg>
+            ${dots ? "" : `<p class="ci-history-empty">${esc(t("diagnostics.historyNoMeasurements"))}</p>`}</figure>`;
+    }).join("");
+    const freshness = model.ageMS === null ? t("diagnostics.historyAgeUnknown") : t(model.stale ? "diagnostics.stale" : "diagnostics.fresh", { seconds: Math.round(model.ageMS / 1000) });
+    return `<details data-role="voice-history"><summary>${esc(t("diagnostics.history"))}</summary><p class="ci-muted">${esc(t("diagnostics.historyMeaning"))}</p>
+        <p class="ci-history-age ${model.stale ? "ci-diagnostic-stale" : "ci-muted"}">${esc(freshness)}</p>
+        <div class="ci-history-charts">${charts}</div><div class="ci-history-times" aria-hidden="true"><span>${esc(clock(model.start))}</span><span>${esc(clock(model.end))}</span></div>
+        <p class="ci-muted ci-history-hint">${esc(t("diagnostics.historyGaps"))}</p>
+        <div class="ci-history-scroll" tabindex="0" role="region" aria-label="${esc(t("diagnostics.historyTable"))}"><table><caption>${esc(t("diagnostics.historyTable"))}</caption><thead><tr>${["historyTime", "historyBuffer", "historyLoss", "historyDiscard", "historyConcealment"].map(key => `<th scope="col">${esc(t(`diagnostics.${key}`))}</th>`).join("")}</tr></thead><tbody>${model.points.slice().reverse().map(point => `<tr><td>${esc(clock(point.observed_at))}</td><td>${esc(metric(point.buffer_ms, " ms"))}</td><td>${esc(metric(point.loss_percent, "%"))}</td><td>${esc(metric(point.discard_percent, "%"))}</td><td>${esc(metric(point.concealment_percent, "%"))}</td></tr>`).join("")}</tbody></table></div></details>`;
+}
 
 // Only the owner/administrators receive this optional field. Clear the section
 // when permission or connection changes, including failed refreshes.
@@ -49,7 +73,7 @@ export function renderReceiverDiagnostics(overlay, diagnostic, clients = []) {
         if (!report.tracks?.length) parts.push(`<p class="ci-muted">${esc(t("diagnostics.noTracks"))}</p>`);
     } else parts.push(`<p class="ci-muted">${esc(t("diagnostics.missing"))}</p>`);
     if (diagnostic.history?.length) {
-        parts.push(`<details data-role="voice-history"><summary>${esc(t("diagnostics.history"))}</summary><p class="ci-muted">${esc(t("diagnostics.historyMeaning"))}</p><div class="ci-history-scroll"><table><thead><tr>${["historyTime", "historyBuffer", "historyLoss", "historyDiscard", "historyConcealment"].map(key => `<th>${esc(t(`diagnostics.${key}`))}</th>`).join("")}</tr></thead><tbody>${diagnostic.history.slice(-60).reverse().map(point => `<tr><td>${esc(new Date(point.observed_at).toLocaleTimeString())}</td><td>${esc(metric(point.buffer_ms, " ms"))}</td><td>${esc(metric(point.loss_percent, "%"))}</td><td>${esc(metric(point.discard_percent, "%"))}</td><td>${esc(metric(point.concealment_percent, "%"))}</td></tr>`).join("")}</tbody></table></div></details>`);
+        parts.push(historyHTML(diagnostic));
     }
     if (diagnostic.paths?.length) {
         parts.push(`<h4>${esc(t("diagnostics.path"))}</h4><p class="ci-muted">${esc(t("diagnostics.pathMeaning"))}</p>`);
@@ -69,7 +93,14 @@ export function renderReceiverDiagnostics(overlay, diagnostic, clients = []) {
     }
     if (!feedback.length) parts.push(`<p class="ci-muted">${esc(t("diagnostics.noFeedback"))}</p>`);
     const historyOpen = !!section.querySelector('[data-role="voice-history"]')?.open;
+    const previousTable = section.querySelector(".ci-history-scroll");
+    const tablePosition = previousTable && { top: previousTable.scrollTop, left: previousTable.scrollLeft, focused: previousTable.ownerDocument?.activeElement === previousTable };
     section.querySelector(".ci-diagnostic-content").innerHTML = parts.join("");
     const history = section.querySelector('[data-role="voice-history"]');
     if (history) history.open = historyOpen;
+    const table = section.querySelector(".ci-history-scroll");
+    if (table && tablePosition) {
+        table.scrollTop = tablePosition.top; table.scrollLeft = tablePosition.left;
+        if (tablePosition.focused) table.focus({ preventScroll: true });
+    }
 }

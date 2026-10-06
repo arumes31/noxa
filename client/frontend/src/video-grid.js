@@ -11,6 +11,7 @@ import { t as tLabel, currentLanguage } from "./i18n.js";
 import { SLOT_SCREEN, parseTrackID } from "./media-track-id.js";
 import { streamQualityTarget, streamUsesSourceQuality } from "./stream-controls.js";
 import { allocateReceiveQuality, settleAutoQuality } from "./receive-quality.js";
+import { samplePeerStats } from "./peer-stats.js";
 const V = () => window.__noxa;
 
 export function createVideoGrid({ applySendCaps, syncCameraButton, syncShareButton }) {
@@ -696,7 +697,7 @@ export function createVideoGrid({ applySendCaps, syncCameraButton, syncShareButt
         statsPollRequest = request;
         const current = () => statsPollRequest === request && state.pc === request.pc && mediaScopeIsCurrent(request.scope);
         try {
-            const stats = await request.pc.getStats();
+            const stats = await samplePeerStats(request.pc);
             if (!current()) return;
             for (const tile of tiles.values()) {
                 tile.diagnostics = summarizeStream(stats, tile.track?.id, tile.diagnosticsPC === request.pc ? tile.diagnostics : null);

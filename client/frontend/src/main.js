@@ -2,7 +2,7 @@ import { createConnectionQuality } from './connection-quality.js';
 import { createLoginMemory } from './login-memory.js';
 import { watchMicrophone } from "./microphone-recovery.js";
 import { createRemoteAudio } from './remote-audio.js';
-import { startVoiceDiagnostics } from './voice-diagnostics.js';
+import { startVoiceDiagnostics, noteVoiceActivity } from './voice-diagnostics.js';
 import { createChannelTree } from './channel-tree.js';
 import { captureChannelPresence, channelPresenceChanges } from './channel-presence.js';
 // noxa client frontend — voice ops console (vanilla JS).
@@ -1463,6 +1463,7 @@ window.runtime.EventsOn("event", (json) => {
             const c = state.clients.find((c) => c.client_id === d.client_id);
             if (c && d.channel_id !== undefined && d.channel_id !== c.channel_id) break;
             const speaking = !!d.speaking && !!c && !isClientMicrophoneMuted(c, state);
+            if (c?.is_speaking || speaking) noteVoiceActivity(state, d.client_id);
             if (c) c.is_speaking = speaking;
             if (speaking && d.client_id === state.myClientID && state.myChannelID &&
                 d.channel_id === state.myChannelID && !state.replayingTabID && !state.muted && !state.deafened) noteActivity();

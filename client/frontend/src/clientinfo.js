@@ -15,6 +15,7 @@ import { openMemberMove } from "./member-move.js";
 import { escapeHTML } from "./markdown.js";
 import { sessionUserID } from "./session-identity.js";
 import { renderReceiverDiagnostics } from "./voice-diagnostics-ui.js";
+import { samplePeerStats } from "./peer-stats.js";
 
 const V = () => window.__noxa;
 
@@ -332,7 +333,7 @@ async function refreshVoiceStats(overlay, client) {
     }
     try {
         const pc = state.pc;
-        const stats = await pc.getStats();
+        const stats = await samplePeerStats(pc);
         if (!isCurrentServerDialog(overlay)) return;
         if (state.pc !== pc) { blank(t("desktop.voice.reconnecting")); return; }
         if (client.client_id === state.myClientID) {

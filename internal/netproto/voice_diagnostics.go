@@ -87,6 +87,9 @@ type VoiceReceiverDiagnostics struct {
 	// interval averages, not instantaneous or end-to-end latency.
 	BufferMinimumMS *float64 `json:"buffer_minimum_ms,omitempty"`
 	AudioLevel      *float64 `json:"audio_level"`
+	// AudioActive describes audible activity over SampleMS, not the instantaneous
+	// level. Nil means unavailable; false permits a neutral idle playback badge.
+	AudioActive *bool `json:"audio_active,omitempty"`
 }
 
 func diagnosticText(s string, maximum int) bool {

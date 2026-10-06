@@ -24,3 +24,17 @@
 .ci-history-scroll table { border-collapse: collapse; width: 100%; font-size: .85em; font-variant-numeric: tabular-nums; }
 .ci-history-scroll th, .ci-history-scroll td { padding: 6px; text-align: start; border-bottom: 1px solid var(--border); white-space: nowrap; }
 .ci-history-scroll th { color: var(--text-dim); }
+.ci-history-scroll:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.ci-history-scroll caption { padding-bottom: 8px; text-align: start; color: var(--text-dim); }
+.ci-history-charts { display: grid; gap: 12px; min-width: 0; }
+.ci-history-chart { margin: 0; padding: 10px 12px 8px; min-width: 0; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-panel); }
+.ci-history-chart figcaption { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 4px 12px; font-size: .85em; }
+.ci-history-chart figcaption strong { font-weight: 600; }
+.ci-history-chart figcaption span { color: var(--text-dim); font-variant-numeric: tabular-nums; }
+.ci-history-chart svg { display: block; width: 100%; height: 64px; margin-top: 8px; overflow: visible; color: var(--accent); }
+.ci-history-chart polyline { fill: none; stroke: currentColor; stroke-width: 1.5; vector-effect: non-scaling-stroke; }
+.ci-history-chart circle { fill: currentColor; }
+.ci-history-grid { stroke: var(--border); stroke-width: 1; fill: none; vector-effect: non-scaling-stroke; }
+.ci-history-times { display: flex; justify-content: space-between; gap: 12px; padding: 6px 0 0; color: var(--text-dim); font-size: .8em; font-variant-numeric: tabular-nums; }
+.ci-history-empty, .ci-history-hint { margin: 6px 0 0; font-size: .85em; color: var(--text-dim); }
+.ci-history-age { font-size: .85em; }

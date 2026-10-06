@@ -2542,6 +2542,7 @@ export namespace netproto {
 	    buffer_target_ms?: number;
 	    buffer_minimum_ms?: number;
 	    audio_level?: number;
+	    audio_active?: boolean;
 
 	    static createFrom(source: any = {}) {
 	        return new VoiceReceiverDiagnostics(source);
@@ -2576,6 +2577,7 @@ export namespace netproto {
 	        this.buffer_target_ms = source["buffer_target_ms"];
 	        this.buffer_minimum_ms = source["buffer_minimum_ms"];
 	        this.audio_level = source["audio_level"];
+	        this.audio_active = source["audio_active"];
 	    }
 	}
 	export class VoiceTelemetry {

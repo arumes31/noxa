@@ -1,5 +1,7 @@
 import { collectVideoSenders, videoSenderSources } from "./video-sender-stats.js";
 import { publicationSnapshot } from "./stream-publication.js";
+import { samplePeerStats } from "./peer-stats.js";
+import { parseTrackID } from "./media-track-id.js";
 
 // Bounded media telemetry. Only explicit quality fields leave the client;
 // raw RTCStats, device identifiers, addresses and media content stay local.
@@ -7,6 +9,23 @@ const number = (value, min = 0, max = Number.MAX_SAFE_INTEGER) => Number.isFinit
 const milliseconds = value => Number.isFinite(value) ? number(value * 1000, 0, 60000) : null;
 const delta = (now, before, field, minimum = 0) => number(now?.[field], minimum) !== null && number(before?.[field], minimum) !== null && now[field] >= before[field] ? now[field] - before[field] : null;
 const ratio = (part, total, scale = 100) => part !== null && total !== null && total > 0 ? number(part / total * scale, 0, scale === 100 ? 100 : 60000) : null;
+const speechActivity = new WeakMap();
+const voiceScope = state => JSON.stringify([state.activeTabID, state.serverGeneration, state.myChannelID]);
+
+// Remember both speech starts and stops: polling only the final speaking flag
+// would lose a short phrase that ended between two diagnostic samples.
+export function noteVoiceActivity(state, clientID, at = performance.timeOrigin + performance.now()) {
+    if (!state.pc || state.replayingTabID || !clientID || !Number.isFinite(at)) return;
+    const scope = voiceScope(state);
+    let activity = speechActivity.get(state.pc);
+    if (activity?.scope !== scope) {
+        activity = { scope, publishers: new Map() };
+        speechActivity.set(state.pc, activity);
+    }
+    activity.publishers.delete(clientID);
+    activity.publishers.set(clientID, at);
+    while (activity.publishers.size > 256) activity.publishers.delete(activity.publishers.keys().next().value);
+}
 
 // This grades observed playback, not a promised end-to-end quality score.
 // Unknown metrics cannot make a track look healthy; silent concealment alone
@@ -18,18 +37,42 @@ export function voicePlaybackHealth(report, ageMS = 0) {
     if (report.connection_state !== "connected") return { quality: "unknown", reasons: ["connection"] };
     if (["suspended", "interrupted", "closed"].includes(report.output_state)) return { quality: "poor", reasons: ["output"] };
     const reasons = new Set();
-    let severity = 0, complete = report.output_state === "running" && !report.truncated, count = 0;
+    let severity = 0, complete = report.output_state === "running" && !report.truncated, count = 0, idle = 0;
     for (const track of report.tracks || []) {
         if (!(track.sample_ms > 0)) { complete = false; continue; }
         count++;
+        const quiet = track.audio_active === false;
+        if (quiet) idle++;
         const measurements = [["loss", track.loss_percent, 1, 3], ["discard", track.discard_percent, 1, 3],
             ["concealment", track.non_silent_concealment_percent, 0.5, 2], ["buffer", track.buffer_ms, 150, 300]];
         for (const [reason, value, fair, poor] of measurements) {
+            // DTX/comfort-noise playout still accumulates buffer and concealment
+            // counters. They do not establish damaged speech in a quiet interval.
+            // Actual network loss/discards remain visible even while idle.
+            if (quiet && (reason === "buffer" || reason === "concealment")) continue;
             if (!Number.isFinite(value)) { complete = false; continue; }
             if (value >= fair) { reasons.add(reason); severity = Math.max(severity, value >= poor ? 2 : 1); }
         }
     }
-    return { quality: severity === 2 ? "poor" : severity === 1 ? "fair" : count && complete ? "good" : "unknown", reasons: [...reasons] };
+    const quality = severity === 2 ? "poor" : severity === 1 ? "fair" : count && complete ? (idle === count ? "idle" : "good") : "unknown";
+    return { quality, reasons: quality === "idle" ? ["idle"] : [...reasons] };
+}
+
+function intervalAudioActivity(state, stat, previous, publisher, microphone) {
+    if (!previous) return null;
+    const client = microphone && state.clients?.find(candidate => candidate.client_id === publisher);
+    const activity = speechActivity.get(state.pc);
+    const recentSpeech = microphone && activity?.scope === voiceScope(state) && activity.publishers.get(publisher) >= previous.timestamp;
+    if (client?.is_speaking || recentSpeech) return true;
+    // W3C RTCStats defines interval RMS as sqrt(delta energy / delta duration).
+    // Unlike instantaneous audioLevel, this retains speech earlier in the poll.
+    // Positive energy is useful evidence, but Chromium's muted HTML sink with
+    // WebAudio playback can report ZERO energy even during decoded speech.
+    // Therefore zero energy alone must never establish an idle interval.
+    const energy = delta(stat, previous, "totalAudioEnergy");
+    const duration = delta(stat, previous, "totalSamplesDuration");
+    if (energy !== null && duration > 0 && energy <= duration && energy / duration > 0.000001) return true;
+    return client?.is_speaking === false ? false : null;
 }
 
 export function selectedVoiceTransport(stats) {
@@ -79,7 +122,9 @@ export function collectVoiceTelemetry(state, stats, previousStats, output = {}, 
     }
     for (const stat of [...inbound.values()].slice(0, 64)) {
         const trackID = String(stat.trackIdentifier || stat.id).slice(0, 160);
-        const publisher = state.trackUsers?.get(stat.trackIdentifier)?.client_id || (/^c-[a-zA-Z0-9-]+(?:\||$)/.test(trackID) ? trackID.split("|")[0] : "");
+        const owner = state.trackUsers?.get(stat.trackIdentifier);
+        const publisher = owner?.client_id || (/^c-[a-zA-Z0-9-]+(?:\||$)/.test(trackID) ? trackID.split("|")[0] : "");
+        const microphone = !parseTrackID(owner?.track_id || trackID).slot;
         let previous = previousStats?.get(stat.id);
         if (previous?.trackIdentifier !== stat.trackIdentifier || previous?.ssrc !== stat.ssrc) previous = null;
         const elapsed = delta(stat, previous, "timestamp");
@@ -101,6 +146,7 @@ export function collectVoiceTelemetry(state, stats, previousStats, output = {}, 
             track_id: trackID, publisher_id: String(publisher).slice(0, 80), codec: String(stats.get(stat.codecId)?.mimeType || "").slice(0, 40),
             ssrc: Number.isInteger(stat.ssrc) ? number(stat.ssrc, 1, 0xffffffff) : null,
             sample_ms: sample,
+            audio_active: intervalAudioActivity(state, stat, previous, publisher, microphone),
             packets_received: number(stat.packetsReceived), packets_lost: number(stat.packetsLost, -Number.MAX_SAFE_INTEGER), bytes_received: number(stat.bytesReceived),
             packets_discarded: validDiscarded ? number(stat.packetsDiscarded) : null, discard_percent: ratio(discarded, received),
             total_samples: number(stat.totalSamplesReceived), concealed_samples: number(stat.concealedSamples), concealment_events: number(stat.concealmentEvents),
@@ -130,7 +176,8 @@ export function collectVoiceTelemetry(state, stats, previousStats, output = {}, 
 
 export function startVoiceDiagnostics({ state, output, bridge, intervalMS = 5000 }) {
     let stopped = false, pending = false, previous = null, previousSources = [], previousScope = "", previousPeer = null, sessionID = "";
-    const scope = () => JSON.stringify([state.activeTabID, state.serverGeneration, state.myChannelID]);
+    let previousPublications = [];
+    const scope = () => voiceScope(state);
     const poll = async () => {
         if (stopped || pending) return;
         const pc = state.pc, tabID = state.activeTabID, key = scope();
@@ -140,12 +187,15 @@ export function startVoiceDiagnostics({ state, output, bridge, intervalMS = 5000
         const current = () => !stopped && state.pc === pc && scope() === key;
         try {
             const publications = publicationSnapshot();
-            const stats = await pc.getStats();
+            const samePublications = publications.length === previousPublications.length && publications.every((entry, index) =>
+                entry.publication === previousPublications[index].publication && entry.generation === previousPublications[index].generation);
+            const stats = await samplePeerStats(pc, { fresh: pc !== previousPeer || key !== previousScope || !samePublications });
             if (!current()) return;
             const sources = videoSenderSources(state, publications);
             const report = collectVoiceTelemetry(state, stats, previous, output?.() || {}, sources, previousSources);
             report.session_id = sessionID;
             previous = stats; previousSources = sources; previousScope = key; previousPeer = pc;
+            previousPublications = publications;
             state.voiceTelemetry = { report, at: Date.now(), scope: key, peer: pc };
             await bridge(tabID, report);
         } catch {
@@ -155,5 +205,8 @@ export function startVoiceDiagnostics({ state, output, bridge, intervalMS = 5000
     };
     void poll();
     const timer = setInterval(() => { void poll(); }, intervalMS);
-    return () => { stopped = true; clearInterval(timer); previous = null; state.voiceTelemetry = null; };
+    return () => {
+        stopped = true; clearInterval(timer); previous = null; previousPeer = null;
+        previousSources = []; previousPublications = []; state.voiceTelemetry = null;
+    };
 }

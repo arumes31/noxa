@@ -40,6 +40,33 @@ func extendedVoiceDiagnostic(t *testing.T, extra string) VoiceTelemetry {
 	return report
 }
 
+func TestVoiceTelemetryPreservesOptionalAudioActivity(t *testing.T) {
+	t.Parallel()
+	for _, value := range []string{"true", "false", "null"} {
+		t.Run(value, func(t *testing.T) {
+			report := extendedVoiceDiagnostic(t, `"audio_active":`+value)
+			if !report.Valid() {
+				t.Fatal("valid audio activity rejected")
+			}
+			encoded, err := json.Marshal(report.Tracks[0])
+			if err != nil {
+				t.Fatal(err)
+			}
+			fields := map[string]json.RawMessage{}
+			if err := json.Unmarshal(encoded, &fields); err != nil {
+				t.Fatal(err)
+			}
+			if value == "null" {
+				if len(fields["audio_active"]) != 0 {
+					t.Fatal("unknown activity must remain absent")
+				}
+			} else if string(fields["audio_active"]) != value {
+				t.Fatalf("audio activity lost: %s", encoded)
+			}
+		})
+	}
+}
+
 func TestVoiceTelemetryPreservesDiscardedPacketMeasurements(t *testing.T) {
 	t.Parallel()
 	report := extendedVoiceDiagnostic(t, `"packets_received":1000,"packets_discarded":25,"discard_percent":20`)

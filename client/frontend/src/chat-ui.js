@@ -143,6 +143,9 @@ let dmRestoreAttempt = null;
 let dmOwner = null;
 let dmIdentityRevision = 0n;
 const closedDMPeers = new Set();
+// Only explicit closes belong here; server removals never become undo actions.
+const recentlyClosedChats = new Map();
+const tabSubscriptionChanges = new Map();
 
 // Restore a small recent working set in addition to explicitly pinned peers.
 const DM_RESTORE_TABS = 6;
@@ -274,6 +277,8 @@ function resetDMOwner() {
     dmRestoreAttempt = null;
     dmPersistWarned = false;
     closedDMPeers.clear();
+    recentlyClosedChats.clear();
+    for (const request of tabSubscriptionChanges.values()) request.finish(false);
 }
 
 function onDMIdentityChanged(value) {
@@ -1427,6 +1432,7 @@ export function openPM(uid, nick) {
     // retain their old owner and are never transparently retried.
     if (dmOwner?.failed && dmOwnerIsCurrent(dmOwner)) resetDMHistoryView();
     closedDMPeers.delete(uid);
+    recentlyClosedChats.delete("dm:" + uid);
     if (!pmTabs.has(uid)) pmTabs.set(uid, { uid, nick: nick || uid, unread: 0, offline: false, pendingRead: "" });
     if (nick) pmTabs.get(uid).nick = nick;
     activatePM(uid);
@@ -1492,6 +1498,7 @@ async function openE2EEDiagnostics() {
 function activateChannel(channelID) {
     const id = Number(channelID);
     if (!id || !subscribed(id)) return;
+    recentlyClosedChats.delete("ch:" + id);
     $("chat-scope").value = "channel";
     V().setDirectTargetVisible(false);
     setView(id === V().state.myChannelID ? { kind: "channel" } : { kind: "chan", id });
@@ -1542,8 +1549,68 @@ async function closeChannelTab(channelID) {
         V().toast(t("chat.moveUnsubscribe"), "info", "alert");
         return;
     }
-    const scope = captureScope(readDMHistoryScope);
-    if (await setChannelSubscription(id, false) && dmHistoryScopeIsCurrent(scope)) removeTabPin("ch:" + id);
+    if (tabSubscriptionChanges.has(id)) return;
+    const scope = captureScope(readDMHistoryScope), name = "# " + channelName(id);
+    const result = await confirmTabSubscription(id, false, scope);
+    if (!dmHistoryScopeIsCurrent(scope) || !V().state.channels.some(channel => Number(channel.ChannelID) === id)) return;
+    if (!result.ok) {
+        if (!result.reported) V().toast(t("chat.tabsCloseFailed", { name }), "warn");
+        return;
+    }
+    removeTabPin("ch:" + id);
+    rememberClosedChat("ch:" + id, name);
+    renderTabs();
+}
+
+// Sending a subscription request does not authorize membership. Wait for the
+// authoritative server reply before consuming an undo entry or opening chat.
+function confirmTabSubscription(id, subscribe, scope) {
+    let resolveConfirmation;
+    const confirmed = new Promise(resolve => { resolveConfirmation = resolve; });
+    const request = {
+        subscribe, scope, timer: 0,
+        finish(ok, reported = false) {
+            if (tabSubscriptionChanges.get(id) !== request) return;
+            clearTimeout(request.timer);
+            tabSubscriptionChanges.delete(id);
+            resolveConfirmation({ ok, reported });
+        },
+    };
+    tabSubscriptionChanges.set(id, request);
+    request.timer = setTimeout(() => request.finish(false), 10_000);
+    void setChannelSubscription(id, subscribe).then(sent => {
+        if (!sent) request.finish(false, true);
+    });
+    return confirmed;
+}
+
+function rememberClosedChat(key, name) {
+    recentlyClosedChats.delete(key);
+    recentlyClosedChats.set(key, { key, name, scope: captureScope(readDMHistoryScope), pending: false });
+    while (recentlyClosedChats.size > 10) recentlyClosedChats.delete(recentlyClosedChats.keys().next().value);
+}
+
+async function reopenClosedChat(entry) {
+    const current = () => recentlyClosedChats.get(entry.key) === entry && dmHistoryScopeIsCurrent(entry.scope);
+    if (!current() || entry.pending) return;
+    if (entry.key.startsWith("dm:")) { openPM(entry.key.slice(3), entry.name); return; }
+    const id = Number(entry.key.slice(3));
+    if (!V().state.channels.some(channel => Number(channel.ChannelID) === id)) {
+        recentlyClosedChats.delete(entry.key); renderTabs();
+        V().toast(t("chat.tabsReopenFailed", { name: entry.name }), "warn");
+        return;
+    }
+    if (subscribed(id)) { activateChannel(id); return; }
+    if (tabSubscriptionChanges.has(id)) return;
+    entry.pending = true; renderTabs();
+    const result = await confirmTabSubscription(id, true, entry.scope);
+    if (!current()) return;
+    entry.pending = false;
+    if (result.ok && subscribed(id)) activateChannel(id);
+    else {
+        renderTabs();
+        if (!result.reported) V().toast(t("chat.tabsReopenFailed", { name: entry.name }), "warn");
+    }
 }
 
 // Normalize the full authoritative subscription payload before replacing the
@@ -1564,6 +1631,11 @@ export function onSubscriptions(json) {
     subscriptions = next;
     chanTabs.clear();
     for (const id of subscriptions) chanTabs.set(id, { id });
+    for (const [id, request] of tabSubscriptionChanges) {
+        // An unrelated snapshot may precede this request's reply. A matching
+        // state confirms success; rejection or a lost reply times out safely.
+        if (dmHistoryScopeIsCurrent(request.scope) && subscribed(id) === request.subscribe) request.finish(true);
+    }
 
     if (view.kind === "chan" && !subscribed(view.id)) {
         setView({ kind: "channel" });
@@ -1585,6 +1657,9 @@ export function onSubscriptions(json) {
 // instead of starting empty. Destroying that log is a separate, explicit act
 // (clearPMHistory) — closing a tab must never delete a conversation (122).
 function closePM(uid) {
+    const tab = pmTabs.get(uid);
+    if (!tab) return;
+    rememberClosedChat("dm:" + uid, tab.nick);
     closedDMPeers.add(uid);
     removeTabPin("dm:" + uid);
     pmTabs.delete(uid);
@@ -1687,6 +1762,8 @@ function renderTabs() {
     const saved = items.length && V().state.activeTabID ? tabLayoutFor(getDMOwner()) : null;
     chatTabs?.render(items, saved?.layout || { order: [], pinned: [] }, {
         scope: JSON.stringify(scope), ready: !!saved?.ready,
+        recentlyClosed: [...recentlyClosedChats.values()].reverse().filter(entry => dmHistoryScopeIsCurrent(entry.scope) && !items.some(item => item.key === entry.key))
+            .map(entry => ({ ...entry, open: () => reopenClosedChat(entry) })),
     });
 }
 
@@ -3648,6 +3725,8 @@ export function onChannelsDeleted(channelIDs) {
     if (removed.size === 0) return;
     subscriptions = subscriptions.filter((id) => !removed.has(id));
     for (const id of removed) {
+        recentlyClosedChats.delete("ch:" + id);
+        tabSubscriptionChanges.get(id)?.finish(false);
         chanTabs.delete(id);
         unread.delete(id);
         store.delete("ch:" + id);
