@@ -1,4 +1,7 @@
-// Bounded receiver telemetry. Only explicit quality fields leave the client;
+import { collectVideoSenders, videoSenderSources } from "./video-sender-stats.js";
+import { publicationSnapshot } from "./stream-publication.js";
+
+// Bounded media telemetry. Only explicit quality fields leave the client;
 // raw RTCStats, device identifiers, addresses and media content stay local.
 const number = (value, min = 0, max = Number.MAX_SAFE_INTEGER) => Number.isFinite(value) && value >= min && value <= max ? value : null;
 const milliseconds = value => Number.isFinite(value) ? number(value * 1000, 0, 60000) : null;
@@ -63,7 +66,7 @@ function senderTelemetry(stats, previousStats) {
     return senders;
 }
 
-export function collectVoiceTelemetry(state, stats, previousStats, output = {}) {
+export function collectVoiceTelemetry(state, stats, previousStats, output = {}, videoSources = [], previousVideoSources = []) {
     const tracks = [];
     let rtt = null;
     const inbound = new Map();
@@ -121,11 +124,12 @@ export function collectVoiceTelemetry(state, stats, previousStats, output = {}) 
         muted: !!state.muted, deafened: !!state.deafened, volume: Math.round(number(state.settings?.volume, 0, 200) ?? 100),
         voice_limiter: state.settings?.voice_limiter !== false, gain_normalize: !!state.settings?.gain_normalize, tracks,
         transport: selectedVoiceTransport(stats), senders: senderTelemetry(stats, previousStats),
+        video_senders: collectVideoSenders(stats, previousStats, videoSources, previousVideoSources),
     };
 }
 
 export function startVoiceDiagnostics({ state, output, bridge, intervalMS = 5000 }) {
-    let stopped = false, pending = false, previous = null, previousScope = "", previousPeer = null, sessionID = "";
+    let stopped = false, pending = false, previous = null, previousSources = [], previousScope = "", previousPeer = null, sessionID = "";
     const scope = () => JSON.stringify([state.activeTabID, state.serverGeneration, state.myChannelID]);
     const poll = async () => {
         if (stopped || pending) return;
@@ -135,11 +139,13 @@ export function startVoiceDiagnostics({ state, output, bridge, intervalMS = 5000
         pending = true;
         const current = () => !stopped && state.pc === pc && scope() === key;
         try {
+            const publications = publicationSnapshot();
             const stats = await pc.getStats();
             if (!current()) return;
-            const report = collectVoiceTelemetry(state, stats, previous, output?.() || {});
+            const sources = videoSenderSources(state, publications);
+            const report = collectVoiceTelemetry(state, stats, previous, output?.() || {}, sources, previousSources);
             report.session_id = sessionID;
-            previous = stats; previousScope = key; previousPeer = pc;
+            previous = stats; previousSources = sources; previousScope = key; previousPeer = pc;
             state.voiceTelemetry = { report, at: Date.now(), scope: key, peer: pc };
             await bridge(tabID, report);
         } catch {

@@ -45,6 +45,43 @@ test.beforeEach(async ({ page }) => {
     await expect(page.getByRole("button", { name: "Watch", exact: true })).toHaveCount(2);
 });
 
+test("upload invalidation serializes catalog refresh and cannot apply the older in-flight snapshot", async ({ page }) => {
+    await page.evaluate(async () => {
+        const publications = await import("/src/stream-publication.js");
+        const track = document.createElement("canvas").captureStream(1).getVideoTracks()[0];
+        const own = { publisher_id: "me", slot: "cam", generation: "20", watch_revision: "0", quality_mode: "source" };
+        const original = window.go.main.App.VideoStreamControlForTab;
+        Object.assign(window.__streams, { uploadChanges: [], uploadLists: 0, uploadPending: 0, uploadMaxPending: 0 });
+        window.go.main.App.SupportsStreamSourceQualityForTab = async () => true;
+        window.go.main.App.VideoStreamControlForTab = async (tab, body) => {
+            if (body.action === "publish") return { ...body, generation: "20", upload_active: false };
+            if (body.action !== "list") return original(tab, body);
+            const n = ++window.__streams.uploadLists;
+            window.__streams.uploadPending++;
+            window.__streams.uploadMaxPending = Math.max(window.__streams.uploadMaxPending, window.__streams.uploadPending);
+            if (n === 1) await new Promise(resolve => { window.__streams.finishUploadList = resolve; });
+            window.__streams.uploadPending--;
+            return { session: "10", streams: [...window.__streams.streams, { ...own, upload_active: n !== 2 }] };
+        };
+        await publications.preparePublicationUpload("cam", track, () => { window.__streams.uploadChanges.push(publications.publicationUploadActive("cam", track)); });
+        await publications.startPublication("cam", track);
+        window.__streams.uploadEvent = { publisher_id: "me", slot: "cam", generation: "20" };
+        window.__streams.controls.refreshStreamUploads(window.__streams.uploadEvent);
+    });
+    await expect.poll(() => page.evaluate(() => typeof window.__streams.finishUploadList)).toBe("function");
+    await page.evaluate(() => {
+        window.__streams.controls.refreshStreamUploads(window.__streams.uploadEvent);
+        window.__streams.controls.refreshStreamUploads(window.__streams.uploadEvent);
+    });
+    expect(await page.evaluate(() => window.__streams.uploadLists)).toBe(1);
+    await page.evaluate(() => window.__streams.finishUploadList());
+    await expect.poll(() => page.evaluate(() => window.__streams.uploadLists)).toBe(2);
+    expect(await page.evaluate(() => window.__streams.uploadChanges)).toEqual([false]);
+    expect(await page.evaluate(() => window.__streams.uploadMaxPending)).toBe(1);
+    await page.evaluate(() => window.__streams.controls.refreshStreamUploads(window.__streams.uploadEvent));
+    await expect.poll(() => page.evaluate(() => window.__streams.uploadChanges)).toEqual([false, true]);
+});
+
 test("watched shares have independent quality and allow multiple High selections", async ({ page }) => {
     for (const publisher of ["alice", "bob"]) await page.locator(`[data-publisher="${publisher}"] .stream-watch`).click();
     for (const publisher of ["alice", "bob"]) {
@@ -56,6 +93,25 @@ test("watched shares have independent quality and allow multiple High selections
     await page.locator('.ctx-menu [data-q="low"]').click();
     await expect.poll(() => page.evaluate(() => Object.fromEntries(window.__streams.calls.filter(c => c.action === "quality").map(c => [c.publisher, c.quality])))).toEqual({ alice: "low", bob: "high" });
     expect(await page.evaluate(() => window.__streams.calls.filter(c => c.action === "quality").every(c => c.session === "10" && c.slot === "screen"))).toBe(true);
+});
+
+test("source-quality streams expose details without requesting alternate receiver layers", async ({ page }) => {
+    await page.evaluate(() => {
+        window.__streams.controls.stopStreamSession();
+        for (const stream of window.__streams.streams) stream.quality_mode = 'source';
+        window.__streams.start();
+        for (const publisher of ['alice', 'bob']) {
+            const track = document.createElement('canvas').captureStream(1).getVideoTracks()[0];
+            window.__streams.controls.receiveStreamTrack(track, { client_id: publisher }, `${publisher}|screen`);
+        }
+    });
+    for (const publisher of ['alice', 'bob']) await page.locator(`[data-publisher="${publisher}"] .stream-watch`).click();
+    await expect(page.locator('.vtile[data-clid="alice"] .vtile-quality-button')).toBeHidden();
+    await page.locator('.vtile[data-clid="alice"]').click({ button: 'right' });
+    await expect(page.locator('.ctx-menu [data-q]')).toHaveCount(0);
+    await page.locator('[data-stream-details]').click();
+    await expect(page.locator('.vtile[data-clid="alice"] .vtile-quality')).toContainText('sender');
+    expect(await page.evaluate(() => window.__streams.calls.filter(c => c.action === 'quality'))).toEqual([]);
 });
 
 test("a denied quality request remains visible and stale publication replies are ignored", async ({ page }) => {
@@ -111,6 +167,123 @@ test("older servers expose an honest connection-wide quality control", async ({ 
     await expect(page.locator('.vtile[data-clid="bob"] .vtile-quality-button')).toContainText('High');
     expect(await page.evaluate(() => window.__streams.legacyQuality)).toEqual(['one', 'high']);
     expect(await page.evaluate(() => window.__streams.calls.some(call => call.action === 'quality'))).toBe(false);
+});
+
+for (const failure of ["reject", "pending"]) test(`receiver diagnostics expire when stats are ${failure} and recover with a new baseline`, async ({ page }) => {
+    await page.clock.install();
+    await page.evaluate(() => {
+        let sample = 0;
+        window.__streams.statsMode = "healthy";
+        window.__noxa.toast = () => {};
+        window.runtime = { ClipboardSetText: async value => { window.__streams.copied = value; return true; } };
+        window.go.main.App.SystemCPUPercent = async () => 10;
+        window.__noxa.state.pc.getStats = async () => {
+            if (window.__streams.statsMode === "reject") throw new Error("stats rejected");
+            if (window.__streams.statsMode === "pending") await new Promise(resolve => { window.__streams.resolveStats = resolve; });
+            sample++;
+            return new Map([["video", { id: "video", type: "inbound-rtp", kind: "video", ssrc: 42, trackIdentifier: "alice|screen",
+                timestamp: sample * 3000, framesDecoded: sample * 90, bytesReceived: sample * 1500000, frameWidth: 1920, frameHeight: 1080 }]]);
+        };
+    });
+    await page.locator('[data-publisher="alice"] .stream-watch').click();
+    await page.clock.fastForward(3000);
+    await expect(page.locator(".vtile-received")).toContainText("— fps");
+    await page.clock.fastForward(3000);
+    await expect(page.locator(".vtile-received")).toContainText("30.0 fps");
+    await page.locator(".vtile-diagnostics summary").click();
+    await page.evaluate(mode => { window.__streams.statsMode = mode; }, failure);
+    await page.clock.fastForward(3000);
+    await page.clock.fastForward(16000);
+    await expect(page.locator(".vtile-received")).toHaveText("Received: — · — fps");
+    await expect(page.locator(".vtile-badge")).toBeHidden();
+    await page.getByRole("button", { name: "Copy this stream’s diagnostics" }).click();
+    expect(await page.evaluate(() => JSON.parse(window.__streams.copied).receiver)).toBe(null);
+    await page.evaluate(() => { window.__streams.statsMode = "healthy"; window.__streams.resolveStats?.(); });
+    if (failure === "pending") await expect(page.locator(".vtile-received")).toContainText("— fps");
+    else { await page.clock.fastForward(3000); await expect(page.locator(".vtile-received")).toContainText("— fps"); }
+    await page.clock.fastForward(3000);
+    await expect(page.locator(".vtile-received")).toContainText("30.0 fps");
+});
+
+test("ordinary stream viewers can inspect the sender, server and receiver path", async ({ page }) => {
+    await page.clock.install();
+    await page.evaluate(() => {
+        const stage = { fps: 12, sample_ms: 3000, age_ms: 0, stale: false };
+        window.__streams.diagnosticCalls = 0;
+        window.go.main.App.SupportsStreamDiagnosticsForTab = async () => true;
+        window.go.main.App.StreamDiagnosticsForTab = async (_tab, publisher, slot, generation, session) => {
+            window.__streams.diagnosticCalls++;
+            return { publisher_id: publisher, slot, generation, session,
+                sender_report: { age_ms: 1000, stale: false, rows: [{ ssrc: 42, slot, generation, sample_ms: 5000,
+                    capture_fps: 60, encoded_fps: 12, sent_fps: 12, reported_fps: 60 }] },
+                layers: [{ ssrc: 42, rid: "f", ingress: stage }], forwarding: { source_ssrc: 42, stage } };
+        };
+    });
+    await page.locator('[data-publisher="alice"] .stream-watch').click();
+    expect(await page.evaluate(() => window.__streams.diagnosticCalls)).toBe(0);
+    await page.locator('.vtile-quality-button').click();
+    await page.locator('[data-stream-details]').click();
+    await expect(page.locator('[data-stage="capture"]')).toHaveText('60.0 fps');
+    await expect(page.locator('[data-stage="encoded"]')).toHaveText('12.0 fps');
+    await expect(page.locator('[data-stage="ingress"]')).toHaveText('12.0 fps');
+    await page.setViewportSize({ width: 360, height: 729 });
+    expect(await page.locator('.vtile-diagnostics-body').evaluate(el => el.scrollWidth <= el.clientWidth + 1)).toBe(true);
+    await page.evaluate(async () => { (await import('/src/i18n.js')).setLanguage('de'); window.dispatchEvent(new Event('noxa-language-changed')); });
+    await expect(page.locator('.vtile-diagnostics summary')).toHaveText('Streamdetails');
+});
+
+test("stream details stay scrollable and quality controls remain reachable in short tiles", async ({ page }, testInfo) => {
+    await page.setViewportSize({ width: 720, height: 600 });
+    await page.evaluate(() => {
+        window.__noxa.toast = () => {};
+        window.runtime = { ClipboardSetText: async value => { window.__streams.copied = value; return true; } };
+    });
+    for (const publisher of ["alice", "bob"]) await page.locator(`[data-publisher="${publisher}"] .stream-watch`).click();
+    await page.addStyleTag({ content: "#video-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); max-height: none; } .vtile { height: 250px; aspect-ratio: auto; }" });
+    const tile = page.locator('.vtile[data-clid="alice"]');
+    await tile.locator(".vtile-diagnostics summary").click();
+    await tile.locator(".vtile-quality-button").click();
+    await page.locator('.ctx-menu [data-q="high"]').click();
+    const copy = tile.getByRole("button", { name: "Copy this stream’s diagnostics" });
+    await copy.click();
+    expect(await page.evaluate(() => JSON.parse(window.__streams.copied).direction)).toBe("received");
+    const bounds = await tile.evaluate(el => {
+        const tileRect = el.getBoundingClientRect();
+        const details = el.querySelector(".vtile-diagnostics");
+        const summary = details.querySelector("summary").getBoundingClientRect();
+        const button = details.querySelector(".vtile-copy-diagnostics").getBoundingClientRect();
+        return { inside: button.top >= tileRect.top && button.bottom <= tileRect.bottom,
+            summaryVisible: summary.top >= tileRect.top && summary.bottom <= tileRect.bottom,
+            scrolled: details.scrollTop > 0, overflowX: details.scrollWidth > details.clientWidth + 1 };
+    });
+    expect(bounds).toEqual({ inside: true, summaryVisible: true, scrolled: true, overflowX: false });
+    await tile.locator(".vtile-quality-button").click();
+    await page.locator('.ctx-menu [data-q="mid"]').click();
+    await page.screenshot({ path: testInfo.outputPath("short-tile-diagnostics.png") });
+    await tile.locator(".vtile-diagnostics summary").click();
+    await expect(tile.locator(".vtile-diagnostics")).not.toHaveAttribute("open", "");
+});
+
+test("diagnostics ignore replies from replaced streams and deny stale access", async ({ page }) => {
+    await page.evaluate(() => {
+        window.go.main.App.SupportsStreamDiagnosticsForTab = async () => true;
+        window.go.main.App.StreamDiagnosticsForTab = () => new Promise(resolve => { window.__streams.resolveDiagnostics = resolve; });
+    });
+    await page.locator('[data-publisher="alice"] .stream-watch').click();
+    await page.locator('.vtile-diagnostics summary').click();
+    await expect.poll(() => page.evaluate(() => typeof window.__streams.resolveDiagnostics)).toBe('function');
+    await page.evaluate(() => {
+        window.__streams.controls.stopStreamSession();
+        window.__streams.resolveDiagnostics({ publisher_id: 'alice', slot: 'screen', generation: '1', session: '10' });
+        window.__streams.start();
+        const track = document.createElement('canvas').captureStream(1).getVideoTracks()[0];
+        window.__streams.controls.receiveStreamTrack(track, { client_id: 'alice' }, 'alice|screen');
+        window.go.main.App.StreamDiagnosticsForTab = async () => { throw new Error('permission changed'); };
+    });
+    await page.locator('[data-publisher="alice"] .stream-watch').click();
+    await page.locator('.vtile-diagnostics summary').click();
+    await expect(page.locator('.vtile-path-status')).toContainText('permission changed');
+    await expect(page.locator('[data-stage="encoded"]')).toHaveText('—');
 });
 
 test("two independent watches, stop, and shared audio controls leave voice intact", async ({ page }) => {

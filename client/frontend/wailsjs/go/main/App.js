@@ -1022,6 +1022,10 @@ export function StopPrivateCallForTab(arg1, arg2) {
   return window['go']['main']['App']['StopPrivateCallForTab'](arg1, arg2);
 }
 
+export function StreamDiagnosticsForTab(arg1, arg2, arg3, arg4, arg5) {
+  return window['go']['main']['App']['StreamDiagnosticsForTab'](arg1, arg2, arg3, arg4, arg5);
+}
+
 export function SubscribeChannels(arg1, arg2) {
   return window['go']['main']['App']['SubscribeChannels'](arg1, arg2);
 }
@@ -1036,6 +1040,14 @@ export function Subscriptions() {
 
 export function SubscriptionsForTab(arg1) {
   return window['go']['main']['App']['SubscriptionsForTab'](arg1);
+}
+
+export function SupportsStreamDiagnosticsForTab(arg1) {
+  return window['go']['main']['App']['SupportsStreamDiagnosticsForTab'](arg1);
+}
+
+export function SupportsStreamSourceQualityForTab(arg1) {
+  return window['go']['main']['App']['SupportsStreamSourceQualityForTab'](arg1);
 }
 
 export function SupportsStreamVideoQualityForTab(arg1) {

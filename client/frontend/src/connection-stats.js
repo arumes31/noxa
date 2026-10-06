@@ -15,15 +15,55 @@ export function summarizeStream(report, trackID, previous) {
     const rows = report && typeof trackID === "string" && trackID.length ? [...report.values()].filter(row => row.type === "inbound-rtp" &&
         (row.kind || row.mediaType) === "video" && row.trackIdentifier === trackID) : [];
     const codecs = [...new Set(rows.map(row => report.get(row.codecId)?.mimeType?.replace(/^video\//i, "")).filter(Boolean))];
-    const bytesPerSecond = rate(rows, previous?.rows, "bytesReceived");
+    const before = streamInterval(rows, previous?.rows) ? previous.rows : undefined;
+    const bytesPerSecond = rate(rows, before, "bytesReceived");
+    const sampleMS = before ? Math.max(...rows.map(row => row.timestamp - before.find(old => old.id === row.id).timestamp)) : null;
+    const received = change(rows, before, "packetsReceived"), lost = change(rows, before, "packetsLost");
+    const decoder = [...new Set(rows.map(row => typeof row.decoderImplementation === "string" ? row.decoderImplementation.trim().slice(0, 160) : "").filter(Boolean))].join(" / ") || null;
     return {
         rows, codec: codecs.join(" / ") || null,
         bitrate: measured(bytesPerSecond) ? bytesPerSecond * 8 : null,
-        bytes: sum(rows, "bytesReceived"), frames: sum(rows, "framesDecoded"), fps: rate(rows, previous?.rows, "framesDecoded"),
+        bytes: sum(rows, "bytesReceived"), frames: sum(rows, "framesDecoded"), fps: rate(rows, before, "framesDecoded"),
         width: rows.length === 1 && measured(rows[0].frameWidth) ? rows[0].frameWidth : null,
         height: rows.length === 1 && measured(rows[0].frameHeight) ? rows[0].frameHeight : null,
         packetsLost: sum(rows, "packetsLost"),
+        sampleMS, receivedFPS: rate(rows, before, "framesReceived"), droppedFPS: rate(rows, before, "framesDropped"),
+        framesReceived: sum(rows, "framesReceived"), framesDropped: sum(rows, "framesDropped"),
+        decodeMS: intervalRatio(rows, before, "totalDecodeTime", "framesDecoded", 1000),
+        bufferMS: intervalRatio(rows, before, "jitterBufferDelay", "jitterBufferEmittedCount", 1000),
+        processingMS: intervalRatio(rows, before, "totalProcessingDelay", "framesDecoded", 1000),
+        lossPercent: measured(received) && measured(lost) && received + lost > 0 ? lost * 100 / (received + lost) : null,
+        nacks: change(rows, before, "nackCount"), plis: change(rows, before, "pliCount"),
+        freezes: change(rows, before, "freezeCount"), keyFrames: change(rows, before, "keyFramesDecoded"),
+        retransmittedPackets: change(rows, before, "retransmittedPacketsReceived"),
+        decoder, powerEfficientDecoder: rows.length && rows.every(row => typeof row.powerEfficientDecoder === "boolean")
+            ? rows.every(row => row.powerEfficientDecoder) : null,
     };
+}
+
+function streamInterval(rows, before) {
+    return rows.length && before?.length === rows.length && rows.every(row => {
+        const old = before.find(candidate => candidate.id === row.id);
+        return old && old.ssrc === row.ssrc && old.trackIdentifier === row.trackIdentifier &&
+            Number.isFinite(row.timestamp) && Number.isFinite(old.timestamp) && row.timestamp > old.timestamp && row.timestamp - old.timestamp <= 60000 &&
+            ["framesDecoded", "bytesReceived"].every(field => !measured(row[field]) || !measured(old[field]) || row[field] >= old[field]);
+    });
+}
+
+function change(rows, before, field) {
+    if (!before || !rows.length) return null;
+    let total = 0;
+    for (const row of rows) {
+        const old = before.find(candidate => candidate.id === row.id);
+        if (!old || !measured(row[field]) || !measured(old[field]) || row[field] < old[field]) return null;
+        total += row[field] - old[field];
+    }
+    return total;
+}
+
+function intervalRatio(rows, before, numerator, denominator, scale) {
+    const part = change(rows, before, numerator), count = change(rows, before, denominator);
+    return measured(part) && measured(count) && count > 0 ? part * scale / count : null;
 }
 
 // Report what this runtime actually used, independently for each direction.

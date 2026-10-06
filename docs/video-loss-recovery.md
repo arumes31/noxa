@@ -9,13 +9,24 @@ New layers receive a one-second opportunity to begin sending actual video.
 
 Ingress reorders packets before checking frame dimensions. Contiguous packets
 pass immediately; only packets waiting behind a gap are copied. Each track
-holds at most 128 packets or 256 KiB and allows 200 ms for reordering or NACK
+holds at most 2,048 packets or 2 MiB and allows 200 ms for reordering or NACK
 repair. A Pion read deadline also releases the final queued frame of an idle
 screen. At timeout the reader first drains already queued RTX repairs: Pion's
 separate RTX queue cannot wake a blocked primary RTP read. Unrepaired gaps
 still invalidate reference dimensions and request a new keyframe. Track
 ownership, publication permission, current codec and current limits are checked
 again when buffered packets are released.
+
+The larger bounded window leaves room for NACK repairs on high-bitrate video:
+the old 128-packet limit could fill before the 100 ms feedback cadence plus
+network round-trip completed. Expiry/overflow drains sort one snapshot, avoiding
+quadratic scans of a sparse full window. Contiguous packets still pass immediately;
+the repair deadline has not increased.
+
+The shared WebRTC UDP socket requests a 4 MiB receive buffer before the ICE mux
+starts. Startup logs report the actual Linux allocation and whether the host
+clamped it. Failure is nonfatal. This does not modify host sysctls; operators can
+use the allocation and kernel receive-drop counters to assess their host limit.
 
 The frame-size inspector counts padding in sequence continuity without
 discarding known dimensions. Genuine forward gaps still invalidate the

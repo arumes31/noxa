@@ -2,11 +2,9 @@ import { expect, test } from "./fixtures.js";
 
 function expectLayeredScreenBudget(encodings, cap) {
     const active = encodings.filter(encoding => encoding.active !== false);
-    expect(active.map(encoding => encoding.rid)).toEqual(["q", "h", "f"]);
-    expect(active.map(encoding => encoding.scaleResolutionDownBy)).toEqual([4, 2, 1]);
-    expect(active[0].maxBitrate).toBeGreaterThan(0);
-    expect(active[1].maxBitrate).toBeGreaterThan(active[0].maxBitrate);
-    expect(active[2].maxBitrate).toBeGreaterThan(active[1].maxBitrate);
+    expect(encodings).toHaveLength(1);
+    expect(active.map(encoding => encoding.rid)).toEqual([undefined]);
+    expect(active.map(encoding => encoding.scaleResolutionDownBy)).toEqual([1]);
     const total = active.reduce((sum, encoding) => sum + encoding.maxBitrate, 0);
     expect(total).toBeGreaterThanOrEqual(cap - active.length);
     expect(total).toBeLessThanOrEqual(cap);
@@ -149,6 +147,63 @@ test("application audio requires a window and never switches silently to system 
     await expect(page.locator(".sh-audio")).toHaveValue("application");
 });
 
+test("source-quality publication pauses video and shared audio without viewers while voice stays active", async ({ page }) => {
+    await page.evaluate(() => {
+        window.go.main.App.SupportsStreamSourceQualityForTab = async () => true;
+        window.__media.audioContext = new AudioContext();
+        const original = window.go.main.App.VideoStreamControlForTab;
+        window.go.main.App.VideoStreamControlForTab = async (tab, msg) => {
+            if (msg.action === "publish" && msg.active) window.__media.qualityMode = msg.quality_mode;
+            return { ...await original(tab, msg), upload_active: false };
+        };
+        const voice = window.__media.audioContext.createMediaStreamDestination().stream.getAudioTracks()[0];
+        window.__media.voiceSender = window.__noxa.state.pc.addTransceiver(voice, { direction: "sendrecv", sendEncodings: [{ active: true }] }).sender;
+        Object.defineProperty(navigator.mediaDevices, "getDisplayMedia", { configurable: true, value: async () => {
+            const video = document.createElement("canvas").captureStream(1).getVideoTracks()[0];
+            const audio = window.__media.audioContext.createMediaStreamDestination().stream.getAudioTracks()[0];
+            return new MediaStream([video, audio]);
+        } });
+    });
+    await page.locator("#voice-screen").click();
+    await page.locator(".sh-audio").selectOption("system");
+    await page.getByRole("dialog").getByRole("button", { name: "Start sharing", exact: true }).click();
+    await expect.poll(() => page.evaluate(() => !!window.__noxa.state.screenSharing)).toBe(true);
+    await expect(page.locator(".sharing-meta")).toContainText("Waiting for viewers");
+    expect(await page.evaluate(() => window.__media.qualityMode)).toBe("source");
+    const activity = () => page.evaluate(() => ({
+        video: window.__noxa.state.shareVideoTransceiver.sender.getParameters().encodings.map(e => e.active),
+        audio: window.__noxa.state.shareAudioTransceiver.sender.getParameters().encodings.map(e => e.active),
+        voice: window.__media.voiceSender.getParameters().encodings.map(e => e.active),
+    }));
+    await expect.poll(activity).toEqual({ video: [false], audio: [false], voice: [true] });
+    for (const active of [true, false, true]) {
+        await page.evaluate(async upload_active => {
+            const publication = await import("/src/stream-publication.js");
+            const snapshot = publication.publicationSnapshot();
+            publication.reconcilePublicationUploads(snapshot, snapshot.map(item => ({ publisher_id: "self", slot: item.publication.slot,
+                generation: item.generation, upload_active })));
+        }, active);
+        await expect.poll(activity).toEqual({ video: [active], audio: [active], voice: [true] });
+    }
+    await page.evaluate(() => {
+        window.__media.replacementActivity = [];
+        for (const sender of [window.__noxa.state.shareVideoTransceiver.sender, window.__noxa.state.shareAudioTransceiver.sender]) {
+            const replace = sender.replaceTrack;
+            sender.replaceTrack = async track => {
+                if (track) window.__media.replacementActivity.push(sender.getParameters().encodings.map(encoding => encoding.active));
+                await replace(track);
+            };
+        }
+    });
+    await page.locator(".sharing-change").click();
+    await page.getByRole("dialog").getByRole("button", { name: "Start sharing", exact: true }).click();
+    await expect.poll(() => page.evaluate(() => window.__media.replacementActivity)).toEqual([[false], [false]]);
+    await expect.poll(activity).toEqual({ video: [false], audio: [false], voice: [true] });
+    await page.locator("#voice-screen").click();
+    await page.getByRole("dialog").getByRole("button", { name: "Stop sharing", exact: true }).click();
+    await page.evaluate(() => window.__media.audioContext.close());
+});
+
 for (const mode of ["none", "system"]) {
     test(`window sharing honors the ${mode} audio override across source changes and reopening`, async ({ page }) => {
         await installApplicationCapture(page, "System Audio");
@@ -262,7 +317,7 @@ for (const [preset, fps] of [["hd", 30], ["hdMotion", 60]]) {
         expect(result.options.video.height.ideal).toBe(1080);
         expect(result.options.video.frameRate.ideal).toBe(fps);
         expectLayeredScreenBudget(result.parameters.encodings, 50000000);
-        expect(result.parameters.degradationPreference).toBe(fps === 60 ? "balanced" : "maintain-resolution");
+        expect(result.parameters.degradationPreference).toBe("maintain-resolution");
         expect(result.hint).toBe(fps === 60 ? "motion" : "detail");
     });
 }
@@ -357,8 +412,10 @@ test("sharing status shows sent quality, audio, honest viewer counts and an expa
     await expect(panel).toContainText("Viewer count unavailable");
     await page.evaluate(async () => {
         const sender = window.__noxa.state.shareVideoTransceiver.sender;
-        sender.getStats = async () => new Map([["sent", { type: "outbound-rtp", kind: "video", framesEncoded: 10,
-            frameWidth: 160, frameHeight: 90, framesPerSecond: 28, qualityLimitationReason: "bandwidth" }]]);
+        let tick = 0;
+        sender.getStats = async () => { tick++; return new Map([["sent", { id: "sent", type: "outbound-rtp", kind: "video", ssrc: 42,
+            timestamp: tick * 2000, framesEncoded: tick * 56, framesSent: tick * 56,
+            frameWidth: 160, frameHeight: 90, framesPerSecond: 28, qualityLimitationReason: "bandwidth" }]]); };
         const module = await import("/src/share-status.js");
         module.updateShareViewers([{ publisher_id: "self", slot: "screen", generation: "1", viewer_count: 0 }]);
     });
@@ -367,9 +424,9 @@ test("sharing status shows sent quality, audio, honest viewer counts and an expa
     await expect(panel.locator(".sharing-warning")).toContainText("network bandwidth");
     await page.evaluate(async () => (await import("/src/share-status.js")).updateShareViewers([{ publisher_id: "self", slot: "screen", generation: "1", viewer_count: 2 }]));
     await expect(panel).toContainText("Watching: 2");
-    await panel.locator("summary").click();
+    await panel.locator(".sharing-preview summary").click();
     await expect.poll(() => page.evaluate(() => !!document.querySelector("#sharing-status video").srcObject)).toBe(true);
-    await panel.locator("summary").click();
+    await panel.locator(".sharing-preview summary").click();
     await expect.poll(() => page.evaluate(() => document.querySelector("#sharing-status video").srcObject)).toBe(null);
     await panel.getByRole("button", { name: "Stop sharing", exact: true }).click();
     await expect(panel).toBeHidden();
@@ -1078,7 +1135,10 @@ test("denied screen confirmation releases capture and preserves camera", async (
 test("quality failure from an old peer cannot report against the replacement session", async ({ page }) => {
     await page.evaluate(() => {
         window.__media.delayQualityControl = true;
+        window.__noxa.initials = name => (name || "P").slice(0, 1);
         const grid = document.createElement("div"); grid.id = "video-grid"; document.body.append(grid);
+        const stream = document.createElement("canvas").captureStream(1);
+        window.__media.video.videoTrackAdded("peer|screen", stream, { client_id: "peer" });
         void window.__media.video.setLowBandwidth(true, false);
     });
     await expect.poll(() => page.evaluate(() => typeof window.__media.finishQualityControl)).toBe("function");

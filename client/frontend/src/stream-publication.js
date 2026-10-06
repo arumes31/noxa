@@ -3,6 +3,56 @@ import { t } from "./i18n.js";
 
 const V = () => window.__noxa;
 const publications = new Map();
+const uploads = new Map();
+
+// A new capable server starts with no media upload until its own catalog
+// confirms a viewer or recorder. Older servers keep continuous publication.
+export async function preparePublicationUpload(slot, track, onChange) {
+    const scope = captureMediaScope(), pc = V().state.pc;
+    const supported = await window.go.main.App.SupportsStreamSourceQualityForTab?.(scope.tabID) || false;
+    if (!mediaScopeIsCurrent(scope) || V().state.pc !== pc || track.readyState === "ended") return false;
+    uploads.set(slot, { scope, pc, track, supported, active: !supported, generation: "0", onChange });
+    return true;
+}
+
+function currentUpload(slot, track) {
+    const upload = uploads.get(slot);
+    return upload && upload.track === track && upload.track.readyState !== "ended" &&
+        mediaScopeIsCurrent(upload.scope) && V().state.pc === upload.pc ? upload : null;
+}
+
+function applyUpload(upload, slot) {
+    if (upload.applying) return upload.applying;
+    const active = upload.active;
+    upload.applying = Promise.resolve().then(() => upload.onChange?.()).then(() => {
+        upload.applied = active;
+    }).catch(error => {
+        upload.applied = null;
+        throw error;
+    }).finally(() => {
+        upload.applying = null;
+        if (currentUpload(slot, upload.track) === upload && upload.active !== active) void applyUpload(upload, slot).catch(() => {});
+    });
+    return upload.applying;
+}
+
+export function publicationUploadActive(slot, track) {
+    const upload = currentUpload(slot, track);
+    return upload?.supported ? upload.active : undefined;
+}
+
+export function reconcilePublicationUploads(snapshot, streams) {
+    for (const { publication, generation } of snapshot) {
+        if (!valid(publication) || publication.generation !== generation) continue;
+        const upload = currentUpload(publication.slot, publication.track);
+        if (!upload?.supported || upload.generation !== generation) continue;
+        const own = streams.find(stream => stream.publisher_id === publication.scope.clientID &&
+            stream.slot === publication.slot && stream.generation === generation);
+        if (typeof own?.upload_active !== "boolean" || own.upload_active === upload.active && upload.applied === upload.active) continue;
+        upload.active = own.upload_active;
+        void applyUpload(upload, publication.slot).catch(() => {});
+    }
+}
 
 // Ignore queued notifications after a stop, replacement, or connection change.
 export function isCurrentPublication(data) {
@@ -20,28 +70,44 @@ export function streamRequest(scope, body) {
 export async function startPublication(slot, track, onInvalidated = () => track.stop()) {
     const scope = captureMediaScope();
     const pc = V().state.pc;
-    await stopPublication(slot);
+    const preparedUpload = currentUpload(slot, track);
+    await stopPublication(slot, undefined, preparedUpload);
     if (!mediaScopeIsCurrent(scope) || V().state.pc !== pc || track.readyState === "ended") return false;
+    if (preparedUpload && currentUpload(slot, track) !== preparedUpload) return false;
     const publication = { scope, pc, slot, track, onInvalidated, generation: "0", timer: null, video: null, cancelled: false };
     publications.set(slot, publication);
     try {
-        const result = await streamRequest(scope, { action: "publish", slot, active: true });
+        const upload = currentUpload(slot, track);
+        const result = await streamRequest(scope, { action: "publish", slot, active: true, ...(upload?.supported ? { quality_mode: "source" } : {}) });
         publication.generation = result.generation;
         if (!valid(publication)) {
             if (publications.get(slot) === publication) publications.delete(slot);
             await streamRequest(scope, { action: "publish", slot, generation: result.generation, active: false });
             return false;
         }
+        if (upload && currentUpload(slot, track) === upload) {
+            upload.generation = result.generation;
+            if (upload.supported) {
+                upload.active = result.upload_active === true;
+                await applyUpload(upload, slot);
+            }
+        }
+        if (!valid(publication)) return false;
         if (slot === "screen") void capturePreview(publication);
         return true;
     } catch (error) {
-        if (publications.get(slot) === publication) publications.delete(slot);
+        if (publications.get(slot) === publication) {
+            if (publication.generation !== "0") await stopPublication(slot, track).catch(() => {});
+            else { publications.delete(slot); if (uploads.get(slot)?.track === track) uploads.delete(slot); }
+        }
         throw error;
     }
 }
 
-export async function stopPublication(slot, track) {
+export async function stopPublication(slot, track, preserveUpload = null) {
     const publication = publications.get(slot);
+    const upload = uploads.get(slot);
+    if (upload && upload !== preserveUpload && (!track || upload.track === track)) uploads.delete(slot);
     if (!publication || (track && publication.track !== track)) return;
     publications.delete(slot);
     publication.cancelled = true;
@@ -52,7 +118,7 @@ export async function stopPublication(slot, track) {
 }
 
 export function stopPublications() {
-    for (const slot of publications.keys()) void stopPublication(slot).catch(() => {});
+    for (const slot of new Set([...publications.keys(), ...uploads.keys()])) void stopPublication(slot).catch(() => {});
 }
 
 // Freeze only acknowledged generations that existed before the catalog request.

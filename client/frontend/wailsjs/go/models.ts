@@ -2368,6 +2368,80 @@ export namespace netproto {
 		    return a;
 		}
 	}
+	export class VideoSenderDiagnostics {
+	    ssrc: number;
+	    rid: string;
+	    slot: string;
+	    generation: number;
+	    sample_ms?: number;
+	    requested_fps?: number;
+	    settings_fps?: number;
+	    capture_fps?: number;
+	    encoded_fps?: number;
+	    sent_fps?: number;
+	    reported_fps?: number;
+	    width?: number;
+	    height?: number;
+	    bitrate_bps?: number;
+	    target_bitrate_bps?: number;
+	    retransmit_bitrate_bps?: number;
+	    retransmit_percent?: number;
+	    frame_bytes?: number;
+	    encode_ms?: number;
+	    send_delay_ms?: number;
+	    quality_reason: string;
+	    codec: string;
+	    encoder_implementation: string;
+	    power_efficient?: boolean;
+	    frames_encoded?: number;
+	    frames_sent?: number;
+	    key_frames?: number;
+	    key_frames_delta?: number;
+	    packets_sent?: number;
+	    bytes_sent?: number;
+	    retransmitted_packets?: number;
+	    retransmitted_bytes?: number;
+
+	    static createFrom(source: any = {}) {
+	        return new VideoSenderDiagnostics(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.ssrc = source["ssrc"];
+	        this.rid = source["rid"];
+	        this.slot = source["slot"];
+	        this.generation = source["generation"];
+	        this.sample_ms = source["sample_ms"];
+	        this.requested_fps = source["requested_fps"];
+	        this.settings_fps = source["settings_fps"];
+	        this.capture_fps = source["capture_fps"];
+	        this.encoded_fps = source["encoded_fps"];
+	        this.sent_fps = source["sent_fps"];
+	        this.reported_fps = source["reported_fps"];
+	        this.width = source["width"];
+	        this.height = source["height"];
+	        this.bitrate_bps = source["bitrate_bps"];
+	        this.target_bitrate_bps = source["target_bitrate_bps"];
+	        this.retransmit_bitrate_bps = source["retransmit_bitrate_bps"];
+	        this.retransmit_percent = source["retransmit_percent"];
+	        this.frame_bytes = source["frame_bytes"];
+	        this.encode_ms = source["encode_ms"];
+	        this.send_delay_ms = source["send_delay_ms"];
+	        this.quality_reason = source["quality_reason"];
+	        this.codec = source["codec"];
+	        this.encoder_implementation = source["encoder_implementation"];
+	        this.power_efficient = source["power_efficient"];
+	        this.frames_encoded = source["frames_encoded"];
+	        this.frames_sent = source["frames_sent"];
+	        this.key_frames = source["key_frames"];
+	        this.key_frames_delta = source["key_frames_delta"];
+	        this.packets_sent = source["packets_sent"];
+	        this.bytes_sent = source["bytes_sent"];
+	        this.retransmitted_packets = source["retransmitted_packets"];
+	        this.retransmitted_bytes = source["retransmitted_bytes"];
+	    }
+	}
 	export class VoiceSenderDiagnostics {
 	    ssrc: number;
 	    sample_ms?: number;
@@ -2489,6 +2563,7 @@ export namespace netproto {
 	    tracks: VoiceReceiverDiagnostics[];
 	    transport?: VoiceICETransport;
 	    senders?: VoiceSenderDiagnostics[];
+	    video_senders?: VideoSenderDiagnostics[];
 
 	    static createFrom(source: any = {}) {
 	        return new VoiceTelemetry(source);
@@ -2512,6 +2587,7 @@ export namespace netproto {
 	        this.tracks = this.convertValues(source["tracks"], VoiceReceiverDiagnostics);
 	        this.transport = this.convertValues(source["transport"], VoiceICETransport);
 	        this.senders = this.convertValues(source["senders"], VoiceSenderDiagnostics);
+	        this.video_senders = this.convertValues(source["video_senders"], VideoSenderDiagnostics);
 	    }
 
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -3809,82 +3885,23 @@ export namespace netproto {
 	        this.slot = source["slot"];
 	    }
 	}
-	export class VideoStream {
-	    watch_revision: number;
-	    viewer_count?: number;
-	    publisher_id: string;
-	    slot: string;
-	    generation: number;
-	    preview_at: number;
+
+	export class VideoSenderReport {
+	    received_at: number;
+	    age_ms: number;
+	    stale: boolean;
+	    rows: VideoSenderDiagnostics[];
 
 	    static createFrom(source: any = {}) {
-	        return new VideoStream(source);
+	        return new VideoSenderReport(source);
 	    }
 
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.watch_revision = source["watch_revision"];
-	        this.viewer_count = source["viewer_count"];
-	        this.publisher_id = source["publisher_id"];
-	        this.slot = source["slot"];
-	        this.generation = source["generation"];
-	        this.preview_at = source["preview_at"];
-	    }
-	}
-	export class VideoStreamControl {
-	    action: string;
-	    publisher_id: string;
-	    slot: string;
-	    generation: number;
-	    revision: number;
-	    session: number;
-	    active: boolean;
-	    jpeg?: number[];
-
-	    static createFrom(source: any = {}) {
-	        return new VideoStreamControl(source);
-	    }
-
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.action = source["action"];
-	        this.publisher_id = source["publisher_id"];
-	        this.slot = source["slot"];
-	        this.generation = source["generation"];
-	        this.revision = source["revision"];
-	        this.session = source["session"];
-	        this.active = source["active"];
-	        this.jpeg = source["jpeg"];
-	    }
-	}
-	export class VideoStreamResult {
-	    action: string;
-	    publisher_id: string;
-	    slot: string;
-	    generation: number;
-	    revision: number;
-	    session: number;
-	    active: boolean;
-	    streams: VideoStream[];
-	    jpeg?: number[];
-	    preview_at: number;
-
-	    static createFrom(source: any = {}) {
-	        return new VideoStreamResult(source);
-	    }
-
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.action = source["action"];
-	        this.publisher_id = source["publisher_id"];
-	        this.slot = source["slot"];
-	        this.generation = source["generation"];
-	        this.revision = source["revision"];
-	        this.session = source["session"];
-	        this.active = source["active"];
-	        this.streams = this.convertValues(source["streams"], VideoStream);
-	        this.jpeg = source["jpeg"];
-	        this.preview_at = source["preview_at"];
+	        this.received_at = source["received_at"];
+	        this.age_ms = source["age_ms"];
+	        this.stale = source["stale"];
+	        this.rows = this.convertValues(source["rows"], VideoSenderDiagnostics);
 	    }
 
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -3905,6 +3922,261 @@ export namespace netproto {
 		    return a;
 		}
 	}
+	export class VideoStream {
+	    watch_revision: number;
+	    viewer_count?: number;
+	    publisher_id: string;
+	    slot: string;
+	    generation: number;
+	    preview_at: number;
+	    quality_mode?: string;
+	    upload_active?: boolean;
+
+	    static createFrom(source: any = {}) {
+	        return new VideoStream(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.watch_revision = source["watch_revision"];
+	        this.viewer_count = source["viewer_count"];
+	        this.publisher_id = source["publisher_id"];
+	        this.slot = source["slot"];
+	        this.generation = source["generation"];
+	        this.preview_at = source["preview_at"];
+	        this.quality_mode = source["quality_mode"];
+	        this.upload_active = source["upload_active"];
+	    }
+	}
+	export class VideoStreamControl {
+	    action: string;
+	    publisher_id: string;
+	    slot: string;
+	    generation: number;
+	    revision: number;
+	    session: number;
+	    active: boolean;
+	    jpeg?: number[];
+	    quality_mode?: string;
+
+	    static createFrom(source: any = {}) {
+	        return new VideoStreamControl(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.action = source["action"];
+	        this.publisher_id = source["publisher_id"];
+	        this.slot = source["slot"];
+	        this.generation = source["generation"];
+	        this.revision = source["revision"];
+	        this.session = source["session"];
+	        this.active = source["active"];
+	        this.jpeg = source["jpeg"];
+	        this.quality_mode = source["quality_mode"];
+	    }
+	}
+	export class VideoStreamForwardDiagnostics {
+	    source_ssrc: number;
+	    rid: string;
+	    output_ssrc: number;
+	    stage: VideoStreamStageDiagnostics;
+
+	    static createFrom(source: any = {}) {
+	        return new VideoStreamForwardDiagnostics(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.source_ssrc = source["source_ssrc"];
+	        this.rid = source["rid"];
+	        this.output_ssrc = source["output_ssrc"];
+	        this.stage = this.convertValues(source["stage"], VideoStreamStageDiagnostics);
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class VideoStreamStageDiagnostics {
+	    packets: number;
+	    bytes: number;
+	    frames: number;
+	    markers: number;
+	    sample_ms: number;
+	    age_ms: number;
+	    stale: boolean;
+	    fps?: number;
+	    bitrate_bps?: number;
+
+	    static createFrom(source: any = {}) {
+	        return new VideoStreamStageDiagnostics(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.packets = source["packets"];
+	        this.bytes = source["bytes"];
+	        this.frames = source["frames"];
+	        this.markers = source["markers"];
+	        this.sample_ms = source["sample_ms"];
+	        this.age_ms = source["age_ms"];
+	        this.stale = source["stale"];
+	        this.fps = source["fps"];
+	        this.bitrate_bps = source["bitrate_bps"];
+	    }
+	}
+	export class VideoStreamLayerDiagnostics {
+	    rid: string;
+	    ssrc: number;
+	    started_at: number;
+	    ingress: VideoStreamStageDiagnostics;
+
+	    static createFrom(source: any = {}) {
+	        return new VideoStreamLayerDiagnostics(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.rid = source["rid"];
+	        this.ssrc = source["ssrc"];
+	        this.started_at = source["started_at"];
+	        this.ingress = this.convertValues(source["ingress"], VideoStreamStageDiagnostics);
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class VideoStreamDiagnostics {
+	    publisher_id: string;
+	    slot: string;
+	    generation: number;
+	    session: number;
+	    sampled_at: number;
+	    sender_report?: VideoSenderReport;
+	    layers: VideoStreamLayerDiagnostics[];
+	    forwarding?: VideoStreamForwardDiagnostics;
+
+	    static createFrom(source: any = {}) {
+	        return new VideoStreamDiagnostics(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.publisher_id = source["publisher_id"];
+	        this.slot = source["slot"];
+	        this.generation = source["generation"];
+	        this.session = source["session"];
+	        this.sampled_at = source["sampled_at"];
+	        this.sender_report = this.convertValues(source["sender_report"], VideoSenderReport);
+	        this.layers = this.convertValues(source["layers"], VideoStreamLayerDiagnostics);
+	        this.forwarding = this.convertValues(source["forwarding"], VideoStreamForwardDiagnostics);
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+
+
+	export class VideoStreamResult {
+	    action: string;
+	    publisher_id: string;
+	    slot: string;
+	    generation: number;
+	    revision: number;
+	    session: number;
+	    active: boolean;
+	    streams: VideoStream[];
+	    jpeg?: number[];
+	    preview_at: number;
+	    diagnostics?: VideoStreamDiagnostics;
+	    quality_mode?: string;
+	    upload_active?: boolean;
+
+	    static createFrom(source: any = {}) {
+	        return new VideoStreamResult(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.action = source["action"];
+	        this.publisher_id = source["publisher_id"];
+	        this.slot = source["slot"];
+	        this.generation = source["generation"];
+	        this.revision = source["revision"];
+	        this.session = source["session"];
+	        this.active = source["active"];
+	        this.streams = this.convertValues(source["streams"], VideoStream);
+	        this.jpeg = source["jpeg"];
+	        this.preview_at = source["preview_at"];
+	        this.diagnostics = this.convertValues(source["diagnostics"], VideoStreamDiagnostics);
+	        this.quality_mode = source["quality_mode"];
+	        this.upload_active = source["upload_active"];
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+
 
 
 

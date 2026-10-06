@@ -41,7 +41,7 @@ import {
     renegotiate, answerRemoteOffer, queuePeerNegotiation, applyVideoLimits,
 } from "./video.js";
 import * as chatUI from "./chat-ui.js";
-import { startStreamSession, stopStreamSession, streamSessionIsCurrent, receiveStreamTrack, removeStreamTrack, receiveShareAudio, removeShareAudio } from "./stream-controls.js";
+import { startStreamSession, stopStreamSession, streamSessionIsCurrent, receiveStreamTrack, removeStreamTrack, receiveShareAudio, removeShareAudio, refreshStreamUploads } from "./stream-controls.js";
 import { startRemoteMedia } from "./remote-media.js";
 import { remoteTrackID } from "./media-track-id.js";
 import { isClientMicrophoneMuted, publishAudioState } from "./audio-state.js";
@@ -1565,6 +1565,9 @@ window.runtime.EventsOn("event", (json) => {
         }
         case "stream_watch_started":
             if (!actionSoundsSuppressed() && isCurrentPublication(d)) playEvent("stream_watch_started");
+            return;
+        case "stream_upload_changed":
+            refreshStreamUploads(d);
             return;
         case "screenshare_changed": {
             // (73) remember who is sharing: the grid labels those tiles, and

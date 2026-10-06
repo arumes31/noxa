@@ -14,6 +14,7 @@ const origin = `http://127.0.0.1:${vite.httpServer.address().port}`;
 let browser;
 const errors = [];
 const pages = [];
+const samples = [];
 try {
     browser = await chromium.launch({ headless: true });
     async function fixture() {
@@ -60,6 +61,7 @@ try {
                 activeTabID: id, settings: {}, myChannelID: 1, myClientID: id, clients: [] },
                 $: id => document.getElementById(id), sysMsg: message => { throw new Error(message); }, toast: () => {} };
             window.go = { main: { App: {
+                SupportsStreamSourceQualityForTab: async () => true,
                 WebRTCOfferForTab: async (_tab, _sdp, tracks) => {
                     await window.gather(pc);
                     return (await window.request("offer", { id, sdp: pc.localDescription.sdp, tracks })).sdp;
@@ -80,53 +82,122 @@ try {
         await expect.poll(() => page.evaluate(() => window.__noxa.state.pc.connectionState), { timeout: 15000 }).toBe("connected");
         publishers.push(page);
     }
-    const viewer = await fixture();
-    await viewer.evaluate(async () => {
-        const pc = new RTCPeerConnection({ iceServers: [] });
-        window.receiver = pc;
-        pc.ontrack = ({ track }) => {
-            if (track.kind !== "video") return;
-            const video = document.createElement("video");
-            video.muted = true; video.autoplay = true; video.playsInline = true;
-            video.srcObject = new MediaStream([track]);
-            document.body.append(video);
-        };
-        await pc.setRemoteDescription(await window.request("viewer", { id: "viewer" }));
-        await pc.setLocalDescription(await pc.createAnswer());
-        await window.gather(pc);
-        await window.request("answer", { id: "viewer", sdp: pc.localDescription.sdp });
+    const outbound = page => page.evaluate(async () => {
+        const sender = window.__noxa.state.shareVideoTransceiver.sender;
+        return { encodings: sender.getParameters().encodings,
+            rows: [...(await sender.getStats()).values()].filter(row => row.type === "outbound-rtp" && row.kind === "video")
+                .map(row => ({ rid: row.rid || "", width: row.frameWidth, height: row.frameHeight,
+                    encoded: row.framesEncoded || 0, sent: row.framesSent || 0, bytes: row.bytesSent || 0, fps: row.framesPerSecond,
+                    targetBitrate: row.targetBitrate, reason: row.qualityLimitationReason, encodeSeconds: row.totalEncodeTime })) };
     });
+    async function refreshUploads() {
+        for (const page of publishers) {
+            await page.evaluate(async () => {
+                const { publicationSnapshot, reconcilePublicationUploads } = await import("/src/stream-publication.js");
+                const snapshot = publicationSnapshot();
+                const result = await window.request("catalog", { id: window.__noxa.state.myClientID });
+                reconcilePublicationUploads(snapshot, result.streams);
+            });
+        }
+    }
+    async function paused(page, stage) {
+        await expect.poll(async () => (await outbound(page)).encodings.every(encoding => encoding.active === false),
+            { message: `${stage}: encoder stopped` }).toBe(true);
+        // Let already queued packets/RTX drain, then compare actual media
+        // counters. An inactive flag alone does not prove upload stopped.
+        await page.waitForTimeout(1000);
+        const before = await outbound(page);
+        await page.waitForTimeout(1000);
+        const after = await outbound(page);
+        assert.equal(after.encodings.length, 1, `${stage}: one encoding`);
+        assert.equal(after.rows.reduce((sum, row) => sum + row.sent, 0), before.rows.reduce((sum, row) => sum + row.sent, 0), `${stage}: no sent frames`);
+        assert.equal(after.rows.reduce((sum, row) => sum + row.encoded, 0), before.rows.reduce((sum, row) => sum + row.encoded, 0), `${stage}: no encoded frames`);
+        assert.ok(after.rows.reduce((sum, row) => sum + row.bytes, 0) - before.rows.reduce((sum, row) => sum + row.bytes, 0) <= 1200, `${stage}: no video payload upload`);
+        return after;
+    }
+    const dormant = [];
+    for (const page of publishers) dormant.push(await paused(page, "before first viewer"));
+    async function receiver(id) {
+        const page = await fixture();
+        await page.evaluate(async id => {
+            const pc = new RTCPeerConnection({ iceServers: [] });
+            window.receiver = pc;
+            pc.ontrack = ({ track }) => {
+                if (track.kind !== "video") return;
+                const video = document.createElement("video");
+                video.muted = true; video.autoplay = true; video.playsInline = true;
+                video.srcObject = new MediaStream([track]);
+                document.body.append(video);
+            };
+            await pc.setRemoteDescription(await window.request("viewer", { id }));
+            await pc.setLocalDescription(await pc.createAnswer());
+            await window.gather(pc);
+            await window.request("answer", { id, sdp: pc.localDescription.sdp });
+        }, id);
+        await refreshUploads();
+        return page;
+    }
     const stages = [];
-    for (const [a, b] of [["high", "high"], ["low", "high"], ["mid", "low"], ["high", "high"]]) {
-        await viewer.evaluate(async ({ a, b }) => {
-            await window.request("quality", { id: "a", quality: a });
-            await window.request("quality", { id: "b", quality: b });
-        }, { a, b });
-        const dimensions = { high: [width, height], mid: [width / 2, height / 2], low: [width / 4, height / 4] };
+    async function decoded(page, stage, dimensions = [[width, height], [width, height]]) {
         let received;
+        const start = Date.now();
+        let sampled = 0;
         await expect.poll(async () => {
-            received = await viewer.evaluate(async () => [...(await window.receiver.getStats()).values()]
+            received = await page.evaluate(async () => [...(await window.receiver.getStats()).values()]
                 .filter(row => row.type === "inbound-rtp" && row.kind === "video" && row.framesDecoded > 0)
                 .map(row => ({ id: row.trackIdentifier, width: row.frameWidth, height: row.frameHeight, fps: row.framesPerSecond, decoded: row.framesDecoded })));
-            return [a, b].every((quality, index) => {
+            if (Date.now() - sampled >= 2000) {
+                sampled = Date.now();
+                samples.push({ stage, elapsedMS: sampled - start, received, sent: await Promise.all(publishers.map(outbound)) });
+            }
+            return dimensions.every((size, index) => {
+                if (!size) return true;
                 const row = received.find(row => row.id === `${index === 0 ? "a" : "b"}|screen`);
-                return row && row.width === dimensions[quality][0] && row.height === dimensions[quality][1] && row.fps >= fps * 0.6 && row.fps <= fps + 5;
+                return row && row.width === size[0] && row.height === size[1] && row.fps >= fps * 0.6 && row.fps <= fps + 5;
             });
-        }, { timeout: 15000, message: `decoded independent qualities ${a}/${b}` }).toBe(true);
-        stages.push({ a, b, received });
+        }, { timeout: 15000, message: stage }).toBe(true);
+        stages.push({ stage, elapsedMS: Date.now() - start, received });
     }
+    const viewer = await receiver("viewer");
+    await decoded(viewer, "first viewer starts dormant sources");
+    const viewer2 = await receiver("viewer2");
+    await decoded(viewer2, "second viewer receives identical source quality");
+    async function watch(viewerID, active) {
+        await viewer.evaluate(args => window.request("watch", { id: "a", ...args }), { viewer: viewerID, active });
+        await refreshUploads();
+    }
+    await watch("viewer", false);
+    await decoded(viewer2, "one remaining viewer keeps source active");
+    assert.equal((await outbound(publishers[0])).encodings[0].active, true);
+    await watch("viewer2", false);
+    const stopped = await paused(publishers[0], "last viewer stopped");
+    await decoded(viewer, "independent second source keeps playing", [null, [width, height]]);
+    await watch("viewer", true);
+    await decoded(viewer, "source resumes after all viewers stopped");
+    await watch("viewer2", true);
+    await decoded(viewer2, "second viewer resumes same source");
+    // Choose the new sender size through production live quality controls.
+    // Every receiver must see the same change, with no second encoding.
+    await publishers[0].locator(".sharing-quality").click();
+    await publishers[0].locator(".live-share-quality .sh-preset").selectOption("custom");
+    await publishers[0].locator(".live-share-quality .sh-width").fill(String(width / 2));
+    await publishers[0].locator(".live-share-quality .sh-height").fill(String(height / 2));
+    await publishers[0].locator(".live-share-quality .sh-fps").selectOption(String(fps));
+    await publishers[0].locator(".live-share-quality").locator("..").getByRole("button", { name: "Apply quality", exact: true }).click();
+    await decoded(viewer, "sender quality change reaches first viewer", [[width / 2, height / 2], [width, height]]);
+    await decoded(viewer2, "sender quality change reaches second viewer", [[width / 2, height / 2], [width, height]]);
     const sent = [];
-    for (const page of publishers) {
-        const layers = await page.evaluate(async () => [...(await window.__noxa.state.shareVideoTransceiver.sender.getStats()).values()]
-            .filter(row => row.type === "outbound-rtp" && row.kind === "video" && row.framesEncoded > 0)
-            .map(row => ({ rid: row.rid, width: row.frameWidth, height: row.frameHeight, encoded: row.framesEncoded, fps: row.framesPerSecond }))
-            .sort((a, b) => a.width - b.width));
-        assert.deepEqual(layers.map(row => [row.rid, row.width, row.height]), [["q", width / 4, height / 4], ["h", width / 2, height / 2], ["f", width, height]]);
-        sent.push(layers);
+    for (const [index, page] of publishers.entries()) {
+        const output = await outbound(page);
+        const divisor = index === 0 ? 2 : 1;
+        assert.equal(output.encodings.length, 1);
+        assert.deepEqual(output.rows.filter(row => row.encoded > 0).map(row => [row.rid, row.width, row.height]), [["", width / divisor, height / divisor]]);
+        sent.push(output);
     }
     assert.deepEqual(errors, []);
-    console.log(JSON.stringify({ sent, stages }, null, 2));
+    console.log(JSON.stringify({ dormant, stopped, sent, stages, samples }, null, 2));
 } catch (error) {
+    console.error("media samples", JSON.stringify(samples));
     for (const page of pages) {
         console.error("media failure stats", await page.evaluate(async () => {
             const pc = window.receiver || window.__noxa?.state.pc;

@@ -2,7 +2,7 @@ import { escapeHTML as escapeTranslation } from "./markdown.js";
 // video-publication.js — camera/screen capture and publication lifecycle.
 import { captureCamera, applyCameraPreview } from "./camera-capture.js";
 import { captureMediaScope, mediaScopeIsCurrent } from "./media-controls.js";
-import { startPublication, stopPublication, publicationSnapshot } from "./stream-publication.js";
+import { startPublication, stopPublication, publicationSnapshot, preparePublicationUpload, publicationUploadActive } from "./stream-publication.js";
 import { startShareStatus, stopShareStatus, refreshShareStatus } from "./share-status.js";
 import { displayAudioOptions, validateDisplayAudio } from "./display-audio.js";
 import { shareQuality, screenShareConstraints, createShareQualityControls } from "./screen-share-quality.js";
@@ -11,6 +11,7 @@ import { labelButton } from "./icons.js";
 import { renderMicStatus } from "./audio.js";
 import { videoConstraints, trackFitsVideoLimits, capVideoEncodings } from "./media-limits.js";
 import { t as tLabel } from "./i18n.js";
+import { rememberVideoSenderProfile } from "./video-sender-stats.js";
 import { renegotiate, negotiateOffer, queuePeerNegotiation } from "./video-negotiation.js";
 const V = () => window.__noxa;
 // An unset maxBitrate invokes Chromium's ~2.5 Mbps default for larger frames.
@@ -123,19 +124,29 @@ export function createVideoPublication({ policy }) {
         const pending = (capUpdates.get(pc) || Promise.resolve()).catch(() => {}).then(async () => {
             if (!current()) return;
             const screenSender = state.shareVideoTransceiver?.sender;
+            const screenTrack = state.shareStream?.getVideoTracks()[0];
             const sources = [videoSenderFor(pc), screenSender].filter(sender => sender &&
-                (sender === pendingVideoSenders.get(pc) || (sender.track && sender.track.readyState !== "ended"))).map(sender => {
+                (sender === screenSender && screenTrack?.readyState === "live" ||
+                    sender === pendingVideoSenders.get(pc)?.sender || (sender.track && sender.track.readyState !== "ended"))).map(sender => {
                 const parameters = sender.getParameters();
-                if (sender === screenSender) parameters.degradationPreference =
-                    sender.track?.contentHint === "motion" ? "balanced" : "maintain-resolution";
+                if (sender === screenSender) parameters.degradationPreference = "maintain-resolution";
                 return { sender, parameters, encodings: parameters.encodings || [],
-                    weightedSimulcast: sender === screenSender,
+                    singleEncoding: true,
+                    uploadActive: publicationUploadActive(sender === screenSender ? "screen" : "cam",
+                        sender === screenSender ? screenTrack : pendingVideoSenders.get(pc)?.sender === sender ? pendingVideoSenders.get(pc).track : sender.track),
                     bitrateHeadroom: sender === screenSender ? SCREEN_BITRATE_HEADROOM : Infinity };
             });
             capVideoEncodings(sources, state.mediaLimits, policy.lowBandwidth ? policy.lowBandwidthBitrate : 0);
             for (const { sender, parameters, encodings } of sources) {
                 if (!current()) return;
                 if (encodings.length) await sender.setParameters(parameters);
+            }
+            const audioSender = state.shareAudioTransceiver?.sender;
+            if (audioSender && (audioSender.track || state.shareStream?.getAudioTracks().some(track => track.readyState === "live")) && current()) {
+                const parameters = audioSender.getParameters();
+                const active = publicationUploadActive("screen", state.shareStream?.getVideoTracks()[0]) !== false;
+                for (const encoding of parameters.encodings || []) encoding.active = active;
+                if (parameters.encodings?.length) await audioSender.setParameters(parameters);
             }
         });
         capUpdates.set(pc, pending);
@@ -354,6 +365,7 @@ export function createVideoPublication({ policy }) {
             return;
         }
         capturePreferences.set(screenTrack, { ...p, screen: true });
+        rememberVideoSenderProfile(screenTrack, p);
         screenTrack.contentHint = preset === "text" ? "text" : p.fps > 30 ? "motion" : "detail";
         let shareEnded = false;
         screenTrack.onended = () => {
@@ -392,16 +404,23 @@ export function createVideoPublication({ policy }) {
         if (peerConnection) {
             // The dedicated screen transceiver survives publication stops.
             try {
+                if (!await preparePublicationUpload("screen", screenTrack, () => applySendCaps())) throw new DOMException("capture ended", "AbortError");
                 await queuePeerNegotiation(peerConnection, async () => {
                     if (!current() || shareEnded) throw new DOMException("capture ended", "AbortError");
                     try {
                         if (!trackFitsVideoLimits(screenTrack, state.mediaLimits)) throw new Error(tLabel("voice.mediaDimensionsFailed"));
                         shareTransceiver = state.shareVideoTransceiver;
-                        if (shareTransceiver) await shareTransceiver.sender.replaceTrack(screenTrack);
+                        if (shareTransceiver) {
+                            // A reused sender can still be active from the previous
+                            // publication. Pause it before attaching the new source.
+                            await applySendCaps(current);
+                            if (!current() || shareEnded) throw new DOMException("capture ended", "AbortError");
+                            await shareTransceiver.sender.replaceTrack(screenTrack);
+                        }
                         else {
                             try {
                                 shareTransceiver = peerConnection.addTransceiver(screenTrack, { direction: "sendonly", streams: [display],
-                                    sendEncodings: [{ rid: "q", scaleResolutionDownBy: 4 }, { rid: "h", scaleResolutionDownBy: 2 }, { rid: "f" }] });
+                                    sendEncodings: [{ active: publicationUploadActive("screen", screenTrack) !== false }] });
                             } catch {
                                 shareTransceiver = peerConnection.addTransceiver(screenTrack, { direction: "sendonly", streams: [display] });
                             }
@@ -448,7 +467,8 @@ export function createVideoPublication({ policy }) {
                     // addTrack would recycle one of the server's recvonly audio
                     // m-lines and publish the share on a subscriber slot, so take a
                     // dedicated sendonly transceiver.
-                    tr = peerConnection.addTransceiver(displayAudio, { direction: "sendonly", streams: [display] });
+                    tr = peerConnection.addTransceiver(displayAudio, { direction: "sendonly", streams: [display],
+                        sendEncodings: [{ active: publicationUploadActive("screen", screenTrack) !== false }] });
                     state.shareAudioTransceiver = tr;
                     state.shareAudioSender = tr.sender;
                     await renegotiate(peerConnection, generation);
@@ -472,6 +492,8 @@ export function createVideoPublication({ policy }) {
             } else {
                 try {
                     state.shareAudioSender = state.shareAudioTransceiver.sender;
+                    await applySendCaps(current);
+                    if (!current() || shareEnded) { discardDisplay(display); return; }
                     await state.shareAudioSender.replaceTrack(displayAudio);
                     await renegotiate(peerConnection, generation);
                     if (!current()) {
@@ -556,11 +578,13 @@ export function createVideoPublication({ policy }) {
                         if (!alive()) return;
                         if (!trackFitsVideoLimits(track, state.mediaLimits)) throw new Error(tLabel("voice.mediaDimensionsFailed"));
                         capturePreferences.set(track, { ...next, screen: true });
+                        rememberVideoSenderProfile(track, next);
                         track.contentHint = selected.preset === "text" ? "text" : next.fps > 30 ? "motion" : "detail";
                         await applySendCaps(alive);
                     } catch (error) {
                         if (!alive()) return;
                         capturePreferences.set(track, preferred);
+                        rememberVideoSenderProfile(track, preferred);
                         track.contentHint = hint;
                         let restored = true;
                         try { await track.applyConstraints(previous); if (alive()) await applySendCaps(alive); }
@@ -886,8 +910,10 @@ export function createVideoPublication({ policy }) {
             const cam = stream.getVideoTracks()[0];
             if (!cam) throw new Error("no camera track available");
             capturePreferences.set(cam, { width: 640, height: 360, fps: state.settings?.camera_fps || 30 });
+            rememberVideoSenderProfile(cam, capturePreferences.get(cam));
             if (!trackFitsVideoLimits(cam, state.mediaLimits)) throw new Error(tLabel("voice.mediaDimensionsFailed"));
             cam.contentHint = "motion";
+            if (!await preparePublicationUpload("cam", cam, () => applySendCaps())) return;
             // Teardown owns capture immediately, even while another offer is pending.
             localStream.addTrack(cam);
             await queuePeerNegotiation(pc, async () => {
@@ -899,14 +925,14 @@ export function createVideoPublication({ policy }) {
                         try {
                             transceiver = pc.addTransceiver(cam, {
                                 direction: "sendrecv", streams: [localStream],
-                                sendEncodings: [{ rid: "q", scaleResolutionDownBy: 4 }, { rid: "h", scaleResolutionDownBy: 2 }, { rid: "f" }],
+                                sendEncodings: [{ active: publicationUploadActive("cam", cam) !== false }],
                             });
                         } catch {
                             transceiver = pc.addTransceiver(cam, { direction: "sendrecv", streams: [localStream] });
                         }
                         sender = transceiver.sender;
                     }
-                    pendingVideoSenders.set(pc, sender);
+                    pendingVideoSenders.set(pc, { sender, track: cam });
                     await applySendCaps();
                     if (!current()) throw new DOMException("capture ended", "AbortError");
                     if (!trackFitsVideoLimits(cam, state.mediaLimits)) throw new Error(tLabel("voice.mediaDimensionsFailed"));

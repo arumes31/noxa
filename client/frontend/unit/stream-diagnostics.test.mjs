@@ -43,3 +43,46 @@ test("stream diagnostics isolate the track and reset rates after counter/identit
     assert.equal(summarizeStream(unlabelled, undefined).bytes, null);
     assert.equal(summarizeStream(unlabelled, "").bytes, null);
 });
+
+test("stream diagnostics separate received and decoded frames from loss and decode cost", () => {
+    const stats = (second) => new Map([["v", {
+        id: "v", type: "inbound-rtp", kind: "video", trackIdentifier: "screen", ssrc: 42,
+        timestamp: second ? 3000 : 1000, framesReceived: second ? 220 : 100,
+        framesDecoded: second ? 211 : 95, framesDropped: second ? 9 : 5,
+        packetsReceived: second ? 3000 : 1000, packetsLost: second ? 30 : 10,
+        bytesReceived: second ? 4000000 : 2000000,
+        totalDecodeTime: second ? 1.58 : 1, jitterBufferDelay: second ? 13.6 : 2,
+        jitterBufferEmittedCount: second ? 211 : 95,
+        nackCount: second ? 8 : 3, pliCount: second ? 3 : 1,
+        decoderImplementation: "test decoder", powerEfficientDecoder: true,
+    }]]);
+    const first = summarizeStream(stats(false), "screen");
+    assert.equal(first.receivedFPS, null);
+    assert.equal(first.decodeMS, null);
+    assert.equal(first.lossPercent, null);
+    const second = summarizeStream(stats(true), "screen", first);
+    assert.equal(second.sampleMS, 2000);
+    assert.equal(second.receivedFPS, 60);
+    assert.equal(second.fps, 58);
+    assert.equal(second.droppedFPS, 2);
+    assert.ok(Math.abs(second.decodeMS - 5) < 1e-9);
+    assert.ok(Math.abs(second.bufferMS - 100) < 1e-9);
+    assert.ok(Math.abs(second.lossPercent - 100 * 20 / 2020) < 1e-9);
+    assert.equal(second.nacks, 5);
+    assert.equal(second.plis, 2);
+    assert.equal(second.decoder, "test decoder");
+    assert.equal(second.powerEfficientDecoder, true);
+});
+
+test("stream detail intervals never bridge a long pause or mix decoder counter resets", () => {
+    const stats = (timestamp, frames, ssrc = 1) => new Map([["v", { id: "v", type: "inbound-rtp", kind: "video",
+        trackIdentifier: "screen", ssrc, timestamp, framesDecoded: frames, framesReceived: frames,
+        totalDecodeTime: frames / 1000, bytesReceived: frames * 100, nackCount: frames, pliCount: frames }]]);
+    const first = summarizeStream(stats(1000, 100), "screen");
+    for (const next of [stats(62000, 200), stats(2000, 1), stats(2000, 200, 2)]) {
+        const summary = summarizeStream(next, "screen", first);
+        assert.equal(summary.fps, null);
+        assert.equal(summary.decodeMS, null);
+        assert.equal(summary.nacks, null);
+    }
+});

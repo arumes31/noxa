@@ -14,12 +14,30 @@ func (a *App) VideoStreamControlForTab(tabID string, msg netproto.VideoStreamCon
 	if err != nil {
 		return netproto.VideoStreamResult{}, err
 	}
-	if msg.Action == "publish" || msg.Action == "preview_upload" {
-		msg.PublisherID = cm.clientIDSnapshot()
+	cm.mu.Lock()
+	conn, clientID, sourceSupported, model := cm.conn, cm.clientID, cm.supportsStreamSourceQuality, cm.authorizationModel
+	cm.mu.Unlock()
+	if conn == nil {
+		return netproto.VideoStreamResult{}, errors.New("not connected")
 	}
-	frame, err := cm.request(netproto.MsgVideoStreamControl, netproto.MsgVideoStreamResult, msg, 10*time.Second)
+	if (msg.QualityMode != "" && msg.QualityMode != "source") || (msg.QualityMode != "" && msg.Action != "publish") {
+		return netproto.VideoStreamResult{}, errors.New("invalid publication quality mode")
+	}
+	if msg.QualityMode == "source" && (!sourceSupported || model != netproto.AuthorizationModelRolesV1 || clientID == "") {
+		return netproto.VideoStreamResult{}, errors.New("source quality publications are not supported by this server")
+	}
+	if msg.Action == "publish" || msg.Action == "preview_upload" {
+		msg.PublisherID = clientID
+	}
+	frame, err := cm.requestOn(conn, netproto.MsgVideoStreamControl, netproto.MsgVideoStreamResult, msg, 10*time.Second)
 	if err != nil {
 		return netproto.VideoStreamResult{}, err
+	}
+	cm.mu.Lock()
+	current := cm.conn == conn && cm.clientID == clientID
+	cm.mu.Unlock()
+	if !current {
+		return netproto.VideoStreamResult{}, errors.New("stream connection changed")
 	}
 	var result netproto.VideoStreamResult
 	var fields map[string]json.RawMessage
@@ -42,8 +60,13 @@ func (a *App) VideoStreamControlForTab(tabID string, msg netproto.VideoStreamCon
 		(!newPublication && result.Generation != msg.Generation) {
 		return netproto.VideoStreamResult{}, errors.New("video stream acknowledgement does not match request")
 	}
+	if result.QualityMode != "" && result.QualityMode != "source" ||
+		(msg.Action == "publish" && msg.Active && msg.QualityMode == "source" && (result.QualityMode != "source" || result.UploadActive == nil)) {
+		return netproto.VideoStreamResult{}, errors.New("invalid source quality acknowledgement")
+	}
 	for _, stream := range result.Streams {
-		if stream.PublisherID == "" || stream.Generation == 0 || (stream.Slot != "cam" && stream.Slot != "screen") {
+		if stream.PublisherID == "" || stream.Generation == 0 || (stream.Slot != "cam" && stream.Slot != "screen") ||
+			(stream.QualityMode != "" && stream.QualityMode != "source") || (stream.UploadActive != nil && stream.PublisherID != clientID) {
 			return netproto.VideoStreamResult{}, errors.New("invalid video stream catalog")
 		}
 	}

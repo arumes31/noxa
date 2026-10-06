@@ -5,6 +5,7 @@ import (
 	"log"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/pion/interceptor"
@@ -62,16 +63,21 @@ type mediaTicket struct {
 	router        *Router
 	videoRevision uint64
 	csrc          []uint32
+	videoSource   uint32
+	videoRID      string
+	videoMedia    bool
 }
 
 type mediaEgressStream struct {
-	mu         sync.RWMutex
-	active     bool
-	retryAfter time.Time
-	registry   *mediaEgressRegistry
-	tickets    map[uint64]*mediaTicket
-	order      [mediaTicketCount]uint64
-	nextTicket int
+	mu              sync.RWMutex
+	active          bool
+	retryAfter      time.Time
+	registry        *mediaEgressRegistry
+	tickets         map[uint64]*mediaTicket
+	order           [mediaTicketCount]uint64
+	nextTicket      int
+	outputSSRC      atomic.Uint32
+	videoDiagnostic videoForwardDiagnostic
 }
 
 func (r *mediaEgressRegistry) ticketID() uint64 {
@@ -91,6 +97,7 @@ func (s *mediaEgressStream) prepare(pkt *rtp.Packet, ticket mediaTicket) (rtp.Pa
 	}
 	ticket.id, ticket.expires = id, time.Now().Add(mediaTicketLifetime)
 	ticket.csrc = append([]uint32(nil), pkt.CSRC...)
+	ticket.videoMedia = !isVideoPadding(pkt) && len(pkt.Payload) > 0
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if !s.active || time.Now().Before(s.retryAfter) {
@@ -156,6 +163,9 @@ func (s *mediaEgressStream) write(header *rtp.Header, payload []byte, attrs inte
 			out := *header
 			out.CSRC = ticket.csrc
 			n, outputError = writer.Write(&out, payload, attrs)
+			if n > 0 && outputError == nil {
+				s.observeVideo(&out, out.MarshalSize()+len(payload)+int(out.PaddingSize), ticket, time.Now())
+			}
 			return outputError
 		}
 		if ticket.router != nil {
@@ -196,6 +206,7 @@ func (t *guardedLocalTrack) Bind(ctx webrtc.TrackLocalContext) (webrtc.RTPCodecP
 	if err != nil {
 		return codec, err
 	}
+	t.egress.outputSSRC.Store(uint32(ctx.SSRC()))
 	r := t.egress.registry
 	r.mu.Lock()
 	if r.streams == nil {

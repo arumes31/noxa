@@ -1,0 +1,10 @@
+.sharing-diagnostics { margin-top: .5rem; }
+.sharing-diagnostics summary { cursor: pointer; color: var(--accent, #37d5ed); }
+.sharing-diagnostics-note, .sharing-layers { color: var(--muted, #9aafbd); font-size: .82rem; overflow-wrap: anywhere; }
+.sharing-diagnostics dl { display: grid; grid-template-columns: minmax(9rem, 1fr) minmax(0, 1fr); gap: .3rem 1rem; margin: .75rem 0; font-size: .85rem; }
+.sharing-diagnostics dt { color: var(--muted, #9aafbd); }
+.sharing-diagnostics dd { margin: 0; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+.sharing-copy { margin-top: .3rem; padding: 6px 10px; font: inherit; color: var(--text); background: var(--bg-hover); border: 1px solid var(--border); border-radius: 4px; cursor: pointer; }
+.sharing-copy:hover { border-color: var(--accent); }
+.sharing-copy:disabled { opacity: .6; cursor: default; }
+@media (max-width: 480px) { .sharing-diagnostics dl { grid-template-columns: 1fr; gap: .15rem; } .sharing-diagnostics dd { margin-bottom: .45rem; } }

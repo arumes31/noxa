@@ -178,9 +178,14 @@ body.details-collapsed #details-toggle { display: inline-flex; position: static;
 .notification-snooze { padding: 12px; border-top: 1px solid var(--border); }
 .notification-snooze button { margin: 4px 6px 4px 0; }
 .notification-snooze p { margin: 4px 0; }
-.vtile-diagnostics { position: absolute; top: 40px; left: 6px; z-index: 5; max-width: calc(100% - 12px); font-size: 11px; color: var(--text); }
-.vtile-diagnostics summary { cursor: pointer; background: #121820e8; padding: 5px 8px; border-radius: 4px; }
-.vtile-diagnostics-body { background: #121820f5; padding: 8px; border-radius: 4px; max-height: 150px; overflow: auto; overflow-wrap: anywhere; }
+.vtile-diagnostics { position: absolute; top: 40px; left: 6px; z-index: 5; width: min(350px, calc(100% - 12px)); max-height: calc(100% - 46px); overflow: auto; font-size: 11px; color: var(--text); }
+.vtile-diagnostics summary { position: sticky; top: 0; z-index: 1; box-sizing: border-box; cursor: pointer; background: #121820; padding: 5px 8px; padding-inline-end: 45%; border-radius: 4px; }
+.vtile .vtile-quality-button { z-index: 6; }
+.vtile-diagnostics-body { background: #121820f5; padding: 10px; border: 1px solid var(--border); border-radius: 4px; width: 100%; box-sizing: border-box; overflow-wrap: anywhere; }
+.vtile-stage-grid { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 5px 14px; margin: 10px 0; padding-block: 10px; border-block: 1px solid var(--border); }
+.vtile-stage-grid dt { color: var(--text-muted); min-width: 0; }
+.vtile-stage-grid dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; }
+.vtile-path-note, .vtile-stream-path > p { color: var(--text-muted); line-height: 1.45; }
 .vtile-diagnostics-body p { margin: 3px 0 7px; }
 .vtile-diagnostics-body button { color: inherit; background: var(--bg-panel); border: 1px solid var(--border); border-radius: 4px; padding: 5px 8px; font: inherit; cursor: pointer; }
 .vtile-diagnostics-body button:hover { border-color: var(--text-muted); }

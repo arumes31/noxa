@@ -3,6 +3,7 @@ package webrtc
 import (
 	"errors"
 	"sort"
+	"time"
 )
 
 var ErrVideoPublication = errors.New("video publication is no longer available")
@@ -25,6 +26,8 @@ type VideoPublication struct {
 	PreviewAt     int64  `json:"preview_at"`
 	WatchRevision uint64 `json:"watch_revision"`
 	ViewerCount   *int   `json:"viewer_count,omitempty"`
+	QualityMode   string `json:"quality_mode,omitempty"`
+	UploadActive  *bool  `json:"upload_active,omitempty"`
 }
 
 func watchSlot(slot string) string {
@@ -40,7 +43,13 @@ func watchSlot(slot string) string {
 // PublishVideo is called under the server's publication authorization lease.
 // Stops must identify the exact publication; retries cannot stop a replacement.
 func (r *Router) PublishVideo(publisher, slot string, generation uint64, active bool) (uint64, error) {
-	if slot != SlotCam && slot != SlotScreen {
+	return r.PublishVideoWithMode(publisher, slot, generation, active, "")
+}
+
+// PublishVideoWithMode pins the source's quality policy to its publication.
+// Source mode publishes one sender-selected quality to every viewer.
+func (r *Router) PublishVideoWithMode(publisher, slot string, generation uint64, active bool, mode string) (uint64, error) {
+	if (slot != SlotCam && slot != SlotScreen) || (mode != "" && mode != "source") {
 		return 0, ErrVideoPublication
 	}
 	r.mu.RLock()
@@ -60,7 +69,7 @@ func (r *Router) PublishVideo(publisher, slot string, generation uint64, active 
 		return 0, ErrVideoPublication
 	}
 	if current != 0 {
-		if generation == current {
+		if generation == current && (mode == "" || mode == r.publicationModes[key]) {
 			return current, nil
 		}
 		return 0, ErrVideoPublication
@@ -73,6 +82,22 @@ func (r *Router) PublishVideo(publisher, slot string, generation uint64, active 
 		r.publications = make(map[publicationKey]uint64)
 	}
 	r.publications[key] = r.watchEpoch
+	if mode != "" {
+		if r.publicationModes == nil {
+			r.publicationModes = make(map[publicationKey]string)
+		}
+		r.publicationModes[key] = mode
+	}
+	// A reused track can publish again without creating a new RTP reader.
+	// Its diagnostic history must still start at this publication boundary.
+	for source, input := range r.videoIngress {
+		if source.publisher == publisher && source.slot == slot {
+			input.mu.Lock()
+			input.started = time.Now()
+			input.stage = videoStageCounter{}
+			input.mu.Unlock()
+		}
+	}
 	return r.watchEpoch, nil
 }
 
@@ -156,7 +181,7 @@ func (r *Router) VideoPublications(subscriber string) []VideoPublication {
 			if watch := r.watches[watchKey{subscriber, key.publisher, key.slot}]; watch.session == r.watchSessions[subscriber] {
 				revision = watch.revision
 			}
-			stream := VideoPublication{PublisherID: key.publisher, Slot: key.slot, Generation: generation, PreviewAt: previewAt, WatchRevision: revision}
+			stream := VideoPublication{PublisherID: key.publisher, Slot: key.slot, Generation: generation, PreviewAt: previewAt, WatchRevision: revision, QualityMode: r.publicationModes[key]}
 			// Only the publisher sees an aggregate count. Watcher identities,
 			// including invisible members, never leave the router.
 			if subscriber == key.publisher {
@@ -169,6 +194,8 @@ func (r *Router) VideoPublications(subscriber string) []VideoPublication {
 					}
 				}
 				stream.ViewerCount = &count
+				active := count > 0 || r.videoRecordingConsumerLocked(key)
+				stream.UploadActive = &active
 			}
 			list = append(list, stream)
 		}
@@ -184,6 +211,7 @@ func (r *Router) VideoPublications(subscriber string) []VideoPublication {
 
 func (r *Router) removePublicationLocked(key publicationKey) {
 	delete(r.publications, key)
+	delete(r.publicationModes, key)
 	delete(r.previews, key)
 	for watch := range r.watches {
 		if watch.publisher == key.publisher && watch.slot == key.slot {
@@ -258,6 +286,9 @@ func (r *Router) withWatch(d MediaDelivery, write func() error) error {
 
 func (v *Voice) PublishVideo(publisher, slot string, generation uint64, active bool) (uint64, error) {
 	return v.router.PublishVideo(publisher, slot, generation, active)
+}
+func (v *Voice) PublishVideoWithMode(publisher, slot string, generation uint64, active bool, mode string) (uint64, error) {
+	return v.router.PublishVideoWithMode(publisher, slot, generation, active, mode)
 }
 func (v *Voice) WatchVideo(subscriber, publisher, slot string, generation, revision, session uint64, active bool) (started bool, err error) {
 	return v.router.WatchVideo(subscriber, publisher, slot, generation, revision, session, active)

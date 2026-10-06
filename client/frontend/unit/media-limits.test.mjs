@@ -123,3 +123,31 @@ test("weighted simulcast never exceeds even tiny server ceilings", () => {
         assert.ok(active.reduce((sum, encoding) => sum + encoding.maxBitrate, 0) <= Math.floor(ceiling * 0.85), `ceiling ${ceiling}`);
     }
 });
+
+test("source-quality sends exactly one full-resolution encoding and preserves explicit low-bandwidth mode", () => {
+    const source = { encodings: [{ rid: "q" }, { rid: "h" }, { rid: "f" }], singleEncoding: true, bitrateHeadroom: 50000000 };
+    capVideoEncodings([source], {}, 0);
+    assert.deepEqual(source.encodings.map(e => e.active), [false, false, true]);
+    assert.equal(source.encodings[2].maxBitrate, 50000000);
+    assert.equal(source.encodings[2].scaleResolutionDownBy, 1);
+    capVideoEncodings([source], {}, 150000);
+    assert.deepEqual(source.encodings.map(e => e.active), [false, false, true]);
+    assert.equal(source.encodings[2].maxBitrate, 150000);
+    assert.equal(source.encodings[2].scaleResolutionDownBy, 2);
+});
+
+test("unwatched sources use no upload budget and resume within the shared server ceiling", () => {
+    const screen = { encodings: [{}], singleEncoding: true, uploadActive: false };
+    const camera = { encodings: [{}], singleEncoding: true, uploadActive: true };
+    capVideoEncodings([screen, camera], limits, 0);
+    assert.equal(screen.encodings[0].active, false);
+    assert.equal(camera.encodings[0].maxBitrate, 850000);
+    screen.uploadActive = true;
+    capVideoEncodings([screen, camera], limits, 0);
+    assert.equal(screen.encodings[0].active, true);
+    assert.equal(screen.encodings[0].maxBitrate, 425000);
+    assert.equal(camera.encodings[0].maxBitrate, 425000);
+    screen.uploadActive = camera.uploadActive = false;
+    capVideoEncodings([screen, camera], limits, 0);
+    assert.ok([screen, camera].every(source => source.encodings.every(encoding => !encoding.active)));
+});

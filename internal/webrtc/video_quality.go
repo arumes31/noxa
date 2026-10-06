@@ -27,6 +27,11 @@ func (r *Router) SetStreamVideoQuality(subscriber, publisher, slot string, gener
 		r.mu.RUnlock()
 		return ErrVideoWatch
 	}
+	if r.publicationModes[publicationKey{publisher, slot}] == "source" && (quality == "low" || quality == "mid") {
+		r.watchMu.Unlock()
+		r.mu.RUnlock()
+		return fmt.Errorf("video quality is selected by the publisher")
+	}
 	changed := watch.qualityRID != rid
 	watch.qualityRID = rid
 	r.watches[key] = watch

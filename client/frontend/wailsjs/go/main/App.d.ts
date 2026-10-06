@@ -514,6 +514,8 @@ export function StartConnectionBenchmark(arg1:string):Promise<main.ConnectionBen
 
 export function StopPrivateCallForTab(arg1:string,arg2:string):Promise<void>;
 
+export function StreamDiagnosticsForTab(arg1:string,arg2:string,arg3:string,arg4:string,arg5:string):Promise<netproto.VideoStreamDiagnostics>;
+
 export function SubscribeChannels(arg1:Array<number>,arg2:boolean):Promise<string>;
 
 export function SubscribeChannelsForTab(arg1:string,arg2:Array<number>,arg3:boolean):Promise<string>;
@@ -521,6 +523,10 @@ export function SubscribeChannelsForTab(arg1:string,arg2:Array<number>,arg3:bool
 export function Subscriptions():Promise<Array<number>>;
 
 export function SubscriptionsForTab(arg1:string):Promise<Array<number>>;
+
+export function SupportsStreamDiagnosticsForTab(arg1:string):Promise<boolean>;
+
+export function SupportsStreamSourceQualityForTab(arg1:string):Promise<boolean>;
 
 export function SupportsStreamVideoQualityForTab(arg1:string):Promise<boolean>;
 

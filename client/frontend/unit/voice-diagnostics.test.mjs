@@ -6,6 +6,18 @@ const settle = () => new Promise(resolve => setImmediate(resolve));
 const snapshot = (...rows) => new Map(rows.map(row => [row.id, row]));
 const near = (actual, expected) => assert.ok(Math.abs(actual - expected) < 0.00001, `${actual} should equal ${expected}`);
 
+test("own video sender telemetry is included independently of roles or receive-audio availability", () => {
+    const source = { slot: "screen", generation: "3", trackID: "own-private-track", mid: "2", requestedFPS: 60, settingsFPS: 60 };
+    const old = { id: "screen", type: "outbound-rtp", kind: "video", ssrc: 15, rid: "f", mid: "2", timestamp: 1000, framesEncoded: 100, framesSent: 90 };
+    const now = { ...old, timestamp: 6000, framesEncoded: 160, framesSent: 140, framesPerSecond: 60 };
+    const result = collectVoiceTelemetry(stateFixture(), snapshot(now), snapshot(old), {}, [source], [source]);
+    assert.equal(result.tracks.length, 0);
+    assert.equal(result.video_senders.length, 1);
+    assert.equal(result.video_senders[0].encoded_fps, 12);
+    assert.equal(result.video_senders[0].sent_fps, 10);
+    assert.doesNotMatch(JSON.stringify(result.video_senders), /own-private-track/);
+});
+
 test("playback health uses actual recent playout rather than ping and preserves unknowns", () => {
     const report = { connection_state: "connected", output_state: "running", tracks: [{ sample_ms: 5000,
         loss_percent: 0, discard_percent: 0, non_silent_concealment_percent: 0, buffer_ms: 40 }] };
@@ -367,6 +379,29 @@ test("an unresolved stats poll does not overlap interval polls and stopping disc
     assert.equal(requests, 1);
     stop(); finish(snapshot(receiver())); await settle();
     assert.equal(sent.length, 0);
+});
+
+test("an in-flight report cannot relabel an old same-track publication as its replacement", async t => {
+    t.mock.timers.enable({ apis: ["setInterval"] });
+    const { startPublication, stopPublication } = await import("../src/stream-publication.js");
+    const state = stateFixture(), previousWindow = globalThis.window, sent = [];
+    let generation = 0, finish;
+    const track = { id: "reused-track", readyState: "live", getSettings: () => ({ frameRate: 60 }), stop() {} };
+    state.pc.getTransceivers = () => [{ mid: "2", sender: { track } }];
+    state.pc.getStats = () => new Promise(resolve => { finish = resolve; });
+    globalThis.window = { __noxa: { state }, go: { main: { App: { VideoStreamControlForTab: async (_tab, body) => ({ generation: body.active ? String(++generation) : body.generation }) } } } };
+    let stop;
+    t.after(async () => { stop?.(); await stopPublication("cam"); if (previousWindow === undefined) delete globalThis.window; else globalThis.window = previousWindow; });
+    await startPublication("cam", track);
+    stop = startVoiceDiagnostics({ state, bridge: async (_tab, report) => sent.push(report), intervalMS: 1000 });
+    await stopPublication("cam"); await startPublication("cam", track);
+    const stats = snapshot({ id: "out", type: "outbound-rtp", kind: "video", ssrc: 42, mid: "2", timestamp: 1000, framesEncoded: 100, framesSent: 90 });
+    finish(stats); await settle();
+    assert.deepEqual(sent[0].video_senders, []);
+    state.pc.getStats = async () => stats;
+    t.mock.timers.tick(1000); await settle();
+    assert.equal(sent[1].video_senders[0].generation, "2");
+    assert.equal(sent[1].video_senders[0].sample_ms, null);
 });
 
 test("delayed stats from a previous server, reconnect, channel or peer connection are discarded", async t => {

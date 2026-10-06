@@ -1,5 +1,10 @@
 import { t } from "./i18n.js";
 import { mediaScopeIsCurrent } from "./media-controls.js";
+import { copyToClipboard } from "./clipboard.js";
+import { formatBitrate } from "./connection-stats.js";
+import { collectVideoSenders, primaryVideoSender, videoSenderFrameRateReduced } from "./video-sender-stats.js";
+import { publicationUploadActive } from "./stream-publication.js";
+import "./share-status.css";
 
 let session = null;
 export function refreshShareStatus() { if (session) render(session); }
@@ -8,14 +13,8 @@ const current = s => session === s && mediaScopeIsCurrent(s.scope) && window.__n
 
 // Only this sender's outbound report describes what is transmitted. Capture
 // dimensions and the selected preset are never presented as sent dimensions.
-export function summarizeShare(report) {
-    const rows = [...report.values()].filter(r => r.type === "outbound-rtp" && (r.kind || r.mediaType) === "video" &&
-        r.active !== false && r.framesEncoded > 0);
-    if (!rows.length) return null;
-    // Sender-scoped getStats includes all simulcast layers. Report the largest
-    // active one, rather than claiming simulcast has no measurable dimensions.
-    const r = rows.sort((a, b) => (b.frameWidth || 0) * (b.frameHeight || 0) - (a.frameWidth || 0) * (a.frameHeight || 0))[0];
-    return { width: r.frameWidth, height: r.frameHeight, fps: r.framesPerSecond, reason: r.qualityLimitationReason };
+export function summarizeShare(report, previous, source, previousSource) {
+    return primaryVideoSender(collectVideoSenders(report, previous, source ? [source] : [], previousSource ? [previousSource] : []));
 }
 
 export function updateShareViewers(streams) {
@@ -34,12 +33,18 @@ export function startShareStatus(options) {
     session = s;
     root.innerHTML = `<div class="sharing-heading"><strong class="sharing-source"></strong><div class="sharing-actions"><button type="button" class="sharing-quality"></button><button type="button" class="sharing-change"></button><button type="button" class="sharing-stop danger"></button></div></div>
         <p class="sharing-meta"></p><p class="sharing-warning" role="status" hidden></p>
-        <details class="sharing-preview"><summary></summary><video muted playsinline></video></details>`;
+        <details class="sharing-preview"><summary></summary><video muted playsinline></video></details>
+        <details class="sharing-diagnostics"><summary></summary><p class="sharing-diagnostics-note"></p><dl></dl><p class="sharing-layers"></p><button type="button" class="sharing-copy"></button></details>`;
     root.hidden = false;
     root.querySelector(".sharing-change").onclick = () => { if (current(s)) s.change(); };
     root.querySelector(".sharing-quality").onclick = () => { if (current(s)) s.changeQuality(); };
     root.querySelector(".sharing-stop").onclick = () => { if (current(s)) s.stop(); };
-    const details = root.querySelector("details"), video = root.querySelector("video");
+    root.querySelector(".sharing-copy").onclick = () => {
+        if (!current(s) || !s.layers?.length) return;
+        void copyToClipboard(JSON.stringify({ sampled_at: s.sampledAt, direction: "sent", slot: "screen", video_senders: s.layers,
+            note: "Measured RTP payload counters. Requested and capture settings are not measured frame rates. Null means unavailable." }, null, 2), { isCurrent: () => current(s) });
+    };
+    const details = root.querySelector(".sharing-preview"), video = root.querySelector("video");
     details.ontoggle = () => {
         if (!current(s)) return;
         if (details.open) { video.srcObject = new MediaStream([s.track]); void video.play().catch(() => {}); }
@@ -58,7 +63,7 @@ function render(s) {
     s.root.setAttribute("aria-label", t("share.status"));
     s.root.querySelector(".sharing-source").textContent = t("share.source", { source });
     s.root.querySelector(".sharing-source").title = source;
-    s.root.querySelector("summary").textContent = t("share.preview");
+    s.root.querySelector(".sharing-preview summary").textContent = t("share.preview");
     s.root.querySelector("video").setAttribute("aria-label", t("share.preview"));
     const busy = !!window.__noxa.state.shareStarting || !!window.__noxa.state.shareStopping;
     for (const [selector, key] of [[".sharing-quality", "share.changeQuality"], [".sharing-change", "share.change"], [".sharing-stop", "voice.stopShare"]]) {
@@ -66,14 +71,16 @@ function render(s) {
         button.disabled = busy || (selector !== ".sharing-stop" && !!window.__noxa.state.shareQualityUpdating);
     }
     const sample = s.sample;
+    const waiting = publicationUploadActive("screen", s.track) === false;
     const dimensions = sample?.width > 0 && sample?.height > 0 ? `${sample.width} × ${sample.height}` : "—";
-    const fps = Number.isFinite(sample?.fps) && sample.fps >= 0 ? `${Math.round(sample.fps)} fps` : "— fps";
+    const fps = Number.isFinite(sample?.sent_fps) ? `${Math.round(sample.sent_fps)} fps` : "— fps";
     const audio = s.stream.getAudioTracks().some(track => track.readyState === "live" && track.enabled);
     const viewers = s.viewers === null ? t("share.viewersUnknown") : s.viewers === 0 ? t("share.noViewers") : t("share.viewers", { count: s.viewers });
     const audioText = t(!audio ? "share.audioOff" : s.audioMode === "application" ? "share.applicationOn" : "share.audioOn");
-    s.root.querySelector(".sharing-meta").textContent = `${t("share.sending", { dimensions, fps })} · ${audioText} · ${viewers}`;
-    const reason = s.reduction() || (sample?.reason === "cpu" ? "share.cpu" : sample?.reason === "bandwidth" ? "share.bandwidth" :
-        sample?.width > 0 && sample.width < (s.preset.original ? settings.width : Math.min(settings.width || s.preset.width, s.preset.width)) ? "share.reduced" : "");
+    s.root.querySelector(".sharing-meta").textContent = `${waiting ? t("share.waitingViewers") : t("share.sending", { dimensions, fps })} · ${audioText} · ${viewers}`;
+    const reason = waiting ? "" : s.reduction() || (sample?.quality_reason === "cpu" ? "share.cpu" : sample?.quality_reason === "bandwidth" ? "share.bandwidth" :
+        sample?.width > 0 && sample.width < (s.preset.original ? settings.width : Math.min(settings.width || s.preset.width, s.preset.width)) ? "share.reduced" :
+            videoSenderFrameRateReduced(sample) ? "share.fpsReduced" : "");
     const limits = window.__noxa.state.mediaLimits;
     const capped = (s.preset.original && limits?.video_max_width > 0) || (limits?.video_max_width > 0 && limits.video_max_width < s.preset.width) ||
         (limits?.video_max_height > 0 && limits.video_max_height < s.preset.height) ||
@@ -83,15 +90,53 @@ function render(s) {
     warning.hidden = !warning.textContent;
     s.root.querySelector(".sharing-meta").title = t(s.preset.original ? "share.selectedOriginal" : "share.selected", {
         width: s.preset.width, height: s.preset.height, fps: s.preset.fps });
+    renderDetails(s);
+}
+
+function renderDetails(s) {
+    const details = s.root.querySelector(".sharing-diagnostics"), sample = s.sample;
+    details.querySelector("summary").textContent = t("share.diagnostics");
+    details.querySelector(".sharing-diagnostics-note").textContent = t("share.diagnosticsNote");
+    const display = (value, suffix = "") => Number.isFinite(value) ? `${value.toFixed(1)}${suffix}` : "—";
+    const rows = [["share.requestedFPS", display(sample?.requested_fps ?? s.preset.fps, " fps")],
+        ["share.settingsFPS", display(sample?.settings_fps, " fps")], ["share.captureFPS", display(sample?.capture_fps, " fps")],
+        ["share.encodedFPS", display(sample?.encoded_fps, " fps")], ["share.sentFPS", display(sample?.sent_fps, " fps")],
+        ["share.reportedFPS", display(sample?.reported_fps, " fps")], ["share.sendBitrate", formatBitrate(sample?.bitrate_bps)],
+        ["share.targetBitrate", formatBitrate(sample?.target_bitrate_bps)],
+        ["share.retryBitrate", `${formatBitrate(sample?.retransmit_bitrate_bps)} · ${display(sample?.retransmit_percent, "%")}`],
+        ["share.keyframes", display(sample?.key_frames_delta)], ["share.frameBytes", display(sample?.frame_bytes, " B")],
+        ["share.encodeTime", display(sample?.encode_ms, " ms")], ["share.sendDelay", display(sample?.send_delay_ms, " ms")],
+        ["share.sampleWindow", display(sample?.sample_ms ? sample.sample_ms / 1000 : null, " s")],
+        ["share.encoder", sample ? `${sample.codec} · ${sample.encoder_implementation}` : "—"],
+        ["share.encoderReason", sample?.quality_reason || "—"],
+        ["share.powerEfficient", t(sample?.power_efficient === true ? "streams.reportedYes" : sample?.power_efficient === false ? "streams.reportedNo" : "streams.notReported")]];
+    const list = details.querySelector("dl");
+    list.replaceChildren(...rows.flatMap(([key, value]) => {
+        const label = document.createElement("dt"), text = document.createElement("dd");
+        label.textContent = t(key); text.textContent = value; return [label, text];
+    }));
+    details.querySelector(".sharing-layers").textContent = (s.layers || []).map(row =>
+        `${row.rid || "—"}: ${row.width ?? "—"} × ${row.height ?? "—"} · ${display(row.sent_fps, " fps")} · ${formatBitrate(row.bitrate_bps)}`).join(" | ");
+    const copy = details.querySelector(".sharing-copy");
+    copy.textContent = t("share.copyDiagnostics"); copy.disabled = !s.layers?.length;
 }
 
 async function poll(s) {
     if (!current(s)) { if (session === s) stopShareStatus(); return; }
     try {
         const sender = window.__noxa.state.shareVideoTransceiver?.sender;
-        s.sample = sender?.getStats ? summarizeShare(await sender.getStats()) : null;
+        const source = { slot: "screen", generation: s.generation, trackID: s.track.id, senderScoped: true,
+            requestedFPS: s.preset.fps, settingsFPS: s.track.getSettings().frameRate };
+        let deadline;
+        const report = sender?.getStats ? await Promise.race([sender.getStats(), new Promise((_, reject) => {
+            deadline = setTimeout(() => reject(new Error("stats timeout")), 10000);
+        })]).finally(() => clearTimeout(deadline)) : null;
+        if (!current(s)) return;
+        s.layers = report ? collectVideoSenders(report, s.previous, [source], s.previousSource ? [s.previousSource] : []) : [];
+        s.sample = primaryVideoSender(s.layers);
+        s.previous = report; s.previousSource = source; s.sampledAt = Date.now();
         if (current(s)) render(s);
-    } catch { if (current(s)) { s.sample = null; render(s); } }
+    } catch { if (current(s)) { s.sample = null; s.layers = []; s.previous = null; render(s); } }
     finally { if (current(s)) s.timer = setTimeout(() => { void poll(s); }, 2000); }
 }
 

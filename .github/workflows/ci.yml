@@ -124,9 +124,9 @@ jobs:
       - run: npm run build
       - run: npm run test:unit
       - run: npm run test:e2e
-      - name: Verify browser screen layers through the SFU
+      - name: Verify single-quality browser streams through the SFU
         working-directory: .
-        run: go test -tags integration -count=1 -timeout=4m -run '^TestBrowserScreenSimulcast$' -v ./internal/webrtc
+        run: go test -tags integration -count=1 -timeout=4m -run '^TestBrowserScreenSingleSource$' -v ./internal/webrtc
 
   webview2:
     name: Standalone WebView2 fork

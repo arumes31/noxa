@@ -80,11 +80,16 @@ in English/German. Screen quality announcements use the actual capture height.
 Subsequent source changes remain subject to the server's encoded packet checks.
 
 The encoder budget reserves 15% of the server ceiling for RTP overhead and divides
-the rest equally between live camera/screen sources, then their active simulcast
-layers. Screen presets remain additional ceilings. Low-bandwidth mode divides
-its 150 kbit/s ceiling between both sources and uses one active layer per source;
-CPU-pressure mode similarly divides its 500 kbit/s ceiling. Stopping a source
-restores budget to the remaining source. Camera layer scales remain 1/2/4.
+the rest between actively uploading camera/screen sources. Updated clients send
+one encoding per source, with no parallel fallback layers. Screen bitrate has
+50 Mbit/s of encoder headroom; explicit server ceilings still take precedence.
+Low-bandwidth mode shares its explicit 150 kbit/s ceiling between active sources.
+Unwatched sources pause video/shared-audio upload on capable servers and do not
+consume another source's budget; authorized recording consumers also activate
+upload. Microphone audio is independent. System CPU pressure does not impose an
+additional sender cap; WebRTC still performs its own congestion/encoder adaptation.
+Screen encoding prefers maintaining resolution and adapting FPS when constrained,
+so the selected resolution does not shrink aggressively during startup.
 Track attachment, cap setup and offers share the peer negotiation queue, so a
 competing offer cannot publish a candidate whose cap setup has not succeeded.
 Pending captures belong to session teardown even while negotiation is waiting.
@@ -278,16 +283,15 @@ role-aware Query/SSH and gRPC contracts are available when the server advertises
 the capability. Startup controls remain available for offline configuration.
 
 - Channel Opus bitrate/FEC/DTX/stereo are audio settings, not permission powers.
-- Receive quality (`high`, `mid`, `low`) selects an available simulcast layer with
-  fallback. A layer name is not proof of its encoded resolution or bitrate.
+- Updated sources provide one sender-controlled quality to all viewers. The
+  sender changes resolution/FPS manually if a receiver cannot keep up. Legacy
+  publishers retain compatible receive-quality selection where layers exist.
 - Channel screen-share presets offer 720p, 1080p, 1440p and 4K. Original source
   resolution leaves capture dimensions unrestricted except for server bounds;
   Custom accepts 160–8192 pixels per dimension and 15, 30 or 60 fps. The source
-  keeps its aspect ratio. 1440p uses a 10 Mbit/s video budget; 4K and Original use
-  20 Mbit/s. Custom budgets scale with pixels and frame rate, capped at 40 Mbit/s.
-  The dialog shows the budget and approximate GB/hour at that rate (excluding
-  audio and protocol overhead), with a CPU/GPU and traffic warning for demanding
-  settings. Low-bandwidth mode and server limits remain additional caps. Actual
+  keeps its aspect ratio. Bitrate adapts within the source's encoder headroom
+  and any explicit server/Low-bandwidth limits. The dialog explains traffic and
+  processing costs without treating the selected preset as a measured rate. Actual
   sent dimensions are shown separately in the sharing status; presets are
   cooperative encoder controls, not guarantees of delivered quality.
 - The retired `b_client_issue_screenshare_1080p` switch checked only the

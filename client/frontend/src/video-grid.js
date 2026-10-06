@@ -2,13 +2,14 @@ import { escapeHTML as escapeTranslation } from "./markdown.js";
 // video-grid.js — received stream tiles, quality selection and diagnostics.
 import { copyToClipboard } from "./clipboard.js";
 import { formatBitrate, summarizeStream } from "./connection-stats.js";
+import { renderStreamPath } from "./stream-path-diagnostics.js";
 import { GridCompositor } from "./grid-compositor.js";
 import { captureMediaScope, mediaScopeIsCurrent } from "./media-controls.js";
 import { closeContextMenu, mountContextMenu, contextMenuKey } from "./context-menu.js";
 import { setSafeImage } from "./safe-media.js";
 import { t as tLabel, currentLanguage } from "./i18n.js";
 import { SLOT_SCREEN, parseTrackID } from "./media-track-id.js";
-import { streamQualityTarget } from "./stream-controls.js";
+import { streamQualityTarget, streamUsesSourceQuality } from "./stream-controls.js";
 import { allocateReceiveQuality, settleAutoQuality } from "./receive-quality.js";
 const V = () => window.__noxa;
 
@@ -73,7 +74,7 @@ export function createVideoGrid({ applySendCaps, syncCameraButton, syncShareButt
                     <span class="vtile-preview-age hidden"></span>
                 </div>
                 <span class="vtile-badge hidden"></span>
-                <details class="vtile-diagnostics"><summary></summary><div class="vtile-diagnostics-body"><p class="vtile-codec"></p><p class="vtile-rate"></p><p class="vtile-received"></p><p class="vtile-quality"></p><p class="vtile-quality-error" role="status"></p><p class="vtile-traffic-note"></p><button class="vtile-copy-diagnostics" type="button"></button></div></details>
+                <details class="vtile-diagnostics"><summary></summary><div class="vtile-diagnostics-body"><p class="vtile-codec"></p><p class="vtile-rate"></p><p class="vtile-received"></p><p class="vtile-quality"></p><p class="vtile-quality-error" role="status"></p><div class="vtile-stream-path"></div><p class="vtile-traffic-note"></p><button class="vtile-copy-diagnostics" type="button"></button></div></details>
                 <button class="vtile-quality-button" type="button"></button>
                 <button class="vtile-pip icon-btn" title="${escapeTranslation(tLabel("desktop.floating.always.on.top.video"))}">▣</button>
                 <button class="vtile-fullscreen icon-btn" title="${escapeTranslation(tLabel("desktop.fullscreen.esc.exits"))}">⛶</button>`;
@@ -136,17 +137,25 @@ export function createVideoGrid({ applySendCaps, syncCameraButton, syncShareButt
             };
             el.querySelector(".vtile-quality-button").onclick = event => { event.stopPropagation(); void openTileMenu(undefined, undefined, t); };
             el.querySelector(".vtile-diagnostics").onclick = event => event.stopPropagation();
+            el.querySelector(".vtile-diagnostics").ontoggle = () => { void refreshRemoteDiagnostics(t); };
             el.querySelector(".vtile-copy-diagnostics").onclick = () => {
-                const sample = t.diagnostics;
+                const sample = currentReceiverDiagnostics(t);
+                const sourceQuality = streamUsesSourceQuality(t.clientID, t.slot);
                 const payload = {
                     sampled_at: t.diagnosticsAt || null, direction: "received", slot: t.slot,
                     codec: sample?.codec ?? null, bitrate_bits_per_second: sample?.bitrate ?? null,
                     bandwidth: formatBitrate(sample?.bitrate), payload_bytes_received: sample?.bytes ?? null,
                     width: sample?.width ?? null, height: sample?.height ?? null,
                     frames_decoded: sample?.frames ?? null, frames_per_second: sample?.fps ?? null, packets_lost: sample?.packetsLost ?? null,
-                    requested_quality: qualityCapability?.supported === false ? qualityPref : t.qualityPreference,
-                    confirmed_preference: (qualityCapability?.supported === false ? lastSentQuality : t.sentQuality) || null,
-                    note: "RTP media payload only; excludes network headers. Null means unavailable.",
+                    requested_quality: sourceQuality ? "source" : qualityCapability?.supported === false ? qualityPref : t.qualityPreference,
+                    confirmed_preference: sourceQuality ? "source" : (qualityCapability?.supported === false ? lastSentQuality : t.sentQuality) || null,
+                    receiver: sample ? { sample_ms: sample.sampleMS, received_fps: sample.receivedFPS, decoded_fps: sample.fps,
+                        dropped_fps: sample.droppedFPS, decode_ms: sample.decodeMS, jitter_buffer_ms: sample.bufferMS,
+                        recent_loss_percent: sample.lossPercent, nacks: sample.nacks, plis: sample.plis, freezes: sample.freezes,
+                        key_frames: sample.keyFrames, decoder: sample.decoder, power_efficient_decoder: sample.powerEfficientDecoder } : null,
+                    stream_path: t.remoteDiagnostics || null,
+                    stream_path_age_ms: remoteDiagnosticsAge(t),
+                    note: "Browser bitrate is RTP payload, including retransmissions. Server byte counts include RTP headers. Stage sample windows are independent; server FPS counts observed RTP timestamps, not complete or decoded frames. Null means unavailable.",
                 };
                 void copyToClipboard(JSON.stringify(payload, null, 2), { success: tLabel("wins.streamCopied"), isCurrent: () => el.isConnected });
             };
@@ -165,6 +174,12 @@ export function createVideoGrid({ applySendCaps, syncCameraButton, syncShareButt
         t.diagnostics = null;
         t.diagnosticsPC = null;
         t.diagnosticsAt = null;
+        t.diagnosticsMeasuredAt = null;
+        t.remoteDiagnostics = null;
+        t.remoteDiagnosticsAt = null;
+        t.remoteDiagnosticsRequest = null;
+        t.remoteDiagnosticsStatus = "";
+        t.remoteDiagnosticsError = "";
         if (t.frameCallback != null) t.video.cancelVideoFrameCallback(t.frameCallback);
         t.frameCallback = null;
         t.lastFrameAt = null;
@@ -278,7 +293,19 @@ export function createVideoGrid({ applySendCaps, syncCameraButton, syncShareButt
         t.el.classList.toggle("speaking", !!(c && c.is_speaking));
     }
 
+    function currentReceiverDiagnostics(tile) {
+        if (tile.diagnostics && tile.diagnosticsMeasuredAt != null && performance.now() - tile.diagnosticsMeasuredAt > 15000) {
+            tile.diagnostics = null;
+            tile.diagnosticsPC = null;
+            tile.diagnosticsAt = null;
+            tile.diagnosticsMeasuredAt = null;
+            tile.badgeEl.classList.add("hidden");
+        }
+        return tile.diagnostics;
+    }
+
     function renderStreamDiagnostics(tile) {
+        currentReceiverDiagnostics(tile);
         const panel = tile.el.querySelector(".vtile-diagnostics");
         panel.querySelector("summary").textContent = tLabel("wins.streamDetails");
         panel.querySelector(".vtile-codec").textContent = tLabel("wins.streamCodec", { codec: tile.diagnostics?.codec || "—" });
@@ -288,16 +315,74 @@ export function createVideoGrid({ applySendCaps, syncCameraButton, syncShareButt
         const fps = Number.isFinite(sample?.fps) ? sample.fps.toFixed(1) : "—";
         panel.querySelector(".vtile-received").textContent = tLabel("streams.received", { dimensions, fps });
         const legacy = qualityCapability?.supported === false;
+        const sourceQuality = streamUsesSourceQuality(tile.clientID, tile.slot);
         const preference = legacy ? qualityPref : tile.qualityPreference;
         const label = tLabel(`polish.video${preference[0].toUpperCase()}${preference.slice(1)}`);
-        panel.querySelector(".vtile-quality").textContent = tLabel("streams.qualityState", { preference: label, applied: (legacy ? lastSentQuality : tile.sentQuality) || "—" });
-        panel.querySelector(".vtile-quality-error").textContent = tile.qualityError || "";
+        panel.querySelector(".vtile-quality").textContent = sourceQuality ? tLabel("wins.sourceQuality") : tLabel("streams.qualityState", { preference: label, applied: (legacy ? lastSentQuality : tile.sentQuality) || "—" });
+        panel.querySelector(".vtile-quality-error").textContent = sourceQuality ? "" : tile.qualityError || "";
         const qualityButton = tile.el.querySelector(".vtile-quality-button");
+        qualityButton.hidden = sourceQuality;
         qualityButton.textContent = preference === "auto" ? tLabel("streams.auto") : label;
         qualityButton.title = tLabel(legacy ? "polish.videoQualityHelp" : "streams.qualityHelp");
         qualityButton.setAttribute("aria-label", tLabel(legacy ? "streams.legacyQualityControl" : "streams.qualityControl"));
         panel.querySelector(".vtile-traffic-note").textContent = tLabel("wins.payloadNote");
         panel.querySelector("button").textContent = tLabel("wins.copyStream");
+        renderStreamPath(panel.querySelector(".vtile-stream-path"), tile.remoteDiagnostics, sample, {
+            extraAgeMS: remoteDiagnosticsAge(tile) || 0, quality: tile.sentQuality || "high",
+            status: tile.remoteDiagnosticsStatus, error: tile.remoteDiagnosticsError,
+        });
+    }
+
+    function remoteDiagnosticsAge(tile) {
+        return tile.remoteDiagnosticsAt == null ? null : Math.max(0, performance.now() - tile.remoteDiagnosticsAt);
+    }
+
+    async function refreshRemoteDiagnostics(tile) {
+        if (!tile.el.querySelector(".vtile-diagnostics").open || tile.remoteDiagnosticsRequest) return;
+        const scope = captureMediaScope(), pc = V().state.pc;
+        const target = streamQualityTarget(tile.clientID, tile.slot);
+        if (!pc) return;
+        const identity = JSON.stringify(target), track = tile.track;
+        if (tile.remoteDiagnosticsIdentity !== identity) {
+            tile.remoteDiagnostics = null;
+            tile.remoteDiagnosticsAt = null;
+            tile.remoteDiagnosticsIdentity = identity;
+        }
+        const request = {};
+        tile.remoteDiagnosticsRequest = request;
+        const current = () => tile.remoteDiagnosticsRequest === request && V().state.pc === pc && mediaScopeIsCurrent(scope) &&
+            tiles.get(tile.key) === tile && tile.track === track && JSON.stringify(streamQualityTarget(tile.clientID, tile.slot)) === identity;
+        tile.remoteDiagnosticsStatus = tile.remoteDiagnostics ? "" : "loading";
+        tile.remoteDiagnosticsError = "";
+        renderStreamDiagnostics(tile);
+        try {
+            const api = window.go.main.App;
+            const supported = await api.SupportsStreamDiagnosticsForTab?.(scope.tabID);
+            if (!current()) return;
+            if (!supported || !target || !api.StreamDiagnosticsForTab) {
+                tile.remoteDiagnostics = null;
+                tile.remoteDiagnosticsAt = null;
+                tile.remoteDiagnosticsStatus = "unsupported";
+                return;
+            }
+            const reply = await api.StreamDiagnosticsForTab(scope.tabID, target.publisherID, target.slot, target.generation, target.session);
+            if (!current()) return;
+            if (!reply || reply.publisher_id !== target.publisherID || reply.slot !== target.slot ||
+                reply.generation !== target.generation || reply.session !== target.session) throw new Error(tLabel("wins.path.scopeMismatch"));
+            tile.remoteDiagnostics = reply;
+            tile.remoteDiagnosticsAt = performance.now();
+            tile.remoteDiagnosticsStatus = "";
+        } catch (error) {
+            if (!current()) return;
+            tile.remoteDiagnostics = null;
+            tile.remoteDiagnosticsAt = null;
+            tile.remoteDiagnosticsStatus = "";
+            tile.remoteDiagnosticsError = error?.message || String(error);
+        } finally {
+            const render = current();
+            if (tile.remoteDiagnosticsRequest === request) tile.remoteDiagnosticsRequest = null;
+            if (render) renderStreamDiagnostics(tile);
+        }
     }
 
     function tileIsScreen(t) {
@@ -425,18 +510,25 @@ export function createVideoGrid({ applySendCaps, syncCameraButton, syncShareButt
 
     async function pushQuality(immediate = true) {
         const pc = V().state.pc, scope = captureMediaScope();
+        let adaptable = [...tiles.values()].filter(tile => !streamUsesSourceQuality(tile.clientID, tile.slot));
+        if (tiles.size && !adaptable.length) {
+            for (const tile of tiles.values()) renderStreamDiagnostics(tile);
+            return;
+        }
         const independent = await supportsIndependentQuality();
         if (V().state.pc !== pc || !mediaScopeIsCurrent(scope)) return;
+        adaptable = [...tiles.values()].filter(tile => !streamUsesSourceQuality(tile.clientID, tile.slot));
+        if (!adaptable.length) return;
         if (!independent) {
             await pushLegacyQuality();
             if (V().state.pc === pc && mediaScopeIsCurrent(scope)) for (const tile of tiles.values()) renderStreamDiagnostics(tile);
             return;
         }
-        const streams = [...tiles.values()].map(tile => ({ key: tile.key, preference: tile.qualityPreference, slot: tile.slot,
+        const streams = adaptable.map(tile => ({ key: tile.key, preference: tile.qualityPreference, slot: tile.slot,
             highBitrate: tile.estimatedHighBitrate, bitrate: tile.diagnostics?.bitrate }));
         const qualities = allocateReceiveQuality(streams, { availableBitrate: incomingBudget, focusedID,
             cpuPressure: receiveCpuPressure, lowBandwidth });
-        await Promise.all([...tiles.values()].map(async tile => {
+        await Promise.all(adaptable.map(async tile => {
             const target = streamQualityTarget(tile.clientID, tile.slot);
             if (!target) return;
             const identity = JSON.stringify(target);
@@ -471,14 +563,16 @@ export function createVideoGrid({ applySendCaps, syncCameraButton, syncShareButt
         const qMenuEl = document.createElement("div");
         qMenuEl.className = "ctx-menu";
         const cur = independent ? t.qualityPreference : qualityPref;
+        const sourceQuality = streamUsesSourceQuality(t.clientID, t.slot);
         const sa = V().shareAudioCtl?.get(t.clientID) || null;
-        qMenuEl.innerHTML = `
+        qMenuEl.innerHTML = (sourceQuality ? "" : `
             <a data-q="auto">${cur === "auto" ? "✓ " : ""}${tLabel("polish.videoAuto")}</a>
             <a data-q="high">${cur === "high" ? "✓ " : ""}${tLabel("polish.videoHigh")}</a>
             <a data-q="mid">${cur === "mid" ? "✓ " : ""}${tLabel("polish.videoMid")}</a>
             <a data-q="low">${cur === "low" ? "✓ " : ""}${tLabel("polish.videoLow")}</a>
-            <div class="ctx-divider"></div>
-            <a class="ctx-note">${tLabel(independent ? "streams.qualityHelp" : "polish.videoQualityHelp")}</a>
+            <div class="ctx-divider"></div>`) + `
+            <a data-stream-details>${tLabel("wins.streamDetails")}</a>
+            <a class="ctx-note">${tLabel(sourceQuality ? "wins.sourceQuality" : independent ? "streams.qualityHelp" : "polish.videoQualityHelp")}</a>
             <a data-grid-pip="1">${tLabel("polish.floatGrid")}</a>` + (sa && tileIsScreen(t) ? `
             <div class="ctx-divider"></div>
             <a data-sa="mute">${tLabel(sa.muted ? "polish.sharedAudioUnmute" : "polish.sharedAudioMute")}</a>
@@ -497,6 +591,13 @@ export function createVideoGrid({ applySendCaps, syncCameraButton, syncShareButt
             };
         }
         qMenuEl.querySelector("[data-grid-pip]").onclick = () => { closeContextMenu(qMenuEl, true); void openGridOverlay(); };
+        qMenuEl.querySelector("[data-stream-details]").onclick = () => {
+            closeContextMenu(qMenuEl, true);
+            const panel = t.el.querySelector(".vtile-diagnostics");
+            panel.open = true;
+            panel.querySelector("summary").focus();
+            void refreshRemoteDiagnostics(t);
+        };
         if (sa && tileIsScreen(t)) {
             qMenuEl.querySelector('a[data-sa="mute"]').onclick = () => {
                 V().shareAudioCtl.setMuted(t.clientID, !sa.muted);
@@ -583,7 +684,12 @@ export function createVideoGrid({ applySendCaps, syncCameraButton, syncShareButt
     const STALL_POLLS = 2;
 
     async function refreshBadges() {
-        for (const tile of tiles.values()) updatePreviewAge(tile);
+        for (const tile of tiles.values()) {
+            updatePreviewAge(tile);
+            const hadSample = !!tile.diagnostics;
+            if (hadSample && !currentReceiverDiagnostics(tile)) renderStreamDiagnostics(tile);
+            void refreshRemoteDiagnostics(tile);
+        }
         const { state } = V();
         if (!state.pc || tiles.size === 0 || statsPollRequest) return;
         const request = { pc: state.pc, scope: captureMediaScope() };
@@ -596,6 +702,7 @@ export function createVideoGrid({ applySendCaps, syncCameraButton, syncShareButt
                 tile.diagnostics = summarizeStream(stats, tile.track?.id, tile.diagnosticsPC === request.pc ? tile.diagnostics : null);
                 tile.diagnosticsPC = request.pc;
                 tile.diagnosticsAt = new Date().toISOString();
+                tile.diagnosticsMeasuredAt = performance.now();
                 if (tile.sentQuality === "high" && Number.isFinite(tile.diagnostics.bitrate) && tile.diagnostics.bitrate > 0) {
                     const estimate = Math.max(tile.slot === "screen" ? 1000000 : 250000, Math.min(50000000, tile.diagnostics.bitrate));
                     tile.estimatedHighBitrate = tile.estimatedHighBitrate ? tile.estimatedHighBitrate * 0.7 + estimate * 0.3 : estimate;
@@ -644,7 +751,8 @@ export function createVideoGrid({ applySendCaps, syncCameraButton, syncShareButt
             // Honor the runtime's power-efficient path (normally hardware-backed)
             // instead of reacting to other applications' CPU use. Missing stats
             // retain the software fallback; this flag is not proof of a GPU codec.
-            const nextReceive = cpuPressure && !(decoders.length && decoders.every(r => r.powerEfficientDecoder === true));
+            const canAdapt = [...tiles.values()].some(tile => !streamUsesSourceQuality(tile.clientID, tile.slot));
+            const nextReceive = canAdapt && cpuPressure && !(decoders.length && decoders.every(r => r.powerEfficientDecoder === true));
             // Encoding already adapts to its own CPU budget in WebRTC. System
             // load from a game must not impose a second bitrate/resolution cut.
             if (nextReceive !== receiveCpuPressure) {

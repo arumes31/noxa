@@ -31,6 +31,7 @@ type VoiceTelemetry struct {
 	Tracks          []VoiceReceiverDiagnostics `json:"tracks"`
 	Transport       *VoiceICETransport         `json:"transport,omitempty"`
 	Senders         []VoiceSenderDiagnostics   `json:"senders,omitempty"`
+	VideoSenders    []VideoSenderDiagnostics   `json:"video_senders,omitempty"`
 }
 
 type VoiceICETransport struct {
@@ -138,7 +139,7 @@ func (m VoiceTelemetry) Valid() bool {
 	if m.Transport != nil && !m.Transport.Valid() {
 		return false
 	}
-	if len(m.Senders) > 8 {
+	if len(m.Senders) > 8 || len(m.VideoSenders) > 8 {
 		return false
 	}
 	senders := map[uint32]bool{}
@@ -149,6 +150,13 @@ func (m VoiceTelemetry) Valid() bool {
 			return false
 		}
 		senders[sender.SSRC] = true
+	}
+	videoSenders := map[uint32]bool{}
+	for _, sender := range m.VideoSenders {
+		if !sender.Valid() || videoSenders[sender.SSRC] {
+			return false
+		}
+		videoSenders[sender.SSRC] = true
 	}
 	seen := map[string]bool{}
 	for _, t := range m.Tracks {

@@ -1,5 +1,5 @@
 import { captureMediaScope, mediaScopeIsCurrent } from "./media-controls.js";
-import { streamRequest, stopPublications, publicationSnapshot, reconcilePublications } from "./stream-publication.js";
+import { streamRequest, stopPublications, publicationSnapshot, reconcilePublications, reconcilePublicationUploads, isCurrentPublication } from "./stream-publication.js";
 import { t } from "./i18n.js";
 import { updateShareViewers } from "./share-status.js";
 import { streamRecovery } from "./stream-recovery.js";
@@ -223,12 +223,16 @@ function createEntry(s, stream) {
 
 async function poll(s) {
     if (!current(s)) return;
+    if (s.polling) { s.pollAgain = true; return; }
+    clearTimeout(s.timer);
+    s.polling = true;
     try {
         const publications = publicationSnapshot();
         const result = await streamRequest(s.scope, { action: "list" });
         if (!current(s)) return;
         s.catalogLoaded = true;
         reconcilePublications(publications, result.streams);
+        if (!s.pollAgain) reconcilePublicationUploads(publications, result.streams);
         updateShareViewers(result.streams);
         if (s.watchSession && s.watchSession !== result.session) {
             for (const entry of s.streams.values()) { entry.watching = false; applyWatch(s, entry); entry.card.remove(); }
@@ -253,6 +257,7 @@ async function poll(s) {
             let entry = s.streams.get(id);
             if (!entry) { entry = createEntry(s, stream); s.streams.set(id, entry); }
             entry.available = true;
+            entry.quality_mode = stream.quality_mode;
             const revision = BigInt(stream.watch_revision);
             if (revision > entry.revision) entry.revision = revision;
             entry.pollError = "";
@@ -276,11 +281,22 @@ async function poll(s) {
             renderEntry(s, entry);
         }
     } finally {
+        s.polling = false;
         if (current(s)) {
             refreshMemberStreams(s);
-            s.timer = setTimeout(() => { void poll(s); }, 3000);
+            s.timer = setTimeout(() => { void poll(s); }, s.pollAgain ? 0 : 3000);
+            s.pollAgain = false;
         }
     }
+}
+
+export function refreshStreamUploads(data) {
+    if (session && current(session) && isCurrentPublication(data)) void poll(session);
+}
+
+export function streamUsesSourceQuality(publisherID, slot) {
+    const s = session;
+    return !!s && current(s) && s.streams.get(`${publisherID}|${slot}`)?.quality_mode === "source";
 }
 
 export function startStreamSession(pc, addVideo, removeVideo) {
