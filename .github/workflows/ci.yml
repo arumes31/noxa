@@ -122,6 +122,7 @@ jobs:
       - run: npm run lint
       - run: npx playwright install --with-deps chromium
       - run: npm run build
+      - run: npm run test:build
       - run: npm run test:unit
       - run: npm run test:e2e
       - name: Verify single-quality browser streams through the SFU

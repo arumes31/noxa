@@ -105,7 +105,7 @@ test("owner can inspect bounded history, selected transport and correlated media
     await dialog.screenshot({ path: testInfo.outputPath("voice-history-transport.png") });
 });
 
-test("actual poor playback appears separately from a healthy server ping and clears on scope change", async ({ page }) => {
+test("actual poor playback appears separately from a healthy server ping and clears on scope change", async ({ page }, testInfo) => {
     await page.evaluate(async () => {
         const { createConnectionQuality } = await import("/src/connection-quality.js");
         const state = window.__noxa.state;
@@ -124,10 +124,75 @@ test("actual poor playback appears separately from a healthy server ping and cle
     await expect(page.locator("#voice-latency")).toHaveAttribute("data-quality", "good");
     await expect(page.locator("#voice-playback-quality")).toHaveText("Voice: poor");
     await expect(page.locator("#voice-playback-quality")).toHaveAttribute("data-quality", "poor");
-    await expect(page.locator("#voice-playback-quality")).toHaveAttribute("title", /UDP · relay → host · TURN tcp/);
+    const badge = page.locator("#voice-playback-quality");
+    await expect(badge).not.toHaveAttribute("title");
+    await badge.focus();
+    const tooltip = page.getByRole("tooltip", { includeHidden: true });
+    await expect(tooltip).toBeVisible();
+    await expect(badge).toHaveAttribute("aria-describedby", await tooltip.getAttribute("id"));
+    await expect(tooltip).toContainText("UDP · relay → host · TURN tcp");
+    await expect(tooltip).toContainText("Increased playback buffering");
+    await expect(tooltip.locator(".voice-quality-tooltip-notes p")).toHaveCount(2);
+    await page.keyboard.press("Escape");
+    await expect(tooltip).toBeHidden();
+    await expect(badge).toBeFocused();
+    await page.keyboard.press("Enter");
+    await expect(tooltip).toBeVisible();
+    await badge.blur();
+    await badge.hover();
+    await expect(tooltip).toBeVisible();
+    await tooltip.hover();
+    await expect(tooltip).toBeVisible();
+    await page.screenshot({ path: testInfo.outputPath("voice-tooltip-en.png") });
+    await page.keyboard.press("Escape");
+    await expect(tooltip).toBeHidden();
+    await badge.hover();
+    await expect(tooltip).toBeVisible();
+    await page.mouse.move(1000, 10);
+    await expect(tooltip).toBeHidden();
+    await badge.focus();
+    await expect(tooltip).toBeVisible();
     await page.evaluate(() => { window.__noxa.state.myChannelID = 8; });
-    await expect(page.locator("#voice-playback-quality")).toBeHidden();
+    await expect(badge).toBeHidden();
+    await expect(tooltip).toBeHidden();
+    await expect(tooltip).toBeEmpty();
     await page.evaluate(() => window.__stopDiagnosticQuality());
+    await expect(tooltip).toHaveCount(0);
+});
+
+test("voice tooltip preserves unknown measurements and fits a narrow German footer", async ({ page }, testInfo) => {
+    await page.setViewportSize({ width: 360, height: 640 });
+    await page.evaluate(async () => {
+        (await import("/src/i18n.js")).setLanguage("de");
+        const { createConnectionQuality } = await import("/src/connection-quality.js");
+        const state = window.__noxa.state;
+        const peer = { connectionState: "connected" };
+        state.pc = peer;
+        state.voiceTelemetry = { at: Date.now(), peer,
+            scope: JSON.stringify([state.activeTabID, state.serverGeneration, state.myChannelID]),
+            report: { connection_state: "connected", output_state: "running", tracks: [] } };
+        const quality = createConnectionQuality({ $: id => document.getElementById(id), state });
+        window.__stopDiagnosticQuality = quality.stopQualitySampler;
+        quality.startQualitySampler();
+    });
+    const badge = page.locator("#voice-playback-quality");
+    await expect(badge).toHaveText("Sprache: Messung läuft");
+    await badge.focus();
+    const tooltip = page.getByRole("tooltip", { includeHidden: true });
+    await expect(tooltip).toBeVisible();
+    await expect(tooltip).toContainText("Fehlende Messwerte bleiben unbekannt");
+    await expect(tooltip).not.toContainText("UDP");
+    await expect(tooltip).not.toContainText("0.0%");
+    const bounds = await tooltip.boundingBox(), trigger = await badge.boundingBox();
+    expect(bounds.x).toBeGreaterThanOrEqual(8);
+    expect(bounds.x + bounds.width).toBeLessThanOrEqual(352);
+    expect(bounds.y).toBeGreaterThanOrEqual(8);
+    expect(bounds.y + bounds.height).toBeLessThanOrEqual(trigger.y);
+    await page.screenshot({ path: testInfo.outputPath("voice-tooltip-de-narrow.png") });
+    await page.setViewportSize({ width: 960, height: 720 });
+    await expect(tooltip).toBeVisible();
+    await page.evaluate(() => window.__stopDiagnosticQuality());
+    await expect(tooltip).toHaveCount(0);
 });
 
 test("member connection info exposes the selected client's version and ping", async ({ page }) => {

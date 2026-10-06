@@ -1,5 +1,6 @@
 export const voiceDiagnosticsEnglish = {
     "diagnostics.healthBadge": "Voice: {quality}",
+    "diagnostics.playbackHealth": "Playback quality",
     "diagnostics.health.good": "good",
     "diagnostics.health.fair": "impaired",
     "diagnostics.health.poor": "poor",
@@ -59,6 +60,7 @@ export const voiceDiagnosticsEnglish = {
 
 export const voiceDiagnosticsGerman = {
     "diagnostics.healthBadge": "Sprache: {quality}",
+    "diagnostics.playbackHealth": "Wiedergabequalität",
     "diagnostics.health.good": "gut",
     "diagnostics.health.fair": "beeinträchtigt",
     "diagnostics.health.poor": "schlecht",
