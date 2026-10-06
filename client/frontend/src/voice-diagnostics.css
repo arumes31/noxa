@@ -1,0 +1,8 @@
+.voice-playback-quality { flex: none; color: var(--text-dim); font-size: .85rem; white-space: nowrap; }
+.voice-playback-quality[data-quality="good"], [data-role="voice-health"][data-quality="good"] { color: var(--accent); }
+.voice-playback-quality[data-quality="fair"], [data-role="voice-health"][data-quality="fair"] { color: var(--warn); }
+.voice-playback-quality[data-quality="poor"], [data-role="voice-health"][data-quality="poor"] { color: var(--danger); }
+.ci-history-scroll { max-height: 220px; overflow: auto; margin-top: 8px; }
+.ci-history-scroll table { border-collapse: collapse; width: 100%; font-size: .85em; font-variant-numeric: tabular-nums; }
+.ci-history-scroll th, .ci-history-scroll td { padding: 6px; text-align: start; border-bottom: 1px solid var(--border); white-space: nowrap; }
+.ci-history-scroll th { color: var(--text-dim); }

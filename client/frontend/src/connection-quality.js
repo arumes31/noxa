@@ -1,5 +1,6 @@
 // connection-quality.js — connection quality sampling and freshness.
 import { t } from "./i18n.js";
+import { voicePlaybackHealth } from "./voice-diagnostics.js";
 
 
 export function createConnectionQuality({ $, state }) {
@@ -38,6 +39,32 @@ export function createConnectionQuality({ $, state }) {
         if (latency.dataset.quality !== quality) latency.dataset.quality = quality;
         if (latency.getAttribute("aria-label") !== label) latency.setAttribute("aria-label", label);
         if (latency.hidden) latency.hidden = false;
+        const voiceSample = state.voiceTelemetry;
+        const scope = JSON.stringify([state.activeTabID, state.serverGeneration, state.myChannelID]);
+        const currentVoice = !!state.myChannelID && voiceSample?.scope === scope && voiceSample.peer === state.pc;
+        const health = voicePlaybackHealth(currentVoice ? voiceSample.report : null, currentVoice ? Date.now() - voiceSample.at : 0);
+        const playbackQuality = currentVoice ? health.quality : "";
+        if (pill.dataset.playbackQuality !== playbackQuality) pill.dataset.playbackQuality = playbackQuality;
+        // Preserve the established ping badge and show playback independently:
+        // an excellent control RTT cannot make damaged/delayed audio look good.
+        let playback = $("voice-playback-quality");
+        if (!playback && latency.parentElement) {
+            playback = document.createElement("span");
+            playback.id = "voice-playback-quality";
+            playback.className = "voice-playback-quality";
+            latency.after(playback);
+        }
+        if (playback) {
+            playback.hidden = !currentVoice;
+            if (playback.dataset.quality !== playbackQuality) playback.dataset.quality = playbackQuality;
+            const playbackText = currentVoice ? t("diagnostics.healthBadge", { quality: t(`diagnostics.health.${health.quality}`) }) : "";
+            const route = currentVoice ? voiceSample.report.transport : null;
+            const transportText = route ? `${t("diagnostics.transport")}: ${route.protocol.toUpperCase()} · ${route.local_candidate} → ${route.remote_candidate}${route.local_candidate === "relay" ? ` · TURN ${route.relay_protocol}` : ""}` : "";
+            const playbackTitle = currentVoice ? [t("diagnostics.healthMeaning"), ...health.reasons.map(reason => t(`diagnostics.reason.${reason}`)), transportText, route ? t("diagnostics.transportMeaning") : ""].filter(Boolean).join(" · ") : "";
+            if (playback.textContent !== playbackText) playback.textContent = playbackText;
+            if (playback.title !== playbackTitle) playback.title = playbackTitle;
+            if (playback.getAttribute("aria-label") !== `${playbackText}. ${playbackTitle}`) playback.setAttribute("aria-label", `${playbackText}. ${playbackTitle}`);
+        }
         if (pill.dataset.quality !== quality) pill.dataset.quality = quality;
         pill.title = t("runtime.qualityTitle", { quality: t(`runtime.quality.${lastQualitySample.quality}`), ping: lastQualitySample.pingMs, age: qualitySampleAge(lastQualitySample.at) });
         const title = t("runtime.latencyTitle", { quality: qualityLabel, age: qualitySampleAge(lastQualitySample.at) });
@@ -94,6 +121,8 @@ export function createConnectionQuality({ $, state }) {
         lastQualitySample = null;
         const pill = $("conn-pill");
         delete pill.dataset.quality;
+        delete pill.dataset.playbackQuality;
+        $("voice-playback-quality")?.remove();
         pill.title = pill.classList.contains("up") ? "" : t("runtime.latencyOffline");
         const latency = $("voice-latency");
         latency.hidden = true;

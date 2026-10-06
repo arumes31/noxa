@@ -11,8 +11,10 @@ const current = s => session === s && mediaScopeIsCurrent(s.scope) && window.__n
 export function summarizeShare(report) {
     const rows = [...report.values()].filter(r => r.type === "outbound-rtp" && (r.kind || r.mediaType) === "video" &&
         r.active !== false && r.framesEncoded > 0);
-    if (rows.length !== 1) return null;
-    const r = rows[0];
+    if (!rows.length) return null;
+    // Sender-scoped getStats includes all simulcast layers. Report the largest
+    // active one, rather than claiming simulcast has no measurable dimensions.
+    const r = rows.sort((a, b) => (b.frameWidth || 0) * (b.frameHeight || 0) - (a.frameWidth || 0) * (a.frameHeight || 0))[0];
     return { width: r.frameWidth, height: r.frameHeight, fps: r.framesPerSecond, reason: r.qualityLimitationReason };
 }
 
@@ -30,11 +32,12 @@ export function startShareStatus(options) {
     if (!root) return;
     const s = { ...options, root, track: options.stream.getVideoTracks()[0], viewers: null, sample: null };
     session = s;
-    root.innerHTML = `<div class="sharing-heading"><strong class="sharing-source"></strong><div class="sharing-actions"><button type="button" class="sharing-change"></button><button type="button" class="sharing-stop danger"></button></div></div>
+    root.innerHTML = `<div class="sharing-heading"><strong class="sharing-source"></strong><div class="sharing-actions"><button type="button" class="sharing-quality"></button><button type="button" class="sharing-change"></button><button type="button" class="sharing-stop danger"></button></div></div>
         <p class="sharing-meta"></p><p class="sharing-warning" role="status" hidden></p>
         <details class="sharing-preview"><summary></summary><video muted playsinline></video></details>`;
     root.hidden = false;
     root.querySelector(".sharing-change").onclick = () => { if (current(s)) s.change(); };
+    root.querySelector(".sharing-quality").onclick = () => { if (current(s)) s.changeQuality(); };
     root.querySelector(".sharing-stop").onclick = () => { if (current(s)) s.stop(); };
     const details = root.querySelector("details"), video = root.querySelector("video");
     details.ontoggle = () => {
@@ -58,8 +61,9 @@ function render(s) {
     s.root.querySelector("summary").textContent = t("share.preview");
     s.root.querySelector("video").setAttribute("aria-label", t("share.preview"));
     const busy = !!window.__noxa.state.shareStarting || !!window.__noxa.state.shareStopping;
-    for (const [selector, key] of [[".sharing-change", "share.change"], [".sharing-stop", "voice.stopShare"]]) {
-        const button = s.root.querySelector(selector); button.textContent = t(key); button.disabled = busy;
+    for (const [selector, key] of [[".sharing-quality", "share.changeQuality"], [".sharing-change", "share.change"], [".sharing-stop", "voice.stopShare"]]) {
+        const button = s.root.querySelector(selector); button.textContent = t(key);
+        button.disabled = busy || (selector !== ".sharing-stop" && !!window.__noxa.state.shareQualityUpdating);
     }
     const sample = s.sample;
     const dimensions = sample?.width > 0 && sample?.height > 0 ? `${sample.width} × ${sample.height}` : "—";

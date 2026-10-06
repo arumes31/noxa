@@ -129,6 +129,7 @@ export function createVideoPublication({ policy }) {
                 if (sender === screenSender) parameters.degradationPreference =
                     sender.track?.contentHint === "motion" ? "balanced" : "maintain-resolution";
                 return { sender, parameters, encodings: parameters.encodings || [],
+                    weightedSimulcast: sender === screenSender,
                     bitrateHeadroom: sender === screenSender ? SCREEN_BITRATE_HEADROOM : Infinity };
             });
             capVideoEncodings(sources, state.mediaLimits, policy.lowBandwidth ? policy.lowBandwidthBitrate : 0);
@@ -308,6 +309,7 @@ export function createVideoPublication({ policy }) {
         const previousDisplay = state.shareStream;
         const p = shareQuality(preset, custom);
         if (!p) return;
+        const selection = { preset, custom };
         const limits = state.mediaLimits;
         const video = screenShareConstraints(p, limits);
         if (surface !== "region") video.displaySurface = surface; // 69: "monitor" | "window"
@@ -396,7 +398,14 @@ export function createVideoPublication({ policy }) {
                         if (!trackFitsVideoLimits(screenTrack, state.mediaLimits)) throw new Error(tLabel("voice.mediaDimensionsFailed"));
                         shareTransceiver = state.shareVideoTransceiver;
                         if (shareTransceiver) await shareTransceiver.sender.replaceTrack(screenTrack);
-                        else shareTransceiver = peerConnection.addTransceiver(screenTrack, { direction: "sendonly", streams: [display] });
+                        else {
+                            try {
+                                shareTransceiver = peerConnection.addTransceiver(screenTrack, { direction: "sendonly", streams: [display],
+                                    sendEncodings: [{ rid: "q", scaleResolutionDownBy: 4 }, { rid: "h", scaleResolutionDownBy: 2 }, { rid: "f" }] });
+                            } catch {
+                                shareTransceiver = peerConnection.addTransceiver(screenTrack, { direction: "sendonly", streams: [display] });
+                            }
+                        }
                         state.shareVideoTransceiver = shareTransceiver;
                         await applySendCaps();
                         if (!current() || shareEnded) throw new DOMException("capture ended", "AbortError");
@@ -507,8 +516,76 @@ export function createVideoPublication({ policy }) {
         }
         startShareStatus({ stream: display, pc: peerConnection, scope: shareScope, preset: p, surface, audioMode,
             generation: publicationSnapshot().find(p => p.publication.slot === "screen")?.generation,
-            stop: () => { V().$("voice-screen").focus(); void doStopShare(); }, change: () => openShareDialog(true, preset, audioMode, surface, custom),
+            stop: () => { V().$("voice-screen").focus(); void doStopShare(); },
+            change: () => openShareDialog(true, selection.preset, audioMode, surface, selection.custom),
+            changeQuality: () => openLiveShareQuality(display, peerConnection, shareScope, p, selection),
             reduction: () => policy.lowBandwidth ? "share.lowBandwidth" : "" });
+    }
+
+    function openLiveShareQuality(stream, pc, scope, profile, selection) {
+        const { state } = V();
+        const track = stream.getVideoTracks()[0];
+        const current = () => mediaScopeIsCurrent(scope) && state.pc === pc && state.shareStream === stream && track.readyState === "live";
+        if (!current() || state.shareQualityUpdating) return;
+        const overlay = document.createElement("div");
+        overlay.className = "dlg-overlay";
+        overlay.innerHTML = `<div class="dlg share-dlg"><h3>${tLabel("share.changeQuality")}</h3>
+            <p class="set-hint">${tLabel("share.qualityHelp")}</p><div class="live-share-quality"></div>
+            <p class="live-share-quality-error warn" role="alert" hidden></p>
+            <div class="dlg-buttons"><button type="button" class="dlg-cancel">${tLabel("desktop.cancel")}</button>
+            <button type="button" class="dlg-ok primary">${tLabel("share.applyQuality")}</button></div></div>`;
+        const controls = createShareQualityControls(`live-share-quality-${++shareDialogID}`, selection);
+        overlay.querySelector(".live-share-quality").append(controls.element);
+        overlay.querySelector(".dlg-cancel").onclick = () => overlay.remove();
+        overlay.querySelector(".dlg-ok").onclick = async () => {
+            const selected = controls.read(), next = selected && shareQuality(selected.preset, selected.custom);
+            if (!next || !current() || state.shareQualityUpdating) return;
+            const operation = {};
+            state.shareQualityUpdating = operation;
+            const alive = () => current() && state.shareQualityUpdating === operation;
+            overlay.dataset.blocking = "true";
+            const disabledStates = [...overlay.querySelectorAll("button, input, select")].map(control => [control, control.disabled]);
+            for (const [control] of disabledStates) control.disabled = true;
+            refreshShareStatus();
+            try {
+                await queuePeerNegotiation(pc, async () => {
+                    if (!alive()) return;
+                    const previous = track.getConstraints(), hint = track.contentHint, preferred = capturePreferences.get(track);
+                    try {
+                        await track.applyConstraints({ ...previous, ...screenShareConstraints(next, state.mediaLimits) });
+                        if (!alive()) return;
+                        if (!trackFitsVideoLimits(track, state.mediaLimits)) throw new Error(tLabel("voice.mediaDimensionsFailed"));
+                        capturePreferences.set(track, { ...next, screen: true });
+                        track.contentHint = selected.preset === "text" ? "text" : next.fps > 30 ? "motion" : "detail";
+                        await applySendCaps(alive);
+                    } catch (error) {
+                        if (!alive()) return;
+                        capturePreferences.set(track, preferred);
+                        track.contentHint = hint;
+                        let restored = true;
+                        try { await track.applyConstraints(previous); if (alive()) await applySendCaps(alive); }
+                        catch { restored = false; }
+                        throw new Error(tLabel(restored ? "share.qualityFailed" : "share.qualityRestoreFailed", { error: error.message || String(error) }));
+                    }
+                    if (!alive()) return;
+                    for (const key of Object.keys(profile)) delete profile[key];
+                    Object.assign(profile, next);
+                    Object.assign(selection, selected);
+                });
+                overlay.remove();
+            } catch (error) {
+                if (alive() && overlay.isConnected) {
+                    const notice = overlay.querySelector(".live-share-quality-error");
+                    notice.hidden = false; notice.textContent = error.message || String(error);
+                }
+            } finally {
+                if (state.shareQualityUpdating === operation) state.shareQualityUpdating = null;
+                delete overlay.dataset.blocking;
+                for (const [control, disabled] of disabledStates) control.disabled = disabled;
+                refreshShareStatus();
+            }
+        };
+        mountServerDialog(overlay);
     }
 
     // pickRegionAndCrop shows a draggable/resizable box over the app; on confirm

@@ -1,10 +1,50 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { collectVoiceTelemetry, startVoiceDiagnostics } from "../src/voice-diagnostics.js";
+import { collectVoiceTelemetry, startVoiceDiagnostics, voicePlaybackHealth, selectedVoiceTransport } from "../src/voice-diagnostics.js";
 
 const settle = () => new Promise(resolve => setImmediate(resolve));
 const snapshot = (...rows) => new Map(rows.map(row => [row.id, row]));
 const near = (actual, expected) => assert.ok(Math.abs(actual - expected) < 0.00001, `${actual} should equal ${expected}`);
+
+test("playback health uses actual recent playout rather than ping and preserves unknowns", () => {
+    const report = { connection_state: "connected", output_state: "running", tracks: [{ sample_ms: 5000,
+        loss_percent: 0, discard_percent: 0, non_silent_concealment_percent: 0, buffer_ms: 40 }] };
+    assert.equal(voicePlaybackHealth(report).quality, "good");
+    assert.equal(voicePlaybackHealth({ ...report, rtt_ms: 900 }).quality, "good");
+    assert.equal(voicePlaybackHealth({ ...report, tracks: [{ ...report.tracks[0], buffer_ms: 500 }] }).quality, "poor");
+    assert.equal(voicePlaybackHealth({ ...report, tracks: [{ ...report.tracks[0], non_silent_concealment_percent: 4 }] }).quality, "poor");
+    assert.equal(voicePlaybackHealth({ ...report, tracks: [{ sample_ms: 5000, loss_percent: 0 }] }).quality, "unknown");
+    assert.equal(voicePlaybackHealth({ ...report, tracks: [{ ...report.tracks[0], sample_ms: null }] }).quality, "unknown");
+    assert.equal(voicePlaybackHealth(report, 15001).quality, "stale");
+    assert.equal(voicePlaybackHealth({ ...report, deafened: true }).quality, "inactive");
+    assert.equal(voicePlaybackHealth({ ...report, output_state: "suspended" }).quality, "poor");
+    assert.equal(voicePlaybackHealth({ ...report, output_state: "unavailable" }).quality, "unknown");
+    assert.equal(voicePlaybackHealth({ ...report, truncated: true }).quality, "unknown");
+    assert.equal(voicePlaybackHealth({ ...report, truncated: true, tracks: [{ ...report.tracks[0], buffer_ms: 500 }] }).quality, "poor");
+});
+
+test("transport exposes only the selected pair's allowlisted types and never its addresses", () => {
+    const stats = snapshot({ id: "transport", type: "transport", selectedCandidatePairId: "pair" },
+        { id: "pair", type: "candidate-pair", localCandidateId: "local", remoteCandidateId: "remote" },
+        { id: "local", type: "local-candidate", candidateType: "relay", protocol: "udp", relayProtocol: "tcp", address: "10.1.2.3" },
+        { id: "remote", type: "remote-candidate", candidateType: "host", protocol: "udp", address: "private.example" });
+    assert.deepEqual(selectedVoiceTransport(stats), { protocol: "udp", local_candidate: "relay", remote_candidate: "host", relay_protocol: "tcp" });
+    stats.get("local").protocol = "secret";
+    assert.equal(selectedVoiceTransport(stats).protocol, "unknown");
+    assert.doesNotMatch(JSON.stringify(selectedVoiceTransport(stats)), /10\.1|private|secret/);
+});
+
+test("outbound audio telemetry preserves SSRC and interval counters without sending track/device IDs", () => {
+    const old = { id: "outbound", type: "outbound-rtp", kind: "audio", ssrc: 123, timestamp: 1000, packetsSent: 100, bytesSent: 10000 };
+    const now = { ...old, timestamp: 6000, packetsSent: 350, bytesSent: 30000, mediaSourceId: "private-device" };
+    const report = collectVoiceTelemetry(stateFixture(), snapshot(now), snapshot(old));
+    assert.equal(report.senders[0].ssrc, 123);
+    assert.equal(report.senders[0].sample_ms, 5000);
+    assert.equal(report.senders[0].packets_per_second, 50);
+    assert.equal(report.senders[0].bitrate_bps, 32000);
+    assert.doesNotMatch(JSON.stringify(report), /private-device|mediaSourceId/);
+    assert.equal(collectVoiceTelemetry(stateFixture(), snapshot(now), snapshot({ ...old, ssrc: 124 })).senders[0].sample_ms, null);
+});
 
 function receiver(overrides = {}) {
     return {

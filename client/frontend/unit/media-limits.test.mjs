@@ -95,3 +95,31 @@ test("screen encoder headroom overrides browser defaults but yields to explicit 
     assert.equal(screen.encodings[0].maxBitrate, 50000000);
     assert.equal(screen.encodings[0].scaleResolutionDownBy, 1);
 });
+
+test("screen simulcast prioritizes full resolution within the aggregate headroom", () => {
+    const screen = { encodings: [{ rid: "q" }, { rid: "h" }, { rid: "f" }], bitrateHeadroom: 50000000, weightedSimulcast: true };
+    capVideoEncodings([screen], {}, 0);
+    const [low, mid, high] = screen.encodings.map(e => e.maxBitrate);
+    assert.equal(low, 250000);
+    assert.equal(mid, 1000000);
+    assert.ok(high >= 48749997 && high <= 48750000);
+    assert.ok(low + mid + high <= 50000000);
+    capVideoEncodings([screen], { video_max_bitrate: 4000000 }, 0);
+    const capped = screen.encodings.map(e => e.maxBitrate);
+    assert.ok(capped[0] <= 250000 && capped[1] <= 1000000);
+    assert.ok(capped[2] >= capped[1] * 4 - 16);
+    assert.ok(capped.reduce((sum, bitrate) => sum + bitrate, 0) <= 3400000);
+    capVideoEncodings([screen], { video_max_bitrate: 1000000 }, 150000);
+    assert.equal(screen.encodings.filter(e => e.active).length, 1);
+    assert.equal(screen.encodings[0].maxBitrate, 150000);
+});
+
+test("weighted simulcast never exceeds even tiny server ceilings", () => {
+    for (let ceiling = 1; ceiling <= 32; ceiling++) {
+        const screen = { encodings: [{ rid: "q" }, { rid: "h" }, { rid: "f" }], weightedSimulcast: true };
+        capVideoEncodings([screen], { video_max_bitrate: ceiling }, 0);
+        const active = screen.encodings.filter(encoding => encoding.active);
+        assert.ok(active.every(encoding => encoding.maxBitrate >= 1));
+        assert.ok(active.reduce((sum, encoding) => sum + encoding.maxBitrate, 0) <= Math.floor(ceiling * 0.85), `ceiling ${ceiling}`);
+    }
+});

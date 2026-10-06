@@ -1,7 +1,7 @@
 import { test, expect } from "./fixtures.js";
 
 test.beforeEach(async ({ page }) => {
-    await page.route("**/streams-fixture", route => route.fulfill({ contentType: "text/html", body: `<!doctype html><html lang="en"><head><link rel="stylesheet" href="/src/style.css"><link rel="stylesheet" href="/src/streams.css"></head><body><main><div id="video-grid"></div></main></body></html>` }));
+    await page.route("**/streams-fixture", route => route.fulfill({ contentType: "text/html", body: `<!doctype html><html lang="en"><head><link rel="stylesheet" href="/src/style.css"><link rel="stylesheet" href="/src/streams.css"><link rel="stylesheet" href="/src/workspace.css"></head><body><main><div id="video-grid"></div></main></body></html>` }));
     await page.goto("/streams-fixture");
     await page.evaluate(async () => {
         const pc = {}, audio = { muted: false, volume: 100 };
@@ -11,7 +11,14 @@ test.beforeEach(async ({ page }) => {
         window.__noxa = { state: { pc, activeTabID: "one", serverGeneration: 1, sessionGeneration: 1, myChannelID: 1, myClientID: "me", settings: {}, clients: [{ client_id: "alice", nickname: "Alice" }, { client_id: "bob", nickname: "Bob" }] },
             $: id => document.getElementById(id),
             shareAudioCtl: { get: () => audio, setMuted: (_id, muted) => { audio.muted = muted; }, setVolume: (_id, volume) => { audio.volume = volume; } }, sysMsg: () => {}, initials: name => name.slice(0, 1) };
-        window.go = { main: { App: { VideoStreamControlForTab: async (tab, msg) => {
+        window.go = { main: { App: {
+            SupportsStreamVideoQualityForTab: async () => true,
+            SetStreamVideoQualityForTab: async (tab, publisher, slot, generation, session, quality) => {
+                calls.push({ action: "quality", tab, publisher, slot, generation, session, quality });
+                if (window.__streams.delayQuality) await new Promise(resolve => { window.__streams.resolveQuality = resolve; });
+                return window.__streams.qualityError || "";
+            },
+            VideoStreamControlForTab: async (tab, msg) => {
             calls.push({ tab, ...msg });
             if (msg.action === "watch" && window.__streams.delayWatch) await new Promise(resolve => { window.__streams.resolveWatch = resolve; });
             return { ...msg, streams: structuredClone(window.__streams.streams), session: msg.action === "list" ? window.__streams.session : msg.session };
@@ -36,6 +43,74 @@ test.beforeEach(async ({ page }) => {
         window.__streams.sharedAudio = sharedAudio;
     });
     await expect(page.getByRole("button", { name: "Watch", exact: true })).toHaveCount(2);
+});
+
+test("watched shares have independent quality and allow multiple High selections", async ({ page }) => {
+    for (const publisher of ["alice", "bob"]) await page.locator(`[data-publisher="${publisher}"] .stream-watch`).click();
+    for (const publisher of ["alice", "bob"]) {
+        await page.locator(`.vtile[data-clid="${publisher}"] .vtile-quality-button`).click();
+        await page.locator('.ctx-menu [data-q="high"]').click();
+    }
+    await expect.poll(() => page.evaluate(() => Object.fromEntries(window.__streams.calls.filter(c => c.action === "quality").map(c => [c.publisher, c.quality])))).toEqual({ alice: "high", bob: "high" });
+    await page.locator('.vtile[data-clid="alice"] .vtile-quality-button').click();
+    await page.locator('.ctx-menu [data-q="low"]').click();
+    await expect.poll(() => page.evaluate(() => Object.fromEntries(window.__streams.calls.filter(c => c.action === "quality").map(c => [c.publisher, c.quality])))).toEqual({ alice: "low", bob: "high" });
+    expect(await page.evaluate(() => window.__streams.calls.filter(c => c.action === "quality").every(c => c.session === "10" && c.slot === "screen"))).toBe(true);
+});
+
+test("a denied quality request remains visible and stale publication replies are ignored", async ({ page }) => {
+    await page.locator('[data-publisher="alice"] .stream-watch').click();
+    await page.evaluate(() => { window.__streams.qualityError = "permission changed"; });
+    await page.locator('.vtile[data-clid="alice"] .vtile-quality-button').click();
+    await page.locator('.ctx-menu [data-q="low"]').click();
+    await page.locator('.vtile[data-clid="alice"] .vtile-diagnostics summary').click();
+    await expect(page.locator('.vtile-quality-error')).toContainText("permission changed");
+    await page.evaluate(() => { window.__streams.delayQuality = true; });
+    await page.locator('.vtile[data-clid="alice"] .vtile-quality-button').click();
+    await page.locator('.ctx-menu [data-q="mid"]').click();
+    await expect.poll(() => page.evaluate(() => typeof window.__streams.resolveQuality)).toBe("function");
+    await page.evaluate(() => { window.__streams.controls.stopStreamSession(); window.__streams.resolveQuality(); });
+    await expect(page.locator('.vtile')).toHaveCount(0);
+});
+
+test("received details show measured dimensions and FPS separately from requested quality", async ({ page }, testInfo) => {
+    await page.clock.install();
+    await page.evaluate(() => {
+        let sample = 0;
+        window.go.main.App.SystemCPUPercent = async () => 15;
+        window.__noxa.state.pc.getStats = async () => {
+            sample++;
+            return new Map([['alice-video', { id: 'alice-video', ssrc: 42, type: 'inbound-rtp', kind: 'video',
+                trackIdentifier: 'alice|screen', frameWidth: 1920, frameHeight: 1080,
+                framesDecoded: sample * 90, bytesReceived: sample * 1500000, timestamp: sample * 3000,
+                packetsLost: 0, codecId: 'vp8' }], ['vp8', { type: 'codec', mimeType: 'video/VP8' }]]);
+        };
+    });
+    await page.locator('[data-publisher="alice"] .stream-watch').click();
+    await page.clock.fastForward(3000);
+    await expect(page.locator('.vtile-received')).toHaveText('Received: 1920 × 1080 · — fps');
+    await page.clock.fastForward(3000);
+    await expect(page.locator('.vtile-received')).toHaveText('Received: 1920 × 1080 · 30.0 fps');
+    await page.locator('.vtile-quality-button').click();
+    await page.locator('.ctx-menu [data-q="low"]').click();
+    await page.locator('.vtile-diagnostics summary').click();
+    await expect(page.locator('.vtile-quality')).toContainText('requested layer: low');
+    await expect(page.locator('.vtile-received')).toContainText('1920 × 1080');
+    await page.screenshot({ path: testInfo.outputPath('received-quality.png') });
+});
+
+test("older servers expose an honest connection-wide quality control", async ({ page }) => {
+    await page.evaluate(() => {
+        window.go.main.App.SupportsStreamVideoQualityForTab = async () => false;
+        window.go.main.App.SetVideoQualityForTab = async (tab, quality) => { window.__streams.legacyQuality = [tab, quality]; return ''; };
+    });
+    for (const publisher of ['alice', 'bob']) await page.locator(`[data-publisher="${publisher}"] .stream-watch`).click();
+    await page.locator('.vtile[data-clid="alice"] .vtile-quality-button').click();
+    await page.locator('.ctx-menu [data-q="high"]').click();
+    await expect(page.getByRole('button', { name: 'Receive quality for all streams on this server', exact: true })).toHaveCount(2);
+    await expect(page.locator('.vtile[data-clid="bob"] .vtile-quality-button')).toContainText('High');
+    expect(await page.evaluate(() => window.__streams.legacyQuality)).toEqual(['one', 'high']);
+    expect(await page.evaluate(() => window.__streams.calls.some(call => call.action === 'quality'))).toBe(false);
 });
 
 test("two independent watches, stop, and shared audio controls leave voice intact", async ({ page }) => {

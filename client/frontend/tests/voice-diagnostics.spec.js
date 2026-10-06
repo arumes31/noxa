@@ -75,6 +75,61 @@ async function provideDiagnostics(page) {
     });
 }
 
+test("owner can inspect bounded history, selected transport and correlated media stages", async ({ page }, testInfo) => {
+    await provideDiagnostics(page);
+    await page.evaluate(() => {
+        const d = window.__info.voice_diagnostics;
+        d.client_report.report.transport = { protocol: "udp", local_candidate: "relay", remote_candidate: "host", relay_protocol: "tcp" };
+        d.history = [{ observed_at: Date.now(), buffer_ms: 420, loss_percent: 0, discard_percent: 2,
+            concealment_percent: 1, track_count: 2 }];
+        d.paths = [{ publisher_id: "c-alice", slot: "mic", output_ssrc: 123,
+            sender: { ssrc: 456, packets_per_second: 50, bitrate_bps: 32000 }, sender_age_ms: 1000,
+            ingress: { publication: "41", ssrc: 456, packets_per_second: 49, jitter_ms: 61, max_gap_ms: 480, burst_packets: 20 },
+            receiver: { buffer_ms: 420, non_silent_concealment_percent: 1 },
+            feedback: { fraction_lost: 0, jitter_ms: 72 } }];
+    });
+    const dialog = await openInfo(page);
+    const diagnostics = dialog.locator('[data-role="receiver-diagnostics"]');
+    await diagnostics.locator(":scope > summary").click();
+    await expect(diagnostics).toContainText("UDP · relay → host · TURN tcp");
+    await expect(diagnostics).toContainText("50.0 packets/s · 32.0 kbit/s");
+    await expect(diagnostics).toContainText("49.0 packets/s · 61.0 ms");
+    await expect(diagnostics).toContainText("Clocks are not synchronized");
+    const history = diagnostics.locator('[data-role="voice-history"]');
+    await history.locator("summary").click();
+    await expect(history.locator("tbody tr")).toHaveCount(1);
+    await expect(history).toContainText("420.0 ms");
+    await expect.poll(() => page.evaluate(() => window.__infoCalls.length)).toBeGreaterThan(1);
+    await expect(history).toHaveAttribute("open", "");
+    await history.scrollIntoViewIfNeeded();
+    await dialog.screenshot({ path: testInfo.outputPath("voice-history-transport.png") });
+});
+
+test("actual poor playback appears separately from a healthy server ping and clears on scope change", async ({ page }) => {
+    await page.evaluate(async () => {
+        const { createConnectionQuality } = await import("/src/connection-quality.js");
+        const state = window.__noxa.state;
+        const peer = { connectionState: "connected", getStats: async () => new Map() };
+        state.pc = peer;
+        state.voiceTelemetry = { at: Date.now(), peer,
+            scope: JSON.stringify([state.activeTabID, state.serverGeneration, state.myChannelID]),
+            report: { connection_state: "connected", output_state: "running",
+                transport: { protocol: "udp", local_candidate: "relay", remote_candidate: "host", relay_protocol: "tcp" }, tracks: [{ sample_ms: 5000,
+                loss_percent: 0, discard_percent: 0, non_silent_concealment_percent: 0, buffer_ms: 500 }] } };
+        const quality = createConnectionQuality({ $: id => document.getElementById(id), state });
+        window.__stopDiagnosticQuality = quality.stopQualitySampler;
+        quality.startQualitySampler();
+    });
+    await expect(page.locator("#voice-latency")).toHaveText("10 ms");
+    await expect(page.locator("#voice-latency")).toHaveAttribute("data-quality", "good");
+    await expect(page.locator("#voice-playback-quality")).toHaveText("Voice: poor");
+    await expect(page.locator("#voice-playback-quality")).toHaveAttribute("data-quality", "poor");
+    await expect(page.locator("#voice-playback-quality")).toHaveAttribute("title", /UDP · relay → host · TURN tcp/);
+    await page.evaluate(() => { window.__noxa.state.myChannelID = 8; });
+    await expect(page.locator("#voice-playback-quality")).toBeHidden();
+    await page.evaluate(() => window.__stopDiagnosticQuality());
+});
+
 test("member connection info exposes the selected client's version and ping", async ({ page }) => {
     await page.evaluate(() => { window.__noxa.state.ownAuthority = "member"; });
     const dialog = await openInfo(page);

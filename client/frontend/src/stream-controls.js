@@ -11,6 +11,15 @@ const current = s => session === s && V().state.pc === s.pc && mediaScopeIsCurre
 
 export function streamSessionIsCurrent(pc) { return !!session && session.pc === pc && current(session); }
 
+export function streamQualityTarget(publisherID, slot) {
+    const s = session;
+    if (!s || !current(s) || !s.watchSession) return null;
+    const entry = s.streams.get(`${publisherID}|${slot}`);
+    return entry?.watching && entry.available !== false ? {
+        publisherID: entry.publisher_id, slot: entry.slot, generation: entry.generation, session: s.watchSession,
+    } : null;
+}
+
 export function memberScreenStream(clientID) {
     const s = session;
     if (!s || !current(s)) return null;

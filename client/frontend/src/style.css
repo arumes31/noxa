@@ -476,12 +476,14 @@ body:not(.details-collapsed) #details-toggle { display: none; }
     color: var(--text); font-family: var(--font-body); outline: none;
 }
 .dlg-buttons { display: flex; gap: 8px; justify-content: flex-end; }
-.dlg-buttons button, .dlg button, .camera-test button, .gaming-overlay-settings > button {
+.dlg-buttons button, .dlg button, .camera-test button, .gaming-overlay-settings > button,
+.mic-check button, .network-echo button, .network-echo-session button {
     padding: 7px 14px; border: 1px solid var(--border); border-radius: 6px;
     background: var(--bg-hover); color: var(--text); cursor: pointer;
     font-family: var(--font-body); font-size: 0.9286rem;
 }
-.dlg-buttons button:hover, .dlg button:hover, .camera-test button:hover, .gaming-overlay-settings > button:hover { border-color: var(--border-accent); }
+.dlg-buttons button:hover, .dlg button:hover, .camera-test button:hover, .gaming-overlay-settings > button:hover,
+.mic-check button:hover, .network-echo button:hover, .network-echo-session button:hover { border-color: var(--border-accent); }
 .camera-test { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; }
 .camera-test video { width: 100%; border-radius: 3px; }
 .camera-test button:disabled, .gaming-overlay-settings > button:disabled { opacity: .55; cursor: wait; }
@@ -795,7 +797,7 @@ body:not(.details-collapsed) #details-toggle { display: none; }
 .vtile.speaking { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-dim); }
 .vtile.speaking .vtile-fallback .avatar { animation: speak-pulse 1.4s ease-in-out infinite; }
 .vtile-label {
-    position: absolute; left: 0; right: 0; top: 0;
+    position: absolute; left: 0; right: 74px; top: 0;
     display: flex; align-items: center; justify-content: space-between; gap: 6px;
     padding: 3px 8px; font-size: 0.7857rem;
     background: linear-gradient(rgba(0, 0, 0, 0.85), transparent);
@@ -809,10 +811,19 @@ body:not(.details-collapsed) #details-toggle { display: none; }
 .vtile-preview-age { flex-basis: 100%; font-size: 0.7143rem; color: var(--text); }
 .vtile.is-screen { border-color: var(--border-accent); }
 .vtile-badge {
+    position: absolute; bottom: 6px; left: 6px; max-width: calc(100% - 12px);
     font-family: var(--font-mono); font-size: 0.6429rem; padding: 1px 5px;
     border-radius: 4px; background: var(--accent-dim); color: var(--accent);
     border: 1px solid var(--border-accent);
 }
+.vtile-quality-button {
+    position: absolute; top: 40px; right: 6px; z-index: 4;
+    max-width: 45%; padding: 5px 8px; border-radius: 4px;
+    background: var(--bg-panel); color: var(--accent); border: 1px solid var(--border);
+    font: inherit; font-size: 11px; cursor: pointer;
+}
+.vtile-quality-button:hover, .vtile-quality-button:focus-visible { border-color: var(--accent); }
+.vtile-quality-error:empty { display: none; }
 /* (88) low-bandwidth: tiles render paused; a badge marks the mode. */
 #video-grid.lowbw { border-color: var(--warn, #f0b35a); }
 #video-grid.lowbw::before {

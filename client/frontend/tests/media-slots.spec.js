@@ -1,5 +1,17 @@
 import { expect, test } from "./fixtures.js";
 
+function expectLayeredScreenBudget(encodings, cap) {
+    const active = encodings.filter(encoding => encoding.active !== false);
+    expect(active.map(encoding => encoding.rid)).toEqual(["q", "h", "f"]);
+    expect(active.map(encoding => encoding.scaleResolutionDownBy)).toEqual([4, 2, 1]);
+    expect(active[0].maxBitrate).toBeGreaterThan(0);
+    expect(active[1].maxBitrate).toBeGreaterThan(active[0].maxBitrate);
+    expect(active[2].maxBitrate).toBeGreaterThan(active[1].maxBitrate);
+    const total = active.reduce((sum, encoding) => sum + encoding.maxBitrate, 0);
+    expect(total).toBeGreaterThanOrEqual(cap - active.length);
+    expect(total).toBeLessThanOrEqual(cap);
+}
+
 test.beforeEach(async ({ page }) => {
     await page.route("**/media-slots-fixture", (route) => route.fulfill({ contentType: "text/html", body: `<!doctype html>
         <button id="voice-screen">Share</button><button id="voice-video">Camera</button>
@@ -249,7 +261,7 @@ for (const [preset, fps] of [["hd", 30], ["hdMotion", 60]]) {
         expect(result.options.video.width.ideal).toBe(1920);
         expect(result.options.video.height.ideal).toBe(1080);
         expect(result.options.video.frameRate.ideal).toBe(fps);
-        expect(result.parameters.encodings[0]).toMatchObject({ maxBitrate: 50000000, scaleResolutionDownBy: 1 });
+        expectLayeredScreenBudget(result.parameters.encodings, 50000000);
         expect(result.parameters.degradationPreference).toBe(fps === 60 ? "balanced" : "maintain-resolution");
         expect(result.hint).toBe(fps === 60 ? "motion" : "detail");
     });
@@ -266,7 +278,7 @@ for (const [preset, width, height] of [["qhd", 2560, 1440], ["uhd", 3840, 2160]]
         expect(await page.evaluate(() => window.__media.captureOptions.video)).toMatchObject({
             width: { ideal: width, max: width }, height: { ideal: height, max: height }, frameRate: { ideal: 30, max: 30 },
         });
-        expect(await page.evaluate(() => window.__noxa.state.shareVideoTransceiver.sender.getParameters().encodings[0].maxBitrate)).toBe(50000000);
+        expectLayeredScreenBudget(await page.evaluate(() => window.__noxa.state.shareVideoTransceiver.sender.getParameters().encodings), 50000000);
     });
 }
 
@@ -313,14 +325,14 @@ test("original sharing removes resolution preferences and restores source dimens
             settings = { width: constraints.width.max || 3840, height: constraints.height.max || 2160 };
         };
         await window.__media.video.applyVideoLimits({ video_max_width: 1280, video_max_height: 720, video_max_bitrate: 2000000 });
-        const capped = window.__noxa.state.shareVideoTransceiver.sender.getParameters().encodings[0].maxBitrate;
+        const capped = window.__noxa.state.shareVideoTransceiver.sender.getParameters().encodings;
         await window.__media.video.applyVideoLimits({ video_max_width: 0, video_max_height: 0, video_max_bitrate: 0 });
-        return { applied, settings, capped, restored: window.__noxa.state.shareVideoTransceiver.sender.getParameters().encodings[0].maxBitrate };
+        return { applied, settings, capped, restored: window.__noxa.state.shareVideoTransceiver.sender.getParameters().encodings };
     });
     expect(result.applied.map(c => [c.width, c.height])).toEqual([[{ max: 1280 }, { max: 720 }], [{}, {}]]);
     expect(result.settings).toEqual({ width: 3840, height: 2160 });
-    expect(result.capped).toBe(850000);
-    expect(result.restored).toBe(50000000);
+    expectLayeredScreenBudget(result.capped, 850000);
+    expectLayeredScreenBudget(result.restored, 50000000);
     await page.locator(".sharing-change").click();
     await expect(page.locator(".sh-preset")).toHaveValue("original");
 });
@@ -333,7 +345,7 @@ test("high-resolution requests still respect server size and bitrate limits", as
     await page.getByRole("button", { name: "Start sharing", exact: true }).click();
     await expect(page.locator("#sharing-status")).toBeVisible();
     expect(await page.evaluate(() => window.__media.captureOptions.video)).toMatchObject({ width: { ideal: 1280, max: 1280 }, height: { ideal: 720, max: 720 } });
-    expect(await page.evaluate(() => window.__noxa.state.shareVideoTransceiver.sender.getParameters().encodings[0].maxBitrate)).toBe(1700000);
+    expectLayeredScreenBudget(await page.evaluate(() => window.__noxa.state.shareVideoTransceiver.sender.getParameters().encodings), 1700000);
 });
 
 test("sharing status shows sent quality, audio, honest viewer counts and an expandable live preview", async ({ page }) => {
@@ -459,11 +471,14 @@ test("server limits constrain screen capture and divide the budget with the came
     await expect.poll(() => page.evaluate(() => !!window.__noxa.state.screenSharing)).toBe(true);
     const result = await page.evaluate(() => ({
         options: window.__media.captureOptions,
-        budgets: window.__noxa.state.pc.getSenders().map(sender => sender.getParameters().encodings[0].maxBitrate),
+        encodings: window.__noxa.state.pc.getSenders().map(sender => sender.getParameters().encodings),
     }));
     expect(result.options.video.width).toEqual({ ideal: 320, max: 320 });
     expect(result.options.video.height).toEqual({ ideal: 180, max: 180 });
-    expect(result.budgets).toEqual([425000, 425000]);
+    expect(result.encodings).toHaveLength(2);
+    expect(result.encodings[0]).toHaveLength(1);
+    expect(result.encodings[0][0].maxBitrate).toBe(425000);
+    expectLayeredScreenBudget(result.encodings[1], 425000);
     await page.locator("#voice-screen").click();
     await page.getByRole("dialog").getByRole("button", { name: "Stop sharing", exact: true }).click();
     await expect.poll(() => page.evaluate(() => window.__media.cameraSender.getParameters().encodings[0].maxBitrate)).toBe(850000);
@@ -477,14 +492,22 @@ test("live bitrate updates preserve captures and redistribute both sender budget
         const { state } = window.__noxa;
         const offers = window.__media.offers.length;
         const changed = await window.__media.video.applyVideoLimits({ video_max_width: 0, video_max_height: 0, video_max_bitrate: 600000 });
-        const budgets = state.pc.getSenders().map(sender => sender.getParameters().encodings[0].maxBitrate);
+        const budgets = state.pc.getSenders().map(sender => sender.getParameters().encodings);
         const duplicate = await window.__media.video.applyVideoLimits({ ...state.mediaLimits });
         await window.__media.video.applyVideoLimits({ video_max_width: 0, video_max_height: 0, video_max_bitrate: 0 });
-        return { changed, duplicate, budgets, restored: state.pc.getSenders().map(sender => sender.getParameters().encodings[0].maxBitrate),
+        return { changed, duplicate, budgets, restored: state.pc.getSenders().map(sender => sender.getParameters().encodings),
             offers: window.__media.offers.length - offers, camera: window.__media.camera.readyState, screen: state.shareStream.getVideoTracks()[0].readyState };
     });
-    expect(result).toEqual({ changed: { changed: true, dimensionsChanged: false }, duplicate: { changed: false, dimensionsChanged: false },
-        budgets: [255000, 255000], restored: [undefined, 50000000], offers: 0, camera: "live", screen: "live" });
+    expect(result).toMatchObject({ changed: { changed: true, dimensionsChanged: false }, duplicate: { changed: false, dimensionsChanged: false },
+        offers: 0, camera: "live", screen: "live" });
+    expect(result.budgets).toHaveLength(2);
+    expect(result.budgets[0]).toHaveLength(1);
+    expect(result.budgets[0][0].maxBitrate).toBe(255000);
+    expectLayeredScreenBudget(result.budgets[1], 255000);
+    expect(result.restored).toHaveLength(2);
+    expect(result.restored[0]).toHaveLength(1);
+    expect(result.restored[0][0].maxBitrate).toBeUndefined();
+    expectLayeredScreenBudget(result.restored[1], 50000000);
 });
 
 test("live bitrate changes apply to a negotiated browser sender", async ({ page }) => {
@@ -542,6 +565,85 @@ test("negotiated screen sender restores quality headroom after low bandwidth and
     expect(result.restored.encodings[0]).toMatchObject({ maxBitrate: 50000000, scaleResolutionDownBy: 1 });
     expect(result.restored.degradationPreference).toBe("maintain-resolution");
     expect(result.ready).toBe("live");
+});
+
+test("live share quality changes keep the same source, audio and publication", async ({ page }) => {
+    await installApplicationCapture(page);
+    await page.locator("#voice-screen").click();
+    await page.getByLabel("Window", { exact: true }).check();
+    await page.getByRole("button", { name: "Start sharing", exact: true }).click();
+    await expect(page.locator("#sharing-status")).toBeVisible();
+    await page.evaluate(() => {
+        window.__media.originalShare = window.__noxa.state.shareStream;
+        const track = window.__media.originalShare.getVideoTracks()[0];
+        track.applyConstraints = async value => { window.__media.liveConstraints = value; };
+        navigator.mediaDevices.getDisplayMedia = async () => { throw new Error("capture picker must stay closed"); };
+    });
+    await page.getByRole("button", { name: "Change quality", exact: true }).click();
+    await page.locator(".sh-preset").selectOption("qhd");
+    await page.getByRole("button", { name: "Apply quality", exact: true }).click();
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+    expect(await page.evaluate(() => window.__media.liveConstraints.width.max)).toBe(2560);
+    expect(await page.evaluate(() => window.__noxa.state.shareStream === window.__media.originalShare)).toBe(true);
+    expect(await page.evaluate(() => window.__media.originalShare.getTracks().every(track => track.readyState === "live"))).toBe(true);
+    await expect(page.locator(".sharing-meta")).toContainText("Application audio on");
+});
+
+test("failed live share quality restores capture settings and leaves audio connected", async ({ page }) => {
+    await installApplicationCapture(page);
+    await page.locator("#voice-screen").click();
+    await page.getByLabel("Window", { exact: true }).check();
+    await page.getByRole("button", { name: "Start sharing", exact: true }).click();
+    await expect(page.locator("#sharing-status")).toBeVisible();
+    await page.evaluate(() => {
+        const stream = window.__noxa.state.shareStream, track = stream.getVideoTracks()[0];
+        window.__media.originalShare = stream;
+        window.__media.originalHint = track.contentHint;
+        const previous = { width: { max: 1280 }, height: { max: 720 }, frameRate: { max: 30 } };
+        track.getConstraints = () => previous;
+        track.applyConstraints = async value => { window.__media.restoredConstraints = value; };
+        const sender = window.__noxa.state.shareVideoTransceiver.sender, set = sender.setParameters;
+        let failOnce = true;
+        sender.setParameters = async value => {
+            if (failOnce) { failOnce = false; throw new Error("encoder cap rejected"); }
+            return set(value);
+        };
+    });
+    await page.getByRole("button", { name: "Change quality", exact: true }).click();
+    await page.locator(".sh-preset").selectOption("qhd");
+    await page.getByRole("button", { name: "Apply quality", exact: true }).click();
+    await expect(page.locator(".live-share-quality-error")).toBeVisible();
+    await expect(page.locator(".sh-preset")).toBeEnabled();
+    expect(await page.evaluate(() => ({
+        same: window.__noxa.state.shareStream === window.__media.originalShare,
+        tracksLive: window.__media.originalShare.getTracks().every(track => track.readyState === "live"),
+        hintRestored: window.__media.originalShare.getVideoTracks()[0].contentHint === window.__media.originalHint,
+        constraints: window.__media.restoredConstraints,
+    }))).toEqual({ same: true, tracksLive: true, hintRestored: true,
+        constraints: { width: { max: 1280 }, height: { max: 720 }, frameRate: { max: 30 } } });
+    await expect(page.locator(".sharing-meta")).toContainText("Application audio on");
+});
+
+test("stopping a share during quality change ignores the obsolete completion", async ({ page }) => {
+    await page.locator("#voice-screen").click();
+    await page.getByRole("button", { name: "Start sharing", exact: true }).click();
+    await expect(page.locator("#sharing-status")).toBeVisible();
+    await page.evaluate(() => {
+        const track = window.__noxa.state.shareStream.getVideoTracks()[0];
+        track.applyConstraints = () => new Promise(resolve => { window.__media.finishLiveQuality = resolve; });
+    });
+    await page.getByRole("button", { name: "Change quality", exact: true }).click();
+    await page.locator(".sh-preset").selectOption("qhd");
+    await page.getByRole("button", { name: "Apply quality", exact: true }).click();
+    await expect.poll(() => page.evaluate(() => typeof window.__media.finishLiveQuality)).toBe("function");
+    await expect(page.locator(".sh-preset")).toBeDisabled();
+    await page.evaluate(() => { document.querySelector(".sharing-stop").click(); });
+    await page.evaluate(() => window.__media.finishLiveQuality());
+    await expect.poll(() => page.evaluate(() => !!window.__noxa.state.shareStopping)).toBe(false);
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+    expect(await page.evaluate(() => ({ sharing: !!window.__noxa.state.screenSharing,
+        tracksEnded: window.__media.displayTracks.every(track => track.readyState === "ended"),
+        busy: !!window.__noxa.state.shareQualityUpdating }))).toEqual({ sharing: false, tracksEnded: true, busy: false });
 });
 
 test("live dimension updates pause capture and validate actual settings before resuming", async ({ page }) => {

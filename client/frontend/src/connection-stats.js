@@ -19,7 +19,7 @@ export function summarizeStream(report, trackID, previous) {
     return {
         rows, codec: codecs.join(" / ") || null,
         bitrate: measured(bytesPerSecond) ? bytesPerSecond * 8 : null,
-        bytes: sum(rows, "bytesReceived"), frames: sum(rows, "framesDecoded"),
+        bytes: sum(rows, "bytesReceived"), frames: sum(rows, "framesDecoded"), fps: rate(rows, previous?.rows, "framesDecoded"),
         width: rows.length === 1 && measured(rows[0].frameWidth) ? rows[0].frameWidth : null,
         height: rows.length === 1 && measured(rows[0].frameHeight) ? rows[0].frameHeight : null,
         packetsLost: sum(rows, "packetsLost"),
@@ -71,7 +71,7 @@ function rate(rows, previous, field) {
     let total = 0;
     for (const row of rows) {
         const before = previous.find((r) => r.id === row.id);
-        if (!before || !measured(row[field]) || !measured(before[field]) ||
+        if (!before || row.ssrc !== before.ssrc || row.trackIdentifier !== before.trackIdentifier || !measured(row[field]) || !measured(before[field]) ||
             !Number.isFinite(row.timestamp) || !Number.isFinite(before.timestamp) ||
             row.timestamp <= before.timestamp || row[field] < before[field]) return null;
         total += (row[field] - before[field]) * 1000 / (row.timestamp - before.timestamp);

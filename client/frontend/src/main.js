@@ -11,6 +11,7 @@ import { captureChannelPresence, channelPresenceChanges } from './channel-presen
 
 import "@fontsource-variable/sora";
 import "./streams.css";
+import "./voice-diagnostics.css";
 import "./polls.css";
 import "./conversations.css";
 import { conversationChanged } from "./conversations.js";

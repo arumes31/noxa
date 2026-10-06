@@ -9,6 +9,21 @@ test("bandwidth uses decimal bits, handles zero and unavailable measurements", (
     assert.equal(formatBitrate(1500000), "1.50 Mbit/s");
 });
 
+test("receiver FPS uses the decoded-frame interval and resets when its SSRC changes", () => {
+    const report = (frames, timestamp, ssrc = 1) => new Map([["r", {
+        id: "r", type: "inbound-rtp", kind: "video", trackIdentifier: "screen", ssrc,
+        framesDecoded: frames, timestamp, bytesReceived: frames * 100, frameWidth: 1920, frameHeight: 1080,
+    }]]);
+    const first = summarizeStream(report(10, 1000), "screen");
+    assert.equal(first.fps, null);
+    const second = summarizeStream(report(70, 3000), "screen", first);
+    assert.equal(second.fps, 30);
+    assert.equal(summarizeStream(report(70, 5000), "screen", second).fps, 0);
+    const replacement = summarizeStream(report(100, 5000, 2), "screen", second);
+    assert.equal(replacement.fps, null);
+    assert.equal(replacement.bitrate, null);
+});
+
 test("stream diagnostics isolate the track and reset rates after counter/identity changes", () => {
     const report = (bytes, timestamp, id = "one") => new Map([
         ["codec", { type: "codec", mimeType: "video/VP8" }],
