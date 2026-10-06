@@ -2118,6 +2118,8 @@ export namespace netproto {
 	    sample_ms?: number;
 	    packets_received?: number;
 	    packets_lost?: number;
+	    packets_discarded?: number;
+	    discard_percent?: number;
 	    bytes_received?: number;
 	    total_samples?: number;
 	    concealed_samples?: number;
@@ -2149,6 +2151,8 @@ export namespace netproto {
 	        this.sample_ms = source["sample_ms"];
 	        this.packets_received = source["packets_received"];
 	        this.packets_lost = source["packets_lost"];
+	        this.packets_discarded = source["packets_discarded"];
+	        this.discard_percent = source["discard_percent"];
 	        this.bytes_received = source["bytes_received"];
 	        this.total_samples = source["total_samples"];
 	        this.concealed_samples = source["concealed_samples"];

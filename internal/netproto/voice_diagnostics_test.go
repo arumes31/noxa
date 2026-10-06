@@ -17,6 +17,50 @@ func extendedVoiceDiagnostic(t *testing.T, extra string) VoiceTelemetry {
 	return report
 }
 
+func TestVoiceTelemetryPreservesDiscardedPacketMeasurements(t *testing.T) {
+	t.Parallel()
+	report := extendedVoiceDiagnostic(t, `"packets_received":1000,"packets_discarded":25,"discard_percent":20`)
+	if !report.Valid() {
+		t.Fatal("valid discarded packet measurements rejected")
+	}
+	encoded, err := json.Marshal(report.Tracks[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fields map[string]any
+	if err := json.Unmarshal(encoded, &fields); err != nil {
+		t.Fatal(err)
+	}
+	if fields["packets_discarded"] != float64(25) || fields["discard_percent"] != float64(20) {
+		t.Fatalf("discarded packet measurements lost: %s", encoded)
+	}
+}
+
+func TestVoiceTelemetryRejectsInvalidDiscardedPacketMeasurements(t *testing.T) {
+	t.Parallel()
+	for _, extra := range []string{
+		`"packets_discarded":-1`, `"packets_discarded":9007199254740992`,
+		`"discard_percent":-1`, `"discard_percent":100.1`,
+		`"packets_received":10,"packets_discarded":11`,
+	} {
+		if extendedVoiceDiagnostic(t, extra).Valid() {
+			t.Errorf("accepted invalid measurements: %s", extra)
+		}
+	}
+	for _, value := range []float64{math.NaN(), math.Inf(1), math.Inf(-1)} {
+		report := extendedVoiceDiagnostic(t, `"packets_received":1000`)
+		report.Tracks[0].PacketsDiscarded = &value
+		if report.Valid() {
+			t.Errorf("accepted nonfinite discarded count %v", value)
+		}
+		report.Tracks[0].PacketsDiscarded = nil
+		report.Tracks[0].DiscardPercent = &value
+		if report.Valid() {
+			t.Errorf("accepted nonfinite discarded percentage %v", value)
+		}
+	}
+}
+
 func TestVoiceTelemetryPreservesOptionalAdaptivePlaybackMeasurements(t *testing.T) {
 	t.Parallel()
 	report := extendedVoiceDiagnostic(t, `"silent_concealed_samples":123,"silent_concealment_percent":1.2,"non_silent_concealment_percent":0.3,"buffer_minimum_ms":44,"accelerated_samples":1000,"decelerated_samples":99,"acceleration_percent":0.4,"deceleration_percent":0.1`)

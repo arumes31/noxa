@@ -33,12 +33,16 @@ type VoiceTelemetry struct {
 // Percentages and buffer delays describe SampleMS, not the entire call.
 // Missing, initial or reset measurements are null, never a false healthy zero.
 type VoiceReceiverDiagnostics struct {
-	TrackID           string   `json:"track_id"`
-	PublisherID       string   `json:"publisher_id"`
-	Codec             string   `json:"codec"`
-	SampleMS          *float64 `json:"sample_ms"`
-	PacketsReceived   *float64 `json:"packets_received"`
-	PacketsLost       *float64 `json:"packets_lost"`
+	TrackID         string   `json:"track_id"`
+	PublisherID     string   `json:"publisher_id"`
+	Codec           string   `json:"codec"`
+	SampleMS        *float64 `json:"sample_ms"`
+	PacketsReceived *float64 `json:"packets_received"`
+	PacketsLost     *float64 `json:"packets_lost"`
+	// Discarded packets were received but rejected by the jitter buffer, which
+	// network loss alone cannot reveal. The percentage uses received packets.
+	PacketsDiscarded  *float64 `json:"packets_discarded,omitempty"`
+	DiscardPercent    *float64 `json:"discard_percent,omitempty"`
 	BytesReceived     *float64 `json:"bytes_received"`
 	TotalSamples      *float64 `json:"total_samples"`
 	ConcealedSamples  *float64 `json:"concealed_samples"`
@@ -107,7 +111,7 @@ func (m VoiceTelemetry) Valid() bool {
 			return false
 		}
 		seen[t.TrackID] = true
-		for _, n := range []*float64{t.PacketsReceived, t.BytesReceived, t.TotalSamples, t.ConcealedSamples, t.ConcealmentEvents, t.SilentConcealedSamples, t.AcceleratedSamples, t.DeceleratedSamples} {
+		for _, n := range []*float64{t.PacketsReceived, t.PacketsDiscarded, t.BytesReceived, t.TotalSamples, t.ConcealedSamples, t.ConcealmentEvents, t.SilentConcealedSamples, t.AcceleratedSamples, t.DeceleratedSamples} {
 			if !diagnosticNumber(n, 0, 9007199254740991) {
 				return false
 			}
@@ -120,7 +124,7 @@ func (m VoiceTelemetry) Valid() bool {
 				return false
 			}
 		}
-		for _, n := range []*float64{t.LossPercent, t.ConcealmentPercent, t.SilentConcealmentPercent, t.NonSilentConcealmentPercent, t.AccelerationPercent, t.DecelerationPercent} {
+		for _, n := range []*float64{t.LossPercent, t.DiscardPercent, t.ConcealmentPercent, t.SilentConcealmentPercent, t.NonSilentConcealmentPercent, t.AccelerationPercent, t.DecelerationPercent} {
 			if !diagnosticNumber(n, 0, 100) {
 				return false
 			}
@@ -129,6 +133,9 @@ func (m VoiceTelemetry) Valid() bool {
 			return false
 		}
 		if t.SilentConcealedSamples != nil && t.ConcealedSamples != nil && *t.SilentConcealedSamples > *t.ConcealedSamples {
+			return false
+		}
+		if t.PacketsDiscarded != nil && t.PacketsReceived != nil && *t.PacketsDiscarded > *t.PacketsReceived {
 			return false
 		}
 	}

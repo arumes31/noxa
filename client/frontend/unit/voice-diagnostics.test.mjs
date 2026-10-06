@@ -86,6 +86,45 @@ test("silence concealment and adaptive playback describe the same recent sample 
     near(track.deceleration_percent, 0.2);
 });
 
+test("received packets discarded by playout remain visible despite low network loss", () => {
+    const { tracks: [track] } = collectVoiceTelemetry(stateFixture(),
+        snapshot(receiver({ packetsLost: 100, packetsDiscarded: 25 })),
+        snapshot(previous({ packetsDiscarded: 5 })), {});
+    assert.equal(track.packets_discarded, 25);
+    near(track.discard_percent, 20);
+    near(track.loss_percent, 0);
+});
+
+test("discard rates stay unknown without a valid received-packet interval", () => {
+    const now = receiver({ packetsDiscarded: 25, ssrc: 12 });
+    const before = previous({ packetsDiscarded: 5, ssrc: 12 });
+    for (const [current, old] of [
+        [now, undefined],
+        [now, snapshot({ ...before, ssrc: 13 })],
+        [now, snapshot({ ...before, packetsDiscarded: 26 })],
+        [now, snapshot({ ...before, packetsDiscarded: undefined })],
+        [{ ...now, packetsReceived: before.packetsReceived }, snapshot(before)],
+        [{ ...now, timestamp: before.timestamp }, snapshot(before)],
+        [receiver(), snapshot(previous())],
+    ]) {
+        const { tracks: [track] } = collectVoiceTelemetry(stateFixture(), snapshot(current), old, {});
+        assert.equal(track.discard_percent, null);
+    }
+});
+
+test("invalid discard counters cannot claim an interval percentage", () => {
+    for (const value of [undefined, NaN, Infinity, -1, Number.MAX_SAFE_INTEGER + 1, 1001]) {
+        const { tracks: [track] } = collectVoiceTelemetry(stateFixture(),
+            snapshot(receiver({ packetsDiscarded: value })), snapshot(previous({ packetsDiscarded: 0 })), {});
+        assert.equal(track.packets_discarded, null);
+        assert.equal(track.discard_percent, null);
+    }
+    const { tracks: [track] } = collectVoiceTelemetry(stateFixture(),
+        snapshot(receiver({ packetsDiscarded: 150 })), snapshot(previous({ packetsDiscarded: 0 })), {});
+    assert.equal(track.packets_discarded, 150);
+    assert.equal(track.discard_percent, null, "inconsistent interval subset must stay unknown");
+});
+
 test("adaptive playback and silence fields stay unknown on missing, reset or replaced stats", () => {
     const before = previous({ silentConcealedSamples: 800, jitterBufferMinimumDelay: 20,
         removedSamplesForAcceleration: 4000, insertedSamplesForDeceleration: 100, ssrc: 12 });
@@ -147,6 +186,7 @@ test("owner diagnostics label recent buffering and separate silence from non-sil
     const overlay = { querySelector: () => section };
     renderReceiverDiagnostics(overlay, { nickname: "Receiver", client_report: { age_ms: 0, report: {
         output_state: "running", tracks: [{ publisher_id: "publisher", sample_ms: 5000,
+            discard_percent: 20,
             buffer_ms: 501, buffer_target_ms: 400, buffer_minimum_ms: 399,
             concealment_percent: 1.5, silent_concealment_percent: 1.2, non_silent_concealment_percent: 0.3,
             acceleration_percent: 2.1, deceleration_percent: 0,
@@ -158,6 +198,8 @@ test("owner diagnostics label recent buffering and separate silence from non-sil
     assert.match(content.innerHTML, /2\.1% \/ 0\.0%/);
     assert.match(content.innerHTML, /5\.0 s/);
     assert.match(content.innerHTML, /end-to-end latency/);
+    assert.match(content.innerHTML, /Received packets discarded by playout/);
+    assert.match(content.innerHTML, /20\.0%/);
 });
 
 test("first, idle, replaced and reset receiver samples do not claim healthy zero loss or concealment", () => {

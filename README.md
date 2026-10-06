@@ -788,10 +788,21 @@ or recovery procedures change.
 
 **Client Info** shows ping and reported client version for visible members.
 Owners and administrators additionally see **Reception on this member's client**:
-loss, silent/non-silent concealment, actual/target/minimum jitter-buffer delay,
+loss, received packets discarded by playout, silent/non-silent concealment,
+actual/target/minimum jitter-buffer delay,
 adaptive playback acceleration/deceleration, and output state as reported by that
 receiver. Unsupported counters display **—**. Older clients may show an unknown version and no client report;
-server-side RTCP feedback can still provide loss/jitter measurements.
+server-side RTCP feedback can still provide loss/jitter measurements. The discard
+percentage covers the latest reporting interval; its cumulative packet count is
+also included in the operator snapshot. Missing or reset counters remain unknown.
+Packets can arrive and still be rejected by playout, so low network loss alone
+does not prove uninterrupted audio.
+
+When buffer delay grows, compare the target with the browser's minimum, packet
+arrival timing and the selected media route. A VPN exit node or relay can affect
+media even when the server has a public address. Test a different route before
+changing capture settings or forcing a smaller buffer; a lower buffer preference
+cannot remove delivery gaps or override the browser's network-derived minimum.
 
 Operators can query the loopback-only health endpoint from inside the server
 container. With the repository's Compose service name:

@@ -24,6 +24,9 @@ func TestVoicePlaybackDiagnosticsSurviveControlAndOperatorRead(t *testing.T) {
 	number := func(value float64) *float64 { return &value }
 	report := voiceTelemetryFixture()
 	report.Tracks[0].SampleMS = number(5000)
+	report.Tracks[0].PacketsReceived = number(1000)
+	report.Tracks[0].PacketsDiscarded = number(25)
+	report.Tracks[0].DiscardPercent = number(20)
 	report.Tracks[0].TotalSamples = number(240000)
 	report.Tracks[0].ConcealedSamples = number(3000)
 	report.Tracks[0].SilentConcealedSamples = number(1000)

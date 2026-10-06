@@ -34,6 +34,7 @@ export function renderReceiverDiagnostics(overlay, diagnostic, clients = []) {
             parts.push(card(name(track.publisher_id),
                 row(t("diagnostics.interval"), metric(Number.isFinite(track.sample_ms) ? track.sample_ms / 1000 : null, " s")) +
                 row(t("diagnostics.lossJitter"), `${metric(track.loss_percent, "%")} / ${metric(track.jitter_ms, " ms")}`) +
+                row(t("diagnostics.discarded"), metric(track.discard_percent, "%")) +
                 row(t("diagnostics.bufferDelays"), `${metric(track.buffer_ms, " ms")} / ${metric(track.buffer_target_ms, " ms")} / ${metric(track.buffer_minimum_ms, " ms")}`) +
                 row(t("diagnostics.concealmentParts"), `${metric(track.concealment_percent, "%")} / ${metric(track.non_silent_concealment_percent, "%")} / ${metric(track.silent_concealment_percent, "%")}`) +
                 row(t("diagnostics.timeStretch"), `${metric(track.acceleration_percent, "%")} / ${metric(track.deceleration_percent, "%")}`)));

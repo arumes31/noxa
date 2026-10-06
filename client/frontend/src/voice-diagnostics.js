@@ -25,6 +25,9 @@ export function collectVoiceTelemetry(state, stats, previousStats, output = {}) 
         const sample = elapsed > 0 && elapsed <= 60000 ? elapsed : null;
         if (sample === null) previous = null;
         const received = delta(stat, previous, "packetsReceived"), lost = delta(stat, previous, "packetsLost", -Number.MAX_SAFE_INTEGER);
+        const validDiscarded = number(stat.packetsDiscarded) !== null && number(stat.packetsReceived) !== null && stat.packetsDiscarded <= stat.packetsReceived;
+        const validPreviousDiscarded = number(previous?.packetsDiscarded) !== null && number(previous?.packetsReceived) !== null && previous.packetsDiscarded <= previous.packetsReceived;
+        const discarded = validDiscarded && validPreviousDiscarded ? delta(stat, previous, "packetsDiscarded") : null;
         const emitted = delta(stat, previous, "jitterBufferEmittedCount");
         const samples = delta(stat, previous, "totalSamplesReceived");
         const concealed = delta(stat, previous, "concealedSamples"), silent = delta(stat, previous, "silentConcealedSamples");
@@ -37,6 +40,7 @@ export function collectVoiceTelemetry(state, stats, previousStats, output = {}) 
             track_id: trackID, publisher_id: String(publisher).slice(0, 80), codec: String(stats.get(stat.codecId)?.mimeType || "").slice(0, 40),
             sample_ms: sample,
             packets_received: number(stat.packetsReceived), packets_lost: number(stat.packetsLost, -Number.MAX_SAFE_INTEGER), bytes_received: number(stat.bytesReceived),
+            packets_discarded: validDiscarded ? number(stat.packetsDiscarded) : null, discard_percent: ratio(discarded, received),
             total_samples: number(stat.totalSamplesReceived), concealed_samples: number(stat.concealedSamples), concealment_events: number(stat.concealmentEvents),
             silent_concealed_samples: validSilent ? number(stat.silentConcealedSamples) : null,
             accelerated_samples: number(stat.removedSamplesForAcceleration), decelerated_samples: number(stat.insertedSamplesForDeceleration),

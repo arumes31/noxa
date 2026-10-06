@@ -64,6 +64,7 @@ async function provideDiagnostics(page) {
                 tracks: [
                     { track_id: "c-alice", publisher_id: "c-alice", codec: "audio/opus", sample_ms: 5000, packets_received: 950,
                         packets_lost: 50, bytes_received: 40000, total_samples: 240000, concealed_samples: 9600,
+                        packets_discarded: 25, discard_percent: 20,
                         concealment_events: 4, jitter_ms: 7, loss_percent: 5, concealment_percent: 4, buffer_ms: 80, buffer_target_ms: 60, audio_level: 0.3 },
                     { track_id: "c-bob", publisher_id: "c-bob", codec: "audio/opus", sample_ms: 5000, packets_received: 200,
                         packets_lost: 0, loss_percent: 0, concealment_percent: 0, jitter_ms: 2, buffer_ms: 30, buffer_target_ms: 25, audio_level: 0.1 },
@@ -103,6 +104,8 @@ test("owner diagnostics display the selected receiver's report and each incoming
     await expect(diagnostics).toContainText(/4(?:\.0+)?\s*%/);
     await expect(diagnostics).toContainText(/80(?:\.0+)?\s*ms/);
     await expect(diagnostics).toContainText(/30(?:\.0+)?\s*ms/);
+    await expect(diagnostics).toContainText("Received packets discarded by playout");
+    await expect(diagnostics).toContainText(/20(?:\.0+)?\s*%/);
     await diagnostics.getByText("Bob", { exact: true }).scrollIntoViewIfNeeded();
     await expect(diagnostics.getByText("Alice", { exact: true })).toBeVisible();
     await expect(diagnostics.getByText("Bob", { exact: true })).toBeVisible();
