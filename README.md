@@ -98,7 +98,7 @@ graph TD
 | **`UDP dynamic or configured port`** | WebRTC SFU Engine | DTLS-SRTP (Opus audio, negotiated video codecs) | ICE candidate negotiation & SRTP encryption; separate from the keepalive listener |
 | **`TCP 127.0.0.1:12335`** | ServerQuery Protocol | Line-based ASCII / UTF-8 plaintext stream | Loopback by default; remote binding requires explicit opt-in, and SSH is preferred |
 | **`TCP :12336`** | File Transfer Engine | Binary frames over TLS 1.3 | TOFU-pinned certificate plus an ephemeral single-use token |
-| **`TCP :12337`** | HTTP services | Health/readiness, Prometheus, `/debug/voice`, `/events`, `/hooks/`, `/dl/` | Voice diagnostics stay loopback-only; metrics require explicit remote opt-in; pprof is opt-in and loopback-only. Remote authenticated HTTP routes need an HTTPS proxy |
+| **`TCP :12337`** | HTTP services | Health/readiness, Prometheus, `/debug/voice`, `/debug/streams`, `/events`, `/hooks/`, `/dl/` | Media diagnostics stay loopback-only; metrics require explicit remote opt-in; pprof is opt-in and loopback-only. Remote authenticated HTTP routes need an HTTPS proxy |
 | **`TCP 127.0.0.1:12338`** | gRPC administration | Plaintext gRPC | Integration account authentication and current roles; loopback binding is mandatory |
 | **`TCP :12339`** | ServerQuery over SSH | SSH-wrapped command stream | Disabled by default; integration credentials and `roles-v1` negotiation |
 
@@ -110,11 +110,11 @@ graph TD
 
 ### 🎙️ Voice, video, and screen sharing
 
-* **Pion WebRTC SFU**: Routes individual publisher tracks to authorized subscribers, with separate camera, screen, microphone, and shared-audio streams.
+* **Pion WebRTC SFU**: Routes individual publisher tracks to authorized subscribers, with separate camera, screen, microphone, and shared-audio streams. A new video receiver briefly probes the measured source rate and keeps an increase only when receiver feedback confirms it; congestion and missing feedback end that startup probe.
 * **Opus controls**: Per-channel bitrate, Forward Error Correction (FEC), Discontinuous Transmission (DTX), and stereo settings. The default bitrate is 32 kbps; latency and capacity depend on the network and host.
 * **One quality per stream**: Each camera or screen share uploads one encoding using the sender's selected settings. Screen sharing preserves the selected resolution while actual FPS can adapt to the sender's resources. All viewers receive the same source; a slower viewer needs the sender to lower the source settings manually. Different shares retain independent sender settings. On updated servers, video and screen-share audio upload pause without viewers or an active server recording; capture and previews remain available. Legacy publishers with multiple layers retain their compatible receive controls.
 * **Screen-share audio choices**: In channel shares and private calls, choose **No audio**, **Shared application**, or **System audio**. Application audio requires a window and a supported capture runtime; enable audio in the system picker. It can include other windows of the same application. If application-only capture is unavailable or cannot be confirmed, video still starts without audio and a short notification explains the fallback. System audio is only shared when explicitly selected.
-* **Screen-share resolution**: The channel share dialog offers 720p, 1080p, 1440p, 4K, **Original source resolution**, and **Custom** dimensions (160–8192 pixels, 15/30/60 fps). The encoder has 50 Mbps of headroom instead of Chromium's implicit ~2.5 Mbps default; this is a ceiling, not a target or minimum. Normal presets preserve resolution, while 60 fps presets balance resolution and frame rate. WebRTC adapts to actual network and encoder capacity without an additional system-CPU-triggered 500 kbps cap. Server limits and explicit Low bandwidth mode still apply.
+* **Screen-share resolution**: The channel share dialog offers 720p, 1080p, 1440p, 4K, **Original source resolution**, and **Custom** dimensions (160–8192 pixels, 15/30/60 fps). The encoder has 50 Mbps of headroom instead of Chromium's implicit ~2.5 Mbps default; this is a ceiling, not a target or minimum. Screen-share presets preserve resolution while actual frame rate can adapt to network and encoder capacity, without an additional system-CPU-triggered 500 kbps cap. Server limits and explicit Low bandwidth mode still apply.
 * **Live share controls**: **Change quality** adjusts a running channel share's resolution and frame rate without reopening the capture picker or changing its source/audio. It updates the one encoding received by every viewer. Watched-stream details show measured resolution, decoded frames per second, codec and payload bitrate separately from the sender's selected settings.
 * **Stream diagnostics for viewers**: Any authorized viewer can compare sender capture/encoding/transmission, server ingress/forwarding and local reception/decoding in **Stream details**. Bitrate, retransmission share, keyframes, frame size and processing delays help locate bottlenecks. Updated senders are required for sender measurements; missing or stale data stays unknown. See [stream diagnostics](docs/stream-diagnostics.md).
 * **Priority speaker**: Non-priority publishers in the current voice channel are ducked to 25% gain (about −12 dB) while a priority speaker talks.
@@ -840,6 +840,29 @@ are marked stale. The endpoint stays
 loopback-only even if remote metrics are enabled. See
 [receiver voice diagnostics](docs/voice-diagnostics.md) for interpretation and
 access details.
+
+### Stream operator diagnostics
+
+To compare a publisher's stream across viewers without logging into a client:
+
+```sh
+docker compose exec noxa wget -qO- 'http://127.0.0.1:12337/debug/streams?nickname=Example'
+```
+
+This GET-only endpoint accepts direct loopback connections, including when remote
+metrics are enabled. It exposes current publications, eligible viewers' watch and
+output states, fresh sender reports, server ingress/forwarding counters and each
+receiver's video pacing queue, feedback age and local packet-drop counters.
+Pacing counters cover the recipient's entire video connection, including retries;
+they are not losses for one source. Server frame rates count RTP timestamps, not
+successfully decoded frames. No media payloads or network addresses are included.
+
+Use either `nickname` or `publisher_id`, or omit the filter. Snapshots contain at
+most 32 publications and 32 eligible viewers per publication. Filters select from
+that bounded snapshot; when `truncated` or `viewers_truncated` is true, an absent
+row does not establish that a stream or viewer is missing. Viewer-facing
+**Stream details** keeps its existing access checks and shows only that viewer's
+forwarding path.
 
 ---
 

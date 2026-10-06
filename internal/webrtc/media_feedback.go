@@ -2,6 +2,7 @@ package webrtc
 
 import (
 	"strings"
+	"time"
 
 	"github.com/pion/interceptor"
 	"github.com/pion/interceptor/pkg/cc"
@@ -43,6 +44,7 @@ func (e *mediaBandwidthEstimator) WriteRTCP(packets []rtcp.Packet, attrs interce
 		if feedback, ok := packet.(*rtcp.TransportLayerCC); ok {
 			if bounded := boundedTransportFeedback(feedback, e.pacer.sent); bounded != nil {
 				normalized = append(normalized, bounded)
+				e.pacer.recordVideoFeedback(time.Now())
 			}
 		} else {
 			normalized = append(normalized, packet)

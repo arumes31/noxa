@@ -1,6 +1,7 @@
 package webrtc
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -89,12 +90,50 @@ func TestStreamVideoQualityLoopbackIndependentShares(t *testing.T) {
 			t.Fatal("gather timeout")
 		}
 	}
+	assertUnready := func(s source) {
+		t.Helper()
+		output := pubTrackFor(router, "viewer", s.publisher).video[s.slot]
+		before, epoch := output.videoContinuity, output.watchEpoch
+		for sequence := uint16(1); sequence <= 1100; sequence++ {
+			packet := continuityPacket(s.base, sequence, uint32(sequence)*3000, sequence, true)
+			if router.ForwardVideo(s.publisher, s.slot, "f", packet) != 0 {
+				t.Fatal("video admitted before transport and sender binding were ready")
+			}
+		}
+		if output.videoContinuity != before || output.watchEpoch != epoch || output.videoSource.Load() != 0 || len(output.egress.tickets) != 0 {
+			t.Fatal("undelivered video committed continuity or retained media tickets")
+		}
+		output.egress.mu.RLock()
+		pacer := output.egress.pacer
+		output.egress.mu.RUnlock()
+		if pacer != nil {
+			state := pacer.diagnosticSnapshot(time.Now())
+			if state.QueuedPackets != 0 || state.SentPackets != 0 || pacer.videoStarted.Load() {
+				t.Fatalf("unconnected video queued or consumed its probe: %+v", state)
+			}
+		}
+	}
+	assertUnready(sources[0]) // Before sender binding, not only before ICE.
+	withoutCandidates := func(description pion.SessionDescription) (pion.SessionDescription, []pion.ICECandidateInit) {
+		var kept []string
+		var candidates []pion.ICECandidateInit
+		for _, line := range strings.Split(description.SDP, "\r\n") {
+			if strings.HasPrefix(line, "a=candidate:") {
+				candidates = append(candidates, pion.ICECandidateInit{Candidate: strings.TrimPrefix(line, "a=")})
+			} else if line != "a=end-of-candidates" {
+				kept = append(kept, line)
+			}
+		}
+		description.SDP = strings.Join(kept, "\r\n")
+		return description, candidates
+	}
 	offer, err := peer.pc.CreateOffer(nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	gather(peer.pc, offer)
-	if err := receiver.SetRemoteDescription(*peer.pc.LocalDescription()); err != nil {
+	strippedOffer, serverCandidates := withoutCandidates(*peer.pc.LocalDescription())
+	if err := receiver.SetRemoteDescription(strippedOffer); err != nil {
 		t.Fatal(err)
 	}
 	answer, err := receiver.CreateAnswer(nil)
@@ -102,8 +141,37 @@ func TestStreamVideoQualityLoopbackIndependentShares(t *testing.T) {
 		t.Fatal(err)
 	}
 	gather(receiver, answer)
-	if err := peer.pc.SetRemoteDescription(*receiver.LocalDescription()); err != nil {
+	strippedAnswer, receiverCandidates := withoutCandidates(*receiver.LocalDescription())
+	if err := peer.pc.SetRemoteDescription(strippedAnswer); err != nil {
 		t.Fatal(err)
+	}
+	assertUnready(sources[0]) // Bound senders must still wait for ICE/DTLS.
+	connected := make(chan struct{}, 1)
+	peer.pc.OnConnectionStateChange(func(state pion.PeerConnectionState) {
+		if state == pion.PeerConnectionStateConnected {
+			select {
+			case connected <- struct{}{}:
+			default:
+			}
+		}
+	})
+	for _, candidate := range serverCandidates {
+		if err := receiver.AddICECandidate(candidate); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, candidate := range receiverCandidates {
+		if err := peer.pc.AddICECandidate(candidate); err != nil {
+			t.Fatal(err)
+		}
+	}
+	select {
+	case <-connected:
+	case <-time.After(5 * time.Second):
+		t.Fatal("transport did not connect after candidates were released")
+	}
+	if router.ForwardVideo("a", SlotScreen, "f", continuityPacket(100, 1101, 3303000, 1101, false)) != 0 {
+		t.Fatal("post-connect delta frame reused an unseen keyframe")
 	}
 
 	tick := time.NewTicker(20 * time.Millisecond)
@@ -145,6 +213,69 @@ func TestStreamVideoQualityLoopbackIndependentShares(t *testing.T) {
 			case <-deadline.C:
 				t.Fatalf("phase %d: streams did not reach receiver: %v (ICE %s)", phase, seen, receiver.ConnectionState())
 			}
+		}
+	}
+	checkedOutputs := 0
+	for _, publication := range router.VideoOperatorDiagnostics().Publications {
+		for _, viewer := range publication.Viewers {
+			if viewer.ClientID != "viewer" {
+				continue
+			}
+			checkedOutputs++
+			if viewer.Pacer == nil || !viewer.OutputActive || viewer.OutputSSRC == 0 || viewer.Pacer.SentPackets == 0 {
+				t.Fatalf("real negotiated output was not linked to its pacer: %+v", viewer)
+			}
+		}
+	}
+	if checkedOutputs != len(sources) {
+		t.Fatalf("checked %d negotiated outputs, want %d", checkedOutputs, len(sources))
+	}
+
+	// A connected voice/video peer can acquire a new screen sender that has not
+	// yet been negotiated. Connection state alone must not admit its keyframe.
+	router.JoinChannel(1, "c")
+	router.SetTrackSlots("c", map[string]string{"desktop": SlotScreen})
+	late := source{publisher: "c", slot: SlotScreen, quality: "high", base: 500}
+	late.generation = testVideoPublication(t, router, "c", "viewer", SlotScreen)
+	registerVideoSource(router, "c", SlotScreen, "f", late.base)
+	if peer.pc.ConnectionState() != pion.PeerConnectionStateConnected {
+		t.Fatal("existing transport unexpectedly disconnected")
+	}
+	assertUnready(late)
+	offer, err = peer.pc.CreateOffer(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gather(peer.pc, offer)
+	if err := receiver.SetRemoteDescription(*peer.pc.LocalDescription()); err != nil {
+		t.Fatal(err)
+	}
+	answer, err = receiver.CreateAnswer(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gather(receiver, answer)
+	if err := peer.pc.SetRemoteDescription(*receiver.LocalDescription()); err != nil {
+		t.Fatal(err)
+	}
+	if router.ForwardVideo("c", SlotScreen, "f", continuityPacket(late.base, 1101, 3303000, 1101, false)) != 0 {
+		t.Fatal("newly bound screen accepted a delta without its first keyframe")
+	}
+	for {
+		select {
+		case got := <-received:
+			if got.id == slotTrackID("c", SlotScreen) {
+				return
+			}
+		case <-tick.C:
+			seq++
+			packet := continuityPacket(late.base, seq, uint32(seq)*3000, seq, true)
+			packet.Version, packet.PayloadType, packet.Marker = 2, 96, true
+			if router.ForwardVideo("c", SlotScreen, "f", packet) != 1 {
+				t.Fatal("fresh keyframe was not admitted after screen binding")
+			}
+		case <-deadline.C:
+			t.Fatal("fresh keyframe did not reach the newly bound screen receiver")
 		}
 	}
 }

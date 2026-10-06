@@ -127,13 +127,14 @@ func TestRouterJoinLeave(t *testing.T) {
 // attachFakePeer creates a real (unnegotiated) peer connection for clientID
 // and attaches it to the router. Writes to its tracks succeed silently
 // (unbound tracks have no bindings), which is exactly what the fan-out tests
-// need.
+// need. These fixtures use direct writers rather than managed network egress.
 func attachFakePeer(t *testing.T, e *Engine, r *Router, clientID string) {
 	t.Helper()
 	pc, err := e.NewPeerConnection(clientID)
 	if err != nil {
 		t.Fatalf("NewPeerConnection(%s): %v", clientID, err)
 	}
+	pc.egress = nil
 	if err := r.AttachPeer(clientID, pc); err != nil {
 		t.Fatalf("AttachPeer(%s): %v", clientID, err)
 	}

@@ -22,6 +22,13 @@ const mediaTicketLifetime = time.Second
 // lease before entering Pion: the terminal interceptor checks again after all
 // buffering, without acquiring Authority recursively through a track lock.
 func (s *pubSlot) enqueueMedia(pkt *rtp.Packet, ticket mediaTicket) (bool, error) {
+	// Pion binds senders before ICE/DTLS is ready. Admitting video then both
+	// commits an unseen keyframe and fills the pacing queue with stale frames.
+	// Return false so the caller rolls continuity back until transport is ready.
+	if ticket.router != nil && (ticket.delivery.Slot == SlotCam || ticket.delivery.Slot == SlotScreen) &&
+		!s.videoTransportReady(ticket.router, ticket.delivery.RecipientID) {
+		return false, nil
+	}
 	allowed := false
 	admit := func() error { allowed = true; return nil }
 	switch {
@@ -39,6 +46,7 @@ func (s *pubSlot) enqueueMedia(pkt *rtp.Packet, ticket mediaTicket) (bool, error
 	if !allowed {
 		return false, nil
 	}
+	s.startVideoProbe(pkt, ticket)
 	packet, ok := s.egress.prepare(pkt, ticket)
 	if !ok {
 		return false, nil
@@ -78,6 +86,7 @@ type mediaEgressStream struct {
 	nextTicket      int
 	outputSSRC      atomic.Uint32
 	videoDiagnostic videoForwardDiagnostic
+	pacer           *mediaPacer // immutable after binding; protected by mu
 }
 
 func (r *mediaEgressRegistry) ticketID() uint64 {

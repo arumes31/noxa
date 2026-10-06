@@ -746,6 +746,7 @@ func run() (retErr error) {
 	})
 	channelMgr.EnableRoleMode(roleAuthority)
 	healthServer.HandleLocalGET("/debug/voice", tcpServer.VoiceDiagnosticsHandler())
+	healthServer.HandleLocalGET("/debug/streams", tcpServer.StreamOperatorDiagnosticsHandler())
 	// Remove orphaned file data before serving. Role-mode channel timers remain
 	// disabled until the Authority is attached and its initial Reload completes.
 	// No listener is accepting file work yet.

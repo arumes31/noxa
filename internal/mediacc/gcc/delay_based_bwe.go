@@ -14,6 +14,8 @@ import (
 // DelayStats contains some internal statistics of the delay based congestion
 // controller.
 type DelayStats struct {
+	// generation prevents an in-flight callback from undoing a probe transition.
+	generation       uint64
 	Measurement      time.Duration
 	Estimate         time.Duration
 	Threshold        time.Duration
