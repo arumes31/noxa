@@ -88,6 +88,8 @@ export function ChatSearch(arg1:number,arg2:string,arg3:number):Promise<main.Cha
 
 export function ChatSearchForTab(arg1:string,arg2:string,arg3:number,arg4:string,arg5:number):Promise<main.ChatSearchResult>;
 
+export function ChatTabLayoutForContext(arg1:main.DMHistoryContext):Promise<main.ChatTabLayout>;
+
 export function CheckAccess(arg1:netproto.AccessCheck):Promise<netproto.AccessCheckResult>;
 
 export function CheckAccessForTab(arg1:string,arg2:netproto.AccessCheck):Promise<netproto.AccessCheckResult>;
@@ -391,6 +393,8 @@ export function RoleStateForTab(arg1:string,arg2:number):Promise<netproto.RoleSt
 export function SaveChatAttachment(arg1:number,arg2:string,arg3:string,arg4:string):Promise<string>;
 
 export function SaveChatAttachmentForTab(arg1:string,arg2:number,arg3:string,arg4:string,arg5:string):Promise<string>;
+
+export function SaveChatTabLayoutForContext(arg1:main.DMHistoryContext,arg2:main.ChatTabLayout):Promise<string>;
 
 export function SaveSettings(arg1:main.Settings):Promise<string>;
 

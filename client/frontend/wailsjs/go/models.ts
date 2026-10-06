@@ -649,6 +649,22 @@ export namespace main {
 		    return a;
 		}
 	}
+	export class ChatTabLayout {
+	    order: string[];
+	    pinned: string[];
+	    names?: Record<string, string>;
+
+	    static createFrom(source: any = {}) {
+	        return new ChatTabLayout(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.order = source["order"];
+	        this.pinned = source["pinned"];
+	        this.names = source["names"];
+	    }
+	}
 	export class ConnectTabResult {
 	    tab_id: string;
 	    error: string;

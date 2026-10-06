@@ -5551,6 +5551,8 @@ test.beforeEach(async ({ page }) => {
                         (window.__callArgs[method] ||= []).push(structuredClone(args));
                     }
                     if (method === "DMHistoryContextForTab") return { tab_id: args[0], identity_uid: window.__dmStorageIdentity || "playwright-identity", activation: "0", identity_revision: "0" };
+                    if (method === "ChatTabLayout") return structuredClone(window.__chatTabLayout || { order: [], pinned: [] });
+                    if (method === "SaveChatTabLayout") { window.__chatTabLayout = structuredClone(args[0]); return ""; }
                     if (method === "GetSettings") {
                         const persisted = sessionStorage.getItem("startup-settings");
                         if (persisted) {
@@ -6874,6 +6876,124 @@ test("encryption badges sit beside dates and stay hidden on grouped follow-ups",
     await expect(messages.first().locator(".msg-timestamp")).toHaveText("now");
     await expect(messages.first().locator(".msg-lock")).toBeVisible();
     await messages.first().screenshot({ path: testInfo.outputPath("encryption-next-to-date.png") });
+});
+
+test.describe("chat tab layout storage", () => {
+    test.beforeEach(async ({ page }) => {
+        await page.evaluate(() => {
+            window.__dmStorageIdentity = "alpha";
+            Object.assign(window.__noxa.state, { activeTabID: "layout-a", myUniqueID: "alpha", myChannelID: 1,
+                channels: [{ ChannelID: 1, Name: "Lobby" }, { ChannelID: 2, Name: "Gaming" }] });
+            const original = window.go.main.App;
+            window.go.main.App = new Proxy(original, { get(target, key) {
+                if (key === "SubscriptionsForTab") return async () => [1, 2];
+                if (key === "ConversationForTab") return async () => ({ conversations: [], messages: [] });
+                if (key === "DMHistoryPeersForContext") return async () => Array.from({ length: 9 }, (_, n) => ({ unique_id: "peer-" + n, nickname: "Person " + n }));
+                return target[key];
+            } });
+            window.__noxa.showWorkspace(false);
+        });
+    });
+
+    test("restores older pinned conversations before the recent-chat limit and keeps the bar on one row", async ({ page }) => {
+        await page.setViewportSize({ width: 800, height: 700 });
+        await page.evaluate(async () => {
+            window.__chatTabLayout = { order: ["dm:peer-8", "ch:2", "ch:1"], pinned: ["dm:peer-8"] };
+            await window.__noxaChat.onConnect();
+        });
+        await expect(page.locator('#pm-tabs .pm-tab').first()).toHaveAttribute("data-chat-key", "dm:peer-8");
+        await expect(page.locator('#pm-tabs .pm-tab')).toHaveCount(9);
+        await expect(page.locator('[data-chat-key="dm:peer-8"]')).toHaveClass(/pinned/);
+        expect(await page.locator('#pm-tabs .pm-tab').evaluateAll(tabs => new Set(tabs.map(tab => Math.round(tab.getBoundingClientRect().top))).size)).toBe(1);
+        await page.getByRole("button", { name: "All chats", exact: true }).click();
+        await page.getByRole("menuitem", { name: "Person 5", exact: true }).click();
+        await expect(page.locator('[data-chat-key="dm:peer-5"] .pm-tab-select')).toHaveAttribute("aria-selected", "true");
+        await expect(page.locator(".group-sidebar-status")).toHaveText("No private groups yet.");
+        await page.screenshot({ path: test.info().outputPath("chat-tabs-workspace.png") });
+    });
+
+    test("pins and reorders through the captured native owner and restores after reconnect", async ({ page }) => {
+        await page.evaluate(async () => { await window.__noxaChat.onConnect(); });
+        const gaming = page.locator('[data-chat-key="ch:2"]');
+        await gaming.click({ button: "right" });
+        await page.getByRole("menuitem", { name: "Pin chat", exact: true }).click();
+        await expect.poll(() => page.evaluate(() => window.__chatTabLayout?.pinned)).toEqual(["ch:2"]);
+        const savedOwner = await page.evaluate(() => window.__callArgs.SaveChatTabLayoutForContext.at(-1)[0]);
+        expect(savedOwner).toMatchObject({ tab_id: "layout-a", identity_uid: "alpha" });
+        await page.evaluate(async () => { window.__noxaChat.resetView(); await window.__noxaChat.onConnect(); });
+        await expect(page.locator('#pm-tabs .pm-tab').first()).toHaveAttribute("data-chat-key", "ch:2");
+        await expect(page.locator('[data-chat-key="ch:2"]')).toHaveClass(/pinned/);
+    });
+
+    test("failed saves restore the previous persisted layout", async ({ page }) => {
+        await page.evaluate(async () => {
+            await window.__noxaChat.onConnect();
+            const original = window.go.main.App;
+            window.go.main.App = new Proxy(original, { get(target, key) {
+                if (key === "SaveChatTabLayoutForContext") return async () => "disk unavailable";
+                return target[key];
+            } });
+            window.__layoutToasts = [];
+            window.__noxa.toast = text => window.__layoutToasts.push(text);
+        });
+        await page.locator('[data-chat-key="ch:2"]').click({ button: "right" });
+        await page.getByRole("menuitem", { name: "Pin chat", exact: true }).click();
+        await expect.poll(() => page.evaluate(() => window.__layoutToasts)).toEqual(["Chat order could not be saved. Your previous order has been restored."]);
+        await expect(page.locator('[data-chat-key="ch:2"]')).not.toHaveClass(/pinned/);
+    });
+
+    test("empty pinned chats restore their names and closing removes their saved pin", async ({ page }) => {
+        await page.evaluate(async () => { await window.__noxaChat.onConnect(); window.__noxaChat.openPM("empty-peer", "Empty friend"); });
+        await page.locator('[data-chat-key="dm:empty-peer"]').click({ button: "right" });
+        await page.getByRole("menuitem", { name: "Pin chat", exact: true }).click();
+        await expect.poll(() => page.evaluate(() => window.__chatTabLayout?.names)).toEqual({ "dm:empty-peer": "Empty friend" });
+        await page.evaluate(async () => { window.__noxaChat.resetView(); await window.__noxaChat.onConnect(); });
+        await expect(page.locator('[data-chat-key="dm:empty-peer"] .pm-tab-name')).toHaveText("Empty friend");
+        await page.getByRole("button", { name: "Close Empty friend", exact: true }).click();
+        await expect.poll(() => page.evaluate(() => window.__chatTabLayout?.pinned)).toEqual([]);
+        await page.evaluate(async () => { window.__noxaChat.resetView(); await window.__noxaChat.onConnect(); });
+        await expect(page.locator('[data-chat-key="dm:empty-peer"]')).toHaveCount(0);
+    });
+
+    test("closing before layout loading finishes removes a saved pin", async ({ page }) => {
+        await page.evaluate(() => {
+            const original = window.go.main.App;
+            window.go.main.App = new Proxy(original, { get(target, key) {
+                if (key === "ChatTabLayoutForContext") return () => new Promise(resolve => { window.__lateLayout = resolve; });
+                return target[key];
+            } });
+            window.__noxaChat.openPM("empty-peer", "Empty friend");
+        });
+        await expect.poll(() => page.evaluate(() => typeof window.__lateLayout)).toBe("function");
+        await page.getByRole("button", { name: "Close Empty friend", exact: true }).click();
+        await page.evaluate(() => window.__lateLayout({ order: ["dm:empty-peer"], pinned: ["dm:empty-peer"], names: { "dm:empty-peer": "Empty friend" } }));
+        await expect.poll(() => page.evaluate(() => window.__chatTabLayout?.pinned)).toEqual([]);
+        await expect(page.locator('[data-chat-key="dm:empty-peer"]')).toHaveCount(0);
+    });
+
+    test("late layout loads cannot cross a server switch", async ({ page }) => {
+        await page.evaluate(() => {
+            const original = window.go.main.App;
+            window.go.main.App = new Proxy(original, { get(target, key) {
+                if (key === "ChatTabLayoutForContext") return context => context.tab_id === "layout-a"
+                    ? new Promise(resolve => { window.__lateLayout = resolve; })
+                    : Promise.resolve({ order: ["ch:1", "ch:2"], pinned: ["ch:1"] });
+                return target[key];
+            } });
+            window.__noxaChat.onSubscriptions({ channel_ids: [1, 2] });
+        });
+        await expect.poll(() => page.evaluate(() => typeof window.__lateLayout)).toBe("function");
+        await page.evaluate(() => {
+            window.__noxa.state.activeTabID = "layout-b";
+            window.__noxa.state.serverGeneration++;
+            window.__noxaChat.resetView();
+            window.__noxaChat.onSubscriptions({ channel_ids: [1, 2] });
+        });
+        await expect(page.locator('[data-chat-key="ch:1"]')).toHaveClass(/pinned/);
+        await page.evaluate(() => window.__lateLayout({ order: ["ch:2", "ch:1"], pinned: ["ch:2"] }));
+        await expect(page.locator('[data-chat-key="ch:1"]')).toHaveClass(/pinned/);
+        await expect(page.locator('[data-chat-key="ch:2"]')).not.toHaveClass(/pinned/);
+    });
 });
 
 test.describe("unread private-message tab pulse", () => {
@@ -9201,7 +9321,8 @@ test("discards stale inline attachment previews and configures lazy image and vi
     await page.locator(".lightbox").click({ position: { x: 1, y: 1 } });
     await expect(page.locator(".lightbox")).toHaveCount(0);
     await page.locator(".msg-file:has(video) .media-zoom").click();
-    await expect(page.locator(".lightbox video[controls][autoplay]")).toBeVisible();
+    await expect(page.locator(".lightbox video[controls]")).toBeVisible();
+    expect(await page.locator(".lightbox video").evaluate(el => el.paused)).toBe(true);
 });
 
 test("does not construct stale attachment data URLs after channel or view changes", async ({ page }) => {

@@ -170,6 +170,10 @@ export function ChatSearchForTab(arg1, arg2, arg3, arg4, arg5) {
   return window['go']['main']['App']['ChatSearchForTab'](arg1, arg2, arg3, arg4, arg5);
 }
 
+export function ChatTabLayoutForContext(arg1) {
+  return window['go']['main']['App']['ChatTabLayoutForContext'](arg1);
+}
+
 export function CheckAccess(arg1) {
   return window['go']['main']['App']['CheckAccess'](arg1);
 }
@@ -776,6 +780,10 @@ export function SaveChatAttachment(arg1, arg2, arg3, arg4) {
 
 export function SaveChatAttachmentForTab(arg1, arg2, arg3, arg4, arg5) {
   return window['go']['main']['App']['SaveChatAttachmentForTab'](arg1, arg2, arg3, arg4, arg5);
+}
+
+export function SaveChatTabLayoutForContext(arg1, arg2) {
+  return window['go']['main']['App']['SaveChatTabLayoutForContext'](arg1, arg2);
 }
 
 export function SaveSettings(arg1) {

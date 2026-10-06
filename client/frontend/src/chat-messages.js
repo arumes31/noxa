@@ -1,4 +1,15 @@
 export const chatEnglish = {
+    "chat.tabsLabel": "Conversations",
+    "chat.tabsAll": "All chats",
+    "chat.tabsPinned": "Pinned",
+    "chat.tabsPin": "Pin chat",
+    "chat.tabsUnpin": "Unpin chat",
+    "chat.tabsMoveLeft": "Move left",
+    "chat.tabsMoveRight": "Move right",
+    "chat.tabsUnread": "{count} unread messages",
+    "chat.tabsCloseNamed": "Close {name}",
+    "chat.tabsLoadFailed": "Chat order could not be loaded. Reconnect to try again.",
+    "chat.tabsSaveFailed": "Chat order could not be saved. Your previous order has been restored.",
     "poll.label": "Poll",
     "poll.create": "Create poll",
     "poll.question": "Question",
@@ -137,6 +148,17 @@ export const chatEnglish = {
     "chat.encryptionHelp": "Channel and global messages are encrypted with a key the server holds, so it can apply moderation at send time but keeps no readable copy: history, pins and attachments are stored sealed. Direct messages are end-to-end encrypted and the server never holds their key. Search runs in this client over decrypted messages — the server cannot match on content. Attachments carry their own key inside the encrypted message body, so a file is exactly as private as the message that links it."
 };
 export const chatGerman = {
+    "chat.tabsLabel": "Unterhaltungen",
+    "chat.tabsAll": "Alle Chats",
+    "chat.tabsPinned": "Angeheftet",
+    "chat.tabsPin": "Chat anheften",
+    "chat.tabsUnpin": "Chat lösen",
+    "chat.tabsMoveLeft": "Nach links verschieben",
+    "chat.tabsMoveRight": "Nach rechts verschieben",
+    "chat.tabsUnread": "{count} ungelesene Nachrichten",
+    "chat.tabsCloseNamed": "{name} schließen",
+    "chat.tabsLoadFailed": "Die Chat-Reihenfolge konnte nicht geladen werden. Verbinde dich erneut, um es noch einmal zu versuchen.",
+    "chat.tabsSaveFailed": "Die Chat-Reihenfolge konnte nicht gespeichert werden. Die vorherige Reihenfolge wurde wiederhergestellt.",
     "poll.label": "Umfrage",
     "poll.create": "Umfrage erstellen",
     "poll.question": "Frage",

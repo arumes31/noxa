@@ -943,7 +943,6 @@ body:not(.details-collapsed) #details-toggle { display: none; }
 mark { background: var(--warn); color: #3a2a05; border-radius: 2px; padding: 0 1px; }
 
 /* PM tabs (122) */
-#pm-tabs { display: flex; gap: 10px; padding: 4px 2px; flex-wrap: wrap; }
 .pm-tab {
     display: flex; align-items: center; gap: 6px;
     padding: 4px 8px; border-radius: 7px; cursor: pointer;
