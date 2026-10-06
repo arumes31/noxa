@@ -89,7 +89,9 @@ func trustedTLS(pin string) (*tls.Config, error) {
 	if err != nil || len(want) != sha256.Size {
 		return nil, errors.New("an existing trusted TLS connection is required")
 	}
-	return &tls.Config{MinVersion: tls.VersionTLS13, InsecureSkipVerify: true, // TOFU: exact existing certificate pin replaces CA validation.
+	// #nosec G402 -- VerifyConnection requires the exact SHA-256 certificate pin
+	// from the already trusted live connection instead of public CA validation.
+	return &tls.Config{MinVersion: tls.VersionTLS13, InsecureSkipVerify: true,
 		VerifyConnection: func(state tls.ConnectionState) error {
 			if len(state.PeerCertificates) == 0 {
 				return errors.New("server certificate absent")

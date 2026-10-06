@@ -65,7 +65,14 @@ func (d *audioIngressDiagnostic) observe(packet *rtp.Packet, now time.Time) {
 	}
 	if !d.last.IsZero() {
 		arrivalMS := float64(now.Sub(d.last)) / float64(time.Millisecond)
-		rtpMS := float64(int32(packet.Timestamp-d.timestamp)) / 48
+		// RTP clocks wrap at 32 bits; retain negative deltas for reordered packets.
+		timestampDelta := int64(packet.Timestamp) - int64(d.timestamp)
+		if timestampDelta > math.MaxInt32 {
+			timestampDelta -= 1 << 32
+		} else if timestampDelta < math.MinInt32 {
+			timestampDelta += 1 << 32
+		}
+		rtpMS := float64(timestampDelta) / 48
 		d.jitter += (math.Abs(arrivalMS-rtpMS) - d.jitter) / 16
 		d.maxGap = max(d.maxGap, arrivalMS)
 		if arrivalMS >= 0 && arrivalMS < 2 {
@@ -77,7 +84,9 @@ func (d *audioIngressDiagnostic) observe(packet *rtp.Packet, now time.Time) {
 	d.ssrc, d.timestamp, d.last = packet.SSRC, packet.Timestamp, now
 	d.packets++
 	d.windowPackets++
-	d.bytes += uint64(packet.MarshalSize())
+	if size := packet.MarshalSize(); size > 0 {
+		d.bytes += uint64(size)
+	}
 }
 
 func (d *audioIngressDiagnostic) snapshot(now time.Time) *netproto.VoiceIngressDiagnostics {

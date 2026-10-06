@@ -58,6 +58,31 @@ func TestVoiceIngressBindsPublicationAndMeasuresArrivalBursts(t *testing.T) {
 	}
 }
 
+func TestVoiceIngressJitterPreservesWrappedRTPClock(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		first, next uint32
+		gap         time.Duration
+		wantJitter  float64
+	}{
+		{"ordinary packet", 1920, 2880, 20 * time.Millisecond, 0},
+		{"timestamp wraps forward", 0xfffffe20, 480, 20 * time.Millisecond, 0},
+		{"reordered across wrap", 480, 0xfffffe20, 20 * time.Millisecond, 2.5},
+		{"intentional silence", 1920, 49920, time.Second, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			diagnostic := &audioIngressDiagnostic{}
+			started := time.Unix(1, 0)
+			diagnostic.observe(&rtp.Packet{Header: rtp.Header{SSRC: 1, Timestamp: tc.first}, Payload: []byte{1, 2}}, started)
+			diagnostic.observe(&rtp.Packet{Header: rtp.Header{SSRC: 1, Timestamp: tc.next}, Payload: []byte{1, 2}}, started.Add(tc.gap))
+			got := diagnostic.snapshot(started.Add(tc.gap))
+			if got.JitterMS != tc.wantJitter || got.Bytes != 28 || got.Packets != 2 {
+				t.Fatalf("ingress = %+v, want jitter %v ms, 28 bytes and two packets", got, tc.wantJitter)
+			}
+		})
+	}
+}
+
 func TestVoiceReceiverReportsUseAudioBindingAndRTCPUnits(t *testing.T) {
 	router, output := audioReceiverReportFixture(t)
 	ssrc := uint32(output.sender.GetParameters().Encodings[0].SSRC)
