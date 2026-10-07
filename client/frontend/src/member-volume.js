@@ -61,6 +61,8 @@ export function bindMemberVolume(slider, output, reset, uid, { format = value =>
 function showVolume(slider, output, text) {
     const amplified = Number(slider.value) > 100;
     const group = slider.closest(".ctx-audio-group");
+    // Segments are decorative: the fill and native thumb follow every 1% step.
+    group?.style.setProperty("--volume-position", `${Number(slider.value) / 2}%`);
     const decibels = group?.querySelector(".ctx-audio-db");
     const gain = personalVolumeGain(Number(slider.value) / 100);
     const db = gain > 0 ? Number((20 * Math.log10(gain)).toFixed(1)) : -Infinity;

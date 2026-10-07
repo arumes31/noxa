@@ -114,6 +114,72 @@ test("screen-share controls explain unavailable audio and follow stream changes"
     await expect(share).toBeDisabled();
 });
 
+test("segmented volume keeps fine adjustment and repaints on reset and settings updates", async ({ page }, testInfo) => {
+    await page.locator('#channel-tree .client[data-clid="alice"]').click({ button: 'right' });
+    await page.getByRole('menuitem', { name: 'Personal audio…', exact: true }).click();
+    const panel = page.locator('.member-audio-popover');
+    const voice = panel.getByRole('slider', { name: 'Voice volume', exact: true });
+    const share = panel.getByRole('slider', { name: 'Screen-share audio', exact: true });
+    const voicePercent = panel.getByRole('spinbutton', { name: 'Voice volume percentage', exact: true });
+    await voicePercent.fill('137'); await voicePercent.press('Enter');
+    await expect.poll(() => page.evaluate(() => window.__saved.user_volumes['alice-uid'])).toBe(137);
+    await voice.focus(); await voice.press('ArrowRight');
+    await expect.poll(() => page.evaluate(() => window.__saved.user_volumes['alice-uid'])).toBe(138);
+    await expect(voicePercent).toHaveValue('138');
+    await expect(voice).toHaveAttribute('aria-valuetext', '138% · +7.6 dB');
+    expect(await page.evaluate(() => window.__gain.gain.value)).toBeCloseTo(10 ** .38);
+    await expect(panel.locator('.ctx-volume')).toHaveCSS('--volume-position', '69%');
+
+    const sharePercent = panel.getByRole('spinbutton', { name: 'Screen-share audio percentage', exact: true });
+    await sharePercent.fill('43'); await sharePercent.press('Enter');
+    await expect.poll(() => page.evaluate(() => window.__saved.user_share_volumes['alice-uid'])).toBe(43);
+    await share.focus(); await share.press('ArrowRight');
+    await expect.poll(() => page.evaluate(() => window.__saved.user_share_volumes['alice-uid'])).toBe(44);
+    await expect(sharePercent).toHaveValue('44');
+    await expect(panel.locator('.ctx-share-volume')).toHaveCSS('--volume-position', '22%');
+    await expect(voice).toHaveValue('138');
+    await panel.screenshot({ path: testInfo.outputPath('member-audio-segmented-desktop.png') });
+
+    await panel.getByRole('button', { name: 'Reset volume to 100%', exact: true }).click();
+    await expect(voice).toHaveValue('100');
+    await expect(panel.locator('.ctx-volume')).toHaveCSS('--volume-position', '50%');
+    await expect(share).toHaveValue('44');
+    await page.evaluate(() => {
+        window.__saved.user_volumes['alice-uid'] = 73;
+        window.__saved.user_share_volumes['alice-uid'] = 129;
+        for (const callback of window.__events.settings_update || []) callback(structuredClone(window.__saved));
+    });
+    await expect(voice).toHaveValue('73'); await expect(share).toHaveValue('129');
+    await expect(panel.locator('.ctx-volume')).toHaveCSS('--volume-position', '36.5%');
+    await expect(panel.locator('.ctx-share-volume')).toHaveCSS('--volume-position', '64.5%');
+});
+
+for (const language of ['en', 'de']) test(`personal audio remains contained at 320px with a long name in ${language}`, async ({ page }, testInfo) => {
+    await page.setViewportSize({ width: 320, height: 480 });
+    await page.evaluate(async language => {
+        (await import('/src/i18n.js')).setLanguage(language);
+        window.__noxa.state.clients.find(client => client.client_id === 'alice').nickname = 'AliceWithAnExceptionallyLongUnbrokenDisplayName';
+        window.__noxa.renderTree();
+    }, language);
+    await page.locator('#workspace-sidebar-toggle').click();
+    await page.locator('#channel-tree .client[data-clid="alice"]').click({ button: 'right' });
+    await page.getByRole('menu').locator('[data-act="audio"]').click();
+    const panel = page.locator('.member-audio-popover');
+    await expect(panel).toBeVisible();
+    const bounds = await panel.boundingBox();
+    expect(bounds.x).toBeGreaterThanOrEqual(0); expect(bounds.y).toBeGreaterThanOrEqual(0);
+    expect(bounds.x + bounds.width).toBeLessThanOrEqual(320);
+    expect(bounds.y + bounds.height).toBeLessThanOrEqual(480);
+    expect(await panel.evaluate(node => node.scrollWidth <= node.clientWidth)).toBe(true);
+    for (const slider of await panel.getByRole('slider').all()) {
+        await expect(slider).toBeVisible();
+        const sliderBounds = await slider.boundingBox();
+        expect(sliderBounds.x).toBeGreaterThanOrEqual(bounds.x);
+        expect(sliderBounds.x + sliderBounds.width).toBeLessThanOrEqual(bounds.x + bounds.width);
+    }
+    await page.screenshot({ path: testInfo.outputPath(`member-audio-narrow-${language}.png`) });
+});
+
 for (const language of ['en', 'de']) test(`compact audio groups keep hierarchy and fit in ${language}`, async ({ page }, testInfo) => {
     await page.setViewportSize({ width: 644, height: 480 });
     await page.evaluate(async language => { (await import('/src/i18n.js')).setLanguage(language); }, language);
