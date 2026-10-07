@@ -93,4 +93,9 @@ test("processed microphones stay private through mute, deafen, replacement and t
         g.tone.stop(); await g.ctx.close();
         return [g.sent.readyState, g.nextSent.readyState, g.sent.enabled, g.nextSent.enabled];
     })).toEqual(["ended", "ended", false, false]);
+    expect(await page.evaluate(async () => {
+        const g = window.__gate;
+        try { await g.api.replaceMicrophoneGate(g.raw, g.next); return "unprocessed"; }
+        catch (error) { return error.message; }
+    })).toBe("Microphone processing is not ready");
 });

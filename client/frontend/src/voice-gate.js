@@ -18,7 +18,10 @@ export function updateMicrophoneGate(raw) {
 
 export async function replaceMicrophoneGate(previous, next) {
     const gate = gates.get(previous);
-    return gate ? createMicrophoneGate(next, gate.readState, gate.onActivity) : next;
+    // A settings change may race initial worklet loading. Keep the existing
+    // capture rather than ever substituting an unprocessed microphone.
+    if (!gate) throw new Error("Microphone processing is not ready");
+    return createMicrophoneGate(next, gate.readState, gate.onActivity);
 }
 
 export async function createMicrophoneGate(raw, readState, onActivity = () => {}) {
