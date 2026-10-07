@@ -1,5 +1,6 @@
 import { createConnectionQuality } from './connection-quality.js';
 import { createLoginMemory } from './login-memory.js';
+import { createLoginFeedback } from './login-errors.js';
 import { watchMicrophone } from "./microphone-recovery.js";
 import { createRemoteAudio } from './remote-audio.js';
 import { startVoiceDiagnostics, noteVoiceActivity } from './voice-diagnostics.js';
@@ -253,7 +254,8 @@ function applyAppearance() {
 // Login / connection
 // ---------------------------------------------------------------------------
 
-const loginMemory = createLoginMemory({ $, settings: () => state.settings, clearBookmark: () => { state.pendingBookmark = null; } });
+const loginFeedback = createLoginFeedback($);
+const loginMemory = createLoginMemory({ $, settings: () => state.settings, clearBookmark: () => { state.pendingBookmark = null; }, onSelect: loginFeedback.clear });
 const startupInitialized = (async () => {
     let settingsInitialized = false;
     try {
@@ -284,6 +286,7 @@ const startupInitialized = (async () => {
 })();
 
 function showLogin() {
+    loginFeedback.clear();
     // (334) the dialog is retargetable, so a stash from an earlier bookmark
     // must never identify the next login — a same-address login can be a
     // different account (callers loading a bookmark stash after this call).
@@ -330,6 +333,9 @@ document.querySelector(".login-card").addEventListener("submit", (event) => {
 async function connectFromLogin() {
     const submit = $("login-connect");
     if (submit.disabled) return;
+    loginFeedback.clear();
+    if (!$("login-addr").value.trim()) { loginFeedback.show("server address is required"); return; }
+    if (!$("login-nick").value.trim()) { loginFeedback.show("nickname is required"); return; }
     const label = $("login-connect-label");
     const submitLabel = label.textContent;
     submit.disabled = true;
@@ -344,8 +350,10 @@ async function connectFromLogin() {
     // initiated this login may announce its eventual failure.
     const requestServerGeneration = state.serverGeneration;
     const requestTabID = state.activeTabID;
+    const sameForm = loginFeedback.snapshot();
+    const currentAttempt = () => requestServerGeneration === state.serverGeneration && requestTabID === state.activeTabID && sameForm();
     const playCurrentConnectionFailure = () => {
-        if (requestServerGeneration === state.serverGeneration && requestTabID === state.activeTabID) {
+        if (currentAttempt()) {
             playEvent("connection_failed");
         }
     };
@@ -359,6 +367,7 @@ async function connectFromLogin() {
             ? normalizeConnectResult(await window.go.main.App.ConnectLogin({ ...loginRequest, bookmark }))
             : await connectBookmarkTabWithID(bookmark, addr, nick, pw, spw, displayName);
         if (err) {
+            if (!currentAttempt()) return;
             // (4a) TOFU fingerprint mismatch: prominent warning + explicit
             // trust action — never silently accepted.
             if (err.startsWith("tls fingerprint mismatch")) {
@@ -367,7 +376,7 @@ async function connectFromLogin() {
                 return;
             }
             playCurrentConnectionFailure();
-            $("login-error").textContent = err;
+            loginFeedback.show(err, { ...loginRequest, displayName });
             return;
         }
         // (334) consumed: lastConnect carries the name for reconnects from
@@ -419,7 +428,7 @@ async function connectFromLogin() {
         if (warning) toast(warning, "warn");
     } catch (e) {
         playCurrentConnectionFailure();
-        $("login-error").textContent = String(e);
+        if (currentAttempt()) loginFeedback.show(e, { displayName });
     } finally {
         submit.disabled = false;
         label.textContent = submitLabel;

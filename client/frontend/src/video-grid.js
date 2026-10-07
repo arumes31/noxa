@@ -3,6 +3,7 @@ import { escapeHTML as escapeTranslation } from "./markdown.js";
 import { copyToClipboard } from "./clipboard.js";
 import { formatBitrate, summarizeStream } from "./connection-stats.js";
 import { renderStreamPath } from "./stream-path-diagnostics.js";
+import "./stream-health.css";
 import { GridCompositor } from "./grid-compositor.js";
 import { captureMediaScope, mediaScopeIsCurrent } from "./media-controls.js";
 import { closeContextMenu, mountContextMenu, contextMenuKey } from "./context-menu.js";
@@ -75,7 +76,7 @@ export function createVideoGrid({ applySendCaps, syncCameraButton, syncShareButt
                     <span class="vtile-preview-age hidden"></span>
                 </div>
                 <span class="vtile-badge hidden"></span>
-                <details class="vtile-diagnostics"><summary></summary><div class="vtile-diagnostics-body"><p class="vtile-codec"></p><p class="vtile-rate"></p><p class="vtile-received"></p><p class="vtile-quality"></p><p class="vtile-quality-error" role="status"></p><div class="vtile-stream-path"></div><p class="vtile-traffic-note"></p><button class="vtile-copy-diagnostics" type="button"></button></div></details>
+                <details class="vtile-diagnostics"><summary></summary><div class="vtile-diagnostics-body"><div class="vtile-stream-path"></div><p class="vtile-codec"></p><p class="vtile-rate"></p><p class="vtile-received"></p><p class="vtile-quality"></p><p class="vtile-quality-error" role="status"></p><p class="vtile-traffic-note"></p><button class="vtile-copy-diagnostics" type="button"></button></div></details>
                 <button class="vtile-quality-button" type="button"></button>
                 <button class="vtile-pip icon-btn" title="${escapeTranslation(tLabel("desktop.floating.always.on.top.video"))}">▣</button>
                 <button class="vtile-fullscreen icon-btn" title="${escapeTranslation(tLabel("desktop.fullscreen.esc.exits"))}">⛶</button>`;
@@ -330,6 +331,7 @@ export function createVideoGrid({ applySendCaps, syncCameraButton, syncShareButt
         panel.querySelector("button").textContent = tLabel("wins.copyStream");
         renderStreamPath(panel.querySelector(".vtile-stream-path"), tile.remoteDiagnostics, sample, {
             extraAgeMS: remoteDiagnosticsAge(tile) || 0, quality: tile.sentQuality || "high",
+            receiverAgeMS: tile.diagnosticsMeasuredAt == null ? null : Math.max(0, performance.now() - tile.diagnosticsMeasuredAt),
             status: tile.remoteDiagnosticsStatus, error: tile.remoteDiagnosticsError,
         });
     }

@@ -1,0 +1,6 @@
+.stream-health { margin: .6rem 0; padding: .65rem .75rem; border-left: 3px solid var(--border); background: var(--bg-hover); font-size: .85rem; line-height: 1.45; overflow-wrap: anywhere; }
+.stream-health-headline { display: block; color: var(--text); }
+.stream-health p { margin: .35rem 0 0; }
+.stream-health p:empty { display: none; }
+.stream-health-evidence { color: var(--muted); font-variant-numeric: tabular-nums; }
+.stream-health[data-health="encoding"], .stream-health[data-health="network"], .stream-health[data-health="decoding"], .stream-health[data-health="lowOutput"] { border-left-color: var(--warn); }

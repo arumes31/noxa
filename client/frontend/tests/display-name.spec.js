@@ -86,11 +86,12 @@ test("a rejected login keeps optional credentials and restores the connect actio
             return target[method];
         } });
     });
+    await page.locator("#login-addr").fill("server.example");
     await page.locator("#login-nick").fill("owner");
     await page.locator("#login-options > summary").click();
     await page.locator("#login-accountpw").fill("retry-password");
     await page.locator("#login-connect").click();
-    await expect(page.locator("#login-error")).toHaveText("Account password is incorrect");
+    await expect(page.locator("#login-error")).toContainText("The account login or password was rejected.");
     await expect(page.locator("#login-accountpw")).toHaveValue("retry-password");
     await expect(page.locator("#login-connect")).toBeEnabled();
     await expect(page.locator("#login-connect")).toHaveAccessibleName("Connect");

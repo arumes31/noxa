@@ -161,6 +161,10 @@ func (s *Store) Discussion(ctx context.Context, r netproto.DiscussionRequest, ui
 			}
 			_, err = tx.ExecContext(ctx, `INSERT INTO discussion_messages(thread_id,from_unique_id,from_nickname,body_enc,key_id,request_id) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(thread_id,from_unique_id,request_id) DO NOTHING`, r.ThreadID, uid, nickname, r.BodyEnc, r.KeyID, r.RequestID)
 			if err == nil {
+				// A retried send keeps its original message even after newer replies.
+				err = tx.QueryRowContext(ctx, `SELECT id FROM discussion_messages WHERE thread_id=$1 AND from_unique_id=$2 AND request_id=$3`, r.ThreadID, uid, r.RequestID).Scan(&out.MessageID)
+			}
+			if err == nil {
 				_, err = tx.ExecContext(ctx, `UPDATE discussion_threads SET updated_at=NOW(),last_activity_at=NOW() WHERE id=$1`, r.ThreadID)
 			}
 		}

@@ -1,5 +1,6 @@
 import { t } from "./i18n.js";
 import { formatBitrate } from "./connection-stats.js";
+import { summarizeStreamHealth, renderStreamHealth } from "./stream-health.js";
 
 const fresh = (value, extraAgeMS) => value && !value.stale && Number.isFinite(value.age_ms) && value.age_ms >= 0 && value.age_ms + extraAgeMS <= 15000;
 const format = (value, suffix, digits = 1) => Number.isFinite(value) && value >= 0 ? `${value.toFixed(digits)}${suffix}` : "—";
@@ -25,9 +26,15 @@ export function streamPathMeasurements(remote, extraAgeMS = 0, quality = "high")
     };
 }
 
-export function renderStreamPath(element, remote, receiver, { extraAgeMS = 0, quality = "high", status = "", error = "" } = {}) {
+export function renderStreamPath(element, remote, receiver, { extraAgeMS = 0, receiverAgeMS = null, quality = "high", status = "", error = "" } = {}) {
     const view = streamPathMeasurements(remote, extraAgeMS, quality);
     const sender = view.sender;
+    if (!element.querySelector(".stream-health")) {
+        element.innerHTML = '<div class="stream-health" data-direction="receiver"></div><div class="vtile-path-technical"></div>';
+    }
+    renderStreamHealth(element.querySelector(".stream-health"), summarizeStreamHealth({
+        sender, senderAgeMS: view.senderAgeMS, receiver, receiverAgeMS, direction: "receiver", starting: status === "loading" && !receiver,
+    }));
     const rows = [
         ["capture", format(sender?.capture_fps, " fps")],
         ["encoded", format(sender?.encoded_fps, " fps")],
@@ -81,5 +88,5 @@ export function renderStreamPath(element, remote, receiver, { extraAgeMS = 0, qu
     condition.textContent = error ? t("wins.path.failed", { error }) : view.senderStale ? t("wins.path.stale")
         : status === "loading" ? t("wins.path.loading") : status === "unsupported" ? t("wins.path.unsupported")
             : remote && !sender ? t("wins.path.senderUnavailable") : "";
-    element.replaceChildren(list, note, explanation, condition);
+    element.querySelector(".vtile-path-technical").replaceChildren(list, note, explanation, condition);
 }

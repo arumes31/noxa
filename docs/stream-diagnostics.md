@@ -20,6 +20,15 @@ after a stream, tab or connection changes. Closing the panel stops further reads
 
 ## Reading the measurements
 
+The health summary above the measurements offers a next step for the sender or
+viewer when recent evidence shows encoding pressure, delivery problems, or
+decoding pressure. If capture continues while very few frames are encoded and
+sent, it reports low sender output even when the browser reports no limitation.
+These are diagnostic hints, not a confirmed cause. A still screen, a share
+waiting for viewers, startup samples and unavailable or stale counters are
+distinguished from evidence of a problem. The summary never changes stream
+quality automatically.
+
 Capture FPS, selected FPS, browser-reported encode FPS, interval-encoded FPS and
 interval-sent FPS are separate values. The sender status uses interval-sent FPS;
 it does not treat the selected capture preset as a measured transmission rate.

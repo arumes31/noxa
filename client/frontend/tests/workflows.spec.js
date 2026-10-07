@@ -2868,17 +2868,17 @@ test.describe("tab-bound metadata and channel icons", () => {
         await expect(page.locator("#voice-leave-channel")).toBeEnabled();
     });
 
-    test("channel notifications retain their originating server across tab changes", async ({ page }) => {
+    test("stale channel notifications never join a voice channel", async ({ page }) => {
         await page.evaluate(() => {
+            window.__noxa.state.myUniqueID = "old-identity";
             window.__noxaPolish.recordNotification("mention", "Old channel mention", { channelID: 2 });
             for (const callback of window.__events.tab_reset || []) callback("server-b");
             window.__metadata.nativeTab = "server-b";
             window.__noxaPolish.openNotifCenter();
         });
         await page.locator(".nc-row").filter({ hasText: "Old channel mention" }).click();
-        await expect.poll(() => page.evaluate(() => window.__metadata.calls.filter(c => c.name === "JoinChannel"))).toEqual([
-            { name: "JoinChannel", tabID: "server-a", args: [2] },
-        ]);
+        await expect.poll(() => page.evaluate(() => window.__metadata.toasts)).toContain("This message is unavailable or you no longer have access.");
+        expect(await page.evaluate(() => window.__metadata.calls.filter(c => c.name === "JoinChannel"))).toEqual([]);
         expect(await page.evaluate(() => window.__metadata.effects)).toEqual([]);
     });
 

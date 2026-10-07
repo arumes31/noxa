@@ -2241,7 +2241,8 @@ export function addChat(d) {
             announcementEvent = event;
             announcementContext = context;
         }
-        window.__noxaNotify?.notify(event, text, { ...context, announce: false });
+        window.__noxaNotify?.notify(event, text, { ...context, announce: false,
+            reference: { kind: "channel", channel_id: chID, message_id: m.id || 0 } });
     }
     if (key === activeKey() && !isPrivateGroupActive()) {
         if (position === "append") appendLive(m);
@@ -2309,7 +2310,8 @@ function routeDM(d, m) {
     if (pushMsg(key, m) === "duplicate") return false;
     if (!m.self && !m.offline) {
         window.__noxaNotify?.notify("dm", (m.from || "someone") + ": " + (m.text || "").slice(0, 80),
-            { uid: peer, className: "messages", kind: "info", announce: false });
+            { uid: peer, className: "messages", kind: "info", announce: false,
+                reference: { kind: "dm", peer_id: peer, client_message_id: m.clientMsgID || "", local_seq: m.localSeq || 0 } });
     }
     dmRecord(peer, tab.nick, m); // (122) both directions, so a restart replays the thread
 
@@ -2323,7 +2325,8 @@ function routeDM(d, m) {
             offlineBatch.delete(peer);
             const summary = t("chat.offlineBatch", { count: b.n, name: b.nick });
             window.__noxaNotify?.notify("dm", summary,
-                { uid: peer, className: "messages", kind: "info", announce: false });
+                { uid: peer, className: "messages", kind: "info", announce: false,
+                    reference: { kind: "dm", peer_id: peer, client_message_id: m.clientMsgID || "", local_seq: m.localSeq || 0 } });
             if (chatAnnouncementAllowed("dm", { uid: peer, className: "messages" }, key)) {
                 V().announceLive(summary);
             }
@@ -4311,34 +4314,38 @@ export function unreadMessageReferences() {
 
 // Historical jumps open an authenticated context window without splicing a
 // disconnected old page into the live store (which would create paging gaps).
-export async function jumpMessageReference(reference) {
+export async function jumpMessageReference(reference, options = {}) {
+    const destinationCurrent = () => !options.isCurrent || options.isCurrent();
+    if (!destinationCurrent()) return;
     if (reference.kind === "dm") {
         if (!reference.client_message_id && !reference.local_seq) { openPM(reference.peer_id, reference.name); return; }
         const owner = getDMOwner();
         const rows = await callDMHistory(owner, "DMHistoryLoadForContext", reference.peer_id);
-        if (!dmOwnerIsCurrent(owner)) return;
+        if (!dmOwnerIsCurrent(owner) || !destinationCurrent()) return;
         const entry = rows.find(row => reference.client_message_id ? row.client_msg_id === reference.client_message_id : Number(row.seq) === Number(reference.local_seq));
-        if (!entry) { V().toast(t("messages.notFound"), "warn"); return; }
+        if (!entry) { V().toast(t("messages.notFound"), "warn", "alert", { bypassDND: !!options.continueConversation }); return; }
         const index = rows.indexOf(entry), name = pmTabs.get(reference.peer_id)?.nick || reference.peer_id;
         const context = rows.slice(Math.max(0, index - 19), index + 1).map(row => dmMsg(row, name));
-        showMessageReferenceContext(`DM · ${name}`, context, context.at(-1));
+        showMessageReferenceContext(`DM · ${name}`, context, context.at(-1), options.continueConversation
+            ? () => { if (dmOwnerIsCurrent(owner)) openPM(reference.peer_id, name); } : null);
         return;
     }
     const scope = captureScope(readChatServerScope);
     const channelID = Number(reference.channel_id), targetID = Number(reference.message_id);
     if (!targetID) { if (channelID) await openChannelTab(channelID); else setView({ kind: "global" }); return; }
     const page = await app().ChatHistoryForTab(scope.tabID, channelID, targetID + 1, 20);
-    if (!chatServerIsCurrent(scope)) return;
+    if (!chatServerIsCurrent(scope) || !destinationCurrent()) return;
     if (!(page.messages || []).some(message => message.id === targetID && !message.deleted && message.enc_verified)) {
-        V().toast(t("messages.notFound"), "warn"); return;
+        V().toast(t("messages.notFound"), "warn", "alert", { bypassDND: !!options.continueConversation }); return;
     }
-    if (channelID === (activeChannelID() || 0) && flashMsg(targetID)) return;
+    if (!isPrivateGroupActive() && $("chat-log").getClientRects().length && channelID === (activeChannelID() || 0) && flashMsg(targetID)) return;
     const messages = [...page.messages].reverse().map(message => attribute(normalize(message, channelID)));
     const name = V().state.channels.find(channel => Number(channel.ChannelID) === channelID)?.Name || (channelID ? `#${channelID}` : "Global");
-    showMessageReferenceContext(name, messages, messages.find(message => message.id === targetID));
+    showMessageReferenceContext(name, messages, messages.find(message => message.id === targetID), options.continueConversation
+        ? () => { if (chatServerIsCurrent(scope)) { if (channelID) void openChannelTab(channelID); else setView({ kind: "global" }); } } : null);
 }
 
-function showMessageReferenceContext(name, messages, target) {
+function showMessageReferenceContext(name, messages, target, continueConversation = null) {
     const overlay = document.createElement("div"); overlay.className = "dlg-overlay";
     const box = document.createElement("section"); box.className = "dlg message-tools-dialog";
     const heading = document.createElement("h2"); heading.textContent = name;
@@ -4353,6 +4360,12 @@ function showMessageReferenceContext(name, messages, target) {
         if (message === target) row.classList.add("message-reference-flash");
     }
     const close = document.createElement("button"); close.textContent = t("messages.close"); close.onclick = () => closeDialog(overlay);
-    box.append(heading, list, close); overlay.append(box); mountServerDialog(overlay);
+    box.append(heading, list);
+    if (continueConversation) {
+        const open = document.createElement("button"); open.textContent = t("messages.openConversation");
+        open.onclick = () => { if (!isCurrentServerDialog(overlay)) return; closeDialog(overlay); continueConversation(); };
+        box.append(open);
+    }
+    box.append(close); overlay.append(box); mountServerDialog(overlay);
     list.querySelector(".message-reference-flash")?.scrollIntoView({ block: "center" });
 }

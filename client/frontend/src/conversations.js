@@ -33,7 +33,8 @@ export async function conversationChanged(event = {}) {
         const member = group?.members.find(member => member.unique_id === sessionUserID(state));
         if (!member || (member.pending && !event.invitation) || (!member.pending && event.invitation)) return;
         if ((state.settings?.blocked_users || []).includes(group.owner) && member.pending) return;
-        window.__noxaNotify?.notify("dm", t(event.invitation ? "group.invitedNotification" : "group.messageNotification", { name: group.name }));
+        window.__noxaNotify?.notify("dm", t(event.invitation ? "group.invitedNotification" : "group.messageNotification", { name: group.name }),
+            { reference: { kind: "group", group_id: group.id, message_id: event.message_id || 0 } });
     } catch { /* Removed groups and stale sessions do not produce alerts. */ }
 }
 function el(tag, className, text) {
@@ -49,9 +50,9 @@ export function openConversations() {
     initConversations();
     workspace?.open();
 }
-export async function openConversationsAt(groupID, messageID = 0) {
+export async function openConversationsAt(groupID, messageID = 0, destinationCurrent = () => true) {
     initConversations();
-    await workspace?.jump(groupID, Number(messageID));
+    await workspace?.jump(groupID, Number(messageID), destinationCurrent);
 }
 export function closeConversations() { workspace?.close(); }
 export function isPrivateGroupActive() { return !!workspace?.active(); }
@@ -187,7 +188,7 @@ export function initConversations() {
             open: details.open, target: details.querySelector(".group-invite input")?.value || "",
         });
     };
-    const refresh = async (sidebarOnly = false) => {
+    const refresh = async (sidebarOnly = false, destinationCurrent = () => true) => {
         if (!current()) return;
         if (mutationPending) return;
         if (sidebarOnly && refreshPending) { sidebarRefreshQueued = true; return; }
@@ -196,7 +197,7 @@ export function initConversations() {
         const token = sidebarOnly ? generation : ++generation;
         try {
             const result = await request({ action: "list" });
-            if (!current() || token !== generation) return;
+            if (!current() || token !== generation || !destinationCurrent()) return;
             const focusedGroup = list.contains(document.activeElement) ? document.activeElement.dataset.groupId : null;
             list.replaceChildren();
             const groups = result.conversations.filter(group => !group.members.find(member => member.unique_id === uid())?.pending || !blocked(group.owner));
@@ -235,12 +236,12 @@ export function initConversations() {
             const selection = content.contains(activeInput) && activeInput?.matches(selector) && content.dataset.groupId === group.id
                 ? [activeInput.selectionStart, activeInput.selectionEnd, activeInput.selectionDirection] : null;
             saveDraft();
-            await showGroup(group, token);
+            await showGroup(group, token, destinationCurrent);
             if (selection && visible() && token === generation && document.activeElement === document.body) {
                 const input = content.querySelector(selector);
                 input?.focus({ preventScroll: true }); input?.setSelectionRange(...selection);
             }
-        } catch (error) { if (token === generation) fail(error); }
+        } catch (error) { if (token === generation && destinationCurrent()) fail(error); }
         finally { refreshPending--; if (!refreshPending && sidebarRefreshQueued && current()) void refresh(true); }
     };
     const mutate = async (group, action, target = "", extra = {}) => {
@@ -270,7 +271,7 @@ export function initConversations() {
             if (current() && selected === group.id) void mutate(group, action, target);
         }
     };
-    const showGroup = async (group, token) => {
+    const showGroup = async (group, token, destinationCurrent = () => true) => {
         const previousMessages = content.dataset.groupId === group.id ? content.querySelector(".group-messages") : null;
         const preserveScroll = previousMessages && previousMessages.scrollHeight - previousMessages.scrollTop - previousMessages.clientHeight > 24;
         const previousScrollTop = previousMessages?.scrollTop || 0;
@@ -371,6 +372,7 @@ export function initConversations() {
         };
         let before = jumpTarget > 0 ? jumpTarget + 1 : 0;
         let loading = false;
+        let initialNavigation = true;
         let historyError = "";
         let latestRendered = 0;
         messages.onscroll = () => {
@@ -378,10 +380,12 @@ export function initConversations() {
         };
         const history = async () => {
             if (loading || !current() || token !== generation) return;
+            const navigationCurrent = initialNavigation ? destinationCurrent : () => true;
+            initialNavigation = false;
             loading = true; older.disabled = true;
             try {
                 const result = await request({ action: "history", id: group.id, before_id: before });
-                if (!current() || token !== generation) return;
+                if (!current() || token !== generation || !navigationCurrent()) return;
                 if (historyError && status.textContent === historyError) status.textContent = "";
                 historyError = "";
                 const fragment = document.createDocumentFragment();
@@ -415,12 +419,15 @@ export function initConversations() {
                     jumpTarget = 0;
                 }
             } catch (error) {
-                if (current() && token === generation) {
+                if (current() && token === generation && navigationCurrent()) {
                     fail(error); historyError = status.textContent;
                     older.disabled = false;
                 }
             }
-            finally { loading = false; }
+            finally {
+                loading = false;
+                if (current() && token === generation && !navigationCurrent()) older.disabled = false;
+            }
         };
         older.onclick = history;
         await history();
@@ -447,7 +454,7 @@ export function initConversations() {
     workspace = {
         current, filter, active: visible, token: () => visible() ? viewToken : null,
         open: () => { setVisible(true); layout.expand(); create.hidden = false; add.setAttribute("aria-expanded", "true"); name.focus(); },
-        jump: async (id, messageID) => { saveDraft(); selected = id; jumpTarget = messageID; setVisible(true); layout.expand(); await refresh(); if (current() && selected !== id) status.textContent = t("messages.notFound"); },
+        jump: async (id, messageID, destinationCurrent) => { saveDraft(); selected = id; jumpTarget = messageID; setVisible(true); layout.expand(); await refresh(false, destinationCurrent); if (current() && destinationCurrent() && selected !== id) status.textContent = t("messages.notFound"); },
         close: () => { saveDraft(); setVisible(false); },
         destroy: () => { ++generation; window.clearInterval(sidebarPoll); window.removeEventListener("noxa-language-changed", languageChanged); window.removeEventListener("focus", focusChanged); document.removeEventListener("visibilitychange", focusChanged); setVisible(false); layout.destroy(); sidebar.remove(); panel.remove(); drafts.clear(); memberForms.clear(); references.clear(); },
     };

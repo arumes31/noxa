@@ -2,7 +2,7 @@ import { t } from "./i18n.js";
 
 // Passwords stay in the native credential store. Only their presence crosses
 // the bridge; changing the server/account invalidates every pending lookup.
-export function createLoginMemory({ $, settings, clearBookmark }) {
+export function createLoginMemory({ $, settings, clearBookmark, onSelect }) {
     const app = () => window.go.main.App;
     const addr = $("login-addr"), nick = $("login-nick"), display = $("login-display-name");
     const account = $("login-accountpw"), server = $("login-serverpw");
@@ -42,6 +42,7 @@ export function createLoginMemory({ $, settings, clearBookmark }) {
     }
 
     function select(profile) {
+        onSelect?.();
         edited = true;
         clearBookmark();
         addr.value = profile.addr || "";

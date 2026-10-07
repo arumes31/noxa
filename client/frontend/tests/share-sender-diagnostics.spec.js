@@ -43,7 +43,8 @@ test.beforeEach(async ({ page }) => {
 test("sending details distinguish captured, encoded, sent and reported frame rates and copy only safe fields", async ({ page }, testInfo) => {
     const panel = page.locator("#sharing-status");
     await expect(panel.locator(".sharing-meta")).toContainText("Sending 1920 × 1080 · 10 fps");
-    await expect(panel.locator(".sharing-warning")).toContainText("Sending fewer frames than selected");
+    await expect(panel.locator(".sharing-warning")).toBeHidden();
+    await expect(panel.locator(".stream-health-headline")).toHaveText("Stream health is not clear yet");
     await panel.getByText("Sending details", { exact: true }).click();
     const details = panel.locator(".sharing-diagnostics");
     for (const [label, value] of [["Selected frame rate", "60.0 fps"], ["Capture setting", "60.0 fps"], ["Captured frames", "60.0 fps"],

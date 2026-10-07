@@ -66,14 +66,28 @@ func TestIntegrationDiscussionEncryptedTCPRoundTrip(t *testing.T) {
 	send(t, reader, netproto.MsgDiscussionRequest, netproto.DiscussionRequest{Action: "join", ChannelID: 1, ThreadID: created.ThreadID})
 	readOfType(t, reader, netproto.MsgDiscussionResult)
 	send(t, writer, netproto.MsgDiscussionRequest, netproto.DiscussionRequest{Action: "send", ChannelID: 1, ThreadID: created.ThreadID, BodyEnc: sealScopeTest(t, key, "Followed update"), KeyID: keyID, RequestID: "followed-update-1"})
-	readOfType(t, writer, netproto.MsgDiscussionResult)
+	var sent netproto.DiscussionResult
+	if err := netproto.Decode(readOfType(t, writer, netproto.MsgDiscussionResult), &sent); err != nil || sent.MessageID <= 0 || len(sent.Messages) != 2 {
+		t.Fatalf("sent response=%+v error=%v", sent, err)
+	}
 	var notice struct {
 		ChannelID  int64 `json:"channel_id"`
 		ThreadID   int64 `json:"thread_id"`
+		MessageID  int64 `json:"message_id"`
 		NewMessage bool  `json:"new_message"`
 	}
-	if err := json.Unmarshal(readEventOfType(t, reader, "discussion_changed"), &notice); err != nil || notice.ChannelID != 1 || notice.ThreadID != created.ThreadID || !notice.NewMessage {
+	if err := json.Unmarshal(readEventOfType(t, reader, "discussion_changed"), &notice); err != nil || notice.ChannelID != 1 || notice.ThreadID != created.ThreadID || notice.MessageID != sent.MessageID || !notice.NewMessage {
 		t.Fatalf("independent follower notification=%+v error=%v", notice, err)
+	}
+	// Retry the original create after a later reply: the destination must remain
+	// the original post, not the newest item in its returned history page.
+	send(t, writer, netproto.MsgDiscussionRequest, request)
+	var retried netproto.DiscussionResult
+	if err := netproto.Decode(readOfType(t, writer, netproto.MsgDiscussionResult), &retried); err != nil || retried.MessageID != created.Messages[0].ID {
+		t.Fatalf("retried destination=%+v error=%v", retried, err)
+	}
+	if err := json.Unmarshal(readEventOfType(t, reader, "discussion_changed"), &notice); err != nil || notice.MessageID != retried.MessageID {
+		t.Fatalf("retried notification=%+v error=%v", notice, err)
 	}
 	// The server rejects a body offered in plaintext before touching storage.
 	request.RequestID = "plaintext-attempt"

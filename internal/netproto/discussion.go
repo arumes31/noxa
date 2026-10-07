@@ -60,6 +60,7 @@ type DiscussionResult struct {
 	Action           string             `json:"action"`
 	ChannelID        int64              `json:"channel_id"`
 	ThreadID         int64              `json:"thread_id,omitempty"`
+	MessageID        int64              `json:"message_id,omitempty"`
 	Forum            bool               `json:"forum"`
 	AutoArchiveHours int                `json:"auto_archive_hours"`
 	Tags             []string           `json:"tags"`

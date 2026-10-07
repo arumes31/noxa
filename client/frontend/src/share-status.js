@@ -2,9 +2,11 @@ import { t } from "./i18n.js";
 import { mediaScopeIsCurrent } from "./media-controls.js";
 import { copyToClipboard } from "./clipboard.js";
 import { formatBitrate } from "./connection-stats.js";
-import { collectVideoSenders, primaryVideoSender, videoSenderEncodingSettings, videoSenderFrameRateReduced } from "./video-sender-stats.js";
+import { collectVideoSenders, primaryVideoSender, videoSenderEncodingSettings } from "./video-sender-stats.js";
 import { publicationUploadActive } from "./stream-publication.js";
+import { summarizeStreamHealth, renderStreamHealth } from "./stream-health.js";
 import "./share-status.css";
+import "./stream-health.css";
 
 let session = null;
 export function refreshShareStatus() { if (session) render(session); }
@@ -29,10 +31,10 @@ export function startShareStatus(options) {
     stopShareStatus();
     const root = document.getElementById("sharing-status");
     if (!root) return;
-    const s = { ...options, root, track: options.stream.getVideoTracks()[0], viewers: null, sample: null };
+    const s = { ...options, root, track: options.stream.getVideoTracks()[0], viewers: null, sample: null, startedAt: performance.now() };
     session = s;
     root.innerHTML = `<div class="sharing-heading"><strong class="sharing-source"></strong><div class="sharing-actions"><button type="button" class="sharing-quality"></button><button type="button" class="sharing-change"></button><button type="button" class="sharing-stop danger"></button></div></div>
-        <p class="sharing-meta"></p><p class="sharing-warning" role="status" hidden></p>
+        <p class="sharing-meta"></p><p class="sharing-warning" role="status" hidden></p><div class="stream-health" data-direction="sender"></div>
         <details class="sharing-preview"><summary></summary><video muted playsinline></video></details>
         <details class="sharing-diagnostics"><summary></summary><p class="sharing-diagnostics-note"></p><dl></dl><p class="sharing-layers"></p><button type="button" class="sharing-copy"></button></details>`;
     root.hidden = false;
@@ -78,9 +80,7 @@ function render(s) {
     const viewers = s.viewers === null ? t("share.viewersUnknown") : s.viewers === 0 ? t("share.noViewers") : t("share.viewers", { count: s.viewers });
     const audioText = t(!audio ? "share.audioOff" : s.audioMode === "application" ? "share.applicationOn" : "share.audioOn");
     s.root.querySelector(".sharing-meta").textContent = `${waiting ? t("share.waitingViewers") : t("share.sending", { dimensions, fps })} · ${audioText} · ${viewers}`;
-    const reason = waiting ? "" : s.reduction() || (sample?.quality_reason === "cpu" ? "share.cpu" : sample?.quality_reason === "bandwidth" ? "share.bandwidth" :
-        sample?.width > 0 && sample.width < (s.preset.original ? settings.width : Math.min(settings.width || s.preset.width, s.preset.width)) ? "share.reduced" :
-            videoSenderFrameRateReduced(sample) ? "share.fpsReduced" : "");
+    const reason = waiting ? "" : s.reduction();
     const limits = window.__noxa.state.mediaLimits;
     const capped = (s.preset.original && limits?.video_max_width > 0) || (limits?.video_max_width > 0 && limits.video_max_width < s.preset.width) ||
         (limits?.video_max_height > 0 && limits.video_max_height < s.preset.height) ||
@@ -88,6 +88,10 @@ function render(s) {
     const warning = s.root.querySelector(".sharing-warning");
     warning.textContent = reason ? t(reason) : capped ? t(s.preset.original ? "share.originalServerLimit" : "share.serverLimit") : "";
     warning.hidden = !warning.textContent;
+    renderStreamHealth(s.root.querySelector(".stream-health"), summarizeStreamHealth({ sender: sample,
+        senderAgeMS: s.measuredAt == null ? null : performance.now() - s.measuredAt, screen: true, waiting,
+        starting: !s.statsFailed && performance.now() - s.startedAt < 5000 && !sample?.sample_ms,
+    }));
     s.root.querySelector(".sharing-meta").title = t(s.preset.original ? "share.selectedOriginal" : "share.selected", {
         width: s.preset.width, height: s.preset.height, fps: s.preset.fps });
     renderDetails(s);
@@ -141,9 +145,9 @@ async function poll(s) {
         if (!current(s)) return;
         s.layers = report ? collectVideoSenders(report, s.previous, [source], s.previousSource ? [s.previousSource] : []) : [];
         s.sample = primaryVideoSender(s.layers);
-        s.previous = report; s.previousSource = source; s.sampledAt = Date.now();
+        s.previous = report; s.previousSource = source; s.sampledAt = Date.now(); s.measuredAt = performance.now(); s.statsFailed = false;
         if (current(s)) render(s);
-    } catch { if (current(s)) { s.sample = null; s.layers = []; s.previous = null; render(s); } }
+    } catch { if (current(s)) { s.sample = null; s.layers = []; s.previous = null; s.statsFailed = true; render(s); } }
     finally { if (current(s)) s.timer = setTimeout(() => { void poll(s); }, 2000); }
 }
 

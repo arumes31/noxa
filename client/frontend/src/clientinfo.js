@@ -10,7 +10,7 @@ import { roleChip } from "./role-presentation.js";
 import { startPrivateCall } from "./private-calls.js";
 import { updateLocalSettings } from "./settings-store.js";
 import { closeContextMenu, mountContextMenu, contextMenuKey } from "./context-menu.js";
-import { memberAudioControls } from "./member-audio-ui.js";
+import { openMemberAudio } from "./member-audio-ui.js";
 import { openMemberMove } from "./member-move.js";
 import { escapeHTML } from "./markdown.js";
 import { sessionUserID } from "./session-identity.js";
@@ -72,11 +72,13 @@ function openContextMenu(x, y, client, trigger) {
         <a data-act="pm">${escapeTranslation(t("desktop.send.private.message"))}</a>
         <a data-act="info">${escapeTranslation(t("desktop.client.info"))}</a>
         <div class="ctx-divider"></div>
-        <div class="ctx-audio-host"></div>
+        <a data-act="audio" aria-haspopup="dialog">${escapeTranslation(t("context.personalAudioMenu"))}</a>
         ${mod.length ? `<div class="ctx-divider"></div>${mod.join("")}` : ""}
         <a data-act="copy">${escapeTranslation(t("desktop.copy.unique.id"))}</a>`;
-    const audioControls = memberAudioControls(client);
-    menuEl.querySelector(".ctx-audio-host").replaceWith(audioControls.element);
+    menuEl.querySelector('[data-act="audio"]').onclick = () => {
+        closeMenu();
+        openMemberAudio(client, { x, y, trigger, resolveTrigger: replacementTrigger(trigger) });
+    };
     menuEl.style.left = Math.min(x, window.innerWidth - 240) + "px";
     menuEl.style.top = Math.min(y, window.innerHeight - 260) + "px";
     menuEl.onclick = (e) => e.stopPropagation();
@@ -218,7 +220,7 @@ function openContextMenu(x, y, client, trigger) {
     const copyDivider = document.createElement("div"); copyDivider.className = "ctx-divider";
     menuEl.append(copyDivider, menuEl.querySelector('[data-act="copy"]'));
     const menu = menuEl;
-    mountContextMenu(menu, { x, y, trigger, resolveTrigger: replacementTrigger(trigger), onClose: () => { audioControls.dispose(); if (menuEl === menu) menuEl = null; } });
+    mountContextMenu(menu, { x, y, trigger, resolveTrigger: replacementTrigger(trigger), onClose: () => { if (menuEl === menu) menuEl = null; } });
 }
 
 // openBatchMenu is the multi-select context menu (306): actions apply to

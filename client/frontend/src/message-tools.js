@@ -34,12 +34,17 @@ function resultRow(dlg, ref, text, meta = "") {
         if (!dlg.current()) return;
         closeDialog(dlg.overlay);
         try {
-            if (ref.kind === "thread") openDiscussions(ref.channel_id, null, ref.thread_id, ref.message_id || 0);
-            else if (ref.kind === "group") await openConversationsAt(ref.group_id, ref.message_id || 0);
-            else await hooks.jump?.(ref);
+            await openMessageReference(ref);
         } catch (error) { V().toast(t("messages.failed", { error: String(error) }), "warn"); }
     };
     row.append(jump); dlg.list.append(row); return row;
+}
+
+export async function openMessageReference(ref, options) {
+    if (options?.isCurrent && !options.isCurrent()) return;
+    if (ref.kind === "thread") openDiscussions(ref.channel_id, null, ref.thread_id, ref.message_id || 0, options?.isCurrent);
+    else if (ref.kind === "group") await openConversationsAt(ref.group_id, ref.message_id || 0, options?.isCurrent);
+    else await hooks.jump?.(ref, options);
 }
 
 export async function saveMessageReference(reference, dmOwner = null) {

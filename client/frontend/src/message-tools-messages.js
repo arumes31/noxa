@@ -14,6 +14,9 @@ export const messageToolsEnglish = {
     "messages.scopeLimit": "Showing a partial thread list. Use the thread browser to reach older threads.",
     "messages.moreThreads": "Load more threads",
     "messages.invalidDates": "The start date must be on or before the end date.",
+    "messages.openConversation": "Open conversation",
+    "messages.switchServer": "Switch server and open",
+    "messages.switchServerHint": "This notification is from {server}. Switching servers stops your current voice, private call, and screen sharing. Stay here to keep them active, or switch to open the message.",
 };
 export const messageToolsGerman = {
     "messages.inbox": "Posteingang", "messages.search": "Verlauf durchsuchen", "messages.saved": "Gespeicherte Nachrichten", "messages.save": "Nachricht speichern",
@@ -31,4 +34,7 @@ export const messageToolsGerman = {
     "messages.scopeLimit": "Die Thread-Liste ist unvollständig. Ältere Threads sind im Thread-Browser erreichbar.",
     "messages.moreThreads": "Weitere Threads laden",
     "messages.invalidDates": "Das Startdatum muss vor oder am Enddatum liegen.",
+    "messages.openConversation": "Unterhaltung öffnen",
+    "messages.switchServer": "Server wechseln und öffnen",
+    "messages.switchServerHint": "Diese Benachrichtigung stammt von {server}. Beim Serverwechsel werden deine aktuelle Sprachverbindung, dein privater Anruf und deine Bildschirmfreigabe beendet. Bleibe hier, um sie aktiv zu halten, oder wechsle zur Nachricht.",
 };

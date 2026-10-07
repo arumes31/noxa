@@ -5,11 +5,13 @@ import { escapeHTML as escapeTranslation } from "./markdown.js";
 // announcements (343), notification center (346), DND (347/348), and tree
 // virtualization (349).
 import { isActivationKey } from "./a11y.js";
-import { mountDialog } from "./modal.js";
+import { closeDialog, mountDialog, mountServerDialog } from "./modal.js";
 import { icon } from "./icons.js";
 
 import { t } from "./i18n.js";
 import { mountSnoozeControls } from "./notification-snooze.js";
+import { captureNotificationDestination, createNotificationNavigator } from "./notification-navigation.js";
+import { openMessageReference } from "./message-tools.js";
 
 const V = () => window.__noxa;
 const App = () => window.go.main.App;
@@ -222,12 +224,37 @@ function announce(text) {
 // Notification center (346) + DND (347/348)
 // ---------------------------------------------------------------------------
 
-const notifHistory = []; // {kind, text, at, channelID, uid, tabID}
+const notifHistory = []; // {kind, text, at, destination, read}
 const notifViews = new Set();
+const navigateNotification = createNotificationNavigator({
+    state: () => V().state, app: App,
+    on: (event, callback) => window.runtime.EventsOn(event, callback),
+    open: (reference, isCurrent) => openMessageReference(reference, { continueConversation: true, isCurrent }),
+    unavailable: () => V().toast(t("messages.notFound"), "warn", "alert", { record: false, bypassDND: true }),
+    confirmSwitch: target => {
+        const state = V().state;
+        if (!state.myChannelID && !state.pc && !state.localStream && !state.shareStream && !window.__noxaPrivateCalls?.overlaySnapshot?.()?.active) return true;
+        return new Promise(resolve => {
+            const overlay = document.createElement("div"); overlay.className = "dlg-overlay";
+            const dialog = document.createElement("section"); dialog.className = "dlg";
+            const heading = document.createElement("h3"); heading.textContent = t("messages.switchServer");
+            const text = document.createElement("p"); text.className = "dlg-text";
+            text.textContent = t("messages.switchServerHint", { server: target.addr || target.id });
+            const actions = document.createElement("div"); actions.className = "dlg-buttons";
+            const cancel = document.createElement("button"); cancel.type = "button"; cancel.className = "dlg-cancel"; cancel.textContent = t("desktop.cancel");
+            const accept = document.createElement("button"); accept.type = "button"; accept.className = "dlg-ok"; accept.textContent = t("messages.switchServer");
+            let accepted = false;
+            cancel.onclick = () => closeDialog(overlay);
+            accept.onclick = () => { accepted = true; closeDialog(overlay); };
+            actions.append(cancel, accept); dialog.append(heading, text, actions); overlay.append(dialog);
+            mountServerDialog(overlay, { initialFocus: cancel, onClose: () => resolve(accepted) });
+        });
+    },
+});
 
 // recordNotification appends to the bell history (session-persisted, 50).
 export function recordNotification(kind, text, ctx = {}) {
-    notifHistory.unshift({ kind, text, at: Date.now(), ...ctx, tabID: V().state.activeTabID });
+    notifHistory.unshift({ kind, text, at: Date.now(), destination: captureNotificationDestination(kind, ctx, V().state) });
     if (notifHistory.length > 50) notifHistory.pop();
     for (const render of notifViews) render();
     updateBellBadge();
@@ -297,28 +324,13 @@ function openNotifCenter() {
             row.querySelector(".nc-kind").textContent = n.kind;
             row.querySelector(".nc-text").textContent = n.text;
             row.querySelector(".nc-time").textContent = new Date(n.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-            // Click-through: jump to the channel or PM tab (346).
-            if (n.uid && window.__noxa.openPM) {
+            if (n.destination) {
                 row.classList.add("clickable");
                 row.tabIndex = 0;
                 row.setAttribute("role", "button");
                 row.onclick = () => {
                     overlay.remove();
-                    window.__noxa.openPM(n.uid, "");
-                };
-            } else if (n.channelID) {
-                row.classList.add("clickable");
-                row.tabIndex = 0;
-                row.setAttribute("role", "button");
-                row.onclick = async () => {
-                    const generation = V().state.serverGeneration;
-                    overlay.remove();
-                    try {
-                        const err = await App().JoinChannelForTab(n.tabID, n.channelID);
-                        if (err && generation === V().state.serverGeneration) V().toast(err, "warn");
-                    } catch (err) {
-                        if (generation === V().state.serverGeneration) V().toast(String(err), "warn");
-                    }
+                    void navigateNotification(n.destination);
                 };
             }
             if (row.classList.contains("clickable")) {

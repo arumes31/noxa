@@ -12,6 +12,8 @@
 //      startup). Every settings page uses the same catalogs.
 
 import { settingsEnglish, settingsGerman } from "./settings-messages.js";
+import { loginErrorEnglish, loginErrorGerman } from "./login-error-messages.js";
+import { streamHealthEnglish, streamHealthGerman } from "./stream-health-messages.js";
 import { audioRecoveryEnglish, audioRecoveryGerman } from "./audio-recovery-messages.js";
 import { networkEchoEnglish, networkEchoGerman } from "./network-echo-messages.js";
 import { runtimeEnglish, runtimeGerman } from "./runtime-messages.js";
@@ -41,6 +43,7 @@ import { messageToolsEnglish, messageToolsGerman } from "./message-tools-message
 import { webhookEnglish, webhookGerman } from "./webhook-messages.js";
 
 const en = {
+    ...loginErrorEnglish, ...streamHealthEnglish,
     ...voiceDiagnosticsEnglish,
     ...desktopEnglish,
     ...runtimeEnglish,
@@ -139,6 +142,7 @@ const en = {
 };
 
 const de = {
+    ...loginErrorGerman, ...streamHealthGerman,
     ...voiceDiagnosticsGerman,
     ...desktopGerman,
     ...runtimeGerman,

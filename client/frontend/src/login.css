@@ -123,6 +123,13 @@
 #login-overlay #login-connect:focus-visible { outline-color: var(--login-text); }
 #login-error:empty { display: none; }
 #login-overlay #login-error { margin: -8px 0 0; color: #ffb0b8; font-size: 1.143rem; overflow-wrap: anywhere; }
+#login-error p { margin: 0; }
+#login-error p + p, #login-error details { margin-top: 8px; }
+#login-error details { color: var(--login-muted); font-size: .929rem; }
+#login-error details summary { cursor: pointer; padding-block: 4px; }
+#login-error details p { margin-top: 4px; }
+#login-overlay .login-field-error { margin-top: -12px; color: #ffb0b8; font-size: 1rem; line-height: 1.4; font-weight: 400; }
+#login-overlay .login-card input[aria-invalid="true"] { border-color: #ffb0b8; }
 .login-recents-panel { margin-top: 18px; padding: 23px 41px 16px; }
 #login-recents-title { margin: 0 0 7px; color: var(--login-text); font: 500 1.429rem/1.4 var(--font-body); }
 #login-overlay #login-recents { margin: 0; max-height: 248px; scrollbar-color: var(--login-border) transparent; }
