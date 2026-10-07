@@ -34,7 +34,8 @@ import { initClientInfo } from "./clientinfo.js";
 import { initUpdater, startupAutoCheck } from "./updater.js";
 import { playEvent, playAlert, clearSpeech, initSounds, updateSoundOutput, updateConversationDucking, soundEngine, speechQueue } from "./sounds.js";
 import { initClosingAudio } from "./closing-audio.js";
-import { startMicMeter, stopMicMeter, pttRelease, refreshUserAudio, setUserShareVolume, setUserShareMuted, captureConstraints, markCaptureProfile, applyCaptureProfile, syncMuteButton, renderMicStatus, VAD_RELEASE_MS } from "./audio.js";
+import { startMicMeter, stopMicMeter, pttRelease, refreshUserAudio, setUserShareVolume, setUserShareMuted, captureConstraints, markCaptureProfile, applyCaptureProfile, syncMuteButton, renderMicStatus } from "./audio.js";
+import { createMicrophoneGate, microphoneSendTrack, disposeMicrophoneGate, updateMicrophoneGate, replaceMicrophoneGate } from "./voice-gate.js";
 import {
     initVideo, videoTrackAdded, videoTrackRemoved, videoSpeaking,
     videoRefreshNames, clearVideoGrid, shareToggle, setLowBandwidth, isLowBandwidth,
@@ -1868,11 +1869,13 @@ function watchCurrentMicrophone() {
     stopWatchingMicrophone = watchMicrophone(track, lost => {
         if (state.pc !== pc || state.localStream !== stream || voiceSessionEpoch !== epoch || !stream.getAudioTracks().includes(lost)) return;
         lostMicrophoneName = lost.label;
+        const sent = microphoneSendTrack(lost);
+        disposeMicrophoneGate(lost);
         lost.enabled = false;
         stream.removeTrack(lost); lost.stop();
         stopMicMeter(); stopVoiceMonitor(); setPTT(false);
         for (const sender of pc.getSenders()) {
-            if (sender.track === lost) void sender.replaceTrack(null).catch(() => {});
+            if (sender.track === sent) void sender.replaceTrack(null).catch(() => {});
         }
         setMicState("disconnected");
     });
@@ -2130,7 +2133,14 @@ async function startVoice(expectedEpoch = voiceSessionEpoch) {
 
     const audioTrack = state.localStream.getAudioTracks()[0];
     if (audioTrack) {
-        pc.addTransceiver(audioTrack, { direction: "sendrecv", streams: [state.localStream] });
+        const sent = await prepareChannelMicrophone(audioTrack);
+        if (!current() || state.pc !== pc) {
+            disposeMicrophoneGate(audioTrack);
+            audioTrack.stop(); pc.close();
+            return false;
+        }
+        pc.addTransceiver(sent, { direction: "sendrecv", streams: [state.localStream] });
+        applyVoiceState();
     } else {
         pc.addTransceiver("audio", { direction: "recvonly" });
     }
@@ -2217,14 +2227,19 @@ async function applyChannelAudio() {
     }
     // (25) A move into or out of a music channel needs a fresh capture: the
     // stereo/DSP constraints cannot be changed on a live track.
-    const { track, changed, error } = await applyCaptureProfile(state.pc, state.localStream, ch);
+    const { track, changed, error } = await applyCaptureProfile(state.pc, state.localStream, ch, {
+        prepare: replaceMicrophoneGate, sendTrack: microphoneSendTrack, dispose: disposeMicrophoneGate,
+    });
     if (changed) {
         watchCurrentMicrophone();
         startVoiceMonitor();
         startMicMeter(state.localStream);
         applyVoiceState();
     }
-    if (track && !changed) track.contentHint = ch.OpusStereo ? "music" : "speech";
+    if (track && !changed) {
+        track.contentHint = ch.OpusStereo ? "music" : "speech";
+        microphoneSendTrack(track).contentHint = track.contentHint;
+    }
     return error;
 }
 
@@ -2419,7 +2434,7 @@ function teardownVoice() {
     state.voiceTabID = "";
     syncTrayVoice();
     if (state.localStream) {
-        for (const t of state.localStream.getTracks()) t.stop();
+        for (const t of state.localStream.getTracks()) { disposeMicrophoneGate(t); t.stop(); }
         state.localStream = null;
     }
     resetCameraState(); // (85)
@@ -2531,7 +2546,9 @@ async function retryMicrophoneCapture() {
     markCaptureProfile(audioTrack, state.channels.find((channel) => channel.ChannelID === state.myChannelID));
     let transceiver = null;
     try {
-        transceiver = peerConnection.addTransceiver(audioTrack, {
+        const sent = await prepareChannelMicrophone(audioTrack);
+        if (!current()) throw new DOMException("voice session changed", "AbortError");
+        transceiver = peerConnection.addTransceiver(sent, {
             direction: "sendrecv",
             streams: [localStream],
         });
@@ -2548,6 +2565,7 @@ async function retryMicrophoneCapture() {
         return true;
     } catch (error) {
         localStream.removeTrack(audioTrack);
+        disposeMicrophoneGate(audioTrack);
         audioTrack.stop();
         await transceiver?.sender?.replaceTrack(null).catch(() => {});
         try {
@@ -2603,6 +2621,21 @@ window.runtime.EventsOn("offer", (json) => {
 
 // Mute / deafen / PTT ---------------------------------------------------------
 
+async function prepareChannelMicrophone(track) {
+    return createMicrophoneGate(track, () => state, (active, _level, currentTrack) => {
+        // Activity messages are UI/presence hints, never the audio gate itself.
+        // A replaced microphone must not update the new session's controls.
+        if (!state.localStream?.getAudioTracks().includes(currentTrack) || state.settings?.activation_mode !== "vad") return;
+        if (state.pttActive === active) return;
+        state.pttActive = active;
+        $("ptt-btn").classList.toggle("live", active);
+        $("ptt-btn").setAttribute("aria-pressed", String(active));
+        void window.go.main.App.SetPTT(active).catch(() => {});
+        applyVoiceState();
+        updateTalkBanner();
+    });
+}
+
 function applyVoiceState() {
     if (state.muted || state.deafened) {
         const me = state.clients.find(c => c.client_id === state.myClientID);
@@ -2612,15 +2645,17 @@ function applyVoiceState() {
     if (!state.localStream) return;
     const mode = state.settings?.activation_mode || "ptt";
     let audible = !state.muted && !state.deafened;
-    // ptt and vad both gate transmission on the (hotkey- or VAD-driven)
-    // pttActive flag; continuous always transmits.
+    // Keep the raw track's enablement consistent for local UI consumers.
+    // The worklet independently gates the transmitted track in VAD mode.
     if (mode !== "continuous") audible = audible && state.pttActive;
-    for (const t of state.localStream.getAudioTracks()) t.enabled = audible;
+    for (const t of state.localStream.getAudioTracks()) {
+        t.enabled = audible;
+        updateMicrophoneGate(t);
+    }
 }
 
-// Voice monitor: one interval driving VAD transmission, the mic meter's
-// sibling level feed, the talking-while-muted warning (26), and the
-// talking-to-empty-channel hint (27).
+// Voice monitor: a UI-only level feed for talking-while-muted warnings,
+// presence, and the talking-to-empty-channel hint.
 let mutedTalkStreak = 0, emptyStreak = 0, lastEmptyWarn = 0;
 let voiceMonitorTrack = null;
 let voiceMonitorSource = null;
@@ -2645,7 +2680,6 @@ function startVoiceMonitor() {
         src.connect(analyser);
         void ctx.resume().catch(() => {});
         const buf = new Uint8Array(analyser.frequencyBinCount);
-        let lastVoice = 0;
         let lastActivity = -Infinity;
         const presenceScope = capturePresenceScope();
         state.vadMonitor = setInterval(() => {
@@ -2655,16 +2689,6 @@ function startVoiceMonitor() {
             const level = sum / buf.length / 128; // 0..1
             const mode = state.settings?.activation_mode || "ptt";
             const threshold = (state.settings?.vad_threshold ?? 50) / 100 * 0.2;
-
-            // VAD transmission.
-            if (mode === "vad") {
-                if (level > threshold) {
-                    lastVoice = Date.now();
-                    if (!state.pttActive) setPTT(true);
-                } else if (state.pttActive && Date.now() - lastVoice > VAD_RELEASE_MS) {
-                    setPTT(false);
-                }
-            }
 
             // (26) talking while muted / PTT off.
             const blocked = state.muted || state.deafened || (mode !== "continuous" && !state.pttActive);
@@ -3048,7 +3072,7 @@ window.__noxa = {
     speechQueue,
     state, $, toast, announceLive, sysMsg, showLogin, showWorkspace, disconnect, sendChat, setPTT, noteActivity,
     setDeafened, refreshPermissions, applyVoiceState, applyOutputSettings, applyLiveAudioSettings,
-    startVADMonitor: startVoiceMonitor, stopVADMonitor: stopVoiceMonitor, readRemoteAudioLevel,
+    startVADMonitor: startVoiceMonitor, stopVADMonitor: stopVoiceMonitor, prepareChannelMicrophone, readRemoteAudioLevel,
     connectFromLogin, renderTree, setChannelExpanded, setDetailsOpen, setDirectTargetVisible,
     clientName, initials, fetchAvatar,
     applyAppearance, toggleCompact, recentChannels, syncOwnChannel,

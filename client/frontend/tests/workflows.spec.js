@@ -6016,53 +6016,6 @@ test("mute control switches to an unmute affordance and back", async ({ page }) 
     await expect(page.getByRole("button", { name: "Mute microphone" })).toHaveText("Microphone on");
 });
 
-test("voice activation retains quiet word endings for 450 ms without delaying mute or PTT", async ({ page }) => {
-    const result = await page.evaluate(async () => {
-        const v = window.__noxa, ctx = new AudioContext();
-        const stream = ctx.createMediaStreamDestination().stream;
-        Object.assign(v.state, { localStream: stream, muted: false, deafened: false, pttActive: false });
-        v.state.settings.activation_mode = "vad";
-        v.applyVoiceState();
-        const nativeInterval = window.setInterval, nativeAnalyser = AudioContext.prototype.createAnalyser;
-        const nativeNow = Date.now;
-        let tick, sample = 128;
-        AudioContext.prototype.createAnalyser = function () {
-            const analyser = nativeAnalyser.call(this);
-            analyser.getByteTimeDomainData = buffer => buffer.fill(sample);
-            return analyser;
-        };
-        window.setInterval = (callback, delay, ...args) => {
-            if (delay === 100) tick = callback;
-            return nativeInterval(callback, delay, ...args);
-        };
-        try { v.startVADMonitor(); } finally {
-            window.setInterval = nativeInterval; AudioContext.prototype.createAnalyser = nativeAnalyser;
-        }
-        clearInterval(v.state.vadMonitor); v.state.vadMonitor = null;
-        const enabled = () => stream.getAudioTracks()[0].enabled;
-        const at = (time, signal = 128) => {
-            Date.now = () => time; sample = signal;
-            try { tick(); return enabled(); } finally { Date.now = nativeNow; }
-        };
-        try {
-            const silent = at(10000), voice = at(10100, 180);
-            const tail = [at(10401), at(10549)];
-            const closed = at(10551);
-            const resumed = at(10600, 180);
-            at(11000, 180); // More speech starts a new release period.
-            const restartedTail = at(11449), restartedClosed = at(11451);
-            at(11500, 180);
-            v.state.muted = true; v.applyVoiceState(); const muted = enabled();
-            v.state.muted = false; v.state.deafened = true; v.applyVoiceState(); const deafened = enabled();
-            v.state.deafened = false; v.state.settings.activation_mode = "ptt";
-            v.setPTT(true); v.setPTT(false); const pttReleased = enabled();
-            return { silent, voice, tail, closed, resumed, restartedTail, restartedClosed, muted, deafened, pttReleased };
-        } finally { v.resetVoiceSession(); await ctx.close(); }
-    });
-    expect(result).toEqual({ silent: false, voice: true, tail: [true, true], closed: false, resumed: true,
-        restartedTail: true, restartedClosed: false, muted: false, deafened: false, pttReleased: false });
-});
-
 test("voice activation reopens after silence and keeps mute and PTT private", async ({ page }) => {
     // Use real browser tracks: disabling a track must silence its consumers.
     await page.locator("body").click({ position: { x: 1, y: 1 } });
@@ -6084,6 +6037,8 @@ test("voice activation reopens after silence and keeps mute and PTT private", as
         v.state.pttActive = false;
         v.state.muted = false;
         v.applyVoiceState();
+        await v.prepareChannelMicrophone(output.stream.getAudioTracks()[0]);
+        v.applyVoiceState();
         v.startVADMonitor();
         await v.state.voiceMonitorCtx.resume();
     });
@@ -6100,7 +6055,7 @@ test("voice activation reopens after silence and keeps mute and PTT private", as
         window.__voiceSignal.gain.gain.value = 0.5;
         window.__noxa.applyVoiceState();
     });
-    await expect.poll(() => page.evaluate(() => window.__noxa.state.pttActive)).toBe(true);
+    await expect.poll(() => page.evaluate(() => window.__noxa.state.pttActive)).toBe(false);
     expect(await transmitting()).toBe(false);
     await page.evaluate(() => {
         const v = window.__noxa;

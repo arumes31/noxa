@@ -8,7 +8,7 @@ import { updateLocalSettings } from "./settings-store.js";
 const V = () => window.__noxa;
 
 // Keep quiet word endings audible in channels, private calls, and the mic preview.
-export const VAD_RELEASE_MS = 450;
+export { VAD_RELEASE_MS } from "./voice-gate-core.js";
 
 // Incoming tracks arrive outside a user gesture. Resume their WebAudio context
 // explicitly and retry from user interaction if autoplay initially suspends it.
@@ -325,7 +325,7 @@ export function markCaptureProfile(track, ch) {
 // settings. Returns {track, changed}; on any failure the working track is
 // kept. The caller must restart anything holding the old track (mic meter,
 // VAD monitor) and re-apply mute/PTT state when changed is true.
-export async function applyCaptureProfile(pc, stream, ch) {
+export async function applyCaptureProfile(pc, stream, ch, gate = null) {
     const cur = stream?.getAudioTracks()[0] || null;
     if (!cur) return { track: null, changed: false };
     const initialState = cur.readyState;
@@ -355,21 +355,35 @@ export async function applyCaptureProfile(pc, stream, ch) {
         trackProfiles.set(next, want);
         next.enabled = cur.enabled;
         next.contentHint = profileOf(ch) === "music" ? "music" : "speech";
-        const sender = pc?.getSenders().find((s) => s.track === cur) || null;
+        let sendTrack;
+        try {
+            sendTrack = gate ? await gate.prepare(cur, next) : next;
+        } catch (error) {
+            next.stop();
+            return { track: cur, changed: false, error };
+        }
+        if (!current()) {
+            gate?.dispose(next); next.stop();
+            return { track: null, changed: false };
+        }
+        const sender = pc?.getSenders().find((s) => s.track === (gate ? gate.sendTrack(cur) : cur)) || null;
         if (sender) {
             try {
-                await sender.replaceTrack(next);
+                await sender.replaceTrack(sendTrack);
                 if (!current()) {
-                    next.enabled = false;
-                    if (sender.track === next) await sender.replaceTrack(null).catch(() => {});
+                    sendTrack.enabled = false;
+                    if (sender.track === sendTrack) await sender.replaceTrack(null).catch(() => {});
+                    gate?.dispose(next);
                     next.stop();
                     return { track: null, changed: false };
                 }
             } catch (error) {
+                gate?.dispose(next);
                 next.stop();
                 return { track: cur, changed: false, error };
             }
         }
+        gate?.dispose(cur);
         cur.stop();
         stream.removeTrack(cur);
         stream.addTrack(next);
