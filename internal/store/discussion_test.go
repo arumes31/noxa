@@ -29,6 +29,9 @@ func TestDiscussionDeletionScopesTombstonesAndRetries(t *testing.T) {
 	}
 	create := netproto.DiscussionRequest{Action: "create", ChannelID: channel, RootMessageID: sourceID, Title: "Remove this thread", RequestID: "create-1", BodyEnc: "first ciphertext", KeyID: 1}
 	created := call(create, "author")
+	if len(created.Messages) != 1 || created.MessageID <= 0 || created.MessageID != created.Messages[0].ID {
+		t.Fatalf("create message destination=%+v", created)
+	}
 	id := created.ThreadID
 	other := create
 	other.RequestID = "create-2"
@@ -45,6 +48,12 @@ func TestDiscussionDeletionScopesTombstonesAndRetries(t *testing.T) {
 	call(netproto.DiscussionRequest{Action: "join", ChannelID: channel, ThreadID: id}, "follower")
 	write := netproto.DiscussionRequest{Action: "send", ChannelID: channel, ThreadID: id, RequestID: "reply-1", BodyEnc: "reply ciphertext", KeyID: 1}
 	reply := call(write, "author")
+	if len(reply.Messages) != 2 || reply.MessageID != reply.Messages[0].ID || reply.MessageID == created.MessageID {
+		t.Fatalf("populated thread reply destination=%+v", reply)
+	}
+	if retriedCreate := call(create, "author"); retriedCreate.MessageID != created.MessageID || len(retriedCreate.Messages) != 2 {
+		t.Fatalf("create retry must target the original post after a newer reply: %+v", retriedCreate)
+	}
 	remove.MessageID = reply.Messages[0].ID
 	call(netproto.DiscussionRequest{Action: "archive", ChannelID: channel, ThreadID: id}, "author")
 	deleted := call(remove, "moderator") // Nonmember moderation also works on archived threads.
@@ -58,7 +67,7 @@ func TestDiscussionDeletionScopesTombstonesAndRetries(t *testing.T) {
 	}
 	call(netproto.DiscussionRequest{Action: "reopen", ChannelID: channel, ThreadID: id}, "author")
 	retried := call(write, "author")
-	if len(retried.Messages) != 2 || !retried.Messages[0].Deleted || retried.Messages[0].BodyEnc != "" {
+	if len(retried.Messages) != 2 || retried.MessageID != reply.MessageID || !retried.Messages[0].Deleted || retried.Messages[0].BodyEnc != "" {
 		t.Fatalf("retry resurrected removed reply: %+v", retried)
 	}
 	wrong := netproto.DiscussionRequest{Action: "delete", ChannelID: otherChannel, ThreadID: id}
