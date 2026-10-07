@@ -271,6 +271,7 @@ function callDMHistory(owner, method, ...args) {
 }
 
 function resetDMOwner() {
+    selectDirectRecipient("");
     dmGeneration++;
     dmOwner = null;
     tabLayoutOwner = null;
@@ -1426,6 +1427,54 @@ function setView(v) {
 
 export function resumeChatView() { setView(view); }
 
+let selectedDirectRecipient = null;
+
+function knownPeerName(uid, supplied = "") {
+    const live = V().state.clients?.find(client => client.unique_id === uid)?.nickname;
+    const names = [live, supplied, pmTabs.get(uid)?.nick, tabLayoutOwner?.layout?.names?.["dm:" + uid]];
+    const history = store.get("dm:" + uid)?.msgs || [];
+    for (let i = history.length - 1; i >= 0; i--) {
+        if (!history[i].self && history[i].from && history[i].from !== "?") {
+            names.push(history[i].from);
+            break;
+        }
+    }
+    return (names.find(name => typeof name === "string" && name.trim() && name !== uid && name !== "?" && name !== t("chat.unknownMember")) || "").trim();
+}
+
+function peerName(uid, supplied) {
+    return knownPeerName(uid, supplied) || t("chat.unknownMember");
+}
+
+function selectDirectRecipient(uid, nick) {
+    const input = $("chat-target");
+    const label = uid ? peerName(uid, nick) : "";
+    selectedDirectRecipient = uid ? { uid, label } : null;
+    if (input) input.value = label;
+}
+
+function directRecipientID() {
+    const value = $("chat-target")?.value.trim() || "";
+    if (!value) return "";
+    if (selectedDirectRecipient?.label === value) return selectedDirectRecipient.uid;
+    // Typed names must resolve unambiguously. A label is never a protocol ID.
+    const matches = new Set();
+    for (const client of V().state.clients || []) {
+        if (client.unique_id && (client.unique_id === value || client.nickname === value)) matches.add(client.unique_id);
+    }
+    for (const tab of pmTabs.values()) {
+        if (tab.uid === value || knownPeerName(tab.uid) === value) matches.add(tab.uid);
+    }
+    if (matches.size) return matches.size === 1 ? [...matches][0] : "";
+    // Preserve deliberate identity entry for a new/offline peer. noXa IDs
+    // are canonical double-base64 SHA-256 digests, never arbitrary names.
+    try {
+        const digest = atob(atob(value));
+        if (digest.length === 32 && btoa(btoa(digest)) === value) return value;
+    } catch { /* search text is not an identity */ }
+    return "";
+}
+
 export function openPM(uid, nick) {
     if (!uid) return;
     // A new user action can recover failed acquisition. Pending descendants
@@ -1433,16 +1482,17 @@ export function openPM(uid, nick) {
     if (dmOwner?.failed && dmOwnerIsCurrent(dmOwner)) resetDMHistoryView();
     closedDMPeers.delete(uid);
     recentlyClosedChats.delete("dm:" + uid);
-    if (!pmTabs.has(uid)) pmTabs.set(uid, { uid, nick: nick || uid, unread: 0, offline: false, pendingRead: "" });
-    if (nick) pmTabs.get(uid).nick = nick;
+    const name = knownPeerName(uid, nick);
+    if (!pmTabs.has(uid)) pmTabs.set(uid, { uid, nick: name, unread: 0, offline: false, pendingRead: "" });
+    if (name) pmTabs.get(uid).nick = name;
     activatePM(uid);
 }
 
 function activatePM(uid) {
     // Keep the scope selector in sync so sendChat routes to the tab's user.
     $("chat-scope").value = "direct";
+    selectDirectRecipient(uid);
     V().setDirectTargetVisible(true);
-    $("chat-target").value = uid;
     setView({ kind: "dm", uid });
 }
 
@@ -1751,8 +1801,9 @@ function renderTabs() {
     }
     for (const tab of pmTabs.values()) {
         const owns = () => current() && pmTabs.get(tab.uid) === tab;
+        tab.nick = knownPeerName(tab.uid);
         items.push({
-            key: "dm:" + tab.uid, name: tab.nick, active: view.kind === "dm" && view.uid === tab.uid,
+            key: "dm:" + tab.uid, name: peerName(tab.uid), active: view.kind === "dm" && view.uid === tab.uid,
             unread: tab.unread, arrivedAt: tab.unreadAt, offline: tab.offline,
             open: () => { if (owns()) activatePM(tab.uid); },
             close: () => { if (owns()) closePM(tab.uid); },
@@ -1821,11 +1872,14 @@ async function ensureDMHistory(uid) {
         // overlapping clear: success invalidates this load, failure keeps it.
         if (st.dmClearPending) await st.dmClearPending;
         if (!current()) return false;
-        const nick = pmTabs.get(uid)?.nick || uid;
+        const nick = peerName(uid);
         const live = new Set(st.msgs.map((m) => m.clientMsgID).filter(Boolean));
         const older = (rows || []).map((e) => dmMsg(e, nick))
             .filter((m) => !m.clientMsgID || !live.has(m.clientMsgID));
         st.msgs = older.concat(st.msgs);
+        const tab = pmTabs.get(uid);
+        if (tab) tab.nick = knownPeerName(uid);
+        renderTabs();
         const max = V().state.settings?.chat_max_lines || 200;
         while (st.msgs.length > Math.max(max, PAGE)) st.msgs.shift();
     } catch (e) {
@@ -1854,7 +1908,7 @@ function dmRecord(peer, nick, m) {
         dmPersistWarned = true;
         V().toast(t("chat.dmNotSaved", { error: String(err) }), "warn");
     };
-    callDMHistory(owner, "DMHistoryAppendForContext", peer, nick || "", {
+    callDMHistory(owner, "DMHistoryAppendForContext", peer, knownPeerName(peer, nick), {
         from_unique_id: m.fromUID,
         from_nickname: m.from,
         body: m.text,
@@ -1936,7 +1990,7 @@ async function restorePMTabs() {
     for (const p of restored) {
         if (!p.unique_id || pmTabs.has(p.unique_id) || closedDMPeers.has(p.unique_id)) continue;
         pmTabs.set(p.unique_id, {
-            uid: p.unique_id, nick: p.nickname || p.unique_id,
+            uid: p.unique_id, nick: knownPeerName(p.unique_id, p.nickname),
             unread: 0, offline: false, pendingRead: "",
         });
         added = true;
@@ -2302,9 +2356,9 @@ function routeDM(d, m) {
     const st = V().state;
     const peer = directPeer(d, m);
     if (!peer) return false;
-    const tab = pmTabs.get(peer) || { uid: peer, nick: m.self ? peer : m.from, unread: 0, offline: false, pendingRead: "" };
+    const tab = pmTabs.get(peer) || { uid: peer, nick: knownPeerName(peer, m.self ? "" : m.from), unread: 0, offline: false, pendingRead: "" };
     if (!pmTabs.has(peer)) pmTabs.set(peer, tab);
-    if (!m.self) tab.nick = m.from;
+    tab.nick = knownPeerName(peer, m.self ? "" : m.from);
 
     const key = "dm:" + peer;
     if (pushMsg(key, m) === "duplicate") return false;
@@ -2627,7 +2681,7 @@ function renderTyping() {
 function readSendScope() {
     const scope = $("chat-scope").value;
     const target = scope === "channel" ? String(activeChannelID() || "")
-        : scope === "direct" ? $("chat-target").value.trim() : "";
+        : scope === "direct" ? directRecipientID() : "";
     return { ...readExportScope(), sendScope: scope, target };
 }
 
@@ -2655,6 +2709,11 @@ export async function sendMessage() {
     if (!text && pendingFiles.length === 0) return;
     $("chat-send-error").classList.add("hidden");
     const captured = captureScope(readSendScope);
+    if (captured.sendScope === "direct" && !captured.target) {
+        V().toast(t("chat.chooseRecipient"), "warn");
+        $("chat-target").focus();
+        return;
+    }
     const operation = { scope: captured };
     activeSend = operation;
     $("chat-send").disabled = true;
@@ -2773,8 +2832,7 @@ function closeEmojiPanel() {
 }
 
 function openPMKeepView(uid) {
-    const c = V().state.clients.find((x) => x.unique_id === uid);
-    pmTabs.set(uid, { uid, nick: c?.nickname || uid, unread: 0, offline: false, pendingRead: "" });
+    pmTabs.set(uid, { uid, nick: knownPeerName(uid), unread: 0, offline: false, pendingRead: "" });
     renderTabs();
 }
 
@@ -3370,6 +3428,7 @@ function showSearchResults(q, results, scanned, undecryptable, scope) {
 // ---------------------------------------------------------------------------
 
 export function refreshHeader() {
+    renderTabs();
     updateHeader();
     void sendPendingReads();
 }
@@ -3395,7 +3454,8 @@ function updateHeader() {
     } else if (view.kind === "global") {
         title = t("chat.globalTitle");
     } else if (view.kind === "dm") {
-        title = "DM — " + (pmTabs.get(view.uid)?.nick || view.uid);
+        title = "DM — " + peerName(view.uid);
+        if (selectedDirectRecipient?.uid === view.uid && $("chat-target").value === selectedDirectRecipient.label) selectDirectRecipient(view.uid);
     } else {
         const ch = st.channels.find((c) => c.ChannelID === activeChannelID());
         if (ch) {
@@ -3408,7 +3468,7 @@ function updateHeader() {
     $("chat-head-title").textContent = title;
     $("chat-search-btn").classList.toggle("hidden", filesOpen);
     $("chat-head-actions").querySelector(".channel-actions").hidden = filesOpen;
-    $("chat-text").placeholder = view.kind === "channel" || view.kind === "chan" ? t("workspace.compose", { name: title }) : view.kind === "dm" ? t("workspace.compose", { name: pmTabs.get(view.uid)?.nick || view.uid }) : t("workspace.composeAll");
+    $("chat-text").placeholder = view.kind === "channel" || view.kind === "chan" ? t("workspace.compose", { name: title }) : view.kind === "dm" ? t("workspace.compose", { name: peerName(view.uid) }) : t("workspace.composeAll");
     const topicEl = $("chat-topic");
     topicEl.textContent = topic;
     topicEl.title = topic; // (111) tooltip carries the full topic
@@ -4093,15 +4153,20 @@ export function initChat() {
         if (scope === "global") setView({ kind: "global" });
         else if (scope === "channel") setView({ kind: "channel" });
         else {
-            const uid = $("chat-target").value.trim();
-            if (uid) openPM(uid);
-            else invalidateChatViewWork();
+            // Entering direct mode from a channel starts a new selection.
+            // An already-open private chat keeps its own recipient.
+            selectDirectRecipient(view.kind === "dm" ? view.uid : "");
+            invalidateChatViewWork();
         }
     });
+    $("chat-target").addEventListener("input", () => {
+        selectedDirectRecipient = null;
+        invalidateChatViewWork();
+    });
     $("chat-target").addEventListener("change", () => {
-        const uid = $("chat-target").value.trim();
+        const uid = directRecipientID();
         if ($("chat-scope").value === "direct" && uid) openPM(uid);
-        else invalidateChatViewWork();
+        else { selectedDirectRecipient = null; invalidateChatViewWork(); }
     });
 
     // (134) scroll lock + (103) scroll-up history paging.

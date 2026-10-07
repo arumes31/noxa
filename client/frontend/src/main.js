@@ -1811,14 +1811,13 @@ function renderDirectTargets(show = false) {
         option.className = "target-option" + (client.channel_id === state.myChannelID ? " same-channel" : "");
         option.setAttribute("role", "option");
         option.innerHTML = `<span class="target-option-dot" aria-hidden="true"></span><span class="target-option-copy"><strong></strong></span>`;
-        option.querySelector("strong").textContent = client.nickname || client.unique_id;
+        option.querySelector("strong").textContent = client.nickname || t("chat.unknownMember");
         // Keep the search field focused until selection; its blur/change would
         // otherwise open a DM for the search text and rebuild this option.
         option.onpointerdown = (event) => event.preventDefault();
         option.onclick = () => {
-            input.value = client.unique_id;
             hideDirectTargets();
-            input.dispatchEvent(new Event("change", { bubbles: true }));
+            chatUI.openPM(client.unique_id, client.nickname);
             $("chat-text").focus();
         };
         options.appendChild(option);

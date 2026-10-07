@@ -780,6 +780,7 @@ test.describe("confirmed tab-bound presence", () => {
             Object.assign(v.state.settings, { activation_mode: mode, auto_away_minutes: 1, ptt_release_delay_ms: 0, warn_muted_talking: false, warn_empty_channel: false });
             Object.assign(v.state, { myChannelID: 1, muted: false, deafened: false, pttActive: mode === "ptt", localStream: output.stream,
                 clients: [{ client_id: "self", channel_id: 1, status: "", status_message: "" }] });
+            await v.prepareChannelMicrophone(output.stream.getAudioTracks()[0]);
             v.applyVoiceState();
             v.startVADMonitor();
             await v.state.voiceMonitorCtx.resume();
@@ -9558,8 +9559,7 @@ test("contains disconnect and ICE-candidate rejections and reports ICE exhaustio
         };
         const audio = new AudioContext();
         window.__iceAudio = audio;
-        const stream = audio.createMediaStreamDestination().stream;
-        navigator.mediaDevices.getUserMedia = async () => stream;
+        navigator.mediaDevices.getUserMedia = async () => audio.createMediaStreamDestination().stream;
         class FakePeerConnection {
             constructor() {
                 this.senders = [];
@@ -9730,7 +9730,9 @@ test("nests connected members below channels and offers them as direct-message t
     await expect(page.locator("#chat-target-options .target-option")).toHaveText(["Bob", "Carol"]);
     await page.locator("#chat-target").fill("Car");
     await page.locator("#chat-target-options .target-option", { hasText: "Carol" }).click();
-    await expect(page.locator("#chat-target")).toHaveValue("user-c");
+    await expect(page.locator("#chat-target")).toHaveValue("Carol");
+    await expect(page.locator("#chat-head-title")).toHaveText("DM — Carol");
+    await expect(page.locator("#pm-tabs .pm-tab:not(.channel-tab)")).toContainText("Carol");
     await expect(page.locator("#pm-tabs .pm-tab:not(.channel-tab)")).toHaveCount(1);
     await page.locator("#chat-target-toggle").click();
     await expect(page.locator("#chat-target-options")).toBeVisible();
@@ -9738,6 +9740,59 @@ test("nests connected members below channels and offers them as direct-message t
     await expect(page.locator("#chat-target-options")).toBeHidden();
     await page.locator("#chat-target-toggle").click();
     await expect(page.locator("#chat-target-options")).toBeVisible();
+});
+
+test("direct recipients clear in channels, follow private tabs and send by identity", async ({ page }, testInfo) => {
+    await page.evaluate(() => {
+        const v = window.__noxa;
+        v.showWorkspace(false);
+        v.state.myChannelID = 1;
+        v.state.clients = [{ unique_id: "peer-b", nickname: "Bob" }, { unique_id: "peer-c", nickname: "Carol" }];
+        window.__noxaChat.openPM("peer-b", "Bob");
+    });
+    await expect(page.locator("#chat-target")).toHaveValue("Bob");
+    await page.locator("#chat-scope").selectOption("channel");
+    await page.locator("#chat-scope").selectOption("direct");
+    await expect(page.locator("#chat-target")).toHaveValue("");
+    await expect(page.locator("#chat-head-title")).not.toHaveText("DM — Bob");
+    await page.evaluate(() => window.__noxaChat.openPM("peer-c", "Carol"));
+    await page.locator("#chat-scope").selectOption("direct");
+    await expect(page.locator("#chat-target")).toHaveValue("Carol");
+    await page.locator("#chat-text").fill("hello");
+    await page.locator("#chat-send").click();
+    expect(await page.evaluate(() => window.__callArgs.SendChatForTab.at(-1).slice(1))).toEqual(["direct", "peer-c", "hello"]);
+    await page.evaluate(() => { window.__noxa.state.clients = []; window.__noxaChat.openPM("peer-c"); });
+    await expect(page.locator("#chat-target")).toHaveValue("Carol");
+    await expect(page.locator("#chat-head-title")).toHaveText("DM — Carol");
+    await page.screenshot({ path: testInfo.outputPath("direct-recipient-name.png") });
+});
+
+test("offline DM names recover from history instead of keeping a cached identity label", async ({ page }) => {
+    await page.evaluate(() => {
+        window.__noxa.showWorkspace(false);
+        window.__noxa.state.clients = [];
+        window.__dmHistory = { "offline-peer": [{ self: false, from_unique_id: "offline-peer", from_nickname: "becksn", body: "hello", sent_at: 1 }] };
+        window.__noxaChat.openPM("offline-peer", "offline-peer");
+    });
+    await expect(page.locator("#chat-target")).toHaveValue("becksn");
+    await expect(page.locator("#chat-head-title")).toHaveText("DM — becksn");
+    await expect(page.locator("#pm-tabs .pm-tab:not(.channel-tab)")).toContainText("becksn");
+});
+
+test("an edited recipient cannot send to the previous selection or an ambiguous name", async ({ page }) => {
+    await page.evaluate(() => {
+        const v = window.__noxa;
+        v.showWorkspace(false);
+        v.state.clients = [{ unique_id: "bob-one", nickname: "Bob" }, { unique_id: "bob-two", nickname: "Bob" }];
+        window.__noxaChat.openPM("previous", "Carol");
+    });
+    const sentBefore = await page.evaluate(() => window.__calls.SendChatForTab || 0);
+    await page.locator("#chat-target").fill("Bob");
+    await page.locator("#chat-text").fill("private draft");
+    await page.locator("#chat-send").click();
+    expect(await page.evaluate(() => window.__calls.SendChatForTab || 0)).toBe(sentBefore);
+    await expect(page.locator("#chat-text")).toHaveValue("private draft");
+    await expect(page.locator("#toasts")).toContainText("Choose a recipient");
 });
 
 test("uses the B3 console composition without losing responsive navigation", async ({ page }) => {
