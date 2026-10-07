@@ -415,13 +415,18 @@ test("sharing status shows sent quality, audio, honest viewer counts and an expa
         let tick = 0;
         sender.getStats = async () => { tick++; return new Map([["sent", { id: "sent", type: "outbound-rtp", kind: "video", ssrc: 42,
             timestamp: tick * 2000, framesEncoded: tick * 56, framesSent: tick * 56,
-            frameWidth: 160, frameHeight: 90, framesPerSecond: 28, qualityLimitationReason: "bandwidth" }]]); };
+            frameWidth: 160, frameHeight: 90, framesPerSecond: 28, qualityLimitationReason: "bandwidth",
+            qualityLimitationDurations: { bandwidth: tick * 1.5, cpu: 0 } }]]); };
         const module = await import("/src/share-status.js");
         module.updateShareViewers([{ publisher_id: "self", slot: "screen", generation: "1", viewer_count: 0 }]);
     });
     await expect(panel).toContainText("Sending 160 × 90 · 28 fps");
     await expect(panel).toContainText("Nobody is watching");
-    await expect(panel.locator(".sharing-warning")).toContainText("network bandwidth");
+    await expect(panel.locator(".sharing-warning")).toBeHidden();
+    await expect(panel.locator(".stream-health-headline")).toHaveText("Recent measurements suggest network trouble");
+    await expect(panel.locator(".stream-health-evidence")).toContainText("Sender bandwidth-limited time: 1500.0 ms");
+    await expect(panel.locator(".stream-health-evidence")).toContainText("Sample window: 2.0 s");
+    await expect(panel.locator(".stream-health-action")).toContainText("Check your connection");
     await page.evaluate(async () => (await import("/src/share-status.js")).updateShareViewers([{ publisher_id: "self", slot: "screen", generation: "1", viewer_count: 2 }]));
     await expect(panel).toContainText("Watching: 2");
     await panel.locator(".sharing-preview summary").click();

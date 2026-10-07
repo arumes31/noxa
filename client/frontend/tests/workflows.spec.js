@@ -7581,6 +7581,7 @@ test("warns after connect when the local clock is outside certificate validity",
 });
 
 test("login submits an account password separately and clears the input after success", async ({ page }) => {
+    await page.locator("#login-addr").fill("voice.example");
     await page.locator("#login-options > summary").click();
     await page.locator("#login-nick").fill("registered-member");
     await page.locator("#login-accountpw").fill("account-test-password");
