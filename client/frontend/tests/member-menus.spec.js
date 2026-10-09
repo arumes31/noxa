@@ -35,16 +35,15 @@ test.beforeEach(async ({ page }) => {
     });
 });
 
-test("member audio opens a separate popover with gain and keyboard dismissal", async ({ page }) => {
+test("member audio is compact and inline with gain and keyboard dismissal", async ({ page }) => {
     const trigger = page.locator('#channel-tree .client[data-clid="alice"]');
     await trigger.focus(); await page.keyboard.press("Shift+F10");
-    const action = page.getByRole("menuitem", { name: "Personal audio…", exact: true });
-    await expect(page.getByRole("slider")).toHaveCount(0);
+    const panel = page.getByRole("menu");
+    await expect(panel.getByRole("slider")).toHaveCount(2);
     await expect(page.getByRole("menuitem", { name: "Kick from server…", exact: true })).toBeVisible();
-    await action.focus(); await page.keyboard.press("Enter");
-    const panel = page.getByRole("dialog", { name: "Audio · Only for you" });
     await expect(panel).toBeVisible();
-    await expect(page.getByRole("menu")).toHaveCount(0);
+    await expect(page.locator('.member-audio-popover')).toHaveCount(0);
+    expect((await panel.locator('.ctx-member-audio').boundingBox()).height).toBeLessThan(190);
     const voice = panel.getByRole("spinbutton", { name: "Voice volume percentage", exact: true });
     await voice.fill("50"); await voice.press("Enter");
     await expect(panel.locator(".ctx-volume .ctx-audio-db")).toHaveText("-12 dB");
@@ -56,10 +55,52 @@ test("member audio opens a separate popover with gain and keyboard dismissal", a
     await expect(panel).toHaveCount(0); await expect(trigger).toBeFocused();
 });
 
+test("member context menu scrolls to its last action in a short window", async ({ page }) => {
+    await page.setViewportSize({ width: 1000, height: 360 });
+    await page.locator('#channel-tree .client[data-clid="alice"]').focus();
+    await page.keyboard.press('Shift+F10');
+    const menu = page.getByRole('menu');
+    await expect(menu.getByRole('slider')).toHaveCount(2);
+    const bounds = await menu.boundingBox();
+    expect(bounds.y).toBeGreaterThanOrEqual(8);
+    expect(bounds.y + bounds.height).toBeLessThanOrEqual(352);
+    expect(await menu.evaluate(node => node.scrollHeight > node.clientHeight)).toBe(true);
+    await expect(menu).toHaveCSS('overflow-y', 'auto');
+    await menu.hover(); await page.mouse.wheel(0, 1000);
+    const copy = menu.locator('[data-act="copy"]');
+    await expect(copy).toBeInViewport();
+    await copy.focus(); await page.keyboard.press('Home');
+    await expect(menu.locator('[data-act="pm"]')).toBeFocused();
+    await page.keyboard.press('End');
+    await expect(copy).toBeFocused(); await expect(copy).toBeInViewport();
+});
+
+test("late role actions stay inside the menu viewport", async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await page.evaluate(() => {
+        const app = window.go.main.App;
+        window.go.main.App = new Proxy(app, { get(target, method) {
+            if (method === 'RoleStateForTab') return async () => ({ manageable_role_ids: ['member'], policy: { everyone_id: 'everyone', revision: 1 } });
+            if (method === 'RoleMembersForTab') return () => new Promise(resolve => { window.__showRoleAction = () => resolve({ revision: 1, entries: [{ unique_id: 'alice-uid', manageable: true }] }); });
+            return target[method];
+        } });
+    });
+    await page.locator('#channel-tree .client[data-clid="alice"]').dispatchEvent('contextmenu', { clientX: 800, clientY: 850 });
+    const menu = page.getByRole('menu');
+    await expect(menu).toBeVisible();
+    await page.waitForFunction(() => !!window.__showRoleAction);
+    await page.evaluate(() => window.__showRoleAction());
+    await expect(menu.getByRole('menuitem', { name: 'Assign roles…' })).toBeVisible();
+    const bounds = await menu.boundingBox();
+    expect(bounds.y + bounds.height).toBeLessThanOrEqual(892);
+    expect(await menu.evaluate(node => node.scrollHeight > node.clientHeight)).toBe(true);
+    await menu.locator('[data-act="pm"]').focus(); await page.keyboard.press('End');
+    await expect(menu.locator('[data-act="copy"]')).toBeInViewport();
+});
+
 test("visible member menu exposes separate personal microphone and screen-share volumes", async ({ page }) => {
     const trigger = page.locator('#channel-tree .client[data-clid="alice"]');
     await trigger.click({ button: 'right' });
-    await page.getByRole('menuitem', { name: 'Personal audio…', exact: true }).click();
     const microphone = page.getByRole('slider', { name: 'Voice volume', exact: true });
     const share = page.getByRole('slider', { name: 'Screen-share audio', exact: true });
     await expect(microphone).toHaveValue('100');
@@ -72,13 +113,11 @@ test("visible member menu exposes separate personal microphone and screen-share 
     await page.keyboard.press('Escape');
     await expect(trigger).toBeFocused();
     await page.keyboard.press('Shift+F10');
-    await page.getByRole('menuitem', { name: 'Personal audio…', exact: true }).click();
     await expect(share).toHaveValue('45');
 });
 
 test("exact percentages, amplification, and mute preserve independent audio preferences", async ({ page }) => {
     await page.locator('#channel-tree .client[data-clid="alice"]').click({ button: 'right' });
-    await page.getByRole('menuitem', { name: 'Personal audio…', exact: true }).click();
     const voice = page.getByRole('spinbutton', { name: 'Voice volume percentage', exact: true });
     const share = page.getByRole('spinbutton', { name: 'Screen-share audio percentage', exact: true });
     await voice.fill('145'); await voice.press('Enter');
@@ -87,7 +126,7 @@ test("exact percentages, amplification, and mute preserve independent audio pref
     await share.fill('40'); await share.press('Enter');
     await expect.poll(() => page.evaluate(() => window.__saved.user_share_volumes['alice-uid'])).toBe(40);
     await page.getByRole('button', { name: 'Mute voice for me', exact: true }).click();
-    await expect(page.getByRole('dialog', { name: 'Audio · Only for you' })).toBeVisible();
+    await expect(page.getByRole('menu')).toBeVisible();
     await expect(page.getByRole('button', { name: 'Unmute voice for me', exact: true })).toHaveAttribute('aria-pressed', 'true');
     await expect(voice).toHaveValue('145'); await expect(share).toHaveValue('40');
     await page.getByRole('button', { name: 'Reset volume to 100%', exact: true }).click();
@@ -101,7 +140,6 @@ test("exact percentages, amplification, and mute preserve independent audio pref
 test("screen-share controls explain unavailable audio and follow stream changes", async ({ page }) => {
     await page.evaluate(() => { window.__shareAvailable = false; });
     await page.locator('#channel-tree .client[data-clid="alice"]').click({ button: 'right' });
-    await page.getByRole('menuitem', { name: 'Personal audio…', exact: true }).click();
     const share = page.getByRole('slider', { name: 'Screen-share audio', exact: true });
     await expect(page.getByText('No screen-share audio', { exact: true })).toBeVisible();
     await expect(share).toBeDisabled();
@@ -116,8 +154,7 @@ test("screen-share controls explain unavailable audio and follow stream changes"
 
 test("segmented volume keeps fine adjustment and repaints on reset and settings updates", async ({ page }, testInfo) => {
     await page.locator('#channel-tree .client[data-clid="alice"]').click({ button: 'right' });
-    await page.getByRole('menuitem', { name: 'Personal audio…', exact: true }).click();
-    const panel = page.locator('.member-audio-popover');
+    const panel = page.locator('.ctx-member-menu');
     const voice = panel.getByRole('slider', { name: 'Voice volume', exact: true });
     const share = panel.getByRole('slider', { name: 'Screen-share audio', exact: true });
     const voicePercent = panel.getByRole('spinbutton', { name: 'Voice volume percentage', exact: true });
@@ -163,8 +200,7 @@ for (const language of ['en', 'de']) test(`personal audio remains contained at 3
     }, language);
     await page.locator('#workspace-sidebar-toggle').click();
     await page.locator('#channel-tree .client[data-clid="alice"]').click({ button: 'right' });
-    await page.getByRole('menu').locator('[data-act="audio"]').click();
-    const panel = page.locator('.member-audio-popover');
+    const panel = page.locator('.ctx-member-menu');
     await expect(panel).toBeVisible();
     const bounds = await panel.boundingBox();
     expect(bounds.x).toBeGreaterThanOrEqual(0); expect(bounds.y).toBeGreaterThanOrEqual(0);
@@ -190,8 +226,7 @@ for (const language of ['en', 'de']) test(`compact audio groups keep hierarchy a
     expect(order.slice(0, 2)).toEqual(['pm', 'info']); expect(order.at(-1)).toBe('copy');
     const bounds = await menu.boundingBox(); expect(bounds.x + bounds.width).toBeLessThanOrEqual(644);
     expect(await menu.evaluate(node => node.scrollWidth <= node.clientWidth)).toBe(true);
-    await menu.locator('[data-act="audio"]').click();
-    const panel = page.locator('.member-audio-popover');
+    const panel = page.locator('.ctx-member-menu');
     await expect(panel.locator('.ctx-audio-baseline')).toHaveCount(2);
     const panelBounds = await panel.boundingBox();
     expect(panelBounds.x + panelBounds.width).toBeLessThanOrEqual(644);
@@ -229,7 +264,6 @@ test("voice More keeps secondary actions available and restores keyboard focus",
 
 test("personal screen-share volume restores on failed save and resets independently", async ({ page }) => {
     await page.locator('#channel-tree .client[data-clid="alice"]').click({ button: 'right' });
-    await page.getByRole('menuitem', { name: 'Personal audio…', exact: true }).click();
     const share = page.getByRole('slider', { name: 'Screen-share audio', exact: true });
     await page.evaluate(() => { window.__saveFail = true; });
     await share.fill('25'); await share.dispatchEvent('change');
@@ -245,8 +279,7 @@ test("personal screen-share volume restores on failed save and resets independen
 
 test("member volume previews without saving and resets from the menu", async ({ page }) => {
     await page.locator('.client[data-clid="alice"]').click({ button: "right" });
-    await page.getByRole('menuitem', { name: 'Personal audio…', exact: true }).click();
-    const slider = page.locator(".member-audio-popover .ctx-volume input[type=range]");
+    const slider = page.locator(".ctx-member-menu .ctx-volume input[type=range]");
     await slider.evaluate(input => { input.value = "150"; input.dispatchEvent(new Event("input", { bubbles: true })); });
     expect(await page.evaluate(() => window.__gain.gain.value)).toBeCloseTo(Math.sqrt(10));
     expect(await page.evaluate(() => window.__saved.user_volumes["alice-uid"])).toBeUndefined();
@@ -285,15 +318,13 @@ test("channel menu has explicit join and leave actions", async ({ page }) => {
 
 test("failed volume save and cancelled drag restore the saved level", async ({ page }) => {
     await page.locator('.client[data-clid="alice"]').click({ button: "right" });
-    await page.getByRole('menuitem', { name: 'Personal audio…', exact: true }).click();
-    const slider = page.locator(".member-audio-popover .ctx-volume input[type=range]");
+    const slider = page.locator(".ctx-member-menu .ctx-volume input[type=range]");
     await slider.evaluate(input => { input.value = "25"; input.dispatchEvent(new Event("input", { bubbles: true })); });
     expect(await page.evaluate(() => window.__gain.gain.value)).toBe(0.0625);
     await page.keyboard.press("Escape");
     expect(await page.evaluate(() => window.__gain.gain.value)).toBe(1);
     await page.evaluate(() => { window.__saveFail = true; });
     await page.locator('.client[data-clid="alice"]').click({ button: "right" });
-    await page.getByRole('menuitem', { name: 'Personal audio…', exact: true }).click();
     await slider.evaluate(input => { input.value = "175"; input.dispatchEvent(new Event("input", { bubbles: true })); input.dispatchEvent(new Event("change", { bubbles: true })); });
     await expect(slider).toHaveValue("100");
     expect(await page.evaluate(() => window.__gain.gain.value)).toBe(1);
@@ -302,7 +333,7 @@ test("failed volume save and cancelled drag restore the saved level", async ({ p
 test("member card exposes the same menu and DM right-click does not delete history", async ({ page }) => {
     await page.evaluate(() => window.__noxa.setDetailsOpen(true));
     await page.locator(".card-nick").click({ button: "right" });
-    await expect(page.getByRole("menuitem", { name: "Personal audio…", exact: true })).toBeVisible();
+    await expect(page.getByRole('menu').getByRole('slider', { name: 'Voice volume', exact: true })).toBeVisible();
     await page.keyboard.press("Escape");
     await page.evaluate(() => window.__noxaChat.openPM("alice-uid", "Alice"));
     const tab = page.locator(".pm-tab");
@@ -331,7 +362,6 @@ test("authors and mentions share the member menu and messages support keyboard a
     const row = page.locator('.msg[data-msg-id="501"]');
     for (const target of [row.locator(".msg-from"), row.locator(".mention-tok")]) {
         await target.click();
-        await page.getByRole('menuitem', { name: 'Personal audio…', exact: true }).click();
         await expect(page.getByRole("slider", { name: "Voice volume" })).toBeVisible();
         await page.keyboard.press("Escape");
         await expect(target).toBeFocused();
@@ -385,11 +415,10 @@ test("video tile menu supports keyboard navigation within a short viewport", asy
 test("keyboard volume adjustment can continue through the audio panel", async ({ page }) => {
     const member = page.locator('.client[data-clid="alice"]');
     await member.focus(); await page.keyboard.press("Shift+F10");
-    await page.getByRole('menuitem', { name: 'Personal audio…', exact: true }).click();
-    const slider = page.locator(".member-audio-popover .ctx-volume input[type=range]"); await slider.focus();
+    const slider = page.locator(".ctx-member-menu .ctx-volume input[type=range]"); await slider.focus();
     await page.keyboard.press("ArrowRight");
     await expect.poll(() => page.evaluate(() => window.__saved.user_volumes["alice-uid"])).toBeGreaterThan(100);
-    await page.keyboard.press("Shift+Tab");
+    await page.keyboard.press("ArrowUp");
     await expect(page.getByRole("button", { name: "Reset volume to 100%" })).toBeFocused();
     await page.keyboard.press("Enter");
     await expect.poll(() => page.evaluate(() => window.__saved.user_volumes["alice-uid"])).toBe(100);
@@ -423,8 +452,7 @@ test('member card reflects volume saved through the member menu', async ({page})
     await page.evaluate(()=>window.__noxa.setDetailsOpen(true));
     await expect(page.locator('#member-volume')).toHaveValue('100');
     await page.locator('.client[data-clid="alice"]').click({button:'right'});
-    await page.getByRole('menuitem', { name: 'Personal audio…', exact: true }).click();
-    const slider=page.locator('.member-audio-popover .ctx-volume input[type=range]'); await slider.fill('160'); await slider.dispatchEvent('change');
+    const slider=page.locator('.ctx-member-menu .ctx-volume input[type=range]'); await slider.fill('160'); await slider.dispatchEvent('change');
     await expect.poll(()=>page.evaluate(()=>window.__saved.user_volumes['alice-uid'])).toBe(160);
     await page.keyboard.press('Escape');
     await page.evaluate(()=>window.__noxa.renderTree());
@@ -443,21 +471,20 @@ test('member card retains keyboard focus across volume saves', async ({page}) =>
 test('channel member exposes the shared personal volume menu', async ({page}) => {
     const participant=page.locator('#channel-tree .client[data-clid="alice"]');
     await participant.click({button:'right'});
-    await expect(page.getByRole('menuitem',{name:'Personal audio…',exact:true})).toBeVisible();
+    await expect(page.getByRole('menu').getByRole('slider', { name: 'Voice volume', exact: true })).toBeVisible();
 });
 
 for (const field of ['activeTabID', 'serverGeneration', 'sessionGeneration', 'myUniqueID', 'myClientID']) {
     test(`personal audio closes and rejects edits when ${field} changes`, async ({ page }) => {
         await page.locator('.client[data-clid="alice"]').click({ button: 'right' });
-        await page.getByRole('menuitem', { name: 'Personal audio…', exact: true }).click();
         await page.evaluate(field => {
-            const input = document.querySelector('.member-audio-popover .ctx-volume input[type=range]');
+            const input = document.querySelector('.ctx-member-menu .ctx-volume input[type=range]');
             window.__noxa.state[field] = typeof window.__noxa.state[field] === 'number' ? window.__noxa.state[field] + 1 : 'changed';
             input.value = '175';
             input.dispatchEvent(new Event('input', { bubbles: true }));
             input.dispatchEvent(new Event('change', { bubbles: true }));
         }, field);
-        await expect(page.locator('.member-audio-popover')).toHaveCount(0);
+        await expect(page.locator('.ctx-member-menu')).toHaveCount(0);
         expect(await page.evaluate(() => window.__saved.user_volumes['alice-uid'])).toBeUndefined();
         expect(await page.evaluate(() => window.__gain.gain.value)).toBe(1);
     });
@@ -466,14 +493,12 @@ for (const field of ['activeTabID', 'serverGeneration', 'sessionGeneration', 'my
 test('personal audio closes outside and restores the replacement member row', async ({ page }) => {
     const trigger = page.locator('.client[data-clid="alice"]');
     await trigger.click({ button: 'right' });
-    await page.getByRole('menuitem', { name: 'Personal audio…', exact: true }).click();
     await page.evaluate(() => window.__noxa.renderTree());
     await page.keyboard.press('Escape');
     await expect(trigger).toBeFocused();
     await trigger.click({ button: 'right' });
-    await page.getByRole('menuitem', { name: 'Personal audio…', exact: true }).click();
     await page.locator('#chat-text').click();
-    await expect(page.locator('.member-audio-popover')).toHaveCount(0);
+    await expect(page.locator('.ctx-member-menu')).toHaveCount(0);
     await expect(page.locator('#chat-text')).toBeFocused();
 });
 
@@ -505,7 +530,6 @@ test("identity-only author menu never picks an arbitrary connected device", asyn
     await expect(page.getByRole("menuitem", { name: "Move to channel…", exact: true })).toHaveCount(0);
     await expect(page.locator('.ctx-menu [data-act="call"]')).not.toHaveAttribute("aria-disabled", "true");
     await expect(page.locator('.ctx-menu [data-act="call"]')).toBeEnabled();
-    await page.getByRole('menuitem', { name: 'Personal audio…', exact: true }).click();
     await expect(page.getByRole("slider", { name: "Voice volume" })).toBeEnabled();
 });
 
@@ -540,13 +564,12 @@ test("channel member keyboard menu preserves its existing selection click", asyn
     await participant.click();
     await expect(page.locator(".card-nick")).toHaveText("Alice");
     await participant.focus(); await page.keyboard.press("Shift+F10");
-    await expect(page.getByRole("menuitem", { name: "Personal audio…", exact: true })).toBeVisible();
+    await expect(page.getByRole('menu').getByRole('slider', { name: 'Voice volume', exact: true })).toBeVisible();
     await page.keyboard.press("Escape"); await expect(participant).toBeFocused();
 });
 
 test("live settings update refreshes both personal volume controls", async ({ page }) => {
     await page.locator('#channel-tree .client[data-clid="alice"]').click({ button: 'right' });
-    await page.getByRole('menuitem', { name: 'Personal audio…', exact: true }).click();
     await page.evaluate(() => {
         window.__saved.user_volumes['alice-uid'] = 65;
         window.__saved.user_share_volumes = { 'alice-uid': 25 };
@@ -559,7 +582,6 @@ test("live settings update refreshes both personal volume controls", async ({ pa
 test("keyboard mute returns focus to its member control", async ({ page }) => {
     const trigger = page.locator('#channel-tree .client[data-clid="alice"]');
     await trigger.focus(); await page.keyboard.press('Shift+F10');
-    await page.getByRole('menuitem', { name: 'Personal audio…', exact: true }).click();
     await page.getByRole('button', { name: 'Mute voice for me', exact: true }).focus();
     await page.keyboard.press('Enter');
     await expect.poll(() => page.evaluate(() => window.__saved.muted_users)).toEqual(['alice-uid']);
@@ -571,12 +593,11 @@ test("keyboard mute returns focus to its member control", async ({ page }) => {
 test("member mute uses the current state after a live settings update", async ({ page }) => {
     const trigger = page.locator('#channel-tree .client[data-clid="alice"]');
     await trigger.click({ button: 'right' });
-    await page.getByRole('menuitem', { name: 'Personal audio…', exact: true }).click();
     await page.evaluate(() => {
         window.__saved.muted_users = ['alice-uid'];
         for (const callback of window.__events.settings_update || []) callback(structuredClone(window.__saved));
     });
-    const mute = page.locator('.member-audio-popover [data-act="mute"]');
+    const mute = page.locator('.ctx-member-menu [data-act="mute"]');
     await expect(mute).toHaveAttribute("aria-pressed", "true");
     await expect(page.locator('.client[data-clid="alice"] .status-icons[title="muted locally"]')).toBeVisible();
     await mute.click();
@@ -587,12 +608,11 @@ test("member Escape restores focus while a volume save is pending", async ({ pag
     await page.evaluate(() => { window.__saveWait = new Promise(resolve => { window.__releaseSave = resolve; }); });
     const trigger = page.locator('#channel-tree .client[data-clid="alice"]');
     await trigger.click({ button: 'right' });
-    await page.getByRole('menuitem', { name: 'Personal audio…', exact: true }).click();
     const slider = page.getByRole('slider', { name: 'Voice volume', exact: true });
     await slider.focus(); await page.keyboard.press('ArrowRight');
     await expect(slider).toBeDisabled();
     await page.keyboard.press('Escape');
-    await expect(page.locator('.member-audio-popover')).toHaveCount(0);
+    await expect(page.locator('.ctx-member-menu')).toHaveCount(0);
     await expect(trigger).toBeFocused();
     await page.evaluate(() => window.__releaseSave());
     await expect.poll(() => page.evaluate(() => window.__saved.user_volumes['alice-uid'])).toBe(101);
@@ -604,15 +624,14 @@ test("adjusting and resetting a muted microphone preserves its mute", async ({ p
         for (const callback of window.__events.settings_update || []) callback(structuredClone(window.__saved));
     });
     await page.locator('#channel-tree .client[data-clid="alice"]').click({ button: 'right' });
-    await page.getByRole('menuitem', { name: 'Personal audio…', exact: true }).click();
-    await expect(page.locator('.member-audio-popover [data-act="mute"]')).toHaveAttribute("aria-pressed", "true");
+    await expect(page.locator('.ctx-member-menu [data-act="mute"]')).toHaveAttribute("aria-pressed", "true");
     const slider = page.getByRole('slider', { name: 'Voice volume', exact: true });
     await slider.fill('140'); await slider.dispatchEvent('change');
     await expect.poll(() => page.evaluate(() => window.__saved.user_volumes['alice-uid'])).toBe(140);
     await page.getByRole('button', { name: 'Reset volume to 100%', exact: true }).click();
     await expect(slider).toHaveValue('100');
     expect(await page.evaluate(() => window.__mute.gain.value)).toBe(0);
-    await page.locator('.member-audio-popover [data-act="mute"]').click();
+    await page.locator('.ctx-member-menu [data-act="mute"]').click();
     await expect.poll(() => page.evaluate(() => window.__mute.gain.value)).toBe(1);
 });
 
@@ -630,7 +649,6 @@ test.describe('member controls on touch screens', () => {
         expect(box.y).toBeGreaterThanOrEqual(0);
         expect(box.x + box.width).toBeLessThanOrEqual(644);
         expect(box.y + box.height).toBeLessThanOrEqual(480);
-        await page.getByRole('menuitem', { name: 'Personal audio…', exact: true }).tap();
         const slider = page.getByRole('slider', { name: 'Screen-share audio', exact: true });
         await expect(slider).toBeVisible();
         if (process.env.NOXA_UI_AUDIT_SCREENSHOTS) await page.screenshot({ path: '.cache/ui-audit-members/member-menu-compact.png' });
@@ -646,18 +664,17 @@ test("member menu exposes and toggles the existing independent screen-share mute
     });
     const trigger = page.locator('#channel-tree .client[data-clid="alice"]');
     await trigger.click({ button: 'right' });
-    await page.getByRole('menuitem', { name: 'Personal audio…', exact: true }).click();
-    const shareMute = page.locator('.member-audio-popover [data-act="mute-share"]');
+    const shareMute = page.locator('.ctx-member-menu [data-act="mute-share"]');
     await expect(shareMute).toHaveAttribute("aria-pressed", "true");
     expect(await page.evaluate(() => window.__mute.gain.value)).toBe(1);
     await shareMute.click();
     await expect.poll(() => page.evaluate(() => window.__saved.muted_share_users)).toEqual([]);
-    await expect(page.locator('.member-audio-popover')).toBeVisible();
+    await expect(page.locator('.ctx-member-menu')).toBeVisible();
     await expect(shareMute).toHaveAttribute("aria-pressed", "false");
     await page.evaluate(() => { window.__saveFail = true; });
     await shareMute.click();
     await expect(page.locator('#toasts')).toContainText('save failed');
-    await expect(page.locator('.member-audio-popover')).toBeVisible();
+    await expect(page.locator('.ctx-member-menu')).toBeVisible();
     await expect(shareMute).toHaveAttribute("aria-pressed", "false");
     expect(await page.evaluate(() => window.__saved.muted_users ?? [])).toEqual([]);
     expect(await page.evaluate(() => window.__saved.user_share_volumes ?? {})).toEqual({});
@@ -666,8 +683,7 @@ test("member menu exposes and toggles the existing independent screen-share mute
 test("member mute immediately updates its visible channel state", async ({ page }) => {
     const trigger = page.locator('#channel-tree .client[data-clid="alice"]');
     await trigger.click({ button: 'right' });
-    await page.getByRole('menuitem', { name: 'Personal audio…', exact: true }).click();
-    await page.locator('.member-audio-popover [data-act="mute"]').click();
+    await page.locator('.ctx-member-menu [data-act="mute"]').click();
     await expect.poll(() => page.evaluate(() => window.__saved.muted_users)).toEqual(['alice-uid']);
     await expect(page.locator('.client[data-clid="alice"] .status-icons[title="muted locally"]')).toBeVisible();
 });

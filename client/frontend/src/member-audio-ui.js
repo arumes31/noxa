@@ -5,81 +5,28 @@ import { bindMemberVolume, bindMemberShareVolume } from "./member-volume.js";
 import { sessionUserID } from "./session-identity.js";
 import "./member-audio-ui.css";
 
-let activePopover = null;
-
-export function openMemberAudio(client, { x, y, trigger = document.activeElement, resolveTrigger } = {}) {
-    activePopover?.();
-    const v = window.__noxa, state = v.state;
+// Owned by the context menu; dispose with it to cancel pending previews.
+export function memberAudioControls(client, onStale) {
+    const owner = window.__noxa, state = owner.state;
     const { serverGeneration, sessionGeneration, activeTabID, myClientID, myUniqueID } = state;
     const identity = sessionUserID(state);
-    const current = () => v === window.__noxa && state === v.state &&
+    const current = () => owner === window.__noxa && state === owner.state &&
         serverGeneration === state.serverGeneration && sessionGeneration === state.sessionGeneration &&
         activeTabID === state.activeTabID && myClientID === state.myClientID &&
         myUniqueID === state.myUniqueID && identity === sessionUserID(state);
-    const panel = document.createElement("section");
-    panel.className = "member-audio-popover";
-    panel.setAttribute("role", "dialog");
-    panel.setAttribute("aria-label", t("context.personalAudio"));
-    panel.tabIndex = -1;
-    const header = document.createElement("header");
-    header.className = "member-audio-heading";
-    const title = document.createElement("h3"); title.textContent = t("context.personalAudio");
-    const close = document.createElement("button"); close.type = "button"; close.className = "ctx-audio-icon";
-    close.innerHTML = icon("close"); close.setAttribute("aria-label", t("common.close"));
-    header.append(title, close);
-    const name = document.createElement("p"); name.className = "member-audio-name";
-    name.textContent = client.nickname || client.unique_id;
-    const controls = memberAudioControls(client, current);
-    panel.append(header, name, controls.element);
-    const events = new AbortController();
-    let disposed = false;
-    const dismiss = (restore = true) => {
-        if (disposed) return;
-        disposed = true;
-        events.abort(); clearInterval(timer); observer.disconnect(); controls.dispose(); panel.remove();
-        if (activePopover === dismiss) activePopover = null;
-        if (restore && current()) {
-            const target = trigger?.isConnected ? trigger : resolveTrigger?.();
-            target?.focus({ preventScroll: true });
-        }
-    };
-    // The check also runs before input handlers so stale controls cannot save
-    // during the short interval between a session change and lifecycle cleanup.
-    const guard = event => {
-        if (current()) return;
-        event?.preventDefault(); event?.stopImmediatePropagation(); dismiss(false);
-    };
-    for (const type of ["click", "input", "change", "keydown", "pointerdown"]) {
-        panel.addEventListener(type, guard, { capture: true, signal: events.signal });
-    }
-    close.onclick = () => dismiss();
-    document.addEventListener("keydown", event => {
-        if (event.key !== "Escape") return;
-        event.preventDefault(); event.stopPropagation(); dismiss();
-    }, { capture: true, signal: events.signal });
-    document.addEventListener("pointerdown", event => {
-        if (!panel.contains(event.target)) dismiss();
-    }, { capture: true, signal: events.signal });
-    document.addEventListener("focusin", event => {
-        if (!panel.contains(event.target)) dismiss(false);
-    }, { signal: events.signal });
-    window.addEventListener("resize", () => dismiss(), { signal: events.signal });
-    const timer = setInterval(() => { if (!current()) dismiss(false); }, 150);
-    const observer = new MutationObserver(() => { if (!panel.isConnected) dismiss(false); });
-    document.body.append(panel);
-    observer.observe(document.body, { childList: true });
-    const anchor = trigger?.getBoundingClientRect?.();
-    const bounds = panel.getBoundingClientRect(), gap = 8;
-    panel.style.left = `${Math.max(gap, Math.min(x ?? anchor?.right ?? gap, innerWidth - bounds.width - gap))}px`;
-    panel.style.top = `${Math.max(gap, Math.min(y ?? anchor?.top ?? gap, innerHeight - bounds.height - gap))}px`;
-    activePopover = dismiss;
-    panel.querySelector('input[type="range"]').focus({ preventScroll: true });
-}
-
-function memberAudioControls(client, current) {
     const v = window.__noxa, uid = client.unique_id;
     let disposed = false;
     const element = document.createElement("section"); element.className = "ctx-member-audio";
+    element.setAttribute("aria-label", t("context.personalAudio"));
+    const heading = document.createElement("h4"); heading.textContent = t("context.personalAudio"); element.append(heading);
+    const events = new AbortController();
+    const guard = event => {
+        if (current()) return;
+        event.preventDefault(); event.stopImmediatePropagation(); onStale();
+    };
+    for (const type of ["click", "input", "change", "keydown", "pointerdown"]) {
+        element.addEventListener(type, guard, { capture: true, signal: events.signal });
+    }
     const disposers = [];
     const group = share => {
         const host = document.createElement("fieldset"); host.className = `ctx-audio-group ${share ? "ctx-share-volume" : "ctx-volume"}`;
@@ -139,12 +86,12 @@ function memberAudioControls(client, current) {
         share.disabled = !available; availability.hidden = available;
     };
     refreshAvailability();
-    const timer = setInterval(refreshAvailability, 500);
+    const timer = setInterval(() => { if (!current()) onStale(); else refreshAvailability(); }, 150);
     for (const control of element.querySelectorAll("input, button")) {
         for (const property of ["oninput", "onchange", "onclick", "onkeydown", "onpointercancel"]) {
             const action = control[property];
             if (action) control[property] = event => { if (!disposed && current()) return action(event); };
         }
     }
-    return { element, dispose: () => { disposed = true; clearInterval(timer); for (const dispose of disposers) dispose(); } };
+    return { element, dispose: () => { disposed = true; events.abort(); clearInterval(timer); for (const dispose of disposers) dispose(); } };
 }
