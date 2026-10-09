@@ -1,6 +1,6 @@
 module noxa/client
 
-go 1.27.1
+go 1.27.2
 
 require (
 	github.com/getlantern/systray v1.2.2
@@ -73,7 +73,7 @@ require (
 	go.opentelemetry.io/otel/trace v1.46.0 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
 	go.uber.org/zap v1.28.0 // indirect
-	golang.org/x/net v0.59.0 // indirect
+	golang.org/x/net v0.60.0 // indirect
 	golang.org/x/text v0.42.0 // indirect
 	golang.org/x/time v0.16.0 // indirect
 )

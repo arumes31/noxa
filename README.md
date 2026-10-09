@@ -230,7 +230,7 @@ retained beside the executable for manual recovery.
 
 #### Prerequisites
 
-* **Go**: `>= 1.27.1` for the root and client modules; the separately tested WebView2 fork declares its own version.
+* **Go**: `>= 1.27.2` for the root and client modules; the separately tested WebView2 fork declares its own version.
 * **Node.js**: `>= 24`
 * **Wails CLI**: `go install github.com/wailsapp/wails/v2/cmd/wails@v2.16.0` (match `client/go.mod`)
 * **PostgreSQL**: `>= 16`

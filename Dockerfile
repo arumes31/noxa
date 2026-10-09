@@ -3,7 +3,7 @@
 # noxa - voice/video server (Phase 1 base image)
 # =============================================================================
 # Multi-stage build:
-#   1. builder  - cross-compiles a static Go binary from Go 1.27.1/Alpine 3.24
+#   1. builder  - cross-compiles a static Go binary from Go 1.27.2/Alpine 3.24
 #   2. runtime  - minimal Alpine 3.24 image running as a non-root user
 #
 # NOTE on CGO: Phase 1 keeps CGO_ENABLED=0 to produce a fully static binary
@@ -15,7 +15,7 @@
 # -----------------------------------------------------------------------------
 # Builder stage
 # -----------------------------------------------------------------------------
-FROM --platform=$BUILDPLATFORM golang:1.27.1-alpine@sha256:8a5910f31396cd4d89662f56c68b3ae31d374308270a1c3bd96672ee5ed43414 AS builder
+FROM --platform=$BUILDPLATFORM golang:1.27.2-alpine@sha256:85dc1069ac644ea3c527b177303a406eb3358192816cd7f9e5848eb658851673 AS builder
 
 ARG TARGETOS
 ARG TARGETARCH
