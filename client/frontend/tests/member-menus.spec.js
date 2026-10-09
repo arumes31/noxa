@@ -76,7 +76,7 @@ test("member context menu scrolls to its last action in a short window", async (
 });
 
 test("late role actions stay inside the menu viewport", async ({ page }) => {
-    await page.setViewportSize({ width: 1280, height: 900 });
+    const { height } = page.viewportSize();
     await page.evaluate(() => {
         const app = window.go.main.App;
         window.go.main.App = new Proxy(app, { get(target, method) {
@@ -85,14 +85,14 @@ test("late role actions stay inside the menu viewport", async ({ page }) => {
             return target[method];
         } });
     });
-    await page.locator('#channel-tree .client[data-clid="alice"]').dispatchEvent('contextmenu', { clientX: 800, clientY: 850 });
+    await page.locator('#channel-tree .client[data-clid="alice"]').dispatchEvent('contextmenu', { clientX: 800, clientY: height - 50 });
     const menu = page.getByRole('menu');
     await expect(menu).toBeVisible();
     await page.waitForFunction(() => !!window.__showRoleAction);
     await page.evaluate(() => window.__showRoleAction());
     await expect(menu.getByRole('menuitem', { name: 'Assign roles…' })).toBeVisible();
     const bounds = await menu.boundingBox();
-    expect(bounds.y + bounds.height).toBeLessThanOrEqual(892);
+    expect(bounds.y + bounds.height).toBeLessThanOrEqual(height - 8);
     expect(await menu.evaluate(node => node.scrollHeight > node.clientHeight)).toBe(true);
     await menu.locator('[data-act="pm"]').focus(); await page.keyboard.press('End');
     await expect(menu.locator('[data-act="copy"]')).toBeInViewport();
