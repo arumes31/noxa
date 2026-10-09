@@ -14,6 +14,12 @@ fontsource — fully offline in WebView2):
   shows connection/idle time (ticking), ping (or `unknown`), client address
   (IP only for self or with ViewConnectionInfo), and transfer
   stats — live-refreshing every 2s.
+- **Personal audio** — compact voice and screen-share volume, mute, and reset
+  controls appear directly in the member context menu. Tall menus scroll within
+  the window, including actions loaded after the menu opens.
+- Notification audio retries temporary output-device failures on interaction or
+  subsequent live cues, while preserving mute/DND preferences and avoiding replay
+  of missed sounds.
 - **Server information** — click the server name, the latency readout, or
   Connections → Server information. Shows server details and your connection's
   latency, incoming audio loss/jitter, and In/Out control and media traffic.

@@ -304,3 +304,45 @@ test("an explicit output retry recovers a device without requiring a selection c
     assert.equal(f.ctx.sinkId, "headset");
     assert.equal(f.engine.play("dm"), true);
 });
+
+for (const fallbackWorks of [false, true]) test(`live notifications recover a failed selected output (fallback=${fallbackWorks}) without replaying old cues`, async () => {
+    const f = fixture();
+    f.state.settings.playback_device_id = "headset";
+    const routes = [];
+    let available = false;
+    f.ctx.setSinkId = async id => {
+        routes.push(id);
+        if (!available && (id || !fallbackWorks)) throw Error("temporarily unavailable");
+        f.ctx.sinkId = id;
+    };
+    await f.engine.preload(["dm"]);
+    assert.equal(f.engine.outputState, fallbackWorks ? "fallback" : "unavailable");
+    for (let i = 0; i < 20; i++) await f.engine.setOutput("headset");
+    assert.deepEqual(routes, ["headset", ""], "failed routes do not spin on every event");
+    available = true; f.tick(2000);
+    assert.equal(f.engine.play("dm"), fallbackWorks, "only an already-working fallback plays during recovery");
+    await Promise.all(Array.from({ length: 20 }, () => f.engine.setOutput("headset")));
+    assert.equal(f.engine.outputState, "ready");
+    assert.deepEqual(routes, ["headset", "", "headset"]);
+    assert.equal(f.sources.length, fallbackWorks ? 1 : 0, "recovery must not replay old notifications");
+    f.tick();
+    assert.equal(f.engine.play("dm"), true);
+    f.tick(2000); await f.engine.setOutput("headset");
+    assert.equal(routes.length, 3, "healthy output remains cached");
+    await f.engine.dispose();
+});
+
+test("a missing headset keeps notifications audible on fallback across retries", async () => {
+    const f = fixture();
+    f.state.settings.playback_device_id = "missing-headset";
+    f.ctx.setSinkId = async id => { if (id) throw Error("device removed"); };
+    await f.engine.preload(["dm"]);
+    for (let i = 0; i < 3; i++) {
+        f.tick(3000);
+        assert.equal(f.engine.play("dm"), true);
+        await f.engine.output;
+        assert.equal(f.engine.outputState, "fallback");
+        assert.equal(f.engine.outputReady, true);
+    }
+    await f.engine.dispose();
+});

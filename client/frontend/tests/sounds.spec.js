@@ -201,6 +201,34 @@ test("notification previews retry a failed selected output and report missing as
     expect(result.reasons).toContainEqual({ reason: "assets_failed", count: 1 });
 });
 
+test("window focus recovers live notification output without replaying missed sounds", async ({ page }) => {
+    const result = await page.evaluate(async () => {
+        window.__noxa = { state: { settings: { play_sounds: true, sound_volume: 100, playback_device_id: "headset" } } };
+        const { soundEngine, initSounds, playEvent } = await import("/src/sounds.js");
+        soundEngine.now = () => 0;
+        const context = soundEngine.context();
+        context.setSinkId = async () => { throw Error("temporary device failure"); };
+        initSounds();
+        await soundEngine.preload(); await soundEngine.resume();
+        const before = soundEngine.outputState;
+        const missed = playEvent("dm");
+        const routes = [];
+        context.setSinkId = async id => { routes.push(id); };
+        soundEngine.now = () => 2000;
+        window.dispatchEvent(new Event("focus"));
+        await soundEngine.output;
+        const after = soundEngine.outputState;
+        const replayed = soundEngine.active.size;
+        window.dispatchEvent(new Event("focus"));
+        const readyDuringInteraction = soundEngine.outputReady;
+        const played = playEvent("dm");
+        await soundEngine.dispose();
+        return { before, missed, after, replayed, routes, readyDuringInteraction, played };
+    });
+    expect(result).toEqual({ before: "unavailable", missed: false, after: "ready", replayed: 0,
+        routes: ["headset"], readyDuringInteraction: true, played: true });
+});
+
 test("static speech decodes and frequent contact cues survive mandatory repetition", async ({ page }) => {
     test.setTimeout(120000);
     const result=await page.evaluate(async()=>{

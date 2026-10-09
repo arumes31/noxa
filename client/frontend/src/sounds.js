@@ -185,7 +185,10 @@ export function updateSoundOutput() {
 export function initSounds() {
     void preloadSounds();
     void updateSoundOutput();
-    const resume = () => { void soundEngine.resume(); };
+    const resume = () => {
+        void soundEngine.resume();
+        void soundEngine.setOutput(V()?.state.settings?.playback_device_id);
+    };
     const deviceChange = () => {
         soundEngine.requestedSink = undefined;
         void updateSoundOutput();
