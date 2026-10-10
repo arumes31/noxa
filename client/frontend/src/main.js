@@ -2248,6 +2248,9 @@ async function applyChannelAudio() {
         const p = sender.getParameters();
         if (p.encodings?.length) {
             p.encodings[0].maxBitrate = bitrate > 0 ? bitrate : undefined;
+            // Keep voice in the highest allocation class alongside screen media.
+            // This parameter belongs to the existing channel-audio update owner.
+            p.encodings[0].priority = "high";
             await sender.setParameters(p).catch(() => {});
         }
     }

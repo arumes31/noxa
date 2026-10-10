@@ -317,10 +317,33 @@ for (const [preset, fps] of [["hd", 30], ["hdMotion", 60]]) {
         expect(result.options.video.height.ideal).toBe(1080);
         expect(result.options.video.frameRate.ideal).toBe(fps);
         expectLayeredScreenBudget(result.parameters.encodings, 50000000);
-        expect(result.parameters.degradationPreference).toBe("maintain-resolution");
-        expect(result.hint).toBe(fps === 60 ? "motion" : "detail");
+        expect(result.parameters.degradationPreference).toBe("maintain-framerate");
+        expect(result.parameters.encodings[0]).toMatchObject({ priority: "high", maxFramerate: fps });
+        expect(result.hint).toBe("motion");
     });
 }
+
+test("text sharing retains readable pixels and live motion changes update the same encoder", async ({ page }) => {
+    await page.locator("#voice-screen").click();
+    await page.locator(".sh-preset").selectOption("text");
+    await page.getByRole("button", { name: "Start sharing", exact: true }).click();
+    const read = () => page.evaluate(() => ({ parameters: window.__noxa.state.shareVideoTransceiver.sender.getParameters(),
+        hint: window.__noxa.state.shareStream.getVideoTracks()[0].contentHint }));
+    expect(await read()).toMatchObject({ hint: "text", parameters: { degradationPreference: "maintain-resolution",
+        encodings: [{ priority: "high", maxFramerate: 15 }] } });
+    await page.evaluate(() => {
+        window.__media.originalShare = window.__noxa.state.shareStream;
+        window.__media.originalShare.getVideoTracks()[0].applyConstraints = async () => {};
+    });
+    await page.getByRole("button", { name: "Change quality", exact: true }).click();
+    await page.locator(".sh-preset").selectOption("hdMotion");
+    await page.getByRole("button", { name: "Apply quality", exact: true }).click();
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+    expect(await read()).toMatchObject({ hint: "motion", parameters: { degradationPreference: "maintain-framerate",
+        encodings: [{ priority: "high", maxFramerate: 60 }] } });
+    expect(await page.evaluate(() => window.__media.originalShare === window.__noxa.state.shareStream)).toBe(true);
+    expect(await page.evaluate(() => window.__media.cameraSender.getParameters().encodings[0].priority)).toBe("medium");
+});
 
 for (const [preset, width, height] of [["qhd", 2560, 1440], ["uhd", 3840, 2160]]) {
     test(`${preset} shares high resolution with a traffic warning and adaptive bitrate`, async ({ page }) => {
@@ -601,7 +624,8 @@ test("negotiated screen sender restores quality headroom after low bandwidth and
         document.body.append(grid);
         const pc = new RTCPeerConnection(), receiver = new RTCPeerConnection();
         const state = window.__noxa.state, track = window.__media.camera;
-        track.contentHint = "detail";
+        track.contentHint = "motion";
+        state.shareStream = state.localStream;
         state.pc = pc;
         state.shareVideoTransceiver = pc.addTransceiver(track, { direction: "sendonly", streams: [state.localStream] });
         const sender = state.shareVideoTransceiver.sender;
@@ -625,7 +649,8 @@ test("negotiated screen sender restores quality headroom after low bandwidth and
     expect(result.bounded.encodings[0].maxBitrate).toBe(510000);
     expect(result.low.encodings[0]).toMatchObject({ maxBitrate: 150000, scaleResolutionDownBy: 2 });
     expect(result.restored.encodings[0]).toMatchObject({ maxBitrate: 50000000, scaleResolutionDownBy: 1 });
-    expect(result.restored.degradationPreference).toBe("maintain-resolution");
+    expect(result.restored.degradationPreference).toBe("maintain-framerate");
+    expect(result.restored.encodings[0].priority).toBe("high");
     expect(result.ready).toBe("live");
 });
 

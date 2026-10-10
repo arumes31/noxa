@@ -129,7 +129,18 @@ export function createVideoPublication({ policy }) {
                 (sender === screenSender && screenTrack?.readyState === "live" ||
                     sender === pendingVideoSenders.get(pc)?.sender || (sender.track && sender.track.readyState !== "ended"))).map(sender => {
                 const parameters = sender.getParameters();
-                if (sender === screenSender) parameters.degradationPreference = "maintain-resolution";
+                if (sender === screenSender) {
+                    // Motion must be able to trade pixels for frames under CPU or
+                    // network pressure. Only explicit text/detail shares keep pixels.
+                    parameters.degradationPreference = ["text", "detail"].includes(screenTrack?.contentHint) ? "maintain-resolution" : "maintain-framerate";
+                }
+                for (const encoding of parameters.encodings || []) {
+                    encoding.priority = sender === screenSender ? "high" : "medium";
+                    if (sender === screenSender) {
+                        const fps = capturePreferences.get(screenTrack)?.fps;
+                        if (fps > 0) encoding.maxFramerate = fps;
+                    }
+                }
                 return { sender, parameters, encodings: parameters.encodings || [],
                     singleEncoding: true,
                     uploadActive: publicationUploadActive(sender === screenSender ? "screen" : "cam",
@@ -145,7 +156,7 @@ export function createVideoPublication({ policy }) {
             if (audioSender && (audioSender.track || state.shareStream?.getAudioTracks().some(track => track.readyState === "live")) && current()) {
                 const parameters = audioSender.getParameters();
                 const active = publicationUploadActive("screen", state.shareStream?.getVideoTracks()[0]) !== false;
-                for (const encoding of parameters.encodings || []) encoding.active = active;
+                for (const encoding of parameters.encodings || []) { encoding.active = active; encoding.priority = "high"; }
                 if (parameters.encodings?.length) await audioSender.setParameters(parameters);
             }
         });
@@ -366,7 +377,7 @@ export function createVideoPublication({ policy }) {
         }
         capturePreferences.set(screenTrack, { ...p, screen: true });
         rememberVideoSenderProfile(screenTrack, p);
-        screenTrack.contentHint = preset === "text" ? "text" : p.fps > 30 ? "motion" : "detail";
+        screenTrack.contentHint = preset === "text" ? "text" : "motion";
         let shareEnded = false;
         screenTrack.onended = () => {
             shareEnded = true;
@@ -579,7 +590,7 @@ export function createVideoPublication({ policy }) {
                         if (!trackFitsVideoLimits(track, state.mediaLimits)) throw new Error(tLabel("voice.mediaDimensionsFailed"));
                         capturePreferences.set(track, { ...next, screen: true });
                         rememberVideoSenderProfile(track, next);
-                        track.contentHint = selected.preset === "text" ? "text" : next.fps > 30 ? "motion" : "detail";
+                        track.contentHint = selected.preset === "text" ? "text" : "motion";
                         await applySendCaps(alive);
                     } catch (error) {
                         if (!alive()) return;

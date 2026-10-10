@@ -43,6 +43,36 @@ test.beforeEach(async ({ page }) => {
     });
 });
 
+test('channel audio keeps its bitrate ceiling and high priority alongside screen media', async ({ page }) => {
+    await page.evaluate(() => {
+        const state = window.__noxa.state;
+        const context = new AudioContext();
+        const stream = context.createMediaStreamDestination().stream;
+        window.__priorityAudio = { context, stream, sender: state.pc.addTrack(stream.getAudioTracks()[0], stream) };
+        state.localStream = stream;
+        state.myChannelID = 8;
+        const emit = bitrate => {
+            // A channel transition owns this update; a repeated same-channel
+            // membership snapshot intentionally does not rewrite audio settings.
+            state.myChannelID = 8;
+            const snapshot = { root_channels: [{ ChannelID: 7, Name: 'Voice', OpusBitrate: bitrate,
+                clients: [{ client_id: 'self', nickname: 'Self', channel_id: 7 }] }] };
+            for (const callback of window.__events.snapshot) callback(JSON.stringify(snapshot));
+        };
+        window.__priorityAudio.emit = emit;
+        emit(64000);
+    });
+    const parameters = () => page.evaluate(() => window.__priorityAudio.sender.getParameters().encodings[0]);
+    await expect.poll(parameters).toMatchObject({ maxBitrate: 64000, priority: 'high' });
+    await page.evaluate(() => window.__priorityAudio.emit(32000));
+    await expect.poll(parameters).toMatchObject({ maxBitrate: 32000, priority: 'high' });
+    await page.evaluate(async () => {
+        window.__noxa.state.pc.close();
+        window.__priorityAudio.stream.getTracks().forEach(track => track.stop());
+        await window.__priorityAudio.context.close();
+    });
+});
+
 for (const language of ['en', 'de']) {
     test(`${language} filtered snapshot announces a moderator moving self exactly once`, async ({ page }) => {
         await page.evaluate(language => {
