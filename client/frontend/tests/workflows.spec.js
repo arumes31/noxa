@@ -502,7 +502,7 @@ test.describe("tab-bound voice signaling", () => {
                 return async (...args) => {
                     const tab = key.endsWith("ForTab") ? args.shift() : f.nativeTab;
                     f.calls.push([method, tab, ...args]);
-                    if (tab !== f.nativeTab) throw new Error("server changed");
+                    if (tab !== f.nativeTab) throw new Error("server tab changed; refresh the editor");
                     f.effects.push([method, tab, ...args]);
                     if (method === "GetICEServers") return [];
                     if (method === "GetMediaLimits") return {};

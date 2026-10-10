@@ -104,6 +104,9 @@ async function applyPendingRemoteOffer(peerConnection, pending) {
                     return current();
                 } catch (error) {
                     if (!current()) return false;
+                    // requireTabCM can observe native activation before tab_reset
+                    // reaches JS. This is a retired session, not a failed write.
+                    if (String(error?.message ?? error) === "server tab changed; refresh the editor") return false;
                     if (attempt >= 2) throw error;
                     await new Promise(resolve => setTimeout(resolve, [100, 300][attempt]));
                 }

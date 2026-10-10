@@ -1107,6 +1107,27 @@ test("remote negotiation retries transient failures and resends the exact commit
     expect(result).toEqual({ accepted: true, descriptions: 1, answers: 2, sent: ["exact-answer", "exact-answer"] });
 });
 
+for (const errorShape of ["string", "Error"]) test(`remote answer discards native tab changes without retries (${errorShape})`, async ({ page }) => {
+    const result = await page.evaluate(async errorShape => {
+        const pc = window.__noxa.state.pc;
+        const sdp = "a=ice-ufrag:original\r\na=ice-pwd:original-password\r\n";
+        pc.remoteDescription = { type: "answer", sdp };
+        pc.setRemoteDescription = async description => { pc.remoteDescription = description; };
+        pc.createAnswer = async () => ({ type: "answer", sdp: "old-server-answer" });
+        pc.setLocalDescription = async description => { pc.localDescription = description; };
+        const calls = [];
+        window.go.main.App.WebRTCAnswerForTab = async (tab, answer) => {
+            calls.push([tab, answer]);
+            // Native activation precedes its frontend tab_reset event.
+            const message = "server tab changed; refresh the editor";
+            throw errorShape === "string" ? message : new Error(message);
+        };
+        const accepted = await window.__media.video.answerRemoteOffer(pc, 1, sdp);
+        return { accepted, calls, peerUnchanged: window.__noxa.state.pc === pc };
+    }, errorShape);
+    expect(result).toEqual({ accepted: false, calls: [["media-tab", "old-server-answer"]], peerUnchanged: true });
+});
+
 test("ending capture closes a pending region picker and releases the share button", async ({ page }) => {
     await page.locator("#voice-screen").click();
     await page.getByRole("radio", { name: "Region of this app", exact: true }).check();
