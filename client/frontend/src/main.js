@@ -5,6 +5,7 @@ import { initLoginBackground } from './login-background.js';
 import { watchMicrophone } from "./microphone-recovery.js";
 import { createRemoteAudio } from './remote-audio.js';
 import { startVoiceDiagnostics, noteVoiceActivity } from './voice-diagnostics.js';
+import { createVoiceRecovery } from './voice-recovery.js';
 import { createChannelTree } from './channel-tree.js';
 import { captureChannelPresence, channelPresenceChanges } from './channel-presence.js';
 // noxa client frontend — voice ops console (vanilla JS).
@@ -45,7 +46,7 @@ import {
 } from "./video.js";
 import * as chatUI from "./chat-ui.js";
 import { startStreamSession, stopStreamSession, streamSessionIsCurrent, receiveStreamTrack, removeStreamTrack, receiveShareAudio, removeShareAudio, refreshStreamUploads } from "./stream-controls.js";
-import { startRemoteMedia } from "./remote-media.js";
+import { startRemoteMedia, reconcileRemoteMedia } from "./remote-media.js";
 import { remoteTrackID } from "./media-track-id.js";
 import { isClientMicrophoneMuted, publishAudioState } from "./audio-state.js";
 import { isCurrentPublication } from "./stream-publication.js";
@@ -149,8 +150,19 @@ const { startQualitySampler, stopQualitySampler } = createConnectionQuality({ $,
 
 const remoteAudio = createRemoteAudio({ state, toast, sysMsg, voiceEpoch: () => voiceSessionEpoch });
 const { selectAudioOutput, applyOutputSettings, remoteChain, reconcileSpatialVoice, attachRemoteAudio, readRemoteAudioLevel, resolveTrackUsers, shareAudio, applyDucking, applyShareAudio, attachShareAudio, detachRemoteAudio } = remoteAudio;
+const channelAudioAttached = (track, id = remoteTrackID(state.pc, track)) => remoteAudio.hasRemoteAudio(track) && state.trackUsers.get(track.id)?.track_id === id;
 startVoiceDiagnostics({
     state,
+    recover: createVoiceRecovery({ state,
+        attached: channelAudioAttached,
+        repair: pc => reconcileRemoteMedia(pc),
+        resync: pc => renegotiate(pc),
+        rebuild: async pc => {
+            if (state.pc !== pc) return;
+            resetVoiceSession();
+            await ensureVoiceForChannel();
+        },
+    }),
     output: () => ({ state: remoteChain.ctx?.state || "unavailable", latencyMS: Number.isFinite(remoteChain.ctx?.outputLatency) ? remoteChain.ctx.outputLatency * 1000 : null }),
     bridge: (tabID, report) => window.go?.main?.App.ReportVoiceDiagnosticsForTab?.(tabID, report),
 });
@@ -944,6 +956,7 @@ async function disconnect() {
     state.lastConnect = null; // intentional disconnect: no reconnect
     clearReconnectTimer();
     chatUI.cancelReconnectAnnouncementBatch();
+    stopVoiceForDisconnect();
     try {
         await window.go.main.App.DisconnectTab(sourceTabID);
     } catch {
@@ -962,6 +975,7 @@ async function disconnect() {
 // teardown into one exactly-once user-facing connection edge.
 window.runtime.EventsOn("intentional_disconnect", (tabID) => {
     if (String(tabID || "") !== state.activeTabID) return;
+    stopVoiceForDisconnect();
     if (pendingIntentionalDisconnectCue?.sourceTabID === state.activeTabID
         && pendingIntentionalDisconnectCue.sourceGeneration === state.serverGeneration) return;
     clearSpeech();
@@ -1884,6 +1898,13 @@ $("chat-text").addEventListener("keydown", (e) => { if (e.key === "Enter") sendC
 // ---------------------------------------------------------------------------
 
 let voiceSessionEpoch = 0;
+let intentionalVoiceDisconnectScope = "";
+const voiceConnectionScope = () => JSON.stringify([state.activeTabID, state.serverGeneration, state.sessionGeneration]);
+
+function stopVoiceForDisconnect() {
+    intentionalVoiceDisconnectScope = voiceConnectionScope();
+    resetVoiceSession();
+}
 let stopRemoteMedia = () => {};
 let stopWatchingMicrophone = () => {};
 let lostMicrophoneName = "";
@@ -1980,6 +2001,9 @@ function refreshLiveMediaLimits() {
 // join/leave voice control: a confirmed local channel move establishes the
 // session, while disconnecting or changing server tabs tears it down.
 function ensureVoiceForChannel() {
+    // A native disconnect can await transport shutdown. Retire capture now,
+    // and do not let snapshots or recovery reopen it in the closing session.
+    if (intentionalVoiceDisconnectScope === voiceConnectionScope()) return Promise.resolve(false);
     reconcileSpatialVoice();
     if (state.myChannelID > 0) stopPrivateCall();
     if (state.myChannelID <= 0) {
@@ -2214,7 +2238,7 @@ async function startVoice(expectedEpoch = voiceSessionEpoch) {
             remoteAudio.detachShareAudio(clientID);
         }
         else remoteAudio.detachRemoteTrack(track.id);
-    });
+    }, (track, trackID) => track.kind !== "audio" || parseTrackID(trackID).slot !== "" || channelAudioAttached(track, trackID));
 
     await renegotiate(pc, state.serverGeneration, undefined, () => expectedEpoch === voiceSessionEpoch);
 
@@ -2645,7 +2669,13 @@ window.runtime.EventsOn("offer", (json) => {
     // async rejection here so a failed renegotiation cannot surface globally.
     // A tab reset may replace both the active backend and its peer while the
     // offer is pending, so never answer through the new backend for old SDP.
-    void answerRemoteOffer(pc, generation, o.sdp).catch(() => {});
+    void answerRemoteOffer(pc, generation, o.sdp).catch(() => {
+        if (state.pc !== pc || state.serverGeneration !== generation) return;
+        // Exhausted SDP retries require a fresh media transport. Retain audio
+        // preferences; teardown stops camera/screen capture before recovery.
+        resetVoiceSession();
+        void ensureVoiceForChannel();
+    });
 });
 
 // Mute / deafen / PTT ---------------------------------------------------------

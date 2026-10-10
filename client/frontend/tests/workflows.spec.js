@@ -6394,6 +6394,42 @@ test("camera stays off on joins and reconnects, and discards a late enable reque
     expect(await page.evaluate(() => window.__noxa.state.localStream)).toBeNull();
 });
 
+for (const action of ["local", "native"]) test(`${action} disconnect intent retires pending voice recovery before the backend settles`, async ({ page }) => {
+    await page.evaluate(() => {
+        const v = window.__noxa;
+        v.state.myChannelID = 42;
+        v.state.muted = true; v.state.deafened = true;
+        const pc = new RTCPeerConnection();
+        v.state.pc = pc;
+        v.state.localStream = document.createElement("canvas").captureStream(1);
+        window.__disconnectTrack = v.state.localStream.getTracks()[0];
+        window.__disconnectCaptures = 0;
+        navigator.mediaDevices.getUserMedia = async () => { window.__disconnectCaptures++; throw Error("capture after disconnect"); };
+        const sdp = "a=ice-ufrag:existing\r\na=ice-pwd:existing-password\r\n";
+        Object.defineProperty(pc, "remoteDescription", {get:()=>({sdp})});
+        pc.setRemoteDescription = async () => {};
+        pc.createAnswer = () => new Promise((_resolve,reject) => { window.__failPendingAnswer = reject; });
+        window.__disconnectTabHandler = () => new Promise(resolve => { window.__finishDisconnect = resolve; });
+        for (const callback of window.__events.offer) callback(JSON.stringify({sdp}));
+    });
+    await expect.poll(() => page.evaluate(() => typeof window.__failPendingAnswer)).toBe("function");
+    await page.evaluate(action => {
+        if (action === "local") window.__heldDisconnect = window.__noxa.disconnect();
+        else for (const callback of window.__events.intentional_disconnect) callback(window.__noxa.state.activeTabID);
+    }, action);
+    expect(await page.evaluate(() => window.__noxa.state.pc)).toBeNull();
+    expect(await page.evaluate(() => window.__disconnectTrack.readyState)).toBe("ended");
+    expect(await page.evaluate(() => window.__noxa.ensureVoiceForChannel())).toBe(false);
+    await page.evaluate(() => window.__failPendingAnswer(Error("answer exhausted")));
+    await page.waitForTimeout(500);
+    expect(await page.evaluate(() => window.__disconnectCaptures)).toBe(0);
+    expect(await page.evaluate(() => [window.__noxa.state.muted,window.__noxa.state.deafened])).toEqual([true,true]);
+    await page.evaluate(async action => {
+        if (action === "local") { window.__finishDisconnect(); await window.__heldDisconnect; }
+        for (const callback of window.__events.disconnected) callback();
+    }, action);
+});
+
 test("disconnect immediately releases camera capture waiting for a negotiation", async ({ page }) => {
     await page.evaluate(async () => {
         const v = window.__noxa;
@@ -9589,6 +9625,10 @@ test("contains disconnect and ICE-candidate rejections and reports ICE exhaustio
         }
         window.RTCPeerConnection = FakePeerConnection;
         const state = window.__noxa.state;
+        // ICE recovery belongs to a new session; explicit disconnect intent
+        // continues to block capture in the session that was just closed.
+        if (await window.__noxa.ensureVoiceForChannel()) throw Error("closing session reopened capture");
+        state.serverGeneration++;
         state.myClientID = "client-a";
         state.myChannelID = 42;
         state.channels = [{ ChannelID: 42, Name: "Lobby" }];

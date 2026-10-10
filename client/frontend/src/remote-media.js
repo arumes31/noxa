@@ -6,25 +6,27 @@ export function reconcileRemoteMedia(pc) { sessions.get(pc)?.(); }
 
 // Reconcile track events and completed SDP exchanges. Browser receiver identity
 // can survive publisher changes without creating a new MediaStreamTrack.
-export function startRemoteMedia(pc, current, onTrack, onRemoved) {
+export function startRemoteMedia(pc, current, onTrack, onRemoved, attached = () => true) {
     const bindings = new Map();
     let active = true;
     const remove = (receiver, binding) => {
         if (bindings.get(receiver) !== binding) return;
         bindings.delete(receiver);
         binding.track.removeEventListener("ended", binding.ended);
+        binding.track.removeEventListener("unmute", binding.unmute);
         onRemoved(binding.track, binding.id);
     };
     const bind = (receiver, track, id) => {
         if (!active || !current()) return;
         if (track.readyState === "ended") id = "";
         const previous = bindings.get(receiver);
-        if (previous?.id === id && previous.track === track) return;
+        if (previous?.id === id && previous.track === track && attached(track, id)) return;
         if (previous) remove(receiver, previous);
         if (!id) return;
-        const binding = { id, track, ended: () => remove(receiver, binding) };
+        const binding = { id, track, ended: () => remove(receiver, binding), unmute: () => reconcile() };
         bindings.set(receiver, binding);
         track.addEventListener("ended", binding.ended);
+        track.addEventListener("unmute", binding.unmute);
         onTrack(track, id);
     };
     const reconcile = () => {

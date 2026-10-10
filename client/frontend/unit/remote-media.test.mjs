@@ -23,6 +23,23 @@ test("receiver reuse follows negotiated MSID even when its browser track ID stay
     f.stop();
 });
 
+test("a missing playback attachment is repaired without changing healthy receiver ownership", () => {
+    const f = fixture(); f.stop();
+    const attached = new Set();
+    let attempts = 0;
+    const stop = startRemoteMedia(f.pc, () => true, track => { attempts++; if (attempts > 1) attached.add(track); }, track => attached.delete(track), track => attached.has(track));
+    reconcileRemoteMedia(f.pc);
+    assert.equal(attached.size, 0); // A transient processing-graph failure.
+    reconcileRemoteMedia(f.pc);
+    assert.equal(attached.size, 1);
+    reconcileRemoteMedia(f.pc);
+    assert.equal(attempts, 2, "healthy playback must not be restarted");
+    attached.clear(); f.track.dispatchEvent(new Event("unmute"));
+    assert.equal(attached.size, 1, "resumed receiver repairs detached playback");
+    stop(); f.track.dispatchEvent(new Event("unmute"));
+    assert.equal(attached.size, 0, "retired peer must not restart playback");
+});
+
 test("inactive negotiated receivers cannot retain a previous publisher or fall back to its track ID", () => {
     const f = fixture(); reconcileRemoteMedia(f.pc);
     f.pc.remoteDescription.sdp = description("alice|screen", "inactive");

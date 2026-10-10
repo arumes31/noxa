@@ -71,21 +71,46 @@ export function answerRemoteOffer(peerConnection, generation, offerSDP) {
 }
 
 async function applyPendingRemoteOffer(peerConnection, pending) {
-        if (pendingRemoteOffers.get(peerConnection) !== pending) return false;
-        pendingRemoteOffers.delete(peerConnection);
         const { generation, tabID, offerSDP } = pending;
-        const current = () => V().state.pc === peerConnection && V().state.serverGeneration === generation && V().state.activeTabID === tabID;
+        const current = () => pendingRemoteOffers.get(peerConnection) === pending && V().state.pc === peerConnection && V().state.serverGeneration === generation && V().state.activeTabID === tabID;
+        if (!current()) {
+            if (pendingRemoteOffers.get(peerConnection) === pending) pendingRemoteOffers.delete(peerConnection);
+            return false;
+        }
         const identity = remoteICEIdentity(peerConnection.remoteDescription?.sdp);
-        if (!current() || !identity || identity !== remoteICEIdentity(offerSDP)) return false;
-        await peerConnection.setRemoteDescription({ type: "offer", sdp: offerSDP });
-        if (!current()) return;
-        reconcileRemoteMedia(peerConnection);
-        const answer = await peerConnection.createAnswer();
-        if (!current()) return;
-        await peerConnection.setLocalDescription(answer);
-        if (!current()) return;
-        await window.go.main.App.WebRTCAnswerForTab(tabID, answer.sdp);
-        return current();
+        if (!identity || identity !== remoteICEIdentity(offerSDP)) {
+            pendingRemoteOffers.delete(peerConnection);
+            return false;
+        }
+        try {
+            for (let attempt = 0; ; attempt++) {
+                try {
+                    if (!current()) return false;
+                    if (!pending.applied) {
+                        await peerConnection.setRemoteDescription({ type: "offer", sdp: offerSDP });
+                        if (!current()) return false;
+                        pending.applied = true;
+                        reconcileRemoteMedia(peerConnection);
+                    }
+                    if (!pending.answer) {
+                        const answer = await peerConnection.createAnswer();
+                        if (!current()) return false;
+                        await peerConnection.setLocalDescription(answer);
+                        if (!current()) return false;
+                        pending.answer = answer;
+                    }
+                    // Retry a failed native write with the exact committed answer.
+                    await window.go.main.App.WebRTCAnswerForTab(tabID, pending.answer.sdp);
+                    return current();
+                } catch (error) {
+                    if (!current()) return false;
+                    if (attempt >= 2) throw error;
+                    await new Promise(resolve => setTimeout(resolve, [100, 300][attempt]));
+                }
+            }
+        } finally {
+            if (pendingRemoteOffers.get(peerConnection) === pending) pendingRemoteOffers.delete(peerConnection);
+        }
 }
 
 export function renegotiate(peerConnection = V().state.pc, generation = V().state.serverGeneration, offerOptions, stillRelevant = () => true) {

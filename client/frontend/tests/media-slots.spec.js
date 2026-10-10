@@ -1090,6 +1090,23 @@ test("queued offers from a replaced server peer are discarded", async ({ page })
     expect(accepted).toEqual(["a=ice-ufrag:new\r\na=ice-pwd:new-password\r\n"]);
 });
 
+test("remote negotiation retries transient failures and resends the exact committed answer", async ({ page }) => {
+    const result = await page.evaluate(async () => {
+        const pc = window.__noxa.state.pc;
+        const sdp = "a=ice-ufrag:retry\r\na=ice-pwd:retry-password\r\n";
+        pc.remoteDescription = { type: "answer", sdp };
+        let descriptions = 0, answers = 0, writes = 0;
+        const sent = [];
+        pc.setRemoteDescription = async description => { descriptions++; pc.remoteDescription = description; pc.signalingState = "have-remote-offer"; };
+        pc.createAnswer = async () => { if (++answers === 1) throw new Error("temporary browser failure"); return { type: "answer", sdp: "exact-answer" }; };
+        pc.setLocalDescription = async description => { pc.localDescription = description; pc.signalingState = "stable"; };
+        window.go.main.App.WebRTCAnswerForTab = async (_tab, answer) => { sent.push(answer); if (++writes === 1) throw new Error("temporary bridge failure"); };
+        const accepted = await window.__media.video.answerRemoteOffer(pc, 1, sdp);
+        return { accepted, descriptions, answers, sent };
+    });
+    expect(result).toEqual({ accepted: true, descriptions: 1, answers: 2, sent: ["exact-answer", "exact-answer"] });
+});
+
 test("ending capture closes a pending region picker and releases the share button", async ({ page }) => {
     await page.locator("#voice-screen").click();
     await page.getByRole("radio", { name: "Region of this app", exact: true }).check();

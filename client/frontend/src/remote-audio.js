@@ -155,7 +155,7 @@ export function createRemoteAudio({ state, toast, sysMsg, voiceEpoch }) {
             spatialVoice.attach(track.id, mute, remoteChain.master, publisher?.client_id || "");
 
             const uid = publisher?.unique_id || "";
-            const entry = { src, playback, gain, mute, uid };
+            const entry = { track, src, playback, gain, mute, uid };
             remoteTracks.set(track.id, entry);
             if (uid) registerUserChain(uid, gain, mute);
 
@@ -172,6 +172,11 @@ export function createRemoteAudio({ state, toast, sysMsg, voiceEpoch }) {
         if (!entry || !remoteChain.ctx || remoteChain.ctx.state === "closed") return null;
         entry.sampleLevel ||= createAudioLevelSampler(remoteChain.ctx, entry.src);
         return entry.sampleLevel();
+    }
+
+    function hasRemoteAudio(track) {
+        const entry = remoteTracks.get(track.id);
+        return entry?.track === track && entry.playback.srcObject?.getAudioTracks().includes(track) && remoteChain.ctx?.state !== "closed";
     }
 
     // resolveTrackUsers re-attributes tracks whose renegotiation arrived before
@@ -316,5 +321,5 @@ export function createRemoteAudio({ state, toast, sysMsg, voiceEpoch }) {
         state.trackUsers.clear();
     }
 
-    return { selectAudioOutput, applyOutputSettings, remoteChain, get spatialVoice() { return spatialVoice; }, reconcileSpatialVoice, attachRemoteAudio, readRemoteAudioLevel, resolveTrackUsers, shareAudio, applyDucking, applyShareAudio, attachShareAudio, detachRemoteTrack, detachShareAudio, detachRemoteAudio };
+    return { selectAudioOutput, applyOutputSettings, remoteChain, get spatialVoice() { return spatialVoice; }, reconcileSpatialVoice, attachRemoteAudio, hasRemoteAudio, readRemoteAudioLevel, resolveTrackUsers, shareAudio, applyDucking, applyShareAudio, attachShareAudio, detachRemoteTrack, detachShareAudio, detachRemoteAudio };
 }

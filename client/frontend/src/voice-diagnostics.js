@@ -174,7 +174,7 @@ export function collectVoiceTelemetry(state, stats, previousStats, output = {}, 
     };
 }
 
-export function startVoiceDiagnostics({ state, output, bridge, intervalMS = 5000 }) {
+export function startVoiceDiagnostics({ state, output, bridge, recover, intervalMS = 5000 }) {
     let stopped = false, pending = false, previous = null, previousSources = [], previousScope = "", previousPeer = null, sessionID = "";
     let previousPublications = [];
     const scope = () => voiceScope(state);
@@ -190,6 +190,8 @@ export function startVoiceDiagnostics({ state, output, bridge, intervalMS = 5000
             const samePublications = publications.length === previousPublications.length && publications.every((entry, index) =>
                 entry.publication === previousPublications[index].publication && entry.generation === previousPublications[index].generation);
             const stats = await samplePeerStats(pc, { fresh: pc !== previousPeer || key !== previousScope || !samePublications });
+            if (!current()) return;
+            await recover?.(pc, stats);
             if (!current()) return;
             const sources = videoSenderSources(state, publications);
             const report = collectVoiceTelemetry(state, stats, previous, output?.() || {}, sources, previousSources);
