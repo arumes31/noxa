@@ -50,7 +50,8 @@ test("all 33 events have unique replacement PCM assets with safe endpoints and l
             const recording = recipes.events.find(event => event.id === id).recording;
             assert.equal(recording.sha256, metrics[id].sha256, "regeneration preserves the approved poke");
             assert.equal(recording.path, "client/frontend/src/assets/sounds/poke.wav");
-            assert.equal(def.duration, 1.031875);
+            assert.equal(def.duration, 0.6);
+            assert.equal(recording.edits[0].sequence, "Speech only; trailing double beep removed");
         }
         assert.ok(provenance.edits[id].length > 0, `${id} source provenance`);
         for (const edit of provenance.edits[id]) {
@@ -289,4 +290,59 @@ test("failure of both selected and fallback outputs remains silent", async () =>
     await f.engine.setOutput("removed-headset");
     assert.equal(f.engine.play("ban"), false);
     assert.equal(f.sources.length, 0);
+});
+
+test("an explicit output retry recovers a device without requiring a selection change", async () => {
+    const f = fixture(); await f.engine.preload();
+    f.state.settings.playback_device_id = "headset";
+    f.ctx.setSinkId = async () => { throw Error("temporarily unavailable"); };
+    await f.engine.setOutput("headset");
+    assert.equal(f.engine.outputState, "unavailable");
+    f.ctx.setSinkId = async id => { f.ctx.sinkId = id; };
+    await f.engine.setOutput("headset", { retry: true });
+    assert.equal(f.engine.outputState, "ready");
+    assert.equal(f.ctx.sinkId, "headset");
+    assert.equal(f.engine.play("dm"), true);
+});
+
+for (const fallbackWorks of [false, true]) test(`live notifications recover a failed selected output (fallback=${fallbackWorks}) without replaying old cues`, async () => {
+    const f = fixture();
+    f.state.settings.playback_device_id = "headset";
+    const routes = [];
+    let available = false;
+    f.ctx.setSinkId = async id => {
+        routes.push(id);
+        if (!available && (id || !fallbackWorks)) throw Error("temporarily unavailable");
+        f.ctx.sinkId = id;
+    };
+    await f.engine.preload(["dm"]);
+    assert.equal(f.engine.outputState, fallbackWorks ? "fallback" : "unavailable");
+    for (let i = 0; i < 20; i++) await f.engine.setOutput("headset");
+    assert.deepEqual(routes, ["headset", ""], "failed routes do not spin on every event");
+    available = true; f.tick(2000);
+    assert.equal(f.engine.play("dm"), fallbackWorks, "only an already-working fallback plays during recovery");
+    await Promise.all(Array.from({ length: 20 }, () => f.engine.setOutput("headset")));
+    assert.equal(f.engine.outputState, "ready");
+    assert.deepEqual(routes, ["headset", "", "headset"]);
+    assert.equal(f.sources.length, fallbackWorks ? 1 : 0, "recovery must not replay old notifications");
+    f.tick();
+    assert.equal(f.engine.play("dm"), true);
+    f.tick(2000); await f.engine.setOutput("headset");
+    assert.equal(routes.length, 3, "healthy output remains cached");
+    await f.engine.dispose();
+});
+
+test("a missing headset keeps notifications audible on fallback across retries", async () => {
+    const f = fixture();
+    f.state.settings.playback_device_id = "missing-headset";
+    f.ctx.setSinkId = async id => { if (id) throw Error("device removed"); };
+    await f.engine.preload(["dm"]);
+    for (let i = 0; i < 3; i++) {
+        f.tick(3000);
+        assert.equal(f.engine.play("dm"), true);
+        await f.engine.output;
+        assert.equal(f.engine.outputState, "fallback");
+        assert.equal(f.engine.outputReady, true);
+    }
+    await f.engine.dispose();
 });

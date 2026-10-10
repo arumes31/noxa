@@ -168,11 +168,14 @@ describe("applyStaticLabels", () => {
         const keys = ["login.server", "login.nickname", "login.displayName", "login.accountPassword", "login.serverPassword", "login.optional", "login.optionalHint", "login.connect", "login.recentServers"];
         const labels = keys.map(loginI18n => ({ dataset: { loginI18n }, textContent: "old" }));
         const attributes = {};
+        const placeholderAttributes = {};
+        const placeholder = { dataset: { loginI18nPlaceholder: "login.serverPlaceholder" }, setAttribute(name, value) { placeholderAttributes[name] = value; } };
         const login = { dataset: { loginI18nAriaLabel: "workspace.labels.serverConnection" }, setAttribute(name, value) { attributes[name] = value; } };
         globalThis.document = {
             querySelectorAll(selector) {
                 if (selector === "[data-login-i18n]") return labels;
                 if (selector === "[data-login-i18n-aria-label]") return [login];
+                if (selector === "[data-login-i18n-placeholder]") return [placeholder];
                 return [];
             },
         };
@@ -184,6 +187,7 @@ describe("applyStaticLabels", () => {
             ["Server", "Konto-Login / Gastname", "Anzeigename (optional)", "Konto-Passwort (optional)", "Server-Passwort (optional)", "Optionale Angaben", "Anzeigename · Passwörter", "Verbinden", "Letzte Server"],
         );
         assert.equal(attributes["aria-label"], "Serververbindung");
+        assert.equal(placeholderAttributes.placeholder, "Serveradresse");
     });
 
     it("tolerates missing optional DOM elements", () => {

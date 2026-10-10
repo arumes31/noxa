@@ -189,7 +189,7 @@ test("selected wins: volume reset persists and amplification is explicit", async
     const slider = page.locator("#member-volume");
     await slider.fill("150");
     await slider.dispatchEvent("change");
-    await expect(page.locator("#member-volume-value")).toHaveText("150% · amplified");
+    await expect(page.locator("#member-volume-value")).toHaveText("150% · amplified · +10 dB");
     await page.getByRole("button", { name: "Reset to 100%", exact: true }).click();
     await expect(slider).toHaveValue("100");
     await expect.poll(() => page.evaluate(() => window.__saved.user_volumes["alice-uid"])).toBe(100);

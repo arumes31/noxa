@@ -1,0 +1,12 @@
+.connection-benchmark { margin-block: 1.25rem; padding-block: 1rem; border-top: 1px solid var(--border); }
+.connection-benchmark p { max-width: 70ch; line-height: 1.5; }
+.connection-benchmark-actions { display: flex; flex-wrap: wrap; gap: .5rem; }
+.connection-benchmark button { min-height: 36px; padding: 7px 14px; border: 1px solid var(--border); border-radius: 3px; background: var(--bg-hover); color: var(--text); cursor: pointer; font: inherit; }
+.connection-benchmark button:hover:not(:disabled) { border-color: var(--accent); }
+.connection-benchmark button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.connection-benchmark button:disabled { opacity: .55; cursor: not-allowed; }
+.connection-benchmark progress { width: 100%; margin-block: .5rem; accent-color: var(--accent); }
+.connection-benchmark-results dl { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .5rem 1rem; }
+.connection-benchmark-results dt { color: var(--text-dim); }
+.connection-benchmark-results dd { margin: 0; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+@media (max-width: 540px) { .connection-benchmark-results dl { grid-template-columns: 1fr; } .connection-benchmark-results dd { margin-bottom: .5rem; } }

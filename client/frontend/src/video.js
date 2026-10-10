@@ -14,5 +14,5 @@ const grid = createVideoGrid({
 });
 publication = createVideoPublication({ policy: grid });
 
-export const { videoTrackAdded, videoTrackRemoved, videoSpeaking, videoRefreshNames, clearVideoGrid, initVideo, setIdleQualityOverride, isLowBandwidth, setLowBandwidth } = grid;
+export const { videoTrackAdded, videoTrackRemoved, videoSpeaking, videoRefreshNames, clearVideoGrid, initVideo, isLowBandwidth, setLowBandwidth } = grid;
 export const { applyVideoLimits, shareToggle, clearRegionBox, resetCameraState, cameraToggle } = publication;

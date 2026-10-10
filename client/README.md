@@ -14,6 +14,12 @@ fontsource — fully offline in WebView2):
   shows connection/idle time (ticking), ping (or `unknown`), client address
   (IP only for self or with ViewConnectionInfo), and transfer
   stats — live-refreshing every 2s.
+- **Personal audio** — compact voice and screen-share volume, mute, and reset
+  controls appear directly in the member context menu. Tall menus scroll within
+  the window, including actions loaded after the menu opens.
+- Notification audio retries temporary output-device failures on interaction or
+  subsequent live cues, while preserving mute/DND preferences and avoiding replay
+  of missed sounds.
 - **Server information** — click the server name, the latency readout, or
   Connections → Server information. Shows server details and your connection's
   latency, incoming audio loss/jitter, and In/Out control and media traffic.
@@ -35,6 +41,9 @@ fontsource — fully offline in WebView2):
   download UI itself is future work), Chat (max lines, per-scope file
   logging), Security (identity manager: UID display/copy, export/import,
   regenerate), Notifications (toast + synthesized sound toggles).
+- Voice activation keeps transmission open for 450 ms after the last detected
+  speech to preserve quiet word endings. Channels, private calls, and the mic
+  preview use the same release time; mute and deafen remain immediate.
 - **Left** — wordmark + connection pill, channel tree with nesting indent
   lines, users with avatar circles (initials fallback) and a pulsing
   speaking glow ring.
@@ -67,7 +76,7 @@ failures, and connection loss.
 - **Per-user volume & local mute** — right-click a user → Volume slider
   (0–200%) or Mute locally; persisted per unique ID in `settings.json`.
   The same personal controls are available from chat authors, member mentions,
-  member cards, the voice participant strip, and private-call participants. Volume previews while dragging,
+  member cards and private-call participants. Volume previews while dragging,
   saves on release, and can be reset to 100%; cancelling restores the saved
   level. Member cards stay synchronized with changes made in menus and keep
   keyboard focus after saving. Private calls multiply personal volume by the
@@ -347,6 +356,10 @@ The files UI (`frontend/src/files-ui.js`, bindings in `files.go`) adds a
   settings control its volume and per-event toggle; master mute and DND apply.
   Closing to the tray and update restarts stay silent. Exit continues if audio
   is unavailable, with a four-second fallback for an unresponsive renderer.
+- **Channel announcements**: live membership snapshots announce users joining,
+  leaving, disconnecting or moving out of your current voice channel. English
+  and German recordings follow Notifications speech and join/leave preferences.
+  Initial connection, reconnect and tab-history replay do not announce old changes.
 - **Themes & fonts (294-297)**: dark/light/high-contrast variable sets,
   accent color picker, scoped user-CSS textarea, UI font family + size, all
   live-applied.
@@ -599,8 +612,9 @@ update source" and stays silent.
 
 **Security note**: SHA-256 verifies artifact integrity and the detached
 Ed25519 signature authenticates the signed manifest against keys embedded in
-the client. Key setup and rotation are documented in
-[`docs/update-signing.md`](../docs/update-signing.md).
+the client. Custom builds must embed trusted public keys with
+`NOXA_UPDATE_PUBLIC_KEYS` for Make or `-UpdatePublicKeys` for the PowerShell wrapper.
+Never include the private signing key in a client build.
 
 ## Headless backend test
 
@@ -643,7 +657,6 @@ request/response round-trip works.
 - Channel discussions provide persistent independent threads and forum boards,
   tags, membership, following, unread state, and archive/reopen controls. Message
   bodies use channel encryption; titles and tags are server-visible metadata.
-  See [threads and forums](../docs/threads-and-forums.md) for permissions and migration.
 - The microphone button in channel, private-group and discussion composers
   records up to five minutes or 5 MiB. Preview, discard or send the recording as
   an encrypted attachment; recipients explicitly load it for inline playback.
@@ -658,14 +671,23 @@ request/response round-trip works.
 - Shared audio has a separate personal mute and 0–200% volume setting per member,
   independent of that member's microphone volume. Deafen still silences both.
 - The inbox, older-history search and personal saved collections provide message
-  navigation. See [message tools](../docs/message-tools.md) for scope and persistence.
+  navigation scoped to the current server.
 - Discussion controls include title/tag editing, pinning, resolved status and
-  inactivity archiving. Channel managers can create/revoke incoming text webhooks;
-  see [incoming webhooks](../docs/incoming-webhooks.md) for HTTPS setup and limits.
-- Settings → Application → Gaming overlay is enabled by default on Windows and
-  can be disabled. A separate, nonactivating window shows current voice speakers,
-  mute state and brief notifications on a selected monitor. Settings provide
-  position presets or a draggable preview, size, opacity and speakers-only mode.
+  inactivity archiving. Channel managers can create/revoke incoming text webhooks.
+  Remote HTTP access requires an HTTPS proxy.
+- Settings → Overlay contains the voice overlay controls. It is enabled by default on Windows and
+  can be disabled. Only active, unmuted speakers appear, each with a circular
+  avatar, name and animated cyan activity indicator on a transparent background.
+  It defaults to the left edge at 45% of the primary monitor work-area height, expanding
+  upward and downward as speakers join, with compact 40 px avatars
+  (80% size), and hides when everyone is quiet or you mute/deafen in the main
+  controls or an active private call. Unmuting/undeafening restores the overlay
+  if someone is speaking. The native animation continues
+  while noXa is unfocused and even when Windows animations are disabled. The
+  separate "Animate speaking indicators" setting can disable overlay motion.
+  Settings provide monitor selection, position presets or a draggable preview,
+  size and opacity. Missing avatars fall back to initials. The activity waveform
+  indicates speaking, not measured volume.
   It passes input through and supports windowed/borderless games. Exclusive
   fullscreen and other operating systems are not supported.
 

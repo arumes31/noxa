@@ -1,5 +1,7 @@
 // connection-quality.js — connection quality sampling and freshness.
 import { t } from "./i18n.js";
+import { voicePlaybackHealth } from "./voice-diagnostics.js";
+import { createVoicePlaybackTooltip } from "./voice-playback-tooltip.js";
 
 
 export function createConnectionQuality({ $, state }) {
@@ -14,6 +16,7 @@ export function createConnectionQuality({ $, state }) {
     let qualityAgeTimer = null;
     let qualitySamplerEpoch = 0;
     let lastQualitySample = null;
+    let playbackTooltip = null;
 
     function qualitySampleAge(at, now = Date.now()) {
         const seconds = Math.max(0, Math.floor((now - at) / 1000));
@@ -33,11 +36,38 @@ export function createConnectionQuality({ $, state }) {
         const text = `${lastQualitySample.pingMs} ms${stale ? " · " + qualityLabel : ""}`;
         const label = t("runtime.latencyLabel", { ping: lastQualitySample.pingMs, quality: qualityLabel });
         // The existing age ticker runs each second; only change visible DOM when
-        // the value or freshness actually changes. No layout reads or new timers.
+        // the value or freshness actually changes. Tooltip layout runs only
+        // while its details are visible.
         if (latency.textContent !== text) latency.textContent = text;
         if (latency.dataset.quality !== quality) latency.dataset.quality = quality;
         if (latency.getAttribute("aria-label") !== label) latency.setAttribute("aria-label", label);
         if (latency.hidden) latency.hidden = false;
+        const voiceSample = state.voiceTelemetry;
+        const scope = JSON.stringify([state.activeTabID, state.serverGeneration, state.myChannelID]);
+        const currentVoice = !!state.myChannelID && voiceSample?.scope === scope && voiceSample.peer === state.pc;
+        const health = voicePlaybackHealth(currentVoice ? voiceSample.report : null, currentVoice ? Date.now() - voiceSample.at : 0);
+        const playbackQuality = currentVoice ? health.quality : "";
+        if (pill.dataset.playbackQuality !== playbackQuality) pill.dataset.playbackQuality = playbackQuality;
+        // Preserve the established ping badge and show playback independently:
+        // an excellent control RTT cannot make damaged/delayed audio look good.
+        let playback = $("voice-playback-quality");
+        if (!playback && latency.parentElement) {
+            playback = document.createElement("button");
+            playback.type = "button";
+            playback.id = "voice-playback-quality";
+            playback.className = "voice-playback-quality";
+            latency.after(playback);
+            playbackTooltip = createVoicePlaybackTooltip(playback);
+        }
+        if (playback) {
+            playback.hidden = !currentVoice;
+            if (playback.dataset.quality !== playbackQuality) playback.dataset.quality = playbackQuality;
+            const playbackText = currentVoice ? t("diagnostics.healthBadge", { quality: t(`diagnostics.health.${health.quality}`) }) : "";
+            const route = currentVoice ? voiceSample.report.transport : null;
+            if (playback.textContent !== playbackText) playback.textContent = playbackText;
+            if (playback.getAttribute("aria-label") !== playbackText) playback.setAttribute("aria-label", playbackText);
+            playbackTooltip?.update(currentVoice ? health : null, route);
+        }
         if (pill.dataset.quality !== quality) pill.dataset.quality = quality;
         pill.title = t("runtime.qualityTitle", { quality: t(`runtime.quality.${lastQualitySample.quality}`), ping: lastQualitySample.pingMs, age: qualitySampleAge(lastQualitySample.at) });
         const title = t("runtime.latencyTitle", { quality: qualityLabel, age: qualitySampleAge(lastQualitySample.at) });
@@ -94,6 +124,10 @@ export function createConnectionQuality({ $, state }) {
         lastQualitySample = null;
         const pill = $("conn-pill");
         delete pill.dataset.quality;
+        delete pill.dataset.playbackQuality;
+        playbackTooltip?.destroy();
+        playbackTooltip = null;
+        $("voice-playback-quality")?.remove();
         pill.title = pill.classList.contains("up") ? "" : t("runtime.latencyOffline");
         const latency = $("voice-latency");
         latency.hidden = true;

@@ -3,14 +3,19 @@ package webrtc
 import (
 	"errors"
 	"net"
+	"sort"
 	"time"
 
 	"github.com/pion/rtp"
 )
 
 const videoReorderWait = 200 * time.Millisecond
-const videoReorderPackets = 128
-const videoReorderBytes = 256 * 1024
+
+// A 50 Mbps source needs about 1.25 MB and 1,042 ordinary RTP packets for
+// this repair window. Leave bounded headroom for keyframe bursts; a tiny
+// packet cap otherwise abandons gaps before the first NACK can return.
+const videoReorderPackets = 2048
+const videoReorderBytes = 2 * 1024 * 1024
 
 type orderedVideoPacket struct {
 	packet *rtp.Packet
@@ -26,19 +31,24 @@ type videoReorder struct {
 	next    uint16
 	bytes   int
 	pending map[uint16]orderedVideoPacket
+	expires time.Time
+	dirty   bool
 }
 
 func (q *videoReorder) deadline() time.Time {
-	var oldest time.Time
-	for _, entry := range q.pending {
-		if oldest.IsZero() || entry.at.Before(oldest) {
-			oldest = entry.at
+	// Reads behind the same missing packet must not scan the entire repair
+	// window. Recompute only after its oldest entry has actually been removed.
+	if q.dirty {
+		q.expires = time.Time{}
+		for _, entry := range q.pending {
+			expires := entry.at.Add(videoReorderWait)
+			if q.expires.IsZero() || expires.Before(q.expires) {
+				q.expires = expires
+			}
 		}
+		q.dirty = false
 	}
-	if oldest.IsZero() {
-		return time.Time{}
-	}
-	return oldest.Add(videoReorderWait)
+	return q.expires
 }
 
 func (q *videoReorder) push(packet *rtp.Packet, codec string, now time.Time, emit func(*rtp.Packet, string)) {
@@ -72,6 +82,12 @@ func (q *videoReorder) push(packet *rtp.Packet, codec string, now time.Time, emi
 	if q.pending == nil {
 		q.pending = make(map[uint16]orderedVideoPacket)
 	}
+	expires := now.Add(videoReorderWait)
+	if len(q.pending) == 0 {
+		q.expires, q.dirty = expires, false
+	} else if !q.dirty && expires.Before(q.expires) {
+		q.expires = expires
+	}
 	q.pending[packet.SequenceNumber] = orderedVideoPacket{packet.Clone(), codec, now}
 	q.bytes += size
 	q.flush(time.Time{}, false, emit)
@@ -84,25 +100,61 @@ func (q *videoReorder) flush(now time.Time, force bool, emit func(*rtp.Packet, s
 			if !force && now.Before(q.deadline()) {
 				return
 			}
-			nearest := uint16(32767)
-			for sequence := range q.pending {
-				if distance := sequence - q.next; distance < nearest {
-					nearest = distance
-				}
-			}
-			q.next += nearest
-			entry = q.pending[q.next]
+			q.flushGaps(now, force, emit)
+			return
 		}
 		delete(q.pending, q.next)
+		if entry.at.Add(videoReorderWait).Equal(q.expires) {
+			q.dirty = true
+		}
 		q.bytes -= entry.packet.MarshalSize()
 		q.next++
 		emit(entry.packet, entry.codec)
 	}
+	q.expires, q.dirty = time.Time{}, false
+}
+
+// Expiration/pressure can expose many gaps at once. Sort once and retain each
+// suffix's earliest deadline instead of repeatedly scanning the entire map.
+// The ordinary contiguous path above does not allocate this work list.
+func (q *videoReorder) flushGaps(now time.Time, force bool, emit func(*rtp.Packet, string)) {
+	type pendingDeadline struct {
+		sequence uint16
+		expires  time.Time
+	}
+	ordered := make([]pendingDeadline, 0, len(q.pending))
+	for sequence, entry := range q.pending {
+		ordered = append(ordered, pendingDeadline{sequence, entry.at.Add(videoReorderWait)})
+	}
+	sort.Slice(ordered, func(i, j int) bool { return ordered[i].sequence-q.next < ordered[j].sequence-q.next })
+	for index := len(ordered) - 2; index >= 0; index-- {
+		if ordered[index+1].expires.Before(ordered[index].expires) {
+			ordered[index].expires = ordered[index+1].expires
+		}
+	}
+	for _, pending := range ordered {
+		if pending.sequence != q.next && !force && now.Before(pending.expires) {
+			q.expires, q.dirty = pending.expires, false
+			return
+		}
+		entry := q.pending[pending.sequence]
+		delete(q.pending, pending.sequence)
+		q.bytes -= entry.packet.MarshalSize()
+		q.next = pending.sequence + 1
+		emit(entry.packet, entry.codec)
+	}
+	q.expires, q.dirty = time.Time{}, false
 }
 
 // Pion's read deadline lets an idle screen release its final queued frame
 // without a helper goroutine. Fakes without deadlines flush at EOF instead.
-func readOrderedVideo(track VideoTrackReader, current func() bool, codec func() string, emit func(*rtp.Packet, string)) {
+func readOrderedVideo(track VideoTrackReader, current func() bool, codec func() string, emit func(*rtp.Packet, string), observe func(*rtp.Packet)) {
+	push := func(queue *videoReorder, packet *rtp.Packet) {
+		if observe != nil {
+			observe(packet)
+		}
+		queue.push(packet, codec(), time.Now(), emit)
+	}
 	var queue videoReorder
 	deadline, hasDeadline := track.(interface{ SetReadDeadline(time.Time) error })
 	for current() {
@@ -138,7 +190,7 @@ func readOrderedVideo(track VideoTrackReader, current func() bool, codec func() 
 						return
 					}
 					if repaired != nil {
-						queue.push(repaired, codec(), time.Now(), emit)
+						push(&queue, repaired)
 					}
 				}
 				queue.flush(time.Now(), false, emit)
@@ -148,7 +200,7 @@ func readOrderedVideo(track VideoTrackReader, current func() bool, codec func() 
 			return
 		}
 		if packet != nil {
-			queue.push(packet, codec(), time.Now(), emit)
+			push(&queue, packet)
 		}
 	}
 }

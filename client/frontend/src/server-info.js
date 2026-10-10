@@ -4,6 +4,7 @@ import { icon } from "./icons.js";
 import { copyToClipboard } from "./clipboard.js";
 import { formatBytes, formatBitrate, formatDuration, measured, summarizeMedia, summarizeVideoProcessing } from "./connection-stats.js";
 import { t } from "./i18n.js";
+import { samplePeerStats } from "./peer-stats.js";
 
 const V = () => window.__noxa;
 let currentOverlay = null;
@@ -112,7 +113,7 @@ export function openServerInfo() {
             const [infoResult, serverResult, mediaResult] = await Promise.allSettled([
                 Promise.resolve().then(() => app.GetClientInfoForTab(tabID, clientID)),
                 Promise.resolve().then(() => refreshServer ? app.ServerInfoForTab(tabID) : server),
-                Promise.resolve().then(() => pc?.getStats()),
+                Promise.resolve().then(() => pc ? samplePeerStats(pc) : null),
             ]);
             busy = false;
             if (!isCurrentServerDialog(overlay)) return;

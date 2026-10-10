@@ -1,0 +1,64 @@
+.pm-tab.has-unread {
+    position: relative; isolation: isolate; border-color: var(--accent); color: var(--text);
+    animation: pm-unread-border 4.2s linear infinite;
+}
+.pm-tab.has-unread.unread-arrival {
+    animation: pm-unread-border 1.2s linear 2, pm-unread-border-idle 4.2s linear infinite;
+    animation-delay: var(--pm-unread-elapsed), calc(2.4s + var(--pm-unread-elapsed));
+}
+.pm-unread-plasma {
+    position: absolute; left: -10px; top: -10px;
+    width: calc(100% + 20px); height: calc(100% + 20px);
+    pointer-events: none; z-index: -1;
+}
+.pm-tab.has-unread .pm-unread {
+    position: relative; flex: none; overflow: visible;
+    background: var(--accent); color: var(--bg);
+}
+.pm-unread-halo, .pm-unread-echo {
+    position: absolute; left: 50%; top: 50%; pointer-events: none;
+    width: calc(100% + 6px); height: calc(100% + 6px); box-sizing: border-box;
+    border: 1.5px solid var(--accent); border-radius: inherit;
+    transform: translate(-50%, -50%); opacity: 0.55;
+    box-shadow: 0 0 8px var(--accent);
+    animation: pm-counter-halo 4.2s linear infinite;
+}
+.pm-unread-echo { border-width: 1px; opacity: 0; animation-name: pm-counter-echo; }
+.unread-arrival .pm-unread-halo {
+    animation: pm-counter-halo 1.2s linear 2, pm-counter-halo-idle 4.2s linear infinite;
+    animation-delay: var(--pm-unread-elapsed), calc(2.4s + var(--pm-unread-elapsed));
+}
+.unread-arrival .pm-unread-echo {
+    animation: pm-counter-echo 1.2s linear 2, pm-counter-echo-idle 4.2s linear infinite;
+    animation-delay: var(--pm-unread-elapsed), calc(2.4s + var(--pm-unread-elapsed));
+}
+/* The counter answers the border peak at 29%, then releases an outer echo.
+   Separate idle names keep negative delays stable across complete bar redraws. */
+@keyframes pm-unread-border {
+    0%, 70%, 100% { border-color: color-mix(in srgb, var(--accent) 35%, var(--border)); }
+    29% { border-color: var(--accent); }
+}
+@keyframes pm-unread-border-idle {
+    0%, 70%, 100% { border-color: color-mix(in srgb, var(--accent) 35%, var(--border)); }
+    29% { border-color: var(--accent); }
+}
+@keyframes pm-counter-halo {
+    0%, 100% { opacity: 0.28; transform: translate(-50%, -50%) scale(1); box-shadow: 0 0 7px var(--accent); }
+    29%, 67% { opacity: 0.53; transform: translate(-50%, -50%) scale(1.08); }
+    48% { opacity: 0.98; transform: translate(-50%, -50%) scale(1.2); box-shadow: 0 0 13px var(--accent); }
+}
+@keyframes pm-counter-halo-idle {
+    0%, 100% { opacity: 0.28; transform: translate(-50%, -50%) scale(1); box-shadow: 0 0 7px var(--accent); }
+    29%, 67% { opacity: 0.53; transform: translate(-50%, -50%) scale(1.08); }
+    48% { opacity: 0.98; transform: translate(-50%, -50%) scale(1.2); box-shadow: 0 0 13px var(--accent); }
+}
+@keyframes pm-counter-echo {
+    0%, 41% { opacity: 0; transform: translate(-50%, -50%) scale(1); }
+    42% { opacity: 0.55; transform: translate(-50%, -50%) scale(1); }
+    87%, 100% { opacity: 0; transform: translate(-50%, -50%) scale(1.5); }
+}
+@keyframes pm-counter-echo-idle {
+    0%, 41% { opacity: 0; transform: translate(-50%, -50%) scale(1); }
+    42% { opacity: 0.55; transform: translate(-50%, -50%) scale(1); }
+    87%, 100% { opacity: 0; transform: translate(-50%, -50%) scale(1.5); }
+}

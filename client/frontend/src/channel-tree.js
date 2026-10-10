@@ -2,18 +2,23 @@
 import { filterConversations, privateGroupViewToken } from "./conversations.js";
 import { isUserMuted } from "./audio.js";
 import * as chatUI from "./chat-ui.js";
-import { publishAudioState } from "./audio-state.js";
+import { isClientMicrophoneMuted, publishAudioState } from "./audio-state.js";
 import { roleChip } from "./role-presentation.js";
 import { setSafeImage } from "./safe-media.js";
 import { t } from "./i18n.js";
 import { presenceLabel } from "./presence.js";
 import { icon } from "./icons.js";
+import { memberScreenStream } from "./stream-controls.js";
 import { renderWorkspace } from "./workspace-ui.js";
 import { captureScope, scopeIsCurrent } from "./scoped-actions.js";
+import { createSpeakingAvatars, speakingAvatar } from "./speaking-avatar.js";
+
+const memberNameOrder = new Intl.Collator(undefined, { sensitivity: "base", numeric: true });
 
 export function createChannelTree({ P, $, syncTrayVoice, state, toast, fetchAvatar, renderClientCard, setDetailsOpen, renderDirectTargets }) {
     const readEchoScope = () => ({ tabID: state.activeTabID, generation: state.serverGeneration, session: state.sessionGeneration });
     let echoInfo = null;
+    let speakingAvatars = null;
 
     async function refreshEchoChannel() {
         const request = { scope: captureScope(readEchoScope), channelID: 0 };
@@ -119,6 +124,8 @@ export function createChannelTree({ P, $, syncTrayVoice, state, toast, fetchAvat
         publishAudioState();
         syncTrayVoice();
         restoreTreeFocus(root, focusState);
+        speakingAvatars ||= createSpeakingAvatars(root);
+        speakingAvatars.refresh();
     }
 
     function captureTreeFocus(root) {
@@ -283,7 +290,7 @@ export function createChannelTree({ P, $, syncTrayVoice, state, toast, fetchAvat
             if (expandable) setChannelExpanded(ch.ChannelID, collapsed);
         };
         if (!collapsed) {
-            const members = state.clients.filter((c) => c.channel_id === ch.ChannelID);
+            const members = channelMembers(ch.ChannelID);
             if (members.length > 0) {
                 const list = document.createElement("div");
                 list.className = "channel-members";
@@ -336,10 +343,22 @@ export function createChannelTree({ P, $, syncTrayVoice, state, toast, fetchAvat
         }
     }
 
+    function channelMembers(channelID) {
+        // Snapshots originate from a server map. Tie identical names to identity
+        // so speech, mute and presence updates cannot shuffle the visible rows.
+        return state.clients.filter(c => c.channel_id === channelID).sort((a, b) =>
+            memberNameOrder.compare(a.nickname || a.unique_id || "", b.nickname || b.unique_id || "") ||
+            String(a.unique_id || "").localeCompare(String(b.unique_id || "")) ||
+            String(a.client_id).localeCompare(String(b.client_id)));
+    }
+
     function clientRow(c) {
         const tabID = state.activeTabID, generation = state.serverGeneration;
         const row = document.createElement("div");
-        const speakingHere = state.myChannelID !== 0 && c.channel_id === state.myChannelID && c.is_speaking;
+        const speakingHere = state.myChannelID !== 0 && c.channel_id === state.myChannelID && c.is_speaking && !isClientMicrophoneMuted(c, state);
+        const stream = c.client_id === state.myClientID ? { active: state.screenSharing, watching: false } : memberScreenStream(c.client_id);
+        const sharing = stream ? stream.active : c.sharing;
+        const streamLabel = sharing ? t(stream?.watching ? "streams.memberWatching" : "streams.memberLive") : "";
         row.className = "client" + (speakingHere ? " speaking" : "") +
             (state.multiSelect.has(c.client_id) ? " selected" : "") +
             (c.status === "away" || c.status === "busy" || c.status === "invisible" ? " " + c.status : "");
@@ -350,6 +369,7 @@ export function createChannelTree({ P, $, syncTrayVoice, state, toast, fetchAvat
         row.setAttribute("aria-label", [c.nickname || c.unique_id || t("runtime.user"),
             c.status && presenceLabel(c.status), speakingHere && t("runtime.speaking"),
             c.priority_speaker && t("runtime.priority"),
+            streamLabel,
             c.client_id === state.myClientID && state.muted && t("runtime.muted"),
             c.client_id === state.myClientID && state.deafened && t("runtime.deaf")].filter(Boolean).join(", "));
         // (140/305) users are draggable (group assign in the manager; move by
@@ -382,8 +402,17 @@ export function createChannelTree({ P, $, syncTrayVoice, state, toast, fetchAvat
         if (gColor) name.style.color = gColor;
         const g = P().primaryGroup(c.unique_id);
         if (g) name.title = `${t("roles.title")}: ${(c.roles || []).map((r) => r.name).join(", ")}`;
-        row.appendChild(av);
+        row.appendChild(speakingHere ? speakingAvatar(av) : av);
         row.appendChild(name);
+        if (sharing) {
+            const indicator = document.createElement("span");
+            indicator.className = "client-stream-state" + (stream?.watching ? " watching" : "");
+            indicator.innerHTML = icon(stream?.watching ? "streamWatching" : "streamLive");
+            indicator.title = streamLabel;
+            indicator.setAttribute("role", "img");
+            indicator.setAttribute("aria-label", streamLabel);
+            row.appendChild(indicator);
+        }
         // (310) group badge next to the name. Groups without an icon get a text
         // chip in the group colour instead of nothing — colour and hoisting are
         // settable on their own, so an icon is not what makes a group visible.
@@ -407,7 +436,7 @@ export function createChannelTree({ P, $, syncTrayVoice, state, toast, fetchAvat
             st.title = presenceLabel(c.status) + (c.status_message ? ": " + c.status_message : "");
             row.appendChild(st);
         }
-        // (10) Own status icons: muted / deafened / screen sharing.
+        // (10) Microphone and deafen status; sharing has its own named indicator.
         if (c.client_id !== state.myClientID) {
             for (const [visible, glyph, key] of [[c.server_muted || c.self_muted || c.self_deafened, "micOff", c.server_muted ? "workspace.voice.serverMuted" : "workspace.voice.muted"],
                 [c.server_deafened || c.self_deafened, "headphonesOff", c.server_deafened ? "workspace.voice.serverDeafened" : "audioState.deafened"]]) {
@@ -424,7 +453,7 @@ export function createChannelTree({ P, $, syncTrayVoice, state, toast, fetchAvat
             const icons = document.createElement("span");
             icons.className = "status-icons";
             icons.innerHTML = icon(state.muted ? "micOff" : "mic") +
-                (state.deafened ? icon("headphonesOff") : "") + (state.screenSharing ? icon("screen") : "");
+                (state.deafened ? icon("headphonesOff") : "");
             row.appendChild(icons);
             // (347) DND shows on own status icons.
             if (window.__noxaPolish?.dndActive?.()) {
@@ -442,14 +471,6 @@ export function createChannelTree({ P, $, syncTrayVoice, state, toast, fetchAvat
             icons.title = t("runtime.mutedLocally");
             row.appendChild(icons);
         }
-        if (speakingHere) {
-            const voice = document.createElement("span");
-            voice.className = "client-voice-state";
-            voice.title = t("runtime.talkingHere");
-            voice.setAttribute("aria-label", t("runtime.talking"));
-            voice.innerHTML = "<i></i><i></i><i></i>";
-            row.appendChild(voice);
-        }
         row.onclick = (e) => {
             e.stopPropagation();
             // (306) ctrl/shift multi-select; plain click selects just this user.
@@ -457,7 +478,7 @@ export function createChannelTree({ P, $, syncTrayVoice, state, toast, fetchAvat
                 if (state.multiSelect.has(c.client_id)) state.multiSelect.delete(c.client_id);
                 else state.multiSelect.add(c.client_id);
             } else if (e.shiftKey && state.selectedClientID) {
-                const rows = state.clients.filter((x) => x.channel_id === c.channel_id);
+                const rows = channelMembers(c.channel_id);
                 const ids = rows.map((x) => x.client_id);
                 const a = ids.indexOf(state.selectedClientID);
                 const b = ids.indexOf(c.client_id);

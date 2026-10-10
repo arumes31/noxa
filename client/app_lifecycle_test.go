@@ -144,6 +144,120 @@ func TestRestoreWindowOpacityRetriesUntilNativeWindowExists(t *testing.T) {
 	}
 }
 
+func TestRestoreWindowOpacityStopsWhenWindowStaysUnavailable(t *testing.T) {
+	originalInterval, originalApply := lifecyclePollInterval, windowOpacityApply
+	lifecyclePollInterval = time.Millisecond
+	var calls atomic.Int32
+	windowOpacityApply = func(int) error {
+		calls.Add(1)
+		return errors.New("window unavailable")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	t.Cleanup(func() {
+		cancel()
+		<-done
+		lifecyclePollInterval, windowOpacityApply = originalInterval, originalApply
+	})
+	go func() {
+		(&App{settings: DefaultSettings()}).restoreWindowOpacity(ctx)
+		close(done)
+	}()
+	select {
+	case <-done:
+		if got := calls.Load(); got != windowOpacityStartupAttempts {
+			t.Fatalf("opacity attempts = %d, want bounded %d", got, windowOpacityStartupAttempts)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("unavailable native window left an unbounded opacity retry loop")
+	}
+}
+
+func TestDOMReadyRestoresOpacityAfterStartupRetryLimit(t *testing.T) {
+	originalInterval, originalApply := lifecyclePollInterval, windowOpacityApply
+	t.Cleanup(func() { lifecyclePollInterval, windowOpacityApply = originalInterval, originalApply })
+	lifecyclePollInterval = time.Millisecond
+	windowOpacityApply = func(int) error { return errors.New("window unavailable") }
+	a := &App{settings: DefaultSettings()}
+	a.restoreWindowOpacity(context.Background())
+	var applied int
+	windowOpacityApply = func(value int) error { applied = value; return nil }
+	a.settings.WindowOpacity = 72
+	a.domReady(context.Background())
+	if applied != 72 {
+		t.Fatalf("DOM-ready opacity = %d, want persisted 72 after startup cutoff", applied)
+	}
+	a.shutdown(context.Background())
+	applied = 0
+	a.domReady(context.Background())
+	if applied != 0 {
+		t.Fatal("DOM-ready applied opacity after shutdown")
+	}
+}
+
+func TestQueuedOpacityRestoreUsesLatestSettings(t *testing.T) {
+	originalApply := windowOpacityApply
+	t.Cleanup(func() { windowOpacityApply = originalApply })
+	var applied []int
+	windowOpacityApply = func(value int) error { applied = append(applied, value); return nil }
+	a := &App{settings: DefaultSettings(), settingsPath: t.TempDir() + "/settings.json"}
+	a.opacityMu.Lock()
+	done := make(chan error, 1)
+	go func() { done <- a.restoreWindowOpacityOnce(context.Background()) }()
+	waitForQueuedOpacityRestore(t, a)
+	generation, err := a.updateSettings(func(current Settings) Settings {
+		current.WindowOpacity = 67
+		return current
+	})
+	if err != nil {
+		a.opacityMu.Unlock()
+		t.Fatal(err)
+	}
+	a.opacityMu.Unlock()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if err := a.applyOpacityEffect(generation); err != nil {
+		t.Fatal(err)
+	}
+	if len(applied) != 2 || applied[0] != 67 || applied[1] != 67 || loadSettingsAt(a.settingsPath).WindowOpacity != 67 {
+		t.Fatalf("queued restore and settings effect applied %v, want newest durable opacity 67", applied)
+	}
+}
+
+func TestShutdownRejectsQueuedOpacityRestore(t *testing.T) {
+	originalApply := windowOpacityApply
+	t.Cleanup(func() { windowOpacityApply = originalApply })
+	windowOpacityApply = func(int) error { t.Error("queued opacity restore ran after shutdown"); return nil }
+	a := &App{settings: DefaultSettings()}
+	a.opacityMu.Lock()
+	done := make(chan error, 1)
+	go func() { done <- a.restoreWindowOpacityOnce(context.Background()) }()
+	waitForQueuedOpacityRestore(t, a)
+	a.shutdown(context.Background())
+	a.opacityMu.Unlock()
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Fatalf("queued restore result = %v, want cancellation after shutdown", err)
+	}
+}
+
+func waitForQueuedOpacityRestore(t *testing.T, a *App) {
+	t.Helper()
+	deadline := time.After(time.Second)
+	for {
+		if !a.settingsEffectMu.TryLock() {
+			return // Restore owns effect ordering and is queued on opacityMu.
+		}
+		a.settingsEffectMu.Unlock()
+		select {
+		case <-deadline:
+			a.opacityMu.Unlock()
+			t.Fatal("opacity restore did not enter effect ordering")
+		case <-time.After(time.Millisecond):
+		}
+	}
+}
+
 func TestMinimizeWatcherUsesRisingEdgeAndShutdownCancelsPromptly(t *testing.T) {
 	originalInterval := lifecyclePollInterval
 	originalIsMin := windowIsMinimized

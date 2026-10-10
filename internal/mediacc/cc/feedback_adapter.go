@@ -19,6 +19,10 @@ import (
 // so we don't need to reparse.
 const TwccExtensionAttributesKey = iota
 
+// FeedbackHistorySize retains feedback across high-bitrate packet bursts and
+// normal RTTs, while staying below half the 16-bit transport sequence space.
+const FeedbackHistorySize = 4096
+
 var (
 	errMissingTWCCExtension = errors.New("missing transport layer cc header extension")
 	errInvalidFeedback      = errors.New("invalid feedback")
@@ -33,7 +37,7 @@ type FeedbackAdapter struct {
 
 // NewFeedbackAdapter returns a new FeedbackAdapter.
 func NewFeedbackAdapter() *FeedbackAdapter {
-	return &FeedbackAdapter{history: newFeedbackHistory(250)}
+	return &FeedbackAdapter{history: newFeedbackHistory(FeedbackHistorySize)}
 }
 
 func (f *FeedbackAdapter) onSentRFC8888(ts time.Time, header *rtp.Header, size int) error {

@@ -222,27 +222,64 @@ test("frontend UI module behaviors", { concurrency: false }, async (t) => {
         assert.equal((await audio.applyCaptureProfile({ connectionState: "closed", getSenders: () => [sender] }, stream, null)).changed, false);
         assert.deepEqual(changes, []);
 
+        // A processed microphone replaces the sender output, never the raw
+        // capture. Failed and stale swaps must dispose only the new pipeline.
+        const processedOld = { kind: "audio" }, processedNext = { kind: "audio" };
+        const disposed = [];
+        let failPrepare = false, closeDuringPrepare = false, closeDuringReplace = false;
+        const gatedPeer = { connectionState: "connected", getSenders: () => [gatedSender] };
+        const gatedSender = { track: processedOld, replaceTrack: async track => {
+            gatedSender.track = track;
+            if (closeDuringReplace) gatedPeer.connectionState = "closed";
+        } };
+        const gate = {
+            sendTrack: () => processedOld,
+            prepare: async () => {
+                if (failPrepare) throw replacementError;
+                if (closeDuringPrepare) gatedPeer.connectionState = "closed";
+                return processedNext;
+            },
+            dispose: track => disposed.push(track),
+        };
+        const gated = await audio.applyCaptureProfile(gatedPeer, stream, null, gate);
+        assert.equal(gated.changed, true);
+        assert.equal(gatedSender.track, processedNext);
+        assert.equal(disposed.at(-1), oldTrack);
+        gatedSender.track = processedOld;
+        failPrepare = true;
+        assert.equal((await audio.applyCaptureProfile(gatedPeer, stream, null, gate)).error, replacementError);
+        assert.equal(gatedSender.track, processedOld);
+        failPrepare = false; closeDuringPrepare = true;
+        assert.equal((await audio.applyCaptureProfile(gatedPeer, stream, null, gate)).changed, false);
+        assert.equal(disposed.at(-1), freshTrack);
+        assert.equal(gatedSender.track, processedOld);
+        closeDuringPrepare = false; gatedPeer.connectionState = "connected"; closeDuringReplace = true;
+        assert.equal((await audio.applyCaptureProfile(gatedPeer, stream, null, gate)).changed, false);
+        assert.equal(gatedSender.track, null);
+        assert.equal(processedNext.enabled, false);
+        assert.equal(disposed.at(-1), freshTrack);
+
         const gainNode = { gain: { value: 0 } };
         const muteNode = { gain: { value: 0 } };
         audio.registerUserChain("alice", gainNode, muteNode);
-        assert.equal(gainNode.gain.value, 0.6);
+        assert.equal(gainNode.gain.value, 0.36);
         audio.setDucking(true, []);
-        assert.equal(gainNode.gain.value, 0.15);
+        assert.equal(gainNode.gain.value, 0.09);
         audio.setDucking(true, ["alice"]);
-        assert.equal(gainNode.gain.value, 0.6);
+        assert.equal(gainNode.gain.value, 0.36);
         await audio.setUserMuted("alice", true);
         assert.equal(gainNode.gain.value, 0);
         assert.equal(muteNode.gain.value, 0);
         assert.deepEqual(saved[0].muted_users, ["alice"]);
         audio.setDucking(false, []);
-        audio.unregisterUserChain("alice");
+        audio.unregisterUserChain("alice", gainNode);
 
         const compressor = {
             attack: { value: 0 }, knee: { value: 0 }, ratio: { value: 0 }, release: { value: 0 }, threshold: { value: 0 },
         };
         assert.equal(audio.makeLimiter({ createDynamicsCompressor: () => compressor }), compressor);
-        assert.equal(compressor.threshold.value, -12);
-        assert.equal(compressor.ratio.value, 8);
+        assert.equal(compressor.threshold.value, -6);
+        assert.equal(compressor.ratio.value, 20);
         const normalized = audio.makeNormalizer(
             { createGain: () => ({ gain: { value: 1 } }) },
             { frequencyBinCount: 2, getByteTimeDomainData: (buffer) => buffer.set([128, 144]) },

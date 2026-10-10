@@ -76,6 +76,9 @@ func (f *fakeVoice) PublishVideo(publisher, slot string, generation uint64, acti
 func (f *fakeVoice) WatchVideo(subscriber, publisher, slot string, generation, revision, session uint64, active bool) (bool, error) {
 	return f.videoRouter().WatchVideo(subscriber, publisher, slot, generation, revision, session, active)
 }
+func (f *fakeVoice) SetStreamVideoQuality(subscriber, publisher, slot string, generation, session uint64, quality string) error {
+	return f.videoRouter().SetStreamVideoQuality(subscriber, publisher, slot, generation, session, quality)
+}
 func (f *fakeVoice) VideoWatchSession(subscriber string) uint64 {
 	return f.videoRouter().VideoWatchSession(subscriber)
 }

@@ -23,6 +23,7 @@ type rateController struct {
 	dsWriter func(DelayStats)
 
 	lock               sync.Mutex
+	generation         uint64
 	init               bool
 	delayStats         DelayStats
 	target             int
@@ -87,6 +88,7 @@ func (c *rateController) updateRTT(rtt time.Duration) {
 }
 
 func (c *rateController) onDelayStats(ds DelayStats) {
+	c.lock.Lock()
 	now := c.now()
 	if ds.Usage != usageOver {
 		c.lossLimitedOveruse = time.Time{}
@@ -96,6 +98,7 @@ func (c *rateController) onDelayStats(ds DelayStats) {
 		c.delayStats = ds
 		c.delayStats.State = stateIncrease
 		c.init = true
+		c.lock.Unlock()
 
 		return
 	}
@@ -104,12 +107,11 @@ func (c *rateController) onDelayStats(ds DelayStats) {
 	c.delayStats.State = nextState
 
 	if c.delayStats.State == stateHold {
+		c.lock.Unlock()
 		return
 	}
 
 	var next DelayStats
-
-	c.lock.Lock()
 
 	switch c.delayStats.State {
 	case stateHold:
@@ -138,10 +140,23 @@ func (c *rateController) onDelayStats(ds DelayStats) {
 			TargetBitrate:    c.target,
 		}
 	}
+	next.generation = c.generation
 
 	c.lock.Unlock()
 
 	c.dsWriter(next)
+}
+
+// Probe transitions serialize with every delay decision, and callbacks run only
+// after releasing this lock. The generation invalidates already queued decisions.
+func (c *rateController) seedVideoProbe(rate int) uint64 {
+	c.lock.Lock()
+	defer c.lock.Unlock()
+	c.generation++
+	c.target = clampInt(rate, c.minBitrate, c.maxBitrate)
+	c.pacedBitrate = c.target
+	c.lastUpdate = c.now()
+	return c.generation
 }
 
 func (c *rateController) increase(now time.Time) int {

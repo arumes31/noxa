@@ -47,62 +47,7 @@ function voiceState(client) {
 
 export function renderWorkspace() {
     const state = V().state;
-    const strip = $("voice-participants");
     const members = state.myChannelID ? state.clients.filter((c) => c.channel_id === state.myChannelID) : [];
-    const current = new Map([...strip.querySelectorAll(".participant")].map((el) => [el.dataset.clientId, el]));
-    strip.querySelector(".participant-empty")?.remove();
-    for (const client of members) {
-        let button = current.get(client.client_id);
-        if (!button) {
-            const card = document.createElement("div");
-            card.className = "participant-card";
-            button = document.createElement("button");
-            button.type = "button";
-            button.className = "participant";
-            button.dataset.clientId = client.client_id;
-            button.innerHTML = '<span class="avatar"></span><span class="participant-copy"><span class="participant-name"></span><span class="participant-state"></span></span>';
-            button.onclick = () => {
-                state.selectedClientID = client.client_id;
-                state.multiSelect = new Set([client.client_id]);
-                V().setDetailsOpen(true);
-                V().renderTree();
-            };
-            const menu = document.createElement("button");
-            menu.type = "button";
-            menu.className = "participant-menu icon-btn";
-            menu.innerHTML = icon("more");
-            card.append(button, menu);
-            strip.appendChild(card);
-        }
-        current.delete(client.client_id);
-        memberTarget(button, client.unique_id, client.nickname, { clientID: client.client_id, openOnClick: false });
-        const name = (client.nickname || client.unique_id) + (client.client_id === state.myClientID ? t("workspace.you") : "");
-        const menu = button.parentElement.querySelector(".participant-menu");
-        memberTarget(menu, client.unique_id, client.nickname, { clientID: client.client_id });
-        menu.title = t("context.memberOptions", { name });
-        menu.setAttribute("aria-label", menu.title);
-        const statusKey = voiceState(client);
-        const description = t(statusKey === "deafened" ? "audioState.deafened" : "workspace.voice." + statusKey);
-        button.querySelector(".participant-name").textContent = name;
-        const status = button.querySelector(".participant-state");
-        const speaking = statusKey === "speaking" || statusKey === "talking";
-        const statusIcon = speaking ? "signal" : ["deafened", "serverDeafened"].includes(statusKey) ? "headphonesOff" : ["muted", "localMuted", "serverMuted"].includes(statusKey) ? "micOff" : "mic";
-        labelButton(status, statusIcon, description);
-        button.setAttribute("aria-label", t("workspace.memberLabel", { name, state: description.toLowerCase() }));
-        button.classList.toggle("speaking", speaking);
-        button.classList.toggle("selected", state.selectedClientID === client.client_id);
-        avatar(button.querySelector(".avatar"), client);
-    }
-    for (const element of current.values()) {
-        if (element.parentElement.contains(document.activeElement)) $("details-toggle").focus();
-        element.parentElement.remove();
-    }
-    if (!members.length) {
-        const empty = document.createElement("p");
-        empty.className = "participant-empty";
-        empty.textContent = state.myChannelID ? t("workspace.emptyVoice") : t("workspace.joinVoice");
-        strip.appendChild(empty);
-    }
     const ownChannel = state.channels.find((c) => c.ChannelID === state.myChannelID);
     const context = $("voice-context");
     context.textContent = t("polish.connection", {
@@ -111,7 +56,6 @@ export function renderWorkspace() {
     });
     context.title = context.textContent;
     $("mic-meter").setAttribute("aria-label", t("polish.meter"));
-    strip.title = ownChannel ? t("workspace.participantsIn", { channel: ownChannel.Name }) : t("workspace.participants");
     $("server-summary").textContent = t("workspace.online", { count: state.clients.length });
     $("channel-member-count").textContent = t("workspace.inVoice", { count: members.length });
     $("channel-member-count").title = ownChannel ? t("workspace.countIn", { count: members.length, channel: ownChannel.Name }) : t("workspace.noVoice");
@@ -335,14 +279,12 @@ function translateWorkspace() {
         ["#tab-transfers", "aria-label", "workspace.labels.openTransfers"],
         ["#chat-file", "aria-label", "workspace.labels.chooseAttachments"],
         ["#voice-options > summary", "aria-label", "workspace.labels.voiceOptions"],
-        ["#login-serverpw", "placeholder", "workspace.labels.ifRequired"],
         ["#login-nick", "placeholder", "workspace.labels.nickname"],
         ["#workspace-tablist", "aria-label", "workspace.labels.workspaceViews"],
         ["#voice-bar", "aria-label", "workspace.labels.voiceControls"],
         ["#center", "aria-label", "workspace.labels.voiceAndChatWorkspace"],
         ["#details .inspector-section:first-of-type summary", "text", "workspace.labels.serverConnection"],
-        ["#details .inspector-section:last-of-type summary", "text", "workspace.labels.yourPermissions"],
-        [".inspector-hint", "text", "workspace.labels.yourResolvedPermissionsOnThisServer"],
+        ["#details .inspector-section:last-of-type summary", "text", "roles.title"],
         [".skip-link", "text", "workspace.labels.skipToMessageComposer"],
         ["#server-name", "title", "workspace.labels.serverInformation"],
     ]) {

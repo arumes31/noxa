@@ -47,6 +47,10 @@ import (
 )
 
 func main() {
+	if len(os.Args) > 1 && (os.Args[1] == "--version" || os.Args[1] == "-version") {
+		fmt.Println(version.String())
+		return
+	}
 	var err error
 	if len(os.Args) > 1 && os.Args[1] == "rewrap-chat-keys" {
 		err = rewrapChatKeys()
@@ -741,6 +745,8 @@ func run() (retErr error) {
 		ICEServers:         iceServersProvider(cfg, logger),
 	})
 	channelMgr.EnableRoleMode(roleAuthority)
+	healthServer.HandleLocalGET("/debug/voice", tcpServer.VoiceDiagnosticsHandler())
+	healthServer.HandleLocalGET("/debug/streams", tcpServer.StreamOperatorDiagnosticsHandler())
 	// Remove orphaned file data before serving. Role-mode channel timers remain
 	// disabled until the Authority is attached and its initial Reload completes.
 	// No listener is accepting file work yet.

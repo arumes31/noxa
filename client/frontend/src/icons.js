@@ -9,6 +9,8 @@ const paths = {
     camera: '<rect x="2" y="5" width="14" height="14" rx="2"/><path d="m16 9 6-4v14l-6-4"/>',
     cameraOff: '<path d="m3 3 18 18M9 5h5a2 2 0 0 1 2 2v2l6-4v14l-6-4M16 16v1a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V7M2 7l14 9"/>',
     screen: '<rect x="2" y="3" width="20" height="14" rx="2"/><path d="M12 17v4M8 21h8"/>',
+    streamLive: '<rect x="2" y="4" width="18" height="13" rx="2"/><path d="M11 17v4M7 21h8"/><circle cx="20" cy="4" r="3" fill="currentColor"/>',
+    streamWatching: '<rect x="2" y="4" width="18" height="13" rx="2"/><path d="M11 17v4M7 21h8"/><circle cx="20" cy="4" r="3" fill="currentColor"/><path d="m9 7 6 3.5-6 3.5z" fill="currentColor" stroke="none"/>',
     speaker: '<path d="m11 3-6 5H2v8h3l6 5zM15 8a6 6 0 0 1 0 8M18 4a11 11 0 0 1 0 16"/>',
     speakerOff: '<path d="m11 3-6 5H2v8h3l6 5zM16 9l6 6M22 9l-6 6"/>',
     settings: '<path d="m9 3 1-1h4l1 3 3 1 3-1 2 4-2 2v3l2 2-2 4-3-1-3 1-1 3h-4l-1-3-3-1-3 1-2-4 2-2v-3L1 9l2-4 3 1 3-1z"/><circle cx="12" cy="12" r="3"/>',

@@ -7,8 +7,9 @@ import { currentLanguage, t } from "./i18n.js";
 import { copyToClipboard } from "./clipboard.js";
 import { createMicCheck } from "./mic-check-ui.js";
 import { createNetworkEchoTest } from "./network-echo.js";
+import { createConnectionBenchmark } from "./connection-benchmark.js";
 import { percentageInput } from "./percentage-input.js";
-import { previewSounds, previewSpeech, speechPreviewLabel, audioStatus, SPEECH_EVENTS, stopPreviews, updateSoundOutput, SOUND_EVENT_GROUPS, testAll } from "./sounds.js";
+import { previewSounds, previewSpeech, speechPreviewLabel, speechEventEnabled, audioStatus, SPEECH_EVENTS, stopPreviews, updateSoundOutput, SOUND_EVENT_GROUPS, testAll } from "./sounds.js";
 import { MATRIX_EVENTS, defaultMatrixRow } from "./notifications.js";
 import { renderVoiceHints } from "./workspace-ui.js";
 import { associateControlLabel, wrappedIndex } from "./a11y.js";
@@ -24,6 +25,7 @@ const PAGES = [
     { id: "capture", icon: "mic", label: "settings.capture" },
     { id: "camera", icon: "camera", label: "settings.camera" },
     { id: "playback", icon: "speaker", label: "settings.playback" },
+    { id: "overlay", icon: "screen", label: "settings.overlay" },
     { id: "hotkeys", icon: "keyboard", label: "settings.hotkeys" },
     { id: "whisper", icon: "whisper", label: "settings.whisper" },
     { id: "downloads", icon: "download", label: "settings.downloads" },
@@ -334,10 +336,8 @@ function pageApplication() {
     el.appendChild(row(t("settings.ui.font"), fontSel));
     el.appendChild(row(t("settings.ui.font.size"), slider(s.ui_font_size || 14, 10, 20, (v) => { s.ui_font_size = v; })));
     el.appendChild(row(t("settings.always.on.top"), checkbox(s.always_on_top, (v) => { s.always_on_top = v; })));
-    el.append(gamingOverlaySettings(s, { row, checkbox, slider, hint }));
     el.appendChild(row(t("settings.compact.mode"), checkbox(s.compact_mode, (v) => { s.compact_mode = v; })));
     el.appendChild(row(t("settings.reduce.motion"), checkbox(s.reduce_motion, (v) => { s.reduce_motion = v; })));
-    el.appendChild(row(t("settings.pause.video.when.unfocused"), checkbox(s.idle_video_pause !== false, (v) => { s.idle_video_pause = v; })));
     el.appendChild(row(t("settings.close.to.tray"), checkbox(s.close_to_tray, (v) => { s.close_to_tray = v; })));
     el.appendChild(row(t("settings.minimize.to.tray"), checkbox(s.minimize_to_tray, (v) => { s.minimize_to_tray = v; })));
     // (292) the floor keeps the window clickable. Applied on release, not per
@@ -690,6 +690,7 @@ function pageCapture() {
     });
     el.append(timingNote("localPreview"), microphone.root);
     el.append(createNetworkEchoTest());
+    el.append(createConnectionBenchmark());
     el.addEventListener("change", () => microphone.refresh());
     // Activation mode.
     const modeWrap = document.createElement("div");
@@ -708,7 +709,7 @@ function pageCapture() {
         l.appendChild(document.createTextNode(" " + label));
         modeWrap.appendChild(l);
     }
-    el.append(timingNote("saved", modeWrap.querySelectorAll("input")), modeWrap);
+    el.prepend(timingNote("saved", modeWrap.querySelectorAll("input")), modeWrap);
 
     el.appendChild(row(t("settings.echo.cancellation"), checkbox(s.echo_cancellation !== false, (v) => { s.echo_cancellation = v; }), "saved"));
     el.appendChild(row(t("settings.noise.suppression"), checkbox(s.noise_suppression !== false, (v) => { s.noise_suppression = v; }), "saved"));
@@ -1180,7 +1181,28 @@ function pageSecurity() { return securitySettings(settings()); }
 function pageNotifications() {
     const s = settings();
     const el = document.createElement("div");
-    el.appendChild(audioStatusPanel());
+    el.className = "notification-settings";
+    const section = (key, className, collapsible = false) => {
+        const group = document.createElement(collapsible ? "details" : "section");
+        group.className = "notification-section " + className;
+        const title = document.createElement(collapsible ? "summary" : "h3");
+        title.textContent = t("settings.notifications." + key);
+        group.appendChild(title);
+        el.appendChild(group);
+        return group;
+    };
+    const output = section("output", "notification-output");
+    const effects = section("effects", "notification-effects");
+    const speech = section("speech", "notification-speech");
+    const delivery = section("delivery", "notification-delivery");
+    const quiet = section("quiet", "notification-quiet");
+    const eventEffects = section("eventEffects", "notification-event-effects", true);
+    output.appendChild(audioStatusPanel());
+    output.appendChild(row(t("settings.play.sounds.master"), checkbox(s.play_sounds !== false, v => { s.play_sounds = v; })));
+    output.appendChild(row(t("settings.output.device"), devicePicker("audiooutput", s.playback_device_id,
+        v => { s.playback_device_id = v; }, t("settings.playback.devices")), "saved"));
+    output.appendChild(hint(t("settings.notifications.sameOutput")));
+
     const chatLevel = document.createElement("select");
     chatLevel.className = "dlg-input";
     for (const [value, label] of [
@@ -1196,8 +1218,8 @@ function pageNotifications() {
     }
     chatLevel.value = s.chat_notification_level || "all";
     chatLevel.onchange = () => { s.chat_notification_level = chatLevel.value; };
-    el.appendChild(row(t("settings.chat.notification.category"), chatLevel));
-    el.appendChild(hint(t("settings.per.channel.mute.and.notification.matrix.outputs.still.apply.after.this.cat")));
+    delivery.appendChild(row(t("settings.chat.notification.category"), chatLevel));
+    delivery.appendChild(hint(t("settings.per.channel.mute.and.notification.matrix.outputs.still.apply.after.this.cat")));
     // (385) notification matrix: rows = events, columns = outputs. The rows
     // are the dispatcher's own event list, so every event it can fire has
     // reachable toggles here and the two cannot drift apart.
@@ -1214,14 +1236,16 @@ function pageNotifications() {
         const rowData = s.notify_matrix[event] || defaultMatrixRow(event);
         s.notify_matrix[event] = rowData;
         const tr = document.createElement("tr");
-        tr.innerHTML = `<td class="mono">${label}</td>`;
+        tr.innerHTML = `<th scope="row">${label}</th>`;
         for (const col of ["toast", "sound", "flash", "native"]) {
             const td = document.createElement("td");
+            td.dataset.label = t("settings.matrix." + col);
             td.appendChild(checkbox(rowData[col], (v) => { rowData[col] = v; }));
             td.firstChild.setAttribute("aria-label", label + ": " + t("settings.matrix." + col));
             tr.appendChild(td);
         }
         const td = document.createElement("td");
+        td.dataset.label = t("settings.matrix.preview");
         const preview = document.createElement("button");
         preview.type = "button";
         preview.textContent = t("settings.play");
@@ -1231,69 +1255,65 @@ function pageNotifications() {
         tr.appendChild(td);
         tbody.appendChild(tr);
     }
-    el.appendChild(matrix);
-    el.appendChild(hint(t("settings.pokePopup")));
-    el.appendChild(hint(t("settings.previews.use.your.sound.volume.and.event.choices.dnd.silences.all.previews")));
+    const matrixWrap = document.createElement("div");
+    matrixWrap.className = "notification-matrix-wrap";
+    matrixWrap.appendChild(matrix);
+    delivery.appendChild(matrixWrap);
+    delivery.appendChild(hint(t("settings.pokePopup")));
+    delivery.appendChild(hint(t("settings.previews.use.your.sound.volume.and.event.choices.dnd.silences.all.previews")));
     // (347/348) do-not-disturb: toggle + quiet hours schedule.
-    el.appendChild(row(t("settings.do.not.disturb"), checkbox(s.dnd_enabled, (v) => { s.dnd_enabled = v; })));
+    quiet.appendChild(row(t("settings.do.not.disturb"), checkbox(s.dnd_enabled, (v) => { s.dnd_enabled = v; })));
     const from = document.createElement("input");
-    from.type = "time";
+    from.type = "time"; from.className = "dlg-input";
     from.setAttribute("aria-label", t("settings.quiet.from"));
     from.value = s.dnd_from || "";
     from.onchange = () => { s.dnd_from = from.value; };
     const to = document.createElement("input");
-    to.type = "time";
+    to.type = "time"; to.className = "dlg-input";
     to.setAttribute("aria-label", t("settings.quiet.to"));
     to.value = s.dnd_to || "";
     to.onchange = () => { s.dnd_to = to.value; };
     const hours = document.createElement("div");
     hours.className = "dnd-hours";
     hours.append(from, document.createTextNode(" – "), to);
-    el.appendChild(row(t("settings.quiet.hours.empty.off"), hours));
-    el.appendChild(hint(t("settings.dnd.suppresses.toasts.sounds.and.taskbar.flashes.mentions.still.badge.silen")));
-    el.appendChild(row(t("settings.toasts.for.join.leave"), checkbox(s.notify_join_leave, (v) => { s.notify_join_leave = v; })));
-    el.appendChild(row(t("settings.toasts.for.connection.events"), checkbox(s.notify_connection, (v) => { s.notify_connection = v; })));
-    el.appendChild(row(t("settings.warn.when.talking.while.muted"), checkbox(s.warn_muted_talking !== false, (v) => { s.warn_muted_talking = v; })));
-    el.appendChild(row(t("settings.hint.when.talking.to.an.empty.channel"), checkbox(s.warn_empty_channel !== false, (v) => { s.warn_empty_channel = v; })));
+    quiet.appendChild(row(t("settings.quiet.hours.empty.off"), hours));
+    quiet.appendChild(hint(t("settings.dnd.suppresses.toasts.sounds.and.taskbar.flashes.mentions.still.badge.silen")));
+    quiet.appendChild(row(t("settings.toasts.for.join.leave"), checkbox(s.notify_join_leave, (v) => { s.notify_join_leave = v; })));
+    quiet.appendChild(row(t("settings.toasts.for.connection.events"), checkbox(s.notify_connection, (v) => { s.notify_connection = v; })));
+    quiet.appendChild(row(t("settings.warn.when.talking.while.muted"), checkbox(s.warn_muted_talking !== false, (v) => { s.warn_muted_talking = v; })));
+    quiet.appendChild(row(t("settings.hint.when.talking.to.an.empty.channel"), checkbox(s.warn_empty_channel !== false, (v) => { s.warn_empty_channel = v; })));
 
-    // (28) master gate, now actually read by sounds.js: only an explicit
-    // false silences playback, so a settings blob without the field is on.
-    el.appendChild(row(t("settings.play.sounds.master"), checkbox(s.play_sounds !== false, (v) => { s.play_sounds = v; })));
-
-    const pack = document.createElement("span");
-    pack.textContent = "noXa";
-    el.appendChild(row(t("settings.sound.set"), pack));
-    el.appendChild(hint(t("settings.original.noxa.sounds.replace.soft.bright.retro.and.custom.beeps.your.event")));
-    el.appendChild(hint(t("settings.audio.output.fallback")));
-    el.appendChild(row(t("settings.sound.volume"), slider(s.sound_volume ?? 100, 0, 200, (v) => { s.sound_volume = v; }, true)));
-    el.appendChild(row(t("settings.sound.effects"), checkbox(s.effects_enabled !== false, v => { s.effects_enabled = v; })));
-    el.appendChild(row(t("settings.audio.duck"), checkbox(s.duck_effects_while_speaking, v => { s.duck_effects_while_speaking = v; })));
-    el.appendChild(hint(t("settings.audio.duck.hint")));
-    el.appendChild(row(t("settings.spoken.system.messages"), checkbox(s.spoken_messages !== false, v => { s.spoken_messages = v; })));
-    el.appendChild(row(t("settings.speech.volume"), slider(s.speech_volume ?? 100, 0, 200, v => { s.speech_volume = v; }, true)));
+    effects.appendChild(row(t("settings.sound.volume"), slider(s.sound_volume ?? 100, 0, 200, (v) => { s.sound_volume = v; }, true)));
+    effects.appendChild(row(t("settings.sound.effects"), checkbox(s.effects_enabled !== false, v => { s.effects_enabled = v; })));
+    effects.appendChild(row(t("settings.audio.duck"), checkbox(s.duck_effects_while_speaking, v => { s.duck_effects_while_speaking = v; })));
+    effects.appendChild(hint(t("settings.audio.duck.hint")));
+    speech.appendChild(row(t("settings.spoken.system.messages"), checkbox(s.spoken_messages !== false, v => { s.spoken_messages = v; })));
+    speech.appendChild(row(t("settings.speech.volume"), slider(s.speech_volume ?? 100, 0, 200, v => { s.speech_volume = v; }, true)));
     const speechLocale = document.createElement("select");
     for (const [value, label] of [["interface", t("settings.audio.follow.interface")], ["en", "English"], ["de", "Deutsch"]]) {
         const option = document.createElement("option"); option.value = value; option.textContent = label; speechLocale.appendChild(option);
     }
     speechLocale.value = s.speech_language || "interface";
     speechLocale.onchange = () => { s.speech_language = speechLocale.value; stopPreviews(); renderPage("notifications"); };
-    el.appendChild(row(t("settings.audio.speech.language"), speechLocale));
-    el.appendChild(row(t("settings.speak.connection.problems"), checkbox(s.speech_connection !== false, v => { s.speech_connection = v; })));
-    el.appendChild(row(t("settings.speak.administrative.actions"), checkbox(s.speech_admin !== false, v => { s.speech_admin = v; })));
-    el.appendChild(row(t("settings.speak.removal"), checkbox(s.speech_removal !== false, v => { s.speech_removal = v; })));
-    el.appendChild(row(t("settings.speak.permissions"), checkbox(s.speech_permissions !== false, v => { s.speech_permissions = v; })));
+    speech.appendChild(row(t("settings.audio.speech.language"), speechLocale));
+    speech.appendChild(row(t("settings.speak.connection.problems"), checkbox(s.speech_connection !== false, v => { s.speech_connection = v; })));
+    speech.appendChild(row(t("settings.speak.administrative.actions"), checkbox(s.speech_admin !== false, v => { s.speech_admin = v; })));
+    speech.appendChild(row(t("settings.speak.removal"), checkbox(s.speech_removal !== false, v => { s.speech_removal = v; })));
+    speech.appendChild(row(t("settings.speak.permissions"), checkbox(s.speech_permissions !== false, v => { s.speech_permissions = v; })));
     const speechTest = document.createElement("button");
     speechTest.type = "button";
     speechTest.textContent = t("settings.test.spoken.message");
-    speechTest.onclick = () => previewSpeech(s);
-    el.appendChild(speechTest);
-    el.appendChild(hint(t("settings.fixed.english.or.german.recordings.follow.your.interface.language.other.lan")));
-    el.appendChild(hint(t("settings.previews.use.unsaved.settings.master.mute.can.be.bypassed.for.previews.dnd")));
+    speechTest.onclick = () => previewSpeech(s, ["test"], event => {
+        status.textContent = event ? t("settings.playing", { label: speechPreviewLabel(event, s) }) : t("settings.preview.finished");
+    });
+    speech.appendChild(hint(t("settings.notifications.speechReplaces")));
+    speech.appendChild(row(t("settings.speak.channel.activity"), checkbox(s.speech_channel !== false, v => { s.speech_channel = v; })));
+    speech.appendChild(hint(t("settings.previews.use.unsaved.settings.master.mute.can.be.bypassed.for.previews.dnd")));
     const status = document.createElement("div");
     status.className = "set-hint";
     status.setAttribute("role", "status");
-    const onLabel = (label, event) => {
-        status.textContent = label ? t("settings.playing", { label: t("settings.sound." + event) }) : t("settings.preview.finished");
+    const onLabel = (label, event, spoken) => {
+        status.textContent = label ? t("settings.playing", { label: spoken ? label : t("settings.sound." + event) }) : t("settings.preview.finished");
     };
     const button = (label, events) => {
         const b = document.createElement("button");
@@ -1311,7 +1331,8 @@ function pageNotifications() {
     stop.textContent = t("settings.stop.preview");
     stop.onclick = () => { stopPreviews(); status.textContent = t("settings.preview.stopped"); };
     controls.append(all, stop);
-    el.append(controls, status);
+    controls.prepend(speechTest);
+    output.append(controls, status);
     const speechButton = (label, events) => {
         const b = document.createElement("button");
         b.type = "button";
@@ -1327,27 +1348,32 @@ function pageNotifications() {
     for (const [category, label] of [["connection", "settings.speak.connection.problems"], ["admin", "settings.speak.administrative.actions"], ["channel", "settings.speak.channel.activity"]]) {
         speechControls.appendChild(speechButton(t("settings.preview", { label: t(label) }), Object.keys(SPEECH_EVENTS).filter(id => SPEECH_EVENTS[id].category === category)));
     }
-    el.appendChild(speechControls);
+    const speechEvents = document.createElement("details");
+    speechEvents.className = "notification-event-speech";
+    const speechSummary = document.createElement("summary");
+    speechSummary.textContent = t("settings.notifications.eventSpeech");
+    speechEvents.appendChild(speechSummary);
+    speech.append(speechControls, speechEvents);
     for (const event of Object.keys(SPEECH_EVENTS)) {
         const label = speechPreviewLabel(event, s);
         const controls = document.createElement("div");
         controls.className = "sound-controls";
-        if (event !== "test") controls.appendChild(checkbox(s.speech_events?.[event] !== false, enabled => {
+        if (event !== "test") controls.appendChild(checkbox(speechEventEnabled(s, event), enabled => {
             s.speech_events ||= {};
             s.speech_events[event] = enabled;
         }));
         const b = speechButton(t("settings.play"), [event]);
         b.setAttribute("aria-label", t("settings.preview", { label }));
         controls.appendChild(b);
-        el.appendChild(row(label, controls));
+        speechEvents.appendChild(row(label, controls));
     }
     for (const group of SOUND_EVENT_GROUPS) {
         const heading = document.createElement("div");
         heading.className = "set-subhead sound-controls";
         const label = document.createElement("span");
-        label.textContent = t("settings.soundgroup." + group.events[0][0]);
+        label.textContent = t("settings.soundgroup." + group.key);
         heading.append(label, button(t("settings.preview", { label: currentLanguage() === "en" ? label.textContent.toLowerCase() : label.textContent }), group.events.map(([event]) => event)));
-        el.appendChild(heading);
+        eventEffects.appendChild(heading);
         for (const [event] of group.events) {
             const label = t("settings.sound." + event);
             const controls = document.createElement("div");
@@ -1357,17 +1383,20 @@ function pageNotifications() {
                 s.event_sounds[event] = enabled;
             }), button(t("settings.play"), [event]));
             controls.querySelector("button").setAttribute("aria-label", t("settings.preview", { label }));
-            el.appendChild(row(label, controls));
+            eventEffects.appendChild(row(label, controls));
         }
     }
     return el;
 }
+
+function pageOverlay() { return gamingOverlaySettings(settings(), { row, checkbox, slider, hint }); }
 
 const PAGE_BUILDERS = {
     application: pageApplication,
     capture: pageCapture,
     camera: pageCamera,
     playback: pagePlayback,
+    overlay: pageOverlay,
     hotkeys: pageHotkeys,
     whisper: pageWhisper,
     downloads: pageDownloads,
@@ -1518,6 +1547,9 @@ function openSettings(pageId = "application") {
                 const match = [...content.querySelectorAll(".set-row, .set-subhead, .set-hint, button")].find(r =>
                     (r.querySelector(".set-label")?.textContent || r.textContent || "").toLowerCase().trim() === h.label);
                 if (!match) return;
+                for (let parent = match.parentElement; parent && parent !== content; parent = parent.parentElement) {
+                    if (parent.tagName === "DETAILS") parent.open = true;
+                }
                 const highlighted = match.closest(".set-row") || match;
                 highlighted.classList.add("set-hit");
                 highlighted.scrollIntoView({ block: "center" });

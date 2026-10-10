@@ -104,8 +104,24 @@ func TestRoleClientMetadataFiltersHiddenMembersAndSensitiveFields(t *testing.T) 
 		}
 		return result
 	}
-	if got := query(member, ownerID); got.IP != "" || got.ConnectedAt != 0 || got.BytesIn != 0 {
-		t.Fatalf("legacy admin received sensitive fields: %+v", got)
+	if got := query(member, ownerID); got.PingMs != -1 {
+		t.Fatalf("unmeasured member ping = %d, want -1", got.PingMs)
+	}
+	target, ok := env.srv.clientByID(ownerID)
+	if !ok {
+		t.Fatal("connected member missing")
+	}
+	target.mu.Lock()
+	target.rttKnown, target.rttNs = true, int64(73*time.Millisecond)
+	target.mu.Unlock()
+	ownerState, _ := env.state.GetClient(ownerID)
+	ownerState.ConnectedAt = time.Now().Add(-time.Minute)
+	env.state.AddClient(ownerState)
+	if got := query(member, ownerID); got.PingMs != 73 {
+		t.Errorf("visible member ping = %d, want 73 without sensitive-metadata permission", got.PingMs)
+	}
+	if got := query(member, ownerID); got.IP != "" || got.Port != 0 || got.ConnectedAt != 0 || got.IdleSeconds != 0 || got.BytesIn != 0 || got.BytesOut != 0 {
+		t.Fatalf("ordinary member received sensitive fields: %+v", got)
 	}
 	if got := query(member, memberID); got.IP == "" || got.ConnectedAt == 0 {
 		t.Fatalf("self information missing: %+v", got)
@@ -113,6 +129,12 @@ func TestRoleClientMetadataFiltersHiddenMembersAndSensitiveFields(t *testing.T) 
 	if got := query(owner, memberID); got.IP == "" || got.ConnectedAt == 0 {
 		t.Fatalf("role owner lacks metadata: %+v", got)
 	}
+	env.state.SetStatus(ownerID, "invisible", "")
+	send(t, member, netproto.MsgClientInfoQuery, netproto.ClientInfoQuery{ClientID: ownerID})
+	if got := readError(t, member); got.Code != errCodeNotFound {
+		t.Fatalf("invisible member response: %+v", got)
+	}
+	env.state.SetStatus(ownerID, "online", "")
 	if err := env.state.MoveClient(ownerID, 1); err != nil {
 		t.Fatal(err)
 	}
@@ -124,5 +146,48 @@ func TestRoleClientMetadataFiltersHiddenMembersAndSensitiveFields(t *testing.T) 
 	var info netproto.ServerInfoResponse
 	if err := netproto.Decode(readOfType(t, member, netproto.MsgServerInfoResponse), &info); err != nil || info.ChannelsOnline != 0 || info.ClientsOnline != 1 {
 		t.Fatalf("hidden population exposed: %+v %v", info, err)
+	}
+}
+
+func TestClientInfoIdleIgnoresControlTraffic(t *testing.T) {
+	env := startTestEnv(t, nil)
+	defer env.stop()
+	conn, clientID := dialAuthed(t, env.addr, "user-uid")
+	defer func() { _ = conn.Close() }()
+
+	// Backdate this silent connection instead of waiting on wall-clock sleeps.
+	member, _ := env.state.GetClient(clientID)
+	member.ConnectedAt = time.Now().Add(-time.Minute)
+	env.state.AddClient(member)
+	before := queryClientInfo(t, conn, clientID)
+	if before.IdleSeconds < 60 {
+		t.Fatalf("silent connection idle = %d, want at least 60", before.IdleSeconds)
+	}
+	send(t, conn, netproto.MsgPing, netproto.Ping{})
+	readOfType(t, conn, netproto.MsgPong)
+	send(t, conn, netproto.MsgChatSend, netproto.ChatSend{Text: "still not speaking"})
+	after := queryClientInfo(t, conn, clientID)
+	if after.IdleSeconds < before.IdleSeconds || after.BytesIn <= before.BytesIn {
+		t.Fatalf("control traffic reset voice idle or lost byte accounting: before=%+v after=%+v", before, after)
+	}
+
+	env.srv.onSpeakingChanged(clientID, true)
+	if info := queryClientInfo(t, conn, clientID); info.IdleSeconds != 0 {
+		t.Fatalf("speaking client idle = %d, want 0", info.IdleSeconds)
+	}
+	env.srv.onSpeakingChanged(clientID, false)
+	member, _ = env.state.GetClient(clientID)
+	if member.LastSpokeAt.IsZero() {
+		t.Fatal("stopping speech did not record the start of voice idle")
+	}
+	member.LastSpokeAt = time.Now().Add(-15 * time.Second)
+	env.state.AddClient(member)
+	if info := queryClientInfo(t, conn, clientID); info.IdleSeconds < 15 || info.IdleSeconds >= before.IdleSeconds {
+		t.Fatalf("idle should be measured from the end of speech: %+v", info)
+	}
+	member.LastSpokeAt = time.Now().Add(time.Minute)
+	env.state.AddClient(member)
+	if info := queryClientInfo(t, conn, clientID); info.IdleSeconds != 0 {
+		t.Fatalf("clock change produced negative idle: %+v", info)
 	}
 }

@@ -15,6 +15,8 @@ func TestSelfAudioStateIsPublicSessionMetadata(t *testing.T) {
 	bob, bobID := dialAuthed(t, env.addr, "admin-uid")
 	defer func() { _ = bob.Close() }()
 	for _, controls := range []netproto.AudioStateSet{{Deafened: true}, {Muted: true}, {}} {
+		env.state.SetAudioState(aliceID, false, false)
+		env.state.SetSpeaking(aliceID, true)
 		send(t, alice, netproto.MsgAudioStateSet, controls)
 		var saved netproto.AudioStateSaved
 		if err := netproto.Decode(readOfType(t, alice, netproto.MsgAudioStateSaved), &saved); err != nil {
@@ -32,6 +34,9 @@ func TestSelfAudioStateIsPublicSessionMetadata(t *testing.T) {
 			matched := false
 			for _, member := range snapshot.UnassignedClients {
 				if member.ClientID == aliceID && member.SelfMuted == saved.Muted && member.SelfDeafened == saved.Deafened {
+					if saved.Muted && member.IsSpeaking {
+						t.Fatal("muted member still advertised as speaking")
+					}
 					matched = true
 				}
 			}

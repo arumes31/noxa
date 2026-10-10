@@ -3,15 +3,17 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
+	"log"
 	"runtime"
-	"strings"
 	"sync"
 	"syscall"
 	"time"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
+	"noxa/internal/safecast"
 )
 
 var (
@@ -24,19 +26,14 @@ var (
 	overlayDispatch        = user32.NewProc("DispatchMessageW")
 	overlayShow            = user32.NewProc("ShowWindow")
 	overlayPosition        = user32.NewProc("SetWindowPos")
-	overlayInvalidate      = user32.NewProc("InvalidateRect")
 	overlayBegin           = user32.NewProc("BeginPaint")
 	overlayEnd             = user32.NewProc("EndPaint")
-	overlayFill            = user32.NewProc("FillRect")
 	overlayDraw            = user32.NewProc("DrawTextW")
 	overlayWorkArea        = user32.NewProc("SystemParametersInfoW")
-	overlayAlpha           = user32.NewProc("SetLayeredWindowAttributes")
 	overlayColor           = overlayGDI.NewProc("SetTextColor")
 	overlayBackground      = overlayGDI.NewProc("SetBkMode")
-	overlayBrush           = overlayGDI.NewProc("CreateSolidBrush")
 	overlayDelete          = overlayGDI.NewProc("DeleteObject")
 	overlaySelect          = overlayGDI.NewProc("SelectObject")
-	overlayStock           = overlayGDI.NewProc("GetStockObject")
 	overlayFont            = overlayGDI.NewProc("CreateFontW")
 	overlayEnumMonitors    = user32.NewProc("EnumDisplayMonitors")
 	overlayMonitorInfo     = user32.NewProc("GetMonitorInfoW")
@@ -80,6 +77,7 @@ func nativeGamingOverlayMonitors() []GamingOverlayMonitor {
 	_, _, _ = overlayEnumMonitors.Call(0, 0, overlayMonitorCallback, 0)
 	if len(overlayMonitorList) == 0 {
 		var area overlayRect
+		// #nosec G103 -- SystemParametersInfo fills the ABI-shaped rectangle synchronously.
 		_, _, _ = overlayWorkArea.Call(0x30, 0, uintptr(unsafe.Pointer(&area)), 0)
 		if area.Right > area.Left && area.Bottom > area.Top {
 			overlayMonitorList = []GamingOverlayMonitor{{ID: "primary", Name: "Primary", Primary: true, Width: area.Right - area.Left, Height: area.Bottom - area.Top, workLeft: area.Left, workTop: area.Top, workWidth: area.Right - area.Left, workHeight: area.Bottom - area.Top}}
@@ -120,7 +118,6 @@ type nativeOverlay struct {
 	stop         chan struct{}
 	done         chan struct{}
 	once         sync.Once
-	brush        uintptr
 }
 
 func nativeGamingOverlayAvailable() bool      { return true }
@@ -137,44 +134,14 @@ func overlayProcedure(hwnd, message, wparam, lparam uintptr) uintptr {
 		return 1
 	} // Paint owns the entire background.
 	if message == 0x0F {
-		if value, ok := overlayWindows.Load(hwnd); ok {
-			window := value.(*nativeOverlay)
-			window.mu.Lock()
-			snapshot := window.latest
-			if time.Now().Before(window.previewUntil) {
-				snapshot = window.preview
-			}
-			window.mu.Unlock()
-			var paint overlayPaint
-			// #nosec G103 -- Win32 consumes ABI-shaped stack structs synchronously.
-			dc, _, _ := overlayBegin.Call(hwnd, uintptr(unsafe.Pointer(&paint)))
-			defer func() { _, _, _ = overlayEnd.Call(hwnd, uintptr(unsafe.Pointer(&paint))) }()
-			_, _, _ = overlayFill.Call(dc, uintptr(unsafe.Pointer(&paint.Rect)), window.brush)
-			_, _, _ = overlayBackground.Call(dc, 1)
-			fontHeight := int32(-14 * snapshot.Scale / 100)
-			face, _ := windows.UTF16PtrFromString("Segoe UI")
-			font, _, _ := overlayFont.Call(uintptr(fontHeight), 0, 0, 0, 400, 0, 0, 0, 1, 0, 0, 5, 0, uintptr(unsafe.Pointer(face)))
-			if font == 0 {
-				font, _, _ = overlayStock.Call(17)
-			} else {
-				defer func() { _, _, _ = overlayDelete.Call(font) }()
-			}
-			old, _, _ := overlaySelect.Call(dc, font)
-			defer func() { _, _, _ = overlaySelect.Call(dc, old) }()
-			for i, line := range strings.Split(gamingOverlayText(snapshot), "\n") {
-				color := uintptr(0x00E8E8E8)
-				if strings.HasPrefix(line, "●") {
-					color = 0x008AF046
-				}
-				_, _, _ = overlayColor.Call(dc, color)
-				text, _ := windows.UTF16FromString(line)
-				scale := int32(snapshot.Scale)
-				rect := overlayRect{12 * scale / 100, int32(10+i*23) * scale / 100, 336 * scale / 100, int32(33+i*23) * scale / 100}
-				_, _, _ = overlayDraw.Call(dc, uintptr(unsafe.Pointer(&text[0])), uintptr(len(text)-1), uintptr(unsafe.Pointer(&rect)), 0x8820) // SINGLELINE | NOPREFIX | END_ELLIPSIS
-			}
-			return 0
-		}
+		var paint overlayPaint
+		// #nosec G103 -- BeginPaint fills this ABI-shaped value; EndPaint consumes it on the same OS thread.
+		_, _, _ = overlayBegin.Call(hwnd, uintptr(unsafe.Pointer(&paint)))
+		// #nosec G103 -- Paired synchronous cleanup of the BeginPaint value above.
+		_, _, _ = overlayEnd.Call(hwnd, uintptr(unsafe.Pointer(&paint)))
+		return 0
 	}
+
 	result, _, _ := overlayDefault.Call(hwnd, message, wparam, lparam)
 	return result
 }
@@ -232,21 +199,33 @@ func (w *nativeOverlay) run(ready chan<- error) {
 	// Layered + transparent + toolwindow + topmost + noactivate. No owner means
 	// minimizing the main client does not hide the game overlay with it.
 	// #nosec G103 -- Static UTF-16 class name is retained for the native window.
-	hwnd, _, err := overlayCreate.Call(0x080800A8, uintptr(unsafe.Pointer(overlayClassName)), uintptr(unsafe.Pointer(overlayClassName)), 0x80000000, 0, 0, 348, 120, 0, 0, 0, 0)
+	hwnd, _, err := overlayCreate.Call(0x080800A8, uintptr(unsafe.Pointer(overlayClassName)), uintptr(unsafe.Pointer(overlayClassName)), 0x80000000, 0, 0, 280, 64, 0, 0, 0, 0)
 	if hwnd == 0 {
 		ready <- fmt.Errorf("create gaming overlay: %w", err)
 		return
 	}
 	defer func() { _, _, _ = overlayDestroy.Call(hwnd) }()
-	w.brush, _, _ = overlayBrush.Call(0x00251C12)
-	defer func() { _, _, _ = overlayDelete.Call(w.brush) }()
 	overlayWindows.Store(hwnd, w)
 	defer overlayWindows.Delete(hwnd)
-	_, _, _ = overlayAlpha.Call(hwnd, 0, 224, 2)
 	ready <- nil
 	ticker := time.NewTicker(50 * time.Millisecond)
 	defer ticker.Stop()
 	last := ""
+	lastError := ""
+	reportError := func(err error) {
+		if message := err.Error(); message != lastError {
+			log.Printf("gaming overlay: %s", message)
+			lastError = message
+		}
+	}
+	var renderer *overlayRenderer
+	var surface *overlaySurface
+	defer func() {
+		if surface != nil {
+			surface.close()
+		}
+	}()
+	started := time.Now()
 	visible := false
 	var monitors []GamingOverlayMonitor
 	var monitorRefresh time.Time
@@ -263,6 +242,7 @@ func (w *nativeOverlay) run(ready chan<- error) {
 			if ok == 0 {
 				break
 			}
+			// #nosec G103 -- DispatchMessage synchronously reads the message filled by PeekMessage.
 			_, _, _ = overlayDispatch.Call(uintptr(unsafe.Pointer(&message)))
 		}
 		w.mu.Lock()
@@ -276,7 +256,11 @@ func (w *nativeOverlay) run(ready chan<- error) {
 				_, _, _ = overlayShow.Call(hwnd, 0)
 				visible = false
 			}
-			last = ""
+			last, renderer = "", nil
+			if surface != nil {
+				surface.close()
+				surface = nil
+			}
 			continue
 		}
 		if time.Since(monitorRefresh) > time.Second {
@@ -284,14 +268,49 @@ func (w *nativeOverlay) run(ready chan<- error) {
 		}
 		monitor := selectOverlayMonitor(monitors, s.Monitor)
 		x, y, width, height := gamingOverlayPlacement(s, monitor)
-		text := fmt.Sprintf("%s|%d,%d,%d,%d,%d", gamingOverlayText(s), x, y, width, height, s.Opacity)
-		if text == last && visible {
+		encoded, _ := json.Marshal(s)
+		key := fmt.Sprintf("%s|%d,%d,%d,%d", encoded, x, y, width, height)
+		if key == last && visible && !s.Animate {
 			continue
 		}
-		last = text
-		_, _, _ = overlayAlpha.Call(hwnd, 0, uintptr(s.Opacity*255/100), 2)
-		_, _, _ = overlayPosition.Call(hwnd, ^uintptr(0), uintptr(x), uintptr(y), uintptr(width), uintptr(height), 0x50) // SHOWWINDOW | NOACTIVATE
-		_, _, _ = overlayInvalidate.Call(hwnd, 0, 1)
+		if key != last || renderer == nil {
+			if surface != nil {
+				surface.close()
+				surface = nil
+			}
+			renderer, err = newOverlayRenderer(s, int(width), int(height), nativeOverlayLabel)
+			if err == nil {
+				surface, err = newOverlaySurface(renderer.base.Bounds().Dx(), renderer.base.Bounds().Dy())
+			}
+			if err != nil {
+				reportError(err)
+				_, _, _ = overlayShow.Call(hwnd, 0)
+				visible = false
+				continue
+			}
+			last = key
+		}
+		// Position the measured surface, rather than its allocation bound.
+		if s.Style == "mist-aurora" {
+			width, _ = safecast.IntToInt32(renderer.base.Bounds().Dx())
+			height, _ = safecast.IntToInt32(renderer.base.Bounds().Dy())
+			x, y, _, _ = gamingOverlayPlacementSized(s, monitor, width, height)
+		}
+		seconds := time.Since(started).Seconds()
+		if !s.Animate {
+			seconds = 0
+		}
+		if err = surface.present(hwnd, renderer.render(seconds), x, y, s.Opacity); err != nil {
+			reportError(err)
+			_, _, _ = overlayShow.Call(hwnd, 0)
+			visible = false
+			continue
+		}
+		if !visible {
+			// UpdateLayeredWindow already set geometry; show topmost without activation.
+			_, _, _ = overlayPosition.Call(hwnd, ^uintptr(0), 0, 0, 0, 0, 0x53)
+		}
 		visible = true
+		lastError = ""
 	}
 }

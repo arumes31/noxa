@@ -121,12 +121,9 @@ export function notify(event, text, ctx = {}) {
 function playEventSound(event, soundEvent = event, speechEvent) {
     if (window.__noxaPolish?.dndActive?.()) return;
     const settings = V().state.settings;
-    // Matrix sound permission is checked by notify() before this point. These
-    // two checks additionally make a replay silent and let a precise action
-    // toggle (for example user_move_out) suppress the specific cue.
-    if (V().state.replayingTabID
-        || settings?.event_sounds?.[event] === false
-        || settings?.event_sounds?.[soundEvent] === false) return;
+    // Preserve the matrix and replay gates. The audio dispatcher applies each
+    // action's speech preference or remaining effect preference independently.
+    if (V().state.replayingTabID || settings?.event_sounds?.[event] === false) return;
     speechEvent ||= { user_join: "user_join", user_leave: "user_leave", user_move_in: "user_join", user_move_out: "user_leave" }[soundEvent];
     if (speechEvent) playAlert(speechEvent, { effect: soundEvent });
     else playEvent(soundEvent);

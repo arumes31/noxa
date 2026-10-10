@@ -1,3 +1,59 @@
+.settings-dialog:has(.notification-settings) { width: 860px; }
+.notification-settings { display: flex; flex-direction: column; gap: 24px; }
+.notification-section { min-width: 0; }
+.notification-section > h3, .notification-section > summary {
+    margin: 0 0 10px; font-size: 1rem; font-weight: 600; color: var(--text);
+}
+.notification-settings summary {
+    cursor: pointer; padding: 10px 0; color: var(--text-dim); font-weight: 600;
+}
+.notification-settings details { border-top: 1px solid var(--border); }
+.notification-settings summary:hover { color: var(--accent); }
+.notification-settings summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.notification-settings .set-row { padding: 10px 0; }
+.notification-settings .set-label { line-height: 1.45; min-width: 0; }
+.notification-settings .set-hint { font-style: normal; line-height: 1.5; color: var(--text-dim); }
+.notification-settings .audio-status-panel {
+    margin: 0 0 10px; padding: 12px; background: var(--bg-panel); border-left: 3px solid var(--accent);
+}
+.notification-settings .audio-preview-status:not(:empty) { margin-top: 6px; color: var(--warn); }
+.notification-settings input[type="checkbox"] { width: 17px; height: 17px; flex-shrink: 0; accent-color: var(--accent); cursor: pointer; }
+.notification-settings .sound-controls { gap: 8px; margin-top: 10px; }
+.notification-settings .set-row .sound-controls { flex-shrink: 0; margin: 0; }
+.notification-settings .sound-controls button, .notification-settings .notify-matrix button {
+    min-height: 32px; padding: 6px 10px; border: 1px solid var(--border); border-radius: 5px;
+    background: var(--bg-hover); color: var(--text); font: inherit; font-size: .8571rem; cursor: pointer;
+}
+.notification-settings .sound-controls button:hover, .notification-settings .notify-matrix button:hover { border-color: var(--accent); }
+.notification-settings .sound-controls button:first-child { color: var(--accent); }
+.notification-settings .device-picker { flex: 0 1 370px; min-width: 0; }
+.notification-settings .set-slider { min-width: 0; flex: 0 1 280px; }
+.notification-settings .set-slider input[type="range"] { min-width: 50px; width: 100%; }
+.notification-settings .dnd-hours { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.notification-settings .dnd-hours input { min-width: 0; width: 120px; padding: 6px 8px; }
+.notification-matrix-wrap { margin-top: 16px; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+.notification-settings .notify-matrix { margin: 0; width: 100%; border: 0; font-size: .8571rem; }
+.notification-settings .notify-matrix th, .notification-settings .notify-matrix td { padding: 9px 6px; }
+.notification-settings .notify-matrix th { font-family: inherit; letter-spacing: normal; text-transform: none; }
+.notification-settings .notify-matrix thead { background: var(--bg-panel); color: var(--text-dim); }
+.notification-settings .notify-matrix th:first-child { padding-left: 10px; white-space: normal; font-weight: 500; }
+.notification-settings .notify-matrix tbody tr:last-child > * { border-bottom: 0; }
+.notification-settings .notify-matrix tbody tr:hover { background: var(--bg-hover); }
+.notification-settings .notification-event-speech { margin-top: 14px; }
+.notification-settings .set-subhead { letter-spacing: .03em; color: var(--text-dim); }
+@media (max-width: 760px) {
+    .notification-settings .notify-matrix, .notification-settings .notify-matrix tbody { display: block; }
+    .notification-settings .notify-matrix thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+    .notification-settings .notify-matrix tr { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); border-bottom: 1px solid var(--border); padding: 6px; }
+    .notification-settings .notify-matrix tr:last-child { border-bottom: 0; }
+    .notification-settings .notify-matrix tbody th { grid-column: 1 / -1; text-align: left; border: 0; }
+    .notification-settings .notify-matrix td { display: flex; flex-direction: column; align-items: center; justify-content: space-between; gap: 8px; border: 0; min-width: 0; }
+    .notification-settings .notify-matrix td::before { content: attr(data-label); color: var(--text-dim); font-size: .7857rem; }
+    .notification-settings .set-row:has(select, .dnd-hours, .set-slider) { flex-direction: column; align-items: stretch; gap: 6px; }
+    .notification-settings .set-slider { flex-basis: auto; }
+    .notification-settings .device-picker { flex-basis: auto; width: 100%; }
+    .notification-settings .dnd-hours input { flex: 1; width: 100%; }
+}
 @media (max-width: 600px) {
     .settings-dialog { flex-direction: column; }
     .settings-nav { width: auto; flex-direction: row; flex-shrink: 0; overflow-x: auto; border-right: 0; border-bottom: 1px solid var(--border); }

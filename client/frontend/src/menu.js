@@ -256,13 +256,8 @@ async function bookmarkCurrent() {
 }
 
 async function connectBookmark(b) {
-    const { state, toast, $ } = V();
-    $("login-addr").value = b.addr;
-    // Keep the account login; the bookmark overrides only its public name.
-    $("login-nick").value = b.nickname;
-    $("login-display-name").value = b.nickname_override || state.settings?.display_name || "";
-    $("login-serverpw").value = "";
-    $("login-accountpw").value = "";
+    const { state, toast } = V();
+    void V().prefillLogin({ ...b, display_name: b.nickname_override || "" });
     state.lastConnect = null;
     V().showLogin();
     // Carry the bookmark name independently of its display-name override. Stashed
@@ -569,7 +564,9 @@ export function initMenu() {
 
     const permissions = buildMenu(t("menu.permissions"), [
         menuAction(() => t("roles.myRoles"), () => {
-            V().refreshPermissions();
+            V().state.selectedClientID = V().state.myClientID;
+            V().state.multiSelect = new Set([V().state.myClientID]);
+            V().renderTree();
             V().setDetailsOpen(true);
         }),
         menuAction(() => t("roles.title"), async () => {

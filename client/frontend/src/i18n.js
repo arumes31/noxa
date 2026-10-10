@@ -12,6 +12,8 @@
 //      startup). Every settings page uses the same catalogs.
 
 import { settingsEnglish, settingsGerman } from "./settings-messages.js";
+import { loginErrorEnglish, loginErrorGerman } from "./login-error-messages.js";
+import { streamHealthEnglish, streamHealthGerman } from "./stream-health-messages.js";
 import { audioRecoveryEnglish, audioRecoveryGerman } from "./audio-recovery-messages.js";
 import { networkEchoEnglish, networkEchoGerman } from "./network-echo-messages.js";
 import { runtimeEnglish, runtimeGerman } from "./runtime-messages.js";
@@ -20,6 +22,7 @@ import { securityEnglish, securityGerman } from "./security-messages.js";
 import { interfaceEnglish, interfaceGerman } from "./interface-messages.js";
 import { roleEnglish, roleGerman } from "./role-messages.js";
 import { auditEnglish, auditGerman } from "./audit-messages.js";
+import { voiceDiagnosticsEnglish, voiceDiagnosticsGerman } from "./voice-diagnostics-messages.js";
 
 import { quickWinEnglish, quickWinGerman } from "./quick-win-messages.js";
 import { uiPolishEnglish, uiPolishGerman } from "./ui-polish-messages.js";
@@ -40,6 +43,8 @@ import { messageToolsEnglish, messageToolsGerman } from "./message-tools-message
 import { webhookEnglish, webhookGerman } from "./webhook-messages.js";
 
 const en = {
+    ...loginErrorEnglish, ...streamHealthEnglish,
+    ...voiceDiagnosticsEnglish,
     ...desktopEnglish,
     ...runtimeEnglish,
     ...networkEchoEnglish,
@@ -95,6 +100,16 @@ const en = {
     "common.create": "Create",
     "common.apply": "Apply",
     "login.optional": "Optional details",
+    "login.serverPlaceholder": "Server address",
+    "login.displayPlaceholder": "Use account name",
+    "login.accountPasswordPlaceholder": "For a registered account",
+    "login.rememberPasswords": "Remember passwords for this connection",
+    "login.savedPassword": "Saved password",
+    "login.passwordProtection": "Protected by your operating system. Uncheck to delete saved passwords.",
+    "login.passwordUnavailable": "Protected password storage is unavailable on this device.",
+    "login.passwordLookupFailed": "Saved passwords could not be checked. Enter them again.",
+    "login.passwordForgetFailed": "Saved passwords could not be deleted. Please try again.",
+    "login.connectionChanged": "Connection details changed. Please connect again.",
     "login.optionalHint": "Display name · Passwords",
     "login.identity": "Identity auto-generated — stored locally",
     "login.connecting": "Connecting…",
@@ -106,6 +121,10 @@ const en = {
     "login.serverPassword": "Server password (optional)",
     "login.accountPassword": "Account password (optional)",
     "login.connect": "Connect",
+    "login.pauseMotion": "Pause",
+    "login.playMotion": "Play",
+    "login.pauseAnimation": "Pause background animation",
+    "login.playAnimation": "Play background animation",
     "login.recentServers": "Recent servers",
     "settings.application": "Application",
     "settings.capture": "Capture",
@@ -127,6 +146,8 @@ const en = {
 };
 
 const de = {
+    ...loginErrorGerman, ...streamHealthGerman,
+    ...voiceDiagnosticsGerman,
     ...desktopGerman,
     ...runtimeGerman,
     ...networkEchoGerman,
@@ -182,6 +203,16 @@ const de = {
     "common.create": "Erstellen",
     "common.apply": "Anwenden",
     "login.optional": "Optionale Angaben",
+    "login.serverPlaceholder": "Serveradresse",
+    "login.displayPlaceholder": "Kontonamen verwenden",
+    "login.accountPasswordPlaceholder": "Für ein registriertes Konto",
+    "login.rememberPasswords": "Passwörter für diese Verbindung merken",
+    "login.savedPassword": "Gespeichertes Passwort",
+    "login.passwordProtection": "Vom Betriebssystem geschützt. Häkchen entfernen, um gespeicherte Passwörter zu löschen.",
+    "login.passwordUnavailable": "Geschütztes Speichern von Passwörtern ist auf diesem Gerät nicht verfügbar.",
+    "login.passwordLookupFailed": "Gespeicherte Passwörter konnten nicht geprüft werden. Bitte erneut eingeben.",
+    "login.passwordForgetFailed": "Gespeicherte Passwörter konnten nicht gelöscht werden. Bitte erneut versuchen.",
+    "login.connectionChanged": "Verbindungsdaten wurden geändert. Bitte erneut verbinden.",
     "login.optionalHint": "Anzeigename · Passwörter",
     "login.identity": "Identität automatisch erstellt — lokal gespeichert",
     "login.connecting": "Verbindung wird hergestellt…",
@@ -193,6 +224,10 @@ const de = {
     "login.serverPassword": "Server-Passwort (optional)",
     "login.accountPassword": "Konto-Passwort (optional)",
     "login.connect": "Verbinden",
+    "login.pauseMotion": "Pause",
+    "login.playMotion": "Abspielen",
+    "login.pauseAnimation": "Hintergrundanimation pausieren",
+    "login.playAnimation": "Hintergrundanimation abspielen",
     "login.recentServers": "Letzte Server",
     "settings.application": "Anwendung",
     "settings.capture": "Aufnahme",
@@ -277,6 +312,9 @@ export function t(key, vars) {
 
 // applyStaticLabels re-labels the static index.html surfaces (login card).
 export function applyStaticLabels() {
+    for (const element of document.querySelectorAll("[data-login-i18n-placeholder]")) {
+        element.setAttribute("placeholder", t(element.dataset.loginI18nPlaceholder));
+    }
     for (const element of document.querySelectorAll("[data-login-i18n]")) {
         element.textContent = t(element.dataset.loginI18n);
     }

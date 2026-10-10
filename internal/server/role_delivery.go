@@ -35,7 +35,7 @@ func (s *TCPServer) writeRoleBroadcastInContext(ctx context.Context, client *Cli
 			s.privateCallsMu.Lock()
 			defer s.privateCallsMu.Unlock()
 		}
-		if event.Type == eventSpeakingChanged || event.Type == eventWhisper || event.Type == eventAvatarChanged || event.Type == eventPoke || event.Type == eventPrioritySpeakerChanged || event.Type == eventScreenshareChanged || event.Type == eventStreamWatchStarted || event.Type == eventPosition {
+		if event.Type == eventSpeakingChanged || event.Type == eventWhisper || event.Type == eventAvatarChanged || event.Type == eventPoke || event.Type == eventPrioritySpeakerChanged || event.Type == eventScreenshareChanged || event.Type == eventStreamWatchStarted || event.Type == eventStreamUploadChanged || event.Type == eventPosition {
 			// A queued activity write must finish before moderation can
 			// acknowledge a mute/deafen, or recheck after that change. Avatar
 			// notifications likewise must not outlive the member's visibility.
@@ -85,7 +85,7 @@ func (s *TCPServer) roleBroadcastFrame(client *Client, payload []byte, e *author
 		if !online || !liveSender.isAuthed() || liveSender.sessionRevoked() || liveSender.UniqueID != signal.From {
 			return nil, nil
 		}
-	case eventStreamWatchStarted:
+	case eventStreamWatchStarted, eventStreamUploadChanged:
 		var event streamWatchStartedEvent
 		if err := json.Unmarshal(envelope.Data, &event); err != nil {
 			return nil, err
@@ -96,7 +96,7 @@ func (s *TCPServer) roleBroadcastFrame(client *Client, payload []byte, e *author
 		current := false
 		for _, stream := range s.deps.Voice.VideoPublications(client.ID) {
 			if stream.PublisherID == client.ID && stream.Slot == event.Slot && stream.Generation == event.Generation {
-				current = true
+				current = envelope.Type != eventStreamUploadChanged || stream.QualityMode == "source"
 				break
 			}
 		}

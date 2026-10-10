@@ -24,6 +24,8 @@ export function BanList():Promise<netproto.BanListResponse>;
 
 export function BanListForTab(arg1:string):Promise<netproto.BanListResponse>;
 
+export function CancelConnectionBenchmark(arg1:string,arg2:string):Promise<void>;
+
 export function CancelIdentityLevel(arg1:string):Promise<boolean>;
 
 export function CancelTransfer(arg1:string):Promise<void>;
@@ -86,6 +88,8 @@ export function ChatSearch(arg1:number,arg2:string,arg3:number):Promise<main.Cha
 
 export function ChatSearchForTab(arg1:string,arg2:string,arg3:number,arg4:string,arg5:number):Promise<main.ChatSearchResult>;
 
+export function ChatTabLayoutForContext(arg1:main.DMHistoryContext):Promise<main.ChatTabLayout>;
+
 export function CheckAccess(arg1:netproto.AccessCheck):Promise<netproto.AccessCheckResult>;
 
 export function CheckAccessForTab(arg1:string,arg2:netproto.AccessCheck):Promise<netproto.AccessCheckResult>;
@@ -126,11 +130,15 @@ export function ConnectGuestBookmarkTabWithID(arg1:string,arg2:string,arg3:strin
 
 export function ConnectGuestTab(arg1:string,arg2:string):Promise<string>;
 
+export function ConnectLogin(arg1:main.LoginRequest):Promise<main.ConnectTabResult>;
+
 export function ConnectNamedBookmarkTabWithID(arg1:string,arg2:string,arg3:string,arg4:string,arg5:string,arg6:string):Promise<main.ConnectTabResult>;
 
 export function ConnectTab(arg1:string,arg2:string,arg3:string,arg4:string):Promise<string>;
 
 export function Connected():Promise<boolean>;
+
+export function ConnectionBenchmarkStatusForTab(arg1:string,arg2:string):Promise<main.ConnectionBenchmarkStatus>;
 
 export function ConnectionSecurity():Promise<string>;
 
@@ -242,6 +250,8 @@ export function FileVersionsForTab(arg1:string,arg2:number,arg3:string,arg4:stri
 
 export function FlashWindow():Promise<string>;
 
+export function ForgetLoginPasswords(arg1:string,arg2:string):Promise<string>;
+
 export function GamingOverlayAvailable():Promise<boolean>;
 
 export function GetAvatar(arg1:string):Promise<netproto.AvatarData>;
@@ -257,6 +267,8 @@ export function GetGamingOverlayMonitors():Promise<Array<main.GamingOverlayMonit
 export function GetICEServers():Promise<Array<netproto.ICEServer>>;
 
 export function GetICEServersForTab(arg1:string):Promise<Array<netproto.ICEServer>>;
+
+export function GetLoginPasswordStatus(arg1:string,arg2:string):Promise<main.LoginPasswordStatus>;
 
 export function GetMediaLimits():Promise<netproto.MediaLimits>;
 
@@ -356,6 +368,8 @@ export function RemoveRoleBanForTab(arg1:string,arg2:number):Promise<netproto.Ro
 
 export function RenameIdentity(arg1:string,arg2:string):Promise<string>;
 
+export function ReportVoiceDiagnosticsForTab(arg1:string,arg2:netproto.VoiceTelemetry):Promise<void>;
+
 export function ResetIdentity(arg1:string,arg2:string):Promise<void>;
 
 export function RestoreIdentity():Promise<boolean>;
@@ -379,6 +393,8 @@ export function RoleStateForTab(arg1:string,arg2:number):Promise<netproto.RoleSt
 export function SaveChatAttachment(arg1:number,arg2:string,arg3:string,arg4:string):Promise<string>;
 
 export function SaveChatAttachmentForTab(arg1:string,arg2:number,arg3:string,arg4:string,arg5:string):Promise<string>;
+
+export function SaveChatTabLayoutForContext(arg1:main.DMHistoryContext,arg2:main.ChatTabLayout):Promise<string>;
 
 export function SaveSettings(arg1:main.Settings):Promise<string>;
 
@@ -488,6 +504,8 @@ export function SetStatus(arg1:string,arg2:string):Promise<string>;
 
 export function SetStatusForTab(arg1:string,arg2:string,arg3:string):Promise<string>;
 
+export function SetStreamVideoQualityForTab(arg1:string,arg2:string,arg3:string,arg4:string,arg5:string,arg6:string):Promise<string>;
+
 export function SetTrayVoiceState(arg1:boolean,arg2:boolean,arg3:boolean):Promise<void>;
 
 export function SetVideoQuality(arg1:string):Promise<string>;
@@ -496,7 +514,11 @@ export function SetVideoQualityForTab(arg1:string,arg2:string):Promise<string>;
 
 export function SetWindowOpacity(arg1:number):Promise<string>;
 
+export function StartConnectionBenchmark(arg1:string):Promise<main.ConnectionBenchmarkStatus>;
+
 export function StopPrivateCallForTab(arg1:string,arg2:string):Promise<void>;
+
+export function StreamDiagnosticsForTab(arg1:string,arg2:string,arg3:string,arg4:string,arg5:string):Promise<netproto.VideoStreamDiagnostics>;
 
 export function SubscribeChannels(arg1:Array<number>,arg2:boolean):Promise<string>;
 
@@ -505,6 +527,12 @@ export function SubscribeChannelsForTab(arg1:string,arg2:Array<number>,arg3:bool
 export function Subscriptions():Promise<Array<number>>;
 
 export function SubscriptionsForTab(arg1:string):Promise<Array<number>>;
+
+export function SupportsStreamDiagnosticsForTab(arg1:string):Promise<boolean>;
+
+export function SupportsStreamSourceQualityForTab(arg1:string):Promise<boolean>;
+
+export function SupportsStreamVideoQualityForTab(arg1:string):Promise<boolean>;
 
 export function SwitchIdentity(arg1:string):Promise<string>;
 

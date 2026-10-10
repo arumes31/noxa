@@ -5,6 +5,7 @@ import (
 	"io"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/pion/interceptor"
@@ -21,6 +22,10 @@ const mediaPacerLifetime = 500 * time.Millisecond
 const mediaAudioPackets = 256
 const mediaAudioBytes = 128 * 1024
 const mediaAudioLifetime = 100 * time.Millisecond
+
+// Enough initial headroom for a Full HD stream while receiver feedback starts.
+// This is not a floor: GCC may immediately reduce it on a constrained path.
+const mediaInitialBitrate = 6_000_000
 
 type pacedStream struct {
 	writer    interceptor.RTPWriter
@@ -55,10 +60,13 @@ type mediaPacer struct {
 	sent                              uint64 // historyMu covers insertion and feedback delivery
 	audioQueue                        [mediaAudioPackets]pacedPacket
 	audioHead, audioCount, audioBytes int
+	diagnostics                       mediaPacerCounters // protected by mu; video only
+	videoStarted                      atomic.Bool
+	startVideoProbe                   func(int) bool // installed before binding a stream
 }
 
 func newMediaPacer() *mediaPacer {
-	p := &mediaPacer{streams: make(map[uint32]*pacedStream), bitrate: 1_500_000, stop: make(chan struct{}), done: make(chan struct{})}
+	p := &mediaPacer{streams: make(map[uint32]*pacedStream), bitrate: mediaInitialBitrate, stop: make(chan struct{}), done: make(chan struct{})}
 	go p.run()
 	return p
 }
@@ -129,6 +137,9 @@ func (p *mediaPacer) Write(header *rtp.Header, payload []byte, attrs interceptor
 	}
 	stream := p.streams[header.SSRC]
 	if stream == nil || !stream.active || size > 65535 {
+		if stream == nil || !stream.audio {
+			p.diagnostics.droppedRetired++
+		}
 		return size, nil
 	}
 	if stream.audio {
@@ -136,6 +147,7 @@ func (p *mediaPacer) Write(header *rtp.Header, payload []byte, attrs interceptor
 			return size, nil
 		}
 	} else if p.count == mediaPacerPackets || p.bytes+size > mediaPacerBytes {
+		p.diagnostics.droppedQueueFull++
 		return size, nil
 	}
 	attributes := make(interceptor.Attributes, len(attrs))
@@ -214,7 +226,13 @@ func (p *mediaPacer) run() {
 					break
 				}
 				front := &p.queue[p.head]
-				if !front.stream.active || !time.Now().Before(front.expires) {
+				if !front.stream.active {
+					p.diagnostics.droppedRetired++
+					p.popLocked()
+					continue
+				}
+				if !time.Now().Before(front.expires) {
+					p.diagnostics.droppedExpired++
 					p.popLocked()
 					continue
 				}
@@ -233,7 +251,9 @@ func (p *mediaPacer) run() {
 }
 
 func (p *mediaPacer) writePacket(packet pacedPacket) {
+	attempted := false
 	write := interceptor.RTPWriterFunc(func(header *rtp.Header, payload []byte, attrs interceptor.Attributes) (int, error) {
+		attempted = true
 		if packet.stream.twccID != 0 {
 			p.historyMu.Lock()
 			defer p.historyMu.Unlock()
@@ -253,14 +273,18 @@ func (p *mediaPacer) writePacket(packet pacedPacket) {
 		return n, err
 	})
 	if p.egress == nil { // Standalone pacing tests have no router bindings.
-		_, _ = write.Write(&packet.header, packet.payload, packet.attrs)
+		n, err := write.Write(&packet.header, packet.payload, packet.attrs)
+		p.recordVideoWrite(packet.stream.audio, attempted, n, err)
 		return
 	}
 	p.egress.mu.Lock()
 	stream := p.egress.streams[packet.stream.bindingID]
 	p.egress.mu.Unlock()
 	if stream != nil {
-		_, _ = stream.write(&packet.header, packet.payload, packet.attrs, write)
+		n, err := stream.write(&packet.header, packet.payload, packet.attrs, write)
+		p.recordVideoWrite(packet.stream.audio, attempted, n, err)
+	} else {
+		p.recordVideoWrite(packet.stream.audio, false, 0, nil)
 	}
 }
 
@@ -290,10 +314,11 @@ func (f mediaCCFactory) NewInterceptor(id string) (interceptor.Interceptor, erro
 	pacer := newMediaPacer()
 	pacer.egress = f.registry
 	factory, err := cc.NewInterceptor(func() (cc.BandwidthEstimator, error) {
-		estimator, err := gcc.NewSendSideBWE(gcc.SendSideBWEInitialBitrate(1_500_000), gcc.SendSideBWEPacer(pacer))
+		estimator, err := gcc.NewSendSideBWE(gcc.SendSideBWEInitialBitrate(mediaInitialBitrate), gcc.SendSideBWEPacer(pacer))
 		if err != nil {
 			return nil, err
 		}
+		pacer.startVideoProbe = estimator.StartVideoProbe
 		return &mediaBandwidthEstimator{BandwidthEstimator: estimator, pacer: pacer}, nil
 	})
 	if err != nil {
@@ -328,6 +353,16 @@ func (i *mediaCCInterceptor) BindLocalStream(info *interceptor.StreamInfo, write
 	}
 	i.pacer.mu.Unlock()
 	i.pacer.addRTX(info.SSRC, info.SSRCRetransmission)
+	if registry := i.pacer.egress; registry != nil {
+		registry.mu.Lock()
+		output := registry.streams[info.ID]
+		registry.mu.Unlock()
+		if output != nil {
+			output.mu.Lock()
+			output.pacer = i.pacer
+			output.mu.Unlock()
+		}
+	}
 	return out
 }
 func (i *mediaCCInterceptor) UnbindLocalStream(info *interceptor.StreamInfo) {

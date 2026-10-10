@@ -44,3 +44,5 @@
 .stream-live-controls .stream-audio output { font-size: 11px; }
 .vtile:has(.stream-live-controls) .vtile-pip { right: 76px; }
 .vtile:has(.stream-live-controls) .vtile-fullscreen { right: 42px; }
+.vtile:has(.stream-live-controls) .vtile-label { right: 110px; }
+.vtile:has(.stream-live-controls) .vtile-badge { bottom: 50px; }

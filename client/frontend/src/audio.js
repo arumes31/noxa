@@ -7,6 +7,9 @@ import { updateLocalSettings } from "./settings-store.js";
 
 const V = () => window.__noxa;
 
+// Keep quiet word endings audible in channels, private calls, and the mic preview.
+export { VAD_RELEASE_MS } from "./voice-gate-core.js";
+
 // Incoming tracks arrive outside a user gesture. Resume their WebAudio context
 // explicitly and retry from user interaction if autoplay initially suspends it.
 export async function resumeAudioPlayback(context) {
@@ -322,7 +325,7 @@ export function markCaptureProfile(track, ch) {
 // settings. Returns {track, changed}; on any failure the working track is
 // kept. The caller must restart anything holding the old track (mic meter,
 // VAD monitor) and re-apply mute/PTT state when changed is true.
-export async function applyCaptureProfile(pc, stream, ch) {
+export async function applyCaptureProfile(pc, stream, ch, gate = null) {
     const cur = stream?.getAudioTracks()[0] || null;
     if (!cur) return { track: null, changed: false };
     const initialState = cur.readyState;
@@ -352,21 +355,35 @@ export async function applyCaptureProfile(pc, stream, ch) {
         trackProfiles.set(next, want);
         next.enabled = cur.enabled;
         next.contentHint = profileOf(ch) === "music" ? "music" : "speech";
-        const sender = pc?.getSenders().find((s) => s.track === cur) || null;
+        let sendTrack;
+        try {
+            sendTrack = gate ? await gate.prepare(cur, next) : next;
+        } catch (error) {
+            next.stop();
+            return { track: cur, changed: false, error };
+        }
+        if (!current()) {
+            gate?.dispose(next); next.stop();
+            return { track: null, changed: false };
+        }
+        const sender = pc?.getSenders().find((s) => s.track === (gate ? gate.sendTrack(cur) : cur)) || null;
         if (sender) {
             try {
-                await sender.replaceTrack(next);
+                await sender.replaceTrack(sendTrack);
                 if (!current()) {
-                    next.enabled = false;
-                    if (sender.track === next) await sender.replaceTrack(null).catch(() => {});
+                    sendTrack.enabled = false;
+                    if (sender.track === sendTrack) await sender.replaceTrack(null).catch(() => {});
+                    gate?.dispose(next);
                     next.stop();
                     return { track: null, changed: false };
                 }
             } catch (error) {
+                gate?.dispose(next);
                 next.stop();
                 return { track: cur, changed: false, error };
             }
         }
+        gate?.dispose(cur);
         cur.stop();
         stream.removeTrack(cur);
         stream.addTrack(next);
@@ -406,6 +423,14 @@ export function clearUserVolumePreview(uid, owner) {
 export function getUserVolume(uid) {
     const s = V().state.settings;
     return (volumePreviews.get(uid)?.volume ?? s?.user_volumes?.[uid] ?? 100) / 100;
+}
+
+// 100% stays at unity. Below it, a square taper makes attenuation useful;
+// above it, each 5 percentage points adds 1 dB, up to +20 dB at 200%.
+export function personalVolumeGain(volume) {
+    const value = Number(volume);
+    const bounded = Math.min(2, Math.max(0, Number.isFinite(value) ? value : 1));
+    return bounded <= 1 ? bounded ** 2 : 10 ** (bounded - 1);
 }
 
 export function isUserMuted(uid) {
@@ -489,18 +514,23 @@ export function refreshUserAudio() {
     for (const listener of shareAudioListeners) listener();
 }
 
-// userNodes maps uniqueID -> {gain: GainNode, mute: GainNode}.
+// An identity can publish from several sessions at once. Retiring one track
+// must not orphan the other sessions' personal volume and mute controls.
 const userNodes = new Map();
 
 // registerUserChain creates the per-user gain nodes for a remote audio
 // chain (used when a track can be attributed to a user).
 export function registerUserChain(uid, gainNode, muteNode) {
-    userNodes.set(uid, { gain: gainNode, mute: muteNode });
+    if (!userNodes.has(uid)) userNodes.set(uid, new Map());
+    userNodes.get(uid).set(gainNode, muteNode);
     applyUserAudio(uid);
 }
 
-export function unregisterUserChain(uid) {
-    userNodes.delete(uid);
+export function unregisterUserChain(uid, gainNode) {
+    const nodes = userNodes.get(uid);
+    if (!nodes) return;
+    nodes.delete(gainNode);
+    if (!nodes.size) userNodes.delete(uid);
 }
 
 // ---------------------------------------------------------------------------
@@ -526,12 +556,15 @@ function duckMultiplier(uid) {
 }
 
 export function applyUserAudio(uid) {
-    const n = userNodes.get(uid);
-    if (!n) return;
+    const nodes = userNodes.get(uid);
+    if (!nodes) return;
     // gain and mute are in series, so the duck factor belongs on exactly one
     // of them — applying it to both squares it (14: -24 dB, not -12 dB).
-    n.gain.gain.value = (isUserMuted(uid) ? 0 : getUserVolume(uid)) * duckMultiplier(uid);
-    n.mute.gain.value = isUserMuted(uid) ? 0 : 1;
+    const muted = isUserMuted(uid);
+    for (const [gain, mute] of nodes) {
+        gain.gain.value = (muted ? 0 : personalVolumeGain(getUserVolume(uid))) * duckMultiplier(uid);
+        mute.gain.value = muted ? 0 : 1;
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -540,9 +573,12 @@ export function applyUserAudio(uid) {
 
 export function makeLimiter(ctx) {
     const comp = ctx.createDynamicsCompressor();
-    comp.threshold.value = -12;
-    comp.knee.value = 20;
-    comp.ratio.value = 8;
+    // Protect loud peaks without compressing ordinary conversation levels.
+    // The old wide knee at -12 dB reduced personal volume adjustments.
+    // Leave headroom for the +20 dB personal boost and the master volume.
+    comp.threshold.value = -6;
+    comp.knee.value = 0;
+    comp.ratio.value = 20;
     comp.attack.value = 0.003;
     comp.release.value = 0.2;
     return comp;

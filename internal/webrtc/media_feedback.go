@@ -2,14 +2,16 @@ package webrtc
 
 import (
 	"strings"
+	"time"
 
 	"github.com/pion/interceptor"
 	"github.com/pion/interceptor/pkg/cc"
 	"github.com/pion/rtcp"
 	"github.com/pion/sdp/v3"
+	mediacc "noxa/internal/mediacc/cc"
 )
 
-// The pinned adapter retains 250 sends and reads padded status symbols. Neither
+// The pinned adapter has bounded history and reads padded status symbols. Neither
 // padding nor evicted history is evidence of loss; give GCC a bounded copy.
 type mediaBandwidthEstimator struct {
 	cc.BandwidthEstimator
@@ -42,6 +44,7 @@ func (e *mediaBandwidthEstimator) WriteRTCP(packets []rtcp.Packet, attrs interce
 		if feedback, ok := packet.(*rtcp.TransportLayerCC); ok {
 			if bounded := boundedTransportFeedback(feedback, e.pacer.sent); bounded != nil {
 				normalized = append(normalized, bounded)
+				e.pacer.recordVideoFeedback(time.Now())
 			}
 		} else {
 			normalized = append(normalized, packet)
@@ -51,12 +54,12 @@ func (e *mediaBandwidthEstimator) WriteRTCP(packets []rtcp.Packet, attrs interce
 }
 
 func boundedTransportFeedback(feedback *rtcp.TransportLayerCC, sent uint64) *rtcp.TransportLayerCC {
-	if sent == 0 || feedback.PacketStatusCount == 0 || feedback.PacketStatusCount > 250 {
+	if sent == 0 || feedback.PacketStatusCount == 0 || feedback.PacketStatusCount > mediacc.FeedbackHistorySize {
 		return nil
 	}
 	// Subtraction intentionally follows the wire's 16-bit sequence space.
 	distance := uint16((sent-1)&0xffff) - feedback.BaseSequenceNumber
-	if uint64(distance) >= min(sent, 250) || feedback.PacketStatusCount > distance+1 {
+	if uint64(distance) >= min(sent, mediacc.FeedbackHistorySize) || feedback.PacketStatusCount > distance+1 {
 		return nil
 	}
 	out := *feedback

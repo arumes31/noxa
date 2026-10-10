@@ -730,27 +730,27 @@
       "id": "poke",
       "label": "Poke",
       "category": "Notifications",
-      "character": "G05: David says Wake up! followed by a double beep",
-      "duration": 1.031875,
+      "character": "David says Wake up! without a trailing beep",
+      "duration": 0.6,
       "priority": 2,
       "gain": 1,
       "cooldown": 100,
       "concurrency": "replace same event within session; priority admission",
-      "rmsDB": -32.99946114832019,
+      "rmsDB": -31.784741224487355,
       "peakCeiling": 0.112,
       "recording": {
         "path": "client/frontend/src/assets/sounds/poke.wav",
-        "sha256": "7e5ba62a579ae6eb91b96778338319c349dc020396951da2c54280d534f9f0c7",
+        "sha256": "1e8b4e99d88e5e914b09b3dd5c3aa16c66859148e1f9cb397452e90f0a84bb6e",
         "edits": [
           {
             "source": "poke_g05",
             "file": "G05.wav",
             "sourceFileSha256": "69ce65a84a1005a3c9bf8bcf2d7f83ca8b396839fb0b33259d5e314b2b3e1c6c",
             "transcript": "Wake up!",
-            "sequence": "Speech, 60 ms gap, double beep",
-            "lengthMs": 1031.875,
+            "sequence": "Speech only; trailing double beep removed",
+            "lengthMs": 600,
             "gain": 0.18673125063600285,
-            "processing": "Uniform gain only; preserves the full selected speech and cue timing"
+            "processing": "Uniform gain; retain the first 600 ms of the selected recording, ending in silence before the beeps"
           }
         ]
       }

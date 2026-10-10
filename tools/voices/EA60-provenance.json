@@ -1,0 +1,49 @@
+{
+  "voice": {
+    "id": "EA60",
+    "group": "C",
+    "category": "Mentors & narration",
+    "style": "Epic adventure narrator",
+    "gender": "man",
+    "age": 61,
+    "timbre": "Deep smooth bass, broad resonant vowels, stately decisive phrasing",
+    "prompt": "An original fictional adult man, age 61, an epic adventure narrator in an English anime dub. Native neutral US English. Deep smooth bass with broad resonant vowels, clean strong consonants and stately decisive phrasing. Dignified narrative authority, calm anticipation and a reassuring sense of scale. Compact subtle dramatic emphasis, normal conversational volume and steady concise pacing; avoid exaggerated booming or long pauses. Use a natural unprocessed human voice. Speak all six sentences exactly once in order, clearly at a concise natural pace, in a clean dry recording: Microphone muted. Microphone activated. Sound muted. A user joined the channel. A user disconnected. Server connection restored. No added words, vocalizations, music, effects, singing or screaming.",
+    "file": "tools/voices/EA60.wav",
+    "duration": 11.216,
+    "sample_rate": 24000,
+    "sha256": "4d016355ffef426b9b1bcb9a369c67bcaeaa8cbaa93d3ce34063c85e37aa6d5d",
+    "raw_samples": 280320,
+    "peak": 0.37892,
+    "rms_dbfs": -23.0,
+    "source_clipped_samples": 0,
+    "seed": 203085240,
+    "generator": "Local Qwen3-TTS VoiceDesign / audio.cpp v0.9.1",
+    "language": "English",
+    "text": "Microphone muted. Microphone activated. Sound muted. A user joined the channel. A user disconnected. Server connection restored.",
+    "model_sha256": "1bcef9a8c021072fca40e00498e00af9091fbe6d3ae4f87567cfee885d6c7554",
+    "runtime_sha256": "5e4d2ecd6e274d677c0d14d54d8ed83f4953057789801da0dad696d413a981ac"
+  },
+  "transcript": "Microphone muted. Microphone activated. Sound muted. A user joined the channel. A user disconnected. Server connection restored.",
+  "original_model": "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign",
+  "original_provider": {
+    "repository": "audio-cpp/audio.cpp-gguf",
+    "revision": "e479ac197bae727f69574261a8025696bc51de48",
+    "file": "Qwen3-TTS-12Hz-1.7B-VoiceDesign-GGUF/qwen3-tts-12hz-1.7b-voicedesign-q8_0.gguf",
+    "sha256": "1bcef9a8c021072fca40e00498e00af9091fbe6d3ae4f87567cfee885d6c7554",
+    "license": "Apache-2.0"
+  },
+  "reference_review": {
+    "id": "EA60",
+    "sha256": "4d016355ffef426b9b1bcb9a369c67bcaeaa8cbaa93d3ce34063c85e37aa6d5d",
+    "language": "en",
+    "language_probability": 0.9923,
+    "transcript": "Microphone muted, microphone activated, sound muted. A user joined the channel, a user disconnected, server connection restored.",
+    "status": "accepted",
+    "text_match": 1.0,
+    "duration": 11.216,
+    "peak": 0.37891,
+    "note": "Automatic unprompted ASR and waveform checks; not human listening."
+  },
+  "recording_license": "MIT",
+  "note": "Original synthetic adult fictional voice selected by the user. Authoring reference only; no model or engine ships in the client. Automatic transcript checks do not certify human listening or voice identity."
+}

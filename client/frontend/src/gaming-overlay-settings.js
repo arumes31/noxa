@@ -1,14 +1,18 @@
 import { t } from "./i18n.js";
 import "./gaming-overlay-settings.css";
+import { mistAuroraPreview } from "./gaming-overlay-mist.js";
 
 export function gamingOverlaySettings(settings, { row, checkbox, slider, hint }) {
     const panel = document.createElement("section"); panel.className = "gaming-overlay-settings";
     const available = window.go.main.App.GamingOverlayAvailable;
     const position = document.createElement("select");
     const monitor = document.createElement("select");
+    const design = document.createElement("select");
     const option = (select, value, text) => { const item = document.createElement("option"); item.value = value; item.textContent = text; select.append(item); };
-    for (const corner of ["top-left", "top-right", "bottom-left", "bottom-right", "custom"]) option(position, corner, t("overlay." + corner));
-    position.value = settings.gaming_overlay_position || "top-right";
+    for (const corner of ["center-left", "top-left", "top-right", "bottom-left", "bottom-right", "custom"]) option(position, corner, t("overlay." + corner));
+    for (const style of ["bars", "mist-aurora"]) option(design, style, t("overlay." + style));
+    design.value = settings.gaming_overlay_style || "bars";
+    position.value = settings.gaming_overlay_position || "center-left";
     option(monitor, "", t("overlay.primary"));
     const savedMonitor = settings.gaming_overlay_monitor || "";
     if (savedMonitor) option(monitor, savedMonitor, savedMonitor);
@@ -16,16 +20,32 @@ export function gamingOverlaySettings(settings, { row, checkbox, slider, hint })
     const preview = document.createElement("div"); preview.className = "overlay-position-preview";
     const sample = document.createElement("button"); sample.type = "button"; sample.className = "overlay-position-sample";
     sample.setAttribute("aria-label", t("overlay.drag"));
-    sample.textContent = t("overlay.sample"); preview.append(sample);
+    for (const name of ["Alex", "Sam"]) {
+        const person = document.createElement("span"); person.className = "overlay-sample-person";
+        const avatar = document.createElement("span"); avatar.className = "overlay-sample-avatar"; avatar.textContent = name[0];
+        const details = document.createElement("span"); details.className = "overlay-sample-details";
+        const label = document.createElement("span"); label.className = "overlay-sample-name"; label.textContent = name; details.append(label);
+        const wave = document.createElement("span"); wave.className = "overlay-sample-wave"; wave.setAttribute("aria-hidden", "true");
+        for (let i = 0; i < 11; i++) { const bar = document.createElement("i"); bar.style.setProperty("--bar", i); wave.append(bar); }
+        details.append(wave); person.append(avatar, details); sample.append(person);
+    }
+    preview.append(sample);
+    const showDesign = mistAuroraPreview(sample);
     const coordinates = document.createElement("output"); coordinates.className = "overlay-position-readout"; coordinates.setAttribute("aria-live", "polite");
     const render = () => {
         const custom = position.value === "custom";
         const x = custom ? settings.gaming_overlay_x || 0 : position.value.endsWith("right") ? 100 : 0;
-        const y = custom ? settings.gaming_overlay_y || 0 : position.value.startsWith("bottom") ? 100 : 0;
-        sample.style.left = `${x}%`; sample.style.top = `${y}%`; sample.style.transform = `translate(-${x}%, -${y}%)`;
+        const y = custom ? settings.gaming_overlay_y || 0 : position.value.startsWith("bottom") ? 100 : position.value === "center-left" ? 45 : 0;
+        const translateY = position.value === "center-left" ? 50 : y;
+        sample.style.left = `${x}%`; sample.style.top = `${y}%`; sample.style.transform = `translate(-${x}%, -${translateY}%)`;
         sample.style.opacity = String((settings.gaming_overlay_opacity ?? 88) / 100);
-        sample.style.fontSize = `${(settings.gaming_overlay_scale ?? 100) / 100}em`;
-        sample.textContent = t(settings.gaming_overlay_speakers_only ? "overlay.sampleSpeaking" : "overlay.sample");
+        const scale = (settings.gaming_overlay_scale ?? 80) / 100;
+        sample.style.setProperty("--overlay-scale", String(scale));
+        sample.style.fontSize = design.value === "mist-aurora" ? `${16 * scale}px` : `${scale}em`;
+        sample.classList.toggle("overlay-motion-disabled", settings.gaming_overlay_animate === false);
+        preview.classList.toggle("overlay-mist-preview", design.value === "mist-aurora");
+        preview.style.height = design.value === "mist-aurora" ? `${Math.max(390, 384 * scale + 20)}px` : "";
+        showDesign(design.value, settings.gaming_overlay_animate !== false);
         coordinates.textContent = t("overlay.coordinates", { x, y });
     };
     const setPosition = (x, y) => {
@@ -51,17 +71,20 @@ export function gamingOverlaySettings(settings, { row, checkbox, slider, hint })
         if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key)) return;
         event.preventDefault();
         const x = position.value === "custom" ? settings.gaming_overlay_x || 0 : position.value.endsWith("right") ? 100 : 0;
-        const y = position.value === "custom" ? settings.gaming_overlay_y || 0 : position.value.startsWith("bottom") ? 100 : 0;
+        const y = position.value === "custom" ? settings.gaming_overlay_y || 0 : position.value.startsWith("bottom") ? 100 : position.value === "center-left" ? 45 : 0;
         const step = event.shiftKey ? 10 : 1;
         setPosition(x + (event.key === "ArrowLeft" ? -step : event.key === "ArrowRight" ? step : 0), y + (event.key === "ArrowUp" ? -step : event.key === "ArrowDown" ? step : 0));
     };
     position.onchange = () => { settings.gaming_overlay_position = position.value; render(); };
     monitor.onchange = () => { settings.gaming_overlay_monitor = monitor.value; };
+    design.onchange = () => { settings.gaming_overlay_style = design.value; render(); };
     panel.append(row(t("overlay.enabled"), checkbox(settings.gaming_overlay !== false, value => { settings.gaming_overlay = value; }), "saved"),
         row(t("overlay.monitor"), monitor, "saved"), row(t("overlay.position"), position, "saved"),
-        row(t("overlay.scale"), slider(settings.gaming_overlay_scale ?? 100, 75, 200, value => { settings.gaming_overlay_scale = value; render(); }, true), "saved"),
+        row(t("overlay.design"), design, "saved"),
+        row(t("overlay.scale"), slider(settings.gaming_overlay_scale ?? 80, 75, 200, value => { settings.gaming_overlay_scale = value; render(); }, true), "saved"),
         row(t("overlay.opacity"), slider(settings.gaming_overlay_opacity ?? 88, 20, 100, value => { settings.gaming_overlay_opacity = value; render(); }, true), "saved"),
-        row(t("overlay.speakersOnly"), checkbox(settings.gaming_overlay_speakers_only, value => { settings.gaming_overlay_speakers_only = value; render(); }), "saved"),
+        row(t("overlay.animate"), checkbox(settings.gaming_overlay_animate !== false, value => { settings.gaming_overlay_animate = value; render(); }), "saved"),
+        hint(t("overlay.animateHint")),
         preview, coordinates, hint(t("overlay.dragHelp")));
     const nativePreview = document.createElement("button"); nativePreview.type = "button"; nativePreview.textContent = t("overlay.preview");
     const status = hint(t("overlay.hint")); status.setAttribute("role", "status");

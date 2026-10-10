@@ -253,8 +253,8 @@ export const SOUND_DEFINITIONS = {
     "poke": {
         "label": "Poke",
         "category": "Notifications",
-        "character": "G05: David says Wake up! followed by a double beep",
-        "duration": 1.031875,
+        "character": "David says Wake up! without a trailing beep",
+        "duration": 0.6,
         "priority": 2,
         "gain": 1,
         "cooldown": 100,

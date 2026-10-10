@@ -79,9 +79,10 @@ type ChannelOverride struct {
 // RecentServer is one entry of the connect history (282; max 10, no
 // passwords).
 type RecentServer struct {
-	Addr     string `json:"addr"`
-	Nickname string `json:"nickname"`
-	LastUsed int64  `json:"last_used"` // unix
+	Addr        string `json:"addr"`
+	Nickname    string `json:"nickname"`
+	DisplayName string `json:"display_name,omitempty"`
+	LastUsed    int64  `json:"last_used"` // unix
 }
 
 // HotkeyProfile is a named set of hotkey specs (300): per-server profiles
@@ -100,7 +101,7 @@ type HotkeyProfile struct {
 // serialized default changes, and add the repair to migrateSettings:
 // loading merges the file ONTO the defaults, so a field an older client always
 // wrote wins over the new default unless it is explicitly repaired.
-const settingsVersion = 10
+const settingsVersion = 12
 
 // Settings holds all user preferences.
 type Settings struct {
@@ -134,18 +135,17 @@ type Settings struct {
 	ReduceMotion            bool   `json:"reduce_motion"`             // (344)
 	SidebarWidth            int    `json:"sidebar_width"`             // (338) px, 0 = default
 	DetailsWidth            int    `json:"details_width"`             // (338) px, 0 = default
-	IdleVideoPause          bool   `json:"idle_video_pause"`          // (342) default on
 	DNDEnabled              bool   `json:"dnd_enabled"`               // (347)
 	NotificationSnoozeUntil int64  `json:"notification_snooze_until"` // Unix milliseconds; independent of DND and quiet hours.
 	DNDFrom                 string `json:"dnd_from"`                  // (348) quiet hours start "22:00" ("" = off)
 	DNDTo                   string `json:"dnd_to"`                    // (348) quiet hours end "07:00"
 
 	// Capture (input / microphone).
-	CaptureDeviceID  string `json:"capture_device_id"`
-	ActivationMode   string `json:"activation_mode"` // "ptt" | "vad" | "continuous"
-	VADThreshold     int    `json:"vad_threshold"`   // 0..100
-	EchoCancellation bool   `json:"echo_cancellation"`
-	NoiseSuppression bool   `json:"noise_suppression"`
+	CaptureDeviceID  string  `json:"capture_device_id"`
+	ActivationMode   string  `json:"activation_mode"` // "ptt" | "vad" | "continuous"
+	VADThreshold     float64 `json:"vad_threshold"`   // 0..100; UI supports 0.1% steps
+	EchoCancellation bool    `json:"echo_cancellation"`
+	NoiseSuppression bool    `json:"noise_suppression"`
 
 	// Playback (output).
 	PlaybackDeviceID string `json:"playback_device_id"`
@@ -201,6 +201,7 @@ type Settings struct {
 	SpeechVolume             int             `json:"speech_volume"`   // 0..200
 	SpeechLanguage           string          `json:"speech_language"` // interface | en | de
 	SpeechConnection         bool            `json:"speech_connection"`
+	SpeechChannel            bool            `json:"speech_channel"`
 	SpeechAdmin              bool            `json:"speech_admin"`
 	SpeechRemoval            bool            `json:"speech_removal"`
 	SpeechPermissions        bool            `json:"speech_permissions"`
@@ -212,22 +213,23 @@ type Settings struct {
 	GainNormalize            bool            `json:"gain_normalize"`
 
 	// Video (wave 3).
-	CameraFPS                 int    `json:"camera_fps"`    // 15 | 30 | 60 (default 30)
-	LowBandwidth              bool   `json:"low_bandwidth"` // (88) low-bandwidth mode
-	CameraDeviceID            string `json:"camera_device_id"`
-	CameraBackground          string `json:"camera_background"`       // none | blur | replace
-	CameraBackgroundScene     string `json:"camera_background_scene"` // slate | warm | studio
-	GamingOverlay             bool   `json:"gaming_overlay"`          // default on, can be disabled
-	GamingOverlayPosition     string `json:"gaming_overlay_position"`
-	GamingOverlayMonitor      string `json:"gaming_overlay_monitor"`
-	GamingOverlayScale        int    `json:"gaming_overlay_scale"`
-	GamingOverlayOpacity      int    `json:"gaming_overlay_opacity"`
-	GamingOverlaySpeakersOnly bool   `json:"gaming_overlay_speakers_only"`
-	GamingOverlayX            int    `json:"gaming_overlay_x"` // percentage of available travel
-	GamingOverlayY            int    `json:"gaming_overlay_y"`
-	CameraBackgroundImage     string `json:"camera_background_image"`
-	CameraBlurStrength        int    `json:"camera_blur_strength"`
-	CameraMirrorPreview       bool   `json:"camera_mirror_preview"`
+	CameraFPS             int    `json:"camera_fps"`    // 15 | 30 | 60 (default 30)
+	LowBandwidth          bool   `json:"low_bandwidth"` // (88) low-bandwidth mode
+	CameraDeviceID        string `json:"camera_device_id"`
+	CameraBackground      string `json:"camera_background"`       // none | blur | replace
+	CameraBackgroundScene string `json:"camera_background_scene"` // slate | warm | studio
+	GamingOverlay         bool   `json:"gaming_overlay"`          // default on, can be disabled
+	GamingOverlayAnimate  bool   `json:"gaming_overlay_animate"`  // independent of Windows animation preferences
+	GamingOverlayStyle    string `json:"gaming_overlay_style"`
+	GamingOverlayPosition string `json:"gaming_overlay_position"`
+	GamingOverlayMonitor  string `json:"gaming_overlay_monitor"`
+	GamingOverlayScale    int    `json:"gaming_overlay_scale"`
+	GamingOverlayOpacity  int    `json:"gaming_overlay_opacity"`
+	GamingOverlayX        int    `json:"gaming_overlay_x"` // percentage of available travel
+	GamingOverlayY        int    `json:"gaming_overlay_y"`
+	CameraBackgroundImage string `json:"camera_background_image"`
+	CameraBlurStrength    int    `json:"camera_blur_strength"`
+	CameraMirrorPreview   bool   `json:"camera_mirror_preview"`
 
 	// Security (wave 4a).
 	AllowPlaintext bool              `json:"allow_plaintext"`         // allow plaintext control connections (dev servers)
@@ -282,7 +284,6 @@ func DefaultSettings() Settings {
 		HotkeyMute:            "Ctrl+M",
 		HotkeyQuickConnect:    "Ctrl+Shift+C",
 		HotkeyZen:             "Ctrl+Shift+Z",
-		IdleVideoPause:        true,
 		Theme:                 "dark",
 		UIFont:                "outfit",
 		UIFontSize:            14,
@@ -305,6 +306,7 @@ func DefaultSettings() Settings {
 		SpeechVolume:      100,
 		SpeechLanguage:    "interface",
 		SpeechConnection:  true,
+		SpeechChannel:     true,
 		SpeechAdmin:       true,
 		SpeechRemoval:     true,
 		SpeechPermissions: true,
@@ -332,8 +334,10 @@ func DefaultSettings() Settings {
 		CameraBackground:      "none",
 		CameraBackgroundScene: "slate",
 		GamingOverlay:         true,
-		GamingOverlayPosition: "top-right",
-		GamingOverlayScale:    100,
+		GamingOverlayAnimate:  true,
+		GamingOverlayStyle:    "bars",
+		GamingOverlayPosition: "center-left",
+		GamingOverlayScale:    80,
 		GamingOverlayOpacity:  88,
 		CameraBlurStrength:    14,
 		CameraMirrorPreview:   true,
@@ -454,6 +458,12 @@ func migrateSettings(s Settings) Settings {
 			}
 		}
 	}
+	if s.SettingsVersion < 11 && s.GamingOverlayScale == 100 {
+		s.GamingOverlayScale = 80
+	}
+	if s.SettingsVersion < 11 && s.GamingOverlayPosition == "top-right" {
+		s.GamingOverlayPosition = "center-left"
+	}
 	s.SettingsVersion = settingsVersion
 	return s
 }
@@ -488,6 +498,7 @@ func migrateEventSoundSplits(s *Settings) {
 // silently rewritten.
 func normalizeSettings(s Settings) Settings {
 	s.GamingOverlayScale = clampSetting(s.GamingOverlayScale, 75, 200)
+	s.GamingOverlayStyle = normalizeOverlayStyle(s.GamingOverlayStyle)
 	s.GamingOverlayOpacity = clampSetting(s.GamingOverlayOpacity, 20, 100)
 	s.GamingOverlayX = clampSetting(s.GamingOverlayX, 0, 100)
 	s.GamingOverlayY = clampSetting(s.GamingOverlayY, 0, 100)
@@ -877,9 +888,12 @@ func (a *App) SaveSettings(s Settings) string {
 		return "invalid camera background scene"
 	}
 	switch s.GamingOverlayPosition {
-	case "", "top-left", "top-right", "bottom-left", "bottom-right", "custom":
+	case "", "center-left", "top-left", "top-right", "bottom-left", "bottom-right", "custom":
 	default:
 		return "invalid gaming overlay position"
+	}
+	if s.GamingOverlayStyle != "" && s.GamingOverlayStyle != "bars" && s.GamingOverlayStyle != "mist-aurora" {
+		return "invalid gaming overlay design"
 	}
 	if len(s.GamingOverlayMonitor) > 128 {
 		return "invalid gaming overlay monitor"
@@ -931,10 +945,14 @@ func (a *App) applyAllSettingsEffects(ticket uint64) error {
 // RecordRecent prepends addr+nickname to the connect history (282): most
 // recent first, deduped, capped at 10. Called after a successful connect.
 func (a *App) RecordRecent(addr, nickname string) {
+	a.recordRecentConnection(addr, nickname, "")
+}
+
+func (a *App) recordRecentConnection(addr, nickname, displayName string) {
 	if addr == "" {
 		return
 	}
-	rec := RecentServer{Addr: addr, Nickname: nickname, LastUsed: time.Now().Unix()}
+	rec := RecentServer{Addr: addr, Nickname: nickname, DisplayName: displayName, LastUsed: time.Now().Unix()}
 	_, err := a.updateSettings(func(current Settings) Settings {
 		out := []RecentServer{rec}
 		for _, r := range current.Recents {

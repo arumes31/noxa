@@ -30,7 +30,7 @@ func (s *TCPServer) moveRoleMember(ctx context.Context, e *authorization.RoleEva
 	target.roleActionMu.Lock()
 	defer target.roleActionMu.Unlock()
 	before, ok := s.deps.State.GetClient(target.ID)
-	if !ok || target.rulesBlocked() || !e.CanManageMember(actorID, target.userID()) ||
+	if !ok || target.rulesBlocked() || !e.CanMoveMember(actorID, target.userID()) ||
 		!e.Evaluate(actorID, before.ChannelID, authorization.MoveMembers).Allowed ||
 		!e.Evaluate(target.userID(), msg.ChannelID, authorization.Connect).Allowed ||
 		(before.Status == "invisible" && !e.Evaluate(actorID, 0, authorization.ViewConnectionInfo).Allowed) {

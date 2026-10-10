@@ -1,6 +1,6 @@
 // remote-audio.js — remote voice and shared-audio playback ownership.
 import { SpatialVoice } from "./positional-audio.js";
-import { makeLimiter, registerUserChain, unregisterUserChain, createAudioLevelSampler, getUserShareVolume, isUserShareMuted, onShareAudioChange, setDucking, attachUserNormalizer, detachUserNormalizer, detachAllUserNormalizers, resumeAudioPlayback, createRemoteAudioSource } from "./audio.js";
+import { makeLimiter, personalVolumeGain, registerUserChain, unregisterUserChain, createAudioLevelSampler, getUserShareVolume, isUserShareMuted, onShareAudioChange, setDucking, attachUserNormalizer, detachUserNormalizer, detachAllUserNormalizers, resumeAudioPlayback, createRemoteAudioSource } from "./audio.js";
 import { parseTrackID } from "./video.js";
 import { t } from "./i18n.js";
 import { watchAudioOutput } from "./microphone-recovery.js";
@@ -245,7 +245,7 @@ export function createRemoteAudio({ state, toast, sysMsg, voiceEpoch }) {
             n.muted = isUserShareMuted(n.uid);
         }
         const duck = shareDuckActive && !shareDuckExempt.has(n.uid) ? SHARE_DUCK_FACTOR : 1;
-        n.gain.gain.value = (n.muted ? 0 : n.volume / 100) * duck;
+        n.gain.gain.value = (n.muted ? 0 : personalVolumeGain(n.volume / 100)) * duck;
     }
 
     function attachShareAudio(track, clientID, publisher) {
@@ -294,7 +294,7 @@ export function createRemoteAudio({ state, toast, sysMsg, voiceEpoch }) {
         spatialVoice?.detach(trackID);
         t.playback.pause();
         t.playback.srcObject = null;
-        if (t.uid) unregisterUserChain(t.uid);
+        if (t.uid) unregisterUserChain(t.uid, t.gain);
         detachUserNormalizer(trackID); // (53) no-op when normalization is off
         try {
             t.mute.disconnect();

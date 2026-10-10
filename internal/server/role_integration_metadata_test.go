@@ -78,8 +78,11 @@ func TestIntegrationMetadataFiltersCurrentScopeAndSensitiveFields(t *testing.T) 
 	}
 	for _, target := range []string{"visible", "own-account-session"} {
 		info, err := clientInfo(target)
-		if err != nil || info.ClientID != target || info.IP != "" || info.BytesIn != 0 || info.ConnectedAt != 0 || info.PingMs != -1 {
+		if err != nil || info.ClientID != target || info.IP != "" || info.Port != 0 || info.BytesIn != 0 || info.BytesOut != 0 || info.ConnectedAt != 0 || info.IdleSeconds != 0 {
 			t.Fatalf("ordinary member or same-account bypass: %+v %v", info, err)
+		}
+		if info.PingMs != 1 {
+			t.Errorf("visible member %q ping = %d, want 1 without sensitive-metadata permission", target, info.PingMs)
 		}
 	}
 	for _, target := range []string{"hidden", "missing"} {

@@ -50,11 +50,14 @@ type SendSideBWE struct {
 
 	onTargetBitrateChange func(bitrate int)
 
-	lock          sync.Mutex
-	latestStats   Stats
-	latestBitrate int
-	minBitrate    int
-	maxBitrate    int
+	lock                 sync.Mutex
+	latestStats          Stats
+	latestBitrate        int
+	minBitrate           int
+	maxBitrate           int
+	videoProbeUsed       bool
+	videoProbe           *videoStartupProbe
+	controllerGeneration uint64
 
 	close     chan struct{}
 	closeLock sync.RWMutex
@@ -232,6 +235,7 @@ func (e *SendSideBWE) WriteRTCP(pkts []rtcp.Packet, _ interceptor.Attributes) er
 		}
 
 		e.lossController.updateLossEstimate(acks)
+		e.observeVideoProbe(acks, now)
 		e.delayController.updateDelayEstimate(acks)
 	}
 
@@ -266,6 +270,8 @@ func (e *SendSideBWE) GetStats() map[string]any {
 // OnTargetBitrateChange sets the callback that is called when the target
 // bitrate in bits per second changes.
 func (e *SendSideBWE) OnTargetBitrateChange(f func(bitrate int)) {
+	e.lock.Lock()
+	defer e.lock.Unlock()
 	e.onTargetBitrateChange = f
 }
 
@@ -283,6 +289,12 @@ func (e *SendSideBWE) isClosed() bool {
 func (e *SendSideBWE) Close() error {
 	e.closeLock.Lock()
 	defer e.closeLock.Unlock()
+	e.lock.Lock()
+	if e.videoProbe != nil {
+		e.videoProbe.timer.Stop()
+		e.videoProbe = nil
+	}
+	e.lock.Unlock()
 
 	if err := e.delayController.Close(); err != nil {
 		return err
@@ -295,10 +307,21 @@ func (e *SendSideBWE) Close() error {
 func (e *SendSideBWE) onDelayUpdate(delayStats DelayStats) {
 	e.lock.Lock()
 	defer e.lock.Unlock()
+	if delayStats.generation != e.controllerGeneration {
+		return
+	}
 
 	lossStats := e.lossController.getEstimate(delayStats.TargetBitrate)
 	bitrateChanged := false
 	bitrate := min(delayStats.TargetBitrate, lossStats.TargetBitrate)
+	if probe := e.videoProbe; probe != nil {
+		if delayStats.State == stateDecrease || lossStats.AverageLoss > decreaseLossThreshold {
+			bitrate = min(probe.base, bitrate)
+			e.endVideoProbeLocked(bitrate)
+		} else {
+			bitrate = min(probe.rate, bitrate)
+		}
+	}
 	e.delayController.setPacedBitrate(bitrate)
 	if bitrate != e.latestBitrate {
 		bitrateChanged = true

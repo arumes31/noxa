@@ -271,18 +271,21 @@ function openPoke(client) {
     const overlay = document.createElement("div");
     overlay.className = "dlg-overlay";
     overlay.innerHTML = `
-        <div class="dlg">
+        <form class="dlg">
             <h3>${escapeTranslation(t("desktop.poke"))}</h3>
             <div class="dlg-text poke-target"></div>
             <input class="dlg-input poke-msg" maxlength="200" placeholder="${escapeTranslation(t("desktop.message.optional"))}" />
             <div class="dlg-buttons">
-                <button class="dlg-ok">${escapeTranslation(t("desktop.poke"))}</button>
-                <button class="dlg-cancel">${escapeTranslation(t("desktop.cancel"))}</button>
+                <button type="submit" class="dlg-ok">${escapeTranslation(t("desktop.poke"))}</button>
+                <button type="button" class="dlg-cancel">${escapeTranslation(t("desktop.cancel"))}</button>
             </div>
-        </div>`;
+        </form>`;
     overlay.querySelector(".poke-target").textContent = client.nickname || client.unique_id;
-    overlay.querySelector(".dlg-ok").onclick = async () => {
-        if (!isCurrentServerDialog(overlay)) return;
+    let submitted = false;
+    overlay.querySelector("form").onsubmit = async (event) => {
+        event.preventDefault();
+        if (submitted || !isCurrentServerDialog(overlay)) return;
+        submitted = true;
         const msg = overlay.querySelector(".poke-msg").value.trim();
         overlay.remove();
         try {

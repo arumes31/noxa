@@ -21,8 +21,7 @@ coverage.txt
 *.key
 *.pfx
 *.p12
-docker/secrets/*
-!docker/secrets/.empty
+/docker/secrets/
 
 # Local runtime data
 /data/
@@ -53,17 +52,8 @@ go.work.sum
 BACKLOG.md
 GOAL.md
 /DESIGN.md
-/docs/plans/
+/docs/
 /tasks/
-/docs/operations/orderotto-dev.md
-
-# Local audit and validation reports
-/docs/client-audit-*.md
-/docs/client-followup-fixes-*.md
-/docs/client-update-validation-*.md
-/docs/native-ui-integration-*.md
-/docs/quality-audit-*.md
-/docs/teamspeak-discord-gap-analysis-*.md
 
 # Generated frontend metadata
 /client/frontend/package.json.md5

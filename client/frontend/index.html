@@ -14,33 +14,41 @@
 <body class="details-collapsed">
     <!-- Login overlay -->
     <div id="login-overlay">
+      <canvas id="login-background" aria-hidden="true"></canvas>
+      <div class="login-toolbar">
+        <button id="login-motion" type="button" aria-label="Pause background animation">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path class="login-pause-icon" d="M8 5v14M16 5v14"/><path class="login-play-icon" d="m8 5 11 7-11 7Z"/></svg><span>Pause</span>
+        </button>
+      </div>
       <main class="login-shell">
-        <div class="login-brand wordmark"><img class="login-logo" src="/branding/logo.png" width="80" height="80" alt="" />noXa</div>
+        <h1 class="login-brand wordmark"><img class="login-logo" src="/branding/logo.png" width="58" height="58" alt="" />noXa</h1>
         <form class="login-card" aria-label="Server connection" data-login-i18n-aria-label="workspace.labels.serverConnection">
-            <label for="login-addr"><span data-login-i18n="login.server">Server</span><span class="login-input"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="7" rx="1.5"/><rect x="3" y="14" width="18" height="7" rx="1.5"/><path d="M6 6.5h.01M6 17.5h.01M15 6.5h3M15 17.5h3"/></svg><input id="login-addr" value="127.0.0.1:12333" autocomplete="url" spellcheck="false" /></span></label>
-            <label for="login-nick"><span data-login-i18n="login.nickname">Account login / guest name</span><span class="login-input"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="7" r="4"/><path d="M3 21v-3a5 5 0 0 1 5-5h8a5 5 0 0 1 5 5v3Z"/></svg><input id="login-nick" placeholder="owner" autocomplete="username" /></span></label>
+            <label for="login-addr"><span data-login-i18n="login.server">Server</span><input id="login-addr" placeholder="Server address" data-login-i18n-placeholder="login.serverPlaceholder" autocomplete="url" spellcheck="false" /></label>
+            <label for="login-nick"><span data-login-i18n="login.nickname">Account login / guest name</span><input id="login-nick" placeholder="owner" autocomplete="username" /></label>
             <details id="login-options">
-              <summary><svg class="login-chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="m5 9 7 7 7-7"/></svg><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="10" width="14" height="11" rx="2"/><path d="M8 10V6a4 4 0 0 1 8 0v4M12 14v3"/></svg><span><span data-login-i18n="login.optional">Optional details</span><small data-login-i18n="login.optionalHint">Display name · Passwords</small></span></summary>
+              <summary><span data-login-i18n="login.optional">Optional details</span><svg class="login-chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="m5 9 7 7 7-7"/></svg></summary>
               <div class="login-options-fields">
-            <label for="login-display-name"><span data-login-i18n="login.displayName">Display name (optional)</span><input id="login-display-name" placeholder="NoxaUser" autocomplete="nickname" aria-describedby="login-display-name-hint" /></label>
+            <label for="login-display-name"><span data-login-i18n="login.displayName">Display name (optional)</span><input id="login-display-name" placeholder="Use account name" data-login-i18n-placeholder="login.displayPlaceholder" autocomplete="nickname" aria-describedby="login-display-name-hint" /></label>
             <p id="login-display-name-hint" class="hint" data-login-i18n="login.displayNameHint">Visible to everyone. Your account login stays unchanged.</p>
             <label for="login-accountpw"><span data-login-i18n="login.accountPassword">Account password (optional)</span><input id="login-accountpw" type="password" placeholder="for a registered account" autocomplete="current-password" /></label>
             <label for="login-serverpw"><span data-login-i18n="login.serverPassword">Server password (optional)</span><input id="login-serverpw" type="password" placeholder="if required" autocomplete="off" /></label>
+            <label class="login-remember"><input id="login-remember-passwords" type="checkbox" aria-describedby="login-password-hint" /><span data-login-i18n="login.rememberPasswords">Remember passwords for this connection</span></label>
+            <p id="login-password-hint" class="hint" aria-live="polite"></p>
               </div>
             </details>
-            <button id="login-connect" type="submit"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 11v2M7 7v10M12 3v18M17 7v10M21 11v2"/></svg><span id="login-connect-label" data-login-i18n="login.connect">Connect</span></button>
+            <button id="login-connect" type="submit"><span id="login-connect-label" data-login-i18n="login.connect">Connect</span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12h16m-6-6 6 6-6 6"/></svg></button>
             <div id="login-error" role="alert" aria-live="assertive"></div>
         </form>
         <section class="login-recents-panel" aria-labelledby="login-recents-title">
             <h2 id="login-recents-title" data-login-i18n="login.recentServers">Recent servers</h2>
             <div id="login-recents"></div>
         </section>
+      </main>
             <div class="identity-footnote">
                 <span data-login-i18n="login.identity">Identity auto-generated — stored locally</span>
                 <span class="mono" id="login-identity"></span>
                 <span class="mono version-foot" id="login-version"></span>
             </div>
-      </main>
     </div>
 
     <div id="toasts" role="region" aria-label="Notifications"></div>
@@ -100,7 +108,6 @@
                 </div>
                 <button id="tab-transfers" class="icon-btn" title="Transfers" aria-label="Open transfers" aria-haspopup="dialog">⇅</button>
             </div>
-            <section id="voice-participants" role="region" aria-label="Voice participants"></section>
             <section id="sharing-status" class="sharing-status" hidden></section>
             <section id="chat-pane" role="tabpanel" aria-labelledby="tab-chat">
             <div id="banner-box"></div>
@@ -155,7 +162,7 @@
             </div>
             <div id="client-card"></div>
             <details class="inspector-section" open><summary>Server connection</summary><div id="news-area"></div></details>
-            <details class="inspector-section"><summary>Your permissions</summary><p class="inspector-hint">Your resolved permissions on this server.</p><div id="perm-area"></div></details>
+            <details class="inspector-section"><summary>Roles</summary><div id="perm-area"></div></details>
         </aside>
         </div>
         <footer id="voice-bar" aria-label="Voice controls">

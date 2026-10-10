@@ -128,6 +128,8 @@ export function createCallMedia(owner, { current, acceptedPeer, label, report, r
         if (!canPublish()) return;
         if (captures[source] || requests[source]) { stop(source); return; }
         const request = { controller: new AbortController() }; requests[source] = request; render(owner);
+        const requestedAudioMode = audioMode;
+        let captureAudioMode = requestedAudioMode;
         let capture;
         try {
             if (source === "camera") {
@@ -136,10 +138,19 @@ export function createCallMedia(owner, { current, acceptedPeer, label, report, r
                 capture = await captureCamera(window.__noxa.state.settings || {}, undefined, { signal: request.controller.signal });
             } else {
                 const video = { frameRate: { ideal: 15, max: 30 } };
-                if (audioMode === "application") video.displaySurface = "window";
-                const stream = await navigator.mediaDevices.getDisplayMedia({ video, ...displayAudioOptions(audioMode) });
+                if (captureAudioMode === "application") video.displaySurface = "window";
+                let stream;
+                try {
+                    stream = await navigator.mediaDevices.getDisplayMedia({ video, ...displayAudioOptions(captureAudioMode) });
+                } catch (error) {
+                    if (!canPublish() || requests[source] !== request) return;
+                    if (captureAudioMode === "none" || error.name === "NotAllowedError" || error.name === "AbortError") throw error;
+                    stream = await navigator.mediaDevices.getDisplayMedia({ video, ...displayAudioOptions("none") });
+                    captureAudioMode = "none";
+                }
                 capture = { stream, stop: () => stream.getTracks().forEach(track => track.stop()) };
-                validateDisplayAudio(stream, audioMode);
+                if (!canPublish() || requests[source] !== request) { capture.stop(); return; }
+                audioMode = validateDisplayAudio(stream, captureAudioMode);
             }
             if (!canPublish() || requests[source] !== request) { capture.stop(); return; }
             const track = liveTrack(capture, "video");
@@ -147,12 +158,17 @@ export function createCallMedia(owner, { current, acceptedPeer, label, report, r
             captures[source] = capture; requests[source] = null;
             track.addEventListener("ended", () => { if (captures[source] === capture) stop(source); }, { once: true });
             await syncPeers();
-            if (canPublish() && captures[source] === capture) { updateGrid(); render(owner); }
+            if (canPublish() && captures[source] === capture) {
+                updateGrid(); render(owner);
+                if (source === "screen" && requestedAudioMode !== "none" && audioMode === "none") {
+                    window.__noxa.toast(t(requestedAudioMode === "application" ? "share.applicationUnavailable" : "share.audioNotSelected"), "warn");
+                }
+            }
         } catch (error) {
             capture?.stop();
             if (requests[source] === request || captures[source] === capture) {
                 requests[source] = null; captures[source] = null;
-                if (current(owner)) { updateGrid(); render(owner); void syncPeers().catch(report); report(error.message === "share.applicationUnavailable" ? new Error(t(error.message)) : error); }
+                if (current(owner)) { updateGrid(); render(owner); void syncPeers().catch(report); report(error); }
             }
         }
     }

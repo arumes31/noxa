@@ -283,6 +283,16 @@ func (e *RoleEvaluator) CanManageMember(actorID, targetID int64) bool {
 	return actorID == e.policy.OwnerID || e.HighestRole(actorID) > e.HighestRole(targetID)
 }
 
+// CanMoveMember is a hierarchy guard allowing peers to move one another.
+// Callers must still require MoveMembers in both source and destination.
+// Other moderation and role management retain the strict CanManageMember guard.
+func (e *RoleEvaluator) CanMoveMember(actorID, targetID int64) bool {
+	if actorID < 1 || targetID < 0 || actorID == targetID || targetID == e.policy.OwnerID {
+		return false
+	}
+	return actorID == e.policy.OwnerID || e.HighestRole(actorID) >= e.HighestRole(targetID)
+}
+
 func (e *RoleEvaluator) CanManageRole(actorID, roleID int64) bool {
 	r, ok := e.roles[roleID]
 	if !ok || actorID < 1 {

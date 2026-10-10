@@ -21,3 +21,18 @@ test("calibration chooses a threshold between noise and speech in the live VAD s
     assert.equal(recommendThreshold([0, 0], [0, 0]).valid, false);
     assert.equal(recommendThreshold([0.1, 0.1], [0.1, 0.1]).valid, false);
 });
+
+test("calibration rounds upward to a tenth of a percent without discarding fine adjustments", () => {
+    assert.equal(recommendThreshold([0.0021], [0.0131]).suggested, 2.5);
+    assert.equal(recommendThreshold([0.004], [0.02]).suggested, 4);
+    assert.equal(recommendThreshold([0], [0.01]).suggested, 1.3);
+    assert.equal(recommendThreshold([0], [0]).suggested, 1);
+    assert.equal(recommendThreshold([1], [1]).suggested, 100);
+    for (let i = 1; i <= 100; i++) {
+        const floor = i / 100000, voice = 0.014;
+        const result = recommendThreshold([floor], [voice]);
+        const unrounded = Math.max(0.002, floor * 1.5, floor + (voice - floor) * 0.25) / 0.2 * 100;
+        assert.ok(result.suggested >= unrounded - 1e-10);
+        assert.ok(result.suggested - unrounded < 0.1 + 1e-10);
+    }
+});

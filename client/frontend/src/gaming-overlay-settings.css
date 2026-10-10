@@ -1,6 +1,25 @@
 .gaming-overlay-settings { margin-block: 12px; }
 .overlay-position-preview { position: relative; width: 100%; height: 190px; overflow: hidden; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); }
-.overlay-position-sample { position: absolute; max-width: 70%; margin: 0; padding: 8px; border: 1px solid var(--accent); border-radius: 4px; color: var(--text); background: var(--panel); white-space: pre-line; text-align: left; cursor: grab; touch-action: none; user-select: none; }
+.overlay-position-sample { position: absolute; max-width: 70%; margin: 0; padding: 4px; border: 0; border-radius: 4px; color: #e1e2e7; background: transparent; text-align: left; cursor: grab; touch-action: none; user-select: none; }
+.overlay-position-sample:hover { background: transparent; }
+.overlay-sample-person { display: flex; align-items: center; gap: .75em; padding: .3em 0; }
+.overlay-sample-avatar { display: grid; place-items: center; flex: 0 0 3em; height: 3em; border: 2px solid #00f2ff; border-radius: 50%; background: #111417; }
+.overlay-sample-details { min-width: 3em; font-weight: 500; text-shadow: 0 1px 2px #111417; }
+.overlay-sample-wave { display: flex; align-items: center; gap: 2px; height: 1.2em; margin-top: .15em; }
+/* The overlay has its own motion preference, including when system motion is reduced. */
+.overlay-sample-wave i { width: 2px; height: .9em; background: #00f2ff; transform-origin: center; animation: overlay-speaking .7s ease-in-out infinite alternate !important; animation-delay: calc(var(--bar) * -90ms) !important; }
+.overlay-sample-person:nth-child(2) i { animation-delay: calc(var(--bar) * -130ms - 240ms) !important; }
+@keyframes overlay-speaking { from { transform: scaleY(.2); } to { transform: scaleY(1); } }
+.overlay-motion-disabled .overlay-sample-wave i { animation: none !important; transform: scaleY(.55); }
 .overlay-position-sample:active { cursor: grabbing; }
 .overlay-position-sample:focus-visible { outline: 2px solid var(--accent); outline-offset: -3px; }
 .overlay-position-readout { display: block; margin-top: 6px; font-size: .85rem; color: var(--muted); }
+.overlay-mist-canvas { display: none; position: absolute; left: -18px; top: -72px; pointer-events: none; z-index: 0; }
+.overlay-mist-preview { height: 390px; }
+.overlay-mist-aurora { padding: calc(72px * var(--overlay-scale)) calc(18px * var(--overlay-scale)); max-width: calc(100% - 4px); }
+.overlay-mist-aurora .overlay-sample-person { position: relative; width: max-content; max-width: 100%; height: auto; min-height: calc(40px * var(--overlay-scale)); padding: 0; gap: calc(12px * var(--overlay-scale)); }
+.overlay-mist-aurora .overlay-sample-person + .overlay-sample-person { margin-top: calc(144px * var(--overlay-scale)); }
+.overlay-mist-aurora .overlay-mist-canvas { display: block; left: calc(-18px * var(--overlay-scale)); top: calc(-72px * var(--overlay-scale)); }
+.overlay-mist-aurora .overlay-sample-avatar { position: relative; z-index: 1; flex-basis: calc(40px * var(--overlay-scale)); height: calc(40px * var(--overlay-scale)); border-width: calc(2px * var(--overlay-scale)); box-sizing: border-box; }
+.overlay-mist-aurora .overlay-sample-details { position: relative; z-index: 1; min-width: 0; overflow-wrap: anywhere; background: transparent; }
+.overlay-mist-aurora .overlay-sample-wave { display: none; }

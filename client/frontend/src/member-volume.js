@@ -1,4 +1,4 @@
-import { getUserVolume, setUserVolume, previewUserVolume, clearUserVolumePreview, onUserVolumeChange } from "./audio.js";
+import { getUserVolume, setUserVolume, previewUserVolume, clearUserVolumePreview, onUserVolumeChange, personalVolumeGain } from "./audio.js";
 import { t } from "./i18n.js";
 import { getUserShareVolume, setUserShareVolume, onShareAudioChange } from "./audio.js";
 
@@ -59,9 +59,19 @@ export function bindMemberVolume(slider, output, reset, uid, { format = value =>
 }
 
 function showVolume(slider, output, text) {
-    if (output.tagName === "INPUT") { output.value = slider.value; output.disabled = slider.disabled; }
-    else output.textContent = text;
     const amplified = Number(slider.value) > 100;
-    slider.closest(".ctx-audio-group")?.classList.toggle("amplified", amplified);
-    slider.setAttribute("aria-valuetext", amplified ? `${text} · ${t("context.amplified")}` : text);
+    const group = slider.closest(".ctx-audio-group");
+    // Segments are decorative: the fill and native thumb follow every 1% step.
+    group?.style.setProperty("--volume-position", `${Number(slider.value) / 2}%`);
+    const decibels = group?.querySelector(".ctx-audio-db");
+    const gain = personalVolumeGain(Number(slider.value) / 100);
+    const db = gain > 0 ? Number((20 * Math.log10(gain)).toFixed(1)) : -Infinity;
+    const gainLabel = Number.isFinite(db) ? `${db > 0 ? "+" : ""}${db} dB` : "−∞ dB";
+    const label = amplified || decibels ? `${text} · ${gainLabel}` : text;
+    if (decibels) decibels.textContent = gainLabel;
+    if (output.tagName === "INPUT") { output.value = slider.value; output.disabled = slider.disabled; }
+    else output.textContent = label;
+    output.title = label;
+    group?.classList.toggle("amplified", amplified);
+    slider.setAttribute("aria-valuetext", label);
 }

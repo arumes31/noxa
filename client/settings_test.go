@@ -59,6 +59,24 @@ func TestSettingsRoundTrip(t *testing.T) {
 	}
 }
 
+func TestVADThresholdPreservesFineAndLegacyValues(t *testing.T) {
+	for _, value := range []string{"1.2", "1.5", "1.8", "3", "50"} {
+		t.Run(value, func(t *testing.T) {
+			s := DefaultSettings()
+			if err := json.Unmarshal([]byte(`{"vad_threshold":`+value+`}`), &s); err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(t.TempDir(), "settings.json")
+			if err := saveSettingsAt(path, s); err != nil {
+				t.Fatal(err)
+			}
+			if got := loadSettingsAt(path); got.VADThreshold != s.VADThreshold {
+				t.Fatalf("threshold changed on reload: got %v, want %v", got.VADThreshold, s.VADThreshold)
+			}
+		})
+	}
+}
+
 func TestSettingsPresentationBoundsOnSaveAndLoad(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "settings.json")
 	s := DefaultSettings()
@@ -403,6 +421,38 @@ func TestIndependentAudioSettingsRoundTrip(t *testing.T) {
 	}
 }
 
+func TestChannelSpeechPreferenceRoundTrip(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	settings := DefaultSettings()
+	data, err := json.Marshal(settings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		t.Fatal(err)
+	}
+	if string(fields["speech_channel"]) != "true" {
+		t.Fatal("channel announcements must default to enabled")
+	}
+	if err := json.Unmarshal([]byte(`{"speech_channel":false}`), &settings); err != nil {
+		t.Fatal(err)
+	}
+	if err := saveSettingsAt(path, settings); err != nil {
+		t.Fatal(err)
+	}
+	data, err = json.Marshal(loadSettingsAt(path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(data, &fields); err != nil {
+		t.Fatal(err)
+	}
+	if string(fields["speech_channel"]) != "false" {
+		t.Fatal("disabled channel announcements did not survive save/load")
+	}
+}
+
 func TestLegacyAnnouncementLanguageAndDucking(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "settings.json")
 	if err := os.WriteFile(path, []byte(`{"settings_version":9,"language":"de","sound_volume":0,"play_sounds":false}`), 0o600); err != nil {
@@ -522,9 +572,6 @@ func TestSettingsWave8c(t *testing.T) {
 	s := DefaultSettings()
 	if s.Language != "" && s.Language != "system" {
 		t.Fatalf("default language = %q", s.Language)
-	}
-	if !s.IdleVideoPause {
-		t.Fatal("idle video pause should default on")
 	}
 	if s.HotkeyZen != "Ctrl+Shift+Z" {
 		t.Fatalf("zen hotkey default = %q", s.HotkeyZen)

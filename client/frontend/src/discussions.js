@@ -46,7 +46,10 @@ export async function discussionChanged(event) {
         const result = await bridgeRequest(tabID, generation, { action: "state", channel_id: Number(event.channel_id), thread_id: Number(event.thread_id) });
         if (tabID !== V().state.activeTabID || generation !== V().state.serverGeneration) return;
         const thread = result.threads?.[0];
-        if (thread?.joined && thread.subscribed && thread.unread) window.__noxaNotify?.notify("channel_message", t("discussion.notification", { title: thread.title }), { channelID: Number(event.channel_id), uid: event.author });
+        if (thread?.joined && thread.subscribed && thread.unread) window.__noxaNotify?.notify("channel_message", t("discussion.notification", { title: thread.title }), {
+            channelID: Number(event.channel_id),
+            reference: { kind: "thread", channel_id: Number(event.channel_id), thread_id: Number(event.thread_id), message_id: event.message_id || 0 },
+        });
     } catch { /* A revoked channel must not disclose the old thread title. */ }
     finally { notifying = false; }
 }
@@ -103,7 +106,7 @@ export function initDiscussions(readChannel) {
     document.getElementById("chat-emoji")?.before(open);
 }
 
-export function openDiscussions(channelID, source = null, initialThreadID = 0, targetMessageID = 0) {
+export function openDiscussions(channelID, source = null, initialThreadID = 0, targetMessageID = 0, destinationCurrent = () => true) {
     channelID = Number(channelID);
     if (!(channelID > 0)) { V().toast(t("discussion.channelOnly"), "warn"); return; }
     if (!window.go.main.App.DiscussionForTab) { V().toast(t("discussion.unavailable"), "warn"); return; }
@@ -122,7 +125,7 @@ export function openDiscussions(channelID, source = null, initialThreadID = 0, t
     let mode = "list", replyDraft = "", messages = [], posts = [], requestSequence = 0;
     const deletedMessages = new Set();
     let targetPages = 0;
-    const current = () => isCurrentServerDialog(overlay) && tabID === V().state.activeTabID && generation === V().state.serverGeneration;
+    const current = () => destinationCurrent() && isCurrentServerDialog(overlay) && tabID === V().state.activeTabID && generation === V().state.serverGeneration;
     const disable = value => { for (const control of dialog.querySelectorAll("button,input,textarea,select")) control.disabled = value; };
     const request = async (action, extra = {}, append = false) => {
         if (!current() || busy) return false;
@@ -130,7 +133,10 @@ export function openDiscussions(channelID, source = null, initialThreadID = 0, t
         const sequence = ++requestSequence;
         try {
             const result = await bridgeRequest(tabID, generation, { action, channel_id: channelID, thread_id: selected, ...extra });
-            if (!current() || sequence !== requestSequence) return false;
+            if (!current() || sequence !== requestSequence) {
+                if (!destinationCurrent()) closeDialog(overlay, "navigate");
+                return false;
+            }
             if (result.channel_id !== channelID || result.action !== action) throw new Error(t("discussion.unavailable"));
             data = result;
             if (action === "configure") {
@@ -157,9 +163,11 @@ export function openDiscussions(channelID, source = null, initialThreadID = 0, t
                 else if (result.has_more && messages.length && ++targetPages < 50) { queueMicrotask(() => request("get", { before_id: messages[0].id }, true)); }
                 else { status.textContent = t("discussion.messageMissing"); targetMessageID = 0; }
             }
+            if (!targetMessageID) destinationCurrent = () => true;
             return true;
         } catch (error) {
             if (current()) status.textContent = t("discussion.error", { error: String(error) });
+            else if (!destinationCurrent()) closeDialog(overlay, "navigate");
             return false;
         } finally {
             busy = false;

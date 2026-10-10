@@ -266,6 +266,7 @@ func (m *Manager) removeChannelLocked(channelID int64) {
 		for clientID := range members {
 			if c, ok := m.clients[clientID]; ok {
 				c.ChannelID = 0
+				c.ChannelEpoch++
 			}
 		}
 		delete(m.membership, channelID)
@@ -275,7 +276,7 @@ func (m *Manager) removeChannelLocked(channelID int64) {
 	for cid, ss := range m.speaking {
 		if ss.ChannelID == channelID {
 			if c, ok := m.clients[cid]; ok {
-				c.IsSpeaking = false
+				m.stopSpeakingLocked(c)
 			}
 			delete(m.speaking, cid)
 		}
@@ -488,6 +489,7 @@ func (m *Manager) JoinChannel(clientID string, channelID int64) error {
 	}
 
 	c.ChannelID = channelID
+	c.ChannelEpoch++
 	members, ok := m.membership[channelID]
 	if !ok {
 		members = make(map[string]bool)
@@ -529,11 +531,11 @@ func (m *Manager) LeaveChannel(clientID string) error {
 
 	// Clear speaking state for the client when leaving a channel.
 	if _, ok := m.speaking[clientID]; ok {
-		delete(m.speaking, clientID)
-		c.IsSpeaking = false
+		m.stopSpeakingLocked(c)
 	}
 
 	c.ChannelID = 0
+	c.ChannelEpoch++
 	m.logger.Debug("state: client left channel",
 		zap.String("client_id", clientID),
 		zap.Int64("channel_id", channelID))
@@ -606,13 +608,13 @@ func (m *Manager) moveClient(clientID string, targetChannelID int64, enforceCapa
 		}
 		// Clear speaking state on move.
 		if _, ok := m.speaking[clientID]; ok {
-			delete(m.speaking, clientID)
-			c.IsSpeaking = false
+			m.stopSpeakingLocked(c)
 		}
 	}
 
 	// Join target channel.
 	c.ChannelID = targetChannelID
+	c.ChannelEpoch++
 	members, ok := m.membership[targetChannelID]
 	if !ok {
 		members = make(map[string]bool)
@@ -764,7 +766,7 @@ func (m *Manager) SetSpeaking(clientID string, speaking bool) {
 		return
 	}
 
-	if speaking && !c.ServerMuted {
+	if speaking && !c.ServerMuted && !c.SelfMuted && !c.SelfDeafened {
 		c.IsSpeaking = true
 		m.speaking[clientID] = &SpeakingState{
 			ClientID:  clientID,
@@ -774,8 +776,17 @@ func (m *Manager) SetSpeaking(clientID string, speaking bool) {
 		return
 	}
 
+	m.stopSpeakingLocked(c)
+}
+
+// stopSpeakingLocked preserves the end of speech across repeated silent updates.
+// The caller holds m.mu.
+func (m *Manager) stopSpeakingLocked(c *Client) {
+	if c.IsSpeaking {
+		c.LastSpokeAt = time.Now()
+	}
 	c.IsSpeaking = false
-	delete(m.speaking, clientID)
+	delete(m.speaking, c.ClientID)
 }
 
 // SetPrioritySpeaker updates the client's PrioritySpeaker flag. It is a no-op
@@ -812,8 +823,7 @@ func (m *Manager) SetServerVoiceState(clientID string, muted, deafened *bool) (*
 	}
 	c.VoiceRevision++
 	if c.ServerMuted {
-		c.IsSpeaking = false
-		delete(m.speaking, clientID)
+		m.stopSpeakingLocked(c)
 	}
 	return cloneClient(c), nil
 }
@@ -837,6 +847,9 @@ func (m *Manager) SetAudioState(clientID string, muted, deafened bool) bool {
 		return false
 	}
 	c.SelfMuted, c.SelfDeafened = muted || deafened, deafened
+	if c.SelfMuted {
+		m.stopSpeakingLocked(c)
+	}
 	return true
 }
 

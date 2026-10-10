@@ -18,20 +18,29 @@ test("application capture excludes monitors and system audio", () => {
 
 test("application audio accepts only a confirmed application track from a window", () => {
     const { stream, audio } = capture("window", ["Application Audio"]);
-    validateDisplayAudio(stream, "application");
+    assert.equal(validateDisplayAudio(stream, "application"), "application");
     assert.equal(audio[0].stopped, undefined);
 });
 
 for (const [surface, labels] of [["window", ["System Audio"]], ["window", [""]], ["window", []],
     ["monitor", ["Application Audio"]], [undefined, ["Application Audio"]], ["browser", ["Tab audio"]],
     ["window", ["Application Audio", "System Audio"]]]) {
-    test(`application capture rejects ${surface}/${labels.join("+") || "missing audio"} and stops all capture`, () => {
+    test(`application capture drops ${surface}/${labels.join("+") || "missing audio"} without stopping video`, () => {
         const { stream, video, audio } = capture(surface, labels);
-        assert.throws(() => validateDisplayAudio(stream, "application"), { message: "share.applicationUnavailable" });
-        assert.equal(video.stopped, true);
+        assert.equal(validateDisplayAudio(stream, "application"), "none");
+        assert.equal(video.stopped, undefined);
+        assert.deepEqual(stream.getAudioTracks(), []);
         assert.ok(audio.every(track => track.stopped));
     });
 }
+
+test("ended application audio is removed without stopping video", () => {
+    const { stream, video, audio } = capture("window", ["Application Audio"]);
+    audio[0].readyState = "ended";
+    assert.equal(validateDisplayAudio(stream, "application"), "none");
+    assert.deepEqual(stream.getAudioTracks(), []);
+    assert.equal(video.stopped, undefined);
+});
 
 test("no audio mode stops and removes unexpected audio without ending video", () => {
     const { stream, video, audio } = capture("monitor", ["System Audio"]);

@@ -3,6 +3,11 @@ import { t } from "./i18n.js";
 
 let pending = null, active = null, attempted = "";
 
+export function isClientMicrophoneMuted(client, state) {
+    return !!(client?.input_muted || client?.self_muted || client?.self_deafened || client?.server_muted ||
+        (client?.client_id === state.myClientID && (state.muted || state.deafened)));
+}
+
 // Coalesce rapid toggles and serialize acknowledgements. Snapshots never
 // overwrite local controls, and a late reply cannot affect another server.
 export function publishAudioState() {

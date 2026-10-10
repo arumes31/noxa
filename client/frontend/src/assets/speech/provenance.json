@@ -1,20 +1,100 @@
 {
-  "repository": "rhasspy/piper-voices",
-  "revision": "1162a9173d0ce503555aed757976b7a9912eae4c",
+  "schema_version": 2,
+  "pronunciation_aliases": {
+    "de": {
+      "noXa": "Noksa"
+    }
+  },
+  "providers": {
+    "en": {
+      "engine": "qwen3_tts",
+      "repository": "audio-cpp/audio.cpp-gguf",
+      "revision": "e479ac197bae727f69574261a8025696bc51de48",
+      "file": "Qwen3-TTS-12Hz-1.7B-Base-GGUF/qwen3-tts-12hz-1.7b-base-q8_0_v2.gguf",
+      "size": 2695175104,
+      "sha256": "b55e06c7890d43c208d15aed8b4ed3f18215f295e47d5960e061b15bff338ab0",
+      "upstream_repository": "Qwen/Qwen3-TTS-12Hz-1.7B-Base",
+      "license": "Apache-2.0"
+    },
+    "de": {
+      "engine": "qwen3_tts",
+      "repository": "audio-cpp/audio.cpp-gguf",
+      "revision": "e479ac197bae727f69574261a8025696bc51de48",
+      "file": "Qwen3-TTS-12Hz-1.7B-Base-GGUF/qwen3-tts-12hz-1.7b-base-q8_0_v2.gguf",
+      "size": 2695175104,
+      "sha256": "b55e06c7890d43c208d15aed8b4ed3f18215f295e47d5960e061b15bff338ab0",
+      "upstream_repository": "Qwen/Qwen3-TTS-12Hz-1.7B-Base",
+      "license": "Apache-2.0"
+    }
+  },
   "authoring": {
-    "tool": "piper-tts 1.4.2",
-    "length_scale": 1.08,
-    "noise_scale": 0.55,
-    "noise_w_scale": 0.7,
+    "tool": "audio.cpp v0.9.1 (en/de)",
     "peak_ceiling": 0.115,
     "target_rms_dbfs": -31,
     "silence_threshold": 0.002,
     "edge_padding_ms": 25,
     "endpoint_fade_ms": 5,
-    "runtime_generation": false
+    "runtime_generation": false,
+    "en": {
+      "audition": "EA60",
+      "tool": "audio.cpp",
+      "task": "tts",
+      "language": "English",
+      "threads": 4,
+      "max_tokens": 192,
+      "timeout_seconds_per_event": 300,
+      "seed_base": 2026101060,
+      "seed_step": 7919,
+      "runtime": {
+        "version": "v0.9.1",
+        "archive_url": "https://github.com/0xShug0/audio.cpp/releases/download/v0.9.1/audio-v0.9.1-bin-windows-x64-cpu.zip",
+        "archive_sha256": "57a17896aba4447f088b27d2875e90a6563afd7860023d50da03a61fb143609f",
+        "executable_sha256": "5e4d2ecd6e274d677c0d14d54d8ed83f4953057789801da0dad696d413a981ac",
+        "license": "Apache-2.0"
+      },
+      "reference": {
+        "path": "tools/voices/EA60.wav",
+        "sha256": "4d016355ffef426b9b1bcb9a369c67bcaeaa8cbaa93d3ce34063c85e37aa6d5d",
+        "provenance": "tools/voices/EA60-provenance.json",
+        "text": "Microphone muted. Microphone activated. Sound muted. A user joined the channel. A user disconnected. Server connection restored."
+      },
+      "leading_padding_ms": 40,
+      "trailing_padding_ms": 60,
+      "endpoint_fade_ms": 6,
+      "review": "Verify every complete transcript, extra speech, intelligibility and EA60 voice continuity before publication."
+    },
+    "de": {
+      "audition": "AN06",
+      "tool": "audio.cpp",
+      "task": "tts",
+      "language": "German",
+      "threads": 4,
+      "max_tokens": 192,
+      "timeout_seconds_per_event": 300,
+      "seed_base": 20264010,
+      "seed_step": 7919,
+      "runtime": {
+        "version": "v0.9.1",
+        "archive_url": "https://github.com/0xShug0/audio.cpp/releases/download/v0.9.1/audio-v0.9.1-bin-windows-x64-cpu.zip",
+        "archive_sha256": "57a17896aba4447f088b27d2875e90a6563afd7860023d50da03a61fb143609f",
+        "executable_sha256": "5e4d2ecd6e274d677c0d14d54d8ed83f4953057789801da0dad696d413a981ac",
+        "license": "Apache-2.0"
+      },
+      "reference": {
+        "path": "tools/voices/AN06.wav",
+        "sha256": "38f2ae669bbda13d21a6ad446fbbd97ac734729a83cd1633a6e0248fe847b35b",
+        "provenance": "tools/voices/AN06-provenance.json",
+        "text": "Mikrofon stummgeschaltet. Mikrofon aktiviert. Ton stummgeschaltet. Ein Benutzer hat den Channel betreten. Ein Benutzer hat die Verbindung getrennt. Verbindung zum Server wiederhergestellt."
+      },
+      "leading_padding_ms": 40,
+      "trailing_padding_ms": 60,
+      "endpoint_fade_ms": 6,
+      "review": "Verify every complete transcript, extra speech, intelligibility and AN06 voice continuity before publication."
+    }
   },
   "models": {
-    "en": "en/en_US/ljspeech/high/en_US-ljspeech-high",
-    "de": "de/de_DE/thorsten/medium/de_DE-thorsten-medium"
-  }
+    "en": "Qwen/Qwen3-TTS-12Hz-1.7B-Base",
+    "de": "Qwen/Qwen3-TTS-12Hz-1.7B-Base"
+  },
+  "checksums": {}
 }

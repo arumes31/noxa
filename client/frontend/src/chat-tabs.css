@@ -1,0 +1,18 @@
+#pm-tabs { display: flex; flex-wrap: nowrap; align-items: center; gap: 4px; min-width: 0; padding: 0; }
+.pm-tab-list { display: flex; flex: 1; min-width: 0; gap: 10px; overflow-x: auto; overflow-y: hidden; padding: 10px 8px; scrollbar-width: thin; scroll-behavior: auto; }
+#pm-tabs .pm-tab { flex: none; max-width: 240px; gap: 6px; padding: 0 7px 0 0; }
+.pm-tab-select { display: flex; align-items: center; gap: 5px; min-width: 0; padding: 5px 2px 5px 8px; border: 0; border-radius: inherit; background: transparent; color: inherit; font: inherit; cursor: pointer; }
+.pm-tab-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pm-tab-select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.pm-tab-pin { display: inline-flex; flex: none; color: var(--accent); }
+.pm-tab-pin svg { width: 12px; height: 12px; }
+.pm-tab.drop-target { outline: 2px dashed var(--accent); outline-offset: 3px; }
+.pm-tabs-more { display: inline-flex; align-items: center; justify-content: center; flex: none; gap: 4px; min-width: 30px; height: 30px; padding: 4px 7px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-panel); color: var(--text-dim); cursor: pointer; }
+.pm-tabs-more:hover { border-color: var(--accent); color: var(--text); }
+.pm-tabs-more > svg { width: 14px; height: 14px; }
+.pm-tabs-total { font-size: 11px; color: var(--accent); font-family: var(--font-mono); }
+.chat-tabs-menu { min-width: 210px; overflow-y: auto; }
+.chat-tabs-menu .ctx-action { white-space: normal; overflow-wrap: anywhere; }
+.chat-tabs-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-top: 6px; padding: 10px 12px 6px; border-top: 1px solid var(--border); color: var(--text-faint); font-size: 0.7857rem; }
+.chat-tabs-heading kbd { font: inherit; white-space: nowrap; }
+@media (max-width: 700px) { #pm-tabs .pm-tab { max-width: 170px; } }

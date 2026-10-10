@@ -72,7 +72,7 @@ test("VAD threshold adjusts on the meter with pointer and keyboard without savin
     await expect(slider).toBeVisible();
     await slider.focus();
     await page.keyboard.press("ArrowRight");
-    await expect(slider).toHaveAttribute("aria-valuenow", "26");
+    await expect(slider).toHaveAttribute("aria-valuenow", "25.1");
     await begin(page).click();
     await expect(page.getByRole("meter", { name: "Microphone level" })).toBeVisible();
     const bounds = await slider.boundingBox();
@@ -93,6 +93,26 @@ test("VAD threshold adjusts on the meter with pointer and keyboard without savin
     await expect(slider).toHaveAttribute("aria-valuenow", "100");
     await page.locator("#set-cancel").click();
     expect(await page.evaluate(() => window.__quickSavedSettings.vad_threshold)).toBe(25);
+});
+
+test("VAD accepts tenths between 1 and 3 percent and preserves them on Apply", async ({ page }) => {
+    await page.getByLabel("Voice Activity Detection", { exact: true }).check();
+    const input = page.getByRole("spinbutton", { name: "VAD threshold", exact: true });
+    const slider = page.getByRole("slider", { name: "VAD threshold", exact: true });
+    for (const value of ["1.2", "1.5", "1.8"]) {
+        await input.fill(value);
+        await expect(slider).toHaveAttribute("aria-valuenow", value);
+    }
+    await slider.focus();
+    await page.keyboard.press("ArrowRight");
+    await expect(input).toHaveValue("1.9");
+    await page.keyboard.press("ArrowLeft");
+    await expect(input).toHaveValue("1.8");
+    await page.locator("#set-apply").click();
+    expect(await page.evaluate(() => window.__quickSavedSettings.vad_threshold)).toBe(1.8);
+    await page.locator("#set-cancel").click();
+    await page.evaluate(() => window.__noxa.openSettings("capture"));
+    await expect(input).toHaveValue("1.8");
 });
 
 test("meter threshold changes live transmission preview and Apply persists it in compact settings", async ({ page }, testInfo) => {
@@ -469,6 +489,7 @@ test("notification silence explanations reflect unsaved gates, zero volumes, and
     await page.getByRole("spinbutton", { name: "Speech volume (%)", exact: true }).fill("0");
     await expect(status).toContainText("Effects volume is 0%");
     await expect(status).toContainText("Announcement volume is 0%");
+    await page.locator(".notification-event-effects > summary").click();
     await page.getByLabel("Push-to-talk on", { exact: true }).uncheck();
     await expect(status).toContainText("Disabled sound events: 1");
     await page.locator("#set-cancel").click();
@@ -501,6 +522,7 @@ test("announcement language changes only fixed speech, previews the chosen asset
     await expect(language).toHaveValue("de");
     await language.scrollIntoViewIfNeeded();
     await page.screenshot({ path: testInfo.outputPath("notification-audio-controls.png") });
+    await page.locator(".notification-event-speech > summary").click();
     await page.getByRole("button", { name: "Preview Du wurdest vom Server gebannt.", exact: true }).click();
     await expect.poll(() => page.evaluate(() => window.__quickPlayed.includes("speech_de_banned"))).toBe(true);
     await page.getByRole("button", { name: "Stop preview", exact: true }).click();
@@ -514,6 +536,7 @@ test("announcement language changes only fixed speech, previews the chosen asset
     await expect(language).toHaveValue("de");
     await expect(page.getByLabel("Lower routine sounds during conversations", { exact: true })).toBeChecked();
     await language.selectOption("en");
+    await page.locator(".notification-event-speech > summary").click();
     await expect(page.getByRole("button", { name: "Preview You were banned from the server.", exact: true })).toBeVisible();
     await page.locator("#set-cancel").click();
     await page.evaluate(() => window.__noxa.openSettings("notifications"));

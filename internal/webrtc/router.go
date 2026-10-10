@@ -138,6 +138,7 @@ func defaultSlot(kind webrtc.RTPCodecType) string {
 // pubSlot is one output track (and its sender) for a single (subscriber,
 // publisher, slot) triple.
 type pubSlot struct {
+	receiverReport  *audioReceiverReport // protected by Router.mu; expires with this binding
 	track           *webrtc.TrackLocalStaticRTP
 	sender          *webrtc.RTPSender
 	egress          *mediaEgressStream
@@ -205,15 +206,18 @@ type Router struct {
 	whisperScopes     map[string]whisperScope
 	watchEpoch        uint64
 	publications      map[publicationKey]uint64
+	publicationModes  map[publicationKey]string
 	watches           map[watchKey]videoWatch
 	previews          map[publicationKey]videoPreview
 	previewBudgets    map[string]previewBudget
 	watchSessions     map[string]uint64
 
 	mu           sync.RWMutex
-	members      map[int64]map[string]bool         // channelID -> member clientIDs
-	clientChan   map[string]int64                  // clientID -> current channelID
-	pubTracks    map[string]map[string]*pubTrack   // subscriberID -> publisherID -> tracks
+	members      map[int64]map[string]bool       // channelID -> member clientIDs
+	clientChan   map[string]int64                // clientID -> current channelID
+	pubTracks    map[string]map[string]*pubTrack // subscriberID -> publisherID -> tracks
+	audioIngress map[publicationKey]*audioIngressDiagnostic
+	videoIngress map[videoIngressKey]*videoIngressDiagnostic
 	pubPeers     map[string]*PeerConnectionWrapper // subscriberID -> its wrapper
 	outputs      map[string]TrackWriter            // tap clientID -> audio output track (recorder taps only)
 	videoOutputs map[string]TrackWriter            // tap clientID -> video output track (taps only)
@@ -1179,6 +1183,16 @@ func (r *Router) detachPeer(clientID string, leaveChannel bool) {
 	// The inbound tracks die with the peer connection, so their slots are
 	// free again even if the read loops have not noticed yet.
 	delete(r.slotClaims, clientID)
+	for key := range r.audioIngress {
+		if key.publisher == clientID {
+			delete(r.audioIngress, key)
+		}
+	}
+	for key := range r.videoIngress {
+		if key.publisher == clientID {
+			delete(r.videoIngress, key)
+		}
+	}
 	if leaveChannel {
 		delete(r.trackSlots, clientID)
 	}
@@ -1362,6 +1376,8 @@ func (r *Router) ReadLoop(clientID, slot string, track TrackReader, extID uint8)
 		return
 	}
 	defer r.releaseSlot(clientID, slot, token)
+	ingress := r.startAudioIngress(clientID, slot, token)
+	defer r.stopAudioIngress(clientID, slot, ingress)
 
 	if slot != SlotMic {
 		// Screen audio must not drive the microphone speaking indicator.
@@ -1376,6 +1392,7 @@ func (r *Router) ReadLoop(clientID, slot string, track TrackReader, extID uint8)
 		if err != nil || !r.ownsSlot(clientID, slot, token) {
 			break
 		}
+		ingress.observe(pkt, time.Now())
 
 		// RTP level metadata is optional and supplied by the publisher. It
 		// must never decide whether authorization is checked. Recheck each
@@ -1631,6 +1648,15 @@ func (r *Router) ReadVideoLoop(clientID, slot string, track VideoTrackReader) {
 		bySlot[slot] = src
 	}
 	src[rid] = ssrc
+	ingressKey := videoIngressKey{clientID, slot, rid}
+	var ingress *videoIngressDiagnostic
+	if diagnosticVideoRID(rid) {
+		ingress = &videoIngressDiagnostic{ssrc: ssrc, started: time.Now()}
+		if r.videoIngress == nil {
+			r.videoIngress = make(map[videoIngressKey]*videoIngressDiagnostic)
+		}
+		r.videoIngress[ingressKey] = ingress
+	}
 	ref := videoSourceRef{clientID, slot}
 	if r.videoSeen[ref] == nil {
 		r.videoSeen[ref] = make(map[string]time.Time)
@@ -1645,6 +1671,9 @@ func (r *Router) ReadVideoLoop(clientID, slot string, track VideoTrackReader) {
 		defer r.mu.Unlock()
 		if r.slotClaims[clientID][claimKey].token != token {
 			return
+		}
+		if r.videoIngress[ingressKey] == ingress {
+			delete(r.videoIngress, ingressKey)
 		}
 		// Re-look up: a peer rebuild may have replaced these maps, and this
 		// loop must not unregister the layer that succeeded it.
@@ -1699,6 +1728,10 @@ func (r *Router) ReadVideoLoop(clientID, slot string, track VideoTrackReader) {
 			}
 		}
 		r.forwardVideoAtPolicyCodec(clientID, slot, rid, pkt, time.Now(), policy, true, mime)
+	}, func(packet *rtp.Packet) {
+		if ingress != nil {
+			ingress.observe(packet, time.Now())
+		}
 	})
 }
 
@@ -1828,7 +1861,7 @@ func (r *Router) forwardVideoAtPolicyCodec(senderID, slot, rid string, pkt *rtp.
 				output.videoSource.Store(pkt.SSRC)
 			}
 			if slot, ok := w.writer.(*pubSlot); ok && slot.egress != nil {
-				return slot.enqueueMedia(packet, mediaTicket{delivery: w.delivery, guard: guard, router: r, videoRevision: policy.revision})
+				return slot.enqueueMedia(packet, mediaTicket{delivery: w.delivery, guard: guard, router: r, videoRevision: policy.revision, videoSource: pkt.SSRC, videoRID: rid})
 			}
 			written = false
 			write := func() error {
@@ -1963,7 +1996,7 @@ func (r *Router) preferredRIDLocked(subscriber, publisher, slot string) string {
 	src := r.videoSources[publisher][slot]
 	seen := r.videoSeen[videoSourceRef{publisher, slot}]
 	now := time.Now()
-	for _, candidate := range layerFallback(r.layerPrefLocked(subscriber)) {
+	for _, candidate := range layerFallback(r.streamLayerPrefLocked(subscriber, publisher, slot)) {
 		last := seen[candidate]
 		if _, ok := src[candidate]; ok && (last.IsZero() || now.Sub(last) < time.Second) {
 			return candidate
@@ -2017,7 +2050,11 @@ func (r *Router) rtcpRelayLoop(clientID string, sender *webrtc.RTPSender) {
 			return
 		}
 		for _, pkt := range pkts {
-			switch pkt.(type) {
+			switch report := pkt.(type) {
+			case *rtcp.ReceiverReport:
+				r.recordAudioReceiverReports(clientID, sender, report.Reports)
+			case *rtcp.SenderReport:
+				r.recordAudioReceiverReports(clientID, sender, report.Reports)
 			case *rtcp.PictureLossIndication, *rtcp.FullIntraRequest:
 				r.relayKeyframeRequest(clientID, sender)
 			}

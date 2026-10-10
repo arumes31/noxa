@@ -1,5 +1,7 @@
 import { SOUND_DEFINITIONS, SOUND_URLS } from "./sound-catalog.js";
 
+const OUTPUT_RETRY_MS = 2000;
+
 export function soundVolume(value) {
     if ((typeof value !== "number" && typeof value !== "string") || !Number.isFinite(Number(value))) return 1;
     return Math.max(0, Math.min(2, Number(value) / 100));
@@ -23,6 +25,7 @@ export class SoundEngine {
         this.ctx = null;
         this.output = Promise.resolve();
         this.requestedSink = undefined;
+        this.lastOutputAttempt = -Infinity;
         this.outputReady = false;
         this.outputState = "uninitialized";
         this.generation = 0;
@@ -84,13 +87,20 @@ export class SoundEngine {
         return this.resuming;
     }
 
-    setOutput(id = "") {
+    setOutput(id = "", { retry = false } = {}) {
         const ctx = this.context();
         if (!ctx) return Promise.resolve();
         const sink = typeof id === "string" ? id : "";
-        if (this.requestedSink === sink) return this.output;
+        const sameSink = this.requestedSink === sink;
+        const recoverable = typeof ctx.setSinkId === "function" && ["unavailable", "fallback"].includes(this.outputState);
+        if (sameSink && !retry && (!recoverable || this.now() - this.lastOutputAttempt < OUTPUT_RETRY_MS)) return this.output;
+        // A temporary failure must not remain cached forever. Retry at most once
+        // per interval, and keep a working fallback audible while probing the
+        // same requested device. A new device selection still blocks old output.
+        const keepFallback = sameSink && this.outputReady && this.outputState === "fallback";
         this.requestedSink = sink;
-        this.outputReady = false;
+        this.lastOutputAttempt = this.now();
+        this.outputReady = keepFallback;
         this.setOutputState("routing");
         let routed = false;
         let fallback = false;

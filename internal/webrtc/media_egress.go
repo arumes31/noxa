@@ -5,6 +5,7 @@ import (
 	"log"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/pion/interceptor"
@@ -12,13 +13,22 @@ import (
 	"github.com/pion/webrtc/v4"
 )
 
-const mediaTicketCount = 512
+// Retain the whole bounded pacing queue plus recent NACK retransmissions.
+// Count and lifetime remain bounded; every write still rechecks authority.
+const mediaTicketCount = 4096
 const mediaTicketLifetime = time.Second
 
 // Admission avoids filling queues with already-denied media. It releases its
 // lease before entering Pion: the terminal interceptor checks again after all
 // buffering, without acquiring Authority recursively through a track lock.
 func (s *pubSlot) enqueueMedia(pkt *rtp.Packet, ticket mediaTicket) (bool, error) {
+	// Pion binds senders before ICE/DTLS is ready. Admitting video then both
+	// commits an unseen keyframe and fills the pacing queue with stale frames.
+	// Return false so the caller rolls continuity back until transport is ready.
+	if ticket.router != nil && (ticket.delivery.Slot == SlotCam || ticket.delivery.Slot == SlotScreen) &&
+		!s.videoTransportReady(ticket.router, ticket.delivery.RecipientID) {
+		return false, nil
+	}
 	allowed := false
 	admit := func() error { allowed = true; return nil }
 	switch {
@@ -36,6 +46,7 @@ func (s *pubSlot) enqueueMedia(pkt *rtp.Packet, ticket mediaTicket) (bool, error
 	if !allowed {
 		return false, nil
 	}
+	s.startVideoProbe(pkt, ticket)
 	packet, ok := s.egress.prepare(pkt, ticket)
 	if !ok {
 		return false, nil
@@ -60,16 +71,22 @@ type mediaTicket struct {
 	router        *Router
 	videoRevision uint64
 	csrc          []uint32
+	videoSource   uint32
+	videoRID      string
+	videoMedia    bool
 }
 
 type mediaEgressStream struct {
-	mu         sync.RWMutex
-	active     bool
-	retryAfter time.Time
-	registry   *mediaEgressRegistry
-	tickets    map[uint64]*mediaTicket
-	order      [mediaTicketCount]uint64
-	nextTicket int
+	mu              sync.RWMutex
+	active          bool
+	retryAfter      time.Time
+	registry        *mediaEgressRegistry
+	tickets         map[uint64]*mediaTicket
+	order           [mediaTicketCount]uint64
+	nextTicket      int
+	outputSSRC      atomic.Uint32
+	videoDiagnostic videoForwardDiagnostic
+	pacer           *mediaPacer // immutable after binding; protected by mu
 }
 
 func (r *mediaEgressRegistry) ticketID() uint64 {
@@ -89,6 +106,7 @@ func (s *mediaEgressStream) prepare(pkt *rtp.Packet, ticket mediaTicket) (rtp.Pa
 	}
 	ticket.id, ticket.expires = id, time.Now().Add(mediaTicketLifetime)
 	ticket.csrc = append([]uint32(nil), pkt.CSRC...)
+	ticket.videoMedia = !isVideoPadding(pkt) && len(pkt.Payload) > 0
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if !s.active || time.Now().Before(s.retryAfter) {
@@ -154,6 +172,9 @@ func (s *mediaEgressStream) write(header *rtp.Header, payload []byte, attrs inte
 			out := *header
 			out.CSRC = ticket.csrc
 			n, outputError = writer.Write(&out, payload, attrs)
+			if n > 0 && outputError == nil {
+				s.observeVideo(&out, out.MarshalSize()+len(payload)+int(out.PaddingSize), ticket, time.Now())
+			}
 			return outputError
 		}
 		if ticket.router != nil {
@@ -194,6 +215,7 @@ func (t *guardedLocalTrack) Bind(ctx webrtc.TrackLocalContext) (webrtc.RTPCodecP
 	if err != nil {
 		return codec, err
 	}
+	t.egress.outputSSRC.Store(uint32(ctx.SSRC()))
 	r := t.egress.registry
 	r.mu.Lock()
 	if r.streams == nil {

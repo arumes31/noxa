@@ -274,10 +274,22 @@ func (s *TCPServer) handleVideoQuality(ctx context.Context, client *Client, f *n
 }
 
 func (s *TCPServer) applyVideoQuality(ctx context.Context, client *Client, msg netproto.VideoQuality) error {
-	if err := s.deps.Voice.SetVideoQuality(client.ID, msg.Quality); err != nil {
+	var err error
+	if msg.PublisherID != "" || msg.Slot != "" || msg.Generation != 0 || msg.Session != 0 {
+		// Refresh the immutable publisher-access snapshot under the same lease
+		// used for this control; hidden or revoked publications cannot be tuned.
+		s.refreshRolePublishers(ctx.Value(roleLeaseKey{}).(roleLease).evaluator)
+		err = s.deps.Voice.SetStreamVideoQuality(client.ID, msg.PublisherID, msg.Slot, msg.Generation, msg.Session, msg.Quality)
+	} else {
+		err = s.deps.Voice.SetVideoQuality(client.ID, msg.Quality)
+	}
+	if err != nil {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, err.Error())
 	}
-	return s.acknowledgeMediaControl(client, msg.AckRequested, netproto.MediaControlSaved{Operation: netproto.MsgVideoQuality, Quality: msg.Quality})
+	return s.acknowledgeMediaControl(client, msg.AckRequested, netproto.MediaControlSaved{
+		Operation: netproto.MsgVideoQuality, Quality: msg.Quality, PublisherID: msg.PublisherID,
+		Slot: msg.Slot, Generation: msg.Generation, Session: msg.Session,
+	})
 }
 
 // handleRecordingControl starts or stops a server-side recording of a

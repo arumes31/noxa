@@ -25,6 +25,12 @@ func TestPokeTrackerZeroValueIsolationCapacityAndExpiry(t *testing.T) {
 	if !second.allow("alice→bob", now) {
 		t.Fatal("second tracker inherited another server's cooldown")
 	}
+	if first.allow("alice→bob", now.Add(3*time.Second-time.Nanosecond)) {
+		t.Fatal("poke allowed before the three-second cooldown ended")
+	}
+	if !first.allow("alice→bob", now.Add(3*time.Second)) {
+		t.Fatal("poke refused at the three-second cooldown boundary")
+	}
 
 	var capped pokeTracker
 	for i := 0; i < maxPokeEntries; i++ {

@@ -117,10 +117,10 @@ test(`real peer call captures only after acceptance and tears down without joini
         await alice.evaluate(async () => {
             const context = new AudioContext(); await context.resume();
             const tone = context.createOscillator(), gain = context.createGain(), output = context.createMediaStreamDestination();
-            tone.frequency.value = 440; gain.gain.value = 0.1;
+            tone.frequency.value = 440; gain.gain.value = 0.01;
             tone.connect(gain); gain.connect(output); tone.start();
             const sender = window.__peers[0].getSenders().find(sender => sender.track?.kind === "audio");
-            window.__testTone = { context, tone, output, sender, original: sender.track };
+            window.__testTone = { context, tone, gain, output, sender, original: sender.track };
             await sender.replaceTrack(output.stream.getAudioTracks()[0]);
         });
         await bob.evaluate(async () => {
@@ -134,18 +134,40 @@ test(`real peer call captures only after acceptance and tears down without joini
             const samples = new Float32Array(analyser.fftSize); analyser.getFloatTimeDomainData(samples);
             return Math.sqrt(samples.reduce((sum, sample) => sum + sample * sample, 0) / samples.length);
         });
-        await expect.poll(playbackLevel).toBeGreaterThan(0.001);
+        // replaceTrack can leave buffered microphone samples and codec/limiter
+        // transients in playback. Calibrate from a settled window of decoded
+        // audio, not a single sample taken while the receive path is changing.
+        const unitySamples = [];
+        let unityLevel;
+        await expect.poll(async () => {
+            unitySamples.push(await playbackLevel());
+            if (unitySamples.length > 8) unitySamples.shift();
+            const mean = unitySamples.reduce((sum, level) => sum + level, 0) / unitySamples.length;
+            const low = Math.min(...unitySamples), high = Math.max(...unitySamples);
+            const settled = unitySamples.length === 8 && low > 0.001 && high < 0.015 && high - low < mean * 0.03;
+            if (settled) unityLevel = mean;
+            return settled;
+        }, { intervals: [100], message: "decoded test tone settles before measuring playback gain" }).toBe(true);
         // Playback settings must apply to an existing private call without
         // replacing the peer, including master mute and per-user attenuation.
-        for (const [master, user, expected] of [[0, 100, 0], [50, 50, 0.25], [100, 200, 2], [200, 200, 4], [100, 100, 1]]) {
+        for (const [master, user, expected] of [[0, 100, 0], [50, 50, 0.125], [100, 200, 10], [200, 200, 20], [100, 100, 1]]) {
             await bob.evaluate(({ master, user }) => {
                 window.__noxa.state.settings.volume = master;
                 window.__noxa.state.settings.user_volumes = { alice: user };
             }, { master, user });
             await expect.poll(() => bob.evaluate(() => document.querySelector("audio").volume * window.__callGains[0].gain.value)).toBe(expected);
             if (expected === 0) await expect.poll(playbackLevel).toBeLessThan(0.00001);
-            else await expect.poll(async () => Math.abs(await playbackLevel() - 0.0707 * expected)).toBeLessThan(0.015);
+            else await expect.poll(async () => Math.abs(await playbackLevel() / unityLevel - expected)).toBeLessThan(Math.max(0.05, expected * 0.08));
         }
+        await alice.evaluate(() => { window.__testTone.gain.gain.value = 0.3; });
+        await bob.evaluate(() => { window.__noxa.state.settings.user_volumes = { alice: 200 }; });
+        await expect.poll(playbackLevel).toBeGreaterThan(0.2);
+        await expect.poll(() => bob.evaluate(() => {
+            const analyser = window.__playbackMeter.analyser;
+            const samples = new Float32Array(analyser.fftSize); analyser.getFloatTimeDomainData(samples);
+            return samples.reduce((peak, sample) => Math.max(peak, Math.abs(sample)), 0);
+        })).toBeLessThan(1);
+        await bob.evaluate(() => { window.__noxa.state.settings.user_volumes = { alice: 100 }; });
         await bob.evaluate(() => window.__playbackMeter.context.close());
         await alice.evaluate(async () => {
             const test = window.__testTone; await test.sender.replaceTrack(test.original);
@@ -206,7 +228,7 @@ test(`real peer call captures only after acceptance and tears down without joini
                 await screen.getByRole("slider", { name: "Shared audio", exact: true }).fill("35");
                 await expect.poll(() => bob.evaluate(() => window.__savedSettings?.user_share_volumes?.alice)).toBe(35);
                 await bob.evaluate(() => { window.__noxa.state.settings.muted_users = ["alice"]; });
-                await expect.poll(() => bob.evaluate(() => window.__callGains.slice(0, 2).map(gain => Number(gain.gain.value.toFixed(2))))).toEqual([0, 0.35]);
+                await expect.poll(() => bob.evaluate(() => window.__callGains.slice(0, 2).map(gain => Number(gain.gain.value.toFixed(2))))).toEqual([0, 0.12]);
                 // A real tone on the separate negotiated share-audio sender must
                 // remain audible when the same member's microphone is muted.
                 await alice.evaluate(async () => {
@@ -221,11 +243,11 @@ test(`real peer call captures only after acceptance and tears down without joini
                     const source = context.createMediaStreamSource(document.querySelector("audio").srcObject);
                     const analyser = context.createAnalyser(); source.connect(analyser); window.__playbackMeter = { context, source, analyser };
                 });
-                await expect.poll(async () => Math.abs(await playbackLevel() - 0.0707 * 0.35)).toBeLessThan(0.008);
+                await expect.poll(async () => Math.abs(await playbackLevel() - unityLevel * 10 * 0.35 ** 2)).toBeLessThan(0.002);
                 await screen.getByRole("button", { name: "Mute shared audio", exact: true }).click();
                 await expect.poll(playbackLevel).toBeLessThan(0.00001);
                 await screen.getByRole("button", { name: "Unmute shared audio", exact: true }).click();
-                await expect.poll(playbackLevel).toBeGreaterThan(0.015);
+                await expect.poll(playbackLevel).toBeGreaterThan(0.008);
                 await bob.evaluate(() => { window.__noxa.state.settings.muted_users = []; return window.__playbackMeter.context.close(); });
                 await alice.evaluate(async () => {
                     const tone = window.__shareTone; await tone.sender.replaceTrack(tone.original); tone.tone.stop(); tone.output.stream.getTracks().forEach(track => track.stop()); await tone.context.close();
@@ -316,17 +338,49 @@ for (const audioLabel of ["Application Audio", "System Audio"]) {
         }, audioLabel);
         await page.getByRole("combobox", { name: "Share audio", exact: true }).selectOption("application");
         await page.getByRole("button", { name: "Share screen", exact: true }).click();
-        if (audioLabel === "Application Audio") {
-            await expect(page.locator('.call-media-tile[data-local="true"][data-source="screen"]')).toBeVisible();
-            await expect(page.getByRole("combobox", { name: "Share audio", exact: true })).toBeDisabled();
-            await page.getByRole("button", { name: "Stop sharing", exact: true }).click();
-        } else {
-            await expect.poll(() => page.evaluate(() => window.__warnings.join(" "))).toContain("Application-only audio was not available");
-            await expect(page.locator('.call-media-tile[data-source="screen"]')).toHaveCount(0);
+        await expect(page.locator('.call-media-tile[data-local="true"][data-source="screen"]')).toBeVisible();
+        await expect(page.getByRole("combobox", { name: "Share audio", exact: true })).toBeDisabled();
+        if (audioLabel !== "Application Audio") {
+            await expect.poll(() => page.evaluate(() => window.__warnings.join(" "))).toContain("Application audio unavailable. Sharing without audio.");
+            expect(await page.evaluate(() => window.__displayStream.getAudioTracks().length)).toBe(0);
         }
+        await page.getByRole("button", { name: "Stop sharing", exact: true }).click();
         expect(await page.evaluate(() => window.__displayStream.getTracks().every(t => t.readyState === "ended"))).toBe(true);
         expect(await page.evaluate(() => window.__displayOptions)).toMatchObject({ video: { displaySurface: "window" }, windowAudio: "window", systemAudio: "exclude" });
-        await expect(page.getByRole("combobox", { name: "Share audio", exact: true })).toHaveValue("application");
+        await expect(page.getByRole("combobox", { name: "Share audio", exact: true })).toHaveValue(audioLabel === "Application Audio" ? "application" : "none");
+    });
+}
+
+for (const captureError of ["NotReadableError", "NotSupportedError", "NotAllowedError", "AbortError"]) {
+    test(`private-call application audio handles ${captureError}`, async ({ page }) => {
+        await mountCallRaceFixture(page);
+        await page.evaluate(async captureError => {
+            await window.__callsModule.startPrivateCall("alice");
+            window.__displayAttempts = [];
+            navigator.mediaDevices.getDisplayMedia = async options => {
+                window.__displayAttempts.push(options);
+                if (options.audio) throw new DOMException("audio unavailable", captureError);
+                window.__displayStream = await navigator.mediaDevices.getUserMedia({ video: true });
+                return window.__displayStream;
+            };
+        }, captureError);
+        await page.getByRole("combobox", { name: "Share audio", exact: true }).selectOption("application");
+        await page.getByRole("button", { name: "Share screen", exact: true }).click();
+        const cancelled = ["NotAllowedError", "AbortError"].includes(captureError);
+        if (cancelled) {
+            await expect(page.getByRole("button", { name: "Share screen", exact: true })).toBeVisible();
+            await expect(page.locator('.call-media-tile[data-source="screen"]')).toHaveCount(0);
+            expect(await page.evaluate(() => window.__displayAttempts.length)).toBe(1);
+            expect(await page.evaluate(() => window.__warnings.join(" "))).not.toContain("Sharing without audio");
+        } else {
+            await expect(page.locator('.call-media-tile[data-local="true"][data-source="screen"]')).toBeVisible();
+            expect(await page.evaluate(() => window.__displayAttempts.length)).toBe(2);
+            expect(await page.evaluate(() => window.__displayAttempts[1])).toMatchObject({ audio: false, windowAudio: "exclude", systemAudio: "exclude" });
+            expect(await page.evaluate(() => window.__warnings)).toEqual(["Application audio unavailable. Sharing without audio."]);
+            await expect(page.getByRole("combobox", { name: "Share audio", exact: true })).toHaveValue("none");
+            await page.getByRole("button", { name: "Stop sharing", exact: true }).click();
+            expect(await page.evaluate(() => window.__displayStream.getTracks().every(track => track.readyState === "ended"))).toBe(true);
+        }
     });
 }
 

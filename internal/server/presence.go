@@ -26,7 +26,7 @@ const (
 var validStatuses = map[string]bool{"": true, "online": true, "away": true, "busy": true, "invisible": true}
 
 // pokeCooldown is the per (caller, target) poke rate limit (322).
-const pokeCooldown = 30 * time.Second
+const pokeCooldown = 3 * time.Second
 
 // maxPokeEntries bounds retained caller-to-target cooldowns. A full tracker
 // fails closed for new pairs, rather than allowing a short burst of unique

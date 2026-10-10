@@ -18,12 +18,15 @@ import (
 // Conn is nullable: headless clients (e.g. bots or server-side entities) may
 // have a nil Conn. Metadata is an arbitrary string map for per-client extras.
 type Client struct {
-	ClientID   string
-	UserID     int64 `json:"-"` // authenticated account; zero for guests
-	UniqueID   string
-	Nickname   string
-	ChannelID  int64 // 0 means no channel
-	IsSpeaking bool
+	ClientID     string
+	UserID       int64 `json:"-"` // authenticated account; zero for guests
+	UniqueID     string
+	Nickname     string
+	ChannelID    int64  // 0 means no channel
+	ChannelEpoch uint64 `json:"-"` // changes on every membership transition
+	IsSpeaking   bool
+	// LastSpokeAt records when speech last stopped, independently of network traffic.
+	LastSpokeAt time.Time `json:"-"`
 	// PrioritySpeaker marks TS3-style priority speakers (channel commanders):
 	// clients duck other publishers while a priority speaker talks.
 	PrioritySpeaker bool

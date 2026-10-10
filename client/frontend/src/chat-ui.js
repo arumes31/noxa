@@ -10,6 +10,10 @@
 //
 // Replies and direct recipients use explicit protocol identities.
 import { resolveParent, directPeer } from "./chat-relations.js";
+import { manageChatGIFPlayback } from "./chat-gif-playback.js";
+import { openChatMediaLightbox } from "./chat-media-lightbox.js";
+import { createUnreadTabEffects } from "./chat-unread.js";
+import { createChatTabs } from "./chat-tabs.js";
 import { voiceMessageButton, renderVoiceMessage } from "./voice-messages.js";
 import { initMessageTools, saveMessageReference } from "./message-tools.js";
 import { roleMentionChoices, roleMentionLabel, mentionFlags } from "./role-mentions.js";
@@ -65,8 +69,11 @@ let view = { kind: "channel" };
 // replaced wholesale, never merged, so the client cannot accumulate drift.
 let subscriptions = [];
 const store = new Map(); // key -> {msgs, hasMore, end, loading, loaded}
-const unread = new Map(); // channelID -> {n, mention}
-const pmTabs = new Map(); // uid -> {uid, nick, unread, offline, pendingRead}
+const unread = new Map(); // channelID -> {n, mention, unreadAt}
+let unreadEffects = null;
+let chatTabs = null;
+let tabLayoutOwner = null;
+const pmTabs = new Map(); // uid -> {uid, nick, unread, unreadAt, offline, pendingRead}
 const chanTabs = new Map(); // channelID -> {id}; derived from SubscriptionState
 let pendingChannelTab = 0; // activate only after the server confirms subscription
 let channelTabRequest = 0;
@@ -136,10 +143,11 @@ let dmRestoreAttempt = null;
 let dmOwner = null;
 let dmIdentityRevision = 0n;
 const closedDMPeers = new Set();
+// Only explicit closes belong here; server removals never become undo actions.
+const recentlyClosedChats = new Map();
+const tabSubscriptionChanges = new Map();
 
-// DM_RESTORE_TABS caps how many stored conversations get a tab back on
-// connect. The bar is a single wrapped row, so restoring 200 peers would bury
-// the chat rather than restore it.
+// Restore a small recent working set in addition to explicitly pinned peers.
 const DM_RESTORE_TABS = 6;
 
 // Persist debounce for settings writes (last-read, dismissed announcement).
@@ -263,11 +271,15 @@ function callDMHistory(owner, method, ...args) {
 }
 
 function resetDMOwner() {
+    selectDirectRecipient("");
     dmGeneration++;
     dmOwner = null;
+    tabLayoutOwner = null;
     dmRestoreAttempt = null;
     dmPersistWarned = false;
     closedDMPeers.clear();
+    recentlyClosedChats.clear();
+    for (const request of tabSubscriptionChanges.values()) request.finish(false);
 }
 
 function onDMIdentityChanged(value) {
@@ -754,12 +766,25 @@ function renderMsg(m) {
         const openMenu = event => {
             if (event.target.closest('[data-member-uid], input, textarea, a, video')) return;
             event.preventDefault(); event.stopPropagation();
-            const menu = document.createElement("div"); menu.className = "ctx-menu";
+            closeReactStrip();
+            const menu = document.createElement("div"); menu.className = "ctx-menu msg-context-menu";
+            const scope = captureScope(readExportScope);
+            menu.appendChild(quickReactionBar(m, menu, el, scope));
             for (const action of actions.querySelectorAll("button")) {
                 const item = document.createElement("button"); item.className = "ctx-action";
-                item.textContent = action.getAttribute("aria-label") || action.title;
+                const reaction = action.dataset.action === "react";
+                item.textContent = reaction ? t("chat.moreReactions") : action.getAttribute("aria-label") || action.title;
                 item.disabled = action.disabled;
-                item.onclick = () => { closeContextMenu(menu, true); if (el.isConnected) action.click(); };
+                item.onclick = event => {
+                    // Closing removes the menu's propagation guard. Keep this
+                    // click from immediately dismissing the newly opened picker.
+                    event.stopPropagation();
+                    const current = menu.isConnected && el.isConnected && exportScopeIsCurrent(scope);
+                    closeContextMenu(menu, true);
+                    if (!current) return;
+                    if (reaction) openReactStrip(m, el);
+                    else action.click();
+                };
                 menu.append(item);
             }
             mountContextMenu(menu, { trigger: el, x: event.clientX, y: event.clientY });
@@ -769,13 +794,18 @@ function renderMsg(m) {
     }
     if (!m.deleted && m.direct && (m.clientMsgID || m.localSeq) && view.kind === "dm") {
         const peer = view.uid, owner = getDMOwner(), scope = captureScope(readExportScope);
-        const save = document.createElement("button"); save.className = "icon-btn"; save.textContent = "☆"; save.title = t("messages.save"); save.setAttribute("aria-label", t("messages.save"));
+        const save = document.createElement("button");
+        save.type = "button";
+        save.className = "msg-save";
+        save.textContent = "☆";
+        save.title = t("messages.save");
+        save.setAttribute("aria-label", t("messages.save"));
         save.onclick = async () => {
             const ready = await owner.ready;
             if (ready.error || !dmOwnerIsCurrent(owner) || !exportScopeIsCurrent(scope) || !save.isConnected) return;
             await saveMessageReference({ kind: "dm", peer_id: peer, client_message_id: m.clientMsgID || "", local_seq: m.localSeq || 0 }, ready.context);
         };
-        el.append(save);
+        time.append(save);
     }
     return el;
 }
@@ -920,29 +950,41 @@ function downloadChip(chID, ref, name, suffix) {
     return b;
 }
 
-// openLightbox zooms a rendered media element. It clones the node rather than
-// re-downloading, so the attachment is fetched and decrypted exactly once.
+// Media owns the single-player lifecycle; attachment loading stays here.
 function openLightbox(node) {
-    const ov = document.createElement("div");
-    ov.className = "dlg-overlay lightbox";
-    const big = node.cloneNode(true);
-    big.removeAttribute("class");
-    big.removeAttribute("title");
-    if (big.tagName === "VIDEO") {
-        big.controls = true;
-        big.autoplay = true;
-    }
-    ov.appendChild(big);
-    const close = () => closeDialog(ov);
-    ov.onclick = (e) => {
-        if (e.target === ov) close(); // clicking the video's controls must not close it
-    };
-    mountServerDialog(ov);
+    return openChatMediaLightbox(node);
 }
 
 // --- reactions (97) -----------------------------------------------------------
 
 const QUICK_REACTS = ["👍", "❤️", "😂", "😮", "😢", "🎉", "🔥", "👀"];
+
+function quickReactionBar(m, menu, trigger, scope) {
+    const bar = document.createElement("div");
+    bar.className = "msg-quick-reactions";
+    bar.setAttribute("role", "group");
+    bar.setAttribute("aria-label", t("chat.reactions"));
+    for (const emoji of QUICK_REACTS) {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.textContent = emoji;
+        button.setAttribute("aria-label", t("chat.reactWith", { emoji }));
+        button.onclick = event => {
+            event.stopPropagation();
+            if (!menu.isConnected || !trigger.isConnected || !exportScopeIsCurrent(scope)) return;
+            closeContextMenu(menu, true);
+            void toggleReaction(m, emoji);
+        };
+        bar.appendChild(button);
+    }
+    bar.onkeydown = event => {
+        if (!["ArrowLeft", "ArrowRight"].includes(event.key)) return;
+        event.preventDefault(); event.stopPropagation();
+        const buttons = [...bar.children], index = buttons.indexOf(document.activeElement);
+        buttons[(index + (event.key === "ArrowRight" ? 1 : -1) + buttons.length) % buttons.length].focus();
+    };
+    return bar;
+}
 
 function renderReacts(m) {
     const scope = captureScope(readExportScope);
@@ -1067,7 +1109,7 @@ function renderActions(m) {
             setTimeout(() => { feedback.remove(); if (copy.isConnected) { copy.innerHTML = icon("copy"); copy.setAttribute("aria-label", t("wins.copyMessage")); } }, 2500);
         }
     });
-    mk("smile", t("chat.action.react"), () => openReactStrip(m, acts));
+    mk("smile", t("chat.action.react"), () => openReactStrip(m, acts)).dataset.action = "react";
     mk("reply", t("chat.action.reply"), () => setReply(m));
     if (!m.direct && m.id) mk("pin", t("messages.save"), () => saveMessageReference({ kind: "channel", channel_id: scope.channelID, message_id: m.id }));
     // (108) only messages that are actually part of a chain get the affordance
@@ -1374,6 +1416,7 @@ function setView(v) {
         const tab = pmTabs.get(v.uid);
         if (tab) {
             tab.unread = 0;
+            tab.unreadAt = undefined;
             tab.offline = false;
         }
     }
@@ -1384,22 +1427,72 @@ function setView(v) {
 
 export function resumeChatView() { setView(view); }
 
+let selectedDirectRecipient = null;
+
+function knownPeerName(uid, supplied = "") {
+    const live = V().state.clients?.find(client => client.unique_id === uid)?.nickname;
+    const names = [live, supplied, pmTabs.get(uid)?.nick, tabLayoutOwner?.layout?.names?.["dm:" + uid]];
+    const history = store.get("dm:" + uid)?.msgs || [];
+    for (let i = history.length - 1; i >= 0; i--) {
+        if (!history[i].self && history[i].from && history[i].from !== "?") {
+            names.push(history[i].from);
+            break;
+        }
+    }
+    return (names.find(name => typeof name === "string" && name.trim() && name !== uid && name !== "?" && name !== t("chat.unknownMember")) || "").trim();
+}
+
+function peerName(uid, supplied) {
+    return knownPeerName(uid, supplied) || t("chat.unknownMember");
+}
+
+function selectDirectRecipient(uid, nick) {
+    const input = $("chat-target");
+    const label = uid ? peerName(uid, nick) : "";
+    selectedDirectRecipient = uid ? { uid, label } : null;
+    if (input) input.value = label;
+}
+
+function directRecipientID() {
+    const value = $("chat-target")?.value.trim() || "";
+    if (!value) return "";
+    if (selectedDirectRecipient?.label === value) return selectedDirectRecipient.uid;
+    // Typed names must resolve unambiguously. A label is never a protocol ID.
+    const matches = new Set();
+    for (const client of V().state.clients || []) {
+        if (client.unique_id && (client.unique_id === value || client.nickname === value)) matches.add(client.unique_id);
+    }
+    for (const tab of pmTabs.values()) {
+        if (tab.uid === value || knownPeerName(tab.uid) === value) matches.add(tab.uid);
+    }
+    if (matches.size) return matches.size === 1 ? [...matches][0] : "";
+    // Preserve deliberate identity entry for a new/offline peer. noXa IDs
+    // are canonical double-base64 SHA-256 digests, never arbitrary names.
+    try {
+        const digest = atob(atob(value));
+        if (digest.length === 32 && btoa(btoa(digest)) === value) return value;
+    } catch { /* search text is not an identity */ }
+    return "";
+}
+
 export function openPM(uid, nick) {
     if (!uid) return;
     // A new user action can recover failed acquisition. Pending descendants
     // retain their old owner and are never transparently retried.
     if (dmOwner?.failed && dmOwnerIsCurrent(dmOwner)) resetDMHistoryView();
     closedDMPeers.delete(uid);
-    if (!pmTabs.has(uid)) pmTabs.set(uid, { uid, nick: nick || uid, unread: 0, offline: false, pendingRead: "" });
-    if (nick) pmTabs.get(uid).nick = nick;
+    recentlyClosedChats.delete("dm:" + uid);
+    const name = knownPeerName(uid, nick);
+    if (!pmTabs.has(uid)) pmTabs.set(uid, { uid, nick: name, unread: 0, offline: false, pendingRead: "" });
+    if (name) pmTabs.get(uid).nick = name;
     activatePM(uid);
 }
 
 function activatePM(uid) {
     // Keep the scope selector in sync so sendChat routes to the tab's user.
     $("chat-scope").value = "direct";
+    selectDirectRecipient(uid);
     V().setDirectTargetVisible(true);
-    $("chat-target").value = uid;
     setView({ kind: "dm", uid });
 }
 
@@ -1455,6 +1548,7 @@ async function openE2EEDiagnostics() {
 function activateChannel(channelID) {
     const id = Number(channelID);
     if (!id || !subscribed(id)) return;
+    recentlyClosedChats.delete("ch:" + id);
     $("chat-scope").value = "channel";
     V().setDirectTargetVisible(false);
     setView(id === V().state.myChannelID ? { kind: "channel" } : { kind: "chan", id });
@@ -1499,13 +1593,74 @@ export async function openChannelTab(channelID) {
     if (!await setChannelSubscription(id, true) && chatServerIsCurrent(scope) && request === channelTabRequest && pendingChannelTab === id) pendingChannelTab = 0;
 }
 
-function closeChannelTab(channelID) {
+async function closeChannelTab(channelID) {
     const id = Number(channelID);
     if (id === V().state.myChannelID) {
         V().toast(t("chat.moveUnsubscribe"), "info", "alert");
         return;
     }
-    setChannelSubscription(id, false);
+    if (tabSubscriptionChanges.has(id)) return;
+    const scope = captureScope(readDMHistoryScope), name = "# " + channelName(id);
+    const result = await confirmTabSubscription(id, false, scope);
+    if (!dmHistoryScopeIsCurrent(scope) || !V().state.channels.some(channel => Number(channel.ChannelID) === id)) return;
+    if (!result.ok) {
+        if (!result.reported) V().toast(t("chat.tabsCloseFailed", { name }), "warn");
+        return;
+    }
+    removeTabPin("ch:" + id);
+    rememberClosedChat("ch:" + id, name);
+    renderTabs();
+}
+
+// Sending a subscription request does not authorize membership. Wait for the
+// authoritative server reply before consuming an undo entry or opening chat.
+function confirmTabSubscription(id, subscribe, scope) {
+    let resolveConfirmation;
+    const confirmed = new Promise(resolve => { resolveConfirmation = resolve; });
+    const request = {
+        subscribe, scope, timer: 0,
+        finish(ok, reported = false) {
+            if (tabSubscriptionChanges.get(id) !== request) return;
+            clearTimeout(request.timer);
+            tabSubscriptionChanges.delete(id);
+            resolveConfirmation({ ok, reported });
+        },
+    };
+    tabSubscriptionChanges.set(id, request);
+    request.timer = setTimeout(() => request.finish(false), 10_000);
+    void setChannelSubscription(id, subscribe).then(sent => {
+        if (!sent) request.finish(false, true);
+    });
+    return confirmed;
+}
+
+function rememberClosedChat(key, name) {
+    recentlyClosedChats.delete(key);
+    recentlyClosedChats.set(key, { key, name, scope: captureScope(readDMHistoryScope), pending: false });
+    while (recentlyClosedChats.size > 10) recentlyClosedChats.delete(recentlyClosedChats.keys().next().value);
+}
+
+async function reopenClosedChat(entry) {
+    const current = () => recentlyClosedChats.get(entry.key) === entry && dmHistoryScopeIsCurrent(entry.scope);
+    if (!current() || entry.pending) return;
+    if (entry.key.startsWith("dm:")) { openPM(entry.key.slice(3), entry.name); return; }
+    const id = Number(entry.key.slice(3));
+    if (!V().state.channels.some(channel => Number(channel.ChannelID) === id)) {
+        recentlyClosedChats.delete(entry.key); renderTabs();
+        V().toast(t("chat.tabsReopenFailed", { name: entry.name }), "warn");
+        return;
+    }
+    if (subscribed(id)) { activateChannel(id); return; }
+    if (tabSubscriptionChanges.has(id)) return;
+    entry.pending = true; renderTabs();
+    const result = await confirmTabSubscription(id, true, entry.scope);
+    if (!current()) return;
+    entry.pending = false;
+    if (result.ok && subscribed(id)) activateChannel(id);
+    else {
+        renderTabs();
+        if (!result.reported) V().toast(t("chat.tabsReopenFailed", { name: entry.name }), "warn");
+    }
 }
 
 // Normalize the full authoritative subscription payload before replacing the
@@ -1526,6 +1681,11 @@ export function onSubscriptions(json) {
     subscriptions = next;
     chanTabs.clear();
     for (const id of subscriptions) chanTabs.set(id, { id });
+    for (const [id, request] of tabSubscriptionChanges) {
+        // An unrelated snapshot may precede this request's reply. A matching
+        // state confirms success; rejection or a lost reply times out safely.
+        if (dmHistoryScopeIsCurrent(request.scope) && subscribed(id) === request.subscribe) request.finish(true);
+    }
 
     if (view.kind === "chan" && !subscribed(view.id)) {
         setView({ kind: "channel" });
@@ -1547,7 +1707,11 @@ export function onSubscriptions(json) {
 // instead of starting empty. Destroying that log is a separate, explicit act
 // (clearPMHistory) — closing a tab must never delete a conversation (122).
 function closePM(uid) {
+    const tab = pmTabs.get(uid);
+    if (!tab) return;
+    rememberClosedChat("dm:" + uid, tab.nick);
     closedDMPeers.add(uid);
+    removeTabPin("dm:" + uid);
     pmTabs.delete(uid);
     store.delete("dm:" + uid);
     if (view.kind === "dm" && view.uid === uid) {
@@ -1559,96 +1723,99 @@ function closePM(uid) {
     renderTabs();
 }
 
+function tabLayoutFor(owner) {
+    if (tabLayoutOwner?.owner === owner) return tabLayoutOwner;
+    const record = { owner, layout: { order: [], pinned: [] }, ready: false, saved: null, pending: Promise.resolve(), revision: 0, closed: new Set() };
+    tabLayoutOwner = record;
+    record.loading = callDMHistory(owner, "ChatTabLayoutForContext").then(value => {
+        if (tabLayoutOwner !== record || !dmOwnerIsCurrent(owner)) return;
+        if (!value || !Array.isArray(value.order) || !Array.isArray(value.pinned)) throw new Error("Invalid chat layout");
+        record.layout = { order: value.order, pinned: value.pinned, names: value.names || {} };
+        record.saved = record.layout;
+        record.ready = true;
+        if (record.layout.pinned.some(key => record.closed.has(key))) {
+            saveTabLayout({ ...record.layout, pinned: record.layout.pinned.filter(key => !record.closed.has(key)) });
+        }
+        renderTabs();
+    }).catch(() => {
+        // The identity/history path reports acquisition failures itself.
+        if (owner.context && tabLayoutOwner === record && dmOwnerIsCurrent(owner)) V().toast(t("chat.tabsLoadFailed"), "warn");
+    });
+    return record;
+}
+
+function removeTabPin(key) {
+    const record = tabLayoutOwner;
+    if (!record || !dmOwnerIsCurrent(record.owner)) return;
+    record.closed.add(key);
+    if (record.ready && record.layout.pinned.includes(key)) saveTabLayout({ ...record.layout, pinned: record.layout.pinned.filter(id => id !== key) });
+}
+
+function saveTabLayout(layout) {
+    const record = tabLayoutOwner;
+    if (!record?.ready || !dmOwnerIsCurrent(record.owner)) return;
+    // Keep human labels only for pinned DMs, in the same encrypted native file.
+    const names = {};
+    for (const key of layout.pinned) {
+        if (!key.startsWith("dm:")) continue;
+        const name = pmTabs.get(key.slice(3))?.nick || record.layout.names?.[key];
+        if (typeof name !== "string") continue;
+        const label = [...name.replace(/[\p{Cc}\p{Zl}\p{Zp}]/gu, "").trim()].slice(0, 64).join("");
+        if (label) names[key] = label;
+    }
+    layout = { order: layout.order, pinned: layout.pinned, ...(Object.keys(names).length ? { names } : {}) };
+    const revision = ++record.revision;
+    record.layout = layout;
+    renderTabs();
+    // Each queued write retains the native owner it was created for.
+    record.pending = record.pending.then(async () => {
+        if (tabLayoutOwner !== record || !dmOwnerIsCurrent(record.owner)) return;
+        try {
+            const error = await callDMHistory(record.owner, "SaveChatTabLayoutForContext", layout);
+            if (error) throw new Error(error);
+            record.saved = layout;
+        } catch {
+            if (tabLayoutOwner !== record || !dmOwnerIsCurrent(record.owner) || record.revision !== revision) return;
+            record.layout = record.saved;
+            renderTabs();
+            V().toast(t("chat.tabsSaveFailed"), "warn");
+        }
+    });
+}
+
 function renderTabs() {
-    const bar = $("pm-tabs");
-    bar.innerHTML = "";
-    bar.classList.toggle("hidden", pmTabs.size === 0 && chanTabs.size === 0);
-    for (const tab of chanTabs.values()) {
-        const id = tab.id;
-        const current = id === V().state.myChannelID;
-        const active = activeChannelID() === id && view.kind !== "global" && view.kind !== "dm";
-        const el = document.createElement("div");
-        el.className = "pm-tab channel-tab" + (active ? " active" : "");
-        el.title = current ? t("chat.joinedChannel") : t("chat.subscribedChannel");
-        const name = document.createElement("span");
-        name.className = "pm-tab-name";
-        name.textContent = "# " + channelName(id);
-        el.appendChild(name);
+    const scope = captureScope(readDMHistoryScope);
+    const current = () => dmHistoryScopeIsCurrent(scope);
+    const items = [];
+    for (const { id } of chanTabs.values()) {
         const badge = unread.get(id);
-        if (badge?.n > 0) {
-            const dot = document.createElement("span");
-            dot.className = "pm-unread" + (badge.mention ? " mention" : "");
-            dot.textContent = badge.n;
-            el.appendChild(dot);
-        }
-        if (!current) {
-            const x = document.createElement("button");
-            x.className = "pm-close";
-            x.textContent = "✕";
-            x.title = t("chat.unsubscribeClose");
-            x.onclick = (e) => {
-                e.stopPropagation();
-                closeChannelTab(id);
-            };
-            el.appendChild(x);
-        }
-        el.onclick = () => activateChannel(id);
-        bar.appendChild(el);
+        const joined = id === V().state.myChannelID;
+        items.push({
+            key: "ch:" + id, name: "# " + channelName(id),
+            active: activeChannelID() === id && view.kind !== "global" && view.kind !== "dm",
+            unread: badge?.n || 0, arrivedAt: badge?.unreadAt, mention: badge?.mention,
+            title: t(joined ? "chat.joinedChannel" : "chat.subscribedChannel"),
+            open: () => { if (current() && chanTabs.has(id)) activateChannel(id); },
+            close: joined ? null : () => { if (current() && chanTabs.has(id)) closeChannelTab(id); },
+        });
     }
     for (const tab of pmTabs.values()) {
-        const el = document.createElement("div");
-        const scope = captureScope(readDMHistoryScope);
-        const current = () => el.isConnected && dmHistoryScopeIsCurrent(scope) && pmTabs.get(tab.uid) === tab;
-        el.className = "pm-tab" + (view.kind === "dm" && view.uid === tab.uid ? " active" : "");
-        el.title = t("chat.deleteHistoryHint");
-        const openMenu = (e, keyboard = false) => {
-            e.preventDefault(); e.stopPropagation();
-            if (!current()) return;
-            const menu = document.createElement("div"); menu.className = "ctx-menu";
-            const add = (key, action, danger = false) => {
-                const button = document.createElement("button"); button.type = "button"; button.className = "ctx-action" + (danger ? " ctx-danger" : "");
-                button.textContent = t(key); button.onclick = () => { closeContextMenu(menu); if (current()) action(); };
-                menu.append(button);
-            };
-            add("context.openConversation", () => activatePM(tab.uid));
-            add("context.closeConversation", () => closePM(tab.uid));
-            const divider = document.createElement("div"); divider.className = "ctx-divider"; menu.append(divider);
-            add("context.clearHistory", () => clearPMHistory(tab.uid, tab.nick), true);
-            mountContextMenu(menu, { x: keyboard ? undefined : e.clientX, y: keyboard ? undefined : e.clientY, trigger: el });
-        };
-        el.tabIndex = 0; el.setAttribute("aria-haspopup", "menu");
-        el.oncontextmenu = e => openMenu(e);
-        el.onkeydown = e => { if (contextMenuKey(e)) openMenu(e, true); };
-        const name = document.createElement("span");
-        name.className = "pm-tab-name";
-        name.textContent = tab.nick;
-        el.appendChild(name);
-        if (tab.offline) {
-            const b = document.createElement("span");
-            b.className = "pm-badge offline";
-            b.textContent = t("chat.offline");
-            b.title = t("chat.offlineReceived");
-            el.appendChild(b);
-        }
-        if (tab.unread > 0) {
-            const dot = document.createElement("span");
-            dot.className = "pm-unread";
-            dot.textContent = tab.unread;
-            el.appendChild(dot);
-        }
-        const x = document.createElement("button");
-        x.className = "pm-close";
-        x.textContent = "✕";
-        x.title = t("chat.tabClose");
-        x.onclick = (e) => {
-            e.stopPropagation();
-            if (!current()) return;
-            closePM(tab.uid);
-        };
-        el.appendChild(x);
-        el.onclick = () => { if (current()) activatePM(tab.uid); };
-        bar.appendChild(el);
+        const owns = () => current() && pmTabs.get(tab.uid) === tab;
+        tab.nick = knownPeerName(tab.uid);
+        items.push({
+            key: "dm:" + tab.uid, name: peerName(tab.uid), active: view.kind === "dm" && view.uid === tab.uid,
+            unread: tab.unread, arrivedAt: tab.unreadAt, offline: tab.offline,
+            open: () => { if (owns()) activatePM(tab.uid); },
+            close: () => { if (owns()) closePM(tab.uid); },
+            clearHistory: () => { if (owns()) clearPMHistory(tab.uid, tab.nick); },
+        });
     }
+    const saved = items.length && V().state.activeTabID ? tabLayoutFor(getDMOwner()) : null;
+    chatTabs?.render(items, saved?.layout || { order: [], pinned: [] }, {
+        scope: JSON.stringify(scope), ready: !!saved?.ready,
+        recentlyClosed: [...recentlyClosedChats.values()].reverse().filter(entry => dmHistoryScopeIsCurrent(entry.scope) && !items.some(item => item.key === entry.key))
+            .map(entry => ({ ...entry, open: () => reopenClosedChat(entry) })),
+    });
 }
 
 // --- local DM history (122) ---------------------------------------------------
@@ -1705,11 +1872,14 @@ async function ensureDMHistory(uid) {
         // overlapping clear: success invalidates this load, failure keeps it.
         if (st.dmClearPending) await st.dmClearPending;
         if (!current()) return false;
-        const nick = pmTabs.get(uid)?.nick || uid;
+        const nick = peerName(uid);
         const live = new Set(st.msgs.map((m) => m.clientMsgID).filter(Boolean));
         const older = (rows || []).map((e) => dmMsg(e, nick))
             .filter((m) => !m.clientMsgID || !live.has(m.clientMsgID));
         st.msgs = older.concat(st.msgs);
+        const tab = pmTabs.get(uid);
+        if (tab) tab.nick = knownPeerName(uid);
+        renderTabs();
         const max = V().state.settings?.chat_max_lines || 200;
         while (st.msgs.length > Math.max(max, PAGE)) st.msgs.shift();
     } catch (e) {
@@ -1738,7 +1908,7 @@ function dmRecord(peer, nick, m) {
         dmPersistWarned = true;
         V().toast(t("chat.dmNotSaved", { error: String(err) }), "warn");
     };
-    callDMHistory(owner, "DMHistoryAppendForContext", peer, nick || "", {
+    callDMHistory(owner, "DMHistoryAppendForContext", peer, knownPeerName(peer, nick), {
         from_unique_id: m.fromUID,
         from_nickname: m.from,
         body: m.text,
@@ -1802,17 +1972,25 @@ async function restorePMTabs() {
     const attempt = Symbol();
     dmRestoreAttempt = attempt;
     let peers = [];
+    const saved = V().state.activeTabID ? tabLayoutFor(owner) : null;
     try {
         peers = await callDMHistory(owner, "DMHistoryPeersForContext");
+        await saved?.loading;
     } catch {
         return; // no local storage path yet
     }
     if (!dmHistoryScopeIsCurrent(scope) || dmRestoreAttempt !== attempt) return;
     let added = false;
-    for (const p of (peers || []).slice(0, DM_RESTORE_TABS)) {
+    const pinned = new Set(saved?.layout.pinned.filter(key => key.startsWith("dm:")).map(key => key.slice(3)) || []);
+    const peerByID = new Map((peers || []).map(peer => [peer.unique_id, peer]));
+    const members = new Map((V().state.clients || []).map(member => [member.unique_id, member]));
+    const restored = [...pinned].map(uid => ({
+        unique_id: uid, nickname: members.get(uid)?.nickname || peerByID.get(uid)?.nickname || saved.layout.names?.["dm:" + uid],
+    })).concat((peers || []).filter(peer => !pinned.has(peer.unique_id)).slice(0, DM_RESTORE_TABS));
+    for (const p of restored) {
         if (!p.unique_id || pmTabs.has(p.unique_id) || closedDMPeers.has(p.unique_id)) continue;
         pmTabs.set(p.unique_id, {
-            uid: p.unique_id, nick: p.nickname || p.unique_id,
+            uid: p.unique_id, nick: knownPeerName(p.unique_id, p.nickname),
             unread: 0, offline: false, pendingRead: "",
         });
         added = true;
@@ -1822,6 +2000,7 @@ async function restorePMTabs() {
 
 function scrollToBottom() {
     const log = $("chat-log");
+    atBottom = true;
     log.scrollTop = log.scrollHeight;
 }
 
@@ -2116,7 +2295,8 @@ export function addChat(d) {
             announcementEvent = event;
             announcementContext = context;
         }
-        window.__noxaNotify?.notify(event, text, { ...context, announce: false });
+        window.__noxaNotify?.notify(event, text, { ...context, announce: false,
+            reference: { kind: "channel", channel_id: chID, message_id: m.id || 0 } });
     }
     if (key === activeKey() && !isPrivateGroupActive()) {
         if (position === "append") appendLive(m);
@@ -2128,6 +2308,7 @@ export function addChat(d) {
         const u = unread.get(chID) || { n: 0, mention: false };
         u.n++;
         u.mention = u.mention || m.mentioned;
+        if (!st.replayingTabID) u.unreadAt = Date.now();
         unread.set(chID, u);
         V().renderTree();
         renderTabs();
@@ -2175,15 +2356,16 @@ function routeDM(d, m) {
     const st = V().state;
     const peer = directPeer(d, m);
     if (!peer) return false;
-    const tab = pmTabs.get(peer) || { uid: peer, nick: m.self ? peer : m.from, unread: 0, offline: false, pendingRead: "" };
+    const tab = pmTabs.get(peer) || { uid: peer, nick: knownPeerName(peer, m.self ? "" : m.from), unread: 0, offline: false, pendingRead: "" };
     if (!pmTabs.has(peer)) pmTabs.set(peer, tab);
-    if (!m.self) tab.nick = m.from;
+    tab.nick = knownPeerName(peer, m.self ? "" : m.from);
 
     const key = "dm:" + peer;
     if (pushMsg(key, m) === "duplicate") return false;
     if (!m.self && !m.offline) {
         window.__noxaNotify?.notify("dm", (m.from || "someone") + ": " + (m.text || "").slice(0, 80),
-            { uid: peer, className: "messages", kind: "info", announce: false });
+            { uid: peer, className: "messages", kind: "info", announce: false,
+                reference: { kind: "dm", peer_id: peer, client_message_id: m.clientMsgID || "", local_seq: m.localSeq || 0 } });
     }
     dmRecord(peer, tab.nick, m); // (122) both directions, so a restart replays the thread
 
@@ -2197,7 +2379,8 @@ function routeDM(d, m) {
             offlineBatch.delete(peer);
             const summary = t("chat.offlineBatch", { count: b.n, name: b.nick });
             window.__noxaNotify?.notify("dm", summary,
-                { uid: peer, className: "messages", kind: "info", announce: false });
+                { uid: peer, className: "messages", kind: "info", announce: false,
+                    reference: { kind: "dm", peer_id: peer, client_message_id: m.clientMsgID || "", local_seq: m.localSeq || 0 } });
             if (chatAnnouncementAllowed("dm", { uid: peer, className: "messages" }, key)) {
                 V().announceLive(summary);
             }
@@ -2218,6 +2401,7 @@ function routeDM(d, m) {
         appendLive(m);
     } else if (!m.self) {
         tab.unread++;
+        if (!st.replayingTabID) tab.unreadAt = Date.now();
     }
     renderTabs();
     return {
@@ -2497,7 +2681,7 @@ function renderTyping() {
 function readSendScope() {
     const scope = $("chat-scope").value;
     const target = scope === "channel" ? String(activeChannelID() || "")
-        : scope === "direct" ? $("chat-target").value.trim() : "";
+        : scope === "direct" ? directRecipientID() : "";
     return { ...readExportScope(), sendScope: scope, target };
 }
 
@@ -2525,6 +2709,11 @@ export async function sendMessage() {
     if (!text && pendingFiles.length === 0) return;
     $("chat-send-error").classList.add("hidden");
     const captured = captureScope(readSendScope);
+    if (captured.sendScope === "direct" && !captured.target) {
+        V().toast(t("chat.chooseRecipient"), "warn");
+        $("chat-target").focus();
+        return;
+    }
     const operation = { scope: captured };
     activeSend = operation;
     $("chat-send").disabled = true;
@@ -2643,8 +2832,7 @@ function closeEmojiPanel() {
 }
 
 function openPMKeepView(uid) {
-    const c = V().state.clients.find((x) => x.unique_id === uid);
-    pmTabs.set(uid, { uid, nick: c?.nickname || uid, unread: 0, offline: false, pendingRead: "" });
+    pmTabs.set(uid, { uid, nick: knownPeerName(uid), unread: 0, offline: false, pendingRead: "" });
     renderTabs();
 }
 
@@ -3240,6 +3428,7 @@ function showSearchResults(q, results, scanned, undecryptable, scope) {
 // ---------------------------------------------------------------------------
 
 export function refreshHeader() {
+    renderTabs();
     updateHeader();
     void sendPendingReads();
 }
@@ -3265,7 +3454,8 @@ function updateHeader() {
     } else if (view.kind === "global") {
         title = t("chat.globalTitle");
     } else if (view.kind === "dm") {
-        title = "DM — " + (pmTabs.get(view.uid)?.nick || view.uid);
+        title = "DM — " + peerName(view.uid);
+        if (selectedDirectRecipient?.uid === view.uid && $("chat-target").value === selectedDirectRecipient.label) selectDirectRecipient(view.uid);
     } else {
         const ch = st.channels.find((c) => c.ChannelID === activeChannelID());
         if (ch) {
@@ -3278,7 +3468,7 @@ function updateHeader() {
     $("chat-head-title").textContent = title;
     $("chat-search-btn").classList.toggle("hidden", filesOpen);
     $("chat-head-actions").querySelector(".channel-actions").hidden = filesOpen;
-    $("chat-text").placeholder = view.kind === "channel" || view.kind === "chan" ? t("workspace.compose", { name: title }) : view.kind === "dm" ? t("workspace.compose", { name: pmTabs.get(view.uid)?.nick || view.uid }) : t("workspace.composeAll");
+    $("chat-text").placeholder = view.kind === "channel" || view.kind === "chan" ? t("workspace.compose", { name: title }) : view.kind === "dm" ? t("workspace.compose", { name: peerName(view.uid) }) : t("workspace.composeAll");
     const topicEl = $("chat-topic");
     topicEl.textContent = topic;
     topicEl.title = topic; // (111) tooltip carries the full topic
@@ -3598,6 +3788,8 @@ export function onChannelsDeleted(channelIDs) {
     if (removed.size === 0) return;
     subscriptions = subscriptions.filter((id) => !removed.has(id));
     for (const id of removed) {
+        recentlyClosedChats.delete("ch:" + id);
+        tabSubscriptionChanges.get(id)?.finish(false);
         chanTabs.delete(id);
         unread.delete(id);
         store.delete("ch:" + id);
@@ -3911,6 +4103,10 @@ function handleTabComplete(e) {
 // ---------------------------------------------------------------------------
 
 export function initChat() {
+    chatTabs?.dispose();
+    unreadEffects?.dispose();
+    unreadEffects = createUnreadTabEffects($("pm-tabs"));
+    chatTabs = createChatTabs($("pm-tabs"), { onLayoutChange: saveTabLayout, onRefresh: () => unreadEffects?.refresh() });
     initMessageTools({ unread: unreadMessageReferences, jump: jumpMessageReference });
     initDiscussions(() => activeChannelID());
     $("chat-text").addEventListener("input", updateComposerCount);
@@ -3927,6 +4123,29 @@ export function initChat() {
     const log = $("chat-log");
 
     applyChatPrefs();
+    const stopGIFPlayback = manageChatGIFPlayback(document.body, ".msg img, .lightbox img, .msg video.msg-video, .lightbox video");
+
+    // Attachments, wrapped text and viewport changes can grow the conversation
+    // after appendLive has scrolled. Keep following the newest message until
+    // the user scrolls into history; observe rows as well as the viewport.
+    let lastViewportHeight = log.clientHeight, lastContentHeight = log.scrollHeight;
+    const rememberChatLayout = () => { lastViewportHeight = log.clientHeight; lastContentHeight = log.scrollHeight; };
+    const followLatest = () => {
+        if (atBottom) scrollToBottom();
+        rememberChatLayout();
+    };
+    const chatResize = new ResizeObserver(followLatest);
+    chatResize.observe(log);
+    const chatRows = new MutationObserver(records => {
+        for (const record of records) {
+            for (const node of record.removedNodes) if (node.nodeType === 1) chatResize.unobserve(node);
+            for (const node of record.addedNodes) if (node.nodeType === 1) chatResize.observe(node);
+        }
+    });
+    chatRows.observe(log, { childList: true });
+    log.addEventListener("load", followLatest, true);
+    log.addEventListener("loadedmetadata", followLatest, true);
+    window.addEventListener("pagehide", () => { chatResize.disconnect(); chatRows.disconnect(); stopGIFPlayback(); chatTabs?.dispose(); unreadEffects?.dispose(); }, { once: true });
 
     // Scope selector drives the active view (channel/global/direct).
     $("chat-scope").addEventListener("change", () => {
@@ -3934,20 +4153,29 @@ export function initChat() {
         if (scope === "global") setView({ kind: "global" });
         else if (scope === "channel") setView({ kind: "channel" });
         else {
-            const uid = $("chat-target").value.trim();
-            if (uid) openPM(uid);
-            else invalidateChatViewWork();
+            // Entering direct mode from a channel starts a new selection.
+            // An already-open private chat keeps its own recipient.
+            selectDirectRecipient(view.kind === "dm" ? view.uid : "");
+            invalidateChatViewWork();
         }
     });
+    $("chat-target").addEventListener("input", () => {
+        selectedDirectRecipient = null;
+        invalidateChatViewWork();
+    });
     $("chat-target").addEventListener("change", () => {
-        const uid = $("chat-target").value.trim();
+        const uid = directRecipientID();
         if ($("chat-scope").value === "direct" && uid) openPM(uid);
-        else invalidateChatViewWork();
+        else { selectedDirectRecipient = null; invalidateChatViewWork(); }
     });
 
     // (134) scroll lock + (103) scroll-up history paging.
     log.addEventListener("scroll", () => {
+        // Layout can dispatch scroll before ResizeObserver. That does not mean
+        // the user chose to leave the bottom of the conversation.
+        if (atBottom && (log.clientHeight !== lastViewportHeight || log.scrollHeight !== lastContentHeight)) scrollToBottom();
         atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 30;
+        rememberChatLayout();
         if (atBottom) {
             resetNewCount();
             markRead(activeKey());
@@ -4151,34 +4379,38 @@ export function unreadMessageReferences() {
 
 // Historical jumps open an authenticated context window without splicing a
 // disconnected old page into the live store (which would create paging gaps).
-export async function jumpMessageReference(reference) {
+export async function jumpMessageReference(reference, options = {}) {
+    const destinationCurrent = () => !options.isCurrent || options.isCurrent();
+    if (!destinationCurrent()) return;
     if (reference.kind === "dm") {
         if (!reference.client_message_id && !reference.local_seq) { openPM(reference.peer_id, reference.name); return; }
         const owner = getDMOwner();
         const rows = await callDMHistory(owner, "DMHistoryLoadForContext", reference.peer_id);
-        if (!dmOwnerIsCurrent(owner)) return;
+        if (!dmOwnerIsCurrent(owner) || !destinationCurrent()) return;
         const entry = rows.find(row => reference.client_message_id ? row.client_msg_id === reference.client_message_id : Number(row.seq) === Number(reference.local_seq));
-        if (!entry) { V().toast(t("messages.notFound"), "warn"); return; }
+        if (!entry) { V().toast(t("messages.notFound"), "warn", "alert", { bypassDND: !!options.continueConversation }); return; }
         const index = rows.indexOf(entry), name = pmTabs.get(reference.peer_id)?.nick || reference.peer_id;
         const context = rows.slice(Math.max(0, index - 19), index + 1).map(row => dmMsg(row, name));
-        showMessageReferenceContext(`DM · ${name}`, context, context.at(-1));
+        showMessageReferenceContext(`DM · ${name}`, context, context.at(-1), options.continueConversation
+            ? () => { if (dmOwnerIsCurrent(owner)) openPM(reference.peer_id, name); } : null);
         return;
     }
     const scope = captureScope(readChatServerScope);
     const channelID = Number(reference.channel_id), targetID = Number(reference.message_id);
     if (!targetID) { if (channelID) await openChannelTab(channelID); else setView({ kind: "global" }); return; }
     const page = await app().ChatHistoryForTab(scope.tabID, channelID, targetID + 1, 20);
-    if (!chatServerIsCurrent(scope)) return;
+    if (!chatServerIsCurrent(scope) || !destinationCurrent()) return;
     if (!(page.messages || []).some(message => message.id === targetID && !message.deleted && message.enc_verified)) {
-        V().toast(t("messages.notFound"), "warn"); return;
+        V().toast(t("messages.notFound"), "warn", "alert", { bypassDND: !!options.continueConversation }); return;
     }
-    if (channelID === (activeChannelID() || 0) && flashMsg(targetID)) return;
+    if (!isPrivateGroupActive() && $("chat-log").getClientRects().length && channelID === (activeChannelID() || 0) && flashMsg(targetID)) return;
     const messages = [...page.messages].reverse().map(message => attribute(normalize(message, channelID)));
     const name = V().state.channels.find(channel => Number(channel.ChannelID) === channelID)?.Name || (channelID ? `#${channelID}` : "Global");
-    showMessageReferenceContext(name, messages, messages.find(message => message.id === targetID));
+    showMessageReferenceContext(name, messages, messages.find(message => message.id === targetID), options.continueConversation
+        ? () => { if (chatServerIsCurrent(scope)) { if (channelID) void openChannelTab(channelID); else setView({ kind: "global" }); } } : null);
 }
 
-function showMessageReferenceContext(name, messages, target) {
+function showMessageReferenceContext(name, messages, target, continueConversation = null) {
     const overlay = document.createElement("div"); overlay.className = "dlg-overlay";
     const box = document.createElement("section"); box.className = "dlg message-tools-dialog";
     const heading = document.createElement("h2"); heading.textContent = name;
@@ -4193,6 +4425,12 @@ function showMessageReferenceContext(name, messages, target) {
         if (message === target) row.classList.add("message-reference-flash");
     }
     const close = document.createElement("button"); close.textContent = t("messages.close"); close.onclick = () => closeDialog(overlay);
-    box.append(heading, list, close); overlay.append(box); mountServerDialog(overlay);
+    box.append(heading, list);
+    if (continueConversation) {
+        const open = document.createElement("button"); open.textContent = t("messages.openConversation");
+        open.onclick = () => { if (!isCurrentServerDialog(overlay)) return; closeDialog(overlay); continueConversation(); };
+        box.append(open);
+    }
+    box.append(close); overlay.append(box); mountServerDialog(overlay);
     list.querySelector(".message-reference-flash")?.scrollIntoView({ block: "center" });
 }

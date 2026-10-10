@@ -148,3 +148,21 @@ func TestMediaTicketsAreBoundedPerStream(t *testing.T) {
 		t.Fatalf("other streams evicted this stream's ticket: %v", err)
 	}
 }
+
+func TestMediaTicketsRetainAnEntireAdmittedPacingQueue(t *testing.T) {
+	registry := &mediaEgressRegistry{}
+	stream := &mediaEgressStream{active: true, registry: registry}
+	source := &rtp.Packet{Header: rtp.Header{Version: 2}, Payload: []byte{1}}
+	packet, _ := stream.prepare(source, mediaTicket{})
+	for range mediaPacerPackets - 1 {
+		stream.prepare(source, mediaTicket{})
+	}
+	written := false
+	_, err := stream.write(&packet.Header, packet.Payload, nil, interceptor.RTPWriterFunc(func(*rtp.Header, []byte, interceptor.Attributes) (int, error) {
+		written = true
+		return 1, nil
+	}))
+	if err != nil || !written {
+		t.Fatalf("a valid queued keyframe lost its first packet before pacing: %v", err)
+	}
+}

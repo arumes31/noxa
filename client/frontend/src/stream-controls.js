@@ -1,5 +1,5 @@
 import { captureMediaScope, mediaScopeIsCurrent } from "./media-controls.js";
-import { streamRequest, stopPublications, publicationSnapshot, reconcilePublications } from "./stream-publication.js";
+import { streamRequest, stopPublications, publicationSnapshot, reconcilePublications, reconcilePublicationUploads, isCurrentPublication } from "./stream-publication.js";
 import { t } from "./i18n.js";
 import { updateShareViewers } from "./share-status.js";
 import { streamRecovery } from "./stream-recovery.js";
@@ -10,6 +10,32 @@ const key = stream => `${stream.publisher_id}|${stream.slot}`;
 const current = s => session === s && V().state.pc === s.pc && mediaScopeIsCurrent(s.scope);
 
 export function streamSessionIsCurrent(pc) { return !!session && session.pc === pc && current(session); }
+
+export function streamQualityTarget(publisherID, slot) {
+    const s = session;
+    if (!s || !current(s) || !s.watchSession) return null;
+    const entry = s.streams.get(`${publisherID}|${slot}`);
+    return entry?.watching && entry.available !== false ? {
+        publisherID: entry.publisher_id, slot: entry.slot, generation: entry.generation, session: s.watchSession,
+    } : null;
+}
+
+export function memberScreenStream(clientID) {
+    const s = session;
+    if (!s || !current(s)) return null;
+    const entry = s.streams.get(`${clientID}|screen`);
+    if (entry) return { active: entry.available !== false, watching: entry.available !== false && entry.watching };
+    const member = V().state.clients.find(client => String(client.client_id) === String(clientID));
+    return s.catalogLoaded && member?.channel_id === s.scope.channelID ? { active: false, watching: false } : null;
+}
+
+function refreshMemberStreams(s) {
+    const signature = JSON.stringify([...s.streams.values()].filter(entry => entry.slot === "screen")
+        .map(entry => [entry.publisher_id, entry.available !== false, entry.watching]).sort((a, b) => a[0].localeCompare(b[0])));
+    if (signature === s.memberSignature) return;
+    s.memberSignature = signature;
+    V().renderTree?.();
+}
 
 // Receiver bindings stay negotiated while unwatched. Playback follows only
 // acknowledged intent; the router separately enforces packet delivery.
@@ -95,6 +121,7 @@ async function toggleWatch(s, entry, retry = false) {
         entry.pending = false;
         if (current(s) && s.streams.get(key(entry)) === entry) {
             renderEntry(s, entry);
+            refreshMemberStreams(s);
             if (restoreFocus && (document.activeElement === document.body || document.activeElement === focusButton)) {
                 entry.watchButton.focus({ preventScroll: true });
             }
@@ -196,11 +223,16 @@ function createEntry(s, stream) {
 
 async function poll(s) {
     if (!current(s)) return;
+    if (s.polling) { s.pollAgain = true; return; }
+    clearTimeout(s.timer);
+    s.polling = true;
     try {
         const publications = publicationSnapshot();
         const result = await streamRequest(s.scope, { action: "list" });
         if (!current(s)) return;
+        s.catalogLoaded = true;
         reconcilePublications(publications, result.streams);
+        if (!s.pollAgain) reconcilePublicationUploads(publications, result.streams);
         updateShareViewers(result.streams);
         if (s.watchSession && s.watchSession !== result.session) {
             for (const entry of s.streams.values()) { entry.watching = false; applyWatch(s, entry); entry.card.remove(); }
@@ -225,6 +257,7 @@ async function poll(s) {
             let entry = s.streams.get(id);
             if (!entry) { entry = createEntry(s, stream); s.streams.set(id, entry); }
             entry.available = true;
+            entry.quality_mode = stream.quality_mode;
             const revision = BigInt(stream.watch_revision);
             if (revision > entry.revision) entry.revision = revision;
             entry.pollError = "";
@@ -248,8 +281,22 @@ async function poll(s) {
             renderEntry(s, entry);
         }
     } finally {
-        if (current(s)) s.timer = setTimeout(() => { void poll(s); }, 3000);
+        s.polling = false;
+        if (current(s)) {
+            refreshMemberStreams(s);
+            s.timer = setTimeout(() => { void poll(s); }, s.pollAgain ? 0 : 3000);
+            s.pollAgain = false;
+        }
     }
+}
+
+export function refreshStreamUploads(data) {
+    if (session && current(session) && isCurrentPublication(data)) void poll(session);
+}
+
+export function streamUsesSourceQuality(publisherID, slot) {
+    const s = session;
+    return !!s && current(s) && s.streams.get(`${publisherID}|${slot}`)?.quality_mode === "source";
 }
 
 export function startStreamSession(pc, addVideo, removeVideo) {
@@ -276,6 +323,7 @@ export function stopStreamSession() {
         for (const entry of s.streams.values()) { entry.watching = false; applyWatch(s, entry); }
         s.media.before(s.grid);
         s.media.remove();
+        V().renderTree?.();
     }
     stopPublications();
 }

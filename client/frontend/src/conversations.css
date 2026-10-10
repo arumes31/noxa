@@ -34,7 +34,7 @@
 .group-summary > [hidden], .group-list-item[hidden], .group-search-empty[hidden] { display: none; }
 .group-call-status { flex: none; margin-left: auto; font-size: 11px; color: var(--accent); }
 .group-sidebar-status, .group-search-empty { color: var(--muted); font-size: 12px; padding: 0 6px; overflow-wrap: anywhere; }
-#center.private-group-active > :is(#chat-head, #center-tabs, #voice-participants, #chat-pane, #files-pane) { display: none !important; }
+#center.private-group-active > :is(#chat-head, #center-tabs, #chat-pane, #files-pane) { display: none !important; }
 .group-workspace { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 12px; padding: 16px; }
 .group-navigation { display: flex; align-items: center; gap: 8px; }
 .group-navigation > :last-child { margin-left: auto; }

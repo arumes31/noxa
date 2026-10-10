@@ -1,24 +1,21 @@
-// A connection notice has a fixed lifetime; live participant updates do not
-// extend it. A server/session or channel change starts a new notice.
-export function createOverlayVisibility() {
-    let connection = '', until = 0;
-    return (state, snapshot, now = Date.now()) => {
-        if (!snapshot.active) { connection = ''; until = 0; return snapshot; }
-        const next = JSON.stringify([state.activeTabID, state.serverGeneration, state.sessionGeneration,
-            snapshot.label ? 'private-call' : state.myChannelID]);
-        if (next !== connection) { connection = next; until = now + 5000; }
-        return now < until ? snapshot : { active: false };
-    };
-}
-
+// Publish only actual talkers while local audio controls allow the overlay.
+// Private calls take precedence over channel membership.
 export function overlayVoiceState(state, privateCall = null) {
-    if (state.settings?.gaming_overlay === false) return { active: false };
-    const visibleSpeakers = speakers => speakers.filter(speaker => !state.settings?.gaming_overlay_speakers_only || speaker.speaking)
-        .sort((a, b) => Number(!!b.speaking) - Number(!!a.speaking)).slice(0, 8);
-    if (privateCall?.active) return { ...privateCall, title: privateCall.label, speakers: visibleSpeakers(privateCall.speakers) };
+    if (state.settings?.gaming_overlay === false || state.muted || state.deafened) return { active: false };
+    const visible = speakers => speakers.filter(speaker => speaker.speaking && !speaker.muted).slice(0, 8);
+    if (privateCall?.active) {
+        if (privateCall.muted || privateCall.deafened) return { active: false };
+        const speakers = visible(privateCall.speakers || []);
+        return speakers.length ? { ...privateCall, title: privateCall.label, speakers } : { active: false };
+    }
     if (!state.myChannelID || !state.pc) return { active: false };
+    const speakers = visible(state.clients.filter(client => client.channel_id === state.myChannelID).map(client => {
+        const muted = !!(client.input_muted || client.self_muted || client.self_deafened || client.server_muted)
+            || (state.settings?.muted_users || []).includes(client.unique_id);
+        return { id: client.unique_id || String(client.client_id || ''), name: client.nickname || client.unique_id,
+            speaking: !!client.is_speaking && !muted, muted };
+    }));
+    if (!speakers.length) return { active: false };
     const channel = state.channels.find(channel => channel.ChannelID === state.myChannelID);
-    const speakers = state.clients.filter(client => client.channel_id === state.myChannelID)
-        .map(client => ({ name: client.nickname || client.unique_id, speaking: !!client.is_speaking, muted: !!client.input_muted || (state.settings?.muted_users || []).includes(client.unique_id) }));
-    return { active: true, title: channel?.Name || 'noXa', muted: state.muted, deafened: state.deafened, speakers: visibleSpeakers(speakers) };
+    return { active: true, title: channel?.Name || 'noXa', speakers };
 }

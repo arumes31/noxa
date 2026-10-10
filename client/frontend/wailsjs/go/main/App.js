@@ -42,6 +42,10 @@ export function BanListForTab(arg1) {
   return window['go']['main']['App']['BanListForTab'](arg1);
 }
 
+export function CancelConnectionBenchmark(arg1, arg2) {
+  return window['go']['main']['App']['CancelConnectionBenchmark'](arg1, arg2);
+}
+
 export function CancelIdentityLevel(arg1) {
   return window['go']['main']['App']['CancelIdentityLevel'](arg1);
 }
@@ -166,6 +170,10 @@ export function ChatSearchForTab(arg1, arg2, arg3, arg4, arg5) {
   return window['go']['main']['App']['ChatSearchForTab'](arg1, arg2, arg3, arg4, arg5);
 }
 
+export function ChatTabLayoutForContext(arg1) {
+  return window['go']['main']['App']['ChatTabLayoutForContext'](arg1);
+}
+
 export function CheckAccess(arg1) {
   return window['go']['main']['App']['CheckAccess'](arg1);
 }
@@ -246,6 +254,10 @@ export function ConnectGuestTab(arg1, arg2) {
   return window['go']['main']['App']['ConnectGuestTab'](arg1, arg2);
 }
 
+export function ConnectLogin(arg1) {
+  return window['go']['main']['App']['ConnectLogin'](arg1);
+}
+
 export function ConnectNamedBookmarkTabWithID(arg1, arg2, arg3, arg4, arg5, arg6) {
   return window['go']['main']['App']['ConnectNamedBookmarkTabWithID'](arg1, arg2, arg3, arg4, arg5, arg6);
 }
@@ -256,6 +268,10 @@ export function ConnectTab(arg1, arg2, arg3, arg4) {
 
 export function Connected() {
   return window['go']['main']['App']['Connected']();
+}
+
+export function ConnectionBenchmarkStatusForTab(arg1, arg2) {
+  return window['go']['main']['App']['ConnectionBenchmarkStatusForTab'](arg1, arg2);
 }
 
 export function ConnectionSecurity() {
@@ -478,6 +494,10 @@ export function FlashWindow() {
   return window['go']['main']['App']['FlashWindow']();
 }
 
+export function ForgetLoginPasswords(arg1, arg2) {
+  return window['go']['main']['App']['ForgetLoginPasswords'](arg1, arg2);
+}
+
 export function GamingOverlayAvailable() {
   return window['go']['main']['App']['GamingOverlayAvailable']();
 }
@@ -508,6 +528,10 @@ export function GetICEServers() {
 
 export function GetICEServersForTab(arg1) {
   return window['go']['main']['App']['GetICEServersForTab'](arg1);
+}
+
+export function GetLoginPasswordStatus(arg1, arg2) {
+  return window['go']['main']['App']['GetLoginPasswordStatus'](arg1, arg2);
 }
 
 export function GetMediaLimits() {
@@ -706,6 +730,10 @@ export function RenameIdentity(arg1, arg2) {
   return window['go']['main']['App']['RenameIdentity'](arg1, arg2);
 }
 
+export function ReportVoiceDiagnosticsForTab(arg1, arg2) {
+  return window['go']['main']['App']['ReportVoiceDiagnosticsForTab'](arg1, arg2);
+}
+
 export function ResetIdentity(arg1, arg2) {
   return window['go']['main']['App']['ResetIdentity'](arg1, arg2);
 }
@@ -752,6 +780,10 @@ export function SaveChatAttachment(arg1, arg2, arg3, arg4) {
 
 export function SaveChatAttachmentForTab(arg1, arg2, arg3, arg4, arg5) {
   return window['go']['main']['App']['SaveChatAttachmentForTab'](arg1, arg2, arg3, arg4, arg5);
+}
+
+export function SaveChatTabLayoutForContext(arg1, arg2) {
+  return window['go']['main']['App']['SaveChatTabLayoutForContext'](arg1, arg2);
 }
 
 export function SaveSettings(arg1) {
@@ -970,6 +1002,10 @@ export function SetStatusForTab(arg1, arg2, arg3) {
   return window['go']['main']['App']['SetStatusForTab'](arg1, arg2, arg3);
 }
 
+export function SetStreamVideoQualityForTab(arg1, arg2, arg3, arg4, arg5, arg6) {
+  return window['go']['main']['App']['SetStreamVideoQualityForTab'](arg1, arg2, arg3, arg4, arg5, arg6);
+}
+
 export function SetTrayVoiceState(arg1, arg2, arg3) {
   return window['go']['main']['App']['SetTrayVoiceState'](arg1, arg2, arg3);
 }
@@ -986,8 +1022,16 @@ export function SetWindowOpacity(arg1) {
   return window['go']['main']['App']['SetWindowOpacity'](arg1);
 }
 
+export function StartConnectionBenchmark(arg1) {
+  return window['go']['main']['App']['StartConnectionBenchmark'](arg1);
+}
+
 export function StopPrivateCallForTab(arg1, arg2) {
   return window['go']['main']['App']['StopPrivateCallForTab'](arg1, arg2);
+}
+
+export function StreamDiagnosticsForTab(arg1, arg2, arg3, arg4, arg5) {
+  return window['go']['main']['App']['StreamDiagnosticsForTab'](arg1, arg2, arg3, arg4, arg5);
 }
 
 export function SubscribeChannels(arg1, arg2) {
@@ -1004,6 +1048,18 @@ export function Subscriptions() {
 
 export function SubscriptionsForTab(arg1) {
   return window['go']['main']['App']['SubscriptionsForTab'](arg1);
+}
+
+export function SupportsStreamDiagnosticsForTab(arg1) {
+  return window['go']['main']['App']['SupportsStreamDiagnosticsForTab'](arg1);
+}
+
+export function SupportsStreamSourceQualityForTab(arg1) {
+  return window['go']['main']['App']['SupportsStreamSourceQualityForTab'](arg1);
+}
+
+export function SupportsStreamVideoQualityForTab(arg1) {
+  return window['go']['main']['App']['SupportsStreamVideoQualityForTab'](arg1);
 }
 
 export function SwitchIdentity(arg1) {

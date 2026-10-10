@@ -103,6 +103,9 @@ func (s *TCPServer) handleDiscussion(ctx context.Context, client *Client, frame 
 			result.CanModerate = s.roleAllowed(ctx, client, r.ChannelID, authorization.ManageMessages)
 			if mutation && r.Action != "subscribe" && r.Action != "join" && r.Action != "leave" {
 				event := map[string]any{"channel_id": r.ChannelID, "thread_id": result.ThreadID, "new_message": r.Action == "send" || r.Action == "create", "author": client.UniqueID}
+				if (r.Action == "send" || r.Action == "create") && result.MessageID > 0 {
+					event["message_id"] = result.MessageID
+				}
 				if r.Action == "delete" {
 					event["deleted"] = true
 				}
