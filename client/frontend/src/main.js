@@ -33,7 +33,7 @@ import { initChannelUndocking } from "./call-undocking.js";
 import { refreshVoicePlayback } from "./voice-messages.js";
 import { discussionChanged } from "./discussions.js";
 import { initClientInfo } from "./clientinfo.js";
-import { initUpdater, startupAutoCheck } from "./updater.js";
+import { initUpdater, startupAutoCheck, reconnectAutoCheck } from "./updater.js";
 import { playEvent, playAlert, clearSpeech, initSounds, updateSoundOutput, updateConversationDucking, soundEngine, speechQueue } from "./sounds.js";
 import { initClosingAudio } from "./closing-audio.js";
 import { startMicMeter, stopMicMeter, pttRelease, refreshUserAudio, setUserShareVolume, setUserShareMuted, captureConstraints, markCaptureProfile, applyCaptureProfile, syncMuteButton, renderMicStatus } from "./audio.js";
@@ -615,6 +615,7 @@ async function completeReconnect(c, generation, tabID, current = () => true) {
     const clockWarning = tabID ? "" : await certificateClockWarning(c.addr);
     const ownsActiveTab = await rememberTabConnect(c, generation, tabID, alive);
     if (!alive()) return false;
+    void reconnectAutoCheck(tabID);
     const finalizationGeneration = state.serverGeneration;
     const sessionGeneration = state.sessionGeneration;
     // A user-selected tab now owns the global UI. The reconnect still
@@ -807,7 +808,10 @@ const tabReconnects = createTabReconnects({
         if (!current()) return false;
         if (!tab?.connected) return false;
         state.tabConnects.set(tabID, { ...target });
-        if (state.activeTabID !== tabID) return true;
+        if (state.activeTabID !== tabID) {
+            void reconnectAutoCheck(tabID);
+            return true;
+        }
         return completeReconnect(target, null, tabID, current);
     },
     changed(tabID, entry) {

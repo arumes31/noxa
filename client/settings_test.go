@@ -59,6 +59,24 @@ func TestSettingsRoundTrip(t *testing.T) {
 	}
 }
 
+func TestReconnectUpdateCheckDefaultAndOptOut(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	if err := os.WriteFile(path, []byte(`{"settings_version":12,"updates_auto_check":false}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	settings := loadSettingsAt(path)
+	if !settings.UpdatesCheckOnReconnect || settings.UpdatesAutoCheck {
+		t.Fatal("missing reconnect update setting must default on independently of startup")
+	}
+	settings.UpdatesCheckOnReconnect = false
+	if err := saveSettingsAt(path, settings); err != nil {
+		t.Fatal(err)
+	}
+	if loadSettingsAt(path).UpdatesCheckOnReconnect {
+		t.Fatal("reconnect update opt-out was not preserved")
+	}
+}
+
 func TestVADThresholdPreservesFineAndLegacyValues(t *testing.T) {
 	for _, value := range []string{"1.2", "1.5", "1.8", "3", "50"} {
 		t.Run(value, func(t *testing.T) {

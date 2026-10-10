@@ -289,6 +289,7 @@ function pageApplication() {
     el.appendChild(row(t("settings.toasts.for.connection.events"), checkbox(s.notify_connection, (v) => { s.notify_connection = v; })));
     el.appendChild(row(t("settings.reconnect.on.connection.loss.5.tries"), checkbox(s.reconnect_on_loss, (v) => { s.reconnect_on_loss = v; })));
     el.appendChild(row(t("settings.check.for.updates.at.startup"), checkbox(s.updates_auto_check !== false, (v) => { s.updates_auto_check = v; }), "startup"));
+    el.appendChild(row(t("settings.check.for.updates.on.reconnect"), checkbox(s.updates_check_on_reconnect !== false, (v) => { s.updates_check_on_reconnect = v; })));
 
     // Presence (308/390): the idle timer and the status line it publishes.
     const psep = document.createElement("div");

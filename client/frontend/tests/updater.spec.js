@@ -18,8 +18,9 @@ async function boot(page, scenario = {}) {
             if (method === "GetSettings") {
                 if (s.settingsThrows) throw new Error("settings bridge unavailable");
                 if (s.settingsPending) await new Promise(resolve => { window.__finishSettings = resolve; });
-                return { onboarding_done: true, alpha_dismissed: "0.4.0", updates_auto_check: s.enabled !== false, notification_matrix: {} };
+                return { onboarding_done: true, alpha_dismissed: "0.4.0", updates_auto_check: s.enabled !== false, updates_check_on_reconnect: s.reconnectEnabled !== false, notification_matrix: {} };
             }
+            if (method === "SessionInfoForTab") return { connected: !s.disconnected, client_id: s.clientID || "alice" };
             if (method === "ClientVersionShort") return "0.4.0";
             if (method === "CheckForUpdate") {
                 if (s.checkPending) await new Promise((resolve) => { window.__finishCheck = resolve; });
@@ -59,6 +60,55 @@ test("replacement readiness waits for native startup and rendered login", async 
     await page.evaluate(() => window.__finishSettings());
     await expect(page.locator(".login-card")).toHaveClass(/(?:^|\s)in(?:\s|$)/);
     await expect.poll(() => page.evaluate(() => window.__calls.ConfirmUpdateStartup)).toBe(1);
+});
+
+test("reconnect offers an update by default independently of startup checking", async ({ page }) => {
+    await boot(page, { enabled: false });
+    await page.evaluate(() => window.__noxa.reconnectAutoCheck("server-a"));
+    const dialog = page.getByRole("dialog", { name: "Check for updates", exact: true });
+    await expect(dialog).toBeVisible();
+    await expect(dialog).toContainText("v0.4.1");
+    expect(await page.evaluate(() => window.__calls.CheckForUpdate)).toBe(1);
+});
+
+for (const scenario of [{ reconnectEnabled: false }, { available: false }, { offline: true }, { disconnected: true }]) {
+    test(`reconnect stays quiet ${JSON.stringify(scenario)}`, async ({ page }) => {
+        await boot(page, { enabled: false, ...scenario });
+        await page.evaluate(() => window.__noxa.reconnectAutoCheck("server-a"));
+        await expect(page.locator(".update-dlg")).toHaveCount(0);
+        expect(await page.evaluate(() => window.__calls.CheckForUpdate || 0)).toBe(scenario.reconnectEnabled === false || scenario.disconnected ? 0 : 1);
+    });
+}
+
+for (const change of ["disconnect", "new-session", "disable"]) {
+    test(`reconnect discards an available update after ${change}`, async ({ page }) => {
+        await boot(page, { enabled: false, checkPending: true });
+        await page.evaluate(() => { void window.__noxa.reconnectAutoCheck("server-a"); });
+        await page.waitForFunction(() => typeof window.__finishCheck === "function");
+        await page.evaluate(async change => {
+            if (change === "disconnect") window.__scenario.disconnected = true;
+            if (change === "new-session") window.__scenario.clientID = "replacement";
+            if (change === "disable") window.__noxa.state.settings.updates_check_on_reconnect = false;
+            window.__finishCheck();
+            // Allow the asynchronous native session validation to settle.
+            await new Promise(resolve => setTimeout(resolve, 50));
+        }, change);
+        await expect(page.locator(".update-dlg")).toHaveCount(0);
+    });
+}
+
+test("simultaneous reconnects share one check and only one dialog", async ({ page }) => {
+    await boot(page, { enabled: false, checkPending: true });
+    await page.evaluate(() => {
+        window.__checksFinished = Promise.all([
+            window.__noxa.reconnectAutoCheck("server-a"),
+            window.__noxa.reconnectAutoCheck("server-b"),
+        ]);
+    });
+    await page.waitForFunction(() => typeof window.__finishCheck === "function");
+    expect(await page.evaluate(() => window.__calls.CheckForUpdate)).toBe(1);
+    await page.evaluate(async () => { window.__finishCheck(); await window.__checksFinished; });
+    await expect(page.locator(".update-dlg")).toHaveCount(1);
 });
 
 test("broken native settings startup cannot confirm a healthy replacement", async ({ page }) => {

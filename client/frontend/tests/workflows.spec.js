@@ -8120,6 +8120,76 @@ test.describe("per-tab automatic reconnect", () => {
         await expect.poll(() => page.evaluate(() => window.__recoverySpeech)).toEqual([`speech_${language}_connection_reconnected`]);
     });
 
+    for (const tabID of ["tab-a", "tab-b"]) test(`offers available updates after successful ${tabID} recovery`, async ({ page }) => {
+        const before = await page.evaluate(() => window.__calls.CheckForUpdate || 0);
+        await page.evaluate(tabID => {
+            window.__updateInfo = { available: true, version: "v9.9.9", size: 1048576 };
+            window.__loseTab(tabID);
+        }, tabID);
+        await page.clock.runFor(5000);
+        const dialog = page.getByRole("dialog", { name: "Check for updates", exact: true });
+        await expect(dialog).toBeVisible();
+        await expect(dialog).toContainText("v9.9.9");
+        expect(await page.evaluate(() => window.__calls.CheckForUpdate)).toBe(before + 1);
+        expect(await page.evaluate(() => window.__noxa.state.activeTabID)).toBe("tab-a");
+    });
+
+    test("reconnect setting saves an opt-out and preserves it during recovery", async ({ page }) => {
+        await page.evaluate(() => {
+            const app = window.go.main.App;
+            window.go.main.App = new Proxy(app, { get(target, key) {
+                if (key === "GetSettings") return async () => structuredClone(window.__savedSettings || window.__noxa.state.settings);
+                return target[key];
+            } });
+            window.__noxa.openSettings("application");
+        });
+        const toggle = page.getByLabel("Check for updates after reconnecting to a server", { exact: true });
+        await expect(toggle).toBeChecked();
+        await toggle.uncheck();
+        await page.getByRole("button", { name: "Cancel", exact: true }).click();
+        expect(await page.evaluate(() => window.__noxa.state.settings.updates_check_on_reconnect)).not.toBe(false);
+        await page.evaluate(() => window.__noxa.openSettings("application"));
+        await toggle.uncheck();
+        await page.getByRole("button", { name: "Apply", exact: true }).click();
+        expect(await page.evaluate(() => window.__savedSettings.updates_check_on_reconnect)).toBe(false);
+        expect(await page.evaluate(() => window.__noxa.state.settings.updates_check_on_reconnect)).toBe(false);
+        await page.keyboard.press("Escape");
+        const before = await page.evaluate(() => window.__calls.CheckForUpdate || 0);
+        await page.evaluate(() => {
+            window.__updateInfo = { available: true, version: "v9.9.9", size: 1048576 };
+            window.__loseTab("tab-a");
+        });
+        await page.clock.runFor(5000);
+        await expect(page.locator("#conn-pill")).toHaveClass(/up/);
+        await expect(page.locator(".update-dlg")).toHaveCount(0);
+        expect(await page.evaluate(() => window.__calls.CheckForUpdate || 0)).toBe(before);
+    });
+
+    test("checks updates when tab selection changes during reconnect finalization", async ({ page }) => {
+        await page.evaluate(() => {
+            const app = window.go.main.App;
+            let reads = 0;
+            const gate = new Promise(resolve => { window.__finishRecoveredTab = resolve; });
+            window.go.main.App = new Proxy(app, { get(target, key) {
+                if (key === "ListTabs") return async () => {
+                    if (++reads === 2) { window.__finalizationHeld = true; await gate; }
+                    return target.ListTabs();
+                };
+                return target[key];
+            } });
+            window.__updateInfo = { available: true, version: "v9.9.9", size: 1048576 };
+            window.__loseTab("tab-a");
+        });
+        await page.clock.runFor(5000);
+        await page.waitForFunction(() => window.__finalizationHeld);
+        await page.evaluate(async () => {
+            await window.go.main.App.SetActiveTab("tab-b");
+            window.__finishRecoveredTab();
+        });
+        await expect(page.getByRole("dialog", { name: "Check for updates", exact: true })).toContainText("v9.9.9");
+        expect(await page.evaluate(() => window.__noxa.state.activeTabID)).toBe("tab-b");
+    });
+
     test("recovers an inactive tab without changing selection, focus or credentials", async ({ page }) => {
         await page.locator("#chat-text").focus();
         await expect(page.locator("#chat-text")).toBeFocused();

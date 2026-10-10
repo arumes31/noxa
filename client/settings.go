@@ -185,6 +185,8 @@ type Settings struct {
 	ReconnectOnLoss  bool   `json:"reconnect_on_loss"`
 	UpdatesAutoCheck bool   `json:"updates_auto_check"`
 
+	UpdatesCheckOnReconnect bool `json:"updates_check_on_reconnect"`
+
 	// Voice UX (wave 1).
 	UserVolumes              map[string]int  `json:"user_volumes"` // uniqueID -> volume 0..200
 	UserShareVolumes         map[string]int  `json:"user_share_volumes"`
@@ -298,6 +300,8 @@ func DefaultSettings() Settings {
 		ChatNotificationLevel: "all",
 		ReconnectOnLoss:       true,
 		UpdatesAutoCheck:      true,
+
+		UpdatesCheckOnReconnect: true,
 
 		PTTReleaseDelayMs: 0,
 		WarnMutedTalking:  true,

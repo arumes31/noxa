@@ -1,4 +1,4 @@
-// updater.js — Check for updates modal + startup auto-check.
+// updater.js — Interactive and silent automatic update checks.
 import { closeDialog, mountDialog } from "./modal.js";
 import { t } from "./i18n.js";
 import { formatBytes } from "./connection-stats.js";
@@ -10,6 +10,7 @@ let startupChecked = false;
 let downloading = false;
 let restarting = false;
 let applied = false;
+let automaticCheck = null;
 const progressCleanup = new WeakMap();
 const checking = new WeakSet();
 
@@ -253,21 +254,40 @@ async function checkForUpdatesInteractive() {
     await runCheck(m);
 }
 
-// startupAutoCheck runs once when the login screen is ready (Application setting:
-// updates.auto_check, default on).
+async function quietUpdateCheck(enabled, current = async () => true) {
+    if (!enabled() || modal || downloading || restarting || applied) return;
+    try {
+        // Startup and simultaneous server recoveries share one metadata request.
+        automaticCheck ||= Promise.resolve().then(() => window.go.main.App.CheckForUpdate())
+            .finally(() => { automaticCheck = null; });
+        const info = await automaticCheck;
+        if (!info?.available || !enabled() || modal || applied || !await current()) return;
+        if (enabled() && !modal && !applied) await runCheck(showUpdateModal(), info);
+    } catch { /* Offline or no update source: stay quiet. */ }
+}
+
+// Automatic checks only offer an available update; they never install it.
 export function startupAutoCheck() {
     if (startupChecked) return;
     startupChecked = true;
-    const s = V().state.settings;
-    if (s && s.updates_auto_check === false) return;
-    window.go.main.App.CheckForUpdate().then((info) => {
-        if (info.available && !modal) {
-            return runCheck(showUpdateModal(), info);
-        }
-    }).catch(() => { /* offline or no update source: stay quiet */ });
+    void quietUpdateCheck(() => V().state.settings?.updates_auto_check !== false);
+}
+
+export async function reconnectAutoCheck(tabID) {
+    const enabled = () => V().state.settings?.updates_check_on_reconnect !== false;
+    if (!tabID || !enabled() || modal || downloading || restarting || applied) return;
+    try {
+        const session = await window.go.main.App.SessionInfoForTab(tabID);
+        if (!session?.connected || !session.client_id) return;
+        await quietUpdateCheck(enabled, async () => {
+            const latest = await window.go.main.App.SessionInfoForTab(tabID);
+            return latest?.connected && latest.client_id === session.client_id;
+        });
+    } catch { /* A closing or disconnected tab cannot offer an update. */ }
 }
 
 export function initUpdater() {
     window.__noxa.checkForUpdatesInteractive = checkForUpdatesInteractive;
     window.__noxa.startupAutoCheck = startupAutoCheck;
+    window.__noxa.reconnectAutoCheck = reconnectAutoCheck;
 }
