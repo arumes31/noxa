@@ -11,6 +11,7 @@ import (
 type overlayMistRow struct {
 	width, center, phase float64
 	text                 image.Rectangle
+	tint                 color.NRGBA
 }
 
 type overlayMist struct {
@@ -30,7 +31,7 @@ func overlayInkWidth(mask *image.Alpha) int {
 	return max(1, width)
 }
 
-func newMistOverlayRenderer(s GamingOverlaySnapshot, width, height int, label overlayLabel) (*overlayRenderer, error) {
+func newOverlayRenderer(s GamingOverlaySnapshot, width, height int, label overlayLabel) (*overlayRenderer, error) {
 	scale := float64(s.Scale) / 100
 	longest := 1.0
 	for _, person := range s.Speakers {
@@ -41,11 +42,12 @@ func newMistOverlayRenderer(s GamingOverlaySnapshot, width, height int, label ov
 		longest = math.Max(longest, float64(overlayInkWidth(mask))/scale)
 	}
 	// Fit all rows to the selected work area, including their upper/lower motion.
-	scale = math.Min(scale, math.Min(float64(width)/(88+longest), float64(height)/float64(184*max(1, len(s.Speakers)))))
+	stackHeight := float64(184 + (max(1, len(s.Speakers))-1)*72)
+	scale = math.Min(scale, math.Min(float64(width)/(88+longest), float64(height)/stackHeight))
 	r := &overlayRenderer{scale: scale, mist: &overlayMist{rows: make([]overlayMistRow, 0, len(s.Speakers))}}
-	r.base = image.NewRGBA(image.Rect(0, 0, max(1, int(math.Ceil((88+longest)*scale))), max(1, int(math.Ceil(float64(184*len(s.Speakers))*scale)))))
+	r.base = image.NewRGBA(image.Rect(0, 0, max(1, int(math.Ceil((88+longest)*scale))), max(1, int(math.Ceil(stackHeight*scale)))))
 	for index, person := range s.Speakers {
-		y := float64(index * 184)
+		y := float64(index * 72)
 		mask, err := label(person.Name, max(1, int(longest*scale)+4), max(1, int(26*scale)), max(1, int(16*scale)), false)
 		if err != nil {
 			return nil, err
@@ -57,8 +59,11 @@ func newMistOverlayRenderer(s GamingOverlaySnapshot, width, height int, label ov
 			draw.DrawMask(r.base, mask.Bounds().Add(origin.Add(offset)), shadow, image.Point{}, mask, image.Point{}, draw.Over)
 		}
 		draw.DrawMask(r.base, mask.Bounds().Add(origin), image.NewUniform(color.NRGBA{R: 225, G: 226, B: 231, A: 255}), image.Point{}, mask, image.Point{}, draw.Over)
-		r.circle(38, y+92, 22, color.NRGBA{R: 0, G: 242, B: 255, A: 25})
-		r.circle(38, y+92, 20, color.NRGBA{R: 0, G: 242, B: 255, A: 255})
+		tint := overlayTint(person.Color)
+		glow := tint
+		glow.A = 25
+		r.circle(38, y+92, 22, glow)
+		r.circle(38, y+92, 20, tint)
 		r.circle(38, y+92, 18, color.NRGBA{R: 17, G: 20, B: 23, A: 255})
 		if avatar := overlayAvatar(person.Avatar); avatar != nil {
 			r.avatar(avatar, 38, y+92, 17)
@@ -75,6 +80,7 @@ func newMistOverlayRenderer(s GamingOverlaySnapshot, width, height int, label ov
 		_, _ = hash.Write([]byte(person.ID + person.Name))
 		r.mist.rows = append(r.mist.rows, overlayMistRow{
 			width: 88 + nameWidth, center: y + 92, phase: float64(hash.Sum32()%628) / 100,
+			tint: tint,
 			text: image.Rect(origin.X, origin.Y, origin.X+int(nameWidth*scale), origin.Y+mask.Bounds().Dy()),
 		})
 	}
@@ -86,7 +92,12 @@ func newMistOverlayRenderer(s GamingOverlaySnapshot, width, height int, label ov
 				px, py := float64(x)/scale, float64(y)/scale
 				fx := math.Min(overlaySmooth((px-float64(row.text.Min.X)/scale+12)/8), overlaySmooth((float64(row.text.Max.X)/scale+12-px)/8))
 				fy := math.Min(overlaySmooth((py-float64(row.text.Min.Y)/scale+12)/8), overlaySmooth((float64(row.text.Max.Y)/scale+12-py)/8))
-				r.mist.mask.SetAlpha(x, y, color.Alpha{A: uint8(math.Floor(255 * (.65 - .55*fx*fy)))})
+				alpha := uint8(math.Floor(255 * (.65 - .55*fx*fy)))
+				// Overlapping rows must retain every name's final composite cap.
+				if previous := r.mist.mask.AlphaAt(x, y).A; previous > 0 {
+					alpha = min(alpha, previous)
+				}
+				r.mist.mask.SetAlpha(x, y, color.Alpha{A: alpha})
 			}
 		}
 	}
@@ -99,7 +110,7 @@ func overlaySmooth(value float64) float64 {
 }
 
 // Mist and aurora are decorative speaking activity, not measured microphone levels.
-func (r *overlayRenderer) renderMist(seconds float64) *image.RGBA {
+func (r *overlayRenderer) render(seconds float64) *image.RGBA {
 	clear(r.frame.Pix)
 	for _, row := range r.mist.rows {
 		t := seconds + row.phase
@@ -112,18 +123,18 @@ func (r *overlayRenderer) renderMist(seconds float64) *image.RGBA {
 			wave := func(phase float64) float64 { return math.Sin(x*.041-t*1.7+phase)*.72 + math.Sin(x*.09+t+phase)*.28 }
 			for layer := range 5 {
 				cy := row.center + span*.7*math.Sin(x*.022-t*.6+float64(layer)*1.1)
-				r.mistColumn(x, cy-float64(7+layer)*edge, cy+float64(7+layer)*edge, .055*fade)
-				r.mistColumn(x, cy-.55, cy+.55, .23*fade)
+				r.mistColumn(x, cy-float64(7+layer)*edge, cy+float64(7+layer)*edge, .055*fade, row.tint)
+				r.mistColumn(x, cy-.55, cy+.55, .23*fade, row.tint)
 			}
 			// Curtains leave the same three-pixel rhythm as the selected preview.
 			if math.Mod(x, 3) < 1.4 {
 				spread := span * (.75 + strength*.18*wave(0))
 				shift := wave(1) * spread * .2
-				r.mistColumn(x, row.center-spread+shift, row.center+spread+shift, (.2+.35*(.5+.5*math.Sin(x*.055-t*1.2)))*fade)
+				r.mistColumn(x, row.center-spread+shift, row.center+spread+shift, (.2+.35*(.5+.5*math.Sin(x*.055-t*1.2)))*fade, row.tint)
 			}
 			for strand := range 3 {
 				cy := row.center + edge*float64(2+strand*3)*math.Sin(x*.03+t*.7+float64(strand)*1.7)
-				r.mistColumn(x, cy-.5, cy+.5, .2*fade)
+				r.mistColumn(x, cy-.5, cy+.5, .2*fade, row.tint)
 			}
 		}
 	}
@@ -138,14 +149,14 @@ func (r *overlayRenderer) renderMist(seconds float64) *image.RGBA {
 	return r.frame
 }
 
-func (r *overlayRenderer) mistColumn(x, top, bottom, opacity float64) {
+func (r *overlayRenderer) mistColumn(x, top, bottom, opacity float64, tint color.NRGBA) {
 	px := int(x * r.scale)
 	top, bottom = top*r.scale, bottom*r.scale
 	for y := max(0, int(math.Floor(top))); y < min(r.frame.Bounds().Dy(), int(math.Ceil(bottom))); y++ {
 		coverage := math.Max(0, math.Min(float64(y+1), bottom)-math.Max(float64(y), top))
 		alpha := uint16(math.Min(255, coverage*opacity*255))
 		i := r.frame.PixOffset(px, y)
-		for channel, value := range []uint16{53, 214, 233, 255} {
+		for channel, value := range []uint16{uint16(tint.R), uint16(tint.G), uint16(tint.B), 255} {
 			r.frame.Pix[i+channel] = uint8((value*alpha + uint16(r.frame.Pix[i+channel])*(255-alpha)) / 255)
 		}
 	}

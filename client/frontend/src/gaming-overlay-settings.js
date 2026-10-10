@@ -1,17 +1,38 @@
 import { t } from "./i18n.js";
 import "./gaming-overlay-settings.css";
 import { mistAuroraPreview } from "./gaming-overlay-mist.js";
+import { overlayColorPreferences, overlayBlueColor } from "./overlay-colors.js";
 
 export function gamingOverlaySettings(settings, { row, checkbox, slider, hint }) {
     const panel = document.createElement("section"); panel.className = "gaming-overlay-settings";
     const available = window.go.main.App.GamingOverlayAvailable;
     const position = document.createElement("select");
     const monitor = document.createElement("select");
-    const design = document.createElement("select");
+    const design = document.createElement("output"); design.textContent = t("overlay.default");
+    settings.gaming_overlay_style = "default";
+    const preferences = overlayColorPreferences(settings);
+    settings.gaming_overlay_self_color = preferences.self;
+    settings.gaming_overlay_blue_start = preferences.start;
+    settings.gaming_overlay_blue_end = preferences.end;
+    const ownColor = document.createElement("input"); ownColor.type = "color"; ownColor.value = preferences.self;
+    ownColor.oninput = () => { settings.gaming_overlay_self_color = ownColor.value; render(); };
+    const blueSlider = (field, min, max) => {
+        const element = document.createElement("div"); element.className = "set-slider overlay-blue-slider";
+        const input = document.createElement("input"); input.type = "range"; input.min = min; input.max = max;
+        const swatch = document.createElement("span"); swatch.className = "overlay-color-chip"; swatch.setAttribute("aria-hidden", "true");
+        const output = document.createElement("output");
+        input.oninput = () => {
+            settings[field] = Number(input.value);
+            if (field === "gaming_overlay_blue_start") settings.gaming_overlay_blue_end = Math.max(settings.gaming_overlay_blue_end,settings[field]+20);
+            else settings.gaming_overlay_blue_start = Math.min(settings.gaming_overlay_blue_start,settings[field]-20);
+            render();
+        };
+        element.append(input,swatch,output);
+        return {element,input,swatch,output,field};
+    };
+    const firstBlue = blueSlider("gaming_overlay_blue_start",180,220), lastBlue = blueSlider("gaming_overlay_blue_end",200,240);
     const option = (select, value, text) => { const item = document.createElement("option"); item.value = value; item.textContent = text; select.append(item); };
     for (const corner of ["center-left", "top-left", "top-right", "bottom-left", "bottom-right", "custom"]) option(position, corner, t("overlay." + corner));
-    for (const style of ["bars", "mist-aurora"]) option(design, style, t("overlay." + style));
-    design.value = settings.gaming_overlay_style || "bars";
     position.value = settings.gaming_overlay_position || "center-left";
     option(monitor, "", t("overlay.primary"));
     const savedMonitor = settings.gaming_overlay_monitor || "";
@@ -25,14 +46,19 @@ export function gamingOverlaySettings(settings, { row, checkbox, slider, hint })
         const avatar = document.createElement("span"); avatar.className = "overlay-sample-avatar"; avatar.textContent = name[0];
         const details = document.createElement("span"); details.className = "overlay-sample-details";
         const label = document.createElement("span"); label.className = "overlay-sample-name"; label.textContent = name; details.append(label);
-        const wave = document.createElement("span"); wave.className = "overlay-sample-wave"; wave.setAttribute("aria-hidden", "true");
-        for (let i = 0; i < 11; i++) { const bar = document.createElement("i"); bar.style.setProperty("--bar", i); wave.append(bar); }
-        details.append(wave); person.append(avatar, details); sample.append(person);
+        person.append(avatar, details); sample.append(person);
     }
     preview.append(sample);
     const showDesign = mistAuroraPreview(sample);
     const coordinates = document.createElement("output"); coordinates.className = "overlay-position-readout"; coordinates.setAttribute("aria-live", "polite");
     const render = () => {
+        sample.querySelectorAll(".overlay-sample-person").forEach((person,index) =>
+            person.style.setProperty("--overlay-color", index === 0 ? settings.gaming_overlay_self_color : overlayBlueColor(settings.gaming_overlay_blue_start)));
+        for (const control of [firstBlue,lastBlue]) {
+            const hue = settings[control.field];
+            control.input.value = hue; control.input.setAttribute("aria-valuetext", `${hue}°`);
+            control.output.textContent = `${hue}°`; control.swatch.style.background = overlayBlueColor(hue);
+        }
         const custom = position.value === "custom";
         const x = custom ? settings.gaming_overlay_x || 0 : position.value.endsWith("right") ? 100 : 0;
         const y = custom ? settings.gaming_overlay_y || 0 : position.value.startsWith("bottom") ? 100 : position.value === "center-left" ? 45 : 0;
@@ -41,11 +67,10 @@ export function gamingOverlaySettings(settings, { row, checkbox, slider, hint })
         sample.style.opacity = String((settings.gaming_overlay_opacity ?? 88) / 100);
         const scale = (settings.gaming_overlay_scale ?? 80) / 100;
         sample.style.setProperty("--overlay-scale", String(scale));
-        sample.style.fontSize = design.value === "mist-aurora" ? `${16 * scale}px` : `${scale}em`;
+        sample.style.fontSize = `${16 * scale}px`;
         sample.classList.toggle("overlay-motion-disabled", settings.gaming_overlay_animate === false);
-        preview.classList.toggle("overlay-mist-preview", design.value === "mist-aurora");
-        preview.style.height = design.value === "mist-aurora" ? `${Math.max(390, 384 * scale + 20)}px` : "";
-        showDesign(design.value, settings.gaming_overlay_animate !== false);
+        preview.style.height = `${Math.max(270, 256 * scale + 20)}px`;
+        showDesign(settings.gaming_overlay_animate !== false);
         coordinates.textContent = t("overlay.coordinates", { x, y });
     };
     const setPosition = (x, y) => {
@@ -77,10 +102,12 @@ export function gamingOverlaySettings(settings, { row, checkbox, slider, hint })
     };
     position.onchange = () => { settings.gaming_overlay_position = position.value; render(); };
     monitor.onchange = () => { settings.gaming_overlay_monitor = monitor.value; };
-    design.onchange = () => { settings.gaming_overlay_style = design.value; render(); };
     panel.append(row(t("overlay.enabled"), checkbox(settings.gaming_overlay !== false, value => { settings.gaming_overlay = value; }), "saved"),
         row(t("overlay.monitor"), monitor, "saved"), row(t("overlay.position"), position, "saved"),
         row(t("overlay.design"), design, "saved"),
+        row(t("overlay.selfColor"), ownColor, "saved"),
+        row(t("overlay.firstBlue"), firstBlue.element, "saved"), row(t("overlay.lastBlue"), lastBlue.element, "saved"),
+        hint(t("overlay.colorsHint")),
         row(t("overlay.scale"), slider(settings.gaming_overlay_scale ?? 80, 75, 200, value => { settings.gaming_overlay_scale = value; render(); }, true), "saved"),
         row(t("overlay.opacity"), slider(settings.gaming_overlay_opacity ?? 88, 20, 100, value => { settings.gaming_overlay_opacity = value; render(); }, true), "saved"),
         row(t("overlay.animate"), checkbox(settings.gaming_overlay_animate !== false, value => { settings.gaming_overlay_animate = value; render(); }), "saved"),

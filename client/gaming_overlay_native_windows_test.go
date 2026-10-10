@@ -46,14 +46,23 @@ func TestNativeGamingOverlay(t *testing.T) {
 	if !primary.Primary {
 		t.Fatal("default overlay monitor is not the primary display")
 	}
-	x, y, width, height := gamingOverlayPlacement(snapshot, primary)
+	placement := func(s GamingOverlaySnapshot, m GamingOverlayMonitor) (int32, int32, int32, int32) {
+		t.Helper()
+		_, _, w, h := gamingOverlayPlacement(s, m)
+		r, err := newOverlayRenderer(s, int(w), int(h), nativeOverlayLabel)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return gamingOverlayPlacementSized(s, m, int32(r.base.Bounds().Dx()), int32(r.base.Bounds().Dy()))
+	}
+	x, y, width, height := placement(snapshot, primary)
 	var rect overlayRect
 	_, _, _ = user32.NewProc("GetWindowRect").Call(hwnd, uintptr(unsafe.Pointer(&rect)))
 	if rect.Left != x || rect.Top != y || rect.Right-rect.Left != width || rect.Bottom-rect.Top != height {
 		t.Fatalf("default overlay is not positioned on the primary desktop: %+v", rect)
 	}
-	// Switch the live window to the measured name-spanning design.
-	snapshot.Style = "mist-aurora"
+	// Longer names extend the sole Default design on the live native surface.
+	snapshot.Style = "default"
 	snapshot.Speakers[0].Name = "TheLegendaryNightwalker"
 	_, _, capacityWidth, capacityHeight := gamingOverlayPlacement(snapshot, primary)
 	renderer, err := newOverlayRenderer(snapshot, int(capacityWidth), int(capacityHeight), nativeOverlayLabel)
@@ -77,7 +86,7 @@ func TestNativeGamingOverlay(t *testing.T) {
 	preview := normalizeGamingOverlay(GamingOverlaySnapshot{Active: true, Animate: true, Title: "Preview", Monitor: monitors[0].ID, Position: "custom", X: 100, Y: 100, Scale: 150, Opacity: 40, Speakers: []GamingOverlaySpeaker{{Name: "Alex", Speaking: true}}})
 	window.Preview(preview)
 	window.Update(GamingOverlaySnapshot{}) // routine idle poll must not hide a preview
-	x, y, width, height = gamingOverlayPlacement(preview, monitors[0])
+	x, y, width, height = placement(preview, monitors[0])
 	deadline = time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
 		_, _, _ = user32.NewProc("GetWindowRect").Call(hwnd, uintptr(unsafe.Pointer(&rect)))

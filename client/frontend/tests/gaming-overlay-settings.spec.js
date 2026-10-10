@@ -73,6 +73,70 @@ test("global and private-call mute controls hide the overlay until cleared", asy
     await expect.poll(() => page.evaluate(() => window.__overlayUpdates.at(-1).active)).toBe(true);
 });
 
+test("private-call colors also distinguish the local identity from every other participant", async ({page}) => {
+    await page.evaluate(()=>{
+        window.__noxaPrivateCalls.overlaySnapshot=()=>({active:true,selfID:"local-account",speakers:[
+            {id:"local-account",name:"Self",speaking:true},{id:"remote-account",name:"Peer",speaking:true},
+        ]});
+    });
+    await expect.poll(()=>page.evaluate(()=>window.__overlayUpdates.at(-1).speakers?.[0]?.color)).toBe("#43c798");
+    const other=await page.evaluate(()=>window.__overlayUpdates.at(-1).speakers[1].color);
+    const [r,g,b]=other.slice(1).match(/../g).map(value=>parseInt(value,16));
+    expect(b).toBeGreaterThanOrEqual(g); expect(g).toBeGreaterThan(r);
+});
+
+test("channel colors stay distinct and stable when quiet members speak or new members join", async ({ page }) => {
+    await page.evaluate(() => Object.assign(window.__noxa.state,{myClientID:1,myChannelID:1,pc:{},channels:[{ChannelID:1,Name:"Lobby"}],clients:[
+        {client_id:1,channel_id:1,unique_id:"alpha",nickname:"Alice",is_speaking:true},
+        {client_id:2,channel_id:1,unique_id:"beta",nickname:"Bob",is_speaking:true},
+        {client_id:3,channel_id:1,unique_id:"gamma",nickname:"Quiet",is_speaking:false},
+    ]}));
+    await expect.poll(() => page.evaluate(() => window.__overlayUpdates.at(-1).speakers?.length)).toBe(2);
+    const first = await page.evaluate(() => window.__overlayUpdates.at(-1).speakers.map(member=>[member.id,member.color]));
+    expect(new Map(first).get("alpha")).toBe("#43c798");
+    expect(first[0][1]).not.toBe(first[1][1]);
+    await page.evaluate(() => {
+        const state=window.__noxa.state;state.clients[2].is_speaking=true;
+        state.clients.push({client_id:4,channel_id:1,unique_id:"new",nickname:"New",is_speaking:true});
+        state.clients.reverse();
+    });
+    await expect.poll(() => page.evaluate(() => window.__overlayUpdates.at(-1).speakers?.length)).toBe(4);
+    const next = await page.evaluate(() => window.__overlayUpdates.at(-1).speakers.map(member=>[member.id,member.color]));
+    for (const [id,color] of first) expect(new Map(next).get(id)).toBe(color);
+    expect(new Set(next.map(([,color])=>color)).size).toBe(4);
+    for (const [,color] of next) expect(color).toMatch(/^#[0-9a-f]{6}$/);
+    for (const [id,color] of next) if (id !== "alpha") {
+        const [r,g,b]=color.slice(1).match(/../g).map(value=>parseInt(value,16));
+        expect(b).toBeGreaterThanOrEqual(g); expect(g).toBeGreaterThan(r);
+    }
+});
+
+test("overlay color settings preview drafts, Cancel discards them and Apply updates live colors", async ({page}) => {
+    await page.evaluate(() => Object.assign(window.__noxa.state,{myClientID:1,myChannelID:1,pc:{},clients:[
+        {client_id:1,channel_id:1,unique_id:"me",nickname:"Self",is_speaking:true},
+        {client_id:2,channel_id:1,unique_id:"peer",nickname:"Peer",is_speaking:true},
+    ]}));
+    await expect.poll(()=>page.evaluate(()=>window.__overlayUpdates.at(-1).speakers?.[0]?.color)).toBe("#43c798");
+    await page.evaluate(()=>window.__noxa.openSettings("overlay"));
+    await expect(page.getByLabel("Your overlay color",{exact:true})).toHaveValue("#43c798");
+    await page.getByLabel("Your overlay color",{exact:true}).fill("#ff8800");
+    await page.getByLabel("Other members: first blue",{exact:true}).fill("180");
+    await page.getByLabel("Other members: last blue",{exact:true}).fill("200");
+    await page.getByRole("button",{name:"Preview on monitor",exact:true}).click();
+    expect(await page.evaluate(()=>window.__overlayPreview)).toMatchObject({gaming_overlay_self_color:"#ff8800",gaming_overlay_blue_start:180,gaming_overlay_blue_end:200});
+    expect(await page.locator(".overlay-sample-person").first().evaluate(el=>el.style.getPropertyValue("--overlay-color"))).toBe("#ff8800");
+    expect(await page.evaluate(()=>window.__overlayUpdates.at(-1).speakers[0].color)).toBe("#43c798");
+    await page.getByRole("button",{name:"Cancel",exact:true}).click();
+    await page.evaluate(()=>window.__noxa.openSettings("overlay"));
+    await expect(page.getByLabel("Your overlay color",{exact:true})).toHaveValue("#43c798");
+    await page.getByLabel("Your overlay color",{exact:true}).fill("#ff8800");
+    await page.getByLabel("Other members: first blue",{exact:true}).fill("180");
+    await page.getByLabel("Other members: last blue",{exact:true}).fill("200");
+    await page.getByRole("button",{name:"Apply",exact:true}).click();
+    await expect.poll(()=>page.evaluate(()=>window.__overlayUpdates.at(-1).speakers[0].color)).toBe("#ff8800");
+    expect(await page.evaluate(()=>window.__overlaySaved)).toMatchObject({gaming_overlay_self_color:"#ff8800",gaming_overlay_blue_start:180,gaming_overlay_blue_end:200});
+});
+
 test("overlay preferences stay drafts until Apply, support keyboard positioning and native preview", async ({ page }, testInfo) => {
     await page.evaluate(() => window.__noxa.openSettings("application"));
     await expect(page.getByLabel("Voice overlay", { exact: true })).toHaveCount(0);
@@ -140,26 +204,27 @@ test("speaker avatars reach the native overlay as bounded thumbnails and clear a
 test("overlay animation overrides system motion settings and has its own saved toggle", async ({ page }) => {
     await page.emulateMedia({ reducedMotion: "no-preference" });
     await page.evaluate(() => window.__noxa.openSettings("overlay"));
-    const bars = page.locator(".overlay-sample-wave i");
-    await expect(bars).toHaveCount(22);
-    const motion = await bars.evaluateAll(items => items.map(item => {
-        const css = getComputedStyle(item); return { animation: css.animationName, delay: css.animationDelay };
-    }));
-    expect(motion.every(item => item.animation === "overlay-speaking")).toBe(true);
-    expect(motion[0].delay).not.toBe(motion[11].delay);
+    const canvas = page.locator(".overlay-mist-canvas").first();
+    await expect.poll(() => canvas.evaluate(el => el.width)).toBeGreaterThan(0);
+    const first = await canvas.evaluate(el => el.toDataURL());
+    await expect.poll(() => canvas.evaluate(el => el.toDataURL())).not.toBe(first);
     await page.emulateMedia({ reducedMotion: "reduce" });
-    await expect(bars.first()).toHaveCSS("animation-name", "overlay-speaking");
+    const reduced = await canvas.evaluate(el => el.toDataURL());
+    await expect.poll(() => canvas.evaluate(el => el.toDataURL())).not.toBe(reduced);
     const animation = page.getByLabel("Animate speaking indicators", { exact: true });
     await expect(animation).toBeChecked();
     await animation.uncheck();
-    await expect(bars.first()).toHaveCSS("animation-name", "none");
+    await canvas.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    const frozen = await canvas.evaluate(el => el.toDataURL());
+    await page.waitForTimeout(150);
+    expect(await canvas.evaluate(el => el.toDataURL())).toBe(frozen);
     await page.getByRole("button", { name: "Preview on monitor", exact: true }).click();
     expect(await page.evaluate(() => window.__overlayPreview.gaming_overlay_animate)).toBe(false);
     expect(await page.evaluate(() => window.__overlaySaved)).toBeUndefined();
     await page.getByRole("button", { name: "Apply", exact: true }).click();
     expect(await page.evaluate(() => window.__overlaySaved.gaming_overlay_animate)).toBe(false);
     await animation.check();
-    await expect(bars.first()).toHaveCSS("animation-name", "overlay-speaking");
+    await expect.poll(() => canvas.evaluate(el => el.toDataURL())).not.toBe(frozen);
 });
 
 test("overlay preview drag remains bounded and Cancel discards draft position", async ({ page }) => {
@@ -184,40 +249,49 @@ test("unsupported native overlays disable controls with a clear explanation", as
     await expect(page.getByText("The native voice overlay is available on Windows.", { exact: true })).toBeVisible();
 });
 
-test("mist and aurora is selectable, transparent behind names and saved only on Apply", async ({ page }, testInfo) => {
-    await page.evaluate(() => window.__noxa.openSettings("overlay"));
-    const design = page.getByLabel("Overlay design", { exact: true });
-    await expect(design).toHaveValue("bars");
-    await design.selectOption("mist-aurora");
+test("Default migrates old bars, overlaps compact rows and protects every name", async ({ page }, testInfo) => {
+    await page.evaluate(() => { window.__noxa.state.settings.gaming_overlay_style = "bars"; window.__noxa.openSettings("overlay"); });
+    await expect(page.getByText("Default", { exact: true })).toBeVisible();
+    await expect(page.locator(".overlay-sample-wave, option[value='bars'], option[value='mist-aurora']")).toHaveCount(0);
     const canvases = page.locator(".overlay-mist-canvas");
     await expect(canvases).toHaveCount(2);
     await expect.poll(() => canvases.first().evaluate(canvas => canvas.width)).toBeGreaterThan(0);
-    const pixels = await canvases.first().evaluate(canvas => {
-        const name = canvas.parentElement.querySelector(".overlay-sample-name");
-        const a = name.getBoundingClientRect(), b = canvas.getBoundingClientRect();
-        const dpr = canvas.width / b.width;
-        const ctx = canvas.getContext("2d");
-        const data = ctx.getImageData(Math.round((a.x-b.x)*dpr), Math.round((a.y-b.y)*dpr), Math.floor(a.width*dpr), Math.floor(a.height*dpr)).data;
-        let max = 0, visible = 0;
-        for (let i = 3; i < data.length; i += 4) { max = Math.max(max, data[i]); if (data[i]) visible++; }
-        return { max, visible, background: getComputedStyle(name).backgroundColor };
+    const pixels = await page.locator(".overlay-position-sample").evaluate(sample => {
+        const people = [...sample.querySelectorAll(".overlay-sample-person")];
+        const bounds = people.map(person => person.getBoundingClientRect());
+        const results = people.map(person => {
+            const name = person.querySelector(".overlay-sample-name"), a = name.getBoundingClientRect();
+            const composite = document.createElement("canvas"); composite.width = Math.ceil(a.width); composite.height = Math.ceil(a.height);
+            const ctx = composite.getContext("2d");
+            for (const canvas of sample.querySelectorAll("canvas")) {
+                const b = canvas.getBoundingClientRect();
+                ctx.drawImage(canvas, b.x-a.x, b.y-a.y, b.width, b.height);
+            }
+            let max = 0, visible = 0;
+            const data = ctx.getImageData(0,0,composite.width,composite.height).data;
+            for (let i = 3; i < data.length; i += 4) { max = Math.max(max, data[i]); if (data[i]) visible++; }
+            return { max, visible, background: getComputedStyle(name).backgroundColor };
+        });
+        return { results, gap: (bounds[1].y-bounds[0].bottom)/Number(sample.style.getPropertyValue("--overlay-scale")) };
     });
-    expect(pixels.max).toBeLessThanOrEqual(26); expect(pixels.visible).toBeGreaterThan(0);
-    expect(pixels.background).toBe("rgba(0, 0, 0, 0)");
+    for (const name of pixels.results) {
+        expect(name.max).toBeLessThanOrEqual(26); expect(name.visible).toBeGreaterThan(0);
+        expect(name.background).toBe("rgba(0, 0, 0, 0)");
+    }
+    expect(pixels.gap).toBeCloseTo(32, 1);
     await page.screenshot({ path: testInfo.outputPath("mist-aurora-settings.png") });
     expect(await page.evaluate(() => window.__overlaySaved)).toBeUndefined();
     await page.getByRole("button", { name: "Preview on monitor", exact: true }).click();
-    expect(await page.evaluate(() => window.__overlayPreview.gaming_overlay_style)).toBe("mist-aurora");
+    expect(await page.evaluate(() => window.__overlayPreview.gaming_overlay_style)).toBe("default");
     await page.getByRole("button", { name: "Apply", exact: true }).click();
-    expect(await page.evaluate(() => window.__overlaySaved.gaming_overlay_style)).toBe("mist-aurora");
+    expect(await page.evaluate(() => window.__overlaySaved.gaming_overlay_style)).toBe("default");
     await page.getByRole("button", { name: "Cancel", exact: true }).click();
     await page.evaluate(() => window.__noxa.openSettings("overlay"));
-    await expect(design).toHaveValue("mist-aurora");
+    await expect(page.getByText("Default", { exact: true })).toBeVisible();
 });
 
 test("mist overlay extends behind long names, freezes when disabled and stays bounded on narrow screens", async ({ page }) => {
     await page.evaluate(() => window.__noxa.openSettings("overlay"));
-    await page.getByLabel("Overlay design", { exact: true }).selectOption("mist-aurora");
     const canvas = page.locator(".overlay-mist-canvas").first();
     await expect.poll(() => canvas.evaluate(el => el.width)).toBeGreaterThan(0);
     const first = await canvas.evaluate(el => ({ width: el.width, frame: el.toDataURL() }));

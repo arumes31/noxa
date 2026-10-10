@@ -74,7 +74,7 @@ func TestGamingOverlayMonitorPlacementAndBounds(t *testing.T) {
 	s := normalizeGamingOverlay(GamingOverlaySnapshot{Active: true, Monitor: "left", Position: "custom", X: 100, Y: 100, Scale: 200, Opacity: 1, Speakers: []GamingOverlaySpeaker{{Name: "Alice", Speaking: true}}})
 	area := selectOverlayMonitor(monitors, s.Monitor)
 	x, y, width, height := gamingOverlayPlacement(s, area)
-	if x < -1280 || y < 0 || x+width > 0 || y+height > 680 || width != 560 || s.Opacity != 20 {
+	if x < -1280 || y < 0 || x+width > 0 || y+height > 680 || width != 416 || s.Opacity != 20 {
 		t.Fatalf("overlay outside selected monitor: %d,%d %dx%d %+v", x, y, width, height, s)
 	}
 	if got := selectOverlayMonitor(monitors, "unplugged"); got.ID != "primary" {

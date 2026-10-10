@@ -291,11 +291,9 @@ func (w *nativeOverlay) run(ready chan<- error) {
 			last = key
 		}
 		// Position the measured surface, rather than its allocation bound.
-		if s.Style == "mist-aurora" {
-			width, _ = safecast.IntToInt32(renderer.base.Bounds().Dx())
-			height, _ = safecast.IntToInt32(renderer.base.Bounds().Dy())
-			x, y, _, _ = gamingOverlayPlacementSized(s, monitor, width, height)
-		}
+		width, _ = safecast.IntToInt32(renderer.base.Bounds().Dx())
+		height, _ = safecast.IntToInt32(renderer.base.Bounds().Dy())
+		x, y, _, _ = gamingOverlayPlacementSized(s, monitor, width, height)
 		seconds := time.Since(started).Seconds()
 		if !s.Animate {
 			seconds = 0

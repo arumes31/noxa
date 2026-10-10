@@ -43,7 +43,7 @@ func TestNativeOverlayLabelsAndResolutionPreviews(t *testing.T) {
 			t.Fatal(err)
 		}
 		frame := r.render(0.2)
-		if w != 224 || h != 172 {
+		if w != 147 || h != 262 {
 			t.Fatalf("compact overlay changed size at %v: %dx%d", size, w, h)
 		}
 		directory := os.Getenv("NOXA_OVERLAY_PREVIEW_PATH")

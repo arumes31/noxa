@@ -6,7 +6,7 @@ export function mistAuroraPreview(sample) {
         canvas.setAttribute("aria-hidden", "true"); person.prepend(canvas);
         return { person, canvas, ctx: canvas.getContext("2d"), mask: document.createElement("canvas") };
     });
-    let enabled = false, animate = true, frame = 0, started = 0;
+    let animate = true, frame = 0, started = 0;
     const measure = row => {
         const body = row.person.getBoundingClientRect(), name = row.person.querySelector(".overlay-sample-name").getBoundingClientRect();
         if (!body.width) return;
@@ -14,17 +14,25 @@ export function mistAuroraPreview(sample) {
         const scale = Number(sample.style.getPropertyValue("--overlay-scale")) || 1;
         row.w = body.width + 36*scale; row.h = body.height + 144*scale; row.dpr = dpr; row.body = body.height; row.scale = scale;
         row.text = { x: name.x - body.x + 18*scale, y: name.y - body.y + 72*scale, w: name.width, h: name.height };
+        const names = rows.map(other => {
+            const bounds = other.person.querySelector(".overlay-sample-name").getBoundingClientRect();
+            return { x: bounds.x-body.x+18*scale, y: bounds.y-body.y+72*scale, w: bounds.width, h: bounds.height };
+        });
         row.canvas.width = row.mask.width = Math.ceil(row.w*dpr); row.canvas.height = row.mask.height = Math.ceil(row.h*dpr);
         row.canvas.style.width = `${row.w}px`; row.canvas.style.height = `${row.h}px`;
         const ctx = row.mask.getContext("2d"), pixels = ctx.createImageData(row.mask.width, row.mask.height);
         const smooth = value => { const x = Math.max(0, Math.min(1, value)); return x*x*(3-2*x); };
-        const text = row.text;
         for (let y = 0; y < row.mask.height; y++) for (let x = 0; x < row.mask.width; x++) {
             const px = x/dpr, py = y/dpr;
-            const fx = Math.min(smooth((px-text.x+12*scale)/(8*scale)), smooth((text.x+text.w+12*scale-px)/(8*scale)));
-            const fy = Math.min(smooth((py-text.y+12*scale)/(8*scale)), smooth((text.y+text.h+12*scale-py)/(8*scale)));
+            let protection = 0;
+            for (const text of names) {
+                const fx = Math.min(smooth((px-text.x+12*scale)/(8*scale)), smooth((text.x+text.w+12*scale-px)/(8*scale)));
+                const fy = Math.min(smooth((py-text.y+12*scale)/(8*scale)), smooth((text.y+text.h+12*scale-py)/(8*scale)));
+                protection = Math.max(protection, fx*fy);
+            }
             const i = (y*row.mask.width+x)*4;
-            pixels.data[i+3] = Math.floor(255*(.65-.55*fx*fy));
+            // All canvases overlap behind all names; their sum stays below 10%.
+            pixels.data[i+3] = Math.floor(255*(.65-(.65-.1/rows.length)*protection));
         }
         ctx.putImageData(pixels, 0, 0);
     };
@@ -34,8 +42,9 @@ export function mistAuroraPreview(sample) {
         const ctx = row.ctx, scale = row.scale, w = row.w/scale, cy = row.h/scale/2, t = seconds + index*2.43;
         ctx.setTransform(row.dpr*scale, 0, 0, row.dpr*scale, 0, 0); ctx.clearRect(0, 0, w, row.h/scale);
         const gradient = ctx.createLinearGradient(0, 0, w, 0);
-        gradient.addColorStop(0, "rgba(53,214,233,0)"); gradient.addColorStop(Math.min(.15,18/w), "#35d6e9");
-        gradient.addColorStop(Math.max(.85,1-18/w), "#35d6e9"); gradient.addColorStop(1, "rgba(53,214,233,0)");
+        const color = row.person.style.getPropertyValue("--overlay-color") || "#35d6e9";
+        gradient.addColorStop(0, color+"00"); gradient.addColorStop(Math.min(.15,18/w), color);
+        gradient.addColorStop(Math.max(.85,1-18/w), color); gradient.addColorStop(1, color+"00");
         ctx.strokeStyle = gradient; ctx.fillStyle = gradient; ctx.lineCap = "round";
         const edge = x => Math.max(0, Math.sin(Math.PI*x/w))**.48;
         const span = x => edge(x)*(row.body/scale/2+21+Math.exp(-(((x-38)/34)**2))*14);
@@ -65,22 +74,18 @@ export function mistAuroraPreview(sample) {
     const tick = now => {
         frame = 0;
         if (!sample.isConnected) { observer.disconnect(); return; }
-        if (!enabled) return;
         if (!started) started = now;
         rows.forEach((row,index) => paint(row,animate ? (now-started)/1000 : 0,index));
         if (animate) frame = requestAnimationFrame(tick);
     };
     const observer = new ResizeObserver(() => {
         if (!sample.isConnected) { observer.disconnect(); return; }
-        if (!enabled) return;
         rows.forEach(measure);
         if (!frame) frame = requestAnimationFrame(tick);
     });
-    return (style, motion) => {
-        enabled = style === "mist-aurora"; animate = motion;
-        sample.classList.toggle("overlay-mist-aurora", enabled);
+    return motion => {
+        animate = motion;
         cancelAnimationFrame(frame); frame = 0;
-        if (enabled) { rows.forEach(row => { observer.observe(row.person); measure(row); }); frame = requestAnimationFrame(tick); }
-        else observer.disconnect();
+        rows.forEach(row => { observer.observe(row.person); measure(row); }); frame = requestAnimationFrame(tick);
     };
 }

@@ -213,23 +213,26 @@ type Settings struct {
 	GainNormalize            bool            `json:"gain_normalize"`
 
 	// Video (wave 3).
-	CameraFPS             int    `json:"camera_fps"`    // 15 | 30 | 60 (default 30)
-	LowBandwidth          bool   `json:"low_bandwidth"` // (88) low-bandwidth mode
-	CameraDeviceID        string `json:"camera_device_id"`
-	CameraBackground      string `json:"camera_background"`       // none | blur | replace
-	CameraBackgroundScene string `json:"camera_background_scene"` // slate | warm | studio
-	GamingOverlay         bool   `json:"gaming_overlay"`          // default on, can be disabled
-	GamingOverlayAnimate  bool   `json:"gaming_overlay_animate"`  // independent of Windows animation preferences
-	GamingOverlayStyle    string `json:"gaming_overlay_style"`
-	GamingOverlayPosition string `json:"gaming_overlay_position"`
-	GamingOverlayMonitor  string `json:"gaming_overlay_monitor"`
-	GamingOverlayScale    int    `json:"gaming_overlay_scale"`
-	GamingOverlayOpacity  int    `json:"gaming_overlay_opacity"`
-	GamingOverlayX        int    `json:"gaming_overlay_x"` // percentage of available travel
-	GamingOverlayY        int    `json:"gaming_overlay_y"`
-	CameraBackgroundImage string `json:"camera_background_image"`
-	CameraBlurStrength    int    `json:"camera_blur_strength"`
-	CameraMirrorPreview   bool   `json:"camera_mirror_preview"`
+	CameraFPS              int    `json:"camera_fps"`    // 15 | 30 | 60 (default 30)
+	LowBandwidth           bool   `json:"low_bandwidth"` // (88) low-bandwidth mode
+	CameraDeviceID         string `json:"camera_device_id"`
+	CameraBackground       string `json:"camera_background"`       // none | blur | replace
+	CameraBackgroundScene  string `json:"camera_background_scene"` // slate | warm | studio
+	GamingOverlay          bool   `json:"gaming_overlay"`          // default on, can be disabled
+	GamingOverlayAnimate   bool   `json:"gaming_overlay_animate"`  // independent of Windows animation preferences
+	GamingOverlayStyle     string `json:"gaming_overlay_style"`
+	GamingOverlaySelfColor string `json:"gaming_overlay_self_color"`
+	GamingOverlayBlueStart int    `json:"gaming_overlay_blue_start"`
+	GamingOverlayBlueEnd   int    `json:"gaming_overlay_blue_end"`
+	GamingOverlayPosition  string `json:"gaming_overlay_position"`
+	GamingOverlayMonitor   string `json:"gaming_overlay_monitor"`
+	GamingOverlayScale     int    `json:"gaming_overlay_scale"`
+	GamingOverlayOpacity   int    `json:"gaming_overlay_opacity"`
+	GamingOverlayX         int    `json:"gaming_overlay_x"` // percentage of available travel
+	GamingOverlayY         int    `json:"gaming_overlay_y"`
+	CameraBackgroundImage  string `json:"camera_background_image"`
+	CameraBlurStrength     int    `json:"camera_blur_strength"`
+	CameraMirrorPreview    bool   `json:"camera_mirror_preview"`
 
 	// Security (wave 4a).
 	AllowPlaintext bool              `json:"allow_plaintext"`         // allow plaintext control connections (dev servers)
@@ -328,27 +331,30 @@ func DefaultSettings() Settings {
 			"kick": true, "ban": true, "announcement": true, "channel_watch": true,
 			"stream_watch_started": true,
 		},
-		WhisperReplyHotkey:    "Ctrl+R",
-		VoiceLimiter:          true,
-		CameraFPS:             30,
-		CameraBackground:      "none",
-		CameraBackgroundScene: "slate",
-		GamingOverlay:         true,
-		GamingOverlayAnimate:  true,
-		GamingOverlayStyle:    "bars",
-		GamingOverlayPosition: "center-left",
-		GamingOverlayScale:    80,
-		GamingOverlayOpacity:  88,
-		CameraBlurStrength:    14,
-		CameraMirrorPreview:   true,
-		ChatTimestamps:        "absolute",
-		ChatDensity:           "comfortable",
-		ChatFontSize:          14,
-		ChatLayout:            "irc",
-		SysJoinLeave:          true,
-		SysKick:               true,
-		AutoAwayMinutes:       15,
-		AutoAwayMessage:       defaultAutoAwayMessage,
+		WhisperReplyHotkey:     "Ctrl+R",
+		VoiceLimiter:           true,
+		CameraFPS:              30,
+		CameraBackground:       "none",
+		CameraBackgroundScene:  "slate",
+		GamingOverlay:          true,
+		GamingOverlayAnimate:   true,
+		GamingOverlayStyle:     "default",
+		GamingOverlaySelfColor: "#43c798",
+		GamingOverlayBlueStart: 195,
+		GamingOverlayBlueEnd:   235,
+		GamingOverlayPosition:  "center-left",
+		GamingOverlayScale:     80,
+		GamingOverlayOpacity:   88,
+		CameraBlurStrength:     14,
+		CameraMirrorPreview:    true,
+		ChatTimestamps:         "absolute",
+		ChatDensity:            "comfortable",
+		ChatFontSize:           14,
+		ChatLayout:             "irc",
+		SysJoinLeave:           true,
+		SysKick:                true,
+		AutoAwayMinutes:        15,
+		AutoAwayMessage:        defaultAutoAwayMessage,
 	}
 }
 
@@ -499,6 +505,7 @@ func migrateEventSoundSplits(s *Settings) {
 func normalizeSettings(s Settings) Settings {
 	s.GamingOverlayScale = clampSetting(s.GamingOverlayScale, 75, 200)
 	s.GamingOverlayStyle = normalizeOverlayStyle(s.GamingOverlayStyle)
+	normalizeOverlayColors(&s)
 	s.GamingOverlayOpacity = clampSetting(s.GamingOverlayOpacity, 20, 100)
 	s.GamingOverlayX = clampSetting(s.GamingOverlayX, 0, 100)
 	s.GamingOverlayY = clampSetting(s.GamingOverlayY, 0, 100)
@@ -892,11 +899,14 @@ func (a *App) SaveSettings(s Settings) string {
 	default:
 		return "invalid gaming overlay position"
 	}
-	if s.GamingOverlayStyle != "" && s.GamingOverlayStyle != "bars" && s.GamingOverlayStyle != "mist-aurora" {
+	if s.GamingOverlayStyle != "" && s.GamingOverlayStyle != "bars" && s.GamingOverlayStyle != "mist-aurora" && s.GamingOverlayStyle != "default" {
 		return "invalid gaming overlay design"
 	}
 	if len(s.GamingOverlayMonitor) > 128 {
 		return "invalid gaming overlay monitor"
+	}
+	if s.GamingOverlaySelfColor != "" && !validOverlayColor(s.GamingOverlaySelfColor) {
+		return "invalid gaming overlay color"
 	}
 	if err := validateCameraBackground(s.CameraBackgroundImage); err != nil {
 		return err.Error()

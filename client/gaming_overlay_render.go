@@ -2,12 +2,13 @@ package main
 
 import (
 	"encoding/base64"
-	"hash/fnv"
+	"fmt"
 	"image"
 	"image/color"
 	"image/draw"
 	"image/png"
 	"math"
+	"strconv"
 	"strings"
 )
 
@@ -16,11 +17,25 @@ import (
 type overlayRenderer struct {
 	base, frame *image.RGBA
 	scale       float64
-	phases      []float64
 	mist        *overlayMist
 }
 
 type overlayLabel func(text string, width, height, fontSize int, centered bool) (*image.Alpha, error)
+
+func overlayTint(value string) color.NRGBA {
+	if len(value) == 7 && value[0] == '#' {
+		if rgb, err := strconv.ParseUint(value[1:], 16, 24); err == nil {
+			r, g, b := uint8(rgb>>16), uint8(rgb>>8), uint8(rgb)
+			return color.NRGBA{R: r, G: g, B: b, A: 255}
+		}
+	}
+	return color.NRGBA{R: 54, G: 157, B: 199, A: 255}
+}
+
+func normalizeOverlayColor(value string) string {
+	tint := overlayTint(value)
+	return fmt.Sprintf("#%02x%02x%02x", tint.R, tint.G, tint.B)
+}
 
 func overlayAvatar(value string) image.Image {
 	const prefix = "data:image/png;base64,"
@@ -37,40 +52,6 @@ func overlayAvatar(value string) image.Image {
 		return nil
 	}
 	return avatar
-}
-
-func newOverlayRenderer(s GamingOverlaySnapshot, width, height int, label overlayLabel) (*overlayRenderer, error) {
-	if s.Style == "mist-aurora" {
-		return newMistOverlayRenderer(s, width, height, label)
-	}
-	r := &overlayRenderer{base: image.NewRGBA(image.Rect(0, 0, width, height)), scale: float64(s.Scale) / 100}
-	for index, speaker := range s.Speakers {
-		y := float64(index * 76)
-		// Transparent space separates each person. Only the avatar has a backing.
-		r.circle(30, y+32, 28, color.NRGBA{0, 242, 255, 25})
-		r.circle(30, y+32, 25, color.NRGBA{0, 242, 255, 255})
-		r.circle(30, y+32, 23, color.NRGBA{17, 20, 23, 255})
-		avatar := overlayAvatar(speaker.Avatar)
-		if avatar != nil {
-			r.avatar(avatar, 30, y+32, 22)
-		} else {
-			initial := "?"
-			if name := []rune(speaker.Name); len(name) > 0 {
-				initial = strings.ToUpper(string(name[0]))
-			}
-			if err := r.text(label, initial, 8, y+10, 44, 44, 22, true); err != nil {
-				return nil, err
-			}
-		}
-		if err := r.text(label, speaker.Name, 68, y+8, 208, 26, 16, false); err != nil {
-			return nil, err
-		}
-		hash := fnv.New32a()
-		_, _ = hash.Write([]byte(speaker.ID + speaker.Name))
-		r.phases = append(r.phases, float64(hash.Sum32()%628)/100)
-	}
-	r.frame = image.NewRGBA(r.base.Bounds())
-	return r, nil
 }
 
 func (r *overlayRenderer) text(label overlayLabel, text string, x, y, width, height, fontSize float64, centered bool) error {
@@ -117,25 +98,4 @@ func (r *overlayRenderer) avatar(avatar image.Image, x, y, radius float64) {
 			draw.Draw(r.base, image.Rect(px, py, px+1, py+1), pixel, image.Point{}, draw.Over)
 		}
 	}
-}
-
-func (r *overlayRenderer) render(seconds float64) *image.RGBA {
-	if r.mist != nil {
-		return r.renderMist(seconds)
-	}
-	copy(r.frame.Pix, r.base.Pix)
-	cyan := image.NewUniform(color.NRGBA{0, 242, 255, 255})
-	for row, phase := range r.phases {
-		for bar := range 11 {
-			// Activity animation, not an audio-level meter. Each speaker has a
-			// distinct phase and keeps moving without frontend/IPC frame updates.
-			envelope := 0.35 + 0.65*math.Sin(float64(bar)*math.Pi/10)
-			height := (3 + 14*envelope*(0.5+0.5*math.Sin(seconds*9+phase-float64(bar)*0.8))) * r.scale
-			x := int(float64(68+bar*4) * r.scale)
-			cy := float64(row*76+44) * r.scale
-			rect := image.Rect(x, int(cy-height/2), x+max(1, int(2*r.scale)), int(cy+height/2)+1)
-			draw.Draw(r.frame, rect, cyan, image.Point{}, draw.Over)
-		}
-	}
-	return r.frame
 }

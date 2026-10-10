@@ -544,7 +544,7 @@ function overlaySnapshot() {
     const owner = session;
     if (!owner || !current(owner)) return null;
     return {
-        active: true, label: t("call.active"), muted: !!(owner.muted || V().state.muted), deafened: !!(owner.deafened || V().state.deafened),
+        active: true, selfID: owner.uid, label: t("call.active"), muted: !!(owner.muted || V().state.muted), deafened: !!(owner.deafened || V().state.deafened),
         speakers: owner.call.participants.filter(participant => participant.state === "accepted").map(participant => {
             const uid = participant.unique_id, peer = owner.peers.get(uid);
             let speaking = uid === owner.uid && !!owner.speaking && !!owner.stream?.getAudioTracks().some(track => track.enabled);

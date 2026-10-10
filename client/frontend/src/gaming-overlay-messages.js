@@ -1,5 +1,7 @@
 export const overlayEnglish = {
-    'overlay.design': 'Overlay design', 'overlay.bars': 'Speaking bars', 'overlay.mist-aurora': 'Mist + Aurora',
+    'overlay.design': 'Overlay design', 'overlay.default': 'Default',
+    'overlay.selfColor': 'Your overlay color', 'overlay.firstBlue': 'Other members: first blue', 'overlay.lastBlue': 'Other members: last blue',
+    'overlay.colorsHint': 'You appear green by default; others receive different blue shades. These colors apply only to your overlay. Quiet members keep their shade.',
     'settings.overlay': 'Overlay',
     'overlay.animate': 'Animate speaking indicators', 'overlay.animateHint': 'Uses its own motion setting, even when Windows animations are disabled.',
     'overlay.enabled': 'Voice overlay', 'overlay.position': 'Overlay position',
@@ -15,7 +17,9 @@ export const overlayEnglish = {
     'overlay.muted': 'Microphone muted', 'overlay.deafened': 'Deafened', 'overlay.ready': 'Voice connected', 'overlay.failed': 'Voice overlay unavailable: {error}',
 };
 export const overlayGerman = {
-    'overlay.design': 'Overlay-Design', 'overlay.bars': 'Sprechbalken', 'overlay.mist-aurora': 'Nebel + Polarlicht',
+    'overlay.design': 'Overlay-Design', 'overlay.default': 'Default',
+    'overlay.selfColor': 'Deine Overlay-Farbe', 'overlay.firstBlue': 'Andere Mitglieder: erster Blauton', 'overlay.lastBlue': 'Andere Mitglieder: letzter Blauton',
+    'overlay.colorsHint': 'Du erscheinst standardmäßig grün, andere in unterschiedlichen Blautönen. Die Farben gelten nur für dein Overlay. Stille Mitglieder behalten ihren Blauton.',
     'settings.overlay': 'Overlay',
     'overlay.animate': 'Sprechanzeigen animieren', 'overlay.animateHint': 'Eigene Bewegungseinstellung, auch wenn Windows-Animationen deaktiviert sind.',
     'overlay.enabled': 'Sprach-Overlay', 'overlay.position': 'Overlay-Position',

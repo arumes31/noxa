@@ -6,6 +6,7 @@ import (
 	"image"
 	"image/color"
 	"image/png"
+	"math"
 	"strings"
 	"testing"
 )
@@ -36,42 +37,49 @@ func TestOverlayAvatarValidation(t *testing.T) {
 	}
 }
 
-func TestOverlayRendererSeparatesPeopleAndAnimatesOnlyIndicators(t *testing.T) {
+func TestDefaultOverlayCachesLabelsAndKeepsAvatarsStill(t *testing.T) {
 	s := normalizeGamingOverlay(GamingOverlaySnapshot{Active: true, Scale: 100, Speakers: []GamingOverlaySpeaker{
 		{ID: "alice", Name: "Alice", Speaking: true, Avatar: overlayTestAvatar(t, 64)},
 		{ID: "bob", Name: "Bob", Speaking: true},
 		{Name: "Quiet"},
 	}})
 	var labels []string
-	r, err := newOverlayRenderer(s, 280, 140, func(text string, width, height, _ int, _ bool) (*image.Alpha, error) {
+	r, err := newOverlayRenderer(s, 800, 800, func(text string, width, height, font int, centered bool) (*image.Alpha, error) {
 		labels = append(labels, text)
-		return image.NewAlpha(image.Rect(0, 0, width, height)), nil
+		return mistTestLabel(text, width, height, font, centered)
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Join(labels, ",") != "Alice,B,Bob" {
+	if strings.Join(labels, ",") != "Alice,Bob,Alice,Bob,B" {
 		t.Fatalf("labels = %v", labels)
 	}
+	cached := len(labels)
 	first := bytes.Clone(r.render(0).Pix)
 	second := r.render(0.2)
+	if len(labels) != cached {
+		t.Fatal("animation rasterized labels again")
+	}
 	if bytes.Equal(first, second.Pix) {
 		t.Fatal("speaking indicator did not animate")
 	}
-	if got := second.RGBAAt(30, 32); got.R != 220 || got.A != 255 {
+	if got := second.RGBAAt(38, 92); got.R != 220 || got.A != 255 {
 		t.Fatalf("avatar not rendered: %v", got)
 	}
-	if second.RGBAAt(30, 6).A == 0 {
+	if second.RGBAAt(38, 72).A == 0 {
 		t.Fatal("speaking ring missing")
 	}
-	for y := range 140 {
-		for x := range 280 {
-			i := second.PixOffset(x, y)
-			if !bytes.Equal(first[i:i+4], second.Pix[i:i+4]) && (x < 68 || x > 110 || y%76 < 34 || y%76 > 54) {
-				t.Fatalf("animation moved avatar or label at %d,%d", x, y)
-			}
-			if (y >= 64 && y < 76 || x > 120) && second.RGBAAt(x, y).A != 0 {
-				t.Fatalf("unexpected panel backdrop at %d,%d", x, y)
+	for _, row := range r.mist.rows {
+		center := int(row.center)
+		for y := center - 15; y < center+15; y++ {
+			for x := 24; x < 52; x++ {
+				if math.Hypot(float64(x)-38, float64(y-center)) > 16 {
+					continue
+				}
+				i := second.PixOffset(x, y)
+				if !bytes.Equal(first[i:i+4], second.Pix[i:i+4]) {
+					t.Fatalf("animation moved avatar at %d,%d", x, y)
+				}
 			}
 		}
 	}

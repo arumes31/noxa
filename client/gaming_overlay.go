@@ -36,6 +36,7 @@ type GamingOverlayMonitor struct {
 type GamingOverlaySpeaker struct {
 	ID       string `json:"id"`
 	Avatar   string `json:"avatar"`
+	Color    string `json:"color"`
 	Name     string `json:"name"`
 	Speaking bool   `json:"speaking"`
 	Muted    bool   `json:"muted"`
@@ -91,6 +92,7 @@ func normalizeGamingOverlay(s GamingOverlaySnapshot) GamingOverlaySnapshot {
 		}
 		speaker.Name = overlayText(speaker.Name, 48)
 		speaker.ID = overlayText(speaker.ID, 160)
+		speaker.Color = normalizeOverlayColor(speaker.Color)
 		if len(speaker.Avatar) > 32768 {
 			speaker.Avatar = ""
 		}
@@ -123,7 +125,8 @@ func overlayPresentation(s GamingOverlaySnapshot, settings Settings) GamingOverl
 // PreviewGamingOverlay uses only bounded presentation preferences; names are
 // examples, and no account, channel or notification data enters the preview.
 func (a *App) PreviewGamingOverlay(settings Settings) string {
-	s := overlayPresentation(GamingOverlaySnapshot{Active: true, Speakers: []GamingOverlaySpeaker{{ID: "preview-alex", Name: "Alex", Speaking: true}, {ID: "preview-sam", Name: "Sam", Speaking: true}}}, settings)
+	settings = normalizeSettings(settings)
+	s := overlayPresentation(GamingOverlaySnapshot{Active: true, Speakers: []GamingOverlaySpeaker{{ID: "preview-alex", Name: "Alex", Speaking: true, Color: settings.GamingOverlaySelfColor}, {ID: "preview-sam", Name: "Sam", Speaking: true, Color: overlayBlueColor(settings.GamingOverlayBlueStart)}}}, settings)
 	a.overlayMu.Lock()
 	defer a.overlayMu.Unlock()
 	if a.overlayStopped || a.ctx == nil {
@@ -158,25 +161,19 @@ func gamingOverlayPlacement(s GamingOverlaySnapshot, monitor GamingOverlayMonito
 	// speakers to eight. Checked conversions also make the native ABI explicit.
 	scale, _ := safecast.IntToInt32(s.Scale)
 	rows, _ := safecast.IntToInt32(max(1, len(s.Speakers)))
-	width = min(280*scale/100, monitor.workWidth)
-	height = min((rows*76-12)*scale/100, monitor.workHeight)
-	if s.Style == "mist-aurora" {
-		longest := 1
-		for _, person := range s.Speakers {
-			longest = max(longest, len([]rune(person.Name)))
-		}
-		nameWidth, _ := safecast.IntToInt32(longest * 24)
-		width = min((88+nameWidth)*scale/100, monitor.workWidth)
-		height = min(rows*184*scale/100, monitor.workHeight)
+	longest := 1
+	for _, person := range s.Speakers {
+		longest = max(longest, len([]rune(person.Name)))
 	}
+	nameWidth, _ := safecast.IntToInt32(longest * 24)
+	width = min((88+nameWidth)*scale/100, monitor.workWidth)
+	height = min((184+(rows-1)*72)*scale/100, monitor.workHeight)
 	return gamingOverlayPlacementSized(s, monitor, width, height)
 }
 
-func normalizeOverlayStyle(style string) string {
-	if style == "mist-aurora" {
-		return style
-	}
-	return "bars"
+func normalizeOverlayStyle(_ string) string {
+	// Legacy profiles and previews migrate to the only supported design.
+	return "default"
 }
 
 func gamingOverlayPlacementSized(s GamingOverlaySnapshot, monitor GamingOverlayMonitor, width, height int32) (x, y, w, h int32) {
