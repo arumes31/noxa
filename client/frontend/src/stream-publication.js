@@ -1,5 +1,6 @@
 import { captureMediaScope, mediaScopeIsCurrent } from "./media-controls.js";
 import { t } from "./i18n.js";
+import { publicationVideoCodecs } from "./video-codecs.js";
 
 const V = () => window.__noxa;
 const publications = new Map();
@@ -10,8 +11,10 @@ const uploads = new Map();
 export async function preparePublicationUpload(slot, track, onChange) {
     const scope = captureMediaScope(), pc = V().state.pc;
     const supported = await window.go.main.App.SupportsStreamSourceQualityForTab?.(scope.tabID) || false;
+    const codecSupport = supported && await window.go.main.App.SupportsStreamCodecForTab?.(scope.tabID) || false;
+    const codecs = codecSupport ? await publicationVideoCodecs(track) : null;
     if (!mediaScopeIsCurrent(scope) || V().state.pc !== pc || track.readyState === "ended") return false;
-    uploads.set(slot, { scope, pc, track, supported, active: !supported, generation: "0", onChange });
+    uploads.set(slot, { scope, pc, track, supported, codecs, codec: codecs?.[0], active: !supported, generation: "0", onChange });
     return true;
 }
 
@@ -24,14 +27,16 @@ function currentUpload(slot, track) {
 function applyUpload(upload, slot) {
     if (upload.applying) return upload.applying;
     const active = upload.active;
+    const codec = upload.codec;
     upload.applying = Promise.resolve().then(() => upload.onChange?.()).then(() => {
         upload.applied = active;
+        upload.appliedCodec = codec;
     }).catch(error => {
         upload.applied = null;
         throw error;
     }).finally(() => {
         upload.applying = null;
-        if (currentUpload(slot, upload.track) === upload && upload.active !== active) void applyUpload(upload, slot).catch(() => {});
+        if (currentUpload(slot, upload.track) === upload && (upload.active !== active || upload.codec !== codec)) void applyUpload(upload, slot).catch(() => {});
     });
     return upload.applying;
 }
@@ -41,6 +46,8 @@ export function publicationUploadActive(slot, track) {
     return upload?.supported ? upload.active : undefined;
 }
 
+export function publicationCodec(slot, track) { return currentUpload(slot, track)?.codec; }
+
 export function reconcilePublicationUploads(snapshot, streams) {
     for (const { publication, generation } of snapshot) {
         if (!valid(publication) || publication.generation !== generation) continue;
@@ -48,7 +55,10 @@ export function reconcilePublicationUploads(snapshot, streams) {
         if (!upload?.supported || upload.generation !== generation) continue;
         const own = streams.find(stream => stream.publisher_id === publication.scope.clientID &&
             stream.slot === publication.slot && stream.generation === generation);
-        if (typeof own?.upload_active !== "boolean" || own.upload_active === upload.active && upload.applied === upload.active) continue;
+        if (typeof own?.upload_active !== "boolean") continue;
+        const codec = upload.codecs ? (own.codec === "h264" && upload.codecs.includes("h264") ? "h264" : "vp8") : undefined;
+        if (own.upload_active === upload.active && upload.applied === upload.active && codec === upload.codec && codec === upload.appliedCodec) continue;
+        upload.codec = codec;
         upload.active = own.upload_active;
         void applyUpload(upload, publication.slot).catch(() => {});
     }
@@ -78,7 +88,7 @@ export async function startPublication(slot, track, onInvalidated = () => track.
     publications.set(slot, publication);
     try {
         const upload = currentUpload(slot, track);
-        const result = await streamRequest(scope, { action: "publish", slot, active: true, ...(upload?.supported ? { quality_mode: "source" } : {}) });
+        const result = await streamRequest(scope, { action: "publish", slot, active: true, ...(upload?.supported ? { quality_mode: "source" } : {}), ...(upload?.codecs ? { codecs: upload.codecs } : {}) });
         publication.generation = result.generation;
         if (!valid(publication)) {
             if (publications.get(slot) === publication) publications.delete(slot);
@@ -88,6 +98,7 @@ export async function startPublication(slot, track, onInvalidated = () => track.
         if (upload && currentUpload(slot, track) === upload) {
             upload.generation = result.generation;
             if (upload.supported) {
+                if (upload.codecs) upload.codec = result.codec === "h264" && upload.codecs.includes("h264") ? "h264" : "vp8";
                 upload.active = result.upload_active === true;
                 await applyUpload(upload, slot);
             }

@@ -4,8 +4,8 @@
 //
 // Design notes:
 //   - The SFU never decodes or re-encodes media. Contiguous ingress avoids a
-//     payload copy; video held for bounded reordering owns a copy. One released
-//     packet is
+//     payload copy; video held for bounded reordering or H.264 access-unit
+//     assembly owns a copy. One released packet is
 //     handed to every TrackWriter. Subscriber slots clear connection-specific
 //     header extensions on a shallow copy; pion's TrackLocalStaticRTP.WriteRTP
 //     then value-copies the rtp.Header into a pooled packet and rewrites
@@ -197,20 +197,21 @@ type Router struct {
 	videoPolicy   videoPolicy
 	// Control changes take Router.mu before watchMu. Final writes never acquire
 	// Router.mu: authority -> video policy -> watch -> egress -> socket.
-	watchMu           contextRWMutex
-	echoScopeMu       contextRWMutex
-	echoScopeEpoch    uint64
-	echoMembers       map[string]uint64
-	whisperScopeMu    contextRWMutex
-	whisperScopeEpoch uint64
-	whisperScopes     map[string]whisperScope
-	watchEpoch        uint64
-	publications      map[publicationKey]uint64
-	publicationModes  map[publicationKey]string
-	watches           map[watchKey]videoWatch
-	previews          map[publicationKey]videoPreview
-	previewBudgets    map[string]previewBudget
-	watchSessions     map[string]uint64
+	watchMu                      contextRWMutex
+	echoScopeMu                  contextRWMutex
+	echoScopeEpoch               uint64
+	echoMembers                  map[string]uint64
+	whisperScopeMu               contextRWMutex
+	whisperScopeEpoch            uint64
+	whisperScopes                map[string]whisperScope
+	watchEpoch                   uint64
+	publications                 map[publicationKey]uint64
+	publicationModes             map[publicationKey]string
+	publicationCodecCapabilities map[publicationKey]uint8
+	watches                      map[watchKey]videoWatch
+	previews                     map[publicationKey]videoPreview
+	previewBudgets               map[string]previewBudget
+	watchSessions                map[string]uint64
 
 	mu           sync.RWMutex
 	members      map[int64]map[string]bool       // channelID -> member clientIDs
@@ -226,6 +227,7 @@ type Router struct {
 	// non-simulcast). It is keyed by slot as well because two video slots of
 	// the same publisher have independent RID/SSRC spaces.
 	videoSources map[string]map[string]map[string]uint32
+	videoCodecs  map[videoSourceRef]webrtc.RTPCodecCapability
 	videoSeen    map[videoSourceRef]map[string]time.Time
 	layerPrefs   map[string]string         // subscriberID -> preferred RID ("f"/"h"/"q")
 	keyframeLast map[uint32]time.Time      // media SSRC -> last forwarded PLI/FIR
@@ -598,7 +600,7 @@ func (r *Router) addSlotLocked(pc *PeerConnectionWrapper, subscriberID, publishe
 
 	codec := webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeOpus, ClockRate: 48000, Channels: 2}
 	if kind == webrtc.RTPCodecTypeVideo {
-		codec = webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeVP8, ClockRate: 90000}
+		codec = r.subscriberVideoCodecLocked(subscriberID, publisherID, slot)
 	}
 	track, err := webrtc.NewTrackLocalStaticRTP(codec, slotTrackID(publisherID, slot), slotStreamID(publisherID, slot))
 	if err != nil {
@@ -1175,6 +1177,11 @@ func (r *Router) detachPeer(clientID string, leaveChannel bool) {
 		}
 	}
 	delete(r.videoSources, clientID)
+	for ref := range r.videoCodecs {
+		if ref.publisher == clientID {
+			delete(r.videoCodecs, ref)
+		}
+	}
 	for ref := range r.videoSeen {
 		if ref.publisher == clientID {
 			delete(r.videoSeen, ref)
@@ -1698,6 +1705,7 @@ func (r *Router) ReadVideoLoop(clientID, slot string, track VideoTrackReader) {
 		}
 		return webrtc.MimeTypeVP8
 	}
+	var h264Frame h264ForwardFrame
 	readOrderedVideo(track, func() bool { return r.ownsSlot(clientID, claimKey, token) }, codecName, func(pkt *rtp.Packet, mime string) {
 		if !r.ownsSlot(clientID, claimKey, token) {
 			return
@@ -1708,6 +1716,7 @@ func (r *Router) ReadVideoLoop(clientID, slot string, track VideoTrackReader) {
 		policy = r.videoPolicySnapshot()
 		if boundsRevision != policy.boundsRevision {
 			dimensions = vp8BoundsInspector{bounds: policy.bounds}
+			h264Frame = h264ForwardFrame{}
 			boundsRevision = policy.boundsRevision
 		}
 		if policy.bounds != (VideoBounds{}) {
@@ -1727,7 +1736,32 @@ func (r *Router) ReadVideoLoop(clientID, slot string, track VideoTrackReader) {
 				return
 			}
 		}
-		r.forwardVideoAtPolicyCodec(clientID, slot, rid, pkt, time.Now(), policy, true, mime)
+		codec := webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeVP8, ClockRate: 90000}
+		if currentCodec != nil {
+			codec = currentCodec().RTPCodecCapability
+			if !strings.EqualFold(codec.MimeType, mime) {
+				return
+			}
+		}
+		if !r.setVideoCodec(clientID, slot, rid, token, codec) {
+			return
+		}
+		now := time.Now()
+		if strings.EqualFold(mime, webrtc.MimeTypeH264) {
+			packets, keyframe, lost := h264Frame.push(pkt, now)
+			if lost {
+				r.RequestKeyframe(clientID, slot, rid)
+			}
+			for i, packet := range packets {
+				if !r.ownsSlot(clientID, claimKey, token) {
+					return
+				}
+				r.forwardVideoFrameAtPolicyCodec(clientID, slot, rid, packet, now, policy, true, mime, keyframe && i == 0)
+			}
+			return
+		}
+		h264Frame = h264ForwardFrame{}
+		r.forwardVideoAtPolicyCodec(clientID, slot, rid, pkt, now, policy, true, mime)
 	}, func(packet *rtp.Packet) {
 		if ingress != nil {
 			ingress.observe(packet, time.Now())
@@ -1760,6 +1794,10 @@ func (r *Router) forwardVideoAtPolicy(senderID, slot, rid string, pkt *rtp.Packe
 }
 
 func (r *Router) forwardVideoAtPolicyCodec(senderID, slot, rid string, pkt *rtp.Packet, now time.Time, policy videoPolicy, inspected bool, mime string) int {
+	return r.forwardVideoFrameAtPolicyCodec(senderID, slot, rid, pkt, now, policy, inspected, mime, false)
+}
+
+func (r *Router) forwardVideoFrameAtPolicyCodec(senderID, slot, rid string, pkt *rtp.Packet, now time.Time, policy videoPolicy, inspected bool, mime string, frameStart bool) int {
 	if policy.bounds != (VideoBounds{}) && !inspected {
 		return 0
 	}
@@ -1785,7 +1823,7 @@ func (r *Router) forwardVideoAtPolicyCodec(senderID, slot, rid string, pkt *rtp.
 		}
 		if tracks, ok := r.pubTracks[sub]; ok {
 			if t, ok := tracks[senderID]; ok {
-				if s, ok := t.video[slot]; ok {
+				if s, ok := t.video[slot]; ok && strings.EqualFold(s.track.Codec().MimeType, mime) {
 					accepted = append(accepted, r.mediaOutputLocked(senderID, sub, slot, false, s))
 				}
 			}
@@ -1849,7 +1887,11 @@ func (r *Router) forwardVideoAtPolicyCodec(senderID, slot, rid string, pkt *rtp.
 						output.watchEpoch = w.delivery.WatchEpoch
 						output.videoContinuity.beginEpoch()
 					}
-					packet, accepted = output.videoContinuity.translate(pkt, now)
+					if strings.EqualFold(mime, webrtc.MimeTypeH264) {
+						packet, accepted = output.videoContinuity.translateH264(pkt, now, frameStart)
+					} else if strings.EqualFold(mime, webrtc.MimeTypeVP8) {
+						packet, accepted = output.videoContinuity.translate(pkt, now)
+					}
 					return nil
 				})
 				if !accepted {

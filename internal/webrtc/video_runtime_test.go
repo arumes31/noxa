@@ -168,7 +168,7 @@ func TestRuntimeVideoBoundsRejectExistingUninspectedCodec(t *testing.T) {
 	tap := &fakeTrackWriter{}
 	r.addVideoOutput("recorder", tap)
 	track := &updatingVideoTrack{boundsVideoTrack: boundsVideoTrack{fakeVideoTrack: fakeVideoTrack{ssrc: 42, fakeTrackReader: fakeTrackReader{packets: []*rtp.Packet{
-		boundsKeyPacket(1, 1, 640, 360), boundsKeyPacket(2, 2, 640, 360),
+		h264ForwardPacket(1, 1, true, 0x65, 1), h264ForwardPacket(2, 2, true, 0x65, 2),
 	}}}, mime: webrtc.MimeTypeH264}}
 	track.beforeRead = func(read int) {
 		if read == 1 {
@@ -188,7 +188,7 @@ func TestRuntimeVideoBoundsRenegotiatesExistingCodec(t *testing.T) {
 	tap := &fakeTrackWriter{}
 	r.addVideoOutput("recorder", tap)
 	track := &updatingVideoTrack{boundsVideoTrack: boundsVideoTrack{fakeVideoTrack: fakeVideoTrack{ssrc: 42, fakeTrackReader: fakeTrackReader{packets: []*rtp.Packet{
-		boundsKeyPacket(1, 1, 640, 360), boundsKeyPacket(2, 2, 640, 360), boundsKeyPacket(3, 3, 640, 360),
+		h264ForwardPacket(1, 1, true, 0x65, 1), h264ForwardPacket(2, 2, true, 0x65, 2), boundsKeyPacket(3, 3, 640, 360),
 	}}}, mime: webrtc.MimeTypeH264}}
 	track.beforeRead = func(read int) {
 		if read == 1 {

@@ -30,6 +30,9 @@ func (s *TCPServer) handleVideoStreamControl(ctx context.Context, client *Client
 	if (msg.QualityMode != "" && msg.QualityMode != "source") || (msg.QualityMode != "" && msg.Action != "publish") {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "invalid publication quality mode")
 	}
+	if len(msg.Codecs) != 0 && msg.Action != "publish" && msg.Action != "watch" {
+		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "invalid video codec scope")
+	}
 	capability := authorization.Connect
 	switch msg.Action {
 	case "publish", "preview_upload":
@@ -68,7 +71,7 @@ func (s *TCPServer) handleVideoStreamControl(ctx context.Context, client *Client
 			if err == nil && msg.Active {
 				for _, stream := range voice.VideoPublications(client.ID) {
 					if stream.PublisherID == client.ID && stream.Slot == msg.Slot && stream.Generation == result.Generation {
-						result.QualityMode, result.UploadActive = stream.QualityMode, stream.UploadActive
+						result.QualityMode, result.UploadActive, result.Codec = stream.QualityMode, stream.UploadActive, stream.Codec
 						break
 					}
 				}
@@ -77,7 +80,7 @@ func (s *TCPServer) handleVideoStreamControl(ctx context.Context, client *Client
 				s.deps.State.SetSharing(client.ID, msg.Active)
 			}
 		case "watch":
-			started, err = voice.WatchVideo(client.ID, msg.PublisherID, msg.Slot, msg.Generation, msg.Revision, msg.Session, msg.Active)
+			started, err = watchVideoWithCodecs(voice, client.ID, msg)
 		case "preview_upload":
 			err = voice.SetVideoPreview(client.ID, msg.Slot, msg.Generation, msg.JPEG)
 		case "preview":
@@ -87,7 +90,7 @@ func (s *TCPServer) handleVideoStreamControl(ctx context.Context, client *Client
 		case "list":
 			result.Session = voice.VideoWatchSession(client.ID)
 			for _, stream := range voice.VideoPublications(client.ID) {
-				result.Streams = append(result.Streams, netproto.VideoStream{PublisherID: stream.PublisherID, Slot: stream.Slot, Generation: stream.Generation, PreviewAt: stream.PreviewAt, WatchRevision: stream.WatchRevision, ViewerCount: stream.ViewerCount, QualityMode: stream.QualityMode, UploadActive: stream.UploadActive})
+				result.Streams = append(result.Streams, netproto.VideoStream{PublisherID: stream.PublisherID, Slot: stream.Slot, Generation: stream.Generation, PreviewAt: stream.PreviewAt, WatchRevision: stream.WatchRevision, ViewerCount: stream.ViewerCount, QualityMode: stream.QualityMode, UploadActive: stream.UploadActive, Codec: stream.Codec})
 			}
 		}
 		if err != nil {

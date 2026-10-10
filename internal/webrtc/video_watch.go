@@ -15,6 +15,7 @@ type videoWatch struct {
 	publication, revision, epoch, session uint64
 	active                                bool
 	qualityRID                            string
+	codecs                                uint8
 }
 
 // VideoPublication is a current, explicitly announced camera or screen source.
@@ -28,6 +29,7 @@ type VideoPublication struct {
 	ViewerCount   *int   `json:"viewer_count,omitempty"`
 	QualityMode   string `json:"quality_mode,omitempty"`
 	UploadActive  *bool  `json:"upload_active,omitempty"`
+	Codec         string `json:"codec,omitempty"`
 }
 
 func watchSlot(slot string) string {
@@ -49,6 +51,14 @@ func (r *Router) PublishVideo(publisher, slot string, generation uint64, active 
 // PublishVideoWithMode pins the source's quality policy to its publication.
 // Source mode publishes one sender-selected quality to every viewer.
 func (r *Router) PublishVideoWithMode(publisher, slot string, generation uint64, active bool, mode string) (uint64, error) {
+	return r.PublishVideoWithCodecs(publisher, slot, generation, active, mode, nil)
+}
+
+func (r *Router) PublishVideoWithCodecs(publisher, slot string, generation uint64, active bool, mode string, codecs []string) (uint64, error) {
+	capabilities, valid := videoCodecCapabilities(codecs)
+	if !valid {
+		return 0, ErrVideoPublication
+	}
 	if (slot != SlotCam && slot != SlotScreen) || (mode != "" && mode != "source") {
 		return 0, ErrVideoPublication
 	}
@@ -69,7 +79,7 @@ func (r *Router) PublishVideoWithMode(publisher, slot string, generation uint64,
 		return 0, ErrVideoPublication
 	}
 	if current != 0 {
-		if generation == current && (mode == "" || mode == r.publicationModes[key]) {
+		if generation == current && (mode == "" || mode == r.publicationModes[key]) && capabilities == r.publicationCodecCapabilities[key] {
 			return current, nil
 		}
 		return 0, ErrVideoPublication
@@ -82,6 +92,10 @@ func (r *Router) PublishVideoWithMode(publisher, slot string, generation uint64,
 		r.publications = make(map[publicationKey]uint64)
 	}
 	r.publications[key] = r.watchEpoch
+	if r.publicationCodecCapabilities == nil {
+		r.publicationCodecCapabilities = make(map[publicationKey]uint8)
+	}
+	r.publicationCodecCapabilities[key] = capabilities
 	if mode != "" {
 		if r.publicationModes == nil {
 			r.publicationModes = make(map[publicationKey]string)
@@ -104,6 +118,14 @@ func (r *Router) PublishVideoWithMode(publisher, slot string, generation uint64,
 // WatchVideo records explicit recipient intent. Revisions order requests within
 // a publication; a new watch epoch invalidates every previously queued packet.
 func (r *Router) WatchVideo(subscriber, publisher, slot string, generation, revision, session uint64, active bool) (started bool, err error) {
+	return r.WatchVideoWithCodecs(subscriber, publisher, slot, generation, revision, session, active, nil)
+}
+
+func (r *Router) WatchVideoWithCodecs(subscriber, publisher, slot string, generation, revision, session uint64, active bool, codecs []string) (started bool, err error) {
+	capabilities, valid := videoCodecCapabilities(codecs)
+	if !valid {
+		return false, ErrVideoWatch
+	}
 	if slot != SlotCam && slot != SlotScreen || generation == 0 || revision == 0 {
 		return false, ErrVideoWatch
 	}
@@ -117,7 +139,7 @@ func (r *Router) WatchVideo(subscriber, publisher, slot string, generation, revi
 	key := watchKey{subscriber, publisher, slot}
 	old := r.watches[key]
 	if session == 0 || r.watchSessions[subscriber] != session || r.publications[publicationKey{publisher, slot}] != generation ||
-		(old.session == session && old.publication == generation && (revision < old.revision || revision == old.revision && active != old.active)) || r.watchEpoch == ^uint64(0) {
+		(old.session == session && old.publication == generation && (revision < old.revision || revision == old.revision && (active != old.active || capabilities != old.codecs))) || r.watchEpoch == ^uint64(0) {
 		r.watchMu.Unlock()
 		r.mu.RUnlock()
 		return false, ErrVideoWatch
@@ -131,7 +153,7 @@ func (r *Router) WatchVideo(subscriber, publisher, slot string, generation, revi
 		if active && old.active && old.publication == generation && old.session == session {
 			qualityRID = old.qualityRID
 		}
-		r.watches[key] = videoWatch{publication: generation, revision: revision, epoch: r.watchEpoch, session: session, active: active, qualityRID: qualityRID}
+		r.watches[key] = videoWatch{publication: generation, revision: revision, epoch: r.watchEpoch, session: session, active: active, qualityRID: qualityRID, codecs: capabilities}
 	}
 	// A newer active revision is an explicit retry. Notify the publisher again
 	// so paused screen capture can produce a fresh frame; exact retries remain
@@ -139,6 +161,7 @@ func (r *Router) WatchVideo(subscriber, publisher, slot string, generation, revi
 	started = active && (!old.active || old.session != session || old.publication != generation || revision > old.revision)
 	r.watchMu.Unlock()
 	r.mu.RUnlock()
+	r.syncSubscriberVideoCodec(subscriber, publisher, slot)
 	if active {
 		r.RequestKeyframe(publisher, slot, "")
 	}
@@ -196,6 +219,7 @@ func (r *Router) VideoPublications(subscriber string) []VideoPublication {
 				stream.ViewerCount = &count
 				active := count > 0 || r.videoRecordingConsumerLocked(key)
 				stream.UploadActive = &active
+				stream.Codec = r.publicationCodecLocked(key, generation)
 			}
 			list = append(list, stream)
 		}
@@ -212,6 +236,7 @@ func (r *Router) VideoPublications(subscriber string) []VideoPublication {
 func (r *Router) removePublicationLocked(key publicationKey) {
 	delete(r.publications, key)
 	delete(r.publicationModes, key)
+	delete(r.publicationCodecCapabilities, key)
 	delete(r.previews, key)
 	for watch := range r.watches {
 		if watch.publisher == key.publisher && watch.slot == key.slot {

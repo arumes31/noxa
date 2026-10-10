@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"noxa/internal/netproto"
+	"slices"
 	"time"
 )
 
@@ -15,7 +16,7 @@ func (a *App) VideoStreamControlForTab(tabID string, msg netproto.VideoStreamCon
 		return netproto.VideoStreamResult{}, err
 	}
 	cm.mu.Lock()
-	conn, clientID, sourceSupported, model := cm.conn, cm.clientID, cm.supportsStreamSourceQuality, cm.authorizationModel
+	conn, clientID, sourceSupported, codecSupported, model := cm.conn, cm.clientID, cm.supportsStreamSourceQuality, cm.supportsStreamCodec, cm.authorizationModel
 	cm.mu.Unlock()
 	if conn == nil {
 		return netproto.VideoStreamResult{}, errors.New("not connected")
@@ -25,6 +26,13 @@ func (a *App) VideoStreamControlForTab(tabID string, msg netproto.VideoStreamCon
 	}
 	if msg.QualityMode == "source" && (!sourceSupported || model != netproto.AuthorizationModelRolesV1 || clientID == "") {
 		return netproto.VideoStreamResult{}, errors.New("source quality publications are not supported by this server")
+	}
+	if len(msg.Codecs) != 0 {
+		if !codecSupported || model != netproto.AuthorizationModelRolesV1 || clientID == "" ||
+			(msg.Action != "publish" && msg.Action != "watch") || len(msg.Codecs) > 2 || !slices.Contains(msg.Codecs, "vp8") ||
+			(len(msg.Codecs) == 2 && !slices.Contains(msg.Codecs, "h264")) {
+			return netproto.VideoStreamResult{}, errors.New("invalid or unsupported video codec capabilities")
+		}
 	}
 	if msg.Action == "publish" || msg.Action == "preview_upload" {
 		msg.PublisherID = clientID
@@ -64,9 +72,14 @@ func (a *App) VideoStreamControlForTab(tabID string, msg netproto.VideoStreamCon
 		(msg.Action == "publish" && msg.Active && msg.QualityMode == "source" && (result.QualityMode != "source" || result.UploadActive == nil)) {
 		return netproto.VideoStreamResult{}, errors.New("invalid source quality acknowledgement")
 	}
+	if (result.Codec != "" && (msg.Action != "publish" || (result.Codec != "vp8" && result.Codec != "h264"))) ||
+		(msg.Action == "publish" && msg.Active && len(msg.Codecs) != 0 && !slices.Contains(msg.Codecs, result.Codec)) {
+		return netproto.VideoStreamResult{}, errors.New("invalid publication codec acknowledgement")
+	}
 	for _, stream := range result.Streams {
 		if stream.PublisherID == "" || stream.Generation == 0 || (stream.Slot != "cam" && stream.Slot != "screen") ||
-			(stream.QualityMode != "" && stream.QualityMode != "source") || (stream.UploadActive != nil && stream.PublisherID != clientID) {
+			(stream.QualityMode != "" && stream.QualityMode != "source") || (stream.UploadActive != nil && stream.PublisherID != clientID) ||
+			(stream.Codec != "" && (stream.PublisherID != clientID || (stream.Codec != "vp8" && stream.Codec != "h264"))) {
 			return netproto.VideoStreamResult{}, errors.New("invalid video stream catalog")
 		}
 	}

@@ -3,6 +3,7 @@ import { streamRequest, stopPublications, publicationSnapshot, reconcilePublicat
 import { t } from "./i18n.js";
 import { updateShareViewers } from "./share-status.js";
 import { streamRecovery } from "./stream-recovery.js";
+import { receiverVideoCodecs } from "./video-codecs.js";
 
 const V = () => window.__noxa;
 let session = null;
@@ -109,7 +110,9 @@ async function toggleWatch(s, entry, retry = false) {
     }
     renderEntry(s, entry);
     try {
-        await streamRequest(s.scope, { action: "watch", publisher_id: entry.publisher_id, slot: entry.slot, generation: entry.generation, revision: String(entry.revision), session: s.watchSession, active });
+        const codecSupport = await window.go.main.App.SupportsStreamCodecForTab?.(s.scope.tabID) || false;
+        if (!current(s) || s.streams.get(key(entry)) !== entry) return;
+        await streamRequest(s.scope, { action: "watch", publisher_id: entry.publisher_id, slot: entry.slot, generation: entry.generation, revision: String(entry.revision), session: s.watchSession, active, ...(codecSupport ? { codecs: receiverVideoCodecs() } : {}) });
         if (!current(s) || s.streams.get(key(entry)) !== entry || entry.available === false) return;
         entry.watching = active;
         entry.watchStartedAt = Date.now();

@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { preparePublicationUpload, publicationUploadActive, startPublication, stopPublication,
-    publicationSnapshot, reconcilePublicationUploads } from "../src/stream-publication.js";
+    publicationSnapshot, reconcilePublicationUploads, publicationCodec } from "../src/stream-publication.js";
 
 function setup(t, supported = true) {
     const requests = [], changes = [], track = { id: "capture", readyState: "live", stop() { this.readyState = "ended"; } };
@@ -19,6 +19,29 @@ function setup(t, supported = true) {
 }
 
 const settle = async () => { for (let n = 0; n < 12; n++) await Promise.resolve(); };
+
+test("codec-only catalog changes reconfigure one current publication and ignore stale generations", async t => {
+    const fixture = setup(t);
+    window.go.main.App.SupportsStreamCodecForTab = async () => true;
+    const previous = Object.getOwnPropertyDescriptor(globalThis, "navigator");
+    const sender = Object.getOwnPropertyDescriptor(globalThis, "RTCRtpSender");
+    Object.defineProperty(globalThis, "navigator", { configurable: true, value: { mediaCapabilities: { encodingInfo: async () => ({ supported: true, powerEfficient: true }) } } });
+    Object.defineProperty(globalThis, "RTCRtpSender", { configurable: true, value: { getCapabilities: () => ({ codecs: [{ mimeType: "video/H264", clockRate: 90000, sdpFmtpLine: "packetization-mode=1;profile-level-id=42001f" }] }) } });
+    t.after(() => { if (previous) Object.defineProperty(globalThis, "navigator", previous); else delete globalThis.navigator; if (sender) Object.defineProperty(globalThis, "RTCRtpSender", sender); else delete globalThis.RTCRtpSender; });
+    const request = window.go.main.App.VideoStreamControlForTab;
+    window.go.main.App.VideoStreamControlForTab = async (...args) => ({ ...await request(...args), codec: "h264" });
+    const choices = [];
+    await preparePublicationUpload("cam", fixture.track, () => { choices.push(publicationCodec("cam", fixture.track)); });
+    await startPublication("cam", fixture.track);
+    assert.deepEqual(fixture.requests[0].codecs, ["h264", "vp8"]);
+    const snapshot = publicationSnapshot(), own = { publisher_id: "self", slot: "cam", generation: snapshot[0].generation, upload_active: false };
+    reconcilePublicationUploads(snapshot, [{ ...own, generation: "999", codec: "vp8" }]); await settle();
+    assert.deepEqual(choices, ["h264"]);
+    reconcilePublicationUploads(snapshot, [{ ...own, codec: "vp8" }]); await settle();
+    assert.deepEqual(choices, ["h264", "vp8"]);
+    reconcilePublicationUploads(snapshot, [{ ...own, codec: "vp8" }]); await settle();
+    assert.equal(choices.length, 2);
+});
 
 test("capable source publishers start paused and only current authoritative demand resumes them", async t => {
     const fixture = setup(t);

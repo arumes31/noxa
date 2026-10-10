@@ -22,6 +22,43 @@ func TestStreamSourceQualityRequiresCapability(t *testing.T) {
 	}
 }
 
+func TestStreamCodecRequiresAuthenticatedCapability(t *testing.T) {
+	app, cm, capture := voiceDiagnosticApp(t, false)
+	cm.authorizationModel, cm.clientID = netproto.AuthorizationModelRolesV1, "self"
+	if app.SupportsStreamCodecForTab("a") {
+		t.Fatal("missing capability accepted")
+	}
+	if _, err := app.VideoStreamControlForTab("a", netproto.VideoStreamControl{Action: "publish", Slot: "screen", Active: true, Codecs: []string{"h264", "vp8"}}); err == nil || capture.data.Len() != 0 {
+		t.Fatal("codec request sent to legacy server")
+	}
+	cm.supportsStreamCodec = true
+	if !app.SupportsStreamCodecForTab("a") || app.SupportsStreamCodecForTab("missing") {
+		t.Fatal("codec capability is not tab-scoped")
+	}
+}
+
+func TestStreamCodecValidatesSelectedCodec(t *testing.T) {
+	for _, selected := range []string{"vp8", "h264", "h265", ""} {
+		t.Run(selected, func(t *testing.T) {
+			app, cm := newPipedApp(t, func(frame *netproto.Frame) (netproto.MessageType, any, bool) {
+				var request netproto.VideoStreamControl
+				if err := netproto.Decode(frame, &request); err != nil {
+					t.Fatal(err)
+				}
+				return netproto.MsgVideoStreamResult, netproto.VideoStreamResult{Action: request.Action, PublisherID: request.PublisherID, Slot: request.Slot, Generation: 9, Active: true, Streams: []netproto.VideoStream{}, Codec: selected}, true
+			})
+			cm.mu.Lock()
+			cm.clientID, cm.authorizationModel, cm.supportsStreamCodec = "self", netproto.AuthorizationModelRolesV1, true
+			cm.mu.Unlock()
+			app.tabs, app.activeID = map[string]*tabState{"a": {cm: cm}}, "a"
+			_, err := app.VideoStreamControlForTab("a", netproto.VideoStreamControl{Action: "publish", Slot: "screen", Active: true, Codecs: []string{"h264", "vp8"}})
+			if (err == nil) != (selected == "vp8" || selected == "h264") {
+				t.Fatalf("invalid selected codec accepted: %q %v", selected, err)
+			}
+		})
+	}
+}
+
 func TestStreamSourceQualityInitialReplyAndOwnCatalog(t *testing.T) {
 	for _, test := range []string{"valid", "missing feedback", "wrong mode", "other publisher feedback", "legacy unknown"} {
 		t.Run(test, func(t *testing.T) {

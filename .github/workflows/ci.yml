@@ -125,9 +125,9 @@ jobs:
       - run: npm run test:build
       - run: npm run test:unit
       - run: npm run test:e2e
-      - name: Verify single-quality browser streams through the SFU
+      - name: Verify single-quality streams and codec switching through the SFU
         working-directory: .
-        run: go test -tags integration -count=1 -timeout=4m -run '^TestBrowserScreenSingleSource$' -v ./internal/webrtc
+        run: go test -tags integration -count=1 -timeout=4m -run '^TestBrowser(ScreenSingleSource|SingleCodecSwitch)$' -v ./internal/webrtc
 
   webview2:
     name: Standalone WebView2 fork

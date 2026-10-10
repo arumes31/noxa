@@ -63,6 +63,7 @@ type connManager struct {
 	supportsStreamVideoQuality  bool
 	supportsStreamDiagnostics   bool
 	supportsStreamSourceQuality bool
+	supportsStreamCodec         bool
 	conn                        net.Conn
 	connEpoch                   uint64
 	addr                        string // control address (tab info)
@@ -517,6 +518,7 @@ func (m *connManager) connectWith(addr string, authMsg netproto.Authenticate, si
 	m.supportsStreamVideoQuality = slices.Contains(resp.Capabilities, netproto.CapabilityStreamVideoQuality)
 	m.supportsStreamDiagnostics = slices.Contains(resp.Capabilities, netproto.CapabilityStreamDiagnostics)
 	m.supportsStreamSourceQuality = slices.Contains(resp.Capabilities, netproto.CapabilityStreamSourceQuality)
+	m.supportsStreamCodec = slices.Contains(resp.Capabilities, netproto.CapabilityStreamCodec)
 	m.isGuest = authMsg.Anonymous
 	m.iceServers = resp.ICEServers
 	m.mediaLimits = netproto.MediaLimits{}

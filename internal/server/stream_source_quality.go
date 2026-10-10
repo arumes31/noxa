@@ -11,6 +11,12 @@ type sourceQualityPublisher interface {
 }
 
 func publishVideoWithMode(voice VoiceBackend, publisher string, request netproto.VideoStreamControl) (uint64, error) {
+	if backend, ok := voice.(singleCodecVideoBackend); ok {
+		return backend.PublishVideoWithCodecs(publisher, request.Slot, request.Generation, request.Active, request.QualityMode, request.Codecs)
+	}
+	if len(request.Codecs) != 0 {
+		return 0, errors.New("single-codec publications unavailable")
+	}
 	if backend, ok := voice.(sourceQualityPublisher); ok {
 		return backend.PublishVideoWithMode(publisher, request.Slot, request.Generation, request.Active, request.QualityMode)
 	}
@@ -18,6 +24,21 @@ func publishVideoWithMode(voice VoiceBackend, publisher string, request netproto
 		return 0, errors.New("source quality publications unavailable")
 	}
 	return voice.PublishVideo(publisher, request.Slot, request.Generation, request.Active)
+}
+
+type singleCodecVideoBackend interface {
+	PublishVideoWithCodecs(publisher, slot string, generation uint64, active bool, mode string, codecs []string) (uint64, error)
+	WatchVideoWithCodecs(subscriber, publisher, slot string, generation, revision, session uint64, active bool, codecs []string) (bool, error)
+}
+
+func watchVideoWithCodecs(voice VoiceBackend, subscriber string, request netproto.VideoStreamControl) (bool, error) {
+	if backend, ok := voice.(singleCodecVideoBackend); ok {
+		return backend.WatchVideoWithCodecs(subscriber, request.PublisherID, request.Slot, request.Generation, request.Revision, request.Session, request.Active, request.Codecs)
+	}
+	if len(request.Codecs) != 0 {
+		return false, errors.New("single-codec watches unavailable")
+	}
+	return voice.WatchVideo(subscriber, request.PublisherID, request.Slot, request.Generation, request.Revision, request.Session, request.Active)
 }
 
 // This is an invalidation hint, never a delayed demand value. The publisher

@@ -2,7 +2,8 @@ import { escapeHTML as escapeTranslation } from "./markdown.js";
 // video-publication.js — camera/screen capture and publication lifecycle.
 import { captureCamera, applyCameraPreview } from "./camera-capture.js";
 import { captureMediaScope, mediaScopeIsCurrent } from "./media-controls.js";
-import { startPublication, stopPublication, publicationSnapshot, preparePublicationUpload, publicationUploadActive } from "./stream-publication.js";
+import { startPublication, stopPublication, publicationSnapshot, preparePublicationUpload, publicationUploadActive, publicationCodec } from "./stream-publication.js";
+import { preferPublicationCodec } from "./video-codecs.js";
 import { startShareStatus, stopShareStatus, refreshShareStatus } from "./share-status.js";
 import { displayAudioOptions, validateDisplayAudio } from "./display-audio.js";
 import { shareQuality, screenShareConstraints, createShareQualityControls } from "./screen-share-quality.js";
@@ -41,6 +42,38 @@ export function createVideoPublication({ policy }) {
     const pendingVideoSenders = new WeakMap();
     const videoLimitUpdates = new WeakMap();
     const capturePreferences = new WeakMap();
+    const codecSelections = new WeakMap();
+
+    function selectCodec(slot, track, transceiver) {
+        const codec = publicationCodec(slot, track);
+        if (!codec || codecSelections.get(transceiver) === codec) return false;
+        if (!preferPublicationCodec(transceiver, codec)) return false;
+        codecSelections.set(transceiver, codec);
+        return true;
+    }
+
+    function applyPublicationSettings(slot, track) {
+        const { state } = V(), pc = state.pc, scope = captureMediaScope();
+        if (!pc) return Promise.resolve();
+        const current = () => state.pc === pc && mediaScopeIsCurrent(scope) && track.readyState !== "ended" &&
+            (slot === "screen" ? state.shareStream?.getVideoTracks()[0] === track : state.localStream?.getVideoTracks().includes(track));
+        return queuePeerNegotiation(pc, async () => {
+            if (!current()) return;
+            const transceiver = slot === "screen" ? state.shareVideoTransceiver : pc.getTransceivers().find(item => item.sender.track === track);
+            const previous = codecSelections.get(transceiver);
+            if (selectCodec(slot, track, transceiver)) {
+                try { await negotiateOffer(pc, scope.generation, undefined, current, scope.tabID); }
+                catch (error) {
+                    if (current()) {
+                        if (previous) { preferPublicationCodec(transceiver, previous); codecSelections.set(transceiver, previous); }
+                        else codecSelections.delete(transceiver);
+                    }
+                    throw error;
+                }
+            }
+            if (current()) await applySendCaps(current);
+        });
+    }
 
     // Capture/encoder phase only. The caller owns native-cache fetching and must
     // rebuild the server peer (restoring authorized controls) after dimension changes.
@@ -415,7 +448,7 @@ export function createVideoPublication({ policy }) {
         if (peerConnection) {
             // The dedicated screen transceiver survives publication stops.
             try {
-                if (!await preparePublicationUpload("screen", screenTrack, () => applySendCaps())) throw new DOMException("capture ended", "AbortError");
+                if (!await preparePublicationUpload("screen", screenTrack, () => applyPublicationSettings("screen", screenTrack))) throw new DOMException("capture ended", "AbortError");
                 await queuePeerNegotiation(peerConnection, async () => {
                     if (!current() || shareEnded) throw new DOMException("capture ended", "AbortError");
                     try {
@@ -437,6 +470,7 @@ export function createVideoPublication({ policy }) {
                             }
                         }
                         state.shareVideoTransceiver = shareTransceiver;
+                        selectCodec("screen", screenTrack, shareTransceiver);
                         await applySendCaps();
                         if (!current() || shareEnded) throw new DOMException("capture ended", "AbortError");
                         if (!trackFitsVideoLimits(screenTrack, state.mediaLimits)) throw new Error(tLabel("voice.mediaDimensionsFailed"));
@@ -924,7 +958,7 @@ export function createVideoPublication({ policy }) {
             rememberVideoSenderProfile(cam, capturePreferences.get(cam));
             if (!trackFitsVideoLimits(cam, state.mediaLimits)) throw new Error(tLabel("voice.mediaDimensionsFailed"));
             cam.contentHint = "motion";
-            if (!await preparePublicationUpload("cam", cam, () => applySendCaps())) return;
+            if (!await preparePublicationUpload("cam", cam, () => applyPublicationSettings("cam", cam))) return;
             // Teardown owns capture immediately, even while another offer is pending.
             localStream.addTrack(cam);
             await queuePeerNegotiation(pc, async () => {
@@ -948,6 +982,7 @@ export function createVideoPublication({ policy }) {
                     if (!current()) throw new DOMException("capture ended", "AbortError");
                     if (!trackFitsVideoLimits(cam, state.mediaLimits)) throw new Error(tLabel("voice.mediaDimensionsFailed"));
                     await sender.replaceTrack(cam);
+                    selectCodec("cam", cam, pc.getTransceivers().find(item => item.sender === sender));
                     await negotiateOffer(pc, generation, undefined, current, tabID);
                 } catch (error) {
                     // A failed candidate must disappear before the queue advances.

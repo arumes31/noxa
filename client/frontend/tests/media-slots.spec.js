@@ -345,6 +345,38 @@ test("text sharing retains readable pixels and live motion changes update the sa
     expect(await page.evaluate(() => window.__media.cameraSender.getParameters().encodings[0].priority)).toBe("medium");
 });
 
+test("hardware screen codec follows common fallback without adding a sender", async ({ page }) => {
+    await page.evaluate(() => {
+        const app = window.go.main.App, pc = window.__noxa.state.pc;
+        app.SupportsStreamSourceQualityForTab = async () => true;
+        app.SupportsStreamCodecForTab = async () => true;
+        Object.defineProperty(navigator.mediaCapabilities, "encodingInfo", { configurable: true, value: async () => ({ supported: true, powerEfficient: true }) });
+        const add = pc.addTransceiver.bind(pc);
+        pc.addTransceiver = (...args) => {
+            const transceiver = add(...args);
+            transceiver.setCodecPreferences = codecs => { transceiver.codec = codecs[0].mimeType; };
+            return transceiver;
+        };
+        const control = app.VideoStreamControlForTab;
+        app.VideoStreamControlForTab = async (...args) => ({ ...await control(...args), codec: "h264", upload_active: true });
+    });
+    await page.locator("#voice-screen").click();
+    await page.getByRole("dialog").getByRole("button", { name: "Start sharing", exact: true }).click();
+    await expect.poll(() => page.evaluate(() => window.__noxa.state.screenSharing)).toBe(true);
+    const before = await page.evaluate(() => ({ senders: window.__noxa.state.pc.getSenders().length, offers: window.__media.offers.length }));
+    expect(await page.evaluate(() => window.__noxa.state.shareVideoTransceiver.codec)).toBe("video/H264");
+    await page.evaluate(async () => {
+        const { publicationSnapshot, reconcilePublicationUploads } = await import("/src/stream-publication.js");
+        const snapshot = publicationSnapshot();
+        reconcilePublicationUploads(snapshot, snapshot.map(({ publication, generation }) => ({ publisher_id: "self", slot: publication.slot, generation, upload_active: true, codec: "vp8" })));
+    });
+    await expect.poll(() => page.evaluate(() => window.__media.offers.length)).toBe(before.offers + 1);
+    expect(await page.evaluate(() => window.__noxa.state.shareVideoTransceiver.codec)).toBe("video/VP8");
+    expect(await page.evaluate(() => window.__noxa.state.pc.getSenders().length)).toBe(before.senders);
+    expect(await page.evaluate(() => window.__noxa.state.shareVideoTransceiver.sender.getParameters().encodings.length)).toBe(1);
+    expect(await page.evaluate(() => window.__media.errors)).toEqual([]);
+});
+
 for (const [preset, width, height] of [["qhd", 2560, 1440], ["uhd", 3840, 2160]]) {
     test(`${preset} shares high resolution with a traffic warning and adaptive bitrate`, async ({ page }) => {
         await page.locator("#voice-screen").click();
