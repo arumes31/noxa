@@ -23,7 +23,17 @@
     "user_leave": "User left your channel.",
     "user_disconnected": "User disconnected.",
     "user_moved": "User moved.",
-    "test": "This is a noXa spoken notification."
+    "test": "This is a noXa spoken notification.",
+    "connection_connected": "Connected to the server.",
+    "connection_disconnected": "Disconnected from the server.",
+    "connection_reconnecting": "Reconnecting to the server.",
+    "connection_failed": "Connection to the server failed.",
+    "disconnect_failed": "Disconnecting from the server failed.",
+    "server_error": "The server action failed.",
+    "poke": "You were poked.",
+    "buddy_online": "A watched contact is online.",
+    "channel_watch": "The requested channel user count has been reached.",
+    "stream_watch_started": "Someone is watching your stream."
   },
   "de": {
     "microphone_muted": "Mikrofon stummgeschaltet.",
@@ -49,6 +59,16 @@
     "user_leave": "Ein Benutzer hat deinen Channel verlassen.",
     "user_disconnected": "Ein Benutzer hat die Verbindung getrennt.",
     "user_moved": "Ein Benutzer hat den Channel gewechselt.",
-    "test": "Dies ist eine gesprochene noXa-Benachrichtigung."
+    "test": "Dies ist eine gesprochene noXa-Benachrichtigung.",
+    "connection_connected": "Mit dem Server verbunden.",
+    "connection_disconnected": "Vom Server getrennt.",
+    "connection_reconnecting": "Verbindung zum Server wird wiederhergestellt.",
+    "connection_failed": "Verbindung zum Server fehlgeschlagen.",
+    "disconnect_failed": "Trennen der Verbindung fehlgeschlagen.",
+    "server_error": "Die Serveraktion ist fehlgeschlagen.",
+    "poke": "Du wurdest angestupst.",
+    "buddy_online": "Ein beobachteter Kontakt ist online.",
+    "channel_watch": "Die gewünschte Benutzerzahl im Channel ist erreicht.",
+    "stream_watch_started": "Jemand schaut deinem Stream zu."
   }
 }

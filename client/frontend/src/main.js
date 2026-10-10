@@ -766,6 +766,7 @@ function scheduleReconnect(
 
 const scopedReconnectAvailable = () => typeof window.go.main.App.ReconnectTab === "function";
 const reconnectNotices = new Map();
+let pendingIntentionalDisconnectCue = null;
 const restoredVoiceChannels = new Map();
 window.runtime.EventsOn("tab_voice_restored", restored => {
     if (restored?.tab_id && restored.client_id && Number(restored.channel_id) > 0) {
@@ -853,6 +854,17 @@ window.runtime.EventsOn("tab_closed", tabID => {
 });
 window.runtime.EventsOn("tab_reconnect_disabled", tabID => tabReconnects.cancel(String(tabID)));
 window.runtime.EventsOn("tab_reset", tabID => {
+    const cue = pendingIntentionalDisconnectCue;
+    if (cue) {
+        // The native intentional edge precedes its replacement reset. A
+        // later navigation must not claim an already assigned announcement.
+        if (cue.replacementTabID !== null || cue.sourceTabID !== state.activeTabID
+            || cue.sourceGeneration !== state.serverGeneration) pendingIntentionalDisconnectCue = null;
+        else {
+            cue.replacementTabID = String(tabID || "");
+            cue.replacementGeneration = (state.serverGeneration || 0) + 1;
+        }
+    }
     // tabs.js commits its view synchronously in the same native event batch.
     queueMicrotask(() => {
         if (scopedReconnectAvailable() && state.activeTabID === tabID) tabReconnects.refresh(tabID);
@@ -938,7 +950,7 @@ async function disconnect() {
         // instead of leaking an unhandled tray-event rejection.
         if (wasVisiblyConnected && ownsSource()) {
             toast(t("runtime.disconnectFailed"), "warn", "conn");
-            playEvent("connection_failed");
+            playAlert("disconnect_failed", { effect: "connection_failed" });
         }
     }
 }
@@ -948,10 +960,14 @@ async function disconnect() {
 // teardown into one exactly-once user-facing connection edge.
 window.runtime.EventsOn("intentional_disconnect", (tabID) => {
     if (String(tabID || "") !== state.activeTabID) return;
+    if (pendingIntentionalDisconnectCue?.sourceTabID === state.activeTabID
+        && pendingIntentionalDisconnectCue.sourceGeneration === state.serverGeneration) return;
     clearSpeech();
     if (state.settings?.notify_connection !== false) toast(t("runtime.disconnected"), "info", "conn");
-    playEvent("connection_disconnected");
+    pendingIntentionalDisconnectCue = { sourceTabID: state.activeTabID, sourceGeneration: state.serverGeneration,
+        replacementTabID: null, replacementGeneration: null };
 });
+window.addEventListener("pagehide", () => { pendingIntentionalDisconnectCue = null; });
 
 window.runtime.EventsOn("disconnected", () => {
     // A selected server that drops takes over the one foreground retry
@@ -1088,6 +1104,14 @@ window.runtime.EventsOn("tab_replay_done", (tabID) => {
     // In either case, this resolves a new tab's first own-channel cue exactly
     // once, while restored tabs have no pending cue to play.
     syncOwnChannel({ audible: false });
+    const cue = pendingIntentionalDisconnectCue;
+    if (cue && cue.replacementTabID === String(tabID || "")
+        && cue.replacementTabID === state.activeTabID && cue.replacementGeneration === state.serverGeneration) {
+        pendingIntentionalDisconnectCue = null;
+        // The native reset has cleared the closing tab's queue. Play this
+        // committed edge once after replay, including an empty replacement.
+        playAlert("connection_disconnected", { delay: 0 });
+    }
 });
 
 window.runtime.EventsOn("snapshot", (json) => {

@@ -3,10 +3,10 @@ noXa audio sources and redistribution
 Sample-based effects: CC0-1.0. noXa edits of these samples are also dedicated under CC0-1.0.
 https://creativecommons.org/publicdomain/zero/1.0/legalcode
 
-Poke (G05): "Wake up!" rendered locally with Microsoft David Desktop using
+Historical poke audition (G05): "Wake up!" rendered locally with Microsoft David Desktop using
 Windows System.Speech, followed by an original synthesized double beep.
 This recording is separate from the CC0 sample libraries listed below.
-The checked-in WAV is used directly; no Windows voice engine is shipped.
+Localized English/German poke speech replaces this cue. No Windows voice engine is shipped.
 
 Source archives and each edit are identified in the repository at:
 client/frontend/src/assets/sounds/provenance.json
@@ -18,27 +18,49 @@ https://kenney.nl/assets/interface-sounds
 Archive SHA-256: f2193d072726d6758a5f7871b2dcc54dcce0d5c35c6f0a62f92549b327c81232
 
 Original source license:
-	
-
-	Interface Sounds (1.0)
-
-	Created/distributed by Kenney (www.kenney.nl)
-	Creation date: 11-02-2020
-
-			------------------------------
-
-	License: (Creative Commons Zero, CC0)
-	http://creativecommons.org/publicdomain/zero/1.0/
-
-	This content is free to use in personal, educational and commercial projects.
-	Support us by crediting Kenney or www.kenney.nl (this is not mandatory)
-
-			------------------------------
-
-	Donate:   http://support.kenney.nl
-	Patreon:  http://patreon.com/kenney/
-
-	Follow on Twitter for updates:
+
+
+
+
+	Interface Sounds (1.0)
+
+
+
+	Created/distributed by Kenney (www.kenney.nl)
+
+	Creation date: 11-02-2020
+
+
+
+			------------------------------
+
+
+
+	License: (Creative Commons Zero, CC0)
+
+	http://creativecommons.org/publicdomain/zero/1.0/
+
+
+
+	This content is free to use in personal, educational and commercial projects.
+
+
+	Support us by crediting Kenney or www.kenney.nl (this is not mandatory)
+
+
+
+			------------------------------
+
+
+
+	Donate:   http://support.kenney.nl
+
+	Patreon:  http://patreon.com/kenney/
+
+
+
+	Follow on Twitter for updates:
+
 	http://twitter.com/KenneyNL
 
 UI Audio 1.0
@@ -48,26 +70,46 @@ https://kenney.nl/assets/ui-audio
 Archive SHA-256: 946fc23a63d535d693eb31b2eabb80c8c28d6351e2186b344ceb71b2cb1d5eb6
 
 Original source license:
-	
-
-	UI SFX Set
-
-	by  Kenney Vleugels (Kenney.nl)
-
-			------------------------------
-
-	License (Creative Commons Zero, CC0)
-	http://creativecommons.org/publicdomain/zero/1.0/
-
-	You may use these assets in personal and commercial projects.
-	Credit (Kenney or www.kenney.nl) would be nice but is not mandatory.
-
-			------------------------------
-
-	Donate:   http://support.kenney.nl
-	Request:  http://request.kenney.nl
-
-	Follow on Twitter for updates:
+
+
+
+
+	UI SFX Set
+
+
+
+	by  Kenney Vleugels (Kenney.nl)
+
+
+
+			------------------------------
+
+
+
+	License (Creative Commons Zero, CC0)
+
+	http://creativecommons.org/publicdomain/zero/1.0/
+
+
+
+	You may use these assets in personal and commercial projects.
+
+	Credit (Kenney or www.kenney.nl) would be nice but is not mandatory.
+
+
+
+			------------------------------
+
+
+
+	Donate:   http://support.kenney.nl
+
+	Request:  http://request.kenney.nl
+
+
+
+	Follow on Twitter for updates:
+
 	@KenneyNL
 
 Casino Audio 1.1 — card and packaging foley only
@@ -77,26 +119,46 @@ https://kenney.nl/assets/casino-audio
 Archive SHA-256: f36250766ac5bc378c13708ddf12a23a8e54a3251f8d482c7536e51b5dbafa18
 
 Original source license:
-	
-
-	Casino Audio (1.1)
-
-	by  Kenney Vleugels (Kenney.nl)
-
-			------------------------------
-
-	License (Creative Commons Zero, CC0)
-	http://creativecommons.org/publicdomain/zero/1.0/
-
-	You may use these assets in personal and commercial projects.
-	Credit (Kenney or www.kenney.nl) would be nice but is not mandatory.
-
-			------------------------------
-
-	Donate:   http://support.kenney.nl
-	Request:  http://request.kenney.nl
-
-	Follow on Twitter for updates:
+
+
+
+
+	Casino Audio (1.1)
+
+
+
+	by  Kenney Vleugels (Kenney.nl)
+
+
+
+			------------------------------
+
+
+
+	License (Creative Commons Zero, CC0)
+
+	http://creativecommons.org/publicdomain/zero/1.0/
+
+
+
+	You may use these assets in personal and commercial projects.
+
+	Credit (Kenney or www.kenney.nl) would be nice but is not mandatory.
+
+
+
+			------------------------------
+
+
+
+	Donate:   http://support.kenney.nl
+
+	Request:  http://request.kenney.nl
+
+
+
+	Follow on Twitter for updates:
+
 	@KenneyNL
 
 Various Paper Sound Effects
@@ -108,17 +170,53 @@ Archive SHA-256: aa1889414310c7cfdd8dc291c19d4e4fc21ec987e9238b0d961fb72449c263a
 Speech: complete fixed noXa English and German sentences rendered offline.
 English: Piper en_US-ljspeech-high, based on public-domain LJ Speech.
 https://keithito.com/LJ-Speech-Dataset/
-German: D33, Piper de_DE-mls-medium, speaker ID 9 (MLS source speaker 9132).
-Model published by rhasspy / Michael Hansen:
-https://huggingface.co/rhasspy/piper-voices/blob/1162a9173d0ce503555aed757976b7a9912eae4c/de/de_DE/mls/medium/MODEL_CARD
-Based on Multilingual LibriSpeech (MLS), 2020:
-Vineel Pratap, Qiantong Xu, Anuroop Sriram, Gabriel Synnaeve and Ronan Collobert.
-https://www.openslr.org/94/
-Dataset and German noXa recordings: Creative Commons Attribution 4.0 International (CC BY 4.0).
-https://creativecommons.org/licenses/by/4.0/
-https://creativecommons.org/licenses/by/4.0/legalcode
-Changes: synthesized noXa sentences, pronunciation overrides, context cropping,
-silence trimming, endpoint fades and loudness normalization. No endorsement implied.
-Voice source revision: 1162a9173d0ce503555aed757976b7a9912eae4c
+English voice source revision: 1162a9173d0ce503555aed757976b7a9912eae4c
 https://huggingface.co/rhasspy/piper-voices
-Piper tooling and model weights are not included in the application.
+
+German: selected synthetic AN06 voice, authored with Qwen3-TTS VoiceDesign
+and reproduced from its original WAV and complete transcript using Qwen3-TTS Base.
+Original fictional adult voice; no actor recording or identifiable character imitation.
+Qwen3-TTS-12Hz-1.7B-VoiceDesign and Qwen3-TTS-12Hz-1.7B-Base: Apache-2.0.
+https://huggingface.co/Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign
+https://huggingface.co/Qwen/Qwen3-TTS-12Hz-1.7B-Base
+https://www.apache.org/licenses/LICENSE-2.0
+Q8 conversion: audio-cpp/audio.cpp-gguf
+Revision: e479ac197bae727f69574261a8025696bc51de48
+https://huggingface.co/audio-cpp/audio.cpp-gguf
+Offline runtime: audio.cpp v0.9.1, Apache-2.0, Copyright 2026 ShugoAI LLC.
+https://github.com/0xShug0/audio.cpp
+
+Model/tool licenses identify authoring sources; they do not automatically
+establish the license of generated recordings. Original noXa German fixed
+recordings and the synthetic AN06 reference are distributed under the project's
+MIT license below. Changes: generated complete noXa sentences, silence trimming,
+DC removal, endpoint fades and loudness normalization.
+AN06 reference SHA-256: 38f2ae669bbda13d21a6ad446fbbd97ac734729a83cd1633a6e0248fe847b35b
+Full model hashes, reference provenance and rendering settings are tracked at:
+client/frontend/src/assets/speech/provenance.json
+tools/voices/AN06-provenance.json
+
+Piper tooling, Qwen/audio.cpp engines and all model weights are not included
+in the application. This notice does not imply endorsement by their authors.
+
+MIT License
+
+Copyright (c) 2026 arumes31
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

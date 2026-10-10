@@ -1,15 +1,91 @@
-# Model card for mls (medium)
+# noXa German AN06 authoring model card
 
-* Language: de_DE (German, Germany)
-* Speakers: 236
-* Quality: medium
-* Samplerate: 22,050Hz
+Language: German. Output: mono 24,000 Hz PCM16 static recordings.
+Selected voice: AN06, "Schelmischer Begleiter", an original synthetic adult
+fictional voice with light Austrian coloring. No identifiable actor or existing
+character imitation was requested. Accent and voice continuity are model-directed;
+this card does not certify native-listener authentication.
 
-## Dataset
+## Upstream models and licenses
 
-* URL: http://openslr.org/94/
-* License: CC-BY 4.0
+Qwen team, Qwen3-TTS-12Hz-1.7B-VoiceDesign (reference authoring):
+https://huggingface.co/Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign
+https://huggingface.co/Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign/raw/main/README.md
 
-## Training
+Qwen team, Qwen3-TTS-12Hz-1.7B-Base (reference-conditioned text-to-speech):
+https://huggingface.co/Qwen/Qwen3-TTS-12Hz-1.7B-Base
+https://huggingface.co/Qwen/Qwen3-TTS-12Hz-1.7B-Base/raw/main/README.md
 
-Trained from scratch
+Both models are published under Apache-2.0.
+The official model cards declare the model license; the Qwen source license is:
+https://github.com/QwenLM/Qwen3-TTS/blob/main/LICENSE
+https://www.apache.org/licenses/LICENSE-2.0
+Upstream explicitly documents VoiceDesign followed by reference cloning:
+https://github.com/QwenLM/Qwen3-TTS#voice-design-then-clone
+
+The GGUF repository hosts models with different licenses. Its general "other"
+license badge does not replace each Qwen model's Apache-2.0 license.
+
+## Pinned conversion and runtime
+
+Conversion repository: audio-cpp/audio.cpp-gguf
+Revision: e479ac197bae727f69574261a8025696bc51de48
+
+Reference VoiceDesign file:
+Qwen3-TTS-12Hz-1.7B-VoiceDesign-GGUF/qwen3-tts-12hz-1.7b-voicedesign-q8_0.gguf
+SHA-256: 1bcef9a8c021072fca40e00498e00af9091fbe6d3ae4f87567cfee885d6c7554
+
+Base file:
+Qwen3-TTS-12Hz-1.7B-Base-GGUF/qwen3-tts-12hz-1.7b-base-q8_0_v2.gguf
+Bytes: 2695175104
+SHA-256: b55e06c7890d43c208d15aed8b4ed3f18215f295e47d5960e061b15bff338ab0
+
+Runtime: audio.cpp v0.9.1 Windows x64 CPU, Apache-2.0.
+Copyright 2026 ShugoAI LLC.
+https://github.com/0xShug0/audio.cpp
+https://github.com/0xShug0/audio.cpp/releases/tag/v0.9.1
+Archive SHA-256: 57a17896aba4447f088b27d2875e90a6563afd7860023d50da03a61fb143609f
+Executable SHA-256: 5e4d2ecd6e274d677c0d14d54d8ed83f4953057789801da0dad696d413a981ac
+
+## Synthetic reference and procedure
+
+Reference: tools/voices/AN06.wav
+SHA-256: 38f2ae669bbda13d21a6ad446fbbd97ac734729a83cd1633a6e0248fe847b35b
+Original VoiceDesign seed: 20302605
+Original full prompt and source hashes: tools/voices/AN06-provenance.json
+Reference transcript:
+Mikrofon stummgeschaltet. Mikrofon aktiviert. Ton stummgeschaltet.
+Ein Benutzer hat den Channel betreten.
+Ein Benutzer hat die Verbindung getrennt.
+Verbindung zum Server wiederhergestellt.
+
+All German production phrases are generated as complete sentences through task
+tts, family qwen3_tts, using the Base model, the unmodified synthetic reference
+and its complete transcript as per-request voice_ref and reference_text fields
+in the batch JSON. The fourth reference sentence differs from the
+canonical user_join phrase. The reference transcript must describe the actual
+reference and must not be replaced with a desired production phrase.
+
+The top-level provenance pronunciation_aliases.de map applies noXa -> Noksa only
+to native target text. Canonical transcripts keep noXa; results.text is canonical
+and results.renderText records the actual native text. Import matching validates
+the current rendered request exactly. The alias does not alter AN06, its full
+reference transcript, the original event seeds or authoring.de settings.
+
+provenance.json records per-language providers, request seeds, token/time
+limits, reference hash and mastering settings. Each accepted WAV has its own
+metrics/hash and recorded review evidence. Trimming, DC removal, endpoint fades
+and loudness normalization are applied. No pitch shift or time stretch is used.
+Model-conditioned synthesis can vary by runtime or quantization and may omit,
+repeat or add speech. Format checks alone do not authenticate content. ASR
+review and listening review are distinct; neither should be claimed without
+recorded evidence.
+
+## Redistribution boundary
+
+Qwen model weights and audio.cpp are offline authoring dependencies and are
+not packaged in noXa. The noXa original synthetic reference and generated fixed
+German recordings use the repository's MIT license. This is a project license
+choice for the recordings; it is not an assertion that Apache-2.0 automatically
+licenses all generated output. English LJ Speech remains public domain. Former
+German MLS/D33 attribution describes the retired assets, not these AN06 WAVs.

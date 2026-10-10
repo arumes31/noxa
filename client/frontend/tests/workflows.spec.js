@@ -11140,7 +11140,7 @@ test("disabled speech stays silent while unrelated effects work and history stay
     expect(result.vadPTT).toEqual([]);
     expect(result.ptt).toEqual(["ptt_on"]);
     expect(result.deafen).toEqual([]);
-    expect(result.guestConnect).toEqual(["connection_connected"]);
+    expect(result.guestConnect).toEqual([]);
     expect(result.guestInitialJoinMedia).toBe(0);
     expect(result.guestInitialCueCleared).toBe(true);
     expect(result.replayFirstIdentityMedia).toBe(0);
@@ -11148,7 +11148,7 @@ test("disabled speech stays silent while unrelated effects work and history stay
     expect(result.liveMoveInitialMedia).toBe(0);
     expect(result.liveMoveCueCleared).toBe(true);
     expect(result.groups).toEqual(expect.arrayContaining([
-        "Connection", "Voice controls", "Notifications",
+        "Voice controls", "Notifications",
     ]));
     await page.getByText("Individual sound effects", { exact: true }).click();
     await expect(page.getByText("Channel message", { exact: true })).toBeVisible();
@@ -11157,7 +11157,7 @@ test("disabled speech stays silent while unrelated effects work and history stay
 test("scopes connection failures and active-tab close sounds", async ({ page }) => {
     const result = await page.evaluate(async () => {
         const tones = [];
-        const { soundEngine } = window.__noxa;
+        const { soundEngine, speechQueue } = window.__noxa;
         await soundEngine.preload();
         await soundEngine.resume();
         const expectedSounds = Object.keys(soundEngine.definitions);
@@ -11177,7 +11177,8 @@ test("scopes connection failures and active-tab close sounds", async ({ page }) 
             return source;
         };
         const state = window.__noxa.state;
-        state.settings = { ...state.settings, event_sounds: {}, notify_matrix: {} };
+        state.settings = { ...state.settings, spoken_messages: true, speech_language: "en", speech_volume: 100,
+            speech_connection: true, effects_enabled: false, event_sounds: {}, speech_events: {}, notify_matrix: {} };
         const emit = (name, payload) => {
             for (const callback of window.__events[name] || []) callback(payload);
         };
@@ -11197,13 +11198,16 @@ test("scopes connection failures and active-tab close sounds", async ({ page }) 
         window.__connectBookmarkResult = "server unavailable";
         window.__releaseSlowConnect();
         await slowLogin;
+        await new Promise(resolve => setTimeout(resolve, 200));
         const staleFailure = [...tones];
 
         tones.length = 0;
         window.__connectBookmarkGate = null;
         window.__connectBookmarkResult = "still unavailable";
         await window.__noxa.connectFromLogin();
+        await new Promise(resolve => setTimeout(resolve, 200));
         const currentFailure = [...tones];
+        speechQueue.clear();
         window.__connectBookmarkResult = "";
 
         tones.length = 0;
@@ -11269,21 +11273,79 @@ test("scopes connection failures and active-tab close sounds", async ({ page }) 
     });
 
     expect(result.staleFailure).toEqual([]);
-    expect(result.currentFailure).toEqual(["connection_failed"]);
-    expect(result.menuDisconnect).toEqual(["connection_disconnected"]);
+    expect(result.currentFailure).toEqual(["speech_en_connection_failed"]);
+    expect(result.menuDisconnect).toEqual(["speech_en_connection_disconnected"]);
     expect(result.backgroundClose).toEqual([]);
-    expect(result.activeClose).toEqual(["connection_disconnected"]);
+    expect(result.activeClose).toEqual(["speech_en_connection_disconnected"]);
     expect(result.activeOfflineClose).toEqual([]);
     expect(result.offlineMenuDisconnect).toEqual([]);
 });
 
+for (const language of ["en", "de"]) {
+    test(`native disconnect replacement preserves one ${language} announcement and rejects obsolete batches`, async ({ page }) => {
+        const result = await page.evaluate(async language => {
+            const { state, soundEngine, speechQueue } = window.__noxa;
+            Object.assign(state.settings, { play_sounds: true, spoken_messages: true, speech_language: language,
+                speech_connection: true, speech_volume: 100, effects_enabled: false, event_sounds: {}, speech_events: {},
+                notify_matrix: {}, dnd_enabled: false, dnd_from: "", dnd_to: "" });
+            await soundEngine.preload(); await soundEngine.resume();
+            const played = [], play = soundEngine.play.bind(soundEngine);
+            soundEngine.play = (id, options) => { const ok = play(id, options); if (ok) played.push(id); return ok; };
+            const emit = (event, payload) => { for (const cb of window.__events[event] || []) cb(payload); };
+            const setup = async source => {
+                speechQueue.clear();
+                window.__tabs = [{ id: source, active: true, connected: true, addr: source + ".example:12333", nickname: "Alice" }];
+                emit("tab_reset", source); emit("tab_replay_done", source);
+                await new Promise(resolve => setTimeout(resolve, 50));
+                document.getElementById("conn-pill").classList.add("up");
+                played.length = 0;
+            };
+            const outcomes = {};
+            for (const target of ["replacement", ""]) {
+                const source = "source-" + (target || "last"); await setup(source);
+                emit("intentional_disconnect", source); emit("intentional_disconnect", source);
+                window.__tabs = target ? [{ id: target, active: true, connected: true, addr: "replacement.example:12333", nickname: "Bob" }] : [];
+                emit("tab_closed", source); emit("tab_reset", target); emit("tab_replay_done", target); emit("tab_replay_done", target);
+                await new Promise(resolve => setTimeout(resolve, 50));
+                outcomes[target || "last"] = [...played];
+            }
+            await setup("source-stale");
+            emit("intentional_disconnect", "source-stale"); emit("tab_reset", "first-target");
+            emit("tab_reset", "newer-target"); emit("tab_replay_done", "first-target"); emit("tab_replay_done", "newer-target");
+            await new Promise(resolve => setTimeout(resolve, 50)); outcomes.stale = [...played];
+            await setup("source-background");
+            emit("intentional_disconnect", "background"); emit("tab_reset", "another-target"); emit("tab_replay_done", "another-target");
+            await new Promise(resolve => setTimeout(resolve, 50)); outcomes.background = [...played];
+            await setup("source-muted"); state.settings.speech_events.connection_disconnected = false;
+            emit("intentional_disconnect", "source-muted"); emit("tab_reset", "muted-target"); emit("tab_replay_done", "muted-target");
+            await new Promise(resolve => setTimeout(resolve, 50)); outcomes.muted = [...played];
+            delete state.settings.speech_events.connection_disconnected;
+            await setup("source-failed");
+            const app = window.go.main.App;
+            window.go.main.App = new Proxy(app, { get(target, key) { return key === "DisconnectTab"
+                ? async () => { throw Error("native disconnect failed"); } : target[key]; } });
+            emit("tray_disconnect"); await new Promise(resolve => setTimeout(resolve, 200));
+            outcomes.failed = [...played];
+            emit("tray_disconnect"); await new Promise(resolve => setTimeout(resolve, 200));
+            outcomes.repeatedFailure = [...played];
+            speechQueue.clear();
+            return outcomes;
+        }, language);
+        const disconnected = [`speech_${language}_connection_disconnected`];
+        const failed = [`speech_${language}_disconnect_failed`];
+        expect(result).toEqual({ replacement: disconnected, last: disconnected, stale: [], background: [], muted: [],
+            failed, repeatedFailure: failed });
+    });
+}
 
-test("viewer-start sound belongs to the current publication and obeys sound settings", async ({ page }) => {
+
+test("viewer-start speech belongs to the current publication, preserves gates and limits repeated notices", async ({ page }) => {
     const result = await page.evaluate(async () => {
-        const { state, soundEngine } = window.__noxa;
+        const { state, soundEngine, speechQueue } = window.__noxa;
         state.pc = {}; state.myClientID = "publisher"; state.myChannelID = 1;
         state.replayingTabID = "";
         state.settings = { ...state.settings, play_sounds: true, effects_enabled: true, sound_volume: 100,
+            spoken_messages: true, speech_language: "en", speech_volume: 100, speech_events: {},
             event_sounds: {}, notify_matrix: {}, dnd_enabled: false, dnd_from: "", dnd_to: "" };
         window.go.main.App = new Proxy(window.go.main.App, { get: (target, key) => key === "VideoStreamControlForTab"
             ? async (_tab, msg) => ({ ...msg, generation: "90" }) : target[key] });
@@ -11291,23 +11353,35 @@ test("viewer-start sound belongs to the current publication and obeys sound sett
         const track = document.createElement("canvas").captureStream(1).getVideoTracks()[0];
         if (!await p.startPublication("cam", track)) throw new Error("fixture publication rejected");
         await soundEngine.preload(); await soundEngine.resume();
-        let clock = 0; soundEngine.now = () => clock += 1000;
+        let clock = 0; soundEngine.now = () => clock; speechQueue.now = () => clock;
         const heard = []; const original = soundEngine.play.bind(soundEngine);
         soundEngine.play = (name, options) => { const ok = original(name, options); if (ok) heard.push(name); return ok; };
-        const emit = (data = {}) => {
+        const emit = async (data = {}, at = clock + 4000) => {
+            speechQueue.clear();
             for (const entry of soundEngine.active) soundEngine.release(entry);
+            clock = at;
             for (const cb of window.__events.event) cb(JSON.stringify({ type: "stream_watch_started", data: { publisher_id: "publisher", slot: "cam", generation: "90", ...data } }));
+            clock += 150; speechQueue.pump();
+            await new Promise(resolve => setTimeout(resolve, 30));
             return heard.length;
         };
-        const counts = [emit(), emit({ generation: "89" }), emit({ publisher_id: "someone-else" }), emit({ slot: "screen" })];
-        state.settings.play_sounds = false; counts.push(emit()); state.settings.play_sounds = true;
-        state.settings.event_sounds.stream_watch_started = false; counts.push(emit()); state.settings.event_sounds.stream_watch_started = true;
-        state.settings.effects_enabled = false; counts.push(emit()); state.settings.effects_enabled = true;
-        state.settings.dnd_enabled = true; counts.push(emit()); state.settings.dnd_enabled = false;
-        state.replayingTabID = "past"; counts.push(emit()); state.replayingTabID = "";
-        counts.push(emit());
-        await p.stopPublication("cam"); counts.push(emit()); track.stop();
+        const counts = { first: await emit({}, 0), beforeCooldown: await emit({}, 2999), atCooldown: await emit({}, 3000),
+            staleGeneration: await emit({ generation: "89" }), otherPublisher: await emit({ publisher_id: "someone-else" }),
+            otherSlot: await emit({ slot: "screen" }) };
+        state.settings.play_sounds = false; counts.masterMuted = await emit(); state.settings.play_sounds = true;
+        state.settings.event_sounds.stream_watch_started = false; counts.legacyMuted = await emit(); delete state.settings.event_sounds.stream_watch_started;
+        state.settings.speech_events.stream_watch_started = false; counts.speechEventMuted = await emit(); delete state.settings.speech_events.stream_watch_started;
+        state.settings.dnd_enabled = true; counts.dnd = await emit(); state.settings.dnd_enabled = false;
+        state.replayingTabID = "past"; counts.history = await emit(); state.replayingTabID = "";
+        state.settings.effects_enabled = false; counts.effectsIndependent = await emit(); state.settings.effects_enabled = true;
+        state.settings.spoken_messages = false; counts.speechDisabled = await emit(); state.settings.spoken_messages = true;
+        state.settings.speech_volume = 0; counts.speechZero = await emit(); state.settings.speech_volume = 100;
+        counts.enabledAgain = await emit();
+        await p.stopPublication("cam"); counts.stoppedPublication = await emit(); track.stop(); speechQueue.clear();
         return { counts, heard };
     });
-    expect(result).toEqual({ counts: [1,1,1,1,1,1,1,1,1,2,2], heard: ["stream_watch_started", "stream_watch_started"] });
+    expect(result.counts).toEqual({ first: 1, beforeCooldown: 1, atCooldown: 2, staleGeneration: 2, otherPublisher: 2, otherSlot: 2,
+        masterMuted: 2, legacyMuted: 2, speechEventMuted: 2, dnd: 2, history: 2, effectsIndependent: 3,
+        speechDisabled: 3, speechZero: 3, enabledAgain: 4, stoppedPublication: 4 });
+    expect(result.heard).toEqual(Array(4).fill("speech_en_stream_watch_started"));
 });

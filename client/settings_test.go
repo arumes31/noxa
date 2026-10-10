@@ -421,6 +421,38 @@ func TestIndependentAudioSettingsRoundTrip(t *testing.T) {
 	}
 }
 
+func TestChannelSpeechPreferenceRoundTrip(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	settings := DefaultSettings()
+	data, err := json.Marshal(settings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		t.Fatal(err)
+	}
+	if string(fields["speech_channel"]) != "true" {
+		t.Fatal("channel announcements must default to enabled")
+	}
+	if err := json.Unmarshal([]byte(`{"speech_channel":false}`), &settings); err != nil {
+		t.Fatal(err)
+	}
+	if err := saveSettingsAt(path, settings); err != nil {
+		t.Fatal(err)
+	}
+	data, err = json.Marshal(loadSettingsAt(path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(data, &fields); err != nil {
+		t.Fatal(err)
+	}
+	if string(fields["speech_channel"]) != "false" {
+		t.Fatal("disabled channel announcements did not survive save/load")
+	}
+}
+
 func TestLegacyAnnouncementLanguageAndDucking(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "settings.json")
 	if err := os.WriteFile(path, []byte(`{"settings_version":9,"language":"de","sound_volume":0,"play_sounds":false}`), 0o600); err != nil {

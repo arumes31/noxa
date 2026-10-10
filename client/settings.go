@@ -201,6 +201,7 @@ type Settings struct {
 	SpeechVolume             int             `json:"speech_volume"`   // 0..200
 	SpeechLanguage           string          `json:"speech_language"` // interface | en | de
 	SpeechConnection         bool            `json:"speech_connection"`
+	SpeechChannel            bool            `json:"speech_channel"`
 	SpeechAdmin              bool            `json:"speech_admin"`
 	SpeechRemoval            bool            `json:"speech_removal"`
 	SpeechPermissions        bool            `json:"speech_permissions"`
@@ -304,6 +305,7 @@ func DefaultSettings() Settings {
 		SpeechVolume:      100,
 		SpeechLanguage:    "interface",
 		SpeechConnection:  true,
+		SpeechChannel:     true,
 		SpeechAdmin:       true,
 		SpeechRemoval:     true,
 		SpeechPermissions: true,

@@ -1,8 +1,29 @@
 {
-  "repository": "rhasspy/piper-voices",
-  "revision": "1162a9173d0ce503555aed757976b7a9912eae4c",
+  "schema_version": 2,
+  "pronunciation_aliases": {
+    "de": { "noXa": "Noksa" }
+  },
+  "providers": {
+    "en": {
+      "engine": "piper",
+      "repository": "rhasspy/piper-voices",
+      "revision": "1162a9173d0ce503555aed757976b7a9912eae4c",
+      "model": "en/en_US/ljspeech/high/en_US-ljspeech-high",
+      "dataset_license": "Public domain"
+    },
+    "de": {
+      "engine": "qwen3_tts",
+      "repository": "audio-cpp/audio.cpp-gguf",
+      "revision": "e479ac197bae727f69574261a8025696bc51de48",
+      "file": "Qwen3-TTS-12Hz-1.7B-Base-GGUF/qwen3-tts-12hz-1.7b-base-q8_0_v2.gguf",
+      "size": 2695175104,
+      "sha256": "b55e06c7890d43c208d15aed8b4ed3f18215f295e47d5960e061b15bff338ab0",
+      "upstream_repository": "Qwen/Qwen3-TTS-12Hz-1.7B-Base",
+      "license": "Apache-2.0"
+    }
+  },
   "authoring": {
-    "tool": "piper-tts 1.4.2",
+    "tool": "piper-tts 1.4.2 (en); audio.cpp v0.9.1 (de)",
     "length_scale": 1.08,
     "noise_scale": 0.55,
     "noise_w_scale": 0.7,
@@ -12,39 +33,42 @@
     "edge_padding_ms": 25,
     "endpoint_fade_ms": 5,
     "runtime_generation": false,
+    "en": { "tool": "piper-tts", "version": "1.4.2" },
     "de": {
-      "audition": "D33",
-      "speaker_id": 9,
-      "source_speaker": "9132",
-      "length_scale": 1,
-      "noise_scale": 0.333,
-      "noise_w_scale": 0.333,
-      "minimum_context_phonemes": 200,
-      "minimum_repetitions": 3,
-      "alignment_output": "w_ceil",
-      "alignment_padding_ms": 25,
+      "audition": "AN06",
+      "tool": "audio.cpp",
+      "task": "tts",
+      "language": "German",
+      "threads": 4,
+      "max_tokens": 192,
+      "timeout_seconds_per_event": 300,
+      "seed_base": 20264010,
+      "seed_step": 7919,
+      "runtime": {
+        "version": "v0.9.1",
+        "archive_url": "https://github.com/0xShug0/audio.cpp/releases/download/v0.9.1/audio-v0.9.1-bin-windows-x64-cpu.zip",
+        "archive_sha256": "57a17896aba4447f088b27d2875e90a6563afd7860023d50da03a61fb143609f",
+        "executable_sha256": "5e4d2ecd6e274d677c0d14d54d8ed83f4953057789801da0dad696d413a981ac",
+        "license": "Apache-2.0"
+      },
+      "reference": {
+        "path": "tools/voices/AN06.wav",
+        "sha256": "38f2ae669bbda13d21a6ad446fbbd97ac734729a83cd1633a6e0248fe847b35b",
+        "provenance": "tools/voices/AN06-provenance.json",
+        "text": "Mikrofon stummgeschaltet. Mikrofon aktiviert. Ton stummgeschaltet. Ein Benutzer hat den Channel betreten. Ein Benutzer hat die Verbindung getrennt. Verbindung zum Server wiederhergestellt."
+      },
       "leading_padding_ms": 40,
       "trailing_padding_ms": 60,
       "endpoint_fade_ms": 6,
-      "pronunciation": {
-        "Channel": "[[tʃˈɛnəl]]",
-        "Server": "[[sˈɛrvɜ]]",
-        "noXa-": "Noksa-"
-      },
-      "events": {
-        "banned": { "length_scale": 1.15 },
-        "kicked": { "length_scale": 1.15 },
-        "user_kicked": { "length_scale": 1.15 },
-        "server_shutdown": { "length_scale": 1.15 }
-      }
+      "review": "Verify every complete transcript, extra speech, intelligibility and AN06 voice continuity before publication."
     }
   },
   "models": {
     "en": "en/en_US/ljspeech/high/en_US-ljspeech-high",
-    "de": "de/de_DE/mls/medium/de_DE-mls-medium"
+    "de": "Qwen/Qwen3-TTS-12Hz-1.7B-Base"
   },
   "checksums": {
-    "de.onnx": "69cd1d2aa5a35839a518966fcc4924b5f93e5f8c948ed0752b1a616ad53f65bf",
-    "de.onnx.json": "b0af1c89ddfdc72d32e015729b0e89b99eec13c2c8caa1db7488d98e9e570b40"
+    "en.onnx": "5d4f08ba6a2a48c44592eed3ce56bf85e9de3dd4e20df90541ae68a8310c029a",
+    "en.onnx.json": "7e1f4634af596d83cca997fb7a931ba80b70f8a316a2655ee69c55365e0ace14"
   }
 }

@@ -1,0 +1,31 @@
+{
+  "voice": {
+    "id": "AN06",
+    "group": "CH",
+    "accent": "Österreichisch",
+    "style": "Schelmischer Begleiter",
+    "file": "audio/AN06.wav",
+    "prompt": "An original adult man character, age 27, with a nasal elastic tenor voice. German anime-dubbing performance. A mischievous adult comic companion, playful elastic vowels, cheeky nasal twang, animated teasing intonation and nimble rhythm. German with light Austrian vowel coloring and melodic Austrian intonation. Make the character personality and expressive speaking style clearly audible while every word stays intelligible. Speak all six provided German sentences exactly once, entirely in German. Brief pauses. Do not add Japanese words, interjections, laughter, grunts or dialogue. No screaming. Dry voice only, no music or sound effects. This is an original fictional character, no imitation of any identifiable actor or existing character.",
+    "duration": 15.582,
+    "sample_rate": 24000,
+    "sha256": "38f2ae669bbda13d21a6ad446fbbd97ac734729a83cd1633a6e0248fe847b35b",
+    "peak": 0.53273,
+    "rms_dbfs": -23.0,
+    "source_clipped_samples": 0,
+    "generator": "Local audio.cpp Qwen VoiceDesign Q8",
+    "local_provenance": {
+      "runtime": "v0.9.1",
+      "runtime_sha256": "57a17896aba4447f088b27d2875e90a6563afd7860023d50da03a61fb143609f",
+      "model_repository": "audio-cpp/audio.cpp-gguf",
+      "revision": "e479ac197bae727f69574261a8025696bc51de48",
+      "filename": "Qwen3-TTS-12Hz-1.7B-VoiceDesign-GGUF/qwen3-tts-12hz-1.7b-voicedesign-q8_0.gguf",
+      "sha256": "1bcef9a8c021072fca40e00498e00af9091fbe6d3ae4f87567cfee885d6c7554",
+      "runtime_variant": "Windows x64 CPU optimized; verified compatible trial",
+      "runtime_asset": "https://github.com/0xShug0/audio.cpp/releases/download/v0.9.1/audio-v0.9.1-bin-windows-x64-cpu.zip"
+    },
+    "seed": 20302605
+  },
+  "transcript": "Mikrofon stummgeschaltet. Mikrofon aktiviert. Ton stummgeschaltet. Ein Benutzer hat den Channel betreten. Ein Benutzer hat die Verbindung getrennt. Verbindung zum Server wiederhergestellt.",
+  "original_model": "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign",
+  "note": "Original synthetic adult fictional voice selected by the user. No recording or imitation of an identifiable person. Authoring reference only; not a client runtime dependency."
+}

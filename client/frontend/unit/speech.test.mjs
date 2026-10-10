@@ -4,6 +4,30 @@ import { readFileSync, readdirSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { SpeechQueue, SPEECH_EVENTS, speechLanguage } from "../src/speech-queue.js";
 import { SPEECH_ASSETS } from "../src/speech-catalog.js";
+import { SOUND_DEFINITIONS } from "../src/sound-catalog.js";
+import { SPOKEN_ACTIONS, EFFECT_EVENTS } from "../src/notification-audio.js";
+
+const NEW_ANNOUNCEMENTS = [
+    "connection_connected", "connection_disconnected", "connection_reconnecting", "connection_failed", "server_error",
+    "poke", "buddy_online", "channel_watch", "stream_watch_started",
+];
+const NOTIFICATION_ANNOUNCEMENTS = NEW_ANNOUNCEMENTS.slice(5);
+const MESSAGE_EFFECTS = ["mention", "keyword", "dm", "channel_message", "whisper", "announcement"];
+const SPOKEN_COOLDOWNS = {
+    connection_connected: 100, connection_disconnected: 100, connection_reconnecting: 5000,
+    connection_failed: 3000, disconnect_failed: 3000, server_error: 3000,
+    poke: 5000, buddy_online: 5000, channel_watch: 10000, stream_watch_started: 3000,
+};
+
+function announcementFixture() {
+    const f = fixture();
+    // Policy tests use fixed asset metadata; the separate real catalog test
+    // verifies authoring without masking queue regressions behind missing WAVs.
+    f.queue.assets = Object.fromEntries(["en", "de"].map(language => [language,
+        Object.fromEntries([...Object.keys(SPEECH_EVENTS), ...NEW_ANNOUNCEMENTS, "disconnect_failed"].map(event =>
+            [event, { duration: 1, transcript: event }]))]));
+    return f;
+}
 
 function fixture() {
     let time = 0, timer;
@@ -13,7 +37,8 @@ function fixture() {
         play(id, options) { played.push({ id, options }); this.active.add({ family:id }); return true; } };
     const queue = new SpeechQueue({ engine, assets:SPEECH_ASSETS, getState:()=>state, isDND:()=>dnd, now:()=>time,
         schedule:cb=>{ timer=cb; return 1; }, cancel:()=>{timer=null;} });
-    return { queue, engine, state, played, dnd:value=>{dnd=value;}, tick:ms=>{time+=ms;const cb=timer;timer=null;cb?.();} };
+    return { queue, engine, state, played, dnd:value=>{dnd=value;}, advance:ms=>{time+=ms;},
+        tick:ms=>{time+=ms;const cb=timer;timer=null;cb?.();} };
 }
 
 test("announcement language can override the interface without changing fallback behavior", () => {
@@ -50,17 +75,32 @@ test("each fixed speech event has valid English/German PCM and no orphaned clips
     }
 });
 
-test("German announcements retain the selected D33 voice, Channel wording and shipped attribution", () => {
+test("German announcements use the pinned AN06 reference offline and retain Channel wording and attribution", () => {
     const provenance = JSON.parse(readFileSync(new URL("../src/assets/speech/provenance.json", import.meta.url)));
-    assert.equal(provenance.models.de, "de/de_DE/mls/medium/de_DE-mls-medium");
-    assert.equal(provenance.authoring.de.audition, "D33");
-    assert.equal(provenance.authoring.de.speaker_id, 9);
-    assert.equal(provenance.authoring.de.source_speaker, "9132");
+    assert.equal(provenance.schema_version, 2);
+    assert.equal(provenance.models.en, "en/en_US/ljspeech/high/en_US-ljspeech-high");
+    assert.equal(provenance.models.de, "Qwen/Qwen3-TTS-12Hz-1.7B-Base");
+    assert.equal(provenance.providers.de.engine, "qwen3_tts");
+    assert.equal(provenance.providers.de.revision, "e479ac197bae727f69574261a8025696bc51de48");
+    assert.equal(provenance.providers.de.sha256, "b55e06c7890d43c208d15aed8b4ed3f18215f295e47d5960e061b15bff338ab0");
+    assert.equal(provenance.authoring.runtime_generation, false);
+    assert.equal(provenance.authoring.de.audition, "AN06");
+    assert.equal(provenance.authoring.de.task, "tts");
+    const reference = provenance.authoring.de.reference;
+    assert.equal(reference.path, "tools/voices/AN06.wav");
+    assert.equal(reference.sha256, "38f2ae669bbda13d21a6ad446fbbd97ac734729a83cd1633a6e0248fe847b35b");
+    const referenceWav = readFileSync(new URL("../../../" + reference.path, import.meta.url));
+    assert.equal(createHash("sha256").update(referenceWav).digest("hex"), reference.sha256);
+    assert.ok(reference.text.includes("Mikrofon stummgeschaltet."));
+    assert.equal(provenance.authoring.de.runtime.version, "v0.9.1");
+    assert.equal(provenance.authoring.de.runtime.archive_sha256, "57a17896aba4447f088b27d2875e90a6563afd7860023d50da03a61fb143609f");
     assert.equal(SPEECH_ASSETS.de.user_join.transcript, "Benutzer ist dem Channel beigetreten.");
     for (const clip of Object.values(SPEECH_ASSETS.de)) assert.doesNotMatch(clip.transcript, /kanal/i);
     const notice = readFileSync(new URL("../public/noxa-audio-licenses.txt", import.meta.url), "utf8");
-    assert.match(notice, /Multilingual LibriSpeech/);
-    assert.match(notice, /creativecommons\.org\/licenses\/by\/4\.0\//);
+    assert.match(notice, /AN06/);
+    assert.match(notice, /Qwen3-TTS/);
+    assert.match(notice, /Apache-2\.0/);
+    assert.match(notice, /LJ Speech/);
 });
 
 test("preview never interrupts a live critical announcement", () => {
@@ -274,5 +314,233 @@ test("every spoken action stays silent when disabled or unavailable, without an 
     f.queue.enqueue(event, { withEffect: true });
     f.tick(150);
     assert.deepEqual(f.played, [], event);
+    }
+});
+
+test("rare action effects become fixed speech while messages and push-to-talk keep their short effects", () => {
+    for (const event of NEW_ANNOUNCEMENTS) {
+        assert.equal(SPOKEN_ACTIONS[event], event, event);
+        assert.ok(SPEECH_EVENTS[event], event);
+        assert.equal(SPEECH_EVENTS[event].priority, SOUND_DEFINITIONS[event].priority, event);
+        assert.equal(SPEECH_EVENTS[event].cooldown, SPOKEN_COOLDOWNS[event], event);
+    }
+    assert.deepEqual(EFFECT_EVENTS.slice().sort(), [...MESSAGE_EFFECTS, "ptt_on", "ptt_off"].sort());
+    for (const event of MESSAGE_EFFECTS) {
+        assert.equal(SPOKEN_ACTIONS[event], undefined, event);
+        assert.equal(SPEECH_EVENTS[event], undefined, event);
+        assert.ok(EFFECT_EVENTS.includes(event), event);
+    }
+    assert.equal(SPEECH_EVENTS.ptt_on, undefined);
+    assert.equal(SPEECH_EVENTS.ptt_off, undefined);
+    assert.equal(SPEECH_EVENTS.disconnect_failed?.effect, "connection_failed");
+    assert.equal(SPEECH_EVENTS.disconnect_failed?.category, "connection");
+});
+
+test("new announcements select both languages and preserve independent silence preferences", () => {
+    for (const event of [...NEW_ANNOUNCEMENTS, "disconnect_failed"]) for (const language of ["en", "de"]) {
+        const f = announcementFixture();
+        Object.assign(f.state.settings, { speech_language: language, effects_enabled: false });
+        assert.equal(f.queue.enqueue(event, { delay: 0 }), true, event);
+        assert.deepEqual(f.played.map(item => item.id), [`speech_${language}_${event}`], event);
+        f.queue.clear();
+        f.state.settings.event_sounds = { [SPEECH_EVENTS[event].effect]: false };
+        assert.equal(f.queue.allowed(event, f.state.settings, false), false, event + " legacy opt-out");
+        f.state.settings.event_sounds = {};
+        f.state.settings.speech_events = { [event]: false };
+        assert.equal(f.queue.allowed(event, f.state.settings, false), false, event + " speech opt-out");
+        f.state.settings.speech_events = {};
+        if (SPEECH_EVENTS[event].category !== "notification") {
+            f.state.settings["speech_" + SPEECH_EVENTS[event].category] = false;
+            assert.equal(f.queue.allowed(event, f.state.settings, false), false, event + " category opt-out");
+        }
+    }
+});
+
+test("new notification speech respects its matrix row and stream notices have no invented row", () => {
+    for (const event of NOTIFICATION_ANNOUNCEMENTS) {
+        const f = announcementFixture();
+        if (event === "stream_watch_started") {
+            assert.equal(SPEECH_EVENTS[event]?.matrix, undefined);
+            f.state.settings.notify_matrix = { stream_watch_started: { sound: false } };
+            assert.equal(f.queue.allowed(event, f.state.settings, false), true, event);
+        } else {
+            assert.equal(SPEECH_EVENTS[event]?.matrix, event);
+            f.state.settings.speech_events = { [event]: true };
+            f.state.settings.notify_matrix = { [event]: { sound: false } };
+            assert.equal(f.queue.enqueue(event, { delay: 0 }), false, event);
+            assert.deepEqual(f.played, [], event);
+        }
+    }
+});
+
+test("missing German announcement assets and failed playback stay silent without English or effect fallback", () => {
+    for (const event of [...NEW_ANNOUNCEMENTS, "disconnect_failed"]) {
+        const f = announcementFixture();
+        f.state.settings.speech_language = "de";
+        delete f.queue.assets.de[event];
+        assert.ok(f.queue.assets.en[event]);
+        assert.equal(f.queue.enqueue(event, { delay: 0 }), false, event);
+        assert.deepEqual(f.played, [], event);
+        f.queue.assets.de[event] = { duration: 1, transcript: event };
+        const attempted = [];
+        f.queue.engine.play = id => { attempted.push(id); return false; };
+        f.queue.enqueue(event, { delay: 0 });
+        assert.deepEqual(attempted, [`speech_de_${event}`], event);
+        assert.equal(f.queue.current, null, event);
+        assert.equal(f.queue.pending.length, 0, event);
+    }
+});
+
+test("pending notification speech rechecks DND, history and preferences before playback", () => {
+    for (const block of [f => f.dnd(true), f => { f.state.replayingTabID = "history"; },
+        f => { f.state.settings.play_sounds = false; }, f => { f.state.settings.spoken_messages = false; },
+        f => { f.state.settings.speech_events = { poke: false }; },
+        f => { f.state.settings.notify_matrix = { poke: { sound: false } }; }]) {
+        const f = announcementFixture();
+        assert.equal(f.queue.enqueue("poke"), true);
+        block(f); f.tick(150);
+        assert.deepEqual(f.played, []);
+        assert.equal(f.queue.pending.length, 0);
+    }
+});
+
+test("new routine announcement cooldowns suppress duplicates and expire at their defined boundary", () => {
+    for (const event of [...NEW_ANNOUNCEMENTS, "disconnect_failed"].filter(event => event !== "connection_reconnecting")) {
+        const f = announcementFixture();
+        assert.equal(f.queue.enqueue(event, { delay: 0 }), true, event);
+        f.played[0].options.onEnded();
+        assert.equal(f.queue.enqueue(event, { delay: 0 }), false, event);
+        f.tick(SPOKEN_COOLDOWNS[event] - 1);
+        assert.equal(f.queue.enqueue(event, { delay: 0 }), false, event);
+        f.tick(1);
+        assert.equal(f.queue.enqueue(event, { delay: 0 }), true, event);
+        assert.deepEqual(f.played.map(item => item.id), [`speech_en_${event}`, `speech_en_${event}`], event);
+    }
+});
+
+test("reconnecting is spoken once per outage and a new outage or server scope can announce again", () => {
+    const f = announcementFixture();
+    assert.equal(f.queue.enqueue("connection_reconnecting", { delay: 0 }), true);
+    f.played.at(-1).options.onEnded(); f.tick(11000);
+    assert.equal(f.queue.enqueue("connection_reconnecting", { delay: 0 }), false);
+    assert.equal(f.queue.enqueue("connection_lost", { delay: 0 }), true);
+    f.played.at(-1).options.onEnded();
+    assert.equal(f.queue.enqueue("connection_reconnecting", { delay: 0 }), true);
+    f.played.at(-1).options.onEnded();
+    f.state.activeTabID = "another-server";
+    assert.equal(f.queue.enqueue("connection_reconnecting", { delay: 0 }), true);
+});
+
+test("connection outcomes discard pending and active reconnecting without stale ended callbacks", () => {
+    for (const outcome of ["connection_reconnected", "connection_lost", "connection_failed", "connection_disconnected", "server_shutdown", "reconnect_failed"]) {
+        for (const delay of [0, 500]) {
+            const f = announcementFixture();
+            assert.equal(f.queue.enqueue("connection_reconnecting", { delay }), true, outcome);
+            const old = f.played[0];
+            assert.equal(f.queue.enqueue(outcome, { delay: 0 }), true, outcome);
+            assert.equal(f.queue.current.event, outcome, outcome);
+            old?.options.onEnded();
+            assert.equal(f.queue.current.event, outcome, outcome);
+            f.played.at(-1).options.onEnded(); f.tick(1000);
+            assert.equal(f.queue.pending.length, 0, outcome);
+            assert.equal(f.played.filter(item => item.id.endsWith("_connection_reconnecting")).length, delay === 0 ? 1 : 0, outcome);
+        }
+    }
+});
+
+test("recovery replaces outdated connection loss while preserving an unrelated ban announcement", () => {
+    for (const delay of [0, 500]) {
+        const f = announcementFixture();
+        assert.equal(f.queue.enqueue("connection_lost", { delay }), true);
+        assert.equal(f.queue.enqueue("connection_reconnected", { delay: 0 }), true);
+        assert.equal(f.queue.current.event, "connection_reconnected");
+        f.played.at(-1).options.onEnded(); f.tick(1000);
+        assert.equal(f.queue.current, null);
+        assert.equal(f.queue.pending.length, 0);
+    }
+    const f = announcementFixture();
+    f.queue.enqueue("banned", { delay: 0 });
+    assert.equal(f.queue.enqueue("connection_reconnected", { delay: 0 }), false);
+    assert.equal(f.queue.current.event, "banned");
+});
+
+test("a muted recovery still cancels obsolete connection announcements", () => {
+    for (const delay of [0, 500]) {
+        const f = announcementFixture();
+        assert.equal(f.queue.enqueue("connection_lost", { delay }), true);
+        f.state.settings.speech_events = { connection_reconnected: false };
+        assert.equal(f.queue.enqueue("connection_reconnected", { delay: 0 }), false);
+        f.tick(1000);
+        assert.equal(f.queue.current, null);
+        assert.equal(f.queue.pending.length, 0);
+        assert.equal(f.played.filter(item => item.id.endsWith("_connection_reconnected")).length, 0);
+    }
+});
+
+test("unexpected loss cannot replace a terminal shutdown and previews do not consume a live outage announcement", () => {
+    const f = announcementFixture();
+    f.queue.enqueue("server_shutdown", { delay: 0 });
+    assert.equal(f.queue.enqueue("connection_lost", { delay: 0 }), false);
+    assert.equal(f.queue.current.event, "server_shutdown");
+    f.queue.clear();
+    assert.equal(f.queue.enqueue("connection_reconnecting", { preview: true, delay: 0 }), true);
+    f.queue.clear();
+    assert.equal(f.queue.enqueue("connection_reconnecting", { delay: 0 }), true);
+    assert.equal(f.queue.current.preview, false);
+});
+
+test("authoritative recovery invalidates ready loss before any preview cleanup can start it", () => {
+    for (const muted of [true, false]) {
+        const f = announcementFixture();
+        f.queue.enqueue("connection_lost", { delay: 150 });
+        // A native recovery event can arrive after the deadline but before the
+        // timer callback. Old state must never start during enqueue cleanup.
+        f.advance(200);
+        f.state.settings.speech_events = { connection_reconnected: !muted };
+        assert.equal(f.queue.enqueue("connection_reconnected", { delay: 0 }), !muted);
+        assert.deepEqual(f.played.map(item => item.id), muted ? [] : ["speech_en_connection_reconnected"]);
+        assert.equal(f.queue.pending.length, 0);
+        assert.equal(f.queue.current?.event || null, muted ? null : "connection_reconnected");
+    }
+});
+
+test("a cooldown-suppressed duplicate loss cannot rearm reconnect speech in the same outage", () => {
+    const f = announcementFixture();
+    f.queue.enqueue("connection_lost", { delay: 0 }); f.played.at(-1).options.onEnded();
+    f.queue.enqueue("connection_reconnecting", { delay: 0 }); f.played.at(-1).options.onEnded();
+    f.tick(6000);
+    assert.equal(f.queue.enqueue("connection_lost", { delay: 0 }), false);
+    assert.equal(f.queue.enqueue("connection_reconnecting", { delay: 0 }), false);
+    assert.equal(f.played.filter(item => item.id === "speech_en_connection_reconnecting").length, 1);
+});
+
+test("a recovery during its own cooldown still invalidates pending and active loss", () => {
+    for (const delay of [0, 150]) {
+        const f = announcementFixture();
+        f.queue.enqueue("connection_reconnected", { delay: 0 });
+        f.played.at(-1).options.onEnded(); f.advance(200);
+        assert.equal(f.queue.enqueue("connection_lost", { delay }), true);
+        f.advance(200);
+        assert.equal(f.queue.enqueue("connection_reconnected", { delay: 0 }), false);
+        assert.deepEqual(f.played.map(item => item.id), delay === 0
+            ? ["speech_en_connection_reconnected", "speech_en_connection_lost"]
+            : ["speech_en_connection_reconnected"]);
+        assert.equal(f.queue.current, null);
+        assert.equal(f.queue.pending.length, 0);
+    }
+});
+
+test("a new loss after recovery invalidates recovery even while its recording is cooling down", () => {
+    for (const delay of [0, 150]) {
+        const f = announcementFixture();
+        f.queue.enqueue("connection_lost", { delay: 0 });
+        f.played.at(-1).options.onEnded(); f.advance(200);
+        assert.equal(f.queue.enqueue("connection_reconnected", { delay }), true);
+        f.advance(200);
+        // Audio anti-spam still suppresses the repeated loss clip, but the
+        // newer loss state makes the intervening recovery obsolete.
+        assert.equal(f.queue.enqueue("connection_lost", { delay: 0 }), false);
+        assert.equal(f.queue.current, null, `recovery delay ${delay}`);
+        assert.equal(f.queue.pending.length, 0, `recovery delay ${delay}`);
     }
 });
