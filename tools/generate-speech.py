@@ -1,13 +1,10 @@
-"""Development-only static speech rendering. Never imported or run by noXa.
+"""Shared offline speech mastering and catalog publication. Never run by noXa.
 
-Usage: python tools/generate-speech.py --models .cache/noxa-speech-models [--events user_join user_leave]
-English uses piper-tts==1.4.2 and numpy in an isolated environment.
-German AN06 authoring is handled by generate-an06-speech.py.
+Usage: python tools/generate-speech.py --catalog-only
+Render reviewed EA60/AN06 candidates with generate-reference-speech.py.
 """
 import argparse
 import hashlib
-import importlib.metadata
-import io
 import json
 import wave
 from pathlib import Path
@@ -30,7 +27,7 @@ def master_samples(samples, rate, settings, language):
     active = np.flatnonzero(np.abs(samples) > settings['silence_threshold'])
     if not len(active):
         raise ValueError('Empty speech clip')
-    local = settings['de'] if language == 'de' else {}
+    local = settings[language]
     leading = round(rate * local.get('leading_padding_ms', settings['edge_padding_ms']) / 1000)
     trailing = round(rate * local.get('trailing_padding_ms', settings['edge_padding_ms']) / 1000)
     samples = samples[max(0, active[0]-leading):min(len(samples), active[-1]+trailing+1)].copy()
@@ -86,60 +83,15 @@ def write_catalog(root, lines, metrics):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--models', type=Path, default=Path('.cache/noxa-speech-models'))
-    parser.add_argument('--events', nargs='+', help='Render only these events; retain all other WAVs and metrics')
-    parser.add_argument('--languages', nargs='+', choices=['en'], default=['en'])
-    parser.add_argument('--skip-catalog', action='store_true', help='Defer catalog publication until German authoring is complete')
     parser.add_argument('--catalog-only', action='store_true', help='Publish the catalog from complete, reviewed metrics without inference')
     args = parser.parse_args()
+    if not args.catalog_only:
+        parser.error('Render candidates with generate-reference-speech.py, then use --catalog-only after review')
     root = Path(__file__).resolve().parents[1]
     out = root / 'client/frontend/src/assets/speech'
     lines = json.loads((Path(__file__).parent / 'speech-lines.json').read_text(encoding='utf-8'))
-    if args.events and set(args.events) - set(lines['en']):
-        parser.error('Unknown speech event')
-    provenance = json.loads((out / 'provenance.json').read_text(encoding='utf-8'))
     metrics = json.loads((out / 'metrics.json').read_text(encoding='utf-8'))
-    if args.catalog_only:
-        write_catalog(root, lines, metrics)
-        return
-    import numpy as np
-    from piper import PiperVoice, SynthesisConfig
-    if importlib.metadata.version('piper-tts') != provenance['authoring']['en']['version']:
-        raise ValueError('Install the pinned piper-tts version')
-    model_provenance = json.loads((args.models / 'provenance.json').read_text(encoding='utf-8'))
-    if model_provenance.get('providers', {}).get('en') != provenance['providers']['en']:
-        raise ValueError('Download the current English authoring model first')
-    for name, digest in provenance['checksums'].items():
-        if name.startswith('en.') and sha256(args.models / name) != digest:
-            raise ValueError(f'Checksum mismatch: {name}')
-    voice = PiperVoice.load(str(args.models / 'en.onnx'))
-    settings = provenance['authoring']
-    for event, text in lines['en'].items():
-        if args.events and event not in args.events:
-            if metrics[f'en/{event}']['text'] != text:
-                raise ValueError(f'Regenerate changed text: en/{event}')
-            continue
-        raw = io.BytesIO()
-        with wave.open(raw, 'wb') as wav:
-            voice.synthesize_wav(text, wav, syn_config=SynthesisConfig(
-                length_scale=settings['length_scale'], noise_scale=settings['noise_scale'],
-                noise_w_scale=settings['noise_w_scale']))
-        raw.seek(0)
-        with wave.open(raw, 'rb') as wav:
-            if wav.getnchannels() != 1 or wav.getsampwidth() != 2:
-                raise ValueError('Expected mono PCM16 Piper output')
-            rate = wav.getframerate()
-            samples = np.frombuffer(wav.readframes(wav.getnframes()), dtype='<i2').astype(np.float64) / 32768
-        pcm, measured = master_samples(samples, rate, settings, 'en')
-        path = out / 'en' / (event + '.wav')
-        write_recording(path, pcm, rate)
-        metrics[f'en/{event}'] = {'title': f'noXa — {event}', 'text': text,
-                                 **measured, 'sha256': sha256(path)}
-        print('en', event, round(measured['duration'], 3), flush=True)
-    (out / 'metrics.json').write_text(json.dumps(metrics, indent=2, ensure_ascii=False, allow_nan=False)+'\n', encoding='utf-8')
-    if not args.skip_catalog:
-        write_catalog(root, lines, metrics)
-    (out / 'en-MODEL_CARD').write_bytes((args.models / 'en-MODEL_CARD').read_bytes())
+    write_catalog(root, lines, metrics)
 
 
 if __name__ == '__main__':

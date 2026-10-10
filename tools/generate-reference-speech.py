@@ -1,4 +1,4 @@
-"""Offline Qwen3-TTS Base authoring using the selected synthetic AN06 reference.
+"""Offline Qwen3-TTS Base authoring using the selected synthetic voice reference.
 
 Writes raw WAVs, mastered candidates and results.json to a development directory.
 Never called by the application or its ordinary build. Review complete speech
@@ -55,7 +55,7 @@ def find_raw(directory, event):
     return matches[0]
 
 
-def master_raw(source, destination, settings, max_tokens):
+def master_raw(source, destination, settings, max_tokens, language):
     import numpy as np
     with wave.open(str(source), 'rb') as wav:
         if wav.getnchannels() != 1 or wav.getsampwidth() != 2 or wav.getcomptype() != 'NONE':
@@ -76,7 +76,7 @@ def master_raw(source, destination, settings, max_tokens):
     if np.any((raw == -32768) | (raw == 32767)):
         raise ValueError(f'Clipped raw speech: {source}')
     samples = raw.astype(np.float64) / 32768
-    pcm, measured = speech.master_samples(samples, rate, settings, 'de')
+    pcm, measured = speech.master_samples(samples, rate, settings, language)
     speech.write_recording(destination, pcm, rate)
     return {**measured, 'sha256': speech.sha256(destination),
             'rawSha256': speech.sha256(source), 'rawDuration': raw_duration}
@@ -86,8 +86,9 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--runtime', type=Path, default=ROOT / '.cache/noxa-accent-local/runtime-fast/bin/audiocpp_cli.exe')
     parser.add_argument('--model', type=Path, default=ROOT / '.cache/noxa-speech-models/qwen3-tts-12hz-1.7b-base-q8_0_v2.gguf')
-    parser.add_argument('--events', nargs='+', help='Select canonical event IDs; default: all German announcements')
-    parser.add_argument('--output', type=Path, default=ROOT / '.cache/noxa-an06-speech')
+    parser.add_argument('--language', choices=['en', 'de'], default='de')
+    parser.add_argument('--events', nargs='+', help='Select canonical event IDs; default: all announcements in the selected language')
+    parser.add_argument('--output', type=Path, help='Development output directory; default: .cache/noxa-reference-speech-LANGUAGE')
     parser.add_argument('--raw-dir', type=Path, help='Native output directory; default: OUTPUT/raw')
     parser.add_argument('--import-raw', type=Path, help='Master existing raw WAVs instead of running inference')
     parser.add_argument('--import-manifest', type=Path, help='Required raw-manifest.json binding imported WAVs to their original requests')
@@ -96,9 +97,12 @@ def main():
     parser.add_argument('--seed-offset', type=int, default=0, help='Record an explicit retry seed offset')
     args = parser.parse_args()
     provenance = json.loads((ROOT / 'client/frontend/src/assets/speech/provenance.json').read_text(encoding='utf-8'))
-    lines = json.loads((ROOT / 'tools/speech-lines.json').read_text(encoding='utf-8'))['de']
-    settings = provenance['authoring']['de']
-    provider = provenance['providers']['de']
+    lines = json.loads((ROOT / 'tools/speech-lines.json').read_text(encoding='utf-8'))[args.language]
+    settings = provenance['authoring'][args.language]
+    provider = provenance['providers'][args.language]
+    args.output = args.output or ROOT / ('.cache/noxa-reference-speech-' + args.language)
+    if provider['engine'] != 'qwen3_tts':
+        parser.error('Selected language does not use reference-conditioned Qwen authoring')
     selected = set(args.events or lines)
     if selected - set(lines):
         parser.error('Unknown speech events: ' + ', '.join(sorted(selected - set(lines))))
@@ -121,7 +125,7 @@ def main():
         parser.error('Output already contains a generated run; use a fresh output directory')
     reference = ROOT / settings['reference']['path']
     verify_file(reference, settings['reference']['sha256'])
-    aliases = provenance.get('pronunciation_aliases', {}).get('de', {})
+    aliases = provenance.get('pronunciation_aliases', {}).get(args.language, {})
     requests = requests_for(lines, settings, selected, args.seed_offset, aliases)
     args.output.mkdir(parents=True, exist_ok=True)
     request_path = args.output / 'requests.json'
@@ -133,7 +137,7 @@ def main():
         'mode': 'import' if args.import_raw else ('prepare' if args.prepare_only else 'generate')}
     write_json(args.output / 'authoring.json', authoring)
     if args.prepare_only:
-        print(f'Prepared {len(requests)} German AN06 requests: {request_path}', flush=True)
+        print(f'Prepared {len(requests)} {settings["audition"]} requests: {request_path}', flush=True)
         return
     # Fail before expensive inference when the authoring environment is incomplete.
     import numpy
@@ -169,10 +173,10 @@ def main():
                    '--request-sequence', str(request_path.resolve()), '--out-dir', str(raw_directory.resolve()),
                    '--batch-manifest-out', str((args.output / 'native-manifest.json').resolve()),
                    '--metrics', '--log-file', str((args.output / 'native.log').resolve())]
-        print(f'Generating {len(requests)} AN06 sentences using {settings["threads"]} CPU threads.', flush=True)
+        print(f'Generating {len(requests)} {settings["audition"]} sentences using {settings["threads"]} CPU threads.', flush=True)
         with (args.output / 'native.stdout').open('w', encoding='utf-8') as log:
             subprocess.run(command, cwd=runtime.parent, stdout=log, stderr=subprocess.STDOUT,
-                           check=True, timeout=timeout)
+                           check=True, timeout=timeout, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
         native = json.loads((args.output / 'native-manifest.json').read_text(encoding='utf-8'))['requests']
         if len(native) != len(requests) or {item['id'] for item in native} != selected:
             raise ValueError('Native batch manifest does not contain every selected event exactly once')
@@ -187,16 +191,16 @@ def main():
         event = request['id']
         source = find_raw(raw_directory, event)
         destination = args.output / 'mastered' / (event + '.wav')
-        measured = master_raw(source, destination, provenance['authoring'], request['max_tokens'])
-        results.append({'event': event, 'language': 'de', 'title': f'noXa — {event}',
+        measured = master_raw(source, destination, provenance['authoring'], request['max_tokens'], args.language)
+        results.append({'event': event, 'language': args.language, 'title': f'noXa — {event}',
                         'text': lines[event], 'renderText': request['text'],
                         'seed': request['seed'], 'file': str(destination),
                         **measured, 'reviewStatus': 'pending-transcript-and-listening-review'})
         write_json(args.output / 'results.json', results)
-        print('de', event, round(measured['duration'], 3), flush=True)
+        print(args.language, event, round(measured['duration'], 3), flush=True)
     if len({result['sha256'] for result in results}) != len(results):
         raise ValueError('Duplicate mastered recordings')
-    print(f'{len(results)} mastered AN06 candidates ready for transcript/listening review: {args.output / "results.json"}', flush=True)
+    print(f'{len(results)} mastered {settings["audition"]} candidates ready for transcript/listening review: {args.output / "results.json"}', flush=True)
 
 
 if __name__ == '__main__':

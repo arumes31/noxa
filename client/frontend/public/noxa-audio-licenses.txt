@@ -168,10 +168,9 @@ https://opengameart.org/content/various-paper-sound-effects
 Archive SHA-256: aa1889414310c7cfdd8dc291c19d4e4fc21ec987e9238b0d961fb72449c263a4
 
 Speech: complete fixed noXa English and German sentences rendered offline.
-English: Piper en_US-ljspeech-high, based on public-domain LJ Speech.
-https://keithito.com/LJ-Speech-Dataset/
-English voice source revision: 1162a9173d0ce503555aed757976b7a9912eae4c
-https://huggingface.co/rhasspy/piper-voices
+English: selected synthetic EA60 voice, "Epic adventure narrator", authored with
+Qwen3-TTS VoiceDesign and reproduced from its original WAV and complete transcript
+using Qwen3-TTS Base. Historical Piper/LJ Speech English WAVs are retired.
 
 German: selected synthetic AN06 voice, authored with Qwen3-TTS VoiceDesign
 and reproduced from its original WAV and complete transcript using Qwen3-TTS Base.
@@ -187,13 +186,15 @@ Offline runtime: audio.cpp v0.9.1, Apache-2.0, Copyright 2026 ShugoAI LLC.
 https://github.com/0xShug0/audio.cpp
 
 Model/tool licenses identify authoring sources; they do not automatically
-establish the license of generated recordings. Original noXa German fixed
-recordings and the synthetic AN06 reference are distributed under the project's
+establish the license of generated recordings. Original noXa English/German fixed
+recordings and the synthetic EA60/AN06 references are distributed under the project's
 MIT license below. Changes: generated complete noXa sentences, silence trimming,
 DC removal, endpoint fades and loudness normalization.
+EA60 reference SHA-256: 4d016355ffef426b9b1bcb9a369c67bcaeaa8cbaa93d3ce34063c85e37aa6d5d
 AN06 reference SHA-256: 38f2ae669bbda13d21a6ad446fbbd97ac734729a83cd1633a6e0248fe847b35b
 Full model hashes, reference provenance and rendering settings are tracked at:
 client/frontend/src/assets/speech/provenance.json
+tools/voices/EA60-provenance.json
 tools/voices/AN06-provenance.json
 
 Piper tooling, Qwen/audio.cpp engines and all model weights are not included

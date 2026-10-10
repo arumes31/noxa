@@ -78,7 +78,6 @@ test("each fixed speech event has valid English/German PCM and no orphaned clips
 test("German announcements use the pinned AN06 reference offline and retain Channel wording and attribution", () => {
     const provenance = JSON.parse(readFileSync(new URL("../src/assets/speech/provenance.json", import.meta.url)));
     assert.equal(provenance.schema_version, 2);
-    assert.equal(provenance.models.en, "en/en_US/ljspeech/high/en_US-ljspeech-high");
     assert.equal(provenance.models.de, "Qwen/Qwen3-TTS-12Hz-1.7B-Base");
     assert.equal(provenance.providers.de.engine, "qwen3_tts");
     assert.equal(provenance.providers.de.revision, "e479ac197bae727f69574261a8025696bc51de48");
@@ -100,7 +99,42 @@ test("German announcements use the pinned AN06 reference offline and retain Chan
     assert.match(notice, /AN06/);
     assert.match(notice, /Qwen3-TTS/);
     assert.match(notice, /Apache-2\.0/);
-    assert.match(notice, /LJ Speech/);
+});
+
+test("every English announcement uses the exact selected EA60 reference with reviewed static output", () => {
+    const root = new URL("../../../", import.meta.url);
+    const provenance = JSON.parse(readFileSync(new URL("../src/assets/speech/provenance.json", import.meta.url)));
+    assert.equal(provenance.models.en, "Qwen/Qwen3-TTS-12Hz-1.7B-Base");
+    assert.deepEqual(provenance.providers.en, provenance.providers.de);
+    assert.equal(provenance.authoring.runtime_generation, false);
+    assert.equal(provenance.authoring.en.audition, "EA60");
+    assert.equal(provenance.authoring.en.language, "English");
+    const reference = provenance.authoring.en.reference;
+    assert.equal(reference.path, "tools/voices/EA60.wav");
+    assert.equal(reference.sha256, "4d016355ffef426b9b1bcb9a369c67bcaeaa8cbaa93d3ce34063c85e37aa6d5d");
+    assert.equal(createHash("sha256").update(readFileSync(new URL(reference.path, root))).digest("hex"), reference.sha256);
+    const original = JSON.parse(readFileSync(new URL(reference.provenance, root)));
+    assert.equal(original.voice.id, "EA60");
+    assert.equal(original.voice.sha256, reference.sha256);
+    assert.equal(original.transcript, reference.text);
+    assert.equal(original.voice.seed, 203085240);
+    const metrics = JSON.parse(readFileSync(new URL("../src/assets/speech/metrics.json", import.meta.url)));
+    const review = JSON.parse(readFileSync(new URL("../src/assets/speech/ea60-content-review.json", import.meta.url)));
+    assert.deepEqual(Object.keys(review).sort(), Object.keys(SPEECH_ASSETS.en).sort());
+    for (const [event, clip] of Object.entries(SPEECH_ASSETS.en)) {
+        const metric = metrics["en/" + event];
+        assert.equal(metric.voice, "EA60", event);
+        assert.equal(metric.referenceSha256, reference.sha256, event);
+        assert.equal(metric.modelSha256, provenance.providers.en.sha256, event);
+        assert.equal(metric.sampleRate, 24000, event);
+        assert.equal(review[event].sha256, metric.sha256, event);
+        assert.equal(review[event].expected, clip.transcript, event);
+        assert.equal(review[event].reviewStatus, "accepted-automatic-content-review", event);
+    }
+    const notice = readFileSync(new URL("../public/noxa-audio-licenses.txt", import.meta.url), "utf8");
+    assert.match(notice, /EA60/);
+    assert.match(notice, /Qwen3-TTS/);
+    assert.match(notice, /MIT License/);
 });
 
 test("preview never interrupts a live critical announcement", () => {
