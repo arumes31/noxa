@@ -1,6 +1,7 @@
 import { createConnectionQuality } from './connection-quality.js';
 import { createLoginMemory } from './login-memory.js';
 import { createLoginFeedback } from './login-errors.js';
+import { initLoginBackground } from './login-background.js';
 import { watchMicrophone } from "./microphone-recovery.js";
 import { createRemoteAudio } from './remote-audio.js';
 import { startVoiceDiagnostics, noteVoiceActivity } from './voice-diagnostics.js';
@@ -73,6 +74,7 @@ const P = () => window.__noxaPerms;
 window.__noxaChat = chatUI;
 
 const $ = (id) => document.getElementById(id);
+initLoginBackground();
 const publishTrayVoice = createTrayVoiceSync((...flags) => window.go.main.App.SetTrayVoiceState(...flags));
 
 function syncTrayVoice() {
