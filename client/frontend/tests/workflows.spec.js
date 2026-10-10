@@ -4513,10 +4513,12 @@ test("sound previews use draft volume, finish Test All, and cancel on close @a11
     await page.evaluate(() => { window.__previewedSounds = []; });
     await page.getByRole("button", { name: "Test all sounds", exact: true }).click();
     await expect(page.getByRole("status").filter({ hasText: "Preview finished" })).toBeVisible({ timeout: 70_000 });
-    expect(await page.evaluate(() => new Set(window.__previewedSounds.map(x => x.name)).size)).toBe(41);
-    await page.getByRole("button", { name: "Preview connection", exact: true }).click();
+    expect(await page.evaluate(() => new Set(window.__previewedSounds.map(x => x.name)).size)).toBe(34 + 8);
+    await page.getByRole("button", { name: "Preview Speak connection status", exact: true }).click();
+    await expect.poll(() => page.evaluate(() => window.__noxa.speechQueue.current?.preview)).toBe(true);
     await page.getByRole("button", { name: "Cancel", exact: true }).click();
     await expect.poll(() => page.evaluate(() => window.__noxa.soundEngine.active.size)).toBe(0);
+    expect(await page.evaluate(() => window.__noxa.speechQueue.current)).toBeNull();
     const count = await page.evaluate(() => window.__previewedSounds.length);
     await page.waitForTimeout(650);
     expect(await page.evaluate(() => window.__previewedSounds.length)).toBe(count);
