@@ -90,6 +90,19 @@ func windowsChordPressed(mods []hotkey.Modifier, key hotkey.Key) bool {
 }
 
 func windowsVirtualKey(key hotkey.Key) (uintptr, bool) {
+	if key&physicalScanKey != 0 {
+		// MAPVK_VSC_TO_VK_EX (3) handles OEM positions on both DE and EN.
+		vk, _, _ := hotkeyMapScan.Call(uintptr(key&^physicalScanKey), 3, foregroundKeyboardLayout())
+		return vk, vk != 0
+	}
+	for _, supported := range windowsSpecKeys {
+		if key == supported {
+			return uintptr(key), true
+		}
+	}
+	if key >= hotkey.KeyVolumeMute && key <= hotkey.KeyVolumeUp || key >= hotkey.KeyMediaNext && key <= hotkey.KeyMediaPlayPause || key >= 0xBA && key <= 0xE2 {
+		return uintptr(key), true
+	}
 	if key >= hotkey.KeyA && key <= hotkey.KeyZ {
 		return 0x41 + uintptr(key-hotkey.KeyA), true
 	}

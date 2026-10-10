@@ -5,9 +5,72 @@ package main
 import (
 	"testing"
 	"time"
+	"unsafe"
 
 	"golang.design/x/hotkey"
+	"golang.org/x/sys/windows"
 )
+
+func TestWindowsNumpadAndNavigationPolling(t *testing.T) {
+	original := keyPressed
+	t.Cleanup(func() { keyPressed = original })
+	for _, tc := range []struct {
+		spec string
+		vk   uintptr
+	}{
+		{"PageUp", 0x21}, {"PageDown", 0x22}, {"Home", 0x24}, {"End", 0x23},
+		{"Insert", 0x2D}, {"Backspace", 0x08}, {"F24", 0x87}, {"NumpadAdd", 0x6B},
+		{"NumpadDecimal", 0x6E}, {"AudioVolumeMute", 0xAD},
+	} {
+		_, key, err := parseHotkeySpec(tc.spec)
+		if err != nil {
+			t.Fatal(err)
+		}
+		keyPressed = func(vk uintptr) bool { return vk == tc.vk }
+		if !windowsChordPressed(nil, key) {
+			t.Errorf("%s did not poll VK 0x%X", tc.spec, tc.vk)
+		}
+	}
+	_, num, _ := parseHotkeySpec("Numpad7")
+	_, row, _ := parseHotkeySpec("7")
+	keyPressed = func(vk uintptr) bool { return vk == 0x67 }
+	if !windowsChordPressed(nil, num) || windowsChordPressed(nil, row) {
+		t.Fatal("numpad digit aliased the main number row")
+	}
+}
+
+func TestWindowsPunctuationPositionsOnDEAndENLayouts(t *testing.T) {
+	for _, tc := range []struct {
+		layout string
+		chars  map[string]rune
+	}{
+		{"00000407", map[string]rune{"Semicolon": 'ö', "Quote": 'ä', "BracketLeft": 'ü', "BracketRight": '+', "Backslash": '#', "Slash": '-', "Minus": 'ß', "Comma": ',', "Period": '.', "IntlBackslash": '<'}},
+		{"00000409", map[string]rune{"Semicolon": ';', "Quote": '\'', "BracketLeft": '[', "BracketRight": ']', "Backslash": '\\', "Slash": '/', "Minus": '-', "Equal": '=', "Backquote": '`', "Comma": ',', "Period": '.'}},
+	} {
+		t.Run(tc.layout, func(t *testing.T) {
+			name, err := windows.UTF16PtrFromString(tc.layout)
+			if err != nil {
+				t.Fatal(err)
+			}
+			// Loading without KLF_ACTIVATE leaves the user's active layout intact.
+			layout, _, _ := hotkeyUser32.NewProc("LoadKeyboardLayoutW").Call(uintptr(unsafe.Pointer(name)), 0)
+			if layout == 0 {
+				t.Fatal("test keyboard layout unavailable")
+			}
+			for spec, char := range tc.chars {
+				_, key, err := parseHotkeySpec(spec)
+				if err != nil {
+					t.Fatal(err)
+				}
+				vk, _, _ := hotkeyMapScan.Call(uintptr(key&^physicalScanKey), 3, layout)
+				characterVK, _, _ := hotkeyScanCharacter.Call(uintptr(char), layout)
+				if uint16(characterVK) == 0xFFFF || vk != characterVK&0xFF {
+					t.Errorf("%s (%c) mapped to 0x%X, character maps to 0x%X", spec, char, vk, characterVK)
+				}
+			}
+		})
+	}
+}
 
 func TestWindowsChordPressedRequiresKeyAndModifiers(t *testing.T) {
 	original := keyPressed

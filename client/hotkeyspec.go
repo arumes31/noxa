@@ -9,21 +9,26 @@ import (
 	"golang.design/x/hotkey"
 )
 
-// specKeys maps key names to hotkey keys (only keys the hotkey package
-// defines on Windows are listed).
+// specKeys contains names with constants shared by the supported platforms.
 var specKeys = map[string]hotkey.Key{
-	"space":  hotkey.KeySpace,
-	"tab":    hotkey.KeyTab,
-	"enter":  hotkey.KeyReturn,
-	"return": hotkey.KeyReturn,
-	"escape": hotkey.KeyEscape,
-	"esc":    hotkey.KeyEscape,
-	"delete": hotkey.KeyDelete,
-	"del":    hotkey.KeyDelete,
-	"up":     hotkey.KeyUp,
-	"down":   hotkey.KeyDown,
-	"left":   hotkey.KeyLeft,
-	"right":  hotkey.KeyRight,
+	"space":   hotkey.KeySpace,
+	"tab":     hotkey.KeyTab,
+	"enter":   hotkey.KeyReturn,
+	"return":  hotkey.KeyReturn,
+	"escape":  hotkey.KeyEscape,
+	"esc":     hotkey.KeyEscape,
+	"delete":  hotkey.KeyDelete,
+	"del":     hotkey.KeyDelete,
+	"up":      hotkey.KeyUp,
+	"down":    hotkey.KeyDown,
+	"left":    hotkey.KeyLeft,
+	"right":   hotkey.KeyRight,
+	"arrowup": hotkey.KeyUp, "arrowdown": hotkey.KeyDown,
+	"arrowleft": hotkey.KeyLeft, "arrowright": hotkey.KeyRight,
+	"audiovolumeup": hotkey.KeyVolumeUp, "audiovolumedown": hotkey.KeyVolumeDown,
+	"audiovolumemute": hotkey.KeyVolumeMute, "mediaplaypause": hotkey.KeyMediaPlayPause,
+	"mediatracknext": hotkey.KeyMediaNext, "mediatrackprevious": hotkey.KeyMediaPrev,
+	"mediastop": hotkey.KeyMediaStop,
 }
 
 // functionKeys maps F1..F20 names to keys.
@@ -71,6 +76,9 @@ func parseHotkeySpec(spec string) ([]hotkey.Modifier, hotkey.Key, error) {
 		return mods, k, nil
 	}
 	if k, ok := functionKeys[name]; ok {
+		return mods, k, nil
+	}
+	if k, ok := platformSpecKey(name); ok {
 		return mods, k, nil
 	}
 	if len(name) == 1 {

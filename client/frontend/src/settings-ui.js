@@ -1,5 +1,6 @@
 // settings-ui.js — TS3-style settings dialog with left icon nav.
 import { icon } from "./icons.js";
+import { capturedHotkey, hotkeyLabel } from "./hotkey-input.js";
 import { gamingOverlaySettings } from "./gaming-overlay-settings.js";
 import { securitySettings } from "./security-settings.js";
 import { captureMediaScope, mediaScopeIsCurrent, setWhisperRouting } from "./media-controls.js";
@@ -915,41 +916,41 @@ function cancelHotkeyCapture() {
 }
 
 // hotkeyCapture builds a click-to-rebind button (shared by the map rows).
-function hotkeyCapture(initial, oncapture) {
+function hotkeyCapture(initial, oncapture, errorElement) {
     const b = document.createElement("button");
     b.className = "hotkey-capture";
-    b.textContent = initial || t("settings.click.and.press.a.key");
+    b.textContent = initial ? hotkeyLabel(initial, currentLanguage()) : t("settings.click.and.press.a.key");
     b.onclick = () => {
+        const wasCapturing = b.classList.contains("capturing");
         cancelHotkeyCapture();
+        if (wasCapturing) return;
         const previousLabel = b.textContent;
         b.textContent = t("settings.press.keys");
         b.classList.add("capturing");
         const onKey = (e) => {
             e.preventDefault();
-            const parts = [];
-            if (e.ctrlKey) parts.push("Ctrl");
-            if (e.altKey) parts.push("Alt");
-            if (e.shiftKey) parts.push("Shift");
-            if (e.metaKey) parts.push("Win");
-            let key = e.key;
-            if (key === " ") key = "Space";
-            if (key.length === 1) key = key.toUpperCase();
-            if (!["Control", "Alt", "Shift", "Meta"].includes(e.key)) {
-                parts.push(key);
-                stopCapture();
-                b.textContent = parts.join("+");
-                oncapture(parts.join("+"));
-                b.dispatchEvent(new Event("change", { bubbles: true }));
+            e.stopImmediatePropagation();
+            const spec = capturedHotkey(e);
+            if (spec === null) return;
+            if (!spec) {
+                errorElement.textContent = t("settings.hotkey.unavailable", { key: e.key });
+                return;
             }
+            stopCapture();
+            errorElement.textContent = "";
+            b.textContent = hotkeyLabel(spec, currentLanguage());
+            oncapture(spec);
+            b.dispatchEvent(new Event("change", { bubbles: true }));
         };
         const stopCapture = () => {
-            document.removeEventListener("keydown", onKey, true);
+            window.removeEventListener("keydown", onKey, true);
             b.classList.remove("capturing");
             b.textContent = previousLabel;
             if (stopActiveHotkeyCapture === stopCapture) stopActiveHotkeyCapture = null;
         };
         stopActiveHotkeyCapture = stopCapture;
-        document.addEventListener("keydown", onKey, true);
+        // Run before the dialog's Escape/Tab handlers so those keys can bind.
+        window.addEventListener("keydown", onKey, true);
     };
     return b;
 }
@@ -1012,6 +1013,11 @@ function pageHotkeys() {
             const spec = curProfile === "default" ? (s[field] || "") : (override || t("settings.default") + (s[field] || t("settings.unbound")) + ")");
             const wrap = document.createElement("div");
             wrap.className = "hk-map-row";
+            wrap.dataset.hotkeyAction = action;
+            const errEl = document.createElement("span");
+            errEl.className = "hk-err warn";
+            errEl.setAttribute("role", "status");
+            errEl.id = "hotkey-error-" + action;
             const cap = hotkeyCapture(override || s[field] || "", (v) => {
                 if (curProfile === "default") {
                     s[field] = v;
@@ -1021,17 +1027,17 @@ function pageHotkeys() {
                     s.hotkey_profiles[curProfile][profField] = v;
                 }
                 if (/^[A-Z]$/.test(v)) V().toast(t("settings.warning.bare.letter.hotkeys.fire.while.typing"), "warn");
-            });
+            }, errEl);
+            cap.setAttribute("aria-describedby", errEl.id);
             const unbind = document.createElement("button");
             unbind.textContent = "✕";
             unbind.title = curProfile === "default" ? t("settings.unbind") : t("settings.clear.override.fall.back.to.default");
+            unbind.setAttribute("aria-label", unbind.title + ": " + label);
             unbind.onclick = () => {
                 if (curProfile === "default") s[field] = "";
                 else if (prof) prof[profField] = "";
                 renderRows();
             };
-            const errEl = document.createElement("span");
-            errEl.className = "hk-err warn";
             if (hkErrors.has(action)) errEl.textContent = hkErrors.get(action);
             wrap.appendChild(row(label, cap));
             wrap.appendChild(unbind);
@@ -1049,6 +1055,8 @@ function pageHotkeys() {
         renderPage("hotkeys");
     };
     el.appendChild(reset);
+    el.appendChild(hint(t("settings.hotkey.supported")));
+    el.appendChild(hint(t("settings.hotkey.numpad")));
     el.appendChild(hint(t("settings.hotkeys.are.applied.when.you.apply.or.ok.on.windows.they.do.not.reserve.or")));
     return el;
 }
@@ -1727,6 +1735,9 @@ export function initSettingsUI() {
     // (301) track registration errors for the hotkey map rows.
     window.runtime.EventsOn("hotkey_status", (st) => {
         if (st.error) hkErrors.set(st.action, st.error);
-        else if (st.registered) hkErrors.delete(st.action);
+        else hkErrors.delete(st.action);
+        for (const row of document.querySelectorAll(".hk-map-row")) {
+            if (row.dataset.hotkeyAction === st.action) row.querySelector(".hk-err").textContent = st.error || "";
+        }
     });
 }
