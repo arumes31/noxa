@@ -17,6 +17,7 @@ type overlayRenderer struct {
 	base, frame *image.RGBA
 	scale       float64
 	phases      []float64
+	mist        *overlayMist
 }
 
 type overlayLabel func(text string, width, height, fontSize int, centered bool) (*image.Alpha, error)
@@ -39,6 +40,9 @@ func overlayAvatar(value string) image.Image {
 }
 
 func newOverlayRenderer(s GamingOverlaySnapshot, width, height int, label overlayLabel) (*overlayRenderer, error) {
+	if s.Style == "mist-aurora" {
+		return newMistOverlayRenderer(s, width, height, label)
+	}
 	r := &overlayRenderer{base: image.NewRGBA(image.Rect(0, 0, width, height)), scale: float64(s.Scale) / 100}
 	for index, speaker := range s.Speakers {
 		y := float64(index * 76)
@@ -116,6 +120,9 @@ func (r *overlayRenderer) avatar(avatar image.Image, x, y, radius float64) {
 }
 
 func (r *overlayRenderer) render(seconds float64) *image.RGBA {
+	if r.mist != nil {
+		return r.renderMist(seconds)
+	}
 	copy(r.frame.Pix, r.base.Pix)
 	cyan := image.NewUniform(color.NRGBA{0, 242, 255, 255})
 	for row, phase := range r.phases {

@@ -11,6 +11,7 @@ import (
 type GamingOverlaySnapshot struct {
 	Active       bool                   `json:"active"`
 	Animate      bool                   `json:"animate"`
+	Style        string                 `json:"style"`
 	Title        string                 `json:"title"`
 	Status       string                 `json:"status"`
 	Speakers     []GamingOverlaySpeaker `json:"speakers"`
@@ -67,6 +68,7 @@ func normalizeGamingOverlay(s GamingOverlaySnapshot) GamingOverlaySnapshot {
 	s.Title = overlayText(s.Title, 64)
 	s.Status = overlayText(s.Status, 64)
 	s.Notification = overlayText(s.Notification, 140)
+	s.Style = normalizeOverlayStyle(s.Style)
 	switch s.Position {
 	case "center-left", "top-left", "top-right", "bottom-left", "bottom-right", "custom":
 	default:
@@ -111,6 +113,7 @@ func (a *App) GetGamingOverlayMonitors() []GamingOverlayMonitor { return nativeG
 
 func overlayPresentation(s GamingOverlaySnapshot, settings Settings) GamingOverlaySnapshot {
 	s.Animate = settings.GamingOverlayAnimate
+	s.Style = settings.GamingOverlayStyle
 	s.Position, s.Monitor = settings.GamingOverlayPosition, settings.GamingOverlayMonitor
 	s.Scale, s.Opacity = settings.GamingOverlayScale, settings.GamingOverlayOpacity
 	s.X, s.Y = settings.GamingOverlayX, settings.GamingOverlayY
@@ -157,6 +160,26 @@ func gamingOverlayPlacement(s GamingOverlaySnapshot, monitor GamingOverlayMonito
 	rows, _ := safecast.IntToInt32(max(1, len(s.Speakers)))
 	width = min(280*scale/100, monitor.workWidth)
 	height = min((rows*76-12)*scale/100, monitor.workHeight)
+	if s.Style == "mist-aurora" {
+		longest := 1
+		for _, person := range s.Speakers {
+			longest = max(longest, len([]rune(person.Name)))
+		}
+		nameWidth, _ := safecast.IntToInt32(longest * 24)
+		width = min((88+nameWidth)*scale/100, monitor.workWidth)
+		height = min(rows*184*scale/100, monitor.workHeight)
+	}
+	return gamingOverlayPlacementSized(s, monitor, width, height)
+}
+
+func normalizeOverlayStyle(style string) string {
+	if style == "mist-aurora" {
+		return style
+	}
+	return "bars"
+}
+
+func gamingOverlayPlacementSized(s GamingOverlaySnapshot, monitor GamingOverlayMonitor, width, height int32) (x, y, w, h int32) {
 	margin := min(int32(16), max(int32(0), min(monitor.workWidth-width, monitor.workHeight-height)/2))
 	x, y = monitor.workWidth-width-margin, margin
 	if strings.HasSuffix(s.Position, "left") {

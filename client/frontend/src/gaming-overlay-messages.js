@@ -1,4 +1,5 @@
 export const overlayEnglish = {
+    'overlay.design': 'Overlay design', 'overlay.bars': 'Speaking bars', 'overlay.mist-aurora': 'Mist + Aurora',
     'settings.overlay': 'Overlay',
     'overlay.animate': 'Animate speaking indicators', 'overlay.animateHint': 'Uses its own motion setting, even when Windows animations are disabled.',
     'overlay.enabled': 'Voice overlay', 'overlay.position': 'Overlay position',
@@ -14,6 +15,7 @@ export const overlayEnglish = {
     'overlay.muted': 'Microphone muted', 'overlay.deafened': 'Deafened', 'overlay.ready': 'Voice connected', 'overlay.failed': 'Voice overlay unavailable: {error}',
 };
 export const overlayGerman = {
+    'overlay.design': 'Overlay-Design', 'overlay.bars': 'Sprechbalken', 'overlay.mist-aurora': 'Nebel + Polarlicht',
     'settings.overlay': 'Overlay',
     'overlay.animate': 'Sprechanzeigen animieren', 'overlay.animateHint': 'Eigene Bewegungseinstellung, auch wenn Windows-Animationen deaktiviert sind.',
     'overlay.enabled': 'Sprach-Overlay', 'overlay.position': 'Overlay-Position',

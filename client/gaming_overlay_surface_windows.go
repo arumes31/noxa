@@ -37,7 +37,7 @@ type overlaySurface struct {
 }
 
 func newOverlaySurface(width, height int) (*overlaySurface, error) {
-	if width < 1 || height < 1 || width > 560 || height > 1216 {
+	if width < 1 || height < 1 || width > 2560 || height > 4096 {
 		return nil, fmt.Errorf("invalid overlay surface size %dx%d", width, height)
 	}
 	w, _ := safecast.IntToInt32(width)

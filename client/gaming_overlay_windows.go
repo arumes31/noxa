@@ -13,6 +13,7 @@ import (
 	"unsafe"
 
 	"golang.org/x/sys/windows"
+	"noxa/internal/safecast"
 )
 
 var (
@@ -279,7 +280,7 @@ func (w *nativeOverlay) run(ready chan<- error) {
 			}
 			renderer, err = newOverlayRenderer(s, int(width), int(height), nativeOverlayLabel)
 			if err == nil {
-				surface, err = newOverlaySurface(int(width), int(height))
+				surface, err = newOverlaySurface(renderer.base.Bounds().Dx(), renderer.base.Bounds().Dy())
 			}
 			if err != nil {
 				reportError(err)
@@ -288,6 +289,12 @@ func (w *nativeOverlay) run(ready chan<- error) {
 				continue
 			}
 			last = key
+		}
+		// Position the measured surface, rather than its allocation bound.
+		if s.Style == "mist-aurora" {
+			width, _ = safecast.IntToInt32(renderer.base.Bounds().Dx())
+			height, _ = safecast.IntToInt32(renderer.base.Bounds().Dy())
+			x, y, _, _ = gamingOverlayPlacementSized(s, monitor, width, height)
 		}
 		seconds := time.Since(started).Seconds()
 		if !s.Animate {

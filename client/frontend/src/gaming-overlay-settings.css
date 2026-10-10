@@ -14,3 +14,12 @@
 .overlay-position-sample:active { cursor: grabbing; }
 .overlay-position-sample:focus-visible { outline: 2px solid var(--accent); outline-offset: -3px; }
 .overlay-position-readout { display: block; margin-top: 6px; font-size: .85rem; color: var(--muted); }
+.overlay-mist-canvas { display: none; position: absolute; left: -18px; top: -72px; pointer-events: none; z-index: 0; }
+.overlay-mist-preview { height: 390px; }
+.overlay-mist-aurora { padding: calc(72px * var(--overlay-scale)) calc(18px * var(--overlay-scale)); max-width: calc(100% - 4px); }
+.overlay-mist-aurora .overlay-sample-person { position: relative; width: max-content; max-width: 100%; height: auto; min-height: calc(40px * var(--overlay-scale)); padding: 0; gap: calc(12px * var(--overlay-scale)); }
+.overlay-mist-aurora .overlay-sample-person + .overlay-sample-person { margin-top: calc(144px * var(--overlay-scale)); }
+.overlay-mist-aurora .overlay-mist-canvas { display: block; left: calc(-18px * var(--overlay-scale)); top: calc(-72px * var(--overlay-scale)); }
+.overlay-mist-aurora .overlay-sample-avatar { position: relative; z-index: 1; flex-basis: calc(40px * var(--overlay-scale)); height: calc(40px * var(--overlay-scale)); border-width: calc(2px * var(--overlay-scale)); box-sizing: border-box; }
+.overlay-mist-aurora .overlay-sample-details { position: relative; z-index: 1; min-width: 0; overflow-wrap: anywhere; background: transparent; }
+.overlay-mist-aurora .overlay-sample-wave { display: none; }

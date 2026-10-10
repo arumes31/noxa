@@ -220,6 +220,7 @@ type Settings struct {
 	CameraBackgroundScene string `json:"camera_background_scene"` // slate | warm | studio
 	GamingOverlay         bool   `json:"gaming_overlay"`          // default on, can be disabled
 	GamingOverlayAnimate  bool   `json:"gaming_overlay_animate"`  // independent of Windows animation preferences
+	GamingOverlayStyle    string `json:"gaming_overlay_style"`
 	GamingOverlayPosition string `json:"gaming_overlay_position"`
 	GamingOverlayMonitor  string `json:"gaming_overlay_monitor"`
 	GamingOverlayScale    int    `json:"gaming_overlay_scale"`
@@ -334,6 +335,7 @@ func DefaultSettings() Settings {
 		CameraBackgroundScene: "slate",
 		GamingOverlay:         true,
 		GamingOverlayAnimate:  true,
+		GamingOverlayStyle:    "bars",
 		GamingOverlayPosition: "center-left",
 		GamingOverlayScale:    80,
 		GamingOverlayOpacity:  88,
@@ -496,6 +498,7 @@ func migrateEventSoundSplits(s *Settings) {
 // silently rewritten.
 func normalizeSettings(s Settings) Settings {
 	s.GamingOverlayScale = clampSetting(s.GamingOverlayScale, 75, 200)
+	s.GamingOverlayStyle = normalizeOverlayStyle(s.GamingOverlayStyle)
 	s.GamingOverlayOpacity = clampSetting(s.GamingOverlayOpacity, 20, 100)
 	s.GamingOverlayX = clampSetting(s.GamingOverlayX, 0, 100)
 	s.GamingOverlayY = clampSetting(s.GamingOverlayY, 0, 100)
@@ -888,6 +891,9 @@ func (a *App) SaveSettings(s Settings) string {
 	case "", "center-left", "top-left", "top-right", "bottom-left", "bottom-right", "custom":
 	default:
 		return "invalid gaming overlay position"
+	}
+	if s.GamingOverlayStyle != "" && s.GamingOverlayStyle != "bars" && s.GamingOverlayStyle != "mist-aurora" {
+		return "invalid gaming overlay design"
 	}
 	if len(s.GamingOverlayMonitor) > 128 {
 		return "invalid gaming overlay monitor"

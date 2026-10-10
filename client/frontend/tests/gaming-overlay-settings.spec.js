@@ -183,3 +183,59 @@ test("unsupported native overlays disable controls with a clear explanation", as
     await expect(page.getByRole("button", { name: "Preview on monitor", exact: true })).toBeDisabled();
     await expect(page.getByText("The native voice overlay is available on Windows.", { exact: true })).toBeVisible();
 });
+
+test("mist and aurora is selectable, transparent behind names and saved only on Apply", async ({ page }, testInfo) => {
+    await page.evaluate(() => window.__noxa.openSettings("overlay"));
+    const design = page.getByLabel("Overlay design", { exact: true });
+    await expect(design).toHaveValue("bars");
+    await design.selectOption("mist-aurora");
+    const canvases = page.locator(".overlay-mist-canvas");
+    await expect(canvases).toHaveCount(2);
+    await expect.poll(() => canvases.first().evaluate(canvas => canvas.width)).toBeGreaterThan(0);
+    const pixels = await canvases.first().evaluate(canvas => {
+        const name = canvas.parentElement.querySelector(".overlay-sample-name");
+        const a = name.getBoundingClientRect(), b = canvas.getBoundingClientRect();
+        const dpr = canvas.width / b.width;
+        const ctx = canvas.getContext("2d");
+        const data = ctx.getImageData(Math.round((a.x-b.x)*dpr), Math.round((a.y-b.y)*dpr), Math.floor(a.width*dpr), Math.floor(a.height*dpr)).data;
+        let max = 0, visible = 0;
+        for (let i = 3; i < data.length; i += 4) { max = Math.max(max, data[i]); if (data[i]) visible++; }
+        return { max, visible, background: getComputedStyle(name).backgroundColor };
+    });
+    expect(pixels.max).toBeLessThanOrEqual(26); expect(pixels.visible).toBeGreaterThan(0);
+    expect(pixels.background).toBe("rgba(0, 0, 0, 0)");
+    await page.screenshot({ path: testInfo.outputPath("mist-aurora-settings.png") });
+    expect(await page.evaluate(() => window.__overlaySaved)).toBeUndefined();
+    await page.getByRole("button", { name: "Preview on monitor", exact: true }).click();
+    expect(await page.evaluate(() => window.__overlayPreview.gaming_overlay_style)).toBe("mist-aurora");
+    await page.getByRole("button", { name: "Apply", exact: true }).click();
+    expect(await page.evaluate(() => window.__overlaySaved.gaming_overlay_style)).toBe("mist-aurora");
+    await page.getByRole("button", { name: "Cancel", exact: true }).click();
+    await page.evaluate(() => window.__noxa.openSettings("overlay"));
+    await expect(design).toHaveValue("mist-aurora");
+});
+
+test("mist overlay extends behind long names, freezes when disabled and stays bounded on narrow screens", async ({ page }) => {
+    await page.evaluate(() => window.__noxa.openSettings("overlay"));
+    await page.getByLabel("Overlay design", { exact: true }).selectOption("mist-aurora");
+    const canvas = page.locator(".overlay-mist-canvas").first();
+    await expect.poll(() => canvas.evaluate(el => el.width)).toBeGreaterThan(0);
+    const first = await canvas.evaluate(el => ({ width: el.width, frame: el.toDataURL() }));
+    await expect.poll(() => canvas.evaluate(el => el.toDataURL())).not.toBe(first.frame);
+    await page.evaluate(() => { document.querySelector(".overlay-sample-name").textContent = "TheLegendaryNightwalker"; });
+    await expect.poll(() => canvas.evaluate(el => el.width)).toBeGreaterThan(first.width);
+    await page.getByLabel("Animate speaking indicators", { exact: true }).uncheck();
+    await canvas.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    const frozen = await canvas.evaluate(el => el.toDataURL());
+    await page.waitForTimeout(150);
+    expect(await canvas.evaluate(el => el.toDataURL())).toBe(frozen);
+    await page.getByLabel("Overlay size", { exact: true }).fill("200");
+    await expect.poll(() => page.locator(".overlay-sample-avatar").first().evaluate(el => el.getBoundingClientRect().width)).toBe(80);
+    await page.getByLabel("Overlay size", { exact: true }).fill("75");
+    await expect.poll(() => page.locator(".overlay-sample-avatar").first().evaluate(el => el.getBoundingClientRect().width)).toBe(30);
+    await page.setViewportSize({ width: 400, height: 850 });
+    await expect.poll(() => canvas.evaluate(el => {
+        const area = el.closest(".overlay-position-preview").getBoundingClientRect(), bounds = el.getBoundingClientRect();
+        return bounds.width <= area.width;
+    })).toBe(true);
+});
