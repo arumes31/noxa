@@ -45,7 +45,7 @@ static product/download website.
 > forward secrecy. Channel/global messages and forum bodies use server-managed
 > scope keys and can be decrypted by the server. Channel audio/video uses
 > WebRTC DTLS-SRTP to the SFU; channel media E2EE is
-> [not yet integrated](docs/media-e2ee-integration.md).
+> not yet integrated.
 
 ---
 
@@ -116,7 +116,7 @@ graph TD
 * **Screen-share audio choices**: In channel shares and private calls, choose **No audio**, **Shared application**, or **System audio**. Application audio requires a window and a supported capture runtime; enable audio in the system picker. It can include other windows of the same application. If application-only capture is unavailable or cannot be confirmed, video still starts without audio and a short notification explains the fallback. System audio is only shared when explicitly selected.
 * **Screen-share resolution**: The channel share dialog offers 720p, 1080p, 1440p, 4K, **Original source resolution**, and **Custom** dimensions (160–8192 pixels, 15/30/60 fps). The encoder has 50 Mbps of headroom instead of Chromium's implicit ~2.5 Mbps default; this is a ceiling, not a target or minimum. Screen-share presets preserve resolution while actual frame rate can adapt to network and encoder capacity, without an additional system-CPU-triggered 500 kbps cap. Server limits and explicit Low bandwidth mode still apply.
 * **Live share controls**: **Change quality** adjusts a running channel share's resolution and frame rate without reopening the capture picker or changing its source/audio. It updates the one encoding received by every viewer. Watched-stream details show measured resolution, decoded frames per second, codec and payload bitrate separately from the sender's selected settings.
-* **Stream diagnostics for viewers**: Any authorized viewer can compare sender capture/encoding/transmission, server ingress/forwarding and local reception/decoding in **Stream details**. A plain-language health summary explains the available evidence and suggests an action for the sender or viewer; live share controls show the sender's summary too. Bitrate, retransmission share, keyframes, frame size and processing delays help locate bottlenecks. Updated senders are required for sender measurements; missing or stale data stays unknown. See [stream diagnostics](docs/stream-diagnostics.md).
+* **Stream diagnostics for viewers**: Any authorized viewer can compare sender capture/encoding/transmission, server ingress/forwarding and local reception/decoding in **Stream details**. A plain-language health summary explains the available evidence and suggests an action for the sender or viewer; live share controls show the sender's summary too. Bitrate, retransmission share, keyframes, frame size and processing delays help locate bottlenecks. Updated senders are required for sender measurements; missing or stale data stays unknown.
 * **Priority speaker**: Non-priority publishers in the current voice channel are ducked to 25% gain (about −12 dB) while a priority speaker talks.
 * **Whisper Routing**: Point-to-point and cross-channel targeted voice transmission bypasses standard channel boundaries.
 * **Microphone recovery**: If the selected microphone disconnects, receiving audio and video continues. Choose and apply a device in **Capture** settings, then select **Retry microphone**. A replacement microphone never starts automatically.
@@ -128,11 +128,11 @@ graph TD
 ### 💬 Messaging and collaboration
 
 * **Encrypted messages and attachments**: Direct messages use recipient keys; channel/global bodies use server-managed scope-key generations. Attachment keys travel inside their encrypted message bodies.
-* **Message tools**: Emoji reactions, replies, pins, polls, voice messages, typing indicators, read receipts, and mentions. [Inbox, history search, and saved messages](docs/message-tools.md) are scoped to the current server; history search decrypts and matches bodies in the native client.
+* **Message tools**: Emoji reactions, replies, pins, polls, voice messages, typing indicators, read receipts, and mentions. Inbox, history search, and saved messages are scoped to the current server; history search decrypts and matches bodies in the native client.
 * **Chat navigation**: Channel and direct-message tabs stay on one row, with an **All chats** menu for overflow. Right-click to pin or reorder, or drag within the pinned/unpinned section. Arrow keys move focus, Enter opens a chat, and Ctrl+Shift+Left/Right reorders it. Order and pins are saved locally, encrypted and separated by server and identity; closing a tab removes its pin. **Recently closed** in All chats and **Ctrl+Shift+T** reopen explicitly closed chats from the current session (up to ten); channel access is checked again. This list resets when the server or identity changes.
 * **Chat media**: Enlarging an attached video keeps the same player, playback position, volume, speed and pause state. Animated images and chat videos pause offscreen or after a minute without window focus; only visible media resumes, and manually paused videos stay paused.
-* **Threads and forums**: Persistent posts/replies, tags, following, unread state, archive/reopen, resolved questions, and pinned posts, under the parent channel's access rules. See [threads and forums](docs/threads-and-forums.md).
-* **Incoming webhooks**: Revocable, channel-scoped integration tokens; posts remain subject to the creator's current access. See [incoming webhooks](docs/incoming-webhooks.md).
+* **Threads and forums**: Persistent posts/replies, tags, following, unread state, archive/reopen, resolved questions, and pinned posts, under the parent channel's access rules.
+* **Incoming webhooks**: Revocable, channel-scoped integration tokens; posts remain subject to the creator's current access.
 * **Moderation**: Role-controlled message and thread moderation, domain allow/block lists, word filters, duplicate suppression, and rate limits. Server-side content filtering does not inspect E2EE direct-message bodies.
 
 ### 🖥️ Desktop experience
@@ -153,7 +153,7 @@ graph TD
 * **Protected ownership**: Owner and Administrator bypass configurable channel overrides, but not account bans, admission checks, ownership protection, hierarchy checks, or operational limits. Only the owner can grant Administrator or transfer ownership.
 * **Explainable changes**: Check access shows the effective decision and its source. Revision checks prevent stale saves; role/access mutations are audited.
 
-The current server and client require the coordinated `roles-v1` model and a fresh database. Existing legacy databases are not automatically migrated. See [fresh setup](docs/role-setup-preflight.md) and [the authorization contract](docs/capability-enforcement.md).
+The current server and client require the coordinated `roles-v1` model and a fresh database. Existing legacy databases are not automatically migrated. Follow [New server setup](#new-server-setup) for a new installation.
 
 ---
 
@@ -166,7 +166,7 @@ For the desktop client, download `noxa-client-windows-amd64.exe` from
 Releases also include `noxa-server-linux-amd64`, checksums, and a signed manifest.
 Container builds publish `linux/amd64` and `linux/arm64` images to
 [`ghcr.io/arumes31/noxa`](https://github.com/arumes31/noxa/pkgs/container/noxa).
-See [update signing](docs/update-signing.md) for verification and signing-key setup.
+The desktop updater verifies the signed manifest using its embedded trusted keys.
 
 > [!TIP]
 > The fastest way to run noXa is using **Docker Compose**.
@@ -195,7 +195,7 @@ See [update signing](docs/update-signing.md) for verification and signing-key se
    Each Compose secret also supports an `_FILE` counterpart; configure exactly
    one non-empty source. Set an `_FILE` value to a readable host path; Compose
    mounts it read-only at `/run/secrets/...`. Prefer a path outside the
-   repository—`docker/secrets/.empty` is only the checked-in empty fallback.
+   repository—`docker/empty-secret` is only the checked-in empty fallback.
    On Linux, keep the source directory root-owned `0700` and each source file
    root-owned `0444`; Compose mounts individual files, never the directory.
    This permits the non-root service reader without exposing host traversal.
@@ -274,15 +274,14 @@ make client-build
 ```
 
 Stable versions come from `vMAJOR.MINOR.PATCH` tags. Untagged commits and
-dirty trees receive deterministic commit/content metadata automatically; see
-[`docs/versioning.md`](docs/versioning.md). Plain `go build` and `wails build`
+dirty trees receive deterministic commit/content metadata automatically.
+Plain `go build` and `wails build`
 also use Go's embedded VCS information, while the Make targets additionally
 stamp the exact dirty-tree fingerprint into the binary.
 
 The client build writes to `client/build/bin/`. Custom builds that need the
 signed updater must embed trusted public keys using `NOXA_UPDATE_PUBLIC_KEYS`
-for Make or `-UpdatePublicKeys` for the PowerShell wrapper; see
-[update signing](docs/update-signing.md). The private signing key is never part
+for Make or `-UpdatePublicKeys` for the PowerShell wrapper. The private signing key is never part
 of the client build.
 
 ---
@@ -338,8 +337,7 @@ For a source installation, build `go build -o bin/adduser ./cmd/adduser` and
 your `NOXA_DATABASE_URL` and run those binaries with the same arguments. Set
 `-chat-master-key-file` to the server's actual key path (default
 `./data/keys/chat_master.key`) and share the same configured key override, if any.
-See [role setup and activation](docs/role-setup-preflight.md) for inspection,
-failure recovery and process-lock details.
+Use `role-setup -h` to inspect the setup and activation options.
 
 ### 2. Connect as owner and grant administrators
 
@@ -470,7 +468,7 @@ and its relay-port settings are described in [`.env.example`](.env.example).
 
 Back up PostgreSQL together with the matching chat/PII keys, uploaded files,
 recordings, TLS identity and configuration. Verify a restore before relying on
-the installation; see [backup and restore](docs/operations/backup-restore.md).
+the installation.
 
 ---
 
@@ -543,7 +541,7 @@ key or a newline-separated `id:base64` key ring for key rotation.
 Default member assignment is managed through **Permissions → Roles** in the
 active `roles-v1` policy. The retired `NOXA_DEFAULT_GROUPS_ENABLED` setting does
 not configure current roles. Video ceilings can also be managed through the
-authorized media-limits interface; see [media resource limits](docs/media-resource-limits.md).
+authorized media-limits interface.
 
 ### Join by hostname with DNS SRV
 
@@ -640,10 +638,8 @@ enabling Query SSH.
 Provision integration accounts offline with `adduser -integration`; this enables
 login but grants no roles. Current capabilities and hierarchy apply to every
 operation, including existing sessions. Retired numeric permissions and privilege
-tokens have no compatibility fallback. Use `help` for the complete command list
-and [integration access](docs/integration-role-access.md) for JSON schemas,
-ServerQuery escaping and conflict handling. SSH sessions must separately negotiate
-`NOXA_AUTHORIZATION_MODEL=roles-v1`; see [model negotiation](docs/authorization-model-negotiation.md).
+tokens have no compatibility fallback. Use `help` for the complete command list.
+SSH sessions must separately negotiate `NOXA_AUTHORIZATION_MODEL=roles-v1`.
 
 <details>
 <summary><b>Click to expand ServerQuery session example</b></summary>
@@ -712,8 +708,7 @@ and Redis 7, runs Go race/coverage checks (70% root-internal and 50% client
 minimums), Windows client tests, browser tests, protobuf checks, lint, security
 analysis, and a backup/restore drill. Passing a local subset does not replace
 these gates. [`.github/workflows/ci.yml`](.github/workflows/ci.yml) contains the
-exact commands; [role E2E testing](docs/role-e2e-testing.md) describes the live
-protocol fixtures. Website checks are separate in [`website/README.md`](website/README.md).
+exact commands and live protocol fixtures. Website checks are separate in [`website/README.md`](website/README.md).
 
 The browser/SFU test checks independent single-encoding shares, upload suspension
 without viewers, resumption and sender-controlled quality changes using synthetic
@@ -752,7 +747,6 @@ noxa/
 │   ├── query/                  # ServerQuery line-based admin protocol
 │   ├── store/                  # PostgreSQL data access layer & migrations
 │   └── webrtc/                 # Pion WebRTC SFU, routing and RTCP diagnostics
-├── docs/                       # Authorization, media, signing and operator guides
 ├── proto/                      # Protobuf sources and Buf generation policy
 ├── v1/                         # Generated Go protocol code
 ├── website/                    # Static product/download site and its tests
@@ -790,12 +784,11 @@ resize it when replacing icons, rather than converting it back to JPEG.
 
 ## Operations
 
-Production operators should adopt the repository's
-[service-level objectives](docs/operations/service-level-objectives.md), practice
-the [backup and restore drill](docs/operations/backup-restore.md), and keep the
-[incident runbook](docs/operations/incident-runbook.md) available outside the
-deployment being operated. Update these documents when architecture, telemetry,
-or recovery procedures change.
+Production operators should define service-level objectives, practice backup
+and restore drills, and keep their incident runbook outside the deployment being
+operated. Update these local procedures when architecture, telemetry or recovery
+steps change. The `docs/` directory and `docker/secrets/` are local-only and ignored
+by Git; keep operator notes and credentials out of the public repository.
 
 ### Voice diagnostics
 
@@ -851,9 +844,7 @@ the server retains up to 60 compact summary samples over five minutes in memory
 per client. History is isolated by connection, channel epoch and media session;
 it is cleared on the relevant lifecycle changes. Samples older than 15 seconds
 are marked stale. The endpoint stays
-loopback-only even if remote metrics are enabled. See
-[receiver voice diagnostics](docs/voice-diagnostics.md) for interpretation and
-access details.
+loopback-only even if remote metrics are enabled.
 
 ### Stream operator diagnostics
 

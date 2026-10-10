@@ -27,4 +27,4 @@ Use Python 3.12 with numpy 2.5.3, scipy 1.17.1 and soundfile 0.13.1, then `node 
 
 PTT and frequent events stay quieter than alerts. Registry gain is 1; level differences are mastered into the files. `metrics.json` contains noXa titles, duration, peak, RMS, DC and SHA-256. Maximum asset peak is 0.112 (below the engine's 0.115 ceiling); four sources at 200% retain sample headroom.
 
-The user approved implementation of this corrected pack after requesting removal of metallic/drum/instrument sounds. These files are integrated into production event playback and settings previews. This does not establish a full 32-event fatigue review. Automated measurements cannot establish comfort or perceptual distinction. See `docs/sound-system-report.md` for review status.
+The user approved implementation of this corrected pack after requesting removal of metallic/drum/instrument sounds. These files are integrated into production event playback and settings previews. This does not establish a full 32-event fatigue review. Automated measurements cannot establish comfort or perceptual distinction.

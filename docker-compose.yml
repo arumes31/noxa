@@ -82,22 +82,22 @@ services:
       # root filesystem can stay read-only.
       - noxadata:/data
       - type: bind
-        source: ${NOXA_COMPOSE_DATABASE_URL_FILE:-./docker/secrets/.empty}
+        source: ${NOXA_COMPOSE_DATABASE_URL_FILE:-./docker/empty-secret}
         target: /run/secrets/noxa_database_url
         read_only: true
         bind: { create_host_path: false }
       - type: bind
-        source: ${POSTGRES_PASSWORD_FILE:-./docker/secrets/.empty}
+        source: ${POSTGRES_PASSWORD_FILE:-./docker/empty-secret}
         target: /run/secrets/postgres_password
         read_only: true
         bind: { create_host_path: false }
       - type: bind
-        source: ${REDIS_PASSWORD_FILE:-./docker/secrets/.empty}
+        source: ${REDIS_PASSWORD_FILE:-./docker/empty-secret}
         target: /run/secrets/redis_password
         read_only: true
         bind: { create_host_path: false }
       - type: bind
-        source: ${TURN_SECRET_FILE:-./docker/secrets/.empty}
+        source: ${TURN_SECRET_FILE:-./docker/empty-secret}
         target: /run/secrets/turn_secret
         read_only: true
         bind: { create_host_path: false }
@@ -177,7 +177,7 @@ services:
     volumes:
       - pgdata:/var/lib/postgresql/data
       - type: bind
-        source: ${POSTGRES_PASSWORD_FILE:-./docker/secrets/.empty}
+        source: ${POSTGRES_PASSWORD_FILE:-./docker/empty-secret}
         target: /run/secrets/postgres_password
         read_only: true
         bind: { create_host_path: false }
@@ -230,32 +230,32 @@ services:
     volumes:
       - pgbackups:/backups
       - type: bind
-        source: ${POSTGRES_PASSWORD_FILE:-./docker/secrets/.empty}
+        source: ${POSTGRES_PASSWORD_FILE:-./docker/empty-secret}
         target: /run/secrets/postgres_password
         read_only: true
         bind: { create_host_path: false }
       - type: bind
-        source: ${BACKUP_POSTGRES_PASSWORD_FILE:-./docker/secrets/.empty}
+        source: ${BACKUP_POSTGRES_PASSWORD_FILE:-./docker/empty-secret}
         target: /run/secrets/backup_postgres_password
         read_only: true
         bind: { create_host_path: false }
       - type: bind
-        source: ${BACKUP_PGSSLROOTCERT_FILE:-./docker/secrets/.empty}
+        source: ${BACKUP_PGSSLROOTCERT_FILE:-./docker/empty-secret}
         target: /run/secrets/backup_pgsslrootcert
         read_only: true
         bind: { create_host_path: false }
       - type: bind
-        source: ${BACKUP_PGSSLCERT_FILE:-./docker/secrets/.empty}
+        source: ${BACKUP_PGSSLCERT_FILE:-./docker/empty-secret}
         target: /run/secrets/backup_pgsslcert
         read_only: true
         bind: { create_host_path: false }
       - type: bind
-        source: ${BACKUP_PGSSLKEY_FILE:-./docker/secrets/.empty}
+        source: ${BACKUP_PGSSLKEY_FILE:-./docker/empty-secret}
         target: /run/secrets/backup_pgsslkey
         read_only: true
         bind: { create_host_path: false }
       - type: bind
-        source: ${RCLONE_CONFIG_FILE:-./docker/secrets/.empty}
+        source: ${RCLONE_CONFIG_FILE:-./docker/empty-secret}
         target: /run/secrets/rclone.conf
         read_only: true
         bind: { create_host_path: false }
@@ -277,7 +277,7 @@ services:
       - ./scripts/secret-env.sh:/usr/local/lib/noxa/secret-env.sh:ro
       - ./scripts/redis-entrypoint.sh:/usr/local/bin/noxa-redis-entrypoint.sh:ro
       - type: bind
-        source: ${REDIS_PASSWORD_FILE:-./docker/secrets/.empty}
+        source: ${REDIS_PASSWORD_FILE:-./docker/empty-secret}
         target: /run/secrets/redis_password
         read_only: true
         bind: { create_host_path: false }
@@ -331,7 +331,7 @@ services:
       - ./scripts/coturn-entrypoint.sh:/usr/local/bin/noxa-coturn-entrypoint.sh:ro
       - ./scripts/secret-env.sh:/usr/local/lib/noxa/secret-env.sh:ro
       - type: bind
-        source: ${TURN_SECRET_FILE:-./docker/secrets/.empty}
+        source: ${TURN_SECRET_FILE:-./docker/empty-secret}
         target: /run/secrets/turn_secret
         read_only: true
         bind: { create_host_path: false }

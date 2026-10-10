@@ -612,8 +612,9 @@ update source" and stays silent.
 
 **Security note**: SHA-256 verifies artifact integrity and the detached
 Ed25519 signature authenticates the signed manifest against keys embedded in
-the client. Key setup and rotation are documented in
-[`docs/update-signing.md`](../docs/update-signing.md).
+the client. Custom builds must embed trusted public keys with
+`NOXA_UPDATE_PUBLIC_KEYS` for Make or `-UpdatePublicKeys` for the PowerShell wrapper.
+Never include the private signing key in a client build.
 
 ## Headless backend test
 
@@ -656,7 +657,6 @@ request/response round-trip works.
 - Channel discussions provide persistent independent threads and forum boards,
   tags, membership, following, unread state, and archive/reopen controls. Message
   bodies use channel encryption; titles and tags are server-visible metadata.
-  See [threads and forums](../docs/threads-and-forums.md) for permissions and migration.
 - The microphone button in channel, private-group and discussion composers
   records up to five minutes or 5 MiB. Preview, discard or send the recording as
   an encrypted attachment; recipients explicitly load it for inline playback.
@@ -671,10 +671,10 @@ request/response round-trip works.
 - Shared audio has a separate personal mute and 0–200% volume setting per member,
   independent of that member's microphone volume. Deafen still silences both.
 - The inbox, older-history search and personal saved collections provide message
-  navigation. See [message tools](../docs/message-tools.md) for scope and persistence.
+  navigation scoped to the current server.
 - Discussion controls include title/tag editing, pinning, resolved status and
-  inactivity archiving. Channel managers can create/revoke incoming text webhooks;
-  see [incoming webhooks](../docs/incoming-webhooks.md) for HTTPS setup and limits.
+  inactivity archiving. Channel managers can create/revoke incoming text webhooks.
+  Remote HTTP access requires an HTTPS proxy.
 - Settings → Overlay contains the voice overlay controls. It is enabled by default on Windows and
   can be disabled. Only active, unmuted speakers appear, each with a circular
   avatar, name and animated cyan activity indicator on a transparent background.
