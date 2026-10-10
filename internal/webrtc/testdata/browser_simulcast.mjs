@@ -138,44 +138,102 @@ try {
         return page;
     }
     const stages = [];
-    async function decoded(page, stage, dimensions = [[width, height], [width, height]]) {
-        let received;
+    const inbound = page => page.evaluate(async () => [...(await window.receiver.getStats()).values()]
+        .filter(row => row.type === "inbound-rtp" && row.kind === "video" && row.framesDecoded > 0)
+        .map(row => ({ id: row.trackIdentifier, width: row.frameWidth, height: row.frameHeight, fps: row.framesPerSecond, decoded: row.framesDecoded })));
+    function matchesSource(received, output, size, id) {
+        const rows = output.rows.filter(row => row.encoded > 0);
+        if (output.encodings.length !== 1 || output.encodings[0].active !== true || output.encodings[0].rid || rows.length !== 1) return false;
+        const source = rows[0], tracks = received.filter(row => row.id === id);
+        if (source.rid || tracks.length !== 1) return false;
+        const row = tracks[0];
+        // Motion-first encoding may reduce size. The SFU must still forward the
+        // very same single source rendition to every watching receiver.
+        return Number.isInteger(source.width) && Number.isInteger(source.height) && source.width > 0 && source.height > 0 &&
+            source.width <= size[0] && source.height <= size[1] && Math.abs(source.width - source.height * size[0] / size[1]) <= 2 &&
+            row.width === source.width && row.height === source.height && row.fps >= fps * 0.6 && row.fps <= fps + 5;
+    }
+    let checkedRejections = false;
+    async function decoded(viewers, stage, dimensions = [[width, height], [width, height]]) {
+        let received, sent;
         const start = Date.now();
         let sampled = 0;
+        const baselineSent = await Promise.all(publishers.map(outbound));
+        const baselineReceived = await Promise.all(viewers.map(inbound));
         await expect.poll(async () => {
-            received = await page.evaluate(async () => [...(await window.receiver.getStats()).values()]
-                .filter(row => row.type === "inbound-rtp" && row.kind === "video" && row.framesDecoded > 0)
-                .map(row => ({ id: row.trackIdentifier, width: row.frameWidth, height: row.frameHeight, fps: row.framesPerSecond, decoded: row.framesDecoded })));
+            // Bracket both viewers with publisher samples so a size transition
+            // cannot approve different renditions in sequential viewer checks.
+            const before = await Promise.all(publishers.map(outbound));
+            received = await Promise.all(viewers.map(inbound));
+            sent = await Promise.all(publishers.map(outbound));
             if (Date.now() - sampled >= 2000) {
                 sampled = Date.now();
-                samples.push({ stage, elapsedMS: sampled - start, received, sent: await Promise.all(publishers.map(outbound)) });
+                samples.push({ stage, elapsedMS: sampled - start, received, sent });
             }
-            return dimensions.every((size, index) => {
+            const matches = dimensions.every((size, index) => {
                 if (!size) return true;
-                const row = received.find(row => row.id === `${index === 0 ? "a" : "b"}|screen`);
-                return row && row.width === size[0] && row.height === size[1] && row.fps >= fps * 0.6 && row.fps <= fps + 5;
+                const id = `${index === 0 ? "a" : "b"}|screen`;
+                const source = sent[index].rows.find(row => row.encoded > 0);
+                const earlier = before[index].rows.find(row => row.encoded > 0);
+                const baseline = baselineSent[index].rows.find(row => row.encoded > 0);
+                return source && earlier && source.width === earlier.width && source.height === earlier.height &&
+                    source.sent > (baseline?.sent || 0) && source.encoded > (baseline?.encoded || 0) &&
+                    received.every((rows, viewerIndex) => matchesSource(rows, sent[index], size, id) &&
+                        rows.find(row => row.id === id).decoded > (baselineReceived[viewerIndex].find(row => row.id === id)?.decoded || 0));
             });
+            if (matches && !checkedRejections) {
+                const rows = received[0], output = sent[0], size = dimensions[0], id = "a|screen";
+                const reject = (change, label) => {
+                    const fixture = structuredClone({ rows, output, size });
+                    change(fixture);
+                    assert.equal(matchesSource(fixture.rows, fixture.output, fixture.size, id), false, label);
+                };
+                reject(fixture => fixture.rows.find(row => row.id === id).width += 2, "reject a different viewer rendition");
+                reject(fixture => fixture.rows.find(row => row.id === id).id = "wrong|screen", "reject a different source identity");
+                reject(fixture => fixture.rows.find(row => row.id === id).fps = fps * 0.6 - 1, "retain the FPS floor");
+                reject(fixture => fixture.output.encodings[0].active = false, "reject inactive sources");
+                reject(fixture => fixture.output.encodings.push({ active: true }), "reject multiple encodings");
+                reject(fixture => fixture.output.rows[0].rid = "extra", "reject simulcast renditions");
+                reject(fixture => fixture.size = [1, 1], "reject dimensions above the selected ceiling");
+                checkedRejections = true;
+            }
+            return matches;
         }, { timeout: 15000, message: stage }).toBe(true);
         stages.push({ stage, elapsedMS: Date.now() - start, received });
+        return { sent, received };
     }
     const viewer = await receiver("viewer");
-    await decoded(viewer, "first viewer starts dormant sources");
+    await decoded([viewer], "first viewer starts dormant sources");
     const viewer2 = await receiver("viewer2");
-    await decoded(viewer2, "second viewer receives identical source quality");
+    await decoded([viewer, viewer2], "both viewers receive identical source quality");
+    // Exercise a reduced source size deterministically, independent of whether
+    // Chromium's bandwidth adaptation happens to activate on this CI host.
+    async function scaleSource(scale) {
+        await publishers[0].evaluate(async scale => {
+            const sender = window.__noxa.state.shareVideoTransceiver.sender;
+            const parameters = sender.getParameters();
+            parameters.encodings[0].scaleResolutionDownBy = scale;
+            await sender.setParameters(parameters);
+        }, scale);
+    }
+    await scaleSource(2);
+    await decoded([viewer, viewer2], "both viewers receive the reduced source rendition", [[width / 2, height / 2], [width, height]]);
+    await scaleSource(1);
+    await decoded([viewer, viewer2], "both viewers follow restored source scaling");
     async function watch(viewerID, active) {
         await viewer.evaluate(args => window.request("watch", { id: "a", ...args }), { viewer: viewerID, active });
         await refreshUploads();
     }
     await watch("viewer", false);
-    await decoded(viewer2, "one remaining viewer keeps source active");
+    await decoded([viewer2], "one remaining viewer keeps source active");
     assert.equal((await outbound(publishers[0])).encodings[0].active, true);
     await watch("viewer2", false);
     const stopped = await paused(publishers[0], "last viewer stopped");
-    await decoded(viewer, "independent second source keeps playing", [null, [width, height]]);
+    await decoded([viewer, viewer2], "independent second source keeps playing", [null, [width, height]]);
     await watch("viewer", true);
-    await decoded(viewer, "source resumes after all viewers stopped");
+    await decoded([viewer], "source resumes after all viewers stopped");
     await watch("viewer2", true);
-    await decoded(viewer2, "second viewer resumes same source");
+    await decoded([viewer, viewer2], "second viewer resumes same source");
     // Choose the new sender size through production live quality controls.
     // Every receiver must see the same change, with no second encoding.
     await publishers[0].locator(".sharing-quality").click();
@@ -184,15 +242,22 @@ try {
     await publishers[0].locator(".live-share-quality .sh-height").fill(String(height / 2));
     await publishers[0].locator(".live-share-quality .sh-fps").selectOption(String(fps));
     await publishers[0].locator(".live-share-quality").locator("..").getByRole("button", { name: "Apply quality", exact: true }).click();
-    await decoded(viewer, "sender quality change reaches first viewer", [[width / 2, height / 2], [width, height]]);
-    await decoded(viewer2, "sender quality change reaches second viewer", [[width / 2, height / 2], [width, height]]);
-    const sent = [];
-    for (const [index, page] of publishers.entries()) {
-        const output = await outbound(page);
+    await expect(publishers[0].locator(".live-share-quality")).toHaveCount(0);
+    const capture = await publishers[0].evaluate(() => {
+        const track = window.__noxa.state.shareStream.getVideoTracks()[0];
+        return { constraints: track.getConstraints(), settings: track.getSettings(), hint: track.contentHint };
+    });
+    assert.equal(capture.constraints.width.max, width / 2);
+    assert.equal(capture.constraints.height.max, height / 2);
+    assert.equal(capture.constraints.frameRate.max, fps);
+    assert.ok(capture.settings.width > 0 && capture.settings.width <= width / 2);
+    assert.ok(capture.settings.height > 0 && capture.settings.height <= height / 2);
+    assert.equal(capture.hint, "motion");
+    const { sent, received } = await decoded([viewer, viewer2], "sender quality change reaches both viewers", [[width / 2, height / 2], [width, height]]);
+    for (const [index, output] of sent.entries()) {
         const divisor = index === 0 ? 2 : 1;
         assert.equal(output.encodings.length, 1);
-        assert.deepEqual(output.rows.filter(row => row.encoded > 0).map(row => [row.rid, row.width, row.height]), [["", width / divisor, height / divisor]]);
-        sent.push(output);
+        assert.ok(matchesSource(received[0], output, [width / divisor, height / divisor], `${index === 0 ? "a" : "b"}|screen`));
     }
     assert.deepEqual(errors, []);
     console.log(JSON.stringify({ dormant, stopped, sent, stages, samples }, null, 2));
