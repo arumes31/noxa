@@ -138,6 +138,7 @@ test("speaker avatars reach the native overlay as bounded thumbnails and clear a
 });
 
 test("overlay animation overrides system motion settings and has its own saved toggle", async ({ page }) => {
+    await page.emulateMedia({ reducedMotion: "no-preference" });
     await page.evaluate(() => window.__noxa.openSettings("overlay"));
     const bars = page.locator(".overlay-sample-wave i");
     await expect(bars).toHaveCount(22);

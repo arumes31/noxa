@@ -10,6 +10,9 @@ export default defineConfig({
     use: {
         baseURL: "http://127.0.0.1:12364",
         headless: true,
+        // Functional tests advance virtual time by minutes. Keep ambient
+        // animation out of those clocks; motion tests opt in explicitly.
+        reducedMotion: "reduce",
         trace: "on-first-retry",
         screenshot: "only-on-failure",
     },
