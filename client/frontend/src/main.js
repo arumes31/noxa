@@ -1137,7 +1137,7 @@ window.runtime.EventsOn("snapshot", (json) => {
     // Snapshot replay can beat the async ClientID lookup during a tab switch
     // or reconnect. Reconcile here when the identity is already known; the
     // identity completion path calls the same helper for the opposite order.
-    syncOwnChannel();
+    syncOwnChannel({ ownMove: snap.own_channel_move });
     const nextPresence = captureChannelPresence(state);
     // Role-filtered servers send snapshots for membership changes. Compare the
     // live state (also updated by legacy events), never replayed tab history.
@@ -1163,7 +1163,7 @@ window.runtime.EventsOn("snapshot", (json) => {
 
 // syncOwnChannel makes channel ownership independent of whether the snapshot
 // / user_moved event or the active-tab ClientID lookup finishes first.
-function syncOwnChannel({ audible = true } = {}) {
+function syncOwnChannel({ audible = true, ownMove } = {}) {
     reconcileSpatialVoice();
     void refreshPermissions();
     if (!state.myClientID) return;
@@ -1195,7 +1195,8 @@ function syncOwnChannel({ audible = true } = {}) {
     let playedCue = false;
     if ((audible || initialCuePending) && !actionSoundsSuppressed()) {
         if (channelID > 0) {
-            playAlert("channel_join", { effect: previousChannelID > 0 ? "own_channel_switch" : "own_channel_join" });
+            const forcedMove = ownMove?.forced === true && Number(ownMove.channel_id) === channelID;
+            playAlert(forcedMove ? "moved_by_admin" : "channel_join", { effect: previousChannelID > 0 ? "own_channel_switch" : "own_channel_join" });
             playedCue = true;
         } else if (previousChannelID > 0) {
             playAlert("channel_leave");

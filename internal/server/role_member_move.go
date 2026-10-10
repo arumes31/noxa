@@ -39,7 +39,8 @@ func (s *TCPServer) moveRoleMember(ctx context.Context, e *authorization.RoleEva
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if err := s.moveClient(ctx, target.ID, msg.ChannelID, actorClientID); err != nil {
+	// Moderation can originate from an integration without a desktop session.
+	if err := s.moveClientWithCause(ctx, target.ID, msg.ChannelID, actorClientID, actorClientID != target.ID); err != nil {
 		if errors.Is(err, state.ErrChannelFull) {
 			return authorization.ErrRoleConflict
 		}

@@ -35,10 +35,28 @@ test.beforeEach(async ({ page }) => {
             for (const callback of window.__events.snapshot) callback(JSON.stringify(snapshot));
         };
         window.__membership();
+        window.__ownMove = (channel, hint = { channel_id: channel, forced: true }) => {
+            const snapshot = { own_channel_move: hint, root_channels: [7, 8].map(id => ({ ChannelID: id, Name: 'Channel ' + id,
+                clients: id === channel ? [{ client_id: 'self', nickname: 'Self', channel_id: channel }] : [] })) };
+            for (const callback of window.__events.snapshot) callback(JSON.stringify(snapshot));
+        };
     });
 });
 
 for (const language of ['en', 'de']) {
+    test(`${language} filtered snapshot announces a moderator moving self exactly once`, async ({ page }) => {
+        await page.evaluate(language => {
+            window.__noxa.state.settings.speech_language = language;
+            window.__ownMove(8);
+        }, language);
+        await expect.poll(() => page.evaluate(() => window.__spoken)).toEqual([`speech_${language}_moved_by_admin`]);
+        await page.evaluate(() => window.__ownMove(8));
+        await page.waitForTimeout(350);
+        expect(await page.evaluate(() => window.__spoken)).toEqual([`speech_${language}_moved_by_admin`]);
+        // A distinct rapid move must not be swallowed by the generic cooldown.
+        await page.evaluate(() => { window.__noxa.speechQueue.clear(); window.__ownMove(7); });
+        await expect.poll(() => page.evaluate(() => window.__spoken)).toEqual([`speech_${language}_moved_by_admin`, `speech_${language}_moved_by_admin`]);
+    });
     for (const [channel, event] of [[null, 'user_disconnected'], [0, 'user_leave'], [8, 'user_moved']]) {
         test(`${language} live snapshot plays ${event} once`, async ({ page }) => {
             await page.evaluate(({ channel, language }) => { window.__noxa.state.settings.speech_language = language; window.__membership(channel); }, { channel, language });
@@ -49,6 +67,29 @@ for (const language of ['en', 'de']) {
         });
     }
 }
+
+for (const condition of ['replay', 'event disabled', 'admin disabled', 'master muted', 'speech muted']) {
+    test(`own forced-move snapshot preserves ${condition} gate`, async ({ page }) => {
+        await page.evaluate(condition => {
+            const state = window.__noxa.state;
+            if (condition === 'replay') state.replayingTabID = state.activeTabID;
+            if (condition === 'event disabled') state.settings.speech_events = { moved_by_admin: false };
+            if (condition === 'admin disabled') state.settings.speech_admin = false;
+            if (condition === 'master muted') state.settings.play_sounds = false;
+            if (condition === 'speech muted') state.settings.spoken_messages = false;
+            window.__ownMove(8);
+        }, condition);
+        await page.waitForTimeout(350);
+        expect(await page.evaluate(() => window.__spoken)).toEqual([]);
+    });
+}
+
+test('stale or non-boolean forced-move hints preserve voluntary join speech', async ({ page }) => {
+    await page.evaluate(() => window.__ownMove(8, { channel_id: 99, forced: true }));
+    await expect.poll(() => page.evaluate(() => window.__spoken)).toEqual(['speech_en_channel_join']);
+    await page.evaluate(() => { window.__noxa.speechQueue.clear(); window.__noxa.speechQueue.last.clear(); window.__ownMove(7, { channel_id: 7, forced: 'true' }); });
+    await expect.poll(() => page.evaluate(() => window.__spoken)).toEqual(['speech_en_channel_join', 'speech_en_channel_join']);
+});
 
 for (const condition of ['replay', 'reconnect', 'tab switch', 'notifications disabled']) {
     test(`membership announcements stay silent during ${condition}`, async ({ page }) => {

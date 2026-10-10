@@ -19,7 +19,7 @@ export const SPEECH_EVENTS = {
     connection_failed: { priority: 3, category: "connection", family: "connection", effect: "connection_failed", cooldown: 3000 },
     disconnect_failed: { priority: 3, category: "connection", family: "connection", effect: "connection_failed", cooldown: 3000 },
     server_error: { priority: 3, category: "admin", effect: "server_error", cooldown: 3000 },
-    moved_by_admin: { priority: 4, category: "admin", effect: "own_channel_switch" },
+    moved_by_admin: { priority: 4, category: "admin", effect: "own_channel_switch", cooldown: 0 },
     permission_denied: { priority: 4, category: "admin", effect: "server_error" },
     user_kicked: { priority: 3, category: "admin", effect: "kick", matrix: "kick", cooldown: 1000 },
     user_kicked_channel: { priority: 3, category: "admin", effect: "kick", matrix: "kick", cooldown: 1000 },

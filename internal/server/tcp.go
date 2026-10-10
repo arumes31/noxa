@@ -25,6 +25,7 @@ import (
 
 	"noxa/internal/auth"
 	"noxa/internal/authorization"
+	"noxa/internal/broadcast"
 	"noxa/internal/chatcrypto"
 	"noxa/internal/config"
 	"noxa/internal/filetransfer"
@@ -55,6 +56,7 @@ type Client struct {
 	UserID   int64  // database users.id, once authenticated
 
 	mu                 sync.RWMutex
+	lastOwnChannelMove *broadcast.OwnChannelMove // recipient-only cause, protected by mu
 	authed             bool
 	revoked            bool   // role-mode removal closes protected work before socket cleanup
 	disconnectCleaned  bool   // membership/media cleanup is idempotent

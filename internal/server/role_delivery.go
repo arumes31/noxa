@@ -35,7 +35,7 @@ func (s *TCPServer) writeRoleBroadcastInContext(ctx context.Context, client *Cli
 			s.privateCallsMu.Lock()
 			defer s.privateCallsMu.Unlock()
 		}
-		if event.Type == eventSpeakingChanged || event.Type == eventWhisper || event.Type == eventAvatarChanged || event.Type == eventPoke || event.Type == eventPrioritySpeakerChanged || event.Type == eventScreenshareChanged || event.Type == eventStreamWatchStarted || event.Type == eventStreamUploadChanged || event.Type == eventPosition {
+		if roleSnapshotEvent(event.Type) || event.Type == eventSpeakingChanged || event.Type == eventWhisper || event.Type == eventAvatarChanged || event.Type == eventPoke || event.Type == eventPrioritySpeakerChanged || event.Type == eventScreenshareChanged || event.Type == eventStreamWatchStarted || event.Type == eventStreamUploadChanged || event.Type == eventPosition {
 			// A queued activity write must finish before moderation can
 			// acknowledge a mute/deafen, or recheck after that change. Avatar
 			// notifications likewise must not outlive the member's visibility.
@@ -134,7 +134,7 @@ func (s *TCPServer) roleBroadcastFrame(client *Client, payload []byte, e *author
 			}
 		}
 	case eventUserJoined, eventUserLeft, eventUserMoved, eventChannelCreated, eventChannelDeleted, eventChannelUpdated, eventStatusChanged, eventNicknameChanged, eventMemberVoiceChanged, eventAudioStateChanged:
-		return netproto.Encode(netproto.MsgSnapshot, buildRoleSnapshot(s.deps.State, e, client.userID(), client.uniqueID()))
+		return netproto.Encode(netproto.MsgSnapshot, s.roleSnapshotWithOwnMove(client, e))
 	case eventAvatarChanged, eventSpeakingChanged, eventPrioritySpeakerChanged, eventPosition, eventScreenshareChanged:
 		var event struct {
 			ClientID  string `json:"client_id"`
@@ -189,7 +189,7 @@ func (s *TCPServer) roleBroadcastFrame(client *Client, payload []byte, e *author
 		// Other members learn the new visible tree, without private reasons or
 		// the identities of moderators acting in channels they cannot see.
 		if event.ClientID != client.ID {
-			return netproto.Encode(netproto.MsgSnapshot, buildRoleSnapshot(s.deps.State, e, client.userID(), client.uniqueID()))
+			return netproto.Encode(netproto.MsgSnapshot, s.roleSnapshotWithOwnMove(client, e))
 		}
 	case eventAnnouncement:
 		if !e.Evaluate(client.userID(), 0, authorization.ViewChannel).Allowed {

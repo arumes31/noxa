@@ -61,9 +61,17 @@ type ChannelAccess struct {
 	CanConnect bool `json:"can_connect"`
 }
 
+// OwnChannelMove describes the recipient's most recent channel transition.
+// It never contains the source channel or the moving member's identity.
+type OwnChannelMove struct {
+	ChannelID int64 `json:"channel_id"`
+	Forced    bool  `json:"forced"`
+}
+
 // TreeSnapshot is the full nested view of the server's channel tree and the
 // users currently connected.
 type TreeSnapshot struct {
+	OwnChannelMove *OwnChannelMove `json:"own_channel_move,omitempty"`
 	// OwnAuthority describes the recipient's authority, independently of cosmetic roles.
 	OwnAuthority string `json:"own_authority,omitempty"`
 	// CanSetInvisible is recipient-specific role authority, never a legacy admin flag.

@@ -75,7 +75,7 @@ func (s *TCPServer) reconcileRoleChat(ctx context.Context, before, after *author
 			_ = client.Conn.Close()
 			continue
 		}
-		if err := s.writeMessage(client, netproto.MsgSnapshot, buildRoleSnapshot(s.deps.State, after, client.userID(), client.uniqueID())); err != nil {
+		if err := s.writeMessage(client, netproto.MsgSnapshot, s.roleSnapshotWithOwnMove(client, after)); err != nil {
 			_ = client.Conn.Close()
 		}
 	}

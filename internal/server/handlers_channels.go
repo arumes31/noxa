@@ -220,6 +220,7 @@ func (s *TCPServer) leaveOwnChannelInContext(ctx context.Context, client *Client
 		}
 	}
 	s.deps.State.SetPrioritySpeaker(client.ID, false)
+	client.rememberOwnChannelMove(previousChannelID, 0, false)
 	s.deps.State.SetSharing(client.ID, false)
 	if previousChannelID != 0 {
 		if s.deps.Voice != nil {
@@ -260,8 +261,15 @@ func (s *TCPServer) handleMoveClient(ctx context.Context, client *Client, f *net
 // temp-channel cleanup bookkeeping for the source and target channels, keeps
 // the voice router's membership in sync, and announces the move.
 func (s *TCPServer) moveClient(ctx context.Context, clientID string, channelID int64, movedBy string) error {
+	return s.moveClientWithCause(ctx, clientID, channelID, movedBy, movedBy != "" && movedBy != clientID)
+}
+
+func (s *TCPServer) moveClientWithCause(ctx context.Context, clientID string, channelID int64, movedBy string, forced bool) error {
 	afterMove := func(previousChannelID int64) {
 		if previousChannelID != channelID {
+			if client, ok := s.clientByID(clientID); ok {
+				client.rememberOwnChannelMove(previousChannelID, channelID, forced)
+			}
 			// Moving invalidates publications even when the destination permits sharing.
 			s.deps.State.SetSharing(clientID, false)
 		}
