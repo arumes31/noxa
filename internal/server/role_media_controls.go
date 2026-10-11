@@ -19,12 +19,32 @@ func (s *TCPServer) roleChannelControl(ctx context.Context, client *Client, capa
 	return err
 }
 
+// roleChannelRead retains the same policy and metadata barriers through the
+// reply, but shares membership with packet writes. The callback must not change
+// membership, permissions, publisher visibility or watch consent.
+func (s *TCPServer) roleChannelRead(ctx context.Context, client *Client, capability authorization.Capability, active bool, effect func(context.Context, int64) error) error {
+	err := s.withRoleChannelLease(ctx, client, capability, active, true, effect)
+	if errors.Is(err, authorization.ErrRoleForbidden) || errors.Is(err, authorization.ErrAuthorizationUnavailable) {
+		return s.roleError(ctx, client, err)
+	}
+	return err
+}
+
 func (s *TCPServer) withRoleChannelControl(ctx context.Context, client *Client, capability authorization.Capability, active bool, effect func(context.Context, int64) error) error {
+	return s.withRoleChannelLease(ctx, client, capability, active, false, effect)
+}
+
+func (s *TCPServer) withRoleChannelLease(ctx context.Context, client *Client, capability authorization.Capability, active, readOnly bool, effect func(context.Context, int64) error) error {
 	return s.withRolePolicy(ctx, func(ctx context.Context) error {
 		s.roleMetadataMu.Lock()
 		defer s.roleMetadataMu.Unlock()
-		client.roleActionMu.Lock()
-		defer client.roleActionMu.Unlock()
+		if readOnly {
+			client.roleActionMu.RLock()
+			defer client.roleActionMu.RUnlock()
+		} else {
+			client.roleActionMu.Lock()
+			defer client.roleActionMu.Unlock()
+		}
 		if s.deps.State == nil {
 			return authorization.ErrAuthorizationUnavailable
 		}

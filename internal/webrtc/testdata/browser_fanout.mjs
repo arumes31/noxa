@@ -8,12 +8,18 @@ const { chromium, expect } = require('@playwright/test');
 const { createServer } = await import(pathToFileURL(require.resolve('vite')).href);
 const endpoint = process.argv[2];
 const [width, height, fps] = process.argv.slice(3).map(Number);
-const profile = 'pan';
+const configuration = process.argv[7] ? JSON.parse(process.argv[7]) : { capacity: false, viewers: 3, stageSeconds: 15, slowWriteMS: 0 };
+if (configuration.capacity && (![1, 5, 20].includes(configuration.viewers) || !Number.isInteger(configuration.stageSeconds) || configuration.stageSeconds < 10 || configuration.stageSeconds > 60 ||
+    !Number.isInteger(configuration.slowWriteMS) || configuration.slowWriteMS < 0 || configuration.slowWriteMS > 20 || (configuration.slowWriteMS && configuration.viewers < 5))) throw new Error('Invalid bounded capacity profile');
+const profile = configuration.capacity ? 'pan-capacity' : 'pan';
+if (configuration.codec && (!configuration.capacity || !['h264', 'vp8'].includes(configuration.codec))) throw new Error('Unsupported requested test codec');
 const output = process.argv[6];
 const vite = await createServer({ root: frontend, logLevel: 'error', server: { host: '127.0.0.1', port: 0, hmr: false } });
 await vite.listen();
 const origin = `http://127.0.0.1:${vite.httpServer.address().port}`;
 let browser;
+let browserServer;
+let browserClosing;
 let failure;
 let publisher;
 let generation;
@@ -21,8 +27,30 @@ const receivers = [];
 const errors = [];
 const samples = [];
 const joins = [];
+const impairments = [];
+const timeoutSeconds = configuration.capacity ? configuration.viewers * 15 + configuration.stageSeconds * 3 + 60 : 180;
+async function bounded(operation, milliseconds, label) {
+    let timer;
+    try {
+        return await Promise.race([operation(), new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(`${label} timed out`)), milliseconds); })]);
+    } finally { clearTimeout(timer); }
+}
+function closeBrowser() {
+    return browserClosing ||= (async () => {
+        if (!browserServer) return;
+        try { await bounded(() => browserServer.close(), 4000, 'browser close'); }
+        catch { await bounded(() => browserServer.kill(), 3000, 'owned browser termination'); }
+    })();
+}
+const watchdog = setTimeout(() => {
+    failure ||= 'Browser fixture watchdog expired before Go hard deadline';
+    // Closing the owned browser interrupts pending page evaluations/polls so
+    // the normal finally block can preserve samples and close the local server.
+    void closeBrowser().catch(error => errors.push(String(error)));
+}, (timeoutSeconds - 20) * 1000);
 try {
-    browser = await chromium.launch({ headless: true });
+    browserServer = await chromium.launchServer({ headless: true });
+    browser = await chromium.connect(browserServer.wsEndpoint());
     async function fixture() {
         const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
         context.on('weberror', event => errors.push(String(event.error())));
@@ -33,7 +61,7 @@ try {
             <section id="sharing-status" hidden></section>` }));
         await page.goto(`${origin}/fanout-fixture`);
         await page.exposeFunction('request', async (path, body) => {
-            const response = await fetch(`${endpoint}/${path}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+            const response = await fetch(`${endpoint}/${path}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal: AbortSignal.timeout(10000) });
             if (!response.ok) throw new Error(await response.text());
             return response.json();
         });
@@ -46,8 +74,17 @@ try {
         return page;
     }
     publisher = await fixture();
-    await publisher.evaluate(async ({ width, height, fps }) => {
+    await publisher.evaluate(async ({ width, height, fps, capacity, codec }) => {
         const pc = new RTCPeerConnection({ iceServers: [] });
+        if (codec) {
+            const { preferPublicationCodec } = await import('/src/video-codecs.js');
+            const createOffer = pc.createOffer.bind(pc);
+            pc.createOffer = async options => {
+                const video = pc.getTransceivers().find(transceiver => transceiver.sender.track?.kind === 'video');
+                if (!preferPublicationCodec(video, codec)) throw new Error(`Test codec unavailable: ${codec}`);
+                return createOffer(options);
+            };
+        }
         const canvas = document.createElement('canvas');
         canvas.width = width; canvas.height = height; canvas.style.width = '960px';
         document.body.append(canvas);
@@ -73,7 +110,10 @@ try {
         }, 1000 / fps);
         const localStream = new MediaStream();
         window.__noxa = { state: { pc, localStream, serverGeneration: 1, sessionGeneration: 1,
-            activeTabID: 'a', settings: {}, myChannelID: 1, myClientID: 'a', clients: [] },
+            activeTabID: 'a', settings: {}, myChannelID: 1, myClientID: 'a', clients: [],
+            // Use the production cap policy so upload reconciliation preserves
+            // this test's 8 Mbps ceiling (including its 15% RTP headroom rule).
+            mediaLimits: capacity ? { video_max_bitrate: Math.ceil(8_000_000 / .85) } : undefined },
             $: id => document.getElementById(id), sysMsg: message => { throw new Error(message); }, toast: () => {} };
         window.go = { main: { App: {
             SupportsStreamSourceQualityForTab: async () => true,
@@ -89,7 +129,7 @@ try {
         const publication = createVideoPublication({ policy: { lowBandwidth: false } });
         (await import('/src/modal.js')).initModalSystem();
         document.getElementById('voice-screen').onclick = () => publication.shareToggle();
-    }, { width, height, fps });
+    }, { width, height, fps, capacity: configuration.capacity, codec: configuration.codec });
     await publisher.locator('#voice-screen').click();
     await publisher.locator('.sh-preset').selectOption(fps === 60 ? 'hdMotion' : 'original');
     await publisher.getByRole('button', { name: 'Start sharing', exact: true }).click();
@@ -106,50 +146,77 @@ try {
         const startedAt = Date.now();
         const page = await fixture();
         await page.evaluate(async id => {
+            const { observeVideoPresentation } = await import('/src/video-presentation-timing.js');
             const pc = new RTCPeerConnection({ iceServers: [] });
             window.receiver = pc;
+            window.presentationObservers = new Map();
             pc.ontrack = ({ track }) => {
                 if (track.kind === 'audio') {
                     const audio = document.createElement('audio'); audio.muted = true; audio.autoplay = true;
                     audio.srcObject = new MediaStream([track]); document.body.append(audio); return;
                 }
                 if (track.kind !== 'video') return;
-                const video = document.createElement('video');
+                const video = [...document.querySelectorAll('video')].find(element => element.srcObject?.getVideoTracks()[0]?.id === track.id) || document.createElement('video');
+                window.presentationObservers.get(video)?.dispose();
                 video.muted = true; video.autoplay = true; video.playsInline = true; video.style.width = '960px';
                 video.srcObject = new MediaStream([track]); document.body.append(video);
-                video.requestVideoFrameCallback(() => { window.firstFrameAt ||= Date.now(); });
+                const stream = video.srcObject;
+                window.presentationObservers.set(video, observeVideoPresentation(video, {
+                    track, visibility: document, isCurrent: () => video.srcObject === stream,
+                    onFrame: () => { window.firstFrameAt ||= Date.now(); },
+                }));
             };
-            await pc.setRemoteDescription(await window.request('viewer', { id }));
-            await pc.setLocalDescription(await pc.createAnswer()); await window.gather(pc);
-            await window.request('answer', { id, sdp: pc.localDescription.sdp });
+            window.negotiate = async () => {
+                await pc.setRemoteDescription(await window.request('viewer', { id }));
+                await pc.setLocalDescription(await pc.createAnswer()); await window.gather(pc);
+                await window.request('answer', { id, sdp: pc.localDescription.sdp });
+            };
+            await window.negotiate();
         }, id);
         joins.push({ id, startedAt, connectedAt: Date.now() });
         receivers.push({ id, page });
         await refresh();
+        if (configuration.codec && receivers.length === 1) {
+            // As in browser_codec.mjs, wait for the actual ingress codec before
+            // negotiating its receiver track. Upload activation needs the first
+            // watch, so refresh the initial reserved output once after it starts.
+            await expect.poll(() => publisher.evaluate(() => window.request('codec', { id: 'a' })), { timeout: 15000 }).toBe(`video/${configuration.codec === 'h264' ? 'H264' : 'VP8'}`);
+            await page.evaluate(async () => { await window.negotiate(); window.firstFrameAt = null; });
+            joins.at(-1).codecRenegotiatedAt = Date.now();
+        }
     }
     const capture = page => page.evaluate(async () => {
         const pc = window.receiver || window.__noxa.state.pc;
         const keys = ['id', 'type', 'timestamp', 'kind', 'ssrc', 'rid', 'active', 'trackIdentifier', 'codecId', 'mediaSourceId',
-            'frameWidth', 'frameHeight', 'frames', 'framesPerSecond', 'framesEncoded', 'framesSent', 'framesReceived', 'framesDecoded', 'framesDropped',
+            'width', 'height', 'frameWidth', 'frameHeight', 'frames', 'framesPerSecond', 'framesEncoded', 'framesSent', 'framesReceived', 'framesDecoded', 'framesDropped',
             'bytesSent', 'bytesReceived', 'packetsSent', 'packetsReceived', 'packetsLost', 'retransmittedBytesSent', 'retransmittedPacketsSent',
             'retransmittedBytesReceived', 'retransmittedPacketsReceived', 'keyFramesEncoded', 'keyFramesDecoded', 'nackCount', 'pliCount', 'firCount',
             'freezeCount', 'totalFreezesDuration', 'jitter', 'jitterBufferDelay', 'jitterBufferEmittedCount', 'totalDecodeTime', 'totalEncodeTime',
             'concealedSamples', 'silentConcealedSamples', 'totalSamplesReceived', 'concealmentEvents',
             'totalInterFrameDelay', 'totalSquaredInterFrameDelay', 'totalPacketSendDelay', 'targetBitrate', 'qualityLimitationReason',
             'qualityLimitationDurations', 'qualityLimitationResolutionChanges', 'encoderImplementation', 'decoderImplementation', 'mimeType',
+            'powerEfficientEncoder', 'powerEfficientDecoder', 'totalProcessingDelay',
             'currentRoundTripTime', 'availableOutgoingBitrate', 'availableIncomingBitrate', 'state', 'nominated'];
-        return { at: Date.now(), state: pc.connectionState, firstFrameAt: window.firstFrameAt || null,
+        return { at: Date.now(), state: pc.connectionState, firstFrameAt: window.firstFrameAt || null, visibility: document.visibilityState,
             encodings: window.__noxa?.state.shareVideoTransceiver.sender.getParameters().encodings,
+            sourceSettings: window.__noxa?.state.shareVideoTransceiver.sender.track ? ((settings) => ({ width: settings.width, height: settings.height, frameRate: settings.frameRate }))(window.__noxa.state.shareVideoTransceiver.sender.track.getSettings()) : null,
             rows: [...(await pc.getStats()).values()].filter(row => ['outbound-rtp', 'inbound-rtp', 'media-source', 'codec', 'candidate-pair'].includes(row.type))
                 .map(row => Object.fromEntries(keys.filter(key => row[key] !== undefined).map(key => [key, row[key]]))),
             playback: [...document.querySelectorAll('video')].filter(video => video.srcObject).map(video => ({
                 id: video.srcObject.getVideoTracks()[0]?.id, width: video.videoWidth, height: video.videoHeight, paused: video.paused,
+                presentation: window.presentationObservers?.get(video)?.snapshot(performance.now()) ?? null,
                 total: video.getVideoPlaybackQuality().totalVideoFrames, dropped: video.getVideoPlaybackQuality().droppedVideoFrames })) };
     });
     async function sample(stage, seconds) {
         for (let second = 0; second < seconds; second++) {
             const started = Date.now();
             const sender = await capture(publisher);
+            assert.equal(sender.encodings?.length, 1, 'one source encoding throughout the run');
+            assert.equal(sender.encodings[0].rid, undefined, 'no simulcast RID');
+            if (configuration.capacity) assert.equal(sender.encodings[0].maxBitrate, 8_000_000, 'configured capacity ceiling survives publication updates');
+            assert.equal(sender.rows.filter(row => row.type === 'outbound-rtp' && row.kind === 'video').length, 1, 'one outgoing video RTP source');
+            const outbound = sender.rows.find(row => row.type === 'outbound-rtp' && row.kind === 'video');
+            if (configuration.codec && outbound.framesEncoded > 0) assert.equal(sender.rows.find(row => row.id === outbound.codecId)?.mimeType?.toLowerCase(), `video/${configuration.codec}`, 'actual requested codec, no silent alternative');
             const received = await Promise.all(receivers.map(async ({ id, page }) => {
                 const measured = await capture(page);
                 const server = await page.evaluate(({ id, generation }) => window.request('diagnostics', { id, generation }), { id, generation });
@@ -180,12 +247,63 @@ try {
         }
         throw new Error(`${stage}: source did not sustain ${minimumBitrate / 1e6} Mbps and 15 fps on this host`);
     }
-    await receiver('viewer'); await sample('one', 15);
-    await waitForBusySource('one-warmup', 12_000_000);
-    await receiver('viewer2'); await sample('two', 15);
-    await waitForBusySource('two-warmup', 15_000_000);
-    await receiver('viewer3'); await sample('three', 20);
+    if (configuration.capacity) {
+        await receiver('viewer'); await sample('warmup', 10);
+        let fullSize = 0;
+        // Include the initial ten seconds in the 45-second warmup bound. Keep
+        // all cumulative stats and adaptation samples; only scoring starts later.
+        for (let second = 0; second < 35; second++) {
+            await sample('geometry-warmup', 1);
+            const row = samples.at(-1).sender.rows.find(row => row.type === 'outbound-rtp' && row.kind === 'video');
+            fullSize = row?.frameWidth === width && row?.frameHeight === height && row?.framesPerSecond >= 15 ? fullSize + 1 : 0;
+            if (fullSize >= 2) break;
+        }
+        assert.ok(fullSize >= 2, 'capacity source reaches requested geometry during bounded warmup');
+        for (let index = 2; index <= configuration.viewers; index++) await receiver(`viewer${index}`);
+        if (configuration.viewers > 1) await sample('join-warmup', 5);
+        await sample('capacity', configuration.stageSeconds);
+        if (configuration.slowWriteMS) {
+            const slow = receivers.at(-1);
+            impairments.push({ stage: 'slow-writer', id: slow.id, at: Date.now(), ...await slow.page.evaluate(id => window.request('impairment', { id, active: true }), slow.id) });
+            try {
+                await sample('slow-writer', configuration.stageSeconds);
+                assert.ok(Date.now() < impairments[0].expires_at_ms, 'scored slow stage completed before automatic impairment expiry');
+            }
+            finally { impairments.push({ stage: 'recovery', id: slow.id, at: Date.now(), ...await slow.page.evaluate(id => window.request('impairment', { id, active: false }), slow.id) }); }
+            await sample('recovery', configuration.stageSeconds);
+            assert.ok(impairments.at(-1).delayed_packets > impairments[0].delayed_packets, 'slow-writer fixture actually delayed video packets');
+        }
+    } else {
+        await receiver('viewer'); await sample('one', 15);
+        await waitForBusySource('one-warmup', 12_000_000);
+        await receiver('viewer2'); await sample('two', 15);
+        await waitForBusySource('two-warmup', 15_000_000);
+        await receiver('viewer3'); await sample('three', 20);
+    }
     const last = samples.at(-1);
+    if (configuration.capacity) {
+        const stages = configuration.slowWriteMS ? ['capacity', 'slow-writer', 'recovery'] : ['capacity'];
+        for (const stage of stages) {
+            const measured = samples.filter(sample => sample.stage === stage);
+            assert.ok(measured.length >= 2 && measured.at(-1).sender.at - measured[0].sender.at >= 5000, `${stage}: sufficient measured window`);
+            const source = sample => sample.sender.rows.find(row => row.type === 'outbound-rtp' && row.kind === 'video');
+            const sentFrames = source(measured.at(-1)).framesEncoded - source(measured[0]).framesEncoded;
+            assert.ok(sentFrames >= 120, `${stage}: sustained source frames`);
+            for (const sample of measured) {
+                assert.equal(source(sample).frameWidth, width, `${stage}: source preserves requested width`);
+                assert.equal(source(sample).frameHeight, height, `${stage}: source preserves requested height`);
+            }
+            const healthy = stage === 'slow-writer' ? receivers.slice(0, -1) : receivers;
+            for (const { id } of healthy) {
+                const inbound = sample => sample.receivers.find(receiver => receiver.id === id).rows.find(row => row.type === 'inbound-rtp' && row.trackIdentifier === 'a|screen');
+                for (const sample of measured) {
+                    assert.equal(inbound(sample)?.frameWidth, width, `${stage}/${id}: actual decoded width`);
+                    assert.equal(inbound(sample)?.frameHeight, height, `${stage}/${id}: actual decoded height`);
+                }
+                assert.ok((inbound(measured.at(-1)).framesDecoded - inbound(measured[0]).framesDecoded) / sentFrames >= .85, `${stage}/${id}: transport capacity floor (not 60fps presentation acceptance)`);
+            }
+        }
+    }
     assert.equal(last.sender.encodings.length, 1, 'one source encoding');
     assert.equal(last.sender.encodings[0].rid, undefined, 'no simulcast RID');
     for (const received of last.receivers) {
@@ -198,14 +316,16 @@ try {
             `${received.id}: video element plays the full source`);
     }
     {
-        const terminal = samples.filter(sample => sample.stage === 'three').slice(-10);
+        const terminalStage = configuration.capacity ? (configuration.slowWriteMS ? 'recovery' : 'capacity') : 'three';
+        const stageRows = samples.filter(sample => sample.stage === terminalStage);
+        const terminal = configuration.capacity ? stageRows : stageRows.slice(-10);
         const senderRow = sample => sample.sender.rows.find(row => row.type === 'outbound-rtp' && row.kind === 'video');
         const sentFrames = senderRow(terminal.at(-1)).framesEncoded - senderRow(terminal[0]).framesEncoded;
         assert.ok(sentFrames >= 120, 'source sends sustained measured frames');
         const elapsedSeconds = (terminal.at(-1).sender.at - terminal[0].sender.at) / 1000;
         const sourceBitrate = (senderRow(terminal.at(-1)).bytesSent - senderRow(terminal[0]).bytesSent) * 8 / elapsedSeconds;
-        assert.ok(sourceBitrate >= 10_000_000, 'workload exercises a busy source above the old startup pacing budget');
-        for (const id of ['viewer', 'viewer2', 'viewer3']) {
+        if (!configuration.capacity) assert.ok(sourceBitrate >= 10_000_000, 'workload exercises a busy source above the old startup pacing budget');
+        for (const { id } of receivers) {
             const frame = sample => sample.receivers.find(row => row.id === id).rows.find(row => row.type === 'inbound-rtp' && row.trackIdentifier === 'a|screen').framesDecoded;
             assert.ok((frame(terminal.at(-1)) - frame(terminal[0])) / sentFrames >= .85, `${id}: keeps up with source frames`);
             const join = joins.find(row => row.id === id);
@@ -213,16 +333,50 @@ try {
             assert.ok(firstFrameAt >= join.startedAt && Math.max(0, firstFrameAt - join.connectedAt) < 5000,
                 `${id}: first picture within 5 seconds`);
         }
+        if (configuration.slowWriteMS) {
+            const slowStage = samples.filter(sample => sample.stage === 'slow-writer');
+            const sourceFrames = senderRow(slowStage.at(-1)).framesEncoded - senderRow(slowStage[0]).framesEncoded;
+            assert.ok(sourceFrames >= 120, 'source continues during one slow writer');
+            for (const { id } of receivers.slice(0, -1)) {
+                const frames = sample => sample.receivers.find(receiver => receiver.id === id).rows.find(row => row.type === 'inbound-rtp' && row.kind === 'video').framesDecoded;
+                assert.ok((frames(slowStage.at(-1)) - frames(slowStage[0])) / sourceFrames >= .85, `${id}: healthy viewer remains isolated from slow writer`);
+            }
+        }
         for (const receiver of samples.flatMap(sample => sample.receivers)) {
             assert.ok(receiver.pacer.packets <= 1024 && receiver.pacer.bytes <= 2 * 1024 * 1024, 'bounded video send queue');
         }
     }
     assert.deepEqual(errors, []);
 } catch (error) {
-    failure = String(error?.stack || error);
+    failure ||= String(error?.stack || error);
 } finally {
-    fs.writeFileSync(output, JSON.stringify({ profile, width, height, fps, joins, errors, failure, samples }, null, 2));
-    try { await browser?.close(); } finally { await vite.close(); }
+    clearTimeout(watchdog);
+    try {
+      const stageWindows = [...new Set(samples.map(sample => sample.stage))].map(stage => {
+        const rows = samples.filter(sample => sample.stage === stage);
+        const scoring = configuration.capacity ? ['capacity', 'slow-writer', 'recovery'].includes(stage) : stage === 'three';
+        const scored = scoring ? (configuration.capacity ? rows : rows.slice(-10)) : [];
+        const source = row => row.sender.rows.find(value => value.type === 'outbound-rtp' && value.kind === 'video');
+        const seconds = (rows.at(-1).sender.at - rows[0].sender.at) / 1000;
+        const sentFrames = source(rows.at(-1))?.framesEncoded - source(rows[0])?.framesEncoded;
+        const finite = value => Number.isFinite(value) ? value : null;
+        const delivery = rows.at(-1).receivers.map(receiver => {
+            const first = rows[0].receivers.find(value => value.id === receiver.id);
+            const inbound = value => value?.rows.find(row => row.type === 'inbound-rtp' && row.trackIdentifier === 'a|screen');
+            const before = inbound(first), after = inbound(receiver);
+            const frames = after?.framesDecoded - before?.framesDecoded;
+            return { id: receiver.id, decodedFPS: finite(frames / seconds), decodedSourceRatio: sentFrames > 0 ? finite(frames / sentFrames) : null,
+                freezes: finite(after?.freezeCount - before?.freezeCount), freezeSeconds: finite(after?.totalFreezesDuration - before?.totalFreezesDuration) };
+        });
+        return { stage, startAt: rows[0].sender.at, endAt: rows.at(-1).sender.at, samples: rows.length,
+            scoring, scoredSamples: scored.length, scoredStartAt: scored[0]?.sender.at ?? null, scoredEndAt: scored.at(-1)?.sender.at ?? null,
+            fullStageEncodedFPS: finite(sentFrames / seconds), fullStageDelivery: delivery };
+      });
+      fs.writeFileSync(output, JSON.stringify({ profile, configuration, width, height, fps, joins, impairments, stageWindows, errors, failure, samples,
+        note: 'Real Chromium encoding and decoding of a synthetic canvas over a local SFU; all contexts share this host. This is not native display capture or proof of GPU acceleration. One source encoding/upload. The 85% decoded/source ratio is a transport capacity floor, not 1080p60 or 95% presentation acceptance; >=15fps warmup is fixture viability only. Slow-writer mode delays only one local video writer, not network jitter. Presentation percentiles are overlapping bounded windows, not a whole-run distribution.' }, null, 2));
+    } finally {
+        try { await closeBrowser(); } finally { await bounded(() => vite.close(), 3000, 'fixture server close'); }
+    }
 }
 console.log(JSON.stringify({ profile, samples: samples.length, receivers: receivers.length, output,
     rendered: samples.at(-1)?.receivers.map(receiver => ({ id: receiver.id,

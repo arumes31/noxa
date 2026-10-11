@@ -176,6 +176,15 @@ func (r *Router) VideoWatchSession(subscriber string) uint64 {
 	if r.clientChan[subscriber] <= 0 {
 		return 0
 	}
+	// Catalog polling normally reads an existing session. Do not queue a
+	// writer behind packet leases: writer preference would make unrelated
+	// final packet TryRLock checks fail even though no consent is changing.
+	r.watchMu.RLock()
+	session := r.watchSessions[subscriber]
+	r.watchMu.RUnlock()
+	if session != 0 {
+		return session
+	}
 	r.watchMu.Lock()
 	defer r.watchMu.Unlock()
 	if r.watchSessions[subscriber] == 0 && r.watchEpoch != ^uint64(0) {

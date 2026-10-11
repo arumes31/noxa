@@ -22,6 +22,11 @@ import (
 // Run: go test -tags integration ./internal/webrtc -run TestBrowserHighMotionFanout -v
 // Set NOXA_BROWSER_MEDIA_PERF=1 to enable this CPU-intensive regression.
 // NOXA_BROWSER_MEDIA_OUTPUT optionally preserves the complete stats artifact.
+// NOXA_BROWSER_MEDIA_VIEWERS=1|5|20 selects a shared-host capacity profile.
+// NOXA_BROWSER_MEDIA_STAGE_SECONDS=10..60 (default 15) controls each stage.
+// NOXA_BROWSER_MEDIA_CODEC=h264|vp8 pins and verifies the capacity test codec.
+// NOXA_BROWSER_MEDIA_SLOW_WRITE_MS=1..20 delays only the last viewer's video
+// writer during a bounded middle stage. This is not network jitter emulation.
 func TestBrowserHighMotionFanout(t *testing.T) {
 	if os.Getenv("NOXA_BROWSER_MEDIA_PERF") != "1" {
 		t.Skip("set NOXA_BROWSER_MEDIA_PERF=1 on an idle host for the high-motion 1080p60 profile")
@@ -30,6 +35,16 @@ func TestBrowserHighMotionFanout(t *testing.T) {
 }
 
 func runBrowserHighMotionFanout(t *testing.T, width, height, fps int) {
+	profile, err := parseBrowserFanoutProfile(os.Getenv("NOXA_BROWSER_MEDIA_VIEWERS"), os.Getenv("NOXA_BROWSER_MEDIA_STAGE_SECONDS"), os.Getenv("NOXA_BROWSER_MEDIA_SLOW_WRITE_MS"), os.Getenv("NOXA_BROWSER_MEDIA_CODEC"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	budget := 180 * time.Second
+	if profile.Capacity {
+		budget = time.Duration(profile.Viewers*15+profile.StageSeconds*3+60) * time.Second
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), budget)
+	defer cancel()
 	node, err := exec.LookPath("node")
 	if err != nil {
 		t.Fatal("Node is required for the browser media integration test")
@@ -39,12 +54,41 @@ func runBrowserHighMotionFanout(t *testing.T, width, height, fps int) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = engine.Close() })
+	engines := map[string]*Engine{}
+	delay := &browserVideoWriteDelay{ctx: ctx, delay: time.Duration(profile.SlowWriteMS) * time.Millisecond}
+	viewerIDs := make([]string, profile.Viewers)
+	for index := range viewerIDs {
+		viewerIDs[index] = "viewer"
+		if index > 0 {
+			viewerIDs[index] += strconv.Itoa(index + 1)
+		}
+		engines[viewerIDs[index]] = engine
+	}
+	if profile.SlowWriteMS > 0 {
+		slow, err := NewWithNetwork(testLogger(), nil, false, NetworkConfig{UDPAddr: "127.0.0.1:0", ExternalIPs: []string{"127.0.0.1"}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = slow.Close() })
+		if err := installBrowserVideoWriteDelay(slow, delay); err != nil {
+			t.Fatal(err)
+		}
+		engines[viewerIDs[len(viewerIDs)-1]] = slow
+	}
+	engines["a"] = engine
+	var testCodecs []string
+	if profile.Codec == "h264" {
+		testCodecs = []string{"h264", "vp8"}
+	}
 	router := NewRouter(nil)
-	for _, id := range []string{"a", "viewer", "viewer2", "viewer3"} {
+	for id := range engines {
 		router.JoinChannel(1, id)
 	}
 	newPeer := func(id string) (*PeerConnectionWrapper, error) {
-		peer, err := engine.NewPeerConnection(id)
+		if peer := engines[id].PeerConnection(id); peer != nil {
+			return peer, nil
+		}
+		peer, err := engines[id].NewPeerConnection(id)
 		if err != nil {
 			return nil, err
 		}
@@ -66,7 +110,7 @@ func runBrowserHighMotionFanout(t *testing.T, width, height, fps int) {
 			}
 		}
 		if r.Method != http.MethodPost || json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&body) != nil ||
-			(body.ID != "a" && body.ID != "viewer" && body.ID != "viewer2" && body.ID != "viewer3") {
+			engines[body.ID] == nil {
 			http.Error(w, "invalid test request", http.StatusBadRequest)
 			return
 		}
@@ -96,11 +140,15 @@ func runBrowserHighMotionFanout(t *testing.T, width, height, fps int) {
 			}
 		case "/publication":
 			generation, _ := strconv.ParseUint(body.Generation, 10, 64)
-			generation, requestErr = router.PublishVideoWithMode(body.ID, body.Slot, generation, body.Active, body.QualityMode)
+			generation, requestErr = router.PublishVideoWithCodecs(body.ID, body.Slot, generation, body.Active, body.QualityMode, testCodecs)
 			result = map[string]any{"generation": strconv.FormatUint(generation, 10), "upload_active": false}
 		case "/diagnostics":
 			generation, _ := strconv.ParseUint(body.Generation, 10, 64)
 			result, requestErr = router.StreamDiagnostics(body.ID, "a", SlotScreen, generation, router.VideoWatchSession(body.ID))
+		case "/codec":
+			router.mu.RLock()
+			result = router.videoCodecs[videoSourceRef{"a", SlotScreen}].MimeType
+			router.mu.RUnlock()
 		case "/pacer":
 			result = nil
 			for _, publication := range router.VideoOperatorDiagnostics().Publications {
@@ -128,7 +176,7 @@ func runBrowserHighMotionFanout(t *testing.T, width, height, fps int) {
 				break
 			}
 			for _, publication := range router.VideoPublications(body.ID) {
-				_, requestErr = router.WatchVideo(body.ID, publication.PublisherID, publication.Slot, publication.Generation, 1, router.VideoWatchSession(body.ID), true)
+				_, requestErr = router.WatchVideoWithCodecs(body.ID, publication.PublisherID, publication.Slot, publication.Generation, 1, router.VideoWatchSession(body.ID), true, testCodecs)
 				if requestErr != nil {
 					break
 				}
@@ -147,15 +195,34 @@ func runBrowserHighMotionFanout(t *testing.T, width, height, fps int) {
 				}
 			}
 		case "/answer":
-			requestErr = engine.PeerConnection(body.ID).HandleAnswer(body.SDP)
+			peer := engines[body.ID].PeerConnection(body.ID)
+			if peer == nil {
+				http.Error(w, "unknown test peer", http.StatusBadRequest)
+				return
+			}
+			requestErr = peer.HandleAnswer(body.SDP)
+			if requestErr == nil {
+				router.RequestKeyframe("a", SlotScreen, "")
+			}
+		case "/impairment":
+			if profile.SlowWriteMS == 0 || body.ID != viewerIDs[len(viewerIDs)-1] {
+				http.Error(w, "not the configured slow viewer", http.StatusBadRequest)
+				return
+			}
+			if body.Active {
+				delay.until.Store(time.Now().Add(time.Duration(profile.StageSeconds+5) * time.Second).UnixNano())
+			} else {
+				delay.until.Store(0)
+			}
+			result = map[string]any{"delayed_packets": delay.packets.Load(), "slow_write_ms": profile.SlowWriteMS, "expires_at_ms": delay.until.Load() / int64(time.Millisecond)}
 		case "/watch":
 			requestErr = ErrVideoPublication
-			if body.Viewer != "viewer" && body.Viewer != "viewer2" && body.Viewer != "viewer3" {
+			if body.Viewer == "a" || engines[body.Viewer] == nil {
 				break
 			}
 			for _, publication := range router.VideoPublications(body.Viewer) {
 				if publication.PublisherID == body.ID && publication.Slot == SlotScreen {
-					_, requestErr = router.WatchVideo(body.Viewer, body.ID, SlotScreen, publication.Generation, publication.WatchRevision+1, router.VideoWatchSession(body.Viewer), body.Active)
+					_, requestErr = router.WatchVideoWithCodecs(body.Viewer, body.ID, SlotScreen, publication.Generation, publication.WatchRevision+1, router.VideoWatchSession(body.Viewer), body.Active, testCodecs)
 				}
 			}
 		default:
@@ -170,8 +237,6 @@ func runBrowserHighMotionFanout(t *testing.T, width, height, fps int) {
 		_ = json.NewEncoder(w).Encode(result)
 	}))
 	t.Cleanup(server.Close)
-	ctx, cancel := context.WithTimeout(t.Context(), 180*time.Second)
-	defer cancel()
 	script, err := filepath.Abs("testdata/browser_fanout.mjs")
 	if err != nil {
 		t.Fatal(err)
@@ -181,9 +246,20 @@ func runBrowserHighMotionFanout(t *testing.T, width, height, fps int) {
 		if err := os.MkdirAll(directory, 0o700); err != nil {
 			t.Fatal(err)
 		}
-		resultPath = filepath.Join(directory, "browser-fanout-stats.json")
+		name := "browser-fanout-stats.json"
+		if profile.Capacity {
+			name = "browser-fanout-" + strconv.Itoa(profile.Viewers) + "-viewers-" + profile.Codec + "-slow-" + strconv.Itoa(profile.SlowWriteMS) + "ms-stats.json"
+		}
+		resultPath = filepath.Join(directory, name)
 	}
-	command := exec.CommandContext(ctx, node, script, server.URL, strconv.Itoa(width), strconv.Itoa(height), strconv.Itoa(fps), resultPath)
+	configuration, err := json.Marshal(profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	command := exec.CommandContext(ctx, node, script, server.URL, strconv.Itoa(width), strconv.Itoa(height), strconv.Itoa(fps), resultPath, string(configuration))
+	// The script's earlier watchdog writes evidence and closes its owned browser.
+	// Bound inherited pipes as a fallback if the hard process deadline fires.
+	command.WaitDelay = 5 * time.Second
 	output, err := command.CombinedOutput()
 	t.Logf("real browser media results:\n%s", output)
 	if err != nil {

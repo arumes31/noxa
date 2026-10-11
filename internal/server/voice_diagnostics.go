@@ -18,7 +18,9 @@ func (s *TCPServer) handleVoiceTelemetry(ctx context.Context, client *Client, fr
 	if len(frame.Payload) > netproto.MaxVoiceTelemetryBytes || netproto.Decode(frame, &report) != nil || !report.Valid() {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "invalid voice diagnostics")
 	}
-	return s.roleChannelControl(ctx, client, authorization.Connect, true, func(ctx context.Context, channelID int64) error {
+	// Telemetry changes only client.mu-protected diagnostics. It must retain
+	// current channel eligibility without excluding concurrent packet writes.
+	return s.roleChannelRead(ctx, client, authorization.Connect, true, func(ctx context.Context, channelID int64) error {
 		if channelID != report.ChannelID {
 			return s.sendErrorFor(client, requestOrigin(ctx), errCodeConflict, "voice diagnostics channel changed")
 		}
