@@ -30,6 +30,37 @@ func TestH264ForwardFrameCompleteAndOwned(t *testing.T) {
 	}
 }
 
+func TestH264ForwardFrameDetectsLossBetweenCompleteUnits(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		first, next uint16
+		padding     bool
+		lost        bool
+	}{
+		{name: "contiguous", first: 10, next: 11},
+		{name: "sequence wrap", first: 65535, next: 0},
+		{name: "whole frame missing", first: 10, next: 12, lost: true},
+		{name: "gap before padding", first: 10, next: 12, padding: true, lost: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var frame h264ForwardFrame
+			now := time.Now()
+			frame.push(h264ForwardPacket(test.first, 90, true, 0x41, 1), now)
+			packet := h264ForwardPacket(test.next, 180, true, 0x41, 2)
+			if test.padding {
+				packet = recoveryPaddingPacket(7, test.next, 0)
+			}
+			packets, _, lost := frame.push(packet, now.Add(time.Millisecond))
+			if len(packets) != 1 || lost != test.lost {
+				t.Fatalf("complete-unit gap recovery: packets=%d lost=%v want=%v", len(packets), lost, test.lost)
+			}
+			if _, _, lost := frame.push(h264ForwardPacket(test.next+1, 270, true, 0x41, 3), now.Add(2*time.Millisecond)); lost {
+				t.Fatal("one gap kept requesting recovery on contiguous packets")
+			}
+		})
+	}
+}
+
 func TestH264ForwardFrameRejectsBrokenUnits(t *testing.T) {
 	for _, payload := range [][]byte{{24, 0, 5, 0x67, 1}, {0x7c, 0x45, 1}, {0x7c, 0xc5, 1}, {0xe7, 1}, {25, 1}} {
 		var frame h264ForwardFrame

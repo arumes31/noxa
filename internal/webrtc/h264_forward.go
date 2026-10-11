@@ -11,6 +11,9 @@ import (
 // deliberately separate from the strict dimension-policy inspector. A fresh
 // receiver needs the SPS, PPS and a complete IDR access unit before deltas.
 type h264ForwardFrame struct {
+	observed               bool
+	lastSSRC               uint32
+	lastSequence           uint16
 	packets                []*rtp.Packet
 	bytes                  int
 	started                time.Time
@@ -47,6 +50,16 @@ func (f *h264ForwardFrame) nal(header byte) bool {
 // push owns buffered packets because ReadRTP may reuse the source memory.
 // lost is also true when a new valid unit replaces an incomplete old one.
 func (f *h264ForwardFrame) push(p *rtp.Packet, now time.Time) (packets []*rtp.Packet, keyframe, lost bool) {
+	// The reorder window has already repaired or abandoned gaps. Remember
+	// sequence continuity across completed access units too: losing a whole
+	// frame leaves no unfinished unit, but dependent frames still need a PLI.
+	gap := f.observed && f.lastSSRC == p.SSRC && p.SequenceNumber != f.lastSequence+1
+	defer func() {
+		// Unit resets below must not erase inter-frame loss detection. Padding
+		// participates in the same sequence space and can expose the gap first.
+		f.observed, f.lastSSRC, f.lastSequence = true, p.SSRC, p.SequenceNumber
+		lost = lost || gap
+	}()
 	if isVideoPadding(p) {
 		// Padding shares the RTP sequence space and may be interleaved with a
 		// fragmented frame. Forward it in order too: consuming it only here
