@@ -54,8 +54,9 @@ test("startup and device changes prepare the saved notification output without a
     expect(result.settings.playback_device_id).toBe("saved-headset");
 });
 
-test("a trusted click unlocks a pending startup resume without replaying notification cues", async ({ page }) => {
-    await page.evaluate(async () => {
+test("a trusted click unlocks a pending startup resume without replaying notification cues", async ({ page, context }) => {
+    const session = await context.newCDPSession(page);
+    const setup = async () => {
         window.__noxa = { state: { settings: { play_sounds: true, playback_device_id: "", sound_volume: 100 } } };
         const { soundEngine, initSounds } = await import("/src/sounds.js");
         const ctx = soundEngine.context();
@@ -75,7 +76,12 @@ test("a trusted click unlocks a pending startup resume without replaying notific
         window.droppedCue = soundEngine.play("dm");
         document.body.innerHTML = "<button>Activate audio</button>";
         window.dispatchEvent(new PointerEvent("pointerdown"));
+    };
+    const initialized = await session.send("Runtime.evaluate", {
+        expression: `(${setup.toString()})()`, awaitPromise: true, userGesture: false,
     });
+    expect(initialized.exceptionDetails).toBeUndefined();
+    await session.detach();
     expect(await page.evaluate(() => window.resumeCalls)).toBe(1);
     await page.getByRole("button", { name: "Activate audio" }).click();
     const result = await page.evaluate(async () => {
@@ -86,6 +92,41 @@ test("a trusted click unlocks a pending startup resume without replaying notific
         return result;
     });
     expect(result).toEqual({ resumes: 2, dropped: false, active: 0, state: "running" });
+});
+
+test("real AudioContext startup can resume from a later activated caller without an explicit option", async ({ page, context }) => {
+    test.setTimeout(8000);
+    const session = await context.newCDPSession(page);
+    try {
+        // Import/start outside activation, like main.js on a fresh app load.
+        // Keep Chromium's actual autoplay policy, AudioContext and resume method.
+        const before = await session.send("Runtime.evaluate", {
+            expression: `(async () => {
+                window.__noxa = { state: { settings: { play_sounds: true, playback_device_id: "" } } };
+                const { soundEngine, initSounds } = await import("/src/sounds.js");
+                initSounds();
+                await soundEngine.preload(["dm"]);
+                return { state: soundEngine.context().state, pending: soundEngine.resumeAttempts.size,
+                    activation: navigator.userActivation.isActive };
+            })()`,
+            awaitPromise: true, returnByValue: true, userGesture: false,
+        });
+        expect(before.exceptionDetails).toBeUndefined();
+        expect(before.result.value).toEqual({ state: "suspended", pending: 1, activation: false });
+        // Playwright's evaluate supplies real Chromium user activation, but does
+        // not dispatch a DOM pointer/key event or pass our userGesture option.
+        const after = await page.evaluate(async () => {
+            const { soundEngine } = await import("/src/sounds.js");
+            const activation = navigator.userActivation.isActive;
+            const resumed = await soundEngine.resume();
+            const result = { activation, resumed, state: soundEngine.context().state, active: soundEngine.active.size };
+            await soundEngine.dispose();
+            return result;
+        });
+        expect(after).toEqual({ activation: true, resumed: true, state: "running", active: 0 });
+    } finally {
+        await session.detach().catch(() => {});
+    }
 });
 
 for (const language of ["en", "de"]) {

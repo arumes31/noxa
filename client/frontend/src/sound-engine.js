@@ -75,12 +75,13 @@ export class SoundEngine {
         }));
     }
 
-    resume({ userGesture = false } = {}) {
+    resume({ userGesture = globalThis.navigator?.userActivation?.isActive === true } = {}) {
         const ctx = this.context();
         if (!ctx) return Promise.resolve(false);
         if (ctx.state === "running") return Promise.resolve(true);
         // A startup resume may remain pending until browser activation. Do not
-        // let that promise swallow the later trusted gesture, but retain at most
+        // let that promise swallow a later activated caller (including native
+        // browser activation without a DOM pointer/key callback), but retain at most
         // one startup call and one activation retry while either is pending.
         const attempts = this.resumeAttempts;
         if (attempts.size && (!userGesture || [...attempts].some(attempt => attempt.userGesture))) {
