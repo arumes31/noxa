@@ -1,5 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
+import { runInNewContext } from "node:vm";
+import { parse } from "acorn";
 import { createVideoPresentationTiming, observeVideoPresentation } from "../src/video-presentation-timing.js";
 
 const frame = (time, number, overrides = {}) => ({ presentationTime: time, expectedDisplayTime: time + 5,
@@ -166,4 +169,36 @@ test("a runtime without frame callbacks or a tile without a track reports unavai
         assert.equal(observer.snapshot(100), null);
         observer.dispose();
     }
+});
+
+test("the diagnostics export reads existing tile observers and returns no live media references", async () => {
+    const sources = await Promise.all(["video-grid.js", "video.js", "main.js"].map(name => readFile(new URL(`../src/${name}`, import.meta.url), "utf8")));
+    const trees = sources.map(source => parse(source, { ecmaVersion: "latest", sourceType: "module" }));
+    const nodes = tree => {
+        const result = [];
+        const visit = value => {
+            if (!value || typeof value !== "object") return;
+            if (value.type) result.push(value);
+            for (const child of Object.values(value)) if (Array.isArray(child)) child.forEach(visit); else visit(child);
+        };
+        visit(tree); return result;
+    };
+    const name = "videoPresentationDiagnostics";
+    const gridNodes = nodes(trees[0]);
+    const getter = gridNodes.find(node => node.type === "FunctionDeclaration" && node.id?.name === name);
+    assert.ok(getter);
+    assert.ok(gridNodes.some(node => node.type === "ReturnStatement" && node.argument?.type === "ObjectExpression" && node.argument.properties.some(property => property.key?.name === name)));
+    assert.ok(trees[1].body.some(node => node.type === "ExportNamedDeclaration" && node.declaration?.declarations?.some(declaration => declaration.init?.name === "grid" && declaration.id.properties?.some(property => property.key?.name === name))));
+    assert.ok(trees[2].body.some(node => node.type === "ImportDeclaration" && node.source.value === "./video.js" && node.specifiers.some(specifier => specifier.local.name === name)));
+    assert.ok(nodes(trees[2]).some(node => node.type === "AssignmentExpression" && node.left?.object?.name === "window" && node.left?.property?.name === "__noxa" && node.right.properties?.some(property => property.key?.name === name)));
+    const calls = [], tiles = new Map();
+    const track = { id: "opaque-track", label: "private source title" };
+    tiles.set("key", { key: "opaque-key", track, slot: "screen", video: {}, stream: {}, presentation: { snapshot: now => { calls.push(now); return { observed_callbacks: 2 }; } } });
+    const read = runInNewContext(`(${sources[0].slice(getter.start, getter.end)})`, { tiles, performance: { now: () => 123 } });
+    const first = read();
+    assert.deepEqual(JSON.parse(JSON.stringify(first)), [{ key: "opaque-key", track_id: "opaque-track", slot: "screen", presentation: { observed_callbacks: 2 } }]);
+    first[0].presentation.observed_callbacks = 999;
+    assert.equal(read()[0].presentation.observed_callbacks, 2);
+    assert.deepEqual(calls, [123, 123]);
+    tiles.clear(); assert.equal(read().length, 0);
 });

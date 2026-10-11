@@ -44,7 +44,7 @@ import {
     initVideo, videoTrackAdded, videoTrackRemoved, videoSpeaking,
     videoRefreshNames, clearVideoGrid, shareToggle, setLowBandwidth, isLowBandwidth,
     parseTrackID, SLOT_SCREEN_AUDIO, cameraToggle, resetCameraState, clearRegionBox,
-    renegotiate, answerRemoteOffer, queuePeerNegotiation, applyVideoLimits, retryVideoHardware,
+    renegotiate, answerRemoteOffer, queuePeerNegotiation, applyVideoLimits, retryVideoHardware, videoPresentationDiagnostics,
 } from "./video.js";
 import * as chatUI from "./chat-ui.js";
 import { startStreamSession, stopStreamSession, streamSessionIsCurrent, receiveStreamTrack, removeStreamTrack, receiveShareAudio, removeShareAudio, refreshStreamUploads, streamReceiverRecoveryTarget } from "./stream-controls.js";
@@ -3140,6 +3140,7 @@ async function refreshPermissions() {
 // ---------------------------------------------------------------------------
 
 window.__noxa = {
+    videoPresentationDiagnostics,
     prefillLogin: loginMemory.select,
     soundEngine,
     speechQueue,

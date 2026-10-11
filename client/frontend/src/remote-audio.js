@@ -159,9 +159,10 @@ export function createRemoteAudio({ state, toast, sysMsg, voiceEpoch }) {
             remoteTracks.set(track.id, entry);
             if (uid) registerUserChain(uid, gain, mute);
 
-            track.addEventListener("ended", () => {
+            entry.ended = () => {
                 if (remoteTracks.get(track.id) === entry) detachRemoteTrack(track.id);
-            });
+            };
+            track.addEventListener("ended", entry.ended);
         } catch (e) {
             sysMsg(t("runtime.remoteAudioFailed", { error: String(e) }));
         }
@@ -266,14 +267,15 @@ export function createRemoteAudio({ state, toast, sysMsg, voiceEpoch }) {
             // game sound, which is not a quiet speaker that needs lifting.
             gain.connect(remoteChain.master);
             const entry = {
-                trackID: track.id, src, playback, gain, uid: publisher?.unique_id || "",
+                track, trackID: track.id, src, playback, gain, uid: publisher?.unique_id || "",
                 volume: 100, muted: false,
             };
             shareAudio.set(clid, entry);
             applyShareAudio(clid);
-            track.addEventListener("ended", () => {
+            entry.ended = () => {
                 if (shareAudio.get(clid) === entry) detachShareAudio(clid);
-            });
+            };
+            track.addEventListener("ended", entry.ended);
         } catch (e) {
             sysMsg(t("runtime.shareAudioFailed", { error: String(e) }));
         }
@@ -283,6 +285,7 @@ export function createRemoteAudio({ state, toast, sysMsg, voiceEpoch }) {
         const n = shareAudio.get(String(clientID));
         if (!n) return;
         shareAudio.delete(String(clientID));
+        n.track.removeEventListener("ended", n.ended);
         n.playback.pause();
         n.playback.srcObject = null;
         try {
@@ -296,6 +299,7 @@ export function createRemoteAudio({ state, toast, sysMsg, voiceEpoch }) {
         const t = remoteTracks.get(trackID);
         if (!t) return;
         remoteTracks.delete(trackID);
+        t.track.removeEventListener("ended", t.ended);
         spatialVoice?.detach(trackID);
         t.playback.pause();
         t.playback.srcObject = null;

@@ -77,10 +77,15 @@ type mediaTicket struct {
 }
 
 type mediaEgressStream struct {
-	mu              sync.RWMutex
-	active          bool
-	retryAfter      time.Time
-	registry        *mediaEgressRegistry
+	mu         sync.RWMutex
+	active     bool
+	retryAfter time.Time
+	registry   *mediaEgressRegistry
+	// mu protects lifecycle and remains held through authorized socket writes.
+	// Ticket admission uses its shared side: a slow socket must not block the
+	// publisher's sequential fan-out to other recipients. ticketsMu protects
+	// the bounded map/ring only, always acquired after mu, never across writes.
+	ticketsMu       sync.Mutex
 	tickets         map[uint64]*mediaTicket
 	order           [mediaTicketCount]uint64
 	nextTicket      int
@@ -107,11 +112,13 @@ func (s *mediaEgressStream) prepare(pkt *rtp.Packet, ticket mediaTicket) (rtp.Pa
 	ticket.id, ticket.expires = id, time.Now().Add(mediaTicketLifetime)
 	ticket.csrc = append([]uint32(nil), pkt.CSRC...)
 	ticket.videoMedia = !isVideoPadding(pkt) && len(pkt.Payload) > 0
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	if !s.active || time.Now().Before(s.retryAfter) {
 		return rtp.Packet{}, false
 	}
+	s.ticketsMu.Lock()
+	defer s.ticketsMu.Unlock()
 	if s.tickets == nil {
 		s.tickets = make(map[uint64]*mediaTicket)
 	}
@@ -132,8 +139,10 @@ func (s *mediaEgressStream) stop() bool {
 	defer s.mu.Unlock()
 	wasActive := s.active
 	s.active = false
+	s.ticketsMu.Lock()
 	clear(s.tickets)
 	clear(s.order[:])
+	s.ticketsMu.Unlock()
 	return wasActive
 }
 
@@ -153,7 +162,9 @@ func (s *mediaEgressStream) writeResult(header *rtp.Header, payload []byte, attr
 		return 0, mediaDropInvalidTicket, nil
 	}
 	s.mu.RLock()
+	s.ticketsMu.Lock()
 	ticket := s.tickets[id]
+	s.ticketsMu.Unlock()
 	active := s.active
 	validTicket := ticket != nil && ticket.id == id
 	s.mu.RUnlock()
@@ -188,7 +199,10 @@ func (s *mediaEgressStream) writeResult(header *rtp.Header, payload []byte, attr
 				reason = mediaDropInactiveStream
 				return nil
 			}
-			if s.tickets[id] != ticket {
+			s.ticketsMu.Lock()
+			current := s.tickets[id] == ticket
+			s.ticketsMu.Unlock()
+			if !current {
 				reason = mediaDropMissingTicket
 				return nil
 			}
@@ -197,6 +211,9 @@ func (s *mediaEgressStream) writeResult(header *rtp.Header, payload []byte, attr
 				return nil
 			}
 			reason = mediaDropUnclassified
+			// Lifecycle/permission read leases still linearize revocation with
+			// this write. Concurrent admission may evict a cache entry afterward,
+			// but cannot change this immutable, already authorized ticket.
 			out := *header
 			out.CSRC = ticket.csrc
 			n, outputError = writer.Write(&out, payload, attrs)
@@ -223,8 +240,10 @@ func (s *mediaEgressStream) writeResult(header *rtp.Header, payload []byte, attr
 	var timeout net.Error
 	if errors.As(outputError, &timeout) && timeout.Timeout() {
 		s.mu.Lock()
+		s.ticketsMu.Lock()
 		clear(s.tickets)
 		clear(s.order[:])
+		s.ticketsMu.Unlock()
 		s.retryAfter = time.Now().Add(mediaSocketWriteTimeout)
 		s.mu.Unlock()
 	} else if outputError != nil && s.stop() {

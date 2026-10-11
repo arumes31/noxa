@@ -308,6 +308,14 @@ export function createVideoGrid({ applySendCaps, syncCameraButton, syncShareButt
         return tile.diagnostics;
     }
 
+    // Read the existing observers without starting another frame loop. Return
+    // detached numeric snapshots and opaque identities, never media or titles.
+    function videoPresentationDiagnostics() {
+        const now = performance.now();
+        return [...tiles.values()].map(tile => ({ key: tile.key, track_id: tile.track?.id ?? null, slot: tile.slot,
+            presentation: tile.presentation?.snapshot(now) ?? null }));
+    }
+
     function renderStreamDiagnostics(tile) {
         currentReceiverDiagnostics(tile);
         const panel = tile.el.querySelector(".vtile-diagnostics");
@@ -863,5 +871,5 @@ export function createVideoGrid({ applySendCaps, syncCameraButton, syncShareButt
         }
     }
 
-    return { videoTrackAdded, videoTrackRemoved, videoSpeaking, videoRefreshNames, clearVideoGrid, initVideo, isLowBandwidth, setLowBandwidth, get lowBandwidth() { return lowBandwidth; }, lowBandwidthBitrate: LOW_BW_BITRATE };
+    return { videoTrackAdded, videoTrackRemoved, videoSpeaking, videoRefreshNames, clearVideoGrid, initVideo, isLowBandwidth, setLowBandwidth, videoPresentationDiagnostics, get lowBandwidth() { return lowBandwidth; }, lowBandwidthBitrate: LOW_BW_BITRATE };
 }
