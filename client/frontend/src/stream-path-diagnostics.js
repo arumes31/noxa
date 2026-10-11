@@ -26,7 +26,7 @@ export function streamPathMeasurements(remote, extraAgeMS = 0, quality = "high")
     };
 }
 
-export function renderStreamPath(element, remote, receiver, { extraAgeMS = 0, receiverAgeMS = null, quality = "high", status = "", error = "" } = {}) {
+export function renderStreamPath(element, remote, receiver, { extraAgeMS = 0, receiverAgeMS = null, quality = "high", status = "", error = "", presentation = null } = {}) {
     const view = streamPathMeasurements(remote, extraAgeMS, quality);
     const sender = view.sender;
     if (!element.querySelector(".stream-health")) {
@@ -35,6 +35,8 @@ export function renderStreamPath(element, remote, receiver, { extraAgeMS = 0, re
     renderStreamHealth(element.querySelector(".stream-health"), summarizeStreamHealth({
         sender, senderAgeMS: view.senderAgeMS, receiver, receiverAgeMS, direction: "receiver", starting: status === "loading" && !receiver,
     }));
+    const timing = presentation?.stale ? null : presentation;
+    const intervals = timing?.compositor_submission_interval_ms;
     const rows = [
         ["capture", format(sender?.capture_fps, " fps")],
         ["encoded", format(sender?.encoded_fps, " fps")],
@@ -43,6 +45,10 @@ export function renderStreamPath(element, remote, receiver, { extraAgeMS = 0, re
         ["forwarded", format(view.forwarding?.fps, " fps")],
         ["receivedFrames", format(receiver?.receivedFPS, " fps")],
         ["decoded", format(receiver?.fps, " fps")],
+        ["submissionIntervals", [intervals?.p50, intervals?.p95, intervals?.p99].map(value => format(value, " ms")).join(" / ")],
+        ["presentationCoverage", format(timing?.callback_coverage == null ? null : timing.callback_coverage * 100, "%")],
+        ["presentationAge", format(presentation?.last_callback_age_ms, " ms")],
+        ["presentationProcessing", format(timing?.decoder_processing_ms?.p95, " ms")],
         ["requestedFPS", format(sender?.requested_fps, " fps")],
         ["settingsFPS", format(sender?.settings_fps, " fps")],
         ["reportedFPS", format(sender?.reported_fps, " fps")],

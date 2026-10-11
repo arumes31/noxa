@@ -46,18 +46,46 @@ type VideoOperatorViewer struct {
 // feedback counters precede the estimator's semantic validation. Lifecycle
 // queue purges on unbind/close are not network losses and are not counted.
 type VideoPacerDiagnostics struct {
-	TargetBitrateBPS   int    `json:"target_bitrate_bps"`
-	QueuedPackets      int    `json:"queued_packets"`
-	QueuedBytes        int    `json:"queued_bytes"`
-	OldestAgeMS        int64  `json:"oldest_age_ms"`
-	DroppedQueueFull   uint64 `json:"dropped_queue_full"`
-	DroppedExpired     uint64 `json:"dropped_expired"`
-	DroppedRetired     uint64 `json:"dropped_retired"`
-	DroppedScope       uint64 `json:"dropped_scope"`
-	CoalescedRepairs   uint64 `json:"coalesced_repairs,omitempty"`
-	SentPackets        uint64 `json:"sent_packets"`
-	SentBytes          uint64 `json:"sent_bytes"`
-	FinalWriteFailures uint64 `json:"final_write_failures"`
-	FeedbackReports    uint64 `json:"feedback_reports"`
-	FeedbackAgeMS      *int64 `json:"feedback_age_ms"`
+	TargetBitrateBPS   int                           `json:"target_bitrate_bps"`
+	QueuedPackets      int                           `json:"queued_packets"`
+	QueuedBytes        int                           `json:"queued_bytes"`
+	OldestAgeMS        int64                         `json:"oldest_age_ms"`
+	DroppedQueueFull   uint64                        `json:"dropped_queue_full"`
+	DroppedExpired     uint64                        `json:"dropped_expired"`
+	DroppedRetired     uint64                        `json:"dropped_retired"`
+	DroppedScope       uint64                        `json:"dropped_scope"`
+	TerminalDrops      *VideoTerminalDropDiagnostics `json:"terminal_drops,omitempty"`
+	CoalescedRepairs   uint64                        `json:"coalesced_repairs,omitempty"`
+	SentPackets        uint64                        `json:"sent_packets"`
+	SentBytes          uint64                        `json:"sent_bytes"`
+	FinalWriteFailures uint64                        `json:"final_write_failures"`
+	FeedbackReports    uint64                        `json:"feedback_reports"`
+	FeedbackAgeMS      *int64                        `json:"feedback_age_ms"`
+}
+
+// TerminalDrops partitions dropped_scope, with the same recipient-peer lifetime.
+// Nil means the server does not report this diagnostic; present zero counters
+// mean no such drops. Publication/watch changes do not reset these counters.
+// Primary includes same-SSRC retransmissions; RTX means a negotiated RTX SSRC.
+// Padding means an empty payload with the RTP padding flag, not padding bytes
+// attached to media. No packet identifiers or contents are exposed.
+type VideoTerminalDropDiagnostics struct {
+	Primary VideoTerminalDropReasons `json:"primary"`
+	RTX     VideoTerminalDropReasons `json:"rtx"`
+	Padding VideoTerminalDropReasons `json:"padding"`
+}
+
+// ScopeDeclined and GuardDeclined also include fail-closed lock contention;
+// neither counter establishes that authorization or watch state changed.
+type VideoTerminalDropReasons struct {
+	Unclassified   uint64 `json:"unclassified"`
+	MissingBinding uint64 `json:"missing_binding"`
+	InvalidTicket  uint64 `json:"invalid_ticket"`
+	MissingTicket  uint64 `json:"missing_ticket"`
+	InactiveStream uint64 `json:"inactive_stream"`
+	ExpiredTicket  uint64 `json:"expired_ticket"`
+	PolicyBusy     uint64 `json:"policy_busy"`
+	PolicyRevision uint64 `json:"policy_revision"`
+	ScopeDeclined  uint64 `json:"scope_declined"`
+	GuardDeclined  uint64 `json:"guard_declined"`
 }

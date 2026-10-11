@@ -43,6 +43,7 @@ type pacedPacket struct {
 	expires time.Time
 	size    int
 	repair  mediaRepairKey
+	kind    mediaPacketKind
 }
 
 // mediaPacer always queues, even with no backlog: StaticRTP holds its track
@@ -166,6 +167,13 @@ func (p *mediaPacer) Write(header *rtp.Header, payload []byte, attrs interceptor
 		attributes[key] = value
 	}
 	packet := pacedPacket{header: header.Clone(), payload: append([]byte(nil), payload...), attrs: attributes, stream: stream, expires: time.Now().Add(mediaPacerLifetime), size: size, repair: repair}
+	// Classify while stream metadata is protected; no packet content is retained
+	// by diagnostics. Same-SSRC retransmissions remain primary, not proven RTX.
+	if header.Padding && len(payload) == 0 {
+		packet.kind = mediaPacketPadding
+	} else if stream.rtxSSRC != 0 && header.SSRC == stream.rtxSSRC {
+		packet.kind = mediaPacketRTX
+	}
 	if stream.audio {
 		packet.expires = time.Now().Add(mediaAudioLifetime)
 		p.pushAudioLocked(packet)
@@ -292,17 +300,17 @@ func (p *mediaPacer) writePacket(packet pacedPacket) {
 	})
 	if p.egress == nil { // Standalone pacing tests have no router bindings.
 		n, err := write.Write(&packet.header, packet.payload, packet.attrs)
-		p.recordVideoWrite(packet.stream.audio, attempted, n, err)
+		p.recordVideoWrite(packet, attempted, n, err, mediaDropUnclassified)
 		return
 	}
 	p.egress.mu.Lock()
 	stream := p.egress.streams[packet.stream.bindingID]
 	p.egress.mu.Unlock()
 	if stream != nil {
-		n, err := stream.write(&packet.header, packet.payload, packet.attrs, write)
-		p.recordVideoWrite(packet.stream.audio, attempted, n, err)
+		n, reason, err := stream.writeResult(&packet.header, packet.payload, packet.attrs, write)
+		p.recordVideoWrite(packet, attempted, n, err, reason)
 	} else {
-		p.recordVideoWrite(packet.stream.audio, false, 0, nil)
+		p.recordVideoWrite(packet, false, 0, nil, mediaDropMissingBinding)
 	}
 }
 

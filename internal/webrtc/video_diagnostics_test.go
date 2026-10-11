@@ -21,14 +21,16 @@ func TestH264RejectDiagnosticsAreScopedSnapshots(t *testing.T) {
 	frame.push(h264ForwardPacket(1, 90, false, 0x7c, 0x81, 1), now)
 	frame.push(h264ForwardPacket(2, 90, true, 0x7c, 0x41, 1), now.Add(time.Second))
 	first := ingress.h264RejectSnapshot()
-	if first == nil || first.Idle != 1 || first.Malformed != 1 {
+	// The expired unit is rejected once; its orphan FU end stays quarantined
+	// instead of being parsed again as another malformed access unit.
+	if first == nil || first.Idle != 1 || first.Malformed != 0 {
 		t.Fatalf("missing assembly failure reasons: %+v", first)
 	}
 	// Finishing a good unit must retain observation; snapshots do not alias.
 	frame.push(h264ForwardPacket(3, 180, true, 0x41, 1), now.Add(time.Second))
 	frame.push(h264ForwardPacket(4, 270, true, 25, 1), now.Add(time.Second))
 	second := ingress.h264RejectSnapshot()
-	if first.Malformed != 1 || second.Malformed != 2 {
+	if first.Malformed != 0 || second.Malformed != 1 {
 		t.Fatal("diagnostic callback lost or mutable snapshot escaped")
 	}
 }

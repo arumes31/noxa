@@ -13,6 +13,7 @@ import { SLOT_SCREEN, parseTrackID } from "./media-track-id.js";
 import { streamQualityTarget, streamUsesSourceQuality } from "./stream-controls.js";
 import { allocateReceiveQuality, settleAutoQuality } from "./receive-quality.js";
 import { samplePeerStats } from "./peer-stats.js";
+import { observeVideoPresentation } from "./video-presentation-timing.js";
 const V = () => window.__noxa;
 
 export function createVideoGrid({ applySendCaps, syncCameraButton, syncShareButton }) {
@@ -156,8 +157,9 @@ export function createVideoGrid({ applySendCaps, syncCameraButton, syncShareButt
                         recent_loss_percent: sample.lossPercent, nacks: sample.nacks, plis: sample.plis, freezes: sample.freezes,
                         key_frames: sample.keyFrames, decoder: sample.decoder, power_efficient_decoder: sample.powerEfficientDecoder } : null,
                     stream_path: t.remoteDiagnostics || null,
+                    presentation: t.presentation?.snapshot(performance.now()) ?? null,
                     stream_path_age_ms: remoteDiagnosticsAge(t),
-                    note: "Browser bitrate is RTP payload, including retransmissions. Server byte counts include RTP headers. Stage sample windows are independent; server FPS counts observed RTP timestamps, not complete or decoded frames. Null means unavailable.",
+                    note: "Browser bitrate is RTP payload, including retransmissions. Server byte counts include RTP headers. Stage sample windows are independent; server FPS counts observed RTP timestamps, not complete or decoded frames. Presentation intervals describe compositor submission, not physical display. Callback gaps may reflect main-thread scheduling; unobserved callbacks are not decoded frame drops. Capture-to-display is a browser clock-mapping estimate, which the relay can change, not end-to-end latency. Null means unavailable.",
                 };
                 void copyToClipboard(JSON.stringify(payload, null, 2), { success: tLabel("wins.streamCopied"), isCurrent: () => el.isConnected });
             };
@@ -182,19 +184,19 @@ export function createVideoGrid({ applySendCaps, syncCameraButton, syncShareButt
         t.remoteDiagnosticsRequest = null;
         t.remoteDiagnosticsStatus = "";
         t.remoteDiagnosticsError = "";
-        if (t.frameCallback != null) t.video.cancelVideoFrameCallback(t.frameCallback);
-        t.frameCallback = null;
+        t.presentation?.dispose();
         t.lastFrameAt = null;
         t.stream = vt ? new MediaStream([vt]) : null;
         t.video.srcObject = t.stream;
-        if (vt && t.video.requestVideoFrameCallback) {
-            const presented = () => {
+        const boundStream = t.stream;
+        t.presentation = observeVideoPresentation(t.video, {
+            track: vt, visibility: document,
+            isCurrent: () => tiles.get(key) === t && t.track === vt && t.video.srcObject === boundStream,
+            onFrame: () => {
                 t.lastFrameAt = Date.now();
                 if (t.video.paused) updatePreviewAge(t);
-                t.frameCallback = t.video.requestVideoFrameCallback(presented);
-            };
-            t.frameCallback = t.video.requestVideoFrameCallback(presented);
-        }
+            },
+        });
         t.frames = 0;
         t.stalls = 0;
         t.flowing = true;
@@ -216,7 +218,7 @@ export function createVideoGrid({ applySendCaps, syncCameraButton, syncShareButt
         const key = String(trackID);
         const t = tiles.get(key);
         if (!t) return;
-        if (t.frameCallback != null) t.video.cancelVideoFrameCallback(t.frameCallback);
+        t.presentation?.dispose();
         t.video.srcObject = null;
         t.el.remove();
         tiles.delete(key);
@@ -330,6 +332,7 @@ export function createVideoGrid({ applySendCaps, syncCameraButton, syncShareButt
         panel.querySelector(".vtile-traffic-note").textContent = tLabel("wins.payloadNote");
         panel.querySelector("button").textContent = tLabel("wins.copyStream");
         renderStreamPath(panel.querySelector(".vtile-stream-path"), tile.remoteDiagnostics, sample, {
+            presentation: tile.presentation?.snapshot(performance.now()) ?? null,
             extraAgeMS: remoteDiagnosticsAge(tile) || 0, quality: tile.sentQuality || "high",
             receiverAgeMS: tile.diagnosticsMeasuredAt == null ? null : Math.max(0, performance.now() - tile.diagnosticsMeasuredAt),
             status: tile.remoteDiagnosticsStatus, error: tile.remoteDiagnosticsError,

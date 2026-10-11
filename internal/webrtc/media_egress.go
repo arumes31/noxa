@@ -138,37 +138,65 @@ func (s *mediaEgressStream) stop() bool {
 }
 
 func (s *mediaEgressStream) write(header *rtp.Header, payload []byte, attrs interceptor.Attributes, writer interceptor.RTPWriter) (int, error) {
+	n, _, err := s.writeResult(header, payload, attrs, writer)
+	return n, err
+}
+
+// The result describes only the branch that actually declined this write.
+// Counters are updated by the pacer after every permission/stream lock unwinds.
+func (s *mediaEgressStream) writeResult(header *rtp.Header, payload []byte, attrs interceptor.Attributes, writer interceptor.RTPWriter) (int, mediaTerminalDropReason, error) {
 	if len(header.CSRC) != 2 {
-		return 0, nil
+		return 0, mediaDropInvalidTicket, nil
 	}
 	id := uint64(header.CSRC[0])<<32 | uint64(header.CSRC[1])
+	if id == 0 {
+		return 0, mediaDropInvalidTicket, nil
+	}
 	s.mu.RLock()
 	ticket := s.tickets[id]
-	valid := s.active && ticket != nil && ticket.id == id
+	active := s.active
+	validTicket := ticket != nil && ticket.id == id
 	s.mu.RUnlock()
-	if !valid {
-		return 0, nil
+	if !active {
+		return 0, mediaDropInactiveStream, nil
+	}
+	if !validTicket {
+		return 0, mediaDropMissingTicket, nil
 	}
 	n := 0
 	var outputError error
+	reason := mediaDropGuardDeclined
 	write := func() error {
+		reason = mediaDropScopeDeclined
 		// Lock order: authority, member movement, video policy, echo, whisper, watch, stream, socket.
 		// No router or track lock may be acquired while holding stream.mu.
 		if ticket.router != nil && (ticket.delivery.Slot == SlotCam || ticket.delivery.Slot == SlotScreen) {
 			if !ticket.router.videoPolicyMu.TryRLock() {
+				reason = mediaDropPolicyBusy
 				return nil
 			}
 			defer ticket.router.videoPolicyMu.RUnlock()
 			if ticket.videoRevision != ticket.router.videoPolicy.revision {
+				reason = mediaDropPolicyRevision
 				return nil
 			}
 		}
 		commit := func() error {
 			s.mu.RLock()
 			defer s.mu.RUnlock()
-			if !s.active || s.tickets[id] != ticket || !time.Now().Before(ticket.expires) {
+			if !s.active {
+				reason = mediaDropInactiveStream
 				return nil
 			}
+			if s.tickets[id] != ticket {
+				reason = mediaDropMissingTicket
+				return nil
+			}
+			if !time.Now().Before(ticket.expires) {
+				reason = mediaDropExpiredTicket
+				return nil
+			}
+			reason = mediaDropUnclassified
 			out := *header
 			out.CSRC = ticket.csrc
 			n, outputError = writer.Write(&out, payload, attrs)
@@ -202,7 +230,7 @@ func (s *mediaEgressStream) write(header *rtp.Header, payload []byte, attrs inte
 	} else if outputError != nil && s.stop() {
 		log.Printf("webrtc: retiring failed media output slot=%s: %v; track rebuild required", ticket.delivery.Slot, outputError)
 	}
-	return n, err
+	return n, reason, err
 }
 
 type guardedLocalTrack struct {

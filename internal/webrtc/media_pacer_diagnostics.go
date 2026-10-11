@@ -11,10 +11,11 @@ type mediaPacerCounters struct {
 	coalescedRepairs                                               uint64
 	sentPackets, sentBytes, finalWriteFailures, feedbackReports    uint64
 	lastFeedback                                                   time.Time
+	terminalDrops                                                  mediaTerminalDropCounters
 }
 
-func (p *mediaPacer) recordVideoWrite(audio, attempted bool, n int, err error) {
-	if audio {
+func (p *mediaPacer) recordVideoWrite(packet pacedPacket, attempted bool, n int, err error, reason mediaTerminalDropReason) {
+	if packet.stream.audio {
 		return
 	}
 	p.mu.Lock()
@@ -22,6 +23,7 @@ func (p *mediaPacer) recordVideoWrite(audio, attempted bool, n int, err error) {
 	switch {
 	case !attempted:
 		p.diagnostics.droppedScope++
+		p.diagnostics.terminalDrops[packet.kind][reason]++
 	case err != nil:
 		p.diagnostics.finalWriteFailures++
 	case n > 0:
@@ -46,6 +48,7 @@ func (p *mediaPacer) diagnosticSnapshot(now time.Time) *netproto.VideoPacerDiagn
 		DroppedQueueFull: d.droppedQueueFull, DroppedExpired: d.droppedExpired,
 		DroppedRetired: d.droppedRetired, DroppedScope: d.droppedScope,
 		CoalescedRepairs: d.coalescedRepairs,
+		TerminalDrops:    d.terminalDrops.snapshot(),
 		SentPackets:      d.sentPackets, SentBytes: d.sentBytes, FinalWriteFailures: d.finalWriteFailures,
 		FeedbackReports: d.feedbackReports,
 	}

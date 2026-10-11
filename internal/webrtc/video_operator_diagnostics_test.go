@@ -32,6 +32,8 @@ func TestVideoOperatorDiagnosticsSeparatesWatchOutputAndForwarding(t *testing.T)
 		t.Fatalf("watch intent was confused with output delivery: %+v", initial.Publications[0].Viewers)
 	}
 	egress := &mediaEgressStream{active: true, pacer: &mediaPacer{bitrate: mediaInitialBitrate}}
+	egress.pacer.diagnostics.droppedScope = 1
+	egress.pacer.diagnostics.terminalDrops[mediaPacketRTX][mediaDropExpiredTicket] = 1
 	egress.outputSSRC.Store(99)
 	r.pubTracks["watcher"] = map[string]*pubTrack{"pub": {video: map[string]*pubSlot{SlotScreen: {egress: egress}}}}
 	watch := r.watches[watchKey{"watcher", "pub", SlotScreen}]
@@ -41,6 +43,9 @@ func TestVideoOperatorDiagnosticsSeparatesWatchOutputAndForwarding(t *testing.T)
 	active := r.VideoOperatorDiagnostics().Publications[0].Viewers[1]
 	if !active.OutputExists || !active.OutputActive || active.OutputSSRC != 99 || active.Pacer == nil || active.Forwarding == nil || active.Forwarding.Stage.Packets != 1 {
 		t.Fatalf("active output missing actual forwarding evidence: %+v", active)
+	}
+	if active.Pacer.TerminalDrops == nil || active.Pacer.TerminalDrops.RTX.ExpiredTicket != 1 {
+		t.Fatal("operator snapshot lost terminal drop classification")
 	}
 	egress.stop()
 	if r.VideoOperatorDiagnostics().Publications[0].Viewers[1].OutputActive {
@@ -52,6 +57,9 @@ func TestVideoOperatorDiagnosticsSeparatesWatchOutputAndForwarding(t *testing.T)
 	stopped := r.VideoOperatorDiagnostics().Publications[0].Viewers[1]
 	if stopped.Watching || stopped.Forwarding != nil || stopped.WatchRevision != 2 {
 		t.Fatalf("unwatch retained current delivery state: %+v", stopped)
+	}
+	if stopped.Pacer.TerminalDrops.RTX.ExpiredTicket != 1 || stopped.Pacer.DroppedScope != 1 {
+		t.Fatal("watch change reset recipient-lifetime counters")
 	}
 	r.RevokeVideo("pub", SlotScreen)
 	if len(r.VideoOperatorDiagnostics().Publications) != 0 {

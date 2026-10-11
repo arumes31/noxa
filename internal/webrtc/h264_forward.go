@@ -43,16 +43,21 @@ type h264ForwardFrame struct {
 	sps, pps, idr          bool
 	nals                   int
 	configurationBeforeIDR bool
+	rejected               bool
+	rejectedSSRC           uint32
+	rejectedTimestamp      uint32
 }
 
 func (f *h264ForwardFrame) clearUnit() {
-	*f = h264ForwardFrame{observed: f.observed, lastSSRC: f.lastSSRC, lastSequence: f.lastSequence, onReject: f.onReject}
+	*f = h264ForwardFrame{observed: f.observed, lastSSRC: f.lastSSRC, lastSequence: f.lastSequence, onReject: f.onReject,
+		rejected: f.rejected, rejectedSSRC: f.rejectedSSRC, rejectedTimestamp: f.rejectedTimestamp}
 }
 
 func (f *h264ForwardFrame) reject(reason h264RejectReason) {
 	if f.onReject != nil {
 		f.onReject(reason)
 	}
+	f.rejected, f.rejectedSSRC, f.rejectedTimestamp = true, f.ssrc, f.timestamp
 	f.clearUnit()
 }
 
@@ -131,6 +136,16 @@ func (f *h264ForwardFrame) push(p *rtp.Packet, now time.Time) (packets []*rtp.Pa
 		f.reject(h264RejectDiscontinuity)
 		lost = true
 	}
+	// A later slice cannot make a rejected access unit complete. Keep this
+	// bounded identity until a different media timestamp/source arrives;
+	// padding above preserves sequence continuity without reopening the unit.
+	if f.rejected && p.SSRC == f.rejectedSSRC && p.Timestamp == f.rejectedTimestamp {
+		return nil, false, lost
+	}
+	f.rejected = false
+	if len(f.packets) == 0 {
+		f.ssrc, f.timestamp, f.started = p.SSRC, p.Timestamp, now
+	}
 	reject := func() ([]*rtp.Packet, bool, bool) { f.reject(h264RejectMalformed); return nil, false, true }
 	if p.MarshalSize() > h264AccessUnitBytes-f.bytes || len(f.packets) >= h264AccessUnitPackets {
 		f.reject(h264RejectCapacity)
@@ -140,9 +155,6 @@ func (f *h264ForwardFrame) push(p *rtp.Packet, now time.Time) (packets []*rtp.Pa
 		return reject()
 	}
 	f.lastPacket = now
-	if len(f.packets) == 0 {
-		f.ssrc, f.timestamp, f.started = p.SSRC, p.Timestamp, now
-	}
 	f.sequence = p.SequenceNumber
 	f.bytes += p.MarshalSize()
 	switch p.Payload[0] & 31 {

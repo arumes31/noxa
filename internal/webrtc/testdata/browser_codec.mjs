@@ -23,6 +23,9 @@ try {
         });
     }
     await sender.addScriptTag({type:'module',content:await readFile(new URL('../../../client/frontend/src/video-codecs.js',import.meta.url),'utf8')+'\nwindow.preferTestCodec=preferPublicationCodec;'});
+    // Inline modules execute asynchronously; inserting the element is not a
+    // readiness signal for the exported helper used by the next evaluation.
+    await sender.waitForFunction(() => typeof window.preferTestCodec === 'function');
     await sender.evaluate(async () => {
         const canvas=document.createElement('canvas');canvas.width=1280;canvas.height=720;document.body.append(canvas);
         const context=canvas.getContext('2d');let frame=0;

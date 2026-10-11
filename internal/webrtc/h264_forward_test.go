@@ -160,6 +160,83 @@ func TestH264ForwardFrameRejectsBrokenUnits(t *testing.T) {
 	}
 }
 
+func TestH264RejectedUnitCannotReleaseLaterSlice(t *testing.T) {
+	for _, cause := range []string{"gap", "malformed", "idle", "age", "capacity", "first malformed"} {
+		for _, recovery := range []string{"next timestamp", "new source"} {
+			t.Run(cause+"/"+recovery, func(t *testing.T) {
+				var frame h264ForwardFrame
+				now := time.Now()
+				if cause != "first malformed" {
+					frame.push(h264ForwardPacket(1, 90, false, 0x7c, 0x85, 1), now)
+				}
+				broken := h264ForwardPacket(2, 90, false, 0x7c, 0x45, 1)
+				switch cause {
+				case "gap":
+					broken.SequenceNumber = 3
+				case "malformed", "first malformed":
+					broken.Payload = []byte{0xff}
+				case "idle":
+					now = now.Add(h264ForwardIdleWait + time.Millisecond)
+				case "age":
+					now = now.Add(h264ForwardMaxWait + time.Millisecond)
+				case "capacity":
+					broken.Payload = make([]byte, h264AccessUnitBytes)
+				}
+				if out, _, lost := frame.push(broken, now); len(out) != 0 || !lost {
+					t.Fatal("broken access unit was not rejected")
+				}
+				seq := broken.SequenceNumber + 1
+				// Padding has an unrelated timestamp and must neither disappear
+				// nor let another slice of the rejected unit restart assembly.
+				padding := recoveryPaddingPacket(7, seq, 180)
+				if out, key, _ := frame.push(padding, now); len(out) != 1 || key || !isVideoPadding(out[0]) {
+					t.Fatal("padding continuity lost after rejected unit")
+				}
+				for index, payload := range [][]byte{{0x7c, 0x85, 2}, {0x7c, 0x45, 3}} {
+					out, key, _ := frame.push(h264ForwardPacket(seq+1+uint16(index), 90, index == 1, payload...), now)
+					if len(out) != 0 || key {
+						t.Fatalf("rejected access unit leaked later slice: packets=%d key=%v", len(out), key)
+					}
+				}
+				packet := h264ForwardPacket(seq+3, 180, true, 24, 0, 2, 0x67, 1, 0, 2, 0x68, 1, 0, 2, 0x65, 1)
+				if recovery == "new source" {
+					packet.SSRC, packet.Timestamp = 8, 90
+				}
+				if out, key, lost := frame.push(packet, now); len(out) != 1 || !key || lost {
+					t.Fatalf("next complete keyframe did not recover: packets=%d key=%v lost=%v", len(out), key, lost)
+				}
+			})
+		}
+	}
+}
+
+func TestH264RejectedUnitLateRepairCannotCorruptNextUnit(t *testing.T) {
+	var reorder videoReorder
+	var frame h264ForwardFrame
+	now := time.Now()
+	var complete []*rtp.Packet
+	keyframes := 0
+	emit := func(packet *rtp.Packet, _ string) {
+		packets, key, _ := frame.push(packet, now)
+		complete = append(complete, packets...)
+		if key {
+			keyframes++
+		}
+	}
+	reorder.push(h264ForwardPacket(1, 90, false, 0x7c, 0x85, 1), webrtc.MimeTypeH264, now, emit)
+	reorder.push(h264ForwardPacket(3, 90, true, 0x7c, 0x45, 1), webrtc.MimeTypeH264, now, emit)
+	now = now.Add(videoReorderWait)
+	reorder.flush(now, false, emit)
+	reorder.push(h264ForwardPacket(4, 180, false, 24, 0, 2, 0x67, 1, 0, 2, 0x68, 1), webrtc.MimeTypeH264, now, emit)
+	// The assembler follows videoReorder: an abandoned packet's late repair
+	// cannot re-enter it after a newer access unit has begun.
+	reorder.push(h264ForwardPacket(2, 90, false, 0x7c, 5, 1), webrtc.MimeTypeH264, now, emit)
+	reorder.push(h264ForwardPacket(5, 180, true, 0x65, 1), webrtc.MimeTypeH264, now, emit)
+	if keyframes != 1 || len(complete) != 2 || complete[0].SequenceNumber != 4 || complete[1].SequenceNumber != 5 {
+		t.Fatalf("late repair damaged next access unit: keyframes=%d packets=%v", keyframes, complete)
+	}
+}
+
 func TestH264ForwardFrameInterleavedPadding(t *testing.T) {
 	for _, gap := range []uint16{0, 1} {
 		var frame h264ForwardFrame
