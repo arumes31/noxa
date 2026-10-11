@@ -64,6 +64,7 @@ type connManager struct {
 	supportsStreamDiagnostics      bool
 	supportsStreamSourceQuality    bool
 	supportsStreamCodec            bool
+	supportsStreamCodecRefresh     bool
 	supportsStreamReceiverRecovery bool
 	conn                           net.Conn
 	connEpoch                      uint64
@@ -520,6 +521,7 @@ func (m *connManager) connectWith(addr string, authMsg netproto.Authenticate, si
 	m.supportsStreamDiagnostics = slices.Contains(resp.Capabilities, netproto.CapabilityStreamDiagnostics)
 	m.supportsStreamSourceQuality = slices.Contains(resp.Capabilities, netproto.CapabilityStreamSourceQuality)
 	m.supportsStreamCodec = slices.Contains(resp.Capabilities, netproto.CapabilityStreamCodec)
+	m.supportsStreamCodecRefresh = slices.Contains(resp.Capabilities, netproto.CapabilityStreamCodecRefresh)
 	m.supportsStreamReceiverRecovery = slices.Contains(resp.Capabilities, netproto.CapabilityStreamReceiverRecovery)
 	m.isGuest = authMsg.Anonymous
 	m.iceServers = resp.ICEServers

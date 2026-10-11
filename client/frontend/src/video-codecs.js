@@ -14,20 +14,59 @@ export function receiverVideoCodecs() {
     return capabilities("RTCRtpReceiver").some(relayH264) ? ["h264", "vp8"] : ["vp8"];
 }
 
-export async function publicationVideoCodecs(track) {
+const publicationQueries = new WeakMap();
+
+function publicationQuery(track) {
     const codec = capabilities("RTCRtpSender").find(relayH264);
-    if (!codec || !globalThis.navigator?.mediaCapabilities?.encodingInfo) return ["vp8"];
-    const settings = track.getSettings?.() || {};
+    const media = globalThis.navigator?.mediaCapabilities;
+    if (!codec || typeof media?.encodingInfo !== "function") return null;
+    let settings;
+    try { settings = track?.getSettings?.(); } catch { return null; }
+    if (![settings?.width, settings?.height].every(value => Number.isInteger(value) && value > 0 && value <= 16384) ||
+        !Number.isFinite(settings?.frameRate) || settings.frameRate <= 0 || settings.frameRate > 240) return null;
+    const video = { contentType: `${codec.mimeType};${codec.sdpFmtpLine}`, width: settings.width,
+        height: settings.height, framerate: settings.frameRate, bitrate: 8000000 };
+    return { media, video, key: JSON.stringify(video) };
+}
+
+export function publicationCodecQueryKey(track) { return publicationQuery(track)?.key ?? null; }
+
+// Initial selection and later retries share the same bounded native promises.
+// A timeout never starts another unresolved query for the same geometry.
+export async function publicationCodecSupport(track) {
+    const query = publicationQuery(track);
+    if (!query) return { codecs: ["vp8"], status: "unavailable", key: null };
+    const { media, video, key } = query;
     let timeout;
     try {
-        const query = navigator.mediaCapabilities.encodingInfo({ type: "webrtc", video: {
-            contentType: `${codec.mimeType};${codec.sdpFmtpLine}`, width: settings.width || 1920,
-            height: settings.height || 1080, framerate: settings.frameRate || 60, bitrate: 8000000,
-        } });
-        const result = await Promise.race([query, new Promise(resolve => { timeout = setTimeout(() => resolve({}), 2000); })]);
-        return result.supported && result.powerEfficient ? ["h264", "vp8"] : ["vp8"];
-    } catch { return ["vp8"]; } finally { clearTimeout(timeout); }
+        let cache = publicationQueries.get(media);
+        if (!cache) { cache = new Map(); publicationQueries.set(media, cache); }
+        let entry = cache.get(key);
+        if (entry?.settled && entry.expires <= Date.now()) { cache.delete(key); entry = null; }
+        if (!entry) {
+            if (cache.size >= 16) {
+                const disposable = [...cache].find(([, value]) => value.settled);
+                if (!disposable) return { codecs: ["vp8"], status: "unknown", key };
+                cache.delete(disposable[0]);
+            }
+            entry = { settled: false };
+            entry.promise = Promise.resolve().then(() => media.encodingInfo({ type: "webrtc", video }))
+                .catch(() => null).then(result => {
+                    const status = result?.supported === true && result.powerEfficient === true ? "hardware" :
+                        result?.supported === false || result?.powerEfficient === false ? "unsupported" : "unknown";
+                    entry.settled = true;
+                    entry.expires = Date.now() + (status === "unsupported" ? 300000 : 30000);
+                    return status;
+                });
+            cache.set(key, entry);
+        }
+        let status = await Promise.race([entry.promise, new Promise(resolve => { timeout = setTimeout(() => resolve("unknown"), 2000); })]);
+        if (publicationCodecQueryKey(track) !== key) status = "unknown";
+        return { codecs: status === "hardware" ? ["h264", "vp8"] : ["vp8"], status, key };
+    } catch { return { codecs: ["vp8"], status: "unknown", key }; } finally { clearTimeout(timeout); }
 }
+
+export async function publicationVideoCodecs(track) { return (await publicationCodecSupport(track)).codecs; }
 
 export function preferPublicationCodec(transceiver, codec) {
     if (!transceiver?.setCodecPreferences || !["h264", "vp8"].includes(codec)) return false;

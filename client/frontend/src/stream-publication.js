@@ -1,10 +1,21 @@
 import { captureMediaScope, mediaScopeIsCurrent } from "./media-controls.js";
 import { t } from "./i18n.js";
-import { publicationVideoCodecs } from "./video-codecs.js";
+import { publicationCodecSupport, publicationCodecQueryKey } from "./video-codecs.js";
 
 const V = () => window.__noxa;
 const publications = new Map();
 const uploads = new Map();
+const codecRetryDelays = [30000, 120000, 300000];
+
+async function supportsCodecRefresh(tabID) {
+    let timer;
+    try {
+        return await Promise.race([
+            Promise.resolve().then(() => window.go.main.App.SupportsStreamCodecRefreshForTab?.(tabID)).catch(() => false),
+            new Promise(resolve => { timer = setTimeout(() => resolve(false), 1000); }),
+        ]) === true;
+    } finally { clearTimeout(timer); }
+}
 
 // A new capable server starts with no media upload until its own catalog
 // confirms a viewer or recorder. Older servers keep continuous publication.
@@ -12,9 +23,13 @@ export async function preparePublicationUpload(slot, track, onChange) {
     const scope = captureMediaScope(), pc = V().state.pc;
     const supported = await window.go.main.App.SupportsStreamSourceQualityForTab?.(scope.tabID) || false;
     const codecSupport = supported && await window.go.main.App.SupportsStreamCodecForTab?.(scope.tabID) || false;
-    const codecs = codecSupport ? await publicationVideoCodecs(track) : null;
+    const probe = codecSupport ? await publicationCodecSupport(track) : null;
+    const codecs = probe?.codecs;
+    const refreshSupported = codecSupport && await supportsCodecRefresh(scope.tabID);
     if (!mediaScopeIsCurrent(scope) || V().state.pc !== pc || track.readyState === "ended") return false;
-    uploads.set(slot, { scope, pc, track, supported, codecs, codec: codecs?.[0], active: !supported, generation: "0", onChange });
+    uploads.set(slot, { scope, pc, track, supported, codecs, codec: codecs?.[0], active: !supported, generation: "0", onChange,
+        refresh: { supported: refreshSupported, done: codecs?.includes("h264"), pending: false, key: probe?.key,
+            last: Date.now(), next: Date.now() + (probe?.status === "unsupported" ? 300000 : 30000), attempts: 0 } });
     return true;
 }
 
@@ -48,6 +63,40 @@ export function publicationUploadActive(slot, track) {
 
 export function publicationCodec(slot, track) { return currentUpload(slot, track)?.codec; }
 
+// Catalog polling drives retries without waiting for a native capability query
+// or publishing again. Only the server selects the active shared codec.
+function refreshPublicationCodec(publication, upload) {
+    const retry = upload.refresh, slot = publication.slot, generation = publication.generation;
+    if (!retry?.supported || retry.done || retry.pending || upload.active !== true) return;
+    const key = publicationCodecQueryKey(upload.track), now = Date.now();
+    if (key === null || (now < retry.next && (key === retry.key || now - retry.last < 30000))) return;
+    const current = () => valid(publication) && publication.generation === generation && generation !== "0" &&
+        currentUpload(slot, upload.track) === upload && upload.generation === generation;
+    if (!current()) return;
+    retry.pending = true; retry.key = key; retry.last = now;
+    retry.next = now + codecRetryDelays[Math.min(retry.attempts++, codecRetryDelays.length - 1)];
+    void (async () => {
+        try {
+            const result = await publicationCodecSupport(upload.track);
+            if (!current() || publicationCodecQueryKey(upload.track) !== key) return;
+            if (result.status !== "hardware") {
+                if (result.status === "unsupported") retry.next = Math.max(retry.next, Date.now() + 300000);
+                return;
+            }
+            // Keep locally proven support even if the acknowledgement is lost:
+            // a later authoritative catalog may show the accepted augmentation.
+            // Never select H264 merely because the capability query succeeded.
+            upload.codecs = result.codecs;
+            await streamRequest(upload.scope, { action: "publish", slot, generation, active: true,
+                quality_mode: "source", codecs: result.codecs });
+            if (current() && publicationCodecQueryKey(upload.track) === key) retry.done = true;
+        } catch {
+            // Older/rejecting servers and lost replies cannot cause poll-rate
+            // mutations. The next exact-generation request is idempotent.
+        } finally { retry.pending = false; }
+    })();
+}
+
 export function reconcilePublicationUploads(snapshot, streams) {
     for (const { publication, generation } of snapshot) {
         if (!valid(publication) || publication.generation !== generation) continue;
@@ -56,6 +105,7 @@ export function reconcilePublicationUploads(snapshot, streams) {
         const own = streams.find(stream => stream.publisher_id === publication.scope.clientID &&
             stream.slot === publication.slot && stream.generation === generation);
         if (typeof own?.upload_active !== "boolean") continue;
+        refreshPublicationCodec(publication, upload);
         const codec = upload.codecs ? (own.codec === "h264" && upload.codecs.includes("h264") ? "h264" : "vp8") : undefined;
         if (own.upload_active === upload.active && upload.applied === upload.active && codec === upload.codec && codec === upload.appliedCodec) continue;
         upload.codec = codec;

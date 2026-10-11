@@ -2,6 +2,18 @@ package main
 
 import "noxa/internal/netproto"
 
+// SupportsStreamCodecRefreshForTab permits an in-place capability addition only
+// when this authenticated server explicitly advertises the newer semantics.
+func (a *App) SupportsStreamCodecRefreshForTab(tabID string) bool {
+	cm, err := a.requireTabCM(tabID)
+	if err != nil {
+		return false
+	}
+	cm.mu.Lock()
+	defer cm.mu.Unlock()
+	return cm.conn != nil && cm.clientID != "" && cm.supportsStreamCodecRefresh && cm.supportsStreamCodec && cm.supportsStreamSourceQuality && cm.authorizationModel == netproto.AuthorizationModelRolesV1
+}
+
 func (a *App) SupportsStreamReceiverRecoveryForTab(tabID string) bool {
 	cm, err := a.requireTabCM(tabID)
 	if err != nil {

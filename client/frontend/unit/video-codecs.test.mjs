@@ -19,9 +19,12 @@ test("hardware encoding preference uses the actual capture dimensions and fps", 
 });
 test("software H264 and capability-query errors retain VP8", async t => {
     let fail = false;
+    let now = 1000;
+    t.mock.method(Date, "now", () => now);
     install(t, [vp8, h264], async () => { if (fail) throw new Error("unsupported query"); return { supported: true, powerEfficient: false }; });
-    assert.deepEqual(await publicationVideoCodecs({}), ["vp8"]);
-    fail = true; assert.deepEqual(await publicationVideoCodecs({}), ["vp8"]);
+    const track = { getSettings: () => ({ width: 1920, height: 1080, frameRate: 60 }) };
+    assert.deepEqual(await publicationVideoCodecs(track), ["vp8"]);
+    fail = true; now += 300001; assert.deepEqual(await publicationVideoCodecs(track), ["vp8"]);
 });
 test("incompatible H264 profiles and packetization modes are not advertised", async t => {
     install(t, [vp8, { ...h264, sdpFmtpLine: "packetization-mode=0;profile-level-id=42001f" }, { ...h264, sdpFmtpLine: "packetization-mode=1;profile-level-id=640032" }], async () => { throw new Error("must not query incompatible encoder"); });

@@ -79,6 +79,15 @@ func (r *Router) PublishVideoWithCodecs(publisher, slot string, generation uint6
 		return 0, ErrVideoPublication
 	}
 	if current != 0 {
+		// A transient client capability query can initially publish VP8 only.
+		// Add H264 to that exact source lifetime without replacing its watches,
+		// preview, ingress diagnostics or transport. Selection still intersects
+		// current viewers and the recording/dimension policies below.
+		if generation == current && mode == "source" && r.publicationModes[key] == "source" &&
+			r.publicationCodecCapabilities[key] == videoCodecVP8 && capabilities == videoCodecVP8|videoCodecH264 {
+			r.publicationCodecCapabilities[key] = capabilities
+			return current, nil
+		}
 		if generation == current && (mode == "" || mode == r.publicationModes[key]) && capabilities == r.publicationCodecCapabilities[key] {
 			return current, nil
 		}

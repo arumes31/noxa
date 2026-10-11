@@ -18,6 +18,7 @@ func (a *App) VideoStreamControlForTab(tabID string, msg netproto.VideoStreamCon
 	cm.mu.Lock()
 	conn, clientID, sourceSupported, codecSupported, model := cm.conn, cm.clientID, cm.supportsStreamSourceQuality, cm.supportsStreamCodec, cm.authorizationModel
 	recoverySupported := cm.supportsStreamReceiverRecovery
+	codecRefreshSupported := cm.supportsStreamCodecRefresh
 	cm.mu.Unlock()
 	if conn == nil {
 		return netproto.VideoStreamResult{}, errors.New("not connected")
@@ -33,6 +34,9 @@ func (a *App) VideoStreamControlForTab(tabID string, msg netproto.VideoStreamCon
 		return netproto.VideoStreamResult{}, errors.New("source quality publications are not supported by this server")
 	}
 	if len(msg.Codecs) != 0 {
+		if msg.Action == "publish" && msg.Active && msg.Generation != 0 && (!codecRefreshSupported || msg.QualityMode != "source") {
+			return netproto.VideoStreamResult{}, errors.New("in-place video codec refresh is not supported")
+		}
 		if !codecSupported || model != netproto.AuthorizationModelRolesV1 || clientID == "" ||
 			(msg.Action != "publish" && msg.Action != "watch") || len(msg.Codecs) > 2 || !slices.Contains(msg.Codecs, "vp8") ||
 			(len(msg.Codecs) == 2 && !slices.Contains(msg.Codecs, "h264")) {

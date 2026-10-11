@@ -23,6 +23,7 @@ const settle = async () => { for (let n = 0; n < 12; n++) await Promise.resolve(
 test("codec-only catalog changes reconfigure one current publication and ignore stale generations", async t => {
     const fixture = setup(t);
     window.go.main.App.SupportsStreamCodecForTab = async () => true;
+    fixture.track.getSettings = () => ({ width: 640, height: 360, frameRate: 30 });
     const previous = Object.getOwnPropertyDescriptor(globalThis, "navigator");
     const sender = Object.getOwnPropertyDescriptor(globalThis, "RTCRtpSender");
     Object.defineProperty(globalThis, "navigator", { configurable: true, value: { mediaCapabilities: { encodingInfo: async () => ({ supported: true, powerEfficient: true }) } } });

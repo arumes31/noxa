@@ -530,6 +530,8 @@ export function SubscriptionsForTab(arg1:string):Promise<Array<number>>;
 
 export function SupportsStreamDiagnosticsForTab(arg1:string):Promise<boolean>;
 
+export function SupportsStreamCodecRefreshForTab(arg1:string):Promise<boolean>;
+
 export function SupportsStreamSourceQualityForTab(arg1:string):Promise<boolean>;
 
 export function SupportsStreamReceiverRecoveryForTab(arg1:string):Promise<boolean>;

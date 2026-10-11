@@ -1054,6 +1054,10 @@ export function SupportsStreamDiagnosticsForTab(arg1) {
   return window['go']['main']['App']['SupportsStreamDiagnosticsForTab'](arg1);
 }
 
+export function SupportsStreamCodecRefreshForTab(arg1) {
+  return window['go']['main']['App']['SupportsStreamCodecRefreshForTab'](arg1);
+}
+
 export function SupportsStreamSourceQualityForTab(arg1) {
   return window['go']['main']['App']['SupportsStreamSourceQualityForTab'](arg1);
 }
