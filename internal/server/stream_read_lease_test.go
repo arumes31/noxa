@@ -1,7 +1,10 @@
 package server
 
 import (
+	"bytes"
 	"context"
+	"image"
+	"image/jpeg"
 	"sync"
 	"testing"
 	"time"
@@ -39,7 +42,7 @@ func (v *streamReadVoice) SetPublisherGuard(guard webrtc.PublisherGuard) {
 }
 
 func TestStreamReadReplyDoesNotDiscardAuthorizedMedia(t *testing.T) {
-	for _, action := range []string{"list", "preview", "diagnostics"} {
+	for _, action := range []string{"list", "preview", "diagnostics", "preview_upload"} {
 		t.Run(action, func(t *testing.T) {
 			backend := serverRoleFixture()
 			backend.policy.Roles[0].Permissions = []authorization.Capability{authorization.Connect, authorization.ViewChannel, authorization.ShareScreen, authorization.Speak}
@@ -67,11 +70,22 @@ func TestStreamReadReplyDoesNotDiscardAuthorizedMedia(t *testing.T) {
 				t.Fatal(err)
 			}
 			refreshes := voice.refreshes
-			generation, err := voice.PublishVideo(other.ID, webrtc.SlotScreen, 0, true)
+			publisher := other.ID
+			if action == "preview_upload" {
+				publisher = reader.ID
+			}
+			generation, err := voice.PublishVideo(publisher, webrtc.SlotScreen, 0, true)
 			if err != nil {
 				t.Fatal(err)
 			}
-			request := netproto.VideoStreamControl{Action: action, PublisherID: other.ID, Slot: webrtc.SlotScreen, Generation: generation, Session: voice.VideoWatchSession(reader.ID)}
+			request := netproto.VideoStreamControl{Action: action, PublisherID: publisher, Slot: webrtc.SlotScreen, Generation: generation, Session: voice.VideoWatchSession(reader.ID)}
+			if action == "preview_upload" {
+				var encoded bytes.Buffer
+				if err := jpeg.Encode(&encoded, image.NewRGBA(image.Rect(0, 0, 16, 9)), nil); err != nil {
+					t.Fatal(err)
+				}
+				request.JPEG = encoded.Bytes()
+			}
 			frame, err := netproto.Encode(netproto.MsgVideoStreamControl, request)
 			if err != nil {
 				t.Fatal(err)
@@ -88,6 +102,12 @@ func TestStreamReadReplyDoesNotDiscardAuthorizedMedia(t *testing.T) {
 			case <-conn.entered:
 			case <-time.After(time.Second):
 				t.Fatal("read-only stream reply did not reach blocked TCP writer")
+			}
+			if action == "preview_upload" {
+				data, captured, err := voice.VideoPreview(other.ID, publisher, webrtc.SlotScreen, generation)
+				if err != nil || captured == 0 || !bytes.Equal(data, request.JPEG) {
+					t.Fatalf("authorized preview was not stored before reply: captured=%d err=%v", captured, err)
+				}
 			}
 			// A real response is paused inside its socket write, not merely queued
 			// in a goroutine. Membership and metadata must remain pinned there.
@@ -116,13 +136,20 @@ func TestStreamReadReplyDoesNotDiscardAuthorizedMedia(t *testing.T) {
 }
 
 func TestStreamReadLeaseRejectsRevokedOrIneligibleSessions(t *testing.T) {
-	for _, action := range []string{"list", "preview", "diagnostics", "telemetry"} {
-		for _, condition := range []string{"rules blocked", "session revoked", "membership removed", "lobby", "connect denied", "authority unavailable"} {
+	for _, action := range []string{"list", "preview", "diagnostics", "telemetry", "preview_upload"} {
+		conditions := []string{"rules blocked", "session revoked", "membership removed", "lobby", "connect denied", "authority unavailable"}
+		if action == "preview_upload" {
+			conditions = append(conditions, "share denied")
+		}
+		for _, condition := range conditions {
 			t.Run(action+"/"+condition, func(t *testing.T) {
 				backend := serverRoleFixture()
-				backend.policy.Roles[0].Permissions = []authorization.Capability{authorization.Connect, authorization.ViewChannel}
-				if condition == "connect denied" {
+				backend.policy.Roles[0].Permissions = []authorization.Capability{authorization.Connect, authorization.ViewChannel, authorization.ShareScreen}
+				switch condition {
+				case "connect denied":
 					backend.policy.Roles[0].Permissions = nil
+				case "share denied":
+					backend.policy.Roles[0].Permissions = []authorization.Capability{authorization.Connect, authorization.ViewChannel}
 				}
 				authority, err := authorization.NewAuthority(t.Context(), backend, func(context.Context, *authorization.RoleEvaluator, *authorization.RoleEvaluator) error { return nil })
 				if err != nil {
@@ -168,7 +195,11 @@ func TestStreamReadLeaseRejectsRevokedOrIneligibleSessions(t *testing.T) {
 						t.Fatal("ineligible session changed retained telemetry")
 					}
 				} else {
-					frame, err := netproto.Encode(netproto.MsgVideoStreamControl, netproto.VideoStreamControl{Action: action, PublisherID: "other", Slot: webrtc.SlotScreen, Generation: 1, Session: 1})
+					publisher := "other"
+					if action == "preview_upload" {
+						publisher = client.ID
+					}
+					frame, err := netproto.Encode(netproto.MsgVideoStreamControl, netproto.VideoStreamControl{Action: action, PublisherID: publisher, Slot: webrtc.SlotScreen, Generation: 1, Session: 1})
 					if err != nil {
 						t.Fatal(err)
 					}

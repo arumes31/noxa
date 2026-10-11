@@ -63,9 +63,12 @@ func (s *TCPServer) handleVideoStreamControl(ctx context.Context, client *Client
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "invalid video stream action")
 	}
 	active := msg.Action != "publish" || msg.Active
-	readOnly := msg.Action == "list" || msg.Action == "preview" || msg.Action == "diagnostics"
+	// Updating the bounded preview cache changes neither publisher permission nor
+	// membership/watch consent. Its JPEG validation and TCP reply must not exclude
+	// authorized packet writes; SetVideoPreview owns its cache/generation locks.
+	sharedLease := msg.Action == "list" || msg.Action == "preview" || msg.Action == "diagnostics" || msg.Action == "preview_upload"
 	lease := s.roleChannelControl
-	if readOnly {
+	if sharedLease {
 		lease = s.roleChannelRead
 	}
 	return lease(ctx, client, capability, active, func(ctx context.Context, channelID int64) error {
@@ -73,7 +76,7 @@ func (s *TCPServer) handleVideoStreamControl(ctx context.Context, client *Client
 		// Real policy, membership, rules and visibility changes refresh this
 		// snapshot under their mutation barriers. Polling must not acquire the
 		// router's global watch writer merely to reinstall the same predicate.
-		if !readOnly {
+		if !sharedLease {
 			s.refreshRolePublishers(ctx.Value(roleLeaseKey{}).(roleLease).evaluator)
 		}
 		result := netproto.VideoStreamResult{Action: msg.Action, PublisherID: msg.PublisherID, Slot: msg.Slot, Generation: msg.Generation, Revision: msg.Revision, Active: msg.Active, Streams: []netproto.VideoStream{}}
