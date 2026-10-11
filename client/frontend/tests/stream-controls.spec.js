@@ -222,7 +222,8 @@ for (const failure of ["reject", "pending"]) test(`receiver diagnostics expire w
             if (window.__streams.statsMode === "pending") await new Promise(resolve => { window.__streams.resolveStats = resolve; });
             sample++;
             return new Map([["video", { id: "video", type: "inbound-rtp", kind: "video", ssrc: 42, trackIdentifier: "alice|screen",
-                timestamp: sample * 3000, framesDecoded: sample * 90, bytesReceived: sample * 1500000, frameWidth: 1920, frameHeight: 1080 }]]);
+                timestamp: sample * 3000, framesReceived: sample * 91, framesDecoded: sample * 90, framesDropped: sample,
+                freezeCount: 2, totalFreezesDuration: 1.25, bytesReceived: sample * 1500000, frameWidth: 1920, frameHeight: 1080 }]]);
         };
     });
     await page.locator('[data-publisher="alice"] .stream-watch').click();
@@ -231,6 +232,15 @@ for (const failure of ["reject", "pending"]) test(`receiver diagnostics expire w
     await page.clock.fastForward(3000);
     await expect(page.locator(".vtile-received")).toContainText("30.0 fps");
     await page.locator(".vtile-diagnostics summary").click();
+    const copy = page.getByRole("button", { name: "Copy this stream’s diagnostics" });
+    await copy.click();
+    const first = await page.evaluate(() => JSON.parse(window.__streams.copied));
+    expect(first.receiver.stats_epoch).toMatch(/^[0-9a-f-]{36}$/);
+    expect(first.receiver.cumulative).toEqual([{ stats_id: "video", ssrc: 42, timestamp_ms: expect.any(Number),
+        frames_received: expect.any(Number), frames_decoded: first.frames_decoded, frames_dropped: expect.any(Number),
+        freeze_count: 2, total_freezes_duration_seconds: 1.25 }]);
+    await copy.click();
+    expect(await page.evaluate(() => JSON.parse(window.__streams.copied).receiver.stats_epoch)).toBe(first.receiver.stats_epoch);
     await page.evaluate(mode => { window.__streams.statsMode = mode; }, failure);
     await page.clock.fastForward(3000);
     await page.clock.fastForward(16000);
@@ -245,6 +255,12 @@ for (const failure of ["reject", "pending"]) test(`receiver diagnostics expire w
     await expect(page.locator(".vtile-received")).toContainText("— fps");
     await page.clock.fastForward(3000);
     await expect(page.locator(".vtile-received")).toContainText("30.0 fps");
+    await copy.click();
+    const recovered = await page.evaluate(() => JSON.parse(window.__streams.copied).receiver);
+    expect(recovered.stats_epoch).not.toBe(first.receiver.stats_epoch);
+    expect(recovered.cumulative[0].stats_id).toBe(first.receiver.cumulative[0].stats_id);
+    expect(recovered.cumulative[0].ssrc).toBe(first.receiver.cumulative[0].ssrc);
+    expect(recovered.cumulative[0].total_freezes_duration_seconds).toBe(1.25);
 });
 
 test("ordinary stream viewers can inspect the sender, server and receiver path", async ({ page }) => {

@@ -153,13 +153,14 @@ export function createVideoGrid({ applySendCaps, syncCameraButton, syncShareButt
                     requested_quality: sourceQuality ? "source" : qualityCapability?.supported === false ? qualityPref : t.qualityPreference,
                     confirmed_preference: sourceQuality ? "source" : (qualityCapability?.supported === false ? lastSentQuality : t.sentQuality) || null,
                     receiver: sample ? { sample_ms: sample.sampleMS, received_fps: sample.receivedFPS, decoded_fps: sample.fps,
+                        stats_epoch: t.diagnosticsEpoch, cumulative: sample.cumulative,
                         dropped_fps: sample.droppedFPS, decode_ms: sample.decodeMS, jitter_buffer_ms: sample.bufferMS,
                         recent_loss_percent: sample.lossPercent, nacks: sample.nacks, plis: sample.plis, freezes: sample.freezes,
                         key_frames: sample.keyFrames, decoder: sample.decoder, power_efficient_decoder: sample.powerEfficientDecoder } : null,
                     stream_path: t.remoteDiagnostics || null,
                     presentation: t.presentation?.snapshot(performance.now()) ?? null,
                     stream_path_age_ms: remoteDiagnosticsAge(t),
-                    note: "Browser bitrate is RTP payload, including retransmissions. Server byte counts include RTP headers. Stage sample windows are independent; server FPS counts observed RTP timestamps, not complete or decoded frames. Presentation intervals describe compositor submission, not physical display. Callback gaps may reflect main-thread scheduling; unobserved callbacks are not decoded frame drops. Capture-to-display is a browser clock-mapping estimate, which the relay can change, not end-to-end latency. Null means unavailable.",
+                    note: "Browser bitrate is RTP payload, including retransmissions. Server byte counts include RTP headers. Stage sample windows are independent; server FPS counts observed RTP timestamps, not complete or decoded frames. Receiver cumulative counters belong to each stats_epoch/stats_id/SSRC; counter regression starts a new counter lifetime. timestamp_ms is the browser RTCStats timestamp; sampled_at is local collection time. Freeze duration is in seconds and browser-reported; freezes in progress may not yet be counted. Presentation intervals describe compositor submission, not physical display. Callback gaps may reflect main-thread scheduling; unobserved callbacks are not decoded frame drops. Capture-to-display is a browser clock-mapping estimate, which the relay can change, not end-to-end latency. Null means unavailable.",
                 };
                 void copyToClipboard(JSON.stringify(payload, null, 2), { success: tLabel("wins.streamCopied"), isCurrent: () => el.isConnected });
             };
@@ -713,6 +714,9 @@ export function createVideoGrid({ applySendCaps, syncCameraButton, syncShareButt
             const stats = await samplePeerStats(request.pc);
             if (!current()) return;
             for (const tile of tiles.values()) {
+                // A binding/peer replacement or stale-sample reset starts a
+                // local epoch, even if the runtime reuses stats IDs and SSRCs.
+                if (tile.diagnosticsPC !== request.pc) tile.diagnosticsEpoch = crypto.randomUUID();
                 tile.diagnostics = summarizeStream(stats, tile.track?.id, tile.diagnosticsPC === request.pc ? tile.diagnostics : null);
                 tile.diagnosticsPC = request.pc;
                 tile.diagnosticsAt = new Date().toISOString();

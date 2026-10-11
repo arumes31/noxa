@@ -86,3 +86,50 @@ test("stream detail intervals never bridge a long pause or mix decoder counter r
         assert.equal(summary.nacks, null);
     }
 });
+
+test("copied receiver counters retain RTP identity, units and lifetime without private stats fields", () => {
+    const row = { id: "inbound-42", type: "inbound-rtp", kind: "video", trackIdentifier: "screen", ssrc: 42,
+        timestamp: 1234.5, framesReceived: 121, framesDecoded: 119, framesDropped: 2, freezeCount: 3,
+        totalFreezesDuration: 1.25, bytesReceived: 5000, remoteId: "private", trackTitle: "private", codecId: "private" };
+    const summarize = (changes, previous) => summarizeStream(new Map([["row", { ...row, ...changes }],
+        ["other", { ...row, id: "other", trackIdentifier: "other-track", freezeCount: 999 }]]), "screen", previous);
+    const first = summarize({});
+    assert.deepEqual(first.cumulative, [{ stats_id: "inbound-42", ssrc: 42, timestamp_ms: 1234.5,
+        frames_received: 121, frames_decoded: 119, frames_dropped: 2, freeze_count: 3, total_freezes_duration_seconds: 1.25 }]);
+    assert.equal(first.freezes, null, "initial cumulative counters are available without inventing interval deltas");
+    const next = summarize({ timestamp: 4234.5, framesDecoded: 299, freezeCount: 4, totalFreezesDuration: 2 }, first);
+    assert.equal(next.freezes, 1);
+    assert.equal(next.cumulative[0].freeze_count, 4);
+    assert.equal(next.cumulative[0].total_freezes_duration_seconds, 2);
+    for (const replacement of [{ id: "replacement" }, { ssrc: 43 }, { framesDecoded: 0, bytesReceived: 0 }]) {
+        const reset = summarize({ timestamp: 7234.5, freezeCount: 0, totalFreezesDuration: 0, ...replacement }, next);
+        assert.equal(reset.freezes, null, "never bridge replaced RTP stats or reset counters");
+        assert.equal(reset.cumulative[0].freeze_count, 0, "a new lifetime retains measured zero");
+        assert.equal(reset.cumulative[0].total_freezes_duration_seconds, 0);
+    }
+});
+
+test("receiver cumulative counters distinguish missing or invalid measurements from zero", () => {
+    const row = { id: "v", type: "inbound-rtp", kind: "video", trackIdentifier: "screen" };
+    const snapshot = values => summarizeStream(new Map([["v", { ...row, ...values }]]), "screen").cumulative[0];
+    const unknown = { stats_id: "v", ssrc: null, timestamp_ms: null, frames_received: null, frames_decoded: null,
+        frames_dropped: null, freeze_count: null, total_freezes_duration_seconds: null };
+    assert.deepEqual(snapshot({}), unknown);
+    for (const value of [null, NaN, Infinity, -1, "0"]) {
+        assert.deepEqual(snapshot({ ssrc: value, timestamp: value, framesReceived: value, framesDecoded: value,
+            framesDropped: value, freezeCount: value, totalFreezesDuration: value }), unknown);
+    }
+    const zero = snapshot({ ssrc: 42, timestamp: 0, framesReceived: 0, framesDecoded: 0,
+        framesDropped: 0, freezeCount: 0, totalFreezesDuration: 0 });
+    assert.equal(zero.timestamp_ms, 0);
+    assert.equal(zero.frames_received, 0);
+    assert.equal(zero.frames_decoded, 0);
+    assert.equal(zero.frames_dropped, 0);
+    assert.equal(zero.freeze_count, 0);
+    assert.equal(zero.total_freezes_duration_seconds, 0);
+    assert.equal(snapshot({ id: "x".repeat(161) }).stats_id, null, "do not truncate IDs into ambiguous identities");
+    assert.equal(snapshot({ ssrc: 2 ** 32 }).ssrc, null);
+    assert.equal(snapshot({ framesDecoded: 1.5 }).frames_decoded, null);
+    assert.equal(snapshot({ freezeCount: Number.MAX_SAFE_INTEGER + 1 }).freeze_count, null);
+    assert.deepEqual(summarizeStream(new Map(), "screen").cumulative, []);
+});

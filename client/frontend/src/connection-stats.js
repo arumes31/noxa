@@ -22,6 +22,7 @@ export function summarizeStream(report, trackID, previous) {
     const decoder = [...new Set(rows.map(row => typeof row.decoderImplementation === "string" ? row.decoderImplementation.trim().slice(0, 160) : "").filter(Boolean))].join(" / ") || null;
     return {
         rows, codec: codecs.join(" / ") || null,
+        cumulative: rows.map(receiverCounters),
         bitrate: measured(bytesPerSecond) ? bytesPerSecond * 8 : null,
         bytes: sum(rows, "bytesReceived"), frames: sum(rows, "framesDecoded"), fps: rate(rows, before, "framesDecoded"),
         width: rows.length === 1 && measured(rows[0].frameWidth) ? rows[0].frameWidth : null,
@@ -38,6 +39,20 @@ export function summarizeStream(report, trackID, previous) {
         retransmittedPackets: change(rows, before, "retransmittedPacketsReceived"),
         decoder, powerEfficientDecoder: rows.length && rows.every(row => typeof row.powerEfficientDecoder === "boolean")
             ? rows.every(row => row.powerEfficientDecoder) : null,
+    };
+}
+
+// Preserve each RTP counter lifetime rather than merging old/new receivers.
+// Only opaque stats identity and numeric measurements belong in copied reports.
+function receiverCounters(row) {
+    const counter = value => Number.isSafeInteger(value) && value >= 0 ? value : null;
+    return {
+        stats_id: typeof row.id === "string" && row.id.length > 0 && row.id.length <= 160 ? row.id : null,
+        ssrc: Number.isInteger(row.ssrc) && row.ssrc > 0 && row.ssrc <= 0xffffffff ? row.ssrc : null,
+        timestamp_ms: measured(row.timestamp) ? row.timestamp : null,
+        frames_received: counter(row.framesReceived), frames_decoded: counter(row.framesDecoded),
+        frames_dropped: counter(row.framesDropped), freeze_count: counter(row.freezeCount),
+        total_freezes_duration_seconds: measured(row.totalFreezesDuration) ? row.totalFreezesDuration : null,
     };
 }
 
