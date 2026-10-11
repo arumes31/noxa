@@ -20,7 +20,11 @@ func (w *PeerConnectionWrapper) setVideoBoundsCodecPreferences() error {
 	// as well, so a single sender can switch between its negotiated codecs.
 	orders := make(map[string]map[string]int)
 	if remote := w.pc.RemoteDescription(); remote != nil && w.pc.SignalingState() == webrtc.SignalingStateHaveRemoteOffer {
-		parsed, err := remote.Unmarshal()
+		// Unmarshal replaces the description's cached parse. Pion still reads
+		// its own description from asynchronous transport setup, so parse a
+		// private snapshot instead of mutating that shared object.
+		snapshot := webrtc.SessionDescription{Type: remote.Type, SDP: remote.SDP}
+		parsed, err := snapshot.Unmarshal()
 		if err != nil {
 			return fmt.Errorf("reading offered video codecs: %w", err)
 		}
