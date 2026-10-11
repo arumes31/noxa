@@ -275,6 +275,7 @@ func (t *deadlineVideoTrack) ReadRTP() (*rtp.Packet, interceptor.Attributes, err
 			t.repair = nil
 			return packet, nil, nil
 		}
+		time.Sleep(max(0, time.Until(t.deadline)))
 		return nil, nil, os.ErrDeadlineExceeded
 	}
 	return t.boundsVideoTrack.ReadRTP()

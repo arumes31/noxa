@@ -11,6 +11,11 @@ import (
 
 const videoReorderWait = 200 * time.Millisecond
 
+// Pion polls its separate, bounded RTX queue before blocking on primary RTP;
+// repairs cannot wake that primary read. Service repairs while a gap exists
+// without shortening the reorder window or adding polls to contiguous media.
+const videoRepairPoll = 20 * time.Millisecond
+
 // A 50 Mbps source needs about 1.25 MB and 1,042 ordinary RTP packets for
 // this repair window. Leave bounded headroom for keyframe bursts; a tiny
 // packet cap otherwise abandons gaps before the first NACK can return.
@@ -159,7 +164,13 @@ func readOrderedVideo(track VideoTrackReader, current func() bool, codec func() 
 	deadline, hasDeadline := track.(interface{ SetReadDeadline(time.Time) error })
 	for current() {
 		if hasDeadline {
-			if err := deadline.SetReadDeadline(queue.deadline()); err != nil {
+			readDeadline := queue.deadline()
+			if !readDeadline.IsZero() {
+				if poll := time.Now().Add(videoRepairPoll); poll.Before(readDeadline) {
+					readDeadline = poll
+				}
+			}
+			if err := deadline.SetReadDeadline(readDeadline); err != nil {
 				return
 			}
 		}
@@ -175,8 +186,9 @@ func readOrderedVideo(track VideoTrackReader, current func() bool, codec func() 
 				}
 				// Pion polls its separate RTX queue before blocking on primary
 				// RTP. A repair arriving during that blocked read cannot wake it.
-				// Keep the primary deadline expired while draining queued repairs
-				// before declaring the gap lost; bound work under adversarial input.
+				// Keep the chosen read deadline expired while draining repairs.
+				// A poll timeout is not the gap's abandonment deadline: flush below
+				// still uses the original reorder deadline. Bound draining work.
 				for range videoReorderPackets {
 					repaired, _, repairErr := track.ReadRTP()
 					if !current() {
