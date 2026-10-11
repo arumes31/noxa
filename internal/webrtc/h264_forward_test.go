@@ -73,7 +73,7 @@ func TestH264ForwardAssemblyTimeBounds(t *testing.T) {
 		t.Run(mode, func(t *testing.T) {
 			now := time.Now()
 			var reasons []h264RejectReason
-			frame := h264ForwardFrame{onReject: func(reason h264RejectReason) { reasons = append(reasons, reason) }}
+			frame := h264ForwardFrame{onReject: func(reason h264RejectReason, _ h264DiscontinuityMask) { reasons = append(reasons, reason) }}
 			frame.push(h264ForwardPacket(1, 90, false, 0x7c, 0x81, 1), now)
 			expected := h264RejectIdle
 			if mode == "idle" {

@@ -17,6 +17,14 @@ const h264ForwardMaxWait = 2 * time.Second
 
 type h264RejectReason uint8
 
+type h264DiscontinuityMask uint8
+
+const (
+	h264DiscontinuitySSRC h264DiscontinuityMask = 1 << iota
+	h264DiscontinuityTimestamp
+	h264DiscontinuitySequence
+)
+
 const (
 	h264RejectMalformed h264RejectReason = iota
 	h264RejectCapacity
@@ -36,7 +44,7 @@ type h264ForwardFrame struct {
 	bytes                  int
 	started                time.Time
 	lastPacket             time.Time
-	onReject               func(h264RejectReason)
+	onReject               func(h264RejectReason, h264DiscontinuityMask)
 	ssrc, timestamp        uint32
 	sequence               uint16
 	fragment               byte
@@ -54,8 +62,12 @@ func (f *h264ForwardFrame) clearUnit() {
 }
 
 func (f *h264ForwardFrame) reject(reason h264RejectReason) {
+	f.rejectObserved(reason, 0)
+}
+
+func (f *h264ForwardFrame) rejectObserved(reason h264RejectReason, mask h264DiscontinuityMask) {
 	if f.onReject != nil {
-		f.onReject(reason)
+		f.onReject(reason, mask)
 	}
 	f.rejected, f.rejectedSSRC, f.rejectedTimestamp = true, f.ssrc, f.timestamp
 	f.clearUnit()
@@ -133,7 +145,19 @@ func (f *h264ForwardFrame) push(p *rtp.Packet, now time.Time) (packets []*rtp.Pa
 		return nil, false, lost
 	}
 	if len(f.packets) > 0 && (p.SSRC != f.ssrc || p.Timestamp != f.timestamp || p.SequenceNumber != f.sequence+1) {
-		f.reject(h264RejectDiscontinuity)
+		// Observe the existing rejection predicate without storing packet
+		// identifiers. Simultaneous causes occupy one fixed combination bucket.
+		var mask h264DiscontinuityMask
+		if p.SSRC != f.ssrc {
+			mask |= h264DiscontinuitySSRC
+		}
+		if p.Timestamp != f.timestamp {
+			mask |= h264DiscontinuityTimestamp
+		}
+		if p.SequenceNumber != f.sequence+1 {
+			mask |= h264DiscontinuitySequence
+		}
+		f.rejectObserved(h264RejectDiscontinuity, mask)
 		lost = true
 	}
 	// A later slice cannot make a rejected access unit complete. Keep this

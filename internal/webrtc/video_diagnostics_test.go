@@ -197,12 +197,21 @@ func TestStreamDiagnosticsForwardingFollowsWatchEpochAndPublication(t *testing.T
 	}
 	input := &videoIngressDiagnostic{ssrc: 99, started: time.Now()}
 	input.observe(&rtp.Packet{Header: rtp.Header{Timestamp: 1500}, Payload: []byte{1}}, time.Now())
-	input.rejectH264(h264RejectIdle)
+	input.rejectH264(h264RejectIdle, 0)
+	input.rejectH264(h264RejectDiscontinuity, h264DiscontinuityTimestamp|h264DiscontinuitySequence)
 	r.videoIngress = map[videoIngressKey]*videoIngressDiagnostic{{"publisher", SlotScreen, "f"}: input}
 	registerVideoSource(r, "publisher", SlotScreen, "f", 99)
 	got, err = r.StreamDiagnostics("member", "publisher", SlotScreen, generation, session)
-	if err != nil || len(got.Layers) != 1 || got.Layers[0].H264Rejects == nil || got.Layers[0].H264Rejects.Idle != 1 {
+	if err != nil || len(got.Layers) != 1 || got.Layers[0].H264Rejects == nil || got.Layers[0].H264Rejects.Idle != 1 || got.Layers[0].H264Rejects.DiscontinuityMasks == nil || got.Layers[0].H264Rejects.DiscontinuityMasks[5] != 1 {
 		t.Fatalf("current publication reject counter missing: %+v, %v", got, err)
+	}
+	operator := r.VideoOperatorDiagnostics()
+	if len(operator.Publications) != 1 || len(operator.Publications[0].Layers) != 1 || operator.Publications[0].Layers[0].H264Rejects.DiscontinuityMasks[5] != 1 {
+		t.Fatal("operator diagnostics lost discontinuity combinations")
+	}
+	operator.Publications[0].Layers[0].H264Rejects.DiscontinuityMasks[5] = 99
+	if got.Layers[0].H264Rejects.DiscontinuityMasks[5] != 1 || input.h264RejectSnapshot().DiscontinuityMasks[5] != 1 {
+		t.Fatal("operator and member snapshots share mutable combination counters")
 	}
 	if _, err := r.PublishVideo("publisher", SlotScreen, generation, false); err != nil {
 		t.Fatal(err)
@@ -214,6 +223,10 @@ func TestStreamDiagnosticsForwardingFollowsWatchEpochAndPublication(t *testing.T
 	got, err = r.StreamDiagnostics("member", "publisher", SlotScreen, newGeneration, session)
 	if err != nil || len(got.Layers) != 1 || got.Layers[0].Ingress.Packets != 0 || got.Layers[0].Ingress.FPS != nil || got.Layers[0].H264Rejects != nil {
 		t.Fatalf("reused track retained prior publication counters: %+v, %v", got, err)
+	}
+	operator = r.VideoOperatorDiagnostics()
+	if len(operator.Publications) != 1 || len(operator.Publications[0].Layers) != 1 || operator.Publications[0].Layers[0].H264Rejects != nil {
+		t.Fatal("operator diagnostics retained prior publication combinations")
 	}
 }
 

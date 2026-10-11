@@ -162,6 +162,11 @@ type VideoH264RejectDiagnostics struct {
 	Discontinuity uint64 `json:"discontinuity"`
 	Idle          uint64 `json:"idle"`
 	Age           uint64 `json:"age"`
+	// Index is mask-1, with SSRC=1, timestamp=2, sequence=4. Each existing
+	// discontinuity contributes to exactly one of seven combination counters.
+	// These are unfinished-access-unit transitions, not network loss counts.
+	// Absent means unavailable; lifetime/reset/access scope match the aggregate.
+	DiscontinuityMasks *[7]uint64 `json:"discontinuity_masks,omitempty"`
 }
 
 type VideoStreamLayerDiagnostics struct {

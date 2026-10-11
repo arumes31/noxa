@@ -108,11 +108,11 @@ type videoIngressDiagnostic struct {
 	h264Rejects *netproto.VideoH264RejectDiagnostics
 }
 
-func (d *videoIngressDiagnostic) rejectH264(reason h264RejectReason) {
+func (d *videoIngressDiagnostic) rejectH264(reason h264RejectReason, mask h264DiscontinuityMask) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if d.h264Rejects == nil {
-		d.h264Rejects = &netproto.VideoH264RejectDiagnostics{}
+		d.h264Rejects = &netproto.VideoH264RejectDiagnostics{DiscontinuityMasks: &[7]uint64{}}
 	}
 	switch reason {
 	case h264RejectMalformed:
@@ -121,6 +121,9 @@ func (d *videoIngressDiagnostic) rejectH264(reason h264RejectReason) {
 		d.h264Rejects.Capacity++
 	case h264RejectDiscontinuity:
 		d.h264Rejects.Discontinuity++
+		if mask > 0 && mask <= 7 {
+			d.h264Rejects.DiscontinuityMasks[mask-1]++
+		}
 	case h264RejectIdle:
 		d.h264Rejects.Idle++
 	case h264RejectAge:
@@ -134,6 +137,10 @@ func (d *videoIngressDiagnostic) h264RejectSnapshot() *netproto.VideoH264RejectD
 		return nil
 	}
 	copy := *d.h264Rejects
+	if copy.DiscontinuityMasks != nil {
+		masks := *copy.DiscontinuityMasks
+		copy.DiscontinuityMasks = &masks
+	}
 	return &copy
 }
 
