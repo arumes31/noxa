@@ -54,6 +54,7 @@ type VideoPacerDiagnostics struct {
 	DroppedExpired     uint64 `json:"dropped_expired"`
 	DroppedRetired     uint64 `json:"dropped_retired"`
 	DroppedScope       uint64 `json:"dropped_scope"`
+	CoalescedRepairs   uint64 `json:"coalesced_repairs,omitempty"`
 	SentPackets        uint64 `json:"sent_packets"`
 	SentBytes          uint64 `json:"sent_bytes"`
 	FinalWriteFailures uint64 `json:"final_write_failures"`

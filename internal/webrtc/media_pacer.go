@@ -33,6 +33,7 @@ type pacedStream struct {
 	bindingID string
 	twccID    uint8
 	audio     bool
+	rtxSSRC   uint32
 }
 type pacedPacket struct {
 	header  rtp.Header
@@ -41,6 +42,7 @@ type pacedPacket struct {
 	stream  *pacedStream
 	expires time.Time
 	size    int
+	repair  mediaRepairKey
 }
 
 // mediaPacer always queues, even with no backlog: StaticRTP holds its track
@@ -60,7 +62,8 @@ type mediaPacer struct {
 	sent                              uint64 // historyMu covers insertion and feedback delivery
 	audioQueue                        [mediaAudioPackets]pacedPacket
 	audioHead, audioCount, audioBytes int
-	diagnostics                       mediaPacerCounters // protected by mu; video only
+	diagnostics                       mediaPacerCounters          // protected by mu; video only
+	queuedRepairs                     map[mediaRepairKey]struct{} // protected by mu; bounded by video queue
 	videoStarted                      atomic.Bool
 	startVideoProbe                   func(int) bool // installed before binding a stream
 }
@@ -90,6 +93,7 @@ func (p *mediaPacer) addRTX(ssrc, rtx uint32) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if stream := p.streams[ssrc]; stream != nil {
+		stream.rtxSSRC = rtx
 		p.streams[rtx] = stream
 	}
 }
@@ -142,6 +146,13 @@ func (p *mediaPacer) Write(header *rtp.Header, payload []byte, attrs interceptor
 		}
 		return size, nil
 	}
+	repair := queuedRepairKey(stream, header, payload)
+	if repair.stream != nil {
+		if _, queued := p.queuedRepairs[repair]; queued {
+			p.diagnostics.coalescedRepairs++
+			return size, nil
+		}
+	}
 	if stream.audio {
 		if p.audioCount == mediaAudioPackets || p.audioBytes+size > mediaAudioBytes {
 			return size, nil
@@ -154,7 +165,7 @@ func (p *mediaPacer) Write(header *rtp.Header, payload []byte, attrs interceptor
 	for key, value := range attrs {
 		attributes[key] = value
 	}
-	packet := pacedPacket{header: header.Clone(), payload: append([]byte(nil), payload...), attrs: attributes, stream: stream, expires: time.Now().Add(mediaPacerLifetime), size: size}
+	packet := pacedPacket{header: header.Clone(), payload: append([]byte(nil), payload...), attrs: attributes, stream: stream, expires: time.Now().Add(mediaPacerLifetime), size: size, repair: repair}
 	if stream.audio {
 		packet.expires = time.Now().Add(mediaAudioLifetime)
 		p.pushAudioLocked(packet)
@@ -183,6 +194,12 @@ func (p *mediaPacer) pushLocked(packet pacedPacket) {
 	p.queue[(p.head+p.count)%mediaPacerPackets] = packet
 	p.count++
 	p.bytes += packet.size
+	if packet.repair.stream != nil {
+		if p.queuedRepairs == nil {
+			p.queuedRepairs = make(map[mediaRepairKey]struct{})
+		}
+		p.queuedRepairs[packet.repair] = struct{}{}
+	}
 }
 func (p *mediaPacer) popLocked() pacedPacket {
 	packet := p.queue[p.head]
@@ -190,6 +207,7 @@ func (p *mediaPacer) popLocked() pacedPacket {
 	p.head = (p.head + 1) % mediaPacerPackets
 	p.count--
 	p.bytes -= packet.size
+	delete(p.queuedRepairs, packet.repair)
 	return packet
 }
 
@@ -297,6 +315,7 @@ func (p *mediaPacer) Close() error {
 		}
 		clear(p.streams)
 		clear(p.queue[:])
+		clear(p.queuedRepairs)
 		p.count, p.bytes = 0, 0
 		clear(p.audioQueue[:])
 		p.audioCount, p.audioBytes = 0, 0

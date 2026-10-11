@@ -8,6 +8,7 @@ import (
 
 type mediaPacerCounters struct {
 	droppedQueueFull, droppedExpired, droppedRetired, droppedScope uint64
+	coalescedRepairs                                               uint64
 	sentPackets, sentBytes, finalWriteFailures, feedbackReports    uint64
 	lastFeedback                                                   time.Time
 }
@@ -44,7 +45,8 @@ func (p *mediaPacer) diagnosticSnapshot(now time.Time) *netproto.VideoPacerDiagn
 		TargetBitrateBPS: p.bitrate, QueuedPackets: p.count, QueuedBytes: p.bytes,
 		DroppedQueueFull: d.droppedQueueFull, DroppedExpired: d.droppedExpired,
 		DroppedRetired: d.droppedRetired, DroppedScope: d.droppedScope,
-		SentPackets: d.sentPackets, SentBytes: d.sentBytes, FinalWriteFailures: d.finalWriteFailures,
+		CoalescedRepairs: d.coalescedRepairs,
+		SentPackets:      d.sentPackets, SentBytes: d.sentBytes, FinalWriteFailures: d.finalWriteFailures,
 		FeedbackReports: d.feedbackReports,
 	}
 	if p.count > 0 {
