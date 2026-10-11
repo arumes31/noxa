@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { counterDelta, counterRate } from './browser_fanout_metrics.mjs';
 const frontend = fileURLToPath(new URL('../../../client/frontend/', import.meta.url));
 const require = createRequire(`${frontend}/package.json`);
 const { chromium, expect } = require('@playwright/test');
@@ -11,7 +12,10 @@ const [width, height, fps] = process.argv.slice(3).map(Number);
 const configuration = process.argv[7] ? JSON.parse(process.argv[7]) : { capacity: false, viewers: 3, stageSeconds: 15, slowWriteMS: 0 };
 if (configuration.capacity && (![1, 5, 20].includes(configuration.viewers) || !Number.isInteger(configuration.stageSeconds) || configuration.stageSeconds < 10 || configuration.stageSeconds > 60 ||
     !Number.isInteger(configuration.slowWriteMS) || configuration.slowWriteMS < 0 || configuration.slowWriteMS > 20 || (configuration.slowWriteMS && configuration.viewers < 5))) throw new Error('Invalid bounded capacity profile');
-const profile = configuration.capacity ? 'pan-capacity' : 'pan';
+const workload = configuration.workload || 'pan';
+if (!['pan', 'desktop'].includes(workload) || (workload === 'desktop' && (!configuration.capacity || configuration.stageSeconds !== 60))) throw new Error('Desktop workload requires complete 60-second capacity stages');
+const profile = configuration.capacity ? `${workload}-capacity` : 'pan';
+const desktopModule = workload === 'desktop' ? fs.readFileSync(new URL('./browser_desktop_workload.mjs', import.meta.url), 'utf8') : null;
 if (configuration.codec && (!configuration.capacity || !['h264', 'vp8'].includes(configuration.codec))) throw new Error('Unsupported requested test codec');
 const output = process.argv[6];
 const vite = await createServer({ root: frontend, logLevel: 'error', server: { host: '127.0.0.1', port: 0, hmr: false } });
@@ -55,6 +59,7 @@ try {
         const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
         context.on('weberror', event => errors.push(String(event.error())));
         const page = await context.newPage();
+        if (desktopModule) await page.route('**/fanout-workload.js', route => route.fulfill({ contentType: 'text/javascript', body: desktopModule }));
         await page.route('**/fanout-fixture', route => route.fulfill({ contentType: 'text/html', body: `<!doctype html>
             <button id="voice-screen">Share</button><button id="voice-video">Camera</button>
             <video id="local-video"></video><div id="mic-status"></div><button id="ptt-btn">Talk</button>
@@ -74,7 +79,7 @@ try {
         return page;
     }
     publisher = await fixture();
-    await publisher.evaluate(async ({ width, height, fps, capacity, codec }) => {
+    await publisher.evaluate(async ({ width, height, fps, capacity, codec, workload }) => {
         const pc = new RTCPeerConnection({ iceServers: [] });
         if (codec) {
             const { preferPublicationCodec } = await import('/src/video-codecs.js');
@@ -101,12 +106,27 @@ try {
         textureContext.putImageData(pixels, 0, 0);
         const ctx = canvas.getContext('2d'); ctx.imageSmoothingEnabled = false;
         let frame = 0;
-        setInterval(() => {
+        const start = performance.now();
+        window.sourceWorkload = { name: workload, width, height, requested_fps: fps, drawn_frames: 0 };
+        const sourceState = (now, phase) => Object.assign(window.sourceWorkload, { drawn_frames: frame, elapsed_ms: now - start,
+            phase: phase?.name || 'pan', phase_elapsed_ms: phase?.phase_elapsed_ms ?? now - start, cycle: phase?.cycle ?? 0 });
+        if (workload === 'desktop') {
+            const { drawDesktopScene } = await import('/fanout-workload.js');
+            let last = 0;
+            const draw = now => {
+                requestAnimationFrame(draw);
+                if (last && now - last < 1000 / fps - 1) return;
+                last = now; frame++;
+                sourceState(now, drawDesktopScene(ctx, now - start, width, height));
+            };
+            requestAnimationFrame(draw);
+        } else setInterval(() => {
             frame++;
             const shift = (frame * 13) % width;
             ctx.drawImage(texture, shift, 0, width, height); ctx.drawImage(texture, shift - width, 0, width, height);
             ctx.fillStyle = '#072530'; ctx.fillRect(0, 0, 600, 80);
             ctx.fillStyle = '#40e2fa'; ctx.font = '48px sans-serif'; ctx.fillText(`Synthetic ${frame}`, 20, 60);
+            sourceState(performance.now());
         }, 1000 / fps);
         const localStream = new MediaStream();
         window.__noxa = { state: { pc, localStream, serverGeneration: 1, sessionGeneration: 1,
@@ -129,7 +149,7 @@ try {
         const publication = createVideoPublication({ policy: { lowBandwidth: false } });
         (await import('/src/modal.js')).initModalSystem();
         document.getElementById('voice-screen').onclick = () => publication.shareToggle();
-    }, { width, height, fps, capacity: configuration.capacity, codec: configuration.codec });
+    }, { width, height, fps, capacity: configuration.capacity, codec: configuration.codec, workload });
     await publisher.locator('#voice-screen').click();
     await publisher.locator('.sh-preset').selectOption(fps === 60 ? 'hdMotion' : 'original');
     await publisher.getByRole('button', { name: 'Start sharing', exact: true }).click();
@@ -145,11 +165,13 @@ try {
     async function receiver(id) {
         const startedAt = Date.now();
         const page = await fixture();
-        await page.evaluate(async id => {
+        await page.evaluate(async ({ id, capacity }) => {
             const { observeVideoPresentation } = await import('/src/video-presentation-timing.js');
             const pc = new RTCPeerConnection({ iceServers: [] });
             window.receiver = pc;
             window.presentationObservers = new Map();
+            window.presentationCounts = new Map();
+            window.presentationEpoch = 0;
             pc.ontrack = ({ track }) => {
                 if (track.kind === 'audio') {
                     const audio = document.createElement('audio'); audio.muted = true; audio.autoplay = true;
@@ -159,11 +181,22 @@ try {
                 const video = [...document.querySelectorAll('video')].find(element => element.srcObject?.getVideoTracks()[0]?.id === track.id) || document.createElement('video');
                 window.presentationObservers.get(video)?.dispose();
                 video.muted = true; video.autoplay = true; video.playsInline = true; video.style.width = '960px';
+                // Reserved camera tracks stay attached, but must not push the
+                // actual capacity-test video below the viewport and suppress
+                // autoplay/presentation. Legacy pan layout stays unchanged.
+                if (capacity && track.id === 'a|screen') Object.assign(video.style, {
+                    position: 'fixed', left: '0', top: '0', width: '960px', height: '540px', zIndex: '1', objectFit: 'contain',
+                });
                 video.srcObject = new MediaStream([track]); document.body.append(video);
                 const stream = video.srcObject;
+                const callbacks = { count: 0, epoch: ++window.presentationEpoch };
+                window.presentationCounts.set(video, callbacks);
                 window.presentationObservers.set(video, observeVideoPresentation(video, {
                     track, visibility: document, isCurrent: () => video.srcObject === stream,
-                    onFrame: () => { window.firstFrameAt ||= Date.now(); },
+                    onFrame: () => {
+                        callbacks.count++;
+                        if (!capacity || track.id === 'a|screen') window.firstFrameAt ||= Date.now();
+                    },
                 }));
             };
             window.negotiate = async () => {
@@ -172,7 +205,7 @@ try {
                 await window.request('answer', { id, sdp: pc.localDescription.sdp });
             };
             await window.negotiate();
-        }, id);
+        }, { id, capacity: configuration.capacity });
         joins.push({ id, startedAt, connectedAt: Date.now() });
         receivers.push({ id, page });
         await refresh();
@@ -187,6 +220,15 @@ try {
     }
     const capture = page => page.evaluate(async () => {
         const pc = window.receiver || window.__noxa.state.pc;
+        const viewport = video => {
+            const rect = video.getBoundingClientRect(), style = getComputedStyle(video);
+            const intersection = Math.max(0, Math.min(rect.right, innerWidth) - Math.max(rect.left, 0)) *
+                Math.max(0, Math.min(rect.bottom, innerHeight) - Math.max(rect.top, 0));
+            return { x: rect.x, y: rect.y, width: rect.width, height: rect.height,
+                viewport_width: innerWidth, viewport_height: innerHeight,
+                intersection_ratio: rect.width > 0 && rect.height > 0 ? intersection / (rect.width * rect.height) : 0,
+                style_visible: style.display !== 'none' && style.visibility === 'visible' && Number(style.opacity) > 0 };
+        };
         const keys = ['id', 'type', 'timestamp', 'kind', 'ssrc', 'rid', 'active', 'trackIdentifier', 'codecId', 'mediaSourceId',
             'width', 'height', 'frameWidth', 'frameHeight', 'frames', 'framesPerSecond', 'framesEncoded', 'framesSent', 'framesReceived', 'framesDecoded', 'framesDropped',
             'bytesSent', 'bytesReceived', 'packetsSent', 'packetsReceived', 'packetsLost', 'retransmittedBytesSent', 'retransmittedPacketsSent',
@@ -198,17 +240,25 @@ try {
             'powerEfficientEncoder', 'powerEfficientDecoder', 'totalProcessingDelay',
             'currentRoundTripTime', 'availableOutgoingBitrate', 'availableIncomingBitrate', 'state', 'nominated'];
         return { at: Date.now(), state: pc.connectionState, firstFrameAt: window.firstFrameAt || null, visibility: document.visibilityState,
+            workload: window.sourceWorkload ? { ...window.sourceWorkload } : null,
             encodings: window.__noxa?.state.shareVideoTransceiver.sender.getParameters().encodings,
             sourceSettings: window.__noxa?.state.shareVideoTransceiver.sender.track ? ((settings) => ({ width: settings.width, height: settings.height, frameRate: settings.frameRate }))(window.__noxa.state.shareVideoTransceiver.sender.track.getSettings()) : null,
             rows: [...(await pc.getStats()).values()].filter(row => ['outbound-rtp', 'inbound-rtp', 'media-source', 'codec', 'candidate-pair'].includes(row.type))
                 .map(row => Object.fromEntries(keys.filter(key => row[key] !== undefined).map(key => [key, row[key]]))),
             playback: [...document.querySelectorAll('video')].filter(video => video.srcObject).map(video => ({
                 id: video.srcObject.getVideoTracks()[0]?.id, width: video.videoWidth, height: video.videoHeight, paused: video.paused,
+                ready_state: video.readyState, viewport: viewport(video),
+                observed_presentation_callbacks: window.presentationCounts?.get(video)?.count ?? null,
+                presentation_epoch: window.presentationCounts?.get(video)?.epoch ?? null,
                 presentation: window.presentationObservers?.get(video)?.snapshot(performance.now()) ?? null,
                 total: video.getVideoPlaybackQuality().totalVideoFrames, dropped: video.getVideoPlaybackQuality().droppedVideoFrames })) };
     });
     async function sample(stage, seconds) {
-        for (let second = 0; second < seconds; second++) {
+        const completeCycle = workload === 'desktop' && ['capacity', 'slow-writer', 'recovery'].includes(stage);
+        let firstAt;
+        // N interval samples normally span N-1 seconds. Desktop scoring needs
+        // an endpoint at least a whole 60-second cycle after its baseline.
+        for (let second = 0; second < seconds || (completeCycle && samples.at(-1).sender.at - firstAt < seconds * 1000); second++) {
             const started = Date.now();
             const sender = await capture(publisher);
             assert.equal(sender.encodings?.length, 1, 'one source encoding throughout the run');
@@ -227,6 +277,7 @@ try {
                 return { id, ...measured, server, pacer, operator: diagnostic };
             }));
             samples.push({ stage, sender, receivers: received });
+            firstAt ??= sender.at;
             if (second % 5 === 0) console.log(`${stage} ${second}s: sender ${sender.rows.find(row => row.type === 'outbound-rtp')?.framesPerSecond ?? '?'} fps`);
             await new Promise(resolve => setTimeout(resolve, Math.max(0, 1000 - (Date.now() - started))));
         }
@@ -264,12 +315,18 @@ try {
         await sample('capacity', configuration.stageSeconds);
         if (configuration.slowWriteMS) {
             const slow = receivers.at(-1);
-            impairments.push({ stage: 'slow-writer', id: slow.id, at: Date.now(), ...await slow.page.evaluate(id => window.request('impairment', { id, active: true }), slow.id) });
+            const setImpairment = async active => {
+                const requestedAt = Date.now();
+                const result = await slow.page.evaluate(({ id, active }) => window.request('impairment', { id, active }), { id: slow.id, active });
+                impairments.push({ stage: active ? 'slow-writer' : 'recovery', id: slow.id, at: requestedAt,
+                    requestedAt, acknowledgedAt: Date.now(), ...result });
+            };
+            await setImpairment(true);
             try {
                 await sample('slow-writer', configuration.stageSeconds);
                 assert.ok(Date.now() < impairments[0].expires_at_ms, 'scored slow stage completed before automatic impairment expiry');
             }
-            finally { impairments.push({ stage: 'recovery', id: slow.id, at: Date.now(), ...await slow.page.evaluate(id => window.request('impairment', { id, active: false }), slow.id) }); }
+            finally { await setImpairment(false); }
             await sample('recovery', configuration.stageSeconds);
             assert.ok(impairments.at(-1).delayed_packets > impairments[0].delayed_packets, 'slow-writer fixture actually delayed video packets');
         }
@@ -286,21 +343,30 @@ try {
         for (const stage of stages) {
             const measured = samples.filter(sample => sample.stage === stage);
             assert.ok(measured.length >= 2 && measured.at(-1).sender.at - measured[0].sender.at >= 5000, `${stage}: sufficient measured window`);
+            if (workload === 'desktop') assert.ok(measured.at(-1).sender.at - measured[0].sender.at >= 60000, `${stage}: complete desktop cycle between baseline and endpoint`);
             const source = sample => sample.sender.rows.find(row => row.type === 'outbound-rtp' && row.kind === 'video');
-            const sentFrames = source(measured.at(-1)).framesEncoded - source(measured[0]).framesEncoded;
+            const sentFrames = counterDelta(measured.map(source), 'framesEncoded', ['id', 'ssrc']);
             assert.ok(sentFrames >= 120, `${stage}: sustained source frames`);
             for (const sample of measured) {
                 assert.equal(source(sample).frameWidth, width, `${stage}: source preserves requested width`);
                 assert.equal(source(sample).frameHeight, height, `${stage}: source preserves requested height`);
             }
+            if (workload === 'desktop') assert.deepEqual([...new Set(measured.map(sample => sample.sender.workload.phase))].sort(),
+                ['motion', 'scrolling-text', 'static-text'], `${stage}: all desktop phases measured`);
             const healthy = stage === 'slow-writer' ? receivers.slice(0, -1) : receivers;
             for (const { id } of healthy) {
                 const inbound = sample => sample.receivers.find(receiver => receiver.id === id).rows.find(row => row.type === 'inbound-rtp' && row.trackIdentifier === 'a|screen');
                 for (const sample of measured) {
                     assert.equal(inbound(sample)?.frameWidth, width, `${stage}/${id}: actual decoded width`);
                     assert.equal(inbound(sample)?.frameHeight, height, `${stage}/${id}: actual decoded height`);
+                    const received = sample.receivers.find(receiver => receiver.id === id);
+                    const playback = received.playback.find(video => video.id === 'a|screen');
+                    assert.ok(received.visibility === 'visible' && playback && !playback.paused && playback.ready_state >= 2 &&
+                        playback.viewport.style_visible && playback.viewport.intersection_ratio >= .999,
+                    `${stage}/${id}: actual screen plays fully inside the fixture viewport`);
                 }
-                assert.ok((inbound(measured.at(-1)).framesDecoded - inbound(measured[0]).framesDecoded) / sentFrames >= .85, `${stage}/${id}: transport capacity floor (not 60fps presentation acceptance)`);
+                const decodedFrames = counterDelta(measured.map(inbound), 'framesDecoded', ['id', 'ssrc']);
+                assert.ok(decodedFrames !== null && decodedFrames / sentFrames >= .85, `${stage}/${id}: transport capacity floor (not 60fps presentation acceptance)`);
             }
         }
     }
@@ -358,22 +424,46 @@ try {
         const scored = scoring ? (configuration.capacity ? rows : rows.slice(-10)) : [];
         const source = row => row.sender.rows.find(value => value.type === 'outbound-rtp' && value.kind === 'video');
         const seconds = (rows.at(-1).sender.at - rows[0].sender.at) / 1000;
-        const sentFrames = source(rows.at(-1))?.framesEncoded - source(rows[0])?.framesEncoded;
+        const sentFrames = counterDelta(rows.map(source), 'framesEncoded', ['id', 'ssrc']);
+        const capture = row => row.sender.rows.find(value => value.type === 'media-source' && value.kind === 'video');
+        const captureFrames = counterDelta(rows.map(capture), 'frames', ['id']);
         const finite = value => Number.isFinite(value) ? value : null;
         const delivery = rows.at(-1).receivers.map(receiver => {
             const first = rows[0].receivers.find(value => value.id === receiver.id);
             const inbound = value => value?.rows.find(row => row.type === 'inbound-rtp' && row.trackIdentifier === 'a|screen');
-            const before = inbound(first), after = inbound(receiver);
-            const frames = after?.framesDecoded - before?.framesDecoded;
-            return { id: receiver.id, decodedFPS: finite(frames / seconds), decodedSourceRatio: sentFrames > 0 ? finite(frames / sentFrames) : null,
-                freezes: finite(after?.freezeCount - before?.freezeCount), freezeSeconds: finite(after?.totalFreezesDuration - before?.totalFreezesDuration) };
+            const receiverRows = rows.map(row => row.receivers.find(value => value.id === receiver.id));
+            const inboundRows = receiverRows.map(inbound);
+            const frames = counterDelta(inboundRows, 'framesDecoded', ['id', 'ssrc']);
+            const receiverSeconds = (receiver.at - first?.at) / 1000;
+            const playbackRows = receiverRows.map(row => row?.playback.find(video => video.id === 'a|screen'));
+            const change = field => counterDelta(playbackRows, field, ['id', 'presentation_epoch']);
+            const playbackTotal = change('total'), playbackDropped = change('dropped');
+            const callbacks = change('observed_presentation_callbacks');
+            const nonDropped = playbackTotal !== null && playbackDropped !== null && playbackDropped <= playbackTotal ? playbackTotal - playbackDropped : null;
+            const decodedFPS = counterRate(frames, receiverSeconds), playbackFPS = counterRate(nonDropped, receiverSeconds);
+            return { id: receiver.id, sampleSeconds: finite(receiverSeconds), decodedFPS,
+                decodedSourceRatio: frames !== null && sentFrames > 0 ? frames / sentFrames : null,
+                decodedTargetRatio: decodedFPS === null ? null : decodedFPS / fps,
+                playbackTotalDelta: playbackTotal, playbackDroppedDelta: playbackDropped,
+                playbackNonDroppedFPS: playbackFPS,
+                playbackNonDroppedTargetRatio: playbackFPS === null ? null : playbackFPS / fps,
+                observedPresentationCallbacksDelta: callbacks,
+                observedPresentationCallbacksFPS: counterRate(callbacks, receiverSeconds),
+                freezes: counterDelta(inboundRows, 'freezeCount', ['id', 'ssrc']),
+                freezeSeconds: counterDelta(inboundRows, 'totalFreezesDuration', ['id', 'ssrc']) };
         });
         return { stage, startAt: rows[0].sender.at, endAt: rows.at(-1).sender.at, samples: rows.length,
             scoring, scoredSamples: scored.length, scoredStartAt: scored[0]?.sender.at ?? null, scoredEndAt: scored.at(-1)?.sender.at ?? null,
-            fullStageEncodedFPS: finite(sentFrames / seconds), fullStageDelivery: delivery };
+            workload, phases: [...new Set(rows.map(row => row.sender.workload?.phase).filter(Boolean))],
+            // Draw/capture/encode/decode rates are separate observations; none
+            // alone establishes that the physical display presented at 60fps.
+            fullStageDrawnFPS: counterRate(counterDelta(rows.map(row => row.sender.workload), 'drawn_frames', ['name']), seconds),
+            fullStageCaptureFPS: counterRate(captureFrames, seconds), fullStageCaptureTargetRatio: captureFrames === null ? null : counterRate(captureFrames / fps, seconds),
+            fullStageEncodedFPS: counterRate(sentFrames, seconds), fullStageEncodedTargetRatio: sentFrames === null ? null : counterRate(sentFrames / fps, seconds),
+            fullStageDelivery: delivery };
       });
       fs.writeFileSync(output, JSON.stringify({ profile, configuration, width, height, fps, joins, impairments, stageWindows, errors, failure, samples,
-        note: 'Real Chromium encoding and decoding of a synthetic canvas over a local SFU; all contexts share this host. This is not native display capture or proof of GPU acceleration. One source encoding/upload. The 85% decoded/source ratio is a transport capacity floor, not 1080p60 or 95% presentation acceptance; >=15fps warmup is fixture viability only. Slow-writer mode delays only one local video writer, not network jitter. Presentation percentiles are overlapping bounded windows, not a whole-run distribution.' }, null, 2));
+        note: 'Real Chromium encoding and decoding of a synthetic canvas over a local SFU; all contexts share this host. This is not native display capture or proof of GPU acceleration. One source encoding/upload. Capacity video is displayed at 960x540 in a 1280x800 headless viewport; intersection is geometric, not proof of lack of occlusion or physical display. Playback non-dropped rates subtract droppedVideoFrames from totalVideoFrames as a browser quality-counter proxy, not physical display frames. Observed presentation callbacks can miss compositor submissions and are not a complete frame count. Receiver rates use receiver-local sample intervals; decoded/source ratios compare frame-count deltas from separately sampled windows. Missing counters, identity changes or observed intermediate counter regressions invalidate the affected stage aggregate. presentation_epoch identifies observer binding, not rolling timing-window resets. freezeSeconds is browser-reported duration of freezes completed in the sampled window, including any part before the stage; an ongoing freeze may only be reported later. Impairment at/requestedAt precede the request; acknowledgedAt follows its response. Desktop adapts the native 20s static-text/20s scrolling-text/20s motion pattern; elapsed-time labels replace UTC and measured-FPS labels, so pixels are not identical. Pan remains the original high-entropy workload. The 85% decoded/source ratio is a transport capacity floor, not 1080p60 or 95% presentation acceptance; >=15fps warmup is fixture viability only. Slow-writer mode delays only one local video writer, not network jitter. Presentation percentiles are overlapping bounded windows, not a whole-run distribution.' }, null, 2));
     } finally {
         try { await closeBrowser(); } finally { await bounded(() => vite.close(), 3000, 'fixture server close'); }
     }

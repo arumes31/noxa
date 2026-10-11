@@ -25,6 +25,8 @@ import (
 // NOXA_BROWSER_MEDIA_VIEWERS=1|5|20 selects a shared-host capacity profile.
 // NOXA_BROWSER_MEDIA_STAGE_SECONDS=10..60 (default 15) controls each stage.
 // NOXA_BROWSER_MEDIA_CODEC=h264|vp8 pins and verifies the capacity test codec.
+// NOXA_BROWSER_MEDIA_WORKLOAD=desktop selects the native scene's three 20-second
+// phases with complete 60-second scoring stages. Default pan remains unchanged.
 // NOXA_BROWSER_MEDIA_SLOW_WRITE_MS=1..20 delays only the last viewer's video
 // writer during a bounded middle stage. This is not network jitter emulation.
 func TestBrowserHighMotionFanout(t *testing.T) {
@@ -35,7 +37,7 @@ func TestBrowserHighMotionFanout(t *testing.T) {
 }
 
 func runBrowserHighMotionFanout(t *testing.T, width, height, fps int) {
-	profile, err := parseBrowserFanoutProfile(os.Getenv("NOXA_BROWSER_MEDIA_VIEWERS"), os.Getenv("NOXA_BROWSER_MEDIA_STAGE_SECONDS"), os.Getenv("NOXA_BROWSER_MEDIA_SLOW_WRITE_MS"), os.Getenv("NOXA_BROWSER_MEDIA_CODEC"))
+	profile, err := parseBrowserFanoutProfile(os.Getenv("NOXA_BROWSER_MEDIA_VIEWERS"), os.Getenv("NOXA_BROWSER_MEDIA_STAGE_SECONDS"), os.Getenv("NOXA_BROWSER_MEDIA_SLOW_WRITE_MS"), os.Getenv("NOXA_BROWSER_MEDIA_CODEC"), os.Getenv("NOXA_BROWSER_MEDIA_WORKLOAD"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -248,7 +250,7 @@ func runBrowserHighMotionFanout(t *testing.T, width, height, fps int) {
 		}
 		name := "browser-fanout-stats.json"
 		if profile.Capacity {
-			name = "browser-fanout-" + strconv.Itoa(profile.Viewers) + "-viewers-" + profile.Codec + "-slow-" + strconv.Itoa(profile.SlowWriteMS) + "ms-stats.json"
+			name = "browser-fanout-" + profile.Workload + "-" + strconv.Itoa(profile.Viewers) + "-viewers-" + profile.Codec + "-slow-" + strconv.Itoa(profile.SlowWriteMS) + "ms-stats.json"
 		}
 		resultPath = filepath.Join(directory, name)
 	}

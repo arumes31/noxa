@@ -23,12 +23,25 @@ type browserFanoutProfile struct {
 	StageSeconds int    `json:"stageSeconds"`
 	SlowWriteMS  int    `json:"slowWriteMS"`
 	Codec        string `json:"codec"`
+	Workload     string `json:"workload"`
 }
 
-func parseBrowserFanoutProfile(viewers, seconds, delay string, codec ...string) (browserFanoutProfile, error) {
-	p := browserFanoutProfile{Viewers: 3, StageSeconds: 15}
-	if len(codec) > 0 {
-		p.Codec = codec[0]
+func parseBrowserFanoutProfile(viewers, seconds, delay string, options ...string) (browserFanoutProfile, error) {
+	p := browserFanoutProfile{Viewers: 3, StageSeconds: 15, Workload: "pan"}
+	if len(options) > 0 {
+		p.Codec = options[0]
+	}
+	if len(options) > 1 && options[1] != "" {
+		p.Workload = options[1]
+	}
+	if p.Workload != "pan" && (viewers == "" || p.Workload != "desktop") {
+		return p, errors.New("NOXA_BROWSER_MEDIA_WORKLOAD must be pan or desktop; desktop requires capacity mode")
+	}
+	if p.Workload == "desktop" {
+		p.StageSeconds = 60
+		if seconds != "" && seconds != "60" {
+			return p, errors.New("desktop workload requires 60-second stages to measure all three phases")
+		}
 	}
 	if p.Codec != "" && (viewers == "" || p.Codec != "h264" && p.Codec != "vp8") {
 		return p, errors.New("NOXA_BROWSER_MEDIA_CODEC requires capacity mode and h264 or vp8")
@@ -135,6 +148,21 @@ func TestBrowserFanoutProfileBounds(t *testing.T) {
 		if _, err := parseBrowserFanoutProfile(values[0], "", "", values[1]); err == nil {
 			t.Fatalf("accepted invalid codec profile %v", values)
 		}
+	}
+	for _, viewers := range []string{"1", "5", "20"} {
+		profile, err := parseBrowserFanoutProfile(viewers, "", "", "h264", "desktop")
+		if err != nil || profile.Workload != "desktop" || profile.StageSeconds != 60 {
+			t.Fatalf("desktop profile lost complete phase coverage: %+v, %v", profile, err)
+		}
+	}
+	for _, values := range [][3]string{{"", "", "desktop"}, {"1", "10", "desktop"}, {"1", "60", "unknown"}} {
+		if _, err := parseBrowserFanoutProfile(values[0], values[1], "", "", values[2]); err == nil {
+			t.Fatalf("accepted incomplete/unknown workload %v", values)
+		}
+	}
+	legacy, err := parseBrowserFanoutProfile("", "", "")
+	if err != nil || legacy.Capacity || legacy.Workload != "pan" || legacy.StageSeconds != 15 {
+		t.Fatalf("legacy high-entropy pan changed: %+v, %v", legacy, err)
 	}
 }
 
