@@ -29,7 +29,8 @@ func syntheticSRTP(t *testing.T) *srtp.Context {
 
 // Exercise the pinned responder's actual cache and OSN rewriting, the real
 // asynchronous pacer, and SRTP replay protection. Requests deliberately move
-// backward and repeat; cached packet sequence numbers cannot serve as RTX RSNs.
+// backward beyond the 64-packet replay window and repeat; cached packet sequence
+// numbers cannot serve as RTX RSNs, even for a previously unseen repair.
 func TestMediaRTXSequencePinnedResponderAndSRTP(t *testing.T) {
 	factory, err := nack.NewResponderInterceptor()
 	if err != nil {
@@ -68,7 +69,7 @@ func TestMediaRTXSequencePinnedResponderAndSRTP(t *testing.T) {
 	p.rtxSequences[info.SSRCRetransmission].next = 65535
 	writer := responder.BindLocalStream(info, p)
 	originals := map[uint16]rtp.Packet{}
-	for seq := uint16(4000); seq <= 4002; seq++ {
+	for seq := uint16(4000); seq <= 4100; seq++ {
 		packet := rtp.Packet{Header: rtp.Header{Version: 2, SSRC: info.SSRC, PayloadType: info.PayloadType,
 			SequenceNumber: seq, Timestamp: 90000 + uint32(seq-4000)*1500, Marker: true,
 			CSRC: []uint32{0x12345678, uint32(seq)}}, Payload: []byte{0x65, byte(seq >> 8), byte(seq), 0xde, 0xad, 0xbe, 0xef}}
@@ -84,7 +85,9 @@ func TestMediaRTXSequencePinnedResponderAndSRTP(t *testing.T) {
 	reader := responder.BindRTCPReader(interceptor.RTCPReaderFunc(func(out []byte, attrs interceptor.Attributes) (int, interceptor.Attributes, error) {
 		return copy(out, incoming), attrs, nil
 	}))
-	for index, osn := range []uint16{4002, 4000, 4000, 4001, 4000} {
+	// The first repair of 4000 is 100 cached RSNs behind 4100. It must
+	// decrypt despite never having been sent before, then still allow retries.
+	for index, osn := range []uint16{4100, 4000, 4000, 4001, 4000} {
 		incoming, err = rtcp.Marshal([]rtcp.Packet{&rtcp.TransportLayerNack{SenderSSRC: 999, MediaSSRC: info.SSRC,
 			Nacks: []rtcp.NackPair{{PacketID: osn}}}})
 		if err != nil {

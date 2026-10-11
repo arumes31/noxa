@@ -5,7 +5,7 @@ test.beforeEach(async ({ page }) => {
     await page.goto("/sender-diagnostics-fixture");
     await page.evaluate(async () => {
         const track = document.createElement("canvas").captureStream(1).getVideoTracks()[0];
-        track.getSettings = () => ({ width: 1920, height: 1080, frameRate: 60, deviceId: "private-device" });
+        track.getSettings = () => ({ width: 2560, height: 1440, frameRate: 60, deviceId: "private-device" });
         Object.defineProperty(track, "label", { value: "Private source title" });
         const stream = new MediaStream([track]);
         let tick = 0;
@@ -59,6 +59,7 @@ test("sending details distinguish captured, encoded, sent and reported frame rat
     const copied = await page.evaluate(() => window.__sender.copied);
     expect(copied).not.toMatch(/private|source title|device|192\.0\.2|trackIdentifier|mediaSourceId/i);
     expect(JSON.parse(copied).video_senders[0]).toMatchObject({ generation: "4", ssrc: 101, rid: "f", capture_fps: 60, encoded_fps: 12, sent_fps: 10, reported_fps: 60,
+        capture_width: 2560, capture_height: 1440, width: 1920, height: 1080,
         available_outgoing_bitrate_bps: 12000000, transport_rtt_ms: 40, remote_rtt_ms: 80, remote_fraction_lost: 0.02,
         encoding_max_bitrate_bps: 50000000, encoding_active: true, bandwidth_limited_ms: 500, cpu_limited_ms: 0 });
     await expect(details.locator("dt").filter({ hasText: /^Retransmissions/ }).locator("+ dd")).toHaveText("80 kbit/s · 1.0%");

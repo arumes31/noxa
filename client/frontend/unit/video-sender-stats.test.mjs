@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { collectVideoSenders, primaryVideoSender, rememberVideoSenderProfile, videoSenderEncodingSettings, videoSenderSources, videoSenderFrameRateReduced } from "../src/video-sender-stats.js";
+import { collectVideoSenders, primaryVideoSender, rememberVideoSenderProfile, videoSenderEncodingSettings, videoSenderCaptureSettings, videoSenderSources, videoSenderFrameRateReduced } from "../src/video-sender-stats.js";
 
 const context = { slot: "screen", generation: "42", trackID: "private-track", mid: "2", requestedFPS: 60, settingsFPS: 60 };
 const row = changes => ({ id: "out", type: "outbound-rtp", kind: "video", ssrc: 22, rid: "f", mid: "2", mediaSourceId: "source", codecId: "codec",
@@ -14,6 +14,41 @@ const before = report(row(), { frames: 200 });
 const after = report(row({ timestamp: 6000, framesEncoded: 160, framesSent: 140, packetsSent: 1500, bytesSent: 1100000,
     totalEncodeTime: 5, totalPacketSendDelay: 10, retransmittedPacketsSent: 12, retransmittedBytesSent: 5000, keyFramesEncoded: 5 }), { frames: 500 });
 const collect = (now = after, old = before, source = context, previousSource = context) => collectVideoSenders(now, old, [source], [previousSource])[0];
+
+test("capture output settings remain separate from encoded size and private native settings", () => {
+    const settings = { width: 1920, height: 1080, frameRate: 60, deviceId: "private-device", displaySurface: "monitor" };
+    const capture = videoSenderCaptureSettings({ getSettings: () => settings });
+    assert.deepEqual(capture, { settingsFPS: 60, captureWidth: 1920, captureHeight: 1080 });
+    const source = { ...context, ...capture };
+    const result = collect(report({ ...after.get("out"), frameWidth: 960, frameHeight: 540 }), before, source, source);
+    assert.equal(result.capture_width, 1920); assert.equal(result.capture_height, 1080);
+    assert.equal(result.width, 960); assert.equal(result.height, 540);
+    assert.doesNotMatch(JSON.stringify(result), /private-device|displaySurface|monitor/);
+    settings.width = 1280;
+    assert.equal(capture.captureWidth, 1920, "a prior sample must retain its own settings");
+    const changed = { ...source, ...videoSenderCaptureSettings({ getSettings: () => settings }) };
+    const reset = collect(after, before, changed, source);
+    assert.equal(reset.capture_width, 1280);
+    assert.equal(reset.encoded_fps, null, "do not span a capture geometry change with interval rates");
+    assert.equal(reset.width, 1920, "encoded geometry can lag the new capture settings");
+});
+
+test("unavailable or invalid capture dimensions stay null without preset or encoded-size fallback", () => {
+    const unknown = { settingsFPS: null, captureWidth: null, captureHeight: null };
+    for (const track of [undefined, {}, { getSettings: () => undefined }, { getSettings: () => { throw new Error("unavailable"); } }]) {
+        assert.deepEqual(videoSenderCaptureSettings(track), unknown);
+    }
+    for (const size of [undefined, null, 0, -1, 1.5, 16385, Infinity, NaN, "1920"]) {
+        assert.deepEqual(videoSenderCaptureSettings({ getSettings: () => ({ width: size, height: size }) }), unknown);
+        const result = collect(after, before, { ...context, captureWidth: size, captureHeight: size });
+        assert.equal(result.capture_width, null); assert.equal(result.capture_height, null);
+        assert.equal(result.width, 1920); assert.equal(result.height, 1080);
+    }
+    for (const size of [1, 8192, 16384]) {
+        const capture = videoSenderCaptureSettings({ getSettings: () => ({ width: size, height: size }) });
+        assert.equal(capture.captureWidth, size); assert.equal(capture.captureHeight, size);
+    }
+});
 
 test("sender stages distinguish requested60, captured60, encoded12, sent10 and browser-reported60", () => {
     const result = collect();
@@ -134,12 +169,12 @@ test("primary sender is full resolution, independent of iteration order, warning
 });
 
 test("runtime source metadata is restricted to current acknowledged capture and desiredFPS", () => {
-    const track = { id: "private-track", readyState: "live", label: "private-window", getSettings: () => ({ frameRate: 30, deviceId: "secret-device" }) };
+    const track = { id: "private-track", readyState: "live", label: "private-window", getSettings: () => ({ frameRate: 30, width: 1920, height: 1080, deviceId: "secret-device" }) };
     rememberVideoSenderProfile(track, { fps: 60, title: "private-window" });
     const pc = { getTransceivers: () => [{ mid: "2", sender: { track } }] };
     const state = { pc, activeTabID: "a", serverGeneration: 3, sessionGeneration: 4 };
     const entry = { generation: "42", publication: { pc, track, slot: "screen", generation: "42", scope: { tabID: "a", generation: 3, session: 4 } } };
-    assert.deepEqual(videoSenderSources(state, [entry]), [{ ...context, settingsFPS: 30 }]);
+    assert.deepEqual(videoSenderSources(state, [entry]), [{ ...context, settingsFPS: 30, captureWidth: 1920, captureHeight: 1080 }]);
     pc.getTransceivers = () => [{ mid: "2", sender: { track, getParameters: () => ({ encodings: [{ rid: "f", active: true, maxBitrate: 50000000 }] }) } }];
     assert.deepEqual(videoSenderSources(state, [entry])[0].encodings, [{ rid: "f", active: true, maxBitrate: 50000000 }]);
     for (const other of [{ ...state, activeTabID: "b" }, { ...state, pc: {} }, { ...state, sessionGeneration: 5 }]) assert.deepEqual(videoSenderSources(other, [entry]), []);

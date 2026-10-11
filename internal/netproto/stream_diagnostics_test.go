@@ -97,3 +97,46 @@ func TestVideoSenderFeedbackDiagnosticsRemainOptionalAndBounded(t *testing.T) {
 		}
 	}
 }
+
+func TestVideoSenderCaptureDimensionsRemainOptionalAndSeparate(t *testing.T) {
+	base := `{"ssrc":123,"slot":"screen","generation":"42","width":960,"height":540,`
+	for _, fields := range []string{
+		`"capture_width":null,"capture_height":null`,
+		`"capture_width":1920,"capture_height":1080`,
+		`"capture_width":1,"capture_height":16384`,
+		`"capture_width":8192`,
+	} {
+		var value VideoSenderDiagnostics
+		if err := json.Unmarshal([]byte(base+fields+`}`), &value); err != nil || !value.Valid() {
+			t.Fatalf("valid optional capture dimensions rejected: %s: %v", fields, err)
+		}
+		raw, err := json.Marshal(value)
+		var decoded map[string]any
+		if err != nil || json.Unmarshal(raw, &decoded) != nil {
+			t.Fatal("capture dimensions round trip failed", err)
+		}
+		var input map[string]any
+		if err := json.Unmarshal([]byte(base+fields+`}`), &input); err != nil {
+			t.Fatal(err)
+		}
+		for key, expected := range input {
+			if decoded[key] != expected {
+				t.Fatalf("%s changed from %v to %v", key, expected, decoded[key])
+			}
+		}
+	}
+	for _, field := range []string{"capture_width", "capture_height"} {
+		for _, invalid := range []string{"0", "-1", "1.5", "16385", `"1920"`} {
+			var value VideoSenderDiagnostics
+			if err := json.Unmarshal([]byte(base+`"`+field+`":`+invalid+`}`), &value); err == nil && value.Valid() {
+				t.Fatalf("invalid capture dimension accepted: %s=%s", field, invalid)
+			}
+		}
+	}
+	for _, invalid := range []float64{math.NaN(), math.Inf(1), math.Inf(-1)} {
+		value := VideoSenderDiagnostics{SSRC: 123, Slot: "screen", Generation: 42, CaptureWidth: &invalid}
+		if value.Valid() {
+			t.Fatal("nonfinite capture dimension accepted")
+		}
+	}
+}

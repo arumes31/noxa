@@ -2392,6 +2392,8 @@ export namespace netproto {
 	    sample_ms?: number;
 	    requested_fps?: number;
 	    settings_fps?: number;
+	    capture_width?: number;
+	    capture_height?: number;
 	    capture_fps?: number;
 	    encoded_fps?: number;
 	    sent_fps?: number;
@@ -2439,6 +2441,8 @@ export namespace netproto {
 	        this.sample_ms = source["sample_ms"];
 	        this.requested_fps = source["requested_fps"];
 	        this.settings_fps = source["settings_fps"];
+	        this.capture_width = source["capture_width"];
+	        this.capture_height = source["capture_height"];
 	        this.capture_fps = source["capture_fps"];
 	        this.encoded_fps = source["encoded_fps"];
 	        this.sent_fps = source["sent_fps"];

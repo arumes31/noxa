@@ -3,6 +3,7 @@
 const profiles = new WeakMap();
 const number = (value, max = Number.MAX_SAFE_INTEGER) => Number.isFinite(value) && value >= 0 && value <= max ? value : null;
 const counter = value => Number.isSafeInteger(value) && value >= 0 ? value : null;
+const dimension = value => Number.isInteger(value) && value > 0 && value <= 16384 ? value : null;
 const milliseconds = value => number(value) !== null ? number(value * 1000, 60000) : null;
 const delta = (now, before, key) => number(now?.[key]) !== null && number(before?.[key]) !== null && now[key] >= before[key] ? now[key] - before[key] : null;
 const interval = (now, before) => {
@@ -64,6 +65,15 @@ export function rememberVideoSenderProfile(track, profile) {
     if (track && typeof track === "object") profiles.set(track, { fps: number(profile?.fps, 240) });
 }
 
+// These are the live capture track's output settings, not the selected preset
+// or the encoded dimensions. Never export the rest of getSettings().
+export function videoSenderCaptureSettings(track) {
+    let settings;
+    try { settings = track?.getSettings?.(); } catch { /* Unavailable native settings remain unknown. */ }
+    return { settingsFPS: number(settings?.frameRate, 240),
+        captureWidth: dimension(settings?.width), captureHeight: dimension(settings?.height) };
+}
+
 export function videoSenderSources(state, snapshot) {
     return snapshot.filter(({ publication: p, generation: gen }) => generation(gen) && p.generation === gen && !p.cancelled &&
         p.pc === state.pc && p.scope.tabID === state.activeTabID && p.scope.generation === state.serverGeneration &&
@@ -72,7 +82,7 @@ export function videoSenderSources(state, snapshot) {
             const transceiver = state.pc?.getTransceivers?.().find(t => t.sender?.track === p.track);
             const encodings = videoSenderEncodingSettings(transceiver?.sender);
             return { slot: p.slot, generation: gen, trackID: p.track.id, mid: transceiver?.mid,
-                requestedFPS: profiles.get(p.track)?.fps ?? null, settingsFPS: number(p.track.getSettings?.().frameRate, 240),
+                requestedFPS: profiles.get(p.track)?.fps ?? null, ...videoSenderCaptureSettings(p.track),
                 ...(encodings ? { encodings } : {}) };
         });
 }
@@ -92,7 +102,8 @@ export function collectVideoSenders(stats, previousStats, sources = [], previous
     const rows = [];
     for (const { stat, source, context } of candidates.values()) {
         const oldContext = previousSources.find(s => s.slot === context.slot && s.generation === context.generation && s.trackID === context.trackID &&
-            s.requestedFPS === context.requestedFPS && s.settingsFPS === context.settingsFPS);
+            s.requestedFPS === context.requestedFPS && s.settingsFPS === context.settingsFPS &&
+            s.captureWidth === context.captureWidth && s.captureHeight === context.captureHeight);
         let previous = oldContext && previousStats?.get(stat.id);
         if (previous?.ssrc !== stat.ssrc || previous?.rid !== stat.rid || previous?.mediaSourceId !== stat.mediaSourceId ||
             ["framesEncoded", "framesSent", "packetsSent", "bytesSent"].some(key => number(stat[key]) !== null && number(previous?.[key]) !== null && stat[key] < previous[key])) previous = null;
@@ -119,6 +130,7 @@ export function collectVideoSenders(stats, previousStats, sources = [], previous
         rows.push({ ssrc: stat.ssrc, rid: stat.rid || "", slot: context.slot, generation: context.generation, sample_ms: sample,
             ...senderFeedback(stats, stat, previous, context, sample),
             requested_fps: number(context.requestedFPS, 240), settings_fps: number(context.settingsFPS, 240),
+            capture_width: dimension(context.captureWidth), capture_height: dimension(context.captureHeight),
             capture_fps: sourceSample && captured !== null ? number(captured * 1000 / sourceSample, 240) : null,
             encoded_fps: rate("framesEncoded"), sent_fps: rate("framesSent"), reported_fps: number(stat.framesPerSecond, 240),
             width: number(stat.frameWidth, 16384), height: number(stat.frameHeight, 16384),

@@ -2,7 +2,7 @@ import { t } from "./i18n.js";
 import { mediaScopeIsCurrent } from "./media-controls.js";
 import { copyToClipboard } from "./clipboard.js";
 import { formatBitrate } from "./connection-stats.js";
-import { collectVideoSenders, primaryVideoSender, videoSenderEncodingSettings } from "./video-sender-stats.js";
+import { collectVideoSenders, primaryVideoSender, videoSenderEncodingSettings, videoSenderCaptureSettings } from "./video-sender-stats.js";
 import { publicationUploadActive } from "./stream-publication.js";
 import { summarizeStreamHealth, renderStreamHealth } from "./stream-health.js";
 import "./share-status.css";
@@ -44,7 +44,7 @@ export function startShareStatus(options) {
     root.querySelector(".sharing-copy").onclick = () => {
         if (!current(s) || !s.layers?.length) return;
         void copyToClipboard(JSON.stringify({ sampled_at: s.sampledAt, direction: "sent", slot: "screen", video_senders: s.layers,
-            note: "Measured RTP payload counters. Requested and capture settings are not measured frame rates. Null means unavailable." }, null, 2), { isCurrent: () => current(s) });
+            note: "Measured RTP payload counters. capture_width/capture_height are current capture-track output settings in pixels; width/height are encoded dimensions. Requested and capture settings are not measured frame rates. Null means unavailable." }, null, 2), { isCurrent: () => current(s) });
     };
     const details = root.querySelector(".sharing-preview"), video = root.querySelector("video");
     details.ontoggle = () => {
@@ -137,7 +137,7 @@ async function poll(s) {
     try {
         const sender = window.__noxa.state.shareVideoTransceiver?.sender;
         const source = { slot: "screen", generation: s.generation, trackID: s.track.id, senderScoped: true,
-            requestedFPS: s.preset.fps, settingsFPS: s.track.getSettings().frameRate, encodings: videoSenderEncodingSettings(sender) };
+            requestedFPS: s.preset.fps, ...videoSenderCaptureSettings(s.track), encodings: videoSenderEncodingSettings(sender) };
         let deadline;
         const report = sender?.getStats ? await Promise.race([sender.getStats(), new Promise((_, reject) => {
             deadline = setTimeout(() => reject(new Error("stats timeout")), 10000);

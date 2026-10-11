@@ -1,5 +1,7 @@
 package netproto
 
+import "math"
+
 const CapabilityStreamDiagnostics = "stream_diagnostics_v1"
 
 // VideoSenderDiagnostics reports one current publication encoding. Measured
@@ -14,6 +16,8 @@ type VideoSenderDiagnostics struct {
 	SampleMS                    *float64 `json:"sample_ms"`
 	RequestedFPS                *float64 `json:"requested_fps"`
 	SettingsFPS                 *float64 `json:"settings_fps"`
+	CaptureWidth                *float64 `json:"capture_width"`
+	CaptureHeight               *float64 `json:"capture_height"`
 	CaptureFPS                  *float64 `json:"capture_fps"`
 	EncodedFPS                  *float64 `json:"encoded_fps"`
 	SentFPS                     *float64 `json:"sent_fps"`
@@ -85,6 +89,13 @@ func (r VideoSenderDiagnostics) Valid() bool {
 	}
 	for _, n := range []*float64{r.Width, r.Height} {
 		if !diagnosticNumber(n, 0, 16384) {
+			return false
+		}
+	}
+	// Capture-track output settings are independent of encoded Width/Height.
+	// Missing fields from older clients remain nil; a zero size is unavailable.
+	for _, n := range []*float64{r.CaptureWidth, r.CaptureHeight} {
+		if n != nil && (!diagnosticNumber(n, 1, 16384) || math.Trunc(*n) != *n) {
 			return false
 		}
 	}
