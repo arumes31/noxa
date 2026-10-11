@@ -29,6 +29,8 @@ import (
 // phases with complete 60-second scoring stages. Default pan remains unchanged.
 // NOXA_BROWSER_MEDIA_SLOW_WRITE_MS=1..20 delays only the last viewer's video
 // writer during a bounded middle stage. This is not network jitter emulation.
+// NOXA_BROWSER_MEDIA_TRACE=1 records bounded recovery metadata for the synthetic
+// source, first healthy viewer and fifth impaired viewer (H264 capacity5 only).
 func TestBrowserHighMotionFanout(t *testing.T) {
 	if os.Getenv("NOXA_BROWSER_MEDIA_PERF") != "1" {
 		t.Skip("set NOXA_BROWSER_MEDIA_PERF=1 on an idle host for the high-motion 1080p60 profile")
@@ -38,6 +40,10 @@ func TestBrowserHighMotionFanout(t *testing.T) {
 
 func runBrowserHighMotionFanout(t *testing.T, width, height, fps int) {
 	profile, err := parseBrowserFanoutProfile(os.Getenv("NOXA_BROWSER_MEDIA_VIEWERS"), os.Getenv("NOXA_BROWSER_MEDIA_STAGE_SECONDS"), os.Getenv("NOXA_BROWSER_MEDIA_SLOW_WRITE_MS"), os.Getenv("NOXA_BROWSER_MEDIA_CODEC"), os.Getenv("NOXA_BROWSER_MEDIA_WORKLOAD"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	trace, err := newBrowserMediaTrace(profile, os.Getenv("NOXA_BROWSER_MEDIA_TRACE"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -56,6 +62,11 @@ func runBrowserHighMotionFanout(t *testing.T, width, height, fps int) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = engine.Close() })
+	if trace != nil {
+		if err := installBrowserVideoWriteDelay(engine, nil, trace); err != nil {
+			t.Fatal(err)
+		}
+	}
 	engines := map[string]*Engine{}
 	delay := &browserVideoWriteDelay{ctx: ctx, delay: time.Duration(profile.SlowWriteMS) * time.Millisecond}
 	viewerIDs := make([]string, profile.Viewers)
@@ -72,7 +83,7 @@ func runBrowserHighMotionFanout(t *testing.T, width, height, fps int) {
 			t.Fatal(err)
 		}
 		t.Cleanup(func() { _ = slow.Close() })
-		if err := installBrowserVideoWriteDelay(slow, delay); err != nil {
+		if err := installBrowserVideoWriteDelay(slow, delay, trace); err != nil {
 			t.Fatal(err)
 		}
 		engines[viewerIDs[len(viewerIDs)-1]] = slow
@@ -94,6 +105,7 @@ func runBrowserHighMotionFanout(t *testing.T, width, height, fps int) {
 		if err != nil {
 			return nil, err
 		}
+		trace.assignPeer(peer.pc.ID(), id)
 		if err := router.AttachPeer(id, peer); err != nil {
 			return nil, err
 		}
@@ -211,11 +223,13 @@ func runBrowserHighMotionFanout(t *testing.T, width, height, fps int) {
 				http.Error(w, "not the configured slow viewer", http.StatusBadRequest)
 				return
 			}
+			trace.impairment(body.Active, 1)
 			if body.Active {
 				delay.until.Store(time.Now().Add(time.Duration(profile.StageSeconds+5) * time.Second).UnixNano())
 			} else {
 				delay.until.Store(0)
 			}
+			trace.impairment(body.Active, 2)
 			result = map[string]any{"delayed_packets": delay.packets.Load(), "slow_write_ms": profile.SlowWriteMS, "expires_at_ms": delay.until.Load() / int64(time.Millisecond)}
 		case "/watch":
 			requestErr = ErrVideoPublication
@@ -236,7 +250,9 @@ func runBrowserHighMotionFanout(t *testing.T, width, height, fps int) {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(result)
+		if err := json.NewEncoder(w).Encode(result); err == nil && r.URL.Path == "/impairment" {
+			trace.impairment(body.Active, 3)
+		}
 	}))
 	t.Cleanup(server.Close)
 	script, err := filepath.Abs("testdata/browser_fanout.mjs")
@@ -258,6 +274,11 @@ func runBrowserHighMotionFanout(t *testing.T, width, height, fps int) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer func() {
+		if err := trace.save(resultPath + ".trace.json"); err != nil {
+			t.Error(err)
+		}
+	}()
 	command := exec.CommandContext(ctx, node, script, server.URL, strconv.Itoa(width), strconv.Itoa(height), strconv.Itoa(fps), resultPath, string(configuration))
 	// The script's earlier watchdog writes evidence and closes its owned browser.
 	// Bound inherited pipes as a fallback if the hard process deadline fires.

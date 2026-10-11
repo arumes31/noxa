@@ -103,6 +103,7 @@ func (d *browserVideoWriteDelay) BindLocalStream(info *interceptor.StreamInfo, w
 type browserDelayedProductionFactory struct {
 	base  *interceptor.Registry
 	delay *browserVideoWriteDelay
+	trace *browserMediaTrace
 }
 
 func (f browserDelayedProductionFactory) NewInterceptor(id string) (interceptor.Interceptor, error) {
@@ -112,16 +113,31 @@ func (f browserDelayedProductionFactory) NewInterceptor(id string) (interceptor.
 	}
 	// Pion wraps writers in registration order. The delay goes inside the
 	// production pacer and its terminal authorization lease, not admission.
-	return interceptor.NewChain([]interceptor.Interceptor{f.delay, base}), nil
+	chain := make([]interceptor.Interceptor, 0, 4)
+	if f.trace != nil {
+		chain = append(chain, &browserTraceInterceptor{trace: f.trace, pcID: id, final: true})
+	}
+	if f.delay != nil {
+		chain = append(chain, f.delay)
+	}
+	chain = append(chain, base)
+	if f.trace != nil {
+		chain = append(chain, &browserTraceInterceptor{trace: f.trace, pcID: id})
+	}
+	return interceptor.NewChain(chain), nil
 }
 
-func installBrowserVideoWriteDelay(engine *Engine, delay *browserVideoWriteDelay) error {
+func installBrowserVideoWriteDelay(engine *Engine, delay *browserVideoWriteDelay, traces ...*browserMediaTrace) error {
 	media, base, err := newEngineMedia(engine.enableAV1, engine.videoBounds, engine.egress)
 	if err != nil {
 		return err
 	}
 	registry := &interceptor.Registry{}
-	registry.Add(browserDelayedProductionFactory{base: base, delay: delay})
+	var trace *browserMediaTrace
+	if len(traces) > 0 {
+		trace = traces[0]
+	}
+	registry.Add(browserDelayedProductionFactory{base: base, delay: delay, trace: trace})
 	// Test-only API replacement occurs before this engine creates any peers.
 	engine.api = pion.NewAPI(pion.WithMediaEngine(media), pion.WithSettingEngine(engine.settingEngine), pion.WithInterceptorRegistry(registry))
 	return nil

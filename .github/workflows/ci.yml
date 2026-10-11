@@ -124,6 +124,9 @@ jobs:
       - run: npm run build
       - run: npm run test:build
       - run: npm run test:unit
+      - name: Validate deterministic video workload and measurement counters
+        working-directory: .
+        run: node --test internal/webrtc/testdata/browser_desktop_workload.test.mjs internal/webrtc/testdata/browser_fanout_metrics.test.mjs
       - run: npm run test:e2e
       - name: Verify single-quality streams and codec switching through the SFU
         working-directory: .
