@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/pion/interceptor"
@@ -24,6 +25,23 @@ const browserTracePackets = 131072
 const browserTraceFeedback = 1024
 const browserTracePairs = 64
 const browserTraceTail = 8 * time.Second
+
+const (
+	traceTruncatedSSRC uint8 = 1 << iota
+	traceTruncatedPayload
+	traceTruncatedNAL
+	traceTruncatedNACK
+	traceTruncatedFIR
+)
+
+// Preserve one numeric diagnostic even when its packet/feedback leaves the
+// circular window. Stage zero denotes binding/RTCP rather than an RTP stage.
+type browserTraceTruncation struct {
+	AtNS   int64 `json:"at_ns"`
+	Causes uint8 `json:"causes"`
+	Role   uint8 `json:"role"`
+	Stage  uint8 `json:"stage"`
+}
 
 // All storage is fixed-size; no payload, addresses, SDP, CSRC authority tickets,
 // or arbitrary strings are retained. The opt-in fixture admits synthetic peers
@@ -66,6 +84,14 @@ type browserMediaTrace struct {
 	deadline                                                 time.Time
 	clearRequest, clearApplied, clearResponse                int64
 	packetOverflow, feedbackOverflow, truncated, parseErrors uint64
+	firstTruncation                                          *browserTraceTruncation
+}
+
+func (t *browserMediaTrace) truncateLocked(now time.Time, causes, role, stage uint8) {
+	t.truncated++
+	if t.firstTruncation == nil {
+		t.firstTruncation = &browserTraceTruncation{AtNS: now.Sub(t.origin).Nanoseconds(), Causes: causes, Role: role, Stage: stage}
+	}
 }
 
 func newBrowserMediaTrace(profile browserFanoutProfile, enabled string) (*browserMediaTrace, error) {
@@ -91,7 +117,7 @@ func (t *browserMediaTrace) bindVideo(pcID string, ssrc uint32) {
 		return
 	}
 	if len(t.videoSSRC[pcID]) >= 16 {
-		t.truncated++
+		t.truncateLocked(time.Now(), traceTruncatedSSRC, t.roles[pcID], 0)
 		return
 	}
 	t.videoSSRC[pcID][ssrc] = struct{}{}
@@ -225,8 +251,10 @@ func (t *browserMediaTrace) recordRTP(pcID string, stage uint8, rtx uint32, h *r
 	if h.Padding {
 		e.Flags |= 2
 	}
+	var truncation uint8
 	if len(payload) > 65535 {
 		e.Flags |= 64
+		truncation |= traceTruncatedPayload
 	} else {
 		e.PayloadBytes = uint16(len(payload))
 	}
@@ -242,8 +270,11 @@ func (t *browserMediaTrace) recordRTP(pcID string, stage uint8, rtx uint32, h *r
 	types, flags := browserTraceNAL(payload)
 	e.NALTypes = types
 	e.Flags |= flags
+	if flags&64 != 0 {
+		truncation |= traceTruncatedNAL
+	}
 	if e.Flags&64 != 0 {
-		t.truncated++
+		t.truncateLocked(now, truncation, role, stage)
 	}
 	if t.packetCount == browserTracePackets {
 		cutoff := e.AtNS - int64(browserTraceTail)
@@ -270,6 +301,7 @@ func (t *browserMediaTrace) recordRTCP(pcID string, packets []rtcp.Packet, outgo
 	}
 	for _, p := range packets {
 		e := browserTraceRTCP{AtNS: now.Sub(t.origin).Nanoseconds(), Role: role}
+		var truncation uint8
 		switch p := p.(type) {
 		case *rtcp.TransportLayerNack:
 			if outgoing {
@@ -280,6 +312,7 @@ func (t *browserMediaTrace) recordRTCP(pcID string, packets []rtcp.Packet, outgo
 			e.Count = uint8(min(len(p.Nacks), browserTracePairs))
 			copy(e.Pairs[:], p.Nacks[:e.Count])
 			e.Truncated = len(p.Nacks) > browserTracePairs
+			truncation = traceTruncatedNACK
 		case *rtcp.PictureLossIndication:
 			e.Kind = 2
 			e.MediaSSRC = p.MediaSSRC
@@ -293,6 +326,7 @@ func (t *browserMediaTrace) recordRTCP(pcID string, packets []rtcp.Packet, outgo
 			e.Kind = 3
 			e.MediaSSRC = p.FIR[0].SSRC
 			e.Truncated = len(p.FIR) > 1
+			truncation = traceTruncatedFIR
 		default:
 			continue
 		}
@@ -300,7 +334,7 @@ func (t *browserMediaTrace) recordRTCP(pcID string, packets []rtcp.Packet, outgo
 			continue
 		}
 		if e.Truncated {
-			t.truncated++
+			t.truncateLocked(now, truncation, role, 0)
 		}
 		if t.feedbackCount == browserTraceFeedback {
 			cutoff := e.AtNS - int64(browserTraceTail)
@@ -430,11 +464,12 @@ func (t *browserMediaTrace) save(path string) error {
 		ClearResponseWrittenNS                                   int64 `json:"clear_response_written_ns"`
 		Complete                                                 bool  `json:"complete"`
 		PacketOverflow, FeedbackOverflow, Truncated, ParseErrors uint64
-		Packets                                                  []browserTraceRTP  `json:"rtp"`
-		Feedback                                                 []browserTraceRTCP `json:"rtcp"`
-		Note                                                     string             `json:"note"`
-	}{t.origin.UnixMilli(), t.clearRequest, t.clearApplied, t.clearResponse, complete, t.packetOverflow, t.feedbackOverflow, t.truncated, t.parseErrors, packets, feedback,
-		"Synthetic local H264 only. Roles1=source,2=control,3=impaired. RTP stages1=source read,2=primary admission before cache/pacer,3=successful final Pion writer return,4=failed final write. Success does not prove browser SRTP/decode acceptance. NAL bitmask is1<<NALtype; flags marker1,padding2,RTX4,FUstart8,FUend16,malformed32,truncated64. Cache misses are not observable. Fixed event bounds; no payload/CSRC/SDP/addresses. Clear response timestamp means server encoded response, not browser receipt."}
+		FirstTruncation                                          *browserTraceTruncation `json:"first_truncation,omitempty"`
+		Packets                                                  []browserTraceRTP       `json:"rtp"`
+		Feedback                                                 []browserTraceRTCP      `json:"rtcp"`
+		Note                                                     string                  `json:"note"`
+	}{t.origin.UnixMilli(), t.clearRequest, t.clearApplied, t.clearResponse, complete, t.packetOverflow, t.feedbackOverflow, t.truncated, t.parseErrors, t.firstTruncation, packets, feedback,
+		"Synthetic local H264 only. Roles1=source,2=control,3=impaired. RTP stages1=source read,2=primary admission before cache/pacer,3=successful final Pion writer return,4=failed final write. Success does not prove browser SRTP/decode acceptance. NAL bitmask is1<<NALtype; flags marker1,padding2,RTX4,FUstart8,FUend16,malformed32,truncated64. First truncation survives window eviction; causes bitmask SSRCbound1,RTPpayloadsize2,NALaggregatebound4,NACKpairsbound8,FIRbound16; stage0=binding/RTCP. Cache misses are not observable. Fixed event bounds; no payload/CSRC/SDP/addresses. Clear response timestamp means server encoded response, not browser receipt."}
 	f, err := os.Create(path)
 	if err != nil {
 		return err
@@ -640,4 +675,123 @@ func TestBrowserRecoveryTraceIncompleteArtifactIsPreserved(t *testing.T) {
 	if err := json.Unmarshal(data, &saved); err != nil || saved.Complete || saved.ClearRequest == 0 || saved.ClearResponse == 0 {
 		t.Fatalf("incomplete artifact or clear context lost: %+v %v", saved, err)
 	}
+}
+
+func TestBrowserRecoveryTraceFirstTruncationClassifiesBounds(t *testing.T) {
+	aggregate := []byte{24}
+	for range 65 {
+		aggregate = append(aggregate, 0, 1, 0x65)
+	}
+	for _, scenario := range []struct {
+		name   string
+		causes uint8
+		stage  uint8
+		record func(*browserMediaTrace, string)
+	}{
+		{"SSRC", traceTruncatedSSRC, 0, func(trace *browserMediaTrace, peer string) {
+			for ssrc := uint32(1); ssrc <= 17; ssrc++ {
+				trace.bindVideo(peer, ssrc)
+			}
+		}},
+		{"payload", traceTruncatedPayload, 3, func(trace *browserMediaTrace, peer string) {
+			trace.recordRTP(peer, 3, 0, &rtp.Header{SSRC: 11}, make([]byte, 65536))
+		}},
+		{"NAL aggregate", traceTruncatedNAL, 3, func(trace *browserMediaTrace, peer string) {
+			trace.recordRTP(peer, 3, 0, &rtp.Header{SSRC: 11}, aggregate)
+		}},
+		{"payload and NAL", traceTruncatedPayload | traceTruncatedNAL, 3, func(trace *browserMediaTrace, peer string) {
+			payload := make([]byte, 65536)
+			copy(payload, aggregate)
+			trace.recordRTP(peer, 3, 0, &rtp.Header{SSRC: 11}, payload)
+		}},
+		{"NACK pairs", traceTruncatedNACK, 0, func(trace *browserMediaTrace, peer string) {
+			trace.recordRTCP(peer, []rtcp.Packet{&rtcp.TransportLayerNack{MediaSSRC: 11, Nacks: make([]rtcp.NackPair, browserTracePairs+1)}}, false)
+		}},
+		{"FIR entries", traceTruncatedFIR, 0, func(trace *browserMediaTrace, peer string) {
+			trace.recordRTCP(peer, []rtcp.Packet{&rtcp.FullIntraRequest{FIR: []rtcp.FIREntry{{SSRC: 11}, {SSRC: 11}}}}, false)
+		}},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			trace, err := newBrowserMediaTrace(browserFanoutProfile{Capacity: true, Viewers: 5, Codec: "h264", SlowWriteMS: 5}, "1")
+			if err != nil {
+				t.Fatal(err)
+			}
+			trace.assignPeer("slow", "viewer5")
+			trace.assignPeer("other", "viewer2")
+			trace.bindVideo("slow", 11)
+			trace.impairment(true, 1)
+			scenario.record(trace, "other")
+			if trace.firstTruncation != nil || trace.truncated != 0 {
+				t.Fatal("unselected peer retained a truncation diagnostic")
+			}
+			scenario.record(trace, "slow")
+			first := trace.firstTruncation
+			if first == nil || first.Causes != scenario.causes || first.Stage != scenario.stage || first.Role != 3 || first.AtNS < 0 || trace.truncated != 1 {
+				t.Fatalf("wrong first truncation or changed global count: %+v, total=%d", first, trace.truncated)
+			}
+			trace.recordRTCP("slow", []rtcp.Packet{&rtcp.TransportLayerNack{MediaSSRC: 11, Nacks: make([]rtcp.NackPair, browserTracePairs+1)}}, false)
+			if trace.firstTruncation != first || trace.truncated != 2 {
+				t.Fatal("later truncation replaced the first diagnostic or stopped counting")
+			}
+		})
+	}
+}
+
+func TestBrowserRecoveryTraceFirstTruncationSurvivesEvictionAndCutoff(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		trace, err := newBrowserMediaTrace(browserFanoutProfile{Capacity: true, Viewers: 5, Codec: "h264", SlowWriteMS: 5}, "1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		trace.assignPeer("pub", "a")
+		trace.assignPeer("healthy", "viewer")
+		trace.assignPeer("slow", "viewer5")
+		trace.bindVideo("slow", 11)
+		trace.impairment(true, 1)
+		trace.recordRTCP("slow", []rtcp.Packet{&rtcp.TransportLayerNack{MediaSSRC: 11, Nacks: make([]rtcp.NackPair, browserTracePairs+1)}}, false)
+		first := *trace.firstTruncation
+		time.Sleep(9 * time.Second)
+		trace.impairment(false, 1)
+		trace.impairment(false, 2)
+		trace.impairment(false, 3)
+		for range browserTraceFeedback {
+			trace.recordRTCP("slow", []rtcp.Packet{&rtcp.PictureLossIndication{MediaSSRC: 11}}, false)
+		}
+		if trace.feedback[trace.feedbackHead].Truncated || trace.feedbackOverflow != 0 {
+			t.Fatal("old truncation was not evicted cleanly")
+		}
+		header := &rtp.Header{SSRC: 11}
+		trace.recordRTP("pub", 1, 0, header, []byte{0x65})
+		for _, peer := range []string{"healthy", "slow"} {
+			trace.recordRTP(peer, 2, 0, header, []byte{0x65})
+			trace.recordRTP(peer, 3, 0, header, []byte{0x65})
+		}
+		time.Sleep(browserTraceTail)
+		path := filepath.Join(t.TempDir(), "trace.json")
+		if err := trace.save(path); err == nil {
+			t.Fatal("historical truncation no longer fails completeness")
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var saved struct {
+			Complete        bool                    `json:"complete"`
+			FirstTruncation *browserTraceTruncation `json:"first_truncation"`
+			Truncated       uint64
+			Feedback        []browserTraceRTCP `json:"rtcp"`
+		}
+		if err := json.Unmarshal(data, &saved); err != nil {
+			t.Fatal(err)
+		}
+		if saved.Complete || saved.Truncated != 1 || saved.FirstTruncation == nil || *saved.FirstTruncation != first ||
+			first.AtNS >= trace.clearRequest-int64(browserTraceTail) || len(saved.Feedback) != browserTraceFeedback {
+			t.Fatalf("first truncation lost outside retained window: %+v", saved.FirstTruncation)
+		}
+		for _, feedback := range saved.Feedback {
+			if feedback.Truncated {
+				t.Fatal("test retained the original truncated feedback unexpectedly")
+			}
+		}
+	})
 }
