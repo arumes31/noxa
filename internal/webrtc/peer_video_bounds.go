@@ -57,8 +57,27 @@ func (w *PeerConnectionWrapper) setVideoBoundsCodecPreferences() error {
 			slices.SortStableFunc(codecs, func(a, b webrtc.RTPCodecParameters) int { return rank(a) - rank(b) })
 		}
 		if w.videoBounds != (VideoBounds{}) {
+			vp8Payloads := make(map[string]bool)
+			for _, codec := range codecs {
+				if strings.EqualFold(codec.MimeType, webrtc.MimeTypeVP8) {
+					vp8Payloads[strconv.Itoa(int(codec.PayloadType))] = true
+				}
+			}
 			codecs = slices.DeleteFunc(codecs, func(codec webrtc.RTPCodecParameters) bool {
-				return !strings.EqualFold(codec.MimeType, webrtc.MimeTypeVP8)
+				if strings.EqualFold(codec.MimeType, webrtc.MimeTypeVP8) {
+					return false
+				}
+				// Admit repair only for a retained VP8 payload. Repair must not
+				// reintroduce another codec into a dimension-bounded receiver.
+				if strings.EqualFold(codec.MimeType, webrtc.MimeTypeRTX) {
+					for _, parameter := range strings.Split(codec.SDPFmtpLine, ";") {
+						key, value, ok := strings.Cut(strings.TrimSpace(parameter), "=")
+						if ok && key == "apt" {
+							return !vp8Payloads[value]
+						}
+					}
+				}
+				return true
 			})
 		}
 		for i := range codecs {

@@ -29,11 +29,13 @@ test("incompatible H264 profiles and packetization modes are not advertised", as
     assert.deepEqual(await publicationVideoCodecs({}), ["vp8"]);
 });
 test("codec changes reorder alternatives on the same transceiver", t => {
-    install(t, [vp8, h264], async () => ({}));
+    const rtx = { mimeType: "video/rtx", clockRate: 90000 };
+    install(t, [vp8, h264, rtx], async () => ({}));
     const preferences = [], transceiver = { setCodecPreferences: codecs => preferences.push(codecs) };
     assert.equal(preferPublicationCodec(transceiver, "h264"), true);
     assert.equal(preferPublicationCodec(transceiver, "vp8"), true);
     assert.deepEqual(preferences.map(codecs => codecs[0].mimeType), ["video/H264", "video/VP8"]);
+    assert.ok(preferences.every(codecs => codecs.includes(rtx)), "codec selection must retain packet repair");
     assert.equal(preferPublicationCodec(transceiver, "h265"), false);
     assert.equal(preferPublicationCodec({}, "vp8"), false);
 });

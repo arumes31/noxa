@@ -363,6 +363,20 @@ func registerCodecsWithVideoBounds(m *webrtc.MediaEngine, enableAV1 bool, bounds
 	}
 
 	// Video: VP8, VP9, H.264 (and optionally AV1).
+	// RTX repairs packets of the same encoded stream on its own sequence
+	// space. It is not another media encoding or a second source upload.
+	registerVideo := func(codec webrtc.RTPCodecParameters) error {
+		if err := m.RegisterCodec(codec, webrtc.RTPCodecTypeVideo); err != nil {
+			return err
+		}
+		return m.RegisterCodec(webrtc.RTPCodecParameters{
+			RTPCodecCapability: webrtc.RTPCodecCapability{
+				MimeType: webrtc.MimeTypeRTX, ClockRate: 90000,
+				SDPFmtpLine: fmt.Sprintf("apt=%d", codec.PayloadType),
+			},
+			PayloadType: codec.PayloadType + 1,
+		}, webrtc.RTPCodecTypeVideo)
+	}
 	vp8 := webrtc.RTPCodecParameters{
 		RTPCodecCapability: webrtc.RTPCodecCapability{
 			MimeType:  webrtc.MimeTypeVP8,
@@ -374,7 +388,7 @@ func registerCodecsWithVideoBounds(m *webrtc.MediaEngine, enableAV1 bool, bounds
 		macroblocks := ((bounds.Width + 15) / 16) * ((bounds.Height + 15) / 16)
 		vp8.SDPFmtpLine = fmt.Sprintf("max-fs=%d", macroblocks)
 	}
-	if err := m.RegisterCodec(vp8, webrtc.RTPCodecTypeVideo); err != nil {
+	if err := registerVideo(vp8); err != nil {
 		return fmt.Errorf("vp8: %w", err)
 	}
 	if bounds != (VideoBounds{}) {
@@ -388,7 +402,7 @@ func registerCodecsWithVideoBounds(m *webrtc.MediaEngine, enableAV1 bool, bounds
 		},
 		PayloadType: 98,
 	}
-	if err := m.RegisterCodec(vp9, webrtc.RTPCodecTypeVideo); err != nil {
+	if err := registerVideo(vp9); err != nil {
 		return fmt.Errorf("vp9: %w", err)
 	}
 
@@ -400,7 +414,7 @@ func registerCodecsWithVideoBounds(m *webrtc.MediaEngine, enableAV1 bool, bounds
 		},
 		PayloadType: 102,
 	}
-	if err := m.RegisterCodec(h264, webrtc.RTPCodecTypeVideo); err != nil {
+	if err := registerVideo(h264); err != nil {
 		return fmt.Errorf("h264: %w", err)
 	}
 
@@ -412,7 +426,7 @@ func registerCodecsWithVideoBounds(m *webrtc.MediaEngine, enableAV1 bool, bounds
 			},
 			PayloadType: 45,
 		}
-		if err := m.RegisterCodec(av1, webrtc.RTPCodecTypeVideo); err != nil {
+		if err := registerVideo(av1); err != nil {
 			return fmt.Errorf("av1: %w", err)
 		}
 	}

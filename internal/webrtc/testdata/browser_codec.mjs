@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
+import { readFile } from 'node:fs/promises';
 const require = createRequire(new URL('../../../client/frontend/package.json', import.meta.url));
 const { chromium, expect } = require('@playwright/test');
 const endpoint = process.argv[2];
@@ -21,6 +22,7 @@ try {
             window.gather=()=>pc.iceGatheringState==='complete'?Promise.resolve():new Promise(resolve=>pc.addEventListener('icegatheringstatechange',()=>{if(pc.iceGatheringState==='complete')resolve();}));
         });
     }
+    await sender.addScriptTag({type:'module',content:await readFile(new URL('../../../client/frontend/src/video-codecs.js',import.meta.url),'utf8')+'\nwindow.preferTestCodec=preferPublicationCodec;'});
     await sender.evaluate(async () => {
         const canvas=document.createElement('canvas');canvas.width=1280;canvas.height=720;document.body.append(canvas);
         const context=canvas.getContext('2d');let frame=0;
@@ -28,9 +30,7 @@ try {
         const track=canvas.captureStream(30).getVideoTracks()[0];
         window.transceiver=pc.addTransceiver(track,{direction:'sendonly',streams:[new MediaStream([track])],sendEncodings:[{maxBitrate:4000000}]});
         window.changeCodec=async mime=>{
-            const codecs=RTCRtpSender.getCapabilities('video').codecs.filter(c=>c.mimeType==='video/VP8'||c.mimeType==='video/H264'&&c.sdpFmtpLine.includes('packetization-mode=1')&&c.sdpFmtpLine.includes('profile-level-id=42001f')).sort((a,b)=>Number(b.mimeType===mime)-Number(a.mimeType===mime));
-            if(!codecs.some(c=>c.mimeType===mime))throw new Error(`Missing test codec ${mime}`);
-            transceiver.setCodecPreferences(codecs);
+            if(!preferTestCodec(transceiver,mime==='video/H264'?'h264':'vp8'))throw new Error(`Missing test codec ${mime}`);
             await pc.setLocalDescription(await pc.createOffer());await gather();
             await pc.setRemoteDescription(await request('offer',{id:'pub',sdp:pc.localDescription.sdp,tracks:[{track_id:track.id,slot:'screen'}]}));
         };
@@ -67,7 +67,29 @@ try {
         await expect.poll(()=>receiver.evaluate(mime=>decoded(mime),mime),{timeout:15000}).toBeGreaterThan(before+20);
         assert.equal(await sender.evaluate(()=>pc.getSenders().filter(s=>s.track?.kind==='video').length),1);
         assert.equal(await sender.evaluate(()=>transceiver.sender.getParameters().encodings.length),1);
+        assert.equal(await sender.evaluate(mime=>{
+            const codecs=transceiver.sender.getParameters().codecs;
+            const primary=codecs.find(c=>c.mimeType===mime);
+            return codecs.some(c=>c.mimeType==='video/rtx'&&c.sdpFmtpLine===`apt=${primary?.payloadType}`);
+        },mime),true,'sender codec switch lost RTX');
+        assert.equal(await receiver.evaluate(async mime=>{
+            const stats=await pc.getStats();
+            const incoming=[...stats.values()].find(s=>s.type==='inbound-rtp'&&s.kind==='video'&&stats.get(s.codecId)?.mimeType===mime&&s.framesDecoded>0);
+            return !!incoming&&pc.remoteDescription.sdp.includes(`a=ssrc-group:FID ${incoming.ssrc} `);
+        },mime),true,'active receiver stream has no negotiated repair SSRC');
         console.log(`${mime}: decoded frames advanced with one sender encoding`);
+        const repairBefore=await request('loss',{id:'sub'});
+        await expect.poll(async()=>(await request('loss-state',{id:'sub'})).dropped,{timeout:5000}).toBe(repairBefore.dropped+1);
+        await expect.poll(async()=>(await request('loss-state',{id:'sub'})).repaired,{timeout:5000}).toBeGreaterThan(repairBefore.repaired);
+        const repairedFrames=await receiver.evaluate(mime=>decoded(mime),mime);
+        await expect.poll(()=>receiver.evaluate(mime=>decoded(mime),mime),{timeout:5000}).toBeGreaterThan(repairedFrames+20);
+        console.log(`${mime}: one lost SRTP media packet triggered RTX and decoding continued`);
+        const ingressBefore=await request('ingress-loss',{id:'pub'});
+        await expect.poll(async()=>(await request('ingress-loss-state',{id:'pub'})).dropped,{timeout:5000}).toBe(ingressBefore.dropped+1);
+        await expect.poll(async()=>(await request('ingress-loss-state',{id:'pub'})).repaired,{timeout:5000}).toBeGreaterThan(ingressBefore.repaired);
+        const ingressFrames=await receiver.evaluate(mime=>decoded(mime),mime);
+        await expect.poll(()=>receiver.evaluate(mime=>decoded(mime),mime),{timeout:5000}).toBeGreaterThan(ingressFrames+20);
+        console.log(`${mime}: sender repaired one lost upstream SRTP packet and decoding continued`);
         if(index===1) {
             const before=await legacy.evaluate(()=>decoded('video/VP8'));
             await expect.poll(()=>legacy.evaluate(()=>decoded('video/VP8')),{timeout:15000}).toBeGreaterThan(before+20);

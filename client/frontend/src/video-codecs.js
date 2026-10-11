@@ -31,11 +31,12 @@ export async function publicationVideoCodecs(track) {
 
 export function preferPublicationCodec(transceiver, codec) {
     if (!transceiver?.setCodecPreferences || !["h264", "vp8"].includes(codec)) return false;
-    const codecs = capabilities("RTCRtpSender").filter(item => item.mimeType?.toLowerCase() === "video/vp8" || relayH264(item));
+    const codecs = capabilities("RTCRtpSender").filter(item => ["video/vp8", "video/rtx"].includes(item.mimeType?.toLowerCase()) || relayH264(item));
     const preferred = `video/${codec}`;
     if (!codecs.some(item => item.mimeType.toLowerCase() === preferred)) throw new Error(`Video codec unavailable: ${codec}`);
     codecs.sort((a, b) => Number(b.mimeType.toLowerCase() === preferred) - Number(a.mimeType.toLowerCase() === preferred));
-    // Multiple negotiated formats are alternatives on this ONE encoding.
+    // Multiple media formats are alternatives on this ONE encoding. Keep RTX
+    // so packet repair is negotiated for the selected format as well.
     transceiver.setCodecPreferences(codecs);
     return true;
 }

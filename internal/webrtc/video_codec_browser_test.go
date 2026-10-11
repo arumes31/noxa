@@ -23,6 +23,8 @@ func TestBrowserSingleCodecSwitch(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = engine.Close() })
+	repair := newVideoRepairProxy(t, engine.udpMux.GetListenAddresses()[0])
+	ingressRepair := newVideoRepairProxy(t, engine.udpMux.GetListenAddresses()[0])
 	router := NewRouter(nil)
 	router.JoinChannel(1, "pub")
 	router.JoinChannel(1, "sub")
@@ -74,7 +76,7 @@ func TestBrowserSingleCodecSwitch(t *testing.T) {
 			if requestErr == nil {
 				select {
 				case <-gathered:
-					result = peer.pc.LocalDescription()
+					result = ingressRepair.description(peer.pc.LocalDescription())
 				case <-r.Context().Done():
 					requestErr = r.Context().Err()
 				}
@@ -90,6 +92,9 @@ func TestBrowserSingleCodecSwitch(t *testing.T) {
 				select {
 				case <-gathered:
 					result = peer.pc.LocalDescription()
+					if body.ID == "sub" {
+						result = repair.description(peer.pc.LocalDescription())
+					}
 				case <-r.Context().Done():
 					requestErr = r.Context().Err()
 				}
@@ -109,6 +114,28 @@ func TestBrowserSingleCodecSwitch(t *testing.T) {
 			router.mu.RLock()
 			result = router.videoCodecs[videoSourceRef{"pub", SlotScreen}].MimeType
 			router.mu.RUnlock()
+		case "/loss":
+			router.mu.RLock()
+			output := router.pubTracks["sub"]["pub"].video[SlotScreen]
+			sender := output.sender
+			router.mu.RUnlock()
+			encoding := sender.GetParameters().Encodings[0]
+			repair.repairSSRC.Store(uint32(encoding.RTX.SSRC))
+			repair.dropSSRC.Store(uint32(encoding.SSRC))
+			result = map[string]uint32{"dropped": repair.dropped.Load(), "repaired": repair.repaired.Load()}
+		case "/loss-state":
+			result = map[string]uint32{"dropped": repair.dropped.Load(), "repaired": repair.repaired.Load()}
+		case "/ingress-loss":
+			for _, receiver := range peer.pc.GetReceivers() {
+				if track := receiver.Track(); track != nil && track.Kind() == pion.RTPCodecTypeVideo {
+					ingressRepair.repairSSRC.Store(uint32(track.RtxSSRC()))
+					ingressRepair.dropSSRC.Store(uint32(track.SSRC()))
+					break
+				}
+			}
+			result = map[string]uint32{"dropped": ingressRepair.dropped.Load(), "repaired": ingressRepair.repaired.Load()}
+		case "/ingress-loss-state":
+			result = map[string]uint32{"dropped": ingressRepair.dropped.Load(), "repaired": ingressRepair.repaired.Load()}
 		default:
 			http.NotFound(w, r)
 			return

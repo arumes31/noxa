@@ -119,4 +119,9 @@ func TestPeerVideoBoundsDoesNotMutateSharedCodecParameters(t *testing.T) {
 	if !strings.Contains(transceiver.Receiver().GetParameters().Codecs[0].SDPFmtpLine, "max-fs=920") {
 		t.Fatal("local preference was not installed")
 	}
+	for _, codec := range transceiver.Receiver().GetParameters().Codecs {
+		if codec.MimeType != pion.MimeTypeVP8 && (codec.MimeType != pion.MimeTypeRTX || codec.SDPFmtpLine != "apt=96") {
+			t.Fatalf("bounded preference retained an unrelated media or repair format: %+v", codec)
+		}
+	}
 }
