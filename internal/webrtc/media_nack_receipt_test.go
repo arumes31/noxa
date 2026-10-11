@@ -63,7 +63,7 @@ func TestRepairReceiptWindowAndLifecycle(t *testing.T) {
 	}
 	observe(602, attrs)
 	oldToken := token
-	newInfo, newAttrs := receiptTestBinding(f, 42)
+	_, newAttrs := receiptTestBinding(f, 42)
 	observeRepairReceipt(&oldToken, &rtp.Packet{Header: rtp.Header{SSRC: 42, SequenceNumber: 603}}, attrs)
 	if got := receiptTestFilter(f, receiptTestNACK(42, 602, 603)); len(got) != 2 {
 		t.Fatal("old binding suppressed new source")
@@ -76,7 +76,7 @@ func TestRepairReceiptWindowAndLifecycle(t *testing.T) {
 	if len(f.streams) != 0 {
 		t.Fatal("ambiguous unbind retained ledger")
 	}
-	newInfo, newAttrs = receiptTestBinding(f, 42)
+	newInfo, newAttrs := receiptTestBinding(f, 42)
 	observe(604, newAttrs)
 	if got := receiptTestFilter(f, receiptTestNACK(42, 604)); len(got) != 0 {
 		t.Fatal("fresh bind failed to restore filtering")
