@@ -59,12 +59,67 @@ func TestH264ForwardFrameInterleavedPadding(t *testing.T) {
 		padding.PaddingSize = 1
 		frame.push(padding, now)
 		packets, _, lost := frame.push(h264ForwardPacket(3+gap, 90, true, 0x7c, 0x41, 2), now)
-		if gap == 0 && (len(packets) != 2 || lost) {
+		if gap == 0 && (len(packets) != 3 || lost || !isVideoPadding(packets[1])) {
 			t.Fatal("padding discarded an intact fragmented frame")
 		}
 		if gap != 0 && (len(packets) != 0 || !lost) {
 			t.Fatal("padding hid a missing media packet")
 		}
+	}
+}
+
+// Chromium sends padding probes in the same RTP sequence space as media.
+// Dropping them manufactures downstream loss and repeated, unrepairable NACKs.
+func TestH264PaddingPreservesReceiverSequenceAndFrameState(t *testing.T) {
+	now := time.Now()
+	var frame h264ForwardFrame
+	var stream videoContinuity
+	packets := []*rtp.Packet{
+		h264ForwardPacket(100, 90, true, 24, 0, 2, 0x67, 1, 0, 2, 0x68, 1, 0, 2, 0x65, 1),
+		recoveryPaddingPacket(7, 101, 0),
+		h264ForwardPacket(102, 180, false, 0x7c, 0x81, 1),
+		recoveryPaddingPacket(7, 103, 0),
+		h264ForwardPacket(104, 180, true, 0x7c, 0x41, 2),
+	}
+	next := uint16(100)
+	for _, input := range packets {
+		out, key, lost := frame.push(input, now)
+		if lost {
+			t.Fatal("intact media with padding requested recovery")
+		}
+		for i, packet := range out {
+			previous := stream
+			wire, accepted := stream.translateH264(packet, now.Add(time.Second), key && i == 0)
+			if !accepted || wire.SequenceNumber != next {
+				t.Fatalf("receiver sequence gap: want %d, got %+v", next, wire)
+			}
+			if isVideoPadding(packet) && (stream.timestamp != previous.timestamp || !stream.last.Equal(previous.last)) {
+				t.Fatal("padding advanced the last media frame")
+			}
+			next++
+		}
+	}
+	if next != 105 {
+		t.Fatalf("receiver is missing RTP packets: next=%d", next)
+	}
+	stream.beginEpoch()
+	if _, ok := stream.translateH264(recoveryPaddingPacket(7, 105, 270), now, true); ok {
+		t.Fatal("padding resumed a paused receiver")
+	}
+}
+
+func TestH264InterleavedPaddingRemainsBounded(t *testing.T) {
+	var frame h264ForwardFrame
+	now := time.Now()
+	frame.push(h264ForwardPacket(0, 90, false, 0x7c, 0x81, 1), now)
+	for sequence := 1; sequence <= h264AccessUnitPackets; sequence++ {
+		packets, _, lost := frame.push(recoveryPaddingPacket(7, uint16(sequence), 0), now)
+		if len(packets) != 0 || lost != (sequence == h264AccessUnitPackets) {
+			t.Fatalf("unbounded or prematurely forwarded incomplete unit at %d", sequence)
+		}
+	}
+	if len(frame.packets) != 0 || frame.bytes != 0 {
+		t.Fatal("padding exhaustion retained the abandoned frame")
 	}
 }
 

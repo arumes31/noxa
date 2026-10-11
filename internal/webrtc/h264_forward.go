@@ -49,10 +49,20 @@ func (f *h264ForwardFrame) nal(header byte) bool {
 func (f *h264ForwardFrame) push(p *rtp.Packet, now time.Time) (packets []*rtp.Packet, keyframe, lost bool) {
 	if isVideoPadding(p) {
 		// Padding shares the RTP sequence space and may be interleaved with a
-		// fragmented frame. Consume contiguous padding without treating it as
-		// media or allowing it to hide an actual missing packet.
+		// fragmented frame. Forward it in order too: consuming it only here
+		// would manufacture missing packets and downstream NACKs. Keep padding
+		// behind an unfinished unit until that unit can be released atomically.
+		if len(f.packets) == 0 {
+			return []*rtp.Packet{p.Clone()}, false, false
+		}
 		if len(f.packets) > 0 && p.SSRC == f.ssrc && p.SequenceNumber == f.sequence+1 {
+			if p.MarshalSize() > h264AccessUnitBytes-f.bytes || len(f.packets) >= h264AccessUnitPackets || now.Sub(f.started) > h264AccessUnitWait {
+				*f = h264ForwardFrame{}
+				return nil, false, true
+			}
 			f.sequence = p.SequenceNumber
+			f.bytes += p.MarshalSize()
+			f.packets = append(f.packets, p.Clone())
 		}
 		return nil, false, false
 	}
@@ -124,6 +134,12 @@ func (f *h264ForwardFrame) push(p *rtp.Packet, now time.Time) (packets []*rtp.Pa
 // sequence/timestamp continuity changes; frameStart marks an assembled access
 // unit with parameter sets before its IDR for newly watching receivers.
 func (v *videoContinuity) translateH264(pkt *rtp.Packet, now time.Time, frameStart bool) (*rtp.Packet, bool) {
+	if isVideoPadding(pkt) {
+		// The shared RTP padding path does not parse or rewrite VP8 payloads.
+		// It preserves sequence offsets without advancing media timestamps or
+		// permitting padding to start a new watch/source epoch.
+		return v.translate(pkt, now)
+	}
 	switching := v.seen && (v.ssrc != pkt.SSRC || v.pendingEpoch)
 	if (!v.seen || switching || v.pendingEpoch) && !frameStart {
 		return nil, false
