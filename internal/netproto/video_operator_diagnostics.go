@@ -39,6 +39,7 @@ type VideoOperatorViewer struct {
 	OutputSSRC      uint32                         `json:"output_ssrc"`
 	Forwarding      *VideoStreamForwardDiagnostics `json:"forwarding"`
 	Pacer           *VideoPacerDiagnostics         `json:"pacer"`
+	RTXRepairs      *VideoRTXRepairDiagnostics     `json:"rtx_repairs,omitempty"`
 }
 
 // Pacer counters are cumulative for the recipient peer, across its video

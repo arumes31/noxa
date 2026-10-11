@@ -100,6 +100,8 @@ func (r *Router) videoOperatorViewerLocked(client string, key publicationKey, no
 	d := &output.videoDiagnostic
 	d.mu.Lock()
 	if viewer.Watching && d.publication == watch.publication && d.watchEpoch == watch.epoch && !d.stage.last.IsZero() {
+		repairs := d.repairs // fixed array copied; no mutable state escapes
+		viewer.RTXRepairs = &repairs
 		viewer.Forwarding = &netproto.VideoStreamForwardDiagnostics{SourceSSRC: d.sourceSSRC, RID: d.rid,
 			OutputSSRC: viewer.OutputSSRC, Stage: d.stage.snapshot(now)}
 	}

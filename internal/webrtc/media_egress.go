@@ -74,6 +74,9 @@ type mediaTicket struct {
 	videoSource   uint32
 	videoRID      string
 	videoMedia    bool
+	// Diagnostic-only mutable receipt state; protected by videoDiagnostic.mu.
+	// All authorization and source fields above remain immutable after prepare.
+	repairDiagnostic videoRepairTicketDiagnostic
 }
 
 type mediaEgressStream struct {
@@ -110,6 +113,7 @@ func (s *mediaEgressStream) prepare(pkt *rtp.Packet, ticket mediaTicket) (rtp.Pa
 		return rtp.Packet{}, false
 	}
 	ticket.id, ticket.expires = id, time.Now().Add(mediaTicketLifetime)
+	ticket.repairDiagnostic = videoRepairTicketDiagnostic{}
 	ticket.csrc = append([]uint32(nil), pkt.CSRC...)
 	ticket.videoMedia = !isVideoPadding(pkt) && len(pkt.Payload) > 0
 	s.mu.RLock()
@@ -154,6 +158,11 @@ func (s *mediaEgressStream) write(header *rtp.Header, payload []byte, attrs inte
 // The result describes only the branch that actually declined this write.
 // Counters are updated by the pacer after every permission/stream lock unwinds.
 func (s *mediaEgressStream) writeResult(header *rtp.Header, payload []byte, attrs interceptor.Attributes, writer interceptor.RTPWriter) (int, mediaTerminalDropReason, error) {
+	return s.writeResultKind(header, payload, attrs, writer, mediaPacketPrimary)
+}
+
+// kind is captured from the negotiated binding by the pacer at admission.
+func (s *mediaEgressStream) writeResultKind(header *rtp.Header, payload []byte, attrs interceptor.Attributes, writer interceptor.RTPWriter, kind mediaPacketKind) (int, mediaTerminalDropReason, error) {
 	if len(header.CSRC) != 2 {
 		return 0, mediaDropInvalidTicket, nil
 	}
@@ -213,12 +222,12 @@ func (s *mediaEgressStream) writeResult(header *rtp.Header, payload []byte, attr
 			reason = mediaDropUnclassified
 			// Lifecycle/permission read leases still linearize revocation with
 			// this write. Concurrent admission may evict a cache entry afterward,
-			// but cannot change this immutable, already authorized ticket.
+			// but cannot change this ticket's immutable authorization fields.
 			out := *header
 			out.CSRC = ticket.csrc
 			n, outputError = writer.Write(&out, payload, attrs)
 			if n > 0 && outputError == nil {
-				s.observeVideo(&out, out.MarshalSize()+len(payload)+int(out.PaddingSize), ticket, time.Now())
+				s.observeVideoKind(&out, out.MarshalSize()+len(payload)+int(out.PaddingSize), ticket, time.Now(), kind)
 			}
 			return outputError
 		}

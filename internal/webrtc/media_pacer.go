@@ -350,7 +350,7 @@ func (p *mediaPacer) writePacket(packet pacedPacket) {
 	stream := p.egress.streams[packet.stream.bindingID]
 	p.egress.mu.Unlock()
 	if stream != nil {
-		n, reason, err := stream.writeResult(&packet.header, packet.payload, packet.attrs, write)
+		n, reason, err := stream.writeResultKind(&packet.header, packet.payload, packet.attrs, write, packet.kind)
 		p.recordVideoWrite(packet, attempted, n, err, reason)
 	} else {
 		p.recordVideoWrite(packet, false, 0, nil, mediaDropMissingBinding)

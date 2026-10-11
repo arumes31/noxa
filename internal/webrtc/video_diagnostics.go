@@ -156,10 +156,16 @@ type videoForwardDiagnostic struct {
 	rid                     string
 	publication, watchEpoch uint64
 	latestTicket            uint64
+	repairEpoch             uint64
+	repairs                 netproto.VideoRTXRepairDiagnostics
 	stage                   videoStageCounter
 }
 
 func (s *mediaEgressStream) observeVideo(header *rtp.Header, size int, ticket *mediaTicket, now time.Time) {
+	s.observeVideoKind(header, size, ticket, now, mediaPacketPrimary)
+}
+
+func (s *mediaEgressStream) observeVideoKind(header *rtp.Header, size int, ticket *mediaTicket, now time.Time, kind mediaPacketKind) {
 	if ticket.videoSource == 0 || (ticket.delivery.Slot != SlotCam && ticket.delivery.Slot != SlotScreen) {
 		return
 	}
@@ -175,9 +181,16 @@ func (s *mediaEgressStream) observeVideo(header *rtp.Header, size int, ticket *m
 		d.sourceSSRC, d.rid = ticket.videoSource, ticket.videoRID
 		d.publication, d.watchEpoch = ticket.delivery.Publication, ticket.delivery.WatchEpoch
 		d.stage = videoStageCounter{}
+		d.repairEpoch++
+		d.repairs = netproto.VideoRTXRepairDiagnostics{}
 	}
 	d.latestTicket = max(d.latestTicket, ticket.id)
 	d.stage.observe(header, size, ticket.videoMedia, now)
+	if kind == mediaPacketRTX && ticket.videoMedia {
+		// Sample under the existing diagnostic mutex so concurrent successful
+		// writes cannot reverse the observation order or manufacture zero gaps.
+		d.observeRepair(&ticket.repairDiagnostic, time.Now())
+	}
 }
 
 // StreamDiagnostics is available to the same current channel member who may
