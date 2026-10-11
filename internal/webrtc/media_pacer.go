@@ -2,6 +2,7 @@ package webrtc
 
 import (
 	"encoding/binary"
+	"errors"
 	"io"
 	"strings"
 	"sync"
@@ -22,28 +23,38 @@ const mediaPacerLifetime = 500 * time.Millisecond
 const mediaAudioPackets = 256
 const mediaAudioBytes = 128 * 1024
 const mediaAudioLifetime = 100 * time.Millisecond
+const mediaRTXSequenceStates = 4096
+
+var errMediaRTXSequenceLimit = errors.New("media pacer RTX sequence state limit reached")
+
+// Retained for the peer connection lifetime, including unbind/rebind of an
+// SSRC. Restarting its sequence under the same SRTP key could reuse an index.
+// Only the final pacing worker advances next; binding only shares the pointer.
+type mediaRTXSequence struct{ next uint16 }
 
 // Enough initial headroom for a Full HD stream while receiver feedback starts.
 // This is not a floor: GCC may immediately reduce it on a constrained path.
 const mediaInitialBitrate = 6_000_000
 
 type pacedStream struct {
-	writer    interceptor.RTPWriter
-	active    bool // protected by mediaPacer.mu
-	bindingID string
-	twccID    uint8
-	audio     bool
-	rtxSSRC   uint32
+	writer      interceptor.RTPWriter
+	active      bool // protected by mediaPacer.mu
+	bindingID   string
+	twccID      uint8
+	audio       bool
+	rtxSSRC     uint32
+	rtxSequence *mediaRTXSequence
 }
 type pacedPacket struct {
-	header  rtp.Header
-	payload []byte
-	attrs   interceptor.Attributes
-	stream  *pacedStream
-	expires time.Time
-	size    int
-	repair  mediaRepairKey
-	kind    mediaPacketKind
+	header      rtp.Header
+	payload     []byte
+	attrs       interceptor.Attributes
+	stream      *pacedStream
+	expires     time.Time
+	size        int
+	repair      mediaRepairKey
+	kind        mediaPacketKind
+	rtxSequence *mediaRTXSequence
 }
 
 // mediaPacer always queues, even with no backlog: StaticRTP holds its track
@@ -63,8 +74,9 @@ type mediaPacer struct {
 	sent                              uint64 // historyMu covers insertion and feedback delivery
 	audioQueue                        [mediaAudioPackets]pacedPacket
 	audioHead, audioCount, audioBytes int
-	diagnostics                       mediaPacerCounters          // protected by mu; video only
-	queuedRepairs                     map[mediaRepairKey]struct{} // protected by mu; bounded by video queue
+	diagnostics                       mediaPacerCounters           // protected by mu; video only
+	queuedRepairs                     map[mediaRepairKey]struct{}  // protected by mu; bounded by video queue
+	rtxSequences                      map[uint32]*mediaRTXSequence // protected by mu; bounded, never evicted
 	videoStarted                      atomic.Bool
 	startVideoProbe                   func(int) bool // installed before binding a stream
 }
@@ -88,13 +100,25 @@ func (p *mediaPacer) AddStream(ssrc uint32, writer interceptor.RTPWriter) {
 }
 
 func (p *mediaPacer) addRTX(ssrc, rtx uint32) {
-	if rtx == 0 {
+	if rtx == 0 || rtx == ssrc {
 		return
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if p.closed {
+		return
+	}
 	if stream := p.streams[ssrc]; stream != nil {
+		state := p.rtxSequences[rtx]
+		if state == nil && len(p.rtxSequences) < mediaRTXSequenceStates {
+			if p.rtxSequences == nil {
+				p.rtxSequences = make(map[uint32]*mediaRTXSequence)
+			}
+			state = &mediaRTXSequence{next: rtp.NewRandomSequencer().NextSequenceNumber()}
+			p.rtxSequences[rtx] = state
+		}
 		stream.rtxSSRC = rtx
+		stream.rtxSequence = state
 		p.streams[rtx] = stream
 	}
 }
@@ -147,6 +171,16 @@ func (p *mediaPacer) Write(header *rtp.Header, payload []byte, attrs interceptor
 		}
 		return size, nil
 	}
+	var rtxSequence *mediaRTXSequence
+	if stream.rtxSSRC != 0 && header.SSRC == stream.rtxSSRC {
+		rtxSequence = stream.rtxSequence
+		if rtxSequence == nil {
+			if !stream.audio {
+				p.diagnostics.droppedRetired++
+			}
+			return 0, errMediaRTXSequenceLimit
+		}
+	}
 	repair := queuedRepairKey(stream, header, payload)
 	if repair.stream != nil {
 		if _, queued := p.queuedRepairs[repair]; queued {
@@ -167,6 +201,7 @@ func (p *mediaPacer) Write(header *rtp.Header, payload []byte, attrs interceptor
 		attributes[key] = value
 	}
 	packet := pacedPacket{header: header.Clone(), payload: append([]byte(nil), payload...), attrs: attributes, stream: stream, expires: time.Now().Add(mediaPacerLifetime), size: size, repair: repair}
+	packet.rtxSequence = rtxSequence
 	// Classify while stream metadata is protected; no packet content is retained
 	// by diagnostics. Same-SSRC retransmissions remain primary, not proven RTX.
 	if header.Padding && len(payload) == 0 {
@@ -280,6 +315,14 @@ func (p *mediaPacer) writePacket(packet pacedPacket) {
 	attempted := false
 	write := interceptor.RTPWriterFunc(func(header *rtp.Header, payload []byte, attrs interceptor.Attributes) (int, error) {
 		attempted = true
+		// Pion caches an RTX sequence with each original. RFC 4588 requires a
+		// fresh sequence for every transmission, including repeated NACKs and
+		// padding on that SSRC. Do this only after final authorization, on our
+		// owned header, before GCC and SRTP. Consume even if the write fails.
+		if state := packet.rtxSequence; state != nil {
+			header.SequenceNumber = state.next
+			state.next++
+		}
 		if packet.stream.twccID != 0 {
 			p.historyMu.Lock()
 			defer p.historyMu.Unlock()
@@ -331,6 +374,9 @@ func (p *mediaPacer) Close() error {
 	}
 	p.mu.Unlock()
 	<-p.done
+	p.mu.Lock()
+	clear(p.rtxSequences)
+	p.mu.Unlock()
 	return nil
 }
 
