@@ -12,6 +12,25 @@ const current = s => session === s && V().state.pc === s.pc && mediaScopeIsCurre
 
 export function streamSessionIsCurrent(pc) { return !!session && session.pc === pc && current(session); }
 
+// Capture intent before an asynchronous receiver repair. The transport may
+// temporarily remove its track binding, but a stop, retry or new publication
+// invalidates this intent; recovery never starts watching on its own.
+export function streamReceiverRecoveryTarget(pc, id, track) {
+    const s = session, entry = s?.streams.get(id);
+    if (!s || s.pc !== pc || !current(s) || !entry?.watching || entry.pending || entry.available === false ||
+        s.tracks.get(id)?.track !== track) return null;
+    const revision = entry.revision, generation = entry.generation, watchSession = s.watchSession;
+    return {
+        key: JSON.stringify([id, generation, watchSession]),
+        id,
+        request: { action: "receiver_reset", publisher_id: entry.publisher_id, slot: entry.slot, generation,
+            session: watchSession, revision: String(revision), active: true },
+        bindingCurrent: () => s.tracks.get(id)?.track === track,
+        current: () => current(s) && s.streams.get(id) === entry && entry.watching && !entry.pending && entry.available !== false &&
+            entry.generation === generation && entry.revision === revision && s.watchSession === watchSession,
+    };
+}
+
 export function streamQualityTarget(publisherID, slot) {
     const s = session;
     if (!s || !current(s) || !s.watchSession) return null;

@@ -49,6 +49,11 @@ func (s *TCPServer) handleVideoStreamControl(ctx context.Context, client *Client
 			return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "invalid publication slot")
 		}
 	case "watch", "preview", "list":
+	case "receiver_reset":
+		if len(frame.Payload) > 4096 || msg.PublisherID == "" || (msg.Slot != webrtc.SlotCam && msg.Slot != webrtc.SlotScreen) ||
+			msg.Generation == 0 || msg.Session == 0 || !msg.Active || msg.Revision == 0 || len(msg.JPEG) != 0 {
+			return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "invalid receiver recovery scope")
+		}
 	case "diagnostics":
 		if len(frame.Payload) > 4096 || msg.PublisherID == "" || (msg.Slot != webrtc.SlotCam && msg.Slot != webrtc.SlotScreen) ||
 			msg.Generation == 0 || msg.Session == 0 || msg.Active || msg.Revision != 0 || len(msg.JPEG) != 0 {
@@ -81,6 +86,14 @@ func (s *TCPServer) handleVideoStreamControl(ctx context.Context, client *Client
 			}
 		case "watch":
 			started, err = watchVideoWithCodecs(voice, client.ID, msg)
+		case "receiver_reset":
+			if recovery, ok := voice.(interface {
+				ResetStreamReceiver(string, string, string, uint64, uint64, uint64) error
+			}); ok {
+				err = recovery.ResetStreamReceiver(client.ID, msg.PublisherID, msg.Slot, msg.Generation, msg.Session, msg.Revision)
+			} else {
+				return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "receiver recovery is unavailable")
+			}
 		case "preview_upload":
 			err = voice.SetVideoPreview(client.ID, msg.Slot, msg.Generation, msg.JPEG)
 		case "preview":

@@ -6,6 +6,8 @@ import { watchMicrophone } from "./microphone-recovery.js";
 import { createRemoteAudio } from './remote-audio.js';
 import { startVoiceDiagnostics, noteVoiceActivity } from './voice-diagnostics.js';
 import { createVoiceRecovery } from './voice-recovery.js';
+import { createHardwareRecoveryScheduler, createVideoReceiverRecovery } from './video-hardware-recovery.js';
+import { createVideoSenderRecovery } from './video-sender-hardware-recovery.js';
 import { createChannelTree } from './channel-tree.js';
 import { captureChannelPresence, channelPresenceChanges } from './channel-presence.js';
 // noxa client frontend — voice ops console (vanilla JS).
@@ -42,10 +44,10 @@ import {
     initVideo, videoTrackAdded, videoTrackRemoved, videoSpeaking,
     videoRefreshNames, clearVideoGrid, shareToggle, setLowBandwidth, isLowBandwidth,
     parseTrackID, SLOT_SCREEN_AUDIO, cameraToggle, resetCameraState, clearRegionBox,
-    renegotiate, answerRemoteOffer, queuePeerNegotiation, applyVideoLimits,
+    renegotiate, answerRemoteOffer, queuePeerNegotiation, applyVideoLimits, retryVideoHardware,
 } from "./video.js";
 import * as chatUI from "./chat-ui.js";
-import { startStreamSession, stopStreamSession, streamSessionIsCurrent, receiveStreamTrack, removeStreamTrack, receiveShareAudio, removeShareAudio, refreshStreamUploads } from "./stream-controls.js";
+import { startStreamSession, stopStreamSession, streamSessionIsCurrent, receiveStreamTrack, removeStreamTrack, receiveShareAudio, removeShareAudio, refreshStreamUploads, streamReceiverRecoveryTarget } from "./stream-controls.js";
 import { startRemoteMedia, reconcileRemoteMedia } from "./remote-media.js";
 import { remoteTrackID } from "./media-track-id.js";
 import { isClientMicrophoneMuted, publishAudioState } from "./audio-state.js";
@@ -151,9 +153,7 @@ const { startQualitySampler, stopQualitySampler } = createConnectionQuality({ $,
 const remoteAudio = createRemoteAudio({ state, toast, sysMsg, voiceEpoch: () => voiceSessionEpoch });
 const { selectAudioOutput, applyOutputSettings, remoteChain, reconcileSpatialVoice, attachRemoteAudio, readRemoteAudioLevel, resolveTrackUsers, shareAudio, applyDucking, applyShareAudio, attachShareAudio, detachRemoteAudio } = remoteAudio;
 const channelAudioAttached = (track, id = remoteTrackID(state.pc, track)) => remoteAudio.hasRemoteAudio(track) && state.trackUsers.get(track.id)?.track_id === id;
-startVoiceDiagnostics({
-    state,
-    recover: createVoiceRecovery({ state,
+const recoverVoice = createVoiceRecovery({ state,
         attached: channelAudioAttached,
         repair: pc => reconcileRemoteMedia(pc),
         resync: pc => renegotiate(pc),
@@ -162,7 +162,17 @@ startVoiceDiagnostics({
             resetVoiceSession();
             await ensureVoiceForChannel();
         },
-    }),
+    });
+const hardwareRecovery = createHardwareRecoveryScheduler();
+const recoverVideoSender = createVideoSenderRecovery({ state, retry: retryVideoHardware, scheduler: hardwareRecovery });
+const recoverVideoReceiver = createVideoReceiverRecovery({ state, watch: streamReceiverRecoveryTarget, scheduler: hardwareRecovery,
+    supported: () => window.go?.main?.App.SupportsStreamReceiverRecoveryForTab?.(state.activeTabID) ?? false });
+startVoiceDiagnostics({
+    state,
+    recover: async (pc, stats) => {
+        await recoverVoice(pc, stats);
+        await Promise.all([recoverVideoSender(pc, stats), recoverVideoReceiver(pc, stats)]);
+    },
     output: () => ({ state: remoteChain.ctx?.state || "unavailable", latencyMS: Number.isFinite(remoteChain.ctx?.outputLatency) ? remoteChain.ctx.outputLatency * 1000 : null }),
     bridge: (tabID, report) => window.go?.main?.App.ReportVoiceDiagnosticsForTab?.(tabID, report),
 });

@@ -2,6 +2,16 @@ package main
 
 import "noxa/internal/netproto"
 
+func (a *App) SupportsStreamReceiverRecoveryForTab(tabID string) bool {
+	cm, err := a.requireTabCM(tabID)
+	if err != nil {
+		return false
+	}
+	cm.mu.Lock()
+	defer cm.mu.Unlock()
+	return cm.conn != nil && cm.clientID != "" && cm.supportsStreamReceiverRecovery && cm.authorizationModel == netproto.AuthorizationModelRolesV1
+}
+
 func (a *App) SupportsStreamCodecForTab(tabID string) bool {
 	cm, err := a.requireTabCM(tabID)
 	if err != nil {

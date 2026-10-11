@@ -28,11 +28,14 @@ try {
         const context=canvas.getContext('2d');let frame=0;
         setInterval(()=>{context.fillStyle=`hsl(${frame++%360} 50% 40%)`;context.fillRect(0,0,1280,720);context.fillStyle='white';context.font='40px sans-serif';context.fillText(`Codec recovery ${frame}`,frame%700,200);},33);
         const track=canvas.captureStream(30).getVideoTracks()[0];
+		const audio=new AudioContext();const oscillator=audio.createOscillator();const destination=audio.createMediaStreamDestination();
+		oscillator.connect(destination);oscillator.start();await audio.resume();window.audioContext=audio;
+		const audioTrack=destination.stream.getAudioTracks()[0];pc.addTransceiver(audioTrack,{direction:'sendonly',streams:[destination.stream]});
         window.transceiver=pc.addTransceiver(track,{direction:'sendonly',streams:[new MediaStream([track])],sendEncodings:[{maxBitrate:4000000}]});
         window.changeCodec=async mime=>{
             if(!preferTestCodec(transceiver,mime==='video/H264'?'h264':'vp8'))throw new Error(`Missing test codec ${mime}`);
             await pc.setLocalDescription(await pc.createOffer());await gather();
-            await pc.setRemoteDescription(await request('offer',{id:'pub',sdp:pc.localDescription.sdp,tracks:[{track_id:track.id,slot:'screen'}]}));
+            await pc.setRemoteDescription(await request('offer',{id:'pub',sdp:pc.localDescription.sdp,tracks:[{track_id:track.id,slot:'screen'},{track_id:audioTrack.id,slot:'mic'}]}));
         };
         await changeCodec('video/H264');
     });
@@ -101,6 +104,24 @@ try {
             const paused=await receiver.evaluate(()=>decoded('video/H264'));
             await expect.poll(()=>receiver.evaluate(()=>decoded('video/H264')),{timeout:15000}).toBeGreaterThan(paused+20);
             console.log('H264 watch resume decoded a fresh keyframe');
+			const recoveryBefore=await receiver.evaluate(async()=>{
+				const stats=[...(await pc.getStats()).values()];
+				const video=stats.find(s=>s.type==='inbound-rtp'&&s.kind==='video'&&s.framesDecoded>0);
+				const audio=stats.find(s=>s.type==='inbound-rtp'&&s.kind==='audio'&&s.packetsReceived>0);
+				if(!video||!audio)throw new Error('Expected active video and audio before scoped recovery');
+				window.recoveryPeer=pc;return {mid:video.mid,audioId:audio.id,audioPackets:audio.packetsReceived};
+			});
+			await request('receiver-reset',{id:'sub',revision:11});
+			await receiver.evaluate(()=>negotiate(12));
+			await expect.poll(()=>receiver.evaluate(async before=>{
+				const stats=await pc.getStats();
+				return [...stats.values()].some(s=>s.type==='inbound-rtp'&&s.kind==='video'&&s.mid!==before.mid&&s.framesDecoded>20&&stats.get(s.codecId)?.mimeType==='video/H264');
+			},recoveryBefore),{timeout:15000}).toBe(true);
+			assert.equal(await receiver.evaluate(async before=>{
+				const stats=await pc.getStats(),audio=stats.get(before.audioId);
+				return pc===recoveryPeer&&pc.connectionState==='connected'&&audio?.packetsReceived>before.audioPackets;
+			},recoveryBefore),true,'receiver recovery changed peer or interrupted existing audio binding');
+			console.log('H264 receiver recovery negotiated a fresh decoder MID; same peer and audio binding continued');
         }
     }
 } finally {await browser.close();}

@@ -54,27 +54,28 @@ type connManager struct {
 	// plain names.
 	tabID string
 
-	mu                          sync.Mutex
-	writeMu                     sync.Mutex
-	displayNameMu               sync.Mutex
-	audioStateMu                sync.Mutex
-	supportsAudioState          bool
-	supportsVoiceTelemetry      bool
-	supportsStreamVideoQuality  bool
-	supportsStreamDiagnostics   bool
-	supportsStreamSourceQuality bool
-	supportsStreamCodec         bool
-	conn                        net.Conn
-	connEpoch                   uint64
-	addr                        string // control address (tab info)
-	clientID                    string
-	uniqueID                    string
-	nickname                    string
-	displayName                 string // requested public name; separate from the account login
-	isGuest                     bool
-	authorizationModel          string
-	closed                      bool
-	reconnectTerminal           bool // authenticated rejection or trust failure; guarded by mu
+	mu                             sync.Mutex
+	writeMu                        sync.Mutex
+	displayNameMu                  sync.Mutex
+	audioStateMu                   sync.Mutex
+	supportsAudioState             bool
+	supportsVoiceTelemetry         bool
+	supportsStreamVideoQuality     bool
+	supportsStreamDiagnostics      bool
+	supportsStreamSourceQuality    bool
+	supportsStreamCodec            bool
+	supportsStreamReceiverRecovery bool
+	conn                           net.Conn
+	connEpoch                      uint64
+	addr                           string // control address (tab info)
+	clientID                       string
+	uniqueID                       string
+	nickname                       string
+	displayName                    string // requested public name; separate from the account login
+	isGuest                        bool
+	authorizationModel             string
+	closed                         bool
+	reconnectTerminal              bool // authenticated rejection or trust failure; guarded by mu
 	// The latest snapshot is replayed when a tab becomes active.
 	lastSnapshot string
 	// lastSubscriptions is the newest authoritative subscription set (312).
@@ -519,6 +520,7 @@ func (m *connManager) connectWith(addr string, authMsg netproto.Authenticate, si
 	m.supportsStreamDiagnostics = slices.Contains(resp.Capabilities, netproto.CapabilityStreamDiagnostics)
 	m.supportsStreamSourceQuality = slices.Contains(resp.Capabilities, netproto.CapabilityStreamSourceQuality)
 	m.supportsStreamCodec = slices.Contains(resp.Capabilities, netproto.CapabilityStreamCodec)
+	m.supportsStreamReceiverRecovery = slices.Contains(resp.Capabilities, netproto.CapabilityStreamReceiverRecovery)
 	m.isGuest = authMsg.Anonymous
 	m.iceServers = resp.ICEServers
 	m.mediaLimits = netproto.MediaLimits{}

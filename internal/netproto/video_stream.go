@@ -1,10 +1,11 @@
 package netproto
 
 const (
-	MsgVideoStreamControl         MessageType = 166
-	MsgVideoStreamResult          MessageType = 167
-	CapabilityStreamSourceQuality             = "stream_source_quality_v1"
-	CapabilityStreamCodec                     = "stream_single_codec_v1"
+	MsgVideoStreamControl            MessageType = 166
+	MsgVideoStreamResult             MessageType = 167
+	CapabilityStreamSourceQuality                = "stream_source_quality_v1"
+	CapabilityStreamCodec                        = "stream_single_codec_v1"
+	CapabilityStreamReceiverRecovery             = "stream_receiver_recovery_v1"
 )
 
 // VideoStreamControl has mandatory acknowledgement. Publication generations

@@ -6,6 +6,26 @@ import (
 	"noxa/internal/netproto"
 )
 
+func TestStreamReceiverRecoveryRequiresAuthenticatedCapability(t *testing.T) {
+	app, cm, capture := voiceDiagnosticApp(t, false)
+	cm.authorizationModel, cm.clientID = netproto.AuthorizationModelRolesV1, "self"
+	request := netproto.VideoStreamControl{Action: "receiver_reset", PublisherID: "pub", Slot: "screen", Generation: 1, Session: 1, Revision: 1, Active: true}
+	if app.SupportsStreamReceiverRecoveryForTab("a") {
+		t.Fatal("missing recovery capability accepted")
+	}
+	if _, err := app.VideoStreamControlForTab("a", request); err == nil || capture.data.Len() != 0 {
+		t.Fatal("recovery sent to unsupported server")
+	}
+	cm.supportsStreamReceiverRecovery = true
+	if !app.SupportsStreamReceiverRecoveryForTab("a") || app.SupportsStreamReceiverRecoveryForTab("missing") {
+		t.Fatal("recovery capability escaped authenticated tab")
+	}
+	request.Revision = 0
+	if _, err := app.VideoStreamControlForTab("a", request); err == nil || capture.data.Len() != 0 {
+		t.Fatal("unscoped recovery was transmitted")
+	}
+}
+
 func TestStreamSourceQualityRequiresCapability(t *testing.T) {
 	app, cm, capture := voiceDiagnosticApp(t, false)
 	cm.authorizationModel, cm.clientID = netproto.AuthorizationModelRolesV1, "self"

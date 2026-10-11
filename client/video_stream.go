@@ -17,9 +17,14 @@ func (a *App) VideoStreamControlForTab(tabID string, msg netproto.VideoStreamCon
 	}
 	cm.mu.Lock()
 	conn, clientID, sourceSupported, codecSupported, model := cm.conn, cm.clientID, cm.supportsStreamSourceQuality, cm.supportsStreamCodec, cm.authorizationModel
+	recoverySupported := cm.supportsStreamReceiverRecovery
 	cm.mu.Unlock()
 	if conn == nil {
 		return netproto.VideoStreamResult{}, errors.New("not connected")
+	}
+	if msg.Action == "receiver_reset" && (!recoverySupported || model != netproto.AuthorizationModelRolesV1 || clientID == "" ||
+		msg.PublisherID == "" || (msg.Slot != "cam" && msg.Slot != "screen") || msg.Generation == 0 || msg.Session == 0 || msg.Revision == 0 || !msg.Active || len(msg.JPEG) != 0) {
+		return netproto.VideoStreamResult{}, errors.New("invalid or unsupported receiver recovery")
 	}
 	if (msg.QualityMode != "" && msg.QualityMode != "source") || (msg.QualityMode != "" && msg.Action != "publish") {
 		return netproto.VideoStreamResult{}, errors.New("invalid publication quality mode")

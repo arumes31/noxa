@@ -1058,6 +1058,10 @@ export function SupportsStreamSourceQualityForTab(arg1) {
   return window['go']['main']['App']['SupportsStreamSourceQualityForTab'](arg1);
 }
 
+export function SupportsStreamReceiverRecoveryForTab(arg1) {
+  return window['go']['main']['App']['SupportsStreamReceiverRecoveryForTab'](arg1);
+}
+
 export function SupportsStreamVideoQualityForTab(arg1) {
   return window['go']['main']['App']['SupportsStreamVideoQualityForTab'](arg1);
 }

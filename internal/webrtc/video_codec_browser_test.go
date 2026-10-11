@@ -104,6 +104,8 @@ func TestBrowserSingleCodecSwitch(t *testing.T) {
 			router.RequestKeyframe("pub", SlotScreen, "")
 		case "/watch":
 			_, requestErr = router.WatchVideoWithCodecs(body.ID, "pub", SlotScreen, generation, body.Revision, router.VideoWatchSession(body.ID), body.Active, body.Codecs)
+		case "/receiver-reset":
+			requestErr = router.ResetStreamReceiver(body.ID, "pub", SlotScreen, generation, router.VideoWatchSession(body.ID), body.Revision)
 		case "/selected":
 			for _, stream := range router.VideoPublications("pub") {
 				if stream.Slot == SlotScreen {

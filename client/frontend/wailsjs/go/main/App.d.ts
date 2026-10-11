@@ -532,6 +532,8 @@ export function SupportsStreamDiagnosticsForTab(arg1:string):Promise<boolean>;
 
 export function SupportsStreamSourceQualityForTab(arg1:string):Promise<boolean>;
 
+export function SupportsStreamReceiverRecoveryForTab(arg1:string):Promise<boolean>;
+
 export function SupportsStreamVideoQualityForTab(arg1:string):Promise<boolean>;
 
 export function SwitchIdentity(arg1:string):Promise<string>;
