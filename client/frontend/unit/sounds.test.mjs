@@ -31,6 +31,81 @@ function fixture(options = {}) {
     return { engine, state, ctx, sources, tick: (ms = 1000) => { now += ms; ctx.currentTime += ms / 1000; }, dnd: (v) => { dnd = v; } };
 }
 
+test("default output aliases share the system route without changing saved preferences", async () => {
+    const f = fixture();
+    f.state.settings.playback_device_id = "default";
+    const routes = [];
+    f.ctx.setSinkId = async id => { routes.push(id); };
+    await f.engine.preload(["dm"]);
+    await f.engine.setOutput("");
+    await f.engine.setOutput(undefined);
+    assert.deepEqual(routes, [""]);
+    assert.equal(f.state.settings.playback_device_id, "default");
+    await f.engine.setOutput("communications");
+    assert.deepEqual(routes, ["", "communications"], "explicit communications output is preserved");
+});
+
+test("a trusted gesture can retry a pending startup resume synchronously and only once", async () => {
+    const f = fixture();
+    f.ctx.state = "suspended";
+    const completions = [];
+    f.ctx.resume = () => new Promise(resolve => completions.push(resolve));
+    const startup = f.engine.resume();
+    assert.equal(completions.length, 1, "resume is called in the caller's activation turn");
+    for (let i = 0; i < 20; i++) void f.engine.resume();
+    assert.equal(completions.length, 1);
+    const gesture = f.engine.resume({ userGesture: true });
+    assert.equal(completions.length, 2, "a pending policy-blocked attempt must not swallow the gesture");
+    for (let i = 0; i < 20; i++) void f.engine.resume({ userGesture: true });
+    assert.equal(completions.length, 2, "pending native calls remain bounded");
+    f.ctx.state = "running";
+    completions[1]();
+    assert.equal(await gesture, true);
+    completions[0]();
+    assert.equal(await startup, true);
+    assert.equal(f.sources.length, 0, "unlock does not replay an old notification");
+    await f.engine.dispose();
+});
+
+test("resume failures remain retryable without overriding notification mute", async () => {
+    const f = fixture();
+    f.ctx.state = "suspended";
+    f.state.settings.play_sounds = false;
+    f.ctx.resume = () => { throw Error("activation required"); };
+    assert.equal(await f.engine.resume(), false);
+    f.ctx.resume = async () => { f.ctx.state = "running"; };
+    assert.equal(await f.engine.resume({ userGesture: true }), true);
+    await f.engine.preload(["dm"]);
+    assert.equal(f.engine.play("dm"), false);
+    assert.equal(f.sources.length, 0);
+    await f.engine.dispose();
+});
+
+test("a rejected gesture keeps the pending startup tracked while allowing a later real gesture", async () => {
+    const f = fixture();
+    f.ctx.state = "suspended";
+    let attempts = 0, finishStartup;
+    f.ctx.resume = () => {
+        attempts++;
+        if (attempts === 1) return new Promise(resolve => { finishStartup = resolve; });
+        if (attempts === 2) return Promise.reject(Error("activation not yet allowed"));
+        f.ctx.state = "running";
+        return Promise.resolve();
+    };
+    const startup = f.engine.resume();
+    assert.equal(await f.engine.resume({ userGesture: true }), false);
+    for (let i = 0; i < 100; i++) void f.engine.resume();
+    assert.equal(attempts, 2, "a rejected gesture does not orphan the still-pending startup");
+    assert.equal(f.engine.resumeAttempts.size, 1);
+    assert.equal(await f.engine.resume({ userGesture: true }), true);
+    assert.equal(attempts, 3);
+    finishStartup();
+    await startup;
+    assert.equal(f.engine.resumeAttempts.size, 0);
+    assert.equal(f.sources.length, 0);
+    await f.engine.dispose();
+});
+
 test("all 33 events have unique replacement PCM assets with safe endpoints and levels", () => {
     assert.equal(SOUND_EVENTS.length, 33);
     const directory = new URL("../src/assets/sounds/", import.meta.url);

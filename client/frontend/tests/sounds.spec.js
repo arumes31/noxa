@@ -13,6 +13,81 @@ test.beforeEach(async ({ page }) => {
     await page.goto("/__sounds_test__");
 });
 
+test("startup and device changes prepare the saved notification output without a settings toggle", async ({ page }) => {
+    const result = await page.evaluate(async () => {
+        const settings = { play_sounds: true, playback_device_id: "default", sound_volume: 100 };
+        window.__noxa = { state: { settings } };
+        const { soundEngine, initSounds, updateSoundOutput } = await import("/src/sounds.js");
+        const ctx = soundEngine.context();
+        let state = "suspended", resumes = 0;
+        const routes = [];
+        Object.defineProperty(ctx, "state", { get: () => state });
+        ctx.resume = async () => { resumes++; state = "running"; };
+        ctx.setSinkId = async id => { routes.push(id); };
+        initSounds();
+        await soundEngine.preload(["dm"]);
+        await soundEngine.output;
+        const startup = { state, resumes, routes: [...routes], ready: soundEngine.outputReady };
+        state = "suspended";
+        navigator.mediaDevices.dispatchEvent(new Event("devicechange"));
+        await soundEngine.output;
+        const changed = { state, resumes, routes: [...routes], ready: soundEngine.outputReady };
+        settings.playback_device_id = "saved-headset";
+        settings.play_sounds = false;
+        await updateSoundOutput();
+        const muted = soundEngine.play("dm");
+        const finalRoute = routes.at(-1);
+        await soundEngine.dispose();
+        return { startup, changed, muted, finalRoute, settings };
+    });
+    expect(result.startup.state).toBe("running");
+    expect(result.startup.resumes).toBe(1);
+    expect(result.startup.ready).toBe(true);
+    expect(result.startup.routes.every(id => id === "")).toBe(true);
+    expect(result.changed.state).toBe("running");
+    expect(result.changed.resumes).toBe(2);
+    expect(result.changed.ready).toBe(true);
+    expect(result.changed.routes.length).toBeGreaterThan(result.startup.routes.length);
+    expect(result.finalRoute).toBe("saved-headset");
+    expect(result.muted).toBe(false);
+    expect(result.settings.play_sounds).toBe(false);
+    expect(result.settings.playback_device_id).toBe("saved-headset");
+});
+
+test("a trusted click unlocks a pending startup resume without replaying notification cues", async ({ page }) => {
+    await page.evaluate(async () => {
+        window.__noxa = { state: { settings: { play_sounds: true, playback_device_id: "", sound_volume: 100 } } };
+        const { soundEngine, initSounds } = await import("/src/sounds.js");
+        const ctx = soundEngine.context();
+        let state = "suspended", finishStartup;
+        window.resumeCalls = 0;
+        Object.defineProperty(ctx, "state", { get: () => state });
+        ctx.resume = () => {
+            window.resumeCalls++;
+            if (window.resumeCalls === 1) return new Promise(resolve => { finishStartup = resolve; });
+            state = "running";
+            finishStartup();
+            return Promise.resolve();
+        };
+        ctx.setSinkId = async () => {};
+        initSounds();
+        await soundEngine.preload(["dm"]);
+        window.droppedCue = soundEngine.play("dm");
+        document.body.innerHTML = "<button>Activate audio</button>";
+        window.dispatchEvent(new PointerEvent("pointerdown"));
+    });
+    expect(await page.evaluate(() => window.resumeCalls)).toBe(1);
+    await page.getByRole("button", { name: "Activate audio" }).click();
+    const result = await page.evaluate(async () => {
+        const { soundEngine } = await import("/src/sounds.js");
+        const result = { resumes: window.resumeCalls, dropped: window.droppedCue,
+            active: soundEngine.active.size, state: soundEngine.context().state };
+        await soundEngine.dispose();
+        return result;
+    });
+    expect(result).toEqual({ resumes: 2, dropped: false, active: 0, state: "running" });
+});
+
 for (const language of ["en", "de"]) {
     test(`native close waits for the ${language} goodbye recording to finish`, async ({ page }) => {
         const result = await page.evaluate(async language => {

@@ -178,6 +178,10 @@ export function testAll(settings, onLabel = () => {}) {
 export function updateSoundOutput() {
     updateConversationDucking();
     speechQueue.reconcile();
+    // Routing a suspended context is not playback readiness. Prepare it when
+    // saved settings arrive and after device changes, before the first cue.
+    // A blocked browser resume is retried by the trusted gesture below.
+    void soundEngine.resume();
     void preloadSounds();
     return soundEngine.setOutput(V()?.state.settings?.playback_device_id, { retry: true });
 }
@@ -185,8 +189,9 @@ export function updateSoundOutput() {
 export function initSounds() {
     void preloadSounds();
     void updateSoundOutput();
-    const resume = () => {
-        void soundEngine.resume();
+    const resume = (event) => {
+        const userGesture = !!event?.isTrusted && ["pointerdown", "keydown"].includes(event.type);
+        void soundEngine.resume({ userGesture });
         void soundEngine.setOutput(V()?.state.settings?.playback_device_id);
     };
     const deviceChange = () => {

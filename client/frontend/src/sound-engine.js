@@ -45,6 +45,7 @@ export class SoundEngine {
                 this.ctx = this.createContext();
                 this.ctx.addEventListener?.("statechange", this.onStatusChange);
                 this.requestedSink = undefined;
+                this.resumeAttempts = new Set();
             }
             return this.ctx;
         } catch { this.setOutputState("unavailable"); this.report("audio context unavailable"); return null; }
@@ -74,23 +75,40 @@ export class SoundEngine {
         }));
     }
 
-    resume() {
+    resume({ userGesture = false } = {}) {
         const ctx = this.context();
         if (!ctx) return Promise.resolve(false);
         if (ctx.state === "running") return Promise.resolve(true);
-        if (!this.resuming) {
-            this.resuming = Promise.resolve().then(() => ctx.resume())
-                .then(() => ctx.state === "running")
-                .catch(() => { this.report("playback is suspended"); return false; })
-                .finally(() => { this.resuming = null; });
+        // A startup resume may remain pending until browser activation. Do not
+        // let that promise swallow the later trusted gesture, but retain at most
+        // one startup call and one activation retry while either is pending.
+        const attempts = this.resumeAttempts;
+        if (attempts.size && (!userGesture || [...attempts].some(attempt => attempt.userGesture))) {
+            return [...attempts].at(-1).promise;
         }
-        return this.resuming;
+        const attempt = { userGesture, promise: null };
+        attempts.add(attempt);
+        let resumed;
+        try { resumed = ctx.resume(); } // Invoke directly in the gesture handler.
+        catch (error) { resumed = Promise.reject(error); }
+        attempt.promise = Promise.resolve(resumed)
+            .then(() => !this.disposed && ctx === this.ctx && ctx.state === "running")
+            .catch(() => {
+                if (!this.disposed && ctx === this.ctx) this.report("playback is suspended");
+                return false;
+            })
+            .finally(() => {
+                attempts.delete(attempt);
+            });
+        return attempt.promise;
     }
 
     setOutput(id = "", { retry = false } = {}) {
         const ctx = this.context();
         if (!ctx) return Promise.resolve();
-        const sink = typeof id === "string" ? id : "";
+        // Device enumeration can supply "default" while the built-in settings
+        // option stores "". Both mean the system route; keep explicit IDs intact.
+        const sink = typeof id === "string" && id !== "default" ? id : "";
         const sameSink = this.requestedSink === sink;
         const recoverable = typeof ctx.setSinkId === "function" && ["unavailable", "fallback"].includes(this.outputState);
         if (sameSink && !retry && (!recoverable || this.now() - this.lastOutputAttempt < OUTPUT_RETRY_MS)) return this.output;
