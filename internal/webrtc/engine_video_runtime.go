@@ -60,6 +60,9 @@ func newEngineMediaObserved(enableAV1 bool, bounds VideoBounds, egress *mediaEgr
 	registry := &interceptor.Registry{}
 	// Registered before defaults so their synchronous TWCC writes cross this observer.
 	registry.Add(upstreamFeedbackFactory{registry: feedback})
+	// Pion's separate RTX reader bypasses its primary NACK receive log.
+	// Filter only requests for packets actually returned to our video reader.
+	registry.Add(repairNACKFactory{})
 	// The pacer checks final authority before assigning TWCC or accounting a
 	// send. NACK/RTX also enters this queue and crosses the same boundary.
 	registry.Add(mediaCCFactory{registry: egress})

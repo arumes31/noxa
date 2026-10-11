@@ -6,6 +6,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/pion/interceptor"
 	"github.com/pion/rtp"
 )
 
@@ -154,7 +155,11 @@ func (q *videoReorder) flushGaps(now time.Time, force bool, emit func(*rtp.Packe
 // Pion's read deadline lets an idle screen release its final queued frame
 // without a helper goroutine. Fakes without deadlines flush at EOF instead.
 func readOrderedVideo(track VideoTrackReader, current func() bool, codec func() string, emit func(*rtp.Packet, string), observe func(*rtp.Packet)) {
-	push := func(queue *videoReorder, packet *rtp.Packet) {
+	// A receipt token belongs to this exact read loop, never another track or
+	// replacement. Only successful reads after current() may acknowledge it.
+	var receipt *repairReceiptToken
+	push := func(queue *videoReorder, packet *rtp.Packet, attrs interceptor.Attributes) {
+		observeRepairReceipt(&receipt, packet, attrs)
 		if observe != nil {
 			observe(packet)
 		}
@@ -174,7 +179,7 @@ func readOrderedVideo(track VideoTrackReader, current func() bool, codec func() 
 				return
 			}
 		}
-		packet, _, err := track.ReadRTP()
+		packet, attrs, err := track.ReadRTP()
 		if !current() {
 			return
 		}
@@ -190,7 +195,7 @@ func readOrderedVideo(track VideoTrackReader, current func() bool, codec func() 
 				// A poll timeout is not the gap's abandonment deadline: flush below
 				// still uses the original reorder deadline. Bound draining work.
 				for range videoReorderPackets {
-					repaired, _, repairErr := track.ReadRTP()
+					repaired, repairAttrs, repairErr := track.ReadRTP()
 					if !current() {
 						return
 					}
@@ -202,7 +207,7 @@ func readOrderedVideo(track VideoTrackReader, current func() bool, codec func() 
 						return
 					}
 					if repaired != nil {
-						push(&queue, repaired)
+						push(&queue, repaired, repairAttrs)
 					}
 				}
 				queue.flush(time.Now(), false, emit)
@@ -212,7 +217,7 @@ func readOrderedVideo(track VideoTrackReader, current func() bool, codec func() 
 			return
 		}
 		if packet != nil {
-			push(&queue, packet)
+			push(&queue, packet, attrs)
 		}
 	}
 }
