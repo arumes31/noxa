@@ -2,7 +2,8 @@ import fs from 'node:fs';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { counterDelta, counterRate } from './browser_fanout_metrics.mjs';
+import { counterDelta, counterRate, sourceFrameTimingSummary } from './browser_fanout_metrics.mjs';
+import { drawDurationBoundsMS, rafGapBoundsMS } from './browser_source_timing.mjs';
 const frontend = fileURLToPath(new URL('../../../client/frontend/', import.meta.url));
 const require = createRequire(`${frontend}/package.json`);
 const { chromium, expect } = require('@playwright/test');
@@ -16,6 +17,7 @@ const workload = configuration.workload || 'pan';
 if (!['pan', 'desktop'].includes(workload) || (workload === 'desktop' && (!configuration.capacity || configuration.stageSeconds !== 60))) throw new Error('Desktop workload requires complete 60-second capacity stages');
 const profile = configuration.capacity ? `${workload}-capacity` : 'pan';
 const desktopModule = workload === 'desktop' ? fs.readFileSync(new URL('./browser_desktop_workload.mjs', import.meta.url), 'utf8') : null;
+const sourceTimingModule = desktopModule ? fs.readFileSync(new URL('./browser_source_timing.mjs', import.meta.url), 'utf8') : null;
 if (configuration.codec && (!configuration.capacity || !['h264', 'vp8'].includes(configuration.codec))) throw new Error('Unsupported requested test codec');
 const output = process.argv[6];
 const vite = await createServer({ root: frontend, logLevel: 'error', server: { host: '127.0.0.1', port: 0, hmr: false } });
@@ -60,6 +62,7 @@ try {
         context.on('weberror', event => errors.push(String(event.error())));
         const page = await context.newPage();
         if (desktopModule) await page.route('**/fanout-workload.js', route => route.fulfill({ contentType: 'text/javascript', body: desktopModule }));
+        if (sourceTimingModule) await page.route('**/fanout-source-timing.js', route => route.fulfill({ contentType: 'text/javascript', body: sourceTimingModule }));
         await page.route('**/fanout-fixture', route => route.fulfill({ contentType: 'text/html', body: `<!doctype html>
             <button id="voice-screen">Share</button><button id="voice-video">Camera</button>
             <video id="local-video"></video><div id="mic-status"></div><button id="ptt-btn">Talk</button>
@@ -112,12 +115,19 @@ try {
             phase: phase?.name || 'pan', phase_elapsed_ms: phase?.phase_elapsed_ms ?? now - start, cycle: phase?.cycle ?? 0 });
         if (workload === 'desktop') {
             const { drawDesktopScene } = await import('/fanout-workload.js');
+            const { createSourceFrameTiming } = await import('/fanout-source-timing.js');
+            const timing = window.sourceFrameTiming = createSourceFrameTiming(crypto.randomUUID());
             let last = 0;
             const draw = now => {
                 requestAnimationFrame(draw);
-                if (last && now - last < 1000 / fps - 1) return;
-                last = now; frame++;
-                sourceState(now, drawDesktopScene(ctx, now - start, width, height));
+                timing.opportunity(now);
+                if (last && now - last < 1000 / fps - 1) { timing.skipped(); return; }
+                last = now;
+                const started = performance.now();
+                const phase = drawDesktopScene(ctx, now - start, width, height);
+                timing.completed(performance.now() - started);
+                frame++;
+                sourceState(now, phase);
             };
             requestAnimationFrame(draw);
         } else setInterval(() => {
@@ -241,6 +251,7 @@ try {
             'currentRoundTripTime', 'availableOutgoingBitrate', 'availableIncomingBitrate', 'state', 'nominated'];
         return { at: Date.now(), state: pc.connectionState, firstFrameAt: window.firstFrameAt || null, visibility: document.visibilityState,
             workload: window.sourceWorkload ? { ...window.sourceWorkload } : null,
+            sourceFrameTiming: window.sourceFrameTiming?.snapshot() ?? null,
             encodings: window.__noxa?.state.shareVideoTransceiver.sender.getParameters().encodings,
             sourceSettings: window.__noxa?.state.shareVideoTransceiver.sender.track ? ((settings) => ({ width: settings.width, height: settings.height, frameRate: settings.frameRate }))(window.__noxa.state.shareVideoTransceiver.sender.track.getSettings()) : null,
             rows: [...(await pc.getStats()).values()].filter(row => ['outbound-rtp', 'inbound-rtp', 'media-source', 'codec', 'candidate-pair'].includes(row.type))
@@ -455,6 +466,7 @@ try {
         return { stage, startAt: rows[0].sender.at, endAt: rows.at(-1).sender.at, samples: rows.length,
             scoring, scoredSamples: scored.length, scoredStartAt: scored[0]?.sender.at ?? null, scoredEndAt: scored.at(-1)?.sender.at ?? null,
             workload, phases: [...new Set(rows.map(row => row.sender.workload?.phase).filter(Boolean))],
+            sourceFrameTiming: sourceFrameTimingSummary(rows.map(row => row.sender.sourceFrameTiming), seconds),
             // Draw/capture/encode/decode rates are separate observations; none
             // alone establishes that the physical display presented at 60fps.
             fullStageDrawnFPS: counterRate(counterDelta(rows.map(row => row.sender.workload), 'drawn_frames', ['name']), seconds),
@@ -463,6 +475,8 @@ try {
             fullStageDelivery: delivery };
       });
       fs.writeFileSync(output, JSON.stringify({ profile, configuration, width, height, fps, joins, impairments, stageWindows, errors, failure, samples,
+        sourceFrameTimingSemantics: { sync_draw_bin_upper_bounds_exclusive_ms: drawDurationBoundsMS, raf_gap_bin_upper_bounds_exclusive_ms: rafGapBoundsMS,
+            note: 'Desktop only. Null final bin bound means unbounded. Bins are cumulative counts in samples and interval deltas in stage summaries; no exact percentiles. Epoch changes invalidate stage timing aggregates. Maxima are lifetime maxima, not stage maxima. Synchronous draw duration measures JavaScript/canvas call submission, excluding deferred raster/GPU work. rAF timestamp gaps are opportunities, not captured-frame intervals.' },
         note: 'Real Chromium encoding and decoding of a synthetic canvas over a local SFU; all contexts share this host. This is not native display capture or proof of GPU acceleration. One source encoding/upload. Capacity video is displayed at 960x540 in a 1280x800 headless viewport; intersection is geometric, not proof of lack of occlusion or physical display. Playback non-dropped rates subtract droppedVideoFrames from totalVideoFrames as a browser quality-counter proxy, not physical display frames. Observed presentation callbacks can miss compositor submissions and are not a complete frame count. Receiver rates use receiver-local sample intervals; decoded/source ratios compare frame-count deltas from separately sampled windows. Missing counters, identity changes or observed intermediate counter regressions invalidate the affected stage aggregate. presentation_epoch identifies observer binding, not rolling timing-window resets. freezeSeconds is browser-reported duration of freezes completed in the sampled window, including any part before the stage; an ongoing freeze may only be reported later. Impairment at/requestedAt precede the request; acknowledgedAt follows its response. Desktop adapts the native 20s static-text/20s scrolling-text/20s motion pattern; elapsed-time labels replace UTC and measured-FPS labels, so pixels are not identical. Pan remains the original high-entropy workload. The 85% decoded/source ratio is a transport capacity floor, not 1080p60 or 95% presentation acceptance; >=15fps warmup is fixture viability only. Slow-writer mode delays only one local video writer, not network jitter. Presentation percentiles are overlapping bounded windows, not a whole-run distribution.' }, null, 2));
     } finally {
         try { await closeBrowser(); } finally { await bounded(() => vite.close(), 3000, 'fixture server close'); }
