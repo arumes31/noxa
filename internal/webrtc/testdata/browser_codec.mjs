@@ -104,24 +104,43 @@ try {
             const paused=await receiver.evaluate(()=>decoded('video/H264'));
             await expect.poll(()=>receiver.evaluate(()=>decoded('video/H264')),{timeout:15000}).toBeGreaterThan(paused+20);
             console.log('H264 watch resume decoded a fresh keyframe');
-			const recoveryBefore=await receiver.evaluate(async()=>{
-				const stats=[...(await pc.getStats()).values()];
-				const video=stats.find(s=>s.type==='inbound-rtp'&&s.kind==='video'&&s.framesDecoded>0);
-				const audio=stats.find(s=>s.type==='inbound-rtp'&&s.kind==='audio'&&s.packetsReceived>0);
-				if(!video||!audio)throw new Error('Expected active video and audio before scoped recovery');
-				window.recoveryPeer=pc;return {mid:video.mid,audioId:audio.id,audioPackets:audio.packetsReceived};
-			});
-			await request('receiver-reset',{id:'sub',revision:11});
-			await receiver.evaluate(()=>negotiate(12));
-			await expect.poll(()=>receiver.evaluate(async before=>{
-				const stats=await pc.getStats();
-				return [...stats.values()].some(s=>s.type==='inbound-rtp'&&s.kind==='video'&&s.mid!==before.mid&&s.framesDecoded>20&&stats.get(s.codecId)?.mimeType==='video/H264');
-			},recoveryBefore),{timeout:15000}).toBe(true);
-			assert.equal(await receiver.evaluate(async before=>{
-				const stats=await pc.getStats(),audio=stats.get(before.audioId);
-				return pc===recoveryPeer&&pc.connectionState==='connected'&&audio?.packetsReceived>before.audioPackets;
-			},recoveryBefore),true,'receiver recovery changed peer or interrupted existing audio binding');
-			console.log('H264 receiver recovery negotiated a fresh decoder MID; same peer and audio binding continued');
+            await receiver.evaluate(()=>{
+                window.recoveryPeer=pc;
+                window.recoveryState=async()=>{
+                    const stats=await pc.getStats();
+                    const active=new Set(pc.getTransceivers().filter(t=>t.receiver.track.kind==='video'&&['recvonly','sendrecv'].includes(t.currentDirection)).map(t=>t.mid));
+                    const video=[...stats.values()].find(s=>s.type==='inbound-rtp'&&s.kind==='video'&&active.has(s.mid)&&s.framesDecoded>0);
+                    const audio=[...stats.values()].find(s=>s.type==='inbound-rtp'&&s.kind==='audio'&&s.packetsReceived>0);
+                    if(!video||!audio)throw new Error('Expected active video and audio before scoped recovery');
+                    return {mid:video.mid,videoId:video.id,frames:video.framesDecoded,baseline:Object.fromEntries([...stats.values()].filter(s=>s.type==='inbound-rtp'&&s.kind==='video').map(s=>[s.id,s.framesDecoded||0])),audioId:audio.id,audioPackets:audio.packetsReceived,transceivers:pc.getTransceivers().length};
+                };
+            });
+            const recoveryMids=[];
+            let serverTransceivers;
+            let recoveryGrowth;
+            for(let cycle=0;cycle<12;cycle++) {
+                const before=await receiver.evaluate(()=>recoveryState());
+                const result=await request('receiver-reset',{id:'sub',revision:11+cycle});
+                await receiver.evaluate(revision=>negotiate(revision),12+cycle);
+                await expect.poll(()=>receiver.evaluate(async before=>{
+                    const stats=await pc.getStats();
+                    const active=new Set(pc.getTransceivers().filter(t=>t.receiver.track.kind==='video'&&['recvonly','sendrecv'].includes(t.currentDirection)).map(t=>t.mid));
+                    return [...stats.values()].some(s=>s.type==='inbound-rtp'&&s.kind==='video'&&active.has(s.mid)&&s.mid!==before.mid&&s.id!==before.videoId&&s.framesDecoded>(before.baseline[s.id]||0)+20&&stats.get(s.codecId)?.mimeType==='video/H264');
+                },before),{timeout:15000}).toBe(true);
+                const after=await receiver.evaluate(()=>recoveryState());
+                assert.equal(after.audioId,before.audioId,'receiver recovery replaced audio binding');
+                assert.ok(after.audioPackets>before.audioPackets,'audio packets stopped during recovery');
+                assert.equal(await receiver.evaluate(()=>pc===recoveryPeer&&pc.connectionState==='connected'),true);
+                if(cycle===0){serverTransceivers=result.transceivers;recoveryGrowth=result.growth;}
+                assert.equal(result.transceivers,serverTransceivers,'server transceivers grew after first reset');
+                assert.equal(result.growth,recoveryGrowth,'transceiver reuse consumed recovery growth budget');
+                assert.equal(result.growth,1,'expected one extra transceiver for alternating recovery');
+                assert.equal(after.transceivers,serverTransceivers,'browser/server transceiver count differs');
+                recoveryMids.push(after.mid);
+                if(cycle>1)assert.equal(after.mid,recoveryMids[cycle-2],'recovery did not recycle alternating MIDs');
+                console.log(`H264 receiver reset ${cycle+1}: MID ${before.mid}->${after.mid}, fresh decoded frames ${after.frames}, transceivers ${result.transceivers}, same audio advanced`);
+            }
+            assert.equal(new Set(recoveryMids).size,2,'expected two reusable video MIDs');
         }
     }
 } finally {await browser.close();}

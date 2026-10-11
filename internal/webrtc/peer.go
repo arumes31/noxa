@@ -38,11 +38,11 @@ type PeerConnectionWrapper struct {
 
 	onTrack func(track *webrtc.TrackRemote, receiver *webrtc.RTPReceiver)
 
-	closeOnce          sync.Once
-	signalMu           sync.Mutex
-	videoRecoveryCount uint8 // signalMu; bounded for the entire peer lifetime
-	videoRecoveryLast  time.Time
-	closed             chan struct{}
+	closeOnce           sync.Once
+	signalMu            sync.Mutex
+	videoRecoveryGrowth int // signalMu; cumulative new transceivers from recovery
+	videoRecoveryLast   time.Time
+	closed              chan struct{}
 }
 
 // ReceiverReportStats is the loss/jitter/RTT view derived from RTCP Receiver

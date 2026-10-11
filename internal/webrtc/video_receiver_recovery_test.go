@@ -39,6 +39,7 @@ func TestReceiverRecoveryScopesAndBoundsOutputReplacement(t *testing.T) {
 			old := r.pubTracks["sub"]["pub"].video[SlotScreen]
 			audio := r.pubTracks["sub"]["pub"].audio[SlotMic]
 			other := r.pubTracks["other"]["pub"].video[SlotScreen]
+			transceiversBefore := len(peer.pc.GetTransceivers())
 			renegotiations := 0
 			r.SetRenegotiateHook(func(string) { renegotiations++ })
 			switch scenario {
@@ -57,7 +58,7 @@ func TestReceiverRecoveryScopesAndBoundsOutputReplacement(t *testing.T) {
 			case "cooldown":
 				peer.videoRecoveryLast = time.Now()
 			case "budget":
-				peer.videoRecoveryCount = videoReceiverRecoveryLimit
+				peer.videoRecoveryGrowth = videoReceiverRecoveryGrowthLimit
 			case "replacement denied":
 				calls := 0
 				// Exercise a denied new binding after the exact old binding was
@@ -72,12 +73,15 @@ func TestReceiverRecoveryScopesAndBoundsOutputReplacement(t *testing.T) {
 				t.Fatal("failed replacement did not negotiate retired output")
 			}
 			if scenario != "allowed" {
+				if scenario == "budget" && (renegotiations != 0 || r.pubTracks["sub"]["pub"].video[SlotScreen] != old || !old.egress.active || len(peer.pc.GetTransceivers()) != transceiversBefore) {
+					t.Fatal("exhausted growth budget mutated the active output")
+				}
 				return
 			}
 			if r.pubPeers["sub"] != peer || r.pubTracks["sub"]["pub"].audio[SlotMic] != audio || r.pubTracks["other"]["pub"].video[SlotScreen] != other {
 				t.Fatal("recovery changed unrelated peer or media outputs")
 			}
-			if r.pubTracks["sub"]["pub"].video[SlotScreen] == old || old.egress.active || peer.videoRecoveryCount != 1 {
+			if r.pubTracks["sub"]["pub"].video[SlotScreen] == old || old.egress.active || peer.videoRecoveryGrowth != len(peer.pc.GetTransceivers())-transceiversBefore {
 				t.Fatal("recovery did not retire old guarded output")
 			}
 			if err := r.ResetStreamReceiver("sub", "pub", SlotScreen, generation, session, revision); err == nil {

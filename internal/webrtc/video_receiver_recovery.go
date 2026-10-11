@@ -8,7 +8,7 @@ import (
 )
 
 const videoReceiverRecoveryInterval = 30 * time.Second
-const videoReceiverRecoveryLimit = 8
+const videoReceiverRecoveryGrowthLimit = 8
 
 // ResetStreamReceiver replaces one authorized outgoing video binding. Pion's
 // inactive-offer handling permanently stops transceivers, so decoder recovery
@@ -69,14 +69,23 @@ func (r *Router) resetStreamReceiverLocked(peer *PeerConnectionWrapper, subscrib
 	if !bound {
 		return false, nil, fmt.Errorf("video receiver has no active negotiated output")
 	}
-	// A finite per-peer budget bounds transceiver growth even when clients
-	// replace watch/publication generations to evade a per-watch limit.
+	// Completed server offers let Pion reuse retired transceivers. Charge only
+	// new transceivers, allowing repeated recovery on the reusable pair while
+	// bounding growth when the remote peer prevents reuse. The budget remains
+	// per connection across watch/publication changes.
 	now := time.Now()
-	if peer.videoRecoveryCount >= videoReceiverRecoveryLimit || (!peer.videoRecoveryLast.IsZero() && now.Sub(peer.videoRecoveryLast) < videoReceiverRecoveryInterval) {
+	if peer.videoRecoveryGrowth >= videoReceiverRecoveryGrowthLimit || (!peer.videoRecoveryLast.IsZero() && now.Sub(peer.videoRecoveryLast) < videoReceiverRecoveryInterval) {
 		return false, nil, fmt.Errorf("video receiver recovery limit reached")
 	}
-	peer.videoRecoveryCount++
 	peer.videoRecoveryLast = now
+	transceiversBefore := len(peer.pc.GetTransceivers())
+	defer func() {
+		// Account even a partially failed replacement. Router.mu excludes
+		// unrelated output additions; signalMu excludes SDP-driven changes.
+		if growth := len(peer.pc.GetTransceivers()) - transceiversBefore; growth > 0 {
+			peer.videoRecoveryGrowth += growth
+		}
+	}()
 	r.removeSlotLocked(peer, publication, slot)
 	if !r.addSlotLocked(peer, subscriber, publisher, publication, slot) {
 		// The old sender has already been retired. Negotiate that change even

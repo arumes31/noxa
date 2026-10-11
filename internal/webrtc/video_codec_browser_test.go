@@ -105,7 +105,16 @@ func TestBrowserSingleCodecSwitch(t *testing.T) {
 		case "/watch":
 			_, requestErr = router.WatchVideoWithCodecs(body.ID, "pub", SlotScreen, generation, body.Revision, router.VideoWatchSession(body.ID), body.Active, body.Codecs)
 		case "/receiver-reset":
+			// Exercise repeated recovery without thirty seconds per attempt.
+			// Only this local integration fixture bypasses cooldown; the real
+			// cumulative growth budget is preserved across every reset.
+			peer.signalMu.Lock()
+			peer.videoRecoveryLast = time.Time{}
+			peer.signalMu.Unlock()
 			requestErr = router.ResetStreamReceiver(body.ID, "pub", SlotScreen, generation, router.VideoWatchSession(body.ID), body.Revision)
+			peer.signalMu.Lock()
+			result = map[string]int{"transceivers": len(peer.pc.GetTransceivers()), "growth": peer.videoRecoveryGrowth}
+			peer.signalMu.Unlock()
 		case "/selected":
 			for _, stream := range router.VideoPublications("pub") {
 				if stream.Slot == SlotScreen {
