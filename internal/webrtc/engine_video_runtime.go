@@ -35,7 +35,7 @@ func (e *Engine) prepareVideoBoundsLocked(bounds VideoBounds) (*webrtc.API, erro
 	if e.videoBounds == bounds {
 		return e.api, nil
 	}
-	media, interceptors, err := newEngineMedia(e.enableAV1, bounds, e.egress)
+	media, interceptors, err := newEngineMediaObserved(e.enableAV1, bounds, e.egress, e.upstreamFeedback)
 	if err != nil {
 		return nil, err
 	}
@@ -49,11 +49,17 @@ func (e *Engine) prepareVideoBoundsLocked(bounds VideoBounds) (*webrtc.API, erro
 // Each API gets its own codec/interceptor registration. SettingEngine values
 // are immutable after construction, as required by Pion's WithSettingEngine.
 func newEngineMedia(enableAV1 bool, bounds VideoBounds, egress *mediaEgressRegistry) (*webrtc.MediaEngine, *interceptor.Registry, error) {
+	return newEngineMediaObserved(enableAV1, bounds, egress, nil)
+}
+
+func newEngineMediaObserved(enableAV1 bool, bounds VideoBounds, egress *mediaEgressRegistry, feedback *upstreamFeedbackRegistry) (*webrtc.MediaEngine, *interceptor.Registry, error) {
 	media := &webrtc.MediaEngine{}
 	if err := registerCodecsWithVideoBounds(media, enableAV1, bounds); err != nil {
 		return nil, nil, fmt.Errorf("webrtc: registering codecs: %w", err)
 	}
 	registry := &interceptor.Registry{}
+	// Registered before defaults so their synchronous TWCC writes cross this observer.
+	registry.Add(upstreamFeedbackFactory{registry: feedback})
 	// The pacer checks final authority before assigning TWCC or accounting a
 	// send. NACK/RTX also enters this queue and crosses the same boundary.
 	registry.Add(mediaCCFactory{registry: egress})

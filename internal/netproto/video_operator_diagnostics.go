@@ -12,16 +12,17 @@ type VideoOperatorDiagnostics struct {
 }
 
 type VideoOperatorPublication struct {
-	PublisherID       string                        `json:"publisher_id"`
-	PublisherNickname string                        `json:"publisher_nickname"`
-	PublisherVersion  string                        `json:"publisher_version"`
-	Slot              string                        `json:"slot"`
-	Generation        uint64                        `json:"generation,string"`
-	ChannelID         int64                         `json:"channel_id"`
-	Layers            []VideoStreamLayerDiagnostics `json:"layers"`
-	SenderReport      *VideoSenderReport            `json:"sender_report"`
-	Viewers           []VideoOperatorViewer         `json:"viewers"`
-	ViewersTruncated  bool                          `json:"viewers_truncated"`
+	UpstreamFeedback  *VideoUpstreamFeedbackDiagnostics `json:"upstream_feedback,omitempty"`
+	PublisherID       string                            `json:"publisher_id"`
+	PublisherNickname string                            `json:"publisher_nickname"`
+	PublisherVersion  string                            `json:"publisher_version"`
+	Slot              string                            `json:"slot"`
+	Generation        uint64                            `json:"generation,string"`
+	ChannelID         int64                             `json:"channel_id"`
+	Layers            []VideoStreamLayerDiagnostics     `json:"layers"`
+	SenderReport      *VideoSenderReport                `json:"sender_report"`
+	Viewers           []VideoOperatorViewer             `json:"viewers"`
+	ViewersTruncated  bool                              `json:"viewers_truncated"`
 }
 
 type VideoOperatorViewer struct {

@@ -25,10 +25,11 @@ import (
 // registry of active peer connections keyed by
 // clientID. The Engine is safe for concurrent use.
 type Engine struct {
-	logger *zap.Logger
-	api    *webrtc.API
-	udpMux ice.UDPMux
-	egress *mediaEgressRegistry
+	logger           *zap.Logger
+	api              *webrtc.API
+	udpMux           ice.UDPMux
+	egress           *mediaEgressRegistry
+	upstreamFeedback *upstreamFeedbackRegistry
 	// Saved immutable network settings are reused when rebuilding the API.
 	settingEngine webrtc.SettingEngine
 	videoBounds   VideoBounds
@@ -102,7 +103,8 @@ func NewWithVideoBounds(logger *zap.Logger, iceServers []string, enableAV1 bool,
 	}
 
 	egress := &mediaEgressRegistry{}
-	mediaEngine, interceptorRegistry, err := newEngineMedia(enableAV1, bounds, egress)
+	feedback := &upstreamFeedbackRegistry{}
+	mediaEngine, interceptorRegistry, err := newEngineMediaObserved(enableAV1, bounds, egress, feedback)
 	if err != nil {
 		return nil, err
 	}
@@ -172,17 +174,18 @@ func NewWithVideoBounds(logger *zap.Logger, iceServers []string, enableAV1 bool,
 		webrtc.WithInterceptorRegistry(interceptorRegistry),
 	)
 	e := &Engine{
-		egress:        egress,
-		settingEngine: settingEngine,
-		videoBounds:   bounds,
-		udpMux:        udpMux,
-		logger:        logger,
-		api:           api,
-		iceServers:    parsedICE,
-		enableAV1:     enableAV1,
-		certificate:   *certificate,
-		fingerprint:   fingerprints[0].Value,
-		peers:         make(map[string]*PeerConnectionWrapper),
+		egress:           egress,
+		upstreamFeedback: feedback,
+		settingEngine:    settingEngine,
+		videoBounds:      bounds,
+		udpMux:           udpMux,
+		logger:           logger,
+		api:              api,
+		iceServers:       parsedICE,
+		enableAV1:        enableAV1,
+		certificate:      *certificate,
+		fingerprint:      fingerprints[0].Value,
+		peers:            make(map[string]*PeerConnectionWrapper),
 	}
 
 	e.logger.Info("webrtc engine ready",
@@ -236,6 +239,9 @@ func (e *Engine) NewPeerConnection(clientID string) (*PeerConnectionWrapper, err
 		return nil, fmt.Errorf("webrtc: peer connection already exists for client %q", clientID)
 	}
 
+	// Engine.mu owns this sole observation handoff until construction finishes.
+	lease := e.upstreamFeedback.arm()
+	defer e.upstreamFeedback.disarm(lease)
 	pc, err := e.api.NewPeerConnection(webrtc.Configuration{
 		ICEServers:   e.iceServers,
 		Certificates: []webrtc.Certificate{e.certificate},
@@ -246,6 +252,7 @@ func (e *Engine) NewPeerConnection(clientID string) (*PeerConnectionWrapper, err
 
 	wrapper := newPeerConnectionWrapper(pc, clientID, e.logger)
 	wrapper.egress = e.egress
+	wrapper.upstreamFeedback = e.upstreamFeedback.take(lease, pc.ID())
 	wrapper.videoBounds = e.videoBounds
 	e.peers[clientID] = wrapper
 	e.logger.Info("webrtc peer connection created", zap.String("client_id", clientID))

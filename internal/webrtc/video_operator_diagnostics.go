@@ -37,6 +37,9 @@ func (r *Router) VideoOperatorDiagnostics() *netproto.VideoOperatorDiagnostics {
 			PublisherID: key.publisher, Slot: key.slot, Generation: r.publications[key], ChannelID: r.clientChan[key.publisher],
 			Layers: []netproto.VideoStreamLayerDiagnostics{}, Viewers: []netproto.VideoOperatorViewer{},
 		}
+		if peer := r.pubPeers[key.publisher]; peer != nil {
+			publication.UpstreamFeedback = peer.upstreamFeedback.snapshot(now)
+		}
 		for _, rid := range []string{"", "f", "h", "q"} {
 			input := r.videoIngress[videoIngressKey{key.publisher, key.slot, rid}]
 			if input == nil || input.ssrc != r.videoSources[key.publisher][key.slot][rid] {

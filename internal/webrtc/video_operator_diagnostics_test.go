@@ -86,3 +86,50 @@ func TestVideoOperatorDiagnosticsBoundsAndOrdersResults(t *testing.T) {
 		}
 	}
 }
+
+func TestVideoOperatorUpstreamFeedbackIsPublisherPeerScoped(t *testing.T) {
+	r := NewRouter(nil)
+	r.JoinChannel(1, "pub")
+	for _, slot := range []string{SlotCam, SlotScreen} {
+		if _, err := r.PublishVideo("pub", slot, 0, true); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, publication := range r.VideoOperatorDiagnostics().Publications {
+		if publication.UpstreamFeedback != nil {
+			t.Fatal("missing publisher observation presented as zero")
+		}
+	}
+	observer := &upstreamFeedbackObserver{started: time.Now()}
+	token := observer.begin(1, 7)
+	observer.finish(token, time.Millisecond, false)
+	r.pubPeers["pub"] = &PeerConnectionWrapper{upstreamFeedback: observer}
+	snapshot := r.VideoOperatorDiagnostics()
+	if len(snapshot.Publications) != 2 {
+		t.Fatal("missing publisher slots")
+	}
+	for _, publication := range snapshot.Publications {
+		if publication.UpstreamFeedback == nil || publication.UpstreamFeedback.Attempts != 1 || publication.UpstreamFeedback.ReportedPackets != 7 {
+			t.Fatal("publisher peer counters missing from its slot")
+		}
+	}
+	snapshot.Publications[0].UpstreamFeedback.DurationHistogram[2] = 99
+	if snapshot.Publications[1].UpstreamFeedback.DurationHistogram[2] != 1 || r.VideoOperatorDiagnostics().Publications[0].UpstreamFeedback.DurationHistogram[2] != 1 {
+		t.Fatal("publisher snapshots share mutable state")
+	}
+	r.RevokeVideo("pub", SlotScreen)
+	if _, err := r.PublishVideo("pub", SlotScreen, 0, true); err != nil {
+		t.Fatal(err)
+	}
+	if r.VideoOperatorDiagnostics().Publications[1].UpstreamFeedback.Attempts != 1 {
+		t.Fatal("publication reset peer lifetime counters")
+	}
+	r.pubPeers["pub"] = &PeerConnectionWrapper{upstreamFeedback: &upstreamFeedbackObserver{started: time.Now()}}
+	if r.VideoOperatorDiagnostics().Publications[0].UpstreamFeedback.Attempts != 0 {
+		t.Fatal("replacement peer inherited old observation")
+	}
+	delete(r.pubPeers, "pub")
+	if r.VideoOperatorDiagnostics().Publications[0].UpstreamFeedback != nil {
+		t.Fatal("detached publisher retained stale diagnostic")
+	}
+}
