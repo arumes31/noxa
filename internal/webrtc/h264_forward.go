@@ -7,6 +7,24 @@ import (
 	"github.com/pion/rtp"
 )
 
+// A congestion-paced keyframe can take longer than 500 ms to arrive without
+// losing a packet. Keep progress while packets arrive, but bound both idle time
+// and total residence. The absolute cap prevents endless trickle retention;
+// byte, packet and NAL caps still apply independently. These forwarding limits
+// do not relax the separate dimension-policy inspector.
+const h264ForwardIdleWait = 500 * time.Millisecond
+const h264ForwardMaxWait = 2 * time.Second
+
+type h264RejectReason uint8
+
+const (
+	h264RejectMalformed h264RejectReason = iota
+	h264RejectCapacity
+	h264RejectDiscontinuity
+	h264RejectIdle
+	h264RejectAge
+)
+
 // h264ForwardFrame checks packet boundaries, not decoded dimensions. It is
 // deliberately separate from the strict dimension-policy inspector. A fresh
 // receiver needs the SPS, PPS and a complete IDR access unit before deltas.
@@ -17,12 +35,35 @@ type h264ForwardFrame struct {
 	packets                []*rtp.Packet
 	bytes                  int
 	started                time.Time
+	lastPacket             time.Time
+	onReject               func(h264RejectReason)
 	ssrc, timestamp        uint32
 	sequence               uint16
 	fragment               byte
 	sps, pps, idr          bool
 	nals                   int
 	configurationBeforeIDR bool
+}
+
+func (f *h264ForwardFrame) clearUnit() {
+	*f = h264ForwardFrame{observed: f.observed, lastSSRC: f.lastSSRC, lastSequence: f.lastSequence, onReject: f.onReject}
+}
+
+func (f *h264ForwardFrame) reject(reason h264RejectReason) {
+	if f.onReject != nil {
+		f.onReject(reason)
+	}
+	f.clearUnit()
+}
+
+func (f *h264ForwardFrame) expired(now time.Time) (h264RejectReason, bool) {
+	if now.Sub(f.started) > h264ForwardMaxWait {
+		return h264RejectAge, true
+	}
+	if now.Sub(f.lastPacket) > h264ForwardIdleWait {
+		return h264RejectIdle, true
+	}
+	return 0, false
 }
 
 func (f *h264ForwardFrame) nal(header byte) bool {
@@ -60,33 +101,45 @@ func (f *h264ForwardFrame) push(p *rtp.Packet, now time.Time) (packets []*rtp.Pa
 		f.observed, f.lastSSRC, f.lastSequence = true, p.SSRC, p.SequenceNumber
 		lost = lost || gap
 	}()
+	if len(f.packets) > 0 {
+		if reason, expired := f.expired(now); expired {
+			f.reject(reason)
+			lost = true
+		}
+	}
 	if isVideoPadding(p) {
 		// Padding shares the RTP sequence space and may be interleaved with a
 		// fragmented frame. Forward it in order too: consuming it only here
 		// would manufacture missing packets and downstream NACKs. Keep padding
 		// behind an unfinished unit until that unit can be released atomically.
 		if len(f.packets) == 0 {
-			return []*rtp.Packet{p.Clone()}, false, false
+			return []*rtp.Packet{p.Clone()}, false, lost
 		}
 		if len(f.packets) > 0 && p.SSRC == f.ssrc && p.SequenceNumber == f.sequence+1 {
-			if p.MarshalSize() > h264AccessUnitBytes-f.bytes || len(f.packets) >= h264AccessUnitPackets || now.Sub(f.started) > h264AccessUnitWait {
-				*f = h264ForwardFrame{}
+			if p.MarshalSize() > h264AccessUnitBytes-f.bytes || len(f.packets) >= h264AccessUnitPackets {
+				f.reject(h264RejectCapacity)
 				return nil, false, true
 			}
 			f.sequence = p.SequenceNumber
 			f.bytes += p.MarshalSize()
 			f.packets = append(f.packets, p.Clone())
 		}
-		return nil, false, false
+		// Padding must not keep an unfinished media unit alive indefinitely.
+		return nil, false, lost
 	}
-	if len(f.packets) > 0 && (p.SSRC != f.ssrc || p.Timestamp != f.timestamp || p.SequenceNumber != f.sequence+1 || now.Sub(f.started) > h264AccessUnitWait) {
-		*f = h264ForwardFrame{}
+	if len(f.packets) > 0 && (p.SSRC != f.ssrc || p.Timestamp != f.timestamp || p.SequenceNumber != f.sequence+1) {
+		f.reject(h264RejectDiscontinuity)
 		lost = true
 	}
-	reject := func() ([]*rtp.Packet, bool, bool) { *f = h264ForwardFrame{}; return nil, false, true }
-	if len(p.Payload) < 2 || p.Payload[0]&0x80 != 0 || p.MarshalSize() > h264AccessUnitBytes-f.bytes || len(f.packets) >= h264AccessUnitPackets {
+	reject := func() ([]*rtp.Packet, bool, bool) { f.reject(h264RejectMalformed); return nil, false, true }
+	if p.MarshalSize() > h264AccessUnitBytes-f.bytes || len(f.packets) >= h264AccessUnitPackets {
+		f.reject(h264RejectCapacity)
+		return nil, false, true
+	}
+	if len(p.Payload) < 2 || p.Payload[0]&0x80 != 0 {
 		return reject()
 	}
+	f.lastPacket = now
 	if len(f.packets) == 0 {
 		f.ssrc, f.timestamp, f.started = p.SSRC, p.Timestamp, now
 	}
@@ -110,9 +163,8 @@ func (f *h264ForwardFrame) push(p *rtp.Packet, now time.Time) (packets []*rtp.Pa
 			data = data[size:]
 		}
 	case 28:
-		if len(p.Payload) < 3 || p.Payload[1]&0x20 != 0 {
-			return reject()
-		}
+		// RFC 6184 section 5.8 permits empty FU payloads and requires the
+		// receiver to ignore the reserved R bit. Both header octets exist.
 		header := p.Payload[0]&0xe0 | p.Payload[1]&31
 		start, end := p.Payload[1]&0x80 != 0, p.Payload[1]&0x40 != 0
 		if start {
@@ -139,7 +191,7 @@ func (f *h264ForwardFrame) push(p *rtp.Packet, now time.Time) (packets []*rtp.Pa
 		return reject()
 	}
 	packets, keyframe = f.packets, f.configurationBeforeIDR && f.idr
-	*f = h264ForwardFrame{}
+	f.clearUnit()
 	return packets, keyframe, lost
 }
 

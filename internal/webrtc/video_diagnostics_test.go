@@ -11,6 +11,28 @@ import (
 	"github.com/pion/rtp"
 )
 
+func TestH264RejectDiagnosticsAreScopedSnapshots(t *testing.T) {
+	var ingress videoIngressDiagnostic
+	if ingress.h264RejectSnapshot() != nil {
+		t.Fatal("unused H264 path claimed rejects")
+	}
+	frame := h264ForwardFrame{onReject: ingress.rejectH264}
+	now := time.Now()
+	frame.push(h264ForwardPacket(1, 90, false, 0x7c, 0x81, 1), now)
+	frame.push(h264ForwardPacket(2, 90, true, 0x7c, 0x41, 1), now.Add(time.Second))
+	first := ingress.h264RejectSnapshot()
+	if first == nil || first.Idle != 1 || first.Malformed != 1 {
+		t.Fatalf("missing assembly failure reasons: %+v", first)
+	}
+	// Finishing a good unit must retain observation; snapshots do not alias.
+	frame.push(h264ForwardPacket(3, 180, true, 0x41, 1), now.Add(time.Second))
+	frame.push(h264ForwardPacket(4, 270, true, 25, 1), now.Add(time.Second))
+	second := ingress.h264RejectSnapshot()
+	if first.Malformed != 1 || second.Malformed != 2 {
+		t.Fatal("diagnostic callback lost or mutable snapshot escaped")
+	}
+}
+
 func TestVideoStageDiagnosticsCountsMediaFramesAndExpiresRates(t *testing.T) {
 	var stage videoStageCounter
 	now := time.Unix(100, 0)
@@ -173,8 +195,13 @@ func TestStreamDiagnosticsForwardingFollowsWatchEpochAndPublication(t *testing.T
 	}
 	input := &videoIngressDiagnostic{ssrc: 99, started: time.Now()}
 	input.observe(&rtp.Packet{Header: rtp.Header{Timestamp: 1500}, Payload: []byte{1}}, time.Now())
+	input.rejectH264(h264RejectIdle)
 	r.videoIngress = map[videoIngressKey]*videoIngressDiagnostic{{"publisher", SlotScreen, "f"}: input}
 	registerVideoSource(r, "publisher", SlotScreen, "f", 99)
+	got, err = r.StreamDiagnostics("member", "publisher", SlotScreen, generation, session)
+	if err != nil || len(got.Layers) != 1 || got.Layers[0].H264Rejects == nil || got.Layers[0].H264Rejects.Idle != 1 {
+		t.Fatalf("current publication reject counter missing: %+v, %v", got, err)
+	}
 	if _, err := r.PublishVideo("publisher", SlotScreen, generation, false); err != nil {
 		t.Fatal(err)
 	}
@@ -183,7 +210,7 @@ func TestStreamDiagnosticsForwardingFollowsWatchEpochAndPublication(t *testing.T
 		t.Fatal(err)
 	}
 	got, err = r.StreamDiagnostics("member", "publisher", SlotScreen, newGeneration, session)
-	if err != nil || len(got.Layers) != 1 || got.Layers[0].Ingress.Packets != 0 || got.Layers[0].Ingress.FPS != nil {
+	if err != nil || len(got.Layers) != 1 || got.Layers[0].Ingress.Packets != 0 || got.Layers[0].Ingress.FPS != nil || got.Layers[0].H264Rejects != nil {
 		t.Fatalf("reused track retained prior publication counters: %+v, %v", got, err)
 	}
 }

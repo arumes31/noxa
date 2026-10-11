@@ -62,6 +62,28 @@ test("negative/nonfinite/oversized data and arbitrary implementation strings are
     assert.doesNotMatch(JSON.stringify(result), /Private|192\.0|private-track|source|mediaSource|device/i);
 });
 
+test("actual WebView2 encoder names normalize without exporting platform descriptors or guessing hardware", () => {
+    for (const [raw, canonical] of [
+        ["OpenH264", "openh264"], ["openh264", "openh264"],
+        ["MediaFoundationVideoEncodeAccelerator (NVIDIA H.264 Encoder MFT)", "MediaFoundationVideoEncoder"],
+        ["MediaFoundationVideoEncodeAccelerator", "MediaFoundationVideoEncoder"],
+        ["MediaFoundationVideoEncoder", "MediaFoundationVideoEncoder"],
+        ["MediaFoundationVideoEncodeAccelerator (Private GPU 192.0.2.3)", "MediaFoundationVideoEncoder"],
+    ]) {
+        for (const power of [true, false, undefined]) {
+            const result = collect(report(row({ timestamp: 6000, encoderImplementation: raw, powerEfficientEncoder: power })));
+            assert.equal(result.encoder_implementation, canonical);
+            assert.equal(result.power_efficient, power ?? null);
+            assert.doesNotMatch(JSON.stringify(result), /NVIDIA|Private GPU|192\.0\.2\.3/);
+        }
+    }
+    for (const raw of [undefined, null, 42, {}, "Private GPU", "OpenH264 private", "prefix MediaFoundationVideoEncodeAccelerator",
+        "MediaFoundationVideoEncodeAccelerator (private) suffix", "MediaFoundationVideoEncodeAccelerator (private\nvalue)",
+        "MediaFoundationVideoEncodeAccelerator (nested(value))", `MediaFoundationVideoEncodeAccelerator (${"x".repeat(161)})`]) {
+        assert.equal(collect(report(row({ timestamp: 6000, encoderImplementation: raw }))).encoder_implementation, "unknown");
+    }
+});
+
 test("only mapped acknowledged video publications emit at most8 sender rows", () => {
     assert.equal(collectVideoSenders(after, before, []).length, 0);
     for (const gen of ["0", "01", "-1", "18446744073709551616", "private"]) assert.equal(collectVideoSenders(after, before, [{ ...context, generation: gen }]).length, 0);

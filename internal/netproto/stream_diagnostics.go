@@ -143,11 +143,22 @@ type VideoStreamStageDiagnostics struct {
 	BitrateBPS *float64 `json:"bitrate_bps"`
 }
 
+// H264 assembly rejects count events, not lost packets. No encoded data is
+// exposed, and counters have the same lifetime and access scope as ingress.
+type VideoH264RejectDiagnostics struct {
+	Malformed     uint64 `json:"malformed"`
+	Capacity      uint64 `json:"capacity"`
+	Discontinuity uint64 `json:"discontinuity"`
+	Idle          uint64 `json:"idle"`
+	Age           uint64 `json:"age"`
+}
+
 type VideoStreamLayerDiagnostics struct {
-	RID       string                      `json:"rid"`
-	SSRC      uint32                      `json:"ssrc"`
-	StartedAt int64                       `json:"started_at"`
-	Ingress   VideoStreamStageDiagnostics `json:"ingress"`
+	RID         string                      `json:"rid"`
+	SSRC        uint32                      `json:"ssrc"`
+	StartedAt   int64                       `json:"started_at"`
+	Ingress     VideoStreamStageDiagnostics `json:"ingress"`
+	H264Rejects *VideoH264RejectDiagnostics `json:"h264_rejects,omitempty"`
 }
 
 type VideoStreamForwardDiagnostics struct {

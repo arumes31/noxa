@@ -30,6 +30,86 @@ func TestH264ForwardFrameCompleteAndOwned(t *testing.T) {
 	}
 }
 
+func TestH264ForwardPacedKeyframeKeepsReceiverSequence(t *testing.T) {
+	var frame h264ForwardFrame
+	var stream videoContinuity
+	now := time.Now()
+	// An intact 33-packet keyframe paced over 960 ms is valid. The former
+	// 500 ms total-age cutoff discarded its suffix and created a gap at every
+	// receiver, even though the sender's receiver report showed no loss.
+	frame.push(h264ForwardPacket(100, 90, false, 24, 0, 2, 0x67, 1, 0, 2, 0x68, 1), now)
+	for index := 1; index <= 32; index++ {
+		fu := byte(5)
+		if index == 1 {
+			fu |= 0x80
+		}
+		if index == 32 {
+			fu |= 0x40
+		}
+		out, key, lost := frame.push(h264ForwardPacket(uint16(100+index), 90, index == 32, 0x7c, fu, 1), now.Add(time.Duration(index)*30*time.Millisecond))
+		if lost {
+			t.Fatalf("contiguous paced keyframe discarded at packet %d", index)
+		}
+		if index < 32 {
+			if len(out) != 0 {
+				t.Fatal("partial keyframe escaped")
+			}
+			continue
+		}
+		if len(out) != 33 || !key {
+			t.Fatal("complete paced keyframe missing")
+		}
+		for i, packet := range out {
+			wire, ok := stream.translateH264(packet, now.Add(time.Second), key && i == 0)
+			if !ok || wire.SequenceNumber != uint16(100+i) {
+				t.Fatal("paced keyframe created downstream sequence gap")
+			}
+		}
+	}
+}
+
+func TestH264ForwardAssemblyTimeBounds(t *testing.T) {
+	for _, mode := range []string{"idle", "trickle", "padding"} {
+		t.Run(mode, func(t *testing.T) {
+			now := time.Now()
+			var reasons []h264RejectReason
+			frame := h264ForwardFrame{onReject: func(reason h264RejectReason) { reasons = append(reasons, reason) }}
+			frame.push(h264ForwardPacket(1, 90, false, 0x7c, 0x81, 1), now)
+			expected := h264RejectIdle
+			if mode == "idle" {
+				frame.push(h264ForwardPacket(2, 90, true, 0x7c, 0x41, 1), now.Add(h264ForwardIdleWait+time.Millisecond))
+			} else {
+				if mode == "trickle" {
+					expected = h264RejectAge
+				}
+				for i := 1; len(reasons) == 0 && i <= 21; i++ {
+					packet := h264ForwardPacket(uint16(i+1), 90, false, 0x7c, 1, 1)
+					if mode == "padding" {
+						packet = recoveryPaddingPacket(7, uint16(i+1), 0)
+					}
+					frame.push(packet, now.Add(time.Duration(i)*100*time.Millisecond))
+				}
+			}
+			if len(reasons) == 0 || reasons[0] != expected || len(frame.packets) != 0 {
+				t.Fatalf("assembly not bounded: reasons=%v packets=%d", reasons, len(frame.packets))
+			}
+		})
+	}
+}
+
+func TestH264ForwardAcceptsEmptyFUAndIgnoresReservedBit(t *testing.T) {
+	for _, reserved := range []byte{0, 0x20} {
+		var frame h264ForwardFrame
+		now := time.Now()
+		for index, payload := range [][]byte{{0x7c, 0x81 | reserved}, {0x7c, 1 | reserved, 1}, {0x7c, 0x41 | reserved}} {
+			out, _, lost := frame.push(h264ForwardPacket(uint16(index+1), 90, index == 2, payload...), now)
+			if lost || (index == 2 && len(out) != 3) {
+				t.Fatalf("RFC 6184 valid FU rejected: index=%d reserved=%x", index, reserved)
+			}
+		}
+	}
+}
+
 func TestH264ForwardFrameDetectsLossBetweenCompleteUnits(t *testing.T) {
 	for _, test := range []struct {
 		name        string

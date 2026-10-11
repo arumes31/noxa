@@ -109,6 +109,7 @@ func (r *Router) PublishVideoWithCodecs(publisher, slot string, generation uint6
 			input.mu.Lock()
 			input.started = time.Now()
 			input.stage = videoStageCounter{}
+			input.h264Rejects = nil
 			input.mu.Unlock()
 		}
 	}

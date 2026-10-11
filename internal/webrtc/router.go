@@ -1706,6 +1706,9 @@ func (r *Router) ReadVideoLoop(clientID, slot string, track VideoTrackReader) {
 		return webrtc.MimeTypeVP8
 	}
 	var h264Frame h264ForwardFrame
+	if ingress != nil {
+		h264Frame.onReject = ingress.rejectH264
+	}
 	readOrderedVideo(track, func() bool { return r.ownsSlot(clientID, claimKey, token) }, codecName, func(pkt *rtp.Packet, mime string) {
 		if !r.ownsSlot(clientID, claimKey, token) {
 			return
@@ -1716,7 +1719,7 @@ func (r *Router) ReadVideoLoop(clientID, slot string, track VideoTrackReader) {
 		policy = r.videoPolicySnapshot()
 		if boundsRevision != policy.boundsRevision {
 			dimensions = vp8BoundsInspector{bounds: policy.bounds}
-			h264Frame = h264ForwardFrame{}
+			h264Frame = h264ForwardFrame{onReject: h264Frame.onReject}
 			boundsRevision = policy.boundsRevision
 		}
 		if policy.bounds != (VideoBounds{}) {
@@ -1760,7 +1763,7 @@ func (r *Router) ReadVideoLoop(clientID, slot string, track VideoTrackReader) {
 			}
 			return
 		}
-		h264Frame = h264ForwardFrame{}
+		h264Frame = h264ForwardFrame{onReject: h264Frame.onReject}
 		r.forwardVideoAtPolicyCodec(clientID, slot, rid, pkt, now, policy, true, mime)
 	}, func(packet *rtp.Packet) {
 		if ingress != nil {

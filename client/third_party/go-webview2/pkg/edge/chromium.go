@@ -181,7 +181,13 @@ func (e *Chromium) Embed(hwnd uintptr) bool {
 		}
 	}
 
-	browserArgs := strings.Join(e.AdditionalBrowserArgs, " ")
+	// Chromium otherwise elects to replace working H264 hardware encoders with
+	// software below 360p. Keep hardware through bandwidth-driven resolution changes;
+	// this compatibility flag does not bypass hardware capability or error checks.
+	browserArgs := strings.Join(append(
+		[]string{"--disable-features=ForceSoftwareForRtcLowResolutions"},
+		e.AdditionalBrowserArgs...,
+	), " ")
 	if err := createCoreWebView2EnvironmentWithOptions(e.BrowserPath, dataPath, e.envCompleted, browserArgs); err != nil {
 		e.errorCallback(fmt.Errorf("error calling Webview2Loader: %s", err.Error()))
 	}

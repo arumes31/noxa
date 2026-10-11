@@ -101,10 +101,40 @@ func diagnosticVideoRID(rid string) bool {
 }
 
 type videoIngressDiagnostic struct {
-	mu      sync.Mutex
-	ssrc    uint32
-	started time.Time
-	stage   videoStageCounter
+	mu          sync.Mutex
+	ssrc        uint32
+	started     time.Time
+	stage       videoStageCounter
+	h264Rejects *netproto.VideoH264RejectDiagnostics
+}
+
+func (d *videoIngressDiagnostic) rejectH264(reason h264RejectReason) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.h264Rejects == nil {
+		d.h264Rejects = &netproto.VideoH264RejectDiagnostics{}
+	}
+	switch reason {
+	case h264RejectMalformed:
+		d.h264Rejects.Malformed++
+	case h264RejectCapacity:
+		d.h264Rejects.Capacity++
+	case h264RejectDiscontinuity:
+		d.h264Rejects.Discontinuity++
+	case h264RejectIdle:
+		d.h264Rejects.Idle++
+	case h264RejectAge:
+		d.h264Rejects.Age++
+	}
+}
+
+// The caller holds d.mu; snapshots must not retain mutable counter pointers.
+func (d *videoIngressDiagnostic) h264RejectSnapshot() *netproto.VideoH264RejectDiagnostics {
+	if d.h264Rejects == nil {
+		return nil
+	}
+	copy := *d.h264Rejects
+	return &copy
 }
 
 func (d *videoIngressDiagnostic) observe(packet *rtp.Packet, now time.Time) {
@@ -169,7 +199,7 @@ func (r *Router) StreamDiagnostics(subscriber, publisher, slot string, generatio
 			continue
 		}
 		input.mu.Lock()
-		layer := netproto.VideoStreamLayerDiagnostics{RID: key.rid, SSRC: input.ssrc, StartedAt: input.started.UnixMilli(), Ingress: input.stage.snapshot(now)}
+		layer := netproto.VideoStreamLayerDiagnostics{RID: key.rid, SSRC: input.ssrc, StartedAt: input.started.UnixMilli(), Ingress: input.stage.snapshot(now), H264Rejects: input.h264RejectSnapshot()}
 		input.mu.Unlock()
 		result.Layers = append(result.Layers, layer)
 	}

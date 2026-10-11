@@ -13,6 +13,16 @@ const generation = value => typeof value === "string" && /^[1-9][0-9]{0,19}$/.te
 const encoders = new Set(["libvpx", "libaom", "openh264", "ExternalEncoder", "MediaFoundationVideoEncoder", "VideoToolbox"]);
 const codecs = new Set(["video/vp8", "video/vp9", "video/h264", "video/av1"]);
 
+function encoderImplementation(value) {
+    if (encoders.has(value)) return value;
+    if (value === "OpenH264") return "openh264";
+    // Chromium includes a platform encoder description in parentheses. Export
+    // only the family, never that device/driver text, and do not infer hardware
+    // use from this name: powerEfficientEncoder is reported independently.
+    if (typeof value === "string" && /^MediaFoundationVideoEncodeAccelerator(?: \([^()\r\n]{1,160}\))?$/.test(value)) return "MediaFoundationVideoEncoder";
+    return "unknown";
+}
+
 // Copy only diagnostic parameters; RTCRtpParameters can contain identifiers.
 export function videoSenderEncodingSettings(sender) {
     try {
@@ -122,7 +132,7 @@ export function collectVideoSenders(stats, previousStats, sources = [], previous
             send_delay_ms: average("totalPacketSendDelay", "packetsSent"),
             quality_reason: ["none", "cpu", "bandwidth", "other"].includes(stat.qualityLimitationReason) ? stat.qualityLimitationReason : "unknown",
             codec: codecs.has(codec) ? codec : "unknown",
-            encoder_implementation: encoders.has(stat.encoderImplementation) ? stat.encoderImplementation : "unknown",
+            encoder_implementation: encoderImplementation(stat.encoderImplementation),
             power_efficient: typeof stat.powerEfficientEncoder === "boolean" ? stat.powerEfficientEncoder : null,
             frames_encoded: counter(stat.framesEncoded), frames_sent: counter(stat.framesSent), packets_sent: counter(stat.packetsSent),
             bytes_sent: counter(stat.bytesSent),
