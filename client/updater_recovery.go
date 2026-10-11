@@ -62,20 +62,26 @@ func applyClientUpdate(asset io.Reader) error {
 		return fmt.Errorf("reserve previous executable: %w", err)
 	}
 	previousPath := previous.Name()
-	if err := previous.Close(); err != nil {
-		_ = os.Remove(previousPath)
-		return err
+	reservation, statErr := previous.Stat()
+	closeErr := previous.Close()
+	if statErr != nil {
+		return statErr
+	}
+	if closeErr != nil {
+		removeClientUpdateReservation(previousPath, reservation)
+		return closeErr
 	}
 	newHash := sha256.New()
-	if err := selfupdate.Apply(io.TeeReader(asset, newHash), selfupdate.Options{TargetPath: exe, OldSavePath: previousPath}); err != nil {
+	options := selfupdate.Options{TargetPath: exe, OldSavePath: previousPath}
+	applyErr := selfupdate.Apply(io.TeeReader(asset, newHash), options)
+	applyErr = retryClientUpdateCommit(applyErr, options, oldHash, [sha256.Size]byte(newHash.Sum(nil)))
+	if err := applyErr; err != nil {
 		if rollbackErr := selfupdate.RollbackError(err); rollbackErr != nil {
 			return fmt.Errorf("install failed: %w; restore failed: %v; previous executable retained at %s", err, rollbackErr, previousPath)
 		}
 		// On normal failure selfupdate either never moved the old executable
 		// or restored it; only our empty reservation may remain.
-		if info, statErr := os.Stat(previousPath); statErr == nil && info.Size() == 0 {
-			_ = os.Remove(previousPath)
-		}
+		removeClientUpdateReservation(previousPath, reservation)
 		return err
 	}
 	clientUpdateRecovery.pending = &appliedClientUpdate{

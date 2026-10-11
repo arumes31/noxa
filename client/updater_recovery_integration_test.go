@@ -60,9 +60,10 @@ func TestClientUpdateRecoveryIntegration(t *testing.T) {
 				t.Fatalf("user data changed: %q, %v", got, err)
 			}
 			want := originalBytes
-			if name == "ready" || name == "changed backup" {
+			switch name {
+			case "ready", "changed backup":
 				want = payload
-			} else if name == "changed installed" {
+			case "changed installed":
 				want = []byte("external replacement must not be overwritten")
 			}
 			if got, err := os.ReadFile(executable); err != nil || !bytes.Equal(got, want) {
@@ -105,9 +106,14 @@ func TestClientUpdateRecoveryHelperProcess(t *testing.T) {
 	if err := applyClientUpdate(bytes.NewReader(payload)); err == nil {
 		t.Fatal("a pending update was overwritten by a duplicate apply")
 	}
-	updateStartupTimeout = 600 * time.Millisecond
+	// Process creation/antivirus scheduling on loaded Windows CI can exceed
+	// 600ms. Keep that short deadline only for the deliberate timeout case.
+	updateStartupTimeout = 5 * time.Second
 	updateStartupStability = 150 * time.Millisecond
 	name := os.Getenv("NOXA_RECOVERY_TEST_CASE")
+	if name == "timeout" {
+		updateStartupTimeout = 600 * time.Millisecond
+	}
 	if name == "changed installed" {
 		if err := os.WriteFile(exe, []byte("external replacement must not be overwritten"), 0o700); err != nil {
 			t.Fatal(err)
