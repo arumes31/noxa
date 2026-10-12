@@ -24,6 +24,7 @@ export class SoundEngine {
         this.warnings = new Set();
         this.ctx = null;
         this.output = Promise.resolve();
+        this.outputRequest = 0;
         this.requestedSink = undefined;
         this.lastOutputAttempt = -Infinity;
         this.outputReady = false;
@@ -118,13 +119,16 @@ export class SoundEngine {
         // same requested device. A new device selection still blocks old output.
         const keepFallback = sameSink && this.outputReady && this.outputState === "fallback";
         this.requestedSink = sink;
+        // Sink identity alone cannot distinguish a retry or A -> B -> A.
+        // Only the latest request may publish routing readiness or failure.
+        const request = ++this.outputRequest;
         this.lastOutputAttempt = this.now();
         this.outputReady = keepFallback;
         this.setOutputState("routing");
         let routed = false;
         let fallback = false;
         this.output = this.output.then(async () => {
-            if (this.disposed || ctx !== this.ctx || this.requestedSink !== sink) return;
+            if (this.disposed || ctx !== this.ctx || request !== this.outputRequest) return;
             if (typeof ctx.setSinkId !== "function") {
                 fallback = !!sink;
                 if (sink) this.report("this WebView uses the default sound output");
@@ -139,7 +143,7 @@ export class SoundEngine {
             }
         }).catch(() => this.report("output routing unavailable"))
             .finally(() => {
-                if (!this.disposed && ctx === this.ctx && this.requestedSink === sink) {
+                if (!this.disposed && ctx === this.ctx && request === this.outputRequest) {
                     this.outputReady = routed;
                     this.setOutputState(routed ? (fallback ? "fallback" : "ready") : "unavailable");
                 }

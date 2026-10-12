@@ -358,6 +358,62 @@ test("a device change cannot leak a cue to the previous output while routing is 
     assert.equal(f.engine.play("ban"), true);
 });
 
+for (const selection of ["same sink", "A to B to A"]) test(`overlapping ${selection} output requests wait for the newest native route`, async () => {
+    const f = fixture(); await f.engine.preload(["dm"]);
+    const first = Promise.withResolvers(), latest = Promise.withResolvers();
+    const firstStarted = Promise.withResolvers(), latestStarted = Promise.withResolvers();
+    const routes = [];
+    f.ctx.setSinkId = id => {
+        routes.push(id);
+        if (routes.length === 1) { firstStarted.resolve(); return first.promise; }
+        latestStarted.resolve(); return latest.promise;
+    };
+    f.state.settings.playback_device_id = "A";
+    const original = f.engine.setOutput("A");
+    await firstStarted.promise;
+    if (selection === "A to B to A") void f.engine.setOutput("B");
+    const replacement = f.engine.setOutput("A", { retry: true });
+    first.resolve();
+    await latestStarted.promise;
+    assert.deepEqual(routes, ["A", "A"], "obsolete queued selections are not applied");
+    assert.equal(f.engine.outputState, "routing", "an old success cannot publish readiness for a pending route");
+    assert.equal(f.engine.outputReady, false);
+    assert.equal(f.engine.play("dm"), false);
+    latest.resolve(); await Promise.all([original, replacement]);
+    assert.equal(f.engine.outputState, "ready");
+    assert.equal(f.sources.length, 0, "a blocked notification is not replayed");
+    assert.equal(f.engine.play("dm"), true);
+    await f.engine.dispose();
+});
+
+test("an obsolete selected and fallback failure cannot replace the newest routing status", async () => {
+    const f = fixture(); await f.engine.preload(["dm"]);
+    const first = Promise.withResolvers(), fallback = Promise.withResolvers(), latest = Promise.withResolvers();
+    const firstStarted = Promise.withResolvers(), fallbackStarted = Promise.withResolvers(), latestStarted = Promise.withResolvers();
+    const routes = [];
+    f.ctx.setSinkId = id => {
+        routes.push(id);
+        if (routes.length === 1) { firstStarted.resolve(); return first.promise; }
+        if (routes.length === 2) { fallbackStarted.resolve(); return fallback.promise; }
+        latestStarted.resolve(); return latest.promise;
+    };
+    f.state.settings.playback_device_id = "A";
+    const original = f.engine.setOutput("A");
+    await firstStarted.promise;
+    first.reject(Error("selected device unavailable"));
+    await fallbackStarted.promise;
+    const replacement = f.engine.setOutput("A", { retry: true });
+    fallback.reject(Error("fallback unavailable"));
+    await latestStarted.promise;
+    assert.deepEqual(routes, ["A", "", "A"]);
+    assert.equal(f.engine.outputState, "routing", "an old failure cannot mark the newest request unavailable");
+    assert.equal(f.engine.outputReady, false);
+    latest.resolve(); await Promise.all([original, replacement]);
+    assert.equal(f.engine.outputState, "ready");
+    assert.equal(f.engine.play("dm"), true);
+    await f.engine.dispose();
+});
+
 test("failure of both selected and fallback outputs remains silent", async () => {
     const f = fixture(); await f.engine.preload();
     f.ctx.setSinkId = async () => { throw Error("device lost"); };
