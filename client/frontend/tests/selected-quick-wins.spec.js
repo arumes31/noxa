@@ -254,11 +254,12 @@ test("selected wins: stream codec, bandwidth and isolated diagnostics", async ({
     await page.evaluate(async () => {
         const v = window.__noxa;
         let sample = 0;
-        v.state.pc = { getSenders: () => [], getStats: async () => {
+        const transceivers = [];
+        v.state.pc = { getSenders: () => [], getTransceivers: () => transceivers, getStats: async () => {
             sample++;
             return new Map([
                 ["codec", { type: "codec", mimeType: "video/VP8" }],
-                ["stream", { id: "stream", type: "inbound-rtp", kind: "video", codecId: "codec", trackIdentifier: "alice|cam", timestamp: sample * 3000, bytesReceived: sample * 600000, framesDecoded: sample * 90, frameWidth: 1280, frameHeight: 720, packetsLost: 0 }],
+                ["stream", { id: "stream", type: "inbound-rtp", kind: "video", codecId: "codec", trackIdentifier: "alice|cam", mid: "camera", timestamp: sample * 3000, bytesReceived: sample * 600000, framesDecoded: sample * 90, frameWidth: 1280, frameHeight: 720, packetsLost: 0 }],
                 ["secret", { id: "secret", type: "candidate-pair", localAddress: "do-not-copy", bytesReceived: 100000000 }],
             ]);
         } };
@@ -267,6 +268,7 @@ test("selected wins: stream codec, bandwidth and isolated diagnostics", async ({
         const ctx = canvas.getContext("2d"); ctx.fillStyle = "#33485a"; ctx.fillRect(0, 0, 640, 360);
         const stream = canvas.captureStream(1), track = stream.getVideoTracks()[0];
         Object.defineProperty(track, "id", { value: "alice|cam" });
+        transceivers.push({ mid: "camera", currentDirection: "recvonly", receiver: { track } });
         (await import("/src/video.js")).videoTrackAdded(track.id, stream, "alice");
     });
     await page.locator(".vtile-diagnostics summary").click();

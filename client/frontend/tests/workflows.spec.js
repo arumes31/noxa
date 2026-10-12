@@ -7629,7 +7629,8 @@ test("video CPU pressure does not flap quality around its threshold", async ({ p
     await page.clock.install();
     await page.evaluate(async () => {
         const state = window.__noxa.state;
-        Object.assign(state, { activeTabID: "video-tab", myClientID: "self", myChannelID: 1, pc: { getStats: async () => new Map(), getSenders: () => [] } });
+        const transceivers = [];
+        Object.assign(state, { activeTabID: "video-tab", myClientID: "self", myChannelID: 1, pc: { getStats: async () => new Map(), getSenders: () => [], getTransceivers: () => transceivers } });
         window.__testCPU = 90;
         const app = window.go.main.App;
         window.go.main.App = new Proxy(app, { get(target, key) {
@@ -7642,6 +7643,7 @@ test("video CPU pressure does not flap quality around its threshold", async ({ p
         }});
         const video = await import("/src/video.js");
         const stream = document.createElement("canvas").captureStream(1);
+        transceivers.push({ mid: "camera", currentDirection: "recvonly", receiver: { track: stream.getVideoTracks()[0] } });
         video.videoTrackAdded(stream.getVideoTracks()[0].id, stream, { client_id: "peer", nickname: "Peer" });
     });
     const qualities = () => page.evaluate(() => (window.__callArgs.SetVideoQualityForTab || []).map(args => args[1]));
@@ -7716,7 +7718,10 @@ test("video CPU pressure respects efficient decoding and discards stale polls", 
     await page.evaluate(async () => {
         const state = window.__noxa.state;
         window.__efficientDecoder = true;
-        const pc = { getStats: async () => new Map([["video", { type: "inbound-rtp", kind: "video", framesDecoded: 20, powerEfficientDecoder: window.__efficientDecoder }]]), getSenders: () => [] };
+        const stream = document.createElement("canvas").captureStream(1);
+        const track = stream.getVideoTracks()[0];
+        const transceivers = [{ mid: "camera", currentDirection: "recvonly", receiver: { track } }];
+        const pc = { getStats: async () => new Map([["video", { type: "inbound-rtp", kind: "video", trackIdentifier: track.id, mid: "camera", framesDecoded: 20, powerEfficientDecoder: window.__efficientDecoder }]]), getSenders: () => [], getTransceivers: () => transceivers };
         Object.assign(state, { activeTabID: "video-tab", myClientID: "self", myChannelID: 1, pc });
         const app = window.go.main.App;
         window.go.main.App = new Proxy(app, { get(target, key) {
@@ -7728,7 +7733,6 @@ test("video CPU pressure respects efficient decoding and discards stale polls", 
             return target[key];
         }});
         window.__videoForCPU = await import("/src/video.js");
-        const stream = document.createElement("canvas").captureStream(1);
         window.__videoForCPU.videoTrackAdded(stream.getVideoTracks()[0].id, stream, { client_id: "peer", nickname: "Peer" });
     });
     const qualities = () => page.evaluate(() => window.__callArgs.SetVideoQualityForTab || []);
@@ -7756,11 +7760,12 @@ test("system CPU pressure reduces software decoding without clamping a healthy s
         const stream = document.createElement("canvas").captureStream(1);
         const track = stream.getVideoTracks()[0];
         const sender = { track, getParameters: () => ({ encodings: [{}] }), setParameters: async value => { window.__senderCaps.push(value); } };
+        const transceivers = [{ mid: "camera", sender, receiver: { track }, direction: "sendrecv", currentDirection: "sendrecv" }];
         const pc = {
             getSenders: () => [sender],
-            getTransceivers: () => [{ sender, receiver: { track: { kind: "video" } }, direction: "sendonly" }],
+            getTransceivers: () => transceivers,
             getStats: async () => new Map([
-                ["receive", { type: "inbound-rtp", kind: "video", framesDecoded: 20, powerEfficientDecoder: window.__efficientReceiver }],
+                ["receive", { type: "inbound-rtp", kind: "video", trackIdentifier: track.id, mid: "camera", framesDecoded: 20, powerEfficientDecoder: window.__efficientReceiver }],
                 ["send", { type: "outbound-rtp", kind: "video", framesEncoded: 20, powerEfficientEncoder: window.__efficientSender }],
             ]),
         };
