@@ -126,3 +126,76 @@ test("bandwidth adaptation interrupts dwell until exact source geometry returns"
     f.time(25000); await recover(f.pc, f.stats({ qualityLimitationReason: "bandwidth" }));
     assert.equal(f.calls.length, 1);
 });
+
+function withCapture(f, changes = {}, sourceChanges = {}) {
+    const stats = f.stats({ mediaSourceId: "source", ...changes });
+    const row = stats.get("video");
+    stats.set("source", { id: "source", type: "media-source", kind: "video", trackIdentifier: f.track.id,
+        timestamp: row.timestamp, frames: row.timestamp * 2, ...sourceChanges });
+    return stats;
+}
+
+test("previous hardware and progressing bound capture recover zero-output software with existing backoff", async () => {
+    const f = fixture();
+    f.options.capable = async () => { throw new Error("prior hardware should supply eligibility"); };
+    const proofs = [];
+    f.options.retry = async (slot, track, current, proof) => { assert.ok(current()); proofs.push(proof); };
+    const recover = createVideoSenderRecovery(f.options);
+    await recover(f.pc, withCapture(f, { powerEfficientEncoder: true }));
+    for (let at = 5000; at <= 45000; at += 5000) {
+        f.time(at);
+        await recover(f.pc, withCapture(f, { id: "replacement", ssrc: 456, framesEncoded: 0, framesPerSecond: 0 }));
+        if (at < 15000) assert.equal(proofs.length, 0);
+        if (at >= 15000 && at < 45000) assert.equal(proofs.length, 1);
+    }
+    assert.equal(proofs.length, 2);
+    assert.equal(proofs[0].sourceId, "source");
+    assert.equal(proofs[0].width, 1920);
+});
+
+test("capture cannot authorize software retries without exact prior hardware and fresh owned input", async () => {
+    for (const mode of ["no-hardware", "different-geometry", "different-source", "source-switch", "wrong-track", "stale", "stale-outbound", "future", "missing",
+        "idle", "counter-reset", "timestamp-reset", "unknown-encoder", "adapted", "hardware-stall"]) {
+        const f = fixture(), recover = createVideoSenderRecovery(f.options);
+        if (mode !== "no-hardware") await recover(f.pc, withCapture(f, { powerEfficientEncoder: true,
+            ...(mode === "different-geometry" ? { frameWidth: 1280, frameHeight: 720 } : {}) }));
+        for (const at of [5000, 10000, 15000]) {
+            f.time(at);
+            const source = mode === "wrong-track" ? { trackIdentifier: "other" } : mode === "idle" ? { frames: 20 } :
+                mode === "counter-reset" && at >= 10000 ? { frames: at - 10000 } :
+                mode === "timestamp-reset" && at >= 10000 ? { timestamp: 1 } : {};
+            const stats = withCapture(f, { framesEncoded: 10, framesPerSecond: 0,
+                ...(mode === "adapted" ? { frameWidth: 1280, frameHeight: 720 } : {}),
+                ...(mode === "hardware-stall" ? { powerEfficientEncoder: true } : {}),
+                ...(mode === "unknown-encoder" ? { encoderImplementation: "unknown" } : {}) }, source);
+            if (mode === "different-source" || (mode === "source-switch" && at >= 10000)) {
+                stats.get("video").mediaSourceId = "new-source";
+                stats.set("new-source", { ...stats.get("source"), id: "new-source" });
+            }
+            if (mode === "stale") stats.get("source").timestamp -= 1001;
+            if (mode === "stale-outbound") stats.get("video").timestamp = stats.get("source").timestamp = 5001;
+            if (mode === "future") stats.get("source").timestamp++;
+            if (mode === "missing") stats.delete("source");
+            await recover(f.pc, stats);
+        }
+        assert.equal(f.calls.length, 0, mode);
+    }
+});
+
+test("capture-only hardware activity cannot refill the sender retry budget", async () => {
+    const f = fixture(), recover = createVideoSenderRecovery(f.options);
+    await recover(f.pc, withCapture(f, { powerEfficientEncoder: true }));
+    for (let at = 5000; at <= 45000; at += 5000) {
+        f.time(at); await recover(f.pc, withCapture(f, { framesEncoded: 10 }));
+    }
+    assert.equal(f.calls.length, 2);
+    for (let at = 50000; at <= 115000; at += 5000) {
+        f.time(at); await recover(f.pc, withCapture(f, { framesEncoded: 10, powerEfficientEncoder: true }));
+    }
+    for (let at = 120000; at <= 160000; at += 5000) {
+        f.time(at); await recover(f.pc, withCapture(f, { framesEncoded: 10 }));
+    }
+    assert.equal(f.calls.length, 2, "hardware input without output must not reset the 120-second backoff");
+    f.time(165000); await recover(f.pc, withCapture(f, { framesEncoded: 10 }));
+    assert.equal(f.calls.length, 3);
+});

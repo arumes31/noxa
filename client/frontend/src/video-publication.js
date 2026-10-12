@@ -13,7 +13,7 @@ import { renderMicStatus } from "./audio.js";
 import { videoConstraints, trackFitsVideoLimits, capVideoEncodings } from "./media-limits.js";
 import { t as tLabel } from "./i18n.js";
 import { rememberVideoSenderProfile } from "./video-sender-stats.js";
-import { hardwareVideoEncodeAvailable } from "./video-sender-hardware-recovery.js";
+import { hardwareVideoEncodeAvailable, videoSenderCaptureSample } from "./video-sender-hardware-recovery.js";
 import { createPeerStatsSampler } from "./peer-stats.js";
 import { renegotiate, negotiateOffer, queuePeerNegotiation } from "./video-negotiation.js";
 const V = () => window.__noxa;
@@ -207,7 +207,7 @@ export function createVideoPublication({ policy }) {
     // A bounded half-size pulse keeps the same capture, codec and single upload.
     // Capability queries alone do not guarantee hardware on every runtime; the
     // recovery scheduler must confirm the result using actual encoder stats.
-    function retryVideoHardware(slot, track, stillRelevant = () => true) {
+    function retryVideoHardware(slot, track, stillRelevant = () => true, captureRecovery = null) {
         const { state } = V(), pc = state.pc, scope = captureMediaScope();
         const transceiver = slot === "screen" ? state.shareVideoTransceiver : pc?.getTransceivers().find(item => item.sender.track === track);
         const sender = transceiver?.sender;
@@ -224,7 +224,8 @@ export function createVideoPublication({ policy }) {
                     const reports = await sampleSenderStats(sender, { fresh: true });
                     const video = [...reports.values()].filter(row => row.type === "outbound-rtp" && !row.isRemote &&
                         (row.kind === "video" || row.mediaType === "video"));
-                    return video.length === 1 ? { ...video[0], codec: reports.get(video[0].codecId) } : null;
+                    return video.length === 1 ? { ...video[0], codec: reports.get(video[0].codecId),
+                        capture: videoSenderCaptureSample(reports, video[0], track) } : null;
                 };
                 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
                 const first = await sample();
@@ -235,6 +236,17 @@ export function createVideoPublication({ policy }) {
                     ["none", "cpu", "bandwidth"].includes(row.qualityLimitationReason) && row.frameWidth >= 640 && row.frameHeight >= 360 &&
                     row.frameWidth % 4 === 0 && row.frameHeight % 4 === 0 &&
                     size.width === row.frameWidth * scale && size.height === row.frameHeight * scale;
+                // Only the publication scheduler's previously measured hardware
+                // configuration authorizes capture progress to replace output.
+                // Revalidate the bound source on fresh reads inside this queue.
+                const capturedProgress = (before, after) => captureRecovery &&
+                    [before, after].every(row => row?.capture?.id === captureRecovery.sourceId &&
+                        row.codec?.mimeType === captureRecovery.codec && row.codec?.sdpFmtpLine === captureRecovery.fmtp &&
+                        row.frameWidth === captureRecovery.width && row.frameHeight === captureRecovery.height &&
+                        /^openh264$/i.test(row.encoderImplementation || "") &&
+                        Number.isSafeInteger(row.framesEncoded) && row.framesEncoded >= 0) &&
+                    after.framesEncoded >= before.framesEncoded && after.capture.frames > before.capture.frames &&
+                    after.capture.timestamp > before.capture.timestamp && after.capture.timestamp - before.capture.timestamp <= 15000;
                 if (!current() || parameters.encodings?.length !== 1 || encoding.active === false || !Number.isFinite(scale) || scale < 1 || !eligible(first)) return false;
                 // The shared bounded cache retains hung native queries; a later
                 // retry must not launch additional work for the same geometry.
@@ -246,7 +258,8 @@ export function createVideoPublication({ policy }) {
                 await pause(150);
                 const baseline = await sample();
                 if (!current() || !eligible(baseline) || baseline.id !== first.id || baseline.codecId !== first.codecId ||
-                    baseline.timestamp <= first.timestamp || baseline.framesEncoded <= first.framesEncoded ||
+                    baseline.timestamp <= first.timestamp ||
+                    !(baseline.framesEncoded > first.framesEncoded || capturedProgress(first, baseline)) ||
                     baseline.frameWidth !== first.frameWidth || baseline.frameHeight !== first.frameHeight ||
                     track.getSettings().width !== size.width || track.getSettings().height !== size.height) return false;
                 const originalScale = encoding.scaleResolutionDownBy, originalPreference = parameters.degradationPreference;
@@ -259,6 +272,8 @@ export function createVideoPublication({ policy }) {
                     await pause(150);
                     const ready = await sample();
                     if (!current() || !eligible(ready) || ready.frameWidth !== first.frameWidth || ready.frameHeight !== first.frameHeight ||
+                        (!(baseline.framesEncoded > first.framesEncoded) &&
+                            (ready.timestamp <= baseline.timestamp || !capturedProgress(baseline, ready))) ||
                         track.getSettings().width !== size.width || track.getSettings().height !== size.height) return false;
                     const pulse = sender.getParameters();
                     if (pulse.encodings?.length !== 1 || (pulse.encodings[0].scaleResolutionDownBy ?? 1) !== scale || pulse.encodings[0].active === false) return false;

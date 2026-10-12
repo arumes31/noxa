@@ -29,9 +29,14 @@ export function createHardwareRecoveryScheduler({ now = () => performance.now() 
             const counter = value => Number.isSafeInteger(value) && value >= 0;
             const knownSoftwareInput = candidate.software && !candidate.hardware && entry?.hardware.has(candidate.config) &&
                 counter(candidate.frames) && counter(candidate.receivedFrames) && counter(candidate.receivedPackets);
+            const capture = candidate.capture;
+            const knownSoftwareCapture = candidate.software && !candidate.hardware && entry?.hardware.has(candidate.config) &&
+                counter(candidate.frames) && typeof capture?.id === "string" && capture.id.length > 0 &&
+                counter(capture.frames) && Number.isFinite(capture.timestamp);
             // Zero decoded output is observable only if the runtime still
             // supplies geometry matching prior hardware, plus complete input.
-            if (!(candidate.frames > 0) && !(knownSoftwareInput && candidate.receivedFrames > 0 && candidate.receivedPackets > 0)) continue;
+            if (!(candidate.frames > 0) && !(knownSoftwareInput && candidate.receivedFrames > 0 && candidate.receivedPackets > 0) &&
+                !(knownSoftwareCapture && capture.frames > 0)) continue;
             if (!entry) {
                 if (entries.size >= 64) entries.delete(entries.keys().next().value);
                 entry = { attempts: 0, next: 0, timestamp: -Infinity, hardware: new Set() };
@@ -44,15 +49,19 @@ export function createHardwareRecoveryScheduler({ now = () => performance.now() 
             const receiving = knownSoftwareInput && candidate.frames >= entry.frames &&
                 counter(entry.receivedFrames) && counter(entry.receivedPackets) &&
                 candidate.receivedFrames > entry.receivedFrames && candidate.receivedPackets > entry.receivedPackets;
+            const capturing = knownSoftwareCapture && candidate.frames >= entry.frames && entry.capture?.id === capture.id &&
+                capture.frames > entry.capture.frames && capture.timestamp > entry.capture.timestamp &&
+                capture.timestamp - entry.capture.timestamp <= 15000;
             const continuous = entry.instance === candidate.instance && entry.config === candidate.config &&
                 candidate.timestamp > entry.timestamp && candidate.timestamp - entry.timestamp <= 15000 &&
-                (candidate.frames > entry.frames || receiving);
+                (candidate.frames > entry.frames || receiving || capturing);
             entry.timestamp = candidate.timestamp;
             entry.instance = candidate.instance;
             entry.config = candidate.config;
             entry.frames = candidate.frames;
             entry.receivedFrames = counter(candidate.receivedFrames) ? candidate.receivedFrames : null;
             entry.receivedPackets = counter(candidate.receivedPackets) ? candidate.receivedPackets : null;
+            entry.capture = capture ? { ...capture } : null;
             if (!continuous) { entry.softwareSince = null; entry.healthySince = null; }
             if (candidate.hardware) {
                 entry.hardware.add(candidate.config);
@@ -75,7 +84,7 @@ export function createHardwareRecoveryScheduler({ now = () => performance.now() 
                 entry.next = now() + delays[Math.min(entry.attempts++, delays.length - 1)];
                 entry.softwareSince = null;
                 lastMutationSample = sample;
-                await candidate.recover();
+                await candidate.recover({ hardwareObserved: entry.hardware.has(candidate.config) });
             } catch {
                 // A failed reset must not become a poll-rate negotiation loop.
                 if (scope === key) entry.next = Math.max(entry.next, now() + delays[0]);

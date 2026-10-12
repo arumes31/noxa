@@ -4,6 +4,19 @@ import { publicationSnapshot, publicationUploadActive } from "./stream-publicati
 const scopeKey = state => JSON.stringify([state.activeTabID, state.serverGeneration, state.sessionGeneration, state.myClientID, state.myChannelID]);
 const queries = new WeakMap();
 
+// Capture counters are useful only when bound to this exact sender's source.
+// They show delivery into WebRTC, not successful hardware encoding.
+export function videoSenderCaptureSample(stats, stat, track) {
+    if (typeof stat.mediaSourceId !== "string" || !stat.mediaSourceId || typeof track.id !== "string" || !track.id) return null;
+    const source = stats.get(stat.mediaSourceId);
+    if (!source || source.id !== stat.mediaSourceId || source.type !== "media-source" ||
+        (source.kind || source.mediaType) !== "video" || source.trackIdentifier !== track.id ||
+        !Number.isFinite(source.timestamp) || !Number.isFinite(stat.timestamp) ||
+        source.timestamp > stat.timestamp || stat.timestamp - source.timestamp > 1000 ||
+        !Number.isSafeInteger(source.frames) || source.frames < 0) return null;
+    return { id: source.id, timestamp: source.timestamp, frames: source.frames };
+}
+
 export async function hardwareVideoEncodeAvailable(codec, stat, mediaCapabilities = globalThis.navigator?.mediaCapabilities) {
     if (!mediaCapabilities?.encodingInfo || !codec?.sdpFmtpLine || !(stat.framesPerSecond > 0)) return false;
     let timer;
@@ -55,17 +68,20 @@ export function createVideoSenderRecovery({ state, retry, snapshot = publication
             if (rows.length !== 1) continue;
             const stat = rows[0], codec = stats.get(stat.codecId), settings = p.track.getSettings();
             if (codec?.mimeType?.toLowerCase() !== "video/h264") continue;
+            const capture = videoSenderCaptureSample(stats, stat, p.track);
             const scale = parameters.encodings[0].scaleResolutionDownBy ?? 1;
             const geometry = Number.isFinite(scale) && scale >= 1 && stat.frameWidth >= 640 && stat.frameHeight >= 360 &&
                 stat.frameWidth % 4 === 0 && stat.frameHeight % 4 === 0 &&
                 stat.frameWidth * scale === settings.width && stat.frameHeight * scale === settings.height;
             candidates.push({ key: `send:${p.slot}:${generation}`, instance: `${stat.id}:${stat.ssrc}`,
-                config: JSON.stringify([codec.mimeType, codec.sdpFmtpLine, stat.frameWidth, stat.frameHeight]),
-                timestamp: stat.timestamp, frames: stat.framesEncoded,
-                hardware: stat.powerEfficientEncoder === true,
+                config: JSON.stringify([codec.mimeType, codec.sdpFmtpLine, stat.frameWidth, stat.frameHeight, capture?.id ?? null]),
+                timestamp: stat.timestamp, frames: stat.framesEncoded, capture,
+                hardware: stat.powerEfficientEncoder === true && geometry,
                 software: stat.powerEfficientEncoder === false && /^openh264$/i.test(stat.encoderImplementation || "") &&
                     ["none", "cpu", "bandwidth"].includes(stat.qualityLimitationReason) && geometry && !state.shareQualityUpdating,
-                current, capable: () => capable(codec, stat), recover: () => retry(p.slot, p.track, current) });
+                current, capable: () => capable(codec, stat), recover: evidence => retry(p.slot, p.track, current,
+                    evidence?.hardwareObserved && capture ? { sourceId: capture.id, codec: codec.mimeType,
+                        fmtp: codec.sdpFmtpLine, width: stat.frameWidth, height: stat.frameHeight } : null) });
         }
         await scheduler(scope, candidates, stats);
     };
