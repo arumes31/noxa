@@ -387,6 +387,76 @@ test("text sharing retains readable pixels and live motion changes update the sa
     expect(await page.evaluate(() => window.__media.cameraSender.getParameters().encodings[0].priority)).toBe("medium");
 });
 
+test("compatible viewer joins and leaves preserve the active screen encoder", async ({ page }) => {
+    await page.evaluate(() => {
+        const app = window.go.main.App, pc = window.__noxa.state.pc;
+        app.SupportsStreamSourceQualityForTab = async () => true;
+        app.SupportsStreamCodecForTab = async () => true;
+        Object.defineProperty(navigator.mediaCapabilities, "encodingInfo", { configurable: true, value: async () => ({ supported: true, powerEfficient: true }) });
+        const add = pc.addTransceiver.bind(pc);
+        pc.addTransceiver = (...args) => {
+            const transceiver = add(...args);
+            transceiver.setCodecPreferences = codecs => { transceiver.codec = codecs[0].mimeType; };
+            return transceiver;
+        };
+        const control = app.VideoStreamControlForTab;
+        app.VideoStreamControlForTab = async (...args) => ({ ...await control(...args), codec: "h264", upload_active: true });
+        Object.defineProperty(navigator.mediaDevices, "getDisplayMedia", { configurable: true, value: async () => {
+            const canvas = document.createElement("canvas");
+            canvas.width = 1920; canvas.height = 1080;
+            return canvas.captureStream(60);
+        } });
+    });
+    await page.locator("#voice-screen").click();
+    await page.locator(".sh-preset").selectOption("hdMotion");
+    await page.getByRole("dialog").getByRole("button", { name: "Start sharing", exact: true }).click();
+    await expect.poll(() => page.evaluate(() => window.__noxa.state.shareVideoTransceiver?.sender.getParameters().encodings[0]?.active)).toBe(true);
+    const before = await page.evaluate(async () => {
+        const { queuePeerNegotiation } = await import("/src/video-negotiation.js");
+        const { pc, shareVideoTransceiver } = window.__noxa.state;
+        await queuePeerNegotiation(pc, async () => {});
+        const changes = [];
+        const observe = (target, name) => {
+            const original = target[name].bind(target);
+            target[name] = (...args) => { changes.push(name); return original(...args); };
+        };
+        observe(pc, "createOffer");
+        for (const sender of pc.getSenders()) {
+            observe(sender, "setParameters");
+            observe(sender, "replaceTrack");
+            if (sender.track) observe(sender.track, "applyConstraints");
+        }
+        Object.assign(window.__media, { viewerChanges: changes, originalScreenSender: shareVideoTransceiver.sender,
+            originalScreenTrack: shareVideoTransceiver.sender.track });
+        return shareVideoTransceiver.sender.getParameters();
+    });
+    expectLayeredScreenBudget(before.encodings, 8000000);
+    expect(before).toMatchObject({ degradationPreference: "maintain-framerate", encodings: [{ active: true, maxFramerate: 60 }] });
+    for (const viewer_count of [1, 2, 3, 2, 1]) {
+        const after = await page.evaluate(async viewer_count => {
+            const { publicationSnapshot, reconcilePublicationUploads } = await import("/src/stream-publication.js");
+            const { queuePeerNegotiation } = await import("/src/video-negotiation.js");
+            const { pc, shareVideoTransceiver } = window.__noxa.state;
+            const snapshot = publicationSnapshot();
+            reconcilePublicationUploads(snapshot, snapshot.map(({ publication, generation }) => ({
+                publisher_id: "self", slot: publication.slot, generation, viewer_count,
+                quality_mode: "source", upload_active: true, codec: "h264",
+            })));
+            // Drain publication callbacks and their queued sender work before
+            // checking for mutations, including writes of unchanged parameters.
+            await Promise.resolve();
+            await queuePeerNegotiation(pc, async () => {});
+            return { publications: snapshot.length, changes: [...window.__media.viewerChanges],
+                sameSender: shareVideoTransceiver.sender === window.__media.originalScreenSender,
+                sameTrack: shareVideoTransceiver.sender.track === window.__media.originalScreenTrack,
+                live: shareVideoTransceiver.sender.track.readyState, codec: shareVideoTransceiver.codec,
+                parameters: shareVideoTransceiver.sender.getParameters() };
+        }, viewer_count);
+        expect(after, `viewer count ${viewer_count}`).toEqual({ publications: 1, changes: [], sameSender: true,
+            sameTrack: true, live: "live", codec: "video/H264", parameters: before });
+    }
+});
+
 test("hardware screen codec follows common fallback without adding a sender", async ({ page }) => {
     await page.evaluate(() => {
         const app = window.go.main.App, pc = window.__noxa.state.pc;

@@ -98,6 +98,17 @@ func TestVideoWatchRetryRequestsFreshKeyframe(t *testing.T) {
 	if got := writer.pkts[0][0].(*rtcp.PictureLossIndication).MediaSSRC; got != 8123 {
 		t.Fatalf("retry keyframe source=%d", got)
 	}
+	// A retry of the same revision remains idempotent even outside the PLI
+	// coalescing window; a newer revision still wakes a paused/static source.
+	for _, revision := range []uint64{2, 3} {
+		clear(r.keyframeLast)
+		before := writer.pliCount()
+		started, err := r.WatchVideo("sub", "pub", SlotScreen, generation, revision, r.VideoWatchSession("sub"), true)
+		want := revision == 3
+		if err != nil || started != want || (writer.pliCount() > before) != want {
+			t.Fatalf("revision=%d started=%v err=%v PLI=%d before=%d", revision, started, err, writer.pliCount(), before)
+		}
+	}
 }
 
 func TestVideoViewerCountIsPublisherOnlyAndExpiresWithWatch(t *testing.T) {

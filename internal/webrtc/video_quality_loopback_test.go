@@ -2,11 +2,35 @@ package webrtc
 
 import (
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/pion/rtcp"
 	pion "github.com/pion/webrtc/v4"
 )
+
+type startupPLIWriter struct {
+	mu     sync.Mutex
+	counts map[uint32]int
+}
+
+func (w *startupPLIWriter) WriteRTCP(packets []rtcp.Packet) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	for _, packet := range packets {
+		if pli, ok := packet.(*rtcp.PictureLossIndication); ok {
+			w.counts[pli.MediaSSRC]++
+		}
+	}
+	return nil
+}
+
+func (w *startupPLIWriter) count(ssrc uint32) int {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.counts[ssrc]
+}
 
 // Route independent camera/screen layers from two publishers through the
 // production egress and real ICE/DTLS/SRTP, including a live layer switch.
@@ -49,6 +73,12 @@ func TestStreamVideoQualityLoopbackIndependentShares(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	requests := &startupPLIWriter{counts: make(map[uint32]int)}
+	router.mu.Lock()
+	for _, publisher := range []string{"a", "b", "c"} {
+		router.rtcpWriters[publisher] = requests
+	}
+	router.mu.Unlock()
 	settings := pion.SettingEngine{}
 	settings.SetIncludeLoopbackCandidate(true)
 	settings.SetInterfaceFilter(usableICEInterface)
@@ -94,11 +124,18 @@ func TestStreamVideoQualityLoopbackIndependentShares(t *testing.T) {
 		t.Helper()
 		output := pubTrackFor(router, "viewer", s.publisher).video[s.slot]
 		before, epoch := output.videoContinuity, output.watchEpoch
+		beforeRequests := requests.count(s.base)
 		for sequence := uint16(1); sequence <= 1100; sequence++ {
 			packet := continuityPacket(s.base, sequence, uint32(sequence)*3000, sequence, true)
 			if router.ForwardVideo(s.publisher, s.slot, "f", packet) != 0 {
 				t.Fatal("video admitted before transport and sender binding were ready")
 			}
+		}
+		if router.ForwardVideo(s.publisher, s.slot, "f", continuityPacket(s.base, 1101, 3303000, 1101, false)) != 0 {
+			t.Fatal("delta admitted before transport and sender binding were ready")
+		}
+		if requests.count(s.base) != beforeRequests {
+			t.Fatal("pre-ready delta requested an undeliverable keyframe")
 		}
 		if output.videoContinuity != before || output.watchEpoch != epoch || output.videoSource.Load() != 0 || len(output.egress.tickets) != 0 {
 			t.Fatal("undelivered video committed continuity or retained media tickets")
@@ -170,8 +207,15 @@ func TestStreamVideoQualityLoopbackIndependentShares(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("transport did not connect after candidates were released")
 	}
-	if router.ForwardVideo("a", SlotScreen, "f", continuityPacket(100, 1101, 3303000, 1101, false)) != 0 {
-		t.Fatal("post-connect delta frame reused an unseen keyframe")
+	for _, s := range sources {
+		rid := qualityToRID[s.quality]
+		ssrc := s.base + uint32(strings.Index("fhq", rid))
+		if router.ForwardVideo(s.publisher, s.slot, rid, continuityPacket(ssrc, 1102, 3306000, 1102, false)) != 0 {
+			t.Fatal("post-connect delta frame reused an unseen keyframe")
+		}
+		if requests.count(ssrc) != 1 {
+			t.Fatalf("post-connect %s/%s requested %d keyframes, want 1", s.publisher, s.slot, requests.count(ssrc))
+		}
 	}
 
 	tick := time.NewTicker(20 * time.Millisecond)
@@ -260,6 +304,9 @@ func TestStreamVideoQualityLoopbackIndependentShares(t *testing.T) {
 	}
 	if router.ForwardVideo("c", SlotScreen, "f", continuityPacket(late.base, 1101, 3303000, 1101, false)) != 0 {
 		t.Fatal("newly bound screen accepted a delta without its first keyframe")
+	}
+	if requests.count(late.base) != 1 {
+		t.Fatalf("newly bound screen requested %d keyframes, want 1", requests.count(late.base))
 	}
 	for {
 		select {

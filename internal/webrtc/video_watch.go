@@ -172,7 +172,7 @@ func (r *Router) WatchVideoWithCodecs(subscriber, publisher, slot string, genera
 	r.watchMu.Unlock()
 	r.mu.RUnlock()
 	r.syncSubscriberVideoCodec(subscriber, publisher, slot)
-	if active {
+	if started {
 		r.RequestKeyframe(publisher, slot, "")
 	}
 	return started, nil
