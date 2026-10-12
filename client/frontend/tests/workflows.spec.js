@@ -8515,7 +8515,10 @@ test("labels screen-share controls and explains low-bandwidth data use", async (
     await expect(shareDialog.getByRole("combobox", { name: "Share audio", exact: true })).toHaveValue("none");
     await auditAccessibility(page, "screen-share dialog");
     await shareDialog.getByRole("combobox", { name: "Quality preset" }).selectOption("uhd");
-    await expect(shareDialog.locator(".share-budget")).toContainText("50 Mbps");
+    await expect(shareDialog.locator(".share-budget")).toContainText("Higher resolutions or frame rates can use more");
+    await expect(shareDialog.getByRole("combobox", { name: "Quality preset" })).toHaveAccessibleDescription(
+        /Full HD at 60 fps uses an 8 Mbps video budget.*Higher resolutions or frame rates can use more/,
+    );
     await expect(shareDialog.locator(".share-quality-warning")).toBeVisible();
     await shareDialog.getByRole("combobox", { name: "Quality preset" }).selectOption("custom");
     await shareDialog.getByLabel("Width (px)", { exact: true }).fill("3440");
