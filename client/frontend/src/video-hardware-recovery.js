@@ -24,20 +24,35 @@ export function createHardwareRecoveryScheduler({ now = () => performance.now() 
         if (busy) return;
         const at = now();
         for (const candidate of candidates) {
-            if (!candidate.current() || !Number.isFinite(candidate.timestamp) || !(candidate.frames > 0)) continue;
+            if (!candidate.current() || !Number.isFinite(candidate.timestamp)) continue;
             let entry = entries.get(candidate.key);
+            const counter = value => Number.isSafeInteger(value) && value >= 0;
+            const knownSoftwareInput = candidate.software && !candidate.hardware && entry?.hardware.has(candidate.config) &&
+                counter(candidate.frames) && counter(candidate.receivedFrames) && counter(candidate.receivedPackets);
+            // Zero decoded output is observable only if the runtime still
+            // supplies geometry matching prior hardware, plus complete input.
+            if (!(candidate.frames > 0) && !(knownSoftwareInput && candidate.receivedFrames > 0 && candidate.receivedPackets > 0)) continue;
             if (!entry) {
                 if (entries.size >= 64) entries.delete(entries.keys().next().value);
                 entry = { attempts: 0, next: 0, timestamp: -Infinity, hardware: new Set() };
                 entries.set(candidate.key, entry);
             }
             if (candidate.timestamp <= entry.timestamp && candidate.instance === entry.instance) continue;
+            // Received packets alone can be repairs/padding on an idle source.
+            // For known software only, complete frames AND packets must advance
+            // before incoming activity can substitute for stalled decoded output.
+            const receiving = knownSoftwareInput && candidate.frames >= entry.frames &&
+                counter(entry.receivedFrames) && counter(entry.receivedPackets) &&
+                candidate.receivedFrames > entry.receivedFrames && candidate.receivedPackets > entry.receivedPackets;
             const continuous = entry.instance === candidate.instance && entry.config === candidate.config &&
-                candidate.timestamp > entry.timestamp && candidate.timestamp - entry.timestamp <= 15000 && candidate.frames > entry.frames;
+                candidate.timestamp > entry.timestamp && candidate.timestamp - entry.timestamp <= 15000 &&
+                (candidate.frames > entry.frames || receiving);
             entry.timestamp = candidate.timestamp;
             entry.instance = candidate.instance;
             entry.config = candidate.config;
             entry.frames = candidate.frames;
+            entry.receivedFrames = counter(candidate.receivedFrames) ? candidate.receivedFrames : null;
+            entry.receivedPackets = counter(candidate.receivedPackets) ? candidate.receivedPackets : null;
             if (!continuous) { entry.softwareSince = null; entry.healthySince = null; }
             if (candidate.hardware) {
                 entry.hardware.add(candidate.config);
@@ -172,6 +187,7 @@ export function createVideoReceiverRecovery({ state, watch, scheduler = createHa
             candidates.push({ key: `receive:${watched.key}`, instance: `${stat.id}:${stat.ssrc}`,
                 config: JSON.stringify([codec.mimeType, codec.sdpFmtpLine, stat.frameWidth, stat.frameHeight]),
                 timestamp: stat.timestamp, frames: stat.framesDecoded,
+                receivedFrames: stat.framesReceived, receivedPackets: stat.packetsReceived,
                 hardware: stat.powerEfficientDecoder === true && /D3D11|MediaFoundation|VideoToolbox|Vaapi|V4L2|MediaCodec/i.test(implementation),
                 software: stat.powerEfficientDecoder === false && /FFmpeg|OpenH264/i.test(implementation),
                 current, capable: () => capable(codec, stat), recover: () => reset({ state, pc, transceiver, current, watched }) });

@@ -230,3 +230,85 @@ test("a hung capability request cannot disable recovery in a new server session"
     finishOld(true); await Promise.resolve();
     assert.equal(f.calls.length, 1, "old completion cannot initiate recovery");
 });
+
+
+test("known hardware receiver can recover stalled software while complete input advances", async () => {
+    const f = fixture();
+    f.options.capable = async () => assert.fail("exact hardware history must suffice even with zero decoded FPS");
+    const recover = createVideoReceiverRecovery(f.options);
+    await recover(f.pc, f.stats({ framesDecoded: 12, framesReceived: 20, packetsReceived: 200,
+        powerEfficientDecoder: true, decoderImplementation: "D3D11VideoDecoder" }));
+    for (let at = 5000; at <= 40000; at += 5000) {
+        f.time(at); await recover(f.pc, f.stats({ framesDecoded: 12, framesPerSecond: 0,
+            framesReceived: 20 + at / 5000, packetsReceived: 200 + at / 5000 }));
+    }
+    assert.equal(f.calls.length, 1);
+    f.time(45000); await recover(f.pc, f.stats({ framesDecoded: 12, framesPerSecond: 0, framesReceived: 29, packetsReceived: 209 }));
+    assert.equal(f.calls.length, 2, "stalled software keeps the existing 30-second retry budget");
+});
+
+test("zero decoded output with retained geometry needs prior hardware and complete incoming frames", async () => {
+    for (const priorHardware of [false, true]) {
+        const f = fixture(), recover = createVideoReceiverRecovery(f.options);
+        if (priorHardware) await recover(f.pc, f.stats({ framesDecoded: 12,
+            powerEfficientDecoder: true, decoderImplementation: "D3D11VideoDecoder" }));
+        for (const at of [5000, 10000, 15000]) {
+            f.time(at); await recover(f.pc, f.stats({ ssrc: 456, framesDecoded: 0, framesPerSecond: 0,
+                framesReceived: at / 5000, packetsReceived: at / 5000 }));
+        }
+        assert.equal(f.calls.length, priorHardware ? 1 : 0);
+    }
+});
+
+test("stalled software cannot use idle, partial, invalid, replaced or unsupported input evidence", async () => {
+    for (const mode of ["packets-only", "frames-only", "missing-frames", "missing-packets", "decreasing-input", "invalid-input",
+        "decode-reset", "stale", "long-gap", "geometry", "binding", "no-history", "unknown-decoder", "unwatched", "paused"]) {
+        const f = fixture(), recover = createVideoReceiverRecovery(f.options);
+        if (mode !== "no-history") await recover(f.pc, f.stats({ framesDecoded: 100, framesReceived: 200, packetsReceived: 300,
+            powerEfficientDecoder: true, decoderImplementation: "D3D11VideoDecoder" }));
+        if (mode === "unwatched") f.stop();
+        if (mode === "paused") f.track.enabled = false;
+        for (let i = 1; i <= 5; i++) {
+            const at = i * (mode === "long-gap" ? 20000 : 5000);f.time(at);
+            const row = { framesDecoded: mode === "decode-reset" ? 100 - i : 100,
+                framesReceived: 200 + i, packetsReceived: 300 + i, framesPerSecond: 0 };
+            if (mode === "packets-only") row.framesReceived = 200;
+            if (mode === "frames-only") row.packetsReceived = 300;
+            if (mode === "missing-frames") row.framesReceived = undefined;
+            if (mode === "missing-packets") row.packetsReceived = undefined;
+            if (mode === "decreasing-input") row.framesReceived = 200 - i;
+            if (mode === "invalid-input") row.framesReceived = Number.MAX_SAFE_INTEGER + i;
+            if (mode === "stale") row.timestamp = 1;
+            if (mode === "geometry") { row.frameWidth = 1280; row.frameHeight = 720; }
+            if (mode === "binding") row.ssrc = 456 + i;
+            if (mode === "unknown-decoder") row.powerEfficientDecoder = undefined;
+            await recover(f.pc, f.stats(row));
+        }
+        assert.equal(f.calls.length, 0, mode);
+    }
+});
+
+test("incoming frames cannot reset backoff while hardware decoding itself is stalled", async () => {
+    const f = fixture(), recover = createVideoReceiverRecovery(f.options);
+    for (let at = 0; at <= 40000; at += 5000) { f.time(at); await recover(f.pc, f.stats()); }
+    assert.equal(f.calls.length, 2);
+    for (let at = 45000; at <= 110000; at += 5000) {
+        f.time(at); await recover(f.pc, f.stats({ framesDecoded: 50000, framesReceived: 60000 + at, packetsReceived: 70000 + at,
+            powerEfficientDecoder: true, decoderImplementation: "D3D11VideoDecoder" }));
+    }
+    for (const at of [115000, 120000, 125000]) {
+        f.time(at); await recover(f.pc, f.stats({ framesDecoded: 50000, framesReceived: 60000 + at, packetsReceived: 70000 + at }));
+    }
+    assert.equal(f.calls.length, 2, "receive activity cannot reset the outstanding 120-second backoff");
+});
+
+
+test("a zero-output receiver without actual geometry cannot reuse earlier hardware support", async () => {
+    const f = fixture(), recover = createVideoReceiverRecovery(f.options);
+    await recover(f.pc, f.stats({ framesDecoded: 12, powerEfficientDecoder: true, decoderImplementation: "D3D11VideoDecoder" }));
+    for (const at of [5000, 10000, 15000, 20000]) {
+        f.time(at); await recover(f.pc, f.stats({ ssrc: 456, framesDecoded: 0, framesPerSecond: 0,
+            frameWidth: undefined, frameHeight: undefined, framesReceived: at / 5000, packetsReceived: at / 5000 }));
+    }
+    assert.equal(f.calls.length, 0, "no invented dimensions before a first decoded frame");
+});
