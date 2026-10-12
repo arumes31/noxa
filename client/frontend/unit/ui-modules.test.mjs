@@ -25,6 +25,9 @@ function replaceGlobal(t, name, value) {
         });
     }
     if (!restorations.has(name)) restorations.set(name, Object.getOwnPropertyDescriptor(globalThis, name));
+    // Browser Window is an EventTarget. Imported media modules register page
+    // lifecycle listeners even when this test exercises only another UI area.
+    if (name === "window") value = Object.assign(new EventTarget(), value);
     Object.defineProperty(globalThis, name, { configurable: true, value, writable: true });
 }
 
