@@ -60,3 +60,6 @@ export function createPeerStatsSampler({ now = () => performance.now() } = {}) {
 }
 
 export const samplePeerStats = createPeerStatsSampler();
+
+// Sender selectors share pending work across status and hardware recovery.
+export const sampleSenderStats = createPeerStatsSampler();

@@ -3,6 +3,7 @@ import { mediaScopeIsCurrent } from "./media-controls.js";
 import { copyToClipboard } from "./clipboard.js";
 import { formatBitrate } from "./connection-stats.js";
 import { collectVideoSenders, primaryVideoSender, videoSenderEncodingSettings, videoSenderCaptureSettings } from "./video-sender-stats.js";
+import { sampleSenderStats } from "./peer-stats.js";
 import { publicationUploadActive } from "./stream-publication.js";
 import { summarizeStreamHealth, renderStreamHealth } from "./stream-health.js";
 import "./share-status.css";
@@ -138,10 +139,7 @@ async function poll(s) {
         const sender = window.__noxa.state.shareVideoTransceiver?.sender;
         const source = { slot: "screen", generation: s.generation, trackID: s.track.id, senderScoped: true,
             requestedFPS: s.preset.fps, ...videoSenderCaptureSettings(s.track), encodings: videoSenderEncodingSettings(sender) };
-        let deadline;
-        const report = sender?.getStats ? await Promise.race([sender.getStats(), new Promise((_, reject) => {
-            deadline = setTimeout(() => reject(new Error("stats timeout")), 10000);
-        })]).finally(() => clearTimeout(deadline)) : null;
+        const report = sender?.getStats ? await sampleSenderStats(sender, { fresh: !s.previous }) : null;
         if (!current(s)) return;
         s.layers = report ? collectVideoSenders(report, s.previous, [source], s.previousSource ? [s.previousSource] : []) : [];
         s.sample = primaryVideoSender(s.layers);

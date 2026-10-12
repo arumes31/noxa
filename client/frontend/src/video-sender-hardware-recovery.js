@@ -72,7 +72,9 @@ export function createVideoSenderRecovery({ state, retry, snapshot = publication
             const scale = parameters.encodings[0].scaleResolutionDownBy ?? 1;
             const geometry = Number.isFinite(scale) && scale >= 1 && stat.frameWidth >= 640 && stat.frameHeight >= 360 &&
                 stat.frameWidth % 4 === 0 && stat.frameHeight % 4 === 0 &&
-                stat.frameWidth * scale === settings.width && stat.frameHeight * scale === settings.height;
+                Number.isFinite(settings.width) && Number.isFinite(settings.height) &&
+                stat.frameWidth * scale <= settings.width && stat.frameHeight * scale <= settings.height &&
+                stat.frameWidth * settings.height === stat.frameHeight * settings.width;
             candidates.push({ key: `send:${p.slot}:${generation}`, instance: `${stat.id}:${stat.ssrc}`,
                 config: JSON.stringify([codec.mimeType, codec.sdpFmtpLine, stat.frameWidth, stat.frameHeight, capture?.id ?? null]),
                 timestamp: stat.timestamp, frames: stat.framesEncoded, capture,

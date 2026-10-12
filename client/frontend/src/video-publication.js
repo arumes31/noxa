@@ -16,12 +16,9 @@ import { videoConstraints, trackFitsVideoLimits, capVideoEncodings, screenBitrat
 import { t as tLabel } from "./i18n.js";
 import { rememberVideoSenderProfile } from "./video-sender-stats.js";
 import { hardwareVideoEncodeAvailable, videoSenderCaptureSample } from "./video-sender-hardware-recovery.js";
-import { createPeerStatsSampler } from "./peer-stats.js";
+import { sampleSenderStats } from "./peer-stats.js";
 import { renegotiate, negotiateOffer, queuePeerNegotiation } from "./video-negotiation.js";
 const V = () => window.__noxa;
-// RTCRtpSender has the same getStats contract; keep its scoped reports separate
-// from peer-wide telemetry, coalescing timed-out native calls until they settle.
-const sampleSenderStats = createPeerStatsSampler();
 
 export function createVideoPublication({ policy }) {
     // videoSender returns the sender of a video transceiver this client can send
@@ -219,7 +216,9 @@ export function createVideoPublication({ policy }) {
     }
 
     // WebRTC reinitializes its encoder on a size change, retrying hardware first.
-    // A bounded half-size pulse keeps the same capture, codec and single upload.
+    // A bounded scale-only pulse keeps capture, codec, adaptation and one upload.
+    // Explicit scale applies to already-adapted input; capture/output ratios do
+    // not reveal that native input and must never become a replacement scale.
     // Capability queries alone do not guarantee hardware on every runtime; the
     // recovery scheduler must confirm the result using actual encoder stats.
     function retryVideoHardware(slot, track, stillRelevant = () => true, captureRecovery = null) {
@@ -250,7 +249,9 @@ export function createVideoPublication({ policy }) {
                 const eligible = row => row && row.powerEfficientEncoder === false && row.codec?.mimeType?.toLowerCase() === "video/h264" &&
                     ["none", "cpu", "bandwidth"].includes(row.qualityLimitationReason) && row.frameWidth >= 640 && row.frameHeight >= 360 &&
                     row.frameWidth % 4 === 0 && row.frameHeight % 4 === 0 &&
-                    size.width === row.frameWidth * scale && size.height === row.frameHeight * scale;
+                    Number.isFinite(size.width) && Number.isFinite(size.height) &&
+                    row.frameWidth * scale <= size.width && row.frameHeight * scale <= size.height &&
+                    row.frameWidth * size.height === row.frameHeight * size.width;
                 // Only the publication scheduler's previously measured hardware
                 // configuration authorizes capture progress to replace output.
                 // Revalidate the bound source on fresh reads inside this queue.
@@ -272,21 +273,20 @@ export function createVideoPublication({ policy }) {
                 if (supported.some(value => !value)) return false;
                 await pause(150);
                 const baseline = await sample();
-                if (!current() || !eligible(baseline) || baseline.id !== first.id || baseline.codecId !== first.codecId ||
+                if (!current() || !eligible(baseline) || baseline.id !== first.id || baseline.codecId !== first.codecId || baseline.ssrc !== first.ssrc ||
                     baseline.timestamp <= first.timestamp ||
                     !(baseline.framesEncoded > first.framesEncoded || capturedProgress(first, baseline)) ||
                     baseline.frameWidth !== first.frameWidth || baseline.frameHeight !== first.frameHeight ||
                     track.getSettings().width !== size.width || track.getSettings().height !== size.height) return false;
-                const originalScale = encoding.scaleResolutionDownBy, originalPreference = parameters.degradationPreference;
+                const originalScale = encoding.scaleResolutionDownBy;
                 const pulseScale = scale * 2;
-                let modified = false, pulsed = false;
+                let pulsed = false;
                 try {
-                    parameters.degradationPreference = "maintain-resolution";
-                    modified = true;
-                    await sender.setParameters(parameters);
                     await pause(150);
                     const ready = await sample();
-                    if (!current() || !eligible(ready) || ready.frameWidth !== first.frameWidth || ready.frameHeight !== first.frameHeight ||
+                    if (!current() || !eligible(ready) || ready.id !== first.id || ready.codecId !== first.codecId || ready.ssrc !== first.ssrc ||
+                        ready.timestamp <= baseline.timestamp || ready.framesEncoded < baseline.framesEncoded ||
+                        ready.frameWidth !== first.frameWidth || ready.frameHeight !== first.frameHeight ||
                         (!(baseline.framesEncoded > first.framesEncoded) &&
                             (ready.timestamp <= baseline.timestamp || !capturedProgress(baseline, ready))) ||
                         track.getSettings().width !== size.width || track.getSettings().height !== size.height) return false;
@@ -305,26 +305,24 @@ export function createVideoPublication({ policy }) {
                             row = await Promise.race([sample(), new Promise(resolve => { timer = setTimeout(() => resolve(null), remaining); })]);
                         } finally { clearTimeout(timer); }
                         if (!row) break;
-                        if (row?.timestamp > ready.timestamp && row.framesEncoded > ready.framesEncoded &&
-                            row.frameWidth === first.frameWidth / 2 && row.frameHeight === first.frameHeight / 2) break;
+                        if (current() && row?.timestamp > ready.timestamp && row.framesEncoded > ready.framesEncoded &&
+                            row.id === first.id && row.codecId === first.codecId && row.ssrc === first.ssrc &&
+                            row.frameWidth === first.frameWidth / 2 && row.frameHeight === first.frameHeight / 2 &&
+                            track.getSettings().width === size.width && track.getSettings().height === size.height) return true;
                     }
-                    return true;
+                    return false;
                 } finally {
                     // Restore only fields still owned by this operation. Teardown or
                     // source replacement must never be undone by a late completion.
-                    if (modified && owns()) {
+                    if (pulsed && owns()) {
                         const restore = sender.getParameters();
-                        if (restore.encodings?.length === 1 && pulsed && restore.encodings[0].scaleResolutionDownBy === pulseScale) {
+                        if (restore.encodings?.length === 1 && restore.encodings[0].scaleResolutionDownBy === pulseScale) {
                             if (originalScale === undefined) delete restore.encodings[0].scaleResolutionDownBy;
                             else restore.encodings[0].scaleResolutionDownBy = originalScale;
+                            // Do not race mutation promises: a runtime that never
+                            // settles setParameters cannot safely accept later writes.
+                            await sender.setParameters(restore);
                         }
-                        if (restore.degradationPreference === "maintain-resolution") {
-                            if (originalPreference === undefined) delete restore.degradationPreference;
-                            else restore.degradationPreference = originalPreference;
-                        }
-                        // Do not race mutation promises: a runtime that never
-                        // settles setParameters cannot safely accept later writes.
-                        await sender.setParameters(restore);
                     }
                 }
             });
