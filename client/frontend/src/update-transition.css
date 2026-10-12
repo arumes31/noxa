@@ -1,0 +1,11 @@
+#update-transition {
+    max-width: min(32rem, calc(100vw - 3rem));
+    padding: 2rem;
+    border: 1px solid var(--border, #46516a);
+    border-radius: 0.8rem;
+    background: var(--bg, #1b2636);
+    color: var(--text, #f3f5fa);
+    font: inherit;
+    text-align: center;
+}
+#update-transition::backdrop { background: rgb(0 0 0 / 70%); }

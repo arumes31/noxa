@@ -12,13 +12,18 @@ async function boot(page, scenario = {}) {
             },
             EventsEmit() {},
         };
-        window.go = { main: { App: new Proxy({}, { get: (_, method) => async () => {
+        window.go = { main: { App: new Proxy({}, { get: (_, method) => method === "UpdateStartupPending" && window.__scenario.legacyBridge ? undefined : async () => {
             window.__calls[method] = (window.__calls[method] || 0) + 1;
             const s = window.__scenario;
+            if (method === "UpdateStartupPending") {
+                if (s.transitionQueryPending) await new Promise(resolve => { window.__finishTransitionQuery = resolve; });
+                if (s.transitionQueryThrows) throw new Error("startup status unavailable");
+                return s.transitionPending === true;
+            }
             if (method === "GetSettings") {
                 if (s.settingsThrows) throw new Error("settings bridge unavailable");
                 if (s.settingsPending) await new Promise(resolve => { window.__finishSettings = resolve; });
-                return { onboarding_done: true, alpha_dismissed: "0.4.0", updates_auto_check: s.enabled !== false, updates_check_on_reconnect: s.reconnectEnabled !== false, notification_matrix: {} };
+                return { onboarding_done: s.onboardingDone !== false, alpha_dismissed: "0.4.0", updates_auto_check: s.enabled !== false, updates_check_on_reconnect: s.reconnectEnabled !== false, notification_matrix: {}, notify_connection: s.previousCrash === true, language: s.language || "en", bookmarks: s.bookmarks || [] };
             }
             if (method === "SessionInfoForTab") return { connected: !s.disconnected, client_id: s.clientID || "alice" };
             if (method === "ClientVersionShort") return "0.4.0";
@@ -45,13 +50,109 @@ async function boot(page, scenario = {}) {
                 if (s.restartThrows) throw new Error("launch failed");
                 return s.restartError || "";
             }
+            if (method === "LastCrash") return s.previousCrash ? "previous crash" : "";
             if (method === "ListTabs" || method === "ListBookmarks") return [];
             return "";
         } }) } };
     }, scenario);
     await page.goto("/");
-    if (!scenario.settingsPending) await expect(page.locator(".login-card")).toHaveClass(/(?:^|\s)in(?:\s|$)/);
+    if (!scenario.settingsPending && !scenario.transitionQueryPending) await expect(page.locator(".login-card")).toHaveClass(/(?:^|\s)in(?:\s|$)/);
 }
+
+
+for (const transitionPending of [false, true]) {
+    test(`delayed startup status preserves meta flows only for normal startup (${transitionPending})`, async ({ page }) => {
+        await boot(page, { transitionQueryPending: true, transitionPending, onboardingDone: false, previousCrash: true, enabled: false });
+        await page.waitForFunction(() => typeof window.__finishTransitionQuery === "function" && !!window.__noxaMeta);
+        await page.waitForTimeout(700); // The original 600 ms startup timer has already fired.
+        expect(await page.evaluate(() => window.__calls.LastCrash || 0)).toBe(0);
+        await expect(page.locator(".dlg.onboarding")).toHaveCount(0);
+        await page.evaluate(() => window.__finishTransitionQuery());
+        await expect.poll(() => page.evaluate(() => window.__calls.ConfirmUpdateStartup)).toBe(1);
+        if (transitionPending) {
+            await page.waitForTimeout(450);
+            expect(await page.evaluate(() => window.__calls.LastCrash || 0)).toBe(0);
+            await expect(page.locator(".dlg.onboarding")).toHaveCount(0);
+            await expect(page.getByRole("dialog", { name: "Completing update…", exact: true })).toBeVisible();
+        } else {
+            await expect.poll(() => page.evaluate(() => window.__calls.LastCrash)).toBe(1);
+            await expect(page.locator(".toast").filter({ hasText: /noXa crashed last time/ })).toBeVisible();
+            await expect(page.locator(".dlg.onboarding")).toBeVisible();
+        }
+        expect(await page.evaluate(() => window.__calls.SaveSettings || 0)).toBe(0);
+    });
+}
+
+test("compatibility transition waits for native status and settings before genuine readiness", async ({ page }) => {
+    await boot(page, { transitionQueryPending: true, transitionPending: true, settingsPending: true, language: "de", bookmarks: [{ name: "auto", addr: "example.test:1234", nickname: "guest", auto_connect: true }] });
+    await page.waitForFunction(() => typeof window.__finishTransitionQuery === "function");
+    await page.waitForTimeout(350); // Cover the former unconditional auto-connect timer.
+    expect(await page.evaluate(() => window.__calls.GetSettings || 0)).toBe(0);
+    expect(await page.evaluate(() => window.__calls.ConfirmUpdateStartup || 0)).toBe(0);
+    await page.evaluate(() => window.__finishTransitionQuery());
+    await page.waitForFunction(() => typeof window.__finishSettings === "function");
+    expect(await page.evaluate(() => window.__calls.ConfirmUpdateStartup || 0)).toBe(0);
+    await page.evaluate(() => window.__finishSettings());
+    await expect.poll(() => page.evaluate(() => window.__calls.ConfirmUpdateStartup)).toBe(1);
+    await expect(page.getByRole("dialog", { name: "Update wird abgeschlossen…", exact: true })).toBeVisible();
+    expect(await page.evaluate(() => !!(window.__noxaTabs && window.__noxaFiles && window.__noxaSocial && window.__noxaMeta && window.__noxaNotify))).toBe(true);
+    await page.waitForTimeout(350);
+    expect(await page.evaluate(() => window.__calls.ConnectGuestBookmarkTabWithID || 0)).toBe(0);
+    expect(await page.evaluate(() => window.__calls.CheckForUpdate || 0)).toBe(0);
+});
+
+test("compatibility transition blocks interaction capture and persisted preferences after ACK", async ({ page }) => {
+    await boot(page, { transitionPending: true, bookmarks: [{ name: "auto", addr: "example.test:1234", nickname: "guest", auto_connect: true }] });
+    await expect.poll(() => page.evaluate(() => window.__calls.ConfirmUpdateStartup)).toBe(1);
+    await page.keyboard.press("Escape");
+    await expect(page.getByRole("dialog", { name: "Completing update…", exact: true })).toBeVisible();
+    await page.evaluate(async () => {
+        window.__captureCalls = 0;
+        navigator.mediaDevices.getUserMedia = async () => { window.__captureCalls++; throw new Error("unexpected capture"); };
+        navigator.mediaDevices.getDisplayMedia = async () => { window.__captureCalls++; throw new Error("unexpected capture"); };
+        await window.__noxa.connectFromLogin();
+        await window.__noxaTabs.quickConnectLast();
+        await window.__noxa.ensureVoiceForChannel();
+        for (const cb of window.__events.hotkey || []) await cb("quick_connect");
+        for (const name of ["tray_reconnect", "tray_disconnect"]) for (const cb of window.__events[name] || []) await cb();
+        const video = await import("/src/video.js");
+        await video.shareToggle();
+        await video.cameraToggle();
+        const { updateLocalSettings } = await import("/src/settings-store.js");
+        await updateLocalSettings(settings => { settings.low_bandwidth = true; });
+        document.getElementById("voice-mute").click();
+    });
+    await page.waitForTimeout(350);
+    expect(await page.evaluate(() => ({ capture: window.__captureCalls, saves: window.__calls.SaveSettings || 0, connect: window.__calls.ConnectLogin || 0, guest: window.__calls.ConnectGuestBookmarkTabWithID || 0, muted: window.__noxa.state.muted, low: !!window.__noxa.state.settings.low_bandwidth }))).toEqual({ capture: 0, saves: 0, connect: 0, guest: 0, muted: false, low: false });
+});
+
+for (const scenario of [{ settingsThrows: true }, { transitionQueryThrows: true }]) {
+    test(`compatibility transition never acknowledges failed startup ${JSON.stringify(scenario)}`, async ({ page }) => {
+        await boot(page, { transitionPending: true, ...scenario });
+        await expect(page.getByRole("dialog", { name: "Completing update…", exact: true })).toBeVisible();
+        await page.waitForTimeout(350);
+        expect(await page.evaluate(() => window.__calls.ConfirmUpdateStartup || 0)).toBe(0);
+        expect(await page.evaluate(() => window.__calls.CheckForUpdate || 0)).toBe(0);
+    });
+}
+
+test("normal startup autoconnect waits for delayed settings then remains interactive", async ({ page }) => {
+    await boot(page, { settingsPending: true, enabled: false, bookmarks: [{ name: "auto", addr: "example.test:1234", nickname: "guest", auto_connect: true }] });
+    await page.waitForFunction(() => typeof window.__finishSettings === "function");
+    await page.waitForTimeout(350);
+    expect(await page.evaluate(() => window.__calls.ConnectGuestBookmarkTabWithID || 0)).toBe(0);
+    await page.evaluate(() => window.__finishSettings());
+    await expect.poll(() => page.evaluate(() => window.__calls.ConnectGuestBookmarkTabWithID)).toBe(1);
+    await expect(page.locator("#update-transition")).toHaveCount(0);
+    await expect(page.locator("#login-addr")).toBeEnabled();
+});
+
+test("older native bridge without transition API preserves normal startup", async ({ page }) => {
+    await boot(page, { legacyBridge: true, enabled: false });
+    await expect.poll(() => page.evaluate(() => window.__calls.ConfirmUpdateStartup)).toBe(1);
+    await expect(page.locator("#update-transition")).toHaveCount(0);
+    await expect(page.locator("#login-addr")).toBeEnabled();
+});
 
 test("replacement readiness waits for native startup and rendered login", async ({ page }) => {
     await boot(page, { settingsPending: true, enabled: false });

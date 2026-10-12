@@ -23,10 +23,12 @@ var clientUpdateRecovery struct {
 }
 
 type appliedClientUpdate struct {
-	target   string
-	previous string
-	oldHash  [sha256.Size]byte
-	newHash  [sha256.Size]byte
+	target            string
+	previous          string
+	oldHash           [sha256.Size]byte
+	newHash           [sha256.Size]byte
+	handoff           bool
+	retainFailedImage bool
 }
 
 // The test helper shortens these waits only inside a disposable process.
@@ -234,7 +236,9 @@ func restoreFailedClientUpdate(pending *appliedClientUpdate, cause error) error 
 		restoreErr := os.Rename(failedPath, pending.target)
 		return fmt.Errorf("%w; could not restore previous executable: %v; reinstating update: %v; previous executable retained at %s", cause, err, restoreErr, pending.previous)
 	}
-	_ = os.Remove(failedPath)
+	if !pending.retainFailedImage {
+		_ = os.Remove(failedPath)
+	}
 	clientUpdateRecovery.pending = nil
 	return fmt.Errorf("%w; %w", cause, errUpdateRestored)
 }

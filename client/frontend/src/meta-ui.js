@@ -1,3 +1,4 @@
+import { updateStartupBlocked } from "./update-transition.js";
 import { escapeHTML as escapeTranslation } from "./markdown.js";
 // meta-ui.js — wave-8b meta features: debug console (327), connection stats
 // page (328), onboarding wizard (329), what's-new dialog (330), crash report
@@ -208,7 +209,11 @@ export function initMetaUI() {
         document.getElementById(id)?.addEventListener("click", openServerInfo);
     }
     // Startup flows: crash report and onboarding.
-    setTimeout(() => {
+    setTimeout(async () => {
+        // A slow native status/settings query must defer these flows, not
+        // discard them. The compatibility process stays blocked after readiness.
+        const ready = await V().startupInitialized;
+        if (!ready || updateStartupBlocked()) return;
         maybeCrashToast();
         setTimeout(maybeOnboard, 400);
     }, 600);

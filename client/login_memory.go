@@ -80,6 +80,9 @@ type LoginRequest struct {
 // ConnectLogin keeps stored passwords entirely in the native process. Explicit
 // flags distinguish "use saved" from an intentionally empty guest password.
 func (a *App) ConnectLogin(request LoginRequest) ConnectTabResult {
+	if a.UpdateStartupPending() {
+		return ConnectTabResult{Error: updateStartupPendingMessage}
+	}
 	request.Addr, request.Nickname = strings.TrimSpace(request.Addr), strings.TrimSpace(request.Nickname)
 	if request.Addr == "" || request.Nickname == "" || len(request.Addr) > 2048 || len(request.Nickname) > 256 {
 		return ConnectTabResult{Error: "server address and account / guest name are required"}

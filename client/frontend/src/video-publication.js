@@ -1,3 +1,4 @@
+import { updateStartupBlocked } from "./update-transition.js";
 import { retainDisplayCapture, stopDisplayCapture } from "./display-capture-lease.js";
 import { escapeHTML as escapeTranslation } from "./markdown.js";
 // video-publication.js — camera/screen capture and publication lifecycle.
@@ -373,6 +374,7 @@ export function createVideoPublication({ policy }) {
     // shareToggle is the voice-screen button handler: stop when sharing
     // (confirming first, 85), otherwise open the share dialog.
     async function shareToggle() {
+        if (updateStartupBlocked()) return;
         const { state } = V();
         if (state.shareStarting || state.shareStopping) return;
         if (state.screenSharing) {
@@ -1037,6 +1039,7 @@ export function createVideoPublication({ policy }) {
 
     // cameraToggle is the voice-video button handler.
     async function cameraToggle() {
+        if (updateStartupBlocked()) return;
         const { state } = V();
         if (!state.pc || !state.localStream || cameraRequest) return;
         const cam = state.localStream?.getVideoTracks()[0] || null;

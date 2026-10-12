@@ -1,3 +1,5 @@
+import { initializeUpdateTransition, updateStartupBlocked, refreshUpdateTransition } from "./update-transition.js";
+import "./update-transition.css";
 import { stopDisplayCapture } from "./display-capture-lease.js";
 import { createConnectionQuality } from './connection-quality.js';
 import { createLoginMemory } from './login-memory.js';
@@ -78,6 +80,7 @@ const P = () => window.__noxaPerms;
 window.__noxaChat = chatUI;
 
 const $ = (id) => document.getElementById(id);
+const updateTransitionReady = initializeUpdateTransition();
 initLoginBackground();
 const publishTrayVoice = createTrayVoiceSync((...flags) => window.go.main.App.SetTrayVoiceState(...flags));
 
@@ -234,6 +237,7 @@ function applyAppearance() {
     setLanguage(s.language || "system");
     root.lang = currentLanguage();
     applyStaticLabels();
+    refreshUpdateTransition();
     if (previousLanguage !== currentLanguage()) {
         window.dispatchEvent(new Event("noxa-language-changed"));
         renderTree();
@@ -285,6 +289,7 @@ const loginMemory = createLoginMemory({ $, settings: () => state.settings, clear
 const startupInitialized = (async () => {
     let settingsInitialized = false;
     try {
+        await updateTransitionReady;
         state.settings = await window.go.main.App.GetSettings();
         void loginMemory.restore(state.settings);
         void updateSoundOutput();
@@ -307,7 +312,7 @@ const startupInitialized = (async () => {
         state.clientVersion = v;
     } catch { /* version display is best-effort */ }
     document.querySelector(".login-card").classList.add("in");
-    startupAutoCheck();
+    if (!updateStartupBlocked()) startupAutoCheck();
     return settingsInitialized;
 })();
 
@@ -357,6 +362,7 @@ document.querySelector(".login-card").addEventListener("submit", (event) => {
 });
 
 async function connectFromLogin() {
+    if (updateStartupBlocked()) return;
     const submit = $("login-connect");
     if (submit.disabled) return;
     loginFeedback.clear();
@@ -955,8 +961,8 @@ async function reconnectLastServerNow() {
     }
 }
 
-window.runtime.EventsOn("tray_reconnect", () => { void reconnectLastServerNow(); });
-window.runtime.EventsOn("tray_disconnect", () => { void disconnect(); });
+window.runtime.EventsOn("tray_reconnect", () => { if (!updateStartupBlocked()) void reconnectLastServerNow(); });
+window.runtime.EventsOn("tray_disconnect", () => { if (!updateStartupBlocked()) void disconnect(); });
 
 async function disconnect() {
     // Clear reconnect intent synchronously. CloseTab owns the actual
@@ -2016,6 +2022,7 @@ function refreshLiveMediaLimits() {
 // join/leave voice control: a confirmed local channel move establishes the
 // session, while disconnecting or changing server tabs tears it down.
 function ensureVoiceForChannel() {
+    if (updateStartupBlocked()) return Promise.resolve(false);
     // A native disconnect can await transport shutdown. Retire capture now,
     // and do not let snapshots or recovery reopen it in the closing session.
     if (intentionalVoiceDisconnectScope === voiceConnectionScope()) return Promise.resolve(false);
@@ -2838,6 +2845,7 @@ function warnEmptyChannel() {
 }
 
 function setPTT(active) {
+    if (updateStartupBlocked()) return;
     const scope = captureMediaScope();
     const epoch = voiceSessionEpoch;
     // (6) PTT release delay: PTT-up is deferred by the configured delay so
@@ -2891,6 +2899,7 @@ syncMuteButton($("voice-mute"), state.muted);
 
 let mutedBeforeDeafen = false;
 function setDeafened(on) {
+    if (updateStartupBlocked()) return;
     if (state.deafened === on) return;
     if (on) { mutedBeforeDeafen = state.muted; state.muted = true; }
     else state.muted = mutedBeforeDeafen;
@@ -2908,6 +2917,7 @@ function setDeafened(on) {
 
 let whisperReplyRequest = null;
 window.runtime.EventsOn("hotkey", async (action) => {
+    if (updateStartupBlocked()) return;
     if (["ptt_down", "ptt_up"].includes(action)) {
         const preview = new CustomEvent("noxa-mic-test-ptt", { detail: action, cancelable: true });
         if (!window.dispatchEvent(preview)) { setPTT(false); return; }
@@ -3146,6 +3156,7 @@ window.__noxa = {
     prefillLogin: loginMemory.select,
     soundEngine,
     speechQueue,
+    startupInitialized,
     state, $, toast, announceLive, sysMsg, showLogin, showWorkspace, disconnect, sendChat, setPTT, noteActivity,
     setDeafened, refreshPermissions, applyVoiceState, applyOutputSettings, applyLiveAudioSettings,
     startVADMonitor: startVoiceMonitor, stopVADMonitor: stopVoiceMonitor, prepareChannelMicrophone, readRemoteAudioLevel,

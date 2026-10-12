@@ -13,10 +13,16 @@ import (
 // developer's own <UserConfigDir>/noxa/settings.json. Hotkey registration is
 // disarmed with it: SaveSettings/SetHotkey otherwise grab configured shortcuts
 // system-wide for the whole test run.
+// Assigned only by the Windows integration-tag fixture, never production.
+var updateHandoffTestMain func() bool
+
 func TestMain(m *testing.M) {
 	allowDefaultSettingsPath = false
 	allowEmptySettingsSnapshot = true
 	allowHotkeyRegistration = false
+	if updateHandoffTestMain != nil && updateHandoffTestMain() {
+		return
+	}
 	os.Exit(m.Run())
 }
 

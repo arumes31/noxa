@@ -526,6 +526,9 @@ func (a *App) ConnectBookmarkTabWithID(bookmark, addr, nickname, password, serve
 
 // ConnectNamedBookmarkTabWithID keeps the account login separate from its public display name.
 func (a *App) ConnectNamedBookmarkTabWithID(bookmark, addr, nickname, displayName, password, serverPassword string) ConnectTabResult {
+	if a.UpdateStartupPending() {
+		return ConnectTabResult{Error: updateStartupPendingMessage}
+	}
 	if addr == "" || nickname == "" {
 		return ConnectTabResult{Error: "server address and nickname are required"}
 	}
@@ -564,6 +567,9 @@ func (a *App) ConnectGuestBookmarkTab(bookmark, addr, nickname string) string {
 
 // ConnectGuestBookmarkTabWithID connects as a guest and returns the new tab's ID.
 func (a *App) ConnectGuestBookmarkTabWithID(bookmark, addr, nickname string) ConnectTabResult {
+	if a.UpdateStartupPending() {
+		return ConnectTabResult{Error: updateStartupPendingMessage}
+	}
 	if addr == "" || nickname == "" {
 		return ConnectTabResult{Error: "server address and nickname are required"}
 	}

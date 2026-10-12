@@ -1,4 +1,5 @@
 export const runtimeEnglish = {
+    "runtime.updateCompleting": "Completing update…",
     "runtime.connecting": "CONNECTING…",
     "runtime.trustInvalid": "trust failed: the server did not provide a valid replacement fingerprint",
     "runtime.offline": "offline",
@@ -160,6 +161,7 @@ export const runtimeEnglish = {
     "runtime.previousCrash": "previous crash detected; export logs via Help → Export logs"
 };
 export const runtimeGerman = {
+    "runtime.updateCompleting": "Update wird abgeschlossen…",
     "runtime.connecting": "VERBINDUNG WIRD HERGESTELLT…",
     "runtime.trustInvalid": "Vertrauen fehlgeschlagen: Der Server hat keinen gültigen neuen Fingerabdruck bereitgestellt",
     "runtime.offline": "offline",

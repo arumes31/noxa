@@ -664,6 +664,9 @@ func (a *App) updateSettings(mutate func(Settings) Settings) (uint64, error) {
 }
 
 func (a *App) updateSettingsChecked(mutate func(Settings) (Settings, error)) (uint64, error) {
+	if a.UpdateStartupPending() {
+		return 0, errors.New(updateStartupPendingMessage)
+	}
 	if hook := a.beforeSettingsTransaction; hook != nil {
 		hook()
 	}
@@ -869,6 +872,9 @@ func (a *App) SetNotificationSnooze(minutes int) (int64, error) {
 // baseline retain full replacement semantics. Go-owned fields are preserved;
 // hotkey specs are validated and live effects use the committed settings.
 func (a *App) SaveSettings(s Settings) string {
+	if a.UpdateStartupPending() {
+		return updateStartupPendingMessage
+	}
 	s = cloneSettings(s)
 	if err := validateHotkeySpec(s.HotkeyPTT); err != nil {
 		return "ptt hotkey: " + err.Error()

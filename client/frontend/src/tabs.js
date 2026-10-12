@@ -1,3 +1,4 @@
+import { updateStartupBlocked } from "./update-transition.js";
 import { escapeHTML as escapeTranslation } from "./markdown.js";
 import { t as translate } from "./i18n.js";
 // tabs.js — wave-8a multi-server tabs (281): the TS3-style server tab bar
@@ -292,6 +293,7 @@ function onTabReset(tabID) {
 // Explicitly flagged bookmarks retain their guest auto-connect behavior.
 // Account login uses the prefilled form and its scoped saved-password choice.
 async function autoConnectBookmarks() {
+    if (updateStartupBlocked()) return;
     const flagged = (V().state.settings?.bookmarks || []).filter((b) => b.auto_connect);
     for (const b of flagged) {
         // A public-name override must not replace the account login.
@@ -327,6 +329,7 @@ function quickConnectTarget() {
 // quickConnectLast connects the most recently used bookmark in a new tab
 // (285, default Ctrl+Shift+C). Tray callers pass their captured target.
 async function quickConnectLast(target = quickConnectTarget(), isCancelled = () => false) {
+    if (updateStartupBlocked()) return;
     if (!target) {
         V().toast(translate("desktop.no.bookmark.or.recent.server.to.quick.connect"), "warn");
         return;
@@ -426,7 +429,9 @@ export function initTabs() {
     renderRecents();
 
     // (286) auto-connect flagged bookmarks once settings are loaded.
-    setTimeout(autoConnectBookmarks, 300);
+    void V().startupInitialized.then(ready => {
+        if (ready && !updateStartupBlocked()) setTimeout(autoConnectBookmarks, 300);
+    }).catch(() => {});
 
     window.__noxaTabs = { renderTabs, quickConnectLast, quickConnectTarget, renderRecents };
 }

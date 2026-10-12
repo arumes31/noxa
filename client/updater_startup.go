@@ -12,6 +12,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -20,6 +21,10 @@ const (
 	updateReadyNonceEnv   = "NOXA_UPDATE_READY_NONCE"
 	updateReadyIOTimeout  = 2 * time.Second
 )
+
+// Serialize acknowledgement and legacy ownership transfer: a duplicate frontend
+// call must not cancel a helper after another call already acknowledged readiness.
+var updateStartupConfirmationMu sync.Mutex
 
 type updateReadiness struct {
 	listener net.Listener
@@ -98,13 +103,23 @@ func updateChildEnvironment(env []string, address, nonce string) []string {
 // settings have initialized. It exposes no callback address, path, or command
 // to JavaScript, and does nothing on an ordinary/manual application launch.
 func (a *App) ConfirmUpdateStartup() error {
+	updateStartupConfirmationMu.Lock()
+	defer updateStartupConfirmationMu.Unlock()
 	address, nonce := os.Getenv(updateReadyAddressEnv), os.Getenv(updateReadyNonceEnv)
+	if err := prepareUpdateFrontendHandoff(a); err != nil {
+		return err
+	}
 	_ = os.Unsetenv(updateReadyAddressEnv)
 	_ = os.Unsetenv(updateReadyNonceEnv)
 	if address == "" && nonce == "" {
 		return nil
 	}
-	return confirmUpdateReadiness(address, nonce, os.Getpid())
+	// A lost acknowledgement does not prove the legacy parent rejected us.
+	// Keep the armed supervisor and independent rollback snapshot: the exact
+	// parent-exit waiter resolves ownership without inventing frontend readiness.
+	err := confirmUpdateReadiness(address, nonce, os.Getpid())
+	completeUpdateFrontendHandoff(a)
+	return err
 }
 
 func confirmUpdateReadiness(address, nonce string, processID int) error {
