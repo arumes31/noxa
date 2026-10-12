@@ -90,6 +90,7 @@ type upstreamFeedbackObserver struct {
 	started     time.Time
 	closed      bool
 	counters    netproto.VideoUpstreamFeedbackDiagnostics
+	readTiming  upstreamReadTimingObserver
 	lastAttempt time.Time
 	lastGap     int64
 	slots       [upstreamFeedbackSlots]time.Time
@@ -207,6 +208,7 @@ func (o *upstreamFeedbackObserver) snapshot(now time.Time) *netproto.VideoUpstre
 func (o *upstreamFeedbackObserver) Close() error {
 	o.mu.Lock()
 	o.closed = true
+	o.readTiming.closed.Store(true)
 	o.mu.Unlock()
 	if o.registry != nil {
 		o.registry.remove(o)

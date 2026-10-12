@@ -79,5 +79,6 @@ func newEngineMediaObserved(enableAV1 bool, bounds VideoBounds, egress *mediaEgr
 	); err != nil {
 		return nil, nil, fmt.Errorf("webrtc: registering default interceptors: %w", err)
 	}
+	registry.Add(upstreamReadTimingOuterFactory{registry: feedback})
 	return media, registry, nil
 }

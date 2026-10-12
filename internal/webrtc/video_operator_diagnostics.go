@@ -39,6 +39,7 @@ func (r *Router) VideoOperatorDiagnostics() *netproto.VideoOperatorDiagnostics {
 		}
 		if peer := r.pubPeers[key.publisher]; peer != nil {
 			publication.UpstreamFeedback = peer.upstreamFeedback.snapshot(now)
+			publication.UpstreamReadTiming = peer.upstreamFeedback.readTimingSnapshot(now)
 		}
 		for _, rid := range []string{"", "f", "h", "q"} {
 			input := r.videoIngress[videoIngressKey{key.publisher, key.slot, rid}]
