@@ -232,7 +232,7 @@ export function createVideoPublication({ policy }) {
                 const scale = encoding?.scaleResolutionDownBy ?? 1;
                 const size = track.getSettings();
                 const eligible = row => row && row.powerEfficientEncoder === false && row.codec?.mimeType?.toLowerCase() === "video/h264" &&
-                    ["none", "cpu"].includes(row.qualityLimitationReason) && row.frameWidth >= 640 && row.frameHeight >= 360 &&
+                    ["none", "cpu", "bandwidth"].includes(row.qualityLimitationReason) && row.frameWidth >= 640 && row.frameHeight >= 360 &&
                     row.frameWidth % 4 === 0 && row.frameHeight % 4 === 0 &&
                     size.width === row.frameWidth * scale && size.height === row.frameHeight * scale;
                 if (!current() || parameters.encodings?.length !== 1 || encoding.active === false || !Number.isFinite(scale) || scale < 1 || !eligible(first)) return false;

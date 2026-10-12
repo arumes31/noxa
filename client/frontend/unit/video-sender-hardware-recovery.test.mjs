@@ -37,8 +37,8 @@ test("supported sustained software encoding retries once per backoff, not per st
     assert.equal(f.calls.length, 2);
 });
 
-test("adapted, limited, unsupported, replaced and inactive publications cannot pulse", async () => {
-    for (const mode of ["adapted", "limited", "unknown", "unsupported", "replaced", "inactive", "ended", "scope", "codec"]) {
+test("adapted, unknown-limit, unsupported, replaced and inactive publications cannot pulse", async () => {
+    for (const mode of ["adapted", "adapted-bandwidth", "limited", "unknown", "unsupported", "replaced", "inactive", "ended", "scope", "codec"]) {
         const f = fixture();
         if (mode === "unsupported") f.options.capable = async () => false;
         if (mode === "replaced") f.publication.generation = "2";
@@ -48,7 +48,7 @@ test("adapted, limited, unsupported, replaced and inactive publications cannot p
         const recover = createVideoSenderRecovery(f.options);
         for (const at of [0, 5000, 10000, 15000]) {
             f.time(at);
-            const changes = mode === "adapted" ? { frameWidth: 1280, frameHeight: 720 } : mode === "limited" ? { qualityLimitationReason: "bandwidth" } :
+            const changes = mode === "adapted" || mode === "adapted-bandwidth" ? { frameWidth: 1280, frameHeight: 720, qualityLimitationReason: mode === "adapted-bandwidth" ? "bandwidth" : "none" } : mode === "limited" ? { qualityLimitationReason: "other" } :
                 mode === "unknown" ? { powerEfficientEncoder: undefined } : {};
             const stats = f.stats(changes);
             if (mode === "codec") stats.get("codec").mimeType = "video/VP8";
@@ -103,4 +103,26 @@ test("timed-out native encoding queries remain coalesced and cannot grow beyond 
     assert.equal(calls, 16);
     assert.equal(await hardwareVideoEncodeAvailable(codec, stat, capabilities), false);
     assert.equal(calls, 16, "retry reuses the original unresolved native promise");
+});
+
+
+test("unadapted bandwidth-limited software retries with the existing backoff", async () => {
+    const f = fixture(), recover = createVideoSenderRecovery(f.options);
+    for (let at = 0; at <= 35000; at += 5000) {
+        f.time(at); await recover(f.pc, f.stats({ qualityLimitationReason: "bandwidth" }));
+    }
+    assert.equal(f.calls.length, 1);
+    f.time(40000); await recover(f.pc, f.stats({ qualityLimitationReason: "bandwidth" }));
+    assert.equal(f.calls.length, 2);
+});
+
+test("bandwidth adaptation interrupts dwell until exact source geometry returns", async () => {
+    const f = fixture(), recover = createVideoSenderRecovery(f.options);
+    for (const at of [0, 5000]) { f.time(at); await recover(f.pc, f.stats({ qualityLimitationReason: "bandwidth" })); }
+    f.time(10000); await recover(f.pc, f.stats({ qualityLimitationReason: "bandwidth", frameWidth: 1280, frameHeight: 720 }));
+    assert.equal(f.calls.length, 0);
+    for (const at of [15000, 20000]) { f.time(at); await recover(f.pc, f.stats({ qualityLimitationReason: "bandwidth" })); }
+    assert.equal(f.calls.length, 0);
+    f.time(25000); await recover(f.pc, f.stats({ qualityLimitationReason: "bandwidth" }));
+    assert.equal(f.calls.length, 1);
 });

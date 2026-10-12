@@ -58,7 +58,7 @@ test("hardware retry pulses one existing sender and restores its source quality"
 });
 
 test("hardware retry skips network adaptation, unsupported hardware, and stale frames", async () => {
-    for (const options of [{ row: { qualityLimitationReason: "bandwidth" } },
+    for (const options of [{ row: { qualityLimitationReason: "bandwidth", frameWidth: 1280, frameHeight: 720 } },
         { row: { qualityLimitationReason: "other" } }, { row: { qualityLimitationReason: undefined } },
         { row: { frameWidth: 320, frameHeight: 180 } }, { row: { frameWidth: 1280, frameHeight: 720 } },
         { row: { powerEfficientEncoder: true } }, { capable: false }, { stale: true }]) {
@@ -161,4 +161,39 @@ test("the elapsed pulse deadline restores quality before a delayed stats read fi
         assert.equal(f.sender.getParameters().encodings[0].scaleResolutionDownBy, 1);
         assert.equal(f.sender.getParameters().degradationPreference, "maintain-framerate");
     } finally { finish(); }
+});
+
+
+test("bandwidth-limited unadapted software retains one sender, cap and pulse restoration", async () => {
+    const f = fixture({ row: { qualityLimitationReason: "bandwidth" } });
+    assert.equal(await f.api.retryVideoHardware("screen", f.track), true);
+    assert.deepEqual(f.writes.map(p => p.encodings[0].scaleResolutionDownBy), [1, 2, 1]);
+    assert.ok(f.writes.every(p => p.encodings.length === 1 && p.encodings[0].maxBitrate === 8000000));
+    assert.equal(f.sender.track, f.track);
+    assert.equal(f.sender.getParameters().degradationPreference, "maintain-framerate");
+});
+
+test("delayed bandwidth reason remains eligible only while geometry and other guards survive", async () => {
+    for (const atRead of [2, 3]) {
+        const options = { row: { qualityLimitationReason: "none" } };
+        let reads = 0;
+        options.onStats = () => { if (++reads === atRead) options.row.qualityLimitationReason = "bandwidth"; };
+        const f = fixture(options);
+        assert.equal(await f.api.retryVideoHardware("screen", f.track), true);
+        assert.deepEqual(f.writes.map(p => p.encodings[0].scaleResolutionDownBy), [1, 2, 1]);
+    }
+});
+
+test("delayed adaptation or unknown limitation prevents the pulse and restores owned preference", async () => {
+    for (const atRead of [2, 3]) {
+        for (const change of [{ frameWidth: 1280, frameHeight: 720 }, { qualityLimitationReason: "other" }]) {
+            const options = { row: { qualityLimitationReason: "bandwidth" } };
+            let reads = 0;
+            options.onStats = () => { if (++reads === atRead) Object.assign(options.row, change); };
+            const f = fixture(options);
+            assert.equal(await f.api.retryVideoHardware("screen", f.track), false);
+            assert.deepEqual(f.writes.map(p => p.encodings[0].scaleResolutionDownBy), atRead === 2 ? [] : [1, 1]);
+            assert.equal(f.sender.getParameters().degradationPreference, "maintain-framerate");
+        }
+    }
 });

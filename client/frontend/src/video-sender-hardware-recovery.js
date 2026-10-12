@@ -64,7 +64,7 @@ export function createVideoSenderRecovery({ state, retry, snapshot = publication
                 timestamp: stat.timestamp, frames: stat.framesEncoded,
                 hardware: stat.powerEfficientEncoder === true,
                 software: stat.powerEfficientEncoder === false && /^openh264$/i.test(stat.encoderImplementation || "") &&
-                    ["none", "cpu"].includes(stat.qualityLimitationReason) && geometry && !state.shareQualityUpdating,
+                    ["none", "cpu", "bandwidth"].includes(stat.qualityLimitationReason) && geometry && !state.shareQualityUpdating,
                 current, capable: () => capable(codec, stat), recover: () => retry(p.slot, p.track, current) });
         }
         await scheduler(scope, candidates, stats);
