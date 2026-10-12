@@ -1,6 +1,72 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { formatBytes, formatDuration, summarizeMedia, summarizeVideoProcessing } from "../src/connection-stats.js";
+import { receiverVideoStat, receiverVideoFlow, summarizeStream } from "../src/connection-stats.js";
+
+test("reused receiver selects camera MID over a larger frozen screen counter in either order", () => {
+    const track = { id: "same-track", readyState: "live" };
+    const tr = { mid: "cam", currentDirection: "recvonly", receiver: { track } };
+    const camera = { id: "camera", type: "inbound-rtp", kind: "video", mid: "cam", trackIdentifier: track.id,
+        ssrc: 2, timestamp: 1000, framesDecoded: 14501, bytesReceived: 10000, frameWidth: 640, frameHeight: 360 };
+    const retired = { ...camera, id: "screen", mid: "screen", ssrc: 1, framesDecoded: 47131, frameWidth: 960, frameHeight: 540 };
+    for (const rows of [[camera, retired], [retired, camera]]) {
+        let stats = report(...rows), flow = receiverVideoFlow(null, receiverVideoStat(stats, tr));
+        let summary = summarizeStream(stats, track.id, null, tr);
+        assert.equal(summary.width, 640);
+        assert.equal(summary.frames, 14501);
+        for (let i = 1; i <= 4; i++) {
+            stats = report(...rows.map(r => r === camera ? { ...r, timestamp: 1000 + 3000 * i, framesDecoded: 14501 + 90 * i, bytesReceived: 10000 + 1000 * i } : r));
+            flow = receiverVideoFlow(flow, receiverVideoStat(stats, tr));
+            summary = summarizeStream(stats, track.id, summary, tr);
+            assert.equal(flow.flowing, true, "retired higher counter must not hide advancing camera");
+            assert.equal(summary.fps, 30);
+        }
+    }
+});
+
+test("receiver selection rejects mismatched, ambiguous and inactive bindings without counter heuristics", () => {
+    const tr = { mid: "cam", receiver: { track: { id: "track" } } };
+    const row = { id: "a", type: "inbound-rtp", kind: "video", trackIdentifier: "track", mid: "cam" };
+    assert.equal(receiverVideoStat(report(row), tr), row);
+    const missing = { ...row, mid: undefined };
+    assert.equal(receiverVideoStat(report(missing), tr), missing);
+    for (const rows of [[{ ...row, mid: "old" }], [{ ...row, trackIdentifier: "other" }],
+        [row, { ...row, id: "b" }], [row, { ...missing, id: "b" }]]) {
+        assert.equal(receiverVideoStat(report(...rows), tr), null);
+        assert.equal(summarizeStream(report(...rows), "track", null, tr).frames, null);
+    }
+    assert.equal(receiverVideoStat(report(row), { ...tr, mid: null }), null);
+    assert.equal(receiverVideoStat(report(row), { ...tr, stopped: true }), null);
+    assert.equal(receiverVideoStat(report(row), { ...tr, currentDirection: "inactive" }), null);
+});
+
+test("camera flow stalls only on fresh same-identity counters and resets for replacement", () => {
+    const row = { id: "a", ssrc: 1, mid: "m", trackIdentifier: "track", codecId: "c", transportId: "t", timestamp: 1000, framesDecoded: 20 };
+    let flow = receiverVideoFlow(null, row);
+    for (let i = 0; i < 5; i++) flow = receiverVideoFlow(flow, row);
+    assert.equal(flow.stalls, 0, "cached stats cannot manufacture a stall");
+    flow = receiverVideoFlow(flow, { ...row, timestamp: 4000 });
+    flow = receiverVideoFlow(flow, { ...row, timestamp: 7000 });
+    assert.equal(flow.flowing, false, "real same-stream camera stoppage still hides stale picture");
+    for (const change of [{ id: "b" }, { ssrc: 2 }, { mid: "new" }, { codecId: "new" }, { transportId: "new" }, { framesDecoded: 1 }]) {
+        assert.equal(receiverVideoFlow(flow, { ...row, timestamp: 10000, ...change }).flowing, true);
+    }
+    assert.equal(receiverVideoFlow(flow, null), null);
+    assert.equal(receiverVideoFlow(flow, row, true), null, "screens and paused tiles stay exempt");
+});
+
+test("receiver diagnostics cannot bridge codec, transport or MID replacement", () => {
+    const track = { id: "track" }, tr = { mid: "m", receiver: { track } };
+    const row = { id: "a", type: "inbound-rtp", kind: "video", trackIdentifier: track.id, mid: "m", ssrc: 1,
+        codecId: "codec", transportId: "transport", timestamp: 1000, framesDecoded: 20, bytesReceived: 1000 };
+    const before = summarizeStream(report(row), track.id, null, tr);
+    for (const change of [{ codecId: "new" }, { transportId: "new" }, { mid: "new" }]) {
+        const next = { ...row, timestamp: 4000, framesDecoded: 110, bytesReceived: 2000, ...change };
+        const after = summarizeStream(report(next), track.id, before, { ...tr, mid: next.mid });
+        assert.equal(after.fps, null);
+        assert.equal(after.bitrate, null);
+    }
+});
 
 const report = (...rows) => new Map(rows.map((r) => [r.id, r]));
 test("video processing reports actual local codecs and independent encoder/decoder efficiency", () => {

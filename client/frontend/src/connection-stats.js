@@ -11,8 +11,32 @@ export function formatBitrate(bitsPerSecond) {
 
 // Only the selected receiver's RTP payload is included, never other streams,
 // remote reports, candidate addresses or credentials.
-export function summarizeStream(report, trackID, previous) {
-    const rows = report && typeof trackID === "string" && trackID.length ? [...report.values()].filter(row => row.type === "inbound-rtp" &&
+export function receiverVideoStat(report, transceiver) {
+    const track = transceiver?.receiver?.track;
+    if (!report || !track || track.readyState === "ended" || transceiver.stopped ||
+        (transceiver.currentDirection != null && !["recvonly", "sendrecv"].includes(transceiver.currentDirection))) return null;
+    const rows = [...report.values()].filter(row => row.type === "inbound-rtp" &&
+        (row.kind || row.mediaType) === "video" && row.trackIdentifier === track.id &&
+        (row.mid == null || (transceiver.mid != null && row.mid === transceiver.mid)));
+    // A reused browser track can retain retired RTP rows. Never select by
+    // counter size or iteration order; missing MID is safe only when unique.
+    return rows.length === 1 ? rows[0] : null;
+}
+
+export function receiverVideoFlow(previous, row, exempt = false) {
+    if (!row || exempt || !measured(row.framesDecoded) || !measured(row.timestamp)) return null;
+    const same = previous && previous.id === row.id && previous.ssrc === row.ssrc && previous.mid === row.mid &&
+        previous.codecId === row.codecId && previous.transportId === row.transportId &&
+        previous.trackIdentifier === row.trackIdentifier && row.framesDecoded >= previous.frames;
+    if (same && row.timestamp <= previous.timestamp) return previous;
+    const stalls = same && row.framesDecoded === previous.frames ? previous.stalls + 1 : 0;
+    return { id: row.id, ssrc: row.ssrc, mid: row.mid, codecId: row.codecId, transportId: row.transportId, trackIdentifier: row.trackIdentifier,
+        timestamp: row.timestamp, frames: row.framesDecoded, stalls, flowing: stalls < 2 };
+}
+
+export function summarizeStream(report, trackID, previous, transceiver) {
+    const selected = transceiver === undefined ? undefined : receiverVideoStat(report, transceiver);
+    const rows = selected !== undefined ? (selected ? [selected] : []) : report && typeof trackID === "string" && trackID.length ? [...report.values()].filter(row => row.type === "inbound-rtp" &&
         (row.kind || row.mediaType) === "video" && row.trackIdentifier === trackID) : [];
     const codecs = [...new Set(rows.map(row => report.get(row.codecId)?.mimeType?.replace(/^video\//i, "")).filter(Boolean))];
     const before = streamInterval(rows, previous?.rows) ? previous.rows : undefined;
@@ -60,6 +84,7 @@ function streamInterval(rows, before) {
     return rows.length && before?.length === rows.length && rows.every(row => {
         const old = before.find(candidate => candidate.id === row.id);
         return old && old.ssrc === row.ssrc && old.trackIdentifier === row.trackIdentifier &&
+            old.mid === row.mid && old.codecId === row.codecId && old.transportId === row.transportId &&
             Number.isFinite(row.timestamp) && Number.isFinite(old.timestamp) && row.timestamp > old.timestamp && row.timestamp - old.timestamp <= 60000 &&
             ["framesDecoded", "bytesReceived"].every(field => !measured(row[field]) || !measured(old[field]) || row[field] >= old[field]);
     });

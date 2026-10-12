@@ -1,7 +1,7 @@
 import { escapeHTML as escapeTranslation } from "./markdown.js";
 // video-grid.js — received stream tiles, quality selection and diagnostics.
 import { copyToClipboard } from "./clipboard.js";
-import { formatBitrate, summarizeStream } from "./connection-stats.js";
+import { formatBitrate, summarizeStream, receiverVideoStat, receiverVideoFlow } from "./connection-stats.js";
 import { renderStreamPath } from "./stream-path-diagnostics.js";
 import "./stream-health.css";
 import { GridCompositor } from "./grid-compositor.js";
@@ -200,6 +200,7 @@ export function createVideoGrid({ applySendCaps, syncCameraButton, syncShareButt
         });
         t.frames = 0;
         t.stalls = 0;
+        t.flowSample = null;
         t.flowing = true;
         // Reserved receiver tracks are not evidence that a camera is publishing.
         if (vt) {
@@ -693,10 +694,9 @@ export function createVideoGrid({ applySendCaps, syncCameraButton, syncShareButt
         }
     }
 
-    // STALL_POLLS is how many consecutive polls without a newly decoded frame
-    // count as "the camera is off" (61). Two polls ≈ 6 s, long enough to survive a
+    // Two fresh polls without a newly decoded frame count as "the camera is
+    // off" (61). Two polls ≈ 6 s, long enough to survive a
     // freeze/keyframe gap and short enough that a camera-off does not linger.
-    const STALL_POLLS = 2;
 
     async function refreshBadges() {
         for (const tile of tiles.values()) {
@@ -708,6 +708,12 @@ export function createVideoGrid({ applySendCaps, syncCameraButton, syncShareButt
         const { state } = V();
         if (!state.pc || tiles.size === 0 || statsPollRequest) return;
         const request = { pc: state.pc, scope: captureMediaScope() };
+        const bindings = request.pc.getTransceivers().map(transceiver => ({ transceiver, track: transceiver.receiver.track, mid: transceiver.mid }));
+        const bindingFor = track => {
+            const matches = bindings.filter(item => item.track === track && item.transceiver.receiver.track === track &&
+                item.transceiver.mid === item.mid && request.pc.getTransceivers().includes(item.transceiver));
+            return matches.length === 1 ? matches[0].transceiver : null;
+        };
         statsPollRequest = request;
         const current = () => statsPollRequest === request && state.pc === request.pc && mediaScopeIsCurrent(request.scope);
         try {
@@ -716,8 +722,12 @@ export function createVideoGrid({ applySendCaps, syncCameraButton, syncShareButt
             for (const tile of tiles.values()) {
                 // A binding/peer replacement or stale-sample reset starts a
                 // local epoch, even if the runtime reuses stats IDs and SSRCs.
-                if (tile.diagnosticsPC !== request.pc) tile.diagnosticsEpoch = crypto.randomUUID();
-                tile.diagnostics = summarizeStream(stats, tile.track?.id, tile.diagnosticsPC === request.pc ? tile.diagnostics : null);
+                if (tile.diagnosticsPC !== request.pc) {
+                    tile.diagnosticsEpoch = crypto.randomUUID();
+                    tile.flowSample = null;
+                }
+                tile.diagnostics = summarizeStream(stats, tile.track?.id, tile.diagnosticsPC === request.pc ? tile.diagnostics : null,
+                    bindingFor(tile.track));
                 tile.diagnosticsPC = request.pc;
                 tile.diagnosticsAt = new Date().toISOString();
                 tile.diagnosticsMeasuredAt = performance.now();
@@ -729,14 +739,10 @@ export function createVideoGrid({ applySendCaps, syncCameraButton, syncShareButt
             }
             const cpu = await window.go.main.App.SystemCPUPercent();
             if (!current()) return;
-            const byTrack = new Map(); // trackIdentifier -> {w, frames}
-            const decoders = [];
+            const decoders = [...tiles.values()].map(tile => receiverVideoStat(stats, bindingFor(tile.track)))
+                .filter(row => row?.framesDecoded > 0);
             let availableIncomingBitrate = 0;
             stats.forEach((r) => {
-                if (r.type === "inbound-rtp" && (r.kind === "video" || r.mediaType === "video")) {
-                    byTrack.set(r.trackIdentifier, { w: r.frameWidth || 0, frames: r.framesDecoded || 0 });
-                    if (r.framesDecoded > 0) decoders.push(r);
-                }
                 if (r.type === "candidate-pair" && (r.nominated || r.selected) && r.state === "succeeded") {
                     availableIncomingBitrate = Math.max(availableIncomingBitrate, r.availableIncomingBitrate || 0);
                 }
@@ -779,7 +785,7 @@ export function createVideoGrid({ applySendCaps, syncCameraButton, syncShareButt
                 lastSentQuality = "";
             }
             for (const t of tiles.values()) {
-                const s = (t.track && byTrack.get(t.track.id)) || null;
+                const s = receiverVideoStat(stats, bindingFor(t.track));
                 // (61) a camera switched off mid-call keeps its receiver track
                 // "live" and unmuted in WebView2 — onmute never fires — so without
                 // this the tile would freeze on a stale frame for the rest of the
@@ -787,18 +793,12 @@ export function createVideoGrid({ applySendCaps, syncCameraButton, syncShareButt
                 // encodes nothing, and so does a tile paused by low-bandwidth
                 // mode (88), which is meant to hold its last frame.
                 const exempt = tileIsScreen(t) || t.video.paused;
-                if (!s || exempt) {
-                    t.stalls = 0;
-                    t.flowing = true;
-                } else if (s.frames > t.frames) {
-                    t.frames = s.frames;
-                    t.stalls = 0;
-                    t.flowing = true;
-                } else if (++t.stalls >= STALL_POLLS) {
-                    t.flowing = false;
-                }
+                t.flowSample = receiverVideoFlow(t.flowSample, s, exempt);
+                t.frames = t.flowSample?.frames ?? 0;
+                t.stalls = t.flowSample?.stalls ?? 0;
+                t.flowing = t.flowSample?.flowing ?? true;
                 updateTileVideo(t); // WebView2 does not always fire track mute/unmute
-                const w = s ? s.w : 0;
+                const w = s?.frameWidth || 0;
                 if (!w || !t.flowing) {
                     t.badgeEl.classList.add("hidden");
                     continue;

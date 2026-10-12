@@ -4,7 +4,7 @@ test.beforeEach(async ({ page }) => {
     await page.route("**/streams-fixture", route => route.fulfill({ contentType: "text/html", body: `<!doctype html><html lang="en"><head><link rel="stylesheet" href="/src/style.css"><link rel="stylesheet" href="/src/streams.css"><link rel="stylesheet" href="/src/workspace.css"></head><body><main><div id="video-grid"></div></main></body></html>` }));
     await page.goto("/streams-fixture");
     await page.evaluate(async () => {
-        const pc = {}, audio = { muted: false, volume: 100 };
+        const bindings = [], pc = { getTransceivers: () => bindings }, audio = { muted: false, volume: 100 };
         const streams = ["alice", "bob"].map((publisher_id, i) => ({ publisher_id, slot: "screen", generation: String(i + 1), preview_at: 0, watch_revision: "0" }));
         const calls = [], shown = new Set(), tracks = new Map();
         window.__streams = { streams, calls, shown, tracks, audio, session: "10" };
@@ -36,6 +36,7 @@ test.beforeEach(async ({ page }) => {
             const track = canvas.captureStream(1).getVideoTracks()[0];
             Object.defineProperty(track, "id", { value: `${stream.publisher_id}|screen` });
             tracks.set(stream.publisher_id, track);
+            bindings.push({ mid: stream.publisher_id, currentDirection: "recvonly", receiver: { track } });
             controls.receiveStreamTrack(track, { client_id: stream.publisher_id });
         }
         const sharedAudio = { enabled: true };
@@ -612,6 +613,47 @@ test("late retry cannot resume a newer publication", async ({ page }) => {
     await expect(card.getByRole("button", { name: "Ansehen", exact: true })).toBeVisible();
 });
 
+test("reused camera receiver ignores frozen old-MID statistics but still detects real stagnation", async ({ page }) => {
+    await page.clock.install();
+    await page.evaluate(() => {
+        const s = window.__streams;
+        s.streams[0].slot = "cam";
+        const canvas = document.createElement("canvas");
+        canvas.getContext("2d").fillRect(0, 0, 100, 100);
+        const track = canvas.captureStream(1).getVideoTracks()[0];
+        Object.defineProperty(track, "id", { value: "reused-browser-track" });
+        s.camera = track;
+        s.controls.receiveStreamTrack(track, { client_id: "alice" }, "alice|cam");
+        const binding = { mid: "cam", currentDirection: "recvonly", receiver: { track } };
+        window.__noxa.state.pc.getTransceivers = () => [binding];
+        let frames = 14501;
+        window.__noxa.state.pc.getStats = async () => {
+            if (!s.freezeCamera) frames += 90;
+            return new Map([["camera", { id: "camera", ssrc: 2, mid: "cam", timestamp: performance.now(),
+                type: "inbound-rtp", kind: "video", trackIdentifier: track.id, frameWidth: 640, frameHeight: 360,
+                framesDecoded: frames, bytesReceived: frames * 100 }],
+            ["retired", { id: "retired", ssrc: 1, mid: "old-screen", timestamp: performance.now(),
+                type: "inbound-rtp", kind: "video", trackIdentifier: track.id, frameWidth: 960, frameHeight: 540,
+                framesDecoded: 47131, bytesReceived: 9999999 }]]);
+        };
+        window.__noxa.state.pc.getSenders = () => [];
+        window.go.main.App.SystemCPUPercent = async () => 10;
+    });
+    await page.clock.runFor(3000);
+    await page.locator('[data-publisher="alice"][data-slot="cam"] .stream-watch').click();
+    await page.evaluate(() => window.__streams.camera.requestFrame());
+    const tile = page.locator('.vtile[data-clid="alice"][data-slot="cam"]');
+    await expect(tile).toHaveClass(/has-video/);
+    await page.clock.runFor(21000);
+    await expect(tile).toHaveClass(/has-video/);
+    await expect(tile.locator(".vtile-received")).toContainText("640 × 360 · 30.0 fps");
+    await expect(tile.getByRole("button", { name: "Retry stream", exact: true })).toBeHidden();
+    await page.evaluate(() => { window.__streams.freezeCamera = true; });
+    await page.clock.runFor(21000);
+    await expect(tile).not.toHaveClass(/has-video/);
+    await expect(tile.getByRole("button", { name: "Retry stream", exact: true })).toBeVisible();
+});
+
 test("camera diagnostics expose a stalled stream and successful retry clears the warning on decoded video", async ({ page }) => {
     await page.clock.install();
     await page.evaluate(() => {
@@ -623,7 +665,9 @@ test("camera diagnostics expose a stalled stream and successful retry clears the
         Object.defineProperty(track, "id", { value: "alice|cam" });
         s.camera = track;
         s.controls.receiveStreamTrack(track, { client_id: "alice" });
-        window.__noxa.state.pc.getStats = async () => new Map([["camera", { type: "inbound-rtp", kind: "video", trackIdentifier: "alice|cam", frameWidth: 640, framesDecoded: 1 }]]);
+        const binding = { mid: "cam", currentDirection: "recvonly", receiver: { track } };
+        window.__noxa.state.pc.getTransceivers = () => [binding];
+        window.__noxa.state.pc.getStats = async () => new Map([["camera", { id: "camera", ssrc: 1, timestamp: performance.now(), type: "inbound-rtp", kind: "video", trackIdentifier: "alice|cam", frameWidth: 640, framesDecoded: 1 }]]);
         window.__noxa.state.pc.getSenders = () => [];
         window.go.main.App.SystemCPUPercent = async () => 10;
     });
