@@ -53,3 +53,15 @@ test("self is always green by default and saved colors can configure self and th
     assert.deepEqual(overlayColorPreferences({gaming_overlay_self_color:"#ffffff",gaming_overlay_blue_start:999,gaming_overlay_blue_end:-1}),
         {self:"#ffffff",start:220,end:240});
 });
+
+
+test("pending native settings use defaults and later loaded preferences take effect", () => {
+    assert.deepEqual(overlayColorPreferences(null), {self:"#43c798",start:195,end:235});
+    const colors = createOverlayColors(), members = [{id:"self"},{id:"peer"}];
+    const initial = colors("channel", members, null, "self");
+    assert.equal(initial.get("self"), "#43c798");
+    assert.match(initial.get("peer"), /^#[0-9a-f]{6}$/);
+    const loaded = colors("channel", members, {gaming_overlay_self_color:"#FF8800",gaming_overlay_blue_start:180,gaming_overlay_blue_end:200}, "self");
+    assert.equal(loaded.get("self"), "#ff8800");
+    assert.notEqual(loaded.get("peer"), initial.get("peer"));
+});
