@@ -35,6 +35,7 @@ test.beforeEach(async ({ page }) => {
                 this.signalingState = "stable";
             },
             addTransceiver(track, options) {
+                if (window.__media && track.kind === "video") window.__media.initialVideoEncodings = structuredClone(options.sendEncodings);
                 let parameters = { encodings: options.sendEncodings || [{}] };
                 const sender = { track: typeof track === "string" ? null : track, replaceTrack: async (next) => { sender.track = next; },
                     getParameters: () => structuredClone(parameters), setParameters: async (next) => {
@@ -176,6 +177,7 @@ test("source-quality publication pauses video and shared audio without viewers w
         voice: window.__media.voiceSender.getParameters().encodings.map(e => e.active),
     }));
     await expect.poll(activity).toEqual({ video: [false], audio: [false], voice: [true] });
+    expect(await page.evaluate(() => window.__media.initialVideoEncodings)).toMatchObject([{ active: false, maxBitrate: 8000000, scaleResolutionDownBy: 1 }]);
     for (const active of [true, false, true]) {
         await page.evaluate(async upload_active => {
             const publication = await import("/src/stream-publication.js");
@@ -184,6 +186,7 @@ test("source-quality publication pauses video and shared audio without viewers w
                 generation: item.generation, upload_active })));
         }, active);
         await expect.poll(activity).toEqual({ video: [active], audio: [active], voice: [true] });
+        expect(await page.evaluate(() => window.__noxa.state.shareVideoTransceiver.sender.getParameters().encodings[0].maxBitrate)).toBe(8000000);
     }
     await page.evaluate(() => {
         window.__media.replacementActivity = [];
@@ -316,12 +319,43 @@ for (const [preset, fps] of [["hd", 30], ["hdMotion", 60]]) {
         expect(result.options.video.width.ideal).toBe(1920);
         expect(result.options.video.height.ideal).toBe(1080);
         expect(result.options.video.frameRate.ideal).toBe(fps);
-        expectLayeredScreenBudget(result.parameters.encodings, 50000000);
+        expectLayeredScreenBudget(result.parameters.encodings, 8000000);
+        expect(await page.evaluate(() => window.__media.initialVideoEncodings)).toMatchObject([{ maxBitrate: 8000000, maxFramerate: fps, scaleResolutionDownBy: 1 }]);
         expect(result.parameters.degradationPreference).toBe("maintain-framerate");
         expect(result.parameters.encodings[0]).toMatchObject({ priority: "high", maxFramerate: fps });
         expect(result.hint).toBe("motion");
     });
 }
+
+test("screen startup shares a lower server budget with camera before the first offer", async ({ page }) => {
+    await page.evaluate(() => { window.__noxa.state.mediaLimits = { video_max_bitrate: 4000000 }; });
+    await page.locator("#voice-screen").click();
+    await page.locator(".sh-preset").selectOption("hdMotion");
+    await page.getByRole("button", { name: "Start sharing", exact: true }).click();
+    await expect(page.locator("#sharing-status")).toBeVisible();
+    expect(await page.evaluate(() => window.__media.initialVideoEncodings)).toMatchObject([{ maxBitrate: 1700000, scaleResolutionDownBy: 1 }]);
+    expect(await page.evaluate(() => window.__noxa.state.shareVideoTransceiver.sender.getParameters().encodings)).toMatchObject([{ maxBitrate: 1700000 }]);
+});
+
+test("live Full HD and higher quality round trips retain the same source and update its budget", async ({ page }) => {
+    await page.locator("#voice-screen").click();
+    await page.locator(".sh-preset").selectOption("hdMotion");
+    await page.getByRole("button", { name: "Start sharing", exact: true }).click();
+    await expect(page.locator("#sharing-status")).toBeVisible();
+    await page.evaluate(() => {
+        window.__media.budgetSource = window.__noxa.state.shareStream;
+        window.__media.budgetSender = window.__noxa.state.shareVideoTransceiver.sender;
+        window.__media.budgetSource.getVideoTracks()[0].applyConstraints = async () => {};
+    });
+    for (const [preset, cap] of [["qhd", 50000000], ["hdMotion", 8000000]]) {
+        await page.getByRole("button", { name: "Change quality", exact: true }).click();
+        await page.locator(".sh-preset").selectOption(preset);
+        await page.getByRole("button", { name: "Apply quality", exact: true }).click();
+        await expect(page.getByRole("dialog")).toHaveCount(0);
+        expect(await page.evaluate(() => window.__noxa.state.shareStream === window.__media.budgetSource && window.__noxa.state.shareVideoTransceiver.sender === window.__media.budgetSender)).toBe(true);
+        expectLayeredScreenBudget(await page.evaluate(() => window.__media.budgetSender.getParameters().encodings), cap);
+    }
+});
 
 test("text sharing retains readable pixels and live motion changes update the same encoder", async ({ page }) => {
     await page.locator("#voice-screen").click();
@@ -382,7 +416,7 @@ for (const [preset, width, height] of [["qhd", 2560, 1440], ["uhd", 3840, 2160]]
         await page.locator("#voice-screen").click();
         await page.locator(".sh-preset").selectOption(preset);
         await expect(page.locator(".share-quality-warning")).toContainText("CPU/GPU");
-        await expect(page.locator(".share-budget")).toContainText("50 Mbps");
+        await expect(page.locator(".share-budget")).toContainText("Higher resolutions or frame rates can use more");
         await page.getByRole("button", { name: "Start sharing", exact: true }).click();
         await expect(page.locator("#sharing-status")).toBeVisible();
         expect(await page.evaluate(() => window.__media.captureOptions.video)).toMatchObject({
@@ -402,7 +436,7 @@ test("custom sharing validates dimensions and retains size and frame rate when c
     await page.getByLabel("Width (px)", { exact: true }).fill("3440");
     await page.getByLabel("Height (px)", { exact: true }).fill("1440");
     await page.getByLabel("Frame rate", { exact: true }).selectOption("60");
-    await expect(page.locator(".share-budget")).toContainText("50 Mbps");
+    await expect(page.locator(".share-budget")).toContainText("Higher resolutions or frame rates can use more");
     await page.getByRole("button", { name: "Start sharing", exact: true }).click();
     await expect(page.locator(".sharing-change")).toBeEnabled();
     expect(await page.evaluate(() => window.__media.captureOptions.video)).toMatchObject({
@@ -624,7 +658,7 @@ test("live bitrate updates preserve captures and redistribute both sender budget
     expect(result.restored).toHaveLength(2);
     expect(result.restored[0]).toHaveLength(1);
     expect(result.restored[0][0].maxBitrate).toBeUndefined();
-    expectLayeredScreenBudget(result.restored[1], 50000000);
+    expectLayeredScreenBudget(result.restored[1], 8000000);
 });
 
 test("live bitrate changes apply to a negotiated browser sender", async ({ page }) => {
@@ -680,7 +714,7 @@ test("negotiated screen sender restores quality headroom after low bandwidth and
     });
     expect(result.bounded.encodings[0].maxBitrate).toBe(510000);
     expect(result.low.encodings[0]).toMatchObject({ maxBitrate: 150000, scaleResolutionDownBy: 2 });
-    expect(result.restored.encodings[0]).toMatchObject({ maxBitrate: 50000000, scaleResolutionDownBy: 1 });
+    expect(result.restored.encodings[0]).toMatchObject({ maxBitrate: 8000000, scaleResolutionDownBy: 1 });
     expect(result.restored.degradationPreference).toBe("maintain-framerate");
     expect(result.restored.encodings[0].priority).toBe("high");
     expect(result.ready).toBe("live");
