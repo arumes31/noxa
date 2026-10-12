@@ -450,10 +450,9 @@ func (r *Router) JoinChannel(channelID int64, clientID string) {
 		}
 	}
 
-	// A new video subscriber joining mid-stream needs a keyframe before it
-	// can decode; collect the publishing slots in the channel to PLI (the
-	// RTCP writes happen after unlock).
-	keyframeTargets := r.videoPublishersLocked(channelID, clientID)
+	// Only actual video consumers need startup keyframes. Channel membership
+	// alone must not interrupt every publisher (RTCP writes happen unlocked).
+	keyframeTargets := r.videoStartupPublishersLocked(channelID, clientID)
 	pref := r.layerPrefLocked(clientID)
 	members := len(set)
 	hook := r.onRenegotiate
@@ -897,8 +896,8 @@ func (r *Router) releaseSlot(clientID, key string, token uint64) {
 // EnsurePublishers creates all missing publisher tracks between clientID and
 // the other members of its channel (plus the echo channel's self pair), restores
 // its outgoing whisper tracks, and
-// asks the channel's video publishers for a keyframe (a freshly attached peer
-// decodes nothing until it gets one).
+// asks current video consumers' publishers for a keyframe. A channel member
+// without an active watch must not disturb the shared encoding.
 // It is called when a peer connection attaches (the initial SDP answer then
 // already contains all tracks).
 func (r *Router) EnsurePublishers(clientID string) {
@@ -938,7 +937,7 @@ func (r *Router) EnsurePublishers(clientID string) {
 			}
 		}
 	}
-	keyframeTargets := r.videoPublishersLocked(channelID, clientID)
+	keyframeTargets := r.videoStartupPublishersLocked(channelID, clientID)
 	pref := r.layerPrefLocked(clientID)
 	hook := r.onRenegotiate
 	r.mu.Unlock()
@@ -1881,7 +1880,7 @@ func (r *Router) forwardVideoFrameAtPolicyCodec(senderID, slot, rid string, pkt 
 				if !eligible {
 					return false, nil
 				}
-				var accepted bool
+				var accepted, needsKeyframe bool
 				_ = r.withWatch(w.delivery, func() error {
 					if w.delivery.WatchEpoch < output.watchEpoch {
 						return nil
@@ -1895,10 +1894,15 @@ func (r *Router) forwardVideoFrameAtPolicyCodec(senderID, slot, rid string, pkt 
 					} else if strings.EqualFold(mime, webrtc.MimeTypeVP8) {
 						packet, accepted = output.videoContinuity.translate(pkt, now)
 					}
+					needsKeyframe = !accepted
 					return nil
 				})
 				if !accepted {
-					if w.delivery.WatchEpoch != 0 && !isVideoPadding(pkt) {
+					// Request only for a current watch whose continuity needs a
+					// keyframe and whose output can receive it. The first post-ready
+					// delta retries here; revoked/contended watches do not send PLIs.
+					if needsKeyframe && w.delivery.WatchEpoch != 0 && !isVideoPadding(pkt) &&
+						(output.egress == nil || output.videoTransportReady(r, w.delivery.RecipientID)) {
 						r.RequestKeyframe(senderID, slot, rid)
 					}
 					return false, nil

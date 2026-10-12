@@ -15,6 +15,20 @@ export function trackFitsVideoLimits(track, limits) {
     return width > 0 && height > 0 && width <= limits.video_max_width && height <= limits.video_max_height;
 }
 
+// Full HD screen capture has a measured encoder budget, not a network rate
+// guarantee. Keep the existing headroom for higher or unknown capture profiles.
+// A temporarily smaller capture must not lower an explicitly higher preset.
+export function screenBitrateHeadroom(profile = {}, settings = {}) {
+    const actual = { width: settings.width, height: settings.height, fps: settings.frameRate };
+    const bounds = { width: 1920, height: 1080, fps: 60 };
+    for (const key of Object.keys(bounds)) {
+        const requested = profile[key];
+        const value = actual[key] ?? requested;
+        if (!Number.isFinite(value) || value <= 0 || value > bounds[key] || requested > bounds[key]) return 50000000;
+    }
+    return 8000000;
+}
+
 // Split the publisher ceiling between live sources, then active encodings.
 // Reserve 15% for RTP overhead; the server's packet meter remains authoritative.
 export function capVideoEncodings(sources, limits, localCap) {

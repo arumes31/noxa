@@ -42,6 +42,7 @@ const windowOpacityStartupAttempts = 50
 
 // App is the Wails application.
 type App struct {
+	displayCapturePower displayCapturePower
 	connectionBenchmark connectionBenchmarkOperation
 	loginCredentials    loginCredentialState
 	update              updateOperation
@@ -306,6 +307,9 @@ func (a *App) SetWindowOpacity(pct int) string {
 
 // shutdown is called when the app closes.
 func (a *App) shutdown(_ context.Context) {
+	if err := a.displayCapturePower.shutdown(); err != nil {
+		log.Printf("display capture power shutdown: %v", err)
+	}
 	a.cancelConnectionBenchmark()
 	a.cancelCloseNotification()
 	a.closeGamingOverlay()

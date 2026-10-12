@@ -1,5 +1,6 @@
 import { remoteTrackID } from "./media-track-id.js";
 import { samplePeerStats } from "./peer-stats.js";
+import { receiverVideoStat } from "./connection-stats.js";
 
 const scopeKey = state => JSON.stringify([state.activeTabID, state.serverGeneration, state.sessionGeneration, state.myClientID, state.myChannelID]);
 const delays = [30000, 120000, 300000];
@@ -157,8 +158,7 @@ export async function resetVideoReceiver({ state, pc, transceiver, current, watc
         for (const receiver of pc.getTransceivers()) {
             if (receiver === transceiver || receiver.stopped || receiver.currentDirection !== "recvonly" ||
                 remoteTrackID(pc, receiver.receiver.track, receiver) !== watched.id) continue;
-            if ([...stats.values()].some(stat => stat.type === "inbound-rtp" && stat.kind === "video" &&
-                stat.mid === receiver.mid && stat.framesDecoded > 0)) return true;
+            if (receiverVideoStat(stats, receiver)?.framesDecoded > 0) return true;
         }
         await wait(250);
     }
@@ -171,6 +171,7 @@ export function createVideoReceiverRecovery({ state, watch, scheduler = createHa
     return async (pc, stats) => {
         if (state.pc !== pc || pc.connectionState !== "connected" || pc.signalingState !== "stable") return;
         const scope = scopeKey(state), candidates = [];
+        const bindings = pc.getTransceivers().map(transceiver => ({ transceiver, track: transceiver.receiver?.track, mid: transceiver.mid }));
         // Never probe an unadvertised recovery path by interrupting playback.
         let supportRequest = supportRequests.get(scope);
         if (!supportRequest) {
@@ -184,14 +185,16 @@ export function createVideoReceiverRecovery({ state, watch, scheduler = createHa
         let enabled;
         try { enabled = await bounded(supportRequest, 1000); } catch { return; }
         if (enabled !== true || state.pc !== pc || scopeKey(state) !== scope) return;
-        for (const stat of stats.values()) {
-            if (stat.type !== "inbound-rtp" || (stat.kind || stat.mediaType) !== "video") continue;
-            const transceiver = pc.getTransceivers().find(item => stat.mid != null ? item.mid === stat.mid : item.receiver.track.id === stat.trackIdentifier);
+        for (const { transceiver, track, mid } of bindings) {
+            if (!track || !pc.getTransceivers().includes(transceiver) || transceiver.receiver.track !== track || transceiver.mid !== mid) continue;
+            const stat = receiverVideoStat(stats, transceiver);
+            if (!stat) continue;
             if (!transceiver || transceiver.stopped || transceiver.direction !== "recvonly" || transceiver.currentDirection !== "recvonly" || transceiver.sender?.track) continue;
-            const track = transceiver.receiver.track, id = remoteTrackID(pc, track, transceiver), watched = watch(pc, id, track);
+            const id = remoteTrackID(pc, track, transceiver), watched = watch(pc, id, track);
             const codec = stats.get(stat.codecId);
             if (!watched || !track.enabled || track.readyState !== "live" || codec?.mimeType?.toLowerCase() !== "video/h264") continue;
-            const current = () => state.pc === pc && scopeKey(state) === scope && pc.connectionState === "connected" && watched.current();
+            const current = () => state.pc === pc && scopeKey(state) === scope && pc.connectionState === "connected" &&
+                pc.getTransceivers().includes(transceiver) && transceiver.receiver.track === track && transceiver.mid === mid && watched.current();
             const implementation = String(stat.decoderImplementation || "");
             candidates.push({ key: `receive:${watched.key}`, instance: `${stat.id}:${stat.ssrc}`,
                 config: JSON.stringify([codec.mimeType, codec.sdpFmtpLine, stat.frameWidth, stat.frameHeight]),

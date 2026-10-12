@@ -57,6 +57,11 @@ func hardwareBrowserArguments(fragments []string) (string, error) {
 		retained = append(retained, arg)
 	}
 	addFeature(hardwareFeature)
+	// Keep hardware H.264 on the MFT's CBR controller: Chromium's camera-mode
+	// software bitrate controller can suppress input during low-rate screen
+	// sharing. This also changes trusted-rate-controller behavior and affects
+	// cameras; the measured improvement is NVIDIA-specific, not a vendor guarantee.
+	addFeature("MediaFoundationUseSWBRCForH264Camera")
 	// Place the merged switch before a possible -- terminator. Positional
 	// arguments after it, even ones resembling switches, remain untouched.
 	retained = append([]string{disabledSwitch + "=" + strings.Join(features, ",")}, retained...)

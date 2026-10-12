@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { videoConstraints, trackFitsVideoLimits, capVideoEncodings } from "../src/media-limits.js";
+import { videoConstraints, trackFitsVideoLimits, capVideoEncodings, screenBitrateHeadroom } from "../src/media-limits.js";
 import { shareQuality, screenShareConstraints } from "../src/screen-share-quality.js";
 
 test("screen resolutions leave bitrate adaptive and honor server bounds", () => {
@@ -31,6 +31,39 @@ test("custom capture validates dimensions and frame rate without a preset bitrat
 });
 
 const limits = { video_max_width: 320, video_max_height: 200, video_max_bitrate: 1000000 };
+test("screen budget follows requested and actual capture, not adapted encoded dimensions", () => {
+    for (const preset of ["balanced", "text", "motion", "hd", "hdMotion"]) {
+        assert.equal(screenBitrateHeadroom(shareQuality(preset)), 8000000);
+        assert.equal(screenBitrateHeadroom(shareQuality(preset), { width: 1280, height: 720, frameRate: 30 }), 8000000);
+    }
+    const hd = shareQuality("hdMotion");
+    for (const settings of [{ width: 2560 }, { height: 1440 }, { frameRate: 120 }, { width: 0 }, { height: NaN }, { frameRate: "60" }]) {
+        assert.equal(screenBitrateHeadroom(hd, settings), 50000000);
+    }
+    for (const profile of [shareQuality("qhd"), shareQuality("uhd"), { width: 1920, height: 1080, fps: 120 }]) {
+        assert.equal(screenBitrateHeadroom(profile, { width: 1280, height: 720, frameRate: 30 }), 50000000);
+    }
+    assert.equal(screenBitrateHeadroom(shareQuality("original"), { width: 1920, height: 1080, frameRate: 60 }), 8000000);
+    assert.equal(screenBitrateHeadroom(shareQuality("original")), 50000000);
+    assert.equal(screenBitrateHeadroom(), 50000000);
+    assert.equal(screenBitrateHeadroom({}, { width: 1280, height: 720, frameRate: 60 }), 8000000);
+});
+
+test("normal screen budget survives server and low-bandwidth round trips without changing camera policy", () => {
+    const screen = { encodings: [{}], singleEncoding: true, bitrateHeadroom: screenBitrateHeadroom(shareQuality("hdMotion")) };
+    const camera = { encodings: [{}], singleEncoding: true };
+    capVideoEncodings([camera, screen], {}, 0);
+    assert.equal(screen.encodings[0].maxBitrate, 8000000);
+    assert.equal(camera.encodings[0].maxBitrate, undefined);
+    capVideoEncodings([camera, screen], { video_max_bitrate: 4000000 }, 0);
+    assert.equal(screen.encodings[0].maxBitrate, 1700000);
+    capVideoEncodings([camera, screen], {}, 150000);
+    assert.equal(screen.encodings[0].maxBitrate, 75000);
+    assert.equal(screen.encodings[0].scaleResolutionDownBy, 2);
+    capVideoEncodings([camera, screen], {}, 0);
+    assert.equal(screen.encodings[0].maxBitrate, 8000000);
+    assert.equal(screen.encodings[0].scaleResolutionDownBy, 1);
+});
 test("capture bounds reduce either dimension without stretching the preferred aspect ratio", () => {
     assert.deepEqual(videoConstraints(640, 360, 30, limits), {
         width: { ideal: 320, max: 320 }, height: { ideal: 180, max: 200 }, frameRate: { ideal: 30 },

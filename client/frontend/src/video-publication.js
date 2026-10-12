@@ -1,3 +1,4 @@
+import { retainDisplayCapture, stopDisplayCapture } from "./display-capture-lease.js";
 import { escapeHTML as escapeTranslation } from "./markdown.js";
 // video-publication.js — camera/screen capture and publication lifecycle.
 import { captureCamera, applyCameraPreview } from "./camera-capture.js";
@@ -10,17 +11,13 @@ import { shareQuality, screenShareConstraints, createShareQualityControls } from
 import { isCurrentServerDialog, mountServerDialog } from "./modal.js";
 import { labelButton } from "./icons.js";
 import { renderMicStatus } from "./audio.js";
-import { videoConstraints, trackFitsVideoLimits, capVideoEncodings } from "./media-limits.js";
+import { videoConstraints, trackFitsVideoLimits, capVideoEncodings, screenBitrateHeadroom } from "./media-limits.js";
 import { t as tLabel } from "./i18n.js";
 import { rememberVideoSenderProfile } from "./video-sender-stats.js";
 import { hardwareVideoEncodeAvailable, videoSenderCaptureSample } from "./video-sender-hardware-recovery.js";
 import { createPeerStatsSampler } from "./peer-stats.js";
 import { renegotiate, negotiateOffer, queuePeerNegotiation } from "./video-negotiation.js";
 const V = () => window.__noxa;
-// An unset maxBitrate invokes Chromium's ~2.5 Mbps default for larger frames.
-// Match the relay's 50 Mbps congestion-controller ceiling; this is headroom,
-// not a target or minimum. Actual throughput still follows network feedback.
-const SCREEN_BITRATE_HEADROOM = 50000000;
 // RTCRtpSender has the same getStats contract; keep its scoped reports separate
 // from peer-wide telemetry, coalescing timed-out native calls until they settle.
 const sampleSenderStats = createPeerStatsSampler();
@@ -142,8 +139,8 @@ export function createVideoPublication({ policy }) {
                 return { changed: true, dimensionsChanged };
             } catch (error) {
                 if (!current()) return null;
+                stopDisplayCapture(state.shareStream);
                 for (const track of videoTracks()) track.stop();
-                for (const track of state.shareStream?.getTracks() || []) track.stop();
                 throw error;
             } finally {
                 if (videoLimitUpdates.get(pc) === update) videoLimitUpdates.delete(pc);
@@ -183,7 +180,7 @@ export function createVideoPublication({ policy }) {
                     singleEncoding: true,
                     uploadActive: publicationUploadActive(sender === screenSender ? "screen" : "cam",
                         sender === screenSender ? screenTrack : pendingVideoSenders.get(pc)?.sender === sender ? pendingVideoSenders.get(pc).track : sender.track),
-                    bitrateHeadroom: sender === screenSender ? SCREEN_BITRATE_HEADROOM : Infinity };
+                    bitrateHeadroom: sender === screenSender ? screenBitrateHeadroom(capturePreferences.get(screenTrack), screenTrack?.getSettings()) : Infinity };
             });
             capVideoEncodings(sources, state.mediaLimits, policy.lowBandwidth ? policy.lowBandwidthBitrate : 0);
             for (const { sender, parameters, encodings } of sources) {
@@ -201,6 +198,23 @@ export function createVideoPublication({ policy }) {
         capUpdates.set(pc, pending);
         pending.catch(() => { if (current()) V().sysMsg(tLabel("voice.mediaCapsFailed")); });
         return pending;
+    }
+
+    // Apply the same screen ceiling before the first offer, including when the
+    // source starts paused. A live camera still shares any stricter server cap.
+    function initialScreenEncodings(track) {
+        const { state } = V(), pc = state.pc, profile = capturePreferences.get(track);
+        const encodings = [{}], sources = [{ encodings, singleEncoding: true,
+            bitrateHeadroom: screenBitrateHeadroom(profile, track.getSettings()) }];
+        const camera = videoSenderFor(pc), pending = pendingVideoSenders.get(pc);
+        const cameraTrack = camera === pending?.sender ? pending.track : camera?.track;
+        if (cameraTrack?.readyState === "live") sources.push({ encodings: [],
+            uploadActive: publicationUploadActive("cam", cameraTrack) });
+        capVideoEncodings(sources, state.mediaLimits, policy.lowBandwidth ? policy.lowBandwidthBitrate : 0);
+        encodings[0].active = encodings[0].active && publicationUploadActive("screen", track) !== false;
+        encodings[0].priority = "high";
+        if (profile?.fps > 0) encodings[0].maxFramerate = profile.fps;
+        return encodings;
     }
 
     // WebRTC reinitializes its encoder on a size change, retrying hardware first.
@@ -472,7 +486,7 @@ export function createVideoPublication({ policy }) {
         let nextRegion = null;
         const discardDisplay = (stream) => {
             nextRegion?.remove();
-            stream?.getTracks().forEach((track) => track.stop());
+            stopDisplayCapture(stream);
             shareTransceiver?.stop();
             if (state.shareVideoTransceiver === shareTransceiver) state.shareVideoTransceiver = null;
             if (stream?.getTracks().includes(state.shareAudioSender?.track)) {
@@ -517,6 +531,7 @@ export function createVideoPublication({ policy }) {
                 return;
             }
         }
+        retainDisplayCapture(display);
         if (!current()) {
             discardDisplay(display);
             return;
@@ -584,7 +599,7 @@ export function createVideoPublication({ policy }) {
                         else {
                             try {
                                 shareTransceiver = peerConnection.addTransceiver(screenTrack, { direction: "sendonly", streams: [display],
-                                    sendEncodings: [{ active: publicationUploadActive("screen", screenTrack) !== false }] });
+                                    sendEncodings: initialScreenEncodings(screenTrack) });
                             } catch {
                                 shareTransceiver = peerConnection.addTransceiver(screenTrack, { direction: "sendonly", streams: [display] });
                             }
@@ -962,7 +977,7 @@ export function createVideoPublication({ policy }) {
         const screenSender = state.shareVideoTransceiver?.sender;
         if (screenSender) void screenSender.replaceTrack(null).catch(() => {});
         if (state.shareStream) {
-            state.shareStream.getTracks().forEach((t) => t.stop());
+            stopDisplayCapture(state.shareStream);
             state.shareStream = null;
         }
         clearRegionBox(); // (71)

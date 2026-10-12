@@ -35,6 +35,7 @@ test.beforeEach(async ({ page }) => {
                 this.signalingState = "stable";
             },
             addTransceiver(track, options) {
+                if (window.__media && track.kind === "video") window.__media.initialVideoEncodings = structuredClone(options.sendEncodings);
                 let parameters = { encodings: options.sendEncodings || [{}] };
                 const sender = { track: typeof track === "string" ? null : track, replaceTrack: async (next) => { sender.track = next; },
                     getParameters: () => structuredClone(parameters), setParameters: async (next) => {
@@ -77,6 +78,12 @@ test.beforeEach(async ({ page }) => {
                 if (window.__media.delayQualityControl) return await new Promise(resolve => { window.__media.finishQualityControl = resolve; });
                 return "";
             } } } };
+        window.__captureLeases = { acquired: [], released: [] };
+        Object.assign(window.go.main.App, {
+            AcquireDisplayCaptureLease: async () => { const id = `lease-${window.__captureLeases.acquired.length}`; window.__captureLeases.acquired.push(id); return id; },
+            RefreshDisplayCaptureLease: async () => {},
+            ReleaseDisplayCaptureLease: async id => { window.__captureLeases.released.push(id); },
+        });
         Object.defineProperty(navigator.mediaDevices, "getDisplayMedia", { configurable: true, value: async (options) => {
             window.__media.captureOptions = options;
             const stream = capture();
@@ -111,6 +118,8 @@ test("repeated screen shares reuse senders and declare shared audio after every 
         await page.locator("#voice-screen").click();
         await page.getByRole("dialog").getByRole("button", { name: "Stop sharing", exact: true }).click();
         await expect.poll(() => page.evaluate(() => !!window.__noxa.state.shareStopping)).toBe(false);
+        await expect.poll(() => page.evaluate(() => window.__captureLeases.released.length)).toBe(i + 1);
+        expect(await page.evaluate(() => window.__captureLeases.acquired.length)).toBe(i + 1);
     }
     await page.evaluate(() => window.__media.audioContext.close());
 });
@@ -176,6 +185,7 @@ test("source-quality publication pauses video and shared audio without viewers w
         voice: window.__media.voiceSender.getParameters().encodings.map(e => e.active),
     }));
     await expect.poll(activity).toEqual({ video: [false], audio: [false], voice: [true] });
+    expect(await page.evaluate(() => window.__media.initialVideoEncodings)).toMatchObject([{ active: false, maxBitrate: 8000000, scaleResolutionDownBy: 1 }]);
     for (const active of [true, false, true]) {
         await page.evaluate(async upload_active => {
             const publication = await import("/src/stream-publication.js");
@@ -184,6 +194,7 @@ test("source-quality publication pauses video and shared audio without viewers w
                 generation: item.generation, upload_active })));
         }, active);
         await expect.poll(activity).toEqual({ video: [active], audio: [active], voice: [true] });
+        expect(await page.evaluate(() => window.__noxa.state.shareVideoTransceiver.sender.getParameters().encodings[0].maxBitrate)).toBe(8000000);
     }
     await page.evaluate(() => {
         window.__media.replacementActivity = [];
@@ -316,12 +327,43 @@ for (const [preset, fps] of [["hd", 30], ["hdMotion", 60]]) {
         expect(result.options.video.width.ideal).toBe(1920);
         expect(result.options.video.height.ideal).toBe(1080);
         expect(result.options.video.frameRate.ideal).toBe(fps);
-        expectLayeredScreenBudget(result.parameters.encodings, 50000000);
+        expectLayeredScreenBudget(result.parameters.encodings, 8000000);
+        expect(await page.evaluate(() => window.__media.initialVideoEncodings)).toMatchObject([{ maxBitrate: 8000000, maxFramerate: fps, scaleResolutionDownBy: 1 }]);
         expect(result.parameters.degradationPreference).toBe("maintain-framerate");
         expect(result.parameters.encodings[0]).toMatchObject({ priority: "high", maxFramerate: fps });
         expect(result.hint).toBe("motion");
     });
 }
+
+test("screen startup shares a lower server budget with camera before the first offer", async ({ page }) => {
+    await page.evaluate(() => { window.__noxa.state.mediaLimits = { video_max_bitrate: 4000000 }; });
+    await page.locator("#voice-screen").click();
+    await page.locator(".sh-preset").selectOption("hdMotion");
+    await page.getByRole("button", { name: "Start sharing", exact: true }).click();
+    await expect(page.locator("#sharing-status")).toBeVisible();
+    expect(await page.evaluate(() => window.__media.initialVideoEncodings)).toMatchObject([{ maxBitrate: 1700000, scaleResolutionDownBy: 1 }]);
+    expect(await page.evaluate(() => window.__noxa.state.shareVideoTransceiver.sender.getParameters().encodings)).toMatchObject([{ maxBitrate: 1700000 }]);
+});
+
+test("live Full HD and higher quality round trips retain the same source and update its budget", async ({ page }) => {
+    await page.locator("#voice-screen").click();
+    await page.locator(".sh-preset").selectOption("hdMotion");
+    await page.getByRole("button", { name: "Start sharing", exact: true }).click();
+    await expect(page.locator("#sharing-status")).toBeVisible();
+    await page.evaluate(() => {
+        window.__media.budgetSource = window.__noxa.state.shareStream;
+        window.__media.budgetSender = window.__noxa.state.shareVideoTransceiver.sender;
+        window.__media.budgetSource.getVideoTracks()[0].applyConstraints = async () => {};
+    });
+    for (const [preset, cap] of [["qhd", 50000000], ["hdMotion", 8000000]]) {
+        await page.getByRole("button", { name: "Change quality", exact: true }).click();
+        await page.locator(".sh-preset").selectOption(preset);
+        await page.getByRole("button", { name: "Apply quality", exact: true }).click();
+        await expect(page.getByRole("dialog")).toHaveCount(0);
+        expect(await page.evaluate(() => window.__noxa.state.shareStream === window.__media.budgetSource && window.__noxa.state.shareVideoTransceiver.sender === window.__media.budgetSender)).toBe(true);
+        expectLayeredScreenBudget(await page.evaluate(() => window.__media.budgetSender.getParameters().encodings), cap);
+    }
+});
 
 test("text sharing retains readable pixels and live motion changes update the same encoder", async ({ page }) => {
     await page.locator("#voice-screen").click();
@@ -343,6 +385,76 @@ test("text sharing retains readable pixels and live motion changes update the sa
         encodings: [{ priority: "high", maxFramerate: 60 }] } });
     expect(await page.evaluate(() => window.__media.originalShare === window.__noxa.state.shareStream)).toBe(true);
     expect(await page.evaluate(() => window.__media.cameraSender.getParameters().encodings[0].priority)).toBe("medium");
+});
+
+test("compatible viewer joins and leaves preserve the active screen encoder", async ({ page }) => {
+    await page.evaluate(() => {
+        const app = window.go.main.App, pc = window.__noxa.state.pc;
+        app.SupportsStreamSourceQualityForTab = async () => true;
+        app.SupportsStreamCodecForTab = async () => true;
+        Object.defineProperty(navigator.mediaCapabilities, "encodingInfo", { configurable: true, value: async () => ({ supported: true, powerEfficient: true }) });
+        const add = pc.addTransceiver.bind(pc);
+        pc.addTransceiver = (...args) => {
+            const transceiver = add(...args);
+            transceiver.setCodecPreferences = codecs => { transceiver.codec = codecs[0].mimeType; };
+            return transceiver;
+        };
+        const control = app.VideoStreamControlForTab;
+        app.VideoStreamControlForTab = async (...args) => ({ ...await control(...args), codec: "h264", upload_active: true });
+        Object.defineProperty(navigator.mediaDevices, "getDisplayMedia", { configurable: true, value: async () => {
+            const canvas = document.createElement("canvas");
+            canvas.width = 1920; canvas.height = 1080;
+            return canvas.captureStream(60);
+        } });
+    });
+    await page.locator("#voice-screen").click();
+    await page.locator(".sh-preset").selectOption("hdMotion");
+    await page.getByRole("dialog").getByRole("button", { name: "Start sharing", exact: true }).click();
+    await expect.poll(() => page.evaluate(() => window.__noxa.state.shareVideoTransceiver?.sender.getParameters().encodings[0]?.active)).toBe(true);
+    const before = await page.evaluate(async () => {
+        const { queuePeerNegotiation } = await import("/src/video-negotiation.js");
+        const { pc, shareVideoTransceiver } = window.__noxa.state;
+        await queuePeerNegotiation(pc, async () => {});
+        const changes = [];
+        const observe = (target, name) => {
+            const original = target[name].bind(target);
+            target[name] = (...args) => { changes.push(name); return original(...args); };
+        };
+        observe(pc, "createOffer");
+        for (const sender of pc.getSenders()) {
+            observe(sender, "setParameters");
+            observe(sender, "replaceTrack");
+            if (sender.track) observe(sender.track, "applyConstraints");
+        }
+        Object.assign(window.__media, { viewerChanges: changes, originalScreenSender: shareVideoTransceiver.sender,
+            originalScreenTrack: shareVideoTransceiver.sender.track });
+        return shareVideoTransceiver.sender.getParameters();
+    });
+    expectLayeredScreenBudget(before.encodings, 8000000);
+    expect(before).toMatchObject({ degradationPreference: "maintain-framerate", encodings: [{ active: true, maxFramerate: 60 }] });
+    for (const viewer_count of [1, 2, 3, 2, 1]) {
+        const after = await page.evaluate(async viewer_count => {
+            const { publicationSnapshot, reconcilePublicationUploads } = await import("/src/stream-publication.js");
+            const { queuePeerNegotiation } = await import("/src/video-negotiation.js");
+            const { pc, shareVideoTransceiver } = window.__noxa.state;
+            const snapshot = publicationSnapshot();
+            reconcilePublicationUploads(snapshot, snapshot.map(({ publication, generation }) => ({
+                publisher_id: "self", slot: publication.slot, generation, viewer_count,
+                quality_mode: "source", upload_active: true, codec: "h264",
+            })));
+            // Drain publication callbacks and their queued sender work before
+            // checking for mutations, including writes of unchanged parameters.
+            await Promise.resolve();
+            await queuePeerNegotiation(pc, async () => {});
+            return { publications: snapshot.length, changes: [...window.__media.viewerChanges],
+                sameSender: shareVideoTransceiver.sender === window.__media.originalScreenSender,
+                sameTrack: shareVideoTransceiver.sender.track === window.__media.originalScreenTrack,
+                live: shareVideoTransceiver.sender.track.readyState, codec: shareVideoTransceiver.codec,
+                parameters: shareVideoTransceiver.sender.getParameters() };
+        }, viewer_count);
+        expect(after, `viewer count ${viewer_count}`).toEqual({ publications: 1, changes: [], sameSender: true,
+            sameTrack: true, live: "live", codec: "video/H264", parameters: before });
+    }
 });
 
 test("hardware screen codec follows common fallback without adding a sender", async ({ page }) => {
@@ -382,7 +494,7 @@ for (const [preset, width, height] of [["qhd", 2560, 1440], ["uhd", 3840, 2160]]
         await page.locator("#voice-screen").click();
         await page.locator(".sh-preset").selectOption(preset);
         await expect(page.locator(".share-quality-warning")).toContainText("CPU/GPU");
-        await expect(page.locator(".share-budget")).toContainText("50 Mbps");
+        await expect(page.locator(".share-budget")).toContainText("Higher resolutions or frame rates can use more");
         await page.getByRole("button", { name: "Start sharing", exact: true }).click();
         await expect(page.locator("#sharing-status")).toBeVisible();
         expect(await page.evaluate(() => window.__media.captureOptions.video)).toMatchObject({
@@ -402,7 +514,7 @@ test("custom sharing validates dimensions and retains size and frame rate when c
     await page.getByLabel("Width (px)", { exact: true }).fill("3440");
     await page.getByLabel("Height (px)", { exact: true }).fill("1440");
     await page.getByLabel("Frame rate", { exact: true }).selectOption("60");
-    await expect(page.locator(".share-budget")).toContainText("50 Mbps");
+    await expect(page.locator(".share-budget")).toContainText("Higher resolutions or frame rates can use more");
     await page.getByRole("button", { name: "Start sharing", exact: true }).click();
     await expect(page.locator(".sharing-change")).toBeEnabled();
     expect(await page.evaluate(() => window.__media.captureOptions.video)).toMatchObject({
@@ -624,7 +736,7 @@ test("live bitrate updates preserve captures and redistribute both sender budget
     expect(result.restored).toHaveLength(2);
     expect(result.restored[0]).toHaveLength(1);
     expect(result.restored[0][0].maxBitrate).toBeUndefined();
-    expectLayeredScreenBudget(result.restored[1], 50000000);
+    expectLayeredScreenBudget(result.restored[1], 8000000);
 });
 
 test("live bitrate changes apply to a negotiated browser sender", async ({ page }) => {
@@ -680,7 +792,7 @@ test("negotiated screen sender restores quality headroom after low bandwidth and
     });
     expect(result.bounded.encodings[0].maxBitrate).toBe(510000);
     expect(result.low.encodings[0]).toMatchObject({ maxBitrate: 150000, scaleResolutionDownBy: 2 });
-    expect(result.restored.encodings[0]).toMatchObject({ maxBitrate: 50000000, scaleResolutionDownBy: 1 });
+    expect(result.restored.encodings[0]).toMatchObject({ maxBitrate: 8000000, scaleResolutionDownBy: 1 });
     expect(result.restored.degradationPreference).toBe("maintain-framerate");
     expect(result.restored.encodings[0].priority).toBe("high");
     expect(result.ready).toBe("live");
@@ -1260,3 +1372,26 @@ test("capture finishing after a server switch cannot publish into the new sessio
     expect(await page.evaluate(() => window.__media.offers)).toEqual([]);
     expect(await page.evaluate(() => window.__media.video.trackSlots().map(t => t.slot))).toEqual(["cam"]);
 });
+
+for (const cleanup of ["stop", "limits", "pagehide"]) {
+    test(`display lease follows main capture cleanup (${cleanup})`, async ({ page }) => {
+        await page.evaluate(() => {
+            window.go.main.App.AcquireDisplayCaptureLease = () => new Promise(resolve => { window.__finishLease = () => resolve("late-main"); });
+        });
+        await page.locator("#voice-screen").click();
+        await page.getByRole("dialog").getByRole("button", { name: "Start sharing", exact: true }).click();
+        await expect.poll(() => page.evaluate(() => !!window.__noxa.state.screenSharing)).toBe(true);
+        if (cleanup === "stop") {
+            await page.locator("#voice-screen").click();
+            await page.getByRole("dialog").getByRole("button", { name: "Stop sharing", exact: true }).click();
+        } else if (cleanup === "limits") {
+            await page.evaluate(async () => {
+                window.__media.failCaps = true;
+                await window.__media.video.applyVideoLimits({ video_max_bitrate: 500000 }).catch(() => {});
+            });
+        } else await page.evaluate(() => window.dispatchEvent(new Event("pagehide")));
+        await page.evaluate(() => window.__finishLease());
+        await expect.poll(() => page.evaluate(() => window.__captureLeases.released)).toEqual(["late-main"]);
+        if (cleanup !== "pagehide") expect(await page.evaluate(() => window.__media.displayTracks.every(t => t.readyState === "ended"))).toBe(true);
+    });
+}

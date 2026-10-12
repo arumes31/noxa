@@ -210,28 +210,72 @@ func TestVideoQualityInvalid(t *testing.T) {
 	}
 }
 
-// TestKeyframeRequestOnJoin verifies a subscriber joining a channel with an
-// active video publisher triggers a PLI to the publisher.
-func TestKeyframeRequestOnJoin(t *testing.T) {
-	r := NewRouter(nil)
-	pub := &fakeRTCPWriter{}
-
-	r.JoinChannel(1, "pub")
-	r.mu.Lock()
-	r.rtcpWriters["pub"] = pub
-	r.mu.Unlock()
-	registerVideoSource(r, "pub", SlotCam, "h", 9002)
-
-	// Publisher itself joining must not PLI; a new subscriber joining must.
-	r.JoinChannel(1, "viewer")
-	if got := pub.pliCount(); got != 1 {
-		t.Fatalf("PLIs after join = %d, want 1", got)
-	}
-
-	// The PLI targets the subscriber's preferred layer SSRC (default mid=h).
-	pli := pub.pkts[0][0].(*rtcp.PictureLossIndication)
-	if pli.MediaSSRC != 9002 {
-		t.Fatalf("PLI MediaSSRC = %d, want 9002", pli.MediaSSRC)
+// Channel membership and peer preparation alone are not video consumption.
+func TestKeyframeRequestOnJoinRequiresVideoConsumer(t *testing.T) {
+	for _, consumer := range []string{"none", "watch", "stopped", "old-session", "old-publication", "denied", "recorder", "screen-recorder", "scoped-recorder"} {
+		t.Run(consumer, func(t *testing.T) {
+			r := NewRouter(nil)
+			r.JoinChannel(1, "pub")
+			r.JoinChannel(1, "viewer")
+			if consumer != "none" && consumer != "recorder" && consumer != "screen-recorder" && consumer != "scoped-recorder" {
+				generation := testVideoPublication(t, r, "pub", "viewer", SlotCam)
+				switch consumer {
+				case "stopped":
+					if _, err := r.WatchVideo("viewer", "pub", SlotCam, generation, 2, r.VideoWatchSession("viewer"), false); err != nil {
+						t.Fatal(err)
+					}
+				case "old-session":
+					r.watchSessions["viewer"]++
+				case "old-publication":
+					r.publications[publicationKey{"pub", SlotCam}]++
+				case "denied":
+					r.SetPublisherGuard(func(PublisherAccess) bool { return false })
+				}
+			}
+			switch consumer {
+			case "recorder", "screen-recorder":
+				r.addVideoOutput("viewer", &fakeTrackWriter{})
+				if consumer == "screen-recorder" {
+					r.SetTrackSlots("pub", map[string]string{"display": SlotScreen})
+				}
+			case "scoped-recorder":
+				r.addVideoOutput("viewer", &scopedCapture{})
+			}
+			if r.videoOutputs["viewer"] != nil {
+				// Server SDP authorization excludes recorder identities; recording
+				// has an independent final media guard and still needs keyframes.
+				r.SetPublisherGuard(func(PublisherAccess) bool { return false })
+			}
+			pub := &fakeRTCPWriter{}
+			r.rtcpWriters["pub"] = pub
+			registerVideoSource(r, "pub", SlotCam, "h", 9002)
+			registerVideoSource(r, "pub", SlotScreen, "h", 9003)
+			want := 0
+			switch consumer {
+			case "watch", "recorder", "screen-recorder":
+				want = 1
+			case "scoped-recorder":
+				want = 2
+			}
+			for _, start := range []func(){func() { r.JoinChannel(1, "viewer") }, func() { r.EnsurePublishers("viewer") }} {
+				// Remove coalescing so it cannot hide an unnecessary request.
+				clear(r.keyframeLast)
+				pub.pkts = nil
+				start()
+				if got := pub.pliCount(); got != want {
+					t.Fatalf("startup PLIs = %d, want %d", got, want)
+				}
+				if want == 1 {
+					ssrc := uint32(9002)
+					if consumer == "screen-recorder" {
+						ssrc = 9003
+					}
+					if pub.pkts[0][0].(*rtcp.PictureLossIndication).MediaSSRC != ssrc {
+						t.Fatal("startup requested an unwatched or unrecorded slot")
+					}
+				}
+			}
+		})
 	}
 }
 

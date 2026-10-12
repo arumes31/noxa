@@ -23,6 +23,32 @@ function fixture() {
     return { pc, state, track, transceiver, audio, calls, options, stats, time: value => { time = value; }, stop: () => { watching = false; } };
 }
 
+test("receiver recovery ignores retired same-track rows and requires exact track plus MID", async () => {
+    for (const mode of ["retired", "wrong-track", "ambiguous", "missing-mid"]) {
+        const f = fixture(), seen = [];
+        f.options.scheduler = async (_scope, candidates) => seen.push(candidates);
+        const stats = f.stats(), row = stats.get("video");
+        if (mode === "retired") stats.set("retired", { ...row, id: "retired", mid: "old", framesDecoded: 47131 });
+        if (mode === "wrong-track") row.trackIdentifier = "wrong";
+        if (mode === "ambiguous") stats.set("duplicate", { ...row, id: "duplicate" });
+        if (mode === "missing-mid") delete row.mid;
+        await createVideoReceiverRecovery(f.options)(f.pc, stats);
+        assert.equal(seen[0].length, ["retired", "missing-mid"].includes(mode) ? 1 : 0, mode);
+        if (seen[0].length) assert.equal(seen[0][0].instance, "video:123");
+    }
+});
+
+test("receiver replacement during capability wait cannot use a previous binding sample", async () => {
+    const f = fixture(); let resolve;
+    f.options.supported = () => new Promise(done => { resolve = done; });
+    const seen = []; f.options.scheduler = async (_scope, candidates) => seen.push(candidates);
+    const pending = createVideoReceiverRecovery(f.options)(f.pc, f.stats());
+    await Promise.resolve();
+    f.transceiver.mid = "replacement";
+    resolve(true); await pending;
+    assert.equal(seen[0].length, 0);
+});
+
 test("prolonged supported software decoding retries with a persistent bounded backoff", async () => {
     const f = fixture(), recover = createVideoReceiverRecovery(f.options);
     for (const at of [0, 5000, 10000, 15000, 20000, 25000, 30000, 35000]) { f.time(at); await recover(f.pc, f.stats()); }
@@ -125,7 +151,7 @@ test("receiver reset requests only its scoped output and waits for a decoded rep
             f.pc.getTransceivers = () => [f.audio, f.transceiver, replacement];
             f.pc.remoteDescription.sdp = f.pc.remoteDescription.sdp.replace("a=mid:2", "a=mid:3");
         },
-        sample: async () => new Map([["new", { type: "inbound-rtp", kind: "video", mid: "3", framesDecoded: 1 }]]),
+        sample: async () => new Map([["new", { type: "inbound-rtp", kind: "video", mid: "3", trackIdentifier: "new-track", framesDecoded: 1 }]]),
     });
     assert.equal(result, true);
     assert.deepEqual(calls, [["a", watched.request]]);

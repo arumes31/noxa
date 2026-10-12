@@ -1,3 +1,4 @@
+import { retainDisplayCapture, stopDisplayCapture } from "./display-capture-lease.js";
 import { t } from "./i18n.js";
 import { icon } from "./icons.js";
 import { getUserShareVolume, isUserShareMuted, onShareAudioChange, setUserShareMuted, setUserShareVolume } from "./audio.js";
@@ -148,7 +149,8 @@ export function createCallMedia(owner, { current, acceptedPeer, label, report, r
                     stream = await navigator.mediaDevices.getDisplayMedia({ video, ...displayAudioOptions("none") });
                     captureAudioMode = "none";
                 }
-                capture = { stream, stop: () => stream.getTracks().forEach(track => track.stop()) };
+                retainDisplayCapture(stream);
+                capture = { stream, stop: () => stopDisplayCapture(stream) };
                 if (!canPublish() || requests[source] !== request) { capture.stop(); return; }
                 audioMode = validateDisplayAudio(stream, captureAudioMode);
             }

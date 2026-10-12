@@ -115,3 +115,33 @@ func (r *Router) videoStartupDemand(delivery MediaDelivery, now time.Time) (int,
 	// the probe rate; this is not a new media bandwidth policy.
 	return int(min(demand, 1_000_000_000)), true
 }
+
+// videoStartupPublishersLocked filters channel startup requests to current
+// consumers. Caller holds Router.mu; watch locks follow the usual lock order.
+// Explicit watch starts/retries independently request a frame for idle capture.
+func (r *Router) videoStartupPublishersLocked(channelID int64, subscriber string) []videoSourceRef {
+	publishers := r.videoPublishersLocked(channelID, subscriber)
+	out := publishers[:0]
+	r.watchMu.RLock()
+	defer r.watchMu.RUnlock()
+	for _, source := range publishers {
+		// Recorder identities are not client SDP recipients. Their selected
+		// slots follow the tap policy; MediaGuard authorizes every final write.
+		if output := r.videoOutputs[subscriber]; output != nil {
+			_, scoped := output.(ScopedTrackWriter)
+			if scoped || source.slot == r.recordingVideoSlotLocked(source.publisher) {
+				out = append(out, source)
+			}
+			continue
+		}
+		if !r.publisherAllowedLocked(subscriber, source.publisher) {
+			continue
+		}
+		watch := r.watches[watchKey{subscriber, source.publisher, source.slot}]
+		if watch.active && watch.session != 0 && watch.session == r.watchSessions[subscriber] &&
+			watch.publication != 0 && watch.publication == r.publications[publicationKey(source)] {
+			out = append(out, source)
+		}
+	}
+	return out
+}
