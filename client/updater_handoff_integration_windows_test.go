@@ -187,6 +187,11 @@ func runHandoffFixtureParent(dir, name string) error {
 		return err
 	}
 	target := filepath.Join(dir, "handoff-copy.exe")
+	if name == "target path alias" {
+		// Keep an explicit alias in the handoff, as short-name Windows temp
+		// directories can do. Do not pre-normalize away the regression.
+		target = dir + string(os.PathSeparator) + "." + string(os.PathSeparator) + "handoff-copy.exe"
+	}
 	oldHash, err := hashUpdateExecutable(parent.image)
 	if err != nil {
 		return err
@@ -232,7 +237,7 @@ func TestUpdateHandoffSupervisorIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 	originalHash := sha256.Sum256(originalBytes)
-	for _, name := range []string{"ready", "final exits", "final timeout", "browser timeout", "parent timeout"} {
+	for _, name := range []string{"ready", "target path alias", "final exits", "final timeout", "browser timeout", "parent timeout"} {
 		t.Run(name, func(t *testing.T) {
 			dir, err := os.MkdirTemp("", "noxa-handoff-fixture-")
 			if err != nil {
@@ -322,7 +327,7 @@ func TestUpdateHandoffSupervisorIntegration(t *testing.T) {
 			if restored && !strings.Contains(string(result), "original app relaunched and confirmed ready") {
 				t.Fatalf("restoration was not genuinely acknowledged: %s", result)
 			}
-			if name == "ready" && string(result) != "ready" {
+			if (name == "ready" || name == "target path alias") && string(result) != "ready" {
 				t.Fatalf("unexpected supervisor error: %s", result)
 			}
 			if data, err := os.ReadFile(dataPath); err != nil || !bytes.Equal(data, []byte("unchanged settings and profile")) {

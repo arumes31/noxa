@@ -133,7 +133,16 @@ func launchUpdatedClient(exe string) error {
 	if err != nil {
 		return err
 	}
-	if pending == nil || resolved != pending.target {
+	if pending == nil || pending.handoff {
+		return fmt.Errorf("no verified update is waiting to restart")
+	}
+	// A supervised handoff may retain Windows short-name or case aliases.
+	// Resolve both names before comparing the same installed executable.
+	resolvedTarget, err := filepath.EvalSymlinks(pending.target)
+	if err != nil {
+		return err
+	}
+	if resolved != resolvedTarget {
 		return fmt.Errorf("no verified update is waiting to restart")
 	}
 	installedHash, err := hashUpdateExecutable(pending.target)
