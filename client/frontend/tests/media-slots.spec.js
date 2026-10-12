@@ -78,6 +78,12 @@ test.beforeEach(async ({ page }) => {
                 if (window.__media.delayQualityControl) return await new Promise(resolve => { window.__media.finishQualityControl = resolve; });
                 return "";
             } } } };
+        window.__captureLeases = { acquired: [], released: [] };
+        Object.assign(window.go.main.App, {
+            AcquireDisplayCaptureLease: async () => { const id = `lease-${window.__captureLeases.acquired.length}`; window.__captureLeases.acquired.push(id); return id; },
+            RefreshDisplayCaptureLease: async () => {},
+            ReleaseDisplayCaptureLease: async id => { window.__captureLeases.released.push(id); },
+        });
         Object.defineProperty(navigator.mediaDevices, "getDisplayMedia", { configurable: true, value: async (options) => {
             window.__media.captureOptions = options;
             const stream = capture();
@@ -112,6 +118,8 @@ test("repeated screen shares reuse senders and declare shared audio after every 
         await page.locator("#voice-screen").click();
         await page.getByRole("dialog").getByRole("button", { name: "Stop sharing", exact: true }).click();
         await expect.poll(() => page.evaluate(() => !!window.__noxa.state.shareStopping)).toBe(false);
+        await expect.poll(() => page.evaluate(() => window.__captureLeases.released.length)).toBe(i + 1);
+        expect(await page.evaluate(() => window.__captureLeases.acquired.length)).toBe(i + 1);
     }
     await page.evaluate(() => window.__media.audioContext.close());
 });
@@ -1294,3 +1302,26 @@ test("capture finishing after a server switch cannot publish into the new sessio
     expect(await page.evaluate(() => window.__media.offers)).toEqual([]);
     expect(await page.evaluate(() => window.__media.video.trackSlots().map(t => t.slot))).toEqual(["cam"]);
 });
+
+for (const cleanup of ["stop", "limits", "pagehide"]) {
+    test(`display lease follows main capture cleanup (${cleanup})`, async ({ page }) => {
+        await page.evaluate(() => {
+            window.go.main.App.AcquireDisplayCaptureLease = () => new Promise(resolve => { window.__finishLease = () => resolve("late-main"); });
+        });
+        await page.locator("#voice-screen").click();
+        await page.getByRole("dialog").getByRole("button", { name: "Start sharing", exact: true }).click();
+        await expect.poll(() => page.evaluate(() => !!window.__noxa.state.screenSharing)).toBe(true);
+        if (cleanup === "stop") {
+            await page.locator("#voice-screen").click();
+            await page.getByRole("dialog").getByRole("button", { name: "Stop sharing", exact: true }).click();
+        } else if (cleanup === "limits") {
+            await page.evaluate(async () => {
+                window.__media.failCaps = true;
+                await window.__media.video.applyVideoLimits({ video_max_bitrate: 500000 }).catch(() => {});
+            });
+        } else await page.evaluate(() => window.dispatchEvent(new Event("pagehide")));
+        await page.evaluate(() => window.__finishLease());
+        await expect.poll(() => page.evaluate(() => window.__captureLeases.released)).toEqual(["late-main"]);
+        if (cleanup !== "pagehide") expect(await page.evaluate(() => window.__media.displayTracks.every(t => t.readyState === "ended"))).toBe(true);
+    });
+}

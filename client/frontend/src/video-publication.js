@@ -1,3 +1,4 @@
+import { retainDisplayCapture, stopDisplayCapture } from "./display-capture-lease.js";
 import { escapeHTML as escapeTranslation } from "./markdown.js";
 // video-publication.js — camera/screen capture and publication lifecycle.
 import { captureCamera, applyCameraPreview } from "./camera-capture.js";
@@ -138,8 +139,8 @@ export function createVideoPublication({ policy }) {
                 return { changed: true, dimensionsChanged };
             } catch (error) {
                 if (!current()) return null;
+                stopDisplayCapture(state.shareStream);
                 for (const track of videoTracks()) track.stop();
-                for (const track of state.shareStream?.getTracks() || []) track.stop();
                 throw error;
             } finally {
                 if (videoLimitUpdates.get(pc) === update) videoLimitUpdates.delete(pc);
@@ -485,7 +486,7 @@ export function createVideoPublication({ policy }) {
         let nextRegion = null;
         const discardDisplay = (stream) => {
             nextRegion?.remove();
-            stream?.getTracks().forEach((track) => track.stop());
+            stopDisplayCapture(stream);
             shareTransceiver?.stop();
             if (state.shareVideoTransceiver === shareTransceiver) state.shareVideoTransceiver = null;
             if (stream?.getTracks().includes(state.shareAudioSender?.track)) {
@@ -530,6 +531,7 @@ export function createVideoPublication({ policy }) {
                 return;
             }
         }
+        retainDisplayCapture(display);
         if (!current()) {
             discardDisplay(display);
             return;
@@ -975,7 +977,7 @@ export function createVideoPublication({ policy }) {
         const screenSender = state.shareVideoTransceiver?.sender;
         if (screenSender) void screenSender.replaceTrack(null).catch(() => {});
         if (state.shareStream) {
-            state.shareStream.getTracks().forEach((t) => t.stop());
+            stopDisplayCapture(state.shareStream);
             state.shareStream = null;
         }
         clearRegionBox(); // (71)

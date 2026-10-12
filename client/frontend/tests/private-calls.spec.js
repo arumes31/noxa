@@ -346,6 +346,7 @@ for (const audioLabel of ["Application Audio", "System Audio"]) {
         }
         await page.getByRole("button", { name: "Stop sharing", exact: true }).click();
         expect(await page.evaluate(() => window.__displayStream.getTracks().every(t => t.readyState === "ended"))).toBe(true);
+        await expect.poll(() => page.evaluate(() => window.__captureLeases.released)).toEqual(["lease-0"]);
         expect(await page.evaluate(() => window.__displayOptions)).toMatchObject({ video: { displaySurface: "window" }, windowAudio: "window", systemAudio: "exclude" });
         await expect(page.getByRole("combobox", { name: "Share audio", exact: true })).toHaveValue(audioLabel === "Application Audio" ? "application" : "none");
     });
@@ -407,6 +408,7 @@ for (const source of ["camera", "screen"]) {
         await page.evaluate(() => window.__allowMedia());
         await expect.poll(() => page.evaluate(() => window.__lateMedia?.getTracks().every(track => track.readyState === "ended"))).toBe(true);
         await expect(page.locator(".call-media-tile")).toHaveCount(0);
+        await expect.poll(() => page.evaluate(() => window.__captureLeases.released)).toEqual(source === "screen" ? ["lease-0"] : []);
         await expect(page.locator(".private-call-panel")).toHaveCount(0);
     });
 }
@@ -460,6 +462,12 @@ async function mountCallRaceFixture(page) {
             StopPrivateCallForTab: async (_tab, id) => { window.__stops.push(id); },
             JoinChannelForTab: async () => { throw new Error("private call must not join a channel"); },
         } } };
+        window.__captureLeases = { acquired: [], released: [] };
+        Object.assign(window.go.main.App, {
+            AcquireDisplayCaptureLease: async () => { const id = `lease-${window.__captureLeases.acquired.length}`; window.__captureLeases.acquired.push(id); return id; },
+            RefreshDisplayCaptureLease: async () => {},
+            ReleaseDisplayCaptureLease: async id => { window.__captureLeases.released.push(id); },
+        });
         window.__callsModule = await import("/src/private-calls.js");
     });
 }

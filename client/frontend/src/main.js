@@ -1,3 +1,4 @@
+import { stopDisplayCapture } from "./display-capture-lease.js";
 import { createConnectionQuality } from './connection-quality.js';
 import { createLoginMemory } from './login-memory.js';
 import { createLoginFeedback } from './login-errors.js';
@@ -2033,7 +2034,8 @@ function ensureVoiceForChannel() {
             // A channel move retains microphone voice, but publication and
             // viewing consent belong to the channel that granted them.
             for (const track of state.localStream?.getVideoTracks() || []) { track.stop(); state.localStream.removeTrack(track); }
-            state.shareStream?.getTracks().forEach(track => track.stop());
+            stopDisplayCapture(state.shareStream);
+            clearRegionBox(); // Cancel a region picker before its track becomes shareStream.
             state.shareStream = null;
             state.screenSharing = false;
             state.shareStarting = null;
@@ -2482,7 +2484,7 @@ function teardownVoice() {
     applyDucking(false, []);
     clearVideoGrid();
     if (state.shareStream) {
-        state.shareStream.getTracks().forEach((t) => t.stop());
+        stopDisplayCapture(state.shareStream);
         state.shareStream = null;
         state.shareAudioSender = null;
         state.screenSharing = false;
