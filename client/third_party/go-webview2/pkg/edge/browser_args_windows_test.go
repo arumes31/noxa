@@ -9,7 +9,9 @@ import (
 )
 
 func TestHardwareBrowserArguments(t *testing.T) {
-	const feature = "ForceSoftwareForRtcLowResolutions"
+	const hardwareFeature = "ForceSoftwareForRtcLowResolutions"
+	const cameraRateControlFeature = "MediaFoundationUseSWBRCForH264Camera"
+	const feature = hardwareFeature + "," + cameraRateControlFeature
 	for _, tt := range []struct {
 		name      string
 		fragments []string
@@ -28,6 +30,12 @@ func TestHardwareBrowserArguments(t *testing.T) {
 			[]string{"--disable-features=" + feature, "--enable-features=Other", "", "--disable-features-extra=Keep", "--foo=first", "--foo=last"}},
 		{"switch terminator preserves positional text", []string{"-- --disable-features=Positional"},
 			[]string{"--disable-features=" + feature, "--", "--disable-features=Positional"}},
+		// The controller workaround must merge with an explicit caller policy,
+		// without selecting a software codec or changing unrelated GPU switches.
+		{"existing camera controller policy is deduplicated", []string{`"--disable-features=MediaFoundationUseSWBRCForH264Camera, msSmartScreenProtection"`, "--disable-features=" + cameraRateControlFeature, "--enable-features=Other --use-angle=d3d11"},
+			[]string{"--disable-features=" + cameraRateControlFeature + ",msSmartScreenProtection," + hardwareFeature, "--enable-features=Other", "--use-angle=d3d11"}},
+		{"controller-looking positional argument stays positional", []string{`--message="keep quoted text" -- --disable-features=` + cameraRateControlFeature},
+			[]string{"--disable-features=" + feature, "--message=keep quoted text", "--", "--disable-features=" + cameraRateControlFeature}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			before := append([]string(nil), tt.fragments...)
