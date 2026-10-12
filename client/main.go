@@ -16,6 +16,12 @@ var assets embed.FS
 
 func main() {
 	configureStandardLogger()
+	if handled, err := runUpdateSupervisorMode(); handled {
+		if err != nil {
+			os.Exit(1)
+		}
+		return
+	}
 	// (331) crash handler: a panic anywhere in main writes a timestamped
 	// crash log that is offered at the next start.
 	guardCrash("main", runApp)
@@ -39,6 +45,11 @@ func runApp() {
 			log.SetOutput(writer)
 			defer func() { _ = writer.Close() }()
 		}
+	}
+
+	if err := prepareLegacyUpdateBootstrap(); err != nil {
+		log.Printf("update compatibility startup failed: %v", err)
+		return
 	}
 
 	// Create an instance of the app structure

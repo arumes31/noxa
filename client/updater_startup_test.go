@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/hex"
 	"net"
+	"os"
 	"strconv"
+	"sync"
 	"testing"
 	"time"
 )
@@ -91,5 +93,39 @@ func TestUpdateChildEnvironmentReplacesInheritedHandshake(t *testing.T) {
 	env := updateChildEnvironment([]string{"PATH=example", updateReadyAddressEnv + "=stale", updateReadyNonceEnv + "=stale"}, "127.0.0.1:"+strconv.Itoa(1234), "new")
 	if len(env) != 3 || env[0] != "PATH=example" || env[1] != updateReadyAddressEnv+"=127.0.0.1:1234" || env[2] != updateReadyNonceEnv+"=new" {
 		t.Fatalf("stale handshake was inherited: %v", env)
+	}
+}
+
+func TestConfirmUpdateStartupConcurrentCallsAcknowledgeOnce(t *testing.T) {
+	readiness, err := newUpdateReadiness()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer readiness.close()
+	t.Setenv(updateReadyAddressEnv, readiness.address())
+	t.Setenv(updateReadyNonceEnv, readiness.nonce)
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	ready := make(chan error, 1)
+	go func() { ready <- readiness.wait(ctx, os.Getpid()); readiness.close() }()
+	start := make(chan struct{})
+	results := make(chan error, 16)
+	var callers sync.WaitGroup
+	for range 16 {
+		callers.Go(func() { <-start; results <- (&App{}).ConfirmUpdateStartup() })
+	}
+	close(start)
+	callers.Wait()
+	close(results)
+	for err := range results {
+		if err != nil {
+			t.Fatalf("duplicate confirmation reused or cancelled the acknowledged transition: %v", err)
+		}
+	}
+	if err := <-ready; err != nil {
+		t.Fatal(err)
+	}
+	if err := (&App{}).ConfirmUpdateStartup(); err != nil {
+		t.Fatalf("later confirmation was not idempotent: %v", err)
 	}
 }

@@ -485,6 +485,6 @@ func (a *App) ApplyAndRestart() string {
 	return ""
 }
 
-var restartLaunch = launchUpdatedClient
+var restartLaunch = launchClientUpdateAfterExit
 
 var wailsQuit = wailsRuntime.Quit

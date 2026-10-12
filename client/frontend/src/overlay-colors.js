@@ -1,6 +1,7 @@
 const hex = rgb => "#" + rgb.map(channel => channel.toString(16).padStart(2,"0")).join("");
 const clamp = (value, fallback, min, max) => Math.min(max,Math.max(min,Number.isFinite(value) && value !== 0 ? Math.round(value) : fallback));
 export function overlayColorPreferences(settings = {}) {
+    settings ??= {};
     const start = clamp(settings.gaming_overlay_blue_start,195,180,220);
     const end = Math.max(start+20,clamp(settings.gaming_overlay_blue_end,235,200,240));
     return {self:/^#[0-9a-f]{6}$/i.test(settings.gaming_overlay_self_color || "") ? settings.gaming_overlay_self_color.toLowerCase() : "#43c798",start,end};

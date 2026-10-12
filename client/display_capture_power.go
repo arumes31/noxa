@@ -239,6 +239,9 @@ func (p *displayCapturePower) shutdown() error {
 // AcquireDisplayCaptureLease keeps an actively captured display and system awake.
 // Failure does not grant a lease; capture can continue without this protection.
 func (a *App) AcquireDisplayCaptureLease() (string, error) {
+	if a.UpdateStartupPending() {
+		return "", errors.New(updateStartupPendingMessage)
+	}
 	id, err := a.displayCapturePower.acquire()
 	if err != nil {
 		return "", fmt.Errorf("keep display capture awake: %w", err)

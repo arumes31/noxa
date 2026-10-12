@@ -23,10 +23,12 @@ var clientUpdateRecovery struct {
 }
 
 type appliedClientUpdate struct {
-	target   string
-	previous string
-	oldHash  [sha256.Size]byte
-	newHash  [sha256.Size]byte
+	target            string
+	previous          string
+	oldHash           [sha256.Size]byte
+	newHash           [sha256.Size]byte
+	handoff           bool
+	retainFailedImage bool
 }
 
 // The test helper shortens these waits only inside a disposable process.
@@ -131,7 +133,16 @@ func launchUpdatedClient(exe string) error {
 	if err != nil {
 		return err
 	}
-	if pending == nil || resolved != pending.target {
+	if pending == nil || pending.handoff {
+		return fmt.Errorf("no verified update is waiting to restart")
+	}
+	// A supervised handoff may retain Windows short-name or case aliases.
+	// Resolve both names before comparing the same installed executable.
+	resolvedTarget, err := filepath.EvalSymlinks(pending.target)
+	if err != nil {
+		return err
+	}
+	if resolved != resolvedTarget {
 		return fmt.Errorf("no verified update is waiting to restart")
 	}
 	installedHash, err := hashUpdateExecutable(pending.target)
@@ -234,7 +245,9 @@ func restoreFailedClientUpdate(pending *appliedClientUpdate, cause error) error 
 		restoreErr := os.Rename(failedPath, pending.target)
 		return fmt.Errorf("%w; could not restore previous executable: %v; reinstating update: %v; previous executable retained at %s", cause, err, restoreErr, pending.previous)
 	}
-	_ = os.Remove(failedPath)
+	if !pending.retainFailedImage {
+		_ = os.Remove(failedPath)
+	}
 	clientUpdateRecovery.pending = nil
 	return fmt.Errorf("%w; %w", cause, errUpdateRestored)
 }

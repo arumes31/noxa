@@ -27,13 +27,13 @@ func globalErrorHandler(err error) {
 		return
 	}
 
-	fmt.Printf("[WebView2 Error] %v\n", err)
+	log.Printf("[WebView2 Error] %v", err)
 
 	stackBuf := make([]uintptr, 64)
 	stackSize := runtime.Callers(2, stackBuf)
 	frames := runtime.CallersFrames(stackBuf[:stackSize])
 
-	fmt.Println("\nStack trace:")
+	log.Print("Stack trace:")
 	stackIndex := 1
 	for {
 		frame, more := frames.Next()
@@ -183,7 +183,7 @@ func (e *Chromium) Embed(hwnd uintptr) bool {
 	// Chromium otherwise elects to replace working H264 hardware encoders with
 	// software below 360p. Keep hardware through bandwidth-driven resolution changes;
 	// this compatibility flag does not bypass hardware capability or error checks.
-	browserArgs, err := hardwareBrowserArguments(e.AdditionalBrowserArgs)
+	browserArgs, err := updateBrowserStartup.arguments(e.AdditionalBrowserArgs)
 	if err != nil {
 		e.errorCallback(fmt.Errorf("invalid WebView2 browser arguments: %w", err))
 		return false
@@ -360,6 +360,8 @@ func (e *Chromium) CreateCoreWebView2ControllerCompleted(res uintptr, controller
 	if err != nil {
 		e.errorCallback(err)
 	}
+
+	e.captureUpdateBrowserProcessID()
 
 	e.webview.vtbl.AddRef.Call(uintptr(unsafe.Pointer(e.webview)))
 	err = e.webview.AddWebMessageReceived(e.webMessageReceived, &token)
