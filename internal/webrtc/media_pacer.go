@@ -302,8 +302,11 @@ func (p *mediaPacer) run() {
 				}
 				packet := p.popLocked()
 				p.mu.Unlock()
-				p.writePacket(packet)
-				budget -= float64(packet.size)
+				if p.writePacket(packet) {
+					// Only an authorized write attempt spends network pacing credit.
+					// Final permission/ticket rejection never reaches the writer.
+					budget -= float64(packet.size)
+				}
 				p.mu.Lock()
 			}
 			p.mu.Unlock()
@@ -311,7 +314,7 @@ func (p *mediaPacer) run() {
 	}
 }
 
-func (p *mediaPacer) writePacket(packet pacedPacket) {
+func (p *mediaPacer) writePacket(packet pacedPacket) bool {
 	attempted := false
 	write := interceptor.RTPWriterFunc(func(header *rtp.Header, payload []byte, attrs interceptor.Attributes) (int, error) {
 		attempted = true
@@ -344,7 +347,7 @@ func (p *mediaPacer) writePacket(packet pacedPacket) {
 	if p.egress == nil { // Standalone pacing tests have no router bindings.
 		n, err := write.Write(&packet.header, packet.payload, packet.attrs)
 		p.recordVideoWrite(packet, attempted, n, err, mediaDropUnclassified)
-		return
+		return attempted
 	}
 	p.egress.mu.Lock()
 	stream := p.egress.streams[packet.stream.bindingID]
@@ -355,6 +358,7 @@ func (p *mediaPacer) writePacket(packet pacedPacket) {
 	} else {
 		p.recordVideoWrite(packet, false, 0, nil, mediaDropMissingBinding)
 	}
+	return attempted
 }
 
 func (p *mediaPacer) Close() error {
