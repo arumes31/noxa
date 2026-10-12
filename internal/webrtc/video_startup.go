@@ -139,7 +139,7 @@ func (r *Router) videoStartupPublishersLocked(channelID int64, subscriber string
 		}
 		watch := r.watches[watchKey{subscriber, source.publisher, source.slot}]
 		if watch.active && watch.session != 0 && watch.session == r.watchSessions[subscriber] &&
-			watch.publication != 0 && watch.publication == r.publications[publicationKey{source.publisher, source.slot}] {
+			watch.publication != 0 && watch.publication == r.publications[publicationKey(source)] {
 			out = append(out, source)
 		}
 	}

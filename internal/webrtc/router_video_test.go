@@ -232,12 +232,13 @@ func TestKeyframeRequestOnJoinRequiresVideoConsumer(t *testing.T) {
 					r.SetPublisherGuard(func(PublisherAccess) bool { return false })
 				}
 			}
-			if consumer == "recorder" || consumer == "screen-recorder" {
+			switch consumer {
+			case "recorder", "screen-recorder":
 				r.addVideoOutput("viewer", &fakeTrackWriter{})
 				if consumer == "screen-recorder" {
 					r.SetTrackSlots("pub", map[string]string{"display": SlotScreen})
 				}
-			} else if consumer == "scoped-recorder" {
+			case "scoped-recorder":
 				r.addVideoOutput("viewer", &scopedCapture{})
 			}
 			if r.videoOutputs["viewer"] != nil {
@@ -250,9 +251,10 @@ func TestKeyframeRequestOnJoinRequiresVideoConsumer(t *testing.T) {
 			registerVideoSource(r, "pub", SlotCam, "h", 9002)
 			registerVideoSource(r, "pub", SlotScreen, "h", 9003)
 			want := 0
-			if consumer == "watch" || consumer == "recorder" || consumer == "screen-recorder" {
+			switch consumer {
+			case "watch", "recorder", "screen-recorder":
 				want = 1
-			} else if consumer == "scoped-recorder" {
+			case "scoped-recorder":
 				want = 2
 			}
 			for _, start := range []func(){func() { r.JoinChannel(1, "viewer") }, func() { r.EnsurePublishers("viewer") }} {
