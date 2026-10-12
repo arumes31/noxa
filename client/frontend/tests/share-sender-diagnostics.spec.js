@@ -1,6 +1,7 @@
 import { test, expect } from "./fixtures.js";
 
-test.beforeEach(async ({ page }) => {
+test.beforeEach(async ({ page }, testInfo) => {
+    if (testInfo.title.includes("hung sender stats")) await page.clock.install();
     await page.route("**/sender-diagnostics-fixture", route => route.fulfill({ contentType: "text/html", body: `<!doctype html><html lang="en"><head><link rel="stylesheet" href="/src/style.css"></head><body><section id="sharing-status" class="sharing-status"></section></body></html>` }));
     await page.goto("/sender-diagnostics-fixture");
     await page.evaluate(async () => {
@@ -34,9 +35,10 @@ test.beforeEach(async ({ page }) => {
         window.runtime = { ClipboardSetText: async value => { window.__sender.copied = value; return true; } };
         const module = await import("/src/share-status.js");
         window.__sender.stop = module.stopShareStatus;
-        module.startShareStatus({ stream, pc, scope: { tabID: "qa", generation: 1, session: 1, clientID: "self", channelID: 1 },
+        window.__sender.start = () => module.startShareStatus({ stream, pc, scope: { tabID: "qa", generation: 1, session: 1, clientID: "self", channelID: 1 },
             preset: { width: 1920, height: 1080, fps: 60 }, surface: "screen", audioMode: "none", generation: "4",
             stop: () => module.stopShareStatus(), change: () => {}, changeQuality: () => {}, reduction: () => "" });
+        window.__sender.start();
     });
 });
 
@@ -83,4 +85,43 @@ test("failed or stopped sender measurements do not leave old frame rates or copi
     await expect(panel.locator(".sharing-warning")).toBeHidden();
     await page.evaluate(() => window.__sender.stop());
     await expect(panel).toBeHidden();
+});
+
+
+test("hung sender stats stay single-flight across timeout and panel restart, then recover after late settlement", async ({ page }) => {
+    await page.evaluate(() => {
+        const fixture = window.__sender, sender = window.__noxa.state.shareVideoTransceiver.sender;
+        fixture.stop();
+        const normal = sender.getStats;
+        fixture.calls = 0;
+        sender.getStats = () => {
+            fixture.calls++;
+            return fixture.calls === 1 ? new Promise(resolve => { fixture.resolveLate = resolve; }) : normal();
+        };
+        fixture.start();
+    });
+    await page.clock.runFor(6000);
+    expect(await page.evaluate(() => window.__sender.calls)).toBe(1);
+    await page.evaluate(async () => {
+        const { sampleSenderStats } = await import("/src/peer-stats.js");
+        // Recovery's fresh request shares the timed-out status request too.
+        await sampleSenderStats(window.__noxa.state.shareVideoTransceiver.sender, { fresh: true }).catch(() => {});
+        window.__sender.stop(); window.__sender.start();
+    });
+    await page.clock.runFor(30000);
+    expect(await page.evaluate(() => window.__sender.calls)).toBe(1);
+    await expect(page.locator(".sharing-meta")).toContainText("\u2014 fps");
+    // The late failed-generation result must not become the new panel's sample.
+    await page.evaluate(() => window.__sender.resolveLate(new Map([["late", {
+        id: "late", type: "outbound-rtp", kind: "video", ssrc: 101, timestamp: 1000,
+        frameWidth: 64, frameHeight: 64, framesEncoded: 1, framesSent: 1,
+    }]])));
+    await expect(page.locator(".sharing-meta")).not.toContainText("64 \u00d7 64");
+    await page.clock.runFor(4500);
+    expect(await page.evaluate(() => window.__sender.calls)).toBeGreaterThan(1);
+    await expect(page.locator(".sharing-meta")).toContainText("Sending 1920 \u00d7 1080 \u00b7 10 fps");
+    await page.evaluate(() => window.__sender.stop());
+    const stoppedCalls = await page.evaluate(() => window.__sender.calls);
+    await page.clock.runFor(10000);
+    expect(await page.evaluate(() => window.__sender.calls)).toBe(stoppedCalls);
 });

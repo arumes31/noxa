@@ -12,7 +12,7 @@ const { createVideoSenderRecovery } = await import("../src/video-sender-hardware
 const { createHardwareRecoveryScheduler } = await import("../src/video-hardware-recovery.js");
 
 function fixture(options = {}) {
-    let parameters = { degradationPreference: "maintain-framerate", encodings: [{ active: true, scaleResolutionDownBy: 1, maxBitrate: 8000000 }] };
+    let parameters = { degradationPreference: "maintain-framerate", encodings: [{ active: true, scaleResolutionDownBy: options.scale ?? 1, maxBitrate: 8000000 }] };
     let frames = 0;
     const writes = [], queries = [];
     const size = options.size || { width: 1920, height: 1080 };
@@ -27,11 +27,12 @@ function fixture(options = {}) {
         },
         async getStats() {
             const scale = parameters.encodings[0].scaleResolutionDownBy || 1;
+            const input = options.adaptedSize || size;
             await options.onStats?.(scale);
             frames++;
             return new Map([
                 ["v", { id: "v", type: "outbound-rtp", kind: "video", codecId: "c", timestamp: frames * 150,
-                    framesEncoded: options.stale ? 1 : frames, frameWidth: size.width / scale, frameHeight: size.height / scale,
+                    framesEncoded: options.stale ? 1 : frames, frameWidth: input.width / scale, frameHeight: input.height / scale,
                     powerEfficientEncoder: false, qualityLimitationReason: "none", ...(options.capture ? {
                         mediaSourceId: "source", encoderImplementation: "OpenH264" } : {}), ...options.row }],
                 ["c", { id: "c", type: "codec", mimeType: "video/H264", sdpFmtpLine: "profile-level-id=42001f;packetization-mode=1" }],
@@ -55,17 +56,17 @@ function fixture(options = {}) {
 test("hardware retry pulses one existing sender and restores its source quality", async () => {
     const f = fixture();
     assert.equal(await f.api.retryVideoHardware("screen", f.track), true);
-    assert.deepEqual(f.writes.map(p => p.encodings[0].scaleResolutionDownBy), [1, 2, 1]);
+    assert.deepEqual(f.writes.map(p => p.encodings[0].scaleResolutionDownBy), [2, 1]);
     assert.deepEqual(f.queries.map(q => [q.video.width, q.video.height]), [[1920, 1080], [960, 540]]);
     assert.equal(f.sender.track, f.track);
     assert.equal(f.track.readyState, "live");
     assert.deepEqual(f.sender.getParameters(), { degradationPreference: "maintain-framerate", encodings: [{ active: true, scaleResolutionDownBy: 1, maxBitrate: 8000000 }] });
 });
 
-test("hardware retry skips network adaptation, unsupported hardware, and stale frames", async () => {
-    for (const options of [{ row: { qualityLimitationReason: "bandwidth", frameWidth: 1280, frameHeight: 720 } },
+test("hardware retry skips invalid geometry, unsupported hardware, and stale frames", async () => {
+    for (const options of [{ row: { frameWidth: 1280, frameHeight: 800 } },
         { row: { qualityLimitationReason: "other" } }, { row: { qualityLimitationReason: undefined } },
-        { row: { frameWidth: 320, frameHeight: 180 } }, { row: { frameWidth: 1280, frameHeight: 720 } },
+        { row: { frameWidth: 320, frameHeight: 180 } }, { row: { frameWidth: 2560, frameHeight: 1440 } },
         { row: { powerEfficientEncoder: true } }, { capable: false }, { stale: true }]) {
         const f = fixture(options);
         assert.equal(await f.api.retryVideoHardware("screen", f.track), false);
@@ -83,7 +84,7 @@ test("the verified 360p geometry can pulse to even 180p without compounding adap
 test("CPU-limited software can retry hardware while keeping pulse geometry below the current load", async () => {
     const f = fixture({ row: { qualityLimitationReason: "cpu" } });
     assert.equal(await f.api.retryVideoHardware("screen", f.track), true);
-    assert.deepEqual(f.writes.map(p => p.encodings[0].scaleResolutionDownBy), [1, 2, 1]);
+    assert.deepEqual(f.writes.map(p => p.encodings[0].scaleResolutionDownBy), [2, 1]);
 });
 
 test("encoder rejection restores only the pulse parameters", async () => {
@@ -100,9 +101,9 @@ test("a stopped or replaced source is never restored by late retry completion", 
     const f = fixture({ onWrite(parameters, { sender }) {
         if (parameters.encodings[0].scaleResolutionDownBy === 2) sender.track = replacement;
     } });
-    assert.equal(await f.api.retryVideoHardware("screen", f.track), true);
+    assert.equal(await f.api.retryVideoHardware("screen", f.track), false);
     assert.equal(f.sender.track, replacement);
-    assert.equal(f.writes.length, 2);
+    assert.equal(f.writes.length, 1);
 });
 
 test("loss of retry eligibility still restores a live source's owned parameters", async () => {
@@ -110,10 +111,10 @@ test("loss of retry eligibility still restores a live source's owned parameters"
     const f = fixture({ onWrite(parameters) {
         if (parameters.encodings[0].scaleResolutionDownBy === 2) relevant = false;
     } });
-    assert.equal(await f.api.retryVideoHardware("screen", f.track, () => relevant), true);
+    assert.equal(await f.api.retryVideoHardware("screen", f.track, () => relevant), false);
     assert.equal(f.sender.getParameters().encodings[0].scaleResolutionDownBy, 1);
     assert.equal(f.sender.getParameters().degradationPreference, "maintain-framerate");
-    assert.equal(f.writes.length, 3);
+    assert.equal(f.writes.length, 2);
 });
 
 test("bandwidth changes wait for the pulse and retain the newer budget", async () => {
@@ -125,12 +126,12 @@ test("bandwidth changes wait for the pulse and retain the newer budget", async (
     await active;
     f.state.mediaLimits = { video_max_bitrate: 4000000 };
     const caps = f.api.applySendCaps();
-    assert.equal(f.writes.length, 2);
+    assert.equal(f.writes.length, 1);
     finish();
     await Promise.all([retry, caps]);
     assert.equal(f.sender.getParameters().encodings[0].maxBitrate, 3400000);
     assert.equal(f.sender.getParameters().encodings[0].scaleResolutionDownBy, 1);
-    assert.equal(f.writes.length, 4);
+    assert.equal(f.writes.length, 3);
 });
 
 test("a hung sender stats call times out and is reused without parameter changes", async () => {
@@ -151,7 +152,7 @@ test("later parameter ownership survives a retry cleanup", async () => {
         await sender.setParameters({ ...parameters, degradationPreference: "balanced",
             encodings: [{ ...parameters.encodings[0], scaleResolutionDownBy: 3, maxBitrate: 2345678 }] });
     } });
-    assert.equal(await f.api.retryVideoHardware("screen", f.track, () => relevant), true);
+    assert.equal(await f.api.retryVideoHardware("screen", f.track, () => relevant), false);
     assert.equal(f.sender.getParameters().degradationPreference, "balanced");
     assert.equal(f.sender.getParameters().encodings[0].scaleResolutionDownBy, 3);
     assert.equal(f.sender.getParameters().encodings[0].maxBitrate, 2345678);
@@ -162,7 +163,7 @@ test("the elapsed pulse deadline restores quality before a delayed stats read fi
     const pending = new Promise(resolve => { finish = resolve; });
     const f = fixture({ onStats: scale => scale === 2 ? pending : undefined });
     try {
-        assert.equal(await f.api.retryVideoHardware("screen", f.track), true);
+        assert.equal(await f.api.retryVideoHardware("screen", f.track), false);
         assert.equal(f.sender.getParameters().encodings[0].scaleResolutionDownBy, 1);
         assert.equal(f.sender.getParameters().degradationPreference, "maintain-framerate");
     } finally { finish(); }
@@ -172,7 +173,7 @@ test("the elapsed pulse deadline restores quality before a delayed stats read fi
 test("bandwidth-limited unadapted software retains one sender, cap and pulse restoration", async () => {
     const f = fixture({ row: { qualityLimitationReason: "bandwidth" } });
     assert.equal(await f.api.retryVideoHardware("screen", f.track), true);
-    assert.deepEqual(f.writes.map(p => p.encodings[0].scaleResolutionDownBy), [1, 2, 1]);
+    assert.deepEqual(f.writes.map(p => p.encodings[0].scaleResolutionDownBy), [2, 1]);
     assert.ok(f.writes.every(p => p.encodings.length === 1 && p.encodings[0].maxBitrate === 8000000));
     assert.equal(f.sender.track, f.track);
     assert.equal(f.sender.getParameters().degradationPreference, "maintain-framerate");
@@ -185,11 +186,11 @@ test("delayed bandwidth reason remains eligible only while geometry and other gu
         options.onStats = () => { if (++reads === atRead) options.row.qualityLimitationReason = "bandwidth"; };
         const f = fixture(options);
         assert.equal(await f.api.retryVideoHardware("screen", f.track), true);
-        assert.deepEqual(f.writes.map(p => p.encodings[0].scaleResolutionDownBy), [1, 2, 1]);
+        assert.deepEqual(f.writes.map(p => p.encodings[0].scaleResolutionDownBy), [2, 1]);
     }
 });
 
-test("delayed adaptation or unknown limitation prevents the pulse and restores owned preference", async () => {
+test("delayed adaptation or unknown limitation prevents the pulse without changing preference", async () => {
     for (const atRead of [2, 3]) {
         for (const change of [{ frameWidth: 1280, frameHeight: 720 }, { qualityLimitationReason: "other" }]) {
             const options = { row: { qualityLimitationReason: "bandwidth" } };
@@ -197,7 +198,7 @@ test("delayed adaptation or unknown limitation prevents the pulse and restores o
             options.onStats = () => { if (++reads === atRead) Object.assign(options.row, change); };
             const f = fixture(options);
             assert.equal(await f.api.retryVideoHardware("screen", f.track), false);
-            assert.deepEqual(f.writes.map(p => p.encodings[0].scaleResolutionDownBy), atRead === 2 ? [] : [1, 1]);
+            assert.deepEqual(f.writes.map(p => p.encodings[0].scaleResolutionDownBy), []);
             assert.equal(f.sender.getParameters().degradationPreference, "maintain-framerate");
         }
     }
@@ -211,7 +212,7 @@ test("zero encoded output can pulse only with prior-hardware proof and independe
     options.onStats = scale => { if (scale === 2) options.row.framesEncoded = 1; };
     const actual = fixture(options);
     assert.equal(await actual.api.retryVideoHardware("screen", actual.track, () => true, captureProof), true);
-    assert.deepEqual(actual.writes.map(p => p.encodings[0].scaleResolutionDownBy), [1, 2, 1]);
+    assert.deepEqual(actual.writes.map(p => p.encodings[0].scaleResolutionDownBy), [2, 1]);
     assert.ok(actual.writes.every(p => p.encodings.length === 1 && p.encodings[0].maxBitrate === 8000000));
     assert.equal(actual.sender.track, actual.track);
 });
@@ -233,7 +234,7 @@ test("stalled-output pulse rejects absent proof, idle, changed or stale capture 
         const f = fixture(options);
         const proof = mode === "no-proof" ? null : mode === "wrong-proof" ? { ...captureProof, sourceId: "other" } : captureProof;
         assert.equal(await f.api.retryVideoHardware("screen", f.track, () => true, proof), false, mode);
-        assert.deepEqual(f.writes.map(p => p.encodings[0].scaleResolutionDownBy), mode.startsWith("late-") ? [1, 1] : [], mode);
+        assert.deepEqual(f.writes.map(p => p.encodings[0].scaleResolutionDownBy), [], mode);
         assert.equal(f.sender.getParameters().degradationPreference, "maintain-framerate");
     }
 });
@@ -257,8 +258,52 @@ test("default sender recovery reaches both capability probes with zero encoded F
         await recover(f.pc, await f.sender.getStats());
     }
     assert.deepEqual(f.queries.map(q => [q.video.width, q.video.height, q.video.framerate]), [[1920, 1080, 60], [960, 540, 60]]);
-    assert.deepEqual(f.writes.map(p => p.encodings[0].scaleResolutionDownBy), [1, 2, 1]);
+    assert.deepEqual(f.writes.map(p => p.encodings[0].scaleResolutionDownBy), [2, 1]);
     assert.ok(f.writes.every(p => p.encodings.length === 1 && p.encodings[0].maxBitrate === 8000000));
     assert.equal(f.sender.track, f.track);
     assert.equal(f.sender.getParameters().degradationPreference, "maintain-framerate");
+});
+
+
+test("adapted 720p on a 1080p capture pulses existing scale without overriding adaptation or caps", async () => {
+    const f = fixture({ adaptedSize: { width: 1280, height: 720 }, row: { qualityLimitationReason: "bandwidth" } });
+    assert.equal(await f.api.retryVideoHardware("screen", f.track), true);
+    assert.deepEqual(f.writes.map(p => p.encodings[0].scaleResolutionDownBy), [2, 1]);
+    assert.deepEqual(f.queries.map(q => [q.video.width, q.video.height]), [[1280, 720], [640, 360]]);
+    assert.ok(f.writes.every(p => p.degradationPreference === "maintain-framerate" && p.encodings.length === 1 && p.encodings[0].maxBitrate === 8000000));
+    assert.deepEqual(f.track.getSettings(), { width: 1920, height: 1080, frameRate: 60 });
+});
+
+test("unchanged output size is a failed bounded pulse and restores the original scale", async () => {
+    const f = fixture({ row: { frameWidth: 1280, frameHeight: 720 } });
+    assert.equal(await f.api.retryVideoHardware("screen", f.track), false);
+    assert.deepEqual(f.writes.map(p => p.encodings[0].scaleResolutionDownBy), [2, 1]);
+    assert.ok(f.writes.every(p => p.degradationPreference === "maintain-framerate"));
+});
+
+
+test("adapted recovery multiplies the original explicit scale and preserves another degradation policy", async () => {
+    const f = fixture({ scale: 2, size: { width: 3840, height: 2160 }, adaptedSize: { width: 2560, height: 1440 } });
+    await f.sender.setParameters({ ...f.sender.getParameters(), degradationPreference: "balanced" });
+    f.writes.length = 0;
+    assert.equal(await f.api.retryVideoHardware("screen", f.track), true);
+    assert.deepEqual(f.writes.map(p => p.encodings[0].scaleResolutionDownBy), [4, 2]);
+    assert.ok(f.writes.every(p => p.degradationPreference === "balanced"));
+    assert.deepEqual(f.queries.map(q => [q.video.width, q.video.height]), [[1280, 720], [640, 360]]);
+});
+
+test("concurrent native adaptation is not reported as the expected half-size recovery", async () => {
+    const options = { adaptedSize: { width: 1280, height: 720 } };
+    options.onStats = scale => { if (scale === 2) options.adaptedSize.width = 960, options.adaptedSize.height = 540; };
+    const f = fixture(options);
+    assert.equal(await f.api.retryVideoHardware("screen", f.track), false);
+    assert.deepEqual(f.writes.map(p => p.encodings[0].scaleResolutionDownBy), [2, 1]);
+});
+
+test("a changed sender-stat identity on the final preflight cannot mutate a sender", async () => {
+    let reads = 0; const options = { row: {} };
+    options.onStats = () => { if (++reads === 3) options.row.ssrc = 999; };
+    const f = fixture(options);
+    assert.equal(await f.api.retryVideoHardware("screen", f.track), false);
+    assert.equal(f.writes.length, 0);
 });

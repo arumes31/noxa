@@ -37,8 +37,8 @@ test("supported sustained software encoding retries once per backoff, not per st
     assert.equal(f.calls.length, 2);
 });
 
-test("adapted, unknown-limit, unsupported, replaced and inactive publications cannot pulse", async () => {
-    for (const mode of ["adapted", "adapted-bandwidth", "limited", "unknown", "unsupported", "replaced", "inactive", "ended", "scope", "codec"]) {
+test("unknown-limit, unsupported, replaced and inactive publications cannot pulse", async () => {
+    for (const mode of ["limited", "unknown", "unsupported", "replaced", "inactive", "ended", "scope", "codec"]) {
         const f = fixture();
         if (mode === "unsupported") f.options.capable = async () => false;
         if (mode === "replaced") f.publication.generation = "2";
@@ -48,7 +48,7 @@ test("adapted, unknown-limit, unsupported, replaced and inactive publications ca
         const recover = createVideoSenderRecovery(f.options);
         for (const at of [0, 5000, 10000, 15000]) {
             f.time(at);
-            const changes = mode === "adapted" || mode === "adapted-bandwidth" ? { frameWidth: 1280, frameHeight: 720, qualityLimitationReason: mode === "adapted-bandwidth" ? "bandwidth" : "none" } : mode === "limited" ? { qualityLimitationReason: "other" } :
+            const changes = mode === "limited" ? { qualityLimitationReason: "other" } :
                 mode === "unknown" ? { powerEfficientEncoder: undefined } : {};
             const stats = f.stats(changes);
             if (mode === "codec") stats.get("codec").mimeType = "video/VP8";
@@ -116,7 +116,7 @@ test("unadapted bandwidth-limited software retries with the existing backoff", a
     assert.equal(f.calls.length, 2);
 });
 
-test("bandwidth adaptation interrupts dwell until exact source geometry returns", async () => {
+test("changing adapted geometry restarts the sustained-software dwell", async () => {
     const f = fixture(), recover = createVideoSenderRecovery(f.options);
     for (const at of [0, 5000]) { f.time(at); await recover(f.pc, f.stats({ qualityLimitationReason: "bandwidth" })); }
     f.time(10000); await recover(f.pc, f.stats({ qualityLimitationReason: "bandwidth", frameWidth: 1280, frameHeight: 720 }));
@@ -155,7 +155,7 @@ test("previous hardware and progressing bound capture recover zero-output softwa
 
 test("capture cannot authorize software retries without exact prior hardware and fresh owned input", async () => {
     for (const mode of ["no-hardware", "different-geometry", "different-source", "source-switch", "wrong-track", "stale", "stale-outbound", "future", "missing",
-        "idle", "counter-reset", "timestamp-reset", "unknown-encoder", "adapted", "hardware-stall"]) {
+        "idle", "counter-reset", "timestamp-reset", "unknown-encoder", "hardware-stall"]) {
         const f = fixture(), recover = createVideoSenderRecovery(f.options);
         if (mode !== "no-hardware") await recover(f.pc, withCapture(f, { powerEfficientEncoder: true,
             ...(mode === "different-geometry" ? { frameWidth: 1280, frameHeight: 720 } : {}) }));
@@ -165,7 +165,6 @@ test("capture cannot authorize software retries without exact prior hardware and
                 mode === "counter-reset" && at >= 10000 ? { frames: at - 10000 } :
                 mode === "timestamp-reset" && at >= 10000 ? { timestamp: 1 } : {};
             const stats = withCapture(f, { framesEncoded: 10, framesPerSecond: 0,
-                ...(mode === "adapted" ? { frameWidth: 1280, frameHeight: 720 } : {}),
                 ...(mode === "hardware-stall" ? { powerEfficientEncoder: true } : {}),
                 ...(mode === "unknown-encoder" ? { encoderImplementation: "unknown" } : {}) }, source);
             if (mode === "different-source" || (mode === "source-switch" && at >= 10000)) {
@@ -198,4 +197,16 @@ test("capture-only hardware activity cannot refill the sender retry budget", asy
     assert.equal(f.calls.length, 2, "hardware input without output must not reset the 120-second backoff");
     f.time(165000); await recover(f.pc, withCapture(f, { framesEncoded: 10 }));
     assert.equal(f.calls.length, 3);
+});
+
+
+test("browser-adapted software can retry at its observed supported geometry", async () => {
+    for (const qualityLimitationReason of ["none", "cpu", "bandwidth"]) {
+        const f = fixture(), recover = createVideoSenderRecovery(f.options);
+        for (const at of [0, 5000, 10000]) {
+            f.time(at);
+            await recover(f.pc, f.stats({ frameWidth: 1280, frameHeight: 720, qualityLimitationReason }));
+        }
+        assert.equal(f.calls.length, 1, qualityLimitationReason);
+    }
 });
