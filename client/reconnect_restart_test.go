@@ -113,7 +113,7 @@ func TestReconnectAfterProlongedOutageRestoresAuthorizedChannel(t *testing.T) {
 }
 
 func TestReconnectTerminalAuthenticationAndDeniedChannel(t *testing.T) {
-	for _, reason := range []string{"invalid credentials", "banned", "invalid server password", "too many failed logins, try again later"} {
+	for _, reason := range []string{"invalid credentials", "banned", "invalid server password", "too many failed logins, try again later", "client version rejected: installed 0.5.59; required >=0.5.94; update noXa to connect"} {
 		t.Run(reason, func(t *testing.T) {
 			addr, _ := restartFixture(t, "127.0.0.1:0", reason, "")
 			a, tabID, _, _ := prepareReconnect(t, addr)

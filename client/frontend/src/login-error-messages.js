@@ -1,4 +1,6 @@
 export const loginErrorEnglish = {
+    "login.failure.minimumVersion": "Your noXa version is {installed}. This server requires {required} or newer.",
+    "login.recovery.minimumVersion": "Update noXa, then connect again.",
     "login.failure.serverPassword": "The server password was rejected.",
     "login.recovery.serverPassword": "Enter this server’s password. It is separate from your account password.",
     "login.failure.account": "The account login or password was rejected.",
@@ -27,6 +29,8 @@ export const loginErrorEnglish = {
 };
 
 export const loginErrorGerman = {
+    "login.failure.minimumVersion": "Deine noXa-Version ist {installed}. Dieser Server benötigt {required} oder neuer.",
+    "login.recovery.minimumVersion": "Aktualisiere noXa und verbinde dich danach erneut.",
     "login.failure.serverPassword": "Das Serverpasswort wurde abgelehnt.",
     "login.recovery.serverPassword": "Gib das Passwort dieses Servers ein. Es ist unabhängig von deinem Accountpasswort.",
     "login.failure.account": "Der Accountname oder das Passwort wurde abgelehnt.",

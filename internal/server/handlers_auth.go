@@ -43,6 +43,9 @@ func (s *TCPServer) handleAuthenticate(ctx context.Context, client *Client, f *n
 	client.mu.Lock()
 	client.clientVersion = msg.ClientVersion
 	client.mu.Unlock()
+	if reason := s.clientVersionRejection(msg.ClientVersion); reason != "" {
+		return s.rejectClientVersion(client, reason)
+	}
 	if !s.negotiateAuthorization(client, msg.AuthorizationModels) {
 		return s.rejectAuthorizationModel(client)
 	}
