@@ -63,6 +63,9 @@ export function createConnectionOverlay({ getState, translate, retry, cancel, ca
         lost(tabID) { if (!tabID) return; Object.assign(entry(tabID), { phase: "disconnected", retry: null, unknown: false }); render(); },
         progress(tabID, progress) {
             if (!tabID) return;
+            // An empty retry refresh (for example on a language change) is not
+            // a connection event. Only update a record whose scope is known.
+            if (!progress && !records.has(tabID)) return;
             const value = entry(tabID);
             value.retry = progress ? { inFlight: !!progress.inFlight, attempts: progress.attempts, remaining: progress.remaining } : null;
             if (progress) Object.assign(value, { phase: "disconnected", terminal: false, reason: "", unknown: false });

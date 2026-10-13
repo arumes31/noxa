@@ -8182,11 +8182,20 @@ test.describe("per-tab automatic reconnect", () => {
         });
         await expect(page.locator("#chat-text")).toBeFocused();
         await expect(overlay).toBeVisible();
+        await page.evaluate(() => { window.__noxa.state.settings.language = "de"; window.__noxa.applyAppearance(); });
+        await expect(overlay.locator("h2")).toHaveText("Verbindung zum Server getrennt");
+        expect(await page.locator("#sidebar-scroll").evaluate(el => el.inert)).toBe(true);
+        await page.evaluate(() => { window.__noxa.state.settings.language = "en"; window.__noxa.applyAppearance(); });
+        await expect(overlay.locator("h2")).toHaveText("Server disconnected");
         const tabB = page.locator('#server-tabs [data-tab-id="tab-b"] .srv-tab-select');
         expect(await tabB.evaluate(el => !!el.closest("[inert]"))).toBe(false);
         await tabB.click();
         await expect(tabB).toHaveAttribute("aria-current", "page");
         await expect(overlay).toBeHidden();
+        await page.evaluate(() => { window.__noxa.state.settings.language = "de"; window.__noxa.applyAppearance(); });
+        await expect(overlay).toBeHidden();
+        expect(await page.locator("#sidebar-scroll").evaluate(el => el.inert)).toBe(false);
+        await page.evaluate(() => { window.__noxa.state.settings.language = "en"; window.__noxa.applyAppearance(); });
         await page.clock.runFor(5000);
         await expect(overlay).toBeHidden();
         await page.evaluate(() => {
