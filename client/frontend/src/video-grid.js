@@ -1,3 +1,4 @@
+import { mountStreamDiagnosticRecording, receiverRecordingSample } from "./stream-diagnostic-recording.js";
 import { escapeHTML as escapeTranslation } from "./markdown.js";
 // video-grid.js — received stream tiles, quality selection and diagnostics.
 import { copyToClipboard } from "./clipboard.js";
@@ -141,6 +142,14 @@ export function createVideoGrid({ applySendCaps, syncCameraButton, syncShareButt
             el.querySelector(".vtile-quality-button").onclick = event => { event.stopPropagation(); void openTileMenu(undefined, undefined, t); };
             el.querySelector(".vtile-diagnostics").onclick = event => event.stopPropagation();
             el.querySelector(".vtile-diagnostics").ontoggle = () => { void refreshRemoteDiagnostics(t); };
+            t.recording = mountStreamDiagnosticRecording(el.querySelector(".vtile-diagnostics-body"), {
+                direction: "received", slot: t.slot, cadenceMS: 3000, captureScope: () => {
+                    const pc = V().state.pc, track = t.track, scope = captureMediaScope(), stream = t.stream;
+                    return () => tiles.get(key) === t && el.isConnected && !!pc && V().state.pc === pc &&
+                        mediaScopeIsCurrent(scope) && t.track === track && track?.readyState === "live" && t.stream === stream &&
+                        pc.connectionState !== "closed" && pc.connectionState !== "failed";
+                },
+            }, tLabel, copyToClipboard);
             el.querySelector(".vtile-copy-diagnostics").onclick = () => {
                 const sample = currentReceiverDiagnostics(t);
                 const sourceQuality = streamUsesSourceQuality(t.clientID, t.slot);
@@ -157,6 +166,7 @@ export function createVideoGrid({ applySendCaps, syncCameraButton, syncShareButt
                         dropped_fps: sample.droppedFPS, decode_ms: sample.decodeMS, jitter_buffer_ms: sample.bufferMS,
                         recent_loss_percent: sample.lossPercent, nacks: sample.nacks, plis: sample.plis, freezes: sample.freezes,
                         key_frames: sample.keyFrames, decoder: sample.decoder, power_efficient_decoder: sample.powerEfficientDecoder } : null,
+                    ...(t.recording.status() ? { recording: t.recording.snapshot() } : {}),
                     stream_path: t.remoteDiagnostics || null,
                     presentation: t.presentation?.snapshot(performance.now()) ?? null,
                     stream_path_age_ms: remoteDiagnosticsAge(t),
@@ -175,6 +185,7 @@ export function createVideoGrid({ applySendCaps, syncCameraButton, syncShareButt
         // can differ from the negotiated publisher/slot key after MID reuse.
         const tracks = stream?.getVideoTracks() || [];
         const vt = tracks.length === 1 ? tracks[0] : tracks.find(track => track.id === key) || null;
+        t.recording?.stop("scope_changed");
         t.track = vt;
         t.diagnostics = null;
         t.diagnosticsPC = null;
@@ -221,6 +232,7 @@ export function createVideoGrid({ applySendCaps, syncCameraButton, syncShareButt
         const t = tiles.get(key);
         if (!t) return;
         t.presentation?.dispose();
+        t.recording?.dispose();
         t.video.srcObject = null;
         t.el.remove();
         tiles.delete(key);
@@ -340,7 +352,8 @@ export function createVideoGrid({ applySendCaps, syncCameraButton, syncShareButt
         qualityButton.title = tLabel(legacy ? "polish.videoQualityHelp" : "streams.qualityHelp");
         qualityButton.setAttribute("aria-label", tLabel(legacy ? "streams.legacyQualityControl" : "streams.qualityControl"));
         panel.querySelector(".vtile-traffic-note").textContent = tLabel("wins.payloadNote");
-        panel.querySelector("button").textContent = tLabel("wins.copyStream");
+        panel.querySelector(".vtile-copy-diagnostics").textContent = tLabel("wins.copyStream");
+        tile.recording?.render();
         renderStreamPath(panel.querySelector(".vtile-stream-path"), tile.remoteDiagnostics, sample, {
             presentation: tile.presentation?.snapshot(performance.now()) ?? null,
             extraAgeMS: remoteDiagnosticsAge(tile) || 0, quality: tile.sentQuality || "high",
@@ -716,6 +729,7 @@ export function createVideoGrid({ applySendCaps, syncCameraButton, syncShareButt
         };
         statsPollRequest = request;
         const current = () => statsPollRequest === request && state.pc === request.pc && mediaScopeIsCurrent(request.scope);
+        let statsRecorded = false;
         try {
             const stats = await samplePeerStats(request.pc);
             if (!current()) return;
@@ -731,12 +745,15 @@ export function createVideoGrid({ applySendCaps, syncCameraButton, syncShareButt
                 tile.diagnosticsPC = request.pc;
                 tile.diagnosticsAt = new Date().toISOString();
                 tile.diagnosticsMeasuredAt = performance.now();
+                if (tile.recording?.status()?.state === "recording") tile.recording.add(receiverRecordingSample(tile.diagnostics, tile.presentation?.snapshot(tile.diagnosticsMeasuredAt)),
+                    JSON.stringify([tile.diagnosticsEpoch, tile.diagnostics.cumulative.map(row => [row.stats_id, row.ssrc]), tile.diagnostics.codec]));
                 if (tile.sentQuality === "high" && Number.isFinite(tile.diagnostics.bitrate) && tile.diagnostics.bitrate > 0) {
                     const estimate = Math.max(tile.slot === "screen" ? 1000000 : 250000, Math.min(50000000, tile.diagnostics.bitrate));
                     tile.estimatedHighBitrate = tile.estimatedHighBitrate ? tile.estimatedHighBitrate * 0.7 + estimate * 0.3 : estimate;
                 }
                 renderStreamDiagnostics(tile);
             }
+            statsRecorded = true;
             const cpu = await window.go.main.App.SystemCPUPercent();
             if (!current()) return;
             const decoders = [...tiles.values()].map(tile => receiverVideoStat(stats, bindingFor(tile.track)))
@@ -808,7 +825,10 @@ export function createVideoGrid({ applySendCaps, syncCameraButton, syncShareButt
                 t.badgeEl.textContent = `${w} × ${sample?.height || "—"} · ${Number.isFinite(sample?.fps) ? Math.round(sample.fps) : "—"} fps`;
             }
             void pushQuality(false);
-        } catch { if (current()) cpuRecoverySince = null; }
+        } catch { if (current()) {
+            cpuRecoverySince = null;
+            if (!statsRecorded) for (const tile of tiles.values()) tile.recording?.fail();
+        } }
         finally { if (statsPollRequest === request) statsPollRequest = null; }
     }
 

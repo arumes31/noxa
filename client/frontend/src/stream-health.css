@@ -4,3 +4,13 @@
 .stream-health p:empty { display: none; }
 .stream-health-evidence { color: var(--muted); font-variant-numeric: tabular-nums; }
 .stream-health[data-health="encoding"], .stream-health[data-health="network"], .stream-health[data-health="decoding"], .stream-health[data-health="lowOutput"] { border-left-color: var(--warn); }
+
+.stream-recording { margin-top: .6rem; padding-top: .5rem; border-top: 1px solid var(--border); overflow-wrap: anywhere; }
+.stream-recording label { display: inline-flex; align-items: center; gap: .3rem; flex-wrap: wrap; }
+.stream-recording button, .stream-recording select { max-width: 100%; margin: .2rem 0; padding: .3rem .5rem; font: inherit; color: var(--text); background: var(--bg-hover); border: 1px solid var(--border); border-radius: 4px; }
+.stream-recording button { cursor: pointer; }
+.stream-recording select:disabled { opacity: .6; }
+.stream-recording small { display: block; color: var(--muted); }
+
+.stream-recording-archive { flex: 0 0 auto; max-height: 18rem; overflow: auto; padding: .5rem; }
+.stream-recording-archive button { margin-right: .5rem; }
