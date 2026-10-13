@@ -101,11 +101,12 @@ func diagnosticVideoRID(rid string) bool {
 }
 
 type videoIngressDiagnostic struct {
-	mu          sync.Mutex
-	ssrc        uint32
-	started     time.Time
-	stage       videoStageCounter
-	h264Rejects *netproto.VideoH264RejectDiagnostics
+	mu               sync.Mutex
+	ssrc             uint32
+	started          time.Time
+	stage            videoStageCounter
+	h264Rejects      *netproto.VideoH264RejectDiagnostics
+	keyframeRequests *netproto.VideoKeyframeRequestDiagnostics
 }
 
 func (d *videoIngressDiagnostic) rejectH264(reason h264RejectReason, mask h264DiscontinuityMask) {
@@ -219,7 +220,7 @@ func (r *Router) StreamDiagnostics(subscriber, publisher, slot string, generatio
 			continue
 		}
 		input.mu.Lock()
-		layer := netproto.VideoStreamLayerDiagnostics{RID: key.rid, SSRC: input.ssrc, StartedAt: input.started.UnixMilli(), Ingress: input.stage.snapshot(now), H264Rejects: input.h264RejectSnapshot()}
+		layer := netproto.VideoStreamLayerDiagnostics{RID: key.rid, SSRC: input.ssrc, StartedAt: input.started.UnixMilli(), Ingress: input.stage.snapshot(now), H264Rejects: input.h264RejectSnapshot(), KeyframeRequests: input.keyframeRequestSnapshot()}
 		input.mu.Unlock()
 		result.Layers = append(result.Layers, layer)
 	}

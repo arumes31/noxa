@@ -462,7 +462,7 @@ func (r *Router) JoinChannel(channelID int64, clientID string) {
 	r.mu.Unlock()
 
 	for _, ref := range keyframeTargets {
-		r.RequestKeyframe(ref.publisher, ref.slot, pref)
+		r.requestKeyframe(ref.publisher, ref.slot, pref, keyframeConsumerStart)
 	}
 	if hook != nil {
 		for sub := range renegotiate {
@@ -785,7 +785,7 @@ func (r *Router) SetTrackSlots(publisherID string, slots map[string]string) {
 	recordingRID := r.preferredRIDLocked(tapID, publisherID, nextRecordingSlot)
 	r.mu.Unlock()
 	if refreshRecording {
-		r.RequestKeyframe(publisherID, nextRecordingSlot, recordingRID)
+		r.requestKeyframe(publisherID, nextRecordingSlot, recordingRID, keyframeRecordingSource)
 	}
 
 	if hook != nil {
@@ -946,7 +946,7 @@ func (r *Router) EnsurePublishers(clientID string) {
 	r.mu.Unlock()
 
 	for _, ref := range keyframeTargets {
-		r.RequestKeyframe(ref.publisher, ref.slot, pref)
+		r.requestKeyframe(ref.publisher, ref.slot, pref, keyframeConsumerStart)
 	}
 	if hook != nil {
 		for sub := range renegotiate {
@@ -1737,7 +1737,7 @@ func (r *Router) ReadVideoLoop(clientID, slot string, track VideoTrackReader) {
 				return
 			}
 			if !dimensions.accept(pkt) {
-				r.RequestKeyframe(clientID, slot, rid)
+				r.requestKeyframe(clientID, slot, rid, keyframeVP8Bounds)
 				return
 			}
 		}
@@ -1755,7 +1755,7 @@ func (r *Router) ReadVideoLoop(clientID, slot string, track VideoTrackReader) {
 		if strings.EqualFold(mime, webrtc.MimeTypeH264) {
 			packets, keyframe, lost := h264Frame.push(pkt, now)
 			if lost {
-				r.RequestKeyframe(clientID, slot, rid)
+				r.requestKeyframe(clientID, slot, rid, keyframeH264Assembly)
 			}
 			for i, packet := range packets {
 				if !r.ownsSlot(clientID, claimKey, token) {
@@ -1906,7 +1906,7 @@ func (r *Router) forwardVideoFrameAtPolicyCodec(senderID, slot, rid string, pkt 
 					// delta retries here; revoked/contended watches do not send PLIs.
 					if needsKeyframe && w.delivery.WatchEpoch != 0 && !isVideoPadding(pkt) &&
 						(output.egress == nil || output.videoTransportReady(r, w.delivery.RecipientID)) {
-						r.RequestKeyframe(senderID, slot, rid)
+						r.requestKeyframe(senderID, slot, rid, keyframeAwaitKeyframe)
 					}
 					return false, nil
 				}
@@ -1968,7 +1968,7 @@ func (r *Router) SetVideoQuality(clientID, quality string) error {
 	r.mu.Unlock()
 
 	for _, ref := range publishers {
-		r.RequestKeyframe(ref.publisher, ref.slot, rid)
+		r.requestKeyframe(ref.publisher, ref.slot, rid, keyframeQualityChange)
 	}
 	return nil
 }
@@ -2062,6 +2062,10 @@ func (r *Router) preferredRIDLocked(subscriber, publisher, slot string) string {
 // when the layer is unknown). It is a no-op when the publisher is unknown or
 // has no RTCP writer.
 func (r *Router) RequestKeyframe(publisherID, slot, rid string) {
+	r.requestKeyframe(publisherID, slot, rid, keyframeExplicit)
+}
+
+func (r *Router) requestKeyframe(publisherID, slot, rid string, reason keyframeRequestReason) {
 	r.mu.RLock()
 	w := r.rtcpWriters[publisherID]
 	var ssrc uint32
@@ -2069,24 +2073,45 @@ func (r *Router) RequestKeyframe(publisherID, slot, rid string) {
 		if s, ok := src[rid]; ok {
 			ssrc = s
 		} else {
-			for _, s := range src {
+			for selectedRID, s := range src {
+				rid = selectedRID
 				ssrc = s
 				break
 			}
 		}
 	}
+	ingress := r.videoIngress[videoIngressKey{publisherID, slot, rid}]
+	if ingress != nil && ingress.ssrc != ssrc {
+		ingress = nil
+	}
+	var epoch time.Time
+	if ingress != nil {
+		ingress.mu.Lock()
+		epoch = ingress.started
+		ingress.mu.Unlock()
+	}
 	r.mu.RUnlock()
 
-	if w == nil || ssrc == 0 || !r.allowKeyframeRequest(ssrc, time.Now()) {
+	if w == nil || ssrc == 0 {
+		return
+	}
+	// Requests need both a resolved source and writer; absent targets do not
+	// claim a request or write. Keep the existing throttle and write ordering.
+	ingress.recordKeyframeRequest(reason, keyframeRequested, &epoch)
+	if !r.allowKeyframeRequest(ssrc, time.Now()) {
+		ingress.recordKeyframeRequest(reason, keyframeCoalesced, &epoch)
 		return
 	}
 	if err := w.WriteRTCP([]rtcp.Packet{
 		&rtcp.PictureLossIndication{MediaSSRC: ssrc},
 	}); err != nil {
+		ingress.recordKeyframeRequest(reason, keyframeWriteFailed, &epoch)
 		r.logger.Debug("router: PLI write failed",
 			zap.String("publisher_id", publisherID),
 			zap.Error(err),
 		)
+	} else {
+		ingress.recordKeyframeRequest(reason, keyframeWriteSucceeded, &epoch)
 	}
 }
 
@@ -2142,9 +2167,9 @@ func (r *Router) relayKeyframeRequest(subscriberID string, sender *webrtc.RTPSen
 	r.mu.RUnlock()
 	if owner != "" {
 		if currentKnown && currentRID != rid {
-			r.RequestKeyframe(owner, sourceSlot, currentRID)
+			r.requestKeyframe(owner, sourceSlot, currentRID, keyframeViewerFeedback)
 		}
-		r.RequestKeyframe(owner, sourceSlot, rid)
+		r.requestKeyframe(owner, sourceSlot, rid, keyframeViewerFeedback)
 	}
 }
 
