@@ -35,7 +35,7 @@ func TestMediaPacerExpiredRepairDoesNotSpendPrimaryBudget(t *testing.T) {
 		}
 		// The next 5 ms tick must reject the repair and still send the primary.
 		// At 8 kbps, a fictitious 1200-byte debit takes longer to repay than the
-		// unchanged 500 ms queue lifetime, so it would discard this primary.
+		// next pacing tick, so the primary would incorrectly remain queued.
 		time.Sleep(4 * time.Millisecond)
 		synctest.Wait()
 		got := p.diagnosticSnapshot(time.Now())
@@ -52,7 +52,7 @@ func TestMediaPacerChargesEveryAttemptIncludingErrors(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				p := newMediaPacer()
 				defer func() { _ = p.Close() }()
-				p.SetTargetBitrate(8000)
+				p.SetTargetBitrate(1000)
 				writes := 0
 				p.AddStream(11, interceptor.RTPWriterFunc(func(*rtp.Header, []byte, interceptor.Attributes) (int, error) {
 					writes++
@@ -75,7 +75,8 @@ func TestMediaPacerChargesEveryAttemptIncludingErrors(t *testing.T) {
 				if writes != 1 {
 					t.Fatalf("attempt debt lost for %s: %d writes before repayment", outcome, writes)
 				}
-				time.Sleep(250 * time.Millisecond)
+				// At 1kbps, one packet debt exceeds the whole bounded video lifetime.
+				time.Sleep(mediaPacerLifetime - 300*time.Millisecond + 50*time.Millisecond)
 				synctest.Wait()
 				got := p.diagnosticSnapshot(time.Now())
 				if writes != 1 || got.DroppedExpired != 1 || got.QueuedPackets != 0 {

@@ -46,7 +46,7 @@ func TestVideoReorderPreservesHighBitrateRepairWindow(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			const packetBytes = 1200
-			const repairDelay = 150 * time.Millisecond // 100 ms NACK cadence plus a normal RTT.
+			const repairDelay = 2400 * time.Millisecond // A late repair must fit the requested 2.5 s ceiling.
 			interval := time.Second * packetBytes * 8 / time.Duration(test.bitrate)
 			count := int(repairDelay / interval)
 			packetsPerFrame := max(1, test.bitrate/(60*packetBytes*8))
@@ -307,5 +307,25 @@ func TestVideoReorderDrainsRTXThatArrivedDuringPrimaryRead(t *testing.T) {
 	}, nil)
 	if len(sequences) != 3 || sequences[1] != 2 || sequences[2] != 3 {
 		t.Fatalf("already queued RTX was discarded at timeout: %v", sequences)
+	}
+}
+
+func TestVideoReorderDoesNotDelayOrderedOrPromptlyRepairedMedia(t *testing.T) {
+	var queue videoReorder
+	now := time.Unix(1, 0)
+	var delivered []uint16
+	emit := func(p *rtp.Packet, _ string) { delivered = append(delivered, p.SequenceNumber) }
+	queue.push(boundsDeltaPacket(1, 1), "video/VP8", now, emit)
+	queue.push(boundsDeltaPacket(2, 2), "video/VP8", now, emit)
+	if len(delivered) != 2 || len(queue.pending) != 0 || !queue.deadline().IsZero() {
+		t.Fatal("ordered media acquired a buffering delay")
+	}
+	queue.push(boundsDeltaPacket(4, 4), "video/VP8", now, emit)
+	if len(delivered) != 2 {
+		t.Fatal("gap forwarded prematurely")
+	}
+	queue.push(boundsDeltaPacket(3, 3), "video/VP8", now.Add(40*time.Millisecond), emit)
+	if len(delivered) != 4 || delivered[2] != 3 || delivered[3] != 4 || !queue.deadline().IsZero() {
+		t.Fatal("completed repair waited for the maximum buffer time")
 	}
 }

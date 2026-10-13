@@ -17,9 +17,11 @@ import (
 	"noxa/internal/mediacc/gcc"
 )
 
-const mediaPacerPackets = 1024
-const mediaPacerBytes = 2 * 1024 * 1024
-const mediaPacerLifetime = 500 * time.Millisecond
+// A repaired upstream gap can release the whole reorder window at once.
+// Keep it bounded while the existing congestion-paced worker drains it.
+const mediaPacerPackets = videoReorderPackets
+const mediaPacerBytes = videoReorderBytes
+const mediaPacerLifetime = videoReorderWait + 500*time.Millisecond
 const mediaAudioPackets = 256
 const mediaAudioBytes = 128 * 1024
 const mediaAudioLifetime = 100 * time.Millisecond
@@ -63,7 +65,7 @@ type pacedPacket struct {
 type mediaPacer struct {
 	mu                                sync.Mutex
 	streams                           map[uint32]*pacedStream
-	queue                             [mediaPacerPackets]pacedPacket
+	queue                             []pacedPacket // allocated only after video admission
 	head, count, bytes                int
 	bitrate                           int
 	closed                            bool
@@ -234,6 +236,9 @@ func (p *mediaPacer) popAudioLocked() pacedPacket {
 }
 
 func (p *mediaPacer) pushLocked(packet pacedPacket) {
+	if p.queue == nil {
+		p.queue = make([]pacedPacket, mediaPacerPackets)
+	}
 	p.queue[(p.head+p.count)%mediaPacerPackets] = packet
 	p.count++
 	p.bytes += packet.size
@@ -369,7 +374,8 @@ func (p *mediaPacer) Close() error {
 			stream.active = false
 		}
 		clear(p.streams)
-		clear(p.queue[:])
+		clear(p.queue)
+		p.queue = nil
 		clear(p.queuedRepairs)
 		p.count, p.bytes = 0, 0
 		clear(p.audioQueue[:])

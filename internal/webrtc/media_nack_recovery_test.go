@@ -51,9 +51,9 @@ func TestEngineNACKStopsObsoleteRetriesAndRequestsFreshLoss(t *testing.T) {
 	}
 	receive(100)
 	receive(102)
-	deadline := time.NewTimer(3 * time.Second)
+	deadline := time.NewTimer(4 * time.Second)
 	defer deadline.Stop()
-	for range 10 {
+	for range 26 {
 		select {
 		case sequence := <-requests:
 			if sequence != 101 {
@@ -67,7 +67,7 @@ func TestEngineNACKStopsObsoleteRetriesAndRequestsFreshLoss(t *testing.T) {
 	// to stop requesting a frame that can no longer be repaired usefully.
 	select {
 	case sequence := <-requests:
-		t.Errorf("obsolete missing packet %d was requested more than 10 times", sequence)
+		t.Errorf("obsolete missing packet %d was requested more than 26 times", sequence)
 	case <-time.After(350 * time.Millisecond):
 	}
 	receive(104)

@@ -71,11 +71,13 @@ func newEngineMediaObserved(enableAV1 bool, bounds VideoBounds, egress *mediaEgr
 			return nil, nil, fmt.Errorf("webrtc: configuring TWCC egress: %w", err)
 		}
 	}
-	// At the default 100 ms interval, ten attempts give normal RTTs several
-	// chances to repair loss. Unlimited retries keep obsolete packets alive
-	// for tens of seconds on sparse video and indefinitely on an idle layer.
+	// Retain missing video sequences for the same bounded packet window as
+	// reordering. Pion's default 512 slots can forget a burst's loss before its
+	// first 100 ms NACK tick. Twenty-six attempts cover the 2.5 s repair window
+	// while still ending retries on an idle source. Default registration only
+	// advertises NACK for video; the audio feedback policy remains unchanged.
 	if err := webrtc.RegisterDefaultInterceptorsWithOptions(media, registry,
-		webrtc.WithNackGeneratorOptions(nack.GeneratorMaxNacksPerPacket(10)),
+		webrtc.WithNackGeneratorOptions(nack.GeneratorSize(videoReorderPackets), nack.GeneratorMaxNacksPerPacket(26)),
 	); err != nil {
 		return nil, nil, fmt.Errorf("webrtc: registering default interceptors: %w", err)
 	}

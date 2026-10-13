@@ -49,48 +49,49 @@ func TestRepairReceiptWindowAndLifecycle(t *testing.T) {
 	if got := receiptTestFilter(f, receiptTestNACK(42, 65534, 65535, 0, 1)); !reflect.DeepEqual(got, []uint16{1}) {
 		t.Fatalf("wrap lost true gap:%v", got)
 	}
-	observe(600, attrs) // eviction, no old receipt may suppress a new request
-	if got := receiptTestFilter(f, receiptTestNACK(42, 0, 600, 601)); !reflect.DeepEqual(got, []uint16{0, 601}) {
+	evicted := uint16(repairReceiptWindow + 88)
+	observe(evicted, attrs) // eviction, no old receipt may suppress a new request
+	if got := receiptTestFilter(f, receiptTestNACK(42, 0, evicted, evicted+1)); !reflect.DeepEqual(got, []uint16{0, evicted + 1}) {
 		t.Fatalf("window:%v", got)
 	}
 	observe(0, repair) // ambiguous old RTX invalidates, cannot establish a new window
-	if got := receiptTestFilter(f, receiptTestNACK(42, 0, 600)); len(got) != 2 {
+	if got := receiptTestFilter(f, receiptTestNACK(42, 0, evicted)); len(got) != 2 {
 		t.Fatalf("ambiguous:%v", got)
 	}
-	observe(601, repair)
-	if got := receiptTestFilter(f, receiptTestNACK(42, 601)); len(got) != 1 {
+	observe(evicted+1, repair)
+	if got := receiptTestFilter(f, receiptTestNACK(42, evicted+1)); len(got) != 1 {
 		t.Fatal("RTX established missing primary epoch")
 	}
-	observe(602, attrs)
+	observe(evicted+2, attrs)
 	oldToken := token
 	_, newAttrs := receiptTestBinding(f, 42)
-	observeRepairReceipt(&oldToken, &rtp.Packet{Header: rtp.Header{SSRC: 42, SequenceNumber: 603}}, attrs)
-	if got := receiptTestFilter(f, receiptTestNACK(42, 602, 603)); len(got) != 2 {
+	observeRepairReceipt(&oldToken, &rtp.Packet{Header: rtp.Header{SSRC: 42, SequenceNumber: evicted + 3}}, attrs)
+	if got := receiptTestFilter(f, receiptTestNACK(42, evicted+2, evicted+3)); len(got) != 2 {
 		t.Fatal("old binding suppressed new source")
 	}
 	f.UnbindRemoteStream(info) // ambiguous stale unbind conservatively disables new binding too
-	observe(604, newAttrs)
-	if got := receiptTestFilter(f, receiptTestNACK(42, 604)); len(got) != 1 {
+	observe(evicted+4, newAttrs)
+	if got := receiptTestFilter(f, receiptTestNACK(42, evicted+4)); len(got) != 1 {
 		t.Fatal("ambiguous unbind retained suppression")
 	}
 	if len(f.streams) != 0 {
 		t.Fatal("ambiguous unbind retained ledger")
 	}
 	newInfo, newAttrs := receiptTestBinding(f, 42)
-	observe(604, newAttrs)
-	if got := receiptTestFilter(f, receiptTestNACK(42, 604)); len(got) != 0 {
+	observe(evicted+4, newAttrs)
+	if got := receiptTestFilter(f, receiptTestNACK(42, evicted+4)); len(got) != 0 {
 		t.Fatal("fresh bind failed to restore filtering")
 	}
 	copiedInfo := *newInfo
 	f.UnbindRemoteStream(&copiedInfo)
-	if got := receiptTestFilter(f, receiptTestNACK(42, 604)); len(got) != 1 || len(f.streams) != 0 {
+	if got := receiptTestFilter(f, receiptTestNACK(42, evicted+4)); len(got) != 1 || len(f.streams) != 0 {
 		t.Fatal("copied StreamInfo unbind retained acknowledgement")
 	}
 	_, newAttrs = receiptTestBinding(f, 42)
-	observe(605, newAttrs)
+	observe(evicted+5, newAttrs)
 	_ = f.Close()
-	observe(606, newAttrs)
-	if got := receiptTestFilter(f, receiptTestNACK(42, 605, 606)); len(got) != 2 {
+	observe(evicted+6, newAttrs)
+	if got := receiptTestFilter(f, receiptTestNACK(42, evicted+5, evicted+6)); len(got) != 2 {
 		t.Fatal("close retained acknowledgement")
 	}
 }

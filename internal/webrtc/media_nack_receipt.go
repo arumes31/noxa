@@ -11,8 +11,9 @@ import (
 )
 
 const repairReceiptAttribute = "noxa-repair-receipt-v1"
-const repairReceiptWindow = 512
+const repairReceiptWindow = videoReorderPackets
 const repairReceiptStreams = 64
+const repairFeedbackPairs = 512
 
 // Receipt state is local to one interceptor/PC and invalidated on bind
 // replacement, matching-SSRC unbind, or close. No synthetic packet enters an interceptor.
@@ -168,7 +169,7 @@ func (f *repairNACKFilter) BindRTCPWriter(writer interceptor.RTCPWriter) interce
 				continue
 			}
 			// Do not expand untrusted feedback into an unbounded OSN list.
-			if len(nack.Nacks) > repairReceiptWindow {
+			if len(nack.Nacks) > repairFeedbackPairs {
 				if changed {
 					output = append(output, packet)
 				}

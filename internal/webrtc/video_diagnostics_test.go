@@ -19,7 +19,7 @@ func TestH264RejectDiagnosticsAreScopedSnapshots(t *testing.T) {
 	frame := h264ForwardFrame{onReject: ingress.rejectH264}
 	now := time.Now()
 	frame.push(h264ForwardPacket(1, 90, false, 0x7c, 0x81, 1), now)
-	frame.push(h264ForwardPacket(2, 90, true, 0x7c, 0x41, 1), now.Add(time.Second))
+	frame.push(h264ForwardPacket(2, 90, true, 0x7c, 0x41, 1), now.Add(h264ForwardIdleWait+time.Millisecond))
 	first := ingress.h264RejectSnapshot()
 	// The expired unit is rejected once; its orphan FU end stays quarantined
 	// instead of being parsed again as another malformed access unit.
@@ -27,8 +27,8 @@ func TestH264RejectDiagnosticsAreScopedSnapshots(t *testing.T) {
 		t.Fatalf("missing assembly failure reasons: %+v", first)
 	}
 	// Finishing a good unit must retain observation; snapshots do not alias.
-	frame.push(h264ForwardPacket(3, 180, true, 0x41, 1), now.Add(time.Second))
-	frame.push(h264ForwardPacket(4, 270, true, 25, 1), now.Add(time.Second))
+	frame.push(h264ForwardPacket(3, 180, true, 0x41, 1), now.Add(h264ForwardIdleWait+time.Millisecond))
+	frame.push(h264ForwardPacket(4, 270, true, 25, 1), now.Add(h264ForwardIdleWait+time.Millisecond))
 	second := ingress.h264RejectSnapshot()
 	if first.Malformed != 0 || second.Malformed != 1 {
 		t.Fatal("diagnostic callback lost or mutable snapshot escaped")
