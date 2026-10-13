@@ -174,6 +174,7 @@ export async function stopPublication(slot, track, preserveUpload = null) {
     publication.cancelled = true;
     clearTimeout(publication.timer);
     publication.cancelPlay?.();
+    publication.cancelPreview?.();
     if (publication.video) { publication.video.pause(); publication.video.srcObject = null; }
     if (publication.generation !== "0") await streamRequest(publication.scope, { action: "publish", slot, generation: publication.generation, active: false });
 }
@@ -203,9 +204,60 @@ function valid(publication) {
     return publications.get(publication.slot) === publication && !publication.cancelled && mediaScopeIsCurrent(publication.scope) && V().state.pc === publication.pc && publication.track.readyState !== "ended";
 }
 
+// toBlob cannot be aborted. Keep at most one native encode outstanding even
+// when a timeout or source replacement retires its caller before the callback.
+// A browser that never calls back suppresses future previews, not the stream.
+let previewEncodingPending = false;
+function previewJPEG(publication, canvas) {
+    return new Promise((resolve, reject) => {
+        let settled = false, reader;
+        const finish = (error, jpeg) => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(deadline);
+            publication.track.removeEventListener("ended", cancel);
+            if (publication.cancelPreview === cancel) publication.cancelPreview = null;
+            if (reader?.readyState === 1) reader.abort();
+            if (error) reject(error); else resolve(jpeg);
+        };
+        const cancel = () => finish(new Error("preview cancelled"));
+        const deadline = setTimeout(() => finish(new Error("preview encoding timed out")), 5000);
+        publication.cancelPreview = cancel;
+        publication.track.addEventListener("ended", cancel, { once: true });
+        previewEncodingPending = true;
+        try {
+            canvas.toBlob(blob => {
+                previewEncodingPending = false;
+                if (settled) return;
+                if (!valid(publication)) { cancel(); return; }
+                // Bound the input before allocating its base64 representation.
+                if (!blob || blob.type !== "image/jpeg" || blob.size === 0 || blob.size > 49152) {
+                    finish(new Error("preview JPEG unavailable or too large"));
+                    return;
+                }
+                try {
+                    reader = new FileReader();
+                    reader.onload = () => {
+                        if (settled) return;
+                        if (!valid(publication)) { cancel(); return; }
+                        const url = reader.result;
+                        const jpeg = typeof url === "string" && url.startsWith("data:image/jpeg;base64,") ? url.slice(23) : "";
+                        if (!jpeg || jpeg.length > 65536) finish(new Error("invalid preview JPEG"));
+                        else finish(null, jpeg);
+                    };
+                    reader.onerror = () => finish(new Error("preview JPEG read failed"));
+                    reader.onabort = cancel;
+                    reader.readAsDataURL(blob);
+                } catch (error) { finish(error); }
+            }, "image/jpeg", 0.55);
+        } catch (error) { previewEncodingPending = false; finish(error); }
+    });
+}
+
 async function capturePreview(publication) {
     if (!valid(publication)) return;
     try {
+        if (previewEncodingPending) return;
         const video = document.createElement("video");
         publication.video = video;
         video.muted = true;
@@ -229,8 +281,7 @@ async function capturePreview(publication) {
         canvas.width = Math.max(1, Math.floor(width * scale));
         canvas.height = Math.max(1, Math.floor(height * scale));
         canvas.getContext("2d").drawImage(video, 0, 0, canvas.width, canvas.height);
-        const url = canvas.toDataURL("image/jpeg", 0.55);
-        const jpeg = url.slice(url.indexOf(",") + 1);
+        const jpeg = await previewJPEG(publication, canvas);
         if (!valid(publication) || jpeg.length > 65536) return;
         await streamRequest(publication.scope, { action: "preview_upload", slot: "screen", generation: publication.generation, jpeg });
     } catch (error) {

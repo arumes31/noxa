@@ -20,6 +20,127 @@ function setup(t, supported = true) {
 
 const settle = async () => { for (let n = 0; n < 12; n++) await Promise.resolve(); };
 
+function previewFixture(t, { pendingRead = false } = {}) {
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+    const requests = [], encodes = [], readers = [], videos = [], messages = [];
+    const state = { pc: {}, activeTabID: "one", serverGeneration: 1, sessionGeneration: 1, myChannelID: 1, myClientID: "self" };
+    let generation = 0;
+    globalThis.window = { __noxa: { state, sysMsg: text => messages.push(text) }, go: { main: { App: {
+        VideoStreamControlForTab: async (tab, body) => {
+            requests.push({ tab, ...body });
+            return { ...body, generation: body.action === "publish" && body.active ? String(++generation) : body.generation };
+        },
+    } } } };
+    globalThis.MediaStream = class { constructor(tracks) { this.tracks = tracks; } };
+    globalThis.document = { createElement: type => {
+        if (type === "video") {
+            const video = { videoWidth: 1920, videoHeight: 1080, play: async () => {}, pause() { this.paused = true; } };
+            videos.push(video); return video;
+        }
+        assert.equal(type, "canvas");
+        const canvas = { getContext: () => ({ drawImage() {} }),
+            toDataURL() { throw new Error("synchronous JPEG encoding is forbidden"); },
+            toBlob(callback, type, quality) { encodes.push({ callback, type, quality, width: canvas.width, height: canvas.height }); },
+        };
+        return canvas;
+    } };
+    globalThis.FileReader = class {
+        constructor() { this.readyState = 0; readers.push(this); }
+        readAsDataURL(blob) {
+            this.readyState = 1;
+            this.complete = () => { this.readyState = 2; this.result = `data:image/jpeg;base64,${blob.base64 || "YWJj"}`; this.onload?.(); };
+            if (!pendingRead) queueMicrotask(this.complete);
+        }
+        abort() { this.aborted = true; this.readyState = 2; this.onabort?.(); }
+    };
+    t.after(async () => {
+        await stopPublication("screen");
+        for (const encode of encodes) encode.callback(null); // Release a deliberately hung native callback.
+        await settle();
+        for (const key of ["window", "document", "MediaStream", "FileReader"]) delete globalThis[key];
+    });
+    const start = async () => {
+        const track = Object.assign(new EventTarget(), { id: `screen-${generation + 1}`, readyState: "live",
+            stop() { this.readyState = "ended"; },
+        });
+        await startPublication("screen", track); await settle(); return track;
+    };
+    return { state, requests, encodes, readers, videos, messages, start,
+        uploads: () => requests.filter(r => r.action === "preview_upload") };
+}
+
+test("screen preview asynchronously uploads the bounded JPEG for the exact publication and repeats after two minutes", async t => {
+    const f = previewFixture(t);
+    await f.start();
+    assert.equal(f.uploads().length, 0);
+    assert.deepEqual({ ...f.encodes[0], callback: undefined }, { callback: undefined, type: "image/jpeg", quality: 0.55, width: 640, height: 360 });
+    f.encodes[0].callback({ type: "image/jpeg", size: 49152, base64: "A".repeat(65536) });
+    await settle();
+    assert.deepEqual(f.uploads().map(({ tab, slot, generation, jpeg }) => ({ tab, slot, generation, bytes: jpeg.length })),
+        [{ tab: "one", slot: "screen", generation: "1", bytes: 65536 }]);
+    assert.equal(f.videos[0].srcObject, null);
+    t.mock.timers.tick(119999); await settle(); assert.equal(f.encodes.length, 1);
+    t.mock.timers.tick(1); await settle(); assert.equal(f.encodes.length, 2);
+});
+
+for (const invalid of [null, { type: "image/jpeg", size: 49153 }, { type: "image/png", size: 3 }, { type: "image/jpeg", size: 0 }]) {
+    test(`invalid preview blob never reaches conversion or upload: ${JSON.stringify(invalid)}`, async t => {
+        const f = previewFixture(t); await f.start();
+        f.encodes[0].callback(invalid); await settle();
+        assert.equal(f.readers.length, 0); assert.equal(f.uploads().length, 0);
+        assert.equal(f.videos[0].srcObject, null);
+    });
+}
+
+for (const cancel of ["stop", "ended", "scope"]) {
+    test(`preview encoding pending across ${cancel} cannot upload stale source bytes`, async t => {
+        const f = previewFixture(t); const track = await f.start();
+        if (cancel === "stop") await stopPublication("screen", track);
+        if (cancel === "ended") { track.readyState = "ended"; track.dispatchEvent(new Event("ended")); }
+        if (cancel === "scope") f.state.sessionGeneration++;
+        f.encodes[0].callback({ type: "image/jpeg", size: 3 }); await settle();
+        assert.equal(f.readers.length, 0); assert.equal(f.uploads().length, 0);
+        assert.equal(f.videos[0].srcObject, null);
+    });
+}
+
+test("replacing a preview source cannot start overlapping native JPEG encodes or upload the old result", async t => {
+    const f = previewFixture(t); await f.start(); await f.start();
+    assert.equal(f.encodes.length, 1);
+    f.encodes[0].callback({ type: "image/jpeg", size: 3 }); await settle();
+    assert.equal(f.uploads().length, 0);
+    t.mock.timers.tick(120000); await settle();
+    assert.equal(f.encodes.length, 2);
+    f.encodes[1].callback({ type: "image/jpeg", size: 3 }); await settle();
+    assert.deepEqual(f.uploads().map(r => r.generation), ["2"]);
+});
+
+test("a missing encode callback times out without stacking native encodes and a late callback permits later previews", async t => {
+    const f = previewFixture(t); await f.start();
+    t.mock.timers.tick(5000); await settle();
+    assert.equal(f.videos[0].srcObject, null);
+    t.mock.timers.tick(120000); await settle();
+    assert.equal(f.encodes.length, 1); assert.equal(f.uploads().length, 0);
+    f.encodes[0].callback({ type: "image/jpeg", size: 3 }); await settle();
+    assert.equal(f.readers.length, 0);
+    t.mock.timers.tick(120000); await settle();
+    assert.equal(f.encodes.length, 2);
+});
+
+for (const cancel of ["stop", "timeout", "scope"]) {
+    test(`pending JPEG conversion is retired on ${cancel} without uploading its late result`, async t => {
+        const f = previewFixture(t, { pendingRead: true }); const track = await f.start();
+        f.encodes[0].callback({ type: "image/jpeg", size: 3 }); await settle();
+        assert.equal(f.readers.length, 1);
+        if (cancel === "stop") await stopPublication("screen", track);
+        if (cancel === "timeout") t.mock.timers.tick(5000);
+        if (cancel === "scope") f.state.serverGeneration++;
+        f.readers[0].complete(); await settle();
+        assert.equal(f.uploads().length, 0); assert.equal(f.videos[0].srcObject, null);
+        if (cancel !== "scope") assert.equal(f.readers[0].aborted, true);
+    });
+}
+
 test("codec-only catalog changes reconfigure one current publication and ignore stale generations", async t => {
     const fixture = setup(t);
     window.go.main.App.SupportsStreamCodecForTab = async () => true;

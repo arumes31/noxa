@@ -99,6 +99,34 @@ test.beforeEach(async ({ page }) => {
     });
 });
 
+test("screen preview uploads an asynchronously encoded JPEG while the capture stays live", async ({ page }) => {
+    await page.evaluate(() => {
+        const control = window.go.main.App.VideoStreamControlForTab;
+        window.go.main.App.VideoStreamControlForTab = async (tab, msg) => {
+            if (msg.action === "preview_upload") window.__media.previewUpload = { tab, ...msg };
+            return control(tab, msg);
+        };
+        HTMLCanvasElement.prototype.toDataURL = () => { throw new Error("synchronous preview encoding"); };
+        Object.defineProperty(navigator.mediaDevices, "getDisplayMedia", { configurable: true, value: async () => {
+            const canvas = document.createElement("canvas"); canvas.width = 1920; canvas.height = 1080;
+            const ctx = canvas.getContext("2d"); ctx.fillStyle = "#ff8000"; ctx.fillRect(0, 0, 1920, 1080);
+            return canvas.captureStream(60);
+        } });
+    });
+    await page.locator("#voice-screen").click();
+    await page.getByRole("dialog").getByRole("button", { name: "Start sharing", exact: true }).click();
+    await expect.poll(() => page.evaluate(() => !!window.__media.previewUpload)).toBe(true);
+    expect(await page.evaluate(async () => {
+        const upload = window.__media.previewUpload;
+        const image = new Image(); image.src = `data:image/jpeg;base64,${upload.jpeg}`; await image.decode();
+        return { tab: upload.tab, slot: upload.slot, generation: upload.generation,
+            jpeg: atob(upload.jpeg).startsWith("\xff\xd8"), bounded: upload.jpeg.length <= 65536,
+            width: image.naturalWidth, height: image.naturalHeight,
+            capture: window.__noxa.state.shareStream.getVideoTracks()[0].readyState };
+    })).toEqual({ tab: "media-tab", slot: "screen", generation: "1", jpeg: true, bounded: true,
+        width: 640, height: 360, capture: "live" });
+});
+
 test("repeated screen shares reuse senders and declare shared audio after every restart", async ({ page }) => {
     await page.evaluate(() => {
         window.__media.audioContext = new AudioContext();
