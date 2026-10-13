@@ -41,7 +41,7 @@ func (r *Router) SetStreamVideoQuality(subscriber, publisher, slot string, gener
 	r.watchMu.Unlock()
 	r.mu.RUnlock()
 	if changed {
-		r.RequestKeyframe(publisher, slot, rid)
+		r.requestKeyframe(publisher, slot, rid, keyframeQualityChange)
 	}
 	return nil
 }

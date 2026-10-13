@@ -169,12 +169,35 @@ type VideoH264RejectDiagnostics struct {
 	DiscontinuityMasks *[7]uint64 `json:"discontinuity_masks,omitempty"`
 }
 
+// VideoKeyframeRequestCounters count resolved requests, not received keyframes.
+// WriteSucceeded means WriteRTCP returned nil, not confirmed network delivery.
+type VideoKeyframeRequestCounters struct {
+	Requests       uint64 `json:"requests"`
+	Coalesced      uint64 `json:"coalesced"`
+	WriteSucceeded uint64 `json:"write_succeeded"`
+	WriteFailed    uint64 `json:"write_failed"`
+}
+
+// Reasons are fixed fields with the same lifetime and access scope as ingress.
+type VideoKeyframeRequestDiagnostics struct {
+	ConsumerStart   VideoKeyframeRequestCounters `json:"consumer_start"`
+	RecordingSource VideoKeyframeRequestCounters `json:"recording_source"`
+	WatchStart      VideoKeyframeRequestCounters `json:"watch_start"`
+	QualityChange   VideoKeyframeRequestCounters `json:"quality_change"`
+	VP8Bounds       VideoKeyframeRequestCounters `json:"vp8_bounds"`
+	H264Assembly    VideoKeyframeRequestCounters `json:"h264_assembly"`
+	AwaitKeyframe   VideoKeyframeRequestCounters `json:"await_keyframe"`
+	ViewerFeedback  VideoKeyframeRequestCounters `json:"viewer_feedback"`
+	Explicit        VideoKeyframeRequestCounters `json:"explicit"`
+}
+
 type VideoStreamLayerDiagnostics struct {
-	RID         string                      `json:"rid"`
-	SSRC        uint32                      `json:"ssrc"`
-	StartedAt   int64                       `json:"started_at"`
-	Ingress     VideoStreamStageDiagnostics `json:"ingress"`
-	H264Rejects *VideoH264RejectDiagnostics `json:"h264_rejects,omitempty"`
+	RID              string                           `json:"rid"`
+	SSRC             uint32                           `json:"ssrc"`
+	StartedAt        int64                            `json:"started_at"`
+	Ingress          VideoStreamStageDiagnostics      `json:"ingress"`
+	H264Rejects      *VideoH264RejectDiagnostics      `json:"h264_rejects,omitempty"`
+	KeyframeRequests *VideoKeyframeRequestDiagnostics `json:"keyframe_requests,omitempty"`
 }
 
 type VideoStreamForwardDiagnostics struct {

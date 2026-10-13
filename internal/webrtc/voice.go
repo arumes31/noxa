@@ -374,7 +374,7 @@ func (v *Voice) RequestSourceKeyframe(publisher, slot string, ssrc uint32) {
 	}
 	v.router.mu.RUnlock()
 	if found {
-		v.router.RequestKeyframe(publisher, slot, rid)
+		v.router.requestKeyframe(publisher, slot, rid, keyframeRecordingSource)
 	}
 }
 

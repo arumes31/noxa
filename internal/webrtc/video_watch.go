@@ -119,6 +119,7 @@ func (r *Router) PublishVideoWithCodecs(publisher, slot string, generation uint6
 			input.started = time.Now()
 			input.stage = videoStageCounter{}
 			input.h264Rejects = nil
+			input.keyframeRequests = nil
 			input.mu.Unlock()
 		}
 	}
@@ -173,7 +174,7 @@ func (r *Router) WatchVideoWithCodecs(subscriber, publisher, slot string, genera
 	r.mu.RUnlock()
 	r.syncSubscriberVideoCodec(subscriber, publisher, slot)
 	if started {
-		r.RequestKeyframe(publisher, slot, "")
+		r.requestKeyframe(publisher, slot, "", keyframeWatchStart)
 	}
 	return started, nil
 }
