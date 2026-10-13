@@ -11,17 +11,18 @@ import (
 type ControlCloseReason string
 
 const (
-	ControlCloseEOF              ControlCloseReason = "eof"
-	ControlCloseUnexpectedEOF    ControlCloseReason = "unexpected_eof"
-	ControlCloseLocal            ControlCloseReason = "local_close"
-	ControlCloseReadTimeout      ControlCloseReason = "read_timeout"
-	ControlCloseReadError        ControlCloseReason = "read_error"
-	ControlCloseWriteTimeout     ControlCloseReason = "write_timeout"
-	ControlCloseWriteError       ControlCloseReason = "write_error"
-	ControlCloseRequestTimeout   ControlCloseReason = "request_timeout"
-	ControlCloseProtocolError    ControlCloseReason = "protocol_error"
-	ControlClosePanic            ControlCloseReason = "panic"
-	ControlCloseServerInactivity ControlCloseReason = "server_inactivity"
+	ControlCloseEOF                 ControlCloseReason = "eof"
+	ControlCloseUnexpectedEOF       ControlCloseReason = "unexpected_eof"
+	ControlCloseLocal               ControlCloseReason = "local_close"
+	ControlCloseReadTimeout         ControlCloseReason = "read_timeout"
+	ControlCloseReadError           ControlCloseReason = "read_error"
+	ControlCloseWriteTimeout        ControlCloseReason = "write_timeout"
+	ControlCloseWriteError          ControlCloseReason = "write_error"
+	ControlCloseRequestTimeout      ControlCloseReason = "request_timeout"
+	ControlCloseRequestDrainTimeout ControlCloseReason = "request_drain_timeout"
+	ControlCloseProtocolError       ControlCloseReason = "protocol_error"
+	ControlClosePanic               ControlCloseReason = "panic"
+	ControlCloseServerInactivity    ControlCloseReason = "server_inactivity"
 )
 
 // ControlReadCloseReason classifies a failed framed read without formatting err.

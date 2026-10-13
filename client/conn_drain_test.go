@@ -190,6 +190,7 @@ func TestReadOnlyRequestLateReplyOrErrorDrainsSlot(t *testing.T) {
 }
 
 func TestReadOnlyRequestUnresolvedDrainDisconnectsOnce(t *testing.T) {
+	output := captureConnectionCloseLog(t)
 	cm := newTestConnManager()
 	cm.requestDrainTimeout = 50 * time.Millisecond
 	sink := &recordingSink{}
@@ -215,9 +216,13 @@ func TestReadOnlyRequestUnresolvedDrainDisconnectsOnce(t *testing.T) {
 	if got := sink.count("disconnected"); got != 1 {
 		t.Fatalf("disconnected events = %d, want 1", got)
 	}
+	if got, want := output.String(), "control connection closed reason=request_drain_timeout epoch=1\n"; got != want {
+		t.Fatalf("drain diagnostic = %q, want %q", got, want)
+	}
 }
 
 func TestReadOnlyRequestDrainedTimerCannotCloseNextRequest(t *testing.T) {
+	output := captureConnectionCloseLog(t)
 	cm := newTestConnManager()
 	cm.requestDrainTimeout = 100 * time.Millisecond
 	peer := attachDrainTestPeer(t, cm)
@@ -241,9 +246,13 @@ func TestReadOnlyRequestDrainedTimerCannotCloseNextRequest(t *testing.T) {
 	if result := awaitDrainRequest(t, next); result.err != nil {
 		t.Fatalf("next query failed: %v", result.err)
 	}
+	if got := output.String(); got != "" {
+		t.Fatalf("drained reply emitted close diagnostic: %q", got)
+	}
 }
 
 func TestReadOnlyRequestOldDrainCannotCloseReplacement(t *testing.T) {
+	output := captureConnectionCloseLog(t)
 	cm := newTestConnManager()
 	cm.requestDrainTimeout = 100 * time.Millisecond
 	old := attachDrainTestPeer(t, cm)
@@ -266,6 +275,9 @@ func TestReadOnlyRequestOldDrainCannotCloseReplacement(t *testing.T) {
 	replacement.send(t, netproto.MsgAvatarData, netproto.AvatarData{})
 	if result := awaitDrainRequest(t, next); result.err != nil {
 		t.Fatalf("replacement query failed: %v", result.err)
+	}
+	if got, want := output.String(), "control connection closed reason=local_close epoch=1\n"; got != want {
+		t.Fatalf("stale drain emitted diagnostic: got %q, want %q", got, want)
 	}
 }
 

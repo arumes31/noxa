@@ -921,8 +921,10 @@ func (m *connManager) abandonRequest(conn net.Conn, reply netproto.MessageType, 
 			return
 		}
 		// Claim expiration and detach atomically with respect to reply delivery.
+		epoch := m.connEpoch
 		toClose, waiters, transfers := m.detachLocked()
 		m.mu.Unlock()
+		log.Printf("control connection closed reason=%s epoch=%d", netproto.ControlCloseRequestDrainTimeout, epoch)
 		m.finishDetach(toClose, waiters, transfers, true)
 	})
 	m.pending[reply] = pending
