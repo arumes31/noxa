@@ -136,7 +136,7 @@ func TestMediaPacerVideoStorageIsLazyAndAudioLifetimeUnchanged(t *testing.T) {
 			t.Fatal(err)
 		}
 		p.mu.Lock()
-		if p.queue != nil || p.audioQueue[p.audioHead].expires.Sub(time.Now()) != 100*time.Millisecond {
+		if p.queue != nil || time.Until(p.audioQueue[p.audioHead].expires) != 100*time.Millisecond {
 			t.Error("voice allocated video storage or changed its deadline")
 		}
 		p.mu.Unlock()
@@ -145,7 +145,7 @@ func TestMediaPacerVideoStorageIsLazyAndAudioLifetimeUnchanged(t *testing.T) {
 			t.Fatal(err)
 		}
 		p.mu.Lock()
-		if len(p.queue) != mediaPacerPackets || p.queue[p.head].expires.Sub(time.Now()) != mediaPacerLifetime {
+		if len(p.queue) != mediaPacerPackets || time.Until(p.queue[p.head].expires) != mediaPacerLifetime {
 			t.Error("video storage or deadline mismatch")
 		}
 		p.mu.Unlock()
