@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net"
 	"slices"
 	"strings"
@@ -544,7 +545,7 @@ func (m *connManager) connectWith(addr string, authMsg netproto.Authenticate, si
 	go guardCrash("readLoop", func() {
 		defer func() {
 			if r := recover(); r != nil {
-				m.terminateConn(conn, true)
+				m.terminateConn(conn, true, netproto.ControlClosePanic)
 				panic(r)
 			}
 		}()
@@ -613,8 +614,12 @@ func (m *connManager) detachLocked() (net.Conn, []chan requestResult, []net.Conn
 // disconnect closes the connection, if any.
 func (m *connManager) disconnect() {
 	m.mu.Lock()
+	epoch := m.connEpoch
 	conn, waiters, transferConns := m.detachLocked()
 	m.mu.Unlock()
+	if conn != nil {
+		log.Printf("control connection closed reason=%s epoch=%d", netproto.ControlCloseLocal, epoch)
+	}
 	m.finishDetach(conn, waiters, transferConns, false)
 }
 
@@ -635,14 +640,16 @@ func (m *connManager) finishDetach(conn net.Conn, waiters []chan requestResult, 
 // terminateConn is the single unexpected-termination owner. It detaches only
 // the active transport, wakes waiters and emits disconnected exactly once.
 // A stale read/write loop can never clear or signal a replacement connection.
-func (m *connManager) terminateConn(conn net.Conn, emitDisconnected bool) bool {
+func (m *connManager) terminateConn(conn net.Conn, emitDisconnected bool, reason netproto.ControlCloseReason) bool {
 	m.mu.Lock()
 	if m.conn != conn {
 		m.mu.Unlock()
 		return false
 	}
+	epoch := m.connEpoch
 	toClose, waiters, transferConns := m.detachLocked()
 	m.mu.Unlock()
+	log.Printf("control connection closed reason=%s epoch=%d", reason, epoch)
 	m.finishDetach(toClose, waiters, transferConns, emitDisconnected)
 	return true
 }
@@ -738,7 +745,7 @@ func (m *connManager) writeConn(conn net.Conn, mt netproto.MessageType, msg any)
 	}
 	m.writeMu.Unlock()
 	if err != nil {
-		m.terminateConn(conn, true)
+		m.terminateConn(conn, true, netproto.ControlWriteCloseReason(err))
 		return err
 	}
 	// Event sinks may re-enter write. Emit only after releasing writeMu and
@@ -875,7 +882,7 @@ func (m *connManager) requestOn(expected net.Conn, send, reply netproto.MessageT
 		} else {
 			// Mutations may have succeeded without a reply. Disconnect until
 			// their state can be reconciled, instead of leaving unknown state.
-			m.terminateConn(conn, true)
+			m.terminateConn(conn, true, netproto.ControlCloseRequestTimeout)
 		}
 		return nil, fmt.Errorf("timeout waiting for %s", reply)
 	}
@@ -914,8 +921,10 @@ func (m *connManager) abandonRequest(conn net.Conn, reply netproto.MessageType, 
 			return
 		}
 		// Claim expiration and detach atomically with respect to reply delivery.
+		epoch := m.connEpoch
 		toClose, waiters, transfers := m.detachLocked()
 		m.mu.Unlock()
+		log.Printf("control connection closed reason=%s epoch=%d", netproto.ControlCloseRequestDrainTimeout, epoch)
 		m.finishDetach(toClose, waiters, transfers, true)
 	})
 	m.pending[reply] = pending
@@ -953,7 +962,7 @@ func (m *connManager) readLoop(conn net.Conn) {
 			// Intentional closes (Disconnect/CloseTab) end the loop quietly;
 			// only unexpected drops are reported. An old loop may only detach
 			// the exact transport it was started for.
-			m.terminateConn(conn, true)
+			m.terminateConn(conn, true, netproto.ControlReadCloseReason(err))
 			return
 		}
 		m.dispatchFrom(conn, epoch, f)
@@ -1005,7 +1014,7 @@ func (m *connManager) dispatchAccepted(conn net.Conn, epoch uint64, checkSource 
 		if mediaUpdateErr != nil {
 			m.mu.Unlock()
 			if checkSource {
-				m.terminateConn(conn, true)
+				m.terminateConn(conn, true, netproto.ControlCloseProtocolError)
 			}
 			return
 		}
@@ -1106,7 +1115,7 @@ func (m *connManager) dispatchAccepted(conn net.Conn, epoch uint64, checkSource 
 		// later request, so terminate this exact transport and wake all
 		// current waiters immediately. The global error remains observable.
 		if protocolErr.OriginType == 0 && checkSource {
-			m.terminateConn(conn, true)
+			m.terminateConn(conn, true, netproto.ControlCloseProtocolError)
 		}
 		// Capability probes (121 read state) are sent speculatively, so an
 		// older server answering "unknown message type" is an expected

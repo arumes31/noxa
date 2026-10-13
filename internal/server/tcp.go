@@ -899,14 +899,12 @@ func (s *TCPServer) handleConn(ctx context.Context, conn net.Conn) {
 		if err != nil {
 			if errors.Is(err, io.EOF) || errors.Is(err, net.ErrClosed) {
 				s.logger.Info("client disconnected",
-					zap.String("client_id", client.ID),
-					zap.String("remote", conn.RemoteAddr().String()),
+					zap.String("reason", string(netproto.ControlReadCloseReason(err))),
 				)
 				return
 			}
 			s.logger.Warn("read frame error",
-				zap.String("client_id", client.ID),
-				zap.Error(err),
+				zap.String("reason", string(netproto.ControlReadCloseReason(err))),
 			)
 			return
 		}
@@ -1185,7 +1183,12 @@ func (s *TCPServer) pingLoop(client *Client, stop <-chan struct{}) {
 			timeout := s.cfg.ClientTimeoutSeconds
 			s.configMu.RUnlock()
 			last := client.lastActivity()
-			if timeout > 0 && !last.IsZero() && time.Since(last) > time.Duration(timeout)*time.Second {
+			if idle := time.Since(last); timeout > 0 && !last.IsZero() && idle > time.Duration(timeout)*time.Second {
+				s.logger.Info("control connection closed",
+					zap.String("reason", string(netproto.ControlCloseServerInactivity)),
+					zap.Int64("idle_ms", idle.Milliseconds()),
+					zap.Int("timeout_seconds", timeout),
+				)
 				_ = client.Conn.Close()
 				return
 			}
@@ -1339,9 +1342,8 @@ func (s *TCPServer) writeFrameLocked(ctx context.Context, client *Client, frame 
 	}
 	if err := netproto.WriteFrame(client.Conn, frame); err != nil {
 		s.logger.Warn("write error",
-			zap.String("client_id", client.ID),
+			zap.String("reason", string(netproto.ControlWriteCloseReason(err))),
 			zap.String("msg_type", netproto.MessageType(frame.Type).String()),
-			zap.Error(err),
 		)
 		return err
 	}
