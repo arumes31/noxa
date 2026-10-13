@@ -6,7 +6,9 @@ export function loginFailure(error, request = {}) {
     const text = String(error?.message || error || "").trim().replace(/^Error: /, "");
     const minimum = /^client version rejected: installed (.{1,100}); required >=([0-9A-Za-z.+-]{1,100}); update noXa to connect$/.exec(text);
     if (minimum) return { kind: "minimumVersion", installed: minimum[1], required: minimum[2] };
-    const reason = text.toLowerCase();
+    // The native TLS dial wrapper can contain an ordinary offline/network error.
+    // Classify its cause so an unreachable server does not look like a bad certificate.
+    const reason = text.replace(/^TLS connection failed: /, "").toLowerCase();
     if (reason === "invalid server password") return { kind: "serverPassword", field: "login-serverpw", invalid: true };
     if (reason === "invalid credentials" || reason === "account password is incorrect") return { kind: "account", field: "login-accountpw", invalid: true };
     if (reason === "authentication failed") return { kind: "authentication", field: "login-accountpw" };

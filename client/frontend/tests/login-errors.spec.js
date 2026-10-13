@@ -117,3 +117,13 @@ test("minimum version rejection shows installed version, required version and up
     await expect(page.locator("#login-accountpw")).not.toHaveAttribute("aria-invalid");
     await expect(page.locator("#login-serverpw")).not.toHaveAttribute("aria-invalid");
 });
+
+test("offline TLS connection shows network recovery without plaintext advice", async ({ page }) => {
+    await page.evaluate(() => { window.__failure = "TLS connection failed: dial tcp 127.0.0.1:12333: connectex: actively refused"; });
+    await page.locator("#login-connect").click();
+    await expect(page.locator("#login-error")).toContainText("The connection could not be established.");
+    await expect(page.locator("#login-addr-error")).toContainText("The server may be offline");
+    await expect(page.locator("#login-error")).not.toContainText("plaintext");
+    await expect(page.locator("#login-error")).not.toContainText("verify the certificate");
+    await expect(page.locator("#login-addr")).toBeFocused();
+});

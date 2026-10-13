@@ -47,3 +47,10 @@ test("minimum client version preserves installed and required versions without b
     assert.deepEqual(loginFailure("Error: client version rejected: installed unknown; required >=0.5.94-RC.1+Build; update noXa to connect"), { kind: "minimumVersion", installed: "unknown", required: "0.5.94-RC.1+Build" });
     assert.equal(loginFailure("client version rejected: installed old; required >=<script>; update noXa to connect").kind, "unknown");
 });
+
+test("TLS dial wrapper preserves network versus certificate recovery", () => {
+    assert.deepEqual(loginFailure("TLS connection failed: dial tcp 127.0.0.1:12333: connectex: actively refused"), { kind: "network", field: "login-addr" });
+    assert.deepEqual(loginFailure("TLS connection failed: context deadline exceeded"), { kind: "network", field: "login-addr" });
+    assert.equal(loginFailure("TLS connection failed: tls: failed to verify certificate: x509: certificate expired").kind, "certificate");
+    assert.equal(loginFailure("TLS connection failed: tls fingerprint mismatch").kind, "certificate");
+});
