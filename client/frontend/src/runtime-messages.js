@@ -1,4 +1,12 @@
 export const runtimeEnglish = {
+    "connectionOverlay.checking": "Checking connection…",
+    "connectionOverlay.reconnecting": "Reconnecting…",
+    "connectionOverlay.disconnected": "Server disconnected",
+    "connectionOverlay.explanation": "Channels and participants are unavailable. Messages already loaded remain available.",
+    "connectionOverlay.stopped": "Automatic retries stopped. Resolve the problem before connecting again.",
+    "connectionOverlay.unknown": "The connection could not be confirmed. Try reconnecting.",
+    "connectionOverlay.retry": "Connection settings",
+    "connectionOverlay.cancel": "Stop retrying",
     "runtime.updateCompleting": "Completing update…",
     "runtime.connecting": "CONNECTING…",
     "runtime.trustInvalid": "trust failed: the server did not provide a valid replacement fingerprint",
@@ -161,6 +169,14 @@ export const runtimeEnglish = {
     "runtime.previousCrash": "previous crash detected; export logs via Help → Export logs"
 };
 export const runtimeGerman = {
+    "connectionOverlay.checking": "Verbindung wird geprüft…",
+    "connectionOverlay.reconnecting": "Verbindung wird wiederhergestellt…",
+    "connectionOverlay.disconnected": "Verbindung zum Server getrennt",
+    "connectionOverlay.explanation": "Kanäle und Teilnehmer sind nicht verfügbar. Bereits geladene Nachrichten bleiben erhalten.",
+    "connectionOverlay.stopped": "Automatische Versuche wurden beendet. Behebe das Problem vor einer erneuten Verbindung.",
+    "connectionOverlay.unknown": "Die Verbindung konnte nicht bestätigt werden. Versuche, dich erneut zu verbinden.",
+    "connectionOverlay.retry": "Verbindungseinstellungen",
+    "connectionOverlay.cancel": "Automatische Versuche stoppen",
     "runtime.updateCompleting": "Update wird abgeschlossen…",
     "runtime.connecting": "VERBINDUNG WIRD HERGESTELLT…",
     "runtime.trustInvalid": "Vertrauen fehlgeschlagen: Der Server hat keinen gültigen neuen Fingerabdruck bereitgestellt",

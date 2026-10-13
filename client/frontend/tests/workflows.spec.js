@@ -8104,6 +8104,148 @@ test.describe("per-tab automatic reconnect", () => {
         await expect(page.locator("#conn-pill")).toHaveText("a.example:12333");
     });
 
+    test("channel connection overlay blocks stale participants, preserves chat and clears only after recovery", async ({ page }, testInfo) => {
+        const overlay = page.locator("#channel-connection-overlay"); await expect(overlay).toBeHidden();
+        await page.evaluate(() => {
+            for (const cb of window.__events.snapshot) cb(JSON.stringify({ root_channels: [{ ChannelID: 1, Name: "Public1", ParentID: 0,
+                clients: [{ client_id: "alice-other", nickname: "Alice", channel_id: 1 }, { client_id: "bob-other", nickname: "Bob", channel_id: 1 }] }] }));
+            document.getElementById("chat-text").value = "Keep this unsent draft";
+            document.getElementById("tree-expand").focus();
+            window.__tabReconnectGate = new Promise(resolve => { window.__finishOverlayRetry = resolve; });
+            window.__loseTab("tab-a");
+        });
+        await expect(overlay).toContainText("Server disconnected");
+        await expect(overlay.locator("h2")).toBeFocused();
+        expect(await page.locator("#sidebar-scroll").evaluate(el => el.inert)).toBe(true);
+        await expect(page.locator("#chat-text")).toHaveValue("Keep this unsent draft");
+        await expect(page.locator("#chat-text")).toBeEnabled();
+        await page.clock.runFor(2000);
+        await expect(overlay.locator(".connection-overlay-countdown")).toContainText("3s");
+        await expect(overlay.locator('[role="status"]')).toHaveText("Server disconnected");
+        await page.screenshot({ path: testInfo.outputPath("channel-disconnected-overlay.png"), fullPage: true });
+        await page.clock.runFor(3000);
+        await expect(overlay.locator("h2")).toHaveText("Reconnecting…");
+        await expect(overlay.getByRole("button", { name: "Connection settings" })).toBeDisabled();
+        await page.evaluate(() => window.__finishOverlayRetry());
+        await expect(overlay).toBeHidden();
+        expect(await page.locator("#sidebar-scroll").evaluate(el => el.inert)).toBe(false);
+        expect(await overlay.evaluate(el => el.contains(document.activeElement))).toBe(false);
+    });
+
+    test("channel connection overlay keeps narrow-layout navigation and history accessible", async ({ page }, testInfo) => {
+        await page.setViewportSize({ width: 600, height: 800 });
+        await page.locator("#workspace-sidebar-toggle").click();
+        await page.evaluate(() => { window.__tabReconnectFailure = { "tab-a": true }; window.__loseTab("tab-a"); });
+        const overlay = page.locator("#channel-connection-overlay");
+        await expect(overlay).toBeVisible();
+        await page.screenshot({ path: testInfo.outputPath("channel-disconnected-overlay-narrow.png"), fullPage: true });
+        await overlay.getByRole("button", { name: "Close channels" }).click();
+        await expect(page.locator("#sidebar")).toBeHidden();
+        await expect(page.locator("#workspace-sidebar-toggle")).toBeFocused();
+        await page.locator("#chat-text").fill("Offline draft remains available");
+        await page.locator("#workspace-sidebar-toggle").click();
+        await overlay.locator("h2").focus();
+        await page.evaluate(() => { window.__tabReconnectFailure = {}; });
+        await page.clock.runFor(5000);
+        await expect(overlay).toBeHidden();
+        await expect(page.locator("#workspace-sidebar-toggle")).toBeFocused();
+        expect(await page.locator("#workspace-sidebar-toggle").evaluate(el => el.tabIndex)).toBe(0);
+        await page.locator("#workspace-sidebar-close").click();
+        await page.evaluate(() => window.go.main.App.SetActiveTab("tab-b"));
+        await expect(overlay).toBeHidden();
+        await expect(page.locator("#chat-text")).toBeEnabled();
+    });
+
+    test("channel connection overlay keeps long terminal reasons scrollable in a short viewport", async ({ page }) => {
+        await page.setViewportSize({ width: 600, height: 500 });
+        await page.locator("#workspace-sidebar-toggle").click();
+        await page.evaluate(() => {
+            window.__reconnectTabHandler = async () => ({ terminal: true, error: "Server unavailable.\n".repeat(100) });
+            window.__loseTab("tab-a");
+        });
+        await page.clock.runFor(5000);
+        const overlay = page.locator("#channel-connection-overlay"), close = overlay.getByRole("button", { name: "Close channels" });
+        // Let the existing transient warning toast expire before pointer navigation.
+        await page.clock.runFor(10000);
+        const panelBounds = await overlay.boundingBox(), closeBounds = await close.boundingBox();
+        expect(closeBounds.y).toBeGreaterThanOrEqual(panelBounds.y);
+        await close.click();
+        await expect(page.locator("#sidebar")).toBeHidden();
+        await expect(page.locator("#workspace-sidebar-toggle")).toBeFocused();
+    });
+
+    test("channel connection overlay follows tabs and rejects stale authentication results", async ({ page }) => {
+        const overlay = page.locator("#channel-connection-overlay");
+        await page.evaluate(async () => {
+            window.__tabReconnectFailure = { "tab-a": true };
+            document.getElementById("chat-text").focus(); window.__loseTab("tab-a");
+        });
+        await expect(page.locator("#chat-text")).toBeFocused();
+        await expect(overlay).toBeVisible();
+        const tabB = page.locator('#server-tabs [data-tab-id="tab-b"] .srv-tab-select');
+        expect(await tabB.evaluate(el => !!el.closest("[inert]"))).toBe(false);
+        await tabB.click();
+        await expect(tabB).toHaveAttribute("aria-current", "page");
+        await expect(overlay).toBeHidden();
+        await page.clock.runFor(5000);
+        await expect(overlay).toBeHidden();
+        await page.evaluate(() => {
+            window.__clientIDGate = new Promise(resolve => { window.__finishOverlayIdentity = resolve; });
+        });
+        await page.locator('#server-tabs [data-tab-id="tab-a"] .srv-tab-select').click();
+        await page.evaluate(() => {
+            window.__loseTab("tab-a");
+            window.__finishOverlayIdentity();
+        });
+        await expect(overlay).toBeVisible();
+        await expect(overlay.locator("h2")).toHaveText("Server disconnected");
+    });
+
+    test("channel connection overlay explains terminal rejection safely and cancellation stops retries", async ({ page }, testInfo) => {
+        const overlay = page.locator("#channel-connection-overlay");
+        await page.evaluate(() => {
+            window.__noxa.state.settings.language = "de"; window.__noxa.applyAppearance();
+            window.__reconnectTabHandler = async () => ({ terminal: true,
+                error: "client version rejected: installed 0.5.59; required >=0.5.94; update noXa to connect <img src=x>" });
+            window.__loseTab("tab-a");
+        });
+        await page.clock.runFor(5000);
+        await expect(overlay).toContainText("Automatische Versuche wurden beendet");
+        await expect(overlay).toContainText("required >=0.5.94"); await expect(overlay.locator("img")).toHaveCount(0);
+        await expect(overlay.getByRole("button", { name: "Verbindungseinstellungen" })).toBeEnabled();
+        await page.screenshot({ path: testInfo.outputPath("channel-version-rejected-overlay-de.png"), fullPage: true });
+        await page.clock.runFor(60000);
+        expect(await page.evaluate(() => window.__calls.ReconnectTab)).toBe(1);
+        await page.evaluate(() => { window.__reconnectTabHandler = async () => ({ error: "offline" }); window.__loseTab("tab-a"); });
+        await overlay.getByRole("button", { name: "Automatische Versuche stoppen" }).click();
+        await page.clock.runFor(60000);
+        expect(await page.evaluate(() => window.__calls.ReconnectTab)).toBe(1);
+        expect(await page.evaluate(() => window.__calls.DisconnectTab || 0)).toBe(0);
+        expect(await page.evaluate(() => window.__tabs.map(tab => tab.id))).toEqual(["tab-a", "tab-b"]);
+        await expect(overlay.locator("h2")).toHaveText("Verbindung zum Server getrennt");
+    });
+
+    test("channel connection overlay settings use only the selected tab target and do not connect or close it", async ({ page }) => {
+        const overlay = page.locator("#channel-connection-overlay");
+        await page.evaluate(async () => {
+            window.__noxa.state.settings.reconnect_on_loss = false;
+            window.__noxa.state.lastSuccessfulConnect = { addr: "wrong.example:12333", nick: "Wrong" };
+            window.__loseTab("tab-b"); await window.go.main.App.SetActiveTab("tab-b");
+        });
+        await expect(overlay).toBeVisible();
+        await overlay.getByRole("button", { name: "Connection settings" }).click();
+        await expect(page.locator("#login-addr")).toHaveValue("b.example:12333");
+        await expect(page.locator("#login-nick")).toHaveValue("Bob");
+        expect(await page.evaluate(() => window.__calls.ConnectBookmarkTabWithID || 0)).toBe(0);
+        expect(await page.evaluate(() => window.__calls.CloseTab || 0)).toBe(0);
+        expect(await page.evaluate(() => window.__calls.DisconnectTab || 0)).toBe(0);
+        await page.evaluate(() => {
+            window.__noxa.showWorkspace(false); window.__noxa.state.tabConnects.delete("tab-b");
+            window.__noxa.connectionOverlay.unavailable("tab-b", window.__noxa.state.serverGeneration, window.__noxa.state.sessionGeneration);
+        });
+        await expect(overlay.getByRole("button", { name: "Connection settings" })).toBeDisabled();
+    });
+
     for (const language of ["en", "de"]) test(`successful foreground recovery speaks in ${language}`, async ({ page }) => {
         await page.evaluate(async language => {
             const { state, soundEngine, speechQueue } = window.__noxa;

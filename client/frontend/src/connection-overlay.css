@@ -1,0 +1,17 @@
+#channel-connection-overlay { position: absolute; inset: .5rem; z-index: 8; display: flex; align-items: safe center; justify-content: center; padding: .75rem; background: color-mix(in srgb, var(--bg-panel, #14242e) 94%, transparent); border: 1px solid var(--border); border-radius: 8px; overflow: auto; }
+#channel-connection-overlay[hidden] { display: none; }
+.connection-overlay-card { width: 100%; max-width: 28rem; overflow-wrap: anywhere; }
+.connection-overlay-card h2 { font-size: 1.15rem; margin: 0 0 .75rem; color: var(--text); }
+.connection-overlay-card p { font-size: .9rem; line-height: 1.5; }
+.connection-overlay-countdown { font-variant-numeric: tabular-nums; }
+.connection-overlay-reason { white-space: pre-wrap; color: var(--text); }
+.connection-overlay-actions { display: flex; gap: .5rem; flex-wrap: wrap; }
+.connection-overlay-actions button { color: var(--text); background: var(--bg-hover); border: 1px solid var(--border); padding: .5rem .7rem; border-radius: 5px; font: inherit; cursor: pointer; }
+.connection-overlay-actions button:disabled { opacity: .6; cursor: default; }
+#sidebar.connection-unavailable > :not(#channel-connection-overlay), #details.connection-unavailable > * { opacity: .3; }
+#details.connection-unavailable { pointer-events: none; }
+
+#channel-connection-overlay [data-close-channels] { display: none; }
+@media (max-width: 720px) {
+    #channel-connection-overlay [data-close-channels] { display: block; margin: 0 0 1rem auto; padding: .5rem; color: var(--text); background: var(--bg-hover); border: 1px solid var(--border); border-radius: 5px; font: inherit; }
+}

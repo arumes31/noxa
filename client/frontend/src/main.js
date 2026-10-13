@@ -1,3 +1,5 @@
+import { closeContextMenu } from "./context-menu.js";
+import { createConnectionOverlay } from "./connection-overlay.js";
 import { initializeUpdateTransition, updateStartupBlocked, refreshUpdateTransition } from "./update-transition.js";
 import "./update-transition.css";
 import { stopDisplayCapture } from "./display-capture-lease.js";
@@ -68,7 +70,7 @@ import { setLanguage, currentLanguage, applyStaticLabels, t } from "./i18n.js";
 import { extractPresentedFingerprint } from "./security.js";
 import { isActivationKey } from "./a11y.js";
 import { createLiveAnnouncementQueue } from "./live-announcer.js";
-import { dialogFocusableSelector, initModalSystem, mountServerDialog } from "./modal.js";
+import { dialogFocusableSelector, initModalSystem, mountServerDialog, closeServerDialogs } from "./modal.js";
 import { parseRuntimeObject } from "./runtime-json.js";
 
 import { initWorkspace, renderMember, renderVoiceHints, cancelMemberVolumePreview } from "./workspace-ui.js";
@@ -440,6 +442,7 @@ async function connectFromLogin() {
         if (state.serverGeneration !== finalizationGeneration || state.sessionGeneration !== sessionGeneration || !session.connected) return;
         state.myNickname = session.nickname || displayName || nick;
         state.myClientID = session.client_id;
+        connectionOverlay.confirmed(state.activeTabID, finalizationGeneration, sessionGeneration, session);
         state.isGuest = session.is_guest;
         state.authorizationModel = session.authorization_model || "";
         $("conn-pill").textContent = addr;
@@ -654,6 +657,7 @@ async function completeReconnect(c, generation, tabID, current = () => true) {
     state.reconnectAttempts = 0;
     state.myNickname = session.nickname || c.displayName || c.nick;
     state.myClientID = session.client_id;
+    connectionOverlay.confirmed(state.activeTabID, finalizationGeneration, sessionGeneration, session);
     state.isGuest = session.is_guest;
     state.authorizationModel = session.authorization_model || "";
     $("conn-pill").textContent = c.addr;
@@ -693,7 +697,9 @@ async function attemptReconnect(c = state.lastConnect, { announceFailure = true,
     if (!c || state.reconnectInFlight) return false;
     const generation = reconnectGeneration;
     const sourceServerGeneration = state.serverGeneration;
+    const sourceSessionGeneration = state.sessionGeneration;
     state.reconnectInFlight = true;
+    connectionOverlay.attempt(sourceTabID, sourceServerGeneration, sourceSessionGeneration, true);
     let err = "";
     let tabID = "";
     try {
@@ -722,6 +728,7 @@ async function attemptReconnect(c = state.lastConnect, { announceFailure = true,
     }
     if (err) {
         if (sourceTabID !== state.activeTabID || sourceServerGeneration !== state.serverGeneration) return false;
+        connectionOverlay.attempt(sourceTabID, sourceServerGeneration, sourceSessionGeneration, false, err);
         sysMsg(t("runtime.reconnectFailed", { error: err }));
         if (announceFailure) toast(t("runtime.reconnectToast", { error: err }), "warn", "conn");
         return false;
@@ -771,6 +778,7 @@ function scheduleReconnect(
         chatUI.beginReconnectAnnouncementBatch();
         sysMsg(t("runtime.reconnectCountdown", { seconds, attempt: state.reconnectAttempts }));
         $("conn-pill").textContent = t("runtime.retry", { seconds, attempt: state.reconnectAttempts });
+        connectionOverlay.progress(sourceTabID, { attempts: state.reconnectAttempts, remaining: seconds, inFlight: false });
     }
     let countdown = seconds - 1;
     reconnectCountdownTimer = setInterval(() => {
@@ -779,7 +787,8 @@ function scheduleReconnect(
             reconnectCountdownTimer = null;
             return;
         }
-        if (ownsSource()) $("conn-pill").textContent = t("runtime.retry", { seconds: countdown, attempt: state.reconnectAttempts });
+        if (ownsSource()) { $("conn-pill").textContent = t("runtime.retry", { seconds: countdown, attempt: state.reconnectAttempts });
+            connectionOverlay.progress(sourceTabID, { attempts: state.reconnectAttempts, remaining: countdown, inFlight: false }); }
         countdown--;
     }, 1000);
     state.reconnectTimer = setTimeout(async () => {
@@ -832,6 +841,7 @@ const tabReconnects = createTabReconnects({
         return completeReconnect(target, null, tabID, current);
     },
     changed(tabID, entry) {
+        connectionOverlay.progress(tabID, entry);
         if (state.activeTabID !== tabID) return;
         reconnectCancel.textContent = t("runtime.cancelReconnect");
         reconnectCancel.hidden = !entry;
@@ -857,6 +867,7 @@ const tabReconnects = createTabReconnects({
         if (state.activeTabID === tabID) sysMsg(t("runtime.reconnectFailed", { error }));
     },
     stopped(tabID, error) {
+        connectionOverlay.terminal(tabID, error);
         reconnectNotices.set(tabID, { key: "runtime.reconnectStopped", error });
         showReconnectNotice(tabID);
         if (state.activeTabID !== tabID) return;
@@ -865,6 +876,24 @@ const tabReconnects = createTabReconnects({
         $("conn-pill").textContent = t("runtime.offlineFailed");
     },
 });
+function cancelOverlayRetries() {
+    const tabID = state.activeTabID;
+    if (state.reconnectInFlight) return;
+    tabReconnects.cancel(tabID);
+    if (reconnectTimerSourceTabID === tabID) { reconnectGeneration++; clearReconnectTimer(); }
+    connectionOverlay.progress(tabID, null);
+    chatUI.cancelReconnectAnnouncementBatch();
+}
+function overlayConnectionSettings() {
+    const target = state.tabConnects.get(state.activeTabID);
+    if (!target?.addr || !target.nick || state.reconnectInFlight) return;
+    // Never use another tab's global last-successful connection here.
+    const profile = { addr: target.addr, nickname: target.nick, display_name: target.displayName || "" };
+    cancelOverlayRetries(); showLogin(); void loginMemory.select(profile);
+}
+const connectionOverlay = createConnectionOverlay({ getState: () => state, translate: t,
+    canConfigure: () => { const target = state.tabConnects.get(state.activeTabID); return !!target?.addr && !!target.nick; },
+    retry: overlayConnectionSettings, cancel: cancelOverlayRetries, closeMenus: () => { closeContextMenu(); closeServerDialogs("disconnected"); } });
 const reconnectCancel = document.createElement("button");
 reconnectCancel.id = "reconnect-cancel";
 reconnectCancel.className = "ui-button";
@@ -878,11 +907,13 @@ window.addEventListener("noxa-language-changed", () => {
     tabReconnects.refresh(state.activeTabID);
 });
 window.runtime.EventsOn("tab_disconnected", tabID => {
+    connectionOverlay.lost(String(tabID));
     if (scopedReconnectAvailable()) tabReconnects.start(String(tabID), state.tabConnects.get(String(tabID)));
 });
 window.runtime.EventsOn("tab_closed", tabID => {
     tabID = String(tabID);
     tabReconnects.cancel(tabID);
+    connectionOverlay.forget(tabID);
     reconnectNotices.delete(tabID);
     restoredVoiceChannels.delete(tabID);
     state.tabConnects.delete(tabID);
@@ -1016,6 +1047,7 @@ window.runtime.EventsOn("disconnected", () => {
         state.reconnectAttempts = 0;
     }
     state.sessionGeneration++;
+    connectionOverlay.lost(state.activeTabID);
     const unexpected = !!state.lastConnect;
     if (unexpected && state.settings?.notify_connection !== false) toast(t("runtime.connectionLost"), "warn", "conn");
     if (unexpected) playAlert("connection_lost", { delay: 1200 });
@@ -3152,7 +3184,7 @@ async function refreshPermissions() {
 // ---------------------------------------------------------------------------
 
 window.__noxa = {
-    videoPresentationDiagnostics,
+    videoPresentationDiagnostics, connectionOverlay,
     prefillLogin: loginMemory.select,
     soundEngine,
     speechQueue,
