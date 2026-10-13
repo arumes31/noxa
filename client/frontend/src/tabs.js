@@ -221,6 +221,7 @@ function onTabReset(tabID) {
     const generation = state.serverGeneration;
     const sessionGeneration = state.sessionGeneration;
     const current = () => activeTabID === tabID && state.serverGeneration === generation && state.sessionGeneration === sessionGeneration;
+    V().connectionOverlay?.select(activeTabID);
     // RTT belongs to one server identity. Clear the old sample before replay
     // and restart only after the new tab's identity has been resolved.
     V().stopQualitySampler?.();
@@ -267,7 +268,9 @@ function onTabReset(tabID) {
     V().renderTree();
     V().refreshPermissions();
     refreshTabIdentity(tabID).then(async (session) => {
-        if (!current() || !session) return;
+        if (!current()) return;
+        if (!session) { V().connectionOverlay?.unavailable(tabID, generation, sessionGeneration); return; }
+        V().connectionOverlay?.confirmed(tabID, generation, sessionGeneration, session);
         V().refreshPermissions();
         if (session.connected && state.myClientID) {
             initConversations();
