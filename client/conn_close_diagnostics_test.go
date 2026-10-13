@@ -46,7 +46,7 @@ func TestConnectionReadCloseDiagnostic(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			output := captureConnectionCloseLog(t)
 			local, peer := net.Pipe()
-			defer peer.Close()
+			defer func() { _ = peer.Close() }()
 			cm := newTestConnManager()
 			conn := closeDiagnosticReadConn{local, tc.failure}
 			cm.conn, cm.connEpoch = conn, 17
@@ -65,7 +65,7 @@ func TestConnectionReadCloseDiagnostic(t *testing.T) {
 func TestConnectionCloseDiagnosticExactlyOnceAndNoStaleEpoch(t *testing.T) {
 	output := captureConnectionCloseLog(t)
 	local, peer := net.Pipe()
-	defer peer.Close()
+	defer func() { _ = peer.Close() }()
 	cm := newTestConnManager()
 	cm.conn, cm.connEpoch = local, 23
 	var winners atomic.Int32
@@ -82,7 +82,7 @@ func TestConnectionCloseDiagnosticExactlyOnceAndNoStaleEpoch(t *testing.T) {
 		t.Fatal("duplicate close diagnostic")
 	}
 	next, nextPeer := net.Pipe()
-	defer nextPeer.Close()
+	defer func() { _ = nextPeer.Close() }()
 	cm.conn = next
 	if cm.terminateConn(local, true, netproto.ControlCloseWriteError) {
 		t.Fatal("stale connection terminated replacement")
