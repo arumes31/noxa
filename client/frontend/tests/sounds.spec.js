@@ -314,6 +314,13 @@ test("legacy channel previews use speech and stopping Test All cancels the rest"
         window.__noxa = { state: { settings, activeTabID: "one" } };
         window.__noxaPolish = { dndActive: () => false };
         const { previewSounds, testAll, stopPreviews, soundEngine } = await import("/src/sounds.js");
+        // Mapping and cancellation need real decoding/playback, but do not test
+        // the runner's system output device. Keep Chromium's real audio graph
+        // and ended callbacks using its silent sink; routing has separate tests.
+        const ctx = soundEngine.context(), setSinkId = ctx.setSinkId.bind(ctx);
+        ctx.setSinkId = () => setSinkId({ type: "none" });
+        const blocked = [];
+        window.addEventListener("noxa-audio-preview-blocked", event => { if (event.detail) blocked.push(event.detail); });
         const played = [], play = soundEngine.play.bind(soundEngine);
         soundEngine.play = (id, options) => { const started = play(id, options); if (started) played.push(id); return started; };
         await previewSounds(["own_channel_join", "join_leave", "kick"], settings);
@@ -321,9 +328,11 @@ test("legacy channel previews use speech and stopping Test All cancels the rest"
         await testAll(settings, label => { if (label) setTimeout(stopPreviews, 50); });
         await new Promise(resolve => setTimeout(resolve, 300));
         const active = soundEngine.active.size;
+        const readiness = { blocked, context: ctx.state, output: soundEngine.outputState };
         await soundEngine.dispose();
-        return { previews, played, active };
+        return { previews, played, active, readiness };
     });
+    expect(result.readiness).toEqual({ blocked: [], context: "running", output: "ready" });
     expect(result.previews).toEqual(["speech_en_channel_join", "speech_en_user_join", "speech_en_kicked"]);
     expect(result.played).toEqual(["speech_en_microphone_muted"]);
     expect(result.active).toBe(0);
