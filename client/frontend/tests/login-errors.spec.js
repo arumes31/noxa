@@ -107,3 +107,23 @@ test("German guidance wraps at narrow width without exposing password values", a
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     await page.screenshot({ path: testInfo.outputPath("server-password-error-de.png") });
 });
+
+test("minimum version rejection shows installed version, required version and update instruction", async ({ page }) => {
+    await page.evaluate(() => { window.__failure = "client version rejected: installed 0.5.59; required >=0.5.94; update noXa to connect"; });
+    await page.locator("#login-connect").click();
+    const area = page.locator("#login-error");
+    await expect(area).toContainText("Your noXa version is 0.5.59. This server requires 0.5.94 or newer.");
+    await expect(area).toContainText("Update noXa, then connect again.");
+    await expect(page.locator("#login-accountpw")).not.toHaveAttribute("aria-invalid");
+    await expect(page.locator("#login-serverpw")).not.toHaveAttribute("aria-invalid");
+});
+
+test("offline TLS connection shows network recovery without plaintext advice", async ({ page }) => {
+    await page.evaluate(() => { window.__failure = "TLS connection failed: dial tcp 127.0.0.1:12333: connectex: actively refused"; });
+    await page.locator("#login-connect").click();
+    await expect(page.locator("#login-error")).toContainText("The connection could not be established.");
+    await expect(page.locator("#login-addr-error")).toContainText("The server may be offline");
+    await expect(page.locator("#login-error")).not.toContainText("plaintext");
+    await expect(page.locator("#login-error")).not.toContainText("verify the certificate");
+    await expect(page.locator("#login-addr")).toBeFocused();
+});

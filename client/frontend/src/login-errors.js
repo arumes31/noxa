@@ -3,7 +3,12 @@ import { t } from "./i18n.js";
 // Older servers/native bridges return reason strings. Match only known reasons;
 // an unknown rejection must not be presented as an incorrect password.
 export function loginFailure(error, request = {}) {
-    const reason = String(error?.message || error || "").trim().replace(/^Error: /, "").toLowerCase();
+    const text = String(error?.message || error || "").trim().replace(/^Error: /, "");
+    const minimum = /^client version rejected: installed (.{1,100}); required >=([0-9A-Za-z.+-]{1,100}); update noXa to connect$/.exec(text);
+    if (minimum) return { kind: "minimumVersion", installed: minimum[1], required: minimum[2] };
+    // The native TLS dial wrapper can contain an ordinary offline/network error.
+    // Classify its cause so an unreachable server does not look like a bad certificate.
+    const reason = text.replace(/^TLS connection failed: /, "").toLowerCase();
     if (reason === "invalid server password") return { kind: "serverPassword", field: "login-serverpw", invalid: true };
     if (reason === "invalid credentials" || reason === "account password is incorrect") return { kind: "account", field: "login-accountpw", invalid: true };
     if (reason === "authentication failed") return { kind: "authentication", field: "login-accountpw" };
@@ -43,7 +48,7 @@ export function createLoginFeedback($) {
         const { error, request } = current, failure = loginFailure(error, request);
         const area = $("login-error");
         if (failure.kind === "unknown") { area.textContent = String(error?.message || error); return; }
-        const message = document.createElement("p"); message.textContent = t(`login.failure.${failure.kind}`); area.append(message);
+        const message = document.createElement("p"); message.textContent = t(`login.failure.${failure.kind}`, failure); area.append(message);
         const action = t(`login.recovery.${failure.kind}`);
         const field = failure.field && $(failure.field);
         if (field) {

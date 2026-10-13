@@ -41,3 +41,16 @@ test("name errors focus the name actually submitted, and missing saved secrets r
     assert.equal(loginFailure("saved password is no longer available; enter it again", { use_saved_account: true, use_saved_server: true }).field, "login-accountpw");
     assert.equal(loginFailure("saved passwords cannot be unlocked by this OS account; enter them again").kind, "savedPassword");
 });
+
+test("minimum client version preserves installed and required versions without blaming credentials", () => {
+    assert.deepEqual(loginFailure("client version rejected: installed 0.5.59; required >=0.5.94; update noXa to connect"), { kind: "minimumVersion", installed: "0.5.59", required: "0.5.94" });
+    assert.deepEqual(loginFailure("Error: client version rejected: installed unknown; required >=0.5.94-RC.1+Build; update noXa to connect"), { kind: "minimumVersion", installed: "unknown", required: "0.5.94-RC.1+Build" });
+    assert.equal(loginFailure("client version rejected: installed old; required >=<script>; update noXa to connect").kind, "unknown");
+});
+
+test("TLS dial wrapper preserves network versus certificate recovery", () => {
+    assert.deepEqual(loginFailure("TLS connection failed: dial tcp 127.0.0.1:12333: connectex: actively refused"), { kind: "network", field: "login-addr" });
+    assert.deepEqual(loginFailure("TLS connection failed: context deadline exceeded"), { kind: "network", field: "login-addr" });
+    assert.equal(loginFailure("TLS connection failed: tls: failed to verify certificate: x509: certificate expired").kind, "certificate");
+    assert.equal(loginFailure("TLS connection failed: tls fingerprint mismatch").kind, "certificate");
+});

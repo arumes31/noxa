@@ -102,6 +102,8 @@ services:
         read_only: true
         bind: { create_host_path: false }
     environment:
+      # Preserve an explicit empty value so invalid admission policy fails startup.
+      NOXA_CLIENT_MIN_VERSION: ${NOXA_CLIENT_MIN_VERSION-0.0.0}
       NOXA_ECHO_CHANNEL_ENABLED: ${NOXA_ECHO_CHANNEL_ENABLED:-true}
       NOXA_ECHO_CHANNEL_NAME: ${NOXA_ECHO_CHANNEL_NAME:-Echo Test}
       # --- Logging ---

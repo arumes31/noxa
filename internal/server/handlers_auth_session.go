@@ -82,6 +82,12 @@ type authIdentity struct {
 // followed by a full tree snapshot, deliver any spooled offline messages
 // (registered users only), and announce the join.
 func (s *TCPServer) finishAuth(ctx context.Context, client *Client, id authIdentity) error {
+	client.mu.RLock()
+	clientVersion := client.clientVersion
+	client.mu.RUnlock()
+	if reason := s.clientVersionRejection(clientVersion); reason != "" {
+		return s.rejectClientVersion(client, reason)
+	}
 	if client.negotiatedAuthorizationModel() != s.requiredAuthorizationModel() {
 		return s.rejectAuthorizationModel(client)
 	}

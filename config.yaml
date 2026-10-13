@@ -1,4 +1,7 @@
 # noxa server configuration sample.
+# Native client minimum: 0.0.0 accepts any version; exactly 9.9.9 uses the
+# running server version as a minimum (newer clients also accepted).
+client_min_version: "0.0.0"
 # The loader searches for config.yaml in the working directory first, then in
 # /etc/noxa. Environment variables prefixed with NOXA_ override these values
 # (e.g. NOXA_TCP_ADDR=:12333). See .env.example for the full list of supported

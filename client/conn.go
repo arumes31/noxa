@@ -307,7 +307,7 @@ func (m *connManager) dialEndpoint(ctx context.Context, addr, trustAddr string) 
 	allowPlain := m.allowPlaintext
 	m.mu.Unlock()
 	if !allowPlain {
-		return nil, fmt.Errorf("server does not accept TLS: %v (plaintext dev server? enable allow_plaintext in settings)", tlsErr)
+		return nil, fmt.Errorf("TLS connection failed: %v", tlsErr)
 	}
 
 	m.mu.Lock()

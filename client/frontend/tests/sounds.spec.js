@@ -3,6 +3,19 @@ import { test, expect } from "./fixtures.js";
 const NEW_ANNOUNCEMENTS = ["connection_connected", "connection_disconnected", "connection_reconnecting", "connection_failed", "server_error", "poke", "buddy_online", "channel_watch", "stream_watch_started"];
 const MESSAGE_EFFECTS = ["mention", "keyword", "dm", "channel_message", "whisper", "announcement"];
 
+// Mapping/cancellation tests retain real decoding, audio graph and ended events,
+// but do not depend on the runner's physical output. Device tests stay separate.
+async function useSilentPreviewOutput(page) {
+    await page.evaluate(async () => {
+        const { soundEngine } = await import("/src/sounds.js");
+        const ctx = soundEngine.context(), setSinkId = ctx.setSinkId.bind(ctx);
+        ctx.setSinkId = () => setSinkId({ type: "none" });
+        const blocked = [];
+        window.addEventListener("noxa-audio-preview-blocked", event => { if (event.detail) blocked.push(event.detail); });
+        window.__previewReadiness = () => ({ blocked: [...blocked], context: ctx.state, output: soundEngine.outputState });
+    });
+}
+
 test.beforeEach(async ({ page }) => {
     // These tests exercise real Web Audio modules, not the Wails application.
     // Keep a same-origin document for asset imports without booting main.js.
@@ -283,6 +296,7 @@ for (const language of ["en", "de"]) {
 for (const language of ["en", "de"]) {
     test(`Test All plays every ${language} announcement once and no retired click`, async ({ page }) => {
         test.setTimeout(100_000);
+        await useSilentPreviewOutput(page);
         const result = await page.evaluate(async language => {
             const settings = { spoken_messages: true, speech_language: language, speech_volume: 100, sound_volume: 100 };
             window.__noxa = { state: { settings, activeTabID: "one" } };
@@ -295,11 +309,13 @@ for (const language of ["en", "de"]) {
             await testAll(settings, label => labels.push(label));
             const retired = Object.keys(SPOKEN_ACTIONS).filter(id => soundEngine.definitions[id]);
             const active = soundEngine.active.size;
+            const readiness = window.__previewReadiness();
             await soundEngine.dispose();
-            return { played, retired, active, labels, expected: [
+            return { played, retired, active, labels, readiness, expected: [
                 ...Object.keys(SPEECH_EVENTS).map(event => `speech_${language}_${event}`), ...SOUND_EVENTS,
             ] };
         }, language);
+        expect(result.readiness).toEqual({ blocked: [], context: "running", output: "ready" });
         expect(result.played).toEqual(result.expected);
         expect(result.retired).toEqual([]);
         expect(result.active).toBe(0);
@@ -309,6 +325,7 @@ for (const language of ["en", "de"]) {
 }
 
 test("legacy channel previews use speech and stopping Test All cancels the rest", async ({ page }) => {
+    await useSilentPreviewOutput(page);
     const result = await page.evaluate(async () => {
         const settings = { spoken_messages: true, sound_volume: 100, speech_volume: 100 };
         window.__noxa = { state: { settings, activeTabID: "one" } };
@@ -321,9 +338,11 @@ test("legacy channel previews use speech and stopping Test All cancels the rest"
         await testAll(settings, label => { if (label) setTimeout(stopPreviews, 50); });
         await new Promise(resolve => setTimeout(resolve, 300));
         const active = soundEngine.active.size;
+        const readiness = window.__previewReadiness();
         await soundEngine.dispose();
-        return { previews, played, active };
+        return { previews, played, active, readiness };
     });
+    expect(result.readiness).toEqual({ blocked: [], context: "running", output: "ready" });
     expect(result.previews).toEqual(["speech_en_channel_join", "speech_en_user_join", "speech_en_kicked"]);
     expect(result.played).toEqual(["speech_en_microphone_muted"]);
     expect(result.active).toBe(0);

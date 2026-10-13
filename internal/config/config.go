@@ -5,12 +5,15 @@ import (
 	"fmt"
 	"net"
 	"net/url"
+	"os"
 	"runtime"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/spf13/viper"
+
+	"noxa/internal/version"
 )
 
 // Config holds all runtime configuration for the noxa server.
@@ -21,13 +24,16 @@ import (
 type Config struct {
 	ServerName     string `mapstructure:"server_name"`
 	ServerPassword string `mapstructure:"server_password"`
-	LogLevel       string `mapstructure:"log_level"`
-	DevMode        bool   `mapstructure:"dev_mode"`
-	TCPAddr        string `mapstructure:"tcp_addr"`
-	UDPAddr        string `mapstructure:"udp_addr"`
-	GRPCAddr       string `mapstructure:"grpc_addr"`
-	HealthAddr     string `mapstructure:"health_addr"`
-	QueryAddr      string `mapstructure:"query_addr"`
+	// ClientMinVersion gates native client admission. 0.0.0 accepts any version;
+	// exactly 9.9.9 uses the running server version as the minimum.
+	ClientMinVersion string `mapstructure:"client_min_version"`
+	LogLevel         string `mapstructure:"log_level"`
+	DevMode          bool   `mapstructure:"dev_mode"`
+	TCPAddr          string `mapstructure:"tcp_addr"`
+	UDPAddr          string `mapstructure:"udp_addr"`
+	GRPCAddr         string `mapstructure:"grpc_addr"`
+	HealthAddr       string `mapstructure:"health_addr"`
+	QueryAddr        string `mapstructure:"query_addr"`
 	// QueryAllowRemote is an explicit acknowledgement that the plaintext
 	// ServerQuery listener may bind beyond loopback. Prefer QuerySSH instead.
 	QueryAllowRemote bool `mapstructure:"query_allow_remote"`
@@ -239,6 +245,7 @@ func newConfigViper() *viper.Viper {
 
 	// Defaults -----------------------------------------------------------------
 	v.SetDefault("server_name", "noXa")
+	v.SetDefault("client_min_version", "0.0.0")
 	v.SetDefault("server_password", "")
 	v.SetDefault("log_level", "info")
 	v.SetDefault("dev_mode", true)
@@ -366,6 +373,11 @@ func Load() (*Config, error) {
 	v.SetEnvPrefix("NOXA")
 	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
 	v.AutomaticEnv()
+	// An explicitly empty admission policy is invalid, not an absent override.
+	// Viper normally ignores empty environment variables.
+	if minimum, present := os.LookupEnv("NOXA_CLIENT_MIN_VERSION"); present {
+		v.Set("client_min_version", minimum)
+	}
 
 	return decodeConfig(v)
 }
@@ -405,6 +417,9 @@ func (c *Config) Validate() error {
 	}
 
 	errs := []error{}
+	if _, err := version.NewClientMinimum(c.ClientMinVersion, version.Short()); err != nil {
+		errs = append(errs, err)
+	}
 	if strings.TrimSpace(c.ServerName) == "" {
 		errs = append(errs, errors.New("server_name must not be empty"))
 	}

@@ -482,6 +482,22 @@ defaults. Nested YAML keys use underscores in environment variables, for example
 `webrtc.udp_addr` becomes `NOXA_WEBRTC_UDP_ADDR`. The server does not load `.env`
 itself; Docker Compose uses it for interpolation.
 
+The native-client minimum is set in YAML as `client_min_version: "0.5.94"`
+(or through `NOXA_CLIENT_MIN_VERSION`) and takes effect after server restart.
+`0.0.0` keeps compatibility with older clients that omit a version or report a
+non-semantic descriptive version; existing length/control-character checks remain.
+With a minimum enabled, missing, malformed and older versions are rejected before
+membership is published, for password, signature and anonymous logins alike.
+Exactly `9.9.9` follows the running server's semantic version as a minimum,
+including prerelease precedence; newer clients remain accepted. `9.9.9.9` is
+invalid. Build metadata does not affect ordering. Invalid configuration or an
+unparseable server version in sentinel mode prevents startup. Rejections include
+the installed and required version and an update instruction, also on older
+clients. This is a compatibility gate on self-reported version metadata, not
+binary attestation. ServerQuery/gRPC integration accounts remain governed by their
+separate authorization contract and cannot create native channel membership.
+
+
 This table lists commonly used settings and built-in defaults. See
 [`internal/config/config.go`](internal/config/config.go) for the complete schema
 and validation, [`config.yaml`](config.yaml) for a development example, and
@@ -490,6 +506,7 @@ and validation, [`config.yaml`](config.yaml) for a development example, and
 | Environment Variable | Default Value | Description |
 | :--- | :--- | :--- |
 | `NOXA_SERVER_NAME` / `NOXA_SERVER_PASSWORD` | `noXa` / empty | Displayed server name and optional admission password |
+| `NOXA_CLIENT_MIN_VERSION` | `0.0.0` | Native client minimum; `0.0.0` permits any version, exactly `9.9.9` requires the running server version or newer, e.g. `0.5.94` requires that release or newer |
 | `NOXA_DEV_MODE` | `true` | Development logging/validation; explicitly set `false` for production |
 | `NOXA_TCP_ADDR` | `:12333` | Primary control TCP listener address |
 | `NOXA_UDP_ADDR` | `:12334` | UDP keepalive ping/pong listener address |
