@@ -209,9 +209,12 @@ type Router struct {
 	publicationModes             map[publicationKey]string
 	publicationCodecCapabilities map[publicationKey]uint8
 	watches                      map[watchKey]videoWatch
-	previews                     map[publicationKey]videoPreview
-	previewBudgets               map[string]previewBudget
 	watchSessions                map[string]uint64
+	// Preview metadata is not a consent change. Keep its writers off watchMu,
+	// whose readers include final socket writes. Lock order: watchMu -> previewMu.
+	previewMu      sync.Mutex
+	previews       map[publicationKey]videoPreview
+	previewBudgets map[string]previewBudget
 
 	mu           sync.RWMutex
 	members      map[int64]map[string]bool       // channelID -> member clientIDs
@@ -1164,9 +1167,9 @@ func (r *Router) detachPeer(clientID string, leaveChannel bool) {
 		delete(r.whispers, clientID)
 		r.refreshWhisperScopesLocked()
 		delete(r.layerPrefs, clientID)
-		r.watchMu.Lock()
+		r.previewMu.Lock()
 		delete(r.previewBudgets, clientID)
-		r.watchMu.Unlock()
+		r.previewMu.Unlock()
 	}
 	delete(r.whisperPairs, clientID)
 	for pub, subs := range r.whisperPairs {
