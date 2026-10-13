@@ -50,6 +50,25 @@ test("changed epoch and counter reset stop before admitting the incompatible row
     }
 });
 
+test("sender keyframe counters survive export and missing samples cannot hide their reset", () => {
+    for (const field of ["pli_count", "fir_count", "huge_frames_sent", "qp_sum"]) {
+        for (const next of [7, 8, 0]) {
+            const f = fixture(); f.recorder.start();
+            f.recorder.add(sample(10, { [field]: 7 }), "same");
+            f.advance(2000); f.recorder.add(sample(20), "same");
+            f.advance(2000); const admitted = f.recorder.add(sample(30, { [field]: next }), "same");
+            const record = JSON.parse(JSON.stringify(f.recorder.snapshot()));
+            assert.equal(record.samples[0].rows[0][field], 7);
+            assert.equal(record.samples[1].rows[0][field], null, "unavailable is not zero");
+            assert.equal(admitted, next >= 7);
+            assert.equal(record.stop_reason, next < 7 ? "counter_reset" : null);
+            assert.equal(record.sample_count, next < 7 ? 2 : 3);
+            if (admitted) assert.equal(record.samples[2].rows[0][field], next);
+        }
+        assert.equal(sample(10, { [field]: 0 }).rows[0][field], 0, "genuine zero survives projection");
+    }
+});
+
 test("resource limits interrupt, never silently truncate or claim duration completion", () => {
     for (const limits of [{ maxSamples: 1 }, { maxBytes: 1 }]) {
         const f = fixture(limits); f.recorder.start(); f.recorder.add(sample(), "epoch"); f.advance(2000);

@@ -21,6 +21,7 @@ test.beforeEach(async ({ page }, testInfo) => {
                         framesPerSecond: 60, bytesSent: tick * 2000000, packetsSent: tick * 2000, totalEncodeTime: tick * 1.2,
                         totalPacketSendDelay: tick * 20, qualityLimitationReason: "none", encoderImplementation: "libvpx", powerEfficientEncoder: false,
                         targetBitrate: 10000000, retransmittedBytesSent: tick * 20000, keyFramesEncoded: tick,
+                        pliCount: tick * 2, firCount: 0, hugeFramesSent: tick, qpSum: tick * 720,
                         transportId: "transport", remoteId: "remote", qualityLimitationDurations: { bandwidth: tick * 0.5, cpu: 0 } }],
                     ["transport", { id: "transport", type: "transport", selectedCandidatePairId: "pair" }],
                     ["pair", { id: "pair", type: "candidate-pair", timestamp: tick * 2000, availableOutgoingBitrate: 12000000, currentRoundTripTime: 0.04, localCandidateId: "secret" }],
@@ -148,6 +149,10 @@ test("manual recording reuses existing polls, stops, exports and ends on session
     const record = await page.evaluate(() => JSON.parse(window.__sender.copied).recording);
     expect(record).toMatchObject({ state: "interrupted", stop_reason: "manual", sample_count: 3, direction: "sent" });
     expect(record.samples[0].rows[0]).toMatchObject({ width: 1920, height: 1080, power_efficient: false });
+    for (const { rows: [row] } of record.samples) {
+        expect(row).toMatchObject({ pli_count: row.key_frames * 2, fir_count: 0,
+            huge_frames_sent: row.key_frames, qp_sum: row.frames_encoded * 30 });
+    }
     expect(JSON.stringify(record)).not.toMatch(/private|192\.0\.2|trackIdentifier|stats_id/i);
     await panel.getByRole("button", { name: "Start diagnostic recording", exact: true }).click();
     await page.evaluate(() => { window.__noxa.state.sessionGeneration++; });
