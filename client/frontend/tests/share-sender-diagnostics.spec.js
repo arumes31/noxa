@@ -1,7 +1,7 @@
 import { test, expect } from "./fixtures.js";
 
 test.beforeEach(async ({ page }, testInfo) => {
-    if (testInfo.title.includes("hung sender stats")) await page.clock.install();
+    if (testInfo.title.includes("hung sender stats") || testInfo.title.includes("manual recording")) await page.clock.install();
     await page.route("**/sender-diagnostics-fixture", route => route.fulfill({ contentType: "text/html", body: `<!doctype html><html lang="en"><head><link rel="stylesheet" href="/src/style.css"></head><body><section id="sharing-status" class="sharing-status"></section></body></html>` }));
     await page.goto("/sender-diagnostics-fixture");
     await page.evaluate(async () => {
@@ -12,7 +12,7 @@ test.beforeEach(async ({ page }, testInfo) => {
         let tick = 0;
         const pc = { connectionState: "connected" }, state = { pc, shareStream: stream,
             activeTabID: "qa", serverGeneration: 1, sessionGeneration: 1, myClientID: "self", myChannelID: 1, settings: {},
-            shareVideoTransceiver: { sender: { getParameters: () => ({ encodings: [{ rid: "f", active: true, maxBitrate: 50000000 }] }), getStats: async () => {
+            shareVideoTransceiver: { sender: { track, getParameters: () => ({ encodings: [{ rid: "f", active: true, maxBitrate: 50000000 }] }), getStats: async () => {
                 if (window.__sender.reject) throw new Error("stats failed");
                 tick++;
                 return new Map([
@@ -124,4 +124,57 @@ test("hung sender stats stay single-flight across timeout and panel restart, the
     const stoppedCalls = await page.evaluate(() => window.__sender.calls);
     await page.clock.runFor(10000);
     expect(await page.evaluate(() => window.__sender.calls)).toBe(stoppedCalls);
+});
+
+
+test("manual recording reuses existing polls, stops, exports and ends on session change", async ({ page }, testInfo) => {
+    const panel = page.locator(".sharing-diagnostics");
+    await panel.locator("summary").click();
+    await page.evaluate(() => {
+        const sender = window.__noxa.state.shareVideoTransceiver.sender, get = sender.getStats;
+        window.__sender.calls = 0; sender.getStats = () => { window.__sender.calls++; return get(); };
+    });
+    await panel.getByRole("button", { name: "Start diagnostic recording", exact: true }).click();
+    expect(await page.evaluate(() => window.__sender.calls)).toBe(0);
+    const announcement = panel.locator('.stream-recording [role="status"]');
+    await expect(announcement).toHaveText("Diagnostic recording started.");
+    await page.clock.runFor(6500);
+    await expect(announcement).toHaveText("Diagnostic recording started.");
+    expect(await page.evaluate(() => window.__sender.calls)).toBe(3);
+    await panel.locator(".stream-recording small").scrollIntoViewIfNeeded();
+    await page.screenshot({ path: testInfo.outputPath("sender-diagnostic-recording.png"), fullPage: true });
+    await panel.getByRole("button", { name: "Stop diagnostic recording", exact: true }).click();
+    await panel.getByRole("button", { name: "Copy sending diagnostics" }).click();
+    const record = await page.evaluate(() => JSON.parse(window.__sender.copied).recording);
+    expect(record).toMatchObject({ state: "interrupted", stop_reason: "manual", sample_count: 3, direction: "sent" });
+    expect(record.samples[0].rows[0]).toMatchObject({ width: 1920, height: 1080, power_efficient: false });
+    expect(JSON.stringify(record)).not.toMatch(/private|192\.0\.2|trackIdentifier|stats_id/i);
+    await panel.getByRole("button", { name: "Start diagnostic recording", exact: true }).click();
+    await page.evaluate(() => { window.__noxa.state.sessionGeneration++; });
+    await page.clock.runFor(1100);
+    // The recorder's own watchdog observes stale scope even if the stats request is hung.
+    await expect(panel.locator(".stream-recording")).toContainText("stream or session changed");
+});
+
+
+test("manual recording separates reused SSRC lifetimes and remains copyable after share teardown", async ({ page }, testInfo) => {
+    const panel = page.locator(".sharing-diagnostics"); await panel.locator("summary").click();
+    await panel.getByRole("button", { name: "Start diagnostic recording", exact: true }).click();
+    await page.clock.runFor(2100);
+    await page.evaluate(() => {
+        const sender = window.__noxa.state.shareVideoTransceiver.sender, original = sender.getStats;
+        sender.getStats = async () => { const report = await original(), row = report.get("f"); report.delete("f");
+            row.id = "new-stats-id"; report.set(row.id, row); return report; };
+    });
+    await page.clock.runFor(2100);
+    await expect(panel.locator(".stream-recording")).toContainText("counter lifetime changed");
+    await page.evaluate(() => window.__sender.stop());
+    await expect(page.locator("#sharing-status")).toBeHidden();
+    const archive = page.locator(".stream-recording-archive"); await archive.locator("summary").click();
+    await archive.getByRole("button", { name: "Copy saved diagnostics" }).click();
+    const record = await page.evaluate(() => JSON.parse(window.__sender.copied).recording);
+    expect(record).toMatchObject({ direction: "sent", slot: "screen", stop_reason: "epoch_changed", sample_count: 1 });
+    expect(JSON.stringify(record)).not.toContain("new-stats-id");
+    await page.screenshot({ path: testInfo.outputPath("sender-saved-diagnostics-after-stop.png"), fullPage: true });
+    await archive.getByRole("button", { name: "Remove saved copy" }).click(); await expect(archive).toBeHidden();
 });

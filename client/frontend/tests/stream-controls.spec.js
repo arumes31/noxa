@@ -684,3 +684,49 @@ test("camera diagnostics expose a stalled stream and successful retry clears the
     await expect(tile.getByRole("button", { name: "Retry stream", exact: true })).toBeHidden();
     await expect(tile).toHaveClass(/has-video/);
 });
+
+
+test("manual receiver diagnostic recording exports only existing polls and stops on track loss", async ({ page }, testInfo) => {
+    await page.clock.install();
+    await page.evaluate(() => {
+        window.__streams.statsCalls = 0;
+        window.__noxa.toast = () => {};
+        window.runtime = { ClipboardSetText: async value => { window.__streams.copied = value; return true; } };
+        window.go.main.App.SystemCPUPercent = async () => 10;
+        window.__noxa.state.pc.getStats = async () => {
+            const n = ++window.__streams.statsCalls;
+            return new Map([["codec", { id: "codec", type: "codec", mimeType: "video/H264" }],
+                ["video", { id: "video", type: "inbound-rtp", kind: "video", ssrc: 42, trackIdentifier: "alice|screen", codecId: "codec",
+                    timestamp: n * 3000, framesReceived: n * 180, framesDecoded: n * 171, framesDropped: 0,
+                    freezeCount: 2, totalFreezesDuration: 1.25, bytesReceived: n * 1500000, frameWidth: 1920, frameHeight: 1080,
+                    decoderImplementation: "ExternalDecoder (D3D11VideoDecoder)", powerEfficientDecoder: true }]]);
+        };
+    });
+    await page.locator('[data-publisher="alice"] .stream-watch').click();
+    await page.clock.runFor(3000);
+    const panel = page.locator(".vtile-diagnostics"); await panel.locator("summary").click();
+    const before = await page.evaluate(() => window.__streams.statsCalls);
+    await panel.getByRole("button", { name: "Start diagnostic recording", exact: true }).click();
+    expect(await page.evaluate(() => window.__streams.statsCalls)).toBe(before);
+    await page.clock.runFor(6000);
+    expect(await page.evaluate(() => window.__streams.statsCalls)).toBe(before + 2);
+    await panel.locator(".stream-recording small").scrollIntoViewIfNeeded();
+    await page.screenshot({ path: testInfo.outputPath("receiver-diagnostic-recording.png"), fullPage: true });
+    await panel.getByRole("button", { name: "Stop diagnostic recording", exact: true }).click();
+    await panel.getByRole("button", { name: "Copy this stream’s diagnostics" }).click();
+    const record = await page.evaluate(() => JSON.parse(window.__streams.copied).recording);
+    expect(record).toMatchObject({ direction: "received", stop_reason: "manual", sample_count: 2 });
+    expect(record.samples[0].rows[0]).toMatchObject({ codec: "H264", width: 1920, height: 1080,
+        freeze_count: 2, total_freezes_duration_seconds: 1.25, implementation: "d3d11", power_efficient: true });
+    expect(record.samples[0].presentation.window_ms).toBe(30000);
+    await panel.getByRole("button", { name: "Start diagnostic recording", exact: true }).click();
+    await page.clock.runFor(3000);
+    await page.evaluate(async () => { window.__noxa.state.sessionGeneration++; window.__noxa.state.pc = null;
+        (await import("/src/video.js")).clearVideoGrid(); });
+    await expect(page.locator(".vtile")).toHaveCount(0);
+    const archive = page.locator(".stream-recording-archive"); await archive.locator("summary").click();
+    await archive.getByRole("button", { name: "Copy saved diagnostics" }).click();
+    expect(await page.evaluate(() => JSON.parse(window.__streams.copied).recording)).toMatchObject({ stop_reason: "scope_changed", sample_count: 1 });
+    await page.screenshot({ path: testInfo.outputPath("receiver-saved-diagnostics-after-disconnect.png"), fullPage: true });
+    await archive.getByRole("button", { name: "Remove saved copy" }).click(); await expect(archive).toBeHidden();
+});

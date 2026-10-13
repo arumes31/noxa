@@ -1,6 +1,13 @@
 // Public stream diagnostics contain measured counters only. Never serialize a
 // track label, device identifier, source ID, candidate address or raw RTCStats.
 const profiles = new WeakMap();
+const recordingIdentities = new WeakMap();
+
+// Local lifetime binding only: never add raw RTCStats identities to public rows.
+export function videoSenderRecordingIdentity(rows) {
+    const identities = rows.map(row => recordingIdentities.get(row));
+    return identities.length && identities.every(Boolean) ? JSON.stringify(identities) : null;
+}
 const number = (value, max = Number.MAX_SAFE_INTEGER) => Number.isFinite(value) && value >= 0 && value <= max ? value : null;
 const counter = value => Number.isSafeInteger(value) && value >= 0 ? value : null;
 const dimension = value => Number.isInteger(value) && value > 0 && value <= 16384 ? value : null;
@@ -127,7 +134,7 @@ export function collectVideoSenders(stats, previousStats, sources = [], previous
         const validKeyframes = value => counter(value?.keyFramesEncoded) !== null && counter(value?.framesEncoded) !== null && value.keyFramesEncoded <= value.framesEncoded;
         const keyframes = validKeyframes(stat) && validKeyframes(previous) ? delta(stat, previous, "keyFramesEncoded") : null;
         const codec = String(stats.get(stat.codecId)?.mimeType || "").toLowerCase();
-        rows.push({ ssrc: stat.ssrc, rid: stat.rid || "", slot: context.slot, generation: context.generation, sample_ms: sample,
+        const row = { ssrc: stat.ssrc, rid: stat.rid || "", slot: context.slot, generation: context.generation, sample_ms: sample,
             ...senderFeedback(stats, stat, previous, context, sample),
             requested_fps: number(context.requestedFPS, 240), settings_fps: number(context.settingsFPS, 240),
             capture_width: dimension(context.captureWidth), capture_height: dimension(context.captureHeight),
@@ -149,7 +156,10 @@ export function collectVideoSenders(stats, previousStats, sources = [], previous
             frames_encoded: counter(stat.framesEncoded), frames_sent: counter(stat.framesSent), packets_sent: counter(stat.packetsSent),
             bytes_sent: counter(stat.bytesSent),
             retransmitted_packets: counter(stat.retransmittedPacketsSent) !== null && counter(stat.packetsSent) !== null && stat.retransmittedPacketsSent <= stat.packetsSent ? stat.retransmittedPacketsSent : null,
-            retransmitted_bytes: validRetransmits(stat) ? stat.retransmittedBytesSent : null });
+            retransmitted_bytes: validRetransmits(stat) ? stat.retransmittedBytesSent : null };
+        recordingIdentities.set(row, [stat.id, stat.mediaSourceId, stat.transportId, stat.codecId,
+            source?.trackIdentifier, stat.ssrc, stat.rid, context.slot, context.generation]);
+        rows.push(row);
         if (rows.length === 8) break;
     }
     return rows;

@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { collectVideoSenders, primaryVideoSender, rememberVideoSenderProfile, videoSenderEncodingSettings, videoSenderCaptureSettings, videoSenderSources, videoSenderFrameRateReduced } from "../src/video-sender-stats.js";
+import { collectVideoSenders, videoSenderRecordingIdentity, primaryVideoSender, rememberVideoSenderProfile, videoSenderEncodingSettings, videoSenderCaptureSettings, videoSenderSources, videoSenderFrameRateReduced } from "../src/video-sender-stats.js";
 
 const context = { slot: "screen", generation: "42", trackID: "private-track", mid: "2", requestedFPS: 60, settingsFPS: 60 };
 const row = changes => ({ id: "out", type: "outbound-rtp", kind: "video", ssrc: 22, rid: "f", mid: "2", mediaSourceId: "source", codecId: "codec",
@@ -241,4 +241,21 @@ test("new, reset and invalid limitation counters stay unknown rather than invent
     const missing = collect();
     for (const key of ["available_outgoing_bitrate_bps", "transport_rtt_ms", "remote_rtt_ms", "remote_fraction_lost", "encoding_active", "encoding_max_bitrate_bps", "bandwidth_limited_ms", "cpu_limited_ms"]) assert.equal(missing[key], null, key);
     assert.equal(collect(feedbackReport(), null).remote_rtt_ms, null, "old receiver report must not be relabeled on publication start");
+});
+
+
+test("local recording identity distinguishes RTC lifetimes without exporting raw IDs or geometry epochs", () => {
+    const baseline = [collect()]; const identity = videoSenderRecordingIdentity(baseline);
+    for (const change of [{ id: "new-stats-id" }, { mediaSourceId: "new-source-id" }, { transportId: "new-transport-id" }, { codecId: "new-codec-id" }]) {
+        const next = row({ ...after.get("out"), ...change, framesEncoded: 170, bytesSent: 1200000 });
+        const stats = report(next);
+        stats.set(next.mediaSourceId, { ...stats.get("source"), id: next.mediaSourceId });
+        stats.set(next.codecId, { ...stats.get("codec"), id: next.codecId });
+        const collected = [collect(stats)];
+        assert.notEqual(videoSenderRecordingIdentity(collected), identity);
+        assert.doesNotMatch(JSON.stringify(collected), /new-stats-id|new-source-id|new-transport-id|new-codec-id|private-track/);
+    }
+    const geometry = [collect(report({ ...after.get("out"), frameWidth: 1280, frameHeight: 720 }))];
+    assert.equal(videoSenderRecordingIdentity(geometry), identity);
+    assert.equal(videoSenderRecordingIdentity([{ ...baseline[0] }]), null, "unbound copies must not invent an identity");
 });

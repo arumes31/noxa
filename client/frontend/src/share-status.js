@@ -1,8 +1,9 @@
+import { diagnosticSample, mountStreamDiagnosticRecording } from "./stream-diagnostic-recording.js";
 import { t } from "./i18n.js";
 import { mediaScopeIsCurrent } from "./media-controls.js";
 import { copyToClipboard } from "./clipboard.js";
 import { formatBitrate } from "./connection-stats.js";
-import { collectVideoSenders, primaryVideoSender, videoSenderEncodingSettings, videoSenderCaptureSettings } from "./video-sender-stats.js";
+import { collectVideoSenders, videoSenderRecordingIdentity, primaryVideoSender, videoSenderEncodingSettings, videoSenderCaptureSettings } from "./video-sender-stats.js";
 import { sampleSenderStats } from "./peer-stats.js";
 import { publicationUploadActive } from "./stream-publication.js";
 import { summarizeStreamHealth, renderStreamHealth } from "./stream-health.js";
@@ -38,13 +39,21 @@ export function startShareStatus(options) {
         <p class="sharing-meta"></p><p class="sharing-warning" role="status" hidden></p><div class="stream-health" data-direction="sender"></div>
         <details class="sharing-preview"><summary></summary><video muted playsinline></video></details>
         <details class="sharing-diagnostics"><summary></summary><p class="sharing-diagnostics-note"></p><dl></dl><p class="sharing-layers"></p><button type="button" class="sharing-copy"></button></details>`;
+    s.recording = mountStreamDiagnosticRecording(root.querySelector(".sharing-diagnostics"), {
+        direction: "sent", slot: "screen", cadenceMS: 2000, captureScope: () => {
+            const sender = window.__noxa.state.shareVideoTransceiver?.sender;
+            return () => current(s) && !!sender && window.__noxa.state.shareVideoTransceiver?.sender === sender &&
+                sender.track === s.track && s.pc.connectionState !== "closed" && s.pc.connectionState !== "failed";
+        },
+    }, t, copyToClipboard);
     root.hidden = false;
     root.querySelector(".sharing-change").onclick = () => { if (current(s)) s.change(); };
     root.querySelector(".sharing-quality").onclick = () => { if (current(s)) s.changeQuality(); };
     root.querySelector(".sharing-stop").onclick = () => { if (current(s)) s.stop(); };
     root.querySelector(".sharing-copy").onclick = () => {
-        if (!current(s) || !s.layers?.length) return;
+        if (!current(s) || (!s.layers?.length && !s.recording.status())) return;
         void copyToClipboard(JSON.stringify({ sampled_at: s.sampledAt, direction: "sent", slot: "screen", video_senders: s.layers,
+            ...(s.recording.status() ? { recording: s.recording.snapshot() } : {}),
             note: "Measured RTP payload counters. capture_width/capture_height are current capture-track output settings in pixels; width/height are encoded dimensions. Requested and capture settings are not measured frame rates. Null means unavailable." }, null, 2), { isCurrent: () => current(s) });
     };
     const details = root.querySelector(".sharing-preview"), video = root.querySelector("video");
@@ -130,7 +139,8 @@ function renderDetails(s) {
     details.querySelector(".sharing-layers").textContent = (s.layers || []).map(row =>
         `${row.rid || "—"}: ${row.width ?? "—"} × ${row.height ?? "—"} · ${display(row.sent_fps, " fps")} · ${formatBitrate(row.bitrate_bps)}`).join(" | ");
     const copy = details.querySelector(".sharing-copy");
-    copy.textContent = t("share.copyDiagnostics"); copy.disabled = !s.layers?.length;
+    copy.textContent = t("share.copyDiagnostics"); copy.disabled = !s.layers?.length && !s.recording.status();
+    s.recording.render();
 }
 
 async function poll(s) {
@@ -144,8 +154,10 @@ async function poll(s) {
         s.layers = report ? collectVideoSenders(report, s.previous, [source], s.previousSource ? [s.previousSource] : []) : [];
         s.sample = primaryVideoSender(s.layers);
         s.previous = report; s.previousSource = source; s.sampledAt = Date.now(); s.measuredAt = performance.now(); s.statsFailed = false;
+        if (s.recording.status()?.state === "recording") s.recording.add(diagnosticSample("sent", s.layers.map(row => ({ ...row, implementation: row.encoder_implementation }))),
+            videoSenderRecordingIdentity(s.layers));
         if (current(s)) render(s);
-    } catch { if (current(s)) { s.sample = null; s.layers = []; s.previous = null; s.statsFailed = true; render(s); } }
+    } catch { if (current(s)) { s.sample = null; s.layers = []; s.previous = null; s.statsFailed = true; s.recording.fail(); render(s); } }
     finally { if (current(s)) s.timer = setTimeout(() => { void poll(s); }, 2000); }
 }
 
@@ -154,6 +166,7 @@ export function stopShareStatus() {
     session = null;
     if (!s) return;
     clearTimeout(s.timer);
+    s.recording?.dispose();
     const video = s.root.querySelector("video");
     if (video) { video.pause(); video.srcObject = null; }
     s.root.hidden = true;
