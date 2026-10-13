@@ -1754,7 +1754,10 @@ func (r *Router) ReadVideoLoop(clientID, slot string, track VideoTrackReader) {
 		now := time.Now()
 		if strings.EqualFold(mime, webrtc.MimeTypeH264) {
 			packets, keyframe, lost := h264Frame.push(pkt, now)
-			if lost {
+			// A complete SPS/PPS-before-IDR unit already repairs an abandoned
+			// predecessor. Keep its rejection diagnostics, but do not request
+			// another keyframe; incomplete replacements still need recovery.
+			if lost && !keyframe {
 				r.requestKeyframe(clientID, slot, rid, keyframeH264Assembly)
 			}
 			for i, packet := range packets {
