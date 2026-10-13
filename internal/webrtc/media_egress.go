@@ -15,8 +15,9 @@ import (
 
 // Retain the whole bounded pacing queue plus recent NACK retransmissions.
 // Count and lifetime remain bounded; every write still rechecks authority.
-const mediaTicketCount = 4096
+const mediaTicketCount = mediaPacerPackets + 4096
 const mediaTicketLifetime = time.Second
+const mediaVideoTicketLifetime = mediaPacerLifetime + mediaTicketLifetime
 
 // Admission avoids filling queues with already-denied media. It releases its
 // lease before entering Pion: the terminal interceptor checks again after all
@@ -112,7 +113,11 @@ func (s *mediaEgressStream) prepare(pkt *rtp.Packet, ticket mediaTicket) (rtp.Pa
 	if id == 0 {
 		return rtp.Packet{}, false
 	}
-	ticket.id, ticket.expires = id, time.Now().Add(mediaTicketLifetime)
+	lifetime := mediaTicketLifetime
+	if ticket.delivery.Slot == SlotCam || ticket.delivery.Slot == SlotScreen {
+		lifetime = mediaVideoTicketLifetime
+	}
+	ticket.id, ticket.expires = id, time.Now().Add(lifetime)
 	ticket.repairDiagnostic = videoRepairTicketDiagnostic{}
 	ticket.csrc = append([]uint32(nil), pkt.CSRC...)
 	ticket.videoMedia = !isVideoPadding(pkt) && len(pkt.Payload) > 0

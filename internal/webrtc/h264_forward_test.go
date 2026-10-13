@@ -82,7 +82,7 @@ func TestH264ForwardAssemblyTimeBounds(t *testing.T) {
 				if mode == "trickle" {
 					expected = h264RejectAge
 				}
-				for i := 1; len(reasons) == 0 && i <= 21; i++ {
+				for i := 1; len(reasons) == 0 && i <= int(h264ForwardMaxWait/(100*time.Millisecond))+1; i++ {
 					packet := h264ForwardPacket(uint16(i+1), 90, false, 0x7c, 1, 1)
 					if mode == "padding" {
 						packet = recoveryPaddingPacket(7, uint16(i+1), 0)
@@ -155,7 +155,7 @@ func TestH264ForwardFrameRejectsBrokenUnits(t *testing.T) {
 		t.Fatal("fragment gap accepted")
 	}
 	frame.push(h264ForwardPacket(4, 180, false, 0x67, 1), now)
-	if _, key, lost := frame.push(h264ForwardPacket(5, 180, true, 0x65, 1), now.Add(time.Second)); key || !lost {
+	if _, key, lost := frame.push(h264ForwardPacket(5, 180, true, 0x65, 1), now.Add(h264ForwardIdleWait+time.Millisecond)); key || !lost {
 		t.Fatal("expired configuration accepted")
 	}
 }
@@ -406,5 +406,38 @@ func TestRouterVideoCodecBindingAndLateJoin(t *testing.T) {
 	router.releaseSlot("pub", SlotCam+slotSep, token)
 	if router.setVideoCodec("pub", SlotCam, "", token, webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeVP8, ClockRate: 90000}) {
 		t.Fatal("retired source changed codec")
+	}
+}
+
+func TestH264ForwardAcceptsLateReorderRepair(t *testing.T) {
+	for _, delay := range []time.Duration{40 * time.Millisecond, 2400 * time.Millisecond} {
+		t.Run(delay.String(), func(t *testing.T) {
+			var reorder videoReorder
+			var frame h264ForwardFrame
+			now := time.Unix(1, 0)
+			var complete []*rtp.Packet
+			keyframes := 0
+			emit := func(packet *rtp.Packet, _ string) {
+				packets, key, lost := frame.push(packet, now)
+				if lost {
+					t.Fatal("repaired intact H264 unit was discarded")
+				}
+				complete = append(complete, packets...)
+				if key {
+					keyframes++
+				}
+			}
+			reorder.push(h264ForwardPacket(1, 90, false, 24, 0, 2, 0x67, 1, 0, 2, 0x68, 1), webrtc.MimeTypeH264, now, emit)
+			reorder.push(h264ForwardPacket(2, 90, false, 0x7c, 0x85, 3), webrtc.MimeTypeH264, now, emit)
+			reorder.push(h264ForwardPacket(4, 90, true, 0x7c, 0x45, 5), webrtc.MimeTypeH264, now, emit)
+			if len(complete) != 0 {
+				t.Fatal("incomplete keyframe escaped")
+			}
+			now = now.Add(delay)
+			reorder.push(h264ForwardPacket(3, 90, false, 0x7c, 0x05, 4), webrtc.MimeTypeH264, now, emit)
+			if len(complete) != 4 || keyframes != 1 || !reorder.deadline().IsZero() {
+				t.Fatalf("repair not immediately delivered: packets=%d keyframes=%d", len(complete), keyframes)
+			}
+		})
 	}
 }

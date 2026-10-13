@@ -135,7 +135,7 @@ func TestVideoRepairDiagnosticsActualPacerClassificationAndSuccess(t *testing.T)
 		assert(1, 1)
 		zero = false
 		// Ticket expiry, unlike a pacer queue timeout, is checked at final write.
-		time.Sleep(mediaTicketLifetime)
+		time.Sleep(mediaVideoTicketLifetime)
 		write(rtx, payload)
 		drain()
 		assert(1, 1)

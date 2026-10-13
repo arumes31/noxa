@@ -12,8 +12,10 @@ import (
 // and total residence. The absolute cap prevents endless trickle retention;
 // byte, packet and NAL caps still apply independently. These forwarding limits
 // do not relax the separate dimension-policy inspector.
-const h264ForwardIdleWait = 500 * time.Millisecond
-const h264ForwardMaxWait = 2 * time.Second
+// An unfinished unit can wait behind an upstream sequence gap. Preserve the
+// existing assembly allowance in addition to that bounded repair residence.
+const h264ForwardIdleWait = videoReorderWait + 500*time.Millisecond
+const h264ForwardMaxWait = videoReorderWait + 2*time.Second
 
 type h264RejectReason uint8
 

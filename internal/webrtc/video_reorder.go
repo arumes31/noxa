@@ -10,18 +10,21 @@ import (
 	"github.com/pion/rtp"
 )
 
-const videoReorderWait = 200 * time.Millisecond
+// Wait only behind a missing sequence; contiguous packets and completed
+// repairs are released immediately. This is a ceiling, not a playout delay.
+const videoReorderWait = 2500 * time.Millisecond
 
 // Pion polls its separate, bounded RTX queue before blocking on primary RTP;
 // repairs cannot wake that primary read. Service repairs while a gap exists
 // without shortening the reorder window or adding polls to contiguous media.
 const videoRepairPoll = 20 * time.Millisecond
 
-// A 50 Mbps source needs about 1.25 MB and 1,042 ordinary RTP packets for
-// this repair window. Leave bounded headroom for keyframe bursts; a tiny
-// packet cap otherwise abandons gaps before the first NACK can return.
-const videoReorderPackets = 2048
-const videoReorderBytes = 2 * 1024 * 1024
+// At 50 Mbps, 2.5 seconds requires about 15.625 MB and 13,021 1200-byte
+// RTP packets. Both limits remain hard per-publication bounds; unusually small
+// packets or larger bursts can exhaust them before the time ceiling. Keep the
+// packet window below half the 16-bit sequence space for unambiguous ordering.
+const videoReorderPackets = 16384
+const videoReorderBytes = 16 * 1024 * 1024
 
 type orderedVideoPacket struct {
 	packet *rtp.Packet
