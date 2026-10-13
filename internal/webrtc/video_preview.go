@@ -23,14 +23,16 @@ func (r *Router) SetVideoPreview(publisher, slot string, generation uint64, data
 		return errors.New("invalid video preview")
 	}
 	key := publicationKey{publisher, slot}
-	r.watchMu.Lock()
+	r.watchMu.RLock()
 	if generation == 0 || r.publications[key] != generation {
-		r.watchMu.Unlock()
+		r.watchMu.RUnlock()
 		return ErrVideoPublication
 	}
+	r.previewMu.Lock()
 	budget := r.previewBudgets[publisher]
 	if time.Since(budget.attempt) < 2*time.Second {
-		r.watchMu.Unlock()
+		r.previewMu.Unlock()
+		r.watchMu.RUnlock()
 		return errors.New("video preview update too frequent")
 	}
 	if r.previewBudgets == nil {
@@ -38,7 +40,8 @@ func (r *Router) SetVideoPreview(publisher, slot string, generation uint64, data
 	}
 	budget.attempt = time.Now()
 	r.previewBudgets[publisher] = budget
-	r.watchMu.Unlock()
+	r.previewMu.Unlock()
+	r.watchMu.RUnlock()
 	config, err := jpeg.DecodeConfig(bytes.NewReader(data))
 	if err != nil || config.Width < 1 || config.Height < 1 || config.Width > 640 || config.Height > 360 {
 		return errors.New("invalid video preview dimensions")
@@ -46,11 +49,16 @@ func (r *Router) SetVideoPreview(publisher, slot string, generation uint64, data
 	if _, err := jpeg.Decode(bytes.NewReader(data)); err != nil {
 		return errors.New("invalid video preview JPEG")
 	}
-	r.watchMu.Lock()
-	defer r.watchMu.Unlock()
+	// Pin publication identity through cache commit, without queuing a consent
+	// writer behind a slow receiver's final socket write. JPEG decoding above
+	// holds neither lock; revocation must be rechecked after that work.
+	r.watchMu.RLock()
+	defer r.watchMu.RUnlock()
 	if generation == 0 || r.publications[key] != generation {
 		return ErrVideoPublication
 	}
+	r.previewMu.Lock()
+	defer r.previewMu.Unlock()
 	if time.Since(r.previews[key].captured) < 110*time.Second {
 		return errors.New("video preview update too frequent")
 	}
@@ -73,6 +81,8 @@ func (r *Router) VideoPreview(subscriber, publisher, slot string, generation uin
 	if generation == 0 || r.publications[key] != generation {
 		return nil, 0, ErrVideoPublication
 	}
+	r.previewMu.Lock()
+	defer r.previewMu.Unlock()
 	preview := r.previews[key]
 	if preview.captured.IsZero() {
 		return nil, 0, nil

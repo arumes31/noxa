@@ -216,9 +216,11 @@ func (r *Router) VideoPublications(subscriber string) []VideoPublication {
 	for key, generation := range r.publications {
 		if r.clientChan[subscriber] > 0 && r.clientChan[subscriber] == r.clientChan[key.publisher] && r.publisherAllowedLocked(subscriber, key.publisher) {
 			previewAt := int64(0)
+			r.previewMu.Lock()
 			if preview := r.previews[key]; !preview.captured.IsZero() {
 				previewAt = preview.captured.UnixMilli()
 			}
+			r.previewMu.Unlock()
 			revision := uint64(0)
 			if watch := r.watches[watchKey{subscriber, key.publisher, key.slot}]; watch.session == r.watchSessions[subscriber] {
 				revision = watch.revision
@@ -256,7 +258,9 @@ func (r *Router) removePublicationLocked(key publicationKey) {
 	delete(r.publications, key)
 	delete(r.publicationModes, key)
 	delete(r.publicationCodecCapabilities, key)
+	r.previewMu.Lock()
 	delete(r.previews, key)
+	r.previewMu.Unlock()
 	for watch := range r.watches {
 		if watch.publisher == key.publisher && watch.slot == key.slot {
 			delete(r.watches, watch)
