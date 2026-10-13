@@ -880,6 +880,21 @@ Pacing counters cover the recipient's entire video connection, including retries
 they are not losses for one source. Server frame rates count RTP timestamps, not
 successfully decoded frames. No media payloads or network addresses are included.
 
+Publisher-facing TWCC feedback uses one worker per connection so a slow feedback
+write does not block the recorder and incoming RTP reads. Pending feedback is
+bounded to four batches and 64 KiB of serialized reports, plus one in-flight
+batch (decoded objects add overhead). Reports retain their original arrival
+measurements and order. Before admission and sending, reports pending for 250 ms
+are discarded; overflow discards the oldest pending reports. This omits feedback,
+not media, and does not fabricate packet loss or bandwidth. The shared audio/video
+TWCC scheduling changes; audio RTP pacing and non-TWCC RTCP remain unchanged.
+`upstream_feedback.dispatch` distinguishes admission, completed write attempts,
+errors, queued bytes, and discarded reports. Missing dispatch data means unknown;
+a successful write does not prove delivery. On shutdown pending reports are
+cleared, while Pion closes the transport before waiting for the in-flight write.
+This removes a reproducible feedback/read dependency; it is not by itself proof
+of stable 1080p60 on a particular network.
+
 Use either `nickname` or `publisher_id`, or omit the filter. Snapshots contain at
 most 32 publications and 32 eligible viewers per publication. Filters select from
 that bounded snapshot; when `truncated` or `viewers_truncated` is true, an absent
