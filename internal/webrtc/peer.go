@@ -20,9 +20,12 @@ type PeerConnectionWrapper struct {
 	clientID string
 	logger   *zap.Logger
 	// Immutable codec bounds captured when the engine creates this peer.
-	videoBounds      VideoBounds
-	egress           *mediaEgressRegistry
-	upstreamFeedback *upstreamFeedbackObserver
+	videoBounds             VideoBounds
+	egress                  *mediaEgressRegistry
+	upstreamFeedback        *upstreamFeedbackObserver
+	videoRepairRTTMu        sync.Mutex
+	videoRepairRTTInFlight  *videoRepairRTTResult
+	videoRepairRTTCompleted time.Time
 
 	// localCandidates forwards ICE candidates generated locally. It is never
 	// closed (see Close); consumers should also select on Done.
