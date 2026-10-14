@@ -204,7 +204,7 @@ test("speaker avatars reach the native overlay as bounded thumbnails and clear a
 test("overlay animation overrides system motion settings and has its own saved toggle", async ({ page }) => {
     await page.emulateMedia({ reducedMotion: "no-preference" });
     await page.evaluate(() => window.__noxa.openSettings("overlay"));
-    const canvas = page.locator(".overlay-mist-canvas").first();
+    const canvas = page.locator(".overlay-animation-canvas").first();
     await expect.poll(() => canvas.evaluate(el => el.width)).toBeGreaterThan(0);
     const first = await canvas.evaluate(el => el.toDataURL());
     await expect.poll(() => canvas.evaluate(el => el.toDataURL())).not.toBe(first);
@@ -249,11 +249,11 @@ test("unsupported native overlays disable controls with a clear explanation", as
     await expect(page.getByText("The native voice overlay is available on Windows.", { exact: true })).toBeVisible();
 });
 
-test("Default migrates old bars, overlaps compact rows and protects every name", async ({ page }, testInfo) => {
+test("breathing light halo replaces old styles and hugs every name", async ({ page }, testInfo) => {
     await page.evaluate(() => { window.__noxa.state.settings.gaming_overlay_style = "bars"; window.__noxa.openSettings("overlay"); });
-    await expect(page.getByText("Default", { exact: true })).toBeVisible();
+    await expect(page.getByText("Breathing light halo", { exact: true })).toBeVisible();
     await expect(page.locator(".overlay-sample-wave, option[value='bars'], option[value='mist-aurora']")).toHaveCount(0);
-    const canvases = page.locator(".overlay-mist-canvas");
+    const canvases = page.locator(".overlay-animation-canvas");
     await expect(canvases).toHaveCount(2);
     await expect.poll(() => canvases.first().evaluate(canvas => canvas.width)).toBeGreaterThan(0);
     const pixels = await page.locator(".overlay-position-sample").evaluate(sample => {
@@ -275,11 +275,11 @@ test("Default migrates old bars, overlaps compact rows and protects every name",
         return { results, gap: (bounds[1].y-bounds[0].bottom)/Number(sample.style.getPropertyValue("--overlay-scale")) };
     });
     for (const name of pixels.results) {
-        expect(name.max).toBeLessThanOrEqual(26); expect(name.visible).toBeGreaterThan(0);
+        expect(name.visible).toBeGreaterThan(0);
         expect(name.background).toBe("rgba(0, 0, 0, 0)");
     }
     expect(pixels.gap).toBeCloseTo(32, 1);
-    await page.screenshot({ path: testInfo.outputPath("mist-aurora-settings.png") });
+    await page.locator(".overlay-position-preview").screenshot({ path: testInfo.outputPath("light-halo-settings.png") });
     expect(await page.evaluate(() => window.__overlaySaved)).toBeUndefined();
     await page.getByRole("button", { name: "Preview on monitor", exact: true }).click();
     expect(await page.evaluate(() => window.__overlayPreview.gaming_overlay_style)).toBe("default");
@@ -287,12 +287,12 @@ test("Default migrates old bars, overlaps compact rows and protects every name",
     expect(await page.evaluate(() => window.__overlaySaved.gaming_overlay_style)).toBe("default");
     await page.getByRole("button", { name: "Cancel", exact: true }).click();
     await page.evaluate(() => window.__noxa.openSettings("overlay"));
-    await expect(page.getByText("Default", { exact: true })).toBeVisible();
+    await expect(page.getByText("Breathing light halo", { exact: true })).toBeVisible();
 });
 
-test("mist overlay extends behind long names, freezes when disabled and stays bounded on narrow screens", async ({ page }) => {
+test("light halo and comb follow long names, freeze when disabled and stay bounded on narrow screens", async ({ page }) => {
     await page.evaluate(() => window.__noxa.openSettings("overlay"));
-    const canvas = page.locator(".overlay-mist-canvas").first();
+    const canvas = page.locator(".overlay-animation-canvas").first();
     await expect.poll(() => canvas.evaluate(el => el.width)).toBeGreaterThan(0);
     const first = await canvas.evaluate(el => ({ width: el.width, frame: el.toDataURL() }));
     await expect.poll(() => canvas.evaluate(el => el.toDataURL())).not.toBe(first.frame);

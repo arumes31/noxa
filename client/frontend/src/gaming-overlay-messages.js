@@ -1,5 +1,5 @@
 export const overlayEnglish = {
-    'overlay.design': 'Overlay design', 'overlay.default': 'Default',
+    'overlay.design': 'Overlay design', 'overlay.default': 'Breathing light halo',
     'overlay.selfColor': 'Your overlay color', 'overlay.firstBlue': 'Other members: first blue', 'overlay.lastBlue': 'Other members: last blue',
     'overlay.colorsHint': 'You appear green by default; others receive different blue shades. These colors apply only to your overlay. Quiet members keep their shade.',
     'settings.overlay': 'Overlay',
@@ -17,7 +17,7 @@ export const overlayEnglish = {
     'overlay.muted': 'Microphone muted', 'overlay.deafened': 'Deafened', 'overlay.ready': 'Voice connected', 'overlay.failed': 'Voice overlay unavailable: {error}',
 };
 export const overlayGerman = {
-    'overlay.design': 'Overlay-Design', 'overlay.default': 'Default',
+    'overlay.design': 'Overlay-Design', 'overlay.default': 'Atmender Lichtsaum',
     'overlay.selfColor': 'Deine Overlay-Farbe', 'overlay.firstBlue': 'Andere Mitglieder: erster Blauton', 'overlay.lastBlue': 'Andere Mitglieder: letzter Blauton',
     'overlay.colorsHint': 'Du erscheinst standardmäßig grün, andere in unterschiedlichen Blautönen. Die Farben gelten nur für dein Overlay. Stille Mitglieder behalten ihren Blauton.',
     'settings.overlay': 'Overlay',

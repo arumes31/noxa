@@ -17,7 +17,7 @@ import (
 type overlayRenderer struct {
 	base, frame *image.RGBA
 	scale       float64
-	mist        *overlayMist
+	animation   *overlayAnimation
 }
 
 type overlayLabel func(text string, width, height, fontSize int, centered bool) (*image.Alpha, error)

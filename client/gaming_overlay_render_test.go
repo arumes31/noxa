@@ -69,7 +69,7 @@ func TestDefaultOverlayCachesLabelsAndKeepsAvatarsStill(t *testing.T) {
 	if second.RGBAAt(38, 72).A == 0 {
 		t.Fatal("speaking ring missing")
 	}
-	for _, row := range r.mist.rows {
+	for _, row := range r.animation.rows {
 		center := int(row.center)
 		for y := center - 15; y < center+15; y++ {
 			for x := 24; x < 52; x++ {

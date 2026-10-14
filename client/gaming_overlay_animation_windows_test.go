@@ -9,7 +9,7 @@ import (
 	"testing"
 )
 
-func TestNativeMistAuroraLabelsAndFrames(t *testing.T) {
+func TestNativeLightHaloLabelsAndFrames(t *testing.T) {
 	s := normalizeGamingOverlay(GamingOverlaySnapshot{Active: true, Style: "mist-aurora", Scale: 100,
 		Speakers: []GamingOverlaySpeaker{{Name: "Sam", Speaking: true}, {Name: "NoxaUser", Speaking: true}, {Name: "TheLegendaryNightwalker", Speaking: true}},
 	})
@@ -18,14 +18,14 @@ func TestNativeMistAuroraLabelsAndFrames(t *testing.T) {
 		t.Fatal(err)
 	}
 	previous := 0.0
-	for _, person := range r.mist.rows {
+	for _, person := range r.animation.rows {
 		if person.width <= previous {
-			t.Fatal("native full-name wave width did not grow")
+			t.Fatal("native full-name comb width did not grow")
 		}
 		previous = person.width
 	}
 	if directory := os.Getenv("NOXA_OVERLAY_PREVIEW_PATH"); directory != "" {
-		file, err := os.Create(filepath.Join(directory, "native-mist-aurora.png"))
+		file, err := os.Create(filepath.Join(directory, "native-light-halo.png"))
 		if err != nil {
 			t.Fatal(err)
 		}
