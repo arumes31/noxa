@@ -14,6 +14,19 @@ import (
 // repairs are released immediately. This is a ceiling, not a playout delay.
 const videoReorderWait = 2500 * time.Millisecond
 
+const videoReorderMinWait = 250 * time.Millisecond
+
+// Allow two existing 100 ms NACK ticks plus two transport round trips. Unknown
+// RTT retains the requested ceiling; a fresh low-latency path need not hold all
+// subsequent frames for that entire ceiling after an unrecoverable packet.
+func adaptiveVideoRepairWait(rtt time.Duration) time.Duration {
+	const feedback = 200 * time.Millisecond
+	if rtt <= 0 || rtt >= (videoReorderWait-feedback)/2 {
+		return videoReorderWait
+	}
+	return max(videoReorderMinWait, feedback+2*rtt)
+}
+
 // Pion polls its separate, bounded RTX queue before blocking on primary RTP;
 // repairs cannot wake that primary read. Service repairs while a gap exists
 // without shortening the reorder window or adding polls to contiguous media.
@@ -27,21 +40,52 @@ const videoReorderPackets = 16384
 const videoReorderBytes = 16 * 1024 * 1024
 
 type orderedVideoPacket struct {
-	packet *rtp.Packet
-	codec  string
-	at     time.Time
+	packet  *rtp.Packet
+	codec   string
+	at      time.Time
+	expires time.Time
 }
 
 // Reordering precedes dimension inspection. A repaired gap must not destroy
 // the inspector's known reference frame. Only packets held behind a gap are
 // cloned; the ordinary contiguous path still forwards without a payload copy.
 type videoReorder struct {
-	seen    bool
-	next    uint16
-	bytes   int
-	pending map[uint16]orderedVideoPacket
-	expires time.Time
-	dirty   bool
+	seen      bool
+	next      uint16
+	bytes     int
+	pending   map[uint16]orderedVideoPacket
+	expires   time.Time
+	dirty     bool
+	wait      time.Duration
+	waitUntil time.Time
+	epoch     uint64 // changes whenever an empty queue starts holding a new gap
+}
+
+// A measurement controls future arrivals only while its actual response is fresh.
+func (q *videoReorder) repairWait(now time.Time) time.Duration {
+	if q.wait == 0 || now.After(q.waitUntil) {
+		return videoReorderWait
+	}
+	return q.wait
+}
+
+// An estimate may shorten retained packets, never extend their deadlines. A
+// higher fresh estimate changes only future arrivals. This bounded scan runs
+// on a completed query, not on each packet or repair poll.
+func (q *videoReorder) applyRepairWait(epoch uint64, wait time.Duration, measuredAt, now time.Time) {
+	if len(q.pending) == 0 || q.epoch != epoch || wait < videoReorderMinWait || wait > videoReorderWait || measuredAt.IsZero() || measuredAt.After(now) || now.Sub(measuredAt) > videoRepairRTTFreshness {
+		return
+	}
+	q.wait, q.waitUntil = wait, measuredAt.Add(videoRepairRTTFreshness)
+	for sequence, entry := range q.pending {
+		if expires := entry.at.Add(wait); expires.Before(entry.expires) {
+			entry.expires = expires
+			q.pending[sequence] = entry
+			if !q.dirty && (q.expires.IsZero() || expires.Before(q.expires)) {
+				q.expires = expires
+			}
+		}
+	}
 }
 
 func (q *videoReorder) deadline() time.Time {
@@ -50,7 +94,7 @@ func (q *videoReorder) deadline() time.Time {
 	if q.dirty {
 		q.expires = time.Time{}
 		for _, entry := range q.pending {
-			expires := entry.at.Add(videoReorderWait)
+			expires := entry.expires
 			if q.expires.IsZero() || expires.Before(q.expires) {
 				q.expires = expires
 			}
@@ -91,13 +135,16 @@ func (q *videoReorder) push(packet *rtp.Packet, codec string, now time.Time, emi
 	if q.pending == nil {
 		q.pending = make(map[uint16]orderedVideoPacket)
 	}
-	expires := now.Add(videoReorderWait)
 	if len(q.pending) == 0 {
-		q.expires, q.dirty = expires, false
-	} else if !q.dirty && expires.Before(q.expires) {
+		q.wait, q.waitUntil = 0, time.Time{}
+		q.epoch++
+		q.expires, q.dirty = now.Add(videoReorderWait), false
+	}
+	expires := now.Add(q.repairWait(now))
+	if !q.dirty && expires.Before(q.expires) {
 		q.expires = expires
 	}
-	q.pending[packet.SequenceNumber] = orderedVideoPacket{packet.Clone(), codec, now}
+	q.pending[packet.SequenceNumber] = orderedVideoPacket{packet: packet.Clone(), codec: codec, at: now, expires: expires}
 	q.bytes += size
 	q.flush(time.Time{}, false, emit)
 }
@@ -113,7 +160,7 @@ func (q *videoReorder) flush(now time.Time, force bool, emit func(*rtp.Packet, s
 			return
 		}
 		delete(q.pending, q.next)
-		if entry.at.Add(videoReorderWait).Equal(q.expires) {
+		if entry.expires.Equal(q.expires) {
 			q.dirty = true
 		}
 		q.bytes -= entry.packet.MarshalSize()
@@ -121,6 +168,7 @@ func (q *videoReorder) flush(now time.Time, force bool, emit func(*rtp.Packet, s
 		emit(entry.packet, entry.codec)
 	}
 	q.expires, q.dirty = time.Time{}, false
+	q.wait, q.waitUntil = 0, time.Time{}
 }
 
 // Expiration/pressure can expose many gaps at once. Sort once and retain each
@@ -133,7 +181,7 @@ func (q *videoReorder) flushGaps(now time.Time, force bool, emit func(*rtp.Packe
 	}
 	ordered := make([]pendingDeadline, 0, len(q.pending))
 	for sequence, entry := range q.pending {
-		ordered = append(ordered, pendingDeadline{sequence, entry.at.Add(videoReorderWait)})
+		ordered = append(ordered, pendingDeadline{sequence, entry.expires})
 	}
 	sort.Slice(ordered, func(i, j int) bool { return ordered[i].sequence-q.next < ordered[j].sequence-q.next })
 	for index := len(ordered) - 2; index >= 0; index-- {
@@ -153,6 +201,7 @@ func (q *videoReorder) flushGaps(now time.Time, force bool, emit func(*rtp.Packe
 		emit(entry.packet, entry.codec)
 	}
 	q.expires, q.dirty = time.Time{}, false
+	q.wait, q.waitUntil = 0, time.Time{}
 }
 
 // Pion's read deadline lets an idle screen release its final queued frame
@@ -162,6 +211,10 @@ func readOrderedVideo(track VideoTrackReader, current func() bool, codec func() 
 }
 
 func readOrderedVideoTimed(track VideoTrackReader, current func() bool, codec func() string, emit func(*rtp.Packet, string), observe func(*rtp.Packet), timing *upstreamReadStageTracker) {
+	readOrderedVideoAdaptive(track, current, codec, emit, observe, timing, nil)
+}
+
+func readOrderedVideoAdaptive(track VideoTrackReader, current func() bool, codec func() string, emit func(*rtp.Packet, string), observe func(*rtp.Packet), timing *upstreamReadStageTracker, requestRTT func() *videoRepairRTTResult) {
 	exitReason := "scope_changed"
 	defer func() { timing.finish(exitReason) }()
 	// A receipt token belongs to this exact read loop, never another track or
@@ -175,8 +228,43 @@ func readOrderedVideoTimed(track VideoTrackReader, current func() bool, codec fu
 		queue.push(packet, codec(), time.Now(), emit)
 	}
 	var queue videoReorder
+	var repair *videoRepairRTTResult
+	var repairEpoch, handledEpoch uint64
+	var repairHead, handledHead uint16
+	var handled bool
+	var nextQuery time.Time
 	deadline, hasDeadline := track.(interface{ SetReadDeadline(time.Time) error })
 	for current() {
+		// A future belongs to the exact head gap that requested it. Repairing or
+		// abandoning that head must not apply its eventual result to a new gap.
+		if len(queue.pending) == 0 || (repair != nil && (repairEpoch != queue.epoch || repairHead != queue.next)) {
+			repair = nil
+		}
+		if len(queue.pending) > 0 && requestRTT != nil && repair == nil && (!handled || handledEpoch != queue.epoch || handledHead != queue.next) && !time.Now().Before(nextQuery) {
+			repairEpoch, repairHead = queue.epoch, queue.next
+			nextQuery = time.Now().Add(videoRepairRTTQueryInterval)
+			repair = requestRTT()
+			// nil can mean peer-wide cooldown; retry at most once per second.
+			// A completed unknown result, however, is final for this head gap.
+			if repair != nil {
+				handled, handledEpoch, handledHead = true, repairEpoch, repairHead
+			}
+		}
+		if repair != nil {
+			select {
+			case <-repair.done:
+				now := time.Now()
+				if repair.rtt > 0 {
+					queue.applyRepairWait(repairEpoch, adaptiveVideoRepairWait(repair.rtt), repair.measuredAt, now)
+					queue.flush(now, false, emit)
+					if !current() {
+						return
+					}
+				}
+				repair = nil
+			default:
+			}
+		}
 		if hasDeadline {
 			readDeadline := queue.deadline()
 			if !readDeadline.IsZero() {
