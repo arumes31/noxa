@@ -13,6 +13,9 @@ import (
 // through enqueueing; source packets remain immutable for other subscribers.
 type videoContinuity struct {
 	seen                           bool
+	h265DropRASL                   bool
+	h265DropUnit                   bool
+	h265UnitFirst                  *rtp.Packet
 	pendingEpoch                   bool
 	ssrc                           uint32
 	sequence, sequenceOffset       uint16
@@ -26,7 +29,11 @@ type videoContinuity struct {
 
 // beginEpoch waits for a decodable frame without discarding the receiver's
 // sequence and reference spaces, including when resuming the same source.
-func (v *videoContinuity) beginEpoch() { v.pendingEpoch = true }
+func (v *videoContinuity) beginEpoch() {
+	v.pendingEpoch = true
+	v.h265DropUnit = false
+	v.h265UnitFirst = nil
+}
 
 func isVideoPadding(pkt *rtp.Packet) bool {
 	return pkt.Padding && len(pkt.Payload) == 0 && (pkt.Header.PaddingSize != 0 || pkt.PaddingSize != 0)

@@ -16,6 +16,7 @@ const (
 	keyframeQualityChange
 	keyframeVP8Bounds
 	keyframeH264Assembly
+	keyframeH265Assembly
 	keyframeAwaitKeyframe
 	keyframeViewerFeedback
 )
@@ -58,6 +59,8 @@ func (d *videoIngressDiagnostic) recordKeyframeRequest(reason keyframeRequestRea
 		counter = &d.keyframeRequests.VP8Bounds
 	case keyframeH264Assembly:
 		counter = &d.keyframeRequests.H264Assembly
+	case keyframeH265Assembly:
+		counter = &d.keyframeRequests.H265Assembly
 	case keyframeAwaitKeyframe:
 		counter = &d.keyframeRequests.AwaitKeyframe
 	case keyframeViewerFeedback:

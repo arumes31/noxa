@@ -4,6 +4,7 @@ import { t } from "./i18n.js";
 import { updateShareViewers } from "./share-status.js";
 import { streamRecovery } from "./stream-recovery.js";
 import { receiverVideoCodecs } from "./video-codecs.js";
+import { receiverHEVCSupport, hevcReadmissionDelay } from "./video-hevc.js";
 
 const V = () => window.__noxa;
 let session = null;
@@ -25,6 +26,7 @@ export function streamReceiverRecoveryTarget(pc, id, track) {
         id,
         request: { action: "receiver_reset", publisher_id: entry.publisher_id, slot: entry.slot, generation,
             session: watchSession, revision: String(revision), active: true },
+        withdrawHEVC: () => withdrawWatchHEVC(s, entry, revision, generation, watchSession, track),
         bindingCurrent: () => s.tracks.get(id)?.track === track,
         current: () => current(s) && s.streams.get(id) === entry && entry.watching && !entry.pending && entry.available !== false &&
             entry.generation === generation && entry.revision === revision && s.watchSession === watchSession,
@@ -118,6 +120,7 @@ async function toggleWatch(s, entry, retry = false) {
     const focusButton = retry ? entry.retryButton : entry.watchButton;
     const restoreFocus = document.activeElement === focusButton;
     const active = retry || !entry.watching;
+    const retainedHEVC = retry && entry.watching ? entry.hevcRetry : null;
     entry.pending = true;
     entry.error = "";
     entry.revision++;
@@ -130,8 +133,24 @@ async function toggleWatch(s, entry, retry = false) {
     renderEntry(s, entry);
     try {
         const codecSupport = await window.go.main.App.SupportsStreamCodecForTab?.(s.scope.tabID) || false;
-        if (!current(s) || s.streams.get(key(entry)) !== entry) return;
-        await streamRequest(s.scope, { action: "watch", publisher_id: entry.publisher_id, slot: entry.slot, generation: entry.generation, revision: String(entry.revision), session: s.watchSession, active, ...(codecSupport ? { codecs: receiverVideoCodecs() } : {}) });
+        const hevc = codecSupport && await window.go.main.App.SupportsStreamHEVCForTab?.(s.scope.tabID) === true;
+        const hardware = active && hevc && !retainedHEVC ? await receiverHEVCSupport() : null;
+        if (!current(s) || s.streams.get(key(entry)) !== entry || entry.available === false) return;
+        let capabilities = codecSupport ? { codecs: [...(hardware ? ["h265"] : []), ...receiverVideoCodecs()], ...(hardware || {}) } : {};
+        if (retainedHEVC && codecSupport) {
+            capabilities = entry.codecCapabilities || { codecs: receiverVideoCodecs() };
+            // A repair of the same watch cannot bypass a withdrawal cooldown
+            // or refill its lifetime budget, including a lost withdrawal reply.
+            if (retainedHEVC.withdrawn) capabilities = { codecs: capabilities.codecs.filter(codec => codec !== "h265") };
+        }
+        await streamRequest(s.scope, { action: "watch", publisher_id: entry.publisher_id, slot: entry.slot, generation: entry.generation, revision: String(entry.revision), session: s.watchSession, active, ...capabilities });
+        entry.codecCapabilities = capabilities;
+        entry.hevcRetry = retainedHEVC || { enabled: hevc, done: !!hardware, next: Date.now() + 30000, attempts: 0 };
+        if (retainedHEVC?.withdrawn) {
+            const delay = hevcReadmissionDelay(retainedHEVC.readmissions || 0);
+            retainedHEVC.done = delay === null;
+            retainedHEVC.next = delay === null ? Infinity : Math.max(retainedHEVC.next, Date.now() + delay);
+        }
         if (!current(s) || s.streams.get(key(entry)) !== entry || entry.available === false) return;
         entry.watching = active;
         entry.watchStartedAt = Date.now();
@@ -149,6 +168,70 @@ async function toggleWatch(s, entry, retry = false) {
             }
         }
     }
+}
+
+// A sustained actual software HEVC decoder withdraws only this watch's HEVC
+// capability. Consent remains active; a bounded later poll may re-admit hardware.
+async function withdrawWatchHEVC(s, entry, revision, generation, watchSession, track) {
+    if (!current(s) || s.streams.get(key(entry)) !== entry || !entry.watching || entry.pending ||
+        entry.revision !== revision || entry.generation !== generation || s.watchSession !== watchSession ||
+        s.tracks.get(key(entry))?.track !== track || !entry.codecCapabilities?.codecs.includes("h265")) return false;
+    const capabilities = { codecs: entry.codecCapabilities.codecs.filter(codec => codec !== "h265") };
+    entry.pending = true;
+    const sentRevision = ++entry.revision;
+    const delay = hevcReadmissionDelay(entry.hevcRetry.readmissions || 0);
+    entry.hevcRetry.withdrawn = true;
+    entry.hevcRetry.done = delay === null; entry.hevcRetry.next = delay === null ? Infinity : Date.now() + delay;
+    try {
+        await streamRequest(s.scope, { action: "watch", publisher_id: entry.publisher_id, slot: entry.slot,
+            generation, revision: String(sentRevision), session: watchSession, active: true, ...capabilities });
+        if (!current(s) || s.streams.get(key(entry)) !== entry || entry.generation !== generation ||
+            entry.revision !== sentRevision || s.watchSession !== watchSession || !entry.watching) return false;
+        entry.codecCapabilities = capabilities;
+        return true;
+    } finally {
+        entry.pending = false;
+        if (current(s) && s.streams.get(key(entry)) === entry) renderEntry(s, entry);
+    }
+}
+
+// Reuse catalog polling for a bounded late capability augmentation. A native
+// timeout retains its cached query; it never causes a new upload or watch toggle.
+function refreshWatchHEVC(s, entry) {
+    const retry = entry.hevcRetry;
+    if (!retry?.enabled || retry.done || retry.pending || entry.pending || !entry.watching || Date.now() < retry.next) return;
+    const revision = entry.revision, generation = entry.generation, watchSession = s.watchSession;
+    const valid = () => current(s) && s.streams.get(key(entry)) === entry && entry.watching && !entry.pending && entry.available !== false &&
+        entry.generation === generation && entry.revision === revision && s.watchSession === watchSession;
+    if (!valid()) return;
+    retry.pending = true;
+    retry.next = Date.now() + [30000, 120000, 300000][Math.min(retry.attempts++, 2)];
+    void (async () => {
+        try {
+            const hardware = await receiverHEVCSupport();
+            if (!hardware || !valid()) return;
+            if (retry.withdrawn) {
+                if (hevcReadmissionDelay(retry.readmissions || 0) === null) { retry.done = true; return; }
+                retry.readmissions = (retry.readmissions || 0) + 1;
+            }
+            const capabilities = { codecs: [...new Set(["h265", ...(entry.codecCapabilities?.codecs || receiverVideoCodecs())])], ...hardware };
+            entry.pending = true;
+            entry.revision++;
+            const sentRevision = entry.revision;
+            try {
+                await streamRequest(s.scope, { action: "watch", publisher_id: entry.publisher_id, slot: entry.slot,
+                    generation, revision: String(sentRevision), session: watchSession, active: true, ...capabilities });
+                if (current(s) && s.streams.get(key(entry)) === entry && entry.generation === generation &&
+                    entry.revision === sentRevision && s.watchSession === watchSession && entry.watching) {
+                    entry.codecCapabilities = capabilities; retry.done = true;
+                }
+            } finally {
+                entry.pending = false;
+                if (current(s) && s.streams.get(key(entry)) === entry) renderEntry(s, entry);
+            }
+        } catch { /* Keep existing playback and the finite retry cadence. */ }
+        finally { retry.pending = false; }
+    })();
 }
 
 function renderEntry(s, entry) {
@@ -283,6 +366,7 @@ async function poll(s) {
             const revision = BigInt(stream.watch_revision);
             if (revision > entry.revision) entry.revision = revision;
             entry.pollError = "";
+            refreshWatchHEVC(s, entry);
             if (stream.preview_at && stream.preview_at !== entry.previewAt) {
                 const preview = await streamRequest(s.scope, { action: "preview", publisher_id: stream.publisher_id, slot: stream.slot, generation: stream.generation });
                 if (!current(s)) return;

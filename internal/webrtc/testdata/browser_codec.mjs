@@ -22,7 +22,15 @@ try {
             window.gather=()=>pc.iceGatheringState==='complete'?Promise.resolve():new Promise(resolve=>pc.addEventListener('icegatheringstatechange',()=>{if(pc.iceGatheringState==='complete')resolve();}));
         });
     }
-    await sender.addScriptTag({type:'module',content:await readFile(new URL('../../../client/frontend/src/video-codecs.js',import.meta.url),'utf8')+'\nwindow.preferTestCodec=preferPublicationCodec;'});
+    // Load the production module graph through a closed fixture origin so its
+    // relative HEVC helper import is exercised without external network access.
+    await sender.route('https://noxa-codec-fixture.invalid/**',async route=>{
+        const name=new URL(route.request().url()).pathname.slice(1);
+        if(!['video-codecs.js','video-hevc.js'].includes(name))return route.abort();
+        await route.fulfill({status:200,contentType:'text/javascript',headers:{'Access-Control-Allow-Origin':'*'},
+            body:await readFile(new URL(`../../../client/frontend/src/${name}`,import.meta.url),'utf8')});
+    });
+    await sender.addScriptTag({type:'module',content:'import {preferPublicationCodec} from "https://noxa-codec-fixture.invalid/video-codecs.js"; window.preferTestCodec=preferPublicationCodec;'});
     // Inline modules execute asynchronously; inserting the element is not a
     // readiness signal for the exported helper used by the next evaluation.
     await sender.waitForFunction(() => typeof window.preferTestCodec === 'function');

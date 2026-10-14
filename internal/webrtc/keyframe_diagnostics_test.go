@@ -225,7 +225,7 @@ func TestKeyframeDiagnosticsRejectsResetBeforeFirstRecord(t *testing.T) {
 type keyframeDiagnosticH264Track struct{ diagnosticVideoTrack }
 
 func (*keyframeDiagnosticH264Track) Codec() webrtc.RTPCodecParameters {
-	return webrtc.RTPCodecParameters{RTPCodecCapability: webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeH264, ClockRate: 90000}, PayloadType: 102}
+	return webrtc.RTPCodecParameters{RTPCodecCapability: webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeH264, ClockRate: 90000, SDPFmtpLine: "packetization-mode=1;profile-level-id=42001f"}, PayloadType: 102}
 }
 
 func TestKeyframeDiagnosticsH264ReadLoopReason(t *testing.T) {

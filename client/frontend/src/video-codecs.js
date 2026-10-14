@@ -1,3 +1,5 @@
+import { hevcFormat, hevcFormats, preferredHEVCFormat } from "./video-hevc.js";
+
 // The relay's H264 option is baseline, packetization-mode 1. Capability names
 // describe an interoperable format, not merely the presence of an H264 GPU.
 function relayH264(codec) {
@@ -16,8 +18,8 @@ export function receiverVideoCodecs() {
 
 const publicationQueries = new WeakMap();
 
-function publicationQuery(track) {
-    const codec = capabilities("RTCRtpSender").find(relayH264);
+function publicationQuery(track, family = "h264", chosen) {
+    const codec = family === "h265" ? chosen || preferredHEVCFormat(capabilities("RTCRtpSender")) : capabilities("RTCRtpSender").find(relayH264);
     const media = globalThis.navigator?.mediaCapabilities;
     if (!codec || typeof media?.encodingInfo !== "function") return null;
     let settings;
@@ -29,12 +31,16 @@ function publicationQuery(track) {
     return { media, video, key: JSON.stringify(video) };
 }
 
-export function publicationCodecQueryKey(track) { return publicationQuery(track)?.key ?? null; }
+export function publicationCodecQueryKey(track, hevc = false) {
+    if (!hevc) return publicationQuery(track)?.key ?? null;
+    const keys = [...hevcFormats(capabilities("RTCRtpSender")).map(codec => publicationQuery(track, "h265", codec)?.key), publicationQuery(track)?.key];
+    return keys.some(Boolean) ? JSON.stringify(keys) : null;
+}
 
 // Initial selection and later retries share the same bounded native promises.
 // A timeout never starts another unresolved query for the same geometry.
-export async function publicationCodecSupport(track) {
-    const query = publicationQuery(track);
+async function publicationFamilySupport(track, family = "h264", chosen) {
+    const query = publicationQuery(track, family, chosen);
     if (!query) return { codecs: ["vp8"], status: "unavailable", key: null };
     const { media, video, key } = query;
     try {
@@ -70,16 +76,32 @@ export async function publicationCodecSupport(track) {
         // A native result arriving after the JS timeout remains useful. Its TTL
         // still starts at native settlement; it never rewrites earlier replies.
         let status = entry.settled ? entry.status : await entry.wait;
-        if (publicationCodecQueryKey(track) !== key) status = "unknown";
-        return { codecs: status === "hardware" ? ["h264", "vp8"] : ["vp8"], status, key };
+        if (publicationQuery(track, family, chosen)?.key !== key) status = "unknown";
+        return { codecs: status === "hardware" ? [family, "vp8"] : ["vp8"], status, key };
     } catch { return { codecs: ["vp8"], status: "unknown", key }; }
+}
+
+// HEVC is opt-in per authenticated server. Its advertised level is the exact
+// native format selected for this source, never an invented negotiated level.
+export async function publicationCodecSupport(track, hevc = false) {
+    if (!hevc) return publicationFamilySupport(track);
+    const key = publicationCodecQueryKey(track, true);
+    const formats = hevcFormats(capabilities("RTCRtpSender"));
+    const [results, h264] = await Promise.all([Promise.all(formats.map(codec => publicationFamilySupport(track, "h265", codec))), publicationFamilySupport(track)]);
+    if (publicationCodecQueryKey(track, true) !== key) return { codecs: ["vp8"], status: "unknown", key };
+    const index = results.findIndex(result => result.status === "hardware"), format = index >= 0 ? formats[index] : null;
+    const codecs = [...(format ? ["h265"] : []), ...(h264.status === "hardware" ? ["h264"] : []), "vp8"];
+    const status = format ? "hardware" : results.some(result => result.status === "unknown") ? "unknown" : results.length ? "unsupported" : h264.status;
+    return { codecs, key, status, hevc_level_id: format ? hevcFormat(format).level : undefined,
+        hevcFormat: format || undefined, preferredAvailable: !!format || formats.length === 0 && h264.status === "hardware" };
 }
 
 export async function publicationVideoCodecs(track) { return (await publicationCodecSupport(track)).codecs; }
 
-export function preferPublicationCodec(transceiver, codec) {
-    if (!transceiver?.setCodecPreferences || !["h264", "vp8"].includes(codec)) return false;
-    const codecs = capabilities("RTCRtpSender").filter(item => ["video/vp8", "video/rtx"].includes(item.mimeType?.toLowerCase()) || relayH264(item));
+export function preferPublicationCodec(transceiver, codec, hevc = null) {
+    if (!transceiver?.setCodecPreferences || !["h264", "vp8", "h265"].includes(codec)) return false;
+    if (codec === "h265" && !hevcFormat(hevc)) return false;
+    const codecs = capabilities("RTCRtpSender").filter(item => ["video/vp8", "video/rtx"].includes(item.mimeType?.toLowerCase()) || relayH264(item) || codec === "h265" && hevcFormat(item) && item.sdpFmtpLine === hevc.sdpFmtpLine);
     const preferred = `video/${codec}`;
     if (!codecs.some(item => item.mimeType.toLowerCase() === preferred)) throw new Error(`Video codec unavailable: ${codec}`);
     codecs.sort((a, b) => Number(b.mimeType.toLowerCase() === preferred) - Number(a.mimeType.toLowerCase() === preferred));

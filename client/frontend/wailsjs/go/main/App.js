@@ -1165,3 +1165,7 @@ export function WhisperSet(arg1, arg2, arg3) {
 export function WhisperSetForTab(arg1, arg2, arg3, arg4) {
   return window['go']['main']['App']['WhisperSetForTab'](arg1, arg2, arg3, arg4);
 }
+
+export function SupportsStreamHEVCForTab(arg1) {
+    return window['go']['main']['App']['SupportsStreamHEVCForTab'](arg1);
+}

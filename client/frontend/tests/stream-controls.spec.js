@@ -732,3 +732,155 @@ test("manual receiver diagnostic recording exports only existing polls and stops
     await page.screenshot({ path: testInfo.outputPath("receiver-saved-diagnostics-after-disconnect.png"), fullPage: true });
     await archive.getByRole("button", { name: "Remove saved copy" }).click(); await expect(archive).toBeHidden();
 });
+
+
+async function installHEVCWatchPrediction(page, { supported = true, pending = false } = {}) {
+    await page.evaluate(({ supported, pending }) => {
+        const codecs = [{ mimeType: "video/H265", clockRate: 90000, sdpFmtpLine: "profile-id=1;tier-flag=0;level-id=153;tx-mode=SRST" },
+            { mimeType: "video/H264", clockRate: 90000, sdpFmtpLine: "packetization-mode=1;profile-level-id=42001f" }, { mimeType: "video/VP8", clockRate: 90000 }];
+        Object.defineProperty(RTCRtpReceiver, "getCapabilities", { configurable: true, value: () => ({ codecs }) });
+        window.go.main.App.SupportsStreamCodecForTab = async () => true;
+        window.go.main.App.SupportsStreamHEVCForTab = async () => supported;
+        window.__streams.hevcQueries = 0;
+        Object.defineProperty(navigator.mediaCapabilities, "decodingInfo", { configurable: true, value: () => {
+            window.__streams.hevcQueries++;
+            return pending ? new Promise(resolve => { window.__streams.resolveHEVC = resolve; }) : Promise.resolve({ supported: true, powerEfficient: true });
+        } });
+    }, { supported, pending });
+}
+
+test("HEVC watch declares hardware-predicted Main level only to an HEVC server", async ({ page }) => {
+    await installHEVCWatchPrediction(page);
+    await page.locator('[data-publisher="alice"] .stream-watch').click();
+    await expect.poll(() => page.evaluate(() => window.__streams.calls.filter(row => row.action === "watch").length)).toBe(1);
+    const body = await page.evaluate(() => window.__streams.calls.find(row => row.action === "watch"));
+    expect(body.codecs).toEqual(["h265", "h264", "vp8"]); expect(body.hevc_level_id).toBe(153);
+    expect(body.active).toBe(true); expect(body.publisher_id).toBe("alice"); expect(body.session).toBe("10");
+});
+
+test("older server watch remains legacy despite installed HEVC decoder", async ({ page }) => {
+    await installHEVCWatchPrediction(page, { supported: false });
+    await page.locator('[data-publisher="alice"] .stream-watch').click();
+    const body = await page.evaluate(() => window.__streams.calls.find(row => row.action === "watch"));
+    expect(body.codecs).toEqual(["h264", "vp8"]); expect(body).not.toHaveProperty("hevc_level_id");
+    expect(await page.evaluate(() => window.__streams.hevcQueries)).toBe(0);
+});
+
+test("late HEVC prediction augments the same watch after timeout without another playback toggle", async ({ page }) => {
+    await installHEVCWatchPrediction(page, { pending: true });
+    await page.locator('[data-publisher="alice"] .stream-watch').click();
+    await expect.poll(() => page.evaluate(() => window.__streams.calls.filter(row => row.action === "watch").length)).toBe(1);
+    expect(await page.evaluate(() => window.__streams.calls.find(row => row.action === "watch").codecs)).toEqual(["h264", "vp8"]);
+    await page.evaluate(() => {
+        window.__streams.resolveHEVC({ supported: true, powerEfficient: true });
+        const now = Date.now; Date.now = () => now() + 31000;
+    });
+    await expect.poll(() => page.evaluate(() => window.__streams.calls.filter(row => row.action === "watch").length), { timeout: 6000 }).toBe(2);
+    const calls = await page.evaluate(() => window.__streams.calls.filter(row => row.action === "watch"));
+    expect(calls.map(row => row.active)).toEqual([true, true]); expect(calls[1].generation).toBe(calls[0].generation);
+    expect(calls[1].session).toBe(calls[0].session); expect(BigInt(calls[1].revision)).toBe(BigInt(calls[0].revision) + 1n);
+    expect(calls[1].codecs).toEqual(["h265", "h264", "vp8"]);
+    expect(await page.evaluate(() => window.__streams.hevcQueries)).toBe(1);
+    await expect(page.locator('.vtile[data-clid="alice"]')).toBeVisible();
+});
+
+test("late HEVC watch prediction cannot reach a replaced session", async ({ page }) => {
+    await installHEVCWatchPrediction(page, { pending: true });
+    await page.locator('[data-publisher="alice"] .stream-watch').click();
+    await expect.poll(() => page.evaluate(() => typeof window.__streams.resolveHEVC)).toBe("function");
+    await page.evaluate(() => {
+        window.__streams.controls.stopStreamSession();
+        window.__noxa.state.pc = {};
+        window.__streams.resolveHEVC({ supported: true, powerEfficient: true });
+    });
+    expect(await page.evaluate(() => window.__streams.calls.filter(row => row.action === "watch").length)).toBe(0);
+});
+
+
+test("HEVC software withdrawal preserves watch and delays re-admission without another playback toggle", async ({ page }) => {
+    await installHEVCWatchPrediction(page);
+    await page.locator('[data-publisher="alice"] .stream-watch').click();
+    const result = await page.evaluate(async () => {
+        const s = window.__streams, track = s.tracks.get("alice");
+        const target = s.controls.streamReceiverRecoveryTarget(window.__noxa.state.pc, "alice|screen", track);
+        const before = s.calls.filter(row => row.action === "watch").length;
+        const ok = await target.withdrawHEVC();
+        const stale = await target.withdrawHEVC();
+        return { ok, stale, before, calls: s.calls.filter(row => row.action === "watch") };
+    });
+    expect(result.ok).toBe(true); expect(result.stale).toBe(false); expect(result.calls).toHaveLength(result.before + 1);
+    expect(result.calls[1].codecs).toEqual(["h264", "vp8"]); expect(result.calls[1]).not.toHaveProperty("hevc_level_id");
+    expect(result.calls.map(row => row.active)).toEqual([true, true]);
+    await page.evaluate(() => { const now = Date.now; Date.now = () => now() + 31000; });
+    await page.waitForTimeout(2200);
+    expect(await page.evaluate(() => window.__streams.calls.filter(row => row.action === "watch").length)).toBe(2);
+    await expect(page.locator('.vtile[data-clid="alice"]')).toBeVisible();
+});
+
+
+test("HEVC re-admission remains unique after an accepted withdrawal loses its reply", async ({ page }) => {
+    await installHEVCWatchPrediction(page);
+    await page.locator('[data-publisher="alice"] .stream-watch').click();
+    const result = await page.evaluate(async () => {
+        const s = window.__streams, original = window.go.main.App.VideoStreamControlForTab;
+        let lost = false;
+        window.go.main.App.VideoStreamControlForTab = async (tab, body) => {
+            const result = await original(tab, body);
+            if (body.action === "watch" && body.active && !body.codecs.includes("h265") && !lost) {
+                lost = true; throw new Error("accepted but acknowledgement lost");
+            }
+            if (body.action === "watch" && new Set(body.codecs).size !== body.codecs.length) throw new Error("duplicate codec");
+            return result;
+        };
+        const target = s.controls.streamReceiverRecoveryTarget(window.__noxa.state.pc, "alice|screen", s.tracks.get("alice"));
+        try { await target.withdrawHEVC(); return "unexpected success"; } catch (error) { return error.message; }
+    });
+    expect(result).toBe("accepted but acknowledgement lost");
+    await page.evaluate(() => { const now = Date.now; Date.now = () => now() + 301000; });
+    await expect.poll(() => page.evaluate(() => window.__streams.calls.filter(row => row.action === "watch").length), { timeout: 6000 }).toBe(3);
+    const calls = await page.evaluate(() => window.__streams.calls.filter(row => row.action === "watch"));
+    expect(calls[1].codecs).toEqual(["h264", "vp8"]);
+    expect(calls[2].codecs).toEqual(["h265", "h264", "vp8"]);
+    expect(calls[2].hevc_level_id).toBe(153);
+    expect(calls.map(row => row.active)).toEqual([true, true, true]);
+    expect(BigInt(calls[2].revision)).toBe(BigInt(calls[1].revision) + 1n);
+    await expect(page.locator('.vtile[data-clid="alice"]')).toBeVisible();
+});
+
+
+test("HEVC watch re-admission budget survives revisions and stops after three false-positive cycles", async ({ page }) => {
+    await installHEVCWatchPrediction(page);
+    await page.locator('[data-publisher="alice"] .stream-watch').click();
+    await page.evaluate(() => { const now = Date.now; window.__streams.timeOffset = 0; Date.now = () => now() + window.__streams.timeOffset; });
+    let expected = 1;
+    for (const delay of [300000, 900000, 3600000]) {
+        expect(await page.evaluate(async () => {
+            const s = __streams;
+            return s.controls.streamReceiverRecoveryTarget(__noxa.state.pc, "alice|screen", s.tracks.get("alice")).withdrawHEVC();
+        })).toBe(true);
+        expected++;
+        await page.evaluate(delay => { __streams.timeOffset += delay + 1; }, delay);
+        await expect.poll(() => page.evaluate(() => __streams.calls.filter(row => row.action === "watch").length), { timeout: 6000 }).toBe(++expected);
+    }
+    expect(await page.evaluate(async () => {
+        const s = __streams;
+        return s.controls.streamReceiverRecoveryTarget(__noxa.state.pc, "alice|screen", s.tracks.get("alice")).withdrawHEVC();
+    })).toBe(true);
+    expected++;
+    await page.evaluate(() => { __streams.timeOffset += 7200000; });
+    await page.waitForTimeout(2200);
+    expect(await page.evaluate(() => __streams.calls.filter(row => row.action === "watch").length)).toBe(expected);
+    expect(await page.evaluate(() => __streams.calls.filter(row => row.action === "watch").at(-1).codecs)).toEqual(["h264", "vp8"]);
+    const queries = await page.evaluate(() => __streams.hevcQueries);
+    await page.evaluate(() => { Object.defineProperty(__streams.tracks.get("alice"), "muted", { configurable: true, value: true }); });
+    await page.waitForTimeout(2200);
+    await page.evaluate(() => { __streams.timeOffset += 10000; });
+    await page.getByRole("button", { name: "Retry stream", exact: true }).click();
+    await expect.poll(() => page.evaluate(() => __streams.calls.filter(row => row.action === "watch").length)).toBe(expected + 1);
+    expect(await page.evaluate(() => __streams.calls.filter(row => row.action === "watch").at(-1).codecs)).toEqual(["h264", "vp8"]);
+    expect(await page.evaluate(() => __streams.hevcQueries)).toBe(queries);
+    await page.evaluate(() => { __streams.timeOffset += 7200000; });
+    await page.waitForTimeout(2200);
+    expect(await page.evaluate(() => __streams.calls.filter(row => row.action === "watch").length)).toBe(expected + 1);
+    await expect(page.locator('.vtile[data-clid="alice"]')).toBeVisible();
+});

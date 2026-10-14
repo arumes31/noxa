@@ -212,6 +212,8 @@ type Router struct {
 	publications                 map[publicationKey]uint64
 	publicationModes             map[publicationKey]string
 	publicationCodecCapabilities map[publicationKey]uint8
+	publicationHEVCLevels        map[publicationKey]uint8
+	publicationCodecRevisions    map[publicationKey]uint64
 	watches                      map[watchKey]videoWatch
 	watchSessions                map[string]uint64
 	// Preview metadata is not a consent change. Keep its writers off watchMu,
@@ -1711,13 +1713,18 @@ func (r *Router) ReadVideoLoop(clientID, slot string, track VideoTrackReader) {
 		}
 	}()
 
-	codecName := func() string {
+	codecSnapshot := func() webrtc.RTPCodecCapability {
 		if currentCodec != nil {
-			return currentCodec().MimeType
+			return currentCodec().RTPCodecCapability
 		}
-		return webrtc.MimeTypeVP8
+		return webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeVP8, ClockRate: 90000}
 	}
 	var h264Frame h264ForwardFrame
+	var h264RecoveryPending bool
+	var h265Frame h265ForwardFrame
+	var h265RecoveryPending bool
+	var lastAdmittedCodec webrtc.RTPCodecCapability
+	var hasAdmittedCodec bool
 	if ingress != nil {
 		h264Frame.onReject = ingress.rejectH264
 	}
@@ -1730,7 +1737,8 @@ func (r *Router) ReadVideoLoop(clientID, slot string, track VideoTrackReader) {
 	if repairPeer != nil {
 		requestRepairRTT = repairPeer.RequestVideoRepairRTT
 	}
-	readOrderedVideoAdaptive(track, func() bool { return r.ownsSlot(clientID, claimKey, token) }, codecName, func(pkt *rtp.Packet, mime string) {
+	readOrderedVideoAdaptiveFormats(track, func() bool { return r.ownsSlot(clientID, claimKey, token) }, codecSnapshot, func(pkt *rtp.Packet, codec webrtc.RTPCodecCapability) {
+		mime := codec.MimeType
 		if !r.ownsSlot(clientID, claimKey, token) {
 			return
 		}
@@ -1741,11 +1749,12 @@ func (r *Router) ReadVideoLoop(clientID, slot string, track VideoTrackReader) {
 		if boundsRevision != policy.boundsRevision {
 			dimensions = vp8BoundsInspector{bounds: policy.bounds}
 			h264Frame = h264ForwardFrame{onReject: h264Frame.onReject}
+			h265Frame = h265ForwardFrame{}
 			boundsRevision = policy.boundsRevision
 		}
 		if policy.bounds != (VideoBounds{}) {
 			// Pion updates codec metadata on payload-type changes during ReadRTP.
-			if currentCodec == nil || !strings.EqualFold(mime, webrtc.MimeTypeVP8) || !strings.EqualFold(currentCodec().MimeType, webrtc.MimeTypeVP8) {
+			if currentCodec == nil || !strings.EqualFold(mime, webrtc.MimeTypeVP8) {
 				// An admitted track can switch to VP8 during renegotiation.
 				// Drop this packet without losing the reader for that switch.
 				return
@@ -1760,19 +1769,65 @@ func (r *Router) ReadVideoLoop(clientID, slot string, track VideoTrackReader) {
 				return
 			}
 		}
-		codec := webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeVP8, ClockRate: 90000}
-		if currentCodec != nil {
-			codec = currentCodec().RTPCodecCapability
-			if !strings.EqualFold(codec.MimeType, mime) {
-				return
-			}
-		}
 		if !r.setVideoCodec(clientID, slot, rid, token, codec) {
+			// Never complete an access unit across a rejected format transition.
+			// Quarantine its timestamp too: a later Baseline-labelled slice alone
+			// cannot make that rejected unit complete. Preserve the diagnostics hook.
+			h264Frame = h264ForwardFrame{onReject: h264Frame.onReject,
+				rejected: true, rejectedSSRC: pkt.SSRC, rejectedTimestamp: pkt.Timestamp}
+			h264RecoveryPending = true
+			h265Frame = h265ForwardFrame{rejected: true, rejectedSSRC: pkt.SSRC, rejectedTimestamp: pkt.Timestamp}
+			h265RecoveryPending = true
 			return
 		}
+		if hasAdmittedCodec && !sameVideoCodec(lastAdmittedCodec, codec) {
+			oldH264, oldH265 := h264Frame, h265Frame
+			h264Frame = h264ForwardFrame{onReject: oldH264.onReject}
+			h265Frame = h265ForwardFrame{}
+			if len(oldH264.packets) > 0 {
+				h264Frame.rejected = true
+				h264Frame.rejectedSSRC = oldH264.ssrc
+				h264Frame.rejectedTimestamp = oldH264.timestamp
+			}
+			if len(oldH265.packets) > 0 {
+				h265Frame.rejected = true
+				h265Frame.rejectedSSRC = oldH265.ssrc
+				h265Frame.rejectedTimestamp = oldH265.timestamp
+			}
+			h264RecoveryPending, h265RecoveryPending = true, true
+		}
+		lastAdmittedCodec, hasAdmittedCodec = codec, true
 		now := time.Now()
+		if strings.EqualFold(mime, webrtc.MimeTypeH265) {
+			h264Frame = h264ForwardFrame{onReject: h264Frame.onReject}
+			h264RecoveryPending = false
+			packets, keyframe, lost := h265Frame.push(pkt, now)
+			if h265RecoveryPending && len(packets) > 0 && !isVideoPadding(pkt) {
+				lost = true
+				h265RecoveryPending = false
+			}
+			if lost && !keyframe {
+				r.requestKeyframe(clientID, slot, rid, keyframeH265Assembly)
+			}
+			for i, packet := range packets {
+				if !r.ownsSlot(clientID, claimKey, token) {
+					return
+				}
+				r.forwardVideoFrameAtPolicyCodec(clientID, slot, rid, packet, now, policy, true, mime, keyframe && i == 0, packets)
+			}
+			return
+		}
+		h265Frame = h265ForwardFrame{}
+		h265RecoveryPending = false
 		if strings.EqualFold(mime, webrtc.MimeTypeH264) {
 			packets, keyframe, lost := h264Frame.push(pkt, now)
+			if h264RecoveryPending && len(packets) > 0 && !isVideoPadding(pkt) {
+				// Carry the skipped dependency past quarantined tails, padding and
+				// incomplete fragments. Decide at the next complete media unit so
+				// an intact replacement keyframe avoids a redundant PLI.
+				lost = true
+				h264RecoveryPending = false
+			}
 			// A complete SPS/PPS-before-IDR unit already repairs an abandoned
 			// predecessor. Keep its rejection diagnostics, but do not request
 			// another keyframe; incomplete replacements still need recovery.
@@ -1788,6 +1843,7 @@ func (r *Router) ReadVideoLoop(clientID, slot string, track VideoTrackReader) {
 			return
 		}
 		h264Frame = h264ForwardFrame{onReject: h264Frame.onReject}
+		h264RecoveryPending = false
 		r.forwardVideoAtPolicyCodec(clientID, slot, rid, pkt, now, policy, true, mime)
 	}, func(packet *rtp.Packet) {
 		if ingress != nil {
@@ -1824,7 +1880,7 @@ func (r *Router) forwardVideoAtPolicyCodec(senderID, slot, rid string, pkt *rtp.
 	return r.forwardVideoFrameAtPolicyCodec(senderID, slot, rid, pkt, now, policy, inspected, mime, false)
 }
 
-func (r *Router) forwardVideoFrameAtPolicyCodec(senderID, slot, rid string, pkt *rtp.Packet, now time.Time, policy videoPolicy, inspected bool, mime string, frameStart bool) int {
+func (r *Router) forwardVideoFrameAtPolicyCodec(senderID, slot, rid string, pkt *rtp.Packet, now time.Time, policy videoPolicy, inspected bool, mime string, frameStart bool, hevcUnit ...[]*rtp.Packet) int {
 	if policy.bounds != (VideoBounds{}) && !inspected {
 		return 0
 	}
@@ -1889,13 +1945,14 @@ func (r *Router) forwardVideoFrameAtPolicyCodec(senderID, slot, rid string, pkt 
 			if output, ok := w.writer.(*pubSlot); ok {
 				output.videoMu.Lock()
 				defer output.videoMu.Unlock()
+				intentionalDrop := false
 				previousContinuity, previousEpoch := output.videoContinuity, output.watchEpoch
 				previousSource := output.videoSource.Load()
 				defer func() {
-					if !written {
+					if !written && !intentionalDrop {
 						output.videoContinuity, output.watchEpoch = previousContinuity, previousEpoch
 						output.videoSource.Store(previousSource)
-					} else if !previousContinuity.seen || previousContinuity.pendingEpoch || previousEpoch != output.watchEpoch {
+					} else if written && (!previousContinuity.seen || previousContinuity.pendingEpoch || previousEpoch != output.watchEpoch) {
 						// Do not take a watch write lock on the fanout path: a
 						// slow recipient can hold a final-write read lock.
 						output.videoStartupEpoch.Store(output.watchEpoch)
@@ -1918,9 +1975,31 @@ func (r *Router) forwardVideoFrameAtPolicyCodec(senderID, slot, rid string, pkt 
 						output.watchEpoch = w.delivery.WatchEpoch
 						output.videoContinuity.beginEpoch()
 					}
-					if strings.EqualFold(mime, webrtc.MimeTypeH264) {
+					switch {
+					case strings.EqualFold(mime, webrtc.MimeTypeH265):
+						if len(hevcUnit) == 0 || len(hevcUnit[0]) == 0 {
+							return nil
+						}
+						if output.videoContinuity.h265UnitFirst != hevcUnit[0][0] {
+							fresh := !output.videoContinuity.seen || output.videoContinuity.pendingEpoch || output.videoContinuity.ssrc != pkt.SSRC
+							allowed := output.videoContinuity.beginH265Frame(hevcUnit[0], frameStart)
+							output.videoContinuity.h265DropUnit = !allowed && !fresh
+							if !output.videoContinuity.h265DropUnit && pkt != hevcUnit[0][0] {
+								// The prefix was not accepted for this viewer. Never
+								// turn a complete source unit into an accepted suffix.
+								needsKeyframe = true
+								return nil
+							}
+							output.videoContinuity.h265UnitFirst = hevcUnit[0][0]
+						}
+						if output.videoContinuity.h265DropUnit {
+							intentionalDrop = true
+							return nil
+						}
+						packet, accepted = output.videoContinuity.translateH265(pkt, now, frameStart)
+					case strings.EqualFold(mime, webrtc.MimeTypeH264):
 						packet, accepted = output.videoContinuity.translateH264(pkt, now, frameStart)
-					} else if strings.EqualFold(mime, webrtc.MimeTypeVP8) {
+					case strings.EqualFold(mime, webrtc.MimeTypeVP8):
 						packet, accepted = output.videoContinuity.translate(pkt, now)
 					}
 					needsKeyframe = !accepted

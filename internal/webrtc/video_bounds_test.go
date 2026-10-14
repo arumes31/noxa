@@ -53,7 +53,11 @@ func TestVideoBoundsRejectCodecChangeDuringTrack(t *testing.T) {
 }
 
 func (t *boundsVideoTrack) Codec() webrtc.RTPCodecParameters {
-	return webrtc.RTPCodecParameters{RTPCodecCapability: webrtc.RTPCodecCapability{MimeType: t.mime}}
+	codec := webrtc.RTPCodecCapability{MimeType: t.mime, ClockRate: 90000}
+	if strings.EqualFold(t.mime, webrtc.MimeTypeH264) {
+		codec.SDPFmtpLine = "packetization-mode=1;profile-level-id=42001f"
+	}
+	return webrtc.RTPCodecParameters{RTPCodecCapability: codec}
 }
 
 func TestVideoBoundsBlockOversizeAndUnknownReferences(t *testing.T) {

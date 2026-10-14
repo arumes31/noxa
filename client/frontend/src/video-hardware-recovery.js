@@ -1,3 +1,4 @@
+import { hardwareRecoveryCodec, hevcFormat } from "./video-hevc.js";
 import { remoteTrackID } from "./media-track-id.js";
 import { samplePeerStats } from "./peer-stats.js";
 import { receiverVideoStat } from "./connection-stats.js";
@@ -113,7 +114,6 @@ function createPeerHardwareRecoveryScheduler(now) {
 export async function hardwareVideoDecodeAvailable(codec, stat, mediaCapabilities = globalThis.navigator?.mediaCapabilities) {
     if (!mediaCapabilities?.decodingInfo || !codec?.mimeType || !codec.sdpFmtpLine ||
         !(stat.frameWidth > 0) || !(stat.frameHeight > 0) || !(stat.framesPerSecond > 0)) return false;
-    let timer;
     try {
         let queries = capabilityQueries.get(mediaCapabilities);
         if (!queries) { queries = new Map(); capabilityQueries.set(mediaCapabilities, queries); }
@@ -132,15 +132,15 @@ export async function hardwareVideoDecodeAvailable(codec, stat, mediaCapabilitie
             }
             entry = { settled: false };
             entry.promise = Promise.resolve().then(() => mediaCapabilities.decodingInfo({ type: "webrtc", video }))
-                .catch(() => null).then(result => { entry.settled = true; entry.expires = performance.now() + 30000; return result; });
+                .catch(() => null).then(result => { entry.settled = true; entry.expires = performance.now() + 30000; entry.value = result; return result; });
+            let timer;
+            entry.wait = Promise.race([entry.promise, new Promise(resolve => { timer = setTimeout(() => resolve(null), 2000); })])
+                .finally(() => clearTimeout(timer));
             queries.set(key, entry);
         }
-        const result = await Promise.race([
-            entry.promise,
-            new Promise(resolve => { timer = setTimeout(() => resolve(null), 2000); }),
-        ]);
+        const result = entry.settled ? entry.value : await entry.wait;
         return result?.supported === true && result.powerEfficient === true;
-    } catch { return false; } finally { clearTimeout(timer); }
+    } catch { return false; }
 }
 
 // Ask the relay to replace this output binding. Direction toggles can stop a
@@ -207,7 +207,7 @@ export function createVideoReceiverRecovery({ state, watch, scheduler = createHa
             if (!transceiver || transceiver.stopped || transceiver.direction !== "recvonly" || transceiver.currentDirection !== "recvonly" || transceiver.sender?.track) continue;
             const id = remoteTrackID(pc, track, transceiver), watched = watch(pc, id, track);
             const codec = stats.get(stat.codecId);
-            if (!watched || !track.enabled || track.readyState !== "live" || codec?.mimeType?.toLowerCase() !== "video/h264") continue;
+            if (!watched || !track.enabled || track.readyState !== "live" || !hardwareRecoveryCodec(codec)) continue;
             const current = () => state.pc === pc && scopeKey(state) === scope && pc.connectionState === "connected" &&
                 pc.getTransceivers().includes(transceiver) && transceiver.receiver.track === track && transceiver.mid === mid && watched.current();
             const implementation = String(stat.decoderImplementation || "");
@@ -217,7 +217,8 @@ export function createVideoReceiverRecovery({ state, watch, scheduler = createHa
                 receivedFrames: stat.framesReceived, receivedPackets: stat.packetsReceived,
                 hardware: stat.powerEfficientDecoder === true && /D3D11|MediaFoundation|VideoToolbox|Vaapi|V4L2|MediaCodec/i.test(implementation),
                 software: stat.powerEfficientDecoder === false && /FFmpeg|OpenH264/i.test(implementation),
-                current, capable: () => capable(codec, stat), recover: () => reset({ state, pc, transceiver, current, watched }) });
+                current, capable: () => hevcFormat(codec) && watched.withdrawHEVC ? true : capable(codec, stat),
+                recover: () => hevcFormat(codec) && watched.withdrawHEVC ? watched.withdrawHEVC() : reset({ state, pc, transceiver, current, watched }) });
         }
         await scheduler(scope, candidates, stats, pc);
     };

@@ -19,6 +19,7 @@ func (a *App) VideoStreamControlForTab(tabID string, msg netproto.VideoStreamCon
 	conn, clientID, sourceSupported, codecSupported, model := cm.conn, cm.clientID, cm.supportsStreamSourceQuality, cm.supportsStreamCodec, cm.authorizationModel
 	recoverySupported := cm.supportsStreamReceiverRecovery
 	codecRefreshSupported := cm.supportsStreamCodecRefresh
+	hevcSupported := cm.supportsStreamHEVC && sourceSupported && codecSupported
 	cm.mu.Unlock()
 	if conn == nil {
 		return netproto.VideoStreamResult{}, errors.New("not connected")
@@ -33,13 +34,16 @@ func (a *App) VideoStreamControlForTab(tabID string, msg netproto.VideoStreamCon
 	if msg.QualityMode == "source" && (!sourceSupported || model != netproto.AuthorizationModelRolesV1 || clientID == "") {
 		return netproto.VideoStreamResult{}, errors.New("source quality publications are not supported by this server")
 	}
-	if len(msg.Codecs) != 0 {
+	if msg.CodecRevision != 0 && (!hevcSupported || msg.Action != "publish" || !msg.Active || msg.QualityMode != "source" || len(msg.Codecs) == 0) ||
+		msg.Action == "publish" && slices.Contains(msg.Codecs, "h265") && msg.CodecRevision == 0 {
+		return netproto.VideoStreamResult{}, errors.New("invalid publication codec revision")
+	}
+	if len(msg.Codecs) != 0 || msg.HEVCLevelID != 0 {
 		if msg.Action == "publish" && msg.Active && msg.Generation != 0 && (!codecRefreshSupported || msg.QualityMode != "source") {
 			return netproto.VideoStreamResult{}, errors.New("in-place video codec refresh is not supported")
 		}
 		if !codecSupported || model != netproto.AuthorizationModelRolesV1 || clientID == "" ||
-			(msg.Action != "publish" && msg.Action != "watch") || len(msg.Codecs) > 2 || !slices.Contains(msg.Codecs, "vp8") ||
-			(len(msg.Codecs) == 2 && !slices.Contains(msg.Codecs, "h264")) {
+			(msg.Action != "publish" && msg.Action != "watch") || !validClientVideoCodecs(msg.Codecs, msg.HEVCLevelID, hevcSupported) {
 			return netproto.VideoStreamResult{}, errors.New("invalid or unsupported video codec capabilities")
 		}
 	}
@@ -81,16 +85,48 @@ func (a *App) VideoStreamControlForTab(tabID string, msg netproto.VideoStreamCon
 		(msg.Action == "publish" && msg.Active && msg.QualityMode == "source" && (result.QualityMode != "source" || result.UploadActive == nil)) {
 		return netproto.VideoStreamResult{}, errors.New("invalid source quality acknowledgement")
 	}
-	if (result.Codec != "" && (msg.Action != "publish" || (result.Codec != "vp8" && result.Codec != "h264"))) ||
+	if (result.Codec != "" && (msg.Action != "publish" || (result.Codec != "vp8" && result.Codec != "h264" && (result.Codec != "h265" || !hevcSupported)))) ||
 		(msg.Action == "publish" && msg.Active && len(msg.Codecs) != 0 && !slices.Contains(msg.Codecs, result.Codec)) {
 		return netproto.VideoStreamResult{}, errors.New("invalid publication codec acknowledgement")
 	}
+	if result.CodecRevision != msg.CodecRevision {
+		return netproto.VideoStreamResult{}, errors.New("invalid publication codec revision acknowledgement")
+	}
+	if (result.Codec == "h265" && (!validClientHEVCLevel(result.HEVCLevelID) || result.HEVCLevelID != msg.HEVCLevelID)) ||
+		(result.Codec != "h265" && result.HEVCLevelID != 0) {
+		return netproto.VideoStreamResult{}, errors.New("invalid publication HEVC level")
+	}
 	for _, stream := range result.Streams {
-		if stream.PublisherID == "" || stream.Generation == 0 || (stream.Slot != "cam" && stream.Slot != "screen") ||
+		if stream.CodecRevision != 0 && (!hevcSupported || stream.PublisherID != clientID) || (stream.Codec == "h265" && !validClientHEVCLevel(stream.HEVCLevelID)) || (stream.Codec != "h265" && stream.HEVCLevelID != 0) || stream.PublisherID == "" || stream.Generation == 0 || (stream.Slot != "cam" && stream.Slot != "screen") ||
 			(stream.QualityMode != "" && stream.QualityMode != "source") || (stream.UploadActive != nil && stream.PublisherID != clientID) ||
-			(stream.Codec != "" && (stream.PublisherID != clientID || (stream.Codec != "vp8" && stream.Codec != "h264"))) {
+			(stream.Codec != "" && (stream.PublisherID != clientID || (stream.Codec != "vp8" && stream.Codec != "h264" && (stream.Codec != "h265" || !hevcSupported)))) {
 			return netproto.VideoStreamResult{}, errors.New("invalid video stream catalog")
 		}
 	}
 	return result, nil
+}
+
+func validClientHEVCLevel(level uint8) bool {
+	switch level {
+	case 30, 60, 63, 90, 93, 120, 123, 150, 153, 156, 180, 183, 186:
+		return true
+	}
+	return false
+}
+
+func validClientVideoCodecs(codecs []string, level uint8, hevcSupported bool) bool {
+	if len(codecs) == 0 || len(codecs) > 3 || !slices.Contains(codecs, "vp8") {
+		return false
+	}
+	seen := make(map[string]bool, len(codecs))
+	for _, codec := range codecs {
+		if seen[codec] || (codec != "vp8" && codec != "h264" && codec != "h265") {
+			return false
+		}
+		seen[codec] = true
+	}
+	if seen["h265"] {
+		return hevcSupported && validClientHEVCLevel(level)
+	}
+	return level == 0
 }

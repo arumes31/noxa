@@ -33,7 +33,7 @@ func TestKeyframeDiagnosticsOptionalFixedSchema(t *testing.T) {
 	if err = json.Unmarshal(raw, &reasons); err != nil {
 		t.Fatal(err)
 	}
-	names := []string{"consumer_start", "recording_source", "watch_start", "quality_change", "vp8_bounds", "h264_assembly", "await_keyframe", "viewer_feedback", "explicit"}
+	names := []string{"consumer_start", "recording_source", "watch_start", "quality_change", "vp8_bounds", "h264_assembly", "h265_assembly", "await_keyframe", "viewer_feedback", "explicit"}
 	if len(reasons) != len(names) {
 		t.Fatal("unbounded reason schema")
 	}

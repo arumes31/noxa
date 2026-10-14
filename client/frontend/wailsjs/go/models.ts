@@ -3961,6 +3961,8 @@ export namespace netproto {
 		}
 	}
 	export class VideoStream {
+	    hevc_level_id?: number;
+	    codec_revision?: string;
 	    watch_revision: number;
 	    viewer_count?: number;
 	    publisher_id: string;
@@ -3976,6 +3978,8 @@ export namespace netproto {
 
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.hevc_level_id = source["hevc_level_id"];
+	        this.codec_revision = source["codec_revision"];
 	        this.watch_revision = source["watch_revision"];
 	        this.viewer_count = source["viewer_count"];
 	        this.publisher_id = source["publisher_id"];
@@ -3987,6 +3991,8 @@ export namespace netproto {
 	    }
 	}
 	export class VideoStreamControl {
+	    hevc_level_id?: number;
+	    codec_revision?: string;
 	    action: string;
 	    publisher_id: string;
 	    slot: string;
@@ -4003,6 +4009,8 @@ export namespace netproto {
 
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.hevc_level_id = source["hevc_level_id"];
+	        this.codec_revision = source["codec_revision"];
 	        this.action = source["action"];
 	        this.publisher_id = source["publisher_id"];
 	        this.slot = source["slot"];
@@ -4161,6 +4169,8 @@ export namespace netproto {
 
 
 	export class VideoStreamResult {
+	    hevc_level_id?: number;
+	    codec_revision?: string;
 	    action: string;
 	    publisher_id: string;
 	    slot: string;
@@ -4181,6 +4191,8 @@ export namespace netproto {
 
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.hevc_level_id = source["hevc_level_id"];
+	        this.codec_revision = source["codec_revision"];
 	        this.action = source["action"];
 	        this.publisher_id = source["publisher_id"];
 	        this.slot = source["slot"];

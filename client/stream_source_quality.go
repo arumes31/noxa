@@ -45,3 +45,15 @@ func (a *App) SupportsStreamSourceQualityForTab(tabID string) bool {
 	defer cm.mu.Unlock()
 	return cm.conn != nil && cm.clientID != "" && cm.supportsStreamSourceQuality && cm.authorizationModel == netproto.AuthorizationModelRolesV1
 }
+
+// SupportsStreamHEVCForTab gates the new format and level fields to this
+// authenticated connection. Older servers never receive HEVC capabilities.
+func (a *App) SupportsStreamHEVCForTab(tabID string) bool {
+	cm, err := a.requireTabCM(tabID)
+	if err != nil {
+		return false
+	}
+	cm.mu.Lock()
+	defer cm.mu.Unlock()
+	return cm.conn != nil && cm.clientID != "" && cm.supportsStreamHEVC && cm.supportsStreamCodec && cm.supportsStreamSourceQuality && cm.authorizationModel == netproto.AuthorizationModelRolesV1
+}
