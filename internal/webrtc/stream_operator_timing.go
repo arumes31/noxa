@@ -104,7 +104,7 @@ func (r *Router) streamTiming(request StreamTimingRequest, action string, read f
 			return false, false
 		}
 		defer input.mu.Unlock()
-		return input.started == inputStarted && input.ssrc == request.SSRC, true
+		return input.started.Equal(inputStarted) && input.ssrc == request.SSRC, true
 	}
 	r.timingMu.Lock()
 	defer r.timingMu.Unlock()

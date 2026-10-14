@@ -45,21 +45,22 @@ func (o *upstreamFeedbackObserver) BindRemoteStream(info *interceptor.StreamInfo
 		n, result, err := reader.Read(buf, attrs)
 		if capture := o.timing.Load(); capture != nil && info != nil && info.SSRC == capture.scope.SSRC {
 			at := time.Now()
-			if err != nil {
+			switch {
+			case err != nil:
 				var timeout net.Error
 				if errors.As(err, &timeout) && timeout.Timeout() {
 					capture.readTimeouts.Add(1)
 				} else {
 					capture.stop("read_error", at)
 				}
-			} else if n > 0 && n <= len(buf) {
+			case n > 0 && n <= len(buf):
 				var header rtp.Header
 				if _, parseErr := header.Unmarshal(buf[:n]); parseErr != nil {
 					capture.stop("invalid_rtp_header", at)
 				} else {
 					capture.recordRTP(header, extensionID, at)
 				}
-			} else {
+			default:
 				capture.stop("invalid_read_length", at)
 			}
 			capture.observeRTPHook(at)
