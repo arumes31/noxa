@@ -4,7 +4,8 @@ import { escapeHTML as escapeTranslation } from "./markdown.js";
 // video-publication.js — camera/screen capture and publication lifecycle.
 import { captureCamera, applyCameraPreview } from "./camera-capture.js";
 import { captureMediaScope, mediaScopeIsCurrent } from "./media-controls.js";
-import { startPublication, stopPublication, publicationSnapshot, preparePublicationUpload, publicationUploadActive, publicationCodec } from "./stream-publication.js";
+import { startPublication, stopPublication, publicationSnapshot, preparePublicationUpload, publicationUploadActive, publicationCodec, publicationHEVCFormat, withdrawPublicationHEVC } from "./stream-publication.js";
+import { hardwareRecoveryCodec, knownSoftwareVideoEncoder } from "./video-hevc.js";
 import { preferPublicationCodec } from "./video-codecs.js";
 import { startShareStatus, stopShareStatus, refreshShareStatus } from "./share-status.js";
 import { displayAudioOptions, validateDisplayAudio } from "./display-audio.js";
@@ -46,13 +47,30 @@ export function createVideoPublication({ policy }) {
 
     function selectCodec(slot, track, transceiver) {
         const codec = publicationCodec(slot, track);
-        if (!codec || codecSelections.get(transceiver) === codec) return false;
-        if (!preferPublicationCodec(transceiver, codec)) return false;
-        codecSelections.set(transceiver, codec);
+        const format = codec === "h265" ? publicationHEVCFormat(slot, track) : undefined;
+        const previous = codecSelections.get(transceiver);
+        if (!codec || previous?.codec === codec && previous?.format?.sdpFmtpLine === format?.sdpFmtpLine) return false;
+        if (!preferPublicationCodec(transceiver, codec, format)) {
+            if (codec === "h265") throw new Error("HEVC format unavailable");
+            return false;
+        }
+        codecSelections.set(transceiver, { codec, format });
         return true;
     }
 
-    function applyPublicationSettings(slot, track) {
+    async function negotiateInitialCodec(slot, track, transceiver, pc, generation, current, tabID) {
+        try {
+            selectCodec(slot, track, transceiver);
+            await negotiateOffer(pc, generation, undefined, current, tabID);
+        } catch (error) {
+            if (!current() || publicationCodec(slot, track) !== "h265" ||
+                !await withdrawPublicationHEVC(slot, track, current, false)) throw error;
+            selectCodec(slot, track, transceiver);
+            await negotiateOffer(pc, generation, undefined, current, tabID);
+        }
+    }
+
+    function applyPublicationSettings(slot, track, { demandOnly = false } = {}) {
         const { state } = V(), pc = state.pc, scope = captureMediaScope();
         if (!pc) return Promise.resolve();
         const current = () => state.pc === pc && mediaScopeIsCurrent(scope) && track.readyState !== "ended" &&
@@ -61,13 +79,16 @@ export function createVideoPublication({ policy }) {
             if (!current()) return;
             const transceiver = slot === "screen" ? state.shareVideoTransceiver : pc.getTransceivers().find(item => item.sender.track === track);
             const previous = codecSelections.get(transceiver);
-            if (selectCodec(slot, track, transceiver)) {
-                try { await negotiateOffer(pc, scope.generation, undefined, current, scope.tabID); }
-                catch (error) {
-                    if (current()) {
-                        if (previous) { preferPublicationCodec(transceiver, previous); codecSelections.set(transceiver, previous); }
-                        else codecSelections.delete(transceiver);
-                    }
+            try {
+                if (!demandOnly && selectCodec(slot, track, transceiver)) await negotiateOffer(pc, scope.generation, undefined, current, scope.tabID);
+            } catch (error) {
+                if (!current()) throw error;
+                if (publicationCodec(slot, track) === "h265" && await withdrawPublicationHEVC(slot, track, current, false)) {
+                    selectCodec(slot, track, transceiver);
+                    await negotiateOffer(pc, scope.generation, undefined, current, scope.tabID);
+                } else {
+                    if (previous) { preferPublicationCodec(transceiver, previous.codec, previous.format); codecSelections.set(transceiver, previous); }
+                    else codecSelections.delete(transceiver);
                     throw error;
                 }
             }
@@ -303,7 +324,7 @@ export function createVideoPublication({ policy }) {
                 const parameters = sender.getParameters(), encoding = parameters.encodings?.[0];
                 const scale = encoding?.scaleResolutionDownBy ?? 1;
                 const size = track.getSettings();
-                const eligible = row => row && row.powerEfficientEncoder === false && row.codec?.mimeType?.toLowerCase() === "video/h264" &&
+                const eligible = row => row && row.powerEfficientEncoder === false && hardwareRecoveryCodec(row.codec) && (row.codec.mimeType.toLowerCase() === "video/h264" || knownSoftwareVideoEncoder(row.codec, row.encoderImplementation)) &&
                     ["none", "cpu", "bandwidth"].includes(row.qualityLimitationReason) && row.frameWidth >= 640 && row.frameHeight >= 360 &&
                     row.frameWidth % 4 === 0 && row.frameHeight % 4 === 0 &&
                     Number.isFinite(size.width) && Number.isFinite(size.height) &&
@@ -316,7 +337,7 @@ export function createVideoPublication({ policy }) {
                     [before, after].every(row => row?.capture?.id === captureRecovery.sourceId &&
                         row.codec?.mimeType === captureRecovery.codec && row.codec?.sdpFmtpLine === captureRecovery.fmtp &&
                         row.frameWidth === captureRecovery.width && row.frameHeight === captureRecovery.height &&
-                        /^openh264$/i.test(row.encoderImplementation || "") &&
+                        knownSoftwareVideoEncoder(row.codec, row.encoderImplementation) &&
                         Number.isSafeInteger(row.framesEncoded) && row.framesEncoded >= 0) &&
                     after.framesEncoded >= before.framesEncoded && after.capture.frames > before.capture.frames &&
                     after.capture.timestamp > before.capture.timestamp && after.capture.timestamp - before.capture.timestamp <= 15000;
@@ -640,7 +661,7 @@ export function createVideoPublication({ policy }) {
         if (peerConnection) {
             // The dedicated screen transceiver survives publication stops.
             try {
-                if (!await preparePublicationUpload("screen", screenTrack, () => applyPublicationSettings("screen", screenTrack))) throw new DOMException("capture ended", "AbortError");
+                if (!await preparePublicationUpload("screen", screenTrack, options => applyPublicationSettings("screen", screenTrack, options))) throw new DOMException("capture ended", "AbortError");
                 await queuePeerNegotiation(peerConnection, async () => {
                     if (!current() || shareEnded) throw new DOMException("capture ended", "AbortError");
                     try {
@@ -662,11 +683,10 @@ export function createVideoPublication({ policy }) {
                             }
                         }
                         state.shareVideoTransceiver = shareTransceiver;
-                        selectCodec("screen", screenTrack, shareTransceiver);
                         await applySendCaps();
                         if (!current() || shareEnded) throw new DOMException("capture ended", "AbortError");
                         if (!trackFitsVideoLimits(screenTrack, state.mediaLimits)) throw new Error(tLabel("voice.mediaDimensionsFailed"));
-                        await negotiateOffer(peerConnection, generation, undefined, () => !shareEnded, tabID);
+                        await negotiateInitialCodec("screen", screenTrack, shareTransceiver, peerConnection, generation, () => !shareEnded && state.pc === peerConnection && state.shareStream === display, tabID);
                     } catch (error) {
                         // Remove the candidate before the next queued offer can see it.
                         discardDisplay(display);
@@ -1161,7 +1181,7 @@ export function createVideoPublication({ policy }) {
             rememberVideoSenderProfile(cam, capturePreferences.get(cam));
             if (!trackFitsVideoLimits(cam, state.mediaLimits)) throw new Error(tLabel("voice.mediaDimensionsFailed"));
             cam.contentHint = "motion";
-            if (!await preparePublicationUpload("cam", cam, () => applyPublicationSettings("cam", cam))) return;
+            if (!await preparePublicationUpload("cam", cam, options => applyPublicationSettings("cam", cam, options))) return;
             // Teardown owns capture immediately, even while another offer is pending.
             localStream.addTrack(cam);
             await queuePeerNegotiation(pc, async () => {
@@ -1185,8 +1205,7 @@ export function createVideoPublication({ policy }) {
                     if (!current()) throw new DOMException("capture ended", "AbortError");
                     if (!trackFitsVideoLimits(cam, state.mediaLimits)) throw new Error(tLabel("voice.mediaDimensionsFailed"));
                     await sender.replaceTrack(cam);
-                    selectCodec("cam", cam, pc.getTransceivers().find(item => item.sender === sender));
-                    await negotiateOffer(pc, generation, undefined, current, tabID);
+                    await negotiateInitialCodec("cam", cam, pc.getTransceivers().find(item => item.sender === sender), pc, generation, current, tabID);
                 } catch (error) {
                     // A failed candidate must disappear before the queue advances.
                     cam.stop();

@@ -1596,3 +1596,81 @@ test("share ceiling same dimensions with changed preset still updates capture se
     await expect(page.getByRole("dialog")).toHaveCount(0);
     expect(await page.evaluate(() => ({ calls: window.__media.constraintCalls, hint: window.__noxa.state.shareStream.getVideoTracks()[0].contentHint }))).toEqual({ calls: 1, hint: "motion" });
 });
+async function installHEVCPublication(page, reject = false) {
+    await page.evaluate(reject => {
+        const m = window.__media, state = window.__noxa.state;
+        m.hevcLevel = 153; m.codecPreferences = []; m.codecRequests = []; m.rejectHEVC = reject;
+        const native = RTCRtpSender.getCapabilities("video").codecs.filter(codec => codec.mimeType.toLowerCase() !== "video/h265");
+        Object.defineProperty(RTCRtpSender, "getCapabilities", { configurable: true, value: () => ({ codecs: [
+            { mimeType: "video/H265", clockRate: 90000, sdpFmtpLine: `profile-id=1;tier-flag=0;level-id=${m.hevcLevel};tx-mode=SRST` }, ...native] }) });
+        Object.defineProperty(navigator.mediaCapabilities, "encodingInfo", { configurable: true, value: async () => ({ supported: true, powerEfficient: true }) });
+        for (const name of ["SupportsStreamSourceQualityForTab", "SupportsStreamCodecForTab", "SupportsStreamCodecRefreshForTab", "SupportsStreamHEVCForTab"]) window.go.main.App[name] = async () => true;
+        const add = state.pc.addTransceiver.bind(state.pc);
+        state.pc.addTransceiver = (...args) => {
+            const tr = add(...args);
+            tr.setCodecPreferences = codecs => {
+                m.codecPreferences.push({ mime: codecs[0].mimeType, fmtp: codecs[0].sdpFmtpLine });
+                if (m.rejectHEVC && codecs[0].mimeType === "video/H265") throw new Error("native HEVC unavailable");
+            };
+            return tr;
+        };
+        const control = window.go.main.App.VideoStreamControlForTab;
+        window.go.main.App.VideoStreamControlForTab = async (tab, body) => {
+            const answer = await control(tab, body);
+            if (body.action === "publish" && body.active) {
+                m.codecRequests.push(body);
+                return { ...answer, codec: body.codecs[0], hevc_level_id: body.hevc_level_id, codec_revision: body.codec_revision, upload_active: true };
+            }
+            return answer;
+        };
+    }, reject);
+}
+
+test("HEVC preference rejection falls back on the same captured source before publishing", async ({ page }) => {
+    await installHEVCPublication(page, true);
+    await page.locator("#voice-screen").click();
+    await page.getByRole("button", { name: "Start sharing", exact: true }).click();
+    await expect.poll(() => page.evaluate(() => window.__media.codecRequests.length)).toBe(1);
+    const result = await page.evaluate(() => ({ preferences: __media.codecPreferences, requests: __media.codecRequests,
+        captures: __media.displayTracks.length, errors: __media.errors, encodings: __noxa.state.shareVideoTransceiver.sender.getParameters().encodings.length,
+        source: __noxa.state.shareStream.getVideoTracks()[0] === __media.displayTracks[0] }));
+    expect(result.preferences[0].mime).toBe("video/H265"); expect(result.preferences[1].mime).toBe("video/H264");
+    expect(result.requests[0].codecs).toEqual(["h264", "vp8"]); expect(result.requests[0]).not.toHaveProperty("hevc_level_id");
+    expect(result.requests[0].codec_revision).toBe("1"); expect(result.captures).toBe(1); expect(result.encodings).toBe(1);
+    expect(result.source).toBe(true); expect(result.errors).toEqual([]);
+});
+
+test("HEVC same-family source replacement applies the new exact format on the reused sender", async ({ page }) => {
+    await installHEVCPublication(page);
+    await page.locator("#voice-screen").click();
+    await page.getByRole("button", { name: "Start sharing", exact: true }).click();
+    await expect.poll(() => page.evaluate(() => window.__media.codecRequests.length)).toBe(1);
+    await page.evaluate(() => { __media.previousSender = __noxa.state.shareVideoTransceiver.sender; __media.hevcLevel = 120; });
+    await page.locator("#sharing-status").getByRole("button", { name: "Change source", exact: true }).click();
+    await page.getByRole("button", { name: "Start sharing", exact: true }).click();
+    await expect.poll(() => page.evaluate(() => window.__media.codecRequests.length)).toBe(2);
+    const result = await page.evaluate(() => ({ preferences: __media.codecPreferences, requests: __media.codecRequests,
+        sameSender: __media.previousSender === __noxa.state.shareVideoTransceiver.sender, errors: __media.errors }));
+    expect(result.preferences.filter(row => row.mime === "video/H265").map(row => row.fmtp)).toEqual([
+        "profile-id=1;tier-flag=0;level-id=153;tx-mode=SRST", "profile-id=1;tier-flag=0;level-id=120;tx-mode=SRST"]);
+    expect(result.requests.map(row => row.hevc_level_id)).toEqual([153, 120]); expect(result.sameSender).toBe(true); expect(result.errors).toEqual([]);
+});
+
+
+test("pending HEVC withdrawal cannot prevent last-viewer upload pause or apply stale codec", async ({ page }) => {
+    await installHEVCPublication(page);
+    await page.locator("#voice-screen").click();
+    await page.getByRole("button", { name: "Start sharing", exact: true }).click();
+    await expect.poll(() => page.evaluate(() => window.__media.codecRequests.length)).toBe(1);
+    const before = await page.evaluate(async () => {
+        const p = await import("/src/stream-publication.js"), original = window.go.main.App.VideoStreamControlForTab;
+        window.go.main.App.VideoStreamControlForTab = (tab, body) => body.codec_revision === "2" ? Promise.reject(new Error("not applied")) : original(tab, body);
+        try { await p.withdrawPublicationHEVC("screen", __noxa.state.shareStream.getVideoTracks()[0]); } catch {}
+        const before = { offers: __media.offers.length, preferences: __media.codecPreferences.length };
+        p.reconcilePublicationUploads(p.publicationSnapshot(), [{ publisher_id: "self", slot: "screen", generation: "1",
+            codec_revision: "1", codec: "vp8", upload_active: false }]);
+        return before;
+    });
+    await expect.poll(() => page.evaluate(() => __noxa.state.shareVideoTransceiver.sender.getParameters().encodings[0].active)).toBe(false);
+    expect(await page.evaluate(() => ({ offers: __media.offers.length, preferences: __media.codecPreferences.length }))).toEqual(before);
+});

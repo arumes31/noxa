@@ -425,6 +425,13 @@ func registerCodecsWithVideoBounds(m *webrtc.MediaEngine, enableAV1 bool, bounds
 		return fmt.Errorf("h264: %w", err)
 	}
 
+	// The SFU does not decode HEVC; preserve the source's explicitly admitted
+	// level in the answer. Per-viewer ceilings are enforced by watch signaling.
+	if err := registerVideo(webrtc.RTPCodecParameters{
+		RTPCodecCapability: webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeH265, ClockRate: 90000, SDPFmtpLine: "profile-id=1;tier-flag=0;level-id=186;tx-mode=SRST"}, PayloadType: 116,
+	}); err != nil {
+		return fmt.Errorf("h265: %w", err)
+	}
 	if enableAV1 {
 		av1 := webrtc.RTPCodecParameters{
 			RTPCodecCapability: webrtc.RTPCodecCapability{

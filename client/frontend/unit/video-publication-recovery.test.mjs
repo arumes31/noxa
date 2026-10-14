@@ -35,7 +35,7 @@ function fixture(options = {}) {
                     framesEncoded: options.stale ? 1 : frames, frameWidth: input.width / scale, frameHeight: input.height / scale,
                     powerEfficientEncoder: false, qualityLimitationReason: "none", ...(options.capture ? {
                         mediaSourceId: "source", encoderImplementation: "OpenH264" } : {}), ...options.row }],
-                ["c", { id: "c", type: "codec", mimeType: "video/H264", sdpFmtpLine: "profile-level-id=42001f;packetization-mode=1" }],
+                ["c", { id: "c", type: "codec", mimeType: "video/H264", sdpFmtpLine: "profile-level-id=42001f;packetization-mode=1", ...options.codec }],
                 ...(options.capture ? [["source", { id: "source", type: "media-source", kind: "video", trackIdentifier: track.id,
                     timestamp: frames * 150, frames: frames * 10, ...options.capture }]] : []),
             ]);
@@ -306,4 +306,15 @@ test("a changed sender-stat identity on the final preflight cannot mutate a send
     const f = fixture(options);
     assert.equal(await f.api.retryVideoHardware("screen", f.track), false);
     assert.equal(f.writes.length, 0);
+});
+
+
+test("HEVC hardware retry keeps one sender, exact codec and caps while restoring its scale", async () => {
+    const f = fixture({ codec: { mimeType: "video/H265", clockRate: 90000, sdpFmtpLine: "profile-id=1;tier-flag=0;level-id=153;tx-mode=SRST" },
+        row: { encoderImplementation: "FFmpeg" } });
+    assert.equal(await f.api.retryVideoHardware("screen", f.track), true);
+    assert.deepEqual(f.writes.map(p => p.encodings[0].scaleResolutionDownBy), [2, 1]);
+    assert.ok(f.writes.every(p => p.encodings.length === 1 && p.encodings[0].maxBitrate === 8000000 && p.degradationPreference === "maintain-framerate"));
+    assert.ok(f.queries.every(q => q.video.contentType.includes("H265") && q.video.contentType.includes("level-id=153")));
+    assert.equal(f.sender.track, f.track);
 });

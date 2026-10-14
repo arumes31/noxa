@@ -17,6 +17,7 @@ type videoWatch struct {
 	startupPending                        bool
 	qualityRID                            string
 	codecs                                uint8
+	hevcLevel                             uint8
 }
 
 // VideoPublication is a current, explicitly announced camera or screen source.
@@ -31,6 +32,8 @@ type VideoPublication struct {
 	QualityMode   string `json:"quality_mode,omitempty"`
 	UploadActive  *bool  `json:"upload_active,omitempty"`
 	Codec         string `json:"codec,omitempty"`
+	HEVCLevelID   uint8  `json:"hevc_level_id,omitempty"`
+	CodecRevision uint64 `json:"codec_revision,string,omitempty"`
 }
 
 func watchSlot(slot string) string {
@@ -56,7 +59,17 @@ func (r *Router) PublishVideoWithMode(publisher, slot string, generation uint64,
 }
 
 func (r *Router) PublishVideoWithCodecs(publisher, slot string, generation uint64, active bool, mode string, codecs []string) (uint64, error) {
-	capabilities, valid := videoCodecCapabilities(codecs)
+	return r.PublishVideoWithFormats(publisher, slot, generation, active, mode, codecs, 0)
+}
+func (r *Router) PublishVideoWithFormats(publisher, slot string, generation uint64, active bool, mode string, codecs []string, hevcLevel uint8, revisions ...uint64) (uint64, error) {
+	var codecRevision uint64
+	if len(revisions) > 1 {
+		return 0, ErrVideoPublication
+	}
+	if len(revisions) == 1 {
+		codecRevision = revisions[0]
+	}
+	capabilities, valid := videoFormatCapabilities(codecs, hevcLevel)
 	if !valid {
 		return 0, ErrVideoPublication
 	}
@@ -80,16 +93,43 @@ func (r *Router) PublishVideoWithCodecs(publisher, slot string, generation uint6
 		return 0, ErrVideoPublication
 	}
 	if current != 0 {
+		storedRevision := r.publicationCodecRevisions[key]
+		if codecRevision != 0 || storedRevision != 0 {
+			if generation != current || mode != r.publicationModes[key] || codecRevision < storedRevision || codecRevision == 0 {
+				return 0, ErrVideoPublication
+			}
+			if codecRevision == storedRevision {
+				if capabilities != r.publicationCodecCapabilities[key] || hevcLevel != r.publicationHEVCLevels[key] {
+					return 0, ErrVideoPublication
+				}
+				return current, nil
+			}
+			r.publicationCodecCapabilities[key] = capabilities
+			if r.publicationHEVCLevels == nil {
+				r.publicationHEVCLevels = make(map[publicationKey]uint8)
+			}
+			r.publicationHEVCLevels[key] = hevcLevel
+			if r.publicationCodecRevisions == nil {
+				r.publicationCodecRevisions = make(map[publicationKey]uint64)
+			}
+			r.publicationCodecRevisions[key] = codecRevision
+			return current, nil
+		}
 		// A transient client capability query can initially publish VP8 only.
-		// Add H264 to that exact source lifetime without replacing its watches,
+		// Add newly available codecs to that source lifetime without replacing watches,
 		// preview, ingress diagnostics or transport. Selection still intersects
 		// current viewers and the recording/dimension policies below.
 		if generation == current && mode == "source" && r.publicationModes[key] == "source" &&
-			r.publicationCodecCapabilities[key] == videoCodecVP8 && capabilities == videoCodecVP8|videoCodecH264 {
+			capabilities|r.publicationCodecCapabilities[key] == capabilities &&
+			(r.publicationHEVCLevels[key] == 0 || hevcLevel == r.publicationHEVCLevels[key]) {
 			r.publicationCodecCapabilities[key] = capabilities
+			if r.publicationHEVCLevels == nil {
+				r.publicationHEVCLevels = make(map[publicationKey]uint8)
+			}
+			r.publicationHEVCLevels[key] = hevcLevel
 			return current, nil
 		}
-		if generation == current && (mode == "" || mode == r.publicationModes[key]) && capabilities == r.publicationCodecCapabilities[key] {
+		if generation == current && (mode == "" || mode == r.publicationModes[key]) && capabilities == r.publicationCodecCapabilities[key] && hevcLevel == r.publicationHEVCLevels[key] {
 			return current, nil
 		}
 		return 0, ErrVideoPublication
@@ -106,6 +146,14 @@ func (r *Router) PublishVideoWithCodecs(publisher, slot string, generation uint6
 		r.publicationCodecCapabilities = make(map[publicationKey]uint8)
 	}
 	r.publicationCodecCapabilities[key] = capabilities
+	if r.publicationHEVCLevels == nil {
+		r.publicationHEVCLevels = make(map[publicationKey]uint8)
+	}
+	r.publicationHEVCLevels[key] = hevcLevel
+	if r.publicationCodecRevisions == nil {
+		r.publicationCodecRevisions = make(map[publicationKey]uint64)
+	}
+	r.publicationCodecRevisions[key] = codecRevision
 	if mode != "" {
 		if r.publicationModes == nil {
 			r.publicationModes = make(map[publicationKey]string)
@@ -133,8 +181,11 @@ func (r *Router) WatchVideo(subscriber, publisher, slot string, generation, revi
 	return r.WatchVideoWithCodecs(subscriber, publisher, slot, generation, revision, session, active, nil)
 }
 
-func (r *Router) WatchVideoWithCodecs(subscriber, publisher, slot string, generation, revision, session uint64, active bool, codecs []string) (started bool, err error) {
-	capabilities, valid := videoCodecCapabilities(codecs)
+func (r *Router) WatchVideoWithCodecs(subscriber, publisher, slot string, generation, revision, session uint64, active bool, codecs []string) (bool, error) {
+	return r.WatchVideoWithFormats(subscriber, publisher, slot, generation, revision, session, active, codecs, 0)
+}
+func (r *Router) WatchVideoWithFormats(subscriber, publisher, slot string, generation, revision, session uint64, active bool, codecs []string, hevcLevel uint8) (started bool, err error) {
+	capabilities, valid := videoFormatCapabilities(codecs, hevcLevel)
 	if !valid {
 		return false, ErrVideoWatch
 	}
@@ -151,7 +202,7 @@ func (r *Router) WatchVideoWithCodecs(subscriber, publisher, slot string, genera
 	key := watchKey{subscriber, publisher, slot}
 	old := r.watches[key]
 	if session == 0 || r.watchSessions[subscriber] != session || r.publications[publicationKey{publisher, slot}] != generation ||
-		(old.session == session && old.publication == generation && (revision < old.revision || revision == old.revision && (active != old.active || capabilities != old.codecs))) || r.watchEpoch == ^uint64(0) {
+		(old.session == session && old.publication == generation && (revision < old.revision || revision == old.revision && (active != old.active || capabilities != old.codecs || hevcLevel != old.hevcLevel))) || r.watchEpoch == ^uint64(0) {
 		r.watchMu.Unlock()
 		r.mu.RUnlock()
 		return false, ErrVideoWatch
@@ -165,7 +216,7 @@ func (r *Router) WatchVideoWithCodecs(subscriber, publisher, slot string, genera
 		if active && old.active && old.publication == generation && old.session == session {
 			qualityRID = old.qualityRID
 		}
-		r.watches[key] = videoWatch{publication: generation, revision: revision, epoch: r.watchEpoch, session: session, active: active, startupPending: active, qualityRID: qualityRID, codecs: capabilities}
+		r.watches[key] = videoWatch{publication: generation, revision: revision, epoch: r.watchEpoch, session: session, active: active, startupPending: active, qualityRID: qualityRID, codecs: capabilities, hevcLevel: hevcLevel}
 	}
 	// A newer active revision is an explicit retry. Notify the publisher again
 	// so paused screen capture can produce a fresh frame; exact retries remain
@@ -243,6 +294,10 @@ func (r *Router) VideoPublications(subscriber string) []VideoPublication {
 				active := count > 0 || r.videoRecordingConsumerLocked(key)
 				stream.UploadActive = &active
 				stream.Codec = r.publicationCodecLocked(key, generation)
+				stream.CodecRevision = r.publicationCodecRevisions[key]
+				if stream.Codec == "h265" {
+					stream.HEVCLevelID = r.publicationHEVCLevels[key]
+				}
 			}
 			list = append(list, stream)
 		}
@@ -260,6 +315,8 @@ func (r *Router) removePublicationLocked(key publicationKey) {
 	delete(r.publications, key)
 	delete(r.publicationModes, key)
 	delete(r.publicationCodecCapabilities, key)
+	delete(r.publicationHEVCLevels, key)
+	delete(r.publicationCodecRevisions, key)
 	r.previewMu.Lock()
 	delete(r.previews, key)
 	r.previewMu.Unlock()

@@ -30,8 +30,11 @@ func (s *TCPServer) handleVideoStreamControl(ctx context.Context, client *Client
 	if (msg.QualityMode != "" && msg.QualityMode != "source") || (msg.QualityMode != "" && msg.Action != "publish") {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "invalid publication quality mode")
 	}
-	if len(msg.Codecs) != 0 && msg.Action != "publish" && msg.Action != "watch" {
+	if (len(msg.Codecs) != 0 || msg.HEVCLevelID != 0) && msg.Action != "publish" && msg.Action != "watch" {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "invalid video codec scope")
+	}
+	if msg.CodecRevision != 0 && msg.Action != "publish" {
+		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "invalid codec revision scope")
 	}
 	capability := authorization.Connect
 	switch msg.Action {
@@ -89,7 +92,8 @@ func (s *TCPServer) handleVideoStreamControl(ctx context.Context, client *Client
 			if err == nil && msg.Active {
 				for _, stream := range voice.VideoPublications(client.ID) {
 					if stream.PublisherID == client.ID && stream.Slot == msg.Slot && stream.Generation == result.Generation {
-						result.QualityMode, result.UploadActive, result.Codec = stream.QualityMode, stream.UploadActive, stream.Codec
+						result.QualityMode, result.UploadActive, result.Codec, result.HEVCLevelID = stream.QualityMode, stream.UploadActive, stream.Codec, stream.HEVCLevelID
+						result.CodecRevision = stream.CodecRevision
 						break
 					}
 				}
@@ -116,7 +120,7 @@ func (s *TCPServer) handleVideoStreamControl(ctx context.Context, client *Client
 		case "list":
 			result.Session = voice.VideoWatchSession(client.ID)
 			for _, stream := range voice.VideoPublications(client.ID) {
-				result.Streams = append(result.Streams, netproto.VideoStream{PublisherID: stream.PublisherID, Slot: stream.Slot, Generation: stream.Generation, PreviewAt: stream.PreviewAt, WatchRevision: stream.WatchRevision, ViewerCount: stream.ViewerCount, QualityMode: stream.QualityMode, UploadActive: stream.UploadActive, Codec: stream.Codec})
+				result.Streams = append(result.Streams, netproto.VideoStream{PublisherID: stream.PublisherID, Slot: stream.Slot, Generation: stream.Generation, PreviewAt: stream.PreviewAt, WatchRevision: stream.WatchRevision, ViewerCount: stream.ViewerCount, QualityMode: stream.QualityMode, UploadActive: stream.UploadActive, Codec: stream.Codec, HEVCLevelID: stream.HEVCLevelID, CodecRevision: stream.CodecRevision})
 			}
 		}
 		if err != nil {

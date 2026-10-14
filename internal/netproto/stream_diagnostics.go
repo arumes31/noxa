@@ -68,7 +68,7 @@ func (r VideoSenderDiagnostics) Valid() bool {
 		return false
 	}
 	switch r.Codec {
-	case "", "unknown", "video/vp8", "video/vp9", "video/h264", "video/av1":
+	case "", "unknown", "video/vp8", "video/vp9", "video/h264", "video/h265", "video/av1":
 	default:
 		return false
 	}
@@ -186,6 +186,7 @@ type VideoKeyframeRequestDiagnostics struct {
 	QualityChange   VideoKeyframeRequestCounters `json:"quality_change"`
 	VP8Bounds       VideoKeyframeRequestCounters `json:"vp8_bounds"`
 	H264Assembly    VideoKeyframeRequestCounters `json:"h264_assembly"`
+	H265Assembly    VideoKeyframeRequestCounters `json:"h265_assembly"`
 	AwaitKeyframe   VideoKeyframeRequestCounters `json:"await_keyframe"`
 	ViewerFeedback  VideoKeyframeRequestCounters `json:"viewer_feedback"`
 	Explicit        VideoKeyframeRequestCounters `json:"explicit"`

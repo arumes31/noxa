@@ -3,11 +3,13 @@ package webrtc
 import (
 	"errors"
 	"net"
+	"slices"
 	"sort"
 	"time"
 
 	"github.com/pion/interceptor"
 	"github.com/pion/rtp"
+	"github.com/pion/webrtc/v4"
 )
 
 // Wait only behind a missing sequence; contiguous packets and completed
@@ -41,7 +43,7 @@ const videoReorderBytes = 16 * 1024 * 1024
 
 type orderedVideoPacket struct {
 	packet  *rtp.Packet
-	codec   string
+	codec   webrtc.RTPCodecCapability
 	at      time.Time
 	expires time.Time
 }
@@ -104,7 +106,7 @@ func (q *videoReorder) deadline() time.Time {
 	return q.expires
 }
 
-func (q *videoReorder) push(packet *rtp.Packet, codec string, now time.Time, emit func(*rtp.Packet, string)) {
+func (q *videoReorder) pushFormats(packet *rtp.Packet, codec webrtc.RTPCodecCapability, now time.Time, emit func(*rtp.Packet, webrtc.RTPCodecCapability)) {
 	if !q.seen {
 		q.seen, q.next = true, packet.SequenceNumber
 	}
@@ -114,7 +116,7 @@ func (q *videoReorder) push(packet *rtp.Packet, codec string, now time.Time, emi
 	if packet.SequenceNumber == q.next {
 		q.next++
 		emit(packet, codec)
-		q.flush(time.Time{}, false, emit)
+		q.flushFormats(time.Time{}, false, emit)
 		return
 	}
 	if _, duplicate := q.pending[packet.SequenceNumber]; duplicate {
@@ -127,7 +129,7 @@ func (q *videoReorder) push(packet *rtp.Packet, codec string, now time.Time, emi
 	if len(q.pending) >= videoReorderPackets || q.bytes+size > videoReorderBytes {
 		// Exhaustion declares the oldest gap lost. The inspector still checks
 		// every released packet and rejects unknown/oversized references.
-		q.flush(now, true, emit)
+		q.flushFormats(now, true, emit)
 		if rtpSequenceDelta(packet.SequenceNumber, q.next) < 0 {
 			return
 		}
@@ -144,19 +146,22 @@ func (q *videoReorder) push(packet *rtp.Packet, codec string, now time.Time, emi
 	if !q.dirty && expires.Before(q.expires) {
 		q.expires = expires
 	}
+	// RTP strings are immutable values; own the feedback slice before retaining
+	// the negotiated format across further reads or renegotiation.
+	codec.RTCPFeedback = slices.Clone(codec.RTCPFeedback)
 	q.pending[packet.SequenceNumber] = orderedVideoPacket{packet: packet.Clone(), codec: codec, at: now, expires: expires}
 	q.bytes += size
-	q.flush(time.Time{}, false, emit)
+	q.flushFormats(time.Time{}, false, emit)
 }
 
-func (q *videoReorder) flush(now time.Time, force bool, emit func(*rtp.Packet, string)) {
+func (q *videoReorder) flushFormats(now time.Time, force bool, emit func(*rtp.Packet, webrtc.RTPCodecCapability)) {
 	for len(q.pending) > 0 {
 		entry, found := q.pending[q.next]
 		if !found {
 			if !force && now.Before(q.deadline()) {
 				return
 			}
-			q.flushGaps(now, force, emit)
+			q.flushGapsFormats(now, force, emit)
 			return
 		}
 		delete(q.pending, q.next)
@@ -174,7 +179,7 @@ func (q *videoReorder) flush(now time.Time, force bool, emit func(*rtp.Packet, s
 // Expiration/pressure can expose many gaps at once. Sort once and retain each
 // suffix's earliest deadline instead of repeatedly scanning the entire map.
 // The ordinary contiguous path above does not allocate this work list.
-func (q *videoReorder) flushGaps(now time.Time, force bool, emit func(*rtp.Packet, string)) {
+func (q *videoReorder) flushGapsFormats(now time.Time, force bool, emit func(*rtp.Packet, webrtc.RTPCodecCapability)) {
 	type pendingDeadline struct {
 		sequence uint16
 		expires  time.Time
@@ -214,18 +219,26 @@ func readOrderedVideoTimed(track VideoTrackReader, current func() bool, codec fu
 	readOrderedVideoAdaptive(track, current, codec, emit, observe, timing, nil)
 }
 
+// Legacy MIME-only adapters remain for codec-neutral callers and tests. The
+// production router uses Formats so admission sees each packet's read-time
+// profile, packetization and clock, including after a delayed repair.
 func readOrderedVideoAdaptive(track VideoTrackReader, current func() bool, codec func() string, emit func(*rtp.Packet, string), observe func(*rtp.Packet), timing *upstreamReadStageTracker, requestRTT func() *videoRepairRTTResult) {
+	readOrderedVideoAdaptiveFormats(track, current, func() webrtc.RTPCodecCapability { return webrtc.RTPCodecCapability{MimeType: codec()} }, func(p *rtp.Packet, c webrtc.RTPCodecCapability) { emit(p, c.MimeType) }, observe, timing, requestRTT)
+}
+
+func readOrderedVideoAdaptiveFormats(track VideoTrackReader, current func() bool, codec func() webrtc.RTPCodecCapability, emit func(*rtp.Packet, webrtc.RTPCodecCapability), observe func(*rtp.Packet), timing *upstreamReadStageTracker, requestRTT func() *videoRepairRTTResult) {
 	exitReason := "scope_changed"
 	defer func() { timing.finish(exitReason) }()
 	// A receipt token belongs to this exact read loop, never another track or
 	// replacement. Only successful reads after current() may acknowledge it.
 	var receipt *repairReceiptToken
 	push := func(queue *videoReorder, packet *rtp.Packet, attrs interceptor.Attributes) {
+		format := codec()
 		observeRepairReceipt(&receipt, packet, attrs)
 		if observe != nil {
 			observe(packet)
 		}
-		queue.push(packet, codec(), time.Now(), emit)
+		queue.pushFormats(packet, format, time.Now(), emit)
 	}
 	var queue videoReorder
 	var repair *videoRepairRTTResult
@@ -256,7 +269,7 @@ func readOrderedVideoAdaptive(track VideoTrackReader, current func() bool, codec
 				now := time.Now()
 				if repair.rtt > 0 {
 					queue.applyRepairWait(repairEpoch, adaptiveVideoRepairWait(repair.rtt), repair.measuredAt, now)
-					queue.flush(now, false, emit)
+					queue.flushFormats(now, false, emit)
 					if !current() {
 						return
 					}
@@ -302,7 +315,7 @@ func readOrderedVideoAdaptive(track VideoTrackReader, current func() bool, codec
 						if errors.As(repairErr, &timeout) && timeout.Timeout() {
 							break
 						}
-						queue.flush(time.Now(), true, emit)
+						queue.flushFormats(time.Now(), true, emit)
 						exitReason = "read_error"
 						return
 					}
@@ -310,10 +323,10 @@ func readOrderedVideoAdaptive(track VideoTrackReader, current func() bool, codec
 						push(&queue, repaired, repairAttrs)
 					}
 				}
-				queue.flush(time.Now(), false, emit)
+				queue.flushFormats(time.Now(), false, emit)
 				continue
 			}
-			queue.flush(time.Now(), true, emit)
+			queue.flushFormats(time.Now(), true, emit)
 			exitReason = "read_error"
 			return
 		}
@@ -321,4 +334,12 @@ func readOrderedVideoAdaptive(track VideoTrackReader, current func() bool, codec
 			push(&queue, packet, attrs)
 		}
 	}
+}
+
+// MIME-only queue helpers keep low-level reorder callers source-compatible.
+func (q *videoReorder) push(packet *rtp.Packet, codec string, now time.Time, emit func(*rtp.Packet, string)) {
+	q.pushFormats(packet, webrtc.RTPCodecCapability{MimeType: codec}, now, func(p *rtp.Packet, c webrtc.RTPCodecCapability) { emit(p, c.MimeType) })
+}
+func (q *videoReorder) flush(now time.Time, force bool, emit func(*rtp.Packet, string)) {
+	q.flushFormats(now, force, func(p *rtp.Packet, c webrtc.RTPCodecCapability) { emit(p, c.MimeType) })
 }

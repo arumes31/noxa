@@ -25,7 +25,7 @@ func (p *adaptiveRepairRouterPeer) RequestVideoRepairRTT() *videoRepairRTTResult
 type adaptiveRepairRouterTrack struct{ repairPollingTrack }
 
 func (*adaptiveRepairRouterTrack) Codec() pion.RTPCodecParameters {
-	return pion.RTPCodecParameters{RTPCodecCapability: pion.RTPCodecCapability{MimeType: pion.MimeTypeH264, ClockRate: 90000}}
+	return pion.RTPCodecParameters{RTPCodecCapability: pion.RTPCodecCapability{MimeType: pion.MimeTypeH264, ClockRate: 90000, SDPFmtpLine: "packetization-mode=1;profile-level-id=42001f"}}
 }
 
 type adaptiveRepairRouterOutput struct {

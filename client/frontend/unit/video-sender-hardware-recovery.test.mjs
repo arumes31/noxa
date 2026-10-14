@@ -218,3 +218,19 @@ test("sender recovery supplies the actual peer as scheduler ownership", async ()
     await createVideoSenderRecovery(f.options)(f.pc, f.stats());
     assert.equal(owner, f.pc);
 });
+
+
+test("admitted HEVC software encoding uses the same bounded source recovery and rejects other profiles", async () => {
+    for (const admitted of [true, false]) {
+        const f = fixture();
+        f.options.withdraw = async () => { f.calls.push("withdraw"); return true; };
+        const recover = createVideoSenderRecovery(f.options);
+        for (const at of [0, 5000, 10000, 15000, 20000]) {
+            f.time(at); const stats = f.stats({ encoderImplementation: "FFmpeg" });
+            Object.assign(stats.get("codec"), { mimeType: "video/H265", clockRate: 90000,
+                sdpFmtpLine: `profile-id=${admitted ? 1 : 2};tier-flag=0;level-id=153;tx-mode=SRST` });
+            await recover(f.pc, stats);
+        }
+        assert.equal(f.calls.length, admitted ? 1 : 0);
+    }
+});

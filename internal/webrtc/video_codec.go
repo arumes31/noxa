@@ -10,13 +10,27 @@ import (
 // codec. The sender still publishes exactly one encoding; the SFU only forwards.
 // A fresh binding has a fresh continuity epoch and waits for a complete keyframe.
 func (r *Router) setVideoCodec(clientID, slot, rid string, token uint64, codec webrtc.RTPCodecCapability) bool {
-	if !strings.EqualFold(codec.MimeType, webrtc.MimeTypeVP8) && !strings.EqualFold(codec.MimeType, webrtc.MimeTypeH264) {
+	if strings.EqualFold(codec.MimeType, webrtc.MimeTypeH264) && !admittedH264Codec(codec) {
+		return false
+	}
+	if !strings.EqualFold(codec.MimeType, webrtc.MimeTypeVP8) && !strings.EqualFold(codec.MimeType, webrtc.MimeTypeH264) && !strings.EqualFold(codec.MimeType, webrtc.MimeTypeH265) {
 		return true
 	}
 	r.mu.Lock()
 	if r.slotClaims[clientID][slot+slotSep+rid].token != token {
 		r.mu.Unlock()
 		return false
+	}
+	if strings.EqualFold(codec.MimeType, webrtc.MimeTypeH265) {
+		level, valid := admittedH265Level(codec)
+		r.watchMu.RLock()
+		key := publicationKey{clientID, slot}
+		admitted := valid && r.publicationCodecCapabilities[key]&videoCodecH265 != 0 && r.publicationHEVCLevels[key] == level
+		r.watchMu.RUnlock()
+		if !admitted {
+			r.mu.Unlock()
+			return false
+		}
 	}
 	ref := videoSourceRef{clientID, slot}
 	previous, exists := r.videoCodecs[ref]
@@ -61,9 +75,22 @@ func (r *Router) subscriberVideoCodecLocked(subscriber, publisher, slot string) 
 		return fallback
 	}
 	if strings.EqualFold(codec.MimeType, webrtc.MimeTypeH264) {
+		if !admittedH264Codec(codec) {
+			return fallback
+		}
 		r.watchMu.RLock()
 		watch := r.watches[watchKey{subscriber, publisher, slot}]
 		supported := watch.session != 0 && watch.session == r.watchSessions[subscriber] && watch.codecs&videoCodecH264 != 0
+		r.watchMu.RUnlock()
+		if !supported {
+			return fallback
+		}
+	}
+	if strings.EqualFold(codec.MimeType, webrtc.MimeTypeH265) {
+		level, valid := admittedH265Level(codec)
+		r.watchMu.RLock()
+		watch := r.watches[watchKey{subscriber, publisher, slot}]
+		supported := valid && watch.active && watch.session != 0 && watch.session == r.watchSessions[subscriber] && watch.publication == r.publications[publicationKey{publisher, slot}] && watch.codecs&videoCodecH265 != 0 && watch.hevcLevel >= level
 		r.watchMu.RUnlock()
 		if !supported {
 			return fallback

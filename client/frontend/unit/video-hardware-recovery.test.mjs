@@ -381,3 +381,32 @@ test("returning to an old scope cannot revive its pending capability result on t
     finish(true); await pending;
     assert.equal(resets, 0);
 });
+
+
+test("HEVC receiver recovery preserves bounded retry and stale watch guards", async () => {
+    for (const active of [true, false]) {
+        const f = fixture(), recover = createVideoReceiverRecovery(f.options);
+        for (const at of [0, 5000, 10000, 15000, 20000]) {
+            f.time(at); const stats = f.stats();
+            Object.assign(stats.get("codec"), { mimeType: "video/H265", clockRate: 90000,
+                sdpFmtpLine: "profile-id=1;tier-flag=0;level-id=153;tx-mode=SRST" });
+            if (!active && at === 10000) f.stop();
+            await recover(f.pc, stats);
+        }
+        assert.equal(f.calls.length, active ? 1 : 0);
+    }
+});
+
+
+test("known HEVC software withdraws capability rather than repeatedly resetting its decoder", async () => {
+    const f = fixture(); const original = f.options.watch;
+    f.options.watch = (...args) => { const watched = original(...args); return watched && { ...watched, withdrawHEVC: async () => f.calls.push("withdraw") }; };
+    f.options.capable = async () => { throw new Error("withdrawal is not a new native query"); };
+    const recover = createVideoReceiverRecovery(f.options);
+    for (const at of [0, 5000, 10000, 15000, 20000]) {
+        f.time(at); const stats = f.stats();
+        Object.assign(stats.get("codec"), { mimeType: "video/H265", clockRate: 90000, sdpFmtpLine: "profile-id=1;level-id=153" });
+        await recover(f.pc, stats);
+    }
+    assert.deepEqual(f.calls, ["withdraw"]);
+});

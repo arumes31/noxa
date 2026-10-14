@@ -19,7 +19,7 @@ const interval = (now, before) => {
 };
 const generation = value => typeof value === "string" && /^[1-9][0-9]{0,19}$/.test(value) && BigInt(value) <= 0xffffffffffffffffn;
 const encoders = new Set(["libvpx", "libaom", "openh264", "ExternalEncoder", "MediaFoundationVideoEncoder", "VideoToolbox"]);
-const codecs = new Set(["video/vp8", "video/vp9", "video/h264", "video/av1"]);
+const codecs = new Set(["video/vp8", "video/vp9", "video/h264", "video/h265", "video/av1"]);
 
 function encoderImplementation(value) {
     if (encoders.has(value)) return value;

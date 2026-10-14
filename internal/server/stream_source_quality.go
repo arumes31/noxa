@@ -11,6 +11,12 @@ type sourceQualityPublisher interface {
 }
 
 func publishVideoWithMode(voice VoiceBackend, publisher string, request netproto.VideoStreamControl) (uint64, error) {
+	if backend, ok := voice.(hevcVideoBackend); ok {
+		return backend.PublishVideoWithFormats(publisher, request.Slot, request.Generation, request.Active, request.QualityMode, request.Codecs, request.HEVCLevelID, request.CodecRevision)
+	}
+	if request.HEVCLevelID != 0 || request.CodecRevision != 0 {
+		return 0, errors.New("HEVC publications unavailable")
+	}
 	if backend, ok := voice.(singleCodecVideoBackend); ok {
 		return backend.PublishVideoWithCodecs(publisher, request.Slot, request.Generation, request.Active, request.QualityMode, request.Codecs)
 	}
@@ -32,6 +38,12 @@ type singleCodecVideoBackend interface {
 }
 
 func watchVideoWithCodecs(voice VoiceBackend, subscriber string, request netproto.VideoStreamControl) (bool, error) {
+	if backend, ok := voice.(hevcVideoBackend); ok {
+		return backend.WatchVideoWithFormats(subscriber, request.PublisherID, request.Slot, request.Generation, request.Revision, request.Session, request.Active, request.Codecs, request.HEVCLevelID)
+	}
+	if request.HEVCLevelID != 0 || request.CodecRevision != 0 {
+		return false, errors.New("HEVC publications unavailable")
+	}
 	if backend, ok := voice.(singleCodecVideoBackend); ok {
 		return backend.WatchVideoWithCodecs(subscriber, request.PublisherID, request.Slot, request.Generation, request.Revision, request.Session, request.Active, request.Codecs)
 	}
@@ -58,4 +70,10 @@ func (s *TCPServer) notifyStreamUploadChanged(publisher, slot string, generation
 		}
 		return
 	}
+}
+
+// HEVC requires explicit level signaling; older backends cannot silently ignore it.
+type hevcVideoBackend interface {
+	PublishVideoWithFormats(publisher, slot string, generation uint64, active bool, mode string, codecs []string, hevcLevel uint8, revision ...uint64) (uint64, error)
+	WatchVideoWithFormats(subscriber, publisher, slot string, generation, revision, session uint64, active bool, codecs []string, hevcLevel uint8) (bool, error)
 }
