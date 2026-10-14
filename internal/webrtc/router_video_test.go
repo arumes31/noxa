@@ -212,7 +212,7 @@ func TestVideoQualityInvalid(t *testing.T) {
 
 // Channel membership and peer preparation alone are not video consumption.
 func TestKeyframeRequestOnJoinRequiresVideoConsumer(t *testing.T) {
-	for _, consumer := range []string{"none", "watch", "stopped", "old-session", "old-publication", "denied", "recorder", "screen-recorder", "scoped-recorder"} {
+	for _, consumer := range []string{"none", "watch", "unbound-watch", "stopped", "old-session", "old-publication", "denied", "recorder", "screen-recorder", "scoped-recorder"} {
 		t.Run(consumer, func(t *testing.T) {
 			r := NewRouter(nil)
 			r.JoinChannel(1, "pub")
@@ -232,6 +232,19 @@ func TestKeyframeRequestOnJoinRequiresVideoConsumer(t *testing.T) {
 					r.SetPublisherGuard(func(PublisherAccess) bool { return false })
 				}
 			}
+			if consumer == "watch" {
+				engine, err := New(testLogger(), nil, false)
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() {
+					if err := engine.Close(); err != nil {
+						t.Error(err)
+					}
+				})
+				attachFakePeer(t, engine, r, "viewer") // direct-output readiness fixture
+			}
+
 			switch consumer {
 			case "recorder", "screen-recorder":
 				r.addVideoOutput("viewer", &fakeTrackWriter{})

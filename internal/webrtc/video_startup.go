@@ -41,11 +41,19 @@ func (r *Router) videoTransportConnected(recipient string) bool {
 }
 
 func (s *pubSlot) videoTransportReady(router *Router, recipient string) bool {
+	return router.videoTransportConnected(recipient) && s.videoOutputBound()
+}
+
+func (s *pubSlot) videoOutputBound() bool {
+	return (s.sender == nil || s.videoBindingReady.Load()) && s.videoPacerBound()
+}
+
+func (s *pubSlot) videoPacerBound() bool {
 	s.egress.mu.RLock()
 	pacer, active := s.egress.pacer, s.egress.active
 	ssrc := s.egress.outputSSRC.Load()
 	s.egress.mu.RUnlock()
-	if !active || pacer == nil || ssrc == 0 || !router.videoTransportConnected(recipient) {
+	if !active || pacer == nil || ssrc == 0 {
 		return false
 	}
 	// An established voice transport can still have a new video sender waiting
@@ -137,7 +145,18 @@ func (r *Router) videoStartupPublishersLocked(channelID int64, subscriber string
 		if !r.publisherAllowedLocked(subscriber, source.publisher) {
 			continue
 		}
+
+		peer := r.pubPeers[subscriber]
+		if peer == nil {
+			continue
+		}
 		watch := r.watches[watchKey{subscriber, source.publisher, source.slot}]
+		if peer.egress != nil {
+			tracks := r.pubTracks[subscriber][source.publisher]
+			if watch.startupPending || peer.pc == nil || peer.pc.ConnectionState() != pion.PeerConnectionStateConnected || tracks == nil || tracks.video[source.slot] == nil || tracks.video[source.slot].egress == nil || !tracks.video[source.slot].videoOutputBound() {
+				continue
+			}
+		}
 		if watch.active && watch.session != 0 && watch.session == r.watchSessions[subscriber] &&
 			watch.publication != 0 && watch.publication == r.publications[publicationKey(source)] {
 			out = append(out, source)

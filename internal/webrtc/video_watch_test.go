@@ -91,6 +91,7 @@ func TestVideoWatchRetryRequestsFreshKeyframe(t *testing.T) {
 	r.rtcpWriters["pub"] = writer
 	r.mu.Unlock()
 	registerVideoSource(r, "pub", SlotScreen, "", 8123)
+	r.pubPeers["sub"] = &PeerConnectionWrapper{} // direct output fixture
 	started, err := r.WatchVideo("sub", "pub", SlotScreen, generation, 2, r.VideoWatchSession("sub"), true)
 	if err != nil || !started || writer.pliCount() != 1 {
 		t.Fatalf("retry started=%v err=%v PLI=%d", started, err, writer.pliCount())

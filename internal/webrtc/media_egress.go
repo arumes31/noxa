@@ -85,6 +85,8 @@ type mediaEgressStream struct {
 	active     bool
 	retryAfter time.Time
 	registry   *mediaEgressRegistry
+	// Immutable owner notification; the engine registry is shared by all peers.
+	onVideoReady func()
 	// mu protects lifecycle and remains held through authorized socket writes.
 	// Ticket admission uses its shared side: a slow socket must not block the
 	// publisher's sequential fan-out to other recipients. ticketsMu protects

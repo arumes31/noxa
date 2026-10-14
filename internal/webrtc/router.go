@@ -138,14 +138,16 @@ func defaultSlot(kind webrtc.RTPCodecType) string {
 // pubSlot is one output track (and its sender) for a single (subscriber,
 // publisher, slot) triple.
 type pubSlot struct {
-	receiverReport  *audioReceiverReport // protected by Router.mu; expires with this binding
-	track           *webrtc.TrackLocalStaticRTP
-	sender          *webrtc.RTPSender
-	egress          *mediaEgressStream
-	videoMu         sync.Mutex
-	videoContinuity videoContinuity
-	watchEpoch      uint64 // serialized by videoMu; never decreases
-	videoSource     atomic.Uint32
+	receiverReport    *audioReceiverReport // protected by Router.mu; expires with this binding
+	track             *webrtc.TrackLocalStaticRTP
+	sender            *webrtc.RTPSender
+	egress            *mediaEgressStream
+	videoMu           sync.Mutex
+	videoContinuity   videoContinuity
+	watchEpoch        uint64 // serialized by videoMu; never decreases
+	videoSource       atomic.Uint32
+	videoBindingReady atomic.Bool   // Pion Send finished publishing its writer
+	videoStartupEpoch atomic.Uint64 // first decodable packet admitted for this watch
 }
 
 // WriteRTP starts the subscriber's header-extension space afresh. Publisher
@@ -614,7 +616,7 @@ func (r *Router) addSlotLocked(pc *PeerConnectionWrapper, subscriberID, publishe
 	var localTrack webrtc.TrackLocal = track
 	var egress *mediaEgressStream
 	if pc.egress != nil {
-		egress = &mediaEgressStream{active: true, registry: pc.egress}
+		egress = &mediaEgressStream{active: true, registry: pc.egress, onVideoReady: pc.notifyVideoStartup}
 		localTrack = &guardedLocalTrack{TrackLocalStaticRTP: track, egress: egress}
 	}
 	sender, err := pc.AddTrack(localTrack)
@@ -1115,6 +1117,12 @@ func (r *Router) AttachPeer(clientID string, pc *PeerConnectionWrapper) error {
 	r.pubPeers[clientID] = pc
 	r.rtcpWriters[clientID] = pc
 	r.mu.Unlock()
+	pc.videoStartupMu.Lock()
+	pc.videoStartupHandler = func() time.Duration { return r.flushWatchStartup(clientID, pc) }
+	pc.videoStartupMu.Unlock()
+	if pc.pc != nil && pc.pc.ConnectionState() == webrtc.PeerConnectionStateConnected {
+		pc.notifyVideoStartup()
+	}
 
 	pc.OnTrack(func(remote *webrtc.TrackRemote, receiver *webrtc.RTPReceiver) {
 		slot := r.slotFor(clientID, remote.ID(), remote.Kind())
@@ -1876,6 +1884,10 @@ func (r *Router) forwardVideoFrameAtPolicyCodec(senderID, slot, rid string, pkt 
 					if !written {
 						output.videoContinuity, output.watchEpoch = previousContinuity, previousEpoch
 						output.videoSource.Store(previousSource)
+					} else if !previousContinuity.seen || previousContinuity.pendingEpoch || previousEpoch != output.watchEpoch {
+						// Do not take a watch write lock on the fanout path: a
+						// slow recipient can hold a final-write read lock.
+						output.videoStartupEpoch.Store(output.watchEpoch)
 					}
 				}()
 				// Another layer may have committed a keyframe while this packet
@@ -2105,6 +2117,12 @@ func (r *Router) requestKeyframe(publisherID, slot, rid string, reason keyframeR
 		ingress.recordKeyframeRequest(reason, keyframeCoalesced, &epoch)
 		return
 	}
+	r.writeKeyframeRequest(w, publisherID, ssrc, ingress, reason, epoch)
+}
+
+// The caller has claimed its request under the appropriate scope/throttle locks.
+// Network writes run unlocked; a claimed in-flight request cannot be recalled.
+func (r *Router) writeKeyframeRequest(w RTCPWriter, publisherID string, ssrc uint32, ingress *videoIngressDiagnostic, reason keyframeRequestReason, epoch time.Time) {
 	if err := w.WriteRTCP([]rtcp.Packet{
 		&rtcp.PictureLossIndication{MediaSSRC: ssrc},
 	}); err != nil {

@@ -443,7 +443,11 @@ func (i *mediaCCInterceptor) BindLocalStream(info *interceptor.StreamInfo, write
 		if output != nil {
 			output.mu.Lock()
 			output.pacer = i.pacer
+			notify := output.onVideoReady
 			output.mu.Unlock()
+			if notify != nil && !strings.EqualFold(info.MimeType, "audio/opus") {
+				notify()
+			}
 		}
 	}
 	return out

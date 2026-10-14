@@ -183,15 +183,6 @@ func TestStreamVideoQualityLoopbackIndependentShares(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertUnready(sources[0]) // Bound senders must still wait for ICE/DTLS.
-	connected := make(chan struct{}, 1)
-	peer.pc.OnConnectionStateChange(func(state pion.PeerConnectionState) {
-		if state == pion.PeerConnectionStateConnected {
-			select {
-			case connected <- struct{}{}:
-			default:
-			}
-		}
-	})
 	for _, candidate := range serverCandidates {
 		if err := receiver.AddICECandidate(candidate); err != nil {
 			t.Fatal(err)
@@ -202,12 +193,20 @@ func TestStreamVideoQualityLoopbackIndependentShares(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	select {
-	case <-connected:
-	case <-time.After(5 * time.Second):
-		t.Fatal("transport did not connect after candidates were released")
+
+	waitReady := func(s source) {
+		t.Helper()
+		output := pubTrackFor(router, "viewer", s.publisher).video[s.slot]
+		deadline := time.Now().Add(5 * time.Second)
+		for !output.videoTransportReady(router, "viewer") && time.Now().Before(deadline) {
+			time.Sleep(time.Millisecond)
+		}
+		if !output.videoTransportReady(router, "viewer") {
+			t.Fatal("transport and complete video sender binding did not become ready")
+		}
 	}
 	for _, s := range sources {
+		waitReady(s)
 		rid := qualityToRID[s.quality]
 		ssrc := s.base + uint32(strings.Index("fhq", rid))
 		if router.ForwardVideo(s.publisher, s.slot, rid, continuityPacket(ssrc, 1102, 3306000, 1102, false)) != 0 {
@@ -302,6 +301,7 @@ func TestStreamVideoQualityLoopbackIndependentShares(t *testing.T) {
 	if err := peer.pc.SetRemoteDescription(*receiver.LocalDescription()); err != nil {
 		t.Fatal(err)
 	}
+	waitReady(late)
 	if router.ForwardVideo("c", SlotScreen, "f", continuityPacket(late.base, 1101, 3303000, 1101, false)) != 0 {
 		t.Fatal("newly bound screen accepted a delta without its first keyframe")
 	}

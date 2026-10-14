@@ -37,7 +37,12 @@ type PeerConnectionWrapper struct {
 	localSDP  chan webrtc.SessionDescription
 	remoteSDP chan webrtc.SessionDescription
 
-	onTrack func(track *webrtc.TrackRemote, receiver *webrtc.RTPReceiver)
+	onTrack             func(track *webrtc.TrackRemote, receiver *webrtc.RTPReceiver)
+	videoStartupMu      sync.Mutex
+	videoStartupWake    chan struct{}
+	videoStartupDone    chan struct{}
+	videoStartupRun     bool
+	videoStartupHandler func() time.Duration
 
 	closeOnce           sync.Once
 	signalMu            sync.Mutex
@@ -70,10 +75,16 @@ func newPeerConnectionWrapper(pc *webrtc.PeerConnection, clientID string, logger
 		localSDP:         make(chan webrtc.SessionDescription, 4),
 		remoteSDP:        make(chan webrtc.SessionDescription, 4),
 		closed:           make(chan struct{}),
+		videoStartupWake: make(chan struct{}, 1),
 	}
 
 	pc.OnICECandidate(w.handleLocalICECandidate)
 	pc.OnTrack(w.handleTrack)
+	pc.OnConnectionStateChange(func(state webrtc.PeerConnectionState) {
+		if state == webrtc.PeerConnectionStateConnected {
+			w.notifyVideoStartup()
+		}
+	})
 
 	go w.drainRemoteCandidates()
 	return w
@@ -280,6 +291,9 @@ func (w *PeerConnectionWrapper) Close() error {
 	w.closeOnce.Do(func() {
 		close(w.closed)
 		err = w.pc.Close()
+		// A claimed startup RTCP write belongs to another publisher's peer.
+		// Closing this recipient cancels pending work, but must not join that
+		// foreign write (Engine.Close may need to close its publisher next).
 		w.logger.Info("webrtc peer connection closed",
 			zap.String("client_id", w.clientID), zap.Error(err))
 	})
