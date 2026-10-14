@@ -58,7 +58,7 @@ export function summarizeStream(report, trackID, previous, transceiver) {
         bufferMS: intervalRatio(rows, before, "jitterBufferDelay", "jitterBufferEmittedCount", 1000),
         processingMS: intervalRatio(rows, before, "totalProcessingDelay", "framesDecoded", 1000),
         lossPercent: measured(received) && measured(lost) && received + lost > 0 ? lost * 100 / (received + lost) : null,
-        nacks: change(rows, before, "nackCount"), plis: change(rows, before, "pliCount"),
+        nacks: change(rows, before, "nackCount"), plis: change(rows, before, "pliCount"), firs: change(rows, before, "firCount"),
         freezes: change(rows, before, "freezeCount"), keyFrames: change(rows, before, "keyFramesDecoded"),
         retransmittedPackets: change(rows, before, "retransmittedPacketsReceived"),
         decoder, powerEfficientDecoder: rows.length && rows.every(row => typeof row.powerEfficientDecoder === "boolean")
@@ -75,6 +75,9 @@ function receiverCounters(row) {
         ssrc: Number.isInteger(row.ssrc) && row.ssrc > 0 && row.ssrc <= 0xffffffff ? row.ssrc : null,
         timestamp_ms: measured(row.timestamp) ? row.timestamp : null,
         frames_received: counter(row.framesReceived), frames_decoded: counter(row.framesDecoded),
+        key_frames_decoded: counter(row.keyFramesDecoded), retransmitted_packets_received: counter(row.retransmittedPacketsReceived),
+        packets_received: counter(row.packetsReceived), nack_count: counter(row.nackCount),
+        pli_count: counter(row.pliCount), fir_count: counter(row.firCount),
         frames_dropped: counter(row.framesDropped), freeze_count: counter(row.freezeCount),
         total_freezes_duration_seconds: measured(row.totalFreezesDuration) ? row.totalFreezesDuration : null,
     };
