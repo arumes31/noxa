@@ -91,6 +91,7 @@ type upstreamFeedbackObserver struct {
 	closed      bool
 	counters    netproto.VideoUpstreamFeedbackDiagnostics
 	readTiming  upstreamReadTimingObserver
+	dispatch    *upstreamTWCCDispatch // Assigned once during interceptor construction.
 	lastAttempt time.Time
 	lastGap     int64
 	slots       [upstreamFeedbackSlots]time.Time
@@ -181,6 +182,9 @@ func (o *upstreamFeedbackObserver) snapshot(now time.Time) *netproto.VideoUpstre
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	result := o.counters
+	if o.dispatch != nil {
+		result.Dispatch = o.dispatch.snapshot(now)
+	}
 	result.StartedAt = o.started.UnixMilli()
 	result.SampleMS = max(int64(0), now.Sub(o.started).Milliseconds())
 	result.Closed = o.closed

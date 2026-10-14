@@ -135,6 +135,9 @@ func TestUpstreamFeedbackActualDefaultTWCCWriter(t *testing.T) {
 		if observer == nil {
 			t.Fatal("observer handoff missing")
 		}
+		if observer.dispatch == nil {
+			t.Fatal("TWCC dispatch not linked to actual engine chain")
+		}
 		entered, release := make(chan struct{}, 1), make(chan struct{})
 		var once sync.Once
 		defer func() { once.Do(func() { close(release) }); _ = chain.Close() }()
@@ -174,6 +177,9 @@ func TestUpstreamFeedbackActualDefaultTWCCWriter(t *testing.T) {
 		once.Do(func() { close(release) })
 		synctest.Wait()
 		got = observer.snapshot(time.Now())
+		if got.Dispatch == nil || got.Dispatch.Accepted != 1 || got.Dispatch.Written != 1 || got.Dispatch.QueuedBatches != 0 {
+			t.Fatalf("dispatch snapshot missed actual feedback: %+v", got.Dispatch)
+		}
 		if got.CompletedWrites != 1 || got.InFlight != 0 || got.DurationTotalUS != 120000 {
 			t.Fatalf("actual writer completion missing: %+v", got)
 		}

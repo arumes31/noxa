@@ -146,6 +146,9 @@ export function collectVideoSenders(stats, previousStats, sources = [], previous
             retransmit_bitrate_bps: retrySubset && sample ? number(retryBytes * 8000 / sample, 1e9) : null,
             retransmit_percent: retrySubset && sentBytes > 0 ? number(retryBytes * 100 / sentBytes, 100) : null,
             frame_bytes: retrySubset && encodedFrames > 0 ? number((sentBytes - retryBytes) / encodedFrames, 1e9) : null,
+            // Cumulative browser counters, not proof that a request caused a keyframe.
+            pli_count: counter(stat.pliCount), fir_count: counter(stat.firCount),
+            huge_frames_sent: counter(stat.hugeFramesSent), qp_sum: counter(stat.qpSum),
             key_frames: validKeyframes(stat) ? counter(stat.keyFramesEncoded) : null,
             key_frames_delta: keyframes !== null && encodedFrames !== null && keyframes <= encodedFrames ? keyframes : null,
             send_delay_ms: average("totalPacketSendDelay", "packetsSent"),

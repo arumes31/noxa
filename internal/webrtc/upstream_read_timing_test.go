@@ -50,7 +50,7 @@ func TestUpstreamReadTimingExcludesBlockingReadAndPreservesAttributes(t *testing
 	})
 }
 
-func TestUpstreamReadTimingActualTWCCBlockedHandoff(t *testing.T) {
+func TestUpstreamReadTimingActualTWCCDispatchKeepsReadsMoving(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		registry := &upstreamFeedbackRegistry{}
 		_, factories, err := newEngineMediaObserved(false, VideoBounds{}, nil, registry)
@@ -107,19 +107,24 @@ func TestUpstreamReadTimingActualTWCCBlockedHandoff(t *testing.T) {
 		done := make(chan error, 1)
 		go func() { _, _, readErr := reader.Read(make([]byte, 1500), nil); done <- readErr }()
 		synctest.Wait()
-		if o.readTimingSnapshot(time.Now()).CompletedSamples != 1 {
-			t.Fatal("blocked handoff incorrectly completed")
+		select {
+		case err = <-done:
+			if err != nil {
+				t.Fatal(err)
+			}
+		default:
+			t.Fatal("production RTP read still depends on blocked TWCC write")
 		}
 		time.Sleep(150 * time.Millisecond)
-		close(release)
-		released = true
-		if err = <-done; err != nil {
-			t.Fatal(err)
+		if feedback := o.snapshot(time.Now()); feedback.InFlight != 1 || feedback.CompletedWrites != 0 {
+			t.Fatalf("test did not retain a blocked transport write: %+v", feedback)
 		}
 		d := o.readTimingSnapshot(time.Now())
-		if d.CompletedSamples != 2 || d.DurationMaxUS != 150000 || d.DurationHistogram[6] != 1 {
-			t.Fatalf("missed synchronous TWCC handoff: %+v", d)
+		if d.CompletedSamples != 2 || d.DurationMaxUS != 0 || d.DurationHistogram[0] != 2 {
+			t.Fatalf("feedback stall leaked into measured RTP read duration: %+v", d)
 		}
+		close(release)
+		released = true
 	})
 }
 

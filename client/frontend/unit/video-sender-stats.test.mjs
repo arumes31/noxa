@@ -80,6 +80,20 @@ test("first, stale, reset, replacedSSRC and publication samples cannot invent in
     }
 });
 
+test("sender keyframe diagnostics preserve cumulative values and unknown counters without leaking raw stats", () => {
+    const fields = { pliCount: "pli_count", firCount: "fir_count", hugeFramesSent: "huge_frames_sent", qpSum: "qp_sum" };
+    for (const [raw, exported] of Object.entries(fields)) {
+        for (const value of [0, 7, Number.MAX_SAFE_INTEGER]) {
+            const result = collect(report(row({ [raw]: value, privateDiagnostic: "private-counter-data" })), null);
+            assert.equal(result[exported], value, `${raw} remains cumulative even without a baseline`);
+            assert.doesNotMatch(JSON.stringify(result), /private-counter-data|privateDiagnostic|private-track/);
+        }
+        for (const value of [undefined, null, -1, 1.5, NaN, Infinity, Number.MAX_SAFE_INTEGER + 1, "7", {}]) {
+            assert.equal(collect(report(row({ [raw]: value })))[exported], null, raw);
+        }
+    }
+});
+
 test("missing fields remain unknown while genuine stationary counters report zeroFPS", () => {
     const result = collect(report(row({ timestamp: 6000, framesPerSecond: undefined }), { frames: 200 }));
     assert.equal(result.encoded_fps, 0); assert.equal(result.sent_fps, 0); assert.equal(result.capture_fps, 0);

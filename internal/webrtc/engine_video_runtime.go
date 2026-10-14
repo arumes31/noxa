@@ -66,6 +66,10 @@ func newEngineMediaObserved(enableAV1 bool, bounds VideoBounds, egress *mediaEgr
 	// The pacer checks final authority before assigning TWCC or accounting a
 	// send. NACK/RTX also enters this queue and crosses the same boundary.
 	registry.Add(mediaCCFactory{registry: egress})
+	// The default TWCC recorder synchronously writes feedback. Dispatch its
+	// immutable reports separately so a slow network write cannot hold RTP
+	// reads and manufacture a gap in subsequent arrival timestamps.
+	registry.Add(upstreamTWCCDispatchFactory{registry: feedback})
 	for _, kind := range []webrtc.RTPCodecType{webrtc.RTPCodecTypeAudio, webrtc.RTPCodecTypeVideo} {
 		if err := media.RegisterHeaderExtension(webrtc.RTPHeaderExtensionCapability{URI: sdp.TransportCCURI}, kind); err != nil {
 			return nil, nil, fmt.Errorf("webrtc: configuring TWCC egress: %w", err)
