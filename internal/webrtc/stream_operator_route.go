@@ -21,10 +21,11 @@ type StreamRouteRequest struct {
 	RouteToken  string
 }
 type StreamRouteCandidate struct {
-	Address  string `json:"address"`
-	Port     uint16 `json:"port"`
-	Protocol string `json:"protocol"`
-	Type     string `json:"type"`
+	Component uint16 `json:"component"`
+	Address   string `json:"address"`
+	Port      uint16 `json:"port"`
+	Protocol  string `json:"protocol"`
+	Type      string `json:"type"`
 }
 type StreamRouteDiagnostics struct {
 	SampledAt        int64                `json:"sampled_at"`
@@ -49,7 +50,7 @@ type selectedStreamRoute struct {
 }
 
 func streamRouteCandidate(c *pion.ICECandidate) (StreamRouteCandidate, bool) {
-	if c == nil || c.Component != 1 || c.Port == 0 {
+	if c == nil || (c.Component != 1 && c.Component != 2) || c.Port == 0 {
 		return StreamRouteCandidate{}, false
 	}
 	address, err := netip.ParseAddr(c.Address)
@@ -63,7 +64,7 @@ func streamRouteCandidate(c *pion.ICECandidate) (StreamRouteCandidate, bool) {
 	if kind != "host" && kind != "srflx" && kind != "prflx" && kind != "relay" {
 		return StreamRouteCandidate{}, false
 	}
-	return StreamRouteCandidate{Address: address.String(), Port: c.Port, Protocol: protocol, Type: kind}, true
+	return StreamRouteCandidate{Component: c.Component, Address: address.String(), Port: c.Port, Protocol: protocol, Type: kind}, true
 }
 
 func readSelectedStreamRoute(peer *PeerConnectionWrapper) (selectedStreamRoute, error) {

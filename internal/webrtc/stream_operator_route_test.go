@@ -17,7 +17,7 @@ func routeFixture() (*Router, StreamRouteRequest, selectedStreamRoute) {
 	r.publications = map[publicationKey]uint64{{"pub", SlotScreen}: 23}
 	r.videoSources["pub"] = map[string]map[string]uint32{SlotScreen: {"": 42}}
 	r.videoIngress = map[videoIngressKey]*videoIngressDiagnostic{{"pub", SlotScreen, ""}: {ssrc: 42, started: time.Now()}}
-	return r, StreamRouteRequest{PublisherID: "pub", Slot: SlotScreen, Generation: 23, SSRC: 42}, selectedStreamRoute{peerID: "peer-one", localUfrag: "private-local-ufrag", remoteUfrag: "private-remote-ufrag", local: StreamRouteCandidate{Address: "192.0.2.1", Port: 12334, Protocol: "udp", Type: "host"}, remote: StreamRouteCandidate{Address: "198.51.100.2", Port: 50000, Protocol: "udp", Type: "prflx"}}
+	return r, StreamRouteRequest{PublisherID: "pub", Slot: SlotScreen, Generation: 23, SSRC: 42}, selectedStreamRoute{peerID: "peer-one", localUfrag: "private-local-ufrag", remoteUfrag: "private-remote-ufrag", local: StreamRouteCandidate{Component: 1, Address: "192.0.2.1", Port: 12334, Protocol: "udp", Type: "host"}, remote: StreamRouteCandidate{Component: 1, Address: "198.51.100.2", Port: 50000, Protocol: "udp", Type: "prflx"}}
 }
 func TestStreamRouteScopedSnapshotAndEpoch(t *testing.T) {
 	r, q, route := routeFixture()
@@ -37,7 +37,7 @@ func TestStreamRouteScopedSnapshotAndEpoch(t *testing.T) {
 	if _, err = r.streamRoute(q, read); err != nil {
 		t.Fatal(err)
 	}
-	for _, change := range []func(*selectedStreamRoute){func(s *selectedStreamRoute) { s.peerID = "peer-two" }, func(s *selectedStreamRoute) { s.localUfrag = "new-local" }, func(s *selectedStreamRoute) { s.remoteUfrag = "new-remote" }, func(s *selectedStreamRoute) { s.remote.Port++ }} {
+	for _, change := range []func(*selectedStreamRoute){func(s *selectedStreamRoute) { s.peerID = "peer-two" }, func(s *selectedStreamRoute) { s.localUfrag = "new-local" }, func(s *selectedStreamRoute) { s.remoteUfrag = "new-remote" }, func(s *selectedStreamRoute) { s.remote.Port++ }, func(s *selectedStreamRoute) { s.remote.Component = 2 }} {
 		changed := route
 		change(&changed)
 		if _, err = r.streamRoute(q, func(*PeerConnectionWrapper) (selectedStreamRoute, error) { return changed, nil }); err == nil {
@@ -89,6 +89,19 @@ func TestStreamRouteCandidateAllowlist(t *testing.T) {
 	if !ok || got.Address != "192.0.2.1" || got.Port != 12334 || got.Protocol != "udp" {
 		t.Fatalf("candidate %+v", got)
 	}
+	// Pion may select the component-2 candidate advertised in gathered SDP.
+	// Preserve the observed component instead of assuming rtcp-mux means 1.
+	candidate.Component = 2
+	if got, ok = streamRouteCandidate(&candidate); !ok || got.Component != 2 {
+		t.Fatal("selected RTCP component rejected or lost")
+	}
+	for _, component := range []uint16{0, 3} {
+		candidate.Component = component
+		if _, ok = streamRouteCandidate(&candidate); ok {
+			t.Fatal("unknown component accepted")
+		}
+	}
+	candidate.Component = 1
 	for _, address := range []string{"example.local", "0.0.0.0", "224.0.0.1", ""} {
 		candidate.Address = address
 		if _, ok = streamRouteCandidate(&candidate); ok {
@@ -186,7 +199,7 @@ func TestStreamRoutePionMediaOnlyGetter(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, candidate := range []StreamRouteCandidate{route.local, route.remote} {
-		if ip := net.ParseIP(candidate.Address); ip == nil || !ip.IsLoopback() || candidate.Port == 0 || candidate.Protocol != "udp" {
+		if ip := net.ParseIP(candidate.Address); ip == nil || !ip.IsLoopback() || candidate.Port == 0 || candidate.Protocol != "udp" || (candidate.Component != 1 && candidate.Component != 2) {
 			t.Fatalf("unexpected local candidate: %+v", candidate)
 		}
 	}
