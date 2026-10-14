@@ -157,8 +157,15 @@ test("manual recording reuses existing polls, stops, exports and ends on session
     await panel.getByRole("button", { name: "Start diagnostic recording", exact: true }).click();
     await page.evaluate(() => { window.__noxa.state.sessionGeneration++; });
     await page.clock.runFor(1100);
-    // The recorder's own watchdog observes stale scope even if the stats request is hung.
-    await expect(panel.locator(".stream-recording")).toContainText("stream or session changed");
+    // The sender poll may tear down its panel before the recorder watchdog fires.
+    // Both paths must preserve the interrupted recording in the durable archive.
+    const archive = page.locator(".stream-recording-archive");
+    await archive.locator("summary").click();
+    const saved = archive.locator(":scope > div > div").filter({ hasText: "stream or session changed" });
+    await expect(saved).toHaveCount(1);
+    await saved.getByRole("button", { name: "Copy saved diagnostics", exact: true }).click();
+    const interrupted = await page.evaluate(() => JSON.parse(window.__sender.copied).recording);
+    expect(interrupted).toMatchObject({ state: "interrupted", direction: "sent", slot: "screen", stop_reason: "scope_changed" });
 });
 
 
