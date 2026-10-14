@@ -8,12 +8,7 @@
 
 *Go server, Wails desktop client, Pion WebRTC media routing, PostgreSQL persistence, and named roles with channel access overrides.*
 
-[![CI](https://github.com/arumes31/noxa/actions/workflows/ci.yml/badge.svg)](https://github.com/arumes31/noxa/actions/workflows/ci.yml)
-[![golangci-lint](https://github.com/arumes31/noxa/actions/workflows/golangci-lint.yml/badge.svg)](https://github.com/arumes31/noxa/actions/workflows/golangci-lint.yml)
-[![Security Analysis](https://github.com/arumes31/noxa/actions/workflows/security.yml/badge.svg)](https://github.com/arumes31/noxa/actions/workflows/security.yml)
-[![Go Version](https://img.shields.io/github/go-mod/go-version/arumes31/noxa)](https://go.dev/)
-[![Container Image](https://img.shields.io/badge/container-ghcr.io-blue?logo=docker)](https://github.com/arumes31/noxa/pkgs/container/noxa)
-[![License](https://img.shields.io/github/license/arumes31/noxa)](LICENSE)
+[![CI](https://img.shields.io/github/actions/workflow/status/arumes31/noxa/ci.yml?branch=main&label=CI)](https://github.com/arumes31/noxa/actions/workflows/ci.yml) [![golangci-lint](https://img.shields.io/github/actions/workflow/status/arumes31/noxa/golangci-lint.yml?branch=main&label=golangci-lint)](https://github.com/arumes31/noxa/actions/workflows/golangci-lint.yml) [![Security Analysis](https://img.shields.io/github/actions/workflow/status/arumes31/noxa/security.yml?branch=main&label=security)](https://github.com/arumes31/noxa/actions/workflows/security.yml) [![Go Version](https://img.shields.io/github/go-mod/go-version/arumes31/noxa)](https://go.dev/) [![Container Image](https://img.shields.io/badge/container-ghcr.io-blue?logo=docker)](https://github.com/arumes31/noxa/pkgs/container/noxa) [![License](https://img.shields.io/github/license/arumes31/noxa)](LICENSE)
 
 [Architecture](#architecture) • [Features](#features) • [Quick Start](#quick-start) • [Server Setup](#new-server-setup) • [Permissions](#permissions) • [ServerQuery API](#serverquery) • [Configuration](#configuration) • [Development](#development-and-checks) • [Operations](#operations)
 
