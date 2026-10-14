@@ -439,11 +439,15 @@ func (i *mediaCCInterceptor) BindLocalStream(info *interceptor.StreamInfo, write
 	if registry := i.pacer.egress; registry != nil {
 		registry.mu.Lock()
 		output := registry.streams[info.ID]
+		notify := registry.onVideoReady
 		registry.mu.Unlock()
 		if output != nil {
 			output.mu.Lock()
 			output.pacer = i.pacer
 			output.mu.Unlock()
+			if notify != nil && !strings.EqualFold(info.MimeType, "audio/opus") {
+				notify()
+			}
 		}
 	}
 	return out

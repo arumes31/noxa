@@ -146,11 +146,25 @@ func TestKeyframeDiagnosticsSemanticCallers(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
+			if kind == "join" || kind == "ensure" {
+				engine, createErr := New(testLogger(), nil, false)
+				if createErr != nil {
+					t.Fatal(createErr)
+				}
+				t.Cleanup(func() {
+					if err := engine.Close(); err != nil {
+						t.Error(err)
+					}
+				})
+				attachFakePeer(t, engine, r, "sub") // explicit direct-output recipient
+			}
+
 			d := keyframeDiagnosticSource(r, "f", 42)
 			writer := &fakeRTCPWriter{}
 			r.rtcpWriters["pub"] = writer
 			switch kind {
 			case "watch":
+				r.pubPeers["sub"] = &PeerConnectionWrapper{} // direct output fixture
 				_, err = r.WatchVideo("sub", "pub", SlotScreen, generation, 1, session, true)
 			case "stream_quality":
 				err = r.SetStreamVideoQuality("sub", "pub", SlotScreen, generation, session, "high")

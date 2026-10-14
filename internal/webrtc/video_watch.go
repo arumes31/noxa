@@ -14,6 +14,7 @@ type watchKey struct{ subscriber, publisher, slot string }
 type videoWatch struct {
 	publication, revision, epoch, session uint64
 	active                                bool
+	startupPending                        bool
 	qualityRID                            string
 	codecs                                uint8
 }
@@ -164,7 +165,7 @@ func (r *Router) WatchVideoWithCodecs(subscriber, publisher, slot string, genera
 		if active && old.active && old.publication == generation && old.session == session {
 			qualityRID = old.qualityRID
 		}
-		r.watches[key] = videoWatch{publication: generation, revision: revision, epoch: r.watchEpoch, session: session, active: active, qualityRID: qualityRID, codecs: capabilities}
+		r.watches[key] = videoWatch{publication: generation, revision: revision, epoch: r.watchEpoch, session: session, active: active, startupPending: active, qualityRID: qualityRID, codecs: capabilities}
 	}
 	// A newer active revision is an explicit retry. Notify the publisher again
 	// so paused screen capture can produce a fresh frame; exact retries remain
@@ -174,7 +175,7 @@ func (r *Router) WatchVideoWithCodecs(subscriber, publisher, slot string, genera
 	r.mu.RUnlock()
 	r.syncSubscriberVideoCodec(subscriber, publisher, slot)
 	if started {
-		r.requestKeyframe(publisher, slot, "", keyframeWatchStart)
+		r.requestWatchStartup(subscriber)
 	}
 	return started, nil
 }

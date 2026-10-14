@@ -59,9 +59,10 @@ func (s *pubSlot) enqueueMedia(pkt *rtp.Packet, ticket mediaTicket) (bool, error
 // mediaEgressRegistry associates Pion sender bindings with router outputs.
 // Ticket IDs are process-local and never reused, including after ReplaceTrack.
 type mediaEgressRegistry struct {
-	mu      sync.Mutex
-	next    uint64
-	streams map[string]*mediaEgressStream
+	onVideoReady func() // mu; notification only, never calls Router synchronously
+	mu           sync.Mutex
+	next         uint64
+	streams      map[string]*mediaEgressStream
 }
 
 type mediaTicket struct {
