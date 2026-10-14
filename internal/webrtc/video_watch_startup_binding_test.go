@@ -35,6 +35,15 @@ type startupRTCPFunc func([]rtcp.Packet) error
 func (f startupRTCPFunc) WriteRTCP(packets []rtcp.Packet) error { return f(packets) }
 
 func TestWatchStartupBindingWaitsForPublishedPionWriter(t *testing.T) {
+	testWatchStartupBinding(t, false)
+}
+
+func TestWatchStartupBindingTargetsOriginalPeer(t *testing.T) {
+	testWatchStartupBinding(t, true)
+}
+
+func testWatchStartupBinding(t *testing.T, attachOtherPeer bool) {
+	t.Helper()
 	engine, err := NewWithNetwork(testLogger(), []string{"stun:127.0.0.1:9"}, false, NetworkConfig{UDPAddr: "127.0.0.1:0", ExternalIPs: []string{"127.0.0.1"}})
 	if err != nil {
 		t.Fatal(err)
@@ -75,6 +84,33 @@ func TestWatchStartupBindingWaitsForPublishedPionWriter(t *testing.T) {
 	}
 	if peer.pc.ConnectionState() != pion.PeerConnectionStateConnected {
 		t.Fatal("existing transport not connected")
+	}
+	if attachOtherPeer {
+		// Let the original connection-state wake finish. The later output must
+		// become ready from its own binding notification, without another wake.
+		deadline = time.Now().Add(5 * time.Second)
+		for {
+			peer.videoStartupMu.Lock()
+			running := peer.videoStartupRun
+			peer.videoStartupMu.Unlock()
+			if !running {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatal("initial startup worker did not become idle")
+			}
+			time.Sleep(time.Millisecond)
+		}
+		other, err := engine.NewPeerConnection("other-viewer")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if other.egress != peer.egress {
+			t.Fatal("fixture requires the engine's shared binding registry")
+		}
+		if err := r.AttachPeer("other-viewer", other); err != nil {
+			t.Fatal(err)
+		}
 	}
 	held.enabled.Store(true)
 	r.SetTrackSlots("pub", map[string]string{"desktop": SlotScreen})

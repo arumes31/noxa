@@ -616,7 +616,7 @@ func (r *Router) addSlotLocked(pc *PeerConnectionWrapper, subscriberID, publishe
 	var localTrack webrtc.TrackLocal = track
 	var egress *mediaEgressStream
 	if pc.egress != nil {
-		egress = &mediaEgressStream{active: true, registry: pc.egress}
+		egress = &mediaEgressStream{active: true, registry: pc.egress, onVideoReady: pc.notifyVideoStartup}
 		localTrack = &guardedLocalTrack{TrackLocalStaticRTP: track, egress: egress}
 	}
 	sender, err := pc.AddTrack(localTrack)
@@ -1120,11 +1120,6 @@ func (r *Router) AttachPeer(clientID string, pc *PeerConnectionWrapper) error {
 	pc.videoStartupMu.Lock()
 	pc.videoStartupHandler = func() time.Duration { return r.flushWatchStartup(clientID, pc) }
 	pc.videoStartupMu.Unlock()
-	if pc.egress != nil {
-		pc.egress.mu.Lock()
-		pc.egress.onVideoReady = pc.notifyVideoStartup
-		pc.egress.mu.Unlock()
-	}
 	if pc.pc != nil && pc.pc.ConnectionState() == webrtc.PeerConnectionStateConnected {
 		pc.notifyVideoStartup()
 	}

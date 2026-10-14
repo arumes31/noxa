@@ -59,10 +59,9 @@ func (s *pubSlot) enqueueMedia(pkt *rtp.Packet, ticket mediaTicket) (bool, error
 // mediaEgressRegistry associates Pion sender bindings with router outputs.
 // Ticket IDs are process-local and never reused, including after ReplaceTrack.
 type mediaEgressRegistry struct {
-	onVideoReady func() // mu; notification only, never calls Router synchronously
-	mu           sync.Mutex
-	next         uint64
-	streams      map[string]*mediaEgressStream
+	mu      sync.Mutex
+	next    uint64
+	streams map[string]*mediaEgressStream
 }
 
 type mediaTicket struct {
@@ -86,6 +85,8 @@ type mediaEgressStream struct {
 	active     bool
 	retryAfter time.Time
 	registry   *mediaEgressRegistry
+	// Immutable owner notification; the engine registry is shared by all peers.
+	onVideoReady func()
 	// mu protects lifecycle and remains held through authorized socket writes.
 	// Ticket admission uses its shared side: a slow socket must not block the
 	// publisher's sequential fan-out to other recipients. ticketsMu protects
