@@ -88,7 +88,7 @@ func TestSenderTraceCompletionRequiresBothSignals(t *testing.T) {
 			}
 			c.publish(true)
 			raw := (*emits)[len(*emits)-1]
-			if strings.Contains(raw, "secret") || strings.Contains(raw, "pid") || strings.Contains(raw, "VideoEncoder") {
+			if strings.Contains(raw, "secret") || strings.Contains(raw, `"pid":`) || strings.Contains(raw, `"tid":`) || strings.Contains(raw, "VideoEncoder") {
 				t.Fatal("untrusted trace metadata escaped")
 			}
 			var result senderTraceEnvelope
@@ -342,5 +342,29 @@ func TestSenderTraceLateSuccessfulStartEndsButPreservesFailedRecord(t *testing.T
 	c.publish(true)
 	if (*emits)[len(*emits)-1] != before {
 		t.Fatal("late cleanup rewrote failed export elapsed time")
+	}
+}
+
+func TestSenderTraceRejectedFlushExportsDiagnosticsWithoutMoreTimings(t *testing.T) {
+	c, f, _, emits, released := traceTest(t)
+	traceStart(t, c, f)
+	f.callbacks["Tracing.dataCollected"](strings.Replace(traceMarkers, `"ts":102,"pid":1`, `"s":"g","ts":102,"pid":0`, 1), nil)
+	if len(f.calls) != 2 || c.reason != "ambiguous_marker_scope" {
+		t.Fatal("ambiguity did not request exactly one stop")
+	}
+	f.callbacks["Tracing.dataCollected"](traceMarkers, nil)
+	f.calls[1].callback("{}", nil)
+	f.callbacks["Tracing.tracingComplete"](`{"dataLossOccurred":false}`, nil)
+	c.publish(true)
+	var envelope senderTraceEnvelope
+	if err := json.Unmarshal([]byte((*emits)[len(*emits)-1]), &envelope); err != nil {
+		t.Fatal(err)
+	}
+	r := envelope.Record
+	if r == nil || r.Complete || r.Reason != "ambiguous_marker_scope" || len(r.Events) != 1 || *released != 1 || f.unsub != 3 {
+		t.Fatal("rejected trace recovered or cleanup changed")
+	}
+	if r.Diagnostics == nil || r.Diagnostics.FirstRejection.InstantScope != "global" || r.Diagnostics.ByKind["process"].Seen != 2 {
+		t.Fatal("flush diagnostics disappeared")
 	}
 }

@@ -1,3 +1,5 @@
+import { numericTraceDiagnostics } from "./sender-trace-diagnostics.js";
+
 // Explicit, finite native sender timing. No trace or bridge listener is active by default.
 const PREFIX = "__noxa_sender_trace_v1:";
 const TYPE = "noxa.sender_trace.v1";
@@ -14,6 +16,8 @@ export function numericSenderTrace(value) {
         value.timer_cooperative !== true || !finite(value.elapsed_ms) || !uint(value.dropped_unknown_events, Number.MAX_SAFE_INTEGER) ||
         !Array.isArray(value.events) || value.events.length > 32768 ||
         !KINDS.every(key => uint(value.marker_counts?.[key], Number.MAX_SAFE_INTEGER))) return null;
+    const diagnostics = value.parser_diagnostics === undefined ? undefined : numericTraceDiagnostics(value.parser_diagnostics);
+    if (diagnostics === null || value.complete && diagnostics?.first_rejection) return null;
     const events = [];
     for (const event of value.events) {
         if (!event || !KINDS.includes(event.kind) || (!finite(event.trace_us) || event.trace_us > Number.MAX_SAFE_INTEGER) ||
@@ -25,7 +29,8 @@ export function numericSenderTrace(value) {
     }
     const record = { schema: value.schema, complete: value.complete, reason: reason(value.reason), elapsed_ms: value.elapsed_ms,
         timer_cooperative: true, marker_counts: Object.fromEntries(KINDS.map(key => [key, value.marker_counts[key]])),
-        events, dropped_unknown_events: value.dropped_unknown_events };
+        events, dropped_unknown_events: value.dropped_unknown_events,
+        ...(diagnostics ? { parser_diagnostics: diagnostics } : {}) };
     return new TextEncoder().encode(JSON.stringify(record)).length <= MAX_BYTES ? record : null;
 }
 
