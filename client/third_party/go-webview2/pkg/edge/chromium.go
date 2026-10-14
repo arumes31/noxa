@@ -143,6 +143,7 @@ func NewChromium() *Chromium {
 }
 
 func (e *Chromium) ShuttingDown() {
+	CloseSenderTrace(e.webview)
 	e.shuttingDown = true
 }
 
@@ -412,6 +413,10 @@ func (e *Chromium) MessageReceived(sender *ICoreWebView2, args *ICoreWebView2Web
 		e.errorCallback(err)
 	}
 
+	if e.handleSenderTraceMessage(sender, args, message) {
+		return 0
+	}
+
 	if HasCapability(e.webview2RuntimeVersion, GetAdditionalObjects) {
 		obj, err := args.GetAdditionalObjects()
 		if err != nil {
@@ -555,6 +560,7 @@ func boolToInt(input bool) int {
 }
 
 func (e *Chromium) NavigationCompleted(sender *ICoreWebView2, args *ICoreWebView2NavigationCompletedEventArgs) uintptr {
+	CloseSenderTrace(sender)
 	if e.NavigationCompletedCallback != nil {
 		e.NavigationCompletedCallback(sender, args)
 	}
@@ -562,6 +568,7 @@ func (e *Chromium) NavigationCompleted(sender *ICoreWebView2, args *ICoreWebView
 }
 
 func (e *Chromium) ProcessFailed(sender *ICoreWebView2, args *ICoreWebView2ProcessFailedEventArgs) uintptr {
+	CloseSenderTrace(sender)
 	if e.ProcessFailedCallback != nil {
 		e.ProcessFailedCallback(sender, args)
 	}

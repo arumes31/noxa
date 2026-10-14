@@ -1,5 +1,6 @@
 import { diagnosticSample, mountStreamDiagnosticRecording } from "./stream-diagnostic-recording.js";
 import { t } from "./i18n.js";
+import { mountSenderTrace } from "./sender-trace.js";
 import { mediaScopeIsCurrent } from "./media-controls.js";
 import { copyToClipboard } from "./clipboard.js";
 import { formatBitrate } from "./connection-stats.js";
@@ -46,6 +47,17 @@ export function startShareStatus(options) {
                 sender.track === s.track && s.pc.connectionState !== "closed" && s.pc.connectionState !== "failed";
         },
     }, t, copyToClipboard);
+    s.trace = mountSenderTrace(root.querySelector(".sharing-diagnostics"), { captureScope: () => {
+        const sender = window.__noxa.state.shareVideoTransceiver?.sender, codec = s.sample?.codec;
+        const eligible = () => {
+            if (!current(s) || !sender || sender.track !== s.track || window.__noxa.state.shareVideoTransceiver?.sender !== sender ||
+                s.pc.connectionState !== "connected" || !codec || s.sample?.codec !== codec || s.layers?.length !== 1) return false;
+            const video = s.pc.getSenders?.().filter(item => item.track?.kind === "video" && item.track.readyState !== "ended");
+            const encodings = sender.getParameters?.().encodings;
+            return video?.length === 1 && video[0] === sender && encodings?.length === 1 && encodings[0].active !== false;
+        };
+        return { tabID: s.scope.tabID, current: eligible };
+    } }, t, copyToClipboard);
     root.hidden = false;
     root.querySelector(".sharing-change").onclick = () => { if (current(s)) s.change(); };
     root.querySelector(".sharing-quality").onclick = () => { if (current(s)) s.changeQuality(); };
@@ -141,6 +153,7 @@ function renderDetails(s) {
     const copy = details.querySelector(".sharing-copy");
     copy.textContent = t("share.copyDiagnostics"); copy.disabled = !s.layers?.length && !s.recording.status();
     s.recording.render();
+    s.trace?.render();
 }
 
 async function poll(s) {
@@ -167,6 +180,7 @@ export function stopShareStatus() {
     if (!s) return;
     clearTimeout(s.timer);
     s.recording?.dispose();
+    s.trace?.dispose();
     const video = s.root.querySelector("video");
     if (video) { video.pause(); video.srcObject = null; }
     s.root.hidden = true;
