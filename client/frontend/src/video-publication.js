@@ -198,6 +198,63 @@ export function createVideoPublication({ policy }) {
         return pending;
     }
 
+    // A ceiling-only change owns the same cap queue, but never rewrites camera,
+    // audio, capture or adaptation parameters. Compute shared limits on copies.
+    function applyScreenBitrate(track, profile, stillRelevant) {
+        const { state } = V(), pc = state.pc, scope = captureMediaScope();
+        const stream = state.shareStream, transceiver = state.shareVideoTransceiver, sender = transceiver?.sender;
+        const current = () => stillRelevant() && mediaScopeIsCurrent(scope) && state.pc === pc &&
+            state.shareStream === stream && state.shareVideoTransceiver === transceiver && sender?.track === track &&
+            stream?.getVideoTracks()[0] === track && track.readyState === "live";
+        const pending = (capUpdates.get(pc) || Promise.resolve()).catch(() => {}).then(async () => {
+            if (!current()) return false;
+            if (publicationUploadActive("screen", track) === false) {
+                capturePreferences.set(track, { ...profile, screen: true });
+                return true;
+            }
+            const parameters = sender.getParameters(), original = parameters.encodings?.map(encoding => ({ ...encoding }));
+            if (!original?.length) throw new Error(tLabel("voice.mediaCapsFailed"));
+            const limited = budget => {
+                const encodings = original.map(encoding => ({ ...encoding }));
+                const sources = [{ encodings, singleEncoding: true,
+                    bitrateHeadroom: screenBitrateHeadroom(budget, track.getSettings()) }];
+                const camera = videoSenderFor(pc), waiting = pendingVideoSenders.get(pc);
+                const cameraTrack = camera === waiting?.sender ? waiting.track : camera?.track;
+                if (cameraTrack?.readyState === "live") sources.push({ encodings: [],
+                    uploadActive: publicationUploadActive("cam", cameraTrack) });
+                capVideoEncodings(sources, state.mediaLimits, policy.lowBandwidth ? policy.lowBandwidthBitrate : 0);
+                return encodings;
+            };
+            const encodings = limited(profile);
+            if (encodings.some((encoding, i) => (encoding.active !== false) !== (original[i].active !== false))) throw new Error(tLabel("voice.mediaCapsFailed"));
+            parameters.encodings.forEach((encoding, i) => { encoding.maxBitrate = encodings[i].maxBitrate; });
+            try {
+                if (original.some((encoding, i) => encoding.maxBitrate !== encodings[i].maxBitrate)) await sender.setParameters(parameters);
+            } catch (error) {
+                if (!current()) return false;
+                let restored = true;
+                try {
+                    const rollback = sender.getParameters();
+                    if (rollback.encodings?.length !== original.length || rollback.encodings.some((encoding, i) => encoding.rid !== original[i].rid)) throw error;
+                    // A server limit may change while setParameters is pending.
+                    // Restore the previous preference without exceeding fresh caps.
+                    const bounded = limited(capturePreferences.get(track));
+                    if (bounded.some((encoding, i) => (encoding.active !== false) !== (original[i].active !== false))) throw error;
+                    rollback.encodings.forEach((encoding, i) => {
+                        encoding.maxBitrate = Math.min(original[i].maxBitrate ?? Infinity, bounded[i].maxBitrate);
+                    });
+                    await sender.setParameters(rollback);
+                } catch { restored = false; }
+                throw new Error(tLabel(restored ? "share.qualityFailed" : "share.qualityRestoreFailed", { error: error.message || String(error) }));
+            }
+            if (!current()) return false;
+            capturePreferences.set(track, { ...profile, screen: true });
+            return true;
+        });
+        capUpdates.set(pc, pending);
+        return pending;
+    }
+
     // Apply the same screen ceiling before the first offer, including when the
     // source starts paused. A live camera still shares any stricter server cap.
     function initialScreenEncodings(track) {
@@ -382,7 +439,7 @@ export function createVideoPublication({ policy }) {
         openShareDialog();
     }
 
-    function openShareDialog(replacing = false, initialPreset = "balanced", initialAudio = "none", initialSurface = "monitor", custom = {}) {
+    function openShareDialog(replacing = false, initialPreset = "balanced", initialAudio = "none", initialSurface = "monitor", custom = {}, bitrateCeiling = 0) {
         const dialogID = ++shareDialogID;
         const sourceName = `shsrc-${dialogID}`;
         const qualityID = `share-quality-${dialogID}`;
@@ -414,7 +471,7 @@ export function createVideoPublication({ policy }) {
                 </div>
             </div>`;
         overlay.querySelector(".dlg-cancel").onclick = () => overlay.remove();
-        const quality = createShareQualityControls(qualityID, { preset: initialPreset, custom });
+        const quality = createShareQualityControls(qualityID, { preset: initialPreset, custom, bitrateCeiling });
         overlay.querySelector(".sh-quality").appendChild(quality.element);
         const audioSelect = overlay.querySelector(".sh-audio");
         const audioChoices = new Map();
@@ -473,7 +530,7 @@ export function createVideoPublication({ policy }) {
     // picker ultimately decides what is shareable), publishes a dedicated screen
     // track independently of the camera, optionally merges display
     // audio (70), and applies the quality preset (72).
-    async function startShare({ surface, preset, custom, audioMode, replacing = false }) {
+    async function startShare({ surface, preset, custom, bitrateCeiling = 0, audioMode, replacing = false }) {
         const requestedAudioMode = audioMode;
         const { state } = V();
         const generation = state.serverGeneration;
@@ -496,9 +553,9 @@ export function createVideoPublication({ policy }) {
             }
         };
         const previousDisplay = state.shareStream;
-        const p = shareQuality(preset, custom);
+        const p = shareQuality(preset, custom, bitrateCeiling);
         if (!p) return;
-        const selection = { preset, custom };
+        const selection = { preset, custom, bitrateCeiling };
         const limits = state.mediaLimits;
         const video = screenShareConstraints(p, limits);
         if (surface !== "region") video.displaySurface = surface; // 69: "monitor" | "window"
@@ -719,7 +776,7 @@ export function createVideoPublication({ policy }) {
         startShareStatus({ stream: display, pc: peerConnection, scope: shareScope, preset: p, surface, audioMode,
             generation: publicationSnapshot().find(p => p.publication.slot === "screen")?.generation,
             stop: () => { V().$("voice-screen").focus(); void doStopShare(); },
-            change: () => openShareDialog(true, selection.preset, audioMode, surface, selection.custom),
+            change: () => openShareDialog(true, selection.preset, audioMode, surface, selection.custom, selection.bitrateCeiling),
             changeQuality: () => openLiveShareQuality(display, peerConnection, shareScope, p, selection),
             reduction: () => policy.lowBandwidth ? "share.lowBandwidth" : "" });
     }
@@ -740,8 +797,11 @@ export function createVideoPublication({ policy }) {
         overlay.querySelector(".live-share-quality").append(controls.element);
         overlay.querySelector(".dlg-cancel").onclick = () => overlay.remove();
         overlay.querySelector(".dlg-ok").onclick = async () => {
-            const selected = controls.read(), next = selected && shareQuality(selected.preset, selected.custom);
+            const selected = controls.read(), next = selected && shareQuality(selected.preset, selected.custom, selected.bitrateCeiling);
             if (!next || !current() || state.shareQualityUpdating) return;
+            const bitrateOnly = selected.preset === selection.preset &&
+                ["width", "height", "fps", "original"].every(key => next[key] === profile[key]);
+            if (bitrateOnly && (next.bitrateCeiling || 0) === (profile.bitrateCeiling || 0)) { overlay.remove(); return; }
             const operation = {};
             state.shareQualityUpdating = operation;
             const alive = () => current() && state.shareQualityUpdating === operation;
@@ -752,6 +812,13 @@ export function createVideoPublication({ policy }) {
             try {
                 await queuePeerNegotiation(pc, async () => {
                     if (!alive()) return;
+                    if (bitrateOnly) {
+                        if (!await applyScreenBitrate(track, next, alive) || !alive()) return;
+                        for (const key of Object.keys(profile)) delete profile[key];
+                        Object.assign(profile, next);
+                        Object.assign(selection, selected);
+                        return;
+                    }
                     const previous = track.getConstraints(), hint = track.contentHint, preferred = capturePreferences.get(track);
                     try {
                         await track.applyConstraints({ ...previous, ...screenShareConstraints(next, state.mediaLimits) });
