@@ -48,7 +48,15 @@ test("reduced motion starts still, allows explicit play and follows preference c
     expect(await frame(page)).toBe(still);
     await page.getByRole("button", { name: "Play background animation" }).click();
     await expect.poll(() => frame(page)).not.toBe(still);
+    // Let the intermediate preference reach the renderer before reversing it.
+    await page.evaluate(() => {
+        window.__motionPreferenceChange = null;
+        matchMedia("(prefers-reduced-motion: reduce)").addEventListener("change", event => {
+            window.__motionPreferenceChange = event.matches;
+        }, { once: true });
+    });
     await page.emulateMedia({ reducedMotion: "no-preference" });
+    await expect.poll(() => page.evaluate(() => window.__motionPreferenceChange)).toBe(false);
     await page.emulateMedia({ reducedMotion: "reduce" });
     await expect(page.getByRole("button", { name: "Play background animation" })).toBeVisible();
     const stopped = await frame(page);

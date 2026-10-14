@@ -880,6 +880,24 @@ Pacing counters cover the recipient's entire video connection, including retries
 they are not losses for one source. Server frame rates count RTP timestamps, not
 successfully decoded frames. No media payloads or network addresses are included.
 
+For a scoped, point-in-time server view of the publisher's selected ICE pair,
+use the separate loopback-only endpoint with the publisher ID, publication
+`generation` and ingress `ssrc` from `/debug/streams`:
+
+```sh
+docker compose exec noxa wget -qO- 'http://127.0.0.1:12337/debug/stream-route?publisher_id=EXAMPLE&slot=screen&generation=23&ssrc=42'
+```
+
+The response includes each candidate's address, port, protocol and type, plus an
+opaque `route_token`. Pass that token in subsequent requests to reject a changed
+peer, ICE epoch or candidate pair with HTTP 409; stale publication or membership
+scope also returns 409. Invalid scope returns 400. This is a loopback access
+boundary, not endpoint authentication, even when remote metrics are enabled.
+Addresses are confined to this operator response, never ordinary client stream
+telemetry; ICE credentials and SDP are not returned. Candidate tuples describe
+Pion's selected pair and may differ from host wire tuples after NAT or container
+translation. A successful snapshot does not attest continuous route stability.
+
 Publisher-facing TWCC feedback uses one worker per connection so a slow feedback
 write does not block the recorder and incoming RTP reads. Pending feedback is
 bounded to four batches and 64 KiB of serialized reports, plus one in-flight
