@@ -6,7 +6,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -29,11 +28,6 @@ const updateSupervisorArgument = "--noxa-update-supervisor"
 
 // Only disposable process integration fixtures shorten this bound.
 var updateHandoffTimeout = 90 * time.Second
-
-// Authenticated against the signed published v0.5.59 manifest. Compatibility
-// is deliberately limited to this exact legacy executable, never a version
-// string, environment flag, or an unverified backup selected by modification time.
-const legacyUpdateExecutableSHA256 = "70bafbae4991ffd31c51927f3559dc20409ec519651294e96c04807041310ff6"
 
 type updateProcessIdentity struct {
 	PID     uint32 `json:"pid"`
@@ -105,9 +99,6 @@ func updaterOwnedBackup(target, previous string) bool {
 	return filepath.IsAbs(target) && filepath.IsAbs(previous) && !sameUpdatePath(target, previous) &&
 		sameUpdatePath(filepath.Dir(target), filepath.Dir(previous)) && strings.HasPrefix(name, ".noxa-previous-") && strings.HasSuffix(name, ".exe")
 }
-func legacyUpdateHash(hash [sha256.Size]byte) bool {
-	return hex.EncodeToString(hash[:]) == legacyUpdateExecutableSHA256
-}
 
 type updateSupervisorPlan struct {
 	Version      int                    `json:"version"`
@@ -173,7 +164,7 @@ func (p updateSupervisorPlan) openProcesses() (*updateHandoffProcesses, error) {
 			return fail(err)
 		}
 		hash, hashErr := hashUpdateExecutable(result.legacy.image)
-		if !result.legacy.alive() || !updaterOwnedBackup(p.Target, result.legacy.image) || hashErr != nil || !legacyUpdateHash(hash) {
+		if !result.legacy.alive() || !updaterOwnedBackup(p.Target, result.legacy.image) || hashErr != nil || !legacyUpdateParentHash(hash, p.OldHash) {
 			return fail(fmt.Errorf("legacy parent no longer matches the authenticated release"))
 		}
 	}
@@ -507,7 +498,8 @@ func prepareLegacyUpdateBootstrap() error {
 	if err != nil {
 		return fmt.Errorf("verify update parent: %w", err)
 	}
-	if !legacyUpdateHash(hash) {
+	release := legacyUpdateRelease(hash)
+	if release == "" {
 		return nil
 	}
 	executable, err := os.Executable()
@@ -539,7 +531,7 @@ func prepareLegacyUpdateBootstrap() error {
 	}
 	legacyUpdateStartup = &legacyUpdateBootstrap{parent: parent, pending: &appliedClientUpdate{target: executable, previous: previous, oldHash: hash, newHash: newHash}}
 	retainParent = true
-	log.Print("update compatibility: authenticated v0.5.59 parent; preparing genuine temporary frontend before hardware-policy restart")
+	log.Printf("update compatibility: authenticated %s parent; preparing genuine temporary frontend before hardware-policy restart", release)
 	return nil
 }
 

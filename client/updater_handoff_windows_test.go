@@ -5,7 +5,6 @@ package main
 import (
 	"context"
 	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"os"
 	"path/filepath"
@@ -172,21 +171,6 @@ func TestUpdateHandoffPlanRejectsChangedFilesAndIdentities(t *testing.T) {
 	}
 	if err := plan.validate(filepath.Join(dir, "other.exe")); err == nil {
 		t.Fatal("accepted a different supervisor executable")
-	}
-}
-
-func TestUpdateHandoffLegacyCompatibilityRequiresPublishedDigest(t *testing.T) {
-	decoded, err := hex.DecodeString(legacyUpdateExecutableSHA256)
-	if err != nil {
-		t.Fatal(err)
-	}
-	verified := [sha256.Size]byte(decoded)
-	if !legacyUpdateHash(verified) {
-		t.Fatal("signed release digest rejected")
-	}
-	verified[0] ^= 1
-	if legacyUpdateHash(verified) {
-		t.Fatal("unverified executable accepted for legacy policy")
 	}
 }
 
