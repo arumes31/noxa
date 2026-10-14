@@ -94,9 +94,8 @@ RUN mkdir -p /data/files /data/recordings \
 # Copy the compiled binary from the builder stage.
 COPY --from=builder --chown=10001:10001 /out/noxa /out/noxa
 COPY --from=builder --chown=10001:10001 /out/adduser /out/role-setup /out/e2e /out/
-COPY --chown=10001:10001 scripts/secret-env.sh /usr/local/lib/noxa/secret-env.sh
-COPY --chown=10001:10001 scripts/noxa-entrypoint.sh /usr/local/bin/noxa-entrypoint.sh
-RUN chmod 0555 /usr/local/lib/noxa/secret-env.sh /usr/local/bin/noxa-entrypoint.sh
+COPY --chmod=0555 --chown=10001:10001 scripts/secret-env.sh /usr/local/lib/noxa/secret-env.sh
+COPY --chmod=0555 --chown=10001:10001 scripts/noxa-entrypoint.sh /usr/local/bin/noxa-entrypoint.sh
 
 # Drop privileges: run as the non-root noxa user.
 USER 10001:10001
