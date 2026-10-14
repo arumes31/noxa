@@ -211,7 +211,12 @@ test("selected wins: effective PTT binding, failures and whisper preview", async
     });
     await expect(page.locator("#voice-whisper-preview")).toHaveText("Whisper targets: Alice, Channel: Team");
     await page.evaluate(async () => {
-        window.go.main.App = { WhisperSetForTab: async () => "permission denied" };
+        // Keep unrelated backend methods available to pending UI callbacks.
+        window.go.main.App = new Proxy(window.go.main.App, {
+            get(target, method, receiver) {
+                return method === "WhisperSetForTab" ? async () => "permission denied" : Reflect.get(target, method, receiver);
+            },
+        });
         await (await import("/src/media-controls.js")).setWhisperRouting({ active: true, clients: ["alice-uid"], channels: [] });
     });
     await expect(page.locator("#voice-whisper-preview")).toContainText("Whisper routing is not confirmed");
