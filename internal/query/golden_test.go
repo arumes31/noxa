@@ -40,7 +40,9 @@ func TestResponseGolden(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.String() != string(want) {
-		t.Fatalf("ServerQuery response snapshot changed (-update-golden to accept):\n--- got ---\n%s\n--- want ---\n%s", got.String(), want)
+	wantStr := strings.ReplaceAll(string(want), "\r\n", "\n")
+	gotStr := strings.ReplaceAll(got.String(), "\r\n", "\n")
+	if gotStr != wantStr {
+		t.Fatalf("ServerQuery response snapshot changed (-update-golden to accept):\n--- got ---\n%s\n--- want ---\n%s", gotStr, wantStr)
 	}
 }
