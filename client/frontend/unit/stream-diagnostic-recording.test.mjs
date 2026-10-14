@@ -1,4 +1,5 @@
 import test from "node:test";
+import { summarizeStream } from "../src/connection-stats.js";
 import assert from "node:assert/strict";
 import { createStreamDiagnosticRecording, createDiagnosticArchive, diagnosticSample, receiverRecordingSample } from "../src/stream-diagnostic-recording.js";
 
@@ -147,4 +148,62 @@ test("archive evicts oldest at count/byte bounds and rejects active records", ()
     assert.equal(archive.read(tokens[0]), null); assert.equal(archive.entries().length, 2);
     const tiny = createDiagnosticArchive({ maxBytes: 1 }); assert.equal(tiny.save({}, record), false);
     assert.equal(tiny.entries().length, 0); archive.clear();
+});
+
+
+function receiverSummary(timestamp, counts = {}, previous = null) {
+    const track = { id: "receiver-track" }, transceiver = { mid: "screen", currentDirection: "recvonly", receiver: { track } };
+    const row = { id: "inbound", type: "inbound-rtp", kind: "video", trackIdentifier: track.id, mid: "screen", ssrc: 42,
+        codecId: "h264", transportId: "transport", timestamp, framesDecoded: timestamp, bytesReceived: timestamp * 100,
+        frameWidth: 1920, frameHeight: 1080, ...counts };
+    const stats = new Map([[row.id, row], ["h264", { mimeType: "video/H264" }]]);
+    return summarizeStream(stats, track.id, previous, transceiver);
+}
+
+test("receiver repairs survive summarize-to-record export with cumulative and interval semantics distinct", () => {
+    const before = receiverSummary(1000, { keyFramesDecoded: 10, retransmittedPacketsReceived: 100,
+        packetsReceived: 1000, nackCount: 20, pliCount: 5, firCount: 2 });
+    const after = receiverSummary(4000, { keyFramesDecoded: 12, retransmittedPacketsReceived: 108,
+        packetsReceived: 1300, nackCount: 28, pliCount: 6, firCount: 3 }, before);
+    const settled = receiverSummary(7000, { keyFramesDecoded: 12, retransmittedPacketsReceived: 108,
+        packetsReceived: 1600, nackCount: 28, pliCount: 6, firCount: 3 }, after);
+    const f = fixture({ direction: "received" }); f.recorder.start();
+    for (const value of [before, after, settled]) {
+        assert.equal(f.recorder.add(receiverRecordingSample(value), "receiver-epoch"), true);
+        f.advance(3000);
+    }
+    const record = JSON.parse(JSON.stringify(f.recorder.snapshot()));
+    const initial = record.samples[0].rows[0], active = record.samples[1].rows[0], idle = record.samples[2].rows[0];
+    assert.equal(initial.key_frames_decoded_delta, null, "first interval is unknown");
+    assert.deepEqual([active.key_frames_decoded, active.retransmitted_packets_received, active.packets_received,
+        active.nack_count, active.pli_count, active.fir_count], [12, 108, 1300, 28, 6, 3]);
+    assert.deepEqual([active.key_frames_decoded_delta, active.retransmitted_packets_received_delta,
+        active.nacks, active.plis, active.fir_count_delta], [2, 8, 8, 1, 1]);
+    assert.deepEqual([idle.key_frames_decoded_delta, idle.retransmitted_packets_received_delta,
+        idle.nacks, idle.plis, idle.fir_count_delta], [0, 0, 0, 0, 0]);
+    assert.equal(record.state, "recording", "decreasing interval deltas do not end counter lifetime");
+});
+
+test("receiver cumulative repair resets are detected across unknown samples without inventing zeros", () => {
+    const fields = { keyFramesDecoded: "key_frames_decoded", retransmittedPacketsReceived: "retransmitted_packets_received",
+        packetsReceived: "packets_received", nackCount: "nack_count", pliCount: "pli_count", firCount: "fir_count" };
+    for (const [input, output] of Object.entries(fields)) {
+        for (const next of [0, 7, 8]) {
+            const f = fixture({ direction: "received" }); f.recorder.start();
+            f.recorder.add(receiverRecordingSample(receiverSummary(1000, { [input]: 7 })), "same");
+            f.advance(3000);
+            f.recorder.add(receiverRecordingSample(receiverSummary(4000)), "same");
+            f.advance(3000);
+            const admitted = f.recorder.add(receiverRecordingSample(receiverSummary(7000, { [input]: next })), "same");
+            const result = f.recorder.snapshot();
+            assert.equal(result.samples[0].rows[0][output], 7, output);
+            assert.equal(result.samples[1].rows[0][output], null, output);
+            assert.equal(admitted, next >= 7, output);
+            assert.equal(result.stop_reason, next < 7 ? "counter_reset" : null, output);
+        }
+        assert.equal(receiverRecordingSample(receiverSummary(1000, { [input]: 0 })).rows[0][output], 0);
+        for (const invalid of [-1, 0.5, NaN, Infinity, Number.MAX_SAFE_INTEGER + 1]) {
+            assert.equal(receiverRecordingSample(receiverSummary(1000, { [input]: invalid })).rows[0][output], null, output);
+        }
+    }
 });

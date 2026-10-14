@@ -2,8 +2,8 @@
 const MAX_SAMPLES = 1000;
 const MAX_BYTES = 4 * 1024 * 1024;
 const numeric = value => typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null;
-const fields = `sample_ms width height requested_fps settings_fps capture_width capture_height capture_fps encoded_fps sent_fps reported_fps bitrate_bps encode_ms target_bitrate_bps available_outgoing_bitrate_bps transport_rtt_ms remote_rtt_ms remote_fraction_lost encoding_max_bitrate_bps bandwidth_limited_ms cpu_limited_ms retransmit_bitrate_bps retransmit_percent frame_bytes key_frames key_frames_delta pli_count fir_count huge_frames_sent qp_sum send_delay_ms frames_encoded frames_sent packets_sent bytes_sent retransmitted_packets retransmitted_bytes received_fps decoded_fps dropped_fps decode_ms jitter_buffer_ms recent_loss_percent nacks plis freezes frames_received frames_decoded frames_dropped freeze_count total_freezes_duration_seconds timestamp_ms bytes_received`.split(" ");
-const counters = new Set(`frames_encoded frames_sent packets_sent bytes_sent retransmitted_packets retransmitted_bytes key_frames pli_count fir_count huge_frames_sent qp_sum frames_received frames_decoded frames_dropped freeze_count total_freezes_duration_seconds bytes_received`.split(" "));
+const fields = `sample_ms width height requested_fps settings_fps capture_width capture_height capture_fps encoded_fps sent_fps reported_fps bitrate_bps encode_ms target_bitrate_bps available_outgoing_bitrate_bps transport_rtt_ms remote_rtt_ms remote_fraction_lost encoding_max_bitrate_bps bandwidth_limited_ms cpu_limited_ms retransmit_bitrate_bps retransmit_percent frame_bytes key_frames key_frames_delta pli_count fir_count huge_frames_sent qp_sum send_delay_ms frames_encoded frames_sent packets_sent bytes_sent retransmitted_packets retransmitted_bytes received_fps decoded_fps dropped_fps decode_ms jitter_buffer_ms recent_loss_percent nacks plis freezes frames_received frames_decoded key_frames_decoded retransmitted_packets_received packets_received nack_count frames_dropped freeze_count total_freezes_duration_seconds timestamp_ms bytes_received key_frames_decoded_delta retransmitted_packets_received_delta fir_count_delta`.split(" ");
+const counters = new Set(`frames_encoded frames_sent packets_sent bytes_sent retransmitted_packets retransmitted_bytes key_frames pli_count fir_count huge_frames_sent qp_sum frames_received frames_decoded key_frames_decoded retransmitted_packets_received packets_received nack_count frames_dropped freeze_count total_freezes_duration_seconds bytes_received`.split(" "));
 const presentationFields = "sample_ms observed_callbacks last_callback_age_ms callback_gaps_over_100_ms unobserved_presentation_callbacks callback_coverage".split(" ");
 const distributions = "callback_interval_ms compositor_submission_interval_ms predicted_display_interval_ms decoder_processing_ms estimated_receive_to_display_ms browser_estimated_capture_to_display_ms".split(" ");
 const clone = value => structuredClone(value);
@@ -44,6 +44,9 @@ export function receiverRecordingSample(sample, presentation) {
         bitrate_bps: sample.bitrate, bytes_received: sample.bytes, received_fps: sample.receivedFPS, decoded_fps: sample.fps,
         dropped_fps: sample.droppedFPS, decode_ms: sample.decodeMS, jitter_buffer_ms: sample.bufferMS,
         recent_loss_percent: sample.lossPercent, nacks: sample.nacks, plis: sample.plis, freezes: sample.freezes,
+        // These interval deltas may decrease without changing the cumulative counter lifetime.
+        key_frames_decoded_delta: sample.keyFrames, retransmitted_packets_received_delta: sample.retransmittedPackets,
+        fir_count_delta: sample.firs,
         implementation: sample.decoder, power_efficient: sample.powerEfficientDecoder,
     })), presentation);
 }

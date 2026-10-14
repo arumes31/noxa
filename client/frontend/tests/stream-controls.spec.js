@@ -239,6 +239,8 @@ for (const failure of ["reject", "pending"]) test(`receiver diagnostics expire w
     expect(first.receiver.stats_epoch).toMatch(/^[0-9a-f-]{36}$/);
     expect(first.receiver.cumulative).toEqual([{ stats_id: "video", ssrc: 42, timestamp_ms: expect.any(Number),
         frames_received: expect.any(Number), frames_decoded: first.frames_decoded, frames_dropped: expect.any(Number),
+        key_frames_decoded: null, retransmitted_packets_received: null, packets_received: null,
+        nack_count: null, pli_count: null, fir_count: null,
         freeze_count: 2, total_freezes_duration_seconds: 1.25 }]);
     await copy.click();
     expect(await page.evaluate(() => JSON.parse(window.__streams.copied).receiver.stats_epoch)).toBe(first.receiver.stats_epoch);
