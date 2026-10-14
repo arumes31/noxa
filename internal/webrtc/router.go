@@ -189,7 +189,9 @@ func (p *pubTrack) slots(kind webrtc.RTPCodecType) map[string]*pubSlot {
 // or a publisher's slot set changes, the server renegotiates with affected
 // subscribers (see voice.go renegotiation orchestration).
 type Router struct {
-	logger *zap.Logger
+	timingMu         sync.Mutex
+	timingDiagnostic *upstreamTimingSession
+	logger           *zap.Logger
 
 	videoBitrateLimit int
 	videoBudgets      map[string]videoBudget // publisher session; retained across moves/ICE rebuilds
