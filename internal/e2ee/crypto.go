@@ -401,10 +401,3 @@ func DecryptFileChunk(master []byte, fileID string, index uint64, blob []byte) (
 func EqualFingerprint(a, b []byte) bool {
 	return len(a) == len(b) && subtle.ConstantTimeCompare(a, b) == 1
 }
-
-func ValidateKeySize(key []byte) error {
-	if len(key) != 32 {
-		return fmt.Errorf("key length %d, want 32", len(key))
-	}
-	return nil
-}

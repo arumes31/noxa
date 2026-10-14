@@ -44,12 +44,6 @@ func Short() string {
 	return Current().Short()
 }
 
-// Release returns only the stable numeric release line.
-func Release() string {
-	base, _ := Parse(Current().Version)
-	return base
-}
-
 // Parse splits a version into its stable numeric base and legacy numeric build
 // metadata. For example, "v0.4.0+87" returns ("0.4.0", 87).
 func Parse(value string) (base string, build int) {
