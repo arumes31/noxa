@@ -37,7 +37,6 @@ export async function publicationCodecSupport(track) {
     const query = publicationQuery(track);
     if (!query) return { codecs: ["vp8"], status: "unavailable", key: null };
     const { media, video, key } = query;
-    let timeout;
     try {
         let cache = publicationQueries.get(media);
         if (!cache) { cache = new Map(); publicationQueries.set(media, cache); }
@@ -55,15 +54,25 @@ export async function publicationCodecSupport(track) {
                     const status = result?.supported === true && result.powerEfficient === true ? "hardware" :
                         result?.supported === false || result?.powerEfficient === false ? "unsupported" : "unknown";
                     entry.settled = true;
+                    entry.status = status;
                     entry.expires = Date.now() + (status === "unsupported" ? 300000 : 30000);
                     return status;
                 });
+            // One bounded wait belongs to the native query, not each caller.
+            // Retries after timeout reuse its settled unknown result instead of
+            // attaching new race handlers to a potentially never-settling call.
+            let timeout;
+            entry.wait = Promise.race([entry.promise,
+                new Promise(resolve => { timeout = setTimeout(() => resolve("unknown"), 2000); }),
+            ]).finally(() => clearTimeout(timeout));
             cache.set(key, entry);
         }
-        let status = await Promise.race([entry.promise, new Promise(resolve => { timeout = setTimeout(() => resolve("unknown"), 2000); })]);
+        // A native result arriving after the JS timeout remains useful. Its TTL
+        // still starts at native settlement; it never rewrites earlier replies.
+        let status = entry.settled ? entry.status : await entry.wait;
         if (publicationCodecQueryKey(track) !== key) status = "unknown";
         return { codecs: status === "hardware" ? ["h264", "vp8"] : ["vp8"], status, key };
-    } catch { return { codecs: ["vp8"], status: "unknown", key }; } finally { clearTimeout(timeout); }
+    } catch { return { codecs: ["vp8"], status: "unknown", key }; }
 }
 
 export async function publicationVideoCodecs(track) { return (await publicationCodecSupport(track)).codecs; }
