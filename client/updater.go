@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -69,47 +70,73 @@ var updateHTTPClient = &http.Client{
 	},
 }
 
-func isPermittedUpdateHost(host string) bool {
+func normalizedUpdateHost(host string) string {
 	host = strings.TrimSuffix(strings.ToLower(host), ".")
-	if host == "localhost" {
-		return true
-	}
 	if ip := net.ParseIP(host); ip != nil {
-		return ip.IsLoopback()
+		return ip.String()
 	}
-	if host == "github.com" || strings.HasSuffix(host, ".github.com") {
-		return true
+	return host
+}
+
+func isPermittedUpdateHost(host string) bool {
+	host = normalizedUpdateHost(host)
+	return host == "github.com" || strings.HasSuffix(host, ".github.com") || host == "githubusercontent.com" || strings.HasSuffix(host, ".githubusercontent.com")
+}
+
+func updateOriginPort(u *url.URL) (uint16, bool) {
+	if port := u.Port(); port != "" {
+		value, err := strconv.ParseUint(port, 10, 16)
+		return uint16(value), err == nil && value != 0
 	}
-	if host == "githubusercontent.com" || strings.HasSuffix(host, ".githubusercontent.com") {
-		return true
+	switch strings.ToLower(u.Scheme) {
+	case "http":
+		return 80, true
+	case "https":
+		return 443, true
+	default:
+		return 0, false
 	}
-	if base, err := url.Parse(updateAPIBase); err == nil && base.Hostname() != "" {
-		baseHost := strings.TrimSuffix(strings.ToLower(base.Hostname()), ".")
-		if host == baseHost {
-			return true
-		}
+}
+
+// Only explicitly configured local test APIs may use loopback. Trust the
+// exact normalized origin, not every service on the developer's computer.
+// Changing the test API variable never trusts an arbitrary remote host.
+func isConfiguredLoopbackUpdateOrigin(u *url.URL) bool {
+	base, err := url.Parse(updateAPIBase)
+	if err != nil || base.User != nil || base.Hostname() == "" || base.Opaque != "" {
+		return false
 	}
-	return false
+	scheme := strings.ToLower(base.Scheme)
+	if (scheme != "http" && scheme != "https") || scheme != strings.ToLower(u.Scheme) {
+		return false
+	}
+	host := normalizedUpdateHost(base.Hostname())
+	ip := net.ParseIP(host)
+	if host != "localhost" && (ip == nil || !ip.IsLoopback()) {
+		return false
+	}
+	if host != normalizedUpdateHost(u.Hostname()) {
+		return false
+	}
+	basePort, baseValid := updateOriginPort(base)
+	targetPort, targetValid := updateOriginPort(u)
+	return baseValid && targetValid && basePort == targetPort
 }
 
 func validateUpdateURL(u *url.URL) error {
-	if u == nil || u.Hostname() == "" || u.User != nil {
+	if u == nil || u.Hostname() == "" || u.User != nil || u.Opaque != "" {
 		return fmt.Errorf("invalid update URL")
 	}
-	host := strings.TrimSuffix(strings.ToLower(u.Hostname()), ".")
-	if !isPermittedUpdateHost(host) {
-		return fmt.Errorf("update URL host %q is not permitted", u.Hostname())
-	}
-	if u.Scheme == "https" {
-		return nil
-	}
-	if u.Scheme == "http" {
-		ip := net.ParseIP(host)
-		if host == "localhost" || (ip != nil && ip.IsLoopback()) {
+	if isPermittedUpdateHost(u.Hostname()) {
+		if strings.EqualFold(u.Scheme, "https") {
 			return nil
 		}
+		return fmt.Errorf("update URL must use HTTPS")
 	}
-	return fmt.Errorf("update URL must use HTTPS")
+	if isConfiguredLoopbackUpdateOrigin(u) {
+		return nil
+	}
+	return fmt.Errorf("update URL host %q is not permitted", u.Hostname())
 }
 
 func parseUpdateURL(raw string) (*url.URL, error) {

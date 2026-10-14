@@ -225,6 +225,7 @@ func TestDownloadToEnforcesLimit(t *testing.T) {
 		_, _ = w.Write([]byte("too large"))
 	}))
 	defer srv.Close()
+	withUpdateAPIBase(t, srv.URL)
 
 	root, err := os.OpenRoot(t.TempDir())
 	if err != nil {
@@ -232,8 +233,8 @@ func TestDownloadToEnforcesLimit(t *testing.T) {
 	}
 	defer func() { _ = root.Close() }()
 	err = downloadTo(context.Background(), srv.URL, root, "download", 4, nil)
-	if err == nil {
-		t.Fatal("expected oversized download to fail")
+	if err == nil || !strings.Contains(err.Error(), "exceeds 4-byte limit") {
+		t.Fatalf("expected download-size rejection, got %v", err)
 	}
 	if _, statErr := root.Stat("download"); !os.IsNotExist(statErr) {
 		t.Fatalf("partial download was not removed: %v", statErr)
@@ -291,6 +292,7 @@ func TestDownloadToReportsSpeedForKnownAndUnknownSizes(t *testing.T) {
 				_, _ = w.Write([]byte(data))
 			}))
 			defer srv.Close()
+			withUpdateAPIBase(t, srv.URL)
 			root, err := os.OpenRoot(t.TempDir())
 			if err != nil {
 				t.Fatal(err)
@@ -323,17 +325,12 @@ func TestDownloadToRejectsInsecureRemoteURL(t *testing.T) {
 }
 
 func TestValidateUpdateURL_SSRFMitigation(t *testing.T) {
+	withUpdateAPIBase(t, "https://api.github.com")
 	valid := []string{
 		"https://github.com/owner/repo/releases/download/v1.0.0/app.exe",
 		"https://api.github.com/repos/owner/repo/releases/latest",
 		"https://objects.githubusercontent.com/github-production-release-asset-2e65be/123",
 		"https://raw.githubusercontent.com/owner/repo/main/file",
-		"https://localhost:8443/update",
-		"https://127.0.0.1:8443/update",
-		"https://[::1]:8443/update",
-		"http://localhost:8080/update",
-		"http://127.0.0.1:8080/update",
-		"http://[::1]:8080/update",
 	}
 	for _, raw := range valid {
 		u, err := parseUpdateURL(raw)
@@ -349,6 +346,12 @@ func TestValidateUpdateURL_SSRFMitigation(t *testing.T) {
 		url string
 		err string
 	}{
+		{"https://localhost:8443/update", "not permitted"},
+		{"https://127.0.0.1:8443/update", "not permitted"},
+		{"https://[::1]:8443/update", "not permitted"},
+		{"http://localhost:8080/update", "not permitted"},
+		{"http://127.0.0.1:8080/update", "not permitted"},
+		{"http://[::1]:8080/update", "not permitted"},
 		{"https://169.254.169.254/latest/meta-data", "not permitted"},
 		{"https://10.0.0.1/internal/binary", "not permitted"},
 		{"https://192.168.1.1/secret", "not permitted"},

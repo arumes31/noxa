@@ -92,6 +92,7 @@ func TestCancelledDownloadRemovesPartialAsset(t *testing.T) {
 		<-r.Context().Done()
 	}))
 	defer server.Close()
+	withUpdateAPIBase(t, server.URL)
 	dir := t.TempDir()
 	root, err := os.OpenRoot(dir)
 	if err != nil {
