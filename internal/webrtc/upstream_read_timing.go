@@ -10,6 +10,7 @@ import (
 	"github.com/pion/interceptor"
 	"github.com/pion/rtp"
 	"noxa/internal/netproto"
+	"noxa/internal/safecast"
 )
 
 const upstreamReadSampleEvery = 64
@@ -170,7 +171,11 @@ func (d *upstreamReadTimingObserver) record(token *upstreamReadTimingToken, ende
 		c.InvalidToken++
 		return
 	}
-	micros := uint64(ended.Sub(token.at).Microseconds())
+	micros, err := safecast.Int64ToUint64(ended.Sub(token.at).Microseconds())
+	if err != nil {
+		c.InvalidToken++
+		return
+	}
 	c.CompletedSamples++
 	c.DurationTotalUS += micros
 	c.DurationMaxUS = max(c.DurationMaxUS, micros)

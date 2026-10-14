@@ -105,7 +105,7 @@ func observeRepairReceipt(current **repairReceiptToken, packet *rtp.Packet, attr
 		token.seen = true
 		token.high = seq
 	} else {
-		delta := int16(seq - token.high)
+		delta := rtpSequenceDelta(seq, token.high)
 		if delta <= -repairReceiptWindow {
 			// Ambiguous old arrival or large sequence jump: forget evidence and
 			// pass future requests until a fresh primary establishes a window.
