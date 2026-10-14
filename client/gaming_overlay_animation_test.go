@@ -22,7 +22,7 @@ func mistTestLabel(text string, width, height, _ int, _ bool) (*image.Alpha, err
 	return mask, nil
 }
 
-func TestMistAuroraOverlayFollowsNameAndKeepsTextReadable(t *testing.T) {
+func TestLightHaloOverlayFollowsNameAndKeepsTextReadable(t *testing.T) {
 	var previousWidth int
 	for _, name := range []string{"Sam", "NoxaUser", "TheLegendaryNightwalker", strings.Repeat("W", 48)} {
 		s := normalizeGamingOverlay(GamingOverlaySnapshot{Active: true, Style: "mist-aurora", Scale: 100,
@@ -41,18 +41,15 @@ func TestMistAuroraOverlayFollowsNameAndKeepsTextReadable(t *testing.T) {
 		if bytes.Equal(first, frame.Pix) {
 			t.Fatal("mist and aurora did not animate")
 		}
-		// The gaps between glyphs retain animation, capped at 10% opacity.
+		// The comb hugs each glyph, including the gaps across the full name.
 		columns := 0
 		for x := 70; x < frame.Bounds().Dx()-18; x++ {
 			if (x-70)%8 < 4 {
 				continue
 			}
 			visible := false
-			for y := 79; y <= 85; y++ {
+			for y := 80; y <= 104; y++ {
 				alpha := frame.RGBAAt(x, y).A
-				if alpha > 26 {
-					t.Fatalf("animation hides name %q at %d,%d: alpha=%d", name, x, y, alpha)
-				}
 				visible = visible || alpha > 0
 			}
 			if visible {
@@ -61,6 +58,12 @@ func TestMistAuroraOverlayFollowsNameAndKeepsTextReadable(t *testing.T) {
 		}
 		if columns < len([]rune(name))*2 {
 			t.Fatalf("animation did not continue behind full name %q: %d columns", name, columns)
+		}
+		// The white glyphs remain exact while the surrounding bars animate.
+		for x := 70; x < 70+len([]rune(name))*8; x++ {
+			if (x-70)%8 < 4 && frame.RGBAAt(x, 92) != (color.RGBA{R: 225, G: 226, B: 231, A: 255}) {
+				t.Fatalf("animation changed glyph ink at %d", x)
+			}
 		}
 		above, below := false, false
 		for y := range frame.Bounds().Dy() {
@@ -106,7 +109,7 @@ func TestDefaultOverlayMigratesExistingProfiles(t *testing.T) {
 	}
 }
 
-func TestDefaultOverlayCompactOverlapProtectsEveryName(t *testing.T) {
+func TestDefaultOverlayCompactRowsFollowEveryName(t *testing.T) {
 	s := normalizeGamingOverlay(GamingOverlaySnapshot{Active: true, Scale: 100, Speakers: []GamingOverlaySpeaker{
 		{Name: "TheLegendaryNightwalker", Speaking: true}, {Name: "Sam", Speaking: true},
 	}})
@@ -114,16 +117,15 @@ func TestDefaultOverlayCompactOverlapProtectsEveryName(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if r.mist == nil || r.base.Bounds().Dy() != 256 || r.mist.rows[1].center-r.mist.rows[0].center != 72 {
-		t.Fatal("Default must use compact mist/aurora rows with outer animation space")
+	if r.animation == nil || r.base.Bounds().Dy() != 256 || r.animation.rows[1].center-r.animation.rows[0].center != 72 {
+		t.Fatal("Default must retain compact rows with room for the breathing halo")
 	}
-	for _, row := range r.mist.rows {
-		for y := row.text.Min.Y; y < row.text.Max.Y; y++ {
-			for x := row.text.Min.X; x < row.text.Max.X; x++ {
-				if r.mist.mask.AlphaAt(x, y).A > 26 {
-					t.Fatal("overlapping rows overwrite another name's opacity cap")
-				}
-			}
+	for _, row := range r.animation.rows {
+		if len(row.contour) == 0 || row.contour[0].x != float64(row.text.Min.X) {
+			t.Fatal("comb must start at the name's actual glyph mask")
+		}
+		if row.contour[len(row.contour)-1].x < float64(row.text.Max.X)-2.5 {
+			t.Fatal("comb must extend over the full name")
 		}
 	}
 }
@@ -136,10 +138,10 @@ func TestDefaultOverlayUsesEachMembersConfiguredTint(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if r.mist.rows[0].tint == r.mist.rows[1].tint {
+	if r.animation.rows[0].tint == r.animation.rows[1].tint {
 		t.Fatal("individual tint lost")
 	}
-	for i, row := range r.mist.rows {
+	for i, row := range r.animation.rows {
 		if got := r.base.RGBAAt(38, int(row.center)-19); got.G != row.tint.G || got.B != row.tint.B {
 			t.Fatalf("member %d border lost its tint: %v", i, got)
 		}
@@ -156,7 +158,7 @@ func TestDefaultOverlayUsesEachMembersConfiguredTint(t *testing.T) {
 	}
 }
 
-func TestMistAuroraOverlayPreferenceRoundtrip(t *testing.T) {
+func TestLightHaloOverlayPreferenceRoundtrip(t *testing.T) {
 	s := DefaultSettings()
 	s.GamingOverlayStyle = "mist-aurora"
 	path := filepath.Join(t.TempDir(), "settings.json")
@@ -184,7 +186,7 @@ func TestMistAuroraOverlayPreferenceRoundtrip(t *testing.T) {
 	}
 }
 
-func TestMistAuroraOverlayFitsEightSpeakersOnSmallWorkArea(t *testing.T) {
+func TestLightHaloOverlayFitsEightSpeakersOnSmallWorkArea(t *testing.T) {
 	for _, scale := range []int{75, 80, 100, 200} {
 		s := GamingOverlaySnapshot{Active: true, Style: "mist-aurora", Scale: scale}
 		for range 8 {
@@ -197,7 +199,7 @@ func TestMistAuroraOverlayFitsEightSpeakersOnSmallWorkArea(t *testing.T) {
 		if r.frame.Bounds().Dx() > 320 || r.frame.Bounds().Dy() > 600 {
 			t.Fatal("overlay left work area")
 		}
-		for _, person := range r.mist.rows {
+		for _, person := range r.animation.rows {
 			if !person.text.In(r.base.Bounds()) {
 				t.Fatalf("speaker name clipped: %v in %v", person.text, r.base.Bounds())
 			}
@@ -206,7 +208,7 @@ func TestMistAuroraOverlayFitsEightSpeakersOnSmallWorkArea(t *testing.T) {
 	}
 }
 
-func BenchmarkMistAuroraOverlayEightSpeakers(b *testing.B) {
+func BenchmarkLightHaloOverlayEightSpeakers(b *testing.B) {
 	s := GamingOverlaySnapshot{Active: true, Style: "mist-aurora", Scale: 100}
 	for range 8 {
 		s.Speakers = append(s.Speakers, GamingOverlaySpeaker{Name: "TheLegendaryNightwalker", Speaking: true})

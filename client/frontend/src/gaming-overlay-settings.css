@@ -8,7 +8,7 @@
  .overlay-position-sample { padding: calc(72px * var(--overlay-scale)) calc(18px * var(--overlay-scale)); max-width: calc(100% - 4px); }
 .overlay-sample-person { display: flex; align-items: center; position: relative; width: max-content; max-width: 100%; min-height: calc(40px * var(--overlay-scale)); padding: 0; gap: calc(12px * var(--overlay-scale)); }
 .overlay-sample-person + .overlay-sample-person { margin-top: calc(32px * var(--overlay-scale)); }
-.overlay-mist-canvas { display: block; position: absolute; left: calc(-18px * var(--overlay-scale)); top: calc(-72px * var(--overlay-scale)); pointer-events: none; z-index: 0; }
+.overlay-animation-canvas { display: block; position: absolute; left: calc(-18px * var(--overlay-scale)); top: calc(-72px * var(--overlay-scale)); pointer-events: none; z-index: 0; }
 .overlay-sample-avatar { display: grid; place-items: center; position: relative; z-index: 1; flex: 0 0 calc(40px * var(--overlay-scale)); height: calc(40px * var(--overlay-scale)); border: calc(2px * var(--overlay-scale)) solid var(--overlay-color); border-radius: 50%; background: #111417; box-sizing: border-box; }
 .overlay-sample-details { position: relative; z-index: 1; min-width: 0; overflow-wrap: anywhere; background: transparent; font-weight: 500; text-shadow: 0 1px 2px #111417; }
 .gaming-overlay-settings input[type="color"] { width: 64px; height: 32px; padding: 3px; }

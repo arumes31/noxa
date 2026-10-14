@@ -1,6 +1,6 @@
 import { t } from "./i18n.js";
 import "./gaming-overlay-settings.css";
-import { mistAuroraPreview } from "./gaming-overlay-mist.js";
+import { lightHaloPreview } from "./gaming-overlay-animation.js";
 import { overlayColorPreferences, overlayBlueColor } from "./overlay-colors.js";
 
 export function gamingOverlaySettings(settings, { row, checkbox, slider, hint }) {
@@ -43,13 +43,14 @@ export function gamingOverlaySettings(settings, { row, checkbox, slider, hint })
     sample.setAttribute("aria-label", t("overlay.drag"));
     for (const name of ["Alex", "Sam"]) {
         const person = document.createElement("span"); person.className = "overlay-sample-person";
+        person.dataset.overlayId = `preview-${name.toLowerCase()}`;
         const avatar = document.createElement("span"); avatar.className = "overlay-sample-avatar"; avatar.textContent = name[0];
         const details = document.createElement("span"); details.className = "overlay-sample-details";
         const label = document.createElement("span"); label.className = "overlay-sample-name"; label.textContent = name; details.append(label);
         person.append(avatar, details); sample.append(person);
     }
     preview.append(sample);
-    const showDesign = mistAuroraPreview(sample);
+    const showDesign = lightHaloPreview(sample);
     const coordinates = document.createElement("output"); coordinates.className = "overlay-position-readout"; coordinates.setAttribute("aria-live", "polite");
     const render = () => {
         sample.querySelectorAll(".overlay-sample-person").forEach((person,index) =>
