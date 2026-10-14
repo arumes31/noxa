@@ -8,6 +8,7 @@ import (
 
 	"github.com/pion/interceptor"
 	"github.com/pion/rtp"
+	"noxa/internal/safecast"
 )
 
 const upstreamReadStageThreshold = 20 * time.Millisecond
@@ -189,11 +190,15 @@ func (s *upstreamTimingSession) addReadStageLocked(row StreamTimingReadStage) {
 	if row.Kind == "between_reads" {
 		total = &d.data.Between
 	}
-	elapsed := uint64(row.EndUS - row.StartUS)
+	elapsed, err := safecast.Int64ToUint64(row.EndUS - row.StartUS)
+	if err != nil {
+		d.dropped.Add(1)
+		return
+	}
 	total.Count++
 	total.TotalUS += elapsed
 	total.MaxUS = max(total.MaxUS, elapsed)
-	if elapsed < uint64(upstreamReadStageThreshold.Microseconds()) && row.Result != "error" && row.Result != "timeout" {
+	if elapsed < uint64(upstreamReadStageThreshold/time.Microsecond) && row.Result != "error" && row.Result != "timeout" {
 		return
 	}
 	if len(d.data.Rows) == upstreamReadStageRows {

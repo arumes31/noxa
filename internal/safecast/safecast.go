@@ -35,14 +35,6 @@ func IntToInt32(value int) (int32, error) {
 	return int32(value), nil
 }
 
-// Int32ToInt converts value to int when it is representable on this platform.
-func Int32ToInt(value int32) (int, error) {
-	if int64(value) < int64(math.MinInt) || int64(value) > int64(math.MaxInt) {
-		return 0, outOfRange(value, "int")
-	}
-	return int(value), nil
-}
-
 // IntToUint32 converts value to uint32 when it is representable.
 func IntToUint32(value int) (uint32, error) {
 	return Int64ToUint32(int64(value))
@@ -62,6 +54,22 @@ func Uint32ToInt(value uint32) (int, error) {
 		return 0, outOfRange(value, "int")
 	}
 	return int(value), nil
+}
+
+// Int64ToUint64 converts value to uint64 when it is representable.
+func Int64ToUint64(value int64) (uint64, error) {
+	if value < 0 {
+		return 0, outOfRange(value, "uint64")
+	}
+	return uint64(value), nil
+}
+
+// Int32ToUint32 converts value to uint32 when it is representable.
+func Int32ToUint32(value int32) (uint32, error) {
+	if value < 0 {
+		return 0, outOfRange(value, "uint32")
+	}
+	return uint32(value), nil
 }
 
 func outOfRange(value any, target string) error {

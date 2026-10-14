@@ -531,6 +531,8 @@ and validation, [`config.yaml`](config.yaml) for a development example, and
 | `NOXA_FILE_TLS_ENABLED` | `true` | Enable TLS 1.3 on file transfers; disabling is development-only |
 | `NOXA_FILE_ROOT` | `./data/files` | Root storage path for uploaded channel files & avatars |
 | `NOXA_FILE_MAX_CONNECTIONS` | `128` | Concurrent accepted file-transfer connections (1–10000) |
+| `NOXA_FILE_USER_QUOTA_MB` | `0` | Per-user storage quota across uploads and moves (`0` means unlimited) |
+| `NOXA_UDP_RATE_LIMIT_PPS` / `NOXA_UDP_RATE_BURST` | `200` / `400` | UDP per-source-IP packet rate limit and burst allowance for DDoS mitigation |
 | `NOXA_PII_KEY_FILE` | `./data/keys/pii.key` | AES-256-GCM master key file path for PII encryption |
 | `NOXA_CHANNEL_TEMP_LIFETIME_SECONDS` | `60` | Grace period before an empty temporary channel is removed |
 | `NOXA_CHAT_MASTER_KEY_FILE` | `./data/keys/chat_master.key` | KEK file used to wrap persisted chat scope keys; back it up with PostgreSQL |
@@ -546,12 +548,14 @@ and validation, [`config.yaml`](config.yaml) for a development example, and
 | `NOXA_WEBRTC_UDP_ADDR` | empty | Shared IPv4 WebRTC UDP listener; empty uses dynamic ports |
 | `NOXA_WEBRTC_EXTERNAL_IPS` | empty | Public IPv4 addresses forwarding the fixed WebRTC UDP listener |
 | `NOXA_WEBRTC_ICE_SERVERS` | `stun:stun.l.google.com:19302` | ICE server URLs for the SFU |
+| `NOXA_WEBRTC_ENABLE_AV1` | `false` | Register optional AV1 video codec on the SFU engine |
 | `NOXA_TURN_SECRET` / `NOXA_TURN_URIS` | empty / empty | TURN shared secret and advertised relay URIs |
 | `NOXA_TURN_CREDENTIALS_TTL` | `24h` | TURN credential lifetime; must be positive and at most 30 days |
 | `NOXA_REDIS_DIAL_TIMEOUT` / `NOXA_REDIS_READ_TIMEOUT` / `NOXA_REDIS_WRITE_TIMEOUT` | `5s` / `3s` / `3s` | Redis client timeouts when Redis is enabled |
 | `NOXA_REDIS_TLS_ENABLED` | `false` | Enable verified Redis TLS (TLS 1.2+); optional server name and CA file use `NOXA_REDIS_TLS_SERVER_NAME` / `NOXA_REDIS_TLS_CA_FILE` |
 | `NOXA_RECORDING_ENABLED` / `NOXA_RECORDING_DIR` | `false` / `recordings` | Opt-in server recording; requires FFmpeg and recording permissions |
 | `NOXA_RECORDING_MAX_CONCURRENT` | `4` | Combined budget for starting and active recording sessions |
+| `NOXA_RECORDING_WINDOWS_ACL_READY` | `false` | Acknowledge restricted, inheritable NTFS DACL provisioned on the recording directory for Windows |
 
 `NOXA_CHAT_MASTER_KEY` takes precedence over `NOXA_CHAT_MASTER_KEY_FILE`.
 Use secret injection for the override; it accepts either a single base64 32-byte
@@ -711,7 +715,14 @@ native-client tests in CI use `xvfb-run -a go test ./...`.
 
 | Command | Scope |
 | :--- | :--- |
+| `make build` | Compile the server binary into `./bin` |
+| `make client-build` | Build the Wails desktop client with embedded version metadata |
+| `make run` | Run the server locally with version metadata |
 | `make test` | Root and client Go tests; supplies an embed placeholder, but does not run browser tests |
+| `make migrate` | Run database migrations via `./cmd/migrate` |
+| `make compose-up` / `make compose-down` | Build and start/stop the detached container stack (noXa + PostgreSQL + Redis) |
+| `make chaos` / `make webrtc-load` | Run database failure drills and simulate 100 authenticated Opus publishers |
+| `make canary` | Run encryption rotation and plaintext-leakage security canaries |
 | `go run ./cmd/version -check` | Check synchronized baseline versions and report the current source version |
 | `npm run quality` in `client/frontend` | Frontend lint, unit tests/coverage, accessibility scenarios, and production build |
 | `npm run test:e2e` in `client/frontend` | Full Playwright browser regression suite |
