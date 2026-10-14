@@ -13,3 +13,17 @@ description = "Published update verification key in the validation report"
 condition = "AND"
 paths = ['''^docs/client-update-validation-2026-09-13\.md$''']
 regexes = ['''^V2gJha/\+dbSOAz0F8EBCX6358VJJD0JDtD\+wKZeemFg=$''']
+
+# Historical fixture signatures use the same published public verification key.
+# Restrict each exception to both its exact public value and its exact file.
+[[rules.allowlists]]
+description = "Pinned public update verification key in legacy fixture test"
+condition = "AND"
+paths = ['^client/updater_legacy_windows_test\.go$']
+regexes = ['^V2gJha/\+dbSOAz0F8EBCX6358VJJD0JDtD\+wKZeemFg=$']
+
+[[rules.allowlists]]
+description = "SHA256 fingerprint of the public update verification key"
+condition = "AND"
+paths = ['^client/testdata/legacy-update-releases\.md$']
+regexes = ['^86e42bdb94a45f704f24405d76abc873415d5ce20b9d417e2e1e41db7abe1e3e$']
