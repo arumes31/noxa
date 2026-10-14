@@ -184,3 +184,19 @@ test("unwatched sources use no upload budget and resume within the shared server
     capVideoEncodings([screen, camera], limits, 0);
     assert.ok([screen, camera].every(source => source.encodings.every(encoding => !encoding.active)));
 });
+
+
+test("share bitrate ceilings validate explicitly and never change capture constraints", () => {
+    const automatic = shareQuality("hdMotion");
+    for (const value of [undefined, null, 0]) assert.deepEqual(shareQuality("hdMotion", {}, value), automatic);
+    for (const value of [2000000, 4000000, 6000000, 8000000]) {
+        const selected = shareQuality("hdMotion", {}, value);
+        assert.equal(screenBitrateHeadroom(selected, { width: 1920, height: 1080, frameRate: 60 }), value);
+        assert.deepEqual(screenShareConstraints(selected), screenShareConstraints(automatic));
+        assert.equal(screenBitrateHeadroom(shareQuality("qhd", {}, value), {}), value);
+    }
+    for (const value of [-1, 1.5, NaN, Infinity, "6000000", 5000000]) assert.equal(shareQuality("hdMotion", {}, value), null);
+    for (const value of [-1, 1.5, NaN, Infinity, Number.MAX_SAFE_INTEGER + 1]) {
+        assert.equal(screenBitrateHeadroom({ ...automatic, bitrateCeiling: value }, {}), 8000000);
+    }
+});

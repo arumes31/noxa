@@ -1423,3 +1423,176 @@ for (const cleanup of ["stop", "limits", "pagehide"]) {
         if (cleanup !== "pagehide") expect(await page.evaluate(() => window.__media.displayTracks.every(t => t.readyState === "ended"))).toBe(true);
     });
 }
+
+
+async function startBudgetShare(page) {
+    await page.locator("#voice-screen").click();
+    await page.locator(".sh-preset").selectOption("hdMotion");
+    await page.getByRole("dialog").getByRole("button", { name: "Start sharing", exact: true }).click();
+    await expect(page.locator("#sharing-status")).toBeVisible();
+}
+
+async function changeBudget(page, value) {
+    await page.getByRole("button", { name: "Change quality", exact: true }).click();
+    await page.locator(".sh-bitrate").selectOption(String(value));
+    await page.getByRole("button", { name: "Apply quality", exact: true }).click();
+}
+
+test("share ceiling round trip changes only screen maxBitrate and no-op preserves the encoder", async ({ page }) => {
+    await startBudgetShare(page);
+    await page.evaluate(() => {
+        const state = window.__noxa.state, media = window.__media;
+        const sender = state.shareVideoTransceiver.sender, track = sender.track;
+        media.original = { stream: state.shareStream, pc: state.pc, sender, track,
+            parameters: sender.getParameters(), settings: track.getSettings(), offers: media.offers.length };
+        media.capCalls = 0;
+        const set = sender.setParameters;
+        sender.setParameters = async parameters => { media.capCalls++; return set(parameters); };
+        const forbidden = () => { throw new Error("bitrate must not change capture or another sender"); };
+        track.applyConstraints = forbidden;
+        Object.defineProperty(track, "contentHint", { get: () => "motion", set: forbidden });
+        sender.replaceTrack = forbidden;
+        media.cameraSender.setParameters = forbidden;
+    });
+    for (const [value, cap, count] of [[6000000, 6000000, 1], [8000000, 8000000, 2], [0, 8000000, 2], [0, 8000000, 2]]) {
+        await changeBudget(page, value);
+        await expect(page.getByRole("dialog")).toHaveCount(0);
+        const result = await page.evaluate(() => {
+            const { original, capCalls, offers } = window.__media, state = window.__noxa.state;
+            return { same: state.pc === original.pc && state.shareStream === original.stream &&
+                state.shareVideoTransceiver.sender === original.sender && original.sender.track === original.track,
+            parameters: original.sender.getParameters(), before: original.parameters, settings: original.track.getSettings(),
+            originalSettings: original.settings, capCalls, offers: offers.length, originalOffers: original.offers };
+        });
+        expect(result.same).toBe(true);
+        const expected = structuredClone(result.before); expected.encodings[0].maxBitrate = cap;
+        expect(result.parameters).toEqual(expected);
+        expect(result.settings).toEqual(result.originalSettings);
+        expect(result.offers).toBe(result.originalOffers);
+        expect(result.capCalls).toBe(count);
+    }
+});
+
+test("share ceiling honors a lower server budget without updating camera", async ({ page }) => {
+    await page.evaluate(() => { window.__noxa.state.mediaLimits = { video_max_bitrate: 4000000 }; });
+    await startBudgetShare(page);
+    await page.evaluate(() => {
+        window.__media.cameraBefore = window.__media.cameraSender.getParameters();
+        window.__media.cameraSender.setParameters = () => { throw new Error("camera touched"); };
+    });
+    await changeBudget(page, 6000000);
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+    expect(await page.evaluate(() => window.__noxa.state.shareVideoTransceiver.sender.getParameters().encodings[0].maxBitrate)).toBe(1700000);
+    expect(await page.evaluate(() => window.__media.cameraSender.getParameters())).toEqual(await page.evaluate(() => window.__media.cameraBefore));
+    await page.getByRole("button", { name: "Change quality", exact: true }).click();
+    await expect(page.locator(".sh-bitrate")).toHaveValue("6000000");
+    await expect(page.locator(".share-budget")).toContainText("limited to 6 Mbit/s");
+});
+
+test("share ceiling survives source change but resets on a new share", async ({ page }) => {
+    await startBudgetShare(page);
+    await changeBudget(page, 6000000);
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+    await page.locator(".sharing-change").click();
+    await expect(page.locator(".sh-bitrate")).toHaveValue("6000000");
+    await page.getByRole("dialog").getByRole("button", { name: "Start sharing", exact: true }).click();
+    await expect.poll(() => page.evaluate(() => window.__media.displayTracks.length)).toBe(2);
+    await expect.poll(() => page.evaluate(() => window.__noxa.state.shareVideoTransceiver.sender.getParameters().encodings[0].maxBitrate)).toBe(6000000);
+    await page.locator(".sharing-stop").click();
+    await expect(page.locator("#sharing-status")).toBeHidden();
+    await startBudgetShare(page);
+    expect(await page.evaluate(() => window.__noxa.state.shareVideoTransceiver.sender.getParameters().encodings[0].maxBitrate)).toBe(8000000);
+    await page.getByRole("button", { name: "Change quality", exact: true }).click();
+    await expect(page.locator(".sh-bitrate")).toHaveValue("0");
+});
+
+test("share ceiling rejection restores old preference and respects a newer server cap", async ({ page }) => {
+    await startBudgetShare(page);
+    await page.evaluate(() => {
+        const sender = window.__noxa.state.shareVideoTransceiver.sender, set = sender.setParameters;
+        let first = true;
+        sender.setParameters = async parameters => {
+            if (first) {
+                first = false;
+                await set(parameters);
+                window.__noxa.state.mediaLimits = { video_max_bitrate: 4000000 };
+                throw new Error("encoder rejected update");
+            }
+            return set(parameters);
+        };
+    });
+    await changeBudget(page, 6000000);
+    await expect(page.getByRole("dialog")).toContainText("encoder rejected update");
+    expect(await page.evaluate(() => window.__noxa.state.shareVideoTransceiver.sender.getParameters().encodings[0].maxBitrate)).toBe(1700000);
+    await page.getByRole("button", { name: "Cancel", exact: true }).click();
+    await page.getByRole("button", { name: "Change quality", exact: true }).click();
+    await expect(page.locator(".sh-bitrate")).toHaveValue("0");
+});
+
+test("share ceiling stale sender completion cannot commit or roll back replacement parameters", async ({ page }) => {
+    await startBudgetShare(page);
+    await page.evaluate(() => {
+        const sender = window.__noxa.state.shareVideoTransceiver.sender;
+        window.__media.capCalls = 0;
+        sender.setParameters = async () => {
+            window.__media.capCalls++;
+            await new Promise(resolve => { window.__media.releaseCap = resolve; });
+            throw new Error("old sender rejected");
+        };
+    });
+    await changeBudget(page, 6000000);
+    await expect.poll(() => page.evaluate(() => !!window.__media.releaseCap)).toBe(true);
+    await page.evaluate(() => {
+        const sender = window.__noxa.state.shareVideoTransceiver.sender;
+        window.__media.originalTrack = sender.track;
+        sender.track = window.__media.camera;
+        window.__media.releaseCap();
+    });
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+    expect(await page.evaluate(() => window.__media.capCalls)).toBe(1);
+    await page.evaluate(() => { window.__noxa.state.shareVideoTransceiver.sender.track = window.__media.originalTrack; });
+    await page.getByRole("button", { name: "Change quality", exact: true }).click();
+    await expect(page.locator(".sh-bitrate")).toHaveValue("0");
+});
+
+test("share ceiling stores an unwatched preference without activating upload", async ({ page }) => {
+    await page.evaluate(() => {
+        const app = window.go.main.App, control = app.VideoStreamControlForTab;
+        app.SupportsStreamSourceQualityForTab = async () => true;
+        app.VideoStreamControlForTab = async (...args) => ({ ...await control(...args), upload_active: false });
+    });
+    await startBudgetShare(page);
+    await page.evaluate(() => {
+        const sender = window.__noxa.state.shareVideoTransceiver.sender, set = sender.setParameters;
+        window.__media.capCalls = 0;
+        sender.setParameters = async parameters => { window.__media.capCalls++; return set(parameters); };
+    });
+    await changeBudget(page, 6000000);
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+    expect(await page.evaluate(() => ({ calls: window.__media.capCalls,
+        active: window.__noxa.state.shareVideoTransceiver.sender.getParameters().encodings[0].active }))).toEqual({ calls: 0, active: false });
+    await page.evaluate(async () => {
+        const publication = await import("/src/stream-publication.js"), snapshot = publication.publicationSnapshot();
+        publication.reconcilePublicationUploads(snapshot, snapshot.map(item => ({ publisher_id: "self", slot: item.publication.slot,
+            generation: item.generation, upload_active: true })));
+    });
+    await expect.poll(() => page.evaluate(() => window.__noxa.state.shareVideoTransceiver.sender.getParameters().encodings[0])).toMatchObject({ active: true, maxBitrate: 6000000 });
+});
+
+test("share ceiling same dimensions with changed preset still updates capture semantics", async ({ page }) => {
+    await page.locator("#voice-screen").click();
+    await page.locator(".sh-preset").selectOption("text");
+    await page.getByRole("dialog").getByRole("button", { name: "Start sharing", exact: true }).click();
+    await expect(page.locator("#sharing-status")).toBeVisible();
+    await page.evaluate(() => {
+        window.__media.constraintCalls = 0;
+        window.__noxa.state.shareStream.getVideoTracks()[0].applyConstraints = async () => { window.__media.constraintCalls++; };
+    });
+    await page.getByRole("button", { name: "Change quality", exact: true }).click();
+    await page.locator(".sh-preset").selectOption("custom");
+    await page.locator(".sh-width").fill("1920"); await page.locator(".sh-height").fill("1080");
+    await page.locator(".sh-fps").selectOption("15"); await page.locator(".sh-bitrate").selectOption("6000000");
+    await page.getByRole("button", { name: "Apply quality", exact: true }).click();
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+    expect(await page.evaluate(() => ({ calls: window.__media.constraintCalls, hint: window.__noxa.state.shareStream.getVideoTracks()[0].contentHint }))).toEqual({ calls: 1, hint: "motion" });
+});
