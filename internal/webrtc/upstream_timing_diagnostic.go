@@ -89,6 +89,8 @@ type StreamTimingDiagnostics struct {
 	RouteToken       string                 `json:"route_token"`
 	RTP              []StreamTimingRTP      `json:"rtp"`
 	Feedback         []StreamTimingFeedback `json:"feedback"`
+
+	ReadStages *StreamTimingReadStages `json:"read_stages,omitempty"`
 }
 type timingWriteOutcome struct {
 	endedUS int64
@@ -96,6 +98,7 @@ type timingWriteOutcome struct {
 	bytes   int
 }
 type upstreamTimingSession struct {
+	readStages     *upstreamReadStageState
 	stopped        atomic.Bool
 	droppedRTP     atomic.Uint64
 	droppedReports atomic.Uint64
@@ -386,6 +389,7 @@ func (s *upstreamTimingSession) snapshot(now time.Time) *StreamTimingDiagnostics
 		out.ElapsedUS = s.ended.Sub(s.started).Microseconds()
 	}
 	out.Settled = !s.ended.IsZero() && out.PendingReports == 0
+	out.ReadStages = s.readStageSnapshotLocked(out.Settled)
 	if s.expired {
 		out.Reason = "expired"
 		return out
@@ -399,6 +403,9 @@ func (s *upstreamTimingSession) snapshot(now time.Time) *StreamTimingDiagnostics
 		out.EndRouteCheckedAt = &v
 	}
 	out.Complete = s.reason == "complete" && !s.overflow && !s.contended.Load() && !s.writeFailed.Load()
+	if out.ReadStages != nil && (out.ReadStages.DroppedUpdates != 0 || out.ReadStages.OmittedRows != 0) {
+		out.Complete = false
+	}
 	if !out.Settled {
 		out.Complete = false
 		return out
@@ -459,4 +466,8 @@ func (s *upstreamTimingSession) expire() {
 	s.expired = true
 	s.rtp = nil
 	s.feedback = nil
+	if s.readStages != nil {
+		s.readStages.data.Rows = nil
+		s.readStages.hasOpen = false
+	}
 }

@@ -87,7 +87,7 @@ func (r *Router) streamTiming(request StreamTimingRequest, action string, read f
 		return nil, ErrStreamRouteUnavailable
 	}
 	observer := peer.upstreamFeedback
-	s := &upstreamTimingSession{scope: request, done: make(chan struct{}), reason: "recording", rtp: make([]StreamTimingRTP, 0, upstreamTimingMaxRTP), feedback: make([]StreamTimingFeedback, 0, upstreamTimingMaxReports)}
+	s := &upstreamTimingSession{scope: request, readStages: newUpstreamReadStageState(), bytes: upstreamReadStageBudget, done: make(chan struct{}), reason: "recording", rtp: make([]StreamTimingRTP, 0, upstreamTimingMaxRTP), feedback: make([]StreamTimingFeedback, 0, upstreamTimingMaxReports)}
 	s.guard = func() (bool, bool) {
 		if !r.mu.TryRLock() {
 			return false, false
@@ -122,9 +122,14 @@ func (r *Router) streamTiming(request StreamTimingRequest, action string, read f
 		observer.mu.Unlock()
 		return nil, ErrStreamRouteUnavailable
 	}
+	input.readTiming.Store(s)
 	observer.mu.Unlock()
 	r.timingDiagnostic = s
-	deadline := time.AfterFunc(upstreamTimingDuration, func() { s.stop("complete", time.Now()); observer.timing.CompareAndSwap(s, nil) })
+	deadline := time.AfterFunc(upstreamTimingDuration, func() {
+		s.stop("complete", time.Now())
+		observer.timing.CompareAndSwap(s, nil)
+		input.readTiming.CompareAndSwap(s, nil)
+	})
 	time.AfterFunc(upstreamTimingDuration+upstreamTimingRetention, func() {
 		r.timingMu.Lock()
 		defer r.timingMu.Unlock()
@@ -136,6 +141,7 @@ func (r *Router) streamTiming(request StreamTimingRequest, action string, read f
 	go func() {
 		defer deadline.Stop()
 		defer observer.timing.CompareAndSwap(s, nil)
+		defer input.readTiming.CompareAndSwap(s, nil)
 		ticker := time.NewTicker(500 * time.Millisecond)
 		defer ticker.Stop()
 		for {

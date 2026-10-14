@@ -60,3 +60,31 @@ Start/end UTC plus elapsed monotonic time are not a proven kernel clock bridge.
 Evaluate clock drift/steps, quantization and observer overhead before comparing
 relative same-packet delays. Only a window overlapping an actual BWE decline is
 informative; healthy windows do not explain earlier collapses or establish causality.
+
+The additive `read_stages` object (its own schema 1; outer schema stays 1) observes
+only the armed ingress and the actual ordinary and repair-drain `ReadRTP` calls.
+`read_rtp` covers the complete call, including Pion interceptors, RTX polling and
+packet decoding. `between_reads` covers work after a return until the next call:
+authority/deadline checks, receipt observation, reorder, assembly and fanout. These
+wall durations include scheduling and diagnostic overhead, not just CPU work.
+No stage lookup calls the router or ICE; inactive calls do one atomic lookup and
+allocate nothing. Active metadata uses TryLock and never waits on diagnostic locks.
+
+Each interval has a loop/session-local ordinal and monotonic endpoints relative
+to arm; it does not depend on modular RTP sequences. Totals/count/max include all
+admitted completed intervals. At most 2,048 rows retain intervals >=20 ms plus error
+and timeout outcomes; the reserved capacity costs 263,168 bytes of the existing 16-MiB
+budget. `omitted_rows` reports a full row buffer; totals continue. `dropped_updates`
+reports lock contention and makes complete false. `first_boundary_omitted` means
+there is no observation before the first admitted read; arming during a blocked
+call never retrospectively times that call. Neither missing intervals nor the first
+boundary imply zero work. `loop_exit` distinguishes scope loss, deadline errors,
+terminal read errors and timeout without pending packets when observed.
+
+An open read or processing interval at capture end is a separate `boundary` row,
+clipped to the 60-second window and excluded from completed totals. It does not delay
+settlement or keep an idle reader alive. `boundary_omitted` suppresses its attribution
+if a transition was dropped after the last known state. Rebinding/cancellation cannot
+attach an old return to a replacement session. Retention expiry also releases stage
+rows. These measurements localize a delay; they cannot alone distinguish lock waits,
+Go scheduling, host scheduling or socket waits, and do not establish causality.

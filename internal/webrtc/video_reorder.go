@@ -158,6 +158,12 @@ func (q *videoReorder) flushGaps(now time.Time, force bool, emit func(*rtp.Packe
 // Pion's read deadline lets an idle screen release its final queued frame
 // without a helper goroutine. Fakes without deadlines flush at EOF instead.
 func readOrderedVideo(track VideoTrackReader, current func() bool, codec func() string, emit func(*rtp.Packet, string), observe func(*rtp.Packet)) {
+	readOrderedVideoTimed(track, current, codec, emit, observe, nil)
+}
+
+func readOrderedVideoTimed(track VideoTrackReader, current func() bool, codec func() string, emit func(*rtp.Packet, string), observe func(*rtp.Packet), timing *upstreamReadStageTracker) {
+	exitReason := "scope_changed"
+	defer func() { timing.finish(exitReason) }()
 	// A receipt token belongs to this exact read loop, never another track or
 	// replacement. Only successful reads after current() may acknowledge it.
 	var receipt *repairReceiptToken
@@ -179,10 +185,11 @@ func readOrderedVideo(track VideoTrackReader, current func() bool, codec func() 
 				}
 			}
 			if err := deadline.SetReadDeadline(readDeadline); err != nil {
+				exitReason = "deadline_error"
 				return
 			}
 		}
-		packet, attrs, err := track.ReadRTP()
+		packet, attrs, err := timing.read(track, false)
 		if !current() {
 			return
 		}
@@ -190,6 +197,7 @@ func readOrderedVideo(track VideoTrackReader, current func() bool, codec func() 
 			var timeout net.Error
 			if hasDeadline && errors.As(err, &timeout) && timeout.Timeout() {
 				if queue.deadline().IsZero() {
+					exitReason = "timeout_no_pending"
 					return
 				}
 				// Pion polls its separate RTX queue before blocking on primary
@@ -198,7 +206,7 @@ func readOrderedVideo(track VideoTrackReader, current func() bool, codec func() 
 				// A poll timeout is not the gap's abandonment deadline: flush below
 				// still uses the original reorder deadline. Bound draining work.
 				for range videoReorderPackets {
-					repaired, repairAttrs, repairErr := track.ReadRTP()
+					repaired, repairAttrs, repairErr := timing.read(track, true)
 					if !current() {
 						return
 					}
@@ -207,6 +215,7 @@ func readOrderedVideo(track VideoTrackReader, current func() bool, codec func() 
 							break
 						}
 						queue.flush(time.Now(), true, emit)
+						exitReason = "read_error"
 						return
 					}
 					if repaired != nil {
@@ -217,6 +226,7 @@ func readOrderedVideo(track VideoTrackReader, current func() bool, codec func() 
 				continue
 			}
 			queue.flush(time.Now(), true, emit)
+			exitReason = "read_error"
 			return
 		}
 		if packet != nil {
