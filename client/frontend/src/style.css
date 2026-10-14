@@ -579,14 +579,11 @@ body:not(.details-collapsed) #details-toggle { display: none; }
 .set-modes label { display: flex; align-items: center; gap: 6px; font-size: 0.9286rem; color: var(--text-dim); }
 .set-folder { display: flex; align-items: center; gap: 8px; }
 .set-folder .mono { font-size: 0.7857rem; color: var(--text-dim); max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.set-uid { font-size: 0.7857rem; color: var(--text); max-width: 320px; overflow-wrap: anywhere; }
-.set-danger { margin-top: 18px; padding-top: 12px; border-top: 1px solid rgba(255, 123, 114, 0.25); }
 .danger-btn {
     padding: 7px 14px; border-radius: 6px;
     border: 1px solid rgba(255, 123, 114, 0.4) !important;
     background: rgba(255, 123, 114, 0.08) !important; color: var(--danger) !important;
 }
-.set-disabled { opacity: .5; }
 
 .mic-test { margin-top: 14px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .mic-test button {
@@ -736,7 +733,6 @@ body:not(.details-collapsed) #details-toggle { display: none; }
 .channel-disclosure summary:hover { color: var(--text); }
 .channel-disclosure summary::marker { color: var(--text-dim); }
 .channel-disclosure-body { display: grid; gap: 16px; padding: 8px 0 10px; }
-.channel-section-disclosure { border-top: 1px solid var(--border); margin-top: 8px; padding-top: 4px; }
 .channel-editor .ce-flags { flex-direction: column; gap: 10px; }
 .channel-editor .ce-flags label, .channel-checkbox { display: flex; align-items: center; gap: 8px; font-size: .9286rem; color: var(--text-dim); }
 .channel-editor input[type="checkbox"] { accent-color: var(--accent); width: 16px; height: 16px; flex: 0 0 auto; }
@@ -744,7 +740,6 @@ body:not(.details-collapsed) #details-toggle { display: none; }
 .channel-editor .ce-icon-copy { flex: 1 1 200px; }
 .channel-dialog-footer { flex: 0 0 auto; padding: 14px 24px; border-top: 1px solid var(--border); background: var(--bg-raised); }
 .channel-editor .dlg-buttons button { min-height: 38px; }
-.channel-save-error { color: var(--danger); font-size: .9286rem; line-height: 1.45; margin-bottom: 12px; overflow-wrap: anywhere; }
 .channel-editor :is(button, input, select, textarea, summary):focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .channel-editor button:disabled { cursor: wait; opacity: .6; }
 @media (max-width: 520px) {
