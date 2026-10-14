@@ -163,12 +163,16 @@ func TestWatchStartupCloseDoesNotJoinForeignPublisherWrite(t *testing.T) {
 			t.Error(err)
 		}
 	})
+	r.mu.Lock()
 	r.rtcpWriters["pub"] = startupRTCPFunc(func([]rtcp.Packet) error { close(entered); <-release; close(finished); return nil })
+	r.mu.Unlock()
 	// First record intent without a recipient; readiness later starts the worker.
 	if _, err = r.WatchVideo("viewer", "pub", SlotScreen, generation, 1, session, true); err != nil {
 		t.Fatal(err)
 	}
+	r.mu.Lock()
 	r.pubPeers["viewer"] = peer
+	r.mu.Unlock()
 	peer.notifyVideoStartup()
 	select {
 	case <-entered:

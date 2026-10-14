@@ -41,7 +41,9 @@ func TestWatchStartWaitsForBindingAndTransportWithoutMoreSourcePackets(t *testin
 	}
 	registerVideoSource(r, "pub", SlotScreen, "f", 42)
 	writer := &startupPLIWriter{counts: make(map[uint32]int)}
+	r.mu.Lock()
 	r.rtcpWriters["pub"] = writer
+	r.mu.Unlock()
 	session := r.VideoWatchSession("viewer")
 	if started, err := r.WatchVideo("viewer", "pub", SlotScreen, generation, 1, session, true); err != nil || !started || writer.count(42) != 0 {
 		t.Fatalf("unready watch: started=%v err=%v PLI=%d", started, err, writer.count(42))
@@ -100,7 +102,9 @@ func directStartupFixture(t *testing.T) (*Router, *PeerConnectionWrapper, *start
 	}
 	registerVideoSource(r, "pub", SlotScreen, "f", 42)
 	writer := &startupPLIWriter{counts: make(map[uint32]int)}
+	r.mu.Lock()
 	r.rtcpWriters["pub"] = writer
+	r.mu.Unlock()
 	peer := &PeerConnectionWrapper{closed: make(chan struct{}), videoStartupWake: make(chan struct{}, 1)}
 	peer.videoStartupHandler = func() time.Duration { return r.flushWatchStartup("viewer", peer) }
 	t.Cleanup(func() {
@@ -118,7 +122,9 @@ func directStartupFixture(t *testing.T) (*Router, *PeerConnectionWrapper, *start
 func TestWatchStartupSharedThrottleRetriesStaticSourceOnce(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		r, peer, writer, generation, session := directStartupFixture(t)
+		r.mu.Lock()
 		r.pubPeers["viewer"] = peer
+		r.mu.Unlock()
 		r.RequestKeyframe("pub", SlotScreen, "f")
 		time.Sleep(250 * time.Millisecond)
 		if started, err := r.WatchVideo("viewer", "pub", SlotScreen, generation, 1, session, true); err != nil || !started {
@@ -162,8 +168,10 @@ func TestWatchStartupPendingCannotSurviveRevocation(t *testing.T) {
 				if writer.count(42) != 0 {
 					t.Fatal("watch requested before recipient existed")
 				}
+				r.mu.Lock()
 				r.pubPeers["viewer"] = peer
 				r.keyframeLast[42] = time.Now()
+				r.mu.Unlock()
 				r.requestWatchStartup("viewer")
 				synctest.Wait()
 				switch kind {
@@ -180,7 +188,9 @@ func TestWatchStartupPendingCannotSurviveRevocation(t *testing.T) {
 				case "guard":
 					r.SetPublisherGuard(func(PublisherAccess) bool { return false })
 				case "peer":
+					r.mu.Lock()
 					r.pubPeers["viewer"] = &PeerConnectionWrapper{}
+					r.mu.Unlock()
 				case "close":
 					peer.closeOnce.Do(func() { close(peer.closed) })
 				}
@@ -205,8 +215,10 @@ func TestWatchStartupAdmittedFrameCancelsPendingThrottleRetry(t *testing.T) {
 			t.Fatal(err)
 		}
 		output := &pubSlot{track: track}
+		r.mu.Lock()
 		r.pubTracks["viewer"] = map[string]*pubTrack{"pub": {video: map[string]*pubSlot{SlotScreen: output}}}
 		r.pubPeers["viewer"] = peer
+		r.mu.Unlock()
 		r.RequestKeyframe("pub", SlotScreen, "f")
 		if _, err = r.WatchVideo("viewer", "pub", SlotScreen, generation, 1, session, true); err != nil {
 			t.Fatal(err)
@@ -221,7 +233,9 @@ func TestWatchStartupAdmittedFrameCancelsPendingThrottleRetry(t *testing.T) {
 			t.Fatal("keyframe already admitted but pending retry still wrote")
 		}
 		// The old admitted watch epoch must not consume a later explicit retry.
+		r.mu.Lock()
 		r.keyframeLast[42] = time.Now()
+		r.mu.Unlock()
 		if _, err = r.WatchVideo("viewer", "pub", SlotScreen, generation, 2, session, true); err != nil {
 			t.Fatal(err)
 		}
