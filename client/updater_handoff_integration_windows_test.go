@@ -131,6 +131,15 @@ func runHandoffFixtureMain() bool {
 	if err := confirmUpdateReadiness(os.Getenv(updateReadyAddressEnv), os.Getenv(updateReadyNonceEnv), os.Getpid()); err != nil {
 		panic(err)
 	}
+	// Readiness alone is not success: the rollback image must still exist
+	// until the supervisor's stability interval has elapsed.
+	if _, err := os.Stat(filepath.Join(dir, ".noxa-previous-fixture.exe")); err != nil {
+		panic("backup removed before stable startup")
+	}
+	if name == "final crash after ready" {
+		time.Sleep(20 * time.Millisecond)
+		os.Exit(17)
+	}
 	_ = os.WriteFile(filepath.Join(dir, "replacement-ready"), []byte("genuine fixture ready"), 0600)
 	time.Sleep(300 * time.Millisecond)
 	return true
@@ -237,7 +246,7 @@ func TestUpdateHandoffSupervisorIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 	originalHash := sha256.Sum256(originalBytes)
-	for _, name := range []string{"ready", "target path alias", "final exits", "final timeout", "browser timeout", "parent timeout"} {
+	for _, name := range []string{"ready", "target path alias", "final exits", "final timeout", "final crash after ready", "browser timeout", "parent timeout"} {
 		t.Run(name, func(t *testing.T) {
 			dir, err := os.MkdirTemp("", "noxa-handoff-fixture-")
 			if err != nil {
@@ -302,7 +311,7 @@ func TestUpdateHandoffSupervisorIntegration(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			restored := name == "final exits" || name == "final timeout" || name == "browser timeout"
+			restored := name == "final exits" || name == "final timeout" || name == "final crash after ready" || name == "browser timeout"
 			want := originalHash
 			if restored {
 				want = oldHash
@@ -327,8 +336,18 @@ func TestUpdateHandoffSupervisorIntegration(t *testing.T) {
 			if restored && !strings.Contains(string(result), "original app relaunched and confirmed ready") {
 				t.Fatalf("restoration was not genuinely acknowledged: %s", result)
 			}
-			if (name == "ready" || name == "target path alias") && string(result) != "ready" {
-				t.Fatalf("unexpected supervisor error: %s", result)
+			if name == "ready" || name == "target path alias" {
+				if string(result) != "ready" {
+					t.Fatalf("unexpected supervisor error: %s", result)
+				}
+				if _, err := os.Lstat(previous); !os.IsNotExist(err) {
+					t.Fatalf("successful handoff left previous executable: %v log=%s", err, logData)
+				}
+			}
+			if name == "parent timeout" {
+				if got, err := hashUpdateExecutable(previous); err != nil || got != oldHash {
+					t.Fatalf("unconfirmed handoff lost rollback image: %v", err)
+				}
 			}
 			if data, err := os.ReadFile(dataPath); err != nil || !bytes.Equal(data, []byte("unchanged settings and profile")) {
 				t.Fatal("profile fixture changed")

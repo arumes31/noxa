@@ -93,13 +93,6 @@ func (p *updateProcessHandle) wait(ctx context.Context) error {
 	}
 }
 
-func sameUpdatePath(a, b string) bool { return strings.EqualFold(filepath.Clean(a), filepath.Clean(b)) }
-func updaterOwnedBackup(target, previous string) bool {
-	name := filepath.Base(previous)
-	return filepath.IsAbs(target) && filepath.IsAbs(previous) && !sameUpdatePath(target, previous) &&
-		sameUpdatePath(filepath.Dir(target), filepath.Dir(previous)) && strings.HasPrefix(name, ".noxa-previous-") && strings.HasSuffix(name, ".exe")
-}
-
 type updateSupervisorPlan struct {
 	Version      int                    `json:"version"`
 	Target       string                 `json:"target"`
@@ -223,6 +216,14 @@ func runUpdateSupervisor(input io.Reader) error {
 		return err
 	}
 	defer processes.close()
+	// Legacy updates have both the old parent's image and an independent
+	// rollback snapshot. Retain the exact original identity before waiting;
+	// neither is cleanup-owned until the final normal frontend is stable.
+	var legacyBackup *verifiedUpdateBackup
+	var legacyBackupErr error
+	if processes.legacy != nil {
+		legacyBackup, legacyBackupErr = captureUpdateBackup(plan.Target, processes.legacy.image, plan.OldHash)
+	}
 	// This separate native acknowledgement only promises that the helper holds
 	// verified identities. It is never the frontend-readiness acknowledgement.
 	if err := confirmUpdateReadiness(plan.ArmedAddress, plan.ArmedNonce, os.Getpid()); err != nil {
@@ -260,6 +261,9 @@ func runUpdateSupervisor(input io.Reader) error {
 		return err
 	}
 	log.Print("update supervisor: replacement frontend ready and stable after profile release")
+	if processes.legacy != nil {
+		finishUpdateBackupCleanup(plan.Target, plan.NewHash, legacyBackup, legacyBackupErr)
+	}
 	return nil
 }
 func restoreAndLaunchHandoff(plan updateSupervisorPlan, cause error) error {

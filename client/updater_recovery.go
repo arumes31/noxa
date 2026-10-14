@@ -154,6 +154,11 @@ func launchUpdatedClient(exe string) error {
 		return err
 	}
 	defer readiness.close()
+	// Capture ownership before launching. A substituted backup must not be
+	// deleted even if its bytes happen to match the old release. Cleanup is
+	// best effort after genuine readiness, never a reason to roll back a
+	// healthy replacement.
+	backup, backupErr := captureUpdateBackup(pending.target, pending.previous, pending.oldHash)
 	// #nosec G204 -- target is this process's OS-resolved executable, and its verified update hash was rechecked above.
 	// The healthy replacement outlives the startup deadline and this process.
 	// Failure cleanup below explicitly terminates and waits for this owned child.
@@ -180,6 +185,7 @@ func launchUpdatedClient(exe string) error {
 		return restoreFailedClientUpdate(pending, err)
 	}
 	clientUpdateRecovery.pending = nil
+	finishUpdateBackupCleanup(pending.target, pending.newHash, backup, backupErr)
 	return nil
 }
 
