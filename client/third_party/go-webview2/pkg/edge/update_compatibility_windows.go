@@ -20,7 +20,7 @@ type updateBrowserStartupState struct {
 	pid     atomic.Uint32
 }
 
-// SetLegacyUpdateCompatibility selects the exact v0.5.59 Wails browser options
+// SetLegacyUpdateCompatibility selects the shared legacy Wails browser options
 // for the first, genuinely initialized stage of an authenticated update. Call
 // before Wails starts. The updater must automatically restart this stage with
 // the normal hardware policy after the original browser process has exited.
@@ -48,12 +48,12 @@ func (s *updateBrowserStartupState) arguments(fragments []string) (string, error
 	if !legacy {
 		return hardwareBrowserArguments(fragments)
 	}
-	// v0.5.59 main.go leaves Windows options unset; Wails adds precisely this
-	// fragment. Reject future/default drift instead of broadening the exception
+	// The authenticated releases through v0.5.64 leave Windows options unset.
+	// Wails adds precisely this fragment. Reject future/default drift instead of broadening the exception
 	// into an arbitrary browser-argument override.
 	const legacyArguments = "--disable-features=msSmartScreenProtection"
 	if len(fragments) != 1 || fragments[0] != legacyArguments {
-		return "", fmt.Errorf("unexpected browser options for the v0.5.59 update bridge")
+		return "", fmt.Errorf("unexpected browser options for the legacy update bridge")
 	}
 	return legacyArguments, nil
 }
