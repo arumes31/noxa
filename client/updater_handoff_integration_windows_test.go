@@ -9,6 +9,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -26,6 +27,18 @@ import (
 const handoffFixtureRootEnv = "NOXA_HANDOFF_FIXTURE_ROOT"
 const handoffFixtureCaseEnv = "NOXA_HANDOFF_FIXTURE_CASE"
 const handoffFixtureOldHashEnv = "NOXA_HANDOFF_FIXTURE_OLD_HASH"
+
+const (
+	handoffFixtureStartup   = 700 * time.Millisecond
+	handoffFixtureStability = 100 * time.Millisecond
+	// Include the real first retry delay, a complete child startup/stability
+	// window, and bounded process/hash overhead. Never change production timing.
+	handoffFixtureOSAllowance = 2 * time.Second
+	handoffFixturePhase       = time.Second + handoffFixtureStartup + handoffFixtureStability + handoffFixtureOSAllowance
+	handoffFixtureOuter       = 2*handoffFixturePhase + handoffFixtureStartup + handoffFixtureOSAllowance
+)
+
+var errHandoffFixtureProcessAlive = errors.New("exact fixture process still alive")
 
 func init() { updateHandoffTestMain = runHandoffFixtureMain }
 
@@ -48,9 +61,9 @@ func runHandoffFixtureMain() bool {
 	default:
 		panic("refusing fixture dispatch in another executable")
 	}
-	updateStartupTimeout = 700 * time.Millisecond
-	updateStartupStability = 100 * time.Millisecond
-	updateHandoffTimeout = 1500 * time.Millisecond
+	updateStartupTimeout = handoffFixtureStartup
+	updateStartupStability = handoffFixtureStability
+	updateHandoffTimeout = handoffFixturePhase
 	name := os.Getenv(handoffFixtureCaseEnv)
 	if len(os.Args) == 2 && os.Args[1] == updateSupervisorArgument {
 		output, err := os.OpenFile(filepath.Join(dir, "supervisor.log"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
@@ -80,11 +93,17 @@ func runHandoffFixtureMain() bool {
 		return true
 	}
 	if filepath.Base(executable) == "msedgewebview2.exe" {
-		duration := 600 * time.Millisecond
 		if name == "browser timeout" {
-			duration = 2 * time.Second
+			// Stay alive until a restored child has actually observed the profile
+			// conflict. This guarantees the retry path independently of CI speed.
+			ctx, cancel := context.WithTimeout(context.Background(), handoffFixtureOuter)
+			defer cancel()
+			if err := waitHandoffFixtureMarker(ctx, filepath.Join(dir, "browser-release")); err != nil {
+				panic(err)
+			}
+		} else {
+			time.Sleep(600 * time.Millisecond)
 		}
-		time.Sleep(duration)
 		_ = os.WriteFile(filepath.Join(dir, "browser-exiting"), []byte("natural exit"), 0600)
 		return true
 	}
@@ -93,6 +112,20 @@ func runHandoffFixtureMain() bool {
 			panic(err)
 		}
 		return true
+	}
+	// The last frontend is owned too; earlier failed attempts are reaped by
+	// the supervisor before replacement. Preserve its exact lifetime for cleanup.
+	frontend, err := openUpdateProcess(updateProcessIdentity{PID: uint32(os.Getpid())})
+	if err != nil {
+		panic(err)
+	}
+	frontendData, err := json.Marshal(frontend.identity)
+	frontend.close()
+	if err != nil {
+		panic(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "frontend.json"), frontendData, 0600); err != nil {
+		panic(err)
 	}
 	hash, err := hashUpdateExecutable(executable)
 	if err != nil {
@@ -108,6 +141,17 @@ func runHandoffFixtureMain() bool {
 		// before retrying, and must never kill this browser fixture.
 		if name == "browser timeout" {
 			if err := assertHandoffFixtureProcessesExited(dir, false); err != nil {
+				if !errors.Is(err, errHandoffFixtureProcessAlive) {
+					panic(err)
+				}
+				// This marker is written only after observing the exact browser
+				// alive, before allowing that browser to exit naturally.
+				if err := os.WriteFile(filepath.Join(dir, "restored-profile-rejected"), []byte("owned browser alive"), 0600); err != nil {
+					panic(err)
+				}
+				if err := os.WriteFile(filepath.Join(dir, "browser-release"), []byte("release after rejection"), 0600); err != nil {
+					panic(err)
+				}
 				os.Exit(23)
 			}
 		}
@@ -166,7 +210,7 @@ func assertHandoffFixtureProcessesExited(dir string, parent bool) error {
 		alive := process.alive()
 		process.close()
 		if alive {
-			return fmt.Errorf("replacement started while exact old process %d still alive", identity.PID)
+			return fmt.Errorf("%w: %d", errHandoffFixtureProcessAlive, identity.PID)
 		}
 	}
 	return nil
@@ -229,11 +273,75 @@ func runHandoffFixtureParent(dir, name string) error {
 			if err == nil {
 				return fmt.Errorf("timed-out native helper incorrectly exited successfully")
 			}
-		case <-time.After(3 * time.Second):
+		case <-time.After(handoffFixturePhase + handoffFixtureOSAllowance):
 			return fmt.Errorf("native helper did not honor parent wait deadline")
 		}
 	}
 	return nil
+}
+
+func waitHandoffFixtureMarker(ctx context.Context, path string) error {
+	for {
+		if _, err := os.Stat(path); err == nil {
+			return nil
+		} else if !os.IsNotExist(err) {
+			return err
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+}
+
+func cleanupHandoffFixture(t *testing.T, dir string) {
+	t.Helper()
+	// Release only this disposable browser, even when an earlier assertion fails.
+	if err := os.WriteFile(filepath.Join(dir, "browser-release"), []byte("fixture cleanup"), 0600); err != nil {
+		t.Error(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), handoffFixtureOuter)
+	defer cancel()
+	wait := func(identity updateProcessIdentity) {
+		process, err := openUpdateProcess(identity)
+		if err != nil {
+			return
+		} // Already exited or PID no longer belongs to this lifetime.
+		defer process.close()
+		if !sameUpdatePath(filepath.Dir(process.image), dir) {
+			t.Error("fixture cleanup image escaped owned directory")
+			return
+		}
+		if err := process.wait(ctx); err != nil {
+			t.Errorf("owned fixture cleanup wait: %v", err)
+		}
+	}
+	if data, err := os.ReadFile(filepath.Join(dir, "identities.json")); err == nil {
+		var identities []updateProcessIdentity
+		if err := json.Unmarshal(data, &identities); err != nil {
+			t.Error(err)
+		}
+		for _, identity := range identities {
+			wait(identity)
+		}
+	} else if !os.IsNotExist(err) {
+		t.Error(err)
+	}
+	// Read the final frontend identity only AFTER the helper has exited, so
+	// failure cleanup also observes any restored attempt it launched meanwhile.
+	for _, name := range []string{"helper.json", "frontend.json"} {
+		if data, err := os.ReadFile(filepath.Join(dir, name)); err == nil {
+			var identity updateProcessIdentity
+			if err := json.Unmarshal(data, &identity); err != nil {
+				t.Error(err)
+			} else {
+				wait(identity)
+			}
+		} else if !os.IsNotExist(err) {
+			t.Error(err)
+		}
+	}
 }
 
 func TestUpdateHandoffSupervisorIntegration(t *testing.T) {
@@ -258,6 +366,7 @@ func TestUpdateHandoffSupervisorIntegration(t *testing.T) {
 					t.Error(err)
 				}
 			})
+			t.Cleanup(func() { cleanupHandoffFixture(t, dir) })
 			oldBytes := append(append([]byte(nil), originalBytes...), []byte("authenticated previous fixture")...)
 			oldHash := sha256.Sum256(oldBytes)
 			target, previous := filepath.Join(dir, "handoff-copy.exe"), filepath.Join(dir, ".noxa-previous-fixture.exe")
@@ -270,7 +379,7 @@ func TestUpdateHandoffSupervisorIntegration(t *testing.T) {
 			if err := os.WriteFile(dataPath, []byte("unchanged settings and profile"), 0600); err != nil {
 				t.Fatal(err)
 			}
-			ctx, cancel := context.WithTimeout(t.Context(), 8*time.Second)
+			ctx, cancel := context.WithTimeout(t.Context(), handoffFixtureOuter)
 			defer cancel()
 			cmd := exec.CommandContext(ctx, previous)
 			cmd.Env = append(os.Environ(), handoffFixtureRootEnv+"="+dir, handoffFixtureCaseEnv+"="+name, handoffFixtureOldHashEnv+"="+hex.EncodeToString(oldHash[:]))
@@ -332,6 +441,13 @@ func TestUpdateHandoffSupervisorIntegration(t *testing.T) {
 				}
 			} else if _, err := os.Stat(filepath.Join(dir, marker)); err != nil {
 				t.Fatalf("missing %s: result=%s log=%s", marker, result, logData)
+			}
+			if name == "browser timeout" {
+				for _, marker := range []string{"restored-profile-rejected", "browser-exiting"} {
+					if _, err := os.Stat(filepath.Join(dir, marker)); err != nil {
+						t.Fatalf("missing ordered browser retry evidence %s: %v", marker, err)
+					}
+				}
 			}
 			if restored && !strings.Contains(string(result), "original app relaunched and confirmed ready") {
 				t.Fatalf("restoration was not genuinely acknowledged: %s", result)
