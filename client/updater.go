@@ -69,17 +69,43 @@ var updateHTTPClient = &http.Client{
 	},
 }
 
+func isPermittedUpdateHost(host string) bool {
+	host = strings.TrimSuffix(strings.ToLower(host), ".")
+	if host == "localhost" {
+		return true
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		return ip.IsLoopback()
+	}
+	if host == "github.com" || strings.HasSuffix(host, ".github.com") {
+		return true
+	}
+	if host == "githubusercontent.com" || strings.HasSuffix(host, ".githubusercontent.com") {
+		return true
+	}
+	if base, err := url.Parse(updateAPIBase); err == nil && base.Hostname() != "" {
+		baseHost := strings.TrimSuffix(strings.ToLower(base.Hostname()), ".")
+		if host == baseHost {
+			return true
+		}
+	}
+	return false
+}
+
 func validateUpdateURL(u *url.URL) error {
 	if u == nil || u.Hostname() == "" || u.User != nil {
 		return fmt.Errorf("invalid update URL")
+	}
+	host := strings.TrimSuffix(strings.ToLower(u.Hostname()), ".")
+	if !isPermittedUpdateHost(host) {
+		return fmt.Errorf("update URL host %q is not permitted", u.Hostname())
 	}
 	if u.Scheme == "https" {
 		return nil
 	}
 	if u.Scheme == "http" {
-		host := strings.TrimSuffix(strings.ToLower(u.Hostname()), ".")
 		ip := net.ParseIP(host)
-		if host == "localhost" || ip != nil && ip.IsLoopback() {
+		if host == "localhost" || (ip != nil && ip.IsLoopback()) {
 			return nil
 		}
 	}

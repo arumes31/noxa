@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -51,9 +52,9 @@ func TestCheckForUpdateAvailable(t *testing.T) {
 	srv := fakeGitHub(t, `{
 		"tag_name": "v99.0.0+999",
 		"assets": [
-			{"name": "noxa-client-windows-amd64.exe", "browser_download_url": "https://x/exe", "size": 12345},
-			{"name": "checksums.txt", "browser_download_url": "https://x/sums"},
-			{"name": "checksums.txt.sig", "browser_download_url": "https://x/signature"}
+			{"name": "noxa-client-windows-amd64.exe", "browser_download_url": "https://github.com/o/r/releases/download/v99.0.0/noxa-client-windows-amd64.exe", "size": 12345},
+			{"name": "checksums.txt", "browser_download_url": "https://github.com/o/r/releases/download/v99.0.0/checksums.txt"},
+			{"name": "checksums.txt.sig", "browser_download_url": "https://github.com/o/r/releases/download/v99.0.0/checksums.txt.sig"}
 		]}`)
 	defer srv.Close()
 
@@ -69,8 +70,8 @@ func TestCheckForUpdateAvailable(t *testing.T) {
 	if !info.Available {
 		t.Fatal("expected update available")
 	}
-	if info.Version != "v99.0.0+999" || info.URL != "https://x/exe" ||
-		info.SHA256URL != "https://x/sums" || info.SignatureURL != "https://x/signature" ||
+	if info.Version != "v99.0.0+999" || info.URL != "https://github.com/o/r/releases/download/v99.0.0/noxa-client-windows-amd64.exe" ||
+		info.SHA256URL != "https://github.com/o/r/releases/download/v99.0.0/checksums.txt" || info.SignatureURL != "https://github.com/o/r/releases/download/v99.0.0/checksums.txt.sig" ||
 		info.Size != 12345 {
 		t.Fatalf("info = %+v", info)
 	}
@@ -81,8 +82,8 @@ func TestCheckForUpdateRequiresSignature(t *testing.T) {
 	srv := fakeGitHub(t, `{
 		"tag_name": "v99.0.0+999",
 		"assets": [
-			{"name": "noxa-client-windows-amd64.exe", "browser_download_url": "https://x/exe", "size": 12345},
-			{"name": "checksums.txt", "browser_download_url": "https://x/sums"}
+			{"name": "noxa-client-windows-amd64.exe", "browser_download_url": "https://github.com/o/r/releases/download/v99.0.0/noxa-client-windows-amd64.exe", "size": 12345},
+			{"name": "checksums.txt", "browser_download_url": "https://github.com/o/r/releases/download/v99.0.0/checksums.txt"}
 		]}`)
 	defer srv.Close()
 
@@ -318,5 +319,58 @@ func TestDownloadToRejectsInsecureRemoteURL(t *testing.T) {
 	err = downloadTo(context.Background(), "http://example.com/update", root, "download", 1024, nil)
 	if err == nil {
 		t.Fatal("expected insecure remote URL to fail")
+	}
+}
+
+func TestValidateUpdateURL_SSRFMitigation(t *testing.T) {
+	valid := []string{
+		"https://github.com/owner/repo/releases/download/v1.0.0/app.exe",
+		"https://api.github.com/repos/owner/repo/releases/latest",
+		"https://objects.githubusercontent.com/github-production-release-asset-2e65be/123",
+		"https://raw.githubusercontent.com/owner/repo/main/file",
+		"https://localhost:8443/update",
+		"https://127.0.0.1:8443/update",
+		"https://[::1]:8443/update",
+		"http://localhost:8080/update",
+		"http://127.0.0.1:8080/update",
+		"http://[::1]:8080/update",
+	}
+	for _, raw := range valid {
+		u, err := parseUpdateURL(raw)
+		if err != nil {
+			t.Errorf("expected %q to be valid, got: %v", raw, err)
+		}
+		if u == nil {
+			t.Errorf("expected parsed URL for %q", raw)
+		}
+	}
+
+	invalid := []struct {
+		url string
+		err string
+	}{
+		{"https://169.254.169.254/latest/meta-data", "not permitted"},
+		{"https://10.0.0.1/internal/binary", "not permitted"},
+		{"https://192.168.1.1/secret", "not permitted"},
+		{"https://172.16.0.1/secret", "not permitted"},
+		{"https://example.com/update", "not permitted"},
+		{"https://evilgithub.com/releases", "not permitted"},
+		{"https://notgithub.com/releases", "not permitted"},
+		{"http://github.com/insecure", "must use HTTPS"},
+		{"http://169.254.169.254/metadata", "not permitted"},
+		{"http://10.0.0.1/internal", "not permitted"},
+		{"ftp://github.com/file", "must use HTTPS"},
+		{"", "invalid update URL"},
+		{"https://user:pass@github.com/file", "invalid update URL"},
+	}
+	for _, tc := range invalid {
+		_, err := parseUpdateURL(tc.url)
+		if err == nil {
+			t.Errorf("expected %q to be rejected, but it succeeded", tc.url)
+			continue
+		}
+		if !strings.Contains(err.Error(), tc.err) {
+			t.Errorf("for %q, expected error containing %q, got: %v", tc.url, tc.err, err)
+		}
 	}
 }
