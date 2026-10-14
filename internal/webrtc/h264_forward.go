@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/pion/rtp"
+	"noxa/internal/safecast"
 )
 
 // A congestion-paced keyframe can take longer than 500 ms to arrive without
@@ -257,15 +258,22 @@ func (v *videoContinuity) translateH264(pkt *rtp.Packet, now time.Time, frameSta
 	out.SequenceNumber += v.sequenceOffset
 	out.Timestamp += v.timestampOffset
 	delta := rtpSequenceDelta(out.SequenceNumber, v.sequence)
-	if v.seen && !switching && delta < 0 && uint32(-int32(delta)) > v.epochPackets {
-		return nil, false
+	if v.seen && !switching && delta < 0 {
+		backtrack, err := safecast.Int32ToUint32(-delta)
+		if err != nil || backtrack > v.epochPackets {
+			return nil, false
+		}
 	}
 	v.pendingEpoch = false
 	if first || switching || delta > 0 {
 		if first || switching {
 			v.epochPackets = 0
 		} else {
-			v.epochPackets = min(32768, v.epochPackets+uint32(delta))
+			deltaPackets, err := safecast.Int32ToUint32(delta)
+			if err != nil {
+				return nil, false
+			}
+			v.epochPackets = min(32768, v.epochPackets+deltaPackets)
 		}
 		if first || switching || out.Timestamp != v.timestamp {
 			v.last = now

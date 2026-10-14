@@ -132,6 +132,28 @@ func TestUint32ToInt(t *testing.T) {
 	}
 }
 
+func TestInt64ToUint64(t *testing.T) {
+	t.Parallel()
+
+	got, err := Int64ToUint64(123456)
+	assertConversion(t, got, err, uint64(123456), false)
+	_, err = Int64ToUint64(-1)
+	if !errors.Is(err, ErrOutOfRange) {
+		t.Fatalf("Int64ToUint64(-1) error = %v, want ErrOutOfRange", err)
+	}
+}
+
+func TestInt32ToUint32(t *testing.T) {
+	t.Parallel()
+
+	got, err := Int32ToUint32(1234)
+	assertConversion(t, got, err, uint32(1234), false)
+	_, err = Int32ToUint32(-1)
+	if !errors.Is(err, ErrOutOfRange) {
+		t.Fatalf("Int32ToUint32(-1) error = %v, want ErrOutOfRange", err)
+	}
+}
+
 func assertConversion[T comparable](t *testing.T, got T, err error, expected T, shouldErr bool) {
 	t.Helper()
 	if shouldErr {
