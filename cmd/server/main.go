@@ -748,6 +748,7 @@ func run() (retErr error) {
 	healthServer.HandleLocalGET("/debug/voice", tcpServer.VoiceDiagnosticsHandler())
 	healthServer.HandleLocalGET("/debug/streams", tcpServer.StreamOperatorDiagnosticsHandler())
 	healthServer.HandleLocalGET("/debug/stream-route", tcpServer.StreamRouteDiagnosticsHandler())
+	healthServer.Handle("/debug/stream-timing", tcpServer.StreamTimingDiagnosticsHandler())
 	// Remove orphaned file data before serving. Role-mode channel timers remain
 	// disabled until the Authority is attached and its initial Reload completes.
 	// No listener is accepting file work yet.

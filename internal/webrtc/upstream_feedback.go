@@ -2,6 +2,7 @@ package webrtc
 
 import (
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/pion/interceptor"
@@ -84,6 +85,7 @@ func (f upstreamFeedbackFactory) NewInterceptor(id string) (interceptor.Intercep
 // Locking covers counter updates, never the wrapped writer. Sixteen slots
 // retain start times; additional concurrent writes are counted without storage.
 type upstreamFeedbackObserver struct {
+	timing atomic.Pointer[upstreamTimingSession]
 	interceptor.NoOp
 	registry    *upstreamFeedbackRegistry
 	mu          sync.Mutex
@@ -115,7 +117,15 @@ func (o *upstreamFeedbackObserver) BindRTCPWriter(writer interceptor.RTCPWriter)
 			return writer.Write(packets, attrs)
 		}
 		started := time.Now()
+		capture := o.timing.Load()
+		var writes []int
+		if capture != nil {
+			writes = capture.beginFeedback(packets, started)
+		}
 		n, err := writer.Write(packets, attrs)
+		if capture != nil {
+			capture.endFeedback(writes, n, err, time.Now())
+		}
 		o.finish(slot, time.Since(started), err != nil)
 		return n, err
 	})
@@ -213,7 +223,11 @@ func (o *upstreamFeedbackObserver) Close() error {
 	o.mu.Lock()
 	o.closed = true
 	o.readTiming.closed.Store(true)
+	capture := o.timing.Swap(nil)
 	o.mu.Unlock()
+	if capture != nil {
+		capture.stop("peer_closed", time.Now())
+	}
 	if o.registry != nil {
 		o.registry.remove(o)
 	}

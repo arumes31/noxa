@@ -1,11 +1,14 @@
 package webrtc
 
 import (
+	"errors"
+	"net"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/pion/interceptor"
+	"github.com/pion/rtp"
 	"noxa/internal/netproto"
 )
 
@@ -33,9 +36,35 @@ type upstreamReadTimingObserver struct {
 
 // Already registered before defaults for RTCP observation. This inner edge is
 // immediately outside the SRTP reader. No read/queue/pacing semantics change.
-func (o *upstreamFeedbackObserver) BindRemoteStream(_ *interceptor.StreamInfo, reader interceptor.RTPReader) interceptor.RTPReader {
+func (o *upstreamFeedbackObserver) BindRemoteStream(info *interceptor.StreamInfo, reader interceptor.RTPReader) interceptor.RTPReader {
+	extensionID := timingExtensionID(info)
+	if capture := o.timing.Load(); capture != nil && info != nil && info.SSRC == capture.scope.SSRC {
+		capture.stop("stream_rebound", time.Now())
+	}
 	return interceptor.RTPReaderFunc(func(buf []byte, attrs interceptor.Attributes) (int, interceptor.Attributes, error) {
 		n, result, err := reader.Read(buf, attrs)
+		if capture := o.timing.Load(); capture != nil && info != nil && info.SSRC == capture.scope.SSRC {
+			at := time.Now()
+			switch {
+			case err != nil:
+				var timeout net.Error
+				if errors.As(err, &timeout) && timeout.Timeout() {
+					capture.readTimeouts.Add(1)
+				} else {
+					capture.stop("read_error", at)
+				}
+			case n > 0 && n <= len(buf):
+				var header rtp.Header
+				if _, parseErr := header.Unmarshal(buf[:n]); parseErr != nil {
+					capture.stop("invalid_rtp_header", at)
+				} else {
+					capture.recordRTP(header, extensionID, at)
+				}
+			default:
+				capture.stop("invalid_read_length", at)
+			}
+			capture.observeRTPHook(at)
+		}
 		if token, ok := attrs[upstreamReadTimingKey{}].(*upstreamReadTimingToken); ok && token != nil && token.owner == &o.readTiming {
 			if !token.state.CompareAndSwap(0, 1) {
 				token.state.Store(3)
