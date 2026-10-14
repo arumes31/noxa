@@ -38,12 +38,18 @@ func captureUpdateBackup(target, previous string, expected [sha256.Size]byte) (*
 	if !updaterOwnedBackup(target, previous) {
 		return nil, fmt.Errorf("invalid updater-owned backup path")
 	}
-	identity, err := os.Lstat(previous)
+	root, err := os.OpenRoot(filepath.Dir(target))
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = root.Close() }()
+	name := filepath.Base(previous)
+	identity, err := root.Lstat(name)
 	if err != nil {
 		return nil, err
 	}
 	backup := &verifiedUpdateBackup{path: previous, identity: identity, hash: expected}
-	file, err := os.Open(previous)
+	file, err := root.Open(name)
 	if err != nil {
 		return nil, err
 	}
