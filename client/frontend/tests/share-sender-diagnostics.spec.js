@@ -1,10 +1,10 @@
 import { test, expect } from "./fixtures.js";
 
 test.beforeEach(async ({ page }, testInfo) => {
-    if (testInfo.title.includes("hung sender stats") || testInfo.title.includes("manual recording")) await page.clock.install();
+    if (testInfo.title.includes("hung sender stats") || testInfo.title.includes("manual recording") || testInfo.title.includes("sender trace")) await page.clock.install();
     await page.route("**/sender-diagnostics-fixture", route => route.fulfill({ contentType: "text/html", body: `<!doctype html><html lang="en"><head><link rel="stylesheet" href="/src/style.css"></head><body><section id="sharing-status" class="sharing-status"></section></body></html>` }));
     await page.goto("/sender-diagnostics-fixture");
-    await page.evaluate(async () => {
+    await page.evaluate(async traceEnabled => {
         const track = document.createElement("canvas").captureStream(1).getVideoTracks()[0];
         track.getSettings = () => ({ width: 2560, height: 1440, frameRate: 60, deviceId: "private-device" });
         Object.defineProperty(track, "label", { value: "Private source title" });
@@ -34,13 +34,26 @@ test.beforeEach(async ({ page }, testInfo) => {
         window.__sender = { reject: false, notices: [], copied: null };
         window.__noxa = { state, toast: value => window.__sender.notices.push(value) };
         window.runtime = { ClipboardSetText: async value => { window.__sender.copied = value; return true; } };
+        if (traceEnabled) {
+            const bridge = new EventTarget();
+            window.__sender.traceMessages = [];
+            bridge.postMessage = value => window.__sender.traceMessages.push(JSON.parse(value.slice("__noxa_sender_trace_v1:".length)));
+            window.chrome ??= {}; window.chrome.webview = bridge;
+            window.go = { main: { App: { SupportsSenderTrace: async () => true, ArmSenderTraceForTab: async () => "a".repeat(64) } } };
+            pc.getSenders = () => [state.shareVideoTransceiver.sender, ...(window.__sender.camera ? [{ track: { kind: "video", readyState: "live" } }] : [])];
+            window.__sender.emitTrace = (status, record) => {
+                const start = window.__sender.traceMessages.findLast(message => message.command === "start");
+                bridge.dispatchEvent(new MessageEvent("message", { data: JSON.stringify({ type: "noxa.sender_trace.v1",
+                    token: start.token, scope: start.scope, state: status, reason: "duration", ...(record ? { record } : {}) }) }));
+            };
+        }
         const module = await import("/src/share-status.js");
         window.__sender.stop = module.stopShareStatus;
         window.__sender.start = () => module.startShareStatus({ stream, pc, scope: { tabID: "qa", generation: 1, session: 1, clientID: "self", channelID: 1 },
             preset: { width: 1920, height: 1080, fps: 60 }, surface: "screen", audioMode: "none", generation: "4",
             stop: () => module.stopShareStatus(), change: () => {}, changeQuality: () => {}, reduction: () => "" });
         window.__sender.start();
-    });
+    }, testInfo.title.includes("sender trace"));
 });
 
 test("sending details distinguish captured, encoded, sent and reported frame rates and copy only safe fields", async ({ page }, testInfo) => {
@@ -189,4 +202,69 @@ test("manual recording separates reused SSRC lifetimes and remains copyable afte
     expect(JSON.stringify(record)).not.toContain("new-stats-id");
     await page.screenshot({ path: testInfo.outputPath("sender-saved-diagnostics-after-stop.png"), fullPage: true });
     await archive.getByRole("button", { name: "Remove saved copy" }).click(); await expect(archive).toBeHidden();
+});
+
+
+test("sender trace stays off until clicked and remains explicitly exportable after share ends", async ({ page }) => {
+    await expect(page.locator(".sharing-meta")).toContainText("10 fps");
+    await page.locator(".sharing-diagnostics summary").click();
+    expect(await page.evaluate(() => window.__sender.traceMessages)).toEqual([]);
+    await page.getByRole("button", { name: "Start 60-second sender trace", exact: true }).click();
+    await page.evaluate(() => window.__sender.emitTrace("recording"));
+    await expect(page.locator('.sender-trace [role="status"]')).toContainText("Recording sender timing");
+    await page.evaluate(() => window.__sender.stop());
+    await expect(page.locator("#sharing-status")).toBeHidden();
+    await expect(page.locator('[data-saved-trace="true"]')).toBeVisible();
+    expect(await page.evaluate(() => window.__sender.traceMessages.map(x => x.command))).toEqual(["start", "stop"]);
+    expect(await page.evaluate(() => window.__sender.traceMessages.at(-1).scope_lost)).toBe(true);
+    await page.evaluate(() => window.__sender.emitTrace("completed"));
+    await page.getByRole("button", { name: "Copy sender trace", exact: true }).click();
+    await page.evaluate(() => window.__sender.emitTrace("completed", { schema: "noxa.sender_trace.numeric.v1", complete: true,
+        reason: "duration", elapsed_ms: 60000, timer_cooperative: true, marker_counts: { encode: 1, encoded: 1, enqueue: 1, process: 1 },
+        events: [{ kind: "encode", trace_us: 123, rtp_timestamp: 456, secret: "private source title" }], dropped_unknown_events: 0, raw: "private payload" }));
+    await expect.poll(() => page.evaluate(() => window.__sender.copied)).not.toBeNull();
+    const copied = await page.evaluate(() => window.__sender.copied);
+    expect(copied).not.toMatch(/private|payload|token|"scope"/);
+    expect(JSON.parse(copied).sender_trace).toMatchObject({ complete: false, reason: "scope_changed", events: [{ kind: "encode", trace_us: 123, rtp_timestamp: 456 }] });
+    await page.getByRole("button", { name: "Remove saved trace", exact: true }).click();
+    await expect(page.locator(".sender-trace")).toHaveCount(0);
+});
+
+test("sender trace rejects camera and cancels late arm after share teardown", async ({ page }) => {
+    await expect(page.locator(".sharing-meta")).toContainText("10 fps");
+    await page.locator(".sharing-diagnostics summary").click();
+    await page.evaluate(() => { window.__sender.camera = true; });
+    await page.getByRole("button", { name: "Start 60-second sender trace", exact: true }).click();
+    expect(await page.evaluate(() => window.__sender.traceMessages)).toEqual([]);
+    await page.evaluate(() => { window.__sender.camera = false;
+        window.go.main.App.ArmSenderTraceForTab = () => new Promise(resolve => { window.__sender.lateTraceArm = resolve; }); });
+    await page.getByRole("button", { name: "Start 60-second sender trace", exact: true }).click();
+    await expect(page.locator('.sender-trace [role="status"]')).toContainText("Preparing");
+    await page.evaluate(() => { window.__sender.stop(); window.__sender.lateTraceArm("b".repeat(64)); });
+    expect(await page.evaluate(() => window.__sender.traceMessages.map(x => x.command))).toEqual(["stop"]);
+    await expect(page.locator('.sender-trace [role="status"]')).toContainText("incomplete");
+});
+
+test("sender trace timeout reports incomplete without an automatic export or retry", async ({ page }) => {
+    await expect(page.locator(".sharing-meta")).toContainText("10 fps");
+    await page.locator(".sharing-diagnostics summary").click();
+    await page.getByRole("button", { name: "Start 60-second sender trace", exact: true }).click();
+    await page.evaluate(() => window.__sender.emitTrace("recording"));
+    await page.clock.runFor(91000);
+    await expect(page.locator('.sender-trace [role="status"]')).toContainText("incomplete");
+    expect(await page.evaluate(() => window.__sender.traceMessages.map(x => x.command))).toEqual(["start", "stop"]);
+});
+
+
+test("sender trace new explicit start invalidates an uncopied saved native session", async ({ page }) => {
+    await expect(page.locator(".sharing-meta")).toContainText("10 fps");
+    await page.locator(".sharing-diagnostics summary").click();
+    await page.locator('#sharing-status [data-trace="start"]').click();
+    await page.evaluate(() => { window.__sender.emitTrace("completed", null); window.__sender.stop(); window.__sender.start(); });
+    await expect(page.locator('[data-saved-trace="true"] [data-trace="copy"]')).toBeEnabled();
+    await page.locator(".sharing-diagnostics summary").click();
+    await page.locator('#sharing-status [data-trace="start"]').click();
+    await expect(page.locator('[data-saved-trace="true"] [data-trace="copy"]')).toBeDisabled();
+    await expect(page.locator('[data-saved-trace="true"] [role="status"]')).toContainText("replaced");
+    expect(await page.evaluate(() => window.__sender.traceMessages.map(x => x.command))).toEqual(["start", "start"]);
 });
