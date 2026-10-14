@@ -46,6 +46,14 @@ test("camera selection and background preferences persist without enabling captu
     expect(await page.evaluate(() => window.__rawCamera.readyState)).toBe("ended");
 });
 
+test("video codec diagnostics are accessible without starting the camera", async ({ page }) => {
+    await page.evaluate(() => window.__noxa.openSettings("camera"));
+    await page.getByText("Video codec capabilities", { exact: true }).click();
+    await expect(page.getByRole("button", { name: "Check video codecs" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Copy codec results" })).toBeDisabled();
+    expect(await page.evaluate(() => window.__cameraConstraint)).toBeUndefined();
+});
+
 test("offline segmentation replaces background pixels and stops source when output is stopped", async ({ page }) => {
     const external = [];
     page.on("request", request => { if (!request.url().startsWith("http://127.0.0.1:12364") && !request.url().startsWith("data:")) external.push(request.url()); });

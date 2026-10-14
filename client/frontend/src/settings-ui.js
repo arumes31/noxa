@@ -9,6 +9,7 @@ import { copyToClipboard } from "./clipboard.js";
 import { createMicCheck } from "./mic-check-ui.js";
 import { createNetworkEchoTest } from "./network-echo.js";
 import { createConnectionBenchmark } from "./connection-benchmark.js";
+import { createVideoCodecCapabilities } from "./video-codec-capabilities-ui.js";
 import { percentageInput } from "./percentage-input.js";
 import { previewSounds, previewSpeech, speechPreviewLabel, speechEventEnabled, audioStatus, SPEECH_EVENTS, stopPreviews, updateSoundOutput, SOUND_EVENT_GROUPS, testAll } from "./sounds.js";
 import { MATRIX_EVENTS, defaultMatrixRow } from "./notifications.js";
@@ -847,6 +848,7 @@ function pageCamera() {
     });
     cameraTest.append(timingNote("localPreview", [cameraBtn]), cameraBtn, preview, cameraStatus);
     el.appendChild(cameraTest);
+    el.appendChild(createVideoCodecCapabilities());
 
     return el;
 }
