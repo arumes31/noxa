@@ -18,12 +18,27 @@ async function bounded(promise, milliseconds) {
 // Candidates in both directions share one operation budget. Budgets belong to
 // publications, not SSRCs: replacing an RTP stream must not refill its retries.
 export function createHardwareRecoveryScheduler({ now = () => performance.now() } = {}) {
-    let scope, busy = false, lastMutationSample;
+    const peers = new WeakMap(), defaultPeer = {};
+    return (key, candidates, sample, pc = defaultPeer) => {
+        let schedule = peers.get(pc);
+        if (!schedule) {
+            schedule = createPeerHardwareRecoveryScheduler(now);
+            peers.set(pc, schedule);
+        }
+        return schedule(key, candidates, sample);
+    };
+}
+
+// An unresolved native mutation must retain ownership of its peer even across
+// channel changes. It cannot block a replacement peer, and its late completion
+// cannot release that peer's independent lock or retry budget.
+function createPeerHardwareRecoveryScheduler(now) {
+    let scope, epoch, busy = false, lastMutationSample;
     const entries = new Map();
     return async (key, candidates, sample) => {
-        if (scope !== key) { scope = key; entries.clear(); lastMutationSample = undefined; }
+        if (scope !== key) { scope = key; epoch = {}; entries.clear(); lastMutationSample = undefined; }
         if (busy) return;
-        const at = now();
+        const at = now(), operationEpoch = epoch;
         for (const candidate of candidates) {
             if (!candidate.current() || !Number.isFinite(candidate.timestamp)) continue;
             let entry = entries.get(candidate.key);
@@ -79,7 +94,7 @@ export function createHardwareRecoveryScheduler({ now = () => performance.now() 
             busy = true;
             try {
                 const supported = entry.hardware.has(candidate.config) || await candidate.capable();
-                if (scope !== key || !candidate.current()) return;
+                if (epoch !== operationEpoch || !candidate.current()) return;
                 // Negative/unknown capabilities also have a bounded probe rate.
                 if (!supported) { entry.next = now() + delays[0]; continue; }
                 entry.next = now() + delays[Math.min(entry.attempts++, delays.length - 1)];
@@ -88,7 +103,7 @@ export function createHardwareRecoveryScheduler({ now = () => performance.now() 
                 await candidate.recover({ hardwareObserved: entry.hardware.has(candidate.config) });
             } catch {
                 // A failed reset must not become a poll-rate negotiation loop.
-                if (scope === key) entry.next = Math.max(entry.next, now() + delays[0]);
+                if (epoch === operationEpoch) entry.next = Math.max(entry.next, now() + delays[0]);
             } finally { busy = false; }
             return; // At most one mutation per diagnostic sample.
         }
@@ -204,6 +219,6 @@ export function createVideoReceiverRecovery({ state, watch, scheduler = createHa
                 software: stat.powerEfficientDecoder === false && /FFmpeg|OpenH264/i.test(implementation),
                 current, capable: () => capable(codec, stat), recover: () => reset({ state, pc, transceiver, current, watched }) });
         }
-        await scheduler(scope, candidates, stats);
+        await scheduler(scope, candidates, stats, pc);
     };
 }

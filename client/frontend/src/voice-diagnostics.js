@@ -175,16 +175,27 @@ export function collectVoiceTelemetry(state, stats, previousStats, output = {}, 
 }
 
 export function startVoiceDiagnostics({ state, output, bridge, recover, intervalMS = 5000 }) {
-    let stopped = false, pending = false, previous = null, previousSources = [], previousScope = "", previousPeer = null, sessionID = "";
+    let stopped = false, previous = null, previousSources = [], previousScope = "", previousPeer = null, sessionID = "";
     let previousPublications = [];
+    // Keep one poll per actual peer, including when switching away and back.
+    const pending = new WeakSet();
+    let observedPeer, observedScope, epoch;
     const scope = () => voiceScope(state);
     const poll = async () => {
-        if (stopped || pending) return;
+        if (stopped) return;
         const pc = state.pc, tabID = state.activeTabID, key = scope();
+        // Observe replacement before the per-peer pending guard: returning to a
+        // still-busy old peer must not make its obsolete result current again.
+        if (pc !== observedPeer || key !== observedScope) {
+            observedPeer = pc; observedScope = key; epoch = {};
+            previous = null; previousPeer = null; previousSources = []; previousPublications = [];
+            sessionID = crypto.randomUUID();
+        }
+        const pollEpoch = epoch;
         if (!pc || !tabID || !state.myChannelID || pc.connectionState === "closed") { previous = null; previousPeer = null; state.voiceTelemetry = null; return; }
-        if (pc !== previousPeer || key !== previousScope) { previous = null; sessionID = crypto.randomUUID(); }
-        pending = true;
-        const current = () => !stopped && state.pc === pc && scope() === key;
+        if (pending.has(pc)) return;
+        pending.add(pc);
+        const current = () => !stopped && epoch === pollEpoch && state.pc === pc && scope() === key;
         try {
             const publications = publicationSnapshot();
             const samePublications = publications.length === previousPublications.length && publications.every((entry, index) =>
@@ -202,8 +213,8 @@ export function startVoiceDiagnostics({ state, output, bridge, recover, interval
             await bridge(tabID, report);
         } catch {
             // Diagnostics are best-effort; a failed sample never interrupts voice.
-            previous = null;
-        } finally { pending = false; }
+            if (current()) previous = null;
+        } finally { pending.delete(pc); }
     };
     void poll();
     const timer = setInterval(() => { void poll(); }, intervalMS);

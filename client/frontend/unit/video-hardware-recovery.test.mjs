@@ -338,3 +338,46 @@ test("a zero-output receiver without actual geometry cannot reuse earlier hardwa
     }
     assert.equal(f.calls.length, 0, "no invented dimensions before a first decoded frame");
 });
+
+
+test("pending recovery is serialized per peer across scopes, but replacement peers proceed", async () => {
+    let at = 0, finishOld, finishNew, oldCalls = 0, newCalls = 0;
+    const schedule = createHardwareRecoveryScheduler({ now: () => at }), oldPC = {}, newPC = {};
+    const candidate = (key, recover) => ({ key, instance: key, config: "h264", timestamp: at + 1, frames: at + 1,
+        software: true, current: () => true, capable: async () => true, recover });
+    const old = () => candidate("old", () => { oldCalls++; return new Promise(resolve => { finishOld = resolve; }); });
+    const fresh = () => candidate("new", () => { newCalls++; return new Promise(resolve => { finishNew = resolve; }); });
+    for (at = 0; at < 10000; at += 5000) await schedule("old", [old()], undefined, oldPC);
+    const oldPending = schedule("old", [old()], undefined, oldPC); await Promise.resolve();
+    for (at = 15000; at <= 30000; at += 5000) await schedule("changed-channel", [old()], undefined, oldPC);
+    assert.equal(oldCalls, 1, "a scope change cannot permit concurrent writes on the old peer");
+    for (at = 35000; at < 45000; at += 5000) await schedule("new", [fresh()], undefined, newPC);
+    const newPending = schedule("new", [fresh()], undefined, newPC); await Promise.resolve();
+    assert.equal(newCalls, 1, "replacement peer recovery must not wait for the old native mutation");
+    finishOld(); await oldPending;
+    for (at = 50000; at <= 65000; at += 5000) await schedule("new-channel", [fresh()], undefined, newPC);
+    assert.equal(newCalls, 1, "late old completion cannot release the replacement peer's lock");
+    finishNew(); await newPending;
+});
+
+test("receiver recovery supplies the actual peer as scheduler ownership", async () => {
+    const f = fixture(); let owner;
+    f.options.scheduler = async (_scope, _candidates, _sample, pc) => { owner = pc; };
+    await createVideoReceiverRecovery(f.options)(f.pc, f.stats());
+    assert.equal(owner, f.pc);
+});
+
+
+test("returning to an old scope cannot revive its pending capability result on the same peer", async () => {
+    let at = 0, finish, resets = 0;
+    const pc = {}, schedule = createHardwareRecoveryScheduler({ now: () => at });
+    const candidate = () => ({ key: "receive", instance: "receive", config: "h264", timestamp: at + 1, frames: at + 1,
+        software: true, current: () => true, capable: () => new Promise(resolve => { finish = resolve; }),
+        recover: async () => { resets++; } });
+    for (at = 0; at < 10000; at += 5000) await schedule("old", [candidate()], undefined, pc);
+    const pending = schedule("old", [candidate()], undefined, pc);
+    at = 15000; await schedule("other", [], undefined, pc);
+    at = 20000; await schedule("old", [], undefined, pc);
+    finish(true); await pending;
+    assert.equal(resets, 0);
+});

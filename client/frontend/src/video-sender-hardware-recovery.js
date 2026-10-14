@@ -85,6 +85,6 @@ export function createVideoSenderRecovery({ state, retry, snapshot = publication
                     evidence?.hardwareObserved && capture ? { sourceId: capture.id, codec: codec.mimeType,
                         fmtp: codec.sdpFmtpLine, width: stat.frameWidth, height: stat.frameHeight } : null) });
         }
-        await scheduler(scope, candidates, stats);
+        await scheduler(scope, candidates, stats, pc);
     };
 }
