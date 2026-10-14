@@ -99,14 +99,15 @@ type senderTraceTransport interface {
 	subscribe(string, func(string, error)) (func() error, error)
 }
 type senderTraceRecord struct {
-	Schema           string             `json:"schema"`
-	Complete         bool               `json:"complete"`
-	Reason           string             `json:"reason"`
-	ElapsedMS        int64              `json:"elapsed_ms"`
-	TimerCooperative bool               `json:"timer_cooperative"`
-	MarkerCounts     map[string]int     `json:"marker_counts"`
-	Events           []SenderTraceEvent `json:"events"`
-	Unknown          int                `json:"dropped_unknown_events"`
+	Schema           string                  `json:"schema"`
+	Complete         bool                    `json:"complete"`
+	Reason           string                  `json:"reason"`
+	ElapsedMS        int64                   `json:"elapsed_ms"`
+	TimerCooperative bool                    `json:"timer_cooperative"`
+	MarkerCounts     map[string]int          `json:"marker_counts"`
+	Events           []SenderTraceEvent      `json:"events"`
+	Unknown          int                     `json:"dropped_unknown_events"`
+	Diagnostics      *senderTraceDiagnostics `json:"parser_diagnostics,omitempty"`
 }
 type senderTraceEnvelope struct {
 	Type   string             `json:"type"`
@@ -151,7 +152,7 @@ func (c *senderTraceController) publish(export bool) {
 		if events == nil {
 			events = []SenderTraceEvent{}
 		}
-		e.Record = &senderTraceRecord{Schema: "noxa.sender_trace.numeric.v1", Complete: c.state == "completed", Reason: c.reason, ElapsedMS: elapsed, TimerCooperative: true, MarkerCounts: counts, Events: events, Unknown: c.parser.unknown}
+		e.Record = &senderTraceRecord{Schema: "noxa.sender_trace.numeric.v1", Complete: c.state == "completed", Reason: c.reason, ElapsedMS: elapsed, TimerCooperative: true, MarkerCounts: counts, Events: events, Unknown: c.parser.unknown, Diagnostics: c.parser.diagnostics}
 	}
 	if c.emit != nil && !c.closed {
 		b, _ := json.Marshal(e)

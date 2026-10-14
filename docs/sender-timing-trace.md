@@ -30,6 +30,19 @@ source titles, payloads, URLs, process/thread identifiers and arbitrary argument
 are not exported. One process across all marker kinds and one producer thread per
 kind are required; this does not prove a unique stream within that process.
 
+After the first parser rejection, accepted timing events, marker counts and
+producer references are frozen. Already-delivered tails and flush chunks can
+still contribute to optional `parser_diagnostics`: fixed marker/category/phase/
+instant-scope/ID-state counters and a fixed first-rejection classification.
+There are no raw IDs, arbitrary strings, arguments or additional timing events.
+Classification examines at most 131,072 entries within the existing raw/message
+caps and reports truncation. These counters describe runtime representation;
+a PID difference does not prove a foreign renderer because a global instant
+track can use different attribution semantics. They never restore completion or
+extend the recording. Missing accepted markers after rejection describe only
+the accepted prefix, not absence from the runtime. Older exports remain valid
+without this optional field.
+
 Copy fetches the native numeric result explicitly. One saved frontend control is
 retained for up to 30 minutes. A new trace invalidates uncopied native data; an
 already explicitly copied result remains immutable. Clearing the saved control or

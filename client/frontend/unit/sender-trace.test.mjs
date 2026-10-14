@@ -135,3 +135,40 @@ test("scope loss during manual stop overrides manual reason and reaches native i
     const pending = f.control.export(); f.emit("completed", { record: record() });
     assert.equal((await pending).reason, "scope_changed");
 });
+
+function diagnosticFixture() {
+    const zero = keys => Object.fromEntries(keys.map(key => [key, 0]));
+    const byKind = Object.fromEntries(["encode", "encoded", "enqueue", "process"].map(kind => [kind, { seen: 0, category_expected: 0, category_other: 0,
+        phases: zero(["B", "X", "I", "i", "E", "other"]), scopes: zero(["global", "process", "thread", "absent", "other"]),
+        pid_states: zero(["absent", "invalid", "zero", "positive"]), tid_states: zero(["absent", "invalid", "zero", "positive"]) }]));
+    const encoded = byKind.encoded;
+    encoded.seen = encoded.category_expected = encoded.phases.I = encoded.scopes.global = encoded.pid_states.zero = encoded.tid_states.zero = 1;
+    return { scan_limit: 131072, entries_examined: 2, entries_after_freeze: 1, malformed_entries: 1, classification_truncated: false, by_kind: byKind,
+        first_rejection: { kind: "none", check: "malformed_data", instant_scope: "absent", pid_relation: "unavailable", tid_relation: "unavailable" } };
+}
+
+test("Copy retains bounded diagnostic counters and strips raw metadata", async () => {
+    const f = fixture(); await f.control.start(); f.emit("failed", { reason: "malformed_data" });
+    const input = { ...record(), complete: false, reason: "malformed_data", parser_diagnostics: diagnosticFixture() };
+    input.parser_diagnostics.raw = "private";
+    input.parser_diagnostics.first_rejection.pid = 987654321;
+    input.parser_diagnostics.by_kind.encoded.phases["private-phase"] = 123;
+    const pending = f.control.export(); f.emit("failed", { record: input });
+    const output = await pending;
+    assert.equal(output.complete, false);
+    assert.deepEqual(output.parser_diagnostics, diagnosticFixture());
+    assert.equal(JSON.stringify(output).includes("private"), false);
+    assert.equal(JSON.stringify(output).includes("987654321"), false);
+    assert.equal(numericSenderTrace(record()).parser_diagnostics, undefined, "old native exports remain supported");
+});
+
+test("diagnostic projection rejects inconsistent bounds and unrecognized rejection strings", () => {
+    for (const mutate of [x => { x.scan_limit = 999999; }, x => { x.entries_examined = 131073; },
+        x => { x.entries_after_freeze = 3; }, x => { x.by_kind.encoded.phases.I = 2; },
+        x => { x.by_kind.process.pid_states.zero = -1; }, x => { x.first_rejection.check = "private-path"; },
+        x => { x.first_rejection.instant_scope = "private-scope"; }, x => { delete x.first_rejection; }]) {
+        const input = { ...record(), complete: false, parser_diagnostics: diagnosticFixture() };
+        mutate(input.parser_diagnostics); assert.equal(numericSenderTrace(input), null);
+    }
+    assert.equal(numericSenderTrace({ ...record(), parser_diagnostics: diagnosticFixture() }), null, "rejected parsing cannot claim complete");
+});
