@@ -1721,7 +1721,7 @@ func (r *Router) ReadVideoLoop(clientID, slot string, track VideoTrackReader) {
 	if ingress != nil {
 		h264Frame.onReject = ingress.rejectH264
 	}
-	readOrderedVideo(track, func() bool { return r.ownsSlot(clientID, claimKey, token) }, codecName, func(pkt *rtp.Packet, mime string) {
+	readOrderedVideoTimed(track, func() bool { return r.ownsSlot(clientID, claimKey, token) }, codecName, func(pkt *rtp.Packet, mime string) {
 		if !r.ownsSlot(clientID, claimKey, token) {
 			return
 		}
@@ -1784,7 +1784,7 @@ func (r *Router) ReadVideoLoop(clientID, slot string, track VideoTrackReader) {
 		if ingress != nil {
 			ingress.observe(packet, time.Now())
 		}
-	})
+	}, &upstreamReadStageTracker{input: ingress})
 }
 
 // ForwardVideo fans a video packet out to the appropriate subscribers

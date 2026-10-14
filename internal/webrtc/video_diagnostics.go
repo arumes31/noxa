@@ -3,6 +3,7 @@ package webrtc
 import (
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/pion/rtp"
@@ -101,6 +102,7 @@ func diagnosticVideoRID(rid string) bool {
 }
 
 type videoIngressDiagnostic struct {
+	readTiming       atomic.Pointer[upstreamTimingSession]
 	mu               sync.Mutex
 	ssrc             uint32
 	started          time.Time
