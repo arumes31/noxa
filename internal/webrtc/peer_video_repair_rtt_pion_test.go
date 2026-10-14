@@ -31,7 +31,7 @@ func TestVideoRepairRTTPionLoopbackFirstGap(t *testing.T) {
 		setting.SetIncludeLoopbackCandidate(true)
 		setting.SetIPFilter(func(ip net.IP) bool { return ip.IsLoopback() })
 		setting.SetNetworkTypes([]pion.NetworkType{pion.NetworkTypeUDP4})
-		conn, err := net.ListenPacket("udp4", "127.0.0.1:0")
+		conn, err := (&net.ListenConfig{}).ListenPacket(ctx, "udp4", "127.0.0.1:0")
 		if err != nil {
 			t.Fatal(err)
 		}
