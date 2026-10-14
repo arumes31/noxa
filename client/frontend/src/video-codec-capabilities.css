@@ -1,0 +1,8 @@
+.video-codec-capabilities { margin-top: 20px; }
+.video-codec-capabilities summary { cursor: pointer; font-weight: 600; }
+.video-codec-capabilities-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.video-codec-capabilities-results h4 { margin: 12px 0 4px; }
+.video-codec-capabilities-results ul { padding-left: 20px; }
+.video-codec-capabilities-results li { margin-bottom: 8px; }
+.video-codec-capabilities-results p { margin: 4px 0; }
+.video-codec-capabilities-results code { overflow-wrap: anywhere; }
