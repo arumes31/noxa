@@ -210,3 +210,11 @@ test("browser-adapted software can retry at its observed supported geometry", as
         assert.equal(f.calls.length, 1, qualityLimitationReason);
     }
 });
+
+
+test("sender recovery supplies the actual peer as scheduler ownership", async () => {
+    const f = fixture(); let owner;
+    f.options.scheduler = async (_scope, _candidates, _sample, pc) => { owner = pc; };
+    await createVideoSenderRecovery(f.options)(f.pc, f.stats());
+    assert.equal(owner, f.pc);
+});

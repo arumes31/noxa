@@ -512,3 +512,78 @@ test("getStats and bridge failures do not stop later diagnostic reports", async 
     assert.equal(sent.length, 1);
     assert.equal(sent[0].tab, "server-a");
 });
+
+
+test("hung old recovery cannot block replacement telemetry or erase its baseline on late rejection", async t => {
+    t.mock.timers.enable({ apis: ["setInterval"] });
+    const state = stateFixture(), oldPC = state.pc, sent = [];
+    let rejectOld, recoveries = 0;
+    const stop = startVoiceDiagnostics({ state, intervalMS: 1000,
+        recover: pc => { recoveries++; return pc === oldPC ? new Promise((_resolve, reject) => { rejectOld = reject; }) : Promise.resolve(); },
+        bridge: async (_tab, report) => sent.push(report) });
+    t.after(stop); await settle();
+    state.myChannelID++;
+    t.mock.timers.tick(1000); await settle();
+    assert.equal(recoveries, 1, "same-PC scope changes remain serialized");
+    state.pc = { ...oldPC, getStats: async () => snapshot(previous()) };
+    t.mock.timers.tick(1000); await settle();
+    assert.equal(sent.length, 1, "new peer reports while old recovery is still pending");
+    const session = sent[0].session_id;
+    rejectOld(new Error("late old native failure")); await settle();
+    state.pc.getStats = async () => snapshot(receiver());
+    // Fresh stats after a publication/peer baseline is already cached for 250ms.
+    await new Promise(resolve => setTimeout(resolve, 260));
+    t.mock.timers.tick(1000); await settle();
+    assert.equal(sent.length, 2);
+    assert.equal(sent[1].session_id, session);
+    assert.ok(sent[1].tracks[0].sample_ms > 0, "old rejection must preserve the new peer's counter baseline");
+    assert.equal(state.voiceTelemetry.peer, state.pc);
+});
+
+
+test("switching back retains each peer's pending poll and late success cannot unlock another peer", async t => {
+    t.mock.timers.enable({ apis: ["setInterval"] });
+    const state = stateFixture(), oldPC = state.pc, newPC = { ...oldPC }, sent = [], calls = new Map(), releases = new Map();
+    const stop = startVoiceDiagnostics({ state, intervalMS: 1000,
+        recover: pc => { calls.set(pc, (calls.get(pc) || 0) + 1); return new Promise(resolve => releases.set(pc, resolve)); },
+        bridge: async (_tab, report) => sent.push(report) });
+    t.after(() => { stop(); for (const release of releases.values()) release(); });
+    await settle();
+    state.pc = newPC; t.mock.timers.tick(1000); await settle();
+    assert.equal(calls.get(newPC), 1);
+    state.pc = oldPC; state.myChannelID++;
+    t.mock.timers.tick(1000); await settle();
+    assert.equal(calls.get(oldPC), 1, "switching back cannot overlap the original peer's pending recovery");
+    state.pc = newPC;
+    releases.get(oldPC)(); await settle();
+    assert.equal(sent.length, 0, "late old success must not publish into the new session");
+    t.mock.timers.tick(1000); await settle();
+    assert.equal(calls.get(newPC), 1, "old finally cannot unlock a different peer's pending poll");
+    releases.get(newPC)(); await settle();
+    // The channel change invalidated that poll too; the next interval may start a fresh one.
+    assert.equal(sent.length, 0);
+    t.mock.timers.tick(1000); await settle();
+    assert.equal(calls.get(newPC), 2);
+});
+
+
+test("returning to an old pending peer cannot resurrect its report with another peer's baseline", async t => {
+    t.mock.timers.enable({ apis: ["setInterval"] });
+    const state = stateFixture(), oldPC = state.pc, newPC = { ...oldPC }, sent = [];
+    let finishOld, oldCalls = 0;
+    const stop = startVoiceDiagnostics({ state, intervalMS: 1000,
+        recover: pc => pc === oldPC && ++oldCalls === 1 ? new Promise(resolve => { finishOld = resolve; }) : Promise.resolve(),
+        bridge: async (_tab, report) => sent.push(report) });
+    t.after(stop); await settle();
+    state.pc = newPC; t.mock.timers.tick(1000); await settle();
+    assert.equal(sent.length, 1);
+    const newSession = sent[0].session_id;
+    state.pc = oldPC; t.mock.timers.tick(1000); await settle();
+    finishOld(); await settle();
+    assert.equal(sent.length, 1, "the retired old result stays invalid even after returning to the same PC and scope");
+    t.mock.timers.tick(1000); await settle();
+    assert.equal(sent.length, 2);
+    assert.notEqual(sent[1].session_id, newSession);
+    assert.equal(sent[1].tracks[0].sample_ms, null);
+    assert.equal(state.voiceTelemetry.peer, oldPC);
+});
