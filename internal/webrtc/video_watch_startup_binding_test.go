@@ -112,7 +112,13 @@ func TestWatchStartupBindingWaitsForPublishedPionWriter(t *testing.T) {
 	}
 	// The binding barrier must not own Router/watch locks while waiting for Send.
 	unlocked := make(chan struct{})
-	go func() { r.mu.Lock(); r.watchMu.Lock(); r.watchMu.Unlock(); r.mu.Unlock(); close(unlocked) }()
+	go func() {
+		r.mu.Lock()
+		r.watchMu.Lock()
+		close(unlocked) // Signal only after acquiring both locks while Send is held.
+		r.watchMu.Unlock()
+		r.mu.Unlock()
+	}()
 	select {
 	case <-unlocked:
 	case <-time.After(time.Second):
