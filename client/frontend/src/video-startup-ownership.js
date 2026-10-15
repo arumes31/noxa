@@ -1,9 +1,10 @@
 import { inspectScreenStartupCodec, withScreenStartupBitrateHint, carryScreenStartupHint,
     withoutOwnedScreenStartupHint } from "./video-startup-bitrate.js";
+import { rtcStatsEpochNow } from "./rtc-stats-clock.js";
 
 // Only committed offer/answer rounds change ownership. Planning a round or
 // rolling back a pending remote offer never consumes an existing owner.
-export function createStartupHintOwnership({ now = () => Date.now() } = {}) {
+export function createStartupHintOwnership({ now = rtcStatsEpochNow } = {}) {
     const peers = new WeakMap();
     const safe = callback => { try { return callback?.() === true; } catch { return false; } };
     const read = (description, owner, local = false) => inspectScreenStartupCodec(description, owner, owner.bitrateKbps, local);

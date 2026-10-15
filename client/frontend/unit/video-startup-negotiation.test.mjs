@@ -8,6 +8,13 @@ registerHooks({ load(url, context, next) {
 } });
 const { negotiateOffer, answerRemoteOffer } = await import("../src/video-negotiation.js");
 const { createScreenStartupAttempt } = await import("../src/video-startup-plan.js");
+const { rtcStatsEpochNow } = await import("../src/rtc-stats-clock.js");
+
+function mockPerformance(t, value) {
+    const descriptor = Object.getOwnPropertyDescriptor(globalThis, "performance");
+    Object.defineProperty(globalThis, "performance", { configurable: true, value });
+    t.after(() => Object.defineProperty(globalThis, "performance", descriptor));
+}
 const security = "a=ice-ufrag:rem1\r\na=ice-pwd:remotePassword1234567890\r\na=fingerprint:sha-256 " + Array(32).fill("AA").join(":") + "\r\na=setup:passive\r\n";
 const answerSDP = "v=0\r\nm=video 9 UDP/TLS/RTP/SAVPF 102\r\na=mid:2\r\n" + security + "a=recvonly\r\na=rtpmap:102 H264/90000\r\na=fmtp:102 profile-level-id=42001f;packetization-mode=1\r\n";
 const localSDP = (sdp, offer = false) => sdp.replace("recvonly", "sendonly").replace("ice-ufrag:rem1", "ice-ufrag:loc1")
@@ -45,7 +52,7 @@ function fixture({ native, nativeAnswer, rejectHint = false } = {}) {
         WebRTCOfferForTab: async (...args) => { sent.push(args); return await native?.() ?? answerSDP; },
         WebRTCAnswerForTab: async (...args) => { serverAnswers.push(args); await nativeAnswer?.(); },
     } } } };
-    const plan = { mid: "2", payloadType: 102, bitrateKbps: 2000, expiresAt: Date.now() + 1500,
+    const plan = { mid: "2", payloadType: 102, bitrateKbps: 2000, expiresAt: rtcStatsEpochNow() + 1500,
         stillEligible: () => true, stillOwned: () => true };
     return { pc, state, plan, writes, local, sent, serverAnswers,
         run: () => negotiateOffer(pc, 1, undefined, () => true, "tab", plan),
@@ -59,6 +66,40 @@ test("first-video hint changes only the browser answer, not the server offer", a
     assert.equal(f.sent[0][1].includes("x-google-start-bitrate"), false);
     assert.equal(f.writes[0].sdp, answerSDP.replace("packetization-mode=1", "packetization-mode=1;x-google-start-bitrate=2000"));
     assert.equal(f.pc.signalingState, "stable");
+});
+
+test("fractional observation ownership uses the stats clock despite wall-clock changes", async t => {
+    const origin = 1792020000000;
+    let wall = origin + 10;
+    mockPerformance(t, { timeOrigin: origin, now: () => 10.75 });
+    t.mock.method(Date, "now", () => wall);
+    for (const jump of [-3600000, 3600000]) {
+        wall = origin + 10;
+        const f = fixture({ native: () => { wall += jump; } });
+        f.plan.expiresAt = origin + 10.25 + 1500;
+        await f.run();
+        assert.equal(f.writes.length, 1);
+        assert.ok(f.writes[0].sdp.includes("x-google-start-bitrate=2000"));
+        assert.equal(f.sent[0][1].includes("x-google-start-bitrate"), false);
+    }
+});
+
+test("future observations and an unavailable stats clock cannot authorize ownership", async t => {
+    await t.test("future", async child => {
+        const origin = 1792020000000;
+        mockPerformance(child, { timeOrigin: origin, now: () => 10.75 });
+        const f = fixture();
+        f.plan.expiresAt = origin + 11 + 1500;
+        await f.run();
+        assert.deepEqual(f.writes, [{ type: "answer", sdp: answerSDP }]);
+    });
+    await t.test("unavailable", async child => {
+        const f = fixture();
+        mockPerformance(child, undefined);
+        await f.run();
+        assert.deepEqual(f.writes, [{ type: "answer", sdp: answerSDP }]);
+        assert.equal(f.pc.signalingState, "stable", "clock failure must not block ordinary streaming");
+    });
 });
 
 test("demand or policy changes while the server answers finish the unmodified round", async () => {
@@ -87,9 +128,12 @@ test("a retired server session never receives the old hinted or plain answer", a
 
 
 test("a delayed answer finishes plain without resampling or restoring the attempt budget", async t => {
-    let now = 1792020000000, reads = 0;
-    t.mock.method(Date, "now", () => now);
-    const f = fixture({ native: () => { now += 1501; } });
+    const origin = 1792020000000;
+    let now = origin + 0.25, reads = 0;
+    mockPerformance(t, { timeOrigin: origin, now: () => now - origin });
+    // Wall time stays fixed while the actual observation expires in flight.
+    t.mock.method(Date, "now", () => origin);
+    const f = fixture({ native: () => { now += 1500.25; } });
     f.pc.connectionState = "connected";
     const track = { readyState: "live", enabled: true };
     const parameters = { encodings: [{ active: false, maxBitrate: 8000000 }] };
@@ -100,7 +144,7 @@ test("a delayed answer finishes plain without resampling or restoring the attemp
         ["transport", { type: "transport", dtlsState: "connected", selectedCandidatePairId: "pair", timestamp: now }],
         ["pair", { type: "candidate-pair", state: "succeeded", timestamp: now, availableOutgoingBitrate: 41600 }],
     ]);
-    const attempt = createScreenStartupAttempt({ sample: async () => { reads++; return stats; }, now: () => now });
+    const attempt = createScreenStartupAttempt({ sample: async () => { reads++; return stats; } });
     const input = { pc: f.pc, transceiver, track, profile: { width: 1920, height: 1080, fps: 60 },
         settings: { width: 1920, height: 1080, frameRate: 60 }, limits: {}, current: () => true, otherVideoActive: () => false };
     Object.assign(f.plan, await attempt(input));
@@ -115,7 +159,7 @@ test("a delayed answer finishes plain without resampling or restoring the attemp
 });
 
 test("missing or invalid observation deadlines cannot authorize an optional hint", async () => {
-    for (const expiresAt of [undefined, NaN, Infinity, Date.now() - 1]) {
+    for (const expiresAt of [undefined, NaN, Infinity, rtcStatsEpochNow() - 1]) {
         const f = fixture(); f.plan.expiresAt = expiresAt;
         await f.run();
         assert.deepEqual(f.writes, [{ type: "answer", sdp: answerSDP }]);
@@ -154,7 +198,7 @@ test("cap, profile or publication invalidation retires carry but keeps exact ech
     await f.ordinary();
     assert.equal(f.sent.at(-1)[1].includes("x-google-start-bitrate"), false);
     assert.equal(f.writes.at(-1).sdp, answerSDP);
-    owned = true; f.plan.expiresAt = Date.now() + 1500;
+    owned = true; f.plan.expiresAt = rtcStatsEpochNow() + 1500;
     await f.run(); await f.incoming();
     assert.equal(f.writes.at(-1).sdp.includes("x-google-start-bitrate"), false, "retirement cannot be undone by a new seed object");
 });

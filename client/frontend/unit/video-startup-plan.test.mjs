@@ -1,6 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { screenStartupPlan, createScreenStartupAttempt } from "../src/video-startup-plan.js";
+import { rtcStatsEpochNow } from "../src/rtc-stats-clock.js";
+
+function mockPerformance(t, value) {
+    const descriptor = Object.getOwnPropertyDescriptor(globalThis, "performance");
+    Object.defineProperty(globalThis, "performance", { configurable: true, value });
+    t.after(() => Object.defineProperty(globalThis, "performance", descriptor));
+}
 
 function fixture() {
     const now = 1792020000000;
@@ -102,5 +109,58 @@ test("the oldest authorizing timestamp bounds the plan lifetime", () => {
         const f = fixture();
         f.stats.get(id).timestamp = f.now - 1490;
         assert.equal(screenStartupPlan(f).expiresAt, f.now + 10);
+    }
+});
+
+test("default clocks accept fractional samples without spending an attempt on rounded wall time", async t => {
+    const f = fixture(), origin = f.now;
+    delete f.now;
+    for (const id of ["v", "transport", "pair"]) f.stats.get(id).timestamp = origin + 10.25;
+    mockPerformance(t, { timeOrigin: origin, now: () => 10.75 });
+    t.mock.method(Date, "now", () => origin + 10);
+    assert.equal(screenStartupPlan(f).bitrateKbps, 2000);
+    let reads = 0;
+    const attempt = createScreenStartupAttempt({ sample: async () => { reads++; return f.stats; } });
+    assert.equal((await attempt(f)).expiresAt, origin + 1510.25);
+    assert.equal(await attempt(f), null);
+    assert.equal(reads, 1, "successful default-clock seeding remains once per peer");
+});
+
+test("wall-clock adjustments do not alter freshness, and true future or expired samples remain rejected", t => {
+    const f = fixture(), origin = f.now;
+    delete f.now;
+    let elapsed = 10.75, wall = origin + 10;
+    mockPerformance(t, { timeOrigin: origin, now: () => elapsed });
+    t.mock.method(Date, "now", () => wall);
+    for (const id of ["v", "transport", "pair"]) f.stats.get(id).timestamp = origin + 10.25;
+    for (const jump of [-3600000, 3600000]) {
+        wall += jump;
+        assert.equal(screenStartupPlan(f).bitrateKbps, 2000);
+    }
+    elapsed = 10;
+    assert.equal(screenStartupPlan(f), null, "a sample ahead of the performance clock is still future");
+    elapsed = 1510.25;
+    assert.equal(screenStartupPlan(f).bitrateKbps, 2000, "the exact 1500ms bound is retained");
+    elapsed += 0.25;
+    assert.equal(screenStartupPlan(f), null, "fractional expiry is not rounded away");
+});
+
+test("missing or invalid performance clocks fail closed without falling back to wall time", async t => {
+    const f = fixture(); delete f.now;
+    for (const clock of [undefined, {}, { timeOrigin: NaN, now: () => 1 },
+        { timeOrigin: Infinity, now: () => 1 }, { timeOrigin: -1, now: () => 1 },
+        { timeOrigin: 1, now: () => NaN }, { timeOrigin: 1, now: () => -1 },
+        { timeOrigin: Number.MAX_VALUE, now: () => Number.MAX_VALUE },
+        { timeOrigin: 1, now() { throw Error("clock unavailable"); } }]) {
+        await t.test(String(clock?.timeOrigin), async child => {
+            mockPerformance(child, clock);
+            assert.equal(Number.isNaN(rtcStatsEpochNow()), true);
+            assert.equal(screenStartupPlan(f), null);
+            let reads = 0;
+            const attempt = createScreenStartupAttempt({ sample: async () => { reads++; return f.stats; } });
+            assert.equal(await attempt(f), null);
+            assert.equal(await attempt(f), null);
+            assert.equal(reads, 1, "unavailable clocks do not create retry loops");
+        });
     }
 });

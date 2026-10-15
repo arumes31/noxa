@@ -1,9 +1,10 @@
 import { screenBitrateHeadroom } from "./media-limits.js";
 import { samplePeerStats } from "./peer-stats.js";
+import { rtcStatsEpochNow } from "./rtc-stats-clock.js";
 
 // A one-time initial estimate, never a bitrate floor. The caller owns the peer's
 // attempt budget and rechecks publication/demand identity before negotiation.
-export function screenStartupPlan({ stats, mid, parameters, profile, settings, limits, now = Date.now() }) {
+export function screenStartupPlan({ stats, mid, parameters, profile, settings, limits, now = rtcStatsEpochNow() }) {
     if (!stats?.values || !stats?.get || typeof mid !== "string" || !mid ||
         !Number.isFinite(now) || !profile || !Number.isFinite(profile.width) || profile.width < 1280 ||
         !Number.isFinite(profile.height) || profile.height < 720 || !Number.isFinite(profile.fps) || profile.fps < 50 || profile.fps > 240 ||
@@ -37,7 +38,7 @@ export function screenStartupPlan({ stats, mid, parameters, profile, settings, l
 // Only the first eligible video activation on a peer can seed its estimate.
 // Failed/missing samples also spend the attempt: catalog polls cannot become a
 // retry loop, and a second viewer must never reset an already running stream.
-export function createScreenStartupAttempt({ sample = samplePeerStats, now = Date.now, timeoutMs = 1000 } = {}) {
+export function createScreenStartupAttempt({ sample = samplePeerStats, now = rtcStatsEpochNow, timeoutMs = 1000 } = {}) {
     const attempted = new WeakSet();
     return async ({ pc, transceiver, track, profile, settings, limits, current, otherVideoActive }) => {
         let timer;
