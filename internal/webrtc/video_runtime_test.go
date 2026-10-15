@@ -77,6 +77,7 @@ func TestRuntimeVideoBoundsRoundTripRequiresNewKeyframe(t *testing.T) {
 		boundsKeyPacket(1, 1, 640, 360), boundsDeltaPacket(2, 2), boundsKeyPacket(3, 3, 640, 360),
 	}}}, mime: webrtc.MimeTypeVP8}}
 	track.beforeRead = func(read int) {
+		waitVideoDispatchIdle(t, r)
 		if read == 1 {
 			setRuntimeVideoLimits(t, r, 0, VideoBounds{})
 			setRuntimeVideoLimits(t, r, 0, VideoBounds{640, 360})
@@ -133,6 +134,7 @@ func TestRuntimeVideoBoundsRecheckExistingTrack(t *testing.T) {
 				}}}, mime: webrtc.MimeTypeVP8,
 			}}
 			track.beforeRead = func(read int) {
+				waitVideoDispatchIdle(t, r)
 				switch read {
 				case 1:
 					setRuntimeVideoLimits(t, r, 0, VideoBounds{640, 360})
@@ -171,6 +173,7 @@ func TestRuntimeVideoBoundsRejectExistingUninspectedCodec(t *testing.T) {
 		h264ForwardPacket(1, 1, true, 0x65, 1), h264ForwardPacket(2, 2, true, 0x65, 2),
 	}}}, mime: webrtc.MimeTypeH264}}
 	track.beforeRead = func(read int) {
+		waitVideoDispatchIdle(t, r)
 		if read == 1 {
 			setRuntimeVideoLimits(t, r, 0, VideoBounds{640, 360})
 		}
@@ -191,6 +194,7 @@ func TestRuntimeVideoBoundsRenegotiatesExistingCodec(t *testing.T) {
 		h264ForwardPacket(1, 1, true, 0x65, 1), h264ForwardPacket(2, 2, true, 0x65, 2), boundsKeyPacket(3, 3, 640, 360),
 	}}}, mime: webrtc.MimeTypeH264}}
 	track.beforeRead = func(read int) {
+		waitVideoDispatchIdle(t, r)
 		if read == 1 {
 			setRuntimeVideoLimits(t, r, 0, VideoBounds{640, 360})
 		}

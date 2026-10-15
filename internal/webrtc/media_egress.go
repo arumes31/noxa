@@ -232,6 +232,10 @@ func (s *mediaEgressStream) writeResultKind(header *rtp.Header, payload []byte, 
 			// but cannot change this ticket's immutable authorization fields.
 			out := *header
 			out.CSRC = ticket.csrc
+			if ticket.delivery.sourceLive != nil && !ticket.delivery.sourceLive.Load() {
+				reason = mediaDropScopeDeclined
+				return nil
+			}
 			n, outputError = writer.Write(&out, payload, attrs)
 			if n > 0 && outputError == nil {
 				s.observeVideoKind(&out, out.MarshalSize()+len(payload)+int(out.PaddingSize), ticket, time.Now(), kind)

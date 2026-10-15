@@ -187,6 +187,7 @@ func TestH265RouterLateWatchCRAAndRASLNoFalsePLI(t *testing.T) {
 		hevcPacket(1, 90, true, hevcKey(19)...), hevcPacket(2, 180, true, hevcKey(21)...), hevcPacket(3, 120, true, hevcNAL(6, true)...),
 		hevcPacket(4, 100, false, 98, 1, 0x88, 0x80), hevcPacket(5, 100, true, 98, 1, 0x48, 1), recoveryPaddingPacket(7, 6, 0), hevcPacket(7, 270, true, hevcNAL(1, true)...)}}
 	track.before = func(index int) {
+		waitVideoDispatchIdle(t, r)
 		if index == 1 {
 			watch("late")
 			feedback.pkts = nil
@@ -245,6 +246,7 @@ func TestH265RouterFailedWriteAndResumeWaitForConfiguredIRAP(t *testing.T) {
 		hevcPacket(1, 90, true, hevcKey(21)...), hevcPacket(2, 180, true, hevcNAL(1, true)...), hevcPacket(3, 270, true, hevcKey(21)...), hevcPacket(4, 240, true, hevcNAL(8, true)...), hevcPacket(5, 360, true, hevcNAL(1, true)...),
 		hevcPacket(6, 450, true, hevcNAL(1, true)...), hevcPacket(7, 540, true, hevcKey(21)...), hevcPacket(8, 500, true, hevcNAL(8, true)...), hevcPacket(9, 630, true, hevcNAL(1, true)...)}}
 	track.before = func(i int) {
+		waitVideoDispatchIdle(t, r)
 		if i == 1 {
 			capture.err = nil
 			out := pubTrackFor(r, "sub", "pub").video[SlotScreen]

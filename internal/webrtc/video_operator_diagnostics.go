@@ -47,7 +47,7 @@ func (r *Router) VideoOperatorDiagnostics() *netproto.VideoOperatorDiagnostics {
 				continue
 			}
 			input.mu.Lock()
-			publication.Layers = append(publication.Layers, netproto.VideoStreamLayerDiagnostics{
+			publication.Layers = append(publication.Layers, netproto.VideoStreamLayerDiagnostics{Dispatch: input.dispatch.Load().snapshot(now),
 				RID: rid, SSRC: input.ssrc, StartedAt: input.started.UnixMilli(), Ingress: input.stage.snapshot(now),
 				H264Rejects: input.h264RejectSnapshot(), KeyframeRequests: input.keyframeRequestSnapshot(),
 			})
