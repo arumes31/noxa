@@ -30,15 +30,31 @@ func (r *Router) SetPublisherGuard(guard PublisherGuard) {
 
 func (r *Router) prunePublishersLocked() map[string]bool {
 	renegotiate := make(map[string]bool)
-	r.watchMu.Lock()
-	for key := range r.watches {
-		if !r.publisherAllowedLocked(key.subscriber, key.publisher) {
-			watch := r.watches[key]
-			watch.active = false
-			r.watches[key] = watch
+	// Most refreshes leave every active watch authorized. A needless writer
+	// would wait for in-flight packet writes while holding Router.mu, blocking
+	// unrelated ingress readers and making new final packet TryRLocks fail.
+	needsRevocation := false
+	r.watchMu.RLock()
+	for key, watch := range r.watches {
+		if watch.active && !r.publisherAllowedLocked(key.subscriber, key.publisher) {
+			needsRevocation = true
+			break
 		}
 	}
-	r.watchMu.Unlock()
+	r.watchMu.RUnlock()
+	if needsRevocation {
+		// Router.mu excludes new watches and permission/membership changes.
+		// RevokeVideo may still delete entries, so rescan rather than restoring
+		// entries captured above. Actual revocation still drains packet writes.
+		r.watchMu.Lock()
+		for key, watch := range r.watches {
+			if watch.active && !r.publisherAllowedLocked(key.subscriber, key.publisher) {
+				watch.active = false
+				r.watches[key] = watch
+			}
+		}
+		r.watchMu.Unlock()
+	}
 	for sub, publishers := range r.pubTracks {
 		for pub := range publishers {
 			if !r.publisherAllowedLocked(sub, pub) {

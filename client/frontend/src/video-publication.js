@@ -18,6 +18,7 @@ import { t as tLabel } from "./i18n.js";
 import { rememberVideoSenderProfile } from "./video-sender-stats.js";
 import { hardwareVideoEncodeAvailable, videoSenderCaptureSample } from "./video-sender-hardware-recovery.js";
 import { sampleSenderStats } from "./peer-stats.js";
+import { createScreenStartupAttempt } from "./video-startup-plan.js";
 import { renegotiate, negotiateOffer, queuePeerNegotiation } from "./video-negotiation.js";
 const V = () => window.__noxa;
 
@@ -44,6 +45,7 @@ export function createVideoPublication({ policy }) {
     const videoLimitUpdates = new WeakMap();
     const capturePreferences = new WeakMap();
     const codecSelections = new WeakMap();
+    const startupAttempt = createScreenStartupAttempt();
 
     function selectCodec(slot, track, transceiver) {
         const codec = publicationCodec(slot, track);
@@ -90,6 +92,36 @@ export function createVideoPublication({ policy }) {
                     if (previous) { preferPublicationCodec(transceiver, previous.codec, previous.format); codecSelections.set(transceiver, previous); }
                     else codecSelections.delete(transceiver);
                     throw error;
+                }
+            }
+            if (slot === "screen" && current() && !policy.lowBandwidth && publicationUploadActive(slot, track) === true) {
+                const seedProfile = capturePreferences.get(track), seedLimits = state.mediaLimits;
+                const seedBudget = seedLimits?.video_max_bitrate ?? 0;
+                const otherVideoActive = () => pc.getSenders().some(sender => sender !== transceiver.sender &&
+                    sender.track?.kind === "video" && sender.track.readyState === "live" &&
+                    sender.getParameters().encodings?.some(encoding => encoding.active !== false));
+                const seedCurrent = () => current() && publicationUploadActive(slot, track) === true &&
+                    track.enabled && !transceiver.stopped && transceiver.sender.track === track &&
+                    !policy.lowBandwidth && !state.shareQualityUpdating && capturePreferences.get(track) === seedProfile &&
+                    state.mediaLimits === seedLimits && (state.mediaLimits?.video_max_bitrate ?? 0) === seedBudget &&
+                    !otherVideoActive() && transceiver.sender.getParameters().encodings?.[0]?.active === false;
+                const plan = await startupAttempt({ pc, transceiver, track, profile: seedProfile,
+                    settings: track.getSettings(), limits: seedLimits, current: seedCurrent, otherVideoActive });
+                if (plan && seedCurrent()) {
+                    const profileKey = value => JSON.stringify([value?.width, value?.height, value?.fps, value?.bitrateCeiling ?? 0]);
+                    const limitKey = value => JSON.stringify([value?.video_max_width ?? 0, value?.video_max_height ?? 0, value?.video_max_bitrate ?? 0]);
+                    const ownedProfile = profileKey(seedProfile), ownedLimits = limitKey(seedLimits), ownedHint = track.contentHint;
+                    // Demand pauses and additional viewers retain the identical
+                    // codec parameter. Actual source, codec or cap changes end it.
+                    const stillOwned = () => current() && state.shareVideoTransceiver === transceiver &&
+                        !transceiver.stopped && transceiver.sender.track === track && track.contentHint === ownedHint && !policy.lowBandwidth &&
+                        profileKey(capturePreferences.get(track)) === ownedProfile && limitKey(state.mediaLimits) === ownedLimits;
+                    // Start-rate hints are consumed by the existing transport even
+                    // while this encoding is paused. Activate only after the answer.
+                    // A rejected optional hint must not prevent ordinary streaming.
+                    try { await negotiateOffer(pc, scope.generation, undefined, current, scope.tabID,
+                        { ...plan, stillEligible: seedCurrent, stillOwned }); }
+                    catch { /* negotiateOffer rolls back; ordinary caps remain authoritative. */ }
                 }
             }
             if (current()) await applySendCaps(current);

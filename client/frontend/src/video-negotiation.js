@@ -1,6 +1,8 @@
 // Serializes offers and answers for one peer, including ICE restart collisions.
 import { SLOT_SCREEN, SLOT_SCREEN_AUDIO } from "./media-track-id.js";
 import { reconcileRemoteMedia } from "./remote-media.js";
+import { createStartupHintOwnership } from "./video-startup-ownership.js";
+const startupHints = createStartupHintOwnership();
 const V = () => window.__noxa;
 
 // trackSlots declares which slot each outbound track occupies (70). The router
@@ -70,6 +72,25 @@ export function answerRemoteOffer(peerConnection, generation, offerSDP) {
     return queuePeerNegotiation(peerConnection, () => applyPendingRemoteOffer(peerConnection, pending));
 }
 
+async function applyRemoteDescription(peerConnection, description, ensureCurrent, startupPlan) {
+    const transaction = startupHints.prepare(peerConnection, description, startupPlan);
+    let applied = transaction.description;
+    try { await peerConnection.setRemoteDescription(applied); }
+    catch (error) {
+        ensureCurrent();
+        const retryState = description.type === "answer" ? "have-local-offer" : "stable";
+        if (!transaction.changed || peerConnection.signalingState !== retryState) throw error;
+        // Rejecting an optional hint must not strand an already accepted round.
+        applied = description;
+        await peerConnection.setRemoteDescription(applied);
+    }
+    // A remote offer is still pending until the local answer succeeds. Keep
+    // the old ledger intact if answer creation/application fails and rolls back.
+    const commit = () => transaction.commit(applied);
+    if (description.type === "answer") commit();
+    return commit;
+}
+
 async function applyPendingRemoteOffer(peerConnection, pending) {
         const { generation, tabID, offerSDP } = pending;
         const current = () => pendingRemoteOffers.get(peerConnection) === pending && V().state.pc === peerConnection && V().state.serverGeneration === generation && V().state.activeTabID === tabID;
@@ -87,7 +108,9 @@ async function applyPendingRemoteOffer(peerConnection, pending) {
                 try {
                     if (!current()) return false;
                     if (!pending.applied) {
-                        await peerConnection.setRemoteDescription({ type: "offer", sdp: offerSDP });
+                        pending.commitStartupHint = await applyRemoteDescription(peerConnection, { type: "offer", sdp: offerSDP }, () => {
+                            if (!current()) throw new DOMException("server session changed", "AbortError");
+                        });
                         if (!current()) return false;
                         pending.applied = true;
                         reconcileRemoteMedia(peerConnection);
@@ -96,11 +119,13 @@ async function applyPendingRemoteOffer(peerConnection, pending) {
                         const answer = await peerConnection.createAnswer();
                         if (!current()) return false;
                         await peerConnection.setLocalDescription(answer);
+                        pending.commitStartupHint();
                         if (!current()) return false;
                         pending.answer = answer;
+                        pending.serverAnswer = startupHints.serverDescription(peerConnection, answer);
                     }
                     // Retry a failed native write with the exact committed answer.
-                    await window.go.main.App.WebRTCAnswerForTab(tabID, pending.answer.sdp);
+                    await window.go.main.App.WebRTCAnswerForTab(tabID, pending.serverAnswer.sdp);
                     return current();
                 } catch (error) {
                     if (!current()) return false;
@@ -122,7 +147,7 @@ export function renegotiate(peerConnection = V().state.pc, generation = V().stat
     return queuePeerNegotiation(peerConnection, () => negotiateOffer(peerConnection, generation, offerOptions, stillRelevant, tabID));
 }
 
-export async function negotiateOffer(peerConnection, generation, offerOptions, stillRelevant, tabID) {
+export async function negotiateOffer(peerConnection, generation, offerOptions, stillRelevant, tabID, startupPlan) {
     const current = () => V().state.pc === peerConnection && V().state.serverGeneration === generation && V().state.activeTabID === tabID && stillRelevant();
     const ensureCurrent = () => {
         if (!current()) throw new DOMException("server session changed", "AbortError");
@@ -134,9 +159,10 @@ export async function negotiateOffer(peerConnection, generation, offerOptions, s
         ensureCurrent();
         await peerConnection.setLocalDescription(offer);
         ensureCurrent();
-        const answerSDP = await window.go.main.App.WebRTCOfferForTab(tabID, offer.sdp, trackSlots(offer.sdp));
+        const serverOffer = startupHints.serverDescription(peerConnection, offer);
+        const answerSDP = await window.go.main.App.WebRTCOfferForTab(tabID, serverOffer.sdp, trackSlots(serverOffer.sdp));
         ensureCurrent();
-        await peerConnection.setRemoteDescription({ type: "answer", sdp: answerSDP });
+        await applyRemoteDescription(peerConnection, { type: "answer", sdp: answerSDP }, ensureCurrent, startupPlan);
         ensureCurrent();
         reconcileRemoteMedia(peerConnection);
         return;
