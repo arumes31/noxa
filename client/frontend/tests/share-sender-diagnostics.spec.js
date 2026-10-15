@@ -268,3 +268,47 @@ test("sender trace new explicit start invalidates an uncopied saved native sessi
     await expect(page.locator('[data-saved-trace="true"] [role="status"]')).toContainText("replaced");
     expect(await page.evaluate(() => window.__sender.traceMessages.map(x => x.command))).toEqual(["start", "start"]);
 });
+
+
+test("manual recording saves the copy payload and retains saved diagnostics after cancel", async ({ page }) => {
+    await page.evaluate(() => { window.go = { main: { App: { SaveStreamDiagnostics: async raw => { window.__sender.saved = raw; return "cancelled"; } } } }; });
+    const panel = page.locator(".sharing-diagnostics"); await panel.locator("summary").click();
+    await panel.getByRole("button", { name: "Start diagnostic recording", exact: true }).click();
+    await page.clock.runFor(4500);
+    await panel.getByRole("button", { name: "Stop diagnostic recording", exact: true }).click();
+    await panel.locator(".sharing-copy").click();
+    await panel.locator(".sharing-save").click();
+    expect(await page.evaluate(() => window.__sender.saved)).toBe(await page.evaluate(() => window.__sender.copied));
+    await page.evaluate(async () => { (await import("/src/share-status.js")).stopShareStatus(); });
+    const archive = page.locator(".stream-recording-archive"); await archive.locator("summary").click();
+    await archive.getByRole("button", { name: "Copy saved diagnostics", exact: true }).click();
+    await archive.getByRole("button", { name: "Save saved diagnostics JSON…", exact: true }).click();
+    expect(await page.evaluate(() => window.__sender.saved)).toBe(await page.evaluate(() => window.__sender.copied));
+    await expect(archive.getByRole("button", { name: "Copy saved diagnostics", exact: true })).toBeVisible();
+});
+
+test("manual recording controls are reachable with wheel in a short clipped window", async ({ page }) => {
+    await page.setViewportSize({ width: 480, height: 500 });
+    await page.evaluate(() => {
+        const panel = document.getElementById("sharing-status"), center = document.createElement("main");
+        center.style.cssText = "height:350px;overflow:hidden;display:flex;flex-direction:column";
+        panel.before(center);
+        const heading = document.createElement("div"), tabs = document.createElement("div");
+        heading.style.cssText = "height:80px;flex:none"; tabs.style.cssText = "height:44px;flex:none";
+        center.append(heading, tabs, panel);
+    });
+    await page.locator(".sharing-diagnostics > summary").click();
+    const panel = page.locator("#sharing-status"), box = await panel.boundingBox();
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height - 30);
+    const startButton = page.getByRole("button", { name: "Start diagnostic recording", exact: true });
+    // Exercise actual wheel scrolling, never focus/scrollIntoView to expose controls.
+    for (let i = 0; i < 50; i++) {
+        if (await startButton.evaluate(el => { const b = el.getBoundingClientRect(), p = document.getElementById("sharing-status").getBoundingClientRect(); return b.top > p.top + 65 && b.bottom < p.bottom; })) break;
+        await page.mouse.wheel(0, 90);
+        await page.waitForTimeout(30);
+    }
+    await expect.poll(() => panel.evaluate(el => el.scrollTop)).toBeGreaterThan(0);
+    await expect(startButton).toBeInViewport();
+    await expect(page.locator(".sharing-stop")).toBeInViewport();
+    await page.screenshot({ path: "test-results/sender-short-window-wheel.png" });
+});

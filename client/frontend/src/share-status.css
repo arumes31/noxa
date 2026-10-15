@@ -4,7 +4,13 @@
 .sharing-diagnostics dl { display: grid; grid-template-columns: minmax(9rem, 1fr) minmax(0, 1fr); gap: .3rem 1rem; margin: .75rem 0; font-size: .85rem; }
 .sharing-diagnostics dt { color: var(--muted, #9aafbd); }
 .sharing-diagnostics dd { margin: 0; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
-.sharing-copy { margin-top: .3rem; padding: 6px 10px; font: inherit; color: var(--text); background: var(--bg-hover); border: 1px solid var(--border); border-radius: 4px; cursor: pointer; }
-.sharing-copy:hover { border-color: var(--accent); }
-.sharing-copy:disabled { opacity: .6; cursor: default; }
+.sharing-copy, .sharing-save { margin-top: .3rem; padding: 6px 10px; font: inherit; color: var(--text); background: var(--bg-hover); border: 1px solid var(--border); border-radius: 4px; cursor: pointer; }
+.sharing-copy:hover, .sharing-save:hover { border-color: var(--accent); }
+.sharing-copy:disabled, .sharing-save:disabled { opacity: .6; cursor: default; }
 @media (max-width: 480px) { .sharing-diagnostics dl { grid-template-columns: 1fr; gap: .15rem; } .sharing-diagnostics dd { margin-bottom: .45rem; } }
+
+/* Keep the heading and Stop action reachable even with long diagnostic records. */
+.sharing-status { flex: 0 1 auto; min-height: 80px; max-height: calc(100dvh - 150px); overflow-y: auto; overscroll-behavior: contain; }
+.sharing-heading { position: sticky; top: 0; z-index: 2; background: var(--bg-panel, var(--bg)); }
+.sharing-diagnostics-body { min-width: 0; }
+.sharing-save { margin: .3rem 0 0 .4rem; }

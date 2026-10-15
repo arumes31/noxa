@@ -1,3 +1,4 @@
+import { saveStreamDiagnostics } from "./stream-diagnostic-export.js";
 // A manual, local record of existing polls; this module never requests stats.
 const MAX_SAMPLES = 1000;
 const MAX_BYTES = 4 * 1024 * 1024;
@@ -186,13 +187,15 @@ function diagnosticArchiveUI(doc, translate, copy) {
         root.querySelector("summary").textContent = translate("record.saved", { count: entries.length });
         root.querySelector("p").textContent = translate("record.retention");
         root.querySelector("div").replaceChildren(...entries.map(entry => {
-            const row = doc.createElement("div"), label = doc.createElement("p"), copyButton = doc.createElement("button"), clear = doc.createElement("button");
+            const row = doc.createElement("div"), label = doc.createElement("p"), copyButton = doc.createElement("button"), clear = doc.createElement("button"), save = doc.createElement("button");
             const date = value => Number.isFinite(value) ? new Date(value).toISOString() : "—";
             label.textContent = `${translate(`record.${entry.direction}`)} · ${translate(`record.reason.${entry.stop_reason}`)} · ${date(entry.started_utc_ms)} – ${date(entry.ended_utc_ms)}`;
             copyButton.type = clear.type = "button"; copyButton.textContent = translate("record.copySaved"); clear.textContent = translate("record.clear");
             copyButton.onclick = () => { const record = archive.read(entry.token); if (record) void copy(JSON.stringify({ recording: record }, null, 2), { isCurrent: () => root.isConnected && archive.has(entry.token) }); };
+            save.type = "button"; save.textContent = translate("record.saveSaved");
+            save.onclick = () => { const record = archive.read(entry.token); if (record) void saveStreamDiagnostics(JSON.stringify({ recording: record }, null, 2), { isCurrent: () => root.isConnected }); };
             clear.onclick = () => archive.remove(entry.token);
-            row.append(label, copyButton, clear); return row;
+            row.append(label, copyButton, save, clear); return row;
         }));
     }
     doc.defaultView?.addEventListener("pagehide", () => archive.clear());

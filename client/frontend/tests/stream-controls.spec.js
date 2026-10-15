@@ -716,6 +716,15 @@ test("manual receiver diagnostic recording exports only existing polls and stops
     await page.screenshot({ path: testInfo.outputPath("receiver-diagnostic-recording.png"), fullPage: true });
     await panel.getByRole("button", { name: "Stop diagnostic recording", exact: true }).click();
     await panel.getByRole("button", { name: "Copy this stream’s diagnostics" }).click();
+    await page.evaluate(() => { window.go.main.App.SaveStreamDiagnostics = async raw => { window.__streams.saved = raw; return "saved"; }; });
+    await panel.getByRole("button", { name: "Save diagnostics JSON…", exact: true }).click();
+    const copied = await page.evaluate(() => JSON.parse(window.__streams.copied));
+    const saved = await page.evaluate(() => JSON.parse(window.__streams.saved));
+    // Presentation age is sampled at each explicit click; all recorder/RTP data match.
+    delete copied.presentation; delete saved.presentation;
+    delete copied.stream_path_age_ms; delete saved.stream_path_age_ms;
+    expect(saved).toEqual(copied);
+    expect(await page.evaluate(() => window.__streams.statsCalls)).toBe(before + 2);
     const record = await page.evaluate(() => JSON.parse(window.__streams.copied).recording);
     expect(record).toMatchObject({ direction: "received", stop_reason: "manual", sample_count: 2 });
     expect(record.samples[0].rows[0]).toMatchObject({ codec: "H264", width: 1920, height: 1080,
