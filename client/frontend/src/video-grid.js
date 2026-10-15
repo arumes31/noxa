@@ -1,3 +1,4 @@
+import { saveStreamDiagnostics } from "./stream-diagnostic-export.js";
 import { mountStreamDiagnosticRecording, receiverRecordingSample } from "./stream-diagnostic-recording.js";
 import { escapeHTML as escapeTranslation } from "./markdown.js";
 // video-grid.js — received stream tiles, quality selection and diagnostics.
@@ -78,7 +79,7 @@ export function createVideoGrid({ applySendCaps, syncCameraButton, syncShareButt
                     <span class="vtile-preview-age hidden"></span>
                 </div>
                 <span class="vtile-badge hidden"></span>
-                <details class="vtile-diagnostics"><summary></summary><div class="vtile-diagnostics-body"><div class="vtile-stream-path"></div><p class="vtile-codec"></p><p class="vtile-rate"></p><p class="vtile-received"></p><p class="vtile-quality"></p><p class="vtile-quality-error" role="status"></p><p class="vtile-traffic-note"></p><button class="vtile-copy-diagnostics" type="button"></button></div></details>
+                <details class="vtile-diagnostics"><summary></summary><div class="vtile-diagnostics-body"><div class="vtile-stream-path"></div><p class="vtile-codec"></p><p class="vtile-rate"></p><p class="vtile-received"></p><p class="vtile-quality"></p><p class="vtile-quality-error" role="status"></p><p class="vtile-traffic-note"></p><button class="vtile-copy-diagnostics" type="button"></button><button class="vtile-save-diagnostics" type="button"></button></div></details>
                 <button class="vtile-quality-button" type="button"></button>
                 <button class="vtile-pip icon-btn" title="${escapeTranslation(tLabel("desktop.floating.always.on.top.video"))}">▣</button>
                 <button class="vtile-fullscreen icon-btn" title="${escapeTranslation(tLabel("desktop.fullscreen.esc.exits"))}">⛶</button>`;
@@ -150,7 +151,8 @@ export function createVideoGrid({ applySendCaps, syncCameraButton, syncShareButt
                         pc.connectionState !== "closed" && pc.connectionState !== "failed";
                 },
             }, tLabel, copyToClipboard);
-            el.querySelector(".vtile-copy-diagnostics").onclick = () => {
+            const exportSnapshot = save => {
+                if (!el.isConnected) return;
                 const sample = currentReceiverDiagnostics(t);
                 const sourceQuality = streamUsesSourceQuality(t.clientID, t.slot);
                 const payload = {
@@ -172,8 +174,10 @@ export function createVideoGrid({ applySendCaps, syncCameraButton, syncShareButt
                     stream_path_age_ms: remoteDiagnosticsAge(t),
                     note: "Browser bitrate is RTP payload, including retransmissions. Server byte counts include RTP headers. Stage sample windows are independent; server FPS counts observed RTP timestamps, not complete or decoded frames. Receiver cumulative counters belong to each stats_epoch/stats_id/SSRC; counter regression starts a new counter lifetime. timestamp_ms is the browser RTCStats timestamp; sampled_at is local collection time. Freeze duration is in seconds and browser-reported; freezes in progress may not yet be counted. Presentation intervals describe compositor submission, not physical display. Callback gaps may reflect main-thread scheduling; unobserved callbacks are not decoded frame drops. Capture-to-display is a browser clock-mapping estimate, which the relay can change, not end-to-end latency. Null means unavailable.",
                 };
-                void copyToClipboard(JSON.stringify(payload, null, 2), { success: tLabel("wins.streamCopied"), isCurrent: () => el.isConnected });
+                void (save ? saveStreamDiagnostics : copyToClipboard)(JSON.stringify(payload, null, 2), { success: tLabel("wins.streamCopied"), isCurrent: () => el.isConnected });
             };
+            el.querySelector(".vtile-copy-diagnostics").onclick = () => exportSnapshot(false);
+            el.querySelector(".vtile-save-diagnostics").onclick = () => exportSnapshot(true);
             tiles.set(key, t);
             gridEl().appendChild(el);
         }
@@ -352,6 +356,7 @@ export function createVideoGrid({ applySendCaps, syncCameraButton, syncShareButt
         qualityButton.title = tLabel(legacy ? "polish.videoQualityHelp" : "streams.qualityHelp");
         qualityButton.setAttribute("aria-label", tLabel(legacy ? "streams.legacyQualityControl" : "streams.qualityControl"));
         panel.querySelector(".vtile-traffic-note").textContent = tLabel("wins.payloadNote");
+        panel.querySelector(".vtile-save-diagnostics").textContent = tLabel("record.saveDiagnostics");
         panel.querySelector(".vtile-copy-diagnostics").textContent = tLabel("wins.copyStream");
         tile.recording?.render();
         renderStreamPath(panel.querySelector(".vtile-stream-path"), tile.remoteDiagnostics, sample, {

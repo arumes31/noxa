@@ -1,3 +1,4 @@
+import { saveStreamDiagnostics } from "./stream-diagnostic-export.js";
 import { diagnosticSample, mountStreamDiagnosticRecording } from "./stream-diagnostic-recording.js";
 import { t } from "./i18n.js";
 import { mountSenderTrace } from "./sender-trace.js";
@@ -39,15 +40,15 @@ export function startShareStatus(options) {
     root.innerHTML = `<div class="sharing-heading"><strong class="sharing-source"></strong><div class="sharing-actions"><button type="button" class="sharing-quality"></button><button type="button" class="sharing-change"></button><button type="button" class="sharing-stop danger"></button></div></div>
         <p class="sharing-meta"></p><p class="sharing-warning" role="status" hidden></p><div class="stream-health" data-direction="sender"></div>
         <details class="sharing-preview"><summary></summary><video muted playsinline></video></details>
-        <details class="sharing-diagnostics"><summary></summary><p class="sharing-diagnostics-note"></p><dl></dl><p class="sharing-layers"></p><button type="button" class="sharing-copy"></button></details>`;
-    s.recording = mountStreamDiagnosticRecording(root.querySelector(".sharing-diagnostics"), {
+        <details class="sharing-diagnostics"><summary></summary><div class="sharing-diagnostics-body"><p class="sharing-diagnostics-note"></p><dl></dl><p class="sharing-layers"></p><button type="button" class="sharing-copy"></button><button type="button" class="sharing-save"></button></div></details>`;
+    s.recording = mountStreamDiagnosticRecording(root.querySelector(".sharing-diagnostics-body"), {
         direction: "sent", slot: "screen", cadenceMS: 2000, captureScope: () => {
             const sender = window.__noxa.state.shareVideoTransceiver?.sender;
             return () => current(s) && !!sender && window.__noxa.state.shareVideoTransceiver?.sender === sender &&
                 sender.track === s.track && s.pc.connectionState !== "closed" && s.pc.connectionState !== "failed";
         },
     }, t, copyToClipboard);
-    s.trace = mountSenderTrace(root.querySelector(".sharing-diagnostics"), { captureScope: () => {
+    s.trace = mountSenderTrace(root.querySelector(".sharing-diagnostics-body"), { captureScope: () => {
         const sender = window.__noxa.state.shareVideoTransceiver?.sender, codec = s.sample?.codec;
         const eligible = () => {
             if (!current(s) || !sender || sender.track !== s.track || window.__noxa.state.shareVideoTransceiver?.sender !== sender ||
@@ -62,12 +63,14 @@ export function startShareStatus(options) {
     root.querySelector(".sharing-change").onclick = () => { if (current(s)) s.change(); };
     root.querySelector(".sharing-quality").onclick = () => { if (current(s)) s.changeQuality(); };
     root.querySelector(".sharing-stop").onclick = () => { if (current(s)) s.stop(); };
-    root.querySelector(".sharing-copy").onclick = () => {
+    const exportSnapshot = save => {
         if (!current(s) || (!s.layers?.length && !s.recording.status())) return;
-        void copyToClipboard(JSON.stringify({ sampled_at: s.sampledAt, direction: "sent", slot: "screen", video_senders: s.layers,
+        void (save ? saveStreamDiagnostics : copyToClipboard)(JSON.stringify({ sampled_at: s.sampledAt, direction: "sent", slot: "screen", video_senders: s.layers,
             ...(s.recording.status() ? { recording: s.recording.snapshot() } : {}),
             note: "Measured RTP payload counters. capture_width/capture_height are current capture-track output settings in pixels; width/height are encoded dimensions. Requested and capture settings are not measured frame rates. Null means unavailable." }, null, 2), { isCurrent: () => current(s) });
     };
+    root.querySelector(".sharing-copy").onclick = () => exportSnapshot(false);
+    root.querySelector(".sharing-save").onclick = () => exportSnapshot(true);
     const details = root.querySelector(".sharing-preview"), video = root.querySelector("video");
     details.ontoggle = () => {
         if (!current(s)) return;
@@ -120,6 +123,8 @@ function render(s) {
 }
 
 function renderDetails(s) {
+    s.root.querySelector(".sharing-save").textContent = t("record.saveDiagnostics");
+    s.root.querySelector(".sharing-save").disabled = !s.layers?.length && !s.recording.status();
     const details = s.root.querySelector(".sharing-diagnostics"), sample = s.sample;
     details.querySelector("summary").textContent = t("share.diagnostics");
     details.querySelector(".sharing-diagnostics-note").textContent = t("share.diagnosticsNote");
