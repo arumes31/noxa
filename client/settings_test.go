@@ -915,3 +915,24 @@ func TestMigrateSettingsSplitsLegacyEventSounds(t *testing.T) {
 		t.Fatalf("version-7 explicit split choices were overwritten: %+v", got.EventSounds)
 	}
 }
+
+func TestStartupUpdateInstallDefaultsAndOptOut(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	if !loadSettingsAt(path).UpdatesAutoInstall {
+		t.Fatal("new settings must enable startup installation")
+	}
+	if err := os.WriteFile(path, []byte(`{"settings_version":12,"updates_auto_check":false}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	s := loadSettingsAt(path)
+	if !s.UpdatesAutoInstall || s.UpdatesAutoCheck {
+		t.Fatal("missing install setting must default on without rewriting notification setting")
+	}
+	s.UpdatesAutoInstall = false
+	if err := saveSettingsAt(path, s); err != nil {
+		t.Fatal(err)
+	}
+	if loadSettingsAt(path).UpdatesAutoInstall {
+		t.Fatal("explicit install opt-out must persist")
+	}
+}

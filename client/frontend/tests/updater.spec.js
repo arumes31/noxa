@@ -23,7 +23,7 @@ async function boot(page, scenario = {}) {
             if (method === "GetSettings") {
                 if (s.settingsThrows) throw new Error("settings bridge unavailable");
                 if (s.settingsPending) await new Promise(resolve => { window.__finishSettings = resolve; });
-                return { onboarding_done: s.onboardingDone !== false, alpha_dismissed: "0.4.0", updates_auto_check: s.enabled !== false, updates_check_on_reconnect: s.reconnectEnabled !== false, notification_matrix: {}, notify_connection: s.previousCrash === true, language: s.language || "en", bookmarks: s.bookmarks || [] };
+                return { onboarding_done: s.onboardingDone !== false, alpha_dismissed: "0.4.0", updates_auto_check: s.enabled !== false, updates_auto_install: s.autoInstall === true ? undefined : false, updates_check_on_reconnect: s.reconnectEnabled !== false, notification_matrix: {}, notify_connection: s.previousCrash === true, language: s.language || "en", bookmarks: s.bookmarks || [] };
             }
             if (method === "SessionInfoForTab") return { connected: !s.disconnected, client_id: s.clientID || "alice" };
             if (method === "ClientVersionShort") return "0.4.0";
@@ -438,4 +438,90 @@ test("German updater translates failure, retry, progress and restart", async ({ 
     await expect(dialog.getByRole("button", { name: "Jetzt neu starten", exact: true })).toBeVisible();
     await expect(dialog.locator(".upd-status")).toHaveText("Bereit zum Neustart");
     await dialog.getByRole("button", { name: "Schließen", exact: true }).click();
+});
+
+
+test("startup installation defaults on and restarts once independently of notices", async ({ page }) => {
+    await boot(page, { autoInstall: true, enabled: false, downloadPending: true, restartPending: true,
+        bookmarks: [{ name: "auto", addr: "example.test:1234", nickname: "guest", auto_connect: true }] });
+    await expect.poll(() => page.evaluate(() => window.__calls.DownloadAndApply)).toBe(1);
+    await expect.poll(() => page.evaluate(() => window.__calls.ConfirmUpdateStartup)).toBe(1);
+    await expect(page.locator(".upd-status")).toHaveText("downloading…");
+    expect(await page.evaluate(() => window.__calls.ConnectGuestBookmarkTabWithID || 0)).toBe(0);
+    await page.evaluate(() => { void window.__noxa.startupAutoCheck(); window.__finishDownload(); });
+    await expect.poll(() => page.evaluate(() => window.__calls.ApplyAndRestart)).toBe(1);
+    await page.evaluate(async () => { window.__finishRestart(); await window.__noxa.startupUpdateFinished(); });
+    await page.waitForTimeout(350);
+    expect(await page.evaluate(() => window.__calls.ConnectGuestBookmarkTabWithID || 0)).toBe(0);
+    expect(await page.evaluate(() => window.__calls.CheckForUpdate)).toBe(1);
+    expect(await page.evaluate(() => window.__calls.DownloadAndApply)).toBe(1);
+});
+
+for (const offline of [false, true]) {
+    test(`reconnect remains notice-only with automatic startup installation enabled (${offline})`, async ({ page }) => {
+        await boot(page, { autoInstall: true, available: false, offline });
+        await page.evaluate(() => window.__noxa.startupUpdateFinished());
+        await page.evaluate(async () => {
+            window.__scenario.available = true;
+            window.__scenario.offline = false;
+            await window.__noxa.reconnectAutoCheck("server-a");
+        });
+        await expect(page.getByRole("button", { name: "Update now", exact: true })).toBeVisible();
+        expect(await page.evaluate(() => window.__calls.DownloadAndApply || 0)).toBe(0);
+        expect(await page.evaluate(() => window.__calls.ApplyAndRestart || 0)).toBe(0);
+    });
+}
+
+test("cancelled startup download resumes autoconnect and retry stays manual", async ({ page }) => {
+    await boot(page, { autoInstall: true, downloadPending: true,
+        bookmarks: [{ name: "auto", addr: "example.test:1234", nickname: "guest", auto_connect: true }] });
+    await page.getByRole("button", { name: "Cancel download", exact: true }).click();
+    await expect(page.locator(".upd-status")).toHaveText("Download cancelled. You can try again.");
+    await expect.poll(() => page.evaluate(() => window.__calls.ConnectGuestBookmarkTabWithID)).toBe(1);
+    expect(await page.evaluate(() => window.__calls.ApplyAndRestart || 0)).toBe(0);
+    await page.evaluate(() => { window.__scenario.downloadPending = false; window.__scenario.downloadError = ""; });
+    await page.getByRole("button", { name: "Update now", exact: true }).click();
+    await expect(page.getByRole("button", { name: "Restart now", exact: true })).toBeVisible();
+    expect(await page.evaluate(() => window.__calls.ApplyAndRestart || 0)).toBe(0);
+});
+
+for (const scenario of [{ downloadError: "network failed" }, { restartError: "startup failed", restored: true }]) {
+    test(`startup installation failure has no automatic retry ${JSON.stringify(scenario)}`, async ({ page }) => {
+        await boot(page, { autoInstall: true, ...scenario });
+        await page.evaluate(() => window.__noxa.startupUpdateFinished());
+        await expect(page.locator(".upd-status")).toHaveClass(/warn/);
+        await page.getByRole("button", { name: "Close", exact: true }).click();
+        await page.evaluate(async () => {
+            await window.__noxa.startupAutoCheck();
+            await window.__noxa.reconnectAutoCheck("server-a");
+        });
+        await expect(page.getByRole("button", { name: "Update now", exact: true })).toBeVisible();
+        expect(await page.evaluate(() => window.__calls.DownloadAndApply)).toBe(1);
+        expect(await page.evaluate(() => window.__calls.ApplyAndRestart || 0)).toBe(scenario.restartError ? 1 : 0);
+    });
+}
+
+test("disabling installation during startup check prevents download", async ({ page }) => {
+    await boot(page, { autoInstall: true, enabled: false, checkPending: true });
+    await page.waitForFunction(() => typeof window.__finishCheck === "function");
+    await page.evaluate(async () => {
+        window.__noxa.state.settings.updates_auto_install = false;
+        window.__finishCheck();
+        await window.__noxa.startupUpdateFinished();
+    });
+    expect(await page.evaluate(() => window.__calls.DownloadAndApply || 0)).toBe(0);
+    await expect(page.locator(".update-dlg")).toHaveCount(0);
+});
+
+test("concurrent startup and reconnect cannot duplicate automatic installation", async ({ page }) => {
+    await boot(page, { autoInstall: true, checkPending: true });
+    await page.waitForFunction(() => typeof window.__finishCheck === "function");
+    await page.evaluate(() => {
+        window.__reconnects = Promise.all([window.__noxa.reconnectAutoCheck("server-a"), window.__noxa.reconnectAutoCheck("server-b")]);
+        window.__finishCheck();
+    });
+    await page.evaluate(() => window.__reconnects);
+    expect(await page.evaluate(() => window.__calls.CheckForUpdate)).toBe(1);
+    expect(await page.evaluate(() => window.__calls.DownloadAndApply)).toBe(1);
+    expect(await page.evaluate(() => window.__calls.ApplyAndRestart)).toBe(1);
 });

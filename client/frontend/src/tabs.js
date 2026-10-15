@@ -432,8 +432,8 @@ export function initTabs() {
     renderRecents();
 
     // (286) auto-connect flagged bookmarks once settings are loaded.
-    void V().startupInitialized.then(ready => {
-        if (ready && !updateStartupBlocked()) setTimeout(autoConnectBookmarks, 300);
+    void V().startupInitialized.then(async ready => {
+        if (ready && !updateStartupBlocked() && !await V().startupUpdateFinished()) setTimeout(autoConnectBookmarks, 300);
     }).catch(() => {});
 
     window.__noxaTabs = { renderTabs, quickConnectLast, quickConnectTarget, renderRecents };

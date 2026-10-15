@@ -213,7 +213,7 @@ export function initMetaUI() {
         // A slow native status/settings query must defer these flows, not
         // discard them. The compatibility process stays blocked after readiness.
         const ready = await V().startupInitialized;
-        if (!ready || updateStartupBlocked()) return;
+        if (!ready || updateStartupBlocked() || await V().startupUpdateFinished()) return;
         maybeCrashToast();
         setTimeout(maybeOnboard, 400);
     }, 600);

@@ -181,9 +181,10 @@ type Settings struct {
 	WhisperActive   bool     `json:"whisper_active"`
 
 	// Misc.
-	DownloadFolder   string `json:"download_folder"`
-	ReconnectOnLoss  bool   `json:"reconnect_on_loss"`
-	UpdatesAutoCheck bool   `json:"updates_auto_check"`
+	DownloadFolder     string `json:"download_folder"`
+	ReconnectOnLoss    bool   `json:"reconnect_on_loss"`
+	UpdatesAutoCheck   bool   `json:"updates_auto_check"`
+	UpdatesAutoInstall bool   `json:"updates_auto_install"` // install/restart only on application startup
 
 	UpdatesCheckOnReconnect bool `json:"updates_check_on_reconnect"`
 
@@ -300,6 +301,7 @@ func DefaultSettings() Settings {
 		ChatNotificationLevel: "all",
 		ReconnectOnLoss:       true,
 		UpdatesAutoCheck:      true,
+		UpdatesAutoInstall:    true,
 
 		UpdatesCheckOnReconnect: true,
 

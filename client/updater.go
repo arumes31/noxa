@@ -505,7 +505,7 @@ func (a *App) emitUpdateProgress(progress updateProgress) {
 }
 
 // ApplyAndRestart relaunches the (just-updated) executable and quits the
-// current process. Only call after user confirmation.
+// current process. Called by the manual action or the enabled startup update policy.
 func (a *App) ApplyAndRestart() string {
 	if a.ctx == nil {
 		return "application window is not available"
