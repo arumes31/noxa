@@ -42,7 +42,8 @@ const udpInboundCap = 1024
 // owns its buffer, which the worker must return to the pool when done.
 type udpPacket struct {
 	remote  *net.UDPAddr
-	payload []byte // header byte + body, owned by this struct
+	payload []byte  // header byte + body
+	bufp    *[]byte // pointer to pooled buffer, returned to pool after processing
 }
 
 // UDPStats is a point-in-time snapshot of UDP server counters. PacketsReceived
@@ -196,20 +197,14 @@ func (s *UDPServer) readLoop() {
 
 		s.packetsReceived.Add(1)
 
-		// Copy the relevant slice into a buffer the worker owns. We cannot
-		// hand the pooled buffer directly to the channel because the read
-		// loop would reuse it on the next iteration; instead we allocate a
-		// fresh buffer per packet. (A future optimization could use a
-		// second pool of exactly-sized buffers.)
-		pkt := make([]byte, n)
-		copy(pkt, buf[:n])
-		s.bufPool.Put(bufp)
-
+		// We hand the pooled buffer directly to the channel.
+		// The worker is responsible for returning it to the pool.
 		select {
-		case s.inbound <- udpPacket{remote: remote, payload: pkt}:
+		case s.inbound <- udpPacket{remote: remote, payload: buf[:n], bufp: bufp}:
 		default:
 			// Queue full: drop to apply backpressure rather than block the
 			// reader or grow unboundedly.
+			s.bufPool.Put(bufp)
 			s.packetsDropped.Add(1)
 			s.metric().IncUDPPacketsDropped()
 			if s.logger.Core().Enabled(zap.DebugLevel) {
@@ -234,6 +229,9 @@ func (s *UDPServer) worker() {
 func (s *UDPServer) processPacket(pkt udpPacket) {
 	defer s.packetsProcessed.Add(1)
 	defer func() {
+		if pkt.bufp != nil {
+			s.bufPool.Put(pkt.bufp)
+		}
 		if recovered := recover(); recovered != nil {
 			s.packetsDropped.Add(1)
 			s.metric().IncUDPPacketsDropped()
