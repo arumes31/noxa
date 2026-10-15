@@ -7,6 +7,7 @@ const V = () => window.__noxa;
 
 let modal = null;
 let startupChecked = false;
+let startupCheck = Promise.resolve(false);
 let downloading = false;
 let restarting = false;
 let applied = false;
@@ -101,7 +102,7 @@ async function runCheck(m, knownInfo) {
     btn.onclick = () => startDownload(m, info);
 }
 
-async function startDownload(m, info) {
+async function startDownload(m, info, restartOnSuccess = false) {
     if (downloading || applied) return;
     downloading = true;
     const status = m.querySelector(".upd-status");
@@ -192,6 +193,7 @@ async function startDownload(m, info) {
         }
         applied = true;
         showRestart(m);
+        if (restartOnSuccess) return await restartUpdate(m);
     } catch (e) {
         unsubscribe();
         status.textContent = t("updater.updateFailed", { error: e });
@@ -216,36 +218,42 @@ function showRestart(m) {
     btn.classList.remove("hidden");
     btn.textContent = t("updater.restartNow");
     btn.disabled = false;
-    btn.onclick = async () => {
-        if (restarting) return;
-        restarting = true;
-        btn.disabled = true;
-        btn.textContent = t("updater.processing");
-        m.querySelector(".upd-close").disabled = true;
-        status.textContent = t("updater.starting");
+    btn.onclick = () => restartUpdate(m);
+}
+
+async function restartUpdate(m) {
+    const status = m.querySelector(".upd-status");
+    const btn = m.querySelector(".upd-update");
+    if (restarting) return;
+    restarting = true;
+    btn.disabled = true;
+    btn.textContent = t("updater.processing");
+    m.querySelector(".upd-close").disabled = true;
+    status.textContent = t("updater.starting");
+    try {
+        const error = await window.go.main.App.ApplyAndRestart();
+        if (error) throw new Error(error);
+        return true;
+    } catch (error) {
+        status.textContent = t("updater.restartFailed", { error });
+        status.classList.add("warn");
+        btn.disabled = false;
+        // A failed replacement may have been rolled back by the native
+        // launcher. Offer a fresh download instead of restarting it again.
         try {
-            const error = await window.go.main.App.ApplyAndRestart();
-            if (error) throw new Error(error);
-        } catch (error) {
-            status.textContent = t("updater.restartFailed", { error });
-            status.classList.add("warn");
-            btn.disabled = false;
-            // A failed replacement may have been rolled back by the native
-            // launcher. Offer a fresh download instead of restarting it again.
-            try {
-                if (await window.go.main.App.GetUpdatePhase() === "restored") {
-                    applied = false;
-                    btn.textContent = t("updater.updateNow");
-                    btn.classList.add("hidden");
-                    m.querySelector(".upd-retry").classList.remove("hidden");
-                }
-            } catch { /* Keep the original restart error visible. */ }
-        } finally {
-            restarting = false;
-            if (applied) btn.textContent = t("updater.restartNow");
-            m.querySelector(".upd-close").disabled = false;
-        }
-    };
+            if (await window.go.main.App.GetUpdatePhase() === "restored") {
+                applied = false;
+                btn.textContent = t("updater.updateNow");
+                btn.classList.add("hidden");
+                m.querySelector(".upd-retry").classList.remove("hidden");
+            }
+        } catch { /* Keep the original restart error visible. */ }
+        return false;
+    } finally {
+        restarting = false;
+        if (applied) btn.textContent = t("updater.restartNow");
+        m.querySelector(".upd-close").disabled = false;
+    }
 }
 
 async function checkForUpdatesInteractive() {
@@ -254,7 +262,7 @@ async function checkForUpdatesInteractive() {
     await runCheck(m);
 }
 
-async function quietUpdateCheck(enabled, current = async () => true) {
+async function quietUpdateCheck(enabled, current = async () => true, autoInstall = () => false) {
     if (!enabled() || modal || downloading || restarting || applied) return;
     try {
         // Startup and simultaneous server recoveries share one metadata request.
@@ -262,18 +270,29 @@ async function quietUpdateCheck(enabled, current = async () => true) {
             .finally(() => { automaticCheck = null; });
         const info = await automaticCheck;
         if (!info?.available || !enabled() || modal || applied || !await current()) return;
-        if (enabled() && !modal && !applied) await runCheck(showUpdateModal(), info);
+        if (enabled() && !modal && !applied) {
+            const m = showUpdateModal();
+            await runCheck(m, info);
+            if (autoInstall() && m.isConnected && modal === m && !applied) {
+                return await startDownload(m, info, true);
+            }
+        }
     } catch { /* Offline or no update source: stay quiet. */ }
 }
 
-// Automatic checks only offer an available update; they never install it.
+// Only this once-per-app-start path may install automatically. Reconnects
+// share metadata requests, never this installation permission.
 export function startupAutoCheck() {
-    if (startupChecked) return;
+    if (startupChecked) return startupCheck;
     startupChecked = true;
-    void quietUpdateCheck(() => V().state.settings?.updates_auto_check !== false);
+    // A failed settings load cannot silently grant installation permission.
+    const install = () => !!V().state.settings && V().state.settings.updates_auto_install !== false;
+    startupCheck = quietUpdateCheck(() => install() || V().state.settings?.updates_auto_check !== false, undefined, install);
+    return startupCheck;
 }
 
 export async function reconnectAutoCheck(tabID) {
+    if (await startupCheck) return;
     const enabled = () => V().state.settings?.updates_check_on_reconnect !== false;
     if (!tabID || !enabled() || modal || downloading || restarting || applied) return;
     try {
@@ -289,5 +308,6 @@ export async function reconnectAutoCheck(tabID) {
 export function initUpdater() {
     window.__noxa.checkForUpdatesInteractive = checkForUpdatesInteractive;
     window.__noxa.startupAutoCheck = startupAutoCheck;
+    window.__noxa.startupUpdateFinished = () => startupCheck;
     window.__noxa.reconnectAutoCheck = reconnectAutoCheck;
 }

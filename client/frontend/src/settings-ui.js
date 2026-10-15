@@ -289,6 +289,8 @@ function pageApplication() {
     el.appendChild(row(t("settings.toasts.for.join.leave"), checkbox(s.notify_join_leave, (v) => { s.notify_join_leave = v; })));
     el.appendChild(row(t("settings.toasts.for.connection.events"), checkbox(s.notify_connection, (v) => { s.notify_connection = v; })));
     el.appendChild(row(t("settings.reconnect.on.connection.loss.5.tries"), checkbox(s.reconnect_on_loss, (v) => { s.reconnect_on_loss = v; })));
+    el.appendChild(row(t("settings.install.updates.at.startup"), checkbox(s.updates_auto_install !== false, (v) => { s.updates_auto_install = v; }), "startup"));
+    el.appendChild(hint(t("settings.install.updates.at.startup.help")));
     el.appendChild(row(t("settings.check.for.updates.at.startup"), checkbox(s.updates_auto_check !== false, (v) => { s.updates_auto_check = v; }), "startup"));
     el.appendChild(row(t("settings.check.for.updates.on.reconnect"), checkbox(s.updates_check_on_reconnect !== false, (v) => { s.updates_check_on_reconnect = v; })));
 

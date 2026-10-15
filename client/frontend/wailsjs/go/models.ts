@@ -1355,6 +1355,7 @@ export namespace main {
 	    download_folder: string;
 	    reconnect_on_loss: boolean;
 	    updates_auto_check: boolean;
+	    updates_auto_install: boolean;
 	    user_volumes: Record<string, number>;
 	    user_share_volumes: Record<string, number>;
 	    muted_share_users: string[];
@@ -1479,6 +1480,7 @@ export namespace main {
 	        this.download_folder = source["download_folder"];
 	        this.reconnect_on_loss = source["reconnect_on_loss"];
 	        this.updates_auto_check = source["updates_auto_check"];
+	        this.updates_auto_install = source["updates_auto_install"];
 	        this.user_volumes = source["user_volumes"];
 	        this.user_share_volumes = source["user_share_volumes"];
 	        this.muted_share_users = source["muted_share_users"];
