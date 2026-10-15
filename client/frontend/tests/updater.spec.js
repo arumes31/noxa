@@ -225,7 +225,8 @@ test("startup offers update before connecting and checks once", async ({ page })
     await expect(dialog).toBeVisible();
     await expect(dialog).toContainText("v0.4.1");
     await expect(dialog.getByRole("button", { name: "Update now" })).toBeVisible();
-    await expect(dialog).toContainText("current build: 0.4.0");
+    await expect(dialog.locator(".upd-current")).toHaveText("0.4.0");
+    await expect(dialog.locator(".upd-current")).toHaveAttribute("aria-label", "current build: 0.4.0");
     await page.evaluate(() => window.__noxa.startupAutoCheck());
     expect(await page.evaluate(() => window.__calls.CheckForUpdate)).toBe(1);
     expect(await page.evaluate(() => window.__calls.Connect)).toBeUndefined();
@@ -255,7 +256,7 @@ test("verification and installation show distinct stages and cannot be cancelled
         await page.evaluate(phase => window.__events.update_phase.forEach(cb => cb(phase)), phase);
         await expect(page.locator(".upd-status")).toHaveText(label);
         await expect(page.locator(".upd-cancel")).toBeHidden();
-        await expect(page.getByRole("button", { name: "Processing…", exact: true })).toBeDisabled();
+        await expect(page.locator(".upd-update")).toBeDisabled();
         await expect(page.locator(".upd-speed")).toBeHidden();
     }
     await page.evaluate(() => window.__finishDownload());
@@ -277,7 +278,7 @@ test("restart remains visibly processing until startup succeeds or recovers", as
     await boot(page, { restartPending: true, restartError: "startup failed" });
     await page.getByRole("button", { name: "Update now" }).click();
     await page.getByRole("button", { name: "Restart now" }).click();
-    await expect(page.getByRole("button", { name: "Processing…", exact: true })).toBeDisabled();
+    await expect(page.locator(".upd-update")).toBeDisabled();
     await expect(page.locator(".upd-status")).toContainText("Starting the updated app");
     await page.keyboard.press("Escape");
     await expect(page.locator(".update-dlg")).toBeVisible();
@@ -299,7 +300,7 @@ test("update shows progress, prevents duplicates, then restarts", async ({ page 
     await boot(page, { downloadPending: true });
     await page.getByRole("button", { name: "Update now" }).click();
     await expect(page.locator(".upd-pct")).toHaveText("50%");
-    await expect(page.getByRole("button", { name: "Processing…", exact: true })).toBeDisabled();
+    await expect(page.locator(".upd-update")).toBeDisabled();
     await page.getByRole("dialog", { name: "Check for updates" }).screenshot({ path: testInfo.outputPath("update-processing.png") });
     await page.keyboard.press("Escape");
     await expect(page.locator(".update-dlg")).toBeVisible();
@@ -423,7 +424,8 @@ test("German updater translates failure, retry, progress and restart", async ({ 
     await expect(dialog.locator(".upd-status")).toHaveText("Update verfügbar: v0.4.1 (1.0 MiB)");
     await dialog.getByRole("button", { name: "Jetzt aktualisieren", exact: true }).click();
     await expect(dialog.locator(".upd-status")).toHaveText("Wird heruntergeladen…");
-    await expect(dialog.getByRole("button", { name: "Wird verarbeitet…", exact: true })).toBeDisabled();
+    await expect(dialog.locator(".upd-update")).toBeDisabled();
+    await expect(dialog.locator(".upd-update")).toHaveText("Wird verarbeitet…");
     await page.evaluate(() => {
         for (const cb of window.__events.update_progress) cb(50, { bytes_per_second: 1048576 });
     });
@@ -524,4 +526,100 @@ test("concurrent startup and reconnect cannot duplicate automatic installation",
     expect(await page.evaluate(() => window.__calls.CheckForUpdate)).toBe(1);
     expect(await page.evaluate(() => window.__calls.DownloadAndApply)).toBe(1);
     expect(await page.evaluate(() => window.__calls.ApplyAndRestart)).toBe(1);
+});
+
+
+test("violet core uses real byte counts and waits for verified completion plus three seconds", async ({ page }, testInfo) => {
+    await boot(page, { downloadPending: true });
+    await expect(page.locator(".upd-update")).toBeVisible();
+    await page.clock.install({ time: new Date("2026-10-15T00:00:00Z") });
+    await page.clock.pauseAt(new Date("2026-10-15T00:00:01Z"));
+    await page.locator(".upd-update").click();
+    await page.evaluate(() => {
+        for (const cb of window.__events.update_progress || []) cb(25, { downloaded_bytes: 524288, total_bytes: 1048576, bytes_per_second: 262144 });
+    });
+    await expect(page.locator(".upd-pct")).toHaveText("50%");
+    await expect(page.locator(".upd-bytes")).toHaveText("512.00 KiB / 1.00 MiB");
+    await expect(page.locator(".upd-blocks")).toHaveText("40 / 80 blocks");
+    await page.evaluate(() => {
+        for (const cb of window.__events.update_progress || []) cb(100, { downloaded_bytes: 1048576, total_bytes: 1048576, bytes_per_second: 0 });
+        for (const cb of window.__events.update_phase || []) cb("ready");
+    });
+    await page.clock.runFor(10000);
+    expect(await page.evaluate(() => window.__calls.ApplyAndRestart || 0)).toBe(0);
+    await page.evaluate(() => window.__finishDownload());
+    await expect(page.locator(".upd-countdown")).toHaveText("Restarting automatically in 3 s…");
+    await page.locator(".update-dlg").screenshot({ path: testInfo.outputPath("violet-countdown.png") });
+    await page.clock.runFor(2999);
+    expect(await page.evaluate(() => window.__calls.ApplyAndRestart || 0)).toBe(0);
+    await page.clock.runFor(1);
+    await expect.poll(() => page.evaluate(() => window.__calls.ApplyAndRestart)).toBe(1);
+    await page.clock.runFor(10000);
+    expect(await page.evaluate(() => window.__calls.ApplyAndRestart)).toBe(1);
+});
+
+test("closing the verified countdown cancels auto restart and retains manual restart", async ({ page }) => {
+    await boot(page, { downloadPending: true });
+    await expect(page.locator(".upd-update")).toBeVisible();
+    await page.clock.install();
+    await page.locator(".upd-update").click();
+    await page.evaluate(() => window.__finishDownload());
+    await expect(page.locator(".upd-countdown")).toBeVisible();
+    await page.locator(".upd-close").click();
+    await page.clock.runFor(5000);
+    expect(await page.evaluate(() => window.__calls.ApplyAndRestart || 0)).toBe(0);
+    await page.evaluate(() => window.__noxa.checkForUpdatesInteractive());
+    await expect(page.locator(".upd-update")).toHaveText("Restart now");
+    await page.locator(".upd-update").click();
+    await expect.poll(() => page.evaluate(() => window.__calls.ApplyAndRestart)).toBe(1);
+});
+
+test("removed dialog cannot restart from a late successful staging result", async ({ page }) => {
+    await boot(page, { downloadPending: true });
+    await expect(page.locator(".upd-update")).toBeVisible();
+    await page.clock.install();
+    await page.locator(".upd-update").click();
+    await page.evaluate(() => { document.querySelector(".update-dlg").parentElement.remove(); window.__finishDownload(); });
+    await page.clock.runFor(10000);
+    expect(await page.evaluate(() => window.__calls.ApplyAndRestart || 0)).toBe(0);
+    expect(await page.evaluate(() => (window.__events.update_progress || []).length)).toBe(0);
+});
+
+
+for (const theme of ["dark", "light", "hc"]) {
+    test(`violet offer and measured core remain readable in ${theme}`, async ({ page }, testInfo) => {
+        await boot(page, { downloadPending: true });
+        await expect(page.locator(".upd-update")).toBeVisible();
+        await page.evaluate(theme => { document.documentElement.dataset.theme = theme; }, theme);
+        expect((await page.locator(".update-dlg").boundingBox()).width).toBe(590);
+        await page.locator(".update-dlg").screenshot({ path: testInfo.outputPath(`violet-${theme}-offer.png`) });
+        await page.locator(".upd-update").click();
+        await page.evaluate(() => {
+            for (const cb of window.__events.update_progress || []) cb(50, { downloaded_bytes: 20971520, total_bytes: 41943040, bytes_per_second: 8388608 });
+        });
+        await expect(page.locator(".upd-bits")).toHaveText("67.11 Mbit/s");
+        await expect(page.locator(".upd-progress")).toHaveAttribute("aria-valuenow", "50");
+        await page.locator(".update-dlg").screenshot({ path: testInfo.outputPath(`violet-${theme}-download.png`) });
+        await page.setViewportSize({ width: 390, height: 780 });
+        const box = await page.locator(".update-dlg").boundingBox();
+        expect(box.width).toBeLessThanOrEqual(358);
+        expect(box.x).toBeGreaterThanOrEqual(0);
+        await expect(page.locator(".upd-cancel")).toBeVisible();
+        await page.locator(".update-dlg").screenshot({ path: testInfo.outputPath(`violet-${theme}-mobile.png`) });
+        expect(await page.locator(".upd-body").evaluate(el => getComputedStyle(el).animationName)).toBe("none");
+    });
+}
+
+test("bloom runs only once on transition and observers retire with the dialog", async ({ page }) => {
+    await page.emulateMedia({ reducedMotion: "no-preference" });
+    await boot(page, { downloadPending: true });
+    await expect(page.locator(".upd-update")).toBeVisible();
+    await page.locator(".upd-update").click();
+    expect(await page.locator(".upd-body").evaluate(el => getComputedStyle(el).animationIterationCount)).toBe("1");
+    await page.waitForTimeout(600);
+    expect(await page.locator(".upd-body").evaluate(el => el.getAnimations().filter(a => a.playState === "running").length)).toBe(0);
+    await page.locator(".upd-cancel").click();
+    await expect(page.locator(".upd-status")).toHaveText("Download cancelled. You can try again.");
+    await page.locator(".upd-close").click();
+    expect(await page.evaluate(() => (window.__events.update_progress || []).length)).toBe(0);
 });
