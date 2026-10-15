@@ -201,7 +201,7 @@ function showHoverCard(x, y, html, avatarURL = null) {
     hoverCard.innerHTML = html;
     const avatarSlot = hoverCard.querySelector(".hc-avatar-slot");
     if (avatarSlot) {
-        if (!setSafeImage(avatarSlot, avatarURL, { className: "hc-av" })) avatarSlot.remove();
+        if (!setSafeImage(avatarSlot, avatarURL, { className: "hc-av", avatar: true })) avatarSlot.remove();
     }
     hoverCard.style.left = Math.min(x, window.innerWidth - 260) + "px";
     hoverCard.style.top = Math.min(y, window.innerHeight - 160) + "px";
@@ -341,7 +341,7 @@ function avatarLightbox(dataUrl) {
     const overlay = document.createElement("div");
     overlay.className = "dlg-overlay";
     overlay.innerHTML = `<div class="dlg avatar-full"></div>`;
-    if (!setSafeImage(overlay.querySelector(".avatar-full"), dataUrl)) return;
+    if (!setSafeImage(overlay.querySelector(".avatar-full"), dataUrl, { avatar: true })) return;
     overlay.onclick = () => overlay.remove();
     mountServerDialog(overlay);
 }

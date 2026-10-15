@@ -30,12 +30,13 @@ export function isSafeImageDataURL(value) {
 }
 
 export function createSafeImage(dataURL, options = {}) {
-    if (!isSafeImageDataURL(dataURL)) return null;
+    if (!isSafeImageDataURL(dataURL) || (options.avatar && dataURL.length > 350000)) return null;
     const ownerDocument = options.ownerDocument || globalThis.document;
     if (!ownerDocument?.createElement) return null;
     const image = ownerDocument.createElement("img");
     image.alt = String(options.alt || "");
     if (options.className) image.className = String(options.className);
+    if (options.avatar) image.dataset.avatarImage = "";
     image.src = dataURL;
     return image;
 }

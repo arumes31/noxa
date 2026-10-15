@@ -1,0 +1,5 @@
+Avatar fixtures (no external user images):
+- avatar-animated.gif: two generated 1x1 black/white full GIF frames, 120ms, infinite loop; no payload metadata.
+- avatar-animated.webp: existing repository chat-gif-playback.spec.js synthetic 24x24 red/blue Pillow fixture, 120ms.
+- avatar-alpha-lossy.webp and avatar-alpha-lossless.webp: generated with Pillow12.1.0; two16x16 RGBA frames containing8x8 red/blue squares on transparent canvas, alpha120/180,120ms, loop0. These exercise ALPH+VP8 and VP8L respectively.
+Original bytes are the expected upload/download values. Decode validation applies before storage; no fixture is user content.

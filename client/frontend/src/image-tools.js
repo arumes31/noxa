@@ -5,6 +5,7 @@ import { t } from "./i18n.js";
 // icons are downscaled to max 1024px and recompressed as JPEG q0.85 (274).
 // Animated GIF/WebP always pass through untouched — canvas re-encoding
 // would flatten the animation (269).
+import { setSafeImage } from "./safe-media.js";
 import { closeDialog, mountDialog } from "./modal.js";
 
 const V = () => window.__noxa;
@@ -19,7 +20,7 @@ function generationCurrent(options) {
 // readFileBase64 reads a File as base64.
 async function readFileBase64(file) {
     const buf = await file.arrayBuffer();
-    return btoa(String.fromCharCode(...new Uint8Array(buf)));
+    return bytesBase64(new Uint8Array(buf));
 }
 
 // pickFile opens the file picker and resolves with the File (or null).
@@ -78,17 +79,71 @@ async function passthroughAnimated(file, current = () => true) {
 
 // pickAvatar opens the picker + crop dialog (268) and resolves with
 // {dataBase64, contentType} or null when cancelled.
+function bytesBase64(bytes) {
+    let binary = "";
+    for (let i = 0; i < bytes.length; i += 8192) binary += String.fromCharCode(...bytes.subarray(i, i + 8192));
+    return btoa(binary);
+}
+
 export async function pickAvatar(options = {}) {
-    const file = await pickFile();
-    if (!file || !generationCurrent(options)) return null;
-    const anim = await passthroughAnimated(file);
-    if (!generationCurrent(options)) return null;
-    if (anim) return anim.dataBase64 ? anim : null;
+    return prepareAvatar(await pickFile(), options);
+}
+
+export async function prepareAvatar(file, options = {}) {
+    const current = () => generationCurrent(options);
+    if (!file || !current()) return null;
     if (file.size > 8 * 1024 * 1024) {
-        V().toast(t("desktop.image.too.large.max.8.mib"), "warn");
+        V().toast(t("desktop.image.too.large.max.8.mib"), "warn"); return null;
+    }
+    if ((file.type === "image/gif" || file.type === "image/webp") && file.size > MAX_UPLOAD) {
+        V().toast(t("desktop.animated.image.too.large.max.256.kib"), "warn"); return null;
+    }
+    try {
+        const bytes = new Uint8Array(await file.arrayBuffer());
+        if (!current()) return null;
+        const head = String.fromCharCode(...bytes.subarray(0, 16));
+        const type = /^GIF8[79]a/.test(head) ? "image/gif" :
+            head.startsWith("RIFF") && head.slice(8, 12) === "WEBP" ? "image/webp" :
+            head.startsWith("\x89PNG\r\n\x1a\n") ? "image/png" :
+            bytes[0] === 255 && bytes[1] === 216 && bytes[2] === 255 ? "image/jpeg" : "";
+        if (!type) throw new Error("unsupported image");
+        if (type === "image/png") {
+            const view = new DataView(bytes.buffer);
+            for (let pos = 8; pos + 12 <= bytes.length;) {
+                const kind = String.fromCharCode(...bytes.subarray(pos + 4, pos + 8));
+                if (["acTL", "fcTL", "fdAT"].includes(kind)) {
+                    V().toast(t("desktop.avatar.apng.unsupported"), "warn"); return null;
+                }
+                const next = pos + 12 + view.getUint32(pos);
+                if (next > bytes.length) throw new Error("invalid PNG");
+                pos = next;
+            }
+        }
+        if (type === "image/gif" || type === "image/webp") {
+            if (bytes.length > MAX_UPLOAD) { V().toast(t("desktop.animated.image.too.large.max.256.kib"), "warn"); return null; }
+            return avatarOriginalDialog({ dataBase64: bytesBase64(bytes), contentType: type }, options);
+        }
+        return cropDialog(file, options);
+    } catch {
+        if (current()) V().toast(t("desktop.cannot.read.image"), "warn");
         return null;
     }
-    return cropDialog(file, options);
+}
+
+function avatarOriginalDialog(payload, options) {
+    return new Promise(resolve => {
+        const overlay = document.createElement("div"); overlay.className = "dlg-overlay";
+        overlay.innerHTML = `<div class="dlg img-edit"><h3>${escapeTranslation(t("desktop.set.avatar"))}</h3>
+            <div class="img-preview"></div><p class="dlg-text">${escapeTranslation(t("desktop.avatar.animation.original"))}</p>
+            <div class="dlg-buttons"><button class="dlg-ok">${escapeTranslation(t("desktop.use.image"))}</button>
+            <button class="dlg-cancel">${escapeTranslation(t("desktop.cancel"))}</button></div></div>`;
+        const image = setSafeImage(overlay.querySelector(".img-preview"), `data:${payload.contentType};base64,${payload.dataBase64}`, { avatar: true });
+        image.style.cssText = "width:256px;height:256px;object-fit:contain";
+        let result = null;
+        overlay.querySelector(".dlg-ok").onclick = () => { if (generationCurrent(options)) result = payload; closeDialog(overlay); };
+        overlay.querySelector(".dlg-cancel").onclick = () => closeDialog(overlay, "cancel");
+        mountDialog(overlay, { serverScoped: options.serverScoped, onCancel: () => { result = null; }, onClose: () => resolve(result) });
+    });
 }
 
 // pickIcon opens the picker and returns a compressed image (274): downscale
