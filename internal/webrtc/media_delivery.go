@@ -1,11 +1,16 @@
 package webrtc
 
-import "github.com/pion/rtp"
+import (
+	"github.com/pion/rtp"
+	"sync/atomic"
+)
 
 // MediaDelivery identifies the routing decision for one packet and recipient.
 // The guard must validate both channel IDs against current membership. Tap
 // recipients are recorder identities, not registered client sessions.
 type MediaDelivery struct {
+	// Immutable source authority for buffered video; never rebound at dequeue.
+	sourceLive                    *atomic.Bool
 	SenderID, RecipientID         string
 	ChannelID, RecipientChannelID int64
 	Slot                          string

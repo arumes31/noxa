@@ -192,7 +192,25 @@ type VideoKeyframeRequestDiagnostics struct {
 	Explicit        VideoKeyframeRequestCounters `json:"explicit"`
 }
 
+// VideoDispatchDiagnostics describes bounded post-reorder dispatch, not kernel
+// arrival, transport loss or a hard end-to-end latency ceiling.
+type VideoDispatchDiagnostics struct {
+	QueuedPackets    int    `json:"queued_packets"`
+	QueuedBytes      int    `json:"queued_bytes"`
+	OldestQueuedMS   int64  `json:"oldest_queued_ms"`
+	MaxWaitMS        int64  `json:"max_wait_ms"`
+	OverflowDrops    uint64 `json:"overflow_drops"`
+	ExpiryDrops      uint64 `json:"expiry_drops"`
+	CancelledPackets uint64 `json:"cancelled_packets"`
+	RecoveryDrops    uint64 `json:"recovery_drops"`
+	Discontinuities  uint64 `json:"discontinuities"`
+	CallbackActive   bool   `json:"callback_active"`
+	CallbackAgeMS    int64  `json:"callback_age_ms"`
+	MaxCallbackMS    int64  `json:"max_callback_ms"`
+}
+
 type VideoStreamLayerDiagnostics struct {
+	Dispatch         *VideoDispatchDiagnostics        `json:"dispatch,omitempty"`
 	RID              string                           `json:"rid"`
 	SSRC             uint32                           `json:"ssrc"`
 	StartedAt        int64                            `json:"started_at"`

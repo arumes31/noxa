@@ -102,6 +102,7 @@ func diagnosticVideoRID(rid string) bool {
 }
 
 type videoIngressDiagnostic struct {
+	dispatch         atomic.Pointer[videoIngressDispatch]
 	readTiming       atomic.Pointer[upstreamTimingSession]
 	mu               sync.Mutex
 	ssrc             uint32
@@ -222,7 +223,7 @@ func (r *Router) StreamDiagnostics(subscriber, publisher, slot string, generatio
 			continue
 		}
 		input.mu.Lock()
-		layer := netproto.VideoStreamLayerDiagnostics{RID: key.rid, SSRC: input.ssrc, StartedAt: input.started.UnixMilli(), Ingress: input.stage.snapshot(now), H264Rejects: input.h264RejectSnapshot(), KeyframeRequests: input.keyframeRequestSnapshot()}
+		layer := netproto.VideoStreamLayerDiagnostics{Dispatch: input.dispatch.Load().snapshot(now), RID: key.rid, SSRC: input.ssrc, StartedAt: input.started.UnixMilli(), Ingress: input.stage.snapshot(now), H264Rejects: input.h264RejectSnapshot(), KeyframeRequests: input.keyframeRequestSnapshot()}
 		input.mu.Unlock()
 		result.Layers = append(result.Layers, layer)
 	}

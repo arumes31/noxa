@@ -57,6 +57,15 @@ func (r *Router) withEchoScope(delivery MediaDelivery, write func() error) error
 
 func (r *Router) withMediaScope(delivery MediaDelivery, write func() error) error {
 	return r.withEchoScope(delivery, func() error {
-		return r.withWhisperScope(delivery, func() error { return r.withWatch(delivery, write) })
+		return r.withWhisperScope(delivery, func() error {
+			return r.withWatch(delivery, func() error {
+				// This is an admission check, not a drain barrier: a write already entered
+				// before retirement remains owned by its existing callback/egress worker.
+				if delivery.sourceLive != nil && !delivery.sourceLive.Load() {
+					return nil
+				}
+				return write()
+			})
+		})
 	})
 }

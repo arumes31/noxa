@@ -1,6 +1,7 @@
 package webrtc
 
 import (
+	"sync/atomic"
 	"testing"
 
 	"github.com/pion/interceptor"
@@ -67,8 +68,9 @@ func TestAudioAuthorizationRevokedDuringContinuousSpeech(t *testing.T) {
 
 func TestVideoAuthorizationRevokedDuringLiveTrack(t *testing.T) {
 	r := NewRouter(nil)
-	allowed := true
-	r.SetVideoHandlers(func(string) bool { return allowed })
+	var allowed atomic.Bool
+	allowed.Store(true)
+	r.SetVideoHandlers(func(string) bool { return allowed.Load() })
 	r.JoinChannel(1, "publisher")
 	tap := &fakeTrackWriter{}
 	r.addVideoOutput("recorder", tap)
@@ -77,7 +79,7 @@ func TestVideoAuthorizationRevokedDuringLiveTrack(t *testing.T) {
 		fakeVideoTrack: fakeVideoTrack{ssrc: 42, fakeTrackReader: fakeTrackReader{packets: []*rtp.Packet{
 			makeAudioPacket(t, 1, -1), makeAudioPacket(t, 2, -1), makeAudioPacket(t, 3, -1),
 		}}},
-		beforeRead: func(n int) { allowed = n == 0 },
+		beforeRead: func(n int) { waitVideoDispatchIdle(t, r); allowed.Store(n == 0) },
 	}
 	r.ReadVideoLoop("publisher", SlotCam, track)
 	if got := tap.count(); got != 1 {

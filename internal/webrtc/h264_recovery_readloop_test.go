@@ -63,9 +63,10 @@ func TestH264ReadLoopCompleteReplacementRecovery(t *testing.T) {
 			for _, packet := range tc.replacement {
 				send(packet)
 			}
-			// The nil read is a barrier: all prior contiguous packets finished their
-			// synchronous forwarding and diagnostics, without injecting another AU.
+			// Finish prior dispatch without injecting another access unit. A nil
+			// read alone no longer promises completion of asynchronous forwarding.
 			send(nil)
+			waitVideoDispatchIdle(t, r)
 			r.mu.RLock()
 			input := r.videoIngress[videoIngressKey{"pub", SlotScreen, "f"}]
 			r.mu.RUnlock()
