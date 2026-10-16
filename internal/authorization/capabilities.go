@@ -52,6 +52,8 @@ type CapabilityInfo struct {
 	Requires []Capability `json:"requires,omitempty"`
 }
 
+var capabilityCatalogMap map[Capability]CapabilityInfo
+
 var capabilityCatalog = []CapabilityInfo{
 	{Administrator, "server", "Administrator", "Administrator", false, nil},
 	{ViewChannel, "access", "View channel", "Kanal sehen", true, nil},
@@ -91,6 +93,13 @@ var capabilityCatalog = []CapabilityInfo{
 	{PokeMembers, "profile", "Poke members", "Mitglieder anstupsen", false, nil},
 }
 
+func init() {
+	capabilityCatalogMap = make(map[Capability]CapabilityInfo, len(capabilityCatalog))
+	for _, info := range capabilityCatalog {
+		capabilityCatalogMap[info.Key] = info
+	}
+}
+
 // Capabilities returns a defensive copy in editor display order.
 func Capabilities() []CapabilityInfo {
 	result := append([]CapabilityInfo(nil), capabilityCatalog...)
@@ -101,10 +110,6 @@ func Capabilities() []CapabilityInfo {
 }
 
 func capabilityInfo(key Capability) (CapabilityInfo, bool) {
-	for _, info := range capabilityCatalog {
-		if info.Key == key {
-			return info, true
-		}
-	}
-	return CapabilityInfo{}, false
+	info, ok := capabilityCatalogMap[key]
+	return info, ok
 }

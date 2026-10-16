@@ -1,0 +1,3 @@
+## 2024-05-14 - O(n) lookups in authorization hot paths
+**Learning:** `capabilityInfo` does an O(n) linear search over the `capabilityCatalog` slice which is heavily used in `RoleEvaluator.Evaluate`. Additionally, small slices are frequently concatenated (`append([]int64{...}, ...)`) in evaluate loops which causes many short-lived memory allocations. This is highly inefficient in a frequently called authorization path.
+**Action:** Replace small slice appends in hot loops with index-based iteration over existing slices, avoiding `append` entirely. Replace O(n) array lookups with O(1) map lookups using a package-level map initialized in `init()`.

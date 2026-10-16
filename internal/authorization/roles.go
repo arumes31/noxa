@@ -198,8 +198,13 @@ func (e *RoleEvaluator) Evaluate(userID, channelID int64, capability Capability)
 		d.Reason = "owner"
 		return d
 	}
-	ids := append([]int64{e.policy.EveryoneID}, e.members[userID]...)
-	for _, id := range ids {
+
+	// Iterate without allocating a new slice
+	for i, limit := -1, len(e.members[userID]); i < limit; i++ {
+		id := e.policy.EveryoneID
+		if i >= 0 {
+			id = e.members[userID][i]
+		}
 		r := e.roles[id]
 		if slices.Contains(r.Permissions, Administrator) {
 			d.Allowed = true
@@ -223,7 +228,12 @@ func (e *RoleEvaluator) Evaluate(userID, channelID int64, capability Capability)
 				d = RoleDecision{Allowed: o.Effect == Allow, Reason: "everyone_override", RoleIDs: []int64{o.RoleID}, ChannelID: ch.ChannelID, Revision: e.policy.Revision}
 			}
 		}
+
 		var allows, denies []int64
+		if len(ch.Overrides) > 0 {
+			allows = make([]int64, 0, len(ch.Overrides))
+			denies = make([]int64, 0, len(ch.Overrides))
+		}
 		for _, o := range ch.Overrides {
 			if o.Capability != capability || o.RoleID == e.policy.EveryoneID || !slices.Contains(e.members[userID], o.RoleID) {
 				continue
