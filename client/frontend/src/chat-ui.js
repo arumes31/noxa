@@ -26,7 +26,7 @@ import { closeDiscussions, initDiscussions, openDiscussions, renderForumChannel,
 import { closeConversations, initConversations, isPrivateGroupActive, openConversationsAt, resetConversations, viewedConversationID } from "./conversations.js";
 import { QUICK_SWITCH_SETTINGS } from "./shell-model.js";
 import { sessionUserID } from "./session-identity.js";
-import { encryptionBadge } from "./message-encryption.js";
+import { encryptionBadge, UNOPENED_BODIES } from "./message-encryption.js";
 import { chatEnglish } from "./chat-messages.js";
 import { renderMarkdown, escapeHTML, EMOJI } from "./markdown.js";
 import { pickIcon } from "./image-tools.js";
@@ -2400,6 +2400,13 @@ async function maybeLoadOlder() {
 // Live incoming chat (addChat entry point, called from main.js)
 // ---------------------------------------------------------------------------
 
+// notificationLine is the toast / OS-notification text for a channel message.
+// previewLine never carries an attachment's storage key or a refused or
+// unopened body: files show their name, refusals their translated text.
+export function notificationLine(m) {
+    return (m.from || "someone") + ": " + previewLine(m);
+}
+
 export function addChat(d) {
     const st = V().state;
     const m = normalize(d);
@@ -2433,7 +2440,7 @@ export function addChat(d) {
             if (keywordLevelAllowed) {
                 notification = {
                     event: "keyword",
-                    text: `[${kw}] ` + (m.from || "someone") + ": " + (m.text || "").slice(0, 80),
+                    text: `[${kw}] ` + notificationLine(m),
                     context: { channelID: m.channelID, className: "mentions", kind: "warn" },
                 };
             }
@@ -2449,13 +2456,13 @@ export function addChat(d) {
             const context = { channelID: m.channelID, className: directMention || roleMention ? "mentions" : "messages" };
             notification = {
                 event,
-                text: (m.from || "someone") + ": " + (m.text || "").slice(0, 80),
+                text: notificationLine(m),
                 context: { ...context, kind: "warn" },
             };
         } else if (!notification && level === "all") {
             notification = {
                 event: "channel_message",
-                text: (m.from || "someone") + ": " + (m.text || "").slice(0, 80),
+                text: notificationLine(m),
                 context: { channelID: m.channelID, className: "messages", kind: "info" },
             };
         }
@@ -2516,15 +2523,40 @@ function pushMsg(key, m) {
 // upgradeEncryption merges the encryption evidence of a second copy of the
 // same message (a live echo after a history replay, or the reverse) so the
 // first copy never keeps a weaker badge than this client actually verified.
-function upgradeEncryption(existing, m) {
-    if (existing.deleted || existing.encVerified || !m.encVerified || existing.text !== m.text) return;
+// A first copy that stayed unopened (UNOPENED_BODIES placeholder, e.g. the key
+// arrived later) takes the verified copy's body as well; a verified body is
+// never replaced by anything else.
+export function upgradeEncryption(existing, m) {
+    if (existing.deleted || !m.encVerified) return false;
+    const opened = UNOPENED_BODIES.has(existing.text) && typeof m.text === "string" && !UNOPENED_BODIES.has(m.text);
+    if (!opened && (existing.encVerified || existing.text !== m.text)) return false;
+    if (opened) {
+        existing.text = m.text;
+        if (m.e2e) existing.e2e = true;
+    }
     existing.enc = true;
     existing.encVerified = true;
     existing.encMode = m.encMode;
     existing.localUnverified = false;
-    if (!existing.renderKey) return;
+    // The Messages list preview follows the opened body.
+    if (opened && existing.direct) window.dispatchEvent(new CustomEvent("noxa-direct-changed"));
+    if (!existing.renderKey) return true;
     const el = document.querySelector(`#chat-log .msg[data-scroll-key="${CSS.escape(existing.renderKey)}"]`);
     if (el) el.replaceWith(renderMsg(existing));
+    return true;
+}
+
+// trimLog keeps at most max message rows in the chat log. Other children
+// (the Messages view's .dm-day separators) do not count against the limit,
+// and a separator left without a message after it is removed with them.
+export function trimLog(log, max) {
+    const isSeparator = el => !!el?.classList?.contains("dm-day");
+    const rows = [...log.children].filter(child => !isSeparator(child));
+    for (const row of rows.slice(0, Math.max(0, rows.length - max))) row.remove();
+    for (const separator of [...log.children].filter(isSeparator)) {
+        const next = separator.nextElementSibling;
+        if (!next || isSeparator(next)) separator.remove();
+    }
 }
 
 function appendLive(m) {
@@ -2532,7 +2564,7 @@ function appendLive(m) {
     const anchor = captureScrollAnchor(log);
     log.appendChild(renderMsg(m));
     const max = V().state.settings?.chat_max_lines || 200;
-    while (log.children.length > max) log.firstChild.remove();
+    trimLog(log, max);
     applySearchFilter();
     restoreScrollAnchor(log, anchor);
     refreshThreadFor(m.id); // (108) a reply joins the open chain immediately

@@ -59,6 +59,25 @@ describe("Direct Messages stylesheet", () => {
         assert.doesNotMatch(view, /https?:\/\/(?!www\.w3\.org\/2000\/svg)/);
     });
 
+    it("offers a way back to the channel sidebar where it collapses", () => {
+        // #chat-head (with #workspace-sidebar-toggle) is hidden in this view.
+        assert.match(css, /#center\.dm-view-active > :is\(#chat-head\b/);
+        assert.match(view, /iconButton\("speaker", "workspace\.labels\.showChannels"/);
+        assert.match(view, /\$\("workspace-sidebar-toggle"\)\?\.click\(\)/);
+        assert.match(view, /classList\.add\("dm-show-channels"\)/);
+        assert.match(view, /channels\.setAttribute\("aria-controls", "sidebar"\)/);
+        assert.match(view, /\[ui\.add, ui\.channels,/, "the toggle's accessible name follows the language");
+        assert.match(css, /\.dm-show-channels\s*\{\s*display:\s*none;?\s*\}/);
+        assert.match(css, /@media \(max-width: 720px\)\s*\{\s*\.dm-show-channels\s*\{\s*display:\s*inline-grid;?\s*\}/);
+    });
+
+    it("never opens a conversation the user did not choose", () => {
+        // Opening one sends read receipts; with nothing selected the hint shows.
+        const render = view.slice(view.indexOf("function render() {"), view.indexOf("function rowFor("));
+        assert.doesNotMatch(render, /select\(/);
+        assert.match(view, /t\("dm\.selectHint"\)/);
+    });
+
     it("exposes the documented entry points for the sidebar", () => {
         for (const name of ["openDirectMessages", "closeDirectMessages", "isDirectMessagesOpen", "directMessagesUnread"]) {
             assert.match(view, new RegExp(`export function ${name}\\b`));

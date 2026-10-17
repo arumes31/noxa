@@ -226,12 +226,13 @@ function render() {
     publishUnread(entries);
     if (!active || !ui) return;
     // A group this user left or was removed from leaves the selection once the
-    // authoritative list no longer has it; the newest conversation follows.
+    // authoritative list no longer has it. Nothing is opened in its place:
+    // opening a conversation sends read receipts (and a group's "Seen by"), so
+    // only the user's own choice opens one. Until then the hint is shown.
     const snapshot = listedPrivateGroups();
-    if (selected?.kind === "group" && snapshot && viewedConversationID() !== selected.id && !snapshot.groups.some(group => group.id === selected.id)) selected = null;
-    if (!selected) {
-        const first = entries.find(entry => !entry.invitation) || entries[0];
-        if (first) { select(first, { focus: false }); return; }
+    if (selected?.kind === "group" && snapshot && viewedConversationID() !== selected.id && !snapshot.groups.some(group => group.id === selected.id)) {
+        selected = null;
+        $("center").classList.remove("dm-thread-open");
     }
     renderList();
     renderThread();
@@ -610,7 +611,7 @@ function translate() {
     ui.searchInput.setAttribute("aria-label", t("dm.search"));
     ui.threadSearchInput.placeholder = t("dm.searchLoaded");
     ui.threadSearchInput.setAttribute("aria-label", t("dm.searchLoaded"));
-    for (const button of [ui.add, ui.back, ui.call, ui.video, ui.search, ui.more, ui.gif, ui.threadSearchClose]) {
+    for (const button of [ui.add, ui.channels, ui.back, ui.call, ui.video, ui.search, ui.more, ui.gif, ui.threadSearchClose]) {
         button.setAttribute("aria-label", t(button.dataset.label));
         button.title = t(button.dataset.label);
     }
@@ -632,7 +633,18 @@ function build() {
     const add = iconButton("plus", "dm.new", () => openNewMenu());
     add.setAttribute("aria-haspopup", "menu");
     add.setAttribute("aria-expanded", "false");
-    head.append(titleIcon, title, add);
+    // The channel sidebar collapses on narrow windows and the workspace's own
+    // toggle lives in #chat-head, which this view hides. This button drives the
+    // same state (body.channels-open) through that toggle, so Escape, the
+    // sidebar's close button and a channel choice all close it as usual.
+    const channels = iconButton("speaker", "workspace.labels.showChannels", () => {
+        $("workspace-sidebar-toggle")?.click();
+        channels.setAttribute("aria-expanded", String(document.body.classList.contains("channels-open")));
+    });
+    channels.classList.add("dm-show-channels");
+    channels.setAttribute("aria-controls", "sidebar");
+    channels.setAttribute("aria-expanded", "false");
+    head.append(channels, titleIcon, title, add);
     const search = node("div", "dm-search");
     const searchIcon = node("span", "dm-search-icon");
     searchIcon.innerHTML = icon("search");
@@ -708,7 +720,7 @@ function build() {
     $("chat-emoji")?.before(gif);
 
     return {
-        list, title, add, searchInput, rows, empty, head: threadHead, back, headAvatar, headName, headStatus, pill,
+        list, title, add, channels, searchInput, rows, empty, head: threadHead, back, headAvatar, headName, headStatus, pill,
         call, video, search: searchButton, more, threadSearch, threadSearchInput, threadSearchCount, threadSearchClose, emptyThread, gif,
     };
 }

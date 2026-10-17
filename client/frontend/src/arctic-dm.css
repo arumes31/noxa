@@ -133,6 +133,8 @@
     min-height: 52px; padding: 6px 14px 6px 18px; border-bottom: 1px solid var(--dm-line);
 }
 .dm-back { display: none; }
+/* Shown only where the channel sidebar collapses (workspace.css / arctic-night.css). */
+.dm-show-channels { display: none; }
 .dm-head-avatar { position: relative; display: inline-flex; align-items: center; flex: none; }
 .dm-head-avatar .dm-presence { box-shadow: 0 0 0 2.5px var(--bg); }
 .dm-head-avatar.stack .dm-avatar + .dm-avatar { margin-left: -8px; box-shadow: 0 0 0 2px var(--bg); }
@@ -410,4 +412,7 @@
     .dm-list { border-right: 0; }
     .dm-back { display: inline-grid; }
     .dm-e2e-pill span { display: none; }
+}
+@media (max-width: 720px) {
+    .dm-show-channels { display: inline-grid; }
 }

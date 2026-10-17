@@ -241,7 +241,10 @@ export function initWorkspace() {
     const closeChannels = () => {
         document.body.classList.remove("channels-open");
         $("workspace-sidebar-toggle").setAttribute("aria-expanded", "false");
-        const groupToggle = document.querySelector("#center.private-group-active .group-show-channels");
+        // The Messages view hides both #chat-head and the group navigation, so
+        // its own toggle takes the focus back there.
+        const groupToggle = document.querySelector("#center.dm-view-active .dm-show-channels")
+            || document.querySelector("#center.private-group-active .group-show-channels");
         groupToggle?.setAttribute("aria-expanded", "false");
         (groupToggle || $("workspace-sidebar-toggle")).focus();
     };
