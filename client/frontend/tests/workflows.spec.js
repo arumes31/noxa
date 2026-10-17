@@ -5036,6 +5036,10 @@ test("private groups restore persisted unread state after native tab activation"
 test("private group sidebar resizes and collapses within the full application layout", async ({ page }, testInfo) => {
     await showB3Workspace(page);
     await page.evaluate(async () => {
+        // The resizable channel/group split is the classic layout; Arctic Night
+        // (the default) scrolls the sidebar sections together without a divider.
+        window.__noxa.state.settings.theme = "dark";
+        window.__noxa.applyAppearance();
         window.__noxa.state.activeTabID = "group-layout-server";
         const app = window.go.main.App;
         window.go.main.App = new Proxy(app, { get(target, key) {
@@ -5110,8 +5114,8 @@ test("chat follows newest messages after delayed images and viewport resizing", 
             return target[key];
         } });
         window.__noxaChat.onMyChannelChanged();
-        for (let id = 1; id <= 50; id++) window.__noxaChat.addChat({ id, channel_id: 2, from: "Alex", text: "Message " + id });
-        window.__noxaChat.addChat({ id: 51, channel_id: 2, from: "Alex", text: "[file:photo.vcx#dGVzdA==#photo.png]" });
+        for (let id = 1; id <= 50; id++) window.__noxaChat.addChat({ enc_verified: true, enc_mode: "server", id, channel_id: 2, from: "Alex", text: "Message " + id });
+        window.__noxaChat.addChat({ enc_verified: true, enc_mode: "server", id: 51, channel_id: 2, from: "Alex", text: "[file:photo.vcx#dGVzdA==#photo.png]" });
     });
 
     const log = page.locator("#chat-log");
@@ -5125,7 +5129,7 @@ test("chat follows newest messages after delayed images and viewport resizing", 
     await expect.poll(bottomGap).toBeLessThan(3);
     await page.setViewportSize({ width: 900, height: 560 });
     await expect.poll(bottomGap).toBeLessThan(3);
-    await page.evaluate(() => window.__noxaChat.addChat({ id: 52, channel_id: 2, from: "Alex", text: "Newest message" }));
+    await page.evaluate(() => window.__noxaChat.addChat({ enc_verified: true, enc_mode: "server", id: 52, channel_id: 2, from: "Alex", text: "Newest message" }));
     await expect.poll(bottomGap).toBeLessThan(3);
     await expect(page.locator('.msg[data-msg-id="52"]')).toBeInViewport();
 });
@@ -5211,14 +5215,19 @@ test("selected quick wins fullscreen keeps names and share audio has independent
     });
     const tile = page.locator('.vtile[data-slot="screen"]');
     await expect(tile).toBeVisible();
-    const gridBounds = await page.locator('#video-grid').boundingBox(), nameBounds = await tile.locator('.vtile-name').boundingBox();
-    expect(nameBounds.y).toBeGreaterThanOrEqual(gridBounds.y);
-    expect(nameBounds.y + nameBounds.height).toBeLessThanOrEqual(gridBounds.y + gridBounds.height);
-    await tile.hover();
-    await tile.locator(".vtile-fullscreen").click();
+    // On the stream stage the publisher's name moves from the tile label to
+    // the stage info strip; it must stay inside the stage.
+    const stageName = page.locator("#stream-stage .stage-info-name");
+    await expect(stageName).toHaveText("Screen Person");
+    const stageBounds = await page.locator("#stream-stage").boundingBox(), nameBounds = await stageName.boundingBox();
+    expect(nameBounds.y).toBeGreaterThanOrEqual(stageBounds.y);
+    expect(nameBounds.y + nameBounds.height).toBeLessThanOrEqual(stageBounds.y + stageBounds.height);
+    // A single stage moves the tile's fullscreen control into its info strip.
+    await page.locator("#stream-stage .stage-info-fullscreen").click();
     await expect.poll(() => page.evaluate(() => document.fullscreenElement?.className || "")).toContain("vtile");
-    await expect(tile.locator(".vtile-name")).toBeVisible();
-    await expect(tile.locator(".vtile-name")).toHaveText("Screen Person");
+    // Fullscreen shows the publisher in the HUD's telemetry card.
+    await expect(tile.locator(".fs-tele-name")).toBeVisible();
+    await expect(tile.locator(".fs-tele-name")).toHaveText("Screen Person");
     await page.keyboard.press("Escape");
     await expect.poll(() => page.evaluate(() => !!document.fullscreenElement)).toBe(false);
     await tile.click({ button: "right" });
@@ -5496,7 +5505,6 @@ test("B3 fits desktop and small windows without losing the composer or toolbar",
             composer: document.getElementById("chat-input-row").getBoundingClientRect().bottom,
             toolbar: document.getElementById("voice-bar").getBoundingClientRect().bottom,
         }));
-        console.log("DBG", JSON.stringify(viewport), await page.evaluate(() => { const out=[]; for (const e of document.querySelectorAll("body *")) { const r=e.getBoundingClientRect(); if (r.right > innerWidth + 0.5 && r.width>0) out.push([e.tagName, e.id, String(e.className).slice(0,40), Math.round(r.left), Math.round(r.right), getComputedStyle(e).position]); } return JSON.stringify({sw: document.documentElement.scrollWidth, iw: innerWidth, out: out.slice(0,15)}); }));
         expect(bounds.overflow).toBe(false);
         expect(bounds.composer).toBeLessThanOrEqual(viewport.height);
         expect(bounds.toolbar).toBeLessThanOrEqual(viewport.height);
@@ -10086,6 +10094,9 @@ test("an edited recipient cannot send to the previous selection or an ambiguous 
 test("uses the B3 console composition without losing responsive navigation", async ({ page }) => {
     await page.setViewportSize({ width: 1280, height: 800 });
     await page.evaluate(() => {
+        // B3 is the classic dark composition; Arctic Night is now the default.
+        window.__noxa.state.settings.theme = "dark";
+        window.__noxa.applyAppearance();
         window.__noxa.showWorkspace(false);
         window.__tabs = [{
             id: "tab-a", addr: "127.0.0.1:12333", nickname: "Test",
