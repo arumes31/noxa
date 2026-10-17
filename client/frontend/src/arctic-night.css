@@ -205,6 +205,9 @@
     border-radius: 12px;
     box-shadow: 0 24px 60px rgba(0, 0, 0, .5);
 }
+/* Context menus are placed and height-clamped to the viewport in JS
+   (context-menu.js); a margin would push their bottom edge past that clamp. */
+:root[data-theme="arctic"] .ctx-menu { margin-top: 0; }
 :root[data-theme="arctic"] .menu-dropdown a,
 :root[data-theme="arctic"] .ctx-menu a,
 :root[data-theme="arctic"] .ctx-menu button.ctx-action {
@@ -710,12 +713,18 @@
 /* Messages ease in once as they arrive (the newest row only); nothing in
    this theme animates continuously and there is no animated background. */
 @keyframes arc-msg-in { from { opacity: 0; transform: translateY(6px); } }
+/* Context menus are clamped to the viewport edge; they fade without sliding
+   so no frame draws them past that edge. */
+@keyframes arc-menu-in { from { opacity: 0; } }
 @media (prefers-reduced-motion: no-preference) {
     :root[data-theme="arctic"]:not([data-reduce-motion="1"]) #chat-log > .msg:last-child {
         animation: arc-msg-in .32s var(--arc-ease) both;
     }
-    :root[data-theme="arctic"]:not([data-reduce-motion="1"]) :is(.menu-dropdown.open, .ctx-menu) {
+    :root[data-theme="arctic"]:not([data-reduce-motion="1"]) .menu-dropdown.open {
         animation: arc-msg-in .16s var(--arc-ease) both;
+    }
+    :root[data-theme="arctic"]:not([data-reduce-motion="1"]) .ctx-menu {
+        animation: arc-menu-in .16s var(--arc-ease) both;
     }
 }
 
