@@ -171,7 +171,7 @@ const { startQualitySampler, stopQualitySampler } = createConnectionQuality({ $,
 
 
 const remoteAudio = createRemoteAudio({ state, toast, sysMsg, voiceEpoch: () => voiceSessionEpoch });
-const { selectAudioOutput, applyOutputSettings, remoteChain, reconcileSpatialVoice, attachRemoteAudio, readRemoteAudioLevel, resolveTrackUsers, shareAudio, applyDucking, applyShareAudio, attachShareAudio, detachRemoteAudio } = remoteAudio;
+const { selectAudioOutput, applyOutputSettings, remoteChain, reconcileSpatialVoice, attachRemoteAudio, readRemoteAudioLevel, resolveTrackUsers, shareAudio, applyDucking, applyShareAudio, setShareAudioStageGains, attachShareAudio, detachRemoteAudio } = remoteAudio;
 // Attachment is judged per receiver track object and its current publisher
 // MSID, never by browser track.id (two live receivers may share one).
 // trackUserReceivers remembers which receiver track object owns each
@@ -3261,6 +3261,8 @@ window.__noxa = {
             n.volume = Math.max(0, Math.min(200, pct | 0));
             applyShareAudio(clientID);
         },
+        // Multiview ducking: scales screen-share audio only, never voice.
+        setStageGains: setShareAudioStageGains,
     },
 };
 
