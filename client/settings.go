@@ -101,7 +101,7 @@ type HotkeyProfile struct {
 // serialized default changes, and add the repair to migrateSettings:
 // loading merges the file ONTO the defaults, so a field an older client always
 // wrote wins over the new default unless it is explicitly repaired.
-const settingsVersion = 12
+const settingsVersion = 13
 
 // Settings holds all user preferences.
 type Settings struct {
@@ -123,7 +123,7 @@ type Settings struct {
 	MinimizeToTray bool   `json:"minimize_to_tray"` // (287)
 	CloseToTray    bool   `json:"close_to_tray"`    // (287) close button hides instead of quitting
 	CompactMode    bool   `json:"compact_mode"`     // (293)
-	Theme          string `json:"theme"`            // (294/295) "dark" | "light" | "hc"
+	Theme          string `json:"theme"`            // (294/295) "arctic" | "dark" | "light" | "hc"
 	AccentColor    string `json:"accent_color"`     // (296) custom accent hex ("" = theme default)
 	UserCSS        string `json:"user_css"`         // (296) scoped overrides
 	UIFont         string `json:"ui_font"`          // (297) "outfit" | "sora" | "jetbrains"
@@ -290,7 +290,7 @@ func DefaultSettings() Settings {
 		HotkeyMute:            "Ctrl+M",
 		HotkeyQuickConnect:    "Ctrl+Shift+C",
 		HotkeyZen:             "Ctrl+Shift+Z",
-		Theme:                 "dark",
+		Theme:                 "arctic",
 		UIFont:                "outfit",
 		UIFontSize:            14,
 		WindowOpacity:         100,
@@ -472,6 +472,13 @@ func migrateSettings(s Settings) Settings {
 	}
 	if s.SettingsVersion < 11 && s.GamingOverlayScale == 100 {
 		s.GamingOverlayScale = 80
+	}
+	if s.SettingsVersion < 13 && (s.Theme == "dark" || s.Theme == "") {
+		// Arctic Night replaced the dark palette as the default look. Every
+		// older client serialized "dark" whether or not it was chosen, so
+		// move those profiles over; light, high contrast and later explicit
+		// "dark" (classic) choices are left alone.
+		s.Theme = "arctic"
 	}
 	if s.SettingsVersion < 11 && s.GamingOverlayPosition == "top-right" {
 		s.GamingOverlayPosition = "center-left"

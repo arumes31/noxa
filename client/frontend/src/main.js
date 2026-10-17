@@ -250,7 +250,8 @@ function applyAppearance() {
     renderVoiceStatus();
     initMenu();
     // (294/295) theme sets the full variable palette via [data-theme].
-    root.dataset.theme = s.theme || "dark";
+    // Arctic Night is the default look; "dark" keeps the classic palette.
+    root.dataset.theme = s.theme || "arctic";
     // (344) reduce motion: toggle + media query both gate animations.
     root.dataset.reduceMotion = s.reduce_motion ? "1" : "";
     // (296) custom accent overrides the theme's accent.
