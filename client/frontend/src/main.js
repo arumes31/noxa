@@ -9,6 +9,7 @@ import { createLoginMemory } from './login-memory.js';
 import { createLoginFeedback } from './login-errors.js';
 import { initLoginBackground } from './login-background.js';
 import { watchMicrophone } from "./microphone-recovery.js";
+import { voiceSendEncoding, applyVoicePriority } from "./voice-priority.js";
 import { createRemoteAudio } from './remote-audio.js';
 import { startVoiceDiagnostics, noteVoiceActivity } from './voice-diagnostics.js';
 import { createVoiceRecovery } from './voice-recovery.js';
@@ -2273,7 +2274,7 @@ async function startVoice(expectedEpoch = voiceSessionEpoch) {
             audioTrack.stop(); pc.close();
             return false;
         }
-        pc.addTransceiver(sent, { direction: "sendrecv", streams: [state.localStream] });
+        pc.addTransceiver(sent, { direction: "sendrecv", streams: [state.localStream], sendEncodings: [voiceSendEncoding()] });
         applyVoiceState();
     } else {
         pc.addTransceiver("audio", { direction: "recvonly" });
@@ -2357,9 +2358,9 @@ async function applyChannelAudio() {
         const p = sender.getParameters();
         if (p.encodings?.length) {
             p.encodings[0].maxBitrate = bitrate > 0 ? bitrate : undefined;
-            // Keep voice in the highest allocation class alongside screen media.
-            // This parameter belongs to the existing channel-audio update owner.
-            p.encodings[0].priority = "high";
+            // Voice stays in the highest allocation and network class.
+            // These parameters belong to the existing channel-audio update owner.
+            applyVoicePriority(p);
             await sender.setParameters(p).catch(() => {});
         }
     }
@@ -2689,6 +2690,7 @@ async function retryMicrophoneCapture() {
         transceiver = peerConnection.addTransceiver(sent, {
             direction: "sendrecv",
             streams: [localStream],
+            sendEncodings: [voiceSendEncoding()],
         });
         await renegotiate(peerConnection, generation);
         if (!current()) throw new DOMException("voice session changed", "AbortError");

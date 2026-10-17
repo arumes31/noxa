@@ -359,15 +359,27 @@ func (s *TCPServer) recordingControlAllowed(ctx context.Context, client *Client,
 // --- voice callbacks (installed on the voice backend at server construction) -
 
 // canTalk evaluates Speak in the client's current channel and current mute state.
+// canTalk is the per-packet ingress pre-filter for every microphone packet.
+// It must never block: a blocking policy lease here stalled every speaker's
+// read loop whenever a policy writer queued behind a slow signaling write.
+// guardRoleMedia re-authorizes each recipient write, so when the packet
+// gate is momentarily closed by a policy commit the pre-filter defers to it
+// instead of flapping the speaking indicator.
 func (s *TCPServer) canTalk(clientID string) bool {
 	client, ok := s.clientByID(clientID)
-	if !ok {
+	if !ok || s.deps == nil || s.deps.Authority == nil {
 		return false
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), mediaPermissionTimeout)
-	defer cancel()
 	member, present := s.deps.State.GetClient(clientID)
-	return present && member.ChannelID > 0 && !member.ServerMuted && !client.rulesBlocked() && s.roleAllowed(ctx, client, member.ChannelID, authorization.Speak)
+	if !present || member.ChannelID <= 0 || member.ServerMuted || client.rulesBlocked() || client.sessionRevoked() {
+		return false
+	}
+	allowed := false
+	err := s.deps.Authority.TryWithPolicy(func(e *authorization.RoleEvaluator) error {
+		allowed = e.Evaluate(client.userID(), member.ChannelID, authorization.Speak).Allowed
+		return nil
+	})
+	return allowed || err != nil
 }
 
 // canPublishVideo checks the client's current video capabilities and channel.

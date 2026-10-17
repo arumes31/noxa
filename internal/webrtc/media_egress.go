@@ -286,11 +286,18 @@ func (s *mediaEgressStream) writeResultKind(header *rtp.Header, payload []byte, 
 	// during a burst) into a (subscriber, publisher) pair that stayed silent
 	// for the rest of the session while every other pair kept working. A
 	// sender that is really gone is stopped by Unbind/RemoveTrack instead.
+	//
+	// Voice is exempt from the timeout cooldown: one stalled write (often
+	// caused by a video burst on the shared socket) must not mute the next
+	// 250 ms of speech. Its own queue already expires after mediaAudioLifetime.
 	if outputError != nil {
 		var timeout net.Error
 		isTimeout := errors.As(outputError, &timeout) && timeout.Timeout()
-		if failures, ok := s.backOff(isTimeout); ok && !isTimeout && failures == 1 {
-			log.Printf("webrtc: media output slot=%s write failed: %v; backing off and retrying", ticket.delivery.Slot, outputError)
+		voice := ticket.delivery.Slot == SlotMic || ticket.delivery.Slot == SlotScreenAudio
+		if !(isTimeout && voice) {
+			if failures, ok := s.backOff(isTimeout); ok && !isTimeout && failures == 1 {
+				log.Printf("webrtc: media output slot=%s write failed: %v; backing off and retrying", ticket.delivery.Slot, outputError)
+			}
 		}
 	} else if n > 0 {
 		s.failures.Store(0)

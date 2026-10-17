@@ -283,6 +283,10 @@ type Router struct {
 	// claim it made itself.
 	slotEpoch uint64
 
+	// voicePath lets microphone packets avoid waiting for mu (see
+	// router_voice_path.go).
+	voicePath routerVoicePath
+
 	// canTalk gates outgoing audio per client (talk power); nil allows all.
 	// canVideo gates outgoing video per client (video publish permission);
 	// nil allows all. onSpeaking reports VAD speaking-state transitions; nil
@@ -418,6 +422,7 @@ func (r *Router) SetHandlers(canTalk func(clientID string) bool, onSpeaking func
 	defer r.mu.Unlock()
 	r.canTalk = canTalk
 	r.onSpeaking = onSpeaking
+	r.publishVoiceHandlersLocked()
 }
 
 // SetForwardObserver installs a callback invoked after each forward with the
@@ -427,6 +432,7 @@ func (r *Router) SetForwardObserver(fn func(media string, n int)) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.onForward = fn
+	r.publishVoiceHandlersLocked()
 }
 
 // SetVideoHandlers installs the video-publish permission gate. A nil gate
@@ -1207,6 +1213,7 @@ func (r *Router) detachPeer(clientID string, leaveChannel bool) {
 	r.sourceTiming.forgetPublisher(clientID)
 	r.mu.Lock()
 	r.invalidateVideoLocked(clientID)
+	r.forgetVoiceFanoutLocked(clientID)
 	delete(r.pubPeers, clientID)
 	delete(r.outputs, clientID)
 	delete(r.videoOutputs, clientID)
@@ -1300,7 +1307,13 @@ func (r *Router) detachPeer(clientID string, leaveChannel bool) {
 // result and the writers slice — are the only remaining per-packet
 // allocations on the audio hot path (436).
 func (r *Router) ForwardRTP(senderID, slot string, pkt *rtp.Packet) int {
-	r.mu.RLock()
+	guard, writers := r.voiceFanoutFor(senderID, slot)
+	return r.forwardVoice(senderID, pkt, guard, writers)
+}
+
+// voiceFanoutLocked selects the outputs of one voice packet. Callers hold at
+// least a read lock.
+func (r *Router) voiceFanoutLocked(senderID, slot string) (MediaGuard, []mediaOutput) {
 	guard := r.mediaGuard
 	subs := r.targetSubscribersLocked(senderID, slot)
 	writers := make([]mediaOutput, 0, len(subs)+1)
@@ -1325,8 +1338,10 @@ func (r *Router) ForwardRTP(senderID, slot string, pkt *rtp.Packet) int {
 			}
 		}
 	}
-	r.mu.RUnlock()
+	return guard, writers
+}
 
+func (r *Router) forwardVoice(senderID string, pkt *rtp.Packet, guard MediaGuard, writers []mediaOutput) int {
 	sent := 0
 	for _, w := range writers {
 		if scoped, ok := w.writer.(ScopedTrackWriter); ok {
@@ -1372,10 +1387,7 @@ func (r *Router) ForwardRTP(senderID, slot string, pkt *rtp.Packet) int {
 
 // notifyForward invokes the forward observer, if any.
 func (r *Router) notifyForward(media string, n int) {
-	r.mu.RLock()
-	obs := r.onForward
-	r.mu.RUnlock()
-	if obs != nil {
+	if obs := r.voiceHandlers().onForward; obs != nil {
 		obs(media, n)
 	}
 }
@@ -1448,10 +1460,13 @@ func (r *Router) ReadLoop(clientID, slot string, track TrackReader, extID uint8)
 
 	v := &vad{}
 	announcedSpeaking := false
+	// Every claim replacement, release and peer detach clears live, so the
+	// per-packet ownership check needs no router lock.
+	live := r.slotLive(clientID, slot, token)
 
 	for {
 		pkt, _, err := track.ReadRTP()
-		if err != nil || !r.ownsSlot(clientID, slot, token) {
+		if err != nil || (live != nil && !live.Load()) || (live == nil && !r.ownsSlot(clientID, slot, token)) {
 			break
 		}
 		ingress.observe(pkt, time.Now())
@@ -1494,9 +1509,7 @@ func (r *Router) ReadLoop(clientID, slot string, track TrackReader, extID uint8)
 
 // allowTalk evaluates the talk gate for clientID, defaulting to allowed.
 func (r *Router) allowTalk(clientID string) bool {
-	r.mu.RLock()
-	gate := r.canTalk
-	r.mu.RUnlock()
+	gate := r.voiceHandlers().canTalk
 	if gate == nil {
 		return true
 	}
@@ -1505,10 +1518,7 @@ func (r *Router) allowTalk(clientID string) bool {
 
 // speak reports a speaking-state transition, if a callback is registered.
 func (r *Router) speak(clientID string, speaking bool) {
-	r.mu.RLock()
-	cb := r.onSpeaking
-	r.mu.RUnlock()
-	if cb != nil {
+	if cb := r.voiceHandlers().onSpeaking; cb != nil {
 		cb(clientID, speaking)
 	}
 }
@@ -1987,6 +1997,8 @@ func (r *Router) forwardVideoFrameAtPolicyCodec(senderID, slot, rid string, pkt 
 
 // A reader supplies its immutable claim, including same-SSRC replacements.
 // Direct forwarding callers retain their existing uncaptured-source behavior.
+const videoSeenRefresh = 100 * time.Millisecond
+
 func (r *Router) forwardVideoFrameAtPolicyCodecSource(senderID, slot, rid string, pkt *rtp.Packet, now time.Time, policy videoPolicy, inspected bool, mime string, frameStart bool, source *slotClaim, hevcUnit ...[]*rtp.Packet) int {
 	if source != nil && (source.live == nil || !source.live.Load()) {
 		return 0
@@ -1998,20 +2010,31 @@ func (r *Router) forwardVideoFrameAtPolicyCodecSource(senderID, slot, rid string
 	if !r.allowVideoPacket(senderID, pkt.MarshalSize(), now) {
 		return 0
 	}
-	r.mu.Lock()
-	if source != nil && r.slotClaims[senderID][slot+slotSep+rid].token != source.token {
-		r.mu.Unlock()
-		return 0
-	}
-	if source, ok := r.videoSources[senderID][slot][rid]; ok && source == pkt.SSRC && !isVideoPadding(pkt) {
-		ref := videoSourceRef{senderID, slot}
-		if r.videoSeen[ref] == nil {
-			r.videoSeen[ref] = make(map[string]time.Time)
-		}
-		r.videoSeen[ref][rid] = now
-	}
-	r.mu.Unlock()
+	// Layer freshness has a one-second window. Refresh it at most every
+	// videoSeenRefresh so per-packet video forwarding does not take the
+	// router lock exclusively thousands of times per second, which would
+	// contend with voice fan-out (ForwardRTP) on the same lock.
 	r.mu.RLock()
+	ref := videoSourceRef{senderID, slot}
+	last, seen := r.videoSeen[ref][rid]
+	src, known := r.videoSources[senderID][slot][rid]
+	refresh := known && src == pkt.SSRC && !isVideoPadding(pkt) && (!seen || !now.After(last) || now.Sub(last) >= videoSeenRefresh)
+	if refresh {
+		r.mu.RUnlock()
+		r.mu.Lock()
+		if source != nil && r.slotClaims[senderID][slot+slotSep+rid].token != source.token {
+			r.mu.Unlock()
+			return 0
+		}
+		if source, ok := r.videoSources[senderID][slot][rid]; ok && source == pkt.SSRC && !isVideoPadding(pkt) {
+			if r.videoSeen[ref] == nil {
+				r.videoSeen[ref] = make(map[string]time.Time)
+			}
+			r.videoSeen[ref][rid] = now
+		}
+		r.mu.Unlock()
+		r.mu.RLock()
+	}
 	if source != nil && r.slotClaims[senderID][slot+slotSep+rid].token != source.token {
 		r.mu.RUnlock()
 		return 0
