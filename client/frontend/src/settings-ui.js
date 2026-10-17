@@ -1495,7 +1495,6 @@ function renderPage(id, focus = {}) {
     const info = PAGES.find(p => p.id === id);
     setPageHeader(t(info.label), t(info.description));
     container.setAttribute("aria-labelledby", `settings-page-${id}`);
-    container.dataset.page = id;
     container.innerHTML = "";
     const built = PAGE_BUILDERS[id]();
     container.appendChild(built);
@@ -1550,7 +1549,7 @@ function openSettings(target = "general", options = {}) {
             <aside class="settings-rail">
                 <h2 id="settings-title" class="settings-rail-title"></h2>
                 <label class="sr-only" for="settings-search"></label>
-                <input id="settings-search" class="dlg-input settings-search" type="search" placeholder="" autocomplete="off" />
+                <input id="settings-search" class="dlg-input settings-search" placeholder="" autocomplete="off" />
                 <div class="settings-nav" role="tablist" aria-orientation="vertical"></div>
             </aside>
             <div class="settings-main">

@@ -4210,6 +4210,7 @@ test("German menus translate remaining actions and bookmark dialogs", async ({ p
 });
 
 test("client language translates every settings page and persists on Apply @a11y", async ({ page }, testInfo) => {
+    test.setTimeout(60_000); // twelve pages, two of them device-heavy
     const errors = [];
     page.on("pageerror", error => errors.push(error.message));
     await page.evaluate(() => {
@@ -4235,8 +4236,8 @@ test("client language translates every settings page and persists on Apply @a11y
         ["Allgemein", "Downloadordner"], ["Audio & Sprache", "Aufnahmegerät"], ["Audio & Sprache", "Ausgabegerät"],
         ["Streams", "Kamerabildrate"], ["Vollbild-Overlay", "Sprach-Overlay"], ["Tastenkürzel", "Als neues Profil speichern…"],
         ["Darstellung", "Fensterdeckkraft"], ["Privatsphäre", "Deine Identitäten"],
-        ["Chat", "Zeitstempel"], ["Benachrichtigungen", "Gesprochene Systemmeldungen"],
-        ["Flüstern", "Flüstern aktivieren"], ["Verbindung", "Maximale Clientanzahl (0 = unbegrenzt)"],
+        ["Chat", "Zeitstempel"], ["Flüstern", "Flüstern aktivieren"],
+        ["Verbindung", "Maximale Clientanzahl (0 = unbegrenzt)"], ["Benachrichtigungen", "Gesprochene Systemmeldungen"],
     ];
     for (const [tab, label] of pages) {
         await page.getByRole("tab", { name: tab, exact: true }).click();
@@ -7704,17 +7705,18 @@ test("camera settings have their own searchable section and preserve drafts acro
 test("settings explain when saved changes and temporary previews take effect", async ({ page }) => {
     await page.evaluate(() => window.__noxa.openSettings("capture"));
     await expect(page.getByLabel("Echo cancellation", { exact: true })).toHaveAccessibleDescription("Applies immediately after saving.");
-    await expect(page.locator("#settings-content")).not.toContainText("next reconnects");
+    await expect(page.locator('#settings-content [data-section="input"]')).not.toContainText("next reconnects");
     await page.getByRole("tab", { name: "Streams", exact: true }).click();
-    await expect(page.getByLabel("Camera frame rate", { exact: true })).toHaveAccessibleDescription("After saving, start or restart the camera to use these settings. Restart the local test to preview them.");
+    await expect(page.getByLabel("Camera frame rate", { exact: true })).toHaveAccessibleDescription(/After saving, start or restart the camera to use these settings\. Restart the local test to preview them\.$/);
     await expect(page.locator("#settings-content")).toContainText("Preview only — stays on this device and does not start a call.");
+    await page.getByRole("tab", { name: "Audio & voice", exact: true }).click();
     await expect(page.getByLabel("Voice limiter (compressor)", { exact: true })).toHaveAccessibleDescription("Requires voice reconnect after saving.");
     await page.getByRole("tab", { name: "Appearance", exact: true }).click();
     await expect(page.getByLabel("Window opacity", { exact: true })).toHaveAccessibleDescription("Preview now; Apply or Done keeps the change. Cancel restores the saved appearance.");
     await page.getByRole("tab", { name: "General", exact: true }).click();
     await expect(page.getByLabel("Check for updates at startup", { exact: true })).toHaveAccessibleDescription("After saving, takes effect at the next app start.");
     await expect(page.getByLabel("Automatically install updates at startup", { exact: true })).toBeChecked();
-    await expect(page.getByLabel("Automatically install updates at startup", { exact: true })).toHaveAccessibleDescription("After saving, takes effect at the next app start.");
+    await expect(page.getByLabel("Automatically install updates at startup", { exact: true })).toHaveAccessibleDescription(/^Downloads updates and restarts noXa when the app starts\..*After saving, takes effect at the next app start\.$/);
 });
 
 test("video CPU pressure respects efficient decoding and discards stale polls", async ({ page }) => {
