@@ -126,6 +126,17 @@ func (r *Router) finishVideoStartupBindings(subscriber string, peer *PeerConnect
 	}
 }
 
+func (r *Router) watchStartupPending(subscriber string) bool {
+	r.watchMu.RLock()
+	defer r.watchMu.RUnlock()
+	for key, watch := range r.watches {
+		if key.subscriber == subscriber && watch.startupPending {
+			return true
+		}
+	}
+	return false
+}
+
 func (r *Router) flushWatchStartup(subscriber string, peer *PeerConnectionWrapper) time.Duration {
 	r.finishVideoStartupBindings(subscriber, peer)
 	type request struct {
@@ -141,6 +152,13 @@ func (r *Router) flushWatchStartup(subscriber string, peer *PeerConnectionWrappe
 	case <-peer.closed:
 		return 0
 	default:
+	}
+	// Binding and connection notifications arrive for every renegotiation of
+	// every recipient. Without a pending startup there is nothing to claim;
+	// a needless watch writer would make concurrent final media writes of all
+	// recipients fail their non-blocking scope check.
+	if !r.watchStartupPending(subscriber) {
+		return 0
 	}
 	r.mu.Lock()
 	r.watchMu.Lock()
@@ -213,7 +231,7 @@ func (r *Router) flushWatchStartup(subscriber string, peer *PeerConnectionWrappe
 			}
 			continue
 		}
-		r.keyframeLast[ssrc] = now
+		r.noteKeyframeRequestLocked(ssrc, now)
 		watch.startupPending = false
 		r.watches[key] = watch
 		requests = append(requests, request{key.publisher, ssrc, writer, input, epoch})

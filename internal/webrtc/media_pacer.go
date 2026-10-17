@@ -307,19 +307,74 @@ func (p *mediaPacer) run() {
 				}
 				packet := p.popLocked()
 				p.mu.Unlock()
-				if p.writePacket(packet) {
+				attempted, busy := p.writePacketRetry(packet, true)
+				if attempted {
 					// Only an authorized write attempt spends network pacing credit.
 					// Final permission/ticket rejection never reaches the writer.
 					budget -= float64(packet.size)
 				}
 				p.mu.Lock()
+				if busy {
+					// A control update holds a final-write gate. The continuity
+					// already assigned this packet's sequence number: dropping it
+					// would leave every recipient with a hole that only a NACK
+					// round trip (or a keyframe) repairs. Keep order and retry on
+					// the next tick; expiry still bounds the wait.
+					if p.requeueBusyLocked(packet) {
+						break
+					}
+				}
 			}
 			p.mu.Unlock()
 		}
 	}
 }
 
+// requeueBusyLocked returns a contended packet to the queue head. It reports
+// false when the packet was discarded instead, accounting it like the drop
+// the regular dequeue path would have recorded.
+func (p *mediaPacer) requeueBusyLocked(packet pacedPacket) bool {
+	switch {
+	case p.closed:
+		return false
+	case !packet.stream.active:
+		p.diagnostics.droppedRetired++
+		return false
+	case !time.Now().Before(packet.expires):
+		p.diagnostics.droppedExpired++
+		return false
+	}
+	if packet.repair.stream != nil {
+		if _, queued := p.queuedRepairs[packet.repair]; queued {
+			p.diagnostics.coalescedRepairs++
+			return true
+		}
+	}
+	if p.queue == nil || p.count == mediaPacerPackets || p.bytes+packet.size > mediaPacerBytes {
+		p.diagnostics.droppedQueueFull++
+		return false
+	}
+	p.head = (p.head - 1 + mediaPacerPackets) % mediaPacerPackets
+	p.queue[p.head] = packet
+	p.count++
+	p.bytes += packet.size
+	if packet.repair.stream != nil {
+		if p.queuedRepairs == nil {
+			p.queuedRepairs = make(map[mediaRepairKey]struct{})
+		}
+		p.queuedRepairs[packet.repair] = struct{}{}
+	}
+	return true
+}
+
 func (p *mediaPacer) writePacket(packet pacedPacket) bool {
+	attempted, _ := p.writePacketRetry(packet, false)
+	return attempted
+}
+
+// writePacketRetry reports busy, without recording a drop, when retryBusy is
+// set and only a contended final-write gate stopped the packet.
+func (p *mediaPacer) writePacketRetry(packet pacedPacket, retryBusy bool) (bool, bool) {
 	attempted := false
 	write := interceptor.RTPWriterFunc(func(header *rtp.Header, payload []byte, attrs interceptor.Attributes) (int, error) {
 		attempted = true
@@ -352,18 +407,26 @@ func (p *mediaPacer) writePacket(packet pacedPacket) bool {
 	if p.egress == nil { // Standalone pacing tests have no router bindings.
 		n, err := write.Write(&packet.header, packet.payload, packet.attrs)
 		p.recordVideoWrite(packet, attempted, n, err, mediaDropUnclassified)
-		return attempted
+		return attempted, false
 	}
 	p.egress.mu.Lock()
 	stream := p.egress.streams[packet.stream.bindingID]
 	p.egress.mu.Unlock()
 	if stream != nil {
 		n, reason, err := stream.writeResultKind(&packet.header, packet.payload, packet.attrs, write, packet.kind)
+		if !attempted && (reason == mediaDropScopeBusy || reason == mediaDropPolicyBusy) {
+			if retryBusy && !packet.stream.audio {
+				return false, true
+			}
+			if reason == mediaDropScopeBusy {
+				reason = mediaDropScopeDeclined // exported diagnostics keep their buckets
+			}
+		}
 		p.recordVideoWrite(packet, attempted, n, err, reason)
 	} else {
 		p.recordVideoWrite(packet, false, 0, nil, mediaDropMissingBinding)
 	}
-	return attempted
+	return attempted, false
 }
 
 func (p *mediaPacer) Close() error {

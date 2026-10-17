@@ -34,7 +34,7 @@ func (s *pubSlot) enqueueMedia(pkt *rtp.Packet, ticket mediaTicket) (bool, error
 	admit := func() error { allowed = true; return nil }
 	switch {
 	case ticket.router != nil:
-		if err := ticket.router.mediaCommit(ticket.delivery, ticket.guard, ticket.videoRevision)(admit); err != nil {
+		if err := ticket.router.mediaAdmit(ticket.delivery, ticket.guard, ticket.videoRevision)(admit); err != nil {
 			return false, err
 		}
 	case ticket.guard != nil:
@@ -243,7 +243,11 @@ func (s *mediaEgressStream) writeResultKind(header *rtp.Header, payload []byte, 
 			return outputError
 		}
 		if ticket.router != nil {
-			return ticket.router.withMediaScope(ticket.delivery, commit)
+			busy, err := ticket.router.gatedMediaScope(ticket.delivery, mediaScopeTry, commit)
+			if busy {
+				reason = mediaDropScopeBusy
+			}
+			return err
 		}
 		return commit()
 	}

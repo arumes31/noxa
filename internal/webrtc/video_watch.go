@@ -377,6 +377,22 @@ func (r *Router) watchAllowedLocked(d MediaDelivery) bool {
 		r.publications[publicationKey{d.SenderID, key.slot}] == d.Publication
 }
 
+// withWatchWait is withWatch for the ingress dispatcher. Skipping a packet
+// there leaves a sequence hole no retransmission can fill (the packet was
+// never sent) and costs every viewer a keyframe; wait for the short update.
+// The dispatcher holds no router, watch or egress lock at this point.
+func (r *Router) withWatchWait(d MediaDelivery, write func() error) error {
+	if d.Tap || watchSlot(d.Slot) == "" {
+		return write()
+	}
+	r.watchMu.RLock()
+	defer r.watchMu.RUnlock()
+	if !r.watchAllowedLocked(d) {
+		return nil
+	}
+	return write()
+}
+
 func (r *Router) withWatch(d MediaDelivery, write func() error) error {
 	if d.Tap || watchSlot(d.Slot) == "" {
 		return write()
