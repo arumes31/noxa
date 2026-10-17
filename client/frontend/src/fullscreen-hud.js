@@ -19,6 +19,7 @@ import { speakingAvatar, createSpeakingAvatars } from "./speaking-avatar.js";
 import { isClientMicrophoneMuted } from "./audio-state.js";
 import { currentWhisperRouting } from "./media-controls.js";
 import { previewLine } from "./dm-model.js";
+import { encModeFrom } from "./message-encryption.js";
 import { SLOT_SCREEN } from "./media-track-id.js";
 import { STAGE_MODES } from "./multiview-state.js";
 import { avatarColor } from "./workspace-ui.js";
@@ -73,7 +74,7 @@ function chatPreview(d) {
     return previewLine({
         text: d.text ?? d.body ?? "", deleted: !!d.deleted, e2e: !!d.e2e, direct: !!d.direct || !!d.e2e,
         enc: !!d.enc || !!d.enc_verified, encVerified: !!d.enc_verified,
-        encMode: d.enc_verified && (d.enc_mode === "e2e" || d.enc_mode === "server") ? d.enc_mode : "", self: false,
+        encMode: encModeFrom(!!d.enc_verified, d.enc_mode), self: false,
     });
 }
 
