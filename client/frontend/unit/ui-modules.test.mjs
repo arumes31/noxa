@@ -424,6 +424,20 @@ test("frontend UI module behaviors", { concurrency: false }, async (t) => {
         assert.match(source, /encMode: encModeFrom\(verified, r\.enc_mode\)/);
     });
 
+    await t.test("channel edit offers no new password on a text channel", async (t) => {
+        replaceGlobal(t, "window", { __noxa: { state: { channels: [{ ChannelID: 3, TextOnly: true }, { ChannelID: 4 }] } } });
+        const { editingTextChannel } = await import("../src/channel-lifecycle-ui.js");
+        assert.equal(editingTextChannel(3), true);
+        assert.equal(editingTextChannel(4), false);
+        assert.equal(editingTextChannel(9), false);
+        assert.equal(editingTextChannel(3, []), false);
+        const source = await (await import("node:fs/promises")).readFile(new URL("../src/channel-lifecycle-ui.js", import.meta.url), "utf8");
+        // "set" is disabled for a text channel; "remove" stays available.
+        assert.match(source, /\["set", t\("roles\.channel\.passwordSet"\), textChannel\]/);
+        assert.match(source, /\["remove", t\("roles\.channel\.passwordRemove"\)\]/);
+        assert.match(source, /passwordAction === "set" && !textChannel\) field\("password"/);
+    });
+
     await t.test("chat replaces an unopened copy with a later verified copy", async (t) => {
         const changed = [];
         replaceGlobal(t, "window", { __noxa: { state: { myNickname: "Dan" } } });

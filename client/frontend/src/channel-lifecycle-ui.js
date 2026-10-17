@@ -7,6 +7,12 @@ import { openChannelAccess } from "./channel-access-ui.js";
 import { channelImpactPanel } from "./channel-impact-ui.js";
 import "./roles.css";
 
+// editingTextChannel reports whether the channel being edited is a text
+// channel, from the live channel tree (the edit snapshot does not carry it).
+export function editingTextChannel(channelID, channels = window.__noxa?.state?.channels || []) {
+    return !!channels.find((channel) => channel.ChannelID === channelID)?.TextOnly;
+}
+
 // One acknowledged operation per dialog. IDs and revision are captured from
 // the same server-scoped query; a rejected or uncertain save requires reload.
 export function openRoleChannel(kind, channelID = 0, { destinationID, orderIndex, textOnly = false } = {}) {
@@ -90,10 +96,15 @@ export function openRoleChannel(kind, channelID = 0, { destinationID, orderIndex
         if (kind === "channel_create" || kind === "channel_edit") {
             field("name"); field("topic"); field("description");
             if (kind === "channel_edit") {
-                select("roles.channel.passwordAction", [["keep", t("roles.channel.passwordKeep")], ["set", t("roles.channel.passwordSet")], ["remove", t("roles.channel.passwordRemove")]], passwordAction, value => {
+                // The server refuses a password on a text channel; clearing
+                // one left from before stays possible.
+                const textChannel = editingTextChannel(channelID);
+                if (textChannel && passwordAction === "set") { passwordAction = "keep"; draft.password = ""; }
+                select("roles.channel.passwordAction", [["keep", t("roles.channel.passwordKeep")], ["set", t("roles.channel.passwordSet"), textChannel], ["remove", t("roles.channel.passwordRemove")]], passwordAction, value => {
                     passwordAction = value; draft.password = ""; render();
                 });
-                if (passwordAction === "set") field("password", "password");
+                if (textChannel) form.append(roleElement("p", "role-hint", t("roles.channel.textNoPassword")));
+                if (passwordAction === "set" && !textChannel) field("password", "password");
                 form.append(roleButton(t("roles.accessTitle"), async () => {
                     if (busy || !current()) return;
                     if (dirty && !await confirm(t("roles.channel.discard"))) return;
