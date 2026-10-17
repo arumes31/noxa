@@ -27,8 +27,8 @@ func (s *TCPServer) moveRoleMember(ctx context.Context, e *authorization.RoleEva
 	if !ok || !target.isAuthed() {
 		return authorization.ErrRoleForbidden
 	}
-	target.roleActionMu.Lock()
-	defer target.roleActionMu.Unlock()
+	target.lockRoleAction()
+	defer target.unlockRoleAction()
 	before, ok := s.deps.State.GetClient(target.ID)
 	if !ok || target.rulesBlocked() || !e.CanMoveMember(actorID, target.userID()) ||
 		!e.Evaluate(actorID, before.ChannelID, authorization.MoveMembers).Allowed ||

@@ -23,6 +23,7 @@ func (s *TCPServer) handleDisplayNameSet(ctx context.Context, client *Client, f 
 	return s.rolePolicyRead(ctx, client, func(ctx context.Context) error {
 		s.roleMetadataMu.Lock()
 		defer s.roleMetadataMu.Unlock()
+		// Nicknames are not a guardRoleMedia input: keep the packet fence open.
 		client.roleActionMu.Lock()
 		defer client.roleActionMu.Unlock()
 		for _, member := range s.deps.State.ListClients() {

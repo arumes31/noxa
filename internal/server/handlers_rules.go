@@ -132,8 +132,8 @@ func (s *TCPServer) setSessionRulesPending(ctx context.Context, client *Client, 
 	return s.withRolePolicy(ctx, func(ctx context.Context) error {
 		s.roleMetadataMu.Lock()
 		defer s.roleMetadataMu.Unlock()
-		client.roleActionMu.Lock()
-		defer client.roleActionMu.Unlock()
+		client.lockRoleAction()
+		defer client.unlockRoleAction()
 		client.setRulesPending(pending)
 		s.refreshRolePublishers(ctx.Value(roleLeaseKey{}).(roleLease).evaluator)
 		return nil

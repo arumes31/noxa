@@ -19,6 +19,12 @@ func (s *TCPServer) refreshRolePublishers(e *authorization.RoleEvaluator) {
 	if s.deps.Voice == nil || s.deps.State == nil {
 		return
 	}
+	// Every renegotiation offer refreshes the guard, so a join triggers N-1
+	// concurrent refreshes. Without serialization an older snapshot that does
+	// not know the newest member could be installed last and prune that
+	// member's pairs (one listener then never heard one speaker).
+	s.publisherGuardMu.Lock()
+	defer s.publisherGuardMu.Unlock()
 	identities := make(map[string]roleMediaIdentity)
 	for _, member := range s.deps.State.ListClients() {
 		client, ok := s.clientByID(member.ClientID)

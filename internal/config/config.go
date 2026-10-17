@@ -113,10 +113,11 @@ type Config struct {
 	TLSCertFile string `mapstructure:"tls_cert_file"`
 	TLSKeyFile  string `mapstructure:"tls_key_file"`
 
-	// ChatAllowPlaintext permits unencrypted chat SENDS (dev escape hatch;
-	// default false). It never affects storage, relay, history or MOTD — the
-	// server seals before storing and before broadcasting regardless (91).
-	ChatAllowPlaintext bool `mapstructure:"chat_allow_plaintext"`
+	// RemovedChatAllowPlaintext records a leftover chat_allow_plaintext key.
+	// The escape hatch was removed: chat bodies are always end-to-end or
+	// client→server→client encrypted and no setting admits plaintext. The
+	// key is read only so that a stale config produces a warning.
+	RemovedChatAllowPlaintext bool `mapstructure:"chat_allow_plaintext"`
 
 	// Chat encryption at rest (91). ChatMasterKeyFile holds the key-encryption
 	// key that wraps every stored scope generation; it lives OUTSIDE the
@@ -292,7 +293,6 @@ func newConfigViper() *viper.Viper {
 	v.SetDefault("tls_dir", "./data/tls")
 	v.SetDefault("tls_cert_file", "")
 	v.SetDefault("tls_key_file", "")
-	v.SetDefault("chat_allow_plaintext", false)
 	v.SetDefault("chat_master_key_file", "./data/keys/chat_master.key")
 	v.SetDefault("pii_key_file", "./data/keys/pii.key")
 	v.SetDefault("chat_legacy_history", "encrypt")
@@ -552,9 +552,6 @@ func (c *Config) Validate() error {
 		if !c.FileTLSEnabled {
 			errs = append(errs, errors.New("file_tls_enabled must be true when dev_mode=false"))
 		}
-		if c.ChatAllowPlaintext {
-			errs = append(errs, errors.New("chat_allow_plaintext must be false when dev_mode=false"))
-		}
 	}
 
 	if strings.TrimSpace(c.ChatMasterKeyFile) == "" {
@@ -696,8 +693,8 @@ func (c *Config) Warnings() []string {
 	if !c.FileTLSEnabled || !c.TLSEnabled {
 		warnings = append(warnings, "file transfers are plaintext because file TLS is not fully enabled")
 	}
-	if c.ChatAllowPlaintext {
-		warnings = append(warnings, "chat_allow_plaintext accepts legacy plaintext chat payloads")
+	if c.RemovedChatAllowPlaintext {
+		warnings = append(warnings, "chat_allow_plaintext was removed and is ignored: plaintext chat is always refused")
 	}
 	if c.TURN.Secret != "" && len(c.TURN.URIs) == 0 {
 		warnings = append(warnings, "turn.secret is configured but turn.uris is empty; TURN is disabled")

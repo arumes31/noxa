@@ -50,8 +50,8 @@ func (s *TCPServer) setRoleMemberVoice(ctx context.Context, e *authorization.Rol
 	if !ok || !target.isAuthed() {
 		return netproto.MemberVoiceState{}, authorization.ErrRoleForbidden
 	}
-	target.roleActionMu.Lock()
-	defer target.roleActionMu.Unlock()
+	target.lockRoleAction()
+	defer target.unlockRoleAction()
 	before, ok := s.deps.State.GetClient(target.ID)
 	if !ok || before.ChannelID != msg.ChannelID || !e.CanManageMember(actorID, target.userID()) {
 		return netproto.MemberVoiceState{}, authorization.ErrRoleForbidden

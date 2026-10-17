@@ -75,7 +75,13 @@ func (s *TCPServer) handleConversation(ctx context.Context, client *Client, fram
 		var err error
 		switch request.Action {
 		case "mark_read":
-			err = backend.MarkConversationRead(ctx, client.UniqueID, request.ID, request.ReadMessageID)
+			shared := false
+			if request.ShareRead {
+				shared, err = s.shareConversationRead(ctx, backend, client.UniqueID, request.ID, request.ReadMessageID)
+			}
+			if !shared {
+				err = backend.MarkConversationRead(ctx, client.UniqueID, request.ID, request.ReadMessageID)
+			}
 		case "create":
 			var c netproto.Conversation
 			c, err = backend.CreateConversation(ctx, client.UniqueID, request.Name)
@@ -92,9 +98,13 @@ func (s *TCPServer) handleConversation(ctx context.Context, client *Client, fram
 		}
 		if request.Action == "leave" {
 			s.removeConversationCaller(request.ID, client.UniqueID)
+			s.conversationFiles.revoke(client.UniqueID, request.ID)
+			s.conversationActivity.revoke(client.UniqueID, request.ID, time.Now())
 		}
 		if request.Action == "remove" {
 			s.removeConversationCaller(request.ID, request.Target)
+			s.conversationFiles.revoke(request.Target, request.ID)
+			s.conversationActivity.revoke(request.Target, request.ID, time.Now())
 		}
 		// Queue only an opaque invalidation. Clients fetch content through a fresh
 		// membership lease; queued events never contain messages or new members.

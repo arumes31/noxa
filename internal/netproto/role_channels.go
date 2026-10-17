@@ -71,8 +71,11 @@ type RoleChannelChange struct {
 	Access      *RoleChannelAccess   `json:"access,omitempty"`
 	Settings    *RoleChannelSettings `json:"settings,omitempty"`
 	ChannelType int                  `json:"channel_type"`
-	Password    string               `json:"password,omitempty"`
-	SetPassword bool                 `json:"set_password,omitempty"`
+	// TextOnly (create only) makes a text channel: chat through subscriptions,
+	// never voice membership. Older servers ignore it and create a voice channel.
+	TextOnly    bool   `json:"text_only,omitempty"`
+	Password    string `json:"password,omitempty"`
+	SetPassword bool   `json:"set_password,omitempty"`
 }
 
 type RoleChannelResult struct {

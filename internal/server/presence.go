@@ -127,8 +127,8 @@ func (s *TCPServer) handleSetStatus(ctx context.Context, client *Client, f *netp
 	return s.rolePolicyRead(ctx, client, func(ctx context.Context) error {
 		s.roleMetadataMu.Lock()
 		defer s.roleMetadataMu.Unlock()
-		client.roleActionMu.Lock()
-		defer client.roleActionMu.Unlock()
+		client.lockRoleAction()
+		defer client.unlockRoleAction()
 		e := ctx.Value(roleLeaseKey{}).(roleLease).evaluator
 		if status == "invisible" && !e.Evaluate(client.userID(), 0, authorization.Administrator).Allowed {
 			return s.roleError(ctx, client, authorization.ErrRoleForbidden)

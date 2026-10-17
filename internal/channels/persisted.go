@@ -11,7 +11,7 @@ const channelStateSelect = `SELECT id, COALESCE(parent_id, 0), name, COALESCE(to
     order_index, channel_type, COALESCE(max_clients, 0), created_at,
     COALESCE(password_hash, ''),
     opus_bitrate, opus_fec, opus_dtx, opus_stereo, slow_mode_seconds,
-    COALESCE(description, '') FROM channels`
+    COALESCE(description, ''), text_only FROM channels`
 
 func scanChannelState(row interface{ Scan(...any) error }) (*state.Channel, error) {
 	var ch state.Channel
@@ -19,7 +19,7 @@ func scanChannelState(row interface{ Scan(...any) error }) (*state.Channel, erro
 	if err := row.Scan(&ch.ChannelID, &ch.ParentID, &ch.Name, &ch.Topic,
 		&ch.OrderIndex, &channelType, &ch.MaxClients, &ch.CreatedAt,
 		&ch.PasswordHash, &ch.OpusBitrate, &ch.OpusFEC,
-		&ch.OpusDTX, &ch.OpusStereo, &ch.SlowModeSeconds, &ch.Description); err != nil {
+		&ch.OpusDTX, &ch.OpusStereo, &ch.SlowModeSeconds, &ch.Description, &ch.TextOnly); err != nil {
 		return nil, err
 	}
 	parsed, err := ParseChannelType(int(channelType))

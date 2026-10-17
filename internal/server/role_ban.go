@@ -81,11 +81,11 @@ func (s *TCPServer) banRoleMember(ctx context.Context, e *authorization.RoleEval
 	cleanupCtx, cancelCleanup := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 	defer cancelCleanup()
 	for _, c := range sessions {
-		c.roleActionMu.Lock()
+		c.lockRoleAction()
 		channelID, _, _ := s.deps.State.ClientChannelState(c.ID)
 		event := kickEvent{ClientID: c.ID, ChannelID: channelID, ByClientID: actorClientID, Reason: reason, FromServer: true, Ban: result.Saved, ExpiresAt: banExpirationMillis(result.ExpiresAt)}
 		result.Pending = s.removeRoleSession(cleanupCtx, c, event) || result.Pending
-		c.roleActionMu.Unlock()
+		c.unlockRoleAction()
 	}
 	for _, channelID := range recordings {
 		stopper, ok := s.deps.Recorder.(interface {

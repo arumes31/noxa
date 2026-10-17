@@ -13,6 +13,28 @@ const (
 	MaxConversationMembers             = 16
 )
 
+// CapabilityConversationActivity advertises private-group typing indicators
+// (Typing.ConversationID -> "conversation_typing") and shared read receipts
+// (ConversationRequest.ShareRead -> "conversation_read"). Both events carry
+// routing metadata only: group id, member id and a message id, never content.
+const CapabilityConversationActivity = "conversation_activity_v1"
+
+// Event payloads of the two activity signals. ConversationTypingEvent mirrors
+// the DM/channel typing event and names its scope explicitly (as a direct
+// relay carries direct: true), so no receiver files it under another scope.
+type ConversationTypingEvent struct {
+	ConversationID string `json:"conversation_id"`
+	ClientID       string `json:"client_id"`
+	UniqueID       string `json:"unique_id"`
+	Nickname       string `json:"nickname"`
+}
+
+type ConversationReadEvent struct {
+	ConversationID string `json:"conversation_id"`
+	UniqueID       string `json:"unique_id"`
+	MessageID      int64  `json:"message_id"`
+}
+
 var (
 	ErrConversationInvalid  = errors.New("invalid conversation request")
 	ErrConversationDenied   = errors.New("conversation access denied")
@@ -23,6 +45,11 @@ type ConversationMember struct {
 	UniqueID    string `json:"unique_id"`
 	Pending     bool   `json:"pending"`
 	JoinedEpoch int64  `json:"joined_epoch"`
+	// SeenMessageID is the member's SHARED read position (read receipts). It
+	// only advances while that member's client opts in (ConversationRequest.
+	// ShareRead), stays 0 otherwise, and is withheld from pending invitees. It
+	// is distinct from the private ReadMessageID cursor behind unread counts.
+	SeenMessageID int64 `json:"seen_message_id,omitempty"`
 }
 
 type Conversation struct {
@@ -49,14 +76,18 @@ func (c Conversation) Member(uid string) (ConversationMember, bool) {
 }
 
 type ConversationRequest struct {
-	Action        string            `json:"action"`
-	ID            string            `json:"id"`
-	Revision      int64             `json:"revision"`
-	Name          string            `json:"name"`
-	Target        string            `json:"target"`
-	BeforeID      int64             `json:"before_id"`
-	ReadMessageID int64             `json:"read_message_id"`
-	Message       *ConversationSend `json:"message,omitempty"`
+	Action        string `json:"action"`
+	ID            string `json:"id"`
+	Revision      int64  `json:"revision"`
+	Name          string `json:"name"`
+	Target        string `json:"target"`
+	BeforeID      int64  `json:"before_id"`
+	ReadMessageID int64  `json:"read_message_id"`
+	// ShareRead makes a mark_read also advance the caller's shared read
+	// receipt (SeenMessageID) and notify the other members. Absent (older
+	// clients, or receipts disabled in settings) keeps the read private.
+	ShareRead bool              `json:"share_read,omitempty"`
+	Message   *ConversationSend `json:"message,omitempty"`
 }
 
 // Each current member receives a separately authenticated, encrypted envelope.
@@ -107,6 +138,9 @@ type ConversationMessage struct {
 	Reference      string `json:"reference"`
 	Body           string `json:"body"`
 	CreatedAt      int64  `json:"created_at"`
+	// EncVerified is set only by the receiving native client after it opened
+	// and authenticated the member envelope; it never comes from a server.
+	EncVerified bool `json:"enc_verified,omitempty"`
 }
 
 type ConversationResult struct {
