@@ -167,3 +167,29 @@ test("speech after silence resets the evidence instead of firing on stale counte
     await recover(f.pc, f.frozenStats(true));
     assert.deepEqual(f.calls, []);
 });
+
+test("a server-deafened listener or server-muted speaker never renegotiates over withheld audio", async () => {
+    for (const mode of ["deafened", "muted"]) {
+        const f = speakerFixture(), recover = createVoiceRecovery(f.options);
+        if (mode === "deafened") f.state.clients[0].server_deafened = true;
+        f.state.clients[1].is_speaking = true; f.state.clients[2].is_speaking = true;
+        if (mode === "muted") { f.state.clients[1].server_muted = true; f.state.clients[2].server_muted = true; }
+        for (let i = 0; i < 6; i++) { f.time(i * 60000); await recover(f.pc, f.frozenStats()); }
+        assert.deepEqual(f.calls, [], mode);
+    }
+});
+
+test("an SSRC change restarting the inbound counter is a baseline, not a strike", async () => {
+    const f = speakerFixture(), recover = createVoiceRecovery(f.options);
+    f.state.clients[1].is_speaking = true;
+    let timestamp = 0;
+    const sample = (ssrc, packets) => new Map([["a", { id: "a", type: "inbound-rtp", kind: "audio", mid: "0", ssrc, trackIdentifier: f.track.id, packetsReceived: packets, timestamp: ++timestamp }]]);
+    await recover(f.pc, sample(1, 100)); // baseline
+    await recover(f.pc, sample(1, 100)); // one quiet interval: strike 1
+    await recover(f.pc, sample(2, 3));   // new SSRC, lower counter: baseline only
+    assert.deepEqual(f.calls, []);
+    await recover(f.pc, sample(2, 9));   // new stream progressing
+    assert.deepEqual(f.calls, []);
+    await recover(f.pc, sample(2, 9)); await recover(f.pc, sample(2, 9));
+    assert.deepEqual(f.calls, ["repair", "resync", "repair"], "a stalled new stream is still detected");
+});

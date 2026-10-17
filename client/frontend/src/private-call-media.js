@@ -125,9 +125,17 @@ export function createCallMedia(owner, { current, acceptedPeer, label, report, r
         updateGrid();
         if (current(owner)) { render(owner); void syncPeers().catch(report); }
     }
+    // isActive reports a live or pending capture for source.
+    const isActive = source => !!captures[source] || !!requests[source];
     async function toggle(source) {
         if (!canPublish()) return;
-        if (captures[source] || requests[source]) { stop(source); return; }
+        if (isActive(source)) { stop(source); return; }
+        await start(source);
+    }
+    // start only ever turns source on: an active or pending capture is kept,
+    // so a repeated "start video" intent cannot switch the camera off.
+    async function start(source) {
+        if (!canPublish() || isActive(source)) return;
         const request = { controller: new AbortController() }; requests[source] = request; render(owner);
         const requestedAudioMode = audioMode;
         let captureAudioMode = requestedAudioMode;
@@ -227,5 +235,5 @@ export function createCallMedia(owner, { current, acceptedPeer, label, report, r
         for (const element of localTiles.values()) releaseTile(element);
         localTiles.clear(); grid.replaceChildren();
     }
-    return { grid, controls, toggle, syncPeer, attachChannel, receiveVideo, closePeer, close, updateGrid };
+    return { grid, controls, toggle, start, isActive, syncPeer, attachChannel, receiveVideo, closePeer, close, updateGrid };
 }

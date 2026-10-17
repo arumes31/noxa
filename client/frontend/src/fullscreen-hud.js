@@ -802,6 +802,9 @@ export function createFullscreenHud(stage) {
         const self = (d.from_client_id && d.from_client_id === state.myClientID) || (d.from_unique_id && d.from_unique_id === state.myUniqueID);
         const sender = state.clients?.find(c => (d.from_client_id && c.client_id === d.from_client_id) || (d.from_unique_id && c.unique_id === d.from_unique_id)) || null;
         const name = d.from || d.from_nickname || sender?.nickname || "?";
+        // Blocked senders never peek or open the bubble (gaming-overlay-peek.js).
+        const senderUID = d.from_unique_id || sender?.unique_id || "";
+        if (senderUID && (state.settings?.blocked_users || []).includes(senderUID)) return;
         if (!direct) {
             const channel = d.channel_id !== undefined && d.channel_id !== null && d.channel_id !== "" ? Number(d.channel_id) : null;
             if (channel === null || channel !== state.myChannelID) return;
@@ -822,7 +825,7 @@ export function createFullscreenHud(stage) {
             return;
         }
         if (!host || !result.incomingDM || self) return;
-        const uid = d.from_unique_id || sender?.unique_id || "";
+        const uid = senderUID;
         if (!uid) return;
         quick.receive({ uid, name, text: chatPreview(d) });
     }

@@ -22,7 +22,7 @@ export function createVoiceRecovery({ state, attached, repair, resync, rebuild, 
         if (busy || !current() || pc.connectionState !== "connected" || pc.signalingState !== "stable") return;
         const failed = [];
         const seen = new Set();
-        const micPackets = new Map(); // publisher client ID -> packets on its live mic receiver
+        const micPackets = new Map(); // publisher client ID -> Map(stat token -> packets) on its live mic receiver
         for (const stat of stats.values()) {
             if (stat.type !== "inbound-rtp" || (stat.kind || stat.mediaType) !== "audio") continue;
             const transceivers = pc.getTransceivers();
@@ -31,8 +31,10 @@ export function createVoiceRecovery({ state, attached, repair, resync, rebuild, 
             if (!transceiver) continue;
             const track = transceiver.receiver.track, id = remoteTrackID(pc, track, transceiver);
             if (!id || transceiver.stopped || !["recvonly", "sendrecv"].includes(transceiver.currentDirection) || parseTrackID(id).slot) continue;
-            micPackets.set(parseTrackID(id).clientID, (micPackets.get(parseTrackID(id).clientID) || 0) + (stat.packetsReceived || 0));
             const token = `${stat.id}:${stat.ssrc}`;
+            const publisher = parseTrackID(id).clientID;
+            if (!micPackets.has(publisher)) micPackets.set(publisher, new Map());
+            micPackets.get(publisher).set(token, stat.packetsReceived || 0);
             seen.add(token);
             const old = previous.get(token);
             previous.set(token, { packets: stat.packetsReceived, timestamp: stat.timestamp });
@@ -62,26 +64,38 @@ export function createVoiceRecovery({ state, attached, repair, resync, rebuild, 
 
 // silentSpeakers returns channel members the server reports as speaking whose
 // microphone has produced no packets here for SPEAKER_STRIKES samples. A
-// whisper to someone else is not addressed to us and is ignored.
+// whisper to someone else is not addressed to us and is ignored. micPackets
+// maps publisher -> Map(inbound stat token "id:ssrc" -> packetsReceived);
+// progress is judged per token so an SSRC change (a new stream whose counter
+// restarts) is a fresh baseline, never a dropped sum.
 export function silentSpeakers(state, micPackets, lastPackets, strikes) {
     const out = [];
     const speaking = new Set();
-    for (const client of state.clients || []) {
+    // The server withholds every mic/screen-audio packet from a server-deafened
+    // listener while still reporting who speaks: silence then proves nothing.
+    const me = (state.clients || []).find(client => String(client.client_id ?? "") === String(state.myClientID));
+    const withheld = !!me?.server_deafened;
+    for (const client of withheld ? [] : state.clients || []) {
         const id = String(client.client_id ?? "");
         if (!id || id === String(state.myClientID) || client.channel_id !== state.myChannelID) continue;
-        if (!client.is_speaking || client.is_whispering) continue;
+        // A server-muted publisher's audio is dropped at the server as well.
+        if (!client.is_speaking || client.is_whispering || client.server_muted) continue;
         speaking.add(id);
-        const packets = micPackets.get(id);
+        const tokens = micPackets.get(id);
         const before = lastPackets.get(id);
-        const fresh = packets !== undefined && before !== undefined && packets > before;
-        if (packets !== undefined) lastPackets.set(id, packets);
-        // The first sample of a speaker with a live receiver only sets the
+        let progressed = false, baseline = before === undefined;
+        for (const [token, packets] of tokens || []) {
+            if (!before?.has(token)) baseline = true;
+            else if (packets > before.get(token)) progressed = true;
+        }
+        if (tokens !== undefined) lastPackets.set(id, new Map(tokens));
+        // The first sample of a speaker's receiver stream only sets the
         // baseline; a missing receiver is evidence right away.
-        const evidence = packets === undefined || (before !== undefined && !fresh);
+        const evidence = tokens === undefined || (!progressed && !baseline);
         strikes.set(id, evidence ? (strikes.get(id) || 0) + 1 : 0);
         if (strikes.get(id) >= SPEAKER_STRIKES) out.push(id);
     }
     for (const id of strikes.keys()) if (!speaking.has(id)) strikes.delete(id);
-    for (const [id, packets] of micPackets) if (!speaking.has(id)) lastPackets.set(id, packets);
+    for (const [id, tokens] of micPackets) if (!speaking.has(id)) lastPackets.set(id, new Map(tokens));
     return out;
 }
