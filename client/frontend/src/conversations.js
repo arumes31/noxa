@@ -66,7 +66,11 @@ async function messagePreview(tabID, group, messageID) {
         if (!message || !message.enc_verified || (V().state.settings?.blocked_users || []).includes(message.from_unique_id)) return null;
         const sender = V().state.clients.find(client => client.unique_id === message.from_unique_id)?.nickname || t("chat.unknownMember");
         const text = String(message.body || "").replace(/\[file:([^\]]+)\]/g, (_, capture) => `📎 ${parseFileRef(capture).name}`).slice(0, 80);
-        return t("group.messagePreview", { name: group.name, sender, text });
+        // The in-game overlay's chat peek applies the DM toast gates itself;
+        // it gets the raw (verified, decrypted) body so attachments become labels.
+        const peek = { direct: true, e2e: true, enc_verified: true, enc_mode: "e2e",
+            from: `${sender} · ${group.name}`, from_unique_id: message.from_unique_id || "", text: String(message.body || "") };
+        return { notice: t("group.messagePreview", { name: group.name, sender, text }), peek };
     } catch { return null; }
 }
 export async function conversationChanged(event = {}) {
@@ -99,7 +103,10 @@ export async function conversationChanged(event = {}) {
         if (event.message_id && !event.invitation) {
             const preview = await messagePreview(tabID, group, Number(event.message_id));
             if (stale() || muted() || viewed()) return;
-            if (preview) text = preview;
+            if (preview) {
+                text = preview.notice;
+                window.__noxaOverlayChat?.(preview.peek);
+            }
         }
         window.__noxaNotify?.notify("dm", text,
             { className: "messages", kind: "info", announce: false, reference: { kind: "group", group_id: group.id, message_id: event.message_id || 0 } });

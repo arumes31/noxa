@@ -80,3 +80,18 @@ test('the queue keeps the newest three lines for about seven seconds', () => {
     assert.deepEqual(queue.entries(200 + PEEK_KEEP_MS).map(line => line.text), ['m3', 'm4']);
     assert.deepEqual(queue.entries(400 + PEEK_KEEP_MS), []);
 });
+
+// conversations.js forwards verified private-group messages in this shape.
+test('private group messages peek through the DM gates with sender and group', () => {
+    const group = (extra = {}) => ({ direct: true, e2e: true, enc_verified: true, enc_mode: 'e2e',
+        from: 'Sam · Raid leads', from_unique_id: 'sam', text: 'pull at 20:00', ...extra });
+    assert.deepEqual(chatPeekLine(group(), env()), { name: 'Sam · Raid leads', text: 'pull at 20:00' });
+    const calls = [];
+    chatPeekLine(group(), env({ allowed: (event, ctx) => { calls.push([event, ctx]); return true; } }));
+    assert.deepEqual(calls[0], ['dm', { uid: 'sam', className: 'messages' }]);
+    assert.equal(chatPeekLine(group({ from_unique_id: 'blocked' }), env()), null, 'blocked sender');
+    assert.equal(chatPeekLine(group(), env({ allowed: () => false })), null, 'muted/DND via the toast gate');
+    const file = chatPeekLine(group({ text: '[file:store#SECRETKEY#plan.pdf]' }), env());
+    assert.ok(file);
+    assert.doesNotMatch(file.text, /SECRETKEY/);
+});

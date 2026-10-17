@@ -6,6 +6,9 @@ import { chatPeekLine, createChatPeek } from './gaming-overlay-peek.js';
 import { sessionUserID } from './session-identity.js';
 
 let peek = null;
+// Private-group messages reach the peek through conversations.js, which has
+// no import path to this module.
+window.__noxaOverlayChat = (d) => noteOverlayChat(d);
 
 // noteOverlayChat offers a received chat payload to the overlay's chat peek
 // (main.js calls it for every message chat-ui.js accepted). It never throws.
