@@ -18,6 +18,7 @@ type videoWatch struct {
 	qualityRID                            string
 	codecs                                uint8
 	hevcLevel                             uint8
+	cacheStart                            time.Time // first startup deferred to the GOP cache
 }
 
 // VideoPublication is a current, explicitly announced camera or screen source.

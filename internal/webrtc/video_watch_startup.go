@@ -222,6 +222,22 @@ func (r *Router) flushWatchStartup(subscriber string, peer *PeerConnectionWrappe
 			epoch = input.started
 			input.mu.Unlock()
 		}
+		// A live source with a fresh cached keyframe starts this viewer on its
+		// next unit without disturbing the publisher. If that has not happened
+		// within gopRefillTimeout (source paused, admission failed), ask upstream.
+		if peer.egress != nil && tracks != nil && tracks.video[key.slot] != nil &&
+			r.gopCacheLocked(key.publisher, key.slot, rid).servable(now, tracks.video[key.slot].track.Codec().MimeType) {
+			if watch.cacheStart.IsZero() {
+				watch.cacheStart = now
+				r.watches[key] = watch
+			}
+			if waited := now.Sub(watch.cacheStart); waited < gopRefillTimeout {
+				if delay := gopRefillTimeout - waited; retry == 0 || delay < retry {
+					retry = delay
+				}
+				continue
+			}
+		}
 		input.recordKeyframeRequest(keyframeWatchStart, keyframeRequested, &epoch)
 		if last := r.keyframeLast[ssrc]; !last.IsZero() && now.Sub(last) < keyframeRequestWindow {
 			input.recordKeyframeRequest(keyframeWatchStart, keyframeCoalesced, &epoch)

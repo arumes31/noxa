@@ -220,6 +220,18 @@ func (p *mediaPacer) Write(header *rtp.Header, payload []byte, attrs interceptor
 	return size, nil
 }
 
+// videoDrain estimates how long the video lane needs to send its queue plus
+// extra bytes at the current pacing rate (1.5x the congestion target).
+func (p *mediaPacer) videoDrain(extra int) time.Duration {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	rate := float64(p.bitrate) * 1.5 / 8
+	if rate <= 0 {
+		return time.Duration(1<<63 - 1)
+	}
+	return time.Duration(float64(p.bytes+extra) / rate * float64(time.Second))
+}
+
 func (p *mediaPacer) pushAudioLocked(packet pacedPacket) {
 	p.audioQueue[(p.audioHead+p.audioCount)%mediaAudioPackets] = packet
 	p.audioCount++

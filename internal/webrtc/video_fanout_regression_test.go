@@ -63,3 +63,103 @@ func TestKeyframeThrottleForgetsEndedSources(t *testing.T) {
 		t.Fatalf("detached publisher retained %d throttle entries (PLIs %d)", size, feedback.pliCount())
 	}
 }
+
+// A final write that meets a pending control update must not be discarded:
+// its sequence number is already assigned, so dropping it leaves every
+// recipient a hole. The pacer retries it after the update.
+func TestPacerRetriesFinalWriteBehindControlUpdate(t *testing.T) {
+	r := NewRouter(nil)
+	ticket := mediaTicket{router: r, videoRevision: r.videoPolicySnapshot().revision, delivery: MediaDelivery{Slot: SlotCam, Tap: true}}
+	p, _, packet, writes := terminalDiagnosticFixture(t, ticket)
+	p.bitrate, p.stop, p.done = mediaInitialBitrate, make(chan struct{}), make(chan struct{})
+	r.echoScopeMu.Lock() // a membership refresh holds the echo gate
+	go p.run()
+	defer func() { _ = p.Close() }()
+	if _, err := p.Write(&packet.Header, packet.Payload, nil); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(60 * time.Millisecond)
+	p.mu.Lock()
+	queued, dropped := p.count, p.diagnostics.droppedScope
+	p.mu.Unlock()
+	if queued != 1 || dropped != 0 {
+		r.echoScopeMu.Unlock()
+		t.Fatalf("contended final write: queued=%d dropped=%d, want retained", queued, dropped)
+	}
+	r.echoScopeMu.Unlock()
+	deadline := time.Now().Add(time.Second)
+	for {
+		p.mu.Lock()
+		count := p.count
+		p.mu.Unlock()
+		if count == 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("retried packet was never written")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	p.mu.Lock()
+	written := *writes
+	p.mu.Unlock()
+	if written != 1 {
+		t.Fatalf("packet written %d times after the update", written)
+	}
+}
+
+// Joining and leaving outside the echo channel must not take the echo gate:
+// a pending writer there fails every recipient's final media write.
+func TestMembershipRefreshSkipsUnchangedEchoGate(t *testing.T) {
+	r := NewRouter(nil)
+	r.JoinChannel(1, "a")
+	r.echoScopeMu.RLock() // an in-flight final write
+	done := make(chan struct{})
+	go func() {
+		r.JoinChannel(1, "b")
+		r.LeaveChannel(1, "b")
+		close(done)
+	}()
+	select {
+	case <-done:
+		r.echoScopeMu.RUnlock()
+	case <-time.After(time.Second):
+		r.echoScopeMu.RUnlock()
+		<-done
+		t.Fatal("membership change waited for the echo gate without an echo channel")
+	}
+	r.SetEchoChannel(9)
+	r.JoinChannel(9, "echo")
+	r.echoScopeMu.RLock()
+	defer r.echoScopeMu.RUnlock()
+	if r.echoMembers["echo"] == 0 {
+		t.Fatal("echo membership change was not recorded")
+	}
+}
+
+// Binding notifications without a pending startup must not take the watch
+// writer gate.
+func TestWatchStartupFlushWithoutPendingSkipsWatchGate(t *testing.T) {
+	e, err := New(testLogger(), nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = e.Close() }()
+	r := NewRouter(nil)
+	attachFakePeer(t, e, r, "viewer")
+	r.JoinChannel(1, "viewer")
+	r.mu.RLock()
+	peer := r.pubPeers["viewer"]
+	r.mu.RUnlock()
+	r.watchMu.RLock()
+	done := make(chan struct{})
+	go func() { r.flushWatchStartup("viewer", peer); close(done) }()
+	select {
+	case <-done:
+		r.watchMu.RUnlock()
+	case <-time.After(time.Second):
+		r.watchMu.RUnlock()
+		<-done
+		t.Fatal("startup flush took the watch writer gate with nothing pending")
+	}
+}

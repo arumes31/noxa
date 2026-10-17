@@ -100,6 +100,18 @@ type mediaEgressStream struct {
 	pacer           *mediaPacer // immutable after binding; protected by mu
 }
 
+// videoDrain reports the bound pacer's estimated drain time for its queue
+// plus extra bytes; ok is false before the sender is bound.
+func (s *mediaEgressStream) videoDrain(extra int) (drain time.Duration, ok bool) {
+	s.mu.RLock()
+	pacer := s.pacer
+	s.mu.RUnlock()
+	if pacer == nil {
+		return 0, false
+	}
+	return pacer.videoDrain(extra), true
+}
+
 func (r *mediaEgressRegistry) ticketID() uint64 {
 	r.mu.Lock()
 	defer r.mu.Unlock()

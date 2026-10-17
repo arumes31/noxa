@@ -257,12 +257,21 @@ func TestKeyframeDiagnosticsH264ReadLoopReason(t *testing.T) {
 	r.mu.RLock()
 	d := r.videoIngress[videoIngressKey{"pub", SlotScreen, "f"}]
 	r.mu.RUnlock()
-	d.mu.Lock()
-	got := d.keyframeRequestSnapshot()
-	rejects := d.h264RejectSnapshot()
-	d.mu.Unlock()
-	if got == nil || got.H264Assembly != (netproto.VideoKeyframeRequestCounters{Requests: 1, WriteSucceeded: 1}) || rejects == nil || rejects.Malformed != 1 {
-		t.Fatalf("assembler provenance lost: %+v, %+v", got, rejects)
+	// The read loop hands units to the ingress dispatcher goroutine, so the
+	// second read does not prove the first request's write was recorded.
+	deadline := time.Now().Add(time.Second)
+	for {
+		d.mu.Lock()
+		got := d.keyframeRequestSnapshot()
+		rejects := d.h264RejectSnapshot()
+		d.mu.Unlock()
+		if got != nil && got.H264Assembly == (netproto.VideoKeyframeRequestCounters{Requests: 1, WriteSucceeded: 1}) && rejects != nil && rejects.Malformed == 1 {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("assembler provenance lost: %+v, %+v", got, rejects)
+		}
+		time.Sleep(time.Millisecond)
 	}
 }
 
