@@ -478,6 +478,9 @@
     background: var(--arc-s2); color: var(--text);
     border-color: var(--border); box-shadow: inset 0 -2px 0 var(--accent);
 }
+/* Unread keeps its steady accent border (chat-unread.css) over the transparent
+   arctic tab border, so it reads without motion too. */
+:root[data-theme="arctic"] #pm-tabs .pm-tab.has-unread { border-color: var(--accent); color: var(--text); }
 :root[data-theme="arctic"] .pm-tabs-more { border-radius: var(--arc-r-xs); background: var(--arc-s2); }
 
 /* composer */
