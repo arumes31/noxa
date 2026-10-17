@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net"
 	"testing"
+	"time"
 
 	"noxa/internal/authorization"
 	"noxa/internal/filetransfer"
@@ -202,5 +203,23 @@ func TestConversationFolderNamespaceIsScopeZeroOnly(t *testing.T) {
 	}
 	if got := filterConversationFolders(5, []string{testGroupFolder}); len(got) != 1 {
 		t.Fatalf("channel listing filtered: %v", got)
+	}
+}
+
+// TestConversationFileGrantIgnoresChecksOverlappingRevocation pins the cache
+// race: a positive membership answer read before a leave/remove committed is
+// not cached after the revocation.
+func TestConversationFileGrantIgnoresChecksOverlappingRevocation(t *testing.T) {
+	var access conversationFileAccess
+	now := time.Now()
+	epoch := access.epoch()
+	access.revoke("user-uid", testGroupID) // the removal lands mid-check
+	access.grant("user-uid", testGroupID, now, epoch)
+	if access.cached("user-uid", testGroupID, now) {
+		t.Fatal("stale membership answer cached after revocation")
+	}
+	access.grant("user-uid", testGroupID, now, access.epoch())
+	if !access.cached("user-uid", testGroupID, now) || access.cached("user-uid", testGroupID, now.Add(conversationFileAccessTTL)) {
+		t.Fatal("fresh grant not cached for exactly its TTL")
 	}
 }

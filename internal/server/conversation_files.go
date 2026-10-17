@@ -60,6 +60,9 @@ func conversationFolderID(folder string) (string, bool) {
 type conversationFileAccess struct {
 	mu      sync.Mutex
 	granted map[string]time.Time // uid + "\x00" + group -> expiry
+	// revocations counts leave/remove events. A membership check that began
+	// before a revocation must not cache its (now stale) positive answer.
+	revocations uint64
 }
 
 func conversationAccessKey(uid, group string) string { return uid + "\x00" + group }
@@ -71,9 +74,19 @@ func (c *conversationFileAccess) cached(uid, group string, now time.Time) bool {
 	return ok && now.Before(expiry)
 }
 
-func (c *conversationFileAccess) grant(uid, group string, now time.Time) {
+// epoch is captured before a membership query and handed back to grant.
+func (c *conversationFileAccess) epoch() uint64 {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	return c.revocations
+}
+
+func (c *conversationFileAccess) grant(uid, group string, now time.Time, epoch uint64) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if epoch != c.revocations {
+		return
+	}
 	if c.granted == nil {
 		c.granted = map[string]time.Time{}
 	}
@@ -88,6 +101,7 @@ func (c *conversationFileAccess) grant(uid, group string, now time.Time) {
 func (c *conversationFileAccess) revoke(uid, group string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	c.revocations++
 	delete(c.granted, conversationAccessKey(uid, group))
 }
 
@@ -127,11 +141,12 @@ func (s *TCPServer) authorizeConversationFile(ctx context.Context, uid, folder, 
 	if direction == "upload" && !conversationAttachmentName.MatchString(name) {
 		return errConversationFileDenied
 	}
+	epoch := s.conversationFiles.epoch()
 	if !s.conversationMember(ctx, uid, group) {
 		s.conversationFiles.revoke(uid, group)
 		return errConversationFileDenied
 	}
-	s.conversationFiles.grant(uid, group, time.Now())
+	s.conversationFiles.grant(uid, group, time.Now(), epoch)
 	return nil
 }
 
@@ -151,10 +166,11 @@ func (s *TCPServer) guardConversationTransfer(ctx context.Context, client *Clien
 	if s.conversationFiles.cached(uid, group, time.Now()) {
 		return nil
 	}
+	epoch := s.conversationFiles.epoch()
 	if !s.conversationMember(ctx, uid, group) {
 		return filetransfer.ErrAccessRevoked
 	}
-	s.conversationFiles.grant(uid, group, time.Now())
+	s.conversationFiles.grant(uid, group, time.Now(), epoch)
 	return nil
 }
 
