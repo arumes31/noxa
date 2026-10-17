@@ -176,6 +176,9 @@ type VideoKeyframeRequestCounters struct {
 	Coalesced      uint64 `json:"coalesced"`
 	WriteSucceeded uint64 `json:"write_succeeded"`
 	WriteFailed    uint64 `json:"write_failed"`
+	// Deferred receiver requests: held back while that receiver's relay
+	// backlog meant it could not take a new keyframe promptly.
+	Deferred uint64 `json:"deferred,omitempty"`
 }
 
 // Reasons are fixed fields with the same lifetime and access scope as ingress.

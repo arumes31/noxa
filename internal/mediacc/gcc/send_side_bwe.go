@@ -62,7 +62,30 @@ type SendSideBWE struct {
 	close     chan struct{}
 	closeLock sync.RWMutex
 
+	// now and afterFunc default to the wall clock; deterministic simulations
+	// replace both so every timing decision follows a virtual clock.
+	now       func() time.Time
+	afterFunc func(time.Duration, func()) Timer
+
 	loggerFactory logging.LoggerFactory
+}
+
+// Timer is a cancellable callback created by the estimator's clock.
+type Timer interface{ Stop() bool }
+
+func wallAfterFunc(d time.Duration, f func()) Timer { return time.AfterFunc(d, f) }
+
+// SendSideBWEClock drives the estimator from an injected clock, for
+// deterministic simulation. afterFunc must schedule f on that same clock.
+// Production estimators use the wall clock.
+func SendSideBWEClock(nowFn func() time.Time, afterFunc func(time.Duration, func()) Timer) Option {
+	return func(e *SendSideBWE) error {
+		if nowFn != nil && afterFunc != nil {
+			e.now, e.afterFunc = nowFn, afterFunc
+		}
+
+		return nil
+	}
 }
 
 // Option configures a bandwidth estimator.
@@ -127,6 +150,8 @@ func NewSendSideBWE(opts ...Option) (*SendSideBWE, error) {
 		minBitrate:            minBitrate,
 		maxBitrate:            maxBitrate,
 		close:                 make(chan struct{}),
+		now:                   time.Now,
+		afterFunc:             wallAfterFunc,
 	}
 	for _, opt := range opts {
 		if err := opt(send); err != nil {
@@ -139,9 +164,9 @@ func NewSendSideBWE(opts ...Option) (*SendSideBWE, error) {
 	if send.pacer == nil {
 		send.pacer = newLeakyBucketPacer(send.latestBitrate, send.loggerFactory)
 	}
-	send.lossController = newLossBasedBWE(send.latestBitrate, send.loggerFactory)
+	send.lossController = newLossBasedBWE(send.latestBitrate, send.now, send.loggerFactory)
 	send.delayController = newDelayController(delayControllerConfig{
-		nowFn:          time.Now,
+		nowFn:          send.now,
 		initialBitrate: send.latestBitrate,
 		minBitrate:     send.minBitrate,
 		maxBitrate:     send.maxBitrate,
@@ -171,7 +196,7 @@ func (e *SendSideBWE) AddStream(info *interceptor.StreamInfo, writer interceptor
 				}
 				attributes.Set(cc.TwccExtensionAttributesKey, hdrExtID)
 			}
-			if err := e.feedbackAdapter.OnSent(time.Now(), header, len(payload), attributes); err != nil {
+			if err := e.feedbackAdapter.OnSent(e.now(), header, len(payload), attributes); err != nil {
 				return 0, err
 			}
 
@@ -186,7 +211,7 @@ func (e *SendSideBWE) AddStream(info *interceptor.StreamInfo, writer interceptor
 //
 //nolint:cyclop
 func (e *SendSideBWE) WriteRTCP(pkts []rtcp.Packet, _ interceptor.Attributes) error {
-	now := time.Now()
+	now := e.now()
 	e.closeLock.RLock()
 	defer e.closeLock.RUnlock()
 
@@ -311,6 +336,9 @@ func (e *SendSideBWE) onDelayUpdate(delayStats DelayStats) {
 		return
 	}
 
+	if delayStats.usageFloor > 0 {
+		e.lossController.raiseToDeliveredRate(delayStats.usageFloor)
+	}
 	lossStats := e.lossController.getEstimate(delayStats.TargetBitrate)
 	bitrateChanged := false
 	bitrate := min(delayStats.TargetBitrate, lossStats.TargetBitrate)

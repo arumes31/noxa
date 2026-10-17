@@ -39,6 +39,7 @@ import (
 	"github.com/pion/webrtc/v4"
 	"go.uber.org/zap"
 
+	"noxa/internal/mediacc/keyframe"
 	"noxa/internal/safecast"
 )
 
@@ -148,6 +149,22 @@ type pubSlot struct {
 	videoSource       atomic.Uint32
 	videoBindingReady atomic.Bool   // Pion Send finished publishing its writer
 	videoStartupEpoch atomic.Uint64 // first decodable packet admitted for this watch
+	keyframeGate      keyframe.FeedbackGate
+}
+
+// videoBacklog is how long media already queued for this subscriber waits
+// in its relay pacer before it can be sent.
+func (s *pubSlot) videoBacklog() time.Duration {
+	if s == nil || s.egress == nil {
+		return 0
+	}
+	s.egress.mu.RLock()
+	pacer := s.egress.pacer
+	s.egress.mu.RUnlock()
+	if pacer == nil {
+		return 0
+	}
+	return pacer.videoBacklog()
 }
 
 // WriteRTP starts the subscriber's header-extension space afresh. Publisher
@@ -2410,10 +2427,11 @@ func (r *Router) relayKeyframeRequest(subscriberID string, sender *webrtc.RTPSen
 	r.mu.RLock()
 	var owner, sourceSlot, rid, currentRID string
 	var currentKnown bool
+	var requester *pubSlot
 	for publisherID, tracks := range r.pubTracks[subscriberID] {
 		for slot, output := range tracks.video {
 			if output.sender == sender && sender != nil {
-				owner, sourceSlot = publisherID, slot
+				owner, sourceSlot, requester = publisherID, slot, output
 				rid = r.preferredRIDLocked(subscriberID, publisherID, slot)
 				// A switch waits for the desired layer's keyframe while the
 				// current layer keeps playing. Repair that current source too.
@@ -2430,11 +2448,44 @@ func (r *Router) relayKeyframeRequest(subscriberID string, sender *webrtc.RTPSen
 	}
 	r.mu.RUnlock()
 	if owner != "" {
+		// Every forwarded request makes the publisher's single upload encode
+		// a keyframe for all receivers. A receiver that cannot currently take
+		// one (its relay backlog would delay it) must not force keyframes on
+		// the shared encoder every coalescing window; it repeats its request
+		// and is served as soon as its backlog clears (see keyframe.FeedbackGate).
+		if !requester.keyframeGate.Allow(time.Now(), requester.videoBacklog()) {
+			r.recordDeferredKeyframe(owner, sourceSlot, rid)
+			return
+		}
 		if currentKnown && currentRID != rid {
 			r.requestKeyframe(owner, sourceSlot, currentRID, keyframeViewerFeedback)
 		}
 		r.requestKeyframe(owner, sourceSlot, rid, keyframeViewerFeedback)
 	}
+}
+
+// recordDeferredKeyframe counts a receiver request held back by its gate on
+// the source it would have targeted. Nothing is written to the publisher.
+func (r *Router) recordDeferredKeyframe(publisherID, slot, rid string) {
+	r.mu.RLock()
+	var ssrc uint32
+	if src, ok := r.videoSources[publisherID][slot]; ok {
+		if s, ok := src[rid]; ok {
+			ssrc = s
+		} else {
+			for selectedRID, s := range src {
+				rid, ssrc = selectedRID, s
+				break
+			}
+		}
+	}
+	ingress := r.videoIngress[videoIngressKey{publisherID, slot, rid}]
+	r.mu.RUnlock()
+	if ingress == nil || ssrc == 0 || ingress.ssrc != ssrc {
+		return
+	}
+	ingress.recordKeyframeRequest(keyframeViewerFeedback, keyframeRequested, nil)
+	ingress.recordKeyframeRequest(keyframeViewerFeedback, keyframeDeferred, nil)
 }
 
 // keyframeRequestWindow coalesces simultaneous subscriber PLIs/FIRs. One

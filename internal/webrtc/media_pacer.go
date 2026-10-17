@@ -34,6 +34,9 @@ var errMediaRTXSequenceLimit = errors.New("media pacer RTX sequence state limit 
 // Only the final pacing worker advances next; binding only shares the pointer.
 type mediaRTXSequence struct{ next uint16 }
 
+// The pacer may spend up to this multiple of the estimate to absorb bursts.
+const mediaPacingGain = 1.5
+
 // Enough initial headroom for a Full HD stream while receiver feedback starts.
 // This is not a floor: GCC may immediately reduce it on a constrained path.
 const mediaInitialBitrate = 6_000_000
@@ -157,6 +160,18 @@ func (p *mediaPacer) SetTargetBitrate(rate int) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.bitrate = min(max(rate, 0), 1_000_000_000)
+}
+
+// videoBacklog estimates how long queued video waits before the pacer can
+// send it at its current pacing rate.
+func (p *mediaPacer) videoBacklog() time.Duration {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	rate := float64(p.bitrate) * mediaPacingGain / 8
+	if p.closed || p.count == 0 || rate <= 0 {
+		return 0
+	}
+	return time.Duration(float64(p.bytes) / rate * float64(time.Second))
 }
 
 func (p *mediaPacer) Write(header *rtp.Header, payload []byte, attrs interceptor.Attributes) (int, error) {
@@ -284,7 +299,7 @@ func (p *mediaPacer) run() {
 				p.mu.Lock()
 			}
 			// Bound catch-up after a stalled socket; never release a huge burst.
-			bytesPerSecond := float64(p.bitrate) * 1.5 / 8
+			bytesPerSecond := float64(p.bitrate) * mediaPacingGain / 8
 			budget = min(budget+min(now.Sub(last), 50*time.Millisecond).Seconds()*bytesPerSecond, 0.05*bytesPerSecond)
 			last = now
 			for work := p.count; work > 0 && p.count > 0 && !p.closed; work-- {
