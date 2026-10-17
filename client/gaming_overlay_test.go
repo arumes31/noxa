@@ -3,6 +3,7 @@ package main
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestGamingOverlaySnapshotBoundsAndPrivacy(t *testing.T) {
@@ -47,9 +48,18 @@ func TestGamingOverlayDefaultsAndSilentState(t *testing.T) {
 	if !DefaultSettings().GamingOverlay || DefaultSettings().GamingOverlayPosition != "center-left" {
 		t.Fatal("overlay must default to the left")
 	}
-	got := normalizeGamingOverlay(GamingOverlaySnapshot{Active: true, Speakers: []GamingOverlaySpeaker{{Name: "Quiet"}, {Name: "Muted", Speaking: true, Muted: true}}})
-	if got.Active || len(got.Speakers) != 0 {
-		t.Fatalf("silent overlay should be hidden: %+v", got)
+	if !DefaultSettings().GamingOverlayOnlySpeaking || DefaultSettings().GamingOverlayChatPeek || DefaultSettings().GamingOverlayAutoHide {
+		t.Fatal("behaviour defaults must keep the speakers-only overlay without peek or auto-hide")
+	}
+	got := overlayPresentation(GamingOverlaySnapshot{Active: true, Speakers: []GamingOverlaySpeaker{{Name: "Quiet"}, {Name: "Muted", Speaking: true, Muted: true}}}, DefaultSettings())
+	for _, speaker := range got.Speakers {
+		if speaker.Speaking {
+			t.Fatalf("muted or quiet member marked speaking: %+v", got)
+		}
+	}
+	var presence overlayPresence
+	if scene := presence.scene(got, time.Now()); scene.visible() || len(scene.snapshot.Speakers) != 0 {
+		t.Fatalf("silent overlay should be hidden: %+v", scene)
 	}
 }
 
@@ -98,7 +108,12 @@ func TestGamingOverlaySpeakersOnlyFiltersBeforeDisplayLimit(t *testing.T) {
 	s.Speakers = append(s.Speakers, GamingOverlaySpeaker{Name: "Talking", Speaking: true})
 	settings := DefaultSettings()
 	got := overlayPresentation(s, settings)
-	if len(got.Speakers) != 1 || got.Speakers[0].Name != "Talking" || len(s.Speakers) != 13 {
-		t.Fatalf("speaker filter mutated input or retained quiet member: %+v", got)
+	if len(got.Speakers) != 8 || got.Speakers[7].Name != "Talking" || len(s.Speakers) != 13 {
+		t.Fatalf("display limit dropped the speaker or mutated input: %+v", got)
+	}
+	var presence overlayPresence
+	scene := presence.scene(got, time.Now())
+	if len(scene.snapshot.Speakers) != 1 || scene.snapshot.Speakers[0].Name != "Talking" {
+		t.Fatalf("speakers-only scene retained quiet members: %+v", scene.snapshot.Speakers)
 	}
 }

@@ -37,6 +37,7 @@ var (
 	overlayFont            = overlayGDI.NewProc("CreateFontW")
 	overlayEnumMonitors    = user32.NewProc("EnumDisplayMonitors")
 	overlayMonitorInfo     = user32.NewProc("GetMonitorInfoW")
+	overlayCursorPos       = user32.NewProc("GetCursorPos")
 	overlayMonitorMu       sync.Mutex
 	overlayMonitorList     []GamingOverlayMonitor
 	overlayMonitorCallback = syscall.NewCallback(collectOverlayMonitor)
@@ -118,6 +119,15 @@ type nativeOverlay struct {
 	stop         chan struct{}
 	done         chan struct{}
 	once         sync.Once
+}
+
+// overlayCursor samples the cursor position: one cheap GetCursorPos call,
+// made only while auto-hide controls visible content (no input hooks).
+func overlayCursor() (x, y int32, ok bool) {
+	var point struct{ X, Y int32 }
+	// #nosec G103 -- GetCursorPos fills this ABI-shaped stack value synchronously.
+	result, _, _ := overlayCursorPos.Call(uintptr(unsafe.Pointer(&point)))
+	return point.X, point.Y, result != 0
 }
 
 func nativeGamingOverlayAvailable() bool      { return true }
@@ -229,6 +239,10 @@ func (w *nativeOverlay) run(ready chan<- error) {
 	visible := false
 	var monitors []GamingOverlayMonitor
 	var monitorRefresh time.Time
+	var presence overlayPresence
+	var lastPoll time.Time
+	polling := false
+	presented := ""
 	for {
 		select {
 		case <-w.stop:
@@ -251,26 +265,53 @@ func (w *nativeOverlay) run(ready chan<- error) {
 			s, updated = w.preview, time.Now()
 		}
 		w.mu.Unlock()
-		if !s.Active || time.Since(updated) > 5*time.Second {
+		now := time.Now()
+		if !s.Active || now.Sub(updated) > 5*time.Second {
+			s = GamingOverlaySnapshot{}
+		}
+		scene := presence.scene(s, now)
+		// Auto-hide: sample the cursor at 4 Hz, only while it controls
+		// visible content; the first sample after a pause is immediate.
+		if scene.hideable && (!polling || now.Sub(lastPoll) >= overlayCursorPoll) {
+			lastPoll = now
+			if cx, cy, ok := overlayCursor(); ok && presence.observeCursor(cx, cy, now) {
+				scene = presence.scene(s, now)
+			}
+		}
+		polling = scene.hideable
+		if !scene.visible() {
 			if visible {
 				_, _, _ = overlayShow.Call(hwnd, 0)
 				visible = false
 			}
-			last, renderer = "", nil
+			last, renderer, presented = "", nil, ""
 			if surface != nil {
 				surface.close()
 				surface = nil
 			}
 			continue
 		}
+		s = scene.snapshot
 		if time.Since(monitorRefresh) > time.Second {
 			monitors, monitorRefresh = nativeGamingOverlayMonitors(), time.Now()
 		}
 		monitor := selectOverlayMonitor(monitors, s.Monitor)
 		x, y, width, height := gamingOverlayPlacement(s, monitor)
-		encoded, _ := json.Marshal(s)
+		// The layout key ignores speaking flags and opacities: those change
+		// per frame state, not the rasterized labels and avatars.
+		layout := s
+		layout.Speakers = append([]GamingOverlaySpeaker(nil), s.Speakers...)
+		for index := range layout.Speakers {
+			layout.Speakers[index].Speaking = false
+		}
+		encoded, _ := json.Marshal(layout)
 		key := fmt.Sprintf("%s|%d,%d,%d,%d", encoded, x, y, width, height)
-		if key == last && visible && !s.Animate {
+		animating := false
+		for _, speaker := range s.Speakers {
+			animating = animating || (s.Animate && speaker.Speaking)
+		}
+		frameKey := fmt.Sprint(scene.rowAlpha, scene.peekAlpha, s.Speakers)
+		if key == last && visible && !animating && !scene.changing && frameKey == presented {
 			continue
 		}
 		if key != last || renderer == nil {
@@ -290,6 +331,7 @@ func (w *nativeOverlay) run(ready chan<- error) {
 			}
 			last = key
 		}
+		renderer.apply(scene)
 		// Position the measured surface, rather than its allocation bound.
 		width, _ = safecast.IntToInt32(renderer.base.Bounds().Dx())
 		height, _ = safecast.IntToInt32(renderer.base.Bounds().Dy())
@@ -309,6 +351,7 @@ func (w *nativeOverlay) run(ready chan<- error) {
 			_, _, _ = overlayPosition.Call(hwnd, ^uintptr(0), 0, 0, 0, 0, 0x53)
 		}
 		visible = true
+		presented = frameKey
 		lastError = ""
 	}
 }

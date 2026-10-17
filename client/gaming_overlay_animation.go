@@ -26,8 +26,17 @@ type overlayAnimationRow struct {
 	tint                 color.NRGBA
 	contour              []overlayContourColumn
 	halo                 []overlayHaloPixel
+	speaking             bool // quiet rows keep only their static avatar and name
 }
 type overlayAnimation struct{ rows []overlayAnimationRow }
+
+// overlayBand is a horizontal slice of the static layer: one per row, then one
+// per chat peek line. Together they partition the surface, so drawing every
+// band at full opacity equals drawing the whole static layer at once.
+type overlayBand struct {
+	area  image.Rectangle
+	alpha float64
+}
 
 func overlayInkWidth(mask *image.Alpha) int {
 	width := 0
@@ -104,10 +113,10 @@ func newOverlayRenderer(s GamingOverlaySnapshot, width, height int, label overla
 		}
 		longest = math.Max(longest, float64(overlayInkWidth(mask))/scale)
 	}
-	stackHeight := float64(184 + (max(1, len(s.Speakers))-1)*72)
-	scale = math.Min(scale, math.Min(float64(width)/(88+longest), float64(height)/stackHeight))
-	r := &overlayRenderer{scale: scale, animation: &overlayAnimation{rows: make([]overlayAnimationRow, 0, len(s.Speakers))}}
-	r.base = image.NewRGBA(image.Rect(0, 0, max(1, min(width, int(math.Ceil((88+longest)*scale)))), max(1, min(height, int(math.Ceil(stackHeight*scale))))))
+	contentWidth, stackHeight := overlayContentSize(len(s.Speakers), longest, s.ChatPeek)
+	scale = math.Min(scale, math.Min(float64(width)/contentWidth, float64(height)/stackHeight))
+	r := &overlayRenderer{scale: scale, layer: 1, animation: &overlayAnimation{rows: make([]overlayAnimationRow, 0, len(s.Speakers))}}
+	r.base = image.NewRGBA(image.Rect(0, 0, max(1, min(width, int(math.Ceil(contentWidth*scale)))), max(1, min(height, int(math.Ceil(stackHeight*scale))))))
 	for index, person := range s.Speakers {
 		y := float64(index * 72)
 		mask, err := label(person.Name, max(1, int(longest*scale)+4), max(1, int(26*scale)), max(1, int(16*scale)), false)
@@ -139,7 +148,7 @@ func newOverlayRenderer(s GamingOverlaySnapshot, width, height int, label overla
 		row := overlayAnimationRow{
 			width: 88 + nameWidth, center: y + 92, phase: overlaySpeakerPhase(person.ID, person.Name), tint: tint,
 			text:    image.Rect(origin.X, origin.Y, origin.X+inkWidth, origin.Y+mask.Bounds().Dy()),
-			contour: overlayNameContour(mask, origin, scale),
+			contour: overlayNameContour(mask, origin, scale), speaking: person.Speaking,
 		}
 		// Distance samples are reused by the breathing halo; no per-frame masks.
 		area := image.Rect(0, int((row.center-38)*scale), int(math.Ceil(76*scale)), int(math.Ceil((row.center+38)*scale))).Intersect(r.base.Bounds())
@@ -153,8 +162,92 @@ func newOverlayRenderer(s GamingOverlaySnapshot, width, height int, label overla
 		}
 		r.animation.rows = append(r.animation.rows, row)
 	}
+	if err := r.peek(s, label); err != nil {
+		return nil, err
+	}
+	r.layoutBands(len(s.Speakers), len(s.Peek))
 	r.frame = image.NewRGBA(r.base.Bounds())
 	return r, nil
+}
+
+// peek rasterizes the chat lines once per snapshot, in the overlay's own
+// label style: the same face, light text and compact dark halo as the names,
+// with no panel behind them. The message text is slightly dimmer than the name.
+func (r *overlayRenderer) peek(s GamingOverlaySnapshot, label overlayLabel) error {
+	top := overlayPeekTop(len(s.Speakers))
+	height, font := max(1, int(overlayPeekLine*r.scale)), max(1, int(overlayPeekFont*r.scale))
+	for index, line := range s.Peek {
+		y := int((top + float64(index)*overlayPeekLine) * r.scale)
+		name, err := label(line.Name, max(1, int(overlayPeekNameMax*r.scale)), height, font, false)
+		if err != nil {
+			return err
+		}
+		left := int(overlayPeekLeft * r.scale)
+		r.label(name, image.Pt(left, y), 255)
+		textX := left + overlayInkWidth(name) + int(8*r.scale)
+		textWidth := int((overlayPeekLeft+overlayPeekWidth)*r.scale) - textX
+		if textWidth < int(16*r.scale) {
+			continue
+		}
+		text, err := label(line.Text, textWidth, height, font, false)
+		if err != nil {
+			return err
+		}
+		r.label(text, image.Pt(textX, y), 205)
+	}
+	return nil
+}
+
+// label draws a cached glyph mask with the overlay's text halo.
+func (r *overlayRenderer) label(mask *image.Alpha, origin image.Point, opacity uint8) {
+	shadow := image.NewUniform(color.NRGBA{R: 17, G: 20, B: 23, A: uint8(160 * int(opacity) / 255)})
+	for _, offset := range []image.Point{{-1, 0}, {1, 0}, {0, -1}, {0, 1}, {0, 2}} {
+		draw.DrawMask(r.base, mask.Bounds().Add(origin.Add(offset)), shadow, image.Point{}, mask, image.Point{}, draw.Over)
+	}
+	draw.DrawMask(r.base, mask.Bounds().Add(origin), image.NewUniform(color.NRGBA{R: 225, G: 226, B: 231, A: opacity}), image.Point{}, mask, image.Point{}, draw.Over)
+}
+
+// layoutBands splits the static layer between rows (at the midpoints between
+// avatar centers) and peek lines, so each can fade on its own.
+func (r *overlayRenderer) layoutBands(rows, lines int) {
+	bounds := r.base.Bounds()
+	edges := make([]int, 0, rows+lines+1)
+	edges = append(edges, bounds.Min.Y)
+	for index := 1; index < rows; index++ {
+		edges = append(edges, int(float64(56+index*72)*r.scale))
+	}
+	top := overlayPeekTop(rows)
+	for index := range lines {
+		if rows > 0 || index > 0 {
+			edges = append(edges, int((top+float64(index)*overlayPeekLine)*r.scale))
+		}
+	}
+	edges = append(edges, bounds.Max.Y)
+	r.bands = make([]overlayBand, 0, len(edges)-1)
+	for index := 0; index+1 < len(edges); index++ {
+		low, high := min(max(edges[index], bounds.Min.Y), bounds.Max.Y), min(max(edges[index+1], bounds.Min.Y), bounds.Max.Y)
+		r.bands = append(r.bands, overlayBand{area: image.Rect(bounds.Min.X, low, bounds.Max.X, max(low, high)), alpha: 1})
+	}
+}
+
+// apply sets per-row speaking state and the row/peek opacities for the next
+// frame. A speaking change needs no new rasterization: quiet rows only skip
+// the animated halo and comb.
+func (r *overlayRenderer) apply(scene overlayScene) {
+	for index := range r.animation.rows {
+		if index < len(scene.snapshot.Speakers) {
+			r.animation.rows[index].speaking = scene.snapshot.Speakers[index].Speaking
+		}
+	}
+	alphas := append(append([]float64(nil), scene.rowAlpha...), scene.peekAlpha...)
+	if len(alphas) == 0 && len(r.bands) == 1 {
+		return // A single band without rows or lines (empty preview layout).
+	}
+	for index := range r.bands {
+		if index < len(alphas) {
+			r.bands[index].alpha = overlayUnit(alphas[index])
+		}
+	}
 }
 
 func overlayUnit(value float64) float64 { return math.Max(0, math.Min(1, value)) }
@@ -163,7 +256,14 @@ func overlayUnit(value float64) float64 { return math.Max(0, math.Min(1, value))
 // selected light halo and glyph-hugging comb use the same 2.4x / 8px preset.
 func (r *overlayRenderer) render(seconds float64) *image.RGBA {
 	clear(r.frame.Pix)
-	for _, row := range r.animation.rows {
+	for index, row := range r.animation.rows {
+		if !row.speaking {
+			continue
+		}
+		r.layer = r.bandAlpha(index)
+		if r.layer <= 0 {
+			continue
+		}
 		t := seconds*overlayMotionSpeed + row.phase
 		pulse := .5 + .5*math.Sin(t*4)
 		radius := (23 + 3*pulse) * 1.25 // Preserve the selected shape around a 40px avatar.
@@ -192,8 +292,24 @@ func (r *overlayRenderer) render(seconds float64) *image.RGBA {
 			}
 		}
 	}
-	draw.Draw(r.frame, r.frame.Bounds(), r.base, image.Point{}, draw.Over)
+	r.layer = 1
+	for _, band := range r.bands {
+		switch {
+		case band.alpha >= 1:
+			draw.Draw(r.frame, band.area, r.base, band.area.Min, draw.Over)
+		case band.alpha > 0:
+			mask := image.NewUniform(color.Alpha{A: uint8(band.alpha * 255)})
+			draw.DrawMask(r.frame, band.area, r.base, band.area.Min, mask, image.Point{}, draw.Over)
+		}
+	}
 	return r.frame
+}
+
+func (r *overlayRenderer) bandAlpha(index int) float64 {
+	if index < len(r.bands) {
+		return r.bands[index].alpha
+	}
+	return 1
 }
 
 func (r *overlayRenderer) animationRect(x, y, width, height, opacity float64, tint color.NRGBA) {
@@ -209,7 +325,7 @@ func (r *overlayRenderer) animationRect(x, y, width, height, opacity float64, ti
 }
 
 func (r *overlayRenderer) animationPixel(x, y int, opacity float64, tint color.NRGBA) {
-	alpha := uint16(overlayUnit(opacity) * 255)
+	alpha := uint16(overlayUnit(opacity*r.layer) * 255)
 	if alpha == 0 {
 		return
 	}
