@@ -266,6 +266,15 @@ export function createRemoteAudio({ state, toast, sysMsg, voiceEpoch }) {
     const SHARE_DUCK_FACTOR = 0.25;
     let shareDuckActive = false;
     let shareDuckExempt = new Set();
+    // Multiview focus (design 45): publisher client ID -> factor for its
+    // screen-share audio only. Voice chains are never in this map.
+    let shareStageGains = new Map();
+
+    function setShareAudioStageGains(gains) {
+        shareStageGains = new Map([...(gains || [])].map(([clientID, factor]) => [String(clientID),
+            Number.isFinite(factor) ? Math.min(1, Math.max(0, factor)) : 1]));
+        for (const clid of shareAudio.keys()) applyShareAudio(clid);
+    }
 
     // applyDucking is setDucking plus the share chains it cannot see.
     function applyDucking(active, exceptUIDs) {
@@ -283,7 +292,8 @@ export function createRemoteAudio({ state, toast, sysMsg, voiceEpoch }) {
             n.muted = isUserShareMuted(n.uid);
         }
         const duck = shareDuckActive && !shareDuckExempt.has(n.uid) ? SHARE_DUCK_FACTOR : 1;
-        n.gain.gain.value = (n.muted ? 0 : personalVolumeGain(n.volume / 100)) * duck;
+        const stage = shareStageGains.get(String(clientID)) ?? 1;
+        n.gain.gain.value = (n.muted ? 0 : personalVolumeGain(n.volume / 100)) * duck * stage;
     }
 
     function attachShareAudio(track, clientID, publisher) {
@@ -357,5 +367,5 @@ export function createRemoteAudio({ state, toast, sysMsg, voiceEpoch }) {
         state.trackUsers.clear();
     }
 
-    return { selectAudioOutput, applyOutputSettings, remoteChain, get spatialVoice() { return spatialVoice; }, reconcileSpatialVoice, attachRemoteAudio, hasRemoteAudio, readRemoteAudioLevel, resolveTrackUsers, shareAudio, applyDucking, applyShareAudio, attachShareAudio, detachRemoteTrack, detachShareAudio, detachRemoteAudio };
+    return { selectAudioOutput, applyOutputSettings, remoteChain, get spatialVoice() { return spatialVoice; }, reconcileSpatialVoice, attachRemoteAudio, hasRemoteAudio, readRemoteAudioLevel, resolveTrackUsers, shareAudio, applyDucking, applyShareAudio, setShareAudioStageGains, attachShareAudio, detachRemoteTrack, detachShareAudio, detachRemoteAudio };
 }

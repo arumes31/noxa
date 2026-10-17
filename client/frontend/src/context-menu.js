@@ -39,7 +39,7 @@ export function mountContextMenu(menu, { x, y, trigger = document.activeElement,
     // Async permission checks may add actions after placement. Keep that growth
     // inside the viewport and let the menu scroll from its final position.
     menu.style.maxHeight = `${Math.max(0, innerHeight - parseFloat(menu.style.top) - gap)}px`;
-    const items = () => [...menu.querySelectorAll('[role="menuitem"], input, button')].filter(item => !item.matches(":disabled") && item.getAttribute("aria-disabled") !== "true" && !item.hidden);
+    const items = () => [...menu.querySelectorAll('[role="menuitem"], [role="menuitemradio"], input, button')].filter(item => !item.matches(":disabled") && item.getAttribute("aria-disabled") !== "true" && !item.hidden);
     menu.addEventListener("click", event => event.stopPropagation(), { signal: events.signal });
     // Saving temporarily disables range inputs and can move focus to body.
     // Escape must still dismiss the menu and return to its original control.

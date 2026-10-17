@@ -1,0 +1,330 @@
+/* Stream stage + multiview (design 45, Arctic Night).
+
+   Layout applies inside the workspace chat pane (#chat-pane) for every
+   theme and is built from the theme variables, so the classic themes get a
+   working stage in their own colours. Arctic-only polish is scoped to
+   :root[data-theme="arctic"]. Deliberately NOT styled here:
+   - the gaming / fullscreen overlay and native :fullscreen tiles (stage
+     chrome is only hidden there, the tile itself renders as before);
+   - the speaking avatar;
+   - background motion: nothing here animates continuously. */
+
+#chat-pane {
+    --stage-gap: 12px;
+    --stage-panel-w: 340px;
+    --stage-live: var(--arc-live, #e5484d);
+    --stage-glass: var(--arc-glass, rgba(10, 14, 20, .72));
+    --stage-glass-line: var(--arc-glass-line, rgba(255, 255, 255, .14));
+    --stage-surface: var(--arc-s2, var(--bg-panel));
+    --stage-surface-2: var(--arc-s3, var(--bg-hover));
+    --stage-radius: var(--arc-r, 10px);
+    --stage-radius-sm: var(--arc-r-sm, 7px);
+}
+
+/* Stage chrome stays inert outside the workspace (e.g. the bare stream
+   fixture) and while nothing is watched. */
+.stream-stage, .stage-body { display: contents; }
+.stage-head, .stage-foot, .stage-info, .stage-tile-tools, .stage-tag,
+.stage-panel-head, .stage-viewers, .stage-rail, .stage-splitter, .stage-chat-head { display: none; }
+.stage-icon { width: 18px; height: 18px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; }
+
+#chat-pane .stream-stage:not([data-stage="none"]) {
+    display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden;
+    background: var(--bg);
+    container-type: inline-size; container-name: stagebox;
+}
+#chat-pane .stream-stage:not([data-stage="none"]) .stage-body {
+    display: block; position: relative; flex: 1 1 auto; min-height: 0; min-width: 0;
+    container-type: size; container-name: stage;
+}
+
+/* While a stage is shown the catalog cards give way; "+ Add" picks from them. */
+#chat-pane .stream-media:has(.stream-stage:not([data-stage="none"])) {
+    grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); max-height: none;
+}
+#chat-pane .stream-media:has(.stream-stage:not([data-stage="none"])) #stream-catalog { display: none; }
+
+/* ------------------------------------------------------------- the grid */
+#chat-pane .stream-stage:not([data-stage="none"]) #video-grid {
+    position: absolute; inset: 0; margin: 0; padding: 14px 18px;
+    max-height: none; height: auto; overflow: auto;
+    display: grid; gap: var(--stage-gap); justify-content: center; align-content: center;
+    background: transparent; border: 0; border-radius: 0;
+}
+#chat-pane .stream-stage #video-grid.lowbw::before { position: absolute; top: 2px; left: 18px; }
+#chat-pane .stream-stage:not([data-stage="none"]) .vtile:not(:fullscreen) {
+    min-height: 0; aspect-ratio: 16 / 9; height: auto; width: 100%;
+    border-radius: var(--stage-radius);
+}
+
+/* Single stage: one framed 16:9 picture, as large as the area allows. */
+#chat-pane .stream-stage[data-stage="single"] #video-grid {
+    grid-template-columns: min(calc(100cqw - 36px), calc((100cqh - 28px) * 16 / 9));
+    padding: 14px 18px;
+}
+#chat-pane .stream-stage[data-stage="single"] .vtile:not(:fullscreen) { cursor: default; }
+
+/* Multiview grid: columns × rows that fit the stage without scrolling. */
+#chat-pane .stream-stage[data-stage="multi"][data-layout="grid"] #video-grid {
+    --tile-w: min(calc((100cqw - 36px - (var(--stage-cols) - 1) * var(--stage-gap)) / var(--stage-cols)),
+        calc((100cqh - 28px - (var(--stage-rows) - 1) * var(--stage-gap)) / var(--stage-rows) * 16 / 9));
+    grid-template-columns: repeat(var(--stage-cols), var(--tile-w));
+}
+
+/* Multiview focus: a large tile and a filmstrip of the others. */
+#chat-pane .stream-stage[data-stage="multi"][data-layout="focus"] #video-grid {
+    --strip-h: min(clamp(72px, 19cqh, 150px), calc((100cqw - 36px - (var(--stage-cols) - 1) * var(--stage-gap)) / var(--stage-cols) * 9 / 16));
+    grid-template-columns: repeat(var(--stage-cols), minmax(0, 1fr));
+    grid-template-rows: minmax(0, 1fr) var(--strip-h);
+    justify-content: stretch; align-content: stretch; padding-bottom: 8px;
+}
+#chat-pane .stream-stage[data-layout="focus"] .vtile.stage-focus:not(:fullscreen) {
+    grid-row: 1; grid-column: 1 / -1; order: -1 !important;
+    justify-self: center; align-self: center;
+    width: min(100%, calc((100cqh - 22px - var(--strip-h) - var(--stage-gap)) * 16 / 9));
+}
+#chat-pane .stream-stage[data-stage="multi"][data-layout="focus"] .vtile:not(.stage-focus):not(:fullscreen) {
+    grid-row: 2; aspect-ratio: auto; height: var(--strip-h); border-radius: var(--stage-radius-sm);
+}
+
+/* Multiview stack: one column, two tiles fit, more scroll. */
+#chat-pane .stream-stage[data-stage="multi"][data-layout="stack"] #video-grid {
+    grid-template-columns: min(calc(100cqw - 36px), calc((100cqh - 28px - var(--stage-gap)) / 2 * 16 / 9));
+    align-content: start;
+}
+
+#chat-pane .stream-stage[data-stage="multi"] .vtile:not(:fullscreen) { cursor: pointer; }
+
+/* Legacy in-tile chrome is replaced by the stage strip, tag and tools.
+   Native :fullscreen tiles keep their own label and controls. */
+#chat-pane .stream-stage:not([data-stage="none"]) .vtile:not(:fullscreen) :is(.vtile-label, .vtile-badge, .vtile-pip) { display: none; }
+#chat-pane .stream-stage:not([data-stage="none"]) .vtile:not(:fullscreen) .stream-live-controls .stream-audio { display: none; }
+#chat-pane .stream-stage[data-stage="single"] .vtile:not(:fullscreen) .vtile-fullscreen { display: none; }
+#chat-pane .stream-stage:not([data-stage="none"]) .vtile:not(:fullscreen):not(:hover):not(:focus-within) :is(.vtile-quality-button, .vtile-diagnostics:not([open]) summary) { opacity: 0; }
+#chat-pane .stream-stage[data-stage="multi"] .vtile:not(:fullscreen):not(:hover):not(:focus-within) :is(.stage-tile-tools, .vtile-fullscreen, .stream-live-controls .stream-watch) { opacity: 0; }
+#chat-pane .stream-stage[data-stage="single"] .vtile:not(:fullscreen):not(:hover):not(:focus-within) .stream-live-controls .stream-watch { opacity: 0; }
+.vtile:fullscreen :is(.stage-info, .stage-tile-tools, .stage-tag) { display: none; }
+
+/* Stage menus mark the checked audio source. */
+.stage-menu [role="menuitemradio"] { display: flex; align-items: center; gap: 12px; }
+.stage-menu [role="menuitemradio"]::after { content: ""; width: 7px; height: 7px; margin-left: auto; border-radius: 50%; flex: none; }
+.stage-menu [aria-checked="true"] { color: var(--text); font-weight: 600; }
+.stage-menu [aria-checked="true"]::after { background: var(--accent); }
+
+/* ------------------------------------------------------- tile tools/tag */
+#chat-pane .stream-stage[data-stage="multi"] .vtile:not(:fullscreen) .stage-tile-tools {
+    position: absolute; top: 10px; right: 10px; z-index: 4;
+    display: flex; gap: 4px; padding: 4px 80px 4px 4px;
+    border-radius: var(--stage-radius-sm);
+    background: var(--stage-glass); border: 1px solid var(--stage-glass-line);
+    pointer-events: none;
+}
+#chat-pane .stream-stage[data-stage="multi"] .vtile:not(:fullscreen) .stage-tile-tools > * { pointer-events: auto; }
+/* The stop button lives in the session's live-controls layer; lift that
+   layer above the tools bar so close sits on (not under) the glass. */
+#chat-pane .stream-stage[data-stage="multi"] .vtile:not(:fullscreen) .stream-live-controls { z-index: 5; }
+#chat-pane .stream-stage[data-stage="multi"] .vtile:not(:fullscreen) .vtile-fullscreen { top: 15px; right: 51px; width: 32px; height: 32px; z-index: 5; }
+#chat-pane .stream-stage[data-stage="multi"] .vtile:not(:fullscreen) .stream-live-controls .stream-watch,
+#chat-pane .stream-stage[data-stage="multi"] .vtile:not(:fullscreen) .vtile-fullscreen {
+    border: 1px solid transparent; border-radius: var(--stage-radius-sm); background: transparent; box-shadow: none;
+    color: var(--text); -webkit-backdrop-filter: none; backdrop-filter: none;
+}
+#chat-pane .stream-stage[data-stage="multi"] .vtile:not(:fullscreen) .stream-live-controls .stream-watch { top: 15px; right: 15px; z-index: 5; font-size: 20px; }
+#chat-pane .stream-stage[data-stage="multi"] .vtile:not(:fullscreen) :is(.stream-live-controls .stream-watch, .vtile-fullscreen):hover { background: var(--stage-surface-2); }
+#chat-pane .stream-stage[data-stage="multi"][data-layout="focus"] .vtile:not(.stage-focus):not(:fullscreen) .stage-tile-tools { top: 6px; right: 6px; padding-right: 4px; }
+#chat-pane .stream-stage[data-stage="multi"][data-layout="focus"] .vtile:not(.stage-focus):not(:fullscreen) :is(.vtile-fullscreen, .stream-live-controls .stream-watch, .stage-pin, .vtile-quality-button, .vtile-diagnostics) { display: none; }
+.stage-tool {
+    display: inline-grid; place-items: center; width: 32px; height: 32px; padding: 0;
+    border: 1px solid transparent; border-radius: var(--stage-radius-sm, 7px);
+    background: transparent; color: var(--text); cursor: pointer;
+}
+.stage-tool:hover:not(:disabled) { background: var(--stage-surface-2, var(--bg-hover)); }
+.stage-tool:focus-visible, .stage-btn:focus-visible, .stage-mode:focus-visible, .stage-tab:focus-visible, .stage-splitter:focus-visible {
+    outline: 2px solid var(--accent); outline-offset: 2px;
+}
+.stage-tool:disabled { opacity: .45; cursor: default; }
+.stage-tool[aria-pressed="true"] { color: var(--accent); }
+.stage-tool[hidden] { display: none; }
+
+#chat-pane .stream-stage[data-stage="multi"] .vtile:not(:fullscreen) .stage-tag {
+    position: absolute; left: 10px; bottom: 10px; z-index: 3; max-width: calc(100% - 20px);
+    display: inline-flex; align-items: center; gap: 8px; padding: 4px 10px 4px 4px;
+    border-radius: 999px; background: var(--stage-glass); border: 1px solid var(--stage-glass-line);
+    color: var(--text); font-weight: 600; font-size: .9286rem; pointer-events: none;
+}
+.stage-tag-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.stage-tag-res { font-family: var(--font-mono); font-size: .8571rem; color: var(--text-dim); }
+.stage-tag-res:empty { display: none; }
+.stage-tag-audio { display: none; color: var(--accent); }
+.stage-tag-audio .stage-icon { width: 15px; height: 15px; }
+#chat-pane .stream-stage[data-stage="multi"] .vtile.stage-audio-source .stage-tag-audio { display: inline-flex; }
+#chat-pane .stream-stage[data-layout="focus"] .vtile:not(.stage-focus) .stage-tag { left: 6px; bottom: 6px; padding-right: 8px; font-size: .8571rem; }
+#chat-pane .stream-stage[data-layout="focus"] .vtile:not(.stage-focus) .stage-tag :is(.stage-live, .stage-tag-res) { display: none; }
+.stage-tag-avatar, .stage-info-avatar, .stage-viewer-avatar {
+    width: 24px; height: 24px; flex: none; border-radius: 50%; font-size: .7857rem; overflow: hidden;
+}
+:is(.stage-tag-avatar, .stage-info-avatar, .stage-viewer-avatar) img { width: 100%; height: 100%; object-fit: cover; }
+
+.stage-live {
+    display: inline-flex; align-items: center; gap: 4px; flex: none;
+    padding: 1px 6px; border-radius: 5px; background: var(--stage-live, #e5484d); color: #fff;
+    font: 800 .7143rem/1.4 var(--font-body); letter-spacing: .08em;
+}
+.stage-live::before { content: ""; width: 5px; height: 5px; border-radius: 50%; background: #fff; }
+
+/* ---------------------------------------------------------- info strip */
+#chat-pane .stream-stage[data-stage="single"] .vtile:not(:fullscreen) .stage-info {
+    position: absolute; left: 0; right: 0; bottom: 0; z-index: 4;
+    display: flex; align-items: center; gap: 10px; padding: 26px 14px 12px;
+    background: linear-gradient(transparent, rgba(0, 0, 0, .72));
+    color: #fff; cursor: default;
+}
+.stage-info-avatar { width: 30px; height: 30px; font-size: .9286rem; }
+.stage-info-name { flex: 0 0 auto; max-width: 40%; font-weight: 700; font-size: 1.0714rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.stage-info-stats { flex: 0 1 auto; min-width: 0; font-family: var(--font-mono); font-size: .8929rem; color: rgba(255, 255, 255, .86); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.stage-info-actions { display: flex; align-items: center; gap: 8px; margin-left: auto; flex: none; }
+.stage-info .stage-tool {
+    width: 36px; height: 36px; color: #fff;
+    background: var(--stage-glass); border-color: var(--stage-glass-line);
+}
+.stage-info .stage-tool:hover:not(:disabled) { background: rgba(255, 255, 255, .14); }
+
+/* -------------------------------------------------------- multiview head */
+#chat-pane .stream-stage[data-stage="multi"] .stage-head {
+    display: flex; align-items: center; flex-wrap: wrap; gap: 8px 10px;
+    padding: 12px 18px; border-bottom: 1px solid var(--border);
+}
+.stage-title { display: inline-flex; align-items: center; gap: 10px; margin-right: auto; min-width: 0; color: var(--text); }
+.stage-title .stage-icon { width: 20px; height: 20px; color: var(--text-dim); }
+.stage-heading { margin: 0; font: 700 1.2857rem var(--font-display, inherit); white-space: nowrap; }
+.stage-count { color: var(--text-faint); font-size: .9286rem; white-space: nowrap; }
+.stage-modes {
+    display: inline-flex; gap: 2px; padding: 3px;
+    border-radius: var(--stage-radius-sm); background: var(--stage-surface); border: 1px solid var(--border);
+}
+.stage-mode, .stage-btn {
+    display: inline-flex; align-items: center; gap: 7px; min-height: 32px; padding: 0 12px;
+    border: 1px solid transparent; border-radius: calc(var(--stage-radius-sm) - 2px);
+    background: transparent; color: var(--text-dim); font: 600 .9286rem var(--font-body); cursor: pointer; white-space: nowrap;
+}
+.stage-mode .stage-icon, .stage-btn .stage-icon { width: 16px; height: 16px; }
+.stage-mode:hover { color: var(--text); background: var(--stage-surface-2); }
+.stage-mode[aria-checked="true"] { color: var(--text); background: var(--stage-surface-2); box-shadow: inset 0 0 0 1px var(--border); }
+.stage-btn {
+    min-height: 36px; border-color: var(--border); border-radius: var(--stage-radius-sm);
+    background: var(--stage-surface); color: var(--text);
+}
+.stage-btn:hover:not(:disabled) { background: var(--stage-surface-2); }
+.stage-btn:disabled { opacity: .5; cursor: default; }
+.stage-btn[hidden] { display: none; }
+.stage-audio .stage-icon:last-child { width: 14px; height: 14px; color: var(--text-faint); }
+.stage-primary { border-color: transparent; background: var(--arc-acc-grad, var(--accent)); color: var(--arc-on-acc, #04121c); }
+.stage-primary:hover:not(:disabled) { background: var(--arc-acc-grad, var(--accent)); filter: brightness(1.06); }
+.stage-info .stage-btn { min-height: 36px; background: var(--stage-glass); border-color: var(--stage-glass-line); color: #fff; }
+
+#chat-pane .stream-stage[data-stage="multi"] .stage-foot {
+    display: flex; align-items: center; justify-content: space-between; gap: 12px;
+    padding: 4px 18px 12px; color: var(--text-faint); font-size: .8929rem;
+}
+#chat-pane .stream-stage[data-stage="multi"]:not([data-layout="focus"]) .stage-foot-audio { visibility: visible; }
+.stage-foot-audio, .stage-foot-keys { display: inline-flex; align-items: center; gap: 8px; }
+.stage-foot-audio .stage-icon { width: 15px; height: 15px; }
+.stage-foot kbd {
+    padding: 1px 7px; border: 1px solid var(--border); border-radius: 5px;
+    background: var(--stage-surface); color: var(--text-dim); font: .8571rem var(--font-mono);
+}
+
+.stream-stage:fullscreen { background: var(--bg); }
+.stream-stage:fullscreen .stage-body { flex: 1 1 auto; }
+
+/* ------------------------------------------------- split: stage over chat */
+#chat-pane.stage-split .stream-media { flex: 0 0 calc(var(--stage-split, .62) * 100%); min-height: 160px; }
+#chat-pane.stage-split .stage-splitter {
+    position: relative; display: flex; align-items: center; justify-content: center; gap: 12px;
+    flex: none; height: 14px; margin: 0; cursor: row-resize; touch-action: none;
+    border-top: 1px solid var(--border);
+}
+.stage-splitter-grip { width: 80px; height: 4px; border-radius: 4px; background: color-mix(in srgb, var(--accent) 70%, transparent); }
+.stage-splitter-hint {
+    position: absolute; left: calc(50% + 52px); top: 50%; transform: translateY(-50%);
+    padding: 3px 10px; border-radius: 7px; white-space: nowrap;
+    background: var(--stage-surface); border: 1px solid var(--border); color: var(--text-dim);
+    font-size: .8571rem; font-weight: 600; opacity: 0; pointer-events: none;
+}
+.stage-splitter:is(:hover, :focus-visible, .dragging) .stage-splitter-hint { opacity: 1; }
+.stage-splitter:is(:hover, .dragging) .stage-splitter-grip { background: var(--accent); }
+#chat-pane.stage-split .stage-chat-head {
+    display: flex; align-items: baseline; gap: 8px; flex: none; padding: 6px 18px 4px;
+    color: var(--text); font-weight: 700; font-size: 1.0714rem;
+}
+.stage-chat-hash { color: var(--text-faint); font-weight: 500; }
+.stage-chat-count { color: var(--text-faint); font-size: .8571rem; font-weight: 500; }
+.stage-chat-count::before { content: "· "; }
+
+/* ------------------------------------- side: stage left, panel at right */
+#chat-pane.stage-side { position: relative; padding-left: calc(100% - var(--stage-panel-w)); box-sizing: border-box; }
+#chat-pane.stage-side.stage-panel-collapsed { --stage-panel-w: 52px; }
+#chat-pane.stage-side .stream-media {
+    position: absolute; top: 0; bottom: 0; left: 0; right: var(--stage-panel-w);
+    max-height: none; border-right: 1px solid var(--border);
+}
+#chat-pane.stage-side .stage-panel-head {
+    display: flex; align-items: center; gap: 8px; flex: none; min-height: 60px; padding: 10px 12px 10px 14px;
+    border-bottom: 1px solid var(--border);
+}
+.stage-tabs { display: flex; gap: 4px; margin-right: auto; }
+.stage-tab {
+    min-height: 32px; padding: 0 12px; border: 1px solid transparent; border-radius: var(--stage-radius-sm);
+    background: transparent; color: var(--text-dim); font: 600 .9286rem var(--font-body); cursor: pointer;
+}
+.stage-tab:hover { color: var(--text); }
+.stage-tab[aria-selected="true"] { color: var(--text); background: var(--stage-surface); border-color: var(--border); }
+#chat-pane.stage-side.stage-panel-viewers .stage-viewers { display: block; flex: 1 1 auto; min-height: 0; overflow: auto; padding: 8px; }
+#chat-pane.stage-side.stage-panel-viewers > :not(.stream-media, .stage-panel-head, .stage-viewers, .stage-rail) { display: none; }
+.stage-viewer-list { list-style: none; margin: 0; padding: 0; }
+.stage-viewer { display: flex; align-items: center; gap: 10px; padding: 7px 8px; border-radius: var(--stage-radius-sm); }
+.stage-viewer:hover { background: var(--stage-surface); }
+.stage-viewer-avatar { width: 28px; height: 28px; }
+.stage-viewer-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#chat-pane.stage-side.stage-panel-collapsed > :not(.stream-media, .stage-rail) { display: none; }
+#chat-pane.stage-side.stage-panel-collapsed .stage-rail {
+    display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 12px 0; height: 100%;
+}
+
+@media (max-width: 900px) {
+    #chat-pane { --stage-panel-w: 280px; }
+}
+/* Narrow stages keep every control; labels that the icon already carries
+   collapse to their accessible names. */
+@container stagebox (max-width: 880px) {
+    .stage-mode span, .stage-add-label {
+        position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap;
+    }
+    .stage-mode, .stage-head .stage-add { padding: 0 9px; }
+    .stage-count { display: none; }
+}
+@container stagebox (max-width: 620px) {
+    .stage-info-stats { display: none; }
+    .stage-fullscreen-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+    .stage-head .stage-fullscreen { padding: 0 9px; }
+    .stage-info .stage-tool { width: 32px; height: 32px; }
+    .stage-info-actions { gap: 6px; }
+}
+
+/* ------------------------------------------------- arctic polish + motion */
+:root[data-theme="arctic"] #chat-pane .stream-stage[data-stage="multi"] .vtile:not(:fullscreen) .stage-tile-tools,
+:root[data-theme="arctic"] #chat-pane .stream-stage[data-stage="multi"] .vtile:not(:fullscreen) .stage-tag {
+    -webkit-backdrop-filter: blur(var(--arc-blur)) saturate(1.4); backdrop-filter: blur(var(--arc-blur)) saturate(1.4);
+}
+:root[data-theme="arctic"] .stage-primary { box-shadow: 0 0 22px -6px color-mix(in srgb, var(--accent) 70%, transparent); }
+@media (prefers-reduced-motion: no-preference) {
+    :root:not([data-reduce-motion="1"]) #chat-pane .stream-stage .vtile:not(:fullscreen) :is(.stage-tile-tools, .vtile-quality-button, .vtile-diagnostics summary, .stream-live-controls .stream-watch, .vtile-fullscreen) {
+        transition: opacity .2s ease;
+    }
+    :root:not([data-reduce-motion="1"]) .stage-splitter-hint { transition: opacity .15s ease; }
+}
+
+/* The side panel is narrow: the composer puts the message field on its own row. */
+#chat-pane.stage-side #chat-input-row { flex-wrap: wrap; }
+#chat-pane.stage-side #chat-input-row #chat-text { flex: 1 1 100%; order: -1; min-width: 0; }
+#chat-pane.stage-side #chat-input-row #chat-scope { margin-right: auto; }

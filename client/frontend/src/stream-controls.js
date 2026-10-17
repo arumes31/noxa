@@ -398,6 +398,7 @@ async function poll(s) {
         s.polling = false;
         if (current(s)) {
             refreshMemberStreams(s);
+            window.dispatchEvent(new Event("noxa-stream-catalog"));
             s.timer = setTimeout(() => { void poll(s); }, s.pollAgain ? 0 : 3000);
             s.pollAgain = false;
         }
@@ -406,6 +407,20 @@ async function poll(s) {
 
 export function refreshStreamUploads(data) {
     if (session && current(session) && isCurrentPublication(data)) void poll(session);
+}
+
+// availableStreams lists active publications this client is not watching,
+// for the stage's "+ Add" picker. watch() goes through the same toggleWatch
+// as the catalog card, so server limits, pending state and errors apply.
+export function availableStreams() {
+    const s = session;
+    if (!s || !current(s)) return [];
+    return [...s.streams.values()].filter(entry => entry.available !== false && !entry.watching && !entry.pending).map(entry => {
+        const person = V().state.clients.find(c => String(c.client_id) === entry.publisher_id);
+        const img = entry.card.querySelector(".stream-preview");
+        return { id: key(entry), publisherID: entry.publisher_id, slot: entry.slot, name: person?.nickname || entry.publisher_id,
+            preview: img && !img.hidden ? img.src : "", watch: () => toggleWatch(s, entry) };
+    });
 }
 
 export function streamUsesSourceQuality(publisherID, slot) {
@@ -419,7 +434,9 @@ export function startStreamSession(pc, addVideo, removeVideo) {
     container.id = "stream-catalog";
     container.hidden = true;
     container.setAttribute("aria-label", t("streams.available"));
-    const grid = document.getElementById("video-grid");
+    // The stream stage (stream-stage.js) may wrap the grid; move the wrapper.
+    const gridEl = document.getElementById("video-grid");
+    const grid = gridEl.closest?.(".stream-stage") || gridEl;
     const media = document.createElement("div");
     media.className = "stream-media";
     grid.before(media);
@@ -435,7 +452,8 @@ export function stopStreamSession() {
     if (s) {
         clearTimeout(s.timer);
         for (const entry of s.streams.values()) { entry.watching = false; applyWatch(s, entry); }
-        s.media.before(s.grid);
+        const gridEl = document.getElementById("video-grid");
+        s.media.before(gridEl?.closest?.(".stream-stage") || gridEl || s.grid);
         s.media.remove();
         V().renderTree?.();
     }
