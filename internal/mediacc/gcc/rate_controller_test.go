@@ -120,7 +120,9 @@ func TestLossLimitedFeedbackDoesNotEraseRecoveryBetweenLossUpdates(t *testing.T)
 		c.setPacedBitrate(paced)
 	})
 	c.lastUpdate = now
-	c.onReceivedRate(200_000)
+	// Delivered throughput equals the paced rate, so the clean-usage floor
+	// does not mask the AIMD time accounting under test.
+	c.onReceivedRate(paced)
 	c.onDelayStats(DelayStats{Usage: usageNormal})
 	for range 100 {
 		now = now.Add(10 * time.Millisecond)

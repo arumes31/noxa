@@ -30,10 +30,14 @@ type rateController struct {
 	pacedBitrate       int
 	lastUpdate         time.Time
 	lastDecrease       time.Time
+	lastOveruse        time.Time
+	lastFloorRaise     time.Time
+	floorHoldoff       time.Duration
 	lossLimitedOveruse time.Time
 	lastState          state
 	latestRTT          time.Duration
 	latestReceivedRate int
+	deliveryRatio      float64
 	latestDecreaseRate *exponentialMovingAverage
 }
 
@@ -81,6 +85,12 @@ func (c *rateController) onReceivedRate(rate int) {
 	c.latestReceivedRate = rate
 }
 
+func (c *rateController) onDeliveryRatio(ratio float64) {
+	c.lock.Lock()
+	defer c.lock.Unlock()
+	c.deliveryRatio = ratio
+}
+
 func (c *rateController) updateRTT(rtt time.Duration) {
 	c.lock.Lock()
 	defer c.lock.Unlock()
@@ -92,6 +102,8 @@ func (c *rateController) onDelayStats(ds DelayStats) {
 	now := c.now()
 	if ds.Usage != usageOver {
 		c.lossLimitedOveruse = time.Time{}
+	} else {
+		c.lastOveruse = now
 	}
 
 	if !c.init {
@@ -118,7 +130,13 @@ func (c *rateController) onDelayStats(ds DelayStats) {
 		// should never occur due to check above, but makes the linter happy
 	case stateIncrease:
 		c.target = clampInt(c.increase(now), c.minBitrate, c.maxBitrate)
+		floor := c.usageFloor(now)
+		if floor > c.target {
+			c.target = clampInt(floor, c.minBitrate, c.maxBitrate)
+			c.lastUpdate, c.lastFloorRaise = now, now
+		}
 		next = DelayStats{
+			usageFloor:       floor,
 			Measurement:      c.delayStats.Measurement,
 			Estimate:         c.delayStats.Estimate,
 			Threshold:        c.delayStats.Threshold,
@@ -157,6 +175,55 @@ func (c *rateController) seedVideoProbe(rate int) uint64 {
 	c.pacedBitrate = c.target
 	c.lastUpdate = c.now()
 	return c.generation
+}
+
+const (
+	// The delivered rate is proven capacity only if the path kept pace with
+	// the sender over the measurement window (send span / receive span).
+	// Jitter at the window edges stays well inside this margin at 500 ms.
+	usageFloorMinDeliveryRatio = 0.93
+	// A decrease this soon after a floor raise means the raise overshot.
+	usageFloorOvershootWindow = 3 * time.Second
+	usageFloorMaxHoldoff      = 16 * time.Second
+	// After this long without any decrease the path is trusted again.
+	usageFloorBackoffReset = 30 * time.Second
+)
+
+// usageFloorHoldoff is the clean period after the last overuse or decrease
+// before delivered throughput may again bound the estimate from below. It
+// backs off exponentially while floor raises keep ending in congestion (a
+// receiver whose path cannot carry the full stream), so the floor cannot keep
+// the pacer above a persistently constrained path.
+func (c *rateController) usageFloorHoldoff() time.Duration {
+	return max(clampDuration(2*c.latestRTT, time.Second, 2*time.Second), c.floorHoldoff)
+}
+
+// usageFloor returns the throughput the receiver has just been delivered when
+// the path has been free of delay overuse and backoff for a full hold-off,
+// otherwise 0. Bandwidth that was actually carried without queue growth is
+// proven capacity: the estimate must not sit below it. This makes recovery
+// after transient congestion (and after a spurious jitter-induced decrease)
+// follow the real delivered rate instead of a slow AIMD ramp, without any
+// probing traffic: when the relay's pacer is backlogged it already offers up
+// to its pacing gain over the target, so delivered throughput can rise only
+// as far as the path really carries it. Loss is handled by the loss
+// controller, whose estimate still bounds the final target.
+func (c *rateController) usageFloor(now time.Time) int {
+	if c.latestReceivedRate <= 0 || c.deliveryRatio < usageFloorMinDeliveryRatio {
+		return 0
+	}
+	if c.floorHoldoff > 0 && !c.lastDecrease.IsZero() && now.Sub(c.lastDecrease) > usageFloorBackoffReset {
+		c.floorHoldoff = 0
+	}
+	holdoff := c.usageFloorHoldoff()
+	if !c.lastDecrease.IsZero() && now.Sub(c.lastDecrease) < holdoff {
+		return 0
+	}
+	if !c.lastOveruse.IsZero() && now.Sub(c.lastOveruse) < holdoff {
+		return 0
+	}
+
+	return c.latestReceivedRate
 }
 
 func (c *rateController) increase(now time.Time) int {
@@ -207,6 +274,10 @@ func (c *rateController) decrease() int {
 	}
 	target := int(beta * float64(min(c.target, c.pacedBitrate)))
 	c.latestDecreaseRate.update(float64(c.latestReceivedRate))
+	if !c.lastFloorRaise.IsZero() && now.Sub(c.lastFloorRaise) < usageFloorOvershootWindow {
+		c.floorHoldoff = min(2*c.usageFloorHoldoff(), usageFloorMaxHoldoff)
+		c.lastFloorRaise = time.Time{}
+	}
 	c.lastUpdate, c.lastDecrease = now, now
 
 	return min(c.target, target)
