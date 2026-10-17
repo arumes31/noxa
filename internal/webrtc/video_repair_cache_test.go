@@ -134,24 +134,41 @@ func TestViewerNACKAnsweredFromEgressHistory(t *testing.T) {
 			time.Sleep(time.Until(start.Add(time.Duration(i) * 2 * time.Second / total)))
 		}
 	}
-	first := map[uint16]time.Time{}
-	var target uint16
+	// The test is about the repair path, not loopback delivery: a slow
+	// (-race, 2-core) host may lose some of the burst. The target is the
+	// first packet the viewer saw; every later forward still went through
+	// the egress, so it sits about total positions deep in the history no
+	// matter how many of the other packets reached the receiver.
+	received := map[uint16]struct{}{}
+	var target, newest uint16
+	var targetAt time.Time
 	targetSet := false
 	collect := time.After(3 * time.Second)
-	for len(first) < total {
+collecting:
+	for len(received) < total {
 		select {
 		case got := <-arrivals:
-			if _, ok := first[got.seq]; !ok {
-				first[got.seq] = got.at
-			}
+			received[got.seq] = struct{}{}
 			if !targetSet {
-				target, targetSet = got.seq, true
+				target, newest, targetAt, targetSet = got.seq, got.seq, got.at, true
+			}
+			if got.seq-target > newest-target && got.seq-target < 1<<15 {
+				newest = got.seq
 			}
 		case <-collect:
-			t.Fatalf("received %d of %d packets", len(first), total)
+			break collecting
 		}
 	}
-	if age := time.Since(first[target]); age < 1500*time.Millisecond {
+	if !targetSet {
+		t.Fatal("viewer received no packets")
+	}
+	if len(received) < total {
+		t.Logf("loopback delivered %d of %d packets; repair is still checked", len(received), total)
+	}
+	if depth := newest - target; int(depth) < total*3/4 {
+		t.Fatalf("target packet %d is only %d positions deep", target, depth)
+	}
+	if age := time.Since(targetAt); age < 1500*time.Millisecond {
 		t.Fatalf("target packet is only %v old", age)
 	}
 	plisBefore, _ := f.upstream.counts()
