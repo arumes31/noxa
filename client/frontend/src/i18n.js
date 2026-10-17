@@ -12,6 +12,7 @@
 //      startup). Every settings page uses the same catalogs.
 
 import { settingsEnglish, settingsGerman } from "./settings-messages.js";
+import { settingsShellEnglish, settingsShellGerman } from "./settings-shell-messages.js";
 import { loginErrorEnglish, loginErrorGerman } from "./login-error-messages.js";
 import { streamHealthEnglish, streamHealthGerman } from "./stream-health-messages.js";
 import { audioRecoveryEnglish, audioRecoveryGerman } from "./audio-recovery-messages.js";
@@ -62,6 +63,7 @@ const en = {
     ...roleEnglish,
     ...quickWinEnglish,
     ...settingsEnglish,
+    ...settingsShellEnglish,
     ...securityEnglish,
     ...interfaceEnglish,
     "menu.connections": "Connections",
@@ -165,6 +167,7 @@ const de = {
     ...roleGerman,
     ...quickWinGerman,
     ...settingsGerman,
+    ...settingsShellGerman,
     ...securityGerman,
     ...interfaceGerman,
     "menu.connections": "Verbindungen",
