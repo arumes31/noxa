@@ -20,6 +20,7 @@ let groupUnread = 0;
 let countsQueued = false;
 let shareTimer = 0;
 let directView = null;
+let directViewUnread = NaN; // last count published by the DM view, if any
 
 // ---------------------------------------------------------------- helpers
 
@@ -30,6 +31,7 @@ function activateChat() {
 }
 
 export function openTextChannel(channelID) {
+    if (V()?.isDirectMessagesOpen?.()) V().closeDirectMessages?.();
     activateChat();
     void chatUI.openChannelTab(channelID);
 }
@@ -39,6 +41,8 @@ export function openTextChannel(channelID) {
 // newest unread DM opens, otherwise the private conversations workspace.
 export function openDirectMessages() {
     if (typeof directView === "function") { directView(); return; }
+    // The dedicated DM view (dm-view.js), when present, owns this action.
+    if (typeof V()?.openDirectMessages === "function") { V().openDirectMessages(); return; }
     activateChat();
     const unread = chatUI.directPeers().filter((peer) => peer.unread > 0).sort((a, b) => b.unreadAt - a.unreadAt)[0];
     if (unread) { V().openPM(unread.uid, unread.nick); return; }
@@ -105,13 +109,16 @@ function renderTextSection() {
 function renderDirectSection() {
     const row = $("direct-messages");
     if (!row) return;
-    const count = chatUI.directUnreadTotal() + groupUnread;
+    const count = Number.isFinite(directViewUnread) ? directViewUnread
+        : typeof V()?.directMessagesUnread === "function" ? Number(V().directMessagesUnread()) || 0
+            : chatUI.directUnreadTotal() + groupUnread;
     const badge = row.querySelector(".side-count");
     badge.hidden = count <= 0;
     badge.textContent = count > 99 ? "99+" : String(count);
     row.querySelector(".side-row-name").textContent = t("shell.messages");
     row.setAttribute("aria-label", count > 0 ? t("shell.messagesUnread", { count }) : t("shell.messages"));
-    const viewing = document.getElementById("center")?.classList.contains("private-group-active") || (chatUI.activeChatKey?.() || "").startsWith("dm:");
+    const viewing = typeof V()?.isDirectMessagesOpen === "function" ? !!V().isDirectMessagesOpen()
+        : document.getElementById("center")?.classList.contains("private-group-active") || (chatUI.activeChatKey?.() || "").startsWith("dm:");
     if (viewing) row.setAttribute("aria-current", "true"); else row.removeAttribute("aria-current");
 }
 
@@ -269,6 +276,13 @@ export function initAppShell() {
     // The private-groups workspace toggles a class on the centre pane.
     new MutationObserver(renderDirectSection).observe($("center"), { attributes: true, attributeFilter: ["class"] });
 
+    // The DM view publishes its own unread total and open state.
+    window.addEventListener("noxa-direct-unread", (event) => {
+        const count = Number(event.detail?.count);
+        directViewUnread = Number.isFinite(count) && count >= 0 ? count : NaN;
+        renderDirectSection();
+    });
+    window.addEventListener("noxa-direct-view", renderDirectSection);
     window.addEventListener("noxa-language-changed", () => { translateShell(); renderSidebarSections(); renderVoiceCard(); });
     window.__noxaShell = {
         openDirectMessages, openTextChannel, renderSidebarSections, renderVoiceCard,
