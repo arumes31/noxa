@@ -859,7 +859,18 @@ func (m *connManager) encryptChat(scope, target, text string) (netproto.ChatSend
 		uniqueID := target
 		peer, ok := m.peerPubKey(uniqueID)
 		if !ok {
-			return netproto.ChatSend{}, fmt.Errorf("no encryption key for %s (old client?)", uniqueID)
+			// Without the recipient's end-to-end key, fall back to the
+			// client→server→client path (the global scope key). There is no
+			// plaintext fallback: with neither key the send is refused.
+			keyID, key, scoped := m.scopeKeys.current(0)
+			if !scoped {
+				return netproto.ChatSend{}, fmt.Errorf("no end-to-end key for %s and no server encryption key yet; plaintext messages are not allowed", uniqueID)
+			}
+			blob, err := sealScope(text, key)
+			if err != nil {
+				return netproto.ChatSend{}, err
+			}
+			return netproto.ChatSend{ToUniqueID: uniqueID, Text: blob, Enc: true, KeyID: keyID, ClientMsgID: newClientMsgID()}, nil
 		}
 		blob, err := sealDM(text, peer, priv)
 		if err != nil {
@@ -875,7 +886,7 @@ func (m *connManager) encryptChat(scope, target, text string) (netproto.ChatSend
 		}
 		keyID, key, ok := m.scopeKeys.current(channelID)
 		if !ok {
-			return netproto.ChatSend{}, fmt.Errorf("no chat key for this channel yet (rejoin or wait for re-key)")
+			return netproto.ChatSend{}, fmt.Errorf("no chat key for this channel yet (rejoin or wait for re-key); plaintext messages are not allowed")
 		}
 		blob, err := sealScope(text, key)
 		if err != nil {
@@ -886,7 +897,7 @@ func (m *connManager) encryptChat(scope, target, text string) (netproto.ChatSend
 	default: // global
 		keyID, key, ok := m.scopeKeys.current(0)
 		if !ok {
-			return netproto.ChatSend{}, fmt.Errorf("no global chat key yet (wait for key delivery)")
+			return netproto.ChatSend{}, fmt.Errorf("no global chat key yet (wait for key delivery); plaintext messages are not allowed")
 		}
 		blob, err := sealScope(text, key)
 		if err != nil {
@@ -955,18 +966,22 @@ func (m *connManager) decryptChatEvent(data json.RawMessage, payload string) str
 		return payload
 	}
 	// Verification is local evidence, never a claim accepted from the wire.
-	claimedVerified := chat.EncVerified
-	chat.EncVerified = false
+	chat.EncVerified, chat.EncMode = false, ""
 	if !chat.Enc {
-		if claimedVerified || chat.E2E {
-			chat.Direct = chat.Direct || chat.E2E
-			presentChat(&chat)
-			return rewrapChat("chat", chat, payload)
-		}
-		return payload
+		// Plaintext chat is never displayed: every body must be end-to-end
+		// or client→server→client encrypted. The refusal keeps the scope so
+		// the placeholder lands in the right tab with a warning badge.
+		chat.Direct = chat.Direct || chat.E2E
+		chat.Text = refusedPlainText
+		presentChat(&chat)
+		return rewrapChat("chat", chat, payload)
 	}
 
-	if chat.Direct || chat.E2E || chat.KeyID == 0 {
+	// A direct message with a scope generation and no E2E flag is the
+	// client→server→client fallback, sealed with the global scope key; it
+	// opens like a global message but stays a direct message.
+	serverDM := chat.Direct && !chat.E2E && chat.KeyID != 0
+	if !serverDM && (chat.Direct || chat.E2E || chat.KeyID == 0) {
 		// Legacy servers only supplied e2e. Keep scope after presentChat strips
 		// encryption metadata, even for a missing-key placeholder.
 		chat.Direct = true
@@ -984,6 +999,9 @@ func (m *connManager) decryptChatEvent(data json.RawMessage, payload string) str
 	}
 
 	scope := scopeOf(chat)
+	if serverDM {
+		scope = 0
+	}
 	blob := chat.Text
 	text, ok := m.resolveScopeText(scope, chat.KeyID, blob)
 	if !ok {
@@ -993,7 +1011,8 @@ func (m *connManager) decryptChatEvent(data json.RawMessage, payload string) str
 		if !m.startScopeDecrypt(scope, chat.KeyID, func() string {
 			return m.scopeTextAfterFetch(scope, chat.KeyID, blob)
 		}, func(text string) {
-			chat.Text = text
+			chat.Text, chat.EncVerified = text, openedChatText(text)
+			chat.EncMode = verifiedMode(chat.EncVerified, "server")
 			presentChat(&chat)
 			m.emit("event", rewrapChat("chat", chat, payload))
 		}) {
@@ -1003,9 +1022,32 @@ func (m *connManager) decryptChatEvent(data json.RawMessage, payload string) str
 		}
 		return ""
 	}
-	chat.Text = text
+	// The shield is drawn from this flag: set it only for a body this client
+	// opened itself, never for a placeholder.
+	chat.Text, chat.EncVerified = text, openedChatText(text)
+	chat.EncMode = verifiedMode(chat.EncVerified, "server")
 	presentChat(&chat)
 	return rewrapChat("chat", chat, payload)
+}
+
+// verifiedMode names the encryption path of a body this client opened; an
+// unopened body has none.
+func verifiedMode(verified bool, mode string) string {
+	if !verified {
+		return ""
+	}
+	return mode
+}
+
+// openedChatText reports whether text is a body this client opened, as
+// opposed to one of the placeholders substituted for a sealed or refused
+// body.
+func openedChatText(text string) bool {
+	switch text {
+	case missingKeyText, refusedKeyText, refusedPlainText, decryptFailedText:
+		return false
+	}
+	return true
 }
 
 // decryptEventField unseals one sealed field of a scope event (the edited
@@ -1016,8 +1058,11 @@ func (m *connManager) decryptEventField(envType, field string, data json.RawMess
 	if !ok {
 		return payload
 	}
+	delete(obj, "enc_verified") // local evidence only, never a wire claim
 	if enc, _ := obj["enc"].(bool); !enc {
-		return payload // old server, or an unsealed event
+		// An unsealed edit or announcement is refused like a plaintext chat
+		// body.
+		return finishEventField(envType, field, obj, refusedPlainText, payload)
 	}
 	blob, _ := obj[field].(string)
 	scope := jsonInt64(obj["channel_id"]) // absent on announcements = global
@@ -1175,7 +1220,7 @@ func (m *connManager) decryptDMAsync(chat netproto.ChatBroadcast, payload string
 		chat.Text = missingKeyText
 	} else {
 		chat.Text = plain
-		chat.EncVerified = true
+		chat.EncVerified, chat.EncMode = true, "e2e"
 	}
 	presentChat(&chat)
 	m.emit("event", rewrapChat("chat", chat, payload))
@@ -1209,6 +1254,11 @@ func rewrapChat(envType string, chat netproto.ChatBroadcast, fallback string) st
 // drops the crypto state and re-wraps the envelope.
 func finishEventField(envType, field string, obj map[string]any, text, fallback string) string {
 	obj[field] = text
+	if openedChatText(text) {
+		obj["enc_verified"] = true
+	} else {
+		delete(obj, "enc_verified")
+	}
 	delete(obj, "enc")
 	delete(obj, "key_id")
 	// Compatibility/event variants carry these aliases. Once a placeholder or

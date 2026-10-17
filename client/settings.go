@@ -101,7 +101,7 @@ type HotkeyProfile struct {
 // serialized default changes, and add the repair to migrateSettings:
 // loading merges the file ONTO the defaults, so a field an older client always
 // wrote wins over the new default unless it is explicitly repaired.
-const settingsVersion = 12
+const settingsVersion = 13
 
 // Settings holds all user preferences.
 type Settings struct {
@@ -123,7 +123,7 @@ type Settings struct {
 	MinimizeToTray bool   `json:"minimize_to_tray"` // (287)
 	CloseToTray    bool   `json:"close_to_tray"`    // (287) close button hides instead of quitting
 	CompactMode    bool   `json:"compact_mode"`     // (293)
-	Theme          string `json:"theme"`            // (294/295) "dark" | "light" | "hc"
+	Theme          string `json:"theme"`            // (294/295) "arctic" | "dark" | "light" | "hc"
 	AccentColor    string `json:"accent_color"`     // (296) custom accent hex ("" = theme default)
 	UserCSS        string `json:"user_css"`         // (296) scoped overrides
 	UIFont         string `json:"ui_font"`          // (297) "outfit" | "sora" | "jetbrains"
@@ -233,9 +233,21 @@ type Settings struct {
 	GamingOverlayOpacity   int    `json:"gaming_overlay_opacity"`
 	GamingOverlayX         int    `json:"gaming_overlay_x"` // percentage of available travel
 	GamingOverlayY         int    `json:"gaming_overlay_y"`
-	CameraBackgroundImage  string `json:"camera_background_image"`
-	CameraBlurStrength     int    `json:"camera_blur_strength"`
-	CameraMirrorPreview    bool   `json:"camera_mirror_preview"`
+	// Placement aid only: the settings page keeps the overlay out of the
+	// chosen game's HUD zones. The native overlay never reads these.
+	GamingOverlayGameUI     string `json:"gaming_overlay_game_ui"`     // none | mmo | shooter | moba
+	GamingOverlayAvoidZones bool   `json:"gaming_overlay_avoid_zones"` // default on
+	// In-game overlay behaviours. Only-speaking (default on) fades quiet
+	// members out 3 s after they stop talking; off keeps every channel member
+	// listed. Chat peek shows new messages under the speakers for about 6 s.
+	// Auto-hide fades the non-speaking content after 2.5 s without mouse
+	// movement (the overlay has no separate HUD, see gaming_overlay_presence.go).
+	GamingOverlayOnlySpeaking bool   `json:"gaming_overlay_only_speaking"`
+	GamingOverlayChatPeek     bool   `json:"gaming_overlay_chat_peek"`
+	GamingOverlayAutoHide     bool   `json:"gaming_overlay_auto_hide"`
+	CameraBackgroundImage     string `json:"camera_background_image"`
+	CameraBlurStrength        int    `json:"camera_blur_strength"`
+	CameraMirrorPreview       bool   `json:"camera_mirror_preview"`
 
 	// Security (wave 4a).
 	AllowPlaintext bool              `json:"allow_plaintext"`         // allow plaintext control connections (dev servers)
@@ -252,15 +264,19 @@ type Settings struct {
 	DismissedAnnouncement string           `json:"dismissed_announcement"` // hash of the dismissed announcement (132)
 
 	// Social & meta (wave 8b).
-	Contacts           []Contact          `json:"contacts,omitempty"`      // (316)
-	BlockedUsers       []string           `json:"blocked_users,omitempty"` // (317) unique IDs
-	MutedConversations []string           `json:"muted_conversations,omitempty"`
-	UserNotes          map[string]string  `json:"user_notes,omitempty"`      // (315) uniqueID -> local note
-	RecentChannels     map[string][]int64 `json:"recent_channels,omitempty"` // (320) server addr -> last 5 channel IDs
-	AutoAwayMinutes    int                `json:"auto_away_minutes"`         // (308) 0 = off, default 15
-	AutoAwayMessage    string             `json:"auto_away_message"`         // (390) status line other clients see while idle
-	OnboardingDone     bool               `json:"onboarding_done"`           // (329)
-	LastSeenVersion    string             `json:"last_seen_version"`         // (330) what's-new tracking
+	Contacts           []Contact `json:"contacts,omitempty"`      // (316)
+	BlockedUsers       []string  `json:"blocked_users,omitempty"` // (317) unique IDs
+	MutedConversations []string  `json:"muted_conversations,omitempty"`
+	// HideChatActivity stops this client from sending read receipts and typing
+	// indicators, in direct messages and private groups alike. Delivery
+	// receipts are unaffected. Default (false) keeps the existing behaviour.
+	HideChatActivity bool               `json:"hide_chat_activity,omitempty"`
+	UserNotes        map[string]string  `json:"user_notes,omitempty"`      // (315) uniqueID -> local note
+	RecentChannels   map[string][]int64 `json:"recent_channels,omitempty"` // (320) server addr -> last 5 channel IDs
+	AutoAwayMinutes  int                `json:"auto_away_minutes"`         // (308) 0 = off, default 15
+	AutoAwayMessage  string             `json:"auto_away_message"`         // (390) status line other clients see while idle
+	OnboardingDone   bool               `json:"onboarding_done"`           // (329)
+	LastSeenVersion  string             `json:"last_seen_version"`         // (330) what's-new tracking
 
 	// Identity (wave 9).
 	ActiveIdentity string `json:"active_identity,omitempty"` // (351) identity file stem in identities/
@@ -290,7 +306,7 @@ func DefaultSettings() Settings {
 		HotkeyMute:            "Ctrl+M",
 		HotkeyQuickConnect:    "Ctrl+Shift+C",
 		HotkeyZen:             "Ctrl+Shift+Z",
-		Theme:                 "dark",
+		Theme:                 "arctic",
 		UIFont:                "outfit",
 		UIFontSize:            14,
 		WindowOpacity:         100,
@@ -351,16 +367,23 @@ func DefaultSettings() Settings {
 		GamingOverlayPosition:  "center-left",
 		GamingOverlayScale:     80,
 		GamingOverlayOpacity:   88,
-		CameraBlurStrength:     14,
-		CameraMirrorPreview:    true,
-		ChatTimestamps:         "absolute",
-		ChatDensity:            "comfortable",
-		ChatFontSize:           14,
-		ChatLayout:             "irc",
-		SysJoinLeave:           true,
-		SysKick:                true,
-		AutoAwayMinutes:        15,
-		AutoAwayMessage:        defaultAutoAwayMessage,
+		// New in the settings redesign. Files without these keys keep the
+		// defaults when merged, so no settingsVersion bump is needed.
+		GamingOverlayGameUI:     "none",
+		GamingOverlayAvoidZones: true,
+		// Also new keys: older files keep these defaults when merged. Only
+		// speaking stays on, the behaviour every earlier overlay had.
+		GamingOverlayOnlySpeaking: true,
+		CameraBlurStrength:        14,
+		CameraMirrorPreview:       true,
+		ChatTimestamps:            "absolute",
+		ChatDensity:               "comfortable",
+		ChatFontSize:              14,
+		ChatLayout:                "irc",
+		SysJoinLeave:              true,
+		SysKick:                   true,
+		AutoAwayMinutes:           15,
+		AutoAwayMessage:           defaultAutoAwayMessage,
 	}
 }
 
@@ -473,6 +496,13 @@ func migrateSettings(s Settings) Settings {
 	if s.SettingsVersion < 11 && s.GamingOverlayScale == 100 {
 		s.GamingOverlayScale = 80
 	}
+	if s.SettingsVersion < 13 && (s.Theme == "dark" || s.Theme == "") {
+		// Arctic Night replaced the dark palette as the default look. Every
+		// older client serialized "dark" whether or not it was chosen, so
+		// move those profiles over; light, high contrast and later explicit
+		// "dark" (classic) choices are left alone.
+		s.Theme = "arctic"
+	}
 	if s.SettingsVersion < 11 && s.GamingOverlayPosition == "top-right" {
 		s.GamingOverlayPosition = "center-left"
 	}
@@ -515,6 +545,9 @@ func normalizeSettings(s Settings) Settings {
 	s.GamingOverlayOpacity = clampSetting(s.GamingOverlayOpacity, 20, 100)
 	s.GamingOverlayX = clampSetting(s.GamingOverlayX, 0, 100)
 	s.GamingOverlayY = clampSetting(s.GamingOverlayY, 0, 100)
+	if s.GamingOverlayGameUI == "" {
+		s.GamingOverlayGameUI = "none"
+	}
 	s.CameraBlurStrength = clampSetting(s.CameraBlurStrength, 2, 30)
 	for uid, volume := range s.UserShareVolumes {
 		s.UserShareVolumes[uid] = clampSetting(volume, 0, 200)
@@ -710,6 +743,12 @@ func saveSettingsSnapshot(path string, snapshot Settings) error {
 		return errors.New("settings path is empty")
 	}
 	return saveSettingsAt(path, snapshot)
+}
+
+// DefaultSettingsSnapshot returns the built-in defaults so the settings
+// dialog can offer "Reset to default" per page without duplicating them.
+func (a *App) DefaultSettingsSnapshot() Settings {
+	return DefaultSettings()
 }
 
 // GetSettings returns the current settings to the frontend.
@@ -913,6 +952,11 @@ func (a *App) SaveSettings(s Settings) string {
 	}
 	if s.GamingOverlayStyle != "" && s.GamingOverlayStyle != "bars" && s.GamingOverlayStyle != "mist-aurora" && s.GamingOverlayStyle != "default" {
 		return "invalid gaming overlay design"
+	}
+	switch s.GamingOverlayGameUI {
+	case "", "none", "mmo", "shooter", "moba":
+	default:
+		return "invalid gaming overlay game UI preset"
 	}
 	if len(s.GamingOverlayMonitor) > 128 {
 		return "invalid gaming overlay monitor"

@@ -3,11 +3,85 @@ package main
 import (
 	"encoding/json"
 	"errors"
+	"regexp"
 	"strings"
 	"time"
 
 	"noxa/internal/netproto"
 )
+
+// conversationAttachmentRoot must match the server's reserved scope-0 folder
+// (internal/server/conversation_files.go). The server authorizes every
+// transfer below it against current, accepted group membership.
+const conversationAttachmentRoot = "private-groups"
+
+// canonicalConversationID matches the server's canonical (lowercase) UUID form.
+var canonicalConversationID = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+
+func conversationAttachmentLocation(groupID string) (attachmentLocation, error) {
+	if !canonicalConversationID.MatchString(groupID) {
+		return attachmentLocation{}, errors.New("invalid private group")
+	}
+	return attachmentLocation{folder: conversationAttachmentRoot + "/" + groupID}, nil
+}
+
+// UploadConversationAttachmentForTab seals a file exactly like a DM or channel
+// attachment (fresh per-file key, content-addressed ciphertext) and stores it
+// in the group's folder. The returned [file:...] token carries the key and is
+// only ever sent inside the per-member encrypted group message.
+func (a *App) UploadConversationAttachmentForTab(tabID, groupID, name, dataBase64 string) (string, error) {
+	location, err := conversationAttachmentLocation(groupID)
+	if err != nil {
+		return "", err
+	}
+	m, err := a.requireTabCM(tabID)
+	if err != nil {
+		return "", err
+	}
+	result, err := m.conversationRequest(netproto.ConversationRequest{Action: "get", ID: groupID})
+	if err != nil {
+		return "", err
+	}
+	m.mu.Lock()
+	uid := m.uniqueID
+	m.mu.Unlock()
+	if len(result.Conversations) != 1 {
+		return "", netproto.ErrConversationDenied
+	}
+	if member, found := result.Conversations[0].Member(uid); !found || member.Pending {
+		return "", netproto.ErrConversationDenied
+	}
+	return uploadChatAttachmentTo(m, location, name, dataBase64)
+}
+
+// DownloadConversationAttachmentForTab returns a bounded inline preview of a
+// sealed group attachment.
+func (a *App) DownloadConversationAttachmentForTab(tabID, groupID, storage, keyB64 string) (string, error) {
+	location, err := conversationAttachmentLocation(groupID)
+	if err != nil {
+		return "", err
+	}
+	m, err := a.requireTabCM(tabID)
+	if err != nil {
+		return "", err
+	}
+	plain, err := a.chatAttachmentBytesAt(m, location, storage, keyB64)
+	return inlineChatAttachment(plain, err)
+}
+
+// SaveConversationAttachmentForTab saves a decrypted group attachment through
+// the same native, no-overwrite path as channel and DM attachments.
+func (a *App) SaveConversationAttachmentForTab(tabID, groupID, storage, keyB64, defaultName string) (string, error) {
+	location, err := conversationAttachmentLocation(groupID)
+	if err != nil {
+		return "", err
+	}
+	m, err := a.requireTabCM(tabID)
+	if err != nil {
+		return "", err
+	}
+	return a.saveChatAttachmentAt(m, location, storage, keyB64, defaultName)
+}
 
 // The authenticated inner envelope binds server-visible routing metadata to
 // the ciphertext, preventing a relay from moving content between groups/epochs.
@@ -56,6 +130,7 @@ func (a *App) ConversationForTab(tabID string, request netproto.ConversationRequ
 	if request.Action == "send" {
 		return netproto.ConversationResult{}, errors.New("use encrypted group messaging")
 	}
+	request.ShareRead = request.Action == "mark_read" && a.shareConversationReads(m)
 	result, err := m.conversationRequest(request)
 	if err != nil || request.Action != "history" {
 		return result, err
@@ -73,6 +148,8 @@ func (a *App) ConversationForTab(tabID string, request netproto.ConversationRequ
 	m.mu.Unlock()
 	for i := range result.Messages {
 		message := &result.Messages[i]
+		// Verification is local evidence, never accepted from the server.
+		message.EncVerified = false
 		if message.ConversationID != request.ID {
 			return netproto.ConversationResult{}, errors.New("private group history mismatch")
 		}
@@ -90,7 +167,7 @@ func (a *App) ConversationForTab(tabID string, request netproto.ConversationRequ
 			message.Body = "[Message authentication failed]"
 			continue
 		}
-		message.Body = body
+		message.Body, message.EncVerified = body, true
 	}
 	return result, nil
 }

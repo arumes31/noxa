@@ -71,7 +71,7 @@ func installPageKeys(m *connManager, scope int64, keys []netproto.ChannelKey, re
 // set only when this client actually opened the body itself.
 func openChatEntry(m *connManager, scope int64, e *netproto.ChatHistoryEntry, refused map[uint32]bool) {
 	defer func() { e.BodyEnc, e.KeyID = "", 0 }()
-	e.EncVerified = false
+	e.EncVerified, e.EncMode = false, ""
 	if e.Deleted {
 		e.Body = ""
 		return
@@ -97,7 +97,7 @@ func openChatEntry(m *connManager, scope int64, e *netproto.ChatHistoryEntry, re
 			e.Body = decryptFailedText
 			return
 		}
-		e.Body, e.EncVerified = plain, true
+		e.Body, e.EncVerified, e.EncMode = plain, true, "server"
 	}
 }
 
