@@ -685,7 +685,7 @@ func (r *Router) removeSlotLocked(pc *PeerConnectionWrapper, t *pubTrack, slot s
 		s.egress.stop()
 	}
 	if pc != nil && s.sender != nil {
-		_ = pc.pc.RemoveTrack(s.sender)
+		pc.removeSender(s.sender)
 	}
 	delete(set, slot)
 	return true

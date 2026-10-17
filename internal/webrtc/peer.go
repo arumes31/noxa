@@ -47,8 +47,17 @@ type PeerConnectionWrapper struct {
 	videoStartupRun     bool
 	videoStartupHandler func() time.Duration
 
-	closeOnce           sync.Once
-	signalMu            sync.Mutex
+	closeOnce sync.Once
+	signalMu  sync.Mutex
+	// removalMu guards signalingBusy and deferredRemovals. Pion starts every
+	// newly negotiated sender when an answer is applied (local answer or
+	// remote answer) and fails that whole SetLocal/SetRemoteDescription with
+	// "Sender Track has been removed" if one of them was removed while the
+	// offer/answer exchange was in flight, leaving the connection half started.
+	// Removals that race an exchange are therefore applied after it settles.
+	removalMu           sync.Mutex
+	signalingBusy       bool
+	deferredRemovals    []*webrtc.RTPSender
 	videoRecoveryGrowth int // signalMu; cumulative new transceivers from recovery
 	videoRecoveryLast   time.Time
 	closed              chan struct{}
@@ -124,6 +133,8 @@ func (w *PeerConnectionWrapper) HandleOffer(sdp string) (string, error) {
 func (w *PeerConnectionWrapper) handleOffer(sdp string, bounds *VideoBounds) (result string, resultErr error) {
 	w.signalMu.Lock()
 	defer w.signalMu.Unlock()
+	w.beginSignaling()
+	defer w.endSignaling()
 	if w.pc.SignalingState() == webrtc.SignalingStateHaveLocalOffer {
 		return "", ErrOfferCollision
 	}
@@ -174,6 +185,8 @@ func (w *PeerConnectionWrapper) handleOffer(sdp string, bounds *VideoBounds) (re
 func (w *PeerConnectionWrapper) HandleAnswer(sdp string) error {
 	w.signalMu.Lock()
 	defer w.signalMu.Unlock()
+	w.beginSignaling()
+	defer w.endSignaling()
 	answer := webrtc.SessionDescription{Type: webrtc.SDPTypeAnswer, SDP: sdp}
 	if err := w.pc.SetRemoteDescription(answer); err != nil {
 		return fmt.Errorf("setting remote answer: %w", err)
@@ -195,6 +208,8 @@ func (w *PeerConnectionWrapper) HandleAnswer(sdp string) error {
 func (w *PeerConnectionWrapper) CreateOffer() (string, error) {
 	w.signalMu.Lock()
 	defer w.signalMu.Unlock()
+	w.beginSignaling()
+	defer w.endSignaling()
 	if w.pc.SignalingState() != webrtc.SignalingStateStable {
 		return "", fmt.Errorf("signaling state %s is not stable", w.pc.SignalingState())
 	}
@@ -251,6 +266,46 @@ func (w *PeerConnectionWrapper) AddTrack(track webrtc.TrackLocal) (*webrtc.RTPSe
 		zap.String("track_id", track.ID()),
 	)
 	return sender, nil
+}
+
+// removeSender detaches an output sender. While an offer/answer exchange is
+// in flight (an SDP call in progress, or a local offer awaiting its answer)
+// the removal is deferred until the exchange settles; the caller has already
+// stopped the output, so no media flows in the meantime. It never blocks on
+// signaling and may be called with Router.mu held.
+func (w *PeerConnectionWrapper) removeSender(sender *webrtc.RTPSender) {
+	if sender == nil {
+		return
+	}
+	w.removalMu.Lock()
+	defer w.removalMu.Unlock()
+	if w.signalingBusy || w.pc.SignalingState() != webrtc.SignalingStateStable {
+		w.deferredRemovals = append(w.deferredRemovals, sender)
+		return
+	}
+	_ = w.pc.RemoveTrack(sender)
+}
+
+func (w *PeerConnectionWrapper) beginSignaling() {
+	w.removalMu.Lock()
+	w.signalingBusy = true
+	w.removalMu.Unlock()
+}
+
+// endSignaling applies removals deferred during the exchange once the
+// connection is stable again. A local offer still awaiting its answer keeps
+// them deferred until HandleAnswer settles it.
+func (w *PeerConnectionWrapper) endSignaling() {
+	w.removalMu.Lock()
+	defer w.removalMu.Unlock()
+	w.signalingBusy = false
+	if w.pc.SignalingState() != webrtc.SignalingStateStable || len(w.deferredRemovals) == 0 {
+		return
+	}
+	for _, sender := range w.deferredRemovals {
+		_ = w.pc.RemoveTrack(sender)
+	}
+	w.deferredRemovals = nil
 }
 
 // WriteRTCP sends RTCP packets to the remote peer (e.g. PLI keyframe
