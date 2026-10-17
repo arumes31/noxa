@@ -28,6 +28,7 @@ const (
 	keyframeCoalesced
 	keyframeWriteSucceeded
 	keyframeWriteFailed
+	keyframeDeferred
 )
 
 // The ingress pointer is captured with source selection and never looked up
@@ -77,6 +78,8 @@ func (d *videoIngressDiagnostic) recordKeyframeRequest(reason keyframeRequestRea
 		counter.WriteSucceeded++
 	case keyframeWriteFailed:
 		counter.WriteFailed++
+	case keyframeDeferred:
+		counter.Deferred++
 	}
 	return d.started
 }
