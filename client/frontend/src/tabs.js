@@ -77,6 +77,9 @@ function renderTabs(tabs) {
     const existing = new Map([...bar.querySelectorAll(".srv-tab[data-tab-id]")].map(tab => [tab.dataset.tabId, tab]));
     const visible = new Set((tabs || []).map(tab => tab.id));
     retainPresenceTabs(visible);
+    // Background tabs' chat counters feed the tray (the active tab's own
+    // badges come from chat-ui; the backend zeroes them on activation).
+    V().trayUnread?.set("tabs", (tabs || []).reduce((sum, tab) => sum + (tab.active ? 0 : tab.unread || 0), 0));
     for (const [id, element] of existing) if (!visible.has(id)) element.remove();
     if (!tabs || tabs.length === 0) {
         V().showLogin();
@@ -89,7 +92,7 @@ function renderTabs(tabs) {
         el.className = "srv-tab" + (t.active ? " active" : "") + (t.connected ? "" : " offline");
         el.dataset.tabId = t.id;
         if (!existing.has(t.id)) {
-            el.innerHTML = '<button type="button" class="srv-tab-select"><span class="srv-tab-dot"></span><span class="srv-tab-label"></span></button><button type="button" class="srv-tab-x">✕</button>';
+            el.innerHTML = '<button type="button" class="srv-tab-select"><span class="srv-tab-dot"></span><span class="srv-tab-user" aria-hidden="true"></span><span class="srv-tab-label"></span></button><button type="button" class="srv-tab-x">✕</button>';
         }
         const select = el.querySelector(".srv-tab-select");
         select.setAttribute("aria-current", t.active ? "page" : "false");
@@ -105,6 +108,10 @@ function renderTabs(tabs) {
         }
         const label = select.querySelector(".srv-tab-label");
         label.textContent = bm?.name || t.addr || translate("desktop.server");
+        // "Daniel @ wowcraft.pw": the identity prefix is visual only; the
+        // button's accessible name already spells out nickname @ address.
+        const user = select.querySelector(".srv-tab-user");
+        if (user) user.textContent = (t.display_name || t.nickname) ? `${t.display_name || t.nickname} @ ` : "";
         label.title = (t.display_name || t.nickname || "?") + " @ " + (t.addr || "?") + (t.connected ? "" : translate("desktop.offline.151c6e"));
         select.setAttribute("aria-label", (t.display_name || t.nickname || "?") + " @ " + (t.addr || "?") + (t.connected ? "" : translate("desktop.offline.a0e628")));
         select.querySelector(".srv-badge")?.remove();

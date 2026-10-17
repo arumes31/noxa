@@ -10,6 +10,7 @@
 //
 // Replies and direct recipients use explicit protocol identities.
 import { resolveParent, directPeer } from "./chat-relations.js";
+import { fileCardText, previewLine } from "./dm-model.js";
 import { manageChatGIFPlayback } from "./chat-gif-playback.js";
 import { openChatMediaLightbox } from "./chat-media-lightbox.js";
 import { createUnreadTabEffects } from "./chat-unread.js";
@@ -22,8 +23,10 @@ import { mountContextMenu, closeContextMenu, contextMenuKey } from "./context-me
 import { createPoll, renderPoll } from "./polls.js";
 import { parsePoll } from "./poll-state.js";
 import { closeDiscussions, initDiscussions, openDiscussions, renderForumChannel, resetDiscussions } from "./discussions.js";
-import { closeConversations, initConversations, isPrivateGroupActive, resetConversations } from "./conversations.js";
+import { closeConversations, initConversations, isPrivateGroupActive, openConversationsAt, resetConversations, viewedConversationID } from "./conversations.js";
+import { QUICK_SWITCH_SETTINGS } from "./shell-model.js";
 import { sessionUserID } from "./session-identity.js";
+import { encryptionBadge } from "./message-encryption.js";
 import { chatEnglish } from "./chat-messages.js";
 import { renderMarkdown, escapeHTML, EMOJI } from "./markdown.js";
 import { pickIcon } from "./image-tools.js";
@@ -74,6 +77,12 @@ let unreadEffects = null;
 let chatTabs = null;
 let tabLayoutOwner = null;
 const pmTabs = new Map(); // uid -> {uid, nick, unread, unreadAt, offline, pendingRead}
+// Private groups appear in the same tab strip as DMs. Unread counts come from
+// the server's per-member read state, so a tab is never double counted when a
+// live event and a list refresh both report the same message.
+const groupTabs = new Map(); // groupID -> {id, name, unread, unreadAt, latest}
+const closedGroupTabs = new Map(); // tabID:groupID -> newest message id when closed
+const GROUP_TAB = "grp:";
 const chanTabs = new Map(); // channelID -> {id}; derived from SubscriptionState
 let pendingChannelTab = 0; // activate only after the server confirms subscription
 let channelTabRequest = 0;
@@ -455,6 +464,7 @@ function normalize(d, chID) {
         // exactly like one the server handed over in the clear (91-135).
         enc: !!d.enc || !!d.enc_verified,
         encVerified: !!d.enc_verified,
+        encMode: d.enc_verified && (d.enc_mode === "e2e" || d.enc_mode === "server") ? d.enc_mode : "",
         offline: !!d.offline,
         clientMsgID: d.client_msg_id || "",
         replyToID: Number(d.reply_to_id) || 0,
@@ -647,15 +657,19 @@ function applyCustomEmoji(html) {
 // Message rendering (91-93, 97, 99, 101/102, 106, 107)
 // ---------------------------------------------------------------------------
 
-// UNOPENED_BODIES are the exact strings the Go layer substitutes for a body it
-// could not show. They must match client/e2e.go character for character — a
-// drift silently downgrades the ⚠ badge back to a normal shield (91-135).
-const UNOPENED_BODIES = new Set([
-    "[encrypted message — key unavailable]",
-    "[encrypted message — you do not have access]",
-    "[refused: server sent plaintext history]",
-    "[encrypted message — decryption failed]",
-]);
+// encryptionBadgeElement draws the badge every displayed message carries
+// (message-encryption.js): lock, shield or warning.
+export function encryptionBadgeElement(badge) {
+    if (!badge.kind) return null;
+    const lock = document.createElement("span");
+    lock.className = "msg-lock";
+    lock.dataset.encryption = badge.kind;
+    lock.innerHTML = icon(badge.kind);
+    lock.setAttribute("role", "img");
+    lock.setAttribute("aria-label", t(badge.label));
+    lock.title = t(badge.label);
+    return lock;
+}
 
 // CHAT_ENCRYPTION_HELP is the single source for what the shield actually
 // promises, so the channel info panel and the README cannot drift apart.
@@ -667,11 +681,13 @@ function renderMsg(m) {
     if (m.deleted) el.classList.add("deleted");
     if (m.mentioned) el.classList.add("mentioned");
     if (m.self) el.classList.add("own");
+    if (m.direct && m.offline) el.classList.add("offline-direct");
     if (m.id) el.dataset.msgId = m.id;
     m.renderKey ||= m.id ? "message-" + m.id : m.clientMsgID ? "client-" + m.clientMsgID : crypto.randomUUID();
     el.dataset.scrollKey = m.renderKey;
     el.dataset.ts = m.ts;
-    el.dataset.authorGroup = m.deleted || !m.fromUID ? "" : JSON.stringify([m.fromUID, m.from, m.self, m.direct, m.channelID, m.enc, m.e2e]);
+    const badge = encryptionBadge(m);
+    el.dataset.authorGroup = m.deleted || !m.fromUID ? "" : JSON.stringify([m.fromUID, m.from, m.self, m.direct, m.channelID, badge.kind]);
     const avatar = document.createElement("span");
     avatar.className = "msg-avatar";
     avatar.setAttribute("aria-hidden", "true");
@@ -700,39 +716,19 @@ function renderMsg(m) {
     tag.textContent = t(m.direct ? (m.offline ? "polish.offlineDirect" : "polish.direct") : (m.channelID ? "polish.channel" : "polish.global"));
     el.appendChild(tag);
 
-    // (4b/91-135) lock semantics. A placeholder body means the message stayed
-    // sealed, which must not look like an ordinary encrypted message.
-    const unopened = !m.deleted && UNOPENED_BODIES.has(m.text);
-    if (unopened) el.classList.add("missing-key");
-    let lock;
-    if (m.e2e || m.enc || unopened) {
-        lock = document.createElement("span");
-        lock.className = "msg-lock";
-        if (unopened) {
-            lock.innerHTML = icon("warning");
-            lock.setAttribute("aria-label", t("workspace.encryption"));
-            lock.title = t("chat.encryptedHelp");
-        } else if (m.e2e || (m.direct && m.enc)) {
-            lock.innerHTML = icon("lock");
-            lock.setAttribute("aria-label", t("chat.directHelp"));
-            lock.title = t("chat.directHelp");
-        } else {
-            lock.innerHTML = icon("shield");
-            lock.setAttribute("aria-label", t("chat.channelHelp"));
-            lock.title = t("chat.channelHelp");
-        }
-    }
+    // (4b/91-135) Every message shows its encryption: lock (end-to-end),
+    // shield (client→server→client) or warning. A body that stayed sealed or
+    // arrived as plaintext is never rendered: its refusal text replaces it.
+    if (badge.kind === "warning") el.classList.add("missing-key");
+    const lock = encryptionBadgeElement(badge);
 
     const body = document.createElement("span");
     body.className = "msg-text";
     if (m.deleted) {
         body.classList.add("tombstone");
         body.textContent = t("polish.deleted");
-    } else if (unopened) {
-        const key = m.text === "[encrypted message — you do not have access]" ? "chat.noAccess"
-            : m.text === "[refused: server sent plaintext history]" ? "chat.plaintextRefused"
-                : m.text === "[encrypted message — decryption failed]" ? "chat.decryptFailed" : "chat.keyUnavailable";
-        body.textContent = t(key);
+    } else if (badge.bodyKey) {
+        body.textContent = t(badge.bodyKey);
     } else {
         renderBody(body, m);
     }
@@ -850,25 +846,26 @@ const INLINE_MAX_B64 = 8 * 1024 * 1024; // ~6 MB of media rendered inline
 // attachFileRef takes the RAW capture and parses it here rather than in
 // renderBody, so the file key never crosses the split boundary. The key goes
 // straight into the Go call: never into textContent, an attribute or a src.
-function attachFileRef(container, m, cap) {
+function attachFileRef(container, m, cap, source = null) {
     const ref = parseFileRef(cap);
     if (!ref.valid) {
         container.appendChild(document.createTextNode(`[file:${cap}]`));
         return;
     }
-    const isDM = m.isDM || !m.channelID || m.channelID === "0" || m.channelID === 0;
-    const chID = isDM ? 0 : Number(m.channelID);
+    if (!source) {
+        const isDM = m.isDM || !m.channelID || m.channelID === "0" || m.channelID === 0;
+        source = chatAttachmentSource(isDM ? 0 : Number(m.channelID));
+    }
     const name = ref.name;
     const ext = (name.split(".").pop() || "").toLowerCase();
     const wrap = document.createElement("span");
     wrap.className = "msg-file";
-    const previewScope = captureScope(() => readInlineAttachmentScope(chID));
-    const previewIsCurrent = () => inlineAttachmentScopeIsCurrent(previewScope, wrap);
+    const previewIsCurrent = () => source.previewCurrent(wrap);
     const inlineImage = IMAGE_EXTS.includes(ext);
     const inlineVideo = VIDEO_EXTS.includes(ext);
     if (inlineImage || inlineVideo) {
         wrap.textContent = t(inlineVideo ? "chat.loadingVideo" : "chat.loadingImage", { name });
-        app().DownloadChatAttachmentForTab(previewScope.tabID, chID, ref.storage, ref.key).then((b64) => {
+        Promise.resolve().then(() => source.download(ref)).then((b64) => {
             // Check before touching the wrapper or constructing a renderer data
             // URL: a completed request belongs to the scope that launched it.
             if (!previewIsCurrent()) return;
@@ -881,7 +878,7 @@ function attachFileRef(container, m, cap) {
             // oversized media stays a download chip rather than wedging the
             // webview (100).
             if (b64.length > INLINE_MAX_B64) {
-                wrap.appendChild(downloadChip(chID, ref, name, t("chat.tooLargePreview")));
+                wrap.appendChild(downloadChip(source, ref, name, t("chat.tooLargePreview")));
                 return;
             }
             const el = inlineVideo
@@ -913,38 +910,106 @@ function attachFileRef(container, m, cap) {
             if (!previewIsCurrent()) return;
             wrap.textContent = "";
             if (String(err).includes("too large to preview")) {
-                wrap.appendChild(downloadChip(chID, ref, name, t("chat.tooLargePreview")));
+                wrap.appendChild(downloadChip(source, ref, name, t("chat.tooLargePreview")));
             } else {
                 wrap.textContent = "📎 " + name + t("chat.downloadFailed");
             }
         });
     } else {
-        wrap.appendChild(downloadChip(chID, ref, name, ""));
+        wrap.appendChild(downloadChip(source, ref, name, ""));
     }
     container.appendChild(wrap);
+}
+
+// chatAttachmentSource binds channel and DM attachments (scope 0) to the chat
+// view that rendered them. Private groups supply their own source with the
+// same shape, bound to their folder-scoped storage and workspace view.
+function chatAttachmentSource(chID) {
+    const previewScope = captureScope(() => readInlineAttachmentScope(chID));
+    const saveScope = captureScope(() => readAttachmentSaveScope(chID));
+    return {
+        download: ref => app().DownloadChatAttachmentForTab(previewScope.tabID, chID, ref.storage, ref.key),
+        previewCurrent: wrap => inlineAttachmentScopeIsCurrent(previewScope, wrap),
+        save: (ref, name) => app().SaveChatAttachmentForTab(saveScope.tabID, chID, ref.storage, ref.key, name),
+        saveCurrent: () => attachmentSaveScopeIsCurrent(saveScope),
+    };
+}
+
+// renderSharedRichText renders a message body through the exact pipeline of
+// channel and DM rows: escaped markdown with autolinks and remote GIF/image
+// embeds, server emoji, mentions and encrypted [file:...] attachments with
+// inline image/GIF/video previews. Callers handle voice messages first.
+export function renderSharedRichText(container, text, source) {
+    const parts = String(text ?? "").split(/\[file:([^\]]+)\]/);
+    let html = "";
+    for (let i = 0; i < parts.length; i += 2) html += renderMarkdown(parts[i]);
+    container.innerHTML = applyCustomEmoji(html);
+    markMentions(container);
+    for (let i = 1; i < parts.length; i += 2) attachFileRef(container, null, parts[i], source);
+}
+
+// bindSharedLinks gives another message surface the chat log's link policy:
+// links open through the native browser, never by navigating the webview, and
+// hovering shows the same privacy-preserving preview card.
+export function bindSharedLinks(root) {
+    root.addEventListener("click", (e) => {
+        const link = e.target.closest(".md-link");
+        if (!link || !root.contains(link)) return;
+        e.preventDefault();
+        const url = link.getAttribute("data-url");
+        if (url) window.runtime.BrowserOpenURL(url);
+    });
+    root.addEventListener("mouseover", (e) => {
+        const link = e.target.closest(".md-link");
+        if (link && root.contains(link)) scheduleLinkCard(link);
+    });
+    root.addEventListener("mouseout", (e) => {
+        if (e.target.closest(".md-link")) closeLinkCard();
+    });
 }
 
 // downloadChip builds the "📎 name" button. ref carries the attachment key,
 // which is read straight into the Go call and never written to the DOM. Native
 // Go saves the decrypted bytes, so an attachment never becomes a base64 data
 // URL or plaintext buffer in the JavaScript download path.
-function downloadChip(chID, ref, name, suffix) {
-    const scope = captureScope(() => readAttachmentSaveScope(chID));
+function downloadChip(source, ref, name, suffix) {
     const b = document.createElement("button");
     b.className = "file-chip";
-    b.textContent = "📎 " + name + suffix;
-    b.title = t("chat.downloadName", { name });
+    // The Messages view (arctic-dm.css) draws this as a file card; the meta
+    // line stays display:none elsewhere, so the accessible name is unchanged.
+    const glyph = document.createElement("span");
+    glyph.className = "file-chip-icon";
+    glyph.textContent = "📎";
+    const label = document.createElement("span");
+    label.className = "file-chip-name";
+    label.textContent = name + suffix;
+    // The size comes from the sealed reference; references without metadata
+    // (older senders) show none. Outside the Messages view it follows the
+    // name; inside, the card's meta line carries it.
+    const text = fileCardText(name, ref.meta);
+    const meta = document.createElement("span");
+    meta.className = "file-chip-meta";
+    meta.textContent = text.meta;
+    b.append(glyph, " ", label);
+    if (text.size) {
+        const size = document.createElement("span");
+        size.className = "file-chip-size";
+        size.textContent = " · " + text.size;
+        b.append(size);
+    }
+    b.append(meta);
+    b.title = text.title;
     b.onclick = async () => {
-        if (!b.isConnected || b.disabled || !attachmentSaveScopeIsCurrent(scope)) return;
+        if (!b.isConnected || b.disabled || !source.saveCurrent()) return;
         b.disabled = true;
         try {
-            const path = await app().SaveChatAttachmentForTab(scope.tabID, chID, ref.storage, ref.key, name);
-            if (!attachmentSaveScopeIsCurrent(scope)) return;
+            const path = await source.save(ref, name);
+            if (!source.saveCurrent()) return;
             if (path) V().toast(t("chat.saved", { name }));
         } catch (e) {
-            if (attachmentSaveScopeIsCurrent(scope)) V().toast(t("chat.saveFailed", { error: String(e) }), "warn");
+            if (source.saveCurrent()) V().toast(t("chat.saveFailed", { error: String(e) }), "warn");
         } finally {
-            if (attachmentSaveScopeIsCurrent(scope) && b.isConnected) b.disabled = false;
+            if (source.saveCurrent() && b.isConnected) b.disabled = false;
         }
     };
     return b;
@@ -1423,6 +1488,7 @@ function setView(v) {
     renderTabs();
     renderView();
     sendPendingReads();
+    window.dispatchEvent(new CustomEvent("noxa-chat-view-changed", { detail: { kind: v.kind, uid: v.uid || "" } }));
 }
 
 export function resumeChatView() { setView(view); }
@@ -1644,6 +1710,15 @@ async function reopenClosedChat(entry) {
     const current = () => recentlyClosedChats.get(entry.key) === entry && dmHistoryScopeIsCurrent(entry.scope);
     if (!current() || entry.pending) return;
     if (entry.key.startsWith("dm:")) { openPM(entry.key.slice(3), entry.name); return; }
+    if (entry.key.startsWith(GROUP_TAB)) {
+        const groupID = entry.key.slice(GROUP_TAB.length);
+        recentlyClosedChats.delete(entry.key);
+        closedGroupTabs.delete(`${V().state.activeTabID}:${groupID}`);
+        groupTabs.set(groupID, { id: groupID, name: entry.name, unread: 0, unreadAt: undefined, latest: 0 });
+        renderTabs();
+        await openConversationsAt(groupID, 0, () => dmHistoryScopeIsCurrent(entry.scope));
+        return;
+    }
     const id = Number(entry.key.slice(3));
     if (!V().state.channels.some(channel => Number(channel.ChannelID) === id)) {
         recentlyClosedChats.delete(entry.key); renderTabs();
@@ -1723,6 +1798,62 @@ function closePM(uid) {
     renderTabs();
 }
 
+function closeGroupTab(groupID) {
+    const tab = groupTabs.get(groupID);
+    if (!tab) return;
+    rememberClosedChat(GROUP_TAB + groupID, tab.name);
+    removeTabPin(GROUP_TAB + groupID);
+    closedGroupTabs.set(`${V().state.activeTabID}:${groupID}`, tab.latest || 0);
+    groupTabs.delete(groupID);
+    renderTabs();
+}
+
+// syncGroupTabs mirrors DM tab behaviour for private groups: an unread group
+// message opens a tab (never activating it or taking focus), a closed tab
+// returns only for a newer message, and muted groups never add a tab on their
+// own. An authoritative list also removes tabs of groups the user left.
+export function syncGroupTabs(tabID, generation, groups, uid, { authoritative = false } = {}) {
+    const st = V().state;
+    if (tabID !== st.activeTabID || generation !== st.serverGeneration || !Array.isArray(groups)) return;
+    const muted = new Set(st.settings?.muted_conversations || []);
+    const accepted = new Map();
+    for (const group of groups) {
+        const member = group?.members?.find(member => member.unique_id === uid);
+        if (typeof group?.id === "string" && member && !member.pending) accepted.set(group.id, group);
+    }
+    let changed = false;
+    if (authoritative) {
+        for (const id of [...groupTabs.keys()]) {
+            if (!accepted.has(id)) { groupTabs.delete(id); changed = true; }
+        }
+    }
+    const pinned = new Set(tabLayoutOwner?.ready ? tabLayoutOwner.layout.pinned : []);
+    for (const group of accepted.values()) {
+        const latest = Number(group.latest_message_id) || 0;
+        const count = Math.max(0, Number(group.unread_count) || 0);
+        let tab = groupTabs.get(group.id);
+        if (!tab) {
+            const closedAt = closedGroupTabs.get(`${tabID}:${group.id}`);
+            const arrived = count > 0 && !muted.has(group.id) && (closedAt === undefined || latest > closedAt);
+            if (!arrived && !pinned.has(GROUP_TAB + group.id)) continue;
+            closedGroupTabs.delete(`${tabID}:${group.id}`);
+            recentlyClosedChats.delete(GROUP_TAB + group.id);
+            tab = { id: group.id, name: group.name, unread: 0, unreadAt: undefined, latest: 0 };
+            groupTabs.set(group.id, tab);
+            changed = true;
+        }
+        if (tab.name !== group.name) { tab.name = group.name; changed = true; }
+        if (tab.unread !== count) {
+            if (count > tab.unread && !st.replayingTabID) tab.unreadAt = Date.now();
+            if (!count) tab.unreadAt = undefined;
+            tab.unread = count;
+            changed = true;
+        }
+        tab.latest = Math.max(tab.latest, latest);
+    }
+    if (changed) renderTabs();
+}
+
 function tabLayoutFor(owner) {
     if (tabLayoutOwner?.owner === owner) return tabLayoutOwner;
     const record = { owner, layout: { order: [], pinned: [] }, ready: false, saved: null, pending: Promise.resolve(), revision: 0, closed: new Set() };
@@ -1784,6 +1915,8 @@ function saveTabLayout(layout) {
 }
 
 function renderTabs() {
+    V()?.syncTrayUnread?.(); // every unread badge change re-renders the tab bar
+    window.dispatchEvent(new CustomEvent("noxa-direct-changed"));
     const scope = captureScope(readDMHistoryScope);
     const current = () => dmHistoryScopeIsCurrent(scope);
     const items = [];
@@ -1810,12 +1943,46 @@ function renderTabs() {
             clearHistory: () => { if (owns()) clearPMHistory(tab.uid, tab.nick); },
         });
     }
+    for (const tab of groupTabs.values()) {
+        const owns = () => current() && groupTabs.get(tab.id) === tab;
+        items.push({
+            key: GROUP_TAB + tab.id, name: tab.name, title: t("group.tabTitle", { name: tab.name }),
+            active: isPrivateGroupActive() && viewedConversationID() === tab.id,
+            unread: tab.unread, arrivedAt: tab.unreadAt,
+            open: () => { if (owns()) void openConversationsAt(tab.id, 0, owns); },
+            close: () => { if (owns()) closeGroupTab(tab.id); },
+        });
+    }
     const saved = items.length && V().state.activeTabID ? tabLayoutFor(getDMOwner()) : null;
     chatTabs?.render(items, saved?.layout || { order: [], pinned: [] }, {
         scope: JSON.stringify(scope), ready: !!saved?.ready,
         recentlyClosed: [...recentlyClosedChats.values()].reverse().filter(entry => dmHistoryScopeIsCurrent(entry.scope) && !items.some(item => item.key === entry.key))
             .map(entry => ({ ...entry, open: () => reopenClosedChat(entry) })),
     });
+}
+
+// --- Messages view accessors (dm-view.js) ---------------------------------------
+// liveDirectConversations reports this session's DM tabs with their unread
+// state and newest in-memory message; storedDirectPeers lists every sealed
+// local log with its newest entry. Neither changes any state.
+export function liveDirectConversations() {
+    return [...pmTabs.values()].map(tab => ({
+        uid: tab.uid, name: knownPeerName(tab.uid), unread: tab.unread || 0, offline: !!tab.offline,
+        last: store.get("dm:" + tab.uid)?.msgs.at(-1) || null,
+    }));
+}
+
+export async function storedDirectPeers() {
+    const scope = captureScope(readDMHistoryScope);
+    const peers = await callDMHistory(getDMOwner(), "DMHistoryPeersForContext");
+    return dmHistoryScopeIsCurrent(scope) ? peers || [] : null;
+}
+
+export function directMessageFromEntry(entry) { return dmMsg(entry, ""); }
+export function directPeerName(uid, supplied = "") { return peerName(uid, supplied); }
+export function activeDirectPeer() { return view.kind === "dm" ? view.uid : ""; }
+export function clearDirectHistory(uid) {
+    if (pmTabs.has(uid)) void clearPMHistory(uid, peerName(uid));
 }
 
 // --- local DM history (122) ---------------------------------------------------
@@ -1845,6 +2012,11 @@ function dmMsg(e, peerNick) {
         direct: true,
         enc: !!e.enc_verified,
         encVerified: !!e.enc_verified,
+        // A verified record without a mode predates the server-encrypted
+        // fallback, so it was end-to-end. An unverified legacy record keeps
+        // the text the user already saw, under a warning badge.
+        encMode: e.enc_verified ? (e.enc_mode === "server" ? "server" : "e2e") : "",
+        localUnverified: !e.enc_verified,
         offline: !!e.offline,
         clientMsgID: e.client_msg_id || "",
         channelID: null,
@@ -1917,6 +2089,7 @@ function dmRecord(peer, nick, m) {
         client_msg_id: m.clientMsgID,
         offline: m.offline,
         enc_verified: m.encVerified,
+        enc_mode: m.encVerified ? m.encMode : "",
     }).then(reportFailure).catch(reportFailure);
 }
 
@@ -2298,10 +2471,12 @@ export function addChat(d) {
         window.__noxaNotify?.notify(event, text, { ...context, announce: false,
             reference: { kind: "channel", channel_id: chID, message_id: m.id || 0 } });
     }
-    if (key === activeKey() && !isPrivateGroupActive()) {
+    const channelMuted = !!window.__noxaNotify?.channelOverride?.(chID)?.muted;
+    const live = key === activeKey() && !isPrivateGroupActive();
+    if (live) {
         if (position === "append") appendLive(m);
         else renderView();
-    } else if (!m.self && !window.__noxaNotify?.channelOverride?.(chID)?.muted) {
+    } else if (!m.self && !channelMuted) {
         // (104) unread badge for a non-selected channel. A muted channel (387)
         // suppresses the badge too — silencing only the sound would still nag
         // through the tree.
@@ -2315,6 +2490,8 @@ export function addChat(d) {
     }
     return {
         added: true,
+        // Shown in the open chat rather than badged (tray unseen counter).
+        live: live && !m.self && !channelMuted,
         announcement: eligibleChatAnnouncement(
             m, key, announcementEvent, announcementContext, announcementAllowed),
     };
@@ -2322,14 +2499,32 @@ export function addChat(d) {
 
 function pushMsg(key, m) {
     const st = getStore(key);
-    if (m.id && st.msgs.some((existing) => existing.id === m.id)) return "duplicate";
-    if (m.clientMsgID && st.msgs.some((existing) => existing.clientMsgID === m.clientMsgID && existing.self === m.self)) return "duplicate";
+    const duplicate = st.msgs.find((existing) => (m.id && existing.id === m.id) ||
+        (m.clientMsgID && existing.clientMsgID === m.clientMsgID && existing.self === m.self));
+    if (duplicate) {
+        upgradeEncryption(duplicate, m);
+        return "duplicate";
+    }
     const index = m.id ? st.msgs.findIndex((existing) => existing.id && existing.id > m.id) : -1;
     if (index >= 0) st.msgs.splice(index, 0, m);
     else st.msgs.push(m);
     const max = V().state.settings?.chat_max_lines || 200;
     while (st.msgs.length > Math.max(max, PAGE)) st.msgs.shift();
     return index >= 0 ? "insert" : "append";
+}
+
+// upgradeEncryption merges the encryption evidence of a second copy of the
+// same message (a live echo after a history replay, or the reverse) so the
+// first copy never keeps a weaker badge than this client actually verified.
+function upgradeEncryption(existing, m) {
+    if (existing.deleted || existing.encVerified || !m.encVerified || existing.text !== m.text) return;
+    existing.enc = true;
+    existing.encVerified = true;
+    existing.encMode = m.encMode;
+    existing.localUnverified = false;
+    if (!existing.renderKey) return;
+    const el = document.querySelector(`#chat-log .msg[data-scroll-key="${CSS.escape(existing.renderKey)}"]`);
+    if (el) el.replaceWith(renderMsg(existing));
 }
 
 function appendLive(m) {
@@ -2363,7 +2558,9 @@ function routeDM(d, m) {
     const key = "dm:" + peer;
     if (pushMsg(key, m) === "duplicate") return false;
     if (!m.self && !m.offline) {
-        window.__noxaNotify?.notify("dm", (m.from || "someone") + ": " + (m.text || "").slice(0, 80),
+        // previewLine never puts an attachment's storage key or a refused
+        // body into a notification: files show their name, refusals their text.
+        window.__noxaNotify?.notify("dm", (m.from || "someone") + ": " + previewLine(m),
             { uid: peer, className: "messages", kind: "info", announce: false,
                 reference: { kind: "dm", peer_id: peer, client_message_id: m.clientMsgID || "", local_seq: m.localSeq || 0 } });
     }
@@ -2397,7 +2594,8 @@ function routeDM(d, m) {
         void sendPendingReads();
     }
 
-    if (key === activeKey() && !isPrivateGroupActive()) {
+    const live = key === activeKey() && !isPrivateGroupActive();
+    if (live) {
         appendLive(m);
     } else if (!m.self) {
         tab.unread++;
@@ -2406,6 +2604,7 @@ function routeDM(d, m) {
     renderTabs();
     return {
         added: true,
+        live: live && !m.self,
         incomingDM: !m.self && !m.offline,
         announcement: eligibleChatAnnouncement(
             m,
@@ -2487,6 +2686,9 @@ export function onChatEdited(d) {
     const m = findMsg(d.message_id);
     if (!m) return;
     m.text = d.body ?? "";
+    // The native layer marks an edit body it opened itself; a refused or
+    // sealed edit arrives as a placeholder and draws the warning instead.
+    if (d.enc_verified) { m.enc = true; m.encVerified = true; m.encMode ||= m.direct ? "" : "server"; }
     m.edited = true;
     m.version = Number(d.version) || (m.version + 1);
     m.mentioned = !m.self && mentionsMe(m.text); // an edit can add or drop my name
@@ -2612,13 +2814,15 @@ function noteTyping() {
     typingIdle = setTimeout(resetTypingOut, TYPING_IDLE_MS);
 }
 
-// onTyping records one relayed indicator, keyed exactly on the channel_id the
-// event carries — the only scope information in the contract.
+// onTyping records one relayed indicator, keyed exactly on the scope the
+// event carries: its channel_id, or the sender's DM when it is direct.
 export function onTyping(d) {
     const st = V().state;
     const uid = d.unique_id || "";
     if (!uid || uid === sessionUserID(st) || d.client_id === st.myClientID) return;
-    const key = "ch:" + (Number(d.channel_id) || 0);
+    // A relay addressed to this user carries direct: true and belongs to that
+    // DM; older servers omit it, which keeps the indicator in the global scope.
+    const key = d.direct ? "dm:" + uid : "ch:" + (Number(d.channel_id) || 0);
     if (!typers.has(key)) typers.set(key, new Map());
     typers.get(key).set(uid, { nick: d.nickname || uid, expires: Date.now() + TYPING_TTL_MS });
     startTypingSweep();
@@ -2840,6 +3044,15 @@ function openPMKeepView(uid) {
 
 function stageFiles(fileList) {
     const scope = captureScope(readSendScope);
+    readStagedFiles(fileList, () => scopeIsCurrent(scope, readSendScope), file => {
+        pendingFiles.push(file);
+        renderFilePreview();
+    });
+}
+
+// readStagedFiles applies the chat attachment rules (25 MiB cap, safe unique
+// display names, image previews) for every composer, including groups.
+export function readStagedFiles(fileList, isCurrent, onFile) {
     for (const f of fileList) {
         if (f.size > ATTACH_MAX_BYTES) {
             V().toast(t("chat.attachmentTooLarge", { name: f.name || t("chat.file"), size: Math.round(ATTACH_MAX_BYTES / 1048576) }), "warn");
@@ -2847,7 +3060,7 @@ function stageFiles(fileList) {
         }
         const reader = new FileReader();
         reader.onload = () => {
-            if (!scopeIsCurrent(scope, readSendScope)) return;
+            if (!isCurrent()) return;
             const dataURL = reader.result;
             const rawName = (f.name || "image.png").replace(/[\[\]#]/g, "_");
             const extIdx = rawName.lastIndexOf(".");
@@ -2858,15 +3071,14 @@ function stageFiles(fileList) {
             } else {
                 uniqueName = rawName + "_" + uniqueId;
             }
-            pendingFiles.push({
+            onFile({
                 name: uniqueName,
                 dataBase64: dataURL.split(",")[1] || "",
                 isImage: f.type.startsWith("image/"),
                 dataURL: f.type.startsWith("image/") ? dataURL : null,
             });
-            renderFilePreview();
         };
-        reader.onerror = () => { if (scopeIsCurrent(scope, readSendScope)) V().toast(t("chat.readFileFailed", { name: f.name || t("chat.file") }), "warn"); };
+        reader.onerror = () => { if (isCurrent()) V().toast(t("chat.readFileFailed", { name: f.name || t("chat.file") }), "warn"); };
         reader.readAsDataURL(f);
     }
 }
@@ -2901,21 +3113,29 @@ function renderFilePreview() {
     });
 }
 
-function insertAtCursor(text) {
-    draftRevision++;
-    const input = $("chat-text");
+function insertAtCursor(text, input = $("chat-text")) {
+    const main = input === $("chat-text");
+    if (main) draftRevision++;
     const pos = input.selectionStart ?? input.value.length;
     input.value = input.value.slice(0, pos) + text + input.value.slice(input.selectionEnd ?? pos);
     input.selectionStart = input.selectionEnd = pos + text.length;
-    updateComposerCount();
+    if (main) updateComposerCount();
+    else input.dispatchEvent(new Event("input", { bubbles: true }));
     input.focus();
 }
 
-function toggleEmojiPanel() {
+// toggleSharedEmojiPanel opens the chat emoji picker (built-in and server
+// emoji) for another composer, such as a private group.
+export function toggleSharedEmojiPanel(input, anchor) {
+    toggleEmojiPanel({ input, anchor });
+}
+
+function toggleEmojiPanel(target = null) {
     if (emojiPanel) {
         closeEmojiPanel();
         return;
     }
+    const insert = text => { if (!target || target.input.isConnected) insertAtCursor(text, target?.input); };
     emojiPanel = document.createElement("div");
     const panel = emojiPanel;
     const panelGeneration = V().state.serverGeneration;
@@ -2935,7 +3155,7 @@ function toggleEmojiPanel() {
             b.textContent = e;
             const code = Object.entries(EMOJI).find(([, v]) => v === e)?.[0];
             if (code) b.title = ":" + code + ":";
-            b.onclick = () => insertAtCursor(e);
+            b.onclick = () => insert(e);
             grid.appendChild(b);
         }
         emojiPanel.appendChild(grid);
@@ -3002,12 +3222,12 @@ function toggleEmojiPanel() {
             img.src = url;
             img.alt = ":" + e.name + ":";
             b.appendChild(img);
-            b.onclick = () => insertAtCursor(":" + e.name + ":");
+            b.onclick = () => insert(":" + e.name + ":");
             grid.appendChild(b);
         }
     });
 
-    const r = $("chat-emoji").getBoundingClientRect();
+    const r = (target?.anchor || $("chat-emoji")).getBoundingClientRect();
     emojiPanel.style.right = Math.max(8, window.innerWidth - r.right) + "px";
     emojiPanel.style.bottom = (window.innerHeight - r.top + 8) + "px";
     document.body.appendChild(emojiPanel);
@@ -3205,7 +3425,11 @@ async function loadPinsPanel() {
         const body = document.createElement("span");
         body.className = "pin-body";
         const msg = p.message || {};
-        body.textContent = `${msg.from_nickname || "?"}: ${msg.deleted ? t("runtime.deleted") : (msg.body || "").slice(0, 120)}`;
+        const pinBadge = encryptionBadge(normalize(msg, chID));
+        const shown = pinBadge.bodyKey ? t(pinBadge.bodyKey) : (msg.body || "").slice(0, 120);
+        body.textContent = `${msg.from_nickname || "?"}: ${msg.deleted ? t("runtime.deleted") : shown}`;
+        const pinLock = encryptionBadgeElement(pinBadge);
+        if (pinLock) body.appendChild(pinLock);
         row.appendChild(body);
         const jump = document.createElement("button");
         jump.textContent = "↩";
@@ -3399,6 +3623,13 @@ function showSearchResults(q, results, scanned, undecryptable, scope) {
         meta.className = "search-meta";
         meta.textContent = `${r.from_nickname || "?"} · ${fmtFull((typeof r.sent_at === "number" ? r.sent_at * 1000 : Date.parse(r.sent_at)) || 0)}`;
         row.insertBefore(meta, row.firstChild);
+        // A hit names its encryption like the message it points to.
+        const verified = !!r.enc_verified;
+        const hitBadge = encryptionBadgeElement(encryptionBadge({
+            text: r.body, direct: scope.kind === "dm", enc: verified, encVerified: verified,
+            encMode: verified && (r.enc_mode === "e2e" || r.enc_mode === "server") ? r.enc_mode : "",
+        }));
+        if (hitBadge) meta.appendChild(hitBadge);
         row.onclick = () => {
             closeDialog(overlay);
             if (!exportScopeIsCurrent(scope)) return;
@@ -3468,7 +3699,8 @@ function updateHeader() {
     $("chat-head-title").textContent = title;
     $("chat-search-btn").classList.toggle("hidden", filesOpen);
     $("chat-head-actions").querySelector(".channel-actions").hidden = filesOpen;
-    $("chat-text").placeholder = view.kind === "channel" || view.kind === "chan" ? t("workspace.compose", { name: title }) : view.kind === "dm" ? t("workspace.compose", { name: peerName(view.uid) }) : t("workspace.composeAll");
+    const directView = view.kind === "dm" && $("center")?.classList.contains("dm-view-active");
+    $("chat-text").placeholder = view.kind === "channel" || view.kind === "chan" ? t("workspace.compose", { name: title }) : directView ? t("dm.composer", { name: peerName(view.uid) }) : view.kind === "dm" ? t("workspace.compose", { name: peerName(view.uid) }) : t("workspace.composeAll");
     const topicEl = $("chat-topic");
     topicEl.textContent = topic;
     topicEl.title = topic; // (111) tooltip carries the full topic
@@ -3824,6 +4056,7 @@ export function resetView(options = {}) {
     store.clear();
     unread.clear();
     pmTabs.clear();
+    groupTabs.clear();
     chanTabs.clear();
     subscriptions = [];
     pendingChannelTab = 0;
@@ -3946,7 +4179,17 @@ function openQS() {
     const st = V().state;
     const { activeTabID: tabID, serverGeneration: generation } = st;
     const items = [];
+    const toChat = () => window.__noxaFiles?.activateWorkspaceTab?.("chat");
     for (const ch of st.channels) {
+        // Text channels have no voice: picking one opens its chat.
+        if (ch.TextOnly) {
+            items.push({ label: "# " + ch.Name, hint: t("shell.qs.kind.text"), action: () => {
+                if (generation !== st.serverGeneration) return;
+                toChat();
+                void openChannelTab(ch.ChannelID);
+            } });
+            continue;
+        }
         items.push({ label: "# " + ch.Name, hint: t("chat.channelHint"), action: async () => {
             if (generation !== st.serverGeneration) return;
             try {
@@ -3968,17 +4211,48 @@ function openQS() {
     for (const tab of chanTabs.values()) {
         items.push({ label: "# " + channelName(tab.id), hint: t("chat.channelTabHint"), action: () => activateChannel(tab.id) });
     }
+    // Settings pages match once the user types, so they never crowd the
+    // default list of channels and people.
+    // The settings dialog may publish its own page list (settingsPages());
+    // otherwise the shell's static list is used.
+    let settingsPages = null;
+    try { settingsPages = V().settingsPages?.(); } catch { settingsPages = null; }
+    const pages = Array.isArray(settingsPages) && settingsPages.length
+        ? settingsPages.filter((page) => page?.id).map((page) => [page.id, String(page.label || page.id)])
+        : QUICK_SWITCH_SETTINGS;
+    for (const [page, key] of pages) {
+        const label = /^[\w-]+(\.[\w-]+)+$/.test(key) ? t(key) : key;
+        items.push({ label: "⚙ " + label, hint: t("shell.qs.kind.setting"), typed: true, action: () => V()?.openSettings?.(page) });
+    }
 
     qsOverlay = document.createElement("div");
     qsOverlay.className = "dlg-overlay qs-overlay";
+    qsOverlay.setAttribute("aria-label", t("shell.qs.title"));
     const box = document.createElement("div");
     box.className = "qs-box";
     const input = document.createElement("input");
     input.placeholder = t("chat.switcherHint");
+    input.autocomplete = "off";
+    input.spellcheck = false;
+    input.setAttribute("role", "combobox");
+    input.setAttribute("aria-label", t("shell.qs.title"));
+    input.setAttribute("aria-autocomplete", "list");
+    input.setAttribute("aria-expanded", "true");
+    input.setAttribute("aria-controls", "qs-list");
+    input.setAttribute("aria-describedby", "qs-help");
     const list = document.createElement("div");
     list.className = "qs-list";
-    box.appendChild(input);
-    box.appendChild(list);
+    list.id = "qs-list";
+    list.setAttribute("role", "listbox");
+    list.setAttribute("aria-label", t("shell.qs.results"));
+    const help = document.createElement("p");
+    help.className = "qs-help";
+    help.id = "qs-help";
+    help.textContent = t("shell.qs.hint");
+    const status = document.createElement("p");
+    status.className = "sr-only";
+    status.setAttribute("role", "status");
+    box.append(input, list, help, status);
     qsOverlay.appendChild(box);
     qsOverlay.onclick = (e) => {
         if (e.target === qsOverlay) closeQS();
@@ -3998,7 +4272,8 @@ function openQS() {
     const renderList = () => {
         const q = input.value.trim();
         matches = items
-            .map((it) => ({ it, score: qsScore(q, it.label) }))
+            .filter((it) => q || !it.typed)
+            .map((it) => ({ it, score: qsScore(q, it.label.replace(/^[#@✉⚙👥] /u, "")) }))
             .filter((x) => x.score >= 0)
             .sort((a, b) => b.score - a.score)
             .slice(0, 12)
@@ -4008,6 +4283,9 @@ function openQS() {
         matches.forEach((it, i) => {
             const row = document.createElement("div");
             row.className = "qs-row" + (i === sel ? " sel" : "");
+            row.id = `qs-option-${i}`;
+            row.setAttribute("role", "option");
+            row.setAttribute("aria-selected", String(i === sel));
             const l = document.createElement("span");
             l.textContent = it.label;
             const h = document.createElement("span");
@@ -4015,6 +4293,7 @@ function openQS() {
             h.textContent = it.hint;
             row.appendChild(l);
             row.appendChild(h);
+            row.onmousedown = (e) => e.preventDefault(); // keep focus in the input
             row.onclick = () => {
                 if (!currentQuickSwitcher()) return;
                 closeQS();
@@ -4022,6 +4301,11 @@ function openQS() {
             };
             list.appendChild(row);
         });
+        if (matches.length) {
+            input.setAttribute("aria-activedescendant", `qs-option-${sel}`);
+            list.querySelector(".qs-row.sel")?.scrollIntoView({ block: "nearest" });
+        } else input.removeAttribute("aria-activedescendant");
+        status.textContent = matches.length ? t("shell.qs.count", { count: matches.length }) : t("shell.qs.empty", { query: q });
     };
     input.oninput = () => {
         sel = 0;
@@ -4041,6 +4325,12 @@ function openQS() {
             sel = Math.max(sel - 1, 0);
             renderList();
         }
+        if (e.key === "Home" || e.key === "End") {
+            if (!e.ctrlKey) return;
+            e.preventDefault();
+            sel = e.key === "Home" ? 0 : Math.max(0, matches.length - 1);
+            renderList();
+        }
         if (e.key === "Enter" && matches[sel]) {
             closeQS();
             matches[sel].action();
@@ -4048,6 +4338,25 @@ function openQS() {
     };
     renderList();
     input.focus();
+    // Private groups come from the server; add them when the list arrives.
+    const listGroups = app().ConversationForTab;
+    if (typeof listGroups === "function") void Promise.resolve().then(() => listGroups(tabID, { action: "list" })).then((result) => {
+        if (!currentQuickSwitcher() || generation !== st.serverGeneration) return;
+        const me = sessionUserID(st);
+        for (const group of result?.conversations || []) {
+            if (!group?.id || group.members?.find((member) => member.unique_id === me)?.pending) continue;
+            items.push({ label: "👥 " + (group.name || group.id), hint: t("shell.qs.kind.group"), action: () => {
+                toChat();
+                void openConversationsAt(group.id);
+            } });
+        }
+        renderList();
+    }).catch(() => { /* Groups are optional; channels and people still work. */ });
+}
+
+// The top bar's "Search or jump to…" field opens the same switcher.
+export function openQuickSwitcher() {
+    if (!document.getElementById("app")?.classList.contains("hidden")) openQS();
 }
 
 // ---------------------------------------------------------------------------
@@ -4123,7 +4432,7 @@ export function initChat() {
     const log = $("chat-log");
 
     applyChatPrefs();
-    const stopGIFPlayback = manageChatGIFPlayback(document.body, ".msg img, .lightbox img, .msg video.msg-video, .lightbox video");
+    const stopGIFPlayback = manageChatGIFPlayback(document.body, ".msg img, .lightbox img, .msg video.msg-video, .lightbox video, .group-message-body img, .group-message-body video.msg-video");
 
     // Attachments, wrapped text and viewport changes can grow the conversation
     // after appendLive has scrolled. Keep following the newest message until
@@ -4365,6 +4674,27 @@ export function initChat() {
 
 export function unreadFor(chID) {
     return unread.get(chID) || null;
+}
+
+// Sidebar shell (app-shell.js): the "Messages" row counts direct messages;
+// private groups are added from the conversation list. The quick switcher
+// lists the open DM peers and resolves the chat currently on screen.
+export function directUnreadTotal() {
+    let total = 0;
+    for (const peer of pmTabs.values()) total += peer.unread || 0;
+    return total;
+}
+export function directPeers() {
+    return [...pmTabs.values()].map(({ uid, nick, unread, unreadAt }) => ({ uid, nick, unread: unread || 0, unreadAt: unreadAt || 0 }));
+}
+export function activeChatKey() { return activeKey(); }
+
+// Tray counter (main.js): the same badges unreadMessageReferences lists.
+export function unreadTotal() {
+    let total = 0;
+    for (const [channelID, value] of unread) if (channelID === 0 || subscribed(channelID)) total += value.n || 0;
+    for (const peer of pmTabs.values()) total += peer.unread || 0;
+    return total;
 }
 
 export function unreadMessageReferences() {

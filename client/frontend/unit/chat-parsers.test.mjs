@@ -6,22 +6,22 @@ import { parseFileRef, transformCustomEmoji } from "../src/chat-parsers.js";
 describe("parseFileRef", () => {
     it("matches the Go parser for legacy, partial, encrypted, and empty captures", () => {
         assert.deepEqual(parseFileRef("photo.png"), {
-            storage: "photo.png", key: "", name: "photo.png", valid: true, legacy: true,
+            storage: "photo.png", key: "", name: "photo.png", valid: true, legacy: true, meta: null,
         });
         assert.deepEqual(parseFileRef("legacy#name"), {
-            storage: "legacy#name", key: "", name: "legacy#name", valid: true, legacy: true,
+            storage: "legacy#name", key: "", name: "legacy#name", valid: true, legacy: true, meta: null,
         });
         assert.deepEqual(parseFileRef("blob#key#photo.png"), {
-            storage: "blob", key: "key", name: "photo.png", valid: true, legacy: false,
+            storage: "blob", key: "key", name: "photo.png", valid: true, legacy: false, meta: null,
         });
         assert.deepEqual(parseFileRef("#key#"), {
-            storage: "", key: "key", name: "", valid: true, legacy: false,
+            storage: "", key: "key", name: "", valid: true, legacy: false, meta: null,
         });
         assert.deepEqual(parseFileRef("blob#key#name#with#hash"), {
-            storage: "blob", key: "key", name: "name#with#hash", valid: true, legacy: false,
+            storage: "blob", key: "key", name: "name#with#hash", valid: true, legacy: false, meta: null,
         });
         assert.deepEqual(parseFileRef(null), {
-            storage: "", key: "", name: "", valid: false, legacy: false,
+            storage: "", key: "", name: "", valid: false, legacy: false, meta: null,
         });
     });
 });

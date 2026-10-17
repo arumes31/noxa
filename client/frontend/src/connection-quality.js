@@ -51,12 +51,15 @@ export function createConnectionQuality({ $, state }) {
         // Preserve the established ping badge and show playback independently:
         // an excellent control RTT cannot make damaged/delayed audio look good.
         let playback = $("voice-playback-quality");
-        if (!playback && latency.parentElement) {
+        // The ping lives in the top bar; playback health belongs to the voice
+        // card's status row when there is one.
+        const playbackHost = document.querySelector("#voice-bar .voice-summary");
+        if (!playback && (playbackHost || latency.parentElement)) {
             playback = document.createElement("button");
             playback.type = "button";
             playback.id = "voice-playback-quality";
             playback.className = "voice-playback-quality";
-            latency.after(playback);
+            if (playbackHost) playbackHost.append(playback); else latency.after(playback);
             playbackTooltip = createVoicePlaybackTooltip(playback);
         }
         if (playback) {

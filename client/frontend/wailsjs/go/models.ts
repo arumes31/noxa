@@ -749,6 +749,7 @@ export namespace main {
 	    client_msg_id?: string;
 	    offline?: boolean;
 	    enc_verified?: boolean;
+	    enc_mode?: string;
 
 	    static createFrom(source: any = {}) {
 	        return new DMEntry(source);
@@ -765,6 +766,7 @@ export namespace main {
 	        this.client_msg_id = source["client_msg_id"];
 	        this.offline = source["offline"];
 	        this.enc_verified = source["enc_verified"];
+	        this.enc_mode = source["enc_mode"];
 	    }
 	}
 	export class DMHistoryContext {
@@ -790,6 +792,7 @@ export namespace main {
 	    nickname?: string;
 	    messages: number;
 	    last_at: number;
+	    last?: DMEntry;
 
 	    static createFrom(source: any = {}) {
 	        return new DMPeer(source);
@@ -801,7 +804,26 @@ export namespace main {
 	        this.nickname = source["nickname"];
 	        this.messages = source["messages"];
 	        this.last_at = source["last_at"];
+	        this.last = this.convertValues(source["last"], DMEntry);
 	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
 	}
 	export class E2EEDiagnostics {
 	    cipher: string;
@@ -1393,6 +1415,8 @@ export namespace main {
 	    gaming_overlay_opacity: number;
 	    gaming_overlay_x: number;
 	    gaming_overlay_y: number;
+	    gaming_overlay_game_ui: string;
+	    gaming_overlay_avoid_zones: boolean;
 	    camera_background_image: string;
 	    camera_blur_strength: number;
 	    camera_mirror_preview: boolean;
@@ -1409,6 +1433,7 @@ export namespace main {
 	    contacts?: Contact[];
 	    blocked_users?: string[];
 	    muted_conversations?: string[];
+	    hide_chat_activity?: boolean;
 	    user_notes?: Record<string, string>;
 	    recent_channels?: Record<string, Array<number>>;
 	    auto_away_minutes: number;
@@ -1518,6 +1543,8 @@ export namespace main {
 	        this.gaming_overlay_opacity = source["gaming_overlay_opacity"];
 	        this.gaming_overlay_x = source["gaming_overlay_x"];
 	        this.gaming_overlay_y = source["gaming_overlay_y"];
+	        this.gaming_overlay_game_ui = source["gaming_overlay_game_ui"];
+	        this.gaming_overlay_avoid_zones = source["gaming_overlay_avoid_zones"];
 	        this.camera_background_image = source["camera_background_image"];
 	        this.camera_blur_strength = source["camera_blur_strength"];
 	        this.camera_mirror_preview = source["camera_mirror_preview"];
@@ -1534,6 +1561,7 @@ export namespace main {
 	        this.contacts = this.convertValues(source["contacts"], Contact);
 	        this.blocked_users = source["blocked_users"];
 	        this.muted_conversations = source["muted_conversations"];
+	        this.hide_chat_activity = source["hide_chat_activity"];
 	        this.user_notes = source["user_notes"];
 	        this.recent_channels = source["recent_channels"];
 	        this.auto_away_minutes = source["auto_away_minutes"];
@@ -2046,6 +2074,7 @@ export namespace netproto {
 	    key_id?: number;
 	    body?: string;
 	    enc_verified?: boolean;
+	    enc_mode?: string;
 	    sent_at: number;
 	    edited_at?: number;
 	    deleted?: boolean;
@@ -2066,6 +2095,7 @@ export namespace netproto {
 	        this.key_id = source["key_id"];
 	        this.body = source["body"];
 	        this.enc_verified = source["enc_verified"];
+	        this.enc_mode = source["enc_mode"];
 	        this.sent_at = source["sent_at"];
 	        this.edited_at = source["edited_at"];
 	        this.deleted = source["deleted"];
@@ -2844,6 +2874,7 @@ export namespace netproto {
 	    unique_id: string;
 	    pending: boolean;
 	    joined_epoch: number;
+	    seen_message_id?: number;
 
 	    static createFrom(source: any = {}) {
 	        return new ConversationMember(source);
@@ -2854,6 +2885,7 @@ export namespace netproto {
 	        this.unique_id = source["unique_id"];
 	        this.pending = source["pending"];
 	        this.joined_epoch = source["joined_epoch"];
+	        this.seen_message_id = source["seen_message_id"];
 	    }
 	}
 	export class Conversation {
@@ -2915,6 +2947,7 @@ export namespace netproto {
 	    reference: string;
 	    body: string;
 	    created_at: number;
+	    enc_verified?: boolean;
 
 	    static createFrom(source: any = {}) {
 	        return new ConversationMessage(source);
@@ -2929,6 +2962,7 @@ export namespace netproto {
 	        this.reference = source["reference"];
 	        this.body = source["body"];
 	        this.created_at = source["created_at"];
+	        this.enc_verified = source["enc_verified"];
 	    }
 	}
 	export class ConversationSend {
@@ -2955,6 +2989,7 @@ export namespace netproto {
 	    target: string;
 	    before_id: number;
 	    read_message_id: number;
+	    share_read?: boolean;
 	    message?: ConversationSend;
 
 	    static createFrom(source: any = {}) {
@@ -2970,6 +3005,7 @@ export namespace netproto {
 	        this.target = source["target"];
 	        this.before_id = source["before_id"];
 	        this.read_message_id = source["read_message_id"];
+	        this.share_read = source["share_read"];
 	        this.message = this.convertValues(source["message"], ConversationSend);
 	    }
 
@@ -3626,6 +3662,7 @@ export namespace netproto {
 	    access?: RoleChannelAccess;
 	    settings?: RoleChannelSettings;
 	    channel_type: number;
+	    text_only?: boolean;
 	    password?: string;
 	    set_password?: boolean;
 
@@ -3644,6 +3681,7 @@ export namespace netproto {
 	        this.access = this.convertValues(source["access"], RoleChannelAccess);
 	        this.settings = this.convertValues(source["settings"], RoleChannelSettings);
 	        this.channel_type = source["channel_type"];
+	        this.text_only = source["text_only"];
 	        this.password = source["password"];
 	        this.set_password = source["set_password"];
 	    }

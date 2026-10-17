@@ -59,7 +59,7 @@ test('switching pages cancels capture and current registration status clears err
     await page.evaluate(() => window.__events.hotkey_status.forEach(cb => cb({ action: 'ptt', registered: false })));
     await expect(page.locator('#hotkey-error-ptt')).toBeEmpty();
     await capture(page).click();
-    await page.getByRole('tab', { name: 'Anwendung', exact: true }).click();
+    await page.getByRole('tab', { name: 'Allgemein', exact: true }).click();
     await page.keyboard.press('PageDown');
     await page.getByRole('tab', { name: 'Tastenkürzel', exact: true }).click();
     await expect(capture(page)).toHaveText('Ctrl+M');

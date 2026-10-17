@@ -321,12 +321,18 @@ test("frontend UI module behaviors", { concurrency: false }, async (t) => {
         assert.deepEqual(chat.normalize({
             body: "hello", enc_verified: true, from_nickname: "Ada", id: "8", reply_to_id: "3", sent_at: 7,
         }, 5), {
-            channelID: 5, clientMsgID: "", deleted: false, edited: false, e2e: false, direct: false, enc: true, encVerified: true, from: "Ada", fromUID: "",
+            channelID: 5, clientMsgID: "", deleted: false, edited: false, e2e: false, direct: false, enc: true, encVerified: true, encMode: "", from: "Ada", fromUID: "",
             id: 8, mentioned: false, mentions: [], role_mentions: [], offline: false, reactions: null, replyToID: 3, self: false, text: "hello", ts: 7000, version: 1,
         });
         const plaintextDM = chat.normalize({ direct: true, text: "clear" });
         assert.equal(plaintextDM.direct, true);
         assert.equal(plaintextDM.encVerified, false);
+        // The encryption mode is local evidence: it counts only next to the
+        // native layer's verification flag.
+        assert.equal(chat.normalize({ text: "x", enc_verified: true, enc_mode: "server" }).encMode, "server");
+        assert.equal(chat.normalize({ direct: true, text: "x", enc_verified: true, enc_mode: "e2e" }).encMode, "e2e");
+        assert.equal(chat.normalize({ text: "x", enc_mode: "e2e" }).encMode, "");
+        assert.equal(chat.normalize({ text: "x", enc_verified: true, enc_mode: "bogus" }).encMode, "");
         const legacyDM = chat.normalize({ e2e: true, text: "legacy" });
         assert.equal(legacyDM.direct, true);
         assert.equal(legacyDM.encVerified, false);

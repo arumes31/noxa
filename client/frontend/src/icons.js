@@ -50,6 +50,10 @@ const paths = {
     shield: '<path d="m12 2 9 4v6c0 5-9 10-9 10S3 17 3 12V6zM8 12l3 3 5-6"/>',
     leave: '<path d="M10 3H3v18h7M8 12h14m-5-5 5 5-5 5"/>',
     warning: '<path d="M12 3 1 21h22zM12 9v5M12 18h.01"/>',
+    hash: '<path d="M9 3 7 21M17 3l-2 18M4 8.5h17M3 15.5h17"/>',
+    hangup: '<path d="M3 15.5c5.5-5 12.5-5 18 0l-2.5 2.5-3.5-1.5v-2.5a10 10 0 0 0-6 0v2.5L5.5 18z"/>',
+    effects: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>',
+    messages: '<path d="M21 11.5a8.5 8.5 0 0 1-12.4 7.6L3 21l1.9-5.6A8.5 8.5 0 1 1 21 11.5Z"/>',
 };
 
 export function icon(name) {

@@ -12,6 +12,7 @@
 //      startup). Every settings page uses the same catalogs.
 
 import { settingsEnglish, settingsGerman } from "./settings-messages.js";
+import { settingsShellEnglish, settingsShellGerman } from "./settings-shell-messages.js";
 import { loginErrorEnglish, loginErrorGerman } from "./login-error-messages.js";
 import { streamHealthEnglish, streamHealthGerman } from "./stream-health-messages.js";
 import { audioRecoveryEnglish, audioRecoveryGerman } from "./audio-recovery-messages.js";
@@ -41,8 +42,13 @@ import { overlayEnglish, overlayGerman } from "./gaming-overlay-messages.js";
 import { communicationExtrasEnglish, communicationExtrasGerman } from "./communication-extras-messages.js";
 import { messageToolsEnglish, messageToolsGerman } from "./message-tools-messages.js";
 import { webhookEnglish, webhookGerman } from "./webhook-messages.js";
+import { directMessageEnglish, directMessageGerman } from "./dm-messages.js";
+import { shellEnglish, shellGerman } from "./shell-messages.js";
+import { fullscreenEnglish, fullscreenGerman } from "./fullscreen-messages.js";
 
 const en = {
+    ...directMessageEnglish,
+    ...fullscreenEnglish,
     ...loginErrorEnglish, ...streamHealthEnglish,
     ...voiceDiagnosticsEnglish,
     ...desktopEnglish,
@@ -62,8 +68,10 @@ const en = {
     ...roleEnglish,
     ...quickWinEnglish,
     ...settingsEnglish,
+    ...settingsShellEnglish,
     ...securityEnglish,
     ...interfaceEnglish,
+    ...shellEnglish,
     "menu.connections": "Connections",
     "menu.bookmarks": "Bookmarks",
     "menu.self": "Self",
@@ -146,6 +154,8 @@ const en = {
 };
 
 const de = {
+    ...directMessageGerman,
+    ...fullscreenGerman,
     ...loginErrorGerman, ...streamHealthGerman,
     ...voiceDiagnosticsGerman,
     ...desktopGerman,
@@ -165,8 +175,10 @@ const de = {
     ...roleGerman,
     ...quickWinGerman,
     ...settingsGerman,
+    ...settingsShellGerman,
     ...securityGerman,
     ...interfaceGerman,
+    ...shellGerman,
     "menu.connections": "Verbindungen",
     "menu.bookmarks": "Lesezeichen",
     "menu.self": "Selbst",

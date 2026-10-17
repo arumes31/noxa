@@ -4005,7 +4005,7 @@ test("settings save blocks duplicates, retains draft after failure and retries",
     const errors = [];
     page.on("pageerror", error => errors.push(error.message));
     await installSaveScenario(page);
-    await page.evaluate(() => window.__noxa.openSettings());
+    await page.evaluate(() => window.__noxa.openSettings("chat"));
     const dialog = page.locator("#settings-overlay");
     await page.getByRole("spinbutton", { name: "Chat max lines", exact: true }).fill("777");
     await page.locator("#set-apply").click();
@@ -4169,7 +4169,7 @@ test("settings search reuses labels and invalidates after edits, language change
     await page.evaluate(async () => (await import("/src/i18n.js")).setLanguage("de"));
     const beforeGermanSearch = await page.evaluate(() => window.__searchControls);
     await search.fill("lautstärke");
-    await expect(page.locator(".set-search-hit").first()).toContainText("Wiedergabe");
+    await expect(page.locator(".set-search-hit").first()).toContainText("Audio & Sprache");
     const germanBuild = await page.evaluate(() => window.__searchControls);
     expect(germanBuild).toBeGreaterThan(beforeGermanSearch);
     await search.fill("lautstärk");
@@ -4210,6 +4210,7 @@ test("German menus translate remaining actions and bookmark dialogs", async ({ p
 });
 
 test("client language translates every settings page and persists on Apply @a11y", async ({ page }, testInfo) => {
+    test.setTimeout(60_000); // twelve pages, two of them device-heavy
     const errors = [];
     page.on("pageerror", error => errors.push(error.message));
     await page.evaluate(() => {
@@ -4222,25 +4223,26 @@ test("client language translates every settings page and persists on Apply @a11y
         window.__noxa.openSettings();
     });
     await page.getByRole("combobox", { name: "Language", exact: true }).selectOption("de");
+    await page.getByRole("tab", { name: "Chat", exact: true }).click();
     await page.getByRole("spinbutton", { name: "Chat max lines", exact: true }).fill("500");
     await page.getByRole("button", { name: "Apply", exact: true }).click();
     await expect(page.getByRole("dialog", { name: "Einstellungen", exact: true })).toBeVisible();
-    await expect(page.getByRole("combobox", { name: "Sprache", exact: true })).toHaveValue("de");
     await expect(page.locator("html")).toHaveAttribute("lang", "de");
     await expect(page.getByRole("spinbutton", { name: "Chat max. Zeilen", exact: true })).toHaveValue("500");
+    await page.getByRole("tab", { name: "Allgemein", exact: true }).click();
+    await expect(page.getByRole("combobox", { name: "Sprache", exact: true })).toHaveValue("de");
     await page.screenshot({ path: testInfo.outputPath("settings-german-application.png") });
     const pages = [
-        ["Anwendung", "Chat max. Zeilen"], ["Aufnahme", "Aufnahmegerät"], ["Kamera", "Kamerabildrate"],
-        ["Wiedergabe", "Ausgabegerät"], ["Overlay", "Sprach-Overlay"], ["Tastenkürzel", "Als neues Profil speichern…"],
-        ["Flüstern", "Flüstern aktivieren"], ["Downloads", "Downloadordner"],
-        ["Chat", "Zeitstempel"], ["Sicherheit", "Deine Identitäten"],
-        ["Server", "Maximale Clientanzahl (0 = unbegrenzt)"],
-        ["Benachrichtigungen", "Gesprochene Systemmeldungen"],
+        ["Allgemein", "Downloadordner"], ["Audio & Sprache", "Aufnahmegerät"], ["Audio & Sprache", "Ausgabegerät"],
+        ["Streams", "Kamerabildrate"], ["Vollbild-Overlay", "Sprach-Overlay"], ["Tastenkürzel", "Als neues Profil speichern…"],
+        ["Darstellung", "Fensterdeckkraft"], ["Privatsphäre", "Deine Identitäten"],
+        ["Chat", "Zeitstempel"], ["Flüstern", "Flüstern aktivieren"],
+        ["Verbindung", "Maximale Clientanzahl (0 = unbegrenzt)"], ["Benachrichtigungen", "Gesprochene Systemmeldungen"],
     ];
     for (const [tab, label] of pages) {
         await page.getByRole("tab", { name: tab, exact: true }).click();
         await expect(page.locator("#settings-content").getByText(label, { exact: true })).toBeVisible();
-        if (tab === "Sicherheit") {
+        if (tab === "Privatsphäre") {
             await expect(page.getByText("My identity", { exact: false })).toBeVisible();
             await page.screenshot({ path: testInfo.outputPath("settings-german-security.png") });
         }
@@ -4252,7 +4254,7 @@ test("client language translates every settings page and persists on Apply @a11y
         return table.getBoundingClientRect().right <= content.getBoundingClientRect().right;
     })).toBe(true);
     await page.getByRole("textbox", { name: "Einstellungen suchen", exact: true }).fill("Lautstärke");
-    await expect(page.locator(".set-search-hit").first()).toContainText("Wiedergabe");
+    await expect(page.locator(".set-search-hit").first()).toContainText("Audio & Sprache");
     await page.getByRole("button", { name: "Abbrechen", exact: true }).click();
     await page.evaluate(() => window.__noxa.openSettings());
     await expect(page.getByRole("combobox", { name: "Sprache", exact: true })).toHaveValue("de");
@@ -4261,7 +4263,7 @@ test("client language translates every settings page and persists on Apply @a11y
     expect(await page.evaluate(() => window.__noxa.state.settings.language)).toBe("de");
     await page.evaluate(() => window.__noxa.openSettings());
     await page.getByRole("combobox", { name: "Sprache", exact: true }).selectOption("en");
-    await page.getByRole("button", { name: "OK", exact: true }).click();
+    await page.getByRole("button", { name: "Fertig", exact: true }).click();
     await page.evaluate(() => window.__noxa.openSettings());
     await expect(page.getByRole("dialog", { name: "Settings", exact: true })).toBeVisible();
     await expect(page.getByRole("combobox", { name: "Language", exact: true })).toHaveValue("en");
@@ -4273,7 +4275,7 @@ test("notification settings group controls and keep device selection shared @a11
     const output = page.locator(".notification-output");
     await expect(output.getByRole("button", { name: "Test spoken message", exact: true })).toBeVisible();
     await output.getByRole("combobox", { name: "Output device", exact: true }).selectOption("speaker-usb");
-    await page.getByRole("tab", { name: "Playback", exact: true }).click();
+    await page.getByRole("tab", { name: "Audio & voice", exact: true }).click();
     await expect(page.getByRole("combobox", { name: "Output device", exact: true })).toHaveValue("speaker-usb");
     await page.getByRole("tab", { name: "Notifications", exact: true }).click();
     await expect(page.locator(".notification-event-speech")).not.toHaveAttribute("open");
@@ -5295,7 +5297,7 @@ test("tray follows detected self speech, input/output mute, and voice teardown w
         }));
     });
     const flags = () => page.evaluate(() => window.__callArgs.SetTrayVoiceState?.at(-1));
-    await expect.poll(flags).toEqual([true, false, false]);
+    await expect.poll(flags).toEqual([true, false, false, true]);
     const count = await page.evaluate(() => window.__calls.SetTrayVoiceState);
     await page.evaluate(() => {
         for (let i = 0; i < 20; i++) window.__noxa.renderTree();
@@ -5305,9 +5307,9 @@ test("tray follows detected self speech, input/output mute, and voice teardown w
     });
     expect(await page.evaluate(() => window.__calls.SetTrayVoiceState)).toBe(count);
     await page.locator("#voice-deafen").click();
-    await expect.poll(flags).toEqual([false, true, true]);
+    await expect.poll(flags).toEqual([false, true, true, true]);
     await page.locator("#voice-deafen").click();
-    await expect.poll(flags).toEqual([false, false, false]);
+    await expect.poll(flags).toEqual([false, false, false, true]);
     // Restoring the microphone must not revive speech from before deafen.
     const speak = () => page.evaluate(() => {
         for (const cb of window.__events.event) cb(JSON.stringify({
@@ -5315,19 +5317,20 @@ test("tray follows detected self speech, input/output mute, and voice teardown w
         }));
     });
     await speak();
-    await expect.poll(flags).toEqual([true, false, false]);
+    await expect.poll(flags).toEqual([true, false, false, true]);
     await page.locator("#voice-mute").click();
-    await expect.poll(flags).toEqual([false, true, false]);
+    await expect.poll(flags).toEqual([false, true, false, true]);
     await page.locator("#voice-deafen").click();
-    await expect.poll(flags).toEqual([false, true, true]);
+    await expect.poll(flags).toEqual([false, true, true, true]);
     await page.locator("#voice-deafen").click();
-    await expect.poll(flags).toEqual([false, true, false]);
+    await expect.poll(flags).toEqual([false, true, false, true]);
     await page.locator("#voice-mute").click();
-    await expect.poll(flags).toEqual([false, false, false]);
+    await expect.poll(flags).toEqual([false, false, false, true]);
     await speak();
-    await expect.poll(flags).toEqual([true, false, false]);
+    await expect.poll(flags).toEqual([true, false, false, true]);
+    // Leaving voice (teardown) reports "not in a channel" for the gray icon.
     await page.evaluate(() => window.__noxa.resetVoiceSession());
-    await expect.poll(flags).toEqual([false, false, false]);
+    await expect.poll(flags).toEqual([false, false, false, false]);
 });
 
 test("deafen disables microphone transmission and preserves manual mute when restored", async ({ page }) => {
@@ -5987,7 +5990,7 @@ test("refreshes capture and playback device lists on demand", async ({ page }) =
     await expect(captureSelect.getByRole("option", { name: "Studio Mic" })).toHaveCount(1);
     await expect(captureSelect).toHaveValue("mic-usb");
 
-    await page.getByRole("tab", { name: /Playback/ }).click();
+    await page.getByRole("tab", { name: "Audio & voice", exact: true }).click();
     const playbackRow = page.locator("#settings-content .set-row").filter({ hasText: "Output device" });
     const playbackSelect = playbackRow.locator("select");
     await expect(playbackSelect).toHaveAccessibleName("Output device");
@@ -6257,7 +6260,7 @@ test("retries a missing or disconnected microphone without interrupting video or
         for (const callback of window.__events.event || []) callback(moved);
     });
 
-    await expect(page.locator("#voice-status")).toHaveText("voice on");
+    await expect(page.locator("#voice-status")).toHaveText("Voice connected");
     expect(await page.evaluate(() => window.__cameraRequests)).toBe(0);
     await expect(page.locator("#local-video")).toBeHidden();
     await page.getByRole("button", { name: "Camera off — click to turn on", exact: true }).click();
@@ -6359,7 +6362,7 @@ test("camera stays off on joins and reconnects, and discards a late enable reque
         v.state.channels = [{ ChannelID: 42, Name: "Lobby" }];
         await v.ensureVoiceForChannel();
     });
-    await expect(page.locator("#voice-status")).toHaveText("voice on");
+    await expect(page.locator("#voice-status")).toHaveText("Voice connected");
     expect(await page.evaluate(() => window.__cameraRequests)).toBe(0);
     const enable = page.getByRole("button", { name: "Camera off — click to turn on", exact: true });
     await enable.click();
@@ -6377,7 +6380,7 @@ test("camera stays off on joins and reconnects, and discards a late enable reque
         window.__cameraRemote = new RTCPeerConnection();
         await v.ensureVoiceForChannel();
     });
-    await expect(page.locator("#voice-status")).toHaveText("voice on");
+    await expect(page.locator("#voice-status")).toHaveText("Voice connected");
     await expect(page.locator("#local-video")).toBeHidden();
     expect(await page.evaluate(() => window.__enabledCameraTrack.readyState)).toBe("ended");
     expect(await page.evaluate(() => window.__cameraRequests)).toBe(2);
@@ -6528,7 +6531,7 @@ for (const failure of ["failRead", "failCaps", "failOffer"]) {
             window.__mediaUpdate.limits = { video_max_width: 320, video_max_height: 180, video_max_bitrate: 1000000 };
             window.__emitLimits();
         }, failure);
-        await expect(page.locator("#voice-status")).toHaveText("voice unavailable");
+        await expect(page.locator("#voice-status")).toHaveText("Voice unavailable");
         expect(await page.evaluate(() => ({ state: window.__mediaUpdate.track.readyState, peer: window.__noxa.state.pc, limits: window.__noxa.state.mediaLimits })))
             .toEqual({ state: "ended", peer: null, limits: null });
         expect(errors).toEqual([]);
@@ -6577,7 +6580,7 @@ test("live media update timeout tears down its peer and late completion leaves a
     await page.evaluate(() => { window.__mediaUpdate.holdRead = true; window.__emitLimits(); });
     await expect.poll(() => page.evaluate(() => typeof window.__mediaUpdate.finishRead)).toBe("function");
     await page.clock.fastForward(10001);
-    await expect(page.locator("#voice-status")).toHaveText("voice unavailable");
+    await expect(page.locator("#voice-status")).toHaveText("Voice unavailable");
     expect(await page.evaluate(() => window.__mediaUpdate.track.readyState)).toBe("ended");
     await page.evaluate(() => {
         const state = window.__noxa.state;
@@ -6610,7 +6613,7 @@ for (const stage of ["queue", "constraints", "offer"]) {
         }, stage);
         await expect.poll(() => page.evaluate(stage => typeof window.__mediaUpdate[stage === "offer" ? "finishOffer" : "finishWork"], stage)).toBe("function");
         await page.clock.fastForward(10001);
-        await expect(page.locator("#voice-status")).toHaveText("voice unavailable");
+        await expect(page.locator("#voice-status")).toHaveText("Voice unavailable");
         expect(await page.evaluate(() => window.__mediaUpdate.track.readyState)).toBe("ended");
         await page.evaluate(stage => window.__mediaUpdate[stage === "offer" ? "finishOffer" : "finishWork"](), stage);
         await expect.poll(() => page.evaluate(() => window.__noxa.state.pc)).toBeNull();
@@ -6639,7 +6642,7 @@ test("live media update waits for startup's offer before rebuilding", async ({ p
         await window.__mediaUpdate.start;
     });
     await expect.poll(() => page.evaluate(() => window.__mediaUpdate.offers.length)).toBe(2);
-    await expect(page.locator("#voice-status")).toHaveText("voice on");
+    await expect(page.locator("#voice-status")).toHaveText("Voice connected");
 });
 
 test("live media timeout releases startup ownership before an old offer finishes", async ({ page }) => {
@@ -6655,16 +6658,16 @@ test("live media timeout releases startup ownership before an old offer finishes
     await expect.poll(() => page.evaluate(() => typeof window.__mediaUpdate.finishOffer)).toBe("function");
     await page.evaluate(() => { window.__mediaUpdate.finishOldOffer = window.__mediaUpdate.finishOffer; window.__emitLimits(); });
     await page.clock.fastForward(10001);
-    await expect(page.locator("#voice-status")).toHaveText("voice unavailable");
+    await expect(page.locator("#voice-status")).toHaveText("Voice unavailable");
     await page.evaluate(() => { window.__mediaUpdate.nextStart = window.__noxa.ensureVoiceForChannel(); });
     await expect.poll(() => page.evaluate(() => window.__mediaUpdate.offers.length)).toBe(2);
     await page.evaluate(async () => {
         window.__mediaUpdate.finishOldOffer();
         await window.__mediaUpdate.firstStart;
     });
-    await expect(page.locator("#voice-status")).toHaveText("voice connecting…");
+    await expect(page.locator("#voice-status")).toHaveText("Connecting voice…");
     await page.evaluate(async () => { window.__mediaUpdate.finishOffer(); await window.__mediaUpdate.nextStart; });
-    await expect(page.locator("#voice-status")).toHaveText("voice on");
+    await expect(page.locator("#voice-status")).toHaveText("Voice connected");
     expect(await page.evaluate(() => window.__mediaUpdate.offers.length)).toBe(2);
 });
 
@@ -6681,7 +6684,7 @@ test("voice startup limits deadline releases microphone capture before any peer 
     await expect.poll(() => page.evaluate(() => typeof window.__mediaUpdate.finishRead)).toBe("function");
     await page.evaluate(() => window.__emitLimits());
     await page.clock.fastForward(10001);
-    await expect(page.locator("#voice-status")).toHaveText("voice unavailable");
+    await expect(page.locator("#voice-status")).toHaveText("Voice unavailable");
     expect(await page.evaluate(() => window.__mediaUpdate.track.readyState)).toBe("ended");
     await page.evaluate(async () => { window.__mediaUpdate.finishRead({ video_max_bitrate: 100 }); await window.__mediaUpdate.start; });
     expect(await page.evaluate(() => window.__noxa.state.pc)).toBeNull();
@@ -6758,7 +6761,7 @@ test("media-limit bridge failure releases capture and exits connecting state", a
         } });
         await v.ensureVoiceForChannel();
     });
-    await expect(page.locator("#voice-status")).toHaveText("voice unavailable");
+    await expect(page.locator("#voice-status")).toHaveText("Voice unavailable");
     expect(await page.evaluate(() => window.__limitsCapture.getTracks()[0].readyState)).toBe("ended");
     expect(await page.evaluate(() => window.__noxa.state.mediaLimits)).toBeNull();
 });
@@ -6782,9 +6785,9 @@ test("camera settings preview requires an explicit test and releases capture on 
     await page.getByRole("button", { name: "Stop camera test", exact: true }).click();
     expect(await page.evaluate(() => window.__previewTrack.readyState)).toBe("ended");
     await start.click();
-    await page.locator('[data-page="playback"]').click();
+    await page.locator('[data-page="audio"]').click();
     expect(await page.evaluate(() => window.__previewTrack.readyState)).toBe("ended");
-    await page.locator('[data-page="camera"]').click();
+    await page.locator('[data-page="streams"]').click();
     await start.click();
     await page.getByRole("button", { name: "Cancel", exact: true }).click();
     expect(await page.evaluate(() => window.__previewTrack.readyState)).toBe("ended");
@@ -7677,18 +7680,18 @@ test("camera settings have their own searchable section and preserve drafts acro
         window.__noxa.openSettings("capture");
     });
     await expect(page.getByRole("button", { name: "Test camera", exact: true })).toHaveCount(0);
-    const capture = page.getByRole("tab", { name: "Capture", exact: true });
+    const capture = page.getByRole("tab", { name: "Audio & voice", exact: true });
     await capture.focus();
     await page.keyboard.press("ArrowDown");
-    await expect(page.getByRole("tab", { name: "Camera", exact: true })).toBeFocused();
+    await expect(page.getByRole("tab", { name: "Streams", exact: true })).toBeFocused();
     await page.keyboard.press("Enter");
     await page.getByLabel("Camera frame rate", { exact: true }).selectOption("60");
     await capture.click();
     await page.getByLabel("Search settings", { exact: true }).fill("camera frame rate");
     const hit = page.locator(".set-search-hit");
-    await expect(hit).toContainText("Camera");
+    await expect(hit).toContainText("Streams");
     await hit.click();
-    await expect(page.getByRole("tab", { name: "Camera", exact: true })).toHaveAttribute("aria-selected", "true");
+    await expect(page.getByRole("tab", { name: "Streams", exact: true })).toHaveAttribute("aria-selected", "true");
     await expect(page.getByLabel("Camera frame rate", { exact: true })).toHaveValue("60");
     await page.locator("#set-apply").click();
     await expect(page.locator(".settings-save-status")).toHaveText("Changes applied");
@@ -7702,17 +7705,18 @@ test("camera settings have their own searchable section and preserve drafts acro
 test("settings explain when saved changes and temporary previews take effect", async ({ page }) => {
     await page.evaluate(() => window.__noxa.openSettings("capture"));
     await expect(page.getByLabel("Echo cancellation", { exact: true })).toHaveAccessibleDescription("Applies immediately after saving.");
-    await expect(page.locator("#settings-content")).not.toContainText("next reconnects");
-    await page.getByRole("tab", { name: "Camera", exact: true }).click();
-    await expect(page.getByLabel("Camera frame rate", { exact: true })).toHaveAccessibleDescription("After saving, start or restart the camera to use these settings. Restart the local test to preview them.");
+    await expect(page.locator('#settings-content [data-section="input"]')).not.toContainText("next reconnects");
+    await page.getByRole("tab", { name: "Streams", exact: true }).click();
+    await expect(page.getByLabel("Camera frame rate", { exact: true })).toHaveAccessibleDescription(/After saving, start or restart the camera to use these settings\. Restart the local test to preview them\.$/);
     await expect(page.locator("#settings-content")).toContainText("Preview only — stays on this device and does not start a call.");
-    await page.getByRole("tab", { name: "Playback", exact: true }).click();
+    await page.getByRole("tab", { name: "Audio & voice", exact: true }).click();
     await expect(page.getByLabel("Voice limiter (compressor)", { exact: true })).toHaveAccessibleDescription("Requires voice reconnect after saving.");
-    await page.getByRole("tab", { name: "Application", exact: true }).click();
-    await expect(page.getByLabel("Window opacity", { exact: true })).toHaveAccessibleDescription("Preview now; Apply or OK keeps the change. Cancel restores the saved appearance.");
+    await page.getByRole("tab", { name: "Appearance", exact: true }).click();
+    await expect(page.getByLabel("Window opacity", { exact: true })).toHaveAccessibleDescription("Preview now; Apply or Done keeps the change. Cancel restores the saved appearance.");
+    await page.getByRole("tab", { name: "General", exact: true }).click();
     await expect(page.getByLabel("Check for updates at startup", { exact: true })).toHaveAccessibleDescription("After saving, takes effect at the next app start.");
     await expect(page.getByLabel("Automatically install updates at startup", { exact: true })).toBeChecked();
-    await expect(page.getByLabel("Automatically install updates at startup", { exact: true })).toHaveAccessibleDescription("After saving, takes effect at the next app start.");
+    await expect(page.getByLabel("Automatically install updates at startup", { exact: true })).toHaveAccessibleDescription(/^Downloads updates and restarts noXa when the app starts\..*After saving, takes effect at the next app start\.$/);
 });
 
 test("video CPU pressure respects efficient decoding and discards stale polls", async ({ page }) => {
@@ -8112,7 +8116,7 @@ test.describe("per-tab automatic reconnect", () => {
             for (const cb of window.__events.snapshot) cb(JSON.stringify({ root_channels: [{ ChannelID: 1, Name: "Public1", ParentID: 0,
                 clients: [{ client_id: "alice-other", nickname: "Alice", channel_id: 1 }, { client_id: "bob-other", nickname: "Bob", channel_id: 1 }] }] }));
             document.getElementById("chat-text").value = "Keep this unsent draft";
-            document.getElementById("tree-expand").focus();
+            document.getElementById("channel-create-btn").focus(); // the tree tools are folded away behind the filter toggle
             window.__tabReconnectGate = new Promise(resolve => { window.__finishOverlayRetry = resolve; });
             window.__loseTab("tab-a");
         });
@@ -8841,7 +8845,7 @@ test("removes cascaded deleted channels and displaces every cached member safely
     });
     await expect(page.locator('.channel[data-chid="10"], .channel[data-chid="11"], .channel[data-chid="12"]')).toHaveCount(0);
     await expect(page.locator('.channel[data-chid="20"]')).toHaveCount(1);
-    await expect(page.locator("#voice-status")).toHaveText("voice off");
+    await expect(page.locator("#voice-status")).toHaveText("Voice disconnected");
     await expect(page.locator("#files-pane .fb-list")).toContainText("Join a channel to browse its files");
 
     // Legacy servers send only the parent channel_id. Re-enter the surviving
@@ -8878,7 +8882,7 @@ test("removes cascaded deleted channels and displaces every cached member safely
         expandedDeleted: true,
     });
     await expect(page.locator('.channel[data-chid="20"], .channel[data-chid="21"], .channel[data-chid="22"]')).toHaveCount(0);
-    await expect(page.locator("#voice-status")).toHaveText("voice off");
+    await expect(page.locator("#voice-status")).toHaveText("Voice disconnected");
 });
 
 test("starts voice silently when channel speech is disabled", async ({ page }) => {
@@ -8916,7 +8920,7 @@ test("starts voice silently when channel speech is disabled", async ({ page }) =
     await expect(page.locator("#voice-join")).toHaveCount(0);
     await expect.poll(() => page.evaluate(() => window.__getUserMediaCalls)).toBeGreaterThan(0);
     expect(await page.evaluate(() => window.__playedMedia)).toEqual([]);
-    await expect(page.locator("#voice-status")).toHaveText("voice unavailable");
+    await expect(page.locator("#voice-status")).toHaveText("Voice unavailable");
     await expect(page.locator("#mic-status > span")).toHaveText("Microphone access denied");
 
     const firstCueCount = await page.evaluate(() => window.__playedMedia.length);

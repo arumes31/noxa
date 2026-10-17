@@ -30,7 +30,7 @@ test("settings search selection focuses the matching control and navigation clea
     await page.screenshot({ path: testInfo.outputPath("settings-search-focus.png") });
     await expect(page.getByLabel("Chat max lines", { exact: true })).toBeFocused();
     await page.getByLabel("Search settings", { exact: true }).fill("voice");
-    await page.getByRole("tab", { name: "Camera", exact: true }).click();
+    await page.getByRole("tab", { name: "Streams", exact: true }).click();
     await expect(page.getByLabel("Search settings", { exact: true })).toHaveValue("");
 });
 
@@ -53,20 +53,20 @@ test("settings controls remain reachable in a narrow window", async ({ page }, t
     await page.setViewportSize({ width: 500, height: 780 });
     await page.evaluate(() => window.__noxa.openSettings("capture"));
     await expect(page.getByRole("tablist")).toHaveAttribute("aria-orientation", "horizontal");
-    await page.getByRole("tab", { name: "Capture", exact: true }).focus();
+    await page.getByRole("tab", { name: "Audio & voice", exact: true }).focus();
     await page.keyboard.press("ArrowRight");
-    await expect(page.getByRole("tab", { name: "Camera", exact: true })).toBeFocused();
+    await expect(page.getByRole("tab", { name: "Streams", exact: true })).toBeFocused();
     await page.keyboard.press("ArrowLeft");
     await page.screenshot({ path: testInfo.outputPath("settings-narrow-capture.png") });
     expect(await page.locator("#settings-content").evaluate(content => content.scrollWidth <= content.clientWidth + 1)).toBe(true);
-    await page.getByRole("tab", { name: "Application", exact: true }).click();
+    await page.getByRole("tab", { name: "General", exact: true }).click();
     await page.screenshot({ path: testInfo.outputPath("settings-narrow-application.png") });
     const overflowing = await page.locator("#settings-content").evaluate(content => [...content.querySelectorAll("input,select,textarea,button")].filter(control => control.getBoundingClientRect().right > content.getBoundingClientRect().right).map(control => ({label: control.closest(".set-row")?.querySelector(".set-label")?.textContent || control.textContent, right: control.getBoundingClientRect().right})));
     expect(overflowing).toEqual([]);
 });
 
 test("invalid numeric settings stay local and focus their control before saving", async ({ page }) => {
-    await page.evaluate(() => window.__noxa.openSettings("application"));
+    await page.evaluate(() => window.__noxa.openSettings("chat"));
     const lines = page.getByLabel("Chat max lines", { exact: true });
     for (const value of ["", "9", "5001", "12.5"]) {
         await lines.fill(value);
@@ -74,8 +74,8 @@ test("invalid numeric settings stay local and focus their control before saving"
         await expect(lines).toBeFocused();
         expect(await page.evaluate(() => window.__auditSaved.length)).toBe(0);
     }
-    await page.getByRole("tab", { name: "Camera", exact: true }).click();
-    await page.getByRole("tab", { name: "Application", exact: true }).click();
+    await page.getByRole("tab", { name: "Streams", exact: true }).click();
+    await page.getByRole("tab", { name: "Chat", exact: true }).click();
     await expect(lines).toHaveValue("200");
     await lines.fill("777");
     await page.locator("#set-apply").click();
@@ -114,7 +114,7 @@ test("starting a different hotkey capture restores the previous binding label", 
 });
 
 test("theme swatches and User CSS preserve each other's edits", async ({ page }) => {
-    await page.evaluate(() => window.__noxa.openSettings("application"));
+    await page.evaluate(() => window.__noxa.openSettings("appearance"));
     const css = page.getByLabel("User CSS", { exact: true });
     const background = page.getByLabel("Background", { exact: true });
     await background.fill("#123456");

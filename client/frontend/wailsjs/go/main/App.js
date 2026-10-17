@@ -342,6 +342,10 @@ export function DMSearchForContext(arg1, arg2, arg3, arg4) {
   return window['go']['main']['App']['DMSearchForContext'](arg1, arg2, arg3, arg4);
 }
 
+export function DefaultSettingsSnapshot() {
+  return window['go']['main']['App']['DefaultSettingsSnapshot']();
+}
+
 export function DeleteIdentity(arg1, arg2) {
   return window['go']['main']['App']['DeleteIdentity'](arg1, arg2);
 }
@@ -372,6 +376,10 @@ export function DownloadChatAttachment(arg1, arg2, arg3) {
 
 export function DownloadChatAttachmentForTab(arg1, arg2, arg3, arg4) {
   return window['go']['main']['App']['DownloadChatAttachmentForTab'](arg1, arg2, arg3, arg4);
+}
+
+export function DownloadConversationAttachmentForTab(arg1, arg2, arg3, arg4) {
+  return window['go']['main']['App']['DownloadConversationAttachmentForTab'](arg1, arg2, arg3, arg4);
 }
 
 export function DownloadFile(arg1, arg2) {
@@ -786,6 +794,10 @@ export function SaveChatTabLayoutForContext(arg1, arg2) {
   return window['go']['main']['App']['SaveChatTabLayoutForContext'](arg1, arg2);
 }
 
+export function SaveConversationAttachmentForTab(arg1, arg2, arg3, arg4, arg5) {
+  return window['go']['main']['App']['SaveConversationAttachmentForTab'](arg1, arg2, arg3, arg4, arg5);
+}
+
 export function SaveSettings(arg1) {
   return window['go']['main']['App']['SaveSettings'](arg1);
 }
@@ -824,6 +836,10 @@ export function SendChatReply(arg1, arg2, arg3, arg4) {
 
 export function SendChatReplyForTab(arg1, arg2, arg3, arg4, arg5) {
   return window['go']['main']['App']['SendChatReplyForTab'](arg1, arg2, arg3, arg4, arg5);
+}
+
+export function SendConversationTypingForTab(arg1, arg2) {
+  return window['go']['main']['App']['SendConversationTypingForTab'](arg1, arg2);
 }
 
 export function SendConversationForTab(arg1, arg2, arg3, arg4) {
@@ -1006,8 +1022,12 @@ export function SetStreamVideoQualityForTab(arg1, arg2, arg3, arg4, arg5, arg6) 
   return window['go']['main']['App']['SetStreamVideoQualityForTab'](arg1, arg2, arg3, arg4, arg5, arg6);
 }
 
-export function SetTrayVoiceState(arg1, arg2, arg3) {
-  return window['go']['main']['App']['SetTrayVoiceState'](arg1, arg2, arg3);
+export function SetTrayUnread(arg1) {
+  return window['go']['main']['App']['SetTrayUnread'](arg1);
+}
+
+export function SetTrayVoiceState(arg1, arg2, arg3, arg4) {
+  return window['go']['main']['App']['SetTrayVoiceState'](arg1, arg2, arg3, arg4);
 }
 
 export function SetVideoQuality(arg1) {
@@ -1100,6 +1120,10 @@ export function UploadChatAttachment(arg1, arg2, arg3) {
 
 export function UploadChatAttachmentForTab(arg1, arg2, arg3, arg4) {
   return window['go']['main']['App']['UploadChatAttachmentForTab'](arg1, arg2, arg3, arg4);
+}
+
+export function UploadConversationAttachmentForTab(arg1, arg2, arg3, arg4) {
+  return window['go']['main']['App']['UploadConversationAttachmentForTab'](arg1, arg2, arg3, arg4);
 }
 
 export function UploadFile(arg1, arg2, arg3) {

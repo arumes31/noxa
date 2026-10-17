@@ -646,6 +646,7 @@ export function initMenu() {
             tooltip: t("menu.opacityUnsupported"),
         }),
         divider(),
+        menuAction(t("menu.themeArctic"), () => setTheme("arctic")),
         menuAction(t("menu.themeDark"), () => setTheme("dark")),
         menuAction(t("menu.themeLight"), () => setTheme("light")),
         menuAction(t("menu.themeContrast"), () => setTheme("hc")),
