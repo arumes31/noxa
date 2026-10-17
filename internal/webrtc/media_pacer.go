@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"io"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -22,6 +23,18 @@ import (
 const mediaPacerPackets = videoReorderPackets
 const mediaPacerBytes = videoReorderBytes
 const mediaPacerLifetime = videoReorderWait + 500*time.Millisecond
+
+// mediaPacerSustainedBurst is how far above the estimate the 1.5x pacing
+// factor may run before output is held to the estimate itself, while the
+// source persistently outruns the estimate.
+const mediaPacerSustainedBurst = 40 * time.Millisecond
+
+// Source overload is judged on the median of short input bins, so a one-off
+// release (a repaired reorder gap, a keyframe) can still drain at 1.5x while
+// a source that is steadily faster than this receiver's estimate cannot.
+const mediaInputBin = 100 * time.Millisecond
+const mediaInputBins = 10
+const mediaOverloadRatio = 1.2
 const mediaAudioPackets = 256
 const mediaAudioBytes = 128 * 1024
 const mediaAudioLifetime = 100 * time.Millisecond
@@ -85,6 +98,9 @@ type mediaPacer struct {
 	diagnostics     mediaPacerCounters           // protected by mu; video only
 	queuedRepairs   map[mediaRepairKey]struct{}  // protected by mu; bounded by video queue
 	rtxSequences    map[uint32]*mediaRTXSequence // protected by mu; bounded, never evicted
+	inputBins       [mediaInputBins]int          // protected by mu; primary video bytes per bin
+	inputBin        int
+	inputBinStart   time.Time
 	videoStarted    atomic.Bool
 	startVideoProbe func(int) bool // installed before binding a stream
 }
@@ -225,9 +241,35 @@ func (p *mediaPacer) Write(header *rtp.Header, payload []byte, attrs interceptor
 		default: // A wake-up is already pending; the worker drains everything.
 		}
 	} else {
+		if packet.kind == mediaPacketPrimary {
+			p.advanceInputLocked(time.Now())
+			p.inputBins[p.inputBin] += size
+		}
 		p.pushLocked(packet)
 	}
 	return size, nil
+}
+
+func (p *mediaPacer) advanceInputLocked(now time.Time) {
+	if p.inputBinStart.IsZero() || now.Sub(p.inputBinStart) >= mediaInputBin*mediaInputBins {
+		clear(p.inputBins[:])
+		p.inputBin, p.inputBinStart = 0, now
+		return
+	}
+	for now.Sub(p.inputBinStart) >= mediaInputBin {
+		p.inputBin = (p.inputBin + 1) % mediaInputBins
+		p.inputBins[p.inputBin] = 0
+		p.inputBinStart = p.inputBinStart.Add(mediaInputBin)
+	}
+}
+
+// sourceOverloadedLocked reports whether the median video input rate over the
+// last second exceeds the estimate by mediaOverloadRatio.
+func (p *mediaPacer) sourceOverloadedLocked(now time.Time, estimate float64) bool {
+	p.advanceInputLocked(now)
+	bins := p.inputBins
+	slices.Sort(bins[:])
+	return float64(bins[mediaInputBins/2])/mediaInputBin.Seconds() > mediaOverloadRatio*estimate
 }
 
 func (p *mediaPacer) pushAudioLocked(packet pacedPacket) {
@@ -283,7 +325,8 @@ func (p *mediaPacer) run() {
 	ticker := time.NewTicker(5 * time.Millisecond)
 	defer ticker.Stop()
 	last := time.Now()
-	budget := float64(0)
+	budget := float64(0)    // burst credit at the 1.5x pacing factor
+	sustained := float64(0) // average credit at 1.0x the estimate
 	for {
 		select {
 		case <-p.stop:
@@ -294,12 +337,26 @@ func (p *mediaPacer) run() {
 			// bytes share the estimated path, so they are reserved out of the
 			// video budget: video receives the estimate minus voice.
 			// Bound catch-up after a stalled socket; never release a huge burst.
-			bytesPerSecond := float64(p.bitrate) * 1.5 / 8
-			budget = min(budget+min(now.Sub(last), 50*time.Millisecond).Seconds()*bytesPerSecond, 0.05*bytesPerSecond)
+			elapsed := min(now.Sub(last), 50*time.Millisecond).Seconds()
+			estimate := float64(p.bitrate) / 8
+			bytesPerSecond := estimate * 1.5
+			budget = min(budget+elapsed*bytesPerSecond, 0.05*bytesPerSecond)
+			// The 1.5x factor drains frame bursts quickly, but a source that
+			// outruns the estimate (one slow viewer of a 1080p60 share) must
+			// not be forwarded at 1.5x indefinitely: that keeps a standing
+			// queue and loss at the viewer's bottleneck, delaying and dropping
+			// its voice. Sustained output is held to the estimate.
+			sustained = min(sustained+elapsed*estimate, mediaPacerSustainedBurst.Seconds()*estimate)
+			overloaded := p.sourceOverloadedLocked(now, estimate)
+			if !overloaded {
+				sustained = max(sustained, 0) // Catch-up debt only counts under overload.
+			}
 			// The voice debit is bounded so a long silence-free talk spurt on a
 			// tiny estimate cannot build unbounded video debt; video's own packet
 			// debt is never forgiven.
-			budget = max(budget-float64(p.audioSent.Swap(0)), min(budget, -0.05*bytesPerSecond))
+			voice := float64(p.audioSent.Swap(0))
+			budget = max(budget-voice, min(budget, -0.05*bytesPerSecond))
+			sustained = max(sustained-voice, min(sustained, -mediaPacerSustainedBurst.Seconds()*estimate))
 			last = now
 			for work := p.count; work > 0 && p.count > 0 && !p.closed; work-- {
 				front := &p.queue[p.head]
@@ -313,7 +370,7 @@ func (p *mediaPacer) run() {
 					p.popLocked()
 					continue
 				}
-				if budget <= 0 {
+				if budget <= 0 || (overloaded && sustained <= 0) {
 					break
 				}
 				packet := p.popLocked()
@@ -322,6 +379,7 @@ func (p *mediaPacer) run() {
 					// Only an authorized write attempt spends network pacing credit.
 					// Final permission/ticket rejection never reaches the writer.
 					budget -= float64(packet.size)
+					sustained -= float64(packet.size)
 				}
 				p.mu.Lock()
 			}
