@@ -24,7 +24,9 @@ export function trackVoicePlayback(audio) {
     }
 }
 
-export function renderVoiceMessage(container, text, { tabID, channelID = 0, isCurrent = () => true }) {
+// download/upload let a surface with its own attachment storage (private
+// groups) reuse the recorder and player unchanged.
+export function renderVoiceMessage(container, text, { tabID, channelID = 0, isCurrent = () => true, download = null }) {
     const match = /^\[file:([^\]]+)\]$/.exec(text || '');
     if (!match) return false;
     const ref = parseFileRef(match[1]);
@@ -49,7 +51,7 @@ export function renderVoiceMessage(container, text, { tabID, channelID = 0, isCu
         // continue at the player, without stealing focus if they move elsewhere.
         load.setAttribute('aria-disabled', 'true'); status.textContent = t('voiceMessage.loading');
         try {
-            const data = await window.go.main.App.DownloadChatAttachmentForTab(tabID, channelID, ref.storage, ref.key);
+            const data = download ? await download(ref) : await window.go.main.App.DownloadChatAttachmentForTab(tabID, channelID, ref.storage, ref.key);
             if (!isCurrent() || !wrap.isConnected) return;
             if (data.length > Math.ceil(VOICE_MAX_BYTES / 3) * 4 || !isBase64Payload(data)) throw new Error('Invalid audio attachment');
             const audio = document.createElement('audio'); audio.controls = true; audio.preload = 'metadata'; audio.setAttribute('aria-label', t('voiceMessage.player'));
@@ -126,7 +128,8 @@ function openVoiceMessage(context) {
         try {
             const data = await asBase64(result.blob);
             if (!current()) return;
-            if (!token) token = await window.go.main.App.UploadChatAttachmentForTab(context.tabID, context.channelID || 0, `voice-${crypto.randomUUID()}.${result.extension}`, data);
+            const name = `voice-${crypto.randomUUID()}.${result.extension}`;
+            if (!token) token = context.upload ? await context.upload(name, data) : await window.go.main.App.UploadChatAttachmentForTab(context.tabID, context.channelID || 0, name, data);
             if (!current()) return;
             const error = await context.send(token);
             if (error) throw new Error(error);

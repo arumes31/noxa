@@ -190,6 +190,8 @@ export function DownloadChatAttachment(arg1:number,arg2:string,arg3:string):Prom
 
 export function DownloadChatAttachmentForTab(arg1:string,arg2:number,arg3:string,arg4:string):Promise<string>;
 
+export function DownloadConversationAttachmentForTab(arg1:string,arg2:string,arg3:string,arg4:string):Promise<string>;
+
 export function DownloadFile(arg1:number,arg2:string):Promise<string>;
 
 export function DownloadFileProgress(arg1:string,arg2:number,arg3:string,arg4:string,arg5:string,arg6:number):Promise<string>;
@@ -396,6 +398,8 @@ export function SaveChatAttachmentForTab(arg1:string,arg2:number,arg3:string,arg
 
 export function SaveChatTabLayoutForContext(arg1:main.DMHistoryContext,arg2:main.ChatTabLayout):Promise<string>;
 
+export function SaveConversationAttachmentForTab(arg1:string,arg2:string,arg3:string,arg4:string,arg5:string):Promise<string>;
+
 export function SaveSettings(arg1:main.Settings):Promise<string>;
 
 export function SavedMessagesForTab(arg1:string,arg2:main.SavedMessageRequest):Promise<main.SavedMessageResult>;
@@ -553,6 +557,8 @@ export function UpdateGamingOverlay(arg1:main.GamingOverlaySnapshot):Promise<str
 export function UploadChatAttachment(arg1:number,arg2:string,arg3:string):Promise<string>;
 
 export function UploadChatAttachmentForTab(arg1:string,arg2:number,arg3:string,arg4:string):Promise<string>;
+
+export function UploadConversationAttachmentForTab(arg1:string,arg2:string,arg3:string,arg4:string):Promise<string>;
 
 export function UploadFile(arg1:number,arg2:string,arg3:string):Promise<string>;
 

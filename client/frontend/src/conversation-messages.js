@@ -1,4 +1,7 @@
 export const conversationEnglish = {
+    "group.attach": "Attach files", "group.emoji": "Insert emoji", "group.removeAttachment": "Remove {name}",
+    "group.tabTitle": "Private group · {name}", "group.messagePreview": "{name} · {sender}: {text}",
+    "group.offlineBatch": "{count} unread messages in {name}",
     "group.invitations": "{count} pending invitations", "group.noMatches": "No matching private groups", "group.callStatus": "Call · {count}",
     "group.resize": "Resize channels and private groups",
     "group.back": "Back to channel", "group.noGroups": "No private groups yet.", "group.unread": "{count} unread messages",
@@ -8,6 +11,9 @@ export const conversationEnglish = {
     "group.remove": "Remove", "group.transfer": "Make owner", "group.leave": "Leave group", "group.rename": "Rename", "group.close": "Close", "group.refresh": "Refresh", "group.send": "Send", "group.message": "Message this group", "group.older": "Load older messages", "group.loading": "Loading…", "group.failed": "Could not complete the request: {error}", "group.private": "Messages are encrypted for accepted members. New members see messages sent after they join.", "group.leaveOwner": "Transfer ownership or remove the other members before leaving.", "group.confirmRemove": "Remove {name} from this group?", "group.confirmTransfer": "Make {name} the group owner?", "group.confirmLeave": "Leave this private group?", "group.blocked": "Message hidden from blocked member", "group.sent": "Message sent", "group.noMessages": "No messages yet.",
 };
 export const conversationGerman = {
+    "group.attach": "Dateien anhängen", "group.emoji": "Emoji einfügen", "group.removeAttachment": "{name} entfernen",
+    "group.tabTitle": "Private Gruppe · {name}", "group.messagePreview": "{name} · {sender}: {text}",
+    "group.offlineBatch": "{count} ungelesene Nachrichten in {name}",
     "group.invitations": "{count} offene Einladungen", "group.noMatches": "Keine passenden privaten Gruppen", "group.callStatus": "Anruf · {count}",
     "group.resize": "Größe von Kanälen und privaten Gruppen anpassen",
     "group.back": "Zurück zum Kanal", "group.noGroups": "Noch keine privaten Gruppen.", "group.unread": "{count} ungelesene Nachrichten",

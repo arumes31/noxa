@@ -22,7 +22,7 @@ import { mountContextMenu, closeContextMenu, contextMenuKey } from "./context-me
 import { createPoll, renderPoll } from "./polls.js";
 import { parsePoll } from "./poll-state.js";
 import { closeDiscussions, initDiscussions, openDiscussions, renderForumChannel, resetDiscussions } from "./discussions.js";
-import { closeConversations, initConversations, isPrivateGroupActive, resetConversations } from "./conversations.js";
+import { closeConversations, initConversations, isPrivateGroupActive, openConversationsAt, resetConversations, viewedConversationID } from "./conversations.js";
 import { sessionUserID } from "./session-identity.js";
 import { chatEnglish } from "./chat-messages.js";
 import { renderMarkdown, escapeHTML, EMOJI } from "./markdown.js";
@@ -74,6 +74,12 @@ let unreadEffects = null;
 let chatTabs = null;
 let tabLayoutOwner = null;
 const pmTabs = new Map(); // uid -> {uid, nick, unread, unreadAt, offline, pendingRead}
+// Private groups appear in the same tab strip as DMs. Unread counts come from
+// the server's per-member read state, so a tab is never double counted when a
+// live event and a list refresh both report the same message.
+const groupTabs = new Map(); // groupID -> {id, name, unread, unreadAt, latest}
+const closedGroupTabs = new Map(); // tabID:groupID -> newest message id when closed
+const GROUP_TAB = "grp:";
 const chanTabs = new Map(); // channelID -> {id}; derived from SubscriptionState
 let pendingChannelTab = 0; // activate only after the server confirms subscription
 let channelTabRequest = 0;
@@ -850,25 +856,26 @@ const INLINE_MAX_B64 = 8 * 1024 * 1024; // ~6 MB of media rendered inline
 // attachFileRef takes the RAW capture and parses it here rather than in
 // renderBody, so the file key never crosses the split boundary. The key goes
 // straight into the Go call: never into textContent, an attribute or a src.
-function attachFileRef(container, m, cap) {
+function attachFileRef(container, m, cap, source = null) {
     const ref = parseFileRef(cap);
     if (!ref.valid) {
         container.appendChild(document.createTextNode(`[file:${cap}]`));
         return;
     }
-    const isDM = m.isDM || !m.channelID || m.channelID === "0" || m.channelID === 0;
-    const chID = isDM ? 0 : Number(m.channelID);
+    if (!source) {
+        const isDM = m.isDM || !m.channelID || m.channelID === "0" || m.channelID === 0;
+        source = chatAttachmentSource(isDM ? 0 : Number(m.channelID));
+    }
     const name = ref.name;
     const ext = (name.split(".").pop() || "").toLowerCase();
     const wrap = document.createElement("span");
     wrap.className = "msg-file";
-    const previewScope = captureScope(() => readInlineAttachmentScope(chID));
-    const previewIsCurrent = () => inlineAttachmentScopeIsCurrent(previewScope, wrap);
+    const previewIsCurrent = () => source.previewCurrent(wrap);
     const inlineImage = IMAGE_EXTS.includes(ext);
     const inlineVideo = VIDEO_EXTS.includes(ext);
     if (inlineImage || inlineVideo) {
         wrap.textContent = t(inlineVideo ? "chat.loadingVideo" : "chat.loadingImage", { name });
-        app().DownloadChatAttachmentForTab(previewScope.tabID, chID, ref.storage, ref.key).then((b64) => {
+        Promise.resolve().then(() => source.download(ref)).then((b64) => {
             // Check before touching the wrapper or constructing a renderer data
             // URL: a completed request belongs to the scope that launched it.
             if (!previewIsCurrent()) return;
@@ -881,7 +888,7 @@ function attachFileRef(container, m, cap) {
             // oversized media stays a download chip rather than wedging the
             // webview (100).
             if (b64.length > INLINE_MAX_B64) {
-                wrap.appendChild(downloadChip(chID, ref, name, t("chat.tooLargePreview")));
+                wrap.appendChild(downloadChip(source, ref, name, t("chat.tooLargePreview")));
                 return;
             }
             const el = inlineVideo
@@ -913,38 +920,84 @@ function attachFileRef(container, m, cap) {
             if (!previewIsCurrent()) return;
             wrap.textContent = "";
             if (String(err).includes("too large to preview")) {
-                wrap.appendChild(downloadChip(chID, ref, name, t("chat.tooLargePreview")));
+                wrap.appendChild(downloadChip(source, ref, name, t("chat.tooLargePreview")));
             } else {
                 wrap.textContent = "📎 " + name + t("chat.downloadFailed");
             }
         });
     } else {
-        wrap.appendChild(downloadChip(chID, ref, name, ""));
+        wrap.appendChild(downloadChip(source, ref, name, ""));
     }
     container.appendChild(wrap);
+}
+
+// chatAttachmentSource binds channel and DM attachments (scope 0) to the chat
+// view that rendered them. Private groups supply their own source with the
+// same shape, bound to their folder-scoped storage and workspace view.
+function chatAttachmentSource(chID) {
+    const previewScope = captureScope(() => readInlineAttachmentScope(chID));
+    const saveScope = captureScope(() => readAttachmentSaveScope(chID));
+    return {
+        download: ref => app().DownloadChatAttachmentForTab(previewScope.tabID, chID, ref.storage, ref.key),
+        previewCurrent: wrap => inlineAttachmentScopeIsCurrent(previewScope, wrap),
+        save: (ref, name) => app().SaveChatAttachmentForTab(saveScope.tabID, chID, ref.storage, ref.key, name),
+        saveCurrent: () => attachmentSaveScopeIsCurrent(saveScope),
+    };
+}
+
+// renderSharedRichText renders a message body through the exact pipeline of
+// channel and DM rows: escaped markdown with autolinks and remote GIF/image
+// embeds, server emoji, mentions and encrypted [file:...] attachments with
+// inline image/GIF/video previews. Callers handle voice messages first.
+export function renderSharedRichText(container, text, source) {
+    const parts = String(text ?? "").split(/\[file:([^\]]+)\]/);
+    let html = "";
+    for (let i = 0; i < parts.length; i += 2) html += renderMarkdown(parts[i]);
+    container.innerHTML = applyCustomEmoji(html);
+    markMentions(container);
+    for (let i = 1; i < parts.length; i += 2) attachFileRef(container, null, parts[i], source);
+}
+
+// bindSharedLinks gives another message surface the chat log's link policy:
+// links open through the native browser, never by navigating the webview, and
+// hovering shows the same privacy-preserving preview card.
+export function bindSharedLinks(root) {
+    root.addEventListener("click", (e) => {
+        const link = e.target.closest(".md-link");
+        if (!link || !root.contains(link)) return;
+        e.preventDefault();
+        const url = link.getAttribute("data-url");
+        if (url) window.runtime.BrowserOpenURL(url);
+    });
+    root.addEventListener("mouseover", (e) => {
+        const link = e.target.closest(".md-link");
+        if (link && root.contains(link)) scheduleLinkCard(link);
+    });
+    root.addEventListener("mouseout", (e) => {
+        if (e.target.closest(".md-link")) closeLinkCard();
+    });
 }
 
 // downloadChip builds the "📎 name" button. ref carries the attachment key,
 // which is read straight into the Go call and never written to the DOM. Native
 // Go saves the decrypted bytes, so an attachment never becomes a base64 data
 // URL or plaintext buffer in the JavaScript download path.
-function downloadChip(chID, ref, name, suffix) {
-    const scope = captureScope(() => readAttachmentSaveScope(chID));
+function downloadChip(source, ref, name, suffix) {
     const b = document.createElement("button");
     b.className = "file-chip";
     b.textContent = "📎 " + name + suffix;
     b.title = t("chat.downloadName", { name });
     b.onclick = async () => {
-        if (!b.isConnected || b.disabled || !attachmentSaveScopeIsCurrent(scope)) return;
+        if (!b.isConnected || b.disabled || !source.saveCurrent()) return;
         b.disabled = true;
         try {
-            const path = await app().SaveChatAttachmentForTab(scope.tabID, chID, ref.storage, ref.key, name);
-            if (!attachmentSaveScopeIsCurrent(scope)) return;
+            const path = await source.save(ref, name);
+            if (!source.saveCurrent()) return;
             if (path) V().toast(t("chat.saved", { name }));
         } catch (e) {
-            if (attachmentSaveScopeIsCurrent(scope)) V().toast(t("chat.saveFailed", { error: String(e) }), "warn");
+            if (source.saveCurrent()) V().toast(t("chat.saveFailed", { error: String(e) }), "warn");
         } finally {
-            if (attachmentSaveScopeIsCurrent(scope) && b.isConnected) b.disabled = false;
+            if (source.saveCurrent() && b.isConnected) b.disabled = false;
         }
     };
     return b;
@@ -1644,6 +1697,15 @@ async function reopenClosedChat(entry) {
     const current = () => recentlyClosedChats.get(entry.key) === entry && dmHistoryScopeIsCurrent(entry.scope);
     if (!current() || entry.pending) return;
     if (entry.key.startsWith("dm:")) { openPM(entry.key.slice(3), entry.name); return; }
+    if (entry.key.startsWith(GROUP_TAB)) {
+        const groupID = entry.key.slice(GROUP_TAB.length);
+        recentlyClosedChats.delete(entry.key);
+        closedGroupTabs.delete(`${V().state.activeTabID}:${groupID}`);
+        groupTabs.set(groupID, { id: groupID, name: entry.name, unread: 0, unreadAt: undefined, latest: 0 });
+        renderTabs();
+        await openConversationsAt(groupID, 0, () => dmHistoryScopeIsCurrent(entry.scope));
+        return;
+    }
     const id = Number(entry.key.slice(3));
     if (!V().state.channels.some(channel => Number(channel.ChannelID) === id)) {
         recentlyClosedChats.delete(entry.key); renderTabs();
@@ -1721,6 +1783,62 @@ function closePM(uid) {
         return;
     }
     renderTabs();
+}
+
+function closeGroupTab(groupID) {
+    const tab = groupTabs.get(groupID);
+    if (!tab) return;
+    rememberClosedChat(GROUP_TAB + groupID, tab.name);
+    removeTabPin(GROUP_TAB + groupID);
+    closedGroupTabs.set(`${V().state.activeTabID}:${groupID}`, tab.latest || 0);
+    groupTabs.delete(groupID);
+    renderTabs();
+}
+
+// syncGroupTabs mirrors DM tab behaviour for private groups: an unread group
+// message opens a tab (never activating it or taking focus), a closed tab
+// returns only for a newer message, and muted groups never add a tab on their
+// own. An authoritative list also removes tabs of groups the user left.
+export function syncGroupTabs(tabID, generation, groups, uid, { authoritative = false } = {}) {
+    const st = V().state;
+    if (tabID !== st.activeTabID || generation !== st.serverGeneration || !Array.isArray(groups)) return;
+    const muted = new Set(st.settings?.muted_conversations || []);
+    const accepted = new Map();
+    for (const group of groups) {
+        const member = group?.members?.find(member => member.unique_id === uid);
+        if (typeof group?.id === "string" && member && !member.pending) accepted.set(group.id, group);
+    }
+    let changed = false;
+    if (authoritative) {
+        for (const id of [...groupTabs.keys()]) {
+            if (!accepted.has(id)) { groupTabs.delete(id); changed = true; }
+        }
+    }
+    const pinned = new Set(tabLayoutOwner?.ready ? tabLayoutOwner.layout.pinned : []);
+    for (const group of accepted.values()) {
+        const latest = Number(group.latest_message_id) || 0;
+        const count = Math.max(0, Number(group.unread_count) || 0);
+        let tab = groupTabs.get(group.id);
+        if (!tab) {
+            const closedAt = closedGroupTabs.get(`${tabID}:${group.id}`);
+            const arrived = count > 0 && !muted.has(group.id) && (closedAt === undefined || latest > closedAt);
+            if (!arrived && !pinned.has(GROUP_TAB + group.id)) continue;
+            closedGroupTabs.delete(`${tabID}:${group.id}`);
+            recentlyClosedChats.delete(GROUP_TAB + group.id);
+            tab = { id: group.id, name: group.name, unread: 0, unreadAt: undefined, latest: 0 };
+            groupTabs.set(group.id, tab);
+            changed = true;
+        }
+        if (tab.name !== group.name) { tab.name = group.name; changed = true; }
+        if (tab.unread !== count) {
+            if (count > tab.unread && !st.replayingTabID) tab.unreadAt = Date.now();
+            if (!count) tab.unreadAt = undefined;
+            tab.unread = count;
+            changed = true;
+        }
+        tab.latest = Math.max(tab.latest, latest);
+    }
+    if (changed) renderTabs();
 }
 
 function tabLayoutFor(owner) {
@@ -1808,6 +1926,16 @@ function renderTabs() {
             open: () => { if (owns()) activatePM(tab.uid); },
             close: () => { if (owns()) closePM(tab.uid); },
             clearHistory: () => { if (owns()) clearPMHistory(tab.uid, tab.nick); },
+        });
+    }
+    for (const tab of groupTabs.values()) {
+        const owns = () => current() && groupTabs.get(tab.id) === tab;
+        items.push({
+            key: GROUP_TAB + tab.id, name: tab.name, title: t("group.tabTitle", { name: tab.name }),
+            active: isPrivateGroupActive() && viewedConversationID() === tab.id,
+            unread: tab.unread, arrivedAt: tab.unreadAt,
+            open: () => { if (owns()) void openConversationsAt(tab.id, 0, owns); },
+            close: () => { if (owns()) closeGroupTab(tab.id); },
         });
     }
     const saved = items.length && V().state.activeTabID ? tabLayoutFor(getDMOwner()) : null;
@@ -2840,6 +2968,15 @@ function openPMKeepView(uid) {
 
 function stageFiles(fileList) {
     const scope = captureScope(readSendScope);
+    readStagedFiles(fileList, () => scopeIsCurrent(scope, readSendScope), file => {
+        pendingFiles.push(file);
+        renderFilePreview();
+    });
+}
+
+// readStagedFiles applies the chat attachment rules (25 MiB cap, safe unique
+// display names, image previews) for every composer, including groups.
+export function readStagedFiles(fileList, isCurrent, onFile) {
     for (const f of fileList) {
         if (f.size > ATTACH_MAX_BYTES) {
             V().toast(t("chat.attachmentTooLarge", { name: f.name || t("chat.file"), size: Math.round(ATTACH_MAX_BYTES / 1048576) }), "warn");
@@ -2847,7 +2984,7 @@ function stageFiles(fileList) {
         }
         const reader = new FileReader();
         reader.onload = () => {
-            if (!scopeIsCurrent(scope, readSendScope)) return;
+            if (!isCurrent()) return;
             const dataURL = reader.result;
             const rawName = (f.name || "image.png").replace(/[\[\]#]/g, "_");
             const extIdx = rawName.lastIndexOf(".");
@@ -2858,15 +2995,14 @@ function stageFiles(fileList) {
             } else {
                 uniqueName = rawName + "_" + uniqueId;
             }
-            pendingFiles.push({
+            onFile({
                 name: uniqueName,
                 dataBase64: dataURL.split(",")[1] || "",
                 isImage: f.type.startsWith("image/"),
                 dataURL: f.type.startsWith("image/") ? dataURL : null,
             });
-            renderFilePreview();
         };
-        reader.onerror = () => { if (scopeIsCurrent(scope, readSendScope)) V().toast(t("chat.readFileFailed", { name: f.name || t("chat.file") }), "warn"); };
+        reader.onerror = () => { if (isCurrent()) V().toast(t("chat.readFileFailed", { name: f.name || t("chat.file") }), "warn"); };
         reader.readAsDataURL(f);
     }
 }
@@ -2901,21 +3037,29 @@ function renderFilePreview() {
     });
 }
 
-function insertAtCursor(text) {
-    draftRevision++;
-    const input = $("chat-text");
+function insertAtCursor(text, input = $("chat-text")) {
+    const main = input === $("chat-text");
+    if (main) draftRevision++;
     const pos = input.selectionStart ?? input.value.length;
     input.value = input.value.slice(0, pos) + text + input.value.slice(input.selectionEnd ?? pos);
     input.selectionStart = input.selectionEnd = pos + text.length;
-    updateComposerCount();
+    if (main) updateComposerCount();
+    else input.dispatchEvent(new Event("input", { bubbles: true }));
     input.focus();
 }
 
-function toggleEmojiPanel() {
+// toggleSharedEmojiPanel opens the chat emoji picker (built-in and server
+// emoji) for another composer, such as a private group.
+export function toggleSharedEmojiPanel(input, anchor) {
+    toggleEmojiPanel({ input, anchor });
+}
+
+function toggleEmojiPanel(target = null) {
     if (emojiPanel) {
         closeEmojiPanel();
         return;
     }
+    const insert = text => { if (!target || target.input.isConnected) insertAtCursor(text, target?.input); };
     emojiPanel = document.createElement("div");
     const panel = emojiPanel;
     const panelGeneration = V().state.serverGeneration;
@@ -2935,7 +3079,7 @@ function toggleEmojiPanel() {
             b.textContent = e;
             const code = Object.entries(EMOJI).find(([, v]) => v === e)?.[0];
             if (code) b.title = ":" + code + ":";
-            b.onclick = () => insertAtCursor(e);
+            b.onclick = () => insert(e);
             grid.appendChild(b);
         }
         emojiPanel.appendChild(grid);
@@ -3002,12 +3146,12 @@ function toggleEmojiPanel() {
             img.src = url;
             img.alt = ":" + e.name + ":";
             b.appendChild(img);
-            b.onclick = () => insertAtCursor(":" + e.name + ":");
+            b.onclick = () => insert(":" + e.name + ":");
             grid.appendChild(b);
         }
     });
 
-    const r = $("chat-emoji").getBoundingClientRect();
+    const r = (target?.anchor || $("chat-emoji")).getBoundingClientRect();
     emojiPanel.style.right = Math.max(8, window.innerWidth - r.right) + "px";
     emojiPanel.style.bottom = (window.innerHeight - r.top + 8) + "px";
     document.body.appendChild(emojiPanel);
@@ -3824,6 +3968,7 @@ export function resetView(options = {}) {
     store.clear();
     unread.clear();
     pmTabs.clear();
+    groupTabs.clear();
     chanTabs.clear();
     subscriptions = [];
     pendingChannelTab = 0;
@@ -4123,7 +4268,7 @@ export function initChat() {
     const log = $("chat-log");
 
     applyChatPrefs();
-    const stopGIFPlayback = manageChatGIFPlayback(document.body, ".msg img, .lightbox img, .msg video.msg-video, .lightbox video");
+    const stopGIFPlayback = manageChatGIFPlayback(document.body, ".msg img, .lightbox img, .msg video.msg-video, .lightbox video, .group-message-body img, .group-message-body video.msg-video");
 
     // Attachments, wrapped text and viewport changes can grow the conversation
     // after appendLive has scrolled. Keep following the newest message until
