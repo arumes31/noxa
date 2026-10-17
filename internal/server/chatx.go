@@ -1156,6 +1156,11 @@ type typingEvent struct {
 	UniqueID  string `json:"unique_id"`
 	Nickname  string `json:"nickname"`
 	ChannelID int64  `json:"channel_id"`
+	// Direct marks a relay addressed to one user (a DM). Without it a DM
+	// indicator is indistinguishable from a global one, so the recipient
+	// could only file it under the global scope. Additive: older clients
+	// ignore the field.
+	Direct bool `json:"direct,omitempty"`
 }
 
 // handleTyping relays a typing indicator. It is never stored — there is no
@@ -1193,6 +1198,7 @@ func (s *TCPServer) relaySessionTyping(ctx context.Context, client *Client, f *n
 		UniqueID:  client.UniqueID,
 		Nickname:  client.nickname(),
 		ChannelID: msg.ChannelID,
+		Direct:    msg.ToUniqueID != "",
 	}
 	if msg.ToUniqueID == "" {
 		_ = s.withRoleAccess(ctx, client, msg.ChannelID, authorization.SendMessages, func(ctx context.Context) error {

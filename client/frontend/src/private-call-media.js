@@ -227,5 +227,5 @@ export function createCallMedia(owner, { current, acceptedPeer, label, report, r
         for (const element of localTiles.values()) releaseTile(element);
         localTiles.clear(); grid.replaceChildren();
     }
-    return { grid, controls, syncPeer, attachChannel, receiveVideo, closePeer, close, updateGrid };
+    return { grid, controls, toggle, syncPeer, attachChannel, receiveVideo, closePeer, close, updateGrid };
 }
