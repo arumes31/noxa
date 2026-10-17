@@ -586,7 +586,7 @@ test("removed dialog cannot restart from a late successful staging result", asyn
 });
 
 
-for (const theme of ["dark", "light", "hc"]) {
+for (const theme of ["arctic", "dark", "light", "hc"]) {
     test(`violet offer and measured core remain readable in ${theme}`, async ({ page }, testInfo) => {
         await boot(page, { downloadPending: true });
         await expect(page.locator(".upd-update")).toBeVisible();

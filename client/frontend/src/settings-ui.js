@@ -315,13 +315,13 @@ function pageApplication() {
     sep.textContent = t("settings.window.appearance");
     el.appendChild(sep);
     const themeSel = document.createElement("select");
-    for (const [v, label] of [["dark", t("settings.dark.default")], ["light", t("settings.light")], ["hc", t("settings.high.contrast")]]) {
+    for (const [v, label] of [["arctic", t("settings.arctic.default")], ["dark", t("settings.dark.default")], ["light", t("settings.light")], ["hc", t("settings.high.contrast")]]) {
         const o = document.createElement("option");
         o.value = v;
         o.textContent = label;
         themeSel.appendChild(o);
     }
-    themeSel.value = s.theme || "dark";
+    themeSel.value = s.theme || "arctic";
     themeSel.onchange = () => { s.theme = themeSel.value; };
     el.appendChild(row(t("settings.theme"), themeSel));
     const accent = document.createElement("input");

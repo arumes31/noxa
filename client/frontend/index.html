@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="arctic">
 <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -10,6 +10,7 @@
     <link rel="stylesheet" href="/src/style.css" />
     <link rel="stylesheet" href="/src/workspace.css" />
     <link rel="stylesheet" href="/src/login.css" />
+    <link rel="stylesheet" href="/src/arctic-night.css" />
 </head>
 <body class="details-collapsed">
     <!-- Login overlay -->
@@ -56,9 +57,11 @@
     <!-- Main three-pane layout -->
     <div id="app" class="hidden">
         <a class="skip-link" href="#chat-text">Skip to message composer</a>
-        <nav id="menubar" aria-label="Application menu"></nav>
+        <header id="topbar">
+            <nav id="menubar" aria-label="Application menu"></nav>
+            <nav id="server-tabs" aria-label="Server connections"></nav>
+        </header>
         <button id="compact-exit" type="button">Exit compact mode</button>
-        <nav id="server-tabs" aria-label="Server connections"></nav>
         <div id="app-body">
         <aside id="sidebar" aria-labelledby="channels-heading">
             <div class="brand">
