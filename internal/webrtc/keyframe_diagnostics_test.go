@@ -311,11 +311,21 @@ func TestKeyframeDiagnosticsVP8BoundsReadLoopReason(t *testing.T) {
 	r.mu.RLock()
 	d := r.videoIngress[videoIngressKey{"pub", SlotScreen, "f"}]
 	r.mu.RUnlock()
-	d.mu.Lock()
-	got := d.keyframeRequestSnapshot()
-	d.mu.Unlock()
-	if got == nil || got.VP8Bounds != (netproto.VideoKeyframeRequestCounters{Requests: 1, WriteSucceeded: 1}) {
-		t.Fatalf("bounds provenance lost: %+v", got)
+	// The keyframe request is written asynchronously: the writer signals
+	// before the request records its outcome, so poll for the final counters.
+	want := netproto.VideoKeyframeRequestCounters{Requests: 1, WriteSucceeded: 1}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		d.mu.Lock()
+		got := d.keyframeRequestSnapshot()
+		d.mu.Unlock()
+		if got != nil && got.VP8Bounds == want {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("bounds provenance lost: %+v", got)
+		}
+		time.Sleep(time.Millisecond)
 	}
 }
 
