@@ -23,6 +23,7 @@ import { createPoll, renderPoll } from "./polls.js";
 import { parsePoll } from "./poll-state.js";
 import { closeDiscussions, initDiscussions, openDiscussions, renderForumChannel, resetDiscussions } from "./discussions.js";
 import { closeConversations, initConversations, isPrivateGroupActive, openConversationsAt, resetConversations, viewedConversationID } from "./conversations.js";
+import { QUICK_SWITCH_SETTINGS } from "./shell-model.js";
 import { sessionUserID } from "./session-identity.js";
 import { encryptionBadge } from "./message-encryption.js";
 import { chatEnglish } from "./chat-messages.js";
@@ -4123,7 +4124,17 @@ function openQS() {
     const st = V().state;
     const { activeTabID: tabID, serverGeneration: generation } = st;
     const items = [];
+    const toChat = () => window.__noxaFiles?.activateWorkspaceTab?.("chat");
     for (const ch of st.channels) {
+        // Text channels have no voice: picking one opens its chat.
+        if (ch.TextOnly) {
+            items.push({ label: "# " + ch.Name, hint: t("shell.qs.kind.text"), action: () => {
+                if (generation !== st.serverGeneration) return;
+                toChat();
+                void openChannelTab(ch.ChannelID);
+            } });
+            continue;
+        }
         items.push({ label: "# " + ch.Name, hint: t("chat.channelHint"), action: async () => {
             if (generation !== st.serverGeneration) return;
             try {
@@ -4145,17 +4156,40 @@ function openQS() {
     for (const tab of chanTabs.values()) {
         items.push({ label: "# " + channelName(tab.id), hint: t("chat.channelTabHint"), action: () => activateChannel(tab.id) });
     }
+    // Settings pages match once the user types, so they never crowd the
+    // default list of channels and people.
+    for (const [page, key] of QUICK_SWITCH_SETTINGS) {
+        items.push({ label: "⚙ " + t(key), hint: t("shell.qs.kind.setting"), typed: true, action: () => V().openSettings(page) });
+    }
 
     qsOverlay = document.createElement("div");
     qsOverlay.className = "dlg-overlay qs-overlay";
+    qsOverlay.setAttribute("aria-label", t("shell.qs.title"));
     const box = document.createElement("div");
     box.className = "qs-box";
     const input = document.createElement("input");
     input.placeholder = t("chat.switcherHint");
+    input.autocomplete = "off";
+    input.spellcheck = false;
+    input.setAttribute("role", "combobox");
+    input.setAttribute("aria-label", t("shell.qs.title"));
+    input.setAttribute("aria-autocomplete", "list");
+    input.setAttribute("aria-expanded", "true");
+    input.setAttribute("aria-controls", "qs-list");
+    input.setAttribute("aria-describedby", "qs-help");
     const list = document.createElement("div");
     list.className = "qs-list";
-    box.appendChild(input);
-    box.appendChild(list);
+    list.id = "qs-list";
+    list.setAttribute("role", "listbox");
+    list.setAttribute("aria-label", t("shell.qs.results"));
+    const help = document.createElement("p");
+    help.className = "qs-help";
+    help.id = "qs-help";
+    help.textContent = t("shell.qs.hint");
+    const status = document.createElement("p");
+    status.className = "sr-only";
+    status.setAttribute("role", "status");
+    box.append(input, list, help, status);
     qsOverlay.appendChild(box);
     qsOverlay.onclick = (e) => {
         if (e.target === qsOverlay) closeQS();
@@ -4175,7 +4209,8 @@ function openQS() {
     const renderList = () => {
         const q = input.value.trim();
         matches = items
-            .map((it) => ({ it, score: qsScore(q, it.label) }))
+            .filter((it) => q || !it.typed)
+            .map((it) => ({ it, score: qsScore(q, it.label.replace(/^[#@✉⚙👥] /u, "")) }))
             .filter((x) => x.score >= 0)
             .sort((a, b) => b.score - a.score)
             .slice(0, 12)
@@ -4185,6 +4220,9 @@ function openQS() {
         matches.forEach((it, i) => {
             const row = document.createElement("div");
             row.className = "qs-row" + (i === sel ? " sel" : "");
+            row.id = `qs-option-${i}`;
+            row.setAttribute("role", "option");
+            row.setAttribute("aria-selected", String(i === sel));
             const l = document.createElement("span");
             l.textContent = it.label;
             const h = document.createElement("span");
@@ -4192,6 +4230,7 @@ function openQS() {
             h.textContent = it.hint;
             row.appendChild(l);
             row.appendChild(h);
+            row.onmousedown = (e) => e.preventDefault(); // keep focus in the input
             row.onclick = () => {
                 if (!currentQuickSwitcher()) return;
                 closeQS();
@@ -4199,6 +4238,11 @@ function openQS() {
             };
             list.appendChild(row);
         });
+        if (matches.length) {
+            input.setAttribute("aria-activedescendant", `qs-option-${sel}`);
+            list.querySelector(".qs-row.sel")?.scrollIntoView({ block: "nearest" });
+        } else input.removeAttribute("aria-activedescendant");
+        status.textContent = matches.length ? t("shell.qs.count", { count: matches.length }) : t("shell.qs.empty", { query: q });
     };
     input.oninput = () => {
         sel = 0;
@@ -4218,6 +4262,12 @@ function openQS() {
             sel = Math.max(sel - 1, 0);
             renderList();
         }
+        if (e.key === "Home" || e.key === "End") {
+            if (!e.ctrlKey) return;
+            e.preventDefault();
+            sel = e.key === "Home" ? 0 : Math.max(0, matches.length - 1);
+            renderList();
+        }
         if (e.key === "Enter" && matches[sel]) {
             closeQS();
             matches[sel].action();
@@ -4225,6 +4275,25 @@ function openQS() {
     };
     renderList();
     input.focus();
+    // Private groups come from the server; add them when the list arrives.
+    const listGroups = app().ConversationForTab;
+    if (typeof listGroups === "function") void Promise.resolve().then(() => listGroups(tabID, { action: "list" })).then((result) => {
+        if (!currentQuickSwitcher() || generation !== st.serverGeneration) return;
+        const me = sessionUserID(st);
+        for (const group of result?.conversations || []) {
+            if (!group?.id || group.members?.find((member) => member.unique_id === me)?.pending) continue;
+            items.push({ label: "👥 " + (group.name || group.id), hint: t("shell.qs.kind.group"), action: () => {
+                toChat();
+                void openConversationsAt(group.id);
+            } });
+        }
+        renderList();
+    }).catch(() => { /* Groups are optional; channels and people still work. */ });
+}
+
+// The top bar's "Search or jump to…" field opens the same switcher.
+export function openQuickSwitcher() {
+    if (!document.getElementById("app")?.classList.contains("hidden")) openQS();
 }
 
 // ---------------------------------------------------------------------------
@@ -4543,6 +4612,19 @@ export function initChat() {
 export function unreadFor(chID) {
     return unread.get(chID) || null;
 }
+
+// Sidebar shell (app-shell.js): the "Messages" row counts direct messages;
+// private groups are added from the conversation list. The quick switcher
+// lists the open DM peers and resolves the chat currently on screen.
+export function directUnreadTotal() {
+    let total = 0;
+    for (const peer of pmTabs.values()) total += peer.unread || 0;
+    return total;
+}
+export function directPeers() {
+    return [...pmTabs.values()].map(({ uid, nick, unread, unreadAt }) => ({ uid, nick, unread: unread || 0, unreadAt: unreadAt || 0 }));
+}
+export function activeChatKey() { return activeKey(); }
 
 // Tray counter (main.js): the same badges unreadMessageReferences lists.
 export function unreadTotal() {

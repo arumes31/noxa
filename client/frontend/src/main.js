@@ -77,6 +77,7 @@ import { dialogFocusableSelector, initModalSystem, mountServerDialog, closeServe
 import { parseRuntimeObject } from "./runtime-json.js";
 
 import { initWorkspace, renderMember, renderVoiceHints, cancelMemberVolumePreview } from "./workspace-ui.js";
+import { initAppShell } from "./app-shell.js";
 import { createTrayVoiceSync, createTrayUnreadModel, trayInChannel } from "./tray-state.js";
 import { capturePresenceScope, presenceIsCurrent, desiredPresence, restorePresenceOnActivity, setPresence } from "./presence.js";
 import { captureMediaScope, mediaScopeIsCurrent, setWhisperRouting } from "./media-controls.js";
@@ -1342,6 +1343,9 @@ function flattenChannel(node) {
         // (304) lock icon — the field is read under both spellings so a json
         // tag on the server's Channel struct cannot silently drop the lock.
         HasPassword: !!(node.has_password ?? node.HasPassword),
+        // Text channels (chat only, no voice) list in the sidebar's Text
+        // section; older servers omit the field and every channel is voice.
+        TextOnly: !!(node.text_only ?? node.TextOnly),
         Access: node.access || null,
         ClientCount: node.ClientCount || 0, // (303) [n/max]
         Topic: node.Topic || "",
@@ -1475,7 +1479,7 @@ window.runtime.EventsOn("event", (json) => {
             break;
         }
         case "channel_created":
-            state.channels.push({ ChannelID: d.channel_id, ParentID: d.parent_id || 0, Name: d.name, HasIcon: false });
+            state.channels.push({ ChannelID: d.channel_id, ParentID: d.parent_id || 0, Name: d.name, HasIcon: false, TextOnly: !!d.text_only });
             break;
         case "channel_deleted": {
             // New servers include the complete cascaded subtree; older ones
@@ -2597,6 +2601,7 @@ function renderVoiceStatus() {
     const key = { "voice on": "voice.on", "voice off": "voice.off", "voice connecting…": "voice.connecting", "voice unavailable": "voice.unavailable" }[voiceStatusBase];
     $("voice-status").textContent = (key ? t(key) : voiceStatusBase) +
         (state.whisperArmed ? " · " + t("polish.whisper", { name: uidName(state.whisperTargetUID) }) : "");
+    $("voice-status").dataset.state = { "voice on": "connected", "voice connecting…": "connecting", "voice unavailable": "unavailable" }[voiceStatusBase] || "off";
 }
 
 function resetVoiceUI() {
@@ -3283,6 +3288,7 @@ initPolishUI(); // wave-8c polish/a11y (registers window.__noxaPolish)
 initNotifications(); // wave-9 notification matrix (registers window.__noxaNotify)
 chatUI.initChat(); // wave-5b chat UI (must run after __noxa exists)
 initWorkspace();
+initAppShell(); // top bar search/ping, sidebar sections, voice card
 
 // A replacement is ready only once native settings and all UI modules have
 // initialized. A startup exception leaves the old app's recovery guard active.

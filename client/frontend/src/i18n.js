@@ -41,6 +41,7 @@ import { overlayEnglish, overlayGerman } from "./gaming-overlay-messages.js";
 import { communicationExtrasEnglish, communicationExtrasGerman } from "./communication-extras-messages.js";
 import { messageToolsEnglish, messageToolsGerman } from "./message-tools-messages.js";
 import { webhookEnglish, webhookGerman } from "./webhook-messages.js";
+import { shellEnglish, shellGerman } from "./shell-messages.js";
 
 const en = {
     ...loginErrorEnglish, ...streamHealthEnglish,
@@ -64,6 +65,7 @@ const en = {
     ...settingsEnglish,
     ...securityEnglish,
     ...interfaceEnglish,
+    ...shellEnglish,
     "menu.connections": "Connections",
     "menu.bookmarks": "Bookmarks",
     "menu.self": "Self",
@@ -167,6 +169,7 @@ const de = {
     ...settingsGerman,
     ...securityGerman,
     ...interfaceGerman,
+    ...shellGerman,
     "menu.connections": "Verbindungen",
     "menu.bookmarks": "Lesezeichen",
     "menu.self": "Selbst",

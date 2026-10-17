@@ -179,6 +179,20 @@ async function poll(s) {
     finally { if (current(s)) s.timer = setTimeout(() => { void poll(s); }, 2000); }
 }
 
+// shareSummaryStats is the voice card's one-line summary of the current
+// share: measured sent height, frame rate and bitrate, falling back to the
+// selected preset until the first sender sample arrives.
+export function shareSummaryStats() {
+    const s = session;
+    if (!s || !current(s)) return null;
+    const sample = s.sample;
+    return {
+        height: sample?.height > 0 ? sample.height : s.preset?.height || 0,
+        fps: Number.isFinite(sample?.sent_fps) ? sample.sent_fps : s.preset?.fps || 0,
+        bitrate: Number.isFinite(sample?.bitrate_bps) ? sample.bitrate_bps : null,
+    };
+}
+
 export function stopShareStatus() {
     const s = session;
     session = null;
