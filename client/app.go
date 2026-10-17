@@ -307,6 +307,9 @@ func (a *App) SetWindowOpacity(pct int) string {
 
 // shutdown is called when the app closes.
 func (a *App) shutdown(_ context.Context) {
+	if err := shutdownTaskbarOverlay(); err != nil {
+		log.Printf("taskbar shutdown: %v", err)
+	}
 	if err := a.displayCapturePower.shutdown(); err != nil {
 		log.Printf("display capture power shutdown: %v", err)
 	}

@@ -64,7 +64,10 @@ func setTaskbarIcon(mode trayIconState) error {
 		// #nosec G103 -- GetWindowThreadProcessId writes the provided DWORD.
 		_, _, _ = procGetWindowPID.Call(hwnd, uintptr(unsafe.Pointer(&pid)))
 		if uint64(pid) == uint64(os.Getpid()) {
-			return setTaskbarWindowIcon(hwnd, mode)
+			if err := setTaskbarWindowIcon(hwnd, mode); err != nil {
+				return err
+			}
+			return queueTaskbarOverlay(hwnd, mode)
 		}
 	}
 }
