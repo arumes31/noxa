@@ -158,6 +158,8 @@ body.compact .topbar-tools { display: none; }
 @media (max-width: 720px) {
     :root[data-theme="arctic"] .topbar-brand .topbar-wordmark { display: none; }
     :root[data-theme="arctic"] .topbar-search kbd { display: none; }
+    /* The full menubar still has to fit beside the tools at 640px. */
+    :root[data-theme="arctic"] .topbar-tools { gap: 4px; padding-left: 4px; }
 }
 
 /* sidebar: server header */
