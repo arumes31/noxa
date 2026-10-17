@@ -10,6 +10,7 @@
 //
 // Replies and direct recipients use explicit protocol identities.
 import { resolveParent, directPeer } from "./chat-relations.js";
+import { previewLine } from "./dm-model.js";
 import { manageChatGIFPlayback } from "./chat-gif-playback.js";
 import { openChatMediaLightbox } from "./chat-media-lightbox.js";
 import { createUnreadTabEffects } from "./chat-unread.js";
@@ -679,6 +680,7 @@ function renderMsg(m) {
     if (m.deleted) el.classList.add("deleted");
     if (m.mentioned) el.classList.add("mentioned");
     if (m.self) el.classList.add("own");
+    if (m.direct && m.offline) el.classList.add("offline-direct");
     if (m.id) el.dataset.msgId = m.id;
     m.renderKey ||= m.id ? "message-" + m.id : m.clientMsgID ? "client-" + m.clientMsgID : crypto.randomUUID();
     el.dataset.scrollKey = m.renderKey;
@@ -972,7 +974,18 @@ export function bindSharedLinks(root) {
 function downloadChip(source, ref, name, suffix) {
     const b = document.createElement("button");
     b.className = "file-chip";
-    b.textContent = "📎 " + name + suffix;
+    // The Messages view (arctic-dm.css) draws this as a file card; the meta
+    // line stays display:none elsewhere, so the accessible name is unchanged.
+    const glyph = document.createElement("span");
+    glyph.className = "file-chip-icon";
+    glyph.textContent = "📎";
+    const label = document.createElement("span");
+    label.className = "file-chip-name";
+    label.textContent = name + suffix;
+    const meta = document.createElement("span");
+    meta.className = "file-chip-meta";
+    meta.textContent = t("dm.fileMeta");
+    b.append(glyph, " ", label, meta);
     b.title = t("chat.downloadName", { name });
     b.onclick = async () => {
         if (!b.isConnected || b.disabled || !source.saveCurrent()) return;
@@ -1463,6 +1476,7 @@ function setView(v) {
     renderTabs();
     renderView();
     sendPendingReads();
+    window.dispatchEvent(new CustomEvent("noxa-chat-view-changed", { detail: { kind: v.kind, uid: v.uid || "" } }));
 }
 
 export function resumeChatView() { setView(view); }
@@ -1890,6 +1904,7 @@ function saveTabLayout(layout) {
 
 function renderTabs() {
     V()?.syncTrayUnread?.(); // every unread badge change re-renders the tab bar
+    window.dispatchEvent(new CustomEvent("noxa-direct-changed"));
     const scope = captureScope(readDMHistoryScope);
     const current = () => dmHistoryScopeIsCurrent(scope);
     const items = [];
@@ -1932,6 +1947,30 @@ function renderTabs() {
         recentlyClosed: [...recentlyClosedChats.values()].reverse().filter(entry => dmHistoryScopeIsCurrent(entry.scope) && !items.some(item => item.key === entry.key))
             .map(entry => ({ ...entry, open: () => reopenClosedChat(entry) })),
     });
+}
+
+// --- Messages view accessors (dm-view.js) ---------------------------------------
+// liveDirectConversations reports this session's DM tabs with their unread
+// state and newest in-memory message; storedDirectPeers lists every sealed
+// local log with its newest entry. Neither changes any state.
+export function liveDirectConversations() {
+    return [...pmTabs.values()].map(tab => ({
+        uid: tab.uid, name: knownPeerName(tab.uid), unread: tab.unread || 0, offline: !!tab.offline,
+        last: store.get("dm:" + tab.uid)?.msgs.at(-1) || null,
+    }));
+}
+
+export async function storedDirectPeers() {
+    const scope = captureScope(readDMHistoryScope);
+    const peers = await callDMHistory(getDMOwner(), "DMHistoryPeersForContext");
+    return dmHistoryScopeIsCurrent(scope) ? peers || [] : null;
+}
+
+export function directMessageFromEntry(entry) { return dmMsg(entry, ""); }
+export function directPeerName(uid, supplied = "") { return peerName(uid, supplied); }
+export function activeDirectPeer() { return view.kind === "dm" ? view.uid : ""; }
+export function clearDirectHistory(uid) {
+    if (pmTabs.has(uid)) void clearPMHistory(uid, peerName(uid));
 }
 
 // --- local DM history (122) ---------------------------------------------------
@@ -2507,7 +2546,9 @@ function routeDM(d, m) {
     const key = "dm:" + peer;
     if (pushMsg(key, m) === "duplicate") return false;
     if (!m.self && !m.offline) {
-        window.__noxaNotify?.notify("dm", (m.from || "someone") + ": " + (m.text || "").slice(0, 80),
+        // previewLine never puts an attachment's storage key or a refused
+        // body into a notification: files show their name, refusals their text.
+        window.__noxaNotify?.notify("dm", (m.from || "someone") + ": " + previewLine(m),
             { uid: peer, className: "messages", kind: "info", announce: false,
                 reference: { kind: "dm", peer_id: peer, client_message_id: m.clientMsgID || "", local_seq: m.localSeq || 0 } });
     }
@@ -2761,13 +2802,15 @@ function noteTyping() {
     typingIdle = setTimeout(resetTypingOut, TYPING_IDLE_MS);
 }
 
-// onTyping records one relayed indicator, keyed exactly on the channel_id the
-// event carries — the only scope information in the contract.
+// onTyping records one relayed indicator, keyed exactly on the scope the
+// event carries: its channel_id, or the sender's DM when it is direct.
 export function onTyping(d) {
     const st = V().state;
     const uid = d.unique_id || "";
     if (!uid || uid === sessionUserID(st) || d.client_id === st.myClientID) return;
-    const key = "ch:" + (Number(d.channel_id) || 0);
+    // A relay addressed to this user carries direct: true and belongs to that
+    // DM; older servers omit it, which keeps the indicator in the global scope.
+    const key = d.direct ? "dm:" + uid : "ch:" + (Number(d.channel_id) || 0);
     if (!typers.has(key)) typers.set(key, new Map());
     typers.get(key).set(uid, { nick: d.nickname || uid, expires: Date.now() + TYPING_TTL_MS });
     startTypingSweep();
@@ -3644,7 +3687,8 @@ function updateHeader() {
     $("chat-head-title").textContent = title;
     $("chat-search-btn").classList.toggle("hidden", filesOpen);
     $("chat-head-actions").querySelector(".channel-actions").hidden = filesOpen;
-    $("chat-text").placeholder = view.kind === "channel" || view.kind === "chan" ? t("workspace.compose", { name: title }) : view.kind === "dm" ? t("workspace.compose", { name: peerName(view.uid) }) : t("workspace.composeAll");
+    const directView = view.kind === "dm" && $("center")?.classList.contains("dm-view-active");
+    $("chat-text").placeholder = view.kind === "channel" || view.kind === "chan" ? t("workspace.compose", { name: title }) : directView ? t("dm.composer", { name: peerName(view.uid) }) : view.kind === "dm" ? t("workspace.compose", { name: peerName(view.uid) }) : t("workspace.composeAll");
     const topicEl = $("chat-topic");
     topicEl.textContent = topic;
     topicEl.title = topic; // (111) tooltip carries the full topic

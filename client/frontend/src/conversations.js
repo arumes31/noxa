@@ -107,10 +107,17 @@ export function isPrivateGroupActive() { return !!workspace?.active(); }
 export function viewedConversationID() { return viewedGroup?.() || ""; }
 export function privateGroupViewToken() { return workspace?.token(); }
 export function filterConversations() { workspace?.filter(); }
+// listedPrivateGroups is the Messages view's read-only snapshot of the last
+// authoritative list (dm-view.js); "noxa-private-groups-changed" announces a
+// new one. createPrivateGroup runs the same create flow as the sidebar form.
+export function listedPrivateGroups() { return workspace?.current() ? workspace.snapshot() : null; }
+export function createPrivateGroup(name) { initConversations(); return workspace?.create(name); }
+function groupsChanged() { window.dispatchEvent(new CustomEvent("noxa-private-groups-changed")); }
 export function resetConversations() {
     V()?.trayUnread?.set("groups", 0); // the group list belongs to one server tab
     workspace?.destroy(); workspace = null;
     refreshOpen = null; viewedGroup = null;
+    groupsChanged();
 }
 
 export function initConversations() {
@@ -285,6 +292,7 @@ export function initConversations() {
                 list.append(item);
             }
             filter();
+            groupsChanged();
             if (focusedGroup && document.activeElement === document.body) [...list.children].find(item => item.dataset.groupId === focusedGroup)?.focus({ preventScroll: true });
             if (sidebarOnly) return;
             const group = groups.find(group => group.id === selected);
@@ -336,7 +344,7 @@ export function initConversations() {
         content.dataset.groupId = group.id;
         const me = group.members.find(member => member.unique_id === uid());
         const owner = group.owner === uid();
-        const top = el("header", "group-header"); top.append(el("h3", "", group.name), button("group.refresh", () => void refresh()));
+        const top = el("header", "group-header"); const refreshButton = button("group.refresh", () => void refresh()); refreshButton.className = "group-refresh"; top.append(el("h3", "", group.name), refreshButton);
         content.replaceChildren(top, el("p", "group-privacy", t("group.private")));
         if (me?.pending) {
             jumpTarget = 0;
@@ -385,12 +393,13 @@ export function initConversations() {
             }
             const add = button("group.invite"); add.type = "submit"; add.disabled = group.members.length >= 16;
             invite.append(target, suggestions, add); invite.onsubmit = event => { event.preventDefault(); void mutate(group, "invite", target.value.trim()); }; details.append(invite);
-            details.append(button("group.rename", async () => {
+            const renameButton = button("group.rename", async () => {
                 const value = await promptDialog({ title: t("group.rename"), label: t("group.name"), value: group.name, serverScoped: true });
                 if (value !== null && current() && selected === group.id) void mutate(group, "rename", "", { name: value });
-            }));
+            });
+            renameButton.className = "group-rename"; details.append(renameButton);
         }
-        const leave = button("group.leave", () => confirmChange(group, "leave", uid(), "group.confirmLeave"));
+        const leave = button("group.leave", () => confirmChange(group, "leave", uid(), "group.confirmLeave")); leave.className = "group-leave";
         leave.disabled = owner && group.members.length > 1; if (leave.disabled) leave.title = t("group.leaveOwner"); details.append(leave);
         content.append(details);
         const messages = el("div", "group-messages"); messages.setAttribute("aria-label", t("group.message"));
@@ -424,6 +433,10 @@ export function initConversations() {
         attach.title = t("group.attach"); attach.setAttribute("aria-label", t("group.attach"));
         const emoji = button("group.emoji", event => { event.stopPropagation(); chat?.toggleSharedEmojiPanel?.(input, emoji); });
         emoji.className = "group-emoji"; emoji.textContent = "☺"; emoji.title = t("group.emoji"); emoji.setAttribute("aria-label", t("group.emoji"));
+        const gifInput = el("input", "group-gif-file"); gifInput.type = "file"; gifInput.accept = "image/gif,.gif"; gifInput.hidden = true;
+        gifInput.setAttribute("aria-label", t("dm.gif"));
+        const gif = button("dm.gif", () => gifInput.click()); gif.className = "group-gif"; gif.textContent = "GIF";
+        gif.title = t("dm.gif"); gif.setAttribute("aria-label", t("dm.gif"));
         const previews = el("div", "group-file-previews");
         const pendingFor = () => stagedFiles.get(group.id) || [];
         const renderPreviews = () => {
@@ -445,6 +458,7 @@ export function initConversations() {
             stagedFiles.set(group.id, [...pendingFor(), file]); refreshStaged();
         });
         fileInput.onchange = () => { if (fileInput.files?.length) stage(fileInput.files); fileInput.value = ""; };
+        gifInput.onchange = () => { if (gifInput.files?.length) stage(gifInput.files); gifInput.value = ""; };
         input.addEventListener("paste", event => {
             const files = [...(event.clipboardData?.files || [])];
             if (files.length) { event.preventDefault(); stage(files); }
@@ -457,7 +471,7 @@ export function initConversations() {
             });
         }
         input.required = false;
-        composer.append(previews, input, fileInput, attach, emoji, send); content.append(composer);
+        composer.append(previews, input, fileInput, gifInput, attach, gif, emoji, send); content.append(composer);
         refreshStaged = () => { if (previews.isConnected) renderPreviews(); };
         renderPreviews();
         composer.append(voiceMessageButton(() => {
@@ -529,6 +543,8 @@ export function initConversations() {
                 for (const message of [...result.messages].reverse()) {
                     const row = el("article", "group-message");
                     row.dataset.messageId = String(message.id);
+                    row.dataset.ts = String(message.created_at * 1000);
+                    row.classList.toggle("own", message.from_unique_id === uid());
                     const body = el("div", "group-message-body");
                     // Group messages are end-to-end encrypted per member: an
                     // envelope this client authenticated shows the lock; one
@@ -542,7 +558,12 @@ export function initConversations() {
                         if (rich) rich(body, message.body, attachments); else body.textContent = message.body;
                     }
                     if (badge.kind === "warning") row.classList.add("missing-key");
-                    const stamp = el("time", "", new Date(message.created_at * 1000).toLocaleString());
+                    // The full date stays the visible label; the Messages view
+                    // shows the clock time under its day separators instead.
+                    const sent = new Date(message.created_at * 1000);
+                    const stamp = el("time", "");
+                    stamp.dateTime = sent.toISOString(); stamp.title = sent.toLocaleString();
+                    stamp.append(el("span", "group-time-full", sent.toLocaleString()), el("span", "group-time-short", sent.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })));
                     const lock = window.__noxaChat?.encryptionBadgeElement?.(badge);
                     if (lock) stamp.append(lock);
                     row.append(el("strong", "", label(message.from_unique_id)), stamp, body);
@@ -603,6 +624,8 @@ export function initConversations() {
     const sidebarPoll = window.setInterval(() => { if (current() && !document.hidden) void refresh(true); }, 15000);
     workspace = {
         current, filter, active: visible, token: () => visible() ? viewToken : null,
+        snapshot: () => ({ tabID, generation: serverGeneration, uid: uid(), groups: listedGroups }),
+        create: groupName => mutate(null, "create", "", { name: String(groupName || "").trim() }),
         open: () => { setVisible(true); layout.expand(); create.hidden = false; add.setAttribute("aria-expanded", "true"); name.focus(); },
         jump: async (id, messageID, destinationCurrent) => { saveDraft(); selected = id; jumpTarget = messageID; setVisible(true); layout.expand(); await refresh(false, destinationCurrent); if (current() && destinationCurrent() && selected !== id) status.textContent = t("messages.notFound"); },
         close: () => { saveDraft(); setVisible(false); },
