@@ -92,6 +92,7 @@ type mediaPacer struct {
 	// Voice has its own worker: it is woken per packet, never waits for the
 	// video pacing tick, and never queues behind a video socket write.
 	audioWake chan struct{} // protected by mu; created by run
+	audioBusy bool          // protected by mu; voice worker is draining
 	// Voice bytes written since the video worker last refilled its budget.
 	// Video is paced with the estimate minus voice, never the reverse.
 	audioSent       atomic.Int64
@@ -373,6 +374,12 @@ func (p *mediaPacer) run() {
 				if budget <= 0 || (overloaded && sustained <= 0) {
 					break
 				}
+				// Yield the rest of this burst to pending voice: voice then
+				// enters a congested bottleneck queue ahead of the burst,
+				// right after it drained for a tick, instead of behind it.
+				if p.audioCount > 0 || p.audioBusy {
+					break
+				}
 				packet := p.popLocked()
 				p.mu.Unlock()
 				if p.writePacket(packet) {
@@ -396,6 +403,7 @@ func (p *mediaPacer) runAudio(wake <-chan struct{}, done chan<- struct{}) {
 	defer close(done)
 	for {
 		p.mu.Lock()
+		p.audioBusy = true
 		for p.audioCount > 0 && !p.closed {
 			packet := p.popAudioLocked()
 			if !packet.stream.active || !time.Now().Before(packet.expires) {
@@ -407,6 +415,7 @@ func (p *mediaPacer) runAudio(wake <-chan struct{}, done chan<- struct{}) {
 			}
 			p.mu.Lock()
 		}
+		p.audioBusy = false
 		p.mu.Unlock()
 		select {
 		case <-p.stop:
