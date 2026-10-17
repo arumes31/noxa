@@ -307,10 +307,13 @@ func (w *nativeOverlay) run(ready chan<- error) {
 		encoded, _ := json.Marshal(layout)
 		key := fmt.Sprintf("%s|%d,%d,%d,%d", encoded, x, y, width, height)
 		animating := false
-		for _, speaker := range s.Speakers {
+		speaking := make([]bool, len(s.Speakers))
+		for index, speaker := range s.Speakers {
+			speaking[index] = speaker.Speaking
 			animating = animating || (s.Animate && speaker.Speaking)
 		}
-		frameKey := fmt.Sprint(scene.rowAlpha, scene.peekAlpha, s.Speakers)
+		// Small per-tick key: only the state that changes a static frame.
+		frameKey := fmt.Sprint(scene.rowAlpha, scene.peekAlpha, speaking)
 		if key == last && visible && !animating && !scene.changing && frameKey == presented {
 			continue
 		}
