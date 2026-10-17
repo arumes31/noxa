@@ -2407,6 +2407,19 @@ export function notificationLine(m) {
     return (m.from || "someone") + ": " + previewLine(m);
 }
 
+// keywordText is the text keyword highlights match against: the same
+// sanitized body previewLine shows (attachment references reduced to their
+// file name, so a keyword never matches inside a storage key), without the
+// 80-character cut. A refused, unopened or deleted body has no user text and
+// matches nothing — not even words of its refusal notice.
+export function keywordText(m) {
+    if (!m || m.deleted || encryptionBadge(m).bodyKey) return "";
+    return String(m.text ?? "")
+        .replace(/\[file:([^\]]+)\]/g, (_, capture) => " " + parseFileRef(capture).name + " ")
+        .replace(/\s+/g, " ")
+        .trim();
+}
+
 export function addChat(d) {
     const st = V().state;
     const m = normalize(d);
@@ -2433,7 +2446,7 @@ export function addChat(d) {
         m.mentioned = true; // (106) accent highlight
     } else if (!m.self) {
         // (388) keyword highlights: whole-word match gets mention treatment.
-        const kw = window.__noxaNotify?.matchKeyword(m.text || "");
+        const kw = window.__noxaNotify?.matchKeyword(keywordText(m));
         const keywordLevelAllowed = level === "all" || level === "channel_mentions";
         if (kw) {
             m.mentioned = true;

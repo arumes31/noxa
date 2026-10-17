@@ -371,6 +371,32 @@ test("frontend UI module behaviors", { concurrency: false }, async (t) => {
         assert.equal(addChat.match(/notificationLine\(m\)/g)?.length, 3);
     });
 
+    await t.test("chat keyword highlights match only sanitized message text", async (t) => {
+        replaceGlobal(t, "window", { __noxa: { state: { myNickname: "Dan" } } });
+        const chat = await import("../src/chat-ui.js");
+        const channel = (text, extra = {}) => chat.normalize({ text, from_nickname: "Ada", enc_verified: true, enc_mode: "server", ...extra }, 4);
+        const token = channel("[file:raid#secretkey#nx1;size=4#plan.pdf]");
+        assert.equal(chat.keywordText(token), "plan.pdf");
+        assert.doesNotMatch(chat.keywordText(token), /raid|secretkey|nx1/);
+        assert.equal(chat.keywordText(channel("see\n[file:raid#secretkey#plan.pdf]  now")), "see plan.pdf now");
+        const long = "x ".repeat(60) + "raid tonight";
+        assert.equal(chat.keywordText(channel(long)), long.trim(), "no preview truncation");
+        assert.equal(chat.keywordText(channel("[encrypted message — key unavailable]")), "");
+        assert.equal(chat.keywordText(chat.normalize({ text: "raid in the clear", from_nickname: "Ada" }, 4)), "");
+        assert.equal(chat.keywordText({ ...channel("raid"), deleted: true }), "");
+        // With the real matcher: a keyword inside the token or key never matches.
+        window.__noxa.state.lastConnect = { addr: "srv" };
+        window.__noxa.state.settings = { keywords: { srv: ["raid", "secretkey", "plan"] } };
+        const { matchKeyword } = await import("../src/notifications.js");
+        assert.equal(matchKeyword(chat.keywordText(token)), "plan");
+        window.__noxa.state.settings.keywords.srv = ["raid", "secretkey"];
+        assert.equal(matchKeyword(chat.keywordText(token)), "");
+        assert.equal(matchKeyword(chat.keywordText(channel(long))), "raid");
+        const source = await (await import("node:fs/promises")).readFile(new URL("../src/chat-ui.js", import.meta.url), "utf8");
+        assert.match(source, /matchKeyword\(keywordText\(m\)\)/);
+        assert.doesNotMatch(source, /matchKeyword\(m\.text/);
+    });
+
     await t.test("chat replaces an unopened copy with a later verified copy", async (t) => {
         const changed = [];
         replaceGlobal(t, "window", { __noxa: { state: { myNickname: "Dan" } } });
