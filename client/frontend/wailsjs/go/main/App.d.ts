@@ -420,6 +420,8 @@ export function SendChatReply(arg1:string,arg2:string,arg3:string,arg4:number):P
 
 export function SendChatReplyForTab(arg1:string,arg2:string,arg3:string,arg4:string,arg5:number):Promise<string>;
 
+export function SendConversationTypingForTab(arg1:string,arg2:string):Promise<string>;
+
 export function SendConversationForTab(arg1:string,arg2:string,arg3:string,arg4:string):Promise<number>;
 
 export function SendICECandidate(arg1:string,arg2:string,arg3:number):Promise<void>;

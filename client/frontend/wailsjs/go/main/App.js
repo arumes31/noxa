@@ -834,6 +834,10 @@ export function SendChatReplyForTab(arg1, arg2, arg3, arg4, arg5) {
   return window['go']['main']['App']['SendChatReplyForTab'](arg1, arg2, arg3, arg4, arg5);
 }
 
+export function SendConversationTypingForTab(arg1, arg2) {
+  return window['go']['main']['App']['SendConversationTypingForTab'](arg1, arg2);
+}
+
 export function SendConversationForTab(arg1, arg2, arg3, arg4) {
   return window['go']['main']['App']['SendConversationForTab'](arg1, arg2, arg3, arg4);
 }

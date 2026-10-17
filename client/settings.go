@@ -255,6 +255,10 @@ type Settings struct {
 	Contacts           []Contact          `json:"contacts,omitempty"`      // (316)
 	BlockedUsers       []string           `json:"blocked_users,omitempty"` // (317) unique IDs
 	MutedConversations []string           `json:"muted_conversations,omitempty"`
+	// HideChatActivity stops this client from sending read receipts and typing
+	// indicators, in direct messages and private groups alike. Delivery
+	// receipts are unaffected. Default (false) keeps the existing behaviour.
+	HideChatActivity bool `json:"hide_chat_activity,omitempty"`
 	UserNotes          map[string]string  `json:"user_notes,omitempty"`      // (315) uniqueID -> local note
 	RecentChannels     map[string][]int64 `json:"recent_channels,omitempty"` // (320) server addr -> last 5 channel IDs
 	AutoAwayMinutes    int                `json:"auto_away_minutes"`         // (308) 0 = off, default 15

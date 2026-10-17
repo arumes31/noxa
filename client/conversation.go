@@ -130,6 +130,7 @@ func (a *App) ConversationForTab(tabID string, request netproto.ConversationRequ
 	if request.Action == "send" {
 		return netproto.ConversationResult{}, errors.New("use encrypted group messaging")
 	}
+	request.ShareRead = request.Action == "mark_read" && a.shareConversationReads(m)
 	result, err := m.conversationRequest(request)
 	if err != nil || request.Action != "history" {
 		return result, err
