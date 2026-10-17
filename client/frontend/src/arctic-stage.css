@@ -238,7 +238,9 @@
 .stream-stage:fullscreen .stage-body { flex: 1 1 auto; }
 
 /* ------------------------------------------------- split: stage over chat */
-#chat-pane.stage-split .stream-media { flex: 0 0 calc(var(--stage-split, .62) * 100%); min-height: 160px; }
+/* The stage wraps itself when no stream session supplied a .stream-media
+   wrapper (stream-stage.js falls back to the stage root); size both alike. */
+#chat-pane.stage-split .stream-media, #chat-pane.stage-split > .stream-stage { flex: 0 0 calc(var(--stage-split, .62) * 100%); min-height: 160px; }
 #chat-pane.stage-split .stage-splitter {
     position: relative; display: flex; align-items: center; justify-content: center; gap: 12px;
     flex: none; height: 14px; margin: 0; cursor: row-resize; touch-action: none;
@@ -264,7 +266,7 @@
 /* ------------------------------------- side: stage left, panel at right */
 #chat-pane.stage-side { position: relative; padding-left: calc(100% - var(--stage-panel-w)); box-sizing: border-box; }
 #chat-pane.stage-side.stage-panel-collapsed { --stage-panel-w: 52px; }
-#chat-pane.stage-side .stream-media {
+#chat-pane.stage-side .stream-media, #chat-pane.stage-side > .stream-stage {
     position: absolute; top: 0; bottom: 0; left: 0; right: var(--stage-panel-w);
     max-height: none; border-right: 1px solid var(--border);
 }
@@ -280,13 +282,13 @@
 .stage-tab:hover { color: var(--text); }
 .stage-tab[aria-selected="true"] { color: var(--text); background: var(--stage-surface); border-color: var(--border); }
 #chat-pane.stage-side.stage-panel-viewers .stage-viewers { display: block; flex: 1 1 auto; min-height: 0; overflow: auto; padding: 8px; }
-#chat-pane.stage-side.stage-panel-viewers > :not(.stream-media, .stage-panel-head, .stage-viewers, .stage-rail) { display: none; }
+#chat-pane.stage-side.stage-panel-viewers > :not(.stream-media, .stream-stage, .stage-panel-head, .stage-viewers, .stage-rail) { display: none; }
 .stage-viewer-list { list-style: none; margin: 0; padding: 0; }
 .stage-viewer { display: flex; align-items: center; gap: 10px; padding: 7px 8px; border-radius: var(--stage-radius-sm); }
 .stage-viewer:hover { background: var(--stage-surface); }
 .stage-viewer-avatar { width: 28px; height: 28px; }
 .stage-viewer-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-#chat-pane.stage-side.stage-panel-collapsed > :not(.stream-media, .stage-rail) { display: none; }
+#chat-pane.stage-side.stage-panel-collapsed > :not(.stream-media, .stream-stage, .stage-rail) { display: none; }
 #chat-pane.stage-side.stage-panel-collapsed .stage-rail {
     display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 12px 0; height: 100%;
 }
