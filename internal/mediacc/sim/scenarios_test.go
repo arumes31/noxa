@@ -52,11 +52,24 @@ func logReports(t *testing.T, w *world, from time.Duration) map[string]viewerRep
 
 var seeds = []int64{1, 2, 3}
 
+// scenarioSeeds returns the seeds a scenario runs. Every scenario runs all of
+// them in a normal run. Under the race detector (about 8x slower; the
+// simulation is a single goroutine, so extra seeds add no race coverage) and
+// with -short, one seed exercises each scenario.
+func scenarioSeeds(t *testing.T, all []int64) []int64 {
+	t.Helper()
+	if raceEnabled || testing.Short() {
+		t.Logf("race=%v short=%v: running seed %d only", raceEnabled, testing.Short(), all[0])
+		return all[:1]
+	}
+	return all
+}
+
 // A stable link with ample capacity: the estimate must never fall below what
 // the stream needs, and the viewer must stay at full quality without
 // periodic disturbances.
 func TestSimStableJitteryLink(t *testing.T) {
-	for _, seed := range seeds {
+	for _, seed := range scenarioSeeds(t, seeds) {
 		w := newWorld(seed)
 		newSource(w, 60, constant(demand1080p60))
 		v := w.addViewer("A", jitteryLink(constant(30_000_000)))
@@ -75,7 +88,7 @@ func TestSimStableJitteryLink(t *testing.T) {
 // A link only 50% above the stream's rate, with the same jitter: jitter must
 // not be mistaken for congestion often enough to starve the stream.
 func TestSimStableTightLink(t *testing.T) {
-	for _, seed := range seeds {
+	for _, seed := range scenarioSeeds(t, seeds) {
 		w := newWorld(seed)
 		newSource(w, 60, constant(demand1080p60))
 		w.addViewer("A", jitteryLink(constant(12_000_000)))
@@ -90,7 +103,7 @@ func TestSimStableTightLink(t *testing.T) {
 // Small bursty loss (about 1%, bursts of ~3 packets) must be repaired and must
 // not collapse the estimate.
 func TestSimBurstyLoss(t *testing.T) {
-	for _, seed := range seeds {
+	for _, seed := range scenarioSeeds(t, seeds) {
 		w := newWorld(seed)
 		newSource(w, 60, constant(demand1080p60))
 		cfg := jitteryLink(constant(30_000_000))
@@ -110,7 +123,7 @@ func TestSimBurstyLoss(t *testing.T) {
 // watch starts.
 func TestSimViewerJoin(t *testing.T) {
 	for _, demand := range []int{demand1080p60, demand1080p60Motion} {
-		for _, seed := range seeds {
+		for _, seed := range scenarioSeeds(t, seeds) {
 			w := newWorld(seed)
 			newSource(w, 60, constant(demand))
 			w.source.keyframeFactor = 10
@@ -138,7 +151,7 @@ func TestSimViewerJoin(t *testing.T) {
 // Transient congestion: capacity collapses to 3 Mbit/s for 3 s, then returns.
 // Full quality must return within a few seconds, without a keyframe storm.
 func TestSimTransientCongestion(t *testing.T) {
-	for _, seed := range seeds {
+	for _, seed := range scenarioSeeds(t, seeds) {
 		w := newWorld(seed)
 		newSource(w, 60, constant(demand1080p60))
 		v := w.addViewer("A", jitteryLink(stepped(30_000_000, 3_000_000, 20*time.Second, 23*time.Second)))
@@ -162,7 +175,7 @@ func TestSimTransientCongestion(t *testing.T) {
 // degrade the fast viewers, neither through the relay nor by making the
 // shared publisher encode keyframes on a fixed cadence.
 func TestSimSlowViewerAmongFast(t *testing.T) {
-	for _, seed := range seeds[:2] {
+	for _, seed := range scenarioSeeds(t, seeds[:2]) {
 		w := newWorld(seed)
 		newSource(w, 60, constant(demand1080p60))
 		w.addViewer("A", jitteryLink(constant(30_000_000)))
