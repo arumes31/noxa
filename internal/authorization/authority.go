@@ -10,6 +10,13 @@ import (
 
 var ErrAuthorizationUnavailable = errors.New("authorization unavailable")
 
+// ErrAuthorizationBusy is returned by TryWithPolicy when a policy writer
+// momentarily holds the packet gate. It wraps ErrAuthorizationUnavailable, so
+// existing checks still treat it as "no decision"; realtime callers can tell
+// a transient contention apart from a missing or failed policy, which must
+// never be read as permission.
+var ErrAuthorizationBusy = fmt.Errorf("policy gate busy: %w", ErrAuthorizationUnavailable)
+
 // ErrLifecycleUnchanged is returned only by trusted maintenance callbacks
 // that revalidated a timer and found no work. It never acknowledges a commit.
 var ErrLifecycleUnchanged = errors.New("channel lifecycle unchanged")
@@ -103,7 +110,7 @@ func (a *Authority) WithPolicy(ctx context.Context, effect func(*RoleEvaluator) 
 // Contention drops the packet; it never bypasses the authorization check.
 func (a *Authority) TryWithPolicy(effect func(*RoleEvaluator) error) error {
 	if !a.packetGate.TryRLock() {
-		return ErrAuthorizationUnavailable
+		return ErrAuthorizationBusy
 	}
 	defer a.packetGate.RUnlock()
 	if a.evaluator == nil {

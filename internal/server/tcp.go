@@ -19,6 +19,7 @@ import (
 	"io"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"go.uber.org/zap"
@@ -54,6 +55,9 @@ type Client struct {
 	Username string // nickname, once authenticated
 	UniqueID string // TS3-style unique ID, once authenticated
 	UserID   int64  // database users.id, once authenticated
+
+	// talkDecision caches the last uncontended Speak evaluation (canTalk).
+	talkDecision atomic.Pointer[talkDecision]
 
 	mu                 sync.RWMutex
 	lastOwnChannelMove *broadcast.OwnChannelMove // recipient-only cause, protected by mu

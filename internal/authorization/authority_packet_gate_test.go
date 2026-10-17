@@ -2,6 +2,7 @@ package authorization
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 )
@@ -87,5 +88,25 @@ func TestUnchangedLoginRefreshKeepsPacketGateOpen(t *testing.T) {
 	close(backend.release)
 	if err := <-done; err != nil {
 		t.Fatal(err)
+	}
+}
+
+// Realtime callers must be able to tell a momentarily busy gate from a
+// missing policy: only the former may reuse a previous decision.
+func TestTryWithPolicyDistinguishesBusyFromUnavailable(t *testing.T) {
+	a, err := NewAuthority(t.Context(), &authorityTestBackend{policy: roleFixture()}, func(context.Context, *RoleEvaluator, *RoleEvaluator) error { return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	unlock := a.lockExclusive()
+	err = a.TryWithPolicy(func(*RoleEvaluator) error { t.Error("packet ran under a policy writer"); return nil })
+	unlock()
+	if !errors.Is(err, ErrAuthorizationBusy) || !errors.Is(err, ErrAuthorizationUnavailable) {
+		t.Fatalf("held gate: got %v, want busy (wrapping unavailable)", err)
+	}
+	empty := &Authority{}
+	err = empty.TryWithPolicy(func(*RoleEvaluator) error { t.Error("packet ran without a policy"); return nil })
+	if !errors.Is(err, ErrAuthorizationUnavailable) || errors.Is(err, ErrAuthorizationBusy) {
+		t.Fatalf("no evaluator: got %v, want unavailable but not busy", err)
 	}
 }

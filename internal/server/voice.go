@@ -8,6 +8,7 @@ package server
 import (
 	"context"
 	"errors"
+	"sync/atomic"
 	"time"
 
 	"go.uber.org/zap"
@@ -379,7 +380,34 @@ func (s *TCPServer) canTalk(clientID string) bool {
 		allowed = e.Evaluate(client.userID(), member.ChannelID, authorization.Speak).Allowed
 		return nil
 	})
-	return allowed || err != nil
+	return resolveTalk(&client.talkDecision, member.ChannelID, allowed, err)
+}
+
+// resolveTalk turns one Speak evaluation into the per-packet talk decision.
+// A successful evaluation is authoritative and remembered. While a policy
+// commit momentarily holds the gate (ErrAuthorizationBusy) the speaker keeps
+// its last real decision in the same channel instead of flapping; without one
+// (new speaker, or moved channel) the packet is dropped. A missing or failed
+// policy is never permission and clears the remembered decision.
+func resolveTalk(last *atomic.Pointer[talkDecision], channelID int64, allowed bool, err error) bool {
+	switch {
+	case err == nil:
+		last.Store(&talkDecision{channelID: channelID, allowed: allowed})
+		return allowed
+	case errors.Is(err, authorization.ErrAuthorizationBusy):
+		previous := last.Load()
+		return previous != nil && previous.channelID == channelID && previous.allowed
+	default:
+		last.Store(nil)
+		return false
+	}
+}
+
+// talkDecision is a client's last uncontended Speak evaluation, reused only
+// while the policy gate is momentarily busy.
+type talkDecision struct {
+	channelID int64
+	allowed   bool
 }
 
 // canPublishVideo checks the client's current video capabilities and channel.
