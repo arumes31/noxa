@@ -118,7 +118,7 @@ test("settings Apply refreshes its edit baseline before the next edit", async ({
             };
             return target[method];
         } });
-        window.__noxa.openSettings();
+        window.__noxa.openSettings("chat");
     });
     await page.getByRole("spinbutton", { name: "Chat max lines", exact: true }).fill("777");
     await page.locator("#set-apply").click();

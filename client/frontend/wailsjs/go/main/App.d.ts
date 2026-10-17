@@ -174,6 +174,8 @@ export function DMSearch(arg1:string,arg2:string,arg3:number):Promise<main.ChatS
 
 export function DMSearchForContext(arg1:main.DMHistoryContext,arg2:string,arg3:string,arg4:number):Promise<main.ChatSearchResult>;
 
+export function DefaultSettingsSnapshot():Promise<main.Settings>;
+
 export function DeleteIdentity(arg1:string,arg2:boolean):Promise<string>;
 
 export function Disconnect():Promise<void>;

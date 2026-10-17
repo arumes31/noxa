@@ -4005,7 +4005,7 @@ test("settings save blocks duplicates, retains draft after failure and retries",
     const errors = [];
     page.on("pageerror", error => errors.push(error.message));
     await installSaveScenario(page);
-    await page.evaluate(() => window.__noxa.openSettings());
+    await page.evaluate(() => window.__noxa.openSettings("chat"));
     const dialog = page.locator("#settings-overlay");
     await page.getByRole("spinbutton", { name: "Chat max lines", exact: true }).fill("777");
     await page.locator("#set-apply").click();
@@ -4169,7 +4169,7 @@ test("settings search reuses labels and invalidates after edits, language change
     await page.evaluate(async () => (await import("/src/i18n.js")).setLanguage("de"));
     const beforeGermanSearch = await page.evaluate(() => window.__searchControls);
     await search.fill("lautstärke");
-    await expect(page.locator(".set-search-hit").first()).toContainText("Wiedergabe");
+    await expect(page.locator(".set-search-hit").first()).toContainText("Audio & Sprache");
     const germanBuild = await page.evaluate(() => window.__searchControls);
     expect(germanBuild).toBeGreaterThan(beforeGermanSearch);
     await search.fill("lautstärk");
@@ -4210,6 +4210,7 @@ test("German menus translate remaining actions and bookmark dialogs", async ({ p
 });
 
 test("client language translates every settings page and persists on Apply @a11y", async ({ page }, testInfo) => {
+    test.setTimeout(60_000); // twelve pages, two of them device-heavy
     const errors = [];
     page.on("pageerror", error => errors.push(error.message));
     await page.evaluate(() => {
@@ -4222,25 +4223,26 @@ test("client language translates every settings page and persists on Apply @a11y
         window.__noxa.openSettings();
     });
     await page.getByRole("combobox", { name: "Language", exact: true }).selectOption("de");
+    await page.getByRole("tab", { name: "Chat", exact: true }).click();
     await page.getByRole("spinbutton", { name: "Chat max lines", exact: true }).fill("500");
     await page.getByRole("button", { name: "Apply", exact: true }).click();
     await expect(page.getByRole("dialog", { name: "Einstellungen", exact: true })).toBeVisible();
-    await expect(page.getByRole("combobox", { name: "Sprache", exact: true })).toHaveValue("de");
     await expect(page.locator("html")).toHaveAttribute("lang", "de");
     await expect(page.getByRole("spinbutton", { name: "Chat max. Zeilen", exact: true })).toHaveValue("500");
+    await page.getByRole("tab", { name: "Allgemein", exact: true }).click();
+    await expect(page.getByRole("combobox", { name: "Sprache", exact: true })).toHaveValue("de");
     await page.screenshot({ path: testInfo.outputPath("settings-german-application.png") });
     const pages = [
-        ["Anwendung", "Chat max. Zeilen"], ["Aufnahme", "Aufnahmegerät"], ["Kamera", "Kamerabildrate"],
-        ["Wiedergabe", "Ausgabegerät"], ["Overlay", "Sprach-Overlay"], ["Tastenkürzel", "Als neues Profil speichern…"],
-        ["Flüstern", "Flüstern aktivieren"], ["Downloads", "Downloadordner"],
-        ["Chat", "Zeitstempel"], ["Sicherheit", "Deine Identitäten"],
-        ["Server", "Maximale Clientanzahl (0 = unbegrenzt)"],
-        ["Benachrichtigungen", "Gesprochene Systemmeldungen"],
+        ["Allgemein", "Downloadordner"], ["Audio & Sprache", "Aufnahmegerät"], ["Audio & Sprache", "Ausgabegerät"],
+        ["Streams", "Kamerabildrate"], ["Vollbild-Overlay", "Sprach-Overlay"], ["Tastenkürzel", "Als neues Profil speichern…"],
+        ["Darstellung", "Fensterdeckkraft"], ["Privatsphäre", "Deine Identitäten"],
+        ["Chat", "Zeitstempel"], ["Flüstern", "Flüstern aktivieren"],
+        ["Verbindung", "Maximale Clientanzahl (0 = unbegrenzt)"], ["Benachrichtigungen", "Gesprochene Systemmeldungen"],
     ];
     for (const [tab, label] of pages) {
         await page.getByRole("tab", { name: tab, exact: true }).click();
         await expect(page.locator("#settings-content").getByText(label, { exact: true })).toBeVisible();
-        if (tab === "Sicherheit") {
+        if (tab === "Privatsphäre") {
             await expect(page.getByText("My identity", { exact: false })).toBeVisible();
             await page.screenshot({ path: testInfo.outputPath("settings-german-security.png") });
         }
@@ -4252,7 +4254,7 @@ test("client language translates every settings page and persists on Apply @a11y
         return table.getBoundingClientRect().right <= content.getBoundingClientRect().right;
     })).toBe(true);
     await page.getByRole("textbox", { name: "Einstellungen suchen", exact: true }).fill("Lautstärke");
-    await expect(page.locator(".set-search-hit").first()).toContainText("Wiedergabe");
+    await expect(page.locator(".set-search-hit").first()).toContainText("Audio & Sprache");
     await page.getByRole("button", { name: "Abbrechen", exact: true }).click();
     await page.evaluate(() => window.__noxa.openSettings());
     await expect(page.getByRole("combobox", { name: "Sprache", exact: true })).toHaveValue("de");
@@ -4261,7 +4263,7 @@ test("client language translates every settings page and persists on Apply @a11y
     expect(await page.evaluate(() => window.__noxa.state.settings.language)).toBe("de");
     await page.evaluate(() => window.__noxa.openSettings());
     await page.getByRole("combobox", { name: "Sprache", exact: true }).selectOption("en");
-    await page.getByRole("button", { name: "OK", exact: true }).click();
+    await page.getByRole("button", { name: "Fertig", exact: true }).click();
     await page.evaluate(() => window.__noxa.openSettings());
     await expect(page.getByRole("dialog", { name: "Settings", exact: true })).toBeVisible();
     await expect(page.getByRole("combobox", { name: "Language", exact: true })).toHaveValue("en");
@@ -4273,7 +4275,7 @@ test("notification settings group controls and keep device selection shared @a11
     const output = page.locator(".notification-output");
     await expect(output.getByRole("button", { name: "Test spoken message", exact: true })).toBeVisible();
     await output.getByRole("combobox", { name: "Output device", exact: true }).selectOption("speaker-usb");
-    await page.getByRole("tab", { name: "Playback", exact: true }).click();
+    await page.getByRole("tab", { name: "Audio & voice", exact: true }).click();
     await expect(page.getByRole("combobox", { name: "Output device", exact: true })).toHaveValue("speaker-usb");
     await page.getByRole("tab", { name: "Notifications", exact: true }).click();
     await expect(page.locator(".notification-event-speech")).not.toHaveAttribute("open");
@@ -5988,7 +5990,7 @@ test("refreshes capture and playback device lists on demand", async ({ page }) =
     await expect(captureSelect.getByRole("option", { name: "Studio Mic" })).toHaveCount(1);
     await expect(captureSelect).toHaveValue("mic-usb");
 
-    await page.getByRole("tab", { name: /Playback/ }).click();
+    await page.getByRole("tab", { name: "Audio & voice", exact: true }).click();
     const playbackRow = page.locator("#settings-content .set-row").filter({ hasText: "Output device" });
     const playbackSelect = playbackRow.locator("select");
     await expect(playbackSelect).toHaveAccessibleName("Output device");
@@ -6783,9 +6785,9 @@ test("camera settings preview requires an explicit test and releases capture on 
     await page.getByRole("button", { name: "Stop camera test", exact: true }).click();
     expect(await page.evaluate(() => window.__previewTrack.readyState)).toBe("ended");
     await start.click();
-    await page.locator('[data-page="playback"]').click();
+    await page.locator('[data-page="audio"]').click();
     expect(await page.evaluate(() => window.__previewTrack.readyState)).toBe("ended");
-    await page.locator('[data-page="camera"]').click();
+    await page.locator('[data-page="streams"]').click();
     await start.click();
     await page.getByRole("button", { name: "Cancel", exact: true }).click();
     expect(await page.evaluate(() => window.__previewTrack.readyState)).toBe("ended");
@@ -7678,18 +7680,18 @@ test("camera settings have their own searchable section and preserve drafts acro
         window.__noxa.openSettings("capture");
     });
     await expect(page.getByRole("button", { name: "Test camera", exact: true })).toHaveCount(0);
-    const capture = page.getByRole("tab", { name: "Capture", exact: true });
+    const capture = page.getByRole("tab", { name: "Audio & voice", exact: true });
     await capture.focus();
     await page.keyboard.press("ArrowDown");
-    await expect(page.getByRole("tab", { name: "Camera", exact: true })).toBeFocused();
+    await expect(page.getByRole("tab", { name: "Streams", exact: true })).toBeFocused();
     await page.keyboard.press("Enter");
     await page.getByLabel("Camera frame rate", { exact: true }).selectOption("60");
     await capture.click();
     await page.getByLabel("Search settings", { exact: true }).fill("camera frame rate");
     const hit = page.locator(".set-search-hit");
-    await expect(hit).toContainText("Camera");
+    await expect(hit).toContainText("Streams");
     await hit.click();
-    await expect(page.getByRole("tab", { name: "Camera", exact: true })).toHaveAttribute("aria-selected", "true");
+    await expect(page.getByRole("tab", { name: "Streams", exact: true })).toHaveAttribute("aria-selected", "true");
     await expect(page.getByLabel("Camera frame rate", { exact: true })).toHaveValue("60");
     await page.locator("#set-apply").click();
     await expect(page.locator(".settings-save-status")).toHaveText("Changes applied");
@@ -7703,17 +7705,18 @@ test("camera settings have their own searchable section and preserve drafts acro
 test("settings explain when saved changes and temporary previews take effect", async ({ page }) => {
     await page.evaluate(() => window.__noxa.openSettings("capture"));
     await expect(page.getByLabel("Echo cancellation", { exact: true })).toHaveAccessibleDescription("Applies immediately after saving.");
-    await expect(page.locator("#settings-content")).not.toContainText("next reconnects");
-    await page.getByRole("tab", { name: "Camera", exact: true }).click();
-    await expect(page.getByLabel("Camera frame rate", { exact: true })).toHaveAccessibleDescription("After saving, start or restart the camera to use these settings. Restart the local test to preview them.");
+    await expect(page.locator('#settings-content [data-section="input"]')).not.toContainText("next reconnects");
+    await page.getByRole("tab", { name: "Streams", exact: true }).click();
+    await expect(page.getByLabel("Camera frame rate", { exact: true })).toHaveAccessibleDescription(/After saving, start or restart the camera to use these settings\. Restart the local test to preview them\.$/);
     await expect(page.locator("#settings-content")).toContainText("Preview only — stays on this device and does not start a call.");
-    await page.getByRole("tab", { name: "Playback", exact: true }).click();
+    await page.getByRole("tab", { name: "Audio & voice", exact: true }).click();
     await expect(page.getByLabel("Voice limiter (compressor)", { exact: true })).toHaveAccessibleDescription("Requires voice reconnect after saving.");
-    await page.getByRole("tab", { name: "Application", exact: true }).click();
-    await expect(page.getByLabel("Window opacity", { exact: true })).toHaveAccessibleDescription("Preview now; Apply or OK keeps the change. Cancel restores the saved appearance.");
+    await page.getByRole("tab", { name: "Appearance", exact: true }).click();
+    await expect(page.getByLabel("Window opacity", { exact: true })).toHaveAccessibleDescription("Preview now; Apply or Done keeps the change. Cancel restores the saved appearance.");
+    await page.getByRole("tab", { name: "General", exact: true }).click();
     await expect(page.getByLabel("Check for updates at startup", { exact: true })).toHaveAccessibleDescription("After saving, takes effect at the next app start.");
     await expect(page.getByLabel("Automatically install updates at startup", { exact: true })).toBeChecked();
-    await expect(page.getByLabel("Automatically install updates at startup", { exact: true })).toHaveAccessibleDescription("After saving, takes effect at the next app start.");
+    await expect(page.getByLabel("Automatically install updates at startup", { exact: true })).toHaveAccessibleDescription(/^Downloads updates and restarts noXa when the app starts\..*After saving, takes effect at the next app start\.$/);
 });
 
 test("video CPU pressure respects efficient decoding and discards stale polls", async ({ page }) => {

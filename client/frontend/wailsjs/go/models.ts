@@ -1415,6 +1415,8 @@ export namespace main {
 	    gaming_overlay_opacity: number;
 	    gaming_overlay_x: number;
 	    gaming_overlay_y: number;
+	    gaming_overlay_game_ui: string;
+	    gaming_overlay_avoid_zones: boolean;
 	    camera_background_image: string;
 	    camera_blur_strength: number;
 	    camera_mirror_preview: boolean;
@@ -1540,6 +1542,8 @@ export namespace main {
 	        this.gaming_overlay_opacity = source["gaming_overlay_opacity"];
 	        this.gaming_overlay_x = source["gaming_overlay_x"];
 	        this.gaming_overlay_y = source["gaming_overlay_y"];
+	        this.gaming_overlay_game_ui = source["gaming_overlay_game_ui"];
+	        this.gaming_overlay_avoid_zones = source["gaming_overlay_avoid_zones"];
 	        this.camera_background_image = source["camera_background_image"];
 	        this.camera_blur_strength = source["camera_blur_strength"];
 	        this.camera_mirror_preview = source["camera_mirror_preview"];
