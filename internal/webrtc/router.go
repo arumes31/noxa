@@ -2101,26 +2101,6 @@ func (r *Router) forwardVideoFrameAtPolicyCodecSource(senderID, slot, rid string
 	}
 	r.markVideoSeen(senderID, slot, rid, pkt, now)
 	r.mu.RLock()
-	ref := videoSourceRef{senderID, slot}
-	last, seen := r.videoSeen[ref][rid]
-	src, known := r.videoSources[senderID][slot][rid]
-	refresh := known && src == pkt.SSRC && !isVideoPadding(pkt) && (!seen || !now.After(last) || now.Sub(last) >= videoSeenRefresh)
-	if refresh {
-		r.mu.RUnlock()
-		r.mu.Lock()
-		if source != nil && r.slotClaims[senderID][slot+slotSep+rid].token != source.token {
-			r.mu.Unlock()
-			return 0
-		}
-		if source, ok := r.videoSources[senderID][slot][rid]; ok && source == pkt.SSRC && !isVideoPadding(pkt) {
-			if r.videoSeen[ref] == nil {
-				r.videoSeen[ref] = make(map[string]time.Time)
-			}
-			r.videoSeen[ref][rid] = now
-		}
-		r.mu.Unlock()
-		r.mu.RLock()
-	}
 	if source != nil && r.slotClaims[senderID][slot+slotSep+rid].token != source.token {
 		r.mu.RUnlock()
 		return 0

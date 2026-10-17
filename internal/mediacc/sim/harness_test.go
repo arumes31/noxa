@@ -835,8 +835,10 @@ func (v *viewer) report(from time.Duration) viewerReport {
 	if count > 0 {
 		r.meanTarget = sum / count
 	}
-	if v.mediaBytes > 0 {
-		r.overhead = float64(v.sentBytes-v.mediaBytes) / float64(v.mediaBytes)
+	// Overhead is retransmission cost over unique media actually sent: media
+	// that expired in the pacer was never sent, so it must not offset RTX.
+	if media := v.sentBytes - v.rtxBytes; media > 0 {
+		r.overhead = float64(v.rtxBytes) / float64(media)
 	}
 	if d := v.w.elapsed() - v.joined.Sub(simEpoch); d > 0 {
 		r.sentMbps = float64(v.sentBytes*8) / d.Seconds() / 1e6

@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -65,7 +66,21 @@ func TestBrowserVoiceListenerSurvivesSpeakerChurn(t *testing.T) {
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = cmd.Process.Kill(); _ = cmd.Wait() })
+	t.Cleanup(func() {
+		// SIGTERM lets the script close Chromium; kill only if it does not
+		// exit in time (or the platform cannot deliver SIGTERM).
+		exited := make(chan struct{})
+		go func() { _ = cmd.Wait(); close(exited) }()
+		if err := cmd.Process.Signal(syscall.SIGTERM); err == nil {
+			select {
+			case <-exited:
+				return
+			case <-time.After(10 * time.Second):
+			}
+		}
+		_ = cmd.Process.Kill()
+		<-exited
+	})
 	go func() {
 		scanner := bufio.NewScanner(out)
 		for scanner.Scan() {
