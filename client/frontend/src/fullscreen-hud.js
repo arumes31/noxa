@@ -639,7 +639,8 @@ export function createFullscreenHud(stage) {
         const avatarHolder = box.querySelector(".fs-quick-avatar");
         const avatar = el("span", "avatar");
         avatar.setAttribute("aria-hidden", "true");
-        paintAvatar(avatar, c, dm ? target.name : `#${target.name}`);
+        if (dm) paintAvatar(avatar, c, target.name);
+        else { avatar.replaceChildren(); avatar.dataset.uid = avatar.dataset.name = ""; avatar.textContent = "#"; avatar.classList.add("fs-channel-avatar"); }
         const speaking = !!(c?.is_speaking);
         avatarHolder.className = `fs-quick-avatar${speaking ? " client speaking" : ""}`;
         avatarHolder.replaceChildren(speaking ? speakingAvatar(avatar) : avatar);
@@ -757,6 +758,7 @@ export function createFullscreenHud(stage) {
         const state = V()?.state || {};
         const channel = state.channels?.find(c => c.ChannelID === state.myChannelID);
         if (!channel) return;
+        peek.clear();
         quick.openChannel({ id: channel.ChannelID, name: channel.Name, recent: channelRing.filter(m => m.channel === channel.ChannelID) });
         chatUnread = 0;
         renderDock();

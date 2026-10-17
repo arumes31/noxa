@@ -244,7 +244,7 @@
 .fs-quick-input {
     flex: 1; min-width: 0; border: 0; outline: 0; background: transparent; color: inherit; font: inherit; font-size: 13px;
 }
-.fs-hud .fs-quick-input:focus-visible { outline: 0; }
+.fs-hud .fs-quick-input:is(:focus, :focus-visible) { outline: none !important; box-shadow: none; border: 0; }
 .fs-quick-input::placeholder { color: var(--fs-dim); opacity: .85; }
 .fs-quick-error { margin: -4px 14px 12px; color: var(--fs-danger); font-size: 12px; }
 
@@ -326,3 +326,4 @@
 :root[data-reduce-motion="1"] :is(.fs-peek-item, .fs-quick) { animation: none; }
 :root[data-reduce-motion="1"] .fs-hud[data-hud="hidden"] .fs-telemetry { translate: none; }
 :root[data-reduce-motion="1"] .fs-hud[data-hud="hidden"] .fs-dock { translate: -50% 0; }
+.fs-quick-avatar .avatar.fs-channel-avatar { background: color-mix(in srgb, var(--accent) 24%, #0b1520); color: var(--accent); font-size: 13px; }
