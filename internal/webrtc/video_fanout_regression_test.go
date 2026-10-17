@@ -17,9 +17,9 @@ func TestKeyframeThrottleStateIsBounded(t *testing.T) {
 			t.Fatalf("first request for ssrc %d was throttled", i+1)
 		}
 	}
-	r.mu.RLock()
+	r.keyframeMu.Lock()
 	size := len(r.keyframeLast)
-	r.mu.RUnlock()
+	r.keyframeMu.Unlock()
 	if size > keyframeSweepThreshold+int(keyframeRequestWindow/(100*time.Millisecond)) {
 		t.Fatalf("throttle map retained %d entries", size)
 	}
@@ -46,9 +46,9 @@ func TestKeyframeThrottleForgetsEndedSources(t *testing.T) {
 	delete(r.videoSources, "pub")
 	r.mu.Unlock()
 	r.ReadVideoLoop("pub", SlotScreen, track) // registers and unregisters 77
-	r.mu.RLock()
+	r.keyframeMu.Lock()
 	_, retained := r.keyframeLast[77]
-	r.mu.RUnlock()
+	r.keyframeMu.Unlock()
 	if retained {
 		t.Fatal("ended video reader retained keyframe throttle state")
 	}
@@ -56,9 +56,9 @@ func TestKeyframeThrottleForgetsEndedSources(t *testing.T) {
 	registerVideoSource(r, "pub", SlotScreen, "", 78)
 	r.RequestKeyframe("pub", SlotScreen, "")
 	r.DetachPeer("pub")
-	r.mu.RLock()
+	r.keyframeMu.Lock()
 	size := len(r.keyframeLast)
-	r.mu.RUnlock()
+	r.keyframeMu.Unlock()
 	if size != 0 || feedback.pliCount() != 2 {
 		t.Fatalf("detached publisher retained %d throttle entries (PLIs %d)", size, feedback.pliCount())
 	}
@@ -171,5 +171,26 @@ func TestWatchStartupFlushWithoutPendingSkipsWatchGate(t *testing.T) {
 		r.watchMu.RUnlock()
 		<-done
 		t.Fatal("startup flush took the watch writer gate with nothing pending")
+	}
+}
+
+// The media-path throttle never takes Router.mu: a viewer awaiting a keyframe
+// consults it for every rejected packet, and a queued Router.mu writer would
+// block voice's TryRLock.
+func TestKeyframeThrottleDoesNotTakeRouterLock(t *testing.T) {
+	r := NewRouter(nil)
+	r.mu.Lock()
+	done := make(chan bool, 1)
+	go func() { done <- r.allowKeyframeRequest(5, time.Now()) }()
+	select {
+	case ok := <-done:
+		r.mu.Unlock()
+		if !ok {
+			t.Fatal("first request was throttled")
+		}
+	case <-time.After(time.Second):
+		r.mu.Unlock()
+		<-done
+		t.Fatal("keyframe throttle waited for Router.mu")
 	}
 }

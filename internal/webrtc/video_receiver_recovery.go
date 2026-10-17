@@ -37,7 +37,10 @@ func (r *Router) ResetStreamReceiver(subscriber, publisher, slot string, generat
 // membership, publication and watch ownership through output replacement.
 func (r *Router) resetStreamReceiverLocked(peer *PeerConnectionWrapper, subscriber, publisher, slot string, generation, session, revision uint64) (bool, func(string), error) {
 	r.mu.Lock()
-	defer r.mu.Unlock()
+	// The replaced sender is retired after Router.mu is released (Pion's
+	// RemoveTrack can wait for this recipient's SetRemoteDescription).
+	r.beginDeferredTrackRemovalsLocked()
+	defer r.unlockFlushingTrackRemovals()
 	channel := r.clientChan[subscriber]
 	if r.pubPeers[subscriber] != peer || channel <= 0 || channel != r.clientChan[publisher] || !r.publisherAllowedLocked(subscriber, publisher) {
 		return false, nil, ErrVideoWatch

@@ -1422,10 +1422,13 @@ func (e *chaosEnv) checkRouterEmpty() {
 	r := e.router
 	r.mu.RLock()
 	defer r.mu.RUnlock()
+	r.keyframeMu.Lock()
+	keyframes := len(r.keyframeLast)
+	r.keyframeMu.Unlock()
 	sizes := map[string]int{
 		"pubTracks": len(r.pubTracks), "pubPeers": len(r.pubPeers), "videoSources": len(r.videoSources),
 		"videoSeen": len(r.videoSeen), "videoCodecs": len(r.videoCodecs), "videoIngress": len(r.videoIngress),
-		"slotClaims": len(r.slotClaims), "keyframeLast": len(r.keyframeLast), "rtcpWriters": len(r.rtcpWriters),
+		"slotClaims": len(r.slotClaims), "keyframeLast": keyframes, "rtcpWriters": len(r.rtcpWriters),
 		"layerPrefs": len(r.layerPrefs), "trackSlots": len(r.trackSlots),
 	}
 	for name, size := range sizes {

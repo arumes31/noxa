@@ -193,9 +193,9 @@ func TestH265RouterLateWatchCRAAndRASLNoFalsePLI(t *testing.T) {
 			watch("late")
 			feedback.pkts = nil
 		}
-		r.mu.Lock()
+		r.keyframeMu.Lock()
 		r.keyframeLast = make(map[uint32]time.Time)
-		r.mu.Unlock()
+		r.keyframeMu.Unlock()
 	}
 	r.ReadVideoLoop("pub", SlotScreen, track)
 	early, late := captures["early"].packets, captures["late"].packets
@@ -259,9 +259,9 @@ func TestH265RouterFailedWriteAndResumeWaitForConfiguredIRAP(t *testing.T) {
 			watch(2, false)
 			watch(3, true)
 		}
-		r.mu.Lock()
+		r.keyframeMu.Lock()
 		r.keyframeLast = make(map[uint32]time.Time)
-		r.mu.Unlock()
+		r.keyframeMu.Unlock()
 	}
 	r.ReadVideoLoop("pub", SlotScreen, track)
 	if len(capture.packets) != 4 {

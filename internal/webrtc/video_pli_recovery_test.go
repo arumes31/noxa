@@ -69,9 +69,9 @@ func TestSubscriberPLIRepairsCurrentLayerWhileSwitchWaitsForKeyframe(t *testing.
 	}
 	// Open a new request window without sleeping. Once the desired source is
 	// current, feedback must request it once and never wake the retired layer.
-	r.mu.Lock()
+	r.keyframeMu.Lock()
 	clear(r.keyframeLast)
-	r.mu.Unlock()
+	r.keyframeMu.Unlock()
 	feedback.pkts = nil
 	r.relayKeyframeRequest("viewer", output.sender)
 	if feedback.pliCount() != 1 || feedback.pkts[0][0].(*rtcp.PictureLossIndication).MediaSSRC != 20 {

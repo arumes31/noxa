@@ -239,15 +239,13 @@ func (r *Router) flushWatchStartup(subscriber string, peer *PeerConnectionWrappe
 			}
 		}
 		input.recordKeyframeRequest(keyframeWatchStart, keyframeRequested, &epoch)
-		if last := r.keyframeLast[ssrc]; !last.IsZero() && now.Sub(last) < keyframeRequestWindow {
+		if delay, ok := r.claimKeyframeRequest(ssrc, now); !ok {
 			input.recordKeyframeRequest(keyframeWatchStart, keyframeCoalesced, &epoch)
-			delay := keyframeRequestWindow - now.Sub(last)
 			if retry == 0 || delay < retry {
 				retry = delay
 			}
 			continue
 		}
-		r.noteKeyframeRequestLocked(ssrc, now)
 		watch.startupPending = false
 		r.watches[key] = watch
 		requests = append(requests, request{key.publisher, ssrc, writer, input, epoch})

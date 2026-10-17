@@ -62,9 +62,9 @@ func TestBackloggedReceiverKeyframeRequestsAreDeferred(t *testing.T) {
 	feedback := &fakeRTCPWriter{}
 	r.rtcpWriters["pub"] = feedback
 	openWindow := func() {
-		r.mu.Lock()
+		r.keyframeMu.Lock()
 		clear(r.keyframeLast)
-		r.mu.Unlock()
+		r.keyframeMu.Unlock()
 	}
 
 	// The first backlogged request is forwarded; immediate repeats are not,

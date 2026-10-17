@@ -256,8 +256,13 @@ type Router struct {
 	videoSources map[string]map[string]map[string]uint32
 	videoCodecs  map[videoSourceRef]webrtc.RTPCodecCapability
 	videoSeen    map[videoSourceRef]map[string]time.Time
-	layerPrefs   map[string]string    // subscriberID -> preferred RID ("f"/"h"/"q")
-	keyframeLast map[uint32]time.Time // media SSRC -> last forwarded PLI/FIR
+	layerPrefs   map[string]string // subscriberID -> preferred RID ("f"/"h"/"q")
+	// keyframeLast (media SSRC -> last forwarded PLI/FIR) is guarded by
+	// keyframeMu, a leaf lock, not by mu: the media path consults it for every
+	// rejected packet of a viewer awaiting a keyframe, and taking mu there
+	// would queue a writer in front of voice's TryRLock.
+	keyframeMu   sync.Mutex
+	keyframeLast map[uint32]time.Time
 	// keyframeWriting single-flights media-path PLI writes per source SSRC.
 	// Its mutex is a leaf and is never held across the network write.
 	keyframeWriteMu sync.Mutex
@@ -362,6 +367,7 @@ func (r *Router) SetRenegotiateHook(fn func(subscriberID string)) {
 // the echo channel.
 func (r *Router) SetEchoChannel(channelID int64) {
 	r.mu.Lock()
+	r.beginDeferredTrackRemovalsLocked()
 	r.echoChannel = channelID
 	r.refreshEchoScopeLocked()
 	r.refreshWhisperScopesLocked()
@@ -374,7 +380,7 @@ func (r *Router) SetEchoChannel(channelID int64) {
 		}
 	}
 	hook := r.onRenegotiate
-	r.mu.Unlock()
+	r.unlockFlushingTrackRemovals()
 	if hook != nil {
 		for sub := range renegotiate {
 			hook(sub)
@@ -456,6 +462,7 @@ func (r *Router) SetVideoHandlers(canVideo func(clientID string) bool) {
 // schedules renegotiation for peers that have a connection.
 func (r *Router) JoinChannel(channelID int64, clientID string) {
 	r.mu.Lock()
+	r.beginDeferredTrackRemovalsLocked()
 
 	if prev, ok := r.clientChan[clientID]; ok && prev != channelID {
 		r.leaveChannelLocked(prev, clientID)
@@ -501,7 +508,7 @@ func (r *Router) JoinChannel(channelID int64, clientID string) {
 	pref := r.layerPrefLocked(clientID)
 	members := len(set)
 	hook := r.onRenegotiate
-	r.mu.Unlock()
+	r.unlockFlushingTrackRemovals()
 
 	for _, ref := range keyframeTargets {
 		r.requestKeyframe(ref.publisher, ref.slot, pref, keyframeConsumerStart)
@@ -549,6 +556,7 @@ func (r *Router) leaveChannelLocked(channelID int64, clientID string) {
 	}
 	if r.clientChan[clientID] == channelID {
 		r.invalidateVideoLocked(clientID)
+		r.forgetVoiceFanoutLocked(clientID)
 		delete(r.clientChan, clientID)
 	}
 	r.refreshEchoScopeLocked()
@@ -734,6 +742,14 @@ func (r *Router) endDeferredTrackRemovalsLocked() []pendingTrackRemoval {
 	removals := r.trackRemovals
 	r.trackRemovals, r.deferTrackRemovals = nil, false
 	return removals
+}
+
+// unlockFlushingTrackRemovals ends a deferral begun under r.mu, releases
+// r.mu, and retires the queued outputs without router locks.
+func (r *Router) unlockFlushingTrackRemovals() {
+	removals := r.endDeferredTrackRemovalsLocked()
+	r.mu.Unlock()
+	flushTrackRemovals(removals)
 }
 
 // flushTrackRemovals runs without router locks and before renegotiation hooks,
@@ -1085,6 +1101,7 @@ func (r *Router) SetWhisper(clientID string, clients []string, channels []int64,
 	}
 
 	r.mu.Lock()
+	r.beginDeferredTrackRemovalsLocked()
 	old := r.whispers[clientID]
 	r.whispers[clientID] = cfg
 	r.refreshWhisperScopesLocked()
@@ -1126,7 +1143,7 @@ func (r *Router) SetWhisper(clientID string, clients []string, channels []int64,
 		}
 	}
 	hook := r.onRenegotiate
-	r.mu.Unlock()
+	r.unlockFlushingTrackRemovals()
 
 	if hook != nil {
 		for sub := range renegotiate {
@@ -2671,13 +2688,22 @@ func (r *Router) recordDeferredKeyframe(publisherID, slot, rid string) {
 const keyframeRequestWindow = time.Second
 
 func (r *Router) allowKeyframeRequest(ssrc uint32, now time.Time) bool {
-	r.mu.Lock()
-	defer r.mu.Unlock()
+	_, ok := r.claimKeyframeRequest(ssrc, now)
+	return ok
+}
+
+// claimKeyframeRequest records a request for ssrc at now unless one was
+// claimed within keyframeRequestWindow; then it returns how long remains of
+// that window. It takes only the keyframeMu leaf lock, so callers may hold
+// mu (and watchMu) or nothing at all.
+func (r *Router) claimKeyframeRequest(ssrc uint32, now time.Time) (time.Duration, bool) {
+	r.keyframeMu.Lock()
+	defer r.keyframeMu.Unlock()
 	if last := r.keyframeLast[ssrc]; !last.IsZero() && now.Sub(last) < keyframeRequestWindow {
-		return false
+		return keyframeRequestWindow - now.Sub(last), false
 	}
-	r.noteKeyframeRequestLocked(ssrc, now)
-	return true
+	r.noteKeyframeRequestKeyframeLocked(ssrc, now)
+	return 0, true
 }
 
 // keyframeSweepThreshold bounds the throttle map without scanning it on the
@@ -2685,8 +2711,9 @@ func (r *Router) allowKeyframeRequest(ssrc uint32, now time.Time) bool {
 // SSRC; entries older than the window carry no throttle state and are pruned.
 const keyframeSweepThreshold = 64
 
-// noteKeyframeRequestLocked records a claimed request. Router.mu is held.
-func (r *Router) noteKeyframeRequestLocked(ssrc uint32, now time.Time) {
+// noteKeyframeRequestKeyframeLocked records a claimed request. keyframeMu is
+// held.
+func (r *Router) noteKeyframeRequestKeyframeLocked(ssrc uint32, now time.Time) {
 	if r.keyframeLast == nil {
 		r.keyframeLast = make(map[uint32]time.Time)
 	}
@@ -2712,7 +2739,9 @@ func (r *Router) forgetKeyframeSourceLocked(ssrc uint32) {
 			}
 		}
 	}
+	r.keyframeMu.Lock()
 	delete(r.keyframeLast, ssrc)
+	r.keyframeMu.Unlock()
 }
 
 // allowVideo evaluates the video-publish gate for clientID, defaulting to

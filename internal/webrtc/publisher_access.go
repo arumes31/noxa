@@ -38,13 +38,14 @@ func (r *Router) publisherAllowedLocked(subscriber, publisher string) bool {
 // offer guard.
 func (r *Router) SetPublisherGuard(guard PublisherGuard) {
 	r.mu.Lock()
+	r.beginDeferredTrackRemovalsLocked()
 	r.publisherGuard = guard
 	renegotiate := r.prunePublishersLocked()
 	for sub := range r.restorePublishersLocked() {
 		renegotiate[sub] = true
 	}
 	hook := r.onRenegotiate
-	r.mu.Unlock()
+	r.unlockFlushingTrackRemovals()
 	if hook != nil {
 		for sub := range renegotiate {
 			hook(sub)
@@ -240,7 +241,8 @@ func (r *Router) sanitizeOffer(subscriber, offerSDP string) (string, bool) {
 // answering a client offer knows a server offer must follow.
 func (r *Router) PrepareSubscriber(subscriber string) bool {
 	r.mu.Lock()
-	defer r.mu.Unlock()
+	r.beginDeferredTrackRemovalsLocked()
+	defer r.unlockFlushingTrackRemovals()
 	changed := r.prunePublishersLocked()[subscriber]
 	if r.repairSubscriberLocked(subscriber) {
 		changed = true
