@@ -1,5 +1,9 @@
 import { expect, test } from './fixtures.js';
 
+// Recorded notes carry their duration in the sealed token's metadata segment,
+// so the load button names it before anything is downloaded.
+const RECORDED_LOAD = /^Load voice message, \d+:\d{2}$/;
+
 test.beforeEach(async ({ page }) => {
     await page.route('**/__voice_test__', route => route.fulfill({ contentType: 'text/html', body: '<!doctype html><title>Voice test</title><link rel="stylesheet" href="/src/style.css"><main id="fixture"></main>' }));
     await page.goto('/__voice_test__');
@@ -65,7 +69,7 @@ test('record, preview, encrypted attachment send and lazy inline playback', asyn
     await page.evaluate(() => window.__voiceModule.renderVoiceMessage(document.querySelector('#fixture'), window.__sent[0], { tabID: 'server-a', channelID: 7 }));
     expect(await page.evaluate(() => window.__downloads)).toBe(0);
     await expect(page.locator('#fixture')).not.toContainText('secret-key');
-    await page.getByRole('button', { name: 'Load voice message', exact: true }).click();
+    await page.getByRole('button', { name: RECORDED_LOAD }).click();
     const audio = page.getByLabel('Voice message playback');
     await expect(audio).toBeVisible();
     await audio.evaluate(element => { window.__player = element; return element.play(); });
@@ -114,7 +118,7 @@ test('unplayable voice attachment can be downloaded again without reopening the 
         window.go.main.App.DownloadChatAttachmentForTab = async () => ++window.__downloads === 1 ? btoa('damaged audio') : valid;
         window.__voiceModule.renderVoiceMessage(document.querySelector('#fixture'), window.__sent[0], { tabID: 'server-a', channelID: 7 });
     });
-    await page.getByRole('button', { name: 'Load voice message', exact: true }).click();
+    await page.getByRole('button', { name: RECORDED_LOAD }).click();
     await expect(page.getByText('Voice message unavailable', { exact: true })).toBeVisible();
     await expect(page.getByRole('button', { name: 'Retry voice message', exact: true })).toBeEnabled();
     await expect(page.locator('.voice-playback-details')).toHaveCount(0);
@@ -131,7 +135,7 @@ test('keyboard loading keeps focus on the voice playback controls', async ({ pag
     await expect(page.locator('.voice-message-dialog')).toHaveCount(0);
     await expect(page.getByRole('button', { name: 'Record voice message', exact: true })).toBeFocused();
     await page.evaluate(() => window.__voiceModule.renderVoiceMessage(document.querySelector('#fixture'), window.__sent[0], { tabID: 'server-a', channelID: 7 }));
-    await page.getByRole('button', { name: 'Load voice message', exact: true }).focus();
+    await page.getByRole('button', { name: RECORDED_LOAD }).focus();
     await page.keyboard.press('Enter');
     await expect(page.getByLabel('Voice message playback')).toBeFocused();
 });
@@ -143,7 +147,7 @@ test('voice waveform, seeking, speed and private local resume survive reopening'
     await expect(page.locator('.voice-message-dialog')).toHaveCount(0);
     await page.evaluate(() => { window.__remoteDecodes = 0; AudioContext.prototype.decodeAudioData = () => { window.__remoteDecodes++; throw new Error('Remote media must not expand into a complete PCM buffer'); }; });
     const mount = () => page.evaluate(() => window.__voiceModule.renderVoiceMessage(document.querySelector('#fixture'), window.__sent[0], {tabID:'server-a',channelID:7}));
-    await mount(); await page.getByRole('button', {name:'Load voice message',exact:true}).click();
+    await mount(); await page.getByRole('button', { name: RECORDED_LOAD }).click();
     const seek = page.getByRole('slider', {name:'Seek voice message'});
     await expect(seek).toBeEnabled();
     await expect.poll(() => seek.getAttribute('max').then(Number)).toBeGreaterThan(1);
@@ -160,7 +164,7 @@ test('voice waveform, seeking, speed and private local resume survive reopening'
     await expect.poll(() => page.getByLabel('Voice message playback').evaluate(audio => audio.currentTime)).toBeGreaterThan(.65);
     const removedAt = await page.evaluate(() => { const position = document.querySelector('.voice-message audio').currentTime; document.querySelector('.voice-message').remove(); return position; });
     await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem('noxa:voice-playback:v1'))[0].position)).toBeCloseTo(removedAt, 1);
-    await mount(); await page.getByRole('button', {name:'Load voice message',exact:true}).click();
+    await mount(); await page.getByRole('button', { name: RECORDED_LOAD }).click();
     await expect(page.getByLabel('Playback speed')).toHaveValue('1.5');
     await expect.poll(() => page.getByLabel('Voice message playback').evaluate(audio => audio.currentTime)).toBeCloseTo(removedAt,1);
     expect(await page.evaluate(() => window.__remoteDecodes)).toBe(0);
