@@ -290,13 +290,8 @@
 :root[data-theme="arctic"] .client .avatar,
 :root[data-theme="arctic"] .msg-avatar,
 :root[data-theme="arctic"] .card-avatar { color: #fff; text-shadow: 0 1px 1px rgb(0 0 0 / 35%); }
-:root[data-theme="arctic"] .client .avatar {
-    width: 22px; height: 22px; flex-basis: 22px;
-    background: color-mix(in srgb, var(--avatar-color, #70b7f5) 78%, #0b1520);
-    font-size: .6786rem;
-}
-:root[data-theme="arctic"] .client .speaking-avatar { flex: 0 0 22px; width: 22px; height: 22px; }
-:root[data-theme="arctic"] .client .speaking-avatar canvas { left: -18px; top: -18px; }
+/* Avatar size stays 26px: the speaking-avatar canvas geometry is tuned to it. */
+:root[data-theme="arctic"] .client .avatar { background: color-mix(in srgb, var(--avatar-color, #70b7f5) 78%, #0b1520); }
 :root[data-theme="arctic"] .group-list-item { border-radius: 7px; }
 :root[data-theme="arctic"] .group-unread,
 :root[data-theme="arctic"] .group-summary-unread { color: var(--arc-on-acc); }
@@ -386,12 +381,12 @@
     min-height: 52px; padding: 6px 12px 6px 18px; gap: 10px;
     background: transparent; border-bottom: 1px solid var(--border);
 }
-:root[data-theme="arctic"] .channel-heading { flex-direction: row; align-items: baseline; gap: 12px; }
+:root[data-theme="arctic"] .channel-heading { flex-direction: row; align-items: baseline; gap: 12px; min-width: 0; }
 :root[data-theme="arctic"] #chat-head-title {
-    flex: none; max-width: 60%;
+    flex: 0 1 auto; min-width: 5ch;
     font: 700 1.1429rem var(--font-display); letter-spacing: -.01em;
 }
-:root[data-theme="arctic"] #chat-topic { font-size: .8929rem; color: var(--text-faint); min-width: 0; }
+:root[data-theme="arctic"] #chat-topic { flex: 1 1 0; font-size: .8929rem; color: var(--text-faint); min-width: 0; }
 :root[data-theme="arctic"] #channel-member-count { font-size: .8571rem; color: var(--text-faint); margin-right: 4px; }
 :root[data-theme="arctic"] #chat-head-actions .icon-btn { width: 34px; height: 34px; border-radius: var(--arc-r-sm); }
 :root[data-theme="arctic"] #chat-head-actions > button:not(.icon-btn),
@@ -545,6 +540,13 @@
     background: var(--arc-acc-grad); color: var(--arc-on-acc); font-weight: 600;
 }
 :root[data-theme="arctic"] #member-message:hover { filter: brightness(1.06); }
+:root[data-theme="arctic"] #member-volume-reset {
+    min-height: 28px; padding: 3px 10px; margin-bottom: 10px;
+    border: 1px solid var(--border); border-radius: 8px;
+    background: var(--arc-s2); color: var(--text-dim); font: 500 .8571rem var(--font-body);
+    cursor: pointer;
+}
+:root[data-theme="arctic"] #member-volume-reset:hover { background: var(--arc-s3); color: var(--text); }
 :root[data-theme="arctic"] .inspector-section,
 :root[data-theme="arctic"] .member-identity-details { border-top-color: var(--border); }
 :root[data-theme="arctic"] .inspector-section summary,
