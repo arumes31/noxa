@@ -1885,6 +1885,7 @@ function addChat(d) {
     // in chat-ui.js. Only a successfully routed E2EE message is a DM; global
     // chat also has no channel_id and must never enter the direct path.
     const result = chatUI.addChat(d);
+    window.__noxaFullscreen?.chatMessage(d, result); // design 45 fullscreen chat peek / quick reply
     // A message rendered into the open chat is unseen while the window is
     // unfocused (hidden to tray, minimized, or behind another window).
     if (result?.live && !state.replayingTabID && !document.hasFocus()) trayUnread.noteUnseen();

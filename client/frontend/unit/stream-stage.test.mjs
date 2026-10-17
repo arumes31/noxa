@@ -11,6 +11,8 @@ const stubs = new Map(Object.entries({
 }).map(([name, source]) => [new URL(`../src/${name}`, import.meta.url).href, source]));
 registerHooks({ load(url, context, next) {
     if (stubs.has(url)) return { format: "module", source: stubs.get(url), shortCircuit: true };
+    // Stylesheets imported further down (fullscreen HUD, speaking avatar).
+    if (url.endsWith(".css")) return { format: "module", source: "export default '';", shortCircuit: true };
     return next(url, context);
 } });
 const { formatStageRate, stageResolution, stageStats } = await import("../src/stream-stage.js");

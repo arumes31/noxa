@@ -280,6 +280,7 @@ export function createVideoGrid({ applySendCaps, syncCameraButton, syncShareButt
         for (const t of tiles.values()) {
             if (t.clientID === clid) t.el.classList.toggle("speaking", speaking);
         }
+        stage.voiceChanged();
     }
 
     // videoRefreshNames re-resolves nickname/avatar on all tiles (user joined,

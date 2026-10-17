@@ -44,9 +44,11 @@ import { messageToolsEnglish, messageToolsGerman } from "./message-tools-message
 import { webhookEnglish, webhookGerman } from "./webhook-messages.js";
 import { directMessageEnglish, directMessageGerman } from "./dm-messages.js";
 import { shellEnglish, shellGerman } from "./shell-messages.js";
+import { fullscreenEnglish, fullscreenGerman } from "./fullscreen-messages.js";
 
 const en = {
     ...directMessageEnglish,
+    ...fullscreenEnglish,
     ...loginErrorEnglish, ...streamHealthEnglish,
     ...voiceDiagnosticsEnglish,
     ...desktopEnglish,
@@ -153,6 +155,7 @@ const en = {
 
 const de = {
     ...directMessageGerman,
+    ...fullscreenGerman,
     ...loginErrorGerman, ...streamHealthGerman,
     ...voiceDiagnosticsGerman,
     ...desktopGerman,
