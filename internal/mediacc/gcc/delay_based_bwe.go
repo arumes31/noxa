@@ -15,7 +15,11 @@ import (
 // controller.
 type DelayStats struct {
 	// generation prevents an in-flight callback from undoing a probe transition.
-	generation       uint64
+	generation uint64
+	// usageFloor is the throughput just delivered on a path free of delay
+	// overuse for a full hold-off (0 otherwise). It bounds this increase from
+	// below, and the loss controller adopts it while loss is low.
+	usageFloor       int
 	Measurement      time.Duration
 	Estimate         time.Duration
 	Threshold        time.Duration
@@ -29,14 +33,16 @@ type DelayStats struct {
 type now func() time.Time
 
 type delayController struct {
-	ackPipe chan<- []cc.Acknowledgment
-
-	*arrivalGroupAccumulator
 	*rateController
 
 	onUpdateCallback func(DelayStats)
 
-	wg sync.WaitGroup
+	// mu serializes complete feedback reports. Each report is processed
+	// synchronously by its caller so rate decisions are deterministic with
+	// respect to the feedback that produced them (and to an injected clock).
+	mu      sync.Mutex
+	closed  bool
+	process func([]cc.Acknowledgment)
 
 	log logging.LeveledLogger
 }
@@ -49,15 +55,13 @@ type delayControllerConfig struct {
 }
 
 func newDelayController(delayConfig delayControllerConfig, loggerFactory logging.LoggerFactory) *delayController {
-	ackPipe := make(chan []cc.Acknowledgment)
-
+	if delayConfig.nowFn == nil {
+		delayConfig.nowFn = time.Now
+	}
 	delayController := &delayController{
-		ackPipe:                 ackPipe,
-		arrivalGroupAccumulator: nil,
-		rateController:          nil,
-		onUpdateCallback:        nil,
-		wg:                      sync.WaitGroup{},
-		log:                     loggerFactory.NewLogger("gcc_delay_controller"),
+		rateController:   nil,
+		onUpdateCallback: nil,
+		log:              loggerFactory.NewLogger("gcc_delay_controller"),
 	}
 
 	rateController := newRateController(
@@ -75,7 +79,7 @@ func newDelayController(delayConfig delayControllerConfig, loggerFactory logging
 	var slopeEstimator *slopeEstimator
 	var arrivalGroupAccumulator *arrivalGroupAccumulator
 	resetTiming := func() {
-		detector := newOveruseDetector(newAdaptiveThreshold(), 10*time.Millisecond, func(ds DelayStats) {
+		detector := newOveruseDetector(newAdaptiveThreshold(withThresholdClock(delayConfig.nowFn)), 10*time.Millisecond, func(ds DelayStats) {
 			latest, updated = ds, true
 		})
 		slopeEstimator = newSlopeEstimator(newTrendline(), detector.onDelayStats)
@@ -85,39 +89,37 @@ func newDelayController(delayConfig delayControllerConfig, loggerFactory logging
 
 	rc := newRateCalculator(500 * time.Millisecond)
 
-	delayController.wg.Add(1)
-	go func() {
-		defer delayController.wg.Done()
-		var lastFeedback time.Time
-		for acks := range ackPipe {
-			received := false
-			for _, ack := range acks {
-				if !ack.Arrival.IsZero() {
-					received = true
-					break
-				}
-			}
-			if !received {
-				continue
-			}
-			now := delayConfig.nowFn()
-			// Match WebRTC's two-second stream timeout: keep the current
-			// bitrate, but do not compare resumed packets with stale timing.
-			if !lastFeedback.IsZero() && now.Sub(lastFeedback) > 2*time.Second {
-				resetTiming()
-			}
-			lastFeedback = now
-			// Rate and delay must describe the same completed feedback report.
-			// A burst of acknowledgements supplies one rate-control decision,
-			// not repeated reductions against the previous report's throughput.
-			rc.add(acks, rateController.onReceivedRate)
-			updated = false
-			arrivalGroupAccumulator.add(acks, slopeEstimator.onArrivalGroup)
-			if updated {
-				rateController.onDelayStats(latest)
+	var lastFeedback time.Time
+	delayController.process = func(acks []cc.Acknowledgment) {
+		received := false
+		for _, ack := range acks {
+			if !ack.Arrival.IsZero() {
+				received = true
+
+				break
 			}
 		}
-	}()
+		if !received {
+			return
+		}
+		now := delayConfig.nowFn()
+		// Match WebRTC's two-second stream timeout: keep the current
+		// bitrate, but do not compare resumed packets with stale timing.
+		if !lastFeedback.IsZero() && now.Sub(lastFeedback) > 2*time.Second {
+			resetTiming()
+		}
+		lastFeedback = now
+		// Rate and delay must describe the same completed feedback report.
+		// A burst of acknowledgements supplies one rate-control decision,
+		// not repeated reductions against the previous report's throughput.
+		rc.add(acks, rateController.onReceivedRate)
+		rateController.onDeliveryRatio(rc.deliveryRatio())
+		updated = false
+		arrivalGroupAccumulator.add(acks, slopeEstimator.onArrivalGroup)
+		if updated {
+			rateController.onDelayStats(latest)
+		}
+	}
 
 	return delayController
 }
@@ -127,13 +129,17 @@ func (d *delayController) onUpdate(f func(DelayStats)) {
 }
 
 func (d *delayController) updateDelayEstimate(acks []cc.Acknowledgment) {
-	d.ackPipe <- acks
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if !d.closed {
+		d.process(acks)
+	}
 }
 
 func (d *delayController) Close() error {
-	defer d.wg.Wait()
-
-	close(d.ackPipe)
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.closed = true
 
 	return nil
 }

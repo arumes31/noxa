@@ -39,11 +39,16 @@ type lossBasedBandwidthEstimator struct {
 	lastLossUpdate time.Time
 	lastIncrease   time.Time
 	lastDecrease   time.Time
+	now            now
 	log            logging.LeveledLogger
 }
 
-func newLossBasedBWE(initialBitrate int, loggerFactory logging.LoggerFactory) *lossBasedBandwidthEstimator {
+func newLossBasedBWE(initialBitrate int, nowFn now, loggerFactory logging.LoggerFactory) *lossBasedBandwidthEstimator {
+	if nowFn == nil {
+		nowFn = time.Now
+	}
 	return &lossBasedBandwidthEstimator{
+		now:            nowFn,
 		lock:           sync.Mutex{},
 		maxBitrate:     100_000_000, // 100 mbit
 		minBitrate:     100_000,     // 100 kbit
@@ -71,6 +76,17 @@ func (e *lossBasedBandwidthEstimator) getEstimate(wantedRate int) LossStats {
 	}
 }
 
+// raiseToDeliveredRate lets throughput that was just delivered without delay
+// overuse bound the loss estimate from below while loss is low. Its 5% per
+// 200 ms ramp otherwise lags far behind after a transient congestion episode.
+func (e *lossBasedBandwidthEstimator) raiseToDeliveredRate(rate int) {
+	e.lock.Lock()
+	defer e.lock.Unlock()
+	if e.averageLoss < increaseLossThreshold && rate > e.bitrate {
+		e.bitrate = clampInt(rate, e.minBitrate, e.maxBitrate)
+	}
+}
+
 func (e *lossBasedBandwidthEstimator) updateLossEstimate(results []cc.Acknowledgment) {
 	if len(results) == 0 {
 		return
@@ -87,25 +103,26 @@ func (e *lossBasedBandwidthEstimator) updateLossEstimate(results []cc.Acknowledg
 	defer e.lock.Unlock()
 
 	lossRatio := float64(packetsLost) / float64(len(results))
-	e.averageLoss = e.average(time.Since(e.lastLossUpdate), e.averageLoss, lossRatio)
-	e.lastLossUpdate = time.Now()
+	now := e.now()
+	e.averageLoss = e.average(now.Sub(e.lastLossUpdate), e.averageLoss, lossRatio)
+	e.lastLossUpdate = now
 
 	increaseLoss := math.Max(e.averageLoss, lossRatio)
 	decreaseLoss := math.Min(e.averageLoss, lossRatio)
 
-	if increaseLoss < increaseLossThreshold && time.Since(e.lastIncrease) > increaseTimeThreshold {
+	if increaseLoss < increaseLossThreshold && now.Sub(e.lastIncrease) > increaseTimeThreshold {
 		e.log.Infof(
 			"loss controller increasing; averageLoss: %v, decreaseLoss: %v, increaseLoss: %v",
 			e.averageLoss, decreaseLoss, increaseLoss,
 		)
-		e.lastIncrease = time.Now()
+		e.lastIncrease = now
 		e.bitrate = clampInt(int(increaseFactor*float64(e.bitrate)), e.minBitrate, e.maxBitrate)
-	} else if decreaseLoss > decreaseLossThreshold && time.Since(e.lastDecrease) > decreaseTimeThreshold {
+	} else if decreaseLoss > decreaseLossThreshold && now.Sub(e.lastDecrease) > decreaseTimeThreshold {
 		e.log.Infof(
 			"loss controller decreasing; averageLoss: %v, decreaseLoss: %v, increaseLoss: %v",
 			e.averageLoss, decreaseLoss, increaseLoss,
 		)
-		e.lastDecrease = time.Now()
+		e.lastDecrease = now
 		e.bitrate = clampInt(int(float64(e.bitrate)*(1-0.5*decreaseLoss)), e.minBitrate, e.maxBitrate)
 	}
 }

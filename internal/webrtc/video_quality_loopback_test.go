@@ -134,6 +134,7 @@ func TestStreamVideoQualityLoopbackIndependentShares(t *testing.T) {
 		if router.ForwardVideo(s.publisher, s.slot, "f", continuityPacket(s.base, 1101, 3303000, 1101, false)) != 0 {
 			t.Fatal("delta admitted before transport and sender binding were ready")
 		}
+		waitAsyncKeyframeRequests(t, router)
 		if requests.count(s.base) != beforeRequests {
 			t.Fatal("pre-ready delta requested an undeliverable keyframe")
 		}
@@ -212,6 +213,8 @@ func TestStreamVideoQualityLoopbackIndependentShares(t *testing.T) {
 		if router.ForwardVideo(s.publisher, s.slot, rid, continuityPacket(ssrc, 1102, 3306000, 1102, false)) != 0 {
 			t.Fatal("post-connect delta frame reused an unseen keyframe")
 		}
+		// Media-path keyframe requests are written asynchronously.
+		waitAsyncKeyframeRequests(t, router)
 		if requests.count(ssrc) != 1 {
 			t.Fatalf("post-connect %s/%s requested %d keyframes, want 1", s.publisher, s.slot, requests.count(ssrc))
 		}
@@ -305,6 +308,7 @@ func TestStreamVideoQualityLoopbackIndependentShares(t *testing.T) {
 	if router.ForwardVideo("c", SlotScreen, "f", continuityPacket(late.base, 1101, 3303000, 1101, false)) != 0 {
 		t.Fatal("newly bound screen accepted a delta without its first keyframe")
 	}
+	waitAsyncKeyframeRequests(t, router)
 	if requests.count(late.base) != 1 {
 		t.Fatalf("newly bound screen requested %d keyframes, want 1", requests.count(late.base))
 	}

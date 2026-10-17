@@ -25,6 +25,26 @@ type videoContinuity struct {
 	tl0, tl0Offset, key, keyOffset byte
 	last                           time.Time
 	epochPackets                   uint32
+	// preferredOffset, when preferredOffsetOK, is the timestamp offset that
+	// keeps the receiver's RTP->capture-time mapping across a switch. It is
+	// set by the caller for the packet about to be translated.
+	preferredOffset   uint32
+	preferredOffsetOK bool
+}
+
+// switchTimestampOffset chooses the outbound timestamp offset for a new
+// source or watch epoch. The mapping-preserving offset is used only when it
+// moves the outbound timestamp forward by a bounded step; otherwise the
+// elapsed-time offset keeps playback continuous (and the SR timing enters a
+// new generation, see media_timing.go).
+func (v *videoContinuity) switchTimestampOffset(pkt *rtp.Packet, now time.Time) uint32 {
+	if v.preferredOffsetOK {
+		if step := pkt.Timestamp + v.preferredOffset - v.timestamp; step != 0 && step < timingPreserveMaxStep {
+			return v.preferredOffset
+		}
+	}
+	elapsed := max(int64(1), now.Sub(v.last).Nanoseconds()*90000/int64(time.Second))
+	return v.timestamp + uint32(elapsed&0xffffffff) - pkt.Timestamp
 }
 
 // beginEpoch waits for a decodable frame without discarding the receiver's
@@ -72,8 +92,7 @@ func (v *videoContinuity) translate(pkt *rtp.Packet, now time.Time) (*rtp.Packet
 	first := !v.seen
 	if switching {
 		v.sequenceOffset = v.sequence + 1 - pkt.SequenceNumber
-		elapsed := max(int64(1), now.Sub(v.last).Nanoseconds()*90000/int64(time.Second))
-		v.timestampOffset = v.timestamp + uint32(elapsed&0xffffffff) - pkt.Timestamp
+		v.timestampOffset = v.switchTimestampOffset(pkt, now)
 		v.tl0Offset = v.tl0 + 1 - descriptor.TL0PICIDX
 		v.keyOffset = v.key + 1 - descriptor.KEYIDX
 	}

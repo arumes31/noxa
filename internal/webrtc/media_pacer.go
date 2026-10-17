@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"io"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -22,6 +23,18 @@ import (
 const mediaPacerPackets = videoReorderPackets
 const mediaPacerBytes = videoReorderBytes
 const mediaPacerLifetime = videoReorderWait + 500*time.Millisecond
+
+// mediaPacerSustainedBurst is how far above the estimate the 1.5x pacing
+// factor may run before output is held to the estimate itself, while the
+// source persistently outruns the estimate.
+const mediaPacerSustainedBurst = 40 * time.Millisecond
+
+// Source overload is judged on the median of short input bins, so a one-off
+// release (a repaired reorder gap, a keyframe) can still drain at 1.5x while
+// a source that is steadily faster than this receiver's estimate cannot.
+const mediaInputBin = 100 * time.Millisecond
+const mediaInputBins = 10
+const mediaOverloadRatio = 1.2
 const mediaAudioPackets = 256
 const mediaAudioBytes = 128 * 1024
 const mediaAudioLifetime = 100 * time.Millisecond
@@ -33,6 +46,9 @@ var errMediaRTXSequenceLimit = errors.New("media pacer RTX sequence state limit 
 // SSRC. Restarting its sequence under the same SRTP key could reuse an index.
 // Only the final pacing worker advances next; binding only shares the pointer.
 type mediaRTXSequence struct{ next uint16 }
+
+// The pacer may spend up to this multiple of the estimate to absorb bursts.
+const mediaPacingGain = 1.5
 
 // Enough initial headroom for a Full HD stream while receiver feedback starts.
 // This is not a floor: GCC may immediately reduce it on a constrained path.
@@ -76,11 +92,21 @@ type mediaPacer struct {
 	sent                              uint64 // historyMu covers insertion and feedback delivery
 	audioQueue                        [mediaAudioPackets]pacedPacket
 	audioHead, audioCount, audioBytes int
-	diagnostics                       mediaPacerCounters           // protected by mu; video only
-	queuedRepairs                     map[mediaRepairKey]struct{}  // protected by mu; bounded by video queue
-	rtxSequences                      map[uint32]*mediaRTXSequence // protected by mu; bounded, never evicted
-	videoStarted                      atomic.Bool
-	startVideoProbe                   func(int) bool // installed before binding a stream
+	// Voice has its own worker: it is woken per packet, never waits for the
+	// video pacing tick, and never queues behind a video socket write.
+	audioWake chan struct{} // protected by mu; created by run
+	audioBusy bool          // protected by mu; voice worker is draining
+	// Voice bytes written since the video worker last refilled its budget.
+	// Video is paced with the estimate minus voice, never the reverse.
+	audioSent       atomic.Int64
+	diagnostics     mediaPacerCounters           // protected by mu; video only
+	queuedRepairs   map[mediaRepairKey]struct{}  // protected by mu; bounded by video queue
+	rtxSequences    map[uint32]*mediaRTXSequence // protected by mu; bounded, never evicted
+	inputBins       [mediaInputBins]int          // protected by mu; primary video bytes per bin
+	inputBin        int
+	inputBinStart   time.Time
+	videoStarted    atomic.Bool
+	startVideoProbe func(int) bool // installed before binding a stream
 }
 
 func newMediaPacer() *mediaPacer {
@@ -159,6 +185,32 @@ func (p *mediaPacer) SetTargetBitrate(rate int) {
 	p.bitrate = min(max(rate, 0), 1_000_000_000)
 }
 
+// videoDrain estimates how long the video lane needs to send its queue plus
+// extra bytes at the current pacing rate (mediaPacingGain x the congestion
+// target). It is the single backlog estimate: the keyframe feedback gate asks
+// for the queue alone (videoBacklog), and a GOP cache start asks whether its
+// burst can drain in time. Voice has its own lane and is never counted.
+func (p *mediaPacer) videoDrain(extra int) time.Duration {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	bytes := max(extra, 0)
+	if !p.closed && p.count > 0 {
+		bytes += p.bytes
+	}
+	if bytes == 0 {
+		return 0
+	}
+	rate := float64(p.bitrate) * mediaPacingGain / 8
+	if rate <= 0 {
+		return time.Duration(1<<63 - 1) // nothing drains at a zero estimate
+	}
+	return time.Duration(float64(bytes) / rate * float64(time.Second))
+}
+
+// videoBacklog estimates how long already queued video waits before the
+// pacer can send it at its current pacing rate.
+func (p *mediaPacer) videoBacklog() time.Duration { return p.videoDrain(0) }
+
 func (p *mediaPacer) Write(header *rtp.Header, payload []byte, attrs interceptor.Attributes) (int, error) {
 	size := header.MarshalSize() + len(payload) + int(header.PaddingSize)
 	p.mu.Lock()
@@ -214,10 +266,40 @@ func (p *mediaPacer) Write(header *rtp.Header, payload []byte, attrs interceptor
 	if stream.audio {
 		packet.expires = time.Now().Add(mediaAudioLifetime)
 		p.pushAudioLocked(packet)
+		select {
+		case p.audioWake <- struct{}{}:
+		default: // A wake-up is already pending; the worker drains everything.
+		}
 	} else {
+		if packet.kind == mediaPacketPrimary {
+			p.advanceInputLocked(time.Now())
+			p.inputBins[p.inputBin] += size
+		}
 		p.pushLocked(packet)
 	}
 	return size, nil
+}
+
+func (p *mediaPacer) advanceInputLocked(now time.Time) {
+	if p.inputBinStart.IsZero() || now.Sub(p.inputBinStart) >= mediaInputBin*mediaInputBins {
+		clear(p.inputBins[:])
+		p.inputBin, p.inputBinStart = 0, now
+		return
+	}
+	for now.Sub(p.inputBinStart) >= mediaInputBin {
+		p.inputBin = (p.inputBin + 1) % mediaInputBins
+		p.inputBins[p.inputBin] = 0
+		p.inputBinStart = p.inputBinStart.Add(mediaInputBin)
+	}
+}
+
+// sourceOverloadedLocked reports whether the median video input rate over the
+// last second exceeds the estimate by mediaOverloadRatio.
+func (p *mediaPacer) sourceOverloadedLocked(now time.Time, estimate float64) bool {
+	p.advanceInputLocked(now)
+	bins := p.inputBins
+	slices.Sort(bins[:])
+	return float64(bins[mediaInputBins/2])/mediaInputBin.Seconds() > mediaOverloadRatio*estimate
 }
 
 func (p *mediaPacer) pushAudioLocked(packet pacedPacket) {
@@ -261,36 +343,52 @@ func (p *mediaPacer) popLocked() pacedPacket {
 
 func (p *mediaPacer) run() {
 	defer close(p.done)
+	p.mu.Lock()
+	if p.audioWake == nil {
+		p.audioWake = make(chan struct{}, 1)
+	}
+	wake := p.audioWake
+	p.mu.Unlock()
+	audioDone := make(chan struct{})
+	go p.runAudio(wake, audioDone)
+	defer func() { <-audioDone }() // Close joins both lanes through done.
 	ticker := time.NewTicker(5 * time.Millisecond)
 	defer ticker.Stop()
 	last := time.Now()
-	budget := float64(0)
+	budget := float64(0)    // burst credit at the 1.5x pacing factor
+	sustained := float64(0) // average credit at 1.0x the estimate
 	for {
 		select {
 		case <-p.stop:
 			return
 		case now := <-ticker.C:
 			p.mu.Lock()
-			// Voice has its own bounded queue and does not spend the video
-			// pacing budget. A video retransmission backlog cannot starve it.
-			// Both queues still cross the same final authorization boundary.
-			for count := p.audioCount; count > 0 && p.audioCount > 0 && !p.closed; count-- {
-				packet := p.popAudioLocked()
-				if !packet.stream.active || !time.Now().Before(packet.expires) {
-					continue
-				}
-				p.mu.Unlock()
-				p.writePacket(packet)
-				p.mu.Lock()
-			}
+			// Voice is written by runAudio and never waits for this worker. Its
+			// bytes share the estimated path, so they are reserved out of the
+			// video budget: video receives the estimate minus voice.
 			// Bound catch-up after a stalled socket; never release a huge burst.
-			bytesPerSecond := float64(p.bitrate) * 1.5 / 8
-			budget = min(budget+min(now.Sub(last), 50*time.Millisecond).Seconds()*bytesPerSecond, 0.05*bytesPerSecond)
+			elapsed := min(now.Sub(last), 50*time.Millisecond).Seconds()
+			estimate := float64(p.bitrate) / 8
+			bytesPerSecond := estimate * mediaPacingGain
+			budget = min(budget+elapsed*bytesPerSecond, 0.05*bytesPerSecond)
+			// The 1.5x factor drains frame bursts quickly, but a source that
+			// outruns the estimate (one slow viewer of a 1080p60 share) must
+			// not be forwarded at 1.5x indefinitely: that keeps a standing
+			// queue and loss at the viewer's bottleneck, delaying and dropping
+			// its voice. Sustained output is held to the estimate.
+			sustained = min(sustained+elapsed*estimate, mediaPacerSustainedBurst.Seconds()*estimate)
+			overloaded := p.sourceOverloadedLocked(now, estimate)
+			if !overloaded {
+				sustained = max(sustained, 0) // Catch-up debt only counts under overload.
+			}
+			// The voice debit is bounded so a long silence-free talk spurt on a
+			// tiny estimate cannot build unbounded video debt; video's own packet
+			// debt is never forgiven.
+			voice := float64(p.audioSent.Swap(0))
+			budget = max(budget-voice, min(budget, -0.05*bytesPerSecond))
+			sustained = max(sustained-voice, min(sustained, -mediaPacerSustainedBurst.Seconds()*estimate))
 			last = now
 			for work := p.count; work > 0 && p.count > 0 && !p.closed; work-- {
-				if p.audioCount > 0 {
-					break
-				}
 				front := &p.queue[p.head]
 				if !front.stream.active {
 					p.diagnostics.droppedRetired++
@@ -302,24 +400,116 @@ func (p *mediaPacer) run() {
 					p.popLocked()
 					continue
 				}
-				if budget <= 0 {
+				if budget <= 0 || (overloaded && sustained <= 0) {
+					break
+				}
+				// Yield the rest of this burst to pending voice: voice then
+				// enters a congested bottleneck queue ahead of the burst,
+				// right after it drained for a tick, instead of behind it.
+				if p.audioCount > 0 || p.audioBusy {
 					break
 				}
 				packet := p.popLocked()
 				p.mu.Unlock()
-				if p.writePacket(packet) {
+				attempted, busy := p.writePacketRetry(packet, true)
+				if attempted {
 					// Only an authorized write attempt spends network pacing credit.
 					// Final permission/ticket rejection never reaches the writer.
 					budget -= float64(packet.size)
+					sustained -= float64(packet.size)
 				}
 				p.mu.Lock()
+				if busy {
+					// A control update holds a final-write gate. The continuity
+					// already assigned this packet's sequence number: dropping it
+					// would leave every recipient with a hole that only a NACK
+					// round trip (or a keyframe) repairs. Keep order and retry on
+					// the next tick; expiry still bounds the wait.
+					if p.requeueBusyLocked(packet) {
+						break
+					}
+				}
 			}
 			p.mu.Unlock()
 		}
 	}
 }
 
+// runAudio is the strict-priority voice lane. Voice bypasses pacing delay:
+// each packet is written as soon as it is queued, concurrently with (never
+// behind) video writes, and still crosses the same final authorization
+// boundary in writePacket. The queue only absorbs a briefly stalled socket.
+func (p *mediaPacer) runAudio(wake <-chan struct{}, done chan<- struct{}) {
+	defer close(done)
+	for {
+		p.mu.Lock()
+		p.audioBusy = true
+		for p.audioCount > 0 && !p.closed {
+			packet := p.popAudioLocked()
+			if !packet.stream.active || !time.Now().Before(packet.expires) {
+				continue
+			}
+			p.mu.Unlock()
+			if p.writePacket(packet) {
+				p.audioSent.Add(int64(packet.size))
+			}
+			p.mu.Lock()
+		}
+		p.audioBusy = false
+		p.mu.Unlock()
+		select {
+		case <-p.stop:
+			return
+		case <-wake:
+		}
+	}
+}
+
+// requeueBusyLocked returns a contended packet to the queue head. It reports
+// false when the packet was discarded instead, accounting it like the drop
+// the regular dequeue path would have recorded.
+func (p *mediaPacer) requeueBusyLocked(packet pacedPacket) bool {
+	switch {
+	case p.closed:
+		return false
+	case !packet.stream.active:
+		p.diagnostics.droppedRetired++
+		return false
+	case !time.Now().Before(packet.expires):
+		p.diagnostics.droppedExpired++
+		return false
+	}
+	if packet.repair.stream != nil {
+		if _, queued := p.queuedRepairs[packet.repair]; queued {
+			p.diagnostics.coalescedRepairs++
+			return true
+		}
+	}
+	if p.queue == nil || p.count == mediaPacerPackets || p.bytes+packet.size > mediaPacerBytes {
+		p.diagnostics.droppedQueueFull++
+		return false
+	}
+	p.head = (p.head - 1 + mediaPacerPackets) % mediaPacerPackets
+	p.queue[p.head] = packet
+	p.count++
+	p.bytes += packet.size
+	if packet.repair.stream != nil {
+		if p.queuedRepairs == nil {
+			p.queuedRepairs = make(map[mediaRepairKey]struct{})
+		}
+		p.queuedRepairs[packet.repair] = struct{}{}
+	}
+	return true
+}
+
 func (p *mediaPacer) writePacket(packet pacedPacket) bool {
+	attempted, _ := p.writePacketRetry(packet, false)
+	return attempted
+}
+
+// writePacketRetry reports busy, without recording a drop, when retryBusy is
+// set and only a contended final-write gate stopped the packet.
+func (p *mediaPacer) writePacketRetry(packet pacedPacket, retryBusy bool) (bool, bool) {
 	attempted := false
 	write := interceptor.RTPWriterFunc(func(header *rtp.Header, payload []byte, attrs interceptor.Attributes) (int, error) {
 		attempted = true
@@ -352,18 +542,26 @@ func (p *mediaPacer) writePacket(packet pacedPacket) bool {
 	if p.egress == nil { // Standalone pacing tests have no router bindings.
 		n, err := write.Write(&packet.header, packet.payload, packet.attrs)
 		p.recordVideoWrite(packet, attempted, n, err, mediaDropUnclassified)
-		return attempted
+		return attempted, false
 	}
 	p.egress.mu.Lock()
 	stream := p.egress.streams[packet.stream.bindingID]
 	p.egress.mu.Unlock()
 	if stream != nil {
 		n, reason, err := stream.writeResultKind(&packet.header, packet.payload, packet.attrs, write, packet.kind)
+		if !attempted && (reason == mediaDropScopeBusy || reason == mediaDropPolicyBusy) {
+			if retryBusy && !packet.stream.audio {
+				return false, true
+			}
+			if reason == mediaDropScopeBusy {
+				reason = mediaDropScopeDeclined // exported diagnostics keep their buckets
+			}
+		}
 		p.recordVideoWrite(packet, attempted, n, err, reason)
 	} else {
 		p.recordVideoWrite(packet, false, 0, nil, mediaDropMissingBinding)
 	}
-	return attempted
+	return attempted, false
 }
 
 func (p *mediaPacer) Close() error {

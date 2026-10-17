@@ -19,7 +19,7 @@ type videoProbeAckKey struct {
 type videoStartupProbe struct {
 	started                       time.Time
 	base, rate                    int
-	timer                         *time.Timer
+	timer                         Timer
 	seen                          map[videoProbeAckKey]struct{}
 	bytes, firstSize              int
 	firstDeparture, lastDeparture time.Time
@@ -46,14 +46,14 @@ func (e *SendSideBWE) StartVideoProbe(demandBPS int) bool {
 	if rate <= e.latestBitrate {
 		return false
 	}
-	probe := &videoStartupProbe{started: time.Now(), base: e.latestBitrate, rate: rate, seen: make(map[videoProbeAckKey]struct{})}
+	probe := &videoStartupProbe{started: e.now(), base: e.latestBitrate, rate: rate, seen: make(map[videoProbeAckKey]struct{})}
 	e.videoProbe = probe
 	e.seedVideoProbeLocked(rate)
-	probe.timer = time.AfterFunc(videoProbeLifetime, func() {
+	probe.timer = e.afterFunc(videoProbeLifetime, func() {
 		e.closeLock.RLock()
 		defer e.closeLock.RUnlock()
 		if !e.isClosed() {
-			e.finishVideoProbe(time.Now())
+			e.finishVideoProbe(e.now())
 		}
 	})
 	return true

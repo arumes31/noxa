@@ -3,6 +3,7 @@
 package webrtc
 
 import (
+	"sync"
 	"testing"
 
 	"github.com/pion/rtcp"
@@ -23,15 +24,20 @@ func (f *fakeVideoTrack) SSRC() webrtc.SSRC { return f.ssrc }
 
 // fakeRTCPWriter records WriteRTCP calls.
 type fakeRTCPWriter struct {
+	mu   sync.Mutex
 	pkts [][]rtcp.Packet
 }
 
 func (f *fakeRTCPWriter) WriteRTCP(pkts []rtcp.Packet) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.pkts = append(f.pkts, pkts)
 	return nil
 }
 
 func (f *fakeRTCPWriter) pliCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	n := 0
 	for _, batch := range f.pkts {
 		for _, p := range batch {

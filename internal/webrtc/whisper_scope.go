@@ -50,14 +50,19 @@ func (r *Router) withWhisperScope(delivery MediaDelivery, write func() error) er
 		return nil
 	}
 	defer r.whisperScopeMu.RUnlock()
-	scope := r.whisperScopes[delivery.SenderID]
-	if scope.revision != delivery.WhisperRevision || scope.active != delivery.Whisper {
-		return nil
-	}
-	// A channel recording is not a whisper recipient. Neither a queued tap
-	// nor a retransmission may retain access after the recipient set changes.
-	if scope.active && (delivery.Tap || !scope.targets[delivery.RecipientID]) {
+	if !r.whisperAllowedLocked(delivery) {
 		return nil
 	}
 	return write()
+}
+
+// whisperAllowedLocked requires whisperScopeMu (shared or exclusive).
+func (r *Router) whisperAllowedLocked(delivery MediaDelivery) bool {
+	scope := r.whisperScopes[delivery.SenderID]
+	if scope.revision != delivery.WhisperRevision || scope.active != delivery.Whisper {
+		return false
+	}
+	// A channel recording is not a whisper recipient. Neither a queued tap
+	// nor a retransmission may retain access after the recipient set changes.
+	return !scope.active || (!delivery.Tap && scope.targets[delivery.RecipientID])
 }

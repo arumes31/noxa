@@ -40,6 +40,16 @@ type adaptiveThreshold struct {
 	max                    time.Duration
 	lastUpdate             time.Time
 	numDeltas              int
+	now                    now
+}
+
+// withThresholdClock replaces the wall clock used to scale adaptation steps.
+func withThresholdClock(nowFn now) adaptiveThresholdOption {
+	return func(at *adaptiveThreshold) {
+		if nowFn != nil {
+			at.now = nowFn
+		}
+	}
 }
 
 // newAdaptiveThreshold initializes a new adaptiveThreshold with default
@@ -53,6 +63,7 @@ func newAdaptiveThreshold(opts ...adaptiveThresholdOption) *adaptiveThreshold {
 		max:                    600 * time.Millisecond,
 		lastUpdate:             time.Time{},
 		numDeltas:              0,
+		now:                    time.Now,
 	}
 	for _, opt := range opts {
 		opt(at)
@@ -80,7 +91,7 @@ func (a *adaptiveThreshold) compare(estimate, _ time.Duration) (usage, time.Dura
 }
 
 func (a *adaptiveThreshold) update(estimate time.Duration) {
-	now := time.Now()
+	now := a.now()
 	if a.lastUpdate.IsZero() {
 		a.lastUpdate = now
 	}

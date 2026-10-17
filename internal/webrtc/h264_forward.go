@@ -251,8 +251,7 @@ func (v *videoContinuity) translateH264(pkt *rtp.Packet, now time.Time, frameSta
 	first := !v.seen
 	if switching {
 		v.sequenceOffset = v.sequence + 1 - pkt.SequenceNumber
-		elapsed := max(int64(1), now.Sub(v.last).Nanoseconds()*90000/int64(time.Second))
-		v.timestampOffset = v.timestamp + uint32(elapsed&0xffffffff) - pkt.Timestamp
+		v.timestampOffset = v.switchTimestampOffset(pkt, now)
 	}
 	out := *pkt
 	out.SequenceNumber += v.sequenceOffset

@@ -164,7 +164,10 @@ func NewWithVideoBounds(logger *zap.Logger, iceServers []string, enableAV1 bool,
 			return nil, fmt.Errorf("webrtc: listening on shared UDP address: %w", err)
 		}
 		configureMediaReceiveBuffer(conn, logger)
-		udpMux = webrtc.NewICEUDPMux(nil, &boundedPacketConn{PacketConn: conn})
+		if err := configureMediaSendBuffer(conn); err != nil {
+			logger.Warn("webrtc: shared UDP send buffer request failed", zap.Int("requested_bytes", mediaSendBufferBytes), zap.Error(err))
+		}
+		udpMux = webrtc.NewICEUDPMux(nil, &faultInjectingPacketConn{PacketConn: &boundedPacketConn{PacketConn: conn}})
 		settingEngine.SetICEUDPMux(udpMux)
 		settingEngine.SetNetworkTypes([]webrtc.NetworkType{webrtc.NetworkTypeUDP4})
 	}
@@ -356,7 +359,7 @@ func registerCodecsWithVideoBounds(m *webrtc.MediaEngine, enableAV1 bool, bounds
 	}
 	if err := m.RegisterCodec(webrtc.RTPCodecParameters{
 		RTPCodecCapability: opus,
-		PayloadType:        111,
+		PayloadType:        mediaOpusPayloadType, // also classifies voice on the socket
 	}, webrtc.RTPCodecTypeAudio); err != nil {
 		return fmt.Errorf("opus: %w", err)
 	}

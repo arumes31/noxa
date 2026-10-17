@@ -71,3 +71,31 @@ func (c *rateCalculator) add(acks []cc.Acknowledgment, onRateUpdate func(int)) {
 		onRateUpdate(int(float64(8*c.sum) / dt.Seconds()))
 	}
 }
+
+// deliveryRatio compares how long the path took to deliver the packets in the
+// current receive window with how long the sender took to send them (send
+// span / receive span). About 1 means the path kept up with the sending rate;
+// clearly below 1 means a queue grew somewhere. It returns 0 when the window
+// is too short to judge.
+func (c *rateCalculator) deliveryRatio() float64 {
+	if len(c.history) < 2 {
+		return 0
+	}
+	first, last := c.history[0], c.history[len(c.history)-1]
+	minDeparture, maxDeparture := first.Departure, first.Departure
+	for _, ack := range c.history[1:] {
+		if ack.Departure.Before(minDeparture) {
+			minDeparture = ack.Departure
+		}
+		if ack.Departure.After(maxDeparture) {
+			maxDeparture = ack.Departure
+		}
+	}
+	receive := last.Arrival.Sub(first.Arrival)
+	send := maxDeparture.Sub(minDeparture)
+	if receive < c.window/4 || send <= 0 {
+		return 0
+	}
+
+	return send.Seconds() / receive.Seconds()
+}

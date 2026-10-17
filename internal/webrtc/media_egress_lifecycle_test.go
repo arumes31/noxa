@@ -16,34 +16,85 @@ import (
 	"github.com/pion/rtp"
 )
 
-func TestMediaEgressRetiresFailedOutput(t *testing.T) {
+// A non-timeout write error (for example io.ErrClosedPipe while an ICE restart
+// replaces the muxed socket) must not retire the (subscriber, publisher, slot)
+// output for the rest of the session. That was the "one listener cannot hear
+// one speaker" failure: nothing ever rebuilt the stopped egress stream.
+func TestMediaEgressRecoversAfterFailedOutput(t *testing.T) {
 	for _, failure := range []struct {
 		name string
 		err  error
-	}{{"closed transport", io.ErrClosedPipe}} {
+	}{{"closed transport", io.ErrClosedPipe}, {"no buffer space", errors.New("sendto: no buffer space available")}} {
 		t.Run(failure.name, func(t *testing.T) {
 			registry := &mediaEgressRegistry{}
 			stream := &mediaEgressStream{active: true, registry: registry}
 			source := &rtp.Packet{Header: rtp.Header{Version: 2}, Payload: []byte{1}}
 			packet, _ := stream.prepare(source, mediaTicket{})
+			queued, _ := stream.prepare(source, mediaTicket{})
 			attempts := 0
-			writer := interceptor.RTPWriterFunc(func(*rtp.Header, []byte, interceptor.Attributes) (int, error) {
+			fail := true
+			writer := interceptor.RTPWriterFunc(func(_ *rtp.Header, payload []byte, _ interceptor.Attributes) (int, error) {
 				attempts++
-				return 0, failure.err
+				if fail {
+					return 0, failure.err
+				}
+				return len(payload), nil
 			})
 			if _, err := stream.write(&packet.Header, packet.Payload, nil, writer); !errors.Is(err, failure.err) {
 				t.Fatalf("write error = %v, want %v", err, failure.err)
 			}
-			// An already queued packet and a NACK reuse the original ticket.
-			// Neither may revisit a transport that has failed its write budget.
+			// An already queued packet and a NACK reuse old tickets; neither may
+			// revisit the failed transport.
 			_, _ = stream.write(&packet.Header, packet.Payload, nil, writer)
+			_, _ = stream.write(&queued.Header, queued.Payload, nil, writer)
 			if attempts != 1 {
 				t.Errorf("failed output was retried %d times", attempts)
 			}
 			if _, ok := stream.prepare(source, mediaTicket{}); ok {
-				t.Error("failed output accepted another packet")
+				t.Error("failed output accepted a packet during its cooldown")
+			}
+			if !stream.Active() {
+				t.Fatal("transient write failure retired the output")
+			}
+			fail = false
+			time.Sleep(mediaSocketWriteTimeout + 20*time.Millisecond)
+			fresh, ok := stream.prepare(source, mediaTicket{})
+			if !ok {
+				t.Fatal("output never recovered after a transient write failure")
+			}
+			if n, err := stream.write(&fresh.Header, fresh.Payload, nil, writer); err != nil || n != 1 {
+				t.Fatalf("recovered write = %d, %v", n, err)
+			}
+			if stream.failures.Load() != 0 {
+				t.Fatal("successful write did not reset the failure backoff")
 			}
 		})
+	}
+}
+
+func TestMediaEgressBackoffGrowsAndIsCapped(t *testing.T) {
+	stream := &mediaEgressStream{active: true, registry: &mediaEgressRegistry{}}
+	var last time.Duration
+	for i := 0; i < 8; i++ {
+		before := time.Now()
+		if _, ok := stream.backOff(false); !ok {
+			t.Fatal("active stream refused backoff")
+		}
+		delay := stream.retryAfter.Sub(before)
+		if delay+5*time.Millisecond < last {
+			t.Fatalf("backoff shrank: %v after %v", delay, last)
+		}
+		if delay > mediaEgressRetryMax+5*time.Millisecond {
+			t.Fatalf("backoff %v exceeds cap", delay)
+		}
+		last = delay
+	}
+	if last < mediaEgressRetryMax-5*time.Millisecond {
+		t.Fatalf("backoff never reached cap: %v", last)
+	}
+	stream.stop()
+	if _, ok := stream.backOff(false); ok {
+		t.Fatal("stopped stream must stay stopped")
 	}
 }
 
