@@ -5295,7 +5295,7 @@ test("tray follows detected self speech, input/output mute, and voice teardown w
         }));
     });
     const flags = () => page.evaluate(() => window.__callArgs.SetTrayVoiceState?.at(-1));
-    await expect.poll(flags).toEqual([true, false, false]);
+    await expect.poll(flags).toEqual([true, false, false, true]);
     const count = await page.evaluate(() => window.__calls.SetTrayVoiceState);
     await page.evaluate(() => {
         for (let i = 0; i < 20; i++) window.__noxa.renderTree();
@@ -5305,9 +5305,9 @@ test("tray follows detected self speech, input/output mute, and voice teardown w
     });
     expect(await page.evaluate(() => window.__calls.SetTrayVoiceState)).toBe(count);
     await page.locator("#voice-deafen").click();
-    await expect.poll(flags).toEqual([false, true, true]);
+    await expect.poll(flags).toEqual([false, true, true, true]);
     await page.locator("#voice-deafen").click();
-    await expect.poll(flags).toEqual([false, false, false]);
+    await expect.poll(flags).toEqual([false, false, false, true]);
     // Restoring the microphone must not revive speech from before deafen.
     const speak = () => page.evaluate(() => {
         for (const cb of window.__events.event) cb(JSON.stringify({
@@ -5315,19 +5315,20 @@ test("tray follows detected self speech, input/output mute, and voice teardown w
         }));
     });
     await speak();
-    await expect.poll(flags).toEqual([true, false, false]);
+    await expect.poll(flags).toEqual([true, false, false, true]);
     await page.locator("#voice-mute").click();
-    await expect.poll(flags).toEqual([false, true, false]);
+    await expect.poll(flags).toEqual([false, true, false, true]);
     await page.locator("#voice-deafen").click();
-    await expect.poll(flags).toEqual([false, true, true]);
+    await expect.poll(flags).toEqual([false, true, true, true]);
     await page.locator("#voice-deafen").click();
-    await expect.poll(flags).toEqual([false, true, false]);
+    await expect.poll(flags).toEqual([false, true, false, true]);
     await page.locator("#voice-mute").click();
-    await expect.poll(flags).toEqual([false, false, false]);
+    await expect.poll(flags).toEqual([false, false, false, true]);
     await speak();
-    await expect.poll(flags).toEqual([true, false, false]);
+    await expect.poll(flags).toEqual([true, false, false, true]);
+    // Leaving voice (teardown) reports "not in a channel" for the gray icon.
     await page.evaluate(() => window.__noxa.resetVoiceSession());
-    await expect.poll(flags).toEqual([false, false, false]);
+    await expect.poll(flags).toEqual([false, false, false, false]);
 });
 
 test("deafen disables microphone transmission and preserves manual mute when restored", async ({ page }) => {

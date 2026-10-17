@@ -77,6 +77,9 @@ function renderTabs(tabs) {
     const existing = new Map([...bar.querySelectorAll(".srv-tab[data-tab-id]")].map(tab => [tab.dataset.tabId, tab]));
     const visible = new Set((tabs || []).map(tab => tab.id));
     retainPresenceTabs(visible);
+    // Background tabs' chat counters feed the tray (the active tab's own
+    // badges come from chat-ui; the backend zeroes them on activation).
+    V().trayUnread?.set("tabs", (tabs || []).reduce((sum, tab) => sum + (tab.active ? 0 : tab.unread || 0), 0));
     for (const [id, element] of existing) if (!visible.has(id)) element.remove();
     if (!tabs || tabs.length === 0) {
         V().showLogin();

@@ -1006,8 +1006,12 @@ export function SetStreamVideoQualityForTab(arg1, arg2, arg3, arg4, arg5, arg6) 
   return window['go']['main']['App']['SetStreamVideoQualityForTab'](arg1, arg2, arg3, arg4, arg5, arg6);
 }
 
-export function SetTrayVoiceState(arg1, arg2, arg3) {
-  return window['go']['main']['App']['SetTrayVoiceState'](arg1, arg2, arg3);
+export function SetTrayUnread(arg1) {
+  return window['go']['main']['App']['SetTrayUnread'](arg1);
+}
+
+export function SetTrayVoiceState(arg1, arg2, arg3, arg4) {
+  return window['go']['main']['App']['SetTrayVoiceState'](arg1, arg2, arg3, arg4);
 }
 
 export function SetVideoQuality(arg1) {

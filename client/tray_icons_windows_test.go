@@ -15,8 +15,10 @@ func TestTrayIconsLoadAtWindowsTraySize(t *testing.T) {
 	loadImage := user32.NewProc("LoadImageW")
 	destroyIcon := user32.NewProc("DestroyIcon")
 	dir := t.TempDir()
-	for mode, data := range trayIcons() {
-		path := filepath.Join(dir, strconv.Itoa(int(mode))+".ico")
+	for i := range int(trayStateCount) * trayUnreadBuckets {
+		mode := trayIconKey{state: trayIconState(i / trayUnreadBuckets), unread: uint8(i % trayUnreadBuckets)}
+		data := trayIconFor(mode)
+		path := filepath.Join(dir, strconv.Itoa(i)+".ico")
 		if err := os.WriteFile(path, data, 0600); err != nil {
 			t.Fatal(err)
 		}
@@ -28,10 +30,10 @@ func TestTrayIconsLoadAtWindowsTraySize(t *testing.T) {
 			// IMAGE_ICON + LR_LOADFROMFILE, matching the native tray loader.
 			handle, _, err := loadImage.Call(0, uintptr(unsafe.Pointer(name)), 1, size, size, 0x10)
 			if handle == 0 {
-				t.Fatalf("load tray state %d at %dpx: %v", mode, size, err)
+				t.Fatalf("load tray state %+v at %dpx: %v", mode, size, err)
 			}
 			if ok, _, err := destroyIcon.Call(handle); ok == 0 {
-				t.Fatalf("destroy tray state %d at %dpx: %v", mode, size, err)
+				t.Fatalf("destroy tray state %+v at %dpx: %v", mode, size, err)
 			}
 		}
 	}
