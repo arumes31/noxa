@@ -97,7 +97,7 @@ test.describe("persistent polls", () => {
         });
     });
     async function postPoll(page) {
-        await page.evaluate(() => window.__noxaChat.addChat({ id: 9100, channel_id: 1, from_unique_id: "other", from: "Bob", text: '[noxa-poll:v1]' + JSON.stringify({ question: "Choose <script>", options: ["Forest", "Harbor"], multiple: false, closes_at: window.__pollState.closes_at }) }));
+        await page.evaluate(() => window.__noxaChat.addChat({ id: 9100, channel_id: 1, from_unique_id: "other", from: "Bob", enc_verified: true, enc_mode: "server", text: '[noxa-poll:v1]' + JSON.stringify({ question: "Choose <script>", options: ["Forest", "Harbor"], multiple: false, closes_at: window.__pollState.closes_at }) }));
         await expect(page.locator(".poll-status")).toContainText("0 voters");
     }
     test("single ballots replace, clear, persist after rerender and close", async ({ page }) => {
@@ -158,8 +158,8 @@ test("custom role mentions complete stable IDs and render safe role names", asyn
     await page.locator("#chat-text").press("Tab");
     await expect(page.locator("#chat-text")).toHaveValue("<@&20> ");
     await page.evaluate(() => {
-        window.__noxaChat.addChat({ id: 8001, channel_id: 1, from_unique_id: "other", from: "Bob", text: "Hello <@&20>", role_mentions: ["self"] });
-        window.__noxaChat.addChat({ id: 8002, channel_id: 1, from_unique_id: "other", from: "Bob", text: "Unresolved @admin <@&20>" });
+        window.__noxaChat.addChat({ enc_verified: true, enc_mode: "server", id: 8001, channel_id: 1, from_unique_id: "other", from: "Bob", text: "Hello <@&20>", role_mentions: ["self"] });
+        window.__noxaChat.addChat({ enc_verified: true, enc_mode: "server", id: 8002, channel_id: 1, from_unique_id: "other", from: "Bob", text: "Unresolved @admin <@&20>" });
     });
     await expect(page.locator('#chat-log [data-msg-id="8001"]')).toHaveClass(/mentioned/);
     await expect(page.locator('#chat-log [data-msg-id="8002"]')).not.toHaveClass(/mentioned/);
@@ -1616,12 +1616,12 @@ test.describe("tab-bound chat sending and attachments", () => {
         test(`native activation cannot redirect ${kind}`, async ({ page }) => {
             if (kind === "upload") await attach(page);
             if (["reply", "save"].includes(kind)) {
-                await page.evaluate(kind => window.__noxaChat.addChat({ id: 71, channel_id: 1, from: "Me", text: kind === "save" ? "[file:original.vcx#dGVzdA==#original.txt]" : "parent" }), kind);
+                await page.evaluate(kind => window.__noxaChat.addChat({ enc_verified: true, enc_mode: "server", id: 71, channel_id: 1, from: "Me", text: kind === "save" ? "[file:original.vcx#dGVzdA==#original.txt]" : "parent" }), kind);
                 if (kind === "reply") await page.locator('#chat-log button[title="reply"]').evaluate(button => button.click());
             }
             await page.evaluate(() => { window.__sendScope.nativeTab = "server-b"; });
             if (kind === "preview") {
-                await page.evaluate(() => window.__noxaChat.addChat({ id: 72, channel_id: 1, from: "Me", text: "[file:photo.vcx#dGVzdA==#photo.png]" }));
+                await page.evaluate(() => window.__noxaChat.addChat({ enc_verified: true, enc_mode: "server", id: 72, channel_id: 1, from: "Me", text: "[file:photo.vcx#dGVzdA==#photo.png]" }));
             } else if (kind === "save") {
                 await page.locator(".msg-file .file-chip").click();
             } else {
@@ -1777,7 +1777,7 @@ test.describe("tab-bound chat sending and attachments", () => {
     }
     test("detached attachment save controls cannot invoke the native dialog", async ({ page }) => {
         await page.evaluate(() => {
-            window.__noxaChat.addChat({ id: 71, channel_id: 1, from: "Me", text: "[file:original.vcx#dGVzdA==#original.txt]" });
+            window.__noxaChat.addChat({ enc_verified: true, enc_mode: "server", id: 71, channel_id: 1, from: "Me", text: "[file:original.vcx#dGVzdA==#original.txt]" });
             const button = document.querySelector(".msg-file .file-chip");
             button.remove();
             button.click();
@@ -1785,7 +1785,7 @@ test.describe("tab-bound chat sending and attachments", () => {
         expect(await page.evaluate(() => window.__sendScope.calls)).toEqual([]);
     });
     test("current attachment previews and save controls retain their exact source", async ({ page }) => {
-        await page.evaluate(() => window.__noxaChat.addChat({ id: 71, channel_id: 1, from: "Me", text: "[file:photo.vcx#dGVzdA==#photo.png] [file:doc.vcx#dGVzdA==#doc.txt]" }));
+        await page.evaluate(() => window.__noxaChat.addChat({ enc_verified: true, enc_mode: "server", id: 71, channel_id: 1, from: "Me", text: "[file:photo.vcx#dGVzdA==#photo.png] [file:doc.vcx#dGVzdA==#doc.txt]" }));
         await expect(page.locator(".msg-img")).toHaveAttribute("src", "data:image/png;base64,aGVsbG8=");
         await page.locator(".msg-file .file-chip").click();
         expect(await page.evaluate(() => window.__sendScope.effects)).toEqual([
@@ -1879,7 +1879,7 @@ test.describe("tab-bound chat mutations", () => {
                 if (key === "DownloadChatAttachmentForTab") return async () => "R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
                 return target[key];
             } });
-            window.__noxaChat.addChat({ id: 72, channel_id: 1, from: "Other", text: "[file:animation.vcx#dGVzdA==#animation.gif]" });
+            window.__noxaChat.addChat({ enc_verified: true, enc_mode: "server", id: 72, channel_id: 1, from: "Other", text: "[file:animation.vcx#dGVzdA==#animation.gif]" });
         });
         await page.locator('.msg[data-msg-id="72"] img.msg-img').click({ button: "right" });
         const menu = page.locator(".msg-context-menu");
@@ -2270,7 +2270,7 @@ test.describe("tab-bound chat history and pins", () => {
     test("late history cannot rerender the replacement server", async ({ page }) => {
         await page.evaluate(() => {
             const f = window.__chatReadScope;
-            f.history = { messages: [{ id: 77, body: "old private history", from_nickname: "old member" }] };
+            f.history = { messages: [{ id: 77, body: "old private history", from_nickname: "old member", enc_verified: true, enc_mode: "server" }] };
             f.historyGate = new Promise(resolve => { f.releaseHistory = resolve; });
             window.__noxaChat.onMyChannelChanged();
         });
@@ -2280,7 +2280,7 @@ test.describe("tab-bound chat history and pins", () => {
             window.__noxa.state.activeTabID = "server-b";
             window.__noxa.state.serverGeneration++;
             window.__chatReadScope.nativeTab = "server-b";
-            window.__chatReadScope.history = { messages: [{ id: 10, body: "replacement history", from_nickname: "new member" }] };
+            window.__chatReadScope.history = { messages: [{ id: 10, body: "replacement history", from_nickname: "new member", enc_verified: true, enc_mode: "server" }] };
             window.__noxaChat.onMyChannelChanged();
         });
         await expect(page.locator("#chat-log")).toContainText("replacement history");
@@ -2700,7 +2700,7 @@ test.describe("tab-bound custom emoji", () => {
             window.__noxa.state.myChannelID = 42;
             window.__noxa.state.channels = [{ ChannelID: 42, Name: "Chat" }];
             for (const id of [1, 2]) {
-                for (const callback of window.__events.event || []) callback(JSON.stringify({ type: "chat", data: { id, channel_id: 42, from: "Bob", from_unique_id: "peer", text: "Message " + id } }));
+                for (const callback of window.__events.event || []) callback(JSON.stringify({ type: "chat", data: { id, channel_id: 42, from: "Bob", from_unique_id: "peer", text: "Message " + id, enc_verified: true, enc_mode: "server" } }));
             }
         });
         await expect.poll(() => page.evaluate(() => window.__emoji.completed.includes("EmojiList"))).toBe(true);
@@ -3793,18 +3793,18 @@ test("@quickwins transfer estimates and new-message counts translate without cha
         v.state.channels = [{ ChannelID: 42, Name: "Lounge" }];
         v.refreshHeader();
         for (let id = 1; id <= 35; id++) {
-            for (const callback of window.__events.event || []) callback(JSON.stringify({ type: "chat", data: { id, channel_id: 42, from: "Bob", from_unique_id: "peer", text: "Message " + id, enc: id === 35 } }));
+            for (const callback of window.__events.event || []) callback(JSON.stringify({ type: "chat", data: { id, channel_id: 42, from: "Bob", from_unique_id: "peer", text: "Message " + id, enc_verified: true, enc_mode: "server" } }));
         }
     });
     await expect(page.locator("#chat-log .msg.rich")).toHaveCount(35);
-    await expect(page.locator("#chat-log .msg-lock")).toHaveAttribute("aria-label", /channel key/);
+    await expect(page.locator('#chat-log [data-msg-id="35"] .msg-lock')).toHaveAttribute("aria-label", /channel key/);
     await page.locator("#chat-log").evaluate(log => { log.scrollTop = 0; log.dispatchEvent(new Event("scroll")); });
     await page.evaluate(() => {
-        for (const callback of window.__events.event || []) callback(JSON.stringify({ type: "chat", data: { id: 36, channel_id: 42, from: "Bob", from_unique_id: "peer", text: "New message" } }));
+        for (const callback of window.__events.event || []) callback(JSON.stringify({ type: "chat", data: { id: 36, channel_id: 42, from: "Bob", from_unique_id: "peer", text: "New message", enc_verified: true, enc_mode: "server" } }));
     });
     await expect(page.locator("#chat-newpill")).toHaveText("1 new message ↓");
     await page.evaluate(() => {
-        for (const callback of window.__events.event || []) callback(JSON.stringify({ type: "chat", data: { id: 37, channel_id: 42, from: "Bob", from_unique_id: "peer", text: "Another message" } }));
+        for (const callback of window.__events.event || []) callback(JSON.stringify({ type: "chat", data: { id: 37, channel_id: 42, from: "Bob", from_unique_id: "peer", text: "Another message", enc_verified: true, enc_mode: "server" } }));
         for (const callback of window.__events.ft_progress || []) callback({ id: "eta", name: "notes.zip", direction: "download", status: "active", total: 121000, transferred: 1000, bytes_per_sec: 1000 });
     });
     await expect(page.locator("#chat-newpill")).toHaveText("2 new messages ↓");
@@ -4192,7 +4192,7 @@ test("German menus translate remaining actions and bookmark dialogs", async ({ p
         (await import("/src/menu.js")).initMenu();
     });
     await page.getByRole("menuitem", { name: "Ansicht", exact: true }).click();
-    for (const name of ["Details ein-/ausblenden", "Chat in eigenem Fenster", "Nicht stören", "Immer im Vordergrund", "Design: dunkel", "Design: hell", "Design: hoher Kontrast"]) {
+    for (const name of ["Details ein-/ausblenden", "Chat in eigenem Fenster", "Nicht stören", "Immer im Vordergrund", "Design: Arctic Night", "Design: klassisch dunkel", "Design: hell", "Design: hoher Kontrast"]) {
         await expect(page.getByRole("menuitem", { name, exact: true })).toBeVisible();
     }
     await page.screenshot({ path: testInfo.outputPath("german-view-menu.png") });
