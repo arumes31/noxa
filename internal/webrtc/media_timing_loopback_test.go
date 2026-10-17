@@ -726,11 +726,17 @@ func TestBlockedKeyframeRequestDoesNotStallFanout(t *testing.T) {
 		return healthy.count(id) > 10
 	})
 	// The late viewer never gets a keyframe: its fanout keeps asking for one.
+	// The only keyframe is the forced one above; let it age out of the GOP
+	// cache first, or the cache (correctly) starts the late viewer without
+	// asking the publisher and no request ever reaches the blocked writer.
+	time.Sleep(gopCacheMaxAge + 300*time.Millisecond)
 	late := fixture.addViewer(t, "late")
 	writer.armed.Store(true)
-	// The watch-start request blocks first (on the viewer's startup worker);
-	// once the throttle window passes, the fanout itself asks again.
-	timingWait(t, "a blocked fanout keyframe request", 5*time.Second, func() bool { return writer.blocked.Load() >= 2 })
+	// Upstream keyframe requests are written asynchronously, one at a time per
+	// source SSRC, so once one is stuck in the publisher's RTCP write no
+	// second write can start; a single blocked request is the stall this test
+	// needs. What matters is that the fanout keeps serving other viewers.
+	timingWait(t, "a blocked upstream keyframe request", 5*time.Second, func() bool { return writer.blocked.Load() >= 1 })
 	if got := timingGrowth(t, healthy, id, time.Second); got < 15 {
 		t.Fatalf("healthy viewer received only %d packets while a keyframe request was blocked", got)
 	}
