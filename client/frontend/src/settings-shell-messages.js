@@ -139,7 +139,7 @@ export const settingsShellGerman = {
     "settings.done": "Fertig",
     "settings.close": "Einstellungen schließen",
     "settings.resetPage": "Auf Standard zurücksetzen",
-    "settings.resetDone": "{page} auf Standard zurückgesetzt. Fertig oder Übernehmen speichert es; Abbrechen behält deine gespeicherten Einstellungen.",
+    "settings.resetDone": "{page} auf Standard zurückgesetzt. Fertig oder Anwenden speichert es; Abbrechen behält deine gespeicherten Einstellungen.",
     "settings.resetNothing": "{page} verwendet bereits die Standardwerte.",
     "settings.resetUnavailable": "Die Standardwerte sind gerade nicht verfügbar. Nichts wurde geändert.",
     "settings.searchResults": "Suchergebnisse",

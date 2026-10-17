@@ -336,7 +336,7 @@ export function gamingOverlaySettings(settings, { row, checkbox, slider, hint, g
         row(t("overlay.onlySpeaking"), lockedOn, "", { help: t("overlay.onlySpeakingHelp") }),
         soonRow(t("overlay.chatPeek"), t("overlay.chatPeekHelp")),
         soonRow(t("overlay.autoHide"), t("overlay.autoHideHelp")),
-        row(t("overlay.avoidZones"), checkbox(avoidZones(), value => { settings.gaming_overlay_avoid_zones = value; keepClearOfZones(); render(); }), "saved",
+        row(t("overlay.avoidZones"), checkbox(avoidZones(), value => { settings.gaming_overlay_avoid_zones = value; keepClearOfZones(); render(); }), "",
             { key: "gaming_overlay_avoid_zones", help: t("overlay.avoidZonesHelp") }));
 
     // --- general overlay options (pre-existing preferences) -------------------------
@@ -364,13 +364,13 @@ export function gamingOverlaySettings(settings, { row, checkbox, slider, hint, g
     };
     const firstBlue = blueSlider("gaming_overlay_blue_start", 180, 220), lastBlue = blueSlider("gaming_overlay_blue_end", 200, 240);
     const general = group(t("overlay.general"), "general",
-        row(t("overlay.enabled"), checkbox(settings.gaming_overlay !== false, value => { settings.gaming_overlay = value; }), "saved", { key: "gaming_overlay" }),
-        row(t("overlay.monitor"), monitor, "saved", { key: "gaming_overlay_monitor" }),
-        row(t("overlay.scale"), slider(settings.gaming_overlay_scale ?? 80, 75, 200, value => { settings.gaming_overlay_scale = value; render(); }, true), "saved", { key: "gaming_overlay_scale" }),
-        row(t("overlay.selfColor"), ownColor, "saved", { key: "gaming_overlay_self_color" }),
-        row(t("overlay.firstBlue"), firstBlue.element, "saved", { key: "gaming_overlay_blue_start" }),
-        row(t("overlay.lastBlue"), lastBlue.element, "saved", { key: "gaming_overlay_blue_end", help: t("overlay.colorsHint") }),
-        hint(t("overlay.hint")));
+        row(t("overlay.enabled"), checkbox(settings.gaming_overlay !== false, value => { settings.gaming_overlay = value; }), "", { key: "gaming_overlay" }),
+        row(t("overlay.monitor"), monitor, "", { key: "gaming_overlay_monitor" }),
+        row(t("overlay.scale"), slider(settings.gaming_overlay_scale ?? 80, 75, 200, value => { settings.gaming_overlay_scale = value; render(); }, true), "", { key: "gaming_overlay_scale" }),
+        row(t("overlay.selfColor"), ownColor, "", { key: "gaming_overlay_self_color" }),
+        row(t("overlay.firstBlue"), firstBlue.element, "", { key: "gaming_overlay_blue_start" }),
+        row(t("overlay.lastBlue"), lastBlue.element, "", { key: "gaming_overlay_blue_end", help: t("overlay.colorsHint") }),
+        hint(t("settings.timing.saved") + " " + t("overlay.hint")));
 
     const placementGroup = group("", "placement", layout, status);
     placementGroup.dataset.setting = "gaming_overlay_position";

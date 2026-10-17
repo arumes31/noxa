@@ -122,7 +122,7 @@ test("overlay color settings preview drafts, Cancel discards them and Apply upda
     await page.getByLabel("Your overlay color",{exact:true}).fill("#ff8800");
     await page.getByLabel("Other members: first blue",{exact:true}).fill("180");
     await page.getByLabel("Other members: last blue",{exact:true}).fill("200");
-    await page.getByRole("button",{name:"Preview on monitor",exact:true}).click();
+    await page.getByRole("button",{name:"Preview in game",exact:true}).click();
     expect(await page.evaluate(()=>window.__overlayPreview)).toMatchObject({gaming_overlay_self_color:"#ff8800",gaming_overlay_blue_start:180,gaming_overlay_blue_end:200});
     expect(await page.locator(".overlay-sample-person").first().evaluate(el=>el.style.getPropertyValue("--overlay-color"))).toBe("#ff8800");
     expect(await page.evaluate(()=>window.__overlayUpdates.at(-1).speakers[0].color)).toBe("#43c798");
@@ -140,35 +140,39 @@ test("overlay color settings preview drafts, Cancel discards them and Apply upda
 test("overlay preferences stay drafts until Apply, support keyboard positioning and native preview", async ({ page }, testInfo) => {
     await page.evaluate(() => window.__noxa.openSettings("application"));
     await expect(page.getByLabel("Voice overlay", { exact: true })).toHaveCount(0);
-    await page.getByRole("tab", { name: "Overlay", exact: true }).click();
-    await expect(page.getByRole("tabpanel", { name: "Overlay", exact: true })).toBeVisible();
+    await page.getByRole("tab", { name: "Fullscreen overlay", exact: true }).click();
+    await expect(page.getByRole("tabpanel", { name: "Fullscreen overlay", exact: true })).toBeVisible();
     await page.screenshot({ path: testInfo.outputPath("overlay-settings-section.png") });
     await expect(page.getByLabel("Voice overlay", { exact: true })).toBeChecked();
     await expect(page.getByLabel("Overlay monitor", { exact: true })).toHaveValue("");
     await page.getByLabel("Overlay monitor", { exact: true }).selectOption("left");
     await page.getByLabel("Overlay size", { exact: true }).fill("150");
     await page.getByLabel("Overlay opacity", { exact: true }).fill("40");
-    await expect(page.getByLabel("Show only speaking members", { exact: true })).toHaveCount(0);
+    // Speaking-only is the overlay's fixed behaviour: shown, but locked on.
+    await expect(page.getByLabel("Only show who's speaking", { exact: true })).toBeChecked();
+    await expect(page.getByLabel("Only show who's speaking", { exact: true })).toBeDisabled();
     const sample = page.getByRole("button", { name: "Move overlay preview" });
     await sample.focus(); await page.keyboard.press("Shift+ArrowRight"); await page.keyboard.press("ArrowDown");
-    await expect(page.getByLabel("Overlay position", { exact: true })).toHaveValue("custom");
+    await expect(page.locator('.ovl-anchor[aria-checked="true"]')).toHaveCount(0);
+    await expect(page.locator(".ovl-anchor-name")).toHaveText("Custom position");
     await expect(page.locator(".overlay-position-readout")).toContainText("10% horizontal, 46% vertical");
     await expect(sample).toContainText("Sam");
     expect(await page.evaluate(() => window.__overlaySaved)).toBeUndefined();
-    await page.getByRole("button", { name: "Preview on monitor", exact: true }).click();
+    await page.getByRole("button", { name: "Preview in game", exact: true }).click();
     const draft = await page.evaluate(() => window.__overlayPreview);
     expect(draft).toMatchObject({ gaming_overlay_monitor: "left", gaming_overlay_scale: 150, gaming_overlay_opacity: 40, gaming_overlay_position: "custom", gaming_overlay_x: 10, gaming_overlay_y: 46 });
     expect(Object.keys(draft).every(key => key.startsWith("gaming_overlay"))).toBe(true);
     expect(await page.evaluate(() => window.__overlaySaved)).toBeUndefined();
     await page.getByRole("button", { name: "Apply", exact: true }).click();
     expect(await page.evaluate(() => window.__overlaySaved)).toMatchObject(draft);
-    await page.getByRole("tab", { name: "Application", exact: true }).click();
+    await page.getByRole("tab", { name: "General", exact: true }).click();
     await page.locator("#settings-search").fill("Overlay opacity");
     const hit = page.locator(".set-search-hit");
     await expect(hit).toHaveCount(1);
-    await expect(hit.locator(".set-search-page")).toHaveText("Overlay");
+    await expect(hit.locator(".set-search-page")).toHaveText("Fullscreen overlay");
     await hit.click();
-    await expect(page.getByRole("tab", { name: "Overlay", exact: true })).toHaveAttribute("aria-selected", "true");
+    await expect(page.getByRole("tab", { name: "Fullscreen overlay", exact: true })).toHaveAttribute("aria-selected", "true");
+    await expect(page.getByLabel("Overlay opacity", { exact: true })).toBeFocused();
     await expect(page.getByLabel("Overlay opacity", { exact: true })).toHaveValue("40");
 });
 
@@ -211,19 +215,19 @@ test("overlay animation overrides system motion settings and has its own saved t
     await page.emulateMedia({ reducedMotion: "reduce" });
     const reduced = await canvas.evaluate(el => el.toDataURL());
     await expect.poll(() => canvas.evaluate(el => el.toDataURL())).not.toBe(reduced);
-    const animation = page.getByLabel("Animate speaking indicators", { exact: true });
-    await expect(animation).toBeChecked();
-    await animation.uncheck();
+    const animation = page.getByLabel("Talk animation", { exact: true });
+    await expect(animation).toHaveValue("halo");
+    await animation.selectOption("still");
     await canvas.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
     const frozen = await canvas.evaluate(el => el.toDataURL());
     await page.waitForTimeout(150);
     expect(await canvas.evaluate(el => el.toDataURL())).toBe(frozen);
-    await page.getByRole("button", { name: "Preview on monitor", exact: true }).click();
+    await page.getByRole("button", { name: "Preview in game", exact: true }).click();
     expect(await page.evaluate(() => window.__overlayPreview.gaming_overlay_animate)).toBe(false);
     expect(await page.evaluate(() => window.__overlaySaved)).toBeUndefined();
     await page.getByRole("button", { name: "Apply", exact: true }).click();
     expect(await page.evaluate(() => window.__overlaySaved.gaming_overlay_animate)).toBe(false);
-    await animation.check();
+    await animation.selectOption("halo");
     await expect.poll(() => canvas.evaluate(el => el.toDataURL())).not.toBe(frozen);
 });
 
@@ -239,19 +243,20 @@ test("overlay preview drag remains bounded and Cancel discards draft position", 
     await page.getByRole("button", { name: "Cancel", exact: true }).click();
     expect(await page.evaluate(() => window.__overlaySaved)).toBeUndefined();
     await page.evaluate(() => window.__noxa.openSettings("overlay"));
-    await expect(page.getByLabel("Overlay position", { exact: true })).toHaveValue("center-left");
+    await expect(page.locator('.ovl-anchor[data-anchor="center-left"]')).toHaveAttribute("aria-checked", "true");
 });
 
 test("unsupported native overlays disable controls with a clear explanation", async ({ page }) => {
     await page.evaluate(() => { window.__overlayAvailable = false; window.__noxa.openSettings("overlay"); });
     await expect(page.getByLabel("Voice overlay", { exact: true })).toBeDisabled();
-    await expect(page.getByRole("button", { name: "Preview on monitor", exact: true })).toBeDisabled();
+    await expect(page.getByRole("button", { name: "Preview in game", exact: true })).toBeDisabled();
     await expect(page.getByText("The native voice overlay is available on Windows.", { exact: true })).toBeVisible();
 });
 
 test("breathing light halo replaces old styles and hugs every name", async ({ page }, testInfo) => {
     await page.evaluate(() => { window.__noxa.state.settings.gaming_overlay_style = "bars"; window.__noxa.openSettings("overlay"); });
-    await expect(page.getByText("Breathing light halo", { exact: true })).toBeVisible();
+    await expect(page.getByLabel("Talk animation", { exact: true })).toHaveValue("halo");
+    await expect(page.locator('#ovl-talk option[value="halo"]')).toHaveText("Light halo + comb (noXa)");
     await expect(page.locator(".overlay-sample-wave, option[value='bars'], option[value='mist-aurora']")).toHaveCount(0);
     const canvases = page.locator(".overlay-animation-canvas");
     await expect(canvases).toHaveCount(2);
@@ -281,13 +286,13 @@ test("breathing light halo replaces old styles and hugs every name", async ({ pa
     expect(pixels.gap).toBeCloseTo(32, 1);
     await page.locator(".overlay-position-preview").screenshot({ path: testInfo.outputPath("light-halo-settings.png") });
     expect(await page.evaluate(() => window.__overlaySaved)).toBeUndefined();
-    await page.getByRole("button", { name: "Preview on monitor", exact: true }).click();
+    await page.getByRole("button", { name: "Preview in game", exact: true }).click();
     expect(await page.evaluate(() => window.__overlayPreview.gaming_overlay_style)).toBe("default");
     await page.getByRole("button", { name: "Apply", exact: true }).click();
     expect(await page.evaluate(() => window.__overlaySaved.gaming_overlay_style)).toBe("default");
     await page.getByRole("button", { name: "Cancel", exact: true }).click();
     await page.evaluate(() => window.__noxa.openSettings("overlay"));
-    await expect(page.getByText("Breathing light halo", { exact: true })).toBeVisible();
+    await expect(page.getByLabel("Talk animation", { exact: true })).toHaveValue("halo");
 });
 
 test("light halo and comb follow long names, freeze when disabled and stay bounded on narrow screens", async ({ page }) => {
@@ -298,15 +303,19 @@ test("light halo and comb follow long names, freeze when disabled and stay bound
     await expect.poll(() => canvas.evaluate(el => el.toDataURL())).not.toBe(first.frame);
     await page.evaluate(() => { document.querySelector(".overlay-sample-name").textContent = "TheLegendaryNightwalker"; });
     await expect.poll(() => canvas.evaluate(el => el.width)).toBeGreaterThan(first.width);
-    await page.getByLabel("Animate speaking indicators", { exact: true }).uncheck();
+    await page.getByLabel("Talk animation", { exact: true }).selectOption("still");
     await canvas.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
     const frozen = await canvas.evaluate(el => el.toDataURL());
     await page.waitForTimeout(150);
     expect(await canvas.evaluate(el => el.toDataURL())).toBe(frozen);
+    // The preview frame models a 960 px wide desktop, so the sample keeps
+    // the overlay's proportions: avatar = 40 px × size × frame / 960.
+    const expected = size => page.locator(".overlay-position-preview").evaluate((el, size) => 40 * size / 100 * el.clientWidth / 960, size);
+    const avatar = () => page.locator(".overlay-sample-avatar").first().evaluate(el => el.getBoundingClientRect().width);
     await page.getByLabel("Overlay size", { exact: true }).fill("200");
-    await expect.poll(() => page.locator(".overlay-sample-avatar").first().evaluate(el => el.getBoundingClientRect().width)).toBe(80);
+    await expect.poll(async () => Math.abs(await avatar() - await expected(200))).toBeLessThan(1);
     await page.getByLabel("Overlay size", { exact: true }).fill("75");
-    await expect.poll(() => page.locator(".overlay-sample-avatar").first().evaluate(el => el.getBoundingClientRect().width)).toBe(30);
+    await expect.poll(async () => Math.abs(await avatar() - await expected(75))).toBeLessThan(1);
     await page.setViewportSize({ width: 400, height: 850 });
     await expect.poll(() => canvas.evaluate(el => {
         const area = el.closest(".overlay-position-preview").getBoundingClientRect(), bounds = el.getBoundingClientRect();

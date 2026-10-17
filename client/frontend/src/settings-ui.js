@@ -1618,7 +1618,7 @@ function openSettings(target = "general", options = {}) {
             searchLanguage = currentLanguage();
             for (const p of PAGES) {
                 const pageEl = PAGE_BUILDERS[p.id]({ detached: true });
-                pageEl.querySelectorAll(".set-row, .set-subhead, .set-group-title, .set-hint, button").forEach((r) => {
+                pageEl.querySelectorAll(".set-row, .set-subhead, .set-group-title, .ovl-side-label, .set-hint, button").forEach((r) => {
                     const label = (r.querySelector(".set-label")?.textContent || r.textContent || "").toLowerCase().trim();
                     searchIndex.push({ page: p.id, label });
                 });
@@ -1647,7 +1647,7 @@ function openSettings(target = "general", options = {}) {
             row.onclick = () => {
                 search.value = "";
                 renderPage(h.page);
-                const match = [...content.querySelectorAll(".set-row, .set-subhead, .set-group-title, .set-hint, button")].find(r =>
+                const match = [...content.querySelectorAll(".set-row, .set-subhead, .set-group-title, .ovl-side-label, .set-hint, button")].find(r =>
                     (r.querySelector(".set-label")?.textContent || r.textContent || "").toLowerCase().trim() === h.label);
                 if (!match) return;
                 for (let parent = match.parentElement; parent && parent !== content; parent = parent.parentElement) {
@@ -1657,7 +1657,7 @@ function openSettings(target = "general", options = {}) {
                 highlighted.classList.add("set-hit");
                 highlighted.scrollIntoView({ block: "center" });
                 const selector = "input:not([disabled]):not([type=hidden]), select:not([disabled]), textarea:not([disabled]), button:not([disabled])";
-                const target = match.matches(selector) ? match : match.querySelector(selector);
+                const target = match.matches(selector) ? match : match.querySelector(selector) || (match.htmlFor && document.getElementById(match.htmlFor));
                 if (target) target.focus({ preventScroll: true });
                 else { highlighted.tabIndex = -1; highlighted.focus({ preventScroll: true }); }
             };
