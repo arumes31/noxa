@@ -11318,6 +11318,7 @@ test("disabled speech stays silent while unrelated effects work and history stay
         const chat = (id, text, role_mentions = []) => emit("event", JSON.stringify({
             type: "chat", data: {
                 id, from: "Bob", from_unique_id: "user-b", text, channel_id: 1, role_mentions,
+                enc_verified: true, enc_mode: "server",
             },
         }));
         const keywordChat = collect(() => chat(901, "urgent request"));
