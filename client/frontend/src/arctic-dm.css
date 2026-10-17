@@ -73,7 +73,7 @@
     flex: 1; min-width: 0; border: 0; padding: 0; background: transparent; color: var(--text); font: inherit; font-size: .9rem;
 }
 .dm-search-input::placeholder { color: var(--text-faint); }
-.dm-search-input:focus-visible { outline: none !important; box-shadow: none !important; }
+#dm-list .dm-search-input:focus-visible { outline: none !important; box-shadow: none !important; }
 .dm-rows { flex: 1; min-height: 0; overflow-y: auto; list-style: none; margin: 0; padding: 0 8px 12px; }
 .dm-row-item { margin: 0 0 2px; }
 .dm-row {
@@ -158,6 +158,8 @@
     padding: 4px 6px; border: 1px solid var(--dm-line); border-radius: var(--dm-r-sm); background: var(--dm-s2);
 }
 .dm-thread-search input { flex: 1; min-width: 0; border: 0; background: transparent; color: var(--text); font: inherit; }
+#dm-thread-head .dm-thread-search input:focus-visible { outline: none !important; box-shadow: none !important; }
+.dm-thread-search:focus-within { border-color: var(--border-accent, var(--accent)); }
 .dm-thread-search-count { font: .75rem var(--dm-mono); color: var(--text-faint); }
 .dm-thread-empty { margin: auto; padding: 24px; max-width: 360px; text-align: center; color: var(--text-faint); line-height: 1.5; }
 
@@ -289,7 +291,14 @@
 
 /* composer */
 #center.dm-view-active #chat-input-row { margin: 8px 18px 16px; }
-#center.dm-view-active #chat-input-row #chat-attach { order: -1; }
+#center.dm-view-active #chat-input-row #chat-attach { order: -1; position: relative; }
+/* attach reads as "+" here, as in the design; its label stays "Attach files" */
+#center.dm-view-active :is(#chat-input-row #chat-attach, #private-groups .group-composer .group-attach) { font-size: 0; color: var(--text-dim); }
+#center.dm-view-active :is(#chat-input-row #chat-attach, #private-groups .group-composer .group-attach) > * { display: none; }
+#center.dm-view-active :is(#chat-input-row #chat-attach, #private-groups .group-composer .group-attach)::before {
+    content: ""; width: 14px; height: 14px; display: block; margin: auto;
+    background: linear-gradient(currentColor, currentColor) center / 100% 1.7px no-repeat, linear-gradient(currentColor, currentColor) center / 1.7px 100% no-repeat;
+}
 
 /* ---------------------------------------------------------------- group thread (private-group panel) */
 #center.dm-view-active #private-groups { padding: 0; gap: 0; }
@@ -357,7 +366,7 @@
 #center.dm-view-active #private-groups .group-composer button:hover { background: var(--dm-s3); color: var(--text); }
 #center.dm-view-active #private-groups .group-composer button[type="submit"] { color: var(--accent); }
 #center.dm-view-active #private-groups .group-gif { font-weight: 700; font-size: .68rem; }
-#center.dm-view-active #private-groups :is(.group-emoji, .group-attach) { font-size: 1.05rem; }
+#center.dm-view-active #private-groups .group-composer .group-emoji { font-size: 1.1rem; }
 
 /* ---------------------------------------------------------------- narrow windows */
 @media (max-width: 760px) {
