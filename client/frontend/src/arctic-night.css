@@ -341,22 +341,21 @@
 :root[data-theme="arctic"] #voice-latency { border-left: 0; padding: 0; font-size: .7857rem; }
 :root[data-theme="arctic"] body:not(.compact) #voice-bar .voice-microphone { display: flex; flex: 1 1 0; min-width: 0; position: relative; }
 :root[data-theme="arctic"] body:not(.compact) #voice-bar .voice-buttons > :is(.voice-control, #voice-options) { flex: 1 1 0; min-width: 0; }
-:root[data-theme="arctic"] body:not(.compact) #voice-bar .voice-buttons .voice-control {
+:root[data-theme="arctic"] body:not(.compact) #voice-bar :is(.voice-buttons, .voice-microphone, #voice-options) > .voice-control {
     width: 100%; min-height: 32px; height: 32px; padding: 0;
     border: 0; border-radius: 8px;
     background: var(--arc-s3); color: var(--text-dim);
 }
-:root[data-theme="arctic"] body:not(.compact) #voice-bar .voice-buttons .voice-control:hover { color: var(--text); background: hsl(212 32% 23%); }
-:root[data-theme="arctic"] body:not(.compact) #voice-bar .voice-buttons .voice-control .ui-icon { width: 18px; height: 18px; }
-:root[data-theme="arctic"] body:not(.compact) #voice-bar .voice-buttons .voice-control .control-label,
-:root[data-theme="arctic"] body:not(.compact) #voice-options > summary .control-label {
+:root[data-theme="arctic"] body:not(.compact) #voice-bar :is(.voice-buttons, .voice-microphone, #voice-options) > .voice-control:hover { color: var(--text); background: hsl(212 32% 23%); }
+:root[data-theme="arctic"] body:not(.compact) #voice-bar :is(.voice-buttons, .voice-microphone, #voice-options) > .voice-control .ui-icon { width: 18px; height: 18px; }
+:root[data-theme="arctic"] body:not(.compact) #voice-bar :is(.voice-buttons, .voice-microphone, #voice-options) > .voice-control > .control-label {
     position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
     overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
 }
 :root[data-theme="arctic"] body:not(.compact) #voice-options > summary { font-size: 0; }
 :root[data-theme="arctic"] body:not(.compact) #voice-options > summary::after { content: "⋯"; margin: 0; font-size: 1.1429rem; }
 :root[data-theme="arctic"] body:not(.compact) #voice-options > summary:has(.ui-icon)::after { content: none; }
-:root[data-theme="arctic"] #voice-bar .voice-control.active,
+:root[data-theme="arctic"] #voice-bar :is(.voice-buttons, .voice-microphone) > .voice-control.active,
 :root[data-theme="arctic"] #ptt-btn.live { background: var(--accent-dim) !important; color: var(--accent) !important; }
 :root[data-theme="arctic"] #voice-bar .voice-control:is(#voice-mute, #voice-deafen)[aria-pressed="true"] {
     background: color-mix(in srgb, var(--danger) 18%, transparent) !important;
@@ -374,8 +373,12 @@
 :root[data-theme="arctic"] body:not(.compact) #voice-bar > .voice-hints:not(:has(> :not([hidden]))) { display: none; }
 :root[data-theme="arctic"] #mic-status .mic-retry { border-radius: 6px; }
 :root[data-theme="arctic"] .voice-options-menu .voice-control {
-    border-radius: 8px; border-color: var(--border); background: var(--arc-s2);
+    min-height: 34px; padding: 6px 10px;
+    border-radius: 8px; border: 1px solid var(--border); background: var(--arc-s2);
+    color: var(--text); font-size: .9286rem;
 }
+:root[data-theme="arctic"] .voice-options-menu .voice-control:hover { background: var(--arc-s3); }
+:root[data-theme="arctic"] .voice-options-menu #voice-disconnect { color: var(--danger); }
 
 /* ---------------------------------------------------------------- main */
 :root[data-theme="arctic"] #center { background: var(--bg); }
@@ -549,7 +552,22 @@
 
 /* ---------------------------------------------------------------- media tiles */
 /* In-app tiles only. Native :fullscreen tiles are intentionally left as-is. */
-:root[data-theme="arctic"] #video-grid { gap: 12px; padding: 12px 18px 4px; }
+:root[data-theme="arctic"] #video-grid {
+    gap: 12px; margin: 12px 18px 6px; padding: 0;
+    background: transparent; border: 0; border-radius: 0;
+}
+:root[data-theme="arctic"] .stream-media #video-grid { margin: 12px 18px 6px 0; }
+:root[data-theme="arctic"] #video-grid.lowbw { border: 0; }
+:root[data-theme="arctic"] .stream-card {
+    padding: 10px; border-radius: var(--arc-r);
+    background: var(--arc-s2); border-color: var(--border);
+}
+:root[data-theme="arctic"] .stream-thumbnail { border-radius: var(--arc-r-sm); background: #000; }
+:root[data-theme="arctic"] .stream-watch:not(.stream-live-controls .stream-watch) {
+    border: 0; border-radius: var(--arc-r-sm);
+    background: var(--arc-acc-grad); color: var(--arc-on-acc); font-weight: 600;
+}
+:root[data-theme="arctic"] .stream-watch:not(.stream-live-controls .stream-watch):hover { filter: brightness(1.06); background: var(--arc-acc-grad); }
 :root[data-theme="arctic"] .vtile:not(:fullscreen) {
     border-radius: var(--arc-r);
     border: 1px solid var(--border);
@@ -557,8 +575,29 @@
     box-shadow: var(--shadow);
     overflow: hidden;
 }
-:root[data-theme="arctic"] .vtile.speaking:not(:fullscreen) { border-color: var(--border-accent); }
+:root[data-theme="arctic"] .vtile:not(:fullscreen):hover { border-color: var(--border-accent); }
+:root[data-theme="arctic"] .vtile.is-screen:not(:fullscreen) { border-color: var(--border); }
+:root[data-theme="arctic"] .vtile.speaking:not(:fullscreen) {
+    border: 1px solid var(--accent);
+    box-shadow: 0 0 0 1px var(--accent), var(--shadow);
+}
+:root[data-theme="arctic"] .vtile:not(:fullscreen) .vtile-kind { color: var(--text-dim); font-weight: 500; }
+:root[data-theme="arctic"] .vtile:not(:fullscreen) .vtile-quality-button {
+    top: 50px; right: 10px; border-radius: 8px;
+    background: var(--arc-glass); border: 1px solid var(--arc-glass-line); color: var(--text);
+    -webkit-backdrop-filter: blur(var(--arc-blur)); backdrop-filter: blur(var(--arc-blur));
+    font-family: var(--font-mono);
+}
+:root[data-theme="arctic"] .vtile:not(:fullscreen) :is(.vtile-fullscreen, .vtile-pip) { top: 10px; width: 32px; height: 32px; }
+:root[data-theme="arctic"] .vtile:not(:fullscreen) .vtile-fullscreen { right: 10px; }
+:root[data-theme="arctic"] .vtile:not(:fullscreen) .vtile-pip { right: 46px; }
+:root[data-theme="arctic"] .vtile:not(:fullscreen):has(.stream-live-controls) .vtile-fullscreen { right: 46px; }
+:root[data-theme="arctic"] .vtile:not(:fullscreen):has(.stream-live-controls) .vtile-pip { right: 82px; }
 :root[data-theme="arctic"] .vtile:not(:fullscreen) .vtile-label {
+    top: 10px; left: 10px; right: auto;
+    max-width: calc(100% - 104px);
+    padding: 4px 11px; gap: 8px;
+    font: 600 .8571rem var(--font-body);
     border-radius: 999px;
     background: var(--arc-glass);
     -webkit-backdrop-filter: blur(var(--arc-blur)) saturate(1.5);
