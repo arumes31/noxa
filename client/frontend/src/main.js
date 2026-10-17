@@ -56,6 +56,7 @@ import * as chatUI from "./chat-ui.js";
 import { startStreamSession, stopStreamSession, streamSessionIsCurrent, receiveStreamTrack, removeStreamTrack, receiveShareAudio, removeShareAudio, refreshStreamUploads, streamReceiverRecoveryTarget } from "./stream-controls.js";
 import { startRemoteMedia, reconcileRemoteMedia } from "./remote-media.js";
 import { remoteTrackID } from "./media-track-id.js";
+import { createReceiverRegistry, attributeReceiver, releaseReceiver } from "./remote-receivers.js";
 import { isClientMicrophoneMuted, publishAudioState } from "./audio-state.js";
 import { isCurrentPublication } from "./stream-publication.js";
 import { initPermsUI } from "./roles-access-ui.js";
@@ -144,7 +145,11 @@ const state = {
     reconnectInFlight: false,
     vadMonitor: null,
     voiceMonitorCtx: null,
-    trackUsers: new Map(), // media track ID -> {client_id, unique_id, nickname} (per-publisher tracks; wave-3 video tiles)
+    // Negotiated publisher track ID ("<client>" or "<client>|<slot>", from the
+    // CURRENT remote MSID) -> {client_id, unique_id, nickname, track_id}. Never
+    // keyed by browser track.id: a reused MID keeps its creation-time id, so two
+    // live receivers can share one (see remote-receivers.js).
+    trackUsers: new Map(),
     shareStream: null,     // getDisplayMedia result while screen sharing
     shareAudioSender: null, // RTCRtpSender of the optional share system-audio track
     shareVideoTransceiver: null, // dedicated screen source, independent of camera
@@ -159,7 +164,11 @@ const { startQualitySampler, stopQualitySampler } = createConnectionQuality({ $,
 
 const remoteAudio = createRemoteAudio({ state, toast, sysMsg, voiceEpoch: () => voiceSessionEpoch });
 const { selectAudioOutput, applyOutputSettings, remoteChain, reconcileSpatialVoice, attachRemoteAudio, readRemoteAudioLevel, resolveTrackUsers, shareAudio, applyDucking, applyShareAudio, attachShareAudio, detachRemoteAudio } = remoteAudio;
-const channelAudioAttached = (track, id = remoteTrackID(state.pc, track)) => remoteAudio.hasRemoteAudio(track) && state.trackUsers.get(track.id)?.track_id === id;
+// trackUserReceivers remembers which receiver track object owns each
+// state.trackUsers key, so only that receiver's removal can drop attribution.
+const trackUserReceivers = createReceiverRegistry();
+const channelAudioAttached = (track, id = remoteTrackID(state.pc, track)) => remoteAudio.hasRemoteAudio(track) &&
+    trackUserReceivers.owns(id, track) && state.trackUsers.get(id)?.track_id === id;
 const recoverVoice = createVoiceRecovery({ state,
         attached: channelAudioAttached,
         repair: pc => reconcileRemoteMedia(pc),
@@ -2270,9 +2279,8 @@ async function startVoice(expectedEpoch = voiceSessionEpoch) {
     stopRemoteMedia = startRemoteMedia(pc, () => current() && state.pc === pc, (track, trackID) => {
         const { clientID, slot } = parseTrackID(trackID);
         const publisher = state.clients.find((c) => String(c.client_id) === clientID) || null;
-        state.trackUsers.set(track.id, {
-            client_id: clientID, unique_id: publisher?.unique_id || "", nickname: publisher?.nickname || "", track_id: trackID,
-        });
+        // Attribution follows the negotiated publisher track ID, not track.id.
+        attributeReceiver(state.trackUsers, trackUserReceivers, track, trackID, clientID, publisher);
         if (track.kind === "video") {
             receiveStreamTrack(track, publisher, trackID);
             return;
@@ -2286,12 +2294,14 @@ async function startVoice(expectedEpoch = voiceSessionEpoch) {
         track.enabled = true;
         attachRemoteAudio(track, publisher);
     }, (track, trackID) => {
-        state.trackUsers.delete(track.id);
+        // Only the receiver that owns this publisher track ID may drop it; a
+        // duplicate browser track.id never removes another user's state.
+        releaseReceiver(state.trackUsers, trackUserReceivers, track, trackID);
         if (track.kind === "video") removeStreamTrack(track, trackID);
         else if (parseTrackID(trackID).slot === SLOT_SCREEN_AUDIO) {
             const { clientID } = parseTrackID(trackID);
             removeShareAudio(track, clientID);
-            remoteAudio.detachShareAudio(clientID);
+            if (shareAudio.get(String(clientID))?.track === track) remoteAudio.detachShareAudio(clientID);
         }
         else remoteAudio.detachRemoteTrack(track.id);
     }, (track, trackID) => track.kind !== "audio" || parseTrackID(trackID).slot !== "" || channelAudioAttached(track, trackID));

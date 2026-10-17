@@ -1,7 +1,7 @@
 import { collectVideoSenders, videoSenderSources } from "./video-sender-stats.js";
 import { publicationSnapshot } from "./stream-publication.js";
 import { samplePeerStats } from "./peer-stats.js";
-import { parseTrackID } from "./media-track-id.js";
+import { parseTrackID, remoteTrackIDs } from "./media-track-id.js";
 
 // Bounded media telemetry. Only explicit quality fields leave the client;
 // raw RTCStats, device identifiers, addresses and media content stay local.
@@ -113,16 +113,24 @@ export function collectVoiceTelemetry(state, stats, previousStats, output = {}, 
     const tracks = [];
     let rtt = null;
     const inbound = new Map();
+    // A receiver's trackIdentifier is the browser track.id, fixed when its MID
+    // was first negotiated; a reused MID keeps it for another publisher, so two
+    // live receivers (e.g. two shares' system audio) can report the same one.
+    // The CURRENT remote MSID of the stat's MID owns publisher and slot.
+    const negotiated = remoteTrackIDs(state.pc?.remoteDescription?.sdp);
+    const negotiatedID = stat => (stat.mid != null && negotiated.get(String(stat.mid))) || "";
     for (const stat of stats.values()) {
         if (stat.type === "transport" && stat.selectedCandidatePairId) rtt = milliseconds(stats.get(stat.selectedCandidatePairId)?.currentRoundTripTime);
         if (stat.type !== "inbound-rtp" || (stat.kind || stat.mediaType) !== "audio") continue;
-        const key = String(stat.trackIdentifier || stat.id).slice(0, 160);
+        const key = (negotiatedID(stat) ? `mid:${stat.mid}` : String(stat.trackIdentifier || stat.id)).slice(0, 160);
         const old = inbound.get(key);
         if (!old || stat.timestamp > old.timestamp || (stat.timestamp === old.timestamp && (stat.packetsReceived || 0) > (old.packetsReceived || 0))) inbound.set(key, stat);
     }
     for (const stat of [...inbound.values()].slice(0, 64)) {
-        const trackID = String(stat.trackIdentifier || stat.id).slice(0, 160);
-        const owner = state.trackUsers?.get(stat.trackIdentifier);
+        const negotiatedTrack = negotiatedID(stat);
+        const trackID = String(negotiatedTrack || stat.trackIdentifier || stat.id).slice(0, 160);
+        // state.trackUsers is keyed by the negotiated publisher track ID.
+        const owner = state.trackUsers?.get(negotiatedTrack || stat.trackIdentifier);
         const publisher = owner?.client_id || (/^c-[a-zA-Z0-9-]+(?:\||$)/.test(trackID) ? trackID.split("|")[0] : "");
         const microphone = !parseTrackID(owner?.track_id || trackID).slot;
         let previous = previousStats?.get(stat.id);
