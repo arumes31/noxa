@@ -453,6 +453,54 @@ func (p *chaosPublisher) plisSince(since time.Time) int {
 	return n
 }
 
+// offerInitial runs the client-initiated first offer/answer, as browsers do:
+// the server never offers to a peer that has not negotiated yet (Voice
+// suspends renegotiation until the client's initial answer is set).
+func (e *chaosEnv) offerInitial(client *fanoutChaosClient) {
+	t := e.t
+	t.Helper()
+	pc := client.pc
+	offer, err := pc.CreateOffer(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := pc.SetLocalDescription(offer); err != nil {
+		t.Fatal(err)
+	}
+	if err := gatherChaos(pc); err != nil {
+		t.Fatal(err)
+	}
+	client.sigMu.Lock()
+	answer, err := e.voice.HandleOffer(client.id, pc.LocalDescription().SDP, nil)
+	if err != nil {
+		client.sigMu.Unlock()
+		t.Fatal(err)
+	}
+	wrapper := e.engine.PeerConnection(client.id)
+	client.server.Store(wrapper)
+	if err := pc.SetRemoteDescription(pion.SessionDescription{Type: pion.SDPTypeAnswer, SDP: answer}); err != nil {
+		client.sigMu.Unlock()
+		t.Fatal(err)
+	}
+	// The answer carries no candidates. The server may already have queued a
+	// renegotiation offer, so take its candidates from whichever description
+	// it holds once gathering is complete.
+	if err := gatherChaos(wrapper.pc); err != nil {
+		client.sigMu.Unlock()
+		t.Fatal(err)
+	}
+	for _, line := range strings.Split(wrapper.pc.LocalDescription().SDP, "\r\n") {
+		if candidate, ok := strings.CutPrefix(line, "a=candidate:"); ok {
+			mid := "0"
+			if err := pc.AddICECandidate(pion.ICECandidateInit{Candidate: "candidate:" + candidate, SDPMid: &mid}); err != nil {
+				client.sigMu.Unlock()
+				t.Fatal(err)
+			}
+		}
+	}
+	client.sigMu.Unlock()
+}
+
 // startPublisher connects (or reconnects with a new DTLS identity) and
 // publishes an HEVC-capable screen source.
 func (e *chaosEnv) startPublisher(generation uint32) *chaosPublisher {
@@ -486,45 +534,7 @@ func (e *chaosEnv) startPublisher(generation uint32) *chaosPublisher {
 	e.voice.JoinChannel(chaosPublisherID, 1)
 	e.voice.DeclareTrackSlots(chaosPublisherID, map[string]string{chaosTrackID: SlotScreen})
 	e.register(client)
-	offer, err := pc.CreateOffer(nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := pc.SetLocalDescription(offer); err != nil {
-		t.Fatal(err)
-	}
-	if err := gatherChaos(pc); err != nil {
-		t.Fatal(err)
-	}
-	client.sigMu.Lock()
-	answer, err := e.voice.HandleOffer(chaosPublisherID, pc.LocalDescription().SDP, nil)
-	if err != nil {
-		client.sigMu.Unlock()
-		t.Fatal(err)
-	}
-	wrapper := e.engine.PeerConnection(chaosPublisherID)
-	client.server.Store(wrapper)
-	if err := pc.SetRemoteDescription(pion.SessionDescription{Type: pion.SDPTypeAnswer, SDP: answer}); err != nil {
-		client.sigMu.Unlock()
-		t.Fatal(err)
-	}
-	// The answer carries no candidates. The server may already have queued a
-	// renegotiation offer, so take its candidates from whichever description
-	// it holds once gathering is complete.
-	if err := gatherChaos(wrapper.pc); err != nil {
-		client.sigMu.Unlock()
-		t.Fatal(err)
-	}
-	for _, line := range strings.Split(wrapper.pc.LocalDescription().SDP, "\r\n") {
-		if candidate, ok := strings.CutPrefix(line, "a=candidate:"); ok {
-			mid := "0"
-			if err := pc.AddICECandidate(pion.ICECandidateInit{Candidate: "candidate:" + candidate, SDPMid: &mid}); err != nil {
-				client.sigMu.Unlock()
-				t.Fatal(err)
-			}
-		}
-	}
-	client.sigMu.Unlock()
+	e.offerInitial(client)
 	p.pubGen, err = e.router.PublishVideoWithFormats(chaosPublisherID, SlotScreen, 0, true, "source", []string{"h265", "h264", "vp8"}, chaosHEVCLevel)
 	if err != nil {
 		t.Fatal(err)
@@ -920,19 +930,14 @@ func (e *chaosEnv) joinViewer(id string, hevc bool) *chaosViewer {
 		viewer.readers.Add(1)
 		go viewer.read(remote)
 	})
+	// A browser viewer always has its microphone m-line.
+	if _, err := pc.AddTransceiverFromKind(pion.RTPCodecTypeAudio, pion.RTPTransceiverInit{Direction: pion.RTPTransceiverDirectionRecvonly}); err != nil {
+		t.Fatal(err)
+	}
 	e.register(client)
 	e.voice.JoinChannel(id, 1)
-	wrapper, err := e.engine.NewPeerConnection(id)
-	if err != nil {
-		t.Fatal(err)
-	}
-	client.server.Store(wrapper)
-	if err := e.router.AttachPeer(id, wrapper); err != nil {
-		t.Fatal(err)
-	}
 	started := time.Now()
-	e.router.EnsurePublishers(id)
-	e.router.PrepareSubscriber(id)
+	e.offerInitial(client)
 	if os.Getenv("NOXA_VIDEO_CHAOS_TIMING") != "" {
 		e.t.Logf("timing: join %s at %s took %v", id, started.Format("15:04:05.000"), time.Since(started))
 	}
