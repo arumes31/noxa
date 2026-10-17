@@ -43,9 +43,11 @@ import { communicationExtrasEnglish, communicationExtrasGerman } from "./communi
 import { messageToolsEnglish, messageToolsGerman } from "./message-tools-messages.js";
 import { webhookEnglish, webhookGerman } from "./webhook-messages.js";
 import { directMessageEnglish, directMessageGerman } from "./dm-messages.js";
+import { fullscreenEnglish, fullscreenGerman } from "./fullscreen-messages.js";
 
 const en = {
     ...directMessageEnglish,
+    ...fullscreenEnglish,
     ...loginErrorEnglish, ...streamHealthEnglish,
     ...voiceDiagnosticsEnglish,
     ...desktopEnglish,
@@ -151,6 +153,7 @@ const en = {
 
 const de = {
     ...directMessageGerman,
+    ...fullscreenGerman,
     ...loginErrorGerman, ...streamHealthGerman,
     ...voiceDiagnosticsGerman,
     ...desktopGerman,
