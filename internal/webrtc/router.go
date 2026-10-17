@@ -1960,6 +1960,8 @@ func (r *Router) forwardVideoFrameAtPolicyCodec(senderID, slot, rid string, pkt 
 
 // A reader supplies its immutable claim, including same-SSRC replacements.
 // Direct forwarding callers retain their existing uncaptured-source behavior.
+const videoSeenRefresh = 100 * time.Millisecond
+
 func (r *Router) forwardVideoFrameAtPolicyCodecSource(senderID, slot, rid string, pkt *rtp.Packet, now time.Time, policy videoPolicy, inspected bool, mime string, frameStart bool, source *slotClaim, hevcUnit ...[]*rtp.Packet) int {
 	if source != nil && (source.live == nil || !source.live.Load()) {
 		return 0
@@ -1971,20 +1973,31 @@ func (r *Router) forwardVideoFrameAtPolicyCodecSource(senderID, slot, rid string
 	if !r.allowVideoPacket(senderID, pkt.MarshalSize(), now) {
 		return 0
 	}
-	r.mu.Lock()
-	if source != nil && r.slotClaims[senderID][slot+slotSep+rid].token != source.token {
-		r.mu.Unlock()
-		return 0
-	}
-	if source, ok := r.videoSources[senderID][slot][rid]; ok && source == pkt.SSRC && !isVideoPadding(pkt) {
-		ref := videoSourceRef{senderID, slot}
-		if r.videoSeen[ref] == nil {
-			r.videoSeen[ref] = make(map[string]time.Time)
-		}
-		r.videoSeen[ref][rid] = now
-	}
-	r.mu.Unlock()
+	// Layer freshness has a one-second window. Refresh it at most every
+	// videoSeenRefresh so per-packet video forwarding does not take the
+	// router lock exclusively thousands of times per second, which would
+	// contend with voice fan-out (ForwardRTP) on the same lock.
 	r.mu.RLock()
+	ref := videoSourceRef{senderID, slot}
+	last, seen := r.videoSeen[ref][rid]
+	src, known := r.videoSources[senderID][slot][rid]
+	refresh := known && src == pkt.SSRC && !isVideoPadding(pkt) && (!seen || !now.After(last) || now.Sub(last) >= videoSeenRefresh)
+	if refresh {
+		r.mu.RUnlock()
+		r.mu.Lock()
+		if source != nil && r.slotClaims[senderID][slot+slotSep+rid].token != source.token {
+			r.mu.Unlock()
+			return 0
+		}
+		if source, ok := r.videoSources[senderID][slot][rid]; ok && source == pkt.SSRC && !isVideoPadding(pkt) {
+			if r.videoSeen[ref] == nil {
+				r.videoSeen[ref] = make(map[string]time.Time)
+			}
+			r.videoSeen[ref][rid] = now
+		}
+		r.mu.Unlock()
+		r.mu.RLock()
+	}
 	if source != nil && r.slotClaims[senderID][slot+slotSep+rid].token != source.token {
 		r.mu.RUnlock()
 		return 0

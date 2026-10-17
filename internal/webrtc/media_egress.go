@@ -257,8 +257,13 @@ func (s *mediaEgressStream) writeResultKind(header *rtp.Header, payload []byte, 
 	// stream read locks unwind. A socket deadline does not invalidate ICE:
 	// discard its backlog, then let fresh, reauthorized packets try again.
 	// The cooldown bounds repeated attempts against a stalled transport.
+	// Voice is exempt from the cooldown: one stalled write (often caused by
+	// a video burst on the shared socket) must not mute the next 250 ms of
+	// speech. Its own queue already expires after mediaAudioLifetime.
 	var timeout net.Error
-	if errors.As(outputError, &timeout) && timeout.Timeout() {
+	voice := ticket.delivery.Slot == SlotMic || ticket.delivery.Slot == SlotScreenAudio
+	timedOut := errors.As(outputError, &timeout) && timeout.Timeout()
+	if timedOut && !voice {
 		s.mu.Lock()
 		s.ticketsMu.Lock()
 		clear(s.tickets)
@@ -266,7 +271,7 @@ func (s *mediaEgressStream) writeResultKind(header *rtp.Header, payload []byte, 
 		s.ticketsMu.Unlock()
 		s.retryAfter = time.Now().Add(mediaSocketWriteTimeout)
 		s.mu.Unlock()
-	} else if outputError != nil && s.stop() {
+	} else if outputError != nil && !timedOut && s.stop() {
 		log.Printf("webrtc: retiring failed media output slot=%s: %v; track rebuild required", ticket.delivery.Slot, outputError)
 	}
 	return n, reason, err

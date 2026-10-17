@@ -76,11 +76,17 @@ type mediaPacer struct {
 	sent                              uint64 // historyMu covers insertion and feedback delivery
 	audioQueue                        [mediaAudioPackets]pacedPacket
 	audioHead, audioCount, audioBytes int
-	diagnostics                       mediaPacerCounters           // protected by mu; video only
-	queuedRepairs                     map[mediaRepairKey]struct{}  // protected by mu; bounded by video queue
-	rtxSequences                      map[uint32]*mediaRTXSequence // protected by mu; bounded, never evicted
-	videoStarted                      atomic.Bool
-	startVideoProbe                   func(int) bool // installed before binding a stream
+	// Voice has its own worker: it is woken per packet, never waits for the
+	// video pacing tick, and never queues behind a video socket write.
+	audioWake chan struct{} // protected by mu; created by run
+	// Voice bytes written since the video worker last refilled its budget.
+	// Video is paced with the estimate minus voice, never the reverse.
+	audioSent       atomic.Int64
+	diagnostics     mediaPacerCounters           // protected by mu; video only
+	queuedRepairs   map[mediaRepairKey]struct{}  // protected by mu; bounded by video queue
+	rtxSequences    map[uint32]*mediaRTXSequence // protected by mu; bounded, never evicted
+	videoStarted    atomic.Bool
+	startVideoProbe func(int) bool // installed before binding a stream
 }
 
 func newMediaPacer() *mediaPacer {
@@ -214,6 +220,10 @@ func (p *mediaPacer) Write(header *rtp.Header, payload []byte, attrs interceptor
 	if stream.audio {
 		packet.expires = time.Now().Add(mediaAudioLifetime)
 		p.pushAudioLocked(packet)
+		select {
+		case p.audioWake <- struct{}{}:
+		default: // A wake-up is already pending; the worker drains everything.
+		}
 	} else {
 		p.pushLocked(packet)
 	}
@@ -261,6 +271,15 @@ func (p *mediaPacer) popLocked() pacedPacket {
 
 func (p *mediaPacer) run() {
 	defer close(p.done)
+	p.mu.Lock()
+	if p.audioWake == nil {
+		p.audioWake = make(chan struct{}, 1)
+	}
+	wake := p.audioWake
+	p.mu.Unlock()
+	audioDone := make(chan struct{})
+	go p.runAudio(wake, audioDone)
+	defer func() { <-audioDone }() // Close joins both lanes through done.
 	ticker := time.NewTicker(5 * time.Millisecond)
 	defer ticker.Stop()
 	last := time.Now()
@@ -271,26 +290,18 @@ func (p *mediaPacer) run() {
 			return
 		case now := <-ticker.C:
 			p.mu.Lock()
-			// Voice has its own bounded queue and does not spend the video
-			// pacing budget. A video retransmission backlog cannot starve it.
-			// Both queues still cross the same final authorization boundary.
-			for count := p.audioCount; count > 0 && p.audioCount > 0 && !p.closed; count-- {
-				packet := p.popAudioLocked()
-				if !packet.stream.active || !time.Now().Before(packet.expires) {
-					continue
-				}
-				p.mu.Unlock()
-				p.writePacket(packet)
-				p.mu.Lock()
-			}
+			// Voice is written by runAudio and never waits for this worker. Its
+			// bytes share the estimated path, so they are reserved out of the
+			// video budget: video receives the estimate minus voice.
 			// Bound catch-up after a stalled socket; never release a huge burst.
 			bytesPerSecond := float64(p.bitrate) * 1.5 / 8
 			budget = min(budget+min(now.Sub(last), 50*time.Millisecond).Seconds()*bytesPerSecond, 0.05*bytesPerSecond)
+			// The voice debit is bounded so a long silence-free talk spurt on a
+			// tiny estimate cannot build unbounded video debt; video's own packet
+			// debt is never forgiven.
+			budget = max(budget-float64(p.audioSent.Swap(0)), min(budget, -0.05*bytesPerSecond))
 			last = now
 			for work := p.count; work > 0 && p.count > 0 && !p.closed; work-- {
-				if p.audioCount > 0 {
-					break
-				}
 				front := &p.queue[p.head]
 				if !front.stream.active {
 					p.diagnostics.droppedRetired++
@@ -315,6 +326,34 @@ func (p *mediaPacer) run() {
 				p.mu.Lock()
 			}
 			p.mu.Unlock()
+		}
+	}
+}
+
+// runAudio is the strict-priority voice lane. Voice bypasses pacing delay:
+// each packet is written as soon as it is queued, concurrently with (never
+// behind) video writes, and still crosses the same final authorization
+// boundary in writePacket. The queue only absorbs a briefly stalled socket.
+func (p *mediaPacer) runAudio(wake <-chan struct{}, done chan<- struct{}) {
+	defer close(done)
+	for {
+		p.mu.Lock()
+		for p.audioCount > 0 && !p.closed {
+			packet := p.popAudioLocked()
+			if !packet.stream.active || !time.Now().Before(packet.expires) {
+				continue
+			}
+			p.mu.Unlock()
+			if p.writePacket(packet) {
+				p.audioSent.Add(int64(packet.size))
+			}
+			p.mu.Lock()
+		}
+		p.mu.Unlock()
+		select {
+		case <-p.stop:
+			return
+		case <-wake:
 		}
 	}
 }

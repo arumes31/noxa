@@ -7,7 +7,9 @@ import (
 
 // guardRoleMedia pins authorization through the actual recipient write. The
 // routing snapshot must still match both clients' membership; moving either
-// client serializes against this bounded packet operation.
+// client serializes against this bounded packet operation. It takes only the
+// clients' packet fences (see Client.mediaFence), never roleActionMu, so
+// signaling and renegotiation leases cannot drop voice.
 func (s *TCPServer) guardRoleMedia(delivery webrtc.MediaDelivery, write func() error) error {
 	if s.deps == nil || s.deps.State == nil || s.deps.Authority == nil {
 		return authorization.ErrAuthorizationUnavailable
@@ -28,15 +30,15 @@ func (s *TCPServer) guardRoleMedia(delivery webrtc.MediaDelivery, write func() e
 		if second != nil && first.ID > second.ID {
 			first, second = second, first
 		}
-		if !first.roleActionMu.TryRLock() {
+		if !first.mediaFence.TryRLock() {
 			return nil
 		}
-		defer first.roleActionMu.RUnlock()
+		defer first.mediaFence.RUnlock()
 		if second != nil && second != first {
-			if !second.roleActionMu.TryRLock() {
+			if !second.mediaFence.TryRLock() {
 				return nil
 			}
-			defer second.roleActionMu.RUnlock()
+			defer second.mediaFence.RUnlock()
 		}
 		channelID, _, present := s.deps.State.ClientChannelState(sender.ID)
 		if !present || channelID != delivery.ChannelID {

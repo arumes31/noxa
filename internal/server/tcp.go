@@ -107,8 +107,27 @@ type Client struct {
 	wmu contextMutex // serializes frame writes to Conn
 	// Role-mode member operations lock after acquiring the policy lease, so
 	// a concurrent move cannot change the scope checked by a moderation action.
-	// Packet writes share read leases; scope mutations retain exclusive access.
+	// Scope mutations retain exclusive access through lockRoleAction.
 	roleActionMu sync.RWMutex
+	// mediaFence is the realtime packet side of roleActionMu. Packet writes
+	// take only this fence (TryRLock, never waiting). lockRoleAction acquires it
+	// exclusively after roleActionMu, so media-scope mutations still exclude
+	// every in-flight packet, while shared roleActionMu leases (renegotiation
+	// offers, ICE/answer signaling) and writers merely queued behind them never
+	// block voice. Never acquire mediaFence without first holding roleActionMu.
+	mediaFence sync.RWMutex
+}
+
+// lockRoleAction takes the exclusive member barrier including the packet
+// fence. Use it for any change to an input of guardRoleMedia.
+func (c *Client) lockRoleAction() {
+	c.roleActionMu.Lock()
+	c.mediaFence.Lock()
+}
+
+func (c *Client) unlockRoleAction() {
+	c.mediaFence.Unlock()
+	c.roleActionMu.Unlock()
 }
 
 // isAuthed reports whether the client has completed authentication.
@@ -460,7 +479,12 @@ func New(cfg *config.Config, logger *zap.Logger, deps *Deps) *TCPServer {
 				if !ok {
 					return authorization.ErrRoleForbidden
 				}
-				return s.withRoleChannelControl(context.Background(), client, authorization.Connect, true, func(ctx context.Context, _ int64) error {
+				// A shared member lease: the offer write (up to the TCP write
+				// ceiling) must not close this client's packet fence, or every
+				// renegotiation (e.g. a screen share starting) would drop all
+				// voice to and from it. Membership/moderation changes still
+				// serialize against it, and roleMetadataMu stays exclusive.
+				return s.withRoleChannelLease(context.Background(), client, authorization.Connect, true, true, func(ctx context.Context, _ int64) error {
 					s.refreshRolePublishers(ctx.Value(roleLeaseKey{}).(roleLease).evaluator)
 					return send()
 				})
@@ -1221,8 +1245,8 @@ func (s *TCPServer) onDisconnect(client *Client) {
 		if s.deps.Authority != nil {
 			s.roleMetadataMu.Lock()
 			defer s.roleMetadataMu.Unlock()
-			client.roleActionMu.Lock()
-			defer client.roleActionMu.Unlock()
+			client.lockRoleAction()
+			defer client.unlockRoleAction()
 		}
 		if !client.needsDisconnectCleanup() {
 			alreadyCleaned = true

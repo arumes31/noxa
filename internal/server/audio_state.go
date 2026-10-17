@@ -19,6 +19,8 @@ func (s *TCPServer) handleAudioStateSet(ctx context.Context, client *Client, fra
 	return s.rolePolicyRead(ctx, client, func(ctx context.Context) error {
 		s.roleMetadataMu.Lock()
 		defer s.roleMetadataMu.Unlock()
+		// Self mute/deafen is not a guardRoleMedia input: keep the packet fence
+		// open so a slow reply to this client cannot drop its live voice.
 		client.roleActionMu.Lock()
 		defer client.roleActionMu.Unlock()
 		muted := msg.Muted || msg.Deafened
