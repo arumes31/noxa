@@ -4844,12 +4844,14 @@ test("selected quick wins group consecutive authors and count every search hit",
         const base = Date.now();
         for (const [i, name, text] of [[1, "Alex", "needle needle <tag>"], [2, "Alex", "needle again"], [3, "Mia", "something else"]]) {
             window.__noxaChat.addChat({ id: 9000 + i, channel_id: 2, from: name,
-                from_unique_id: "uid-" + name.toLowerCase(), text, sent_at: base + i, edited: i === 2 });
+                from_unique_id: "uid-" + name.toLowerCase(), text, sent_at: base + i, edited: i === 2, enc_verified: true, enc_mode: "server" });
         }
     });
     await expect(page.locator('[data-msg-id="9002"]')).toHaveClass(/grouped/);
     const grouped = page.locator('[data-msg-id="9002"]');
-    await expect(grouped.locator('.msg-time')).toBeHidden();
+    // A grouped follow-up hides its timestamp; only its encryption badge stays.
+    await expect(grouped.locator('.msg-timestamp')).toBeHidden();
+    await expect(grouped.locator('.msg-lock')).toBeVisible();
     await expect(page.locator('[data-msg-id="9001"] .msg-time')).toBeVisible();
     await expect(page.locator('[data-msg-id="9003"]')).not.toHaveClass(/grouped/);
     await page.locator("#chat-search-btn").click();
@@ -5167,7 +5169,7 @@ for (const change of ["history edit", "history deletion", "concurrent edit", "co
                 return new Promise(resolve => { window.__resolveHistory = resolve; });
             };
         } });
-        for (const id of [100, 200]) window.__noxaChat.addChat({ id, channel_id: 2, from: "Alex", from_unique_id: "alex", text: "cached", version: 1 });
+        for (const id of [100, 200]) window.__noxaChat.addChat({ id, channel_id: 2, from: "Alex", from_unique_id: "alex", text: "cached", version: 1, enc_verified: true, enc_mode: "server" });
         window.__noxaChat.onMyChannelChanged();
     });
     await expect.poll(() => page.evaluate(() => typeof window.__resolveHistory)).toBe("function");
@@ -5175,7 +5177,7 @@ for (const change of ["history edit", "history deletion", "concurrent edit", "co
         if (change === "concurrent edit") window.__noxaChat.onChatEdited({ message_id: 200, body: "concurrent", version: 3 });
         if (change === "concurrent reaction") window.__noxaChat.onChatReaction({ message_id: 200, reactions: { "👍": 3 } });
         const messages = Array.from({ length: 50 }, (_, i) => ({
-            id: 249 - i, from_nickname: "Alex", from_unique_id: "alex", body: "authoritative", version: 2,
+            id: 249 - i, from_nickname: "Alex", from_unique_id: "alex", body: "authoritative", version: 2, enc_verified: true, enc_mode: "server",
             edited: true, deleted: change === "history deletion" && i === 49,
         }));
         window.__resolveHistory({ messages });
@@ -5494,6 +5496,7 @@ test("B3 fits desktop and small windows without losing the composer or toolbar",
             composer: document.getElementById("chat-input-row").getBoundingClientRect().bottom,
             toolbar: document.getElementById("voice-bar").getBoundingClientRect().bottom,
         }));
+        console.log("DBG", JSON.stringify(viewport), await page.evaluate(() => { const out=[]; for (const e of document.querySelectorAll("body *")) { const r=e.getBoundingClientRect(); if (r.right > innerWidth + 0.5 && r.width>0) out.push([e.tagName, e.id, String(e.className).slice(0,40), Math.round(r.left), Math.round(r.right), getComputedStyle(e).position]); } return JSON.stringify({sw: document.documentElement.scrollWidth, iw: innerWidth, out: out.slice(0,15)}); }));
         expect(bounds.overflow).toBe(false);
         expect(bounds.composer).toBeLessThanOrEqual(viewport.height);
         expect(bounds.toolbar).toBeLessThanOrEqual(viewport.height);
@@ -6837,7 +6840,7 @@ test("ignores a delayed microphone failure after the voice session changes", asy
     expect(await page.evaluate(() => window.__noxa.state.micState)).toBe("unknown");
 });
 
-test("encryption badges sit beside dates and stay hidden on grouped follow-ups", async ({ page }, testInfo) => {
+test("encryption badges sit beside dates and stay visible on grouped follow-ups", async ({ page }, testInfo) => {
     await page.evaluate(() => {
         const v = window.__noxa;
         v.showWorkspace();
@@ -6854,7 +6857,9 @@ test("encryption badges sit beside dates and stay hidden on grouped follow-ups",
         await expect(message.locator(".msg-text .msg-lock")).toHaveCount(0);
         await expect(message.locator(".msg-lock")).toHaveAttribute("title", /encrypted/);
         if (await message.evaluate(row => row.classList.contains("grouped"))) {
-            await expect(message.locator(".msg-lock")).toBeHidden();
+            // Every message carries its badge; a grouped follow-up hides only its date.
+            await expect(message.locator(".msg-lock")).toBeVisible();
+            await expect(message.locator(".msg-timestamp")).toBeHidden();
             continue;
         }
         const geometry = await message.evaluate(row => {
@@ -7367,9 +7372,15 @@ test("restores DM history without claiming legacy or plaintext records were veri
     });
     await expect(page.locator("#chat-log")).toContainText("verified record");
     await expect(page.locator("#chat-log .msg-tag")).toHaveText(["Direct message", "Direct message", "Direct message"]);
-    await expect(page.locator("#chat-log .msg-lock")).toHaveCount(1);
-    await expect(page.locator("#chat-log .msg-lock")).toHaveAttribute("title", /end-to-end encrypted/);
-    await expect(page.locator("#chat-log .msg-lock")).toHaveAttribute("aria-label", /end-to-end encrypted/);
+    // Every message carries a badge: only the verified record gets the lock,
+    // the legacy and plaintext records keep their text under a warning.
+    await expect(page.locator("#chat-log .msg-lock")).toHaveCount(3);
+    const lock = page.locator('#chat-log .msg-lock[data-encryption="lock"]');
+    await expect(lock).toHaveCount(1);
+    await expect(lock).toHaveAttribute("title", /end-to-end encrypted/);
+    await expect(lock).toHaveAttribute("aria-label", /end-to-end encrypted/);
+    await expect(page.locator('#chat-log .msg-lock[data-encryption="warning"]')).toHaveCount(2);
+    await expect(page.locator('#chat-log .msg-lock[data-encryption="warning"]').first()).not.toHaveAttribute("title", /end-to-end encrypted/);
 });
 
 test("tracks existing unassigned clients when they later join a channel", async ({ page }) => {
@@ -9518,7 +9529,7 @@ test("saves chat attachments through the native bridge without a DOM data URL", 
         for (const callback of window.__events.event || []) callback(JSON.stringify({
             type: "chat",
             data: {
-                id: 99, channel_id: 42, from: "Alice", from_unique_id: "user-a",
+                enc_verified: true, enc_mode: "server", id: 99, channel_id: 42, from: "Alice", from_unique_id: "user-a",
                 text: "[file:blob.vcx#dGVzdC1rZXk=#report.txt]",
             },
         }));
@@ -9693,7 +9704,7 @@ test("discards stale inline attachment previews and configures lazy image and vi
         window.__attachmentGate = new Promise((resolve) => { release = resolve; });
         window.__releaseAttachment = release;
         window.__attachmentData = "aGVsbG8=";
-        window.__noxaChat.addChat({ id: 702, channel_id: 42, from: "Bob", text: "[file:stale.vcx#dGVzdA==#stale.png]" });
+        window.__noxaChat.addChat({ enc_verified: true, enc_mode: "server", id: 702, channel_id: 42, from: "Bob", text: "[file:stale.vcx#dGVzdA==#stale.png]" });
     });
     await page.evaluate(() => {
         window.__noxa.state.serverGeneration++;
@@ -9705,7 +9716,7 @@ test("discards stale inline attachment previews and configures lazy image and vi
 
     await page.evaluate(() => {
         window.__attachmentGate = null;
-        window.__noxaChat.addChat({ id: 703, channel_id: 42, from: "Bob", text: "[file:photo.vcx#dGVzdA==#photo.png] [file:clip.vcx#dGVzdA==#clip.webm]" });
+        window.__noxaChat.addChat({ enc_verified: true, enc_mode: "server", id: 703, channel_id: 42, from: "Bob", text: "[file:photo.vcx#dGVzdA==#photo.png] [file:clip.vcx#dGVzdA==#clip.webm]" });
     });
     const image = page.locator(".msg-file img.msg-img");
     const video = page.locator(".msg-file video.msg-video");
@@ -9759,7 +9770,7 @@ test("does not construct stale attachment data URLs after channel or view change
             window.__attachmentRequests[storage] = { resolve, reject };
         });
         window.__noxaChat.addChat({
-            id: 705, channel_id: 42, from: "Bob", text: "[file:stale-resolve.vcx#dGVzdA==#photo.png]",
+            enc_verified: true, enc_mode: "server", id: 705, channel_id: 42, from: "Bob", text: "[file:stale-resolve.vcx#dGVzdA==#photo.png]",
         });
     });
     await expect.poll(() => page.evaluate(() => Object.keys(window.__attachmentRequests))).toEqual(["stale-resolve.vcx"]);
@@ -9772,7 +9783,7 @@ test("does not construct stale attachment data URLs after channel or view change
 
     await page.evaluate(() => {
         window.__noxaChat.addChat({
-            id: 706, channel_id: 43, from: "Bob", text: "[file:stale-reject.vcx#dGVzdA==#photo.png]",
+            enc_verified: true, enc_mode: "server", id: 706, channel_id: 43, from: "Bob", text: "[file:stale-reject.vcx#dGVzdA==#photo.png]",
         });
     });
     await expect.poll(() => page.evaluate(() => Object.keys(window.__attachmentRequests).sort())).toEqual([
@@ -10803,11 +10814,15 @@ test("permission inspector distinguishes server ownership from assigned roles", 
 });
 
 test("computes names for settings and generated dialog controls", async ({ page }) => {
+    // The redesign split the old Application page: language stays on
+    // General, chat limits moved to Chat and theme/font size to Appearance.
     await page.evaluate(() => window.__noxa.openSettings("application"));
-    await expect(page.locator('#settings-content input[type="number"]').first()).toHaveAccessibleName("Chat max lines");
     await expect(page.locator("#settings-content select").first()).toHaveAccessibleName("Language");
+    await page.evaluate(() => window.__noxa.openSettings("chat"));
+    await expect(page.getByRole("spinbutton", { name: "Chat max lines", exact: true })).toBeVisible();
+    await page.evaluate(() => window.__noxa.openSettings("appearance"));
     await expect(page.getByRole("combobox", { name: "Theme", exact: true })).toBeVisible();
-    await expect(page.locator('#settings-content input[type="range"]').first()).toHaveAccessibleName("UI font size");
+    await expect(page.getByRole("slider", { name: "UI font size", exact: true })).toBeVisible();
     await page.keyboard.press("Escape");
 
     await page.evaluate(() => {
