@@ -146,7 +146,7 @@ func TestChatSendAcknowledgementFollowsStorage(t *testing.T) {
 					}
 					msg.ChannelID = "1"
 				case "offline":
-					msg.ToUniqueID, msg.Enc, msg.Text = "admin-uid", true, "opaque-dm-ciphertext"
+					msg.ToUniqueID, msg.Enc, msg.KeyID, msg.Text = "admin-uid", true, 0, "opaque-dm-ciphertext" // end-to-end: no scope generation
 				}
 				send(t, conn, netproto.MsgChatSend, msg)
 				send(t, conn, netproto.MsgPing, netproto.Ping{})
