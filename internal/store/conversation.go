@@ -21,14 +21,14 @@ func lockConversation(ctx context.Context, tx *sql.Tx, id string, write bool) (n
 	if err != nil {
 		return c, err
 	}
-	rows, err := tx.QueryContext(ctx, `SELECT unique_id,pending,joined_epoch FROM private_conversation_members WHERE conversation_id=$1 ORDER BY unique_id`, id)
+	rows, err := tx.QueryContext(ctx, `SELECT unique_id,pending,joined_epoch,seen_message_id FROM private_conversation_members WHERE conversation_id=$1 ORDER BY unique_id`, id)
 	if err != nil {
 		return c, err
 	}
 	defer func() { _ = rows.Close() }()
 	for rows.Next() {
 		var member netproto.ConversationMember
-		if err := rows.Scan(&member.UniqueID, &member.Pending, &member.JoinedEpoch); err != nil {
+		if err := rows.Scan(&member.UniqueID, &member.Pending, &member.JoinedEpoch, &member.SeenMessageID); err != nil {
 			return c, err
 		}
 		c.Members = append(c.Members, member)
@@ -181,6 +181,12 @@ func (s *Store) WithConversations(ctx context.Context, uid string, request netpr
 		if !member.Pending {
 			if err := conversationReadState(ctx, tx, &c, uid, member.JoinedEpoch); err != nil {
 				return err
+			}
+		} else {
+			// Read receipts are for accepted members; an invitation does not
+			// reveal who has read what.
+			for i := range c.Members {
+				c.Members[i].SeenMessageID = 0
 			}
 		}
 		result.Conversations = append(result.Conversations, c)

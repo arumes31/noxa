@@ -380,14 +380,18 @@ type TCPServer struct {
 	chatRate             *chatRateLimiter
 	callSignalRate       *chatRateLimiter
 	conversationReadRate *chatRateLimiter
-	conversationFiles    conversationFileAccess
-	chatSpam             *spamTracker
-	chatSlow             *slowTracker
-	typingRate           *typingTracker
-	chatFilters          *chatFilterCache
-	pokes                pokeTracker
-	beforeHandle         func()
-	afterAccept          func()
+	// conversationSignalRate bounds private-group typing relays per user
+	// across all groups, before any membership lookup.
+	conversationSignalRate *chatRateLimiter
+	conversationFiles      conversationFileAccess
+	conversationActivity   conversationActivityRevocations
+	chatSpam               *spamTracker
+	chatSlow               *slowTracker
+	typingRate             *typingTracker
+	chatFilters            *chatFilterCache
+	pokes                  pokeTracker
+	beforeHandle           func()
+	afterAccept            func()
 
 	loginLimiter *auth.LoginFailureLimiter
 
@@ -458,13 +462,14 @@ func New(cfg *config.Config, logger *zap.Logger, deps *Deps) *TCPServer {
 		rotationAfter: func(delay time.Duration, callback func()) {
 			time.AfterFunc(delay, callback)
 		},
-		chatRate:             newChatRateLimiter(cfg.ChatRateMsgs, time.Duration(cfg.ChatRateWindowSeconds)*time.Second),
-		callSignalRate:       newChatRateLimiter(32, time.Second),
-		conversationReadRate: newChatRateLimiter(32, time.Second),
-		chatSpam:             newSpamTracker(),
-		chatSlow:             newSlowTracker(),
-		typingRate:           newTypingTracker(),
-		loginLimiter:         loginLimiter,
+		chatRate:               newChatRateLimiter(cfg.ChatRateMsgs, time.Duration(cfg.ChatRateWindowSeconds)*time.Second),
+		callSignalRate:         newChatRateLimiter(32, time.Second),
+		conversationReadRate:   newChatRateLimiter(32, time.Second),
+		conversationSignalRate: newChatRateLimiter(8, 4*time.Second),
+		chatSpam:               newSpamTracker(),
+		chatSlow:               newSlowTracker(),
+		typingRate:             newTypingTracker(),
+		loginLimiter:           loginLimiter,
 
 		chatFilters: &chatFilterCache{},
 	}

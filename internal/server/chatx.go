@@ -168,10 +168,14 @@ func bodyDigest(body string) [32]byte {
 }
 
 // attachmentRefRe matches the chat attachment token
-// [file:<storage>#<base64 file key>#<display name>] (12).
-var attachmentRefRe = regexp.MustCompile(`\[file:([^\]#]*)#([^\]#]*)#([^\]]*)\]`)
+// [file:<storage>#<base64 file key>#<display name>] (12), including the
+// metadata form [file:<storage>#<key>#nx1;...#<display name>] whose sealed
+// segment carries the plaintext size and voice-note duration/waveform.
+var attachmentRefRe = regexp.MustCompile(`\[file:([^\]#]*)#([^\]#]*)#(?:nx1(?:;[^\]#]*)?#)?([^\]]*)\]`)
 
 // stripAttachmentRefs rewrites attachment tokens to [file:<display name>].
+// The metadata segment is dropped with the key, so the heuristic below and
+// the word filter see the same token for a file with or without metadata.
 // The per-file key is fresh random base64 on every paste, so without this no
 // two image posts are ever equal and the "same message 3x in 30s" heuristic
 // (116) stops catching image spam. The word filter still sees the file name.
@@ -1183,6 +1187,9 @@ func (s *TCPServer) relaySessionTyping(ctx context.Context, client *Client, f *n
 	}
 	if s.deps == nil || s.deps.Broadcast == nil {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "broadcast backend unavailable")
+	}
+	if msg.ConversationID != "" {
+		return s.relayConversationTyping(ctx, client, msg)
 	}
 	typingScope := "global"
 	if msg.ToUniqueID != "" {
