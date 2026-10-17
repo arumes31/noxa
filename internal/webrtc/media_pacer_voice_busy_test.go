@@ -35,12 +35,26 @@ func TestVoicePacketRetriedWhileWriteGateBusy(t *testing.T) {
 			if _, err := p.Write(&packet.Header, packet.Payload, nil); err != nil {
 				t.Fatal(err)
 			}
+			// The worker pops the packet for each attempt and puts it back
+			// when the gate is busy, so a single snapshot can land in the gap;
+			// poll until the packet is seen back at the queue head.
 			time.Sleep(20 * time.Millisecond)
-			p.mu.Lock()
-			queued := p.audioCount
-			p.mu.Unlock()
-			if writes.Load() != 0 || queued != 1 {
-				t.Fatalf("busy voice packet: writes=%d queued=%d, want 0 and 1", writes.Load(), queued)
+			var queued int
+			seen := time.Now().Add(50 * time.Millisecond)
+			for {
+				p.mu.Lock()
+				queued = p.audioCount
+				p.mu.Unlock()
+				if writes.Load() != 0 {
+					t.Fatalf("busy voice packet was written through a held gate (writes=%d)", writes.Load())
+				}
+				if queued == 1 {
+					break
+				}
+				if time.Now().After(seen) {
+					t.Fatalf("busy voice packet: writes=%d queued=%d, want 0 and 1", writes.Load(), queued)
+				}
+				time.Sleep(100 * time.Microsecond)
 			}
 			if !release {
 				time.Sleep(mediaAudioLifetime)
