@@ -38,6 +38,13 @@ const (
 	trayIconSize      = 32
 )
 
+// trayICOSizes are the images in a Windows tray ICO. The artwork is designed
+// at trayIconSize; the others are rendered natively so the shell can pick the
+// size that matches the display scale (LoadImage takes the closest entry to
+// SM_CXICON: 32px at 100%, 40/48/64px at 125/150/200%) instead of resampling
+// one 32px image.
+var trayICOSizes = [...]int{16, 20, 24, trayIconSize, 48, 64}
+
 func trayUnreadBucket(count int) uint8 {
 	switch {
 	case count <= 0:
@@ -150,6 +157,9 @@ func trayIcon() []byte {
 	return trayIconPNG
 }
 
+//go:embed frontend/public/branding/icon-192.png
+var trayIconLargePNG []byte
+
 // trayLogoMask is the 32px logo coverage, decoded once.
 var trayLogoMask = sync.OnceValue(func() []float64 {
 	source, err := png.Decode(bytes.NewReader(trayIconPNG))
@@ -159,6 +169,58 @@ var trayLogoMask = sync.OnceValue(func() []float64 {
 	}
 	return trayAlphaMask(source, trayIconSize)
 })
+
+// trayLogoMasks holds the logo coverage for every other ICO size, area-sampled
+// once from the large brand mark (the 32px mask keeps its hand-tuned source).
+var trayLogoMasks = sync.OnceValue(func() map[int][]float64 {
+	masks := make(map[int][]float64, len(trayICOSizes))
+	source, err := png.Decode(bytes.NewReader(trayIconLargePNG))
+	if err != nil {
+		log.Printf("large tray logo unavailable: %v", err)
+		return masks
+	}
+	for _, size := range trayICOSizes {
+		if size != trayIconSize {
+			masks[size] = trayAreaMask(source, size)
+		}
+	}
+	return masks
+})
+
+// trayLogoMaskAt returns the logo coverage at size, or nil when unavailable.
+func trayLogoMaskAt(size int) []float64 {
+	if size == trayIconSize {
+		return trayLogoMask()
+	}
+	return trayLogoMasks()[size]
+}
+
+// trayAreaMask box-filters source coverage into a size×size mask: every
+// source pixel contributes to the target pixel its center falls in.
+func trayAreaMask(source image.Image, size int) []float64 {
+	b := source.Bounds()
+	w, h := b.Dx(), b.Dy()
+	if size <= 0 || w <= 0 || h <= 0 {
+		return nil
+	}
+	sum := make([]float64, size*size)
+	count := make([]float64, size*size)
+	for y := range h {
+		ty := (2*y + 1) * size / (2 * h)
+		for x := range w {
+			tx := (2*x + 1) * size / (2 * w)
+			_, _, _, a := source.At(b.Min.X+x, b.Min.Y+y).RGBA()
+			sum[ty*size+tx] += float64(a) / 0xffff
+			count[ty*size+tx]++
+		}
+	}
+	for i := range sum {
+		if count[i] > 0 {
+			sum[i] /= count[i]
+		}
+	}
+	return sum
+}
 
 // trayAlphaMask samples source coverage into a size×size mask; pixels
 // outside the source bounds are transparent.
@@ -175,7 +237,8 @@ func trayAlphaMask(source image.Image, size int) []float64 {
 }
 
 // Icons are generated lazily per (state, unread bucket) and kept for the
-// process lifetime: at most trayStateCount×trayUnreadBuckets (88) entries.
+// process lifetime: at most trayStateCount×trayUnreadBuckets (88) entries,
+// each one ICO holding len(trayICOSizes) PNG images on Windows.
 // After first use a transition is a mutex-guarded array read; it never
 // decodes, renders, allocates or starts a timer.
 var trayIconCache struct {
@@ -192,7 +255,7 @@ func trayIconFor(key trayIconKey) []byte {
 	if data := trayIconCache.icons[key.state][key.unread]; data != nil {
 		return data
 	}
-	data := trayEncodeIcon(trayStateImage(trayLogoMask(), key))
+	data := trayEncodeIcon(key)
 	if data == nil {
 		data = trayIcon()
 	}
@@ -200,31 +263,43 @@ func trayIconFor(key trayIconKey) []byte {
 	return data
 }
 
-// trayEncodeIcon returns PNG bytes, wrapped as ICO on Windows.
-func trayEncodeIcon(img *image.NRGBA) []byte {
-	var out bytes.Buffer
-	if err := png.Encode(&out, img); err != nil {
-		return nil
+// trayEncodeIcon returns the 32px PNG, or on Windows a multi-size ICO.
+func trayEncodeIcon(key trayIconKey) []byte {
+	encode := func(size int) []byte {
+		var out bytes.Buffer
+		if err := png.Encode(&out, trayStateImage(size, key)); err != nil {
+			return nil
+		}
+		return out.Bytes()
 	}
-	if runtime.GOOS == "windows" {
-		return trayPNGToICO(out.Bytes(), img.Bounds().Dx())
+	if runtime.GOOS != "windows" {
+		return encode(trayIconSize)
 	}
-	return out.Bytes()
+	images := make([]trayICOImage, 0, len(trayICOSizes))
+	for _, size := range trayICOSizes {
+		data := encode(size)
+		if data == nil {
+			return nil
+		}
+		images = append(images, trayICOImage{size: size, png: data})
+	}
+	return trayICO(images...)
 }
 
-// trayStateImage renders the 32px tray icon: the tinted logo, a glyph badge
+// trayStateImage renders the tray icon at size: the tinted logo, a glyph badge
 // in the bottom-right corner for mute states, and the unread counter in the
-// top-right corner.
-func trayStateImage(logo []float64, key trayIconKey) *image.NRGBA {
-	c := newTrayCanvas(trayIconSize)
-	trayDrawLogo(c, logo, key.state)
+// top-right corner. Geometry is designed in trayIconSize units and scaled.
+func trayStateImage(size int, key trayIconKey) *image.NRGBA {
+	c := newTrayCanvas(size)
+	s := float64(size) / trayIconSize
+	trayDrawLogo(c, trayLogoMaskAt(size), key.state)
 	if trayHasCornerBadge(key.state) {
 		// Centered on an even pixel boundary so vertical strokes stay crisp
 		// at 32px and after the shell's 2:1 downscale to 16px.
-		trayDrawBadge(c, key.state, 22, 22, 8.5, 1.25)
+		trayDrawBadge(c, key.state, 22*s, 22*s, 8.5*s, 1.25*s)
 	}
 	if key.unread > 0 {
-		trayDrawCounter(c, key.unread)
+		trayDrawCounter(c, key.unread, s)
 	}
 	return c.image()
 }
@@ -368,24 +443,25 @@ var trayDigitFont = [10][5]string{
 
 var trayPlusGlyph = [5]string{"...", ".#.", "###", ".#.", "..."}
 
-// trayDrawCounter paints the unread pill in the top-right corner. Cells are
-// 2px on even coordinates, so a 2:1 downscale yields exact 1px cells.
-func trayDrawCounter(c *trayCanvas, bucket uint8) {
-	const cell, top, height = 2, 2, 14
-	left := 18.0
+// trayDrawCounter paints the unread pill in the top-right corner, in 32px
+// design units scaled by s. Cells are 2 units on even coordinates, so the 32px
+// and 16px images get exact 2px and 1px cells.
+func trayDrawCounter(c *trayCanvas, bucket uint8, s float64) {
+	cell, top, height := 2*s, 2*s, 14*s
+	left := 18 * s
 	if bucket >= trayUnreadMax {
-		left = 14
+		left = 14 * s
 	}
 	right := float64(c.size)
-	all := image.Rect(int(left)-1, 0, c.size, height+1)
+	all := image.Rect(int(left)-1, 0, c.size, int(math.Ceil(height))+1)
 	// A rounded square rather than a full pill keeps the digit corners inside.
-	c.fill(trayBox(left, 0, right, height, 5), trayInk, all)
-	c.fill(trayBox(left+1.25, 1.25, right-1.25, height-1.25, 3.75), trayCountRed, all)
+	c.fill(trayBox(left, 0, right, height, 5*s), trayInk, all)
+	c.fill(trayBox(left+1.25*s, 1.25*s, right-1.25*s, height-1.25*s, 3.75*s), trayCountRed, all)
 	glyphs := [][5]string{trayDigitFont[min(int(bucket), 9)]}
-	x := 22
+	x := 22 * s
 	if bucket >= trayUnreadMax {
 		glyphs = append(glyphs, trayPlusGlyph)
-		x = 16
+		x = 16 * s
 	}
 	for _, glyph := range glyphs {
 		for row, bits := range glyph {
@@ -393,37 +469,97 @@ func trayDrawCounter(c *trayCanvas, bucket uint8) {
 				if bit != '#' {
 					continue
 				}
-				x0, y0 := float64(x+col*cell), float64(top+row*cell)
-				c.fill(trayBox(x0, y0, x0+cell, y0+cell, 0), trayWhite, image.Rect(int(x0), int(y0), int(x0)+cell, int(y0)+cell))
+				x0, y0 := x+float64(col)*cell, top+float64(row)*cell
+				c.fill(trayBox(x0, y0, x0+cell, y0+cell, 0), trayWhite, image.Rect(int(x0)-1, int(y0)-1, int(math.Ceil(x0+cell))+1, int(math.Ceil(y0+cell))+1))
 			}
 		}
 		x += 4 * cell
 	}
 }
 
-// ICO supports PNG payloads. A single 32px RGBA entry preserves transparency
-// and lets Windows scale the logo for the user's tray DPI.
-func trayPNGToICO(data []byte, size int) []byte {
-	if size < 1 || size > 256 || len(data) > math.MaxInt-22 {
+// trayICOImage is one PNG entry of an ICO file.
+type trayICOImage struct {
+	size int
+	png  []byte
+}
+
+// trayICO packs PNG payloads into one ICO, which preserves transparency and
+// lets Windows choose the entry that matches the user's display scale. It
+// returns nil for an empty set, a dimension outside 1..256 or an oversized
+// payload.
+func trayICO(images ...trayICOImage) []byte {
+	if len(images) == 0 || len(images) > math.MaxUint16 {
 		return nil
 	}
-	// ICO stores a 256px dimension as zero in its one-byte directory field.
-	dimension, err := safecast.IntToUint8(size % 256)
+	header := 6 + 16*len(images)
+	total := header
+	for _, img := range images {
+		if img.size < 1 || img.size > 256 || len(img.png) > math.MaxInt32-total {
+			return nil
+		}
+		total += len(img.png)
+	}
+	count, err := safecast.Int64ToUint16(int64(len(images)))
 	if err != nil {
 		return nil
 	}
-	payloadSize, err := safecast.IntToUint32(len(data))
-	if err != nil {
-		return nil
-	}
-	ico := make([]byte, 22+len(data))
+	ico := make([]byte, header, total)
 	binary.LittleEndian.PutUint16(ico[2:], 1)
-	binary.LittleEndian.PutUint16(ico[4:], 1)
-	ico[6], ico[7] = dimension, dimension
-	binary.LittleEndian.PutUint16(ico[10:], 1)
-	binary.LittleEndian.PutUint16(ico[12:], 32)
-	binary.LittleEndian.PutUint32(ico[14:], payloadSize)
-	binary.LittleEndian.PutUint32(ico[18:], 22)
-	copy(ico[22:], data)
+	binary.LittleEndian.PutUint16(ico[4:], count)
+	for i, img := range images {
+		// ICO stores a 256px dimension as zero in its one-byte directory field.
+		dimension, err := safecast.IntToUint8(img.size % 256)
+		if err != nil {
+			return nil
+		}
+		payloadSize, err := safecast.IntToUint32(len(img.png))
+		if err != nil {
+			return nil
+		}
+		offset, err := safecast.IntToUint32(len(ico))
+		if err != nil {
+			return nil
+		}
+		entry := ico[6+16*i:]
+		entry[0], entry[1] = dimension, dimension
+		binary.LittleEndian.PutUint16(entry[4:], 1)
+		binary.LittleEndian.PutUint16(entry[6:], 32)
+		binary.LittleEndian.PutUint32(entry[8:], payloadSize)
+		binary.LittleEndian.PutUint32(entry[12:], offset)
+		ico = append(ico, img.png...)
+	}
 	return ico
+}
+
+// trayICOEntry returns the payload of the smallest ICO entry at least size
+// pixels wide, or of the largest entry when none is; nil for a malformed ICO.
+func trayICOEntry(ico []byte, size int) []byte {
+	if len(ico) < 6 || binary.LittleEndian.Uint16(ico[2:]) != 1 {
+		return nil
+	}
+	count := int(binary.LittleEndian.Uint16(ico[4:]))
+	if count == 0 || len(ico) < 6+16*count {
+		return nil
+	}
+	best, bestDim := -1, 0
+	for i := range count {
+		entry := ico[6+16*i:]
+		dim := int(entry[0])
+		if dim == 0 {
+			dim = 256
+		}
+		better := best < 0 ||
+			(dim >= size && (bestDim < size || dim < bestDim)) ||
+			(dim < size && bestDim < size && dim > bestDim)
+		if better {
+			best, bestDim = i, dim
+		}
+	}
+	entry := ico[6+16*best:]
+	length := uint64(binary.LittleEndian.Uint32(entry[8:]))
+	offset := uint64(binary.LittleEndian.Uint32(entry[12:]))
+	if length == 0 || offset+length > uint64(len(ico)) {
+		return nil
+	}
+	return ico[offset : offset+length]
 }

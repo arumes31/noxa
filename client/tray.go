@@ -112,13 +112,10 @@ func (t *tray) onReady() {
 // mutex serializes state changes and MenuItem updates from connection relays.
 func (t *tray) setConnected(isConnected bool) {
 	t.mu.Lock()
+	// The voice flags stay as the frontend last reported them: trayStateFor
+	// masks them while disconnected, and the frontend reports its own voice
+	// teardown, so a state that arrived before the connection is kept.
 	t.status.connected = isConnected
-	if !isConnected {
-		// A lost connection ends the voice session; the frontend confirms
-		// with its next SetTrayVoiceState after reconnecting.
-		t.status.speaking = false
-		t.status.inChannel = false
-	}
 	if t.miReconnect != nil {
 		if isConnected {
 			t.miReconnect.Disable()
@@ -239,8 +236,8 @@ func (t *tray) updateTitleLocked() {
 func (t *tray) setVoiceState(speaking, muted, deafened, inChannel bool) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	inChannel = inChannel && t.status.connected
-	speaking = speaking && inChannel
+	// Store the raw flags: the frontend deduplicates its reports, so a state
+	// masked here while not yet connected would never be sent again.
 	s := &t.status
 	if t.presented && s.speaking == speaking && s.muted == muted && s.deafened == deafened && s.inChannel == inChannel {
 		return

@@ -147,3 +147,31 @@ func TestTrayDisconnectOnlyEmitsWhileConnected(t *testing.T) {
 		t.Fatalf("tray event = %q, want tray_disconnect", event)
 	}
 }
+
+// TestTrayVoiceStateSurvivesConnectionOrder pins that a voice report arriving
+// before the connection is not lost (the frontend deduplicates its reports),
+// that a disconnect still shows the disconnected icon, and that the voice
+// teardown the frontend reports while disconnected is what reconnect shows.
+func TestTrayVoiceStateSurvivesConnectionOrder(t *testing.T) {
+	controller := &tray{}
+	var got trayPresentation
+	controller.publish = func(p trayPresentation, _ bool) { got = p }
+
+	controller.setVoiceState(true, false, false, true)
+	if got.icon.state != trayDisconnected {
+		t.Fatalf("voice state before connect shows %v", got.icon.state)
+	}
+	controller.setConnected(true)
+	if got.icon.state != trayTalking {
+		t.Fatalf("early voice state lost on connect: %v", got.icon.state)
+	}
+	controller.setConnected(false)
+	if got.icon.state != trayDisconnected {
+		t.Fatalf("disconnect shows %v", got.icon.state)
+	}
+	controller.setVoiceState(false, false, false, false)
+	controller.setConnected(true)
+	if got.icon.state != trayNoChannel {
+		t.Fatalf("reconnect after voice teardown shows %v", got.icon.state)
+	}
+}

@@ -123,6 +123,15 @@ func (a *App) captureDMHistory() (dmHistoryStore, error) {
 	return dmHistoryStoreForIdentity(dir, id)
 }
 
+// dmHistoryForIdentity opens the logs bound to one tab's pinned identity.
+func (a *App) dmHistoryForIdentity(id *identity) (dmHistoryStore, error) {
+	dir, err := a.dmHistoryDir()
+	if err != nil {
+		return dmHistoryStore{}, err
+	}
+	return dmHistoryStoreForIdentity(dir, id)
+}
+
 func dmHistoryStoreForIdentity(dir string, id *identity) (dmHistoryStore, error) {
 	pub, _, err := id.x25519()
 	if err != nil {
@@ -302,6 +311,7 @@ func (a *App) dmHistoryAppendWith(store dmHistoryStore, peer, nickname string, e
 	if e.SentAt == 0 {
 		e.SentAt = time.Now().Unix()
 	}
+	normalizeDMEncryption(&e)
 	if e.ClientMsgID != "" {
 		// Re-delivery of the same message (a reconnect replaying an offline
 		// spool) must not duplicate the log.
@@ -394,8 +404,8 @@ func (s dmHistoryStore) peers() []DMPeer {
 // DMSearch searches the local DM logs and answers in the SAME shape as
 // ChatSearch, so the existing client-side search UI renders DM hits with no
 // second code path (122/110). An empty peer searches every stored
-// conversation. EncVerified is true because these bodies were opened by this
-// client from true-E2EE ciphertext before they were ever written down.
+// conversation. Each hit carries its record's own verification and mode, so
+// a server-encrypted or unverified record never shows the lock.
 func (a *App) DMSearch(peer, query string, maxMessages int) (ChatSearchResult, error) {
 	store, err := a.captureDMHistory()
 	if err != nil {
@@ -441,7 +451,7 @@ func (s dmHistoryStore) search(peer, query string, maxMessages int) ChatSearchRe
 				FromNickname: m.FromNickname,
 				Body:         m.Body,
 				SentAt:       m.SentAt,
-				EncVerified:  true,
+				EncVerified:  m.EncVerified,
 				EncMode:      dmEncMode(m),
 			})
 		}
@@ -449,11 +459,28 @@ func (s dmHistoryStore) search(peer, query string, maxMessages int) ChatSearchRe
 	return res
 }
 
-// dmEncMode names how a stored DM was protected; records written before the
-// server-encrypted fallback existed were end-to-end.
+// dmEncMode names how a stored DM was protected, or "" when this client did
+// not verify it. A verified record without a mode predates the
+// server-encrypted fallback (appends since then always carry one, see
+// normalizeDMEncryption), so it was end-to-end.
 func dmEncMode(m DMEntry) string {
-	if m.EncMode == "server" {
+	if !m.EncVerified {
+		return ""
+	}
+	switch m.EncMode {
+	case "", "e2e":
+		return "e2e"
+	case "server":
 		return "server"
 	}
-	return "e2e"
+	return ""
+}
+
+// normalizeDMEncryption keeps the stored marker unambiguous: a new verified
+// record must name a known mode, otherwise it is stored as unverified rather
+// than read back later as a pre-fallback end-to-end record.
+func normalizeDMEncryption(e *DMEntry) {
+	if !e.EncVerified || (e.EncMode != "e2e" && e.EncMode != "server") {
+		e.EncVerified, e.EncMode = false, ""
+	}
 }

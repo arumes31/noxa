@@ -780,15 +780,37 @@ func (m *connManager) requestKeys(scope int64, ids []uint32) error {
 }
 
 // peerPubKey resolves a user's X25519 public key: cache first, then the
-// server directory. Returns ok=false when the user never published one.
+// server directory. Returns ok=false when no key could be obtained.
 func (m *connManager) peerPubKey(uniqueID string) ([32]byte, bool) {
+	key, lookup := m.lookupPeerPubKey(uniqueID)
+	return key, lookup == peerKeyFound
+}
+
+// lookupPeerPubKey is peerPubKey with the reason a key is missing: only a
+// clean directory answer naming this peer with no key is peerKeyAbsent.
+func (m *connManager) lookupPeerPubKey(uniqueID string) ([32]byte, peerKeyLookup) {
 	cachedKey, cached, leader, done, epoch := m.pubKeys.getOrClaimFetch(uniqueID)
 	if cached {
-		return cachedKey, true
+		return cachedKey, peerKeyFound
 	}
 	if !leader {
 		<-done
-		return m.pubKeys.get(uniqueID)
+		if key, ok := m.pubKeys.get(uniqueID); ok {
+			return key, peerKeyFound
+		}
+		// The leader's outcome is not shared; ask once more on the same
+		// connection generation, so an absent key is still reported as such.
+		cachedKey, cached, leader, done, epoch = m.pubKeys.getOrClaimFetch(uniqueID)
+		if cached {
+			return cachedKey, peerKeyFound
+		}
+		if !leader {
+			<-done
+			if key, ok := m.pubKeys.get(uniqueID); ok {
+				return key, peerKeyFound
+			}
+			return [32]byte{}, peerKeyFailed
+		}
 	}
 	defer m.pubKeys.finishFetch(uniqueID, epoch)
 	// The directory request happens without the cache lock. Followers wait on
@@ -801,7 +823,7 @@ func (m *connManager) peerPubKey(uniqueID string) ([32]byte, bool) {
 	for attempt := 0; ; attempt++ {
 		select {
 		case <-done: // Disconnect cleared this cache generation.
-			return [32]byte{}, false
+			return [32]byte{}, peerKeyFailed
 		default:
 		}
 		var err error
@@ -812,34 +834,37 @@ func (m *connManager) peerPubKey(uniqueID string) ([32]byte, bool) {
 		}
 		var failure *requestFailure
 		if attempt >= 2 || !errors.As(err, &failure) || failure.response.RetryAfterMS <= 0 || failure.response.RetryAfterMS > 10_000 {
-			return [32]byte{}, false
+			return [32]byte{}, peerKeyFailed
 		}
 		delay := time.Duration(failure.response.RetryAfterMS) * time.Millisecond
 		if time.Now().Add(delay).After(deadline) {
-			return [32]byte{}, false
+			return [32]byte{}, peerKeyFailed
 		}
 		timer := time.NewTimer(delay)
 		select {
 		case <-done:
 			timer.Stop()
-			return [32]byte{}, false
+			return [32]byte{}, peerKeyFailed
 		case <-timer.C:
 		}
 	}
 	var resp netproto.KeyResponse
-	if err := netproto.Decode(f, &resp); err != nil || resp.UniqueID != uniqueID || resp.PublicKey == "" {
-		return [32]byte{}, false
+	if err := netproto.Decode(f, &resp); err != nil || resp.UniqueID != uniqueID {
+		return [32]byte{}, peerKeyFailed
+	}
+	if resp.PublicKey == "" {
+		return [32]byte{}, peerKeyAbsent
 	}
 	raw, err := base64.StdEncoding.DecodeString(resp.PublicKey)
 	if err != nil || len(raw) != 32 {
-		return [32]byte{}, false
+		return [32]byte{}, peerKeyFailed
 	}
 	var k [32]byte
 	copy(k[:], raw)
 	if !m.pubKeys.putAt(uniqueID, k, epoch) {
-		return [32]byte{}, false
+		return [32]byte{}, peerKeyFailed
 	}
-	return k, true
+	return k, peerKeyFound
 }
 
 // encryptChat seals an outgoing chat message for the scope. It returns the
@@ -857,11 +882,20 @@ func (m *connManager) encryptChat(scope, target, text string) (netproto.ChatSend
 	switch scope {
 	case "direct":
 		uniqueID := target
-		peer, ok := m.peerPubKey(uniqueID)
-		if !ok {
-			// Without the recipient's end-to-end key, fall back to the
-			// client→server→client path (the global scope key). There is no
-			// plaintext fallback: with neither key the send is refused.
+		peer, lookup := m.lookupPeerPubKey(uniqueID)
+		if lookup != peerKeyFound {
+			// Local evidence (E2E history, read from disk only on this rare
+			// path) vetoes a downgrade even when the directory has no key.
+			if !dmServerFallbackAllowed(lookup, lookup == peerKeyAbsent && m.knownE2EPeer(uniqueID, true)) {
+				if lookup == peerKeyAbsent {
+					return netproto.ChatSend{}, fmt.Errorf("%s no longer has an end-to-end key; refusing to downgrade this conversation to server encryption", uniqueID)
+				}
+				return netproto.ChatSend{}, fmt.Errorf("could not fetch the end-to-end key for %s; try again", uniqueID)
+			}
+			// The server cleanly reported that the peer never published an
+			// end-to-end key: fall back to the client→server→client path
+			// (the global scope key). There is no plaintext fallback: with
+			// neither key the send is refused.
 			keyID, key, scoped := m.scopeKeys.current(0)
 			if !scoped {
 				return netproto.ChatSend{}, fmt.Errorf("no end-to-end key for %s and no server encryption key yet; plaintext messages are not allowed", uniqueID)
@@ -876,6 +910,7 @@ func (m *connManager) encryptChat(scope, target, text string) (netproto.ChatSend
 		if err != nil {
 			return netproto.ChatSend{}, err
 		}
+		m.e2ePeers.record(uniqueID)
 		// (124) client-generated ref for delivery/read receipts.
 		return netproto.ChatSend{ToUniqueID: uniqueID, Text: blob, Enc: true, ClientMsgID: newClientMsgID(), RecipientPublicKey: base64.StdEncoding.EncodeToString(peer[:])}, nil
 
@@ -1013,6 +1048,9 @@ func (m *connManager) decryptChatEvent(data json.RawMessage, payload string) str
 		}, func(text string) {
 			chat.Text, chat.EncVerified = text, openedChatText(text)
 			chat.EncMode = verifiedMode(chat.EncVerified, "server")
+			if serverDM {
+				m.flagDowngradedDM(&chat)
+			}
 			presentChat(&chat)
 			m.emit("event", rewrapChat("chat", chat, payload))
 		}) {
@@ -1026,8 +1064,29 @@ func (m *connManager) decryptChatEvent(data json.RawMessage, payload string) str
 	// opened itself, never for a placeholder.
 	chat.Text, chat.EncVerified = text, openedChatText(text)
 	chat.EncMode = verifiedMode(chat.EncVerified, "server")
+	if serverDM {
+		m.flagDowngradedDM(&chat)
+	}
 	presentChat(&chat)
 	return rewrapChat("chat", chat, payload)
+}
+
+// flagDowngradedDM withdraws the shield from a server-encrypted DM whose
+// peer this client knows to have end-to-end history (or a cached key): that
+// conversation should never arrive server-readable, and the server could have
+// written the body itself. Unverified, the renderer shows the warning badge.
+// Only in-memory evidence is consulted; this runs on the read loop.
+func (m *connManager) flagDowngradedDM(chat *netproto.ChatBroadcast) {
+	m.mu.Lock()
+	ownUID := m.uniqueID
+	m.mu.Unlock()
+	peer := chat.FromUniqueID
+	if peer == ownUID {
+		peer = chat.ToUniqueID
+	}
+	if m.knownE2EPeer(peer, false) {
+		chat.EncVerified, chat.EncMode = false, ""
+	}
 }
 
 // verifiedMode names the encryption path of a body this client opened; an
@@ -1221,6 +1280,11 @@ func (m *connManager) decryptDMAsync(chat netproto.ChatBroadcast, payload string
 	} else {
 		chat.Text = plain
 		chat.EncVerified, chat.EncMode = true, "e2e"
+		if chat.FromUniqueID == ownUID {
+			m.e2ePeers.record(chat.ToUniqueID)
+		} else {
+			m.e2ePeers.record(chat.FromUniqueID)
+		}
 	}
 	presentChat(&chat)
 	m.emit("event", rewrapChat("chat", chat, payload))

@@ -26,7 +26,7 @@ func TestTrayIconsLoadAtWindowsTraySize(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		for _, size := range []uintptr{16, 20, 24, 32} {
+		for _, size := range []uintptr{16, 20, 24, 32, 40, 48, 64} {
 			// IMAGE_ICON + LR_LOADFROMFILE, matching the native tray loader.
 			handle, _, err := loadImage.Call(0, uintptr(unsafe.Pointer(name)), 1, size, size, 0x10)
 			if handle == 0 {

@@ -146,19 +146,12 @@ func (a *App) DMExportHistory(peer string) (ChatExportResult, error) {
 func dmExportMessages(msgs []DMEntry) ChatExportResult {
 	lines := make([]string, 0, len(msgs))
 	for _, m := range msgs {
-		mode := ""
-		if m.EncVerified {
-			mode = m.EncMode
-			if mode == "" {
-				mode = "e2e"
-			}
-		}
 		lines = append(lines, chatExportLine(netproto.ChatHistoryEntry{
 			FromUniqueID: m.FromUniqueID,
 			FromNickname: m.FromNickname,
 			Body:         m.Body,
 			SentAt:       m.SentAt,
-		}, mode))
+		}, dmEncMode(m)))
 	}
 	text := ""
 	if len(lines) > 0 {

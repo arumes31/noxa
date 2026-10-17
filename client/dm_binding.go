@@ -29,6 +29,9 @@ func (m *connManager) sendChatWithKeyRetry(msg netproto.ChatSend, plaintext stri
 	if !valid {
 		return err
 	}
+	// The rejected message was end-to-end: its retry must never fall back
+	// to server encryption, whatever the directory answers now.
+	m.e2ePeers.record(msg.ToUniqueID)
 	m.pubKeys.forgetKey(msg.ToUniqueID, rejected)
 	retry, encryptErr := m.encryptChat("direct", msg.ToUniqueID, plaintext)
 	if encryptErr != nil {

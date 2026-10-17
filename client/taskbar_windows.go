@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	"encoding/binary"
 	"fmt"
 	"image/png"
 	"os"
@@ -24,7 +23,11 @@ var taskbarIconCache struct {
 	overlay [trayStateCount]uintptr
 }
 
-var procCreateIconFromResourceEx = user32.NewProc("CreateIconFromResourceEx")
+var (
+	procCreateIconFromResourceEx = user32.NewProc("CreateIconFromResourceEx")
+	procDestroyIcon              = user32.NewProc("DestroyIcon")
+	procGetSystemMetrics         = user32.NewProc("GetSystemMetrics")
+)
 
 // taskbarCreateIcon builds an HICON from PNG resource bytes at a dimension.
 func taskbarCreateIcon(resource []byte, dimension uintptr) (uintptr, error) {
@@ -49,21 +52,19 @@ func taskbarWindowIcons(key trayIconKey) ([2]uintptr, error) {
 		return handles, nil
 	}
 	data := trayIconFor(key)
-	if len(data) < 22 {
-		return [2]uintptr{}, fmt.Errorf("invalid taskbar icon %d", key.state)
-	}
-	size := uint64(binary.LittleEndian.Uint32(data[14:18]))
-	offset := uint64(binary.LittleEndian.Uint32(data[18:22]))
-	if size == 0 || offset+size > uint64(len(data)) {
-		return [2]uintptr{}, fmt.Errorf("invalid taskbar icon resource %d", key.state)
-	}
-	// The native API requires DWORD-aligned resource bytes, unlike an ICO's
-	// directory offset. Copy the PNG/DIB payload to its own aligned buffer.
-	resource := append([]byte(nil), data[offset:offset+size]...)
 	var handles [2]uintptr
-	for i, dimension := range []uintptr{16, 32} {
-		handle, err := taskbarCreateIcon(resource, dimension)
+	for i, dimension := range taskbarWindowIconSizes() {
+		// The native API requires DWORD-aligned resource bytes, unlike an
+		// ICO's directory offset. Copy the chosen PNG to its own buffer.
+		entry := trayICOEntry(data, dimension)
+		if entry == nil {
+			taskbarDestroyIcons(handles[:i])
+			return [2]uintptr{}, fmt.Errorf("invalid taskbar icon resource %d", key.state)
+		}
+		handle, err := taskbarCreateIcon(append([]byte(nil), entry...), uintptr(dimension))
 		if handle == 0 {
+			// Nothing references the icons created so far: release them.
+			taskbarDestroyIcons(handles[:i])
 			return [2]uintptr{}, fmt.Errorf("create taskbar icon %d: %w", key.state, err)
 		}
 		handles[i] = handle
@@ -72,12 +73,36 @@ func taskbarWindowIcons(key trayIconKey) ([2]uintptr, error) {
 	return handles, nil
 }
 
-// taskbarOverlaySize is the system small-icon size (16px at 100% DPI). The
-// overlay glyph is rendered natively at that size instead of being shrunk.
-var taskbarOverlaySize = sync.OnceValue(func() int {
-	size, _, _ := user32.NewProc("GetSystemMetrics").Call(49) // SM_CXSMICON
-	return min(max(int(size), 16), 64)
-})
+// taskbarDestroyIcons releases icons that were never installed.
+func taskbarDestroyIcons(handles []uintptr) {
+	for _, handle := range handles {
+		_, _, _ = procDestroyIcon.Call(handle)
+	}
+}
+
+// taskbarSystemMetric reads a GetSystemMetrics size, clamped to icon bounds.
+func taskbarSystemMetric(index uintptr, fallback int) int {
+	size, _, _ := procGetSystemMetrics.Call(index)
+	if size == 0 {
+		return fallback
+	}
+	return min(max(int(size), 16), 256)
+}
+
+// The system icon sizes are read once, at the scale of the primary display
+// when the first icon is built: the cached handles stay installed on the
+// window, so they are not rebuilt on a later DPI change (Windows rescales).
+var (
+	// taskbarOverlaySize is the system small-icon size (16px at 100% DPI).
+	// The overlay glyph is rendered natively at that size instead of shrunk.
+	taskbarOverlaySize = sync.OnceValue(func() int {
+		return min(taskbarSystemMetric(49, 16), 64) // SM_CXSMICON
+	})
+	// taskbarWindowIconSizes are the ICON_SMALL and ICON_BIG dimensions.
+	taskbarWindowIconSizes = sync.OnceValue(func() [2]int {
+		return [2]int{taskbarOverlaySize(), taskbarSystemMetric(11, 32)} // SM_CXICON
+	})
+)
 
 // taskbarOverlayIcon returns the glyph-only status disc for state. It never
 // contains the logo, which Windows already shows as the button icon.

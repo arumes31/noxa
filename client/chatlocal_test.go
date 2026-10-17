@@ -47,7 +47,7 @@ func TestDMHistoryIsCiphertextAtRest(t *testing.T) {
 	a := newLocalApp(t, cm)
 
 	if err := a.DMHistoryAppend("peer-1", "bob", DMEntry{
-		FromUniqueID: "peer-1", FromNickname: "bob", Body: canary, SentAt: 1000, EncVerified: true,
+		FromUniqueID: "peer-1", FromNickname: "bob", Body: canary, SentAt: 1000, EncVerified: true, EncMode: "e2e",
 	}); err != "" {
 		t.Fatalf("DMHistoryAppend: %s", err)
 	}
@@ -121,7 +121,7 @@ func TestDMHistoryDedupesAndSearches(t *testing.T) {
 	})
 	a := newLocalApp(t, cm)
 
-	e := DMEntry{FromUniqueID: "peer-1", FromNickname: "bob", Body: "needle in here", SentAt: 5, ClientMsgID: "abc"}
+	e := DMEntry{FromUniqueID: "peer-1", FromNickname: "bob", Body: "needle in here", SentAt: 5, ClientMsgID: "abc", EncVerified: true, EncMode: "e2e"}
 	if err := a.DMHistoryAppend("peer-1", "bob", e); err != "" {
 		t.Fatalf("append: %s", err)
 	}
@@ -137,7 +137,7 @@ func TestDMHistoryDedupesAndSearches(t *testing.T) {
 	}
 
 	if err := a.DMHistoryAppend("peer-2", "carol", DMEntry{
-		FromUniqueID: "peer-2", FromNickname: "carol", Body: "another needle", SentAt: 6,
+		FromUniqueID: "peer-2", FromNickname: "carol", Body: "another needle", SentAt: 6, EncVerified: true, EncMode: "server",
 	}); err != "" {
 		t.Fatalf("append peer-2: %s", err)
 	}
@@ -150,8 +150,9 @@ func TestDMHistoryDedupesAndSearches(t *testing.T) {
 		t.Fatalf("matches = %d, want 2 across both conversations", len(res.Messages))
 	}
 	for _, m := range res.Messages {
-		if !m.EncVerified {
-			t.Fatal("a locally stored DM is not marked verified")
+		want := map[string]string{"peer-1": "e2e", "peer-2": "server"}[m.FromUniqueID]
+		if !m.EncVerified || m.EncMode != want {
+			t.Fatalf("DM search hit %s = verified %v mode %q, want %q", m.FromUniqueID, m.EncVerified, m.EncMode, want)
 		}
 		if m.BodyEnc != "" || m.KeyID != 0 {
 			t.Fatalf("DM search result carries crypto state: %+v", m)

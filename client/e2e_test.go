@@ -348,24 +348,15 @@ func TestEncryptChatScopes(t *testing.T) {
 		t.Fatalf("open global = %q, %v", text, err)
 	}
 
-	// Without the recipient's end-to-end key a DM falls back to the
-	// client→server→client path (the global generation), never plaintext.
-	fallback, err := cm.encryptChat("direct", "missing", "server path")
-	if err != nil {
-		t.Fatalf("direct fallback: %v", err)
-	}
-	if !fallback.Enc || fallback.ToUniqueID != "missing" || fallback.KeyID != 5 || fallback.RecipientPublicKey != "" || fallback.Text == "server path" {
-		t.Fatalf("direct fallback = %+v", fallback)
-	}
-	if text, err := openScope(fallback.Text, globalKey); err != nil || text != "server path" {
-		t.Fatalf("open direct fallback = %q, %v", text, err)
+	// A failed key lookup (here: not connected) is not proof that the peer
+	// has no end-to-end key, so it never falls back to server encryption.
+	if msg, err := cm.encryptChat("direct", "missing", "server path"); err == nil {
+		t.Fatalf("direct send without a key lookup answer = %+v", msg)
 	}
 	keyless := newConnManager(context.Background())
 	keyless.id = mustTempIdentity(t)
-	for _, scope := range []string{"direct", "global"} {
-		if msg, err := keyless.encryptChat(scope, "missing", "text"); err == nil || !strings.Contains(err.Error(), "plaintext messages are not allowed") {
-			t.Fatalf("%s without any key = %+v, %v", scope, msg, err)
-		}
+	if msg, err := keyless.encryptChat("global", "", "text"); err == nil || !strings.Contains(err.Error(), "plaintext messages are not allowed") {
+		t.Fatalf("global without any key = %+v, %v", msg, err)
 	}
 
 	for _, tc := range []struct {

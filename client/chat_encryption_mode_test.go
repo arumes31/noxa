@@ -153,8 +153,10 @@ func TestExportLinesNameTheEncryption(t *testing.T) {
 		{FromNickname: "a", Body: "legacy verified", EncVerified: true},
 		{FromNickname: "b", Body: "fallback", EncVerified: true, EncMode: "server"},
 		{FromNickname: "c", Body: "legacy unverified"},
+		{FromNickname: "d", Body: "unverified claim", EncMode: "e2e"},
+		{FromNickname: "e", Body: "unknown mode", EncVerified: true, EncMode: "other"},
 	}).Text
-	for _, want := range []string{"[end-to-end encrypted] a:", "[server encrypted] b:", "[unverified] c:"} {
+	for _, want := range []string{"[end-to-end encrypted] a:", "[server encrypted] b:", "[unverified] c:", "[unverified] d:", "[unverified] e:"} {
 		if !strings.Contains(dm, want) {
 			t.Fatalf("DM export %q lacks %q", dm, want)
 		}

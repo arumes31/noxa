@@ -13,11 +13,11 @@ import (
 	"testing"
 )
 
-func TestTrayPNGToICODimensions(t *testing.T) {
+func TestTrayICODimensions(t *testing.T) {
 	data := []byte("payload")
 	for _, size := range []int{-1, 0, 1, 32, 255, 256, 257} {
 		t.Run(strconv.Itoa(size), func(t *testing.T) {
-			ico := trayPNGToICO(data, size)
+			ico := trayICO(trayICOImage{size: size, png: data})
 			if size < 1 || size > 256 {
 				if ico != nil {
 					t.Fatal("invalid icon dimension was accepted")
@@ -34,6 +34,55 @@ func TestTrayPNGToICODimensions(t *testing.T) {
 				t.Fatal("incorrect ICO payload length")
 			}
 		})
+	}
+	if trayICO() != nil {
+		t.Fatal("empty ICO was accepted")
+	}
+}
+
+// TestTrayICOPicksEntryPerSize pins the multi-size container: every entry is
+// addressable and a lookup takes the smallest entry at least as large as the
+// requested size, or the largest one.
+func TestTrayICOPicksEntryPerSize(t *testing.T) {
+	images := []trayICOImage{{16, []byte("sixteen")}, {32, []byte("thirty-two")}, {48, []byte("forty-eight")}}
+	ico := trayICO(images...)
+	if binary.LittleEndian.Uint16(ico[4:]) != 3 {
+		t.Fatal("ICO entry count")
+	}
+	for size, want := range map[int]string{1: "sixteen", 16: "sixteen", 17: "thirty-two", 32: "thirty-two", 40: "forty-eight", 64: "forty-eight"} {
+		if got := string(trayICOEntry(ico, size)); got != want {
+			t.Fatalf("entry for %dpx = %q, want %q", size, got, want)
+		}
+	}
+	for _, bad := range [][]byte{nil, ico[:5], ico[:20], append(append([]byte(nil), ico[:6+16*3]...), 1)} {
+		if trayICOEntry(bad, 16) != nil {
+			t.Fatal("malformed ICO yielded an entry")
+		}
+	}
+}
+
+// TestTrayIconRendersEverySize renders each ICO size natively: the logo is
+// present at every size, and the counter and mute badge scale with it.
+func TestTrayIconRendersEverySize(t *testing.T) {
+	for _, size := range trayICOSizes {
+		if len(trayLogoMaskAt(size)) != size*size {
+			t.Fatalf("%dpx logo mask missing", size)
+		}
+		key := trayIconKey{state: trayMicMuted, unread: 3}
+		img := trayStateImage(size, key)
+		if img.Bounds().Dx() != size || img.Bounds().Dy() != size {
+			t.Fatalf("%dpx image has bounds %v", size, img.Bounds())
+		}
+		s := float64(size) / trayIconSize
+		if _, _, _, a := img.At(int(15*s), int(15*s)).RGBA(); a == 0 {
+			t.Fatalf("%dpx icon lacks the logo", size)
+		}
+		if _, _, _, a := img.At(int(23*s), int(23*s)).RGBA(); a != 0xffff {
+			t.Fatalf("%dpx icon lacks the mute badge", size)
+		}
+		if _, _, _, a := img.At(size-1-int(s), int(6*s)).RGBA(); a != 0xffff {
+			t.Fatalf("%dpx icon lacks the counter", size)
+		}
 	}
 }
 
@@ -74,12 +123,17 @@ func TestTrayUnreadBuckets(t *testing.T) {
 func decodeTrayIcon(t *testing.T, data []byte) image.Image {
 	t.Helper()
 	if runtime.GOOS == "windows" {
-		if len(data) < 22 || binary.LittleEndian.Uint16(data[2:]) != 1 ||
-			binary.LittleEndian.Uint16(data[4:]) != 1 || data[6] != 32 || data[7] != 32 ||
-			binary.LittleEndian.Uint32(data[18:]) != 22 || int(binary.LittleEndian.Uint32(data[14:])) != len(data)-22 {
-			t.Fatal("invalid Windows ICO directory")
+		if len(data) < 6 || binary.LittleEndian.Uint16(data[4:]) != uint16(len(trayICOSizes)) {
+			t.Fatal("Windows ICO must carry every tray size")
 		}
-		data = data[22:]
+		for _, size := range trayICOSizes {
+			entry := trayICOEntry(data, size)
+			img, err := png.Decode(bytes.NewReader(entry))
+			if err != nil || img.Bounds().Dx() != size {
+				t.Fatalf("ICO entry for %dpx: %v", size, err)
+			}
+		}
+		data = trayICOEntry(data, trayIconSize)
 	}
 	img, err := png.Decode(bytes.NewReader(data))
 	if err != nil {
@@ -248,7 +302,7 @@ func TestTrayIconPreview(t *testing.T) {
 				case spec.badge:
 					img = trayOverlayImage(state, 16)
 				default:
-					full := trayStateImage(trayLogoMask(), trayIconKey{state: state, unread: spec.unread})
+					full := trayStateImage(trayIconSize, trayIconKey{state: state, unread: spec.unread})
 					img = full
 					if spec.half {
 						img = trayDownscale(full)
