@@ -23,7 +23,8 @@ var taskbarOverlayOwner struct {
 // Same-process, thread-specific WH_CALLWNDPROC requires hmod=NULL. This hook
 // never intercepts input or another process, and only observes two messages.
 // https://learn.microsoft.com/windows/win32/api/winuser/nf-winuser-setwindowshookexw
-// SetOverlayIcon copies the cached 16px icon. Explorer restarts require reapply.
+// SetOverlayIcon copies the cached small-icon-size glyph disc (no logo; the
+// button already shows it). Explorer restarts require reapply.
 // https://learn.microsoft.com/windows/win32/api/shobjidl_core/nf-shobjidl_core-itaskbarlist3-setoverlayicon
 type taskbarOverlayWindows struct {
 	queue          *taskbarOverlayQueue
@@ -143,9 +144,22 @@ type taskbarCOMObject struct{ vtable *[21]uintptr }
 var taskbarOle32 = windows.NewLazySystemDLL("ole32.dll")
 var taskbarClass = windows.GUID{Data1: 0x56fdf344, Data2: 0xfd6d, Data3: 0x11d0, Data4: [8]byte{0x95, 0x8a, 0, 0x60, 0x97, 0xc9, 0xa0, 0x90}}
 var taskbarInterface = windows.GUID{Data1: 0xea1afb91, Data2: 0x9e28, Data3: 0x4b86, Data4: [8]byte{0x90, 0xe9, 0x9e, 0x9f, 0x8a, 0x5e, 0xef, 0xaf}}
-var taskbarDescriptions = sync.OnceValue(func() [6]*uint16 {
-	var result [6]*uint16
-	for i, s := range []string{"Microphone on", "Talking", "Microphone muted", "Audio muted", "Microphone and audio muted", "Talking; audio muted"} {
+
+// Accessible overlay descriptions, indexed by trayIconState.
+var taskbarDescriptionText = [trayStateCount]string{
+	trayIdle:            "In a channel, microphone on",
+	trayTalking:         "Talking",
+	trayMicMuted:        "Microphone muted",
+	trayDeafened:        "Audio muted",
+	trayBothMuted:       "Microphone and audio muted",
+	trayTalkingDeafened: "Talking; audio muted",
+	trayDisconnected:    "Not connected",
+	trayNoChannel:       "Connected, not in a channel",
+}
+
+var taskbarDescriptions = sync.OnceValue(func() [trayStateCount]*uint16 {
+	var result [trayStateCount]*uint16
+	for i, s := range taskbarDescriptionText {
 		result[i], _ = windows.UTF16PtrFromString(s)
 	}
 	return result
@@ -221,14 +235,14 @@ func (b *taskbarOverlayWindows) apply(s taskbarOverlayState) {
 	if b.queue.stopped.Load() || current == nil || *current != s || taskbarOwnedThread(s.hwnd) == 0 {
 		return
 	}
-	icons, err := taskbarIcons()
+	icon, err := taskbarOverlayIcon(s.mode)
 	if err != nil {
 		log.Printf("taskbar overlay: %v", err)
 		return
 	}
 	descriptions := taskbarDescriptions()
 	// #nosec G103 -- Cached UTF-16 descriptions and icon handles outlive the synchronous COM call.
-	hr := taskbarCOMCall(b.object, 18, s.hwnd, icons[s.mode][0], uintptr(unsafe.Pointer(descriptions[s.mode])))
+	hr := taskbarCOMCall(b.object, 18, s.hwnd, icon, uintptr(unsafe.Pointer(descriptions[s.mode])))
 	if err := taskbarHRESULT("set taskbar overlay", hr); err != nil {
 		b.release()
 		log.Printf("taskbar overlay: %v", err)
@@ -246,7 +260,7 @@ func (b *taskbarOverlayWindows) closeCOM() {
 	}
 }
 func queueTaskbarOverlay(hwnd uintptr, mode trayIconState) error {
-	if mode > trayTalkingDeafened {
+	if mode >= trayStateCount {
 		return fmt.Errorf("invalid taskbar state")
 	}
 	taskbarOverlayOwner.Lock()

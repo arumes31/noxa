@@ -8,10 +8,7 @@
 package main
 
 import (
-	_ "embed"
 	"log"
-	"runtime"
-	"strconv"
 	"sync"
 
 	"github.com/getlantern/systray"
@@ -29,16 +26,12 @@ type tray struct {
 	// without constructing a Wails runtime context.
 	emit func(string, any)
 
-	mu          sync.Mutex
-	mentions    int
-	speaking    bool
-	muted       bool
-	deafened    bool
-	visible     bool
-	isConnected bool
-	publish     func(trayPresentation, bool)
-	last        trayPresentation
-	presented   bool
+	mu        sync.Mutex
+	status    trayStatus
+	visible   bool
+	publish   func(trayPresentation, bool)
+	last      trayPresentation
+	presented bool
 
 	miShowHide   *systray.MenuItem
 	miMute       *systray.MenuItem
@@ -71,19 +64,19 @@ func (t *tray) onReady() {
 	t.mu.Lock()
 	t.publish = func(p trayPresentation, iconChanged bool) {
 		if iconChanged {
-			systray.SetIcon(trayIcons()[p.icon])
+			systray.SetIcon(trayIconFor(p.icon))
 			if err := setTaskbarIcon(p.icon); err != nil {
 				log.Printf("taskbar icon: %v", err)
 			}
 		}
 		systray.SetTitle(p.title)
 		systray.SetTooltip(p.tooltip)
-		if t.muted {
+		if t.status.muted {
 			t.miMute.SetTitle("Unmute microphone")
 		} else {
 			t.miMute.SetTitle("Mute microphone")
 		}
-		if t.deafened {
+		if t.status.deafened {
 			t.miDeafen.SetTitle("Unmute audio")
 		} else {
 			t.miDeafen.SetTitle("Mute audio")
@@ -119,9 +112,12 @@ func (t *tray) onReady() {
 // mutex serializes state changes and MenuItem updates from connection relays.
 func (t *tray) setConnected(isConnected bool) {
 	t.mu.Lock()
-	t.isConnected = isConnected
+	t.status.connected = isConnected
 	if !isConnected {
-		t.speaking = false
+		// A lost connection ends the voice session; the frontend confirms
+		// with its next SetTrayVoiceState after reconnecting.
+		t.status.speaking = false
+		t.status.inChannel = false
 	}
 	if t.miReconnect != nil {
 		if isConnected {
@@ -154,7 +150,7 @@ func traySetConnected(isConnected bool) {
 // defense against a delayed native-menu click.
 func (t *tray) reconnectLast() {
 	t.mu.Lock()
-	isConnected, emit := t.isConnected, t.emit
+	isConnected, emit := t.status.connected, t.emit
 	t.mu.Unlock()
 	if isConnected || emit == nil {
 		return
@@ -166,7 +162,7 @@ func (t *tray) reconnectLast() {
 // retry and clears the automatic-reconnect target before closing the tab.
 func (t *tray) disconnectActive() {
 	t.mu.Lock()
-	isConnected, emit := t.isConnected, t.emit
+	isConnected, emit := t.status.connected, t.emit
 	t.mu.Unlock()
 	if !isConnected || emit == nil {
 		return
@@ -228,36 +224,11 @@ func trayRefreshWindowIcon() {
 	}
 }
 
-type trayPresentation struct {
-	icon           trayIconState
-	title, tooltip string
-}
-
 func (t *tray) updateTitleLocked() {
 	if t.publish == nil {
 		return
 	}
-	mode, label := trayIdle, "Microphone on"
-	speaking := t.isConnected && t.speaking && !t.muted
-	switch {
-	case t.muted && t.deafened:
-		mode, label = trayBothMuted, "Microphone and audio muted"
-	case t.muted:
-		mode, label = trayMicMuted, "Microphone muted"
-	case speaking && t.deafened:
-		mode, label = trayTalkingDeafened, "Talking · Audio muted"
-	case t.deafened:
-		mode, label = trayDeafened, "Audio muted"
-	case speaking:
-		mode, label = trayTalking, "Talking"
-	}
-	p := trayPresentation{icon: mode, title: "noXa · " + label, tooltip: "noXa — " + label}
-	if !t.isConnected {
-		p.tooltip += " · Disconnected"
-	}
-	if t.mentions > 0 {
-		p.tooltip += " — " + strconv.Itoa(t.mentions) + " unread mention(s)"
-	}
+	p := trayPresent(t.status)
 	if t.presented && p == t.last {
 		return
 	}
@@ -265,22 +236,45 @@ func (t *tray) updateTitleLocked() {
 	t.last, t.presented = p, true
 }
 
-func (t *tray) setVoiceState(speaking, muted, deafened bool) {
+func (t *tray) setVoiceState(speaking, muted, deafened, inChannel bool) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	speaking = speaking && t.isConnected
-	if t.presented && t.speaking == speaking && t.muted == muted && t.deafened == deafened {
+	inChannel = inChannel && t.status.connected
+	speaking = speaking && inChannel
+	s := &t.status
+	if t.presented && s.speaking == speaking && s.muted == muted && s.deafened == deafened && s.inChannel == inChannel {
 		return
 	}
-	t.speaking, t.muted, t.deafened = speaking, muted, deafened
+	s.speaking, s.muted, s.deafened, s.inChannel = speaking, muted, deafened, inChannel
 	t.updateTitleLocked()
 }
 
-// SetTrayVoiceState receives the active voice session's detected speech and
-// independent input/output mute flags, including while the window is hidden.
-func (a *App) SetTrayVoiceState(speaking, muted, deafened bool) {
+func (t *tray) setUnread(count int) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	count = max(count, 0)
+	if t.presented && t.status.unread == count {
+		return
+	}
+	t.status.unread = count
+	t.updateTitleLocked()
+}
+
+// SetTrayVoiceState receives the active voice session's detected speech,
+// independent input/output mute flags, and whether a voice session is live in
+// a channel, including while the window is hidden.
+func (a *App) SetTrayVoiceState(speaking, muted, deafened, inChannel bool) {
 	if trayCtl != nil {
-		trayCtl.setVoiceState(speaking, muted, deafened)
+		trayCtl.setVoiceState(speaking, muted, deafened, inChannel)
+	}
+}
+
+// SetTrayUnread receives the frontend's count of unseen messages (channels,
+// DMs, private groups, background server tabs). The tray shows 1-9 or "9+";
+// the tooltip carries the exact number. Zero hides the counter.
+func (a *App) SetTrayUnread(count int) {
+	if trayCtl != nil {
+		trayCtl.setUnread(count)
 	}
 }
 
@@ -290,7 +284,7 @@ func trayAddMention() {
 		return
 	}
 	trayCtl.mu.Lock()
-	trayCtl.mentions++
+	trayCtl.status.mentions++
 	trayCtl.mu.Unlock()
 	trayCtl.updateTitle()
 }
@@ -301,7 +295,7 @@ func trayClearMentions() {
 		return
 	}
 	trayCtl.mu.Lock()
-	trayCtl.mentions = 0
+	trayCtl.status.mentions = 0
 	trayCtl.mu.Unlock()
 	trayCtl.updateTitle()
 }
@@ -317,18 +311,4 @@ func (a *App) TrayMention() {
 // focused again and the user has necessarily seen the messages.
 func (a *App) TrayClearMentions() {
 	trayClearMentions()
-}
-
-//go:embed build/windows/icon.ico
-var trayIconWindows []byte
-
-//go:embed frontend/public/branding/favicon-32.png
-var trayIconPNG []byte
-
-// trayIcon returns the embedded brand mark in the platform's native format.
-func trayIcon() []byte {
-	if runtime.GOOS == "windows" {
-		return trayIconWindows
-	}
-	return trayIconPNG
 }

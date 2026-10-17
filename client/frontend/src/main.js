@@ -75,7 +75,7 @@ import { dialogFocusableSelector, initModalSystem, mountServerDialog, closeServe
 import { parseRuntimeObject } from "./runtime-json.js";
 
 import { initWorkspace, renderMember, renderVoiceHints, cancelMemberVolumePreview } from "./workspace-ui.js";
-import { createTrayVoiceSync } from "./tray-state.js";
+import { createTrayVoiceSync, createTrayUnreadModel, trayInChannel } from "./tray-state.js";
 import { capturePresenceScope, presenceIsCurrent, desiredPresence, restorePresenceOnActivity, setPresence } from "./presence.js";
 import { captureMediaScope, mediaScopeIsCurrent, setWhisperRouting } from "./media-controls.js";
 
@@ -89,9 +89,16 @@ const publishTrayVoice = createTrayVoiceSync((...flags) => window.go.main.App.Se
 
 function syncTrayVoice() {
     const me = state.clients.find((client) => client.client_id === state.myClientID);
-    const speaking = !!(state.pc && !state.replayingTabID && state.myChannelID &&
-        me?.channel_id === state.myChannelID && me.is_speaking && !state.muted);
-    publishTrayVoice(speaking, state.muted, state.deafened);
+    const inChannel = trayInChannel(state);
+    const speaking = !!(inChannel && me?.channel_id === state.myChannelID && me.is_speaking && !state.muted);
+    publishTrayVoice(speaking, state.muted, state.deafened, inChannel);
+}
+
+// Tray unread counter: chat-ui reports the active tab's channel/DM badges,
+// conversations.js private groups, tabs.js background servers.
+const trayUnread = createTrayUnreadModel((count) => window.go.main.App.SetTrayUnread?.(count));
+function syncTrayUnread() {
+    trayUnread.set("chat", chatUI.unreadTotal());
 }
 
 const liveAnnouncements = createLiveAnnouncementQueue({
@@ -1170,6 +1177,7 @@ function actionSoundsSuppressed() {
 window.runtime.EventsOn("tab_replay_done", (tabID) => {
     if (String(tabID || "") !== state.replayingTabID) return;
     state.replayingTabID = "";
+    syncTrayVoice();
     // Identity resolution may have won or lost the race with this marker.
     // In either case, this resolves a new tab's first own-channel cue exactly
     // once, while restored tabs have no pending cue to play.
@@ -1257,6 +1265,7 @@ function syncOwnChannel({ audible = true, ownMove } = {}) {
     }
     const previousChannelID = state.myChannelID;
     state.myChannelID = channelID;
+    syncTrayVoice();
     // Snapshot/identity reconciliation is not an explicit request to unmute.
     // In particular, recovering a server must retain deafen and its mute state.
     const initialCuePending = state.pendingInitialChannelCueTabID === state.activeTabID;
@@ -1410,6 +1419,7 @@ window.runtime.EventsOn("event", (json) => {
                 const forcedMove = nextChannelID > 0 && nextChannelID !== previousChannelID
                     && d.by_client_id && d.by_client_id !== state.myClientID;
                 state.myChannelID = nextChannelID;
+                syncTrayVoice();
                 if (nextChannelID > 0 && nextChannelID !== previousChannelID && !actionSoundsSuppressed() && !automaticRestore) setDeafened(false);
                 let playedOwnCue = false;
                 if (!actionSoundsSuppressed()) {
@@ -1763,7 +1773,10 @@ function trayMention() {
     window.go.main.App.TrayMention();
 }
 
-window.addEventListener("focus", () => window.go.main.App.TrayClearMentions());
+window.addEventListener("focus", () => {
+    window.go.main.App.TrayClearMentions();
+    trayUnread.clearUnseen();
+});
 
 // ---------------------------------------------------------------------------
 // Avatars
@@ -1846,6 +1859,9 @@ function addChat(d) {
     // in chat-ui.js. Only a successfully routed E2EE message is a DM; global
     // chat also has no channel_id and must never enter the direct path.
     const result = chatUI.addChat(d);
+    // A message rendered into the open chat is unseen while the window is
+    // unfocused (hidden to tray, minimized, or behind another window).
+    if (result?.live && !state.replayingTabID && !document.hasFocus()) trayUnread.noteUnseen();
     if (result?.incomingDM) {
         // Track the last DM sender for the Ctrl+R whisper-reply hotkey (33).
         if (d.from_client_id) {
@@ -2233,6 +2249,7 @@ async function startVoice(expectedEpoch = voiceSessionEpoch) {
     if (state.pc && state.pc !== pc) resetICERestart(state.pc);
     state.pc = pc;
     state.voiceTabID = tabID;
+    syncTrayVoice(); // joined: the tray leaves the gray "not in a channel" state
     // A queued event can run between the read helper returning and this
     // continuation installing the peer. Reconcile it after startup's offer.
     if (limitsSequence !== mediaLimitsSequence) refreshLiveMediaLimits();
@@ -3194,6 +3211,7 @@ window.__noxa = {
     setDeafened, refreshPermissions, applyVoiceState, applyOutputSettings, applyLiveAudioSettings,
     startVADMonitor: startVoiceMonitor, stopVADMonitor: stopVoiceMonitor, prepareChannelMicrophone, readRemoteAudioLevel,
     connectFromLogin, renderTree, setChannelExpanded, setDetailsOpen, setDirectTargetVisible,
+    trayUnread, syncTrayUnread,
     clientName, initials, fetchAvatar,
     applyAppearance, toggleCompact, recentChannels, syncOwnChannel,
     playConnectionCue: (event = "connection_connected") => playEvent(event),

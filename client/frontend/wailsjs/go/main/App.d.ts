@@ -506,7 +506,9 @@ export function SetStatusForTab(arg1:string,arg2:string,arg3:string):Promise<str
 
 export function SetStreamVideoQualityForTab(arg1:string,arg2:string,arg3:string,arg4:string,arg5:string,arg6:string):Promise<string>;
 
-export function SetTrayVoiceState(arg1:boolean,arg2:boolean,arg3:boolean):Promise<void>;
+export function SetTrayUnread(arg1:number):Promise<void>;
+
+export function SetTrayVoiceState(arg1:boolean,arg2:boolean,arg3:boolean,arg4:boolean):Promise<void>;
 
 export function SetVideoQuality(arg1:string):Promise<string>;
 

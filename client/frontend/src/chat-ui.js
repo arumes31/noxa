@@ -1784,6 +1784,7 @@ function saveTabLayout(layout) {
 }
 
 function renderTabs() {
+    V()?.syncTrayUnread?.(); // every unread badge change re-renders the tab bar
     const scope = captureScope(readDMHistoryScope);
     const current = () => dmHistoryScopeIsCurrent(scope);
     const items = [];
@@ -2298,10 +2299,12 @@ export function addChat(d) {
         window.__noxaNotify?.notify(event, text, { ...context, announce: false,
             reference: { kind: "channel", channel_id: chID, message_id: m.id || 0 } });
     }
-    if (key === activeKey() && !isPrivateGroupActive()) {
+    const channelMuted = !!window.__noxaNotify?.channelOverride?.(chID)?.muted;
+    const live = key === activeKey() && !isPrivateGroupActive();
+    if (live) {
         if (position === "append") appendLive(m);
         else renderView();
-    } else if (!m.self && !window.__noxaNotify?.channelOverride?.(chID)?.muted) {
+    } else if (!m.self && !channelMuted) {
         // (104) unread badge for a non-selected channel. A muted channel (387)
         // suppresses the badge too — silencing only the sound would still nag
         // through the tree.
@@ -2315,6 +2318,8 @@ export function addChat(d) {
     }
     return {
         added: true,
+        // Shown in the open chat rather than badged (tray unseen counter).
+        live: live && !m.self && !channelMuted,
         announcement: eligibleChatAnnouncement(
             m, key, announcementEvent, announcementContext, announcementAllowed),
     };
@@ -2397,7 +2402,8 @@ function routeDM(d, m) {
         void sendPendingReads();
     }
 
-    if (key === activeKey() && !isPrivateGroupActive()) {
+    const live = key === activeKey() && !isPrivateGroupActive();
+    if (live) {
         appendLive(m);
     } else if (!m.self) {
         tab.unread++;
@@ -2406,6 +2412,7 @@ function routeDM(d, m) {
     renderTabs();
     return {
         added: true,
+        live: live && !m.self,
         incomingDM: !m.self && !m.offline,
         announcement: eligibleChatAnnouncement(
             m,
@@ -4365,6 +4372,14 @@ export function initChat() {
 
 export function unreadFor(chID) {
     return unread.get(chID) || null;
+}
+
+// Tray counter (main.js): the same badges unreadMessageReferences lists.
+export function unreadTotal() {
+    let total = 0;
+    for (const [channelID, value] of unread) if (channelID === 0 || subscribed(channelID)) total += value.n || 0;
+    for (const peer of pmTabs.values()) total += peer.unread || 0;
+    return total;
 }
 
 export function unreadMessageReferences() {

@@ -59,6 +59,7 @@ export function isPrivateGroupActive() { return !!workspace?.active(); }
 export function privateGroupViewToken() { return workspace?.token(); }
 export function filterConversations() { workspace?.filter(); }
 export function resetConversations() {
+    V()?.trayUnread?.set("groups", 0); // the group list belongs to one server tab
     workspace?.destroy(); workspace = null;
     refreshOpen = null; viewedGroup = null;
 }
@@ -156,6 +157,7 @@ export function initConversations() {
             if (group.members.find(member => member.unique_id === uid())?.pending) invitations++;
             else unread += group.unread_count || 0;
         }
+        V().trayUnread?.set("groups", unread);
         for (const [badge, count, key] of [[summaryUnread, unread, "group.unread"], [summaryInvitations, invitations, "group.invitations"]]) {
             badge.textContent = count > 99 ? "99+" : String(count); badge.hidden = !count;
             badge.setAttribute("aria-label", t(key, { count })); badge.title = t(key, { count });
