@@ -1,0 +1,80 @@
+.dlg.dlg-wide.update-dlg {
+    --upd-bg: #141524; --upd-low: #0c0e1b; --upd-up: #27223d;
+    --upd-text: #f2ecff; --upd-muted: #b2a8c9; --upd-line: #443a5c;
+    --upd-accent: #c3a4ff; --upd-hot: #f7ecff; --upd-on: #201332; --upd-track: #332c48;
+    gap: 0; width: 590px; max-width: calc(100vw - 32px); padding: 0; border-radius: 22px;
+    color: var(--upd-text); border: 1px solid var(--upd-line); overflow: hidden;
+    background: radial-gradient(ellipse at top right, #c3a4ff1f, transparent 65%), var(--upd-bg);
+    box-shadow: 0 24px 70px #0005;
+}
+:root[data-theme="light"] .update-dlg {
+    --upd-bg: #f8f5fd; --upd-low: #eee9f6; --upd-up: #efe8fa;
+    --upd-text: #2a2341; --upd-muted: #6d617f; --upd-line: #d8cce8;
+    --upd-accent: #7851b6; --upd-hot: #af83e6; --upd-on: #fdfaff; --upd-track: #ddd4eb;
+}
+:root[data-theme="hc"] .update-dlg {
+    --upd-bg: #000; --upd-low: #000; --upd-up: #151515; --upd-text: #fff;
+    --upd-muted: #fff; --upd-line: #fff; --upd-accent: #e6ccff; --upd-hot: #fff; --upd-on: #000; --upd-track: #555;
+}
+.update-dlg .upd-header { padding: 22px 25px 18px; text-align: center; border-bottom: 1px solid var(--upd-line); }
+.update-dlg .upd-brand { display: flex; align-items: center; justify-content: center; gap: 10px; font-size: 24px; font-weight: 650; }
+.update-dlg .upd-brand img { width: 43px; height: 43px; object-fit: contain; }
+.update-dlg h3 { margin: 10px 0 0; font-size: 10px; font-weight: 600; letter-spacing: .16em; text-transform: uppercase; color: var(--upd-muted); }
+.update-dlg .upd-body { padding: 28px 25px 22px; }
+.update-dlg h4 { text-align: center; font-size: 27px; line-height: 1.25; margin: 0 0 24px; font-weight: 550; }
+.update-dlg .upd-versions { display: grid; grid-template-columns: 1fr 25px 1fr; align-items: center; gap: 12px; margin-bottom: 23px; }
+.update-dlg .upd-version { padding: 17px 14px; border: 1px solid var(--upd-line); border-radius: 12px; background: var(--upd-low); min-width: 0; text-align: center; }
+.update-dlg .upd-version span { display: block; font-size: 11px; color: var(--upd-muted); margin-bottom: 9px; }
+.update-dlg .upd-version strong { display: block; font-size: 21px; overflow-wrap: anywhere; }
+.update-dlg .upd-version-new { background: var(--upd-up); color: var(--upd-accent); }
+.update-dlg .upd-version-arrow { text-align: center; color: var(--upd-muted); }
+.update-dlg .upd-current { margin: 0; color: inherit; }
+.update-dlg .upd-status { margin: 0; text-align: center; color: var(--upd-muted); font-size: 12px; overflow-wrap: anywhere; }
+.update-dlg .upd-status.warn { color: var(--warn, #ffbc83); }
+.update-dlg .upd-progress { display: block; gap: 0; margin: 0; }
+.update-dlg .upd-core { display: block; width: 100%; height: 200px; }
+.update-dlg .upd-metrics, .update-dlg .upd-details { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.update-dlg .upd-speed { color: var(--upd-accent); margin: 0; }
+.update-dlg .upd-speed-label { display: block; font-size: 10px; color: var(--upd-muted); margin-bottom: 5px; }
+.update-dlg .upd-speed strong { font-size: clamp(22px, 4.5vw, 37px); font-weight: 500; letter-spacing: -.05em; }
+.update-dlg .upd-pct { font-size: 30px; color: var(--upd-text); text-align: right; }
+.update-dlg .upd-details { color: var(--upd-muted); font-size: 11px; margin-top: 17px; flex-wrap: wrap; }
+.update-dlg .upd-bar { height: 2px; background: var(--upd-track); margin-top: 18px; }
+.update-dlg .upd-fill { background: var(--upd-accent); }
+.update-dlg .upd-footer { display: flex; align-items: center; justify-content: center; gap: 16px; padding: 17px 25px; border-top: 1px solid var(--upd-line); }
+.update-dlg .upd-block-size { display: none; color: var(--upd-muted); font-size: 10px; }
+.update-dlg .dlg-buttons { margin: 0; display: flex; justify-content: center; gap: 9px; flex-wrap: wrap; }
+.update-dlg button { border: 1px solid var(--upd-line); background: transparent; color: var(--upd-text); border-radius: 7px; padding: 9px 13px; }
+.update-dlg .upd-update { color: var(--upd-on); background: var(--upd-accent); border-color: var(--upd-accent); }
+.update-dlg button:focus-visible { outline: 2px solid var(--upd-accent); outline-offset: 3px; }
+.update-dlg button:disabled { opacity: .55; }
+.update-dlg .upd-countdown { text-align: center; margin-top: 17px; color: var(--upd-accent); font-size: 14px; }
+.update-dlg[data-view="download"] .upd-offer { display: none; }
+.update-dlg[data-view="download"] .upd-body { animation: upd-bloom 540ms cubic-bezier(.2,.7,.2,1) both; }
+.update-dlg[data-view="download"] .upd-footer { justify-content: space-between; }
+.update-dlg[data-view="download"] .upd-block-size { display: block; }
+.update-dlg .hidden { display: none !important; }
+@keyframes upd-bloom { from { opacity: 0; transform: scale(.86); filter: blur(7px); } to { opacity: 1; transform: scale(1); filter: blur(0); } }
+@media (max-width: 520px) {
+    .update-dlg .upd-header, .update-dlg .upd-body, .update-dlg .upd-footer { padding-left: 18px; padding-right: 18px; }
+    .update-dlg h4 { font-size: 23px; }
+    .update-dlg .upd-version strong { font-size: 17px; }
+    .update-dlg .upd-versions { gap: 7px; }
+    .update-dlg .upd-footer { flex-wrap: wrap; }
+}
+@media (prefers-reduced-motion: reduce) {
+    .update-dlg *, .update-dlg[data-view="download"] .upd-body { animation: none !important; transition: none !important; }
+}
+
+.update-dlg .upd-bits { margin-top: 5px; color: var(--upd-muted); font-size: 11px; }
+
+.update-dlg .upd-route { display: none; margin-top: 10px; font-size: 10px; color: var(--upd-muted); }
+.update-dlg[data-view="download"] .upd-route { display: block; }
+.update-dlg[data-phase="downloading"] .upd-update:disabled,
+.update-dlg[data-phase="downloading"] .upd-close:disabled { display: none; }
+.update-dlg .upd-bar { display: none; }
+
+:root[data-reduce-motion="1"] .update-dlg * { animation: none !important; transition: none !important; }
+
+.update-dlg:not([data-phase="downloading"]) .upd-block-size { display: none; }
+.update-dlg:not([data-phase="downloading"]) .upd-footer { justify-content: center; }

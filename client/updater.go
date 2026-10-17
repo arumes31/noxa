@@ -269,8 +269,10 @@ func checkForUpdateContext(ctx context.Context) (UpdateInfo, error) {
 }
 
 type updateProgress struct {
-	Percent        int     `json:"percent"`
-	BytesPerSecond float64 `json:"bytes_per_second"`
+	DownloadedBytes int64   `json:"downloaded_bytes"`
+	TotalBytes      int64   `json:"total_bytes"`
+	Percent         int     `json:"percent"`
+	BytesPerSecond  float64 `json:"bytes_per_second"`
 }
 
 type updateProgressSampler struct {
@@ -283,7 +285,7 @@ func (s *updateProgressSampler) sample(written, total int64, now time.Time, comp
 	if (!complete && elapsed < 250*time.Millisecond) || (complete && written > 0 && written == s.lastBytes) {
 		return updateProgress{}, false
 	}
-	progress := updateProgress{Percent: -1}
+	progress := updateProgress{Percent: -1, DownloadedBytes: written, TotalBytes: total}
 	if total > 0 {
 		progress.Percent = int(min(written*100/total, 100))
 	}

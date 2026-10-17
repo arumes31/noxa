@@ -248,15 +248,15 @@ func TestUpdateProgressSamplesTransferredBytes(t *testing.T) {
 		t.Fatal("progress events should be throttled")
 	}
 	progress, ok := sampler.sample(1024, 10240, start.Add(500*time.Millisecond), false)
-	if !ok || progress.Percent != 10 || progress.BytesPerSecond != 2048 {
+	if !ok || progress.Percent != 10 || progress.BytesPerSecond != 2048 || progress.DownloadedBytes != 1024 || progress.TotalBytes != 10240 {
 		t.Fatalf("first sample: %+v, reported=%v", progress, ok)
 	}
 	progress, ok = sampler.sample(1536, -1, start.Add(1500*time.Millisecond), false)
-	if !ok || progress.Percent != -1 || progress.BytesPerSecond != 512 {
+	if !ok || progress.Percent != -1 || progress.BytesPerSecond != 512 || progress.DownloadedBytes != 1536 || progress.TotalBytes != -1 {
 		t.Fatalf("unknown total after a slower interval: %+v, reported=%v", progress, ok)
 	}
 	progress, ok = sampler.sample(1600, 1600, start.Add(1510*time.Millisecond), true)
-	if !ok || progress.Percent != 100 || progress.BytesPerSecond != 6400 {
+	if !ok || progress.Percent != 100 || progress.BytesPerSecond != 6400 || progress.DownloadedBytes != 1600 || progress.TotalBytes != 1600 {
 		t.Fatalf("final partial interval: %+v, reported=%v", progress, ok)
 	}
 	if _, ok := sampler.sample(1600, 1600, start.Add(1520*time.Millisecond), true); ok {
@@ -307,6 +307,14 @@ func TestDownloadToReportsSpeedForKnownAndUnknownSizes(t *testing.T) {
 			}
 			if len(progress) == 0 || progress[len(progress)-1].Percent != tt.percent || progress[len(progress)-1].BytesPerSecond <= 0 {
 				t.Fatalf("missing final speed for %s: %+v", tt.name, progress)
+			}
+			final := progress[len(progress)-1]
+			wantTotal := int64(len("download data"))
+			if tt.chunked {
+				wantTotal = -1
+			}
+			if final.DownloadedBytes != int64(len("download data")) || final.TotalBytes != wantTotal {
+				t.Fatalf("actual transferred bytes/Content-Length mismatch: %+v", final)
 			}
 		})
 	}
