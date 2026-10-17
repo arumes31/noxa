@@ -225,6 +225,10 @@ function render() {
     entries = collect();
     publishUnread(entries);
     if (!active || !ui) return;
+    // A group this user left or was removed from leaves the selection once the
+    // authoritative list no longer has it; the newest conversation follows.
+    const snapshot = listedPrivateGroups();
+    if (selected?.kind === "group" && snapshot && viewedConversationID() !== selected.id && !snapshot.groups.some(group => group.id === selected.id)) selected = null;
     if (!selected) {
         const first = entries.find(entry => !entry.invitation) || entries[0];
         if (first) { select(first, { focus: false }); return; }
