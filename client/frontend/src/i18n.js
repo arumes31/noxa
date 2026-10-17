@@ -43,6 +43,7 @@ import { communicationExtrasEnglish, communicationExtrasGerman } from "./communi
 import { messageToolsEnglish, messageToolsGerman } from "./message-tools-messages.js";
 import { webhookEnglish, webhookGerman } from "./webhook-messages.js";
 import { directMessageEnglish, directMessageGerman } from "./dm-messages.js";
+import { shellEnglish, shellGerman } from "./shell-messages.js";
 
 const en = {
     ...directMessageEnglish,
@@ -68,6 +69,7 @@ const en = {
     ...settingsShellEnglish,
     ...securityEnglish,
     ...interfaceEnglish,
+    ...shellEnglish,
     "menu.connections": "Connections",
     "menu.bookmarks": "Bookmarks",
     "menu.self": "Self",
@@ -173,6 +175,7 @@ const de = {
     ...settingsShellGerman,
     ...securityGerman,
     ...interfaceGerman,
+    ...shellGerman,
     "menu.connections": "Verbindungen",
     "menu.bookmarks": "Lesezeichen",
     "menu.self": "Selbst",

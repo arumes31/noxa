@@ -97,6 +97,11 @@ type Channel struct {
 	// Description is the channel's long description (112/113), rendered
 	// client-side with markdown.
 	Description string
+	// TextOnly marks a text channel (migration 042): members read and write
+	// its chat through channel subscriptions, but nobody can join it for
+	// voice. It is fixed at creation. Snapshots marshal it as "TextOnly";
+	// older clients ignore the field and get a join error instead.
+	TextOnly bool
 }
 
 // SpeakingState records that a client is currently speaking in a channel.

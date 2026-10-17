@@ -184,6 +184,11 @@ func (s *TCPServer) joinChannelAllowed(ctx context.Context, client *Client, msg 
 	if !ok {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeNotFound, "channel not found")
 	}
+	// Text channels are read and written through chat subscriptions. Refuse
+	// before the password check so a voice join never probes the password.
+	if ch.TextOnly {
+		return s.sendErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, state.ErrTextChannel.Error())
+	}
 
 	bypassPassword := s.roleAllowed(ctx, client, msg.ChannelID, authorization.BypassChannelPassword)
 	if ch.PasswordHash != "" && !bypassPassword {

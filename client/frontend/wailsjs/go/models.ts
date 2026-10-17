@@ -3656,6 +3656,7 @@ export namespace netproto {
 	    access?: RoleChannelAccess;
 	    settings?: RoleChannelSettings;
 	    channel_type: number;
+	    text_only?: boolean;
 	    password?: string;
 	    set_password?: boolean;
 
@@ -3674,6 +3675,7 @@ export namespace netproto {
 	        this.access = this.convertValues(source["access"], RoleChannelAccess);
 	        this.settings = this.convertValues(source["settings"], RoleChannelSettings);
 	        this.channel_type = source["channel_type"];
+	        this.text_only = source["text_only"];
 	        this.password = source["password"];
 	        this.set_password = source["set_password"];
 	    }

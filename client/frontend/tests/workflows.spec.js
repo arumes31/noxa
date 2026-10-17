@@ -6260,7 +6260,7 @@ test("retries a missing or disconnected microphone without interrupting video or
         for (const callback of window.__events.event || []) callback(moved);
     });
 
-    await expect(page.locator("#voice-status")).toHaveText("voice on");
+    await expect(page.locator("#voice-status")).toHaveText("Voice connected");
     expect(await page.evaluate(() => window.__cameraRequests)).toBe(0);
     await expect(page.locator("#local-video")).toBeHidden();
     await page.getByRole("button", { name: "Camera off — click to turn on", exact: true }).click();
@@ -6362,7 +6362,7 @@ test("camera stays off on joins and reconnects, and discards a late enable reque
         v.state.channels = [{ ChannelID: 42, Name: "Lobby" }];
         await v.ensureVoiceForChannel();
     });
-    await expect(page.locator("#voice-status")).toHaveText("voice on");
+    await expect(page.locator("#voice-status")).toHaveText("Voice connected");
     expect(await page.evaluate(() => window.__cameraRequests)).toBe(0);
     const enable = page.getByRole("button", { name: "Camera off — click to turn on", exact: true });
     await enable.click();
@@ -6380,7 +6380,7 @@ test("camera stays off on joins and reconnects, and discards a late enable reque
         window.__cameraRemote = new RTCPeerConnection();
         await v.ensureVoiceForChannel();
     });
-    await expect(page.locator("#voice-status")).toHaveText("voice on");
+    await expect(page.locator("#voice-status")).toHaveText("Voice connected");
     await expect(page.locator("#local-video")).toBeHidden();
     expect(await page.evaluate(() => window.__enabledCameraTrack.readyState)).toBe("ended");
     expect(await page.evaluate(() => window.__cameraRequests)).toBe(2);
@@ -6531,7 +6531,7 @@ for (const failure of ["failRead", "failCaps", "failOffer"]) {
             window.__mediaUpdate.limits = { video_max_width: 320, video_max_height: 180, video_max_bitrate: 1000000 };
             window.__emitLimits();
         }, failure);
-        await expect(page.locator("#voice-status")).toHaveText("voice unavailable");
+        await expect(page.locator("#voice-status")).toHaveText("Voice unavailable");
         expect(await page.evaluate(() => ({ state: window.__mediaUpdate.track.readyState, peer: window.__noxa.state.pc, limits: window.__noxa.state.mediaLimits })))
             .toEqual({ state: "ended", peer: null, limits: null });
         expect(errors).toEqual([]);
@@ -6580,7 +6580,7 @@ test("live media update timeout tears down its peer and late completion leaves a
     await page.evaluate(() => { window.__mediaUpdate.holdRead = true; window.__emitLimits(); });
     await expect.poll(() => page.evaluate(() => typeof window.__mediaUpdate.finishRead)).toBe("function");
     await page.clock.fastForward(10001);
-    await expect(page.locator("#voice-status")).toHaveText("voice unavailable");
+    await expect(page.locator("#voice-status")).toHaveText("Voice unavailable");
     expect(await page.evaluate(() => window.__mediaUpdate.track.readyState)).toBe("ended");
     await page.evaluate(() => {
         const state = window.__noxa.state;
@@ -6613,7 +6613,7 @@ for (const stage of ["queue", "constraints", "offer"]) {
         }, stage);
         await expect.poll(() => page.evaluate(stage => typeof window.__mediaUpdate[stage === "offer" ? "finishOffer" : "finishWork"], stage)).toBe("function");
         await page.clock.fastForward(10001);
-        await expect(page.locator("#voice-status")).toHaveText("voice unavailable");
+        await expect(page.locator("#voice-status")).toHaveText("Voice unavailable");
         expect(await page.evaluate(() => window.__mediaUpdate.track.readyState)).toBe("ended");
         await page.evaluate(stage => window.__mediaUpdate[stage === "offer" ? "finishOffer" : "finishWork"](), stage);
         await expect.poll(() => page.evaluate(() => window.__noxa.state.pc)).toBeNull();
@@ -6642,7 +6642,7 @@ test("live media update waits for startup's offer before rebuilding", async ({ p
         await window.__mediaUpdate.start;
     });
     await expect.poll(() => page.evaluate(() => window.__mediaUpdate.offers.length)).toBe(2);
-    await expect(page.locator("#voice-status")).toHaveText("voice on");
+    await expect(page.locator("#voice-status")).toHaveText("Voice connected");
 });
 
 test("live media timeout releases startup ownership before an old offer finishes", async ({ page }) => {
@@ -6658,16 +6658,16 @@ test("live media timeout releases startup ownership before an old offer finishes
     await expect.poll(() => page.evaluate(() => typeof window.__mediaUpdate.finishOffer)).toBe("function");
     await page.evaluate(() => { window.__mediaUpdate.finishOldOffer = window.__mediaUpdate.finishOffer; window.__emitLimits(); });
     await page.clock.fastForward(10001);
-    await expect(page.locator("#voice-status")).toHaveText("voice unavailable");
+    await expect(page.locator("#voice-status")).toHaveText("Voice unavailable");
     await page.evaluate(() => { window.__mediaUpdate.nextStart = window.__noxa.ensureVoiceForChannel(); });
     await expect.poll(() => page.evaluate(() => window.__mediaUpdate.offers.length)).toBe(2);
     await page.evaluate(async () => {
         window.__mediaUpdate.finishOldOffer();
         await window.__mediaUpdate.firstStart;
     });
-    await expect(page.locator("#voice-status")).toHaveText("voice connecting…");
+    await expect(page.locator("#voice-status")).toHaveText("Connecting voice…");
     await page.evaluate(async () => { window.__mediaUpdate.finishOffer(); await window.__mediaUpdate.nextStart; });
-    await expect(page.locator("#voice-status")).toHaveText("voice on");
+    await expect(page.locator("#voice-status")).toHaveText("Voice connected");
     expect(await page.evaluate(() => window.__mediaUpdate.offers.length)).toBe(2);
 });
 
@@ -6684,7 +6684,7 @@ test("voice startup limits deadline releases microphone capture before any peer 
     await expect.poll(() => page.evaluate(() => typeof window.__mediaUpdate.finishRead)).toBe("function");
     await page.evaluate(() => window.__emitLimits());
     await page.clock.fastForward(10001);
-    await expect(page.locator("#voice-status")).toHaveText("voice unavailable");
+    await expect(page.locator("#voice-status")).toHaveText("Voice unavailable");
     expect(await page.evaluate(() => window.__mediaUpdate.track.readyState)).toBe("ended");
     await page.evaluate(async () => { window.__mediaUpdate.finishRead({ video_max_bitrate: 100 }); await window.__mediaUpdate.start; });
     expect(await page.evaluate(() => window.__noxa.state.pc)).toBeNull();
@@ -6761,7 +6761,7 @@ test("media-limit bridge failure releases capture and exits connecting state", a
         } });
         await v.ensureVoiceForChannel();
     });
-    await expect(page.locator("#voice-status")).toHaveText("voice unavailable");
+    await expect(page.locator("#voice-status")).toHaveText("Voice unavailable");
     expect(await page.evaluate(() => window.__limitsCapture.getTracks()[0].readyState)).toBe("ended");
     expect(await page.evaluate(() => window.__noxa.state.mediaLimits)).toBeNull();
 });
@@ -8116,7 +8116,7 @@ test.describe("per-tab automatic reconnect", () => {
             for (const cb of window.__events.snapshot) cb(JSON.stringify({ root_channels: [{ ChannelID: 1, Name: "Public1", ParentID: 0,
                 clients: [{ client_id: "alice-other", nickname: "Alice", channel_id: 1 }, { client_id: "bob-other", nickname: "Bob", channel_id: 1 }] }] }));
             document.getElementById("chat-text").value = "Keep this unsent draft";
-            document.getElementById("tree-expand").focus();
+            document.getElementById("channel-create-btn").focus(); // the tree tools are folded away behind the filter toggle
             window.__tabReconnectGate = new Promise(resolve => { window.__finishOverlayRetry = resolve; });
             window.__loseTab("tab-a");
         });
@@ -8845,7 +8845,7 @@ test("removes cascaded deleted channels and displaces every cached member safely
     });
     await expect(page.locator('.channel[data-chid="10"], .channel[data-chid="11"], .channel[data-chid="12"]')).toHaveCount(0);
     await expect(page.locator('.channel[data-chid="20"]')).toHaveCount(1);
-    await expect(page.locator("#voice-status")).toHaveText("voice off");
+    await expect(page.locator("#voice-status")).toHaveText("Voice disconnected");
     await expect(page.locator("#files-pane .fb-list")).toContainText("Join a channel to browse its files");
 
     // Legacy servers send only the parent channel_id. Re-enter the surviving
@@ -8882,7 +8882,7 @@ test("removes cascaded deleted channels and displaces every cached member safely
         expandedDeleted: true,
     });
     await expect(page.locator('.channel[data-chid="20"], .channel[data-chid="21"], .channel[data-chid="22"]')).toHaveCount(0);
-    await expect(page.locator("#voice-status")).toHaveText("voice off");
+    await expect(page.locator("#voice-status")).toHaveText("Voice disconnected");
 });
 
 test("starts voice silently when channel speech is disabled", async ({ page }) => {
@@ -8920,7 +8920,7 @@ test("starts voice silently when channel speech is disabled", async ({ page }) =
     await expect(page.locator("#voice-join")).toHaveCount(0);
     await expect.poll(() => page.evaluate(() => window.__getUserMediaCalls)).toBeGreaterThan(0);
     expect(await page.evaluate(() => window.__playedMedia)).toEqual([]);
-    await expect(page.locator("#voice-status")).toHaveText("voice unavailable");
+    await expect(page.locator("#voice-status")).toHaveText("Voice unavailable");
     await expect(page.locator("#mic-status > span")).toHaveText("Microphone access denied");
 
     const firstCueCount = await page.evaluate(() => window.__playedMedia.length);

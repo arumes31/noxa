@@ -177,7 +177,8 @@ func (s *TCPServer) changeRoleChannel(ctx context.Context, actor int64, request 
 	}
 	switch request.Kind {
 	case authorization.ChannelCreate:
-		if request.Settings == nil || request.ChannelID != 0 || request.SyncToParent || request.ChannelType < 0 || request.ChannelType > 2 || len(request.Password) > 4096 {
+		if request.Settings == nil || request.ChannelID != 0 || request.SyncToParent || request.ChannelType < 0 || request.ChannelType > 2 || len(request.Password) > 4096 ||
+			(request.TextOnly && request.ChannelType == 0) {
 			return netproto.RoleChannelResult{}, authorization.ErrRoleInvalid
 		}
 		change.Temporary = request.ChannelType == 0
@@ -215,9 +216,9 @@ func (s *TCPServer) changeRoleChannel(ctx context.Context, actor int64, request 
 				return netproto.RoleChannelResult{}, err
 			}
 		}
-		create = &store.RoleChannelCreate{Name: settings.Name, Topic: settings.Topic, Description: settings.Description, OrderIndex: settings.OrderIndex, ChannelType: request.ChannelType, MaxClients: settings.MaxClients, SlowModeSeconds: settings.SlowModeSeconds, PasswordHash: passwordHash, OpusBitrate: settings.OpusBitrate, OpusFEC: settings.OpusFEC, OpusDTX: settings.OpusDTX, OpusStereo: settings.OpusStereo}
+		create = &store.RoleChannelCreate{Name: settings.Name, Topic: settings.Topic, Description: settings.Description, OrderIndex: settings.OrderIndex, ChannelType: request.ChannelType, MaxClients: settings.MaxClients, SlowModeSeconds: settings.SlowModeSeconds, PasswordHash: passwordHash, OpusBitrate: settings.OpusBitrate, OpusFEC: settings.OpusFEC, OpusDTX: settings.OpusDTX, OpusStereo: settings.OpusStereo, TextOnly: request.TextOnly}
 	case authorization.ChannelEdit, authorization.ChannelMove, authorization.ChannelDelete:
-		if request.ChannelID < 1 || request.Access != nil || (request.Password != "" && !request.SetPassword) || len(request.Password) > 4096 || request.ChannelType != 0 || (request.Kind == authorization.ChannelEdit) != (request.Settings != nil) || (request.Kind != authorization.ChannelMove && (request.ParentID != 0 || request.SyncToParent)) {
+		if request.ChannelID < 1 || request.TextOnly || request.Access != nil || (request.Password != "" && !request.SetPassword) || len(request.Password) > 4096 || request.ChannelType != 0 || (request.Kind == authorization.ChannelEdit) != (request.Settings != nil) || (request.Kind != authorization.ChannelMove && (request.ParentID != 0 || request.SyncToParent)) {
 			return netproto.RoleChannelResult{}, authorization.ErrRoleInvalid
 		}
 		if request.SetPassword {
