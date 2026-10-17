@@ -124,14 +124,18 @@ describe("times and day separators", () => {
 });
 
 describe("thread encryption claim", () => {
-    it("is end-to-end only while the peer key resolves, and says so when it falls back", () => {
+    it("is end-to-end only while the peer key resolves, and warns that nothing can be sent without it", () => {
         assert.deepEqual(conversationEncryption({ peerKey: true }), { kind: "lock", labelKey: "dm.encryption.e2e", helpKey: "chat.directHelp" });
-        assert.deepEqual(conversationEncryption({ peerKey: false, last: e2e("x") }), { kind: "shield", labelKey: "dm.encryption.server", helpKey: "chat.directServerHelp" });
+        assert.deepEqual(conversationEncryption({ peerKey: false, last: e2e("x") }), { kind: "warning", labelKey: "dm.encryption.noKey", helpKey: "dm.encryption.noKeyHelp" });
     });
 
     it("falls back to the newest message when the key could not be checked", () => {
         assert.equal(conversationEncryption({ last: e2e("x") }).kind, "lock");
-        assert.equal(conversationEncryption({ last: { text: "x", direct: true, enc: true, encVerified: true, encMode: "server" } }).kind, "shield");
+        // A server-mode DM is never shielded.
+        assert.deepEqual(conversationEncryption({ last: { text: "x", direct: true, enc: true, encVerified: true, encMode: "server" } }),
+            { kind: "warning", labelKey: "dm.encryption.unverified", helpKey: "chat.downgradedHelp" });
+        // Even a shield-drawing message without the direct flag is no shield here.
+        assert.equal(conversationEncryption({ last: { text: "x", enc: true } }).kind, "warning");
         const refused = conversationEncryption({ last: { text: "plain", direct: true } });
         assert.equal(refused.kind, "warning");
         assert.equal(refused.helpKey, "chat.plaintextHelp");

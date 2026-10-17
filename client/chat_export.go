@@ -104,8 +104,9 @@ func chatExportHistoryWith(m *connManager, requestID string, channelID int64, ma
 // visible as a gap instead of looking like a quiet channel.
 //
 // Every line names its encryption, matching the badge in the chat view:
-// "e2e" (lock), "server" (client→server→client, shield) or, for a body this
-// client did not open itself, "unverified" (warning).
+// "e2e" (lock), "server" (client→server→client channel or global message,
+// shield), "downgraded" (a DM opened with the server-held key, warning) or,
+// for a body this client did not open itself, "unverified" (warning).
 func chatExportLine(m netproto.ChatHistoryEntry, mode string) string {
 	body := m.Body
 	if m.Deleted {
@@ -126,7 +127,7 @@ func chatExportLine(m netproto.ChatHistoryEntry, mode string) string {
 		case "server":
 			tag = "[server encrypted] "
 		case dmModeDowngraded:
-			tag = "[unverified: server encrypted, contact normally end-to-end] "
+			tag = "[unverified: server encrypted] "
 		default:
 			tag = "[unverified] "
 		}

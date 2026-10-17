@@ -1997,6 +1997,8 @@ export function clearDirectHistory(uid) {
 function dmMsg(e, peerNick) {
     const st = V().state;
     const self = !!e.self;
+    const mode = storedDMMode(e);
+    const verified = mode === "e2e";
     return {
         id: 0,
         localSeq: Number(e.seq) || 0,
@@ -2010,19 +2012,27 @@ function dmMsg(e, peerNick) {
         mentions: [],
         e2e: false,
         direct: true,
-        enc: !!e.enc_verified,
-        encVerified: !!e.enc_verified,
-        // A verified record without a mode predates the server-encrypted
-        // fallback, so it was end-to-end. An unverified legacy record keeps
-        // the text the user already saw, under a warning badge.
-        encMode: e.enc_verified ? (e.enc_mode === "server" ? "server" : "e2e") : encModeFrom(false, e.enc_mode),
-        localUnverified: !e.enc_verified,
+        enc: verified,
+        encVerified: verified,
+        encMode: mode,
+        localUnverified: !verified,
         offline: !!e.offline,
         clientMsgID: e.client_msg_id || "",
         channelID: null,
         self,
         mentioned: false,
     };
+}
+
+// storedDMMode maps a local DM record to its badge mode. A verified record
+// without a mode predates the field, so it was end-to-end. DMs are end-to-end
+// only: a record verified as "server" (the retired fallback) shows as
+// downgraded, never as verified. An unverified legacy record keeps the text
+// the user already saw, under a warning badge.
+function storedDMMode(e) {
+    if (!e.enc_verified) return encModeFrom(false, e.enc_mode);
+    if (!e.enc_mode || e.enc_mode === "e2e") return "e2e";
+    return e.enc_mode === "server" ? DOWNGRADED : "";
 }
 
 // ensureDMHistory replays a peer's log into its store once per session. It

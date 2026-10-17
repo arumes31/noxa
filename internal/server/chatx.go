@@ -1433,6 +1433,10 @@ func (s *TCPServer) handleEmojiGet(ctx context.Context, client *Client, f *netpr
 // configuration, not message content, and stays plain.
 func sealedSetting(key string) bool { return key == "motd" || key == "announcement" }
 
+// errServerSealedDM refuses a direct message sealed with a scope key: DMs
+// are end-to-end only.
+const errServerSealedDM = "direct messages must be end-to-end encrypted"
+
 // errPlaintextChat is the refusal for any unencrypted chat body. There is no
 // configuration that admits plaintext chat bodies (chat_allow_plaintext is
 // ignored for message content).

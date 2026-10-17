@@ -13,12 +13,15 @@ test("every displayed message gets lock, shield or warning", () => {
     assert.equal(encryptionBadge({ text: "hi", enc: true, encMode: "e2e" }).label, "chat.groupHelp");
     assert.equal(encryptionBadge({ text: "hi", direct: true, encMode: "e2e" }).label, "chat.directHelp");
 
-    // Client→server→client: channel/global, and the DM fallback.
+    // Client→server→client: channel and global chat only.
     assert.equal(kind({ text: "hi", enc: true }), "shield");
     assert.equal(kind({ text: "hi", enc: true, encVerified: true, encMode: "server" }), "shield");
-    const fallback = encryptionBadge({ text: "hi", direct: true, enc: true, encVerified: true, encMode: "server" });
-    assert.deepEqual(fallback, { kind: "shield", label: "chat.directServerHelp", bodyKey: "" });
+    assert.equal(kind({ text: "hi", channelID: 4, enc: true, encVerified: true, encMode: "server" }), "shield");
     assert.equal(encryptionBadge({ text: "hi", enc: true }).label, "chat.channelHelp");
+    assert.equal(encryptionBadge({ text: "hi", enc: true, encVerified: true, encMode: "server" }).label, "chat.channelHelp");
+    // DMs are end-to-end only: a server-mode DM is a warning, never a shield.
+    const serverDM = encryptionBadge({ text: "hi", direct: true, enc: true, encVerified: true, encMode: "server" });
+    assert.deepEqual(serverDM, { kind: "warning", label: "chat.downgradedHelp", bodyKey: "" });
 
     // No evidence at all: plaintext is refused, never shown.
     for (const m of [{ text: "plain" }, { text: "plain", direct: true }, { text: "plain", channelID: 4 }]) {

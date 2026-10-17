@@ -43,11 +43,11 @@ type DMEntry struct {
 	ClientMsgID  string `json:"client_msg_id,omitempty"`
 	Offline      bool   `json:"offline,omitempty"`
 	EncVerified  bool   `json:"enc_verified,omitempty"` // body was opened locally; absent on legacy records
-	// EncMode records how a verified body was protected: "e2e", or "server"
-	// for the client→server→client fallback. Empty on a verified record
-	// means end-to-end (records written before the fallback existed). An
-	// unverified record may carry "downgraded": a server-encrypted body from
-	// a peer with end-to-end history, opened but never treated as verified.
+	// EncMode records how a verified body was protected: "e2e". Empty on a
+	// verified record means end-to-end (records written before the field
+	// existed). An unverified record may carry "downgraded": a body opened
+	// with the server-held key, never treated as verified. A verified
+	// "server" record (the retired fallback) reads back as downgraded.
 	EncMode string `json:"enc_mode,omitempty"`
 }
 
@@ -119,15 +119,6 @@ func (a *App) captureDMHistory() (dmHistoryStore, error) {
 		return dmHistoryStore{}, err
 	}
 	id, err := a.dmIdentity()
-	if err != nil {
-		return dmHistoryStore{}, err
-	}
-	return dmHistoryStoreForIdentity(dir, id)
-}
-
-// dmHistoryForIdentity opens the logs bound to one tab's pinned identity.
-func (a *App) dmHistoryForIdentity(id *identity) (dmHistoryStore, error) {
-	dir, err := a.dmHistoryDir()
 	if err != nil {
 		return dmHistoryStore{}, err
 	}
@@ -268,6 +259,10 @@ func (s dmHistoryStore) messages(peer string) ([]DMEntry, error) {
 	}
 	if l.Messages == nil {
 		l.Messages = []DMEntry{}
+	}
+	for i := range l.Messages {
+		m := &l.Messages[i]
+		m.EncVerified, m.EncMode = dmEncState(*m)
 	}
 	return l.Messages, nil
 }
@@ -447,51 +442,56 @@ func (s dmHistoryStore) search(peer, query string, maxMessages int) ChatSearchRe
 			if q != "" && !strings.Contains(strings.ToLower(m.Body), q) {
 				continue
 			}
-			res.Messages = append(res.Messages, netproto.ChatHistoryEntry{
+			entry := netproto.ChatHistoryEntry{
 				ID:           m.Seq,
 				FromUniqueID: m.FromUniqueID,
 				FromNickname: m.FromNickname,
 				Body:         m.Body,
 				SentAt:       m.SentAt,
-				EncVerified:  m.EncVerified,
-				EncMode:      dmEncMode(m),
-			})
+			}
+			entry.EncVerified, entry.EncMode = dmEncState(m)
+			res.Messages = append(res.Messages, entry)
 		}
 	}
 	return res
 }
 
-// dmEncMode names how a stored DM was protected, or "" when this client did
-// not verify it. A verified record without a mode predates the
-// server-encrypted fallback (appends since then always carry one, see
-// normalizeDMEncryption), so it was end-to-end.
-func dmEncMode(m DMEntry) string {
-	if !m.EncVerified {
-		if m.EncMode == dmModeDowngraded {
-			return dmModeDowngraded
+// dmEncState names how a stored DM was protected, as every reader (history
+// load, search, export) presents it. A verified record without a mode
+// predates the mode field (appends since then always carry one, see
+// normalizeDMEncryption), so it was end-to-end. DMs are end-to-end only: a
+// record verified as "server" (the retired client→server→client fallback) or
+// marked "downgraded" is shown unverified under the downgraded warning.
+func dmEncState(m DMEntry) (verified bool, mode string) {
+	if m.EncVerified {
+		switch m.EncMode {
+		case "", "e2e":
+			return true, "e2e"
+		case "server", dmModeDowngraded:
+			return false, dmModeDowngraded
 		}
-		return ""
+		return false, ""
 	}
-	switch m.EncMode {
-	case "", "e2e":
-		return "e2e"
-	case "server":
-		return "server"
+	if m.EncMode == dmModeDowngraded {
+		return false, dmModeDowngraded
 	}
-	return ""
+	return false, ""
+}
+
+// dmEncMode is the mode half of dmEncState.
+func dmEncMode(m DMEntry) string {
+	_, mode := dmEncState(m)
+	return mode
 }
 
 // normalizeDMEncryption keeps the stored marker unambiguous: a new verified
-// record must name a known mode, otherwise it is stored as unverified rather
-// than read back later as a pre-fallback end-to-end record. "downgraded" is
-// kept only on an unverified record, and a verified record claiming it is
-// stored as unverified downgraded, never as verified.
+// record must say "e2e", otherwise it is stored as unverified rather than
+// read back later as a pre-mode end-to-end record. A verified "server" or
+// any "downgraded" record is stored as unverified downgraded, never verified.
 func normalizeDMEncryption(e *DMEntry) {
-	if e.EncMode == dmModeDowngraded {
+	if e.EncVerified && e.EncMode == "" {
 		e.EncVerified = false
 		return
 	}
-	if !e.EncVerified || (e.EncMode != "e2e" && e.EncMode != "server") {
-		e.EncVerified, e.EncMode = false, ""
-	}
+	e.EncVerified, e.EncMode = dmEncState(*e)
 }

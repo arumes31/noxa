@@ -150,8 +150,10 @@ func TestDMHistoryDedupesAndSearches(t *testing.T) {
 		t.Fatalf("matches = %d, want 2 across both conversations", len(res.Messages))
 	}
 	for _, m := range res.Messages {
-		want := map[string]string{"peer-1": "e2e", "peer-2": "server"}[m.FromUniqueID]
-		if !m.EncVerified || m.EncMode != want {
+		// A verified "server" DM (the retired fallback) searches as
+		// unverified "downgraded"; only end-to-end DMs are verified.
+		want := map[string]string{"peer-1": "e2e", "peer-2": "downgraded"}[m.FromUniqueID]
+		if m.EncVerified != (want == "e2e") || m.EncMode != want {
 			t.Fatalf("DM search hit %s = verified %v mode %q, want %q", m.FromUniqueID, m.EncVerified, m.EncMode, want)
 		}
 		if m.BodyEnc != "" || m.KeyID != 0 {

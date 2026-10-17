@@ -153,18 +153,19 @@ export function daySeparators(stamps, now = Date.now()) {
     return out;
 }
 
-// conversationEncryption is the claim the thread header makes. A direct
-// message is end-to-end only while the peer's key resolves (the same lookup
-// the send path uses); without it the client falls back to the server-held
-// key, which is said plainly. When the probe is unavailable the newest
-// message is the evidence. Private groups are always sealed per member.
+// conversationEncryption is the claim the thread header makes. Direct
+// messages are end-to-end only: while the peer's key resolves (the same
+// lookup the send path uses) the thread is locked; without it nothing can be
+// sent, which is said plainly. When the probe is unavailable the newest
+// message is the evidence; a DM that drew a shield would be server-readable,
+// so it reads as a warning. Private groups are always sealed per member.
 export function conversationEncryption({ group = false, peerKey = null, last = null } = {}) {
     if (group) return { kind: "lock", labelKey: "dm.encryption.e2e", helpKey: "dm.encryption.groupHelp" };
     if (peerKey === true) return { kind: "lock", labelKey: "dm.encryption.e2e", helpKey: "chat.directHelp" };
-    if (peerKey === false) return { kind: "shield", labelKey: "dm.encryption.server", helpKey: "chat.directServerHelp" };
+    if (peerKey === false) return { kind: "warning", labelKey: "dm.encryption.noKey", helpKey: "dm.encryption.noKeyHelp" };
     const badge = last ? encryptionBadge(last) : null;
     if (badge?.kind === "lock") return { kind: "lock", labelKey: "dm.encryption.e2e", helpKey: "chat.directHelp" };
-    if (badge?.kind === "shield") return { kind: "shield", labelKey: "dm.encryption.server", helpKey: "chat.directServerHelp" };
+    if (badge?.kind === "shield") return { kind: "warning", labelKey: "dm.encryption.unverified", helpKey: "chat.downgradedHelp" };
     if (badge?.kind === "warning") return { kind: "warning", labelKey: "dm.encryption.unverified", helpKey: badge.label };
     return { kind: "shield", labelKey: "dm.encryption.pending", helpKey: "dm.encryption.pendingHelp" };
 }

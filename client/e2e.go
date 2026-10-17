@@ -786,6 +786,18 @@ func (m *connManager) peerPubKey(uniqueID string) ([32]byte, bool) {
 	return key, lookup == peerKeyFound
 }
 
+// peerKeyLookup is the outcome of a directory lookup for a peer's E2E key.
+// Only a clean answer that the peer published no key is peerKeyAbsent:
+// timeouts, rate limits, disconnects and malformed or mismatched replies are
+// peerKeyFailed and must never be read as "the peer has no key".
+type peerKeyLookup uint8
+
+const (
+	peerKeyFailed peerKeyLookup = iota
+	peerKeyFound
+	peerKeyAbsent
+)
+
 // lookupPeerPubKey is peerPubKey with the reason a key is missing: only a
 // clean directory answer naming this peer with no key is peerKeyAbsent.
 func (m *connManager) lookupPeerPubKey(uniqueID string) ([32]byte, peerKeyLookup) {
@@ -883,34 +895,19 @@ func (m *connManager) encryptChat(scope, target, text string) (netproto.ChatSend
 	case "direct":
 		uniqueID := target
 		peer, lookup := m.lookupPeerPubKey(uniqueID)
+		if lookup == peerKeyAbsent {
+			// DMs are end-to-end only. A peer without an E2E key also never
+			// receives scope keys, so a server-encrypted DM could not be
+			// opened by it: there is no fallback, and never plaintext.
+			return netproto.ChatSend{}, errPeerNoE2EKey
+		}
 		if lookup != peerKeyFound {
-			// Local evidence (E2E history, read from disk only on this rare
-			// path) vetoes a downgrade even when the directory has no key.
-			if !dmServerFallbackAllowed(lookup, lookup == peerKeyAbsent && m.knownE2EPeer(uniqueID, true)) {
-				if lookup == peerKeyAbsent {
-					return netproto.ChatSend{}, fmt.Errorf("%s no longer has an end-to-end key; refusing to downgrade this conversation to server encryption", uniqueID)
-				}
-				return netproto.ChatSend{}, fmt.Errorf("could not fetch the end-to-end key for %s; try again", uniqueID)
-			}
-			// The server cleanly reported that the peer never published an
-			// end-to-end key: fall back to the client→server→client path
-			// (the global scope key). There is no plaintext fallback: with
-			// neither key the send is refused.
-			keyID, key, scoped := m.scopeKeys.current(0)
-			if !scoped {
-				return netproto.ChatSend{}, fmt.Errorf("no end-to-end key for %s and no server encryption key yet; plaintext messages are not allowed", uniqueID)
-			}
-			blob, err := sealScope(text, key)
-			if err != nil {
-				return netproto.ChatSend{}, err
-			}
-			return netproto.ChatSend{ToUniqueID: uniqueID, Text: blob, Enc: true, KeyID: keyID, ClientMsgID: newClientMsgID()}, nil
+			return netproto.ChatSend{}, fmt.Errorf("could not fetch the end-to-end key for %s; try again", uniqueID)
 		}
 		blob, err := sealDM(text, peer, priv)
 		if err != nil {
 			return netproto.ChatSend{}, err
 		}
-		m.e2ePeers.record(uniqueID)
 		// (124) client-generated ref for delivery/read receipts.
 		return netproto.ChatSend{ToUniqueID: uniqueID, Text: blob, Enc: true, ClientMsgID: newClientMsgID(), RecipientPublicKey: base64.StdEncoding.EncodeToString(peer[:])}, nil
 
@@ -1012,9 +1009,11 @@ func (m *connManager) decryptChatEvent(data json.RawMessage, payload string) str
 		return rewrapChat("chat", chat, payload)
 	}
 
-	// A direct message with a scope generation and no E2E flag is the
-	// client→server→client fallback, sealed with the global scope key; it
-	// opens like a global message but stays a direct message.
+	// A direct message with a scope generation and no E2E flag was sealed
+	// with the global scope key, so the server could read or have written
+	// it. DMs are end-to-end only (this client never sends one like that and
+	// current servers refuse them): it opens like a global message, stays a
+	// direct message, and is always shown as downgraded, never verified.
 	serverDM := chat.Direct && !chat.E2E && chat.KeyID != 0
 	if !serverDM && (chat.Direct || chat.E2E || chat.KeyID == 0) {
 		// Legacy servers only supplied e2e. Keep scope after presentChat strips
@@ -1049,7 +1048,7 @@ func (m *connManager) decryptChatEvent(data json.RawMessage, payload string) str
 			chat.Text, chat.EncVerified = text, openedChatText(text)
 			chat.EncMode = verifiedMode(chat.EncVerified, "server")
 			if serverDM {
-				m.flagDowngradedDM(&chat)
+				markDowngradedDM(&chat)
 			}
 			presentChat(&chat)
 			m.emit("event", rewrapChat("chat", chat, payload))
@@ -1065,39 +1064,31 @@ func (m *connManager) decryptChatEvent(data json.RawMessage, payload string) str
 	chat.Text, chat.EncVerified = text, openedChatText(text)
 	chat.EncMode = verifiedMode(chat.EncVerified, "server")
 	if serverDM {
-		m.flagDowngradedDM(&chat)
+		markDowngradedDM(&chat)
 	}
 	presentChat(&chat)
 	return rewrapChat("chat", chat, payload)
 }
 
-// dmModeDowngraded marks an opened server-encrypted DM from a peer with
-// end-to-end history. It is never a verified mode: enc_verified stays false
-// wherever it appears (live event, stored record, search, export).
+// dmModeDowngraded marks an opened server-encrypted DM. It is never a
+// verified mode: enc_verified stays false wherever it appears (live event,
+// stored record, search, export).
 const dmModeDowngraded = "downgraded"
 
-// flagDowngradedDM withdraws the shield from a server-encrypted DM whose
-// peer this client knows to have end-to-end history (or a cached key): that
-// conversation should never arrive server-readable, and the server could have
-// written the body itself. The body was opened with the server key, so it is
-// shown, but unverified under the "downgraded" warning badge; an unopened
-// placeholder keeps no mode. Only in-memory evidence is consulted; this runs
-// on the read loop.
-func (m *connManager) flagDowngradedDM(chat *netproto.ChatBroadcast) {
-	m.mu.Lock()
-	ownUID := m.uniqueID
-	m.mu.Unlock()
-	peer := chat.FromUniqueID
-	if peer == ownUID {
-		peer = chat.ToUniqueID
+// errPeerNoE2EKey refuses a DM to a peer whose client published no
+// end-to-end key. The text reaches the UI as the send error.
+var errPeerNoE2EKey = errors.New("this contact's client has no end-to-end encryption key — they need to update noxa")
+
+// markDowngradedDM withdraws the shield from a server-encrypted DM: DMs must
+// be end-to-end, and the server could have written this body itself. A body
+// opened with the server key is shown, but unverified under the "downgraded"
+// warning badge; an unopened placeholder keeps no mode.
+func markDowngradedDM(chat *netproto.ChatBroadcast) {
+	mode := ""
+	if chat.EncVerified {
+		mode = dmModeDowngraded
 	}
-	if m.knownE2EPeer(peer, false) {
-		mode := ""
-		if chat.EncVerified {
-			mode = dmModeDowngraded
-		}
-		chat.EncVerified, chat.EncMode = false, mode
-	}
+	chat.EncVerified, chat.EncMode = false, mode
 }
 
 // verifiedMode names the encryption path of a body this client opened; an
@@ -1291,11 +1282,6 @@ func (m *connManager) decryptDMAsync(chat netproto.ChatBroadcast, payload string
 	} else {
 		chat.Text = plain
 		chat.EncVerified, chat.EncMode = true, "e2e"
-		if chat.FromUniqueID == ownUID {
-			m.e2ePeers.record(chat.ToUniqueID)
-		} else {
-			m.e2ePeers.record(chat.FromUniqueID)
-		}
 	}
 	presentChat(&chat)
 	m.emit("event", rewrapChat("chat", chat, payload))

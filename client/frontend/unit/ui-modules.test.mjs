@@ -418,6 +418,17 @@ test("frontend UI module behaviors", { concurrency: false }, async (t) => {
         assert.equal(stored.encVerified, false);
         assert.equal(stored.encMode, "downgraded");
         assert.equal(encryptionBadge(stored).label, "chat.downgradedHelp");
+        // A record verified as "server" (the retired fallback) reloads as
+        // downgraded, never verified; legacy verified records stay e2e.
+        const retired = chat.directMessageFromEntry({ from_unique_id: "u-mia", body: "old", sent_at: 6, enc_verified: true, enc_mode: "server" });
+        assert.deepEqual([retired.encVerified, retired.enc, retired.encMode, encryptionBadge(retired).kind], [false, false, "downgraded", "warning"]);
+        const legacy = chat.directMessageFromEntry({ from_unique_id: "u-mia", body: "old", sent_at: 6, enc_verified: true });
+        assert.deepEqual([legacy.encVerified, legacy.encMode, encryptionBadge(legacy).kind], [true, "e2e", "lock"]);
+        const bogus = chat.directMessageFromEntry({ from_unique_id: "u-mia", body: "old", sent_at: 6, enc_verified: true, enc_mode: "bogus" });
+        assert.deepEqual([bogus.encVerified, bogus.encMode, encryptionBadge(bogus).label], [false, "", "chat.unverifiedHelp"]);
+        // A live DM in "server" mode is a warning too; channels keep the shield.
+        assert.equal(encryptionBadge(chat.normalize({ direct: true, text: "x", enc_verified: true, enc_mode: "server" })).kind, "warning");
+        assert.equal(encryptionBadge(chat.normalize({ text: "x", enc_verified: true, enc_mode: "server" }, 4)).kind, "shield");
         const source = await (await import("node:fs/promises")).readFile(new URL("../src/chat-ui.js", import.meta.url), "utf8");
         // The local log keeps the mode, and search hits map it the same way.
         assert.match(source, /enc_mode: m\.encVerified \? m\.encMode : encModeFrom\(false, m\.encMode\)/);

@@ -63,7 +63,7 @@ func TestLiveChatCarriesEncryptionMode(t *testing.T) {
 	}{
 		{name: "channel", chat: netproto.ChatBroadcast{ChannelID: "42", Text: seal("room", channelKey), Enc: true, KeyID: 7}, text: "room", mode: "server", verified: true},
 		{name: "global", chat: netproto.ChatBroadcast{Text: seal("all", globalKey), Enc: true, KeyID: 9}, text: "all", mode: "server", verified: true},
-		{name: "server encrypted direct fallback", chat: netproto.ChatBroadcast{Direct: true, ToUniqueID: "me", Text: seal("dm", globalKey), Enc: true, KeyID: 9}, text: "dm", mode: "server", direct: true, verified: true},
+		{name: "server encrypted direct is downgraded", chat: netproto.ChatBroadcast{Direct: true, ToUniqueID: "me", Text: seal("dm", globalKey), Enc: true, KeyID: 9}, text: "dm", mode: "downgraded", direct: true},
 		{name: "tampered channel", chat: netproto.ChatBroadcast{ChannelID: "42", Text: seal("room", globalKey), Enc: true, KeyID: 7}, text: decryptFailedText},
 		{name: "plaintext channel", chat: netproto.ChatBroadcast{ChannelID: "42", Text: "plain", EncVerified: true}, text: refusedPlainText},
 		{name: "plaintext global claiming a mode", chat: netproto.ChatBroadcast{Text: "plain", EncMode: "e2e"}, text: refusedPlainText},
@@ -92,7 +92,7 @@ func TestLiveChatCarriesEncryptionMode(t *testing.T) {
 }
 
 // TestEndToEndDirectMessageCarriesLockMode verifies the E2E DM path marks its
-// body "e2e" (the lock), distinct from the server-encrypted fallback.
+// body "e2e" (the lock), distinct from a downgraded server-encrypted DM.
 func TestEndToEndDirectMessageCarriesLockMode(t *testing.T) {
 	alpha, bravo := newTestConnManager(), newTestConnManager()
 	alpha.id, bravo.id = mustTempIdentity(t), mustTempIdentity(t)
@@ -151,12 +151,12 @@ func TestExportLinesNameTheEncryption(t *testing.T) {
 	}
 	dm := dmExportMessages([]DMEntry{
 		{FromNickname: "a", Body: "legacy verified", EncVerified: true},
-		{FromNickname: "b", Body: "fallback", EncVerified: true, EncMode: "server"},
+		{FromNickname: "b", Body: "retired fallback", EncVerified: true, EncMode: "server"},
 		{FromNickname: "c", Body: "legacy unverified"},
 		{FromNickname: "d", Body: "unverified claim", EncMode: "e2e"},
 		{FromNickname: "e", Body: "unknown mode", EncVerified: true, EncMode: "other"},
 	}).Text
-	for _, want := range []string{"[end-to-end encrypted] a:", "[server encrypted] b:", "[unverified] c:", "[unverified] d:", "[unverified] e:"} {
+	for _, want := range []string{"[end-to-end encrypted] a:", "[unverified: server encrypted] b:", "[unverified] c:", "[unverified] d:", "[unverified] e:"} {
 		if !strings.Contains(dm, want) {
 			t.Fatalf("DM export %q lacks %q", dm, want)
 		}

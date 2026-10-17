@@ -272,7 +272,8 @@ function rowFor(entry) {
     main.append(top, bottom);
     row.append(avatars, main);
     const facts = [entry.kind === "group" ? t("dm.privateGroup") : t(`dm.presence.${entry.presence.state}`)];
-    if (encryption) facts.push(t(encryption === "lock" ? "dm.encryption.e2e" : encryption === "shield" ? "dm.encryption.server" : "dm.encryption.unverified"));
+    // Conversations are end-to-end only: anything but the lock is unverified.
+    if (encryption) facts.push(t(encryption === "lock" ? "dm.encryption.e2e" : "dm.encryption.unverified"));
     if (entry.invitation) facts.push(t("dm.invitation"));
     if (entry.unread) facts.push(t("dm.unread", { count: entry.unread }));
     row.append(srText(", " + facts.join(", ")));

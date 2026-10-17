@@ -366,7 +366,6 @@ func (a *App) newTabManager(id string, identity *identity) *connManager {
 	if a.knownServers != nil {
 		cm.knownServers = a.knownServers
 	}
-	cm.dmHistory = a.dmHistoryForIdentity
 	return cm
 }
 

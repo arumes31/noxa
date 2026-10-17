@@ -667,7 +667,7 @@ func sendChatWith(cm *connManager, scope, target, text string, replyToID int64) 
 	}
 	msg, err := cm.encryptChat(scope, target, text)
 	if err != nil {
-		return "encryption failed: " + err.Error()
+		return encryptFailure(err).Error()
 	}
 	if scope != "direct" {
 		msg.ReplyToID = replyToID

@@ -103,11 +103,6 @@ type connManager struct {
 	pubKeys    *pubKeyCache
 	scopeKeys  *scopeKeyStore
 	decryptSem chan struct{}
-	// e2ePeers remembers peers with end-to-end history across reconnects;
-	// dmHistory (nil in tests) opens the local DM logs for an identity. Both
-	// keep a DM from being downgraded to the server-encrypted path.
-	e2ePeers  *e2ePeerSet
-	dmHistory func(*identity) (dmHistoryStore, error)
 
 	// debugFrames tees frame summaries to the "debug_frame" event (327 debug
 	// console) when enabled.
@@ -190,7 +185,6 @@ func newConnManager(wailsCtx context.Context) *connManager {
 		pubKeys:             newPubKeyCache(),
 		scopeKeys:           newScopeKeyStore(),
 		decryptSem:          make(chan struct{}, maxAsyncDecrypts),
-		e2ePeers:            newE2EPeerSet(),
 	}
 }
 
@@ -564,7 +558,6 @@ func (m *connManager) connectWith(addr string, authMsg netproto.Authenticate, si
 		m.readLoop(conn)
 	})
 	go guardCrash("heartbeat", func() { m.heartbeatLoop(conn) })
-	m.warmE2EPeers()
 	return ""
 }
 
