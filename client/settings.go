@@ -233,9 +233,13 @@ type Settings struct {
 	GamingOverlayOpacity   int    `json:"gaming_overlay_opacity"`
 	GamingOverlayX         int    `json:"gaming_overlay_x"` // percentage of available travel
 	GamingOverlayY         int    `json:"gaming_overlay_y"`
-	CameraBackgroundImage  string `json:"camera_background_image"`
-	CameraBlurStrength     int    `json:"camera_blur_strength"`
-	CameraMirrorPreview    bool   `json:"camera_mirror_preview"`
+	// Placement aid only: the settings page keeps the overlay out of the
+	// chosen game's HUD zones. The native overlay never reads these.
+	GamingOverlayGameUI     string `json:"gaming_overlay_game_ui"`     // none | mmo | shooter | moba
+	GamingOverlayAvoidZones bool   `json:"gaming_overlay_avoid_zones"` // default on
+	CameraBackgroundImage   string `json:"camera_background_image"`
+	CameraBlurStrength      int    `json:"camera_blur_strength"`
+	CameraMirrorPreview     bool   `json:"camera_mirror_preview"`
 
 	// Security (wave 4a).
 	AllowPlaintext bool              `json:"allow_plaintext"`         // allow plaintext control connections (dev servers)
@@ -351,16 +355,20 @@ func DefaultSettings() Settings {
 		GamingOverlayPosition:  "center-left",
 		GamingOverlayScale:     80,
 		GamingOverlayOpacity:   88,
-		CameraBlurStrength:     14,
-		CameraMirrorPreview:    true,
-		ChatTimestamps:         "absolute",
-		ChatDensity:            "comfortable",
-		ChatFontSize:           14,
-		ChatLayout:             "irc",
-		SysJoinLeave:           true,
-		SysKick:                true,
-		AutoAwayMinutes:        15,
-		AutoAwayMessage:        defaultAutoAwayMessage,
+		// New in the settings redesign. Files without these keys keep the
+		// defaults when merged, so no settingsVersion bump is needed.
+		GamingOverlayGameUI:     "none",
+		GamingOverlayAvoidZones: true,
+		CameraBlurStrength:      14,
+		CameraMirrorPreview:     true,
+		ChatTimestamps:          "absolute",
+		ChatDensity:             "comfortable",
+		ChatFontSize:            14,
+		ChatLayout:              "irc",
+		SysJoinLeave:            true,
+		SysKick:                 true,
+		AutoAwayMinutes:         15,
+		AutoAwayMessage:         defaultAutoAwayMessage,
 	}
 }
 
@@ -522,6 +530,9 @@ func normalizeSettings(s Settings) Settings {
 	s.GamingOverlayOpacity = clampSetting(s.GamingOverlayOpacity, 20, 100)
 	s.GamingOverlayX = clampSetting(s.GamingOverlayX, 0, 100)
 	s.GamingOverlayY = clampSetting(s.GamingOverlayY, 0, 100)
+	if s.GamingOverlayGameUI == "" {
+		s.GamingOverlayGameUI = "none"
+	}
 	s.CameraBlurStrength = clampSetting(s.CameraBlurStrength, 2, 30)
 	for uid, volume := range s.UserShareVolumes {
 		s.UserShareVolumes[uid] = clampSetting(volume, 0, 200)
@@ -717,6 +728,12 @@ func saveSettingsSnapshot(path string, snapshot Settings) error {
 		return errors.New("settings path is empty")
 	}
 	return saveSettingsAt(path, snapshot)
+}
+
+// DefaultSettingsSnapshot returns the built-in defaults so the settings
+// dialog can offer "Reset to default" per page without duplicating them.
+func (a *App) DefaultSettingsSnapshot() Settings {
+	return DefaultSettings()
 }
 
 // GetSettings returns the current settings to the frontend.
@@ -920,6 +937,11 @@ func (a *App) SaveSettings(s Settings) string {
 	}
 	if s.GamingOverlayStyle != "" && s.GamingOverlayStyle != "bars" && s.GamingOverlayStyle != "mist-aurora" && s.GamingOverlayStyle != "default" {
 		return "invalid gaming overlay design"
+	}
+	switch s.GamingOverlayGameUI {
+	case "", "none", "mmo", "shooter", "moba":
+	default:
+		return "invalid gaming overlay game UI preset"
 	}
 	if len(s.GamingOverlayMonitor) > 128 {
 		return "invalid gaming overlay monitor"

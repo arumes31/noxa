@@ -342,6 +342,10 @@ export function DMSearchForContext(arg1, arg2, arg3, arg4) {
   return window['go']['main']['App']['DMSearchForContext'](arg1, arg2, arg3, arg4);
 }
 
+export function DefaultSettingsSnapshot() {
+  return window['go']['main']['App']['DefaultSettingsSnapshot']();
+}
+
 export function DeleteIdentity(arg1, arg2) {
   return window['go']['main']['App']['DeleteIdentity'](arg1, arg2);
 }
