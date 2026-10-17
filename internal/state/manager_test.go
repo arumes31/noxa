@@ -1,6 +1,7 @@
 package state
 
 import (
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -708,4 +709,39 @@ func TestConcurrentAccess(t *testing.T) {
 	}
 
 	wg.Wait()
+}
+
+func TestTextChannelRefusesVoiceMembership(t *testing.T) {
+	m := newTestManager(t)
+	m.AddChannel(&Channel{ChannelID: 1, Name: "voice"})
+	m.AddChannel(&Channel{ChannelID: 2, Name: "general", TextOnly: true})
+	m.AddClient(&Client{ClientID: "a", UniqueID: "u-a"})
+	if err := m.JoinChannel("a", 2); !errors.Is(err, ErrTextChannel) {
+		t.Fatalf("join text channel = %v, want ErrTextChannel", err)
+	}
+	if err := m.JoinChannel("a", 1); err != nil {
+		t.Fatal(err)
+	}
+	for name, move := range map[string]func(string, int64) error{"move": m.MoveClient, "capacity move": m.MoveClientWithinCapacity} {
+		if err := move("a", 2); !errors.Is(err, ErrTextChannel) {
+			t.Fatalf("%s into text channel = %v, want ErrTextChannel", name, err)
+		}
+	}
+	if c, _ := m.GetClient("a"); c.ChannelID != 1 {
+		t.Fatalf("refused moves changed membership to %d", c.ChannelID)
+	}
+	if got := m.ChannelMembers(2); len(got) != 0 {
+		t.Fatalf("text channel members = %v", got)
+	}
+	if ch, _ := m.GetChannel(2); ch.ClientCount != 0 || !ch.TextOnly {
+		t.Fatalf("text channel state = %+v", ch)
+	}
+	// The flag mirrors from storage and survives snapshots.
+	off := false
+	if !m.UpdateChannel(2, ChannelUpdate{TextOnly: &off}) {
+		t.Fatal("update failed")
+	}
+	if ch, _ := m.GetChannel(2); ch.TextOnly {
+		t.Fatal("TextOnly patch ignored")
+	}
 }

@@ -368,7 +368,7 @@ func (m *ChannelManager) LoadIntoState(ctx context.Context) (int, error) {
 	          order_index, channel_type, COALESCE(max_clients, 0), created_at,
 	          COALESCE(password_hash, ''),
 	          opus_bitrate, opus_fec, opus_dtx, opus_stereo, slow_mode_seconds,
-	          COALESCE(description, '')
+	          COALESCE(description, ''), text_only
 	          FROM channels ORDER BY id`
 	rows, err := m.store.DB().QueryContext(ctx, q)
 	if err != nil {
@@ -385,7 +385,7 @@ func (m *ChannelManager) LoadIntoState(ctx context.Context) (int, error) {
 			&ch.OrderIndex, &channelType, &ch.MaxClients, &ch.CreatedAt,
 			&ch.PasswordHash,
 			&ch.OpusBitrate, &ch.OpusFEC, &ch.OpusDTX, &ch.OpusStereo, &ch.SlowModeSeconds,
-			&ch.Description); err != nil {
+			&ch.Description, &ch.TextOnly); err != nil {
 			return count, fmt.Errorf("scanning channel row: %w", err)
 		}
 		parsedType, err := ParseChannelType(int(channelType))
@@ -1292,6 +1292,7 @@ func (m *ChannelManager) mirrorPersistedChannel(channel *state.Channel) {
 		OpusStereo:      &channel.OpusStereo,
 		SlowModeSeconds: &channel.SlowModeSeconds,
 		Description:     &channel.Description,
+		TextOnly:        &channel.TextOnly,
 	}) {
 		m.state.AddChannel(channel)
 	}

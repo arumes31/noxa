@@ -22,6 +22,10 @@ var ErrChannelFull = errors.New("channel is full")
 // not currently a member of.
 var ErrNotInChannel = errors.New("client is not in a channel")
 
+// ErrTextChannel is returned when a client would join a text channel for
+// voice. Text channels are read and written through chat subscriptions only.
+var ErrTextChannel = errors.New("text channels have no voice")
+
 // Manager tracks connected clients, active channels, channel membership, and
 // current speaking states in memory. All methods are goroutine-safe.
 type Manager struct {
@@ -330,6 +334,8 @@ type ChannelUpdate struct {
 	OpusStereo      *bool
 	SlowModeSeconds *int
 	Description     *string
+	// TextOnly is only mirrored from the database row; no operation edits it.
+	TextOnly *bool
 }
 
 // UpdateChannel applies a field patch while holding the manager lock. It
@@ -385,6 +391,9 @@ func (m *Manager) UpdateChannel(channelID int64, update ChannelUpdate) bool {
 	}
 	if update.Description != nil {
 		channel.Description = *update.Description
+	}
+	if update.TextOnly != nil {
+		channel.TextOnly = *update.TextOnly
 	}
 	return true
 }
@@ -468,6 +477,9 @@ func (m *Manager) JoinChannel(clientID string, channelID int64) error {
 	ch, ok := m.channels[channelID]
 	if !ok {
 		return ErrChannelNotFound
+	}
+	if ch.TextOnly {
+		return ErrTextChannel
 	}
 
 	// If already in this channel, nothing to do.
@@ -586,6 +598,9 @@ func (m *Manager) moveClient(clientID string, targetChannelID int64, enforceCapa
 	ch, ok := m.channels[targetChannelID]
 	if !ok {
 		return ErrChannelNotFound
+	}
+	if ch.TextOnly {
+		return ErrTextChannel
 	}
 
 	if c.ChannelID == targetChannelID {
