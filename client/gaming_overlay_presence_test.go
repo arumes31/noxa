@@ -129,13 +129,13 @@ func TestOverlayChatPeekLifetimeAndBounds(t *testing.T) {
 		t.Fatal("chat peek must stay off by default, whatever the frontend sends")
 	}
 	settings.GamingOverlayChatPeek = true
-	long := GamingOverlayPeek{ID: "4", Name: strings.Repeat("N", 80), Text: strings.Repeat("x", 400) + "\x00‮"}
+	long := GamingOverlayPeek{ID: "4", Name: strings.Repeat("N", 80), Text: strings.Repeat("x", 400) + "\x00\u202e"}
 	lines := []GamingOverlayPeek{{ID: "1", Name: "A", Text: "one"}, {ID: "2", Name: "B", Text: "two"}, {ID: "3", Name: "C", Text: ""}, long}
 	s := presenceSnapshot(settings, nil, lines...)
 	if !s.Active || len(s.Peek) != 2 || s.Peek[0].ID != "2" || s.Peek[1].ID != "4" {
 		t.Fatalf("peek must keep the newest three non-empty lines: %+v", s.Peek)
 	}
-	if len([]rune(s.Peek[1].Name)) != 32 || len([]rune(s.Peek[1].Text)) != 120 || strings.ContainsAny(s.Peek[1].Text, "\x00‮") {
+	if len([]rune(s.Peek[1].Name)) != 32 || len([]rune(s.Peek[1].Text)) != 120 || strings.ContainsAny(s.Peek[1].Text, "\x00\u202e") {
 		t.Fatalf("peek line not bounded: %+v", s.Peek[1])
 	}
 	var p overlayPresence

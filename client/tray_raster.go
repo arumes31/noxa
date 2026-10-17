@@ -47,10 +47,6 @@ func (c *trayCanvas) fill(shape traySDF, col color.NRGBA, bounds image.Rectangle
 	}
 }
 
-func (c *trayCanvas) fillAll(shape traySDF, col color.NRGBA) {
-	c.fill(shape, col, image.Rect(0, 0, c.size, c.size))
-}
-
 // image converts the premultiplied canvas into straight-alpha NRGBA.
 func (c *trayCanvas) image() *image.NRGBA {
 	img := image.NewNRGBA(image.Rect(0, 0, c.size, c.size))
