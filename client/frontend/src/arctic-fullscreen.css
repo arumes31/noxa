@@ -1,0 +1,328 @@
+/* In-app fullscreen stream HUD (design 45: "Fullscreen HUD", "Fullscreen
+   (idle)", "Fullscreen multiview", "Fullscreen whisper").
+
+   Applies to the element that is fullscreen (a watched .vtile or the
+   multiview .stream-stage) once fullscreen-hud.js marks it .fs-hud-host.
+   Colours come from the Arctic Night tokens with neutral fallbacks, so the
+   classic themes get a working HUD too. Deliberately NOT styled here:
+   - the native gaming overlay (gaming-overlay*.css / Go renderer);
+   - the speaking avatar: speaker rows reuse .client / .speaking and the
+     unchanged speaking-avatar.css; the row only scales the 26 px avatar;
+   - background motion: nothing animates continuously. The only motion is
+     the HUD sliding / fading in and out, and none with reduced motion. */
+
+.fs-hud-host {
+    --fs-glass: var(--arc-glass, rgba(9, 15, 24, .74));
+    --fs-glass-line: var(--arc-glass-line, rgba(220, 238, 255, .14));
+    --fs-text: hsl(212 40% 94%);
+    --fs-dim: hsl(212 24% 78%);
+    --fs-radius: var(--arc-r, 14px);
+    --fs-blur: var(--arc-blur, 18px);
+    --fs-live: var(--arc-live, #ff5577);
+    --fs-ok: var(--arc-ok, #5ee3a1);
+    --fs-warn: var(--warn, #f6c779);
+    --fs-danger: var(--danger, #ff8fa3);
+    --fs-on-acc: var(--arc-on-acc, #04121c);
+    --fs-ease: var(--arc-ease, cubic-bezier(.2, .8, .2, 1));
+    --fs-shift: 14px;
+    background: #000;
+}
+.fs-hud-host.fs-hud-idle,
+.fs-hud-host.fs-hud-idle video { cursor: none; }
+
+/* ----------------------------------------------------- host adjustments */
+/* A fullscreen tile: the dock replaces label, badge, PiP and fullscreen
+   buttons; quality, diagnostics and watch controls fade with the HUD. */
+.vtile.fs-hud-host :is(.vtile-label, .vtile-badge, .vtile-pip, .vtile-fullscreen, .stage-info, .stage-tag, .stage-tile-tools, .stream-live-controls .stream-audio) { display: none !important; }
+.stream-stage.fs-hud-host .stream-live-controls .stream-audio { display: none !important; }
+.fs-hud-host :is(.vtile-quality-button, .vtile-diagnostics, .stream-live-controls) {
+    transition: opacity .25s var(--fs-ease);
+}
+.fs-hud-host.fs-hud-idle :is(.vtile-quality-button, .vtile-diagnostics:not([open]), .stream-live-controls, .stage-tile-tools) {
+    opacity: 0 !important; pointer-events: none;
+}
+.vtile.fs-hud-host .vtile-quality-button { top: 88px; }
+.vtile.fs-hud-host .vtile-diagnostics { top: 88px; }
+
+/* The multiview stage in fullscreen: no header or footer, edge-to-edge
+   tiles with 4 px seams, tags in the bottom-right corner. */
+.stream-stage.fs-hud-host { display: flex; flex-direction: column; }
+.stream-stage.fs-hud-host :is(.stage-head, .stage-foot) { display: none !important; }
+.stream-stage.fs-hud-host .stage-body { flex: 1 1 auto; position: relative; }
+#chat-pane .stream-stage.fs-hud-host:not([data-stage="none"]) #video-grid { padding: 0; gap: 4px; }
+#chat-pane .stream-stage.fs-hud-host[data-stage="multi"][data-layout="grid"] #video-grid {
+    grid-template-columns: repeat(var(--stage-cols), minmax(0, 1fr));
+    grid-template-rows: repeat(var(--stage-rows), minmax(0, 1fr));
+    justify-content: stretch; align-content: stretch;
+}
+#chat-pane .stream-stage.fs-hud-host[data-stage="multi"][data-layout="grid"] .vtile:not(:fullscreen) {
+    aspect-ratio: auto; width: 100%; height: 100%;
+}
+#chat-pane .stream-stage.fs-hud-host[data-stage="multi"][data-layout="focus"] #video-grid { padding: 0 0 4px; }
+#chat-pane .stream-stage.fs-hud-host[data-stage="multi"][data-layout="stack"] #video-grid { padding: 4px 0 120px; }
+#chat-pane .stream-stage.fs-hud-host:not([data-stage="none"]) .vtile:not(:fullscreen) { border-radius: 0; }
+#chat-pane .stream-stage.fs-hud-host[data-stage="multi"][data-layout="focus"] .vtile:not(.stage-focus):not(:fullscreen) { border-radius: 6px; }
+#chat-pane .stream-stage.fs-hud-host[data-stage="multi"] .vtile:not(:fullscreen) video { object-fit: contain; background: #000; }
+#chat-pane .stream-stage.fs-hud-host[data-stage="multi"] .vtile.stage-focus:not(:fullscreen) { outline: 2px solid var(--accent); outline-offset: -2px; }
+#chat-pane .stream-stage.fs-hud-host[data-stage="multi"] .vtile:not(:fullscreen) .stage-tag {
+    left: auto; right: 12px; bottom: 12px;
+    -webkit-backdrop-filter: blur(var(--fs-blur)) saturate(1.4); backdrop-filter: blur(var(--fs-blur)) saturate(1.4);
+}
+
+/* ------------------------------------------------------------- the HUD */
+.fs-hud {
+    position: absolute; inset: 0; z-index: 30; pointer-events: none;
+    color: var(--fs-text); font: 400 14px/1.35 var(--font-body, "Outfit Variable", system-ui, sans-serif);
+    -webkit-font-smoothing: antialiased;
+}
+.fs-hud :is(button, input, .fs-quick, .fs-unread) { pointer-events: auto; }
+.fs-hud .mono { font-family: var(--font-mono, "JetBrains Mono Variable", monospace); font-variant-numeric: tabular-nums; }
+.fs-hud [hidden] { display: none !important; }
+.fs-sr {
+    position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0);
+    white-space: nowrap; clip-path: inset(50%);
+}
+.fs-glass {
+    background: var(--fs-glass); border: 1px solid var(--fs-glass-line); color: var(--fs-text);
+    -webkit-backdrop-filter: blur(var(--fs-blur)) saturate(1.5); backdrop-filter: blur(var(--fs-blur)) saturate(1.5);
+    box-shadow: 0 10px 40px rgba(0, 0, 0, .35);
+}
+.fs-hud :is(button, input):focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.fs-kbd {
+    padding: 1px 6px; border-radius: 5px; border: 1px solid var(--fs-glass-line);
+    font: 500 11px/1.5 var(--font-mono, monospace); color: var(--fs-dim); white-space: nowrap;
+}
+
+/* Transient parts (telemetry, dock) slide in with the HUD and leave after
+   2.5 s without movement. Hidden parts stay focusable: focusing them shows
+   the HUD again (fullscreen-hud.js), so keyboard users are never stuck. */
+.fs-transient {
+    transition: opacity .32s var(--fs-ease), translate .42s var(--fs-ease);
+}
+.fs-hud[data-hud="hidden"] .fs-transient { opacity: 0; pointer-events: none; }
+.fs-hud[data-hud="hidden"] .fs-telemetry { translate: 0 calc(var(--fs-shift) * -1); }
+.fs-hud[data-hud="hidden"] .fs-dock { translate: -50% var(--fs-shift); }
+.fs-hud[data-hud="hidden"] .fs-dock * { pointer-events: none; }
+
+/* ------------------------------------------------------- top: telemetry */
+.fs-top {
+    position: absolute; left: 50%; top: calc(18px + var(--fs-top-inset, 0%)); translate: -50% 0;
+    display: flex; flex-direction: column; align-items: center; gap: 10px; max-width: calc(100% - 48px);
+}
+.fs-telemetry {
+    display: flex; align-items: center; gap: 12px; height: 46px; padding: 0 16px 0 7px;
+    border-radius: 999px; white-space: nowrap; font-size: 13px;
+}
+.fs-tele-avatar { width: 32px; height: 32px; flex: 0 0 32px; font-size: 12px; border: 0; }
+.fs-tele-avatar img, .fs-peek-avatar img { width: 100%; height: 100%; object-fit: cover; }
+.fs-tele-name { font-size: 14px; font-weight: 700; }
+.fs-sep { width: 1px; height: 18px; background: var(--fs-glass-line); }
+.fs-tele-item { display: inline-flex; align-items: center; gap: 6px; opacity: .92; }
+.fs-tele-item .ui-icon { width: 15px; height: 15px; opacity: .75; }
+.fs-ping-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--fs-dim); }
+.fs-tele-ping[data-quality="good"] .fs-ping-dot { background: var(--fs-ok); }
+.fs-tele-ping[data-quality="fair"] .fs-ping-dot { background: var(--fs-warn); }
+.fs-tele-ping[data-quality="poor"] .fs-ping-dot { background: var(--fs-danger); }
+.fs-live { font-size: 10px; }
+
+.fs-whisper-out {
+    display: flex; align-items: center; gap: 10px; height: 44px; padding: 0 16px 0 9px;
+    border-radius: 999px; font-size: 13.5px; white-space: nowrap; max-width: 100%;
+}
+.fs-whisper-icon {
+    width: 26px; height: 26px; flex: none; border-radius: 50%; display: grid; place-items: center;
+    background: color-mix(in srgb, var(--accent) 22%, transparent); color: var(--accent);
+}
+.fs-whisper-out[data-talking="1"] .fs-whisper-icon { background: var(--accent); color: var(--fs-on-acc); }
+.fs-whisper-icon .ui-icon { width: 15px; height: 15px; }
+.fs-whisper-targets { opacity: .75; overflow: hidden; text-overflow: ellipsis; }
+
+/* ------------------------------------------------ speakers + chat peek */
+.fs-side {
+    position: absolute; translate: var(--fs-tx, 0) var(--fs-ty, 0);
+    display: flex; flex-direction: column; align-items: flex-start; gap: 0; max-width: min(320px, 40%);
+}
+.fs-hud[data-side="right"] .fs-side { align-items: flex-end; }
+.fs-side.peek-above { flex-direction: column-reverse; }
+.fs-speakers { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.fs-side.peek-above .fs-speakers { flex-direction: column-reverse; }
+.fs-hud[data-side="right"] .fs-speakers { align-items: flex-end; }
+
+/* Speaker cards: the channel tree's .client row with the native speaking
+   avatar (canvas plasma + light halo) scaled from 26 px to 36 px. */
+.fs-hud .client.fs-speaker {
+    margin: 0; min-height: 0; width: max-content; max-width: 100%; cursor: default;
+    display: flex; align-items: center; gap: 14px; padding: 11px 18px 11px 13px;
+    border-radius: calc(var(--fs-radius) * 1.1); border: 1px solid var(--fs-glass-line); border-left-width: 1px;
+    background: var(--fs-glass); color: var(--fs-text); font-size: 15px;
+    -webkit-backdrop-filter: blur(var(--fs-blur)) saturate(1.5); backdrop-filter: blur(var(--fs-blur)) saturate(1.5);
+    box-shadow: 0 10px 40px rgba(0, 0, 0, .3);
+    transition: opacity .3s var(--fs-ease);
+}
+.fs-hud .client.fs-speaker:hover { background: var(--fs-glass); }
+.fs-hud .client.fs-speaker:not(.speaking) { opacity: .62; }
+.fs-hud .client.fs-speaker .client-name { flex: 0 1 auto; color: inherit; font-weight: 600; }
+.fs-speaker-av {
+    position: relative; display: inline-flex; flex: none; width: 26px; height: 26px;
+    margin: 5px; transform: scale(1.385); transform-origin: center;
+}
+.fs-speaker-av > .avatar { width: 26px; height: 26px; flex: 0 0 26px; }
+.fs-hud .client.fs-speaker .avatar {
+    color: #fff; font-size: 10px; text-shadow: 0 1px 1px rgb(0 0 0 / 35%);
+    background: color-mix(in srgb, var(--avatar-color, #70b7f5) 78%, #0b1520);
+}
+.fs-speaker-muted { display: inline-flex; color: var(--fs-dim); }
+.fs-speaker-muted .ui-icon { width: 15px; height: 15px; }
+.fs-whisper-tag {
+    padding: 2px 8px; border-radius: 999px; background: var(--accent); color: var(--fs-on-acc);
+    font-size: 10.5px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase;
+}
+.fs-more { margin: 6px 4px 0; font-size: 12.5px; color: var(--fs-dim); }
+
+.fs-peek { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.fs-peek:not(:empty) { margin-top: 22px; }
+.fs-side.peek-above .fs-peek:not(:empty) { margin: 0 0 22px; }
+.fs-peek-item {
+    display: flex; gap: 9px; align-items: flex-start; max-width: 300px;
+    padding: 9px 13px 9px 8px; border-radius: calc(var(--fs-radius) * .9); font-size: 13px;
+    animation: fs-peek-in .32s var(--fs-ease) both;
+}
+.fs-peek-avatar { width: 24px; height: 24px; flex: 0 0 24px; font-size: 10px; color: #fff; border: 0;
+    background: color-mix(in srgb, var(--avatar-color, #70b7f5) 78%, #0b1520); }
+.fs-peek-body { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.fs-peek-name { font-weight: 700; }
+.fs-peek-text { opacity: .88; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+@keyframes fs-peek-in { from { opacity: 0; translate: -10px 0; } }
+
+/* ---------------------------------------------------- quick reply bubble */
+.fs-reply {
+    position: absolute; translate: var(--fs-tx, 0) var(--fs-ty, 0);
+    width: min(360px, calc(100% - 48px));
+    display: flex; flex-direction: column; align-items: flex-end; gap: 14px;
+}
+.fs-hud[data-bubble$="left"] .fs-reply { align-items: flex-start; }
+.fs-quick {
+    width: 100%; border-radius: var(--fs-radius); overflow: hidden;
+    animation: fs-quick-in .36s var(--fs-ease) both;
+}
+@keyframes fs-quick-in { from { opacity: 0; translate: 24px 0; } }
+.fs-quick-head {
+    display: flex; align-items: center; gap: 10px; padding: 11px 12px 11px 14px;
+    border-bottom: 1px solid var(--fs-glass-line);
+}
+.fs-quick-avatar { position: relative; display: inline-flex; flex: none; width: 26px; height: 26px; margin: 2px 8px 2px 2px; transform: scale(1.15); }
+.fs-hud .fs-quick-avatar.client { margin: 2px 8px 2px 2px; padding: 0; min-height: 0; background: none; border: 0; }
+.fs-quick-avatar .avatar { width: 26px; height: 26px; flex: 0 0 26px; font-size: 10px; color: #fff; border: 0;
+    background: color-mix(in srgb, var(--avatar-color, #70b7f5) 78%, #0b1520); }
+.fs-quick-who { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.fs-quick-name { font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fs-quick-sub { font-size: 11.5px; opacity: .7; }
+.fs-quick-lock { display: inline-flex; opacity: .75; }
+.fs-quick-lock .ui-icon { width: 15px; height: 15px; }
+.fs-quick-close, .fs-quick-send {
+    width: 30px; height: 30px; display: grid; place-items: center; flex: none;
+    border: 0; border-radius: 8px; background: transparent; color: inherit; cursor: pointer; opacity: .8;
+}
+.fs-quick-close:hover, .fs-quick-send:hover { background: rgba(255, 255, 255, .1); opacity: 1; }
+.fs-quick-close .ui-icon, .fs-quick-send .ui-icon { width: 16px; height: 16px; }
+.fs-quick-log { list-style: none; margin: 0; padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; font-size: 13px; }
+.fs-quick-log:empty { display: none; }
+.fs-bubble {
+    max-width: 85%; align-self: flex-start; padding: 8px 12px; border-radius: 12px 12px 12px 4px;
+    background: rgba(255, 255, 255, .08); border: 1px solid var(--fs-glass-line); overflow-wrap: anywhere;
+}
+.fs-bubble.self {
+    align-self: flex-end; border-radius: 12px 12px 4px 12px;
+    background: color-mix(in srgb, var(--accent) 20%, transparent); border-color: color-mix(in srgb, var(--accent) 35%, transparent);
+}
+.fs-bubble-name { display: block; font-size: 11.5px; opacity: .8; }
+.fs-quick-form {
+    display: flex; align-items: center; gap: 6px; margin: 0 12px 12px; height: 40px; padding: 0 4px 0 12px;
+    border-radius: calc(var(--fs-radius) * .7); background: rgba(255, 255, 255, .08); border: 1px solid var(--fs-glass-line);
+}
+.fs-quick-form:focus-within { border-color: color-mix(in srgb, var(--accent) 60%, transparent); }
+.fs-quick-input {
+    flex: 1; min-width: 0; border: 0; outline: 0; background: transparent; color: inherit; font: inherit; font-size: 13px;
+}
+.fs-hud .fs-quick-input:focus-visible { outline: 0; }
+.fs-quick-input::placeholder { color: var(--fs-dim); opacity: .85; }
+.fs-quick-error { margin: -4px 14px 12px; color: var(--fs-danger); font-size: 12px; }
+
+.fs-unread {
+    display: inline-flex; align-items: center; gap: 10px; padding: 8px 14px;
+    border-radius: 999px; font: inherit; font-size: 12.5px; cursor: pointer;
+}
+.fs-unread .ui-icon { width: 15px; height: 15px; }
+.fs-unread-names { opacity: .75; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* -------------------------------------------------------------- the dock */
+.fs-dock {
+    position: absolute; left: 50%; bottom: 24px; translate: -50% 0;
+    display: flex; align-items: flex-end; gap: 6px; padding: 10px 14px;
+    border-radius: calc(var(--fs-radius) * 1.4); max-width: calc(100% - 32px);
+}
+.fs-db {
+    position: relative; display: flex; flex-direction: column; align-items: center; gap: 5px;
+    width: 62px; padding: 0; border: 0; background: none; color: var(--fs-text);
+    font: 500 11px/1.2 var(--font-body, sans-serif); cursor: pointer;
+}
+.fs-db-icon {
+    width: 44px; height: 38px; display: grid; place-items: center;
+    border-radius: calc(var(--fs-radius) * .8); background: rgba(255, 255, 255, .1);
+    transition: background .15s, translate .2s var(--fs-ease);
+}
+.fs-db-icon .ui-icon { width: 20px; height: 20px; }
+.fs-db:hover .fs-db-icon { background: rgba(255, 255, 255, .18); }
+.fs-db:focus-visible { outline: 0; }
+.fs-db:focus-visible .fs-db-icon { outline: 2px solid var(--accent); outline-offset: 2px; }
+.fs-db.off .fs-db-icon, .fs-db[aria-pressed="true"] .fs-db-icon { background: color-mix(in srgb, var(--fs-danger) 80%, transparent); color: #fff; }
+.fs-db.on .fs-db-icon, .fs-layout[aria-checked="true"] .fs-db-icon { background: var(--accent); color: var(--fs-on-acc); }
+.fs-exit .fs-db-icon { background: color-mix(in srgb, var(--fs-danger) 85%, transparent); color: #fff; }
+.fs-exit:hover .fs-db-icon { background: var(--fs-danger); }
+.fs-db:disabled { opacity: .45; cursor: default; }
+.fs-badge {
+    position: absolute; top: -5px; right: 6px; min-width: 18px; height: 18px; padding: 0 5px;
+    border-radius: 999px; background: var(--fs-live); color: #fff; font: 700 10.5px/18px var(--font-body, sans-serif);
+}
+.fs-layouts { display: flex; gap: 6px; padding: 0 4px; border-left: 1px solid var(--fs-glass-line); border-right: 1px solid var(--fs-glass-line); }
+.fs-volume {
+    display: flex; flex-direction: column; justify-content: flex-end; gap: 10px; width: 184px; padding: 0 10px 8px;
+    font-size: 11.5px;
+}
+.fs-volume-head { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
+.fs-volume-head .ui-icon { width: 15px; height: 15px; }
+.fs-volume-value { margin-left: auto; font-weight: 700; }
+.fs-volume.disabled { opacity: .5; }
+.fs-volume-input {
+    width: 100%; height: 16px; margin: 0; background: transparent; cursor: pointer;
+    -webkit-appearance: none; appearance: none;
+}
+.fs-volume-input::-webkit-slider-runnable-track {
+    height: 5px; border-radius: 3px;
+    background: linear-gradient(to right, var(--accent) var(--fs-volume, 50%), rgba(127, 127, 127, .35) var(--fs-volume, 50%));
+}
+.fs-volume-input::-webkit-slider-thumb {
+    -webkit-appearance: none; appearance: none; width: 14px; height: 14px; margin-top: -4.5px;
+    border-radius: 50%; background: #fff; box-shadow: 0 1px 4px rgba(0, 0, 0, .4);
+}
+.fs-volume-input:disabled { cursor: default; }
+
+/* Narrow fullscreen windows: labels go, icons stay. */
+@media (max-width: 860px) {
+    .fs-db-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+    .fs-db { width: 46px; }
+    .fs-volume { width: 120px; }
+    .fs-telemetry .fs-tele-rate { display: none; }
+}
+
+/* ----------------------------------------------------- reduced motion */
+@media (prefers-reduced-motion: reduce) {
+    .fs-transient, .fs-hud .client.fs-speaker, .fs-db-icon, .fs-hud-host :is(.vtile-quality-button, .vtile-diagnostics, .stream-live-controls) { transition: none; }
+    .fs-peek-item, .fs-quick { animation: none; }
+    .fs-hud[data-hud="hidden"] :is(.fs-telemetry, .fs-dock) { translate: none; }
+    .fs-hud[data-hud="hidden"] .fs-dock { translate: -50% 0; }
+}
+:root[data-reduce-motion="1"] :is(.fs-transient, .fs-hud .client.fs-speaker, .fs-db-icon) { transition: none; }
+:root[data-reduce-motion="1"] :is(.fs-peek-item, .fs-quick) { animation: none; }
+:root[data-reduce-motion="1"] .fs-hud[data-hud="hidden"] .fs-telemetry { translate: none; }
+:root[data-reduce-motion="1"] .fs-hud[data-hud="hidden"] .fs-dock { translate: -50% 0; }

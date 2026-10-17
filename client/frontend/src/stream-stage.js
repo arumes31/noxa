@@ -18,6 +18,7 @@ import {
     AUDIO_FOLLOW, DUCK_LEVEL, HOTKEY_TILES, STAGE_MODES, SPLIT_MAX, SPLIT_MIN,
     createStageState, gridShape, hotkeyIndex, publisherOf, stageKind,
 } from "./multiview-state.js";
+import { createFullscreenHud } from "./fullscreen-hud.js";
 
 const V = () => window.__noxa;
 
@@ -95,6 +96,12 @@ export function createStreamStage({ gridEl, tiles, onFocusChange }) {
     let kind = "none";
     let qualityFocus = null;
     let lastGains = "";
+    // Design 45 fullscreen HUD for this stage and its tiles (fullscreen-hud.js).
+    const hud = createFullscreenHud({
+        root: () => root, kind: () => kind, tiles, state, displayName,
+        setMode: mode => setMode(mode),
+    });
+    window.__noxaFullscreen = { chatMessage: hud.chatMessage };
 
     // ------------------------------------------------------------- building
     function ensureRoot() {
@@ -650,6 +657,7 @@ export function createStreamStage({ gridEl, tiles, onFocusChange }) {
             qualityFocus = nextQuality;
             onFocusChange?.(qualityFocus);
         }
+        hud.update();
         return changed;
     }
 
@@ -663,6 +671,7 @@ export function createStreamStage({ gridEl, tiles, onFocusChange }) {
 
     return {
         render, tileClicked,
+        voiceChanged: () => hud.voiceChanged(),
         get qualityFocus() { return qualityFocus; },
         get kind() { return kind; },
         state,
