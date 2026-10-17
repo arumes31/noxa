@@ -46,6 +46,16 @@ func (e *Engine) prepareVideoBoundsLocked(bounds VideoBounds) (*webrtc.API, erro
 	), nil
 }
 
+// videoRepairCachePackets is the per-outbound-stream NACK history (Pion
+// requires a power of two). Pion's default of 1024 packets covers only
+// 0.7-1 s of 1080p60 at 12-15 Mbit/s. 2.5 s at 15 Mbit/s with ~1200-byte
+// packets is about 3,900 packets, so 4096 covers videoReorderWait up to
+// roughly 15.7 Mbit/s. Pion's copying packet factory retains at most one
+// pooled MTU-sized buffer per slot: about 4096 x 1.5 KB = 6 MB per viewer
+// and video stream when full, i.e. no more than the window's own media.
+// Audio and video streams without NACK feedback do not use the responder.
+const videoRepairCachePackets = 4096
+
 // Each API gets its own codec/interceptor registration. SettingEngine values
 // are immutable after construction, as required by Pion's WithSettingEngine.
 func newEngineMedia(enableAV1 bool, bounds VideoBounds, egress *mediaEgressRegistry) (*webrtc.MediaEngine, *interceptor.Registry, error) {
@@ -80,8 +90,13 @@ func newEngineMediaObserved(enableAV1 bool, bounds VideoBounds, egress *mediaEgr
 	// first 100 ms NACK tick. Twenty-six attempts cover the 2.5 s repair window
 	// while still ending retries on an idle source. Default registration only
 	// advertises NACK for video; the audio feedback policy remains unchanged.
+	//
+	// The responder answers viewer NACKs from the server's own send history;
+	// viewer feedback never reaches the publisher (only PLI/FIR are relayed).
+	// Size that history for the same 2.5 s repair window as the ingress.
 	if err := webrtc.RegisterDefaultInterceptorsWithOptions(media, registry,
 		webrtc.WithNackGeneratorOptions(nack.GeneratorSize(videoReorderPackets), nack.GeneratorMaxNacksPerPacket(26)),
+		webrtc.WithNackResponderOptions(nack.ResponderSize(videoRepairCachePackets)),
 	); err != nil {
 		return nil, nil, fmt.Errorf("webrtc: registering default interceptors: %w", err)
 	}
