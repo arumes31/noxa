@@ -263,6 +263,20 @@ func (t *sourceTimingTable) outputMappingsEqual(publisher string, ssrcA, offsetA
 	return diff <= timingPreserveTolerance && diff >= -timingPreserveTolerance
 }
 
+// preferTimingOffset prepares an output's continuity for the packet about
+// to be translated: when that packet would start a new source or watch epoch,
+// it records the offset that keeps the output's RTP->capture-time mapping
+// (preservingOffset). switchTimestampOffset still decides whether it can be
+// used. Every packet that may switch an output goes through here, the live
+// fan-out and a GOP cache start alike, so the offset the SR generator later
+// derives from the packets actually sent is the one chosen here.
+func (r *Router) preferTimingOffset(v *videoContinuity, publisher string, pkt *rtp.Packet) {
+	v.preferredOffsetOK = false
+	if v.seen && (v.ssrc != pkt.SSRC || v.pendingEpoch) {
+		v.preferredOffset, v.preferredOffsetOK = r.sourceTiming.preservingOffset(publisher, v.ssrc, v.timestampOffset, pkt.SSRC, pkt.Timestamp, time.Now())
+	}
+}
+
 type sentSenderReport struct {
 	lsr uint32 // middle 32 bits of the NTP value sent
 	at  time.Time

@@ -34,7 +34,15 @@ func (s *pubSlot) enqueueMedia(pkt *rtp.Packet, ticket mediaTicket) (bool, error
 	admit := func() error { allowed = true; return nil }
 	switch {
 	case ticket.router != nil:
-		if err := ticket.router.mediaCommit(ticket.delivery, ticket.guard, ticket.videoRevision)(admit); err != nil {
+		// Translated video waits for a contended scope gate (mediaAdmit): its
+		// continuity already reserved this sequence number. Voice never waits
+		// for a control update: a contended gate drops the 20 ms frame, as
+		// before, and the next one is admitted (see the voice priority lanes).
+		commit := ticket.router.mediaCommit
+		if ticket.delivery.Slot == SlotCam || ticket.delivery.Slot == SlotScreen {
+			commit = ticket.router.mediaAdmit
+		}
+		if err := commit(ticket.delivery, ticket.guard, ticket.videoRevision)(admit); err != nil {
 			return false, err
 		}
 	case ticket.guard != nil:
@@ -114,6 +122,18 @@ type mediaEgressStream struct {
 	// timing records actually sent primary packets for Sender Reports. Its
 	// leaf mutex is taken after a successful write, never across one.
 	timing egressTiming
+}
+
+// videoDrain reports the bound pacer's estimated drain time for its queue
+// plus extra bytes; ok is false before the sender is bound.
+func (s *mediaEgressStream) videoDrain(extra int) (drain time.Duration, ok bool) {
+	s.mu.RLock()
+	pacer := s.pacer
+	s.mu.RUnlock()
+	if pacer == nil {
+		return 0, false
+	}
+	return pacer.videoDrain(extra), true
 }
 
 func (r *mediaEgressRegistry) ticketID() uint64 {
@@ -265,7 +285,11 @@ func (s *mediaEgressStream) writeResultKind(header *rtp.Header, payload []byte, 
 			return outputError
 		}
 		if ticket.router != nil {
-			return ticket.router.withMediaScope(ticket.delivery, commit)
+			busy, err := ticket.router.gatedMediaScope(ticket.delivery, mediaScopeTry, commit)
+			if busy {
+				reason = mediaDropScopeBusy
+			}
+			return err
 		}
 		return commit()
 	}

@@ -143,6 +143,11 @@ func (r *Router) recordAudioReceiverReports(clientID string, sender *webrtc.RTPS
 	if sender == nil || len(reports) == 0 {
 		return
 	}
+	// Only audio outputs keep receiver reports. Video senders report too, at
+	// the same rate per viewer; do not serialize them on Router.mu.
+	if track := sender.Track(); track == nil || track.Kind() != webrtc.RTPCodecTypeAudio {
+		return
+	}
 	parameters := sender.GetParameters()
 	r.mu.Lock()
 	defer r.mu.Unlock()

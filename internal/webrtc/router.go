@@ -147,24 +147,24 @@ type pubSlot struct {
 	videoContinuity   videoContinuity
 	watchEpoch        uint64 // serialized by videoMu; never decreases
 	videoSource       atomic.Uint32
-	videoBindingReady atomic.Bool   // Pion Send finished publishing its writer
-	videoStartupEpoch atomic.Uint64 // first decodable packet admitted for this watch
+	videoBindingReady atomic.Bool         // Pion Send finished publishing its writer
+	videoStartupEpoch atomic.Uint64       // first decodable packet admitted for this watch
+	gopRefillAt       atomic.Int64        // UnixNano of a pending cache refill request; 0 = none
+	gopRefilledAt     atomic.Int64        // UnixNano of the last cache start delivered
+	backfill          []gopBackfillPacket // cached GOP still being admitted; videoMu
+	backfilling       bool                // a drainBackfill worker runs; videoMu
 	keyframeGate      keyframe.FeedbackGate
 }
 
 // videoBacklog is how long media already queued for this subscriber waits
-// in its relay pacer before it can be sent.
+// in its relay pacer before it can be sent. It shares the pacer's single
+// drain estimate with the GOP cache's admission bound (videoDrain).
 func (s *pubSlot) videoBacklog() time.Duration {
 	if s == nil || s.egress == nil {
 		return 0
 	}
-	s.egress.mu.RLock()
-	pacer := s.egress.pacer
-	s.egress.mu.RUnlock()
-	if pacer == nil {
-		return 0
-	}
-	return pacer.videoBacklog()
+	drain, _ := s.egress.videoDrain(0)
+	return drain
 }
 
 // WriteRTP starts the subscriber's header-extension space afresh. Publisher
@@ -245,6 +245,7 @@ type Router struct {
 	pubTracks    map[string]map[string]*pubTrack // subscriberID -> publisherID -> tracks
 	audioIngress map[publicationKey]*audioIngressDiagnostic
 	videoIngress map[videoIngressKey]*videoIngressDiagnostic
+	gopCaches    map[videoIngressKey]*gopCache     // current reader per source layer
 	pubPeers     map[string]*PeerConnectionWrapper // subscriberID -> its wrapper
 	outputs      map[string]TrackWriter            // tap clientID -> audio output track (recorder taps only)
 	videoOutputs map[string]TrackWriter            // tap clientID -> video output track (taps only)
@@ -286,6 +287,11 @@ type Router struct {
 	// voicePath lets microphone packets avoid waiting for mu (see
 	// router_voice_path.go).
 	voicePath routerVoicePath
+
+	// deferTrackRemovals and trackRemovals are protected by mu. See
+	// beginDeferredTrackRemovalsLocked.
+	deferTrackRemovals bool
+	trackRemovals      []pendingTrackRemoval
 
 	// canTalk gates outgoing audio per client (talk power); nil allows all.
 	// canVideo gates outgoing video per client (video publish permission);
@@ -518,10 +524,13 @@ func (r *Router) JoinChannel(channelID int64, clientID string) {
 // members are torn down.
 func (r *Router) LeaveChannel(channelID int64, clientID string) {
 	r.mu.Lock()
+	r.beginDeferredTrackRemovalsLocked()
 	r.leaveChannelLocked(channelID, clientID)
 	renegotiate := r.removePairsLocked(channelID, clientID)
+	removals := r.endDeferredTrackRemovalsLocked()
 	hook := r.onRenegotiate
 	r.mu.Unlock()
+	flushTrackRemovals(removals)
 
 	if hook != nil {
 		for sub := range renegotiate {
@@ -687,6 +696,13 @@ func (r *Router) removeSlotLocked(pc *PeerConnectionWrapper, t *pubTrack, slot s
 	if !exists {
 		return false
 	}
+	if r.deferTrackRemovals {
+		// The slot leaves routing now; its egress and Pion sender are retired
+		// by flushTrackRemovals after Router.mu is released.
+		r.trackRemovals = append(r.trackRemovals, pendingTrackRemoval{pc: pc, slot: s})
+		delete(set, slot)
+		return true
+	}
 	if s.egress != nil {
 		s.egress.stop()
 	}
@@ -695,6 +711,44 @@ func (r *Router) removeSlotLocked(pc *PeerConnectionWrapper, t *pubTrack, slot s
 	}
 	delete(set, slot)
 	return true
+}
+
+// pendingTrackRemoval is an output already removed from routing whose egress
+// stop and Pion RemoveTrack still have to run.
+type pendingTrackRemoval struct {
+	pc   *PeerConnectionWrapper
+	slot *pubSlot
+}
+
+// beginDeferredTrackRemovalsLocked makes removeSlotLocked queue Pion work.
+// RemoveTrack takes the recipient's Pion lock, which that recipient's own
+// SetRemoteDescription can hold for a long time during a renegotiation
+// storm. A departing viewer touches every other recipient: retiring them all
+// under Router.mu stalled the ingress dispatcher of every source for hundreds
+// of milliseconds, expiring queued packets for every viewer.
+func (r *Router) beginDeferredTrackRemovalsLocked() {
+	r.deferTrackRemovals = true
+}
+
+func (r *Router) endDeferredTrackRemovalsLocked() []pendingTrackRemoval {
+	removals := r.trackRemovals
+	r.trackRemovals, r.deferTrackRemovals = nil, false
+	return removals
+}
+
+// flushTrackRemovals runs without router locks and before renegotiation hooks,
+// so the following offers no longer carry the removed senders.
+func flushTrackRemovals(removals []pendingTrackRemoval) {
+	for _, removal := range removals {
+		if removal.slot.egress != nil {
+			removal.slot.egress.stop()
+		}
+		if removal.pc != nil && removal.slot.sender != nil {
+			// removeSender defers the Pion removal while this recipient's
+			// offer/answer is in flight (see PeerConnectionWrapper.removeSender).
+			removal.pc.removeSender(removal.slot.sender)
+		}
+	}
 }
 
 // addPublisherLocked creates the per-publisher output tracks for (subscriber,
@@ -875,6 +929,7 @@ type slotClaim struct {
 	live    *atomic.Bool
 	token   uint64
 	trackID string
+	gop     *gopCache // video reader's cache; set on the reader's own copy
 }
 
 func (r *Router) claimSlot(clientID, key string, trackIDs ...string) (uint64, bool) {
@@ -1212,6 +1267,7 @@ func (r *Router) DetachPeerKeepChannel(clientID string) {
 func (r *Router) detachPeer(clientID string, leaveChannel bool) {
 	r.sourceTiming.forgetPublisher(clientID)
 	r.mu.Lock()
+	r.beginDeferredTrackRemovalsLocked()
 	r.invalidateVideoLocked(clientID)
 	r.forgetVoiceFanoutLocked(clientID)
 	delete(r.pubPeers, clientID)
@@ -1233,7 +1289,13 @@ func (r *Router) detachPeer(clientID string, leaveChannel bool) {
 			delete(r.whisperPairs, pub)
 		}
 	}
+	departed := r.videoSources[clientID]
 	delete(r.videoSources, clientID)
+	for _, layers := range departed {
+		for _, ssrc := range layers {
+			r.forgetKeyframeSourceLocked(ssrc)
+		}
+	}
 	for ref := range r.videoCodecs {
 		if ref.publisher == clientID {
 			delete(r.videoCodecs, ref)
@@ -1262,6 +1324,12 @@ func (r *Router) detachPeer(clientID string, leaveChannel bool) {
 			delete(r.videoIngress, key)
 		}
 	}
+	for key, cache := range r.gopCaches {
+		if key.publisher == clientID {
+			cache.invalidate()
+			delete(r.gopCaches, key)
+		}
+	}
 	if leaveChannel {
 		delete(r.trackSlots, clientID)
 	}
@@ -1277,7 +1345,9 @@ func (r *Router) detachPeer(clientID string, leaveChannel bool) {
 	}
 	channelID, ok := r.clientChan[clientID]
 	hook := r.onRenegotiate
+	removals := r.endDeferredTrackRemovalsLocked()
 	r.mu.Unlock()
+	flushTrackRemovals(removals)
 
 	if hook != nil {
 		for sub := range renegotiate {
@@ -1710,6 +1780,11 @@ func (r *Router) ReadVideoLoop(clientID, slot string, track VideoTrackReader) {
 		return
 	}
 	ownedSource := r.slotClaims[clientID][claimKey]
+	ownedSource.gop = &gopCache{}
+	if r.gopCaches == nil {
+		r.gopCaches = make(map[videoIngressKey]*gopCache)
+	}
+	r.gopCaches[videoIngressKey{clientID, slot, rid}] = ownedSource.gop
 	bySlot, ok := r.videoSources[clientID]
 	if !ok {
 		bySlot = make(map[string]map[string]uint32)
@@ -1748,6 +1823,9 @@ func (r *Router) ReadVideoLoop(clientID, slot string, track VideoTrackReader) {
 		if r.videoIngress[ingressKey] == ingress {
 			delete(r.videoIngress, ingressKey)
 		}
+		if r.gopCaches[ingressKey] == ownedSource.gop {
+			delete(r.gopCaches, ingressKey)
+		}
 		// Re-look up: a peer rebuild may have replaced these maps, and this
 		// loop must not unregister the layer that succeeded it.
 		if bySlot := r.videoSources[clientID]; bySlot != nil {
@@ -1763,6 +1841,7 @@ func (r *Router) ReadVideoLoop(clientID, slot string, track VideoTrackReader) {
 				delete(r.videoSources, clientID)
 			}
 		}
+		r.forgetKeyframeSourceLocked(ssrc)
 	}()
 
 	codecSnapshot := func() webrtc.RTPCodecCapability {
@@ -1789,7 +1868,12 @@ func (r *Router) ReadVideoLoop(clientID, slot string, track VideoTrackReader) {
 	if repairPeer != nil {
 		requestRepairRTT = repairPeer.RequestVideoRepairRTT
 	}
-	current := func() bool { return r.ownsSlot(clientID, claimKey, token) }
+	// The claim's live flag is cleared under Router.mu whenever the claim is
+	// replaced, released or detached, and never set again. Reading it keeps
+	// the per-packet ingress read off Router.mu: a control operation holding
+	// the router lock (track creation for a joining viewer, a slow Pion call)
+	// must not stall RTP reads and thereby every viewer of this source.
+	current := func() bool { return ownedSource.live != nil && ownedSource.live.Load() }
 	var dispatch *videoIngressDispatch
 	dispatchRecovery := false
 	dispatchVP8 := vp8BoundsInspector{bounds: VideoBounds{16383, 16383}}
@@ -1810,6 +1894,7 @@ func (r *Router) ReadVideoLoop(clientID, slot string, track VideoTrackReader) {
 			dimensions = vp8BoundsInspector{bounds: policy.bounds}
 			dispatchVP8 = vp8BoundsInspector{bounds: VideoBounds{16383, 16383}}
 			dispatchRecovery = true
+			ownedSource.gop.invalidate()
 		}
 		if dispatch.cancelled.Load() || !current() {
 			return
@@ -1850,9 +1935,11 @@ func (r *Router) ReadVideoLoop(clientID, slot string, track VideoTrackReader) {
 			h264RecoveryPending = true
 			h265Frame = h265ForwardFrame{rejected: true, rejectedSSRC: pkt.SSRC, rejectedTimestamp: pkt.Timestamp}
 			h265RecoveryPending = true
+			ownedSource.gop.invalidate()
 			return
 		}
 		if hasAdmittedCodec && !sameVideoCodec(lastAdmittedCodec, codec) {
+			ownedSource.gop.invalidate()
 			oldH264, oldH265 := h264Frame, h265Frame
 			h264Frame = h264ForwardFrame{onReject: oldH264.onReject}
 			h265Frame = h265ForwardFrame{}
@@ -1877,6 +1964,7 @@ func (r *Router) ReadVideoLoop(clientID, slot string, track VideoTrackReader) {
 			if dispatchRecovery && len(packets) > 0 {
 				if !keyframe {
 					dispatch.discardRecovery(len(packets))
+					ownedSource.gop.invalidate()
 					if !isVideoPadding(pkt) {
 						r.requestKeyframeAsync(clientID, slot, rid, keyframeH265Assembly)
 					}
@@ -1897,6 +1985,7 @@ func (r *Router) ReadVideoLoop(clientID, slot string, track VideoTrackReader) {
 				}
 				r.forwardVideoFrameAtPolicyCodecSource(clientID, slot, rid, packet, now, policy, true, mime, keyframe && i == 0, &ownedSource, packets)
 			}
+			ownedSource.gop.observe(mime, packets, keyframe, lost, now)
 			return
 		}
 		h265Frame = h265ForwardFrame{}
@@ -1906,6 +1995,7 @@ func (r *Router) ReadVideoLoop(clientID, slot string, track VideoTrackReader) {
 			if dispatchRecovery && len(packets) > 0 {
 				if !keyframe {
 					dispatch.discardRecovery(len(packets))
+					ownedSource.gop.invalidate()
 					if !isVideoPadding(pkt) {
 						r.requestKeyframeAsync(clientID, slot, rid, keyframeH264Assembly)
 					}
@@ -1932,6 +2022,7 @@ func (r *Router) ReadVideoLoop(clientID, slot string, track VideoTrackReader) {
 				}
 				r.forwardVideoFrameAtPolicyCodecSource(clientID, slot, rid, packet, now, policy, true, mime, keyframe && i == 0, &ownedSource)
 			}
+			ownedSource.gop.observe(mime, packets, keyframe, lost, now)
 			return
 		}
 		h264Frame = h264ForwardFrame{onReject: h264Frame.onReject}
@@ -1997,8 +2088,6 @@ func (r *Router) forwardVideoFrameAtPolicyCodec(senderID, slot, rid string, pkt 
 
 // A reader supplies its immutable claim, including same-SSRC replacements.
 // Direct forwarding callers retain their existing uncaptured-source behavior.
-const videoSeenRefresh = 100 * time.Millisecond
-
 func (r *Router) forwardVideoFrameAtPolicyCodecSource(senderID, slot, rid string, pkt *rtp.Packet, now time.Time, policy videoPolicy, inspected bool, mime string, frameStart bool, source *slotClaim, hevcUnit ...[]*rtp.Packet) int {
 	if source != nil && (source.live == nil || !source.live.Load()) {
 		return 0
@@ -2010,10 +2099,7 @@ func (r *Router) forwardVideoFrameAtPolicyCodecSource(senderID, slot, rid string
 	if !r.allowVideoPacket(senderID, pkt.MarshalSize(), now) {
 		return 0
 	}
-	// Layer freshness has a one-second window. Refresh it at most every
-	// videoSeenRefresh so per-packet video forwarding does not take the
-	// router lock exclusively thousands of times per second, which would
-	// contend with voice fan-out (ForwardRTP) on the same lock.
+	r.markVideoSeen(senderID, slot, rid, pkt, now)
 	r.mu.RLock()
 	ref := videoSourceRef{senderID, slot}
 	last, seen := r.videoSeen[ref][rid]
@@ -2115,26 +2201,15 @@ func (r *Router) forwardVideoFrameAtPolicyCodecSource(senderID, slot, rid string
 					return false, nil
 				}
 				var accepted, needsKeyframe bool
-				_ = r.withWatch(w.delivery, func() error {
-					if w.delivery.WatchEpoch < output.watchEpoch {
-						return nil
-					}
-					if w.delivery.WatchEpoch != output.watchEpoch {
-						output.watchEpoch = w.delivery.WatchEpoch
-						output.videoContinuity.beginEpoch()
-					}
+				translate := func() {
 					// A source switch keeps the receiver's RTP->capture-time
 					// mapping when both publisher mappings are known, so no
 					// earlier or later SR can mistime either source's frames.
-					continuity := &output.videoContinuity
-					continuity.preferredOffsetOK = false
-					if continuity.seen && (continuity.ssrc != pkt.SSRC || continuity.pendingEpoch) {
-						continuity.preferredOffset, continuity.preferredOffsetOK = r.sourceTiming.preservingOffset(senderID, continuity.ssrc, continuity.timestampOffset, pkt.SSRC, pkt.Timestamp, time.Now())
-					}
+					r.preferTimingOffset(&output.videoContinuity, senderID, pkt)
 					switch {
 					case strings.EqualFold(mime, webrtc.MimeTypeH265):
 						if len(hevcUnit) == 0 || len(hevcUnit[0]) == 0 {
-							return nil
+							return
 						}
 						if output.videoContinuity.h265UnitFirst != hevcUnit[0][0] {
 							fresh := !output.videoContinuity.seen || output.videoContinuity.pendingEpoch || output.videoContinuity.ssrc != pkt.SSRC
@@ -2144,13 +2219,13 @@ func (r *Router) forwardVideoFrameAtPolicyCodecSource(senderID, slot, rid string
 								// The prefix was not accepted for this viewer. Never
 								// turn a complete source unit into an accepted suffix.
 								needsKeyframe = true
-								return nil
+								return
 							}
 							output.videoContinuity.h265UnitFirst = hevcUnit[0][0]
 						}
 						if output.videoContinuity.h265DropUnit {
 							intentionalDrop = true
-							return nil
+							return
 						}
 						packet, accepted = output.videoContinuity.translateH265(pkt, now, frameStart)
 					case strings.EqualFold(mime, webrtc.MimeTypeH264):
@@ -2159,8 +2234,71 @@ func (r *Router) forwardVideoFrameAtPolicyCodecSource(senderID, slot, rid string
 						packet, accepted = output.videoContinuity.translate(pkt, now)
 					}
 					needsKeyframe = !accepted
+				}
+				// A recipient that waits for a keyframe (new watch, or a refill
+				// requested by its own PLI) starts from the source's GOP cache
+				// at a live unit boundary instead of asking the publisher.
+				var cached []gopUnit
+				var cache *gopCache
+				if source != nil && output.egress != nil && !frameStart && !isVideoPadding(pkt) && gopCacheable(mime) {
+					cache = source.gop
+				}
+				_ = r.withWatchWait(w.delivery, func() error {
+					if w.delivery.WatchEpoch < output.watchEpoch {
+						return nil
+					}
+					if w.delivery.WatchEpoch != output.watchEpoch {
+						output.watchEpoch = w.delivery.WatchEpoch
+						output.videoContinuity.beginEpoch()
+					}
+					if cache != nil && w.delivery.WatchEpoch != 0 {
+						awaiting := !output.videoContinuity.seen || output.videoContinuity.pendingEpoch || output.videoContinuity.ssrc != pkt.SSRC
+						if awaiting || output.gopRefillAt.Load() != 0 {
+							if cached = cache.snapshotBefore(now, pkt, mime); cached != nil {
+								return nil // inject outside the watch gate: admission takes it again
+							}
+						}
+					}
+					translate()
 					return nil
 				})
+				if cached != nil {
+					fresh := !output.videoContinuity.seen || output.videoContinuity.pendingEpoch
+					started, advanced := false, false
+					if output.videoTransportReady(r, w.delivery.RecipientID) {
+						started, advanced = r.injectGOP(output, mediaTicket{delivery: w.delivery, guard: guard, router: r, videoRevision: policy.revision, videoRID: rid}, mime, cached, now)
+					}
+					if advanced {
+						// The cache already advanced this recipient; never roll it back.
+						intentionalDrop = true
+					}
+					if started {
+						if fresh {
+							output.videoStartupEpoch.Store(output.watchEpoch)
+						}
+						translate()
+					} else {
+						// Not admitted (sender unbound, or the burst would not
+						// drain within gopCacheMaxDrain). A playing recipient keeps
+						// its live media; the refill falls back to the publisher.
+						refill := output.gopRefillAt.Swap(0) != 0
+						translate()
+						if accepted && refill && w.delivery.WatchEpoch != 0 {
+							// The cache declined this viewer's own PLI: from here it
+							// is an ordinary upstream request, held to the
+							// viewer's keyframe feedback gate. The RTCP write is
+							// asynchronous; this fanout still holds videoMu.
+							if output.keyframeGate.Allow(time.Now(), output.videoBacklog()) {
+								r.requestKeyframeAsync(senderID, slot, rid, keyframeViewerFeedback)
+							} else {
+								r.recordDeferredKeyframe(senderID, slot, rid)
+							}
+						}
+					}
+				}
+				if accepted && frameStart {
+					output.gopRefillAt.Store(0) // a live keyframe restarted it
+				}
 				if !accepted {
 					// Request only for a current watch whose continuity needs a
 					// keyframe and whose output can receive it. The first post-ready
@@ -2176,7 +2314,7 @@ func (r *Router) forwardVideoFrameAtPolicyCodecSource(senderID, slot, rid string
 				output.videoSource.Store(pkt.SSRC)
 			}
 			if slot, ok := w.writer.(*pubSlot); ok && slot.egress != nil {
-				return slot.enqueueMedia(packet, mediaTicket{delivery: w.delivery, guard: guard, router: r, videoRevision: policy.revision, videoSource: pkt.SSRC, videoRID: rid, timingSSRC: pkt.SSRC, timingTimestamp: pkt.Timestamp})
+				return slot.enqueueVideoLocked(packet, mediaTicket{delivery: w.delivery, guard: guard, router: r, videoRevision: policy.revision, videoSource: pkt.SSRC, videoRID: rid, timingSSRC: pkt.SSRC, timingTimestamp: pkt.Timestamp})
 			}
 			written = false
 			write := func() error {
@@ -2202,6 +2340,35 @@ func (r *Router) forwardVideoFrameAtPolicyCodecSource(senderID, slot, rid string
 		r.notifyForward("video", sent)
 	}
 	return sent
+}
+
+// videoSeenRefresh bounds how often the fan-out takes Router.mu exclusively
+// to record layer activity. Readers judge activity against a one-second
+// horizon, so a coarser timestamp changes no layer decision, while an
+// exclusive lock per packet serializes every publisher and control reader
+// and contends with voice fan-out (ForwardRTP) on the same lock.
+const videoSeenRefresh = 100 * time.Millisecond
+
+func (r *Router) markVideoSeen(senderID, slot, rid string, pkt *rtp.Packet, now time.Time) {
+	if isVideoPadding(pkt) {
+		return
+	}
+	ref := videoSourceRef{senderID, slot}
+	r.mu.RLock()
+	source, ok := r.videoSources[senderID][slot][rid]
+	last := r.videoSeen[ref][rid]
+	r.mu.RUnlock()
+	if !ok || source != pkt.SSRC || (now.Sub(last) >= 0 && now.Sub(last) < videoSeenRefresh) {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if source, ok := r.videoSources[senderID][slot][rid]; ok && source == pkt.SSRC {
+		if r.videoSeen[ref] == nil {
+			r.videoSeen[ref] = make(map[string]time.Time)
+		}
+		r.videoSeen[ref][rid] = now
+	}
 }
 
 // qualityToRID maps the client-facing quality names to simulcast RIDs.
@@ -2470,6 +2637,13 @@ func (r *Router) relayKeyframeRequest(subscriberID string, sender *webrtc.RTPSen
 		}
 	}
 	r.mu.RUnlock()
+	// One viewer's picture loss is repaired from the GOP cache: a fresh
+	// upstream keyframe would cost every other viewer bandwidth and quality.
+	// Only an unservable cache, or a refill that went unserved, goes upstream.
+	if owner != "" && (!currentKnown || currentRID == rid) && r.gopServable(owner, sourceSlot, rid, requester, time.Now()) &&
+		requester.requestGOPRefill(time.Now()) {
+		return
+	}
 	if owner != "" {
 		// Every forwarded request makes the publisher's single upload encode
 		// a keyframe for all receivers. A receiver that cannot currently take
@@ -2522,8 +2696,43 @@ func (r *Router) allowKeyframeRequest(ssrc uint32, now time.Time) bool {
 	if last := r.keyframeLast[ssrc]; !last.IsZero() && now.Sub(last) < keyframeRequestWindow {
 		return false
 	}
-	r.keyframeLast[ssrc] = now
+	r.noteKeyframeRequestLocked(ssrc, now)
 	return true
+}
+
+// keyframeSweepThreshold bounds the throttle map without scanning it on the
+// ordinary path. Every publisher restart or codec rebind brings a new random
+// SSRC; entries older than the window carry no throttle state and are pruned.
+const keyframeSweepThreshold = 64
+
+// noteKeyframeRequestLocked records a claimed request. Router.mu is held.
+func (r *Router) noteKeyframeRequestLocked(ssrc uint32, now time.Time) {
+	if r.keyframeLast == nil {
+		r.keyframeLast = make(map[uint32]time.Time)
+	}
+	if len(r.keyframeLast) >= keyframeSweepThreshold {
+		for source, last := range r.keyframeLast {
+			if now.Sub(last) >= keyframeRequestWindow || now.Before(last) {
+				delete(r.keyframeLast, source)
+			}
+		}
+	}
+	r.keyframeLast[ssrc] = now
+}
+
+// forgetKeyframeSourceLocked drops throttle state once no slot publishes the
+// SSRC any more. Router.mu is held.
+func (r *Router) forgetKeyframeSourceLocked(ssrc uint32) {
+	for _, slots := range r.videoSources {
+		for _, layers := range slots {
+			for _, source := range layers {
+				if source == ssrc {
+					return
+				}
+			}
+		}
+	}
+	delete(r.keyframeLast, ssrc)
 }
 
 // allowVideo evaluates the video-publish gate for clientID, defaulting to

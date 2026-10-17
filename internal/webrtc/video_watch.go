@@ -18,6 +18,7 @@ type videoWatch struct {
 	qualityRID                            string
 	codecs                                uint8
 	hevcLevel                             uint8
+	cacheStart                            time.Time // first startup deferred to the GOP cache
 }
 
 // VideoPublication is a current, explicitly announced camera or screen source.
@@ -375,6 +376,22 @@ func (r *Router) watchAllowedLocked(d MediaDelivery) bool {
 	return d.Publication != 0 && d.WatchEpoch != 0 && watch.active &&
 		watch.publication == d.Publication && watch.epoch == d.WatchEpoch &&
 		r.publications[publicationKey{d.SenderID, key.slot}] == d.Publication
+}
+
+// withWatchWait is withWatch for the ingress dispatcher. Skipping a packet
+// there leaves a sequence hole no retransmission can fill (the packet was
+// never sent) and costs every viewer a keyframe; wait for the short update.
+// The dispatcher holds no router, watch or egress lock at this point.
+func (r *Router) withWatchWait(d MediaDelivery, write func() error) error {
+	if d.Tap || watchSlot(d.Slot) == "" {
+		return write()
+	}
+	r.watchMu.RLock()
+	defer r.watchMu.RUnlock()
+	if !r.watchAllowedLocked(d) {
+		return nil
+	}
+	return write()
 }
 
 func (r *Router) withWatch(d MediaDelivery, write func() error) error {
