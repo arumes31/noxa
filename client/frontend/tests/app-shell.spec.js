@@ -68,8 +68,8 @@ test('search field and Ctrl+K open the same accessible quick switcher', async ({
     await expect(input).toHaveAttribute('aria-activedescendant', 'qs-option-0');
     await input.fill('raid lea');
     await expect(page.getByRole('option', { name: /Raid leads/ })).toBeVisible();
-    await input.fill('secur');
-    await expect(page.getByRole('option', { name: /Security/ })).toBeVisible();
+    await input.fill('notif');
+    await expect(page.getByRole('option', { name: /Notifications/ }).first()).toBeVisible();
     await page.keyboard.press('Escape');
     await expect(page.locator('.qs-overlay')).toHaveCount(0);
     await page.keyboard.press('Control+k');

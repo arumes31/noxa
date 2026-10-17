@@ -4158,8 +4158,16 @@ function openQS() {
     }
     // Settings pages match once the user types, so they never crowd the
     // default list of channels and people.
-    for (const [page, key] of QUICK_SWITCH_SETTINGS) {
-        items.push({ label: "⚙ " + t(key), hint: t("shell.qs.kind.setting"), typed: true, action: () => V().openSettings(page) });
+    // The settings dialog may publish its own page list (settingsPages());
+    // otherwise the shell's static list is used.
+    let settingsPages = null;
+    try { settingsPages = V().settingsPages?.(); } catch { settingsPages = null; }
+    const pages = Array.isArray(settingsPages) && settingsPages.length
+        ? settingsPages.filter((page) => page?.id).map((page) => [page.id, String(page.label || page.id)])
+        : QUICK_SWITCH_SETTINGS;
+    for (const [page, key] of pages) {
+        const label = /^[\w-]+(\.[\w-]+)+$/.test(key) ? t(key) : key;
+        items.push({ label: "⚙ " + label, hint: t("shell.qs.kind.setting"), typed: true, action: () => V()?.openSettings?.(page) });
     }
 
     qsOverlay = document.createElement("div");

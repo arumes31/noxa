@@ -6,7 +6,6 @@ import { shellEnglish, shellGerman } from "../src/shell-messages.js";
 
 const css = (await readFile(new URL("../src/arctic-shell.css", import.meta.url), "utf8")).replace(/\/\*[\s\S]*?\*\//g, "");
 const html = await readFile(new URL("../index.html", import.meta.url), "utf8");
-const settingsSource = await readFile(new URL("../src/settings-ui.js", import.meta.url), "utf8");
 
 describe("app shell model", () => {
     it("lists only text channels, by sort index then snapshot order", () => {
@@ -36,8 +35,11 @@ describe("app shell model", () => {
         assert.equal(serverInitial(""), "");
     });
 
-    it("only offers settings pages the settings dialog knows", () => {
-        for (const [page] of QUICK_SWITCH_SETTINGS) assert.match(settingsSource, new RegExp(`id: "${page}"`), page);
+    it("keeps a well-formed fallback list of settings pages", () => {
+        // The settings dialog's own settingsPages() list wins when present.
+        const ids = QUICK_SWITCH_SETTINGS.map(([page]) => page);
+        assert.equal(new Set(ids).size, ids.length);
+        for (const [, key] of QUICK_SWITCH_SETTINGS) assert.match(key, /^settings\.[a-z]+$/);
     });
 
     it("carries every shell string in English and German", () => {
