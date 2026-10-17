@@ -25,9 +25,10 @@ export function voicePlaybackDetails(audio, blob, reference = '', known = {}) {
     const speed = document.createElement('select'); speed.setAttribute('aria-label',t('voiceMessage.speed'));
     for (const value of PLAYBACK_SPEEDS) { const option = document.createElement('option'); option.value = String(value); option.textContent = `${value}×`; speed.append(option); } speed.value = '1';
     controls.append(canvas, seek, duration, speed); audio.after(controls);
-    let seconds = Number(known?.durationMs) > 0 ? known.durationMs / 1000 : 0, key = '', restored = false, lastSaved = 0, released = false, analysis, sampledStream, sampleTimer;
+    let seconds = Number(known?.durationMs) > 0 ? known.durationMs / 1000 : 0, key = '', restored = false, lastSaved = 0, released = false, durationProbe = false, analysis, sampledStream, sampleTimer;
     let peaks = Array.isArray(known?.peaks) && known.peaks.length ? resamplePeaks(known.peaks, 64) : Array(64).fill(0);
     const current = () => !released && controls.isConnected && audio.isConnected;
+    const settled = () => !durationProbe && Number.isFinite(audio.duration);
     const draw = () => {
         const ctx = canvas.getContext('2d'); ctx.clearRect(0,0,384,40);
         const position = Number(audio.currentTime) || 0;
@@ -37,13 +38,18 @@ export function voicePlaybackDetails(audio, blob, reference = '', known = {}) {
         }
     };
     const save = () => {
-        if (!key || !seconds || !audio.hasAttribute('src')) return;
+        if (!settled() || !key || !seconds || !audio.hasAttribute('src')) return;
         const position = audio.ended || audio.currentTime >= seconds-.25 ? 0 : Math.max(0,Math.min(seconds, audio.currentTime || 0));
         try { localStorage.setItem(storageKey, JSON.stringify(boundedPlaybackHistory([{key,position,speed:audio.playbackRate,at:Date.now()}, ...readHistory().filter(e => e.key !== key)]))); } catch { /* Playback remains usable when local storage is unavailable. */ }
         lastSaved = Date.now();
     };
+    // A sealed reference can supply the duration before the media element
+    // has one. Until the element reports a finite duration (WebM: after the
+    // probe below seeks to the end and back to 0) neither save nor restore may
+    // run, or the probe would overwrite the saved position or discard the
+    // restored one.
     const restore = () => {
-        if (restored || !key || !seconds || audio.readyState < 1) return;
+        if (restored || !settled() || !key || !seconds || audio.readyState < 1) return;
         restored = true;
         const saved = readHistory().find(e => e.key === key);
         if (saved) { audio.playbackRate = saved.speed; speed.value = String(saved.speed); if (saved.position < seconds-.25) audio.currentTime = saved.position; }
@@ -83,7 +89,6 @@ export function voicePlaybackDetails(audio, blob, reference = '', known = {}) {
         duration.textContent = `${time(audio.currentTime || 0)} / ${time(seconds)}`;
         restore(); draw();
     };
-    let durationProbe = false;
     const metadata = () => {
         // MediaRecorder WebM often omits its duration. Let the media element find
         // its seekable end without decoding the entire clip into a JS buffer.

@@ -48,7 +48,7 @@ export function renderVoiceMessage(container, text, { tabID, channelID = 0, isCu
     const retry = () => {
         if (!isCurrent() || !wrap.isConnected) return;
         const focused = wrap.contains(document.activeElement);
-        load.removeAttribute('aria-disabled'); load.textContent = t('voiceMessage.retry');
+        load.removeAttribute('aria-disabled'); load.removeAttribute('aria-label'); load.textContent = t('voiceMessage.retry');
         wrap.replaceChildren(load, ...preview.parts, status); status.textContent = t('voiceMessage.unavailable');
         if (focused) load.focus();
     };
