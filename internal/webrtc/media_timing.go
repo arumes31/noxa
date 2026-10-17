@@ -46,6 +46,15 @@ import (
 // emitted for the generation of the most recently sent packet and only from
 // the current source's own mapping, so a late SR of a previous source is never
 // translated into the new stream. No RTP header bytes are added.
+//
+// Server-clock fallback: without a fresh publisher mapping (the publisher has
+// sent no SR for sourceTimingMaxAge, or a different clock rate) and for
+// outbound streams that are not egress-managed at all, the reporter emits
+// pion's default report instead: the last sent RTP timestamp extrapolated to
+// the server's wall clock. Receivers then still get a mapping for every
+// stream rather than none. Switching an egress stream between the two clock
+// domains after it has reported is a discontinuity, so it starts a new timing
+// generation with its holdoff, exactly like a source switch.
 
 const (
 	// senderReportInterval matches pion's default SR cadence.
@@ -295,6 +304,7 @@ type egressTiming struct {
 	generation   uint64
 	generationAt time.Time
 	lastSent     time.Time
+	lastRTP      uint32 // outbound timestamp of the last sent primary packet
 	packets      uint32
 	octets       uint32
 	delivery     MediaDelivery
@@ -306,6 +316,10 @@ type egressTiming struct {
 	nextReport   int
 	rtt          time.Duration
 	rttAt        time.Time
+	// serverClock is the clock domain of this stream's reports; reported is
+	// set once a report was committed in that domain.
+	serverClock bool
+	reported    bool
 }
 
 type egressTimingSnapshot struct {
@@ -316,6 +330,8 @@ type egressTimingSnapshot struct {
 	packets    uint32
 	octets     uint32
 	lastNTP    uint64
+	lastRTP    uint32
+	lastSent   time.Time
 	delivery   MediaDelivery
 	guard      MediaGuard
 	router     *Router
@@ -335,6 +351,7 @@ func (e *egressTiming) observeSent(header *rtp.Header, payloadSize int, ticket *
 	e.packets++
 	e.octets += uint32(payloadSize)
 	e.lastSent = now
+	e.lastRTP = header.Timestamp
 	e.delivery, e.guard, e.router, e.revision = ticket.delivery, ticket.guard, ticket.router, ticket.videoRevision
 	if e.seen && e.ssrc == header.SSRC && e.publisher == ticket.delivery.SenderID &&
 		e.sourceSSRC == ticket.timingSSRC && e.offset == offset {
@@ -361,7 +378,7 @@ func (e *egressTiming) snapshot(now time.Time) (egressTimingSnapshot, bool) {
 	}
 	return egressTimingSnapshot{
 		ssrc: e.ssrc, sourceSSRC: e.sourceSSRC, offset: e.offset, generation: e.generation,
-		packets: e.packets, octets: e.octets, lastNTP: e.lastNTP,
+		packets: e.packets, octets: e.octets, lastNTP: e.lastNTP, lastRTP: e.lastRTP, lastSent: e.lastSent,
 		delivery: e.delivery, guard: e.guard, router: e.router, revision: e.revision, publisher: e.publisher,
 		holdoff: e.generation > 1 && now.Sub(e.generationAt) < timingGenerationHoldoff,
 	}, true
@@ -382,6 +399,7 @@ func (e *egressTiming) commitReport(report *rtcp.SenderReport, generation uint64
 		return false
 	}
 	e.lastNTP = report.NTPTime
+	e.reported = true
 	e.reports[e.nextReport] = sentSenderReport{lsr: uint32(report.NTPTime >> 16), at: now}
 	e.nextReport = (e.nextReport + 1) % sentReportHistory
 	return true
@@ -408,6 +426,29 @@ func (e *egressTiming) observeReception(report rtcp.ReceptionReport, now time.Ti
 		e.rtt, e.rttAt = rtt, now
 		return
 	}
+}
+
+// selectClock records the clock domain of the next report. Leaving a domain
+// this stream has already reported in starts a new generation (with its
+// holdoff); it returns the generation to report in, or false while held off.
+func (e *egressTiming) selectClock(serverClock bool, now time.Time) (uint64, bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if !e.seen {
+		return 0, false
+	}
+	if e.serverClock != serverClock {
+		e.serverClock = serverClock
+		if e.reported {
+			e.reported = false
+			e.generation++
+			e.generationAt = now
+		}
+	}
+	if e.generation > 1 && now.Sub(e.generationAt) < timingGenerationHoldoff {
+		return 0, false
+	}
+	return e.generation, true
 }
 
 func (e *egressTiming) roundTrip() (time.Duration, time.Time) {
@@ -459,12 +500,17 @@ func (s *mediaEgressStream) senderReport(clockRate uint32, now time.Time) (*rtcp
 	if !ok || snapshot.holdoff || snapshot.router == nil {
 		return nil, 0, false
 	}
-	mapping, ok := snapshot.router.sourceTiming.mapping(snapshot.publisher, snapshot.sourceSSRC, now)
-	if !ok || mapping.clockRate != clockRate {
-		return nil, 0, false
-	}
 	if !snapshot.router.timingAuthorized(snapshot) {
 		return nil, 0, false
+	}
+	mapping, fresh := snapshot.router.sourceTiming.mapping(snapshot.publisher, snapshot.sourceSSRC, now)
+	fresh = fresh && mapping.clockRate == clockRate
+	generation, ok := s.timing.selectClock(!fresh, now)
+	if !ok {
+		return nil, 0, false
+	}
+	if !fresh {
+		return serverClockReport(snapshot.ssrc, snapshot.lastRTP, snapshot.lastSent, clockRate, snapshot.packets, snapshot.octets, now), generation, true
 	}
 	elapsed := now.Sub(mapping.receivedAt)
 	report := &rtcp.SenderReport{
@@ -474,7 +520,56 @@ func (s *mediaEgressStream) senderReport(clockRate uint32, now time.Time) (*rtcp
 		PacketCount: snapshot.packets,
 		OctetCount:  snapshot.octets,
 	}
-	return report, snapshot.generation, true
+	return report, generation, true
+}
+
+// ntpEpochOffset is the number of seconds from 1900 (NTP) to 1970 (Unix).
+const ntpEpochOffset = 2208988800
+
+// serverNTP returns the server's wall clock as an NTP timestamp.
+func serverNTP(now time.Time) uint64 {
+	return ntpAdd(uint64(ntpEpochOffset)<<32, time.Duration(now.UnixNano()))
+}
+
+// serverClockReport is pion's default SR: the last sent RTP timestamp,
+// extrapolated to now, against the server's wall clock.
+func serverClockReport(ssrc, lastRTP uint32, lastSent time.Time, clockRate, packets, octets uint32, now time.Time) *rtcp.SenderReport {
+	return &rtcp.SenderReport{
+		SSRC:        ssrc,
+		NTPTime:     serverNTP(now),
+		RTPTime:     lastRTP + uint32(rtpTicks(now.Sub(lastSent), clockRate)),
+		PacketCount: packets,
+		OctetCount:  octets,
+	}
+}
+
+// localSendStats records what an outbound stream that is not egress-managed
+// actually sent, for its server-clock SRs. Its mutex is a leaf.
+type localSendStats struct {
+	mu       sync.Mutex
+	seen     bool
+	lastRTP  uint32
+	lastSent time.Time
+	packets  uint32
+	octets   uint32
+}
+
+func (l *localSendStats) observe(header *rtp.Header, payloadSize int, now time.Time) {
+	l.mu.Lock()
+	l.seen = true
+	l.lastRTP, l.lastSent = header.Timestamp, now
+	l.packets++
+	l.octets += uint32(payloadSize)
+	l.mu.Unlock()
+}
+
+func (l *localSendStats) report(ssrc, clockRate uint32, now time.Time) (*rtcp.SenderReport, bool) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if !l.seen || clockRate == 0 || now.Sub(l.lastSent) > senderReportIdle {
+		return nil, false
+	}
+	return serverClockReport(ssrc, l.lastRTP, l.lastSent, clockRate, l.packets, l.octets, now), true
 }
 
 func (r *mediaEgressRegistry) stream(id string) *mediaEgressStream {
@@ -531,7 +626,9 @@ func (f sourceTimedReportFactory) NewInterceptor(string) (interceptor.Intercepto
 
 type sourceTimedStream struct {
 	id        string
+	ssrc      uint32
 	clockRate uint32
+	local     *localSendStats
 }
 
 type sourceTimedReporter struct {
@@ -602,10 +699,20 @@ func (s *sourceTimedReporter) streamFor(ssrc uint32) *mediaEgressStream {
 }
 
 func (s *sourceTimedReporter) BindLocalStream(info *interceptor.StreamInfo, writer interceptor.RTPWriter) interceptor.RTPWriter {
+	local := &localSendStats{}
 	s.mu.Lock()
-	s.streams[info.SSRC] = sourceTimedStream{id: info.ID, clockRate: info.ClockRate}
+	s.streams[info.SSRC] = sourceTimedStream{id: info.ID, ssrc: info.SSRC, clockRate: info.ClockRate, local: local}
 	s.mu.Unlock()
-	return writer
+	ssrc := info.SSRC
+	return interceptor.RTPWriterFunc(func(header *rtp.Header, payload []byte, attrs interceptor.Attributes) (int, error) {
+		// Only streams the egress registry does not manage report from this;
+		// recording is a leaf-locked counter update, like pion's own SR
+		// interceptor.
+		if header.SSRC == ssrc {
+			local.observe(header, len(payload), s.now())
+		}
+		return writer.Write(header, payload, attrs)
+	})
 }
 
 func (s *sourceTimedReporter) UnbindLocalStream(info *interceptor.StreamInfo) {
@@ -652,11 +759,15 @@ func (s *sourceTimedReporter) writeReports(writer interceptor.RTCPWriter) {
 	}
 	s.mu.Unlock()
 	for _, info := range infos {
+		now := s.now()
 		stream := s.registry.stream(info.id)
 		if stream == nil {
+			// Not egress-managed: pion's default server-clock report.
+			if report, ok := info.local.report(info.ssrc, info.clockRate, now); ok {
+				_, _ = writer.Write([]rtcp.Packet{report}, interceptor.Attributes{})
+			}
 			continue
 		}
-		now := s.now()
 		report, generation, ok := stream.senderReport(info.clockRate, now)
 		if !ok || !stream.timing.commitReport(report, generation, now) {
 			continue
