@@ -84,7 +84,11 @@ type mediaEgressStream struct {
 	mu         sync.RWMutex
 	active     bool
 	retryAfter time.Time
-	registry   *mediaEgressRegistry
+	failures   atomic.Uint32 // consecutive non-timeout write failures
+	// admitted/written count packets accepted for this output and packets
+	// that reached the transport; a gap between them localizes a silent pair.
+	admitted, written atomic.Uint64
+	registry          *mediaEgressRegistry
 	// Immutable owner notification; the engine registry is shared by all peers.
 	onVideoReady func()
 	// mu protects lifecycle and remains held through authorized socket writes.
@@ -137,6 +141,7 @@ func (s *mediaEgressStream) prepare(pkt *rtp.Packet, ticket mediaTicket) (rtp.Pa
 	s.order[s.nextTicket] = id
 	s.nextTicket = (s.nextTicket + 1) % mediaTicketCount
 	s.tickets[id] = &ticket
+	s.admitted.Add(1)
 	out := *pkt
 	// Internal CSRC words survive both GCC and NACK/RTX header copies. The
 	// terminal interceptor restores the publisher's CSRCs before SRTP. Never
@@ -238,6 +243,9 @@ func (s *mediaEgressStream) writeResultKind(header *rtp.Header, payload []byte, 
 			}
 			n, outputError = writer.Write(&out, payload, attrs)
 			if n > 0 && outputError == nil {
+				s.written.Add(1)
+			}
+			if n > 0 && outputError == nil {
 				s.observeVideoKind(&out, out.MarshalSize()+len(payload)+int(out.PaddingSize), ticket, time.Now(), kind)
 			}
 			return outputError
@@ -257,19 +265,60 @@ func (s *mediaEgressStream) writeResultKind(header *rtp.Header, payload []byte, 
 	// stream read locks unwind. A socket deadline does not invalidate ICE:
 	// discard its backlog, then let fresh, reauthorized packets try again.
 	// The cooldown bounds repeated attempts against a stalled transport.
-	var timeout net.Error
-	if errors.As(outputError, &timeout) && timeout.Timeout() {
-		s.mu.Lock()
-		s.ticketsMu.Lock()
-		clear(s.tickets)
-		clear(s.order[:])
-		s.ticketsMu.Unlock()
-		s.retryAfter = time.Now().Add(mediaSocketWriteTimeout)
-		s.mu.Unlock()
-	} else if outputError != nil && s.stop() {
-		log.Printf("webrtc: retiring failed media output slot=%s: %v; track rebuild required", ticket.delivery.Slot, outputError)
+	//
+	// Any other write error is treated the same way, with a growing cooldown.
+	// Retiring the output permanently turned one transient failure (an ICE
+	// restart closing the muxed socket under the in-flight packet, ENOBUFS
+	// during a burst) into a (subscriber, publisher) pair that stayed silent
+	// for the rest of the session while every other pair kept working. A
+	// sender that is really gone is stopped by Unbind/RemoveTrack instead.
+	if outputError != nil {
+		var timeout net.Error
+		isTimeout := errors.As(outputError, &timeout) && timeout.Timeout()
+		if failures, ok := s.backOff(isTimeout); ok && !isTimeout && failures == 1 {
+			log.Printf("webrtc: media output slot=%s write failed: %v; backing off and retrying", ticket.delivery.Slot, outputError)
+		}
+	} else if n > 0 {
+		s.failures.Store(0)
 	}
 	return n, reason, err
+}
+
+// mediaEgressRetryMax caps the cooldown after repeated non-timeout failures.
+const mediaEgressRetryMax = 2 * time.Second
+
+// backOff discards the backlog queued against a failed transport and pauses
+// admission. Timeouts use the socket deadline; other errors back off
+// exponentially from it up to mediaEgressRetryMax. It reports the number of
+// consecutive non-timeout failures and whether the stream is still active.
+func (s *mediaEgressStream) backOff(isTimeout bool) (uint32, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.active {
+		return 0, false
+	}
+	s.ticketsMu.Lock()
+	clear(s.tickets)
+	clear(s.order[:])
+	s.ticketsMu.Unlock()
+	delay := mediaSocketWriteTimeout
+	var failures uint32
+	if !isTimeout {
+		failures = s.failures.Add(1)
+		for i := uint32(1); i < failures && delay < mediaEgressRetryMax; i++ {
+			delay *= 2
+		}
+		delay = min(delay, mediaEgressRetryMax)
+	}
+	s.retryAfter = time.Now().Add(delay)
+	return failures, true
+}
+
+// Active reports whether the output still admits media (diagnostics/tests).
+func (s *mediaEgressStream) Active() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.active
 }
 
 type guardedLocalTrack struct {
