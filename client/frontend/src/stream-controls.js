@@ -436,7 +436,7 @@ export function startStreamSession(pc, addVideo, removeVideo) {
     container.setAttribute("aria-label", t("streams.available"));
     // The stream stage (stream-stage.js) may wrap the grid; move the wrapper.
     const gridEl = document.getElementById("video-grid");
-    const grid = gridEl.closest(".stream-stage") || gridEl;
+    const grid = gridEl.closest?.(".stream-stage") || gridEl;
     const media = document.createElement("div");
     media.className = "stream-media";
     grid.before(media);
@@ -453,7 +453,7 @@ export function stopStreamSession() {
         clearTimeout(s.timer);
         for (const entry of s.streams.values()) { entry.watching = false; applyWatch(s, entry); }
         const gridEl = document.getElementById("video-grid");
-        s.media.before(gridEl?.closest(".stream-stage") || gridEl || s.grid);
+        s.media.before(gridEl?.closest?.(".stream-stage") || gridEl || s.grid);
         s.media.remove();
         V().renderTree?.();
     }
