@@ -318,7 +318,7 @@ func (s *mediaEgressStream) writeResultKind(header *rtp.Header, payload []byte, 
 		var timeout net.Error
 		isTimeout := errors.As(outputError, &timeout) && timeout.Timeout()
 		voice := ticket.delivery.Slot == SlotMic || ticket.delivery.Slot == SlotScreenAudio
-		if !(isTimeout && voice) {
+		if !isTimeout || !voice {
 			if failures, ok := s.backOff(isTimeout); ok && !isTimeout && failures == 1 {
 				log.Printf("webrtc: media output slot=%s write failed: %v; backing off and retrying", ticket.delivery.Slot, outputError)
 			}

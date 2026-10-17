@@ -727,26 +727,24 @@ func (p *chaosPublisher) close() {
 // --- viewers ----------------------------------------------------------------
 
 type chaosTrackStats struct {
-	ssrc          uint32
-	mime          string
-	packets       int
-	firstAt       time.Time
-	firstKeyAt    time.Time
-	lowest        int64
-	lowestKey     bool
-	lowestInfo    string
-	highest       int64
-	seen          map[int64]struct{}
-	arrived       map[int64]time.Time
-	missing       map[int64]time.Time
-	bigJumps      int
-	generations   map[uint32]int
-	maxGeneration uint32
-	oldAfterNew   int
-	lastFrameAt   time.Time
-	frames        int
-	maxFrameGap   time.Duration
-	foreign       int
+	ssrc        uint32
+	mime        string
+	packets     int
+	firstAt     time.Time
+	firstKeyAt  time.Time
+	lowest      int64
+	lowestKey   bool
+	lowestInfo  string
+	highest     int64
+	seen        map[int64]struct{}
+	arrived     map[int64]time.Time
+	missing     map[int64]time.Time
+	bigJumps    int
+	generations map[uint32]int
+	lastFrameAt time.Time
+	frames      int
+	maxFrameGap time.Duration
+	foreign     int
 }
 
 type chaosViewer struct {

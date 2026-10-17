@@ -417,7 +417,6 @@ type viewer struct {
 	lastTick    time.Time
 	twccSeq     uint16
 	sending     *queued
-	probeTried  bool
 	payload     []byte
 	recorder    *twcc.Recorder
 	expired     int
@@ -492,11 +491,6 @@ func (w *world) addViewer(name string, cfg linkConfig) *viewer {
 		w.source.requestKeyframe("watch-start")
 	}
 	return v
-}
-
-func (v *viewer) leave() {
-	v.active = false
-	_ = v.bwe.Close()
 }
 
 // gcc.Pacer implementation: the estimator registers its accounting writer and
@@ -869,22 +863,6 @@ func (v *viewer) recovery(event, sustain time.Duration) time.Duration {
 		}
 	}
 	return -1
-}
-
-// downStepsInStableWindow counts estimate decreases; used to detect periodic
-// oscillation on a link whose capacity comfortably exceeds demand.
-func (v *viewer) estimateDecreases(from, to time.Duration) int {
-	n := 0
-	for i := 1; i < len(v.targets); i++ {
-		s := v.targets[i]
-		if s.at <= from || s.at > to {
-			continue
-		}
-		if s.target < v.targets[i-1].target {
-			n++
-		}
-	}
-	return n
 }
 
 func (r viewerReport) String() string {

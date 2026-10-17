@@ -264,19 +264,19 @@ type Settings struct {
 	DismissedAnnouncement string           `json:"dismissed_announcement"` // hash of the dismissed announcement (132)
 
 	// Social & meta (wave 8b).
-	Contacts           []Contact          `json:"contacts,omitempty"`      // (316)
-	BlockedUsers       []string           `json:"blocked_users,omitempty"` // (317) unique IDs
-	MutedConversations []string           `json:"muted_conversations,omitempty"`
+	Contacts           []Contact `json:"contacts,omitempty"`      // (316)
+	BlockedUsers       []string  `json:"blocked_users,omitempty"` // (317) unique IDs
+	MutedConversations []string  `json:"muted_conversations,omitempty"`
 	// HideChatActivity stops this client from sending read receipts and typing
 	// indicators, in direct messages and private groups alike. Delivery
 	// receipts are unaffected. Default (false) keeps the existing behaviour.
-	HideChatActivity bool `json:"hide_chat_activity,omitempty"`
-	UserNotes          map[string]string  `json:"user_notes,omitempty"`      // (315) uniqueID -> local note
-	RecentChannels     map[string][]int64 `json:"recent_channels,omitempty"` // (320) server addr -> last 5 channel IDs
-	AutoAwayMinutes    int                `json:"auto_away_minutes"`         // (308) 0 = off, default 15
-	AutoAwayMessage    string             `json:"auto_away_message"`         // (390) status line other clients see while idle
-	OnboardingDone     bool               `json:"onboarding_done"`           // (329)
-	LastSeenVersion    string             `json:"last_seen_version"`         // (330) what's-new tracking
+	HideChatActivity bool               `json:"hide_chat_activity,omitempty"`
+	UserNotes        map[string]string  `json:"user_notes,omitempty"`      // (315) uniqueID -> local note
+	RecentChannels   map[string][]int64 `json:"recent_channels,omitempty"` // (320) server addr -> last 5 channel IDs
+	AutoAwayMinutes  int                `json:"auto_away_minutes"`         // (308) 0 = off, default 15
+	AutoAwayMessage  string             `json:"auto_away_message"`         // (390) status line other clients see while idle
+	OnboardingDone   bool               `json:"onboarding_done"`           // (329)
+	LastSeenVersion  string             `json:"last_seen_version"`         // (330) what's-new tracking
 
 	// Identity (wave 9).
 	ActiveIdentity string `json:"active_identity,omitempty"` // (351) identity file stem in identities/

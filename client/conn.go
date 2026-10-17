@@ -71,17 +71,17 @@ type connManager struct {
 	// supportsConversationActivity gates private-group typing and shared read
 	// receipts: an older server would relay a group typing frame as global.
 	supportsConversationActivity bool
-	conn                           net.Conn
-	connEpoch                      uint64
-	addr                           string // control address (tab info)
-	clientID                       string
-	uniqueID                       string
-	nickname                       string
-	displayName                    string // requested public name; separate from the account login
-	isGuest                        bool
-	authorizationModel             string
-	closed                         bool
-	reconnectTerminal              bool // authenticated rejection or trust failure; guarded by mu
+	conn                         net.Conn
+	connEpoch                    uint64
+	addr                         string // control address (tab info)
+	clientID                     string
+	uniqueID                     string
+	nickname                     string
+	displayName                  string // requested public name; separate from the account login
+	isGuest                      bool
+	authorizationModel           string
+	closed                       bool
+	reconnectTerminal            bool // authenticated rejection or trust failure; guarded by mu
 	// The latest snapshot is replayed when a tab becomes active.
 	lastSnapshot string
 	// lastSubscriptions is the newest authoritative subscription set (312).

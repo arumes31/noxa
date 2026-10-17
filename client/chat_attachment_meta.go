@@ -35,6 +35,7 @@ var attachmentMetaSegment = regexp.MustCompile(`^nx1(;[a-z]{1,8}=[A-Za-z0-9_.-]+
 // maxAttachmentMetaSegment bounds the segment (fields + waveform) so a
 // crafted token cannot carry an unbounded blob next to the name.
 const maxAttachmentMetaSegment = 256
+
 var attachmentPeaks = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
 
 const (

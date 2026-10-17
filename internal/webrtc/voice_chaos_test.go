@@ -30,6 +30,7 @@
 package webrtc
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -770,7 +771,7 @@ func (c *chaosClient) closeSession() {
 
 func (c *chaosClient) connect() error {
 	h := c.h
-	conn, err := net.ListenPacket("udp4", "127.0.0.1:0")
+	conn, err := (&net.ListenConfig{}).ListenPacket(context.Background(), "udp4", "127.0.0.1:0")
 	if err != nil {
 		return err
 	}
