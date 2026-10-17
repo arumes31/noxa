@@ -148,9 +148,11 @@ test("overlay preferences stay drafts until Apply, support keyboard positioning 
     await page.getByLabel("Overlay monitor", { exact: true }).selectOption("left");
     await page.getByLabel("Overlay size", { exact: true }).fill("150");
     await page.getByLabel("Overlay opacity", { exact: true }).fill("40");
-    // Speaking-only is the overlay's fixed behaviour: shown, but locked on.
+    // Speaking-only defaults on; chat peek and auto-hide default off.
     await expect(page.getByLabel("Only show who's speaking", { exact: true })).toBeChecked();
-    await expect(page.getByLabel("Only show who's speaking", { exact: true })).toBeDisabled();
+    await expect(page.getByLabel("Only show who's speaking", { exact: true })).toBeEnabled();
+    await expect(page.getByLabel("Chat peek", { exact: true })).not.toBeChecked();
+    await expect(page.getByLabel("Auto-hide when idle", { exact: true })).not.toBeChecked();
     const sample = page.getByRole("button", { name: "Move overlay preview" });
     await sample.focus(); await page.keyboard.press("Shift+ArrowRight"); await page.keyboard.press("ArrowDown");
     await expect(page.locator('.ovl-anchor[aria-checked="true"]')).toHaveCount(0);
@@ -202,7 +204,10 @@ test("speaker avatars reach the native overlay as bounded thumbnails and clear a
     });
     await expect.poll(() => page.evaluate(() => window.__overlayUpdates.at(-1).speakers?.[0]?.avatar)).toBe("");
     await page.evaluate(() => { window.__noxa.state.clients[0].is_speaking = false; });
-    await expect.poll(() => page.evaluate(() => window.__overlayUpdates.at(-1))).toEqual({ active: false });
+    // The native overlay fades a member who stopped, so they stay listed
+    // (not speaking) for a few seconds before the snapshot empties.
+    await expect.poll(() => page.evaluate(() => window.__overlayUpdates.at(-1).speakers?.[0]?.speaking)).toBe(false);
+    await expect.poll(() => page.evaluate(() => window.__overlayUpdates.at(-1)), { timeout: 8000 }).toEqual({ active: false });
 });
 
 test("overlay animation overrides system motion settings and has its own saved toggle", async ({ page }) => {
@@ -262,7 +267,7 @@ test("breathing light halo replaces old styles and hugs every name", async ({ pa
     await expect(canvases).toHaveCount(2);
     await expect.poll(() => canvases.first().evaluate(canvas => canvas.width)).toBeGreaterThan(0);
     const pixels = await page.locator(".overlay-position-sample").evaluate(sample => {
-        const people = [...sample.querySelectorAll(".overlay-sample-person")];
+        const people = [...sample.querySelectorAll(".overlay-sample-person:not([hidden])")];
         const bounds = people.map(person => person.getBoundingClientRect());
         const results = people.map(person => {
             const name = person.querySelector(".overlay-sample-name"), a = name.getBoundingClientRect();
@@ -321,4 +326,57 @@ test("light halo and comb follow long names, freeze when disabled and stay bound
         const area = el.closest(".overlay-position-preview").getBoundingClientRect(), bounds = el.getBoundingClientRect();
         return bounds.width <= area.width;
     })).toBe(true);
+});
+
+test("behaviour toggles drive the settings preview and save with Apply", async ({ page }, testInfo) => {
+    await page.evaluate(() => window.__noxa.openSettings("overlay"));
+    const quiet = page.locator(".overlay-sample-quiet"), peek = page.locator(".overlay-sample-peek");
+    await expect(quiet).toBeHidden();
+    await expect(peek).toBeHidden();
+    await page.locator(".overlay-position-preview").screenshot({ path: testInfo.outputPath("preview-default.png") });
+    await page.getByLabel("Only show who's speaking", { exact: true }).uncheck();
+    await expect(quiet).toBeVisible();
+    // The quiet member keeps the still avatar + name look: no halo canvas.
+    await expect(page.locator(".overlay-animation-canvas")).toHaveCount(2);
+    await expect(quiet.locator(".overlay-animation-canvas")).toHaveCount(0);
+    await page.getByLabel("Chat peek", { exact: true }).check();
+    await expect(peek).toBeVisible();
+    await expect(peek).toHaveText(/Sam\s*gg, one more round\?/);
+    // Same text treatment as the names, and no panel behind it.
+    const style = await peek.evaluate(node => ({ background: getComputedStyle(node).backgroundColor, border: getComputedStyle(node).borderStyle,
+        shadow: getComputedStyle(node).textShadow, name: getComputedStyle(document.querySelector(".overlay-sample-details")).textShadow }));
+    expect(style).toMatchObject({ background: "rgba(0, 0, 0, 0)", border: "none" });
+    expect(style.shadow).toBe(style.name);
+    await page.getByLabel("Auto-hide when idle", { exact: true }).check();
+    await page.locator(".overlay-position-preview").screenshot({ path: testInfo.outputPath("preview-all-members-peek.png") });
+    await page.getByRole("button", { name: "Preview in game", exact: true }).click();
+    expect(await page.evaluate(() => window.__overlayPreview)).toMatchObject({ gaming_overlay_only_speaking: false, gaming_overlay_chat_peek: true, gaming_overlay_auto_hide: true });
+    expect(await page.evaluate(() => window.__overlaySaved)).toBeUndefined();
+    await page.getByRole("button", { name: "Apply", exact: true }).click();
+    expect(await page.evaluate(() => window.__overlaySaved)).toMatchObject({ gaming_overlay_only_speaking: false, gaming_overlay_chat_peek: true, gaming_overlay_auto_hide: true });
+});
+
+test("chat peek forwards only allowed, encryption-aware lines to the native overlay", async ({ page }) => {
+    await page.evaluate(() => {
+        Object.assign(window.__noxa.state.settings, { gaming_overlay_chat_peek: true, blocked_users: ["blocked-uid"], channel_notify: { "#9": { muted: true } } });
+        document.hasFocus = () => false; // playing a game: noXa is in the background
+        window.__chat = data => { for (const callback of window.__events.event || []) callback(JSON.stringify({ type: "chat", data })); };
+        window.__peek = () => (window.__overlayUpdates || []).at(-1)?.peek || [];
+    });
+    await page.evaluate(() => window.__chat({ id: 1, channel_id: 7, from: "Sam", from_unique_id: "sam", text: "gg, one more round?", enc_verified: true, enc_mode: "server" }));
+    await expect.poll(() => page.evaluate(() => window.__peek().map(line => [line.name, line.text]))).toEqual([["Sam", "gg, one more round?"]]);
+    expect(await page.evaluate(() => window.__overlayUpdates.at(-1).active)).toBe(true);
+    await page.evaluate(() => {
+        window.__chat({ id: 2, channel_id: 9, from: "Muted", from_unique_id: "m", text: "muted channel text", enc_verified: true, enc_mode: "server" });
+        window.__chat({ id: 3, channel_id: 7, from: "Blocked", from_unique_id: "blocked-uid", text: "blocked text", enc_verified: true, enc_mode: "server" });
+        window.__chat({ id: 4, channel_id: 7, from: "Mallory", from_unique_id: "mallory", text: "SECRET sent in plaintext" });
+    });
+    await expect.poll(() => page.evaluate(() => window.__peek().length)).toBe(2);
+    const lines = await page.evaluate(() => window.__peek());
+    expect(lines[1].name).toBe("Mallory");
+    expect(lines[1].text).not.toContain("SECRET");
+    expect(JSON.stringify(lines)).not.toMatch(/muted channel|blocked text/);
+    // Lines expire on their own; turning the setting off clears them at once.
+    await page.evaluate(() => { window.__noxa.state.settings.gaming_overlay_chat_peek = false; });
+    await expect.poll(() => page.evaluate(() => window.__overlayUpdates.at(-1))).toEqual({ active: false });
 });

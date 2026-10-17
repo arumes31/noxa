@@ -23,6 +23,7 @@ export const SETTINGS_CATEGORIES = Object.freeze([
         "gaming_overlay_style", "gaming_overlay_animate", "gaming_overlay_opacity", "gaming_overlay_scale",
         "gaming_overlay_self_color", "gaming_overlay_blue_start", "gaming_overlay_blue_end",
         "gaming_overlay_game_ui", "gaming_overlay_avoid_zones",
+        "gaming_overlay_only_speaking", "gaming_overlay_chat_peek", "gaming_overlay_auto_hide",
     ] },
     { id: "hotkeys", icon: "keyboard", rail: "main", keys: [
         "hotkey_ptt", "hotkey_mute", "hotkey_deafen", "whisper_reply_hotkey", "hotkey_quick_connect",

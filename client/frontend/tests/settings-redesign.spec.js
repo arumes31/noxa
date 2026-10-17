@@ -156,9 +156,9 @@ test("fullscreen overlay: preset zones block anchors, drops snap clear and Apply
     await expect(page.locator(".ovl-anchor-free")).toHaveText("All 8 anchors free");
     await expect(page.locator(".ovl-zone")).toHaveCount(0);
 
-    // Features the overlay cannot render yet are visible but disabled.
-    for (const name of ["Chat peek", "Auto-hide HUD"]) await expect(page.getByLabel(name, { exact: true })).toBeDisabled();
-    await expect(page.getByText("Coming soon")).toHaveCount(2);
+    // The behaviour toggles are live controls now; nothing is "coming soon".
+    await expect(page.getByText("Coming soon")).toHaveCount(0);
+    for (const name of ["Only show who's speaking", "Chat peek", "Auto-hide when idle"]) await expect(page.getByLabel(name, { exact: true })).toBeEnabled();
 
     await page.getByRole("button", { name: "Preview in game", exact: true }).click();
     expect(await page.evaluate(() => window.__overlayPreview.gaming_overlay_position)).toBeTruthy();
