@@ -380,8 +380,10 @@ func TestRenegotiationUnansweredTolerance(t *testing.T) {
 	if got := rec.count(); got != 1 {
 		t.Fatalf("offers while previous is unanswered = %d, want 1 (skipped)", got)
 	}
-	if got := clock.Pending(); got != 0 {
-		t.Fatalf("pending callbacks after unanswered skip = %d, want 0", got)
+	// Only the unanswered-offer watchdog remains armed; the skipped change
+	// waits for the answer (or for the watchdog's rollback).
+	if got := clock.Pending(); got != 1 {
+		t.Fatalf("pending callbacks after unanswered skip = %d, want 1 (answer watchdog)", got)
 	}
 
 	// The client answers the first offer late: renegotiation resumes.

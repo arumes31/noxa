@@ -22,6 +22,10 @@ var ErrNoPeer = errors.New("webrtc: no peer connection for client")
 // ErrPeerReset requires a fresh signaling session after a partially applied SDP.
 var ErrPeerReset = errors.New("webrtc: media negotiation requires reconnect")
 
+// errPeerNotNegotiated defers a server offer until the client's initial
+// offer has been answered.
+var errPeerNotNegotiated = errors.New("webrtc: initial negotiation not complete")
+
 // ErrOfferCollision asks the client to answer the outstanding server offer
 // before retrying its own offer on the same transport.
 var ErrOfferCollision = errors.New("webrtc negotiation collision")
@@ -34,6 +38,14 @@ type renegState struct {
 	pending    bool
 	lastSent   time.Time
 	unanswered int
+	// offerSeq identifies the outstanding server offer for the answer
+	// watchdog; answerTimer expires it after renegAnswerTimeout. expired
+	// counts consecutive expiries to back the watchdog off.
+	offerSeq    uint64
+	offeredAt   time.Time
+	answerTimer renegTimer
+	expired     int
+	outstanding string // SDP of the unanswered offer, for redelivery
 }
 
 type renegTimer interface {
@@ -62,6 +74,19 @@ func (realtimeRenegClock) AfterFunc(delay time.Duration, callback func()) renegT
 const (
 	defaultRenegDebounce  = 200 * time.Millisecond
 	defaultRenegRateLimit = 2 * time.Second
+	// defaultRenegAnswerTimeout bounds how long a server offer may stay
+	// unanswered before it is delivered again. Without it, a dropped offer
+	// froze this subscriber's track set: everybody who joined afterwards
+	// stayed inaudible to it.
+	defaultRenegAnswerTimeout = 8 * time.Second
+	// renegAnswerTimeoutMax caps the watchdog backoff for a client that keeps
+	// ignoring offers (one SDP per interval, never a constant cost).
+	renegAnswerTimeoutMax = 30 * time.Second
+	// renegStaleOffer is the age after which a client offer colliding with an
+	// outstanding server offer triggers immediate redelivery of that offer:
+	// the client evidently did not receive it, and is waiting for it to
+	// resolve the collision.
+	renegStaleOffer = 3 * time.Second
 )
 
 // Voice is the signaling and routing facade for the noxa voice pipeline.
@@ -79,6 +104,7 @@ type Voice struct {
 	renegClock     renegClock
 	renegDebounce  time.Duration
 	renegRateLimit time.Duration
+	renegAnswer    time.Duration
 }
 
 // NewVoice constructs a Voice facade over the given engine and router.
@@ -282,6 +308,7 @@ func (v *Voice) sendRenegotiation(clientID string, expected *renegState, generat
 		return
 	}
 
+	created := false
 	send := func() error {
 		// Guard acquisition may have waited through a peer replacement.
 		v.renegMu.Lock()
@@ -291,6 +318,19 @@ func (v *Voice) sendRenegotiation(clientID string, expected *renegState, generat
 		v.renegMu.Unlock()
 		if !current || v.engine.PeerConnection(clientID) != wrapper {
 			return ErrNoPeer
+		}
+		if wrapper.pc.CurrentRemoteDescription() == nil {
+			// The client's initial offer has not been answered yet. A fresh
+			// Pion peer is "stable", so an offer created now would be for a
+			// transport the client does not know: it drops it, its own offer
+			// then collides, and the reconnecting user ends up without voice.
+			// The pending change resumes once the initial answer is set.
+			v.renegMu.Lock()
+			if v.reneg[clientID] == st {
+				st.unanswered = 0
+			}
+			v.renegMu.Unlock()
+			return errPeerNotNegotiated
 		}
 		v.router.PrepareSubscriber(clientID)
 		offer, err := wrapper.CreateOffer()
@@ -306,6 +346,7 @@ func (v *Voice) sendRenegotiation(clientID string, expected *renegState, generat
 			)
 			return err
 		}
+		created = true
 
 		// Per-channel Opus parameters (21-23): rewrite the offer's Opus fmtp for
 		// the subscriber's channel before delivery.
@@ -319,6 +360,9 @@ func (v *Voice) sendRenegotiation(clientID string, expected *renegState, generat
 			return ErrNoPeer
 		}
 		st.lastSent = clock.Now()
+		st.offeredAt = st.lastSent
+		st.outstanding = offer
+		st.expired = 0
 		v.renegMu.Unlock()
 
 		if sender != nil {
@@ -332,7 +376,7 @@ func (v *Voice) sendRenegotiation(clientID string, expected *renegState, generat
 	} else {
 		err = guard(clientID, send)
 	}
-	if err != nil {
+	if err != nil && !created {
 		v.renegMu.Lock()
 		if v.reneg[clientID] == st {
 			st.unanswered = 0
@@ -340,6 +384,156 @@ func (v *Voice) sendRenegotiation(clientID string, expected *renegState, generat
 		}
 		v.renegMu.Unlock()
 		v.logger.Debug("renegotiation not delivered", zap.String("client_id", clientID), zap.Error(err))
+		return
+	}
+	if err != nil {
+		// Pion cannot roll back a local offer: the peer now waits in
+		// have-local-offer for an answer to an offer the client never got.
+		// Redeliver the same offer soon instead of waiting for an answer
+		// that cannot come (previously this wedged the subscriber for good).
+		v.logger.Debug("renegotiation offer not delivered; will redeliver", zap.String("client_id", clientID), zap.Error(err))
+		_, _, rateLimit := v.renegScheduleConfigLocked()
+		v.armAnswerWatchdog(clientID, st, wrapper, rateLimit)
+		return
+	}
+	v.armAnswerWatchdog(clientID, st, wrapper, 0)
+}
+
+// armAnswerWatchdog (re)starts the unanswered-offer timer for clientID. A zero
+// delay uses the answer timeout, backed off by the number of redeliveries.
+func (v *Voice) armAnswerWatchdog(clientID string, st *renegState, wrapper *PeerConnectionWrapper, delay time.Duration) {
+	v.renegMu.Lock()
+	if v.reneg[clientID] != st || st.unanswered == 0 {
+		v.renegMu.Unlock()
+		return
+	}
+	clock, _, _ := v.renegScheduleConfigLocked()
+	if delay <= 0 {
+		delay = v.renegAnswer
+		if delay <= 0 {
+			delay = defaultRenegAnswerTimeout
+		}
+		for i := 0; i < st.expired && delay < renegAnswerTimeoutMax; i++ {
+			delay *= 2
+		}
+		delay = min(delay, renegAnswerTimeoutMax)
+	}
+	st.offerSeq++
+	seq := st.offerSeq
+	if st.answerTimer != nil {
+		st.answerTimer.Stop()
+	}
+	st.answerTimer = nil
+	v.renegMu.Unlock()
+	timer := clock.AfterFunc(delay, func() { v.redeliverOffer(clientID, st, seq, wrapper) })
+	v.renegMu.Lock()
+	if v.reneg[clientID] == st && st.offerSeq == seq && st.unanswered > 0 {
+		st.answerTimer = timer
+		v.renegMu.Unlock()
+		return
+	}
+	v.renegMu.Unlock()
+	timer.Stop()
+}
+
+// redeliverOffer sends the outstanding server offer again when the client has
+// not answered it. Offers get lost between the server and the frontend (a
+// failed control write, an event dropped during a tab switch, an answer the
+// server could not apply); Pion cannot roll a local offer back, so without
+// redelivery that subscriber never negotiated another track: everybody who
+// joined afterwards stayed inaudible to it.
+func (v *Voice) redeliverOffer(clientID string, st *renegState, seq uint64, wrapper *PeerConnectionWrapper) {
+	v.renegMu.Lock()
+	if v.reneg[clientID] != st || st.offerSeq != seq || st.unanswered == 0 || st.outstanding == "" {
+		v.renegMu.Unlock()
+		return
+	}
+	st.answerTimer = nil
+	offer := st.outstanding
+	sender, guard := v.offerSender, v.offerGuard
+	v.renegMu.Unlock()
+	if v.engine.PeerConnection(clientID) != wrapper {
+		return
+	}
+	if wrapper.SignalingState() != webrtc.SignalingStateHaveLocalOffer {
+		// Answered through another path; resume whatever is pending.
+		v.renegMu.Lock()
+		if v.reneg[clientID] == st && st.offerSeq == seq {
+			st.unanswered = 0
+			st.outstanding = ""
+		}
+		v.renegMu.Unlock()
+		v.resumePending(clientID)
+		return
+	}
+	send := func() error {
+		if v.engine.PeerConnection(clientID) != wrapper || wrapper.SignalingState() != webrtc.SignalingStateHaveLocalOffer {
+			return ErrNoPeer
+		}
+		changed := v.router.PrepareSubscriber(clientID)
+		redelivered, stripped := v.router.sanitizeOffer(clientID, offer)
+		if changed || stripped {
+			// Changes made since the offer follow after its answer.
+			v.renegMu.Lock()
+			if v.reneg[clientID] == st {
+				st.pending = true
+			}
+			v.renegMu.Unlock()
+		}
+		if sender != nil {
+			return sender(clientID, redelivered)
+		}
+		return nil
+	}
+	var err error
+	if guard == nil {
+		err = send()
+	} else {
+		err = guard(clientID, send)
+	}
+	v.renegMu.Lock()
+	if v.reneg[clientID] == st && st.offerSeq == seq {
+		st.expired++
+	}
+	v.renegMu.Unlock()
+	if errors.Is(err, ErrNoPeer) {
+		v.logger.Warn("unanswered renegotiation offer cannot be redelivered",
+			zap.String("client_id", clientID), zap.Error(err))
+		return
+	}
+	v.logger.Warn("client did not answer renegotiation offer; redelivering it",
+		zap.String("client_id", clientID), zap.Error(err))
+	v.armAnswerWatchdog(clientID, st, wrapper, 0)
+}
+
+// redeliverSoon redelivers the outstanding offer right away when it is at
+// least minAge old (a fresh offer is probably still in flight).
+func (v *Voice) redeliverSoon(clientID string, wrapper *PeerConnectionWrapper, minAge time.Duration) {
+	v.renegMu.Lock()
+	st := v.reneg[clientID]
+	clock, _, _ := v.renegScheduleConfigLocked()
+	stale := st != nil && st.unanswered > 0 && st.outstanding != "" && clock.Now().Sub(st.offeredAt) >= minAge
+	// Only the first redelivery is immediate; repeats (a client that keeps
+	// colliding or keeps sending unusable answers) use the watchdog backoff.
+	delay := time.Nanosecond
+	if st != nil && st.expired > 0 {
+		delay = 0
+	}
+	v.renegMu.Unlock()
+	if stale {
+		v.armAnswerWatchdog(clientID, st, wrapper, delay)
+	}
+}
+
+// resumePending re-offers changes left pending by an earlier offer once the
+// peer is stable again.
+func (v *Voice) resumePending(clientID string) {
+	v.renegMu.Lock()
+	st := v.reneg[clientID]
+	resume := st != nil && st.pending && st.unanswered == 0 && st.timer == nil
+	v.renegMu.Unlock()
+	if resume {
+		v.scheduleRenegotiateForState(clientID, st)
 	}
 }
 
@@ -403,6 +597,19 @@ func (v *Voice) HandleOffer(clientID, offerSDP string, onLocalCandidate func(can
 					if cfg := v.channelAudioFor(clientID); !cfg.IsZero() {
 						answer = RewriteOpusFMTP(answer, cfg)
 					}
+					// An answer can only carry tracks the client offered m-lines
+					// for. Output tracks added (or rebuilt) since the last server
+					// offer must follow in one; the client re-offer is also the
+					// frontend's resync for a silent speaker, so it must converge.
+					if missing := v.router.unannouncedOutputs(clientID, answer); missing > 0 {
+						v.scheduleRenegotiate(clientID)
+					} else {
+						v.resumePending(clientID)
+					}
+				} else if errors.Is(err, ErrOfferCollision) {
+					// The client consumes the crossing server offer and retries.
+					// If that offer was lost, it waits in vain: redeliver it.
+					v.redeliverSoon(clientID, existing, renegStaleOffer)
 				}
 				return answer, err
 			}
@@ -441,6 +648,13 @@ func (v *Voice) HandleOffer(clientID, offerSDP string, onLocalCandidate func(can
 	// for the subscriber's channel.
 	if cfg := v.channelAudioFor(clientID); !cfg.IsZero() {
 		answer = RewriteOpusFMTP(answer, cfg)
+	}
+	// Publisher tracks beyond the client's offered m-lines (and changes
+	// deferred while the initial answer was pending) follow in a server offer.
+	if v.router.unannouncedOutputs(clientID, answer) > 0 {
+		v.scheduleRenegotiate(clientID)
+	} else {
+		v.resumePending(clientID)
 	}
 
 	if onLocalCandidate != nil {
@@ -518,12 +732,24 @@ func (v *Voice) HandleAnswer(clientID, answerSDP string) error {
 		return ErrNoPeer
 	}
 	if err := wrapper.HandleAnswer(answerSDP); err != nil {
+		// An answer that cannot be applied leaves the offer outstanding;
+		// offer it again shortly so the client can produce a usable answer.
+		if wrapper.SignalingState() == webrtc.SignalingStateHaveLocalOffer {
+			v.redeliverSoon(clientID, wrapper, 0)
+		}
 		return err
 	}
 	v.renegMu.Lock()
 	pending := false
 	if current := v.reneg[clientID]; st != nil && current == st {
 		st.unanswered = 0
+		st.expired = 0
+		st.outstanding = ""
+		st.offerSeq++
+		if st.answerTimer != nil {
+			st.answerTimer.Stop()
+			st.answerTimer = nil
+		}
 		pending = st.pending
 	}
 	v.renegMu.Unlock()
@@ -564,6 +790,9 @@ func (v *Voice) stopReneg(clientID string) {
 	if st, ok := v.reneg[clientID]; ok {
 		if st.timer != nil {
 			st.timer.Stop()
+		}
+		if st.answerTimer != nil {
+			st.answerTimer.Stop()
 		}
 		delete(v.reneg, clientID)
 	}

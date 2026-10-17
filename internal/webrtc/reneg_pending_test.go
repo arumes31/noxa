@@ -41,17 +41,20 @@ func TestRenegotiationRetainsChangesUntilPreviousOfferAnswered(t *testing.T) {
 	if rec.count() != 1 {
 		t.Fatal("sent overlapping offers while awaiting an answer")
 	}
-	if got := clock.Pending(); got != 0 {
-		t.Fatalf("retry timers while awaiting an answer = %d, want 0", got)
+	// Only the unanswered-offer watchdog is armed.
+	if got := clock.Pending(); got != 1 {
+		t.Fatalf("timers while awaiting an answer = %d, want 1 (answer watchdog)", got)
 	}
 	if err := v.HandleAnswer("subscriber", "invalid SDP"); err == nil {
 		t.Fatal("invalid answer unexpectedly accepted")
 	}
+	// An unusable answer gets the same offer redelivered, never a new
+	// overlapping offer.
 	clock.Advance(10 * rateLimit)
-	if rec.count() != 1 || clock.Pending() != 0 {
-		t.Fatal("invalid answer resumed negotiation or started retry timers")
+	if rec.count() != 2 || rec.sdp(1) != rec.sdp(0) {
+		t.Fatalf("invalid answer: offers = %d, want the outstanding offer redelivered once", rec.count())
 	}
-	if err := client.SetRemoteDescription(webrtc.SessionDescription{Type: webrtc.SDPTypeOffer, SDP: rec.sdp(0)}); err != nil {
+	if err := client.SetRemoteDescription(webrtc.SessionDescription{Type: webrtc.SDPTypeOffer, SDP: rec.sdp(1)}); err != nil {
 		t.Fatal(err)
 	}
 	answer, err := client.CreateAnswer(nil)
@@ -67,10 +70,10 @@ func TestRenegotiationRetainsChangesUntilPreviousOfferAnswered(t *testing.T) {
 	// No new membership event occurs. The pending late track must recover on
 	// this answer, rather than waiting indefinitely for an unrelated join.
 	clock.Advance(rateLimit)
-	if got := rec.count(); got != 2 {
-		t.Fatalf("offers after late answer = %d, want 2; pending publisher change was lost", got)
+	if got := rec.count(); got != 3 {
+		t.Fatalf("offers after late answer = %d, want 3; pending publisher change was lost", got)
 	}
-	if !strings.Contains(rec.sdp(1), "late-publisher") {
+	if !strings.Contains(rec.sdp(2), "late-publisher") {
 		t.Fatal("resumed offer omitted the pending publisher")
 	}
 }

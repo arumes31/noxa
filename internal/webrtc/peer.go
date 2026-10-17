@@ -219,6 +219,12 @@ func (w *PeerConnectionWrapper) CreateOffer() (string, error) {
 	return offer.SDP, nil
 }
 
+// SignalingState reports the current signaling state. (Pion cannot roll back
+// a local offer, so an unanswered server offer is redelivered, not undone.)
+func (w *PeerConnectionWrapper) SignalingState() webrtc.SignalingState {
+	return w.pc.SignalingState()
+}
+
 // AddICECandidate enqueues a remote ICE candidate for application to the
 // underlying PeerConnection. Candidates are applied asynchronously by an
 // internal goroutine to avoid blocking the signaling path.
