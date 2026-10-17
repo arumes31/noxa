@@ -389,7 +389,7 @@ export function createChannelTree({ P, $, syncTrayVoice, state, toast, fetchAvat
         av.dataset.uid = c.unique_id;
         const dataUrl = state.avatars.get(c.unique_id);
         if (dataUrl) {
-            setSafeImage(av, dataUrl);
+            setSafeImage(av, dataUrl, { avatar: true });
         } else {
             av.textContent = initials(c.nickname || c.unique_id || "?");
             fetchAvatar(c.unique_id);

@@ -1,3 +1,4 @@
+import { manageAvatarPlayback } from "./avatar-playback.js";
 import { closeContextMenu } from "./context-menu.js";
 import { createConnectionOverlay } from "./connection-overlay.js";
 import { initializeUpdateTransition, updateStartupBlocked, refreshUpdateTransition } from "./update-transition.js";
@@ -1784,7 +1785,7 @@ async function fetchAvatar(uniqueID) {
     }
     document.querySelectorAll(`.avatar[data-uid="${CSS.escape(uniqueID)}"]`).forEach((el) => {
         const url = state.avatars.get(uniqueID);
-        if (url) setSafeImage(el, url);
+        if (url) setSafeImage(el, url, { avatar: true });
     });
     renderClientCard();
 }
@@ -3254,3 +3255,6 @@ initWorkspace();
 // initialized. A startup exception leaves the old app's recovery guard active.
 void startupInitialized.then(ready => ready && window.go.main.App.ConfirmUpdateStartup())
     .catch(error => console.warn("Update startup confirmation failed", error));
+
+const stopAvatarPlayback = manageAvatarPlayback(document.body);
+window.addEventListener("pagehide", stopAvatarPlayback, { once: true });

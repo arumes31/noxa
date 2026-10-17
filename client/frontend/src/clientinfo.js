@@ -1,3 +1,4 @@
+import { originalAvatarSource } from "./avatar-playback.js";
 import { escapeHTML as escapeTranslation } from "./markdown.js";
 // clientinfo.js — right-click context menu on channel-tree users and the
 // TS3-style Client Info dialog (live-refreshing).
@@ -494,7 +495,7 @@ function openClientInfo(client) {
     const card = document.querySelector(`#client-card .card-avatar img`);
     if (card) {
         card.style.cursor = "zoom-in";
-        card.onclick = () => window.__noxaSocial.avatarLightbox(card.src);
+        card.onclick = () => window.__noxaSocial.avatarLightbox(originalAvatarSource(card));
     }
     // (315) local per-user note editor.
     const noteRow = document.createElement("div");

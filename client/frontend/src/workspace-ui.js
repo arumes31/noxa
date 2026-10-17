@@ -25,7 +25,7 @@ export function avatarColor(name = "") {
 function avatar(element, client) {
     const name = client.nickname || client.unique_id || "?";
     element.style.setProperty("--avatar-color", avatarColor(client.unique_id || name));
-    if (!setSafeImage(element, V().state.avatars.get(client.unique_id))) {
+    if (!setSafeImage(element, V().state.avatars.get(client.unique_id), { avatar: true })) {
         element.textContent = V().initials(name);
     }
 }

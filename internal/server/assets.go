@@ -415,7 +415,7 @@ func readImageAtRoot(root *os.Root, dir, base string) ([]byte, assetImage, error
 	if err != nil {
 		return nil, assetImage{}, err
 	}
-	if err := validateAssetImage(raw, image.extension); err != nil {
+	if err := validateImageForDirectory(raw, image.extension, dir); err != nil {
 		return nil, assetImage{}, fmt.Errorf("validating asset %q: %w", image.fileName, err)
 	}
 	return raw, image, nil
@@ -450,7 +450,7 @@ func (s assetStorage) readAvatarWithHook(uniqueID string, afterLegacyRead func()
 		if err != nil {
 			return nil, assetImage{}, err
 		}
-		if err := validateAssetImage(raw, hashed[0].extension); err != nil {
+		if err := validateImageForDirectory(raw, hashed[0].extension, "avatars"); err != nil {
 			return nil, assetImage{}, fmt.Errorf("validating avatar %q: %w", hashed[0].fileName, err)
 		}
 		legacy, err := safeLegacyAvatarVariants(root, uniqueID, base)
@@ -480,7 +480,7 @@ func (s assetStorage) readAvatarWithHook(uniqueID string, afterLegacyRead func()
 	if err != nil {
 		return nil, assetImage{}, err
 	}
-	if err := validateAssetImage(raw, legacy[0].extension); err != nil {
+	if err := validateImageForDirectory(raw, legacy[0].extension, "avatars"); err != nil {
 		return nil, assetImage{}, fmt.Errorf("validating legacy avatar %q: %w", legacy[0].fileName, err)
 	}
 	if afterLegacyRead != nil {
@@ -653,7 +653,7 @@ func (s assetStorage) listImages(dir string) ([]assetImage, error) {
 			return nil, err
 		}
 		raw, err := readRegularAsset(root, rel, maxImageBytes)
-		if err != nil || validateAssetImage(raw, format.extension) != nil {
+		if err != nil || validateImageForDirectory(raw, format.extension, dir) != nil {
 			// Directory contents are untrusted. A malformed or oversized
 			// preferred variant must not hide a valid lower-ranked one.
 			continue
@@ -852,7 +852,7 @@ func validImageVariants(root *os.Root, dir, base string) ([]assetImage, error) {
 			// but do not mask a later valid extension.
 			continue
 		}
-		if err := validateAssetImage(raw, candidate.extension); err != nil {
+		if err := validateImageForDirectory(raw, candidate.extension, dir); err != nil {
 			continue
 		}
 		valid = append(valid, candidate)

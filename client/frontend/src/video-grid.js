@@ -307,7 +307,7 @@ export function createVideoGrid({ applySendCaps, syncCameraButton, syncShareButt
         av.dataset.uid = uid;
         const url = uid && state.avatars.get(uid);
         if (url) {
-            setSafeImage(av, url);
+            setSafeImage(av, url, { avatar: true });
         } else {
             av.textContent = initials(name || "?");
             if (uid) fetchAvatar(uid);

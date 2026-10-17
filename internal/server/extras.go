@@ -63,7 +63,7 @@ func (s *TCPServer) setAvatar(ctx context.Context, client *Client, msg netproto.
 	if client.userID() == 0 {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, "guests cannot upload avatars")
 	}
-	raw, ext, err := decodeImage(msg.DataBase64)
+	raw, ext, err := decodeAvatarImage(msg.DataBase64)
 	if err != nil {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, err.Error())
 	}
