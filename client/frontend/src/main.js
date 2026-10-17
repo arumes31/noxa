@@ -26,7 +26,7 @@ import "./streams.css";
 import "./voice-diagnostics.css";
 import "./polls.css";
 import "./conversations.css";
-import { conversationChanged } from "./conversations.js";
+import { conversationChanged, conversationRead, conversationTyping } from "./conversations.js";
 import { initDirectMessages } from "./dm-view.js";
 import "./private-calls.css";
 import { privateCallChanged, privateCallSignal, stopPrivateCall, applyPrivateCallAudioSettings } from "./private-calls.js";
@@ -1631,6 +1631,14 @@ window.runtime.EventsOn("event", (json) => {
             return;
         case "conversation_changed":
             void conversationChanged(d);
+            return;
+        // Private-group activity: addressed relays, no content. Like typing,
+        // they change nothing in the tree and return early.
+        case "conversation_typing":
+            conversationTyping(d);
+            return;
+        case "conversation_read":
+            conversationRead(d);
             return;
         case "private_call":
             void privateCallChanged(d);

@@ -6,6 +6,8 @@ import { createVoiceRecording, VOICE_MAX_BYTES, VOICE_MAX_MS } from './voice-rec
 import { parseFileRef } from './chat-parsers.js';
 import { isBase64Payload } from './safe-media.js';
 import { voicePlaybackDetails, releaseVoicePlayback } from './voice-playback.js';
+import { waveformPeaks } from './voice-playback-state.js';
+import { normalizePeaks, voicePreview, withAttachmentMeta, WAVEFORM_BARS } from './attachment-meta.js';
 import './voice-messages.css';
 
 const V = () => window.__noxa;
@@ -37,12 +39,17 @@ export function renderVoiceMessage(container, text, { tabID, channelID = 0, isCu
     const wrap = document.createElement('div'); wrap.className = 'voice-message';
     const load = document.createElement('button'); load.type = 'button'; load.textContent = t('voiceMessage.play');
     const status = document.createElement('span'); status.setAttribute('role', 'status');
-    wrap.append(load, status); container.append(wrap);
+    // The sealed reference may already say how long the note is and how it
+    // looks, so both show before anything is downloaded (older notes: neither).
+    const preview = voicePreviewParts(ref.meta);
+    if (preview.duration) load.setAttribute('aria-label', t('dm.voice.load', { duration: preview.duration }));
+    if (preview.parts.some(part => part.classList.contains('voice-message-wave'))) wrap.classList.add('has-waveform');
+    wrap.append(load, ...preview.parts, status); container.append(wrap);
     const retry = () => {
         if (!isCurrent() || !wrap.isConnected) return;
         const focused = wrap.contains(document.activeElement);
         load.removeAttribute('aria-disabled'); load.textContent = t('voiceMessage.retry');
-        wrap.replaceChildren(load, status); status.textContent = t('voiceMessage.unavailable');
+        wrap.replaceChildren(load, ...preview.parts, status); status.textContent = t('voiceMessage.unavailable');
         if (focused) load.focus();
     };
     load.onclick = async () => {
@@ -65,10 +72,50 @@ export function renderVoiceMessage(container, text, { tabID, channelID = 0, isCu
             if (focused) audio.focus();
             trackVoicePlayback(audio);
             const bytes = Uint8Array.from(atob(data), character => character.charCodeAt(0));
-            voicePlaybackDetails(audio, new Blob([bytes], {type:mime}), `${ref.storage}#${ref.key}`);
+            voicePlaybackDetails(audio, new Blob([bytes], {type:mime}), `${ref.storage}#${ref.key}`, { durationMs: ref.meta?.durationMs, peaks: ref.meta?.peaks });
         } catch { retry(); }
     };
     return true;
+}
+
+// voicePreviewParts builds the static waveform and duration a voice note
+// shows before download. Without metadata it returns no parts and the
+// placeholder waveform stays.
+export function voicePreviewParts(meta) {
+    const parts = [];
+    const { duration, bars } = voicePreview(meta);
+    if (bars.length) {
+        const wave = document.createElement('span'); wave.className = 'voice-message-wave'; wave.setAttribute('aria-hidden', 'true');
+        for (const height of bars) {
+            const bar = document.createElement('span'); bar.style.height = `${height}%`;
+            wave.append(bar);
+        }
+        parts.push(wave);
+    }
+    if (duration) {
+        const time = document.createElement('span'); time.className = 'voice-message-duration'; time.textContent = duration;
+        time.setAttribute('aria-hidden', 'true'); // the play button's label carries it
+        parts.push(time);
+    }
+    return { duration, parts };
+}
+
+// summarizeVoice measures a recording for its sealed reference: the exact
+// duration and a compact waveform. Decoding is local (the sender's own clip);
+// when it fails the recorder's elapsed time is the duration and no waveform
+// is sent.
+async function summarizeVoice(blob, fallbackMs) {
+    let context;
+    try {
+        context = new (globalThis.AudioContext || globalThis.webkitAudioContext)();
+        const decoded = await context.decodeAudioData(await blob.arrayBuffer());
+        const channels = Array.from({ length: decoded.numberOfChannels }, (_, index) => decoded.getChannelData(index));
+        return { durationMs: Math.round(decoded.duration * 1000), peaks: normalizePeaks(waveformPeaks(channels, WAVEFORM_BARS)) };
+    } catch {
+        return { durationMs: Math.round(fallbackMs) || 0, peaks: null };
+    } finally {
+        if (context) await context.close().catch(() => {});
+    }
 }
 
 function asBase64(blob) {
@@ -104,7 +151,7 @@ function openVoiceMessage(context) {
     const player = document.createElement('audio'); player.controls = true; player.hidden = true; player.setAttribute('aria-label', t('voiceMessage.player'));
     const actions = document.createElement('div'); actions.className = 'voice-message-actions';
     const make = (key, callback) => { const b = document.createElement('button'); b.type = 'button'; b.textContent = t(key); b.onclick = callback; actions.append(b); return b; };
-    let capture, details, url = '', result = null, sending = false, started = 0, recording = false, closed = false, token = '';
+    let capture, details, url = '', result = null, sending = false, started = 0, recording = false, closed = false, token = '', recordedMs = 0;
     const current = () => !closed && context.isCurrent() && overlay.isConnected;
     const clearPreview = () => { releaseVoicePlayback(player); player.pause(); player.removeAttribute('src'); player.load(); player.hidden = true; details?.remove(); if (url) URL.revokeObjectURL(url); url = ''; result = null; token = ''; };
     const fail = error => { if (!current()) return; recording = false; feedback.hidden = true; warning.textContent = ''; record.disabled = false; stop.disabled = true; status.textContent = t('voiceMessage.failed', { error: error.message || String(error) }); };
@@ -129,7 +176,12 @@ function openVoiceMessage(context) {
             const data = await asBase64(result.blob);
             if (!current()) return;
             const name = `voice-${crypto.randomUUID()}.${result.extension}`;
-            if (!token) token = context.upload ? await context.upload(name, data) : await window.go.main.App.UploadChatAttachmentForTab(context.tabID, context.channelID || 0, name, data);
+            if (!token) {
+                const summary = await summarizeVoice(result.blob, recordedMs);
+                if (!current()) return;
+                const uploaded = context.upload ? await context.upload(name, data) : await window.go.main.App.UploadChatAttachmentForTab(context.tabID, context.channelID || 0, name, data);
+                token = withAttachmentMeta(uploaded, summary);
+            }
             if (!current()) return;
             const error = await context.send(token);
             if (error) throw new Error(error);
@@ -151,6 +203,7 @@ function openVoiceMessage(context) {
         },
         onReady: value => {
             if (!current()) return;
+            recordedMs = started ? Math.min(VOICE_MAX_MS, Date.now() - started) : 0;
             recording = false; feedback.hidden = true; warning.textContent = ''; result = value; url = URL.createObjectURL(value.blob); player.src = url; player.hidden = false;
             details = voicePlaybackDetails(player, value.blob);
             V()?.applyOutputSettings?.(player); status.textContent = t('voiceMessage.ready'); record.disabled = false; stop.disabled = true; send.disabled = false;

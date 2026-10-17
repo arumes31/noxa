@@ -19,3 +19,8 @@
 .voice-playback-details input { min-width:0; width:100%; grid-column:1/-1; }
 .voice-playback-details output { font-variant-numeric:tabular-nums; font-size:.85rem; color:var(--text-dim); }
 .voice-playback-details select { min-width:70px; padding:3px; color:var(--text); background:var(--bg-hover); border:1px solid var(--border); }
+/* static preview from the sealed reference (duration and waveform), shown
+   before the clip is downloaded; older voice notes carry neither */
+.voice-message-wave { display: inline-flex; align-items: center; gap: 2px; height: 26px; min-width: 120px; flex: 1; max-width: 240px; }
+.voice-message-wave > span { flex: 1; min-width: 2px; max-width: 4px; border-radius: 1px; background: var(--accent); opacity: .7; }
+.voice-message-duration { font-variant-numeric: tabular-nums; font-size: .8rem; color: var(--text-dim); }

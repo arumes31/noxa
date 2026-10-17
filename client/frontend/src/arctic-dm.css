@@ -237,6 +237,8 @@
 }
 #center.dm-view-active :is(#chat-log, #private-groups) .file-chip-name { grid-column: 2; font-weight: 700; font-size: .9rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #center.dm-view-active :is(#chat-log, #private-groups) .file-chip-meta { display: block; grid-column: 2; font: .72rem var(--dm-mono); color: var(--text-faint); }
+/* the card's meta line carries the size ("1.2 MB · encrypted") */
+#center.dm-view-active :is(#chat-log, #private-groups) .file-chip-size { display: none; }
 #center.dm-view-active :is(#chat-log, #private-groups) .file-chip::after {
     content: "›"; grid-column: 3; grid-row: 1 / 3; width: 32px; height: 32px; border-radius: 8px;
     display: grid; place-items: center; transform: rotate(90deg);
@@ -256,7 +258,7 @@
     content: ""; position: absolute; left: 13px; top: 10px;
     border-style: solid; border-width: 7px 0 7px 11px; border-color: transparent transparent transparent var(--text);
 }
-#center.dm-view-active :is(#chat-log, #private-groups) .voice-message:has(> button:first-child)::after {
+#center.dm-view-active :is(#chat-log, #private-groups) .voice-message:not(.has-waveform):has(> button:first-child)::after {
     content: ""; flex: 1; height: 26px; min-width: 150px; opacity: .55;
     background: repeating-linear-gradient(90deg, var(--accent) 0 2px, transparent 2px 5px);
     -webkit-mask: linear-gradient(180deg, transparent 0 30%, #000 30% 70%, transparent 70%),
@@ -266,6 +268,10 @@
     -webkit-mask-composite: source-over; mask-composite: add;
 }
 #center.dm-view-active :is(#chat-log, #private-groups) .voice-message [role="status"]:empty { display: none; }
+/* a note whose sealed reference carries its waveform draws the real shape */
+#center.dm-view-active :is(#chat-log, #private-groups) .voice-message-wave { height: 26px; min-width: 150px; max-width: none; }
+#center.dm-view-active :is(#chat-log, #private-groups) .voice-message-wave > span { background: var(--accent); opacity: .55; }
+#center.dm-view-active :is(#chat-log, #private-groups) .voice-message-duration { font: .72rem var(--dm-mono); color: var(--text-faint); }
 #center.dm-view-active :is(#chat-log, #private-groups) .voice-message audio { height: 34px; width: min(100%, 300px); }
 
 /* typing indicator: the peer's avatar and three static dots; the live
@@ -290,6 +296,31 @@
         radial-gradient(circle, color-mix(in srgb, var(--accent) 45%, transparent) 2.5px, transparent 3px) 28px 50% / 8px 8px no-repeat,
         var(--dm-s2);
 }
+
+/* group typing: the same avatar-and-dots treatment as a direct message */
+#center.dm-view-active #private-groups .group-typing {
+    position: relative; display: flex; align-items: center; min-height: 26px;
+    margin: 0 18px 6px; padding: 0 0 0 82px;
+    font-style: normal; font-size: .78rem; color: var(--text-faint);
+}
+#center.dm-view-active #private-groups .group-typing[hidden] { display: none; }
+#center.dm-view-active #private-groups .group-typing::before {
+    content: attr(data-initial); position: absolute; left: 0; top: 2px;
+    display: grid; place-items: center; width: 22px; height: 22px; border-radius: 50%;
+    background: color-mix(in srgb, var(--dm-typing-color, #70b7f5) 82%, #0b1520); color: #fff; font: 700 .68rem var(--font-body);
+}
+#center.dm-view-active #private-groups .group-typing::after {
+    content: ""; position: absolute; left: 30px; top: 1px; width: 44px; height: 22px; box-sizing: border-box;
+    border: 1px solid var(--dm-line); border-radius: 999px;
+    background:
+        radial-gradient(circle, var(--accent) 2.5px, transparent 3px) 8px 50% / 8px 8px no-repeat,
+        radial-gradient(circle, color-mix(in srgb, var(--accent) 70%, transparent) 2.5px, transparent 3px) 18px 50% / 8px 8px no-repeat,
+        radial-gradient(circle, color-mix(in srgb, var(--accent) 45%, transparent) 2.5px, transparent 3px) 28px 50% / 8px 8px no-repeat,
+        var(--dm-s2);
+}
+/* read receipts: small faces and "Seen by …" under the newest message read */
+#center.dm-view-active #private-groups .group-message > .group-seen { grid-column: 1 / -1; margin: 2px 0 -2px; font: .7rem var(--dm-mono); color: var(--text-faint); }
+#center.dm-view-active #private-groups .group-seen-face { border-color: var(--dm-s2); }
 
 /* composer */
 #center.dm-view-active #chat-input-row { margin: 8px 18px 16px; }

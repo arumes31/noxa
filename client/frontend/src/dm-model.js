@@ -6,6 +6,7 @@
 import { t, currentLanguage } from "./i18n.js";
 import { encryptionBadge } from "./message-encryption.js";
 import { parseFileRef } from "./chat-parsers.js";
+import { formatDuration, formatFileSize } from "./attachment-meta.js";
 
 const VOICE_EXTS = new Set(["weba", "ogg", "m4a"]);
 const IMAGE_EXTS = new Set(["png", "jpg", "jpeg", "webp"]);
@@ -22,7 +23,28 @@ export function attachmentKind(text) {
     if (!ref.valid) return null;
     const ext = (ref.name.split(".").pop() || "").toLowerCase();
     const kind = VOICE_EXTS.has(ext) ? "voice" : ext === "gif" ? "gif" : IMAGE_EXTS.has(ext) ? "image" : VIDEO_EXTS.has(ext) ? "video" : "file";
-    return { kind, name: ref.name };
+    return { kind, name: ref.name, meta: ref.meta };
+}
+
+// attachmentPreview names an attachment in a conversation row. A voice note
+// whose sealed reference carries its duration says how long it is
+// ("Voice note · 0:14"); older references simply say "Voice note".
+export function attachmentPreview(attachment) {
+    const duration = attachment.kind === "voice" ? formatDuration(attachment.meta?.durationMs) : "";
+    if (duration) return t("dm.preview.voiceDuration", { duration });
+    return t(`dm.preview.${attachment.kind}`, { name: attachment.name });
+}
+
+// fileCardText is what a file card says about an attachment: the size when
+// the sealed reference carries it ("1.2 MB · encrypted"), otherwise only
+// "encrypted". size is "" without metadata, so older references show none.
+export function fileCardText(name, meta) {
+    const size = formatFileSize(meta?.size);
+    return {
+        size,
+        meta: size ? t("dm.fileMetaSized", { size }) : t("dm.fileMeta"),
+        title: size ? t("dm.downloadSized", { name, size }) : t("chat.downloadName", { name }),
+    };
 }
 
 // plainPreview flattens a text body to one short line. Inline attachment
@@ -47,7 +69,7 @@ export function previewLine(last, { group = false, senderName = "" } = {}) {
     if (badge.bodyKey) text = t(badge.bodyKey);
     else {
         const attachment = attachmentKind(last.text);
-        text = attachment ? t(`dm.preview.${attachment.kind}`, { name: attachment.name }) : plainPreview(last.text);
+        text = attachment ? attachmentPreview(attachment) : plainPreview(last.text);
     }
     if (last.self) return t("dm.preview.self", { text });
     if (group && senderName) return t("dm.preview.sender", { name: senderName, text });

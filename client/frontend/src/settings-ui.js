@@ -1161,6 +1161,8 @@ function pageChat() {
     // (130) system-message category filters.
     el.appendChild(row(t("settings.show.join.leave.system.lines"), checkbox(s.sys_join_leave !== false, (v) => { s.sys_join_leave = v; })));
     el.appendChild(row(t("settings.show.kick.system.lines"), checkbox(s.sys_kick !== false, (v) => { s.sys_kick = v; })));
+    // Privacy: one switch for read receipts and typing, DMs and private groups (hide_chat_activity).
+    el.appendChild(row(t("dm.privacy.activity"), checkbox(!s.hide_chat_activity, (v) => { s.hide_chat_activity = !v; })));
 
     el.appendChild(row(t("settings.chat.max.lines"), numberInput(s.chat_max_lines, 10, 5000, (v) => { s.chat_max_lines = v; })));
     el.appendChild(row(t("settings.log.channel.chats.to.file"), checkbox(s.log_channel_chat, (v) => { s.log_channel_chat = v; })));

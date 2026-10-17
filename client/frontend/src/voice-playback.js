@@ -1,5 +1,6 @@
 import { t } from './i18n.js';
 import { waveformPeaks, boundedPlaybackHistory, PLAYBACK_SPEEDS } from './voice-playback-state.js';
+import { resamplePeaks } from './attachment-meta.js';
 
 const storageKey = 'noxa:voice-playback:v1';
 const releases = new WeakMap();
@@ -12,7 +13,10 @@ async function referenceKey(reference) {
     return Array.from(new Uint8Array(digest), n => n.toString(16).padStart(2,'0')).join('');
 }
 
-export function voicePlaybackDetails(audio, blob, reference = '') {
+// known carries what a sealed reference already said about the note
+// (durationMs, peaks): the player shows them until the media element and
+// playback sampling report the real values.
+export function voicePlaybackDetails(audio, blob, reference = '', known = {}) {
     releaseVoicePlayback(audio);
     const controls = document.createElement('div'); controls.className = 'voice-playback-details';
     const canvas = document.createElement('canvas'); canvas.width = 384; canvas.height = 40; canvas.className = 'voice-waveform'; canvas.setAttribute('role','img'); canvas.setAttribute('aria-label',t('voiceMessage.waveform'));
@@ -21,7 +25,8 @@ export function voicePlaybackDetails(audio, blob, reference = '') {
     const speed = document.createElement('select'); speed.setAttribute('aria-label',t('voiceMessage.speed'));
     for (const value of PLAYBACK_SPEEDS) { const option = document.createElement('option'); option.value = String(value); option.textContent = `${value}×`; speed.append(option); } speed.value = '1';
     controls.append(canvas, seek, duration, speed); audio.after(controls);
-    let seconds = 0, key = '', restored = false, peaks = Array(64).fill(0), lastSaved = 0, released = false, analysis, sampledStream, sampleTimer;
+    let seconds = Number(known?.durationMs) > 0 ? known.durationMs / 1000 : 0, key = '', restored = false, lastSaved = 0, released = false, analysis, sampledStream, sampleTimer;
+    let peaks = Array.isArray(known?.peaks) && known.peaks.length ? resamplePeaks(known.peaks, 64) : Array(64).fill(0);
     const current = () => !released && controls.isConnected && audio.isConnected;
     const draw = () => {
         const ctx = canvas.getContext('2d'); ctx.clearRect(0,0,384,40);

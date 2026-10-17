@@ -5,6 +5,9 @@ import { startPrivateCall, showCallHistory } from "./private-calls.js";
 import { sessionUserID } from "./session-identity.js";
 import { initGroupSidebarLayout } from "./group-sidebar-layout.js";
 import { encryptionBadge } from "./message-encryption.js";
+import { parseFileRef } from "./chat-parsers.js";
+import { applySeen, createTypingStore, GROUP_TYPING_PING_MS, seenLabel, seenMarkers, typingLabel } from "./group-activity.js";
+import { avatarColor } from "./workspace-ui.js";
 
 const V = () => window.__noxa;
 const app = () => window.go.main.App;
@@ -13,6 +16,37 @@ let viewedGroup = null;
 let workspace = null;
 const notified = new Set();
 const caughtUp = new Map(); // tabID:groupID -> newest message already summarized
+// Private-group activity (typing, shared read receipts). Both arrive as
+// addressed relays from the server only while this client is a member; the
+// open thread repaints through `activity`.
+const typing = createTypingStore();
+let typingSweep = 0;
+let activity = null; // {typing(groupID), seen(groupID)} of the open group view
+const newestSeen = new Map(); // groupID -> newest message id already rendered
+function sweepTyping() {
+    if (typingSweep) return;
+    typingSweep = window.setInterval(() => {
+        const live = typing.live();
+        activity?.typing();
+        if (!live) { window.clearInterval(typingSweep); typingSweep = 0; }
+    }, 1000);
+}
+// conversationTyping handles a "conversation_typing" relay.
+export function conversationTyping(event = {}) {
+    const state = V()?.state;
+    const uid = event.unique_id || "";
+    if (!state || !event.conversation_id || !uid || uid === sessionUserID(state) || event.client_id === state.myClientID) return;
+    if ((state.settings?.blocked_users || []).includes(uid)) return;
+    typing.note(event.conversation_id, uid, event.nickname);
+    sweepTyping();
+    activity?.typing(event.conversation_id);
+}
+// conversationRead handles a "conversation_read" relay: a member's shared
+// read position moved forward.
+export function conversationRead(event = {}) {
+    if (!event.conversation_id || !event.unique_id) return;
+    workspace?.seen(event.conversation_id, event.unique_id, Number(event.message_id) || 0);
+}
 function remember(key) {
     notified.add(key);
     if (notified.size > 512) notified.delete(notified.values().next().value);
@@ -31,7 +65,7 @@ async function messagePreview(tabID, group, messageID) {
         const message = page.messages?.find(message => message.id === messageID);
         if (!message || !message.enc_verified || (V().state.settings?.blocked_users || []).includes(message.from_unique_id)) return null;
         const sender = V().state.clients.find(client => client.unique_id === message.from_unique_id)?.nickname || t("chat.unknownMember");
-        const text = String(message.body || "").replace(/\[file:[^\]#]*#[^\]#]*#([^\]]*)\]/g, "📎 $1").slice(0, 80);
+        const text = String(message.body || "").replace(/\[file:([^\]]+)\]/g, (_, capture) => `📎 ${parseFileRef(capture).name}`).slice(0, 80);
         return t("group.messagePreview", { name: group.name, sender, text });
     } catch { return null; }
 }
@@ -115,6 +149,7 @@ export function createPrivateGroup(name) { initConversations(); return workspace
 function groupsChanged() { window.dispatchEvent(new CustomEvent("noxa-private-groups-changed")); }
 export function resetConversations() {
     V()?.trayUnread?.set("groups", 0); // the group list belongs to one server tab
+    typing.reset(); newestSeen.clear(); activity = null;
     workspace?.destroy(); workspace = null;
     refreshOpen = null; viewedGroup = null;
     groupsChanged();
@@ -263,6 +298,7 @@ export function initConversations() {
             list.replaceChildren();
             const groups = result.conversations.filter(group => !group.members.find(member => member.unique_id === uid())?.pending || !blocked(group.owner));
             listedGroups = groups; updateSummary();
+            if (sidebarOnly) activity?.seen(selected);
             // The authoritative list also restores tabs for messages received
             // while offline, and drops tabs of groups this user has left.
             syncChatTabs(tabID, serverGeneration, groups, true);
@@ -338,6 +374,7 @@ export function initConversations() {
         }
     };
     const showGroup = async (group, token, destinationCurrent = () => true) => {
+        activity = null;
         const previousMessages = content.dataset.groupId === group.id ? content.querySelector(".group-messages") : null;
         const preserveScroll = previousMessages && previousMessages.scrollHeight - previousMessages.scrollTop - previousMessages.clientHeight > 24;
         const previousScrollTop = previousMessages?.scrollTop || 0;
@@ -424,7 +461,23 @@ export function initConversations() {
         const composer = el("form", "group-composer");
         const input = el("textarea", ""); input.rows = 2; input.maxLength = 8192; input.required = true; input.value = drafts.get(group.id) || ""; input.setAttribute("aria-label", t("group.message"));
         input.dataset.groupId = group.id;
-        input.oninput = () => drafts.set(group.id, input.value);
+        // Typing is announced while composing: debounced, at most one ping
+        // per GROUP_TYPING_PING_MS, never for an empty draft. The backend
+        // drops it when the privacy setting is on or the server is too old.
+        let typingSentAt = 0, typingDebounce = 0;
+        const noteTyping = () => {
+            if (!input.value.trim()) { typingSentAt = 0; return; }
+            if (typingDebounce) return;
+            typingDebounce = window.setTimeout(() => {
+                typingDebounce = 0;
+                if (!visible() || selected !== group.id || !input.isConnected || !input.value.trim()) return;
+                const now = Date.now();
+                if (now - typingSentAt < GROUP_TYPING_PING_MS) return;
+                typingSentAt = now;
+                Promise.resolve().then(() => app().SendConversationTypingForTab(tabID, group.id)).catch(() => {});
+            }, 300);
+        };
+        input.oninput = () => { drafts.set(group.id, input.value); noteTyping(); };
         const send = button("group.send"); send.type = "submit";
         const chat = window.__noxaChat;
         const fileInput = el("input", "group-file"); fileInput.type = "file"; fileInput.multiple = true; fileInput.hidden = true;
@@ -471,7 +524,49 @@ export function initConversations() {
             });
         }
         input.required = false;
-        composer.append(previews, input, fileInput, gifInput, attach, gif, emoji, send); content.append(composer);
+        // "… is typing" for this group, above the composer.
+        const typingLine = el("p", "group-typing");
+        typingLine.setAttribute("aria-live", "polite");
+        typingLine.hidden = true;
+        const paintTyping = () => {
+            const typers = typing.typers(group.id).filter(entry => !blocked(entry.uid));
+            const names = typers.map(entry => V().state.clients.find(client => client.unique_id === entry.uid)?.nickname || entry.nick);
+            typingLine.hidden = !names.length;
+            typingLine.textContent = typingLabel(names);
+            if (names.length) {
+                typingLine.dataset.initial = names[0].slice(0, 1).toUpperCase();
+                typingLine.style.setProperty("--dm-typing-color", avatarColor(typers[0].uid));
+            }
+        };
+        // "Seen by …" under the newest message each member has read.
+        const paintSeen = () => {
+            if (!messages.isConnected) return;
+            for (const marker of messages.querySelectorAll(".group-seen")) marker.remove();
+            const rows = [...messages.querySelectorAll(":scope > .group-message")];
+            const members = listedGroups.find(listed => listed.id === group.id)?.members || group.members;
+            const markers = seenMarkers(rows.map(row => ({ id: Number(row.dataset.messageId), from: row.dataset.from })), members, uid());
+            for (const [messageID, uids] of markers) {
+                const shown = uids.filter(memberID => !blocked(memberID));
+                const row = rows.find(item => Number(item.dataset.messageId) === messageID);
+                if (!row || !shown.length) continue;
+                const marker = el("div", "group-seen");
+                const faces = el("span", "group-seen-faces"); faces.setAttribute("aria-hidden", "true");
+                for (const memberID of shown.slice(0, 4)) {
+                    const face = el("span", "group-seen-face", label(memberID).slice(0, 1).toUpperCase());
+                    face.style.setProperty("--avatar-color", avatarColor(memberID));
+                    faces.append(face);
+                }
+                marker.append(faces, el("span", "group-seen-text", seenLabel(shown.map(label))));
+                row.append(marker);
+            }
+        };
+        activity = {
+            groupID: group.id,
+            typing: id => { if ((!id || id === group.id) && typingLine.isConnected) paintTyping(); },
+            seen: id => { if ((!id || id === group.id) && messages.isConnected) paintSeen(); },
+        };
+        paintTyping();
+        composer.append(previews, input, fileInput, gifInput, attach, gif, emoji, send); content.append(typingLine, composer);
         refreshStaged = () => { if (previews.isConnected) renderPreviews(); };
         renderPreviews();
         composer.append(voiceMessageButton(() => {
@@ -505,6 +600,7 @@ export function initConversations() {
                     stagedFiles.set(group.id, pendingFor().filter(staged => staged !== file));
                     refreshStaged();
                 }
+                typingSentAt = 0;
                 if (body.trim()) {
                     let pending = references.get(group.id);
                     if (!pending || pending.body !== body) { pending = { reference: crypto.randomUUID(), body }; references.set(group.id, pending); }
@@ -543,6 +639,7 @@ export function initConversations() {
                 for (const message of [...result.messages].reverse()) {
                     const row = el("article", "group-message");
                     row.dataset.messageId = String(message.id);
+                    row.dataset.from = message.from_unique_id;
                     row.dataset.ts = String(message.created_at * 1000);
                     row.classList.toggle("own", message.from_unique_id === uid());
                     const body = el("div", "group-message-body");
@@ -574,7 +671,14 @@ export function initConversations() {
                 }
                 const initial = !before;
                 latestRendered = Math.max(latestRendered, ...result.messages.map(message => message.id));
+                // A member whose new message just arrived is done typing it.
+                const previousNewest = newestSeen.get(group.id);
+                if (previousNewest !== undefined) {
+                    for (const message of result.messages) if (message.id > previousNewest && typing.clear(group.id, message.from_unique_id)) paintTyping();
+                }
+                newestSeen.set(group.id, Math.max(previousNewest || 0, latestRendered));
                 messages.prepend(fragment);
+                paintSeen();
                 if (result.messages.length) before = Math.min(...result.messages.map(message => message.id));
                 else if (initial) messages.append(el("p", "group-empty", t("group.noMessages")));
                 older.disabled = result.messages.length < 25;
@@ -625,6 +729,10 @@ export function initConversations() {
     workspace = {
         current, filter, active: visible, token: () => visible() ? viewToken : null,
         snapshot: () => ({ tabID, generation: serverGeneration, uid: uid(), groups: listedGroups }),
+        seen: (id, memberID, messageID) => {
+            const listed = listedGroups.find(group => group.id === id);
+            if (listed && applySeen(listed.members, memberID, messageID)) activity?.seen(id);
+        },
         create: groupName => mutate(null, "create", "", { name: String(groupName || "").trim() }),
         open: () => { setVisible(true); layout.expand(); create.hidden = false; add.setAttribute("aria-expanded", "true"); name.focus(); },
         jump: async (id, messageID, destinationCurrent) => { saveDraft(); selected = id; jumpTarget = messageID; setVisible(true); layout.expand(); await refresh(false, destinationCurrent); if (current() && destinationCurrent() && selected !== id) status.textContent = t("messages.notFound"); },
