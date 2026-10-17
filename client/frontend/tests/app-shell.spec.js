@@ -100,8 +100,12 @@ test('Messages counts direct messages and opens the direct view', async ({ page 
     await expect(messages.locator('.side-count')).toHaveText(/^[1-9]\d*$/);
     await expect(messages).toHaveAccessibleName(/^Messages, [1-9]\d* unread$/);
     await messages.click();
-    // The row opens the dedicated direct-messages view on Mira's conversation.
+    // The row opens the dedicated direct-messages view without opening (and
+    // sending read receipts for) a conversation: the select hint shows until
+    // the user picks Mira's conversation.
     await expect.poll(() => page.evaluate(() => window.__noxa.isDirectMessagesOpen?.())).toBe(true);
+    await expect(page.locator('#dm-thread-empty')).toBeVisible();
+    await page.locator('#dm-conversations .dm-row').filter({ hasText: 'Mira' }).click();
     await expect(page.locator('#dm-head-name')).toContainText('Mira');
 });
 
