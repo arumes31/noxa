@@ -14,3 +14,8 @@
 .gaming-overlay-settings input[type="color"] { width: 64px; height: 32px; padding: 3px; }
 .overlay-color-chip { flex: 0 0 18px; height: 18px; border-radius: 50%; border: 1px solid var(--border); }
 .overlay-blue-slider input { accent-color: #369dc7; }
+/* Quiet members and chat peek in the preview: the overlay's own text style
+   (light text, compact dark halo), never a panel or frame. */
+.overlay-sample-person[hidden], .overlay-sample-peek[hidden] { display: none; }
+.overlay-sample-peek { display: flex; gap: calc(8px * var(--overlay-scale)); margin-top: calc(18px * var(--overlay-scale)); max-width: calc(300px * var(--overlay-scale)); font-size: .875em; font-weight: 500; line-height: 1.5; white-space: nowrap; text-shadow: 0 1px 2px #111417; }
+.overlay-sample-peek-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; opacity: .8; }

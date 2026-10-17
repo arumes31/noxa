@@ -61,9 +61,31 @@ export function createRemoteAudio({ state, toast, sysMsg, voiceEpoch }) {
     document.addEventListener("visibilitychange", () => {
         if (document.visibilityState === "visible") resumeRemoteAudio();
     });
-    // remoteTracks maps media track ID -> {src, gain, mute, uid} for per-track
-    // teardown when a publisher leaves or voice is stopped.
+    // remoteTracks maps the receiver MediaStreamTrack OBJECT -> {key, trackID,
+    // src, gain, mute, uid} for per-track teardown when a publisher leaves or
+    // voice is stopped. It must not be keyed by track.id: Chromium derives a
+    // receiver track's id from the a=msid it was created with and keeps it when
+    // the server reuses that media section for another publisher. After a
+    // speaker leaves and rejoins, two live receivers then share one id, and an
+    // id-keyed attach for one tore down the other's chain: that listener
+    // stopped hearing exactly one speaker.
     const remoteTracks = new Map();
+    // trackKeys gives every receiver track object a unique string for the
+    // id-keyed helpers (normalizer, spatial voice).
+    const trackKeys = new WeakMap();
+    let trackKeySequence = 0;
+    const trackKey = track => {
+        let key = trackKeys.get(track);
+        if (!key) { key = `${track.id}#${++trackKeySequence}`; trackKeys.set(track, key); }
+        return key;
+    };
+    // remoteEntry resolves a track object, or (legacy callers) a track id when
+    // exactly one attached track carries it.
+    const remoteEntry = trackOrID => {
+        if (trackOrID && typeof trackOrID === "object") return remoteTracks.get(trackOrID);
+        const matches = [...remoteTracks.values()].filter(entry => entry.track.id === trackOrID);
+        return matches.length === 1 ? matches[0] : matches.find(entry => entry.track.readyState !== "ended") || null;
+    };
     let spatialVoice = null;
     let positionReadPending = false;
     let spatialScope = "";
@@ -133,8 +155,8 @@ export function createRemoteAudio({ state, toast, sysMsg, voiceEpoch }) {
     // attachRemoteAudio adds one publisher's audio track to the shared chain.
     // publisher is the resolved state.clients entry (or null when unknown); its
     // unique ID keys the per-user volume/mute registry from audio.js.
-    function attachRemoteAudio(track, publisher) {
-        detachRemoteTrack(track.id); // re-attach after an ICE restart replaces the track
+    function attachRemoteAudio(track, publisher, trackID = track.id) {
+        detachRemoteTrack(track); // repairing the same receiver replaces its chain
         if (!ensureRemoteChain()) return;
         try {
             const ctx = remoteChain.ctx;
@@ -149,18 +171,19 @@ export function createRemoteAudio({ state, toast, sysMsg, voiceEpoch }) {
             // this publisher's source and returning src unchanged when the setting
             // is off. A master-bus normalizer could not lift a quiet speaker out
             // of a loud one.
-            const head = attachUserNormalizer(ctx, track.id, src);
+            const key = trackKey(track);
+            const head = attachUserNormalizer(ctx, key, src);
             head.connect(gain);
             gain.connect(mute);
-            spatialVoice.attach(track.id, mute, remoteChain.master, publisher?.client_id || "");
+            spatialVoice.attach(key, mute, remoteChain.master, publisher?.client_id || "");
 
             const uid = publisher?.unique_id || "";
-            const entry = { track, src, playback, gain, mute, uid };
-            remoteTracks.set(track.id, entry);
+            const entry = { track, key, trackID, src, playback, gain, mute, uid };
+            remoteTracks.set(track, entry);
             if (uid) registerUserChain(uid, gain, mute);
 
             entry.ended = () => {
-                if (remoteTracks.get(track.id) === entry) detachRemoteTrack(track.id);
+                if (remoteTracks.get(track) === entry) detachRemoteTrack(track);
             };
             track.addEventListener("ended", entry.ended);
         } catch (e) {
@@ -168,16 +191,19 @@ export function createRemoteAudio({ state, toast, sysMsg, voiceEpoch }) {
         }
     }
 
-    function readRemoteAudioLevel(trackID) {
-        const entry = remoteTracks.get(trackID);
+    function readRemoteAudioLevel(trackOrID) {
+        const entry = remoteEntry(trackOrID);
         if (!entry || !remoteChain.ctx || remoteChain.ctx.state === "closed") return null;
         entry.sampleLevel ||= createAudioLevelSampler(remoteChain.ctx, entry.src);
         return entry.sampleLevel();
     }
 
-    function hasRemoteAudio(track) {
-        const entry = remoteTracks.get(track.id);
-        return entry?.track === track && entry.playback.srcObject?.getAudioTracks().includes(track) && remoteChain.ctx?.state !== "closed";
+    // hasRemoteAudio reports whether this receiver track plays, optionally as
+    // the given publisher track ID (MSID).
+    function hasRemoteAudio(track, trackID) {
+        const entry = remoteTracks.get(track);
+        return !!entry && (trackID === undefined || entry.trackID === trackID) &&
+            !!entry.playback.srcObject?.getAudioTracks().includes(track) && remoteChain.ctx?.state !== "closed";
     }
 
     // resolveTrackUsers re-attributes tracks whose renegotiation arrived before
@@ -193,12 +219,6 @@ export function createRemoteAudio({ state, toast, sysMsg, voiceEpoch }) {
             state.trackUsers.set(trackID, {
                 client_id: publisher.client_id, unique_id: publisher.unique_id, nickname: publisher.nickname, track_id: u.track_id,
             });
-            const t = remoteTracks.get(trackID);
-            if (t && !t.uid && publisher.unique_id) {
-                spatialVoice?.peer(trackID, publisher.client_id);
-                t.uid = publisher.unique_id;
-                registerUserChain(publisher.unique_id, t.gain, t.mute);
-            }
             // (14) the share chain needs the unique ID too, or its publisher can
             // never be exempted from ducking.
             const sa = shareAudio.get(clientID);
@@ -206,6 +226,18 @@ export function createRemoteAudio({ state, toast, sysMsg, voiceEpoch }) {
                 sa.uid = publisher.unique_id;
                 applyShareAudio(clientID);
             }
+        }
+        // Microphone chains are resolved from their own publisher track ID, not
+        // through state.trackUsers (keyed by a browser track.id two receivers
+        // may share).
+        for (const entry of remoteTracks.values()) {
+            if (entry.uid) continue;
+            const { clientID, slot } = parseTrackID(entry.trackID);
+            const publisher = !slot && state.clients.find((c) => String(c.client_id) === clientID);
+            if (!publisher?.unique_id) continue;
+            spatialVoice?.peer(entry.key, publisher.client_id);
+            entry.uid = publisher.unique_id;
+            registerUserChain(publisher.unique_id, entry.gain, entry.mute);
         }
     }
 
@@ -234,6 +266,15 @@ export function createRemoteAudio({ state, toast, sysMsg, voiceEpoch }) {
     const SHARE_DUCK_FACTOR = 0.25;
     let shareDuckActive = false;
     let shareDuckExempt = new Set();
+    // Multiview focus (design 45): publisher client ID -> factor for its
+    // screen-share audio only. Voice chains are never in this map.
+    let shareStageGains = new Map();
+
+    function setShareAudioStageGains(gains) {
+        shareStageGains = new Map([...(gains || [])].map(([clientID, factor]) => [String(clientID),
+            Number.isFinite(factor) ? Math.min(1, Math.max(0, factor)) : 1]));
+        for (const clid of shareAudio.keys()) applyShareAudio(clid);
+    }
 
     // applyDucking is setDucking plus the share chains it cannot see.
     function applyDucking(active, exceptUIDs) {
@@ -251,7 +292,8 @@ export function createRemoteAudio({ state, toast, sysMsg, voiceEpoch }) {
             n.muted = isUserShareMuted(n.uid);
         }
         const duck = shareDuckActive && !shareDuckExempt.has(n.uid) ? SHARE_DUCK_FACTOR : 1;
-        n.gain.gain.value = (n.muted ? 0 : personalVolumeGain(n.volume / 100)) * duck;
+        const stage = shareStageGains.get(String(clientID)) ?? 1;
+        n.gain.gain.value = (n.muted ? 0 : personalVolumeGain(n.volume / 100)) * duck * stage;
     }
 
     function attachShareAudio(track, clientID, publisher) {
@@ -295,16 +337,16 @@ export function createRemoteAudio({ state, toast, sysMsg, voiceEpoch }) {
     }
 
     // detachRemoteTrack removes one publisher's nodes from the shared chain.
-    function detachRemoteTrack(trackID) {
-        const t = remoteTracks.get(trackID);
+    function detachRemoteTrack(trackOrID) {
+        const t = remoteEntry(trackOrID);
         if (!t) return;
-        remoteTracks.delete(trackID);
+        remoteTracks.delete(t.track);
         t.track.removeEventListener("ended", t.ended);
-        spatialVoice?.detach(trackID);
+        spatialVoice?.detach(t.key);
         t.playback.pause();
         t.playback.srcObject = null;
         if (t.uid) unregisterUserChain(t.uid, t.gain);
-        detachUserNormalizer(trackID); // (53) no-op when normalization is off
+        detachUserNormalizer(t.key); // (53) no-op when normalization is off
         try {
             t.mute.disconnect();
             t.gain.disconnect();
@@ -313,7 +355,7 @@ export function createRemoteAudio({ state, toast, sysMsg, voiceEpoch }) {
     }
 
     function detachRemoteAudio() {
-        for (const trackID of [...remoteTracks.keys()]) detachRemoteTrack(trackID);
+        for (const track of [...remoteTracks.keys()]) detachRemoteTrack(track);
         spatialVoice = null;
         for (const clid of [...shareAudio.keys()]) detachShareAudio(clid); // (70)
         detachAllUserNormalizers(); // (53) stops the shared auto-level ticker
@@ -325,5 +367,5 @@ export function createRemoteAudio({ state, toast, sysMsg, voiceEpoch }) {
         state.trackUsers.clear();
     }
 
-    return { selectAudioOutput, applyOutputSettings, remoteChain, get spatialVoice() { return spatialVoice; }, reconcileSpatialVoice, attachRemoteAudio, hasRemoteAudio, readRemoteAudioLevel, resolveTrackUsers, shareAudio, applyDucking, applyShareAudio, attachShareAudio, detachRemoteTrack, detachShareAudio, detachRemoteAudio };
+    return { selectAudioOutput, applyOutputSettings, remoteChain, get spatialVoice() { return spatialVoice; }, reconcileSpatialVoice, attachRemoteAudio, hasRemoteAudio, readRemoteAudioLevel, resolveTrackUsers, shareAudio, applyDucking, applyShareAudio, setShareAudioStageGains, attachShareAudio, detachRemoteTrack, detachShareAudio, detachRemoteAudio };
 }

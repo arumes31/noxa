@@ -16,11 +16,22 @@ import { streamQualityTarget, streamUsesSourceQuality } from "./stream-controls.
 import { allocateReceiveQuality, settleAutoQuality } from "./receive-quality.js";
 import { samplePeerStats } from "./peer-stats.js";
 import { observeVideoPresentation } from "./video-presentation-timing.js";
+import { createStreamStage } from "./stream-stage.js";
 const V = () => window.__noxa;
 
 export function createVideoGrid({ applySendCaps, syncCameraButton, syncShareButton }) {
     const tiles = new Map();
-    let focusedID = null; // track id of the focused tile
+    // Receive-quality focus (73): the multiview stage's focused tile while
+    // its Focus layout is shown; null in grid, stack and the single stage.
+    let focusedID = null;
+    const stage = createStreamStage({
+        gridEl: () => gridEl(),
+        tiles: () => tiles,
+        onFocusChange: key => {
+            focusedID = key;
+            void pushQuality();
+        },
+    });
 
     document.addEventListener("keydown", (event) => {
         if (event.key !== "Escape" || !document.fullscreenElement?.classList.contains("vtile")) return;
@@ -123,7 +134,7 @@ export function createVideoGrid({ applySendCaps, syncCameraButton, syncShareButt
                     V().sysMsg(tLabel("polish.floatingFailed", { error: err.message || err }));
                 }
             };
-            el.onclick = () => toggleFocus(key);
+            el.onclick = () => stage.tileClicked(key);
             el.oncontextmenu = (e) => {
                 e.preventDefault();
                 openTileMenu(e.clientX, e.clientY, t);
@@ -186,10 +197,13 @@ export function createVideoGrid({ applySendCaps, syncCameraButton, syncShareButt
         if (watchControls) t.el.append(watchControls);
         t.el.dataset.clid = clid;
         // The receiver supplies a private, single-track stream. Its browser ID
-        // can differ from the negotiated publisher/slot key after MID reuse.
+        // is never matched against the key: after MID reuse it can name another
+        // publisher, and two live receivers can share it.
         const tracks = stream?.getVideoTracks() || [];
-        const vt = tracks.length === 1 ? tracks[0] : tracks.find(track => track.id === key) || null;
+        const vt = tracks.length === 1 ? tracks[0] : null;
         t.recording?.stop("scope_changed");
+        t.untrack?.();
+        t.untrack = null;
         t.track = vt;
         t.diagnostics = null;
         t.diagnosticsPC = null;
@@ -218,9 +232,20 @@ export function createVideoGrid({ applySendCaps, syncCameraButton, syncShareButt
         t.flowSample = null;
         t.flowing = true;
         // Reserved receiver tracks are not evidence that a camera is publishing.
+        // Listeners belong to this tile binding, not to the receiver track: a
+        // reused receiver later rendered by another publisher's tile must not
+        // keep driving (or lose) this tile's state.
         if (vt) {
-            vt.onmute = vt.onended = () => updateTileVideo(t);
-            vt.onunmute = () => { t.flowing = true; updateTileVideo(t); };
+            const changed = () => { if (t.track === vt) updateTileVideo(t); };
+            const unmuted = () => { if (t.track !== vt) return; t.flowing = true; updateTileVideo(t); };
+            vt.addEventListener("mute", changed);
+            vt.addEventListener("ended", changed);
+            vt.addEventListener("unmute", unmuted);
+            t.untrack = () => {
+                vt.removeEventListener("mute", changed);
+                vt.removeEventListener("ended", changed);
+                vt.removeEventListener("unmute", unmuted);
+            };
         }
         updateTileVideo(t);
         applyTileIdentity(t);
@@ -235,12 +260,13 @@ export function createVideoGrid({ applySendCaps, syncCameraButton, syncShareButt
         const key = String(trackID);
         const t = tiles.get(key);
         if (!t) return;
+        t.untrack?.();
+        t.untrack = null;
         t.presentation?.dispose();
         t.recording?.dispose();
         t.video.srcObject = null;
         t.el.remove();
         tiles.delete(key);
-        if (focusedID === key) focusedID = null;
         layoutGrid();
         if (tiles.size === 0) stopStatsPoll();
         else void pushQuality();
@@ -254,12 +280,14 @@ export function createVideoGrid({ applySendCaps, syncCameraButton, syncShareButt
         for (const t of tiles.values()) {
             if (t.clientID === clid) t.el.classList.toggle("speaking", speaking);
         }
+        stage.voiceChanged();
     }
 
     // videoRefreshNames re-resolves nickname/avatar on all tiles (user joined,
     // moved, avatar changed, started/stopped sharing).
     function videoRefreshNames() {
         for (const t of tiles.values()) { applyTileIdentity(t); updateTileVideo(t); updatePreviewAge(t); }
+        stage.render(true);
     }
 
     // clearVideoGrid removes all tiles (voice teardown).
@@ -272,7 +300,6 @@ export function createVideoGrid({ applySendCaps, syncCameraButton, syncShareButt
         qualityCapability = null;
         incomingBudget = null;
         for (const key of [...tiles.keys()]) videoTrackRemoved(key);
-        focusedID = null;
         // the next session starts from the server's default layer, so a stale
         // lastSentQuality would suppress the first push of this session.
         lastSentQuality = "";
@@ -452,27 +479,15 @@ export function createVideoGrid({ applySendCaps, syncCameraButton, syncShareButt
         layoutGrid();
     }
 
-    // layoutGrid recomputes the auto-layout class (1→full, 2→half, 3-4→2x2,
-    // more→scrollable) and hides the grid when empty so chat keeps the space.
+    // layoutGrid counts the visible tiles, hides the grid when empty so chat
+    // keeps the space, and lets the stream stage (stream-stage.js) arrange
+    // them: one tile → single stage, more → multiview grid/focus/stack.
     function layoutGrid() {
         const grid = gridEl();
-        const visible = [...tiles.entries()].filter(([, tile]) => !tile.el.classList.contains("hidden"));
-        const n = visible.length;
+        const n = [...tiles.values()].filter(tile => !tile.el.classList.contains("hidden")).length;
         grid.classList.toggle("hidden", n === 0);
         grid.dataset.count = n <= 4 ? String(n) : "many";
-        grid.classList.toggle("has-focus", !!focusedID && visible.some(([key]) => key === focusedID));
-        for (const [key, t] of tiles) t.el.classList.toggle("focused", key === focusedID);
-    }
-
-    // ---------------------------------------------------------------------------
-    // Focus mode (73): click a tile for the large view + filmstrip; click again
-    // or Esc to return to the grid. Other tiles keep playing in the strip.
-    // ---------------------------------------------------------------------------
-
-    function toggleFocus(clid) {
-        focusedID = focusedID === clid ? null : clid;
-        layoutGrid();
-        pushQuality(); // auto heuristic: focused = high, grid = mid
+        stage.render();
     }
 
     function initVideo() {
@@ -481,13 +496,6 @@ export function createVideoGrid({ applySendCaps, syncCameraButton, syncShareButt
         syncCameraButton();
         syncShareButton();
         syncLowBandwidthButton();
-        document.addEventListener("keydown", (e) => {
-            if (e.key === "Escape" && focusedID) {
-                focusedID = null;
-                layoutGrid();
-                pushQuality();
-            }
-        });
     }
 
     // ---------------------------------------------------------------------------
@@ -829,6 +837,7 @@ export function createVideoGrid({ applySendCaps, syncCameraButton, syncShareButt
                 const sample = t.diagnostics;
                 t.badgeEl.textContent = `${w} × ${sample?.height || "—"} · ${Number.isFinite(sample?.fps) ? Math.round(sample.fps) : "—"} fps`;
             }
+            stage.render();
             void pushQuality(false);
         } catch { if (current()) {
             cpuRecoverySince = null;

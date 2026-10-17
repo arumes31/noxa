@@ -30,8 +30,12 @@ registerHooks({ load(url, context, next) {
 const { createRemoteAudio } = await import("../src/remote-audio.js");
 
 function fixture(t, shared) {
-    const sources = [], failures = [];
-    const node = () => ({ gain: { value: 1 }, disconnected: false, connect() {}, disconnect() { this.disconnected = true; } });
+    const sources = [], failures = [], nodes = [];
+    const node = () => {
+        const created = { gain: { value: 1 }, disconnected: false, connect() {}, disconnect() { this.disconnected = true; } };
+        nodes.push(created);
+        return created;
+    };
     class Context {
         state = "running";
         destination = node();
@@ -57,9 +61,9 @@ function fixture(t, shared) {
     t.after(() => { audio.detachRemoteAudio(); assert.deepEqual(failures, []); });
     const track = id => Object.assign(new EventTarget(), { id, kind: "audio", readyState: "live" });
     return {
-        audio, sources, track,
+        audio, sources, track, nodes,
         attach: (track, key = "publisher") => shared ? audio.attachShareAudio(track, key) : audio.attachRemoteAudio(track),
-        detach: track => shared ? audio.detachShareAudio("publisher") : audio.detachRemoteTrack(track.id),
+        detach: track => shared ? audio.detachShareAudio("publisher") : audio.detachRemoteTrack(track),
         attached: track => shared ? audio.shareAudio.get("publisher")?.track === track : audio.hasRemoteAudio(track),
     };
 }
@@ -82,7 +86,28 @@ for (const shared of [false, true]) {
         }
     });
 
-    test(`${label} ignores stale ended callbacks after a binding replacement`, t => {
+    if (!shared) {
+        // Chromium derives a receiver's track.id from the a=msid it was created
+        // with and keeps it when the media section is reused. After a speaker
+        // leaves and rejoins, two LIVE receivers share an id: attaching one must
+        // never tear down the other (one listener lost one speaker that way).
+        test("microphone chains are keyed by receiver track object, not track.id", t => {
+            const f = fixture(t, false), reused = f.track("speaker-a"), rejoined = f.track("speaker-a");
+            f.audio.attachRemoteAudio(reused, null, "speaker-b"); // section reused for B
+            f.audio.attachRemoteAudio(rejoined, null, "speaker-a"); // A back on a new section
+            assert.equal(f.audio.hasRemoteAudio(reused, "speaker-b"), true, "B's chain survived A's attach");
+            assert.equal(f.audio.hasRemoteAudio(rejoined, "speaker-a"), true);
+            assert.equal(f.audio.hasRemoteAudio(reused, "speaker-a"), false, "attribution is per receiver");
+            assert.equal(f.sources[0].src.disconnected, false);
+            f.audio.detachRemoteTrack(rejoined);
+            assert.equal(f.audio.hasRemoteAudio(reused, "speaker-b"), true, "detaching A leaves B playing");
+            reused.readyState = "ended";
+            reused.dispatchEvent(new Event("ended"));
+            assert.equal(f.audio.hasRemoteAudio(reused), false);
+        });
+    }
+
+    if (shared) test(`${label} ignores stale ended callbacks after a binding replacement`, t => {
         const f = fixture(t, shared), old = f.track("reused-id"), replacement = f.track("reused-id");
         f.attach(old);
         const stale = getEventListeners(old, "ended")[0];
@@ -116,3 +141,34 @@ for (const shared of [false, true]) {
         assert.equal(getEventListeners(other, "ended").length, 0);
     });
 }
+
+// Multiview (design 45) ducks non-focused stream audio through the per-
+// publisher screen-share gain. Voice chains must never follow it.
+test("multiview stage gains scale only screen-share audio and never voice", t => {
+    const f = fixture(t, true);
+    f.audio.attachRemoteAudio(f.track("voice-a"), { client_id: "alice", unique_id: "u-alice" }, "alice");
+    f.audio.attachRemoteAudio(f.track("voice-b"), { client_id: "bob", unique_id: "u-bob" }, "bob");
+    const voiceNodes = f.nodes.slice();
+    const voiceGains = voiceNodes.map(node => node.gain.value);
+    f.audio.attachShareAudio(f.track("share-a"), "alice");
+    f.audio.attachShareAudio(f.track("share-b"), "bob");
+    f.audio.setShareAudioStageGains(new Map([["alice", 1], ["bob", 0.15]]));
+    assert.equal(f.audio.shareAudio.get("alice").gain.gain.value, 1);
+    assert.equal(f.audio.shareAudio.get("bob").gain.gain.value, 0.15);
+    assert.deepEqual(voiceNodes.map(node => node.gain.value), voiceGains, "voice and master gains are untouched");
+    // A share that (re)attaches while ducked keeps the stage factor.
+    f.audio.attachShareAudio(f.track("share-b2"), "bob");
+    assert.equal(f.audio.shareAudio.get("bob").gain.gain.value, 0.15);
+    // Local mute still wins; volume and ducking multiply.
+    f.audio.shareAudio.get("alice").volume = 50;
+    f.audio.applyShareAudio("alice");
+    assert.equal(f.audio.shareAudio.get("alice").gain.gain.value, 0.5);
+    f.audio.setShareAudioStageGains(new Map([["alice", 0.15], ["bob", 1]]));
+    assert.equal(f.audio.shareAudio.get("alice").gain.gain.value, 0.5 * 0.15);
+    f.audio.setShareAudioStageGains(new Map([["alice", Number.NaN], ["bob", 7]]));
+    assert.equal(f.audio.shareAudio.get("alice").gain.gain.value, 0.5, "invalid factors fall back to full gain");
+    assert.equal(f.audio.shareAudio.get("bob").gain.gain.value, 1, "factors never amplify");
+    f.audio.setShareAudioStageGains(new Map());
+    assert.equal(f.audio.shareAudio.get("bob").gain.gain.value, 1, "leaving multiview restores full gain");
+    assert.deepEqual(voiceNodes.map(node => node.gain.value), voiceGains);
+});

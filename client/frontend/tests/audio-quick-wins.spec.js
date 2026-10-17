@@ -142,7 +142,7 @@ test("meter threshold changes live transmission preview and Apply persists it in
 
 async function leaveCapture(page, exit) {
     if (exit === "close") await page.locator("#set-cancel").click();
-    else await page.locator('[data-page="playback"]').click();
+    else await page.locator('[data-page="streams"]').click();
 }
 
 async function expectReleased(page) {
@@ -442,7 +442,7 @@ test("silent microphone input is reported separately from permission denial", as
 });
 
 test("typed audio percentages stay synchronized, clamp safely, and persist independently", async ({ page }) => {
-    await page.locator('[data-page="playback"]').click();
+    await page.locator('[data-page="audio"]').click();
     const voice = page.getByRole("spinbutton", { name: "Voice volume (%)", exact: true });
     const voiceSlider = page.getByRole("slider", { name: "Voice volume", exact: true });
     await voice.fill("137");
@@ -472,7 +472,7 @@ test("typed audio percentages stay synchronized, clamp safely, and persist indep
     await page.evaluate(() => window.__noxa.openSettings("notifications"));
     await expect(page.getByRole("spinbutton", { name: "Sound volume (%)", exact: true })).toHaveValue("63");
     await expect(page.getByRole("spinbutton", { name: "Speech volume (%)", exact: true })).toHaveValue("82");
-    await page.locator('[data-page="playback"]').click();
+    await page.locator('[data-page="audio"]').click();
     await expect(voice).toHaveValue("125");
 });
 
@@ -499,7 +499,7 @@ test("notification silence explanations reflect unsaved gates, zero volumes, and
 });
 
 test("unavailable output is explained when both requested and default routing fail", async ({ page }) => {
-    await page.locator('[data-page="playback"]').click();
+    await page.locator('[data-page="audio"]').click();
     await page.evaluate(async () => {
         const { soundEngine } = await import("/src/sounds.js");
         const ctx = soundEngine.context();

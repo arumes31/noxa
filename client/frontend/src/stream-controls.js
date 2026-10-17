@@ -5,6 +5,7 @@ import { updateShareViewers } from "./share-status.js";
 import { streamRecovery } from "./stream-recovery.js";
 import { receiverVideoCodecs } from "./video-codecs.js";
 import { receiverHEVCSupport, hevcReadmissionDelay } from "./video-hevc.js";
+import { createReceiverRegistry } from "./remote-receivers.js";
 
 const V = () => window.__noxa;
 let session = null;
@@ -61,10 +62,19 @@ function refreshMemberStreams(s) {
 
 // Receiver bindings stay negotiated while unwatched. Playback follows only
 // acknowledged intent; the router separately enforces packet delivery.
-export function receiveStreamTrack(track, publisher, trackID = track.id) {
+// trackID is the publisher/slot the CURRENT remote description assigns to this
+// receiver (remote-media.js). The browser track.id is never a fallback: a
+// reused MID keeps its creation-time id, so two live receivers can share one.
+export function receiveStreamTrack(track, publisher, trackID) {
     const s = session;
-    if (!s || !current(s)) { track.enabled = false; return; }
-    s.tracks.set(trackID, { track, publisher });
+    if (!s || !current(s) || !trackID) { track.enabled = false; return; }
+    // A reused receiver that still carried another slot releases it first, so
+    // the previous publisher's tile can never keep rendering this receiver.
+    for (const previous of s.tracks.bind(trackID, track, { track, publisher })) {
+        s.removeVideo(previous);
+        const old = s.streams.get(previous);
+        if (old) renderEntry(s, old);
+    }
     track.enabled = false;
     const entry = s.streams.get(trackID);
     if (entry) entry.receiverEnded = false;
@@ -72,10 +82,11 @@ export function receiveStreamTrack(track, publisher, trackID = track.id) {
     if (entry) renderEntry(s, entry);
 }
 
+// Only the receiver that currently owns trackID can remove it. A stale binding
+// or another receiver with the same browser id leaves the live tile alone.
 export function removeStreamTrack(track, trackID) {
     const s = session;
-    if (!s || s.tracks.get(trackID)?.track !== track) return;
-    s.tracks.delete(trackID);
+    if (!s || !s.tracks.release(trackID, track)) return;
     track.enabled = false;
     s.removeVideo(trackID);
     const entry = s.streams.get(trackID);
@@ -86,15 +97,12 @@ export function removeStreamTrack(track, trackID) {
 export function receiveShareAudio(track, publisherID) {
     const s = session;
     if (!s || !current(s)) { track.enabled = false; return; }
-    s.audio.set(String(publisherID), track);
+    s.audio.bind(String(publisherID), track, track);
     track.enabled = !!s.streams.get(`${publisherID}|screen`)?.watching;
 }
 
 export function removeShareAudio(track, publisherID) {
-    if (session?.audio.get(String(publisherID)) === track) {
-        session.audio.delete(String(publisherID));
-        track.enabled = false;
-    }
+    if (session?.audio.release(String(publisherID), track)) track.enabled = false;
 }
 
 function applyWatch(s, entry) {
@@ -390,6 +398,7 @@ async function poll(s) {
         s.polling = false;
         if (current(s)) {
             refreshMemberStreams(s);
+            window.dispatchEvent(new Event("noxa-stream-catalog"));
             s.timer = setTimeout(() => { void poll(s); }, s.pollAgain ? 0 : 3000);
             s.pollAgain = false;
         }
@@ -398,6 +407,20 @@ async function poll(s) {
 
 export function refreshStreamUploads(data) {
     if (session && current(session) && isCurrentPublication(data)) void poll(session);
+}
+
+// availableStreams lists active publications this client is not watching,
+// for the stage's "+ Add" picker. watch() goes through the same toggleWatch
+// as the catalog card, so server limits, pending state and errors apply.
+export function availableStreams() {
+    const s = session;
+    if (!s || !current(s)) return [];
+    return [...s.streams.values()].filter(entry => entry.available !== false && !entry.watching && !entry.pending).map(entry => {
+        const person = V().state.clients.find(c => String(c.client_id) === entry.publisher_id);
+        const img = entry.card.querySelector(".stream-preview");
+        return { id: key(entry), publisherID: entry.publisher_id, slot: entry.slot, name: person?.nickname || entry.publisher_id,
+            preview: img && !img.hidden ? img.src : "", watch: () => toggleWatch(s, entry) };
+    });
 }
 
 export function streamUsesSourceQuality(publisherID, slot) {
@@ -411,12 +434,14 @@ export function startStreamSession(pc, addVideo, removeVideo) {
     container.id = "stream-catalog";
     container.hidden = true;
     container.setAttribute("aria-label", t("streams.available"));
-    const grid = document.getElementById("video-grid");
+    // The stream stage (stream-stage.js) may wrap the grid; move the wrapper.
+    const gridEl = document.getElementById("video-grid");
+    const grid = gridEl.closest?.(".stream-stage") || gridEl;
     const media = document.createElement("div");
     media.className = "stream-media";
     grid.before(media);
     media.append(container, grid);
-    const s = { pc, scope: captureMediaScope(), addVideo, removeVideo, container, media, grid, streams: new Map(), tracks: new Map(), audio: new Map() };
+    const s = { pc, scope: captureMediaScope(), addVideo, removeVideo, container, media, grid, streams: new Map(), tracks: createReceiverRegistry(), audio: createReceiverRegistry() };
     session = s;
     void poll(s);
 }
@@ -427,7 +452,8 @@ export function stopStreamSession() {
     if (s) {
         clearTimeout(s.timer);
         for (const entry of s.streams.values()) { entry.watching = false; applyWatch(s, entry); }
-        s.media.before(s.grid);
+        const gridEl = document.getElementById("video-grid");
+        s.media.before(gridEl?.closest?.(".stream-stage") || gridEl || s.grid);
         s.media.remove();
         V().renderTree?.();
     }
