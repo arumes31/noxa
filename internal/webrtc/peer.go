@@ -264,13 +264,20 @@ func (w *PeerConnectionWrapper) ReceiverReports() []ReceiverReportStats {
 		if !ok {
 			continue
 		}
+		rtt := time.Duration(stat.RoundTripTime * float64(time.Second))
+		if w.egress != nil {
+			// Egress SRs carry the publisher's NTP clock, so pion's
+			// now-LSR-DLSR value includes that clock's offset. Use the RTT
+			// measured against this server's own SR send times instead.
+			rtt, _ = w.egress.roundTrip(uint32(stat.SSRC))
+		}
 		out = append(out, ReceiverReportStats{
 			SSRC:         uint32(stat.SSRC),
 			Kind:         stat.Kind,
 			PacketsLost:  stat.PacketsLost,
 			FractionLost: stat.FractionLost,
 			Jitter:       time.Duration(stat.Jitter * float64(time.Second)),
-			RTT:          time.Duration(stat.RoundTripTime * float64(time.Second)),
+			RTT:          rtt,
 		})
 	}
 	return out

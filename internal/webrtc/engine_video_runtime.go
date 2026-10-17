@@ -5,6 +5,7 @@ import (
 
 	"github.com/pion/interceptor"
 	"github.com/pion/interceptor/pkg/nack"
+	"github.com/pion/interceptor/pkg/report"
 	"github.com/pion/sdp/v3"
 	"github.com/pion/webrtc/v4"
 )
@@ -52,12 +53,17 @@ func newEngineMedia(enableAV1 bool, bounds VideoBounds, egress *mediaEgressRegis
 	return newEngineMediaObserved(enableAV1, bounds, egress, nil)
 }
 
-func newEngineMediaObserved(enableAV1 bool, bounds VideoBounds, egress *mediaEgressRegistry, feedback *upstreamFeedbackRegistry) (*webrtc.MediaEngine, *interceptor.Registry, error) {
+// innermost factories (tests only) sit next to the transport, inside every
+// production interceptor.
+func newEngineMediaObserved(enableAV1 bool, bounds VideoBounds, egress *mediaEgressRegistry, feedback *upstreamFeedbackRegistry, innermost ...interceptor.Factory) (*webrtc.MediaEngine, *interceptor.Registry, error) {
 	media := &webrtc.MediaEngine{}
 	if err := registerCodecsWithVideoBounds(media, enableAV1, bounds); err != nil {
 		return nil, nil, fmt.Errorf("webrtc: registering codecs: %w", err)
 	}
 	registry := &interceptor.Registry{}
+	for _, factory := range innermost {
+		registry.Add(factory)
+	}
 	// Registered before defaults so their synchronous TWCC writes cross this observer.
 	registry.Add(upstreamFeedbackFactory{registry: feedback})
 	// Pion's separate RTX reader bypasses its primary NACK receive log.
@@ -80,11 +86,42 @@ func newEngineMediaObserved(enableAV1 bool, bounds VideoBounds, egress *mediaEgr
 	// first 100 ms NACK tick. Twenty-six attempts cover the 2.5 s repair window
 	// while still ending retries on an idle source. Default registration only
 	// advertises NACK for video; the audio feedback policy remains unchanged.
-	if err := webrtc.RegisterDefaultInterceptorsWithOptions(media, registry,
-		webrtc.WithNackGeneratorOptions(nack.GeneratorSize(videoReorderPackets), nack.GeneratorMaxNacksPerPacket(26)),
-	); err != nil {
+	if err := registerEngineInterceptors(media, registry, egress); err != nil {
 		return nil, nil, fmt.Errorf("webrtc: registering default interceptors: %w", err)
 	}
 	registry.Add(upstreamReadTimingOuterFactory{registry: feedback})
 	return media, registry, nil
+}
+
+// registerEngineInterceptors is pion's RegisterDefaultInterceptorsWithOptions
+// in the same order, except that egress-managed outbound streams get Sender
+// Reports carrying the publisher's capture-time mapping instead of pion's
+// server-clock reports (media_timing.go).
+func registerEngineInterceptors(media *webrtc.MediaEngine, registry *interceptor.Registry, egress *mediaEgressRegistry) error {
+	if err := webrtc.ConfigureNackWithOptions(media, registry,
+		[]nack.GeneratorOption{nack.GeneratorSize(videoReorderPackets), nack.GeneratorMaxNacksPerPacket(26)},
+	); err != nil {
+		return err
+	}
+	receiverReports, err := report.NewReceiverInterceptor()
+	if err != nil {
+		return err
+	}
+	registry.Add(receiverReports)
+	if egress != nil {
+		registry.Add(sourceTimedReportFactory{registry: egress})
+	} else {
+		senderReports, err := report.NewSenderInterceptor()
+		if err != nil {
+			return err
+		}
+		registry.Add(senderReports)
+	}
+	if err := webrtc.ConfigureSimulcastExtensionHeaders(media); err != nil {
+		return err
+	}
+	if err := webrtc.ConfigureStatsInterceptor(registry); err != nil {
+		return err
+	}
+	return webrtc.ConfigureTWCCSender(media, registry)
 }

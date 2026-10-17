@@ -405,6 +405,7 @@ func TestH264ProfileAdmissionRecoveryAfterRejectedUnit(t *testing.T) {
 				track.formats = append(track.formats, admittedH264Fmtp, admittedH264Fmtp, admittedH264Fmtp)
 			}
 			r.ReadVideoLoop("pub", SlotScreen, track)
+			waitAsyncKeyframeRequests(t, r)
 			if feedback.pliCount() != wantPLI {
 				t.Fatalf("recovery PLI=%d want=%d", feedback.pliCount(), wantPLI)
 			}
