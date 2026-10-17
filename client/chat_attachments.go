@@ -37,8 +37,16 @@ func safeDisplayName(name string) string {
 
 // parseFileRef splits a [file:<capture>] body token. It is total: zero or one
 // separators means a legacy plain reference, which keeps pre-encryption
-// messages rendering. chat-ui.js mirrors this exactly.
+// messages rendering. A metadata segment (chat_attachment_meta.go) is not part
+// of the returned name. chat-parsers.js mirrors this exactly.
 func parseFileRef(capture string) (storage, keyB64, name string) {
+	storage, keyB64, name, _ = splitFileRef(capture)
+	return storage, keyB64, name
+}
+
+// parseFileRefParts is the original three-field split that older clients
+// still use: storage and key end at the first two separators.
+func parseFileRefParts(capture string) (storage, keyB64, name string) {
 	i := strings.Index(capture, "#")
 	if i < 0 {
 		return capture, "", capture // legacy [file:photo.png]
@@ -53,7 +61,8 @@ func parseFileRef(capture string) (storage, keyB64, name string) {
 
 // UploadChatAttachment seals data with a fresh random 32-byte key, uploads
 // the ciphertext under a content-derived name, and returns the body token
-// "[file:<storage>#<keyB64>#<display>]" for embedding in the chat message.
+// "[file:<storage>#<keyB64>#nx1;s=<bytes>#<display>]" for embedding in the
+// chat message. The plaintext size rides in the token's metadata segment.
 // The key only ever exists inside the (encrypted) message body, so the file
 // gets exactly the protection the message text gets.
 func (a *App) UploadChatAttachment(channelID int64, name, dataBase64 string) (string, error) {
@@ -107,8 +116,7 @@ func uploadChatAttachmentTo(cm *connManager, location attachmentLocation, name, 
 	if err := ftPutBytesInFolder(cm, location.channelID, location.folder, storage, blob); err != nil {
 		return "", err
 	}
-	return "[file:" + storage + "#" + base64.StdEncoding.EncodeToString(key[:]) +
-		"#" + safeDisplayName(name) + "]", nil
+	return formatFileRef(storage, base64.StdEncoding.EncodeToString(key[:]), attachmentMeta{Size: int64(len(data))}, name), nil
 }
 
 const maxChatAttachmentBytes = 25 << 20

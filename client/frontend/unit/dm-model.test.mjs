@@ -84,10 +84,10 @@ describe("preview line", () => {
     });
 
     it("classifies only bodies that are exactly one attachment", () => {
-        assert.deepEqual(attachmentKind("[file:s#k#a.m4a]"), { kind: "voice", name: "a.m4a" });
-        assert.deepEqual(attachmentKind("[file:s#k#a.ogv]"), { kind: "video", name: "a.ogv" });
-        assert.deepEqual(attachmentKind("[file:s#k#a.jpeg]"), { kind: "image", name: "a.jpeg" });
-        assert.deepEqual(attachmentKind("[file:legacy.txt]"), { kind: "file", name: "legacy.txt" });
+        assert.deepEqual(attachmentKind("[file:s#k#a.m4a]"), { kind: "voice", name: "a.m4a", meta: null });
+        assert.deepEqual(attachmentKind("[file:s#k#a.ogv]"), { kind: "video", name: "a.ogv", meta: null });
+        assert.deepEqual(attachmentKind("[file:s#k#a.jpeg]"), { kind: "image", name: "a.jpeg", meta: null });
+        assert.deepEqual(attachmentKind("[file:legacy.txt]"), { kind: "file", name: "legacy.txt", meta: null });
         assert.equal(attachmentKind("hi [file:s#k#a.pdf]"), null);
         assert.equal(attachmentKind(""), null);
     });

@@ -1209,6 +1209,9 @@ function pagePrivacy() {
     // (4b) encryption note.
     return page(
         group("", "identity", securitySettings(s)),
+        // One switch for read receipts and typing, DMs and private groups.
+        group(t("settings.group.chatActivity"), "activity",
+            row(t("dm.privacy.activity"), checkbox(!s.hide_chat_activity, (v) => { s.hide_chat_activity = !v; }), "", { key: "hide_chat_activity" })),
         group(t("settings.group.chatLogs"), "logs",
             row(t("settings.log.channel.chats.to.file"), checkbox(s.log_channel_chat, (v) => { s.log_channel_chat = v; }), "", { key: "log_channel_chat" }),
             row(t("settings.log.private.chats.to.file"), checkbox(s.log_private_chat, (v) => { s.log_private_chat = v; }), "", { key: "log_private_chat" }),

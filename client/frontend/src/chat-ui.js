@@ -10,7 +10,7 @@
 //
 // Replies and direct recipients use explicit protocol identities.
 import { resolveParent, directPeer } from "./chat-relations.js";
-import { previewLine } from "./dm-model.js";
+import { fileCardText, previewLine } from "./dm-model.js";
 import { manageChatGIFPlayback } from "./chat-gif-playback.js";
 import { openChatMediaLightbox } from "./chat-media-lightbox.js";
 import { createUnreadTabEffects } from "./chat-unread.js";
@@ -983,11 +983,22 @@ function downloadChip(source, ref, name, suffix) {
     const label = document.createElement("span");
     label.className = "file-chip-name";
     label.textContent = name + suffix;
+    // The size comes from the sealed reference; references without metadata
+    // (older senders) show none. Outside the Messages view it follows the
+    // name; inside, the card's meta line carries it.
+    const text = fileCardText(name, ref.meta);
     const meta = document.createElement("span");
     meta.className = "file-chip-meta";
-    meta.textContent = t("dm.fileMeta");
-    b.append(glyph, " ", label, meta);
-    b.title = t("chat.downloadName", { name });
+    meta.textContent = text.meta;
+    b.append(glyph, " ", label);
+    if (text.size) {
+        const size = document.createElement("span");
+        size.className = "file-chip-size";
+        size.textContent = " · " + text.size;
+        b.append(size);
+    }
+    b.append(meta);
+    b.title = text.title;
     b.onclick = async () => {
         if (!b.isConnected || b.disabled || !source.saveCurrent()) return;
         b.disabled = true;

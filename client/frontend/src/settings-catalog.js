@@ -32,7 +32,7 @@ export const SETTINGS_CATEGORIES = Object.freeze([
         "theme", "accent_color", "ui_font", "ui_font_size", "compact_mode", "reduce_motion", "window_opacity", "user_css",
     ] },
     { id: "privacy", icon: "lock", rail: "main", keys: [
-        "identity_key_protection", "allow_plaintext", "log_channel_chat", "log_private_chat", "log_server_chat",
+        "identity_key_protection", "allow_plaintext", "hide_chat_activity", "log_channel_chat", "log_private_chat", "log_server_chat",
     ] },
     { id: "chat", icon: "chat", rail: "more", keys: [
         "chat_timestamps", "chat_density", "chat_layout", "chat_font_size", "sys_join_leave", "sys_kick",

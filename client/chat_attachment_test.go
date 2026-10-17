@@ -293,9 +293,13 @@ func TestSealedChatAttachmentMaximumRoundTrip(t *testing.T) {
 	}
 
 	body := strings.TrimSuffix(strings.TrimPrefix(token, "[file:"), "]")
-	storage, keyB64, _ := parseFileRef(body)
-	if storage == "" || keyB64 == "" {
+	storage, keyB64, name, meta := splitFileRef(body)
+	if storage == "" || keyB64 == "" || name != "maximum.bin" {
 		t.Fatalf("upload token = %q", token)
+	}
+	// The sealed token carries the PLAINTEXT size, not the larger ciphertext.
+	if meta.Size != int64(len(plain)) {
+		t.Fatalf("token size = %d, want %d", meta.Size, len(plain))
 	}
 	chunks := transferChunks(upload.data)
 	_, downloadDone := serveTransferDownload(

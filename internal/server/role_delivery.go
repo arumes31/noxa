@@ -248,6 +248,11 @@ func (s *TCPServer) roleBroadcastFrame(client *Client, payload []byte, e *author
 	case eventConversationChanged:
 		// Addressed invalidation only. No content/membership crosses this queue;
 		// fetching either requires a current database membership lease.
+	case eventConversationTyping, eventConversationRead:
+		deliverable, err := s.conversationActivityDeliverable(client.uniqueID(), envelope.Data)
+		if err != nil || !deliverable {
+			return nil, err
+		}
 	case eventTyping, eventDMDelivered, eventDMRead,
 		eventEmojiAdded, eventEmojiRemoved, eventEmojiRenamed, eventServerBannerChanged:
 		// Direct or server-wide events. Channel typing uses the guarded envelope.

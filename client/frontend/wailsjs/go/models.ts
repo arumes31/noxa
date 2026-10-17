@@ -1433,6 +1433,7 @@ export namespace main {
 	    contacts?: Contact[];
 	    blocked_users?: string[];
 	    muted_conversations?: string[];
+	    hide_chat_activity?: boolean;
 	    user_notes?: Record<string, string>;
 	    recent_channels?: Record<string, Array<number>>;
 	    auto_away_minutes: number;
@@ -1560,6 +1561,7 @@ export namespace main {
 	        this.contacts = this.convertValues(source["contacts"], Contact);
 	        this.blocked_users = source["blocked_users"];
 	        this.muted_conversations = source["muted_conversations"];
+	        this.hide_chat_activity = source["hide_chat_activity"];
 	        this.user_notes = source["user_notes"];
 	        this.recent_channels = source["recent_channels"];
 	        this.auto_away_minutes = source["auto_away_minutes"];
@@ -2872,6 +2874,7 @@ export namespace netproto {
 	    unique_id: string;
 	    pending: boolean;
 	    joined_epoch: number;
+	    seen_message_id?: number;
 
 	    static createFrom(source: any = {}) {
 	        return new ConversationMember(source);
@@ -2882,6 +2885,7 @@ export namespace netproto {
 	        this.unique_id = source["unique_id"];
 	        this.pending = source["pending"];
 	        this.joined_epoch = source["joined_epoch"];
+	        this.seen_message_id = source["seen_message_id"];
 	    }
 	}
 	export class Conversation {
@@ -2985,6 +2989,7 @@ export namespace netproto {
 	    target: string;
 	    before_id: number;
 	    read_message_id: number;
+	    share_read?: boolean;
 	    message?: ConversationSend;
 
 	    static createFrom(source: any = {}) {
@@ -3000,6 +3005,7 @@ export namespace netproto {
 	        this.target = source["target"];
 	        this.before_id = source["before_id"];
 	        this.read_message_id = source["read_message_id"];
+	        this.share_read = source["share_read"];
 	        this.message = this.convertValues(source["message"], ConversationSend);
 	    }
 

@@ -68,6 +68,9 @@ type connManager struct {
 	supportsStreamHEVC             bool
 	supportsStreamCodecRefresh     bool
 	supportsStreamReceiverRecovery bool
+	// supportsConversationActivity gates private-group typing and shared read
+	// receipts: an older server would relay a group typing frame as global.
+	supportsConversationActivity bool
 	conn                           net.Conn
 	connEpoch                      uint64
 	addr                           string // control address (tab info)
@@ -526,6 +529,7 @@ func (m *connManager) connectWith(addr string, authMsg netproto.Authenticate, si
 	m.supportsStreamHEVC = slices.Contains(resp.Capabilities, netproto.CapabilityStreamHEVC)
 	m.supportsStreamCodecRefresh = slices.Contains(resp.Capabilities, netproto.CapabilityStreamCodecRefresh)
 	m.supportsStreamReceiverRecovery = slices.Contains(resp.Capabilities, netproto.CapabilityStreamReceiverRecovery)
+	m.supportsConversationActivity = slices.Contains(resp.Capabilities, netproto.CapabilityConversationActivity)
 	m.isGuest = authMsg.Anonymous
 	m.iceServers = resp.ICEServers
 	m.mediaLimits = netproto.MediaLimits{}
