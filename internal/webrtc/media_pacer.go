@@ -439,30 +439,70 @@ func (p *mediaPacer) run() {
 // each packet is written as soon as it is queued, concurrently with (never
 // behind) video writes, and still crosses the same final authorization
 // boundary in writePacket. The queue only absorbs a briefly stalled socket.
+//
+// A contended final-write gate (a control update holding an echo/whisper/
+// watch scope) is not a denial: the packet goes back to the head of the voice
+// queue and is retried after mediaAudioBusyRetry, until mediaAudioLifetime
+// expires it. Dropping it would cut speech for every control update.
 func (p *mediaPacer) runAudio(wake <-chan struct{}, done chan<- struct{}) {
 	defer close(done)
+	retry := time.NewTimer(mediaAudioBusyRetry)
+	retry.Stop()
+	defer retry.Stop()
 	for {
 		p.mu.Lock()
 		p.audioBusy = true
+		blocked := false
 		for p.audioCount > 0 && !p.closed {
 			packet := p.popAudioLocked()
 			if !packet.stream.active || !time.Now().Before(packet.expires) {
 				continue
 			}
 			p.mu.Unlock()
-			if p.writePacket(packet) {
+			attempted, busy := p.writePacketRetry(packet, true)
+			if attempted {
 				p.audioSent.Add(int64(packet.size))
 			}
 			p.mu.Lock()
+			if busy && p.requeueAudioBusyLocked(packet) {
+				blocked = true
+				break
+			}
 		}
 		p.audioBusy = false
 		p.mu.Unlock()
+		var retryC <-chan time.Time
+		if blocked {
+			retry.Reset(mediaAudioBusyRetry)
+			retryC = retry.C
+		}
 		select {
 		case <-p.stop:
 			return
 		case <-wake:
+			retry.Stop()
+		case <-retryC:
 		}
 	}
+}
+
+// mediaAudioBusyRetry spaces retries of a voice packet whose final-write gate
+// was contended. Control updates hold those gates for well under a
+// millisecond, and mediaAudioLifetime bounds the total wait.
+const mediaAudioBusyRetry = time.Millisecond
+
+// requeueAudioBusyLocked returns a contended voice packet to the head of the
+// voice queue, keeping order. It reports false when the packet was discarded
+// (pacer closed, stream retired, packet expired, or the queue refilled).
+func (p *mediaPacer) requeueAudioBusyLocked(packet pacedPacket) bool {
+	if p.closed || !packet.stream.active || !time.Now().Before(packet.expires) || p.audioCount == mediaAudioPackets {
+		return false
+	}
+	p.audioHead = (p.audioHead - 1 + mediaAudioPackets) % mediaAudioPackets
+	p.audioQueue[p.audioHead] = packet
+	p.audioCount++
+	p.audioBytes += packet.size
+	return true
 }
 
 // requeueBusyLocked returns a contended packet to the queue head. It reports
@@ -550,7 +590,7 @@ func (p *mediaPacer) writePacketRetry(packet pacedPacket, retryBusy bool) (bool,
 	if stream != nil {
 		n, reason, err := stream.writeResultKind(&packet.header, packet.payload, packet.attrs, write, packet.kind)
 		if !attempted && (reason == mediaDropScopeBusy || reason == mediaDropPolicyBusy) {
-			if retryBusy && !packet.stream.audio {
+			if retryBusy {
 				return false, true
 			}
 			if reason == mediaDropScopeBusy {
