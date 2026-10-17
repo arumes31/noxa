@@ -74,6 +74,17 @@ func (a *App) UploadChatAttachmentForTab(tabID string, channelID int64, name, da
 }
 
 func uploadChatAttachmentWith(cm *connManager, channelID int64, name, dataBase64 string) (string, error) {
+	return uploadChatAttachmentTo(cm, attachmentLocation{channelID: channelID}, name, dataBase64)
+}
+
+// attachmentLocation addresses attachment ciphertext: a channel scope, or a
+// virtual folder of the server-wide scope (private groups).
+type attachmentLocation struct {
+	channelID int64
+	folder    string
+}
+
+func uploadChatAttachmentTo(cm *connManager, location attachmentLocation, name, dataBase64 string) (string, error) {
 	data, err := io.ReadAll(io.LimitReader(
 		base64.NewDecoder(base64.StdEncoding, strings.NewReader(dataBase64)),
 		int64(maxChatAttachmentBytes)+1,
@@ -93,7 +104,7 @@ func uploadChatAttachmentWith(cm *connManager, channelID int64, name, dataBase64
 		return "", err
 	}
 	storage := attachmentStorageName(blob)
-	if err := ftPutBytesWith(cm, channelID, storage, blob); err != nil {
+	if err := ftPutBytesInFolder(cm, location.channelID, location.folder, storage, blob); err != nil {
 		return "", err
 	}
 	return "[file:" + storage + "#" + base64.StdEncoding.EncodeToString(key[:]) +
@@ -116,6 +127,11 @@ var errChatAttachmentPreviewTooLarge = errors.New("attachment is too large to pr
 // prevents a concurrent tab switch from redirecting the later download to a
 // different server.
 func (a *App) chatAttachmentBytesForCM(cm *connManager, channelID int64, storage, keyB64 string) ([]byte, error) {
+	return a.chatAttachmentBytesAt(cm, attachmentLocation{channelID: channelID}, storage, keyB64)
+}
+
+func (a *App) chatAttachmentBytesAt(cm *connManager, location attachmentLocation, storage, keyB64 string) ([]byte, error) {
+	channelID := location.channelID
 	// A caller that hands over the raw capture instead of its parts is parsed
 	// here too, so a token can never be mistaken for a file name.
 	if keyB64 == "" && strings.Contains(storage, "#") {
@@ -136,14 +152,19 @@ func (a *App) chatAttachmentBytesForCM(cm *connManager, channelID int64, storage
 		blob []byte
 		err  error
 	)
+	if location.folder != "" && keyB64 == "" {
+		// Folder-scoped (private-group) attachments are always sealed; a
+		// legacy plaintext reference is never resolved inside a group folder.
+		return nil, errors.New("invalid attachment key")
+	}
 	if a.chatAttachmentFetch != nil {
-		blob, err = a.chatAttachmentFetch(cm, channelID, storage)
+		blob, err = a.chatAttachmentFetch(cm, channelID, location.folder, storage)
 	} else {
 		maxWireBytes := maxChatAttachmentBytes
 		if keyB64 != "" {
 			maxWireBytes = maxSealedChatAttachmentBytes
 		}
-		blob, err = a.ftGetBytesForCMWithLimit(cm, channelID, storage, int64(maxWireBytes))
+		blob, err = a.ftGetBytesInFolderWithLimit(cm, channelID, location.folder, storage, int64(maxWireBytes))
 	}
 	if err != nil {
 		return nil, err
@@ -332,6 +353,10 @@ func (a *App) SaveChatAttachmentForTab(tabID string, channelID int64, storage, k
 }
 
 func (a *App) saveChatAttachmentWith(cm *connManager, channelID int64, storage, keyB64, defaultName string) (string, error) {
+	return a.saveChatAttachmentAt(cm, attachmentLocation{channelID: channelID}, storage, keyB64, defaultName)
+}
+
+func (a *App) saveChatAttachmentAt(cm *connManager, location attachmentLocation, storage, keyB64, defaultName string) (string, error) {
 	dest, err := a.chooseChatAttachmentPath(defaultName)
 	if err != nil || dest == "" {
 		return dest, err
@@ -343,7 +368,7 @@ func (a *App) saveChatAttachmentWith(cm *connManager, channelID int64, storage, 
 	if cm == nil {
 		return "", errors.New("not connected")
 	}
-	plain, err := a.chatAttachmentBytesForCM(cm, channelID, storage, keyB64)
+	plain, err := a.chatAttachmentBytesAt(cm, location, storage, keyB64)
 	if err != nil {
 		return "", err
 	}

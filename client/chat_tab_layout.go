@@ -84,6 +84,9 @@ func validChatTabKey(key string) bool {
 		id, err := strconv.ParseInt(channel, 10, 64)
 		return err == nil && id > 0 && strconv.FormatInt(id, 10) == channel
 	}
+	if group, ok := strings.CutPrefix(key, "grp:"); ok {
+		return canonicalConversationID.MatchString(group)
+	}
 	peer, ok := strings.CutPrefix(key, "dm:")
 	return ok && len(peer) > 0 && len(peer) <= 128 && utf8.ValidString(peer) &&
 		strings.IndexFunc(peer, func(r rune) bool { return unicode.IsSpace(r) || unicode.IsControl(r) }) < 0

@@ -868,7 +868,7 @@ func startTestEnv(t *testing.T, _ any) *testEnv {
 }
 
 // startTestEnvFull is startTestEnv with a hook to adjust the server config
-// (e.g. disable ChatAllowPlaintext for encryption tests).
+// (e.g. change limits or TLS for a single test).
 func startTestEnvFull(t *testing.T, _ any, mutateCfg func(*config.Config)) *testEnv {
 	t.Helper()
 	return startTestEnvDeps(t, nil, mutateCfg, nil)
@@ -962,13 +962,12 @@ func startTestEnvLogger(t *testing.T, _ any, mutateCfg func(*config.Config), mut
 
 	addr := freePort(t)
 	cfg := &config.Config{
-		TCPAddr:            addr,
-		HealthAddr:         ":12337",
-		FileRoot:           t.TempDir(),
-		TLSEnabled:         true,
-		TLSDir:             t.TempDir(),
-		ChatAllowPlaintext: true, // legacy chat tests send plaintext
-		ChatMaxLength:      2000,
+		TCPAddr:       addr,
+		HealthAddr:    ":12337",
+		FileRoot:      t.TempDir(),
+		TLSEnabled:    true,
+		TLSDir:        t.TempDir(),
+		ChatMaxLength: 2000,
 	}
 	if mutateCfg != nil {
 		mutateCfg(cfg)
@@ -1754,23 +1753,17 @@ func TestJoinChannelAndChat(t *testing.T) {
 	env := startTestEnv(t, nil)
 	defer env.stop()
 
-	adminConn, _ := dialAuthed(t, env.addr, "admin-uid")
+	// chatPair joins both clients to channel 1 with published keys.
+	adminConn, userConn, key, keyID, _ := chatPair(t, env)
 	defer func() { _ = adminConn.Close() }()
-	userConn, _ := dialAuthed(t, env.addr, "user-uid")
 	defer func() { _ = userConn.Close() }()
-
-	env.state.AddChannel(testChannel(1))
-
-	// Both clients join it.
-	send(t, adminConn, netproto.MsgJoinChannel, netproto.JoinChannel{ChannelID: 1})
-	send(t, userConn, netproto.MsgJoinChannel, netproto.JoinChannel{ChannelID: 1})
 
 	waitFor(t, "both clients in channel", func() bool {
 		return len(env.state.ChannelMembers(1)) == 2
 	})
 
 	// Channel chat from the user reaches the admin (a channel member).
-	send(t, userConn, netproto.MsgChatSend, netproto.ChatSend{ChannelID: "1", Text: "hi admin"})
+	sendEncChat(t, userConn, key, keyID, "1", "hi admin")
 	data := readEventOfType(t, adminConn, eventChat)
 	var chat netproto.ChatBroadcast
 	if err := json.Unmarshal(data, &chat); err != nil {
@@ -1792,14 +1785,15 @@ func TestDirectMessage(t *testing.T) {
 	userConn, userID := dialAuthed(t, env.addr, "user-uid")
 	defer func() { _ = userConn.Close() }()
 
-	send(t, adminConn, netproto.MsgChatSend, netproto.ChatSend{ToClientID: userID, Text: "psst"})
+	// DMs are end-to-end ciphertext the server relays verbatim.
+	send(t, adminConn, netproto.MsgChatSend, netproto.ChatSend{ToClientID: userID, Text: "psst-ciphertext", Enc: true})
 
 	data := readEventOfType(t, userConn, eventChat)
 	var chat netproto.ChatBroadcast
 	if err := json.Unmarshal(data, &chat); err != nil {
 		t.Fatalf("unmarshal chat: %v", err)
 	}
-	if chat.Text != "psst" || chat.From != "admin" {
+	if chat.Text != "psst-ciphertext" || chat.From != "admin" || !chat.Enc || !chat.E2E {
 		t.Fatalf("chat = %+v, want from admin text 'psst'", chat)
 	}
 }

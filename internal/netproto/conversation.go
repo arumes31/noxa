@@ -107,6 +107,9 @@ type ConversationMessage struct {
 	Reference      string `json:"reference"`
 	Body           string `json:"body"`
 	CreatedAt      int64  `json:"created_at"`
+	// EncVerified is set only by the receiving native client after it opened
+	// and authenticated the member envelope; it never comes from a server.
+	EncVerified bool `json:"enc_verified,omitempty"`
 }
 
 type ConversationResult struct {

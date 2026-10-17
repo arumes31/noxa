@@ -92,9 +92,11 @@ func (s *TCPServer) handleConversation(ctx context.Context, client *Client, fram
 		}
 		if request.Action == "leave" {
 			s.removeConversationCaller(request.ID, client.UniqueID)
+			s.conversationFiles.revoke(client.UniqueID, request.ID)
 		}
 		if request.Action == "remove" {
 			s.removeConversationCaller(request.ID, request.Target)
+			s.conversationFiles.revoke(request.Target, request.ID)
 		}
 		// Queue only an opaque invalidation. Clients fetch content through a fresh
 		// membership lease; queued events never contain messages or new members.

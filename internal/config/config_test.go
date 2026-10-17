@@ -433,14 +433,6 @@ func TestValidateRejectsUnsafeValues(t *testing.T) {
 			wantErr: "file_tls_enabled",
 		},
 		{
-			name: "production plaintext chat",
-			mutate: func(c *Config) {
-				c.DevMode = false
-				c.ChatAllowPlaintext = true
-			},
-			wantErr: "chat_allow_plaintext",
-		},
-		{
 			name: "production default database credentials",
 			mutate: func(c *Config) {
 				c.DevMode = false
@@ -538,7 +530,7 @@ func TestWarningsReportExplicitUnsafeChoices(t *testing.T) {
 	cfg.MetricsAllowRemote = true
 	cfg.TLSEnabled = false
 	cfg.FileTLSEnabled = false
-	cfg.ChatAllowPlaintext = true
+	cfg.RemovedChatAllowPlaintext = true
 
 	warnings := strings.Join(cfg.Warnings(), "\n")
 	for _, text := range []string{
@@ -546,7 +538,7 @@ func TestWarningsReportExplicitUnsafeChoices(t *testing.T) {
 		"metrics_allow_remote",
 		"tls_enabled=false",
 		"file transfers are plaintext",
-		"chat_allow_plaintext",
+		"chat_allow_plaintext was removed",
 	} {
 		if !strings.Contains(warnings, text) {
 			t.Errorf("Warnings() = %q, want text %q", warnings, text)

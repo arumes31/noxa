@@ -354,10 +354,10 @@ func TestKeyPublishRejectsInvalidX25519WithoutMutation(t *testing.T) {
 	}
 }
 
-// TestPlaintextChatRejected verifies plaintext chat is rejected when
-// chat_allow_plaintext is false (the default), with a clear error.
+// TestPlaintextChatRejected verifies plaintext chat is always rejected with a
+// clear error.
 func TestPlaintextChatRejected(t *testing.T) {
-	env := startTestEnvFull(t, nil, func(c *config.Config) { c.ChatAllowPlaintext = false })
+	env := startTestEnv(t, nil)
 	defer env.stop()
 
 	conn, _ := dialAuthed(t, env.addr, "user-uid")

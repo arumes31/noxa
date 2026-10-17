@@ -83,6 +83,9 @@ func (s *TCPServer) handleFileList(ctx context.Context, client *Client, f *netpr
 	}
 
 	return s.fileReadAction(ctx, client, msg.ChannelID, func(ctx context.Context) error {
+		if conversationFolderReserved(msg.ChannelID, folder) {
+			return s.sendErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, errConversationFileDenied.Error())
+		}
 		files, err := s.deps.FileTransfer.ListFiles(ctx, msg.ChannelID, folder)
 		if err != nil {
 			return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "listing files failed")
@@ -91,6 +94,7 @@ func (s *TCPServer) handleFileList(ctx context.Context, client *Client, f *netpr
 		if err != nil {
 			return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "listing folders failed")
 		}
+		folders = filterConversationFolders(msg.ChannelID, folders)
 		used, quota, err := s.deps.FileTransfer.ChannelQuota(ctx, msg.ChannelID)
 		if err != nil {
 			return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "reading quota failed")
@@ -143,6 +147,9 @@ func (s *TCPServer) handleFileDelete(ctx context.Context, client *Client, f *net
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "file transfer backend unavailable")
 	}
 	return s.roleAction(ctx, client, msg.ChannelID, authorization.ViewChannel, func(ctx context.Context) error {
+		if conversationFolderReserved(msg.ChannelID, msg.Folder) {
+			return s.sendErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, errConversationFileDenied.Error())
+		}
 		if err := s.fileManageAllowed(ctx, client, msg.ChannelID, msg.Folder, msg.Name); err != nil {
 			return s.sendErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, err.Error())
 		}
@@ -173,12 +180,17 @@ func (s *TCPServer) handleFileRename(ctx context.Context, client *Client, f *net
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "new_name is required")
 	}
 	return s.roleAction(ctx, client, msg.ChannelID, authorization.ViewChannel, func(ctx context.Context) error {
-		if err := s.fileManageAllowed(ctx, client, msg.ChannelID, msg.Folder, msg.Name); err != nil {
-			return s.sendErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, err.Error())
-		}
 		target := msg.NewChannelID
 		if target == 0 {
 			target = msg.ChannelID
+		}
+		// Group files may neither be moved out of nor planted into a group
+		// folder; only the authorized attachment upload path writes there.
+		if conversationFolderReserved(msg.ChannelID, msg.Folder) || conversationFolderReserved(target, msg.NewFolder) {
+			return s.sendErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, errConversationFileDenied.Error())
+		}
+		if err := s.fileManageAllowed(ctx, client, msg.ChannelID, msg.Folder, msg.Name); err != nil {
+			return s.sendErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, err.Error())
 		}
 		if target != msg.ChannelID {
 			if !s.roleAllowed(ctx, client, target, authorization.UploadFiles) {
@@ -218,6 +230,9 @@ func (s *TCPServer) handleFileVersions(ctx context.Context, client *Client, f *n
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "file transfer backend unavailable")
 	}
 	return s.fileReadAction(ctx, client, msg.ChannelID, func(ctx context.Context) error {
+		if conversationFolderReserved(msg.ChannelID, msg.Folder) {
+			return s.sendErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, errConversationFileDenied.Error())
+		}
 		files, err := s.deps.FileTransfer.ListFileVersions(ctx, msg.ChannelID, msg.Folder, msg.Name)
 		if err != nil {
 			return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "listing versions failed")

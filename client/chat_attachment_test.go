@@ -92,7 +92,7 @@ func attachmentSaveApp(path string, blob []byte) (*App, *int) {
 	a.chatAttachmentSaveDialog = func(context.Context, wailsRuntime.SaveDialogOptions) (string, error) {
 		return path, nil
 	}
-	a.chatAttachmentFetch = func(*connManager, int64, string) ([]byte, error) {
+	a.chatAttachmentFetch = func(*connManager, int64, string, string) ([]byte, error) {
 		fetches++
 		return append([]byte(nil), blob...), nil
 	}
@@ -200,7 +200,7 @@ func TestSaveChatAttachment(t *testing.T) {
 			dest := filepath.Join(t.TempDir(), "failed.txt")
 			a, _ := attachmentSaveApp(dest, test.blob)
 			if test.want != nil {
-				a.chatAttachmentFetch = func(*connManager, int64, string) ([]byte, error) { return nil, test.want }
+				a.chatAttachmentFetch = func(*connManager, int64, string, string) ([]byte, error) { return nil, test.want }
 			}
 			if _, err := a.SaveChatAttachment(7, "blob.vcx", test.key, "failed.txt"); err == nil {
 				t.Fatal("save unexpectedly succeeded")

@@ -4,6 +4,7 @@ import { confirmDialog, promptDialog } from "./modal.js";
 import { startPrivateCall, showCallHistory } from "./private-calls.js";
 import { sessionUserID } from "./session-identity.js";
 import { initGroupSidebarLayout } from "./group-sidebar-layout.js";
+import { encryptionBadge } from "./message-encryption.js";
 
 const V = () => window.__noxa;
 const app = () => window.go.main.App;
@@ -11,6 +12,29 @@ let refreshOpen = null;
 let viewedGroup = null;
 let workspace = null;
 const notified = new Set();
+const caughtUp = new Map(); // tabID:groupID -> newest message already summarized
+function remember(key) {
+    notified.add(key);
+    if (notified.size > 512) notified.delete(notified.values().next().value);
+}
+// A group message appears as a chat tab exactly like a DM: the tab is added
+// (or its unread count refreshed) without activating it or moving focus.
+function syncChatTabs(tabID, generation, groups, authoritative) {
+    window.__noxaChat?.syncGroupTabs?.(tabID, generation, groups, sessionUserID(V().state), { authoritative });
+}
+// The newest message gives the notification the same "sender: text" preview a
+// DM has. It is opened locally through the authenticated envelope; failure
+// falls back to the content-free group notification.
+async function messagePreview(tabID, group, messageID) {
+    try {
+        const page = await app().ConversationForTab(tabID, { action: "history", id: group.id, before_id: messageID + 1 });
+        const message = page.messages?.find(message => message.id === messageID);
+        if (!message || !message.enc_verified || (V().state.settings?.blocked_users || []).includes(message.from_unique_id)) return null;
+        const sender = V().state.clients.find(client => client.unique_id === message.from_unique_id)?.nickname || t("chat.unknownMember");
+        const text = String(message.body || "").replace(/\[file:[^\]#]*#[^\]#]*#([^\]]*)\]/g, "📎 $1").slice(0, 80);
+        return t("group.messagePreview", { name: group.name, sender, text });
+    } catch { return null; }
+}
 export async function conversationChanged(event = {}) {
     initConversations();
     refreshOpen?.(event);
@@ -19,23 +43,47 @@ export async function conversationChanged(event = {}) {
     const tabID = state.activeTabID, generation = state.serverGeneration;
     const key = `${tabID}:${generation}:${event.id}:${event.message_id || "invitation"}`;
     if (notified.has(key)) return;
-    notified.add(key);
-    if (notified.size > 512) notified.delete(notified.values().next().value);
+    remember(key);
     const muted = () => (V().state.settings?.muted_conversations || []).includes(event.id);
     const viewed = () => viewedGroup?.() === event.id && document.hasFocus();
-    if (muted() || viewed()) return;
+    const stale = () => state !== V().state || tabID !== state.activeTabID || generation !== state.serverGeneration;
     try {
         // An invalidation carries no content. Recheck membership before naming
-        // a group in a notification, including events queued before removal.
+        // a group in a tab or notification, including events queued before removal.
         const result = await app().ConversationForTab(tabID, { action: "get", id: event.id });
-        if (state !== V().state || tabID !== state.activeTabID || generation !== state.serverGeneration || muted() || viewed()) return;
+        if (stale()) return;
         const group = result.conversations.find(group => group.id === event.id);
         const member = group?.members.find(member => member.unique_id === sessionUserID(state));
         if (!member || (member.pending && !event.invitation) || (!member.pending && event.invitation)) return;
         if ((state.settings?.blocked_users || []).includes(group.owner) && member.pending) return;
-        window.__noxaNotify?.notify("dm", t(event.invitation ? "group.invitedNotification" : "group.messageNotification", { name: group.name }),
-            { reference: { kind: "group", group_id: group.id, message_id: event.message_id || 0 } });
+        if (!member.pending) {
+            syncChatTabs(tabID, generation, [group], false);
+            caughtUp.set(`${tabID}:${group.id}`, Math.max(caughtUp.get(`${tabID}:${group.id}`) || 0, Number(event.message_id) || 0));
+        }
+        if (muted() || viewed()) return;
+        let text = t(event.invitation ? "group.invitedNotification" : "group.messageNotification", { name: group.name });
+        if (event.message_id && !event.invitation) {
+            const preview = await messagePreview(tabID, group, Number(event.message_id));
+            if (stale() || muted() || viewed()) return;
+            if (preview) text = preview;
+        }
+        window.__noxaNotify?.notify("dm", text,
+            { className: "messages", kind: "info", announce: false, reference: { kind: "group", group_id: group.id, message_id: event.message_id || 0 } });
     } catch { /* Removed groups and stale sessions do not produce alerts. */ }
+}
+// catchUpNotifications summarizes messages that arrived while this client was
+// offline once per group, mirroring the batched offline-DM notification.
+function catchUpNotifications(tabID, groups, uid) {
+    const muted = new Set(V().state.settings?.muted_conversations || []);
+    for (const group of groups) {
+        const member = group.members.find(member => member.unique_id === uid);
+        const key = `${tabID}:${group.id}`, latest = Number(group.latest_message_id) || 0;
+        if (!member || member.pending || !(group.unread_count > 0) || latest <= (caughtUp.get(key) || 0)) continue;
+        caughtUp.set(key, latest);
+        if (muted.has(group.id) || viewedGroup?.() === group.id) continue;
+        window.__noxaNotify?.notify("dm", t("group.offlineBatch", { count: group.unread_count, name: group.name }),
+            { className: "messages", kind: "info", announce: false, reference: { kind: "group", group_id: group.id, message_id: latest } });
+    }
 }
 function el(tag, className, text) {
     const node = document.createElement(tag); node.className = className;
@@ -56,6 +104,7 @@ export async function openConversationsAt(groupID, messageID = 0, destinationCur
 }
 export function closeConversations() { workspace?.close(); }
 export function isPrivateGroupActive() { return !!workspace?.active(); }
+export function viewedConversationID() { return viewedGroup?.() || ""; }
 export function privateGroupViewToken() { return workspace?.token(); }
 export function filterConversations() { workspace?.filter(); }
 export function resetConversations() {
@@ -115,6 +164,9 @@ export function initConversations() {
     let refreshPending = 0, sidebarRefreshQueued = false;
     let mutationPending = false;
     const drafts = new Map();
+    const stagedFiles = new Map(); // groupID -> files staged with the chat attachment rules
+    let refreshStaged = () => {}; // repaints the composer currently showing staged files
+    let caughtUpOnce = false;
     const memberForms = new Map();
     const references = new Map();
     const reading = new Set();
@@ -204,6 +256,10 @@ export function initConversations() {
             list.replaceChildren();
             const groups = result.conversations.filter(group => !group.members.find(member => member.unique_id === uid())?.pending || !blocked(group.owner));
             listedGroups = groups; updateSummary();
+            // The authoritative list also restores tabs for messages received
+            // while offline, and drops tabs of groups this user has left.
+            syncChatTabs(tabID, serverGeneration, groups, true);
+            if (!caughtUpOnce) { caughtUpOnce = true; catchUpNotifications(tabID, groups, uid()); }
             sidebarStatus.textContent = groups.length ? "" : t("group.noGroups");
             for (const group of groups) {
                 const pending = group.members.find(member => member.unique_id === uid())?.pending;
@@ -338,18 +394,79 @@ export function initConversations() {
         leave.disabled = owner && group.members.length > 1; if (leave.disabled) leave.title = t("group.leaveOwner"); details.append(leave);
         content.append(details);
         const messages = el("div", "group-messages"); messages.setAttribute("aria-label", t("group.message"));
+        window.__noxaChat?.bindSharedLinks?.(messages);
+        const groupID = group.id;
+        // Attachments of a group live in its membership-checked storage; a
+        // preview or save is bound to this rendered view of this group.
+        const attachments = {
+            download: ref => app().DownloadConversationAttachmentForTab(tabID, groupID, ref.storage, ref.key),
+            previewCurrent: wrap => wrap.isConnected && current() && content.dataset.groupId === groupID,
+            save: (ref, name) => app().SaveConversationAttachmentForTab(tabID, groupID, ref.storage, ref.key, name),
+            saveCurrent: () => visible() && selected === groupID && content.dataset.groupId === groupID,
+        };
+        // Voice notes recorded before group storage existed were uploaded to
+        // the server-wide DM attachment scope; keep them playable.
+        const voiceDownload = ref => attachments.download(ref).catch(error => {
+            if (!ref.key) throw error;
+            return app().DownloadChatAttachmentForTab(tabID, 0, ref.storage, ref.key);
+        });
         const older = button("group.older"); older.disabled = true;
         content.append(older, messages);
         const composer = el("form", "group-composer");
         const input = el("textarea", ""); input.rows = 2; input.maxLength = 8192; input.required = true; input.value = drafts.get(group.id) || ""; input.setAttribute("aria-label", t("group.message"));
         input.dataset.groupId = group.id;
         input.oninput = () => drafts.set(group.id, input.value);
-        const send = button("group.send"); send.type = "submit"; composer.append(input, send); content.append(composer);
+        const send = button("group.send"); send.type = "submit";
+        const chat = window.__noxaChat;
+        const fileInput = el("input", "group-file"); fileInput.type = "file"; fileInput.multiple = true; fileInput.hidden = true;
+        fileInput.setAttribute("aria-label", t("group.attach"));
+        const attach = button("group.attach", () => fileInput.click()); attach.className = "group-attach"; attach.textContent = "📎";
+        attach.title = t("group.attach"); attach.setAttribute("aria-label", t("group.attach"));
+        const emoji = button("group.emoji", event => { event.stopPropagation(); chat?.toggleSharedEmojiPanel?.(input, emoji); });
+        emoji.className = "group-emoji"; emoji.textContent = "☺"; emoji.title = t("group.emoji"); emoji.setAttribute("aria-label", t("group.emoji"));
+        const previews = el("div", "group-file-previews");
+        const pendingFor = () => stagedFiles.get(group.id) || [];
+        const renderPreviews = () => {
+            previews.replaceChildren();
+            previews.hidden = pendingFor().length === 0;
+            for (const file of pendingFor()) {
+                const item = el("div", "file-preview group-file-preview");
+                if (file.dataURL) { const image = el("img", ""); image.src = file.dataURL; image.alt = file.name; item.append(image); }
+                else item.append(el("span", "file-chip", "📎 " + file.name));
+                const remove = button("group.removeAttachment", () => {
+                    stagedFiles.set(group.id, pendingFor().filter(staged => staged !== file)); refreshStaged();
+                });
+                remove.textContent = "✕"; remove.setAttribute("aria-label", t("group.removeAttachment", { name: file.name }));
+                item.append(remove); previews.append(item);
+            }
+        };
+        const stageView = viewToken;
+        const stage = files => chat?.readStagedFiles?.(files, () => visible() && viewToken === stageView && selected === group.id, file => {
+            stagedFiles.set(group.id, [...pendingFor(), file]); refreshStaged();
+        });
+        fileInput.onchange = () => { if (fileInput.files?.length) stage(fileInput.files); fileInput.value = ""; };
+        input.addEventListener("paste", event => {
+            const files = [...(event.clipboardData?.files || [])];
+            if (files.length) { event.preventDefault(); stage(files); }
+        });
+        for (const target of [composer, messages]) {
+            target.addEventListener("dragover", event => event.preventDefault());
+            target.addEventListener("drop", event => {
+                event.preventDefault();
+                if (event.dataTransfer?.files?.length) stage(event.dataTransfer.files);
+            });
+        }
+        input.required = false;
+        composer.append(previews, input, fileInput, attach, emoji, send); content.append(composer);
+        refreshStaged = () => { if (previews.isConnected) renderPreviews(); };
+        renderPreviews();
         composer.append(voiceMessageButton(() => {
             const recordingView = viewToken;
             const groupID = group.id;
             let pending = null;
-            return { tabID, channelID: 0, isCurrent: () => visible() && viewToken === recordingView && selected === groupID
+            return { tabID, channelID: 0,
+                upload: (name, data) => app().UploadConversationAttachmentForTab(tabID, groupID, name, data),
+                isCurrent: () => visible() && viewToken === recordingView && selected === groupID
                 && listedGroups.some(listed => listed.id === groupID && listed.members.some(member => member.unique_id === uid() && !member.pending)), send: async body => {
                 if (!pending || pending.body !== body) pending = { body, reference: crypto.randomUUID() };
                 await app().SendConversationForTab(tabID, groupID, body, pending.reference);
@@ -358,20 +475,38 @@ export function initConversations() {
         }));
         composer.onsubmit = async event => {
             event.preventDefault();
-            if (mutationPending || !input.value.trim() || !current()) return;
+            const files = pendingFor();
+            if (mutationPending || (!input.value.trim() && !files.length) || !current()) return;
             const body = input.value;
-            let pending = references.get(group.id);
-            if (!pending || pending.body !== body) { pending = { reference: crypto.randomUUID(), body }; references.set(group.id, pending); }
             mutationPending = true; send.disabled = true;
             try {
-                await app().SendConversationForTab(tabID, group.id, body, pending.reference);
-                if (!current()) return;
-                if (drafts.get(group.id) === body) drafts.delete(group.id);
-                if (input.value === body) input.value = "";
-                references.delete(group.id); status.textContent = t("group.sent");
+                // Same order as the channel/DM composer: each attachment is a
+                // sealed upload whose key travels in its own encrypted message.
+                for (const file of files) {
+                    if (!file.reference) file.reference = crypto.randomUUID();
+                    if (!file.token) file.token = await app().UploadConversationAttachmentForTab(tabID, group.id, file.name, file.dataBase64);
+                    if (!current()) return;
+                    await app().SendConversationForTab(tabID, group.id, file.token, file.reference);
+                    if (!current()) return;
+                    stagedFiles.set(group.id, pendingFor().filter(staged => staged !== file));
+                    refreshStaged();
+                }
+                if (body.trim()) {
+                    let pending = references.get(group.id);
+                    if (!pending || pending.body !== body) { pending = { reference: crypto.randomUUID(), body }; references.set(group.id, pending); }
+                    await app().SendConversationForTab(tabID, group.id, body, pending.reference);
+                    if (!current()) return;
+                    if (drafts.get(group.id) === body) drafts.delete(group.id);
+                    if (input.value === body) input.value = "";
+                    references.delete(group.id);
+                }
+                status.textContent = t("group.sent");
             } catch (error) { fail(error); }
             finally { mutationPending = false; send.disabled = false; if (current()) void refresh(); }
         };
+        input.addEventListener("keydown", event => {
+            if (event.key === "Enter" && !event.shiftKey && !event.isComposing) { event.preventDefault(); composer.requestSubmit(); }
+        });
         let before = jumpTarget > 0 ? jumpTarget + 1 : 0;
         let loading = false;
         let initialNavigation = true;
@@ -395,9 +530,22 @@ export function initConversations() {
                     const row = el("article", "group-message");
                     row.dataset.messageId = String(message.id);
                     const body = el("div", "group-message-body");
+                    // Group messages are end-to-end encrypted per member: an
+                    // envelope this client authenticated shows the lock; one
+                    // it could not open shows the warning and its refusal.
+                    const verified = !!message.enc_verified;
+                    const badge = encryptionBadge({ text: message.body, enc: verified, encVerified: verified, encMode: verified ? "e2e" : "" });
                     if (blocked(message.from_unique_id)) body.textContent = t("group.blocked");
-                    else if (!renderVoiceMessage(body, message.body, { tabID, channelID: 0, isCurrent: () => current() && token === generation })) body.textContent = message.body;
-                    row.append(el("strong", "", label(message.from_unique_id)), el("time", "", new Date(message.created_at * 1000).toLocaleString()), body);
+                    else if (badge.bodyKey) body.textContent = t(badge.bodyKey);
+                    else if (!renderVoiceMessage(body, message.body, { tabID, channelID: 0, isCurrent: () => current() && token === generation, download: voiceDownload })) {
+                        const rich = window.__noxaChat?.renderSharedRichText;
+                        if (rich) rich(body, message.body, attachments); else body.textContent = message.body;
+                    }
+                    if (badge.kind === "warning") row.classList.add("missing-key");
+                    const stamp = el("time", "", new Date(message.created_at * 1000).toLocaleString());
+                    const lock = window.__noxaChat?.encryptionBadgeElement?.(badge);
+                    if (lock) stamp.append(lock);
+                    row.append(el("strong", "", label(message.from_unique_id)), stamp, body);
                     if (!blocked(message.from_unique_id)) row.append(button("messages.save", () => {
                         if (current() && token === generation) void window.__noxaMessageTools?.save({ kind: "group", group_id: group.id, message_id: message.id });
                     }));
@@ -458,7 +606,7 @@ export function initConversations() {
         open: () => { setVisible(true); layout.expand(); create.hidden = false; add.setAttribute("aria-expanded", "true"); name.focus(); },
         jump: async (id, messageID, destinationCurrent) => { saveDraft(); selected = id; jumpTarget = messageID; setVisible(true); layout.expand(); await refresh(false, destinationCurrent); if (current() && destinationCurrent() && selected !== id) status.textContent = t("messages.notFound"); },
         close: () => { saveDraft(); setVisible(false); },
-        destroy: () => { ++generation; window.clearInterval(sidebarPoll); window.removeEventListener("noxa-language-changed", languageChanged); window.removeEventListener("focus", focusChanged); document.removeEventListener("visibilitychange", focusChanged); setVisible(false); layout.destroy(); sidebar.remove(); panel.remove(); drafts.clear(); memberForms.clear(); references.clear(); },
+        destroy: () => { ++generation; window.clearInterval(sidebarPoll); window.removeEventListener("noxa-language-changed", languageChanged); window.removeEventListener("focus", focusChanged); document.removeEventListener("visibilitychange", focusChanged); setVisible(false); layout.destroy(); sidebar.remove(); panel.remove(); drafts.clear(); stagedFiles.clear(); memberForms.clear(); references.clear(); },
     };
     void refresh();
 }

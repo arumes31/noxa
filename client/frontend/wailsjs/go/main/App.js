@@ -374,6 +374,10 @@ export function DownloadChatAttachmentForTab(arg1, arg2, arg3, arg4) {
   return window['go']['main']['App']['DownloadChatAttachmentForTab'](arg1, arg2, arg3, arg4);
 }
 
+export function DownloadConversationAttachmentForTab(arg1, arg2, arg3, arg4) {
+  return window['go']['main']['App']['DownloadConversationAttachmentForTab'](arg1, arg2, arg3, arg4);
+}
+
 export function DownloadFile(arg1, arg2) {
   return window['go']['main']['App']['DownloadFile'](arg1, arg2);
 }
@@ -786,6 +790,10 @@ export function SaveChatTabLayoutForContext(arg1, arg2) {
   return window['go']['main']['App']['SaveChatTabLayoutForContext'](arg1, arg2);
 }
 
+export function SaveConversationAttachmentForTab(arg1, arg2, arg3, arg4, arg5) {
+  return window['go']['main']['App']['SaveConversationAttachmentForTab'](arg1, arg2, arg3, arg4, arg5);
+}
+
 export function SaveSettings(arg1) {
   return window['go']['main']['App']['SaveSettings'](arg1);
 }
@@ -1104,6 +1112,10 @@ export function UploadChatAttachment(arg1, arg2, arg3) {
 
 export function UploadChatAttachmentForTab(arg1, arg2, arg3, arg4) {
   return window['go']['main']['App']['UploadChatAttachmentForTab'](arg1, arg2, arg3, arg4);
+}
+
+export function UploadConversationAttachmentForTab(arg1, arg2, arg3, arg4) {
+  return window['go']['main']['App']['UploadConversationAttachmentForTab'](arg1, arg2, arg3, arg4);
 }
 
 export function UploadFile(arg1, arg2, arg3) {

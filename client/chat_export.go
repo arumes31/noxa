@@ -66,7 +66,11 @@ func chatExportHistoryWith(m *connManager, requestID string, channelID int64, ma
 		if !m.Deleted && !m.EncVerified {
 			undecryptable++
 		}
-		lines = append(lines, chatExportLine(m))
+		mode := ""
+		if m.EncVerified {
+			mode = "server"
+		}
+		lines = append(lines, chatExportLine(m, mode))
 	})
 	if err != nil {
 		return ChatExportResult{}, err
@@ -98,7 +102,11 @@ func chatExportHistoryWith(m *connManager, requestID string, channelID int64, ma
 // chatExportLine renders one transcript line. A body this client could not
 // open keeps its placeholder rather than vanishing, so a gap in the export is
 // visible as a gap instead of looking like a quiet channel.
-func chatExportLine(m netproto.ChatHistoryEntry) string {
+//
+// Every line names its encryption, matching the badge in the chat view:
+// "e2e" (lock), "server" (client→server→client, shield) or, for a body this
+// client did not open itself, "unverified" (warning).
+func chatExportLine(m netproto.ChatHistoryEntry, mode string) string {
 	body := m.Body
 	if m.Deleted {
 		body = "(deleted)"
@@ -110,7 +118,18 @@ func chatExportLine(m netproto.ChatHistoryEntry) string {
 	if name == "" {
 		name = m.FromUniqueID
 	}
-	return "[" + time.Unix(m.SentAt, 0).Format("2006-01-02 15:04:05") + "] " + name + ": " + body
+	tag := ""
+	if !m.Deleted {
+		switch mode {
+		case "e2e":
+			tag = "[end-to-end encrypted] "
+		case "server":
+			tag = "[server encrypted] "
+		default:
+			tag = "[unverified] "
+		}
+	}
+	return "[" + time.Unix(m.SentAt, 0).Format("2006-01-02 15:04:05") + "] " + tag + name + ": " + body
 }
 
 // DMExportHistory renders a stored DM conversation into the same transcript
@@ -127,12 +146,19 @@ func (a *App) DMExportHistory(peer string) (ChatExportResult, error) {
 func dmExportMessages(msgs []DMEntry) ChatExportResult {
 	lines := make([]string, 0, len(msgs))
 	for _, m := range msgs {
+		mode := ""
+		if m.EncVerified {
+			mode = m.EncMode
+			if mode == "" {
+				mode = "e2e"
+			}
+		}
 		lines = append(lines, chatExportLine(netproto.ChatHistoryEntry{
 			FromUniqueID: m.FromUniqueID,
 			FromNickname: m.FromNickname,
 			Body:         m.Body,
 			SentAt:       m.SentAt,
-		}))
+		}, mode))
 	}
 	text := ""
 	if len(lines) > 0 {

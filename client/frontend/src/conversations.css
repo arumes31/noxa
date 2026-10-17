@@ -57,7 +57,13 @@
 .group-message { margin-bottom: 16px; overflow-wrap: anywhere; }
 .group-message time { margin-left: 8px; color: var(--muted); font-size: 11px; }
 .group-message-body { white-space: pre-wrap; margin: 4px 0; line-height: 1.5; }
-.group-composer { display: flex; gap: 8px; margin-top: auto; }
+.group-composer { display: flex; flex-wrap: wrap; gap: 8px; margin-top: auto; }
+.group-file-previews { display: flex; flex-wrap: wrap; gap: 8px; flex-basis: 100%; }
+.group-file-previews[hidden] { display: none; }
+.group-workspace .file-preview button { padding: 0; width: 18px; height: 18px; border-radius: 50%; }
+.group-workspace .group-message-body .media-zoom { padding: 0; border-radius: 6px; background: var(--bg-panel); }
+.group-workspace .group-message-body .file-chip { padding: 4px 10px; border-radius: 7px; background: var(--bg-panel); }
+.group-message-body .md-pre { white-space: pre; }
 .group-composer textarea { flex: 1; min-width: 0; resize: vertical; max-height: 120px; }
 .group-composer button { align-self: end; color: var(--accent); }
 @media (max-width: 720px) {

@@ -94,7 +94,7 @@ func TestRoleChatMessageMutationsUseStoredScope(t *testing.T) {
 			kind netproto.MessageType
 			body any
 		}{
-			{netproto.MsgChatEdit, netproto.ChatEdit{MessageID: messageID, NewText: "edited"}},
+			{netproto.MsgChatEdit, netproto.ChatEdit{MessageID: messageID, NewText: "opaque", Enc: true, KeyID: 1}},
 			{netproto.MsgChatDelete, netproto.ChatDelete{MessageID: messageID}},
 			{netproto.MsgChatReact, netproto.ChatReact{MessageID: messageID, Emoji: "ok"}},
 		} {

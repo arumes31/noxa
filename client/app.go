@@ -53,7 +53,7 @@ type App struct {
 	// Attachment seams keep the native dialog, transfer, and final replacement
 	// independently testable without putting plaintext or destination paths on
 	// the Wails/JavaScript boundary. Nil fields use production implementations.
-	chatAttachmentFetch      func(*connManager, int64, string) ([]byte, error)
+	chatAttachmentFetch      func(cm *connManager, channelID int64, folder, storage string) ([]byte, error)
 	chatAttachmentSaveDialog func(context.Context, wailsRuntime.SaveDialogOptions) (string, error)
 	chatAttachmentWrite      func(string, []byte) error
 	lifecycleMu              sync.Mutex

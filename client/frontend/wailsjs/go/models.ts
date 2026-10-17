@@ -749,6 +749,7 @@ export namespace main {
 	    client_msg_id?: string;
 	    offline?: boolean;
 	    enc_verified?: boolean;
+	    enc_mode?: string;
 
 	    static createFrom(source: any = {}) {
 	        return new DMEntry(source);
@@ -765,6 +766,7 @@ export namespace main {
 	        this.client_msg_id = source["client_msg_id"];
 	        this.offline = source["offline"];
 	        this.enc_verified = source["enc_verified"];
+	        this.enc_mode = source["enc_mode"];
 	    }
 	}
 	export class DMHistoryContext {
@@ -2046,6 +2048,7 @@ export namespace netproto {
 	    key_id?: number;
 	    body?: string;
 	    enc_verified?: boolean;
+	    enc_mode?: string;
 	    sent_at: number;
 	    edited_at?: number;
 	    deleted?: boolean;
@@ -2066,6 +2069,7 @@ export namespace netproto {
 	        this.key_id = source["key_id"];
 	        this.body = source["body"];
 	        this.enc_verified = source["enc_verified"];
+	        this.enc_mode = source["enc_mode"];
 	        this.sent_at = source["sent_at"];
 	        this.edited_at = source["edited_at"];
 	        this.deleted = source["deleted"];
@@ -2915,6 +2919,7 @@ export namespace netproto {
 	    reference: string;
 	    body: string;
 	    created_at: number;
+	    enc_verified?: boolean;
 
 	    static createFrom(source: any = {}) {
 	        return new ConversationMessage(source);
@@ -2929,6 +2934,7 @@ export namespace netproto {
 	        this.reference = source["reference"];
 	        this.body = source["body"];
 	        this.created_at = source["created_at"];
+	        this.enc_verified = source["enc_verified"];
 	    }
 	}
 	export class ConversationSend {

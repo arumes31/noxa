@@ -1264,7 +1264,7 @@ mark { background: var(--warn); color: #3a2a05; border-radius: 2px; padding: 0 1
 }
 #chat-log.chat-bubbles .msg { display: flex; }
 #chat-log.chat-bubbles .msg-time { order: 3; }
-#chat-log.chat-bubbles .msg-tag, #chat-log.chat-bubbles .msg-lock { display: none; }
+#chat-log.chat-bubbles .msg-tag { display: none; }
 
 /* search results (110) */
 .search-results { max-height: 70vh; }
