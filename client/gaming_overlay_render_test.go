@@ -9,6 +9,7 @@ import (
 	"math"
 	"strings"
 	"testing"
+	"time"
 )
 
 func overlayTestAvatar(t *testing.T, width int) string {
@@ -38,11 +39,12 @@ func TestOverlayAvatarValidation(t *testing.T) {
 }
 
 func TestDefaultOverlayCachesLabelsAndKeepsAvatarsStill(t *testing.T) {
-	s := normalizeGamingOverlay(GamingOverlaySnapshot{Active: true, Scale: 100, Speakers: []GamingOverlaySpeaker{
+	var presence overlayPresence
+	s := presence.scene(normalizeGamingOverlay(GamingOverlaySnapshot{Active: true, Scale: 100, OnlySpeaking: true, Speakers: []GamingOverlaySpeaker{
 		{ID: "alice", Name: "Alice", Speaking: true, Avatar: overlayTestAvatar(t, 64)},
 		{ID: "bob", Name: "Bob", Speaking: true},
 		{Name: "Quiet"},
-	}})
+	}}), time.Now()).snapshot
 	var labels []string
 	r, err := newOverlayRenderer(s, 800, 800, func(text string, width, height, font int, centered bool) (*image.Alpha, error) {
 		labels = append(labels, text)

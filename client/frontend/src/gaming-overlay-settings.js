@@ -63,6 +63,8 @@ export function gamingOverlaySettings(settings, { row, checkbox, slider, hint, g
     settings.gaming_overlay_blue_end = preferences.end;
     settings.gaming_overlay_game_ui = gameUIPreset(settings.gaming_overlay_game_ui);
     const avoidZones = () => settings.gaming_overlay_avoid_zones !== false;
+    const onlySpeaking = () => settings.gaming_overlay_only_speaking !== false;
+    const chatPeek = () => settings.gaming_overlay_chat_peek === true;
 
     // --- preview frame ---------------------------------------------------------
     const preview = document.createElement("div");
@@ -73,14 +75,22 @@ export function gamingOverlaySettings(settings, { row, checkbox, slider, hint, g
     preview.append(zoneLayer, handleLayer);
     const sample = document.createElement("button"); sample.type = "button"; sample.className = "overlay-position-sample";
     sample.setAttribute("aria-label", t("overlay.drag"));
-    for (const name of ["Alex", "Sam"]) {
+    // Alex and Sam are speaking; Robin is a quiet member, shown only with
+    // "Only show who's speaking" off. The peek line mirrors chat peek.
+    for (const name of ["Alex", "Sam", "Robin"]) {
         const person = document.createElement("span"); person.className = "overlay-sample-person";
+        if (name === "Robin") person.classList.add("overlay-sample-quiet");
         person.dataset.overlayId = `preview-${name.toLowerCase()}`;
         const avatar = document.createElement("span"); avatar.className = "overlay-sample-avatar"; avatar.textContent = name[0];
         const details = document.createElement("span"); details.className = "overlay-sample-details";
         const label = document.createElement("span"); label.className = "overlay-sample-name"; label.textContent = name; details.append(label);
         person.append(avatar, details); sample.append(person);
     }
+    const quietSample = sample.querySelector(".overlay-sample-quiet");
+    const peekSample = document.createElement("span"); peekSample.className = "overlay-sample-peek";
+    const peekName = document.createElement("span"); peekName.className = "overlay-sample-peek-name"; peekName.textContent = "Sam";
+    const peekText = document.createElement("span"); peekText.className = "overlay-sample-peek-text"; peekText.textContent = t("overlay.peekSample");
+    peekSample.append(peekName, peekText); sample.append(peekSample);
     preview.append(sample);
     const showDesign = lightHaloPreview(sample);
     const coordinates = document.createElement("output"); coordinates.className = "overlay-position-readout"; coordinates.setAttribute("aria-live", "polite");
@@ -204,7 +214,10 @@ export function gamingOverlaySettings(settings, { row, checkbox, slider, hint, g
     // --- render -------------------------------------------------------------------
     const render = () => {
         sample.querySelectorAll(".overlay-sample-person").forEach((person, index) =>
-            person.style.setProperty("--overlay-color", index === 0 ? settings.gaming_overlay_self_color : overlayBlueColor(settings.gaming_overlay_blue_start)));
+            person.style.setProperty("--overlay-color", index === 0 ? settings.gaming_overlay_self_color
+                : overlayBlueColor(person === quietSample ? settings.gaming_overlay_blue_end : settings.gaming_overlay_blue_start)));
+        quietSample.hidden = onlySpeaking();
+        peekSample.hidden = !chatPeek();
         for (const control of [firstBlue, lastBlue]) {
             const hue = settings[control.field];
             control.input.value = hue; control.input.setAttribute("aria-valuetext", `${hue}°`);
@@ -324,18 +337,15 @@ export function gamingOverlaySettings(settings, { row, checkbox, slider, hint, g
     };
 
     // --- toggles -------------------------------------------------------------------
-    const lockedOn = checkbox(true); lockedOn.disabled = true;
-    const soon = () => { const control = checkbox(false); control.disabled = true; return control; };
-    const soonBadge = () => { const badge = document.createElement("span"); badge.className = "set-badge"; badge.textContent = t("settings.comingSoon"); return badge; };
-    const soonRow = (label, help) => {
-        const control = document.createElement("div"); control.className = "set-soon";
-        control.append(soonBadge(), soon());
-        return row(label, control, "", { help });
-    };
+    // The in-game overlay applies these; the preview shows quiet members and
+    // a peek line. Auto-hide has no static preview: it reacts to the mouse.
     const behaviour = group(t("overlay.behaviour"), "behaviour",
-        row(t("overlay.onlySpeaking"), lockedOn, "", { help: t("overlay.onlySpeakingHelp") }),
-        soonRow(t("overlay.chatPeek"), t("overlay.chatPeekHelp")),
-        soonRow(t("overlay.autoHide"), t("overlay.autoHideHelp")),
+        row(t("overlay.onlySpeaking"), checkbox(onlySpeaking(), value => { settings.gaming_overlay_only_speaking = value; render(); }), "",
+            { key: "gaming_overlay_only_speaking", help: t("overlay.onlySpeakingHelp") }),
+        row(t("overlay.chatPeek"), checkbox(chatPeek(), value => { settings.gaming_overlay_chat_peek = value; render(); }), "",
+            { key: "gaming_overlay_chat_peek", help: t("overlay.chatPeekHelp") }),
+        row(t("overlay.autoHide"), checkbox(settings.gaming_overlay_auto_hide === true, value => { settings.gaming_overlay_auto_hide = value; }), "",
+            { key: "gaming_overlay_auto_hide", help: t("overlay.autoHideHelp") }),
         row(t("overlay.avoidZones"), checkbox(avoidZones(), value => { settings.gaming_overlay_avoid_zones = value; keepClearOfZones(); render(); }), "",
             { key: "gaming_overlay_avoid_zones", help: t("overlay.avoidZonesHelp") }));
 

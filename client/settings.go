@@ -237,9 +237,17 @@ type Settings struct {
 	// chosen game's HUD zones. The native overlay never reads these.
 	GamingOverlayGameUI     string `json:"gaming_overlay_game_ui"`     // none | mmo | shooter | moba
 	GamingOverlayAvoidZones bool   `json:"gaming_overlay_avoid_zones"` // default on
-	CameraBackgroundImage   string `json:"camera_background_image"`
-	CameraBlurStrength      int    `json:"camera_blur_strength"`
-	CameraMirrorPreview     bool   `json:"camera_mirror_preview"`
+	// In-game overlay behaviours. Only-speaking (default on) fades quiet
+	// members out 3 s after they stop talking; off keeps every channel member
+	// listed. Chat peek shows new messages under the speakers for about 6 s.
+	// Auto-hide fades the non-speaking content after 2.5 s without mouse
+	// movement (the overlay has no separate HUD, see gaming_overlay_presence.go).
+	GamingOverlayOnlySpeaking bool   `json:"gaming_overlay_only_speaking"`
+	GamingOverlayChatPeek     bool   `json:"gaming_overlay_chat_peek"`
+	GamingOverlayAutoHide     bool   `json:"gaming_overlay_auto_hide"`
+	CameraBackgroundImage     string `json:"camera_background_image"`
+	CameraBlurStrength        int    `json:"camera_blur_strength"`
+	CameraMirrorPreview       bool   `json:"camera_mirror_preview"`
 
 	// Security (wave 4a).
 	AllowPlaintext bool              `json:"allow_plaintext"`         // allow plaintext control connections (dev servers)
@@ -363,16 +371,19 @@ func DefaultSettings() Settings {
 		// defaults when merged, so no settingsVersion bump is needed.
 		GamingOverlayGameUI:     "none",
 		GamingOverlayAvoidZones: true,
-		CameraBlurStrength:      14,
-		CameraMirrorPreview:     true,
-		ChatTimestamps:          "absolute",
-		ChatDensity:             "comfortable",
-		ChatFontSize:            14,
-		ChatLayout:              "irc",
-		SysJoinLeave:            true,
-		SysKick:                 true,
-		AutoAwayMinutes:         15,
-		AutoAwayMessage:         defaultAutoAwayMessage,
+		// Also new keys: older files keep these defaults when merged. Only
+		// speaking stays on, the behaviour every earlier overlay had.
+		GamingOverlayOnlySpeaking: true,
+		CameraBlurStrength:        14,
+		CameraMirrorPreview:       true,
+		ChatTimestamps:            "absolute",
+		ChatDensity:               "comfortable",
+		ChatFontSize:              14,
+		ChatLayout:                "irc",
+		SysJoinLeave:              true,
+		SysKick:                   true,
+		AutoAwayMinutes:           15,
+		AutoAwayMessage:           defaultAutoAwayMessage,
 	}
 }
 

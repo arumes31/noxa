@@ -38,7 +38,7 @@ import "@fontsource-variable/jetbrains-mono";
 import { initMenu } from "./menu.js";
 import { updateLocalSettings } from "./settings-store.js";
 import { initSettingsUI } from "./settings-ui.js";
-import { initGamingOverlay } from "./gaming-overlay.js";
+import { initGamingOverlay, noteOverlayChat } from "./gaming-overlay.js";
 import { initChannelUndocking } from "./call-undocking.js";
 import { refreshVoicePlayback } from "./voice-messages.js";
 import { discussionChanged } from "./discussions.js";
@@ -1886,6 +1886,8 @@ function addChat(d) {
     // chat also has no channel_id and must never enter the direct path.
     const result = chatUI.addChat(d);
     window.__noxaFullscreen?.chatMessage(d, result); // design 45 fullscreen chat peek / quick reply
+    // In-game overlay chat peek (opt-in); it applies the notification rules.
+    if (result?.added) noteOverlayChat(d);
     // A message rendered into the open chat is unseen while the window is
     // unfocused (hidden to tray, minimized, or behind another window).
     if (result?.live && !state.replayingTabID && !document.hasFocus()) trayUnread.noteUnseen();

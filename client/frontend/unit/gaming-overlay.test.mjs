@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { overlayVoiceState } from '../src/gaming-overlay-state.js';
+import { OVERLAY_ROWS, RECENT_MS, overlayOnlySpeaking, overlayVoiceState } from '../src/gaming-overlay-state.js';
 import { OVERLAY_MOTION_SPEED, OVERLAY_COMB_AMPLITUDE, overlayGlyphContour, overlayCombActivity, overlaySpeakerPhase } from '../src/gaming-overlay-animation-core.js';
 
 const state = () => ({ settings: {}, channels: [{ ChannelID: 1, Name: 'Lobby' }], myChannelID: 1,
@@ -105,4 +105,42 @@ test('private calls filter silent and muted participants before the eight-person
     assert.equal(snapshot.title, 'Private call');
     call.speakers[9].speaking = false;
     assert.deepEqual(overlayVoiceState(state(), call), { active: false });
+});
+
+test('speakers-only mode keeps recent talkers so the native overlay can fade them', () => {
+    const recent = new Map();
+    const s = state();
+    assert.deepEqual(overlayVoiceState(s, null, recent, 1000).speakers.map(m => m.id), ['me', 'other']);
+    s.clients[1].is_speaking = false;
+    const fading = overlayVoiceState(s, null, recent, 1000 + RECENT_MS - 1);
+    assert.deepEqual(fading.speakers.map(m => [m.id, m.speaking]), [['me', true], ['other', false]]);
+    assert.deepEqual(overlayVoiceState(s, null, recent, 1000 + RECENT_MS + 1).speakers.map(m => m.id), ['me']);
+    s.clients[0].is_speaking = false;
+    assert.deepEqual(overlayVoiceState(s, null, recent, 1000 + 3 * RECENT_MS), { active: false });
+    // Muting yourself forgets every recent talker at once.
+    s.clients[0].is_speaking = true;
+    overlayVoiceState(s, null, recent, 50000);
+    assert.deepEqual(overlayVoiceState({ ...s, muted: true }, null, recent, 50001), { active: false });
+    assert.equal(recent.size, 0);
+});
+
+test('all-members mode lists quiet and muted members without a speaking flag', () => {
+    const s = state();
+    s.settings.gaming_overlay_only_speaking = false;
+    s.clients[1].is_speaking = false;
+    s.clients[1].self_muted = true;
+    const snapshot = overlayVoiceState(s);
+    assert.deepEqual(snapshot.speakers.map(m => [m.name, m.speaking]), [['Me', true], ['Peer', false], ['Quiet', false]]);
+    s.clients.forEach(client => { client.is_speaking = false; });
+    assert.equal(overlayVoiceState(s).active, true, 'quiet channel stays visible');
+    assert.equal(overlayOnlySpeaking({}), true, 'only-speaking defaults on');
+});
+
+test('more members than rows keep speakers first, in channel order', () => {
+    const s = state();
+    s.settings.gaming_overlay_only_speaking = false;
+    s.clients = Array.from({ length: 12 }, (_, i) => ({ client_id: `c${i}`, unique_id: `u${i}`, channel_id: 1, nickname: `M${i}`, is_speaking: i === 11 }));
+    const ids = overlayVoiceState(s).speakers.map(m => m.id);
+    assert.equal(ids.length, OVERLAY_ROWS);
+    assert.deepEqual(ids, ['u0', 'u1', 'u2', 'u3', 'u4', 'u5', 'u6', 'u11']);
 });
