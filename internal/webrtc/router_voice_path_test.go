@@ -96,7 +96,7 @@ func TestVoiceFanoutForgottenOnLeaveAndDetach(t *testing.T) {
 // RemoveTrack can wait behind the recipient's SetRemoteDescription, and
 // voice/ingress readers must not queue behind it.
 func TestPrunedPairsRetireSendersOutsideRouterLock(t *testing.T) {
-	deny := PublisherGuard(func(p PublisherAccess) bool { return !(p.SubscriberID == "b" && p.PublisherID == "a") })
+	deny := PublisherGuard(func(p PublisherAccess) bool { return p.SubscriberID != "b" || p.PublisherID != "a" })
 	for name, prune := range map[string]func(r *Router){
 		"set_publisher_guard": func(r *Router) { r.SetPublisherGuard(deny) },
 		"prepare_subscriber": func(r *Router) {
