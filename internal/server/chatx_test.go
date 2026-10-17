@@ -1064,6 +1064,25 @@ func TestTyping(t *testing.T) {
 	if ev.UniqueID != "user-uid" {
 		t.Fatalf("typing from = %q, want user-uid", ev.UniqueID)
 	}
+	if strings.Contains(string(data), `"direct"`) {
+		t.Fatalf("channel typing carries the DM marker: %s", data)
+	}
+
+	// A DM indicator reaches only its recipient and says it is direct, so the
+	// Messages view can show it in that conversation instead of global chat.
+	send(t, bob, netproto.MsgTyping, netproto.Typing{ToUniqueID: "admin-uid"})
+	data = readEventOfType(t, alice, "typing")
+	var direct struct {
+		UniqueID  string `json:"unique_id"`
+		ChannelID int64  `json:"channel_id"`
+		Direct    bool   `json:"direct"`
+	}
+	if err := json.Unmarshal(data, &direct); err != nil {
+		t.Fatalf("unmarshal direct typing: %v", err)
+	}
+	if direct.UniqueID != "user-uid" || direct.ChannelID != 0 || !direct.Direct {
+		t.Fatalf("direct typing = %+v, want a direct relay from user-uid", direct)
+	}
 }
 
 // TestDMReceipts verifies delivery and read receipts relay to the DM sender
