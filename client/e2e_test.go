@@ -348,12 +348,31 @@ func TestEncryptChatScopes(t *testing.T) {
 		t.Fatalf("open global = %q, %v", text, err)
 	}
 
+	// Without the recipient's end-to-end key a DM falls back to the
+	// client→server→client path (the global generation), never plaintext.
+	fallback, err := cm.encryptChat("direct", "missing", "server path")
+	if err != nil {
+		t.Fatalf("direct fallback: %v", err)
+	}
+	if !fallback.Enc || fallback.ToUniqueID != "missing" || fallback.KeyID != 5 || fallback.RecipientPublicKey != "" || fallback.Text == "server path" {
+		t.Fatalf("direct fallback = %+v", fallback)
+	}
+	if text, err := openScope(fallback.Text, globalKey); err != nil || text != "server path" {
+		t.Fatalf("open direct fallback = %q, %v", text, err)
+	}
+	keyless := newConnManager(context.Background())
+	keyless.id = mustTempIdentity(t)
+	for _, scope := range []string{"direct", "global"} {
+		if msg, err := keyless.encryptChat(scope, "missing", "text"); err == nil || !strings.Contains(err.Error(), "plaintext messages are not allowed") {
+			t.Fatalf("%s without any key = %+v, %v", scope, msg, err)
+		}
+	}
+
 	for _, tc := range []struct {
 		name   string
 		scope  string
 		target string
 	}{
-		{name: "missing direct key", scope: "direct", target: "missing"},
 		{name: "invalid channel id", scope: "channel", target: "nope"},
 		{name: "missing channel key", scope: "channel", target: "99"},
 	} {
@@ -458,10 +477,25 @@ func TestEncryptedEventTransformation(t *testing.T) {
 	for _, unchanged := range []string{
 		"not json",
 		wrap("presence", map[string]any{"status": "online"}),
-		wrap("chat_edited", map[string]any{"body": "plain"}),
 	} {
 		if got := cm.maybeDecryptEvent(unchanged); got != unchanged {
 			t.Fatalf("unsealed event changed from %q to %q", unchanged, got)
+		}
+	}
+	// Unsealed bodies are refused, never displayed, and cannot claim local
+	// verification.
+	for _, plain := range []struct{ event, field string }{
+		{wrap("chat_edited", map[string]any{"body": "plain", "enc_verified": true}), "body"},
+		{wrap("announcement", map[string]any{"text": "plain"}), "text"},
+	} {
+		var out struct {
+			Data map[string]any `json:"data"`
+		}
+		if err := json.Unmarshal([]byte(cm.maybeDecryptEvent(plain.event)), &out); err != nil {
+			t.Fatal(err)
+		}
+		if out.Data[plain.field] != refusedPlainText || out.Data["enc_verified"] != nil {
+			t.Fatalf("plaintext event displayed: %+v", out.Data)
 		}
 	}
 

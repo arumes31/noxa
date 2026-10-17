@@ -168,7 +168,7 @@ func TestWirePlaintextCannotClaimLocalEncryptionVerification(t *testing.T) {
 	if err := json.Unmarshal([]byte(result), &event); err != nil {
 		t.Fatal(err)
 	}
-	if event.Data["enc_verified"] != nil || event.Data["e2e"] != nil || event.Data["direct"] != true || event.Data["text"] != "unverified" {
+	if event.Data["enc_verified"] != nil || event.Data["e2e"] != nil || event.Data["direct"] != true || event.Data["text"] != refusedPlainText {
 		t.Fatalf("wire plaintext retained a false verification claim: %s", result)
 	}
 }

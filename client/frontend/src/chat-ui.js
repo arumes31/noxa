@@ -24,6 +24,7 @@ import { parsePoll } from "./poll-state.js";
 import { closeDiscussions, initDiscussions, openDiscussions, renderForumChannel, resetDiscussions } from "./discussions.js";
 import { closeConversations, initConversations, isPrivateGroupActive, openConversationsAt, resetConversations, viewedConversationID } from "./conversations.js";
 import { sessionUserID } from "./session-identity.js";
+import { encryptionBadge } from "./message-encryption.js";
 import { chatEnglish } from "./chat-messages.js";
 import { renderMarkdown, escapeHTML, EMOJI } from "./markdown.js";
 import { pickIcon } from "./image-tools.js";
@@ -461,6 +462,7 @@ function normalize(d, chID) {
         // exactly like one the server handed over in the clear (91-135).
         enc: !!d.enc || !!d.enc_verified,
         encVerified: !!d.enc_verified,
+        encMode: d.enc_verified && (d.enc_mode === "e2e" || d.enc_mode === "server") ? d.enc_mode : "",
         offline: !!d.offline,
         clientMsgID: d.client_msg_id || "",
         replyToID: Number(d.reply_to_id) || 0,
@@ -653,15 +655,19 @@ function applyCustomEmoji(html) {
 // Message rendering (91-93, 97, 99, 101/102, 106, 107)
 // ---------------------------------------------------------------------------
 
-// UNOPENED_BODIES are the exact strings the Go layer substitutes for a body it
-// could not show. They must match client/e2e.go character for character — a
-// drift silently downgrades the ⚠ badge back to a normal shield (91-135).
-const UNOPENED_BODIES = new Set([
-    "[encrypted message — key unavailable]",
-    "[encrypted message — you do not have access]",
-    "[refused: server sent plaintext history]",
-    "[encrypted message — decryption failed]",
-]);
+// encryptionBadgeElement draws the badge every displayed message carries
+// (message-encryption.js): lock, shield or warning.
+export function encryptionBadgeElement(badge) {
+    if (!badge.kind) return null;
+    const lock = document.createElement("span");
+    lock.className = "msg-lock";
+    lock.dataset.encryption = badge.kind;
+    lock.innerHTML = icon(badge.kind);
+    lock.setAttribute("role", "img");
+    lock.setAttribute("aria-label", t(badge.label));
+    lock.title = t(badge.label);
+    return lock;
+}
 
 // CHAT_ENCRYPTION_HELP is the single source for what the shield actually
 // promises, so the channel info panel and the README cannot drift apart.
@@ -677,7 +683,8 @@ function renderMsg(m) {
     m.renderKey ||= m.id ? "message-" + m.id : m.clientMsgID ? "client-" + m.clientMsgID : crypto.randomUUID();
     el.dataset.scrollKey = m.renderKey;
     el.dataset.ts = m.ts;
-    el.dataset.authorGroup = m.deleted || !m.fromUID ? "" : JSON.stringify([m.fromUID, m.from, m.self, m.direct, m.channelID, m.enc, m.e2e]);
+    const badge = encryptionBadge(m);
+    el.dataset.authorGroup = m.deleted || !m.fromUID ? "" : JSON.stringify([m.fromUID, m.from, m.self, m.direct, m.channelID, badge.kind]);
     const avatar = document.createElement("span");
     avatar.className = "msg-avatar";
     avatar.setAttribute("aria-hidden", "true");
@@ -706,39 +713,19 @@ function renderMsg(m) {
     tag.textContent = t(m.direct ? (m.offline ? "polish.offlineDirect" : "polish.direct") : (m.channelID ? "polish.channel" : "polish.global"));
     el.appendChild(tag);
 
-    // (4b/91-135) lock semantics. A placeholder body means the message stayed
-    // sealed, which must not look like an ordinary encrypted message.
-    const unopened = !m.deleted && UNOPENED_BODIES.has(m.text);
-    if (unopened) el.classList.add("missing-key");
-    let lock;
-    if (m.e2e || m.enc || unopened) {
-        lock = document.createElement("span");
-        lock.className = "msg-lock";
-        if (unopened) {
-            lock.innerHTML = icon("warning");
-            lock.setAttribute("aria-label", t("workspace.encryption"));
-            lock.title = t("chat.encryptedHelp");
-        } else if (m.e2e || (m.direct && m.enc)) {
-            lock.innerHTML = icon("lock");
-            lock.setAttribute("aria-label", t("chat.directHelp"));
-            lock.title = t("chat.directHelp");
-        } else {
-            lock.innerHTML = icon("shield");
-            lock.setAttribute("aria-label", t("chat.channelHelp"));
-            lock.title = t("chat.channelHelp");
-        }
-    }
+    // (4b/91-135) Every message shows its encryption: lock (end-to-end),
+    // shield (client→server→client) or warning. A body that stayed sealed or
+    // arrived as plaintext is never rendered: its refusal text replaces it.
+    if (badge.kind === "warning") el.classList.add("missing-key");
+    const lock = encryptionBadgeElement(badge);
 
     const body = document.createElement("span");
     body.className = "msg-text";
     if (m.deleted) {
         body.classList.add("tombstone");
         body.textContent = t("polish.deleted");
-    } else if (unopened) {
-        const key = m.text === "[encrypted message — you do not have access]" ? "chat.noAccess"
-            : m.text === "[refused: server sent plaintext history]" ? "chat.plaintextRefused"
-                : m.text === "[encrypted message — decryption failed]" ? "chat.decryptFailed" : "chat.keyUnavailable";
-        body.textContent = t(key);
+    } else if (badge.bodyKey) {
+        body.textContent = t(badge.bodyKey);
     } else {
         renderBody(body, m);
     }
@@ -1973,6 +1960,11 @@ function dmMsg(e, peerNick) {
         direct: true,
         enc: !!e.enc_verified,
         encVerified: !!e.enc_verified,
+        // A verified record without a mode predates the server-encrypted
+        // fallback, so it was end-to-end. An unverified legacy record keeps
+        // the text the user already saw, under a warning badge.
+        encMode: e.enc_verified ? (e.enc_mode === "server" ? "server" : "e2e") : "",
+        localUnverified: !e.enc_verified,
         offline: !!e.offline,
         clientMsgID: e.client_msg_id || "",
         channelID: null,
@@ -2045,6 +2037,7 @@ function dmRecord(peer, nick, m) {
         client_msg_id: m.clientMsgID,
         offline: m.offline,
         enc_verified: m.encVerified,
+        enc_mode: m.encVerified ? m.encMode : "",
     }).then(reportFailure).catch(reportFailure);
 }
 
@@ -2450,14 +2443,32 @@ export function addChat(d) {
 
 function pushMsg(key, m) {
     const st = getStore(key);
-    if (m.id && st.msgs.some((existing) => existing.id === m.id)) return "duplicate";
-    if (m.clientMsgID && st.msgs.some((existing) => existing.clientMsgID === m.clientMsgID && existing.self === m.self)) return "duplicate";
+    const duplicate = st.msgs.find((existing) => (m.id && existing.id === m.id) ||
+        (m.clientMsgID && existing.clientMsgID === m.clientMsgID && existing.self === m.self));
+    if (duplicate) {
+        upgradeEncryption(duplicate, m);
+        return "duplicate";
+    }
     const index = m.id ? st.msgs.findIndex((existing) => existing.id && existing.id > m.id) : -1;
     if (index >= 0) st.msgs.splice(index, 0, m);
     else st.msgs.push(m);
     const max = V().state.settings?.chat_max_lines || 200;
     while (st.msgs.length > Math.max(max, PAGE)) st.msgs.shift();
     return index >= 0 ? "insert" : "append";
+}
+
+// upgradeEncryption merges the encryption evidence of a second copy of the
+// same message (a live echo after a history replay, or the reverse) so the
+// first copy never keeps a weaker badge than this client actually verified.
+function upgradeEncryption(existing, m) {
+    if (existing.deleted || existing.encVerified || !m.encVerified || existing.text !== m.text) return;
+    existing.enc = true;
+    existing.encVerified = true;
+    existing.encMode = m.encMode;
+    existing.localUnverified = false;
+    if (!existing.renderKey) return;
+    const el = document.querySelector(`#chat-log .msg[data-scroll-key="${CSS.escape(existing.renderKey)}"]`);
+    if (el) el.replaceWith(renderMsg(existing));
 }
 
 function appendLive(m) {
@@ -2615,6 +2626,9 @@ export function onChatEdited(d) {
     const m = findMsg(d.message_id);
     if (!m) return;
     m.text = d.body ?? "";
+    // The native layer marks an edit body it opened itself; a refused or
+    // sealed edit arrives as a placeholder and draws the warning instead.
+    if (d.enc_verified) { m.enc = true; m.encVerified = true; m.encMode ||= m.direct ? "" : "server"; }
     m.edited = true;
     m.version = Number(d.version) || (m.version + 1);
     m.mentioned = !m.self && mentionsMe(m.text); // an edit can add or drop my name
@@ -3349,7 +3363,11 @@ async function loadPinsPanel() {
         const body = document.createElement("span");
         body.className = "pin-body";
         const msg = p.message || {};
-        body.textContent = `${msg.from_nickname || "?"}: ${msg.deleted ? t("runtime.deleted") : (msg.body || "").slice(0, 120)}`;
+        const pinBadge = encryptionBadge(normalize(msg, chID));
+        const shown = pinBadge.bodyKey ? t(pinBadge.bodyKey) : (msg.body || "").slice(0, 120);
+        body.textContent = `${msg.from_nickname || "?"}: ${msg.deleted ? t("runtime.deleted") : shown}`;
+        const pinLock = encryptionBadgeElement(pinBadge);
+        if (pinLock) body.appendChild(pinLock);
         row.appendChild(body);
         const jump = document.createElement("button");
         jump.textContent = "↩";
@@ -3543,6 +3561,13 @@ function showSearchResults(q, results, scanned, undecryptable, scope) {
         meta.className = "search-meta";
         meta.textContent = `${r.from_nickname || "?"} · ${fmtFull((typeof r.sent_at === "number" ? r.sent_at * 1000 : Date.parse(r.sent_at)) || 0)}`;
         row.insertBefore(meta, row.firstChild);
+        // A hit names its encryption like the message it points to.
+        const verified = !!r.enc_verified;
+        const hitBadge = encryptionBadgeElement(encryptionBadge({
+            text: r.body, direct: scope.kind === "dm", enc: verified, encVerified: verified,
+            encMode: verified && (r.enc_mode === "e2e" || r.enc_mode === "server") ? r.enc_mode : "",
+        }));
+        if (hitBadge) meta.appendChild(hitBadge);
         row.onclick = () => {
             closeDialog(overlay);
             if (!exportScopeIsCurrent(scope)) return;

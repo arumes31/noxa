@@ -43,6 +43,10 @@ type DMEntry struct {
 	ClientMsgID  string `json:"client_msg_id,omitempty"`
 	Offline      bool   `json:"offline,omitempty"`
 	EncVerified  bool   `json:"enc_verified,omitempty"` // body was opened locally; absent on legacy records
+	// EncMode records how a verified body was protected: "e2e", or "server"
+	// for the client→server→client fallback. Empty on a verified record
+	// means end-to-end (records written before the fallback existed).
+	EncMode string `json:"enc_mode,omitempty"`
 }
 
 // DMPeer summarises one stored conversation, so PM tabs can be restored on
@@ -432,8 +436,18 @@ func (s dmHistoryStore) search(peer, query string, maxMessages int) ChatSearchRe
 				Body:         m.Body,
 				SentAt:       m.SentAt,
 				EncVerified:  true,
+				EncMode:      dmEncMode(m),
 			})
 		}
 	}
 	return res
+}
+
+// dmEncMode names how a stored DM was protected; records written before the
+// server-encrypted fallback existed were end-to-end.
+func dmEncMode(m DMEntry) string {
+	if m.EncMode == "server" {
+		return "server"
+	}
+	return "e2e"
 }

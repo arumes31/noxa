@@ -147,6 +147,8 @@ func (a *App) ConversationForTab(tabID string, request netproto.ConversationRequ
 	m.mu.Unlock()
 	for i := range result.Messages {
 		message := &result.Messages[i]
+		// Verification is local evidence, never accepted from the server.
+		message.EncVerified = false
 		if message.ConversationID != request.ID {
 			return netproto.ConversationResult{}, errors.New("private group history mismatch")
 		}
@@ -164,7 +166,7 @@ func (a *App) ConversationForTab(tabID string, request netproto.ConversationRequ
 			message.Body = "[Message authentication failed]"
 			continue
 		}
-		message.Body = body
+		message.Body, message.EncVerified = body, true
 	}
 	return result, nil
 }

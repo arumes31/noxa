@@ -4,6 +4,7 @@ import { confirmDialog, promptDialog } from "./modal.js";
 import { startPrivateCall, showCallHistory } from "./private-calls.js";
 import { sessionUserID } from "./session-identity.js";
 import { initGroupSidebarLayout } from "./group-sidebar-layout.js";
+import { encryptionBadge } from "./message-encryption.js";
 
 const V = () => window.__noxa;
 const app = () => window.go.main.App;
@@ -28,7 +29,7 @@ async function messagePreview(tabID, group, messageID) {
     try {
         const page = await app().ConversationForTab(tabID, { action: "history", id: group.id, before_id: messageID + 1 });
         const message = page.messages?.find(message => message.id === messageID);
-        if (!message || (V().state.settings?.blocked_users || []).includes(message.from_unique_id)) return null;
+        if (!message || !message.enc_verified || (V().state.settings?.blocked_users || []).includes(message.from_unique_id)) return null;
         const sender = V().state.clients.find(client => client.unique_id === message.from_unique_id)?.nickname || t("chat.unknownMember");
         const text = String(message.body || "").replace(/\[file:[^\]#]*#[^\]#]*#([^\]]*)\]/g, "📎 $1").slice(0, 80);
         return t("group.messagePreview", { name: group.name, sender, text });
@@ -527,12 +528,22 @@ export function initConversations() {
                     const row = el("article", "group-message");
                     row.dataset.messageId = String(message.id);
                     const body = el("div", "group-message-body");
+                    // Group messages are end-to-end encrypted per member: an
+                    // envelope this client authenticated shows the lock; one
+                    // it could not open shows the warning and its refusal.
+                    const verified = !!message.enc_verified;
+                    const badge = encryptionBadge({ text: message.body, enc: verified, encVerified: verified, encMode: verified ? "e2e" : "" });
                     if (blocked(message.from_unique_id)) body.textContent = t("group.blocked");
+                    else if (badge.bodyKey) body.textContent = t(badge.bodyKey);
                     else if (!renderVoiceMessage(body, message.body, { tabID, channelID: 0, isCurrent: () => current() && token === generation, download: voiceDownload })) {
                         const rich = window.__noxaChat?.renderSharedRichText;
                         if (rich) rich(body, message.body, attachments); else body.textContent = message.body;
                     }
-                    row.append(el("strong", "", label(message.from_unique_id)), el("time", "", new Date(message.created_at * 1000).toLocaleString()), body);
+                    if (badge.kind === "warning") row.classList.add("missing-key");
+                    const stamp = el("time", "", new Date(message.created_at * 1000).toLocaleString());
+                    const lock = window.__noxaChat?.encryptionBadgeElement?.(badge);
+                    if (lock) stamp.append(lock);
+                    row.append(el("strong", "", label(message.from_unique_id)), stamp, body);
                     if (!blocked(message.from_unique_id)) row.append(button("messages.save", () => {
                         if (current() && token === generation) void window.__noxaMessageTools?.save({ kind: "group", group_id: group.id, message_id: message.id });
                     }));
