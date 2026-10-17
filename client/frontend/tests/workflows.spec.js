@@ -8113,7 +8113,7 @@ test.describe("per-tab automatic reconnect", () => {
             for (const cb of window.__events.snapshot) cb(JSON.stringify({ root_channels: [{ ChannelID: 1, Name: "Public1", ParentID: 0,
                 clients: [{ client_id: "alice-other", nickname: "Alice", channel_id: 1 }, { client_id: "bob-other", nickname: "Bob", channel_id: 1 }] }] }));
             document.getElementById("chat-text").value = "Keep this unsent draft";
-            document.getElementById("tree-expand").focus();
+            document.getElementById("channel-create-btn").focus(); // the tree tools are folded away behind the filter toggle
             window.__tabReconnectGate = new Promise(resolve => { window.__finishOverlayRetry = resolve; });
             window.__loseTab("tab-a");
         });
