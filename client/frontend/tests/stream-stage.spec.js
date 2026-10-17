@@ -159,7 +159,10 @@ test("layout modes persist per session, 1-5 switch focus and stream audio follow
     expect(await focused()).toBe("carol");
 
     await page.locator(".stage-head .stage-audio").click();
-    await page.getByRole("menuitemradio", { name: "Alice · Screen share" }).click();
+    await expect(page.getByRole("menuitemradio", { name: "Follow focus" })).toHaveAttribute("aria-checked", "true");
+    await page.keyboard.press("ArrowDown");
+    await expect(page.getByRole("menuitemradio", { name: "Alice · Screen share" })).toBeFocused();
+    await page.keyboard.press("Enter");
     await expect(page.locator(".stage-foot")).toContainText("Audio: Alice · others ducked to 15%");
     await page.locator("body").press("2");
     expect(await page.evaluate(() => window.__stage.gains.at(-1))).toEqual({ alice: 1, bob: 0.15, carol: 0.15 });

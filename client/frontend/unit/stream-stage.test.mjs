@@ -38,3 +38,25 @@ describe("stage stream statistics", () => {
         assert.equal(formatStageRate(400), "1 kbps");
     });
 });
+
+describe("stage stylesheet guards", async () => {
+    const { readFile } = await import("node:fs/promises");
+    const css = (await readFile(new URL("../src/arctic-stage.css", import.meta.url), "utf8")).replace(/\/\*[\s\S]*?\*\//g, "");
+
+    it("has no continuous or keyframe animation", () => {
+        assert.doesNotMatch(css, /@keyframes|infinite|animation\s*:/);
+    });
+
+    it("never restyles native fullscreen tiles or the overlay beyond hiding stage chrome", () => {
+        for (const [, prelude, body] of css.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+            if (/gaming-overlay|speaking-avatar|vtile-fallback/.test(prelude)) assert.fail(`touches protected UI: ${prelude.trim()}`);
+            for (const selector of prelude.split(/,(?![^(]*\))/).map(part => part.trim()).filter(part => part.includes(":fullscreen"))) {
+                const negated = selector.replace(/:not\(:fullscreen\)/g, "");
+                if (!negated.includes(":fullscreen")) continue;
+                const hidesStageChrome = /^\.vtile:fullscreen :is\(\.stage-info, \.stage-tile-tools, \.stage-tag\)$/.test(selector) && /^\s*display:\s*none;\s*$/.test(body);
+                const stylesStageRoot = selector.startsWith(".stream-stage:fullscreen");
+                assert.ok(hidesStageChrome || stylesStageRoot, `unexpected :fullscreen rule: ${selector}`);
+            }
+        }
+    });
+});

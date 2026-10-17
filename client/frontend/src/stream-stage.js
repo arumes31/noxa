@@ -315,8 +315,11 @@ export function createStreamStage({ gridEl, tiles, onFocusChange }) {
             menu.append(item);
         };
         add(AUDIO_FOLLOW, t("stage.audioFollow"));
-        for (const key of state.order) add(key, tileLabel(tiles().get(key)));
-        for (const item of menu.querySelectorAll("a")) item.setAttribute("role", "menuitemradio");
+        // Only screen shares carry stream audio; cameras have none to pick.
+        for (const key of state.order) {
+            const tile = tiles().get(key);
+            if (tile?.slot === SLOT_SCREEN) add(key, tileLabel(tile));
+        }
         mountContextMenu(menu, { trigger });
         for (const item of menu.querySelectorAll("a")) item.setAttribute("role", "menuitemradio");
     }

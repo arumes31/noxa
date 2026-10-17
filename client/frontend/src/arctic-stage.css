@@ -31,6 +31,7 @@
 #chat-pane .stream-stage:not([data-stage="none"]) {
     display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden;
     background: var(--bg);
+    container-type: inline-size; container-name: stagebox;
 }
 #chat-pane .stream-stage:not([data-stage="none"]) .stage-body {
     display: block; position: relative; flex: 1 1 auto; min-height: 0; min-width: 0;
@@ -104,6 +105,12 @@
 #chat-pane .stream-stage[data-stage="single"] .vtile:not(:fullscreen):not(:hover):not(:focus-within) .stream-live-controls .stream-watch { opacity: 0; }
 .vtile:fullscreen :is(.stage-info, .stage-tile-tools, .stage-tag) { display: none; }
 
+/* Stage menus mark the checked audio source. */
+.stage-menu [role="menuitemradio"] { display: flex; align-items: center; gap: 12px; }
+.stage-menu [role="menuitemradio"]::after { content: ""; width: 7px; height: 7px; margin-left: auto; border-radius: 50%; flex: none; }
+.stage-menu [aria-checked="true"] { color: var(--text); font-weight: 600; }
+.stage-menu [aria-checked="true"]::after { background: var(--accent); }
+
 /* ------------------------------------------------------- tile tools/tag */
 #chat-pane .stream-stage[data-stage="multi"] .vtile:not(:fullscreen) .stage-tile-tools {
     position: absolute; top: 10px; right: 10px; z-index: 4;
@@ -173,8 +180,8 @@
     color: #fff; cursor: default;
 }
 .stage-info-avatar { width: 30px; height: 30px; font-size: .9286rem; }
-.stage-info-name { font-weight: 700; font-size: 1.0714rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
-.stage-info-stats { font-family: var(--font-mono); font-size: .8929rem; color: rgba(255, 255, 255, .86); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.stage-info-name { flex: 0 0 auto; max-width: 40%; font-weight: 700; font-size: 1.0714rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.stage-info-stats { flex: 0 1 auto; min-width: 0; font-family: var(--font-mono); font-size: .8929rem; color: rgba(255, 255, 255, .86); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .stage-info-actions { display: flex; align-items: center; gap: 8px; margin-left: auto; flex: none; }
 .stage-info .stage-tool {
     width: 36px; height: 36px; color: #fff;
@@ -286,7 +293,22 @@
 
 @media (max-width: 900px) {
     #chat-pane { --stage-panel-w: 280px; }
-    .stage-mode span, .stage-btn:not(.stage-primary) span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+}
+/* Narrow stages keep every control; labels that the icon already carries
+   collapse to their accessible names. */
+@container stagebox (max-width: 880px) {
+    .stage-mode span, .stage-add-label {
+        position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap;
+    }
+    .stage-mode, .stage-head .stage-add { padding: 0 9px; }
+    .stage-count { display: none; }
+}
+@container stagebox (max-width: 620px) {
+    .stage-info-stats { display: none; }
+    .stage-fullscreen-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+    .stage-head .stage-fullscreen { padding: 0 9px; }
+    .stage-info .stage-tool { width: 32px; height: 32px; }
+    .stage-info-actions { gap: 6px; }
 }
 
 /* ------------------------------------------------- arctic polish + motion */
