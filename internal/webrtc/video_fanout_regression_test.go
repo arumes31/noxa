@@ -79,12 +79,22 @@ func TestPacerRetriesFinalWriteBehindControlUpdate(t *testing.T) {
 		t.Fatal(err)
 	}
 	time.Sleep(60 * time.Millisecond)
-	p.mu.Lock()
-	queued, dropped := p.count, p.diagnostics.droppedScope
-	p.mu.Unlock()
-	if queued != 1 || dropped != 0 {
+	// Each pacer tick pops the packet, attempts the gated write and requeues
+	// it, so a single snapshot can land while it is in flight (count 0).
+	// Retained means: never dropped, never written, and back in the queue.
+	var queued, dropped int
+	var written int64
+	for held := time.Now().Add(time.Second); ; time.Sleep(time.Millisecond) {
+		p.mu.Lock()
+		queued, dropped, written = p.count, int(p.diagnostics.droppedScope), writes.Load()
+		p.mu.Unlock()
+		if dropped != 0 || written != 0 || queued == 1 || time.Now().After(held) {
+			break
+		}
+	}
+	if queued != 1 || dropped != 0 || written != 0 {
 		r.echoScopeMu.Unlock()
-		t.Fatalf("contended final write: queued=%d dropped=%d, want retained", queued, dropped)
+		t.Fatalf("contended final write: queued=%d dropped=%d written=%d, want retained", queued, dropped, written)
 	}
 	r.echoScopeMu.Unlock()
 	deadline := time.Now().Add(time.Second)
@@ -101,7 +111,7 @@ func TestPacerRetriesFinalWriteBehindControlUpdate(t *testing.T) {
 		time.Sleep(5 * time.Millisecond)
 	}
 	p.mu.Lock()
-	written := *writes
+	written = writes.Load()
 	p.mu.Unlock()
 	if written != 1 {
 		t.Fatalf("packet written %d times after the update", written)

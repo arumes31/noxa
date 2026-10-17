@@ -2,6 +2,7 @@ package webrtc
 
 import (
 	"errors"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -11,15 +12,15 @@ import (
 
 // A synchronous real pacer queue/terminal-write path, without timers: tests can
 // expire/revoke a ticket between admission and final write deterministically.
-func terminalDiagnosticFixture(t *testing.T, ticket mediaTicket) (*mediaPacer, *mediaEgressStream, rtp.Packet, *int) {
+func terminalDiagnosticFixture(t *testing.T, ticket mediaTicket) (*mediaPacer, *mediaEgressStream, rtp.Packet, *atomic.Int64) {
 	t.Helper()
 	registry := &mediaEgressRegistry{streams: make(map[string]*mediaEgressStream)}
 	stream := &mediaEgressStream{active: true, registry: registry}
 	registry.streams["test"] = stream
 	p := &mediaPacer{streams: make(map[uint32]*pacedStream), egress: registry}
-	writes := new(int)
+	writes := new(atomic.Int64)
 	p.AddStream(11, interceptor.RTPWriterFunc(func(h *rtp.Header, payload []byte, _ interceptor.Attributes) (int, error) {
-		*writes++
+		writes.Add(1)
 		return h.MarshalSize() + len(payload), nil
 	}))
 	p.addRTX(11, 22)
@@ -96,8 +97,8 @@ func TestTerminalDropReasonsPreserveDeniedWrites(t *testing.T) {
 			}
 			flushTerminalDiagnosticPacket(t, p, packet)
 			got := p.diagnosticSnapshot(time.Now())
-			if *writes != 0 || got.DroppedScope != 1 || got.FinalWriteFailures != 0 || p.diagnostics.terminalDrops[mediaPacketPrimary][expected] != 1 {
-				t.Fatalf("denial changed behavior or was misclassified: writes=%d diagnostic=%+v reasons=%+v", *writes, got, got.TerminalDrops)
+			if writes.Load() != 0 || got.DroppedScope != 1 || got.FinalWriteFailures != 0 || p.diagnostics.terminalDrops[mediaPacketPrimary][expected] != 1 {
+				t.Fatalf("denial changed behavior or was misclassified: writes=%d diagnostic=%+v reasons=%+v", writes.Load(), got, got.TerminalDrops)
 			}
 			var total uint64
 			for _, reasons := range p.diagnostics.terminalDrops {
@@ -115,7 +116,7 @@ func TestTerminalDropReasonsPreserveDeniedWrites(t *testing.T) {
 func TestTerminalDropsSeparateLateRTXFromOriginalAndPadding(t *testing.T) {
 	p, stream, packet, writes := terminalDiagnosticFixture(t, mediaTicket{})
 	flushTerminalDiagnosticPacket(t, p, packet)
-	if *writes != 1 || p.diagnosticSnapshot(time.Now()).DroppedScope != 0 {
+	if writes.Load() != 1 || p.diagnosticSnapshot(time.Now()).DroppedScope != 0 {
 		t.Fatal("fresh original was not sent")
 	}
 	stream.tickets[1].expires = time.Now().Add(-time.Second)
@@ -129,7 +130,7 @@ func TestTerminalDropsSeparateLateRTXFromOriginalAndPadding(t *testing.T) {
 	padding.Padding, padding.PaddingSize, padding.Payload = true, 12, nil
 	flushTerminalDiagnosticPacket(t, p, padding)
 	got := p.diagnosticSnapshot(time.Now())
-	if *writes != 1 || got.SentPackets != 1 || got.DroppedScope != 3 || got.TerminalDrops.RTX.ExpiredTicket != 1 ||
+	if writes.Load() != 1 || got.SentPackets != 1 || got.DroppedScope != 3 || got.TerminalDrops.RTX.ExpiredTicket != 1 ||
 		got.TerminalDrops.Primary.ExpiredTicket != 1 || got.TerminalDrops.Padding.ExpiredTicket != 1 {
 		t.Fatalf("late repair was conflated with original loss: %+v", got.TerminalDrops)
 	}
@@ -143,7 +144,7 @@ func TestTerminalDropsSeparateLateRTXFromOriginalAndPadding(t *testing.T) {
 	}
 	flushTerminalDiagnosticPacket(t, p, fresh)
 	got = p.diagnosticSnapshot(time.Now())
-	if *writes != 2 || got.DroppedScope != 4 || got.TerminalDrops.RTX.MissingTicket != 1 || got.TerminalDrops.RTX.ExpiredTicket != 1 {
+	if writes.Load() != 2 || got.DroppedScope != 4 || got.TerminalDrops.RTX.MissingTicket != 1 || got.TerminalDrops.RTX.ExpiredTicket != 1 {
 		t.Fatal("replacement output reset history or admitted an old repair")
 	}
 	got.TerminalDrops.RTX.ExpiredTicket = 999
