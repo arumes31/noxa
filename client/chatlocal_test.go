@@ -97,6 +97,9 @@ func TestDMHistoryIsCiphertextAtRest(t *testing.T) {
 	if len(peers) != 1 || peers[0].UniqueID != "peer-1" || peers[0].Messages != 2 {
 		t.Fatalf("peers = %+v, want one peer with 2 messages", peers)
 	}
+	if last := peers[0].Last; last == nil || last.Seq != 2 || !last.Self || last.Body != msgs[1].Body || peers[0].LastAt != last.SentAt {
+		t.Fatalf("peer preview = %+v, want the newest stored entry", peers[0].Last)
+	}
 
 	// A different identity over the same files reads nothing at all.
 	other := newConnManager(context.Background())

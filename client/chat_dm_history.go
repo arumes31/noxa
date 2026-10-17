@@ -56,6 +56,10 @@ type DMPeer struct {
 	Nickname string `json:"nickname,omitempty"`
 	Messages int    `json:"messages"`
 	LastAt   int64  `json:"last_at"`
+	// Last is the newest stored entry, so the Messages list can show a
+	// preview and its encryption badge without loading every whole log. It
+	// never leaves this process: the frontend reads it over the local bridge.
+	Last *DMEntry `json:"last,omitempty"`
 }
 
 // dmLog is the sealed file's plaintext. The peer id lives INSIDE the
@@ -377,7 +381,9 @@ func (s dmHistoryStore) peers() []DMPeer {
 		}
 		p := DMPeer{UniqueID: l.Peer, Nickname: l.Nickname, Messages: len(l.Messages)}
 		if n := len(l.Messages); n > 0 {
-			p.LastAt = l.Messages[n-1].SentAt
+			last := l.Messages[n-1]
+			p.LastAt = last.SentAt
+			p.Last = &last
 		}
 		out = append(out, p)
 	}
