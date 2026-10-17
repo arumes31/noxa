@@ -48,7 +48,8 @@ describe("Arctic Night theme", () => {
         assert.doesNotMatch(source, /url\(\s*["']?https?:/);
         assert.doesNotMatch(source, /fonts\.(googleapis|gstatic)\.com/);
         for (const match of source.matchAll(/animation:\s*([^;]+);/g)) {
-            assert.match(match[1], /^arc-msg-in\b/, `unexpected animation: ${match[1]}`);
+            // One-shot entrances only: messages slide in, context menus fade in.
+            assert.match(match[1], /^arc-(msg|menu)-in\b/, `unexpected animation: ${match[1]}`);
         }
     });
 
