@@ -45,7 +45,7 @@ func conversationTestRead(t *testing.T, s *Store, uid string, request netproto.C
 
 func conversationTestChange(t *testing.T, s *Store, c netproto.Conversation, uid, action, target string) netproto.Conversation {
 	t.Helper()
-	if _, err := s.ChangeConversation(t.Context(), uid, netproto.ConversationRequest{ID: c.ID, Revision: c.Revision, Action: action, Target: target}); err != nil {
+	if _, _, err := s.ChangeConversation(t.Context(), uid, netproto.ConversationRequest{ID: c.ID, Revision: c.Revision, Action: action, Target: target}); err != nil {
 		t.Fatal(err)
 	}
 	result := conversationTestRead(t, s, "owner", netproto.ConversationRequest{Action: "get", ID: c.ID})
@@ -262,7 +262,7 @@ func TestConversationRemovalWaitsForHistoryDelivery(t *testing.T) {
 	}
 	removeDone := make(chan error, 1)
 	go func() {
-		_, err := other.ChangeConversation(ctx, "owner", netproto.ConversationRequest{Action: "remove", ID: c.ID, Revision: c.Revision, Target: "member"})
+		_, _, err := other.ChangeConversation(ctx, "owner", netproto.ConversationRequest{Action: "remove", ID: c.ID, Revision: c.Revision, Target: "member"})
 		removeDone <- err
 	}()
 	select {
@@ -325,7 +325,7 @@ func TestConversationCancelledHistoryRetainsLockUntilDeliveryReturns(t *testing.
 	}
 	removeDone := make(chan error, 1)
 	go func() {
-		_, err := other.ChangeConversation(deadline, "owner", netproto.ConversationRequest{Action: "remove", ID: c.ID, Revision: c.Revision, Target: "member"})
+		_, _, err := other.ChangeConversation(deadline, "owner", netproto.ConversationRequest{Action: "remove", ID: c.ID, Revision: c.Revision, Target: "member"})
 		removeDone <- err
 	}()
 	select {
@@ -379,11 +379,11 @@ FOR EACH ROW EXECUTE FUNCTION conversation_test_invite_gate()`, gateID)
 	}
 	results := make(chan error, 2)
 	go func() {
-		_, err := s.ChangeConversation(ctx, "owner", netproto.ConversationRequest{Action: "invite", ID: ownerGroup.ID, Revision: ownerGroup.Revision, Target: "member"})
+		_, _, err := s.ChangeConversation(ctx, "owner", netproto.ConversationRequest{Action: "invite", ID: ownerGroup.ID, Revision: ownerGroup.Revision, Target: "member"})
 		results <- err
 	}()
 	go func() {
-		_, err := other.ChangeConversation(ctx, "member", netproto.ConversationRequest{Action: "invite", ID: memberGroup.ID, Revision: memberGroup.Revision, Target: "owner"})
+		_, _, err := other.ChangeConversation(ctx, "member", netproto.ConversationRequest{Action: "invite", ID: memberGroup.ID, Revision: memberGroup.Revision, Target: "owner"})
 		results <- err
 	}()
 	ticker := time.NewTicker(10 * time.Millisecond)
@@ -429,5 +429,27 @@ FOR EACH ROW EXECUTE FUNCTION conversation_test_invite_gate()`, gateID)
 		if !found || !invited.Pending {
 			t.Fatalf("cross-invitation missing or auto-accepted: %+v", result.Conversations[0])
 		}
+	}
+}
+
+// TestConversationChangeReportsGroupDeletion pins the signal the server uses to
+// reclaim a group's attachment folder: only the change that removes the last
+// member reports the group deleted.
+func TestConversationChangeReportsGroupDeletion(t *testing.T) {
+	s, c := conversationTestStore(t)
+	c = conversationTestChange(t, s, c, "owner", "invite", "member")
+	c = conversationTestChange(t, s, c, "member", "accept", "")
+	_, deleted, err := s.ChangeConversation(t.Context(), "member", netproto.ConversationRequest{Action: "leave", ID: c.ID, Revision: c.Revision})
+	if err != nil || deleted {
+		t.Fatalf("leave with a remaining member: deleted=%v err=%v", deleted, err)
+	}
+	c = conversationTestRead(t, s, "owner", netproto.ConversationRequest{Action: "get", ID: c.ID}).Conversations[0]
+	recipients, deleted, err := s.ChangeConversation(t.Context(), "owner", netproto.ConversationRequest{Action: "leave", ID: c.ID, Revision: c.Revision})
+	if err != nil || !deleted || !slices.Equal(recipients, []string{"owner"}) {
+		t.Fatalf("last leave: recipients=%v deleted=%v err=%v", recipients, deleted, err)
+	}
+	var remaining int
+	if err := s.DB().QueryRowContext(t.Context(), `SELECT count(*) FROM private_conversations WHERE id=$1`, c.ID).Scan(&remaining); err != nil || remaining != 0 {
+		t.Fatalf("group row kept: %d (%v)", remaining, err)
 	}
 }

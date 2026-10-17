@@ -34,6 +34,7 @@ var ErrTooManyLinks = errors.New("too many active download links")
 type link struct {
 	principal *Principal
 	scope     int64
+	folder    string // virtual folder within scope, for folder-bound guards
 	path      string // path relative to the registry's confined root
 	name      string // download file name (Content-Disposition)
 	expires   time.Time
@@ -77,10 +78,10 @@ func NewLinkRegistry(rootDir string) *LinkRegistry {
 // Create issues a link for a regular file beneath the configured root and
 // returns its token. path must be relative to that root.
 func (r *LinkRegistry) Create(path, name string) (string, time.Time, error) {
-	return r.create(path, name, nil, 0)
+	return r.create(path, name, nil, 0, "")
 }
 
-func (r *LinkRegistry) create(path, name string, principal *Principal, scope int64) (string, time.Time, error) {
+func (r *LinkRegistry) create(path, name string, principal *Principal, scope int64, folder string) (string, time.Time, error) {
 	// /dl/<token> holds no key, so a chat attachment would be served as raw
 	// ciphertext that looks like a corrupt download (91-135).
 	if isEncryptedAttachment(name) {
@@ -121,7 +122,7 @@ func (r *LinkRegistry) create(path, name string, principal *Principal, scope int
 			continue
 		}
 		expires := now.Add(LinkTTL)
-		r.links[token] = link{path: path, name: name, expires: expires, principal: principal, scope: scope}
+		r.links[token] = link{path: path, name: name, expires: expires, principal: principal, scope: scope, folder: folder}
 		return token, expires, nil
 	}
 	return "", time.Time{}, errors.New("download link token collision limit exceeded")

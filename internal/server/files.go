@@ -148,7 +148,9 @@ func (s *TCPServer) handleFileDelete(ctx context.Context, client *Client, f *net
 	}
 	return s.roleAction(ctx, client, msg.ChannelID, authorization.ViewChannel, func(ctx context.Context) error {
 		if conversationFolderReserved(msg.ChannelID, msg.Folder) {
-			return s.sendErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, errConversationFileDenied.Error())
+			if err := s.conversationFileDeleteAllowed(ctx, client, msg.ChannelID, msg.Folder, msg.Name); err != nil {
+				return s.sendErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, errConversationFileDenied.Error())
+			}
 		}
 		if err := s.fileManageAllowed(ctx, client, msg.ChannelID, msg.Folder, msg.Name); err != nil {
 			return s.sendErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, err.Error())

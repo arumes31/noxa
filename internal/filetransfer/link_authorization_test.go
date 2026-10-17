@@ -19,7 +19,7 @@ func (w deadlineErrorResponse) SetWriteDeadline(time.Time) error {
 
 func TestRoleDownloadDeadlineFailureHidesMetadata(t *testing.T) {
 	r, path := newTestLinkRegistry(t, []byte("private contents"))
-	token, _, err := r.create(path, "private-name.txt", &Principal{UserID: 2, SessionID: "session"}, 7)
+	token, _, err := r.create(path, "private-name.txt", &Principal{UserID: 2, SessionID: "session"}, 7, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -35,7 +35,7 @@ func TestRoleDownloadDeadlineFailureHidesMetadata(t *testing.T) {
 
 func TestRoleDownloadLinkDenialHidesFileMetadata(t *testing.T) {
 	r, path := newTestLinkRegistry(t, []byte("private contents"))
-	token, _, err := r.create(path, "private-name.txt", &Principal{UserID: 2, SessionID: "session"}, 7)
+	token, _, err := r.create(path, "private-name.txt", &Principal{UserID: 2, SessionID: "session"}, 7, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -52,7 +52,7 @@ func TestRoleDownloadLinkDenialHidesFileMetadata(t *testing.T) {
 func TestRoleDownloadLinkRechecksEveryBodyWrite(t *testing.T) {
 	content := bytes.Repeat([]byte("private"), 32*1024)
 	r, path := newTestLinkRegistry(t, content)
-	token, _, err := r.create(path, "private-name.txt", &Principal{UserID: 2, SessionID: "session"}, 7)
+	token, _, err := r.create(path, "private-name.txt", &Principal{UserID: 2, SessionID: "session"}, 7, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -85,7 +85,7 @@ func TestRoleDownloadLinkRechecksEveryBodyWrite(t *testing.T) {
 
 func TestLinkRevocationDrainsAuthorizedWrite(t *testing.T) {
 	r, path := newTestLinkRegistry(t, []byte("private contents"))
-	token, _, err := r.create(path, "private.txt", &Principal{UserID: 2, SessionID: "session"}, 7)
+	token, _, err := r.create(path, "private.txt", &Principal{UserID: 2, SessionID: "session"}, 7, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -113,5 +113,35 @@ func TestLinkRevocationDrainsAuthorizedWrite(t *testing.T) {
 	}
 	if err := r.withLinkAccess(t.Context(), token, l, func(context.Context) error { t.Error("write after revocation"); return nil }); !errors.Is(err, ErrAccessRevoked) {
 		t.Fatal(err)
+	}
+}
+
+// TestLinkGuardSeesLinkFolder pins that a bearer link's guard call carries the
+// link's folder, as a transfer token's does, so folder-bound policy (private
+// group folders) cannot fail open for links.
+func TestLinkGuardSeesLinkFolder(t *testing.T) {
+	r, path := newTestLinkRegistry(t, []byte("contents"))
+	token, _, err := r.create(path, "file.txt", &Principal{UserID: 2, SessionID: "session"}, 0, "docs/sub")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var seen []string
+	r.accessGuard = func(ctx context.Context, _ Principal, _ int64, _ string, effect func(context.Context) error) error {
+		folder, ok := TransferFolder(ctx)
+		if !ok {
+			return ErrAccessRevoked
+		}
+		seen = append(seen, folder)
+		return effect(ctx)
+	}
+	response := httptest.NewRecorder()
+	r.ServeHTTP(response, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/dl/"+token, nil))
+	if response.Code != http.StatusOK || len(seen) == 0 {
+		t.Fatalf("status=%d guard calls=%v", response.Code, seen)
+	}
+	for _, folder := range seen {
+		if folder != "docs/sub" {
+			t.Fatalf("guard saw folder %q", folder)
+		}
 	}
 }

@@ -473,6 +473,49 @@ func (s *Server) DeleteFile(ctx context.Context, channelID int64, folder, name s
 	return nil
 }
 
+// DeleteFolder removes every file of one folder (records and blobs) together
+// with the folder's on-disk directory. It is the reclamation path for storage
+// whose owner disappeared, such as a deleted private group's attachment
+// folder; the caller authorizes it, so no per-file ownership check applies.
+// Pending transfer tokens bound to the folder are dropped so they cannot
+// recreate it.
+func (s *Server) DeleteFolder(ctx context.Context, channelID int64, folder string) error {
+	folder, err := sanitizeFolder(folder)
+	if err != nil {
+		return err
+	}
+	if folder == "" {
+		return fmt.Errorf("%w: refusing to delete a scope root", ErrInvalidName)
+	}
+	s.mu.Lock()
+	for digest, tr := range s.transfers {
+		if tr.ChannelID == channelID && tr.Folder == folder {
+			delete(s.transfers, digest)
+		}
+	}
+	s.mu.Unlock()
+	s.fileOpsMu.Lock()
+	defer s.fileOpsMu.Unlock()
+	files, err := s.store.ListFiles(ctx, channelID, folder)
+	if err != nil {
+		return err
+	}
+	for _, rec := range files {
+		if err := s.store.DeleteFile(ctx, channelID, folder, rec.Name); err != nil && !errors.Is(err, store.ErrFileNotFound) {
+			return err
+		}
+	}
+	root, err := s.openBlobRoot()
+	if err != nil {
+		return fmt.Errorf("opening file root for folder cleanup: %w", err)
+	}
+	defer func() { _ = root.Close() }()
+	if err := root.RemoveAll(filepath.Join(strconv.FormatInt(channelID, 10), filepath.FromSlash(folder))); err != nil {
+		return fmt.Errorf("removing folder %d:%s: %w", channelID, folder, err)
+	}
+	return nil
+}
+
 // RenameFile moves/renames a file record and its blob within one channel
 // (262).
 func (s *Server) RenameFile(ctx context.Context, channelID int64, folder, name, newFolder, newName string) error {
@@ -682,7 +725,7 @@ func (s *Server) CreateLink(ctx context.Context, channelID int64, folder, name s
 	if _, err := s.store.GetFile(ctx, channelID, folder, name); err != nil {
 		return "", time.Time{}, err
 	}
-	return s.links.create(blobPath(channelID, folder, name), name, transferPrincipal(ctx), channelID)
+	return s.links.create(blobPath(channelID, folder, name), name, transferPrincipal(ctx), channelID, folder)
 }
 
 // TombstoneChannelData permanently rejects new work for a deleted channel and

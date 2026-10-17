@@ -79,7 +79,9 @@ func (s *TCPServer) conversationActivityDeliverable(recipient string, data []byt
 // conversationReceiptStore is implemented by stores that keep shared read
 // receipts. A store without it keeps mark_read private (the older contract).
 type conversationReceiptStore interface {
-	ShareConversationRead(ctx context.Context, uid, id string, messageID int64) ([]string, int64, error)
+	// ShareConversationRead returns the receipt's audience, the shared
+	// position after the update and whether that position advanced.
+	ShareConversationRead(ctx context.Context, uid, id string, messageID int64) (audience []string, seen int64, advanced bool, err error)
 }
 
 // conversationAudience returns the other accepted members of group when uid is
@@ -175,14 +177,17 @@ func (s *TCPServer) relayConversationTyping(ctx context.Context, client *Client,
 
 // shareConversationRead advances the caller's private cursor and shared read
 // receipt, then tells the other current members. ok=false means the store
-// keeps no receipts and the caller falls back to a private mark_read.
+// keeps no receipts and the caller falls back to a private mark_read. Only an
+// advance is relayed: a repeated or older position changes nothing members
+// could see, so it must not fan out (the relay count per member is bounded by
+// the number of messages, not by the mark_read rate).
 func (s *TCPServer) shareConversationRead(ctx context.Context, backend conversationStore, uid, id string, messageID int64) (bool, error) {
 	receipts, ok := backend.(conversationReceiptStore)
 	if !ok {
 		return false, nil
 	}
-	audience, seen, err := receipts.ShareConversationRead(ctx, uid, id, messageID)
-	if err != nil {
+	audience, seen, advanced, err := receipts.ShareConversationRead(ctx, uid, id, messageID)
+	if err != nil || !advanced {
 		return true, err
 	}
 	return true, s.relayToMembers(audience, eventConversationRead, netproto.ConversationReadEvent{

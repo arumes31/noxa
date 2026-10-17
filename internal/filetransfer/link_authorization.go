@@ -36,7 +36,10 @@ func (r *LinkRegistry) withLinkAccess(ctx context.Context, token string, l link,
 	if guard == nil || l.principal == nil {
 		return ErrAccessRevoked
 	}
-	return guard(ctx, *l.principal, l.scope, "download", func(ctx context.Context) error {
+	// The guard sees the link's folder exactly as it sees a transfer token's,
+	// so folder-bound authorization (private-group folders) also applies to
+	// bearer links instead of depending on links never being issued there.
+	return guard(WithTransferFolder(ctx, l.folder), *l.principal, l.scope, "download", func(ctx context.Context) error {
 		r.deliveryMu.RLock()
 		defer r.deliveryMu.RUnlock()
 		// Revoked/expired bearer links stay dead even if the account later

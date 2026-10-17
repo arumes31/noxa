@@ -178,7 +178,9 @@ func (s *TCPServer) changeRoleChannel(ctx context.Context, actor int64, request 
 	switch request.Kind {
 	case authorization.ChannelCreate:
 		if request.Settings == nil || request.ChannelID != 0 || request.SyncToParent || request.ChannelType < 0 || request.ChannelType > 2 || len(request.Password) > 4096 ||
-			(request.TextOnly && request.ChannelType == 0) {
+			(request.TextOnly && (request.ChannelType == 0 || request.Password != "")) {
+			// A text channel is reached through chat subscriptions, which never
+			// check a channel password, so one would only pretend to protect it.
 			return netproto.RoleChannelResult{}, authorization.ErrRoleInvalid
 		}
 		change.Temporary = request.ChannelType == 0
@@ -222,6 +224,13 @@ func (s *TCPServer) changeRoleChannel(ctx context.Context, actor int64, request 
 			return netproto.RoleChannelResult{}, authorization.ErrRoleInvalid
 		}
 		if request.SetPassword {
+			// Storage re-checks this inside its transaction; refusing here
+			// skips the password hash for a request that cannot succeed.
+			if request.Password != "" && s.deps.State != nil {
+				if ch, found := s.deps.State.GetChannel(request.ChannelID); found && ch.TextOnly {
+					return netproto.RoleChannelResult{}, authorization.ErrRoleInvalid
+				}
+			}
 			err := s.withRolePolicy(ctx, func(ctx context.Context) error {
 				if validate != nil {
 					if err := validate(ctx); err != nil {

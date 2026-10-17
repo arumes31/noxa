@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"net"
+	"slices"
 	"testing"
 	"time"
 
+	"noxa/internal/auth"
 	"noxa/internal/authorization"
 	"noxa/internal/filetransfer"
 	"noxa/internal/netproto"
@@ -176,7 +178,6 @@ func TestConversationFoldersStayOutOfFileManagement(t *testing.T) {
 	}{
 		{netproto.MsgFileList, netproto.FileList{Folder: testGroupFolder}},
 		{netproto.MsgFileVersions, netproto.FileVersions{Folder: testGroupFolder, Name: testGroupBlob}},
-		{netproto.MsgFileDelete, netproto.FileDelete{Folder: testGroupFolder, Name: testGroupBlob}},
 		{netproto.MsgFileRename, netproto.FileRename{Folder: testGroupFolder, Name: testGroupBlob, NewFolder: "docs", NewName: "leak.vcx"}},
 		{netproto.MsgFileRename, netproto.FileRename{Folder: "docs", Name: "shared.txt", NewFolder: testGroupFolder, NewName: testGroupBlob}},
 		{netproto.MsgFileLink, netproto.FileLink{Folder: testGroupFolder, Name: testGroupBlob}},
@@ -186,8 +187,8 @@ func TestConversationFoldersStayOutOfFileManagement(t *testing.T) {
 	}
 	ft.mu.Lock()
 	defer ft.mu.Unlock()
-	if len(ft.deleted) != 0 || len(ft.moved) != 0 || len(ft.renamed) != 0 {
-		t.Fatalf("group file mutated: deleted=%v moved=%v renamed=%v", ft.deleted, ft.moved, ft.renamed)
+	if len(ft.moved) != 0 || len(ft.renamed) != 0 {
+		t.Fatalf("group file mutated: moved=%v renamed=%v", ft.moved, ft.renamed)
 	}
 }
 
@@ -221,5 +222,165 @@ func TestConversationFileGrantIgnoresChecksOverlappingRevocation(t *testing.T) {
 	access.grant("user-uid", testGroupID, now, access.epoch())
 	if !access.cached("user-uid", testGroupID, now) || access.cached("user-uid", testGroupID, now.Add(conversationFileAccessTTL)) {
 		t.Fatal("fresh grant not cached for exactly its TTL")
+	}
+}
+
+func deleteGroupFile(t *testing.T, conn net.Conn, folder, name string) {
+	t.Helper()
+	send(t, conn, netproto.MsgFileDelete, netproto.FileDelete{Folder: folder, Name: name, AckRequested: true})
+}
+
+// TestConversationFileDeleteAllowsUploaderMembersAndModerators pins who may
+// remove a group attachment: its uploader while still an accepted member, or
+// a holder of ManageFiles (moderation). Everyone else is refused, so an
+// uploader is never stuck with a file counting against their quota while the
+// group lives, and abusive content can still be taken down.
+func TestConversationFileDeleteAllowsUploaderMembersAndModerators(t *testing.T) {
+	// user-uid is the policy owner (ManageFiles through the owner bypass) and
+	// deliberately NOT a group member; admin-uid is a plain accepted member.
+	env, _, ft := conversationFilesTestEnv(t,
+		netproto.ConversationMember{UniqueID: "admin-uid", JoinedEpoch: 1},
+		netproto.ConversationMember{UniqueID: "third-uid", Pending: true, JoinedEpoch: 1},
+	)
+	defer env.stop()
+	env.auth.passwords["third-uid"] = "pw"
+	env.auth.users["third-uid"] = &auth.User{ID: 3, UniqueID: "third-uid", Nickname: "third"}
+	const (
+		memberBlob  = "11111111111111111111111111111111.vcx"
+		otherBlob   = "22222222222222222222222222222222.vcx"
+		pendingBlob = "33333333333333333333333333333333.vcx"
+	)
+	ft.mu.Lock()
+	ft.files = []store.FileRecord{
+		{Name: memberBlob, Folder: testGroupFolder, Uploader: "admin-uid"},
+		{Name: otherBlob, Folder: testGroupFolder, Uploader: "user-uid"},
+		{Name: pendingBlob, Folder: testGroupFolder, Uploader: "third-uid"},
+	}
+	ft.mu.Unlock()
+	member, _ := dialAuthed(t, env.addr, "admin-uid")
+	defer func() { _ = member.Close() }()
+	moderator, _ := dialAuthed(t, env.addr, "user-uid")
+	defer func() { _ = moderator.Close() }()
+	pending, _ := dialAuthed(t, env.addr, "third-uid")
+	defer func() { _ = pending.Close() }()
+
+	// A member cannot delete someone else's attachment.
+	deleteGroupFile(t, member, testGroupFolder, otherBlob)
+	expectDenied(t, member, "member deleting another uploader's file")
+	// An uploader who is not an accepted member (pending, left, removed)
+	// cannot either: current membership is required, as for transfers.
+	deleteGroupFile(t, pending, testGroupFolder, pendingBlob)
+	expectDenied(t, pending, "non-member uploader")
+	// Non-canonical aliases never authorize, not even for moderators.
+	deleteGroupFile(t, moderator, "Private-Groups/"+testGroupID, otherBlob)
+	expectDenied(t, moderator, "non-canonical folder")
+
+	deleteGroupFile(t, member, testGroupFolder, memberBlob)
+	readOfType(t, member, netproto.MsgFileMutationSaved)
+	deleteGroupFile(t, moderator, testGroupFolder, pendingBlob)
+	readOfType(t, moderator, netproto.MsgFileMutationSaved)
+
+	ft.mu.Lock()
+	defer ft.mu.Unlock()
+	want := []string{testGroupFolder + "/" + memberBlob, testGroupFolder + "/" + pendingBlob}
+	if !slices.Equal(ft.deleted, want) {
+		t.Fatalf("deleted=%v want %v", ft.deleted, want)
+	}
+}
+
+// TestConversationGroupDeletionRemovesItsFiles pins reclamation: the change
+// that deletes a group (its last member leaving) removes the group's whole
+// attachment folder, so those files stop counting against uploader quotas.
+func TestConversationGroupDeletionRemovesItsFiles(t *testing.T) {
+	env, chat, ft := conversationFilesTestEnv(t,
+		netproto.ConversationMember{UniqueID: "user-uid", JoinedEpoch: 1},
+		netproto.ConversationMember{UniqueID: "admin-uid", JoinedEpoch: 1},
+	)
+	defer env.stop()
+	ft.mu.Lock()
+	ft.files = []store.FileRecord{{Name: testGroupBlob, Folder: testGroupFolder, Uploader: "admin-uid"}}
+	ft.mu.Unlock()
+	owner, _ := dialAuthed(t, env.addr, "user-uid")
+	defer func() { _ = owner.Close() }()
+	member, _ := dialAuthed(t, env.addr, "admin-uid")
+	defer func() { _ = member.Close() }()
+
+	revision := func() int64 {
+		chat.groupMu.Lock()
+		defer chat.groupMu.Unlock()
+		return chat.group.Revision
+	}
+	send(t, member, netproto.MsgConversationRequest, netproto.ConversationRequest{Action: "leave", ID: testGroupID, Revision: revision()})
+	readOfType(t, member, netproto.MsgConversationResult)
+	ft.mu.Lock()
+	kept := len(ft.foldersDeleted) == 0 && len(ft.files) == 1
+	ft.mu.Unlock()
+	if !kept {
+		t.Fatal("a leave that keeps the group removed its files")
+	}
+
+	send(t, owner, netproto.MsgConversationRequest, netproto.ConversationRequest{Action: "leave", ID: testGroupID, Revision: revision()})
+	readOfType(t, owner, netproto.MsgConversationResult)
+	ft.mu.Lock()
+	defer ft.mu.Unlock()
+	if !slices.Equal(ft.foldersDeleted, []string{testGroupFolder}) || len(ft.files) != 0 {
+		t.Fatalf("group deletion left files: folders=%v files=%+v", ft.foldersDeleted, ft.files)
+	}
+}
+
+// TestConversationFileDenialDoesNotInvalidateMembersGrants pins that a
+// non-member probing group folders cannot bump the global revocation epoch
+// and so cannot defeat every member's grant cache (database load).
+func TestConversationFileDenialDoesNotInvalidateMembersGrants(t *testing.T) {
+	env, _, _ := conversationFilesTestEnv(t, netproto.ConversationMember{UniqueID: "user-uid", JoinedEpoch: 1})
+	defer env.stop()
+	outsider, _ := dialAuthed(t, env.addr, "admin-uid")
+	defer func() { _ = outsider.Close() }()
+
+	before := env.srv.conversationFiles.epoch()
+	for range 3 {
+		send(t, outsider, netproto.MsgFileTransferInit, netproto.FileTransferInit{Direction: "download", Folder: testGroupFolder, Name: testGroupBlob})
+		expectDenied(t, outsider, "outsider download")
+	}
+	if after := env.srv.conversationFiles.epoch(); after != before {
+		t.Fatalf("plain denials bumped the revocation epoch %d -> %d", before, after)
+	}
+
+	var access conversationFileAccess
+	now := time.Now()
+	epoch := access.epoch()
+	access.forget("outsider", testGroupID) // not cached: no epoch change
+	access.grant("member", testGroupID, now, epoch)
+	if !access.cached("member", testGroupID, now) {
+		t.Fatal("an unrelated denial discarded a member's grant")
+	}
+	// A denial that contradicts a cached grant still revokes it and fences
+	// checks that overlapped it.
+	epoch = access.epoch()
+	access.forget("member", testGroupID)
+	access.grant("member", testGroupID, now, epoch)
+	if access.cached("member", testGroupID, now) {
+		t.Fatal("contradicted grant survived")
+	}
+}
+
+// TestConversationGuardFailsClosedWithoutFolder pins that a scope-0 guard
+// call that does not name its folder cannot reach group storage by default.
+func TestConversationGuardFailsClosedWithoutFolder(t *testing.T) {
+	env, _, _ := conversationFilesTestEnv(t, netproto.ConversationMember{UniqueID: "user-uid", JoinedEpoch: 1})
+	defer env.stop()
+	conn, sessionID := dialAuthed(t, env.addr, "user-uid")
+	defer func() { _ = conn.Close() }()
+	client, ok := env.srv.clientByID(sessionID)
+	if !ok {
+		t.Fatal("session missing")
+	}
+	principal := filetransfer.Principal{UserID: client.userID(), SessionID: sessionID}
+	effect := func(context.Context) error { return nil }
+	if err := env.srv.guardRoleFileTransfer(t.Context(), principal, 0, "download", effect); !errors.Is(err, filetransfer.ErrAccessRevoked) {
+		t.Fatalf("folderless scope-0 guard call allowed: %v", err)
+	}
+	if err := env.srv.guardRoleFileTransfer(filetransfer.WithTransferFolder(t.Context(), testGroupFolder), principal, 0, "download", effect); err != nil {
+		t.Fatalf("member guard with folder: %v", err)
 	}
 }

@@ -21,6 +21,7 @@ type receiptTestStore struct {
 	mu     sync.Mutex
 	shared []string // "uid:id:message"
 	marked []string
+	seen   map[string]int64 // uid -> shared position
 }
 
 func (r *receiptTestStore) MarkConversationRead(_ context.Context, uid, id string, messageID int64) error {
@@ -30,16 +31,22 @@ func (r *receiptTestStore) MarkConversationRead(_ context.Context, uid, id strin
 	return nil
 }
 
-func (r *receiptTestStore) ShareConversationRead(_ context.Context, uid, id string, messageID int64) ([]string, int64, error) {
+func (r *receiptTestStore) ShareConversationRead(_ context.Context, uid, id string, messageID int64) ([]string, int64, bool, error) {
 	r.groupMu.Lock()
 	group := r.group
 	r.groupMu.Unlock()
 	member, found := group.Member(uid)
 	if !found || member.Pending || id != group.ID {
-		return nil, 0, netproto.ErrConversationDenied
+		return nil, 0, false, netproto.ErrConversationDenied
 	}
 	r.mu.Lock()
 	r.shared = append(r.shared, uid)
+	if r.seen == nil {
+		r.seen = map[string]int64{}
+	}
+	previous := r.seen[uid]
+	position := max(previous, messageID)
+	r.seen[uid] = position
 	r.mu.Unlock()
 	var audience []string
 	for _, m := range group.Members {
@@ -47,7 +54,7 @@ func (r *receiptTestStore) ShareConversationRead(_ context.Context, uid, id stri
 			audience = append(audience, m.UniqueID)
 		}
 	}
-	return audience, messageID, nil
+	return audience, position, position > previous, nil
 }
 
 // activityTestEnv starts a server whose private group has owner user-uid,
@@ -217,9 +224,22 @@ func TestConversationReadReceiptsAreSharedOnlyOnRequest(t *testing.T) {
 	}
 	expectNoEvent(t, invited, eventConversationRead)
 	expectNoEvent(t, member, eventConversationRead)
+
+	// A repeated or older position is persisted as a no-op and relays
+	// nothing: only an advance fans out to the members.
+	for _, position := range []int64{9, 8} {
+		send(t, member, netproto.MsgConversationRequest, netproto.ConversationRequest{Action: "mark_read", ID: activityGroupID, ReadMessageID: position, ShareRead: true})
+		readOfType(t, member, netproto.MsgConversationResult)
+	}
+	expectNoEvent(t, owner, eventConversationRead)
+	send(t, member, netproto.MsgConversationRequest, netproto.ConversationRequest{Action: "mark_read", ID: activityGroupID, ReadMessageID: 11, ShareRead: true})
+	readOfType(t, member, netproto.MsgConversationResult)
+	if err := json.Unmarshal(readEventOfType(t, owner, eventConversationRead), &event); err != nil || event.MessageID != 11 {
+		t.Fatalf("advanced read event=%+v err=%v", event, err)
+	}
 	store.mu.Lock()
 	defer store.mu.Unlock()
-	if !slices.Equal(store.marked, []string{"admin-uid"}) || !slices.Equal(store.shared, []string{"admin-uid"}) {
+	if !slices.Equal(store.marked, []string{"admin-uid"}) || len(store.shared) != 4 {
 		t.Fatalf("private=%v shared=%v", store.marked, store.shared)
 	}
 }

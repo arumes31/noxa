@@ -351,3 +351,56 @@ func TestDeleteChannelDataRetriesTransientAndLaterPermanentFailure(t *testing.T)
 		t.Fatalf("channel directory survived successful retry: %v", err)
 	}
 }
+
+func TestDeleteFolderRemovesRecordsBlobsAndPendingTokens(t *testing.T) {
+	ctx := context.Background()
+	rootDir := t.TempDir()
+	const folder = "private-groups/ce7189ed-d3d5-442b-b147-241ea9cb3fb9"
+	groupDir := filepath.Join(rootDir, "0", filepath.FromSlash(folder))
+	keptDir := filepath.Join(rootDir, "0", "docs")
+	for _, dir := range []string{groupDir, keptDir} {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	files := newFakeFileStore()
+	for _, rec := range []store.FileRecord{
+		{ChannelID: 0, Folder: folder, Name: "a.vcx", Size: 3, Uploader: "u"},
+		{ChannelID: 0, Folder: folder, Name: "b.vcx", Size: 3, Uploader: "v"},
+		{ChannelID: 0, Folder: "docs", Name: "keep.txt", Size: 3, Uploader: "u"},
+	} {
+		if err := files.AddFile(ctx, rec); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(rootDir, "0", filepath.FromSlash(rec.Folder), rec.Name), []byte("abc"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s := New(Config{Addr: ":0", RootDir: rootDir}, files, nil)
+	transferID, transferToken, err := s.InitUpload(ctx, 0, folder, "c.vcx", 1, "u", 0)
+	if err != nil {
+		t.Fatalf("InitUpload: %v", err)
+	}
+
+	if err := s.DeleteFolder(ctx, 0, folder); err != nil {
+		t.Fatalf("DeleteFolder: %v", err)
+	}
+	if _, err := os.Stat(groupDir); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("group directory still exists: %v", err)
+	}
+	if left, _ := files.ListFiles(ctx, 0, folder); len(left) != 0 {
+		t.Fatalf("group records kept: %+v", left)
+	}
+	if kept, _ := files.ListFiles(ctx, 0, "docs"); len(kept) != 1 {
+		t.Fatalf("sibling folder touched: %+v", kept)
+	}
+	if _, err := os.Stat(filepath.Join(keptDir, "keep.txt")); err != nil {
+		t.Fatalf("sibling blob removed: %v", err)
+	}
+	if _, err := s.consume(transferToken, transferID); err == nil {
+		t.Fatal("pending upload into the deleted folder survived")
+	}
+	if err := s.DeleteFolder(ctx, 0, ""); err == nil {
+		t.Fatal("scope root deletion accepted")
+	}
+}

@@ -9,7 +9,9 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"go.uber.org/zap"
 
+	"noxa/internal/authorization"
 	"noxa/internal/filetransfer"
 	"noxa/internal/netproto"
 )
@@ -105,6 +107,21 @@ func (c *conversationFileAccess) revoke(uid, group string) {
 	delete(c.granted, conversationAccessKey(uid, group))
 }
 
+// forget drops a cached grant that a fresh membership check just contradicted.
+// Only a key that is actually cached bumps the revocation epoch: a plain
+// denial of a key nobody holds (a non-member probing random group folders)
+// must not invalidate every member's in-flight checks.
+func (c *conversationFileAccess) forget(uid, group string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	key := conversationAccessKey(uid, group)
+	if _, ok := c.granted[key]; !ok {
+		return
+	}
+	c.revocations++
+	delete(c.granted, key)
+}
+
 // conversationMember reports whether uid is an accepted member of group,
 // reading the authoritative store (never a client claim).
 func (s *TCPServer) conversationMember(ctx context.Context, uid, group string) bool {
@@ -143,7 +160,7 @@ func (s *TCPServer) authorizeConversationFile(ctx context.Context, uid, folder, 
 	}
 	epoch := s.conversationFiles.epoch()
 	if !s.conversationMember(ctx, uid, group) {
-		s.conversationFiles.revoke(uid, group)
+		s.conversationFiles.forget(uid, group)
 		return errConversationFileDenied
 	}
 	s.conversationFiles.grant(uid, group, time.Now(), epoch)
@@ -154,8 +171,16 @@ func (s *TCPServer) authorizeConversationFile(ctx context.Context, uid, folder, 
 // the short positive cache so a large download costs at most one membership
 // query every few seconds, while leave/remove revoke at once.
 func (s *TCPServer) guardConversationTransfer(ctx context.Context, client *Client, scope int64) error {
+	if scope != 0 {
+		return nil
+	}
 	folder, ok := filetransfer.TransferFolder(ctx)
-	if !ok || !conversationFolderReserved(scope, folder) {
+	if !ok {
+		// Every scope-0 guard call names its folder. One that does not could
+		// be reaching a reserved group folder, so it fails closed.
+		return filetransfer.ErrAccessRevoked
+	}
+	if !conversationFolderReserved(scope, folder) {
 		return nil
 	}
 	group, valid := conversationFolderID(folder)
@@ -175,6 +200,36 @@ func (s *TCPServer) guardConversationTransfer(ctx context.Context, client *Clien
 }
 
 var errConversationFileDenied = errors.New("private group file unavailable or access denied")
+
+// conversationFileDeleteAllowed gates deleting one group attachment. A holder
+// of ManageFiles on the scope may remove any of them (moderation); otherwise
+// the caller must be a current accepted member, and fileManageAllowed then
+// still requires them to be the file's uploader.
+func (s *TCPServer) conversationFileDeleteAllowed(ctx context.Context, client *Client, scope int64, folder, name string) error {
+	if _, ok := conversationFolderID(folder); !ok {
+		return errConversationFileDenied
+	}
+	if s.roleAllowed(ctx, client, scope, authorization.ManageFiles) {
+		return nil
+	}
+	return s.authorizeConversationFile(ctx, client.UniqueID, folder, "delete", name)
+}
+
+// deleteConversationFiles reclaims a deleted group's attachment folder
+// (records and blobs), so its files stop counting against their uploaders'
+// quota. Failure is logged; the group itself is already gone.
+func (s *TCPServer) deleteConversationFiles(ctx context.Context, group string) {
+	if s.deps == nil || s.deps.FileTransfer == nil {
+		return
+	}
+	folder := conversationFileRoot + "/" + group
+	if _, ok := conversationFolderID(folder); !ok {
+		return
+	}
+	if err := s.deps.FileTransfer.DeleteFolder(ctx, 0, folder); err != nil {
+		s.logger.Warn("removing deleted private group files failed", zap.String("conversation_id", group), zap.Error(err))
+	}
+}
 
 // filterConversationFolders hides group folders from scope-0 listings. Group
 // files are reachable only through the encrypted group messages that name

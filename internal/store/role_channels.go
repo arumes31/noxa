@@ -64,7 +64,7 @@ func (r RoleChannelCreate) valid() bool {
 		r.ChannelType >= 0 && r.ChannelType <= 2 && r.MaxClients >= 0 && r.MaxClients <= 2_147_483_647 &&
 		r.OpusBitrate >= 0 && r.OpusBitrate <= 510_000 && r.OrderIndex >= -2_147_483_648 && r.OrderIndex <= 2_147_483_647 &&
 		r.SlowModeSeconds >= 0 && r.SlowModeSeconds <= 2_147_483_647 && validChannelText(r.Topic) && validChannelText(r.Description) &&
-		(!r.TextOnly || r.ChannelType != 0)
+		(!r.TextOnly || (r.ChannelType != 0 && r.PasswordHash == ""))
 }
 
 // PostgreSQL text rejects NUL even though it is valid UTF-8. Reject it as
@@ -162,7 +162,15 @@ func (s *Store) changeRoleChannel(ctx context.Context, actorID int64, change aut
 			change.ChannelID, settings.Name, settings.Topic, settings.Description, settings.OrderIndex, settings.MaxClients, settings.SlowModeSeconds,
 			settings.OpusBitrate, settings.OpusFEC, settings.OpusDTX, settings.OpusStereo)
 		if err == nil && settings.PasswordHash != nil {
-			_, err = tx.ExecContext(ctx, `UPDATE channels SET password_hash=$2 WHERE id=$1`, change.ChannelID, *settings.PasswordHash)
+			// Text channels are reached through chat subscriptions, which never
+			// check a password, so one would only pretend to protect them.
+			var res sql.Result
+			res, err = tx.ExecContext(ctx, `UPDATE channels SET password_hash=$2 WHERE id=$1 AND (NOT text_only OR $2 = '')`, change.ChannelID, *settings.PasswordHash)
+			if err == nil {
+				if n, rowsErr := res.RowsAffected(); rowsErr != nil || n == 0 {
+					return authorization.RolePolicy{}, 0, authorization.ErrRoleInvalid
+				}
+			}
 		}
 	case authorization.ChannelCreate:
 		_, err = tx.ExecContext(ctx, `INSERT INTO channels

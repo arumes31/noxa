@@ -55,19 +55,19 @@ func (f *privateCallTestStore) MarkConversationRead(context.Context, string, str
 	return netproto.ErrConversationInvalid
 }
 
-func (f *privateCallTestStore) ChangeConversation(_ context.Context, uid string, request netproto.ConversationRequest) ([]string, error) {
+func (f *privateCallTestStore) ChangeConversation(_ context.Context, uid string, request netproto.ConversationRequest) ([]string, bool, error) {
 	f.groupMu.Lock()
 	defer f.groupMu.Unlock()
 	next, err := netproto.ChangeConversation(f.group, uid, request)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	uids := []string{}
 	for _, member := range f.group.Members {
 		uids = append(uids, member.UniqueID)
 	}
 	f.group = next
-	return uids, nil
+	return uids, len(next.Members) == 0, nil
 }
 
 func (f *privateCallTestStore) WithConversations(_ context.Context, uid string, request netproto.ConversationRequest, deliver func(netproto.ConversationResult) error) error {

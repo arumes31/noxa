@@ -128,9 +128,9 @@ func TestConversationSharedReadReceipts(t *testing.T) {
 	if got := seen("owner", "member"); got != 0 {
 		t.Fatalf("private read shared: %d", got)
 	}
-	audience, position, err := s.ShareConversationRead(t.Context(), "member", c.ID, second)
-	if err != nil || position != second || !slices.Equal(audience, []string{"owner"}) {
-		t.Fatalf("share: audience=%v position=%d err=%v", audience, position, err)
+	audience, position, advanced, err := s.ShareConversationRead(t.Context(), "member", c.ID, second)
+	if err != nil || position != second || !advanced || !slices.Equal(audience, []string{"owner"}) {
+		t.Fatalf("share: audience=%v position=%d advanced=%v err=%v", audience, position, advanced, err)
 	}
 	if got := seen("owner", "member"); got != second {
 		t.Fatalf("owner sees member at %d, want %d", got, second)
@@ -138,21 +138,25 @@ func TestConversationSharedReadReceipts(t *testing.T) {
 	if got := conversationTestRead(t, s, "member", netproto.ConversationRequest{Action: "get", ID: c.ID}).Conversations[0]; got.ReadMessageID != second || got.UnreadCount != 0 {
 		t.Fatalf("shared read did not advance the private cursor: %+v", got)
 	}
-	// Receipts never move backwards.
-	if _, position, err := s.ShareConversationRead(t.Context(), "member", c.ID, first); err != nil || position != second {
-		t.Fatalf("receipt regressed to %d (%v)", position, err)
+	// Receipts never move backwards, and a repeat or older mark_read reports
+	// no advance, so the server has nothing to relay.
+	if _, position, advanced, err := s.ShareConversationRead(t.Context(), "member", c.ID, first); err != nil || position != second || advanced {
+		t.Fatalf("receipt regressed to %d advanced=%v (%v)", position, advanced, err)
+	}
+	if _, position, advanced, err := s.ShareConversationRead(t.Context(), "member", c.ID, second); err != nil || position != second || advanced {
+		t.Fatalf("repeated receipt: position=%d advanced=%v (%v)", position, advanced, err)
 	}
 	// A pending invitee neither shares nor sees receipts.
 	c = conversationTestChange(t, s, c, "owner", "invite", "third")
 	if got := seen("third", "member"); got != 0 {
 		t.Fatalf("invitee saw a receipt: %d", got)
 	}
-	if _, _, err := s.ShareConversationRead(t.Context(), "third", c.ID, second); !errors.Is(err, netproto.ErrConversationDenied) {
+	if _, _, _, err := s.ShareConversationRead(t.Context(), "third", c.ID, second); !errors.Is(err, netproto.ErrConversationDenied) {
 		t.Fatalf("invitee shared a receipt: %v", err)
 	}
 	// Removal drops the member's receipt with the membership row.
 	c = conversationTestChange(t, s, c, "owner", "remove", "member")
-	if _, _, err := s.ShareConversationRead(t.Context(), "member", c.ID, second); !errors.Is(err, netproto.ErrConversationDenied) {
+	if _, _, _, err := s.ShareConversationRead(t.Context(), "member", c.ID, second); !errors.Is(err, netproto.ErrConversationDenied) {
 		t.Fatalf("removed member shared a receipt: %v", err)
 	}
 	c = conversationTestChange(t, s, c, "owner", "invite", "member")

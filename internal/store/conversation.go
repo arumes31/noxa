@@ -76,23 +76,26 @@ func (s *Store) CreateConversation(ctx context.Context, uid, name string) (_ net
 	return c, tx.Commit()
 }
 
-func (s *Store) ChangeConversation(ctx context.Context, uid string, request netproto.ConversationRequest) (_ []string, retErr error) {
+// ChangeConversation applies one membership/metadata change. deleted reports
+// that the change removed the last member and with it the whole group, so the
+// caller can reclaim resources bound to the group (its attachment folder).
+func (s *Store) ChangeConversation(ctx context.Context, uid string, request netproto.ConversationRequest) (_ []string, deleted bool, retErr error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	defer rollbackRoleTx(tx, &retErr)
 	current, err := lockConversation(ctx, tx, request.ID, true)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	next, err := netproto.ChangeConversation(current, uid, request)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	if request.Action == "invite" {
 		if err := conversationQuota(ctx, tx, request.Target); err != nil {
-			return nil, err
+			return nil, false, err
 		}
 	}
 	recipients := make([]string, 0, len(current.Members)+1)
@@ -102,7 +105,8 @@ func (s *Store) ChangeConversation(ctx context.Context, uid string, request netp
 	if request.Action == "invite" {
 		recipients = append(recipients, request.Target)
 	}
-	if len(next.Members) == 0 {
+	deleted = len(next.Members) == 0
+	if deleted {
 		_, err = tx.ExecContext(ctx, `DELETE FROM private_conversations WHERE id=$1`, current.ID)
 	} else {
 		_, err = tx.ExecContext(ctx, `UPDATE private_conversations SET name=$2,owner_uid=$3,revision=$4,epoch=$5 WHERE id=$1`, next.ID, next.Name, next.Owner, next.Revision, next.Epoch)
@@ -120,9 +124,12 @@ func (s *Store) ChangeConversation(ctx context.Context, uid string, request netp
 		}
 	}
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
-	return recipients, tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return nil, false, err
+	}
+	return recipients, deleted, nil
 }
 
 // WithConversations holds membership locks until the bounded socket write

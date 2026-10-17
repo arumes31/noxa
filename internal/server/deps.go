@@ -139,6 +139,9 @@ type FileTransferBackend interface {
 	ListFileFolders(ctx context.Context, channelID int64) ([]string, error)
 	ListFileVersions(ctx context.Context, channelID int64, folder, name string) ([]store.FileRecord, error)
 	DeleteFile(ctx context.Context, channelID int64, folder, name string) error
+	// DeleteFolder removes every file of one folder (records and blobs). It
+	// skips per-file ownership checks; the caller authorizes the cleanup.
+	DeleteFolder(ctx context.Context, channelID int64, folder string) error
 	RenameFile(ctx context.Context, channelID int64, folder, name, newFolder, newName string) error
 	// MoveFile relocates a file, possibly into another channel (262). The
 	// caller checks permissions on the source AND the destination.
