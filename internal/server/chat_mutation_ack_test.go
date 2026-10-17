@@ -139,7 +139,14 @@ func TestChatMutationAcknowledgementFollowsStorage(t *testing.T) {
 				var msg any
 				switch kind {
 				case netproto.MsgChatEdit:
-					msg = netproto.ChatEdit{AckRequested: ack, MessageID: id, NewText: "changed"}
+					// Edits are sealed like sends; plaintext is never accepted.
+					edit := netproto.ChatEdit{AckRequested: ack, MessageID: id, NewText: "opaque", Enc: true, KeyID: 1}
+					if outcome != "denied" {
+						pub, priv := testX25519(t)
+						gk := publishKey(t, conn, pub)
+						edit.NewText, edit.KeyID = sealScopeTest(t, unsealScopeKey(t, gk, pub, priv), "changed"), gk.KeyID
+					}
+					msg = edit
 				case netproto.MsgChatDelete:
 					msg = netproto.ChatDelete{AckRequested: ack, MessageID: id}
 				case netproto.MsgChatPin:

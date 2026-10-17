@@ -357,6 +357,7 @@ type TCPServer struct {
 	chatRate             *chatRateLimiter
 	callSignalRate       *chatRateLimiter
 	conversationReadRate *chatRateLimiter
+	conversationFiles    conversationFileAccess
 	chatSpam             *spamTracker
 	chatSlow             *slowTracker
 	typingRate           *typingTracker

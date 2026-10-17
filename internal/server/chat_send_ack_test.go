@@ -125,15 +125,24 @@ func TestChatSendAcknowledgementFollowsStorage(t *testing.T) {
 				}
 				conn, _ := dialAuthed(t, env.addr, uid)
 				defer func() { _ = conn.Close() }()
-				msg := netproto.ChatSend{Text: "hello", ClientMsgID: "reference", AckRequested: outcome != "unrequested"}
+				// Plaintext is never accepted; a denied sender is refused by
+				// role before its (opaque) ciphertext is examined.
+				msg := netproto.ChatSend{Text: "opaque", Enc: true, KeyID: 1, ClientMsgID: "reference", AckRequested: outcome != "unrequested"}
 				switch scope {
+				case "global":
+					if outcome != "denied" {
+						pub, priv := testX25519(t)
+						gk := publishKey(t, conn, pub)
+						msg.Text, msg.KeyID = sealScopeTest(t, unsealScopeKey(t, gk, pub, priv), "hello"), gk.KeyID
+					}
 				case "channel":
 					env.state.AddChannel(testChannel(1))
 					if outcome != "denied" {
-						pub, _ := testX25519(t)
+						pub, priv := testX25519(t)
 						publishKey(t, conn, pub)
 						send(t, conn, netproto.MsgJoinChannel, netproto.JoinChannel{ChannelID: 1})
-						readChannelKeyFor(t, conn, 1)
+						ck := readChannelKeyFor(t, conn, 1)
+						msg.Text, msg.KeyID = sealScopeTest(t, unsealScopeKey(t, ck, pub, priv), "hello"), ck.KeyID
 					}
 					msg.ChannelID = "1"
 				case "offline":
@@ -253,7 +262,9 @@ func TestChatSendStoredDuplicateAcknowledgement(t *testing.T) {
 	defer env.stop()
 	conn, _ := dialAuthed(t, env.addr, "user-uid")
 	defer func() { _ = conn.Close() }()
-	msg := netproto.ChatSend{AckRequested: true, ClientMsgID: "ref", Text: "hello"}
+	pub, priv := testX25519(t)
+	gk := publishKey(t, conn, pub)
+	msg := netproto.ChatSend{AckRequested: true, ClientMsgID: "ref", Text: sealScopeTest(t, unsealScopeKey(t, gk, pub, priv), "hello"), Enc: true, KeyID: gk.KeyID}
 	var first netproto.ChatAccepted
 	for i := 0; i < 2; i++ {
 		send(t, conn, netproto.MsgChatSend, msg)

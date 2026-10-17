@@ -859,8 +859,8 @@ func (s *TCPServer) handleChatEdit(ctx context.Context, client *Client, f *netpr
 	if s.deps == nil || s.deps.Chat == nil {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "chat store unavailable")
 	}
-	if !msg.Enc && (s.cfg == nil || !s.cfg.ChatAllowPlaintext) {
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, "plaintext chat is disabled on this server — update your client (chat encryption is mandatory)")
+	if !msg.Enc {
+		return s.sendErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, errPlaintextChat)
 	}
 	stored, err := s.deps.Chat.GetChatMessage(ctx, msg.MessageID)
 	if err != nil {
@@ -1419,6 +1419,11 @@ func (s *TCPServer) handleEmojiGet(ctx context.Context, client *Client, f *netpr
 // Everything else (server_name, max_clients_override) is machine
 // configuration, not message content, and stays plain.
 func sealedSetting(key string) bool { return key == "motd" || key == "announcement" }
+
+// errPlaintextChat is the refusal for any unencrypted chat body. There is no
+// configuration that admits plaintext chat bodies (chat_allow_plaintext is
+// ignored for message content).
+const errPlaintextChat = "plaintext chat is not allowed — chat messages must be end-to-end or channel encrypted (update your client)"
 
 // serverSetting returns an UNSEALED server setting ("" when unset or no
 // store). Callers must not use it for sealed keys — see serverSettingPlain.

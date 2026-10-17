@@ -264,39 +264,49 @@ func TestKeyBundleTruncationIsNotRefusal(t *testing.T) {
 	}
 }
 
-// TestPlaintextEscapeHatchStillStoresAndRelaysCiphertext verifies the branch
-// where the SERVER is the encryptor: chat_allow_plaintext lets an unencrypted
-// send in, and both the stored row and the relay are still ciphertext (91).
-func TestPlaintextEscapeHatchStillStoresAndRelaysCiphertext(t *testing.T) {
+// TestPlaintextChatRefusedEvenWithEscapeHatch verifies that no configuration
+// admits a plaintext chat body: the harness still sets chat_allow_plaintext,
+// yet plaintext channel, global and direct sends and plaintext edits are all
+// refused, nothing is stored and nothing is relayed.
+func TestPlaintextChatRefusedEvenWithEscapeHatch(t *testing.T) {
 	const canary = "canary-7f3a"
 	env := startTestEnv(t, nil) // the harness sets ChatAllowPlaintext
 	defer env.stop()
-	alice, bob, key, _, _ := chatPair(t, env)
+	if !env.srv.cfg.ChatAllowPlaintext {
+		t.Fatal("fixture no longer exercises the legacy escape hatch")
+	}
+	alice, bob, key, keyID, _ := chatPair(t, env)
 	defer func() { _ = alice.Close() }()
 	defer func() { _ = bob.Close() }()
-
-	send(t, bob, netproto.MsgChatSend, netproto.ChatSend{ChannelID: "1", Text: canary})
-	data := readEventOfType(t, alice, eventChat)
-	var chat netproto.ChatBroadcast
-	if err := json.Unmarshal(data, &chat); err != nil {
-		t.Fatalf("unmarshal chat: %v", err)
+	sendEncChat(t, alice, key, keyID, "1", "sealed original")
+	original := readEventOfType(t, bob, eventChat)
+	readEventOfType(t, alice, eventChat) // the sender's own echo
+	var stored netproto.ChatBroadcast
+	if err := json.Unmarshal(original, &stored); err != nil {
+		t.Fatal(err)
 	}
-	if !chat.Enc || chat.KeyID == 0 {
-		t.Fatalf("relay enc/key = %v/%d, want true and a real generation", chat.Enc, chat.KeyID)
+	before := env.chat.messageCount()
+	for _, request := range []struct {
+		kind netproto.MessageType
+		body any
+	}{
+		{netproto.MsgChatSend, netproto.ChatSend{ChannelID: "1", Text: canary}},
+		{netproto.MsgChatSend, netproto.ChatSend{Text: canary}},
+		{netproto.MsgChatSend, netproto.ChatSend{ToUniqueID: "admin-uid", Text: canary}},
+		{netproto.MsgChatEdit, netproto.ChatEdit{MessageID: stored.ID, NewText: canary}},
+	} {
+		send(t, bob, request.kind, request.body)
+		if got := readError(t, bob); got.Code != errCodePermissionDenied || !strings.Contains(got.Message, "plaintext chat is not allowed") {
+			t.Fatalf("%s plaintext: %+v", request.kind, got)
+		}
 	}
-	if chat.Text == canary {
-		t.Fatal("the relay fanned out plaintext")
+	if env.chat.messageCount() != before {
+		t.Fatalf("plaintext stored: %d -> %d", before, env.chat.messageCount())
 	}
-	if got := openScopeTest(t, key, chat.Text); got != canary {
-		t.Fatalf("relayed ciphertext opens to %q, want %q", got, canary)
+	if message, err := env.chat.GetChatMessage(t.Context(), stored.ID); err != nil || message.BodyEnc != stored.Text {
+		t.Fatalf("plaintext edit changed the row: %+v %v", message, err)
 	}
-	stored, err := env.chat.GetChatMessage(t.Context(), chat.ID)
-	if err != nil || stored == nil {
-		t.Fatalf("stored message lookup: %v", err)
-	}
-	if stored.BodyEnc != chat.Text || stored.KeyID != chat.KeyID {
-		t.Fatalf("stored row = %+v, want the relayed ciphertext", stored)
-	}
+	expectNoEvent(t, alice, eventChat)
 }
 
 // TestStorageFailureIsNotRelayed verifies a storage error fails the send:
@@ -1122,7 +1132,9 @@ func TestEmojiUpload(t *testing.T) {
 // extra frame and no ordering rule (133).
 func TestMOTDSealedInAuthResponse(t *testing.T) {
 	const canary = "canary-7f3a"
-	env := startTestEnvFull(t, nil, func(c *config.Config) { c.ChatAllowPlaintext = false })
+	// The legacy escape hatch is on: it must no longer hand a keyless client
+	// a plaintext MOTD.
+	env := startTestEnvFull(t, nil, func(c *config.Config) { c.ChatAllowPlaintext = true })
 	defer env.stop()
 	if err := env.srv.setServerSettingAndAnnounce(t.Context(), "motd", canary, "test"); err != nil {
 		t.Fatalf("set motd: %v", err)

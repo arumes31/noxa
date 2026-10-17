@@ -24,7 +24,9 @@ const maxChatBytes = 16 * 1024
 // direct message to an online connection by client ID (echoed back to the
 // sender), or a global message to all clients.
 //
-// Encryption (4b): plaintext is rejected unless chat_allow_plaintext is set.
+// Encryption (4b): plaintext is always rejected. chat_allow_plaintext no longer
+// admits plaintext chat bodies; every send is a scope (client→server→client)
+// or E2E ciphertext.
 // For encrypted messages the server validates the scope key id (channel and
 // global scopes only; direct messages are true E2EE and unverifiable by
 // design) and the ciphertext size — it cannot read the body.
@@ -54,8 +56,8 @@ func (s *TCPServer) sendSessionChat(ctx context.Context, client *Client, f *netp
 	if len(msg.Text) > maxChatBytes {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "chat message too large")
 	}
-	if !msg.Enc && !s.cfg.ChatAllowPlaintext {
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, "plaintext chat is disabled on this server — update your client (chat encryption is mandatory)")
+	if !msg.Enc {
+		return s.sendErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, errPlaintextChat)
 	}
 	if msg.Enc && msg.KeyID == 0 && msg.ChannelID != "" {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "channel chat requires a scope key id")
