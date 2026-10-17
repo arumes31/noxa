@@ -1071,11 +1071,18 @@ func (m *connManager) decryptChatEvent(data json.RawMessage, payload string) str
 	return rewrapChat("chat", chat, payload)
 }
 
+// dmModeDowngraded marks an opened server-encrypted DM from a peer with
+// end-to-end history. It is never a verified mode: enc_verified stays false
+// wherever it appears (live event, stored record, search, export).
+const dmModeDowngraded = "downgraded"
+
 // flagDowngradedDM withdraws the shield from a server-encrypted DM whose
 // peer this client knows to have end-to-end history (or a cached key): that
 // conversation should never arrive server-readable, and the server could have
-// written the body itself. Unverified, the renderer shows the warning badge.
-// Only in-memory evidence is consulted; this runs on the read loop.
+// written the body itself. The body was opened with the server key, so it is
+// shown, but unverified under the "downgraded" warning badge; an unopened
+// placeholder keeps no mode. Only in-memory evidence is consulted; this runs
+// on the read loop.
 func (m *connManager) flagDowngradedDM(chat *netproto.ChatBroadcast) {
 	m.mu.Lock()
 	ownUID := m.uniqueID
@@ -1085,7 +1092,11 @@ func (m *connManager) flagDowngradedDM(chat *netproto.ChatBroadcast) {
 		peer = chat.ToUniqueID
 	}
 	if m.knownE2EPeer(peer, false) {
-		chat.EncVerified, chat.EncMode = false, ""
+		mode := ""
+		if chat.EncVerified {
+			mode = dmModeDowngraded
+		}
+		chat.EncVerified, chat.EncMode = false, mode
 	}
 }
 

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { encryptionBadge, UNOPENED_BODIES } from "../src/message-encryption.js";
+import { DOWNGRADED, encModeFrom, encryptionBadge, UNOPENED_BODIES } from "../src/message-encryption.js";
 
 const kind = (m) => encryptionBadge(m).kind;
 
@@ -43,4 +43,25 @@ test("sealed and refused placeholders always draw the warning", () => {
         }
     }
     assert.equal(encryptionBadge({ text: "[refused: server sent plaintext history]", enc: true }).bodyKey, "chat.plaintextRefused");
+});
+
+test("a downgraded DM shows its body under a warning, never verified", () => {
+    const downgraded = { text: "hi", direct: true, enc: false, encVerified: false, encMode: DOWNGRADED, localUnverified: true };
+    assert.deepEqual(encryptionBadge(downgraded), { kind: "warning", label: "chat.downgradedHelp", bodyKey: "" });
+    // Stale legacy flags never lift it to a lock or shield.
+    assert.equal(kind({ ...downgraded, enc: true, e2e: true }), "warning");
+    // A placeholder still reads as sealed, not as a downgraded body.
+    assert.equal(encryptionBadge({ ...downgraded, text: "[encrypted message — key unavailable]" }).label, "chat.encryptedHelp");
+    assert.equal(kind({ ...downgraded, deleted: true }), "");
+});
+
+test("encModeFrom pairs each mode with its verification state", () => {
+    assert.equal(encModeFrom(true, "e2e"), "e2e");
+    assert.equal(encModeFrom(true, "server"), "server");
+    assert.equal(encModeFrom(true, "downgraded"), "");
+    assert.equal(encModeFrom(true, "bogus"), "");
+    assert.equal(encModeFrom(false, "downgraded"), "downgraded");
+    assert.equal(encModeFrom(false, "e2e"), "");
+    assert.equal(encModeFrom(false, "server"), "");
+    assert.equal(encModeFrom(false, undefined), "");
 });

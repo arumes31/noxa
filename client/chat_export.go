@@ -125,6 +125,8 @@ func chatExportLine(m netproto.ChatHistoryEntry, mode string) string {
 			tag = "[end-to-end encrypted] "
 		case "server":
 			tag = "[server encrypted] "
+		case dmModeDowngraded:
+			tag = "[unverified: server encrypted, contact normally end-to-end] "
 		default:
 			tag = "[unverified] "
 		}

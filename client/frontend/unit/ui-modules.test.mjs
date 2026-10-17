@@ -397,6 +397,33 @@ test("frontend UI module behaviors", { concurrency: false }, async (t) => {
         assert.doesNotMatch(source, /matchKeyword\(m\.text/);
     });
 
+    await t.test("chat keeps a downgraded DM unverified live, after reload and in search", async (t) => {
+        replaceGlobal(t, "window", { __noxa: { state: { myNickname: "Dan" } } });
+        const chat = await import("../src/chat-ui.js");
+        const { encryptionBadge } = await import("../src/message-encryption.js");
+        const { conversationEncryption } = await import("../src/dm-model.js");
+        const live = chat.normalize({ direct: true, text: "raid at 8", from: "Mia", from_unique_id: "u-mia", enc_mode: "downgraded" });
+        assert.equal(live.encVerified, false);
+        assert.equal(live.encMode, "downgraded");
+        assert.deepEqual(encryptionBadge(live), { kind: "warning", label: "chat.downgradedHelp", bodyKey: "" });
+        // The body is shown (it was opened with the server key), never as verified.
+        assert.equal(chat.notificationLine(live), "Mia: raid at 8");
+        assert.equal(chat.keywordText(live), "");
+        assert.equal(conversationEncryption({ last: live }).kind, "warning");
+        assert.equal(conversationEncryption({ last: live }).helpKey, "chat.downgradedHelp");
+        // A forged verified pair never becomes downgraded-verified or verified-e2e.
+        assert.equal(chat.normalize({ direct: true, text: "x", enc_verified: true, enc_mode: "downgraded" }).encMode, "");
+        // Reload from the local log draws the same badge.
+        const stored = chat.directMessageFromEntry({ from_unique_id: "u-mia", from_nickname: "Mia", body: "raid at 8", sent_at: 5, enc_mode: "downgraded" });
+        assert.equal(stored.encVerified, false);
+        assert.equal(stored.encMode, "downgraded");
+        assert.equal(encryptionBadge(stored).label, "chat.downgradedHelp");
+        const source = await (await import("node:fs/promises")).readFile(new URL("../src/chat-ui.js", import.meta.url), "utf8");
+        // The local log keeps the mode, and search hits map it the same way.
+        assert.match(source, /enc_mode: m\.encVerified \? m\.encMode : encModeFrom\(false, m\.encMode\)/);
+        assert.match(source, /encMode: encModeFrom\(verified, r\.enc_mode\)/);
+    });
+
     await t.test("chat replaces an unopened copy with a later verified copy", async (t) => {
         const changed = [];
         replaceGlobal(t, "window", { __noxa: { state: { myNickname: "Dan" } } });

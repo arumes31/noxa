@@ -26,7 +26,7 @@ import { closeDiscussions, initDiscussions, openDiscussions, renderForumChannel,
 import { closeConversations, initConversations, isPrivateGroupActive, openConversationsAt, resetConversations, viewedConversationID } from "./conversations.js";
 import { QUICK_SWITCH_SETTINGS } from "./shell-model.js";
 import { sessionUserID } from "./session-identity.js";
-import { encryptionBadge, UNOPENED_BODIES } from "./message-encryption.js";
+import { DOWNGRADED, encModeFrom, encryptionBadge, UNOPENED_BODIES } from "./message-encryption.js";
 import { chatEnglish } from "./chat-messages.js";
 import { renderMarkdown, escapeHTML, EMOJI } from "./markdown.js";
 import { pickIcon } from "./image-tools.js";
@@ -464,7 +464,7 @@ function normalize(d, chID) {
         // exactly like one the server handed over in the clear (91-135).
         enc: !!d.enc || !!d.enc_verified,
         encVerified: !!d.enc_verified,
-        encMode: d.enc_verified && (d.enc_mode === "e2e" || d.enc_mode === "server") ? d.enc_mode : "",
+        encMode: encModeFrom(!!d.enc_verified, d.enc_mode),
         offline: !!d.offline,
         clientMsgID: d.client_msg_id || "",
         replyToID: Number(d.reply_to_id) || 0,
@@ -2015,7 +2015,7 @@ function dmMsg(e, peerNick) {
         // A verified record without a mode predates the server-encrypted
         // fallback, so it was end-to-end. An unverified legacy record keeps
         // the text the user already saw, under a warning badge.
-        encMode: e.enc_verified ? (e.enc_mode === "server" ? "server" : "e2e") : "",
+        encMode: e.enc_verified ? (e.enc_mode === "server" ? "server" : "e2e") : encModeFrom(false, e.enc_mode),
         localUnverified: !e.enc_verified,
         offline: !!e.offline,
         clientMsgID: e.client_msg_id || "",
@@ -2089,7 +2089,7 @@ function dmRecord(peer, nick, m) {
         client_msg_id: m.clientMsgID,
         offline: m.offline,
         enc_verified: m.encVerified,
-        enc_mode: m.encVerified ? m.encMode : "",
+        enc_mode: m.encVerified ? m.encMode : encModeFrom(false, m.encMode),
     }).then(reportFailure).catch(reportFailure);
 }
 
@@ -2410,10 +2410,11 @@ export function notificationLine(m) {
 // keywordText is the text keyword highlights match against: the same
 // sanitized body previewLine shows (attachment references reduced to their
 // file name, so a keyword never matches inside a storage key), without the
-// 80-character cut. A refused, unopened or deleted body has no user text and
-// matches nothing — not even words of its refusal notice.
+// 80-character cut. A refused, unopened, downgraded or deleted body has no
+// verified user text and matches nothing — not even words of its notice.
 export function keywordText(m) {
-    if (!m || m.deleted || encryptionBadge(m).bodyKey) return "";
+    // A downgraded DM's body is shown but never counts as verified content.
+    if (!m || m.deleted || m.encMode === DOWNGRADED || encryptionBadge(m).bodyKey) return "";
     return String(m.text ?? "")
         .replace(/\[file:([^\]]+)\]/g, (_, capture) => " " + parseFileRef(capture).name + " ")
         .replace(/\s+/g, " ")
@@ -3672,7 +3673,7 @@ function showSearchResults(q, results, scanned, undecryptable, scope) {
         const verified = !!r.enc_verified;
         const hitBadge = encryptionBadgeElement(encryptionBadge({
             text: r.body, direct: scope.kind === "dm", enc: verified, encVerified: verified,
-            encMode: verified && (r.enc_mode === "e2e" || r.enc_mode === "server") ? r.enc_mode : "",
+            encMode: encModeFrom(verified, r.enc_mode),
         }));
         if (hitBadge) meta.appendChild(hitBadge);
         row.onclick = () => {

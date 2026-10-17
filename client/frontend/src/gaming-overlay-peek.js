@@ -6,6 +6,7 @@
 // deleted and blocked senders' messages never peek, and a body that stayed
 // sealed, was refused or arrived as plaintext only ever shows its refusal text.
 import { previewLine } from './dm-model.js';
+import { encModeFrom } from './message-encryption.js';
 import { mentionFlags } from './role-mentions.js';
 
 export const PEEK_LINES = 3;
@@ -52,7 +53,7 @@ export function chatPeekLine(d, env) {
     const message = {
         text: d.text ?? d.body ?? '', deleted: false, self: false, direct, e2e: !!d.e2e,
         enc: !!d.enc || !!d.enc_verified,
-        encMode: d.enc_verified && (d.enc_mode === 'e2e' || d.enc_mode === 'server') ? d.enc_mode : '',
+        encMode: encModeFrom(!!d.enc_verified, d.enc_mode),
     };
     const text = clip(previewLine(message), TEXT_MAX);
     const name = clip(d.from ?? d.from_nickname ?? '?', NAME_MAX);

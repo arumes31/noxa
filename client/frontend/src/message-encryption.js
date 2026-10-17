@@ -16,13 +16,25 @@ export const UNOPENED_BODIES = new Map([
     ["[Message authentication failed]", "chat.decryptFailed"],
 ]);
 
+// DOWNGRADED is the mode the native layer gives an opened server-encrypted
+// DM from a peer with end-to-end history. It is never verified.
+export const DOWNGRADED = "downgraded";
+
+// encModeFrom maps the native enc_verified / enc_mode pair to the local mode:
+// "e2e" or "server" only next to verification, "downgraded" only without it.
+export function encModeFrom(verified, mode) {
+    if (verified) return mode === "e2e" || mode === "server" ? mode : "";
+    return mode === DOWNGRADED ? DOWNGRADED : "";
+}
+
 // encryptionBadge returns { kind, label, bodyKey }:
 //   kind    "lock" | "shield" | "warning" ("" only for a deletion tombstone,
 //           which displays no message content)
 //   label   i18n key for the badge's accessible name and tooltip
 //   bodyKey i18n key that REPLACES the body (refused or sealed), or ""
 //
-// m.encMode is local evidence from the native layer ("e2e" | "server"); the
+// m.encMode is local evidence from the native layer ("e2e" | "server", or
+// the unverified "downgraded"); the
 // legacy flags (e2e, direct+enc, enc) keep older paths badged. A message with
 // none of them was not opened by this client and is refused, except a legacy
 // local DM record (m.localUnverified), whose text the user already saw: it
@@ -31,6 +43,9 @@ export function encryptionBadge(m) {
     if (!m || m.deleted) return { kind: "", label: "", bodyKey: "" };
     const unopened = UNOPENED_BODIES.get(m.text);
     if (unopened) return { kind: "warning", label: "chat.encryptedHelp", bodyKey: unopened };
+    // Opened with the server key although this contact uses end-to-end
+    // encryption: the body is shown, under a warning, never a lock or shield.
+    if (m.encMode === DOWNGRADED) return { kind: "warning", label: "chat.downgradedHelp", bodyKey: "" };
     if (m.encMode === "e2e" || (m.encMode !== "server" && (m.e2e || (m.direct && m.enc)))) {
         return { kind: "lock", label: m.direct ? "chat.directHelp" : "chat.groupHelp", bodyKey: "" };
     }

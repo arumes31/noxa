@@ -154,8 +154,55 @@ func TestServerDMFromKnownE2EPeerIsNotShielded(t *testing.T) {
 	}
 	cm.e2ePeers.record("friend")
 	data := presentedChat(t, cm, chat("friend"))
-	if data["enc_verified"] != nil || data["enc_mode"] != nil || data["direct"] != true {
-		t.Fatalf("downgraded DM still verified: %+v", data)
+	// The body was opened with the server key: it is shown, unverified, under
+	// the "downgraded" mode rather than refused as plaintext.
+	if data["enc_verified"] != nil || data["enc_mode"] != "downgraded" || data["direct"] != true || data["text"] != "dm" {
+		t.Fatalf("downgraded DM = %+v", data)
+	}
+}
+
+// TestFlagDowngradedDMKeepsPlaceholdersModeless: an unopened body is never
+// labelled downgraded, and the flag never verifies anything.
+func TestFlagDowngradedDMKeepsPlaceholdersModeless(t *testing.T) {
+	cm := newTestConnManager()
+	cm.uniqueID = "me"
+	cm.e2ePeers.record("friend")
+	unopened := netproto.ChatBroadcast{Direct: true, FromUniqueID: "friend", ToUniqueID: "me", Text: missingKeyText}
+	cm.flagDowngradedDM(&unopened)
+	if unopened.EncVerified || unopened.EncMode != "" {
+		t.Fatalf("placeholder flagged: %+v", unopened)
+	}
+	own := netproto.ChatBroadcast{Direct: true, FromUniqueID: "me", ToUniqueID: "friend", Text: "hi", EncVerified: true, EncMode: "server"}
+	cm.flagDowngradedDM(&own)
+	if own.EncVerified || own.EncMode != "downgraded" {
+		t.Fatalf("own downgraded echo = %+v", own)
+	}
+	stranger := netproto.ChatBroadcast{Direct: true, FromUniqueID: "stranger", ToUniqueID: "me", Text: "hi", EncVerified: true, EncMode: "server"}
+	cm.flagDowngradedDM(&stranger)
+	if !stranger.EncVerified || stranger.EncMode != "server" {
+		t.Fatalf("stranger lost the shield: %+v", stranger)
+	}
+}
+
+// TestDowngradedDMRecordStaysUnverified: storage, search and export keep a
+// downgraded record unverified and named, and never count it as e2e history.
+func TestDowngradedDMRecordStaysUnverified(t *testing.T) {
+	for _, e := range []DMEntry{{EncMode: "downgraded"}, {EncVerified: true, EncMode: "downgraded"}} {
+		normalizeDMEncryption(&e)
+		if e.EncVerified || e.EncMode != "downgraded" {
+			t.Fatalf("stored downgraded record = %+v", e)
+		}
+		if got := dmEncMode(e); got != "downgraded" {
+			t.Fatalf("dmEncMode = %q", got)
+		}
+	}
+	line := chatExportLine(netproto.ChatHistoryEntry{FromNickname: "Mia", Body: "hi", SentAt: 1}, dmEncMode(DMEntry{EncMode: "downgraded"}))
+	if !strings.Contains(line, "[unverified: server encrypted") || strings.Contains(line, "[server encrypted]") {
+		t.Fatalf("export line = %q", line)
+	}
+	out := dmExportMessages([]DMEntry{{FromNickname: "Mia", Body: "hi", SentAt: 1, EncMode: "downgraded"}})
+	if !strings.Contains(out.Text, "[unverified: server encrypted") {
+		t.Fatalf("export = %q", out.Text)
 	}
 }
 
@@ -202,5 +249,33 @@ func TestE2EPeerSetIsBounded(t *testing.T) {
 	nilSet.record("x")
 	if nilSet.has("x") {
 		t.Fatal("nil set reported a peer")
+	}
+}
+
+// TestDowngradedDMRoundTripsUnverified: a downgraded record (even one sent in
+// as verified) reloads, searches and summarises as unverified "downgraded".
+func TestDowngradedDMRoundTripsUnverified(t *testing.T) {
+	_, cm := newPipedApp(t, func(*netproto.Frame) (netproto.MessageType, any, bool) {
+		return 0, nil, false
+	})
+	a := newLocalApp(t, cm)
+	e := DMEntry{FromUniqueID: "friend", FromNickname: "mia", Body: "needle", SentAt: 5, EncVerified: true, EncMode: "downgraded"}
+	if err := a.DMHistoryAppend("friend", "mia", e); err != "" {
+		t.Fatalf("append: %s", err)
+	}
+	msgs, err := a.DMHistoryLoad("friend")
+	if err != nil || len(msgs) != 1 || msgs[0].EncVerified || msgs[0].EncMode != "downgraded" {
+		t.Fatalf("reloaded = %+v, %v", msgs, err)
+	}
+	res, err := a.DMSearch("", "needle", 0)
+	if err != nil || len(res.Messages) != 1 || res.Messages[0].EncVerified || res.Messages[0].EncMode != "downgraded" {
+		t.Fatalf("search = %+v, %v", res.Messages, err)
+	}
+	store, err := a.captureDMHistory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if store.hasE2E("friend") {
+		t.Fatal("a downgraded record counted as end-to-end history")
 	}
 }

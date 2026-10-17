@@ -45,7 +45,9 @@ type DMEntry struct {
 	EncVerified  bool   `json:"enc_verified,omitempty"` // body was opened locally; absent on legacy records
 	// EncMode records how a verified body was protected: "e2e", or "server"
 	// for the client→server→client fallback. Empty on a verified record
-	// means end-to-end (records written before the fallback existed).
+	// means end-to-end (records written before the fallback existed). An
+	// unverified record may carry "downgraded": a server-encrypted body from
+	// a peer with end-to-end history, opened but never treated as verified.
 	EncMode string `json:"enc_mode,omitempty"`
 }
 
@@ -465,6 +467,9 @@ func (s dmHistoryStore) search(peer, query string, maxMessages int) ChatSearchRe
 // normalizeDMEncryption), so it was end-to-end.
 func dmEncMode(m DMEntry) string {
 	if !m.EncVerified {
+		if m.EncMode == dmModeDowngraded {
+			return dmModeDowngraded
+		}
 		return ""
 	}
 	switch m.EncMode {
@@ -478,8 +483,14 @@ func dmEncMode(m DMEntry) string {
 
 // normalizeDMEncryption keeps the stored marker unambiguous: a new verified
 // record must name a known mode, otherwise it is stored as unverified rather
-// than read back later as a pre-fallback end-to-end record.
+// than read back later as a pre-fallback end-to-end record. "downgraded" is
+// kept only on an unverified record, and a verified record claiming it is
+// stored as unverified downgraded, never as verified.
 func normalizeDMEncryption(e *DMEntry) {
+	if e.EncMode == dmModeDowngraded {
+		e.EncVerified = false
+		return
+	}
 	if !e.EncVerified || (e.EncMode != "e2e" && e.EncMode != "server") {
 		e.EncVerified, e.EncMode = false, ""
 	}
