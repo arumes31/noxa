@@ -27,6 +27,7 @@ import "./voice-diagnostics.css";
 import "./polls.css";
 import "./conversations.css";
 import { conversationChanged } from "./conversations.js";
+import { initDirectMessages } from "./dm-view.js";
 import "./private-calls.css";
 import { privateCallChanged, privateCallSignal, stopPrivateCall, applyPrivateCallAudioSettings } from "./private-calls.js";
 import { createTabReconnects, reconnectDelay } from "./tab-reconnect.js";
@@ -3282,6 +3283,7 @@ initMetaUI();   // wave-8b debug/stats/onboarding (registers window.__noxaMeta)
 initPolishUI(); // wave-8c polish/a11y (registers window.__noxaPolish)
 initNotifications(); // wave-9 notification matrix (registers window.__noxaNotify)
 chatUI.initChat(); // wave-5b chat UI (must run after __noxa exists)
+initDirectMessages(); // Direct › Messages view (after the chat composer exists)
 initWorkspace();
 
 // A replacement is ready only once native settings and all UI modules have
