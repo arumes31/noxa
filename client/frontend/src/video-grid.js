@@ -186,10 +186,13 @@ export function createVideoGrid({ applySendCaps, syncCameraButton, syncShareButt
         if (watchControls) t.el.append(watchControls);
         t.el.dataset.clid = clid;
         // The receiver supplies a private, single-track stream. Its browser ID
-        // can differ from the negotiated publisher/slot key after MID reuse.
+        // is never matched against the key: after MID reuse it can name another
+        // publisher, and two live receivers can share it.
         const tracks = stream?.getVideoTracks() || [];
-        const vt = tracks.length === 1 ? tracks[0] : tracks.find(track => track.id === key) || null;
+        const vt = tracks.length === 1 ? tracks[0] : null;
         t.recording?.stop("scope_changed");
+        t.untrack?.();
+        t.untrack = null;
         t.track = vt;
         t.diagnostics = null;
         t.diagnosticsPC = null;
@@ -218,9 +221,20 @@ export function createVideoGrid({ applySendCaps, syncCameraButton, syncShareButt
         t.flowSample = null;
         t.flowing = true;
         // Reserved receiver tracks are not evidence that a camera is publishing.
+        // Listeners belong to this tile binding, not to the receiver track: a
+        // reused receiver later rendered by another publisher's tile must not
+        // keep driving (or lose) this tile's state.
         if (vt) {
-            vt.onmute = vt.onended = () => updateTileVideo(t);
-            vt.onunmute = () => { t.flowing = true; updateTileVideo(t); };
+            const changed = () => { if (t.track === vt) updateTileVideo(t); };
+            const unmuted = () => { if (t.track !== vt) return; t.flowing = true; updateTileVideo(t); };
+            vt.addEventListener("mute", changed);
+            vt.addEventListener("ended", changed);
+            vt.addEventListener("unmute", unmuted);
+            t.untrack = () => {
+                vt.removeEventListener("mute", changed);
+                vt.removeEventListener("ended", changed);
+                vt.removeEventListener("unmute", unmuted);
+            };
         }
         updateTileVideo(t);
         applyTileIdentity(t);
@@ -235,6 +249,8 @@ export function createVideoGrid({ applySendCaps, syncCameraButton, syncShareButt
         const key = String(trackID);
         const t = tiles.get(key);
         if (!t) return;
+        t.untrack?.();
+        t.untrack = null;
         t.presentation?.dispose();
         t.recording?.dispose();
         t.video.srcObject = null;
