@@ -356,7 +356,7 @@ test("denied member move shows an error and leaves the member in place", async (
 test("authors and mentions share the member menu and messages support keyboard actions", async ({ page }) => {
     await page.evaluate(() => {
         for (const callback of window.__events.event || []) callback(JSON.stringify({ type: "chat", data: {
-            id: 501, channel_id: 1, from: "Alice", from_unique_id: "alice-uid", text: "Hello @Alice",
+            id: 501, channel_id: 1, from: "Alice", from_unique_id: "alice-uid", text: "Hello @Alice", enc_verified: true, enc_mode: "server",
         } }));
     });
     const row = page.locator('.msg[data-msg-id="501"]');
@@ -427,7 +427,7 @@ test("keyboard volume adjustment can continue through the audio panel", async ({
 test("member names inside links preserve link navigation", async ({ page }) => {
     await page.evaluate(() => {
         for (const callback of window.__events.event || []) callback(JSON.stringify({ type: "chat", data: {
-            id: 502, channel_id: 1, from: "Alice", from_unique_id: "alice-uid", text: "https://example.com/@Alice",
+            id: 502, channel_id: 1, from: "Alice", from_unique_id: "alice-uid", text: "https://example.com/@Alice", enc_verified: true, enc_mode: "server",
         } }));
     });
     const link = page.locator('.msg[data-msg-id="502"] a.md-link');
