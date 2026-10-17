@@ -83,6 +83,7 @@ func TestVideoBoundsBlockOversizeAndUnknownReferences(t *testing.T) {
 			}
 			track := &boundsVideoTrack{fakeVideoTrack: fakeVideoTrack{ssrc: 42, fakeTrackReader: fakeTrackReader{packets: packets}}, mime: webrtc.MimeTypeVP8}
 			r.ReadVideoLoop("publisher", slot, track)
+			waitAsyncKeyframeRequests(t, r)
 			if tap.count() != 4 {
 				t.Fatalf("dimension filter wrote %d packets, want 4", tap.count())
 			}

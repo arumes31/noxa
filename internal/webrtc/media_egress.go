@@ -48,6 +48,10 @@ func (s *pubSlot) enqueueMedia(pkt *rtp.Packet, ticket mediaTicket) (bool, error
 		return false, nil
 	}
 	s.startVideoProbe(pkt, ticket)
+	if ticket.timingSSRC == 0 {
+		// Untranslated media (audio): the outbound timestamp is the source's.
+		ticket.timingSSRC, ticket.timingTimestamp = pkt.SSRC, pkt.Timestamp
+	}
 	packet, ok := s.egress.prepare(pkt, ticket)
 	if !ok {
 		return false, nil
@@ -75,6 +79,11 @@ type mediaTicket struct {
 	videoSource   uint32
 	videoRID      string
 	videoMedia    bool
+	// Source SSRC and source RTP timestamp of this packet before outbound
+	// translation. They bind the actually sent packet to its publisher SR
+	// mapping (media_timing.go).
+	timingSSRC      uint32
+	timingTimestamp uint32
 	// Diagnostic-only mutable receipt state; protected by videoDiagnostic.mu.
 	// All authorization and source fields above remain immutable after prepare.
 	repairDiagnostic videoRepairTicketDiagnostic
@@ -102,6 +111,9 @@ type mediaEgressStream struct {
 	outputSSRC      atomic.Uint32
 	videoDiagnostic videoForwardDiagnostic
 	pacer           *mediaPacer // immutable after binding; protected by mu
+	// timing records actually sent primary packets for Sender Reports. Its
+	// leaf mutex is taken after a successful write, never across one.
+	timing egressTiming
 }
 
 func (r *mediaEgressRegistry) ticketID() uint64 {
@@ -244,9 +256,11 @@ func (s *mediaEgressStream) writeResultKind(header *rtp.Header, payload []byte, 
 			n, outputError = writer.Write(&out, payload, attrs)
 			if n > 0 && outputError == nil {
 				s.written.Add(1)
-			}
-			if n > 0 && outputError == nil {
-				s.observeVideoKind(&out, out.MarshalSize()+len(payload)+int(out.PaddingSize), ticket, time.Now(), kind)
+				now := time.Now()
+				s.observeVideoKind(&out, out.MarshalSize()+len(payload)+int(out.PaddingSize), ticket, now, kind)
+				if kind == mediaPacketPrimary && out.SSRC == s.outputSSRC.Load() {
+					s.timing.observeSent(&out, len(payload), ticket, now)
+				}
 			}
 			return outputError
 		}

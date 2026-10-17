@@ -238,8 +238,15 @@ type Router struct {
 	videoSources map[string]map[string]map[string]uint32
 	videoCodecs  map[videoSourceRef]webrtc.RTPCodecCapability
 	videoSeen    map[videoSourceRef]map[string]time.Time
-	layerPrefs   map[string]string         // subscriberID -> preferred RID ("f"/"h"/"q")
-	keyframeLast map[uint32]time.Time      // media SSRC -> last forwarded PLI/FIR
+	layerPrefs   map[string]string    // subscriberID -> preferred RID ("f"/"h"/"q")
+	keyframeLast map[uint32]time.Time // media SSRC -> last forwarded PLI/FIR
+	// keyframeWriting single-flights media-path PLI writes per source SSRC.
+	// Its mutex is a leaf and is never held across the network write.
+	keyframeWriteMu sync.Mutex
+	keyframeWriting map[uint32]bool
+	// sourceTiming holds publisher SR mappings (see media_timing.go). It has
+	// its own lock, independent of mu and every forwarding lock.
+	sourceTiming sourceTimingTable
 	whispers     map[string]*whisperConfig // clientID -> whisper settings
 	// whisperPairs tracks publisher tracks created solely to serve an active
 	// whisper (publisherID -> subscriberID), so they can be torn down when
@@ -1139,6 +1146,8 @@ func (r *Router) AttachPeer(clientID string, pc *PeerConnectionWrapper) error {
 
 	pc.OnTrack(func(remote *webrtc.TrackRemote, receiver *webrtc.RTPReceiver) {
 		slot := r.slotFor(clientID, remote.ID(), remote.Kind())
+		// Publisher SRs carry the capture-time mapping forwarded to receivers.
+		go r.readSourceTiming(clientID, remote, receiver)
 		switch remote.Kind() {
 		case webrtc.RTPCodecTypeAudio:
 			go r.ReadLoop(clientID, slot, remote, audioLevelExtID(receiver))
@@ -1178,6 +1187,7 @@ func (r *Router) DetachPeerKeepChannel(clientID string) {
 
 // detachPeer implements DetachPeer / DetachPeerKeepChannel.
 func (r *Router) detachPeer(clientID string, leaveChannel bool) {
+	r.sourceTiming.forgetPublisher(clientID)
 	r.mu.Lock()
 	r.invalidateVideoLocked(clientID)
 	delete(r.pubPeers, clientID)
@@ -1800,7 +1810,7 @@ func (r *Router) ReadVideoLoop(clientID, slot string, track VideoTrackReader) {
 				return
 			}
 			if !dimensions.accept(pkt) {
-				r.requestKeyframe(clientID, slot, rid, keyframeVP8Bounds)
+				r.requestKeyframeAsync(clientID, slot, rid, keyframeVP8Bounds)
 				return
 			}
 		}
@@ -1841,7 +1851,7 @@ func (r *Router) ReadVideoLoop(clientID, slot string, track VideoTrackReader) {
 				if !keyframe {
 					dispatch.discardRecovery(len(packets))
 					if !isVideoPadding(pkt) {
-						r.requestKeyframe(clientID, slot, rid, keyframeH265Assembly)
+						r.requestKeyframeAsync(clientID, slot, rid, keyframeH265Assembly)
 					}
 					return
 				}
@@ -1852,7 +1862,7 @@ func (r *Router) ReadVideoLoop(clientID, slot string, track VideoTrackReader) {
 				h265RecoveryPending = false
 			}
 			if lost && !keyframe {
-				r.requestKeyframe(clientID, slot, rid, keyframeH265Assembly)
+				r.requestKeyframeAsync(clientID, slot, rid, keyframeH265Assembly)
 			}
 			for i, packet := range packets {
 				if dispatch.cancelled.Load() || !current() {
@@ -1870,7 +1880,7 @@ func (r *Router) ReadVideoLoop(clientID, slot string, track VideoTrackReader) {
 				if !keyframe {
 					dispatch.discardRecovery(len(packets))
 					if !isVideoPadding(pkt) {
-						r.requestKeyframe(clientID, slot, rid, keyframeH264Assembly)
+						r.requestKeyframeAsync(clientID, slot, rid, keyframeH264Assembly)
 					}
 					return
 				}
@@ -1887,7 +1897,7 @@ func (r *Router) ReadVideoLoop(clientID, slot string, track VideoTrackReader) {
 			// predecessor. Keep its rejection diagnostics, but do not request
 			// another keyframe; incomplete replacements still need recovery.
 			if lost && !keyframe {
-				r.requestKeyframe(clientID, slot, rid, keyframeH264Assembly)
+				r.requestKeyframeAsync(clientID, slot, rid, keyframeH264Assembly)
 			}
 			for i, packet := range packets {
 				if dispatch.cancelled.Load() || !current() {
@@ -1903,7 +1913,7 @@ func (r *Router) ReadVideoLoop(clientID, slot string, track VideoTrackReader) {
 			if !strings.EqualFold(mime, webrtc.MimeTypeVP8) || isVideoPadding(pkt) || !dispatchVP8.accept(pkt) {
 				dispatch.discardRecovery(1)
 				if !isVideoPadding(pkt) {
-					r.requestKeyframe(clientID, slot, rid, keyframeVP8Bounds)
+					r.requestKeyframeAsync(clientID, slot, rid, keyframeVP8Bounds)
 				}
 				return
 			}
@@ -2073,6 +2083,14 @@ func (r *Router) forwardVideoFrameAtPolicyCodecSource(senderID, slot, rid string
 						output.watchEpoch = w.delivery.WatchEpoch
 						output.videoContinuity.beginEpoch()
 					}
+					// A source switch keeps the receiver's RTP->capture-time
+					// mapping when both publisher mappings are known, so no
+					// earlier or later SR can mistime either source's frames.
+					continuity := &output.videoContinuity
+					continuity.preferredOffsetOK = false
+					if continuity.seen && (continuity.ssrc != pkt.SSRC || continuity.pendingEpoch) {
+						continuity.preferredOffset, continuity.preferredOffsetOK = r.sourceTiming.preservingOffset(senderID, continuity.ssrc, continuity.timestampOffset, pkt.SSRC, pkt.Timestamp, time.Now())
+					}
 					switch {
 					case strings.EqualFold(mime, webrtc.MimeTypeH265):
 						if len(hevcUnit) == 0 || len(hevcUnit[0]) == 0 {
@@ -2107,16 +2125,18 @@ func (r *Router) forwardVideoFrameAtPolicyCodecSource(senderID, slot, rid string
 					// Request only for a current watch whose continuity needs a
 					// keyframe and whose output can receive it. The first post-ready
 					// delta retries here; revoked/contended watches do not send PLIs.
+					// The write runs asynchronously: this fanout still has other
+					// viewers to serve, and the publisher's RTCP path may be slow.
 					if needsKeyframe && w.delivery.WatchEpoch != 0 && !isVideoPadding(pkt) &&
 						(output.egress == nil || output.videoTransportReady(r, w.delivery.RecipientID)) {
-						r.requestKeyframe(senderID, slot, rid, keyframeAwaitKeyframe)
+						r.requestKeyframeAsync(senderID, slot, rid, keyframeAwaitKeyframe)
 					}
 					return false, nil
 				}
 				output.videoSource.Store(pkt.SSRC)
 			}
 			if slot, ok := w.writer.(*pubSlot); ok && slot.egress != nil {
-				return slot.enqueueMedia(packet, mediaTicket{delivery: w.delivery, guard: guard, router: r, videoRevision: policy.revision, videoSource: pkt.SSRC, videoRID: rid})
+				return slot.enqueueMedia(packet, mediaTicket{delivery: w.delivery, guard: guard, router: r, videoRevision: policy.revision, videoSource: pkt.SSRC, videoRID: rid, timingSSRC: pkt.SSRC, timingTimestamp: pkt.Timestamp})
 			}
 			written = false
 			write := func() error {
@@ -2269,6 +2289,18 @@ func (r *Router) RequestKeyframe(publisherID, slot, rid string) {
 }
 
 func (r *Router) requestKeyframe(publisherID, slot, rid string, reason keyframeRequestReason) {
+	r.requestKeyframeMode(publisherID, slot, rid, reason, false)
+}
+
+// requestKeyframeAsync is requestKeyframe for the media path (ingress
+// dispatch and viewer fanout). Resolution and throttling stay synchronous;
+// the RTCP write runs on its own goroutine, single-flighted per source, so a
+// slow publisher transport never stalls forwarding to any viewer.
+func (r *Router) requestKeyframeAsync(publisherID, slot, rid string, reason keyframeRequestReason) {
+	r.requestKeyframeMode(publisherID, slot, rid, reason, true)
+}
+
+func (r *Router) requestKeyframeMode(publisherID, slot, rid string, reason keyframeRequestReason, async bool) {
 	r.mu.RLock()
 	w := r.rtcpWriters[publisherID]
 	var ssrc uint32
@@ -2305,7 +2337,30 @@ func (r *Router) requestKeyframe(publisherID, slot, rid string, reason keyframeR
 		ingress.recordKeyframeRequest(reason, keyframeCoalesced, &epoch)
 		return
 	}
-	r.writeKeyframeRequest(w, publisherID, ssrc, ingress, reason, epoch)
+	if !async {
+		r.writeKeyframeRequest(w, publisherID, ssrc, ingress, reason, epoch)
+		return
+	}
+	r.keyframeWriteMu.Lock()
+	if r.keyframeWriting[ssrc] {
+		r.keyframeWriteMu.Unlock()
+		// The in-flight request already asks this source for a keyframe.
+		ingress.recordKeyframeRequest(reason, keyframeCoalesced, &epoch)
+		return
+	}
+	if r.keyframeWriting == nil {
+		r.keyframeWriting = make(map[uint32]bool)
+	}
+	r.keyframeWriting[ssrc] = true
+	r.keyframeWriteMu.Unlock()
+	go func() {
+		defer func() {
+			r.keyframeWriteMu.Lock()
+			delete(r.keyframeWriting, ssrc)
+			r.keyframeWriteMu.Unlock()
+		}()
+		r.writeKeyframeRequest(w, publisherID, ssrc, ingress, reason, epoch)
+	}()
 }
 
 // The caller has claimed its request under the appropriate scope/throttle locks.

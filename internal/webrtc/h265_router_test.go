@@ -100,6 +100,7 @@ func TestH265RouterRejectedProfileRecovery(t *testing.T) {
 				track.codecs = append(track.codecs, good, good, good)
 			}
 			r.ReadVideoLoop("pub", SlotScreen, track)
+			waitAsyncKeyframeRequests(t, r)
 			if feedback.pliCount() != wantPLI {
 				t.Fatalf("PLI=%d want=%d", feedback.pliCount(), wantPLI)
 			}

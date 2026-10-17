@@ -332,6 +332,7 @@ func TestKeyframeDiagnosticsAwaitKeyframeReason(t *testing.T) {
 	if r.ForwardVideo("pub", SlotScreen, "f", continuityPacket(42, 100, 90000, 10, false)) != 0 {
 		t.Fatal("unseen delta was forwarded")
 	}
+	waitAsyncKeyframeRequests(t, r)
 	got := d.keyframeRequestSnapshot()
 	if writer.pliCount() != 1 || got == nil || got.AwaitKeyframe != (netproto.VideoKeyframeRequestCounters{Requests: 1, WriteSucceeded: 1}) {
 		t.Fatalf("waiting output provenance lost: %+v", got)
