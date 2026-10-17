@@ -868,7 +868,7 @@ func startTestEnv(t *testing.T, _ any) *testEnv {
 }
 
 // startTestEnvFull is startTestEnv with a hook to adjust the server config
-// (e.g. disable ChatAllowPlaintext for encryption tests).
+// (e.g. change limits or TLS for a single test).
 func startTestEnvFull(t *testing.T, _ any, mutateCfg func(*config.Config)) *testEnv {
 	t.Helper()
 	return startTestEnvDeps(t, nil, mutateCfg, nil)
@@ -962,13 +962,12 @@ func startTestEnvLogger(t *testing.T, _ any, mutateCfg func(*config.Config), mut
 
 	addr := freePort(t)
 	cfg := &config.Config{
-		TCPAddr:            addr,
-		HealthAddr:         ":12337",
-		FileRoot:           t.TempDir(),
-		TLSEnabled:         true,
-		TLSDir:             t.TempDir(),
-		ChatAllowPlaintext: true, // legacy chat tests send plaintext
-		ChatMaxLength:      2000,
+		TCPAddr:       addr,
+		HealthAddr:    ":12337",
+		FileRoot:      t.TempDir(),
+		TLSEnabled:    true,
+		TLSDir:        t.TempDir(),
+		ChatMaxLength: 2000,
 	}
 	if mutateCfg != nil {
 		mutateCfg(cfg)

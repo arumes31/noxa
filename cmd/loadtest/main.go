@@ -646,7 +646,6 @@ func simulateClient(ctx context.Context, opts options, st *stats, index int) {
 	defer chatTicker.Stop()
 	pingTicker := time.NewTicker(5 * time.Second)
 	defer pingTicker.Stop()
-	var chatSequence uint64
 
 	for {
 		select {
@@ -655,15 +654,15 @@ func simulateClient(ctx context.Context, opts options, st *stats, index int) {
 		case <-readErr:
 			return
 		case <-chatTicker.C:
-			chatSequence++
-			message := netproto.ChatSend{Text: fmt.Sprintf("loadtest ping %d %d", index, chatSequence)}
-			if chat != nil {
-				var err error
-				message, err = chat.message()
-				if err != nil {
-					st.sessionFail.Add(1)
-					return
-				}
+			// Chat bodies are always encrypted; a client without chat keys
+			// (the legacy model) sends no chat rather than plaintext.
+			if chat == nil {
+				continue
+			}
+			message, err := chat.message()
+			if err != nil {
+				st.sessionFail.Add(1)
+				return
 			}
 			if err := writeMsg(conn, netproto.MsgChatSend, message); err != nil {
 				if ctx.Err() == nil {

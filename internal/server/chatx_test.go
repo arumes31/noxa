@@ -265,16 +265,13 @@ func TestKeyBundleTruncationIsNotRefusal(t *testing.T) {
 }
 
 // TestPlaintextChatRefusedEvenWithEscapeHatch verifies that no configuration
-// admits a plaintext chat body: the harness still sets chat_allow_plaintext,
-// yet plaintext channel, global and direct sends and plaintext edits are all
+// admits a plaintext chat body: even with a leftover chat_allow_plaintext key,
+// plaintext channel, global and direct sends and plaintext edits are all
 // refused, nothing is stored and nothing is relayed.
 func TestPlaintextChatRefusedEvenWithEscapeHatch(t *testing.T) {
 	const canary = "canary-7f3a"
-	env := startTestEnv(t, nil) // the harness sets ChatAllowPlaintext
+	env := startTestEnvFull(t, nil, func(c *config.Config) { c.RemovedChatAllowPlaintext = true })
 	defer env.stop()
-	if !env.srv.cfg.ChatAllowPlaintext {
-		t.Fatal("fixture no longer exercises the legacy escape hatch")
-	}
 	alice, bob, key, keyID, _ := chatPair(t, env)
 	defer func() { _ = alice.Close() }()
 	defer func() { _ = bob.Close() }()
@@ -1132,9 +1129,9 @@ func TestEmojiUpload(t *testing.T) {
 // extra frame and no ordering rule (133).
 func TestMOTDSealedInAuthResponse(t *testing.T) {
 	const canary = "canary-7f3a"
-	// The legacy escape hatch is on: it must no longer hand a keyless client
-	// a plaintext MOTD.
-	env := startTestEnvFull(t, nil, func(c *config.Config) { c.ChatAllowPlaintext = true })
+	// A leftover escape-hatch key must not hand a keyless client a
+	// plaintext MOTD.
+	env := startTestEnvFull(t, nil, func(c *config.Config) { c.RemovedChatAllowPlaintext = true })
 	defer env.stop()
 	if err := env.srv.setServerSettingAndAnnounce(t.Context(), "motd", canary, "test"); err != nil {
 		t.Fatalf("set motd: %v", err)
