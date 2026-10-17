@@ -164,7 +164,7 @@ func NewWithVideoBounds(logger *zap.Logger, iceServers []string, enableAV1 bool,
 			return nil, fmt.Errorf("webrtc: listening on shared UDP address: %w", err)
 		}
 		configureMediaReceiveBuffer(conn, logger)
-		udpMux = webrtc.NewICEUDPMux(nil, &boundedPacketConn{PacketConn: conn})
+		udpMux = webrtc.NewICEUDPMux(nil, &faultInjectingPacketConn{PacketConn: &boundedPacketConn{PacketConn: conn}})
 		settingEngine.SetICEUDPMux(udpMux)
 		settingEngine.SetNetworkTypes([]webrtc.NetworkType{webrtc.NetworkTypeUDP4})
 	}

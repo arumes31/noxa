@@ -59,7 +59,7 @@ function fixture(t, shared) {
     return {
         audio, sources, track,
         attach: (track, key = "publisher") => shared ? audio.attachShareAudio(track, key) : audio.attachRemoteAudio(track),
-        detach: track => shared ? audio.detachShareAudio("publisher") : audio.detachRemoteTrack(track.id),
+        detach: track => shared ? audio.detachShareAudio("publisher") : audio.detachRemoteTrack(track),
         attached: track => shared ? audio.shareAudio.get("publisher")?.track === track : audio.hasRemoteAudio(track),
     };
 }
@@ -82,7 +82,28 @@ for (const shared of [false, true]) {
         }
     });
 
-    test(`${label} ignores stale ended callbacks after a binding replacement`, t => {
+    if (!shared) {
+        // Chromium derives a receiver's track.id from the a=msid it was created
+        // with and keeps it when the media section is reused. After a speaker
+        // leaves and rejoins, two LIVE receivers share an id: attaching one must
+        // never tear down the other (one listener lost one speaker that way).
+        test("microphone chains are keyed by receiver track object, not track.id", t => {
+            const f = fixture(t, false), reused = f.track("speaker-a"), rejoined = f.track("speaker-a");
+            f.audio.attachRemoteAudio(reused, null, "speaker-b"); // section reused for B
+            f.audio.attachRemoteAudio(rejoined, null, "speaker-a"); // A back on a new section
+            assert.equal(f.audio.hasRemoteAudio(reused, "speaker-b"), true, "B's chain survived A's attach");
+            assert.equal(f.audio.hasRemoteAudio(rejoined, "speaker-a"), true);
+            assert.equal(f.audio.hasRemoteAudio(reused, "speaker-a"), false, "attribution is per receiver");
+            assert.equal(f.sources[0].src.disconnected, false);
+            f.audio.detachRemoteTrack(rejoined);
+            assert.equal(f.audio.hasRemoteAudio(reused, "speaker-b"), true, "detaching A leaves B playing");
+            reused.readyState = "ended";
+            reused.dispatchEvent(new Event("ended"));
+            assert.equal(f.audio.hasRemoteAudio(reused), false);
+        });
+    }
+
+    if (shared) test(`${label} ignores stale ended callbacks after a binding replacement`, t => {
         const f = fixture(t, shared), old = f.track("reused-id"), replacement = f.track("reused-id");
         f.attach(old);
         const stale = getEventListeners(old, "ended")[0];

@@ -159,7 +159,9 @@ const { startQualitySampler, stopQualitySampler } = createConnectionQuality({ $,
 
 const remoteAudio = createRemoteAudio({ state, toast, sysMsg, voiceEpoch: () => voiceSessionEpoch });
 const { selectAudioOutput, applyOutputSettings, remoteChain, reconcileSpatialVoice, attachRemoteAudio, readRemoteAudioLevel, resolveTrackUsers, shareAudio, applyDucking, applyShareAudio, attachShareAudio, detachRemoteAudio } = remoteAudio;
-const channelAudioAttached = (track, id = remoteTrackID(state.pc, track)) => remoteAudio.hasRemoteAudio(track) && state.trackUsers.get(track.id)?.track_id === id;
+// Attachment is judged per receiver track object and its current publisher
+// MSID, never by browser track.id (two live receivers may share one).
+const channelAudioAttached = (track, id = remoteTrackID(state.pc, track)) => remoteAudio.hasRemoteAudio(track, id);
 const recoverVoice = createVoiceRecovery({ state,
         attached: channelAudioAttached,
         repair: pc => reconcileRemoteMedia(pc),
@@ -1569,7 +1571,7 @@ window.runtime.EventsOn("event", (json) => {
             if (c && d.channel_id !== undefined && d.channel_id !== c.channel_id) break;
             const speaking = !!d.speaking && !!c && !isClientMicrophoneMuted(c, state);
             if (c?.is_speaking || speaking) noteVoiceActivity(state, d.client_id);
-            if (c) c.is_speaking = speaking;
+            if (c) { c.is_speaking = speaking; c.is_whispering = speaking && !!d.whisper; }
             if (speaking && d.client_id === state.myClientID && state.myChannelID &&
                 d.channel_id === state.myChannelID && !state.replayingTabID && !state.muted && !state.deafened) noteActivity();
             // (343) announce speaking events to the screen-reader region.
@@ -2284,16 +2286,18 @@ async function startVoice(expectedEpoch = voiceSessionEpoch) {
             return;
         }
         track.enabled = true;
-        attachRemoteAudio(track, publisher);
+        attachRemoteAudio(track, publisher, trackID);
     }, (track, trackID) => {
-        state.trackUsers.delete(track.id);
+        // Chromium can give two live receivers the same track.id (see
+        // remote-audio.js); never drop the other receiver's attribution.
+        if (state.trackUsers.get(track.id)?.track_id === trackID) state.trackUsers.delete(track.id);
         if (track.kind === "video") removeStreamTrack(track, trackID);
         else if (parseTrackID(trackID).slot === SLOT_SCREEN_AUDIO) {
             const { clientID } = parseTrackID(trackID);
             removeShareAudio(track, clientID);
             remoteAudio.detachShareAudio(clientID);
         }
-        else remoteAudio.detachRemoteTrack(track.id);
+        else remoteAudio.detachRemoteTrack(track);
     }, (track, trackID) => track.kind !== "audio" || parseTrackID(trackID).slot !== "" || channelAudioAttached(track, trackID));
 
     await renegotiate(pc, state.serverGeneration, undefined, () => expectedEpoch === voiceSessionEpoch);

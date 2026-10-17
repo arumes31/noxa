@@ -302,7 +302,11 @@ type TCPServer struct {
 	// Order: Authority, roleMetadataMu, client roleActionMu, backend locks.
 	// SDP metadata must not cross membership/status changes. Packet delivery
 	// does not acquire this mutex, so a slow SDP reader cannot stall all audio.
-	roleMetadataMu      sync.Mutex
+	roleMetadataMu sync.Mutex
+	// publisherGuardMu makes snapshot and installation of the voice publisher
+	// guard atomic, so the last installed guard is always the newest snapshot
+	// (taken after roleMetadataMu/roleActionMu, before backend locks).
+	publisherGuardMu    sync.Mutex
 	cfg                 *config.Config
 	logger              *zap.Logger
 	deps                *Deps

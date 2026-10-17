@@ -383,7 +383,7 @@ async function refreshVoiceStats(overlay, client) {
             : "—");
         setVal("packets", recv + t("desktop.recv") + lost + t("desktop.lost"));
         const receiver = pc.getTransceivers?.().find(transceiver => transceiver.mid === inbound.mid)?.receiver;
-        const level = V().readRemoteAudioLevel?.(receiver?.track?.id || inbound.trackIdentifier) ?? inbound.audioLevel;
+        const level = V().readRemoteAudioLevel?.(receiver?.track || inbound.trackIdentifier) ?? inbound.audioLevel;
         setVal("level", level != null ? (level * 100).toFixed(0) + " %" : "—");
     } catch { /* stats unavailable */ }
 }
