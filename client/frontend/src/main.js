@@ -53,7 +53,7 @@ import { createMicrophoneGate, microphoneSendTrack, disposeMicrophoneGate, updat
 import {
     initVideo, videoTrackAdded, videoTrackRemoved, videoSpeaking,
     videoRefreshNames, clearVideoGrid, shareToggle, setLowBandwidth, isLowBandwidth,
-    parseTrackID, SLOT_SCREEN_AUDIO, cameraToggle, resetCameraState, clearRegionBox,
+    parseTrackID, SLOT_SCREEN_AUDIO, cameraToggle, resetCameraState,
     renegotiate, answerRemoteOffer, queuePeerNegotiation, applyVideoLimits, retryVideoHardware, videoPresentationDiagnostics,
 } from "./video.js";
 import * as chatUI from "./chat-ui.js";
@@ -168,7 +168,6 @@ const state = {
     shareStarting: null,
     shareStopping: false,
     shareAudioTransceiver: null, // dedicated system-audio source for this share
-    regionBox: null,       // (71) crop target element, alive for the whole cropped share
 };
 
 const { startQualitySampler, stopQualitySampler } = createConnectionQuality({ $, state });
@@ -2131,7 +2130,6 @@ function ensureVoiceForChannel() {
             // viewing consent belong to the channel that granted them.
             for (const track of state.localStream?.getVideoTracks() || []) { track.stop(); state.localStream.removeTrack(track); }
             stopDisplayCapture(state.shareStream);
-            clearRegionBox(); // Cancel a region picker before its track becomes shareStream.
             state.shareStream = null;
             state.screenSharing = false;
             state.shareStarting = null;
@@ -2595,7 +2593,6 @@ function teardownVoice() {
     state.shareVideoTransceiver = null;
     state.shareStarting = null;
     state.shareStopping = false;
-    clearRegionBox(); // (71)
     detachRemoteAudio();
     if (state.pc) { state.pc.close(); state.pc = null; }
     state.voiceTabID = "";
