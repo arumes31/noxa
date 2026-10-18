@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { cropRect, normalizeRegion, regionLargeEnough, sourceConstraints, MIN_REGION_PX } from "../src/share-region.js";
+import { cropDisplayStream, cropRect, normalizeRegion, regionLargeEnough, sourceConstraints, MIN_REGION_PX } from "../src/share-region.js";
 import { DEFAULT_SHARE_PRESET, presetSpec, shareSummary, screenShareConstraints, shareQuality } from "../src/screen-share-quality.js";
 
 test("a drag in any direction becomes a rectangle inside the preview", () => {
@@ -54,4 +54,43 @@ test("the share bar summarises preset, size, frame rate and bitrate; Full HD is 
     const summary = shareSummary({ preset: "hd", bitrateCeiling: 0 });
     assert.equal(summary.spec, "1080p · 30 fps · Auto");
     assert.equal(shareSummary({ preset: "uhd", bitrateCeiling: 6000000 }).spec, "2160p · 30 fps · 6 Mbit/s");
+});
+
+test("a failed crop frame ends the generated track and releases its source", async (t) => {
+    const source = new EventTarget();
+    source.getSettings = () => ({ width: 1920, height: 1080 });
+    source.readyState = "live";
+    source.stop = () => { source.readyState = "ended"; };
+    let frameClosed = false;
+    const frame = { codedWidth: 1920, codedHeight: 1080, close: () => { frameClosed = true; } };
+    const replacements = {
+        MediaStreamTrackProcessor: class {
+            readable = new ReadableStream({ start: controller => controller.enqueue(frame) });
+        },
+        MediaStreamTrackGenerator: class extends EventTarget {
+            writable = new WritableStream();
+            readyState = "live";
+            stop() { this.readyState = "ended"; }
+        },
+        VideoFrame: class { constructor() { throw new Error("crop rejected by runtime"); } },
+        MediaStream: class {
+            constructor(tracks) { this.tracks = tracks; }
+            getVideoTracks() { return this.tracks; }
+        },
+    };
+    for (const [key, value] of Object.entries(replacements)) {
+        const descriptor = Object.getOwnPropertyDescriptor(globalThis, key);
+        Object.defineProperty(globalThis, key, { value, configurable: true, writable: true });
+        t.after(() => { if (descriptor) Object.defineProperty(globalThis, key, descriptor); else delete globalThis[key]; });
+    }
+    const { stream } = cropDisplayStream({ getVideoTracks: () => [source], getAudioTracks: () => [] },
+        { x: 0.1, y: 0.1, width: 0.5, height: 0.5 });
+    const track = stream.getVideoTracks()[0];
+    await new Promise((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error("crop failure did not end publication")), 1000);
+        track.addEventListener("ended", () => { clearTimeout(timer); resolve(); }, { once: true });
+    });
+    assert.equal(track.readyState, "ended");
+    assert.equal(source.readyState, "ended");
+    assert.equal(frameClosed, true);
 });

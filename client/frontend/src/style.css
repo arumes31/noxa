@@ -856,7 +856,7 @@ body:not(.details-collapsed) #details-toggle { display: none; }
 .share-picker .sp-tab:has(input:disabled) { opacity: .45; cursor: not-allowed; }
 .share-picker .sp-tab span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .share-picker .sp-stage {
-    position: relative; aspect-ratio: 16 / 9; max-height: min(52dvh, 470px); width: 100%; margin: 0 auto;
+    position: relative; aspect-ratio: 16 / 9; max-height: min(52dvh, 470px); width: auto;
     border: 1px solid var(--border); border-radius: 10px; background: var(--bg); overflow: hidden;
 }
 .share-picker .sp-empty { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; padding: 20px; text-align: center; }

@@ -73,7 +73,13 @@ export function cropDisplayStream(stream, region) {
         },
     });
     processor.readable.pipeThrough(transform, { signal: abort.signal })
-        .pipeTo(track.writable, { signal: abort.signal }).catch(() => {});
+        .pipeTo(track.writable, { signal: abort.signal }).catch(() => {
+            // A failed frame transform must end publication and release capture,
+            // rather than leaving a live source behind a frozen generated track.
+            if (stopped) return;
+            track.stop();
+            track.dispatchEvent(new Event("ended"));
+        });
     const stopTrack = track.stop.bind(track);
     track.stop = () => {
         if (stopped) return;

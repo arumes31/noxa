@@ -682,6 +682,8 @@ test("changing sources keeps the old share on cancel, preserves the preset and s
 
 test("region shares only the dragged area of the picked screen and stops its source", async ({ page }) => {
     await page.evaluate(() => {
+        // Limits constrain the published crop, not the source selected for cropping.
+        window.__noxa.state.mediaLimits = { video_max_width: 1280, video_max_height: 720 };
         Object.defineProperty(navigator.mediaDevices, "getDisplayMedia", { configurable: true, value: async options => {
             window.__media.captureOptions = options;
             const canvas = document.createElement("canvas"); canvas.width = 1920; canvas.height = 1080;

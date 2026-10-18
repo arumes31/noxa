@@ -539,7 +539,9 @@ export function createVideoPublication({ policy }) {
             const surface = view.surface();
             const profile = shareQuality(selection.preset, selection.custom, selection.bitrateCeiling);
             // Region crops afterwards, so it captures at the source's own size.
-            const video = screenShareConstraints(surface === "region" ? { width: 0, height: 0, fps: profile.fps, original: true } : profile, V().state.mediaLimits);
+            const video = surface === "region"
+                ? screenShareConstraints({ width: 0, height: 0, fps: profile.fps, original: true }, null)
+                : screenShareConstraints(profile, V().state.mediaLimits);
             video.displaySurface = surface === "region" ? "monitor" : surface;
             const options = { video, ...displayAudioOptions(view.audio()) };
             try {
