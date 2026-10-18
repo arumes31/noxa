@@ -3,7 +3,8 @@ import { closeDialog, mountDialog } from "./modal.js";
 import { t } from "./i18n.js";
 import { formatBytes } from "./connection-stats.js";
 import { createUpdateCountdown } from "./update-countdown.js";
-import { createUpdateCore, measuredUpdateProgress } from "./update-core.js";
+import { measuredUpdateProgress } from "./update-core.js";
+import { createUpdateLogo } from "./update-logo.js";
 import "./updater.css";
 
 const V = () => window.__noxa;
@@ -47,11 +48,11 @@ function showUpdateModal() {
                         <div class="upd-version upd-version-new"><span>${t("updater.newLabel")}</span><strong class="upd-next mono">—</strong></div>
                     </div>
                 </div>
+                <div class="upd-stage" aria-hidden="true"><canvas class="upd-core"></canvas></div>
                 <div class="upd-status" role="status" aria-live="polite"></div>
                 <div class="upd-progress hidden" role="progressbar" aria-label="${t("updater.progressLabel")}" aria-valuemin="0" aria-valuemax="100">
-                    <canvas class="upd-core" aria-hidden="true"></canvas>
                     <div class="upd-metrics"><div><div class="upd-speed mono"></div><div class="upd-bits mono"></div></div><div class="upd-pct mono">—</div></div>
-                    <div class="upd-details"><span class="upd-bytes mono">—</span><span class="upd-blocks mono">— / 80</span></div>
+                    <div class="upd-details"><div class="upd-size"><span class="upd-size-label">${t("updater.downloadedLabel")}</span><span class="upd-bytes mono">—</span></div><span class="upd-blocks mono">— / 80</span></div>
                     <div class="upd-bar"><div class="upd-fill"></div></div>
                 </div>
                 <div class="upd-countdown hidden" role="status" aria-live="polite" aria-atomic="true"></div>
@@ -69,7 +70,7 @@ function showUpdateModal() {
     modal.querySelector(".upd-close").onclick = closeModal;
     modal.onclick = (e) => { if (e.target === modal) closeModal(); };
     const mounted = modal;
-    cores.set(mounted, createUpdateCore(mounted.querySelector(".upd-core")));
+    cores.set(mounted, createUpdateLogo(mounted.querySelector(".upd-core")));
     mounted.querySelector(".upd-retry").onclick = () => runCheck(mounted);
     mountDialog(modal, {
         onCancel: () => !downloading && !restarting,
@@ -125,7 +126,7 @@ async function runCheck(m, knownInfo) {
     }
 
     m.querySelector(".upd-offer").classList.remove("hidden");
-    m.querySelector(".upd-route").textContent = `${V().state.clientVersion || "dev"} → ${info.version || t("updater.unknownVersion")}`;
+    showRoute(m, V().state.clientVersion || "dev", info.version || t("updater.unknownVersion"));
     m.querySelector(".upd-next").textContent = String(info.version || t("updater.unknownVersion"));
     const version = document.createElement("b");
     version.textContent = String(info.version || t("updater.unknownVersion"));
@@ -258,6 +259,7 @@ async function startDownload(m, info) {
         }
         applied = true;
         m.querySelector(".update-dlg").dataset.phase = "ready";
+        cores.get(m)?.update(1);
         // Native success means verification AND staging have completed. A progress
         // event (even ready/100%) never grants permission to restart.
         if (!m.isConnected || modal !== m) return false;
@@ -294,7 +296,25 @@ async function startDownload(m, info) {
     }
 }
 
+// The splash keeps the old → new route on screen for the whole download.
+function showRoute(m, current, next) {
+    const route = m.querySelector(".upd-route");
+    const from = document.createElement("span");
+    from.className = "upd-route-from";
+    from.textContent = String(current);
+    const arrow = document.createElement("span");
+    arrow.className = "upd-route-arrow";
+    arrow.setAttribute("aria-hidden", "true");
+    arrow.textContent = "→";
+    const to = document.createElement("span");
+    to.className = "upd-route-to";
+    to.textContent = String(next);
+    route.replaceChildren(from, arrow, to);
+    route.setAttribute("aria-label", t("updater.route", { current, next }));
+}
+
 function showRestart(m) {
+    cores.get(m)?.update(1);
     const status = m.querySelector(".upd-status");
     const btn = m.querySelector(".upd-update");
     m.querySelector(".upd-progress").classList.add("hidden");
