@@ -4,7 +4,6 @@ import (
 	"errors"
 	"net"
 	"slices"
-	"sort"
 	"time"
 
 	"github.com/pion/interceptor"
@@ -51,6 +50,11 @@ type orderedVideoPacket struct {
 // Reordering precedes dimension inspection. A repaired gap must not destroy
 // the inspector's known reference frame. Only packets held behind a gap are
 // cloned; the ordinary contiguous path still forwards without a payload copy.
+type pendingDeadline struct {
+	sequence uint16
+	expires  time.Time
+}
+
 type videoReorder struct {
 	seen      bool
 	next      uint16
@@ -61,6 +65,9 @@ type videoReorder struct {
 	wait      time.Duration
 	waitUntil time.Time
 	epoch     uint64 // changes whenever an empty queue starts holding a new gap
+
+	// ⚡ Bolt: Cache slice to avoid allocation and GC pressure during gap flushing
+	ordered []pendingDeadline
 }
 
 // A measurement controls future arrivals only while its actual response is fresh.
@@ -180,21 +187,30 @@ func (q *videoReorder) flushFormats(now time.Time, force bool, emit func(*rtp.Pa
 // suffix's earliest deadline instead of repeatedly scanning the entire map.
 // The ordinary contiguous path above does not allocate this work list.
 func (q *videoReorder) flushGapsFormats(now time.Time, force bool, emit func(*rtp.Packet, webrtc.RTPCodecCapability)) {
-	type pendingDeadline struct {
-		sequence uint16
-		expires  time.Time
-	}
-	ordered := make([]pendingDeadline, 0, len(q.pending))
+	// ⚡ Bolt: Reuse the slice to prevent allocation in hot path
+	q.ordered = q.ordered[:0]
 	for sequence, entry := range q.pending {
-		ordered = append(ordered, pendingDeadline{sequence, entry.expires})
+		q.ordered = append(q.ordered, pendingDeadline{sequence, entry.expires})
 	}
-	sort.Slice(ordered, func(i, j int) bool { return ordered[i].sequence-q.next < ordered[j].sequence-q.next })
-	for index := len(ordered) - 2; index >= 0; index-- {
-		if ordered[index+1].expires.Before(ordered[index].expires) {
-			ordered[index].expires = ordered[index+1].expires
+
+	// ⚡ Bolt: Use generic sort instead of reflection-based sort.Slice
+	slices.SortFunc(q.ordered, func(a, b pendingDeadline) int {
+		da := a.sequence - q.next
+		db := b.sequence - q.next
+		if da < db {
+			return -1
+		} else if da > db {
+			return 1
+		}
+		return 0
+	})
+
+	for index := len(q.ordered) - 2; index >= 0; index-- {
+		if q.ordered[index+1].expires.Before(q.ordered[index].expires) {
+			q.ordered[index].expires = q.ordered[index+1].expires
 		}
 	}
-	for _, pending := range ordered {
+	for _, pending := range q.ordered {
 		if pending.sequence != q.next && !force && now.Before(pending.expires) {
 			q.expires, q.dirty = pending.expires, false
 			return
