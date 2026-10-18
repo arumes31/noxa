@@ -209,7 +209,8 @@ func TestVoiceSurvivesVideoOverloadAndRenegotiation(t *testing.T) {
 		}
 		settings := pion.SettingEngine{}
 		settings.SetIncludeLoopbackCandidate(true)
-		settings.SetInterfaceFilter(func(name string) bool { return strings.HasPrefix(name, "lo") })
+		// Select loopback by address: interface names differ across operating systems.
+		settings.SetIPFilter(func(ip net.IP) bool { return ip.IsLoopback() })
 		settings.SetNetworkTypes([]pion.NetworkType{pion.NetworkTypeUDP4})
 		api := pion.NewAPI(pion.WithMediaEngine(m), pion.WithInterceptorRegistry(registry), pion.WithSettingEngine(settings))
 		receiver, err := api.NewPeerConnection(pion.Configuration{})

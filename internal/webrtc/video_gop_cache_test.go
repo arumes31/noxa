@@ -402,12 +402,14 @@ func TestGOPCacheJoinMidUnitWaitsForBoundary(t *testing.T) {
 					if !r.setVideoCodec("pub", SlotCam, "", token, codec) {
 						t.Fatal("codec not admitted")
 					}
-					generation = r.VideoPublications("viewer")[0].Generation
 					if _, err = r.WatchVideoWithFormats("viewer", "pub", SlotCam, generation, 1, r.VideoWatchSession("viewer"), true, []string{"h265", "h264", "vp8"}, chaosHEVCLevel); err != nil {
 						t.Fatal(err)
 					}
-					// No source SSRC is known yet, so readiness itself cannot request it.
+					// Finish the pending readiness check before exposing the source.
+					// Otherwise its asynchronous wake can race this manual fixture and
+					// request a keyframe before the private cache below is populated.
 					f.connect(t, SlotCam)
+					r.flushWatchStartup("viewer", f.peer)
 					registerVideoSource(r, "pub", SlotCam, "", 4242)
 					r.mu.RLock()
 					source := r.slotClaims["pub"][SlotCam+slotSep]
