@@ -337,10 +337,9 @@ export function showServerRules(json) {
 // Alpha notice (215)
 // ---------------------------------------------------------------------------
 
-export function maybeAlphaNotice(force = false) {
-    const s = V().state.settings;
+export function showAlphaDetails() {
     const ver = V().state.clientVersion || "";
-    if (!s || !ver || (!force && s.alpha_dismissed === ver)) return;
+    if (!ver) return;
     if (document.querySelector(".server-rules-gate")) return;
     const overlay = document.createElement("div");
     overlay.className = "dlg-overlay alpha-notice";
@@ -349,17 +348,10 @@ export function maybeAlphaNotice(force = false) {
             <h3>${escapeTranslation(t("desktop.noxa.is.alpha.software"))}</h3>
             <div class="dlg-text">
                 <p>${escapeTranslation(t("runtime.alphaHelp", { version: ver }))}</p>
-                <label class="dlg-label"><input type="checkbox" class="alpha-skip" /> ${escapeTranslation(t("desktop.don.t.show.again.for.this.version"))}</label>
             </div>
             <div class="dlg-buttons"><button class="dlg-ok">${escapeTranslation(t("desktop.got.it"))}</button></div>
         </div>`;
-    overlay.querySelector(".dlg-ok").onclick = async () => {
-        if (overlay.querySelector(".alpha-skip").checked) {
-            s.alpha_dismissed = ver;
-            await App().SaveSettings(s);
-        }
-        overlay.remove();
-    };
+    overlay.querySelector(".dlg-ok").onclick = () => overlay.remove();
     mountDialog(overlay);
 }
 
@@ -420,13 +412,12 @@ export async function maybeIdentityBackupNag(force = false) {
 export function initNotifications() {
     window.__noxaNotify = {
         notify, checkBuddyOnline, resetBuddyWatch, matchKeyword,
-        checkChannelWatch, channelOverride, saveChannelOverride, maybeAlphaNotice,
+        checkChannelWatch, channelOverride, saveChannelOverride, showAlphaDetails,
         maybeIdentityBackupNag, resetServerRules, notificationOutputAllowed,
     };
     window.runtime.EventsOn("server_rules", showServerRules);
     const badge = document.getElementById("alpha-badge");
-    if (badge) badge.onclick = () => maybeAlphaNotice(true);
-    setTimeout(() => maybeAlphaNotice(false), 1200);
-    // (353) after the alpha notice so two modals never stack on first run.
+    if (badge) badge.onclick = showAlphaDetails;
+    // Leave startup unobstructed by release notices; identity backup remains available.
     setTimeout(() => maybeIdentityBackupNag(false), 3000);
 }
