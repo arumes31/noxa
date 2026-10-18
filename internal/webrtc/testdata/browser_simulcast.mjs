@@ -77,6 +77,7 @@ try {
         }, { id, width, height, fps });
         await page.locator("#voice-screen").click();
         await page.locator(".sh-preset").selectOption(fps === 60 ? "hdMotion" : "original");
+        await page.getByRole("button", { name: "Choose screen or window…", exact: true }).click();
         await page.getByRole("button", { name: "Start sharing", exact: true }).click();
         await expect(page.locator("#sharing-status")).toBeVisible();
         await expect.poll(() => page.evaluate(() => window.__noxa.state.pc.connectionState), { timeout: 15000 }).toBe("connected");

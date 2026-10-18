@@ -83,3 +83,5 @@
     .group-member { flex-wrap: wrap; }
     .group-member span { flex-basis: 100%; }
 }
+
+.group-message-actions { display: flex; gap: 6px; flex-wrap: wrap; }

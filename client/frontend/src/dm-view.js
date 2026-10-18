@@ -152,18 +152,20 @@ function groupMessage(message, uid) {
 function queuePreview(snapshot, group) {
     const latest = Number(group.latest_message_id) || 0;
     const cached = groupPreviews.get(group.id);
-    if (!latest || (cached && (cached.latest >= latest || cached.pending === latest))) return;
-    groupPreviews.set(group.id, { ...(cached || { latest: 0, message: null }), pending: latest });
+    if (!latest) { groupPreviews.delete(group.id); return; }
+    if (cached && (cached.latest === latest || cached.pending === latest)) return;
+    const pending = { latest: 0, message: null, pending: latest };
+    groupPreviews.set(group.id, pending);
     const requestScope = scope;
     previewChain = previewChain.then(async () => {
-        if (requestScope !== scope) return;
+        if (requestScope !== scope || groupPreviews.get(group.id) !== pending) return;
         try {
             const page = await app().ConversationForTab(snapshot.tabID, { action: "history", id: group.id, before_id: latest + 1 });
-            if (requestScope !== scope) return;
+            if (requestScope !== scope || groupPreviews.get(group.id) !== pending) return;
             const newest = (page?.messages || []).reduce((best, message) => !best || message.id > best.id ? message : best, null);
             groupPreviews.set(group.id, { latest, message: newest ? groupMessage(newest, snapshot.uid) : null, pending: 0 });
         } catch {
-            if (requestScope === scope) groupPreviews.set(group.id, { ...(groupPreviews.get(group.id) || {}), latest, pending: 0 });
+            if (requestScope === scope && groupPreviews.get(group.id) === pending) groupPreviews.set(group.id, { latest, message: null, pending: 0 });
         }
         scheduleRender();
     });
@@ -401,7 +403,7 @@ function select(target, { focus = false } = {}) {
         selected = { kind: "dm", uid: target.uid };
         $("center").classList.add("dm-thread-open");
         if (isPrivateGroupActive()) closeConversations();
-        chat.openPM(target.uid, target.name || "");
+        chat.openPM(target.uid, target.name || entries.find(entry => entry.kind === "dm" && entry.uid === target.uid)?.name || "");
     }
     render();
     if (focus) {
@@ -466,6 +468,7 @@ function openMoreMenu() {
         items.push(menuItem("dm.menu.export", () => $("chat-export-btn")?.click()));
         items.push(menuItem("dm.menu.callHistory", () => void showCallHistory()));
         items.push(menuItem("dm.menu.clearHistory", () => chat.clearDirectHistory(uid)));
+        items.push(menuItem("common.close", () => chat.closeDirectConversation(uid)));
     } else {
         const details = groupControl(".group-members");
         if (details) items.push(menuItem("dm.menu.members", () => {
@@ -479,6 +482,8 @@ function openMoreMenu() {
         items.push(menuItem("dm.menu.callHistory", () => void showCallHistory()));
         const refresh = groupControl(".group-refresh");
         if (refresh) items.push(menuItem("dm.menu.refresh", () => refresh.click()));
+        const remove = groupControl(".group-delete");
+        if (remove) items.push(menuItem("group.delete", () => remove.click()));
         const leave = groupControl(".group-leave");
         if (leave && !leave.disabled) items.push(menuItem("dm.menu.leave", () => leave.click()));
     }

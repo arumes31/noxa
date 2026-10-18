@@ -11,7 +11,7 @@ import { startShareStatus, stopShareStatus, refreshShareStatus } from "./share-s
 import { displayAudioOptions, validateDisplayAudio } from "./display-audio.js";
 import { applyVideoNetworkPriority } from "./voice-priority.js";
 import { shareQuality, screenShareConstraints, createShareQualityControls } from "./screen-share-quality.js";
-import { isCurrentServerDialog, mountServerDialog } from "./modal.js";
+import { closeDialog, isCurrentServerDialog, mountServerDialog } from "./modal.js";
 import { labelButton } from "./icons.js";
 import { renderMicStatus } from "./audio.js";
 import { videoConstraints, trackFitsVideoLimits, capVideoEncodings, screenBitrateHeadroom } from "./media-limits.js";
@@ -513,6 +513,11 @@ export function createVideoPublication({ policy }) {
                         <input type="radio" name="${sourceName}" value="region" ${regionSupported ? "" : "disabled"} /> ${tLabel("polish.region")}
                     </label>
                 </fieldset>
+                <button type="button" class="sh-choose">${tLabel("share.chooseSource")}</button>
+                <p class="set-hint">${tLabel("share.chooseHelp")}</p>
+                <video class="sh-preview" autoplay muted playsinline hidden aria-label="${tLabel("share.selectionPreview")}"></video>
+                <p class="sh-source-label" hidden></p>
+                <p class="sh-error" role="alert"></p>
                 <div class="sh-quality"></div>
                 <label class="dlg-label" for="${audioID}">${tLabel("share.audio")}</label>
                 <select class="dlg-input sh-audio" id="${audioID}" aria-describedby="${audioID}-help">
@@ -526,7 +531,7 @@ export function createVideoPublication({ policy }) {
                     <button class="dlg-cancel">${tLabel("polish.cancel")}</button>
                 </div>
             </div>`;
-        overlay.querySelector(".dlg-cancel").onclick = () => overlay.remove();
+        overlay.querySelector(".dlg-cancel").onclick = () => closeDialog(overlay, "cancel");
         const quality = createShareQualityControls(qualityID, { preset: initialPreset, custom, bitrateCeiling });
         overlay.querySelector(".sh-quality").appendChild(quality.element);
         const audioSelect = overlay.querySelector(".sh-audio");
@@ -536,7 +541,7 @@ export function createVideoPublication({ policy }) {
         overlay.querySelector(`input[value="${initialSurface}"]`).checked = true;
         const selectedSurface = () => overlay.querySelector(`input[name="${sourceName}"]:checked`).value;
         // Keep explicit choices per source so toggling sources cannot undo an override.
-        audioSelect.onchange = () => audioChoices.set(selectedSurface(), audioSelect.value);
+        audioSelect.onchange = () => { audioChoices.set(selectedSurface(), audioSelect.value); discardSelection(); };
         const syncAudioSource = () => {
             const surface = selectedSurface();
             const application = surface === "window";
@@ -544,27 +549,84 @@ export function createVideoPublication({ policy }) {
             audioSelect.value = audioChoices.get(surface) ?? (application ? "application" : "none");
             if (!application && audioSelect.value === "application") audioSelect.value = "none";
         };
-        for (const source of overlay.querySelectorAll(`input[name="${sourceName}"]`)) source.onchange = syncAudioSource;
-        syncAudioSource();
-        overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
-        overlay.querySelector(".dlg-ok").onclick = async () => {
-            if (!isCurrentServerDialog(overlay)) return;
-            const selected = quality.read();
-            if (!selected) return;
-            const surface = overlay.querySelector(`input[name="${sourceName}"]:checked`).value;
-            const audioMode = audioSelect.value;
-            overlay.remove();
+        let selectedDisplay = null, picking = false, publishing = false, pickToken = 0;
+        const preview = overlay.querySelector(".sh-preview");
+        const sourceLabel = overlay.querySelector(".sh-source-label");
+        const error = overlay.querySelector(".sh-error");
+        const choose = overlay.querySelector(".sh-choose");
+        const start = overlay.querySelector(".dlg-ok");
+        const update = () => {
+            choose.disabled = picking || publishing;
+            overlay.querySelector(".dlg-cancel").disabled = publishing;
+            start.disabled = picking || publishing || !selectedDisplay;
+            for (const input of overlay.querySelectorAll(`input[name="${sourceName}"]`)) input.disabled = publishing || (input.value === "region" && !regionSupported);
+            audioSelect.disabled = publishing; quality.element.inert = publishing;
+        };
+        const discardSelection = () => {
+            ++pickToken;
+            stopDisplayCapture(selectedDisplay); selectedDisplay = null;
+            preview.srcObject = null; preview.hidden = true; sourceLabel.hidden = true;
+            update();
+        };
+        choose.onclick = async () => {
+            if (picking || publishing || !isCurrentServerDialog(overlay)) return;
+            const selection = quality.read(); if (!selection) return;
+            discardSelection(); const token = pickToken;
+            error.textContent = ""; picking = true; update();
+            const surface = selectedSurface();
+            const video = screenShareConstraints(shareQuality(selection.preset, selection.custom, selection.bitrateCeiling), V().state.mediaLimits);
+            if (surface !== "region") video.displaySurface = surface;
+            const options = { video, ...displayAudioOptions(audioSelect.value),
+                ...(surface === "region" ? { preferCurrentTab: true, selfBrowserSurface: "include" } : {}) };
+            try {
+                // Must run directly from the click to retain user activation.
+                let display;
+                try { display = await navigator.mediaDevices.getDisplayMedia(options); }
+                catch (failure) {
+                    if (!options.audio || ["NotAllowedError", "AbortError"].includes(failure.name) || !isCurrentServerDialog(overlay) || token !== pickToken) throw failure;
+                    display = await navigator.mediaDevices.getDisplayMedia({ ...options, ...displayAudioOptions("none") });
+                }
+                if (!isCurrentServerDialog(overlay) || token !== pickToken) { stopDisplayCapture(display); return; }
+                const track = display.getVideoTracks()[0];
+                if (!track || track.readyState === "ended") { stopDisplayCapture(display); throw new Error(tLabel("desktop.screen.capture.produced.no.video.track")); }
+                selectedDisplay = display; retainDisplayCapture(display);
+                preview.srcObject = display; preview.hidden = false;
+                sourceLabel.textContent = track.label || tLabel(surface === "window" ? "polish.window" : "polish.monitor"); sourceLabel.hidden = false;
+                track.addEventListener("ended", () => { if (selectedDisplay === display) { discardSelection(); error.textContent = tLabel("share.sourceEnded"); } }, { once: true });
+                void preview.play().catch(() => {});
+            } catch (failure) {
+                if (isCurrentServerDialog(overlay) && token === pickToken) error.textContent = tLabel("desktop.screen.capture.failed") + (failure.message || failure.name);
+            } finally { picking = false; if (isCurrentServerDialog(overlay)) update(); }
+        };
+        for (const source of overlay.querySelectorAll(`input[name="${sourceName}"]`)) source.onchange = () => { syncAudioSource(); discardSelection(); };
+        syncAudioSource(); update();
+        overlay.onclick = (event) => { if (event.target === overlay && !publishing) closeDialog(overlay, "cancel"); };
+        start.onclick = async () => {
+            if (!isCurrentServerDialog(overlay) || publishing || !selectedDisplay) return;
+            const selected = quality.read(); if (!selected) return;
             const { state } = V();
-            if (state.shareStarting || state.shareStopping || (!!state.screenSharing !== replacing)) return;
-            const request = {};
-            state.shareStarting = request;
-            syncShareButton();
-            try { await startShare({ surface, ...selected, audioMode, replacing }); }
-            finally {
+            if (!state.pc || state.pc.connectionState === "closed" || state.pc.connectionState === "failed") { error.textContent = tLabel("share.connectionRequired"); return; }
+            if (state.shareStarting || state.shareStopping || (!!state.screenSharing !== replacing)) { error.textContent = tLabel("share.stateChanged"); return; }
+            const display = selectedDisplay; selectedDisplay = null;
+            preview.srcObject = null; preview.hidden = true;
+            const request = {}; state.shareStarting = request;
+            publishing = true; error.textContent = ""; update(); syncShareButton();
+            const surface = selectedSurface();
+            if (surface === "region") closeDialog(overlay, "region");
+            try {
+                const started = await startShare({ surface, ...selected, audioMode: audioSelect.value, replacing, selectedDisplay: display });
+                if (started) closeDialog(overlay, "started");
+                else if (isCurrentServerDialog(overlay)) error.textContent = tLabel("share.startFailed");
+            } catch (failure) {
+                stopDisplayCapture(display);
+                if (isCurrentServerDialog(overlay)) error.textContent = tLabel("desktop.screen.capture.failed") + (failure.message || failure.name);
+            } finally {
+                publishing = false;
                 if (state.shareStarting === request) { state.shareStarting = null; syncShareButton(); }
+                if (isCurrentServerDialog(overlay)) update();
             }
         };
-        mountServerDialog(overlay);
+        mountServerDialog(overlay, { onCancel: () => !publishing, onClose: discardSelection });
         const hint = mediaLimitHint();
         if (hint) {
             const note = document.createElement("p");
@@ -586,13 +648,13 @@ export function createVideoPublication({ policy }) {
     // picker ultimately decides what is shareable), publishes a dedicated screen
     // track independently of the camera, optionally merges display
     // audio (70), and applies the quality preset (72).
-    async function startShare({ surface, preset, custom, bitrateCeiling = 0, audioMode, replacing = false }) {
+    async function startShare({ surface, preset, custom, bitrateCeiling = 0, audioMode, replacing = false, selectedDisplay = null }) {
         const requestedAudioMode = audioMode;
         const { state } = V();
         const generation = state.serverGeneration;
         const tabID = state.activeTabID;
         const peerConnection = state.pc;
-        if (!peerConnection) return;
+        if (!peerConnection) { stopDisplayCapture(selectedDisplay); V().toast(tLabel("share.connectionRequired"), "warn"); return; }
         const shareScope = captureMediaScope();
         const current = () => mediaScopeIsCurrent(shareScope) && state.serverGeneration === generation && state.activeTabID === tabID && state.pc === peerConnection;
         let shareTransceiver = null;
@@ -610,7 +672,7 @@ export function createVideoPublication({ policy }) {
         };
         const previousDisplay = state.shareStream;
         const p = shareQuality(preset, custom, bitrateCeiling);
-        if (!p) return;
+        if (!p) { stopDisplayCapture(selectedDisplay); return; }
         const selection = { preset, custom, bitrateCeiling };
         const limits = state.mediaLimits;
         const video = screenShareConstraints(p, limits);
@@ -625,7 +687,7 @@ export function createVideoPublication({ policy }) {
         }
         let display;
         try {
-            display = await navigator.mediaDevices.getDisplayMedia(gdm);
+            display = selectedDisplay || await navigator.mediaDevices.getDisplayMedia(gdm);
         } catch (e) {
             if (!current()) return;
             if (audioMode !== "none" && e.name !== "NotAllowedError" && e.name !== "AbortError") {
@@ -655,6 +717,11 @@ export function createVideoPublication({ policy }) {
             discardDisplay(display);
             V().sysMsg(tLabel("desktop.screen.capture.produced.no.video.track"));
             return;
+        }
+        if (selectedDisplay) {
+            try { await screenTrack.applyConstraints(screenShareConstraints(p, limits)); }
+            catch (error) { discardDisplay(display); V().sysMsg(tLabel("desktop.screen.capture.failed") + error.message); return; }
+            if (!current() || screenTrack.readyState === "ended") { discardDisplay(display); return; }
         }
         capturePreferences.set(screenTrack, { ...p, screen: true });
         rememberVideoSenderProfile(screenTrack, p);
@@ -834,6 +901,7 @@ export function createVideoPublication({ policy }) {
             change: () => openShareDialog(true, selection.preset, audioMode, surface, selection.custom, selection.bitrateCeiling),
             changeQuality: () => openLiveShareQuality(display, peerConnection, shareScope, p, selection),
             reduction: () => policy.lowBandwidth ? "share.lowBandwidth" : "" });
+        return true;
     }
 
     function openLiveShareQuality(stream, pc, scope, profile, selection) {

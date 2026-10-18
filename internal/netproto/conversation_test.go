@@ -93,3 +93,41 @@ func TestConversationRejectsUnauthorizedAndStaleChangesWithoutMutation(t *testin
 		t.Fatal("successful change aliased source")
 	}
 }
+
+func TestConversationOwnerDeletionAndTransfer(t *testing.T) {
+	c := Conversation{ID: "g", Owner: "alice", Revision: 3, Epoch: 2, Members: []ConversationMember{{UniqueID: "alice", JoinedEpoch: 1}, {UniqueID: "bob", JoinedEpoch: 2}, {UniqueID: "pending", Pending: true}}}
+	for _, action := range []string{"delete", "delete_message"} {
+		request := ConversationRequest{ID: c.ID, Revision: c.Revision, Action: action, MessageID: 7}
+		for _, actor := range []string{"bob", "pending", "outsider"} {
+			if _, err := ChangeConversation(c, actor, request); !errors.Is(err, ErrConversationDenied) {
+				t.Fatalf("%s by %s: %v", action, actor, err)
+			}
+		}
+		request.Revision--
+		if _, err := ChangeConversation(c, "alice", request); !errors.Is(err, ErrConversationConflict) {
+			t.Fatalf("stale %s: %v", action, err)
+		}
+		request.Revision++
+		next, err := ChangeConversation(c, "alice", request)
+		if err != nil || next.Revision != 4 {
+			t.Fatalf("owner %s: %+v %v", action, next, err)
+		}
+		if action == "delete" && len(next.Members) != 0 {
+			t.Fatal("group deletion retained members")
+		}
+		if action == "delete_message" && !reflect.DeepEqual(next.Members, c.Members) {
+			t.Fatal("message deletion changed membership")
+		}
+		transferred, err := ChangeConversation(c, "alice", ConversationRequest{ID: c.ID, Revision: c.Revision, Action: "transfer", Target: "bob"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		request.Revision = transferred.Revision
+		if _, err := ChangeConversation(transferred, "alice", request); !errors.Is(err, ErrConversationDenied) {
+			t.Fatalf("former owner %s: %v", action, err)
+		}
+	}
+	if _, err := ChangeConversation(c, "alice", ConversationRequest{ID: c.ID, Revision: c.Revision, Action: "delete_message"}); !errors.Is(err, ErrConversationInvalid) {
+		t.Fatalf("missing message ID: %v", err)
+	}
+}

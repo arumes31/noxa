@@ -43,6 +43,7 @@ type RoleChannelState struct {
 	Name                  string                         `json:"name"`
 	Settings              RoleChannelSettings            `json:"settings"`
 	AffectedChannels      int                            `json:"affected_channels"`
+	SupportsTextChannels  bool                           `json:"supports_text_channels"`
 	CanCreatePermanent    bool                           `json:"can_create_permanent"`
 	CanCreateTemporary    bool                           `json:"can_create_temporary"`
 	CanManageAccess       bool                           `json:"can_manage_access"`
@@ -72,7 +73,7 @@ type RoleChannelChange struct {
 	Settings    *RoleChannelSettings `json:"settings,omitempty"`
 	ChannelType int                  `json:"channel_type"`
 	// TextOnly (create only) makes a text channel: chat through subscriptions,
-	// never voice membership. Older servers ignore it and create a voice channel.
+	// never voice membership. Clients must check SupportsTextChannels before sending it.
 	TextOnly    bool   `json:"text_only,omitempty"`
 	Password    string `json:"password,omitempty"`
 	SetPassword bool   `json:"set_password,omitempty"`

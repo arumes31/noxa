@@ -34,6 +34,8 @@ export const shellEnglish = {
     "shell.qs.kind.group": "Private group",
     "shell.qs.kind.setting": "Settings page",
     "roles.channel.textOnly": "Text channel (chat only, no voice)",
+    "roles.channel.textPermission": "Creating a text channel requires permission to create permanent channels.",
+    "roles.channel.textUnsupported": "Update the server to create text channels. This server does not support them.",
     "roles.channel.textOnlyHelp": "Members read and write it from the Text section. Nobody can join it for voice.",
     "roles.channel.voiceHelp": "A voice channel with its own chat.",
 };
@@ -72,6 +74,8 @@ export const shellGerman = {
     "shell.qs.kind.group": "Private Gruppe",
     "shell.qs.kind.setting": "Einstellungsseite",
     "roles.channel.textOnly": "Textkanal (nur Chat, keine Sprache)",
+    "roles.channel.textPermission": "Zum Erstellen eines Textkanals benötigst du die Berechtigung für permanente Kanäle.",
+    "roles.channel.textUnsupported": "Aktualisiere den Server, um Textkanäle zu erstellen. Dieser Server unterstützt sie nicht.",
     "roles.channel.textOnlyHelp": "Mitglieder lesen und schreiben ihn im Bereich Text. Niemand kann ihm per Sprache beitreten.",
     "roles.channel.voiceHelp": "Ein Sprachkanal mit eigenem Chat.",
 };

@@ -335,7 +335,7 @@ test("member card exposes the same menu and DM right-click does not delete histo
     await page.locator(".card-nick").click({ button: "right" });
     await expect(page.getByRole('menu').getByRole('slider', { name: 'Voice volume', exact: true })).toBeVisible();
     await page.keyboard.press("Escape");
-    await page.evaluate(() => window.__noxaChat.openPM("alice-uid", "Alice"));
+    await page.evaluate(() => window.__noxaChat.addChat({ direct: true, from_unique_id: "alice-uid", from: "Alice", text: "Unread", client_msg_id: "unread-menu" }));
     const tab = page.locator(".pm-tab");
     await tab.focus(); await page.keyboard.press("Shift+F10");
     await expect(page.getByRole("menuitem", { name: "Open conversation", exact: true })).toBeVisible();

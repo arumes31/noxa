@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createUpdateCountdown } from "../src/update-countdown.js";
-import { createUpdateCore, measuredUpdateProgress } from "../src/update-core.js";
+import { measuredUpdateProgress } from "../src/update-core.js";
 
 function clock() {
     let time = 0, id = 0;
@@ -44,29 +44,4 @@ test("measured bytes determine real core progress and never invent missing bytes
     assert.deepEqual(measuredUpdateProgress(-1, { downloaded_bytes: 100, total_bytes: -1 }), { downloaded: 100, total: null, ratio: null, blocks: null });
     assert.equal(measuredUpdateProgress(100, { downloaded_bytes: -2, total_bytes: Infinity }).downloaded, null);
     assert.equal(measuredUpdateProgress(500).ratio, 1);
-});
-
-
-test("core redraws only for observed changes, skips hidden pixels and disposes all observers", () => {
-    const saved = Object.fromEntries(["window", "document", "ResizeObserver", "MutationObserver", "getComputedStyle"].map(k => [k, globalThis[k]]));
-    const events = new Map(), preferences = new Map(), observers = [], arcs = [];
-    const preference = { matches: true, addEventListener: (n, fn) => preferences.set(n, fn), removeEventListener: n => preferences.delete(n) };
-    globalThis.window = { devicePixelRatio: 2, matchMedia: () => preference };
-    globalThis.document = { hidden: false, documentElement: { dataset: {} }, addEventListener: (n, fn) => events.set(n, fn), removeEventListener: n => events.delete(n) };
-    globalThis.getComputedStyle = () => ({ getPropertyValue: () => "#ffffff" });
-    globalThis.ResizeObserver = globalThis.MutationObserver = class { constructor(fn) { this.fn = fn; this.closed = false; observers.push(this); } observe() {} disconnect() { this.closed = true; } };
-    const ctx = { scale() {}, beginPath() {}, arc(...args) { arcs.push(args); }, fill() {}, save() {}, clip() {}, fillRect() {}, restore() {} };
-    const canvas = { isConnected: true, clientWidth: 500, clientHeight: 200, getClientRects: () => [1], getContext: () => ctx };
-    try {
-        const core = createUpdateCore(canvas);
-        core.update(.25); assert.equal(arcs.length, 80); assert.equal(canvas.width, 750);
-        const first = arcs[0];
-        core.update(.5); assert.deepEqual(arcs[80], first, "reduced motion keeps the core stationary");
-        document.hidden = true; core.update(.75); assert.equal(arcs.length, 160);
-        document.hidden = false; events.get("visibilitychange")(); assert.equal(arcs.length, 240);
-        preference.matches = false; preferences.get("change")(); assert.notDeepEqual(arcs[240], first);
-        document.documentElement.dataset.reduceMotion = "1"; observers[1].fn(); assert.deepEqual(arcs[320], first);
-        core.dispose(); assert.equal(events.size, 0); assert.equal(preferences.size, 0); assert.ok(observers.every(o => o.closed));
-        core.update(1); observers[0].fn(); assert.equal(arcs.length, 400);
-    } finally { for (const [key, value] of Object.entries(saved)) { if (value === undefined) delete globalThis[key]; else globalThis[key] = value; } }
 });

@@ -734,8 +734,9 @@
 /* ---------------------------------------------------------------- responsive */
 @media (max-width: 1100px) {
     :root[data-theme="arctic"] body:not(.compact) #details {
-        position: absolute; top: 40px; right: 0; bottom: 0; z-index: 24;
-        width: min(var(--details-width, 320px), calc(100% - 48px));
+        position: fixed; inset: 40px 0 0 auto; grid-area: auto; z-index: 24;
+        width: min(clamp(260px, var(--details-width, 320px), 560px), calc(100vw - 24px));
+        max-width: calc(100vw - 24px);
         box-shadow: -16px 0 40px rgba(0, 0, 0, .35);
     }
     :root[data-theme="arctic"] body:not(.compact) #app-body { --sidebar-width: 240px; }

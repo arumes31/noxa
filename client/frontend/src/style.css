@@ -2381,3 +2381,7 @@ body.details-collapsed #app-body {
 .sharing-preview { margin-top: 8px; }
 .sharing-preview summary { cursor: pointer; width: fit-content; }
 .sharing-preview video { display: block; margin-top: 8px; width: min(100%, 480px); max-height: min(240px, 30vh); object-fit: contain; background: #000; }
+
+.sh-preview { width: 100%; max-height: 180px; object-fit: contain; background: #000; border-radius: 8px; }
+.sh-source-label { overflow-wrap: anywhere; }
+.sh-error { color: var(--danger); overflow-wrap: anywhere; }

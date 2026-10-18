@@ -497,14 +497,6 @@ export function initMenu() {
     const { $ } = V();
     $("menubar").innerHTML = ""; // rebuilds on language change (336)
 
-    const connections = buildMenu(t("menu.connections"), [
-        menuAction(t("menu.connect"), () => V().showLogin()),
-        menuAction(t("menu.disconnect"), () => V().disconnect()),
-        menuAction(t("menu.serverInfo"), () => window.__noxaMeta.openServerInfo()),
-        divider(),
-        menuAction(t("menu.quit"), () => window.go.main.App.Quit()),
-    ]);
-
     const bookmarkItems = [menuAction(t("menu.bookmarkCurrent"), bookmarkCurrent), divider()];
     const bookmarkList = document.createElement("div");
     bookmarkList.className = "bm-menu-list";
@@ -532,16 +524,21 @@ export function initMenu() {
             bookmarkList.appendChild(item);
         }
     };
-    const bookmarks = buildMenu(t("menu.bookmarks"), [
-        ...bookmarkItems,
-        bookmarkList,
+    const connections = buildMenu(t("menu.connections"), [
+        menuAction(t("menu.connect"), () => V().showLogin()),
+        menuAction(t("menu.disconnect"), () => V().disconnect()),
+        menuAction(t("menu.serverInfo"), () => window.__noxaMeta.openServerInfo()),
+        divider(), ...bookmarkItems, bookmarkList,
         menuAction(t("menu.manageBookmarks"), manageBookmarks),
+        divider(), menuAction(t("menu.quit"), () => window.go.main.App.Quit()),
     ]);
-    const bmItem = bookmarks;
-    const origClick = bmItem.onclick;
-    bmItem.onclick = (e) => { renderBookmarkMenu(); origClick(e); };
+    const connectionsClick = connections.onclick;
+    connections.onclick = event => { renderBookmarkMenu(); connectionsClick(event); };
 
-    const self = buildMenu(t("menu.self"), [
+    const settings = buildMenu(t("menu.settingsTitle"), [
+        menuAction(t("menu.settings"), () => window.__noxa.openSettings("application")),
+        menuAction(t("menu.whisperLists"), () => window.__noxa.openSettings("whisper")),
+        divider(),
         menuAction(t("menu.changeNickname"), openDisplayNameDialog),
         menuAction(t("menu.setStatus"), () => {
             if (!V().state.myClientID) return V().toast(t("menu.notConnected"), "warn");
@@ -562,7 +559,7 @@ export function initMenu() {
         }),
     ]);
 
-    const permissions = buildMenu(t("menu.permissions"), [
+    const permissionItems = [
         menuAction(() => t("roles.myRoles"), () => {
             V().state.selectedClientID = V().state.myClientID;
             V().state.multiSelect = new Set([V().state.myClientID]);
@@ -577,11 +574,10 @@ export function initMenu() {
                 if (generation === V().state.serverGeneration) openRolesManager();
             } catch { if (generation === V().state.serverGeneration) V().toast(t("roles.unavailable"), "warn"); }
         }),
-    ]);
+    ];
 
     const tools = buildMenu(t("menu.tools"), [
-        menuAction(t("menu.settings"), () => window.__noxa.openSettings("application")),
-        menuAction(t("menu.whisperLists"), () => window.__noxa.openSettings("whisper")),
+        ...permissionItems,
         divider(),
         menuAction(t("menu.auditLog"), () => {
             if (!V().state.myClientID) return V().toast(t("menu.notConnected"), "warn");
@@ -669,7 +665,7 @@ export function initMenu() {
 
     const bar = $("menubar");
     bar.setAttribute("role", "menubar");
-    for (const m of [connections, bookmarks, self, view, permissions, tools, help]) bar.appendChild(m);
+    for (const m of [connections, settings, view, tools, help]) bar.appendChild(m);
     if (!focusoutBoundBars.has(bar)) {
         focusoutBoundBars.add(bar);
         bar.addEventListener("focusout", () => {

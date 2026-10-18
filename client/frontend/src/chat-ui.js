@@ -1709,7 +1709,7 @@ function rememberClosedChat(key, name) {
 async function reopenClosedChat(entry) {
     const current = () => recentlyClosedChats.get(entry.key) === entry && dmHistoryScopeIsCurrent(entry.scope);
     if (!current() || entry.pending) return;
-    if (entry.key.startsWith("dm:")) { openPM(entry.key.slice(3), entry.name); return; }
+    if (entry.key.startsWith("dm:")) { V().openDirectMessages?.({ uid: entry.key.slice(3), name: entry.name }); return; }
     if (entry.key.startsWith(GROUP_TAB)) {
         const groupID = entry.key.slice(GROUP_TAB.length);
         recentlyClosedChats.delete(entry.key);
@@ -1933,23 +1933,25 @@ function renderTabs() {
         });
     }
     for (const tab of pmTabs.values()) {
+        if (!(tab.unread > 0)) continue;
         const owns = () => current() && pmTabs.get(tab.uid) === tab;
         tab.nick = knownPeerName(tab.uid);
         items.push({
             key: "dm:" + tab.uid, name: peerName(tab.uid), active: view.kind === "dm" && view.uid === tab.uid,
             unread: tab.unread, arrivedAt: tab.unreadAt, offline: tab.offline,
-            open: () => { if (owns()) activatePM(tab.uid); },
+            open: () => { if (owns()) V().openDirectMessages?.({ uid: tab.uid }); },
             close: () => { if (owns()) closePM(tab.uid); },
             clearHistory: () => { if (owns()) clearPMHistory(tab.uid, tab.nick); },
         });
     }
     for (const tab of groupTabs.values()) {
+        if (!(tab.unread > 0)) continue;
         const owns = () => current() && groupTabs.get(tab.id) === tab;
         items.push({
             key: GROUP_TAB + tab.id, name: tab.name, title: t("group.tabTitle", { name: tab.name }),
             active: isPrivateGroupActive() && viewedConversationID() === tab.id,
             unread: tab.unread, arrivedAt: tab.unreadAt,
-            open: () => { if (owns()) void openConversationsAt(tab.id, 0, owns); },
+            open: () => { if (owns()) V().openDirectMessages?.({ groupID: tab.id }); },
             close: () => { if (owns()) closeGroupTab(tab.id); },
         });
     }
@@ -1981,6 +1983,7 @@ export async function storedDirectPeers() {
 export function directMessageFromEntry(entry) { return dmMsg(entry, ""); }
 export function directPeerName(uid, supplied = "") { return peerName(uid, supplied); }
 export function activeDirectPeer() { return view.kind === "dm" ? view.uid : ""; }
+export function closeDirectConversation(uid) { closePM(uid); }
 export function clearDirectHistory(uid) {
     if (pmTabs.has(uid)) void clearPMHistory(uid, peerName(uid));
 }

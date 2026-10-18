@@ -1,4 +1,6 @@
 export const conversationEnglish = {
+    "group.delete": "Delete group", "group.confirmDelete": "Delete this group and its messages for all members? This cannot be undone.",
+    "group.deleteMessage": "Delete message", "group.confirmDeleteMessage": "Delete this message for all group members?",
     "group.attach": "Attach files", "group.emoji": "Insert emoji", "group.removeAttachment": "Remove {name}",
     "group.tabTitle": "Private group · {name}", "group.messagePreview": "{name} · {sender}: {text}",
     "group.offlineBatch": "{count} unread messages in {name}",
@@ -11,6 +13,8 @@ export const conversationEnglish = {
     "group.remove": "Remove", "group.transfer": "Make owner", "group.leave": "Leave group", "group.rename": "Rename", "group.close": "Close", "group.refresh": "Refresh", "group.send": "Send", "group.message": "Message this group", "group.older": "Load older messages", "group.loading": "Loading…", "group.failed": "Could not complete the request: {error}", "group.private": "Messages are encrypted for accepted members. New members see messages sent after they join.", "group.leaveOwner": "Transfer ownership or remove the other members before leaving.", "group.confirmRemove": "Remove {name} from this group?", "group.confirmTransfer": "Make {name} the group owner?", "group.confirmLeave": "Leave this private group?", "group.blocked": "Message hidden from blocked member", "group.sent": "Message sent", "group.noMessages": "No messages yet.",
 };
 export const conversationGerman = {
+    "group.delete": "Gruppe löschen", "group.confirmDelete": "Diese Gruppe und ihre Nachrichten für alle Mitglieder löschen? Das kann nicht rückgängig gemacht werden.",
+    "group.deleteMessage": "Nachricht löschen", "group.confirmDeleteMessage": "Diese Nachricht für alle Gruppenmitglieder löschen?",
     "group.attach": "Dateien anhängen", "group.emoji": "Emoji einfügen", "group.removeAttachment": "{name} entfernen",
     "group.tabTitle": "Private Gruppe · {name}", "group.messagePreview": "{name} · {sender}: {text}",
     "group.offlineBatch": "{count} ungelesene Nachrichten in {name}",

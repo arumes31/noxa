@@ -1,7 +1,7 @@
 import { expect, test } from "./fixtures.js";
 
 test.beforeEach(async ({ page }) => {
-    await page.route("**/__group_test__", route => route.fulfill({ contentType: "text/html", body: '<!doctype html><html><head><title>Private groups</title><link rel="stylesheet" href="/src/conversations.css"></head><body><aside id="sidebar"><div id="channel-tree"><button>Lobby</button></div></aside><main id="center"><section id="chat-pane"><p>Channel messages</p><textarea aria-label="Message Lobby">channel draft</textarea></section></main><button id="launch">Groups</button></body></html>' }));
+    await page.route("**/__group_test__", route => route.fulfill({ contentType: "text/html", body: '<!doctype html><html><head><title>Private groups</title><link rel="stylesheet" href="/src/conversations.css"></head><body><aside id="sidebar"><div id="channel-tree"><button>Lobby</button></div></aside><nav id="test-group-list"></nav><main id="center"><section id="chat-pane"><p>Channel messages</p><textarea aria-label="Message Lobby">channel draft</textarea></section></main><button id="launch">Groups</button></body></html>' }));
     await page.goto("/__group_test__");
     await page.evaluate(async () => {
         window.__noxa = { state: { activeTabID: "server-a", serverGeneration: 1, myUniqueID: "local-device-key", myClientID: "a", clients: [{ client_id: "a", unique_id: "alice", nickname: "Alice" }, { client_id: "b", unique_id: "bob", nickname: "Bob" }], settings: { blocked_users: [] } } };
@@ -25,6 +25,15 @@ test.beforeEach(async ({ page }) => {
                     if (window.__markGate) await window.__markGate;
                     window.__readPositions[command.id] = Math.max(window.__readPositions[command.id] || 0, command.read_message_id);
                     return { conversations: [], messages: [] };
+                }
+                if (["delete", "delete_message", "remove", "transfer"].includes(command.action)) {
+                    if (group.owner !== "alice") throw new Error("owner required");
+                    if (window.__mutationFailure) throw new Error("Mutation rejected");
+                    if (command.action === "delete") window.__groups = window.__groups.filter(g => g.id !== group.id);
+                    if (command.action === "delete_message") window.__groupMessages = window.__groupMessages.filter(m => m.conversation_id !== group.id || m.id !== command.message_id);
+                    if (command.action === "remove") group.members = group.members.filter(m => m.unique_id !== command.target);
+                    if (command.action === "transfer") group.owner = command.target;
+                    group.revision++;
                 }
                 if (command.action === "accept") { group.members.find(member => member.unique_id === "alice").pending = false; group.revision++; group.epoch++; }
                 if (command.action === "invite") {
@@ -54,6 +63,18 @@ test.beforeEach(async ({ page }) => {
         const module = await import("/src/conversations.js");
         window.__conversationModule = module;
         document.getElementById("launch").onclick = module.openConversations;
+        // A small navigation host for this component fixture. The full Messages
+        // integration is exercised in app-shell.spec.js.
+        window.__noxa.openDirectMessages = () => module.openConversationsAt("");
+        window.addEventListener("noxa-private-groups-changed", () => {
+            const nav = document.getElementById("test-group-list"); nav.replaceChildren();
+            for (const group of module.listedPrivateGroups()?.groups || []) {
+                const button = document.createElement("button"); button.className = "group-list-item";
+                button.dataset.groupId = group.id; button.setAttribute("aria-label", group.name + (group.members.some(m => m.unique_id === "alice" && m.pending) ? " · Invitation" : "")); button.textContent = group.name;
+                if (group.unread_count) { const badge = document.createElement("span"); badge.className = "group-unread"; badge.textContent = group.unread_count; button.append(badge); }
+                button.onclick = () => module.openConversationsAt(group.id); nav.append(button);
+            }
+        });
         module.initConversations();
     });
     await page.getByRole("button", { name: "Groups", exact: true }).click();
@@ -209,7 +230,7 @@ test("group refresh preserves typing focus and selection; notifications honor mu
 
 test("sidebar group unread badges deduplicate events and clear on opening the group", async ({ page }) => {
     await page.getByRole("button", { name: "Back to channel", exact: true }).click();
-    const group = page.locator('#sidebar .group-list-item[data-group-id="g1"]');
+    const group = page.locator('#test-group-list .group-list-item[data-group-id="g1"]');
     await page.evaluate(async () => {
         for (const id of [101, 102]) window.__groupMessages.push({ id, conversation_id: "g1", from_unique_id: "bob", body: "Unread", created_at: 1 });
         await window.__conversationModule.conversationChanged({ id: "g1", message_id: 101 });
@@ -217,7 +238,7 @@ test("sidebar group unread badges deduplicate events and clear on opening the gr
         await window.__conversationModule.conversationChanged({ id: "g1", message_id: 102 });
     });
     await expect(group.locator(".group-unread")).toHaveText("2");
-    await expect(page.locator('#sidebar [data-group-id="g2"] .group-unread')).toHaveCount(0);
+    await expect(page.locator('#test-group-list [data-group-id="g2"] .group-unread')).toHaveCount(0);
     await group.click();
     await expect(page.locator("#private-groups .group-content h3")).toHaveText("Raid <script>");
     await expect(group.locator(".group-unread")).toHaveCount(0);
@@ -233,7 +254,7 @@ test("sidebar group unread badges deduplicate events and clear on opening the gr
     await expect(group.locator(".group-unread")).toHaveText("1");
 });
 
-test("durable unread state and invitation totals survive reset and remain visible when collapsed", async ({ page }) => {
+test("durable unread state and invitations survive reset", async ({ page }) => {
     await page.getByRole("button", { name: "Back to channel", exact: true }).click();
     await page.evaluate(() => {
         window.__groupMessages.push({ id: 501, conversation_id: "g1", from_unique_id: "bob", body: "While offline", created_at: 1 });
@@ -241,30 +262,20 @@ test("durable unread state and invitation totals survive reset and remain visibl
     });
     const group = page.locator('[data-group-id="g1"].group-list-item');
     await expect(group.locator(".group-unread")).toHaveText("1");
-    await page.locator(".group-collapse").click();
-    await expect(page.locator(".group-summary-unread")).toHaveText("1");
-    await expect(page.locator(".group-summary-invitations")).toHaveText("1");
-    await expect(page.locator(".group-summary-unread")).toBeVisible();
-    await page.locator(".group-collapse").click(); await group.click();
+    expect(await page.evaluate(() => window.__conversationModule.listedPrivateGroups().groups.filter(g => g.members.some(m => m.unique_id === "alice" && m.pending)).length)).toBe(1);
+    await group.click();
     await expect.poll(() => page.evaluate(() => window.__readPositions.g1)).toBe(501);
     await page.evaluate(() => { window.__conversationModule.resetConversations(); window.__conversationModule.initConversations(); });
     await expect(group.locator(".group-unread")).toHaveCount(0);
-    await expect(page.locator(".group-summary-unread")).toBeHidden();
+
 });
 
-test("sidebar search filters groups and call activity appears in each matching row", async ({ page }) => {
-    await page.evaluate(() => {
+test("Messages snapshot retains group call activity across refresh", async ({ page }) => {
+    await page.evaluate(async () => {
         window.__groups[0].active_call_count = 1; window.__groups[0].call_participant_count = 2;
-        window.__conversationModule.conversationChanged();
+        await window.__conversationModule.conversationChanged();
     });
-    await expect(page.locator('[data-group-id="g1"] .group-call-status')).toHaveText("Call · 2");
-    await page.evaluate(() => { window.__noxa.state.treeFilter = "friends"; window.__conversationModule.filterConversations(); });
-    await expect(page.locator('[data-group-id="g1"]')).toBeHidden();
-    await expect(page.locator('[data-group-id="g2"]')).toBeVisible();
-    await page.evaluate(() => { window.__noxa.state.treeFilter = "no match"; window.__conversationModule.filterConversations(); });
-    await expect(page.locator(".group-search-empty")).toBeVisible();
-    await page.evaluate(() => { window.__noxa.state.treeFilter = ""; window.__conversationModule.filterConversations(); });
-    await expect(page.locator('[data-group-id="g1"]')).toBeVisible();
+    expect(await page.evaluate(() => window.__conversationModule.listedPrivateGroups().groups[0])).toMatchObject({ active_call_count: 1, call_participant_count: 2 });
 });
 
 test("new visible messages queue behind a delayed read acknowledgment", async ({ page }) => {
@@ -300,18 +311,6 @@ test("reading older group messages does not mark new arrivals read until scrolli
     await expect.poll(() => page.evaluate(() => window.__readPositions.g1)).toBe(31);
 });
 
-test("sidebar refresh preserves the focused group button for keyboard navigation", async ({ page }) => {
-    const group = page.locator('#sidebar .group-list-item[data-group-id="g1"]');
-    await group.focus();
-    await page.evaluate(() => {
-        window.__groups[0].name = "Refreshed raid team";
-        window.__conversationModule.conversationChanged({ id: "g1" });
-    });
-    await expect(group).toHaveText("Refreshed raid team");
-    await expect(group).toBeFocused();
-    await group.press("Enter");
-    await expect(page.locator("#private-groups .group-content h3")).toHaveText("Refreshed raid team");
-});
 
 for (const delayedMethod of ["SaveSettings", "GetSettings"]) test(`group mute ${delayedMethod} completion after reset cannot overwrite the replacement server`, async ({ page }) => {
     await page.getByRole("button", { name: "Raid <script>", exact: true }).click();
@@ -524,8 +523,7 @@ test("invitations require acceptance; drafts never move into another private gro
 });
 
 test("creation and pending responses stay bound to their original server", async ({ page }) => {
-    await page.locator(".group-create").getByRole("textbox", { name: "Group name", exact: true }).fill("New group");
-    await page.locator(".group-create").getByRole("button", { name: "Create group", exact: true }).click();
+    await page.evaluate(() => window.__conversationModule.createPrivateGroup("New group"));
     await expect(page.locator(".group-content h3")).toHaveText("New group");
     await page.evaluate(() => {
         window.__groupGate = new Promise(resolve => { window.__releaseGroup = resolve; });
@@ -536,112 +534,23 @@ test("creation and pending responses stay bound to their original server", async
     expect(await page.evaluate(() => window.__groupCalls.every(([tab]) => tab === "server-a"))).toBe(true);
 });
 
-test("private groups live below channels and open in the main workspace without a dialog", async ({ page }) => {
-    await expect(page.locator("#sidebar .group-list-item")).toHaveCount(2);
-    expect(await page.locator("#sidebar .group-list-item").first().evaluate(item => {
-        const tree = document.getElementById("channel-tree");
-        return !tree.contains(item) && !!(tree.compareDocumentPosition(item) & Node.DOCUMENT_POSITION_FOLLOWING);
-    })).toBe(true);
-    await expect(page.locator(".dlg-overlay, [role=dialog]")).toHaveCount(0);
-    await page.locator("#sidebar").getByRole("button", { name: "Raid <script>", exact: true }).click();
-    await expect(page.locator("#center #private-groups")).toBeVisible();
-    await expect(page.locator("#center #private-groups .group-content h3")).toHaveText("Raid <script>");
-    await expect(page.locator("#chat-pane")).toBeHidden();
-    await expect(page.locator(".dlg-overlay, [role=dialog]")).toHaveCount(0);
-    await page.evaluate(() => window.__conversationModule.initConversations());
-    await expect(page.locator("#sidebar .group-list-item")).toHaveCount(2);
-    await expect(page.locator("#private-groups")).toHaveCount(1);
-});
-
-async function prepareSplitLayout(page) {
-    await page.evaluate(() => {
-        window.__conversationModule.resetConversations();
-        const tree = document.getElementById("channel-tree");
-        const split = document.createElement("div"); split.id = "sidebar-scroll";
-        tree.before(split); split.append(tree);
-        document.getElementById("sidebar").style.cssText = "display:flex;flex-direction:column;height:600px;width:280px";
-        window.__conversationModule.initConversations();
-    });
-}
-
-test("empty groups stay at the bottom by default and both lists scroll independently", async ({ page }) => {
-    await page.evaluate(() => { window.__groups = []; });
-    await prepareSplitLayout(page);
-    await expect(page.locator(".group-sidebar-status")).toHaveText("No private groups yet.");
-    const split = await page.locator("#sidebar-scroll").boundingBox();
-    const divider = await page.getByRole("separator").boundingBox();
-    expect(divider.y).toBeGreaterThan(split.y + split.height * 0.8);
-    await page.evaluate(() => {
-        const tree = document.getElementById("channel-tree");
-        for (let i = 0; i < 50; i++) { const row = document.createElement("p"); row.textContent = `Channel ${i}`; tree.append(row); }
-        window.__groups = Array.from({ length: 30 }, (_, i) => ({ id: `g${i}`, name: `Private group ${i}`, owner: "alice", members: [{ unique_id: "alice", pending: false }] }));
-        window.__conversationModule.conversationChanged();
-    });
-    await expect(page.locator(".group-list-item")).toHaveCount(30);
-    for (const selector of ["#channel-tree", ".group-sidebar-body"]) {
-        expect(await page.locator(selector).evaluate(node => { node.scrollTop = 100; return node.scrollTop; })).toBeGreaterThan(0);
-    }
-    expect(await page.locator("#sidebar-scroll").evaluate(node => node.scrollHeight <= node.clientHeight)).toBe(true);
-    await page.setViewportSize({ width: 320, height: 640 });
-    await page.locator("#sidebar").evaluate(node => { node.style.height = "320px"; });
-    await expect(page.getByRole("button", { name: "Private groups", exact: true })).toBeVisible();
-    expect(await page.locator("#sidebar-scroll").evaluate(node => node.scrollHeight <= node.clientHeight)).toBe(true);
-});
-
-test("group divider supports dragging, keyboard limits and saved sizing", async ({ page }) => {
-    await prepareSplitLayout(page);
-    const divider = page.getByRole("separator", { name: "Resize channels and private groups" });
-    await expect(divider).toBeVisible();
-    const tree = page.locator("#channel-tree");
-    const before = (await tree.boundingBox()).height;
-    const bar = await divider.boundingBox();
-    await page.mouse.move(bar.x + bar.width / 2, bar.y + bar.height / 2);
-    await page.mouse.down(); await page.mouse.move(bar.x + bar.width / 2, bar.y - 100, { steps: 5 }); await page.mouse.up();
-    expect((await tree.boundingBox()).height).toBeLessThan(before - 80);
-    await divider.focus(); await divider.press("End");
-    await expect(divider).toHaveAttribute("aria-valuenow", "80");
-    await divider.press("ArrowUp");
-    await expect(divider).toHaveAttribute("aria-valuenow", "75");
-    const savedHeight = (await tree.boundingBox()).height;
-    await page.evaluate(() => { window.__conversationModule.resetConversations(); window.__conversationModule.initConversations(); });
-    await expect(divider).toHaveAttribute("aria-valuenow", "75");
-    expect((await tree.boundingBox()).height).toBeCloseTo(savedHeight, 0);
-    await divider.press("Home"); await divider.press("ArrowUp");
-    await expect(divider).toHaveAttribute("aria-valuenow", "20");
-});
-
-test("collapsing groups preserves active chat, persists and makes room for channels", async ({ page }) => {
-    await prepareSplitLayout(page);
+test("private group workspace has no duplicate sidebar list or creation form", async ({ page }) => {
+    await expect(page.locator("#sidebar .group-list-item, .group-create, .group-sidebar")).toHaveCount(0);
     await page.getByRole("button", { name: "Raid <script>", exact: true }).click();
-    const composer = page.getByRole("textbox", { name: "Message this group" });
-    await composer.fill("Keep this draft");
-    const toggle = page.getByRole("button", { name: "Private groups", exact: true });
-    const height = (await page.locator("#channel-tree").boundingBox()).height;
-    await toggle.click();
-    await expect(toggle).toHaveAttribute("aria-expanded", "false");
-    await expect(page.locator(".group-list")).toBeHidden();
-    await expect(page.getByRole("separator")).toBeHidden();
-    await expect(composer).toHaveValue("Keep this draft");
-    expect((await page.locator("#channel-tree").boundingBox()).height).toBeGreaterThan(height + 100);
-    await page.evaluate(() => { window.__conversationModule.resetConversations(); window.__conversationModule.initConversations(); });
-    await expect(toggle).toHaveAttribute("aria-expanded", "false");
-    await toggle.focus(); await toggle.press("Enter");
-    await expect(page.locator(".group-list")).toBeVisible();
-    await toggle.press("Space");
-    await page.getByRole("button", { name: "Create group", exact: true }).click();
-    await expect(toggle).toHaveAttribute("aria-expanded", "true");
-    await expect(page.getByRole("textbox", { name: "Group name" })).toBeFocused();
+    await expect(page.locator("#center #private-groups")).toBeVisible();
+    await expect(page.locator(".group-content h3")).toHaveText("Raid <script>");
+    await expect(page.locator(".dlg-overlay")).toHaveCount(0);
 });
 
 test("back to channel restores channel chat and retains the private group draft", async ({ page }) => {
-    await page.locator("#sidebar").getByRole("button", { name: "Raid <script>", exact: true }).click();
+    await page.locator("#test-group-list").getByRole("button", { name: "Raid <script>", exact: true }).click();
     await page.getByRole("textbox", { name: "Message this group" }).fill("Unsent private draft");
     await page.getByRole("button", { name: "Back to channel", exact: true }).click();
     await expect(page.locator("#chat-pane")).toBeVisible();
     await expect(page.getByRole("textbox", { name: "Message Lobby", exact: true })).toHaveValue("channel draft");
     await expect(page.locator("#private-groups")).toBeHidden();
-    await expect(page.locator("#sidebar .group-list-item")).toHaveCount(2);
-    await page.locator("#sidebar").getByRole("button", { name: "Raid <script>", exact: true }).click();
+    await expect(page.locator("#test-group-list .group-list-item")).toHaveCount(2);
+    await page.locator("#test-group-list").getByRole("button", { name: "Raid <script>", exact: true }).click();
     await expect(page.locator("#center #private-groups")).toBeVisible();
     await expect(page.getByRole("textbox", { name: "Message this group" })).toHaveValue("Unsent private draft");
     await page.evaluate(() => window.__conversationModule.closeConversations());
@@ -650,7 +559,7 @@ test("back to channel restores channel chat and retains the private group draft"
 });
 
 test("reset disposes server groups and ignores delayed old-server responses", async ({ page }) => {
-    await page.locator("#sidebar").getByRole("button", { name: "Raid <script>", exact: true }).click();
+    await page.locator("#test-group-list").getByRole("button", { name: "Raid <script>", exact: true }).click();
     await page.getByRole("textbox", { name: "Message this group" }).fill("Server A private draft");
     await page.evaluate(() => {
         window.__oldServerReplies = [];
@@ -673,19 +582,46 @@ test("reset disposes server groups and ignores delayed old-server responses", as
         window.__groups = [{ id: "g1", name: "Server B team", owner: "alice", revision: 1, epoch: 1, members: [{ unique_id: "alice", pending: false, joined_epoch: 1 }] }];
         window.__groupMessages = [];
     });
-    await expect(page.locator("#sidebar .group-list-item")).toHaveCount(0);
+    await expect(page.locator("#test-group-list .group-list-item")).toHaveCount(0);
     await expect(page.locator("#private-groups")).toHaveCount(0);
     await expect(page.locator("#chat-pane")).toBeVisible();
     await page.evaluate(() => window.__conversationModule.initConversations());
-    await expect(page.locator("#sidebar .group-list-item")).toHaveText(["Server B team"]);
+    await expect(page.locator("#test-group-list .group-list-item")).toHaveText(["Server B team"]);
     await page.evaluate(async () => {
         for (const release of window.__oldServerReplies.splice(0)) release();
         await new Promise(requestAnimationFrame);
     });
-    await expect(page.locator("#sidebar .group-list-item")).toHaveText(["Server B team"]);
+    await expect(page.locator("#test-group-list .group-list-item")).toHaveText(["Server B team"]);
     await expect(page.locator("#private-groups")).toBeHidden();
     await expect(page.locator("#chat-pane")).toBeVisible();
-    await page.locator("#sidebar").getByRole("button", { name: "Server B team", exact: true }).click();
+    await page.locator("#test-group-list").getByRole("button", { name: "Server B team", exact: true }).click();
     await expect(page.getByRole("textbox", { name: "Message this group" })).toHaveValue("");
     await expect(page.locator("#center #private-groups .group-content h3")).toHaveText("Server B team");
+});
+
+test("owner can delete another member's message only after confirmation", async ({ page }) => {
+    await page.evaluate(() => { window.__groupMessages.push({ id: 7, conversation_id: "g1", from_unique_id: "bob", body: "Moderate this", created_at: 1 }); });
+    await page.getByRole("button", { name: "Raid <script>", exact: true }).click();
+    await page.getByRole("button", { name: "Delete message", exact: true }).click();
+    await page.getByRole("button", { name: "Cancel", exact: true }).click();
+    await expect(page.locator(".group-messages")).toContainText("Moderate this");
+    await page.getByRole("button", { name: "Delete message", exact: true }).click();
+    await page.getByRole("button", { name: "Confirm", exact: true }).click();
+    await expect(page.locator(".group-message")).toHaveCount(0);
+    expect(await page.evaluate(() => window.__groupCalls.find(([,c]) => c.action === "delete_message"))).toEqual(["server-a", { action: "delete_message", id: "g1", revision: 1, target: "", message_id: 7 }]);
+});
+for (const action of ["Remove", "Make owner", "Delete group"]) test(`owner management: ${action}`, async ({ page }) => {
+    await page.getByRole("button", { name: "Raid <script>", exact: true }).click();
+    await page.locator(".group-members > summary").click();
+    await page.getByRole("button", { name: action, exact: true }).click();
+    await page.getByRole("button", { name: "Confirm", exact: true }).click();
+    if (action === "Delete group") await expect(page.locator('#test-group-list [data-group-id="g1"]')).toHaveCount(0);
+    else if (action === "Make owner") await expect(page.getByRole("button", { name: "Delete group", exact: true })).toHaveCount(0);
+    else await expect.poll(() => page.evaluate(() => window.__groups[0].members.length)).toBe(1);
+});
+test("non-owner never sees owner deletion controls", async ({ page }) => {
+    await page.evaluate(() => { window.__groups[0].owner = "bob"; window.__groupMessages.push({id:7,conversation_id:"g1",from_unique_id:"bob",body:"Private",created_at:1}); });
+    await page.getByRole("button", { name: "Raid <script>", exact: true }).click();
+    await expect(page.getByRole("button", { name: "Delete group", exact: true })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Delete message", exact: true })).toHaveCount(0);
 });

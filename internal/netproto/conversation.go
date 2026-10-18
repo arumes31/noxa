@@ -82,6 +82,7 @@ type ConversationRequest struct {
 	Name          string `json:"name"`
 	Target        string `json:"target"`
 	BeforeID      int64  `json:"before_id"`
+	MessageID     int64  `json:"message_id,omitempty"`
 	ReadMessageID int64  `json:"read_message_id"`
 	// ShareRead makes a mark_read also advance the caller's shared read
 	// receipt (SeenMessageID) and notify the other members. Absent (older
@@ -178,6 +179,18 @@ func ChangeConversation(current Conversation, actor string, request Conversation
 		}
 	}
 	switch request.Action {
+	case "delete":
+		if actor != current.Owner {
+			return Conversation{}, ErrConversationDenied
+		}
+		next.Members = nil
+	case "delete_message":
+		if actor != current.Owner {
+			return Conversation{}, ErrConversationDenied
+		}
+		if request.MessageID <= 0 {
+			return Conversation{}, ErrConversationInvalid
+		}
 	case "invite":
 		if actor != current.Owner {
 			return Conversation{}, ErrConversationDenied

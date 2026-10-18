@@ -73,6 +73,17 @@ function bookmarkFor(t) {
 // tabs left, the login dialog comes back up.
 function renderTabs(tabs) {
     const bar = document.getElementById("server-tabs");
+    const previousActive = bar.querySelector(".srv-tab.active")?.dataset.tabId;
+    // Mouse wheels normally scroll vertically; map them onto an overflowing
+    // horizontal tab strip while preserving native trackpad horizontal input.
+    bar.onwheel = event => {
+        if (event.ctrlKey || bar.scrollWidth <= bar.clientWidth) return;
+        const delta = Math.abs(event.deltaX) > Math.abs(event.deltaY) ? event.deltaX : event.deltaY;
+        const scale = event.deltaMode === 1 ? 20 : event.deltaMode === 2 ? bar.clientWidth : 1;
+        const before = bar.scrollLeft;
+        bar.scrollLeft += delta * scale;
+        if (bar.scrollLeft !== before) event.preventDefault();
+    };
     const focused = bar.contains(document.activeElement) ? document.activeElement : null;
     const existing = new Map([...bar.querySelectorAll(".srv-tab[data-tab-id]")].map(tab => [tab.dataset.tabId, tab]));
     const visible = new Set((tabs || []).map(tab => tab.id));
@@ -156,6 +167,8 @@ function renderTabs(tabs) {
     plus.setAttribute("aria-label", translate("desktop.connect.to.another.server"));
     plus.onclick = () => V().showLogin();
     if (bar.lastElementChild !== plus) bar.appendChild(plus);
+    const active = bar.querySelector(".srv-tab.active");
+    if (active && active.dataset.tabId !== previousActive) active.scrollIntoView({ block: "nearest", inline: "nearest" });
     if (focused?.isConnected && focused.getClientRects().length && document.activeElement !== focused) focused.focus({ preventScroll: true });
 }
 

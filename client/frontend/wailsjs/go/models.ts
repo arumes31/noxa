@@ -2987,6 +2987,7 @@ export namespace netproto {
 	    revision: number;
 	    name: string;
 	    target: string;
+	    message_id?: number;
 	    before_id: number;
 	    read_message_id: number;
 	    share_read?: boolean;
@@ -3003,6 +3004,7 @@ export namespace netproto {
 	        this.revision = source["revision"];
 	        this.name = source["name"];
 	        this.target = source["target"];
+	        this.message_id = source["message_id"];
 	        this.before_id = source["before_id"];
 	        this.read_message_id = source["read_message_id"];
 	        this.share_read = source["share_read"];
@@ -3771,6 +3773,7 @@ export namespace netproto {
 	    name: string;
 	    settings: RoleChannelSettings;
 	    affected_channels: number;
+	    supports_text_channels: boolean;
 	    can_create_permanent: boolean;
 	    can_create_temporary: boolean;
 	    can_manage_access: boolean;
@@ -3792,6 +3795,7 @@ export namespace netproto {
 	        this.name = source["name"];
 	        this.settings = this.convertValues(source["settings"], RoleChannelSettings);
 	        this.affected_channels = source["affected_channels"];
+	        this.supports_text_channels = source["supports_text_channels"];
 	        this.can_create_permanent = source["can_create_permanent"];
 	        this.can_create_temporary = source["can_create_temporary"];
 	        this.can_manage_access = source["can_manage_access"];

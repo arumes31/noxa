@@ -3,7 +3,6 @@ import { voiceMessageButton, renderVoiceMessage } from "./voice-messages.js";
 import { confirmDialog, promptDialog } from "./modal.js";
 import { startPrivateCall, showCallHistory } from "./private-calls.js";
 import { sessionUserID } from "./session-identity.js";
-import { initGroupSidebarLayout } from "./group-sidebar-layout.js";
 import { encryptionBadge } from "./message-encryption.js";
 import { parseFileRef } from "./chat-parsers.js";
 import { applySeen, createTypingStore, GROUP_TYPING_PING_MS, seenLabel, seenMarkers, typingLabel } from "./group-activity.js";
@@ -147,10 +146,9 @@ export function closeConversations() { workspace?.close(); }
 export function isPrivateGroupActive() { return !!workspace?.active(); }
 export function viewedConversationID() { return viewedGroup?.() || ""; }
 export function privateGroupViewToken() { return workspace?.token(); }
-export function filterConversations() { workspace?.filter(); }
 // listedPrivateGroups is the Messages view's read-only snapshot of the last
 // authoritative list (dm-view.js); "noxa-private-groups-changed" announces a
-// new one. createPrivateGroup runs the same create flow as the sidebar form.
+// new one. Creation is owned by the Messages view.
 export function listedPrivateGroups() { return workspace?.current() ? workspace.snapshot() : null; }
 export function createPrivateGroup(name) { initConversations(); return workspace?.create(name); }
 function groupsChanged() { window.dispatchEvent(new CustomEvent("noxa-private-groups-changed")); }
@@ -165,8 +163,8 @@ export function resetConversations() {
 export function initConversations() {
     if (workspace?.current()) return;
     resetConversations();
-    const tree = document.getElementById("channel-tree"), center = document.getElementById("center");
-    if (!tree || !center || !V().state.activeTabID) return;
+    const center = document.getElementById("center");
+    if (!center || !V().state.activeTabID) return;
     const tabID = V().state.activeTabID;
     const serverGeneration = V().state.serverGeneration;
     const uid = () => sessionUserID(V().state);
@@ -182,32 +180,10 @@ export function initConversations() {
     channels.className = "group-show-channels";
     channels.setAttribute("aria-controls", "sidebar"); channels.setAttribute("aria-expanded", "false");
     navigation.append(channels, back, button("call.history", showCallHistory));
-    const sidebar = el("nav", "group-sidebar"); sidebar.setAttribute("aria-label", t("group.title"));
-    sidebar.id = "private-groups-sidebar";
-    const heading = el("div", "pane-head sidebar-head");
-    const title = el("span", "", t("group.title"));
-    const headingTitle = el("h2", ""); headingTitle.append(title); heading.append(headingTitle);
-    const add = button("group.create", () => { const collapsed = sidebarBody.hidden; layout.expand(); create.hidden = collapsed ? false : !create.hidden; add.setAttribute("aria-expanded", String(!create.hidden)); if (!create.hidden) name.focus(); });
-    add.className = "icon-btn pane-head-btn"; add.textContent = "+"; add.setAttribute("aria-label", t("group.create")); add.setAttribute("aria-expanded", "false");
-    heading.append(add);
-    const create = el("form", "group-create");
-    create.hidden = true;
-    const name = el("input", ""); name.maxLength = 80; name.required = true; name.placeholder = t("group.name"); name.setAttribute("aria-label", t("group.name"));
-    const createButton = button("group.create"); createButton.type = "submit"; create.append(name, createButton);
-    const list = el("div", "group-list");
-    const sidebarBody = el("div", "group-sidebar-body"); sidebarBody.id = "private-groups-list";
-    sidebarBody.append(create, list); sidebar.append(heading, sidebarBody);
     const content = el("section", "group-content");
     const status = el("p", "group-status"); status.setAttribute("role", "status");
     panel.append(navigation, content, status);
-    const sidebarStatus = el("p", "group-sidebar-status"); sidebarStatus.setAttribute("role", "status"); sidebarBody.append(sidebarStatus);
-    tree.after(sidebar); center.append(panel);
-    const layout = initGroupSidebarLayout({ tree, body: sidebarBody, title });
-    const summary = el("span", "group-summary"); summary.setAttribute("role", "status");
-    const summaryUnread = el("span", "group-summary-unread");
-    const summaryInvitations = el("span", "group-summary-invitations");
-    summary.append(summaryUnread, summaryInvitations); add.before(summary);
-    const searchEmpty = el("p", "group-search-empty"); searchEmpty.hidden = true; sidebarBody.append(searchEmpty);
+    center.append(panel);
     let selected = "";
     let generation = 0;
     let refreshPending = 0, sidebarRefreshQueued = false;
@@ -236,33 +212,13 @@ export function initConversations() {
             hiddenSurfaces = null;
         }
         panel.hidden = !show; center.classList.toggle("private-group-active", show);
-        for (const item of list.querySelectorAll(".group-list-item")) item.setAttribute("aria-current", String(show && item.dataset.groupId === selected));
     };
     const request = command => app().ConversationForTab(tabID, command);
     const label = memberID => V().state.clients.find(client => client.unique_id === memberID)?.nickname || memberID;
     const blocked = memberID => (V().state.settings?.blocked_users || []).includes(memberID);
-    const filter = () => {
-        const query = (V().state.treeFilter || "").trim().toLocaleLowerCase();
-        let matches = 0;
-        for (const item of list.children) {
-            const group = listedGroups.find(group => group.id === item.dataset.groupId);
-            const haystack = group ? [group.name, ...group.members.map(member => label(member.unique_id))].join(" ").toLocaleLowerCase() : "";
-            item.hidden = !!query && !haystack.includes(query);
-            if (!item.hidden) matches++;
-        }
-        searchEmpty.textContent = t("group.noMatches"); searchEmpty.hidden = !query || matches > 0;
-    };
     const updateSummary = () => {
-        let unread = 0, invitations = 0;
-        for (const group of listedGroups) {
-            if (group.members.find(member => member.unique_id === uid())?.pending) invitations++;
-            else unread += group.unread_count || 0;
-        }
-        V().trayUnread?.set("groups", unread);
-        for (const [badge, count, key] of [[summaryUnread, unread, "group.unread"], [summaryInvitations, invitations, "group.invitations"]]) {
-            badge.textContent = count > 99 ? "99+" : String(count); badge.hidden = !count;
-            badge.setAttribute("aria-label", t(key, { count })); badge.title = t(key, { count });
-        }
+        V().trayUnread?.set("groups", listedGroups.reduce((count, group) =>
+            count + (group.members.find(member => member.unique_id === uid())?.pending ? 0 : group.unread_count || 0), 0));
     };
     const markRead = async (group, messageID, token) => {
         if (!messageID || messageID <= (group.read_message_id || 0)
@@ -282,7 +238,11 @@ export function initConversations() {
         } catch (error) { fail(error); }
         finally { reading.delete(group.id); queuedReads.delete(group.id); }
     };
-    const fail = error => { if (current()) (visible() ? status : sidebarStatus).textContent = t("group.failed", { error: String(error) }); };
+    const fail = error => {
+        if (!current()) return;
+        status.textContent = t("group.failed", { error: String(error) });
+        if (!visible()) V().toast?.(status.textContent, "warn");
+    };
     const saveDraft = () => {
         const input = content.querySelector(".group-composer textarea");
         if (input?.dataset.groupId) drafts.set(input.dataset.groupId, input.value);
@@ -301,42 +261,14 @@ export function initConversations() {
         try {
             const result = await request({ action: "list" });
             if (!current() || token !== generation || !destinationCurrent()) return;
-            const focusedGroup = list.contains(document.activeElement) ? document.activeElement.dataset.groupId : null;
-            list.replaceChildren();
-            const groups = result.conversations.filter(group => !group.members.find(member => member.unique_id === uid())?.pending || !blocked(group.owner));
+            const groups = (result.conversations || []).filter(group => !group.members.find(member => member.unique_id === uid())?.pending || !blocked(group.owner));
             listedGroups = groups; updateSummary();
             if (sidebarOnly) activity?.seen(selected);
             // The authoritative list also restores tabs for messages received
             // while offline, and drops tabs of groups this user has left.
             syncChatTabs(tabID, serverGeneration, groups, true);
             if (!caughtUpOnce) { caughtUpOnce = true; catchUpNotifications(tabID, groups, uid()); }
-            sidebarStatus.textContent = groups.length ? "" : t("group.noGroups");
-            for (const group of groups) {
-                const pending = group.members.find(member => member.unique_id === uid())?.pending;
-                const item = el("button", "group-list-item", `${group.name}${pending ? ` · ${t("group.invitation")}` : ""}`);
-                item.dataset.groupId = group.id;
-                if (!pending && group.active_call_count > 0) {
-                    const activity = el("span", "group-call-status", t("group.callStatus", { count: group.call_participant_count }));
-                    item.append(activity);
-                }
-                if (!pending && group.unread_count > 0) {
-                    const badge = el("span", "group-unread", group.unread_count > 99 ? "99+" : String(group.unread_count));
-                    badge.setAttribute("aria-label", t("group.unread", { count: group.unread_count })); item.append(badge);
-                }
-                item.setAttribute("aria-current", String(visible() && group.id === selected));
-                item.onclick = () => {
-                    saveDraft(); selected = group.id; jumpTarget = 0; status.textContent = ""; setVisible(true);
-                    document.body.classList.remove("channels-open");
-                    document.getElementById("workspace-sidebar-toggle")?.setAttribute("aria-expanded", "false");
-                    channels.setAttribute("aria-expanded", "false");
-                    if (window.innerWidth <= 720) panel.focus({ preventScroll: true });
-                    void refresh();
-                };
-                list.append(item);
-            }
-            filter();
             groupsChanged();
-            if (focusedGroup && document.activeElement === document.body) [...list.children].find(item => item.dataset.groupId === focusedGroup)?.focus({ preventScroll: true });
             if (sidebarOnly) return;
             const group = groups.find(group => group.id === selected);
             if (!group) { saveDraft(); selected = ""; jumpTarget = 0; content.replaceChildren(el("p", "group-empty", t("group.empty"))); return; }
@@ -355,18 +287,19 @@ export function initConversations() {
     };
     const mutate = async (group, action, target = "", extra = {}) => {
         if (!current() || mutationPending) return;
+        const mutationView = viewToken;
         mutationPending = true; ++generation; status.textContent = t("group.loading");
-        const controls = new Map([...content.querySelectorAll("button"), createButton].map(node => [node, node.disabled]));
+        const controls = new Map([...content.querySelectorAll("button")].map(node => [node, node.disabled]));
         for (const node of controls.keys()) node.disabled = true;
         try {
             const result = await request({ action, id: group?.id || "", revision: group?.revision || 0, target, ...extra });
             if (!current()) return;
-            if (action === "create") { selected = result.conversations[0]?.id || ""; name.value = ""; create.hidden = true; add.setAttribute("aria-expanded", "false"); setVisible(true); }
+            if (action === "create" && mutationView === viewToken && V().isDirectMessagesOpen?.() !== false) { selected = result.conversations[0]?.id || ""; setVisible(true); }
             if (action === "invite" && content.dataset.groupId === group.id) {
                 const input = content.querySelector(".group-invite input");
                 if (input?.value.trim() === target) input.value = "";
             }
-            if (action === "leave" || action === "decline") selected = "";
+            if (action === "leave" || action === "decline" || action === "delete") selected = "";
             status.textContent = "";
         } catch (error) { fail(error); }
         finally {
@@ -375,9 +308,10 @@ export function initConversations() {
             for (const [node, disabled] of controls) if (node.isConnected) node.disabled = disabled;
         }
     };
-    const confirmChange = async (group, action, target, key) => {
+    const confirmChange = async (group, action, target, key, extra = {}) => {
+        const capturedView = viewToken;
         if (await confirmDialog({ title: t(key, { name: label(target) }), serverScoped: true })) {
-            if (current() && selected === group.id) void mutate(group, action, target);
+            if (current() && capturedView === viewToken && selected === group.id) void mutate(group, action, target, extra);
         }
     };
     const showGroup = async (group, token, destinationCurrent = () => true) => {
@@ -442,6 +376,8 @@ export function initConversations() {
                 if (value !== null && current() && selected === group.id) void mutate(group, "rename", "", { name: value });
             });
             renameButton.className = "group-rename"; details.append(renameButton);
+            const deleteGroup = button("group.delete", () => confirmChange(group, "delete", "", "group.confirmDelete"));
+            deleteGroup.className = "group-delete danger"; details.append(deleteGroup);
         }
         const leave = button("group.leave", () => confirmChange(group, "leave", uid(), "group.confirmLeave")); leave.className = "group-leave";
         leave.disabled = owner && group.members.length > 1; if (leave.disabled) leave.title = t("group.leaveOwner"); details.append(leave);
@@ -671,9 +607,15 @@ export function initConversations() {
                     const lock = window.__noxaChat?.encryptionBadgeElement?.(badge);
                     if (lock) stamp.append(lock);
                     row.append(el("strong", "", label(message.from_unique_id)), stamp, body);
-                    if (!blocked(message.from_unique_id)) row.append(button("messages.save", () => {
+                    const actions = el("div", "group-message-actions");
+                    if (!blocked(message.from_unique_id)) actions.append(button("messages.save", () => {
                         if (current() && token === generation) void window.__noxaMessageTools?.save({ kind: "group", group_id: group.id, message_id: message.id });
                     }));
+                    if (owner) {
+                        const remove = button("group.deleteMessage", () => confirmChange(group, "delete_message", "", "group.confirmDeleteMessage", { message_id: message.id }));
+                        remove.className = "group-delete-message"; actions.append(remove);
+                    }
+                    row.append(actions);
                     fragment.append(row);
                 }
                 const initial = !before;
@@ -714,7 +656,6 @@ export function initConversations() {
         older.onclick = history;
         await history();
     };
-    create.onsubmit = event => { event.preventDefault(); void mutate(null, "create", "", { name: name.value.trim() }); };
     const refreshHandler = () => {
         if (!current()) return;
         saveDraft(); void refresh();
@@ -723,9 +664,7 @@ export function initConversations() {
     const viewed = () => visible() ? selected : "";
     viewedGroup = viewed;
     const languageChanged = () => {
-        sidebar.setAttribute("aria-label", t("group.title")); panel.setAttribute("aria-label", t("group.title"));
-        layout.translate(); add.setAttribute("aria-label", t("group.create"));
-        createButton.textContent = t("group.create"); name.placeholder = t("group.name"); name.setAttribute("aria-label", t("group.name"));
+        panel.setAttribute("aria-label", t("group.title"));
         back.textContent = t("group.back"); channels.textContent = t("workspace.labels.showChannels");
         navigation.lastChild.textContent = t("call.history"); refreshHandler();
     };
@@ -734,17 +673,17 @@ export function initConversations() {
     window.addEventListener("focus", focusChanged); document.addEventListener("visibilitychange", focusChanged);
     const sidebarPoll = window.setInterval(() => { if (current() && !document.hidden) void refresh(true); }, 15000);
     workspace = {
-        current, filter, active: visible, token: () => visible() ? viewToken : null,
+        current, active: visible, token: () => visible() ? viewToken : null,
         snapshot: () => ({ tabID, generation: serverGeneration, uid: uid(), groups: listedGroups }),
         seen: (id, memberID, messageID) => {
             const listed = listedGroups.find(group => group.id === id);
             if (listed && applySeen(listed.members, memberID, messageID)) activity?.seen(id);
         },
         create: groupName => mutate(null, "create", "", { name: String(groupName || "").trim() }),
-        open: () => { setVisible(true); layout.expand(); create.hidden = false; add.setAttribute("aria-expanded", "true"); name.focus(); },
-        jump: async (id, messageID, destinationCurrent) => { saveDraft(); selected = id; jumpTarget = messageID; setVisible(true); layout.expand(); await refresh(false, destinationCurrent); if (current() && destinationCurrent() && selected !== id) status.textContent = t("messages.notFound"); },
+        open: () => V().openDirectMessages?.(),
+        jump: async (id, messageID, destinationCurrent) => { saveDraft(); status.textContent = ""; selected = id; jumpTarget = messageID; setVisible(true); await refresh(false, destinationCurrent); if (current() && destinationCurrent() && selected !== id) status.textContent = t("messages.notFound"); },
         close: () => { saveDraft(); setVisible(false); },
-        destroy: () => { ++generation; window.clearInterval(sidebarPoll); window.removeEventListener("noxa-language-changed", languageChanged); window.removeEventListener("focus", focusChanged); document.removeEventListener("visibilitychange", focusChanged); setVisible(false); layout.destroy(); sidebar.remove(); panel.remove(); drafts.clear(); stagedFiles.clear(); memberForms.clear(); references.clear(); },
+        destroy: () => { ++generation; window.clearInterval(sidebarPoll); window.removeEventListener("noxa-language-changed", languageChanged); window.removeEventListener("focus", focusChanged); document.removeEventListener("visibilitychange", focusChanged); setVisible(false); panel.remove(); drafts.clear(); stagedFiles.clear(); memberForms.clear(); references.clear(); },
     };
     void refresh();
 }
