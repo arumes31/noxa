@@ -25,10 +25,10 @@ export function voicePlaybackDetails(audio, blob, reference = '', known = {}) {
     const speed = document.createElement('select'); speed.setAttribute('aria-label',t('voiceMessage.speed'));
     for (const value of PLAYBACK_SPEEDS) { const option = document.createElement('option'); option.value = String(value); option.textContent = `${value}×`; speed.append(option); } speed.value = '1';
     controls.append(canvas, seek, duration, speed); audio.after(controls);
-    let seconds = Number(known?.durationMs) > 0 ? known.durationMs / 1000 : 0, key = '', restored = false, lastSaved = 0, released = false, durationProbe = false, analysis, sampledStream, sampleTimer;
+    let seconds = Number(known?.durationMs) > 0 ? known.durationMs / 1000 : 0, key = '', restored = false, lastSaved = 0, released = false, durationProbe = false, controlsReady = false, analysis, sampledStream, sampleTimer;
     let peaks = Array.isArray(known?.peaks) && known.peaks.length ? resamplePeaks(known.peaks, 64) : Array(64).fill(0);
     const current = () => !released && controls.isConnected && audio.isConnected;
-    const settled = () => !durationProbe && Number.isFinite(audio.duration);
+    const settled = () => !durationProbe && !audio.seeking && Number.isFinite(audio.duration);
     const draw = () => {
         const ctx = canvas.getContext('2d'); ctx.clearRect(0,0,384,40);
         const position = Number(audio.currentTime) || 0;
@@ -85,9 +85,14 @@ export function voicePlaybackDetails(audio, blob, reference = '', known = {}) {
     const refresh = () => {
         if (!current()) return;
         if (Number.isFinite(audio.duration) && audio.duration > 0) seconds = audio.duration;
-        seek.disabled = !seconds; seek.max = String(seconds); seek.value = String(Math.min(seconds,audio.currentTime || 0));
+        restore();
+        // Initialize only after probing/restoration, then keep the range usable
+        // throughout a drag even while each input starts another async seek.
+        if (seconds && audio.readyState >= 1 && !audio.seeking && (!reference || (settled() && key && restored))) controlsReady = true;
+        seek.disabled = !controlsReady;
+        speed.disabled = seek.disabled; seek.max = String(seconds); seek.value = String(Math.min(seconds,audio.currentTime || 0));
         duration.textContent = `${time(audio.currentTime || 0)} / ${time(seconds)}`;
-        restore(); draw();
+        draw();
     };
     const metadata = () => {
         // MediaRecorder WebM often omits its duration. Let the media element find
@@ -103,6 +108,10 @@ export function voicePlaybackDetails(audio, blob, reference = '', known = {}) {
     };
     const progress = () => { refresh(); if (!durationProbe && Date.now()-lastSaved > 5000) save(); };
     audio.addEventListener('loadedmetadata', metadata); audio.addEventListener('durationchange', durationChanged);
+    // Seeking is asynchronous: currentTime/ended can still describe the old
+    // position until seeked. Persist the completed seek even while paused.
+    const seeked = () => { refresh(); save(); };
+    audio.addEventListener('seeked', seeked);
     audio.addEventListener('timeupdate', progress);
     audio.addEventListener('playing', samplePlayback);
     audio.addEventListener('pause', save); audio.addEventListener('ended', save);
@@ -112,6 +121,7 @@ export function voicePlaybackDetails(audio, blob, reference = '', known = {}) {
     void referenceKey(reference).then(value => { key = value; if (current()) refresh(); });
     releases.set(audio, () => {
         save(); released = true; stopAnalysis();
+        audio.removeEventListener('seeked', seeked);
         audio.removeEventListener('loadedmetadata', metadata); audio.removeEventListener('durationchange', durationChanged);
         audio.removeEventListener('timeupdate', progress); audio.removeEventListener('playing', samplePlayback);
         audio.removeEventListener('pause', save); audio.removeEventListener('ended', save);

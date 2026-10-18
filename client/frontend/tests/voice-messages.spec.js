@@ -62,6 +62,8 @@ test('recording shows a live meter, formatted elapsed time and an approaching-li
 test('record, preview, encrypted attachment send and lazy inline playback', async ({ page }) => {
     await record(page);
     await expect(page.getByLabel('Voice message playback')).toBeVisible();
+    await expect(page.getByRole('slider', { name: 'Seek voice message' })).toBeEnabled();
+    await expect(page.getByLabel('Playback speed')).toBeEnabled();
     expect(await page.evaluate(() => window.__tracks.every(track => track.readyState === 'ended'))).toBe(true);
     await page.getByRole('button', { name: 'Send voice message', exact: true }).click();
     await expect(page.locator('.voice-message-dialog')).toHaveCount(0);
@@ -168,4 +170,62 @@ test('voice waveform, seeking, speed and private local resume survive reopening'
     await expect(page.getByLabel('Playback speed')).toHaveValue('1.5');
     await expect.poll(() => page.getByLabel('Voice message playback').evaluate(audio => audio.currentTime)).toBeCloseTo(removedAt,1);
     expect(await page.evaluate(() => window.__remoteDecodes)).toBe(0);
+});
+
+// Control the media event order: a WebM duration probe and a paused seek can
+// both finish after the UI has already received their target currentTime.
+test('resume persistence waits for duration probing and a completed paused seek', async ({ page }) => {
+    await page.evaluate(async () => {
+        const { voicePlaybackDetails } = await import('/src/voice-playback.js');
+        const audio = document.createElement('audio');
+        const media = { duration: Infinity, readyState: 0, seeking: false, ended: false, position: 0 };
+        Object.defineProperties(audio, {
+            duration: { get: () => media.duration },
+            readyState: { get: () => media.readyState },
+            seeking: { get: () => media.seeking },
+            ended: { get: () => media.ended },
+            currentTime: { get: () => media.position, set: value => { media.position = value; media.seeking = true; } },
+            hasAttribute: { value: name => name === 'src' },
+        });
+        document.querySelector('#fixture').append(audio);
+        voicePlaybackDetails(audio, new Blob(), 'regression-secret-key', { durationMs: 2200 });
+        window.__seekMedia = media;
+        window.__seekAudio = audio;
+    });
+    const seek = page.getByRole('slider', { name: 'Seek voice message' });
+    await expect(seek).toBeDisabled();
+    await page.evaluate(() => {
+        window.__seekMedia.readyState = 1;
+        window.__seekAudio.dispatchEvent(new Event('loadedmetadata'));
+        window.__seekMedia.duration = 2.2;
+        window.__seekAudio.dispatchEvent(new Event('durationchange'));
+    });
+    // Even a finite duration is insufficient while the probe is returning to 0.
+    await expect(seek).toBeDisabled();
+    await page.evaluate(() => {
+        window.__seekMedia.seeking = false;
+        window.__seekAudio.dispatchEvent(new Event('seeked'));
+    });
+    await expect(seek).toBeEnabled();
+    await page.getByLabel('Playback speed').selectOption('1.5');
+    await page.evaluate(() => { window.__seekMedia.ended = true; });
+    const bounds = await seek.boundingBox();
+    await page.mouse.move(bounds.x + bounds.width * .2, bounds.y + bounds.height / 2);
+    await page.mouse.down();
+    await expect(seek).toBeEnabled();
+    await page.mouse.move(bounds.x + bounds.width * .6, bounds.y + bounds.height / 2, { steps: 4 });
+    await expect(seek).toBeEnabled();
+    await page.mouse.up();
+    expect(await page.evaluate(() => window.__seekMedia.position)).toBeGreaterThan(.4);
+    await seek.fill('0.4');
+    await expect(seek).toBeEnabled();
+    await page.evaluate(() => {
+        window.__seekMedia.seeking = false;
+        window.__seekMedia.ended = false;
+        window.__seekAudio.dispatchEvent(new Event('seeked'));
+    });
+    await expect(seek).toBeEnabled();
+    const history = await page.evaluate(() => localStorage.getItem('noxa:voice-playback:v1'));
+    expect(JSON.parse(history)[0]).toMatchObject({ position: .4, speed: 1.5 });
+    expect(history).not.toContain('regression-secret-key');
 });
