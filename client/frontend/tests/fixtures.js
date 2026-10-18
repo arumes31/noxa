@@ -40,3 +40,11 @@ export const test = base.extend({
 });
 
 export { expect };
+
+// chooseShareOption picks a share-dialog option (group: preset, bitrate or
+// audio), opening its panel in the share bar first when it is closed.
+export async function chooseShareOption(scope, group, value) {
+    const input = scope.locator(`.sh-${group} input[value="${value}"]`);
+    if (!await input.isVisible()) await scope.locator(group === "audio" ? ".sp-audio-toggle" : ".sp-quality-toggle").click();
+    await input.check();
+}

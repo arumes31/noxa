@@ -1,4 +1,4 @@
-import { expect, test } from "./fixtures.js";
+import { expect, test, chooseShareOption } from "./fixtures.js";
 
 function expectLayeredScreenBudget(encodings, cap) {
     const active = encodings.filter(encoding => encoding.active !== false);
@@ -91,8 +91,6 @@ test.beforeEach(async ({ page }) => {
             if (window.__media.delayCapture) await new Promise(resolve => { window.__media.finishCapture = resolve; });
             return stream;
         } });
-        window.CropTarget = { fromElement: async () => ({}) };
-        MediaStreamTrack.prototype.cropTo = async () => {};
         window.__media.video = await import("/src/video.js");
         (await import("/src/modal.js")).initModalSystem();
         document.getElementById("voice-screen").onclick = () => window.__media.video.shareToggle();
@@ -139,7 +137,7 @@ test("repeated screen shares reuse senders and declare shared audio after every 
     });
     for (let i = 0; i < 3; i++) {
         await page.locator("#voice-screen").click();
-        await page.locator(".sh-audio").selectOption("system");
+        await chooseShareOption(page, "audio", "system");
         await page.getByRole("button", { name: "Choose screen or window…", exact: true }).click();
         await page.getByRole("dialog").getByRole("button", { name: "Start sharing", exact: true }).click();
         await expect.poll(() => page.evaluate(() => !!window.__noxa.state.screenSharing)).toBe(true);
@@ -172,18 +170,18 @@ async function installApplicationCapture(page, label = "Application Audio", surf
 
 test("application audio requires a window and never switches silently to system audio", async ({ page }) => {
     await page.locator("#voice-screen").click();
-    await expect(page.locator(".sh-audio")).toHaveValue("none");
-    await expect(page.locator('.sh-audio option[value="application"]')).toBeDisabled();
+    await expect(page.locator(".sh-audio input:checked")).toHaveValue("none");
+    await expect(page.locator('.sh-audio input[value="application"]')).toBeDisabled();
     await page.getByLabel("Window", { exact: true }).check();
-    await expect(page.locator(".sh-audio")).toHaveValue("application");
+    await expect(page.locator(".sh-audio input:checked")).toHaveValue("application");
     await page.getByLabel("Screen", { exact: true }).check();
-    await expect(page.locator(".sh-audio")).toHaveValue("none");
-    await expect(page.locator('.sh-audio option[value="application"]')).toBeDisabled();
-    await page.getByLabel("Region of this app", { exact: true }).check();
-    await expect(page.locator(".sh-audio")).toHaveValue("none");
-    await expect(page.locator('.sh-audio option[value="application"]')).toBeDisabled();
+    await expect(page.locator(".sh-audio input:checked")).toHaveValue("none");
+    await expect(page.locator('.sh-audio input[value="application"]')).toBeDisabled();
+    await page.getByLabel("Region", { exact: true }).check();
+    await expect(page.locator(".sh-audio input:checked")).toHaveValue("none");
+    await expect(page.locator('.sh-audio input[value="application"]')).toBeDisabled();
     await page.getByLabel("Window", { exact: true }).check();
-    await expect(page.locator(".sh-audio")).toHaveValue("application");
+    await expect(page.locator(".sh-audio input:checked")).toHaveValue("application");
 });
 
 test("source-quality publication pauses video and shared audio without viewers while voice stays active", async ({ page }) => {
@@ -204,7 +202,7 @@ test("source-quality publication pauses video and shared audio without viewers w
         } });
     });
     await page.locator("#voice-screen").click();
-    await page.locator(".sh-audio").selectOption("system");
+    await chooseShareOption(page, "audio", "system");
     await page.getByRole("button", { name: "Choose screen or window…", exact: true }).click();
     await page.getByRole("dialog").getByRole("button", { name: "Start sharing", exact: true }).click();
     await expect.poll(() => page.evaluate(() => !!window.__noxa.state.screenSharing)).toBe(true);
@@ -252,11 +250,11 @@ for (const mode of ["none", "system"]) {
         await installApplicationCapture(page, "System Audio");
         await page.locator("#voice-screen").click();
         await page.getByLabel("Window", { exact: true }).check();
-        await expect(page.locator(".sh-audio")).toHaveValue("application");
-        await page.locator(".sh-audio").selectOption(mode);
+        await expect(page.locator(".sh-audio input:checked")).toHaveValue("application");
+        await chooseShareOption(page, "audio", mode);
         await page.getByLabel("Screen", { exact: true }).check();
         await page.getByLabel("Window", { exact: true }).check();
-        await expect(page.locator(".sh-audio")).toHaveValue(mode);
+        await expect(page.locator(".sh-audio input:checked")).toHaveValue(mode);
         await page.getByRole("button", { name: "Choose screen or window…", exact: true }).click();
         await page.getByRole("button", { name: "Start sharing", exact: true }).click();
         await expect(page.locator("#sharing-status")).toContainText(mode === "none" ? "Share audio off" : "System audio on");
@@ -265,10 +263,10 @@ for (const mode of ["none", "system"]) {
         });
         await page.locator(".sharing-change").click();
         await expect(page.getByLabel("Window", { exact: true })).toBeChecked();
-        await expect(page.locator(".sh-audio")).toHaveValue(mode);
+        await expect(page.locator(".sh-audio input:checked")).toHaveValue(mode);
         await page.getByLabel("Screen", { exact: true }).check();
         await page.getByLabel("Window", { exact: true }).check();
-        await expect(page.locator(".sh-audio")).toHaveValue(mode);
+        await expect(page.locator(".sh-audio input:checked")).toHaveValue(mode);
     });
 }
 
@@ -276,7 +274,7 @@ test("application audio publishes in its own slot, labels status and survives so
     await installApplicationCapture(page);
     await page.locator("#voice-screen").click();
     await page.getByLabel("Window", { exact: true }).check();
-    await expect(page.locator(".sh-audio")).toHaveValue("application");
+    await expect(page.locator(".sh-audio input:checked")).toHaveValue("application");
     await page.getByRole("button", { name: "Choose screen or window…", exact: true }).click();
     await page.getByRole("button", { name: "Start sharing", exact: true }).click();
     await expect(page.locator("#sharing-status")).toContainText("Application audio on");
@@ -284,7 +282,7 @@ test("application audio publishes in its own slot, labels status and survives so
         audio: true, windowAudio: "window", systemAudio: "exclude", monitorTypeSurfaces: "exclude", surfaceSwitching: "exclude" });
     expect(await page.evaluate(() => window.__media.offers.at(-1).map(t => t.slot))).toContain("screenaudio");
     await page.locator(".sharing-change").click();
-    await expect(page.locator(".sh-audio")).toHaveValue("application");
+    await expect(page.locator(".sh-audio input:checked")).toHaveValue("application");
     await expect(page.getByLabel("Window", { exact: true })).toBeChecked();
     await page.getByRole("button", { name: "Choose screen or window…", exact: true }).click();
     await page.getByRole("button", { name: "Start sharing", exact: true }).click();
@@ -302,7 +300,7 @@ for (const [label, surface] of [["System Audio", "window"], ["", "window"], ["Ap
         const before = await page.evaluate(() => window.__media.offers.length);
         await page.locator(".sharing-change").click();
         await page.getByLabel("Window", { exact: true }).check();
-        await page.locator(".sh-audio").selectOption("application");
+        await chooseShareOption(page, "audio", "application");
         await page.getByRole("button", { name: "Choose screen or window…", exact: true }).click();
         await page.getByRole("button", { name: "Start sharing", exact: true }).click();
         await expect.poll(() => page.evaluate(() => window.__media.notices)).toEqual(["Application audio unavailable. Sharing without audio."]);
@@ -342,7 +340,7 @@ for (const error of ["NotReadableError", "NotSupportedError", "NotAllowedError",
         }, error);
         await page.locator(".sharing-change").click();
         await page.getByLabel("Window", { exact: true }).check();
-        await page.locator(".sh-audio").selectOption("application");
+        await chooseShareOption(page, "audio", "application");
         await page.getByRole("button", { name: "Choose screen or window…", exact: true }).click();
         const cancelled = ["NotAllowedError", "AbortError"].includes(error);
         if (!cancelled) await page.getByRole("button", { name: "Start sharing", exact: true }).click();
@@ -359,7 +357,7 @@ for (const error of ["NotReadableError", "NotSupportedError", "NotAllowedError",
 for (const [preset, fps] of [["hd", 30], ["hdMotion", 60]]) {
     test(`${preset} requests Full HD with adaptive encoder headroom and less downscaling`, async ({ page }) => {
         await page.locator("#voice-screen").click();
-        await page.locator(".sh-preset").selectOption(preset);
+        await chooseShareOption(page, "preset", preset);
         await page.getByRole("button", { name: "Choose screen or window…", exact: true }).click();
         await page.getByRole("button", { name: "Start sharing", exact: true }).click();
         await expect(page.locator("#sharing-status")).toBeVisible();
@@ -380,7 +378,7 @@ for (const [preset, fps] of [["hd", 30], ["hdMotion", 60]]) {
 test("screen startup shares a lower server budget with camera before the first offer", async ({ page }) => {
     await page.evaluate(() => { window.__noxa.state.mediaLimits = { video_max_bitrate: 4000000 }; });
     await page.locator("#voice-screen").click();
-    await page.locator(".sh-preset").selectOption("hdMotion");
+    await chooseShareOption(page, "preset", "hdMotion");
     await page.getByRole("button", { name: "Choose screen or window…", exact: true }).click();
     await page.getByRole("button", { name: "Start sharing", exact: true }).click();
     await expect(page.locator("#sharing-status")).toBeVisible();
@@ -390,7 +388,7 @@ test("screen startup shares a lower server budget with camera before the first o
 
 test("live Full HD and higher quality round trips retain the same source and update its budget", async ({ page }) => {
     await page.locator("#voice-screen").click();
-    await page.locator(".sh-preset").selectOption("hdMotion");
+    await chooseShareOption(page, "preset", "hdMotion");
     await page.getByRole("button", { name: "Choose screen or window…", exact: true }).click();
     await page.getByRole("button", { name: "Start sharing", exact: true }).click();
     await expect(page.locator("#sharing-status")).toBeVisible();
@@ -401,7 +399,7 @@ test("live Full HD and higher quality round trips retain the same source and upd
     });
     for (const [preset, cap] of [["qhd", 50000000], ["hdMotion", 8000000]]) {
         await page.getByRole("button", { name: "Change quality", exact: true }).click();
-        await page.locator(".sh-preset").selectOption(preset);
+        await chooseShareOption(page, "preset", preset);
         await page.getByRole("button", { name: "Apply quality", exact: true }).click();
         await expect(page.getByRole("dialog")).toHaveCount(0);
         expect(await page.evaluate(() => window.__noxa.state.shareStream === window.__media.budgetSource && window.__noxa.state.shareVideoTransceiver.sender === window.__media.budgetSender)).toBe(true);
@@ -411,7 +409,7 @@ test("live Full HD and higher quality round trips retain the same source and upd
 
 test("text sharing retains readable pixels and live motion changes update the same encoder", async ({ page }) => {
     await page.locator("#voice-screen").click();
-    await page.locator(".sh-preset").selectOption("text");
+    await chooseShareOption(page, "preset", "text");
     await page.getByRole("button", { name: "Choose screen or window…", exact: true }).click();
     await page.getByRole("button", { name: "Start sharing", exact: true }).click();
     await expect(page.locator("#sharing-status")).toBeVisible();
@@ -424,7 +422,7 @@ test("text sharing retains readable pixels and live motion changes update the sa
         window.__media.originalShare.getVideoTracks()[0].applyConstraints = async () => {};
     });
     await page.getByRole("button", { name: "Change quality", exact: true }).click();
-    await page.locator(".sh-preset").selectOption("hdMotion");
+    await chooseShareOption(page, "preset", "hdMotion");
     await page.getByRole("button", { name: "Apply quality", exact: true }).click();
     await expect(page.getByRole("dialog")).toHaveCount(0);
     expect(await read()).toMatchObject({ hint: "motion", parameters: { degradationPreference: "maintain-framerate",
@@ -454,7 +452,7 @@ test("compatible viewer joins and leaves preserve the active screen encoder", as
         } });
     });
     await page.locator("#voice-screen").click();
-    await page.locator(".sh-preset").selectOption("hdMotion");
+    await chooseShareOption(page, "preset", "hdMotion");
     await page.getByRole("button", { name: "Choose screen or window…", exact: true }).click();
     await page.getByRole("dialog").getByRole("button", { name: "Start sharing", exact: true }).click();
     await expect.poll(() => page.evaluate(() => window.__noxa.state.shareVideoTransceiver?.sender.getParameters().encodings[0]?.active)).toBe(true);
@@ -540,7 +538,7 @@ test("hardware screen codec follows common fallback without adding a sender", as
 for (const [preset, width, height] of [["qhd", 2560, 1440], ["uhd", 3840, 2160]]) {
     test(`${preset} shares high resolution with a traffic warning and adaptive bitrate`, async ({ page }) => {
         await page.locator("#voice-screen").click();
-        await page.locator(".sh-preset").selectOption(preset);
+        await chooseShareOption(page, "preset", preset);
         await expect(page.locator(".share-quality-warning")).toContainText("CPU/GPU");
         await expect(page.locator(".share-budget")).toContainText("Higher resolutions or frame rates can use more");
         await page.getByRole("button", { name: "Choose screen or window…", exact: true }).click();
@@ -555,7 +553,7 @@ for (const [preset, width, height] of [["qhd", 2560, 1440], ["uhd", 3840, 2160]]
 
 test("custom sharing validates dimensions and retains size and frame rate when changing sources", async ({ page }) => {
     await page.locator("#voice-screen").click();
-    await page.locator(".sh-preset").selectOption("custom");
+    await chooseShareOption(page, "preset", "custom");
     await page.getByLabel("Width (px)", { exact: true }).fill("9000");
     await page.getByRole("button", { name: "Choose screen or window…", exact: true }).click();
     await expect(page.getByRole("button", { name: "Start sharing", exact: true })).toBeDisabled();
@@ -572,7 +570,7 @@ test("custom sharing validates dimensions and retains size and frame rate when c
         width: { ideal: 3440, max: 3440 }, height: { ideal: 1440, max: 1440 }, frameRate: { ideal: 60, max: 60 },
     });
     await page.locator(".sharing-change").click();
-    await expect(page.locator(".sh-preset")).toHaveValue("custom");
+    await expect(page.locator(".sh-preset input:checked")).toHaveValue("custom");
     await expect(page.getByLabel("Width (px)", { exact: true })).toHaveValue("3440");
     await expect(page.getByLabel("Height (px)", { exact: true })).toHaveValue("1440");
     await expect(page.getByLabel("Frame rate", { exact: true })).toHaveValue("60");
@@ -582,7 +580,7 @@ test("custom sharing validates dimensions and retains size and frame rate when c
 
 test("original sharing removes resolution preferences and restores source dimensions after a server limit", async ({ page }) => {
     await page.locator("#voice-screen").click();
-    await page.locator(".sh-preset").selectOption("original");
+    await chooseShareOption(page, "preset", "original");
     await expect(page.locator(".share-quality-warning")).toBeVisible();
     await page.getByRole("button", { name: "Choose screen or window…", exact: true }).click();
     await page.getByRole("button", { name: "Start sharing", exact: true }).click();
@@ -608,13 +606,13 @@ test("original sharing removes resolution preferences and restores source dimens
     expectLayeredScreenBudget(result.capped, 850000);
     expectLayeredScreenBudget(result.restored, 50000000);
     await page.locator(".sharing-change").click();
-    await expect(page.locator(".sh-preset")).toHaveValue("original");
+    await expect(page.locator(".sh-preset input:checked")).toHaveValue("original");
 });
 
 test("high-resolution requests still respect server size and bitrate limits", async ({ page }) => {
     await page.evaluate(() => { window.__noxa.state.mediaLimits = { video_max_width: 1280, video_max_height: 720, video_max_bitrate: 4000000 }; });
     await page.locator("#voice-screen").click();
-    await page.locator(".sh-preset").selectOption("uhd");
+    await chooseShareOption(page, "preset", "uhd");
     await expect(page.locator(".media-limit-hint")).toContainText("1280");
     await page.getByRole("button", { name: "Choose screen or window…", exact: true }).click();
     await page.getByRole("button", { name: "Start sharing", exact: true }).click();
@@ -661,20 +659,20 @@ test("sharing status shows sent quality, audio, honest viewer counts and an expa
 
 test("changing sources keeps the old share on cancel, preserves the preset and stops only replaced capture", async ({ page }) => {
     await page.locator("#voice-screen").click();
-    await page.locator(".sh-preset").selectOption("hd");
+    await chooseShareOption(page, "preset", "hd");
     await page.getByRole("button", { name: "Choose screen or window…", exact: true }).click();
     await page.getByRole("button", { name: "Start sharing", exact: true }).click();
     const panel = page.locator("#sharing-status");
     await expect(panel.getByRole("button", { name: "Change source" })).toBeEnabled();
     await panel.getByRole("button", { name: "Change source" }).click();
-    await expect(page.locator(".sh-preset")).toHaveValue("hd");
+    await expect(page.locator(".sh-preset input:checked")).toHaveValue("hd");
     await page.getByRole("button", { name: "Cancel", exact: true }).click();
     await expect(panel).toBeVisible();
     expect(await page.evaluate(() => window.__media.displayTracks[0].readyState)).toBe("live");
     await panel.getByRole("button", { name: "Change source" }).click();
     await page.getByLabel("Window", { exact: true }).check();
-    await expect(page.locator(".sh-audio")).toHaveValue("application");
-    await page.locator(".sh-audio").selectOption("none");
+    await expect(page.locator(".sh-audio input:checked")).toHaveValue("application");
+    await chooseShareOption(page, "audio", "none");
     await page.getByRole("button", { name: "Choose screen or window…", exact: true }).click();
     await page.getByRole("button", { name: "Start sharing", exact: true }).click();
     await expect(panel).toContainText("You're sharing: Window");
@@ -682,20 +680,58 @@ test("changing sources keeps the old share on cancel, preserves the preset and s
     expect(result).toEqual({ tracks: ["ended", "live"], camera: "live" });
 });
 
-test("a replacement region keeps its crop target after stopping the old source", async ({ page }) => {
+test("region shares only the dragged area of the picked screen and stops its source", async ({ page }) => {
+    await page.evaluate(() => {
+        Object.defineProperty(navigator.mediaDevices, "getDisplayMedia", { configurable: true, value: async options => {
+            window.__media.captureOptions = options;
+            const canvas = document.createElement("canvas"); canvas.width = 1920; canvas.height = 1080;
+            const context = canvas.getContext("2d");
+            const paint = () => { context.fillStyle = `hsl(${Date.now() % 360} 60% 50%)`; context.fillRect(0, 0, 1920, 1080); };
+            paint(); window.__media.paint = setInterval(paint, 40);
+            const stream = canvas.captureStream(30);
+            window.__media.displayTracks.push(...stream.getTracks());
+            return stream;
+        } });
+    });
     await page.locator("#voice-screen").click();
+    await page.getByLabel("Region", { exact: true }).check();
+    await expect(page.locator(".sp-choose-help")).toContainText("drag over the preview");
     await page.getByRole("button", { name: "Choose screen or window…", exact: true }).click();
+    const layer = page.locator(".sp-region");
+    await expect(layer).toBeVisible();
+    await expect(page.getByRole("button", { name: "Start sharing", exact: true })).toBeEnabled();
+    // This fixture has no app stylesheet; give the preview a size that fits.
+    await page.addStyleTag({ content: ".sp-head, .sp-tabs, .sp-empty { display: none } .sp-preview { position: relative } .sh-preview { display: block; width: 640px; height: 360px; } .sp-region, .sp-region-box { position: absolute }" });
+    await layer.evaluate(element => { element.scrollIntoView({ block: "center" }); window.dispatchEvent(new Event("resize")); });
+    await expect.poll(() => layer.evaluate(element => Math.round(element.getBoundingClientRect().width))).toBe(640);
+    expect(await page.evaluate(() => window.__media.captureOptions.video)).toMatchObject({ displaySurface: "monitor", width: {}, height: {} });
+    const box = await layer.boundingBox();
+    await page.mouse.move(box.x + box.width * 0.1, box.y + box.height * 0.1);
+    await page.mouse.down();
+    await page.mouse.move(box.x + box.width * 0.6, box.y + box.height * 0.5, { steps: 5 });
+    await page.mouse.up();
+    await expect(page.locator(".sp-region-help")).toContainText(/9[56]\d × 4[23]\d px/);
     await page.getByRole("button", { name: "Start sharing", exact: true }).click();
-    await expect(page.locator(".sharing-change")).toBeEnabled();
-    await page.locator(".sharing-change").click();
-    await page.getByLabel("Region of this app", { exact: true }).check();
-    await page.getByRole("button", { name: "Choose screen or window…", exact: true }).click();
-    await page.getByRole("button", { name: "Start sharing", exact: true }).click();
-    await page.locator(".region-ok").click();
-    await expect(page.locator("#sharing-status")).toContainText("You're sharing: Region of this app");
-    expect(await page.evaluate(() => window.__noxa.state.regionBox?.isConnected)).toBe(true);
+    await expect(page.locator("#sharing-status")).toContainText("You're sharing: Region");
+    const result = await page.evaluate(async () => {
+        const track = window.__noxa.state.shareStream.getVideoTracks()[0];
+        const reader = new MediaStreamTrackProcessor({ track: track.clone() }).readable.getReader();
+        const { value } = await reader.read();
+        const frame = [value.displayWidth, value.displayHeight];
+        value.close(); await reader.cancel();
+        const settings = track.getSettings();
+        return { generator: track instanceof MediaStreamTrackGenerator, settings: [settings.width, settings.height], frame,
+            source: window.__media.displayTracks[0].readyState };
+    });
+    expect(result.generator).toBe(true);
+    expect(result.source).toBe("live");
+    for (const [width, height] of [result.settings, result.frame]) {
+        expect(Math.abs(width - 960)).toBeLessThanOrEqual(12);
+        expect(Math.abs(height - 432)).toBeLessThanOrEqual(12);
+    }
     await page.locator(".sharing-stop").click();
-    await expect(page.locator(".region-box")).toHaveCount(0);
+    await expect.poll(() => page.evaluate(() => window.__media.displayTracks[0].readyState)).toBe("ended");
+    await page.evaluate(() => clearInterval(window.__media.paint));
 });
 
 test("slot declarations preserve negotiated MSID after replacing a real browser sender", async ({ page }) => {
@@ -872,7 +908,7 @@ test("live share quality changes keep the same source, audio and publication", a
         navigator.mediaDevices.getDisplayMedia = async () => { throw new Error("capture picker must stay closed"); };
     });
     await page.getByRole("button", { name: "Change quality", exact: true }).click();
-    await page.locator(".sh-preset").selectOption("qhd");
+    await chooseShareOption(page, "preset", "qhd");
     await page.getByRole("button", { name: "Apply quality", exact: true }).click();
     await expect(page.getByRole("dialog")).toHaveCount(0);
     expect(await page.evaluate(() => window.__media.liveConstraints.width.max)).toBe(2560);
@@ -903,10 +939,10 @@ test("failed live share quality restores capture settings and leaves audio conne
         };
     });
     await page.getByRole("button", { name: "Change quality", exact: true }).click();
-    await page.locator(".sh-preset").selectOption("qhd");
+    await chooseShareOption(page, "preset", "qhd");
     await page.getByRole("button", { name: "Apply quality", exact: true }).click();
     await expect(page.locator(".live-share-quality-error")).toBeVisible();
-    await expect(page.locator(".sh-preset")).toBeEnabled();
+    await expect(page.locator('.sh-preset input[value="qhd"]')).toBeEnabled();
     expect(await page.evaluate(() => ({
         same: window.__noxa.state.shareStream === window.__media.originalShare,
         tracksLive: window.__media.originalShare.getTracks().every(track => track.readyState === "live"),
@@ -927,10 +963,10 @@ test("stopping a share during quality change ignores the obsolete completion", a
         track.applyConstraints = () => new Promise(resolve => { window.__media.finishLiveQuality = resolve; });
     });
     await page.getByRole("button", { name: "Change quality", exact: true }).click();
-    await page.locator(".sh-preset").selectOption("qhd");
+    await chooseShareOption(page, "preset", "qhd");
     await page.getByRole("button", { name: "Apply quality", exact: true }).click();
     await expect.poll(() => page.evaluate(() => typeof window.__media.finishLiveQuality)).toBe("function");
-    await expect(page.locator(".sh-preset")).toBeDisabled();
+    await expect(page.locator('.sh-preset input[value="qhd"]')).toBeDisabled();
     await page.evaluate(() => { document.querySelector(".sharing-stop").click(); });
     await page.evaluate(() => window.__media.finishLiveQuality());
     await expect.poll(() => page.evaluate(() => !!window.__noxa.state.shareStopping)).toBe(false);
@@ -1106,8 +1142,8 @@ test("dimension relaxation retains a screen's original preset and disabled captu
         await window.__media.video.applyVideoLimits({ video_max_width: 0, video_max_height: 0 });
         return { applied, enabled: track.enabled, state: track.readyState };
     });
-    expect(result.applied.map(value => value.width)).toEqual([{ ideal: 320, max: 320 }, { ideal: 1280, max: 1280 }]);
-    expect(result.applied.map(value => value.height)).toEqual([{ ideal: 180, max: 180 }, { ideal: 720, max: 720 }]);
+    expect(result.applied.map(value => value.width)).toEqual([{ ideal: 320, max: 320 }, { ideal: 1920, max: 1920 }]);
+    expect(result.applied.map(value => value.height)).toEqual([{ ideal: 180, max: 180 }, { ideal: 1080, max: 1080 }]);
     expect(result.enabled).toBe(false);
     expect(result.state).toBe("live");
 });
@@ -1343,18 +1379,19 @@ for (const errorShape of ["string", "Error"]) test(`remote answer discards nativ
     expect(result).toEqual({ accepted: false, calls: [["media-tab", "old-server-answer"]], peerUnchanged: true });
 });
 
-test("ending capture closes a pending region picker and releases the share button", async ({ page }) => {
+test("a region source that ends before sharing clears the preview and blocks start", async ({ page }) => {
     await page.locator("#voice-screen").click();
-    await page.getByRole("radio", { name: "Region of this app", exact: true }).check();
+    await page.getByRole("radio", { name: "Region", exact: true }).check();
     await page.getByRole("button", { name: "Choose screen or window…", exact: true }).click();
-    await page.getByRole("dialog").getByRole("button", { name: "Start sharing", exact: true }).click();
-    await expect(page.locator(".region-box")).toBeVisible();
+    await expect(page.locator(".sp-region")).toBeVisible();
     await page.evaluate(() => {
         const track = window.__media.displayTracks[0];
         track.stop();
-        track.onended();
+        track.dispatchEvent(new Event("ended"));
     });
-    await expect(page.locator(".region-box")).toHaveCount(0);
+    await expect(page.locator(".sp-region")).toBeHidden();
+    await expect(page.locator(".sh-error")).toContainText("The selected source stopped");
+    await expect(page.getByRole("button", { name: "Start sharing", exact: true })).toBeDisabled();
     await expect(page.locator("#voice-screen")).toBeEnabled();
     expect(await page.evaluate(() => window.__media.offers)).toEqual([]);
 });
@@ -1475,7 +1512,7 @@ for (const cleanup of ["stop", "limits", "pagehide"]) {
 
 async function startBudgetShare(page) {
     await page.locator("#voice-screen").click();
-    await page.locator(".sh-preset").selectOption("hdMotion");
+    await chooseShareOption(page, "preset", "hdMotion");
     await page.getByRole("button", { name: "Choose screen or window…", exact: true }).click();
     await page.getByRole("dialog").getByRole("button", { name: "Start sharing", exact: true }).click();
     await expect(page.locator("#sharing-status")).toBeVisible();
@@ -1483,7 +1520,7 @@ async function startBudgetShare(page) {
 
 async function changeBudget(page, value) {
     await page.getByRole("button", { name: "Change quality", exact: true }).click();
-    await page.locator(".sh-bitrate").selectOption(String(value));
+    await chooseShareOption(page, "bitrate", String(value));
     await page.getByRole("button", { name: "Apply quality", exact: true }).click();
 }
 
@@ -1534,7 +1571,7 @@ test("share ceiling honors a lower server budget without updating camera", async
     expect(await page.evaluate(() => window.__noxa.state.shareVideoTransceiver.sender.getParameters().encodings[0].maxBitrate)).toBe(1700000);
     expect(await page.evaluate(() => window.__media.cameraSender.getParameters())).toEqual(await page.evaluate(() => window.__media.cameraBefore));
     await page.getByRole("button", { name: "Change quality", exact: true }).click();
-    await expect(page.locator(".sh-bitrate")).toHaveValue("6000000");
+    await expect(page.locator(".sh-bitrate input:checked")).toHaveValue("6000000");
     await expect(page.locator(".share-budget")).toContainText("limited to 6 Mbit/s");
 });
 
@@ -1543,7 +1580,7 @@ test("share ceiling survives source change but resets on a new share", async ({ 
     await changeBudget(page, 6000000);
     await expect(page.getByRole("dialog")).toHaveCount(0);
     await page.locator(".sharing-change").click();
-    await expect(page.locator(".sh-bitrate")).toHaveValue("6000000");
+    await expect(page.locator(".sh-bitrate input:checked")).toHaveValue("6000000");
     await page.getByRole("button", { name: "Choose screen or window…", exact: true }).click();
     await page.getByRole("dialog").getByRole("button", { name: "Start sharing", exact: true }).click();
     await expect.poll(() => page.evaluate(() => window.__media.displayTracks.length)).toBe(2);
@@ -1553,7 +1590,7 @@ test("share ceiling survives source change but resets on a new share", async ({ 
     await startBudgetShare(page);
     expect(await page.evaluate(() => window.__noxa.state.shareVideoTransceiver.sender.getParameters().encodings[0].maxBitrate)).toBe(8000000);
     await page.getByRole("button", { name: "Change quality", exact: true }).click();
-    await expect(page.locator(".sh-bitrate")).toHaveValue("0");
+    await expect(page.locator(".sh-bitrate input:checked")).toHaveValue("0");
 });
 
 test("share ceiling rejection restores old preference and respects a newer server cap", async ({ page }) => {
@@ -1576,7 +1613,7 @@ test("share ceiling rejection restores old preference and respects a newer serve
     expect(await page.evaluate(() => window.__noxa.state.shareVideoTransceiver.sender.getParameters().encodings[0].maxBitrate)).toBe(1700000);
     await page.getByRole("button", { name: "Cancel", exact: true }).click();
     await page.getByRole("button", { name: "Change quality", exact: true }).click();
-    await expect(page.locator(".sh-bitrate")).toHaveValue("0");
+    await expect(page.locator(".sh-bitrate input:checked")).toHaveValue("0");
 });
 
 test("share ceiling stale sender completion cannot commit or roll back replacement parameters", async ({ page }) => {
@@ -1602,7 +1639,7 @@ test("share ceiling stale sender completion cannot commit or roll back replaceme
     expect(await page.evaluate(() => window.__media.capCalls)).toBe(1);
     await page.evaluate(() => { window.__noxa.state.shareVideoTransceiver.sender.track = window.__media.originalTrack; });
     await page.getByRole("button", { name: "Change quality", exact: true }).click();
-    await expect(page.locator(".sh-bitrate")).toHaveValue("0");
+    await expect(page.locator(".sh-bitrate input:checked")).toHaveValue("0");
 });
 
 test("share ceiling stores an unwatched preference without activating upload", async ({ page }) => {
@@ -1631,7 +1668,7 @@ test("share ceiling stores an unwatched preference without activating upload", a
 
 test("share ceiling same dimensions with changed preset still updates capture semantics", async ({ page }) => {
     await page.locator("#voice-screen").click();
-    await page.locator(".sh-preset").selectOption("text");
+    await chooseShareOption(page, "preset", "text");
     await page.getByRole("button", { name: "Choose screen or window…", exact: true }).click();
     await page.getByRole("dialog").getByRole("button", { name: "Start sharing", exact: true }).click();
     await expect(page.locator("#sharing-status")).toBeVisible();
@@ -1640,9 +1677,9 @@ test("share ceiling same dimensions with changed preset still updates capture se
         window.__noxa.state.shareStream.getVideoTracks()[0].applyConstraints = async () => { window.__media.constraintCalls++; };
     });
     await page.getByRole("button", { name: "Change quality", exact: true }).click();
-    await page.locator(".sh-preset").selectOption("custom");
+    await chooseShareOption(page, "preset", "custom");
     await page.locator(".sh-width").fill("1920"); await page.locator(".sh-height").fill("1080");
-    await page.locator(".sh-fps").selectOption("15"); await page.locator(".sh-bitrate").selectOption("6000000");
+    await page.locator(".sh-fps").selectOption("15"); await chooseShareOption(page, "bitrate", "6000000");
     await page.getByRole("button", { name: "Apply quality", exact: true }).click();
     await expect(page.getByRole("dialog")).toHaveCount(0);
     expect(await page.evaluate(() => ({ calls: window.__media.constraintCalls, hint: window.__noxa.state.shareStream.getVideoTracks()[0].contentHint }))).toEqual({ calls: 1, hint: "motion" });

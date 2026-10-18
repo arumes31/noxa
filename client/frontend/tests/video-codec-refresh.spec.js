@@ -1,4 +1,4 @@
-import { test, expect } from "./fixtures.js";
+import { test, expect, chooseShareOption } from "./fixtures.js";
 
 // Native control replies and capability evidence are synthetic. The publication
 // lifecycle, negotiation callback, RTP sender, encoders and receiver are real.
@@ -85,7 +85,7 @@ for (const supported of [true, false]) test(`live publication ${supported ? "rec
     }, supported);
     try {
         await page.locator("#voice-screen").click();
-        await page.locator(".sh-preset").selectOption("original");
+        await chooseShareOption(page, "preset", "original");
         await page.getByRole("button", { name: "Choose screen or window…", exact: true }).click();
         await page.getByRole("button", { name: "Start sharing", exact: true }).click();
         await expect.poll(() => page.evaluate(async () => (await codecFixture.read()).vp8)).toBeGreaterThan(20);
