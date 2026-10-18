@@ -284,7 +284,13 @@ func testGOPCacheServesJoin(t *testing.T, mime string) {
 		t.Fatalf("first keyframe after %v", wait)
 	}
 	if plis, _ := f.upstream.counts(); plis != 0 || f.keyframes.Load() != 1 {
-		t.Fatalf("join forced %d upstream keyframe requests (%d keyframes)", plis, f.keyframes.Load())
+		f.router.mu.RLock()
+		input := f.router.videoIngress[videoIngressKey{"pub", SlotCam, ""}]
+		f.router.mu.RUnlock()
+		input.mu.Lock()
+		reasons := input.keyframeRequestSnapshot()
+		input.mu.Unlock()
+		t.Fatalf("join forced %d upstream keyframe requests (%d keyframes): %+v", plis, f.keyframes.Load(), reasons)
 	}
 }
 
@@ -367,5 +373,92 @@ func TestGOPInjectRespectsPacerDrain(t *testing.T) {
 	}
 	if _, ok := (&mediaEgressStream{}).videoDrain(1); ok {
 		t.Fatal("unbound output reported a pacer")
+	}
+}
+
+// Transport/binding readiness can change between packets of an assembled
+// source unit. The suffix cannot start the viewer, but a fresh cache can on
+// the next unit boundary without asking every publisher viewer to restart.
+func TestGOPCacheJoinMidUnitWaitsForBoundary(t *testing.T) {
+	for _, mime := range []string{pion.MimeTypeH264, pion.MimeTypeH265} {
+		t.Run(mime, func(t *testing.T) {
+			for _, mode := range []string{"fresh", "stale", "invalidated", "timed-out"} {
+				t.Run(mode, func(t *testing.T) {
+					verifyNoLeaks(t)
+					f := newVideoLoopbackFixture(t, SlotCam)
+					r := f.router
+					generation, err := r.PublishVideoWithFormats("pub", SlotCam, 0, true, "", []string{"h265", "h264", "vp8"}, chaosHEVCLevel)
+					if err != nil {
+						t.Fatal(err)
+					}
+					token, ok := r.claimSlot("pub", SlotCam+slotSep)
+					if !ok {
+						t.Fatal("source claim failed")
+					}
+					codec := pion.RTPCodecCapability{MimeType: mime, ClockRate: 90000, SDPFmtpLine: chaosH264Fmtp}
+					if mime == pion.MimeTypeH265 {
+						codec.SDPFmtpLine = chaosH265Fmtp
+					}
+					if !r.setVideoCodec("pub", SlotCam, "", token, codec) {
+						t.Fatal("codec not admitted")
+					}
+					generation = r.VideoPublications("viewer")[0].Generation
+					if _, err = r.WatchVideoWithFormats("viewer", "pub", SlotCam, generation, 1, r.VideoWatchSession("viewer"), true, []string{"h265", "h264", "vp8"}, chaosHEVCLevel); err != nil {
+						t.Fatal(err)
+					}
+					// No source SSRC is known yet, so readiness itself cannot request it.
+					f.connect(t, SlotCam)
+					registerVideoSource(r, "pub", SlotCam, "", 4242)
+					r.mu.RLock()
+					source := r.slotClaims["pub"][SlotCam+slotSep]
+					r.mu.RUnlock()
+					source.gop = &gopCache{}
+					var sequence uint16 = 100
+					now := time.Now()
+					key := gopTestFrame(4242, mime, true, &sequence, 1)
+					source.gop.observe(mime, key, true, false, now)
+					switch mode {
+					case "stale":
+						source.gop.keyAt = now.Add(-gopCacheMaxAge - time.Millisecond)
+					case "invalidated":
+						source.gop.invalidate()
+					case "timed-out":
+						f.output.gopRefillAt.Store(now.Add(-gopRefillTimeout - time.Millisecond).UnixNano())
+					}
+					unit := gopTestFrame(4242, mime, false, &sequence, 2)
+					policy := r.videoPolicySnapshot()
+					forward := func(packet *rtp.Packet, packets []*rtp.Packet) int {
+						return r.forwardVideoFrameAtPolicyCodecSource("pub", SlotCam, "", packet, now, policy, true, mime, false, &source, packets)
+					}
+					// Its prefix passed before this viewer was ready. Forward only the
+					// remaining packets, as the production per-packet fanout does.
+					for _, packet := range unit[1:] {
+						if forward(packet, unit) != 0 {
+							t.Fatal("mid-unit suffix was forwarded")
+						}
+					}
+					waitAsyncKeyframeRequests(t, r)
+					if mode != "fresh" {
+						if plis, _ := f.upstream.counts(); plis != 1 {
+							t.Fatalf("unusable cache requested %d upstream keyframes, want 1", plis)
+						}
+						return
+					}
+					if plis, _ := f.upstream.counts(); plis != 0 {
+						t.Fatalf("mid-unit join requested %d upstream keyframes despite fresh cache", plis)
+					}
+					source.gop.observe(mime, unit, false, false, now)
+					next := gopTestFrame(4242, mime, false, &sequence, 3)
+					for _, packet := range next {
+						if forward(packet, next) != 1 {
+							t.Fatal("next complete unit did not start from cache")
+						}
+					}
+					if f.output.gopRefilledAt.Load() == 0 {
+						t.Fatal("viewer did not start from cache")
+					}
+				})
+			}
+		})
 	}
 }

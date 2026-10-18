@@ -2304,6 +2304,13 @@ func (r *Router) forwardVideoFrameAtPolicyCodecSource(senderID, slot, rid string
 					// viewers to serve, and the publisher's RTCP path may be slow.
 					if needsKeyframe && w.delivery.WatchEpoch != 0 && !isVideoPadding(pkt) &&
 						(output.egress == nil || output.videoTransportReady(r, w.delivery.RecipientID)) {
+						// Readiness may change after the unit's first packet. Its
+						// suffix cannot snapshot the cache, but the next boundary
+						// can. Give that refill its bounded chance before asking
+						// the publisher; rejected boundary admissions still fall back.
+						if cached == nil && cache.servable(now, mime) && output.requestGOPRefill(now) {
+							return false, nil
+						}
 						r.requestKeyframeAsync(senderID, slot, rid, keyframeAwaitKeyframe)
 					}
 					return false, nil
