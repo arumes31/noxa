@@ -129,3 +129,20 @@ func TestConfirmUpdateStartupConcurrentCallsAcknowledgeOnce(t *testing.T) {
 		t.Fatalf("later confirmation was not idempotent: %v", err)
 	}
 }
+
+func TestUpdateLaunchedProcessNeedsBothReadinessVariables(t *testing.T) {
+	env := func(values map[string]string) func(string) string {
+		return func(key string) string { return values[key] }
+	}
+	if !updateLaunchedProcess(env(map[string]string{updateReadyAddressEnv: "127.0.0.1:1", updateReadyNonceEnv: "ab"})) {
+		t.Fatal("a process launched by the updater was not recognised")
+	}
+	for _, partial := range []map[string]string{{}, {updateReadyAddressEnv: "127.0.0.1:1"}, {updateReadyNonceEnv: "ab"}} {
+		if updateLaunchedProcess(env(partial)) {
+			t.Fatalf("an ordinary start was taken for an update restart: %v", partial)
+		}
+	}
+	if (&App{}).StartedAfterUpdate() != startedAfterUpdate {
+		t.Fatal("the binding must report the flag captured at process start")
+	}
+}
