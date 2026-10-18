@@ -233,7 +233,7 @@ body.compact .topbar-tools { display: none; }
 
 /* voice card */
 :root[data-theme="arctic"] body:not(.compact) #voice-bar { gap: 10px; padding: 18px 20px 20px; }
-:root[data-theme="arctic"] .voice-summary { display: flex; align-items: center; gap: 7px; min-width: 0; }
+:root[data-theme="arctic"] .voice-summary { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; min-width: 0; }
 :root[data-theme="arctic"] .voice-signal { display: inline-flex; flex: none; color: var(--text-faint); }
 :root[data-theme="arctic"] .voice-signal .ui-icon { width: 15px; height: 15px; }
 :root[data-theme="arctic"] #voice-bar[data-in-channel="true"] .voice-signal { color: var(--arc-ok); }
@@ -248,7 +248,10 @@ body.compact .topbar-tools { display: none; }
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     font-size: .7857rem; color: var(--text-faint);
 }
-:root[data-theme="arctic"] .voice-summary .voice-playback-quality { flex: none; }
+/* Playback health gets its own line so translations do not widen the card. */
+:root[data-theme="arctic"] .voice-summary .voice-playback-quality {
+    flex: 1 1 100%; min-width: 0; overflow: hidden; text-overflow: ellipsis; text-align: left;
+}
 :root[data-theme="arctic"] body:not(.compact) #voice-bar #voice-context { display: none; }
 :root[data-theme="arctic"] body:not(.compact) #voice-bar #conn-pill.up { display: none; }
 :root[data-theme="arctic"] .voice-self { margin: 4px 0 2px; }

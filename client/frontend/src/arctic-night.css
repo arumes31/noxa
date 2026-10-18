@@ -307,7 +307,7 @@
    DOM (visually hidden) so every control keeps its accessible name. */
 :root[data-theme="arctic"] body:not(.compact) #voice-bar {
     position: relative; isolation: isolate;
-    display: flex; flex-direction: column; align-items: stretch;
+    display: flex; flex-direction: column; flex-wrap: nowrap; align-items: stretch;
     gap: 8px; margin: 0; padding: 16px 20px 20px;
     background: color-mix(in srgb, var(--arc-s1) 86%, var(--arc-bg));
     border: 0; border-right: 1px solid var(--border);
@@ -320,11 +320,11 @@
     background: var(--arc-s2); box-shadow: var(--shadow);
 }
 :root[data-theme="arctic"] body:not(.compact) #voice-bar > .voice-info {
-    order: -1; display: flex; flex-direction: column; align-items: stretch;
+    order: -1; display: flex; flex-direction: column; flex-wrap: nowrap; align-items: stretch;
     gap: 2px; max-width: none; margin: 0;
 }
 :root[data-theme="arctic"] body:not(.compact) #voice-bar > .voice-buttons {
-    flex: none; flex-wrap: nowrap; gap: 4px;
+    flex: none; flex-wrap: wrap; gap: 4px;
 }
 :root[data-theme="arctic"] .voice-summary { justify-content: space-between; gap: 8px; }
 :root[data-theme="arctic"] #voice-status { font-size: .8571rem; font-weight: 600; color: var(--text-dim); }
@@ -337,8 +337,8 @@
 :root[data-theme="arctic"] #voice-bar #voice-context { max-width: 100%; }
 :root[data-theme="arctic"] #conn-pill { font: .7857rem var(--font-mono); color: var(--text-faint); }
 :root[data-theme="arctic"] #voice-latency { border-left: 0; padding: 0; font-size: .7857rem; }
-:root[data-theme="arctic"] body:not(.compact) #voice-bar .voice-microphone { display: flex; flex: 1 1 0; min-width: 0; position: relative; }
-:root[data-theme="arctic"] body:not(.compact) #voice-bar .voice-buttons > :is(.voice-control, #voice-options) { flex: 1 1 0; min-width: 0; }
+:root[data-theme="arctic"] body:not(.compact) #voice-bar .voice-microphone { display: flex; flex: 1 1 28px; min-width: 28px; position: relative; }
+:root[data-theme="arctic"] body:not(.compact) #voice-bar .voice-buttons > :is(.voice-control, #voice-options) { flex: 1 1 28px; min-width: 28px; }
 :root[data-theme="arctic"] body:not(.compact) #voice-bar :is(.voice-buttons, .voice-microphone, #voice-options) > .voice-control {
     width: 100%; min-height: 32px; height: 32px; padding: 0;
     border: 0; border-radius: 8px;
@@ -360,7 +360,7 @@
     color: var(--danger) !important;
 }
 :root[data-theme="arctic"] #voice-bar #voice-leave-channel { color: var(--danger); background: color-mix(in srgb, var(--danger) 14%, transparent); }
-:root[data-theme="arctic"] #mic-meter { position: absolute; left: 6px; right: 6px; bottom: 2px; height: 2px; width: auto; }
+:root[data-theme="arctic"] #mic-meter { position: absolute; left: 6px; right: 6px; bottom: 2px; height: 2px; width: auto; min-width: 0; }
 :root[data-theme="arctic"] body:not(.compact) #voice-bar > #mic-status,
 :root[data-theme="arctic"] body:not(.compact) #voice-bar > .voice-hints {
     font-size: .7857rem; line-height: 1.35; padding: 0 2px; max-width: none;

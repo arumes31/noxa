@@ -11671,3 +11671,61 @@ test("viewer-start speech belongs to the current publication, preserves gates an
         speechDisabled: 3, speechZero: 3, enabledAgain: 4, stoppedPublication: 4 });
     expect(result.heard).toEqual(Array(4).fill("speech_en_stream_watch_started"));
 });
+
+for (const { width, mode, language, fontSize } of [
+    { width: 220, mode: "continuous", language: "de", fontSize: 14 },
+    { width: 220, mode: "ptt", language: "de", fontSize: 20 },
+    { width: 260, mode: "ptt", language: "en", fontSize: 14 },
+    { width: 320, mode: "continuous", language: "de", fontSize: 20 },
+]) {
+    test(`voice card contains localized status and controls at ${width}px / ${mode} / ${fontSize}px`, async ({ page }, testInfo) => {
+        await showB3Workspace(page);
+        await page.evaluate(({ width, mode, language, fontSize }) => {
+            const v = window.__noxa;
+            Object.assign(v.state.settings, { language, activation_mode: mode });
+            v.applyAppearance();
+            document.documentElement.style.fontSize = `${fontSize}px`;
+            document.getElementById("app-body").style.setProperty("--sidebar-width", `${width}px`);
+            const peer = { connectionState: "connected" };
+            v.state.pc = peer;
+            v.state.voiceTelemetry = { at: Date.now(), peer,
+                scope: JSON.stringify([v.state.activeTabID, v.state.serverGeneration, v.state.myChannelID]),
+                report: { connection_state: "connected", output_state: "running", tracks: [{
+                    sample_ms: 5000, audio_active: false, loss_percent: 0, discard_percent: 0,
+                    non_silent_concealment_percent: 0, buffer_ms: 20,
+                }] },
+            };
+            window.go.main.App.GetClientInfoForTab = async () => ({ ping_ms: 10 });
+            v.startQualitySampler();
+            document.getElementById("mic-meter").classList.remove("hidden");
+        }, { width, mode, language, fontSize });
+        const badge = page.locator("#voice-playback-quality");
+        await expect(badge).toBeVisible();
+        await expect(badge).toHaveAttribute("data-quality", "idle");
+        const overflow = await page.locator("#voice-bar").evaluate(bar => {
+            const bounds = bar.getBoundingClientRect();
+            return [...bar.querySelectorAll(".voice-summary, .voice-summary > *, .voice-buttons, .voice-buttons > :not(.hidden), #voice-mute, #mic-meter")]
+                .filter(el => el.getBoundingClientRect().width > 0)
+                .filter(el => {
+                    const r = el.getBoundingClientRect();
+                    return r.left < bounds.left || r.right > bounds.right || r.bottom > bounds.bottom;
+                }).map(el => el.id || el.className);
+        });
+        expect(overflow).toEqual([]);
+        for (const control of await page.locator(".voice-buttons > .voice-control:visible, #voice-mute, #voice-options > summary").all()) {
+            const bounds = await control.boundingBox();
+            expect(bounds.width).toBeGreaterThanOrEqual(28);
+            if (await control.isEnabled()) await control.click({ trial: true });
+        }
+        await page.screenshot({ path: testInfo.outputPath("voice-card.png") });
+        await badge.focus();
+        await expect(page.getByRole("tooltip")).toBeVisible();
+        await page.locator("#voice-options > summary").click();
+        await expect(page.locator("#voice-settings")).toBeVisible();
+        await page.locator("#voice-settings").click({ trial: true });
+        await page.keyboard.press("Escape");
+        await expect(page.locator("#voice-options")).not.toHaveAttribute("open", "");
+        await page.locator("#voice-mute").click();
+        await expect(page.locator("#voice-mute")).toHaveAttribute("aria-pressed", "true");
+    });
+}
