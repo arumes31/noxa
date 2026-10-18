@@ -363,7 +363,7 @@ func TestChatTabLayoutRequiresCurrentServerMetadata(t *testing.T) {
 			case "empty address":
 				cm.addr = ""
 			case "invalid address":
-				cm.addr = "not-an-address"
+				cm.addr = "example.com:0"
 			case "unknown certificate":
 				cm.fingerprint = ""
 			}
@@ -375,5 +375,30 @@ func TestChatTabLayoutRequiresCurrentServerMetadata(t *testing.T) {
 				t.Fatal("write accepted missing server scope")
 			}
 		})
+	}
+}
+
+func TestChatTabLayoutDefaultPortSharesExplicitScope(t *testing.T) {
+	a, cm, owner := chatTabLayoutTestApp(t)
+	want := ChatTabLayout{Order: []string{"ch:21"}, Pinned: []string{"ch:21"}}
+	if err := a.SaveChatTabLayoutForContext(owner, want); err != "" {
+		t.Fatal(err)
+	}
+	cm.mu.Lock()
+	cm.addr = "EXAMPLE.COM."
+	cm.mu.Unlock()
+	got, err := a.ChatTabLayoutForContext(owner)
+	if err != nil || !reflect.DeepEqual(got, want) {
+		t.Fatalf("default port: %+v / %v", got, err)
+	}
+	if err := a.SaveChatTabLayoutForContext(owner, ChatTabLayout{}); err != "" {
+		t.Fatal(err)
+	}
+	cm.mu.Lock()
+	cm.addr = "example.com:12333"
+	cm.mu.Unlock()
+	got, err = a.ChatTabLayoutForContext(owner)
+	if err != nil || len(got.Order) != 0 {
+		t.Fatalf("explicit port: %+v / %v", got, err)
 	}
 }

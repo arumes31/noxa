@@ -1955,7 +1955,7 @@ function renderTabs() {
             close: () => { if (owns()) closeGroupTab(tab.id); },
         });
     }
-    const saved = items.length && V().state.activeTabID && V().state.myClientID ? tabLayoutFor(getDMOwner()) : null;
+    const saved = items.length && V().state.activeTabID ? tabLayoutFor(getDMOwner()) : null;
     chatTabs?.render(items, saved?.layout || { order: [], pinned: [] }, {
         scope: JSON.stringify(scope), ready: !!saved?.ready,
         recentlyClosed: [...recentlyClosedChats.values()].reverse().filter(entry => dmHistoryScopeIsCurrent(entry.scope) && !items.some(item => item.key === entry.key))
@@ -2158,9 +2158,7 @@ async function restorePMTabs() {
     const attempt = Symbol();
     dmRestoreAttempt = attempt;
     let peers = [];
-    // Native layout storage needs the connected server certificate. Tab activation
-    // resets the view before its session is available; onConnect retries then.
-    const saved = V().state.activeTabID && V().state.myClientID ? tabLayoutFor(owner) : null;
+    const saved = V().state.activeTabID ? tabLayoutFor(owner) : null;
     try {
         peers = await callDMHistory(owner, "DMHistoryPeersForContext");
         await saved?.loading;

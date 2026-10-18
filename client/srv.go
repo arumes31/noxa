@@ -36,6 +36,16 @@ func serverAddress(addr string) (string, string, error) {
 	return net.JoinHostPort(addr, defaultControlPort), addr, nil
 }
 
+// canonicalServerDestination scopes local data to the same original destination
+// as certificate trust. Add the default port without resolving an SRV target.
+func canonicalServerDestination(addr string) (string, error) {
+	destination, _, err := serverAddress(addr)
+	if err != nil {
+		return "", err
+	}
+	return normalizeServerAddr(destination)
+}
+
 // resolveServerAddresses preserves LookupSRV's priority/weight ordering.
 // The trust address always describes the user's original destination; DNS
 // changes must not turn an existing certificate pin into a first connection.
