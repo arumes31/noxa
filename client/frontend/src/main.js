@@ -44,6 +44,8 @@ import { refreshVoicePlayback } from "./voice-messages.js";
 import { discussionChanged } from "./discussions.js";
 import { initClientInfo } from "./clientinfo.js";
 import { initUpdater, startupAutoCheck, reconnectAutoCheck } from "./updater.js";
+import { showConnectSplash } from "./connect-splash.js";
+import { playUpdateIntro } from "./update-intro.js";
 import { playEvent, playAlert, clearSpeech, initSounds, updateSoundOutput, updateConversationDucking, soundEngine, speechQueue } from "./sounds.js";
 import { initClosingAudio } from "./closing-audio.js";
 import { startMicMeter, stopMicMeter, pttRelease, refreshUserAudio, setUserShareVolume, setUserShareMuted, captureConstraints, markCaptureProfile, applyCaptureProfile, syncMuteButton, renderMicStatus } from "./audio.js";
@@ -401,6 +403,9 @@ async function connectFromLogin() {
     const addr = $("login-addr").value.trim();
     const nick = $("login-nick").value.trim();
     const displayName = $("login-display-name").value.trim();
+    // C04: the comet draws the mark while this login connects to `addr`.
+    const splash = showConnectSplash(addr);
+    let connected = false;
     const pw = $("login-accountpw").value;
     const spw = $("login-serverpw").value;
     // A bridge call can outlive a tab switch. Only the tab/generation that
@@ -472,6 +477,7 @@ async function connectFromLogin() {
         $("conn-pill").classList.add("up");
         $("conn-lock").classList.remove("hidden");
         showWorkspace();
+        connected = true;
         refreshPermissions();
         applyWhisperSettings();
         chatUI.onConnect(); // (133) MOTD + myUniqueID for mentions/own-msgs
@@ -488,6 +494,7 @@ async function connectFromLogin() {
         playCurrentConnectionFailure();
         if (currentAttempt()) loginFeedback.show(e, { displayName });
     } finally {
+        splash.finish(connected);
         submit.disabled = false;
         label.textContent = submitLabel;
         document.querySelector(".login-card").removeAttribute("aria-busy");
@@ -3309,6 +3316,11 @@ initAppShell(); // top bar search/ping, sidebar sections, voice card
 // initialized. A startup exception leaves the old app's recovery guard active.
 void startupInitialized.then(ready => ready && window.go.main.App.ConfirmUpdateStartup())
     .catch(error => console.warn("Update startup confirmation failed", error));
+
+// C20: the first start after an update restart greets with the wordmark.
+void Promise.resolve(window.go?.main?.App?.StartedAfterUpdate?.())
+    .then(afterUpdate => { if (afterUpdate === true && !updateStartupBlocked()) playUpdateIntro(); })
+    .catch(() => { /* An older native side has no flag: no intro. */ });
 
 const stopAvatarPlayback = manageAvatarPlayback(document.body);
 window.addEventListener("pagehide", stopAvatarPlayback, { once: true });

@@ -1,0 +1,52 @@
+/* Connect splash (C04) and post-update intro (C20). */
+.connect-splash, .update-intro {
+    --logo-ring: #1fb0c4; --logo-hi: #5fd7e6; --logo-lo: #16a3b6; --logo-bar: #4fd0e0; --logo-comet: #e3f7ff;
+    position: fixed; inset: 0; z-index: 9000;
+    /* Visual only: the login is already busy, and a fading splash must never
+       swallow the first clicks into the app. */
+    pointer-events: none;
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px;
+    background: radial-gradient(circle at 50% 42%, #0f2131 0%, #060e16 70%);
+    color: #d6e4f0; font-family: var(--font-body, "Outfit", system-ui, sans-serif);
+    animation: connect-splash-in 220ms ease-out both;
+}
+:root[data-theme="light"] :is(.connect-splash, .update-intro) {
+    --logo-ring: #0f8fa3; --logo-hi: #19a9bd; --logo-lo: #0b7f95; --logo-bar: #138ea3; --logo-comet: #0b7f95;
+    background: radial-gradient(circle at 50% 42%, #e3f2f9 0%, #f6fafd 70%); color: #10202e;
+}
+:root[data-theme="hc"] :is(.connect-splash, .update-intro) {
+    --logo-ring: #fff; --logo-hi: #fff; --logo-lo: #fff; --logo-bar: #fff; --logo-comet: #9fe3ff;
+    background: #000; color: #fff;
+}
+.connect-splash-logo { width: 200px; height: 200px; }
+.connect-splash-title { margin: 8px 0 0; font-size: 17px; font-weight: 600; text-align: center; overflow-wrap: anywhere; max-width: min(90vw, 560px); }
+.connect-splash-quip { margin: 0; min-height: 1.4em; font-size: 14px; color: color-mix(in srgb, currentColor 68%, transparent); text-align: center; max-width: min(90vw, 520px); }
+.connect-splash-quip.swap { animation: connect-quip 320ms ease-out both; }
+.connect-splash.leaving, .update-intro.leaving { animation: connect-splash-out 260ms ease-in both; }
+@keyframes connect-splash-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes connect-splash-out { from { opacity: 1; } to { opacity: 0; } }
+@keyframes connect-quip { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+
+/* C20: the mark converges, slides left and the wordmark appears. */
+.update-intro-stage { position: relative; width: 420px; height: 200px; }
+.update-intro-logo { position: absolute; left: 110px; top: 0; width: 200px; height: 200px; animation: update-intro-slide 700ms cubic-bezier(.6,0,.2,1) 1300ms both; }
+.update-intro-word { position: absolute; left: 190px; top: 58px; display: flex; margin: 0; font-family: var(--font-display, "Sora", system-ui, sans-serif); font-weight: 700; font-size: 64px; line-height: 1; letter-spacing: 1px; }
+.update-intro-word span { opacity: 0; animation: update-intro-letter 520ms cubic-bezier(.2,.8,.2,1) both; }
+.update-intro-word span:nth-child(1) { animation-delay: 1600ms; }
+.update-intro-word span:nth-child(2) { animation-delay: 1680ms; }
+.update-intro-word span:nth-child(3) { animation-delay: 1760ms; color: var(--logo-hi); }
+.update-intro-word span:nth-child(4) { animation-delay: 1840ms; }
+@keyframes update-intro-slide { from { transform: none; } to { transform: translateX(-110px) scale(.7); } }
+@keyframes update-intro-letter { from { opacity: 0; transform: translateX(-14px); } to { opacity: 1; transform: none; } }
+
+@media (max-width: 480px) {
+    .update-intro-stage { transform: scale(.75); }
+}
+@media (prefers-reduced-motion: reduce) {
+    :is(.connect-splash, .update-intro), :is(.connect-splash, .update-intro) * { animation: none !important; }
+    .update-intro-logo { transform: translateX(-110px) scale(.7); }
+    .update-intro-word span { opacity: 1; }
+}
+:root[data-reduce-motion="1"] :is(.connect-splash, .update-intro), :root[data-reduce-motion="1"] :is(.connect-splash, .update-intro) * { animation: none !important; }
+:root[data-reduce-motion="1"] .update-intro-logo { transform: translateX(-110px) scale(.7); }
+:root[data-reduce-motion="1"] .update-intro-word span { opacity: 1; }

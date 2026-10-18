@@ -42,6 +42,7 @@ import { overlayEnglish, overlayGerman } from "./gaming-overlay-messages.js";
 import { communicationExtrasEnglish, communicationExtrasGerman } from "./communication-extras-messages.js";
 import { messageToolsEnglish, messageToolsGerman } from "./message-tools-messages.js";
 import { webhookEnglish, webhookGerman } from "./webhook-messages.js";
+import { connectEnglish, connectGerman } from "./connect-messages.js";
 import { directMessageEnglish, directMessageGerman } from "./dm-messages.js";
 import { shellEnglish, shellGerman } from "./shell-messages.js";
 import { fullscreenEnglish, fullscreenGerman } from "./fullscreen-messages.js";
@@ -55,7 +56,7 @@ const en = {
     ...runtimeEnglish,
     ...networkEchoEnglish,
     ...audioRecoveryEnglish,
-    ...cameraEnglish, ...callMediaEnglish, ...discussionEnglish, ...voiceMessageEnglish, ...overlayEnglish, ...communicationExtrasEnglish, ...messageToolsEnglish, ...webhookEnglish,
+    ...cameraEnglish, ...callMediaEnglish, ...discussionEnglish, ...voiceMessageEnglish, ...overlayEnglish, ...communicationExtrasEnglish, ...messageToolsEnglish, ...webhookEnglish, ...connectEnglish,
     ...contextEnglish,
     ...micEnglish,
     ...selectedWinEnglish,
@@ -162,7 +163,7 @@ const de = {
     ...runtimeGerman,
     ...networkEchoGerman,
     ...audioRecoveryGerman,
-    ...cameraGerman, ...callMediaGerman, ...discussionGerman, ...voiceMessageGerman, ...overlayGerman, ...communicationExtrasGerman, ...messageToolsGerman, ...webhookGerman,
+    ...cameraGerman, ...callMediaGerman, ...discussionGerman, ...voiceMessageGerman, ...overlayGerman, ...communicationExtrasGerman, ...messageToolsGerman, ...webhookGerman, ...connectGerman,
     ...contextGerman,
     ...micGerman,
     ...selectedWinGerman,
