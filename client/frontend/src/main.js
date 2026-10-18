@@ -405,6 +405,9 @@ async function connectFromLogin() {
     const displayName = $("login-display-name").value.trim();
     // C04: the comet draws the mark while this login connects to `addr`.
     const splash = showConnectSplash(addr);
+    // A tab activation (including successful connect) owns the workspace now.
+    // Do not obscure it while an older native login is still pending.
+    const stopSplashOnTabReset = window.runtime.EventsOn("tab_reset", () => splash.finish(false));
     let connected = false;
     const pw = $("login-accountpw").value;
     const spw = $("login-serverpw").value;
@@ -494,6 +497,7 @@ async function connectFromLogin() {
         playCurrentConnectionFailure();
         if (currentAttempt()) loginFeedback.show(e, { displayName });
     } finally {
+        stopSplashOnTabReset?.();
         splash.finish(connected);
         submit.disabled = false;
         label.textContent = submitLabel;
