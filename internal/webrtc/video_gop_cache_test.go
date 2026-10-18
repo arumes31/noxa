@@ -328,23 +328,25 @@ func TestGOPCacheServesViewerPLI(t *testing.T) {
 	}
 	deadline := time.After(time.Second)
 	replayed := false
-	for !replayed {
+	// RTP can reach the loopback receiver before injectGOP returns and records
+	// its completion. Wait for both observations rather than racing that store.
+	refillCheck := time.NewTicker(10 * time.Millisecond)
+	defer refillCheck.Stop()
+	for !replayed || f.output.gopRefilledAt.Load() <= beforeRefill {
 		select {
 		case a := <-arrivals:
 			if delta := rtpSequenceDelta(a.packet.SequenceNumber, last); delta != 1 {
 				t.Fatalf("refill broke sequence continuity: %d -> %d", last, a.packet.SequenceNumber)
 			}
 			last = a.packet.SequenceNumber
-			replayed = chaosKeyStart(pion.MimeTypeH264, a.packet.Payload)
+			replayed = replayed || chaosKeyStart(pion.MimeTypeH264, a.packet.Payload)
+		case <-refillCheck.C:
 		case <-deadline:
 			t.Fatal("viewer PLI was not answered from the GOP cache")
 		}
 	}
 	if plis, _ := f.upstream.counts(); plis != beforePLI || f.keyframes.Load() > keyframes+1 {
 		t.Fatalf("viewer PLI reached the publisher: %d new requests", plis-beforePLI)
-	}
-	if f.output.gopRefilledAt.Load() <= beforeRefill {
-		t.Fatal("received keyframe was not a GOP cache refill")
 	}
 }
 
