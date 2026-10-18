@@ -162,6 +162,7 @@ try {
     }, { width, height, fps, capacity: configuration.capacity, codec: configuration.codec, workload });
     await publisher.locator('#voice-screen').click();
     await publisher.locator('.sh-preset').selectOption(fps === 60 ? 'hdMotion' : 'original');
+    await publisher.getByRole('button', { name: 'Choose screen or window…', exact: true }).click();
     await publisher.getByRole('button', { name: 'Start sharing', exact: true }).click();
     await expect.poll(() => publisher.evaluate(() => window.__noxa.state.pc.connectionState), { timeout: 15000 }).toBe('connected');
     generation = await publisher.evaluate(async () => (await window.request('catalog', { id: 'a' })).streams[0].generation);
