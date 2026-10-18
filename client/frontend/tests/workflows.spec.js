@@ -4204,7 +4204,7 @@ test("German menus translate remaining actions and bookmark dialogs", async ({ p
     const dialog = page.getByRole("dialog", { name: "Lesezeichen verwalten", exact: true });
     await expect(dialog).toContainText("Noch keine Lesezeichen");
     await dialog.getByRole("button", { name: "Schließen", exact: true }).click();
-    await page.getByRole("menuitem", { name: "Selbst", exact: true }).click();
+    await page.getByRole("menuitem", { name: "Einstellungen", exact: true }).click();
     await page.getByRole("menuitem", { name: "Anzeigenamen ändern…", exact: true }).click();
     await expect(page.getByRole("dialog", { name: "Anzeigenamen ändern", exact: true })).toContainText("Anzeigename");
     await page.getByRole("button", { name: "Abbrechen", exact: true }).click();
@@ -5023,6 +5023,7 @@ test("selected quick wins completed downloads open their scoped folder", async (
 test("private groups restore persisted unread state after native tab activation", async ({ page }) => {
     await showB3Workspace(page);
     await page.evaluate(() => {
+        window.__dmStorageIdentity = "uid-daniel";
         const app = window.go.main.App;
         window.go.main.App = new Proxy(app, { get(target, key) {
             if (key === "ConversationForTab") return async () => ({ conversations: [{ id: "restored", name: "Restored private group", owner: "uid-daniel", revision: 1, epoch: 1, unread_count: 3, read_message_id: 4, latest_message_id: 7, members: [{ unique_id: "uid-daniel", pending: false }] }], messages: [] });
@@ -5036,6 +5037,7 @@ test("private groups restore persisted unread state after native tab activation"
 
 test("private groups are managed in Messages without a separate sidebar", async ({ page }) => {
     await showB3Workspace(page);
+    await page.evaluate(() => { window.__noxa.state.activeTabID = "groups-menu"; });
     await page.locator("#direct-messages").click();
     await expect(page.locator("#dm-list")).toBeVisible();
     await expect(page.locator("#private-groups-sidebar")).toHaveCount(0);
